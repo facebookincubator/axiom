@@ -77,7 +77,7 @@ ConnectorTableHandlePtr HiveConnectorMetadata::createTableHandle(
   }
   auto dataColumns = ROW(std::move(names), std::move(types));
   std::vector<core::TypedExprPtr> remainingConjuncts;
-  SubfieldFilters subfieldFilters;
+  common::SubfieldFilters subfieldFilters;
   for (auto& typedExpr : filters) {
     try {
       auto pair = velox::exec::toSubfieldFilter(typedExpr, &evaluator);

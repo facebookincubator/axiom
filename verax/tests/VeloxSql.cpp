@@ -302,7 +302,7 @@ class VeloxRunner {
       const std::vector<std::string>& columnNames) {
     using namespace connector::hive;
     auto handle = std::make_shared<HiveTableHandle>(
-        kHiveConnectorId, name, true, SubfieldFilters{}, nullptr);
+        kHiveConnectorId, name, true, common::SubfieldFilters{}, nullptr);
     std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
         assignments;
 
