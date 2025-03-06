@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 
 #include "optimizer/ArenaCache.h" //@manual
 #include "velox/common/memory/HashStringAllocator.h"
+#include "velox/type/Variant.h"
 
 // #define QG_USE_MALLOC
 #define QG_CACHE_ARENA
@@ -62,9 +63,145 @@ struct TypeComparer {
   }
 };
 
+/// Converts std::string to name used in query graph objects. raw pointer to
+/// arena allocated const chars.
+// Name toName(const std::string& string);
+Name toName(std::string_view string);
+
 struct Plan;
 using PlanPtr = Plan*;
 class Optimization;
+
+/// STL compatible allocator that manages std:: containers allocated in the
+/// QueryGraphContext arena.
+template <class T>
+struct QGAllocator {
+  using value_type = T;
+  QGAllocator() = default;
+
+  template <typename U>
+  explicit QGAllocator(QGAllocator<U>) {}
+
+  T* allocate(std::size_t n);
+
+  void deallocate(T* p, std::size_t /*n*/) noexcept;
+
+  friend bool operator==(
+      const QGAllocator& /*lhs*/,
+      const QGAllocator& /*rhs*/) {
+    return true;
+  }
+
+  friend bool operator!=(const QGAllocator& lhs, const QGAllocator& rhs) {
+    return !(lhs == rhs);
+  }
+};
+
+/// Elements of subfield paths. The QueryGraphContext holds a dedupped
+/// collection of distinct paths.
+enum class StepKind : uint8_t { kField, kSubscript, kCardinality };
+
+struct Step {
+  StepKind kind;
+  Name field{nullptr};
+  int64_t id{0};
+  /// True if all fields/keys are accessed at this level but there is a subset
+  /// of fields accessed at a child level.
+  bool allFields{false};
+
+  bool operator==(const Step& other) const;
+  bool operator<(const Step& other) const;
+  size_t hash() const;
+};
+
+class BitSet;
+
+class Path {
+ public:
+  Path() = default;
+
+  Path(std::vector<Step> steps) {
+    for (auto& step : steps) {
+      steps_.push_back(std::move(step));
+    }
+  }
+
+  void operator delete(void* ptr);
+
+  /// True if 'prefix' is a prefix of 'this'.
+  bool hasPrefix(const Path& prefix) const;
+
+  Path* field(const char* name) {
+    VELOX_CHECK(mutable_);
+    steps_.push_back(Step{.kind = StepKind::kField, .field = toName(name)});
+    return this;
+  }
+
+  Path* subscript(const char* name) {
+    VELOX_CHECK(mutable_);
+    steps_.push_back(Step{.kind = StepKind::kSubscript, .field = toName(name)});
+    return this;
+  }
+
+  Path* subscript(int64_t id) {
+    VELOX_CHECK(mutable_);
+    steps_.push_back(Step{.kind = StepKind::kSubscript, .id = id});
+    return this;
+  }
+  Path* cardinality() {
+    VELOX_CHECK(mutable_);
+    steps_.push_back(Step{.kind = StepKind::kCardinality});
+    return this;
+  }
+
+  const std::vector<Step, QGAllocator<Step>>& steps() const {
+    return steps_;
+  }
+
+  int32_t id() const {
+    return id_;
+  }
+
+  void setId(int32_t id) const {
+    VELOX_CHECK(mutable_);
+    id_ = id;
+  }
+
+  bool operator==(const Path& other) const;
+
+  bool operator<(const Path& other) const;
+
+  size_t hash() const;
+
+  std::string toString() const;
+
+  void makeImmutable() const {
+    mutable_ = false;
+  }
+
+  /// Removes elements of 'subfields' where the path has a prefix in
+  /// 'subfields'.
+  static void subfieldSkyline(BitSet& subfields);
+
+ private:
+  std::vector<Step, QGAllocator<Step>> steps_;
+  mutable int32_t id_{-1};
+  mutable bool mutable_{true};
+};
+
+using PathCP = const Path*;
+
+struct PathHasher {
+  size_t operator()(const PathCP path) const {
+    return path->hash();
+  }
+};
+
+struct PathComparer {
+  bool operator()(const PathCP left, const PathCP right) const {
+    return *left == *right;
+  }
+};
 
 /// Context for making a query plan. Owns all memory associated to
 /// planning, except for the input PlanNode tree. The result of
@@ -77,12 +214,6 @@ class QueryGraphContext {
  public:
   explicit QueryGraphContext(velox::HashStringAllocator& allocator)
       : allocator_(allocator), cache_(allocator_) {}
-
-  /// Returns the interned representation of 'str', i.e. Returns a
-  /// pointer to a canonical null terminated const char* with the same
-  /// characters as 'str'. Allows comparing names by comparing
-  /// pointers.
-  Name toName(std::string_view str);
 
   /// Returns a new unique id to use for 'object' and associates 'object' to
   /// this id. Tagging objects with integere ids is useful for efficiently
@@ -143,6 +274,12 @@ class QueryGraphContext {
     return optimization_;
   }
 
+  /// Returns the interned representation of 'str', i.e. Returns a
+  /// pointer to a canonical null terminated const char* with the same
+  /// characters as 'str'. Allows comparing names by comparing
+  /// pointers.
+  Name toName(std::string_view str);
+
   // Records the use of a TypePtr in optimization. Returns a canonical
   // representative of the type, allowing pointer equality for exact match.
   // Allows mapping from the Type* back to TypePtr.
@@ -151,6 +288,23 @@ class QueryGraphContext {
   /// Returns the canonical TypePtr corresponding to 'type'. 'type' must have
   /// been previously returned by toType().
   const TypePtr& toTypePtr(const Type* type);
+
+  /// Returns the interned instance of 'path'. 'path' is either
+  /// retained if it is not previously known or it is deleted. Must be
+  /// allocated from the arena of 'this'.
+  PathCP toPath(PathCP);
+
+  PathCP pathById(uint32_t id) {
+    VELOX_DCHECK_LT(id, pathById_.size());
+    return pathById_[id];
+  }
+
+  /// Takes ownership of a  variant for the duration. Variants are allocated
+  /// with new so not in the arena.
+  variant* registerVariant(std::unique_ptr<variant> value) {
+    allVariants_.push_back(std::move(value));
+    return allVariants_.back().get();
+  }
 
  private:
   TypePtr dedupType(const TypePtr& type);
@@ -173,12 +327,29 @@ class QueryGraphContext {
   // Maps raw Type* back to shared TypePtr. Used in toType()() and toTypePtr().
   std::unordered_map<const velox::Type*, velox::TypePtr> toTypePtr_;
 
+  std::unordered_set<PathCP, PathHasher, PathComparer> deduppedPaths_;
+
+  std::vector<PathCP> pathById_;
+
   Plan* contextPlan_{nullptr};
   Optimization* optimization_{nullptr};
+
+  std::vector<std::unique_ptr<variant>> allVariants_;
 };
 
 /// Returns a mutable reference to the calling thread's QueryGraphContext.
 QueryGraphContext*& queryCtx();
+
+template <class T>
+T* QGAllocator<T>::allocate(std::size_t n) {
+  return reinterpret_cast<T*>(
+      queryCtx()->allocate(velox::checkedMultiply(n, sizeof(T)))); // NOLINT
+}
+
+template <class T>
+void QGAllocator<T>::deallocate(T* p, std::size_t /*n*/) noexcept {
+  queryCtx()->free(p);
+}
 
 template <class _Tp, class... _Args>
 inline _Tp* make(_Args&&... __args) {
@@ -190,45 +361,17 @@ inline _Tp* make(_Args&&... __args) {
 /// many arguments.
 #define QGC_MAKE_IN_ARENA(_Tp) new (queryCtx()->allocate(sizeof(_Tp))) _Tp
 
-/// Converts std::string to name used in query graph objects. raw pointer to
-/// arena allocated const chars.
-// Name toName(const std::string& string);
-Name toName(std::string_view string);
-
 /// Shorthand for toType() in thread's QueryGraphContext.
 const Type* toType(const TypePtr& type);
 /// Shorthand for toTypePtr() in thread's QueryGraphContext.
 const TypePtr& toTypePtr(const Type* type);
 
-/// STL compatible allocator that manages std:: containers allocated in the
-/// QueryGraphContext arena.
-template <class T>
-struct QGAllocator {
-  using value_type = T;
-  QGAllocator() = default;
+// Shorthand for toPath in queryCtx().
+PathCP toPath(std::vector<Step> steps);
 
-  template <typename U>
-  explicit QGAllocator(QGAllocator<U>) {}
-
-  T* allocate(std::size_t n) {
-    return reinterpret_cast<T*>(
-        queryCtx()->allocate(velox::checkedMultiply(n, sizeof(T)))); // NOLINT
-  }
-
-  void deallocate(T* p, std::size_t /*n*/) noexcept {
-    queryCtx()->free(p);
-  }
-
-  friend bool operator==(
-      const QGAllocator& /*lhs*/,
-      const QGAllocator& /*rhs*/) {
-    return true;
-  }
-
-  friend bool operator!=(const QGAllocator& lhs, const QGAllocator& rhs) {
-    return !(lhs == rhs);
-  }
-};
+inline void Path::operator delete(void* ptr) {
+  queryCtx()->free(ptr);
+}
 
 // Forward declarations of common types and collections.
 class Expr;

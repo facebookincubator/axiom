@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -64,6 +64,10 @@ class Expr : public PlanObject {
     return columns_;
   }
 
+  const PlanObjectSet& subexpressions() const {
+    return subexpressions_;
+  }
+
   const Value& value() const {
     return value_;
   }
@@ -76,6 +80,9 @@ class Expr : public PlanObject {
  protected:
   // The columns this depends on.
   PlanObjectSet columns_;
+
+  // All expressions 'this' depends on.
+  PlanObjectSet subexpressions_;
 
   // Type Constraints on the value of 'this'.
   Value value_;
@@ -96,6 +103,8 @@ class Literal : public Expr {
   const velox::variant& literal() const {
     return *literal_;
   }
+
+  std::string toString() const override;
 
  private:
   const velox::variant* const literal_;
@@ -124,6 +133,10 @@ class Column : public Expr {
   /// asserted equal to b, a and c are also equal.
   void equals(ColumnCP other) const;
 
+  int32_t wholeColumnId() {
+    return wholeColumnId_;
+  }
+
   std::string toString() const override;
 
   struct Equivalence* equivalence() const {
@@ -145,6 +158,11 @@ class Column : public Expr {
   // column in the SchemaTable. Used for matching with
   // ordering/partitioning columns in the SchemaTable.
   ColumnCP schemaColumn_{nullptr};
+
+  // If column is of complex type and is used so as to require all
+  // subfields, 'wholeColumnId_' is added to the dependencies of using
+  // exprs. 0 if not applicable.
+  int32_t wholeColumnId_{0};
 };
 
 template <typename T>
@@ -152,10 +170,52 @@ inline folly::Range<T*> toRange(const std::vector<T, QGAllocator<T>>& v) {
   return folly::Range<T const*>(v.data(), v.size());
 }
 
+class Field : public Expr {
+ public:
+  Field(const Type* type, ExprCP base, Name field)
+      : Expr(PlanType::kField, Value(type, 1)), field_(field), base_(base) {}
+  Field(const Type* type, ExprCP base, int32_t index)
+      : Expr(PlanType::kField, Value(type, 1)),
+        field_(nullptr),
+        index_(index),
+        base_(base) {
+    columns_ = base->columns();
+    subexpressions_ = base->subexpressions();
+  }
+
+  Name field() const {
+    return field_;
+  }
+
+  int32_t index() const {
+    return index_;
+  }
+
+  ExprCP base() const {
+    return base_;
+  }
+
+ private:
+  Name field_;
+  int32_t index_;
+  ExprCP base_;
+};
+
 template <typename T, typename U>
 inline CPSpan<T> toRangeCast(U v) {
   return CPSpan<T>(reinterpret_cast<const T* const*>(v.data()), v.size());
 }
+
+struct SubfieldSet {
+  /// Id of an accessed column of complex type.
+  std::vector<int32_t, QGAllocator<int32_t>> ids;
+
+  // Set of subfield paths that are accessed for the corresponding 'column'.
+  // empty means that all subfields are accessed.
+  std::vector<BitSet, QGAllocator<BitSet>> subfields;
+
+  std::optional<BitSet> findSubfields(int32_t id) const;
+};
 
 /// A bit set that qualifies a function call. Represents which functions/kinds
 /// of functions are found inside the children of a function call.
@@ -186,6 +246,78 @@ class FunctionSet {
   uint64_t set_;
 };
 
+/// Describes where the args given to a lambda come from.
+enum class LambdaArg : int8_t { kKey, kValue, kElement };
+
+struct LambdaInfo {
+  /// The ordinal of the lambda in the function's args
+  int32_t ordinal;
+  /// Getter applied to the collection given in corresponding 'argOrdinal' to
+  /// get each argument of the lambda.
+  std::vector<LambdaArg> lambdaArg;
+  /// Argument giving the collection
+  std::vector<int32_t> argOrdinal;
+};
+
+class Call;
+
+struct ResultAccess;
+
+/// Describes functions accepting lambdas and functions with special treatment
+/// of subfields.
+struct FunctionMetadata {
+  std::vector<LambdaInfo> lambdas;
+
+  /// If accessing a subfield on the result means that the same subfield is
+  /// required in an argument, this is the ordinal of the argument. This is 1
+  /// for transform_values, which means that transform_values(f, map)[1] implies
+  /// that key 1 is accessed in 'map'.
+  std::optional<int32_t> subfieldArg;
+
+  /// If true, then access of subscript 'i' in result means that argument 'i' is
+  /// accessed.
+  bool isArrayConstructor_{false};
+
+  /// If key 'k' in result is accessed, then the argument that corresponds to
+  /// this key is accessed.
+  bool isMapConstructor{false};
+
+  /// If ordinal fieldIndexForArg_[i] is accessed, then argument argOrdinal_[i]
+  /// is accessed.
+  std::vector<int32_t> fieldIndexForArg;
+
+  /// Ordinal of argument that produces the result subfield in the corresponding
+  /// element of 'fieldIndexForArg_'.
+  std::vector<int32_t> argOrdinal;
+
+  /// Static fixed cost for processing one row. use 'costFunc' for non-constant
+  /// cost.
+  float cost{1};
+
+  /// Function for evaluating the per-row cost when the cost depends on
+  /// arguments and their stats.
+  std::function<float(const Call*)> costFunc;
+
+  /// Translates a set of paths into path, expression pairs if the complex type
+  /// returning function is decomposable into per-path subexpressions. Suppose
+  /// the function applies array sort to all arrays in a map. suppose it is used
+  /// in [k1][0] and [k2][1]. This could return [k1] = array_sort(arg[k1]) and
+  /// k2 = array_sort(arg[k2]. 'arg'  comes from 'call'.
+  std::function<std::unordered_map<PathCP, core::TypedExprPtr>(
+      const core::CallTypedExpr* call,
+      std::vector<PathCP>& paths)>
+      explode;
+
+  LambdaInfo* lambdaInfo(int32_t i) {
+    for (auto j = 0; j < lambdas.size(); ++j) {
+      if (lambdas[j].ordinal == i) {
+        return &lambdas[j];
+      }
+    }
+    return nullptr;
+  }
+};
+
 /// Represents a function call or a special form, any expression with
 /// subexpressions.
 class Call : public Expr {
@@ -202,6 +334,7 @@ class Call : public Expr {
         functions_(functions) {
     for (auto arg : args_) {
       columns_.unionSet(arg->columns());
+      subexpressions_.unionSet(arg->subexpressions());
     }
   }
 
@@ -247,6 +380,25 @@ class Call : public Expr {
 };
 
 using CallCP = const Call*;
+
+/// Represents a lambda. May occur as an immediate argument of selected
+/// functions.
+class Lambda : public Expr {
+ public:
+  Lambda(ColumnVector args, const Type* type, ExprCP body)
+      : Expr(PlanType::kLambda, Value(type, 1)), args_(args), body_(body) {}
+  ColumnVector args() const {
+    return args_;
+  }
+
+  ExprCP body() const {
+    return body_;
+  }
+
+ private:
+  ColumnVector args_;
+  ExprCP body_;
+};
 
 /// Represens a set of transitively equal columns.
 struct Equivalence {
@@ -484,6 +636,9 @@ struct BaseTable : public PlanObject {
   // table only.
   float filterSelectivity{1};
 
+  SubfieldSet controlSubfields;
+  SubfieldSet payloadSubfields;
+
   bool isTable() const override {
     return true;
   }
@@ -494,6 +649,10 @@ struct BaseTable : public PlanObject {
 
   /// Adds 'expr' to 'filters' or 'columnFilters'.
   void addFilter(ExprCP expr);
+
+  std::optional<int32_t> columnId(Name column) const;
+
+  BitSet columnSubfields(int32_t id, bool payloadOnly, bool controlOnly) const;
 
   std::string toString() const override;
 };

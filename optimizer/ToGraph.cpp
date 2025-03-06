@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "optimizer/FunctionRegistry.h" //@manual
 #include "optimizer/Plan.h" //@manual
 #include "optimizer/PlanUtils.h" //@manual
 #include "velox/exec/Aggregate.h"
@@ -44,6 +45,7 @@ void Optimization::setDerivedTableOutput(
 }
 
 DerivedTableP Optimization::makeQueryGraph() {
+  markAllSubfields(inputPlan_.outputType().get(), &inputPlan_);
   auto* root = make<DerivedTable>();
   root_ = root;
   currentSelect_ = root_;
@@ -86,12 +88,24 @@ void Optimization::translateConjuncts(
 }
 
 template <TypeKind kind>
-variant toVariant(BaseVector& constantVector) {
+const variant* toVariant(BaseVector& constantVector) {
   using T = typename TypeTraits<kind>::NativeType;
   if (auto typed = dynamic_cast<ConstantVector<T>*>(&constantVector)) {
-    return variant(typed->valueAt(0));
+    return queryCtx()->registerVariant(
+        std::make_unique<variant>(typed->valueAt(0)));
   }
   VELOX_FAIL("Literal not of foldable type");
+}
+
+std::shared_ptr<const exec::ConstantExpr> Optimization::foldConstant(
+    const core::TypedExprPtr& typedExpr) {
+  auto exprSet = evaluator_.compile(typedExpr);
+  auto first = exprSet->exprs().front().get();
+  if (auto constantExpr = dynamic_cast<const exec::ConstantExpr*>(first)) {
+    return std::dynamic_pointer_cast<exec::ConstantExpr>(
+        exprSet->exprs().front());
+  }
+  return nullptr;
 }
 
 ExprCP Optimization::tryFoldConstant(
@@ -110,17 +124,362 @@ ExprCP Optimization::tryFoldConstant(
     auto exprSet = evaluator_.compile(typedExpr);
     auto first = exprSet->exprs().front().get();
     if (auto constantExpr = dynamic_cast<const exec::ConstantExpr*>(first)) {
-      auto variantLiteral = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      auto* variantLiteral = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           toVariant, constantExpr->value()->typeKind(), *constantExpr->value());
       Value value(toType(constantExpr->value()->type()), 1);
-      // Copy the variant from value to allocated in arena.
-      auto* copy = make<variant>(variantLiteral);
-      auto* literal = make<Literal>(value, copy);
-      return literal;
+      return make<Literal>(value, variantLiteral);
     }
     return nullptr;
   } catch (const std::exception& e) {
     return nullptr;
+  }
+}
+
+bool Optimization::isSubfield(
+    const core::ITypedExpr* expr,
+    Step& step,
+    core::TypedExprPtr& input) {
+  if (auto* field = dynamic_cast<const core::FieldAccessTypedExpr*>(expr)) {
+    input = field->inputs().empty() ? nullptr : field->inputs()[0];
+    if (!input || dynamic_cast<const core::InputTypedExpr*>(input.get())) {
+      return false;
+    }
+    step.kind = StepKind::kField;
+    step.field = toName(field->name());
+    return true;
+  }
+  if (auto deref = dynamic_cast<const core::DereferenceTypedExpr*>(expr)) {
+    step = {.kind = StepKind::kField, .id = deref->index()};
+    input = deref->inputs()[0];
+    auto& type = input->type();
+    VELOX_CHECK_EQ(type->kind(), TypeKind::ROW);
+    auto& name = type->as<TypeKind::ROW>().nameOf(step.id);
+    // There can be field index-only field accesses over functions
+    // that hav row values without field names. These are not suitable
+    // for subfield pruning in columns though, so fill in the name if
+    // there is one.
+    if (!name.empty()) {
+      step.field = toName(name);
+    }
+    return true;
+  }
+  if (auto* call = dynamic_cast<const core::CallTypedExpr*>(expr)) {
+    auto name = call->name();
+    if (name == "subscript" || name == "element_at") {
+      auto subscript = translateExpr(call->inputs()[1]);
+      if (subscript->type() == PlanType::kLiteral) {
+        step.kind = StepKind::kSubscript;
+        auto& literal = subscript->as<Literal>()->literal();
+        switch (subscript->value().type->kind()) {
+          case TypeKind::VARCHAR:
+            step.field = toName(literal.value<TypeKind::VARCHAR>());
+            break;
+          case TypeKind::BIGINT:
+            step.id = literal.value<TypeKind::BIGINT>();
+            break;
+          case TypeKind::INTEGER:
+            step.id = literal.value<TypeKind::INTEGER>();
+            break;
+          case TypeKind::SMALLINT:
+            step.id = literal.value<TypeKind::SMALLINT>();
+            break;
+          case TypeKind::TINYINT:
+            step.id = literal.value<TypeKind::TINYINT>();
+            break;
+          default:
+            VELOX_UNREACHABLE();
+        }
+        input = expr->inputs()[0];
+        return true;
+      }
+      return false;
+    }
+    if (name == "cardinality") {
+      step.kind = StepKind::kCardinality;
+      input = expr->inputs()[0];
+      return true;
+    }
+  }
+  return false;
+}
+
+void Optimization::getExprForField(
+    const core::FieldAccessTypedExpr* field,
+    core::TypedExprPtr& resultExpr,
+    ColumnCP& resultColumn,
+    const core::PlanNode*& context) {
+  for (;;) {
+    auto& name = field->name();
+    auto row = context->outputType();
+    auto ordinal = row->getChildIdx(name);
+    if (auto* project = dynamic_cast<const core::ProjectNode*>(context)) {
+      auto& def = project->projections()[ordinal];
+      if (auto* innerField =
+              dynamic_cast<const core::FieldAccessTypedExpr*>(def.get())) {
+        context = context->sources()[0].get();
+        field = innerField;
+        continue;
+      }
+      resultExpr = def;
+      context = project->sources()[0].get();
+      return;
+    }
+    auto& sources = context->sources();
+    if (sources.empty()) {
+      auto leaf = findLeaf(context);
+      auto internedName = toName(name);
+      resultExpr = nullptr;
+      if (auto* table = dynamic_cast<BaseTableCP>(leaf)) {
+        for (auto i = 0; i < table->columns.size(); ++i) {
+          if (table->columns[i]->name() == internedName) {
+            resultColumn = table->columns[i];
+            break;
+          }
+        }
+        context = nullptr;
+        return;
+      } else {
+        VELOX_NYI("Leaf node is not a table");
+      }
+    }
+    for (auto i = 0; i < sources.size(); ++i) {
+      auto& row = sources[i]->outputType();
+      auto maybe = row->getChildIdxIfExists(name);
+      if (maybe.has_value()) {
+        context = sources[i].get();
+        break;
+      }
+    }
+  }
+}
+
+bool isLeafField(const core::ITypedExpr* expr) {
+  if (auto* field = dynamic_cast<const core::FieldAccessTypedExpr*>(expr)) {
+    if (field->inputs().empty() ||
+        dynamic_cast<const core::InputTypedExpr*>(field->inputs()[0].get())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::optional<ExprCP> Optimization::translateSubfield(
+    const core::TypedExprPtr& inputExpr) {
+  std::vector<Step> steps;
+  auto* source = exprSource_;
+  auto expr = inputExpr;
+  for (;;) {
+    core::TypedExprPtr input;
+    Step step;
+    VELOX_CHECK_NOT_NULL(expr);
+    bool isStep = isSubfield(expr.get(), step, input);
+    if (!isStep) {
+      if (steps.empty()) {
+        return std::nullopt;
+      }
+      // if this is a field we follow to the expr assigning the field if any.
+      Step ignore;
+      core::TypedExprPtr ignore2;
+      if (!isSubfield(expr.get(), ignore, ignore2)) {
+        ColumnCP column = nullptr;
+        if (isLeafField(expr.get())) {
+          getExprForField(
+              reinterpret_cast<const core::FieldAccessTypedExpr*>(expr.get()),
+              expr,
+              column,
+              source);
+          if (expr) {
+            continue;
+          }
+        }
+        SubfieldProjections* skyline = nullptr;
+        if (column) {
+          auto it = allColumnSubfields_.find(column);
+          if (it != allColumnSubfields_.end()) {
+            skyline = &it->second;
+          }
+        } else {
+          ensureFunctionSubfields(expr);
+          auto it = functionSubfields_.find(expr.get());
+          if (it != functionSubfields_.end()) {
+            skyline = &it->second;
+          }
+        }
+        // 'steps is a path. 'skyline' is a map from path to Expr. If no prefix
+        // of steps occurs in skyline, then the item referenced by steps is not
+        // materialized. Otherwise, the prefix that matches one in skyline is
+        // replaced by the Expr from skyline and the tail of 'steps' are tagged
+        // on the Expr. If skyline is empty, then 'steps' simply becomes a
+        // nested sequence of getters.
+        if (steps.empty()) {
+          return std::nullopt;
+        }
+        return makeGettersOverSkyline(steps, skyline, expr, column);
+      }
+    }
+    steps.push_back(step);
+    expr = input;
+  }
+}
+
+PathCP innerPath(const std::vector<Step>& steps, int32_t last) {
+  std::vector<Step> reverse;
+  for (int32_t i = steps.size() - 1; i >= last; --i) {
+    reverse.push_back(steps[i]);
+  }
+  return toPath(std::move(reverse));
+}
+
+variant* subscriptLiteral(TypeKind kind, const Step& step) {
+  auto* ctx = queryCtx();
+  switch (kind) {
+    case TypeKind::VARCHAR:
+      return ctx->registerVariant(
+          std::make_unique<variant>(std::string(step.field)));
+    case TypeKind::BIGINT:
+      return ctx->registerVariant(
+          std::make_unique<variant>(static_cast<int64_t>(step.id)));
+    case TypeKind::INTEGER:
+      return ctx->registerVariant(
+          std::make_unique<variant>(static_cast<int32_t>(step.id)));
+    case TypeKind::SMALLINT:
+      return ctx->registerVariant(
+          std::make_unique<variant>(static_cast<int16_t>(step.id)));
+    case TypeKind::TINYINT:
+      return ctx->registerVariant(
+          std::make_unique<variant>(static_cast<int8_t>(step.id)));
+    default:
+      VELOX_FAIL("Unsupported key type");
+  }
+}
+
+ExprCP Optimization::makeGettersOverSkyline(
+    const std::vector<Step>& steps,
+    const SubfieldProjections* skyline,
+    const core::TypedExprPtr& base,
+    ColumnCP column) {
+  int32_t last = steps.size() - 1;
+  ExprCP expr = nullptr;
+  if (skyline) {
+    // We see how many trailing (inner) steps fall below skyline, i.e. address
+    // enclosing containers that are not materialized.
+    bool found = false;
+    for (; last >= 0; --last) {
+      auto inner = innerPath(steps, last);
+      auto it = skyline->pathToExpr.find(inner);
+      if (it != skyline->pathToExpr.end()) {
+        expr = it->second;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      // The path is not materialized. Need a longer path. to intersect skyline.
+      return nullptr;
+    }
+  } else {
+    if (column) {
+      expr = column;
+    } else {
+      expr = translateExpr(base);
+    }
+    last = steps.size();
+  }
+  std::vector<Step> reverse;
+  for (int32_t i = last - 1; i >= 0; --i) {
+    // We make a getter over expr made so far with 'steps[i]' as first.
+    PathExpr pathExpr = {steps[i], nullptr, expr};
+    auto it = deduppedGetters_.find(pathExpr);
+    if (it != deduppedGetters_.end()) {
+      expr = it->second;
+    } else {
+      auto& step = steps[i];
+      switch (step.kind) {
+        case StepKind::kField: {
+          if (!step.field) {
+            auto* type = toType(expr->value().type->childAt(step.id));
+            expr = make<Field>(type, expr, step.id);
+            break;
+          }
+          auto* type = toType(expr->value().type->childAt(
+              expr->value().type->as<TypeKind::ROW>().getChildIdx(step.field)));
+          expr = make<Field>(type, expr, step.field);
+          break;
+        }
+        case StepKind::kSubscript: {
+          auto inputType = expr->value().type;
+          const Type* type = toType(
+              inputType->childAt(inputType->kind() == TypeKind::ARRAY ? 0 : 1));
+          auto subscriptType = toType(
+              inputType->kind() == TypeKind::ARRAY
+                  ? INTEGER()
+                  : inputType->as<TypeKind::MAP>().childAt(0));
+          auto subscriptKind = subscriptType->kind();
+          ExprVector args;
+          args.push_back(expr);
+          args.push_back(make<Literal>(
+              Value(subscriptType, 1), subscriptLiteral(subscriptKind, step)));
+          expr = make<Call>(
+              toName("subscript"),
+              Value(type, 1),
+              std::move(args),
+              FunctionSet());
+          break;
+        }
+        default:
+          VELOX_NYI();
+      }
+      deduppedGetters_[pathExpr] = expr;
+    }
+  }
+  return expr;
+}
+
+std::optional<BitSet> findSubfields(
+    const PlanSubfields& fields,
+    const core::CallTypedExpr* call) {
+  auto it = fields.argFields.find(call);
+  if (it == fields.argFields.end()) {
+    return std::nullopt;
+  }
+  auto& paths = it->second.resultPaths;
+  auto it2 = paths.find(ResultAccess::kSelf);
+  if (it2 == paths.end()) {
+    return {};
+  }
+  return it2->second;
+}
+
+BitSet Optimization::functionSubfields(
+    const core::CallTypedExpr* call,
+    bool controlOnly,
+    bool payloadOnly) {
+  BitSet subfields;
+  if (!controlOnly) {
+    auto maybe = findSubfields(payloadSubfields_, call);
+    if (maybe.has_value()) {
+      subfields = maybe.value();
+    }
+  }
+  if (!payloadOnly) {
+    auto maybe = findSubfields(controlSubfields_, call);
+    if (maybe.has_value()) {
+      subfields.unionSet(maybe.value());
+    }
+  }
+  Path::subfieldSkyline(subfields);
+  return subfields;
+}
+
+void Optimization::ensureFunctionSubfields(const core::TypedExprPtr& expr) {
+  if (auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get())) {
+    auto metadata = FunctionRegistry::instance()->metadata(call->name());
+    if (!metadata) {
+      return;
+    }
+    if (!translatedSubfieldFuncs_.count(call)) {
+      translateExpr(expr);
+    }
   }
 }
 
@@ -130,20 +489,38 @@ ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
   }
   if (auto constant =
           dynamic_cast<const core::ConstantTypedExpr*>(expr.get())) {
-    auto* literal =
-        make<Literal>(Value(toType(constant->type()), 1), &constant->value());
+    auto* literal = make<Literal>(
+        Value(toType(constant->type()), 1),
+        queryCtx()->registerVariant(
+            std::make_unique<variant>(constant->value())));
     return literal;
   }
   auto it = exprDedup_.find(expr.get());
   if (it != exprDedup_.end()) {
     return it->second;
   }
+  auto path = translateSubfield(expr);
+  if (path.has_value()) {
+    return path.value();
+  }
+  auto call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
+  if (call) {
+    auto* metadata = FunctionRegistry::instance()->metadata(call->name());
+    if (metadata) {
+      auto translated = translateSubfieldFunction(call, metadata);
+      if (translated.has_value()) {
+        return translated.value();
+      }
+    }
+  }
+  auto cast = dynamic_cast<const core::CastTypedExpr*>(expr.get());
   ExprVector args{expr->inputs().size()};
   PlanObjectSet columns;
   FunctionSet funcs;
   auto& inputs = expr->inputs();
   float cardinality = 1;
   bool allConstant = true;
+
   for (auto i = 0; i < inputs.size(); ++i) {
     args[i] = translateExpr(inputs[i]);
     allConstant &= args[i]->type() == PlanType::kLiteral;
@@ -152,19 +529,16 @@ ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
       funcs = funcs | args[i]->as<Call>()->functions();
     }
   }
-  auto call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
-  auto cast = dynamic_cast<const core::CastTypedExpr*>(expr.get());
+
   if (allConstant && (call || cast)) {
     auto literal = tryFoldConstant(call, cast, args);
     if (literal) {
       return literal;
     }
   }
-
   if (call) {
     auto name = toName(call->name());
     funcs = funcs | functionBits(name);
-
     auto* callExpr =
         make<Call>(name, Value(toType(call->type()), cardinality), args, funcs);
     exprDedup_[expr.get()] = callExpr;
@@ -182,6 +556,77 @@ ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
 
   VELOX_NYI();
   return nullptr;
+}
+
+std::optional<ExprCP> Optimization::translateSubfieldFunction(
+    const core::CallTypedExpr* call,
+    const FunctionMetadata* metadata) {
+  translatedSubfieldFuncs_.insert(call);
+  auto subfields = functionSubfields(call, false, false);
+  if (subfields.empty()) {
+    // The function is accessed as a whole.
+    return std::nullopt;
+  }
+  auto* ctx = queryCtx();
+  std::vector<PathCP> paths;
+  subfields.forEach([&](auto id) { paths.push_back(ctx->pathById(id)); });
+  ExprVector args(call->inputs().size());
+  BitSet usedArgs;
+  bool allUsed = false;
+  if (metadata->argOrdinal.empty()) {
+    allUsed = true;
+  } else {
+    for (auto i = 0; i < paths.size(); ++i) {
+      if (std::find(
+              metadata->argOrdinal.begin(), metadata->argOrdinal.end(), i) ==
+          metadata->argOrdinal.end()) {
+        // This argument is not a source of subfields over some field
+        // of the return value. Compute this in any case. accessed
+        usedArgs.add(i);
+        continue;
+      }
+      auto& step = paths[i]->steps()[0];
+      auto maybeArg = stepToArg(step, metadata);
+      if (maybeArg.has_value()) {
+        usedArgs.add(maybeArg.value());
+      }
+    }
+  }
+
+  float cardinality = 1;
+  FunctionSet funcs;
+  for (auto i = 0; i < call->inputs().size(); ++i) {
+    if (allUsed || usedArgs.contains(i)) {
+      args[i] = translateExpr(call->inputs()[i]);
+      cardinality = std::max(cardinality, args[i]->value().cardinality);
+      if (args[i]->type() == PlanType::kCall) {
+        funcs = funcs | args[i]->as<Call>()->functions();
+      }
+    } else {
+      // make a null of the type for the unused arg to keep the tree valid.
+      args[i] = make<Literal>(
+          Value(toType(call->inputs()[i]->type()), 1),
+          make<variant>(variant::null(call->inputs()[i]->type()->kind())));
+    }
+  }
+  auto* name = toName(call->name());
+  funcs = funcs | functionBits(name);
+  if (metadata->explode) {
+    auto map = metadata->explode(call, paths);
+    std::unordered_map<PathCP, ExprCP> translated;
+    for (auto& pair : map) {
+      translated[pair.first] = translateExpr(pair.second);
+    }
+    if (!translated.empty()) {
+      functionSubfields_[call] =
+          SubfieldProjections{.pathToExpr = std::move(translated)};
+      return nullptr;
+    }
+  }
+  auto* callExpr =
+      make<Call>(name, Value(toType(call->type()), cardinality), args, funcs);
+  exprDedup_[call] = callExpr;
+  return callExpr;
 }
 
 ExprCP Optimization::translateColumn(const std::string& name) {
@@ -212,7 +657,6 @@ TypePtr intermediateType(const core::CallTypedExprPtr& call) {
 AggregationP Optimization::translateAggregation(
     const core::AggregationNode& source) {
   using velox::core::AggregationNode;
-
   if (source.step() == AggregationNode::Step::kPartial ||
       source.step() == AggregationNode::Step::kSingle) {
     auto* aggregation =
@@ -232,7 +676,11 @@ AggregationP Optimization::translateAggregation(
     }
     // The keys for intermediate are the same as for final.
     aggregation->intermediateColumns = aggregation->columns();
-    for (auto i = 0; i < source.aggregateNames().size(); ++i) {
+    for (auto channel : usedChannels(&source)) {
+      if (channel < source.groupingKeys().size()) {
+        continue;
+      }
+      auto i = channel - source.groupingKeys().size();
       auto rawFunc = translateExpr(source.aggregates()[i].call)->as<Call>();
       ExprCP condition = nullptr;
       if (source.aggregates()[i].mask) {
@@ -428,7 +876,7 @@ PlanObjectP Optimization::wrapInDt(const core::PlanNode& node) {
   currentSelect_ = previousDt;
   velox::RowTypePtr type = node.outputType();
   // node.name() == "Aggregation" ? aggFinalType_ : node.outputType();
-  for (auto i = 0; i < type->size(); ++i) {
+  for (auto i : usedChannels(&node)) {
     ExprCP inner = translateColumn(type->nameOf(i));
     newDt->exprs.push_back(inner);
     auto* outer = make<Column>(toName(type->nameOf(i)), newDt, inner->value());
@@ -451,14 +899,34 @@ PlanObjectP Optimization::makeBaseTable(const core::TableScanNode* tableScan) {
   auto* baseTable = make<BaseTable>();
   baseTable->cname = toName(cname);
   baseTable->schemaTable = schemaTable;
+  planLeaves_[tableScan] = baseTable;
+  auto channels = usedChannels(tableScan);
   ColumnVector columns;
   ColumnVector schemaColumns;
   for (auto& pair : assignments) {
+    auto idx = tableScan->outputType()->getChildIdx(pair.second->name());
+    if (std::find(channels.begin(), channels.end(), idx) == channels.end()) {
+      continue;
+    }
     auto schemaColumn = schemaTable->findColumn(pair.second->name());
     schemaColumns.push_back(schemaColumn);
     auto value = schemaColumn->value();
     auto* column = make<Column>(toName(pair.second->name()), baseTable, value);
     columns.push_back(column);
+    auto kind = column->value().type->kind();
+    if (kind == TypeKind::ARRAY || kind == TypeKind::ROW ||
+        kind == TypeKind::MAP) {
+      if (controlSubfields_.hasColumn(tableScan, idx)) {
+        baseTable->controlSubfields.ids.push_back(column->id());
+        baseTable->controlSubfields.subfields.push_back(
+            controlSubfields_.nodeFields[tableScan].resultPaths[idx]);
+      }
+      if (payloadSubfields_.hasColumn(tableScan, idx)) {
+        baseTable->payloadSubfields.ids.push_back(column->id());
+        baseTable->payloadSubfields.subfields.push_back(
+            payloadSubfields_.nodeFields[tableScan].resultPaths[idx]);
+      }
+    }
     renames_[pair.first] = column;
   }
   baseTable->columns = columns;
@@ -471,9 +939,10 @@ PlanObjectP Optimization::makeBaseTable(const core::TableScanNode* tableScan) {
 }
 
 void Optimization::addProjection(const core::ProjectNode* project) {
+  exprSource_ = project->sources()[0].get();
   auto names = project->names();
   auto exprs = project->projections();
-  for (auto i = 0; i < names.size(); ++i) {
+  for (auto i : usedChannels(project)) {
     if (auto field = dynamic_cast<const core::FieldAccessTypedExpr*>(
             exprs.at(i).get())) {
       // A variable projected to itself adds no renames. Inputs contain this
@@ -488,6 +957,7 @@ void Optimization::addProjection(const core::ProjectNode* project) {
 }
 
 void Optimization::addFilter(const core::FilterNode* filter) {
+  exprSource_ = filter->sources()[0].get();
   ExprVector flat;
   translateConjuncts(filter->filter(), flat);
   if (isDirectOver(*filter, "Aggregation")) {

@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,9 @@ add_subdirectory(connectors)
 add_library(
   velox_verax
   ToGraph.cpp
+  Subfields.cpp
   Plan.cpp
+  BitSet.cpp
   PlanObject.cpp
   Schema.cpp
   SchemaResolver.cpp
@@ -27,6 +29,7 @@ add_library(
   QueryGraphContext.cpp
   Filters.cpp
   Cost.cpp
+  FunctionRegistry.cpp
   PlanUtils.cpp
   RelationOp.cpp
   ToVelox.cpp

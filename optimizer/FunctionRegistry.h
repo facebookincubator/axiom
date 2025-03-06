@@ -13,14 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
 #include "optimizer/QueryGraph.h" //@manual
 
 namespace facebook::velox::optimizer {
 
-SchemaP
-tpchSchema(int32_t scale, bool partitioned, bool ordered, bool secondary);
+class FunctionRegistry {
+ public:
+  FunctionMetadata* metadata(const std::string& name);
 
-}
+  void registerFunction(
+      const std::string& function,
+      std::unique_ptr<FunctionMetadata> metadata);
+
+  static FunctionRegistry* instance();
+
+ private:
+  std::unordered_map<std::string, std::unique_ptr<FunctionMetadata>> metadata_;
+};
+} // namespace facebook::velox::optimizer

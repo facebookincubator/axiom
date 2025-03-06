@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 
 #include "optimizer/QueryGraphContext.h" //@manual
+#include "optimizer/BitSet.h" //@manual
 
 namespace facebook::velox::optimizer {
 
@@ -100,6 +101,164 @@ const Type* toType(const TypePtr& type) {
 
 const TypePtr& toTypePtr(const Type* type) {
   return queryCtx()->toTypePtr(type);
+}
+
+bool Step::operator==(const Step& other) const {
+  return kind == other.kind && field == other.field && id == other.id;
+}
+
+bool Step::operator<(const Step& other) const {
+  if (kind != other.kind) {
+    return kind < other.kind;
+  }
+  if (field != other.field) {
+    return field < other.field;
+  }
+  return id < other.id;
+}
+
+size_t Step::hash() const {
+  return 1 + static_cast<int32_t>(kind) + reinterpret_cast<size_t>(field) + id;
+}
+
+size_t Path::hash() const {
+  size_t h = 123;
+  for (auto& step : steps_) {
+    h = (h + 1921) * step.hash();
+  }
+  return h;
+}
+
+bool Path::operator==(const Path& other) const {
+  if (steps_.size() != other.steps_.size()) {
+    return false;
+  }
+  for (auto i = 0; i < steps_.size(); ++i) {
+    if (!(steps_[i] == other.steps_[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool Path::operator<(const Path& other) const {
+  for (auto i = 0; i < steps_.size() && i < other.steps_.size(); ++i) {
+    if (steps_[i] < other.steps_[i]) {
+      return true;
+    }
+  }
+  return steps_.size() < other.steps_.size();
+}
+
+bool Path::hasPrefix(const Path& prefix) const {
+  if (prefix.steps_.size() >= steps_.size()) {
+    return false;
+  }
+  for (auto i = 0; i < prefix.steps_.size(); ++i) {
+    if (!(steps_[i] == prefix.steps_[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string Path::toString() const {
+  std::stringstream out;
+  for (auto& step : steps_) {
+    switch (step.kind) {
+      case StepKind::kCardinality:
+        out << ".cardinality";
+        break;
+      case StepKind::kField:
+        if (step.field) {
+          out << "." << step.field;
+          break;
+        }
+        out << fmt::format("__{}", step.id);
+        break;
+      case StepKind::kSubscript:
+        if (step.field) {
+          out << "[" << step.field << "]";
+          break;
+        }
+        out << "[" << step.id << "]";
+        break;
+    }
+  }
+  return out.str();
+}
+
+PathCP QueryGraphContext::toPath(PathCP path) {
+  path->setId(pathById_.size());
+  path->makeImmutable();
+  auto pair = deduppedPaths_.insert(path);
+  if (path != *pair.first) {
+    delete path;
+  } else {
+    pathById_.push_back(path);
+  }
+  return *pair.first;
+}
+
+void Path::subfieldSkyline(BitSet& subfields) {
+  // Expand the ids to fields and  remove subfields where there exists a shorter
+  // prefix.
+  if (subfields.empty()) {
+    return;
+  }
+  auto ctx = queryCtx();
+  bool allFields = false;
+  std::vector<std::vector<PathCP>> bySize;
+  subfields.forEach([&](auto id) {
+    auto path = ctx->pathById(id);
+    auto size = path->steps().size();
+    if (size == 0) {
+      allFields = true;
+    }
+    if (!allFields) {
+      --size;
+      if (size >= bySize.size()) {
+        bySize.resize(size + 1);
+      }
+      bySize[size].push_back(path);
+    }
+  });
+  if (allFields) {
+    subfields = BitSet();
+    return;
+  }
+  for (auto& set : bySize) {
+    std::sort(set.begin(), set.end(), [](PathCP left, PathCP right) {
+      return *left < *right;
+    });
+  }
+  for (int32_t i = 0; i < bySize.size() - 1; ++i) {
+    for (auto path : bySize[i]) {
+      // Delete paths where 'path' is a prefix.
+      for (int32_t size = i + 1; size < bySize.size(); ++size) {
+        int32_t firstErase = -1;
+        auto& paths = bySize[size];
+        auto it = std::lower_bound(paths.begin(), paths.end(), path);
+        if (it != paths.end() && !(*it)->hasPrefix(*path)) {
+          ++it;
+        }
+        while (it != paths.end() && (*it)->hasPrefix(*path)) {
+          if (firstErase < 0) {
+            firstErase = it - paths.begin();
+          }
+          subfields.erase((*it)->id());
+          ++it;
+        }
+        if (firstErase != -1) {
+          paths.erase(paths.begin() + firstErase, it);
+        }
+      }
+    }
+  }
+}
+
+PathCP toPath(std::vector<Step> steps) {
+  return queryCtx()->toPath(make<Path>(std::move(steps)));
 }
 
 } // namespace facebook::velox::optimizer

@@ -14,13 +14,24 @@
  * limitations under the License.
  */
 
-#pragma once
+#include "velox/vector/ComplexVector.h"
 
-#include "optimizer/QueryGraph.h" //@manual
+namespace facebook::velox::optimizer::test {
 
-namespace facebook::velox::optimizer {
+struct FeatureOptions {
+  int32_t numFloat{10};
+  int32_t numInt{10};
+  int32_t numIdList{10};
+  int32_t idListMaxCard{1000};
+  int32_t idListMinCard{10};
+  int32_t idListMaxDistinct{1000};
+  int32_t numIdScoreList{5};
+};
 
-SchemaP
-tpchSchema(int32_t scale, bool partitioned, bool ordered, bool secondary);
+std::vector<RowVectorPtr> makeFeatures(
+    int32_t numBatches,
+    int32_t batchSize,
+    const FeatureOptions& opts,
+    memory::MemoryPool* pool);
 
-}
+} // namespace facebook::velox::optimizer::test

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -112,7 +112,7 @@ SchemaTableCP Schema::findTable(std::string_view name) const {
   for (auto& pair : table->columnMap()) {
     auto& tableColumn = *pair.second;
     float cardinality = tableColumn.approxNumDistinct(table->numRows());
-    Value value(tableColumn.type().get(), cardinality);
+    Value value(toType(tableColumn.type()), cardinality);
     auto columnName = toName(pair.first);
     auto* column = make<Column>(columnName, nullptr, value);
     schemaTable->columns[columnName] = column;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,6 +57,12 @@ std::string Column::toString() const {
   return fmt::format("{}.{}", cname, name_);
 }
 
+std::string Literal::toString() const {
+  std::stringstream out;
+  out << literal_;
+  return out.str();
+}
+
 std::string Call::toString() const {
   std::stringstream out;
   out << name_ << "(";
@@ -73,6 +79,45 @@ std::string conjunctsToString(const ExprVector& conjuncts) {
         << (i == conjuncts.size() - 1 ? "" : " and ");
   }
   return out.str();
+}
+
+std::optional<BitSet> SubfieldSet::findSubfields(int32_t id) const {
+  for (auto i = 0; i < ids.size(); ++i) {
+    if (ids[i] == id) {
+      return subfields[i];
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<int32_t> BaseTable::columnId(Name column) const {
+  for (auto i = 0; i < columns.size(); ++i) {
+    if (columns[i]->name() == column) {
+      return columns[i]->id();
+    }
+  }
+  return std::nullopt;
+}
+
+BitSet BaseTable::columnSubfields(
+    int32_t id,
+    bool controlOnly,
+    bool payloadOnly) const {
+  BitSet subfields;
+  if (!controlOnly) {
+    auto maybe = payloadSubfields.findSubfields(id);
+    if (maybe.has_value()) {
+      subfields = maybe.value();
+    }
+  }
+  if (!payloadOnly) {
+    auto maybe = controlSubfields.findSubfields(id);
+    if (maybe.has_value()) {
+      subfields.unionSet(maybe.value());
+    }
+  }
+  Path::subfieldSkyline(subfields);
+  return subfields;
 }
 
 std::string BaseTable::toString() const {
@@ -232,6 +277,7 @@ PlanObjectSet allTables(CPSpan<Expr> exprs) {
 Column::Column(Name name, PlanObjectP relation, const Value& value)
     : Expr(PlanType::kColumn, value), name_(name), relation_(relation) {
   columns_.add(this);
+  subexpressions_.add(this);
   if (relation_ && relation_->type() == PlanType::kTable) {
     schemaColumn_ = relation->as<BaseTable>()->schemaTable->findColumn(name_);
     VELOX_CHECK(schemaColumn_);

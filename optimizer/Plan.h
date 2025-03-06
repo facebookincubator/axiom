@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,11 +19,34 @@
 #include "optimizer/RelationOp.h" //@manual
 #include "velox/connectors/Connector.h"
 #include "velox/core/PlanNode.h"
+#include "velox/expression/ConstantExpr.h"
 #include "velox/runner/MultiFragmentPlan.h"
 
 /// Planning-time data structures. Represent the state of the planning process
 /// plus utilities.
 namespace facebook::velox::optimizer {
+
+/// Represents a path over an Expr of complex type. Used as a key
+/// for a map from unique step+optionl subscript expr pairs to the
+/// dedupped Expr that is the getter.
+struct PathExpr {
+  Step step;
+  ExprCP subscriptExpr{nullptr};
+  ExprCP base;
+
+  bool operator==(const PathExpr& other) const {
+    return step == other.step && subscriptExpr == other.subscriptExpr &&
+        base == other.base;
+  }
+};
+
+struct PathExprHasher {
+  size_t operator()(const PathExpr& expr) const {
+    size_t hash = bits::hashMix(expr.step.hash(), expr.base->id());
+    return expr.subscriptExpr ? bits::hashMix(hash, expr.subscriptExpr->id())
+                              : hash;
+  }
+};
 
 struct ITypedExprHasher {
   size_t operator()(const velox::core::ITypedExpr* expr) const {
@@ -45,6 +68,53 @@ using ExprDedupMap = folly::F14FastMap<
     ExprCP,
     ITypedExprHasher,
     ITypedExprComparer>;
+
+/// Set of accessed subfields given ordinal of output column or function
+/// argument.
+struct ResultAccess {
+  // Key in 'resultPaths' to indicate the path is applied to the function
+  // itself, not the ith argument.
+  static constexpr int32_t kSelf = -1;
+  std::map<int32_t, BitSet> resultPaths;
+};
+
+/// PlanNode output columns and function arguments with accessed subfields.
+struct PlanSubfields {
+  std::unordered_map<const core::PlanNode*, ResultAccess> nodeFields;
+  std::unordered_map<const core::ITypedExpr*, ResultAccess> argFields;
+
+  bool hasColumn(const core::PlanNode* node, int32_t ordinal) const {
+    auto it = nodeFields.find(node);
+    if (it == nodeFields.end()) {
+      return false;
+    }
+    return it->second.resultPaths.count(ordinal) != 0;
+  }
+};
+
+/// Struct for resolving which PlanNode or Lambda defines which
+/// FieldAccessTypedExpr for column and subfield tracking.
+struct ContextSource {
+  const core::PlanNode* planNode;
+  const core::CallTypedExpr* call;
+  int32_t lambdaOrdinal{-1};
+};
+
+/// Utility for making a getter from a Step.
+core::TypedExprPtr stepToGetter(Step, core::TypedExprPtr arg);
+/// Lists the subfield paths physically produced by a source. The
+/// source can be a column or a complex type function. This is empty
+/// if the whole object corresponding to the type of the column or
+/// function is materialized. Suppose a type of map<int, float>. If
+/// we have a function that adds 1 to every value in a map and we
+/// only access [1] and [2] then the projection has [1] = 1 +
+/// arg[1], [2] = 1 + arg[2]. If we have a column of the type and
+/// only [1] and [2] are accessed, then we could have [1] = xx1, [2]
+/// = xx2, where xx is the name of a top level column returned by
+/// the scan.
+struct SubfieldProjections {
+  std::unordered_map<PathCP, ExprCP> pathToExpr;
+};
 
 struct Plan;
 struct PlanState;
@@ -488,8 +558,96 @@ class Optimization {
       const velox::core::CastTypedExpr* cast,
       const ExprVector& literals);
 
+  // Returns a constant expression if 'typedExprcan be folded, nullptr
+  // otherwise.
+  std::shared_ptr<const exec::ConstantExpr> foldConstant(
+      const core::TypedExprPtr& typedExpr);
+
+  // Returns the ordinal positions of actually referenced outputs of 'node'.
+  std::vector<int32_t> usedChannels(const core::PlanNode* node);
+
+  // Returns the ordinal position of used arguments for a function call that
+  // produces a complex type.
+  std::vector<int32_t> usedArgs(const core::ITypedExpr* call);
+
+  void markFieldAccessed(
+      const ContextSource& source,
+      int32_t ordinal,
+      std::vector<Step>& steps,
+      bool isControl,
+      const std::vector<const RowType*>& context,
+      const std::vector<ContextSource>& sources);
+
+  void markSubfields(
+      const core::ITypedExpr* expr,
+      std::vector<Step>& steps,
+      bool isControl,
+      const std::vector<const RowType*> context,
+      const std::vector<ContextSource>& sources);
+
+  void markAllSubfields(const RowType* type, const core::PlanNode* node);
+
+  void markControl(const core::PlanNode* node);
+
+  void markColumnSubfields(
+      const core::PlanNode* node,
+      const std::vector<core::FieldAccessTypedExprPtr>& columns,
+      int32_t source);
+
+  bool isSubfield(
+      const core::ITypedExpr* expr,
+      Step& step,
+      core::TypedExprPtr& input);
+
+  // if 'step' applied to result of the function of 'metadata'
+  // corresponds to an argument, returns the ordinal of the argument/
+  std::optional<int32_t> stepToArg(
+      const Step& step,
+      const FunctionMetadata* metadata);
+
+  BitSet functionSubfields(
+      const core::CallTypedExpr* call,
+      bool controlOnly,
+      bool payloadOnly);
+
   // Makes a deduplicated Expr tree from 'expr'.
   ExprCP translateExpr(const velox::core::TypedExprPtr& expr);
+
+  // If 'expr' is not a subfield path, returns std::nullopt. If 'expr'
+  // is a subfield path that is subsumed by a projected subfield,
+  // returns nullptr. Else returns an optional subfield path on top of
+  // the base of the subfield. Suppose column c is map<int,
+  // map<int,array<int>>>. Suppose the only access is
+  // c[1][1][0]. Suppose that the subfield projections are [1][1] =
+  // xx. Then c[1] resolves to nullptr,c[1][1] to xx and c[1][1][1]
+  // resolves to xx[1]. If no subfield projections, c[1][1] is c[1][1] etc.
+  std::optional<ExprCP> translateSubfield(const core::TypedExprPtr& expr);
+
+  void getExprForField(
+      const core::FieldAccessTypedExpr* expr,
+      core::TypedExprPtr& resultExpr,
+      ColumnCP& resultColumn,
+      const core::PlanNode*& context);
+
+  // Translates a complex type function where the generated Exprs  depend on the
+  // accessed subfields.
+  std::optional<ExprCP> translateSubfieldFunction(
+      const core::CallTypedExpr* call,
+      const FunctionMetadata* metadata);
+
+  // Calls translateSubfieldFunction() if not already called.
+  void ensureFunctionSubfields(const core::TypedExprPtr& expr);
+
+  // Makes dedupped getters for 'steps'. if steps is below skyline,
+  // nullptr. If 'steps' intersects 'skyline' returns skyline wrapped
+  // in getters that are not in skyline. If no skyline, puts dedupped
+  // getters defined by 'steps' on 'base' or 'column' if 'base' is
+  // nullptr.
+  ExprCP makeGettersOverSkyline(
+      const std::vector<Step>& steps,
+      const SubfieldProjections* skyline,
+      const core::TypedExprPtr& base,
+      ColumnCP column);
 
   // Adds conjuncts combined by any number of enclosing ands from 'input' to
   // 'flat'.
@@ -679,6 +837,12 @@ class Optimization {
       Cost cost,
       const std::string& role);
 
+  PlanObjectCP findLeaf(const core::PlanNode* node) {
+    auto* leaf = planLeaves_[node];
+    VELOX_CHECK_NOT_NULL(leaf);
+    return leaf;
+  }
+
   const Schema& schema_;
 
   // Top level plan to optimize.
@@ -692,6 +856,9 @@ class Optimization {
 
   // Innermost DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP currentSelect_;
+
+  // Source PlanNode when inside addProjection() or 'addFilter().
+  const core::PlanNode* exprSource_{nullptr};
 
   // Maps names in project noes of 'inputPlan_' to deduplicated Exprs.
   std::unordered_map<std::string, ExprCP> renames_;
@@ -720,6 +887,37 @@ class Optimization {
   // Must stay alive as long as the Plans and RelationOps are reeferenced.
   PlanState topState_{*this, nullptr};
 
+  // Column and subfield access info for filters, joins, grouping and other
+  // things affecting result row selection.
+  PlanSubfields controlSubfields_;
+
+  // Column and subfield info for items that only affect column values.
+  PlanSubfields payloadSubfields_;
+
+  /// Expressions corresponding to skyline paths over a subfield decomposable
+  /// function.
+  std::unordered_map<const core::ITypedExpr*, SubfieldProjections>
+      functionSubfields_;
+
+  // Every unique path step, expr pair. For paths c.f1.f2 and c.f1.f3 there are
+  // 3 entries: c.f1 and c.f1.f2 and c1.f1.f3, where the two last share the same
+  // c.f1.
+  std::unordered_map<PathExpr, ExprCP, PathExprHasher> deduppedGetters_;
+
+  // Complex type functions that have been checke for explode and
+  // 'functionSubfields_'.
+  std::unordered_set<const core::CallTypedExpr*> translatedSubfieldFuncs_;
+
+  /// If subfield extraction is pushed down, then these give the skyline
+  /// subfields for a column for control and payload situations. The same column
+  /// may have different skylines in either. For example if the column is
+  /// struct<a int, b int> and only c.a is accessed, there may be no
+  /// representation for c, but only for c.a. In this case the skyline is .a =
+  /// xx where xx is a synthetic leaf column name for c.a.
+  std::unordered_map<ColumnCP, SubfieldProjections> allColumnSubfields_;
+  std::unordered_map<ColumnCP, SubfieldProjections> controlColumnSubfields_;
+  std::unordered_map<ColumnCP, SubfieldProjections> payloadColumnSubfields_;
+
   // Controls tracing.
   int32_t traceFlags_{0};
 
@@ -730,6 +928,9 @@ class Optimization {
   // from the topmost (final) and the input from the lefmost (whichever consumes
   // raw values). Records the output type of the final aggregation.
   velox::RowTypePtr aggFinalType_;
+
+  // Map from leaf PlanNode to corresponding PlanObject
+  std::unordered_map<const core::PlanNode*, PlanObjectCP> planLeaves_;
 
   // Map from plan object id to pair of handle with pushdown filters and list of
   // filters to eval on the result from the handle.

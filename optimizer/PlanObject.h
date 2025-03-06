@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "optimizer/BitSet.h" //@manual
 #include "optimizer/QueryGraphContext.h" //@manual
 
 namespace facebook::velox::optimizer {
@@ -35,7 +36,9 @@ enum class PlanType {
   kFilter,
   kJoin,
   kOrderBy,
-  kLimit
+  kLimit,
+  kField,
+  kLambda
 };
 
 /// True if 'type' is an expression with a value.
@@ -115,7 +118,7 @@ class PlanObject {
 };
 
 /// Set of PlanObjects. Uses the objects id() as an index into a bitmap.
-class PlanObjectSet {
+class PlanObjectSet : public BitSet {
  public:
   /// True if id of 'object' is in 'this'.
   bool contains(PlanObjectCP object) const {
@@ -123,44 +126,15 @@ class PlanObjectSet {
         velox::bits::isBitSet(bits_.data(), object->id());
   }
 
-  bool operator==(const PlanObjectSet& other) const;
-
-  size_t hash() const;
-
-  // True if no members.
-  bool empty() const {
-    for (auto word : bits_) {
-      if (word) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   /// Inserts id of 'object'.
   void add(PlanObjectCP object) {
     auto id = object->id();
-    ensureSize(id);
-    velox::bits::setBit(bits_.data(), id);
+    BitSet::add(id);
   }
-
-  /// Returns true if 'this' is a subset of 'super'.
-  bool isSubset(const PlanObjectSet& super) const;
 
   /// Erases id of 'object'.
   void erase(PlanObjectCP object) {
-    if (object->id() < bits_.size() * 64) {
-      velox::bits::clearBit(bits_.data(), object->id());
-    }
-  }
-
-  void except(const PlanObjectSet& other) {
-    velox::bits::forEachSetBit(
-        other.bits_.data(), 0, other.bits_.size() * 64, [&](auto id) {
-          if (id < bits_.size() * 64) {
-            velox::bits::clearBit(bits_.data(), id);
-          }
-        });
+    BitSet::erase(object->id());
   }
 
   /// Adds ids of all columns 'expr' depends on.
@@ -169,12 +143,6 @@ class PlanObjectSet {
   /// Adds ids of all columns 'exprs' depend on.
   void unionColumns(const ExprVector& exprs);
   void unionColumns(const ColumnVector& exprs);
-
-  /// Adds all ids in 'other'.
-  void unionSet(const PlanObjectSet& other);
-
-  /// Erases all ids not in 'other'.
-  void intersect(const PlanObjectSet& other);
 
   /// Adds ids of all objects in 'objects'.
   template <typename V>
@@ -213,20 +181,6 @@ class PlanObjectSet {
   /// Prnts the contents with ids and the string representation of the objects
   /// if 'names' is true.
   std::string toString(bool names) const;
-
- private:
-  void ensureSize(int32_t id) {
-    ensureWords(velox::bits::nwords(id + 1));
-  }
-
-  void ensureWords(int32_t size) {
-    if (bits_.size() < size) {
-      bits_.resize(size);
-    }
-  }
-
-  // A one bit corresponds to the id of each member.
-  std::vector<uint64_t, QGAllocator<uint64_t>> bits_;
 };
 
 using PlanObjectVector = std::vector<PlanObjectCP, QGAllocator<PlanObjectCP>>;

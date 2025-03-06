@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -206,6 +206,10 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   HiveConnector* hiveConnector() const {
     return hiveConnector_;
   }
+
+  /// Rereads the contents of the data path and re-creates the tables
+  /// and stats. This is used in tests after adding tables.
+  void reinitialize();
 
   /// returns the set of known tables. This is not part of the
   /// ConnectorMetadata API. This This is only needed for running the

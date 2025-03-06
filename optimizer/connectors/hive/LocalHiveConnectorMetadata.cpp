@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -100,6 +100,13 @@ LocalHiveConnectorMetadata::LocalHiveConnectorMetadata(
       hiveConfig_(
           std::make_shared<HiveConfig>(hiveConnector_->connectorConfig())),
       splitManager_(this) {}
+
+void LocalHiveConnectorMetadata::reinitialize() {
+  std::lock_guard<std::mutex> l(mutex_);
+  tables_.clear();
+  initialize();
+  initialized_ = true;
+}
 
 void LocalHiveConnectorMetadata::initialize() {
   auto formatName = hiveConfig_->hiveLocalFileFormat();
@@ -521,7 +528,8 @@ void LocalTable::sampleNumDistincts(float samplePct, memory::MemoryPool* pool) {
             auto min = ints->getMinimum();
             auto max = ints->getMaximum();
             if (min.has_value() && max.has_value()) {
-              auto range = max.value() - min.value();
+              auto range = static_cast<float>(max.value()) -
+                  static_cast<float>(min.value());
               approxNumDistinct = std::min<float>(approxNumDistinct, range);
             }
           }

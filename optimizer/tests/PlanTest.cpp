@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -148,6 +148,21 @@ TEST_F(PlanTest, queryGraph) {
 
   // Identical child types with different names get equal pointers.
   EXPECT_EQ(dedupRow1->childAt(0).get(), dedupDifferentNames->childAt(0).get());
+
+  auto* path = make<Path>()
+                   ->subscript("field")
+                   ->subscript(123)
+                   ->field("f1")
+                   ->cardinality();
+  auto interned = queryCtx()->toPath(path);
+  EXPECT_EQ(interned, path);
+  auto* path2 = make<Path>()
+                    ->subscript("field")
+                    ->subscript(123)
+                    ->field("f1")
+                    ->cardinality();
+  auto interned2 = queryCtx()->toPath(path2);
+  EXPECT_EQ(interned2, interned);
 }
 
 TEST_F(PlanTest, q3) {
