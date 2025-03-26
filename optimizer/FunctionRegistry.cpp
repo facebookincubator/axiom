@@ -38,17 +38,36 @@ FunctionRegistry* FunctionRegistry::instance() {
   return registry.get();
 }
 
-bool declareBuiltin() {
-  auto metadata = std::make_unique<FunctionMetadata>();
-  LambdaInfo info;
-  info.ordinal = 1;
-  info.lambdaArg = {LambdaArg::kKey, LambdaArg::kValue};
-  info.argOrdinal = {0, 0};
-  metadata->lambdas.push_back(std::move(info));
-  metadata->subfieldArg = 0;
-  FunctionRegistry::instance()->registerFunction(
-      "transform_values", std::move(metadata));
+bool declareBuiltIn() {
+  {
+    auto metadata = std::make_unique<FunctionMetadata>();
+    LambdaInfo info;
+    info.ordinal = 1;
+    info.lambdaArg = {LambdaArg::kKey, LambdaArg::kValue};
+    info.argOrdinal = {0, 0};
+    metadata->lambdas.push_back(std::move(info));
+    metadata->subfieldArg = 0;
+    metadata->cost = 40;
+    FunctionRegistry::instance()->registerFunction(
+        "transform_values", std::move(metadata));
+  }
+  {
+    auto metadata = std::make_unique<FunctionMetadata>();
+    LambdaInfo info;
+    info.ordinal = 1;
+    info.lambdaArg = {LambdaArg::kElement};
+    info.argOrdinal = {0};
+    metadata->lambdas.push_back(std::move(info));
+    metadata->subfieldArg = 0;
+    metadata->cost = 20;
+    FunctionRegistry::instance()->registerFunction(
+        "transform", std::move(metadata));
+  }
   return true;
+}
+
+namespace {
+bool temp = declareBuiltIn();
 }
 
 } // namespace facebook::velox::optimizer

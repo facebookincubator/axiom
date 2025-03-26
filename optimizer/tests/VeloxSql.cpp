@@ -487,8 +487,10 @@ class VeloxRunner {
     try {
       facebook::velox::optimizer::Schema veraxSchema(
           "test", schema_.get(), &locus);
-      facebook::velox::optimizer::Optimization opt(
-          *plan, veraxSchema, *history_, evaluator, FLAGS_optimizer_trace);
+      optimizer::OptimizerOptions optimizerOpts = {
+          .traceFlags = FLAGS_optimizer_trace};
+      optimizer::Optimization opt(
+          *plan, veraxSchema, *history_, evaluator, optimizerOpts);
       auto best = opt.bestPlan();
       if (planString) {
         *planString = best->op->toString(true, false);

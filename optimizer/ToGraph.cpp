@@ -506,7 +506,7 @@ ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
   auto call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
   if (call) {
     auto* metadata = FunctionRegistry::instance()->metadata(call->name());
-    if (metadata) {
+    if (metadata && metadata->processSubfields()) {
       auto translated = translateSubfieldFunction(call, metadata);
       if (translated.has_value()) {
         return translated.value();
@@ -514,6 +514,11 @@ ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
     }
   }
   auto cast = dynamic_cast<const core::CastTypedExpr*>(expr.get());
+  if (!cast && !call) {
+    if (auto* lambda = dynamic_cast<const core::LambdaTypedExpr*>(expr.get())) {
+      return translateLambda(lambda);
+    }
+  }
   ExprVector args{expr->inputs().size()};
   PlanObjectSet columns;
   FunctionSet funcs;
@@ -541,7 +546,9 @@ ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
     funcs = funcs | functionBits(name);
     auto* callExpr =
         make<Call>(name, Value(toType(call->type()), cardinality), args, funcs);
-    exprDedup_[expr.get()] = callExpr;
+    if (!callExpr->containsFunction(FunctionSet::kNondeterministic)) {
+      exprDedup_[expr.get()] = callExpr;
+    }
     return callExpr;
   }
   if (cast) {
@@ -550,12 +557,31 @@ ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
 
     auto* callExpr =
         make<Call>(name, Value(toType(cast->type()), cardinality), args, funcs);
-    exprDedup_[expr.get()] = callExpr;
+    if (!callExpr->containsFunction(FunctionSet::kNondeterministic)) {
+      exprDedup_[expr.get()] = callExpr;
+    }
     return callExpr;
   }
 
   VELOX_NYI();
   return nullptr;
+}
+
+ExprCP Optimization::translateLambda(const core::LambdaTypedExpr* lambda) {
+  auto savedRenames = renames_;
+  auto row = lambda->signature();
+  toType(row);
+  toType(lambda->type());
+  ColumnVector args;
+  for (auto i = 0; i < row->size(); ++i) {
+    auto col = make<Column>(
+        toName(row->nameOf(i)), nullptr, Value(toType(row->childAt(i)), 1));
+    args.push_back(col);
+    renames_[row->nameOf(i)] = col;
+  }
+  auto body = translateExpr(lambda->body());
+  renames_ = savedRenames;
+  return make<Lambda>(std::move(args), toType(lambda->type()), body);
 }
 
 std::optional<ExprCP> Optimization::translateSubfieldFunction(
@@ -901,41 +927,95 @@ PlanObjectP Optimization::makeBaseTable(const core::TableScanNode* tableScan) {
   baseTable->schemaTable = schemaTable;
   planLeaves_[tableScan] = baseTable;
   auto channels = usedChannels(tableScan);
-  ColumnVector columns;
-  ColumnVector schemaColumns;
+
   for (auto& pair : assignments) {
     auto idx = tableScan->outputType()->getChildIdx(pair.second->name());
     if (std::find(channels.begin(), channels.end(), idx) == channels.end()) {
       continue;
     }
     auto schemaColumn = schemaTable->findColumn(pair.second->name());
-    schemaColumns.push_back(schemaColumn);
     auto value = schemaColumn->value();
     auto* column = make<Column>(toName(pair.second->name()), baseTable, value);
-    columns.push_back(column);
+    baseTable->columns.push_back(column);
     auto kind = column->value().type->kind();
     if (kind == TypeKind::ARRAY || kind == TypeKind::ROW ||
         kind == TypeKind::MAP) {
+      BitSet allPaths;
       if (controlSubfields_.hasColumn(tableScan, idx)) {
         baseTable->controlSubfields.ids.push_back(column->id());
-        baseTable->controlSubfields.subfields.push_back(
-            controlSubfields_.nodeFields[tableScan].resultPaths[idx]);
+        allPaths = controlSubfields_.nodeFields[tableScan].resultPaths[idx];
+        baseTable->controlSubfields.subfields.push_back(allPaths);
       }
       if (payloadSubfields_.hasColumn(tableScan, idx)) {
         baseTable->payloadSubfields.ids.push_back(column->id());
-        baseTable->payloadSubfields.subfields.push_back(
-            payloadSubfields_.nodeFields[tableScan].resultPaths[idx]);
+        auto payloadPaths =
+            payloadSubfields_.nodeFields[tableScan].resultPaths[idx];
+        baseTable->payloadSubfields.subfields.push_back(payloadPaths);
+        allPaths.unionSet(payloadPaths);
+      }
+      if (opts_.pushdownSubfields) {
+        Path::subfieldSkyline(allPaths);
+        if (!allPaths.empty()) {
+          makeSubfieldColumns(baseTable, column, allPaths);
+        }
       }
     }
     renames_[pair.first] = column;
   }
-  baseTable->columns = columns;
 
-  setLeafHandle(baseTable->id(), tableScan->tableHandle(), {});
-  setLeafSelectivity(*baseTable);
+  ColumnVector top;
+  std::unordered_map<ColumnCP, TypePtr> map;
+  filterUpdated(baseTable, false);
+  auto scanType =
+      subfieldPushdownScanType(baseTable, baseTable->columns, top, map);
+  setLeafSelectivity(*baseTable, scanType);
   currentSelect_->tables.push_back(baseTable);
   currentSelect_->tableSet.add(baseTable);
   return baseTable;
+}
+
+const Type* pathType(const Type* type, PathCP path) {
+  for (auto& step : path->steps()) {
+    switch (step.kind) {
+      case StepKind::kField:
+        if (step.field) {
+          type =
+              type->childAt(type->as<TypeKind::ROW>().getChildIdx(step.field))
+                  .get();
+          break;
+        }
+        type = type->childAt(step.id).get();
+        break;
+      case StepKind::kSubscript:
+        type = type->childAt(type->kind() == TypeKind::ARRAY ? 0 : 1).get();
+        break;
+      default:
+        VELOX_NYI();
+    }
+  }
+  return type;
+}
+
+void Optimization::makeSubfieldColumns(
+    BaseTable* baseTable,
+    ColumnCP column,
+    const BitSet& paths) {
+  SubfieldProjections projections;
+  auto* ctx = queryCtx();
+  float card =
+      baseTable->schemaTable->columnGroups[0]->distribution().cardinality *
+      baseTable->filterSelectivity;
+  paths.forEach([&](auto id) {
+    auto* path = ctx->pathById(id);
+    auto type = pathType(column->value().type, path);
+    Value value(type, card);
+    auto name = fmt::format("{}.{}", column->name(), path->toString());
+    auto* subcolumn =
+        make<Column>(toName(name), baseTable, value, column, path);
+    baseTable->columns.push_back(subcolumn);
+    projections.pathToExpr[path] = subcolumn;
+  });
+  allColumnSubfields_[column] = std::move(projections);
 }
 
 void Optimization::addProjection(const core::ProjectNode* project) {

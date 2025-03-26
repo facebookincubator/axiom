@@ -19,6 +19,30 @@
 
 namespace facebook::velox::optimizer::test {
 
+RowTypePtr makeRowType(
+    const std::vector<RowVectorPtr>& vectors,
+    int32_t column) {
+  std::unordered_set<int32_t> keys;
+  TypePtr valueType;
+  for (auto& row : vectors) {
+    auto map = row->childAt(column)->as<MapVector>();
+    auto keyVector = map->mapKeys()->as<FlatVector<int32_t>>();
+    if (!valueType) {
+      valueType = map->type()->childAt(1);
+    }
+    for (auto i = 0; i < keyVector->size(); ++i) {
+      keys.insert(keyVector->valueAt(i));
+    }
+  }
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  for (auto key : keys) {
+    names.push_back(fmt::format("{}", key));
+    types.push_back(valueType);
+  }
+  return ROW(std::move(names), std::move(types));
+}
+
 BufferPtr evenOffsets(int32_t numRows, int32_t step, memory::MemoryPool* pool) {
   auto buffer = AlignedBuffer::allocate<int32_t>(numRows, pool);
   for (auto i = 0; i < numRows; ++i) {
@@ -38,7 +62,7 @@ BufferPtr evenSizes(int32_t numRows, int32_t step, memory::MemoryPool* pool) {
 std::vector<RowVectorPtr> makeFeatures(
     int32_t numBatches,
     int32_t batchSize,
-    const FeatureOptions& opts,
+    FeatureOptions& opts,
     memory::MemoryPool* pool) {
   std::vector<RowVectorPtr> result;
   velox::test::VectorMaker vectorMaker(pool);
@@ -119,6 +143,9 @@ std::vector<RowVectorPtr> makeFeatures(
         {uids, tss, floatFeatures, idListFeatures, scoreListFeatures});
     result.push_back(std::move(row));
   }
+  opts.floatStruct = makeRowType(result, 2);
+  opts.idListStruct = makeRowType(result, 3);
+  opts.idScoreListStruct = makeRowType(result, 4);
   return result;
 }
 

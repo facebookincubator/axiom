@@ -63,13 +63,7 @@ PathCP stepsToPath(const std::vector<Step>& steps) {
 RowTypePtr lambdaArgType(const core::ITypedExpr* expr) {
   auto* l = dynamic_cast<const core::LambdaTypedExpr*>(expr);
   VELOX_CHECK_NOT_NULL(l);
-  std::vector<std::string> names;
-  std::vector<TypePtr> types;
-  for (auto i = 0; i < l->type()->size() - 1; ++i) {
-    names.push_back(l->type()->as<TypeKind::ROW>().nameOf(i));
-    types.push_back(l->type()->childAt(i));
-  }
-  return ROW(std::move(names), std::move(types));
+  return l->signature();
 }
 } // namespace
 
@@ -249,7 +243,7 @@ void Optimization::markSubfields(
       return;
     }
     auto* metadata = FunctionRegistry::instance()->metadata(toName(name));
-    if (!metadata) {
+    if (!metadata || !metadata->processSubfields()) {
       for (auto i = 0; i < call->inputs().size(); ++i) {
         std::vector<Step> steps;
         markSubfields(
@@ -300,12 +294,13 @@ void Optimization::markSubfields(
         }
       }
       if (auto* lambda = metadata->lambdaInfo(i)) {
-        auto argType = lambdaArgType(call->inputs()[lambda->ordinal].get());
+        auto argType = lambdaArgType(call->inputs()[i].get());
         std::vector<const RowType*> newContext = {argType.get()};
         newContext.insert(newContext.end(), context.begin(), context.end());
         std::vector<ContextSource> newSources = {
             ContextSource{.call = call, .lambdaOrdinal = i}};
         newSources.insert(newSources.end(), sources.begin(), sources.end());
+
         auto* l = reinterpret_cast<const core::LambdaTypedExpr*>(
             call->inputs()[i].get());
         std::vector<Step> empty;
@@ -461,7 +456,7 @@ core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
         }
 
         return std::make_shared<core::CallTypedExpr>(
-            type->as<TypeKind::MAP>().childAt(0),
+            type->as<TypeKind::MAP>().childAt(1),
             std::vector<core::TypedExprPtr>{arg, key},
             "subscript");
       }

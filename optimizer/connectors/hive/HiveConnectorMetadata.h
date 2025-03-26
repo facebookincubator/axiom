@@ -111,6 +111,7 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       core::ExpressionEvaluator& evaluator,
       std::vector<core::TypedExprPtr> filters,
       std::vector<core::TypedExprPtr>& rejectedFilters,
+      RowTypePtr dataColumns = nullptr,
       std::optional<LookupKeys> lookupKeys = std::nullopt) override;
 
  protected:

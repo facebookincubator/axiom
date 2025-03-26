@@ -97,6 +97,7 @@ void QueryTestBase::SetUp() {
 
   schema_ = std::make_shared<facebook::velox::optimizer::SchemaResolver>(
       connector_, "");
+  history_ = std::make_unique<facebook::velox::optimizer::VeloxHistory>();
 }
 
 void QueryTestBase::TearDown() {
@@ -130,7 +131,6 @@ void QueryTestBase::tablesCreated() {
                                   const std::vector<std::string>& columnNames) {
     return toTableScan(id, name, rowType, columnNames);
   });
-  history_ = std::make_unique<facebook::velox::optimizer::VeloxHistory>();
 }
 
 core::PlanNodePtr QueryTestBase::toTableScan(
@@ -167,45 +167,39 @@ core::PlanNodePtr QueryTestBase::toTableScan(
       id, rowType, handle, assignments);
 }
 
-std::shared_ptr<runner::LocalRunner> QueryTestBase::runSql(
-    const std::string& sql,
-    std::vector<RowVectorPtr>* resultVector,
-    std::string* planString,
-    std::string* errorString,
-    std::vector<exec::TaskStats>* statsReturn) {
-  std::shared_ptr<runner::LocalRunner> runner;
-  auto fragmentedPlan = planSql(sql, planString, errorString);
+TestResult QueryTestBase::runSql(const std::string& sql) {
+  TestResult result;
+  auto fragmentedPlan = planSql(sql, &result.planString, &result.errorString);
   if (!fragmentedPlan) {
-    return nullptr;
+    return result;
   }
+  return runFragmentedPlan(fragmentedPlan);
+}
+
+TestResult QueryTestBase::runFragmentedPlan(
+    runner::MultiFragmentPlanPtr fragmentedPlan) {
+  TestResult result;
+  result.veloxString = veloxString(fragmentedPlan);
   try {
-    runner = std::make_shared<runner::LocalRunner>(
+    result.runner = std::make_shared<runner::LocalRunner>(
         fragmentedPlan,
         queryCtx_,
         std::make_shared<connector::ConnectorSplitSourceFactory>());
-    std::vector<RowVectorPtr> results;
-    while (auto rows = runner->next()) {
-      results.push_back(rows);
+
+    while (auto rows = result.runner->next()) {
+      result.results.push_back(std::move(rows));
     }
-    if (resultVector) {
-      *resultVector = results;
-    }
-    auto stats = runner->stats();
-    if (statsReturn) {
-      *statsReturn = stats;
-    }
+    result.stats = result.runner->stats();
     auto& fragments = fragmentedPlan->fragments();
-    history_->recordVeloxExecution(nullptr, fragments, stats);
+    history_->recordVeloxExecution(nullptr, fragments, result.stats);
   } catch (const std::exception& e) {
     std::cerr << "Query terminated with: " << e.what() << std::endl;
-    if (errorString) {
-      *errorString = fmt::format("Runtime error: {}", e.what());
-    }
-    waitForCompletion(runner);
-    return nullptr;
+    result.errorString = fmt::format("Runtime error: {}", e.what());
+    waitForCompletion(result.runner);
+    return result;
   }
-  waitForCompletion(runner);
-  return runner;
+  waitForCompletion(result.runner);
+  return result;
 }
 
 runner::MultiFragmentPlanPtr QueryTestBase::planSql(
@@ -262,7 +256,7 @@ runner::MultiFragmentPlanPtr QueryTestBase::planVelox(
     facebook::velox::optimizer::Schema veraxSchema(
         "test", schema_.get(), &locus);
     facebook::velox::optimizer::Optimization opt(
-        *plan, veraxSchema, *history_, evaluator, FLAGS_optimizer_trace);
+        *plan, veraxSchema, *history_, evaluator, optimizerOptions_);
     auto best = opt.bestPlan();
     if (planString) {
       *planString = best->op->toString(true, false);
@@ -278,6 +272,15 @@ runner::MultiFragmentPlanPtr QueryTestBase::planVelox(
   }
   facebook::velox::optimizer::queryCtx() = nullptr;
   return fragmentedPlan;
+}
+TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
+  TestResult result;
+  auto fragmentedPlan =
+      planVelox(plan, &result.planString, &result.errorString);
+  if (!fragmentedPlan) {
+    return result;
+  }
+  return runFragmentedPlan(fragmentedPlan);
 }
 
 void QueryTestBase::waitForCompletion(

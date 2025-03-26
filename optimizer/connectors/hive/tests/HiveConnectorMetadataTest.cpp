@@ -91,7 +91,8 @@ TEST_F(HiveConnectorMetadataTest, basic) {
   auto c0 = common::Subfield::create("c0");
   fields.push_back(std::move(*c0));
   HashStringAllocator allocator(pool_.get());
-  auto pair = layout->sample(tableHandle, 100, {}, fields, &allocator, &stats);
+  auto pair = layout->sample(
+      tableHandle, 100, {}, layout->rowType(), fields, &allocator, &stats);
   EXPECT_EQ(250'000, pair.first);
   EXPECT_EQ(250'000, pair.second);
 }

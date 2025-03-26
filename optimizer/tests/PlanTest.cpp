@@ -15,11 +15,11 @@
  */
 
 #include "optimizer/Plan.h" //@manual
-#include "optimizer/VeloxHistory.h" //@manual
-
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
+#include "optimizer/VeloxHistory.h" //@manual
 #include "optimizer/tests/ParquetTpchTest.h" //@manual
+#include "optimizer/tests/QueryTestBase.h" //@manual
 #include "optimizer/tests/Tpch.h" //@manual
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
@@ -41,47 +41,39 @@ std::string nodeString(core::PlanNode* node) {
   return node->toString(true, true);
 }
 
-class PlanTest : public ParquetTpchTest {
+class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
  protected:
+  static void SetUpTestCase() {
+    ParquetTpchTest::SetUpTestCase();
+    LocalRunnerTestBase::testDataPath_ = FLAGS_data_path;
+    LocalRunnerTestBase::localFileFormat_ = "parquet";
+    connector::unregisterConnector(exec::test::kHiveConnectorId);
+    connector::unregisterConnectorFactory("hive");
+    LocalRunnerTestBase::SetUpTestCase();
+  }
+
+  static void TearDownTestCase() {
+    LocalRunnerTestBase::TearDownTestCase();
+    ParquetTpchTest::TearDownTestCase();
+  }
+
   void SetUp() override {
-    memory::MemoryManager::testingSetInstance({});
-    rootPool_ = memory::memoryManager()->addRootPool("velox_sql");
-    pool_ = rootPool_->addLeafChild("optimizer");
+    ParquetTpchTest::SetUp();
+    QueryTestBase::SetUp();
     allocator_ = std::make_unique<HashStringAllocator>(pool_.get());
     context_ = std::make_unique<QueryGraphContext>(*allocator_);
     queryCtx() = context_.get();
-    functions::prestosql::registerAllScalarFunctions();
-    aggregate::prestosql::registerAllAggregateFunctions();
-    parse::registerTypeResolver();
-    filesystems::registerLocalFileSystem();
-    if (!registered) {
-      registered = true;
-      parquet::registerParquetReaderFactory();
-    }
     builder_ = std::make_unique<exec::test::TpchQueryBuilder>(
         dwio::common::FileFormat::PARQUET);
     builder_->initialize(FLAGS_data_path);
-    history_ = std::make_unique<VeloxHistory>();
-    makeCheats();
-    queryCtx_ = core::QueryCtx::create();
-
-    evaluator_ = std::make_unique<exec::SimpleExpressionEvaluator>(
-        queryCtx_.get(), pool_.get());
   }
 
-  void makeCheats() {
-    history_->recordLeafSelectivity(
-        "table: lineitem, range filters: [(l_shipdate, BigintRange: [9205, 9223372036854775807] no nulls)]",
-        0.5);
-    history_->recordLeafSelectivity(
-        "table: orders, range filters: [(o_orderdate, BigintRange: [-9223372036854775808, 9203] no nulls)]",
-        0.5);
-    history_->recordLeafSelectivity(
-        "table: customer, range filters: [(c_mktsegment, Filter(BytesValues, deterministic, null not allowed))]",
-        0.2);
-    history_->recordLeafSelectivity(
-        "table: part, remaining filter: (like(ROW[\"p_name\"],\"%green%\"))",
-        1.0 / 17);
+  void TearDown() override {
+    context_.reset();
+    queryCtx() = nullptr;
+    allocator_.reset();
+    ParquetTpchTest::TearDown();
+    QueryTestBase::TearDown();
   }
 
   std::string makePlan(
@@ -89,31 +81,21 @@ class PlanTest : public ParquetTpchTest {
       bool partitioned,
       bool ordered,
       int numRepeats = FLAGS_num_repeats) {
-    auto schema = tpchSchema(100, partitioned, ordered, false);
-    std::string string;
+    std::string planText;
+    std::string errorText;
     for (auto counter = 0; counter < numRepeats; ++counter) {
-      Optimization opt(*plan, *schema, *history_, *evaluator_, FLAGS_trace);
-      auto result = opt.bestPlan();
-      if (counter == numRepeats - 1) {
-        string = result->toString(true);
-      }
+      optimizerOptions_.traceFlags = FLAGS_trace;
+      auto result = planVelox(plan, &planText, &errorText);
     }
     return fmt::format(
         "=== {} {}:\n{}\n",
         partitioned ? "Partitioned on PK" : "Not partitioned",
         ordered ? "sorted on PK" : "not sorted",
-        string);
+        planText);
   }
 
-  std::shared_ptr<memory::MemoryPool> rootPool_;
-  std::shared_ptr<memory::MemoryPool> pool_;
-
   std::unique_ptr<HashStringAllocator> allocator_;
-
   std::unique_ptr<QueryGraphContext> context_;
-  std::unique_ptr<VeloxHistory> history_;
-  std::shared_ptr<core::QueryCtx> queryCtx_;
-  std::unique_ptr<core::ExpressionEvaluator> evaluator_;
   std::unique_ptr<exec::test::TpchQueryBuilder> builder_;
   static inline bool registered;
 };

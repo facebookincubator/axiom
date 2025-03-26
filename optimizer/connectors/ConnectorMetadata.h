@@ -255,10 +255,13 @@ class TableLayout {
   /// to look at a subset of all accessed columns, so we specify these instead
   /// of defaulting to the columns in 'handle'.  'allocator' is used for
   /// temporary memory in gathering statistics.
+  /// 'outputType' can specify a cast from map to struct. Filter expressions see
+  /// the 'outputType' and 'subfields' are relative to that.
   virtual std::pair<int64_t, int64_t> sample(
       const connector::ConnectorTableHandlePtr& handle,
       float pct,
       std::vector<core::TypedExprPtr> extraFilters,
+      RowTypePtr outputType = nullptr,
       const std::vector<common::Subfield>& fields = {},
       HashStringAllocator* allocator = nullptr,
       std::vector<ColumnStatistics>* statistics = nullptr) const {
@@ -481,13 +484,16 @@ class ConnectorMetadata {
   /// have to be applied to the data returned by the
   /// DataSource. 'rejectedFilters' may or may not be a subset of
   /// 'filters' or subexpressions thereof. If 'lookupKeys' is present,
-  /// these must match the lookupKeys() in 'layout'.
+  /// these must match the lookupKeys() in 'layout'. If 'dataColumns' is given,
+  /// it must have all the existing columns and may additionally specify casting
+  /// from maps to structs by giving a struct in the place of a map.
   virtual ConnectorTableHandlePtr createTableHandle(
       const TableLayout& layout,
       std::vector<ColumnHandlePtr> columnHandles,
       core::ExpressionEvaluator& evaluator,
       std::vector<core::TypedExprPtr> filters,
       std::vector<core::TypedExprPtr>& rejectedFilters,
+      RowTypePtr dataColumns = nullptr,
       std::optional<LookupKeys> = std::nullopt) {
     VELOX_UNSUPPORTED();
   }

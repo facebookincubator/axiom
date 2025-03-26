@@ -70,7 +70,7 @@ class BitSet {
   }
 
   template <typename Func>
-  void forEach(Func f) {
+  void forEach(Func f) const {
     bits::forEachSetBit(bits_.data(), 0, bits_.size() * 64, f);
   }
 

@@ -79,6 +79,12 @@ TypePtr QueryGraphContext::dedupType(const TypePtr& type) {
     case TypeKind::MAP:
       newType = MAP(children[0], children[1]);
       break;
+    case TypeKind::FUNCTION: {
+      auto args = children;
+      args.pop_back();
+      newType =
+          std::make_shared<FunctionType>(std::move(args), children.back());
+    } break;
     default:
       VELOX_FAIL("Type has size > 0 and is not row/array/map");
   }

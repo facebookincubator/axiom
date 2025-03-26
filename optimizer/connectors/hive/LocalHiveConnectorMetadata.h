@@ -98,7 +98,8 @@ class LocalHiveTableLayout : public HiveTableLayout {
       const connector::ConnectorTableHandlePtr& handle,
       float pct,
       std::vector<core::TypedExprPtr> extraFilters,
-      const std::vector<common::Subfield>& fields,
+      RowTypePtr outputType = nullptr,
+      const std::vector<common::Subfield>& fields = {},
       HashStringAllocator* allocator = nullptr,
       std::vector<ColumnStatistics>* statistics = nullptr) const override;
 
@@ -114,6 +115,7 @@ class LocalHiveTableLayout : public HiveTableLayout {
   std::pair<int64_t, int64_t> sample(
       const connector::ConnectorTableHandlePtr& handle,
       float pct,
+      RowTypePtr scanType,
       const std::vector<common::Subfield>& fields,
       HashStringAllocator* allocator,
       std::vector<std::unique_ptr<dwrf::StatisticsBuilder>>* statsBuilders)

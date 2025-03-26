@@ -26,6 +26,26 @@
 
 namespace facebook::velox::optimizer::test {
 
+struct TestResult {
+  /// Runner that produced the results. Owns results.
+  std::shared_ptr<runner::LocalRunner> runner;
+
+  /// Results. Declare after runner because results are from a pool in the
+  /// runner's cursor, so runner must destruct last.
+  std::vector<RowVectorPtr> results;
+
+  /// Human readable Velox plan.
+  std::string veloxString;
+
+  /// Human readable Verax  output.
+  std::string planString;
+
+  /// Error message.
+  std::string errorString;
+
+  std::vector<exec::TaskStats> stats;
+};
+
 class QueryTestBase : public exec::test::LocalRunnerTestBase {
  protected:
   void SetUp() override;
@@ -41,12 +61,11 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
       const RowTypePtr& rowType,
       const std::vector<std::string>& columnNames);
 
-  std::shared_ptr<runner::LocalRunner> runSql(
-      const std::string& sql,
-      std::vector<RowVectorPtr>* resultVector = nullptr,
-      std::string* planString = nullptr,
-      std::string* errorString = nullptr,
-      std::vector<exec::TaskStats>* statsReturn = nullptr);
+  TestResult runSql(const std::string& sql);
+
+  TestResult runVelox(const core::PlanNodePtr& plan);
+
+  TestResult runFragmentedPlan(runner::MultiFragmentPlanPtr plan);
 
   runner::MultiFragmentPlanPtr planSql(
       const std::string& sql,
@@ -67,6 +86,7 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
 
   void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner);
 
+  OptimizerOptions optimizerOptions_;
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> optimizerPool_;
   std::shared_ptr<memory::MemoryPool> schemaPool_;

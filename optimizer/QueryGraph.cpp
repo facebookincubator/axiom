@@ -274,12 +274,22 @@ PlanObjectSet allTables(CPSpan<Expr> exprs) {
   return all;
 }
 
-Column::Column(Name name, PlanObjectP relation, const Value& value)
-    : Expr(PlanType::kColumn, value), name_(name), relation_(relation) {
+Column::Column(
+    Name name,
+    PlanObjectP relation,
+    const Value& value,
+    ColumnCP top,
+    PathCP path)
+    : Expr(PlanType::kColumn, value),
+      name_(name),
+      relation_(relation),
+      topColumn_(top),
+      path_(path) {
   columns_.add(this);
   subexpressions_.add(this);
   if (relation_ && relation_->type() == PlanType::kTable) {
-    schemaColumn_ = relation->as<BaseTable>()->schemaTable->findColumn(name_);
+    schemaColumn_ = relation->as<BaseTable>()->schemaTable->findColumn(
+        topColumn_ ? topColumn_->name() : name_);
     VELOX_CHECK(schemaColumn_);
   }
 }

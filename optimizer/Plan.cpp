@@ -17,6 +17,7 @@
 #include "optimizer/Plan.h" //@manual
 #include "optimizer/Cost.h" //@manual
 #include "optimizer/PlanUtils.h" //@manual
+#include "velox/functions/FunctionRegistry.h"
 
 #include <iostream>
 
@@ -30,12 +31,12 @@ Optimization::Optimization(
     const Schema& schema,
     History& history,
     velox::core::ExpressionEvaluator& evaluator,
-    int32_t traceFlags)
+    OptimizerOptions opts)
     : schema_(schema),
+      opts_(std::move(opts)),
       inputPlan_(plan),
       history_(history),
-      evaluator_(evaluator),
-      traceFlags_(traceFlags) {
+      evaluator_(evaluator) {
   queryCtx()->optimization() = this;
   root_ = makeQueryGraph();
   root_->distributeConjuncts();
@@ -49,7 +50,7 @@ void Optimization::trace(
     int32_t id,
     const Cost& cost,
     RelationOp& plan) {
-  if (event & traceFlags_) {
+  if (event & opts_.traceFlags) {
     std::cout << (event == kRetained ? "Retained: " : "Abandoned: ") << id
               << ":" << " " << succinctNumber(cost.unitCost + cost.setupCost)
               << " " << plan.toString(true, false) << std::endl;
@@ -72,7 +73,11 @@ std::unordered_map<std::string, float>& baseSelectivities() {
   return map;
 }
 
-FunctionSet functionBits(Name /*name*/) {
+FunctionSet functionBits(Name name) {
+  auto deterministic = isDeterministic(name);
+  if (deterministic.has_value() && !deterministic.value()) {
+    return FunctionSet(FunctionSet::kNondeterministic);
+  }
   return FunctionSet(0);
 }
 
@@ -1194,10 +1199,17 @@ void Optimization::addJoin(
 
 // Sets 'columns' to the columns in 'downstream' that exist
 // in 'index' of 'table'.
-ColumnVector indexColumns(const PlanObjectSet& downstream, ColumnGroupP index) {
+ColumnVector indexColumns(
+    const PlanObjectSet& downstream,
+    BaseTableCP table,
+    ColumnGroupP index) {
   ColumnVector result;
   downstream.forEach([&](PlanObjectCP object) {
-    if (!object->as<Column>()->schemaColumn()) {
+    auto* column = object->as<Column>();
+    if (!column->schemaColumn()) {
+      return;
+    }
+    if (table != column->relation()) {
       return;
     }
     if (position(index->columns(), *object->as<Column>()->schemaColumn()) !=
@@ -1390,7 +1402,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
         for (auto index : indices) {
           PlanStateSaver save(state);
           state.placed.add(table);
-          auto columns = indexColumns(downstream, index);
+          auto columns = indexColumns(downstream, table, index);
 
           auto* scan = make<TableScan>(
               nullptr,

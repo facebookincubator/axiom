@@ -402,6 +402,22 @@ struct hash<::facebook::velox::optimizer::MemoKey> {
 
 namespace facebook::velox::optimizer {
 
+struct OptimizerOptions {
+  /// Do not make shuffles or final gather stage.
+  bool singleStage{false};
+
+  /// Produces skyline subfield sets of complex type columns as top level
+  /// columns in table scan.
+  bool pushdownSubfields{false};
+
+  /// Map from table name to  list of map columns to be read as structs unless
+  /// the whole map is accessed as a map.
+  std::unordered_map<std::string, std::vector<std::string>> mapAsStruct;
+
+  /// Produce trace of plan candidates.
+  int32_t traceFlags{0};
+};
+
 /// Instance of query optimization. Comverts a plan and schema into an
 /// optimized plan. Depends on QueryGraphContext being set on the
 /// calling thread. There is one instance per query to plan. The
@@ -420,7 +436,7 @@ class Optimization {
       const Schema& schema,
       History& history,
       velox::core::ExpressionEvaluator& evaluator,
-      int32_t traceFlags = 0);
+      OptimizerOptions opts = OptimizerOptions());
 
   /// Returns the optimized RelationOp plan for 'plan' given at construction.
   PlanPtr bestPlan();
@@ -456,9 +472,34 @@ class Optimization {
     return idGenerator_;
   }
 
+  // Makes a getter path over a top level column and can convert the top map
+  // getter into struct getter if maps extracted as structs.
+  core::TypedExprPtr
+  pathToGetter(ColumnCP column, PathCP path, core::TypedExprPtr source);
+
+  // Produces a scan output type with only top level columns. Returns
+  // these in scanColumns. The scan->columns() is the leaf columns,
+  // not the top level ones if subfield pushdown.
+  RowTypePtr scanOutputType(
+      TableScan* scan,
+      ColumnVector& scanColumns,
+      std::unordered_map<ColumnCP, TypePtr>& typeMap);
+
+  RowTypePtr subfieldPushdownScanType(
+      BaseTableCP baseTable,
+      const ColumnVector& leafColumns,
+      ColumnVector& topColumns,
+      std::unordered_map<ColumnCP, TypePtr>& typeMap);
+
+  // Makes projections for subfields as top level columns.
+  core::PlanNodePtr makeSubfieldProjections(
+      TableScan* scan,
+      const std::shared_ptr<const core::TableScanNode>& scanNode);
+
   /// Sets 'filterSelectivity' of 'baseTable' from history. Returns True if set.
-  bool setLeafSelectivity(BaseTable& baseTable) {
-    return history_.setLeafSelectivity(baseTable);
+  /// 'scanType' is the set of sampled columns with possible map to struct cast.
+  bool setLeafSelectivity(BaseTable& baseTable, RowTypePtr scanType) {
+    return history_.setLeafSelectivity(baseTable, scanType);
   }
 
   auto& memo() {
@@ -493,9 +534,25 @@ class Optimization {
     return makeVeloxExprWithNoAlias_;
   }
 
+  bool& getterForPushdownSubfield() {
+    return getterForPushdownSubfield_;
+  }
+
   // Makes an output type for use in PlanNode et al. If 'columnType' is set,
   // only considers base relation columns of the given type.
   velox::RowTypePtr makeOutputType(const ColumnVector& columns);
+
+  const OptimizerOptions& opts() const {
+    return opts_;
+  }
+
+  std::unordered_map<ColumnCP, TypePtr>& columnAlteredTypes() {
+    return columnAlteredTypes_;
+  }
+
+  /// True if a scan should expose 'column' of 'table' as a struct only
+  /// containing the accessed keys. 'column' must be a top level map column.
+  bool isMapAsStruct(Name table, Name column);
 
  private:
   static constexpr uint64_t kAllAllowedInDt = ~0UL;
@@ -530,6 +587,13 @@ class Optimization {
 
   // Converts a table scan into a BaseTable wen building a DerivedTable.
   PlanObjectP makeBaseTable(const core::TableScanNode* tableScan);
+
+  // Decomposes complex type columns into parts projected out as top
+  // level if subfield pushdown is on.
+  void makeSubfieldColumns(
+      BaseTable* baseTable,
+      ColumnCP column,
+      const BitSet& paths);
 
   // Interprets a Project node and adds its information into the DerivedTable
   // being assembled.
@@ -612,6 +676,8 @@ class Optimization {
 
   // Makes a deduplicated Expr tree from 'expr'.
   ExprCP translateExpr(const velox::core::TypedExprPtr& expr);
+
+  ExprCP translateLambda(const velox::core::LambdaTypedExpr* lambda);
 
   // If 'expr' is not a subfield path, returns std::nullopt. If 'expr'
   // is a subfield path that is subsumed by a projected subfield,
@@ -845,6 +911,8 @@ class Optimization {
 
   const Schema& schema_;
 
+  OptimizerOptions opts_;
+
   // Top level plan to optimize.
   const velox::core::PlanNode& inputPlan_;
 
@@ -971,6 +1039,12 @@ class Optimization {
   // On when producing a remaining filter for table scan, where columns must
   // correspond 1:1 to the schema.
   bool makeVeloxExprWithNoAlias_{false};
+
+  bool getterForPushdownSubfield_{false};
+
+  // Map from top level map column  accessed as struct to the struct type. Used
+  // only when generating a leaf scan for result Velox plan.
+  std::unordered_map<ColumnCP, TypePtr> columnAlteredTypes_;
 };
 
 /// Returns bits describing function 'name'.
@@ -978,6 +1052,11 @@ FunctionSet functionBits(Name name);
 
 const JoinEdgeVector& joinedBy(PlanObjectCP table);
 
-void filterUpdated(BaseTableCP baseTable);
+void filterUpdated(BaseTableCP baseTable, bool updateSelectivity = true);
+
+/// Returns a struct with fields for skyline map keys of 'column' in
+/// 'baseTable'. This is the type to return from the table reader
+/// for the map column.
+RowTypePtr skylineStruct(BaseTableCP baseTable, ColumnCP column);
 
 } // namespace facebook::velox::optimizer

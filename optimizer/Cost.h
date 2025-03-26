@@ -44,7 +44,9 @@ class History {
   /// columns extracted. This is used first for coming up with join orders. The
   /// plan candidates are then made and findCost() is used to access historical
   /// cost and plan cardinality.
-  virtual bool setLeafSelectivity(BaseTable& baseTable) = 0;
+  virtual bool setLeafSelectivity(
+      BaseTable& baseTable,
+      RowTypePtr scanType) = 0;
 
   virtual void recordLeafSelectivity(
       const std::string& handle,

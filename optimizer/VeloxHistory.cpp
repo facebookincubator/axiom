@@ -23,7 +23,7 @@ namespace facebook::velox::optimizer {
 using namespace facebook::velox::exec;
 using namespace facebook::velox::runner;
 
-bool VeloxHistory::setLeafSelectivity(BaseTable& table) {
+bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
   auto optimization = queryCtx()->optimization();
   auto handlePair = optimization->leafHandle(table.id());
   auto handle = handlePair.first;
@@ -47,8 +47,8 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table) {
     return false;
   }
 
-  auto sample =
-      runnerTable->layouts()[0]->sample(handlePair.first, 1, handlePair.second);
+  auto sample = runnerTable->layouts()[0]->sample(
+      handlePair.first, 1, handlePair.second, scanType);
   table.filterSelectivity =
       static_cast<float>(sample.second) / (sample.first + 1);
   recordLeafSelectivity(string, table.filterSelectivity, false);

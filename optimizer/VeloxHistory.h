@@ -34,7 +34,7 @@ class VeloxHistory : public History {
 
   /// Sets the filter selectivity of a table scan. Returns true if there is data
   /// to back the estimate and false if this is a pure guess.
-  bool setLeafSelectivity(BaseTable& table) override;
+  bool setLeafSelectivity(BaseTable& table, RowTypePtr scanType) override;
 
   /// Stores observed costs and cardinalities from a query execution. If 'op' is
   /// non-null, non-leaf costs from non-leaf levels are recorded. Otherwise only

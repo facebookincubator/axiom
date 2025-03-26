@@ -29,6 +29,7 @@ using namespace facebook::velox::runner;
 
 std::vector<common::Subfield> columnSubfields(BaseTableCP table, int32_t id) {
   BitSet set = table->columnSubfields(id, false, false);
+  auto* optimization = queryCtx()->optimization();
   auto columnName = queryCtx()->objectAt(id)->as<Column>()->name();
   std::vector<common::Subfield> subfields;
   set.forEach([&](auto id) {
@@ -36,6 +37,7 @@ std::vector<common::Subfield> columnSubfields(BaseTableCP table, int32_t id) {
     std::vector<std::unique_ptr<common::Subfield::PathElement>> elements;
     elements.push_back(
         std::make_unique<common::Subfield::NestedField>(columnName));
+    bool first = true;
     for (auto& step : steps) {
       switch (step.kind) {
         case StepKind::kField:
@@ -50,6 +52,14 @@ std::vector<common::Subfield> columnSubfields(BaseTableCP table, int32_t id) {
                 std::make_unique<common::Subfield::AllSubscripts>());
             break;
           }
+          if (first &&
+              optimization->isMapAsStruct(
+                  table->schemaTable->name, columnName)) {
+            elements.push_back(std::make_unique<common::Subfield::NestedField>(
+                step.field ? std::string(step.field)
+                           : fmt::format("{}", step.id)));
+            break;
+          }
           if (step.field) {
             elements.push_back(
                 std::make_unique<common::Subfield::StringSubscript>(
@@ -62,17 +72,34 @@ std::vector<common::Subfield> columnSubfields(BaseTableCP table, int32_t id) {
         case StepKind::kCardinality:
           VELOX_UNSUPPORTED();
       }
+      first = false;
     }
     subfields.emplace_back(std::move(elements));
   });
   return subfields;
 }
 
-void filterUpdated(BaseTableCP table) {
-  auto optimization = queryCtx()->optimization();
+void filterUpdated(BaseTableCP table, bool updateSelectivity) {
+  auto ctx = queryCtx();
+  auto optimization = ctx->optimization();
+
+  PlanObjectSet columnSet;
+  for (auto& filter : table->columnFilters) {
+    columnSet.unionSet(filter->columns());
+  }
+  ColumnVector leafColumns;
+  columnSet.forEach([&](auto obj) {
+    leafColumns.push_back(reinterpret_cast<const Column*>(obj));
+  });
+  optimization->columnAlteredTypes().clear();
+  ColumnVector topColumns;
+  auto scanType = optimization->subfieldPushdownScanType(
+      table, leafColumns, topColumns, optimization->columnAlteredTypes());
+
   std::vector<core::TypedExprPtr> remainingConjuncts;
   std::vector<core::TypedExprPtr> pushdownConjuncts;
   ScopedVarSetter noAlias(&optimization->makeVeloxExprWithNoAlias(), true);
+  ScopedVarSetter getters(&optimization->getterForPushdownSubfield(), true);
   for (auto filter : table->columnFilters) {
     auto typedExpr = optimization->toTypedExpr(filter);
     try {
@@ -101,6 +128,7 @@ void filterUpdated(BaseTableCP table) {
           "and");
     }
   }
+  optimization->columnAlteredTypes().clear();
   auto& dataColumns = table->schemaTable->connectorTable->rowType();
   auto* layout = table->schemaTable->columnGroups[0]->layout;
   auto connector = layout->connector();
@@ -128,7 +156,9 @@ void filterUpdated(BaseTableCP table) {
       rejectedFilters);
 
   optimization->setLeafHandle(table->id(), handle, std::move(rejectedFilters));
-  optimization->setLeafSelectivity(*const_cast<BaseTable*>(table));
+  if (updateSelectivity) {
+    optimization->setLeafSelectivity(*const_cast<BaseTable*>(table), scanType);
+  }
 }
 
 core::PlanNodeId Optimization::nextId(const RelationOp& op) {
@@ -194,10 +224,12 @@ RowTypePtr Optimization::makeOutputType(const ColumnVector& columns) {
       if (!schemaTable) {
         continue;
       }
+
       auto* runnerTable = schemaTable->connectorTable;
       if (runnerTable) {
-        auto* runnerColumn =
-            runnerTable->findColumn(std::string(column->name()));
+        auto* runnerColumn = runnerTable->findColumn(std::string(
+            column->topColumn() ? column->topColumn()->name()
+                                : column->name()));
         VELOX_CHECK_NOT_NULL(runnerColumn);
       }
     }
@@ -223,12 +255,68 @@ core::TypedExprPtr Optimization::toAnd(const ExprVector& exprs) {
   return result;
 }
 
+bool Optimization::isMapAsStruct(Name table, Name column) {
+  auto it = opts_.mapAsStruct.find(table);
+  if (it == opts_.mapAsStruct.end()) {
+    return false;
+  }
+  return (
+      std::find(it->second.begin(), it->second.end(), column) !=
+      it->second.end());
+}
+
+core::TypedExprPtr Optimization::pathToGetter(
+    ColumnCP column,
+    PathCP path,
+    core::TypedExprPtr field) {
+  bool first = true;
+  // If this is a path over a map that is retrieved as struct, the first getter
+  // becomes a struct getter.
+  auto alterStep = [&](ColumnCP, const Step& step, Step& newStep) {
+    auto* rel = column->relation();
+    if (rel->type() == PlanType::kTable &&
+        isMapAsStruct(
+            rel->as<BaseTable>()->schemaTable->name, column->name())) {
+      // This column is a map to project out as struct.
+      newStep.kind = StepKind::kField;
+      if (step.field) {
+        newStep.field = step.field;
+      } else {
+        newStep.field = toName(fmt::format("{}", step.id));
+      }
+      return true;
+    }
+    return false;
+  };
+
+  for (auto& step : path->steps()) {
+    Step newStep;
+    if (first && alterStep(column, step, newStep)) {
+      field = stepToGetter(newStep, field);
+      first = false;
+      continue;
+    }
+    first = false;
+    field = stepToGetter(step, field);
+  }
+  return field;
+}
+
 core::TypedExprPtr Optimization::toTypedExpr(ExprCP expr) {
   switch (expr->type()) {
     case PlanType::kColumn: {
       auto column = expr->as<Column>();
+      if (column->topColumn() && getterForPushdownSubfield_) {
+        auto field = toTypedExpr(column->topColumn());
+        return pathToGetter(column->topColumn(), column->path(), field);
+      }
       auto name = makeVeloxExprWithNoAlias_ ? std::string(column->name())
                                             : column->toString();
+      // Check if a top level map should be retrieved as struct.
+      auto it = columnAlteredTypes_.find(column);
+      if (it != columnAlteredTypes_.end()) {
+        return std::make_shared<core::FieldAccessTypedExpr>(it->second, name);
+      }
       return std::make_shared<core::FieldAccessTypedExpr>(
           toTypePtr(expr->value().type), name);
     }
@@ -264,7 +352,17 @@ core::TypedExprPtr Optimization::toTypedExpr(ExprCP expr) {
       return std::make_shared<core::ConstantTypedExpr>(
           toTypePtr(literal->value().type), literal->literal());
     }
-
+    case PlanType::kLambda: {
+      auto* lambda = expr->as<Lambda>();
+      std::vector<std::string> names;
+      std::vector<TypePtr> types;
+      for (auto& c : lambda->args()) {
+        names.push_back(c->toString());
+        types.push_back(toTypePtr(c->value().type));
+      }
+      return std::make_shared<core::LambdaTypedExpr>(
+          ROW(std::move(names), std::move(types)), toTypedExpr(lambda->body()));
+    }
     default:
       VELOX_FAIL("Cannot translate {} to TypeExpr", expr->toString());
   }
@@ -531,6 +629,107 @@ core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
   }
 }
 
+bool hasSubfieldPushdown(TableScan* scan) {
+  for (auto& column : scan->columns()) {
+    if (column->topColumn()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+RowTypePtr skylineStruct(BaseTableCP baseTable, ColumnCP column) {
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  std::unordered_set<std::string> distinct;
+  auto valueType = column->value().type->childAt(1);
+
+  auto* ctx = queryCtx();
+  auto addTopFields = [&](const BitSet& paths) {
+    paths.forEach([&](int32_t id) {
+      auto path = ctx->pathById(id);
+      auto& first = path->steps()[0];
+      std::string name =
+          first.field ? std::string(first.field) : fmt::format("{}", first.id);
+      if (!distinct.count(name)) {
+        distinct.insert(name);
+        names.push_back(name);
+        types.push_back(valueType);
+      }
+    });
+  };
+
+  auto fields = baseTable->controlSubfields.findSubfields(column->id());
+  if (fields.has_value()) {
+    addTopFields(fields.value());
+  }
+  fields = baseTable->payloadSubfields.findSubfields(column->id());
+  if (fields.has_value()) {
+    addTopFields(fields.value());
+  }
+
+  return ROW(std::move(names), std::move(types));
+}
+
+RowTypePtr Optimization::scanOutputType(
+    TableScan* scan,
+    ColumnVector& scanColumns,
+    std::unordered_map<ColumnCP, TypePtr>& typeMap) {
+  if (!hasSubfieldPushdown(scan)) {
+    scanColumns = scan->columns();
+    return makeOutputType(scan->columns());
+  }
+  return subfieldPushdownScanType(
+      scan->baseTable, scan->columns(), scanColumns, typeMap);
+}
+
+RowTypePtr Optimization::subfieldPushdownScanType(
+    BaseTableCP baseTable,
+    const ColumnVector& leafColumns,
+    ColumnVector& topColumns,
+    std::unordered_map<ColumnCP, TypePtr>& typeMap) {
+  PlanObjectSet top;
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  for (auto& column : leafColumns) {
+    if (auto* topColumn = column->topColumn()) {
+      if (top.contains(topColumn)) {
+        continue;
+      }
+      top.add(topColumn);
+      topColumns.push_back(topColumn);
+      names.push_back(topColumn->name());
+      if (isMapAsStruct(baseTable->schemaTable->name, topColumn->name())) {
+        types.push_back(skylineStruct(baseTable, topColumn));
+        typeMap[topColumn] = types.back();
+      } else {
+        types.push_back(toTypePtr(topColumn->value().type));
+      }
+    } else {
+      topColumns.push_back(column);
+      names.push_back(column->name());
+      types.push_back(toTypePtr(column->value().type));
+    }
+  }
+
+  return ROW(std::move(names), std::move(types));
+}
+
+core::PlanNodePtr Optimization::makeSubfieldProjections(
+    TableScan* scan,
+    const std::shared_ptr<const core::TableScanNode>& scanNode) {
+  ScopedVarSetter getters(&getterForPushdownSubfield(), true);
+  ScopedVarSetter noAlias(&makeVeloxExprWithNoAlias(), true);
+  std::vector<std::string> names;
+  std::vector<core::TypedExprPtr> exprs;
+  for (auto* column : scan->columns()) {
+    names.push_back(column->toString());
+    exprs.push_back(toTypedExpr(column));
+  }
+  return std::make_shared<core::ProjectNode>(
+      idGenerator_.next(), std::move(names), std::move(exprs), scanNode);
+}
+
 core::PlanNodePtr Optimization::makeFragment(
     RelationOpPtr op,
     ExecutableFragment& fragment,
@@ -603,25 +802,31 @@ core::PlanNodePtr Optimization::makeFragment(
       return exchange;
     }
     case RelType::kTableScan: {
+      columnAlteredTypes_.clear();
       auto scan = op->as<TableScan>();
       auto handlePair = leafHandle(scan->baseTable->id());
       if (!handlePair.first) {
-        filterUpdated(scan->baseTable);
+        filterUpdated(scan->baseTable, false);
         handlePair = leafHandle(scan->baseTable->id());
         VELOX_CHECK_NOT_NULL(
             handlePair.first,
             "No table for scan {}",
             scan->toString(true, true));
       }
-      auto outputType = makeOutputType(scan->columns());
+      ColumnVector scanColumns;
+      auto outputType = scanOutputType(scan, scanColumns, columnAlteredTypes_);
       std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
           assignments;
-      for (auto column : scan->columns()) {
+      for (auto column : scanColumns) {
         // TODO: Make assignments have a ConnectorTableHandlePtr instead of
         // non-const shared_ptr.
         std::vector<common::Subfield> subfields =
             columnSubfields(scan->baseTable, column->id());
-        assignments[column->toString()] = std::const_pointer_cast<
+        // No correlation name in scan output if pushed down subfield projection
+        // follows.
+        auto scanColumnName =
+            opts_.pushdownSubfields ? column->name() : column->toString();
+        assignments[scanColumnName] = std::const_pointer_cast<
             connector::ColumnHandle>(
             scan->index->layout->connector()->metadata()->createColumnHandle(
                 *scan->index->layout, column->name(), std::move(subfields)));
@@ -634,6 +839,12 @@ core::PlanNodePtr Optimization::makeFragment(
           assignments);
       VELOX_CHECK(handlePair.second.empty(), "Expecting no rejected filters");
       fragment.scans.push_back(scanNode);
+      if (hasSubfieldPushdown(scan)) {
+        auto result = makeSubfieldProjections(scan, scanNode);
+        columnAlteredTypes_.clear();
+        return result;
+      }
+      columnAlteredTypes_.clear();
       return scanNode;
     }
     case RelType::kJoin: {

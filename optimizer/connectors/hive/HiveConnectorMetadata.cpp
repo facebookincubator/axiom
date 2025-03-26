@@ -45,7 +45,6 @@ ColumnHandlePtr HiveConnectorMetadata::createColumnHandle(
     SubfieldMapping subfieldMapping) {
   // castToType and subfieldMapping are not yet supported.
   VELOX_CHECK(subfieldMapping.empty());
-  VELOX_CHECK(!castToType.has_value());
   auto* hiveLayout = reinterpret_cast<const HiveTableLayout*>(&layout);
   auto* column = hiveLayout->findColumn(columnName);
   auto handle = std::make_shared<HiveColumnHandle>(
@@ -63,19 +62,11 @@ ConnectorTableHandlePtr HiveConnectorMetadata::createTableHandle(
     velox::core::ExpressionEvaluator& evaluator,
     std::vector<core::TypedExprPtr> filters,
     std::vector<core::TypedExprPtr>& rejectedFilters,
+    RowTypePtr dataColumns,
     std::optional<LookupKeys> lookupKeys) {
   VELOX_CHECK(!lookupKeys.has_value(), "Hive does not support lookup keys");
   auto* hiveLayout = dynamic_cast<const HiveTableLayout*>(&layout);
 
-  std::vector<std::string> names;
-  std::vector<TypePtr> types;
-  for (auto& columnHandle : columnHandles) {
-    auto* hiveColumn =
-        reinterpret_cast<const HiveColumnHandle*>(columnHandle.get());
-    names.push_back(hiveColumn->name());
-    types.push_back(hiveColumn->dataType());
-  }
-  auto dataColumns = ROW(std::move(names), std::move(types));
   std::vector<core::TypedExprPtr> remainingConjuncts;
   common::SubfieldFilters subfieldFilters;
   for (auto& typedExpr : filters) {
@@ -108,7 +99,7 @@ ConnectorTableHandlePtr HiveConnectorMetadata::createTableHandle(
           true,
           std::move(subfieldFilters),
           remainingFilter,
-          layout.rowType()));
+          dataColumns ? dataColumns : layout.rowType()));
 }
 
 } // namespace facebook::velox::connector::hive

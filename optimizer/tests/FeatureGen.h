@@ -26,12 +26,18 @@ struct FeatureOptions {
   int32_t idListMinCard{10};
   int32_t idListMaxDistinct{1000};
   int32_t numIdScoreList{5};
+
+  /// Structs for use in reading the features. One field for each
+  /// key. Filled in by makeFeatures().
+  RowTypePtr floatStruct;
+  RowTypePtr idListStruct;
+  RowTypePtr idScoreListStruct;
 };
 
 std::vector<RowVectorPtr> makeFeatures(
     int32_t numBatches,
     int32_t batchSize,
-    const FeatureOptions& opts,
+    FeatureOptions& opts,
     memory::MemoryPool* pool);
 
 } // namespace facebook::velox::optimizer::test

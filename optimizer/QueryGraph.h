@@ -114,7 +114,12 @@ class Literal : public Expr {
 /// or derived table.
 class Column : public Expr {
  public:
-  Column(Name _name, PlanObjectP _relation, const Value& value);
+  Column(
+      Name _name,
+      PlanObjectP _relation,
+      const Value& value,
+      ColumnCP topColumn = nullptr,
+      PathCP path = nullptr);
 
   Name name() const {
     return name_;
@@ -133,14 +138,18 @@ class Column : public Expr {
   /// asserted equal to b, a and c are also equal.
   void equals(ColumnCP other) const;
 
-  int32_t wholeColumnId() {
-    return wholeColumnId_;
-  }
-
   std::string toString() const override;
 
   struct Equivalence* equivalence() const {
     return equivalence_;
+  }
+
+  ColumnCP topColumn() const {
+    return topColumn_;
+  }
+
+  PathCP path() const {
+    return path_;
   }
 
  private:
@@ -159,10 +168,12 @@ class Column : public Expr {
   // ordering/partitioning columns in the SchemaTable.
   ColumnCP schemaColumn_{nullptr};
 
-  // If column is of complex type and is used so as to require all
-  // subfields, 'wholeColumnId_' is added to the dependencies of using
-  // exprs. 0 if not applicable.
-  int32_t wholeColumnId_{0};
+  // Containing top level column if 'this' is a subfield projected out as
+  // column.
+  ColumnCP topColumn_;
+
+  // Path from 'topColumn'.
+  PathCP path_;
 };
 
 template <typename T>
@@ -224,6 +235,9 @@ class FunctionSet {
   /// Indicates and aggregate function in the set.
   static constexpr uint64_t kAggregate = 1;
 
+  /// Indicates a non-determinstic function
+  static constexpr uint64_t kNondeterministic = 1UL << 1;
+
   FunctionSet() : set_(0) {}
   explicit FunctionSet(uint64_t set) : set_(set) {}
 
@@ -266,6 +280,11 @@ struct ResultAccess;
 /// Describes functions accepting lambdas and functions with special treatment
 /// of subfields.
 struct FunctionMetadata {
+  bool processSubfields() const {
+    return subfieldArg.has_value() || !fieldIndexForArg.empty() ||
+        isArrayConstructor || isMapConstructor;
+  }
+
   std::vector<LambdaInfo> lambdas;
 
   /// If accessing a subfield on the result means that the same subfield is
@@ -276,7 +295,7 @@ struct FunctionMetadata {
 
   /// If true, then access of subscript 'i' in result means that argument 'i' is
   /// accessed.
-  bool isArrayConstructor_{false};
+  bool isArrayConstructor{false};
 
   /// If key 'k' in result is accessed, then the argument that corresponds to
   /// this key is accessed.
@@ -387,7 +406,7 @@ class Lambda : public Expr {
  public:
   Lambda(ColumnVector args, const Type* type, ExprCP body)
       : Expr(PlanType::kLambda, Value(type, 1)), args_(args), body_(body) {}
-  ColumnVector args() const {
+  const ColumnVector& args() const {
     return args_;
   }
 

@@ -36,11 +36,11 @@ DECLARE_bool(create_dataset);
 
 namespace facebook::velox::optimizer::test {
 
-class ParquetTpchTest : public testing::Test {
+class ParquetTpchTest : public virtual testing::Test {
  protected:
-  static void SetUpTestSuite();
+  static void SetUpTestCase();
 
-  static void TearDownTestSuite();
+  static void TearDownTestCase();
 
   static void saveTpchTablesAsParquet();
 

@@ -33,7 +33,7 @@ std::shared_ptr<exec::test::TempDirectoryPath> ParquetTpchTest::tempDirectory_;
 std::shared_ptr<exec::test::TpchQueryBuilder> ParquetTpchTest::tpchBuilder_;
 
 //  static
-void ParquetTpchTest::SetUpTestSuite() {
+void ParquetTpchTest::SetUpTestCase() {
   memory::MemoryManager::testingSetInstance({});
 
   duckDb_ = std::make_shared<DuckDbQueryRunner>();
@@ -89,7 +89,7 @@ void ParquetTpchTest::SetUpTestSuite() {
 }
 
 //  static
-void ParquetTpchTest::TearDownTestSuite() {
+void ParquetTpchTest::TearDownTestCase() {
   connector::unregisterConnectorFactory(
       connector::hive::HiveConnectorFactory::kHiveConnectorName);
   connector::unregisterConnectorFactory(
