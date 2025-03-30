@@ -22,6 +22,8 @@ add_library(
   Subfields.cpp
   Plan.cpp
   BitSet.cpp
+  ParallelExpr.cpp
+  ParallelProject.cpp
   PlanObject.cpp
   Schema.cpp
   SchemaResolver.cpp

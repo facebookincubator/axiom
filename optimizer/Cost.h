@@ -73,4 +73,11 @@ float shuffleCost(const ColumnVector& columns);
 
 float shuffleCost(const ExprVector& columns);
 
+/// Returns cost of 'expr' for one row, excluding cost of subexpressions.
+float selfCost(ExprCP expr);
+
+/// Returns the per row cost of 'expr' and its subexpressions, excluding
+/// 'notCounting', which represents already computed subtrees of 'expr'.
+float costWithChildren(ExprCP expr, const PlanObjectSet& notCounting);
+
 } // namespace facebook::velox::optimizer

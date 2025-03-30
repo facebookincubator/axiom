@@ -406,6 +406,10 @@ struct OptimizerOptions {
   /// Do not make shuffles or final gather stage.
   bool singleStage{false};
 
+  /// Parallelizes independent projections over this many threads. 1 means no
+  /// parallel projection.
+  int32_t parallelProjectWidth = 1;
+
   /// Produces skyline subfield sets of complex type columns as top level
   /// columns in table scan.
   bool pushdownSubfields{false};
@@ -896,6 +900,18 @@ class Optimization {
   // Returns a new PlanNodeId and associates the Cost of 'op' with it.
   velox::core::PlanNodeId nextId(const RelationOp& op);
 
+  // Returns a stack of parallel project nodes if parallelization makes sense.
+  // nullptr means use regular ProjectNode in output.
+  velox::core::PlanNodePtr maybeParallelProject(
+      Project* op,
+      core::PlanNodePtr input);
+
+  core::PlanNodePtr makeParallelProject(
+      core::PlanNodePtr input,
+      const PlanObjectSet& topExprs,
+      const PlanObjectSet& placed,
+      const PlanObjectSet& extraColumns);
+
   // Records 'cost' for 'id'. 'role' can be e.g. 'build; or
   // 'probe'. for nodes that produce multiple operators.
   void recordPlanNodeEstimate(
@@ -1045,6 +1061,11 @@ class Optimization {
   // Map from top level map column  accessed as struct to the struct type. Used
   // only when generating a leaf scan for result Velox plan.
   std::unordered_map<ColumnCP, TypePtr> columnAlteredTypes_;
+
+  // When generating parallel projections with intermediate assignment for
+  // common subexpressions, maps from ExprCP to the FieldAccessTypedExppr with
+  // the value.
+  std::unordered_map<ExprCP, core::TypedExprPtr> projectedExprs_;
 };
 
 /// Returns bits describing function 'name'.

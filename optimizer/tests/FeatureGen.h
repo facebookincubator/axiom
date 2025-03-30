@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <folly/Random.h>
+#include "velox/core/Expressions.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::optimizer::test {
@@ -32,6 +34,30 @@ struct FeatureOptions {
   RowTypePtr floatStruct;
   RowTypePtr idListStruct;
   RowTypePtr idScoreListStruct;
+
+  // Parameters for generating test exprs.
+  /// Number of projections for float one feature.
+  int32_t floatExprsPct{130};
+  int32_t idListExprPct{0};
+  int32_t idScoreListExprPct{0};
+
+  /// Percentage of projections that depend on multiple features.
+  float multiColumnPct{20};
+
+  /// Percentage of exprs with a rand.
+  int32_t randomPct{20};
+
+  /// Percentage of uid dependent exprs.
+  int32_t uidPct{20};
+
+  /// percentage of extra  + 1's.
+  int32_t plusOnePct{20};
+
+  mutable folly::Random::DefaultGenerator rng;
+
+  bool coinToss(int32_t pct) const {
+    return folly::Random::rand32(rng) % 100u < pct;
+  }
 };
 
 std::vector<RowVectorPtr> makeFeatures(
@@ -39,5 +65,10 @@ std::vector<RowVectorPtr> makeFeatures(
     int32_t batchSize,
     FeatureOptions& opts,
     memory::MemoryPool* pool);
+
+void makeExprs(
+    const FeatureOptions& opts,
+    std::vector<std::string>& names,
+    std::vector<core::TypedExprPtr>& exprs);
 
 } // namespace facebook::velox::optimizer::test

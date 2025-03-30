@@ -149,4 +149,108 @@ std::vector<RowVectorPtr> makeFeatures(
   return result;
 }
 
+core::TypedExprPtr floatFeatures() {
+  return std::make_shared<core::FieldAccessTypedExpr>(
+      MAP(INTEGER(), REAL()), "float_features");
+}
+
+core::TypedExprPtr intLiteral(int32_t i) {
+  return std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(i));
+}
+
+core::TypedExprPtr floatLiteral(float i) {
+  return std::make_shared<core::ConstantTypedExpr>(REAL(), variant(i));
+}
+
+core::TypedExprPtr rand() {
+  core::TypedExprPtr r = std::make_shared<core::CallTypedExpr>(
+      INTEGER(), std::vector<core::TypedExprPtr>{intLiteral(5)}, "rand");
+  return std::make_shared<core::CastTypedExpr>(REAL(), r, false);
+}
+
+core::TypedExprPtr plus(core::TypedExprPtr x, core::TypedExprPtr y) {
+  return std::make_shared<core::CallTypedExpr>(
+      REAL(), std::vector<core::TypedExprPtr>{x, y}, "plus");
+}
+
+core::TypedExprPtr floatFeature(const FeatureOptions& opts) {
+  int32_t id = atoi(
+      opts.floatStruct
+          ->nameOf(folly::Random::rand32(opts.rng) % opts.floatStruct->size())
+          .c_str());
+  std::vector<core::TypedExprPtr> args{floatFeatures(), intLiteral(id)};
+
+  return std::make_shared<core::CallTypedExpr>(
+      REAL(), std::move(args), "subscript");
+}
+
+core::TypedExprPtr plusOne(core::TypedExprPtr expr) {
+  std::vector<core::TypedExprPtr> args{expr, floatLiteral(1)};
+  return std::make_shared<core::CallTypedExpr>(REAL(), std::move(args), "plus");
+}
+core::TypedExprPtr uid() {
+  return std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "uid");
+}
+
+core::TypedExprPtr bigintMod(core::TypedExprPtr x, int64_t y) {
+  core::TypedExprPtr lit =
+      std::make_shared<core::ConstantTypedExpr>(BIGINT(), variant(y));
+  return std::make_shared<core::CallTypedExpr>(
+      BIGINT(), std::vector<core::TypedExprPtr>{x, lit}, "mod");
+}
+
+core::TypedExprPtr bigintEq(core::TypedExprPtr x, int64_t y) {
+  core::TypedExprPtr lit =
+      std::make_shared<core::ConstantTypedExpr>(BIGINT(), variant(y));
+  return std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(), std::vector<core::TypedExprPtr>{x, lit}, "eq");
+}
+
+core::TypedExprPtr uidCond(core::TypedExprPtr f) {
+  auto cond = bigintEq(bigintMod(uid(), 10), 0);
+  return std::make_shared<core::CallTypedExpr>(
+      REAL(), std::vector<core::TypedExprPtr>{cond, f, plusOne(f)}, "if");
+}
+
+core::TypedExprPtr makeFloatExpr(const FeatureOptions& opts) {
+  auto f = floatFeature(opts);
+  if (opts.coinToss(opts.plusOnePct)) {
+    f = plusOne(f);
+  }
+  if (opts.coinToss(opts.randomPct)) {
+    f = plus(f, rand());
+  }
+  if (opts.coinToss(opts.multiColumnPct)) {
+    auto g = floatFeature(opts);
+    if (opts.coinToss(opts.plusOnePct)) {
+      g = plusOne(g);
+    }
+    f = plus(f, g);
+  }
+  if (opts.coinToss(opts.uidPct)) {
+    f = uidCond(f);
+  }
+  return f;
+}
+
+void makeExprs(
+    const FeatureOptions& opts,
+    std::vector<std::string>& names,
+    std::vector<core::TypedExprPtr>& exprs) {
+  names = {"uid"};
+  exprs = {uid()};
+  auto numFloatExprs = (opts.floatStruct->size() * opts.floatExprsPct) / 100.0;
+  std::vector<core::TypedExprPtr> floatExprs;
+  std::vector<TypePtr> floatTypes;
+  for (auto cnt = 0; cnt < numFloatExprs; ++cnt) {
+    floatExprs.push_back(makeFloatExpr(opts));
+    floatTypes.push_back(REAL());
+  }
+  if (!floatExprs.empty()) {
+    names.push_back("floats");
+    exprs.push_back(std::make_shared<core::CallTypedExpr>(
+        ROW(std::move(floatTypes)), std::move(floatExprs), "row_constructor"));
+  }
+}
+
 } // namespace facebook::velox::optimizer::test

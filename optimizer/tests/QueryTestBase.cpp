@@ -22,6 +22,8 @@
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/tests/utils/DistributedPlanBuilder.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 
 #include "optimizer/Plan.h" //@manual
 #include "optimizer/SchemaResolver.h" //@manual
@@ -353,6 +355,28 @@ void QueryTestBase::expectRegexp(
     FAIL() << "Expected " << (expect == false ? " no " : "") << regexp << " in "
            << text;
   }
+}
+
+void QueryTestBase::assertSame(
+    const core::PlanNodePtr& reference,
+    runner::MultiFragmentPlanPtr experiment) {
+  auto refId = fmt::format("q{}", ++queryCounter_);
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  runner::MultiFragmentPlan::Options options = {
+      .queryId = refId, .numWorkers = 1, .numDrivers = 1};
+
+  exec::test::DistributedPlanBuilder builder(options, idGenerator, pool_.get());
+  builder.addNode(
+      [&](std::string nodeId, core::PlanNodePtr) { return reference; });
+
+  auto referencePlan = std::make_shared<runner::MultiFragmentPlan>(
+      builder.fragments(), std::move(options));
+
+  auto referenceResult = runFragmentedPlan(referencePlan);
+  auto experimentResult = runFragmentedPlan(experiment);
+
+  exec::test::assertEqualResults(
+      referenceResult.results, experimentResult.results);
 }
 
 } // namespace facebook::velox::optimizer::test

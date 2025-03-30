@@ -285,6 +285,15 @@ struct FunctionMetadata {
         isArrayConstructor || isMapConstructor;
   }
 
+  LambdaInfo* lambdaInfo(int32_t i) {
+    for (auto j = 0; j < lambdas.size(); ++j) {
+      if (lambdas[j].ordinal == i) {
+        return &lambdas[j];
+      }
+    }
+    return nullptr;
+  }
+
   std::vector<LambdaInfo> lambdas;
 
   /// If accessing a subfield on the result means that the same subfield is
@@ -309,6 +318,9 @@ struct FunctionMetadata {
   /// element of 'fieldIndexForArg_'.
   std::vector<int32_t> argOrdinal;
 
+  /// bits of FunctionSet for the function.
+  FunctionSet functionSet;
+
   /// Static fixed cost for processing one row. use 'costFunc' for non-constant
   /// cost.
   float cost{1};
@@ -326,16 +338,9 @@ struct FunctionMetadata {
       const core::CallTypedExpr* call,
       std::vector<PathCP>& paths)>
       explode;
-
-  LambdaInfo* lambdaInfo(int32_t i) {
-    for (auto j = 0; j < lambdas.size(); ++j) {
-      if (lambdas[j].ordinal == i) {
-        return &lambdas[j];
-      }
-    }
-    return nullptr;
-  }
 };
+
+const FunctionMetadata* functionMetadata(Name name);
 
 /// Represents a function call or a special form, any expression with
 /// subexpressions.
@@ -350,10 +355,12 @@ class Call : public Expr {
       : Expr(type, value),
         name_(name),
         args_(std::move(args)),
-        functions_(functions) {
+        functions_(functions),
+        metadata_(functionMetadata(name_)) {
     for (auto arg : args_) {
       columns_.unionSet(arg->columns());
       subexpressions_.unionSet(arg->subexpressions());
+      subexpressions_.add(arg);
     }
   }
 
@@ -387,6 +394,10 @@ class Call : public Expr {
 
   std::string toString() const override;
 
+  const FunctionMetadata* metadata() const {
+    return metadata_;
+  }
+
  private:
   // name of function.
   Name const name_;
@@ -396,6 +407,8 @@ class Call : public Expr {
 
   // Set of functions used in 'this' and 'args'.
   const FunctionSet functions_;
+
+  const FunctionMetadata* metadata_;
 };
 
 using CallCP = const Call*;

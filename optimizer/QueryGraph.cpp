@@ -59,7 +59,7 @@ std::string Column::toString() const {
 
 std::string Literal::toString() const {
   std::stringstream out;
-  out << literal_;
+  out << *literal_;
   return out.str();
 }
 

@@ -303,6 +303,11 @@ core::TypedExprPtr Optimization::pathToGetter(
 }
 
 core::TypedExprPtr Optimization::toTypedExpr(ExprCP expr) {
+  auto it = projectedExprs_.find(expr);
+  if (it != projectedExprs_.end()) {
+    return it->second;
+  }
+
   switch (expr->type()) {
     case PlanType::kColumn: {
       auto column = expr->as<Column>();
@@ -738,6 +743,12 @@ core::PlanNodePtr Optimization::makeFragment(
     case RelType::kProject: {
       auto input = makeFragment(op->input(), fragment, stages);
       auto project = op->as<Project>();
+      if (opts_.parallelProjectWidth > 1) {
+        auto result = maybeParallelProject(project, input);
+        if (result) {
+          return result;
+        }
+      }
       std::vector<std::string> names;
       std::vector<core::TypedExprPtr> exprs;
       for (auto i = 0; i < project->exprs().size(); ++i) {

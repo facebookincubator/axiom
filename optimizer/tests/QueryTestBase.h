@@ -67,6 +67,11 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
 
   TestResult runFragmentedPlan(runner::MultiFragmentPlanPtr plan);
 
+  /// Checks that 'reference' and 'experiment' produce the same result.
+  void assertSame(
+      const core::PlanNodePtr& reference,
+      runner::MultiFragmentPlanPtr experiment);
+
   runner::MultiFragmentPlanPtr planSql(
       const std::string& sql,
       std::string* planString = nullptr,

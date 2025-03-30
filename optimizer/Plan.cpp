@@ -74,6 +74,9 @@ std::unordered_map<std::string, float>& baseSelectivities() {
 }
 
 FunctionSet functionBits(Name name) {
+  if (auto* md = functionMetadata(name)) {
+    return md->functionSet;
+  }
   auto deterministic = isDeterministic(name);
   if (deterministic.has_value() && !deterministic.value()) {
     return FunctionSet(FunctionSet::kNondeterministic);

@@ -179,4 +179,47 @@ void Filter::setCost(const PlanState& /*input*/) {
   cost_.fanout = pow(0.8, exprs_.size());
 }
 
+float selfCost(ExprCP expr) {
+  switch (expr->type()) {
+    case PlanType::kColumn: {
+      auto kind = expr->value().type->kind();
+      if (kind == TypeKind::ARRAY || kind == TypeKind::MAP) {
+        return 200;
+      }
+      return 10;
+    }
+    case PlanType::kCall: {
+      auto metadata = expr->as<Call>()->metadata();
+      if (metadata) {
+        if (metadata->costFunc) {
+          return metadata->costFunc(expr->as<Call>());
+        }
+        return metadata->cost;
+      }
+      return 5;
+    }
+    default:
+      return 5;
+  }
+}
+
+float costWithChildren(ExprCP expr, const PlanObjectSet& notCounting) {
+  if (notCounting.contains(expr)) {
+    return 0;
+  }
+  switch (expr->type()) {
+    case PlanType::kColumn:
+      return selfCost(expr);
+    case PlanType::kCall: {
+      float cost = selfCost(expr);
+      for (auto arg : expr->as<Call>()->args()) {
+        cost += costWithChildren(arg, notCounting);
+      }
+      return cost;
+    }
+    default:
+      return 0;
+  }
+}
+
 } // namespace facebook::velox::optimizer
