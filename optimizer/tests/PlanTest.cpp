@@ -64,8 +64,11 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
     context_ = std::make_unique<QueryGraphContext>(*allocator_);
     queryCtx() = context_.get();
     builder_ = std::make_unique<exec::test::TpchQueryBuilder>(
-        dwio::common::FileFormat::PARQUET);
+							      dwio::common::FileFormat::PARQUET, true);
     builder_->initialize(FLAGS_data_path);
+    referenceBuilder_ = std::make_unique<exec::test::TpchQueryBuilder>(
+							      dwio::common::FileFormat::PARQUET);
+    referenceBuilder_->initialize(FLAGS_data_path);
   }
 
   void TearDown() override {
@@ -94,9 +97,23 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
         planText);
   }
 
+  
+  void checkSame(const core::PlanNodePtr& planNode, core::PlanNodePtr referencePlan = nullptr) {
+    auto fragmentedPlan = planVelox(planNode);
+    auto reference = referencePlan ? referencePlan : planNode;
+    assertSame(reference, fragmentedPlan);
+  }
+
+  void checkTpch(int32_t query) {
+      auto q = builder_->getQueryPlan(query).plan;
+      auto rq = referenceBuilder_->getQueryPlan(query).plan;
+      checkSame(q, rq);
+  }
+
   std::unique_ptr<HashStringAllocator> allocator_;
   std::unique_ptr<QueryGraphContext> context_;
   std::unique_ptr<exec::test::TpchQueryBuilder> builder_;
+  std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
   static inline bool registered;
 };
 
@@ -147,12 +164,41 @@ TEST_F(PlanTest, queryGraph) {
   EXPECT_EQ(interned2, interned);
 }
 
+TEST_F(PlanTest, q1) {
+  checkTpch(1);
+}
+
+TEST_F(PlanTest, q2) {
+  checkTpch(1);
+}
+
+
 TEST_F(PlanTest, q3) {
   auto q = builder_->getQueryPlan(3).plan;
   auto result = makePlan(q, true, true);
   std::cout << result;
   result = makePlan(q, true, false);
   std::cout << result;
+  checkTpch(3);
+}
+TEST_F(PlanTest, q4) {
+  checkTpch(4);
+}
+
+TEST_F(PlanTest, q5) {
+  checkTpch(5);
+}
+
+TEST_F(PlanTest, q6) {
+  checkTpch(6);
+}
+
+TEST_F(PlanTest, q7) {
+  checkTpch(7);
+}
+
+TEST_F(PlanTest, q8) {
+  checkTpch(8);
 }
 
 TEST_F(PlanTest, q9) {
@@ -161,6 +207,35 @@ TEST_F(PlanTest, q9) {
   std::cout << result;
   result = makePlan(q, true, false);
   std::cout << result;
+  checkTpch(9);
+}
+
+TEST_F(PlanTest, q10) {
+  checkTpch(10);
+}
+
+TEST_F(PlanTest, q11) {
+  checkTpch(11);
+}
+
+TEST_F(PlanTest, q12) {
+  checkTpch(12);
+}
+
+TEST_F(PlanTest, q13) {
+  checkTpch(13);
+}
+
+TEST_F(PlanTest, q14) {
+  checkTpch(14);
+}
+
+TEST_F(PlanTest, q15) {
+  checkTpch(15);
+}
+
+TEST_F(PlanTest, q16) {
+  checkTpch(16);
 }
 
 TEST_F(PlanTest, q17) {
@@ -169,6 +244,27 @@ TEST_F(PlanTest, q17) {
   std::cout << result;
   result = makePlan(q, true, false);
   std::cout << result;
+  checkTpch(17);
+}
+
+TEST_F(PlanTest, q18) {
+  checkTpch(18);
+}
+
+TEST_F(PlanTest, q19) {
+  checkTpch(19);
+}
+
+TEST_F(PlanTest, q20) {
+  checkTpch(20);
+}
+
+TEST_F(PlanTest, q21) {
+  checkTpch(21);
+}
+
+TEST_F(PlanTest, q22) {
+  checkTpch(22);
 }
 
 void printPlan(core::PlanNode* plan, bool r, bool d) {

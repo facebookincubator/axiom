@@ -232,11 +232,11 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
     float pct,
     RowTypePtr scanType,
     const std::vector<common::Subfield>& fields,
-    HashStringAllocator* /*allocator*/,
+    HashStringAllocator* allocator,
     std::vector<std::unique_ptr<velox::dwrf::StatisticsBuilder>>* statsBuilders)
     const {
   dwrf::StatisticsBuilderOptions options(
-      /*stringLengthLimit=*/100, /*initialSize=*/0);
+					 /*stringLengthLimit=*/100, /*initialSize=*/0, /*countDistinct*/true, /*allocator*/allocator);
   std::vector<std::unique_ptr<dwrf::StatisticsBuilder>> builders;
 
   std::unordered_map<
@@ -310,7 +310,24 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
         break;
       }
       passingRows += data->size();
-      for (auto column = 0; column < builders.size(); ++column) {
+      if !(builders.empty()) {
+	  updateStatsBuilders(builders);
+	}
+      if (scannedRows + dataSource->getCompletedRows() >
+          table()->numRows() * (pct / 100)) {
+        scannedRows += dataSource->getCompletedRows();
+        break;
+      }
+    }
+  }
+  if (statsBuilders) {
+    *statsBuilders = std::move(builders);
+  }
+  return std::pair(scannedRows, passingRows);
+}
+
+  void TableLayout::updateStatsBuilders(const RowVectorPtr& data, std::vector<std::unique_ptr<dwrf::StatisticsBuilders>>& builders) {
+          for (auto column = 0; column < builders.size(); ++column) {
         if (!builders[column]) {
           continue;
         }
@@ -355,18 +372,11 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
             break;
         }
       }
-      if (scannedRows + dataSource->getCompletedRows() >
-          table()->numRows() * (pct / 100)) {
-        break;
-      }
-    }
-  }
-  if (statsBuilders) {
-    *statsBuilders = std::move(builders);
-  }
-  return std::pair(scannedRows, passingRows);
-}
 
+  }
+  
+
+  
 void LocalTable::makeDefaultLayout(
     std::vector<std::string> files,
     LocalHiveConnectorMetadata& metadata) {
@@ -506,10 +516,9 @@ void LocalTable::sampleNumDistincts(float samplePct, memory::MemoryPool* pool) {
   numSampledRows_ = sampled;
   for (auto i = 0; i < statsBuilders.size(); ++i) {
     if (statsBuilders[i]) {
-      // TODO: Use HLL estimate of distinct values here after this is added to
-      // the stats builder. Now assume that all rows have a different value.
-      // Later refine this by observed min-max range.
-      int64_t approxNumDistinct = numRows_;
+      auto stats = statsBuilders[i]->build();
+      auto estimate = stats->numDistinct();
+      int64_t approxNumDistinct = estimate.has_value() ? estimate.value() : numRows_;
       // For tiny tables the sample is 100% and the approxNumDistinct is
       // accurate. For partial samples, the distinct estimate is left to be the
       // distinct estimate of the sample if there are few distincts. This is an

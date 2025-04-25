@@ -373,6 +373,7 @@ core::TypedExprPtr Optimization::toTypedExpr(ExprCP expr) {
   }
 }
 
+
 // Translates ExprPtrs to FieldAccessTypedExprs. Maintains a set of
 // projections and produces a ProjectNode to evaluate distinct
 // expressions for non-column Exprs given to toFieldref() and
@@ -434,62 +435,6 @@ class TempProjections {
   std::unordered_map<ExprCP, int32_t> exprChannel_;
 };
 
-core::PlanNodePtr Optimization::makeAggregation(
-    Aggregation& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
-  auto input = makeFragment(op.input(), fragment, stages);
-  TempProjections projections(*this, *op.input());
-
-  std::vector<std::string> aggregateNames;
-  std::vector<core::AggregationNode::Aggregate> aggregates;
-  bool isRawInput = op.step == core::AggregationNode::Step::kPartial ||
-      op.step == core::AggregationNode::Step::kSingle;
-  int32_t numKeys = op.grouping.size();
-  for (auto i = 0; i < op.aggregates.size(); ++i) {
-    aggregateNames.push_back(op.columns()[i + numKeys]->toString());
-
-    auto aggregate = op.aggregates[i];
-    core::FieldAccessTypedExprPtr mask;
-    std::vector<TypePtr> rawInputTypes;
-    for (auto type : aggregate->rawInputType()) {
-      rawInputTypes.push_back(toTypePtr(type));
-    }
-    if (isRawInput) {
-      if (aggregate->condition()) {
-        mask = projections.toFieldRef(aggregate->condition());
-      }
-      auto call = std::make_shared<core::CallTypedExpr>(
-          toTypePtr(op.columns()[numKeys + i]->value().type),
-          projections.toFieldRefs<core::TypedExprPtr>(aggregate->args()),
-          aggregate->name());
-      aggregates.push_back({call, rawInputTypes, mask, {}, {}, false});
-    } else {
-      auto call = std::make_shared<core::CallTypedExpr>(
-          toTypePtr(op.columns()[numKeys + i]->value().type),
-          std::vector<core::TypedExprPtr>{
-              std::make_shared<core::FieldAccessTypedExpr>(
-                  toTypePtr(aggregate->intermediateType()),
-                  aggregateNames.back())},
-          aggregate->name());
-      aggregates.push_back({call, rawInputTypes, mask, {}, {}, false});
-    }
-  }
-  auto keys = projections.toFieldRefs(op.grouping);
-  auto project = projections.maybeProject(input);
-  auto r = new core::AggregationNode(
-      nextId(op),
-      op.step,
-      keys,
-      {},
-      aggregateNames,
-      aggregates,
-      false,
-      project);
-  core::PlanNodePtr ptr;
-  ptr.reset(r);
-  return ptr;
-}
 
 core::PlanNodePtr Optimization::makeOrderBy(
     OrderBy& op,
@@ -613,9 +558,10 @@ class BroadcastPartitionFunctionSpec : public core::PartitionFunctionSpec {
   }
 };
 
+  template <typename ExprType>
 core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const RowTypePtr& inputType,
-    const std::vector<core::TypedExprPtr>& keys,
+    const std::vector<ExprType>& keys,
     bool isBroadcast) {
   if (isBroadcast) {
     return std::make_shared<BroadcastPartitionFunctionSpec>();
@@ -735,6 +681,75 @@ core::PlanNodePtr Optimization::makeSubfieldProjections(
       idGenerator_.next(), std::move(names), std::move(exprs), scanNode);
 }
 
+core::PlanNodePtr Optimization::makeAggregation(
+    Aggregation& op,
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+  TempProjections projections(*this, *op.input());
+
+  std::vector<std::string> aggregateNames;
+  std::vector<core::AggregationNode::Aggregate> aggregates;
+  bool isRawInput = op.step == core::AggregationNode::Step::kPartial ||
+      op.step == core::AggregationNode::Step::kSingle;
+  int32_t numKeys = op.grouping.size();
+  for (auto i = 0; i < op.aggregates.size(); ++i) {
+    aggregateNames.push_back(op.columns()[i + numKeys]->toString());
+
+    auto aggregate = op.aggregates[i];
+    core::FieldAccessTypedExprPtr mask;
+    std::vector<TypePtr> rawInputTypes;
+    for (auto type : aggregate->rawInputType()) {
+      rawInputTypes.push_back(toTypePtr(type));
+    }
+    if (isRawInput) {
+      if (aggregate->condition()) {
+        mask = projections.toFieldRef(aggregate->condition());
+      }
+      auto call = std::make_shared<core::CallTypedExpr>(
+          toTypePtr(op.columns()[numKeys + i]->value().type),
+          projections.toFieldRefs<core::TypedExprPtr>(aggregate->args()),
+          aggregate->name());
+      aggregates.push_back({call, rawInputTypes, mask, {}, {}, false});
+    } else {
+      auto call = std::make_shared<core::CallTypedExpr>(
+          toTypePtr(op.columns()[numKeys + i]->value().type),
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(
+                  toTypePtr(aggregate->intermediateType()),
+                  aggregateNames.back())},
+          aggregate->name());
+      aggregates.push_back({call, rawInputTypes, mask, {}, {}, false});
+    }
+  }
+  auto keys = projections.toFieldRefs(op.grouping);
+  auto project = projections.maybeProject(input);
+  if (options_.numDrivers > 1 &&
+      (op.step == core::AggregationNode::Step::kFinal ||
+       op.step == core::AggregationNode::Step::kSingle)) {
+    auto partition = createPartitionFunctionSpec(project->outputType(), keys, false);
+    std::vector<core::PlanNodePtr> inputs = {project};
+    project = std::make_shared<core::LocalPartitionNode>(
+        nextId(op),
+        core::LocalPartitionNode::Type::kRepartition,
+	false,
+        std::move(partition),
+        std::move(inputs));
+  }
+  auto r = new core::AggregationNode(
+      nextId(op),
+      op.step,
+      keys,
+      {},
+      aggregateNames,
+      aggregates,
+      false,
+      project);
+  core::PlanNodePtr ptr;
+  ptr.reset(r);
+  return ptr;
+}
+  
 core::PlanNodePtr Optimization::makeFragment(
     RelationOpPtr op,
     ExecutableFragment& fragment,
@@ -898,6 +913,10 @@ core::PlanNodePtr Optimization::makeFragment(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));
   }
   return nullptr;
+}
+
+std::string planString(MultiFragmentPlan* plan) {
+  return plan->toString(true);
 }
 
 } // namespace facebook::velox::optimizer

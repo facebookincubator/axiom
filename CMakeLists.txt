@@ -127,6 +127,7 @@ velox_resolve_dependency(folly)
 # Use xxhash and xsimd from Velox for now.
 include_directories(.)
 include_directories(${CMAKE_BINARY_DIR})
+include_directories(${CMAKE_BINARY_DIR}/velox)
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/velox/external/xxhash)
 include_directories(SYSTEM ${CMAKE_BINARY_DIR}/_deps/xsimd-src/include/)

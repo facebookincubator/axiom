@@ -67,6 +67,11 @@ struct ColumnStatistics {
   /// characters/bytes/elements/key-value pairs.
   std::optional<int32_t> maxLength;
 
+  /// Percentage of values where the next row is > the previous. 50 for a random distribution, 0 for descending, 100 for ascending.
+  std::optional<float> ascendingPct;
+
+  std::optional<float> descendingPct;
+  
   /// Average count of characters/bytes/elements/key-value pairs.
   std::optional<int32_t> avgLength;
 
@@ -81,6 +86,28 @@ struct ColumnStatistics {
   std::vector<ColumnStatistics> children;
 };
 
+  /// Options for StatisticsBuilder.
+  struct StatisticsBuilderOptions {
+    int32_t initialSize{0};
+    int32_t maxStringLength{100};
+    bool countDistinctst{false};
+    HashStringAllocator* allocator{nullptr};
+  };
+  
+  /// Abstract class for building statistics from samples.
+  class StatisticsBuilder {
+  public:
+    virtual ~StatisticsBuilder() = default;
+
+    static std::unique_ptr<StatisticsBuilder> create(const TypePtr& type, const StatisticsBuilderOptions& opts);
+    
+    void add(const VectorPtr& data)= 0;
+
+    void merge(const StatisticsBuilder& other) = 0;
+    
+    build(ColumnStatistics& result) = 0;
+  };
+  
 /// Base class for column. The column's name and type are immutable but the
 /// stats may be set multiple times.
 class Column {

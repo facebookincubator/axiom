@@ -421,7 +421,7 @@ struct OptimizerOptions {
   /// Produce trace of plan candidates.
   int32_t traceFlags{0};
 };
-
+  
 /// Instance of query optimization. Comverts a plan and schema into an
 /// optimized plan. Depends on QueryGraphContext being set on the
 /// calling thread. There is one instance per query to plan. The
