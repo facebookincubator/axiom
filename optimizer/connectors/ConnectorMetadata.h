@@ -78,6 +78,9 @@ struct ColumnStatistics {
   /// Estimated number of distinct values. Not specified for complex types.
   std::optional<int64_t> numDistinct;
 
+  /// Count of non-nulls.
+  int64_t numValues{0};
+  
   /// For complex type columns, statistics of children. For array, contains one
   /// element describing the array elements. For struct, has one element for
   /// each member. For map, has an element for keys and one for values. For flat
@@ -88,9 +91,9 @@ struct ColumnStatistics {
 
   /// Options for StatisticsBuilder.
   struct StatisticsBuilderOptions {
-    int32_t initialSize{0};
     int32_t maxStringLength{100};
-    bool countDistinctst{false};
+    int32_t initialSize{0};
+    bool countDistincts{false};
     HashStringAllocator* allocator{nullptr};
   };
   
@@ -100,12 +103,25 @@ struct ColumnStatistics {
     virtual ~StatisticsBuilder() = default;
 
     static std::unique_ptr<StatisticsBuilder> create(const TypePtr& type, const StatisticsBuilderOptions& opts);
-    
-    void add(const VectorPtr& data)= 0;
 
-    void merge(const StatisticsBuilder& other) = 0;
+    virtual TypePtr type() const = 0;
     
-    build(ColumnStatistics& result) = 0;
+    /// Accumulates elements of 'vector' into stats.
+    virtual void add(VectorPtr& data)= 0;
+
+    /// Merges the statistics of 'other' into 'this'.
+    virtual void merge(const StatisticsBuilder& other) = 0;
+    
+    /// Fills 'result' with the accumulated stats. Scales up counts by 'sampleFraction', e.g. 0.1 means 10x.
+    virtual void build(ColumnStatistics& result, float sampleFraction = 1) = 0;
+
+    static void updateStatsBuilders(
+    const RowVectorPtr& data,
+    std::vector<std::unique_ptr<StatisticsBuilder>>& builders);
+
+    virtual int64_t numAsc() const = 0;
+    virtual int64_t numRepeat() const = 0;
+    virtual int64_t numDesc() const = 0;
   };
   
 /// Base class for column. The column's name and type are immutable but the

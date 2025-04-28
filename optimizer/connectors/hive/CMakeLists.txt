@@ -20,7 +20,8 @@ velox_add_library(
 
 velox_link_libraries(
   velox_hive_connector_metadata
-    velox_hive_connector
+  velox_connector_metadata
+  velox_hive_connector
     velox_dwio_catalog_fbhive
     velox_dwio_dwrf_reader
     velox_dwio_dwrf_writer
