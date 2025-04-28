@@ -18,6 +18,6 @@
 
 namespace facebook::velox::connectors {
 
-void dummy() {}  
+void dummy() {}
 
 } // namespace facebook::velox::connectors

@@ -102,7 +102,4 @@ ConnectorTableHandlePtr HiveConnectorMetadata::createTableHandle(
           dataColumns ? dataColumns : layout.rowType()));
 }
 
-  
-
-  
 } // namespace facebook::velox::connector::hive

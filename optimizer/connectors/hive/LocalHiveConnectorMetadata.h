@@ -117,8 +117,7 @@ class LocalHiveTableLayout : public HiveTableLayout {
       RowTypePtr scanType,
       const std::vector<common::Subfield>& fields,
       HashStringAllocator* allocator,
-      std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders)
-      const;
+      std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders) const;
 
  private:
   std::vector<std::string> files_;

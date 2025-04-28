@@ -373,7 +373,6 @@ core::TypedExprPtr Optimization::toTypedExpr(ExprCP expr) {
   }
 }
 
-
 // Translates ExprPtrs to FieldAccessTypedExprs. Maintains a set of
 // projections and produces a ProjectNode to evaluate distinct
 // expressions for non-column Exprs given to toFieldref() and
@@ -558,7 +557,7 @@ class BroadcastPartitionFunctionSpec : public core::PartitionFunctionSpec {
   }
 };
 
-  template <typename ExprType>
+template <typename ExprType>
 core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const RowTypePtr& inputType,
     const std::vector<ExprType>& keys,
@@ -727,12 +726,13 @@ core::PlanNodePtr Optimization::makeAggregation(
   if (options_.numDrivers > 1 &&
       (op.step == core::AggregationNode::Step::kFinal ||
        op.step == core::AggregationNode::Step::kSingle)) {
-    auto partition = createPartitionFunctionSpec(project->outputType(), keys, false);
+    auto partition =
+        createPartitionFunctionSpec(project->outputType(), keys, false);
     std::vector<core::PlanNodePtr> inputs = {project};
     project = std::make_shared<core::LocalPartitionNode>(
         nextId(op),
         core::LocalPartitionNode::Type::kRepartition,
-	false,
+        false,
         std::move(partition),
         std::move(inputs));
   }
@@ -749,7 +749,7 @@ core::PlanNodePtr Optimization::makeAggregation(
   ptr.reset(r);
   return ptr;
 }
-  
+
 core::PlanNodePtr Optimization::makeFragment(
     RelationOpPtr op,
     ExecutableFragment& fragment,

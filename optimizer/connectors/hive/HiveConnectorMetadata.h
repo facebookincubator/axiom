@@ -93,8 +93,11 @@ class HiveTableLayout : public TableLayout {
   const std::vector<const Column*> hivePartitionColumns_;
   std::optional<int32_t> numBuckets_;
 
-  // Feeds 'data' into 'builders'. Builders and children of 'data' correspond pairwise. 'builders' may have a nullptr for some columns. 
-  void updateStatsBuilders(const RowVectorPtr& data, std::vector<std::unique_ptr<dwrf::StatisticsBuilder>>& builders);
+  // Feeds 'data' into 'builders'. Builders and children of 'data' correspond
+  // pairwise. 'builders' may have a nullptr for some columns.
+  void updateStatsBuilders(
+      const RowVectorPtr& data,
+      std::vector<std::unique_ptr<dwrf::StatisticsBuilder>>& builders);
 };
 
 class HiveConnectorMetadata : public ConnectorMetadata {

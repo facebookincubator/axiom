@@ -197,7 +197,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
     if (builders[i]) {
       builders[i]->build(runnerStats);
     }
-        (*statistics)[i] = std::move(runnerStats);
+    (*statistics)[i] = std::move(runnerStats);
   }
   return result;
 }
@@ -208,10 +208,9 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
     RowTypePtr scanType,
     const std::vector<common::Subfield>& fields,
     HashStringAllocator* allocator,
-    std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders)
-    const {
-  StatisticsBuilderOptions options ={
-    .maxStringLength = 100, .countDistincts = true, .allocator =allocator};
+    std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders) const {
+  StatisticsBuilderOptions options = {
+      .maxStringLength = 100, .countDistincts = true, .allocator = allocator};
   std::vector<std::unique_ptr<StatisticsBuilder>> builders;
 
   std::unordered_map<
@@ -267,8 +266,8 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
       }
       passingRows += data->size();
       if (!builders.empty()) {
-	  StatisticsBuilder::updateStatsBuilders(data, builders);
-	}
+        StatisticsBuilder::updateStatsBuilders(data, builders);
+      }
       if (scannedRows + dataSource->getCompletedRows() >
           table()->numRows() * (pct / 100)) {
         scannedRows += dataSource->getCompletedRows();
@@ -281,7 +280,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
   }
   return std::pair(scannedRows, passingRows);
 }
-  
+
 void LocalTable::makeDefaultLayout(
     std::vector<std::string> files,
     LocalHiveConnectorMetadata& metadata) {
@@ -310,12 +309,14 @@ void LocalTable::makeDefaultLayout(
   layouts_.push_back(std::move(layout));
 }
 
-  void mergeReaderStats(Column* column, velox::dwio::common::ColumnStatistics* input) {
+void mergeReaderStats(
+    Column* column,
+    velox::dwio::common::ColumnStatistics* input) {
   auto* stats = column->mutableStats();
   auto c = input->getNumberOfValues();
-  stats->numValues +=  c.has_value() ? c.value() : 0;
+  stats->numValues += c.has_value() ? c.value() : 0;
 }
-  
+
 void LocalHiveConnectorMetadata::loadTable(
     const std::string& tableName,
     const fs::path& tablePath) {
@@ -375,12 +376,12 @@ void LocalHiveConnectorMetadata::loadTable(
 
       auto readerStats = reader->columnStatistics(i);
       if (readerStats) {
-	auto numValues = readerStats->getNumberOfValues();
-	mergeReaderStats(column, readerStats.get());
-	if (rows.has_value() && rows.value() > 0 && numValues.has_value()) {
-	  column->mutableStats()->nullPct =
-	    100 * (rows.value() - numValues.value()) / rows.value();
-	}
+        auto numValues = readerStats->getNumberOfValues();
+        mergeReaderStats(column, readerStats.get());
+        if (rows.has_value() && rows.value() > 0 && numValues.has_value()) {
+          column->mutableStats()->nullPct =
+              100 * (rows.value() - numValues.value()) / rows.value();
+        }
       }
     }
 
@@ -397,25 +398,26 @@ void LocalHiveConnectorMetadata::loadTable(
   }
   table->sampleNumDistincts(pct, schemaPool_.get());
 }
- 
-  bool isMixedOrder(const StatisticsBuilder& stats) {
-    return stats.numAsc() && stats.numDesc();
-  }
 
-  bool isInteger(TypeKind kind) {
-    switch (kind) {
+bool isMixedOrder(const StatisticsBuilder& stats) {
+  return stats.numAsc() && stats.numDesc();
+}
+
+bool isInteger(TypeKind kind) {
+  switch (kind) {
     case TypeKind::TINYINT:
     case TypeKind::SMALLINT:
     case TypeKind::INTEGER:
     case TypeKind::BIGINT:
       return true;
-    default: return false;
-    }
+    default:
+      return false;
   }
+}
 
-  template <  typename T>
-  T numericValue(const variant& v) {
-    switch (v.kind()) {
+template <typename T>
+T numericValue(const variant& v) {
+  switch (v.kind()) {
     case TypeKind::TINYINT:
       return static_cast<T>(v.value<TypeKind::TINYINT>());
     case TypeKind::SMALLINT:
@@ -430,10 +432,9 @@ void LocalHiveConnectorMetadata::loadTable(
       return static_cast<T>(v.value<TypeKind::DOUBLE>());
     default:
       VELOX_UNREACHABLE();
-    }
   }
-  
-  
+}
+
 void LocalTable::sampleNumDistincts(float samplePct, memory::MemoryPool* pool) {
   std::vector<common::Subfield> fields;
   for (auto i = 0; i < type_->size(); ++i) {
@@ -466,7 +467,8 @@ void LocalTable::sampleNumDistincts(float samplePct, memory::MemoryPool* pool) {
       ColumnStatistics& stats = *column->mutableStats();
       statsBuilders[i]->build(stats);
       auto estimate = stats.numDistinct;
-      int64_t approxNumDistinct = estimate.has_value() ? estimate.value() : numRows_;
+      int64_t approxNumDistinct =
+          estimate.has_value() ? estimate.value() : numRows_;
       // For tiny tables the sample is 100% and the approxNumDistinct is
       // accurate. For partial samples, the distinct estimate is left to be the
       // distinct estimate of the sample if there are few distincts. This is an
@@ -482,11 +484,12 @@ void LocalTable::sampleNumDistincts(float samplePct, memory::MemoryPool* pool) {
 
           // If the type is an integer type, num distincts cannot be larger than
           // max - min.
-	  
+
           if (isInteger(statsBuilders[i]->type()->kind())) {
             auto min = stats.min;
             auto max = stats.max;
-            if (min.has_value() && max.has_value() && isMixedOrder(*statsBuilders[i])) {
+            if (min.has_value() && max.has_value() &&
+                isMixedOrder(*statsBuilders[i])) {
               auto range = numericValue<float>(max.value()) -
                   numericValue<float>(min.value());
               approxNumDistinct = std::min<float>(approxNumDistinct, range);

@@ -64,10 +64,10 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
     context_ = std::make_unique<QueryGraphContext>(*allocator_);
     queryCtx() = context_.get();
     builder_ = std::make_unique<exec::test::TpchQueryBuilder>(
-							      dwio::common::FileFormat::PARQUET, true);
+        dwio::common::FileFormat::PARQUET, true);
     builder_->initialize(FLAGS_data_path);
     referenceBuilder_ = std::make_unique<exec::test::TpchQueryBuilder>(
-							      dwio::common::FileFormat::PARQUET);
+        dwio::common::FileFormat::PARQUET);
     referenceBuilder_->initialize(FLAGS_data_path);
   }
 
@@ -97,17 +97,18 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
         planText);
   }
 
-  
-  void checkSame(const core::PlanNodePtr& planNode, core::PlanNodePtr referencePlan = nullptr) {
+  void checkSame(
+      const core::PlanNodePtr& planNode,
+      core::PlanNodePtr referencePlan = nullptr) {
     auto fragmentedPlan = planVelox(planNode);
     auto reference = referencePlan ? referencePlan : planNode;
     assertSame(reference, fragmentedPlan);
   }
 
   void checkTpch(int32_t query) {
-      auto q = builder_->getQueryPlan(query).plan;
-      auto rq = referenceBuilder_->getQueryPlan(query).plan;
-      checkSame(q, rq);
+    auto q = builder_->getQueryPlan(query).plan;
+    auto rq = referenceBuilder_->getQueryPlan(query).plan;
+    checkSame(q, rq);
   }
 
   std::unique_ptr<HashStringAllocator> allocator_;
@@ -171,7 +172,6 @@ TEST_F(PlanTest, q1) {
 TEST_F(PlanTest, q2) {
   checkTpch(1);
 }
-
 
 TEST_F(PlanTest, q3) {
   auto q = builder_->getQueryPlan(3).plan;

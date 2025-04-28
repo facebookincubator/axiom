@@ -111,9 +111,10 @@ void ParquetTpchTest::saveTpchTablesAsParquet() {
     auto tableDirectory = fmt::format("{}/{}", createPath_, tableName);
     auto tableSchema = tpch::getTableSchema(table);
     auto columnNames = tableSchema->names();
-    auto plan = PlanBuilder()
-                    .tpchTableScan(table, std::move(columnNames), FLAGS_tpch_scale)
-                    .planNode();
+    auto plan =
+        PlanBuilder()
+            .tpchTableScan(table, std::move(columnNames), FLAGS_tpch_scale)
+            .planNode();
     auto split =
         exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
             kTpchConnectorId, 1, 0));

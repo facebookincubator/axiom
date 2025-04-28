@@ -21,7 +21,7 @@ namespace facebook::velox::connector {
 
 /// StatisticsBuilder using dwrf::StaticsBuilder
 class StatisticsBuilderImpl : public StatisticsBuilder {
-public:
+ public:
   StatisticsBuilderImpl(
       const TypePtr& type,
       std::unique_ptr<dwrf::StatisticsBuilder> builder)
@@ -30,7 +30,7 @@ public:
   TypePtr type() const override {
     return type_;
   }
-  
+
   void add(VectorPtr& data) override;
 
   void merge(const StatisticsBuilder& other) override;
@@ -48,10 +48,10 @@ public:
   }
 
  private:
-template <typename Builder, typename T>
-void addStats(
-    velox::dwrf::StatisticsBuilder* builder,
-    const BaseVector& vector);
+  template <typename Builder, typename T>
+  void addStats(
+      velox::dwrf::StatisticsBuilder* builder,
+      const BaseVector& vector);
 
   TypePtr type_;
   std::unique_ptr<dwrf::StatisticsBuilder> builder_;
@@ -109,7 +109,7 @@ void StatisticsBuilderImpl::addStats(
           ++numDesc_;
         }
       } else {
-	previous = value;
+        previous = value;
       }
 
       reinterpret_cast<Builder*>(builder)->addValues(value);
@@ -122,34 +122,28 @@ void StatisticsBuilderImpl::addStats(
 
 void StatisticsBuilderImpl::add(VectorPtr& data) {
   auto loadChild = [](VectorPtr& data) {
-    data =
-        BaseVector::loadedVectorShared(data);
+    data = BaseVector::loadedVectorShared(data);
   };
   switch (type_->kind()) {
     case TypeKind::SMALLINT:
       loadChild(data);
-      addStats<dwrf::IntegerStatisticsBuilder, short>(
-          builder_.get(), *data);
+      addStats<dwrf::IntegerStatisticsBuilder, short>(builder_.get(), *data);
       break;
     case TypeKind::INTEGER:
       loadChild(data);
-      addStats<dwrf::IntegerStatisticsBuilder, int32_t>(
-          builder_.get(), *data);
+      addStats<dwrf::IntegerStatisticsBuilder, int32_t>(builder_.get(), *data);
       break;
     case TypeKind::BIGINT:
       loadChild(data);
-      addStats<dwrf::IntegerStatisticsBuilder, int64_t>(
-          builder_.get(), *data);
+      addStats<dwrf::IntegerStatisticsBuilder, int64_t>(builder_.get(), *data);
       break;
     case TypeKind::REAL:
       loadChild(data);
-      addStats<dwrf::DoubleStatisticsBuilder, float>(
-          builder_.get(), *data);
+      addStats<dwrf::DoubleStatisticsBuilder, float>(builder_.get(), *data);
       break;
     case TypeKind::DOUBLE:
       loadChild(data);
-      addStats<dwrf::DoubleStatisticsBuilder, double>(
-          builder_.get(), *data);
+      addStats<dwrf::DoubleStatisticsBuilder, double>(builder_.get(), *data);
       break;
     case TypeKind::VARCHAR:
       loadChild(data);
@@ -184,26 +178,32 @@ void StatisticsBuilderImpl::merge(const StatisticsBuilder& in) {
   numRows_ += other->numRows_;
 }
 
-  
-  void StatisticsBuilderImpl::build(ColumnStatistics& result, float sampleFraction) {
+void StatisticsBuilderImpl::build(
+    ColumnStatistics& result,
+    float sampleFraction) {
   auto stats = builder_->build();
   auto optNumValues = stats->getNumberOfValues();
   auto numValues = optNumValues.has_value() ? optNumValues.value() : 0;
-  if (auto ints = dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get())) {
+  if (auto ints =
+          dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get())) {
     auto min = ints->getMinimum();
     auto max = ints->getMaximum();
     if (min.has_value() && max.has_value()) {
       result.min = variant(min.value());
       result.max = variant(max.value());
     }
-  } else if (auto* dbl = dynamic_cast<dwio::common::DoubleColumnStatistics*>(stats.get())) {
+  } else if (
+      auto* dbl =
+          dynamic_cast<dwio::common::DoubleColumnStatistics*>(stats.get())) {
     auto min = dbl->getMinimum();
     auto max = dbl->getMaximum();
     if (min.has_value() && max.has_value()) {
       result.min = variant(min.value());
       result.max = variant(max.value());
     }
-  } else if (auto* str = dynamic_cast<dwio::common::StringColumnStatistics*>(stats.get())) {
+  } else if (
+      auto* str =
+          dynamic_cast<dwio::common::StringColumnStatistics*>(stats.get())) {
     auto min = str->getMinimum();
     auto max = str->getMaximum();
     if (min.has_value() && max.has_value()) {
@@ -215,9 +215,10 @@ void StatisticsBuilderImpl::merge(const StatisticsBuilder& in) {
     }
   }
   if (numRows_) {
-    result.nullPct = 100 * (numRows_ - numValues) / static_cast<float>(numRows_); 
+    result.nullPct =
+        100 * (numRows_ - numValues) / static_cast<float>(numRows_);
   }
   result.numDistinct = stats->numDistinct();
 }
-  
+
 } // namespace facebook::velox::connector

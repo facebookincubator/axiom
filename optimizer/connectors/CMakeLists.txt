@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_connector_metadata ConnectorMetadata.cpp StatisticsBuilder.cpp)
+velox_add_library(velox_connector_metadata ConnectorMetadata.cpp
+                  StatisticsBuilder.cpp)
 
-velox_link_libraries(
-  velox_connector_metadata
-  velox_common_base velox_memory velox_connector
-  velox_dwio_dwrf_writer)
+velox_link_libraries(velox_connector_metadata velox_common_base velox_memory
+                     velox_connector velox_dwio_dwrf_writer)
 
 add_subdirectory(hive)
 
