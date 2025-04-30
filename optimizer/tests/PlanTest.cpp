@@ -106,44 +106,50 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
     assertSame(reference, fragmentedPlan);
   }
 
-  // Breaks str into tokens at whitespace and punctuation. Returns tokens as string, character position pairs.
-  std::vector<std::pair<std::string, int32_t>> tokenize(const std::string& str) {
+  // Breaks str into tokens at whitespace and punctuation. Returns tokens as
+  // string, character position pairs.
+  std::vector<std::pair<std::string, int32_t>> tokenize(
+      const std::string& str) {
     std::vector<std::pair<std::string, int32_t>> result;
     std::string token;
     for (auto i = 0; i < str.size(); ++i) {
       char c = str[i];
       if (strchr(" \n\t", c)) {
-	  if (token.empty()) {
-	    continue;
-	  }
-	  auto offset = i - token.size();
-	  result.push_back(std::make_pair(std::move(token), offset));
+        if (token.empty()) {
+          continue;
+        }
+        auto offset = i - token.size();
+        result.push_back(std::make_pair(std::move(token), offset));
       } else if (strchr("()[]*%", c)) {
-	if (!token.empty()) {
-	  auto offset = i - token.size();
-	  result.push_back(std::make_pair(std::move(token), offset));
-	}
-	token.resize(1);
-	token[0] = c;
-	result.push_back(std::make_pair(std::move(token), i));
+        if (!token.empty()) {
+          auto offset = i - token.size();
+          result.push_back(std::make_pair(std::move(token), offset));
+        }
+        token.resize(1);
+        token[0] = c;
+        result.push_back(std::make_pair(std::move(token), i));
       } else {
-	token.push_back(c);
+        token.push_back(c);
       }
     }
     return result;
   }
-  
+
   void expectPlan(const std::string& actual, const std::string& expected) {
     auto expectedTokens = tokenize(expected);
     auto actualTokens = tokenize(expected);
-    for (auto i = 0; i < actualTokens.size() && i < expectedTokens.size(); ++i) {
+    for (auto i = 0; i < actualTokens.size() && i < expectedTokens.size();
+         ++i) {
       if (actualTokens[i].first != expectedTokens[i].first) {
-	FAIL() << "Difference at " << i << " position " << actualTokens[i].second << "= " << actualTokens[i].first << " vs " << expectedTokens[i].first << "\na actual= " << actual << "\nexpected=" << expected;
-	return;
+        FAIL() << "Difference at " << i << " position "
+               << actualTokens[i].second << "= " << actualTokens[i].first
+               << " vs " << expectedTokens[i].first << "\na actual= " << actual
+               << "\nexpected=" << expected;
+        return;
       }
     }
   }
-  
+
   void checkTpch(int32_t query, std::string expected = "") {
     auto q = builder_->getQueryPlan(query).plan;
     auto rq = referenceBuilder_->getQueryPlan(query).plan;

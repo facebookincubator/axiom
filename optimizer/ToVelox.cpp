@@ -413,7 +413,8 @@ class TempProjections {
       const std::vector<std::string>* optNames = nullptr) {
     std::vector<Result> result;
     for (auto i = 0; i < exprs.size(); ++i) {
-      result.push_back(toFieldRef(exprs[i], optNames ? &(*optNames)[i] : nullptr));
+      result.push_back(
+          toFieldRef(exprs[i], optNames ? &(*optNames)[i] : nullptr));
     }
     return result;
   }

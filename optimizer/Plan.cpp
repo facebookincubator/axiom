@@ -585,7 +585,7 @@ RelationOpPtr repartitionForAgg(const RelationOpPtr& plan, PlanState& state) {
   for (auto i = 0; i < agg->grouping.size(); ++i) {
     keyValues.push_back(agg->intermediateColumns[i]);
   }
-    // If no grouping and not yet gathered on a single node, add a gather before
+  // If no grouping and not yet gathered on a single node, add a gather before
   // final agg.
   if (keyValues.empty() && !plan->distribution().distributionType.isGather) {
     auto* gather = make<Repartition>(
