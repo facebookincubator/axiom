@@ -722,6 +722,8 @@ AggregationP Optimization::translateAggregation(
       source.step() == AggregationNode::Step::kSingle) {
     auto* aggregation =
         make<Aggregation>(nullptr, translateColumns(source.groupingKeys()));
+      std::unordered_map<std::string, ExprCP> keyRenames;
+
     for (auto i = 0; i < source.groupingKeys().size(); ++i) {
       if (aggregation->grouping[i]->type() == PlanType::kColumn) {
         aggregation->mutableColumns().push_back(
@@ -733,6 +735,7 @@ AggregationP Optimization::translateAggregation(
         auto* column = make<Column>(
             name, currentSelect_, aggregation->grouping[i]->value());
         aggregation->mutableColumns().push_back(column);
+	keyRenames[name] = column;
       }
     }
     // The keys for intermediate are the same as for final.
@@ -777,6 +780,9 @@ AggregationP Optimization::translateAggregation(
       aggregation->aggregates.push_back(dedupped->as<Aggregate>());
       auto resultName = toName(source.aggregateNames()[i]);
       renames_[resultName] = aggregation->columns().back();
+    }
+    for (auto& pair : keyRenames) {
+      renames_[pair.first] = pair.second;
     }
     return aggregation;
   }

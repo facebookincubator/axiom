@@ -390,13 +390,16 @@ class TempProjections {
     exprs_.insert(exprs_.begin(), fieldRefs_.begin(), fieldRefs_.end());
   }
 
-  core::FieldAccessTypedExprPtr toFieldRef(ExprCP expr) {
+  core::FieldAccessTypedExprPtr toFieldRef(
+      ExprCP expr,
+      const std::string* optName = nullptr) {
     auto it = exprChannel_.find(expr);
     if (it == exprChannel_.end()) {
       VELOX_CHECK(expr->type() != PlanType::kColumn);
       exprChannel_[expr] = nextChannel_++;
       exprs_.push_back(optimization_.toTypedExpr(expr));
-      names_.push_back(fmt::format("__r{}", nextChannel_ - 1));
+      names_.push_back(
+          optName ? *optName : fmt::format("__r{}", nextChannel_ - 1));
       fieldRefs_.push_back(std::make_shared<core::FieldAccessTypedExpr>(
           toTypePtr(expr->value().type), names_.back()));
       return fieldRefs_.back();
@@ -405,10 +408,12 @@ class TempProjections {
   }
 
   template <typename Result = core::FieldAccessTypedExprPtr>
-  std::vector<Result> toFieldRefs(const ExprVector& exprs) {
+  std::vector<Result> toFieldRefs(
+      const ExprVector& exprs,
+      const std::vector<std::string>* optNames = nullptr) {
     std::vector<Result> result;
-    for (auto expr : exprs) {
-      result.push_back(toFieldRef(expr));
+    for (auto i = 0; i < exprs.size(); ++i) {
+      result.push_back(toFieldRef(exprs[i], optNames ? &(*optNames)[i] : nullptr));
     }
     return result;
   }
@@ -433,7 +438,6 @@ class TempProjections {
   std::vector<core::TypedExprPtr> exprs_;
   std::unordered_map<ExprCP, int32_t> exprChannel_;
 };
-
 
 core::PlanNodePtr Optimization::makeOrderBy(
     OrderBy& op,
@@ -721,7 +725,11 @@ core::PlanNodePtr Optimization::makeAggregation(
       aggregates.push_back({call, rawInputTypes, mask, {}, {}, false});
     }
   }
-  auto keys = projections.toFieldRefs(op.grouping);
+  std::vector<std::string> keyNames;
+  for (auto i = 0; i < op.grouping.size(); ++i) {
+    keyNames.push_back(op.intermediateColumns[i]->toString());
+  }
+  auto keys = projections.toFieldRefs(op.grouping, &keyNames);
   auto project = projections.maybeProject(input);
   if (options_.numDrivers > 1 &&
       (op.step == core::AggregationNode::Step::kFinal ||

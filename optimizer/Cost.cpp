@@ -150,7 +150,7 @@ void Repartition::setCost(const PlanState& input) {
   RelationOp::setCost(input);
   auto pair = shuffleCostV(columns_);
   cost_.unitCost = pair.second;
-  cost_.totalBytes = cost_.inputCardinality * pair.first;
+  cost_.transferBytes = cost_.inputCardinality * pair.first;
 }
 
 void HashBuild::setCost(const PlanState& input) {

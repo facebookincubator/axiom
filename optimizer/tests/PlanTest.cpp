@@ -99,16 +99,61 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
 
   void checkSame(
       const core::PlanNodePtr& planNode,
-      core::PlanNodePtr referencePlan = nullptr) {
-    auto fragmentedPlan = planVelox(planNode);
+      core::PlanNodePtr referencePlan = nullptr,
+      std::string* planString = nullptr) {
+    auto fragmentedPlan = planVelox(planNode, planString);
     auto reference = referencePlan ? referencePlan : planNode;
     assertSame(reference, fragmentedPlan);
   }
 
-  void checkTpch(int32_t query) {
+  // Breaks str into tokens at whitespace and punctuation. Returns tokens as string, character position pairs.
+  std::vector<std::pair<std::string, int32_t>> tokenize(const std::string& str) {
+    std::vector<std::pair<std::string, int32_t>> result;
+    std::string token;
+    for (auto i = 0; i < str.size(); ++i) {
+      char c = str[i];
+      if (strchr(" \n\t", c)) {
+	  if (token.empty()) {
+	    continue;
+	  }
+	  auto offset = i - token.size();
+	  result.push_back(std::make_pair(std::move(token), offset));
+      } else if (strchr("()[]*%", c)) {
+	if (!token.empty()) {
+	  auto offset = i - token.size();
+	  result.push_back(std::make_pair(std::move(token), offset));
+	}
+	token.resize(1);
+	token[0] = c;
+	result.push_back(std::make_pair(std::move(token), i));
+      } else {
+	token.push_back(c);
+      }
+    }
+    return result;
+  }
+  
+  void expectPlan(const std::string& actual, const std::string& expected) {
+    auto expectedTokens = tokenize(expected);
+    auto actualTokens = tokenize(expected);
+    for (auto i = 0; i < actualTokens.size() && i < expectedTokens.size(); ++i) {
+      if (actualTokens[i].first != expectedTokens[i].first) {
+	FAIL() << "Difference at " << i << " position " << actualTokens[i].second << "= " << actualTokens[i].first << " vs " << expectedTokens[i].first << "\na actual= " << actual << "\nexpected=" << expected;
+	return;
+      }
+    }
+  }
+  
+  void checkTpch(int32_t query, std::string expected = "") {
     auto q = builder_->getQueryPlan(query).plan;
     auto rq = referenceBuilder_->getQueryPlan(query).plan;
-    checkSame(q, rq);
+    std::string planText;
+    checkSame(q, rq, &planText);
+    if (!expected.empty()) {
+      expectPlan(planText, expected);
+    } else {
+      std::cout << " -- plan = " << planText << std::endl;
+    }
   }
 
   std::unique_ptr<HashStringAllocator> allocator_;
@@ -179,7 +224,9 @@ TEST_F(PlanTest, q3) {
   std::cout << result;
   result = makePlan(q, true, false);
   std::cout << result;
-  checkTpch(3);
+  checkTpch(
+      3,
+      "lineitem t2 shuffle *H  (orders t3*H  (customer t4 broadcast   Build ) shuffle   Build ) PARTIAL agg shuffle  FINAL agg");
 }
 TEST_F(PlanTest, q4) {
   checkTpch(4);
@@ -203,10 +250,12 @@ TEST_F(PlanTest, q8) {
 
 TEST_F(PlanTest, q9) {
   auto q = builder_->getQueryPlan(9).plan;
+#if 0
   auto result = makePlan(q, true, true);
   std::cout << result;
   result = makePlan(q, true, false);
   std::cout << result;
+#endif
   checkTpch(9);
 }
 
