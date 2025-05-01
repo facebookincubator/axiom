@@ -175,8 +175,6 @@ void LocalHiveConnectorMetadata::readTables(const std::string& path) {
   }
 }
 
-
-
 std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
     const connector::ConnectorTableHandlePtr& handle,
     float pct,
