@@ -64,8 +64,11 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
     context_ = std::make_unique<QueryGraphContext>(*allocator_);
     queryCtx() = context_.get();
     builder_ = std::make_unique<exec::test::TpchQueryBuilder>(
-        dwio::common::FileFormat::PARQUET);
+        dwio::common::FileFormat::PARQUET, true);
     builder_->initialize(FLAGS_data_path);
+    referenceBuilder_ = std::make_unique<exec::test::TpchQueryBuilder>(
+        dwio::common::FileFormat::PARQUET);
+    referenceBuilder_->initialize(FLAGS_data_path);
   }
 
   void TearDown() override {
@@ -94,9 +97,75 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
         planText);
   }
 
+  void checkSame(
+      const core::PlanNodePtr& planNode,
+      core::PlanNodePtr referencePlan = nullptr,
+      std::string* planString = nullptr) {
+    auto fragmentedPlan = planVelox(planNode, planString);
+    auto reference = referencePlan ? referencePlan : planNode;
+    assertSame(reference, fragmentedPlan);
+  }
+
+  // Breaks str into tokens at whitespace and punctuation. Returns tokens as
+  // string, character position pairs.
+  std::vector<std::pair<std::string, int32_t>> tokenize(
+      const std::string& str) {
+    std::vector<std::pair<std::string, int32_t>> result;
+    std::string token;
+    for (auto i = 0; i < str.size(); ++i) {
+      char c = str[i];
+      if (strchr(" \n\t", c)) {
+        if (token.empty()) {
+          continue;
+        }
+        auto offset = i - token.size();
+        result.push_back(std::make_pair(std::move(token), offset));
+      } else if (strchr("()[]*%", c)) {
+        if (!token.empty()) {
+          auto offset = i - token.size();
+          result.push_back(std::make_pair(std::move(token), offset));
+        }
+        token.resize(1);
+        token[0] = c;
+        result.push_back(std::make_pair(std::move(token), i));
+      } else {
+        token.push_back(c);
+      }
+    }
+    return result;
+  }
+
+  void expectPlan(const std::string& actual, const std::string& expected) {
+    auto expectedTokens = tokenize(expected);
+    auto actualTokens = tokenize(expected);
+    for (auto i = 0; i < actualTokens.size() && i < expectedTokens.size();
+         ++i) {
+      if (actualTokens[i].first != expectedTokens[i].first) {
+        FAIL() << "Difference at " << i << " position "
+               << actualTokens[i].second << "= " << actualTokens[i].first
+               << " vs " << expectedTokens[i].first << "\na actual= " << actual
+               << "\nexpected=" << expected;
+        return;
+      }
+    }
+  }
+
+  void checkTpch(int32_t query, std::string expected = "") {
+    auto q = builder_->getQueryPlan(query).plan;
+    auto rq = referenceBuilder_->getQueryPlan(query).plan;
+    std::string planText;
+    checkSame(q, rq, &planText);
+    if (!expected.empty()) {
+      expectPlan(planText, expected);
+    } else {
+      std::cout << " -- plan = " << planText << std::endl;
+    }
+  }
+
   std::unique_ptr<HashStringAllocator> allocator_;
   std::unique_ptr<QueryGraphContext> context_;
   std::unique_ptr<exec::test::TpchQueryBuilder> builder_;
+  std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
   static inline bool registered;
 };
 
@@ -147,28 +216,114 @@ TEST_F(PlanTest, queryGraph) {
   EXPECT_EQ(interned2, interned);
 }
 
+TEST_F(PlanTest, q1) {
+  checkTpch(1);
+}
+
+TEST_F(PlanTest, q2) {
+  checkTpch(1);
+}
+
 TEST_F(PlanTest, q3) {
-  auto q = builder_->getQueryPlan(3).plan;
-  auto result = makePlan(q, true, true);
-  std::cout << result;
-  result = makePlan(q, true, false);
-  std::cout << result;
+  checkTpch(
+      3,
+      "lineitem t2 shuffle *H  (orders t3*H  (customer t4 broadcast   Build ) shuffle   Build ) PARTIAL agg shuffle  FINAL agg");
+}
+TEST_F(PlanTest, q4) {
+  checkTpch(4);
+}
+
+TEST_F(PlanTest, q5) {
+  // Fix diamond pattern
+  GTEST_SKIP();
+  checkTpch(5);
+}
+
+TEST_F(PlanTest, q6) {
+  checkTpch(6);
+}
+
+TEST_F(PlanTest, q7) {
+  // Need to push down the or of n_name to scans.
+  GTEST_SKIP();
+  checkTpch(7);
+}
+
+TEST_F(PlanTest, q8) {
+  checkTpch(8);
 }
 
 TEST_F(PlanTest, q9) {
-  auto q = builder_->getQueryPlan(9).plan;
-  auto result = makePlan(q, true, true);
-  std::cout << result;
-  result = makePlan(q, true, false);
-  std::cout << result;
+  GTEST_SKIP();
+  // Plan does not minimize build size. To adjust build cost and check that
+  // import of existences to build side does not affect join cardinality. Good
+  // for SF1, bad for 0.1 and 0.01.
+  checkTpch(9);
+}
+
+TEST_F(PlanTest, q10) {
+  checkTpch(10);
+}
+
+TEST_F(PlanTest, q11) {
+  // Fix
+  GTEST_SKIP();
+  checkTpch(11);
+}
+
+TEST_F(PlanTest, q12) {
+  // Fix string in filter
+  GTEST_SKIP();
+  checkTpch(12);
+}
+
+TEST_F(PlanTest, q13) {
+  checkTpch(13);
+}
+
+TEST_F(PlanTest, q14) {
+  checkTpch(14);
+}
+
+TEST_F(PlanTest, q15) {
+  GTEST_SKIP();
+  checkTpch(15);
+}
+
+TEST_F(PlanTest, q16) {
+  GTEST_SKIP();
+  checkTpch(16);
 }
 
 TEST_F(PlanTest, q17) {
-  auto q = builder_->getQueryPlan(17).plan;
-  auto result = makePlan(q, true, true);
-  std::cout << result;
-  result = makePlan(q, true, false);
-  std::cout << result;
+  GTEST_SKIP();
+  checkTpch(17);
+}
+
+TEST_F(PlanTest, q18) {
+  GTEST_SKIP();
+  checkTpch(18);
+}
+
+TEST_F(PlanTest, q19) {
+  // Recognize common conjuncts in ands inside a top level or.
+  GTEST_SKIP();
+  checkTpch(19);
+}
+
+TEST_F(PlanTest, q20) {
+  GTEST_SKIP();
+  checkTpch(20);
+}
+
+TEST_F(PlanTest, q21) {
+  GTEST_SKIP();
+  checkTpch(21);
+}
+
+TEST_F(PlanTest, q22) {
+  GTEST_SKIP();
+  checkTpch(22);
 }
 
 void printPlan(core::PlanNode* plan, bool r, bool d) {

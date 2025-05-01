@@ -97,7 +97,10 @@ std::string Cost::toString(bool /*detail*/, bool isUnit) const {
     out << ", setup " << succinctNumber(setupCost) << "CU";
   }
   if (static_cast<bool>(totalBytes)) {
-    out << " " << velox::succinctBytes(totalBytes);
+    out << " build= " << velox::succinctBytes(totalBytes);
+  }
+  if (static_cast<bool>(transferBytes)) {
+    out << " network= " << velox::succinctBytes(transferBytes);
   }
   return out.str();
 }
@@ -160,6 +163,9 @@ std::string Join::toString(bool recursive, bool detail) const {
   out << "*" << (method == JoinMethod::kHash ? "H" : "M") << " "
       << joinTypeLabel(joinType);
   printCost(detail, out);
+  if (detail && buildCost.unitCost > 0) {
+    out << "{ build=" << buildCost.toString(detail, true) << "}";
+  }
   if (recursive) {
     out << " (" << right->toString(true, detail) << ")";
     if (detail) {

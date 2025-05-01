@@ -95,4 +95,8 @@ std::string PlanObjectSet::toString(bool names) const {
   return out.str();
 }
 
+std::string planObjectString(PlanObject* o) {
+  return o->toString();
+}
+
 } // namespace facebook::velox::optimizer

@@ -23,7 +23,6 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/Options.h"
-#include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -118,8 +117,7 @@ class LocalHiveTableLayout : public HiveTableLayout {
       RowTypePtr scanType,
       const std::vector<common::Subfield>& fields,
       HashStringAllocator* allocator,
-      std::vector<std::unique_ptr<dwrf::StatisticsBuilder>>* statsBuilders)
-      const;
+      std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders) const;
 
  private:
   std::vector<std::string> files_;

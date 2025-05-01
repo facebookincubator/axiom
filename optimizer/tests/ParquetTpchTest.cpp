@@ -21,6 +21,7 @@ DEFINE_string(
     "",
     "Path to TPCH data directory. If empty, the test creates a temp directory and deletes it on exit");
 DEFINE_bool(create_dataset, true, "Creates the TPCH tables");
+DEFINE_double(tpch_scale, 0.01, "Scale factor");
 
 namespace facebook::velox::optimizer::test {
 using namespace facebook::velox::exec;
@@ -110,9 +111,10 @@ void ParquetTpchTest::saveTpchTablesAsParquet() {
     auto tableDirectory = fmt::format("{}/{}", createPath_, tableName);
     auto tableSchema = tpch::getTableSchema(table);
     auto columnNames = tableSchema->names();
-    auto plan = PlanBuilder()
-                    .tpchTableScan(table, std::move(columnNames), 0.01)
-                    .planNode();
+    auto plan =
+        PlanBuilder()
+            .tpchTableScan(table, std::move(columnNames), FLAGS_tpch_scale)
+            .planNode();
     auto split =
         exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
             kTpchConnectorId, 1, 0));

@@ -134,6 +134,7 @@ const JoinSide JoinEdge::sideOf(PlanObjectCP side, bool other) const {
         rightKeys_,
         lrFanout_,
         rightOptional_,
+        leftOptional_,
         rightExists_,
         rightNotExists_,
         markColumn_,
@@ -144,6 +145,7 @@ const JoinSide JoinEdge::sideOf(PlanObjectCP side, bool other) const {
       leftKeys_,
       rlFanout_,
       leftOptional_,
+      rightOptional_,
       false,
       false,
       nullptr,
@@ -174,6 +176,8 @@ std::string JoinEdge::toString() const {
     out << " exists ";
   } else if (rightNotExists_) {
     out << " not exists ";
+  } else if (leftOptional_) {
+    out << "right";
   } else {
     out << " inner ";
   }

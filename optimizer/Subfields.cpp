@@ -116,6 +116,15 @@ void Optimization::markFieldAccessed(
       markColumnSubfields(agg, aggregate.sortingKeys, 0);
       return;
     }
+    if (auto* join =
+            dynamic_cast<const core::AbstractJoinNode*>(source.planNode)) {
+      // Check for flag column produced by semi join filter.
+      if (join->isLeftSemiProjectJoin() || join->isRightSemiProjectJoin()) {
+        if (ordinal == join->outputType()->size() - 1) {
+          return;
+        }
+      }
+    }
     auto& sourceInputs = source.planNode->sources();
     if (sourceInputs.empty()) {
       return;
@@ -131,7 +140,7 @@ void Optimization::markFieldAccessed(
         return;
       }
     }
-    VELOX_FAIL("Should have found source for expr");
+    VELOX_FAIL("Should have found source for expr {}", fieldName);
   }
   // The source is a lambda arg. We apply the path to the corresponding
   // container arg of the 2nd order function call that has the lambda.

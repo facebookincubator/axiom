@@ -62,6 +62,9 @@ struct Cost {
   // operation is streaming or spills.
   float totalBytes{0};
 
+  /// Shuffle data volume
+  float transferBytes{0};
+
   // Maximum memory occupancy. If the operation is blocking, e.g. group by, the
   // amount of spill is 'totalBytes' - 'peakResidentBytes'.
   float peakResidentBytes{0};
@@ -317,6 +320,9 @@ struct Join : public RelationOp {
   ExprVector leftKeys;
   ExprVector rightKeys;
   ExprVector filter;
+
+  // Total cost of build side plan. For documentation.
+  Cost buildCost;
 
   void setCost(const PlanState& input) override;
   std::string toString(bool recursive, bool detail) const override;

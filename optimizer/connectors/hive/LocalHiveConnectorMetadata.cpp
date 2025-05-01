@@ -175,27 +175,6 @@ void LocalHiveConnectorMetadata::readTables(const std::string& path) {
   }
 }
 
-// Feeds the values in 'vector' into 'builder'.
-template <typename Builder, typename T>
-void addStats(
-    velox::dwrf::StatisticsBuilder* builder,
-    const BaseVector& vector) {
-  auto* typedVector = vector.asUnchecked<SimpleVector<T>>();
-  for (auto i = 0; i < typedVector->size(); ++i) {
-    if (!typedVector->isNullAt(i)) {
-      reinterpret_cast<Builder*>(builder)->addValues(typedVector->valueAt(i));
-    }
-  }
-}
-
-std::unique_ptr<ColumnStatistics> toRunnerStats(
-    std::unique_ptr<dwio::common::ColumnStatistics> dwioStats) {
-  auto result = std::make_unique<ColumnStatistics>();
-  // result->numDistinct = dwioStats->numDistinct();
-
-  return result;
-}
-
 std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
     const connector::ConnectorTableHandlePtr& handle,
     float pct,
@@ -204,7 +183,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
     const std::vector<common::Subfield>& fields,
     HashStringAllocator* allocator,
     std::vector<ColumnStatistics>* statistics) const {
-  std::vector<std::unique_ptr<velox::dwrf::StatisticsBuilder>> builders;
+  std::vector<std::unique_ptr<StatisticsBuilder>> builders;
   VELOX_CHECK(extraFilters.empty());
   auto result = sample(handle, pct, scanType, fields, allocator, &builders);
   if (!statistics) {
@@ -214,14 +193,8 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
   for (auto i = 0; i < builders.size(); ++i) {
     ColumnStatistics runnerStats;
     if (builders[i]) {
-      dwrf::proto::ColumnStatistics proto;
-      builders[i]->toProto(proto);
-      dwrf::StatsContext context("", dwrf::WriterVersion::ORIGINAL);
-      auto wrapper = dwrf::ColumnStatisticsWrapper(&proto);
-      auto stats = buildColumnStatisticsFromProto(wrapper, context);
-      runnerStats = *toRunnerStats(std::move(stats));
+      builders[i]->build(runnerStats);
     }
-
     (*statistics)[i] = std::move(runnerStats);
   }
   return result;
@@ -232,12 +205,11 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
     float pct,
     RowTypePtr scanType,
     const std::vector<common::Subfield>& fields,
-    HashStringAllocator* /*allocator*/,
-    std::vector<std::unique_ptr<velox::dwrf::StatisticsBuilder>>* statsBuilders)
-    const {
-  dwrf::StatisticsBuilderOptions options(
-      /*stringLengthLimit=*/100, /*initialSize=*/0);
-  std::vector<std::unique_ptr<dwrf::StatisticsBuilder>> builders;
+    HashStringAllocator* allocator,
+    std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders) const {
+  StatisticsBuilderOptions options = {
+      .maxStringLength = 100, .countDistincts = true, .allocator = allocator};
+  std::vector<std::unique_ptr<StatisticsBuilder>> builders;
 
   std::unordered_map<
       std::string,
@@ -259,26 +231,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
             connector::hive::HiveColumnHandle::ColumnType::kRegular,
             types.back(),
             types.back());
-    switch (types.back()->kind()) {
-      case TypeKind::BIGINT:
-      case TypeKind::INTEGER:
-      case TypeKind::SMALLINT:
-        builders.push_back(
-            std::make_unique<dwrf::IntegerStatisticsBuilder>(options));
-        break;
-      case TypeKind::REAL:
-      case TypeKind::DOUBLE:
-        builders.push_back(
-            std::make_unique<dwrf::DoubleStatisticsBuilder>(options));
-        break;
-      case TypeKind::VARCHAR:
-        builders.push_back(
-            std::make_unique<dwrf::StringStatisticsBuilder>(options));
-        break;
-
-      default:
-        builders.push_back(nullptr);
-    }
+    builders.push_back(StatisticsBuilder::create(types.back(), options));
   }
 
   const auto outputType = ROW(std::move(names), std::move(types));
@@ -310,53 +263,12 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
         break;
       }
       passingRows += data->size();
-      for (auto column = 0; column < builders.size(); ++column) {
-        if (!builders[column]) {
-          continue;
-        }
-        auto* builder = builders[column].get();
-        auto loadChild = [](RowVectorPtr data, int32_t column) {
-          data->childAt(column) =
-              BaseVector::loadedVectorShared(data->childAt(column));
-        };
-        switch (rowType()->childAt(column)->kind()) {
-          case TypeKind::SMALLINT:
-            loadChild(data, column);
-            addStats<dwrf::IntegerStatisticsBuilder, short>(
-                builder, *data->childAt(column));
-            break;
-          case TypeKind::INTEGER:
-            loadChild(data, column);
-            addStats<dwrf::IntegerStatisticsBuilder, int32_t>(
-                builder, *data->childAt(column));
-            break;
-          case TypeKind::BIGINT:
-            loadChild(data, column);
-            addStats<dwrf::IntegerStatisticsBuilder, int64_t>(
-                builder, *data->childAt(column));
-            break;
-          case TypeKind::REAL:
-            loadChild(data, column);
-            addStats<dwrf::DoubleStatisticsBuilder, float>(
-                builder, *data->childAt(column));
-            break;
-          case TypeKind::DOUBLE:
-            loadChild(data, column);
-            addStats<dwrf::DoubleStatisticsBuilder, double>(
-                builder, *data->childAt(column));
-            break;
-          case TypeKind::VARCHAR:
-            loadChild(data, column);
-            addStats<dwrf::StringStatisticsBuilder, StringView>(
-                builder, *data->childAt(column));
-            break;
-
-          default:
-            break;
-        }
+      if (!builders.empty()) {
+        StatisticsBuilder::updateStatsBuilders(data, builders);
       }
       if (scannedRows + dataSource->getCompletedRows() >
           table()->numRows() * (pct / 100)) {
+        scannedRows += dataSource->getCompletedRows();
         break;
       }
     }
@@ -393,6 +305,14 @@ void LocalTable::makeDefaultLayout(
   layout->setFiles(std::move(files));
   exportedLayouts_.push_back(layout.get());
   layouts_.push_back(std::move(layout));
+}
+
+void mergeReaderStats(
+    Column* column,
+    velox::dwio::common::ColumnStatistics* input) {
+  auto* stats = column->mutableStats();
+  auto c = input->getNumberOfValues();
+  stats->numValues += c.has_value() ? c.value() : 0;
 }
 
 void LocalHiveConnectorMetadata::loadTable(
@@ -451,19 +371,18 @@ void LocalHiveConnectorMetadata::loadTable(
             std::make_unique<Column>(name, fileType->childAt(i));
         column = table->columns()[name].get();
       }
-      // Initialize the stats from the first file.
-      if (column->stats() == nullptr) {
-        auto readerStats = reader->columnStatistics(i);
-        if (readerStats) {
-          auto numValues = readerStats->getNumberOfValues();
-          column->setStats(toRunnerStats(std::move(readerStats)));
-          if (rows.has_value() && rows.value() > 0 && numValues.has_value()) {
-            column->mutableStats()->nullPct =
-                100 * (rows.value() - numValues.value()) / rows.value();
-          }
+
+      auto readerStats = reader->columnStatistics(i);
+      if (readerStats) {
+        auto numValues = readerStats->getNumberOfValues();
+        mergeReaderStats(column, readerStats.get());
+        if (rows.has_value() && rows.value() > 0 && numValues.has_value()) {
+          column->mutableStats()->nullPct =
+              100 * (rows.value() - numValues.value()) / rows.value();
         }
       }
     }
+
     files.push_back(dirEntry.path());
   }
   VELOX_CHECK_NOT_NULL(table, "Table directory {} is empty", tablePath);
@@ -476,6 +395,42 @@ void LocalHiveConnectorMetadata::loadTable(
     pct = 100 * 100000 / table->numRows();
   }
   table->sampleNumDistincts(pct, schemaPool_.get());
+}
+
+bool isMixedOrder(const StatisticsBuilder& stats) {
+  return stats.numAsc() && stats.numDesc();
+}
+
+bool isInteger(TypeKind kind) {
+  switch (kind) {
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+      return true;
+    default:
+      return false;
+  }
+}
+
+template <typename T>
+T numericValue(const variant& v) {
+  switch (v.kind()) {
+    case TypeKind::TINYINT:
+      return static_cast<T>(v.value<TypeKind::TINYINT>());
+    case TypeKind::SMALLINT:
+      return static_cast<T>(v.value<TypeKind::SMALLINT>());
+    case TypeKind::INTEGER:
+      return static_cast<T>(v.value<TypeKind::INTEGER>());
+    case TypeKind::BIGINT:
+      return static_cast<T>(v.value<TypeKind::BIGINT>());
+    case TypeKind::REAL:
+      return static_cast<T>(v.value<TypeKind::REAL>());
+    case TypeKind::DOUBLE:
+      return static_cast<T>(v.value<TypeKind::DOUBLE>());
+    default:
+      VELOX_UNREACHABLE();
+  }
 }
 
 void LocalTable::sampleNumDistincts(float samplePct, memory::MemoryPool* pool) {
@@ -498,7 +453,7 @@ void LocalTable::sampleNumDistincts(float samplePct, memory::MemoryPool* pool) {
   std::vector<core::TypedExprPtr> ignore;
   auto handle = layout->connector()->metadata()->createTableHandle(
       *layout, columns, evaluator, {}, ignore);
-  std::vector<std::unique_ptr<dwrf::StatisticsBuilder>> statsBuilders;
+  std::vector<std::unique_ptr<StatisticsBuilder>> statsBuilders;
   auto* localLayout = dynamic_cast<LocalHiveTableLayout*>(layout);
   VELOX_CHECK_NOT_NULL(localLayout, "Expecting a local hive layout");
   auto [sampled, passed] = localLayout->sample(
@@ -506,10 +461,12 @@ void LocalTable::sampleNumDistincts(float samplePct, memory::MemoryPool* pool) {
   numSampledRows_ = sampled;
   for (auto i = 0; i < statsBuilders.size(); ++i) {
     if (statsBuilders[i]) {
-      // TODO: Use HLL estimate of distinct values here after this is added to
-      // the stats builder. Now assume that all rows have a different value.
-      // Later refine this by observed min-max range.
-      int64_t approxNumDistinct = numRows_;
+      auto* column = columns_[type_->nameOf(i)].get();
+      ColumnStatistics& stats = *column->mutableStats();
+      statsBuilders[i]->build(stats);
+      auto estimate = stats.numDistinct;
+      int64_t approxNumDistinct =
+          estimate.has_value() ? estimate.value() : numRows_;
       // For tiny tables the sample is 100% and the approxNumDistinct is
       // accurate. For partial samples, the distinct estimate is left to be the
       // distinct estimate of the sample if there are few distincts. This is an
@@ -525,13 +482,14 @@ void LocalTable::sampleNumDistincts(float samplePct, memory::MemoryPool* pool) {
 
           // If the type is an integer type, num distincts cannot be larger than
           // max - min.
-          if (auto* ints = dynamic_cast<dwrf::IntegerStatisticsBuilder*>(
-                  statsBuilders[i].get())) {
-            auto min = ints->getMinimum();
-            auto max = ints->getMaximum();
-            if (min.has_value() && max.has_value()) {
-              auto range = static_cast<float>(max.value()) -
-                  static_cast<float>(min.value());
+
+          if (isInteger(statsBuilders[i]->type()->kind())) {
+            auto min = stats.min;
+            auto max = stats.max;
+            if (min.has_value() && max.has_value() &&
+                isMixedOrder(*statsBuilders[i])) {
+              auto range = numericValue<float>(max.value()) -
+                  numericValue<float>(min.value());
               approxNumDistinct = std::min<float>(approxNumDistinct, range);
             }
           }

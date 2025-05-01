@@ -67,11 +67,20 @@ struct ColumnStatistics {
   /// characters/bytes/elements/key-value pairs.
   std::optional<int32_t> maxLength;
 
+  /// Percentage of values where the next row is > the previous. 50 for a random
+  /// distribution, 0 for descending, 100 for ascending.
+  std::optional<float> ascendingPct;
+
+  std::optional<float> descendingPct;
+
   /// Average count of characters/bytes/elements/key-value pairs.
   std::optional<int32_t> avgLength;
 
   /// Estimated number of distinct values. Not specified for complex types.
   std::optional<int64_t> numDistinct;
+
+  /// Count of non-nulls.
+  int64_t numValues{0};
 
   /// For complex type columns, statistics of children. For array, contains one
   /// element describing the array elements. For struct, has one element for
@@ -79,6 +88,44 @@ struct ColumnStatistics {
   /// map, may have one element for each key. In all cases, stats may be
   /// missing.
   std::vector<ColumnStatistics> children;
+};
+
+/// Options for StatisticsBuilder.
+struct StatisticsBuilderOptions {
+  int32_t maxStringLength{100};
+  int32_t initialSize{0};
+  bool countDistincts{false};
+  HashStringAllocator* allocator{nullptr};
+};
+
+/// Abstract class for building statistics from samples.
+class StatisticsBuilder {
+ public:
+  virtual ~StatisticsBuilder() = default;
+
+  static std::unique_ptr<StatisticsBuilder> create(
+      const TypePtr& type,
+      const StatisticsBuilderOptions& opts);
+
+  virtual TypePtr type() const = 0;
+
+  /// Accumulates elements of 'vector' into stats.
+  virtual void add(VectorPtr& data) = 0;
+
+  /// Merges the statistics of 'other' into 'this'.
+  virtual void merge(const StatisticsBuilder& other) = 0;
+
+  /// Fills 'result' with the accumulated stats. Scales up counts by
+  /// 'sampleFraction', e.g. 0.1 means 10x.
+  virtual void build(ColumnStatistics& result, float sampleFraction = 1) = 0;
+
+  static void updateStatsBuilders(
+      const RowVectorPtr& data,
+      std::vector<std::unique_ptr<StatisticsBuilder>>& builders);
+
+  virtual int64_t numAsc() const = 0;
+  virtual int64_t numRepeat() const = 0;
+  virtual int64_t numDesc() const = 0;
 };
 
 /// Base class for column. The column's name and type are immutable but the

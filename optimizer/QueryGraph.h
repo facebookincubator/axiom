@@ -445,6 +445,7 @@ struct JoinSide {
   const ExprVector& keys;
   float fanout;
   const bool isOptional;
+  const bool isNonOptionalOfOuter;
   const bool isExists;
   const bool isNotExists;
   ColumnCP markColumn;
@@ -461,6 +462,10 @@ struct JoinSide {
     if (isOptional) {
       return velox::core::JoinType::kLeft;
     }
+    if (isNonOptionalOfOuter) {
+      return velox::core::JoinType::kRight;
+    }
+
     if (markColumn) {
       return velox::core::JoinType::kLeftSemiProject;
     }

@@ -52,8 +52,8 @@ void Optimization::trace(
     RelationOp& plan) {
   if (event & opts_.traceFlags) {
     std::cout << (event == kRetained ? "Retained: " : "Abandoned: ") << id
-              << ":" << " " << succinctNumber(cost.unitCost + cost.setupCost)
-              << " " << plan.toString(true, false) << std::endl;
+              << ": " << cost.toString(true, true) << ": " << " "
+              << plan.toString(true, false) << std::endl;
   }
 }
 
@@ -114,6 +114,8 @@ void PlanState::addCost(RelationOp& op) {
   cost.unitCost += cost.inputCardinality * cost.fanout * op.cost().unitCost;
   cost.setupCost += op.cost().setupCost;
   cost.fanout *= op.cost().fanout;
+  cost.totalBytes += op.cost().totalBytes;
+  cost.transferBytes += op.cost().transferBytes;
 }
 
 void PlanState::addNextJoin(
@@ -578,7 +580,11 @@ bool MemoKey::operator==(const MemoKey& other) const {
 RelationOpPtr repartitionForAgg(const RelationOpPtr& plan, PlanState& state) {
   // No shuffle if all grouping keys are in partitioning.
   bool shuffle = false;
-  const ExprVector& keyValues = state.dt->aggregation->aggregation->grouping;
+  ExprVector keyValues;
+  auto* agg = state.dt->aggregation->aggregation;
+  for (auto i = 0; i < agg->grouping.size(); ++i) {
+    keyValues.push_back(agg->intermediateColumns[i]);
+  }
   // If no grouping and not yet gathered on a single node, add a gather before
   // final agg.
   if (keyValues.empty() && !plan->distribution().distributionType.isGather) {
@@ -1016,7 +1022,10 @@ void Optimization::joinByHash(
       fanout,
       std::move(columns));
   state.addCost(*join);
-  state.cost.setupCost += buildState.cost.unitCost;
+  state.cost.setupCost += buildState.cost.unitCost + buildState.cost.setupCost;
+  state.cost.totalBytes += buildState.cost.totalBytes;
+  state.cost.transferBytes += buildState.cost.transferBytes;
+  join->buildCost = buildState.cost;
   state.addNextJoin(&candidate, join, {buildOp}, toTry);
 }
 
@@ -1110,6 +1119,9 @@ void Optimization::joinByHashRight(
   switch (joinType) {
     case JoinType::kLeft:
       joinType = JoinType::kRight;
+      break;
+    case JoinType::kRight:
+      joinType = JoinType::kLeft;
       break;
     case JoinType::kLeftSemiFilter:
       joinType = JoinType::kRightSemiFilter;

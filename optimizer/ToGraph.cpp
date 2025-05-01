@@ -19,6 +19,8 @@
 #include "optimizer/PlanUtils.h" //@manual
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/FunctionSignature.h"
+#include "velox/expression/SignatureBinder.h"
 
 namespace facebook::velox::optimizer {
 
@@ -672,12 +674,45 @@ ExprVector Optimization::translateColumns(
   return result;
 }
 
+TypePtr aggregateFinalType(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes) {
+  auto signatures = exec::getAggregateFunctionSignatures(name);
+  if (!signatures.has_value()) {
+    VELOX_USER_FAIL("Aggregate function not registered: {}", name);
+  }
+  for (auto& signature : signatures.value()) {
+    exec::SignatureBinder binder(*signature, argTypes);
+    if (binder.tryBind()) {
+      auto type = binder.tryResolveType(signature->returnType());
+      VELOX_USER_CHECK(
+          type,
+          "Cannot resolve intermediate type for aggregate function {}",
+          exec::toString(name, argTypes));
+      return type;
+    }
+  }
+
+  std::stringstream error;
+  error << "Aggregate function signature is not supported: " << name
+        << ". Supported signatures: " << toString(signatures.value()) << ".";
+  VELOX_USER_FAIL(error.str());
+}
+
 TypePtr intermediateType(const core::CallTypedExprPtr& call) {
   std::vector<TypePtr> types;
   for (auto& arg : call->inputs()) {
     types.push_back(arg->type());
   }
   return exec::Aggregate::intermediateType(call->name(), types);
+}
+
+TypePtr finalType(const core::CallTypedExprPtr& call) {
+  std::vector<TypePtr> types;
+  for (auto& arg : call->inputs()) {
+    types.push_back(arg->type());
+  }
+  return aggregateFinalType(call->name(), types);
 }
 
 AggregationP Optimization::translateAggregation(
@@ -687,6 +722,8 @@ AggregationP Optimization::translateAggregation(
       source.step() == AggregationNode::Step::kSingle) {
     auto* aggregation =
         make<Aggregation>(nullptr, translateColumns(source.groupingKeys()));
+    std::unordered_map<std::string, ExprCP> keyRenames;
+
     for (auto i = 0; i < source.groupingKeys().size(); ++i) {
       if (aggregation->grouping[i]->type() == PlanType::kColumn) {
         aggregation->mutableColumns().push_back(
@@ -698,6 +735,7 @@ AggregationP Optimization::translateAggregation(
         auto* column = make<Column>(
             name, currentSelect_, aggregation->grouping[i]->value());
         aggregation->mutableColumns().push_back(column);
+        keyRenames[name] = column;
       }
     }
     // The keys for intermediate are the same as for final.
@@ -713,11 +751,17 @@ AggregationP Optimization::translateAggregation(
         condition = translateExpr(source.aggregates()[i].mask);
       }
       VELOX_CHECK(source.aggregates()[i].sortingKeys.empty());
+      // rawFunc is either a single or a partial aggregation. We need
+      // both final and intermediate types. The type of rawFunc itself
+      // is one or the other so resolve the types using the registered
+      // signatures.
       auto accumulatorType =
           toType(intermediateType(source.aggregates()[i].call));
+      Value finalValue = rawFunc->value();
+      finalValue.type = toType(finalType(source.aggregates()[i].call));
       auto* agg = make<Aggregate>(
           rawFunc->name(),
-          rawFunc->value(),
+          finalValue,
           rawFunc->args(),
           rawFunc->functions(),
           false,
@@ -736,6 +780,9 @@ AggregationP Optimization::translateAggregation(
       aggregation->aggregates.push_back(dedupped->as<Aggregate>());
       auto resultName = toName(source.aggregateNames()[i]);
       renames_[resultName] = aggregation->columns().back();
+    }
+    for (auto& pair : keyRenames) {
+      renames_[pair.first] = pair.second;
     }
     return aggregation;
   }
