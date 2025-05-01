@@ -732,7 +732,7 @@ core::PlanNodePtr Optimization::makeAggregation(
   }
   auto keys = projections.toFieldRefs(op.grouping, &keyNames);
   auto project = projections.maybeProject(input);
-  if (options_.numDrivers > 1 &&
+  if (options_.numDrivers > 1 && !keys.empty() &&
       (op.step == core::AggregationNode::Step::kFinal ||
        op.step == core::AggregationNode::Step::kSingle)) {
     auto partition =

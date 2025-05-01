@@ -1120,6 +1120,9 @@ void Optimization::joinByHashRight(
     case JoinType::kLeft:
       joinType = JoinType::kRight;
       break;
+    case JoinType::kRight:
+      joinType = JoinType::kLeft;
+      break;
     case JoinType::kLeftSemiFilter:
       joinType = JoinType::kRightSemiFilter;
       break;
