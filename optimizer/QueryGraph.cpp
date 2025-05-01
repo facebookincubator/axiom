@@ -134,7 +134,7 @@ const JoinSide JoinEdge::sideOf(PlanObjectCP side, bool other) const {
         rightKeys_,
         lrFanout_,
         rightOptional_,
-	leftOptional_,
+        leftOptional_,
         rightExists_,
         rightNotExists_,
         markColumn_,
