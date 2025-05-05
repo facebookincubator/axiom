@@ -139,7 +139,8 @@ std::shared_ptr<Task> ParquetTpchTest::assertQuery(
   bool noMoreSplits = false;
   constexpr int kNumSplits = 10;
   constexpr int kNumDrivers = 4;
-  auto addSplits = [&](Task* task) {
+  auto addSplits = [&](TaskCursor* taskCursor) {
+    auto& task = taskCursor->task();
     if (!noMoreSplits) {
       for (const auto& entry : tpchPlan.dataFiles) {
         for (const auto& path : entry.second) {
