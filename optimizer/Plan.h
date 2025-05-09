@@ -202,9 +202,11 @@ struct JoinCandidate {
   // other side.
   JoinSide sideOf(PlanObjectCP side, bool other = false) const;
 
-  /// Adds 'other' to the set of joins between the new table and already placed tables. a.k = b.k and c.k = b.k2 and c.k3 = a.k2. When placing c after a and b the edges to both a and b must be combined. 
+  /// Adds 'other' to the set of joins between the new table and already placed
+  /// tables. a.k = b.k and c.k = b.k2 and c.k3 = a.k2. When placing c after a
+  /// and b the edges to both a and b must be combined.
   void addEdge(PlanState& state, JoinEdgeP other);
-  
+
   std::string toString() const;
 
   // The join between already placed tables and the table(s) in 'this'.

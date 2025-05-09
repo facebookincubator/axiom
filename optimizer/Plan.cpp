@@ -513,14 +513,14 @@ void JoinCandidate::addEdge(PlanState& state, JoinEdgeP edge) {
     auto* key = newPlacedSide.keys[i];
     if (!hasEqual(key, tableSide.keys)) {
       if (!compositeEdge) {
-	compositeEdge = make<JoinEdge>(*join);
-	join = compositeEdge;
+        compositeEdge = make<JoinEdge>(*join);
+        join = compositeEdge;
       }
       auto [other, preFanout] = join->otherTable(placedSide.table);
       if (joined == join->rightTable()) {
-	join->addEquality(key, newTableSide.keys[i]);
+        join->addEquality(key, newTableSide.keys[i]);
       } else {
-	join->addEquality(newTableSide.keys[i], key);
+        join->addEquality(newTableSide.keys[i], key);
       }
       auto [other2, postFanout] = join->otherTable(placedSide.table);
       auto change = postFanout > 0 ? preFanout / postFanout : 0;
@@ -576,9 +576,9 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
         if (!state.placed.contains(joined) && state.dt->hasJoin(join) &&
             state.dt->hasTable(joined)) {
           candidates.emplace_back(join, joined, fanout);
-	  if (join->isInner()) {
-	    addExtraEdges(state, candidates.back());
-	  }
+          if (join->isInner()) {
+            addExtraEdges(state, candidates.back());
+          }
         }
       });
 
