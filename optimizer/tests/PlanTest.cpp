@@ -234,8 +234,6 @@ TEST_F(PlanTest, q4) {
 }
 
 TEST_F(PlanTest, q5) {
-  // Fix diamond pattern
-  GTEST_SKIP();
   checkTpch(5);
 }
 
@@ -254,10 +252,8 @@ TEST_F(PlanTest, q8) {
 }
 
 TEST_F(PlanTest, q9) {
-  GTEST_SKIP();
   // Plan does not minimize build size. To adjust build cost and check that
-  // import of existences to build side does not affect join cardinality. Good
-  // for SF1, bad for 0.1 and 0.01.
+  // import of existences to build side does not affect join cardinality.
   checkTpch(9);
 }
 
@@ -266,8 +262,6 @@ TEST_F(PlanTest, q10) {
 }
 
 TEST_F(PlanTest, q11) {
-  // Fix
-  GTEST_SKIP();
   checkTpch(11);
 }
 

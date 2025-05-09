@@ -753,7 +753,7 @@ AggregationP Optimization::translateAggregation(
       VELOX_CHECK(source.aggregates()[i].sortingKeys.empty());
       // rawFunc is either a single or a partial aggregation. We need
       // both final and intermediate types. The type of rawFunc itself
-      // is one or the other so resolve the types using the registerd
+      // is one or the other so resolve the types using the registered
       // signatures.
       auto accumulatorType =
           toType(intermediateType(source.aggregates()[i].call));

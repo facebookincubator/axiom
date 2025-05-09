@@ -202,13 +202,16 @@ struct JoinCandidate {
   // other side.
   JoinSide sideOf(PlanObjectCP side, bool other = false) const;
 
+  /// Adds 'other' to the set of joins between the new table and already placed tables. a.k = b.k and c.k = b.k2 and c.k3 = a.k2. When placing c after a and b the edges to both a and b must be combined. 
+  void addEdge(PlanState& state, JoinEdgeP other);
+  
   std::string toString() const;
 
   // The join between already placed tables and the table(s) in 'this'.
   JoinEdgeP join{nullptr};
 
   // Tables to join on the build side. The tables must not be already placed in
-  // the plan. side, i.e. be alread
+  // the plan.
   std::vector<PlanObjectCP> tables;
 
   // Joins imported from the left side for reducing a build
@@ -229,6 +232,8 @@ struct JoinCandidate {
   // the selectivity from 'existences'. 0.2 means that the join of 'tables' is
   // reduced 5x.
   float existsFanout{1};
+
+  JoinEdgeP compositeEdge{nullptr};
 };
 
 /// Represents a join to add to a partial plan. One join candidate can make
