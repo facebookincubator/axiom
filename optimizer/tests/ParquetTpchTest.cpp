@@ -35,7 +35,7 @@ std::shared_ptr<exec::test::TpchQueryBuilder> ParquetTpchTest::tpchBuilder_;
 
 //  static
 void ParquetTpchTest::SetUpTestCase() {
-  memory::MemoryManager::testingSetInstance({});
+  memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
   duckDb_ = std::make_shared<DuckDbQueryRunner>();
   if (FLAGS_data_path.empty()) {
