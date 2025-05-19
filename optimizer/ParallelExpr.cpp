@@ -48,6 +48,9 @@ void makeExprLevels(
     int32_t levelIdx = levelData.size() - 1;
     exprs.forEach([&](PlanObjectCP o) {
       auto* expr = o->as<Expr>();
+      if (expr->type() == PlanType::kLiteral) {
+        return;
+      }
       float self = selfCost(expr);
       if (counted.contains(expr)) {
         auto i = definitionLevel(levelData, expr);
@@ -167,6 +170,9 @@ void columnBorder(
     ExprCP expr,
     const PlanObjectSet& placed,
     PlanObjectSet& result) {
+  if (expr->type() == PlanType::kLiteral) {
+    return;
+  }
   if (placed.contains(expr)) {
     result.add(expr);
     return;

@@ -69,6 +69,29 @@ using ExprDedupMap = folly::F14FastMap<
     ITypedExprHasher,
     ITypedExprComparer>;
 
+struct ExprDedupKey {
+  Name func;
+  const ExprVector* args;
+
+  bool operator==(const ExprDedupKey& other) const {
+    return func == other.func && *args == *other.args;
+  }
+};
+
+struct ExprDedupHasher {
+  size_t operator()(const ExprDedupKey& key) const {
+    size_t h =
+        folly::hasher<uintptr_t>()(reinterpret_cast<uintptr_t>(key.func));
+    for (auto& a : *key.args) {
+      h = bits::hashMix(h, folly::hasher<ExprCP>()(a));
+    }
+    return h;
+  }
+};
+
+using FunctionDedupMap =
+    std::unordered_map<ExprDedupKey, ExprCP, ExprDedupHasher>;
+
 /// Set of accessed subfields given ordinal of output column or function
 /// argument.
 struct ResultAccess {
@@ -202,13 +225,18 @@ struct JoinCandidate {
   // other side.
   JoinSide sideOf(PlanObjectCP side, bool other = false) const;
 
+  /// Adds 'other' to the set of joins between the new table and already placed
+  /// tables. a.k = b.k and c.k = b.k2 and c.k3 = a.k2. When placing c after a
+  /// and b the edges to both a and b must be combined.
+  void addEdge(PlanState& state, JoinEdgeP other);
+
   std::string toString() const;
 
   // The join between already placed tables and the table(s) in 'this'.
   JoinEdgeP join{nullptr};
 
   // Tables to join on the build side. The tables must not be already placed in
-  // the plan. side, i.e. be alread
+  // the plan.
   std::vector<PlanObjectCP> tables;
 
   // Joins imported from the left side for reducing a build
@@ -229,6 +257,8 @@ struct JoinCandidate {
   // the selectivity from 'existences'. 0.2 means that the join of 'tables' is
   // reduced 5x.
   float existsFanout{1};
+
+  JoinEdgeP compositeEdge{nullptr};
 };
 
 /// Represents a join to add to a partial plan. One join candidate can make
@@ -681,6 +711,11 @@ class Optimization {
   // Makes a deduplicated Expr tree from 'expr'.
   ExprCP translateExpr(const velox::core::TypedExprPtr& expr);
 
+  // Creates or returns pre-existing function call with name+args. If
+  // deterministic, a new ExprCP is remembered for reuse.
+  ExprCP
+  deduppedCall(Name name, Value value, ExprVector args, FunctionSet flags);
+
   ExprCP translateLambda(const velox::core::LambdaTypedExpr* lambda);
 
   // If 'expr' is not a subfield path, returns std::nullopt. If 'expr'
@@ -947,8 +982,12 @@ class Optimization {
   // Maps names in project noes of 'inputPlan_' to deduplicated Exprs.
   std::unordered_map<std::string, ExprCP> renames_;
 
-  // Maps unique core::TypedExprs from 'inputPlan_' to deduplicated Exps.
+  // Maps unique core::TypedExprs from 'inputPlan_' to deduplicated Exps. Use
+  // for leaves, e.g. constants.
   ExprDedupMap exprDedup_;
+
+  // Dedup map from name+ExprVector to corresponding Call Expr.
+  FunctionDedupMap functionDedup_;
 
   // Counter for generating unique correlation names for BaseTables and
   // DerivedTables.

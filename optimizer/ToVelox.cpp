@@ -732,18 +732,33 @@ core::PlanNodePtr Optimization::makeAggregation(
   }
   auto keys = projections.toFieldRefs(op.grouping, &keyNames);
   auto project = projections.maybeProject(input);
-  if (options_.numDrivers > 1 && !keys.empty() &&
+  if (options_.numDrivers > 1 &&
       (op.step == core::AggregationNode::Step::kFinal ||
        op.step == core::AggregationNode::Step::kSingle)) {
-    auto partition =
-        createPartitionFunctionSpec(project->outputType(), keys, false);
-    std::vector<core::PlanNodePtr> inputs = {project};
-    project = std::make_shared<core::LocalPartitionNode>(
-        nextId(op),
-        core::LocalPartitionNode::Type::kRepartition,
-        false,
-        std::move(partition),
-        std::move(inputs));
+    if (keys.empty()) {
+      // Final agg with no grouping is single worker and has a local gather
+      // before the final aggregation.
+      auto partition =
+          createPartitionFunctionSpec(project->outputType(), keys, false);
+      std::vector<core::PlanNodePtr> inputs = {project};
+      project = std::make_shared<core::LocalPartitionNode>(
+          nextId(op),
+          core::LocalPartitionNode::Type::kGather,
+          false,
+          std::move(partition),
+          std::move(inputs));
+      fragment.width = 1;
+    } else {
+      auto partition =
+          createPartitionFunctionSpec(project->outputType(), keys, false);
+      std::vector<core::PlanNodePtr> inputs = {project};
+      project = std::make_shared<core::LocalPartitionNode>(
+          nextId(op),
+          core::LocalPartitionNode::Type::kRepartition,
+          false,
+          std::move(partition),
+          std::move(inputs));
+    }
   }
   auto r = new core::AggregationNode(
       nextId(op),

@@ -489,7 +489,8 @@ class JoinEdge {
       bool rightOptional,
       bool rightExists,
       bool rightNotExists,
-      ColumnCP markColumn = nullptr)
+      ColumnCP markColumn = nullptr,
+      bool directed = false)
       : leftTable_(leftTable),
         rightTable_(rightTable),
         filter_(std::move(filter)),
@@ -497,7 +498,8 @@ class JoinEdge {
         rightOptional_(rightOptional),
         rightExists_(rightExists),
         rightNotExists_(rightNotExists),
-        markColumn_(markColumn) {
+        markColumn_(markColumn),
+        directed_(directed) {
     if (isInner()) {
       VELOX_CHECK(filter_.empty());
     }
@@ -547,7 +549,7 @@ class JoinEdge {
       return false;
     }
     return !leftTable_ || rightOptional_ || leftOptional_ || rightExists_ ||
-        rightNotExists_ || markColumn_;
+        rightNotExists_ || markColumn_ || directed_;
   }
   // Returns the join side info for 'table'. If 'other' is set, returns the
   // other side.
@@ -629,6 +631,10 @@ class JoinEdge {
 
   // Flag to set if right side has a match.
   const ColumnCP markColumn_;
+
+  // If directed non-outer edge. For example unnest or inner dependent on
+  // optional of outer.
+  bool directed_;
 };
 
 using JoinEdgeP = JoinEdge*;

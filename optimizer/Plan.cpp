@@ -487,6 +487,48 @@ JoinSide JoinCandidate::sideOf(PlanObjectCP side, bool other) const {
   return join->sideOf(side, other);
 }
 
+bool hasEqual(ExprCP key, const ExprVector& keys) {
+  if (key->type() != PlanType::kColumn || !key->as<Column>()->equivalence()) {
+    return false;
+  }
+  for (auto& e : keys) {
+    if (key->sameOrEqual(*e)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void JoinCandidate::addEdge(PlanState& state, JoinEdgeP edge) {
+  auto* joined = tables[0];
+  auto newTableSide = edge->sideOf(joined);
+  auto newPlacedSide = edge->sideOf(joined, true);
+  VELOX_CHECK_NOT_NULL(newPlacedSide.table);
+  if (!state.placed.contains(newPlacedSide.table)) {
+    return;
+  }
+  auto tableSide = join->sideOf(joined);
+  auto placedSide = join->sideOf(joined, true);
+  for (auto i = 0; i < newPlacedSide.keys.size(); ++i) {
+    auto* key = newPlacedSide.keys[i];
+    if (!hasEqual(key, tableSide.keys)) {
+      if (!compositeEdge) {
+        compositeEdge = make<JoinEdge>(*join);
+        join = compositeEdge;
+      }
+      auto [other, preFanout] = join->otherTable(placedSide.table);
+      if (joined == join->rightTable()) {
+        join->addEquality(key, newTableSide.keys[i]);
+      } else {
+        join->addEquality(newTableSide.keys[i], key);
+      }
+      auto [other2, postFanout] = join->otherTable(placedSide.table);
+      auto change = postFanout > 0 ? preFanout / postFanout : 0;
+      fanout = change > 0 ? fanout / change : preFanout / 2;
+    }
+  }
+}
+
 std::string JoinCandidate::toString() const {
   std::stringstream out;
   out << join->toString() << " fanout " << fanout;
@@ -508,6 +550,24 @@ bool NextJoin::isWorse(const NextJoin& other) const {
       other.cost.unitCost + other.cost.setupCost;
 }
 
+void addExtraEdges(PlanState& state, JoinCandidate& candidate) {
+  // See if there are more join edges from the first of 'candidate' to already
+  // placed tables. Fill in the non-redundant equalities into the join edge.
+  // Make a new edge if the edge would be altered.
+  auto* originalJoin = candidate.join;
+  auto* table = candidate.tables[0];
+  for (auto* otherJoin : joinedBy(table)) {
+    if (otherJoin == originalJoin || !otherJoin->isInner()) {
+      continue;
+    }
+    auto [otherTable, fanout] = otherJoin->otherTable(table);
+    if (!state.dt->tableSet.contains(otherTable)) {
+      continue;
+    }
+    candidate.addEdge(state, otherJoin);
+  }
+}
+
 std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   std::vector<JoinCandidate> candidates;
   candidates.reserve(state.dt->tables.size());
@@ -516,6 +576,9 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
         if (!state.placed.contains(joined) && state.dt->hasJoin(join) &&
             state.dt->hasTable(joined)) {
           candidates.emplace_back(join, joined, fanout);
+          if (join->isInner()) {
+            addExtraEdges(state, candidates.back());
+          }
         }
       });
 
