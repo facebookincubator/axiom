@@ -49,7 +49,7 @@ void makeExprLevels(
     exprs.forEach([&](PlanObjectCP o) {
       auto* expr = o->as<Expr>();
       if (expr->type() == PlanType::kLiteral) {
-	return;
+        return;
       }
       float self = selfCost(expr);
       if (counted.contains(expr)) {

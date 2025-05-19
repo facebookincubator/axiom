@@ -69,27 +69,29 @@ using ExprDedupMap = folly::F14FastMap<
     ITypedExprHasher,
     ITypedExprComparer>;
 
-  struct ExprDedupKey {
-    Name func;
-    const ExprVector* args;
+struct ExprDedupKey {
+  Name func;
+  const ExprVector* args;
 
-    bool operator==(const ExprDedupKey& other) const {
-      return func == other.func && *args == *other.args;
+  bool operator==(const ExprDedupKey& other) const {
+    return func == other.func && *args == *other.args;
+  }
+};
+
+struct ExprDedupHasher {
+  size_t operator()(const ExprDedupKey& key) const {
+    size_t h =
+        folly::hasher<uintptr_t>()(reinterpret_cast<uintptr_t>(key.func));
+    for (auto& a : *key.args) {
+      h = bits::hashMix(h, folly::hasher<ExprCP>()(a));
     }
-  };
+    return h;
+  }
+};
 
-  struct ExprDedupHasher {
-    size_t operator()(const ExprDedupKey& key) const {
-      size_t h = folly::hasher<uintptr_t>()(reinterpret_cast<uintptr_t>(key.func));
-      for (auto& a : *key.args) {
-	h = bits::hashMix(h, folly::hasher<ExprCP>()(a));
-      }
-      return h;
-    }
-  };
+using FunctionDedupMap =
+    std::unordered_map<ExprDedupKey, ExprCP, ExprDedupHasher>;
 
-  using FunctionDedupMap = std::unordered_map<ExprDedupKey, ExprCP, ExprDedupHasher>;
-  
 /// Set of accessed subfields given ordinal of output column or function
 /// argument.
 struct ResultAccess {
@@ -709,9 +711,11 @@ class Optimization {
   // Makes a deduplicated Expr tree from 'expr'.
   ExprCP translateExpr(const velox::core::TypedExprPtr& expr);
 
-  // Creates or returns pre-existing function call with name+args. If deterministic, a new ExprCP is remembered for reuse.
-  ExprCP deduppedCall(Name name, Value value, ExprVector args, FunctionSet flags);
-  
+  // Creates or returns pre-existing function call with name+args. If
+  // deterministic, a new ExprCP is remembered for reuse.
+  ExprCP
+  deduppedCall(Name name, Value value, ExprVector args, FunctionSet flags);
+
   ExprCP translateLambda(const velox::core::LambdaTypedExpr* lambda);
 
   // If 'expr' is not a subfield path, returns std::nullopt. If 'expr'
@@ -978,12 +982,13 @@ class Optimization {
   // Maps names in project noes of 'inputPlan_' to deduplicated Exprs.
   std::unordered_map<std::string, ExprCP> renames_;
 
-  // Maps unique core::TypedExprs from 'inputPlan_' to deduplicated Exps. Use for leaves, e.g. constants.
+  // Maps unique core::TypedExprs from 'inputPlan_' to deduplicated Exps. Use
+  // for leaves, e.g. constants.
   ExprDedupMap exprDedup_;
 
   // Dedup map from name+ExprVector to corresponding Call Expr.
   FunctionDedupMap functionDedup_;
-  
+
   // Counter for generating unique correlation names for BaseTables and
   // DerivedTables.
   int32_t nameCounter_{0};

@@ -736,7 +736,8 @@ core::PlanNodePtr Optimization::makeAggregation(
       (op.step == core::AggregationNode::Step::kFinal ||
        op.step == core::AggregationNode::Step::kSingle)) {
     if (keys.empty()) {
-      // Final agg with no grouping is single worker and has a local gather before the final aggregation.
+      // Final agg with no grouping is single worker and has a local gather
+      // before the final aggregation.
       auto partition =
           createPartitionFunctionSpec(project->outputType(), keys, false);
       std::vector<core::PlanNodePtr> inputs = {project};

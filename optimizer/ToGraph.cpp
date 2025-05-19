@@ -485,20 +485,24 @@ void Optimization::ensureFunctionSubfields(const core::TypedExprPtr& expr) {
   }
 }
 
-  ExprCP Optimization::deduppedCall(Name name, Value value, ExprVector args, FunctionSet flags) {
-    ExprDedupKey key = {name, &args};
-    auto it = functionDedup_.find(key);
-    if (it != functionDedup_.end()) {
-      return it->second;
-    }
-    auto* call = make<Call>(name, std::move(value), std::move(args), std::move(flags));
-    if (!call->containsFunction(FunctionSet::kNondeterministic)) {
-      key.args = &call->args();
-      functionDedup_[key] = call;
-    }
-    return call;
+ExprCP Optimization::deduppedCall(
+    Name name,
+    Value value,
+    ExprVector args,
+    FunctionSet flags) {
+  ExprDedupKey key = {name, &args};
+  auto it = functionDedup_.find(key);
+  if (it != functionDedup_.end()) {
+    return it->second;
   }
-
+  auto* call =
+      make<Call>(name, std::move(value), std::move(args), std::move(flags));
+  if (!call->containsFunction(FunctionSet::kNondeterministic)) {
+    key.args = &call->args();
+    functionDedup_[key] = call;
+  }
+  return call;
+}
 
 ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
   if (auto name = columnName(expr)) {
@@ -563,16 +567,16 @@ ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
   if (call) {
     auto name = toName(call->name());
     funcs = funcs | functionBits(name);
-    auto* callExpr =
-      deduppedCall(name, Value(toType(call->type()), cardinality), std::move(args), funcs);
+    auto* callExpr = deduppedCall(
+        name, Value(toType(call->type()), cardinality), std::move(args), funcs);
     return callExpr;
   }
   if (cast) {
     auto name = toName("cast");
     funcs = funcs | functionBits(name);
 
-    auto* callExpr =
-      deduppedCall(name, Value(toType(cast->type()), cardinality), std::move(args), funcs);
+    auto* callExpr = deduppedCall(
+        name, Value(toType(cast->type()), cardinality), std::move(args), funcs);
     return callExpr;
   }
 
