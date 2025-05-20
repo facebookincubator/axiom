@@ -716,6 +716,9 @@ class Optimization {
   ExprCP
   deduppedCall(Name name, Value value, ExprVector args, FunctionSet flags);
 
+  // Returns a deduplicated Literal from the value in 'constant'.
+  ExprCP makeConstant(const core::ConstantTypedExprPtr& constant);
+  
   ExprCP translateLambda(const velox::core::LambdaTypedExpr* lambda);
 
   // If 'expr' is not a subfield path, returns std::nullopt. If 'expr'

@@ -19,6 +19,7 @@
 #include "optimizer/ArenaCache.h" //@manual
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/type/Variant.h"
+#include "velox/vector/BaseVector.h"
 
 // #define QG_USE_MALLOC
 #define QG_CACHE_ARENA
@@ -306,6 +307,12 @@ class QueryGraphContext {
     return allVariants_.back().get();
   }
 
+  void registerVector(const VectorPtr& vector);
+
+  VectorPtr toVectorPtr(const BaseVector* vector);
+
+  VectorPtr registeredVector(const BaseVector* vector);
+  
  private:
   TypePtr dedupType(const TypePtr& type);
 
@@ -329,6 +336,9 @@ class QueryGraphContext {
 
   std::unordered_set<PathCP, PathHasher, PathComparer> deduppedPaths_;
 
+  // Complex type literals. Referenced with raw pointer from PlanObject. 
+  std::unordered_map<const BaseVector*, VectorPtr> registeredVectors_;
+  
   std::vector<PathCP> pathById_;
 
   Plan* contextPlan_{nullptr};
