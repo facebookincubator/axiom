@@ -124,7 +124,6 @@ VectorPtr QueryGraphContext::toVectorPtr(const BaseVector* vector) {
   return it->second;
 }
 
-  
 bool Step::operator==(const Step& other) const {
   return kind == other.kind && field == other.field && id == other.id;
 }

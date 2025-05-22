@@ -98,11 +98,11 @@ using EquivalenceP = Equivalence*;
 class Literal : public Expr {
  public:
   Literal(const Value& value, const velox::variant* literal)
-    : Expr(PlanType::kLiteral, value), literal_(literal), vector_(nullptr) {}
+      : Expr(PlanType::kLiteral, value), literal_(literal), vector_(nullptr) {}
 
   Literal(const Value& value, const BaseVector* vector)
-    : Expr(PlanType::kLiteral, value), literal_{}, vector_(vector) {}
-  
+      : Expr(PlanType::kLiteral, value), literal_{}, vector_(vector) {}
+
   const velox::variant& literal() const {
     return *literal_;
   }
@@ -110,11 +110,11 @@ class Literal : public Expr {
   bool hasVector() const {
     return vector_ != nullptr;
   }
-  
+
   const BaseVector* vector() const {
     return vector_;
   }
-  
+
   std::string toString() const override;
 
  private:

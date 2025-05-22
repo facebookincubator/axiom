@@ -201,8 +201,7 @@ class VeloxRunner {
           memory::memoryManager()->allocator(), std::move(ssdCache));
       cache::AsyncDataCache::setInstance(cache_.get());
     } else {
-      memory::MemoryManager::testingSetInstance(
-          memory::MemoryManagerOptions{});
+      memory::MemoryManager::testingSetInstance(memory::MemoryManagerOptions{});
     }
 
     rootPool_ = memory::memoryManager()->addRootPool("velox_sql");
