@@ -140,10 +140,11 @@ ExprCP Optimization::tryFoldConstant(
               toVariant,
               constantExpr->value()->typeKind(),
               *constantExpr->value());
-	  typed = std::make_shared<core::ConstantTypedExpr>(constantExpr->type(), std::move(variantLiteral));
+	  typed = std::make_shared<core::ConstantTypedExpr>(constantExpr->value()->type(), *variantLiteral);
 	  break;
 	}
       }
+      tempExprs_.push_back(typed);
       return makeConstant(typed);
     }
     return nullptr;
@@ -527,10 +528,9 @@ ExprCP Optimization::makeConstant(const core::ConstantTypedExprPtr& constant) {
 
   Literal* literal;
   if (constant->hasValueVector()) {
-    queryCtx()->registerVector(constant->valueVector());
+    auto dedupped = queryCtx()->toVector(constant->valueVector());
     literal = make<Literal>(
-        Value(toType(constant->type()), 1), constant->valueVector().get());
-
+        Value(toType(constant->type()), 1), dedupped);
   } else {
     literal = make<Literal>(
         Value(toType(constant->type()), 1),

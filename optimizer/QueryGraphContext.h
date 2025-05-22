@@ -204,6 +204,18 @@ struct PathComparer {
   }
 };
 
+struct VectorDedupHasher {
+  size_t operator()(const BaseVector* vector) const {
+    return vector->hashValueAt(0);
+  }
+};
+
+struct VectorDedupComparer {
+  bool operator()(const BaseVector* left, const BaseVector* right) const {
+    return left->type() == right->type() && left->equalValueAt(right, 0, 0);
+  }
+};
+
 /// Context for making a query plan. Owns all memory associated to
 /// planning, except for the input PlanNode tree. The result of
 /// planning is also owned by 'this', so the planning result must be
@@ -307,12 +319,10 @@ class QueryGraphContext {
     return allVariants_.back().get();
   }
 
-  void registerVector(const VectorPtr& vector);
+  const BaseVector* toVector(const VectorPtr& vector);
 
   VectorPtr toVectorPtr(const BaseVector* vector);
 
-  VectorPtr registeredVector(const BaseVector* vector);
-  
  private:
   TypePtr dedupType(const TypePtr& type);
 
@@ -336,9 +346,14 @@ class QueryGraphContext {
 
   std::unordered_set<PathCP, PathHasher, PathComparer> deduppedPaths_;
 
-  // Complex type literals. Referenced with raw pointer from PlanObject. 
-  std::unordered_map<const BaseVector*, VectorPtr> registeredVectors_;
-  
+  // Complex type literals. Referenced with raw pointer from PlanObject.
+  std::unordered_map<
+      const BaseVector*,
+      VectorPtr,
+      VectorDedupHasher,
+      VectorDedupComparer>
+      deduppedVectors_;
+
   std::vector<PathCP> pathById_;
 
   Plan* contextPlan_{nullptr};

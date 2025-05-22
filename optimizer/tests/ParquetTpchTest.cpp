@@ -35,7 +35,7 @@ std::shared_ptr<exec::test::TpchQueryBuilder> ParquetTpchTest::tpchBuilder_;
 
 //  static
 void ParquetTpchTest::SetUpTestCase() {
-  memory::MemoryManager::testingSetInstance({});
+  memory::MemoryManager::testingSetInstance(memory::MemoryManagerOptions{});
 
   duckDb_ = std::make_shared<DuckDbQueryRunner>();
   if (FLAGS_data_path.empty()) {
@@ -139,7 +139,8 @@ std::shared_ptr<Task> ParquetTpchTest::assertQuery(
   bool noMoreSplits = false;
   constexpr int kNumSplits = 10;
   constexpr int kNumDrivers = 4;
-  auto addSplits = [&](Task* task) {
+  auto addSplits = [&](TaskCursor* taskCursor) {
+    auto& task = taskCursor->task();
     if (!noMoreSplits) {
       for (const auto& entry : tpchPlan.dataFiles) {
         for (const auto& path : entry.second) {

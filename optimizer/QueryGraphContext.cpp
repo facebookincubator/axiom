@@ -109,17 +109,18 @@ const TypePtr& toTypePtr(const Type* type) {
   return queryCtx()->toTypePtr(type);
 }
 
-void QueryGraphContext::registerVector(const VectorPtr& vector) {
-  auto it = registeredVectors_.find(vector.get());
-  if (it != registeredVectors_.end()) {
-    return;
+const BaseVector* QueryGraphContext::toVector(const VectorPtr& vector) {
+  auto it = deduppedVectors_.find(vector.get());
+  if (it != deduppedVectors_.end()) {
+    return it->second.get();
   }
-  registeredVectors_[vector.get()] = vector;
+  deduppedVectors_[vector.get()] = vector;
+  return vector.get();
 }
 
 VectorPtr QueryGraphContext::toVectorPtr(const BaseVector* vector) {
-  auto it = registeredVectors_.find(vector);
-  VELOX_CHECK(it != registeredVectors_.end());
+  auto it = deduppedVectors_.find(vector);
+  VELOX_CHECK(it != deduppedVectors_.end());
   return it->second;
 }
 
