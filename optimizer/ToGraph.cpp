@@ -145,7 +145,6 @@ ExprCP Optimization::tryFoldConstant(
           break;
         }
       }
-      tempExprs_.push_back(typed);
       return makeConstant(typed);
     }
     return nullptr;
@@ -537,6 +536,8 @@ ExprCP Optimization::makeConstant(const core::ConstantTypedExprPtr& constant) {
         queryCtx()->registerVariant(
             std::make_unique<variant>(constant->value())));
   }
+  // Keep the key live for the optimization duration.
+  tempExprs_.push_back(constant);
   exprDedup_[constant.get()] = literal;
   return literal;
 }
