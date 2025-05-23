@@ -267,7 +267,6 @@ TEST_F(PlanTest, q11) {
 
 TEST_F(PlanTest, q12) {
   // Fix string in filter
-  GTEST_SKIP();
   checkTpch(12);
 }
 

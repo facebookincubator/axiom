@@ -109,6 +109,21 @@ const TypePtr& toTypePtr(const Type* type) {
   return queryCtx()->toTypePtr(type);
 }
 
+const BaseVector* QueryGraphContext::toVector(const VectorPtr& vector) {
+  auto it = deduppedVectors_.find(vector.get());
+  if (it != deduppedVectors_.end()) {
+    return it->second.get();
+  }
+  deduppedVectors_[vector.get()] = vector;
+  return vector.get();
+}
+
+VectorPtr QueryGraphContext::toVectorPtr(const BaseVector* vector) {
+  auto it = deduppedVectors_.find(vector);
+  VELOX_CHECK(it != deduppedVectors_.end());
+  return it->second;
+}
+
 bool Step::operator==(const Step& other) const {
   return kind == other.kind && field == other.field && id == other.id;
 }

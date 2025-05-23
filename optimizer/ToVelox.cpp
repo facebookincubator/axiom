@@ -354,6 +354,10 @@ core::TypedExprPtr Optimization::toTypedExpr(ExprCP expr) {
     }
     case PlanType::kLiteral: {
       auto literal = expr->as<Literal>();
+      if (literal->vector()) {
+        return std::make_shared<core::ConstantTypedExpr>(
+            queryCtx()->toVectorPtr(literal->vector()));
+      }
       return std::make_shared<core::ConstantTypedExpr>(
           toTypePtr(literal->value().type), literal->literal());
     }

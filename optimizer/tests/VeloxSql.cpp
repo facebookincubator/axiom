@@ -176,7 +176,7 @@ class VeloxRunner {
  public:
   void initialize() {
     if (FLAGS_cache_gb) {
-      memory::MemoryManager::Options options;
+      memory::MemoryManagerOptions options;
       int64_t memoryBytes = FLAGS_cache_gb * (1LL << 30);
       options.useMmapAllocator = true;
       options.allocatorCapacity = memoryBytes;
@@ -201,8 +201,7 @@ class VeloxRunner {
           memory::memoryManager()->allocator(), std::move(ssdCache));
       cache::AsyncDataCache::setInstance(cache_.get());
     } else {
-      memory::MemoryManager::testingSetInstance(
-          memory::MemoryManager::Options{});
+      memory::MemoryManager::testingSetInstance(memory::MemoryManagerOptions{});
     }
 
     rootPool_ = memory::memoryManager()->addRootPool("velox_sql");

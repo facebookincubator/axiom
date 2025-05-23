@@ -126,10 +126,26 @@ ExprCP Optimization::tryFoldConstant(
     auto exprSet = evaluator_.compile(typedExpr);
     auto first = exprSet->exprs().front().get();
     if (auto constantExpr = dynamic_cast<const exec::ConstantExpr*>(first)) {
-      auto* variantLiteral = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          toVariant, constantExpr->value()->typeKind(), *constantExpr->value());
-      Value value(toType(constantExpr->value()->type()), 1);
-      return make<Literal>(value, variantLiteral);
+      core::ConstantTypedExprPtr typed;
+      auto kind = constantExpr->type()->kind();
+      switch (kind) {
+        case TypeKind::ARRAY:
+        case TypeKind::ROW:
+        case TypeKind::MAP:
+          typed =
+              std::make_shared<core::ConstantTypedExpr>(constantExpr->value());
+          break;
+        default: {
+          auto* variantLiteral = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+              toVariant,
+              constantExpr->value()->typeKind(),
+              *constantExpr->value());
+          typed = std::make_shared<core::ConstantTypedExpr>(
+              constantExpr->value()->type(), *variantLiteral);
+          break;
+        }
+      }
+      return makeConstant(typed);
     }
     return nullptr;
   } catch (const std::exception&) {
@@ -504,23 +520,35 @@ ExprCP Optimization::deduppedCall(
   return call;
 }
 
+ExprCP Optimization::makeConstant(const core::ConstantTypedExprPtr& constant) {
+  auto it = exprDedup_.find(constant.get());
+  if (it != exprDedup_.end()) {
+    return it->second;
+  }
+
+  Literal* literal;
+  if (constant->hasValueVector()) {
+    auto dedupped = queryCtx()->toVector(constant->valueVector());
+    literal = make<Literal>(Value(toType(constant->type()), 1), dedupped);
+  } else {
+    literal = make<Literal>(
+        Value(toType(constant->type()), 1),
+        queryCtx()->registerVariant(
+            std::make_unique<variant>(constant->value())));
+  }
+  // Keep the key live for the optimization duration.
+  tempExprs_.push_back(constant);
+  exprDedup_[constant.get()] = literal;
+  return literal;
+}
+
 ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
   if (auto name = columnName(expr)) {
     return translateColumn(*name);
   }
   if (auto constant =
-          dynamic_cast<const core::ConstantTypedExpr*>(expr.get())) {
-    auto it = exprDedup_.find(expr.get());
-    if (it != exprDedup_.end()) {
-      return it->second;
-    }
-
-    auto* literal = make<Literal>(
-        Value(toType(constant->type()), 1),
-        queryCtx()->registerVariant(
-            std::make_unique<variant>(constant->value())));
-    exprDedup_[expr.get()] = literal;
-    return literal;
+          std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr)) {
+    return makeConstant(constant);
   }
   auto path = translateSubfield(expr);
   if (path.has_value()) {

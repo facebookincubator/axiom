@@ -19,6 +19,7 @@
 #include "optimizer/ArenaCache.h" //@manual
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/type/Variant.h"
+#include "velox/vector/BaseVector.h"
 
 // #define QG_USE_MALLOC
 #define QG_CACHE_ARENA
@@ -203,6 +204,18 @@ struct PathComparer {
   }
 };
 
+struct VectorDedupHasher {
+  size_t operator()(const BaseVector* vector) const {
+    return vector->hashValueAt(0);
+  }
+};
+
+struct VectorDedupComparer {
+  bool operator()(const BaseVector* left, const BaseVector* right) const {
+    return left->type() == right->type() && left->equalValueAt(right, 0, 0);
+  }
+};
+
 /// Context for making a query plan. Owns all memory associated to
 /// planning, except for the input PlanNode tree. The result of
 /// planning is also owned by 'this', so the planning result must be
@@ -306,6 +319,10 @@ class QueryGraphContext {
     return allVariants_.back().get();
   }
 
+  const BaseVector* toVector(const VectorPtr& vector);
+
+  VectorPtr toVectorPtr(const BaseVector* vector);
+
  private:
   TypePtr dedupType(const TypePtr& type);
 
@@ -328,6 +345,14 @@ class QueryGraphContext {
   std::unordered_map<const velox::Type*, velox::TypePtr> toTypePtr_;
 
   std::unordered_set<PathCP, PathHasher, PathComparer> deduppedPaths_;
+
+  // Complex type literals. Referenced with raw pointer from PlanObject.
+  std::unordered_map<
+      const BaseVector*,
+      VectorPtr,
+      VectorDedupHasher,
+      VectorDedupComparer>
+      deduppedVectors_;
 
   std::vector<PathCP> pathById_;
 

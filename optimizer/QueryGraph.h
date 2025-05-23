@@ -98,16 +98,28 @@ using EquivalenceP = Equivalence*;
 class Literal : public Expr {
  public:
   Literal(const Value& value, const velox::variant* literal)
-      : Expr(PlanType::kLiteral, value), literal_(literal) {}
+      : Expr(PlanType::kLiteral, value), literal_(literal), vector_(nullptr) {}
+
+  Literal(const Value& value, const BaseVector* vector)
+      : Expr(PlanType::kLiteral, value), literal_{}, vector_(vector) {}
 
   const velox::variant& literal() const {
     return *literal_;
+  }
+
+  bool hasVector() const {
+    return vector_ != nullptr;
+  }
+
+  const BaseVector* vector() const {
+    return vector_;
   }
 
   std::string toString() const override;
 
  private:
   const velox::variant* const literal_;
+  const BaseVector* const vector_;
 };
 
 /// Represents a column. A column is always defined by a relation, whether table

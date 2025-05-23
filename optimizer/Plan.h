@@ -716,6 +716,9 @@ class Optimization {
   ExprCP
   deduppedCall(Name name, Value value, ExprVector args, FunctionSet flags);
 
+  // Returns a deduplicated Literal from the value in 'constant'.
+  ExprCP makeConstant(const core::ConstantTypedExprPtr& constant);
+
   ExprCP translateLambda(const velox::core::LambdaTypedExpr* lambda);
 
   // If 'expr' is not a subfield path, returns std::nullopt. If 'expr'
@@ -981,6 +984,10 @@ class Optimization {
 
   // Maps names in project noes of 'inputPlan_' to deduplicated Exprs.
   std::unordered_map<std::string, ExprCP> renames_;
+
+  // Holds transient ConstantTypedExprs etc. Must be after 'exprDedup_' in
+  // destruction order.
+  std::vector<core::TypedExprPtr> tempExprs_;
 
   // Maps unique core::TypedExprs from 'inputPlan_' to deduplicated Exps. Use
   // for leaves, e.g. constants.

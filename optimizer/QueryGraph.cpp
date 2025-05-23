@@ -59,7 +59,11 @@ std::string Column::toString() const {
 
 std::string Literal::toString() const {
   std::stringstream out;
-  out << *literal_;
+  if (vector_) {
+    out << vector_->toString(0);
+  } else {
+    out << *literal_;
+  }
   return out.str();
 }
 
