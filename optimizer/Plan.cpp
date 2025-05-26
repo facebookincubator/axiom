@@ -26,6 +26,45 @@ namespace facebook::velox::optimizer {
 using namespace facebook::velox;
 using facebook::velox::core::JoinType;
 
+/// The dt for which we set a breakpoint for plan candidate.
+int32_t dbgDt{-1};
+/// Number of tables in  'dbgPlacedOrder'
+int32_t dbgNumPlaced = 0;
+/// Tables for setting a breakpoint. Join order selection calls planBreakpoint()
+/// right before evaluating the cost for the tables in dbgPlacedOrder.
+int32_t dbgPlaced[10];
+
+void planBreakpoint() {
+  // Set breakpoint here for looking at cost of join order in 'dbgPlacdOrder'.
+  LOG(INFO) << "Join order breakpoint";
+}
+
+  void   PlanState::setFirstTable(int32_t id) {
+    if (dt->id() == dbgDt) {
+      dbgPlacedTables.resize(1);
+      dbgPlacedTables[0] = id;
+    }
+  }
+
+  
+PlanStateSaver::PlanStateSaver(PlanState& state, const JoinCandidate& candidate)
+    : PlanStateSaver(state) {
+  if (state.dt->id() != dbgDt) {
+    return;
+  }
+  state.dbgPlacedTables.push_back(candidate.tables[0]->id());
+  if (dbgNumPlaced == 0) {
+    return;
+  }
+
+  for (auto i = 0; i < dbgNumPlaced; ++i) {
+    if (dbgPlaced[i] != state.dbgPlacedTables[i]) {
+      return;
+    }
+  }
+  planBreakpoint();
+}
+
 Optimization::Optimization(
     const core::PlanNode& plan,
     const Schema& schema,
@@ -52,8 +91,8 @@ void Optimization::trace(
     RelationOp& plan) {
   if (event & opts_.traceFlags) {
     std::cout << (event == kRetained ? "Retained: " : "Abandoned: ") << id
-              << ": " << cost.toString(true, true) << ": " << " "
-              << plan.toString(true, false) << std::endl;
+              << ": " << cost.toString(true, true) << ": "
+              << " " << plan.toString(true, false) << std::endl;
   }
 }
 
@@ -842,7 +881,7 @@ void Optimization::joinByIndex(
     if (info.lookupKeys.empty()) {
       continue;
     }
-    PlanStateSaver save(state);
+    PlanStateSaver save(state, candidate);
     auto newPartition = repartitionForIndex(info, left.keys, plan, state);
     if (!newPartition) {
       continue;
@@ -937,7 +976,7 @@ void Optimization::joinByHash(
     // align with build.
     copartition = build.keys;
   }
-  PlanStateSaver save(state);
+  PlanStateSaver save(state, candidate);
   PlanObjectSet buildTables;
   PlanObjectSet buildColumns;
   PlanObjectSet buildFilterColumns;
@@ -1100,7 +1139,7 @@ void Optimization::joinByHashRight(
   assert(!candidate.tables.empty());
   auto probe = candidate.sideOf(candidate.tables[0]);
   auto build = candidate.sideOf(candidate.tables[0], true);
-  PlanStateSaver save(state);
+  PlanStateSaver save(state, candidate);
   PlanObjectSet probeTables;
   PlanObjectSet probeColumns;
   PlanObjectSet probeFilterColumns;
@@ -1463,6 +1502,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     std::vector<float> scores(firstTables.size());
     for (auto i = 0; i < firstTables.size(); ++i) {
       auto table = firstTables[i];
+      state.setFirstTable(table->id());
       scores.at(i) = startingScore(table, dt);
     }
     std::vector<int32_t> ids(firstTables.size());

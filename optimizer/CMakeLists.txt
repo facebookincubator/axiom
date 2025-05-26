@@ -35,7 +35,8 @@ add_library(
   PlanUtils.cpp
   RelationOp.cpp
   ToVelox.cpp
-  VeloxHistory.cpp)
+  VeloxHistory.cpp
+  JoinSample.cpp)
 
 add_dependencies(velox_verax velox_hive_connector)
 

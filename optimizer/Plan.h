@@ -342,6 +342,10 @@ struct PlanState {
   mutable std::unordered_map<PlanObjectSet, PlanObjectSet>
       downstreamPrecomputed;
 
+  // Ordered set of tables placed so far. Used for setting a
+  // breakpoint before a specific join order gets costted.
+  std::vector<int32_t> dbgPlacedTables;
+  
   /// Updates 'cost_' to reflect 'op' being placed on top of the partial plan.
   void addCost(RelationOp& op);
 
@@ -376,6 +380,8 @@ struct PlanState {
     return hasCutoff && plans.bestPlan &&
         cost.unitCost + cost.setupCost > plans.bestCostWithShuffle;
   }
+
+    void setFirstTable(int32_t id);
 };
 
 /// A scoped guard that restores fields of PlanState on destruction.
@@ -386,13 +392,17 @@ struct PlanStateSaver {
         placed_(state.placed),
         columns_(state.columns),
         cost_(state.cost),
-        numBuilds_(state.builds.size()) {}
+        numBuilds_(state.builds.size()),
+        numPlaced_(state.dbgPlacedTables.size()) {}
+
+  explicit PlanStateSaver(PlanState& state, const JoinCandidate& candidate);
 
   ~PlanStateSaver() {
     state_.placed = std::move(placed_);
     state_.columns = std::move(columns_);
     state_.cost = cost_;
     state_.builds.resize(numBuilds_);
+    state_.dbgPlacedTables.resize(numPlaced_);
   }
 
  private:
@@ -401,6 +411,7 @@ struct PlanStateSaver {
   PlanObjectSet columns_;
   const Cost cost_;
   const int32_t numBuilds_;
+  const int32_t numPlaced_;
 };
 
 /// Key for collection of memoized partial plans. These are all made for hash
@@ -1114,6 +1125,9 @@ class Optimization {
   std::unordered_map<ExprCP, core::TypedExprPtr> projectedExprs_;
 };
 
+/// Returns possible indices for driving table scan of 'table'.
+std::vector<ColumnGroupP> chooseLeafIndex(const BaseTable* table);
+  
 /// Returns bits describing function 'name'.
 FunctionSet functionBits(Name name);
 

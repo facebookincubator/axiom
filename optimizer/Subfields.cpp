@@ -383,6 +383,9 @@ void Optimization::markControl(const core::PlanNode* node) {
   } else if (name == "Aggregation") {
     auto* agg = dynamic_cast<const core::AggregationNode*>(node);
     markColumnSubfields(node, agg->groupingKeys(), 0);
+  } else if (name == "OrderBy") {
+    auto* order = dynamic_cast<const core::OrderByNode*>(node);
+    markColumnSubfields(node, order->sortingKeys(), 0);
   }
   for (auto& source : node->sources()) {
     markControl(source.get());
