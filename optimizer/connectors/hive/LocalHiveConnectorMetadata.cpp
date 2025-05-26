@@ -128,7 +128,8 @@ void LocalHiveConnectorMetadata::ensureInitialized() const {
   initialized_ = true;
 }
 
-  std::shared_ptr<core::QueryCtx> LocalHiveConnectorMetadata::makeQueryCtx(const std::string& queryId) {
+std::shared_ptr<core::QueryCtx> LocalHiveConnectorMetadata::makeQueryCtx(
+    const std::string& queryId) {
   std::unordered_map<std::string, std::string> config;
   std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
       connectorConfigs;
@@ -143,10 +144,8 @@ void LocalHiveConnectorMetadata::ensureInitialized() const {
       rootPool_->shared_from_this(),
       nullptr,
       queryId);
+}
 
-  }
-
-  
 void LocalHiveConnectorMetadata::makeQueryCtx() {
   queryCtx_ = makeQueryCtx("local_hive_metadata");
 }

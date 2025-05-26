@@ -542,8 +542,7 @@ ExprCP Optimization::makeConstant(const core::ConstantTypedExprPtr& constant) {
   return literal;
 }
 
-
-  ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
+ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
   if (auto name = columnName(expr)) {
     return translateColumn(*name);
   }
@@ -557,7 +556,6 @@ ExprCP Optimization::makeConstant(const core::ConstantTypedExprPtr& constant) {
   }
   auto call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
   if (call) {
-    
     auto* metadata = FunctionRegistry::instance()->metadata(call->name());
     if (metadata && metadata->processSubfields()) {
       auto translated = translateSubfieldFunction(call, metadata);

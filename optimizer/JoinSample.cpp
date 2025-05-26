@@ -15,8 +15,8 @@
  */
 
 #include "optimizer/Plan.h" //@manual
-#include "velox/runner/LocalRunner.h"
 #include "optimizer/connectors/ConnectorSplitSource.h" //@manual
+#include "velox/runner/LocalRunner.h"
 
 namespace facebook::velox::optimizer {
 
@@ -40,7 +40,8 @@ ExprCP makeHash(ExprCP expr) {
     case TypeKind::TINYINT:
     case TypeKind::SMALLINT:
     case TypeKind::INTEGER:
-      expr = make<Call>(toName("cast"), bigintValue(), ExprVector{expr}, FunctionSet());
+      expr = make<Call>(
+          toName("cast"), bigintValue(), ExprVector{expr}, FunctionSet());
       break;
     default: {
       ExprVector castArgs;
@@ -70,7 +71,7 @@ ExprCP makeHash(ExprCP expr) {
 }
 
 std::shared_ptr<core::QueryCtx> sampleQueryCtx(
-					       connector::Connector* connector) {
+    connector::Connector* connector) {
   return connector->metadata()->makeQueryCtx(
       fmt::format("sample:{}", ++sampleQueryCounter));
 }
@@ -112,15 +113,19 @@ std::shared_ptr<runner::Runner> prepareSanpleRunner(
       ExprVector{hash, bigintLit(1815531889)},
       FunctionSet());
   ColumnCP hashCol =
-    make<Column>(toName("hash"), nullptr, bigintValue(), nullptr);
-  RelationOpPtr proj = make<Project>(scan, ExprVector{hash}, ColumnVector{hashCol});
+      make<Column>(toName("hash"), nullptr, bigintValue(), nullptr);
+  RelationOpPtr proj =
+      make<Project>(scan, ExprVector{hash}, ColumnVector{hashCol});
   ExprCP hashMod = make<Call>(
       toName("mod"),
       bigintValue(),
       ExprVector{hash, bigintLit(mod)},
       FunctionSet());
   ExprCP filterExpr = make<Call>(
-				 toName("lt"), Value(toType(BOOLEAN()), 1), ExprVector{hashMod, bigintLit(lim)}, FunctionSet());
+      toName("lt"),
+      Value(toType(BOOLEAN()), 1),
+      ExprVector{hashMod, bigintLit(lim)},
+      FunctionSet());
   RelationOpPtr filter = make<Filter>(proj, ExprVector{filterExpr});
 
   runner::MultiFragmentPlan::Options options;
@@ -139,7 +144,7 @@ std::pair<float, float> sampleJoin(
     SchemaTableCP right,
     const ColumnVector& rightColumns) {}
 
-  folly::F14FastMap<uint32_t, uint32_t> runJoinSample(runner::Runner& runner) {
+folly::F14FastMap<uint32_t, uint32_t> runJoinSample(runner::Runner& runner) {
   folly::F14FastMap<uint32_t, uint32_t> result;
   while (auto rows = runner.next()) {
     auto h = rows->childAt(0)->as<FlatVector<int64_t>>();

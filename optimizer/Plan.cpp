@@ -39,14 +39,13 @@ void planBreakpoint() {
   LOG(INFO) << "Join order breakpoint";
 }
 
-  void   PlanState::setFirstTable(int32_t id) {
-    if (dt->id() == dbgDt) {
-      dbgPlacedTables.resize(1);
-      dbgPlacedTables[0] = id;
-    }
+void PlanState::setFirstTable(int32_t id) {
+  if (dt->id() == dbgDt) {
+    dbgPlacedTables.resize(1);
+    dbgPlacedTables[0] = id;
   }
+}
 
-  
 PlanStateSaver::PlanStateSaver(PlanState& state, const JoinCandidate& candidate)
     : PlanStateSaver(state) {
   if (state.dt->id() != dbgDt) {

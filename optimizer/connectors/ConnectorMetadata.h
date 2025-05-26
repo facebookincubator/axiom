@@ -17,10 +17,10 @@
 
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/Connector.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
-#include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::core {
 // Forward declare because used in sampling and filtering APIs in
@@ -552,7 +552,8 @@ class ConnectorMetadata {
   /// through 'this'.
   virtual ConnectorSplitManager* splitManager() = 0;
 
-  virtual std::shared_ptr<core::QueryCtx> makeQueryCtx(const std::string& queryId) {
+  virtual std::shared_ptr<core::QueryCtx> makeQueryCtx(
+      const std::string& queryId) {
     VELOX_UNSUPPORTED();
   }
 };

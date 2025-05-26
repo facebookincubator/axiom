@@ -345,7 +345,7 @@ struct PlanState {
   // Ordered set of tables placed so far. Used for setting a
   // breakpoint before a specific join order gets costted.
   std::vector<int32_t> dbgPlacedTables;
-  
+
   /// Updates 'cost_' to reflect 'op' being placed on top of the partial plan.
   void addCost(RelationOp& op);
 
@@ -381,7 +381,7 @@ struct PlanState {
         cost.unitCost + cost.setupCost > plans.bestCostWithShuffle;
   }
 
-    void setFirstTable(int32_t id);
+  void setFirstTable(int32_t id);
 };
 
 /// A scoped guard that restores fields of PlanState on destruction.
@@ -1127,7 +1127,7 @@ class Optimization {
 
 /// Returns possible indices for driving table scan of 'table'.
 std::vector<ColumnGroupP> chooseLeafIndex(const BaseTable* table);
-  
+
 /// Returns bits describing function 'name'.
 FunctionSet functionBits(Name name);
 
