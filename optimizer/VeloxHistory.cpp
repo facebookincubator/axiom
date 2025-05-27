@@ -23,6 +23,21 @@ namespace facebook::velox::optimizer {
 using namespace facebook::velox::exec;
 using namespace facebook::velox::runner;
 
+void VeloxHistory::recordJoinSample(
+    const std::string& key,
+    float lr,
+    float rl) {}
+
+std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
+  return std::make_pair(0, 0);
+}
+
+PlanHistory* VeloxHistory::getHistory(const std::string key) {
+  return nullptr;
+}
+
+void VeloxHistory::setHistory(const std::string& key, PlanHistory history) {}
+
 bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
   auto optimization = queryCtx()->optimization();
   auto handlePair = optimization->leafHandle(table.id());

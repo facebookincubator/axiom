@@ -463,6 +463,11 @@ struct OptimizerOptions {
   int32_t traceFlags{0};
 };
 
+  /// A map from PlanNodeId of an executable plan to a key for
+  /// recording the execution for use in cost model. The key is a
+  /// canonical summary of the node and its inputs.
+  using NodeHistoryMap = std::unordered_map<core::PlanNodeId, std::string>;
+  
 /// Instance of query optimization. Comverts a plan and schema into an
 /// optimized plan. Depends on QueryGraphContext being set on the
 /// calling thread. There is one instance per query to plan. The
@@ -486,10 +491,11 @@ class Optimization {
   /// Returns the optimized RelationOp plan for 'plan' given at construction.
   PlanPtr bestPlan();
 
-  /// Returns a set of per-stage Velox PlanNode trees.
+  /// Returns a set of per-stage Velox PlanNode trees. If 'historyKeys' is given, these can be used to record history data about the execution of each relevant node for costing future queries.
   velox::runner::MultiFragmentPlanPtr toVeloxPlan(
       RelationOpPtr plan,
-      const velox::runner::MultiFragmentPlan::Options& options);
+      const velox::runner::MultiFragmentPlan::Options& options,
+      NodeHistoryMap* historyKeys = nullptr);
 
   // Produces trace output if event matches 'traceFlags_'.
   void trace(int32_t event, int32_t id, const Cost& cost, RelationOp& plan);
@@ -599,6 +605,20 @@ class Optimization {
   /// containing the accessed keys. 'column' must be a top level map column.
   bool isMapAsStruct(Name table, Name column);
 
+  History& history() const {
+    return history_;
+  }
+
+  /// If false, correlation names are not included in Column::toString(),. Used for canonicalizing join cache keys.
+  bool& cnamesInExpr() {
+    return cnamesInExpr_;
+  }
+
+  /// Map for canonicalizing correlation names when making history cache keys.
+  std::unordered_map<Name, Name>*& canonicalCnames() {
+    return canonicalCnames_;
+  }
+  
  private:
   static constexpr uint64_t kAllAllowedInDt = ~0UL;
 
@@ -1123,6 +1143,13 @@ class Optimization {
   // common subexpressions, maps from ExprCP to the FieldAccessTypedExppr with
   // the value.
   std::unordered_map<ExprCP, core::TypedExprPtr> projectedExprs_;
+
+  // Map filled in with a PlanNodeId and history key for measurement points for history recording.
+  NodeHistoryMap nodeHistory_; 
+
+  bool cnamesInExpr_{true};
+
+  std::unordered_map<Name, Name>* canonicalCnames_;
 };
 
 /// Returns possible indices for driving table scan of 'table'.

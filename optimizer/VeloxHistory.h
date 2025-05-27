@@ -25,7 +25,18 @@ namespace facebook::velox::optimizer {
 /// Records and retrieves estimated and actual cardinalities based on Velox
 /// handles and execution stats.
 class VeloxHistory : public History {
- public:
+public:
+
+  void recordJoinSample(const std::string& key, float lr, float rl) override;
+
+  std::pair<float, float> sampleJoin(JoinEdge* edge) override;
+
+
+  PlanHistory* getHistory(const std::string key) override;
+
+  virtual void setHistory(const std::string& key, PlanHistory history) override;
+
+
   virtual std::optional<Cost> findCost(RelationOp& op) override {
     return std::nullopt;
   }
@@ -43,6 +54,11 @@ class VeloxHistory : public History {
       const RelationOp* op,
       const std::vector<velox::runner::ExecutableFragment>& plan,
       const std::vector<velox::exec::TaskStats>& stats);
+
+private:
+  std::unordered_map<std::string, std::pair<float, float>> joinCardinalities_;
+  std::unordered_set<std::string, PlanHistory> planHistor_;
+  
 };
 
 } // namespace facebook::velox::optimizer

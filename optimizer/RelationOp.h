@@ -119,6 +119,11 @@ class RelationOp : public Relation {
   /// each subclass.
   virtual void setCost(const PlanState& input);
 
+  /// Returns a key for retrieving/storing a historical record of execution for future costing. Empty string if not applicable.
+  virtual std::string historyKey() {
+    return "";
+  }
+  
   /// Returns human redable string for 'this' and inputs if 'recursive' is true.
   /// If 'detail' is true, includes cost and other details.
   virtual std::string toString(bool recursive, bool detail) const;

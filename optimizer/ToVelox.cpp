@@ -200,7 +200,8 @@ RelationOpPtr addGather(RelationOpPtr op) {
 
 MultiFragmentPlanPtr Optimization::toVeloxPlan(
     RelationOpPtr plan,
-    const MultiFragmentPlan::Options& options) {
+    const MultiFragmentPlan::Options& options,
+    NodeHistoryMap* /*historyMap*/) {
   options_ = options;
   std::vector<ExecutableFragment> stages;
   if (options_.numWorkers > 1) {
