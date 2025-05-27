@@ -597,9 +597,11 @@ class JoinEdge {
   // right. None of the right hash join variants is broadcastable.
   bool isBroadcastableType() const;
 
-  /// Returns a key string for recording a join cardinality sample. The string is empty if not applicable. The bool is true if the key has right table before left.
+  /// Returns a key string for recording a join cardinality sample. The string
+  /// is empty if not applicable. The bool is true if the key has right table
+  /// before left.
   std::pair<std::string, bool> sampleKey() const;
-  
+
  private:
   // Leading left side join keys.
   ExprVector leftKeys_;

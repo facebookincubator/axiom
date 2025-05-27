@@ -106,4 +106,3 @@ std::pair<float, float> sampleJoin(
     const ColumnVector& rightColumns);
 
 } // namespace facebook::velox::optimizer
-

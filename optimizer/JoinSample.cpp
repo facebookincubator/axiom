@@ -16,8 +16,8 @@
 
 #include "optimizer/Plan.h" //@manual
 #include "optimizer/connectors/ConnectorSplitSource.h" //@manual
-#include "velox/runner/LocalRunner.h"
 #include "velox/common/base/AsyncSource.h"
+#include "velox/runner/LocalRunner.h"
 
 namespace facebook::velox::optimizer {
 
@@ -141,8 +141,8 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
       std::make_shared<connector::ConnectorSplitSourceFactory>());
 }
 
-  std::unique_ptr<KeyFreq> runJoinSample(runner::Runner& runner) {
-    auto result = std::make_unique<folly::F14FastMap<uint32_t, uint32_t>>();
+std::unique_ptr<KeyFreq> runJoinSample(runner::Runner& runner) {
+  auto result = std::make_unique<folly::F14FastMap<uint32_t, uint32_t>>();
   while (auto rows = runner.next()) {
     auto h = rows->childAt(0)->as<FlatVector<int64_t>>();
     for (auto i = 0; i < h->size(); ++i) {
@@ -154,19 +154,19 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
   return result;
 }
 
-  float freqs(KeyFreq& l, KeyFreq& r) {
-    if (l.empty()) {
-      return 0;
-    }
-    float hits = 0;
-    for (auto& pair : l) {
-      auto it = r.find(pair.first);
-      if (it !=r.end()) {
-	hits += it->second;
-      }
-    }
-    return hits / l.size();
+float freqs(KeyFreq& l, KeyFreq& r) {
+  if (l.empty()) {
+    return 0;
   }
+  float hits = 0;
+  for (auto& pair : l) {
+    auto it = r.find(pair.first);
+    if (it != r.end()) {
+      hits += it->second;
+    }
+  }
+  return hits / l.size();
+}
 
 std::pair<float, float> sampleJoin(
     SchemaTableCP left,
@@ -175,22 +175,20 @@ std::pair<float, float> sampleJoin(
     const ExprVector& rightKeys) {
   auto leftRunner = prepareSampleRunner(left, leftKeys, 1000, 10);
   auto rightRunner = prepareSampleRunner(right, rightKeys, 1000, 10);
-  auto leftRun = std::make_shared<AsyncSource<KeyFreq>>([leftRunner]() { return runJoinSample(*leftRunner); 
-  });
-  auto rightRun = std::make_shared<AsyncSource<KeyFreq>>([rightRunner]() { return runJoinSample(*rightRunner); 
-  });
+  auto leftRun = std::make_shared<AsyncSource<KeyFreq>>(
+      [leftRunner]() { return runJoinSample(*leftRunner); });
+  auto rightRun = std::make_shared<AsyncSource<KeyFreq>>(
+      [rightRunner]() { return runJoinSample(*rightRunner); });
   auto executor = left->columnGroups[0]->layout->connector()->executor();
   if (executor) {
-    executor->add([leftRun]() {leftRun->prepare();});
-    executor->add([rightRun]() {rightRun->prepare();});
+    executor->add([leftRun]() { leftRun->prepare(); });
+    executor->add([rightRun]() { rightRun->prepare(); });
   }
 
   auto leftFreq = leftRun->move();
   auto rightFreq = rightRun->move();
-  return std::make_pair(freqs(*leftFreq, *rightFreq), freqs(*rightFreq, *leftFreq));
-  }
-      
+  return std::make_pair(
+      freqs(*leftFreq, *rightFreq), freqs(*rightFreq, *leftFreq));
+}
 
-
-  
 } // namespace facebook::velox::optimizer
