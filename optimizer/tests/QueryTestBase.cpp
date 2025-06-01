@@ -171,20 +171,20 @@ core::PlanNodePtr QueryTestBase::toTableScan(
 
 TestResult QueryTestBase::runSql(const std::string& sql) {
   TestResult result;
-  auto fragmentedPlan = planSql(sql, &result.planString, &result.errorString);
-  if (!fragmentedPlan) {
+  auto planAndStats = planSql(sql, &result.planString, &result.errorString);
+  if (!planAndStats.plan) {
     return result;
   }
-  return runFragmentedPlan(fragmentedPlan);
+  return runFragmentedPlan(planAndStats);
 }
 
 TestResult QueryTestBase::runFragmentedPlan(
-    runner::MultiFragmentPlanPtr fragmentedPlan) {
+					    optimizer::PlanAndStats& fragmentedPlan) {
   TestResult result;
-  result.veloxString = veloxString(fragmentedPlan);
+  result.veloxString = veloxString(fragmentedPlan.plan);
   try {
     result.runner = std::make_shared<runner::LocalRunner>(
-        fragmentedPlan,
+        fragmentedPlan.plan,
         queryCtx_,
         std::make_shared<connector::ConnectorSplitSourceFactory>());
 
@@ -192,8 +192,7 @@ TestResult QueryTestBase::runFragmentedPlan(
       result.results.push_back(std::move(rows));
     }
     result.stats = result.runner->stats();
-    auto& fragments = fragmentedPlan->fragments();
-    history_->recordVeloxExecution(nullptr, fragments, result.stats);
+    history_->recordVeloxExecution(fragmentedPlan, result.stats);
   } catch (const std::exception& e) {
     std::cerr << "Query terminated with: " << e.what() << std::endl;
     result.errorString = fmt::format("Runtime error: {}", e.what());
@@ -204,7 +203,7 @@ TestResult QueryTestBase::runFragmentedPlan(
   return result;
 }
 
-runner::MultiFragmentPlanPtr QueryTestBase::planSql(
+  optimizer::PlanAndStats QueryTestBase::planSql(
     const std::string& sql,
     std::string* planString,
     std::string* errorString) {
@@ -216,12 +215,12 @@ runner::MultiFragmentPlanPtr QueryTestBase::planSql(
     if (errorString) {
       *errorString = fmt::format("Parse error: {}", e.what());
     }
-    return nullptr;
+    return {};
   }
   return planVelox(plan, planString, errorString);
 }
 
-runner::MultiFragmentPlanPtr QueryTestBase::planVelox(
+  optimizer::PlanAndStats QueryTestBase::planVelox(
     const core::PlanNodePtr& plan,
     std::string* planString,
     std::string* errorString) {
@@ -253,7 +252,7 @@ runner::MultiFragmentPlanPtr QueryTestBase::planVelox(
   facebook::velox::optimizer::queryCtx() = context.get();
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx_.get(), optimizerPool_.get());
-  runner::MultiFragmentPlanPtr fragmentedPlan;
+  optimizer::PlanAndStats planAndStats;
   try {
     facebook::velox::optimizer::Schema veraxSchema(
         "test", schema_.get(), &locus);
@@ -263,23 +262,23 @@ runner::MultiFragmentPlanPtr QueryTestBase::planVelox(
     if (planString) {
       *planString = best->op->toString(true, false);
     }
-    fragmentedPlan = opt.toVeloxPlan(best->op, opts);
+    planAndStats = opt.toVeloxPlan(best->op, opts);
   } catch (const std::exception& e) {
     facebook::velox::optimizer::queryCtx() = nullptr;
     std::cerr << "optimizer error: " << e.what() << std::endl;
     if (errorString) {
       *errorString = fmt::format("optimizer error: {}", e.what());
     }
-    return nullptr;
+    return {};
   }
   facebook::velox::optimizer::queryCtx() = nullptr;
-  return fragmentedPlan;
+  return planAndStats;
 }
 TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
   TestResult result;
   auto fragmentedPlan =
       planVelox(plan, &result.planString, &result.errorString);
-  if (!fragmentedPlan) {
+  if (!fragmentedPlan.plan) {
     return result;
   }
   return runFragmentedPlan(fragmentedPlan);
@@ -297,8 +296,8 @@ void QueryTestBase::waitForCompletion(
 
 std::string QueryTestBase::veloxString(const std::string& sql) {
   auto plan = planSql(sql);
-  VELOX_CHECK_NOT_NULL(plan);
-  return veloxString(plan);
+  VELOX_CHECK_NOT_NULL(plan.plan);
+  return veloxString(plan.plan);
 }
 
 std::string QueryTestBase::veloxString(
@@ -359,7 +358,7 @@ void QueryTestBase::expectRegexp(
 
 void QueryTestBase::assertSame(
     const core::PlanNodePtr& reference,
-    runner::MultiFragmentPlanPtr experiment) {
+    optimizer::PlanAndStats& experiment) {
   auto refId = fmt::format("q{}", ++queryCounter_);
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   runner::MultiFragmentPlan::Options options = {
@@ -371,8 +370,8 @@ void QueryTestBase::assertSame(
 
   auto referencePlan = std::make_shared<runner::MultiFragmentPlan>(
       builder.fragments(), std::move(options));
-
-  auto referenceResult = runFragmentedPlan(referencePlan);
+  optimizer::PlanAndStats referencePlanAndStats = {.plan = referencePlan};
+  auto referenceResult = runFragmentedPlan(referencePlanAndStats);
   auto experimentResult = runFragmentedPlan(experiment);
 
   exec::test::assertEqualResults(

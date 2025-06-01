@@ -198,10 +198,9 @@ RelationOpPtr addGather(RelationOpPtr op) {
   return gather;
 }
 
-MultiFragmentPlanPtr Optimization::toVeloxPlan(
+PlanAndStats Optimization::toVeloxPlan(
     RelationOpPtr plan,
-    const MultiFragmentPlan::Options& options,
-    NodeHistoryMap* /*historyMap*/) {
+    const MultiFragmentPlan::Options& options) {
   options_ = options;
   std::vector<ExecutableFragment> stages;
   if (options_.numWorkers > 1) {
@@ -210,8 +209,8 @@ MultiFragmentPlanPtr Optimization::toVeloxPlan(
   ExecutableFragment top;
   top.fragment.planNode = makeFragment(plan, top, stages);
   stages.push_back(std::move(top));
-  return std::make_shared<velox::runner::MultiFragmentPlan>(
-      std::move(stages), options);
+  return PlanAndStats{std::make_shared<velox::runner::MultiFragmentPlan>(
+									 std::move(stages), options), std::move(nodeHistory_), std::move(prediction_)};
 }
 
 RowTypePtr Optimization::makeOutputType(const ColumnVector& columns) {

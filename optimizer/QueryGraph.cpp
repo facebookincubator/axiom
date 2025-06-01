@@ -1150,13 +1150,20 @@ void JoinEdge::guessFanout() {
   if (fanoutsFixed_) {
     return;
   }
+  auto* opt = queryCtx()->optimization();
+  auto samplePair = opt->history().sampleJoin(this);
   auto left = joinCardinality(leftTable_, toRangeCast<Column>(leftKeys_));
   auto right = joinCardinality(rightTable_, toRangeCast<Column>(rightKeys_));
   leftUnique_ = left.unique;
   rightUnique_ = right.unique;
-  lrFanout_ = right.joinCardinality * baseSelectivity(rightTable_);
-  rlFanout_ = left.joinCardinality * baseSelectivity(leftTable_);
-  // If one side is unique, the other side is a pk to fk join, with fanout =
+  if (samplePair.first == 0 && samplePair.second == 0) {
+    lrFanout_ = right.joinCardinality * baseSelectivity(rightTable_);
+    rlFanout_ = left.joinCardinality * baseSelectivity(leftTable_);
+  } else {
+    lrFanout_ = samplePair.first * baseSelectivity(rightTable_);
+    rlFanout_ = samplePair.second * baseSelectivity(leftTable_);
+  }
+    // If one side is unique, the other side is a pk to fk join, with fanout =
   // fk-table-card / pk-table-card.
   if (rightUnique_) {
     lrFanout_ = baseSelectivity(rightTable_);

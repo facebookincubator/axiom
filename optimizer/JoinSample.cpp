@@ -136,7 +136,7 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
   auto* layout = table->columnGroups[0]->layout;
   auto connector = layout->connector();
   return std::make_shared<runner::LocalRunner>(
-      plan,
+      plan.plan,
       sampleQueryCtx(connector),
       std::make_shared<connector::ConnectorSplitSourceFactory>());
 }
@@ -168,13 +168,37 @@ float freqs(KeyFreq& l, KeyFreq& r) {
   return hits / l.size();
 }
 
+  float keyCardinality(const ExprVector& keys) {
+    float card = 1;
+    for (auto& key : keys) {
+      card *= key->value().cardinality;
+    }
+    return card;
+  }
+  
 std::pair<float, float> sampleJoin(
     SchemaTableCP left,
     const ExprVector& leftKeys,
     SchemaTableCP right,
     const ExprVector& rightKeys) {
-  auto leftRunner = prepareSampleRunner(left, leftKeys, 1000, 10);
-  auto rightRunner = prepareSampleRunner(right, rightKeys, 1000, 10);
+  uint64_t leftRows = left->numRows();
+  uint64_t rightRows = right->numRows();
+  auto leftCard = keyCardinality(leftKeys);
+  auto rightCard = keyCardinality(rightKeys);
+  int32_t fraction = 10000;
+  if (leftRows < 10000 && rightRows < 10000) {
+    // sample all.
+  } else if (leftCard > 10000 && rightCard > 10000) {
+    // Keys have many values, sample a fraction.
+    auto smaller = std::min(leftRows, rightRows);
+    float ratio = smaller / 10000.0;
+    fraction = std::max<int32_t>(2, 10000 / ratio);
+  } else {
+    return std::make_pair(0, 0);
+  }
+
+  auto leftRunner = prepareSampleRunner(left, leftKeys, 10000, fraction);
+  auto rightRunner = prepareSampleRunner(right, rightKeys, 10000, fraction);
   auto leftRun = std::make_shared<AsyncSource<KeyFreq>>(
       [leftRunner]() { return runJoinSample(*leftRunner); });
   auto rightRun = std::make_shared<AsyncSource<KeyFreq>>(

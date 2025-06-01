@@ -29,14 +29,42 @@ void VeloxHistory::recordJoinSample(
     float rl) {}
 
 std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
-  return std::make_pair(0, 0);
+  auto keyPair = edge->sampleKey();
+  
+  if (keyPair.first.empty()) {
+    return std::make_pair(0, 0);
+  }
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    auto it = joinSamples_.find(keyPair.first);
+    if (it != joinSamples_.end()) {
+      if (keyPair.second) {
+	return std::make_pair(it->second.second, it->second.first);
+      }
+      return it->second;
+    }
+  }
+  std::pair<float, float> pair;
+  if (keyPair.second) {
+    pair = optimizer::sampleJoin(edge->rightTable()->as<BaseTable>()->schemaTable,  edge->rightKeys(), edge->leftTable()->as<BaseTable>()->schemaTable, edge->leftKeys());
+  } else {
+    pair = optimizer::sampleJoin(edge->leftTable()->as<BaseTable>()->schemaTable, edge->leftKeys(), edge->rightTable()->as<BaseTable>()->schemaTable,  edge->rightKeys());
+  }
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    joinSamples_[keyPair.first] = pair;
+  }
+  if (keyPair.second) {
+    return std::make_pair(pair.second, pair.first);
+  }
+  return pair;
 }
 
-PlanHistory* VeloxHistory::getHistory(const std::string key) {
+NodePrediction* VeloxHistory::getHistory(const std::string key) {
   return nullptr;
 }
 
-void VeloxHistory::setHistory(const std::string& key, PlanHistory history) {}
+void VeloxHistory::setHistory(const std::string& key, NodePrediction history) {}
 
 bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
   auto optimization = queryCtx()->optimization();
@@ -71,8 +99,7 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
 }
 
 void VeloxHistory::recordVeloxExecution(
-    const RelationOp* op,
-    const std::vector<ExecutableFragment>& plan,
+					const PlanAndStats& plan,
     const std::vector<velox::exec::TaskStats>& stats) {
   std::unordered_map<std::string, const velox::exec::OperatorStats*> map;
   for (auto& task : stats) {
@@ -82,7 +109,7 @@ void VeloxHistory::recordVeloxExecution(
       }
     }
   }
-  for (auto& fragment : plan) {
+  for (auto& fragment : plan.plan->fragments()) {
     for (auto& scan : fragment.scans) {
       auto scanStats = map[scan->id()];
       std::string handle = scan->tableHandle()->toString();

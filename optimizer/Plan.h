@@ -468,6 +468,16 @@ struct OptimizerOptions {
 /// canonical summary of the node and its inputs.
 using NodeHistoryMap = std::unordered_map<core::PlanNodeId, std::string>;
 
+  using NodePredictionMap = std::unordered_map<core::PlanNodeId, NodePrediction>;
+  
+  /// Plan and specification for recording execution history amd planning ttime predictions.
+  struct PlanAndStats {
+    runner::MultiFragmentPlanPtr plan;
+    NodeHistoryMap history;
+    NodePredictionMap prediction;
+  };
+  
+  
 /// Instance of query optimization. Comverts a plan and schema into an
 /// optimized plan. Depends on QueryGraphContext being set on the
 /// calling thread. There is one instance per query to plan. The
@@ -494,10 +504,9 @@ class Optimization {
   /// Returns a set of per-stage Velox PlanNode trees. If 'historyKeys' is
   /// given, these can be used to record history data about the execution of
   /// each relevant node for costing future queries.
-  velox::runner::MultiFragmentPlanPtr toVeloxPlan(
+  PlanAndStats toVeloxPlan(
       RelationOpPtr plan,
-      const velox::runner::MultiFragmentPlan::Options& options,
-      NodeHistoryMap* historyKeys = nullptr);
+      const velox::runner::MultiFragmentPlan::Options& options);
 
   // Produces trace output if event matches 'traceFlags_'.
   void trace(int32_t event, int32_t id, const Cost& cost, RelationOp& plan);
@@ -1151,6 +1160,9 @@ class Optimization {
   // history recording.
   NodeHistoryMap nodeHistory_;
 
+  // Predicted cardinality and memory for nodes to record in history.
+  NodePredictionMap prediction_;
+  
   bool cnamesInExpr_{true};
 
   std::unordered_map<Name, Name>* canonicalCnames_;
@@ -1171,4 +1183,7 @@ void filterUpdated(BaseTableCP baseTable, bool updateSelectivity = true);
 /// for the map column.
 RowTypePtr skylineStruct(BaseTableCP baseTable, ColumnCP column);
 
+/// Returns  the inverse join type, e.g. right outer from left outr.
+core::JoinType reverseJoinType(core::JoinType joinType);
+  
 } // namespace facebook::velox::optimizer

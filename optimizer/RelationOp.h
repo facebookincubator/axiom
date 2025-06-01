@@ -121,8 +121,12 @@ class RelationOp : public Relation {
 
   /// Returns a key for retrieving/storing a historical record of execution for
   /// future costing. Empty string if not applicable.
-  virtual std::string historyKey() {
-    return "";
+  virtual const std::string& historyKey() {
+    if (input_) {
+      return input_->historyKey();
+    }
+    static std::string empty;
+    return empty;
   }
 
   /// Returns human redable string for 'this' and inputs if 'recursive' is true.
@@ -139,6 +143,9 @@ class RelationOp : public Relation {
 
   Cost cost_;
 
+  // Cache of history lookup key.
+  std::string key_;
+  
  private:
   // thread local reference count. PlanObjects are freed when the
   // QueryGraphContext arena is freed, candidate plans are freed when no longer
@@ -201,6 +208,8 @@ struct TableScan : public RelationOp {
 
   void setCost(const PlanState& input) override;
 
+  const std::string& historyKey() override;
+  
   std::string toString(bool recursive, bool detail) const override;
 
   // The base table reference. May occur in multiple scans if the base
@@ -263,6 +272,9 @@ class Filter : public RelationOp {
   }
 
   void setCost(const PlanState& input) override;
+
+  const std::string& historyKey() override;
+
   std::string toString(bool recursive, bool detail) const override;
 
  private:
@@ -331,6 +343,9 @@ struct Join : public RelationOp {
   Cost buildCost;
 
   void setCost(const PlanState& input) override;
+
+  const std::string& historyKey() override;
+
   std::string toString(bool recursive, bool detail) const override;
 };
 

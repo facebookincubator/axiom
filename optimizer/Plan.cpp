@@ -1130,7 +1130,22 @@ void Optimization::joinByHash(
   state.addNextJoin(&candidate, join, {buildOp}, toTry);
 }
 
-void Optimization::joinByHashRight(
+  core::JoinType reverseJoinType(core::JoinType joinType) {
+  switch (joinType) {
+    case JoinType::kLeft:
+      return JoinType::kRight;
+    case JoinType::kRight:
+      return JoinType::kLeft;
+    case JoinType::kLeftSemiFilter:
+      return JoinType::kRightSemiFilter;
+    case JoinType::kLeftSemiProject:
+      return JoinType::kRightSemiProject;
+    default:
+      return joinType;
+  }
+  }
+
+  void Optimization::joinByHashRight(
     const RelationOpPtr& plan,
     const JoinCandidate& candidate,
     PlanState& state,

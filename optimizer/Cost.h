@@ -20,12 +20,15 @@
 
 namespace facebook::velox::optimizer {
 
-/// Record the history data for a fragment of a plan.
-struct PlanHistory {
-  // Result cardinality for the top node of the recorded plan.
+/// Record the history data for a tracked PlanNode.
+struct NodePrediction {
+  /// Result cardinality for the top node of the recorded plan.
   float cardinality;
+  ///  Peak total memory for the top node.
+  float peakMemory{0};
 };
-/// Interface to historical query cost and cardinality
+
+  /// Interface to historical query cost and cardinality
 /// information. There is one long lived instance per
 /// process. Public functions are thread safe since multiple
 /// concurrent Optimizations may access and update the same History.
@@ -59,9 +62,9 @@ class History {
 
   /// Returns the history record for the plan fragment represented in 'key'.
   /// nullptr if not recorded.
-  virtual PlanHistory* getHistory(const std::string key) = 0;
+  virtual NodePrediction* getHistory(const std::string key) = 0;
 
-  virtual void setHistory(const std::string& key, PlanHistory history) = 0;
+  virtual void setHistory(const std::string& key, NodePrediction history) = 0;
 
   virtual void recordLeafSelectivity(
       const std::string& handle,
@@ -101,8 +104,8 @@ float costWithChildren(ExprCP expr, const PlanObjectSet& notCounting);
 /// right.
 std::pair<float, float> sampleJoin(
     SchemaTableCP left,
-    const ColumnVector& leftKeys,
+    const ExprVector& leftKeys,
     SchemaTableCP right,
-    const ColumnVector& rightColumns);
+    const ExprVector& rightColumns);
 
 } // namespace facebook::velox::optimizer
