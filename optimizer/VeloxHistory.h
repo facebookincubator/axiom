@@ -32,7 +32,8 @@ class VeloxHistory : public History {
 
   NodePrediction* getHistory(const std::string key) override;
 
-  virtual void setHistory(const std::string& key, NodePrediction history) override;
+  virtual void setHistory(const std::string& key, NodePrediction history)
+      override;
 
   virtual std::optional<Cost> findCost(RelationOp& op) override {
     return std::nullopt;
@@ -48,7 +49,7 @@ class VeloxHistory : public History {
   /// non-null, non-leaf costs from non-leaf levels are recorded. Otherwise only
   /// leaf scan selectivities  are recorded.
   virtual void recordVeloxExecution(
-				    const PlanAndStats& plan,
+      const PlanAndStats& plan,
       const std::vector<velox::exec::TaskStats>& stats);
 
  private:

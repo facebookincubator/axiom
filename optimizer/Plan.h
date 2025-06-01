@@ -468,16 +468,16 @@ struct OptimizerOptions {
 /// canonical summary of the node and its inputs.
 using NodeHistoryMap = std::unordered_map<core::PlanNodeId, std::string>;
 
-  using NodePredictionMap = std::unordered_map<core::PlanNodeId, NodePrediction>;
-  
-  /// Plan and specification for recording execution history amd planning ttime predictions.
-  struct PlanAndStats {
-    runner::MultiFragmentPlanPtr plan;
-    NodeHistoryMap history;
-    NodePredictionMap prediction;
-  };
-  
-  
+using NodePredictionMap = std::unordered_map<core::PlanNodeId, NodePrediction>;
+
+/// Plan and specification for recording execution history amd planning ttime
+/// predictions.
+struct PlanAndStats {
+  runner::MultiFragmentPlanPtr plan;
+  NodeHistoryMap history;
+  NodePredictionMap prediction;
+};
+
 /// Instance of query optimization. Comverts a plan and schema into an
 /// optimized plan. Depends on QueryGraphContext being set on the
 /// calling thread. There is one instance per query to plan. The
@@ -1162,7 +1162,7 @@ class Optimization {
 
   // Predicted cardinality and memory for nodes to record in history.
   NodePredictionMap prediction_;
-  
+
   bool cnamesInExpr_{true};
 
   std::unordered_map<Name, Name>* canonicalCnames_;
@@ -1185,5 +1185,5 @@ RowTypePtr skylineStruct(BaseTableCP baseTable, ColumnCP column);
 
 /// Returns  the inverse join type, e.g. right outer from left outr.
 core::JoinType reverseJoinType(core::JoinType joinType);
-  
+
 } // namespace facebook::velox::optimizer

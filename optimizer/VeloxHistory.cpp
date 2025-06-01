@@ -30,7 +30,7 @@ void VeloxHistory::recordJoinSample(
 
 std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
   auto keyPair = edge->sampleKey();
-  
+
   if (keyPair.first.empty()) {
     return std::make_pair(0, 0);
   }
@@ -39,16 +39,24 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
     auto it = joinSamples_.find(keyPair.first);
     if (it != joinSamples_.end()) {
       if (keyPair.second) {
-	return std::make_pair(it->second.second, it->second.first);
+        return std::make_pair(it->second.second, it->second.first);
       }
       return it->second;
     }
   }
   std::pair<float, float> pair;
   if (keyPair.second) {
-    pair = optimizer::sampleJoin(edge->rightTable()->as<BaseTable>()->schemaTable,  edge->rightKeys(), edge->leftTable()->as<BaseTable>()->schemaTable, edge->leftKeys());
+    pair = optimizer::sampleJoin(
+        edge->rightTable()->as<BaseTable>()->schemaTable,
+        edge->rightKeys(),
+        edge->leftTable()->as<BaseTable>()->schemaTable,
+        edge->leftKeys());
   } else {
-    pair = optimizer::sampleJoin(edge->leftTable()->as<BaseTable>()->schemaTable, edge->leftKeys(), edge->rightTable()->as<BaseTable>()->schemaTable,  edge->rightKeys());
+    pair = optimizer::sampleJoin(
+        edge->leftTable()->as<BaseTable>()->schemaTable,
+        edge->leftKeys(),
+        edge->rightTable()->as<BaseTable>()->schemaTable,
+        edge->rightKeys());
   }
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -99,7 +107,7 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
 }
 
 void VeloxHistory::recordVeloxExecution(
-					const PlanAndStats& plan,
+    const PlanAndStats& plan,
     const std::vector<velox::exec::TaskStats>& stats) {
   std::unordered_map<std::string, const velox::exec::OperatorStats*> map;
   for (auto& task : stats) {

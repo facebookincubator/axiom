@@ -1163,7 +1163,7 @@ void JoinEdge::guessFanout() {
     lrFanout_ = samplePair.first * baseSelectivity(rightTable_);
     rlFanout_ = samplePair.second * baseSelectivity(leftTable_);
   }
-    // If one side is unique, the other side is a pk to fk join, with fanout =
+  // If one side is unique, the other side is a pk to fk join, with fanout =
   // fk-table-card / pk-table-card.
   if (rightUnique_) {
     lrFanout_ = baseSelectivity(rightTable_);

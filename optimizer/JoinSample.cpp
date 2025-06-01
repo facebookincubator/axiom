@@ -168,14 +168,14 @@ float freqs(KeyFreq& l, KeyFreq& r) {
   return hits / l.size();
 }
 
-  float keyCardinality(const ExprVector& keys) {
-    float card = 1;
-    for (auto& key : keys) {
-      card *= key->value().cardinality;
-    }
-    return card;
+float keyCardinality(const ExprVector& keys) {
+  float card = 1;
+  for (auto& key : keys) {
+    card *= key->value().cardinality;
   }
-  
+  return card;
+}
+
 std::pair<float, float> sampleJoin(
     SchemaTableCP left,
     const ExprVector& leftKeys,

@@ -145,7 +145,7 @@ class RelationOp : public Relation {
 
   // Cache of history lookup key.
   std::string key_;
-  
+
  private:
   // thread local reference count. PlanObjects are freed when the
   // QueryGraphContext arena is freed, candidate plans are freed when no longer
@@ -209,7 +209,7 @@ struct TableScan : public RelationOp {
   void setCost(const PlanState& input) override;
 
   const std::string& historyKey() override;
-  
+
   std::string toString(bool recursive, bool detail) const override;
 
   // The base table reference. May occur in multiple scans if the base

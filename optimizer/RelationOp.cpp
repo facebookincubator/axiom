@@ -140,36 +140,33 @@ const char* joinTypeLabel(velox::core::JoinType type) {
   }
 }
 
-
-  
 const std::string& TableScan::historyKey() {
   if (!key_.empty()) {
     return key_;
   }
-    std::stringstream out;
-    out << "{scaæn " << baseTable->schemaTable->name << "(";
-    auto* opt = queryCtx()->optimization();
-    ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
-    for (auto& key : keys) {
-      out << "lookup " << key->toString() << ", ";
-    }
-    std::vector<std::string> filters;
-    for (auto& f : baseTable->columnFilters) {
-      filters.push_back(f->toString());
-    }
-    for (auto& f : baseTable->filter) {
-      filters.push_back(f->toString());
-    }
-    std::sort(filters.begin(), filters.end());
-    for (auto& f : filters) {
-      out << "f: " << f << ", ";
-    }
-    out << ")";
-    key_ = out.str();
-    return key_;
+  std::stringstream out;
+  out << "{scaæn " << baseTable->schemaTable->name << "(";
+  auto* opt = queryCtx()->optimization();
+  ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  for (auto& key : keys) {
+    out << "lookup " << key->toString() << ", ";
   }
+  std::vector<std::string> filters;
+  for (auto& f : baseTable->columnFilters) {
+    filters.push_back(f->toString());
+  }
+  for (auto& f : baseTable->filter) {
+    filters.push_back(f->toString());
+  }
+  std::sort(filters.begin(), filters.end());
+  for (auto& f : filters) {
+    out << "f: " << f << ", ";
+  }
+  out << ")";
+  key_ = out.str();
+  return key_;
+}
 
-  
 std::string TableScan::toString(bool /*recursive*/, bool detail) const {
   std::stringstream out;
   if (input()) {
@@ -186,44 +183,49 @@ std::string TableScan::toString(bool /*recursive*/, bool detail) const {
   return out.str();
 }
 
-  std::pair<std::string, std::string> joinKeysString(const ExprVector& left, ExprVector& right) {
-    std::vector<int32_t> indices(left.size());
-    std::iota(indices.begin(), indices.end(), 0);
-    auto* opt = queryCtx()->optimization();
-    ScopedVarSetter cname(&opt->cnamesInExpr(), false);
-    std::vector<std::string> strings;
-    for (auto& k : left) {
-      strings.push_back(k->toString());
-    }
-    std::sort(indices.begin(), indices.end(), [&](int32_t l, int32_t r) {
-      return strings[l] < strings[r];
-    });
-    std::stringstream leftStream;
-    std::stringstream rightStream;
-    for (auto i : indices) {
-      leftStream << left[i]->toString() << ", ";
-      rightStream << right[i]->toString() << ", ";
-    }
-    return std::make_pair(leftStream.str(), rightStream.str());
+std::pair<std::string, std::string> joinKeysString(
+    const ExprVector& left,
+    ExprVector& right) {
+  std::vector<int32_t> indices(left.size());
+  std::iota(indices.begin(), indices.end(), 0);
+  auto* opt = queryCtx()->optimization();
+  ScopedVarSetter cname(&opt->cnamesInExpr(), false);
+  std::vector<std::string> strings;
+  for (auto& k : left) {
+    strings.push_back(k->toString());
   }
-  
-  const   std::string& Join::historyKey() {
-    if (!key_.empty()) {
-      return key_;
-    }
-    auto& leftTree = input_->historyKey();
-    auto& rightTree = right->historyKey();
-    std::stringstream out;
-    auto[leftText, rightText] = joinKeysString(leftKeys, rightKeys);
-    if (leftTree < rightTree || joinType != core::JoinType::kInner) {
-      out << "join " << joinTypeLabel(joinType) << "(" << leftTree << " keys " << leftText << " = " << rightText << rightTree << ")";
-    } else {
-      out << "join " << joinTypeLabel(reverseJoinType(joinType)) << "(" << rightTree << " keys " << rightText << " = " << leftText << leftTree << ")";
-    }
-    key_ = out.str();
+  std::sort(indices.begin(), indices.end(), [&](int32_t l, int32_t r) {
+    return strings[l] < strings[r];
+  });
+  std::stringstream leftStream;
+  std::stringstream rightStream;
+  for (auto i : indices) {
+    leftStream << left[i]->toString() << ", ";
+    rightStream << right[i]->toString() << ", ";
+  }
+  return std::make_pair(leftStream.str(), rightStream.str());
+}
+
+const std::string& Join::historyKey() {
+  if (!key_.empty()) {
     return key_;
   }
-  
+  auto& leftTree = input_->historyKey();
+  auto& rightTree = right->historyKey();
+  std::stringstream out;
+  auto [leftText, rightText] = joinKeysString(leftKeys, rightKeys);
+  if (leftTree < rightTree || joinType != core::JoinType::kInner) {
+    out << "join " << joinTypeLabel(joinType) << "(" << leftTree << " keys "
+        << leftText << " = " << rightText << rightTree << ")";
+  } else {
+    out << "join " << joinTypeLabel(reverseJoinType(joinType)) << "("
+        << rightTree << " keys " << rightText << " = " << leftText << leftTree
+        << ")";
+  }
+  key_ = out.str();
+  return key_;
+}
+
 std::string Join::toString(bool recursive, bool detail) const {
   std::stringstream out;
   if (recursive) {
@@ -298,27 +300,28 @@ std::string HashBuild::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
-  const std::string& Filter::historyKey() {
-    if (!key_.empty()) {
-      return key_;
-    }
-    std::stringstream out;
-    auto* opt = queryCtx()->optimization();
-    ScopedVarSetter cname(&opt->cnamesInExpr(), false);
-    out << input_->historyKey() << " filter " << "(";
-    std::vector<std::string> strings;
-    for (auto& e : exprs_) {
-      strings.push_back(e->toString());
-    }
-    std::sort(strings.begin(), strings.end());
-    for (auto& s : strings) {
-      out << s << ", ";
-    }
-    out << ")";
-    key_ = out.str();
+const std::string& Filter::historyKey() {
+  if (!key_.empty()) {
     return key_;
   }
-  
+  std::stringstream out;
+  auto* opt = queryCtx()->optimization();
+  ScopedVarSetter cname(&opt->cnamesInExpr(), false);
+  out << input_->historyKey() << " filter "
+      << "(";
+  std::vector<std::string> strings;
+  for (auto& e : exprs_) {
+    strings.push_back(e->toString());
+  }
+  std::sort(strings.begin(), strings.end());
+  for (auto& s : strings) {
+    out << s << ", ";
+  }
+  out << ")";
+  key_ = out.str();
+  return key_;
+}
+
 std::string Filter::toString(bool recursive, bool detail) const {
   std::stringstream out;
   if (recursive) {

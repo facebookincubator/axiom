@@ -28,7 +28,7 @@ struct NodePrediction {
   float peakMemory{0};
 };
 
-  /// Interface to historical query cost and cardinality
+/// Interface to historical query cost and cardinality
 /// information. There is one long lived instance per
 /// process. Public functions are thread safe since multiple
 /// concurrent Optimizations may access and update the same History.

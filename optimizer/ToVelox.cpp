@@ -209,8 +209,11 @@ PlanAndStats Optimization::toVeloxPlan(
   ExecutableFragment top;
   top.fragment.planNode = makeFragment(plan, top, stages);
   stages.push_back(std::move(top));
-  return PlanAndStats{std::make_shared<velox::runner::MultiFragmentPlan>(
-									 std::move(stages), options), std::move(nodeHistory_), std::move(prediction_)};
+  return PlanAndStats{
+      std::make_shared<velox::runner::MultiFragmentPlan>(
+          std::move(stages), options),
+      std::move(nodeHistory_),
+      std::move(prediction_)};
 }
 
 RowTypePtr Optimization::makeOutputType(const ColumnVector& columns) {

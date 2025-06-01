@@ -179,7 +179,7 @@ TestResult QueryTestBase::runSql(const std::string& sql) {
 }
 
 TestResult QueryTestBase::runFragmentedPlan(
-					    optimizer::PlanAndStats& fragmentedPlan) {
+    optimizer::PlanAndStats& fragmentedPlan) {
   TestResult result;
   result.veloxString = veloxString(fragmentedPlan.plan);
   try {
@@ -203,7 +203,7 @@ TestResult QueryTestBase::runFragmentedPlan(
   return result;
 }
 
-  optimizer::PlanAndStats QueryTestBase::planSql(
+optimizer::PlanAndStats QueryTestBase::planSql(
     const std::string& sql,
     std::string* planString,
     std::string* errorString) {
@@ -220,7 +220,7 @@ TestResult QueryTestBase::runFragmentedPlan(
   return planVelox(plan, planString, errorString);
 }
 
-  optimizer::PlanAndStats QueryTestBase::planVelox(
+optimizer::PlanAndStats QueryTestBase::planVelox(
     const core::PlanNodePtr& plan,
     std::string* planString,
     std::string* errorString) {
