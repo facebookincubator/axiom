@@ -24,6 +24,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
+#include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -36,6 +37,7 @@ DEFINE_int32(num_repeats, 1, "Number of repeats for optimization timing");
 using namespace facebook::velox;
 using namespace facebook::velox::optimizer;
 using namespace facebook::velox::optimizer::test;
+using namespace facebook::velox::exec::test;
 
 std::string nodeString(core::PlanNode* node) {
   return node->toString(true, true);
@@ -168,6 +170,106 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
   std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
   static inline bool registered;
 };
+
+TEST_F(PlanTest, basicValuesTest) {
+  // This query will use join by right hash
+  {
+    auto probeVectors = makeBatches(3, [&](int32_t /*unused*/) {
+      return makeRowVector({
+          makeFlatVector<int64_t>({1, 2, 2, 3, 3, 3, 4, 5, 5, 6, 7}),
+          makeFlatVector<int64_t>({10, 20, 21, 30, 31, 32, 40, 50, 51, 60, 70}),
+      });
+    });
+
+    // Purposefully make the build side larger than the probe side to see
+    // if the optimizer puts the build side on the right side of the join.
+    auto buildVectors = makeBatches(100, [&](int32_t /*unused*/) {
+      return makeRowVector({
+          makeFlatVector<int64_t>({1, 1, 3, 4, 5, 5, 7, 8}),
+          makeFlatVector<int64_t>({100, 101, 300, 400, 500, 501, 700, 800}),
+      });
+    });
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors)
+                    .project({"c0 AS t0", "c1 AS t1"})
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors)
+                            .project({"c0 AS u0", "c1 AS u1"})
+                            .planNode(),
+                        "",
+                        {"t0", "t1", "match"},
+                        core::JoinType::kLeftSemiProject)
+                    .planNode();
+    auto fragmentedPlan = planVelox(plan, nullptr);
+
+    auto reference = PlanBuilder(planNodeIdGenerator)
+                         .values(probeVectors)
+                         .project({"c0 AS t0", "c1 AS t1"})
+                         .hashJoin(
+                             {"t0"},
+                             {"u0"},
+                             PlanBuilder(planNodeIdGenerator)
+                                 .values(buildVectors)
+                                 .project({"c0 AS u0", "c1 AS u1"})
+                                 .planNode(),
+                             "",
+                             {"t0", "t1", "match"},
+                             core::JoinType::kLeftSemiProject)
+                         .planNode();
+
+    assertSame(reference, fragmentedPlan);
+  }
+
+  // Test a basic inner join that contains a filter
+  {
+    auto probeVectors = makeRowVector({
+        makeFlatVector<int32_t>(
+            100,
+            [](auto row) { return 1 + row % 2; },
+            [](auto row) { return row > 50; }),
+        makeFlatVector<int32_t>(100, [](auto row) { return row * 10; }),
+    });
+
+    auto buildVectors = makeRowVector(
+        {"u_c0", "u_c1"},
+        {
+            makeFlatVector<int32_t>({1, 2}),
+            makeFlatVector<int32_t>({100, 200}),
+        });
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({probeVectors})
+                    .hashJoin(
+                        {"c0"},
+                        {"u_c0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values({buildVectors})
+                            .planNode(),
+                        "c1 < u_c1",
+                        {"c0", "u_c1"})
+                    .planNode();
+    auto fragmentedPlan = planVelox(plan, nullptr);
+
+    auto reference = PlanBuilder(planNodeIdGenerator)
+                         .values({probeVectors})
+                         .hashJoin(
+                             {"c0"},
+                             {"u_c0"},
+                             PlanBuilder(planNodeIdGenerator)
+                                 .values({buildVectors})
+                                 .planNode(),
+                             "c1 < u_c1",
+                             {"c0", "u_c1"})
+                         .planNode();
+
+    assertSame(reference, fragmentedPlan);
+  }
+}
 
 TEST_F(PlanTest, queryGraph) {
   TypePtr row1 = ROW({{"c1", ROW({{"c1a", INTEGER()}})}, {"c2", DOUBLE()}});

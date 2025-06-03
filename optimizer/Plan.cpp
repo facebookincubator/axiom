@@ -1480,15 +1480,25 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
         for (auto index : indices) {
           PlanStateSaver save(state);
           state.placed.add(table);
-          auto columns = indexColumns(downstream, table, index);
-
-          auto* scan = make<TableScan>(
-              nullptr,
-              TableScan::outputDistribution(table, index, columns),
-              table,
-              index,
-              index->distribution().cardinality * table->filterSelectivity,
-              columns);
+          RelationOpPtr scan;
+          auto columns = table->isValues()
+              ? table->columns
+              : indexColumns(downstream, table, index);
+          if (table->isValues()) {
+            scan = make<Values>(
+                nullptr,
+                TableScan::outputDistribution(table, index, columns),
+                columns,
+                table->values.value());
+          } else {
+            scan = make<TableScan>(
+                nullptr,
+                TableScan::outputDistribution(table, index, columns),
+                table,
+                index,
+                index->distribution().cardinality * table->filterSelectivity,
+                columns);
+          }
 
           state.columns.unionObjects(columns);
           state.addCost(*scan);

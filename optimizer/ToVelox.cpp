@@ -834,6 +834,16 @@ core::PlanNodePtr Optimization::makeFragment(
       if (distribution.isBroadcast) {
         source.numBroadcastDestinations = options_.numWorkers;
       }
+
+      // For the case where the sourcePlan is a values node, and there are no
+      // partitions or potential projections, we do not need to add a
+      // repartition node in this case since the values node is anyways just
+      // running within a fragment.
+      auto name = sourcePlan->name();
+      if (name == "Values" && keys.empty() && sourcePlan == partitioningInput) {
+        return partitioningInput;
+      }
+
       source.fragment.planNode = std::make_shared<core::PartitionedOutputNode>(
           nextId(*op),
           distribution.isBroadcast
@@ -936,6 +946,22 @@ core::PlanNodePtr Optimization::makeFragment(
     }
     case RelType::kHashBuild:
       return makeFragment(op->input(), fragment, stages);
+    case RelType::kValues: {
+      // For values, fragment.width should be 1 since it doesn't make
+      // sense to distribute this to > 1 task
+      fragment.width = 1;
+      auto values = op->as<Values>();
+      std::vector<RowVectorPtr> vectors;
+      vectors.reserve(values->values().size());
+      for (auto& value : values->values()) {
+        vectors.push_back(std::dynamic_pointer_cast<RowVector>(
+            queryCtx()->toVectorPtr(value)));
+      }
+      return std::make_shared<core::ValuesNode>(
+          idGenerator_.next(),
+          std::move(vectors),
+          makeOutputType(values->columns()));
+    }
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

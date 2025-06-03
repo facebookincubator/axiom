@@ -661,6 +661,8 @@ inline void pushBackUnique(V& vector, E& element) {
   }
 }
 
+using RowVectorCP = const RowVector*;
+
 /// Represents a reference to a table from a query. The There is one of these
 /// for each occurrence of the schema table. A TableScan references one
 /// baseTable but the same BaseTable can be referenced from many TableScans, for
@@ -694,12 +696,20 @@ struct BaseTable : public PlanObject {
   SubfieldSet controlSubfields;
   SubfieldSet payloadSubfields;
 
+  // The presence of 'values' indicate that this BaseTable represents a values
+  // table and that there is no scan associated with it.
+  std::optional<std::vector<RowVectorCP, QGAllocator<RowVectorCP>>> values;
+
   bool isTable() const override {
     return true;
   }
 
   void addJoinedBy(JoinEdgeP join) {
     pushBackUnique(joinedBy, join);
+  }
+
+  bool isValues() const {
+    return values.has_value();
   }
 
   /// Adds 'expr' to 'filters' or 'columnFilters'.

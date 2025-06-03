@@ -622,6 +622,9 @@ class Optimization {
   // Converts a table scan into a BaseTable wen building a DerivedTable.
   PlanObjectP makeBaseTable(const core::TableScanNode* tableScan);
 
+  // Converts a values node into a ValuesTable when building a DerivedTable.
+  PlanObjectP makeValuesTable(const core::ValuesNode* valuesNode);
+
   // Decomposes complex type columns into parts projected out as top
   // level if subfield pushdown is on.
   void makeSubfieldColumns(
@@ -982,7 +985,7 @@ class Optimization {
   // Source PlanNode when inside addProjection() or 'addFilter().
   const core::PlanNode* exprSource_{nullptr};
 
-  // Maps names in project noes of 'inputPlan_' to deduplicated Exprs.
+  // Maps names in project nodes of 'inputPlan_' to deduplicated Exprs.
   std::unordered_map<std::string, ExprCP> renames_;
 
   // Holds transient ConstantTypedExprs etc. Must be after 'exprDedup_' in

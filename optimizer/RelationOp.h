@@ -241,6 +241,28 @@ class Repartition : public RelationOp {
 
 using RepartitionPtr = const Repartition*;
 
+class Values : public RelationOp {
+ public:
+  Values(
+      RelationOpPtr input,
+      Distribution distribution,
+      ColumnVector columns,
+      const std::vector<RowVectorCP, QGAllocator<RowVectorCP>>& values)
+      : RelationOp(
+            RelType::kValues,
+            std::move(input),
+            std::move(distribution),
+            std::move(columns)),
+        values_(values) {}
+
+  const std::vector<RowVectorCP, QGAllocator<RowVectorCP>>& values() const {
+    return values_;
+  }
+
+ private:
+  const std::vector<RowVectorCP, QGAllocator<RowVectorCP>> values_;
+};
+
 /// Represents a usually multitable filter not associated with any non-inner
 /// join. Non-equality constraints over inner joins become Filters.
 class Filter : public RelationOp {

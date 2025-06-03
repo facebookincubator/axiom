@@ -981,6 +981,89 @@ PlanObjectP Optimization::wrapInDt(const core::PlanNode& node) {
   return newDt;
 }
 
+PlanObjectP Optimization::makeValuesTable(const core::ValuesNode* valuesNode) {
+  static constexpr auto kValuesTblName = "values_";
+  auto vname = fmt::format("{}{}", kValuesTblName, ++nameCounter_);
+  auto internedName = toName(vname);
+
+  auto* schemaTable = make<SchemaTable>(internedName, valuesNode->outputType());
+  const auto& type = valuesNode->outputType();
+  ColumnVector columns;
+
+  for (auto i = 0; i < type->size(); ++i) {
+    // Simply just estimate the cardinality as the # of rows (this will be an
+    // upper limit)
+    Value value(toType(type->childAt(i)), valuesNode->values().size());
+    auto name = toName(type->nameOf(i));
+    auto* column = make<Column>(name, nullptr, value);
+    schemaTable->columns[name] = column;
+    columns.push_back(column);
+  }
+
+  // sum of size of row vecrors
+  DistributionType defaultDist;
+  schemaTable->addIndex(
+      toName("pk"),
+      /*cardinality*/ valuesNode->values().size(),
+      0,
+      0,
+      {},
+      defaultDist,
+      {},
+      std::move(columns));
+
+  // No layout here since this is not a physical table.
+  schema_.addTable(schemaTable);
+
+  auto cname = fmt::format("v{}", ++nameCounter_);
+  std::vector<RowVectorCP, QGAllocator<RowVectorCP>> rowVectors;
+  rowVectors.reserve(valuesNode->values().size());
+  for (auto& row : valuesNode->values()) {
+    rowVectors.emplace_back(
+        dynamic_cast<RowVectorCP>(queryCtx()->toVector(row)));
+  }
+  auto* baseTable = make<BaseTable>();
+  baseTable->values = std::move(rowVectors);
+  baseTable->cname = toName(cname);
+  baseTable->schemaTable = schemaTable;
+  planLeaves_[valuesNode] = baseTable;
+
+  for (auto i = 0; i < type->size(); ++i) {
+    auto schemaColumn = schemaTable->findColumn(type->nameOf(i));
+    auto value = schemaColumn->value();
+    auto* column = make<Column>(toName(type->nameOf(i)), baseTable, value);
+    baseTable->columns.push_back(column);
+    auto kind = column->value().type->kind();
+    if (kind == TypeKind::ARRAY || kind == TypeKind::ROW ||
+        kind == TypeKind::MAP) {
+      BitSet allPaths;
+      if (controlSubfields_.hasColumn(valuesNode, i)) {
+        baseTable->controlSubfields.ids.push_back(column->id());
+        allPaths = controlSubfields_.nodeFields[valuesNode].resultPaths[i];
+        baseTable->controlSubfields.subfields.push_back(allPaths);
+      }
+      if (payloadSubfields_.hasColumn(valuesNode, i)) {
+        baseTable->payloadSubfields.ids.push_back(column->id());
+        auto payloadPaths =
+            payloadSubfields_.nodeFields[valuesNode].resultPaths[i];
+        baseTable->payloadSubfields.subfields.push_back(payloadPaths);
+        allPaths.unionSet(payloadPaths);
+      }
+      if (opts_.pushdownSubfields) {
+        Path::subfieldSkyline(allPaths);
+        if (!allPaths.empty()) {
+          makeSubfieldColumns(baseTable, column, allPaths);
+        }
+      }
+    }
+    renames_[type->nameOf(i)] = column;
+  }
+
+  currentSelect_->tables.push_back(baseTable);
+  currentSelect_->tableSet.add(baseTable);
+  return baseTable;
+}
+
 PlanObjectP Optimization::makeBaseTable(const core::TableScanNode* tableScan) {
   auto tableHandle = tableScan->tableHandle().get();
   auto assignments = tableScan->assignments();
@@ -1150,6 +1233,9 @@ PlanObjectP Optimization::makeQueryGraph(
   auto name = node.name();
   if (isJoin(node) && !contains(allowedInDt, PlanType::kJoin)) {
     return wrapInDt(node);
+  }
+  if (name == "Values") {
+    return makeValuesTable(reinterpret_cast<const core::ValuesNode*>(&node));
   }
   if (name == "TableScan") {
     return makeBaseTable(reinterpret_cast<const core::TableScanNode*>(&node));
