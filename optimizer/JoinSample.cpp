@@ -21,6 +21,7 @@
 
 namespace facebook::velox::optimizer {
 
+namespace {
 // Counter for making unique query ids for sampling.
 int64_t sampleQueryCounter;
 
@@ -28,11 +29,22 @@ Value bigintValue() {
   return Value(toType(BIGINT()), 1);
 }
 
+Value intValue() {
+  return Value(toType(INTEGER()), 1);
+}
+
+  
 ExprCP bigintLit(int64_t n) {
   return make<Literal>(
       bigintValue(), queryCtx()->registerVariant(std::make_unique<variant>(n)));
 }
 
+ExprCP intLit(int32_t n) {
+  return make<Literal>(
+      intValue(), queryCtx()->registerVariant(std::make_unique<variant>(n)));
+}
+
+  
 // Returns an int64 hash with low 28 bits set.
 ExprCP makeHash(ExprCP expr) {
   switch (expr->value().type->kind()) {
@@ -64,16 +76,53 @@ ExprCP makeHash(ExprCP expr) {
       expr = make<Call>(toName("cast"), bigintValue(), final, FunctionSet());
     }
   }
+
   ExprVector andArgs;
   andArgs.push_back(expr);
-  andArgs.push_back(bigintLit(0xfffffff));
+  andArgs.push_back(bigintLit(0x7fffffff));
   return make<Call>(
       toName("bitwise_and"), bigintValue(), andArgs, FunctionSet());
 }
 
+ExprCP scaleTo32(ExprCP value) {
+  ExprVector andArgs;
+  andArgs.push_back(value);
+  andArgs.push_back(bigintLit(0x7fffffff));
+  return make<Call>(
+      toName("bitwise_and"), bigintValue(), andArgs, FunctionSet());
+}
+
+ExprCP mul(ExprCP a, int64_t b) {
+  return scaleTo32(make<Call>(
+      toName("multiply"),
+      bigintValue(),
+      ExprVector{a, bigintLit(b)},
+      FunctionSet()));
+}
+
+ExprCP rightShift(ExprCP a, int32_t s) {
+  return make<Call>(
+      toName("bitwise_right_shift"),
+      bigintValue(),
+      ExprVector{a, intLit(s)},
+      FunctionSet());
+}
+
+ExprCP xor64(ExprCP a, ExprCP b) {
+  return make<Call>(
+      toName("bitwise_xor"), bigintValue(), ExprVector{a, b}, FunctionSet());
+}
+
 std::shared_ptr<core::QueryCtx> sampleQueryCtx(
-    connector::Connector* connector) {
-  return connector->metadata()->makeQueryCtx(
+    std::shared_ptr<core::QueryCtx> original) {
+  std::unordered_map<std::string, std::string> empty;
+  return core::QueryCtx::create(
+      original->executor(),
+      core::QueryConfig(std::move(empty)),
+      original->connectorSessionProperties(),
+      original->cache(),
+      original->pool()->shared_from_this(),
+      nullptr,
       fmt::format("sample:{}", ++sampleQueryCounter));
 }
 
@@ -102,19 +151,20 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
       index->distribution().cardinality,
       columns);
   ExprCP hash = makeHash(keys[0]);
-  for (auto i = 1; i < keys.size(); ++i) {
-    auto other = makeHash(keys[i]);
-    hash = make<Call>(
-        toName("bitwise_xor"),
-        bigintValue(),
-        ExprVector{hash, other},
-        FunctionSet());
+  if (keys.size() == 1) {
+    hash = mul(hash, 1815531889);
+  } else {
+    auto kMul = 0xeb382d69ULL;
+
+    for (auto i = 1; i < keys.size(); ++i) {
+      auto other = makeHash(keys[i]);
+      auto a = mul(xor64(hash, other), kMul);
+      a = xor64(a, rightShift(a, 15));
+      auto b = mul(xor64(other, a), kMul);
+      b = xor64(b, rightShift(b, 13));
+      hash = mul(b, kMul);
+    }
   }
-  hash = make<Call>(
-      toName("multiply"),
-      bigintValue(),
-      ExprVector{hash, bigintLit(1815531889)},
-      FunctionSet());
   ColumnCP hashCol =
       make<Column>(toName("hash"), nullptr, bigintValue(), nullptr);
   RelationOpPtr proj =
@@ -122,7 +172,7 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
   ExprCP hashMod = make<Call>(
       toName("mod"),
       bigintValue(),
-      ExprVector{hash, bigintLit(mod)},
+      ExprVector{hashCol, bigintLit(mod)},
       FunctionSet());
   ExprCP filterExpr = make<Call>(
       toName("lt"),
@@ -131,13 +181,14 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
       FunctionSet());
   RelationOpPtr filter = make<Filter>(proj, ExprVector{filterExpr});
 
-  runner::MultiFragmentPlan::Options options;
+  runner::MultiFragmentPlan::Options& options =
+      queryCtx()->optimization()->options();
   auto plan = queryCtx()->optimization()->toVeloxPlan(filter, options);
   auto* layout = table->columnGroups[0]->layout;
   auto connector = layout->connector();
   return std::make_shared<runner::LocalRunner>(
       plan.plan,
-      sampleQueryCtx(connector),
+      sampleQueryCtx(queryCtx()->optimization()->queryCtxShared()),
       std::make_shared<connector::ConnectorSplitSourceFactory>());
 }
 
@@ -175,6 +226,7 @@ float keyCardinality(const ExprVector& keys) {
   }
   return card;
 }
+} // namespace
 
 std::pair<float, float> sampleJoin(
     SchemaTableCP left,
@@ -203,7 +255,7 @@ std::pair<float, float> sampleJoin(
       [leftRunner]() { return runJoinSample(*leftRunner); });
   auto rightRun = std::make_shared<AsyncSource<KeyFreq>>(
       [rightRunner]() { return runJoinSample(*rightRunner); });
-  auto executor = left->columnGroups[0]->layout->connector()->executor();
+  auto executor = queryCtx()->optimization()->queryCtxShared()->executor();
   if (executor) {
     executor->add([leftRun]() { leftRun->prepare(); });
     executor->add([rightRun]() { rightRun->prepare(); });

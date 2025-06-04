@@ -230,6 +230,10 @@ struct JoinCandidate {
   /// and b the edges to both a and b must be combined.
   void addEdge(PlanState& state, JoinEdgeP other);
 
+  /// True if 'other' has all the equalities to placed columns that 'join' of
+  /// 'this' has and has more equalities.
+  bool isDominantEdge(PlanState& state, JoinEdgeP other);
+
   std::string toString() const;
 
   // The join between already placed tables and the table(s) in 'this'.
@@ -495,8 +499,11 @@ class Optimization {
       const velox::core::PlanNode& plan,
       const Schema& schema,
       History& history,
+      std::shared_ptr<core::QueryCtx> queryCtx,
       velox::core::ExpressionEvaluator& evaluator,
-      OptimizerOptions opts = OptimizerOptions());
+      OptimizerOptions opts = OptimizerOptions(),
+      runner::MultiFragmentPlan::Options options =
+          runner::MultiFragmentPlan::Options{.numWorkers = 5, .numDrivers = 5});
 
   /// Returns the optimized RelationOp plan for 'plan' given at construction.
   PlanPtr bestPlan();
@@ -580,6 +587,10 @@ class Optimization {
   // discards the candidate.
   void makeJoins(RelationOpPtr plan, PlanState& state);
 
+  std::shared_ptr<core::QueryCtx> queryCtxShared() const {
+    return queryCtx_;
+  }
+
   velox::core::ExpressionEvaluator* evaluator() {
     return &evaluator_;
   }
@@ -629,6 +640,10 @@ class Optimization {
   /// Map for canonicalizing correlation names when making history cache keys.
   std::unordered_map<Name, Name>*& canonicalCnames() {
     return canonicalCnames_;
+  }
+
+  runner::MultiFragmentPlan::Options& options() {
+    return options_;
   }
 
  private:
@@ -978,6 +993,12 @@ class Optimization {
       velox::runner::ExecutableFragment& fragment,
       std::vector<velox::runner::ExecutableFragment>& stages);
 
+  // Records the prediction for 'node' and a history key to update history after
+  // the plan is executed.
+  void makePredictionAndHistory(
+      const core::PlanNodeId& id,
+      const RelationOp* op);
+
   // Returns a new PlanNodeId and associates the Cost of 'op' with it.
   velox::core::PlanNodeId nextId(const RelationOp& op);
 
@@ -1015,6 +1036,7 @@ class Optimization {
 
   // Source of historical cost/cardinality information.
   History& history_;
+  std::shared_ptr<core::QueryCtx> queryCtx_;
   velox::core::ExpressionEvaluator& evaluator_;
   // Top DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP root_;
@@ -1165,7 +1187,7 @@ class Optimization {
 
   bool cnamesInExpr_{true};
 
-  std::unordered_map<Name, Name>* canonicalCnames_;
+  std::unordered_map<Name, Name>* canonicalCnames_{nullptr};
 };
 
 /// Returns possible indices for driving table scan of 'table'.

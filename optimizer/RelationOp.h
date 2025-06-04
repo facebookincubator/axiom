@@ -121,7 +121,7 @@ class RelationOp : public Relation {
 
   /// Returns a key for retrieving/storing a historical record of execution for
   /// future costing. Empty string if not applicable.
-  virtual const std::string& historyKey() {
+  virtual const std::string& historyKey() const {
     if (input_) {
       return input_->historyKey();
     }
@@ -144,7 +144,7 @@ class RelationOp : public Relation {
   Cost cost_;
 
   // Cache of history lookup key.
-  std::string key_;
+  mutable std::string key_;
 
  private:
   // thread local reference count. PlanObjects are freed when the
@@ -208,7 +208,7 @@ struct TableScan : public RelationOp {
 
   void setCost(const PlanState& input) override;
 
-  const std::string& historyKey() override;
+  const std::string& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 
@@ -273,7 +273,7 @@ class Filter : public RelationOp {
 
   void setCost(const PlanState& input) override;
 
-  const std::string& historyKey() override;
+  const std::string& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 
@@ -344,7 +344,7 @@ struct Join : public RelationOp {
 
   void setCost(const PlanState& input) override;
 
-  const std::string& historyKey() override;
+  const std::string& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 };
@@ -411,6 +411,9 @@ struct Aggregation : public RelationOp {
   ColumnVector intermediateColumns;
 
   void setCost(const PlanState& input) override;
+
+  const std::string& historyKey() const override;
+
   std::string toString(bool recursive, bool detail) const override;
 };
 

@@ -71,7 +71,7 @@ void QueryTestBase::SetUp() {
       std::make_shared<config::ConfigBase>(std::move(copy));
 
   schemaQueryCtx_ = core::QueryCtx::create(
-      driverExecutor_.get(),
+      executor_.get(),
       core::QueryConfig(config_),
       std::move(connectorConfigs),
       cache::AsyncDataCache::getInstance(),
@@ -257,7 +257,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     facebook::velox::optimizer::Schema veraxSchema(
         "test", schema_.get(), &locus);
     facebook::velox::optimizer::Optimization opt(
-        *plan, veraxSchema, *history_, evaluator, optimizerOptions_);
+						 *plan, veraxSchema, *history_, queryCtx_, evaluator, optimizerOptions_);
     auto best = opt.bestPlan();
     if (planString) {
       *planString = best->op->toString(true, false);

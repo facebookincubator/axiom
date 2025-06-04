@@ -136,7 +136,7 @@ std::shared_ptr<core::QueryCtx> LocalHiveConnectorMetadata::makeQueryCtx(
   connectorConfigs[hiveConnector_->connectorId()] =
       std::const_pointer_cast<config::ConfigBase>(hiveConfig_->config());
 
-  queryCtx_ = core::QueryCtx::create(
+  return core::QueryCtx::create(
       hiveConnector_->executor(),
       core::QueryConfig(config),
       std::move(connectorConfigs),

@@ -537,6 +537,11 @@ class JoinEdge {
     return lrFanout_;
   }
 
+  float rlFanout() const {
+    return rlFanout_;
+  }
+
+  
   bool leftOptional() const {
     return leftOptional_;
   }

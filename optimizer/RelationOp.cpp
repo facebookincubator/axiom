@@ -140,7 +140,7 @@ const char* joinTypeLabel(velox::core::JoinType type) {
   }
 }
 
-const std::string& TableScan::historyKey() {
+const std::string& TableScan::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
@@ -185,7 +185,7 @@ std::string TableScan::toString(bool /*recursive*/, bool detail) const {
 
 std::pair<std::string, std::string> joinKeysString(
     const ExprVector& left,
-    ExprVector& right) {
+    const ExprVector& right) {
   std::vector<int32_t> indices(left.size());
   std::iota(indices.begin(), indices.end(), 0);
   auto* opt = queryCtx()->optimization();
@@ -206,7 +206,7 @@ std::pair<std::string, std::string> joinKeysString(
   return std::make_pair(leftStream.str(), rightStream.str());
 }
 
-const std::string& Join::historyKey() {
+const std::string& Join::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
@@ -275,9 +275,35 @@ Aggregation::Aggregation(
     *const_cast<ColumnVector*>(&columns_) = intermediateColumns;
   } else if (step == AggregationNode::Step::kFinal) {
     for (auto i = 0; i < grouping.size(); ++i) {
-      grouping[i] = intermediateColumns[i];
+       grouping[i] = intermediateColumns[i];
     }
   }
+}
+
+const std::string& Aggregation::historyKey() const {
+  using velox::core::AggregationNode;
+  if (step == AggregationNode::Step::kPartial ||
+      step == AggregationNode::Step::kIntermediate) {
+    return RelationOp::historyKey();
+  }
+  if (!key_.empty()) {
+    return key_;
+  }
+  std::stringstream out;
+  out << input_->historyKey();
+  out << " group by ";
+  auto* opt = queryCtx()->optimization();
+  ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  std::vector<std::string> strings;
+  for (auto& key : grouping) {
+    strings.push_back(key->toString());
+  }
+  std::sort(strings.begin(), strings.end());
+  for (auto& s : strings) {
+    out << s << ", ";
+  }
+  key_ = out.str();
+  return key_;
 }
 
 std::string Aggregation::toString(bool recursive, bool detail) const {
@@ -300,7 +326,7 @@ std::string HashBuild::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
-const std::string& Filter::historyKey() {
+const std::string& Filter::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }

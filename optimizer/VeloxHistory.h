@@ -54,7 +54,7 @@ class VeloxHistory : public History {
 
  private:
   std::unordered_map<std::string, std::pair<float, float>> joinSamples_;
-  std::unordered_set<std::string, NodePrediction> planHistor_;
+  std::unordered_map<std::string, NodePrediction> planHistory_;
 };
 
 } // namespace facebook::velox::optimizer

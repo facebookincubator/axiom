@@ -68,13 +68,17 @@ Optimization::Optimization(
     const core::PlanNode& plan,
     const Schema& schema,
     History& history,
+    std::shared_ptr<core::QueryCtx> _queryCtx,
     velox::core::ExpressionEvaluator& evaluator,
-    OptimizerOptions opts)
+    OptimizerOptions opts,
+    runner::MultiFragmentPlan::Options options)
     : schema_(schema),
       opts_(std::move(opts)),
       inputPlan_(plan),
       history_(history),
-      evaluator_(evaluator) {
+      queryCtx_(std::move(_queryCtx)),
+      evaluator_(evaluator),
+      options_(options) {
   queryCtx()->optimization() = this;
   root_ = makeQueryGraph();
   root_->distributeConjuncts();
@@ -555,6 +559,9 @@ void JoinCandidate::addEdge(PlanState& state, JoinEdgeP edge) {
         join = compositeEdge;
       }
       auto [other, preFanout] = join->otherTable(placedSide.table);
+      // do not recompute a fanout after adding more equalities. This makes the
+      // join edge non-binary and it cannot be sampled.
+      join->setFanouts(join->rlFanout(), join->lrFanout());
       if (joined == join->rightTable()) {
         join->addEquality(key, newTableSide.keys[i]);
       } else {
@@ -565,6 +572,23 @@ void JoinCandidate::addEdge(PlanState& state, JoinEdgeP edge) {
       fanout = change > 0 ? fanout / change : preFanout / 2;
     }
   }
+}
+
+bool JoinCandidate::isDominantEdge(PlanState& state, JoinEdgeP edge) {
+  auto* joined = tables[0];
+  auto newTableSide = edge->sideOf(joined);
+  auto newPlacedSide = edge->sideOf(joined, true);
+  VELOX_CHECK_NOT_NULL(newPlacedSide.table);
+  VELOX_CHECK(state.placed.contains(newPlacedSide.table));
+  auto tableSide = join->sideOf(joined);
+  auto placedSide = join->sideOf(joined, true);
+  for (auto i = 0; i < newPlacedSide.keys.size(); ++i) {
+    auto* key = newPlacedSide.keys[i];
+    if (!hasEqual(key, tableSide.keys)) {
+      return false;
+    }
+  }
+  return newPlacedSide.keys.size() > placedSide.keys.size();
 }
 
 std::string JoinCandidate::toString() const {
@@ -588,7 +612,7 @@ bool NextJoin::isWorse(const NextJoin& other) const {
       other.cost.unitCost + other.cost.setupCost;
 }
 
-void addExtraEdges(PlanState& state, JoinCandidate& candidate) {
+bool addExtraEdges(PlanState& state, JoinCandidate& candidate) {
   // See if there are more join edges from the first of 'candidate' to already
   // placed tables. Fill in the non-redundant equalities into the join edge.
   // Make a new edge if the edge would be altered.
@@ -602,8 +626,12 @@ void addExtraEdges(PlanState& state, JoinCandidate& candidate) {
     if (!state.dt->tableSet.contains(otherTable)) {
       continue;
     }
+    if (candidate.isDominantEdge(state, otherJoin)) {
+      return false;
+    }
     candidate.addEdge(state, otherJoin);
   }
+  return true;
 }
 
 std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
@@ -615,7 +643,11 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
             state.dt->hasTable(joined)) {
           candidates.emplace_back(join, joined, fanout);
           if (join->isInner()) {
-            addExtraEdges(state, candidates.back());
+            if (!addExtraEdges(state, candidates.back())) {
+              // Drop the candidate if the edge was a subsumed in some other
+              // edge.
+              candidates.pop_back();
+            }
           }
         }
       });
