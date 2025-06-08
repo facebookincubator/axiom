@@ -490,8 +490,8 @@ class Optimization {
  public:
   static constexpr int32_t kRetained = 1;
   static constexpr int32_t kExceededBest = 2;
-  static constexpr int32_t  kSample = 4;
-  
+  static constexpr int32_t kSample = 4;
+
   Optimization(
       const velox::core::PlanNode& plan,
       const Schema& schema,
@@ -638,7 +638,7 @@ class Optimization {
   runner::MultiFragmentPlan::Options& options() {
     return options_;
   }
-  
+
  private:
   static constexpr uint64_t kAllAllowedInDt = ~0UL;
 
@@ -1176,7 +1176,6 @@ class Optimization {
 
 /// True f single worker, i.e. do not plan remote exchanges
 bool isSingleWorker();
-
 
 /// Returns possible indices for driving table scan of 'table'.
 std::vector<ColumnGroupP> chooseLeafIndex(const BaseTable* table);

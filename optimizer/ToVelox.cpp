@@ -768,12 +768,14 @@ core::PlanNodePtr Optimization::makeAggregation(
   ptr.reset(r);
   return ptr;
 }
-void Optimization::makePredictionAndHistory(const core::PlanNodeId& id, const RelationOp* op) {
+void Optimization::makePredictionAndHistory(
+    const core::PlanNodeId& id,
+    const RelationOp* op) {
   nodeHistory_[id] = op->historyKey();
-  prediction_[id] = NodePrediction{.cardinality = op->cost().inputCardinality * op->cost().fanout};
+  prediction_[id] = NodePrediction{
+      .cardinality = op->cost().inputCardinality * op->cost().fanout};
 }
 
-  
 core::PlanNodePtr Optimization::makeFragment(
     RelationOpPtr op,
     ExecutableFragment& fragment,
@@ -915,8 +917,8 @@ core::PlanNodePtr Optimization::makeFragment(
             rightProjections.maybeProject(right),
             makeOutputType(join->columns()));
         if (join->filter.empty()) {
-	  makePredictionAndHistory(joinNode->id(), join);
-		return joinNode;
+          makePredictionAndHistory(joinNode->id(), join);
+          return joinNode;
         }
         return std::make_shared<core::FilterNode>(
             idGenerator().next(), toAnd(join->filter), joinNode);

@@ -71,7 +71,7 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
   void assertSame(
       const core::PlanNodePtr& reference,
       optimizer::PlanAndStats& experiment,
-		  TestResult* referenceReturn = nullptr);
+      TestResult* referenceReturn = nullptr);
 
   optimizer::PlanAndStats planSql(
       const std::string& sql,

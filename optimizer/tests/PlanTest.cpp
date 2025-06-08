@@ -35,7 +35,6 @@ DECLARE_int32(optimizer_trace);
 
 DECLARE_int32(num_workers);
 
-
 using namespace facebook::velox;
 using namespace facebook::velox::optimizer;
 using namespace facebook::velox::optimizer::test;
@@ -106,7 +105,7 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
       std::string* planString = nullptr) {
     auto fragmentedPlan = planVelox(planNode, planString);
     auto reference = referencePlan ? referencePlan : planNode;
-    TestResult referenceResult ;
+    TestResult referenceResult;
     assertSame(reference, fragmentedPlan, &referenceResult);
     auto numWorkers = FLAGS_num_workers;
     if (numWorkers != 1) {
@@ -115,7 +114,7 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
       ASSERT_TRUE(singlePlan.plan != nullptr);
       auto singleResult = runFragmentedPlan(singlePlan);
       exec::test::assertEqualResults(
-      referenceResult.results, singleResult.results);
+          referenceResult.results, singleResult.results);
       FLAGS_num_workers = numWorkers;
     }
   }

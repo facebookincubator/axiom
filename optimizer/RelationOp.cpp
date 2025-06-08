@@ -275,7 +275,7 @@ Aggregation::Aggregation(
     *const_cast<ColumnVector*>(&columns_) = intermediateColumns;
   } else if (step == AggregationNode::Step::kFinal) {
     for (auto i = 0; i < grouping.size(); ++i) {
-       grouping[i] = intermediateColumns[i];
+      grouping[i] = intermediateColumns[i];
     }
   }
 }

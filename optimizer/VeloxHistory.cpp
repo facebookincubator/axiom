@@ -199,7 +199,7 @@ void VeloxHistory::recordVeloxExecution(
           std::lock_guard<std::mutex> l(mutex_);
           actualRows = op.outputPositions;
           planHistory_[keyIt->second] =
-	    NodePrediction{.cardinality = static_cast<float>(actualRows)};
+              NodePrediction{.cardinality = static_cast<float>(actualRows)};
         }
         if (op.operatorType == "TableScanOperator") {
           auto scan = findScan(op.planNodeId, plan.plan);

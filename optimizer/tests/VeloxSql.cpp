@@ -420,19 +420,23 @@ class VeloxRunner {
     }
   }
 
-  const OperatorStats* findOperatorStats(const TaskStats& taskStats, const core::PlanNodeId& id) {
+  const OperatorStats* findOperatorStats(
+      const TaskStats& taskStats,
+      const core::PlanNodeId& id) {
     for (auto& p : taskStats.pipelineStats) {
       for (auto& o : p.operatorStats) {
-	if (o.planNodeId == id) {
-	  return &o;
-	}
+        if (o.planNodeId == id) {
+          return &o;
+        }
       }
     }
     return nullptr;
   }
 
-    
-  std::string predictionString(const core::PlanNodeId& id, const TaskStats& taskStats, const optimizer::NodePredictionMap& prediction) {
+  std::string predictionString(
+      const core::PlanNodeId& id,
+      const TaskStats& taskStats,
+      const optimizer::NodePredictionMap& prediction) {
     auto it = prediction.find(id);
     if (it == prediction.end()) {
       return "";
@@ -445,8 +449,6 @@ class VeloxRunner {
     auto actual = operatorStats->outputPositions;
     return fmt::format("predicted={} actual={} ", predicted, actual);
   }
-
-  
 
   /// Runs a query and returns the result as a single vector in *resultVector,
   /// the plan text in *planString and the error message in *errorString.
@@ -503,7 +505,13 @@ class VeloxRunner {
       optimizer::OptimizerOptions optimizerOpts = {
           .traceFlags = FLAGS_optimizer_trace};
       optimizer::Optimization opt(
-				  *plan, veraxSchema, *history_, queryCtx, evaluator, optimizerOpts, opts);
+          *plan,
+          veraxSchema,
+          *history_,
+          queryCtx,
+          evaluator,
+          optimizerOpts,
+          opts);
       auto best = opt.bestPlan();
       if (planString) {
         *planString = best->op->toString(true, false);
@@ -524,7 +532,7 @@ class VeloxRunner {
     RunStats runStats;
     try {
       runner = std::make_shared<LocalRunner>(
-					     planAndStats.plan,
+          planAndStats.plan,
           queryCtx,
           std::make_shared<connector::ConnectorSplitSourceFactory>());
       std::vector<RowVectorPtr> results;
@@ -552,7 +560,9 @@ class VeloxRunner {
               *fragments[i].fragment.planNode,
               stats[i],
               FLAGS_include_custom_stats,
-              [&](auto id) { return predictionString(id, stats[i], planAndStats.prediction); });
+              [&](auto id) {
+                return predictionString(id, stats[i], planAndStats.prediction);
+              });
           std::cout << std::endl;
         }
       }

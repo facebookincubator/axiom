@@ -33,7 +33,6 @@ Value intValue() {
   return Value(toType(INTEGER()), 1);
 }
 
-  
 ExprCP bigintLit(int64_t n) {
   return make<Literal>(
       bigintValue(), queryCtx()->registerVariant(std::make_unique<variant>(n)));
@@ -44,7 +43,6 @@ ExprCP intLit(int32_t n) {
       intValue(), queryCtx()->registerVariant(std::make_unique<variant>(n)));
 }
 
-  
 // Returns an int64 hash with low 28 bits set.
 ExprCP makeHash(ExprCP expr) {
   switch (expr->value().type->kind()) {
