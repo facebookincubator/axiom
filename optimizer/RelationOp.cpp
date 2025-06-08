@@ -333,8 +333,7 @@ const std::string& Filter::historyKey() const {
   std::stringstream out;
   auto* opt = queryCtx()->optimization();
   ScopedVarSetter cname(&opt->cnamesInExpr(), false);
-  out << input_->historyKey() << " filter "
-      << "(";
+  out << input_->historyKey() << " filter " << "(";
   std::vector<std::string> strings;
   for (auto& e : exprs_) {
     strings.push_back(e->toString());

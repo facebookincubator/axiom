@@ -99,8 +99,8 @@ void Optimization::trace(
     RelationOp& plan) {
   if (event & opts_.traceFlags) {
     std::cout << (event == kRetained ? "Retained: " : "Abandoned: ") << id
-              << ": " << cost.toString(true, true) << ": "
-              << " " << plan.toString(true, false) << std::endl;
+              << ": " << cost.toString(true, true) << ": " << " "
+              << plan.toString(true, false) << std::endl;
   }
 }
 
@@ -582,7 +582,6 @@ void JoinCandidate::addEdge(PlanState& state, JoinEdgeP edge) {
 
 bool JoinCandidate::isDominantEdge(PlanState& state, JoinEdgeP edge) {
   auto* joined = tables[0];
-  auto newTableSide = edge->sideOf(joined);
   auto newPlacedSide = edge->sideOf(joined, true);
   VELOX_CHECK_NOT_NULL(newPlacedSide.table);
   if (!state.placed.contains(newPlacedSide.table)) {

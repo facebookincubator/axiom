@@ -182,8 +182,6 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
   runner::MultiFragmentPlan::Options& options =
       queryCtx()->optimization()->options();
   auto plan = queryCtx()->optimization()->toVeloxPlan(filter, options);
-  auto* layout = table->columnGroups[0]->layout;
-  auto connector = layout->connector();
   return std::make_shared<runner::LocalRunner>(
       plan.plan,
       sampleQueryCtx(queryCtx()->optimization()->queryCtxShared()),
