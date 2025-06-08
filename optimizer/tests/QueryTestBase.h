@@ -70,7 +70,8 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
   /// Checks that 'reference' and 'experiment' produce the same result.
   void assertSame(
       const core::PlanNodePtr& reference,
-      optimizer::PlanAndStats& experiment);
+      optimizer::PlanAndStats& experiment,
+		  TestResult* referenceReturn = nullptr);
 
   optimizer::PlanAndStats planSql(
       const std::string& sql,

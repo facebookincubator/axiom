@@ -162,21 +162,7 @@ void filterUpdated(BaseTableCP table, bool updateSelectivity) {
 }
 
 core::PlanNodeId Optimization::nextId(const RelationOp& op) {
-  auto id = idGenerator_.next();
-  recordPlanNodeEstimate(id, op.cost(), "");
-  return id;
-}
-
-void Optimization::recordPlanNodeEstimate(
-    const core::PlanNodeId id,
-    Cost cost,
-    const std::string& role) {
-  auto it = costEstimates_.find(id);
-  if (it == costEstimates_.end()) {
-    costEstimates_[id] = {std::make_pair(role, cost)};
-  } else {
-    it->second.push_back(std::make_pair(role, cost));
-  }
+  return idGenerator_.next();
 }
 
 RelationOpPtr addGather(RelationOpPtr op) {

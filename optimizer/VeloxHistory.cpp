@@ -18,6 +18,8 @@
 #include "velox/exec/Operator.h"
 #include "velox/exec/TaskStats.h"
 
+#include <iostream>
+
 DEFINE_double(
     cardinality_warning_threshold,
     5,
@@ -50,6 +52,9 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
     }
   }
   std::pair<float, float> pair;
+  bool trace = (queryCtx()->optimization()->opts().traceFlags &
+                Optimization::kSample) != 0;
+  uint64_t start = getCurrentTimeMicro();
   if (keyPair.second) {
     pair = optimizer::sampleJoin(
         edge->rightTable()->as<BaseTable>()->schemaTable,
@@ -66,6 +71,12 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
   {
     std::lock_guard<std::mutex> l(mutex_);
     joinSamples_[keyPair.first] = pair;
+  }
+  if (trace) {
+    std::cout << "Sample join " << keyPair.first << ": " << pair.first << " : "
+              << pair.second
+              << " time=" << succinctMicros(getCurrentTimeMicro() - start)
+              << std::endl;
   }
   if (keyPair.second) {
     return std::make_pair(pair.second, pair.first);
@@ -102,11 +113,18 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
     }
     return false;
   }
-
+  bool trace = (queryCtx()->optimization()->opts().traceFlags &
+                Optimization::kSample) != 0;
+  uint64_t start = getCurrentTimeMicro();
   auto sample = runnerTable->layouts()[0]->sample(
       handlePair.first, 1, handlePair.second, scanType);
   table.filterSelectivity =
       static_cast<float>(sample.second) / (sample.first + 1);
+  if (trace) {
+    std::cout << "Sampled scan " << string << "= " << table.filterSelectivity
+              << " time= " << succinctMicros(getCurrentTimeMicro() - start)
+              << std::endl;
+  }
   recordLeafSelectivity(string, table.filterSelectivity, false);
   return true;
 }
@@ -181,7 +199,7 @@ void VeloxHistory::recordVeloxExecution(
           std::lock_guard<std::mutex> l(mutex_);
           actualRows = op.outputPositions;
           planHistory_[keyIt->second] =
-              NodePrediction{.cardinality = actualRows};
+	    NodePrediction{.cardinality = static_cast<float>(actualRows)};
         }
         if (op.operatorType == "TableScanOperator") {
           auto scan = findScan(op.planNodeId, plan.plan);
@@ -189,8 +207,7 @@ void VeloxHistory::recordVeloxExecution(
             std::string handle = scan->tableHandle()->toString();
             recordLeafSelectivity(
                 handle,
-                op.outputPositions /
-                    std::max<float>(1, op.rawInputPositions),
+                op.outputPositions / std::max<float>(1, op.rawInputPositions),
                 true);
           }
         }

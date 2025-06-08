@@ -202,6 +202,7 @@ std::unique_ptr<KeyFreq> runJoinSample(runner::Runner& runner) {
       }
     }
   }
+  runner.waitForCompletion(1000000);
   return result;
 }
 

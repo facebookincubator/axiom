@@ -490,11 +490,8 @@ class Optimization {
  public:
   static constexpr int32_t kRetained = 1;
   static constexpr int32_t kExceededBest = 2;
-
-  using PlanCostMap = std::unordered_map<
-      velox::core::PlanNodeId,
-      std::vector<std::pair<std::string, Cost>>>;
-
+  static constexpr int32_t  kSample = 4;
+  
   Optimization(
       const velox::core::PlanNode& plan,
       const Schema& schema,
@@ -599,10 +596,6 @@ class Optimization {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
   }
 
-  PlanCostMap planCostMap() {
-    return costEstimates_;
-  }
-
   bool& makeVeloxExprWithNoAlias() {
     return makeVeloxExprWithNoAlias_;
   }
@@ -645,7 +638,7 @@ class Optimization {
   runner::MultiFragmentPlan::Options& options() {
     return options_;
   }
-
+  
  private:
   static constexpr uint64_t kAllAllowedInDt = ~0UL;
 
@@ -1014,13 +1007,6 @@ class Optimization {
       const PlanObjectSet& placed,
       const PlanObjectSet& extraColumns);
 
-  // Records 'cost' for 'id'. 'role' can be e.g. 'build; or
-  // 'probe'. for nodes that produce multiple operators.
-  void recordPlanNodeEstimate(
-      const velox::core::PlanNodeId id,
-      Cost cost,
-      const std::string& role);
-
   PlanObjectCP findLeaf(const core::PlanNode* node) {
     auto* leaf = planLeaves_[node];
     VELOX_CHECK_NOT_NULL(leaf);
@@ -1159,10 +1145,6 @@ class Optimization {
   int32_t toVeloxLimit_{-1};
   int32_t toVeloxOffset_{0};
 
-  // map from Velox PlanNode ids to RelationOp. For cases that have multiple
-  // operators, e.g. probe and build, both RelationOps are mentioned.
-  PlanCostMap costEstimates_;
-
   // On when producing a remaining filter for table scan, where columns must
   // correspond 1:1 to the schema.
   bool makeVeloxExprWithNoAlias_{false};
@@ -1188,7 +1170,13 @@ class Optimization {
   bool cnamesInExpr_{true};
 
   std::unordered_map<Name, Name>* canonicalCnames_{nullptr};
+
+  const bool isSingle_;
 };
+
+/// True f single worker, i.e. do not plan remote exchanges
+bool isSingleWorker();
+
 
 /// Returns possible indices for driving table scan of 'table'.
 std::vector<ColumnGroupP> chooseLeafIndex(const BaseTable* table);

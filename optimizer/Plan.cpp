@@ -26,6 +26,10 @@ namespace facebook::velox::optimizer {
 using namespace facebook::velox;
 using facebook::velox::core::JoinType;
 
+bool isSingleWorker() {
+  return queryCtx()->optimization()->options().numWorkers == 1;
+}
+
 /// The dt for which we set a breakpoint for plan candidate.
 int32_t dbgDt{-1};
 /// Number of tables in  'dbgPlacedOrder'
@@ -78,7 +82,8 @@ Optimization::Optimization(
       history_(history),
       queryCtx_(std::move(_queryCtx)),
       evaluator_(evaluator),
-      options_(options) {
+      options_(options),
+      isSingle_(options_.numWorkers == 1) {
   queryCtx()->optimization() = this;
   root_ = makeQueryGraph();
   root_->distributeConjuncts();
@@ -297,6 +302,7 @@ PlanPtr PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
   PlanPtr match = nullptr;
   float bestCost = -1;
   float matchCost = -1;
+  bool single = isSingleWorker();
   for (auto i = 0; i < plans.size(); ++i) {
     float cost = plans[i]->cost.fanout * plans[i]->cost.unitCost +
         plans[i]->cost.setupCost;
@@ -304,7 +310,7 @@ PlanPtr PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
       best = plans[i].get();
       bestCost = cost;
     }
-    if (plans[i]->op->distribution().isSamePartition(distribution)) {
+    if (single || plans[i]->op->distribution().isSamePartition(distribution)) {
       match = plans[i].get();
       matchCost = cost;
     }
@@ -579,7 +585,9 @@ bool JoinCandidate::isDominantEdge(PlanState& state, JoinEdgeP edge) {
   auto newTableSide = edge->sideOf(joined);
   auto newPlacedSide = edge->sideOf(joined, true);
   VELOX_CHECK_NOT_NULL(newPlacedSide.table);
-  VELOX_CHECK(state.placed.contains(newPlacedSide.table));
+  if (!state.placed.contains(newPlacedSide.table)) {
+    return false;
+  }
   auto tableSide = join->sideOf(joined);
   auto placedSide = join->sideOf(joined, true);
   for (auto i = 0; i < newPlacedSide.keys.size(); ++i) {
@@ -712,6 +720,9 @@ bool MemoKey::operator==(const MemoKey& other) const {
 
 RelationOpPtr repartitionForAgg(const RelationOpPtr& plan, PlanState& state) {
   // No shuffle if all grouping keys are in partitioning.
+  if (isSingleWorker()) {
+    return plan;
+  }
   bool shuffle = false;
   ExprVector keyValues;
   auto* agg = state.dt->aggregation->aggregation;
@@ -840,7 +851,7 @@ RelationOpPtr repartitionForIndex(
     const ExprVector& lookupValues,
     const RelationOpPtr& plan,
     PlanState& state) {
-  if (isIndexColocated(info, lookupValues, plan)) {
+  if (isSingleWorker() || isIndexColocated(info, lookupValues, plan)) {
     return plan;
   }
   ExprVector keyExprs;
@@ -1045,7 +1056,7 @@ void Optimization::joinByHash(
     state.placed.unionSet(buildTables);
   }
   PlanState buildState(state.optimization, state.dt, buildPlan);
-  bool partitionByProbe = !partKeys.empty();
+  bool partitionByProbe = !isSingle_ && !partKeys.empty();
   RelationOpPtr buildInput = buildPlan->op;
   RelationOpPtr probeInput = plan;
   if (partitionByProbe) {
@@ -1062,7 +1073,7 @@ void Optimization::joinByHash(
       buildInput = shuffleTemp;
     }
   } else if (
-      candidate.join->isBroadcastableType() &&
+      !isSingle_ && candidate.join->isBroadcastableType() &&
       isBroadcastableSize(buildPlan, state)) {
     auto* broadcast = make<Repartition>(
         buildInput,
@@ -1075,7 +1086,7 @@ void Optimization::joinByHash(
     // The probe gets shuffled to align with build. If build is not partitioned
     // on its keys, shuffle the build too.
     auto buildPart = joinKeyPartition(buildInput, build.keys);
-    if (buildPart.empty()) {
+    if (!isSingle_ && buildPart.empty()) {
       // The build is not aligned on join keys.
       Distribution buildDist(
           plan->distribution().distributionType,
@@ -1103,10 +1114,12 @@ void Optimization::joinByHash(
         probeInput->distribution().distributionType,
         probeInput->resultCardinality(),
         std::move(distCols));
-    auto* probeShuffle =
-        make<Repartition>(plan, std::move(probeDist), plan->columns());
-    state.addCost(*probeShuffle);
-    probeInput = probeShuffle;
+    if (!isSingle_) {
+      auto* probeShuffle =
+          make<Repartition>(plan, std::move(probeDist), plan->columns());
+      state.addCost(*probeShuffle);
+      probeInput = probeShuffle;
+    }
   }
   auto* buildOp =
       make<HashBuild>(buildInput, ++buildCounter_, build.keys, buildPlan);
@@ -1222,7 +1235,7 @@ void Optimization::joinByHashRight(
   // The build gets shuffled to align with probe. If probe is not partitioned
   // on its keys, shuffle the probe too.
   auto probePart = joinKeyPartition(probeInput, probe.keys);
-  if (probePart.empty()) {
+  if (!isSingle_ && probePart.empty()) {
     Distribution probeDist(
         buildInput->distribution().distributionType,
         probeInput->resultCardinality(),
@@ -1239,7 +1252,7 @@ void Optimization::joinByHashRight(
       if (buildPartCols.size() <= nthKey) {
         buildPartCols.resize(nthKey + 1);
       }
-      assert(!buildPartCols.empty());
+      assert(isSingle_ || !buildPartCols.empty());
       buildPartCols[nthKey] = build.keys[i];
     }
   }
@@ -1247,11 +1260,12 @@ void Optimization::joinByHashRight(
       probeInput->distribution().distributionType,
       buildInput->resultCardinality(),
       std::move(buildPartCols));
-  auto* buildShuffle =
-      make<Repartition>(plan, std::move(buildDist), plan->columns());
-  state.addCost(*buildShuffle);
-  buildInput = buildShuffle;
-
+  if (!isSingle_) {
+    auto* buildShuffle =
+        make<Repartition>(plan, std::move(buildDist), plan->columns());
+    state.addCost(*buildShuffle);
+    buildInput = buildShuffle;
+  }
   auto* buildOp =
       make<HashBuild>(buildInput, ++buildCounter_, build.keys, nullptr);
   state.addCost(*buildOp);

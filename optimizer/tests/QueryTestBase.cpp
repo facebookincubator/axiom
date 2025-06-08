@@ -100,6 +100,7 @@ void QueryTestBase::SetUp() {
   schema_ = std::make_shared<facebook::velox::optimizer::SchemaResolver>(
       connector_, "");
   history_ = std::make_unique<facebook::velox::optimizer::VeloxHistory>();
+  optimizerOptions_.traceFlags = FLAGS_optimizer_trace;
 }
 
 void QueryTestBase::TearDown() {
@@ -241,7 +242,6 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
 
   // The default Locus for planning is the system and data of 'connector_'.
   optimizer::Locus locus(connector_->connectorId().c_str(), connector_.get());
-  facebook::velox::optimizer::Optimization::PlanCostMap estimates;
   runner::MultiFragmentPlan::Options opts;
   opts.numWorkers = FLAGS_num_workers;
   opts.numDrivers = FLAGS_num_drivers;
@@ -257,7 +257,13 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     facebook::velox::optimizer::Schema veraxSchema(
         "test", schema_.get(), &locus);
     facebook::velox::optimizer::Optimization opt(
-						 *plan, veraxSchema, *history_, queryCtx_, evaluator, optimizerOptions_);
+        *plan,
+        veraxSchema,
+        *history_,
+        queryCtx_,
+        evaluator,
+        optimizerOptions_,
+        opts);
     auto best = opt.bestPlan();
     if (planString) {
       *planString = best->op->toString(true, false);
@@ -358,11 +364,12 @@ void QueryTestBase::expectRegexp(
 
 void QueryTestBase::assertSame(
     const core::PlanNodePtr& reference,
-    optimizer::PlanAndStats& experiment) {
+    optimizer::PlanAndStats& experiment,
+    TestResult* referenceReturn) {
   auto refId = fmt::format("q{}", ++queryCounter_);
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   runner::MultiFragmentPlan::Options options = {
-      .queryId = refId, .numWorkers = 1, .numDrivers = 1};
+      .queryId = refId, .numWorkers = 1, .numDrivers = FLAGS_num_drivers};
 
   exec::test::DistributedPlanBuilder builder(options, idGenerator, pool_.get());
   builder.addNode(
@@ -376,6 +383,7 @@ void QueryTestBase::assertSame(
 
   exec::test::assertEqualResults(
       referenceResult.results, experimentResult.results);
+  *referenceReturn = referenceResult;
 }
 
 } // namespace facebook::velox::optimizer::test
