@@ -19,6 +19,7 @@
 #include "optimizer/PlanUtils.h" //@manual
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/base/SuccinctPrinter.h"
+#include "velox/expression/ScopedVarSetter.h"
 
 namespace facebook::velox::optimizer {
 
@@ -47,6 +48,10 @@ void Column::equals(ColumnCP other) const {
 }
 
 std::string Column::toString() const {
+  auto* opt = queryCtx()->optimization();
+  if (!-opt->cnamesInExpr()) {
+    return name_;
+  }
   Name cname = !relation_ ? ""
       : relation_->type() == PlanType::kTable
       ? relation_->as<BaseTable>()->cname
@@ -54,6 +59,14 @@ std::string Column::toString() const {
       ? relation_->as<DerivedTable>()->cname
       : "--";
 
+  // Map corre;correlation names to canonical if making keys for history pieces.
+  auto canonical = opt->canonicalCnames();
+  if (canonical) {
+    auto it = canonical->find(cname);
+    if (it != canonical->end()) {
+      cname = it->second;
+    }
+  }
   return fmt::format("{}.{}", cname, name_);
 }
 
@@ -160,10 +173,43 @@ bool JoinEdge::isBroadcastableType() const {
   return !leftOptional_;
 }
 
-void JoinEdge::addEquality(ExprCP left, ExprCP right) {
+void JoinEdge::addEquality(ExprCP left, ExprCP right, bool update) {
   leftKeys_.push_back(left);
   rightKeys_.push_back(right);
-  guessFanout();
+  if (update) {
+    guessFanout();
+  }
+}
+
+std::pair<std::string, bool> JoinEdge::sampleKey() const {
+  std::stringstream out;
+  if (!leftTable_ || leftTable_->type() != PlanType::kTable ||
+      rightTable_->type() != PlanType::kTable) {
+    return std::make_pair("", false);
+  }
+  auto* opt = queryCtx()->optimization();
+  ScopedVarSetter pref(&opt->cnamesInExpr(), false);
+  std::vector<int32_t> indices(leftKeys_.size());
+  std::iota(indices.begin(), indices.end(), 0);
+  std::vector<std::string> leftString;
+  for (auto& k : leftKeys_) {
+    leftString.push_back(k->toString());
+  }
+  std::sort(indices.begin(), indices.end(), [&](int32_t l, int32_t r) {
+    return leftString[l] < leftString[r];
+  });
+  auto left =
+      fmt::format("{} ", leftTable_->as<BaseTable>()->schemaTable->name);
+  auto right =
+      fmt::format("{} ", rightTable_->as<BaseTable>()->schemaTable->name);
+  for (auto i : indices) {
+    left = left + leftKeys_[i]->toString() + " ";
+    right = right + rightKeys_[i]->toString() + " ";
+  }
+  if (left < right) {
+    return std::make_pair(left + " " + right, false);
+  }
+  return std::make_pair(right + " " + left, true);
 }
 
 std::string JoinEdge::toString() const {
@@ -1024,10 +1070,6 @@ void DerivedTable::distributeConjuncts() {
       }
     }
   }
-  // Re-guess fanouts after all single table filters are pushed down.
-  for (auto& join : joins) {
-    join->guessFanout();
-  }
 }
 
 void DerivedTable::makeInitialPlan() {
@@ -1043,9 +1085,12 @@ void DerivedTable::makeInitialPlan() {
   if (it != optimization->memo().end()) {
     found = true;
   }
-  distributeConjuncts();
   addImpliedJoins();
+  distributeConjuncts();
   linkTablesToJoins();
+  for (auto& join : joins) {
+    join->guessFanout();
+  }
   setStartTables();
   PlanState state(*optimization, this);
   for (auto expr : exprs) {
@@ -1106,12 +1151,19 @@ void JoinEdge::guessFanout() {
   if (fanoutsFixed_) {
     return;
   }
+  auto* opt = queryCtx()->optimization();
+  auto samplePair = opt->history().sampleJoin(this);
   auto left = joinCardinality(leftTable_, toRangeCast<Column>(leftKeys_));
   auto right = joinCardinality(rightTable_, toRangeCast<Column>(rightKeys_));
   leftUnique_ = left.unique;
   rightUnique_ = right.unique;
-  lrFanout_ = right.joinCardinality * baseSelectivity(rightTable_);
-  rlFanout_ = left.joinCardinality * baseSelectivity(leftTable_);
+  if (samplePair.first == 0 && samplePair.second == 0) {
+    lrFanout_ = right.joinCardinality * baseSelectivity(rightTable_);
+    rlFanout_ = left.joinCardinality * baseSelectivity(leftTable_);
+  } else {
+    lrFanout_ = samplePair.second * baseSelectivity(rightTable_);
+    rlFanout_ = samplePair.first * baseSelectivity(leftTable_);
+  }
   // If one side is unique, the other side is a pk to fk join, with fanout =
   // fk-table-card / pk-table-card.
   if (rightUnique_) {

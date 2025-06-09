@@ -65,19 +65,20 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
 
   TestResult runVelox(const core::PlanNodePtr& plan);
 
-  TestResult runFragmentedPlan(runner::MultiFragmentPlanPtr plan);
+  TestResult runFragmentedPlan(optimizer::PlanAndStats& plan);
 
   /// Checks that 'reference' and 'experiment' produce the same result.
   void assertSame(
       const core::PlanNodePtr& reference,
-      runner::MultiFragmentPlanPtr experiment);
+      optimizer::PlanAndStats& experiment,
+      TestResult* referenceReturn = nullptr);
 
-  runner::MultiFragmentPlanPtr planSql(
+  optimizer::PlanAndStats planSql(
       const std::string& sql,
       std::string* planString = nullptr,
       std::string* errorString = nullptr);
 
-  runner::MultiFragmentPlanPtr planVelox(
+  optimizer::PlanAndStats planVelox(
       const core::PlanNodePtr& plan,
       std::string* planString = nullptr,
       std::string* errorString = nullptr);

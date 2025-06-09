@@ -17,6 +17,7 @@
 
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/Connector.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
@@ -550,6 +551,11 @@ class ConnectorMetadata {
   /// Returns a SplitManager for split enumeration for TableLayouts accessed
   /// through 'this'.
   virtual ConnectorSplitManager* splitManager() = 0;
+
+  virtual std::shared_ptr<core::QueryCtx> makeQueryCtx(
+      const std::string& queryId) {
+    VELOX_UNSUPPORTED();
+  }
 };
 
 } // namespace facebook::velox::connector

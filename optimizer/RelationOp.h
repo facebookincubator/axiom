@@ -119,6 +119,16 @@ class RelationOp : public Relation {
   /// each subclass.
   virtual void setCost(const PlanState& input);
 
+  /// Returns a key for retrieving/storing a historical record of execution for
+  /// future costing. Empty string if not applicable.
+  virtual const std::string& historyKey() const {
+    if (input_) {
+      return input_->historyKey();
+    }
+    static std::string empty;
+    return empty;
+  }
+
   /// Returns human redable string for 'this' and inputs if 'recursive' is true.
   /// If 'detail' is true, includes cost and other details.
   virtual std::string toString(bool recursive, bool detail) const;
@@ -132,6 +142,9 @@ class RelationOp : public Relation {
   boost::intrusive_ptr<class RelationOp> input_;
 
   Cost cost_;
+
+  // Cache of history lookup key.
+  mutable std::string key_;
 
  private:
   // thread local reference count. PlanObjects are freed when the
@@ -195,6 +208,8 @@ struct TableScan : public RelationOp {
 
   void setCost(const PlanState& input) override;
 
+  const std::string& historyKey() const override;
+
   std::string toString(bool recursive, bool detail) const override;
 
   // The base table reference. May occur in multiple scans if the base
@@ -257,6 +272,9 @@ class Filter : public RelationOp {
   }
 
   void setCost(const PlanState& input) override;
+
+  const std::string& historyKey() const override;
+
   std::string toString(bool recursive, bool detail) const override;
 
  private:
@@ -325,6 +343,9 @@ struct Join : public RelationOp {
   Cost buildCost;
 
   void setCost(const PlanState& input) override;
+
+  const std::string& historyKey() const override;
+
   std::string toString(bool recursive, bool detail) const override;
 };
 
@@ -390,6 +411,9 @@ struct Aggregation : public RelationOp {
   ColumnVector intermediateColumns;
 
   void setCost(const PlanState& input) override;
+
+  const std::string& historyKey() const override;
+
   std::string toString(bool recursive, bool detail) const override;
 };
 

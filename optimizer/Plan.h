@@ -230,6 +230,10 @@ struct JoinCandidate {
   /// and b the edges to both a and b must be combined.
   void addEdge(PlanState& state, JoinEdgeP other);
 
+  /// True if 'other' has all the equalities to placed columns that 'join' of
+  /// 'this' has and has more equalities.
+  bool isDominantEdge(PlanState& state, JoinEdgeP other);
+
   std::string toString() const;
 
   // The join between already placed tables and the table(s) in 'this'.
@@ -342,6 +346,10 @@ struct PlanState {
   mutable std::unordered_map<PlanObjectSet, PlanObjectSet>
       downstreamPrecomputed;
 
+  // Ordered set of tables placed so far. Used for setting a
+  // breakpoint before a specific join order gets costted.
+  std::vector<int32_t> dbgPlacedTables;
+
   /// Updates 'cost_' to reflect 'op' being placed on top of the partial plan.
   void addCost(RelationOp& op);
 
@@ -376,6 +384,8 @@ struct PlanState {
     return hasCutoff && plans.bestPlan &&
         cost.unitCost + cost.setupCost > plans.bestCostWithShuffle;
   }
+
+  void setFirstTable(int32_t id);
 };
 
 /// A scoped guard that restores fields of PlanState on destruction.
@@ -386,13 +396,17 @@ struct PlanStateSaver {
         placed_(state.placed),
         columns_(state.columns),
         cost_(state.cost),
-        numBuilds_(state.builds.size()) {}
+        numBuilds_(state.builds.size()),
+        numPlaced_(state.dbgPlacedTables.size()) {}
+
+  explicit PlanStateSaver(PlanState& state, const JoinCandidate& candidate);
 
   ~PlanStateSaver() {
     state_.placed = std::move(placed_);
     state_.columns = std::move(columns_);
     state_.cost = cost_;
     state_.builds.resize(numBuilds_);
+    state_.dbgPlacedTables.resize(numPlaced_);
   }
 
  private:
@@ -401,6 +415,7 @@ struct PlanStateSaver {
   PlanObjectSet columns_;
   const Cost cost_;
   const int32_t numBuilds_;
+  const int32_t numPlaced_;
 };
 
 /// Key for collection of memoized partial plans. These are all made for hash
@@ -452,6 +467,21 @@ struct OptimizerOptions {
   int32_t traceFlags{0};
 };
 
+/// A map from PlanNodeId of an executable plan to a key for
+/// recording the execution for use in cost model. The key is a
+/// canonical summary of the node and its inputs.
+using NodeHistoryMap = std::unordered_map<core::PlanNodeId, std::string>;
+
+using NodePredictionMap = std::unordered_map<core::PlanNodeId, NodePrediction>;
+
+/// Plan and specification for recording execution history amd planning ttime
+/// predictions.
+struct PlanAndStats {
+  runner::MultiFragmentPlanPtr plan;
+  NodeHistoryMap history;
+  NodePredictionMap prediction;
+};
+
 /// Instance of query optimization. Comverts a plan and schema into an
 /// optimized plan. Depends on QueryGraphContext being set on the
 /// calling thread. There is one instance per query to plan. The
@@ -460,23 +490,25 @@ class Optimization {
  public:
   static constexpr int32_t kRetained = 1;
   static constexpr int32_t kExceededBest = 2;
-
-  using PlanCostMap = std::unordered_map<
-      velox::core::PlanNodeId,
-      std::vector<std::pair<std::string, Cost>>>;
+  static constexpr int32_t kSample = 4;
 
   Optimization(
       const velox::core::PlanNode& plan,
       const Schema& schema,
       History& history,
+      std::shared_ptr<core::QueryCtx> queryCtx,
       velox::core::ExpressionEvaluator& evaluator,
-      OptimizerOptions opts = OptimizerOptions());
+      OptimizerOptions opts = OptimizerOptions(),
+      runner::MultiFragmentPlan::Options options =
+          runner::MultiFragmentPlan::Options{.numWorkers = 5, .numDrivers = 5});
 
   /// Returns the optimized RelationOp plan for 'plan' given at construction.
   PlanPtr bestPlan();
 
-  /// Returns a set of per-stage Velox PlanNode trees.
-  velox::runner::MultiFragmentPlanPtr toVeloxPlan(
+  /// Returns a set of per-stage Velox PlanNode trees. If 'historyKeys' is
+  /// given, these can be used to record history data about the execution of
+  /// each relevant node for costing future queries.
+  PlanAndStats toVeloxPlan(
       RelationOpPtr plan,
       const velox::runner::MultiFragmentPlan::Options& options);
 
@@ -552,16 +584,16 @@ class Optimization {
   // discards the candidate.
   void makeJoins(RelationOpPtr plan, PlanState& state);
 
+  std::shared_ptr<core::QueryCtx> queryCtxShared() const {
+    return queryCtx_;
+  }
+
   velox::core::ExpressionEvaluator* evaluator() {
     return &evaluator_;
   }
 
   Name newCName(const std::string& prefix) {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
-  }
-
-  PlanCostMap planCostMap() {
-    return costEstimates_;
   }
 
   bool& makeVeloxExprWithNoAlias() {
@@ -587,6 +619,25 @@ class Optimization {
   /// True if a scan should expose 'column' of 'table' as a struct only
   /// containing the accessed keys. 'column' must be a top level map column.
   bool isMapAsStruct(Name table, Name column);
+
+  History& history() const {
+    return history_;
+  }
+
+  /// If false, correlation names are not included in Column::toString(),. Used
+  /// for canonicalizing join cache keys.
+  bool& cnamesInExpr() {
+    return cnamesInExpr_;
+  }
+
+  /// Map for canonicalizing correlation names when making history cache keys.
+  std::unordered_map<Name, Name>*& canonicalCnames() {
+    return canonicalCnames_;
+  }
+
+  runner::MultiFragmentPlan::Options& options() {
+    return options_;
+  }
 
  private:
   static constexpr uint64_t kAllAllowedInDt = ~0UL;
@@ -935,6 +986,12 @@ class Optimization {
       velox::runner::ExecutableFragment& fragment,
       std::vector<velox::runner::ExecutableFragment>& stages);
 
+  // Records the prediction for 'node' and a history key to update history after
+  // the plan is executed.
+  void makePredictionAndHistory(
+      const core::PlanNodeId& id,
+      const RelationOp* op);
+
   // Returns a new PlanNodeId and associates the Cost of 'op' with it.
   velox::core::PlanNodeId nextId(const RelationOp& op);
 
@@ -949,13 +1006,6 @@ class Optimization {
       const PlanObjectSet& topExprs,
       const PlanObjectSet& placed,
       const PlanObjectSet& extraColumns);
-
-  // Records 'cost' for 'id'. 'role' can be e.g. 'build; or
-  // 'probe'. for nodes that produce multiple operators.
-  void recordPlanNodeEstimate(
-      const velox::core::PlanNodeId id,
-      Cost cost,
-      const std::string& role);
 
   PlanObjectCP findLeaf(const core::PlanNode* node) {
     auto* leaf = planLeaves_[node];
@@ -972,6 +1022,7 @@ class Optimization {
 
   // Source of historical cost/cardinality information.
   History& history_;
+  std::shared_ptr<core::QueryCtx> queryCtx_;
   velox::core::ExpressionEvaluator& evaluator_;
   // Top DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP root_;
@@ -1094,10 +1145,6 @@ class Optimization {
   int32_t toVeloxLimit_{-1};
   int32_t toVeloxOffset_{0};
 
-  // map from Velox PlanNode ids to RelationOp. For cases that have multiple
-  // operators, e.g. probe and build, both RelationOps are mentioned.
-  PlanCostMap costEstimates_;
-
   // On when producing a remaining filter for table scan, where columns must
   // correspond 1:1 to the schema.
   bool makeVeloxExprWithNoAlias_{false};
@@ -1112,7 +1159,26 @@ class Optimization {
   // common subexpressions, maps from ExprCP to the FieldAccessTypedExppr with
   // the value.
   std::unordered_map<ExprCP, core::TypedExprPtr> projectedExprs_;
+
+  // Map filled in with a PlanNodeId and history key for measurement points for
+  // history recording.
+  NodeHistoryMap nodeHistory_;
+
+  // Predicted cardinality and memory for nodes to record in history.
+  NodePredictionMap prediction_;
+
+  bool cnamesInExpr_{true};
+
+  std::unordered_map<Name, Name>* canonicalCnames_{nullptr};
+
+  const bool isSingle_;
 };
+
+/// True f single worker, i.e. do not plan remote exchanges
+bool isSingleWorker();
+
+/// Returns possible indices for driving table scan of 'table'.
+std::vector<ColumnGroupP> chooseLeafIndex(const BaseTable* table);
 
 /// Returns bits describing function 'name'.
 FunctionSet functionBits(Name name);
@@ -1125,5 +1191,8 @@ void filterUpdated(BaseTableCP baseTable, bool updateSelectivity = true);
 /// 'baseTable'. This is the type to return from the table reader
 /// for the map column.
 RowTypePtr skylineStruct(BaseTableCP baseTable, ColumnCP column);
+
+/// Returns  the inverse join type, e.g. right outer from left outr.
+core::JoinType reverseJoinType(core::JoinType joinType);
 
 } // namespace facebook::velox::optimizer

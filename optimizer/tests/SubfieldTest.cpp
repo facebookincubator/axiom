@@ -270,7 +270,7 @@ class SubfieldTest : public QueryTestBase,
                              id, std::move(names), std::move(exprs), node);
                        });
     auto fragmentedPlan = planVelox(builder.planNode());
-    auto plan = veloxString(fragmentedPlan);
+    auto plan = veloxString(fragmentedPlan.plan);
     expectRegexp(plan, "ParallelProject");
     std::cout << plan;
     assertSame(builder.planNode(), fragmentedPlan);
@@ -293,7 +293,7 @@ TEST_P(SubfieldTest, structs) {
                      .tableScan("structs", rowType)
                      .project({"s.s1 as a", "s.s3[0] as arr0"});
 
-  auto plan = veloxString(planVelox(builder.planNode()));
+  auto plan = veloxString(planVelox(builder.planNode()).plan);
   expectRegexp(plan, "s.*Subfields.*s.s3\\[0\\]");
   expectRegexp(plan, "s.*Subfields.*s.s1");
 }
@@ -340,7 +340,7 @@ TEST_P(SubfieldTest, maps) {
                "opt_ff[10100::INTEGER] as o10",
                "opt_ff[10200::INTEGER] as o20"});
 
-  plan = veloxString(planVelox(builder.planNode()));
+  plan = veloxString(planVelox(builder.planNode()).plan);
   std::cout << plan << std::endl;
 
   builder =
@@ -350,7 +350,7 @@ TEST_P(SubfieldTest, maps) {
               {"float_features[10100::INTEGER] as f1",
                "float_features[10200::INTEGER] as f2",
                "id_score_list_features[200800::INTEGER][100000::INTEGER]"});
-  plan = veloxString(planVelox(builder.planNode()));
+  plan = veloxString(planVelox(builder.planNode()).plan);
   expectRegexp(plan, "float_features.*Subfields.*float_features.10100.");
   expectRegexp(plan, "float_features.*Subfields.*float_features.10200.");
   expectRegexp(
@@ -365,7 +365,7 @@ TEST_P(SubfieldTest, maps) {
                      "id_score_list_features[200800::INTEGER] as sc1",
                      "id_list_features as idlf"})
                 .project({"sc1[1::INTEGER] + 1::REAL as score"});
-  plan = veloxString(planVelox(builder.planNode()));
+  plan = veloxString(planVelox(builder.planNode()).plan);
   expectRegexp(
       plan,
       "id_score_list_features.*Subfields:.*\\[ id_score_list_features.200800.*\\[1\\]");
@@ -382,7 +382,7 @@ TEST_P(SubfieldTest, maps) {
                 .project(
                     {"sc1[1::INTEGER] + 1::REAL as score",
                      "idlf[cast(uid % 100 as INTEGER)] as any"});
-  plan = veloxString(planVelox(builder.planNode()));
+  plan = veloxString(planVelox(builder.planNode()).plan);
   expectRegexp(
       plan, "id_list_features.*Subfields:.* id_list_features\\[\\*\\]");
 
@@ -401,7 +401,7 @@ TEST_P(SubfieldTest, maps) {
                "g.__1[10200::INTEGER] + 22::REAL  as f2b",
                "g.__2[201600::INTEGER] as idl100"});
 
-  plan = veloxString(planVelox(builder.planNode()));
+  plan = veloxString(planVelox(builder.planNode()).plan);
   expectRegexp(plan, "float_features.*Subfield.*float_features.10200");
   expectRegexp(plan, "id_list_features.*Subfields.*id_list_features.201600");
 
@@ -417,7 +417,7 @@ TEST_P(SubfieldTest, maps) {
                "g.__1[10200::INTEGER] as f2",
                "g.__2[200600::INTEGER] as idl100"});
 
-  plan = veloxString(planVelox(builder.planNode()));
+  plan = veloxString(planVelox(builder.planNode()).plan);
   std::cout << plan << std::endl;
 
   // We expect the genie to explode and the filters to be first.
@@ -435,7 +435,7 @@ TEST_P(SubfieldTest, maps) {
                "gg.__2[200600::INTEGER] as idl100"})
           .filter("f10 < 10::REAL and f11 < 10::REAL");
 
-  plan = veloxString(planVelox(builder.planNode()));
+  plan = veloxString(planVelox(builder.planNode()).plan);
   std::cout << plan << std::endl;
 
   builder =

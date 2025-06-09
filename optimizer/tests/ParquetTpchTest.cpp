@@ -111,24 +111,27 @@ void ParquetTpchTest::saveTpchTablesAsParquet() {
     auto tableDirectory = fmt::format("{}/{}", createPath_, tableName);
     auto tableSchema = tpch::getTableSchema(table);
     auto columnNames = tableSchema->names();
+    int32_t numSplits = 1;
+    if (tableName != "nation" && tableName != "region" &&
+        FLAGS_tpch_scale > 1) {
+      numSplits = std::min<int32_t>(FLAGS_tpch_scale, 200);
+    }
     auto plan =
         PlanBuilder()
             .tpchTableScan(table, std::move(columnNames), FLAGS_tpch_scale)
+            .tableWrite(tableDirectory, dwio::common::FileFormat::PARQUET)
             .planNode();
-    auto split =
-        exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
-            kTpchConnectorId, 1, 0));
-
-    auto rows =
-        AssertQueryBuilder(plan).splits({split}).copyResults(pool.get());
-    duckDb_->createTable(tableName.data(), {rows});
-
-    plan = PlanBuilder()
-               .values({rows})
-               .tableWrite(tableDirectory, dwio::common::FileFormat::PARQUET)
-               .planNode();
-
-    AssertQueryBuilder(plan).copyResults(pool.get());
+    std::vector<exec::Split> splits;
+    for (auto nthSplit = 0; nthSplit < numSplits; ++nthSplit) {
+      splits.push_back(
+          exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
+              kTpchConnectorId, numSplits, nthSplit)));
+    }
+    auto rows = AssertQueryBuilder(plan)
+                    .splits(std::move(splits))
+                    .maxDrivers(std::min<int32_t>(
+                        numSplits, std::thread::hardware_concurrency()))
+                    .copyResults(pool.get());
   }
 }
 

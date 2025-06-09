@@ -29,9 +29,11 @@
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
 
-DEFINE_int32(trace, 0, "Enable trace 1=retained plans, 2=abandoned, 3=both");
-
 DEFINE_int32(num_repeats, 1, "Number of repeats for optimization timing");
+
+DECLARE_int32(optimizer_trace);
+
+DECLARE_int32(num_workers);
 
 using namespace facebook::velox;
 using namespace facebook::velox::optimizer;
@@ -87,7 +89,7 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
     std::string planText;
     std::string errorText;
     for (auto counter = 0; counter < numRepeats; ++counter) {
-      optimizerOptions_.traceFlags = FLAGS_trace;
+      optimizerOptions_.traceFlags = FLAGS_optimizer_trace;
       auto result = planVelox(plan, &planText, &errorText);
     }
     return fmt::format(
@@ -103,7 +105,18 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
       std::string* planString = nullptr) {
     auto fragmentedPlan = planVelox(planNode, planString);
     auto reference = referencePlan ? referencePlan : planNode;
-    assertSame(reference, fragmentedPlan);
+    TestResult referenceResult;
+    assertSame(reference, fragmentedPlan, &referenceResult);
+    auto numWorkers = FLAGS_num_workers;
+    if (numWorkers != 1) {
+      FLAGS_num_workers = 1;
+      auto singlePlan = planVelox(planNode, planString);
+      ASSERT_TRUE(singlePlan.plan != nullptr);
+      auto singleResult = runFragmentedPlan(singlePlan);
+      exec::test::assertEqualResults(
+          referenceResult.results, singleResult.results);
+      FLAGS_num_workers = numWorkers;
+    }
   }
 
   // Breaks str into tokens at whitespace and punctuation. Returns tokens as

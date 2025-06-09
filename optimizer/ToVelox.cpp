@@ -162,21 +162,7 @@ void filterUpdated(BaseTableCP table, bool updateSelectivity) {
 }
 
 core::PlanNodeId Optimization::nextId(const RelationOp& op) {
-  auto id = idGenerator_.next();
-  recordPlanNodeEstimate(id, op.cost(), "");
-  return id;
-}
-
-void Optimization::recordPlanNodeEstimate(
-    const core::PlanNodeId id,
-    Cost cost,
-    const std::string& role) {
-  auto it = costEstimates_.find(id);
-  if (it == costEstimates_.end()) {
-    costEstimates_[id] = {std::make_pair(role, cost)};
-  } else {
-    it->second.push_back(std::make_pair(role, cost));
-  }
+  return idGenerator_.next();
 }
 
 RelationOpPtr addGather(RelationOpPtr op) {
@@ -198,19 +184,24 @@ RelationOpPtr addGather(RelationOpPtr op) {
   return gather;
 }
 
-MultiFragmentPlanPtr Optimization::toVeloxPlan(
+PlanAndStats Optimization::toVeloxPlan(
     RelationOpPtr plan,
     const MultiFragmentPlan::Options& options) {
   options_ = options;
   std::vector<ExecutableFragment> stages;
+  prediction_.clear();
+  nodeHistory_.clear();
   if (options_.numWorkers > 1) {
     plan = addGather(plan);
   }
   ExecutableFragment top;
   top.fragment.planNode = makeFragment(plan, top, stages);
   stages.push_back(std::move(top));
-  return std::make_shared<velox::runner::MultiFragmentPlan>(
-      std::move(stages), options);
+  return PlanAndStats{
+      std::make_shared<velox::runner::MultiFragmentPlan>(
+          std::move(stages), options),
+      std::move(nodeHistory_),
+      std::move(prediction_)};
 }
 
 RowTypePtr Optimization::makeOutputType(const ColumnVector& columns) {
@@ -219,7 +210,7 @@ RowTypePtr Optimization::makeOutputType(const ColumnVector& columns) {
   for (auto i = 0; i < columns.size(); ++i) {
     auto* column = columns[i];
     auto relation = column->relation();
-    if (relation->type() == PlanType::kTable) {
+    if (relation && relation->type() == PlanType::kTable) {
       auto* schemaTable = relation->as<BaseTable>()->schemaTable;
       if (!schemaTable) {
         continue;
@@ -777,6 +768,13 @@ core::PlanNodePtr Optimization::makeAggregation(
   ptr.reset(r);
   return ptr;
 }
+void Optimization::makePredictionAndHistory(
+    const core::PlanNodeId& id,
+    const RelationOp* op) {
+  nodeHistory_[id] = op->historyKey();
+  prediction_[id] = NodePrediction{
+      .cardinality = op->cost().inputCardinality * op->cost().fanout};
+}
 
 core::PlanNodePtr Optimization::makeFragment(
     RelationOpPtr op,
@@ -803,10 +801,12 @@ core::PlanNodePtr Optimization::makeFragment(
     }
     case RelType::kFilter: {
       auto filter = op->as<Filter>();
-      return std::make_shared<core::FilterNode>(
+      auto filterNode = std::make_shared<core::FilterNode>(
           idGenerator_.next(),
           toAnd(filter->exprs()),
           makeFragment(filter->input(), fragment, stages));
+      makePredictionAndHistory(filterNode->id(), filter);
+      return filterNode;
     }
     case RelType::kAggregation: {
       return makeAggregation(*op->as<Aggregation>(), fragment, stages);
@@ -858,6 +858,7 @@ core::PlanNodePtr Optimization::makeFragment(
     case RelType::kTableScan: {
       columnAlteredTypes_.clear();
       auto scan = op->as<TableScan>();
+      bool isSubfieldPushdown = hasSubfieldPushdown(scan);
       auto handlePair = leafHandle(scan->baseTable->id());
       if (!handlePair.first) {
         filterUpdated(scan->baseTable, false);
@@ -879,7 +880,7 @@ core::PlanNodePtr Optimization::makeFragment(
         // No correlation name in scan output if pushed down subfield projection
         // follows.
         auto scanColumnName =
-            opts_.pushdownSubfields ? column->name() : column->toString();
+            isSubfieldPushdown ? column->name() : column->toString();
         assignments[scanColumnName] = std::const_pointer_cast<
             connector::ColumnHandle>(
             scan->index->layout->connector()->metadata()->createColumnHandle(
@@ -892,6 +893,7 @@ core::PlanNodePtr Optimization::makeFragment(
               handlePair.first),
           assignments);
       VELOX_CHECK(handlePair.second.empty(), "Expecting no rejected filters");
+      makePredictionAndHistory(scanNode->id(), scan);
       fragment.scans.push_back(scanNode);
       if (hasSubfieldPushdown(scan)) {
         auto result = makeSubfieldProjections(scan, scanNode);
@@ -916,6 +918,7 @@ core::PlanNodePtr Optimization::makeFragment(
             rightProjections.maybeProject(right),
             makeOutputType(join->columns()));
         if (join->filter.empty()) {
+          makePredictionAndHistory(joinNode->id(), join);
           return joinNode;
         }
         return std::make_shared<core::FilterNode>(
@@ -923,7 +926,7 @@ core::PlanNodePtr Optimization::makeFragment(
       }
       auto leftKeys = leftProjections.toFieldRefs(join->leftKeys);
       auto rightKeys = rightProjections.toFieldRefs(join->rightKeys);
-      return std::make_shared<core::HashJoinNode>(
+      auto joinNode = std::make_shared<core::HashJoinNode>(
           nextId(*join),
           join->joinType,
           false,
@@ -933,6 +936,8 @@ core::PlanNodePtr Optimization::makeFragment(
           leftProjections.maybeProject(left),
           rightProjections.maybeProject(right),
           makeOutputType(join->columns()));
+      makePredictionAndHistory(joinNode->id(), join);
+      return joinNode;
     }
     case RelType::kHashBuild:
       return makeFragment(op->input(), fragment, stages);

@@ -18,10 +18,77 @@
 #include "velox/exec/Operator.h"
 #include "velox/exec/TaskStats.h"
 
+#include <iostream>
+
+DEFINE_double(
+    cardinality_warning_threshold,
+    5,
+    "Log a warning if cardinality estimate is more than this many times off. 0 means no warnings.");
+
 namespace facebook::velox::optimizer {
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::runner;
+
+void VeloxHistory::recordJoinSample(
+    const std::string& key,
+    float lr,
+    float rl) {}
+
+std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
+  auto keyPair = edge->sampleKey();
+
+  if (keyPair.first.empty()) {
+    return std::make_pair(0, 0);
+  }
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    auto it = joinSamples_.find(keyPair.first);
+    if (it != joinSamples_.end()) {
+      if (keyPair.second) {
+        return std::make_pair(it->second.second, it->second.first);
+      }
+      return it->second;
+    }
+  }
+  std::pair<float, float> pair;
+  bool trace = (queryCtx()->optimization()->opts().traceFlags &
+                Optimization::kSample) != 0;
+  uint64_t start = getCurrentTimeMicro();
+  if (keyPair.second) {
+    pair = optimizer::sampleJoin(
+        edge->rightTable()->as<BaseTable>()->schemaTable,
+        edge->rightKeys(),
+        edge->leftTable()->as<BaseTable>()->schemaTable,
+        edge->leftKeys());
+  } else {
+    pair = optimizer::sampleJoin(
+        edge->leftTable()->as<BaseTable>()->schemaTable,
+        edge->leftKeys(),
+        edge->rightTable()->as<BaseTable>()->schemaTable,
+        edge->rightKeys());
+  }
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    joinSamples_[keyPair.first] = pair;
+  }
+  if (trace) {
+    std::cout << "Sample join " << keyPair.first << ": " << pair.first << " : "
+              << pair.second
+              << " time=" << succinctMicros(getCurrentTimeMicro() - start)
+              << std::endl;
+  }
+  if (keyPair.second) {
+    return std::make_pair(pair.second, pair.first);
+  }
+  return pair;
+}
+
+NodePrediction* VeloxHistory::getHistory(const std::string key) {
+  return nullptr;
+}
+
+void VeloxHistory::setHistory(const std::string& key, NodePrediction history) {}
 
 bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
   auto optimization = queryCtx()->optimization();
@@ -46,36 +113,109 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
     }
     return false;
   }
-
+  bool trace = (queryCtx()->optimization()->opts().traceFlags &
+                Optimization::kSample) != 0;
+  uint64_t start = getCurrentTimeMicro();
   auto sample = runnerTable->layouts()[0]->sample(
       handlePair.first, 1, handlePair.second, scanType);
   table.filterSelectivity =
       static_cast<float>(sample.second) / (sample.first + 1);
+  if (trace) {
+    std::cout << "Sampled scan " << string << "= " << table.filterSelectivity
+              << " time= " << succinctMicros(getCurrentTimeMicro() - start)
+              << std::endl;
+  }
   recordLeafSelectivity(string, table.filterSelectivity, false);
   return true;
 }
 
-void VeloxHistory::recordVeloxExecution(
-    const RelationOp* op,
-    const std::vector<ExecutableFragment>& plan,
-    const std::vector<velox::exec::TaskStats>& stats) {
-  std::unordered_map<std::string, const velox::exec::OperatorStats*> map;
-  for (auto& task : stats) {
-    for (auto& pipeline : task.pipelineStats) {
-      for (auto& op : pipeline.operatorStats) {
-        map[op.planNodeId] = &op;
+std::shared_ptr<const core::TableScanNode> findScan(
+    const core::PlanNodeId& id,
+    const runner::MultiFragmentPlanPtr& plan) {
+  for (auto& fragment : plan->fragments()) {
+    for (auto& scan : fragment.scans) {
+      if (scan->id() == id) {
+        return scan;
       }
     }
   }
-  for (auto& fragment : plan) {
-    for (auto& scan : fragment.scans) {
-      auto scanStats = map[scan->id()];
-      std::string handle = scan->tableHandle()->toString();
-      recordLeafSelectivity(
-          handle,
-          scanStats->outputPositions /
-              std::max<float>(1, scanStats->rawInputPositions),
-          true);
+  return nullptr;
+}
+
+void logPrediction(const std::string& message) {
+  if (FLAGS_cardinality_warning_threshold != 0) {
+    LOG(WARNING) << message;
+  }
+}
+
+void predictionWarnings(
+    const PlanAndStats& plan,
+    const core::PlanNodeId& id,
+    int64_t actualRows,
+    int64_t predictedRows) {
+  if (actualRows == 0 && predictedRows == 0) {
+    return;
+  }
+  std::string historyKey;
+  auto it = plan.history.find(id);
+  if (it != plan.history.end()) {
+    historyKey = it->second;
+  }
+  if (actualRows == 0 || predictedRows == 0) {
+    logPrediction(fmt::format(
+        "Node {} actual={} predicted={} key={}",
+        id,
+        actualRows,
+        predictedRows,
+        historyKey));
+  } else {
+    float ratio =
+        static_cast<float>(actualRows) / static_cast<float>(predictedRows);
+    auto threshold = FLAGS_cardinality_warning_threshold;
+    if (ratio < 1 / threshold || ratio > threshold) {
+      logPrediction(fmt::format(
+          "Node {} actual={} predicted={} key={}",
+          id,
+          actualRows,
+          predictedRows,
+          historyKey));
+    }
+  }
+}
+
+void VeloxHistory::recordVeloxExecution(
+    const PlanAndStats& plan,
+    const std::vector<velox::exec::TaskStats>& stats) {
+  for (auto& task : stats) {
+    for (auto& pipeline : task.pipelineStats) {
+      for (auto& op : pipeline.operatorStats) {
+        auto it = plan.prediction.find(op.planNodeId);
+        auto keyIt = plan.history.find(op.planNodeId);
+        if (keyIt == plan.history.end()) {
+          continue;
+        }
+        uint64_t actualRows;
+        {
+          std::lock_guard<std::mutex> l(mutex_);
+          actualRows = op.outputPositions;
+          planHistory_[keyIt->second] =
+              NodePrediction{.cardinality = static_cast<float>(actualRows)};
+        }
+        if (op.operatorType == "TableScanOperator") {
+          auto scan = findScan(op.planNodeId, plan.plan);
+          if (scan) {
+            std::string handle = scan->tableHandle()->toString();
+            recordLeafSelectivity(
+                handle,
+                op.outputPositions / std::max<float>(1, op.rawInputPositions),
+                true);
+          }
+        }
+        if (it != plan.prediction.end()) {
+          auto predictedRows = it->second.cardinality;
+          predictionWarnings(plan, op.planNodeId, actualRows, predictedRows);
+        }
+      }
     }
   }
 }

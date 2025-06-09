@@ -217,6 +217,9 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
     return tables_;
   }
 
+  std::shared_ptr<core::QueryCtx> makeQueryCtx(
+      const std::string& queryId) override;
+
  private:
   void ensureInitialized() const;
   void makeQueryCtx();

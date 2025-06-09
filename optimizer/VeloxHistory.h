@@ -26,6 +26,15 @@ namespace facebook::velox::optimizer {
 /// handles and execution stats.
 class VeloxHistory : public History {
  public:
+  void recordJoinSample(const std::string& key, float lr, float rl) override;
+
+  std::pair<float, float> sampleJoin(JoinEdge* edge) override;
+
+  NodePrediction* getHistory(const std::string key) override;
+
+  virtual void setHistory(const std::string& key, NodePrediction history)
+      override;
+
   virtual std::optional<Cost> findCost(RelationOp& op) override {
     return std::nullopt;
   }
@@ -40,9 +49,12 @@ class VeloxHistory : public History {
   /// non-null, non-leaf costs from non-leaf levels are recorded. Otherwise only
   /// leaf scan selectivities  are recorded.
   virtual void recordVeloxExecution(
-      const RelationOp* op,
-      const std::vector<velox::runner::ExecutableFragment>& plan,
+      const PlanAndStats& plan,
       const std::vector<velox::exec::TaskStats>& stats);
+
+ private:
+  std::unordered_map<std::string, std::pair<float, float>> joinSamples_;
+  std::unordered_map<std::string, NodePrediction> planHistory_;
 };
 
 } // namespace facebook::velox::optimizer

@@ -20,6 +20,14 @@
 
 namespace facebook::velox::optimizer {
 
+/// Record the history data for a tracked PlanNode.
+struct NodePrediction {
+  /// Result cardinality for the top node of the recorded plan.
+  float cardinality;
+  ///  Peak total memory for the top node.
+  float peakMemory{0};
+};
+
 /// Interface to historical query cost and cardinality
 /// information. There is one long lived instance per
 /// process. Public functions are thread safe since multiple
@@ -47,6 +55,16 @@ class History {
   virtual bool setLeafSelectivity(
       BaseTable& baseTable,
       RowTypePtr scanType) = 0;
+
+  virtual void recordJoinSample(const std::string& key, float lr, float rl) = 0;
+
+  virtual std::pair<float, float> sampleJoin(JoinEdge* edge) = 0;
+
+  /// Returns the history record for the plan fragment represented in 'key'.
+  /// nullptr if not recorded.
+  virtual NodePrediction* getHistory(const std::string key) = 0;
+
+  virtual void setHistory(const std::string& key, NodePrediction history) = 0;
 
   virtual void recordLeafSelectivity(
       const std::string& handle,
@@ -79,5 +97,15 @@ float selfCost(ExprCP expr);
 /// Returns the per row cost of 'expr' and its subexpressions, excluding
 /// 'notCounting', which represents already computed subtrees of 'expr'.
 float costWithChildren(ExprCP expr, const PlanObjectSet& notCounting);
+
+/// Samples the join of 'left' and 'right' on 'leftKeys' and
+/// 'rightKeys'. Returns the number of hits on the right for one row
+/// of left and the number of hits on the left for one row on the
+/// right.
+std::pair<float, float> sampleJoin(
+    SchemaTableCP left,
+    const ExprVector& leftKeys,
+    SchemaTableCP right,
+    const ExprVector& rightColumns);
 
 } // namespace facebook::velox::optimizer

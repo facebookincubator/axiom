@@ -420,18 +420,34 @@ class VeloxRunner {
     }
   }
 
-  std::string planCostString(
+  const OperatorStats* findOperatorStats(
+      const TaskStats& taskStats,
+      const core::PlanNodeId& id) {
+    for (auto& p : taskStats.pipelineStats) {
+      for (auto& o : p.operatorStats) {
+        if (o.planNodeId == id) {
+          return &o;
+        }
+      }
+    }
+    return nullptr;
+  }
+
+  std::string predictionString(
       const core::PlanNodeId& id,
-      const facebook::velox::optimizer::Optimization::PlanCostMap& estimates) {
-    auto it = estimates.find(id);
-    if (it == estimates.end()) {
+      const TaskStats& taskStats,
+      const optimizer::NodePredictionMap& prediction) {
+    auto it = prediction.find(id);
+    if (it == prediction.end()) {
       return "";
     }
-    std::stringstream out;
-    for (auto& pair : it->second) {
-      out << pair.first << ": " << pair.second.toString(true);
+    auto* operatorStats = findOperatorStats(taskStats, id);
+    if (!operatorStats) {
+      return fmt::format("*** missing stats for {}", id);
     }
-    return out.str();
+    auto predicted = it->second.cardinality;
+    auto actual = operatorStats->outputPositions;
+    return fmt::format("predicted={} actual={} ", predicted, actual);
   }
 
   /// Runs a query and returns the result as a single vector in *resultVector,
@@ -471,7 +487,6 @@ class VeloxRunner {
       }
       return nullptr;
     }
-    facebook::velox::optimizer::Optimization::PlanCostMap estimates;
     MultiFragmentPlan::Options opts;
     opts.numWorkers = FLAGS_num_workers;
     opts.numDrivers = FLAGS_num_drivers;
@@ -483,14 +498,20 @@ class VeloxRunner {
     facebook::velox::optimizer::queryCtx() = context.get();
     exec::SimpleExpressionEvaluator evaluator(
         queryCtx.get(), optimizerPool_.get());
-    MultiFragmentPlanPtr fragmentedPlan;
+    optimizer::PlanAndStats planAndStats;
     try {
       facebook::velox::optimizer::Schema veraxSchema(
           "test", schema_.get(), &locus);
       optimizer::OptimizerOptions optimizerOpts = {
           .traceFlags = FLAGS_optimizer_trace};
       optimizer::Optimization opt(
-          *plan, veraxSchema, *history_, evaluator, optimizerOpts);
+          *plan,
+          veraxSchema,
+          *history_,
+          queryCtx,
+          evaluator,
+          optimizerOpts,
+          opts);
       auto best = opt.bestPlan();
       if (planString) {
         *planString = best->op->toString(true, false);
@@ -498,10 +519,7 @@ class VeloxRunner {
       if (FLAGS_print_plan) {
         std::cout << "Plan: " << best->toString(true);
       }
-      if (FLAGS_print_stats) {
-        estimates = opt.planCostMap();
-      }
-      fragmentedPlan = opt.toVeloxPlan(best->op, opts);
+      planAndStats = opt.toVeloxPlan(best->op, opts);
     } catch (const std::exception& e) {
       facebook::velox::optimizer::queryCtx() = nullptr;
       std::cerr << "optimizer error: " << e.what() << std::endl;
@@ -514,7 +532,7 @@ class VeloxRunner {
     RunStats runStats;
     try {
       runner = std::make_shared<LocalRunner>(
-          fragmentedPlan,
+          planAndStats.plan,
           queryCtx,
           std::make_shared<connector::ConnectorSplitSourceFactory>());
       std::vector<RowVectorPtr> results;
@@ -528,7 +546,7 @@ class VeloxRunner {
       if (statsReturn) {
         *statsReturn = stats;
       }
-      auto& fragments = fragmentedPlan->fragments();
+      auto& fragments = planAndStats.plan->fragments();
       for (int32_t i = fragments.size() - 1; i >= 0; --i) {
         for (auto& pipeline : stats[i].pipelineStats) {
           auto& first = pipeline.operatorStats[0];
@@ -542,11 +560,13 @@ class VeloxRunner {
               *fragments[i].fragment.planNode,
               stats[i],
               FLAGS_include_custom_stats,
-              [&](auto id) { return planCostString(id, estimates); });
+              [&](auto id) {
+                return predictionString(id, stats[i], planAndStats.prediction);
+              });
           std::cout << std::endl;
         }
       }
-      history_->recordVeloxExecution(nullptr, fragments, stats);
+      history_->recordVeloxExecution(planAndStats, stats);
       std::cout << numRows << " rows " << runStats.toString(false) << std::endl;
     } catch (const std::exception& e) {
       std::cerr << "Query terminated with: " << e.what() << std::endl;
@@ -563,7 +583,7 @@ class VeloxRunner {
   void waitForCompletion(const std::shared_ptr<LocalRunner>& runner) {
     if (runner) {
       try {
-        runner->waitForCompletion(50000);
+        runner->waitForCompletion(500000);
       } catch (const std::exception& /*ignore*/) {
       }
     }
