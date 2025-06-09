@@ -858,6 +858,7 @@ core::PlanNodePtr Optimization::makeFragment(
     case RelType::kTableScan: {
       columnAlteredTypes_.clear();
       auto scan = op->as<TableScan>();
+      bool isSubfieldPushdown = hasSubfieldPushdown(scan);
       auto handlePair = leafHandle(scan->baseTable->id());
       if (!handlePair.first) {
         filterUpdated(scan->baseTable, false);
@@ -879,7 +880,7 @@ core::PlanNodePtr Optimization::makeFragment(
         // No correlation name in scan output if pushed down subfield projection
         // follows.
         auto scanColumnName =
-            opts_.pushdownSubfields ? column->name() : column->toString();
+            isSubfieldPushdown ? column->name() : column->toString();
         assignments[scanColumnName] = std::const_pointer_cast<
             connector::ColumnHandle>(
             scan->index->layout->connector()->metadata()->createColumnHandle(

@@ -383,7 +383,9 @@ void QueryTestBase::assertSame(
 
   exec::test::assertEqualResults(
       referenceResult.results, experimentResult.results);
-  *referenceReturn = referenceResult;
+  if (referenceReturn) {
+    *referenceReturn = referenceResult;
+  }
 }
 
 } // namespace facebook::velox::optimizer::test
