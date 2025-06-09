@@ -173,10 +173,12 @@ bool JoinEdge::isBroadcastableType() const {
   return !leftOptional_;
 }
 
-void JoinEdge::addEquality(ExprCP left, ExprCP right) {
+void JoinEdge::addEquality(ExprCP left, ExprCP right, bool update) {
   leftKeys_.push_back(left);
   rightKeys_.push_back(right);
-  guessFanout();
+  if (update) {
+    guessFanout();
+  }
 }
 
 std::pair<std::string, bool> JoinEdge::sampleKey() const {
@@ -1068,10 +1070,6 @@ void DerivedTable::distributeConjuncts() {
       }
     }
   }
-  // Re-guess fanouts after all single table filters are pushed down.
-  for (auto& join : joins) {
-    join->guessFanout();
-  }
 }
 
 void DerivedTable::makeInitialPlan() {
@@ -1087,9 +1085,12 @@ void DerivedTable::makeInitialPlan() {
   if (it != optimization->memo().end()) {
     found = true;
   }
-  distributeConjuncts();
   addImpliedJoins();
+  distributeConjuncts();
   linkTablesToJoins();
+  for (auto& join : joins) {
+    join->guessFanout();
+  }
   setStartTables();
   PlanState state(*optimization, this);
   for (auto expr : exprs) {
@@ -1160,8 +1161,8 @@ void JoinEdge::guessFanout() {
     lrFanout_ = right.joinCardinality * baseSelectivity(rightTable_);
     rlFanout_ = left.joinCardinality * baseSelectivity(leftTable_);
   } else {
-    lrFanout_ = samplePair.first * baseSelectivity(rightTable_);
-    rlFanout_ = samplePair.second * baseSelectivity(leftTable_);
+    lrFanout_ = samplePair.second * baseSelectivity(rightTable_);
+    rlFanout_ = samplePair.first * baseSelectivity(leftTable_);
   }
   // If one side is unique, the other side is a pk to fk join, with fanout =
   // fk-table-card / pk-table-card.

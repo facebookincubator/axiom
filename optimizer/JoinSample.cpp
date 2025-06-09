@@ -261,7 +261,7 @@ std::pair<float, float> sampleJoin(
   auto leftFreq = leftRun->move();
   auto rightFreq = rightRun->move();
   return std::make_pair(
-      freqs(*leftFreq, *rightFreq), freqs(*rightFreq, *leftFreq));
+      freqs(*rightFreq, *leftFreq), freqs(*leftFreq, *rightFreq));
 }
 
 } // namespace facebook::velox::optimizer

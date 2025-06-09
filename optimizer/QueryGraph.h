@@ -549,7 +549,7 @@ class JoinEdge {
     return rightOptional_;
   }
 
-  void addEquality(ExprCP left, ExprCP right);
+  void addEquality(ExprCP left, ExprCP right, bool update = false);
 
   /// True if inner join.
   bool isInner() const {

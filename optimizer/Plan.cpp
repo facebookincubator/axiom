@@ -89,6 +89,9 @@ Optimization::Optimization(
   root_->distributeConjuncts();
   root_->addImpliedJoins();
   root_->linkTablesToJoins();
+  for (auto& join : root_->joins) {
+    join->guessFanout();
+  }
   setDerivedTableOutput(root_, inputPlan_);
 }
 
@@ -468,7 +471,7 @@ JoinCandidate reducingJoins(
         state,
         candidate.tables[0],
         1,
-        10,
+        1.2,
         path,
         reducingSet,
         exists,
