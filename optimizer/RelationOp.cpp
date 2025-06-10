@@ -145,7 +145,7 @@ const std::string& TableScan::historyKey() const {
     return key_;
   }
   std::stringstream out;
-  out << "{scaæn " << baseTable->schemaTable->name << "(";
+  out << "{scan " << baseTable->schemaTable->name << "(";
   auto* opt = queryCtx()->optimization();
   ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
   for (auto& key : keys) {
