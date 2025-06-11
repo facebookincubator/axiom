@@ -36,7 +36,8 @@ LocalHiveSplitManager::listPartitions(
 
 std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
     const ConnectorTableHandlePtr& tableHandle,
-    std::vector<std::shared_ptr<const PartitionHandle>> partitions) {
+    std::vector<std::shared_ptr<const PartitionHandle>> partitions,
+    SplitOptions options) {
   // Since there are only unpartitioned tables now, always makes a SplitSource
   // that goes over all the files in the handle's layout.
   auto tableName = tableHandle->name();
@@ -48,9 +49,16 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
   VELOX_CHECK_NOT_NULL(layout);
   auto files = layout->files();
   return std::make_shared<LocalHiveSplitSource>(
-      files, 2, layout->fileFormat(), layout->connector()->connectorId());
+      files, layout->fileFormat(), layout->connector()->connectorId(), options);
 }
 
+namespace {
+// Integer division that rounds up if remainder is non-zero.
+template <typename T>
+T ceil2(T x, T y) {
+  return (x + y - 1) / y;
+}
+} // namespace
 std::vector<SplitSource::SplitAndGroup> LocalHiveSplitSource::getSplits(
     uint64_t targetBytes) {
   std::vector<SplitAndGroup> result;
@@ -72,9 +80,11 @@ std::vector<SplitSource::SplitAndGroup> LocalHiveSplitSource::getSplits(
       currentSplit_ = 0;
       auto filePath = files_[currentFile_];
       const auto fileSize = fs::file_size(filePath);
+      int64_t splitsPerFile =
+          ceil2<uint64_t>(fileSize, options_.fileBytesPerSplit);
       // Take the upper bound.
-      const int splitSize = std::ceil((fileSize) / splitsPerFile_);
-      for (int i = 0; i < splitsPerFile_; ++i) {
+      const int64_t splitSize = ceil2<uint64_t>(fileSize, splitsPerFile);
+      for (int i = 0; i < splitsPerFile; ++i) {
         fileSplits_.push_back(
             connector::hive::HiveConnectorSplitBuilder(filePath)
                 .connectorId(connectorId_)

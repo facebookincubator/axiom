@@ -189,6 +189,12 @@ void VeloxHistory::recordVeloxExecution(
   for (auto& task : stats) {
     for (auto& pipeline : task.pipelineStats) {
       for (auto& op : pipeline.operatorStats) {
+        if (op.operatorType == "HashBuild") {
+          // Build has same PlanNodeId as probe and never has
+          // output. Build cardinality is recorded as the output of
+          // the previous node.
+          continue;
+        }
         auto it = plan.prediction.find(op.planNodeId);
         auto keyIt = plan.history.find(op.planNodeId);
         if (keyIt == plan.history.end()) {

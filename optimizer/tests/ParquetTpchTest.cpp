@@ -127,10 +127,14 @@ void ParquetTpchTest::saveTpchTablesAsParquet() {
           exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
               kTpchConnectorId, numSplits, nthSplit)));
     }
+    int32_t numDrivers =
+        std::min<int32_t>(numSplits, std::thread::hardware_concurrency());
+    LOG(INFO) << "Creating dataset SF=" << FLAGS_tpch_scale
+              << " numSplits=" << numSplits << " numDrivers=" << numDrivers
+              << " hw concurrency=" << std::thread::hardware_concurrency();
     auto rows = AssertQueryBuilder(plan)
                     .splits(std::move(splits))
-                    .maxDrivers(std::min<int32_t>(
-                        numSplits, std::thread::hardware_concurrency()))
+                    .maxDrivers(numDrivers)
                     .copyResults(pool.get());
   }
 }

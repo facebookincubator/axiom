@@ -411,6 +411,12 @@ class SplitSource {
   virtual std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) = 0;
 };
 
+// Specifies  options for split generation.
+struct SplitOptions {
+  bool wholeFile{false};
+  uint64_t fileBytesPerSplit{128LL << 20};
+};
+
 class ConnectorSplitManager {
  public:
   virtual ~ConnectorSplitManager() = default;
@@ -426,7 +432,8 @@ class ConnectorSplitManager {
   /// cluster.
   virtual std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorTableHandlePtr& tableHandle,
-      std::vector<std::shared_ptr<const PartitionHandle>> partitions) = 0;
+      std::vector<std::shared_ptr<const PartitionHandle>> partitions,
+      SplitOptions = {}) = 0;
 };
 
 using SubfieldPtr = std::shared_ptr<const common::Subfield>;
