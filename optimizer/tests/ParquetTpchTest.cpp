@@ -131,7 +131,7 @@ void ParquetTpchTest::saveTpchTablesAsParquet() {
         std::min<int32_t>(numSplits, std::thread::hardware_concurrency());
     LOG(INFO) << "Creating dataset SF=" << FLAGS_tpch_scale
               << " numSplits=" << numSplits
-              << " numDrivers=" << numDriverrs " hw concurrency="
+              << " numDrivers=" << numDrivers << " hw concurrency="
               << std::thread::hardware_concurrency();
     auto rows = AssertQueryBuilder(plan)
                     .splits(std::move(splits))

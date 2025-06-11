@@ -38,7 +38,7 @@ ConnectorSplitSourceFactory::splitSourceForScan(
   auto partitions =
       connector->metadata()->splitManager()->listPartitions(handle);
   auto source =
-      connector->metadata()->splitManager()->getSplitSource(handle, partitions);
+    connector->metadata()->splitManager()->getSplitSource(handle, partitions, options_);
   return std::make_shared<ConnectorSplitSource>(std::move(source));
 }
 

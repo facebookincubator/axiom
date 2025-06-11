@@ -119,7 +119,7 @@ DEFINE_int32(num_drivers, 4, "Number of drivers");
 DEFINE_int32(num_workers, 4, "Number of in-process workers");
 
 DEFINE_string(data_format, "parquet", "Data format");
-DEFINE_int32(num_splits_per_file, 10, "Number of splits per file");
+DEFINE_int64(split_target_bytes, 16 << 20, "Approx bytes covered by one split");
 DEFINE_int32(
     cache_gb,
     0,
@@ -315,7 +315,7 @@ class VeloxRunner {
         });
     history_ = std::make_unique<facebook::velox::optimizer::VeloxHistory>();
     executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(
-        FLAGS_num_drivers * 2 + 2);
+							       std::max<int32_t>(std::thread::hardware_concurrency() * 2, FLAGS_num_workers * FLAGS_num_drivers * 2 + 2));
     spillExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(4);
   }
 
@@ -558,10 +558,11 @@ class VeloxRunner {
     facebook::velox::optimizer::queryCtx() = nullptr;
     RunStats runStats;
     try {
+      connector::SplitOptions splitOptions{.fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
       runner = std::make_shared<LocalRunner>(
           planAndStats.plan,
           queryCtx,
-          std::make_shared<connector::ConnectorSplitSourceFactory>());
+          std::make_shared<connector::ConnectorSplitSourceFactory>(splitOptions));
       std::vector<RowVectorPtr> results;
       runInner(*runner, results, runStats);
 
@@ -759,7 +760,7 @@ void readCommands(
       continue;
     }
     auto cstr = command.c_str();
-    if (strncpy("help", cstr, 4) == 0) {
+    if (command.substr(0, 4) == "help") {
       std::cout << helpText;
       continue;
     }

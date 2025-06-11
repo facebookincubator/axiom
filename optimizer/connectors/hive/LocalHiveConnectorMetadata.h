@@ -30,10 +30,10 @@ class LocalHiveSplitSource : public SplitSource {
  public:
   LocalHiveSplitSource(
       std::vector<std::string> files,
-      int32_t splitsPerFile,
       dwio::common::FileFormat format,
-      const std::string& connectorId)
-      : splitsPerFile_(splitsPerFile),
+      const std::string& connectorId,
+      SplitOptions options)
+      : options_(options),
         format_(format),
         connectorId_(connectorId),
         files_(files) {}
@@ -42,7 +42,7 @@ class LocalHiveSplitSource : public SplitSource {
       uint64_t targetBytes) override;
 
  private:
-  const int32_t splitsPerFile_;
+  const SplitOptions options_;
   const dwio::common::FileFormat format_;
   const std::string connectorId_;
   std::vector<std::string> files_;
@@ -61,7 +61,8 @@ class LocalHiveSplitManager : public ConnectorSplitManager {
 
   std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorTableHandlePtr& tableHandle,
-      std::vector<std::shared_ptr<const PartitionHandle>> partitions) override;
+      std::vector<std::shared_ptr<const PartitionHandle>> partitions,
+      SplitOptions options = {}) override;
 };
 
 /// A HiveTableLayout backed by local files. Implements sampling by reading
