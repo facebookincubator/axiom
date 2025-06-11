@@ -92,7 +92,7 @@ class ParallelProject : public Operator {
       DriverCtx* driverCtx,
       const std::shared_ptr<const ParallelProjectNode>& node);
 
-  bool isFilter() const override {
+  bool canHaveLazyOutputVectors() const override {
     return false;
   }
 
