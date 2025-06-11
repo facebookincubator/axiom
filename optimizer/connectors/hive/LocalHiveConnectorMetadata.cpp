@@ -25,7 +25,7 @@
 #include "velox/expression/Expr.h"
 
 namespace facebook::velox::connector::hive {
-  
+
 std::vector<std::shared_ptr<const PartitionHandle>>
 LocalHiveSplitManager::listPartitions(
     const ConnectorTableHandlePtr& tableHandle) {
@@ -49,16 +49,16 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
   VELOX_CHECK_NOT_NULL(layout);
   auto files = layout->files();
   return std::make_shared<LocalHiveSplitSource>(
-						files, layout->fileFormat(), layout->connector()->connectorId(), options);
+      files, layout->fileFormat(), layout->connector()->connectorId(), options);
 }
 
-  namespace {
-    // Integer division that rounds up if remainder is non-zero.
-    template <typename T>
-  T ceil2(T x, T y) {
-    return (x + y - 1) / y;
-  }
-  }
+namespace {
+// Integer division that rounds up if remainder is non-zero.
+template <typename T>
+T ceil2(T x, T y) {
+  return (x + y - 1) / y;
+}
+} // namespace
 std::vector<SplitSource::SplitAndGroup> LocalHiveSplitSource::getSplits(
     uint64_t targetBytes) {
   std::vector<SplitAndGroup> result;
@@ -80,9 +80,10 @@ std::vector<SplitSource::SplitAndGroup> LocalHiveSplitSource::getSplits(
       currentSplit_ = 0;
       auto filePath = files_[currentFile_];
       const auto fileSize = fs::file_size(filePath);
-      int64_t splitsPerFile = ceil2<uint64_t>(fileSize, options_.fileBytesPerSplit); 
+      int64_t splitsPerFile =
+          ceil2<uint64_t>(fileSize, options_.fileBytesPerSplit);
       // Take the upper bound.
-      const int64_t splitSize = ceil2<uint64_t>(fileSize,  splitsPerFile);
+      const int64_t splitSize = ceil2<uint64_t>(fileSize, splitsPerFile);
       for (int i = 0; i < splitsPerFile; ++i) {
         fileSplits_.push_back(
             connector::hive::HiveConnectorSplitBuilder(filePath)

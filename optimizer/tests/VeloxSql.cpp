@@ -175,26 +175,24 @@ struct RunStats {
 };
 
 const char* helpText =
-  "Velox Interactive SQL\n"
-"\n"
-"Type SQL and end with ';'.\n"
-"To set a flag, type 'flag <gflag_name> = <valu>;' Leave a space on either side of '='.\n"
-"\n"
-"Useful flags:\n"
-"\n"
-"num_workers - Make a distributed plan for this many workers. Runs it in-process with remote exchanges with serialization and passing data in memory. If num_workers is 1, makes single node plans without remote exchanges.\n"
-"\n"
-"num_drivers - Specifies the parallelism for workers. This many threads per pipeline per worker.\n"
-"\n"
-"print_short_plan - Prints a one line summary of join order.\n"
-"\n"
-"print_plan - Prints optimizer best plan with per operator cardinalities and costs.\n"
-"\n"
-"print_stats - Prints the Velox stats of after execution. Annotates operators with predicted and acttual output cardinality.\n"
-  "\n"
-"include_custom_stats - Prints per operator runtime stats.\n"
-  ;
-
+    "Velox Interactive SQL\n"
+    "\n"
+    "Type SQL and end with ';'.\n"
+    "To set a flag, type 'flag <gflag_name> = <valu>;' Leave a space on either side of '='.\n"
+    "\n"
+    "Useful flags:\n"
+    "\n"
+    "num_workers - Make a distributed plan for this many workers. Runs it in-process with remote exchanges with serialization and passing data in memory. If num_workers is 1, makes single node plans without remote exchanges.\n"
+    "\n"
+    "num_drivers - Specifies the parallelism for workers. This many threads per pipeline per worker.\n"
+    "\n"
+    "print_short_plan - Prints a one line summary of join order.\n"
+    "\n"
+    "print_plan - Prints optimizer best plan with per operator cardinalities and costs.\n"
+    "\n"
+    "print_stats - Prints the Velox stats of after execution. Annotates operators with predicted and acttual output cardinality.\n"
+    "\n"
+    "include_custom_stats - Prints per operator runtime stats.\n";
 
 class VeloxRunner {
  public:
@@ -314,8 +312,10 @@ class VeloxRunner {
           return toTableScan(id, name, rowType, columnNames);
         });
     history_ = std::make_unique<facebook::velox::optimizer::VeloxHistory>();
-    executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(
-							       std::max<int32_t>(std::thread::hardware_concurrency() * 2, FLAGS_num_workers * FLAGS_num_drivers * 2 + 2));
+    executor_ =
+        std::make_shared<folly::CPUThreadPoolExecutor>(std::max<int32_t>(
+            std::thread::hardware_concurrency() * 2,
+            FLAGS_num_workers * FLAGS_num_drivers * 2 + 2));
     spillExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(4);
   }
 
@@ -558,11 +558,13 @@ class VeloxRunner {
     facebook::velox::optimizer::queryCtx() = nullptr;
     RunStats runStats;
     try {
-      connector::SplitOptions splitOptions{.fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
+      connector::SplitOptions splitOptions{
+          .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
       runner = std::make_shared<LocalRunner>(
           planAndStats.plan,
           queryCtx,
-          std::make_shared<connector::ConnectorSplitSourceFactory>(splitOptions));
+          std::make_shared<connector::ConnectorSplitSourceFactory>(
+              splitOptions));
       std::vector<RowVectorPtr> results;
       runInner(*runner, results, runStats);
 

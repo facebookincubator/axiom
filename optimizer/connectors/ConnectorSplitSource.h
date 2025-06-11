@@ -36,12 +36,12 @@ class ConnectorSplitSource : public runner::SplitSource {
 /// Generic SplitSourceFactory that delegates the work to ConnectorMetadata.
 class ConnectorSplitSourceFactory : public runner::SplitSourceFactory {
  public:
-  ConnectorSplitSourceFactory(SplitOptions options = {})
-    : options_(options) {}
-  
+  ConnectorSplitSourceFactory(SplitOptions options = {}) : options_(options) {}
+
   std::shared_ptr<runner::SplitSource> splitSourceForScan(
       const core::TableScanNode& scan) override;
-protected:
+
+ protected:
   SplitOptions options_;
 };
 

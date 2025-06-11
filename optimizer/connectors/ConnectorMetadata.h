@@ -411,12 +411,12 @@ class SplitSource {
   virtual std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) = 0;
 };
 
-  // Specifies  options for split generation.  
+// Specifies  options for split generation.
 struct SplitOptions {
   bool wholeFile{false};
   uint64_t fileBytesPerSplit{128LL << 20};
 };
-  
+
 class ConnectorSplitManager {
  public:
   virtual ~ConnectorSplitManager() = default;
