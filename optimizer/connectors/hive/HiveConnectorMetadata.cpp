@@ -76,7 +76,13 @@ ConnectorTableHandlePtr HiveConnectorMetadata::createTableHandle(
         remainingConjuncts.push_back(std::move(typedExpr));
         continue;
       }
-      subfieldFilters[std::move(pair.first)] = std::move(pair.second);
+      auto it = subfieldFilters.find(pair.first);
+      if (it != subfieldFilters.end()) {
+        auto merged = it->second->mergeWith(pair.second.get());
+        subfieldFilters[std::move(pair.first)] = std::move(merged);
+      } else {
+        subfieldFilters[std::move(pair.first)] = std::move(pair.second);
+      }
     } catch (const std::exception&) {
       remainingConjuncts.push_back(std::move(typedExpr));
     }
