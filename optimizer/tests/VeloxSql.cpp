@@ -35,6 +35,7 @@
 #include "optimizer/SchemaResolver.h" //@manual
 #include "optimizer/VeloxHistory.h" //@manual
 #include "optimizer/connectors/ConnectorSplitSource.h" //@manual
+#include "velox/benchmarks/QueryBenchmarkBase.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -57,19 +58,6 @@ using namespace facebook::velox::dwio::common;
 namespace {
 static bool notEmpty(const char* /*flagName*/, const std::string& value) {
   return !value.empty();
-}
-
-static bool validateDataFormat(const char* flagname, const std::string& value) {
-  if ((value.compare("parquet") == 0) || (value.compare("dwrf") == 0)) {
-    return true;
-  }
-  std::cout
-      << fmt::format(
-             "Invalid value for --{}: {}. Allowed values are [\"parquet\", \"dwrf\"]",
-             flagname,
-             value)
-      << std::endl;
-  return false;
 }
 
 int32_t printResults(const std::vector<RowVectorPtr>& results) {
@@ -96,12 +84,9 @@ DEFINE_string(
     "",
     "Root path of data. Data layout must follow Hive-style partitioning. ");
 
-DEFINE_string(ssd_path, "", "Directory for local SSD cache");
-DEFINE_int32(ssd_cache_gb, 0, "Size of local SSD cache in GB");
-DEFINE_int32(
-    ssd_checkpoint_interval_gb,
-    8,
-    "Make a checkpoint after every n GB added to SSD cache");
+DECLARE_string(ssd_path);
+DECLARE_int32(ssd_cache_gb);
+DECLARE_int32(ssd_checkpoint_interval_gb);
 
 DEFINE_int32(optimizer_trace, 0, "Optimizer trace level");
 
@@ -110,22 +95,17 @@ DEFINE_bool(print_plan, false, "Print optimizer results");
 DEFINE_bool(print_short_plan, false, "Print one line plan from optimizer.");
 
 DEFINE_bool(print_stats, false, "print statistics");
-DEFINE_bool(
-    include_custom_stats,
-    false,
-    "Include custom statistics along with execution statistics");
+DECLARE_bool(include_custom_stats);
+
 DEFINE_int32(max_rows, 100, "Max number of printed result rows");
-DEFINE_int32(num_drivers, 4, "Number of drivers");
+
 DEFINE_int32(num_workers, 4, "Number of in-process workers");
 
-DEFINE_string(data_format, "parquet", "Data format");
+DECLARE_int32(num_drivers);
 DEFINE_int64(split_target_bytes, 16 << 20, "Approx bytes covered by one split");
-DEFINE_int32(
-    cache_gb,
-    0,
-    "GB of process memory for cache and query.. if "
-    "non-0, uses mmap to allocator and in-process data cache.");
-DEFINE_int32(num_repeats, 1, "Number of times to run --query");
+
+DECLARE_int32(cache_gb);
+
 DEFINE_string(
     query,
     "",
@@ -143,36 +123,6 @@ DEFINE_string(
     "compares with <name>.ref, previously recorded with --record");
 
 DEFINE_validator(data_path, &notEmpty);
-DEFINE_validator(data_format, &validateDataFormat);
-
-struct RunStats {
-  std::map<std::string, std::string> flags;
-  int64_t micros{0};
-  int64_t rawInputBytes{0};
-  int64_t userNanos{0};
-  int64_t systemNanos{0};
-  std::string output;
-
-  std::string toString(bool detail) {
-    std::stringstream out;
-    out << succinctNanos(micros * 1000) << " "
-        << succinctBytes(rawInputBytes / (micros / 1000000.0)) << "/s raw, "
-        << succinctNanos(userNanos) << " user " << succinctNanos(systemNanos)
-        << " system (" << (100 * (userNanos + systemNanos) / (micros * 1000))
-        << "%)";
-    if (!flags.empty()) {
-      out << ", flags: ";
-      for (auto& pair : flags) {
-        out << pair.first << "=" << pair.second << " ";
-      }
-    }
-    out << std::endl << std::endl;
-    if (detail) {
-      out << std::endl << output << std::endl;
-    }
-    return out.str();
-  }
-};
 
 const char* helpText =
     "Velox Interactive SQL\n"
@@ -194,7 +144,12 @@ const char* helpText =
     "\n"
     "include_custom_stats - Prints per operator runtime stats.\n";
 
-class VeloxRunner {
+DEFINE_bool(
+    check_test_flag_combinations,
+    true,
+    "Check that all runs in test_flags_file sweep produce the same result");
+
+class VeloxRunner : public QueryBenchmarkBase {
  public:
   void initialize() {
     if (FLAGS_cache_gb) {
@@ -388,9 +343,9 @@ class VeloxRunner {
       std::string error;
       std::string plan;
       std::vector<RowVectorPtr> result;
-      run1(sql, nullptr, nullptr, &error);
+      runSql(sql, nullptr, nullptr, &error);
       if (error.empty()) {
-        run1(sql, &result, &plan, &error);
+        runSql(sql, &result, &plan, &error);
       }
       if (record_) {
         if (!error.empty()) {
@@ -440,7 +395,23 @@ class VeloxRunner {
         }
       }
     } else {
-      run1(sql);
+      if (!FLAGS_test_flags_file.empty()) {
+        sql_ = sql;
+        try {
+          parameters_.clear();
+          runStats_.clear();
+          runAllCombinations();
+          for (auto& dim : parameters_) {
+            modifiedFlags_.insert(dim.flag);
+          }
+        } catch (const std::exception& e) {
+        }
+        hasReferenceResult_ = false;
+        referenceResult_.clear();
+        referenceRunner_.reset();
+      } else {
+        runSql(sql);
+      }
     }
   }
 
@@ -477,12 +448,13 @@ class VeloxRunner {
   /// Runs a query and returns the result as a single vector in *resultVector,
   /// the plan text in *planString and the error message in *errorString.
   /// *errorString is not set if no error. Any of these may be nullptr.
-  std::shared_ptr<LocalRunner> run1(
+  std::shared_ptr<LocalRunner> runSql(
       const std::string& sql,
       std::vector<RowVectorPtr>* resultVector = nullptr,
       std::string* planString = nullptr,
       std::string* errorString = nullptr,
-      std::vector<exec::TaskStats>* statsReturn = nullptr) {
+      std::vector<exec::TaskStats>* statsReturn = nullptr,
+      RunStats* runStatsReturn = nullptr) {
     std::shared_ptr<LocalRunner> runner;
     std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
         connectorConfigs;
@@ -607,7 +579,28 @@ class VeloxRunner {
       return nullptr;
     }
     waitForCompletion(runner);
+    if (runStatsReturn) {
+      *runStatsReturn = runStats;
+    }
     return runner;
+  }
+
+  void runMain(std::ostream& out, RunStats& runStats) override {
+    std::vector<RowVectorPtr> result;
+    auto runner = runSql(sql_, &result, nullptr, nullptr, nullptr, &runStats);
+    if (FLAGS_check_test_flag_combinations) {
+      if (hasReferenceResult_) {
+        exec::test::assertEqualResults(referenceResult_, result);
+        result.clear();
+      } else {
+        hasReferenceResult_ = true;
+        referenceResult_ = std::move(result);
+        referenceRunner_ = std::move(runner);
+      }
+    } else {
+      // Must clear before 'runner' goes out of scope.
+      result.clear();
+    }
   }
 
   void waitForCompletion(const std::shared_ptr<LocalRunner>& runner) {
@@ -629,6 +622,14 @@ class VeloxRunner {
       return 0;
     }
     return numResultMismatch_ ? 2 : 1;
+  }
+
+  std::unordered_map<std::string, std::string>& sessionConfig() {
+    return config_;
+  }
+
+  std::set<std::string>& modifiedFlags() {
+    return modifiedFlags_;
   }
 
  private:
@@ -721,7 +722,6 @@ class VeloxRunner {
   std::shared_ptr<optimizer::SchemaResolver> schema_;
   std::unique_ptr<facebook::velox::optimizer::VeloxHistory> history_;
   std::unique_ptr<core::DuckDbQueryPlanner> planner_;
-  std::unordered_map<std::string, std::string> config_;
   std::unordered_map<std::string, std::string> hiveConfig_;
   std::ofstream* record_{nullptr};
   std::ifstream* check_{nullptr};
@@ -730,6 +730,13 @@ class VeloxRunner {
   int32_t numPlanMismatch_{0};
   int32_t numResultMismatch_{0};
   int32_t queryCounter_{0};
+  std::string sql_;
+  bool hasReferenceResult_;
+  // Keeps live 'referenceResult_'.
+  std::shared_ptr<runner::LocalRunner> referenceRunner_;
+  // Result from first run of flag value sweep.
+  std::vector<RowVectorPtr> referenceResult_;
+  std::set<std::string> modifiedFlags_;
 };
 
 std::string readCommand(std::istream& in, bool& end) {
@@ -769,13 +776,44 @@ void readCommands(
     char* flag = nullptr;
     char* value = nullptr;
     if (sscanf(cstr, "flag %ms = %ms", &flag, &value) == 2) {
-      std::cout << gflags::SetCommandLineOption(flag, value);
+      auto message = gflags::SetCommandLineOption(flag, value);
+      if (!message.empty()) {
+        std::cout << message;
+        runner.modifiedFlags().insert(std::string(flag));
+      } else {
+        std::cout << "No flag " << flag;
+      }
       free(flag);
       free(value);
       continue;
     }
+    if (command == "flags") {
+      std::cout << "Modified flags:\n";
+      for (auto& name : runner.modifiedFlags()) {
+        std::string value;
+        if (gflags::GetCommandLineOption(name.c_str(), &value)) {
+          std::cout << name << " = " << value << std::endl;
+        }
+      }
+      continue;
+    }
+    if (sscanf(cstr, "session %ms = %ms", &flag, &value) == 2) {
+      std::cout << "session " << flag << " set to " << value << std::endl;
+      runner.sessionConfig()[std::string(flag)] = std::string(value);
+      free(flag);
+      free(value);
+      continue;
+    }
+
     runner.run(command);
   }
+}
+
+void initCommands(VeloxRunner& runner) {
+  auto* home = getenv("HOME");
+  std::string homeDir = home ? std::string(home) : std::string(".");
+  std::ifstream in(homeDir + "/.vsql");
+  readCommands(runner, "", in);
 }
 
 void recordQueries(VeloxRunner& runner) {
@@ -811,6 +849,7 @@ int main(int argc, char** argv) {
   VeloxRunner runner;
   try {
     runner.initialize();
+    initCommands(runner);
     if (!FLAGS_query.empty()) {
       runner.run(FLAGS_query);
     } else if (!FLAGS_record.empty()) {
