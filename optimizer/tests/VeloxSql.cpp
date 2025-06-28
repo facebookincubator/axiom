@@ -106,6 +106,8 @@ DEFINE_int64(split_target_bytes, 16 << 20, "Approx bytes covered by one split");
 
 DECLARE_int32(cache_gb);
 
+DEFINE_bool(use_mmap, false, "Use mmap for buffers and cache");
+
 DEFINE_string(
     query,
     "",
@@ -155,7 +157,7 @@ class VeloxRunner : public QueryBenchmarkBase {
     if (FLAGS_cache_gb) {
       memory::MemoryManagerOptions options;
       int64_t memoryBytes = FLAGS_cache_gb * (1LL << 30);
-      options.useMmapAllocator = true;
+      options.useMmapAllocator = FLAGS_use_mmap;
       options.allocatorCapacity = memoryBytes;
       options.useMmapArena = true;
       options.mmapArenaCapacityRatio = 1;
@@ -178,7 +180,8 @@ class VeloxRunner : public QueryBenchmarkBase {
           memory::memoryManager()->allocator(), std::move(ssdCache));
       cache::AsyncDataCache::setInstance(cache_.get());
     } else {
-      memory::MemoryManager::testingSetInstance(memory::MemoryManagerOptions{});
+      memory::MemoryManagerOptions options;
+      memory::MemoryManager::testingSetInstance(options);
     }
 
     rootPool_ = memory::memoryManager()->addRootPool("velox_sql");
@@ -400,6 +403,7 @@ class VeloxRunner : public QueryBenchmarkBase {
         try {
           parameters_.clear();
           runStats_.clear();
+	  gflags::FlagSaver save;
           runAllCombinations();
           for (auto& dim : parameters_) {
             modifiedFlags_.insert(dim.flag);
@@ -531,7 +535,8 @@ class VeloxRunner : public QueryBenchmarkBase {
     RunStats runStats;
     try {
       connector::SplitOptions splitOptions{
-          .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
+	.targetSplitCount = FLAGS_num_workers * FLAGS_num_drivers * 2,
+	.fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
       runner = std::make_shared<LocalRunner>(
           planAndStats.plan,
           queryCtx,
@@ -731,7 +736,7 @@ class VeloxRunner : public QueryBenchmarkBase {
   int32_t numResultMismatch_{0};
   int32_t queryCounter_{0};
   std::string sql_;
-  bool hasReferenceResult_;
+  bool hasReferenceResult_{false};
   // Keeps live 'referenceResult_'.
   std::shared_ptr<runner::LocalRunner> referenceRunner_;
   // Result from first run of flag value sweep.
@@ -787,6 +792,16 @@ void readCommands(
       free(value);
       continue;
     }
+    if (sscanf(cstr, "clear %ms", &flag) == 1) {
+      gflags::CommandLineFlagInfo info;
+      if (!gflags::GetCommandLineFlagInfo(flag, &info)) {
+	std::cout << "No flag " << flag << std::endl;
+	continue;
+      }
+      auto message = gflags::SetCommandLineOption(flag, info.default_value.c_str());
+      if (!message.empty()) {
+        std::cout << message;
+
     if (command == "flags") {
       std::cout << "Modified flags:\n";
       for (auto& name : runner.modifiedFlags()) {
