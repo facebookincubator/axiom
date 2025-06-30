@@ -1026,6 +1026,10 @@ bool isJoinEquality(
 void DerivedTable::distributeConjuncts() {
   std::vector<DerivedTableP> changedDts;
   for (auto i = 0; i < conjuncts.size(); ++i) {
+    // No pushdown of non-deterministic.
+    if (conjuncts[i]->containsFunction(FunctionSet::kNondeterministic)) {
+      continue;
+    }
     PlanObjectSet tableSet = conjuncts[i]->allTables();
     std::vector<PlanObjectP> tables;
     tableSet.forEachMutable([&](auto table) { tables.push_back(table); });
@@ -1036,7 +1040,17 @@ void DerivedTable::distributeConjuncts() {
       } else if (tables[0]->type() == PlanType::kDerivedTable) {
         // Translate the column names and add the condition to the conjuncts in
         // the dt.
-        VELOX_NYI();
+	auto innerDt = tables[0]->as<DerivedTable>();
+	auto imported = importExpr(conjuncts[i],columns, innerDt->exprs); 
+	if (imported->containsFunction(FunctionSet::kAggregate)) {
+	  innerDt->having.push_back(imported);
+	} else {
+	  innerDt->conjuncts.push_back(imported);
+	  changedDts.push_back(innerDt);
+	}
+	  conjuncts.erase(conjuncts.begin() + i);
+	--i;
+	continue;
       } else {
         VELOX_CHECK(tables[0]->type() == PlanType::kTable);
         tables[0]->as<BaseTable>()->addFilter(conjuncts[i]);
@@ -1069,6 +1083,9 @@ void DerivedTable::distributeConjuncts() {
         }
       }
     }
+  }
+  for (auto* changed : changedDts) {
+    changed->distributeConjuncts();
   }
 }
 

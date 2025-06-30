@@ -800,8 +800,10 @@ void readCommands(
       }
       auto message = gflags::SetCommandLineOption(flag, info.default_value.c_str());
       if (!message.empty()) {
-        std::cout << message;
-
+	std::cout << message;
+      }
+      continue;
+    }
     if (command == "flags") {
       std::cout << "Modified flags:\n";
       for (auto& name : runner.modifiedFlags()) {

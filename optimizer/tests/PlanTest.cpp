@@ -332,6 +332,35 @@ TEST_F(PlanTest, q22) {
   checkTpch(22);
 }
 
+TEST_F(PlanTest, filterToJoinEdge) {
+  auto orderType = ROW({"o_custkey"}, {BIGINT()});
+  auto customerType = ROW({"c_custkey"}, {BIGINT()});
+  auto nested = exec::test::PlanBuilder()
+                    .tableScan("orders", orderType, {}, {})
+                    .nestedLoopJoin(
+                        exec::test::PlanBuilder()
+                            .tableScan("customer", customerType, {}, {})
+                            .planNode(),
+                        {"o_custkey", "c_custkey"},
+                        core::JoinType::kInner)
+    .filter("c_custkey = o_custkey")
+    .planNode();
+  std::string plan;
+  checkSame(nested, nullptr, &plan);
+}
+
+TEST_F(PlanTest, filterImport) {
+  auto orderType = ROW({"o_custkey"}, {BIGINT()});
+  auto customerType = ROW({"c_custkey"}, {BIGINT()});
+  auto agg = exec::test::PlanBuilder()
+                    .tableScan("orders", orderType, {}, {})
+    .finalAggregation({"o_custkey"}, {"sum(o_totalprice"}, {DOUBLE()})
+    .filter("o_custkey < 100 and a0 > 200.0")
+    .planNode();
+  std::string plan;
+  checkSame(agg, nullptr, &plan);
+}
+
 void printPlan(core::PlanNode* plan, bool r, bool d) {
   std::cout << plan->toString(r, d) << std::endl;
 }

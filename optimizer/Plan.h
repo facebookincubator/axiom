@@ -892,7 +892,7 @@ class Optimization {
   // recursively to make the rest of the plan. Returns false if no
   // unplaced conjuncts were found and and plan construction should
   // proceed.
-  bool placeConjuncts(RelationOpPtr plan, PlanState& state);
+  bool placeConjuncts(RelationOpPtr plan, PlanState& state, bool allowNondeterministic);
 
   // Helper function that calls makeJoins recursively for each of
   // 'nextJoins'. The point of making 'nextJoins' first and only then
