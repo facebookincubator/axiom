@@ -15,6 +15,7 @@
  */
 
 #include "optimizer/tests/ParquetTpchTest.h" //@manual
+#include "velox/connectors/hive/HiveConnector.h"
 
 DEFINE_string(
     data_path,

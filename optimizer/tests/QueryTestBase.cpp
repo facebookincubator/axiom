@@ -148,8 +148,7 @@ core::PlanNodePtr QueryTestBase::toTableScan(
       true,
       common::SubfieldFilters{},
       nullptr);
-  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-      assignments;
+  connector::ColumnHandleMap assignments;
 
   auto table = connector_->metadata()->findTable(name);
   for (auto i = 0; i < rowType->size(); ++i) {

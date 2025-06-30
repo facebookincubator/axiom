@@ -236,10 +236,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
       .maxStringLength = 100, .countDistincts = true, .allocator = allocator};
   std::vector<std::unique_ptr<StatisticsBuilder>> builders;
 
-  std::unordered_map<
-      std::string,
-      std::shared_ptr<velox::connector::ColumnHandle>>
-      columnHandles;
+  velox::connector::ColumnHandleMap columnHandles;
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (auto& field : fields) {
@@ -263,15 +260,11 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
   int64_t passingRows = 0;
   int64_t scannedRows = 0;
   for (auto& file : files_) {
-    // TODO: make createDataSource take a ConnectorTableHandlePtr instead of a
-    // shared_ptr to mutable handle.
-    auto handleCopy =
-        std::const_pointer_cast<connector::ConnectorTableHandle>(tableHandle);
     auto connectorQueryCtx =
         reinterpret_cast<LocalHiveConnectorMetadata*>(connector()->metadata())
             ->connectorQueryCtx();
     auto dataSource = connector()->createDataSource(
-        outputType, handleCopy, columnHandles, connectorQueryCtx.get());
+        outputType, tableHandle, columnHandles, connectorQueryCtx.get());
 
     auto split = connector::hive::HiveConnectorSplitBuilder(file)
                      .fileFormat(fileFormat_)

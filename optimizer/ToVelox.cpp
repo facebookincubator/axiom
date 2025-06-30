@@ -870,8 +870,7 @@ core::PlanNodePtr Optimization::makeFragment(
       }
       ColumnVector scanColumns;
       auto outputType = scanOutputType(scan, scanColumns, columnAlteredTypes_);
-      std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-          assignments;
+      connector::ColumnHandleMap assignments;
       for (auto column : scanColumns) {
         // TODO: Make assignments have a ConnectorTableHandlePtr instead of
         // non-const shared_ptr.
@@ -887,11 +886,7 @@ core::PlanNodePtr Optimization::makeFragment(
                 *scan->index->layout, column->name(), std::move(subfields)));
       }
       auto scanNode = std::make_shared<core::TableScanNode>(
-          nextId(*op),
-          outputType,
-          std::const_pointer_cast<connector::ConnectorTableHandle>(
-              handlePair.first),
-          assignments);
+          nextId(*op), outputType, handlePair.first, assignments);
       VELOX_CHECK(handlePair.second.empty(), "Expecting no rejected filters");
       makePredictionAndHistory(scanNode->id(), scan);
       fragment.scans.push_back(scanNode);
