@@ -366,7 +366,6 @@ TEST_F(PlanTest, filterToJoinEdge) {
                    core::JoinType::kInner)
                .filter("c_custkey + 1 = o_custkey + 1 and random() < 2::DOUBLE")
                .planNode();
-  plan;
   checkSame(nested, nullptr, &plan);
   expectPlan(
       plan,
