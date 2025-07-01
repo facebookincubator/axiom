@@ -781,6 +781,11 @@ void Optimization::addPostprocess(
     state.addCost(*finalAgg);
     plan = finalAgg;
   }
+  if (!dt->having.empty()) {
+    auto filter = make<Filter>(plan, dt->having);
+    state.addCost(*filter);
+    plan = filter;
+  }
   if (dt->orderBy) {
     auto* orderBy = make<OrderBy>(
         plan,
@@ -1497,7 +1502,10 @@ void Optimization::placeDerivedTable(
   }
 }
 
-bool Optimization::placeConjuncts(RelationOpPtr plan, PlanState& state) {
+bool Optimization::placeConjuncts(
+    RelationOpPtr plan,
+    PlanState& state,
+    bool allowNondeterministic) {
   PlanStateSaver save(state);
   ExprVector filters;
   PlanObjectSet columnsAndSingles = state.columns;
@@ -1505,6 +1513,10 @@ bool Optimization::placeConjuncts(RelationOpPtr plan, PlanState& state) {
     columnsAndSingles.unionColumns(object->as<DerivedTable>()->columns);
   });
   for (auto& conjunct : state.dt->conjuncts) {
+    if (!allowNondeterministic &&
+        conjunct->containsFunction(FunctionSet::kNondeterministic)) {
+      continue;
+    }
     if (state.placed.contains(conjunct)) {
       continue;
     }
@@ -1607,11 +1619,14 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
       return;
     }
     // Add multitable filters not associated to a non-inner join.
-    if (placeConjuncts(plan, state)) {
+    if (placeConjuncts(plan, state, false)) {
       return;
     }
     auto candidates = nextJoins(state);
     if (candidates.empty()) {
+      if (placeConjuncts(plan, state, true)) {
+        return;
+      }
       addPostprocess(dt, plan, state);
       auto kept = state.plans.addPlan(plan, state);
       if (kept) {

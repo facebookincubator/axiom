@@ -25,7 +25,7 @@ namespace facebook::velox::optimizer {
 // Returns the cost and cardinality ('unitCost' and 'fanout') for 'conjuncts'.
 Cost filterCost(CPSpan<Expr> conjuncts);
 
-/// Returns 'conjuncts' wit all items that are common between all disjuncts of
+/// Returns 'conjuncts' with all items that are common between all disjuncts of
 /// each OR are pulled to top level.
 ExprVector extractCommonConjuncts(ExprVector conjuncts) {}
 

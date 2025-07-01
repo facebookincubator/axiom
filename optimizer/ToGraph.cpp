@@ -1144,10 +1144,29 @@ PlanObjectP Optimization::addAggregation(
   return currentSelect_;
 }
 
+bool hasNondeterministic(const core::TypedExprPtr& expr) {
+  if (auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get())) {
+    if (functionBits(toName(call->name()))
+            .contains(FunctionSet::kNondeterministic)) {
+      return true;
+    }
+  }
+  for (auto& in : expr->inputs()) {
+    if (hasNondeterministic(in)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 PlanObjectP Optimization::makeQueryGraph(
     const core::PlanNode& node,
     uint64_t allowedInDt) {
   auto name = node.name();
+  if (name == "Filter" && !contains(allowedInDt, PlanType::kFilter)) {
+    return wrapInDt(node);
+  }
+
   if (isJoin(node) && !contains(allowedInDt, PlanType::kJoin)) {
     return wrapInDt(node);
   }
@@ -1160,8 +1179,16 @@ PlanObjectP Optimization::makeQueryGraph(
     return currentSelect_;
   }
   if (name == "Filter") {
+    auto filter = reinterpret_cast<const core::FilterNode*>(&node);
+    if (!isNondeterministicWrap_ && hasNondeterministic(filter->filter())) {
+      // Force wrap the filter and its input inside a dt so the filter
+      // does not get mixed with parrent nodes.
+      isNondeterministicWrap_ = true;
+      return makeQueryGraph(node, 0);
+    }
+    isNondeterministicWrap_ = false;
     makeQueryGraph(*node.sources()[0], allowedInDt);
-    addFilter(reinterpret_cast<const core::FilterNode*>(&node));
+    addFilter(filter);
     return currentSelect_;
   }
   if (name == "HashJoin" || name == "MergeJoin") {
