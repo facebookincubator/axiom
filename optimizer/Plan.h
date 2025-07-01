@@ -892,7 +892,10 @@ class Optimization {
   // recursively to make the rest of the plan. Returns false if no
   // unplaced conjuncts were found and and plan construction should
   // proceed.
-  bool placeConjuncts(RelationOpPtr plan, PlanState& state);
+  bool placeConjuncts(
+      RelationOpPtr plan,
+      PlanState& state,
+      bool allowNondeterministic);
 
   // Helper function that calls makeJoins recursively for each of
   // 'nextJoins'. The point of making 'nextJoins' first and only then
@@ -1172,9 +1175,12 @@ class Optimization {
   std::unordered_map<Name, Name>* canonicalCnames_{nullptr};
 
   const bool isSingle_;
+
+  // True if wrapping a nondeterministic filter inside a DT in ToGraph.
+  bool isNondeterministicWrap_{false};
 };
 
-/// True f single worker, i.e. do not plan remote exchanges
+/// True if single worker, i.e. do not plan remote exchanges
 bool isSingleWorker();
 
 /// Returns possible indices for driving table scan of 'table'.

@@ -255,7 +255,7 @@ class FunctionSet {
 
   /// True if 'item' is in 'this'.
   bool contains(int64_t item) const {
-    return 0 != (set_ & (1UL << item));
+    return 0 != (set_ & item);
   }
 
   /// Unions 'this' and 'other' and returns the result.

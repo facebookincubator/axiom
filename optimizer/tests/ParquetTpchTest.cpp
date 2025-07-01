@@ -117,11 +117,17 @@ void ParquetTpchTest::saveTpchTablesAsParquet() {
         FLAGS_tpch_scale > 1) {
       numSplits = std::min<int32_t>(FLAGS_tpch_scale, 200);
     }
-    auto plan =
-        PlanBuilder()
-            .tpchTableScan(table, std::move(columnNames), FLAGS_tpch_scale)
-            .tableWrite(tableDirectory, dwio::common::FileFormat::PARQUET)
-            .planNode();
+    common::CompressionKind compression =
+        common::CompressionKind::CompressionKind_SNAPPY;
+    auto builder = PlanBuilder().tpchTableScan(
+        table, std::move(columnNames), FLAGS_tpch_scale);
+
+    auto writer = PlanBuilder::TableWriterBuilder(builder)
+                      .outputDirectoryPath(tableDirectory)
+                      .fileFormat(dwio::common::FileFormat::PARQUET)
+                      .compressionKind(compression);
+    auto plan = writer.endTableWriter().planNode();
+
     std::vector<exec::Split> splits;
     for (auto nthSplit = 0; nthSplit < numSplits; ++nthSplit) {
       splits.push_back(

@@ -26,7 +26,7 @@ namespace facebook::velox::optimizer {
 
 using namespace facebook::velox;
 
-std::string veloxToString(core::PlanNode* plan) {
+std::string veloxToString(const core::PlanNode* plan) {
   return plan->toString(true, true);
 }
 
@@ -69,7 +69,7 @@ const std::string* columnName(const core::TypedExprPtr& expr) {
 
 bool isCall(const core::TypedExprPtr& expr, const std::string& name) {
   if (auto call = std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
-    return call->name() == name;
+    return exec::sanitizeName(call->name()) == name;
   }
   return false;
 }
@@ -103,7 +103,7 @@ std::shared_ptr<const exec::ConstantExpr> Optimization::foldConstant(
     const core::TypedExprPtr& typedExpr) {
   auto exprSet = evaluator_.compile(typedExpr);
   auto first = exprSet->exprs().front().get();
-  if (auto constantExpr = dynamic_cast<const exec::ConstantExpr*>(first)) {
+  if (dynamic_cast<const exec::ConstantExpr*>(first)) {
     return std::dynamic_pointer_cast<exec::ConstantExpr>(
         exprSet->exprs().front());
   }
@@ -491,7 +491,8 @@ BitSet Optimization::functionSubfields(
 
 void Optimization::ensureFunctionSubfields(const core::TypedExprPtr& expr) {
   if (auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get())) {
-    auto metadata = FunctionRegistry::instance()->metadata(call->name());
+    auto metadata = FunctionRegistry::instance()->metadata(
+        exec::sanitizeName(call->name()));
     if (!metadata) {
       return;
     }
@@ -555,8 +556,10 @@ ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
     return path.value();
   }
   auto call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
+  std::string callName;
   if (call) {
-    auto* metadata = FunctionRegistry::instance()->metadata(call->name());
+    callName = exec::sanitizeName(call->name());
+    auto* metadata = FunctionRegistry::instance()->metadata(callName);
     if (metadata && metadata->processSubfields()) {
       auto translated = translateSubfieldFunction(call, metadata);
       if (translated.has_value()) {
@@ -593,7 +596,7 @@ ExprCP Optimization::translateExpr(const core::TypedExprPtr& expr) {
     }
   }
   if (call) {
-    auto name = toName(call->name());
+    auto name = toName(callName);
     funcs = funcs | functionBits(name);
     auto* callExpr = deduppedCall(
         name, Value(toType(call->type()), cardinality), std::move(args), funcs);
@@ -680,7 +683,7 @@ std::optional<ExprCP> Optimization::translateSubfieldFunction(
           make<variant>(variant::null(call->inputs()[i]->type()->kind())));
     }
   }
-  auto* name = toName(call->name());
+  auto* name = toName(exec::sanitizeName(call->name()));
   funcs = funcs | functionBits(name);
   if (metadata->explode) {
     auto map = metadata->explode(call, paths);
@@ -722,7 +725,8 @@ TypePtr intermediateType(const core::CallTypedExprPtr& call) {
   for (auto& arg : call->inputs()) {
     types.push_back(arg->type());
   }
-  return exec::Aggregate::intermediateType(call->name(), types);
+  return exec::Aggregate::intermediateType(
+      exec::sanitizeName(call->name()), types);
 }
 
 TypePtr finalType(const core::CallTypedExprPtr& call) {
@@ -730,7 +734,7 @@ TypePtr finalType(const core::CallTypedExprPtr& call) {
   for (auto& arg : call->inputs()) {
     types.push_back(arg->type());
   }
-  return exec::Aggregate::finalType(call->name(), types);
+  return exec::Aggregate::finalType(exec::sanitizeName(call->name()), types);
 }
 
 AggregationP Optimization::translateAggregation(
@@ -1144,10 +1148,29 @@ PlanObjectP Optimization::addAggregation(
   return currentSelect_;
 }
 
+bool hasNondeterministic(const core::TypedExprPtr& expr) {
+  if (auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get())) {
+    if (functionBits(toName(call->name()))
+            .contains(FunctionSet::kNondeterministic)) {
+      return true;
+    }
+  }
+  for (auto& in : expr->inputs()) {
+    if (hasNondeterministic(in)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 PlanObjectP Optimization::makeQueryGraph(
     const core::PlanNode& node,
     uint64_t allowedInDt) {
   auto name = node.name();
+  if (name == "Filter" && !contains(allowedInDt, PlanType::kFilter)) {
+    return wrapInDt(node);
+  }
+
   if (isJoin(node) && !contains(allowedInDt, PlanType::kJoin)) {
     return wrapInDt(node);
   }
@@ -1160,8 +1183,16 @@ PlanObjectP Optimization::makeQueryGraph(
     return currentSelect_;
   }
   if (name == "Filter") {
+    auto filter = reinterpret_cast<const core::FilterNode*>(&node);
+    if (!isNondeterministicWrap_ && hasNondeterministic(filter->filter())) {
+      // Force wrap the filter and its input inside a dt so the filter
+      // does not get mixed with parrent nodes.
+      isNondeterministicWrap_ = true;
+      return makeQueryGraph(node, 0);
+    }
+    isNondeterministicWrap_ = false;
     makeQueryGraph(*node.sources()[0], allowedInDt);
-    addFilter(reinterpret_cast<const core::FilterNode*>(&node));
+    addFilter(filter);
     return currentSelect_;
   }
   if (name == "HashJoin" || name == "MergeJoin") {

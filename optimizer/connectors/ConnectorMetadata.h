@@ -413,7 +413,14 @@ class SplitSource {
 
 // Specifies  options for split generation.
 struct SplitOptions {
+  /// make no more than one split per file.
   bool wholeFile{false};
+
+  /// If non-0, gives a minimum number of splits to generate, e.g. at least one
+  /// for each driver of each worker.
+  int32_t targetSplitCount{0};
+
+  /// Target size of split.
   uint64_t fileBytesPerSplit{128LL << 20};
 };
 

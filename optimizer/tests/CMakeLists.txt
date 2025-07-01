@@ -39,6 +39,7 @@ target_link_libraries(
   velox_verax
   velox_connector_split_source
   velox_hive_connector_metadata
+  velox_query_benchmark
   velox_exec_test_lib
   velox_dwio_common
   velox_dwio_parquet_reader

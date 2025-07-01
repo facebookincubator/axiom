@@ -26,4 +26,14 @@ Cost filterCost(CPSpan<Expr> conjuncts) {
   return Cost();
 }
 
+void flattenAll(ExprCP expr, Name func, ExprVector& flat) {
+  if (expr->type() != PlanType::kCall || expr->as<Call>()->name() != func) {
+    flat.push_back(expr);
+    return;
+  }
+  for (auto arg : expr->as<Call>()->args()) {
+    flattenAll(arg, func, flat);
+  }
+}
+
 } // namespace facebook::velox::optimizer
