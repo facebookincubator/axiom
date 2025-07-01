@@ -1125,11 +1125,6 @@ void DerivedTable::makeInitialPlan() {
   for (auto& column : columns) {
     key.columns.add(column);
   }
-  bool found = false;
-  auto it = optimization->memo().find(key);
-  if (it != optimization->memo().end()) {
-    found = true;
-  }
   distributeConjuncts();
   addImpliedJoins();
   linkTablesToJoins();
@@ -1159,9 +1154,7 @@ void DerivedTable::makeInitialPlan() {
       order,
       orderType);
   this->distribution = dtDist;
-  if (true || !found) {
-    optimization->memo()[key] = std::move(state.plans);
-  }
+  optimization->memo()[key] = std::move(state.plans);
 }
 
 std::string DerivedTable::toString() const {
