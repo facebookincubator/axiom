@@ -1144,20 +1144,21 @@ PlanObjectP Optimization::addAggregation(
   return currentSelect_;
 }
 
-  bool hasNondeterministic(const core::TypedExprPtr& expr) {
-    if (auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get())) {
-      if (functionBits(toName(call->name())).contains(FunctionSet::kNondeterministic)) {
-	return true;
-      }
+bool hasNondeterministic(const core::TypedExprPtr& expr) {
+  if (auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get())) {
+    if (functionBits(toName(call->name()))
+            .contains(FunctionSet::kNondeterministic)) {
+      return true;
     }
-    for (auto& in : expr->inputs()) {
-      if (hasNondeterministic(in)) {
-	return true;
-      }
-    }
-    return false;
   }
-  
+  for (auto& in : expr->inputs()) {
+    if (hasNondeterministic(in)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 PlanObjectP Optimization::makeQueryGraph(
     const core::PlanNode& node,
     uint64_t allowedInDt) {
@@ -1166,7 +1167,7 @@ PlanObjectP Optimization::makeQueryGraph(
     return wrapInDt(node);
   }
 
-    if (isJoin(node) && !contains(allowedInDt, PlanType::kJoin)) {
+  if (isJoin(node) && !contains(allowedInDt, PlanType::kJoin)) {
     return wrapInDt(node);
   }
   if (name == "TableScan") {
@@ -1184,7 +1185,6 @@ PlanObjectP Optimization::makeQueryGraph(
       // does not get mixed with parrent nodes.
       isNondeterministicWrap_ = true;
       return makeQueryGraph(node, 0);
-      
     }
     isNondeterministicWrap_ = false;
     makeQueryGraph(*node.sources()[0], allowedInDt);

@@ -355,37 +355,39 @@ TEST_F(PlanTest, filterToJoinEdge) {
   expectPlan(plan, "orders t2*H  (customer t3  Build ) project");
 
   nested = exec::test::PlanBuilder(planNodeIdGenerator)
-                    .tableScan("orders", orderType, {}, {})
-    .filter("random() < 2::DOUBLE")
-    .nestedLoopJoin(
-                        exec::test::PlanBuilder(planNodeIdGenerator)
-                            .tableScan("customer", customerType, {}, {})
-			.filter("random() < 2::DOUBLE")
-			.planNode(),
-                        {"o_custkey", "c_custkey"},
-                        core::JoinType::kInner)
-                    .filter("c_custkey + 1 = o_custkey + 1 and random() < 2::DOUBLE")
-                    .planNode();
+               .tableScan("orders", orderType, {}, {})
+               .filter("random() < 2::DOUBLE")
+               .nestedLoopJoin(
+                   exec::test::PlanBuilder(planNodeIdGenerator)
+                       .tableScan("customer", customerType, {}, {})
+                       .filter("random() < 2::DOUBLE")
+                       .planNode(),
+                   {"o_custkey", "c_custkey"},
+                   core::JoinType::kInner)
+               .filter("c_custkey + 1 = o_custkey + 1 and random() < 2::DOUBLE")
+               .planNode();
   plan;
   checkSame(nested, nullptr, &plan);
-  expectPlan(plan, "orders t5 filter 1 exprs  project 1 columns  project 1 columns *H  (customer t8 filter 1 exprs  project 1 columns  project 1 columns  broadcast   Build ) filter 1 exprs  project 2 columns  project 2 columns ");
+  expectPlan(
+      plan,
+      "orders t5 filter 1 exprs  project 1 columns  project 1 columns *H  (customer t8 filter 1 exprs  project 1 columns  project 1 columns  broadcast   Build ) filter 1 exprs  project 2 columns  project 2 columns ");
 }
 
 TEST_F(PlanTest, filterImport) {
   auto orderType = ROW({"o_custkey", "o_totalprice"}, {BIGINT(), DOUBLE()});
   auto customerType = ROW({"c_custkey"}, {BIGINT()});
-  auto agg =
-      exec::test::PlanBuilder()
-          .tableScan("orders", orderType, {}, {})
-          .singleAggregation({"o_custkey"}, {"sum(o_totalprice)"})
-          .singleAggregation({"o_custkey"}, {"sum(a0)"})
-          .filter("o_custkey < 100 and a0 > 200.0")
-          .planNode();
+  auto agg = exec::test::PlanBuilder()
+                 .tableScan("orders", orderType, {}, {})
+                 .singleAggregation({"o_custkey"}, {"sum(o_totalprice)"})
+                 .singleAggregation({"o_custkey"}, {"sum(a0)"})
+                 .filter("o_custkey < 100 and a0 > 200.0")
+                 .planNode();
   std::string plan;
   checkSame(agg, nullptr, &plan);
-  expectPlan(plan, "orders t3 PARTIAL agg shuffle  FINAL agg project 2 columns  PARTIAL agg FINAL agg filter 1 exprs  project");
+  expectPlan(
+      plan,
+      "orders t3 PARTIAL agg shuffle  FINAL agg project 2 columns  PARTIAL agg FINAL agg filter 1 exprs  project");
 }
-
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

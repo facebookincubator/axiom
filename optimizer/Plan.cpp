@@ -1502,7 +1502,10 @@ void Optimization::placeDerivedTable(
   }
 }
 
-  bool Optimization::placeConjuncts(RelationOpPtr plan, PlanState& state, bool allowNondeterministic) {
+bool Optimization::placeConjuncts(
+    RelationOpPtr plan,
+    PlanState& state,
+    bool allowNondeterministic) {
   PlanStateSaver save(state);
   ExprVector filters;
   PlanObjectSet columnsAndSingles = state.columns;
@@ -1510,7 +1513,8 @@ void Optimization::placeDerivedTable(
     columnsAndSingles.unionColumns(object->as<DerivedTable>()->columns);
   });
   for (auto& conjunct : state.dt->conjuncts) {
-    if (!allowNondeterministic && conjunct->containsFunction(FunctionSet::kNondeterministic)) {
+    if (!allowNondeterministic &&
+        conjunct->containsFunction(FunctionSet::kNondeterministic)) {
       continue;
     }
     if (state.placed.contains(conjunct)) {
@@ -1621,7 +1625,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     auto candidates = nextJoins(state);
     if (candidates.empty()) {
       if (placeConjuncts(plan, state, true)) {
-	return;
+        return;
       }
       addPostprocess(dt, plan, state);
       auto kept = state.plans.addPlan(plan, state);

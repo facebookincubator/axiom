@@ -402,7 +402,7 @@ class VeloxRunner : public QueryBenchmarkBase {
         try {
           parameters_.clear();
           runStats_.clear();
-	  gflags::FlagSaver save;
+          gflags::FlagSaver save;
           runAllCombinations();
           for (auto& dim : parameters_) {
             modifiedFlags_.insert(dim.flag);
@@ -534,8 +534,8 @@ class VeloxRunner : public QueryBenchmarkBase {
     RunStats runStats;
     try {
       connector::SplitOptions splitOptions{
-	.targetSplitCount = FLAGS_num_workers * FLAGS_num_drivers * 2,
-	.fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
+          .targetSplitCount = FLAGS_num_workers * FLAGS_num_drivers * 2,
+          .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
       runner = std::make_shared<LocalRunner>(
           planAndStats.plan,
           queryCtx,
@@ -794,12 +794,13 @@ void readCommands(
     if (sscanf(cstr, "clear %ms", &flag) == 1) {
       gflags::CommandLineFlagInfo info;
       if (!gflags::GetCommandLineFlagInfo(flag, &info)) {
-	std::cout << "No flag " << flag << std::endl;
-	continue;
+        std::cout << "No flag " << flag << std::endl;
+        continue;
       }
-      auto message = gflags::SetCommandLineOption(flag, info.default_value.c_str());
+      auto message =
+          gflags::SetCommandLineOption(flag, info.default_value.c_str());
       if (!message.empty()) {
-	std::cout << message;
+        std::cout << message;
       }
       continue;
     }

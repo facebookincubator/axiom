@@ -84,15 +84,16 @@ std::vector<SplitSource::SplitAndGroup> LocalHiveSplitSource::getSplits(
       int64_t splitsPerFile =
           ceil2<uint64_t>(fileSize, options_.fileBytesPerSplit);
       if (options_.targetSplitCount) {
-	auto numFiles = files_.size();
-	if (splitsPerFile * numFiles < options_.targetSplitCount) {
-	  // Divide the file into more splits but still not smaller than 64MB.
-	  auto perFile = ceil2<uint64_t>(options_.targetSplitCount, numFiles);
-	  int64_t bytesInSplit = ceil2<uint64_t>(fileSize, perFile);
-	  splitsPerFile = ceil2<uint64_t>(fileSize, std::max<uint64_t>(bytesInSplit, 32 << 20));
-	}
+        auto numFiles = files_.size();
+        if (splitsPerFile * numFiles < options_.targetSplitCount) {
+          // Divide the file into more splits but still not smaller than 64MB.
+          auto perFile = ceil2<uint64_t>(options_.targetSplitCount, numFiles);
+          int64_t bytesInSplit = ceil2<uint64_t>(fileSize, perFile);
+          splitsPerFile = ceil2<uint64_t>(
+              fileSize, std::max<uint64_t>(bytesInSplit, 32 << 20));
+        }
       }
-	// Take the upper bound.
+      // Take the upper bound.
       const int64_t splitSize = ceil2<uint64_t>(fileSize, splitsPerFile);
       for (int i = 0; i < splitsPerFile; ++i) {
         fileSplits_.push_back(
