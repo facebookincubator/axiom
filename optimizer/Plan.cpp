@@ -781,6 +781,11 @@ void Optimization::addPostprocess(
     state.addCost(*finalAgg);
     plan = finalAgg;
   }
+  if (!dt->having.empty()) {
+    auto filter = make<Filter>(plan, dt->having);
+    state.addCost(*filter);
+    plan = filter;
+  }
   if (dt->orderBy) {
     auto* orderBy = make<OrderBy>(
         plan,

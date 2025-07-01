@@ -1025,7 +1025,27 @@ bool isJoinEquality(
 
 void DerivedTable::distributeConjuncts() {
   std::vector<DerivedTableP> changedDts;
-  for (auto i = 0; i < conjuncts.size(); ++i) {
+  if (!having.empty()) {
+    VELOX_CHECK(aggregation && aggregation->aggregation);
+    auto op = aggregation->aggregation;
+    PlanObjectSet grouping;
+    for (auto expr : op->grouping) {
+      grouping.unionSet(expr->columns());
+    }
+    for (auto i = 0; i < having.size(); ++i) {
+      // No pushdown of non-deterministic.
+      if (having[i]->containsFunction(FunctionSet::kNondeterministic)) {
+	continue;
+      }
+      // having that refers to no aggregates goes below the aggregation.
+      if (having[i]->columns().isSubset(grouping)) {
+	conjuncts.push_back(having[i]);
+	having.erase(having.begin() + i);
+	--i;
+      }
+    }
+  }
+    for (auto i = 0; i < conjuncts.size(); ++i) {
     // No pushdown of non-deterministic.
     if (conjuncts[i]->containsFunction(FunctionSet::kNondeterministic)) {
       continue;
@@ -1041,11 +1061,13 @@ void DerivedTable::distributeConjuncts() {
         // Translate the column names and add the condition to the conjuncts in
         // the dt.
 	auto innerDt = tables[0]->as<DerivedTable>();
-	auto imported = importExpr(conjuncts[i],columns, innerDt->exprs); 
-	if (imported->containsFunction(FunctionSet::kAggregate)) {
+	auto imported = importExpr(conjuncts[i], innerDt->columns, innerDt->exprs); 
+	if (innerDt->aggregation) {
 	  innerDt->having.push_back(imported);
 	} else {
 	  innerDt->conjuncts.push_back(imported);
+	}
+	if (std::find(changedDts.begin(), changedDts.end(), innerDt) == changedDts.end()) {
 	  changedDts.push_back(innerDt);
 	}
 	  conjuncts.erase(conjuncts.begin() + i);
@@ -1084,8 +1106,12 @@ void DerivedTable::distributeConjuncts() {
       }
     }
   }
-  for (auto* changed : changedDts) {
-    changed->distributeConjuncts();
+    // Remake initial plan for changedDTs. Calls distributeConjuncts
+    // recursively for further pushdown of pushed down items. Replans
+    // on returning edge of recursion, so everybody's initial plan is
+    // up to date after all pushdowns.
+    for (auto* changed : changedDts) {
+    changed->makeInitialPlan();
   }
 }
 
@@ -1102,8 +1128,8 @@ void DerivedTable::makeInitialPlan() {
   if (it != optimization->memo().end()) {
     found = true;
   }
-  addImpliedJoins();
   distributeConjuncts();
+  addImpliedJoins();
   linkTablesToJoins();
   for (auto& join : joins) {
     join->guessFanout();
@@ -1131,7 +1157,7 @@ void DerivedTable::makeInitialPlan() {
       order,
       orderType);
   this->distribution = dtDist;
-  if (!found) {
+  if (true || !found) {
     optimization->memo()[key] = std::move(state.plans);
   }
 }

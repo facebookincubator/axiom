@@ -1172,9 +1172,12 @@ class Optimization {
   std::unordered_map<Name, Name>* canonicalCnames_{nullptr};
 
   const bool isSingle_;
+
+  // True if wrapping a nondeterministic filter inside a DT in ToGraph.
+  bool isNondeterministicWrap_{false};
 };
 
-/// True f single worker, i.e. do not plan remote exchanges
+/// True if single worker, i.e. do not plan remote exchanges
 bool isSingleWorker();
 
 /// Returns possible indices for driving table scan of 'table'.
