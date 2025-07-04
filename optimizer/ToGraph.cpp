@@ -502,11 +502,69 @@ void Optimization::ensureFunctionSubfields(const core::TypedExprPtr& expr) {
   }
 }
 
+BuiltinNames::BuiltinNames()
+    : eq(toName("eq")),
+      lt(toName("lt")),
+      lte(toName("lte")),
+      gt(toName("gt")),
+      gte(toName("gte")),
+      plus(toName("plus")),
+      multiply(toName("multiply")),
+      _and(toName("and")),
+      _or(toName("or")) {
+  canonicalizable.insert(eq);
+  canonicalizable.insert(lt);
+  canonicalizable.insert(lte);
+  canonicalizable.insert(gt);
+  canonicalizable.insert(gte);
+  canonicalizable.insert(plus);
+  canonicalizable.insert(multiply);
+  canonicalizable.insert(_and);
+  canonicalizable.insert(_or);
+}
+
+  Name BuiltinNames::reverse(Name name) const {
+  if (name == lt) {
+    return gte;
+  }
+  if (name == lte) {
+    return gt;
+  }
+  if (name == gt) {
+    return lte;
+  }
+  if (name == gte) {
+    return lt;
+  }
+  return name;
+}
+
+BuiltinNames& Optimization::builtinNames() {
+  if (!builtinNames_) {
+    builtinNames_ = std::make_unique<BuiltinNames>();
+  }
+  return *builtinNames_;
+}
+
+void Optimization::canonicalizeCall(Name& name, ExprVector& args) {
+  auto& names = builtinNames();
+  if (!names.isCanonicalizable(name)) {
+    return;
+  }
+  if (args[0]->type() == PlanType::kLiteral || args[0]->id() > args[1]->id()) {
+    std::swap(args[0], args[1]);
+    name = names.reverse(name);
+  }
+}
+
 ExprCP Optimization::deduppedCall(
     Name name,
     Value value,
     ExprVector args,
     FunctionSet flags) {
+  if (args.size() == 2) {
+    canonicalizeCall(name, args);
+  }
   ExprDedupKey key = {name, &args};
   auto it = functionDedup_.find(key);
   if (it != functionDedup_.end()) {

@@ -54,7 +54,7 @@ class GenieFunction : public exec::VectorFunction {
     return {
         exec::FunctionSignatureBuilder()
             .returnType(
-                "row(bigint, map(integer, real), map(integer, array(bigint)), map(integer, map(bigint, real)))")
+                "row(userid bigint, ff map(integer, real), idlf map(integer, array(bigint)), idsf map(integer, map(bigint, real)))")
             .argumentType("bigint")
             .argumentType("map(integer, real)")
             .argumentType("map(integer, array(bigint))")

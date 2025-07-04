@@ -244,6 +244,11 @@ std::string JoinEdge::toString() const {
   return out.str();
 }
 
+const FunctionSet& Expr::functions() const {
+  static FunctionSet empty;
+  return empty;
+}
+
 bool Expr::sameOrEqual(const Expr& other) const {
   if (this == &other) {
     return true;
@@ -1045,6 +1050,7 @@ void DerivedTable::distributeConjuncts() {
       }
     }
   }
+  queryCtx()->optimization()->expandConjuncts(conjuncts);
   for (auto i = 0; i < conjuncts.size(); ++i) {
     // No pushdown of non-deterministic.
     if (conjuncts[i]->containsFunction(FunctionSet::kNondeterministic)) {

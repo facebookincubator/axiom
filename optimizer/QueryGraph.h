@@ -40,6 +40,39 @@ namespace facebook::velox::optimizer {
 /// flag. The filter would be expresssed as a conjunct under the top
 /// derived table with x-exists or y-exists.
 
+
+/// A bit set that qualifies an Expr. Represents which functions/kinds
+/// of functions are found inside the children of an Expr.
+class FunctionSet {
+ public:
+  /// Indicates and aggregate function in the set.
+  static constexpr uint64_t kAggregate = 1;
+
+  /// Indicates a non-determinstic function
+  static constexpr uint64_t kNondeterministic = 1UL << 1;
+
+  FunctionSet() : set_(0) {}
+  explicit FunctionSet(uint64_t set) : set_(set) {}
+
+  /// True if 'item' is in 'this'.
+  bool contains(int64_t item) const {
+    return 0 != (set_ & item);
+  }
+
+  /// Unions 'this' and 'other' and returns the result.
+  FunctionSet operator|(const FunctionSet& other) const {
+    return FunctionSet(set_ | other.set_);
+  }
+
+  /// Unions 'this' and 'other' and returns the result.
+  FunctionSet operator|(uint64_t other) const {
+    return FunctionSet(set_ | other);
+  }
+
+ private:
+  uint64_t set_;
+};
+  
 /// Superclass for all expressions.
 class Expr : public PlanObject {
  public:
@@ -77,7 +110,9 @@ class Expr : public PlanObject {
     return false;
   }
 
- protected:
+  virtual const FunctionSet& functions() const;
+
+protected:
   // The columns this depends on.
   PlanObjectSet columns_;
 
@@ -240,39 +275,7 @@ struct SubfieldSet {
   std::optional<BitSet> findSubfields(int32_t id) const;
 };
 
-/// A bit set that qualifies a function call. Represents which functions/kinds
-/// of functions are found inside the children of a function call.
-class FunctionSet {
- public:
-  /// Indicates and aggregate function in the set.
-  static constexpr uint64_t kAggregate = 1;
-
-  /// Indicates a non-determinstic function
-  static constexpr uint64_t kNondeterministic = 1UL << 1;
-
-  FunctionSet() : set_(0) {}
-  explicit FunctionSet(uint64_t set) : set_(set) {}
-
-  /// True if 'item' is in 'this'.
-  bool contains(int64_t item) const {
-    return 0 != (set_ & item);
-  }
-
-  /// Unions 'this' and 'other' and returns the result.
-  FunctionSet operator|(const FunctionSet& other) const {
-    return FunctionSet(set_ | other.set_);
-  }
-
-  /// Unions 'this' and 'other' and returns the result.
-  FunctionSet operator|(uint64_t other) const {
-    return FunctionSet(set_ | other);
-  }
-
- private:
-  uint64_t set_;
-};
-
-/// Describes where the args given to a lambda come from.
+  /// Describes where the args given to a lambda come from.
 enum class LambdaArg : int8_t { kKey, kValue, kElement };
 
 struct LambdaInfo {
@@ -383,7 +386,7 @@ class Call : public Expr {
     return name_;
   }
 
-  const FunctionSet functions() const {
+  const FunctionSet& functions() const override {
     return functions_;
   }
 

@@ -361,8 +361,9 @@ TEST_F(PlanTest, filterToJoinEdge) {
                    exec::test::PlanBuilder(planNodeIdGenerator)
                        .tableScan("customer", customerType, {}, {})
                        .filter("random() < 2::DOUBLE")
-                       .planNode(),
-                   {"o_custkey", "c_custkey"},
+		   .planNode(),
+		   {"o_custkey", "c_custkey"},
+
                    core::JoinType::kInner)
                .filter("c_custkey + 1 = o_custkey + 1 and random() < 2::DOUBLE")
                .planNode();
@@ -392,4 +393,60 @@ int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init(&argc, &argv, false);
   return RUN_ALL_TESTS();
+}
+
+TEST_F(PlanTest, filterBreakup) {
+  char* filterText =
+      "        (\n"
+      "                p_partkey = l_partkey\n"
+      "                and p_brand = 'Brand#12'\n"
+      "                and p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')\n"
+      "                and l_quantity >= 1 and l_quantity <= 1 + 10\n"
+      "                and p_size between 1 and 5\n"
+      "                and l_shipmode in ('AIR', 'AIR REG')\n"
+      "                and l_shipinstruct = 'DELIVER IN PERSON'\n"
+      "        )\n"
+      "        or\n"
+      "        (\n"
+      "                p_partkey = l_partkey\n"
+      "                and p_brand = 'Brand#23'\n"
+      "                and p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')\n"
+      "                and l_quantity >= 10 and l_quantity <= 10 + 10\n"
+      "                and p_size between 1 and 10\n"
+      "                and l_shipmode in ('AIR', 'AIR REG')\n"
+      "                and l_shipinstruct = 'DELIVER IN PERSON'\n"
+      "        )\n"
+      "        or\n"
+      "        (\n"
+      "                p_partkey = l_partkey\n"
+      "                and p_brand = 'Brand#34'\n"
+      "                and p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')\n"
+      "                and l_quantity >= 20 and l_quantity <= 20 + 10\n"
+      "                and p_size between 1 and 15\n"
+      "                and l_shipmode in ('AIR', 'AIR REG')\n"
+      "                and l_shipinstruct = 'DELIVER IN PERSON'\n"
+      "        )\n";
+
+  auto lineItemType = ROW(
+      {{"l_partkey", BIGINT()},
+       {"l_shipmode", VARCHAR()},
+       {"l_shipinstruct", VARCHAR()},
+       {"l_extendedprice", DOUBLE()},
+       {"l_discount", DOUBLE()},
+       {"l_quantity", DOUBLE()}});
+  auto partType = ROW(
+      {{"p_partkey", BIGINT()},
+       {"p_brand", VARCHAR()},
+       {"p_container", VARCHAR()},
+       {"p_size", INTEGER()}});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = exec::test::PlanBuilder(planNodeIdGenerator)
+                  .tableScan("lineitem", lineitemType)
+                  .nestedLoopJoin(exec::test::PlanBuilder(planNodeIdGenerator)
+                                      .tableScan("part", partType)
+                                      .planNode())
+                  .filter(filterText)
+                  .singleAggregate({}, {"sum(1)"})
+                  .planNode();
 }

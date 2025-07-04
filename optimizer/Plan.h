@@ -482,6 +482,27 @@ struct PlanAndStats {
   NodePredictionMap prediction;
 };
 
+struct BuiltinNames {
+  BuiltinNames();
+
+  Name reverse(Name op) const;
+  bool isCanonicalizable(Name name) const {
+    return canonicalizable.find(name) != canonicalizable.end();
+  }
+
+  Name eq;
+  Name lt;
+  Name lte;
+  Name gt;
+  Name gte;
+  Name plus;
+  Name multiply;
+  Name _and;
+  Name _or;
+
+  folly::F14FastSet<Name> canonicalizable;
+};
+
 /// Instance of query optimization. Comverts a plan and schema into an
 /// optimized plan. Depends on QueryGraphContext being set on the
 /// calling thread. There is one instance per query to plan. The
@@ -639,6 +660,19 @@ class Optimization {
     return options_;
   }
 
+  BuiltinNames& builtinNames();
+
+  // Returns a dedupped left deep reduction with 'func' for the
+  // elements in set1 and set2. The elements are sorted on plan object
+  // id and then combined into a left deep reduction on 'func'.
+  ExprCP
+  combineLeftDeep(Name func, const ExprVector& set1, const ExprVector& set2);
+
+  /// Extracts implied conjuncts and removes duplicates from 'conjuncts' and
+  /// updates 'conjuncts'. Extracted conjuncts may allow extra pushdown or allow
+  /// create join edges
+  void expandConjuncts(ExprVector& conjuncts);
+
  private:
   static constexpr uint64_t kAllAllowedInDt = ~0UL;
 
@@ -761,6 +795,11 @@ class Optimization {
 
   // Makes a deduplicated Expr tree from 'expr'.
   ExprCP translateExpr(const velox::core::TypedExprPtr& expr);
+
+  // For comparisons, swaps the args to have a canonical form for
+  // deduplication. E.g column op constant, and Smaller plan object id
+  // to the left.
+  void canonicalizeCall(Name& name, ExprVector& args);
 
   // Creates or returns pre-existing function call with name+args. If
   // deterministic, a new ExprCP is remembered for reuse.
@@ -1178,6 +1217,8 @@ class Optimization {
 
   // True if wrapping a nondeterministic filter inside a DT in ToGraph.
   bool isNondeterministicWrap_{false};
+
+  std::unique_ptr<BuiltinNames> builtinNames_;
 };
 
 /// True if single worker, i.e. do not plan remote exchanges
