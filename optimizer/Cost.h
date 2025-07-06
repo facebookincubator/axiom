@@ -78,7 +78,15 @@ class History {
     leafSelectivities_[handle] = selectivity;
   }
 
- protected:
+  virtual folly::dynamic serialize() = 0;
+
+  virtual void update(folly::dynamic& serialized) = 0;
+
+  void saveToFile(const std::string& path);
+  
+  void updateFromFile(const std::string& path);
+  
+protected:
   // serializes access to all data members.
   std::mutex mutex_;
 

@@ -70,9 +70,13 @@ ExprVector extractPerTable(
   PlanObjectSet tables;
   auto optimization = queryCtx()->optimization();
   auto& names = optimization->builtinNames();
-  auto& namesu = queryCtx()->optimization()->builtinNames();
   tables = disjuncts[0]->allTables();
+  if (tables.size() <= 1) {
+    // All must depend on the same set of more than 1 table.
+    return {};
+  }
   std::unordered_map<int32_t, std::vector<ExprVector>> perTable;
+
   for (auto i = 0; i < disjuncts.size(); ++i) {
     auto& _and = orOfAnds[i];
     if (i > 0 && disjuncts[i]->allTables() != tables) {
@@ -155,7 +159,8 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
     if (inAll) {
       changeOriginal = true;
       result.push_back(item);
-      flat[j].erase(flat[j].begin() + j);
+      flat[0].erase(flat[0].begin() + j);
+      --j;
       for (auto i = 1; i < flat.size(); ++i) {
         flat[i].erase(std::find(flat[i].begin(), flat[i].end(), item));
       }
@@ -178,15 +183,19 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   return result;
 }
 
-void Optimization::expandConjuncts(ExprVector& conjuncts) {
+void DerivedTable::expandConjuncts() {
   auto& names = queryCtx()->optimization()->builtinNames();
   bool any;
+  std::unordered_set<int32_t> processed;
+  int32_t firstUnprocessed = numCanonicalConjuncts;
   do {
     any = false;
-    for (auto i = 0; i < conjuncts.size(); ++i) {
+    int32_t numProcessed = conjuncts.size();
+    auto end = conjuncts.size();
+    for (auto i = firstUnprocessed; i < end; ++i) {
       auto conjunct = conjuncts[i];
       if (isCallExpr(conjunct, names._or) &&
-          conjunct->containsFunction(FunctionSet::kNondeterministic)) {
+          !conjunct->containsFunction(FunctionSet::kNondeterministic)) {
         ExprVector flat;
         flattenAll(conjunct, names._or, flat);
         ExprCP replace = nullptr;
@@ -201,6 +210,8 @@ void Optimization::expandConjuncts(ExprVector& conjuncts) {
         }
       }
     }
+    firstUnprocessed = numProcessed;
+    numCanonicalConjuncts = numProcessed;
   } while (any);
 }
 

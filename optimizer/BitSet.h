@@ -72,7 +72,10 @@ class BitSet {
           }
         });
   }
-
+  size_t size() const {
+    return bits::countBits(bits_.data(), 0, 64 * bits_.size());
+  }
+  
   template <typename Func>
   void forEach(Func f) const {
     bits::forEachSetBit(bits_.data(), 0, bits_.size() * 64, f);

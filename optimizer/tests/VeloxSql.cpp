@@ -270,11 +270,13 @@ class VeloxRunner : public QueryBenchmarkBase {
           return toTableScan(id, name, rowType, columnNames);
         });
     history_ = std::make_unique<facebook::velox::optimizer::VeloxHistory>();
+    history_->updateFromFile(FLAGS_data_path + "/.history");
     executor_ =
         std::make_shared<folly::CPUThreadPoolExecutor>(std::max<int32_t>(
             std::thread::hardware_concurrency() * 2,
             FLAGS_num_workers * FLAGS_num_drivers * 2 + 2));
     spillExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(4);
+    
   }
 
   core::PlanNodePtr toTableScan(
@@ -636,6 +638,14 @@ class VeloxRunner : public QueryBenchmarkBase {
     return modifiedFlags_;
   }
 
+  void saveHistory() {
+    history_->saveToFile(FLAGS_data_path + "/.hiistory");
+  }
+
+    void clearHistory() {
+      history_ = std::make_unique<VeloxHistory>();
+    }
+    
  private:
   template <typename T>
   static void write(const T& value, std::ostream& out) {
@@ -821,7 +831,9 @@ void readCommands(
       free(value);
       continue;
     }
-
+    if (substr(command, 0, 11) == "savehistory") {
+      runner.saveHistory();
+    }
     runner.run(command);
   }
 }

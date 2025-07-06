@@ -860,6 +860,9 @@ struct DerivedTable : public PlanObject {
   // tables.
   ExprVector conjuncts;
 
+  // Number of fully processed leading elements of 'conjuncts'.
+  int32_t numCanonicalConjuncts{0};
+  
   // Set of reducing joined tables imported to reduce build size. Set if 'this'
   // represents a build side join.
   PlanObjectSet importedExistences;
@@ -900,6 +903,13 @@ struct DerivedTable : public PlanObject {
 
   /// Completes 'joins' with edges implied by column equivalences.
   void addImpliedJoins();
+
+  /// Extracts implied conjuncts and removes duplicates from
+  /// 'conjuncts' and updates 'conjuncts'. Extracted conjuncts may
+  /// allow extra pushdown or allow create join edges. May be called
+  /// repeatedly, each e.g. after pushing down conjuncts from outer
+  /// DTs.
+  void expandConjuncts();
 
   /// Initializes 'this' to join 'tables' from 'super'. Adds the joins from
   /// 'existences' as semijoins to limit cardinality when making a hash join

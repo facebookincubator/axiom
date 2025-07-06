@@ -551,7 +551,8 @@ void Optimization::canonicalizeCall(Name& name, ExprVector& args) {
   if (!names.isCanonicalizable(name)) {
     return;
   }
-  if (args[0]->type() == PlanType::kLiteral || args[0]->id() > args[1]->id()) {
+  VELOX_CHECK_EQ(args.size(), 2, "Expecting binary op {}", name);
+  if ((args[0]->type() == PlanType::kLiteral && args[1]->type() != PlanType::kLiteral) || args[0]->id() > args[1]->id()) {
     std::swap(args[0], args[1]);
     name = names.reverse(name);
   }

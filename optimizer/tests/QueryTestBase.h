@@ -24,6 +24,8 @@
 #include "velox/parse/QueryPlanner.h"
 #include "velox/runner/LocalRunner.h"
 
+DECLARE_string(history_save_path);
+
 namespace facebook::velox::optimizer::test {
 
 struct TestResult {
@@ -107,5 +109,6 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
   std::unique_ptr<facebook::velox::optimizer::VeloxHistory> history_;
   std::unique_ptr<core::DuckDbQueryPlanner> planner_;
   inline static int32_t queryCounter_{0};
+  inline static std::unique_ptr<VeloxHistory> suiteHistory_;
 };
 } // namespace facebook::velox::optimizer::test

@@ -1050,7 +1050,7 @@ void DerivedTable::distributeConjuncts() {
       }
     }
   }
-  queryCtx()->optimization()->expandConjuncts(conjuncts);
+  expandConjuncts();
   for (auto i = 0; i < conjuncts.size(); ++i) {
     // No pushdown of non-deterministic.
     if (conjuncts[i]->containsFunction(FunctionSet::kNondeterministic)) {
@@ -1079,6 +1079,7 @@ void DerivedTable::distributeConjuncts() {
           changedDts.push_back(innerDt);
         }
         conjuncts.erase(conjuncts.begin() + i);
+	--numCanonicalConjuncts;
         --i;
         continue;
       } else {
@@ -1086,6 +1087,7 @@ void DerivedTable::distributeConjuncts() {
         tables[0]->as<BaseTable>()->addFilter(conjuncts[i]);
       }
       conjuncts.erase(conjuncts.begin() + i);
+      --numCanonicalConjuncts;
       --i;
       continue;
     }
@@ -1109,6 +1111,7 @@ void DerivedTable::distributeConjuncts() {
             join->addEquality(right, left);
           }
           conjuncts.erase(conjuncts.begin() + i);
+	  --numCanonicalConjuncts;
           --i;
         }
       }

@@ -153,8 +153,8 @@ using BuildSet = std::vector<HashBuildPtr>;
 struct Plan {
   Plan(RelationOpPtr op, const PlanState& state);
 
-  /// True if 'state' has a lower cost than 'this'.
-  bool isStateBetter(const PlanState& state) const;
+  /// True if 'state' has a lower cost than 'this'. If 'perRowMargin' is given, then 'other' must win by margin per row.
+  bool isStateBetter(const PlanState& state, float perRowMargin = 0) const;
 
   // Root of the plan tree.
   RelationOpPtr op;
@@ -409,7 +409,7 @@ struct PlanStateSaver {
     state_.dbgPlacedTables.resize(numPlaced_);
   }
 
- private:
+private:
   PlanState& state_;
   PlanObjectSet placed_;
   PlanObjectSet columns_;
@@ -532,9 +532,6 @@ class Optimization {
   PlanAndStats toVeloxPlan(
       RelationOpPtr plan,
       const velox::runner::MultiFragmentPlan::Options& options);
-
-  // Produces trace output if event matches 'traceFlags_'.
-  void trace(int32_t event, int32_t id, const Cost& cost, RelationOp& plan);
 
   void setLeafHandle(
       int32_t id,
@@ -668,11 +665,9 @@ class Optimization {
   ExprCP
   combineLeftDeep(Name func, const ExprVector& set1, const ExprVector& set2);
 
-  /// Extracts implied conjuncts and removes duplicates from 'conjuncts' and
-  /// updates 'conjuncts'. Extracted conjuncts may allow extra pushdown or allow
-  /// create join edges
-  void expandConjuncts(ExprVector& conjuncts);
-
+  /// Produces trace output if event matches 'traceFlags_'.
+  void trace(int32_t event, int32_t id, const Cost& cost, RelationOp& plan);
+  
  private:
   static constexpr uint64_t kAllAllowedInDt = ~0UL;
 
