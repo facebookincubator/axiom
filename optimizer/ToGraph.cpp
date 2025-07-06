@@ -523,7 +523,7 @@ BuiltinNames::BuiltinNames()
   canonicalizable.insert(_or);
 }
 
-  Name BuiltinNames::reverse(Name name) const {
+Name BuiltinNames::reverse(Name name) const {
   if (name == lt) {
     return gte;
   }
@@ -552,7 +552,9 @@ void Optimization::canonicalizeCall(Name& name, ExprVector& args) {
     return;
   }
   VELOX_CHECK_EQ(args.size(), 2, "Expecting binary op {}", name);
-  if ((args[0]->type() == PlanType::kLiteral && args[1]->type() != PlanType::kLiteral) || args[0]->id() > args[1]->id()) {
+  if ((args[0]->type() == PlanType::kLiteral &&
+       args[1]->type() != PlanType::kLiteral) ||
+      args[0]->id() > args[1]->id()) {
     std::swap(args[0], args[1]);
     name = names.reverse(name);
   }

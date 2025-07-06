@@ -15,9 +15,9 @@
  */
 
 #include "optimizer/Cost.h" //@manual
+#include "optimizer/JsonUtil.h" //@manual
 #include "optimizer/Plan.h" //@manual
 #include "optimizer/PlanUtils.h" //@manual
-#include "optimizer/JsonUtil.h" //@manual
 
 namespace facebook::velox::optimizer {
 
@@ -57,21 +57,20 @@ struct Costs {
   static constexpr float kMinimumFilterCost = 2;
 };
 
-  void History::saveToFile(const std::string& path) {
-    auto json = serialize();
-    std::ofstream file(path);
-    file << folly::toPrettyJson(json);
-    file.close();
-  }
+void History::saveToFile(const std::string& path) {
+  auto json = serialize();
+  std::ofstream file(path);
+  file << folly::toPrettyJson(json);
+  file.close();
+}
 
-  
-  void History::updateFromFile(const std::string& path) {
-    auto json = readConcatenatedDynamicsFromFile(path);
-    for (auto& elt : json) {
-      update(elt);
-    }
+void History::updateFromFile(const std::string& path) {
+  auto json = readConcatenatedDynamicsFromFile(path);
+  for (auto& elt : json) {
+    update(elt);
   }
-  
+}
+
 void RelationOp::setCost(const PlanState& state) {
   cost_.inputCardinality = state.cost.fanout;
 }

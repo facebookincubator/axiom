@@ -229,22 +229,22 @@ void VeloxHistory::recordVeloxExecution(
 folly::dynamic VeloxHistory::serialize() {
   folly::dynamic obj = folly::dynamic::object();
   for (auto& pair : leafSelectivities_) {
-      folly::dynamic leaf = folly::dynamic::object();
-      leaf["key"] = pair.first;
-      leaf["value"] = pair.second;
+    folly::dynamic leaf = folly::dynamic::object();
+    leaf["key"] = pair.first;
+    leaf["value"] = pair.second;
     obj["leaves"] = leaf;
   }
   for (auto& pair : joinSamples_) {
-      folly::dynamic join = folly::dynamic::object();
-      join["key"] = pair.first;
-      join["lr"] = pair.second.first;
-      join["rl"] = pair.second.second;
+    folly::dynamic join = folly::dynamic::object();
+    join["key"] = pair.first;
+    join["lr"] = pair.second.first;
+    join["rl"] = pair.second.second;
     obj["joins"] = join;
   }
   for (auto& pair : planHistory_) {
-      folly::dynamic plan = folly::dynamic::object();
-      plan["key"] = pair.first;
-      plan["card"] = pair.second.cardinality;
+    folly::dynamic plan = folly::dynamic::object();
+    plan["key"] = pair.first;
+    plan["card"] = pair.second.cardinality;
     obj["plans"] = plan;
   }
 
@@ -253,14 +253,19 @@ folly::dynamic VeloxHistory::serialize() {
 
 void VeloxHistory::update(folly::dynamic& serialized) {
   for (auto& pair : serialized["leaves"]) {
-    leafSelectivities_[pair["key"].asString()] = atof(pair["value"].asString().c_str());
+    leafSelectivities_[pair["key"].asString()] =
+        atof(pair["value"].asString().c_str());
   }
   for (auto& pair : serialized["joins"]) {
-    joinSamples_[pair["key"].asString()] = std::make_pair<float, float>(atof(pair["lr"].asString().c_str()), atof(pair["rl"].asString().c_str()));
+    joinSamples_[pair["key"].asString()] = std::make_pair<float, float>(
+        atof(pair["lr"].asString().c_str()),
+        atof(pair["rl"].asString().c_str()));
   }
   for (auto& pair : serialized["plans"]) {
-    planHistory_[pair["key"].asString()] = NodePrediction{.cardinality = static_cast<float>(atof(pair["card"].asString().c_str()))};
+    planHistory_[pair["key"].asString()] = NodePrediction{
+        .cardinality =
+            static_cast<float>(atof(pair["card"].asString().c_str()))};
   }
 }
-  
+
 } // namespace facebook::velox::optimizer

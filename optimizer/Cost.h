@@ -83,10 +83,10 @@ class History {
   virtual void update(folly::dynamic& serialized) = 0;
 
   void saveToFile(const std::string& path);
-  
+
   void updateFromFile(const std::string& path);
-  
-protected:
+
+ protected:
   // serializes access to all data members.
   std::mutex mutex_;
 

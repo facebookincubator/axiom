@@ -1079,7 +1079,7 @@ void DerivedTable::distributeConjuncts() {
           changedDts.push_back(innerDt);
         }
         conjuncts.erase(conjuncts.begin() + i);
-	--numCanonicalConjuncts;
+        --numCanonicalConjuncts;
         --i;
         continue;
       } else {
@@ -1111,7 +1111,7 @@ void DerivedTable::distributeConjuncts() {
             join->addEquality(right, left);
           }
           conjuncts.erase(conjuncts.begin() + i);
-	  --numCanonicalConjuncts;
+          --numCanonicalConjuncts;
           --i;
         }
       }

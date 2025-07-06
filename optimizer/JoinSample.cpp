@@ -188,7 +188,9 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
       std::make_shared<connector::ConnectorSplitSourceFactory>());
 }
 
-  std::unique_ptr<KeyFreq> runJoinSample(runner::Runner& runner, int32_t maxRows = 0) {
+std::unique_ptr<KeyFreq> runJoinSample(
+    runner::Runner& runner,
+    int32_t maxRows = 0) {
   auto result = std::make_unique<folly::F14FastMap<uint32_t, uint32_t>>();
   int32_t rowCount = 0;
   while (auto rows = runner.next()) {
@@ -199,7 +201,7 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
         ++(*result)[static_cast<uint32_t>(h->valueAt(i))];
       }
     }
-    if (maxRows && rowCount > maxRows)  {
+    if (maxRows && rowCount > maxRows) {
       runner.abort();
       break;
     }

@@ -45,7 +45,10 @@ DEFINE_int32(num_workers, 4, "Number of in-process workers");
 
 DEFINE_string(data_format, "parquet", "Data format");
 
-DEFINE_string(history_save_path, "", "Path to save sampling after the test suite");
+DEFINE_string(
+    history_save_path,
+    "",
+    "Path to save sampling after the test suite");
 
 namespace facebook::velox::optimizer::test {
 using namespace facebook::velox::exec;
@@ -110,7 +113,8 @@ void QueryTestBase::SetUp() {
 }
 
 void QueryTestBase::TearDown() {
-  // If we mean to save the history of running the suite, move the local history to its static location.
+  // If we mean to save the history of running the suite, move the local history
+  // to its static location.
   if (FLAGS_history_save_path.empty()) {
     suiteHistory_ = std::move(history_);
   }

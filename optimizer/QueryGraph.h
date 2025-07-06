@@ -40,7 +40,6 @@ namespace facebook::velox::optimizer {
 /// flag. The filter would be expresssed as a conjunct under the top
 /// derived table with x-exists or y-exists.
 
-
 /// A bit set that qualifies an Expr. Represents which functions/kinds
 /// of functions are found inside the children of an Expr.
 class FunctionSet {
@@ -72,7 +71,7 @@ class FunctionSet {
  private:
   uint64_t set_;
 };
-  
+
 /// Superclass for all expressions.
 class Expr : public PlanObject {
  public:
@@ -112,7 +111,7 @@ class Expr : public PlanObject {
 
   virtual const FunctionSet& functions() const;
 
-protected:
+ protected:
   // The columns this depends on.
   PlanObjectSet columns_;
 
@@ -275,7 +274,7 @@ struct SubfieldSet {
   std::optional<BitSet> findSubfields(int32_t id) const;
 };
 
-  /// Describes where the args given to a lambda come from.
+/// Describes where the args given to a lambda come from.
 enum class LambdaArg : int8_t { kKey, kValue, kElement };
 
 struct LambdaInfo {
@@ -862,7 +861,7 @@ struct DerivedTable : public PlanObject {
 
   // Number of fully processed leading elements of 'conjuncts'.
   int32_t numCanonicalConjuncts{0};
-  
+
   // Set of reducing joined tables imported to reduce build size. Set if 'this'
   // represents a build side join.
   PlanObjectSet importedExistences;

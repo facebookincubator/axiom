@@ -42,7 +42,7 @@ class BitSet {
   bool operator!=(const BitSet& other) const {
     return !(*this == other);
   }
-  
+
   size_t hash() const;
 
   // True if no members.
@@ -75,7 +75,7 @@ class BitSet {
   size_t size() const {
     return bits::countBits(bits_.data(), 0, 64 * bits_.size());
   }
-  
+
   template <typename Func>
   void forEach(Func f) const {
     bits::forEachSetBit(bits_.data(), 0, bits_.size() * 64, f);

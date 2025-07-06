@@ -189,7 +189,7 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
       names.push_back(type->nameOf(i));
     }
   }
-  
+
   std::unique_ptr<HashStringAllocator> allocator_;
   std::unique_ptr<QueryGraphContext> context_;
   std::unique_ptr<exec::test::TpchQueryBuilder> builder_;
@@ -365,18 +365,19 @@ TEST_F(PlanTest, filterToJoinEdge) {
   checkSame(nested, nullptr, &plan);
   expectPlan(plan, "nation t2*H  (region t3  Build ) project");
 
-  nested = exec::test::PlanBuilder(planNodeIdGenerator)
-               .tableScan("nation", nationType, {}, {})
-               .filter("random() < 2::DOUBLE")
-               .nestedLoopJoin(
-                   exec::test::PlanBuilder(planNodeIdGenerator)
-                       .tableScan("region", regionType, {}, {})
-                       .filter("random() < 2::DOUBLE")
-		   .planNode(),
-		   {"n_regionkey", "r_regionkey"},
-                   core::JoinType::kInner)
-               .filter("n_regionkey + 1 = r_regionkey + 1 and random() < 2::DOUBLE")
-               .planNode();
+  nested =
+      exec::test::PlanBuilder(planNodeIdGenerator)
+          .tableScan("nation", nationType, {}, {})
+          .filter("random() < 2::DOUBLE")
+          .nestedLoopJoin(
+              exec::test::PlanBuilder(planNodeIdGenerator)
+                  .tableScan("region", regionType, {}, {})
+                  .filter("random() < 2::DOUBLE")
+                  .planNode(),
+              {"n_regionkey", "r_regionkey"},
+              core::JoinType::kInner)
+          .filter("n_regionkey + 1 = r_regionkey + 1 and random() < 2::DOUBLE")
+          .planNode();
   checkSame(nested, nullptr, &plan);
   expectPlan(
       plan,
@@ -446,17 +447,18 @@ TEST_F(PlanTest, filterBreakup) {
   appendNames(lineitemType, allNames);
   appendNames(partType, allNames);
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = exec::test::PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan("lineitem", lineitemType)
-                  .nestedLoopJoin(exec::test::PlanBuilder(planNodeIdGenerator)
-                                      .tableScan("part", partType)
-				  .planNode(),
-				  allNames)
-                  .filter(filterText)
-                  .project(
-			   {"l_extendedprice * (1.0 - l_discount) as part_revenue"})
-    .singleAggregation({}, {"sum(part_revenue)"})
-    .planNode();
+  auto plan =
+      exec::test::PlanBuilder(planNodeIdGenerator, pool_.get())
+          .tableScan("lineitem", lineitemType)
+          .nestedLoopJoin(
+              exec::test::PlanBuilder(planNodeIdGenerator)
+                  .tableScan("part", partType)
+                  .planNode(),
+              allNames)
+          .filter(filterText)
+          .project({"l_extendedprice * (1.0 - l_discount) as part_revenue"})
+          .singleAggregation({}, {"sum(part_revenue)"})
+          .planNode();
   auto reference = referenceBuilder_->getQueryPlan(19).plan;
   std::string(planString);
   std::string(veloxString);
@@ -468,4 +470,3 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv, false);
   return RUN_ALL_TESTS();
 }
-

@@ -276,7 +276,6 @@ class VeloxRunner : public QueryBenchmarkBase {
             std::thread::hardware_concurrency() * 2,
             FLAGS_num_workers * FLAGS_num_drivers * 2 + 2));
     spillExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(4);
-    
   }
 
   core::PlanNodePtr toTableScan(
@@ -642,10 +641,10 @@ class VeloxRunner : public QueryBenchmarkBase {
     history_->saveToFile(FLAGS_data_path + "/.hiistory");
   }
 
-    void clearHistory() {
-      history_ = std::make_unique<VeloxHistory>();
-    }
-    
+  void clearHistory() {
+    history_ = std::make_unique<VeloxHistory>();
+  }
+
  private:
   template <typename T>
   static void write(const T& value, std::ostream& out) {

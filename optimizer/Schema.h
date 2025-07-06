@@ -205,7 +205,7 @@ struct Distribution {
 
   /// True if 'other' has the same ordering columns and order type.
   bool isSameOrder(const Distribution& other) const;
-  
+
   Distribution rename(const ExprVector& exprs, const ColumnVector& names) const;
 
   std::string toString() const;

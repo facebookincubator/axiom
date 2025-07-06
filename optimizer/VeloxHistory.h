@@ -56,7 +56,6 @@ class VeloxHistory : public History {
 
   void update(folly::dynamic& serialized) override;
 
-  
  private:
   std::unordered_map<std::string, std::pair<float, float>> joinSamples_;
   std::unordered_map<std::string, NodePrediction> planHistory_;

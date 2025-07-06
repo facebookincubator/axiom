@@ -347,15 +347,14 @@ bool Distribution::isSameOrder(const Distribution& other) const {
     return false;
   }
   for (auto i = 0; i < order.size(); ++i) {
-    if (!order[i]->sameOrEqual(*other.order[i])
-	|| orderType[i] != other.orderType[i]) {
+    if (!order[i]->sameOrEqual(*other.order[i]) ||
+        orderType[i] != other.orderType[i]) {
       return false;
     }
   }
   return true;
 }
 
-  
 Distribution Distribution::rename(
     const ExprVector& exprs,
     const ColumnVector& names) const {

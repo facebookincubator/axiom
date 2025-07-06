@@ -143,8 +143,8 @@ Plan::Plan(RelationOpPtr _op, const PlanState& state)
 
 bool Plan::isStateBetter(const PlanState& state, float perRowMargin) const {
   return cost.unitCost * cost.inputCardinality + cost.setupCost >
-             state.cost.unitCost * state.cost.inputCardinality +
-                 state.cost.setupCost + perRowMargin * state.cost.fanout;
+      state.cost.unitCost * state.cost.inputCardinality + state.cost.setupCost +
+      perRowMargin * state.cost.fanout;
 }
 
 std::string Plan::printCost() const {
@@ -290,7 +290,8 @@ PlanPtr PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
       if (newIsBetterWithShuffle && old->op->distribution().order.empty()) {
         // Old plan has no order and is worse than new plus shuffle. Can't win.
         // rase.
-        queryCtx()->optimization()->trace(Optimization::kExceededBest, state.dt->id(), old->cost, *old->op);
+        queryCtx()->optimization()->trace(
+            Optimization::kExceededBest, state.dt->id(), old->cost, *old->op);
         plans.erase(plans.begin() + i);
         --i;
         continue;
