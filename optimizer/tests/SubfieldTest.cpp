@@ -113,7 +113,7 @@ class SubfieldTest : public QueryTestBase,
   static core::TypedExprPtr fieldIndexHook(
       std::shared_ptr<const core::FieldAccessExpr> fae,
       std::vector<core::TypedExprPtr>& children) {
-    auto name = fae->getFieldName();
+    auto name = fae->name();
     if (name.size() < 3 || name[0] != '_' || name[1] != '_') {
       return nullptr;
     }
