@@ -525,16 +525,16 @@ BuiltinNames::BuiltinNames()
 
 Name BuiltinNames::reverse(Name name) const {
   if (name == lt) {
-    return gte;
-  }
-  if (name == lte) {
     return gt;
   }
+  if (name == lte) {
+    return gte;
+  }
   if (name == gt) {
-    return lte;
+    return lt;
   }
   if (name == gte) {
-    return lt;
+    return lte;
   }
   return name;
 }
@@ -896,12 +896,23 @@ ColumnCP Optimization::makeMark(const core::AbstractJoinNode& join) {
 
 void Optimization::translateJoin(const core::AbstractJoinNode& join) {
   bool isInner = join.isInnerJoin();
-  makeQueryGraph(*join.sources()[0], allow(PlanType::kJoin));
-  auto leftKeys = translateColumns(join.leftKeys());
+  auto joinLeft = join.sources()[0];
+  auto joinLeftKeys = join.leftKeys();
+  auto joinRight = join.sources()[1];
+  auto joinRightKeys = join.rightKeys();
+  auto joinType = join.joinType();
+  // Normalize right exists to left exists swapping the sides.
+  if (joinType == core::JoinType::kRightSemiFilter || joinType == core::JoinType::kRightSemiProject) {
+    std::swap(joinLeft, joinRight);
+    std::swap(joinLeftKeys, joinRightKeys);
+    joinType = joinType == core::JoinType::kRightSemiFilter ? core::JoinType::kLeftSemiFilter : core::JoinType::kLeftSemiProject;
+  }
+    makeQueryGraph(*joinLeft, allow(PlanType::kJoin));
+  auto leftKeys = translateColumns(joinLeftKeys);
   // For an inner join a join tree on the right can be flattened, for all other
   // kinds it must be kept together in its own dt.
-  makeQueryGraph(*join.sources()[1], isInner ? allow(PlanType::kJoin) : 0);
-  auto rightKeys = translateColumns(join.rightKeys());
+  makeQueryGraph(*joinRight, isInner ? allow(PlanType::kJoin) : 0);
+  auto rightKeys = translateColumns(joinRightKeys);
   ExprVector conjuncts;
   translateConjuncts(join.filter(), conjuncts);
   if (isInner) {
@@ -920,7 +931,6 @@ void Optimization::translateJoin(const core::AbstractJoinNode& join) {
     currentSelect_->conjuncts.insert(
         currentSelect_->conjuncts.end(), conjuncts.begin(), conjuncts.end());
   } else {
-    auto joinType = join.joinType();
     bool leftOptional =
         joinType == core::JoinType::kRight || joinType == core::JoinType::kFull;
     bool rightOptional =

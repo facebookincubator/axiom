@@ -113,6 +113,8 @@ struct PlanSubfields {
     }
     return it->second.resultPaths.count(ordinal) != 0;
   }
+
+  std::string toString() const;
 };
 
 /// Struct for resolving which PlanNode or Lambda defines which

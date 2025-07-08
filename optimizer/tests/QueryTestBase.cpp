@@ -115,7 +115,7 @@ void QueryTestBase::SetUp() {
 void QueryTestBase::TearDown() {
   // If we mean to save the history of running the suite, move the local history
   // to its static location.
-  if (FLAGS_history_save_path.empty()) {
+  if (!FLAGS_history_save_path.empty()) {
     suiteHistory_ = std::move(history_);
   }
   queryCtx_.reset();

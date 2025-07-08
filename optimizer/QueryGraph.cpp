@@ -89,6 +89,17 @@ std::string Call::toString() const {
   return out.str();
 }
 
+std::string Field::toString() const {
+  std::stringstream out;
+  out << base_->toString() << ".";
+  if (field_) {
+    out << field_;
+  } else {
+    out << fmt::format("{}", index_);
+  }
+  return out.str();
+}
+
 std::string conjunctsToString(const ExprVector& conjuncts) {
   std::stringstream out;
   for (auto i = 0; i < conjuncts.size(); ++i) {

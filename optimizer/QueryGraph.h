@@ -230,7 +230,11 @@ inline folly::Range<T*> toRange(const std::vector<T, QGAllocator<T>>& v) {
 class Field : public Expr {
  public:
   Field(const Type* type, ExprCP base, Name field)
-      : Expr(PlanType::kField, Value(type, 1)), field_(field), base_(base) {}
+      : Expr(PlanType::kField, Value(type, 1)), field_(field), base_(base) {
+    columns_ = base->columns();
+    subexpressions_ = base->subexpressions();
+  }
+
   Field(const Type* type, ExprCP base, int32_t index)
       : Expr(PlanType::kField, Value(type, 1)),
         field_(nullptr),
@@ -248,6 +252,8 @@ class Field : public Expr {
     return index_;
   }
 
+  std::string toString() const override;
+  
   ExprCP base() const {
     return base_;
   }

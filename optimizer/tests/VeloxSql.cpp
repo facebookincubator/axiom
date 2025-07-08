@@ -638,11 +638,11 @@ class VeloxRunner : public QueryBenchmarkBase {
   }
 
   void saveHistory() {
-    history_->saveToFile(FLAGS_data_path + "/.hiistory");
+    history_->saveToFile(FLAGS_data_path + "/.history");
   }
 
   void clearHistory() {
-    history_ = std::make_unique<VeloxHistory>();
+    history_ = std::make_unique<optimizer::VeloxHistory>();
   }
 
  private:
@@ -830,8 +830,13 @@ void readCommands(
       free(value);
       continue;
     }
-    if (substr(command, 0, 11) == "savehistory") {
+    if (command.substr(0, 11) == "savehistory") {
       runner.saveHistory();
+      continue;
+    }
+    if (command.substr(0, 12) == "clearhistory") {
+      runner.clearHistory();
+      continue;
     }
     runner.run(command);
   }

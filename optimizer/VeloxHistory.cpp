@@ -228,26 +228,31 @@ void VeloxHistory::recordVeloxExecution(
 
 folly::dynamic VeloxHistory::serialize() {
   folly::dynamic obj = folly::dynamic::object();
+  auto leafArray = folly::dynamic::array();
   for (auto& pair : leafSelectivities_) {
     folly::dynamic leaf = folly::dynamic::object();
     leaf["key"] = pair.first;
     leaf["value"] = pair.second;
-    obj["leaves"] = leaf;
+    leafArray.push_back(leaf);
   }
+  obj["leaves"] = leafArray;
+  auto joinArray = folly::dynamic::array();
   for (auto& pair : joinSamples_) {
     folly::dynamic join = folly::dynamic::object();
     join["key"] = pair.first;
     join["lr"] = pair.second.first;
     join["rl"] = pair.second.second;
-    obj["joins"] = join;
+    joinArray.push_back(join);
   }
+  obj["joins"] = joinArray;
+  auto planArray = folly::dynamic::array();
   for (auto& pair : planHistory_) {
     folly::dynamic plan = folly::dynamic::object();
     plan["key"] = pair.first;
     plan["card"] = pair.second.cardinality;
-    obj["plans"] = plan;
+    planArray.push_back(plan);
   }
-
+  obj["plans"] = planArray;
   return obj;
 }
 
