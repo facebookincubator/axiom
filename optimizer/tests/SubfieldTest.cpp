@@ -54,7 +54,7 @@ class GenieFunction : public exec::VectorFunction {
     return {
         exec::FunctionSignatureBuilder()
             .returnType(
-                "row(bigint, map(integer, real), map(integer, array(bigint)), map(integer, map(bigint, real)))")
+                "row(userid bigint, ff map(integer, real), idlf map(integer, array(bigint)), idsf map(integer, map(bigint, real)))")
             .argumentType("bigint")
             .argumentType("map(integer, real)")
             .argumentType("map(integer, array(bigint))")
@@ -395,11 +395,12 @@ TEST_P(SubfieldTest, maps) {
           .tableScan("features", rowType)
           .project(
               {"genie(uid, float_features, id_list_features, id_score_list_features) as g"})
+          // Access some fields of the genie by name, others by index.
           .project(
-              {"g.__1[10200::INTEGER] as f2",
+              {"g.ff[10200::INTEGER] as f2",
                "g.__1[10100::INTEGER] as f11",
                "g.__1[10200::INTEGER] + 22::REAL  as f2b",
-               "g.__2[201600::INTEGER] as idl100"});
+               "g.idlf[201600::INTEGER] as idl100"});
 
   plan = veloxString(planVelox(builder.planNode()).plan);
   expectRegexp(plan, "float_features.*Subfield.*float_features.10200");

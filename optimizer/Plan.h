@@ -113,6 +113,8 @@ struct PlanSubfields {
     }
     return it->second.resultPaths.count(ordinal) != 0;
   }
+
+  std::string toString() const;
 };
 
 /// Struct for resolving which PlanNode or Lambda defines which
@@ -153,8 +155,9 @@ using BuildSet = std::vector<HashBuildPtr>;
 struct Plan {
   Plan(RelationOpPtr op, const PlanState& state);
 
-  /// True if 'state' has a lower cost than 'this'.
-  bool isStateBetter(const PlanState& state) const;
+  /// True if 'state' has a lower cost than 'this'. If 'perRowMargin' is given,
+  /// then 'other' must win by margin per row.
+  bool isStateBetter(const PlanState& state, float perRowMargin = 0) const;
 
   // Root of the plan tree.
   RelationOpPtr op;
@@ -196,11 +199,8 @@ struct PlanSet {
   // Interesting equivalent plans.
   std::vector<std::unique_ptr<Plan>> plans;
 
-  // plan with lowest cost + setupCost. Member of 'plans'.
-  PlanPtr bestPlan{nullptr};
-
-  // Cost of 'bestPlan' plus shuffle. If a cutoff is applicable, nothing more
-  // expensive than this should be tried.
+  // Cost of lowest cost  plan plus shuffle. If a cutoff is applicable, nothing
+  // more expensive than this should be tried.
   float bestCostWithShuffle{0};
 
   // Returns the best plan that produces 'distribution'. If the best plan has
@@ -381,7 +381,7 @@ struct PlanState {
   /// True if the costs accumulated so far are so high that this should not be
   /// explored further.
   bool isOverBest() const {
-    return hasCutoff && plans.bestPlan &&
+    return hasCutoff && plans.bestCostWithShuffle != 0 &&
         cost.unitCost + cost.setupCost > plans.bestCostWithShuffle;
   }
 
@@ -482,6 +482,27 @@ struct PlanAndStats {
   NodePredictionMap prediction;
 };
 
+struct BuiltinNames {
+  BuiltinNames();
+
+  Name reverse(Name op) const;
+  bool isCanonicalizable(Name name) const {
+    return canonicalizable.find(name) != canonicalizable.end();
+  }
+
+  Name eq;
+  Name lt;
+  Name lte;
+  Name gt;
+  Name gte;
+  Name plus;
+  Name multiply;
+  Name _and;
+  Name _or;
+
+  folly::F14FastSet<Name> canonicalizable;
+};
+
 /// Instance of query optimization. Comverts a plan and schema into an
 /// optimized plan. Depends on QueryGraphContext being set on the
 /// calling thread. There is one instance per query to plan. The
@@ -511,9 +532,6 @@ class Optimization {
   PlanAndStats toVeloxPlan(
       RelationOpPtr plan,
       const velox::runner::MultiFragmentPlan::Options& options);
-
-  // Produces trace output if event matches 'traceFlags_'.
-  void trace(int32_t event, int32_t id, const Cost& cost, RelationOp& plan);
 
   void setLeafHandle(
       int32_t id,
@@ -639,6 +657,17 @@ class Optimization {
     return options_;
   }
 
+  BuiltinNames& builtinNames();
+
+  // Returns a dedupped left deep reduction with 'func' for the
+  // elements in set1 and set2. The elements are sorted on plan object
+  // id and then combined into a left deep reduction on 'func'.
+  ExprCP
+  combineLeftDeep(Name func, const ExprVector& set1, const ExprVector& set2);
+
+  /// Produces trace output if event matches 'traceFlags_'.
+  void trace(int32_t event, int32_t id, const Cost& cost, RelationOp& plan);
+
  private:
   static constexpr uint64_t kAllAllowedInDt = ~0UL;
 
@@ -761,6 +790,11 @@ class Optimization {
 
   // Makes a deduplicated Expr tree from 'expr'.
   ExprCP translateExpr(const velox::core::TypedExprPtr& expr);
+
+  // For comparisons, swaps the args to have a canonical form for
+  // deduplication. E.g column op constant, and Smaller plan object id
+  // to the left.
+  void canonicalizeCall(Name& name, ExprVector& args);
 
   // Creates or returns pre-existing function call with name+args. If
   // deterministic, a new ExprCP is remembered for reuse.
@@ -1178,6 +1212,8 @@ class Optimization {
 
   // True if wrapping a nondeterministic filter inside a DT in ToGraph.
   bool isNondeterministicWrap_{false};
+
+  std::unique_ptr<BuiltinNames> builtinNames_;
 };
 
 /// True if single worker, i.e. do not plan remote exchanges

@@ -141,9 +141,10 @@ Plan::Plan(RelationOpPtr _op, const PlanState& state)
       columns(state.targetColumns),
       fullyImported(state.dt->fullyImported) {}
 
-bool Plan::isStateBetter(const PlanState& state) const {
+bool Plan::isStateBetter(const PlanState& state, float perRowMargin) const {
   return cost.unitCost * cost.inputCardinality + cost.setupCost >
-      state.cost.unitCost * state.cost.inputCardinality + state.cost.setupCost;
+      state.cost.unitCost * state.cost.inputCardinality + state.cost.setupCost +
+      perRowMargin * state.cost.fanout;
 }
 
 std::string Plan::printCost() const {
@@ -260,6 +261,7 @@ std::string PlanState::printPlan(RelationOpPtr op, bool detail) const {
 PlanPtr PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
   bool insert = plans.empty();
   int32_t replaceIndex = -1;
+  float shuffle = shuffleCost(plan->columns()) * state.cost.fanout;
   if (!insert) {
     // Compare with existing. If there is one with same distribution
     // and new is better, replace. If there is one with a different
@@ -271,33 +273,48 @@ PlanPtr PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
       if (!(state.input == old->input)) {
         continue;
       }
-      if (!old->isStateBetter(state)) {
+      bool newIsBetter = old->isStateBetter(state);
+      bool newIsBetterWithShuffle = old->isStateBetter(state, shuffle);
+      bool sameDist =
+          old->op->distribution().isSamePartition(plan->distribution());
+      bool sameOrder =
+          old->op->distribution().isSameOrder(plan->distribution());
+      if (sameDist && sameOrder) {
+        if (newIsBetter) {
+          replaceIndex = i;
+          continue;
+        }
+        // There's a better one with same dist and partition.
+        return nullptr;
+      }
+      if (newIsBetterWithShuffle && old->op->distribution().order.empty()) {
+        // Old plan has no order and is worse than new plus shuffle. Can't win.
+        // rase.
+        queryCtx()->optimization()->trace(
+            Optimization::kExceededBest, state.dt->id(), old->cost, *old->op);
+        plans.erase(plans.begin() + i);
+        --i;
         continue;
       }
-      if (old->op->distribution().isSamePartition(plan->distribution())) {
-        replaceIndex = i;
-        continue;
+      if (plan->distribution().order.empty() &&
+          !old->isStateBetter(state, -shuffle)) {
+        // New has no order and old would beat it even after adding shuffle.
+        return nullptr;
       }
     }
   }
-  if (insert || replaceIndex != -1) {
-    auto newPlan = std::make_unique<Plan>(plan, state);
-    auto result = newPlan.get();
-    if (!bestPlan ||
-        bestPlan->cost.unitCost + bestPlan->cost.setupCost >
-            result->cost.unitCost + result->cost.setupCost) {
-      bestPlan = result;
-      bestCostWithShuffle = result->cost.unitCost + result->cost.setupCost +
-          shuffleCost(result->op->columns()) * result->cost.fanout;
-    }
-    if (replaceIndex >= 0) {
-      plans[replaceIndex] = std::move(newPlan);
-    } else {
-      plans.push_back(std::move(newPlan));
-    }
-    return result;
+  auto newPlan = std::make_unique<Plan>(plan, state);
+  auto* result = newPlan.get();
+  auto newPlanCost = result->cost.unitCost + result->cost.setupCost + shuffle;
+  if (bestCostWithShuffle == 0 || newPlanCost < bestCostWithShuffle) {
+    bestCostWithShuffle = newPlanCost;
   }
-  return nullptr;
+  if (replaceIndex >= 0) {
+    plans[replaceIndex] = std::move(newPlan);
+  } else {
+    plans.push_back(std::move(newPlan));
+  }
+  return result;
 }
 
 PlanPtr PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
@@ -1249,6 +1266,7 @@ void Optimization::joinByHashRight(
         probe.keys);
     auto* probeShuffle =
         make<Repartition>(probeInput, probeDist, probeInput->columns());
+    probeState.addCost(*probeShuffle);
     probeInput = probeShuffle;
   }
   ExprVector buildPartCols;
@@ -1629,9 +1647,8 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
       }
       addPostprocess(dt, plan, state);
       auto kept = state.plans.addPlan(plan, state);
-      if (kept) {
-        trace(kRetained, dt->id(), state.cost, *kept->op);
-      }
+      trace(kept ? kRetained : kExceededBest, dt->id(), state.cost, *plan);
+
       return;
     }
     std::vector<NextJoin> nextJoins;

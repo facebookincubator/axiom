@@ -140,12 +140,22 @@ const char* joinTypeLabel(velox::core::JoinType type) {
   }
 }
 
+std::string sanitizeHistoryKey(std::string in) {
+  for (auto i = 0; i < in.size(); ++i) {
+    unsigned char c = in[i];
+    if (c < 32 || c > 127 || c == '{' || c == '}' || c == '"') {
+      in[i] = '?';
+    }
+  }
+  return in;
+}
+
 const std::string& TableScan::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
   std::stringstream out;
-  out << "{scan " << baseTable->schemaTable->name << "(";
+  out << "scan " << baseTable->schemaTable->name << "(";
   auto* opt = queryCtx()->optimization();
   ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
   for (auto& key : keys) {
@@ -163,7 +173,7 @@ const std::string& TableScan::historyKey() const {
     out << "f: " << f << ", ";
   }
   out << ")";
-  key_ = out.str();
+  key_ = sanitizeHistoryKey(out.str());
   return key_;
 }
 
@@ -222,7 +232,7 @@ const std::string& Join::historyKey() const {
         << rightTree << " keys " << rightText << " = " << leftText << leftTree
         << ")";
   }
-  key_ = out.str();
+  key_ = sanitizeHistoryKey(out.str());
   return key_;
 }
 
@@ -302,7 +312,7 @@ const std::string& Aggregation::historyKey() const {
   for (auto& s : strings) {
     out << s << ", ";
   }
-  key_ = out.str();
+  key_ = sanitizeHistoryKey(out.str());
   return key_;
 }
 
@@ -343,7 +353,7 @@ const std::string& Filter::historyKey() const {
     out << s << ", ";
   }
   out << ")";
-  key_ = out.str();
+  key_ = sanitizeHistoryKey(out.str());
   return key_;
 }
 
