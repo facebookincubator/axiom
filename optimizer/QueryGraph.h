@@ -253,7 +253,7 @@ class Field : public Expr {
   }
 
   std::string toString() const override;
-  
+
   ExprCP base() const {
     return base_;
   }

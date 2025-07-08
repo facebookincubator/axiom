@@ -902,12 +902,15 @@ void Optimization::translateJoin(const core::AbstractJoinNode& join) {
   auto joinRightKeys = join.rightKeys();
   auto joinType = join.joinType();
   // Normalize right exists to left exists swapping the sides.
-  if (joinType == core::JoinType::kRightSemiFilter || joinType == core::JoinType::kRightSemiProject) {
+  if (joinType == core::JoinType::kRightSemiFilter ||
+      joinType == core::JoinType::kRightSemiProject) {
     std::swap(joinLeft, joinRight);
     std::swap(joinLeftKeys, joinRightKeys);
-    joinType = joinType == core::JoinType::kRightSemiFilter ? core::JoinType::kLeftSemiFilter : core::JoinType::kLeftSemiProject;
+    joinType = joinType == core::JoinType::kRightSemiFilter
+        ? core::JoinType::kLeftSemiFilter
+        : core::JoinType::kLeftSemiProject;
   }
-    makeQueryGraph(*joinLeft, allow(PlanType::kJoin));
+  makeQueryGraph(*joinLeft, allow(PlanType::kJoin));
   auto leftKeys = translateColumns(joinLeftKeys);
   // For an inner join a join tree on the right can be flattened, for all other
   // kinds it must be kept together in its own dt.

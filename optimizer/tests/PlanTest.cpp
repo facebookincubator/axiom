@@ -262,7 +262,7 @@ TEST_F(PlanTest, q3) {
       "lineitem t2 shuffle *H  (orders t3*H  (customer t4 broadcast   Build ) shuffle   Build ) PARTIAL agg shuffle  FINAL agg");
 }
 TEST_F(PlanTest, q4) {
-  // Incorrect with distributed plan at larger scales. 
+  // Incorrect with distributed plan at larger scales.
   GTEST_SKIP();
   checkTpch(4);
 }
@@ -467,7 +467,9 @@ TEST_F(PlanTest, filterBreakup) {
   checkSame(plan, reference, &planString, &veloxString);
 
   // Expect the per table filters to be extracted from the OR.
-  expectRegexp(veloxString, "lineitem,.*range.*l_shipinstruct,.*l_shipmode.*remaining.*l_quantity.*l_quantity.*l_quantity");
+  expectRegexp(
+      veloxString,
+      "lineitem,.*range.*l_shipinstruct,.*l_shipmode.*remaining.*l_quantity.*l_quantity.*l_quantity");
   expectRegexp(veloxString, "part.*p_size.*p_container");
 }
 int main(int argc, char** argv) {

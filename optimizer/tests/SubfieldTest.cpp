@@ -395,8 +395,8 @@ TEST_P(SubfieldTest, maps) {
           .tableScan("features", rowType)
           .project(
               {"genie(uid, float_features, id_list_features, id_score_list_features) as g"})
-    // Access some fields of the genie by name, others by index.
-    .project(
+          // Access some fields of the genie by name, others by index.
+          .project(
               {"g.ff[10200::INTEGER] as f2",
                "g.__1[10100::INTEGER] as f11",
                "g.__1[10200::INTEGER] + 22::REAL  as f2b",

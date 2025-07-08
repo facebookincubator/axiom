@@ -149,7 +149,7 @@ std::string sanitizeHistoryKey(std::string in) {
   }
   return in;
 }
-  
+
 const std::string& TableScan::historyKey() const {
   if (!key_.empty()) {
     return key_;
