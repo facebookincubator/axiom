@@ -77,6 +77,9 @@ void Optimization::markFieldAccessed(
   auto fields = isControl ? &controlSubfields_ : &payloadSubfields_;
   if (source.planNode) {
     auto name = source.planNode->name();
+    if (name == "TableScan") {
+      LOG(INFO) << "ff";
+    }
     auto path = stepsToPath(steps);
     fields->nodeFields[source.planNode].resultPaths[ordinal].add(path->id());
     if (name == "Project") {
@@ -482,6 +485,33 @@ core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
     default:
       VELOX_NYI();
   }
+}
+
+std::string PlanSubfields::toString() const {
+  std::stringstream out;
+  out << "Nodes:";
+  for (auto& pair : nodeFields) {
+    out << "Node " << pair.first->id() << " = {";
+    for (auto& s : pair.second.resultPaths) {
+      out << s.first << " -> {";
+      s.second.forEach(
+          [&](auto i) { out << queryCtx()->pathById(i)->toString(); });
+      out << "}\n";
+    }
+  }
+  if (!argFields.empty()) {
+    out << "Functions:";
+    for (auto& pair : argFields) {
+      out << "Func " << pair.first->toString() << " = {";
+      for (auto& s : pair.second.resultPaths) {
+        out << s.first << " -> {";
+        s.second.forEach(
+            [&](auto i) { out << queryCtx()->pathById(i)->toString(); });
+        out << "}\n";
+      }
+    }
+  }
+  return out.str();
 }
 
 } // namespace facebook::velox::optimizer

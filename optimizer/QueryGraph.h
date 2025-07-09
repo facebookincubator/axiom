@@ -40,6 +40,38 @@ namespace facebook::velox::optimizer {
 /// flag. The filter would be expresssed as a conjunct under the top
 /// derived table with x-exists or y-exists.
 
+/// A bit set that qualifies an Expr. Represents which functions/kinds
+/// of functions are found inside the children of an Expr.
+class FunctionSet {
+ public:
+  /// Indicates and aggregate function in the set.
+  static constexpr uint64_t kAggregate = 1;
+
+  /// Indicates a non-determinstic function
+  static constexpr uint64_t kNondeterministic = 1UL << 1;
+
+  FunctionSet() : set_(0) {}
+  explicit FunctionSet(uint64_t set) : set_(set) {}
+
+  /// True if 'item' is in 'this'.
+  bool contains(int64_t item) const {
+    return 0 != (set_ & item);
+  }
+
+  /// Unions 'this' and 'other' and returns the result.
+  FunctionSet operator|(const FunctionSet& other) const {
+    return FunctionSet(set_ | other.set_);
+  }
+
+  /// Unions 'this' and 'other' and returns the result.
+  FunctionSet operator|(uint64_t other) const {
+    return FunctionSet(set_ | other);
+  }
+
+ private:
+  uint64_t set_;
+};
+
 /// Superclass for all expressions.
 class Expr : public PlanObject {
  public:
@@ -76,6 +108,8 @@ class Expr : public PlanObject {
   virtual bool containsFunction(uint64_t /*set*/) const {
     return false;
   }
+
+  virtual const FunctionSet& functions() const;
 
  protected:
   // The columns this depends on.
@@ -196,7 +230,11 @@ inline folly::Range<T*> toRange(const std::vector<T, QGAllocator<T>>& v) {
 class Field : public Expr {
  public:
   Field(const Type* type, ExprCP base, Name field)
-      : Expr(PlanType::kField, Value(type, 1)), field_(field), base_(base) {}
+      : Expr(PlanType::kField, Value(type, 1)), field_(field), base_(base) {
+    columns_ = base->columns();
+    subexpressions_ = base->subexpressions();
+  }
+
   Field(const Type* type, ExprCP base, int32_t index)
       : Expr(PlanType::kField, Value(type, 1)),
         field_(nullptr),
@@ -213,6 +251,8 @@ class Field : public Expr {
   int32_t index() const {
     return index_;
   }
+
+  std::string toString() const override;
 
   ExprCP base() const {
     return base_;
@@ -238,38 +278,6 @@ struct SubfieldSet {
   std::vector<BitSet, QGAllocator<BitSet>> subfields;
 
   std::optional<BitSet> findSubfields(int32_t id) const;
-};
-
-/// A bit set that qualifies a function call. Represents which functions/kinds
-/// of functions are found inside the children of a function call.
-class FunctionSet {
- public:
-  /// Indicates and aggregate function in the set.
-  static constexpr uint64_t kAggregate = 1;
-
-  /// Indicates a non-determinstic function
-  static constexpr uint64_t kNondeterministic = 1UL << 1;
-
-  FunctionSet() : set_(0) {}
-  explicit FunctionSet(uint64_t set) : set_(set) {}
-
-  /// True if 'item' is in 'this'.
-  bool contains(int64_t item) const {
-    return 0 != (set_ & item);
-  }
-
-  /// Unions 'this' and 'other' and returns the result.
-  FunctionSet operator|(const FunctionSet& other) const {
-    return FunctionSet(set_ | other.set_);
-  }
-
-  /// Unions 'this' and 'other' and returns the result.
-  FunctionSet operator|(uint64_t other) const {
-    return FunctionSet(set_ | other);
-  }
-
- private:
-  uint64_t set_;
 };
 
 /// Describes where the args given to a lambda come from.
@@ -383,7 +391,7 @@ class Call : public Expr {
     return name_;
   }
 
-  const FunctionSet functions() const {
+  const FunctionSet& functions() const override {
     return functions_;
   }
 
@@ -857,6 +865,9 @@ struct DerivedTable : public PlanObject {
   // tables.
   ExprVector conjuncts;
 
+  // Number of fully processed leading elements of 'conjuncts'.
+  int32_t numCanonicalConjuncts{0};
+
   // Set of reducing joined tables imported to reduce build size. Set if 'this'
   // represents a build side join.
   PlanObjectSet importedExistences;
@@ -897,6 +908,13 @@ struct DerivedTable : public PlanObject {
 
   /// Completes 'joins' with edges implied by column equivalences.
   void addImpliedJoins();
+
+  /// Extracts implied conjuncts and removes duplicates from
+  /// 'conjuncts' and updates 'conjuncts'. Extracted conjuncts may
+  /// allow extra pushdown or allow create join edges. May be called
+  /// repeatedly, each e.g. after pushing down conjuncts from outer
+  /// DTs.
+  void expandConjuncts();
 
   /// Initializes 'this' to join 'tables' from 'super'. Adds the joins from
   /// 'existences' as semijoins to limit cardinality when making a hash join

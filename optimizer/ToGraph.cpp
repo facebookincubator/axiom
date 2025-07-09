@@ -502,11 +502,72 @@ void Optimization::ensureFunctionSubfields(const core::TypedExprPtr& expr) {
   }
 }
 
+BuiltinNames::BuiltinNames()
+    : eq(toName("eq")),
+      lt(toName("lt")),
+      lte(toName("lte")),
+      gt(toName("gt")),
+      gte(toName("gte")),
+      plus(toName("plus")),
+      multiply(toName("multiply")),
+      _and(toName("and")),
+      _or(toName("or")) {
+  canonicalizable.insert(eq);
+  canonicalizable.insert(lt);
+  canonicalizable.insert(lte);
+  canonicalizable.insert(gt);
+  canonicalizable.insert(gte);
+  canonicalizable.insert(plus);
+  canonicalizable.insert(multiply);
+  canonicalizable.insert(_and);
+  canonicalizable.insert(_or);
+}
+
+Name BuiltinNames::reverse(Name name) const {
+  if (name == lt) {
+    return gt;
+  }
+  if (name == lte) {
+    return gte;
+  }
+  if (name == gt) {
+    return lt;
+  }
+  if (name == gte) {
+    return lte;
+  }
+  return name;
+}
+
+BuiltinNames& Optimization::builtinNames() {
+  if (!builtinNames_) {
+    builtinNames_ = std::make_unique<BuiltinNames>();
+  }
+  return *builtinNames_;
+}
+
+void Optimization::canonicalizeCall(Name& name, ExprVector& args) {
+  auto& names = builtinNames();
+  if (!names.isCanonicalizable(name)) {
+    return;
+  }
+  VELOX_CHECK_EQ(args.size(), 2, "Expecting binary op {}", name);
+  if ((args[0]->type() == PlanType::kLiteral &&
+       args[1]->type() != PlanType::kLiteral) ||
+      args[0]->id() > args[1]->id()) {
+    std::swap(args[0], args[1]);
+    name = names.reverse(name);
+  }
+}
+
 ExprCP Optimization::deduppedCall(
     Name name,
     Value value,
     ExprVector args,
     FunctionSet flags) {
+  if (args.size() == 2) {
+    canonicalizeCall(name, args);
+  }
   ExprDedupKey key = {name, &args};
   auto it = functionDedup_.find(key);
   if (it != functionDedup_.end()) {
@@ -835,12 +896,26 @@ ColumnCP Optimization::makeMark(const core::AbstractJoinNode& join) {
 
 void Optimization::translateJoin(const core::AbstractJoinNode& join) {
   bool isInner = join.isInnerJoin();
-  makeQueryGraph(*join.sources()[0], allow(PlanType::kJoin));
-  auto leftKeys = translateColumns(join.leftKeys());
+  auto joinLeft = join.sources()[0];
+  auto joinLeftKeys = join.leftKeys();
+  auto joinRight = join.sources()[1];
+  auto joinRightKeys = join.rightKeys();
+  auto joinType = join.joinType();
+  // Normalize right exists to left exists swapping the sides.
+  if (joinType == core::JoinType::kRightSemiFilter ||
+      joinType == core::JoinType::kRightSemiProject) {
+    std::swap(joinLeft, joinRight);
+    std::swap(joinLeftKeys, joinRightKeys);
+    joinType = joinType == core::JoinType::kRightSemiFilter
+        ? core::JoinType::kLeftSemiFilter
+        : core::JoinType::kLeftSemiProject;
+  }
+  makeQueryGraph(*joinLeft, allow(PlanType::kJoin));
+  auto leftKeys = translateColumns(joinLeftKeys);
   // For an inner join a join tree on the right can be flattened, for all other
   // kinds it must be kept together in its own dt.
-  makeQueryGraph(*join.sources()[1], isInner ? allow(PlanType::kJoin) : 0);
-  auto rightKeys = translateColumns(join.rightKeys());
+  makeQueryGraph(*joinRight, isInner ? allow(PlanType::kJoin) : 0);
+  auto rightKeys = translateColumns(joinRightKeys);
   ExprVector conjuncts;
   translateConjuncts(join.filter(), conjuncts);
   if (isInner) {
@@ -859,7 +934,6 @@ void Optimization::translateJoin(const core::AbstractJoinNode& join) {
     currentSelect_->conjuncts.insert(
         currentSelect_->conjuncts.end(), conjuncts.begin(), conjuncts.end());
   } else {
-    auto joinType = join.joinType();
     bool leftOptional =
         joinType == core::JoinType::kRight || joinType == core::JoinType::kFull;
     bool rightOptional =

@@ -270,6 +270,7 @@ class VeloxRunner : public QueryBenchmarkBase {
           return toTableScan(id, name, rowType, columnNames);
         });
     history_ = std::make_unique<facebook::velox::optimizer::VeloxHistory>();
+    history_->updateFromFile(FLAGS_data_path + "/.history");
     executor_ =
         std::make_shared<folly::CPUThreadPoolExecutor>(std::max<int32_t>(
             std::thread::hardware_concurrency() * 2,
@@ -636,6 +637,14 @@ class VeloxRunner : public QueryBenchmarkBase {
     return modifiedFlags_;
   }
 
+  void saveHistory() {
+    history_->saveToFile(FLAGS_data_path + "/.history");
+  }
+
+  void clearHistory() {
+    history_ = std::make_unique<optimizer::VeloxHistory>();
+  }
+
  private:
   template <typename T>
   static void write(const T& value, std::ostream& out) {
@@ -821,7 +830,14 @@ void readCommands(
       free(value);
       continue;
     }
-
+    if (command.substr(0, 11) == "savehistory") {
+      runner.saveHistory();
+      continue;
+    }
+    if (command.substr(0, 12) == "clearhistory") {
+      runner.clearHistory();
+      continue;
+    }
     runner.run(command);
   }
 }

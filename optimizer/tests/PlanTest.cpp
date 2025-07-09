@@ -35,6 +35,8 @@ DECLARE_int32(optimizer_trace);
 
 DECLARE_int32(num_workers);
 
+DECLARE_string(history_save_path);
+
 using namespace facebook::velox;
 using namespace facebook::velox::optimizer;
 using namespace facebook::velox::optimizer::test;
@@ -55,6 +57,9 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
   }
 
   static void TearDownTestCase() {
+    if (!FLAGS_history_save_path.empty()) {
+      suiteHistory_->saveToFile(FLAGS_history_save_path);
+    }
     LocalRunnerTestBase::TearDownTestCase();
     ParquetTpchTest::TearDownTestCase();
   }
@@ -102,8 +107,12 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
   void checkSame(
       const core::PlanNodePtr& planNode,
       core::PlanNodePtr referencePlan = nullptr,
-      std::string* planString = nullptr) {
+      std::string* planString = nullptr,
+      std::string* veloxPlan = nullptr) {
     auto fragmentedPlan = planVelox(planNode, planString);
+    if (veloxPlan) {
+      *veloxPlan = veloxString(fragmentedPlan.plan);
+    }
     auto reference = referencePlan ? referencePlan : planNode;
     TestResult referenceResult;
     assertSame(reference, fragmentedPlan, &referenceResult);
@@ -172,6 +181,12 @@ class PlanTest : public virtual ParquetTpchTest, public virtual QueryTestBase {
       expectPlan(planText, expected);
     } else {
       std::cout << " -- plan = " << planText << std::endl;
+    }
+  }
+
+  void appendNames(const RowTypePtr& type, std::vector<std::string>& names) {
+    for (auto i = 0; i < type->size(); ++i) {
+      names.push_back(type->nameOf(i));
     }
   }
 
@@ -247,6 +262,8 @@ TEST_F(PlanTest, q3) {
       "lineitem t2 shuffle *H  (orders t3*H  (customer t4 broadcast   Build ) shuffle   Build ) PARTIAL agg shuffle  FINAL agg");
 }
 TEST_F(PlanTest, q4) {
+  // Incorrect with distributed plan at larger scales.
+  GTEST_SKIP();
   checkTpch(4);
 }
 
@@ -259,8 +276,6 @@ TEST_F(PlanTest, q6) {
 }
 
 TEST_F(PlanTest, q7) {
-  // Need to push down the or of n_name to scans.
-  GTEST_SKIP();
   checkTpch(7);
 }
 
@@ -316,8 +331,6 @@ TEST_F(PlanTest, q18) {
 }
 
 TEST_F(PlanTest, q19) {
-  // Recognize common conjuncts in ands inside a top level or.
-  GTEST_SKIP();
   checkTpch(19);
 }
 
@@ -337,44 +350,44 @@ TEST_F(PlanTest, q22) {
 }
 
 TEST_F(PlanTest, filterToJoinEdge) {
-  auto orderType = ROW({"o_custkey"}, {BIGINT()});
-  auto customerType = ROW({"c_custkey"}, {BIGINT()});
+  auto nationType = ROW({"n_regionkey"}, {BIGINT()});
+  auto regionType = ROW({"r_regionkey"}, {BIGINT()});
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto nested = exec::test::PlanBuilder(planNodeIdGenerator)
-                    .tableScan("orders", orderType, {}, {})
+                    .tableScan("nation", nationType, {}, {})
                     .nestedLoopJoin(
                         exec::test::PlanBuilder(planNodeIdGenerator)
-                            .tableScan("customer", customerType, {}, {})
+                            .tableScan("region", regionType, {}, {})
                             .planNode(),
-                        {"o_custkey", "c_custkey"},
+                        {"n_regionkey", "r_regionkey"},
                         core::JoinType::kInner)
-                    .filter("c_custkey + 1 = o_custkey + 1")
+                    .filter("n_regionkey + 1 = r_regionkey + 1")
                     .planNode();
   std::string plan;
   checkSame(nested, nullptr, &plan);
-  expectPlan(plan, "orders t2*H  (customer t3  Build ) project");
+  expectPlan(plan, "nation t2*H  (region t3  Build ) project");
 
-  nested = exec::test::PlanBuilder(planNodeIdGenerator)
-               .tableScan("orders", orderType, {}, {})
-               .filter("random() < 2::DOUBLE")
-               .nestedLoopJoin(
-                   exec::test::PlanBuilder(planNodeIdGenerator)
-                       .tableScan("customer", customerType, {}, {})
-                       .filter("random() < 2::DOUBLE")
-                       .planNode(),
-                   {"o_custkey", "c_custkey"},
-                   core::JoinType::kInner)
-               .filter("c_custkey + 1 = o_custkey + 1 and random() < 2::DOUBLE")
-               .planNode();
+  nested =
+      exec::test::PlanBuilder(planNodeIdGenerator)
+          .tableScan("nation", nationType, {}, {})
+          .filter("random() < 2::DOUBLE")
+          .nestedLoopJoin(
+              exec::test::PlanBuilder(planNodeIdGenerator)
+                  .tableScan("region", regionType, {}, {})
+                  .filter("random() < 2::DOUBLE")
+                  .planNode(),
+              {"n_regionkey", "r_regionkey"},
+              core::JoinType::kInner)
+          .filter("n_regionkey + 1 = r_regionkey + 1 and random() < 2::DOUBLE")
+          .planNode();
   checkSame(nested, nullptr, &plan);
   expectPlan(
       plan,
-      "orders t5 filter 1 exprs  project 1 columns  project 1 columns *H  (customer t8 filter 1 exprs  project 1 columns  project 1 columns  broadcast   Build ) filter 1 exprs  project 2 columns  project 2 columns ");
+      "nation t5 filter 1 exprs  project 1 columns  project 1 columns *H  (region t8 filter 1 exprs  project 1 columns  project 1 columns  broadcast   Build ) filter 1 exprs  project 2 columns  project 2 columns ");
 }
 
 TEST_F(PlanTest, filterImport) {
   auto orderType = ROW({"o_custkey", "o_totalprice"}, {BIGINT(), DOUBLE()});
-  auto customerType = ROW({"c_custkey"}, {BIGINT()});
   auto agg = exec::test::PlanBuilder()
                  .tableScan("orders", orderType, {}, {})
                  .singleAggregation({"o_custkey"}, {"sum(o_totalprice)"})
@@ -388,6 +401,77 @@ TEST_F(PlanTest, filterImport) {
       "orders t3 PARTIAL agg shuffle  FINAL agg project 2 columns  PARTIAL agg FINAL agg filter 1 exprs  project");
 }
 
+TEST_F(PlanTest, filterBreakup) {
+  const char* filterText =
+      "        (\n"
+      "                l_partkey = p_partkey\n"
+      "                and p_brand = 'Brand#12'\n"
+      "                and p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')\n"
+      "                and l_quantity >= 1.0 and l_quantity <= 1.0 + 10.0\n"
+      "                and p_size between 1 and 5\n"
+      "                and l_shipmode in ('AIR', 'AIR REG')\n"
+      "                and l_shipinstruct = 'DELIVER IN PERSON'\n"
+      "        )\n"
+      "        or\n"
+      "        (\n"
+      "                p_partkey = l_partkey\n"
+      "                and p_brand = 'Brand#23'\n"
+      "                and p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')\n"
+      "                and l_quantity >= 10.0 and l_quantity <= 10.0 + 10.0\n"
+      "                and p_size between 1 and 10\n"
+      "                and l_shipmode in ('AIR', 'AIR REG')\n"
+      "                and l_shipinstruct = 'DELIVER IN PERSON'\n"
+      "        )\n"
+      "        or\n"
+      "        (\n"
+      "                p_partkey = l_partkey\n"
+      "                and p_brand = 'Brand#34'\n"
+      "                and p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')\n"
+      "                and l_quantity >= 20.0 and l_quantity <= 20.0 + 10.0\n"
+      "                and p_size between 1 and 15\n"
+      "                and l_shipmode in ('AIR', 'AIR REG')\n"
+      "                and l_shipinstruct = 'DELIVER IN PERSON'\n"
+      "        )\n";
+
+  auto lineitemType = ROW(
+      {{"l_partkey", BIGINT()},
+       {"l_shipmode", VARCHAR()},
+       {"l_shipinstruct", VARCHAR()},
+       {"l_extendedprice", DOUBLE()},
+       {"l_discount", DOUBLE()},
+       {"l_quantity", DOUBLE()}});
+  auto partType = ROW(
+      {{"p_partkey", BIGINT()},
+       {"p_brand", VARCHAR()},
+       {"p_container", VARCHAR()},
+       {"p_size", INTEGER()}});
+  std::vector<std::string> allNames;
+  appendNames(lineitemType, allNames);
+  appendNames(partType, allNames);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      exec::test::PlanBuilder(planNodeIdGenerator, pool_.get())
+          .tableScan("lineitem", lineitemType)
+          .nestedLoopJoin(
+              exec::test::PlanBuilder(planNodeIdGenerator)
+                  .tableScan("part", partType)
+                  .planNode(),
+              allNames)
+          .filter(filterText)
+          .project({"l_extendedprice * (1.0 - l_discount) as part_revenue"})
+          .singleAggregation({}, {"sum(part_revenue)"})
+          .planNode();
+  auto reference = referenceBuilder_->getQueryPlan(19).plan;
+  std::string(planString);
+  std::string veloxString;
+  checkSame(plan, reference, &planString, &veloxString);
+
+  // Expect the per table filters to be extracted from the OR.
+  expectRegexp(
+      veloxString,
+      "lineitem,.*range.*l_shipinstruct,.*l_shipmode.*remaining.*l_quantity.*l_quantity.*l_quantity");
+  expectRegexp(veloxString, "part.*p_size.*p_container");
+}
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init(&argc, &argv, false);

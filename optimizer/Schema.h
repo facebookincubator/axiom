@@ -203,6 +203,9 @@ struct Distribution {
   /// equality on all partitioning key columns.
   bool isSamePartition(const Distribution& other) const;
 
+  /// True if 'other' has the same ordering columns and order type.
+  bool isSameOrder(const Distribution& other) const;
+
   Distribution rename(const ExprVector& exprs, const ColumnVector& names) const;
 
   std::string toString() const;
