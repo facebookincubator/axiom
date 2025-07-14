@@ -17,7 +17,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "velox/frontend/logical_plan/PlanBuilder.h"
+#include "logical_plan/PlanBuilder.h" //@manual
 
 namespace facebook::velox::logical_plan {
 

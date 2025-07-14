@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/frontend/logical_plan/PlanPrinter.h"
+#include "logical_plan/PlanPrinter.h" //@manual
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "velox/frontend/logical_plan/PlanBuilder.h"
-#include "velox/frontend/optimizer/connectors/ConnectorMetadata.h"
+#include "logical_plan/PlanBuilder.h" //@manual
+#include "optimizer/connectors/ConnectorMetadata.h" //@manual
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
@@ -111,6 +111,10 @@ class PlanPrinterTest : public testing::Test {
     aggregate::prestosql::registerAllAggregateFunctions();
     connector::registerConnector(
         std::make_shared<TestConnector>(kTestConnectorId));
+  }
+
+  void TearDown() override {
+    connector::unregisterConnector(kTestConnectorId);
   }
 
   static std::vector<std::string> toLines(const LogicalPlanNodePtr& plan) {

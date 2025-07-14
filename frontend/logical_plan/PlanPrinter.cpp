@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/frontend/logical_plan/PlanPrinter.h"
-#include "velox/frontend/logical_plan/ExprPrinter.h"
+#include "logical_plan/PlanPrinter.h" //@manual
+#include "logical_plan/ExprPrinter.h" //@manual
 
 namespace facebook::velox::logical_plan {
 

@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/frontend/logical_plan/LogicalPlanNode.h"
+#include "logical_plan/LogicalPlanNode.h" //@manual
 
 namespace facebook::velox::logical_plan {
 

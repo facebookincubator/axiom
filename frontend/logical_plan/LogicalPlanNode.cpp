@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/frontend/logical_plan/LogicalPlanNode.h"
-#include "velox/frontend/logical_plan/PlanNodeVisitor.h"
+#include "logical_plan/LogicalPlanNode.h" //@manual
+#include "logical_plan/PlanNodeVisitor.h" //@manual
 
 namespace facebook::velox::logical_plan {
 namespace {

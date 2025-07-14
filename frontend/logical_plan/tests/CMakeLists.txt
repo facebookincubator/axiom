@@ -12,13 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  velox_fe_logical_plan_tests PlanPrinterTest.cpp)
+add_executable(velox_fe_logical_plan_tests
+               PlanPrinterTest.cpp NameAllocatorTest.cpp NameMappingsTest.cpp)
 
 add_test(velox_fe_logical_plan_tests velox_fe_logical_plan_tests)
 
-target_link_libraries(
-  velox_fe_logical_plan_tests
-  velox_fe_logical_plan_builder
-  gtest
-  gtest_main)
+target_link_libraries(velox_fe_logical_plan_tests velox_fe_logical_plan_builder
+                      GTest::gtest GTest::gtest_main GTest::gmock)

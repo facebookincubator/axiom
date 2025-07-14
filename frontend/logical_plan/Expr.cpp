@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/frontend/logical_plan/Expr.h"
+#include "logical_plan/Expr.h" //@manual
 #include <boost/algorithm/string.hpp>
-#include "velox/frontend/logical_plan/ExprVisitor.h"
-#include "velox/frontend/logical_plan/LogicalPlanNode.h"
+#include "logical_plan/ExprVisitor.h" //@manual
+#include "logical_plan/LogicalPlanNode.h" //@manual
 
 namespace facebook::velox::logical_plan {
 

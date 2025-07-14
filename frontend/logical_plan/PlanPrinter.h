@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/frontend/logical_plan/PlanNodeVisitor.h"
+#include "logical_plan/PlanNodeVisitor.h" //@manual
 
 namespace facebook::velox::logical_plan {
 
