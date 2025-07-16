@@ -17,5 +17,8 @@ add_executable(velox_fe_logical_plan_tests
 
 add_test(velox_fe_logical_plan_tests velox_fe_logical_plan_tests)
 
-target_link_libraries(velox_fe_logical_plan_tests velox_fe_logical_plan_builder
-                      GTest::gtest GTest::gtest_main GTest::gmock)
+target_link_libraries(velox_fe_logical_plan_tests
+                      velox_fe_logical_plan_builder
+                      GTest::gtest
+                      GTest::gtest_main
+                      GTest::gmock)

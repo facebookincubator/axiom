@@ -41,7 +41,7 @@ const connector::Table* SchemaResolver::findTable(const std::string& name) {
     VELOX_USER_FAIL("Table name has more than 3 parts: {}", name);
   } else {
     connector = connector::getConnector(name.substr(0, dots[0])).get();
-    lookupName = name.substr(dots[0], name.size());
+    lookupName = name.substr(dots[0] + 1, name.size());
   }
 
   return connector->metadata()->findTable(lookupName);

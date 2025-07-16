@@ -18,89 +18,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "logical_plan/PlanBuilder.h" //@manual
-#include "optimizer/connectors/ConnectorMetadata.h" //@manual
+#include "optimizer/connectors/tests/TestConnector.h" //@manual
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 namespace facebook::velox::logical_plan {
 namespace {
-
-class TestTable : public connector::Table {
- public:
-  TestTable(const std::string& name, const RowTypePtr& schema)
-      : connector::Table(name) {
-    type_ = schema;
-  }
-
-  const std::unordered_map<std::string, const connector::Column*>& columnMap()
-      const override {
-    VELOX_NYI();
-  }
-
-  const std::vector<const connector::TableLayout*>& layouts() const override {
-    VELOX_NYI();
-  }
-
-  uint64_t numRows() const override {
-    VELOX_NYI();
-  }
-};
-
-class TestMetadata : public connector::ConnectorMetadata {
- public:
-  void initialize() override {
-    addTable("test", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
-  }
-
-  const connector::Table* findTable(const std::string& name) override {
-    auto it = tables_.find(name);
-    VELOX_USER_CHECK(it != tables_.end(), "Test table not found: {}", name);
-
-    return it->second.get();
-  }
-
-  connector::ConnectorSplitManager* splitManager() override {
-    VELOX_NYI();
-  }
-
- private:
-  void addTable(const std::string& name, const RowTypePtr& schema) {
-    tables_.emplace(name, std::make_unique<TestTable>(name, schema));
-  }
-
-  std::unordered_map<std::string, std::unique_ptr<TestTable>> tables_;
-};
-
-class TestConnector : public connector::Connector {
- public:
-  explicit TestConnector(const std::string& id)
-      : connector::Connector(id), metadata_{std::make_unique<TestMetadata>()} {
-    metadata_->initialize();
-  }
-
-  connector::ConnectorMetadata* metadata() const override {
-    return metadata_.get();
-  }
-
-  std::unique_ptr<connector::DataSource> createDataSource(
-      const RowTypePtr& /* outputType */,
-      const connector::ConnectorTableHandlePtr& /* tableHandle */,
-      const connector::ColumnHandleMap& /* columnHandles */,
-      connector::ConnectorQueryCtx* /* connectorQueryCtx */) override {
-    VELOX_NYI();
-  }
-
-  std::unique_ptr<connector::DataSink> createDataSink(
-      RowTypePtr /* inputType */,
-      connector::ConnectorInsertTableHandlePtr /* connectorInsertTableHandle */,
-      connector::ConnectorQueryCtx* /* connectorQueryCtx */,
-      connector::CommitStrategy /* commitStrategy */) override {
-    VELOX_NYI();
-  }
-
- private:
-  const std::unique_ptr<TestMetadata> metadata_;
-};
 
 class PlanPrinterTest : public testing::Test {
  protected:
@@ -109,8 +32,12 @@ class PlanPrinterTest : public testing::Test {
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
-    connector::registerConnector(
-        std::make_shared<TestConnector>(kTestConnectorId));
+
+    auto connector =
+        std::make_shared<connector::TestConnector>(kTestConnectorId);
+    connector->addTable(
+        "test", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
+    connector::registerConnector(connector);
   }
 
   void TearDown() override {
