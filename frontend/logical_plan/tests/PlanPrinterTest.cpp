@@ -141,6 +141,31 @@ TEST_F(PlanPrinterTest, aggregate) {
           testing::Eq("")));
 }
 
+TEST_F(PlanPrinterTest, tableWrite) {
+  auto metadataType =
+      ROW({"rows", "fragments", "commitcontext"},
+          {BIGINT(), VARBINARY(), VARBINARY()});
+  auto plan = PlanBuilder()
+                  .tableScan(kTestConnectorId, "test", {"a", "c"})
+                  .with({"a * a as d", "if(c = 'find', c, 'replace') as e"})
+                  .tableWrite(metadataType, kTestConnectorId, "tableout")
+                  .build();
+
+  const auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- TableWriteNode:"),
+          testing::StartsWith("  - Project"),
+          testing::StartsWith("      a := a"),
+          testing::StartsWith("      c := c"),
+          testing::StartsWith("      d := multiply(a, a)"),
+          testing::StartsWith("      e := IF(eq(c, find), c, replace)"),
+          testing::StartsWith("    - TableScan"),
+          testing::Eq("")));
+}
+
 TEST_F(PlanPrinterTest, join) {
   auto leftType = ROW({"key", "v"}, {INTEGER(), INTEGER()});
   std::vector<Variant> leftData{

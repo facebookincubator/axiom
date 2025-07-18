@@ -87,6 +87,17 @@ class PlanBuilder {
 
   PlanBuilder& limit(int32_t offset, int32_t count);
 
+  PlanBuilder& tableWrite(
+      const RowTypePtr& outputType,
+      const std::string& connectorId,
+      const std::string& tableName);
+
+  PlanBuilder& tableWrite(
+      const RowTypePtr& outputType,
+      const std::string& connectorId,
+      const std::string& tableName,
+      const std::vector<std::string>& columnNames);
+
   PlanBuilder& as(const std::string& alias);
 
   LogicalPlanNodePtr build();

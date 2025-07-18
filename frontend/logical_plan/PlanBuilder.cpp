@@ -517,6 +517,35 @@ PlanBuilder& PlanBuilder::limit(int32_t offset, int32_t count) {
   return *this;
 }
 
+PlanBuilder& PlanBuilder::tableWrite(
+    const RowTypePtr& outputType,
+    const std::string& connectorId,
+    const std::string& tableName) {
+  std::vector<std::string> columnNames;
+  auto inputType = node_->outputType();
+  columnNames.reserve(inputType->size());
+  for (auto i = 0; i < inputType->size(); i++) {
+    columnNames.push_back(inputType->nameOf(i));
+  }
+  return tableWrite(outputType, connectorId, tableName, columnNames);
+}
+
+PlanBuilder& PlanBuilder::tableWrite(
+    const RowTypePtr& outputType,
+    const std::string& connectorId,
+    const std::string& tableName,
+    const std::vector<std::string>& columnNames) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "TableWrite node cannot be a leaf node");
+
+  auto connector = connector::getConnector(connectorId);
+  VELOX_USER_CHECK_NOT_NULL(connector, "Referenced connector must exist");
+
+  node_ = std::make_shared<TableWriteNode>(
+      nextId(), outputType, connectorId, tableName, columnNames, node_);
+
+  return *this;
+}
+
 ExprPtr PlanBuilder::resolveInputName(
     const std::optional<std::string>& alias,
     const std::string& name) const {

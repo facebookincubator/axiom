@@ -22,6 +22,7 @@ velox_add_library(velox_fe_logical_plan_builder PlanBuilder.cpp)
 velox_link_libraries(
   velox_fe_logical_plan_builder
   velox_fe_logical_plan
+  velox_connector
   velox_connector_metadata
   velox_exec
   velox_function_registry

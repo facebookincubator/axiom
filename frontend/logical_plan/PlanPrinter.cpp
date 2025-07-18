@@ -139,6 +139,15 @@ class ToTextVisitor : public PlanNodeVisitor {
         context);
   }
 
+  void visit(const TableWriteNode& node, PlanNodeVisitorContext& context)
+      const override {
+    appendNode(
+        "TableWriteNode",
+        node,
+        fmt::format("{}:{}", node.connectorId(), node.tableName()),
+        context);
+  }
+
   void visit(const SetNode& node, PlanNodeVisitorContext& context)
       const override {
     appendNode("Set", node, context);

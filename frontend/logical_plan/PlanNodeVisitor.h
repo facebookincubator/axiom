@@ -52,6 +52,10 @@ class PlanNodeVisitor {
   virtual void visit(const LimitNode& node, PlanNodeVisitorContext& context)
       const = 0;
 
+  virtual void visit(
+      const TableWriteNode& node,
+      PlanNodeVisitorContext& context) const = 0;
+
   virtual void visit(const SetNode& node, PlanNodeVisitorContext& context)
       const = 0;
 

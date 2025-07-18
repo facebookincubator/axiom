@@ -560,6 +560,16 @@ class ConnectorMetadata {
     VELOX_UNSUPPORTED();
   }
 
+  /// Returns an ConnectorInsertTableHandle for use in table writes.
+  /// The outputType specifies the schema of the table being
+  /// written. The name specifies the name of the table to be written.
+  /// The specified table may or may not already exist.
+  virtual ConnectorInsertTableHandlePtr createInsertTableHandle(
+      RowTypePtr columns,
+      const std::string& tableName) {
+    VELOX_UNSUPPORTED();
+  }
+
   virtual const Table* findTable(const std::string& name) = 0;
 
   /// Returns a SplitManager for split enumeration for TableLayouts accessed

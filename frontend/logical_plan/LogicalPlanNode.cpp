@@ -187,6 +187,12 @@ void LimitNode::accept(
   visitor.visit(*this, context);
 }
 
+void TableWriteNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 namespace {
 folly::F14FastMap<SetOperation, std::string> setOperationNames() {
   return {
