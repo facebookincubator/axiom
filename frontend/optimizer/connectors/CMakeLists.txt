@@ -19,6 +19,7 @@ velox_link_libraries(velox_connector_metadata velox_common_base velox_memory
                      velox_connector velox_dwio_dwrf_writer)
 
 add_subdirectory(hive)
+add_subdirectory(tests)
 
 velox_add_library(velox_connector_split_source ConnectorSplitSource.cpp)
 
