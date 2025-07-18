@@ -92,7 +92,7 @@ Optimization::Optimization(
   for (auto& join : root_->joins) {
     join->guessFanout();
   }
-  setDerivedTableOutput(root_, inputPlan_);
+  setDerivedTableOutput(root_, *inputPlanWithoutWrite_);
 }
 
 void Optimization::trace(

@@ -283,5 +283,49 @@ TEST_F(OptimizerTest, aggregation) {
   ASSERT_EQ(filters[0]->toString(), "gt(\"o_totalprice\",1000)");
 }
 
+TEST_F(OptimizerTest, create) {
+  auto orderType = ROW(
+      {{"o_orderkey", BIGINT()},
+       {"o_custkey", BIGINT()},
+       {"o_totalprice", DOUBLE()}});
+  auto plan =
+      exec::test::PlanBuilder()
+          .tableScan("orders", orderType)
+          .project({"o_orderkey", "o_custkey", "o_totalprice"})
+          .tableWrite("/tmp/test_output", dwio::common::FileFormat::DWRF)
+          .planNode();
+
+  auto optimizedPlan = optimize(plan);
+  ASSERT_TRUE(optimizedPlan.plan != nullptr);
+  auto fragments = optimizedPlan.plan->fragments();
+  ASSERT_EQ(fragments.size(), 1);
+  auto node = fragments[0].fragment.planNode;
+
+  // Expect plan structured like the following:
+  // TableWrite[2][InsertTableHandle]
+  //   Project[1][expressions:
+  //        (dt1.o_orderkey:BIGINT, "t2.o_orderkey"),
+  //        (dt1.o_custkey:BIGINT, "t2.o_custkey"),
+  //        (dt1.o_totalprice:DOUBLE, "t2.o_totalprice")]
+  //     TableScan[0][orders]
+  ASSERT_EQ(node->name(), "TableWrite");
+  auto tableWriteNode =
+      std::dynamic_pointer_cast<const core::TableWriteNode>(node);
+  ASSERT_TRUE(tableWriteNode != nullptr);
+
+  auto projectNode = tableWriteNode->sources()[0];
+  ASSERT_EQ(projectNode->name(), "Project");
+  auto projectNodeCast =
+      std::dynamic_pointer_cast<const core::ProjectNode>(projectNode);
+  ASSERT_TRUE(projectNodeCast != nullptr);
+
+  auto scanNode = projectNodeCast->sources()[0];
+  ASSERT_EQ(scanNode->name(), "TableScan");
+  auto tableScanNode =
+      std::dynamic_pointer_cast<const core::TableScanNode>(scanNode);
+  ASSERT_TRUE(tableScanNode != nullptr);
+  ASSERT_EQ(tableScanNode->tableHandle()->name(), "orders");
+}
+
 } // namespace
 } // namespace facebook::velox::optimizer::test

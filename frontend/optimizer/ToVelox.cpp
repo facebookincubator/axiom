@@ -184,6 +184,39 @@ RelationOpPtr addGather(RelationOpPtr op) {
   return gather;
 }
 
+core::PlanNodePtr Optimization::reconstructTableWriteIfPresent(
+    const ExecutableFragment& top) {
+  auto node = top.fragment.planNode;
+  if (writeIR_.has_value()) {
+    auto output = node->outputType();
+    VELOX_CHECK(
+        output->size() == writeIR_->columns->size(),
+        "optimized plan has {} columns, expected {}",
+        output->size(),
+        writeIR_->columns->size());
+    for (auto i = 0; i < output->size(); i++) {
+      VELOX_CHECK_EQ(
+          output->childAt(i),
+          writeIR_->columns->childAt(i),
+          "field {} in optimized plan output has type {}, expected {}",
+          i,
+          output->childAt(i),
+          writeIR_->columns->childAt(i));
+    }
+    node = std::make_shared<core::TableWriteNode>(
+        idGenerator_.next(),
+        output,
+        std::move(writeIR_->columnNames),
+        /*aggregationNode=*/nullptr,
+        std::move(writeIR_->insertHandle),
+        /*hasPartitioningScheme=*/false,
+        std::move(writeIR_->output),
+        std::move(writeIR_->commitStrategy),
+        node);
+  }
+  return node;
+}
+
 PlanAndStats Optimization::toVeloxPlan(
     RelationOpPtr plan,
     const MultiFragmentPlan::Options& options) {
@@ -194,8 +227,11 @@ PlanAndStats Optimization::toVeloxPlan(
   if (options_.numWorkers > 1) {
     plan = addGather(plan);
   }
+
   ExecutableFragment top;
   top.fragment.planNode = makeFragment(plan, top, stages);
+  top.fragment.planNode = reconstructTableWriteIfPresent(top);
+
   stages.push_back(std::move(top));
   return PlanAndStats{
       std::make_shared<velox::runner::MultiFragmentPlan>(

@@ -47,12 +47,14 @@ void Optimization::setDerivedTableOutput(
 }
 
 DerivedTableP Optimization::makeQueryGraph() {
-  markAllSubfields(inputPlan_.outputType().get(), &inputPlan_);
+  inputPlanWithoutWrite_ = deconstructWriteNodeIfPresent(inputPlan_);
+  markAllSubfields(
+      inputPlanWithoutWrite_->outputType().get(), inputPlanWithoutWrite_);
   auto* root = make<DerivedTable>();
   root_ = root;
   currentSelect_ = root_;
   root->cname = toName(fmt::format("dt{}", ++nameCounter_));
-  makeQueryGraph(inputPlan_, kAllAllowedInDt);
+  makeQueryGraph(*inputPlanWithoutWrite_, kAllAllowedInDt);
   return root_;
 }
 
@@ -65,6 +67,29 @@ const std::string* columnName(const core::TypedExprPtr& expr) {
     }
   }
   return nullptr;
+}
+
+const velox::core::PlanNode* Optimization::deconstructWriteNodeIfPresent(
+    const core::PlanNode& node) {
+  auto name = node.name();
+  if (name != "TableWrite") {
+    return &node;
+  }
+  auto write = *reinterpret_cast<const core::TableWriteNode*>(&node);
+  VELOX_CHECK(!write.hasPartitioningScheme(), "partitioned writes unsupported");
+  VELOX_CHECK_EQ(
+      write.aggregationNode(), nullptr, "custom stats aggregation unsupported");
+
+  VELOX_CHECK(!writeIR_.has_value(), "only one TableWrite allowed per plan");
+  writeIR_ = TableWriteIR{
+      .output = write.outputType(),
+      .columns = write.columns(),
+      .columnNames = write.columnNames(),
+      .insertHandle = write.insertTableHandle(),
+      .commitStrategy = write.commitStrategy(),
+  };
+
+  return write.sources()[0].get();
 }
 
 bool isCall(const core::TypedExprPtr& expr, const std::string& name) {

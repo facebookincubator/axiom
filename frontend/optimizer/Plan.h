@@ -213,6 +213,25 @@ struct PlanSet {
   PlanPtr addPlan(RelationOpPtr plan, PlanState& state);
 };
 
+// The intermediate representation of a table write, containing all the
+// attributes of the write required to reconstruct it on the output.
+struct TableWriteIR {
+  // The metadata output fields of the table write.
+  RowTypePtr output;
+
+  // The schema of the columns being written to the table.
+  RowTypePtr columns;
+
+  // The names of the columns being written to the table.
+  std::vector<std::string> columnNames;
+
+  // The handle for the table insertion operation.
+  std::shared_ptr<const core::InsertTableHandle> insertHandle;
+
+  // The strategy for committing the write operation.
+  connector::CommitStrategy commitStrategy;
+};
+
 // Represents the next table/derived table to join. May consist of several
 // tables for a bushy build side.
 struct JoinCandidate {
@@ -1044,6 +1063,16 @@ class Optimization {
       const PlanObjectSet& placed,
       const PlanObjectSet& extraColumns);
 
+  /// Checks if a node is a TableWrite node and if so, extracts its details
+  /// into writeIR_ and returns the source node to the caller.
+  const velox::core::PlanNode* deconstructWriteNodeIfPresent(
+      const core::PlanNode& node);
+
+  // If a TableWrite was previously deconstructed, reconstruct and return it
+  // using the output node of the specified fragment as input.
+  velox::core::PlanNodePtr reconstructTableWriteIfPresent(
+      const velox::runner::ExecutableFragment& top);
+
   PlanObjectCP findLeaf(const core::PlanNode* node) {
     auto* leaf = planLeaves_[node];
     VELOX_CHECK_NOT_NULL(leaf);
@@ -1056,6 +1085,9 @@ class Optimization {
 
   // Top level plan to optimize.
   const velox::core::PlanNode& inputPlan_;
+
+  // Top level plan with any Table Write stages removed.
+  const velox::core::PlanNode* inputPlanWithoutWrite_;
 
   // Source of historical cost/cardinality information.
   History& history_;
@@ -1187,6 +1219,10 @@ class Optimization {
   bool makeVeloxExprWithNoAlias_{false};
 
   bool getterForPushdownSubfield_{false};
+
+  // Details needed to reconstruct a TableWrite node during conversion
+  // back to an executable Velox plan.
+  std::optional<TableWriteIR> writeIR_;
 
   // Map from top level map column  accessed as struct to the struct type. Used
   // only when generating a leaf scan for result Velox plan.
