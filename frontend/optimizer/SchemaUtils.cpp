@@ -14,31 +14,42 @@
  * limitations under the License.
  */
 
-#include "optimizer/SchemaResolver.h" //@manual
 #include "optimizer/SchemaUtils.h" //@manual
+
+#include "folly/String.h"
 
 namespace facebook::velox::optimizer {
 
-const connector::Table* SchemaResolver::findTable(const std::string& name) {
-  TableNameParser parser(name);
-  if (!parser.valid()) {
-    VELOX_USER_FAIL("Invalid table name: '{}'", name);
+TableNameParser::TableNameParser(const std::string& name) {
+  std::vector<std::string> parts;
+  folly::split('.', name, parts);
+
+  bool anyempty =
+      std::any_of(parts.begin(), parts.end(), [](const std::string& part) {
+        return part.empty();
+      });
+  if (anyempty) {
+    return;
   }
 
-  connector::Connector* connector = parser.catalog().has_value()
-      ? connector::getConnector(parser.catalog().value()).get()
-      : defaultConnector_.get();
-
-  std::string lookupName;
-  if (parser.schema().has_value()) {
-    lookupName = fmt::format("{}.{}", parser.schema().value(), parser.table());
-  } else if (!defaultSchema_.empty()) {
-    lookupName = fmt::format("{}.{}", defaultSchema_, parser.table());
-  } else {
-    lookupName = parser.table();
+  valid_ = true;
+  switch (parts.size()) {
+    case 1:
+      table_ = std::move(parts[0]);
+      break;
+    case 2:
+      schema_ = std::move(parts[0]);
+      table_ = std::move(parts[1]);
+      break;
+    case 3:
+      catalog_ = std::move(parts[0]);
+      schema_ = std::move(parts[1]);
+      table_ = std::move(parts[2]);
+      break;
+    default:
+      valid_ = false;
+      break;
   }
-
-  return connector->metadata()->findTable(lookupName);
 }
 
 } // namespace facebook::velox::optimizer

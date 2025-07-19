@@ -70,17 +70,17 @@ TEST_F(SchemaResolverTest, invalidName) {
   auto lookup = "table.";
   VELOX_ASSERT_THROW(
       resolver_->findTable(lookup),
-      fmt::format("Table name ends in '.': {}", lookup));
+      fmt::format("Invalid table name: '{}'", lookup));
 
   lookup = "...";
   VELOX_ASSERT_THROW(
       resolver_->findTable(lookup),
-      fmt::format("Table name ends in '.': {}", lookup));
+      fmt::format("Invalid table name: '{}'", lookup));
 
   lookup = "catalog.extra.schema.table";
   VELOX_ASSERT_THROW(
       resolver_->findTable(lookup),
-      fmt::format("Table name has more than 3 parts: {}", lookup));
+      fmt::format("Invalid table name: '{}'", lookup));
 }
 
 TEST_F(SchemaResolverTest, tablePlusSchema) {

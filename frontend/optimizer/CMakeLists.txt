@@ -27,6 +27,7 @@ add_library(
   PlanObject.cpp
   Schema.cpp
   SchemaResolver.cpp
+  SchemaUtils.cpp
   QueryGraph.cpp
   QueryGraphContext.cpp
   Filters.cpp
