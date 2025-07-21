@@ -14,21 +14,13 @@
  * limitations under the License.
  */
 
-#include <gtest/gtest.h>
+#include "optimizer/FunctionRegistry.h" //@manual
+#include "optimizer/tests/FeatureGen.h" //@manual
 
-#include "logical_plan/PlanBuilder.h" //@manual
+#include "optimizer/tests/QueryTestBase.h" //@manual
+#include "velox/common/base/tests/GTestUtils.h"
 
-namespace facebook::velox::logical_plan {
-
-TEST(NameAllocatorTest, basic) {
-  NameAllocator allocator;
-  EXPECT_EQ(allocator.newName("f_oo"), "f_oo");
-  EXPECT_EQ(allocator.newName("f_oo"), "f_oo_0");
-
-  EXPECT_EQ(allocator.newName("bar"), "bar");
-  EXPECT_EQ(allocator.newName("bar"), "bar_1");
-
-  EXPECT_EQ(allocator.newName("f_oo_0"), "f_oo_2");
-}
-
-} // namespace facebook::velox::logical_plan
+namespace facebook::velox::optimizer::test {
+TypePtr makeGenieType();
+void registerGenieUdfs();
+} // namespace facebook::velox::optimizer::test

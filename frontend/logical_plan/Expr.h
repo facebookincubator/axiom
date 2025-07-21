@@ -150,28 +150,33 @@ using InputReferenceExprPtr = std::shared_ptr<const InputReferenceExpr>;
 /// Literal value.
 class ConstantExpr : public Expr {
  public:
-  ConstantExpr(const TypePtr& type, Variant value)
+  ConstantExpr(const TypePtr& type, std::shared_ptr<const Variant> value)
       : Expr(ExprKind::kConstant, type, {}), value_{std::move(value)} {
-    VELOX_USER_CHECK(
-        value_.isTypeCompatible(type),
-        "Constant value doesn't match its type: {} vs. {}",
-        type->toString(),
-        value_.inferType()->toString());
+    if (!isNull()) {
+      VELOX_USER_CHECK(type->kindEquals(value_->inferType()));
+    }
   }
 
+  ConstantExpr(const TypePtr& type, Variant value)
+      : ConstantExpr(type, std::make_shared<const Variant>(value)) {}
+
   const Variant& value() const {
+    return *value_;
+  }
+
+  const std::shared_ptr<const Variant>& valueShared() const {
     return value_;
   }
 
   bool isNull() const {
-    return value_.isNull();
+    return value_->isNull();
   }
 
   void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
       const override;
 
  private:
-  const Variant value_;
+  std::shared_ptr<const Variant> value_;
 };
 
 using ConstantExprPtr = std::shared_ptr<const ConstantExpr>;
@@ -591,9 +596,11 @@ class LambdaExpr : public Expr {
       : Expr(
             ExprKind::kLambda,
             std::make_shared<FunctionType>(
-                std::vector<TypePtr>(signature->children()),
+                copyTypes(signature->children()),
                 body->type()),
-            {}) {
+            {}),
+        signature_(signature),
+        body_(body) {
     VELOX_USER_CHECK_GT(signature->size(), 0);
   }
 
@@ -609,6 +616,10 @@ class LambdaExpr : public Expr {
       const override;
 
  private:
+  std::vector<TypePtr> copyTypes(std::vector<TypePtr> v) {
+    return v;
+  }
+
   const RowTypePtr signature_;
   const ExprPtr body_;
 };

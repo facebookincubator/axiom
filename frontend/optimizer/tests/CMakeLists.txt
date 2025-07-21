@@ -13,14 +13,22 @@
 # limitations under the License.
 
 add_executable(
-  velox_plan_test PlanTest.cpp Tpch.cpp ParquetTpchTest.cpp QueryTestBase.cpp
-                  SubfieldTest.cpp FeatureGen.cpp)
+  velox_plan_test
+  PlanTest.cpp
+  Tpch.cpp
+  ParquetTpchTest.cpp
+  QueryTestBase.cpp
+  SubfieldTest.cpp
+  LogicalSubFieldTest.cpp
+  FeatureGen.cpp
+  Genies.cpp)
 
 add_test(velox_plan_test velox_plan_test)
 
 target_link_libraries(
   velox_plan_test
   velox_verax
+  velox_fe_logical_plan_builder
   velox_tpch_gen
   velox_connector_split_source
   velox_hive_connector_metadata

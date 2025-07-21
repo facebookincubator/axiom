@@ -16,6 +16,7 @@
 #pragma once
 
 #include "logical_plan/LogicalPlanNode.h" //@manual
+#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
@@ -34,6 +35,9 @@ class PlanBuilder {
         : planNodeIdGenerator{std::make_shared<core::PlanNodeIdGenerator>()},
           nameAllocator{std::make_shared<NameAllocator>()} {}
   };
+
+  using FieldAccessHook = std::function<
+      ExprPtr(const core::FieldAccessExpr*, const ExprPtr& input)>;
 
   PlanBuilder()
       : planNodeIdGenerator_(std::make_shared<core::PlanNodeIdGenerator>()),
@@ -91,6 +95,16 @@ class PlanBuilder {
 
   LogicalPlanNodePtr build();
 
+  /// Hook for testing field access of anonymous structs. If set, may generate
+  /// field accesses with an integer field instead of a field name.
+  static void setFieldAccessHook(FieldAccessHook hook) {
+    fieldAccessHook_ = hook;
+  }
+
+  static FieldAccessHook fieldAccessHook() {
+    return fieldAccessHook_;
+  }
+
  private:
   std::string nextId() {
     return planNodeIdGenerator_->next();
@@ -120,6 +134,8 @@ class PlanBuilder {
 
   // Mapping from user-provided to auto-generated output column names.
   std::shared_ptr<NameMappings> outputMapping_;
+
+  static FieldAccessHook fieldAccessHook_;
 };
 
 /// Generate unique names based on user-provided hints.

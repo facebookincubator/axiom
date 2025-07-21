@@ -13,10 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
 #include <folly/Random.h>
+#include "logical_plan/LogicalPlanNode.h" //@manual
 #include "velox/core/Expressions.h"
 #include "velox/vector/ComplexVector.h"
+
+#pragma once
 
 namespace facebook::velox::optimizer::test {
 
@@ -70,5 +74,10 @@ void makeExprs(
     const FeatureOptions& opts,
     std::vector<std::string>& names,
     std::vector<core::TypedExprPtr>& exprs);
+
+void makeLogicalExprs(
+    const FeatureOptions& opts,
+    std::vector<std::string>& names,
+    std::vector<logical_plan::ExprPtr>& exprs);
 
 } // namespace facebook::velox::optimizer::test

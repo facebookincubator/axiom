@@ -24,13 +24,6 @@ namespace facebook::velox::optimizer {
 
 using namespace facebook::velox;
 
-using NodeSubfieldFunc = std::function<void(
-    Optimization*,
-    core::PlanNode* node,
-    const std::vector<const RowType*>& context,
-    const std::vector<ContextSource>& sources,
-    bool isControl)>;
-
 namespace {
 template <typename T>
 int64_t integerValueInner(const BaseVector* vector) {
@@ -50,14 +43,6 @@ int64_t integerValue(const BaseVector* vector) {
     default:
       VELOX_FAIL();
   }
-}
-
-PathCP stepsToPath(const std::vector<Step>& steps) {
-  std::vector<Step> reverse;
-  for (int32_t i = steps.size() - 1; i >= 0; --i) {
-    reverse.push_back(steps[i]);
-  }
-  return queryCtx()->toPath(make<Path>(std::move(reverse)));
 }
 
 RowTypePtr lambdaArgType(const core::ITypedExpr* expr) {
@@ -161,20 +146,6 @@ void Optimization::markFieldAccessed(
       isControl,
       callContext,
       callSources);
-}
-
-std::optional<int32_t> Optimization::stepToArg(
-    const Step& step,
-    const FunctionMetadata* metadata) {
-  auto it = std::find(
-      metadata->fieldIndexForArg.begin(),
-      metadata->fieldIndexForArg.end(),
-      step.id);
-  if (it != metadata->fieldIndexForArg.end()) {
-    // The arg corresponding to the step is accessed.
-    return metadata->argOrdinal[it - metadata->fieldIndexForArg.begin()];
-  }
-  return std::nullopt;
 }
 
 void Optimization::markSubfields(
@@ -432,7 +403,6 @@ core::TypedExprPtr makeKey(const TypePtr& type, T v) {
   return std::make_shared<core::ConstantTypedExpr>(type, variant(v));
 }
 } // namespace
-
 core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
   switch (step.kind) {
     case StepKind::kField: {

@@ -18,6 +18,7 @@
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::optimizer::test {
+namespace lp = facebook::velox::logical_plan;
 
 RowTypePtr makeRowType(
     const std::vector<RowVectorPtr>& vectors,
@@ -250,6 +251,113 @@ void makeExprs(
     names.push_back("floats");
     exprs.push_back(std::make_shared<core::CallTypedExpr>(
         ROW(std::move(floatTypes)), std::move(floatExprs), "row_constructor"));
+  }
+}
+
+namespace lpe {
+
+lp::ExprPtr floatFeatures() {
+  return std::make_shared<lp::InputReferenceExpr>(
+      MAP(INTEGER(), REAL()), "float_features");
+}
+
+lp::ExprPtr intLiteral(int32_t i) {
+  return std::make_shared<lp::ConstantExpr>(INTEGER(), variant(i));
+}
+
+lp::ExprPtr floatLiteral(float i) {
+  return std::make_shared<lp::ConstantExpr>(REAL(), variant(i));
+}
+
+lp::ExprPtr rand() {
+  lp::ExprPtr r = std::make_shared<lp::CallExpr>(
+      INTEGER(), "rand", std::vector<lp::ExprPtr>{intLiteral(5)});
+  return std::make_shared<lp::SpecialFormExpr>(
+      REAL(), lp::SpecialForm::kCast, std::vector<lp::ExprPtr>{r});
+}
+
+lp::ExprPtr plus(lp::ExprPtr x, lp::ExprPtr y) {
+  return std::make_shared<lp::CallExpr>(
+      REAL(), "plus", std::vector<lp::ExprPtr>{x, y});
+}
+
+lp::ExprPtr floatFeature(const FeatureOptions& opts) {
+  int32_t id = atoi(
+      opts.floatStruct
+          ->nameOf(folly::Random::rand32(opts.rng) % opts.floatStruct->size())
+          .c_str());
+  std::vector<lp::ExprPtr> args{floatFeatures(), intLiteral(id)};
+
+  return std::make_shared<lp::CallExpr>(REAL(), "subscript", std::move(args));
+}
+
+lp::ExprPtr plusOne(lp::ExprPtr expr) {
+  std::vector<lp::ExprPtr> args{expr, floatLiteral(1)};
+  return std::make_shared<lp::CallExpr>(REAL(), "plus", std::move(args));
+}
+lp::ExprPtr uid() {
+  return std::make_shared<lp::InputReferenceExpr>(BIGINT(), "uid");
+}
+
+lp::ExprPtr bigintMod(lp::ExprPtr x, int64_t y) {
+  lp::ExprPtr lit = std::make_shared<lp::ConstantExpr>(BIGINT(), variant(y));
+  return std::make_shared<lp::CallExpr>(
+      BIGINT(), "mod", std::vector<lp::ExprPtr>{x, lit});
+}
+
+lp::ExprPtr bigintEq(lp::ExprPtr x, int64_t y) {
+  lp::ExprPtr lit = std::make_shared<lp::ConstantExpr>(BIGINT(), variant(y));
+  return std::make_shared<lp::CallExpr>(
+      BOOLEAN(), "eq", std::vector<lp::ExprPtr>{x, lit});
+}
+
+lp::ExprPtr uidCond(lp::ExprPtr f) {
+  auto cond = bigintEq(bigintMod(uid(), 10), 0);
+  return std::make_shared<lp::SpecialFormExpr>(
+      REAL(),
+      lp::SpecialForm::kIf,
+      std::vector<lp::ExprPtr>{cond, f, plusOne(f)});
+}
+
+lp::ExprPtr makeFloatExpr(const FeatureOptions& opts) {
+  auto f = lpe::floatFeature(opts);
+  if (opts.coinToss(opts.plusOnePct)) {
+    f = plusOne(f);
+  }
+  if (opts.coinToss(opts.randomPct)) {
+    f = plus(f, rand());
+  }
+  if (opts.coinToss(opts.multiColumnPct)) {
+    auto g = lpe::floatFeature(opts);
+    if (opts.coinToss(opts.plusOnePct)) {
+      g = plusOne(g);
+    }
+    f = plus(f, g);
+  }
+  if (opts.coinToss(opts.uidPct)) {
+    f = uidCond(f);
+  }
+  return f;
+}
+} // namespace lpe
+
+void makeLogicalExprs(
+    const FeatureOptions& opts,
+    std::vector<std::string>& names,
+    std::vector<lp::ExprPtr>& exprs) {
+  names = {"uid"};
+  exprs = {lpe::uid()};
+  auto numFloatExprs = (opts.floatStruct->size() * opts.floatExprsPct) / 100.0;
+  std::vector<lp::ExprPtr> floatExprs;
+  std::vector<TypePtr> floatTypes;
+  for (auto cnt = 0; cnt < numFloatExprs; ++cnt) {
+    floatExprs.push_back(lpe::makeFloatExpr(opts));
+    floatTypes.push_back(REAL());
+  }
+  if (!floatExprs.empty()) {
+    names.push_back("floats");
+    exprs.push_back(std::make_shared<lp::CallExpr>(
+        ROW(std::move(floatTypes)), "row_constructor", std::move(floatExprs)));
   }
 }
 

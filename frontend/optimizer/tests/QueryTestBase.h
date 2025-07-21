@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#pragma once
+
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <gflags/gflags.h>
 #include "optimizer/SchemaResolver.h" //@manual
@@ -67,6 +69,8 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
 
   TestResult runVelox(const core::PlanNodePtr& plan);
 
+  TestResult runVelox(const logical_plan::LogicalPlanNodePtr& plan);
+
   TestResult runFragmentedPlan(optimizer::PlanAndStats& plan);
 
   /// Checks that 'reference' and 'experiment' produce the same result.
@@ -84,6 +88,17 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
       const core::PlanNodePtr& plan,
       std::string* planString = nullptr,
       std::string* errorString = nullptr);
+
+  optimizer::PlanAndStats planVelox(
+      const logical_plan::LogicalPlanNodePtr& plan,
+      std::string* planString = nullptr,
+      std::string* errorString = nullptr);
+
+  template <typename PlanPtr>
+  optimizer::PlanAndStats planFromTree(
+      const PlanPtr& plan,
+      std::string* planString,
+      std::string* errorString);
 
   std::string veloxString(const std::string& sql);
 

@@ -348,6 +348,7 @@ Column::Column(
     Name name,
     PlanObjectP relation,
     const Value& value,
+    Name nameInTable,
     ColumnCP top,
     PathCP path)
     : Expr(PlanType::kColumn, value),
@@ -358,9 +359,13 @@ Column::Column(
   columns_.add(this);
   subexpressions_.add(this);
   if (relation_ && relation_->type() == PlanType::kTable) {
-    schemaColumn_ = relation->as<BaseTable>()->schemaTable->findColumn(
-        topColumn_ ? topColumn_->name() : name_);
-    VELOX_CHECK(schemaColumn_);
+    if (topColumn_) {
+      schemaColumn_ = topColumn_->schemaColumn_;
+    } else {
+      schemaColumn_ = relation->as<BaseTable>()->schemaTable->findColumn(
+          nameInTable ? nameInTable : name_);
+      VELOX_CHECK(schemaColumn_);
+    }
   }
 }
 
@@ -1037,6 +1042,39 @@ bool isJoinEquality(
     }
   }
   return false;
+}
+
+void extractNonInnerJoinEqualities(
+    ExprVector& conjuncts,
+    PlanObjectCP right,
+    ExprVector& leftKeys,
+    ExprVector& rightKeys,
+    PlanObjectSet& allLeft) {
+  for (auto i = 0; i < conjuncts.size(); ++i) {
+    auto* eq = toName("eq");
+    auto conjunct = conjuncts[i];
+    if (isCallExpr(conjunct, eq)) {
+      auto eq = conjunct->as<Call>();
+      auto leftTables = eq->args()[0]->allTables();
+      auto rightTables = eq->args()[1]->allTables();
+      if (rightTables.size() == 1 && rightTables.contains(right) &&
+          !leftTables.contains(right)) {
+        allLeft.unionSet(leftTables);
+        leftKeys.push_back(eq->args()[0]);
+        rightKeys.push_back(eq->args()[1]);
+        conjuncts.erase(conjuncts.begin() + i);
+        --i;
+      } else if (
+          leftTables.size() == 1 && leftTables.contains(right) &&
+          !rightTables.contains(right)) {
+        allLeft.unionSet(rightTables);
+        leftKeys.push_back(eq->args()[1]);
+        rightKeys.push_back(eq->args()[0]);
+        conjuncts.erase(conjuncts.begin() + i);
+        --i;
+      }
+    }
+  }
 }
 
 void DerivedTable::distributeConjuncts() {

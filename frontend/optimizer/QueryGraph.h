@@ -16,8 +16,10 @@
 
 #pragma once
 
+#include "logical_plan/ExprPrinter.h" //@manual
+#include "logical_plan/LogicalPlanNode.h" //@manual
+#include "logical_plan/PlanPrinter.h" //@manual
 #include "optimizer/Schema.h" //@manual
-
 #include "velox/core/PlanNode.h"
 
 /// Defines subclasses of PlanObject for describing the logical
@@ -164,6 +166,7 @@ class Column : public Expr {
       Name _name,
       PlanObjectP _relation,
       const Value& value,
+      Name nameInTable = nullptr,
       ColumnCP topColumn = nullptr,
       PathCP path = nullptr);
 
@@ -358,6 +361,11 @@ struct FunctionMetadata {
       const core::CallTypedExpr* call,
       std::vector<PathCP>& paths)>
       explode;
+
+  std::function<std::unordered_map<PathCP, logical_plan::ExprPtr>(
+      const logical_plan::CallExpr* call,
+      std::vector<PathCP>& paths)>
+      logicalExplode;
 };
 
 const FunctionMetadata* functionMetadata(Name name);
@@ -432,6 +440,9 @@ class Call : public Expr {
 };
 
 using CallCP = const Call*;
+
+/// True if 'expr' is a call to function 'name'.
+bool isCallExpr(ExprCP expr, Name name);
 
 /// Represents a lambda. May occur as an immediate argument of selected
 /// functions.
@@ -989,6 +1000,20 @@ float tableCardinality(PlanObjectCP table);
 
 /// Returns all distinct tables 'exprs' depend on.
 PlanObjectSet allTables(CPSpan<Expr> exprs);
+
+/// Fills 'leftKeys' and 'rightKeys's from 'conjuncts' so that
+/// equalities with one side only depending on 'right' go to
+/// 'rightKeys' and the other side not depending on 'right' goes to
+/// 'leftKeys'. The left side may depend on more than one table. The
+/// tables 'leftKeys' depend on are returned in 'allLeft'. The
+/// conjuncts that are not equalities or have both sides depending
+/// on right and something else are left in 'conjuncts'.
+void extractNonInnerJoinEqualities(
+    ExprVector& conjuncts,
+    PlanObjectCP right,
+    ExprVector& leftKeys,
+    ExprVector& rightKeys,
+    PlanObjectSet& allLeft);
 
 /// Appends the string representation of 'exprs' to 'out'.
 void exprsToString(const ExprVector& exprs, std::stringstream& out);

@@ -20,9 +20,11 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/functions/FunctionRegistry.h"
-#include "velox/parse/Expressions.h"
+#include "velox/parse/TypeResolver.h"
 
 namespace facebook::velox::logical_plan {
+
+PlanBuilder::FieldAccessHook PlanBuilder::fieldAccessHook_;
 
 PlanBuilder& PlanBuilder::values(
     const RowTypePtr& rowType,
@@ -74,10 +76,10 @@ PlanBuilder& PlanBuilder::tableScan(
 
   node_ = std::make_shared<TableScanNode>(
       nextId(),
-      ROW(columnNames, columnTypes),
+      ROW(outputNames, columnTypes),
       connectorId,
       tableName,
-      outputNames);
+      columnNames);
 
   return *this;
 }
@@ -348,11 +350,108 @@ ExprPtr tryResolveSpecialForm(
   return nullptr;
 }
 
+using InputNameResolver = std::function<ExprPtr(
+    const std::optional<std::string>& alias,
+    const std::string& fieldName)>;
+
 ExprPtr resolveScalarTypesImpl(
     const core::ExprPtr& expr,
-    const std::function<ExprPtr(
-        const std::optional<std::string>& alias,
-        const std::string& fieldName)>& inputNameResolver) {
+    const InputNameResolver& inputNameResolver);
+
+ExprPtr resolveLambdaExpr(
+    const core::LambdaExpr* lambdaExpr,
+    const std::vector<TypePtr>& lambdaInputTypes,
+    const InputNameResolver& inputNameResolver) {
+  auto names = lambdaExpr->arguments();
+  auto body = lambdaExpr->body();
+
+  VELOX_CHECK_LE(names.size(), lambdaInputTypes.size());
+  std::vector<TypePtr> types;
+  types.reserve(names.size());
+  for (auto i = 0; i < names.size(); ++i) {
+    types.push_back(lambdaInputTypes[i]);
+  }
+
+  auto signature =
+      ROW(std::vector<std::string>(names), std::vector<TypePtr>(types));
+  auto lambdaResolver = [inputNameResolver, signature](
+                            const std::optional<std::string>& alias,
+                            const std::string& fieldName) -> ExprPtr {
+    if (!alias.has_value()) {
+      auto maybeIdx = signature->getChildIdxIfExists(fieldName);
+      if (maybeIdx.has_value()) {
+        return std::make_shared<InputReferenceExpr>(
+            signature->childAt(maybeIdx.value()), fieldName);
+      }
+    }
+    return inputNameResolver(alias, fieldName);
+  };
+
+  return std::make_shared<LambdaExpr>(
+      signature, resolveScalarTypesImpl(body, lambdaResolver));
+}
+
+bool isLambdaArgument(const exec::TypeSignature& typeSignature) {
+  return typeSignature.baseName() == "function";
+}
+
+ExprPtr tryResolveCallWithLambdas(
+    const std::shared_ptr<const core::CallExpr>& callExpr,
+    const InputNameResolver& inputNameResolver) {
+  if (callExpr == nullptr) {
+    return nullptr;
+  }
+  auto signature = core::findLambdaSignature(callExpr);
+
+  if (signature == nullptr) {
+    return nullptr;
+  }
+
+  // Resolve non-lambda arguments first.
+  auto numArgs = callExpr->inputs().size();
+  std::vector<ExprPtr> children(numArgs);
+  std::vector<TypePtr> childTypes(numArgs);
+  for (auto i = 0; i < numArgs; ++i) {
+    if (!isLambdaArgument(signature->argumentTypes()[i])) {
+      children[i] =
+          resolveScalarTypesImpl(callExpr->inputAt(i), inputNameResolver);
+      childTypes[i] = children[i]->type();
+    }
+  }
+
+  // Resolve lambda arguments.
+  exec::SignatureBinder binder(*signature, childTypes);
+  binder.tryBind();
+  for (auto i = 0; i < numArgs; ++i) {
+    auto argSignature = signature->argumentTypes()[i];
+    if (isLambdaArgument(argSignature)) {
+      std::vector<TypePtr> lambdaTypes;
+      for (auto j = 0; j < argSignature.parameters().size() - 1; ++j) {
+        auto type = binder.tryResolveType(argSignature.parameters()[j]);
+        if (type == nullptr) {
+          return nullptr;
+        }
+        lambdaTypes.push_back(type);
+      }
+
+      children[i] = resolveLambdaExpr(
+          dynamic_cast<const core::LambdaExpr*>(callExpr->inputs()[i].get()),
+          lambdaTypes,
+          inputNameResolver);
+    }
+  }
+  std::vector<TypePtr> types;
+  for (auto& e : children) {
+    types.push_back(e->type());
+  }
+  auto returnType = resolveScalarFunction(callExpr->name(), types);
+
+  return std::make_shared<CallExpr>(returnType, callExpr->name(), children);
+}
+
+ExprPtr resolveScalarTypesImpl(
+    const core::ExprPtr& expr,
+    const InputNameResolver& inputNameResolver) {
   if (const auto* fieldAccess =
           dynamic_cast<const core::FieldAccessExpr*>(expr.get())) {
     const auto& name = fieldAccess->name();
@@ -370,6 +469,13 @@ ExprPtr resolveScalarTypesImpl(
     auto input =
         resolveScalarTypesImpl(fieldAccess->input(), inputNameResolver);
 
+    if (PlanBuilder::fieldAccessHook() != nullptr) {
+      auto result = PlanBuilder::fieldAccessHook()(fieldAccess, input);
+      if (result != nullptr) {
+        return result;
+      }
+    }
+
     return std::make_shared<SpecialFormExpr>(
         input->type()->asRow().findChild(name),
         SpecialForm::kDereference,
@@ -380,6 +486,12 @@ ExprPtr resolveScalarTypesImpl(
   if (const auto& constant =
           dynamic_cast<const core::ConstantExpr*>(expr.get())) {
     return std::make_shared<ConstantExpr>(constant->type(), constant->value());
+  }
+
+  if (auto lambdaCall = tryResolveCallWithLambdas(
+          std::dynamic_pointer_cast<const core::CallExpr>(expr),
+          inputNameResolver)) {
+    return lambdaCall;
   }
 
   std::vector<ExprPtr> inputs;
@@ -413,14 +525,15 @@ ExprPtr resolveScalarTypesImpl(
         inputs);
   }
 
+  if (const auto* lambda = dynamic_cast<const core::LambdaExpr*>(expr.get())) {
+  }
+
   VELOX_NYI("Can't resolve {}", expr->toString());
 }
 
 AggregateExprPtr resolveAggregateTypesImpl(
     const core::ExprPtr& expr,
-    const std::function<ExprPtr(
-        const std::optional<std::string>& alias,
-        const std::string& fieldName)>& inputNameResolver) {
+    const InputNameResolver& inputNameResolver) {
   const auto* call = dynamic_cast<const core::CallExpr*>(expr.get());
   VELOX_USER_CHECK_NOT_NULL(call, "Aggregate must be a call expression");
 
@@ -598,14 +711,27 @@ LogicalPlanNodePtr PlanBuilder::build() {
   return node_;
 }
 
+namespace {
+bool isAllDigits(std::string_view str) {
+  for (auto c : str) {
+    if (!isdigit(c)) {
+      return false;
+    }
+  }
+  return true;
+}
+} // namespace
+
 std::string NameAllocator::newName(const std::string& hint) {
   VELOX_CHECK(!hint.empty(), "Hint cannot be empty");
 
-  // Strip suffix past '_'.
+  // Strip suffix past '_' if all digits.
   std::string prefix = hint;
 
   auto pos = prefix.rfind('_');
-  if (pos != std::string::npos) {
+  if (pos != std::string::npos &&
+      isAllDigits(
+          std::string_view(prefix.data() + pos + 1, prefix.size() - pos - 1))) {
     prefix = prefix.substr(0, pos);
   }
 

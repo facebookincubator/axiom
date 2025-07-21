@@ -118,4 +118,12 @@ Target transform(const V& set, Func func) {
   return result;
 }
 
+/// Returns the integer value of 'variant'. Throws if this is not an integer.
+int64_t integerValue(const variant* variant);
+
+/// Returns the integer value of 'expr' if the type is an integer,
+/// std::nullopt otherwise.
+std::optional<int64_t> maybeIntegerLiteral(
+    const logical_plan::ConstantExpr* expr);
+
 } // namespace facebook::velox::optimizer
