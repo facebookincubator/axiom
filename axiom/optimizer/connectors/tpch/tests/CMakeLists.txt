@@ -22,6 +22,7 @@ target_link_libraries(
   velox_exec_runner_test_util
   velox_vector_fuzzer
   velox_vector_test_lib
+  velox_schema_resolver
   velox_exec
   velox_exec_test_lib
   GTest::gtest

@@ -117,10 +117,10 @@ class TpchTableLayout : public TableLayout {
 class TpchTable : public Table {
  public:
   TpchTable(
-      const std::string& name,
+      const std::string& tableName,
       velox::tpch::Table tpchTable,
       double scaleFactor)
-      : Table(name), tpchTable_(tpchTable), scaleFactor_(scaleFactor) {}
+      : Table(tableName), tpchTable_(tpchTable), scaleFactor_(scaleFactor) {}
 
   std::unordered_map<std::string, std::unique_ptr<Column>>& columns() {
     return columns_;
@@ -137,7 +137,7 @@ class TpchTable : public Table {
     type_ = type;
   }
 
-  void makeDefaultLayout(TpchConnectorMetadata& metadata);
+  void makeDefaultLayout(TpchConnectorMetadata& metadata, double scaleFactor);
 
   uint64_t numRows() const override {
     return numRows_;
@@ -173,9 +173,7 @@ class TpchTable : public Table {
 
 class TpchConnectorMetadata : public ConnectorMetadata {
  public:
-  TpchConnectorMetadata(
-      TpchConnector* tpchConnector,
-      double scaleFactor = 0.01);
+  explicit TpchConnectorMetadata(TpchConnector* tpchConnector);
 
   void initialize() override;
 
@@ -209,13 +207,6 @@ class TpchConnectorMetadata : public ConnectorMetadata {
     return tpchConnector_;
   }
 
-  double getScaleFactor() const {
-    return scaleFactor_;
-  }
-
-  /// Reinitializes the metadata with a new scale factor.
-  void reinitialize(double newScaleFactor = 0.01);
-
   const std::unordered_map<std::string, std::unique_ptr<TpchTable>>& tables()
       const {
     ensureInitialized();
@@ -226,17 +217,26 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   void ensureInitialized() const;
   void makeQueryCtx();
   void initializeTables();
-  void loadTable(velox::tpch::Table tpchTable);
+  void loadTable(
+      velox::tpch::Table tpchTable,
+      const std::string& ns,
+      double scaleFactor);
 
   mutable std::mutex mutex_;
   mutable bool initialized_{false};
   TpchConnector* tpchConnector_;
-  double scaleFactor_;
   std::shared_ptr<memory::MemoryPool> rootPool_{
       memory::memoryManager()->addRootPool()};
   std::shared_ptr<core::QueryCtx> queryCtx_;
   std::unordered_map<std::string, std::unique_ptr<TpchTable>> tables_;
   TpchSplitManager splitManager_;
+};
+
+class TpchConnectorMetadataFactoryImpl : public TpchConnectorMetadataFactory {
+ public:
+  std::shared_ptr<ConnectorMetadata> create(TpchConnector* connector) override {
+    return std::make_shared<TpchConnectorMetadata>(connector);
+  }
 };
 
 } // namespace facebook::velox::connector::tpch

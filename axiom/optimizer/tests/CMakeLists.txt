@@ -29,6 +29,7 @@ target_link_libraries(
   velox_plan_test
   velox_verax
   velox_fe_logical_plan_builder
+  velox_schema_resolver
   velox_tpch_gen
   velox_connector_split_source
   velox_hive_connector_metadata
@@ -45,6 +46,7 @@ target_link_libraries(
   velox_sql
   velox_local_runner
   velox_verax
+  velox_schema_resolver
   velox_connector_split_source
   velox_hive_connector_metadata
   velox_query_benchmark

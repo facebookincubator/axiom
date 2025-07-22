@@ -1,17 +1,35 @@
 // (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
 
 #include "axiom/optimizer/connectors/tpch/TpchConnectorMetadata.h"
+
+#include "axiom/optimizer/SchemaUtils.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
-#include "velox/expression/Expr.h"
 #include "velox/tpch/gen/TpchGen.h"
 
 namespace facebook::velox::connector::tpch {
 
+const std::unordered_map<std::string, double>& scaleFactorNamespaceMap() {
+  const static std::unordered_map<std::string, double> sfmap = {
+      {"tiny", 0.01},
+      {"sf1", 1},
+      {"sf100", 100},
+      {"sf1000", 1000},
+      {"sf10000", 10000},
+      {"sf100000", 100000},
+      {"sf300", 300},
+      {"sf3000", 3000},
+      {"sf30000", 30000}};
+  return sfmap;
+}
+
+FOLLY_ALWAYS_INLINE constexpr std::string_view defaultTpchNamespace() {
+  return "tiny";
+}
+
 std::vector<std::shared_ptr<const PartitionHandle>>
 TpchSplitManager::listPartitions(const ConnectorTableHandlePtr& tableHandle) {
-  // All TPCH tables are unpartitioned.
   return {std::make_shared<connector::PartitionHandle>()};
 }
 
@@ -79,20 +97,8 @@ std::vector<SplitSource::SplitAndGroup> TpchSplitSource::getSplits(
   return result;
 }
 
-TpchConnectorMetadata::TpchConnectorMetadata(
-    TpchConnector* tpchConnector,
-    double scaleFactor)
-    : tpchConnector_(tpchConnector),
-      scaleFactor_(scaleFactor),
-      splitManager_(this) {}
-
-void TpchConnectorMetadata::reinitialize(double newScaleFactor) {
-  std::lock_guard<std::mutex> l(mutex_);
-  scaleFactor_ = newScaleFactor;
-  tables_.clear();
-  initialize();
-  initialized_ = true;
-}
+TpchConnectorMetadata::TpchConnectorMetadata(TpchConnector* tpchConnector)
+    : tpchConnector_(tpchConnector), splitManager_(this) {}
 
 void TpchConnectorMetadata::initialize() {
   makeQueryCtx();
@@ -139,44 +145,60 @@ ColumnHandlePtr TpchConnectorMetadata::createColumnHandle(
 
 ConnectorTableHandlePtr TpchConnectorMetadata::createTableHandle(
     const TableLayout& layout,
-    std::vector<ColumnHandlePtr> columnHandles,
-    core::ExpressionEvaluator& /* evaluator */,
-    std::vector<core::TypedExprPtr> /* filters */,
-    std::vector<core::TypedExprPtr>& /* rejectedFilters */,
-    RowTypePtr /* dataColumns */,
-    std::optional<LookupKeys> /* lookupKeys */) {
-  // TODO: support filters
+    std::vector<ColumnHandlePtr> /*columnHandles*/,
+    core::ExpressionEvaluator& /*evaluator*/,
+    std::vector<core::TypedExprPtr> filters,
+    std::vector<core::TypedExprPtr>& /*rejectedFilters*/,
+    RowTypePtr /*dataColumns*/,
+    std::optional<LookupKeys> /*lookupKeys*/) {
   auto* tpchLayout = dynamic_cast<const TpchTableLayout*>(&layout);
+  velox::core::TypedExprPtr filterExpression;
+  for (auto& filter : filters) {
+    if (!filterExpression) {
+      filterExpression = filter;
+    } else {
+      filterExpression = std::make_shared<velox::core::CallTypedExpr>(
+          velox::BOOLEAN(),
+          std::vector<velox::core::TypedExprPtr>{
+              std::move(filterExpression), std::move(filter)},
+          "and");
+    }
+  }
   return std::make_shared<TpchTableHandle>(
       tpchConnector_->connectorId(),
       tpchLayout->getTpchTable(),
-      tpchLayout->getScaleFactor());
+      tpchLayout->getScaleFactor(),
+      std::move(filterExpression));
 }
 
 void TpchConnectorMetadata::initializeTables() {
   for (auto tpchTable : velox::tpch::tables) {
-    loadTable(tpchTable);
+    for (const auto& scaleFactorPair : scaleFactorNamespaceMap()) {
+      loadTable(tpchTable, scaleFactorPair.first, scaleFactorPair.second);
+    }
   }
 }
 
-void TpchConnectorMetadata::loadTable(velox::tpch::Table tpchTable) {
-  const auto tableName = std::string(velox::tpch::toTableName(tpchTable));
+void TpchConnectorMetadata::loadTable(
+    velox::tpch::Table tpchTable,
+    const std::string& ns,
+    double scaleFactor) {
+  const auto tableName =
+      fmt::format("{}.{}", ns, velox::tpch::toTableName(tpchTable));
   const auto tableType = velox::tpch::getTableSchema(tpchTable);
-  const auto numRows = velox::tpch::getRowCount(tpchTable, scaleFactor_);
+  const auto numRows = velox::tpch::getRowCount(tpchTable, scaleFactor);
 
-  auto table = std::make_unique<TpchTable>(tableName, tpchTable, scaleFactor_);
+  auto table = std::make_unique<TpchTable>(tableName, tpchTable, scaleFactor);
   table->numRows_ = numRows;
 
-  // Create columns
   for (auto i = 0; i < tableType->size(); ++i) {
     const auto columnName = tableType->nameOf(i);
     const auto columnType = tableType->childAt(i);
     table->columns()[columnName] =
         std::make_unique<Column>(columnName, columnType);
   }
-
   table->setType(tableType);
-  table->makeDefaultLayout(*this);
+  table->makeDefaultLayout(*this, scaleFactor);
 
   tables_[tableName] = std::move(table);
 }
@@ -194,7 +216,9 @@ std::pair<int64_t, int64_t> TpchTableLayout::sample(
   return std::pair(sampleRows, sampleRows);
 }
 
-void TpchTable::makeDefaultLayout(TpchConnectorMetadata& metadata) {
+void TpchTable::makeDefaultLayout(
+    TpchConnectorMetadata& metadata,
+    double scaleFactor) {
   std::vector<const Column*> columns;
   for (auto i = 0; i < type_->size(); ++i) {
     auto name = type_->nameOf(i);
@@ -212,7 +236,7 @@ void TpchTable::makeDefaultLayout(TpchConnectorMetadata& metadata) {
       std::vector<SortOrder>{},
       empty,
       tpchTable_,
-      scaleFactor_);
+      scaleFactor);
   exportedLayouts_.push_back(layout.get());
   layouts_.push_back(std::move(layout));
 }
@@ -229,25 +253,28 @@ const std::unordered_map<std::string, const Column*>& TpchTable::columnMap()
   return exportedColumns_;
 }
 
+std::string getQualifiedName(const std::string& name) {
+  velox::optimizer::TableNameParser parser(name);
+  VELOX_CHECK(parser.valid(), "invalid table name '{}'", name);
+  std::string qualifiedName;
+  if (parser.schema().has_value()) {
+    qualifiedName =
+        fmt::format("{}.{}", parser.schema().value(), parser.table());
+  } else {
+    qualifiedName =
+        fmt::format("{}.{}", defaultTpchNamespace(), parser.table());
+  }
+  return qualifiedName;
+}
+
 const Table* TpchConnectorMetadata::findTable(const std::string& name) {
   ensureInitialized();
-  auto it = tables_.find(name);
+  const auto qualifiedName = getQualifiedName(name);
+  auto it = tables_.find(qualifiedName);
   if (it == tables_.end()) {
     return nullptr;
   }
   return it->second.get();
 }
-
-namespace {
-class LocalTpchConnectorMetadataFactory : public TpchConnectorMetadataFactory {
- public:
-  std::shared_ptr<ConnectorMetadata> create(TpchConnector* connector) override {
-    return std::make_shared<TpchConnectorMetadata>(connector);
-  }
-};
-
-bool dummy = registerTpchConnectorMetadataFactory(
-    std::make_unique<LocalTpchConnectorMetadataFactory>());
-} // namespace
 
 } // namespace facebook::velox::connector::tpch

@@ -18,6 +18,7 @@ velox_add_library(velox_tpch_connector_metadata OBJECT
 velox_link_libraries(
   velox_tpch_connector_metadata
   velox_connector_metadata
+  velox_schema_resolver
   velox_tpch_connector
   velox_tpch_gen)
 
