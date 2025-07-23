@@ -50,18 +50,14 @@ ValuesNode::ValuesNode(
     std::vector<Variant> rows)
     : LogicalPlanNode(NodeKind::kValues, id, {}, rowType),
       rows_{std::move(rows)} {
-  if (rows_.empty()) {
-    VELOX_USER_CHECK_EQ(0, rowType->size());
-  }
-
   UniqueNameChecker::check(rowType->names());
 
   for (const auto& row : rows_) {
     VELOX_USER_CHECK(
-        rowType->equivalent(*row.inferType()),
+        row.isTypeCompatible(rowType),
         "Incompatible types: {} vs. {}",
-        rowType->toString(),
-        row.inferType()->toString());
+        row.inferType()->toString(),
+        rowType->toString());
   }
 }
 

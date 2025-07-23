@@ -68,7 +68,7 @@ TEST_F(PlanPrinterTest, values) {
                   .limit(5)
                   .build();
 
-  const auto lines = toLines(plan);
+  auto lines = toLines(plan);
 
   EXPECT_THAT(
       lines,
@@ -82,6 +82,19 @@ TEST_F(PlanPrinterTest, values) {
           testing::StartsWith("          b := plus(a, 2)"),
           testing::StartsWith("        - Filter: gt(a, 10)"),
           testing::StartsWith("          - Values"),
+          testing::Eq("")));
+
+  // Empty variant vector - zero rows:
+  plan =
+      PlanBuilder()
+          .values(ROW({"a", "b"}, {BIGINT(), REAL()}), std::vector<Variant>{})
+          .build();
+  lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Values: 0 rows -> ROW<a:BIGINT,b:REAL>"),
           testing::Eq("")));
 }
 
