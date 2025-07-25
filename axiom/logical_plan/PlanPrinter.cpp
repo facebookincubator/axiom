@@ -30,14 +30,12 @@ class ToTextVisitor : public PlanNodeVisitor {
  public:
   void visit(const ValuesNode& node, PlanNodeVisitorContext& context)
       const override {
-    appendNode(
-        "Values", node, fmt::format("{} rows", node.rows().size()), context);
+    appendNode(node, fmt::format("{} rows", node.rows().size()), context);
   }
 
   void visit(const TableScanNode& node, PlanNodeVisitorContext& context)
       const override {
     appendNode(
-        "TableScan",
         node,
         fmt::format("{}.{}", node.connectorId(), node.tableName()),
         context);
@@ -45,13 +43,13 @@ class ToTextVisitor : public PlanNodeVisitor {
 
   void visit(const FilterNode& node, PlanNodeVisitorContext& context)
       const override {
-    appendNode("Filter", node, ExprPrinter::toText(*node.predicate()), context);
+    appendNode(node, ExprPrinter::toText(*node.predicate()), context);
   }
 
   void visit(const ProjectNode& node, PlanNodeVisitorContext& context)
       const override {
     auto& myContext = static_cast<ToTextVisitorContext&>(context);
-    myContext.out << makeIndent(myContext.indent) << "- Project:";
+    myContext.out << makeIndent(myContext.indent) << "- " << node.kind() << ":";
 
     appendOutputType(node, myContext);
 
@@ -73,7 +71,7 @@ class ToTextVisitor : public PlanNodeVisitor {
   void visit(const AggregateNode& node, PlanNodeVisitorContext& context)
       const override {
     auto& myContext = static_cast<ToTextVisitorContext&>(context);
-    myContext.out << makeIndent(myContext.indent) << "- Aggregate(";
+    myContext.out << makeIndent(myContext.indent) << "- " << node.kind() << "(";
 
     const auto numKeys = node.groupingKeys().size();
     for (auto i = 0; i < numKeys; ++i) {
@@ -102,18 +100,19 @@ class ToTextVisitor : public PlanNodeVisitor {
 
   void visit(const JoinNode& node, PlanNodeVisitorContext& context)
       const override {
-    appendNode(
-        fmt::format("Join {}", JoinTypeName::toName(node.joinType())),
-        node,
-        node.condition() != nullptr ? ExprPrinter::toText(*node.condition())
-                                    : "",
-        context);
+    auto details = fmt::format("({})", JoinTypeName::toName(node.joinType()));
+    if (node.condition() != nullptr) {
+      details =
+          fmt::format("{} {}", details, ExprPrinter::toText(*node.condition()));
+    }
+    appendNode(node, details, context);
   }
 
   void visit(const SortNode& node, PlanNodeVisitorContext& context)
       const override {
     auto& myContext = static_cast<ToTextVisitorContext&>(context);
-    myContext.out << makeIndent(myContext.indent) << "- Sort: ";
+    myContext.out << makeIndent(myContext.indent) << "- " << node.kind()
+                  << ": ";
 
     const auto size = node.ordering().size();
     for (auto i = 0; i < size; ++i) {
@@ -132,7 +131,6 @@ class ToTextVisitor : public PlanNodeVisitor {
   void visit(const LimitNode& node, PlanNodeVisitorContext& context)
       const override {
     appendNode(
-        "Limit",
         node,
         node.offset() > 0
             ? fmt::format("{} (offset: {})", node.count(), node.offset())
@@ -142,12 +140,12 @@ class ToTextVisitor : public PlanNodeVisitor {
 
   void visit(const SetNode& node, PlanNodeVisitorContext& context)
       const override {
-    appendNode("Set", node, context);
+    appendNode(node, context);
   }
 
   void visit(const UnnestNode& node, PlanNodeVisitorContext& context)
       const override {
-    appendNode("Unnest", node, context);
+    appendNode(node, context);
   }
 
  private:
@@ -156,12 +154,11 @@ class ToTextVisitor : public PlanNodeVisitor {
   }
 
   void appendNode(
-      const std::string& name,
       const LogicalPlanNode& node,
       const std::optional<std::string>& details,
       PlanNodeVisitorContext& context) const {
     auto& myContext = static_cast<ToTextVisitorContext&>(context);
-    myContext.out << makeIndent(myContext.indent) << "- " << name << ":";
+    myContext.out << makeIndent(myContext.indent) << "- " << node.kind() << ":";
 
     if (details.has_value()) {
       myContext.out << " " << details.value();
@@ -174,11 +171,9 @@ class ToTextVisitor : public PlanNodeVisitor {
     appendInputs(node, myContext);
   }
 
-  void appendNode(
-      const std::string& name,
-      const LogicalPlanNode& node,
-      PlanNodeVisitorContext& context) const {
-    appendNode(name, node, std::nullopt, context);
+  void appendNode(const LogicalPlanNode& node, PlanNodeVisitorContext& context)
+      const {
+    appendNode(node, std::nullopt, context);
   }
 
   void appendOutputType(

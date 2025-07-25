@@ -44,6 +44,36 @@ class UniqueNameChecker {
 
 } // namespace
 
+std::string_view toString(NodeKind nodeKind) {
+  switch (nodeKind) {
+    case NodeKind::kValues:
+      return "Values";
+    case NodeKind::kTableScan:
+      return "TableScan";
+    case NodeKind::kFilter:
+      return "Filter";
+    case NodeKind::kProject:
+      return "Project";
+    case NodeKind::kAggregate:
+      return "Aggregate";
+    case NodeKind::kJoin:
+      return "Join";
+    case NodeKind::kSort:
+      return "Sort";
+    case NodeKind::kLimit:
+      return "Limit";
+    case NodeKind::kSet:
+      return "Set";
+    case NodeKind::kUnnest:
+      return "Unnest";
+  }
+}
+
+std::ostream& operator<<(std::ostream& os, const NodeKind& nodeKind) {
+  os << toString(nodeKind);
+  return os;
+}
+
 ValuesNode::ValuesNode(
     const std::string& id,
     const RowTypePtr& rowType,

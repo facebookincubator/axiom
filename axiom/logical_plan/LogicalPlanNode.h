@@ -34,6 +34,10 @@ enum class NodeKind {
   kUnnest = 9,
 };
 
+// String representation for node kind.
+std::string_view toString(NodeKind nodeKind);
+std::ostream& operator<<(std::ostream& os, const NodeKind& nodeKind);
+
 class LogicalPlanNode;
 using LogicalPlanNodePtr = std::shared_ptr<const LogicalPlanNode>;
 

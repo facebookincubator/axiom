@@ -191,7 +191,7 @@ TEST_F(PlanPrinterTest, join) {
           testing::StartsWith("    key_0 := key_0"),
           testing::StartsWith("    w := w"),
           testing::StartsWith("    z := plus(v, w)"),
-          testing::StartsWith("  - Join LEFT: eq(key, key_0)"),
+          testing::StartsWith("  - Join: (LEFT) eq(key, key_0)"),
           testing::StartsWith("    - Values: 4 rows"),
           testing::StartsWith("    - Values: 2 rows"),
           testing::Eq("")));
@@ -233,7 +233,7 @@ TEST_F(PlanPrinterTest, crossJoin) {
           testing::StartsWith("    key_0 := key_0"),
           testing::StartsWith("    w := w"),
           testing::StartsWith("    z := plus(v, w)"),
-          testing::StartsWith("  - Join INNER:"), // Condition is empty
+          testing::StartsWith("  - Join: (INNER)"), // Condition is empty
           testing::StartsWith("    - Values: 3 rows"),
           testing::StartsWith("    - Values: 2 rows"),
           testing::Eq("")));
