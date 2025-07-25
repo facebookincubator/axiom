@@ -19,7 +19,7 @@ add_executable(
   ParquetTpchTest.cpp
   QueryTestBase.cpp
   SubfieldTest.cpp
-  LogicalSubFieldTest.cpp
+  LogicalSubfieldTest.cpp
   FeatureGen.cpp
   Genies.cpp)
 

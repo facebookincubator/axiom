@@ -960,7 +960,7 @@ velox::core::PlanNodePtr Optimization::makeRepartition(
       idGenerator_.next(),
       sourcePlan->outputType(),
       VectorSerde::Kind::kPresto);
-  fragment.inputStages.emplace_back(exchange->id(), source.taskPrefix);
+  fragment.inputStages.push_back(InputStage{exchange->id(), source.taskPrefix});
   stages.push_back(std::move(source));
   return exchange;
 }

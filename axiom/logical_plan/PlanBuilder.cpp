@@ -922,7 +922,7 @@ void NameMappings::setAlias(const std::string& alias) {
 
 void NameMappings::merge(const NameMappings& other) {
   for (const auto& [name, id] : other.mappings_) {
-    if (mappings_.contains(name)) {
+    if (mappings_.count(name)) {
       VELOX_CHECK(!name.alias.has_value());
       mappings_.erase(name);
     } else {

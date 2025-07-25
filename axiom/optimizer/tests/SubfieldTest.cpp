@@ -23,7 +23,7 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
-DEFINE_string(subfield_data_path, "", "Path to subfield test data");
+DECLARE_string(subfield_data_path);
 
 using namespace facebook::velox;
 using namespace facebook::velox::optimizer;
