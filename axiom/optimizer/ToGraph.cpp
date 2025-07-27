@@ -467,7 +467,7 @@ void Optimization::ensureFunctionSubfields(const core::TypedExprPtr& expr) {
     if (!metadata) {
       return;
     }
-    if (!translatedSubfieldFuncs_.count(call)) {
+    if (!translatedSubfieldFuncs_.contains(call)) {
       translateExpr(expr);
     }
   }

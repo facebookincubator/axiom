@@ -611,7 +611,7 @@ RowTypePtr skylineStruct(BaseTableCP baseTable, ColumnCP column) {
       auto& first = path->steps()[0];
       std::string name =
           first.field ? std::string(first.field) : fmt::format("{}", first.id);
-      if (!distinct.count(name)) {
+      if (!distinct.contains(name)) {
         distinct.insert(name);
         names.push_back(name);
         types.push_back(valueType);
