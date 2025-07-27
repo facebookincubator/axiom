@@ -131,7 +131,7 @@ class SubfieldTest : public QueryTestBase,
 
       std::vector<Step> prefixSteps = {steps[0], steps[1]};
       auto prefixPath = toPath(std::move(prefixSteps));
-      if (result.count(prefixPath)) {
+      if (result.contains(prefixPath)) {
         // There already is an expression for this path.
         continue;
       }
