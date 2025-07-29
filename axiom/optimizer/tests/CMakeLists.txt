@@ -21,7 +21,7 @@ add_executable(
   SubfieldTest.cpp
   LogicalSubfieldTest.cpp
   FeatureGen.cpp
-  Genies.cpp)
+  Genies.cpp OptimizerTest.cpp)
 
 add_test(velox_plan_test velox_plan_test)
 
@@ -35,6 +35,7 @@ target_link_libraries(
   velox_hive_connector_metadata
   velox_exec_runner_test_util
   velox_exec_test_lib
+  velox_test_connector_metadata
   velox_dwio_parquet_reader
   velox_dwio_native_parquet_reader
   gtest
