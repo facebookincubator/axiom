@@ -19,6 +19,7 @@ add_test(velox_fe_logical_plan_tests velox_fe_logical_plan_tests)
 
 target_link_libraries(velox_fe_logical_plan_tests
                       velox_fe_logical_plan_builder
+                      velox_test_connector_metadata
                       GTest::gtest
                       GTest::gtest_main
                       GTest::gmock)

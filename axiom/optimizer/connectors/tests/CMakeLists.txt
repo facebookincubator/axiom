@@ -12,26 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_connector_metadata ConnectorMetadata.cpp
-                  StatisticsBuilder.cpp)
+velox_add_library(velox_test_connector_metadata TestConnector.cpp)
 
-velox_link_libraries(velox_connector_metadata velox_common_base velox_memory
-                     velox_connector velox_dwio_dwrf_writer)
+velox_link_libraries(velox_test_connector_metadata velox_common_base
+                     velox_memory velox_connector)
 
-add_subdirectory(hive)
-add_subdirectory(tests)
+add_executable(
+  velox_test_connector_metadata_test
+  TestConnectorTest.cpp)
 
-velox_add_library(velox_connector_split_source ConnectorSplitSource.cpp)
+add_test(
+    velox_test_connector_metadata_test
+    velox_test_connector_metadata_test)
 
-velox_link_libraries(
-  velox_connector_split_source
-  velox_connector_metadata
-  velox_local_runner
-  velox_multifragment_plan
+target_link_libraries(
+  velox_test_connector_metadata_test
+  velox_test_connector_metadata
   velox_common_base
   velox_memory
-  velox_hive_connector
-  velox_dwio_common
-  velox_dwio_dwrf_writer
+  velox_connector
   velox_exec
-  velox_cursor)
+  gtest
+  gtest_main)
