@@ -20,6 +20,7 @@
 
 namespace facebook::velox::connector {
 
+// Forward declarations
 class TestConnector;
 
 class TestTableLayout : public TableLayout {
@@ -34,22 +35,24 @@ class TestTableLayout : public TableLayout {
             table,
             connector,
             std::move(columns),
-            std::vector<const Column*>{},
-            std::vector<const Column*>{},
-            std::vector<SortOrder>{},
-            std::vector<const Column*>{},
-            true) {}
+            {}, // partitionColumns
+            {}, // orderColumns
+            {}, // sortOrder
+            {}, // lookupKeys
+            true) {} // supportsScan
+
+  const std::vector<const Column*>& columns() const {
+    return TableLayout::columns();
+  }
 
   std::pair<int64_t, int64_t> sample(
-      const connector::ConnectorTableHandlePtr& /* handle */,
-      float /* pct */,
-      std::vector<core::TypedExprPtr> /* extraFilters */,
-      RowTypePtr /* outputType */ = nullptr,
-      const std::vector<common::Subfield>& /* fields */ = {},
-      HashStringAllocator* /* allocator */ = nullptr,
-      std::vector<ColumnStatistics>* /* statistics */ = nullptr) const {
-    return std::make_pair(1'000, 1'000);
-  }
+      const connector::ConnectorTableHandlePtr& handle,
+      float pct,
+      std::vector<core::TypedExprPtr> extraFilters,
+      RowTypePtr outputType = nullptr,
+      const std::vector<common::Subfield>& fields = {},
+      HashStringAllocator* allocator = nullptr,
+      std::vector<ColumnStatistics>* statistics = nullptr) const override;
 };
 
 class TestTable : public Table {
@@ -57,101 +60,142 @@ class TestTable : public Table {
   TestTable(
       const std::string& name,
       const RowTypePtr& schema,
-      TestConnector* connector)
-      : Table(name), connector_{connector} {
-    type_ = schema;
-
-    columns_.reserve(schema->size());
-
-    std::vector<const Column*> columnPtrs;
-    columnPtrs.reserve(schema->size());
-
-    for (auto i = 0; i < schema->size(); ++i) {
-      auto column =
-          std::make_shared<Column>(schema->nameOf(i), schema->childAt(i));
-      columns_.emplace_back(column);
-      columnPtrMap_.emplace(column->name(), column.get());
-      columnPtrs.emplace_back(column.get());
-    }
-
-    layout_ =
-        std::make_shared<TestTableLayout>(name, this, connector, columnPtrs);
-    layoutPtrs_.emplace_back(layout_.get());
-  }
+      TestConnector* connector,
+      uint64_t rows);
 
   const std::unordered_map<std::string, const Column*>& columnMap()
       const override {
-    return columnPtrMap_;
+    return columns_;
   }
 
   const std::vector<const TableLayout*>& layouts() const override {
-    return layoutPtrs_;
+    return layouts_;
   }
 
   uint64_t numRows() const override {
-    return 100;
+    return rows_;
   }
 
  private:
-  TestConnector* connector_;
-  std::vector<std::shared_ptr<const Column>> columns_;
-  std::unordered_map<std::string, const Column*> columnPtrMap_;
-  std::shared_ptr<const TableLayout> layout_;
-  std::vector<const TableLayout*> layoutPtrs_;
+  std::vector<const Column*> getColumnVector() const;
+
+  connector::Connector* connector_;
+  uint64_t rows_;
+  std::unordered_map<std::string, const Column*> columns_;
+  std::vector<std::unique_ptr<Column>> exportedColumns_;
+  std::vector<const TableLayout*> layouts_;
+  std::vector<std::unique_ptr<TableLayout>> exportedLayouts_;
+};
+
+class TestSplit : public ConnectorSplit {
+ public:
+  explicit TestSplit(const std::string& connectorId)
+      : ConnectorSplit(connectorId) {}
+};
+
+class TestSplitSource : public SplitSource {
+ public:
+  TestSplitSource(
+      const std::string& connectorId,
+      const std::vector<std::shared_ptr<const PartitionHandle>>& partitions)
+      : connectorId_(connectorId),
+        partitions_(partitions),
+        currentPartition_(0) {}
+
+  std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) override;
+
+ private:
+  std::string connectorId_;
+  std::vector<std::shared_ptr<const PartitionHandle>> partitions_;
+  size_t currentPartition_;
+};
+
+class TestSplitManager : public ConnectorSplitManager {
+ public:
+  std::vector<std::shared_ptr<const PartitionHandle>> listPartitions(
+      const ConnectorTableHandlePtr& tableHandle) override;
+
+  std::shared_ptr<SplitSource> getSplitSource(
+      const ConnectorTableHandlePtr& tableHandle,
+      std::vector<std::shared_ptr<const PartitionHandle>> partitions,
+      SplitOptions options = {}) override;
 };
 
 class TestColumnHandle : public ColumnHandle {
  public:
-  explicit TestColumnHandle(const std::string& name) : name_{name} {}
+  TestColumnHandle(const std::string& name, TypePtr type)
+      : name_(name), type_(std::move(type)) {}
 
   const std::string& name() const override {
     return name_;
   }
 
+  const TypePtr& type() const {
+    return type_;
+  }
+
  private:
-  const std::string name_;
+  std::string name_;
+  TypePtr type_;
 };
 
 class TestTableHandle : public ConnectorTableHandle {
  public:
-  explicit TestTableHandle(const std::string& connectorId)
-      : ConnectorTableHandle{connectorId} {}
+  TestTableHandle(
+      const TableLayout& layout,
+      std::vector<ColumnHandlePtr> columnHandles,
+      std::vector<core::TypedExprPtr> filters = {})
+      : ConnectorTableHandle(layout.connector()->connectorId()),
+        layout_(layout),
+        columnHandles_(std::move(columnHandles)),
+        filters_(std::move(filters)) {}
+
+  const std::string& name() const override {
+    return layout_.table()->name();
+  }
 
   std::string toString() const override {
-    return "TestTableHandle";
+    return name();
   }
+
+  const TableLayout& layout() const {
+    return layout_;
+  }
+
+  const std::vector<core::TypedExprPtr>& filters() const {
+    return filters_;
+  }
+
+  const std::vector<ColumnHandlePtr>& columnHandles() const {
+    return columnHandles_;
+  }
+
+ private:
+  const TableLayout& layout_;
+  std::vector<ColumnHandlePtr> columnHandles_;
+  std::vector<core::TypedExprPtr> filters_;
 };
 
 class TestConnectorMetadata : public ConnectorMetadata {
  public:
   explicit TestConnectorMetadata(TestConnector* connector)
-      : connector_{connector} {}
+      : connector_(connector),
+        splitManager_(std::make_unique<TestSplitManager>()) {}
 
   void initialize() override {}
 
-  const Table* findTable(const std::string& name) override {
-    auto it = tables_.find(name);
-    VELOX_USER_CHECK(it != tables_.end(), "Test table not found: {}", name);
-    return it->second.get();
-  }
+  const Table* findTable(const std::string& name) override;
 
   ConnectorSplitManager* splitManager() override {
-    VELOX_NYI();
-  }
-
-  void addTable(const std::string& name, const RowTypePtr& schema) {
-    tables_.emplace(
-        name, std::make_unique<TestTable>(name, schema, connector_));
+    return splitManager_.get();
   }
 
   ColumnHandlePtr createColumnHandle(
-      const TableLayout& /* layoutData */,
+      const TableLayout& layout,
       const std::string& columnName,
-      std::vector<common::Subfield> /* subfields */,
-      std::optional<TypePtr> /* castToType */,
-      SubfieldMapping /* subfieldMapping */) override {
-    return std::make_shared<TestColumnHandle>(columnName);
-  }
+      std::vector<common::Subfield> subfields = {},
+      std::optional<TypePtr> castToType = std::nullopt,
+      SubfieldMapping subfieldMapping = {}) override;
 
   ConnectorTableHandlePtr createTableHandle(
       const TableLayout& layout,
@@ -159,12 +203,62 @@ class TestConnectorMetadata : public ConnectorMetadata {
       core::ExpressionEvaluator& evaluator,
       std::vector<core::TypedExprPtr> filters,
       std::vector<core::TypedExprPtr>& rejectedFilters,
-      RowTypePtr dataColumns,
-      std::optional<LookupKeys>) override;
+      RowTypePtr dataColumns = nullptr,
+      std::optional<LookupKeys> = std::nullopt) override;
+
+  void addTable(
+      const std::string& name,
+      const RowTypePtr& schema,
+      TestConnector* connector,
+      uint64_t rows);
 
  private:
   TestConnector* connector_;
   std::unordered_map<std::string, std::unique_ptr<TestTable>> tables_;
+  std::unique_ptr<TestSplitManager> splitManager_;
+};
+
+class TestDataSource : public DataSource {
+ public:
+  TestDataSource(
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle);
+
+  ~TestDataSource() override {
+    data_.reset();
+  }
+
+  void addSplit(std::shared_ptr<ConnectorSplit> split) override;
+
+  std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
+      override;
+
+  void addDynamicFilter(
+      column_index_t outputChannel,
+      const std::shared_ptr<common::Filter>& filter) override;
+
+  uint64_t getCompletedBytes() override {
+    return 0;
+  }
+
+  uint64_t getCompletedRows() override {
+    return 0;
+  }
+
+  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
+    return {};
+  }
+
+ private:
+  memory::MemoryPool* pool() const;
+
+ private:
+  RowTypePtr outputType_;
+  ConnectorTableHandlePtr tableHandle_;
+  std::shared_ptr<ConnectorSplit> split_;
+  RowVectorPtr data_;
+  std::shared_ptr<memory::MemoryPool> pool_;
+  bool hasData_{false};
 };
 
 class TestConnector : public Connector {
@@ -177,32 +271,59 @@ class TestConnector : public Connector {
     return metadata_.get();
   }
 
-  std::unique_ptr<DataSource> createDataSource(
-      const RowTypePtr& /* outputType */,
-      const ConnectorTableHandlePtr& /* tableHandle */,
-      const ColumnHandleMap& /* columnHandles */,
-      ConnectorQueryCtx* /* connectorQueryCtx */) override {
-    VELOX_NYI();
+  bool supportsSplitPreload() override {
+    return true;
   }
+
+  bool canAddDynamicFilter() const override {
+    return true;
+  }
+
+  void setPushdownFilters(bool enabled) {
+    pushdownFilters_ = enabled;
+  }
+
+  bool pushdownFilters() const {
+    return pushdownFilters_;
+  }
+
+  std::unique_ptr<DataSource> createDataSource(
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const ColumnHandleMap& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx) override;
 
   std::unique_ptr<DataSink> createDataSink(
-      RowTypePtr /* inputType */,
-      ConnectorInsertTableHandlePtr /* connectorInsertTableHandle */,
-      ConnectorQueryCtx* /* connectorQueryCtx */,
-      CommitStrategy /* commitStrategy */) override {
-    VELOX_NYI();
-  }
+      RowTypePtr inputType,
+      ConnectorInsertTableHandlePtr connectorInsertTableHandle,
+      ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy) override;
 
-  void addTable(const std::string& name, const RowTypePtr& schema) {
-    metadata_->addTable(name, schema);
-  }
+  void
+  addTable(const std::string& name, const RowTypePtr& schema, uint64_t rows);
 
-  void addTable(const std::string& name) {
-    metadata_->addTable(name, ROW({}, {}));
-  }
+  void addTable(const std::string& name, const RowTypePtr& schema);
+
+  void addTable(const std::string& name);
 
  private:
   const std::unique_ptr<TestConnectorMetadata> metadata_;
+  bool pushdownFilters_{false};
+};
+
+class TestDataSink : public DataSink {
+ public:
+  void appendData(RowVectorPtr) override {}
+  bool finish() override {
+    return true;
+  }
+  std::vector<std::string> close() override {
+    return {};
+  }
+  void abort() override {}
+  Stats stats() const override {
+    return {};
+  }
 };
 
 } // namespace facebook::velox::connector
