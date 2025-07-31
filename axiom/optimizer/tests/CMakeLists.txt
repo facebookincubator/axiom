@@ -21,7 +21,8 @@ add_executable(
   SubfieldTest.cpp
   LogicalSubfieldTest.cpp
   FeatureGen.cpp
-  Genies.cpp)
+  Genies.cpp
+  SchemaResolverTest.cpp)
 
 add_test(velox_plan_test velox_plan_test)
 
@@ -29,6 +30,7 @@ target_link_libraries(
   velox_plan_test
   velox_verax
   velox_fe_logical_plan_builder
+  velox_test_connector
   velox_schema_resolver
   velox_tpch_gen
   velox_connector_split_source
@@ -37,6 +39,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_dwio_parquet_reader
   velox_dwio_native_parquet_reader
+  GTest::gmock
   gtest
   gtest_main)
 

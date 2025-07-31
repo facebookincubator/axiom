@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/logical_plan/Expr.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/Schema.h"
 #include "velox/core/PlanNode.h"
 
@@ -865,6 +865,12 @@ struct DerivedTable : public PlanObject {
   // side. In this case joins that refer to tables not in 'tableSet' are not
   // considered.
   PlanObjectSet tableSet;
+
+  // Set if this is a set operation. If set, 'children' has the operands.
+  std::optional<logical_plan::SetOperation> setOp;
+
+  /// Operands if 'this' is a set operation, e.g. union.
+  std::vector<DerivedTable*, QGAllocator<DerivedTable*>> children;
 
   // Single row tables from non-correlated scalar subqueries.
   PlanObjectSet singleRowDts;

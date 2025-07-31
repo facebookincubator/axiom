@@ -17,7 +17,8 @@ velox_add_library(velox_fe_logical_plan Expr.cpp ExprPrinter.cpp
 
 velox_link_libraries(velox_fe_logical_plan velox_type)
 
-velox_add_library(velox_fe_logical_plan_builder PlanBuilder.cpp)
+velox_add_library(velox_fe_logical_plan_builder PlanBuilder.cpp
+                  NameAllocator.cpp NameMappings.cpp)
 
 velox_link_libraries(
   velox_fe_logical_plan_builder

@@ -17,8 +17,10 @@
 #include "axiom/optimizer/Plan.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/HashPartitionFunction.h"
+#include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/ScopedVarSetter.h"
+#include "velox/vector/VariantToVector.h"
 
 namespace facebook::velox::optimizer {
 
@@ -351,6 +353,13 @@ core::TypedExprPtr Optimization::toTypedExpr(ExprCP expr) {
         return std::make_shared<core::ConstantTypedExpr>(
             queryCtx()->toVectorPtr(literal->vector()));
       }
+      // Complex constants must be vectors for constant folding to work.
+      if (literal->value().type->kind() >= TypeKind::ARRAY) {
+        return std::make_shared<core::ConstantTypedExpr>(variantToVector(
+            toTypePtr(literal->value().type),
+            literal->literal(),
+            evaluator_.pool()));
+      }
       return std::make_shared<core::ConstantTypedExpr>(
           toTypePtr(literal->value().type), literal->literal());
     }
@@ -403,7 +412,17 @@ class TempProjections {
           toTypePtr(expr->value().type), names_.back()));
       return fieldRefs_.back();
     }
-    return fieldRefs_[it->second];
+    auto fieldRef = fieldRefs_[it->second];
+    if (optName && *optName != fieldRef->name()) {
+      auto aliasFieldRef = std::make_shared<core::FieldAccessTypedExpr>(
+          toTypePtr(expr->value().type), *optName);
+      names_.push_back(*optName);
+      exprs_.push_back(fieldRef);
+      fieldRefs_.push_back(aliasFieldRef);
+      exprChannel_[expr] = nextChannel_++;
+      return aliasFieldRef;
+    }
+    return fieldRef;
   }
 
   template <typename Result = core::FieldAccessTypedExprPtr>
@@ -928,7 +947,8 @@ core::PlanNodePtr Optimization::makeAggregation(
 velox::core::PlanNodePtr Optimization::makeRepartition(
     const Repartition& repartition,
     velox::runner::ExecutableFragment& fragment,
-    std::vector<velox::runner::ExecutableFragment>& stages) {
+    std::vector<velox::runner::ExecutableFragment>& stages,
+    std::shared_ptr<core::ExchangeNode>& exchange) {
   ExecutableFragment source;
   source.width = options_.numWorkers;
   source.taskPrefix = fmt::format("stage{}", ++stageCounter_);
@@ -960,13 +980,49 @@ velox::core::PlanNodePtr Optimization::makeRepartition(
       VectorSerde::Kind::kPresto,
       partitioningInput);
 
-  auto exchange = std::make_shared<core::ExchangeNode>(
-      idGenerator_.next(),
-      sourcePlan->outputType(),
-      VectorSerde::Kind::kPresto);
+  if (exchange == nullptr) {
+    exchange = std::make_shared<core::ExchangeNode>(
+        idGenerator_.next(),
+        sourcePlan->outputType(),
+        VectorSerde::Kind::kPresto);
+  }
   fragment.inputStages.push_back(InputStage{exchange->id(), source.taskPrefix});
   stages.push_back(std::move(source));
   return exchange;
+}
+
+velox::core::PlanNodePtr Optimization::makeUnionAll(
+    const UnionAll& unionAll,
+    velox::runner::ExecutableFragment& fragment,
+    std::vector<velox::runner::ExecutableFragment>& stages) {
+  // If no inputs have a repartition, this is a local exchange. If
+  // some have repartition and more than one have no repartition,
+  // this is a local exchange with a remote exchaneg as input. All the
+  // inputs with repartition go to one remote exchange.
+  std::vector<core::PlanNodePtr> localSources;
+  std::shared_ptr<core::ExchangeNode> exchange;
+  for (const auto& input : unionAll.inputs) {
+    if (input->relType() == RelType::kRepartition) {
+      makeRepartition(*input->as<Repartition>(), fragment, stages, exchange);
+    } else {
+      localSources.push_back(makeFragment(input, fragment, stages));
+    }
+  }
+
+  if (localSources.empty()) {
+    return exchange;
+  }
+
+  if (exchange) {
+    localSources.push_back(exchange);
+  }
+
+  return std::make_shared<core::LocalPartitionNode>(
+      nextId(),
+      core::LocalPartitionNode::Type::kRepartition,
+      /* scaleWriter */ false,
+      std::make_shared<exec::RoundRobinPartitionFunctionSpec>(),
+      localSources);
 }
 
 void Optimization::makePredictionAndHistory(
@@ -995,7 +1051,8 @@ core::PlanNodePtr Optimization::makeFragment(
       return makeOrderBy(*op->as<OrderBy>(), fragment, stages);
     }
     case RelType::kRepartition: {
-      return makeRepartition(*op->as<Repartition>(), fragment, stages);
+      std::shared_ptr<core::ExchangeNode> ignore;
+      return makeRepartition(*op->as<Repartition>(), fragment, stages, ignore);
     }
     case RelType::kTableScan: {
       return makeScan(*op->as<TableScan>(), fragment, stages);
@@ -1005,11 +1062,19 @@ core::PlanNodePtr Optimization::makeFragment(
     }
     case RelType::kHashBuild:
       return makeFragment(op->input(), fragment, stages);
+    case RelType::kUnionAll:
+      return makeUnionAll(*op->as<UnionAll>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));
   }
   return nullptr;
+}
+
+/// Debugging helper functions. Must be in a namespace to be
+/// callable from debugger.
+std::string veloxToString(const core::PlanNode* plan) {
+  return plan->toString(true, true);
 }
 
 std::string planString(MultiFragmentPlan* plan) {

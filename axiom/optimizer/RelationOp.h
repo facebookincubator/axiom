@@ -453,4 +453,21 @@ struct OrderBy : public RelationOp {
   PlanObjectSet dependentKeys;
 };
 
+/// Represents a union all.
+struct UnionAll : public RelationOp {
+  UnionAll(RelationOpPtrVector inputs)
+      : RelationOp(
+            RelType::kUnionAll,
+            nullptr,
+            inputs[0]->distribution(),
+            inputs[0]->columns()),
+        inputs(std::move(inputs)) {}
+
+  void setCost(const PlanState& input) override;
+
+  std::string toString(bool recursive, bool detail) const override;
+
+  const RelationOpPtrVector inputs;
+};
+
 } // namespace facebook::velox::optimizer

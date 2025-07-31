@@ -429,4 +429,23 @@ std::string Project::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+std::string UnionAll::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  out << "(";
+  for (auto i = 0; i < inputs.size(); ++i) {
+    out << inputs[i]->toString(recursive, detail);
+    if (i < inputs.size() - 1) {
+      if (detail) {
+        out << std::endl;
+      }
+      out << " union all ";
+      if (detail) {
+        out << std::endl;
+      }
+    }
+  }
+  out << ")";
+  return out.str();
+}
+
 } // namespace facebook::velox::optimizer

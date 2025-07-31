@@ -16,10 +16,7 @@ add_subdirectory(tests)
 
 add_subdirectory(connectors)
 
-add_library(
-  velox_schema_resolver
-  SchemaResolver.cpp
-  SchemaUtils.cpp)
+add_library(velox_schema_resolver SchemaResolver.cpp SchemaUtils.cpp)
 
 target_link_libraries(velox_schema_resolver velox_connector_metadata
                       velox_exception velox_vector)
@@ -33,7 +30,6 @@ add_library(
   Plan.cpp
   BitSet.cpp
   ParallelExpr.cpp
-  ParallelProject.cpp
   PlanObject.cpp
   Schema.cpp
   QueryGraph.cpp
@@ -50,6 +46,10 @@ add_library(
 add_dependencies(velox_verax velox_hive_connector)
 
 target_link_libraries(
-  velox_verax velox_core velox_connector_metadata velox_fe_logical_plan
-  velox_multifragment_plan velox_connector
-                      velox_schema_resolver)
+  velox_verax
+  velox_core
+  velox_connector_metadata
+  velox_fe_logical_plan
+  velox_multifragment_plan
+  velox_connector
+  velox_schema_resolver)
