@@ -429,4 +429,42 @@ std::string Project::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+const QGstring& UnionAll::historyKey() const {
+  if (!key_.empty()) {
+    return key_;
+  }
+  std::vector<QGstring> keys;
+  for (auto in : inputs) {
+    keys.push_back(in->historyKey());
+  }
+  std::sort(keys.begin(), keys.end());
+  std::stringstream out;
+  out << "unionall(";
+  for (const auto& key : keys) {
+    out << key << ", ";
+  }
+  out << ")";
+  key_ = sanitizeHistoryKey(out.str());
+  return key_;
+}
+
+std::string UnionAll::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  out << "(";
+  for (auto i = 0; i < inputs.size(); ++i) {
+    out << inputs[i]->toString(recursive, detail);
+    if (i < inputs.size() - 1) {
+      if (detail) {
+        out << std::endl;
+      }
+      out << " union all ";
+      if (detail) {
+        out << std::endl;
+      }
+    }
+  }
+  out << ")";
+  return out.str();
+}
+
 } // namespace facebook::velox::optimizer

@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/logical_plan/Expr.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/Schema.h"
 #include "velox/core/PlanNode.h"
 
@@ -590,6 +590,13 @@ class JoinEdge {
     return !leftTable_ || rightOptional_ || leftOptional_ || rightExists_ ||
         rightNotExists_ || markColumn_ || directed_;
   }
+
+  /// True if has a hash based variant that builds on the left and probes on the
+  /// right.
+  bool hasRightHashVariant() const {
+    return isNonCommutative() && !rightNotExists_;
+  }
+
   // Returns the join side info for 'table'. If 'other' is set, returns the
   // other side.
   const JoinSide sideOf(PlanObjectCP side, bool other = false) const;
@@ -865,6 +872,12 @@ struct DerivedTable : public PlanObject {
   // side. In this case joins that refer to tables not in 'tableSet' are not
   // considered.
   PlanObjectSet tableSet;
+
+  // Set if this is a set operation. If set, 'children' has the operands.
+  std::optional<logical_plan::SetOperation> setOp;
+
+  /// Operands if 'this' is a set operation, e.g. union.
+  std::vector<DerivedTable*, QGAllocator<DerivedTable*>> children;
 
   // Single row tables from non-correlated scalar subqueries.
   PlanObjectSet singleRowDts;

@@ -25,10 +25,6 @@ namespace facebook::velox::optimizer {
 using namespace facebook::velox;
 
 namespace {
-std::string veloxToString(const core::PlanNode* plan) {
-  return plan->toString(true, true);
-}
-
 const std::string* columnName(const core::TypedExprPtr& expr) {
   if (auto column =
           dynamic_cast<const core::FieldAccessTypedExpr*>(expr.get())) {

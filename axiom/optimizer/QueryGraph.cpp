@@ -1081,17 +1081,26 @@ void DerivedTable::distributeConjuncts() {
     VELOX_CHECK(aggregation && aggregation->aggregation);
     auto op = aggregation->aggregation;
     PlanObjectSet grouping;
-    for (auto expr : op->grouping) {
-      grouping.unionSet(expr->columns());
+    // Gather the columns of grouping expressions. If a having depends
+    // on these alone it can move below the aggregation and gets
+    // translated from the aggregation output columns to the columns
+    // inside the agg. Consider both the grouping expr nd its rename
+    // after the aggregation.
+    for (auto i = 0; i < op->grouping.size(); ++i) {
+      grouping.unionSet(op->columns()[i]->columns());
+      grouping.unionSet(op->grouping[i]->columns());
     }
     for (auto i = 0; i < having.size(); ++i) {
       // No pushdown of non-deterministic.
       if (having[i]->containsFunction(FunctionSet::kNondeterministic)) {
         continue;
       }
-      // having that refers to no aggregates goes below the aggregation.
+      // having that refers to no aggregates goes below the
+      // aggregation. Translate from names after agg to pre-agg
+      // names. Pre/post agg names may differ for dts in set
+      // operations. If already in pre-agg names, no-op.
       if (having[i]->columns().isSubset(grouping)) {
-        conjuncts.push_back(having[i]);
+        conjuncts.push_back(importExpr(having[i], op->columns(), op->grouping));
         having.erase(having.begin() + i);
         --i;
       }
@@ -1112,18 +1121,24 @@ void DerivedTable::distributeConjuncts() {
                   // existence flags. Leave in place.
       } else if (tables[0]->type() == PlanType::kDerivedTable) {
         // Translate the column names and add the condition to the conjuncts in
-        // the dt.
+        // the dt. If the inner is a set operation, add the filter to children.
         auto innerDt = tables[0]->as<DerivedTable>();
-        auto imported =
-            importExpr(conjuncts[i], innerDt->columns, innerDt->exprs);
-        if (innerDt->aggregation) {
-          innerDt->having.push_back(imported);
-        } else {
-          innerDt->conjuncts.push_back(imported);
-        }
-        if (std::find(changedDts.begin(), changedDts.end(), innerDt) ==
-            changedDts.end()) {
-          changedDts.push_back(innerDt);
+        auto numChildren =
+            innerDt->children.empty() ? 1 : innerDt->children.size();
+        for (auto childIdx = 0; childIdx < numChildren; ++childIdx) {
+          auto childDt =
+              numChildren == 1 ? innerDt : innerDt->children[childIdx];
+          auto imported =
+              importExpr(conjuncts[i], childDt->columns, childDt->exprs);
+          if (childDt->aggregation) {
+            childDt->having.push_back(imported);
+          } else {
+            childDt->conjuncts.push_back(imported);
+          }
+          if (std::find(changedDts.begin(), changedDts.end(), childDt) ==
+              changedDts.end()) {
+            changedDts.push_back(childDt);
+          }
         }
         conjuncts.erase(conjuncts.begin() + i);
         --numCanonicalConjuncts;

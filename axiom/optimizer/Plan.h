@@ -470,12 +470,20 @@ struct PlanStateSaver {
   const int32_t numPlaced_;
 };
 
-/// Key for collection of memoized partial plans. These are all made for hash
-/// join builds with different cardinality reducing joins pushed down. The first
-/// table is the table for which the key represents the build side. The 'tables'
-/// set is the set of reducing joins applied to 'firstTable', including the
-/// table itself. 'existences' is another set of reducing joins that are
-/// semijoined to the join of 'tables' in order to restrict the build side.
+/// Key for collection of memoized partial plans. Any table or derived
+/// table with a particular set of projected out columns and an
+/// optional set of reducing joins and semijoins (existences) is
+/// planned once. The plan is then kept in a memo for future use. The
+/// memo may hold multiple plans with different distribution
+/// properties for one MemoKey. The first table is the table or
+/// derived table to be planned. The 'tables' set is the set of
+/// reducing joins applied to 'firstTable', including the table
+/// itself. 'existences' is another set of reducing joins that are
+/// semijoined to the join of 'tables' in order to restrict the
+/// result. For example, if a reducing join is moved below a group by,
+/// unless it is known never to have duplicates, it must become a
+/// semijoin and the original join must still stay in place in case
+/// there were duplicates.
 struct MemoKey {
   bool operator==(const MemoKey& other) const;
   size_t hash() const;
@@ -1036,6 +1044,23 @@ class Optimization {
 
   void translateJoin(const logical_plan::JoinNode& join);
 
+  DerivedTableP translateSetJoin(
+      const logical_plan::SetNode& set,
+      DerivedTableP setDt);
+
+  // Updates the distribution and column stats of 'setDt', which must
+  // be a union. 'innerDt' should be null on top level call. Adds up
+  // the cardinality of union branches and their columns.
+  void makeUnionDistributionAndStats(
+      DerivedTableP setDt,
+      DerivedTableP innerDt = nullptr);
+
+  DerivedTableP translateUnion(
+      const logical_plan::SetNode& set,
+      DerivedTableP setDt,
+      bool isTopLevel,
+      bool& isLeftLeaf);
+
   // Makes an extra column for existence flag.
   ColumnCP makeMark(const velox::core::AbstractJoinNode& join);
 
@@ -1076,6 +1101,15 @@ class Optimization {
   /// table. 'needsShuffle' is set to true if a shuffle is needed to
   /// align the result of the made plan with 'distribution'.
   PlanPtr makePlan(
+      const MemoKey& key,
+      const Distribution& distribution,
+      const PlanObjectSet& boundColumns,
+      float existsFanout,
+      PlanState& state,
+      bool& needsShuffle);
+
+  // Non-union case of makePlan().
+  PlanPtr makeDtPlan(
       const MemoKey& key,
       const Distribution& distribution,
       const PlanObjectSet& boundColumns,
@@ -1217,6 +1251,14 @@ class Optimization {
 
   velox::core::PlanNodePtr makeRepartition(
       const Repartition& repartition,
+      velox::runner::ExecutableFragment& fragment,
+      std::vector<velox::runner::ExecutableFragment>& stages,
+      std::shared_ptr<core::ExchangeNode>& exchange);
+
+  // Makes a union all with a mix of remote and local inputs. Combines all
+  // remote inputs into one ExchangeNode.
+  velox::core::PlanNodePtr makeUnionAll(
+      const UnionAll& unionAll,
       velox::runner::ExecutableFragment& fragment,
       std::vector<velox::runner::ExecutableFragment>& stages);
 

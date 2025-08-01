@@ -754,6 +754,45 @@ PlanBuilder& PlanBuilder::unionAll(const PlanBuilder& other) {
   return *this;
 }
 
+PlanBuilder& PlanBuilder::intersect(const PlanBuilder& other) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Intersect node cannot be a leaf node");
+  VELOX_USER_CHECK_NOT_NULL(other.node_);
+
+  node_ = std::make_shared<SetNode>(
+      nextId(),
+      std::vector<LogicalPlanNodePtr>{node_, other.node_},
+      SetOperation::kIntersect);
+
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::except(const PlanBuilder& other) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Intersect node cannot be a leaf node");
+  VELOX_USER_CHECK_NOT_NULL(other.node_);
+
+  node_ = std::make_shared<SetNode>(
+      nextId(),
+      std::vector<LogicalPlanNodePtr>{node_, other.node_},
+      SetOperation::kExcept);
+
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::setOperation(
+    SetOperation op,
+    const std::vector<PlanBuilder>& inputs) {
+  VELOX_USER_CHECK_NULL(node_, "setOperation must be a leaf");
+  outputMapping_ = inputs.front().outputMapping_;
+  std::vector<LogicalPlanNodePtr> nodes;
+  nodes.reserve(inputs.size());
+  for (auto& builder : inputs) {
+    VELOX_CHECK_NOT_NULL(builder.node_);
+    nodes.push_back(builder.node_);
+  }
+  node_ = std::make_shared<SetNode>(nextId(), std::move(nodes), op);
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::sort(const std::vector<std::string>& sortingKeys) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Sort node cannot be a leaf node");
 

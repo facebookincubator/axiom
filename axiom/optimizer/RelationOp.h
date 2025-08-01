@@ -82,12 +82,19 @@ struct Cost {
 using QGstring =
     std::basic_string<char, std::char_traits<char>, QGAllocator<char>>;
 
-/// Physical relational operator. This is the common base class of all elements
-/// of plan candidates. The immutable Exprs, Columns and BaseTables in the query
-/// graph are referenced from these. RelationOp instances are also arena
-/// allocated but are reference counted so that no longer interesting
-/// candidate plans can be freed, since a very large number of these
-/// could be generated.
+/// Physical relational operator. This is the common base class of all
+/// elements of plan candidates. The immutable Exprs, Columns and
+/// BaseTables in the query graph are referenced from
+/// these. RelationOp instances are also arena allocated but are
+/// reference counted so that no longer interesting candidate plans
+/// can be freed, since a very large number of these could be
+/// generated. All std containers inside RelationOps must be allocated
+/// from the optimization arena, e.g. ExprVector instead of
+/// std::vector<Expr>. RelationOps are owned via intrusive_ptr, which
+/// is more lightweight than std::shared_ptr and does not require
+/// atomics or keeping a separate control block. This is faster and
+/// more compact and entirely bypasses malloc.
+/// would use malloc.
 class RelationOp : public Relation {
  public:
   RelationOp(
@@ -128,13 +135,10 @@ class RelationOp : public Relation {
   virtual void setCost(const PlanState& input);
 
   /// Returns a key for retrieving/storing a historical record of execution for
-  /// future costing. Empty string if not applicable.
+  /// future costing.
   virtual const QGstring& historyKey() const {
-    if (input_) {
-      return input_->historyKey();
-    }
-    // empty.
-    return key_;
+    VELOX_CHECK_NOT_NULL(input_, "Leaf RelationOps must specify a history key");
+    return input_->historyKey();
   }
 
   /// Returns human redable string for 'this' and inputs if 'recursive' is true.
@@ -451,6 +455,25 @@ struct OrderBy : public RelationOp {
   // another key or keys. These can be late materialized or converted
   // to payload.
   PlanObjectSet dependentKeys;
+};
+
+/// Represents a union all.
+struct UnionAll : public RelationOp {
+  UnionAll(RelationOpPtrVector inputs)
+      : RelationOp(
+            RelType::kUnionAll,
+            nullptr,
+            inputs[0]->distribution(),
+            inputs[0]->columns()),
+        inputs(std::move(inputs)) {}
+
+  void setCost(const PlanState& input) override;
+
+  const QGstring& historyKey() const override;
+
+  std::string toString(bool recursive, bool detail) const override;
+
+  const RelationOpPtrVector inputs;
 };
 
 } // namespace facebook::velox::optimizer

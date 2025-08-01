@@ -194,6 +194,12 @@ void Filter::setCost(const PlanState& /*input*/) {
   cost_.fanout = pow(0.8, exprs_.size());
 }
 
+void UnionAll::setCost(const PlanState& input) {
+  for (auto& in : inputs) {
+    cost_.inputCardinality += in->cost().inputCardinality * in->cost().fanout;
+  }
+}
+
 float selfCost(ExprCP expr) {
   switch (expr->type()) {
     case PlanType::kColumn: {

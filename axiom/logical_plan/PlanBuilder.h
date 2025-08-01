@@ -119,6 +119,14 @@ class PlanBuilder {
 
   PlanBuilder& unionAll(const PlanBuilder& other);
 
+  PlanBuilder& intersect(const PlanBuilder& other);
+
+  PlanBuilder& except(const PlanBuilder& other);
+
+  PlanBuilder& setOperation(
+      SetOperation op,
+      const std::vector<PlanBuilder>& inputs);
+
   PlanBuilder& sort(const std::vector<std::string>& sortingKeys);
 
   /// An alias for 'sort'.

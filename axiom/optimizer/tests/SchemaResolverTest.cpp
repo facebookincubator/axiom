@@ -34,6 +34,11 @@ class SchemaResolverTest : public ::testing::Test {
         baseCatalog_.connector, baseCatalog_.schema);
   }
 
+  void TearDown() override {
+    connector::unregisterConnector("base");
+    connector::unregisterConnector("other");
+  }
+
   struct Catalog {
     std::string id;
     std::string schema;

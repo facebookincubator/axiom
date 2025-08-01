@@ -31,6 +31,8 @@ DECLARE_int32(optimizer_trace);
 DECLARE_int32(num_workers);
 DECLARE_string(history_save_path);
 
+namespace lp = facebook::velox::logical_plan;
+
 namespace facebook::velox::optimizer {
 namespace {
 std::string nodeString(core::PlanNode* node) {
@@ -118,11 +120,32 @@ class PlanTest : public virtual test::ParquetTpchTest,
 
     const auto numWorkers = FLAGS_num_workers;
     if (numWorkers != 1) {
+      gflags::FlagSaver saver;
       FLAGS_num_workers = 1;
-      SCOPE_EXIT {
-        FLAGS_num_workers = numWorkers;
-      };
 
+      auto singlePlan = planVelox(planNode, planString);
+      ASSERT_TRUE(singlePlan.plan != nullptr);
+      auto singleResult = runFragmentedPlan(singlePlan);
+      exec::test::assertEqualResults(
+          referenceResult.results, singleResult.results);
+    }
+  }
+
+  void checkSame(
+      const lp::LogicalPlanNodePtr& planNode,
+      core::PlanNodePtr referencePlan,
+      std::string* planString = nullptr,
+      std::string* veloxPlan = nullptr) {
+    auto fragmentedPlan = planVelox(planNode, planString);
+    if (veloxPlan) {
+      *veloxPlan = veloxString(fragmentedPlan.plan);
+    }
+    optimizer::test::TestResult referenceResult;
+    assertSame(referencePlan, fragmentedPlan, &referenceResult);
+    auto numWorkers = FLAGS_num_workers;
+    if (numWorkers != 1) {
+      gflags::FlagSaver saver;
+      FLAGS_num_workers = 1;
       auto singlePlan = planVelox(planNode, planString);
       ASSERT_TRUE(singlePlan.plan != nullptr);
       auto singleResult = runFragmentedPlan(singlePlan);
@@ -194,12 +217,9 @@ class PlanTest : public virtual test::ParquetTpchTest,
   }
 
   runner::MultiFragmentPlanPtr toSingleNodePlan(
-      const velox::logical_plan::LogicalPlanNodePtr& logicalPlan) {
-    const auto numWorkers = FLAGS_num_workers;
+      const lp::LogicalPlanNodePtr& logicalPlan) {
+    gflags::FlagSaver saver;
     FLAGS_num_workers = 1;
-    SCOPE_EXIT {
-      FLAGS_num_workers = numWorkers;
-    };
 
     schema_ =
         std::make_shared<velox::optimizer::SchemaResolver>(testConnector_, "");
@@ -272,7 +292,7 @@ TEST_F(PlanTest, agg) {
   testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
 
-  auto logicalPlan = logical_plan::PlanBuilder()
+  auto logicalPlan = lp::PlanBuilder()
                          .tableScan(kTestConnectorId, "numbers", {"a", "b"})
                          .aggregate({"a"}, {"sum(b)"})
                          .build();
@@ -301,7 +321,7 @@ TEST_F(PlanTest, rejectedFilters) {
   testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
 
-  auto logicalPlan = logical_plan::PlanBuilder()
+  auto logicalPlan = lp::PlanBuilder()
                          .tableScan(kTestConnectorId, "numbers", {"a", "b"})
                          .filter("a > 10")
                          .map({"a + 2"})
@@ -546,6 +566,223 @@ TEST_F(PlanTest, filterBreakup) {
       veloxString,
       "lineitem,.*range.*l_shipinstruct,.*l_shipmode.*remaining.*l_quantity.*l_quantity.*l_quantity");
   expectRegexp(veloxString, "part.*p_size.*p_container");
+}
+
+TEST_F(PlanTest, unions) {
+  auto nationType =
+      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
+          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
+  auto veloxPlan = exec::test::PlanBuilder(pool_.get())
+                       .tableScan("nation", nationType)
+                       .filter("n_nationkey < 11 or n_nationkey > 13")
+                       .project({"n_regionkey + 1 as rk"})
+                       .filter("rk in (1, 2, 4, 5)")
+                       .planNode();
+
+  lp::PlanBuilder::Context ctx;
+  auto t1 = lp::PlanBuilder(ctx)
+                .tableScan(
+                    exec::test::kHiveConnectorId,
+                    "nation",
+                    {"n_nationkey", "n_regionkey", "n_name", "n_comment"})
+                .filter("n_nationkey < 11");
+  auto t2 = lp::PlanBuilder(ctx)
+                .tableScan(
+                    exec::test::kHiveConnectorId,
+                    "nation",
+                    {"n_nationkey", "n_regionkey", "n_name", "n_comment"})
+                .filter("n_nationkey > 13");
+
+  auto unionPlan = t1.unionAll(t2)
+                       .project({"n_regionkey + 1 as rk"})
+                       .filter("cast(rk as integer) in (1, 2, 4, 5)")
+                       .build();
+
+  // Skip distributed run. Problem with local exchange source with
+  // multiple inputs.
+  gflags::FlagSaver saver;
+  FLAGS_num_workers = 1;
+
+  checkSame(unionPlan, veloxPlan);
+}
+
+TEST_F(PlanTest, unionJoin) {
+  auto partType = ROW({"p_partkey", "p_retailprice"}, {BIGINT(), DOUBLE()});
+  auto partSuppType = ROW({"ps_partkey", "ps_availqty"}, {BIGINT(), INTEGER()});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto veloxPlan =
+      exec::test::PlanBuilder(idGenerator)
+          .tableScan("partsupp", partSuppType)
+          .filter(
+              "ps_availqty < 1000::INTEGER or ps_availqty > 2000::INTEGER or ps_availqty between 1200::INTEGER and 1400::INTEGER")
+          .hashJoin(
+              {"ps_partkey"},
+              {"p_partkey"},
+              exec::test::PlanBuilder(idGenerator)
+                  .tableScan("part", partType)
+                  .filter(
+                      "p_retailprice < 1100::DOUBLE or p_retailprice > 1200::DOUBLE")
+                  .planNode(),
+              "",
+              {"p_partkey"})
+          .project({"p_partkey"})
+          .localPartition({})
+          .singleAggregation({}, {"sum(1)"})
+          .planNode();
+
+  lp::PlanBuilder::Context ctx;
+  auto ps1 = lp::PlanBuilder(ctx)
+                 .tableScan(
+                     exec::test::kHiveConnectorId,
+                     "partsupp",
+                     {"ps_partkey", "ps_availqty"})
+                 .filter("ps_availqty < 1000::INTEGER")
+                 .project({"ps_partkey"});
+
+  auto ps2 = lp::PlanBuilder(ctx)
+                 .tableScan(
+                     exec::test::kHiveConnectorId,
+                     "partsupp",
+                     {"ps_partkey", "ps_availqty"})
+                 .filter("ps_availqty  > 2000::INTEGER")
+                 .project({"ps_partkey"});
+
+  auto ps3 =
+      lp::PlanBuilder(ctx)
+          .tableScan(
+              exec::test::kHiveConnectorId,
+              "partsupp",
+              {"ps_partkey", "ps_availqty"})
+          .filter("ps_availqty  between  1200::INTEGER and 1400::INTEGER")
+          .project({"ps_partkey"});
+
+  // The shape of the partsupp union is ps1 union all (ps2 union all
+  // ps3). We verify that a stack of multiple set ops works.
+  auto psu2 = ps2.unionAll(ps3);
+
+  auto p1 = lp::PlanBuilder(ctx)
+                .tableScan(
+                    exec::test::kHiveConnectorId,
+                    "part",
+                    {"p_partkey", "p_retailprice"})
+                .filter("p_retailprice < 1100::DOUBLE");
+
+  auto p2 = lp::PlanBuilder(ctx)
+                .tableScan(
+                    exec::test::kHiveConnectorId,
+                    "part",
+                    {"p_partkey", "p_retailprice"})
+                .filter("p_retailprice  > 1200::DOUBLE");
+
+  auto unionPlan =
+      ps1.unionAll(psu2)
+          .join(p1.unionAll(p2), "ps_partkey = p_partkey", lp::JoinType::kInner)
+          .aggregate({}, {"sum(1)"})
+          .build();
+
+  // Skip distributed run. Problem with local exchange source with
+  // multiple inputs.
+  gflags::FlagSaver saver;
+  FLAGS_num_workers = 1;
+
+  checkSame(unionPlan, veloxPlan);
+}
+
+TEST_F(PlanTest, intersect) {
+  auto nationType =
+      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
+          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
+  auto veloxPlan = exec::test::PlanBuilder(pool_.get())
+                       .tableScan("nation", nationType)
+                       .filter("n_nationkey > 12 and n_nationkey < 21")
+                       .project({"n_regionkey + 1 as rk"})
+                       .filter("rk in (1, 2, 4, 5)")
+                       .planNode();
+
+  lp::PlanBuilder::Context ctx;
+  auto t1 = lp::PlanBuilder(ctx)
+                .tableScan(
+                    exec::test::kHiveConnectorId,
+                    "nation",
+                    {"n_nationkey", "n_regionkey", "n_name", "n_comment"})
+                .filter("n_nationkey < 21")
+                .project({"n_nationkey", "n_regionkey"});
+  auto t2 = lp::PlanBuilder(ctx)
+                .tableScan(
+                    exec::test::kHiveConnectorId,
+                    "nation",
+                    {"n_nationkey", "n_regionkey", "n_name", "n_comment"})
+                .filter(" n_nationkey > 11 ")
+                .project({"n_nationkey", "n_regionkey"});
+  auto t3 = lp::PlanBuilder(ctx)
+                .tableScan(
+                    exec::test::kHiveConnectorId,
+                    "nation",
+                    {"n_nationkey", "n_regionkey", "n_name", "n_comment"})
+                .filter(" n_nationkey > 12 ")
+                .project({"n_nationkey", "n_regionkey"});
+
+  auto intersectPlan =
+      lp::PlanBuilder(ctx)
+          .setOperation(lp::SetOperation::kIntersect, {t1, t2, t3})
+          .project({"n_regionkey + 1 as rk"})
+          .filter("cast(rk as integer) in (1, 2, 4, 5)")
+          .build();
+
+  std::string planString;
+  checkSame(intersectPlan, veloxPlan, &planString);
+
+  // Expect the in filter to be absorbed into the first scan. 2 existences.
+  expectPlan(
+      planString,
+      "nation t8 project 2 columns  shuffle *H right exists (nation t4 project 2 columns  shuffle   Build )*H exists (nation t6 project 2 columns  broadcast   Build ) PARTIAL agg shuffle  FINAL agg project 2 columns  project 1 columns ");
+}
+
+TEST_F(PlanTest, except) {
+  auto nationType =
+      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
+          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
+  auto veloxPlan = exec::test::PlanBuilder(pool_.get())
+                       .tableScan("nation", nationType)
+                       .filter("n_nationkey > 5 and n_nationkey <= 16")
+                       .project({"n_nationkey", "n_regionkey + 1 as rk"})
+                       .filter("rk in (1, 2, 4, 5)")
+                       .planNode();
+
+  lp::PlanBuilder::Context ctx;
+  auto t1 = lp::PlanBuilder(ctx)
+                .tableScan(
+                    exec::test::kHiveConnectorId,
+                    "nation",
+                    {"n_nationkey", "n_regionkey", "n_name", "n_comment"})
+                .filter("n_nationkey < 21")
+                .project({"n_nationkey", "n_regionkey"});
+  auto t2 = lp::PlanBuilder(ctx)
+                .tableScan(
+                    exec::test::kHiveConnectorId,
+                    "nation",
+                    {"n_nationkey", "n_regionkey", "n_name", "n_comment"})
+                .filter(" n_nationkey > 16 ")
+                .project({"n_nationkey", "n_regionkey"});
+  auto t3 = lp::PlanBuilder(ctx)
+                .tableScan(
+                    exec::test::kHiveConnectorId,
+                    "nation",
+                    {"n_nationkey", "n_regionkey", "n_name", "n_comment"})
+                .filter(" n_nationkey <= 5 ")
+                .project({"n_nationkey", "n_regionkey"});
+
+  auto exceptPlan = lp::PlanBuilder(ctx)
+                        .setOperation(lp::SetOperation::kExcept, {t1, t2, t3})
+                        .project({"n_nationkey", "n_regionkey + 1 as rk"})
+                        .filter("cast(rk as integer) in (1, 2, 4, 5)")
+                        .build();
+
+  std::string planString;
+  checkSame(exceptPlan, veloxPlan, &planString);
+  expectPlan(
+      planString,
+      "nation t4 project 2 columns *H not exists (nation t6 project 2 columns  broadcast   Build )*H not exists (nation t8 project 2 columns  broadcast   Build ) PARTIAL agg shuffle  FINAL agg project 2 columns  project 2 columns ");
 }
 
 } // namespace

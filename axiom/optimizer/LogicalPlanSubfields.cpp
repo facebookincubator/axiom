@@ -101,6 +101,21 @@ void Optimization::markFieldAccessed(
       }
       return;
     }
+    if (kind == lp::NodeKind::kSet) {
+      auto* set = reinterpret_cast<const lp::SetNode*>(source.planNode);
+      for (auto in : set->inputs()) {
+        std::vector<const RowType*> inputContext = {in->outputType().get()};
+        std::vector<LogicalContextSource> inputSources = {
+            LogicalContextSource{.planNode = in.get()}};
+        markFieldAccessed(
+            inputSources[0],
+            ordinal,
+            steps,
+            isControl,
+            inputContext,
+            inputSources);
+      }
+    }
     auto& sourceInputs = source.planNode->inputs();
     if (sourceInputs.empty()) {
       return;
@@ -400,6 +415,21 @@ void Optimization::markControl(const lp::LogicalPlanNode* node) {
       keys.push_back(k.expression);
     }
     markColumnSubfields(node, keys, 0);
+  } else if (kind == lp::NodeKind::kSet) {
+    auto* set = reinterpret_cast<const lp::SetNode*>(node);
+    if (set->operation() != lp::SetOperation::kUnionAll) {
+      // If this is with a distinct every column is a control column.
+      for (auto i = 0; i < set->outputType()->size(); ++i) {
+        for (auto& in : set->inputs()) {
+          std::vector<Step> empty;
+          std::vector<const RowType*> inputContext = {in->outputType().get()};
+          std::vector<LogicalContextSource> inputSources = {
+              LogicalContextSource{.planNode = in.get()}};
+          markFieldAccessed(
+              inputSources[0], i, empty, true, inputContext, inputSources);
+        }
+      }
+    }
   }
   for (auto& source : node->inputs()) {
     markControl(source.get());
