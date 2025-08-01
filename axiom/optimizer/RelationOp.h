@@ -69,10 +69,18 @@ struct Cost {
   // amount of spill is 'totalBytes' - 'peakResidentBytes'.
   float peakResidentBytes{0};
 
+  void add(const Cost& other);
+
   /// If 'isUnit' shows the cost/cardinality for one row, else for
   /// 'inputCardinality' rows.
   std::string toString(bool detail, bool isUnit = false) const;
 };
+
+/// A std::string with lifetime of the optimization. These are
+/// freeable unlike Names but can be held in objects that are
+/// dropped without destruction with the optimization arena.
+using QGstring =
+    std::basic_string<char, std::char_traits<char>, QGAllocator<char>>;
 
 /// Physical relational operator. This is the common base class of all elements
 /// of plan candidates. The immutable Exprs, Columns and BaseTables in the query
@@ -121,12 +129,12 @@ class RelationOp : public Relation {
 
   /// Returns a key for retrieving/storing a historical record of execution for
   /// future costing. Empty string if not applicable.
-  virtual const std::string& historyKey() const {
+  virtual const QGstring& historyKey() const {
     if (input_) {
       return input_->historyKey();
     }
-    static std::string empty;
-    return empty;
+    // empty.
+    return key_;
   }
 
   /// Returns human redable string for 'this' and inputs if 'recursive' is true.
@@ -144,7 +152,7 @@ class RelationOp : public Relation {
   Cost cost_;
 
   // Cache of history lookup key.
-  mutable std::string key_;
+  mutable QGstring key_;
 
  private:
   // thread local reference count. PlanObjects are freed when the
@@ -167,6 +175,9 @@ inline void intrusive_ptr_release(RelationOp* op) {
     delete op;
   }
 }
+
+using RelationOpPtrVector =
+    std::vector<RelationOpPtr, QGAllocator<RelationOpPtr>>;
 
 /// Represents a full table scan or an index lookup.
 struct TableScan : public RelationOp {
@@ -208,7 +219,7 @@ struct TableScan : public RelationOp {
 
   void setCost(const PlanState& input) override;
 
-  const std::string& historyKey() const override;
+  const QGstring& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 
@@ -273,7 +284,7 @@ class Filter : public RelationOp {
 
   void setCost(const PlanState& input) override;
 
-  const std::string& historyKey() const override;
+  const QGstring& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 
@@ -291,7 +302,12 @@ class Project : public RelationOp {
             input->distribution().rename(exprs, columns),
             columns),
         exprs_(std::move(exprs)),
-        columns_(std::move(columns)) {}
+        columns_(std::move(columns)) {
+    VELOX_CHECK_EQ(
+        exprs_.size(),
+        columns_.size(),
+        "Projection names and exprs must match");
+  }
 
   const ExprVector& exprs() const {
     return exprs_;
@@ -344,7 +360,7 @@ struct Join : public RelationOp {
 
   void setCost(const PlanState& input) override;
 
-  const std::string& historyKey() const override;
+  const QGstring& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 };
@@ -412,7 +428,7 @@ struct Aggregation : public RelationOp {
 
   void setCost(const PlanState& input) override;
 
-  const std::string& historyKey() const override;
+  const QGstring& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 };
