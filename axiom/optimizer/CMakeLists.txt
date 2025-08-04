@@ -16,6 +16,11 @@ add_subdirectory(tests)
 
 add_subdirectory(connectors)
 
+add_library(velox_md_model Model.cpp)
+
+target_link_libraries(velox_md_model velox_exception)
+
+
 add_library(velox_schema_resolver SchemaResolver.cpp SchemaUtils.cpp)
 
 target_link_libraries(velox_schema_resolver velox_connector_metadata
@@ -51,6 +56,7 @@ target_link_libraries(
   velox_core
   velox_connector_metadata
   velox_fe_logical_plan
+  velox_md_model
   velox_multifragment_plan
   velox_connector
   velox_schema_resolver)

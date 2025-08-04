@@ -60,3 +60,16 @@ target_link_libraries(
   velox_parse_parser
   velox_parse_expression
   velox_parse_utils)
+
+add_executable(velox_model_test ModelTest.cpp)
+
+add_test(velox_model_test velox_model_test)
+
+target_link_libraries(
+  velox_model_test
+  velox_md_model
+  Boost::headers
+  glog::glog
+  GTest::gtest
+  GTest::gtest_main
+  pthread)
