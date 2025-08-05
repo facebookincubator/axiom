@@ -53,6 +53,11 @@ void Optimization::markFieldAccessed(
       isControl ? &logicalControlSubfields_ : &logicalPayloadSubfields_;
   if (source.planNode) {
     const auto* path = stepsToPath(steps);
+    if (fields->nodeFields[source.planNode].resultPaths[ordinal].contains(
+            path->id())) {
+      // Already marked.
+      return;
+    }
     fields->nodeFields[source.planNode].resultPaths[ordinal].add(path->id());
 
     const auto kind = source.planNode->kind();
@@ -292,7 +297,23 @@ void Optimization::markSubfields(
     const auto* path = stepsToPath(steps);
     auto* fields =
         isControl ? &logicalControlSubfields_ : &logicalPayloadSubfields_;
+    if (fields->argFields[call].resultPaths[ResultAccess::kSelf].contains(
+            path->id())) {
+      // Already marked.
+      return;
+    }
     fields->argFields[call].resultPaths[ResultAccess::kSelf].add(path->id());
+
+    // If the function is some kind of constructor, like
+    // make_row_from_map or make_named_row, then a path over it
+    // selects one argument. If there is no path, all arguments are
+    // implicitly accessed.
+    if (metadata->valuePathToArgPath && !steps.empty()) {
+      auto pair = metadata->valuePathToArgPath(steps, *call);
+      markSubfields(
+          expr->inputAt(pair.second), pair.first, isControl, context, sources);
+      return;
+    }
     for (auto i = 0; i < expr->inputs().size(); ++i) {
       if (metadata->subfieldArg == i) {
         // A subfield of func is a subfield of one arg.

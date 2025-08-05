@@ -20,9 +20,11 @@
 #include "velox/connectors/Connector.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
+#include "velox/expression/Expr.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/parse/Expressions.h"
+#include "velox/vector/VariantToVector.h"
 
 namespace facebook::velox::logical_plan {
 
@@ -395,19 +397,12 @@ ExprPtr tryResolveSpecialForm(
 
   return nullptr;
 }
+} // namespace
 
-using InputNameResolver = std::function<ExprPtr(
-    const std::optional<std::string>& alias,
-    const std::string& fieldName)>;
-
-ExprPtr resolveScalarTypesImpl(
-    const core::ExprPtr& expr,
-    const InputNameResolver& inputNameResolver);
-
-ExprPtr resolveLambdaExpr(
+ExprPtr ExprResolver::resolveLambdaExpr(
     const core::LambdaExpr* lambdaExpr,
     const std::vector<TypePtr>& lambdaInputTypes,
-    const InputNameResolver& inputNameResolver) {
+    const InputNameResolver& inputNameResolver) const {
   const auto& names = lambdaExpr->arguments();
   const auto& body = lambdaExpr->body();
 
@@ -434,9 +429,10 @@ ExprPtr resolveLambdaExpr(
   };
 
   return std::make_shared<LambdaExpr>(
-      signature, resolveScalarTypesImpl(body, lambdaResolver));
+      signature, resolveScalarTypes(body, lambdaResolver));
 }
 
+namespace {
 bool isLambdaArgument(const exec::TypeSignature& typeSignature) {
   return typeSignature.baseName() == "function";
 }
@@ -536,10 +532,11 @@ const exec::FunctionSignature* findLambdaSignature(
 
   return nullptr;
 }
+} // namespace
 
-ExprPtr tryResolveCallWithLambdas(
+ExprPtr ExprResolver::tryResolveCallWithLambdas(
     const std::shared_ptr<const core::CallExpr>& callExpr,
-    const InputNameResolver& inputNameResolver) {
+    const InputNameResolver& inputNameResolver) const {
   if (callExpr == nullptr) {
     return nullptr;
   }
@@ -555,8 +552,7 @@ ExprPtr tryResolveCallWithLambdas(
   std::vector<TypePtr> childTypes(numArgs);
   for (auto i = 0; i < numArgs; ++i) {
     if (!isLambdaArgument(signature->argumentTypes()[i])) {
-      children[i] =
-          resolveScalarTypesImpl(callExpr->inputAt(i), inputNameResolver);
+      children[i] = resolveScalarTypes(callExpr->inputAt(i), inputNameResolver);
       childTypes[i] = children[i]->type();
     }
   }
@@ -594,9 +590,65 @@ ExprPtr tryResolveCallWithLambdas(
   return std::make_shared<CallExpr>(returnType, callExpr->name(), children);
 }
 
-ExprPtr resolveScalarTypesImpl(
+core::TypedExprPtr ExprResolver::makeConstantTypedExpr(
+    const ExprPtr& expr) const {
+  auto vector = variantToVector(
+      expr->type(), *expr->asUnchecked<ConstantExpr>()->value(), pool_.get());
+  return std::make_shared<core::ConstantTypedExpr>(vector);
+}
+
+ExprPtr ExprResolver::makeConstant(const VectorPtr& vector) const {
+  auto variant = std::make_shared<Variant>(vectorToVariant(vector, 0));
+  return std::make_shared<ConstantExpr>(vector->type(), std::move(variant));
+}
+
+ExprPtr ExprResolver::tryFoldCall(
+    const TypePtr& type,
+    const std::string& name,
+    const std::vector<ExprPtr>& inputs) const {
+  if (!queryCtx_) {
+    return nullptr;
+  }
+  for (const auto& arg : inputs) {
+    if (arg->kind() != ExprKind::kConstant) {
+      return nullptr;
+    }
+  }
+  std::vector<core::TypedExprPtr> args;
+  for (const auto& arg : inputs) {
+    args.push_back(makeConstantTypedExpr(arg));
+  }
+  auto vector = exec::tryEvaluateConstantExpression(
+      std::make_shared<core::CallTypedExpr>(type, std::move(args), name),
+      pool_.get(),
+      queryCtx_,
+      true);
+  if (vector) {
+    return makeConstant(vector);
+  }
+  return nullptr;
+}
+
+ExprPtr ExprResolver::tryFoldCast(const TypePtr& type, const ExprPtr& input)
+    const {
+  if (!queryCtx_ || input->kind() != ExprKind::kConstant) {
+    return nullptr;
+  }
+  auto vector = exec::tryEvaluateConstantExpression(
+      std::make_shared<core::CastTypedExpr>(
+          type, makeConstantTypedExpr(input), false),
+      pool_.get(),
+      queryCtx_,
+      true);
+  if (vector) {
+    return makeConstant(vector);
+  }
+  return nullptr;
+}
+
+ExprPtr ExprResolver::resolveScalarTypes(
     const core::ExprPtr& expr,
-    const InputNameResolver& inputNameResolver) {
+    const InputNameResolver& inputNameResolver) const {
   if (const auto* fieldAccess =
           dynamic_cast<const core::FieldAccessExpr*>(expr.get())) {
     const auto& name = fieldAccess->name();
@@ -611,8 +663,7 @@ ExprPtr resolveScalarTypesImpl(
       }
     }
 
-    auto input =
-        resolveScalarTypesImpl(fieldAccess->input(), inputNameResolver);
+    auto input = resolveScalarTypes(fieldAccess->input(), inputNameResolver);
 
     return std::make_shared<SpecialFormExpr>(
         input->type()->asRow().findChild(name),
@@ -638,11 +689,18 @@ ExprPtr resolveScalarTypesImpl(
   std::vector<ExprPtr> inputs;
   inputs.reserve(expr->inputs().size());
   for (const auto& input : expr->inputs()) {
-    inputs.push_back(resolveScalarTypesImpl(input, inputNameResolver));
+    inputs.push_back(resolveScalarTypes(input, inputNameResolver));
   }
 
   if (const auto* call = dynamic_cast<const core::CallExpr*>(expr.get())) {
     const auto& name = call->name();
+
+    if (hook_ != nullptr) {
+      auto result = hook_(name, inputs);
+      if (result != nullptr) {
+        return result;
+      }
+    }
 
     if (auto specialForm = tryResolveSpecialForm(name, inputs)) {
       return specialForm;
@@ -655,11 +713,19 @@ ExprPtr resolveScalarTypesImpl(
     }
 
     auto type = resolveScalarFunction(name, inputTypes);
+    auto folded = tryFoldCall(type, name, inputs);
+    if (folded != nullptr) {
+      return folded;
+    }
 
     return std::make_shared<CallExpr>(type, name, inputs);
   }
 
   if (const auto* cast = dynamic_cast<const core::CastExpr*>(expr.get())) {
+    auto folded = tryFoldCast(cast->type(), inputs[0]);
+    if (folded != nullptr) {
+      return folded;
+    }
     return std::make_shared<SpecialFormExpr>(
         cast->type(),
         cast->isTryCast() ? SpecialForm::kTryCast : SpecialForm::kCast,
@@ -674,9 +740,9 @@ ExprPtr resolveScalarTypesImpl(
   VELOX_NYI("Can't resolve {}", expr->toString());
 }
 
-AggregateExprPtr resolveAggregateTypesImpl(
+AggregateExprPtr ExprResolver::resolveAggregateTypes(
     const core::ExprPtr& expr,
-    const InputNameResolver& inputNameResolver) {
+    const InputNameResolver& inputNameResolver) const {
   const auto* call = dynamic_cast<const core::CallExpr*>(expr.get());
   VELOX_USER_CHECK_NOT_NULL(call, "Aggregate must be a call expression");
 
@@ -685,7 +751,7 @@ AggregateExprPtr resolveAggregateTypesImpl(
   std::vector<ExprPtr> inputs;
   inputs.reserve(expr->inputs().size());
   for (const auto& input : expr->inputs()) {
-    inputs.push_back(resolveScalarTypesImpl(input, inputNameResolver));
+    inputs.push_back(resolveScalarTypes(input, inputNameResolver));
   }
 
   std::vector<TypePtr> inputTypes;
@@ -711,8 +777,6 @@ AggregateExprPtr resolveAggregateTypesImpl(
   }
 }
 
-} // namespace
-
 PlanBuilder& PlanBuilder::join(
     const PlanBuilder& right,
     const std::string& condition,
@@ -730,7 +794,7 @@ PlanBuilder& PlanBuilder::join(
   ExprPtr expr;
   if (!condition.empty()) {
     auto untypedExpr = parse::parseExpr(condition, parseOptions_);
-    expr = resolveScalarTypesImpl(
+    expr = resolver_.resolveScalarTypes(
         untypedExpr, [&](const auto& alias, const auto& name) {
           return resolveJoinInputName(
               alias, name, *outputMapping_, inputRowType);
@@ -854,14 +918,15 @@ ExprPtr PlanBuilder::resolveInputName(
 }
 
 ExprPtr PlanBuilder::resolveScalarTypes(const core::ExprPtr& expr) const {
-  return resolveScalarTypesImpl(expr, [&](const auto& alias, const auto& name) {
-    return resolveInputName(alias, name);
-  });
+  return resolver_.resolveScalarTypes(
+      expr, [&](const auto& alias, const auto& name) {
+        return resolveInputName(alias, name);
+      });
 }
 
 AggregateExprPtr PlanBuilder::resolveAggregateTypes(
     const core::ExprPtr& expr) const {
-  return resolveAggregateTypesImpl(
+  return resolver_.resolveAggregateTypes(
       expr, [&](const auto& alias, const auto& name) {
         return resolveInputName(alias, name);
       });

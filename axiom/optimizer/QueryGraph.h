@@ -338,7 +338,7 @@ struct ResultAccess;
 struct FunctionMetadata {
   bool processSubfields() const {
     return subfieldArg.has_value() || !fieldIndexForArg.empty() ||
-        isArrayConstructor || isMapConstructor;
+        isArrayConstructor || isMapConstructor || valuePathToArgPath;
   }
 
   const LambdaInfo* lambdaInfo(int32_t index) const {
@@ -373,6 +373,14 @@ struct FunctionMetadata {
   /// Ordinal of argument that produces the result subfield in the corresponding
   /// element of 'fieldIndexForArg_'.
   std::vector<int32_t> argOrdinal;
+
+  using ValuePathToArgPath =
+      std::function<std::pair<std::vector<Step>, int32_t>(
+          const std::vector<Step>&,
+          const logical_plan::CallExpr& call)>;
+
+  /// Translates a path over the function result to a path over an argument.
+  ValuePathToArgPath valuePathToArgPath;
 
   /// bits of FunctionSet for the function.
   FunctionSet functionSet;

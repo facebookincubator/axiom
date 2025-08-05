@@ -13,11 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/NameAllocator.h"
+#include "velox/core/Expressions.h"
+#include "velox/core/QueryCtx.h"
+#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
@@ -25,15 +29,82 @@ namespace facebook::velox::logical_plan {
 
 class NameMappings;
 
+/// Class encapsulating functions for type inference and constant folding. Use
+/// with SQL and PlanBuilder.
+class ExprResolver {
+ public:
+  using InputNameResolver = std::function<ExprPtr(
+      const std::optional<std::string>& alias,
+      const std::string& fieldName)>;
+
+  /// Maps from an untyped call and  resolved arguments to a resolved function
+  /// call. Use only for anamolous functions where the type depends on constant
+  /// arguments, e.g. Koski make_row_from_map().
+  using FunctionRewriteHook = std::function<
+      ExprPtr(const std::string& name, const std::vector<ExprPtr>& args)>;
+
+  ExprResolver(
+      std::shared_ptr<core::QueryCtx> queryCtx,
+      FunctionRewriteHook hook = nullptr)
+      : queryCtx_(std::move(queryCtx)),
+        hook_(hook),
+        pool_(
+            queryCtx_ ? queryCtx_->pool()->addLeafChild(
+                            fmt::format("literals{}", ++literalsCounter_))
+                      : nullptr) {}
+
+  ExprPtr resolveScalarTypes(
+      const core::ExprPtr& expr,
+      const InputNameResolver& inputNameResolver) const;
+
+  AggregateExprPtr resolveAggregateTypes(
+      const core::ExprPtr& expr,
+      const InputNameResolver& inputNameResolver) const;
+
+ private:
+  ExprPtr resolveLambdaExpr(
+      const core::LambdaExpr* lambdaExpr,
+      const std::vector<TypePtr>& lambdaInputTypes,
+      const InputNameResolver& inputNameResolver) const;
+
+  ExprPtr tryResolveCallWithLambdas(
+      const std::shared_ptr<const core::CallExpr>& callExpr,
+      const InputNameResolver& inputNameResolver) const;
+
+  ExprPtr tryFoldCall(
+      const TypePtr& type,
+      const std::string& name,
+      const std::vector<ExprPtr>& inputs) const;
+
+  ExprPtr tryFoldCast(const TypePtr& type, const ExprPtr& input) const;
+
+  core::TypedExprPtr makeConstantTypedExpr(const ExprPtr& expr) const;
+
+  ExprPtr makeConstant(const VectorPtr& vector) const;
+
+  ExprPtr tryFoldCall(const TypePtr& type, ExprPtr input) const;
+
+  std::shared_ptr<core::QueryCtx> queryCtx_;
+  FunctionRewriteHook hook_;
+  std::shared_ptr<memory::MemoryPool> pool_;
+  static inline int32_t literalsCounter_{0};
+};
+
 class PlanBuilder {
  public:
   struct Context {
     std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator;
     std::shared_ptr<NameAllocator> nameAllocator;
+    std::shared_ptr<core::QueryCtx> queryCtx;
+    ExprResolver::FunctionRewriteHook hook;
 
-    Context()
+    Context(
+        std::shared_ptr<core::QueryCtx> queryCtx = nullptr,
+        ExprResolver::FunctionRewriteHook hook = nullptr)
         : planNodeIdGenerator{std::make_shared<core::PlanNodeIdGenerator>()},
-          nameAllocator{std::make_shared<NameAllocator>()} {}
+          nameAllocator{std::make_shared<NameAllocator>()},
+          queryCtx(std::move(queryCtx)),
+          hook(hook) {}
   };
 
   using Scope = std::function<ExprPtr(
@@ -43,12 +114,14 @@ class PlanBuilder {
   PlanBuilder(Scope outerScope = nullptr)
       : planNodeIdGenerator_(std::make_shared<core::PlanNodeIdGenerator>()),
         nameAllocator_(std::make_shared<NameAllocator>()),
-        outerScope_{std::move(outerScope)} {}
+        outerScope_{std::move(outerScope)},
+        resolver_(nullptr, nullptr) {}
 
   explicit PlanBuilder(const Context& context, Scope outerScope = nullptr)
       : planNodeIdGenerator_{context.planNodeIdGenerator},
         nameAllocator_{context.nameAllocator},
-        outerScope_{std::move(outerScope)} {
+        outerScope_{std::move(outerScope)},
+        resolver_(context.queryCtx, context.hook) {
     VELOX_CHECK_NOT_NULL(planNodeIdGenerator_);
     VELOX_CHECK_NOT_NULL(nameAllocator_);
   }
@@ -188,6 +261,8 @@ class PlanBuilder {
 
   // Mapping from user-provided to auto-generated output column names.
   std::shared_ptr<NameMappings> outputMapping_;
+
+  ExprResolver resolver_;
 };
 
 } // namespace facebook::velox::logical_plan

@@ -17,6 +17,7 @@
 #include "axiom/optimizer/FunctionRegistry.h"
 
 namespace facebook::velox::optimizer {
+namespace lp = facebook::velox::logical_plan;
 
 FunctionMetadata* FunctionRegistry::metadata(const std::string& name) {
   auto it = metadata_.find(name);
@@ -41,6 +42,41 @@ FunctionRegistry* FunctionRegistry::instance() {
 const FunctionMetadata* functionMetadata(Name name) {
   return FunctionRegistry::instance()->metadata(name);
 }
+
+namespace {
+std::pair<std::vector<Step>, int32_t> rowConstructorSubfield(
+    const std::vector<Step>& steps,
+    const logical_plan::CallExpr& call) {
+  VELOX_CHECK(steps.back().kind == StepKind::kField);
+  auto field = steps.back().field;
+  auto idx = call.type()->as<TypeKind::ROW>().getChildIdx(field);
+  auto newFields = steps;
+  newFields.pop_back();
+  return std::make_pair(newFields, idx);
+}
+
+std::unordered_map<PathCP, logical_plan::ExprPtr> rowConstructorExplode(
+    const logical_plan::CallExpr* call,
+    std::vector<PathCP>& paths) {
+  std::unordered_map<PathCP, logical_plan::ExprPtr> result;
+  for (auto& path : paths) {
+    auto& steps = path->steps();
+    if (steps.empty()) {
+      return {};
+    }
+    std::vector<Step> prefixSteps = {steps[0]};
+    auto prefixPath = toPath(std::move(prefixSteps));
+    if (result.count(prefixPath)) {
+      // There already is an expression for this path.
+      continue;
+    }
+    VELOX_CHECK(steps.front().kind == StepKind::kField);
+    auto nth = steps.front().id;
+    result[prefixPath] = call->inputAt(nth);
+  }
+  return result;
+}
+} // namespace
 
 bool declareBuiltIn() {
   {
@@ -77,6 +113,13 @@ bool declareBuiltIn() {
     metadata->lambdas.push_back(std::move(info));
     metadata->cost = 20;
     FunctionRegistry::instance()->registerFunction("zip", std::move(metadata));
+  }
+  {
+    auto metadata = std::make_unique<FunctionMetadata>();
+    metadata->valuePathToArgPath = rowConstructorSubfield;
+    metadata->logicalExplode = rowConstructorExplode;
+    FunctionRegistry::instance()->registerFunction(
+        "row_constructor", std::move(metadata));
   }
   return true;
 }

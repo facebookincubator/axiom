@@ -28,17 +28,6 @@ namespace facebook::velox::optimizer {
 
 namespace lp = facebook::velox::logical_plan;
 
-namespace {
-std::string leString(const lp::Expr* e) {
-  return lp::ExprPrinter::toText(*e);
-}
-
-std::string pString(const lp::LogicalPlanNode* p) {
-  return lp::PlanPrinter::toText(*p);
-}
-
-} // namespace
-
 void Optimization::setDerivedTableOutput(
     DerivedTableP dt,
     const lp::LogicalPlanNode& planNode) {
@@ -1384,6 +1373,15 @@ PlanObjectP Optimization::makeQueryGraph(
           "Unsupported PlanNode {}",
           logical_plan::NodeKindName::toName(node.kind()));
   }
+}
+
+// Debug helper functions. Must be in a namespace to be callable from gdb.
+std::string leString(const lp::Expr* e) {
+  return lp::ExprPrinter::toText(*e);
+}
+
+std::string pString(const lp::LogicalPlanNode* p) {
+  return lp::PlanPrinter::toText(*p);
 }
 
 } // namespace facebook::velox::optimizer

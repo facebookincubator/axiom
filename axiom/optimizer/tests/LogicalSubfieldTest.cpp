@@ -19,6 +19,7 @@
 #include "axiom/optimizer/tests/FeatureGen.h"
 #include "axiom/optimizer/tests/Genies.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "axiom/optimizer/tests/utils/DfFunctions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/parse/Expressions.h"
@@ -39,6 +40,8 @@ class LogicalSubfieldTest : public QueryTestBase,
     testDataPath_ = FLAGS_subfield_data_path;
     LocalRunnerTestBase::localFileFormat_ = "dwrf";
     LocalRunnerTestBase::SetUpTestCase();
+    registerDfFunctions();
+    registerRowUdfs();
   }
 
   static void TearDownTestCase() {
@@ -246,6 +249,43 @@ class LogicalSubfieldTest : public QueryTestBase,
     std::cout << plan;
     assertSame(veloxPlan, fragmentedPlan);
   }
+
+  void testMakeRowFromMap() {
+    lp::PlanBuilder::Context ctx(getQueryCtx(), resolveDfFunction);
+    auto logical =
+        lp::PlanBuilder(ctx)
+            .tableScan(
+                exec::test::kHiveConnectorId,
+                "features",
+                {"float_features", "id_list_features"})
+            .unionAll(lp::PlanBuilder(ctx).tableScan(
+                exec::test::kHiveConnectorId,
+                "features",
+                {"float_features", "id_list_features"}))
+
+            .project(
+                {"make_row_from_map(float_features, array[10010, 10020, 10030], array['f1', 'f2', 'f3']) as r"})
+            .project(
+                {"make_named_row('f1b', r.f1 + 1::REAL, 'f2b', r.f2 + 2::REAL) as named"})
+            .filter("named.f1b < 10000::REAL")
+            .project({"make_named_row('rf2', named.f2b * 2::REAL) as fin"})
+            .build();
+
+    std::string planString;
+    auto plan = planVelox(logical, &planString);
+    expectPlan(
+        planString,
+        "(features t4 project 1 columns  union all features t6 project 1 columns ) project 1 columns ");
+    auto exe = veloxString(plan.plan);
+    // Filters should be pushed down to scan.
+    expectRegexp(
+        exe,
+        "remaining filter: .lt.plus.subscript.*float_features.*10010..1..10000");
+    expectRegexp(
+        exe, "requiredSubfields.*float_features.10010.*float_features.10020");
+    // 10030 is not referenced, expect not in plan.
+    expectRegexp(exe, "10030", false);
+  }
 };
 
 TEST_P(LogicalSubfieldTest, structs) {
@@ -288,6 +328,7 @@ TEST_P(LogicalSubfieldTest, maps) {
   tablesCreated();
   std::string plan;
 
+  testMakeRowFromMap();
   {
     lp::PlanBuilder::Context ctx;
     auto builder =

@@ -80,6 +80,8 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
       const logical_plan::LogicalPlanNodePtr& plan,
       std::string* planString = nullptr);
 
+  std::shared_ptr<core::QueryCtx> getQueryCtx();
+
   std::string veloxString(const std::string& sql);
 
   std::string veloxString(const runner::MultiFragmentPlanPtr& plan);
