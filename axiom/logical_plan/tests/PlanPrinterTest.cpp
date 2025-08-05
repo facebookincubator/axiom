@@ -66,7 +66,7 @@ class PlanPrinterTest : public testing::Test {
     LOG(INFO) << std::endl << text;
 
     std::vector<std::string> lines;
-    folly::split("\n", text, lines);
+    folly::split('\n', text, lines);
 
     return lines;
   }
