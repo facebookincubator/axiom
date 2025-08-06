@@ -192,11 +192,11 @@ class FilterNode : public LogicalPlanNode {
   FilterNode(
       const std::string& id,
       const LogicalPlanNodePtr& input,
-      const ExprPtr& predicate)
+      ExprPtr predicate)
       : LogicalPlanNode(NodeKind::kFilter, id, {input}, input->outputType()),
-        predicate_{predicate} {
-    VELOX_USER_CHECK_NOT_NULL(predicate);
-    VELOX_USER_CHECK_EQ(predicate->type()->kind(), TypeKind::BOOLEAN);
+        predicate_{std::move(predicate)} {
+    VELOX_USER_CHECK_NOT_NULL(predicate_);
+    VELOX_USER_CHECK_EQ(predicate_->type()->kind(), TypeKind::BOOLEAN);
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
