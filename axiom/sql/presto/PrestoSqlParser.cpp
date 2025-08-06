@@ -70,23 +70,26 @@ size_t PrestoSqlParser::SingleStatementContext::getRuleIndex() const {
 void PrestoSqlParser::SingleStatementContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSingleStatement(this);
+  }
 }
 
 void PrestoSqlParser::SingleStatementContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSingleStatement(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SingleStatementContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSingleStatement(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::SingleStatementContext* PrestoSqlParser::singleStatement() {
@@ -141,23 +144,26 @@ size_t PrestoSqlParser::StandaloneExpressionContext::getRuleIndex() const {
 void PrestoSqlParser::StandaloneExpressionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterStandaloneExpression(this);
+  }
 }
 
 void PrestoSqlParser::StandaloneExpressionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitStandaloneExpression(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::StandaloneExpressionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitStandaloneExpression(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::StandaloneExpressionContext*
@@ -213,23 +219,26 @@ size_t PrestoSqlParser::StandaloneRoutineBodyContext::getRuleIndex() const {
 void PrestoSqlParser::StandaloneRoutineBodyContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterStandaloneRoutineBody(this);
+  }
 }
 
 void PrestoSqlParser::StandaloneRoutineBodyContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitStandaloneRoutineBody(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::StandaloneRoutineBodyContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitStandaloneRoutineBody(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::StandaloneRoutineBodyContext*
@@ -314,22 +323,25 @@ PrestoSqlParser::ExplainContext::ExplainContext(StatementContext* ctx) {
 void PrestoSqlParser::ExplainContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterExplain(this);
+  }
 }
 void PrestoSqlParser::ExplainContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitExplain(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ExplainContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitExplain(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- PrepareContext
 //------------------------------------------------------------------
@@ -359,22 +371,25 @@ PrestoSqlParser::PrepareContext::PrepareContext(StatementContext* ctx) {
 void PrestoSqlParser::PrepareContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterPrepare(this);
+  }
 }
 void PrestoSqlParser::PrepareContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitPrepare(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::PrepareContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitPrepare(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DropMaterializedViewContext
 //------------------------------------------------------------------
@@ -413,22 +428,25 @@ PrestoSqlParser::DropMaterializedViewContext::DropMaterializedViewContext(
 void PrestoSqlParser::DropMaterializedViewContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDropMaterializedView(this);
+  }
 }
 void PrestoSqlParser::DropMaterializedViewContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDropMaterializedView(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DropMaterializedViewContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDropMaterializedView(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- UseContext
 //------------------------------------------------------------------
@@ -453,21 +471,24 @@ PrestoSqlParser::UseContext::UseContext(StatementContext* ctx) {
 
 void PrestoSqlParser::UseContext::enterRule(tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterUse(this);
+  }
 }
 void PrestoSqlParser::UseContext::exitRule(tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitUse(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::UseContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitUse(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- AddConstraintContext
 //------------------------------------------------------------------
@@ -510,22 +531,25 @@ PrestoSqlParser::AddConstraintContext::AddConstraintContext(
 void PrestoSqlParser::AddConstraintContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterAddConstraint(this);
+  }
 }
 void PrestoSqlParser::AddConstraintContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitAddConstraint(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::AddConstraintContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitAddConstraint(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DeallocateContext
 //------------------------------------------------------------------
@@ -550,22 +574,25 @@ PrestoSqlParser::DeallocateContext::DeallocateContext(StatementContext* ctx) {
 void PrestoSqlParser::DeallocateContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDeallocate(this);
+  }
 }
 void PrestoSqlParser::DeallocateContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDeallocate(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DeallocateContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDeallocate(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- RenameTableContext
 //------------------------------------------------------------------
@@ -611,22 +638,25 @@ PrestoSqlParser::RenameTableContext::RenameTableContext(StatementContext* ctx) {
 void PrestoSqlParser::RenameTableContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRenameTable(this);
+  }
 }
 void PrestoSqlParser::RenameTableContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRenameTable(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RenameTableContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRenameTable(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CommitContext
 //------------------------------------------------------------------
@@ -646,22 +676,25 @@ PrestoSqlParser::CommitContext::CommitContext(StatementContext* ctx) {
 void PrestoSqlParser::CommitContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCommit(this);
+  }
 }
 void PrestoSqlParser::CommitContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCommit(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CommitContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCommit(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CreateRoleContext
 //------------------------------------------------------------------
@@ -698,22 +731,25 @@ PrestoSqlParser::CreateRoleContext::CreateRoleContext(StatementContext* ctx) {
 void PrestoSqlParser::CreateRoleContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCreateRole(this);
+  }
 }
 void PrestoSqlParser::CreateRoleContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCreateRole(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CreateRoleContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCreateRole(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowCreateFunctionContext
 //------------------------------------------------------------------
@@ -748,22 +784,25 @@ PrestoSqlParser::ShowCreateFunctionContext::ShowCreateFunctionContext(
 void PrestoSqlParser::ShowCreateFunctionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowCreateFunction(this);
+  }
 }
 void PrestoSqlParser::ShowCreateFunctionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowCreateFunction(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowCreateFunctionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowCreateFunction(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DropColumnContext
 //------------------------------------------------------------------
@@ -817,22 +856,25 @@ PrestoSqlParser::DropColumnContext::DropColumnContext(StatementContext* ctx) {
 void PrestoSqlParser::DropColumnContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDropColumn(this);
+  }
 }
 void PrestoSqlParser::DropColumnContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDropColumn(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DropColumnContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDropColumn(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DropViewContext
 //------------------------------------------------------------------
@@ -865,22 +907,25 @@ PrestoSqlParser::DropViewContext::DropViewContext(StatementContext* ctx) {
 void PrestoSqlParser::DropViewContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDropView(this);
+  }
 }
 void PrestoSqlParser::DropViewContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDropView(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DropViewContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDropView(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowTablesContext
 //------------------------------------------------------------------
@@ -931,22 +976,25 @@ PrestoSqlParser::ShowTablesContext::ShowTablesContext(StatementContext* ctx) {
 void PrestoSqlParser::ShowTablesContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowTables(this);
+  }
 }
 void PrestoSqlParser::ShowTablesContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowTables(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowTablesContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowTables(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowCatalogsContext
 //------------------------------------------------------------------
@@ -985,22 +1033,25 @@ PrestoSqlParser::ShowCatalogsContext::ShowCatalogsContext(
 void PrestoSqlParser::ShowCatalogsContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowCatalogs(this);
+  }
 }
 void PrestoSqlParser::ShowCatalogsContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowCatalogs(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowCatalogsContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowCatalogs(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowRolesContext
 //------------------------------------------------------------------
@@ -1037,22 +1088,25 @@ PrestoSqlParser::ShowRolesContext::ShowRolesContext(StatementContext* ctx) {
 void PrestoSqlParser::ShowRolesContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowRoles(this);
+  }
 }
 void PrestoSqlParser::ShowRolesContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowRoles(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowRolesContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowRoles(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- RenameColumnContext
 //------------------------------------------------------------------
@@ -1117,22 +1171,25 @@ PrestoSqlParser::RenameColumnContext::RenameColumnContext(
 void PrestoSqlParser::RenameColumnContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRenameColumn(this);
+  }
 }
 void PrestoSqlParser::RenameColumnContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRenameColumn(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RenameColumnContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRenameColumn(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- RevokeRolesContext
 //------------------------------------------------------------------
@@ -1191,22 +1248,25 @@ PrestoSqlParser::RevokeRolesContext::RevokeRolesContext(StatementContext* ctx) {
 void PrestoSqlParser::RevokeRolesContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRevokeRoles(this);
+  }
 }
 void PrestoSqlParser::RevokeRolesContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRevokeRoles(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RevokeRolesContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRevokeRoles(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowCreateTableContext
 //------------------------------------------------------------------
@@ -1236,22 +1296,25 @@ PrestoSqlParser::ShowCreateTableContext::ShowCreateTableContext(
 void PrestoSqlParser::ShowCreateTableContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowCreateTable(this);
+  }
 }
 void PrestoSqlParser::ShowCreateTableContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowCreateTable(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowCreateTableContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowCreateTable(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowColumnsContext
 //------------------------------------------------------------------
@@ -1292,22 +1355,25 @@ PrestoSqlParser::ShowColumnsContext::ShowColumnsContext(StatementContext* ctx) {
 void PrestoSqlParser::ShowColumnsContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowColumns(this);
+  }
 }
 void PrestoSqlParser::ShowColumnsContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowColumns(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowColumnsContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowColumns(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowRoleGrantsContext
 //------------------------------------------------------------------
@@ -1345,22 +1411,25 @@ PrestoSqlParser::ShowRoleGrantsContext::ShowRoleGrantsContext(
 void PrestoSqlParser::ShowRoleGrantsContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowRoleGrants(this);
+  }
 }
 void PrestoSqlParser::ShowRoleGrantsContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowRoleGrants(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowRoleGrantsContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowRoleGrants(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- AddColumnContext
 //------------------------------------------------------------------
@@ -1418,22 +1487,25 @@ PrestoSqlParser::AddColumnContext::AddColumnContext(StatementContext* ctx) {
 void PrestoSqlParser::AddColumnContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterAddColumn(this);
+  }
 }
 void PrestoSqlParser::AddColumnContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitAddColumn(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::AddColumnContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitAddColumn(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ResetSessionContext
 //------------------------------------------------------------------
@@ -1459,22 +1531,25 @@ PrestoSqlParser::ResetSessionContext::ResetSessionContext(
 void PrestoSqlParser::ResetSessionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterResetSession(this);
+  }
 }
 void PrestoSqlParser::ResetSessionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitResetSession(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ResetSessionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitResetSession(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DropConstraintContext
 //------------------------------------------------------------------
@@ -1530,22 +1605,25 @@ PrestoSqlParser::DropConstraintContext::DropConstraintContext(
 void PrestoSqlParser::DropConstraintContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDropConstraint(this);
+  }
 }
 void PrestoSqlParser::DropConstraintContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDropConstraint(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DropConstraintContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDropConstraint(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- InsertIntoContext
 //------------------------------------------------------------------
@@ -1579,22 +1657,25 @@ PrestoSqlParser::InsertIntoContext::InsertIntoContext(StatementContext* ctx) {
 void PrestoSqlParser::InsertIntoContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterInsertInto(this);
+  }
 }
 void PrestoSqlParser::InsertIntoContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitInsertInto(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::InsertIntoContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitInsertInto(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowSessionContext
 //------------------------------------------------------------------
@@ -1632,22 +1713,25 @@ PrestoSqlParser::ShowSessionContext::ShowSessionContext(StatementContext* ctx) {
 void PrestoSqlParser::ShowSessionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowSession(this);
+  }
 }
 void PrestoSqlParser::ShowSessionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowSession(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowSessionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowSession(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CreateSchemaContext
 //------------------------------------------------------------------
@@ -1694,22 +1778,25 @@ PrestoSqlParser::CreateSchemaContext::CreateSchemaContext(
 void PrestoSqlParser::CreateSchemaContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCreateSchema(this);
+  }
 }
 void PrestoSqlParser::CreateSchemaContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCreateSchema(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CreateSchemaContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCreateSchema(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ExecuteContext
 //------------------------------------------------------------------
@@ -1744,22 +1831,25 @@ PrestoSqlParser::ExecuteContext::ExecuteContext(StatementContext* ctx) {
 void PrestoSqlParser::ExecuteContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterExecute(this);
+  }
 }
 void PrestoSqlParser::ExecuteContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitExecute(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ExecuteContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitExecute(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- RenameSchemaContext
 //------------------------------------------------------------------
@@ -1798,22 +1888,25 @@ PrestoSqlParser::RenameSchemaContext::RenameSchemaContext(
 void PrestoSqlParser::RenameSchemaContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRenameSchema(this);
+  }
 }
 void PrestoSqlParser::RenameSchemaContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRenameSchema(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RenameSchemaContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRenameSchema(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DropRoleContext
 //------------------------------------------------------------------
@@ -1838,22 +1931,25 @@ PrestoSqlParser::DropRoleContext::DropRoleContext(StatementContext* ctx) {
 void PrestoSqlParser::DropRoleContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDropRole(this);
+  }
 }
 void PrestoSqlParser::DropRoleContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDropRole(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DropRoleContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDropRole(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- AnalyzeContext
 //------------------------------------------------------------------
@@ -1883,22 +1979,25 @@ PrestoSqlParser::AnalyzeContext::AnalyzeContext(StatementContext* ctx) {
 void PrestoSqlParser::AnalyzeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterAnalyze(this);
+  }
 }
 void PrestoSqlParser::AnalyzeContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitAnalyze(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::AnalyzeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitAnalyze(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SetRoleContext
 //------------------------------------------------------------------
@@ -1931,22 +2030,25 @@ PrestoSqlParser::SetRoleContext::SetRoleContext(StatementContext* ctx) {
 void PrestoSqlParser::SetRoleContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSetRole(this);
+  }
 }
 void PrestoSqlParser::SetRoleContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSetRole(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SetRoleContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSetRole(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CreateFunctionContext
 //------------------------------------------------------------------
@@ -2021,22 +2123,25 @@ PrestoSqlParser::CreateFunctionContext::CreateFunctionContext(
 void PrestoSqlParser::CreateFunctionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCreateFunction(this);
+  }
 }
 void PrestoSqlParser::CreateFunctionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCreateFunction(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CreateFunctionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCreateFunction(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowGrantsContext
 //------------------------------------------------------------------
@@ -2069,22 +2174,25 @@ PrestoSqlParser::ShowGrantsContext::ShowGrantsContext(StatementContext* ctx) {
 void PrestoSqlParser::ShowGrantsContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowGrants(this);
+  }
 }
 void PrestoSqlParser::ShowGrantsContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowGrants(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowGrantsContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowGrants(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DropSchemaContext
 //------------------------------------------------------------------
@@ -2125,22 +2233,25 @@ PrestoSqlParser::DropSchemaContext::DropSchemaContext(StatementContext* ctx) {
 void PrestoSqlParser::DropSchemaContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDropSchema(this);
+  }
 }
 void PrestoSqlParser::DropSchemaContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDropSchema(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DropSchemaContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDropSchema(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowCreateViewContext
 //------------------------------------------------------------------
@@ -2170,22 +2281,25 @@ PrestoSqlParser::ShowCreateViewContext::ShowCreateViewContext(
 void PrestoSqlParser::ShowCreateViewContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowCreateView(this);
+  }
 }
 void PrestoSqlParser::ShowCreateViewContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowCreateView(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowCreateViewContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowCreateView(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CreateTableContext
 //------------------------------------------------------------------
@@ -2249,22 +2363,25 @@ PrestoSqlParser::CreateTableContext::CreateTableContext(StatementContext* ctx) {
 void PrestoSqlParser::CreateTableContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCreateTable(this);
+  }
 }
 void PrestoSqlParser::CreateTableContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCreateTable(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CreateTableContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCreateTable(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- StartTransactionContext
 //------------------------------------------------------------------
@@ -2295,22 +2412,25 @@ PrestoSqlParser::StartTransactionContext::StartTransactionContext(
 void PrestoSqlParser::StartTransactionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterStartTransaction(this);
+  }
 }
 void PrestoSqlParser::StartTransactionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitStartTransaction(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::StartTransactionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitStartTransaction(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CreateTableAsSelectContext
 //------------------------------------------------------------------
@@ -2394,22 +2514,25 @@ PrestoSqlParser::CreateTableAsSelectContext::CreateTableAsSelectContext(
 void PrestoSqlParser::CreateTableAsSelectContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCreateTableAsSelect(this);
+  }
 }
 void PrestoSqlParser::CreateTableAsSelectContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCreateTableAsSelect(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CreateTableAsSelectContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCreateTableAsSelect(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowStatsContext
 //------------------------------------------------------------------
@@ -2438,22 +2561,25 @@ PrestoSqlParser::ShowStatsContext::ShowStatsContext(StatementContext* ctx) {
 void PrestoSqlParser::ShowStatsContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowStats(this);
+  }
 }
 void PrestoSqlParser::ShowStatsContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowStats(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowStatsContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowStats(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DropFunctionContext
 //------------------------------------------------------------------
@@ -2495,22 +2621,25 @@ PrestoSqlParser::DropFunctionContext::DropFunctionContext(
 void PrestoSqlParser::DropFunctionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDropFunction(this);
+  }
 }
 void PrestoSqlParser::DropFunctionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDropFunction(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DropFunctionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDropFunction(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- RevokeContext
 //------------------------------------------------------------------
@@ -2577,22 +2706,25 @@ PrestoSqlParser::RevokeContext::RevokeContext(StatementContext* ctx) {
 void PrestoSqlParser::RevokeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRevoke(this);
+  }
 }
 void PrestoSqlParser::RevokeContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRevoke(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RevokeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRevoke(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- UpdateContext
 //------------------------------------------------------------------
@@ -2636,22 +2768,25 @@ PrestoSqlParser::UpdateContext::UpdateContext(StatementContext* ctx) {
 void PrestoSqlParser::UpdateContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterUpdate(this);
+  }
 }
 void PrestoSqlParser::UpdateContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitUpdate(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::UpdateContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitUpdate(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CreateTypeContext
 //------------------------------------------------------------------
@@ -2694,22 +2829,25 @@ PrestoSqlParser::CreateTypeContext::CreateTypeContext(StatementContext* ctx) {
 void PrestoSqlParser::CreateTypeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCreateType(this);
+  }
 }
 void PrestoSqlParser::CreateTypeContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCreateType(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CreateTypeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCreateType(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DeleteContext
 //------------------------------------------------------------------
@@ -2743,22 +2881,25 @@ PrestoSqlParser::DeleteContext::DeleteContext(StatementContext* ctx) {
 void PrestoSqlParser::DeleteContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDelete(this);
+  }
 }
 void PrestoSqlParser::DeleteContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDelete(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DeleteContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDelete(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DescribeInputContext
 //------------------------------------------------------------------
@@ -2784,22 +2925,25 @@ PrestoSqlParser::DescribeInputContext::DescribeInputContext(
 void PrestoSqlParser::DescribeInputContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDescribeInput(this);
+  }
 }
 void PrestoSqlParser::DescribeInputContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDescribeInput(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DescribeInputContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDescribeInput(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowStatsForQueryContext
 //------------------------------------------------------------------
@@ -2829,22 +2973,25 @@ PrestoSqlParser::ShowStatsForQueryContext::ShowStatsForQueryContext(
 void PrestoSqlParser::ShowStatsForQueryContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowStatsForQuery(this);
+  }
 }
 void PrestoSqlParser::ShowStatsForQueryContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowStatsForQuery(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowStatsForQueryContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowStatsForQuery(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- StatementDefaultContext
 //------------------------------------------------------------------
@@ -2862,22 +3009,25 @@ PrestoSqlParser::StatementDefaultContext::StatementDefaultContext(
 void PrestoSqlParser::StatementDefaultContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterStatementDefault(this);
+  }
 }
 void PrestoSqlParser::StatementDefaultContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitStatementDefault(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::StatementDefaultContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitStatementDefault(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- TruncateTableContext
 //------------------------------------------------------------------
@@ -2903,22 +3053,25 @@ PrestoSqlParser::TruncateTableContext::TruncateTableContext(
 void PrestoSqlParser::TruncateTableContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTruncateTable(this);
+  }
 }
 void PrestoSqlParser::TruncateTableContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTruncateTable(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TruncateTableContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTruncateTable(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- AlterColumnSetNotNullContext
 //------------------------------------------------------------------
@@ -2980,22 +3133,25 @@ PrestoSqlParser::AlterColumnSetNotNullContext::AlterColumnSetNotNullContext(
 void PrestoSqlParser::AlterColumnSetNotNullContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterAlterColumnSetNotNull(this);
+  }
 }
 void PrestoSqlParser::AlterColumnSetNotNullContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitAlterColumnSetNotNull(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::AlterColumnSetNotNullContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitAlterColumnSetNotNull(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CreateMaterializedViewContext
 //------------------------------------------------------------------
@@ -3065,22 +3221,25 @@ PrestoSqlParser::CreateMaterializedViewContext::CreateMaterializedViewContext(
 void PrestoSqlParser::CreateMaterializedViewContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCreateMaterializedView(this);
+  }
 }
 void PrestoSqlParser::CreateMaterializedViewContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCreateMaterializedView(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CreateMaterializedViewContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCreateMaterializedView(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- AlterFunctionContext
 //------------------------------------------------------------------
@@ -3115,22 +3274,25 @@ PrestoSqlParser::AlterFunctionContext::AlterFunctionContext(
 void PrestoSqlParser::AlterFunctionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterAlterFunction(this);
+  }
 }
 void PrestoSqlParser::AlterFunctionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitAlterFunction(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::AlterFunctionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitAlterFunction(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SetSessionContext
 //------------------------------------------------------------------
@@ -3164,22 +3326,25 @@ PrestoSqlParser::SetSessionContext::SetSessionContext(StatementContext* ctx) {
 void PrestoSqlParser::SetSessionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSetSession(this);
+  }
 }
 void PrestoSqlParser::SetSessionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSetSession(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SetSessionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSetSession(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CreateViewContext
 //------------------------------------------------------------------
@@ -3232,22 +3397,25 @@ PrestoSqlParser::CreateViewContext::CreateViewContext(StatementContext* ctx) {
 void PrestoSqlParser::CreateViewContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCreateView(this);
+  }
 }
 void PrestoSqlParser::CreateViewContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCreateView(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CreateViewContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCreateView(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowSchemasContext
 //------------------------------------------------------------------
@@ -3298,22 +3466,25 @@ PrestoSqlParser::ShowSchemasContext::ShowSchemasContext(StatementContext* ctx) {
 void PrestoSqlParser::ShowSchemasContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowSchemas(this);
+  }
 }
 void PrestoSqlParser::ShowSchemasContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowSchemas(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowSchemasContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowSchemas(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DropTableContext
 //------------------------------------------------------------------
@@ -3346,22 +3517,25 @@ PrestoSqlParser::DropTableContext::DropTableContext(StatementContext* ctx) {
 void PrestoSqlParser::DropTableContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDropTable(this);
+  }
 }
 void PrestoSqlParser::DropTableContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDropTable(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DropTableContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDropTable(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- RollbackContext
 //------------------------------------------------------------------
@@ -3381,22 +3555,25 @@ PrestoSqlParser::RollbackContext::RollbackContext(StatementContext* ctx) {
 void PrestoSqlParser::RollbackContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRollback(this);
+  }
 }
 void PrestoSqlParser::RollbackContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRollback(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RollbackContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRollback(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- RenameViewContext
 //------------------------------------------------------------------
@@ -3442,22 +3619,25 @@ PrestoSqlParser::RenameViewContext::RenameViewContext(StatementContext* ctx) {
 void PrestoSqlParser::RenameViewContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRenameView(this);
+  }
 }
 void PrestoSqlParser::RenameViewContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRenameView(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RenameViewContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRenameView(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- AlterColumnDropNotNullContext
 //------------------------------------------------------------------
@@ -3519,22 +3699,25 @@ PrestoSqlParser::AlterColumnDropNotNullContext::AlterColumnDropNotNullContext(
 void PrestoSqlParser::AlterColumnDropNotNullContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterAlterColumnDropNotNull(this);
+  }
 }
 void PrestoSqlParser::AlterColumnDropNotNullContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitAlterColumnDropNotNull(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::AlterColumnDropNotNullContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitAlterColumnDropNotNull(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- GrantRolesContext
 //------------------------------------------------------------------
@@ -3592,22 +3775,25 @@ PrestoSqlParser::GrantRolesContext::GrantRolesContext(StatementContext* ctx) {
 void PrestoSqlParser::GrantRolesContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterGrantRoles(this);
+  }
 }
 void PrestoSqlParser::GrantRolesContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitGrantRoles(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::GrantRolesContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitGrantRoles(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CallContext
 //------------------------------------------------------------------
@@ -3638,21 +3824,24 @@ PrestoSqlParser::CallContext::CallContext(StatementContext* ctx) {
 void PrestoSqlParser::CallContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCall(this);
+  }
 }
 void PrestoSqlParser::CallContext::exitRule(tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCall(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CallContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCall(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- RefreshMaterializedViewContext
 //------------------------------------------------------------------
@@ -3692,22 +3881,25 @@ PrestoSqlParser::RefreshMaterializedViewContext::RefreshMaterializedViewContext(
 void PrestoSqlParser::RefreshMaterializedViewContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRefreshMaterializedView(this);
+  }
 }
 void PrestoSqlParser::RefreshMaterializedViewContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRefreshMaterializedView(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RefreshMaterializedViewContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRefreshMaterializedView(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowCreateMaterializedViewContext
 //------------------------------------------------------------------
@@ -3743,22 +3935,25 @@ PrestoSqlParser::ShowCreateMaterializedViewContext::
 void PrestoSqlParser::ShowCreateMaterializedViewContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowCreateMaterializedView(this);
+  }
 }
 void PrestoSqlParser::ShowCreateMaterializedViewContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowCreateMaterializedView(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowCreateMaterializedViewContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowCreateMaterializedView(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ShowFunctionsContext
 //------------------------------------------------------------------
@@ -3797,22 +3992,25 @@ PrestoSqlParser::ShowFunctionsContext::ShowFunctionsContext(
 void PrestoSqlParser::ShowFunctionsContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterShowFunctions(this);
+  }
 }
 void PrestoSqlParser::ShowFunctionsContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitShowFunctions(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ShowFunctionsContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitShowFunctions(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DescribeOutputContext
 //------------------------------------------------------------------
@@ -3838,22 +4036,25 @@ PrestoSqlParser::DescribeOutputContext::DescribeOutputContext(
 void PrestoSqlParser::DescribeOutputContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDescribeOutput(this);
+  }
 }
 void PrestoSqlParser::DescribeOutputContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDescribeOutput(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DescribeOutputContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDescribeOutput(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- GrantContext
 //------------------------------------------------------------------
@@ -3920,22 +4121,25 @@ PrestoSqlParser::GrantContext::GrantContext(StatementContext* ctx) {
 void PrestoSqlParser::GrantContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterGrant(this);
+  }
 }
 void PrestoSqlParser::GrantContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitGrant(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::GrantContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitGrant(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SetTablePropertiesContext
 //------------------------------------------------------------------
@@ -3982,22 +4186,25 @@ PrestoSqlParser::SetTablePropertiesContext::SetTablePropertiesContext(
 void PrestoSqlParser::SetTablePropertiesContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSetTableProperties(this);
+  }
 }
 void PrestoSqlParser::SetTablePropertiesContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSetTableProperties(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SetTablePropertiesContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSetTableProperties(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::StatementContext* PrestoSqlParser::statement() {
   StatementContext* _localctx =
@@ -6991,23 +7198,26 @@ size_t PrestoSqlParser::QueryContext::getRuleIndex() const {
 void PrestoSqlParser::QueryContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterQuery(this);
+  }
 }
 
 void PrestoSqlParser::QueryContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitQuery(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::QueryContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitQuery(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::QueryContext* PrestoSqlParser::query() {
@@ -7078,22 +7288,25 @@ size_t PrestoSqlParser::WithContext::getRuleIndex() const {
 void PrestoSqlParser::WithContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterWith(this);
+  }
 }
 
 void PrestoSqlParser::WithContext::exitRule(tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitWith(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::WithContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitWith(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::WithContext* PrestoSqlParser::with() {
@@ -7175,23 +7388,26 @@ size_t PrestoSqlParser::TableElementContext::getRuleIndex() const {
 void PrestoSqlParser::TableElementContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTableElement(this);
+  }
 }
 
 void PrestoSqlParser::TableElementContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTableElement(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TableElementContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTableElement(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::TableElementContext* PrestoSqlParser::tableElement() {
@@ -7295,23 +7511,26 @@ size_t PrestoSqlParser::ColumnDefinitionContext::getRuleIndex() const {
 void PrestoSqlParser::ColumnDefinitionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterColumnDefinition(this);
+  }
 }
 
 void PrestoSqlParser::ColumnDefinitionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitColumnDefinition(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ColumnDefinitionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitColumnDefinition(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ColumnDefinitionContext* PrestoSqlParser::columnDefinition() {
@@ -7409,23 +7628,26 @@ size_t PrestoSqlParser::LikeClauseContext::getRuleIndex() const {
 void PrestoSqlParser::LikeClauseContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterLikeClause(this);
+  }
 }
 
 void PrestoSqlParser::LikeClauseContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitLikeClause(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::LikeClauseContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitLikeClause(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::LikeClauseContext* PrestoSqlParser::likeClause() {
@@ -7505,23 +7727,26 @@ size_t PrestoSqlParser::PropertiesContext::getRuleIndex() const {
 void PrestoSqlParser::PropertiesContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterProperties(this);
+  }
 }
 
 void PrestoSqlParser::PropertiesContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitProperties(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::PropertiesContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitProperties(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::PropertiesContext* PrestoSqlParser::properties() {
@@ -7596,23 +7821,26 @@ size_t PrestoSqlParser::PropertyContext::getRuleIndex() const {
 void PrestoSqlParser::PropertyContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterProperty(this);
+  }
 }
 
 void PrestoSqlParser::PropertyContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitProperty(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::PropertyContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitProperty(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::PropertyContext* PrestoSqlParser::property() {
@@ -7670,23 +7898,26 @@ size_t PrestoSqlParser::SqlParameterDeclarationContext::getRuleIndex() const {
 void PrestoSqlParser::SqlParameterDeclarationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSqlParameterDeclaration(this);
+  }
 }
 
 void PrestoSqlParser::SqlParameterDeclarationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSqlParameterDeclaration(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SqlParameterDeclarationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSqlParameterDeclaration(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::SqlParameterDeclarationContext*
@@ -7744,23 +7975,26 @@ size_t PrestoSqlParser::RoutineCharacteristicsContext::getRuleIndex() const {
 void PrestoSqlParser::RoutineCharacteristicsContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRoutineCharacteristics(this);
+  }
 }
 
 void PrestoSqlParser::RoutineCharacteristicsContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRoutineCharacteristics(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RoutineCharacteristicsContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRoutineCharacteristics(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::RoutineCharacteristicsContext*
@@ -7840,23 +8074,26 @@ size_t PrestoSqlParser::RoutineCharacteristicContext::getRuleIndex() const {
 void PrestoSqlParser::RoutineCharacteristicContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRoutineCharacteristic(this);
+  }
 }
 
 void PrestoSqlParser::RoutineCharacteristicContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRoutineCharacteristic(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RoutineCharacteristicContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRoutineCharacteristic(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::RoutineCharacteristicContext*
@@ -7943,23 +8180,26 @@ size_t PrestoSqlParser::AlterRoutineCharacteristicsContext::getRuleIndex()
 void PrestoSqlParser::AlterRoutineCharacteristicsContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterAlterRoutineCharacteristics(this);
+  }
 }
 
 void PrestoSqlParser::AlterRoutineCharacteristicsContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitAlterRoutineCharacteristics(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::AlterRoutineCharacteristicsContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitAlterRoutineCharacteristics(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::AlterRoutineCharacteristicsContext*
@@ -8021,23 +8261,26 @@ size_t PrestoSqlParser::AlterRoutineCharacteristicContext::getRuleIndex()
 void PrestoSqlParser::AlterRoutineCharacteristicContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterAlterRoutineCharacteristic(this);
+  }
 }
 
 void PrestoSqlParser::AlterRoutineCharacteristicContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitAlterRoutineCharacteristic(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::AlterRoutineCharacteristicContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitAlterRoutineCharacteristic(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::AlterRoutineCharacteristicContext*
@@ -8093,23 +8336,26 @@ size_t PrestoSqlParser::RoutineBodyContext::getRuleIndex() const {
 void PrestoSqlParser::RoutineBodyContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRoutineBody(this);
+  }
 }
 
 void PrestoSqlParser::RoutineBodyContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRoutineBody(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RoutineBodyContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRoutineBody(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::RoutineBodyContext* PrestoSqlParser::routineBody() {
@@ -8179,23 +8425,26 @@ size_t PrestoSqlParser::ReturnStatementContext::getRuleIndex() const {
 void PrestoSqlParser::ReturnStatementContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterReturnStatement(this);
+  }
 }
 
 void PrestoSqlParser::ReturnStatementContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitReturnStatement(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ReturnStatementContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitReturnStatement(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ReturnStatementContext* PrestoSqlParser::returnStatement() {
@@ -8254,23 +8503,26 @@ size_t PrestoSqlParser::ExternalBodyReferenceContext::getRuleIndex() const {
 void PrestoSqlParser::ExternalBodyReferenceContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterExternalBodyReference(this);
+  }
 }
 
 void PrestoSqlParser::ExternalBodyReferenceContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitExternalBodyReference(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ExternalBodyReferenceContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitExternalBodyReference(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ExternalBodyReferenceContext*
@@ -8335,23 +8587,26 @@ size_t PrestoSqlParser::LanguageContext::getRuleIndex() const {
 void PrestoSqlParser::LanguageContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterLanguage(this);
+  }
 }
 
 void PrestoSqlParser::LanguageContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitLanguage(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::LanguageContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitLanguage(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::LanguageContext* PrestoSqlParser::language() {
@@ -8421,23 +8676,26 @@ size_t PrestoSqlParser::DeterminismContext::getRuleIndex() const {
 void PrestoSqlParser::DeterminismContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDeterminism(this);
+  }
 }
 
 void PrestoSqlParser::DeterminismContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDeterminism(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DeterminismContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDeterminism(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::DeterminismContext* PrestoSqlParser::determinism() {
@@ -8526,23 +8784,26 @@ size_t PrestoSqlParser::NullCallClauseContext::getRuleIndex() const {
 void PrestoSqlParser::NullCallClauseContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterNullCallClause(this);
+  }
 }
 
 void PrestoSqlParser::NullCallClauseContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitNullCallClause(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::NullCallClauseContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitNullCallClause(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::NullCallClauseContext* PrestoSqlParser::nullCallClause() {
@@ -8622,23 +8883,26 @@ size_t PrestoSqlParser::ExternalRoutineNameContext::getRuleIndex() const {
 void PrestoSqlParser::ExternalRoutineNameContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterExternalRoutineName(this);
+  }
 }
 
 void PrestoSqlParser::ExternalRoutineNameContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitExternalRoutineName(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ExternalRoutineNameContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitExternalRoutineName(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ExternalRoutineNameContext*
@@ -8752,23 +9016,26 @@ size_t PrestoSqlParser::QueryNoWithContext::getRuleIndex() const {
 void PrestoSqlParser::QueryNoWithContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterQueryNoWith(this);
+  }
 }
 
 void PrestoSqlParser::QueryNoWithContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitQueryNoWith(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::QueryNoWithContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitQueryNoWith(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::QueryNoWithContext* PrestoSqlParser::queryNoWith() {
@@ -8930,22 +9197,25 @@ PrestoSqlParser::QueryTermDefaultContext::QueryTermDefaultContext(
 void PrestoSqlParser::QueryTermDefaultContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterQueryTermDefault(this);
+  }
 }
 void PrestoSqlParser::QueryTermDefaultContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitQueryTermDefault(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::QueryTermDefaultContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitQueryTermDefault(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SetOperationContext
 //------------------------------------------------------------------
@@ -8985,22 +9255,25 @@ PrestoSqlParser::SetOperationContext::SetOperationContext(
 void PrestoSqlParser::SetOperationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSetOperation(this);
+  }
 }
 void PrestoSqlParser::SetOperationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSetOperation(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SetOperationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSetOperation(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::QueryTermContext* PrestoSqlParser::queryTerm() {
@@ -9043,8 +9316,9 @@ PrestoSqlParser::QueryTermContext* PrestoSqlParser::queryTerm(int precedence) {
         _input, 129, _ctx);
     while (alt != 2 && alt != atn::ATN::INVALID_ALT_NUMBER) {
       if (alt == 1) {
-        if (!_parseListeners.empty())
+        if (!_parseListeners.empty()) {
           triggerExitRuleEvent();
+        }
         previousContext = _localctx;
         setState(1086);
         _errHandler->sync(this);
@@ -9059,8 +9333,9 @@ PrestoSqlParser::QueryTermContext* PrestoSqlParser::queryTerm(int precedence) {
             pushNewRecursionContext(newContext, startState, RuleQueryTerm);
             setState(1074);
 
-            if (!(precpred(_ctx, 2)))
+            if (!(precpred(_ctx, 2))) {
               throw FailedPredicateException(this, "precpred(_ctx, 2)");
+            }
             setState(1075);
             antlrcpp::downCast<SetOperationContext*>(_localctx)->op =
                 match(PrestoSqlParser::INTERSECT);
@@ -9089,8 +9364,9 @@ PrestoSqlParser::QueryTermContext* PrestoSqlParser::queryTerm(int precedence) {
             pushNewRecursionContext(newContext, startState, RuleQueryTerm);
             setState(1080);
 
-            if (!(precpred(_ctx, 1)))
+            if (!(precpred(_ctx, 1))) {
               throw FailedPredicateException(this, "precpred(_ctx, 1)");
+            }
             setState(1081);
             antlrcpp::downCast<SetOperationContext*>(_localctx)->op =
                 _input->LT(1);
@@ -9167,22 +9443,25 @@ PrestoSqlParser::SubqueryContext::SubqueryContext(QueryPrimaryContext* ctx) {
 void PrestoSqlParser::SubqueryContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSubquery(this);
+  }
 }
 void PrestoSqlParser::SubqueryContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSubquery(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SubqueryContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSubquery(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- QueryPrimaryDefaultContext
 //------------------------------------------------------------------
@@ -9200,22 +9479,25 @@ PrestoSqlParser::QueryPrimaryDefaultContext::QueryPrimaryDefaultContext(
 void PrestoSqlParser::QueryPrimaryDefaultContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterQueryPrimaryDefault(this);
+  }
 }
 void PrestoSqlParser::QueryPrimaryDefaultContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitQueryPrimaryDefault(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::QueryPrimaryDefaultContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitQueryPrimaryDefault(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- TableContext
 //------------------------------------------------------------------
@@ -9236,22 +9518,25 @@ PrestoSqlParser::TableContext::TableContext(QueryPrimaryContext* ctx) {
 void PrestoSqlParser::TableContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTable(this);
+  }
 }
 void PrestoSqlParser::TableContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTable(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TableContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTable(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- InlineTableContext
 //------------------------------------------------------------------
@@ -9278,22 +9563,25 @@ PrestoSqlParser::InlineTableContext::InlineTableContext(
 void PrestoSqlParser::InlineTableContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterInlineTable(this);
+  }
 }
 void PrestoSqlParser::InlineTableContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitInlineTable(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::InlineTableContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitInlineTable(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::QueryPrimaryContext* PrestoSqlParser::queryPrimary() {
   QueryPrimaryContext* _localctx =
@@ -9428,23 +9716,26 @@ size_t PrestoSqlParser::SortItemContext::getRuleIndex() const {
 void PrestoSqlParser::SortItemContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSortItem(this);
+  }
 }
 
 void PrestoSqlParser::SortItemContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSortItem(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SortItemContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSortItem(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::SortItemContext* PrestoSqlParser::sortItem() {
@@ -9594,23 +9885,26 @@ size_t PrestoSqlParser::QuerySpecificationContext::getRuleIndex() const {
 void PrestoSqlParser::QuerySpecificationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterQuerySpecification(this);
+  }
 }
 
 void PrestoSqlParser::QuerySpecificationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitQuerySpecification(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::QuerySpecificationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitQuerySpecification(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::QuerySpecificationContext*
@@ -9787,23 +10081,26 @@ size_t PrestoSqlParser::GroupByContext::getRuleIndex() const {
 void PrestoSqlParser::GroupByContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterGroupBy(this);
+  }
 }
 
 void PrestoSqlParser::GroupByContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitGroupBy(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::GroupByContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitGroupBy(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::GroupByContext* PrestoSqlParser::groupBy() {
@@ -9909,22 +10206,25 @@ PrestoSqlParser::MultipleGroupingSetsContext::MultipleGroupingSetsContext(
 void PrestoSqlParser::MultipleGroupingSetsContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterMultipleGroupingSets(this);
+  }
 }
 void PrestoSqlParser::MultipleGroupingSetsContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitMultipleGroupingSets(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::MultipleGroupingSetsContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitMultipleGroupingSets(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SingleGroupingSetContext
 //------------------------------------------------------------------
@@ -9942,22 +10242,25 @@ PrestoSqlParser::SingleGroupingSetContext::SingleGroupingSetContext(
 void PrestoSqlParser::SingleGroupingSetContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSingleGroupingSet(this);
+  }
 }
 void PrestoSqlParser::SingleGroupingSetContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSingleGroupingSet(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SingleGroupingSetContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSingleGroupingSet(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CubeContext
 //------------------------------------------------------------------
@@ -9983,21 +10286,24 @@ PrestoSqlParser::CubeContext::CubeContext(GroupingElementContext* ctx) {
 void PrestoSqlParser::CubeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCube(this);
+  }
 }
 void PrestoSqlParser::CubeContext::exitRule(tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCube(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CubeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCube(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- RollupContext
 //------------------------------------------------------------------
@@ -10023,22 +10329,25 @@ PrestoSqlParser::RollupContext::RollupContext(GroupingElementContext* ctx) {
 void PrestoSqlParser::RollupContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRollup(this);
+  }
 }
 void PrestoSqlParser::RollupContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRollup(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RollupContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRollup(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::GroupingElementContext* PrestoSqlParser::groupingElement() {
   GroupingElementContext* _localctx =
@@ -10577,23 +10886,26 @@ size_t PrestoSqlParser::GroupingSetContext::getRuleIndex() const {
 void PrestoSqlParser::GroupingSetContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterGroupingSet(this);
+  }
 }
 
 void PrestoSqlParser::GroupingSetContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitGroupingSet(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::GroupingSetContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitGroupingSet(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::GroupingSetContext* PrestoSqlParser::groupingSet() {
@@ -10883,23 +11195,26 @@ size_t PrestoSqlParser::NamedQueryContext::getRuleIndex() const {
 void PrestoSqlParser::NamedQueryContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterNamedQuery(this);
+  }
 }
 
 void PrestoSqlParser::NamedQueryContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitNamedQuery(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::NamedQueryContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitNamedQuery(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::NamedQueryContext* PrestoSqlParser::namedQuery() {
@@ -10968,23 +11283,26 @@ size_t PrestoSqlParser::SetQuantifierContext::getRuleIndex() const {
 void PrestoSqlParser::SetQuantifierContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSetQuantifier(this);
+  }
 }
 
 void PrestoSqlParser::SetQuantifierContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSetQuantifier(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SetQuantifierContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSetQuantifier(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::SetQuantifierContext* PrestoSqlParser::setQuantifier() {
@@ -11057,22 +11375,25 @@ PrestoSqlParser::SelectAllContext::SelectAllContext(SelectItemContext* ctx) {
 void PrestoSqlParser::SelectAllContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSelectAll(this);
+  }
 }
 void PrestoSqlParser::SelectAllContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSelectAll(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SelectAllContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSelectAll(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SelectSingleContext
 //------------------------------------------------------------------
@@ -11099,22 +11420,25 @@ PrestoSqlParser::SelectSingleContext::SelectSingleContext(
 void PrestoSqlParser::SelectSingleContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSelectSingle(this);
+  }
 }
 void PrestoSqlParser::SelectSingleContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSelectSingle(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SelectSingleContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSelectSingle(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::SelectItemContext* PrestoSqlParser::selectItem() {
   SelectItemContext* _localctx =
@@ -11233,22 +11557,25 @@ PrestoSqlParser::RelationDefaultContext::RelationDefaultContext(
 void PrestoSqlParser::RelationDefaultContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRelationDefault(this);
+  }
 }
 void PrestoSqlParser::RelationDefaultContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRelationDefault(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RelationDefaultContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRelationDefault(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- JoinRelationContext
 //------------------------------------------------------------------
@@ -11298,22 +11625,25 @@ PrestoSqlParser::JoinRelationContext::JoinRelationContext(
 void PrestoSqlParser::JoinRelationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterJoinRelation(this);
+  }
 }
 void PrestoSqlParser::JoinRelationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitJoinRelation(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::JoinRelationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitJoinRelation(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::RelationContext* PrestoSqlParser::relation() {
@@ -11354,8 +11684,9 @@ PrestoSqlParser::RelationContext* PrestoSqlParser::relation(int precedence) {
         _input, 157, _ctx);
     while (alt != 2 && alt != atn::ATN::INVALID_ALT_NUMBER) {
       if (alt == 1) {
-        if (!_parseListeners.empty())
+        if (!_parseListeners.empty()) {
           triggerExitRuleEvent();
+        }
         previousContext = _localctx;
         auto newContext = _tracker.createInstance<JoinRelationContext>(
             _tracker.createInstance<RelationContext>(
@@ -11365,8 +11696,9 @@ PrestoSqlParser::RelationContext* PrestoSqlParser::relation(int precedence) {
         pushNewRecursionContext(newContext, startState, RuleRelation);
         setState(1249);
 
-        if (!(precpred(_ctx, 2)))
+        if (!(precpred(_ctx, 2))) {
           throw FailedPredicateException(this, "precpred(_ctx, 2)");
+        }
         setState(1263);
         _errHandler->sync(this);
         switch (_input->LA(1)) {
@@ -11463,23 +11795,26 @@ size_t PrestoSqlParser::JoinTypeContext::getRuleIndex() const {
 void PrestoSqlParser::JoinTypeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterJoinType(this);
+  }
 }
 
 void PrestoSqlParser::JoinTypeContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitJoinType(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::JoinTypeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitJoinType(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::JoinTypeContext* PrestoSqlParser::joinType() {
@@ -11609,23 +11944,26 @@ size_t PrestoSqlParser::JoinCriteriaContext::getRuleIndex() const {
 void PrestoSqlParser::JoinCriteriaContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterJoinCriteria(this);
+  }
 }
 
 void PrestoSqlParser::JoinCriteriaContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitJoinCriteria(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::JoinCriteriaContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitJoinCriteria(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::JoinCriteriaContext* PrestoSqlParser::joinCriteria() {
@@ -11726,23 +12064,26 @@ size_t PrestoSqlParser::SampledRelationContext::getRuleIndex() const {
 void PrestoSqlParser::SampledRelationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSampledRelation(this);
+  }
 }
 
 void PrestoSqlParser::SampledRelationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSampledRelation(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SampledRelationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSampledRelation(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::SampledRelationContext* PrestoSqlParser::sampledRelation() {
@@ -11817,23 +12158,26 @@ size_t PrestoSqlParser::SampleTypeContext::getRuleIndex() const {
 void PrestoSqlParser::SampleTypeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSampleType(this);
+  }
 }
 
 void PrestoSqlParser::SampleTypeContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSampleType(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SampleTypeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSampleType(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::SampleTypeContext* PrestoSqlParser::sampleType() {
@@ -11904,23 +12248,26 @@ size_t PrestoSqlParser::AliasedRelationContext::getRuleIndex() const {
 void PrestoSqlParser::AliasedRelationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterAliasedRelation(this);
+  }
 }
 
 void PrestoSqlParser::AliasedRelationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitAliasedRelation(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::AliasedRelationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitAliasedRelation(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::AliasedRelationContext* PrestoSqlParser::aliasedRelation() {
@@ -12011,23 +12358,26 @@ size_t PrestoSqlParser::ColumnAliasesContext::getRuleIndex() const {
 void PrestoSqlParser::ColumnAliasesContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterColumnAliases(this);
+  }
 }
 
 void PrestoSqlParser::ColumnAliasesContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitColumnAliases(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ColumnAliasesContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitColumnAliases(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ColumnAliasesContext* PrestoSqlParser::columnAliases() {
@@ -12106,22 +12456,25 @@ PrestoSqlParser::SubqueryRelationContext::SubqueryRelationContext(
 void PrestoSqlParser::SubqueryRelationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSubqueryRelation(this);
+  }
 }
 void PrestoSqlParser::SubqueryRelationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSubqueryRelation(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SubqueryRelationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSubqueryRelation(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ParenthesizedRelationContext
 //------------------------------------------------------------------
@@ -12139,22 +12492,25 @@ PrestoSqlParser::ParenthesizedRelationContext::ParenthesizedRelationContext(
 void PrestoSqlParser::ParenthesizedRelationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterParenthesizedRelation(this);
+  }
 }
 void PrestoSqlParser::ParenthesizedRelationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitParenthesizedRelation(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ParenthesizedRelationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitParenthesizedRelation(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- UnnestContext
 //------------------------------------------------------------------
@@ -12188,22 +12544,25 @@ PrestoSqlParser::UnnestContext::UnnestContext(RelationPrimaryContext* ctx) {
 void PrestoSqlParser::UnnestContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterUnnest(this);
+  }
 }
 void PrestoSqlParser::UnnestContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitUnnest(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::UnnestContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitUnnest(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- LateralContext
 //------------------------------------------------------------------
@@ -12223,22 +12582,25 @@ PrestoSqlParser::LateralContext::LateralContext(RelationPrimaryContext* ctx) {
 void PrestoSqlParser::LateralContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterLateral(this);
+  }
 }
 void PrestoSqlParser::LateralContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitLateral(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::LateralContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitLateral(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- TableNameContext
 //------------------------------------------------------------------
@@ -12261,22 +12623,25 @@ PrestoSqlParser::TableNameContext::TableNameContext(
 void PrestoSqlParser::TableNameContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTableName(this);
+  }
 }
 void PrestoSqlParser::TableNameContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTableName(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TableNameContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTableName(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::RelationPrimaryContext* PrestoSqlParser::relationPrimary() {
   RelationPrimaryContext* _localctx =
@@ -12439,23 +12804,26 @@ size_t PrestoSqlParser::ExpressionContext::getRuleIndex() const {
 void PrestoSqlParser::ExpressionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterExpression(this);
+  }
 }
 
 void PrestoSqlParser::ExpressionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitExpression(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ExpressionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitExpression(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ExpressionContext* PrestoSqlParser::expression() {
@@ -12521,22 +12889,25 @@ PrestoSqlParser::LogicalNotContext::LogicalNotContext(
 void PrestoSqlParser::LogicalNotContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterLogicalNot(this);
+  }
 }
 void PrestoSqlParser::LogicalNotContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitLogicalNot(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::LogicalNotContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitLogicalNot(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- PredicatedContext
 //------------------------------------------------------------------
@@ -12559,22 +12930,25 @@ PrestoSqlParser::PredicatedContext::PredicatedContext(
 void PrestoSqlParser::PredicatedContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterPredicated(this);
+  }
 }
 void PrestoSqlParser::PredicatedContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitPredicated(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::PredicatedContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitPredicated(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- LogicalBinaryContext
 //------------------------------------------------------------------
@@ -12605,22 +12979,25 @@ PrestoSqlParser::LogicalBinaryContext::LogicalBinaryContext(
 void PrestoSqlParser::LogicalBinaryContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterLogicalBinary(this);
+  }
 }
 void PrestoSqlParser::LogicalBinaryContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitLogicalBinary(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::LogicalBinaryContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitLogicalBinary(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::BooleanExpressionContext*
@@ -12880,8 +13257,9 @@ PrestoSqlParser::BooleanExpressionContext* PrestoSqlParser::booleanExpression(
         _input, 177, _ctx);
     while (alt != 2 && alt != atn::ATN::INVALID_ALT_NUMBER) {
       if (alt == 1) {
-        if (!_parseListeners.empty())
+        if (!_parseListeners.empty()) {
           triggerExitRuleEvent();
+        }
         previousContext = _localctx;
         setState(1386);
         _errHandler->sync(this);
@@ -12897,8 +13275,9 @@ PrestoSqlParser::BooleanExpressionContext* PrestoSqlParser::booleanExpression(
                 newContext, startState, RuleBooleanExpression);
             setState(1380);
 
-            if (!(precpred(_ctx, 2)))
+            if (!(precpred(_ctx, 2))) {
               throw FailedPredicateException(this, "precpred(_ctx, 2)");
+            }
             setState(1381);
             antlrcpp::downCast<LogicalBinaryContext*>(_localctx)->op =
                 match(PrestoSqlParser::AND);
@@ -12918,8 +13297,9 @@ PrestoSqlParser::BooleanExpressionContext* PrestoSqlParser::booleanExpression(
                 newContext, startState, RuleBooleanExpression);
             setState(1383);
 
-            if (!(precpred(_ctx, 1)))
+            if (!(precpred(_ctx, 1))) {
               throw FailedPredicateException(this, "precpred(_ctx, 1)");
+            }
             setState(1384);
             antlrcpp::downCast<LogicalBinaryContext*>(_localctx)->op =
                 match(PrestoSqlParser::OR);
@@ -12991,22 +13371,25 @@ PrestoSqlParser::ComparisonContext::ComparisonContext(PredicateContext* ctx) {
 void PrestoSqlParser::ComparisonContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterComparison(this);
+  }
 }
 void PrestoSqlParser::ComparisonContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitComparison(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ComparisonContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitComparison(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- LikeContext
 //------------------------------------------------------------------
@@ -13040,21 +13423,24 @@ PrestoSqlParser::LikeContext::LikeContext(PredicateContext* ctx) {
 void PrestoSqlParser::LikeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterLike(this);
+  }
 }
 void PrestoSqlParser::LikeContext::exitRule(tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitLike(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::LikeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitLike(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- InSubqueryContext
 //------------------------------------------------------------------
@@ -13078,22 +13464,25 @@ PrestoSqlParser::InSubqueryContext::InSubqueryContext(PredicateContext* ctx) {
 void PrestoSqlParser::InSubqueryContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterInSubquery(this);
+  }
 }
 void PrestoSqlParser::InSubqueryContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitInSubquery(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::InSubqueryContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitInSubquery(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DistinctFromContext
 //------------------------------------------------------------------
@@ -13127,22 +13516,25 @@ PrestoSqlParser::DistinctFromContext::DistinctFromContext(
 void PrestoSqlParser::DistinctFromContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDistinctFrom(this);
+  }
 }
 void PrestoSqlParser::DistinctFromContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDistinctFrom(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DistinctFromContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDistinctFrom(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- InListContext
 //------------------------------------------------------------------
@@ -13172,22 +13564,25 @@ PrestoSqlParser::InListContext::InListContext(PredicateContext* ctx) {
 void PrestoSqlParser::InListContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterInList(this);
+  }
 }
 void PrestoSqlParser::InListContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitInList(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::InListContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitInList(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- NullPredicateContext
 //------------------------------------------------------------------
@@ -13212,22 +13607,25 @@ PrestoSqlParser::NullPredicateContext::NullPredicateContext(
 void PrestoSqlParser::NullPredicateContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterNullPredicate(this);
+  }
 }
 void PrestoSqlParser::NullPredicateContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitNullPredicate(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::NullPredicateContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitNullPredicate(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- BetweenContext
 //------------------------------------------------------------------
@@ -13261,22 +13659,25 @@ PrestoSqlParser::BetweenContext::BetweenContext(PredicateContext* ctx) {
 void PrestoSqlParser::BetweenContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterBetween(this);
+  }
 }
 void PrestoSqlParser::BetweenContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitBetween(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::BetweenContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitBetween(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- QuantifiedComparisonContext
 //------------------------------------------------------------------
@@ -13304,22 +13705,25 @@ PrestoSqlParser::QuantifiedComparisonContext::QuantifiedComparisonContext(
 void PrestoSqlParser::QuantifiedComparisonContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterQuantifiedComparison(this);
+  }
 }
 void PrestoSqlParser::QuantifiedComparisonContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitQuantifiedComparison(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::QuantifiedComparisonContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitQuantifiedComparison(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::PredicateContext* PrestoSqlParser::predicate(
     antlr4::ParserRuleContext* value) {
@@ -13582,22 +13986,25 @@ PrestoSqlParser::ValueExpressionDefaultContext::ValueExpressionDefaultContext(
 void PrestoSqlParser::ValueExpressionDefaultContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterValueExpressionDefault(this);
+  }
 }
 void PrestoSqlParser::ValueExpressionDefaultContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitValueExpressionDefault(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ValueExpressionDefaultContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitValueExpressionDefault(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ConcatenationContext
 //------------------------------------------------------------------
@@ -13624,22 +14031,25 @@ PrestoSqlParser::ConcatenationContext::ConcatenationContext(
 void PrestoSqlParser::ConcatenationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterConcatenation(this);
+  }
 }
 void PrestoSqlParser::ConcatenationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitConcatenation(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ConcatenationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitConcatenation(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ArithmeticBinaryContext
 //------------------------------------------------------------------
@@ -13682,22 +14092,25 @@ PrestoSqlParser::ArithmeticBinaryContext::ArithmeticBinaryContext(
 void PrestoSqlParser::ArithmeticBinaryContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterArithmeticBinary(this);
+  }
 }
 void PrestoSqlParser::ArithmeticBinaryContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitArithmeticBinary(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ArithmeticBinaryContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitArithmeticBinary(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ArithmeticUnaryContext
 //------------------------------------------------------------------
@@ -13723,22 +14136,25 @@ PrestoSqlParser::ArithmeticUnaryContext::ArithmeticUnaryContext(
 void PrestoSqlParser::ArithmeticUnaryContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterArithmeticUnary(this);
+  }
 }
 void PrestoSqlParser::ArithmeticUnaryContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitArithmeticUnary(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ArithmeticUnaryContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitArithmeticUnary(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- AtTimeZoneContext
 //------------------------------------------------------------------
@@ -13765,22 +14181,25 @@ PrestoSqlParser::AtTimeZoneContext::AtTimeZoneContext(
 void PrestoSqlParser::AtTimeZoneContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterAtTimeZone(this);
+  }
 }
 void PrestoSqlParser::AtTimeZoneContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitAtTimeZone(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::AtTimeZoneContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitAtTimeZone(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ValueExpressionContext* PrestoSqlParser::valueExpression() {
@@ -14036,8 +14455,9 @@ PrestoSqlParser::ValueExpressionContext* PrestoSqlParser::valueExpression(
         _input, 189, _ctx);
     while (alt != 2 && alt != atn::ATN::INVALID_ALT_NUMBER) {
       if (alt == 1) {
-        if (!_parseListeners.empty())
+        if (!_parseListeners.empty()) {
           triggerExitRuleEvent();
+        }
         previousContext = _localctx;
         setState(1472);
         _errHandler->sync(this);
@@ -14053,8 +14473,9 @@ PrestoSqlParser::ValueExpressionContext* PrestoSqlParser::valueExpression(
                 newContext, startState, RuleValueExpression);
             setState(1460);
 
-            if (!(precpred(_ctx, 3)))
+            if (!(precpred(_ctx, 3))) {
               throw FailedPredicateException(this, "precpred(_ctx, 3)");
+            }
             setState(1461);
             antlrcpp::downCast<ArithmeticBinaryContext*>(_localctx)->op =
                 _input->LT(1);
@@ -14086,8 +14507,9 @@ PrestoSqlParser::ValueExpressionContext* PrestoSqlParser::valueExpression(
                 newContext, startState, RuleValueExpression);
             setState(1463);
 
-            if (!(precpred(_ctx, 2)))
+            if (!(precpred(_ctx, 2))) {
               throw FailedPredicateException(this, "precpred(_ctx, 2)");
+            }
             setState(1464);
             antlrcpp::downCast<ArithmeticBinaryContext*>(_localctx)->op =
                 _input->LT(1);
@@ -14117,8 +14539,9 @@ PrestoSqlParser::ValueExpressionContext* PrestoSqlParser::valueExpression(
                 newContext, startState, RuleValueExpression);
             setState(1466);
 
-            if (!(precpred(_ctx, 1)))
+            if (!(precpred(_ctx, 1))) {
               throw FailedPredicateException(this, "precpred(_ctx, 1)");
+            }
             setState(1467);
             match(PrestoSqlParser::CONCAT);
             setState(1468);
@@ -14136,8 +14559,9 @@ PrestoSqlParser::ValueExpressionContext* PrestoSqlParser::valueExpression(
                 newContext, startState, RuleValueExpression);
             setState(1469);
 
-            if (!(precpred(_ctx, 5)))
+            if (!(precpred(_ctx, 5))) {
               throw FailedPredicateException(this, "precpred(_ctx, 5)");
+            }
             setState(1470);
             match(PrestoSqlParser::AT);
             setState(1471);
@@ -14200,22 +14624,25 @@ PrestoSqlParser::DereferenceContext::DereferenceContext(
 void PrestoSqlParser::DereferenceContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDereference(this);
+  }
 }
 void PrestoSqlParser::DereferenceContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDereference(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DereferenceContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDereference(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- TypeConstructorContext
 //------------------------------------------------------------------
@@ -14243,22 +14670,25 @@ PrestoSqlParser::TypeConstructorContext::TypeConstructorContext(
 void PrestoSqlParser::TypeConstructorContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTypeConstructor(this);
+  }
 }
 void PrestoSqlParser::TypeConstructorContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTypeConstructor(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TypeConstructorContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTypeConstructor(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SpecialDateTimeFunctionContext
 //------------------------------------------------------------------
@@ -14301,22 +14731,25 @@ PrestoSqlParser::SpecialDateTimeFunctionContext::SpecialDateTimeFunctionContext(
 void PrestoSqlParser::SpecialDateTimeFunctionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSpecialDateTimeFunction(this);
+  }
 }
 void PrestoSqlParser::SpecialDateTimeFunctionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSpecialDateTimeFunction(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SpecialDateTimeFunctionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSpecialDateTimeFunction(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SubstringContext
 //------------------------------------------------------------------
@@ -14351,22 +14784,25 @@ PrestoSqlParser::SubstringContext::SubstringContext(
 void PrestoSqlParser::SubstringContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSubstring(this);
+  }
 }
 void PrestoSqlParser::SubstringContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSubstring(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SubstringContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSubstring(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CastContext
 //------------------------------------------------------------------
@@ -14398,21 +14834,24 @@ PrestoSqlParser::CastContext::CastContext(PrimaryExpressionContext* ctx) {
 void PrestoSqlParser::CastContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCast(this);
+  }
 }
 void PrestoSqlParser::CastContext::exitRule(tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCast(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CastContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCast(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- LambdaContext
 //------------------------------------------------------------------
@@ -14439,22 +14878,25 @@ PrestoSqlParser::LambdaContext::LambdaContext(PrimaryExpressionContext* ctx) {
 void PrestoSqlParser::LambdaContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterLambda(this);
+  }
 }
 void PrestoSqlParser::LambdaContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitLambda(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::LambdaContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitLambda(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ParenthesizedExpressionContext
 //------------------------------------------------------------------
@@ -14472,22 +14914,25 @@ PrestoSqlParser::ParenthesizedExpressionContext::ParenthesizedExpressionContext(
 void PrestoSqlParser::ParenthesizedExpressionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterParenthesizedExpression(this);
+  }
 }
 void PrestoSqlParser::ParenthesizedExpressionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitParenthesizedExpression(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ParenthesizedExpressionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitParenthesizedExpression(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ParameterContext
 //------------------------------------------------------------------
@@ -14500,22 +14945,25 @@ PrestoSqlParser::ParameterContext::ParameterContext(
 void PrestoSqlParser::ParameterContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterParameter(this);
+  }
 }
 void PrestoSqlParser::ParameterContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitParameter(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ParameterContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitParameter(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- NormalizeContext
 //------------------------------------------------------------------
@@ -14542,22 +14990,25 @@ PrestoSqlParser::NormalizeContext::NormalizeContext(
 void PrestoSqlParser::NormalizeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterNormalize(this);
+  }
 }
 void PrestoSqlParser::NormalizeContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitNormalize(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::NormalizeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitNormalize(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- IntervalLiteralContext
 //------------------------------------------------------------------
@@ -14575,22 +15026,25 @@ PrestoSqlParser::IntervalLiteralContext::IntervalLiteralContext(
 void PrestoSqlParser::IntervalLiteralContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterIntervalLiteral(this);
+  }
 }
 void PrestoSqlParser::IntervalLiteralContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitIntervalLiteral(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::IntervalLiteralContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitIntervalLiteral(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- NumericLiteralContext
 //------------------------------------------------------------------
@@ -14608,22 +15062,25 @@ PrestoSqlParser::NumericLiteralContext::NumericLiteralContext(
 void PrestoSqlParser::NumericLiteralContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterNumericLiteral(this);
+  }
 }
 void PrestoSqlParser::NumericLiteralContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitNumericLiteral(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::NumericLiteralContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitNumericLiteral(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- BooleanLiteralContext
 //------------------------------------------------------------------
@@ -14641,22 +15098,25 @@ PrestoSqlParser::BooleanLiteralContext::BooleanLiteralContext(
 void PrestoSqlParser::BooleanLiteralContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterBooleanLiteral(this);
+  }
 }
 void PrestoSqlParser::BooleanLiteralContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitBooleanLiteral(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::BooleanLiteralContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitBooleanLiteral(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SimpleCaseContext
 //------------------------------------------------------------------
@@ -14701,22 +15161,25 @@ PrestoSqlParser::SimpleCaseContext::SimpleCaseContext(
 void PrestoSqlParser::SimpleCaseContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSimpleCase(this);
+  }
 }
 void PrestoSqlParser::SimpleCaseContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSimpleCase(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SimpleCaseContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSimpleCase(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ColumnReferenceContext
 //------------------------------------------------------------------
@@ -14734,22 +15197,25 @@ PrestoSqlParser::ColumnReferenceContext::ColumnReferenceContext(
 void PrestoSqlParser::ColumnReferenceContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterColumnReference(this);
+  }
 }
 void PrestoSqlParser::ColumnReferenceContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitColumnReference(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ColumnReferenceContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitColumnReference(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- NullLiteralContext
 //------------------------------------------------------------------
@@ -14766,22 +15232,25 @@ PrestoSqlParser::NullLiteralContext::NullLiteralContext(
 void PrestoSqlParser::NullLiteralContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterNullLiteral(this);
+  }
 }
 void PrestoSqlParser::NullLiteralContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitNullLiteral(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::NullLiteralContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitNullLiteral(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- RowConstructorContext
 //------------------------------------------------------------------
@@ -14808,22 +15277,25 @@ PrestoSqlParser::RowConstructorContext::RowConstructorContext(
 void PrestoSqlParser::RowConstructorContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRowConstructor(this);
+  }
 }
 void PrestoSqlParser::RowConstructorContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRowConstructor(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RowConstructorContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRowConstructor(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SubscriptContext
 //------------------------------------------------------------------
@@ -14846,22 +15318,25 @@ PrestoSqlParser::SubscriptContext::SubscriptContext(
 void PrestoSqlParser::SubscriptContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSubscript(this);
+  }
 }
 void PrestoSqlParser::SubscriptContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSubscript(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SubscriptContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSubscript(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SubqueryExpressionContext
 //------------------------------------------------------------------
@@ -14879,22 +15354,25 @@ PrestoSqlParser::SubqueryExpressionContext::SubqueryExpressionContext(
 void PrestoSqlParser::SubqueryExpressionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSubqueryExpression(this);
+  }
 }
 void PrestoSqlParser::SubqueryExpressionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSubqueryExpression(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SubqueryExpressionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSubqueryExpression(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- BinaryLiteralContext
 //------------------------------------------------------------------
@@ -14911,22 +15389,25 @@ PrestoSqlParser::BinaryLiteralContext::BinaryLiteralContext(
 void PrestoSqlParser::BinaryLiteralContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterBinaryLiteral(this);
+  }
 }
 void PrestoSqlParser::BinaryLiteralContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitBinaryLiteral(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::BinaryLiteralContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitBinaryLiteral(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CurrentUserContext
 //------------------------------------------------------------------
@@ -14943,22 +15424,25 @@ PrestoSqlParser::CurrentUserContext::CurrentUserContext(
 void PrestoSqlParser::CurrentUserContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCurrentUser(this);
+  }
 }
 void PrestoSqlParser::CurrentUserContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCurrentUser(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CurrentUserContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCurrentUser(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ExtractContext
 //------------------------------------------------------------------
@@ -14988,22 +15472,25 @@ PrestoSqlParser::ExtractContext::ExtractContext(PrimaryExpressionContext* ctx) {
 void PrestoSqlParser::ExtractContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterExtract(this);
+  }
 }
 void PrestoSqlParser::ExtractContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitExtract(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ExtractContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitExtract(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- StringLiteralContext
 //------------------------------------------------------------------
@@ -15021,22 +15508,25 @@ PrestoSqlParser::StringLiteralContext::StringLiteralContext(
 void PrestoSqlParser::StringLiteralContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterStringLiteral(this);
+  }
 }
 void PrestoSqlParser::StringLiteralContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitStringLiteral(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::StringLiteralContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitStringLiteral(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ArrayConstructorContext
 //------------------------------------------------------------------
@@ -15063,22 +15553,25 @@ PrestoSqlParser::ArrayConstructorContext::ArrayConstructorContext(
 void PrestoSqlParser::ArrayConstructorContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterArrayConstructor(this);
+  }
 }
 void PrestoSqlParser::ArrayConstructorContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitArrayConstructor(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ArrayConstructorContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitArrayConstructor(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- FunctionCallContext
 //------------------------------------------------------------------
@@ -15146,22 +15639,25 @@ PrestoSqlParser::FunctionCallContext::FunctionCallContext(
 void PrestoSqlParser::FunctionCallContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterFunctionCall(this);
+  }
 }
 void PrestoSqlParser::FunctionCallContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitFunctionCall(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::FunctionCallContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitFunctionCall(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ExistsContext
 //------------------------------------------------------------------
@@ -15181,22 +15677,25 @@ PrestoSqlParser::ExistsContext::ExistsContext(PrimaryExpressionContext* ctx) {
 void PrestoSqlParser::ExistsContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterExists(this);
+  }
 }
 void PrestoSqlParser::ExistsContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitExists(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ExistsContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitExists(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- PositionContext
 //------------------------------------------------------------------
@@ -15227,22 +15726,25 @@ PrestoSqlParser::PositionContext::PositionContext(
 void PrestoSqlParser::PositionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterPosition(this);
+  }
 }
 void PrestoSqlParser::PositionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitPosition(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::PositionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitPosition(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SearchedCaseContext
 //------------------------------------------------------------------
@@ -15282,22 +15784,25 @@ PrestoSqlParser::SearchedCaseContext::SearchedCaseContext(
 void PrestoSqlParser::SearchedCaseContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSearchedCase(this);
+  }
 }
 void PrestoSqlParser::SearchedCaseContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSearchedCase(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SearchedCaseContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSearchedCase(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- GroupingOperationContext
 //------------------------------------------------------------------
@@ -15324,22 +15829,25 @@ PrestoSqlParser::GroupingOperationContext::GroupingOperationContext(
 void PrestoSqlParser::GroupingOperationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterGroupingOperation(this);
+  }
 }
 void PrestoSqlParser::GroupingOperationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitGroupingOperation(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::GroupingOperationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitGroupingOperation(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::PrimaryExpressionContext*
@@ -16876,8 +17384,9 @@ PrestoSqlParser::PrimaryExpressionContext* PrestoSqlParser::primaryExpression(
         _input, 220, _ctx);
     while (alt != 2 && alt != atn::ATN::INVALID_ALT_NUMBER) {
       if (alt == 1) {
-        if (!_parseListeners.empty())
+        if (!_parseListeners.empty()) {
           triggerExitRuleEvent();
+        }
         previousContext = _localctx;
         setState(1726);
         _errHandler->sync(this);
@@ -16893,8 +17402,9 @@ PrestoSqlParser::PrimaryExpressionContext* PrestoSqlParser::primaryExpression(
                 newContext, startState, RulePrimaryExpression);
             setState(1718);
 
-            if (!(precpred(_ctx, 14)))
+            if (!(precpred(_ctx, 14))) {
               throw FailedPredicateException(this, "precpred(_ctx, 14)");
+            }
             setState(1719);
             match(PrestoSqlParser::T__6);
             setState(1720);
@@ -16915,8 +17425,9 @@ PrestoSqlParser::PrimaryExpressionContext* PrestoSqlParser::primaryExpression(
                 newContext, startState, RulePrimaryExpression);
             setState(1723);
 
-            if (!(precpred(_ctx, 12)))
+            if (!(precpred(_ctx, 12))) {
               throw FailedPredicateException(this, "precpred(_ctx, 12)");
+            }
             setState(1724);
             match(PrestoSqlParser::T__0);
             setState(1725);
@@ -16982,22 +17493,25 @@ PrestoSqlParser::UnicodeStringLiteralContext::UnicodeStringLiteralContext(
 void PrestoSqlParser::UnicodeStringLiteralContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterUnicodeStringLiteral(this);
+  }
 }
 void PrestoSqlParser::UnicodeStringLiteralContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitUnicodeStringLiteral(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::UnicodeStringLiteralContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitUnicodeStringLiteral(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- BasicStringLiteralContext
 //------------------------------------------------------------------
@@ -17014,22 +17528,25 @@ PrestoSqlParser::BasicStringLiteralContext::BasicStringLiteralContext(
 void PrestoSqlParser::BasicStringLiteralContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterBasicStringLiteral(this);
+  }
 }
 void PrestoSqlParser::BasicStringLiteralContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitBasicStringLiteral(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::BasicStringLiteralContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitBasicStringLiteral(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::StringContext* PrestoSqlParser::string() {
   StringContext* _localctx =
@@ -17124,23 +17641,26 @@ size_t PrestoSqlParser::NullTreatmentContext::getRuleIndex() const {
 void PrestoSqlParser::NullTreatmentContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterNullTreatment(this);
+  }
 }
 
 void PrestoSqlParser::NullTreatmentContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitNullTreatment(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::NullTreatmentContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitNullTreatment(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::NullTreatmentContext* PrestoSqlParser::nullTreatment() {
@@ -17231,22 +17751,25 @@ PrestoSqlParser::TimeZoneIntervalContext::TimeZoneIntervalContext(
 void PrestoSqlParser::TimeZoneIntervalContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTimeZoneInterval(this);
+  }
 }
 void PrestoSqlParser::TimeZoneIntervalContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTimeZoneInterval(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TimeZoneIntervalContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTimeZoneInterval(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- TimeZoneStringContext
 //------------------------------------------------------------------
@@ -17272,22 +17795,25 @@ PrestoSqlParser::TimeZoneStringContext::TimeZoneStringContext(
 void PrestoSqlParser::TimeZoneStringContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTimeZoneString(this);
+  }
 }
 void PrestoSqlParser::TimeZoneStringContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTimeZoneString(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TimeZoneStringContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTimeZoneString(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::TimeZoneSpecifierContext*
 PrestoSqlParser::timeZoneSpecifier() {
@@ -17387,23 +17913,26 @@ size_t PrestoSqlParser::ComparisonOperatorContext::getRuleIndex() const {
 void PrestoSqlParser::ComparisonOperatorContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterComparisonOperator(this);
+  }
 }
 
 void PrestoSqlParser::ComparisonOperatorContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitComparisonOperator(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ComparisonOperatorContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitComparisonOperator(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ComparisonOperatorContext*
@@ -17474,23 +18003,26 @@ size_t PrestoSqlParser::ComparisonQuantifierContext::getRuleIndex() const {
 void PrestoSqlParser::ComparisonQuantifierContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterComparisonQuantifier(this);
+  }
 }
 
 void PrestoSqlParser::ComparisonQuantifierContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitComparisonQuantifier(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ComparisonQuantifierContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitComparisonQuantifier(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ComparisonQuantifierContext*
@@ -17552,23 +18084,26 @@ size_t PrestoSqlParser::BooleanValueContext::getRuleIndex() const {
 void PrestoSqlParser::BooleanValueContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterBooleanValue(this);
+  }
 }
 
 void PrestoSqlParser::BooleanValueContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitBooleanValue(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::BooleanValueContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitBooleanValue(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::BooleanValueContext* PrestoSqlParser::booleanValue() {
@@ -17649,23 +18184,26 @@ size_t PrestoSqlParser::IntervalContext::getRuleIndex() const {
 void PrestoSqlParser::IntervalContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterInterval(this);
+  }
 }
 
 void PrestoSqlParser::IntervalContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitInterval(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::IntervalContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitInterval(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::IntervalContext* PrestoSqlParser::interval() {
@@ -17774,23 +18312,26 @@ size_t PrestoSqlParser::IntervalFieldContext::getRuleIndex() const {
 void PrestoSqlParser::IntervalFieldContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterIntervalField(this);
+  }
 }
 
 void PrestoSqlParser::IntervalFieldContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitIntervalField(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::IntervalFieldContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitIntervalField(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::IntervalFieldContext* PrestoSqlParser::intervalField() {
@@ -17865,23 +18406,26 @@ size_t PrestoSqlParser::NormalFormContext::getRuleIndex() const {
 void PrestoSqlParser::NormalFormContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterNormalForm(this);
+  }
 }
 
 void PrestoSqlParser::NormalFormContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitNormalForm(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::NormalFormContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitNormalForm(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::NormalFormContext* PrestoSqlParser::normalForm() {
@@ -17946,23 +18490,26 @@ size_t PrestoSqlParser::TypesContext::getRuleIndex() const {
 void PrestoSqlParser::TypesContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTypes(this);
+  }
 }
 
 void PrestoSqlParser::TypesContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTypes(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TypesContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTypes(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::TypesContext* PrestoSqlParser::types() {
@@ -18257,22 +18804,25 @@ size_t PrestoSqlParser::TypeContext::getRuleIndex() const {
 void PrestoSqlParser::TypeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterType(this);
+  }
 }
 
 void PrestoSqlParser::TypeContext::exitRule(tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitType(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TypeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitType(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::TypeContext* PrestoSqlParser::type() {
@@ -18420,16 +18970,18 @@ PrestoSqlParser::TypeContext* PrestoSqlParser::type(int precedence) {
         _input, 233, _ctx);
     while (alt != 2 && alt != atn::ATN::INVALID_ALT_NUMBER) {
       if (alt == 1) {
-        if (!_parseListeners.empty())
+        if (!_parseListeners.empty()) {
           triggerExitRuleEvent();
+        }
         previousContext = _localctx;
         _localctx =
             _tracker.createInstance<TypeContext>(parentContext, parentState);
         pushNewRecursionContext(_localctx, startState, RuleType);
         setState(1835);
 
-        if (!(precpred(_ctx, 6)))
+        if (!(precpred(_ctx, 6))) {
           throw FailedPredicateException(this, "precpred(_ctx, 6)");
+        }
         setState(1836);
         match(PrestoSqlParser::ARRAY);
       }
@@ -18469,23 +19021,26 @@ size_t PrestoSqlParser::TypeParameterContext::getRuleIndex() const {
 void PrestoSqlParser::TypeParameterContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTypeParameter(this);
+  }
 }
 
 void PrestoSqlParser::TypeParameterContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTypeParameter(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TypeParameterContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTypeParameter(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::TypeParameterContext* PrestoSqlParser::typeParameter() {
@@ -18720,23 +19275,26 @@ size_t PrestoSqlParser::BaseTypeContext::getRuleIndex() const {
 void PrestoSqlParser::BaseTypeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterBaseType(this);
+  }
 }
 
 void PrestoSqlParser::BaseTypeContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitBaseType(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::BaseTypeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitBaseType(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::BaseTypeContext* PrestoSqlParser::baseType() {
@@ -18982,23 +19540,26 @@ size_t PrestoSqlParser::WhenClauseContext::getRuleIndex() const {
 void PrestoSqlParser::WhenClauseContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterWhenClause(this);
+  }
 }
 
 void PrestoSqlParser::WhenClauseContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitWhenClause(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::WhenClauseContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitWhenClause(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::WhenClauseContext* PrestoSqlParser::whenClause() {
@@ -19061,23 +19622,26 @@ size_t PrestoSqlParser::FilterContext::getRuleIndex() const {
 void PrestoSqlParser::FilterContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterFilter(this);
+  }
 }
 
 void PrestoSqlParser::FilterContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitFilter(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::FilterContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitFilter(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::FilterContext* PrestoSqlParser::filter() {
@@ -19174,22 +19738,25 @@ size_t PrestoSqlParser::OverContext::getRuleIndex() const {
 void PrestoSqlParser::OverContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterOver(this);
+  }
 }
 
 void PrestoSqlParser::OverContext::exitRule(tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitOver(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::OverContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitOver(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::OverContext* PrestoSqlParser::over() {
@@ -19332,23 +19899,26 @@ size_t PrestoSqlParser::WindowFrameContext::getRuleIndex() const {
 void PrestoSqlParser::WindowFrameContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterWindowFrame(this);
+  }
 }
 
 void PrestoSqlParser::WindowFrameContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitWindowFrame(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::WindowFrameContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitWindowFrame(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::WindowFrameContext* PrestoSqlParser::windowFrame() {
@@ -19505,22 +20075,25 @@ PrestoSqlParser::BoundedFrameContext::BoundedFrameContext(
 void PrestoSqlParser::BoundedFrameContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterBoundedFrame(this);
+  }
 }
 void PrestoSqlParser::BoundedFrameContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitBoundedFrame(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::BoundedFrameContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitBoundedFrame(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- UnboundedFrameContext
 //------------------------------------------------------------------
@@ -19545,22 +20118,25 @@ PrestoSqlParser::UnboundedFrameContext::UnboundedFrameContext(
 void PrestoSqlParser::UnboundedFrameContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterUnboundedFrame(this);
+  }
 }
 void PrestoSqlParser::UnboundedFrameContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitUnboundedFrame(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::UnboundedFrameContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitUnboundedFrame(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CurrentRowBoundContext
 //------------------------------------------------------------------
@@ -19581,22 +20157,25 @@ PrestoSqlParser::CurrentRowBoundContext::CurrentRowBoundContext(
 void PrestoSqlParser::CurrentRowBoundContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCurrentRowBound(this);
+  }
 }
 void PrestoSqlParser::CurrentRowBoundContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCurrentRowBound(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CurrentRowBoundContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCurrentRowBound(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::FrameBoundContext* PrestoSqlParser::frameBound() {
   FrameBoundContext* _localctx =
@@ -19718,23 +20297,26 @@ size_t PrestoSqlParser::UpdateAssignmentContext::getRuleIndex() const {
 void PrestoSqlParser::UpdateAssignmentContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterUpdateAssignment(this);
+  }
 }
 
 void PrestoSqlParser::UpdateAssignmentContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitUpdateAssignment(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::UpdateAssignmentContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitUpdateAssignment(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::UpdateAssignmentContext* PrestoSqlParser::updateAssignment() {
@@ -19811,22 +20393,25 @@ PrestoSqlParser::ExplainFormatContext::ExplainFormatContext(
 void PrestoSqlParser::ExplainFormatContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterExplainFormat(this);
+  }
 }
 void PrestoSqlParser::ExplainFormatContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitExplainFormat(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ExplainFormatContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitExplainFormat(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ExplainTypeContext
 //------------------------------------------------------------------
@@ -19859,22 +20444,25 @@ PrestoSqlParser::ExplainTypeContext::ExplainTypeContext(
 void PrestoSqlParser::ExplainTypeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterExplainType(this);
+  }
 }
 void PrestoSqlParser::ExplainTypeContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitExplainType(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ExplainTypeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitExplainType(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::ExplainOptionContext* PrestoSqlParser::explainOption() {
   ExplainOptionContext* _localctx =
@@ -19996,22 +20584,25 @@ PrestoSqlParser::TransactionAccessModeContext::TransactionAccessModeContext(
 void PrestoSqlParser::TransactionAccessModeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTransactionAccessMode(this);
+  }
 }
 void PrestoSqlParser::TransactionAccessModeContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTransactionAccessMode(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TransactionAccessModeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTransactionAccessMode(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- IsolationLevelContext
 //------------------------------------------------------------------
@@ -20037,22 +20628,25 @@ PrestoSqlParser::IsolationLevelContext::IsolationLevelContext(
 void PrestoSqlParser::IsolationLevelContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterIsolationLevel(this);
+  }
 }
 void PrestoSqlParser::IsolationLevelContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitIsolationLevel(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::IsolationLevelContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitIsolationLevel(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::TransactionModeContext* PrestoSqlParser::transactionMode() {
   TransactionModeContext* _localctx =
@@ -20156,22 +20750,25 @@ PrestoSqlParser::ReadUncommittedContext::ReadUncommittedContext(
 void PrestoSqlParser::ReadUncommittedContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterReadUncommitted(this);
+  }
 }
 void PrestoSqlParser::ReadUncommittedContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitReadUncommitted(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ReadUncommittedContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitReadUncommitted(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SerializableContext
 //------------------------------------------------------------------
@@ -20188,22 +20785,25 @@ PrestoSqlParser::SerializableContext::SerializableContext(
 void PrestoSqlParser::SerializableContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSerializable(this);
+  }
 }
 void PrestoSqlParser::SerializableContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSerializable(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SerializableContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSerializable(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- ReadCommittedContext
 //------------------------------------------------------------------
@@ -20224,22 +20824,25 @@ PrestoSqlParser::ReadCommittedContext::ReadCommittedContext(
 void PrestoSqlParser::ReadCommittedContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterReadCommitted(this);
+  }
 }
 void PrestoSqlParser::ReadCommittedContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitReadCommitted(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ReadCommittedContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitReadCommitted(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- RepeatableReadContext
 //------------------------------------------------------------------
@@ -20260,22 +20863,25 @@ PrestoSqlParser::RepeatableReadContext::RepeatableReadContext(
 void PrestoSqlParser::RepeatableReadContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRepeatableRead(this);
+  }
 }
 void PrestoSqlParser::RepeatableReadContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRepeatableRead(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RepeatableReadContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRepeatableRead(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::LevelOfIsolationContext* PrestoSqlParser::levelOfIsolation() {
   LevelOfIsolationContext* _localctx =
@@ -20385,22 +20991,25 @@ PrestoSqlParser::PositionalArgumentContext::PositionalArgumentContext(
 void PrestoSqlParser::PositionalArgumentContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterPositionalArgument(this);
+  }
 }
 void PrestoSqlParser::PositionalArgumentContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitPositionalArgument(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::PositionalArgumentContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitPositionalArgument(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- NamedArgumentContext
 //------------------------------------------------------------------
@@ -20423,22 +21032,25 @@ PrestoSqlParser::NamedArgumentContext::NamedArgumentContext(
 void PrestoSqlParser::NamedArgumentContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterNamedArgument(this);
+  }
 }
 void PrestoSqlParser::NamedArgumentContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitNamedArgument(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::NamedArgumentContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitNamedArgument(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::CallArgumentContext* PrestoSqlParser::callArgument() {
   CallArgumentContext* _localctx =
@@ -20526,23 +21138,26 @@ size_t PrestoSqlParser::PrivilegeContext::getRuleIndex() const {
 void PrestoSqlParser::PrivilegeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterPrivilege(this);
+  }
 }
 
 void PrestoSqlParser::PrivilegeContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitPrivilege(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::PrivilegeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitPrivilege(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::PrivilegeContext* PrestoSqlParser::privilege() {
@@ -20780,23 +21395,26 @@ size_t PrestoSqlParser::QualifiedNameContext::getRuleIndex() const {
 void PrestoSqlParser::QualifiedNameContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterQualifiedName(this);
+  }
 }
 
 void PrestoSqlParser::QualifiedNameContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitQualifiedName(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::QualifiedNameContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitQualifiedName(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::QualifiedNameContext* PrestoSqlParser::qualifiedName() {
@@ -20900,22 +21518,25 @@ PrestoSqlParser::TableVersionContext::TableVersionContext(
 void PrestoSqlParser::TableVersionContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTableVersion(this);
+  }
 }
 void PrestoSqlParser::TableVersionContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTableVersion(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TableVersionContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTableVersion(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::TableVersionExpressionContext*
 PrestoSqlParser::tableVersionExpression() {
@@ -20999,22 +21620,25 @@ PrestoSqlParser::TableversionbeforeContext::TableversionbeforeContext(
 void PrestoSqlParser::TableversionbeforeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTableversionbefore(this);
+  }
 }
 void PrestoSqlParser::TableversionbeforeContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTableversionbefore(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TableversionbeforeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTableversionbefore(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- TableversionasofContext
 //------------------------------------------------------------------
@@ -21035,22 +21659,25 @@ PrestoSqlParser::TableversionasofContext::TableversionasofContext(
 void PrestoSqlParser::TableversionasofContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterTableversionasof(this);
+  }
 }
 void PrestoSqlParser::TableversionasofContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitTableversionasof(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::TableversionasofContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitTableversionasof(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::TableVersionStateContext*
 PrestoSqlParser::tableVersionState() {
@@ -21135,22 +21762,25 @@ PrestoSqlParser::CurrentUserGrantorContext::CurrentUserGrantorContext(
 void PrestoSqlParser::CurrentUserGrantorContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCurrentUserGrantor(this);
+  }
 }
 void PrestoSqlParser::CurrentUserGrantorContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCurrentUserGrantor(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CurrentUserGrantorContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCurrentUserGrantor(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- SpecifiedPrincipalContext
 //------------------------------------------------------------------
@@ -21168,22 +21798,25 @@ PrestoSqlParser::SpecifiedPrincipalContext::SpecifiedPrincipalContext(
 void PrestoSqlParser::SpecifiedPrincipalContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterSpecifiedPrincipal(this);
+  }
 }
 void PrestoSqlParser::SpecifiedPrincipalContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitSpecifiedPrincipal(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::SpecifiedPrincipalContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitSpecifiedPrincipal(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- CurrentRoleGrantorContext
 //------------------------------------------------------------------
@@ -21200,22 +21833,25 @@ PrestoSqlParser::CurrentRoleGrantorContext::CurrentRoleGrantorContext(
 void PrestoSqlParser::CurrentRoleGrantorContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterCurrentRoleGrantor(this);
+  }
 }
 void PrestoSqlParser::CurrentRoleGrantorContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitCurrentRoleGrantor(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::CurrentRoleGrantorContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitCurrentRoleGrantor(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::GrantorContext* PrestoSqlParser::grantor() {
   GrantorContext* _localctx =
@@ -21309,22 +21945,25 @@ PrestoSqlParser::UnspecifiedPrincipalContext::UnspecifiedPrincipalContext(
 void PrestoSqlParser::UnspecifiedPrincipalContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterUnspecifiedPrincipal(this);
+  }
 }
 void PrestoSqlParser::UnspecifiedPrincipalContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitUnspecifiedPrincipal(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::UnspecifiedPrincipalContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitUnspecifiedPrincipal(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- UserPrincipalContext
 //------------------------------------------------------------------
@@ -21346,22 +21985,25 @@ PrestoSqlParser::UserPrincipalContext::UserPrincipalContext(
 void PrestoSqlParser::UserPrincipalContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterUserPrincipal(this);
+  }
 }
 void PrestoSqlParser::UserPrincipalContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitUserPrincipal(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::UserPrincipalContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitUserPrincipal(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- RolePrincipalContext
 //------------------------------------------------------------------
@@ -21383,22 +22025,25 @@ PrestoSqlParser::RolePrincipalContext::RolePrincipalContext(
 void PrestoSqlParser::RolePrincipalContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRolePrincipal(this);
+  }
 }
 void PrestoSqlParser::RolePrincipalContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRolePrincipal(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RolePrincipalContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRolePrincipal(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::PrincipalContext* PrestoSqlParser::principal() {
   PrincipalContext* _localctx =
@@ -21490,23 +22135,26 @@ size_t PrestoSqlParser::RolesContext::getRuleIndex() const {
 void PrestoSqlParser::RolesContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterRoles(this);
+  }
 }
 
 void PrestoSqlParser::RolesContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitRoles(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::RolesContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitRoles(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::RolesContext* PrestoSqlParser::roles() {
@@ -21580,22 +22228,25 @@ PrestoSqlParser::BackQuotedIdentifierContext::BackQuotedIdentifierContext(
 void PrestoSqlParser::BackQuotedIdentifierContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterBackQuotedIdentifier(this);
+  }
 }
 void PrestoSqlParser::BackQuotedIdentifierContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitBackQuotedIdentifier(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::BackQuotedIdentifierContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitBackQuotedIdentifier(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- QuotedIdentifierContext
 //------------------------------------------------------------------
@@ -21613,22 +22264,25 @@ PrestoSqlParser::QuotedIdentifierContext::QuotedIdentifierContext(
 void PrestoSqlParser::QuotedIdentifierContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterQuotedIdentifier(this);
+  }
 }
 void PrestoSqlParser::QuotedIdentifierContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitQuotedIdentifier(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::QuotedIdentifierContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitQuotedIdentifier(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DigitIdentifierContext
 //------------------------------------------------------------------
@@ -21646,22 +22300,25 @@ PrestoSqlParser::DigitIdentifierContext::DigitIdentifierContext(
 void PrestoSqlParser::DigitIdentifierContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDigitIdentifier(this);
+  }
 }
 void PrestoSqlParser::DigitIdentifierContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDigitIdentifier(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DigitIdentifierContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDigitIdentifier(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- UnquotedIdentifierContext
 //------------------------------------------------------------------
@@ -21683,22 +22340,25 @@ PrestoSqlParser::UnquotedIdentifierContext::UnquotedIdentifierContext(
 void PrestoSqlParser::UnquotedIdentifierContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterUnquotedIdentifier(this);
+  }
 }
 void PrestoSqlParser::UnquotedIdentifierContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitUnquotedIdentifier(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::UnquotedIdentifierContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitUnquotedIdentifier(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::IdentifierContext* PrestoSqlParser::identifier() {
   IdentifierContext* _localctx =
@@ -21960,22 +22620,25 @@ PrestoSqlParser::DecimalLiteralContext::DecimalLiteralContext(
 void PrestoSqlParser::DecimalLiteralContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDecimalLiteral(this);
+  }
 }
 void PrestoSqlParser::DecimalLiteralContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDecimalLiteral(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DecimalLiteralContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDecimalLiteral(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- DoubleLiteralContext
 //------------------------------------------------------------------
@@ -21992,22 +22655,25 @@ PrestoSqlParser::DoubleLiteralContext::DoubleLiteralContext(
 void PrestoSqlParser::DoubleLiteralContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterDoubleLiteral(this);
+  }
 }
 void PrestoSqlParser::DoubleLiteralContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitDoubleLiteral(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::DoubleLiteralContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitDoubleLiteral(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 //----------------- IntegerLiteralContext
 //------------------------------------------------------------------
@@ -22024,22 +22690,25 @@ PrestoSqlParser::IntegerLiteralContext::IntegerLiteralContext(
 void PrestoSqlParser::IntegerLiteralContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterIntegerLiteral(this);
+  }
 }
 void PrestoSqlParser::IntegerLiteralContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitIntegerLiteral(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::IntegerLiteralContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitIntegerLiteral(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 PrestoSqlParser::NumberContext* PrestoSqlParser::number() {
   NumberContext* _localctx =
@@ -22127,23 +22796,26 @@ size_t PrestoSqlParser::ConstraintSpecificationContext::getRuleIndex() const {
 void PrestoSqlParser::ConstraintSpecificationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterConstraintSpecification(this);
+  }
 }
 
 void PrestoSqlParser::ConstraintSpecificationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitConstraintSpecification(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ConstraintSpecificationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitConstraintSpecification(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ConstraintSpecificationContext*
@@ -22224,23 +22896,26 @@ size_t PrestoSqlParser::NamedConstraintSpecificationContext::getRuleIndex()
 void PrestoSqlParser::NamedConstraintSpecificationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterNamedConstraintSpecification(this);
+  }
 }
 
 void PrestoSqlParser::NamedConstraintSpecificationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitNamedConstraintSpecification(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::NamedConstraintSpecificationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitNamedConstraintSpecification(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::NamedConstraintSpecificationContext*
@@ -22308,23 +22983,26 @@ size_t PrestoSqlParser::UnnamedConstraintSpecificationContext::getRuleIndex()
 void PrestoSqlParser::UnnamedConstraintSpecificationContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterUnnamedConstraintSpecification(this);
+  }
 }
 
 void PrestoSqlParser::UnnamedConstraintSpecificationContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitUnnamedConstraintSpecification(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::UnnamedConstraintSpecificationContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitUnnamedConstraintSpecification(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::UnnamedConstraintSpecificationContext*
@@ -22399,23 +23077,26 @@ size_t PrestoSqlParser::ConstraintTypeContext::getRuleIndex() const {
 void PrestoSqlParser::ConstraintTypeContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterConstraintType(this);
+  }
 }
 
 void PrestoSqlParser::ConstraintTypeContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitConstraintType(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ConstraintTypeContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitConstraintType(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ConstraintTypeContext* PrestoSqlParser::constraintType() {
@@ -22488,23 +23169,26 @@ size_t PrestoSqlParser::ConstraintQualifiersContext::getRuleIndex() const {
 void PrestoSqlParser::ConstraintQualifiersContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterConstraintQualifiers(this);
+  }
 }
 
 void PrestoSqlParser::ConstraintQualifiersContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitConstraintQualifiers(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ConstraintQualifiersContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitConstraintQualifiers(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ConstraintQualifiersContext*
@@ -22580,23 +23264,26 @@ size_t PrestoSqlParser::ConstraintQualifierContext::getRuleIndex() const {
 void PrestoSqlParser::ConstraintQualifierContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterConstraintQualifier(this);
+  }
 }
 
 void PrestoSqlParser::ConstraintQualifierContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitConstraintQualifier(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ConstraintQualifierContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitConstraintQualifier(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ConstraintQualifierContext*
@@ -22674,23 +23361,26 @@ size_t PrestoSqlParser::ConstraintRelyContext::getRuleIndex() const {
 void PrestoSqlParser::ConstraintRelyContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterConstraintRely(this);
+  }
 }
 
 void PrestoSqlParser::ConstraintRelyContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitConstraintRely(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ConstraintRelyContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitConstraintRely(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ConstraintRelyContext* PrestoSqlParser::constraintRely() {
@@ -22761,23 +23451,26 @@ size_t PrestoSqlParser::ConstraintEnabledContext::getRuleIndex() const {
 void PrestoSqlParser::ConstraintEnabledContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterConstraintEnabled(this);
+  }
 }
 
 void PrestoSqlParser::ConstraintEnabledContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitConstraintEnabled(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ConstraintEnabledContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitConstraintEnabled(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ConstraintEnabledContext*
@@ -22839,23 +23532,26 @@ size_t PrestoSqlParser::ConstraintEnforcedContext::getRuleIndex() const {
 void PrestoSqlParser::ConstraintEnforcedContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterConstraintEnforced(this);
+  }
 }
 
 void PrestoSqlParser::ConstraintEnforcedContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitConstraintEnforced(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::ConstraintEnforcedContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitConstraintEnforced(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::ConstraintEnforcedContext*
@@ -23519,23 +24215,26 @@ size_t PrestoSqlParser::NonReservedContext::getRuleIndex() const {
 void PrestoSqlParser::NonReservedContext::enterRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->enterNonReserved(this);
+  }
 }
 
 void PrestoSqlParser::NonReservedContext::exitRule(
     tree::ParseTreeListener* listener) {
   auto parserListener = dynamic_cast<PrestoSqlListener*>(listener);
-  if (parserListener != nullptr)
+  if (parserListener != nullptr) {
     parserListener->exitNonReserved(this);
+  }
 }
 
 antlrcpp::Any PrestoSqlParser::NonReservedContext::accept(
     tree::ParseTreeVisitor* visitor) {
-  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor))
+  if (auto parserVisitor = dynamic_cast<PrestoSqlVisitor*>(visitor)) {
     return parserVisitor->visitNonReserved(this);
-  else
+  } else {
     return visitor->visitChildren(this);
+  }
 }
 
 PrestoSqlParser::NonReservedContext* PrestoSqlParser::nonReserved() {
