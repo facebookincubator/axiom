@@ -128,13 +128,42 @@ class Locus {
 
 using LocusCP = const Locus*;
 
+/// A Distribution describes how data is divided between files for
+/// data at rest and workers for data in flight based on values of
+/// special columns. We use the word partitioning to mean that where
+/// a row of data at rest or in flight is found depends on a
+/// function of one or more columns of the row. Hash partitioning nd
+/// range partitioning are examples. The distribution can also state
+/// that rows within a partition are sorted on some columns. The
+/// rows of a partition are the rows of a dataset for which the
+/// partitioning function satisfy some criteria, e.g. has % number
+/// of partitions == id of partition. The corresponding concept in
+/// Hive, e.g. Presto or Spark is bucketing. the word partitioning
+/// in Hive means something else. When Verax uses partitioning the
+/// Hive translation is bucketing. Number of partitions means how many ways the
+/// dataset is split by hash or range of partitioning keys. The Hive word for
+/// this is count of buckets. Hive partitioning columns, i.e. columns whose
+/// value directly specifies a file system directory where the file is found,
+/// are largely transparent to Verax.
+
+/// Two datasets are copartitioned if for one partition of one set
+/// we know that a join on partitioning keys can only fall in a
+/// limited set of partitions of the other dataset. This means that
+/// the partitioning function is the same and the count of
+/// partitions on either side are the same or one is an integer
+/// multiple of the other.
+
+/// A DistributionType specifies the partitioning function and the number of
+/// partitions. Copartitioning exists if datasets are joined on partitioning
+/// columns and the DistributionTypes are compatible.
+
 /// Method for determining a partition given an ordered list of partitioning
-/// keys. Hive hash is an example, range partitioning is another. Add values
-/// here for more types.
+/// keys. Hive hash bucketing is an example, range partitioning is another. Add
+/// values here for more types.
 enum class ShuffleMode { kNone, kHive };
 
 /// Distribution of data. 'numPartitions' is 1 if the data is not partitioned.
-/// There is copartitioning if the DistributionType is the same on both sides
+/// There is copartitioning if the DistributionType iscompatible on both sides
 /// and both sides have an equal number of 1:1 type matched partitioning keys.
 struct DistributionType {
   bool operator==(const DistributionType& other) const {
@@ -148,8 +177,8 @@ struct DistributionType {
   bool isGather{false};
 };
 
-// Describes output of relational operator. If base table, cardinality is
-// after filtering.
+// Describes data at rest or output of relational operator. If base table,
+// cardinality is after filtering.
 struct Distribution {
   Distribution() = default;
   Distribution(
@@ -206,6 +235,11 @@ struct Distribution {
   /// True if 'other' has the same ordering columns and order type.
   bool isSameOrder(const Distribution& other) const;
 
+  /// makes a new Distribution where 'exprs' are replaced with the
+  /// corresponding element of 'names'. Expressions in 'this' but not
+  /// in 'exprs' are not in the result. Recomputes partitioning and
+  /// ordering properties. These can be lost if partitioning or
+  /// ordering columns are not copied.
   Distribution rename(const ExprVector& exprs, const ColumnVector& names) const;
 
   std::string toString() const;
