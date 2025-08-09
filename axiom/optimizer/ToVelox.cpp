@@ -81,8 +81,7 @@ std::vector<common::Subfield> columnSubfields(BaseTableCP table, int32_t id) {
 }
 
 RelationOpPtr addGather(const RelationOpPtr& op) {
-  if (op->distribution().distributionType.isGather ||
-      !op->distribution().distributionType.isParallel) {
+  if (op->distribution().distributionType.isGather) {
     return op;
   }
   if (op->relType() == RelType::kOrderBy) {
@@ -1081,7 +1080,7 @@ velox::core::PlanNodePtr Optimization::makeRepartition(
   auto partitionFunctionFactory = createPartitionFunctionSpec(
       partitioningInput->outputType(), keys, distribution.isBroadcast);
   if (distribution.isBroadcast) {
-    source.numBroadcastDestinations = options_.numWorkers;
+    source.numBroadcastDestinations = fragment.width;
   }
   source.fragment.planNode = std::make_shared<core::PartitionedOutputNode>(
       nextId(),
@@ -1089,7 +1088,7 @@ velox::core::PlanNodePtr Optimization::makeRepartition(
           ? core::PartitionedOutputNode::Kind::kBroadcast
           : core::PartitionedOutputNode::Kind::kPartitioned,
       keys,
-      (keys.empty()) ? 1 : options_.numWorkers,
+      keys.empty() ? 1 : fragment.width,
       false,
       std::move(partitionFunctionFactory),
       makeOutputType(repartition.columns()),

@@ -269,10 +269,7 @@ struct Values : RelationOp {
       : RelationOp{
           RelType::kValues,
           nullptr,
-          Distribution{
-            DistributionType{.isParallel = false}, 
-            valuesTable.cardinality(),
-            {}},
+          Distribution{DistributionType{}, valuesTable.cardinality(), {}},
           std::move(columns)},
         valuesTable{valuesTable} {
     cost_.fanout = valuesTable.cardinality();

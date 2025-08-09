@@ -754,7 +754,7 @@ uint32_t position(const V& exprs, Getter getter, const Expr& expr) {
 
 RelationOpPtr repartitionForAgg(const RelationOpPtr& plan, PlanState& state) {
   // No shuffle if all grouping keys are in partitioning.
-  if (isSingleWorker() || !plan->distribution().distributionType.isParallel) {
+  if (isSingleWorker()) {
     return plan;
   }
   bool shuffle = false;
@@ -891,8 +891,7 @@ RelationOpPtr repartitionForIndex(
     const ExprVector& lookupValues,
     const RelationOpPtr& plan,
     PlanState& state) {
-  if (isSingleWorker() || !plan->distribution().distributionType.isParallel ||
-      isIndexColocated(info, lookupValues, plan)) {
+  if (isSingleWorker() || isIndexColocated(info, lookupValues, plan)) {
     return plan;
   }
   ExprVector keyExprs;
@@ -1088,8 +1087,7 @@ void Optimization::joinByHash(
   auto memoKey = MemoKey{
       candidate.tables[0], buildColumns, buildTables, candidate.existences};
   PlanObjectSet empty;
-  const bool canBePartitioned =
-      !isSingle_ && plan->distribution().distributionType.isParallel;
+  const bool canBePartitioned = !isSingle_;
   bool needsShuffle = false;
   auto buildPlan = makePlan(
       memoKey,
@@ -1271,8 +1269,7 @@ void Optimization::joinByHashRight(
   auto memoKey = MemoKey{
       candidate.tables[0], probeColumns, probeTables, candidate.existences};
   PlanObjectSet empty;
-  const bool canBePartitioned =
-      !isSingle_ && plan->distribution().distributionType.isParallel;
+  const bool canBePartitioned = !isSingle_;
   bool needsShuffle = false;
   auto probePlan = makePlan(
       memoKey,

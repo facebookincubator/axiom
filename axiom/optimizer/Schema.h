@@ -146,7 +146,6 @@ struct DistributionType {
   int32_t numPartitions{1};
   LocusCP locus{nullptr};
   bool isGather{false};
-  bool isParallel{true};
 };
 
 // Describes output of relational operator. If base table, cardinality is
