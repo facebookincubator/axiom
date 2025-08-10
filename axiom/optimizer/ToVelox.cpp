@@ -1160,10 +1160,6 @@ core::PlanNodePtr Optimization::makeValues(
 
     std::vector<uint32_t> oldColumnIdxs;
     oldColumnIdxs.reserve(newColumns.size());
-    // TODO: This place and a lot of other that use getChildIdx/etc results to
-    // O(n * m) complexity, so it doesn't work well for large projections
-    // I think it can be better if type will have FlatHashMap<name, index>
-    // instead of parallel to vector of types vector of names
     for (const auto& column : newColumns) {
       auto oldColumnIdx = oldType->getChildIdx(column->name());
       oldColumnIdxs.emplace_back(oldColumnIdx);

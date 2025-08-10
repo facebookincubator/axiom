@@ -991,10 +991,8 @@ PlanObjectP Optimization::makeBaseTable(const lp::TableScanNode& tableScan) {
   auto channels = usedChannels(&tableScan);
   const auto& type = tableScan.outputType();
   const auto& names = tableScan.columnNames();
-  for (auto i = 0; i < type->size(); ++i) {
-    if (std::find(channels.begin(), channels.end(), i) == channels.end()) {
-      continue;
-    }
+  for (auto i : channels) {
+    VELOX_DCHECK_LT(i, type->size());
 
     const auto& name = names[i];
     auto schemaColumn = schemaTable->findColumn(name);
@@ -1051,10 +1049,8 @@ PlanObjectP Optimization::makeValuesTable(const lp::ValuesNode& values) {
   const auto& type = values.outputType();
   const auto& names = values.outputType()->names();
   const auto cardinality = valuesTable->cardinality();
-  for (uint32_t i = 0; i < type->size(); ++i) {
-    if (std::find(channels.begin(), channels.end(), i) == channels.end()) {
-      continue;
-    }
+  for (auto i : channels) {
+    VELOX_DCHECK_LT(i, type->size());
 
     const auto& name = names[i];
     Value value{type->childAt(i).get(), cardinality};

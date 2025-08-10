@@ -1087,7 +1087,6 @@ void Optimization::joinByHash(
   auto memoKey = MemoKey{
       candidate.tables[0], buildColumns, buildTables, candidate.existences};
   PlanObjectSet empty;
-  const bool canBePartitioned = !isSingle_;
   bool needsShuffle = false;
   auto buildPlan = makePlan(
       memoKey,
@@ -1106,7 +1105,7 @@ void Optimization::joinByHash(
     state.placed.unionSet(buildTables);
   }
   PlanState buildState(state.optimization, state.dt, buildPlan);
-  const bool partitionByProbe = canBePartitioned && !partKeys.empty();
+  const bool partitionByProbe = !isSingle_ && !partKeys.empty();
   RelationOpPtr buildInput = buildPlan->op;
   RelationOpPtr probeInput = plan;
   if (partitionByProbe) {
@@ -1123,7 +1122,7 @@ void Optimization::joinByHash(
       buildInput = shuffleTemp;
     }
   } else if (
-      canBePartitioned && candidate.join->isBroadcastableType() &&
+      !isSingle_ && candidate.join->isBroadcastableType() &&
       isBroadcastableSize(buildPlan, state)) {
     auto* broadcast = make<Repartition>(
         buildInput,
@@ -1132,7 +1131,7 @@ void Optimization::joinByHash(
         buildInput->columns());
     buildState.addCost(*broadcast);
     buildInput = broadcast;
-  } else if (canBePartitioned) {
+  } else if (!isSingle_) {
     // The probe gets shuffled to align with build. If build is not partitioned
     // on its keys, shuffle the build too.
     auto buildPart = joinKeyPartition(buildInput, build.keys);
@@ -1269,7 +1268,6 @@ void Optimization::joinByHashRight(
   auto memoKey = MemoKey{
       candidate.tables[0], probeColumns, probeTables, candidate.existences};
   PlanObjectSet empty;
-  const bool canBePartitioned = !isSingle_;
   bool needsShuffle = false;
   auto probePlan = makePlan(
       memoKey,
@@ -1282,7 +1280,7 @@ void Optimization::joinByHashRight(
 
   RelationOpPtr probeInput = probePlan->op;
   RelationOpPtr buildInput = plan;
-  if (canBePartitioned) {
+  if (!isSingle_) {
     // The build gets shuffled to align with probe. If probe is not partitioned
     // on its keys, shuffle the probe too.
     auto probePart = joinKeyPartition(probeInput, probe.keys);
@@ -1665,9 +1663,11 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
           auto columns = indexColumns(downstream, table, index);
 
           state.columns.unionObjects(columns);
+          auto distribution =
+              TableScan::outputDistribution(table, index, columns);
           auto* scan = make<TableScan>(
               nullptr,
-              TableScan::outputDistribution(table, index, columns),
+              std::move(distribution),
               table,
               index,
               index->distribution().cardinality * table->filterSelectivity,

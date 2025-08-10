@@ -25,6 +25,7 @@ namespace facebook::velox::optimizer {
 /// tables and different expressions.
 enum class PlanType {
   kTable,
+  kValuesTable,
   kDerivedTable,
   kColumn,
   kLiteral,
@@ -38,7 +39,6 @@ enum class PlanType {
   kLimit,
   kField,
   kLambda,
-  kValuesTable,
 };
 
 /// True if 'type' is an expression with a value.
