@@ -98,7 +98,14 @@ float orderPrefixDistance(
 
 namespace {
 
-void updateCost(float cardinality, const ColumnVector& columns, Cost& cost) {
+// For leaf nodes, the fanout represents the cardinality, and the unitCost is
+// the total cost.
+// For non-leaf nodes, the fanout represents the change in cardinality (output
+// cardinality / input cardinality), and the unitCost is the per-row cost.
+void updateLeafCost(
+    float cardinality,
+    const ColumnVector& columns,
+    Cost& cost) {
   cost.fanout = cardinality;
   const auto size = byteSize(columns);
   const auto numColumns = columns.size();
@@ -131,13 +138,13 @@ void TableScan::setCost(const PlanState& input) {
   }
   const auto cardinality =
       index->distribution().cardinality * baseTable->filterSelectivity;
-  updateCost(cardinality, columns_, cost_);
+  updateLeafCost(cardinality, columns_, cost_);
 }
 
 void Values::setCost(const PlanState& input) {
   RelationOp::setCost(input);
   const auto cardinality = valuesTable.cardinality();
-  updateCost(cardinality, columns_, cost_);
+  updateLeafCost(cardinality, columns_, cost_);
 }
 
 void Aggregation::setCost(const PlanState& input) {
