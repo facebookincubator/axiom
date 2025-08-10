@@ -188,7 +188,7 @@ void PlanState::setTargetColumnsForDt(const PlanObjectSet& target) {
   }
 }
 
-PlanObjectSet PlanState::downstreamColumns() const {
+const PlanObjectSet& PlanState::downstreamColumns() const {
   auto it = downstreamPrecomputed.find(placed);
   if (it != downstreamPrecomputed.end()) {
     return it->second;
@@ -232,8 +232,7 @@ PlanObjectSet PlanState::downstreamColumns() const {
     }
   }
   result.unionSet(targetColumns);
-  downstreamPrecomputed[placed] = result;
-  return result;
+  return downstreamPrecomputed[placed] = std::move(result);
 }
 
 std::string PlanState::printCost() const {
@@ -984,7 +983,7 @@ void Optimization::joinByIndex(
     // The number of keys is  the prefix that matches index order.
     lookupKeys.resize(info.lookupKeys.size());
     state.columns.unionSet(TableScan::availableColumns(rightTable, index));
-    PlanObjectSet c = state.downstreamColumns();
+    auto c = state.downstreamColumns();
     c.intersect(state.columns);
     for (auto& filter : rightTable->filter) {
       c.unionSet(filter->columns());
@@ -1079,8 +1078,7 @@ void Optimization::joinByHash(
     buildColumns.unionSet(availableColumns(buildTable));
     buildTables.add(buildTable);
   }
-  auto downstream = state.downstreamColumns();
-  buildColumns.intersect(downstream);
+  buildColumns.intersect(state.downstreamColumns());
   buildColumns.unionColumns(build.keys);
   buildColumns.unionSet(buildFilterColumns);
   state.columns.unionSet(buildColumns);
@@ -1182,8 +1180,7 @@ void Optimization::joinByHash(
       joinType == core::JoinType::kLeftSemiProject ||
       joinType == core::JoinType::kAnti ||
       joinType == core::JoinType::kLeftSemiProject;
-  downstream = state.downstreamColumns();
-  downstream.forEach([&](auto object) {
+  state.downstreamColumns().forEach([&](auto object) {
     auto column = reinterpret_cast<ColumnCP>(object);
     if (column == build.markColumn) {
       mark = column;
@@ -1260,8 +1257,7 @@ void Optimization::joinByHashRight(
     state.placed.add(probeTable);
     probeTables.add(probeTable);
   }
-  auto downstream = state.downstreamColumns();
-  probeColumns.intersect(downstream);
+  probeColumns.intersect(state.downstreamColumns());
   probeColumns.unionColumns(probe.keys);
   probeColumns.unionSet(probeFilterColumns);
   state.columns.unionSet(probeColumns);
@@ -1338,8 +1334,7 @@ void Optimization::joinByHashRight(
   PlanObjectSet columnSet;
   ColumnCP mark = nullptr;
 
-  downstream = state.downstreamColumns();
-  downstream.forEach([&](auto object) {
+  state.downstreamColumns().forEach([&](auto object) {
     auto column = reinterpret_cast<ColumnCP>(object);
     if (column == probe.markColumn) {
       mark = column;
@@ -1503,18 +1498,16 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
 
   state.placed.add(from);
 
-  PlanObjectSet columns = state.downstreamColumns();
-
   PlanObjectSet dtColumns;
   for (const auto& column : from->columns) {
     dtColumns.add(column);
   }
 
-  columns.intersect(dtColumns);
-  state.columns.unionSet(columns);
+  dtColumns.intersect(state.downstreamColumns());
+  state.columns.unionSet(dtColumns);
 
   MemoKey key;
-  key.columns = columns;
+  key.columns = std::move(dtColumns);
   key.firstTable = from;
   key.tables.add(from);
 
@@ -1656,7 +1649,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
         auto table = from->as<BaseTable>();
         auto indices = table->as<BaseTable>()->chooseLeafIndex();
         // Make plan starting with each relevant index of the table.
-        auto downstream = state.downstreamColumns();
+        const auto downstream = state.downstreamColumns();
         for (auto index : indices) {
           PlanStateSaver save(state);
           state.placed.add(table);
@@ -1677,17 +1670,16 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
         }
       } else if (from->type() == PlanType::kValuesTable) {
         const auto* valuesTable = from->as<ValuesTable>();
-        auto downstream = state.downstreamColumns();
-        PlanStateSaver save{state};
-        state.placed.add(valuesTable);
         ColumnVector columns;
-        downstream.forEach([&](PlanObjectCP object) {
+        state.downstreamColumns().forEach([&](PlanObjectCP object) {
           auto* column = object->as<Column>();
           if (valuesTable == column->relation()) {
             columns.push_back(column);
           }
         });
 
+        PlanStateSaver save{state};
+        state.placed.add(valuesTable);
         state.columns.unionObjects(columns);
         auto* scan = make<Values>(*valuesTable, std::move(columns));
         state.addCost(*scan);

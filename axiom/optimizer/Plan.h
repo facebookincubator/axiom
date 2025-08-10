@@ -392,7 +392,7 @@ struct PlanState {
 
   /// Returns the  set of columns referenced in unplaced joins/filters union
   /// targetColumns. Gets smaller as more tables are placed.
-  PlanObjectSet downstreamColumns() const;
+  const PlanObjectSet& downstreamColumns() const;
 
   // Adds a placed join to the set of partial queries to be developed. No op if
   // cost exceeds best so far and cutoff is enabled.
