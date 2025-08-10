@@ -206,8 +206,9 @@ std::string TableScan::toString(bool /*recursive*/, bool detail) const {
   out << baseTable->schemaTable->name << " " << baseTable->cname;
   if (detail) {
     printCost(detail, out);
-    VELOX_DCHECK(!input());
-    out << distribution_.toString() << std::endl;
+    if (!input()) {
+      out << distribution_.toString() << std::endl;
+    }
   }
   return out.str();
 }
@@ -223,11 +224,11 @@ const QGstring& Values::historyKey() const {
 }
 
 std::string Values::toString(bool /*recursive*/, bool detail) const {
+  VELOX_DCHECK(!input());
   std::stringstream out;
   out << valuesTable.values.id() << " " << valuesTable.cname;
   if (detail) {
     printCost(detail, out);
-    VELOX_DCHECK(!input());
     out << distribution_.toString() << std::endl;
   }
   return out.str();
