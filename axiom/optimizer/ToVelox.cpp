@@ -132,7 +132,7 @@ void filterUpdated(BaseTableCP table, bool updateSelectivity) {
         continue;
       }
       pushdownConjuncts.push_back(typedExpr);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       remainingConjuncts.push_back(std::move(typedExpr));
     }
   }
