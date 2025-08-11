@@ -43,22 +43,22 @@ size_t PlanObject::hash() const {
 
 void PlanObjectSet::unionColumns(ExprCP expr) {
   switch (expr->type()) {
-    case PlanType::kLiteral:
+    case PlanType::kLiteralExpr:
       return;
-    case PlanType::kColumn:
+    case PlanType::kColumnExpr:
       add(expr);
       return;
-    case PlanType::kField:
+    case PlanType::kFieldExpr:
       unionColumns(expr->as<Field>()->base());
       return;
-    case PlanType::kAggregate: {
+    case PlanType::kAggregateExpr: {
       auto condition = expr->as<Aggregate>()->condition();
       if (condition) {
         unionColumns(condition);
       }
     }
       [[fallthrough]];
-    case PlanType::kCall: {
+    case PlanType::kCallExpr: {
       auto call = reinterpret_cast<const Call*>(expr);
       unionSet(call->columns());
       return;

@@ -122,10 +122,10 @@ using EquivalenceP = Equivalence*;
 class Literal : public Expr {
  public:
   Literal(const Value& value, const velox::variant* literal)
-      : Expr(PlanType::kLiteral, value), literal_(literal), vector_(nullptr) {}
+      : Expr(PlanType::kLiteralExpr, value), literal_(literal), vector_(nullptr) {}
 
   Literal(const Value& value, const BaseVector* vector)
-      : Expr(PlanType::kLiteral, value), literal_{}, vector_(vector) {}
+      : Expr(PlanType::kLiteralExpr, value), literal_{}, vector_(vector) {}
 
   const velox::variant& literal() const {
     return *literal_;
@@ -221,13 +221,13 @@ inline folly::Range<T*> toRange(const std::vector<T, QGAllocator<T>>& v) {
 class Field : public Expr {
  public:
   Field(const Type* type, ExprCP base, Name field)
-      : Expr(PlanType::kField, Value(type, 1)), field_(field), base_(base) {
+      : Expr(PlanType::kFieldExpr, Value(type, 1)), field_(field), base_(base) {
     columns_ = base->columns();
     subexpressions_ = base->subexpressions();
   }
 
   Field(const Type* type, ExprCP base, int32_t index)
-      : Expr(PlanType::kField, Value(type, 1)),
+      : Expr(PlanType::kFieldExpr, Value(type, 1)),
         field_(nullptr),
         index_(index),
         base_(base) {
@@ -332,7 +332,7 @@ class Call : public Expr {
       FunctionSet functions);
 
   Call(Name name, Value value, ExprVector args, FunctionSet functions)
-      : Call(PlanType::kCall, name, value, std::move(args), functions) {}
+      : Call(PlanType::kCallExpr, name, value, std::move(args), functions) {}
 
   Name name() const {
     return name_;
@@ -386,7 +386,7 @@ using CallCP = const Call*;
 
 /// True if 'expr' is a call to function 'name'.
 inline bool isCallExpr(ExprCP expr, Name name) {
-  return expr->type() == PlanType::kCall && expr->as<Call>()->name() == name;
+  return expr->type() == PlanType::kCallExpr && expr->as<Call>()->name() == name;
 }
 
 /// Represents a lambda. May occur as an immediate argument of selected
@@ -394,7 +394,7 @@ inline bool isCallExpr(ExprCP expr, Name name) {
 class Lambda : public Expr {
  public:
   Lambda(ColumnVector args, const Type* type, ExprCP body)
-      : Expr(PlanType::kLambda, Value(type, 1)),
+      : Expr(PlanType::kLambdaExpr, Value(type, 1)),
         args_(std::move(args)),
         body_(body) {}
   const ColumnVector& args() const {
@@ -665,7 +665,7 @@ using JoinEdgeVector = std::vector<JoinEdgeP, QGAllocator<JoinEdgeP>>;
 /// BaseTable but the same BaseTable can be referenced from many TableScans, for
 /// example if accessing different indices in a secondary to primary key lookup.
 struct BaseTable : public PlanObject {
-  BaseTable() : PlanObject(PlanType::kTable) {}
+  BaseTable() : PlanObject(PlanType::kTableNode) {}
 
   // Correlation name, distinguishes between uses of the same schema table.
   Name cname{nullptr};
@@ -736,7 +736,7 @@ class Aggregate : public Call {
       bool isAccumulator,
       const velox::Type* intermediateType)
       : Call(
-            PlanType::kAggregate,
+            PlanType::kAggregateExpr,
             name,
             value,
             std::move(args),
@@ -789,7 +789,7 @@ using AggregationP = Aggregation*;
 /// Wraps an Aggregation RelationOp. This gives the aggregation a PlanObject id
 struct AggregationPlan : public PlanObject {
   explicit AggregationPlan(AggregationP agg)
-      : PlanObject(PlanType::kAggregation), aggregation(agg) {}
+      : PlanObject(PlanType::kAggregationNode), aggregation(agg) {}
 
   AggregationP aggregation;
 };

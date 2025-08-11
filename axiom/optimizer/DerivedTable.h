@@ -40,7 +40,7 @@ using OrderByP = OrderBy*;
 /// table. Joins can move between derived tables within limits, considering the
 /// semantics of e.g. group by.
 struct DerivedTable : public PlanObject {
-  DerivedTable() : PlanObject(PlanType::kDerivedTable) {}
+  DerivedTable() : PlanObject(PlanType::kDerivedTableNode) {}
 
   /// Distribution that gives partition, cardinality and
   /// order/uniqueness for the dt alone. This is expressed in terms of

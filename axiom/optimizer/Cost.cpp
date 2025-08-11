@@ -214,14 +214,14 @@ void Limit::setCost(const PlanState& input) {
 
 float selfCost(ExprCP expr) {
   switch (expr->type()) {
-    case PlanType::kColumn: {
+    case PlanType::kColumnExpr: {
       auto kind = expr->value().type->kind();
       if (kind == TypeKind::ARRAY || kind == TypeKind::MAP) {
         return 200;
       }
       return 10;
     }
-    case PlanType::kCall: {
+    case PlanType::kCallExpr: {
       auto metadata = expr->as<Call>()->metadata();
       if (metadata) {
         if (metadata->costFunc) {
@@ -241,9 +241,9 @@ float costWithChildren(ExprCP expr, const PlanObjectSet& notCounting) {
     return 0;
   }
   switch (expr->type()) {
-    case PlanType::kColumn:
+    case PlanType::kColumnExpr:
       return selfCost(expr);
-    case PlanType::kCall: {
+    case PlanType::kCallExpr: {
       float cost = selfCost(expr);
       for (auto arg : expr->as<Call>()->args()) {
         cost += costWithChildren(arg, notCounting);
