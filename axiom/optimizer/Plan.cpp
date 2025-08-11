@@ -832,15 +832,14 @@ void Optimization::addPostprocess(
         dt->orderBy->distribution().orderType);
     state.addCost(*orderBy);
     plan = orderBy;
+  } else if (dt->limit >= 0) {
+    auto limit = make<Limit>(plan, dt->limit, dt->offset);
+    state.addCost(*limit);
+    plan = limit;
   }
   if (!dt->columns.empty()) {
     auto* project = make<Project>(plan, dt->exprs, dt->columns);
     plan = project;
-  }
-  if (dt->orderBy == nullptr && dt->limit >= 0) {
-    auto limit = make<Limit>(plan, dt->limit, dt->offset);
-    state.addCost(*limit);
-    plan = limit;
   }
 }
 
