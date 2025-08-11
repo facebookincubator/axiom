@@ -485,15 +485,38 @@ BuiltinNames& Optimization::builtinNames() {
   return *builtinNames_;
 }
 
+namespace {
+
+/// If we should reverse the sides of a binary expression to canonicalize it. We
+/// invert in two cases:
+///
+///  #1. If there is a literal in the left and something else in the right:
+///    f("literal", col) => f(col, "literal")
+///
+///  #2. If none are literal, but the id on the left is higher.
+bool shouldInvert(ExprCP left, ExprCP right) {
+  if (left->type() == PlanType::kLiteral &&
+      right->type() != PlanType::kLiteral) {
+    return true;
+  } else if (
+      (left->type() != PlanType::kLiteral) &&
+      (right->type() != PlanType::kLiteral) && (left->id() > right->id())) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
+} // namespace
+
 void Optimization::canonicalizeCall(Name& name, ExprVector& args) {
   auto& names = builtinNames();
   if (!names.isCanonicalizable(name)) {
     return;
   }
   VELOX_CHECK_EQ(args.size(), 2, "Expecting binary op {}", name);
-  if ((args[0]->type() == PlanType::kLiteral &&
-       args[1]->type() != PlanType::kLiteral) ||
-      args[0]->id() > args[1]->id()) {
+
+  if (shouldInvert(args[0], args[1])) {
     std::swap(args[0], args[1]);
     name = names.reverse(name);
   }

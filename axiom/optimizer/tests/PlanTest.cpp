@@ -480,13 +480,13 @@ TEST_F(PlanTest, unionAll) {
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan(
-                "nation", lte("n_nationkey", 10), "1 = (n_regionkey + 1) % 3")
+                "nation", lte("n_nationkey", 10), "(n_regionkey + 1) % 3 = 1")
             .project()
             .localPartition(core::PlanMatcherBuilder()
                                 .hiveScan(
                                     "nation",
                                     gte("n_nationkey", 14),
-                                    "1 = (n_regionkey + 1) % 3")
+                                    "(n_regionkey + 1) % 3 = 1")
                                 .project()
                                 .build())
             .project()
@@ -660,7 +660,7 @@ TEST_F(PlanTest, intersect) {
                                        .hiveScan(
                                            "nation",
                                            lte("n_nationkey", 20),
-                                           "1 = (n_regionkey + 1) % 3")
+                                           "(n_regionkey + 1) % 3 = 1")
                                        .project()
                                        .build(),
                                    core::JoinType::kRightSemiFilter)
@@ -722,7 +722,7 @@ TEST_F(PlanTest, except) {
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan(
-                "nation", lte("n_nationkey", 20), "1 = (n_regionkey + 1) % 3")
+                "nation", lte("n_nationkey", 20), "(n_regionkey + 1) % 3 = 1")
             .project()
             .hashJoin(
                 core::PlanMatcherBuilder()
