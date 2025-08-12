@@ -52,11 +52,11 @@ std::string Column::toString() const {
     return name_;
   }
   Name cname = !relation_ ? ""
-      : relation_->type() == PlanType::kTable
+      : relation_->type() == PlanType::kTableNode
       ? relation_->as<BaseTable>()->cname
-      : relation_->type() == PlanType::kValuesTable
+      : relation_->type() == PlanType::kValuesTableNode
       ? relation_->as<ValuesTable>()->cname
-      : relation_->type() == PlanType::kDerivedTable
+      : relation_->type() == PlanType::kDerivedTableNode
       ? relation_->as<DerivedTable>()->cname
       : "--";
 
@@ -217,8 +217,8 @@ void JoinEdge::addEquality(ExprCP left, ExprCP right, bool update) {
 
 std::pair<std::string, bool> JoinEdge::sampleKey() const {
   std::stringstream out;
-  if (!leftTable_ || leftTable_->type() != PlanType::kTable ||
-      rightTable_->type() != PlanType::kTable) {
+  if (!leftTable_ || leftTable_->type() != PlanType::kTableNode ||
+      rightTable_->type() != PlanType::kTableNode) {
     return std::make_pair("", false);
   }
   auto* opt = queryCtx()->optimization();
@@ -291,10 +291,10 @@ bool Expr::sameOrEqual(const Expr& other) const {
     return false;
   }
   switch (type()) {
-    case PlanType::kColumn:
+    case PlanType::kColumnExpr:
       return as<Column>()->equivalence() &&
           as<Column>()->equivalence() == other.as<Column>()->equivalence();
-    case PlanType::kAggregate: {
+    case PlanType::kAggregateExpr: {
       auto a = reinterpret_cast<const Aggregate*>(this);
       auto b = reinterpret_cast<const Aggregate*>(&other);
       if (a->isDistinct() != b->isDistinct() ||
@@ -306,7 +306,7 @@ bool Expr::sameOrEqual(const Expr& other) const {
       }
     }
       [[fallthrough]];
-    case PlanType::kCall: {
+    case PlanType::kCallExpr: {
       if (as<Call>()->name() != other.as<Call>()->name()) {
         return false;
       }
@@ -327,14 +327,14 @@ bool Expr::sameOrEqual(const Expr& other) const {
 }
 
 PlanObjectCP Expr::singleTable() const {
-  if (type() == PlanType::kColumn) {
+  if (type() == PlanType::kColumnExpr) {
     return as<Column>()->relation();
   }
 
   PlanObjectCP table = nullptr;
   bool multiple = false;
   columns_.forEach([&](PlanObjectCP object) {
-    VELOX_CHECK(object->type() == PlanType::kColumn);
+    VELOX_CHECK(object->type() == PlanType::kColumnExpr);
     if (!table) {
       table = object->as<Column>()->relation();
     } else if (table != object->as<Column>()->relation()) {
@@ -359,14 +359,14 @@ Column::Column(
     Name nameInTable,
     ColumnCP top,
     PathCP path)
-    : Expr(PlanType::kColumn, value),
+    : Expr(PlanType::kColumnExpr, value),
       name_(name),
       relation_(relation),
       topColumn_(top),
       path_(path) {
   columns_.add(this);
   subexpressions_.add(this);
-  if (relation_ && relation_->type() == PlanType::kTable) {
+  if (relation_ && relation_->type() == PlanType::kTableNode) {
     if (topColumn_) {
       schemaColumn_ = topColumn_->schemaColumn_;
     } else {

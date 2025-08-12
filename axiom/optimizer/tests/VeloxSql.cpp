@@ -372,7 +372,7 @@ class VeloxRunner : public QueryBenchmarkBase {
           for (auto& dim : parameters_) {
             modifiedFlags_.insert(dim.flag);
           }
-        } catch (const std::exception& e) {
+        } catch (const std::exception&) {
         }
         hasReferenceResult_ = false;
         referenceResult_.clear();

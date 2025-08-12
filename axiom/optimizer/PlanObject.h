@@ -24,27 +24,29 @@ namespace facebook::velox::optimizer {
 /// a query graph and later to differentiate between tables, derived
 /// tables and different expressions.
 enum class PlanType {
-  kTable,
-  kValuesTable,
-  kDerivedTable,
-  kColumn,
-  kLiteral,
-  kCall,
-  kAggregate,
-  kAggregation,
-  kProject,
-  kFilter,
-  kJoin,
-  kOrderBy,
-  kLimit,
-  kField,
-  kLambda,
+  // Expressions.
+  kColumnExpr,
+  kLiteralExpr,
+  kCallExpr,
+  kAggregateExpr,
+  kFieldExpr,
+  kLambdaExpr,
+  // Plan nodes.
+  kTableNode,
+  kValuesTableNode,
+  kDerivedTableNode,
+  kAggregationNode,
+  kProjectNode,
+  kFilterNode,
+  kJoinNode,
+  kOrderByNode,
+  kLimitNode,
 };
 
 /// True if 'type' is an expression with a value.
 inline bool isExprType(PlanType type) {
-  return type == PlanType::kColumn || type == PlanType::kCall ||
-      type == PlanType::kLiteral;
+  return type == PlanType::kColumnExpr || type == PlanType::kCallExpr ||
+      type == PlanType::kLiteralExpr;
 }
 
 /// Common superclass of all vertices of a query graph. This
@@ -76,7 +78,7 @@ class PlanObject {
   }
 
   bool isColumn() const {
-    return type_ == PlanType::kColumn;
+    return type_ == PlanType::kColumnExpr;
   }
 
   template <typename T>

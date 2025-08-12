@@ -89,7 +89,7 @@ ExprCP Optimization::tryFoldConstant(
   try {
     Value value(call ? toType(call->type()) : toType(cast->type()), 1);
     auto* veraxExpr = make<Call>(
-        PlanType::kCall,
+        PlanType::kCallExpr,
         cast ? toName("cast") : toName(call->name()),
         value,
         literals,
@@ -140,7 +140,7 @@ bool Optimization::isSubfield(
     auto name = call->name();
     if (name == "subscript" || name == "element_at") {
       auto subscript = translateExpr(call->inputAt(1));
-      if (subscript->type() == PlanType::kLiteral) {
+      if (subscript->type() == PlanType::kLiteralExpr) {
         step.kind = StepKind::kSubscript;
         auto& literal = subscript->as<Literal>()->literal();
         switch (subscript->value().type->kind()) {
@@ -196,14 +196,14 @@ void Optimization::getExprForField(
       auto it = renames_.find(name);
       VELOX_CHECK(it != renames_.end());
       auto maybeColumn = it->second;
-      VELOX_CHECK(maybeColumn->type() == PlanType::kColumn);
+      VELOX_CHECK(maybeColumn->type() == PlanType::kColumnExpr);
       resultColumn = maybeColumn->as<Column>();
       resultExpr = nullptr;
       context = nullptr;
       const auto* relation = resultColumn->relation();
       VELOX_CHECK_NOT_NULL(relation);
-      if (relation->type() == PlanType::kTable ||
-          relation->type() == PlanType::kValuesTable) {
+      if (relation->type() == PlanType::kTableNode ||
+          relation->type() == PlanType::kValuesTableNode) {
         VELOX_CHECK(leaf == relation);
       }
       return;
@@ -495,12 +495,12 @@ namespace {
 ///
 ///  #2. If none are literal, but the id on the left is higher.
 bool shouldInvert(ExprCP left, ExprCP right) {
-  if (left->type() == PlanType::kLiteral &&
-      right->type() != PlanType::kLiteral) {
+  if (left->type() == PlanType::kLiteralExpr &&
+      right->type() != PlanType::kLiteralExpr) {
     return true;
   } else if (
-      (left->type() != PlanType::kLiteral) &&
-      (right->type() != PlanType::kLiteral) && (left->id() > right->id())) {
+      (left->type() != PlanType::kLiteralExpr) &&
+      (right->type() != PlanType::kLiteralExpr) && (left->id() > right->id())) {
     return true;
   } else {
     return false;
@@ -515,7 +515,6 @@ void Optimization::canonicalizeCall(Name& name, ExprVector& args) {
     return;
   }
   VELOX_CHECK_EQ(args.size(), 2, "Expecting binary op {}", name);
-
   if (shouldInvert(args[0], args[1])) {
     std::swap(args[0], args[1]);
     name = names.reverse(name);
@@ -637,9 +636,9 @@ ExprCP Optimization::translateExpr(const lp::ExprPtr& expr) {
 
   for (auto i = 0; i < inputs.size(); ++i) {
     args[i] = translateExpr(inputs[i]);
-    allConstant &= args[i]->type() == PlanType::kLiteral;
+    allConstant &= args[i]->type() == PlanType::kLiteralExpr;
     cardinality = std::max(cardinality, args[i]->value().cardinality);
-    if (args[i]->type() == PlanType::kCall) {
+    if (args[i]->type() == PlanType::kCallExpr) {
       funcs = funcs | args[i]->as<Call>()->functions();
     }
   }
@@ -730,7 +729,7 @@ std::optional<ExprCP> Optimization::translateSubfieldFunction(
     if (allUsed || usedArgs.contains(i)) {
       args[i] = translateExpr(call->inputs()[i]);
       cardinality = std::max(cardinality, args[i]->value().cardinality);
-      if (args[i]->type() == PlanType::kCall) {
+      if (args[i]->type() == PlanType::kCallExpr) {
         funcs = funcs | args[i]->as<Call>()->functions();
       }
     } else {
@@ -785,7 +784,7 @@ AggregationP Optimization::translateAggregation(
     auto name = toName(logicalAgg.outputType()->nameOf(i));
     auto* key = aggregation->grouping[i];
 
-    if (key->type() == PlanType::kColumn) {
+    if (key->type() == PlanType::kColumnExpr) {
       aggregation->mutableColumns().push_back(key->as<Column>());
     } else {
       toType(logicalAgg.outputType()->childAt(i));
@@ -864,7 +863,9 @@ PlanObjectP Optimization::addOrderBy(const lp::SortNode& order) {
     keys.push_back(translateExpr(field.expression));
   }
 
-  currentSelect_->orderBy = make<OrderBy>(nullptr, keys, orderType);
+  currentSelect_->orderByKeys = keys;
+  currentSelect_->orderByTypes = orderType;
+
   return currentSelect_;
 }
 
@@ -919,11 +920,11 @@ void Optimization::translateJoin(const lp::JoinNode& join) {
   const auto joinType = join.joinType();
   const bool isInner = joinType == lp::JoinType::kInner;
 
-  makeQueryGraph(*joinLeft, allow(PlanType::kJoin));
+  makeQueryGraph(*joinLeft, allow(PlanType::kJoinNode));
 
   // For an inner join a join tree on the right can be flattened, for all other
   // kinds it must be kept together in its own dt.
-  makeQueryGraph(*joinRight, isInner ? allow(PlanType::kJoin) : 0);
+  makeQueryGraph(*joinRight, isInner ? allow(PlanType::kJoinNode) : 0);
 
   ExprVector conjuncts;
   translateConjuncts(join.condition(), conjuncts);
@@ -1400,7 +1401,7 @@ PlanObjectP Optimization::makeQueryGraph(
       return makeBaseTable(*node.asUnchecked<lp::TableScanNode>());
 
     case lp::NodeKind::kFilter: {
-      if (!contains(allowedInDt, PlanType::kFilter)) {
+      if (!contains(allowedInDt, PlanType::kFilterNode)) {
         return wrapInDt(node);
       }
 
@@ -1423,16 +1424,16 @@ PlanObjectP Optimization::makeQueryGraph(
       return addProjection(node.asUnchecked<lp::ProjectNode>());
 
     case lp::NodeKind::kAggregate:
-      if (!contains(allowedInDt, PlanType::kAggregation)) {
+      if (!contains(allowedInDt, PlanType::kAggregationNode)) {
         return wrapInDt(node);
       }
 
       makeQueryGraph(
-          *node.onlyInput(), makeDtIf(allowedInDt, PlanType::kAggregation));
+          *node.onlyInput(), makeDtIf(allowedInDt, PlanType::kAggregationNode));
       return addAggregation(*node.asUnchecked<lp::AggregateNode>());
 
     case lp::NodeKind::kJoin:
-      if (!contains(allowedInDt, PlanType::kJoin)) {
+      if (!contains(allowedInDt, PlanType::kJoinNode)) {
         return wrapInDt(node);
       }
 
@@ -1440,12 +1441,12 @@ PlanObjectP Optimization::makeQueryGraph(
       return currentSelect_;
 
     case lp::NodeKind::kSort:
-      if (!contains(allowedInDt, PlanType::kOrderBy)) {
+      if (!contains(allowedInDt, PlanType::kOrderByNode)) {
         return wrapInDt(node);
       }
 
       makeQueryGraph(
-          *node.onlyInput(), makeDtIf(allowedInDt, PlanType::kOrderBy));
+          *node.onlyInput(), makeDtIf(allowedInDt, PlanType::kOrderByNode));
       return addOrderBy(*node.asUnchecked<lp::SortNode>());
 
     case lp::NodeKind::kLimit: {
@@ -1454,12 +1455,12 @@ PlanObjectP Optimization::makeQueryGraph(
       // SELECT * FROM (SELECT * FROM t LIMIT 10 OFFSET 5) LIMIT 10 OFFSET 5
       // is equivalent to
       //    SELECT * FROM t LIMIT 5 OFFSET 10
-      if (!contains(allowedInDt, PlanType::kLimit)) {
+      if (!contains(allowedInDt, PlanType::kLimitNode)) {
         return wrapInDt(node);
       }
 
       makeQueryGraph(
-          *node.onlyInput(), makeDtIf(allowedInDt, PlanType::kLimit));
+          *node.onlyInput(), makeDtIf(allowedInDt, PlanType::kLimitNode));
       return addLimit(*node.asUnchecked<lp::LimitNode>());
     }
 

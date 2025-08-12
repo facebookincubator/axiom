@@ -131,22 +131,22 @@ void Schema::addTable(SchemaTableCP table) const {
 }
 
 float tableCardinality(PlanObjectCP table) {
-  if (table->type() == PlanType::kTable) {
+  if (table->type() == PlanType::kTableNode) {
     return table->as<BaseTable>()
         ->schemaTable->columnGroups[0]
         ->distribution()
         .cardinality;
-  } else if (table->type() == PlanType::kValuesTable) {
+  } else if (table->type() == PlanType::kValuesTableNode) {
     return table->as<ValuesTable>()->cardinality();
   }
-  VELOX_CHECK(table->type() == PlanType::kDerivedTable);
+  VELOX_CHECK(table->type() == PlanType::kDerivedTableNode);
   return table->as<DerivedTable>()->distribution->cardinality;
 }
 
 // The fraction of rows of a base table selected by non-join filters. 0.2
 // means 1 in 5 are selected.
 float baseSelectivity(PlanObjectCP object) {
-  if (object->type() == PlanType::kTable) {
+  if (object->type() == PlanType::kTableNode) {
     return object->as<BaseTable>()->filterSelectivity;
   }
   return 1;
@@ -156,7 +156,7 @@ namespace {
 template <typename T>
 ColumnCP findColumnByName(const T& columns, Name name) {
   for (auto column : columns) {
-    if (column->type() == PlanType::kColumn &&
+    if (column->type() == PlanType::kColumnExpr &&
         column->template as<Column>()->name() == name) {
       return column->template as<Column>();
     }
@@ -167,7 +167,7 @@ ColumnCP findColumnByName(const T& columns, Name name) {
 
 bool SchemaTable::isUnique(CPSpan<Column> columns) const {
   for (auto& column : columns) {
-    if (column->type() != PlanType::kColumn) {
+    if (column->type() != PlanType::kColumnExpr) {
       return false;
     }
   }
@@ -242,7 +242,7 @@ IndexInfo SchemaTable::indexInfo(ColumnGroupP index, CPSpan<Column> columns)
 
   for (auto i = 0; i < columns.size(); ++i) {
     auto column = columns[i];
-    if (column->type() != PlanType::kColumn) {
+    if (column->type() != PlanType::kColumnExpr) {
       // Join key is an expression dependent on the table.
       covered.unionColumns(column->as<Expr>());
       info.joinCardinality = combine(
@@ -302,11 +302,10 @@ IndexInfo SchemaTable::indexByColumns(CPSpan<Column> columns) const {
 }
 
 IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys) {
-  if (table->type() == PlanType::kTable) {
+  if (table->type() == PlanType::kTableNode) {
     auto schemaTable = table->as<BaseTable>()->schemaTable;
     return schemaTable->indexByColumns(keys);
   }
-
   IndexInfo result;
   auto computeCardinalities = [&](float scanCardinality) {
     result.scanCardinality = scanCardinality;
@@ -317,12 +316,12 @@ IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys) {
     }
   };
 
-  if (table->type() == PlanType::kValuesTable) {
+  if (table->type() == PlanType::kValuesTableNode) {
     const auto* valuesTable = table->as<ValuesTable>();
     computeCardinalities(valuesTable->cardinality());
     return result;
   }
-  VELOX_CHECK(table->type() == PlanType::kDerivedTable);
+  VELOX_CHECK(table->type() == PlanType::kDerivedTableNode);
   const auto* dt = table->as<DerivedTable>();
   const auto* distribution = dt->distribution;
   VELOX_CHECK_NOT_NULL(distribution);
@@ -410,6 +409,11 @@ std::string Distribution::toString() const {
   if (isBroadcast) {
     return "broadcast";
   }
+
+  if (distributionType.isGather) {
+    return "gather";
+  }
+
   std::stringstream out;
   if (!partition.empty()) {
     out << "P ";

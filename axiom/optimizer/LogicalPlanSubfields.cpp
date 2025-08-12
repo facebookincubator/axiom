@@ -196,7 +196,7 @@ lp::ConstantExprPtr Optimization::maybeFoldLogicalConstant(
   }
   if (looksConstant(expr)) {
     auto literal = translateExpr(expr);
-    if (literal->type() == PlanType::kLiteral) {
+    if (literal->type() == PlanType::kLiteralExpr) {
       return std::make_shared<lp::ConstantExpr>(
           toTypePtr(literal->value().type),
           std::make_shared<Variant>(literal->as<Literal>()->literal()));

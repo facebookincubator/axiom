@@ -140,11 +140,10 @@ TEST_F(HiveLimitQueriesTest, limit) {
     auto distributedPlan =
         planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
     const auto& fragments = distributedPlan.plan->fragments();
-    ASSERT_EQ(3, fragments.size());
+    ASSERT_EQ(2, fragments.size());
 
     EXPECT_EQ(fragments.at(0).scans.size(), 1);
     EXPECT_EQ(fragments.at(1).scans.size(), 0);
-    EXPECT_EQ(fragments.at(2).scans.size(), 0);
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
@@ -156,11 +155,7 @@ TEST_F(HiveLimitQueriesTest, limit) {
                        .build();
     ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
 
-    matcher = core::PlanMatcherBuilder()
-                  .exchange()
-                  .finalLimit(0, 10)
-                  .partitionedOutput()
-                  .build();
+    matcher = core::PlanMatcherBuilder().exchange().finalLimit(0, 10).build();
     ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
 
     checkResults(distributedPlan, referenceResults);
@@ -220,11 +215,10 @@ TEST_F(HiveLimitQueriesTest, offset) {
     auto distributedPlan =
         planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
     const auto& fragments = distributedPlan.plan->fragments();
-    ASSERT_EQ(3, fragments.size());
+    ASSERT_EQ(2, fragments.size());
 
     EXPECT_EQ(fragments.at(0).scans.size(), 1);
     EXPECT_EQ(fragments.at(1).scans.size(), 0);
-    EXPECT_EQ(fragments.at(2).scans.size(), 0);
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
@@ -236,11 +230,7 @@ TEST_F(HiveLimitQueriesTest, offset) {
                        .build();
     ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
 
-    matcher = core::PlanMatcherBuilder()
-                  .exchange()
-                  .finalLimit(5, 10)
-                  .partitionedOutput()
-                  .build();
+    matcher = core::PlanMatcherBuilder().exchange().finalLimit(5, 10).build();
     ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
 
     checkResults(distributedPlan, referenceResults);
@@ -340,11 +330,10 @@ TEST_F(HiveLimitQueriesTest, orderByLimit) {
     auto distributedPlan =
         planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
     const auto& fragments = distributedPlan.plan->fragments();
-    ASSERT_EQ(3, fragments.size());
+    ASSERT_EQ(2, fragments.size());
 
     EXPECT_EQ(fragments.at(0).scans.size(), 1);
     EXPECT_EQ(fragments.at(1).scans.size(), 0);
-    EXPECT_EQ(fragments.at(2).scans.size(), 0);
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
@@ -358,7 +347,6 @@ TEST_F(HiveLimitQueriesTest, orderByLimit) {
                   .mergeExchange()
                   .finalLimit(0, 10)
                   .project()
-                  .partitionedOutput()
                   .build();
     ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
 

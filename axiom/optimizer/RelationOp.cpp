@@ -443,6 +443,34 @@ std::string Project::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+namespace {
+Distribution makeOrderByDistribution(
+    const RelationOpPtr& input,
+    ExprVector keys,
+    OrderTypeVector orderType) {
+  Distribution distribution = input->distribution();
+
+  distribution.distributionType = DistributionType::gather();
+  distribution.partition.clear();
+  distribution.order = std::move(keys);
+  distribution.orderType = std::move(orderType);
+
+  return distribution;
+}
+} // namespace
+
+OrderBy::OrderBy(
+    RelationOpPtr input,
+    ExprVector keys,
+    OrderTypeVector orderType)
+    : RelationOp(
+          RelType::kOrderBy,
+          input,
+          makeOrderByDistribution(
+              input,
+              std::move(keys),
+              std::move(orderType))) {}
+
 std::string OrderBy::toString(bool recursive, bool detail) const {
   std::stringstream out;
   if (recursive) {
@@ -456,6 +484,28 @@ std::string OrderBy::toString(bool recursive, bool detail) const {
   }
   return out.str();
 }
+
+namespace {
+Distribution makeLimitDistribution(const RelationOpPtr& input, int64_t limit) {
+  Distribution distribution = input->distribution();
+
+  distribution.distributionType = DistributionType::gather();
+  distribution.partition.clear();
+  distribution.cardinality =
+      std::min<float>(input->distribution().cardinality, limit);
+
+  return distribution;
+}
+} // namespace
+
+Limit::Limit(RelationOpPtr input, int64_t limit, int64_t offset)
+    : RelationOp(
+          RelType::kLimit,
+          input,
+          makeLimitDistribution(input, limit),
+          input->columns()),
+      limit{limit},
+      offset{offset} {}
 
 std::string Limit::toString(bool recursive, bool detail) const {
   std::stringstream out;
