@@ -363,7 +363,7 @@ class VeloxRunner : public QueryBenchmarkBase {
       }
     } else {
       if (!FLAGS_test_flags_file.empty()) {
-        logicalPlan_ = logicalPlan;
+        plan_ = logicalPlan;
         try {
           parameters_.clear();
           runStats_.clear();
@@ -592,7 +592,7 @@ class VeloxRunner : public QueryBenchmarkBase {
   void runMain(std::ostream& out, RunStats& runStats) override {
     std::vector<RowVectorPtr> result;
     auto runner =
-        runSql(logicalPlan_, &result, nullptr, nullptr, nullptr, &runStats);
+        runSql(plan_, &result, nullptr, nullptr, nullptr, &runStats);
     if (FLAGS_check_test_flag_combinations) {
       if (hasReferenceResult_) {
         exec::test::assertEqualResults(referenceResult_, result);
@@ -741,7 +741,7 @@ class VeloxRunner : public QueryBenchmarkBase {
   int32_t numPlanMismatch_{0};
   int32_t numResultMismatch_{0};
   int32_t queryCounter_{0};
-  logical_plan::LogicalPlanNodePtr logicalPlan_;
+  logical_plan::LogicalPlanNodePtr plan_;
   bool hasReferenceResult_{false};
   // Keeps live 'referenceResult_'.
   std::shared_ptr<runner::LocalRunner> referenceRunner_;

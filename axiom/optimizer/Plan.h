@@ -124,7 +124,7 @@ struct ResultAccess {
 };
 
 /// PlanNode output columns and function arguments with accessed subfields.
-struct LogicalPlanSubfields {
+struct PlanSubfields {
   std::unordered_map<const logical_plan::LogicalPlanNode*, ResultAccess>
       nodeFields;
   std::unordered_map<const velox::logical_plan::Expr*, ResultAccess> argFields;
@@ -1241,7 +1241,7 @@ class Optimization {
   runner::ExecutableFragment newFragment();
 
   PlanObjectCP findLeaf(const logical_plan::LogicalPlanNode* node) {
-    auto* leaf = logicalPlanLeaves_[node];
+    auto* leaf = planLeaves_[node];
     VELOX_CHECK_NOT_NULL(leaf);
     return leaf;
   }
@@ -1251,7 +1251,7 @@ class Optimization {
   OptimizerOptions opts_;
 
   // Top level plan to optimize.
-  const logical_plan::LogicalPlanNode* logicalPlan_{nullptr};
+  const logical_plan::LogicalPlanNode* plan_{nullptr};
 
   // Source of historical cost/cardinality information.
   History& history_;
@@ -1264,7 +1264,7 @@ class Optimization {
   DerivedTableP currentSelect_;
 
   // Source PlanNode when inside addProjection() or 'addFilter().
-  const logical_plan::LogicalPlanNode* logicalExprSource_{nullptr};
+  const logical_plan::LogicalPlanNode* exprSource_{nullptr};
 
   // Maps names in project noes of 'inputPlan_' to deduplicated Exprs.
   std::unordered_map<std::string, ExprCP> renames_;
@@ -1315,10 +1315,10 @@ class Optimization {
 
   // Column and subfield access info for filters, joins, grouping and other
   // things affecting result row selection.
-  LogicalPlanSubfields logicalControlSubfields_;
+  PlanSubfields controlSubfields_;
 
   // Column and subfield info for items that only affect column values.
-  LogicalPlanSubfields logicalPayloadSubfields_;
+  PlanSubfields payloadSubfields_;
 
   /// Expressions corresponding to skyline paths over a subfield decomposable
   /// function.
@@ -1326,7 +1326,7 @@ class Optimization {
       functionSubfields_;
 
   std::unordered_map<const logical_plan::CallExpr*, SubfieldProjections>
-      logicalFunctionSubfields_;
+      functionSubfields_;
 
   // Every unique path step, expr pair. For paths c.f1.f2 and c.f1.f3 there are
   // 3 entries: c.f1 and c.f1.f2 and c1.f1.f3, where the two last share the same
@@ -1338,7 +1338,7 @@ class Optimization {
   std::unordered_set<const core::CallTypedExpr*> translatedSubfieldFuncs_;
 
   std::unordered_set<const logical_plan::CallExpr*>
-      logicalTranslatedSubfieldFuncs_;
+      translatedSubfieldFuncs_;
 
   /// If subfield extraction is pushed down, then these give the skyline
   /// subfields for a column for control and payload situations. The same column
@@ -1363,7 +1363,7 @@ class Optimization {
 
   // Map from leaf PlanNode to corresponding PlanObject
   std::unordered_map<const logical_plan::LogicalPlanNode*, PlanObjectCP>
-      logicalPlanLeaves_;
+      planLeaves_;
 
   // Map from plan object id to pair of handle with pushdown filters and list of
   // filters to eval on the result from the handle.

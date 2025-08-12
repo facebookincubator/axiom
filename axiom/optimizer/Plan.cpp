@@ -81,7 +81,7 @@ Optimization::Optimization(
     runner::MultiFragmentPlan::Options options)
     : schema_(schema),
       opts_(std::move(opts)),
-      logicalPlan_(&plan),
+      plan_(&plan),
       history_(history),
       queryCtx_(std::move(_queryCtx)),
       evaluator_(evaluator),
@@ -95,7 +95,7 @@ Optimization::Optimization(
   for (auto* join : root_->joins) {
     join->guessFanout();
   }
-  setDerivedTableOutput(root_, *logicalPlan_);
+  setDerivedTableOutput(root_, *plan_);
 }
 
 void Optimization::trace(

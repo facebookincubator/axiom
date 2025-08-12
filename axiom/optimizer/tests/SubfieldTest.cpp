@@ -36,7 +36,7 @@ namespace lp = facebook::velox::logical_plan;
 
 namespace facebook::velox::optimizer {
 
-class LogicalSubfieldTest : public QueryTestBase,
+class SubfieldTest : public QueryTestBase,
                             public testing::WithParamInterface<int32_t> {
  protected:
   static void SetUpTestCase() {
@@ -359,7 +359,7 @@ class LogicalSubfieldTest : public QueryTestBase,
   }
 };
 
-TEST_P(LogicalSubfieldTest, structs) {
+TEST_P(SubfieldTest, structs) {
   auto structType =
       ROW({"s1", "s2", "s3"},
           {BIGINT(), ROW({"s2s1"}, {BIGINT()}), ARRAY(BIGINT())});
@@ -387,7 +387,7 @@ TEST_P(LogicalSubfieldTest, structs) {
   assertSame(referencePlan, fragmentedPlan);
 }
 
-TEST_P(LogicalSubfieldTest, maps) {
+TEST_P(SubfieldTest, maps) {
   FeatureOptions opts;
   opts.rng.seed(1);
   auto vectors = makeFeatures(1, 100, opts, pool_.get());
@@ -574,8 +574,8 @@ TEST_P(LogicalSubfieldTest, maps) {
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
-    LogicalSubfieldTests,
-    LogicalSubfieldTest,
+    SubfieldTests,
+    SubfieldTest,
     testing::ValuesIn(std::vector<int32_t>{1, 2, 3}));
 
 } // namespace facebook::velox::optimizer

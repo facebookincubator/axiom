@@ -48,7 +48,7 @@ void Optimization::markFieldAccessed(
     const std::vector<const RowType*>& context,
     const std::vector<LogicalContextSource>& sources) {
   const auto fields =
-      isControl ? &logicalControlSubfields_ : &logicalPayloadSubfields_;
+      isControl ? &controlSubfields_ : &payloadSubfields_;
   if (source.planNode) {
     const auto* path = stepsToPath(steps);
     auto& paths = fields->nodeFields[source.planNode].resultPaths[ordinal];
@@ -293,7 +293,7 @@ void Optimization::markSubfields(
     const auto* call = expr->asUnchecked<lp::CallExpr>();
     const auto* path = stepsToPath(steps);
     auto* fields =
-        isControl ? &logicalControlSubfields_ : &logicalPayloadSubfields_;
+        isControl ? &controlSubfields_ : &payloadSubfields_;
     if (fields->argFields[call].resultPaths[ResultAccess::kSelf].contains(
             path->id())) {
       // Already marked.
@@ -459,8 +459,8 @@ void Optimization::markAllSubfields(
 
 std::vector<int32_t> Optimization::usedChannels(
     const lp::LogicalPlanNode* node) {
-  const auto& control = logicalControlSubfields_.nodeFields[node];
-  const auto& payload = logicalPayloadSubfields_.nodeFields[node];
+  const auto& control = controlSubfields_.nodeFields[node];
+  const auto& payload = payloadSubfields_.nodeFields[node];
 
   BitSet unique;
   std::vector<int32_t> result;
