@@ -96,9 +96,28 @@ float orderPrefixDistance(
   return selection;
 }
 
+namespace {
+
+// For leaf nodes, the fanout represents the cardinality, and the unitCost is
+// the total cost.
+// For non-leaf nodes, the fanout represents the change in cardinality (output
+// cardinality / input cardinality), and the unitCost is the per-row cost.
+void updateLeafCost(
+    float cardinality,
+    const ColumnVector& columns,
+    Cost& cost) {
+  cost.fanout = cardinality;
+  const auto size = byteSize(columns);
+  const auto numColumns = columns.size();
+  const auto rowCost = numColumns * Costs::kColumnRowCost +
+      std::max<float>(0, size - 8 * numColumns) * Costs::kColumnByteCost;
+  cost.unitCost += cost.fanout * rowCost;
+}
+
+} // namespace
+
 void TableScan::setCost(const PlanState& input) {
   RelationOp::setCost(input);
-  float size = byteSize(columns_);
   if (!keys.empty()) {
     float lookupRange(index->distribution().cardinality);
     float orderSelectivity = orderPrefixDistance(this->input(), index, keys);
@@ -116,14 +135,16 @@ void TableScan::setCost(const PlanState& input) {
       cost_.unitCost = batchCost / batchSize;
     }
     return;
-  } else {
-    cost_.fanout =
-        index->distribution().cardinality * baseTable->filterSelectivity;
   }
-  auto numColumns = columns_.size();
-  auto rowCost = numColumns * Costs::kColumnRowCost +
-      std::max<float>(0, size - 8 * numColumns) * Costs::kColumnByteCost;
-  cost_.unitCost += cost_.fanout * rowCost;
+  const auto cardinality =
+      index->distribution().cardinality * baseTable->filterSelectivity;
+  updateLeafCost(cardinality, columns_, cost_);
+}
+
+void Values::setCost(const PlanState& input) {
+  RelationOp::setCost(input);
+  const auto cardinality = valuesTable.cardinality();
+  updateLeafCost(cardinality, columns_, cost_);
 }
 
 void Aggregation::setCost(const PlanState& input) {

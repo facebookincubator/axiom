@@ -30,8 +30,8 @@ using JoinEdgeVector = std::vector<JoinEdgeP, QGAllocator<JoinEdgeP>>;
 struct AggregationPlan;
 using AggregationPlanCP = const AggregationPlan*;
 
-struct OrderBy;
-using OrderByP = OrderBy*;
+enum class OrderType;
+using OrderTypeVector = std::vector<OrderType, QGAllocator<OrderType>>;
 
 /// Represents a derived table, i.e. a SELECT in a FROM clause. This is the
 /// basic unit of planning. Derived tables can be merged and split apart from
@@ -114,7 +114,12 @@ struct DerivedTable : public PlanObject {
   /// Postprocessing clauses, group by, having, order by, limit, offset.
   AggregationPlanCP aggregation{nullptr};
   ExprVector having;
-  OrderByP orderBy{nullptr};
+
+  /// Order by.
+  ExprVector orderByKeys;
+  OrderTypeVector orderByTypes;
+
+  /// Limit and offset.
   int64_t limit{-1};
   int64_t offset{0};
 
@@ -170,6 +175,14 @@ struct DerivedTable : public PlanObject {
   /// inside the current dt when planning.
   bool hasJoin(JoinEdgeP join) const {
     return std::find(joins.begin(), joins.end(), join) != joins.end();
+  }
+
+  bool hasOrderBy() const {
+    return !orderByKeys.empty();
+  }
+
+  bool hasLimit() const {
+    return limit >= 0;
   }
 
   /// Fills in 'startTables_' to 'tables_' that are not to the right of

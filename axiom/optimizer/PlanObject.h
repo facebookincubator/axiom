@@ -24,20 +24,21 @@ namespace facebook::velox::optimizer {
 /// a query graph and later to differentiate between tables, derived
 /// tables and different expressions.
 enum class PlanType {
-  kTableNode,
-  kDerivedTableNode,
   kColumnExpr,
   kLiteralExpr,
   kCallExpr,
   kAggregateExpr,
+  kFieldExpr,
+  kLambdaExpr,
+  kTableNode,
+  kValuesTableNode,
+  kDerivedTableNode,
   kAggregationNode,
   kProjectNode,
   kFilterNode,
   kJoinNode,
   kOrderByNode,
-  kLimitNode,
-  kFieldExpr,
-  kLambdaExpr
+  kLimitNode
 };
 
 /// True if 'type' is an expression with a value.

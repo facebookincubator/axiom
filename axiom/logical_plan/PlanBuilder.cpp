@@ -44,7 +44,48 @@ PlanBuilder& PlanBuilder::values(
   }
 
   node_ = std::make_shared<ValuesNode>(
-      nextId(), ROW(outputNames, rowType->children()), std::move(rows));
+      nextId(),
+      ROW(std::move(outputNames), rowType->children()),
+      std::move(rows));
+
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::values(const std::vector<RowVectorPtr>& values) {
+  VELOX_USER_CHECK_NULL(node_, "Values node must be the leaf node");
+
+  outputMapping_ = std::make_shared<NameMappings>();
+
+  auto rowType = values.empty() ? ROW({}) : values.front()->rowType();
+  const auto numColumns = rowType->size();
+  std::vector<std::string> outputNames;
+  outputNames.reserve(numColumns);
+  for (const auto& name : rowType->names()) {
+    outputNames.push_back(newName(name));
+    outputMapping_->add(name, outputNames.back());
+  }
+  rowType = ROW(std::move(outputNames), rowType->children());
+
+  std::vector<RowVectorPtr> newValues;
+  newValues.reserve(values.size());
+  for (const auto& value : values) {
+    VELOX_USER_CHECK_NOT_NULL(value);
+    VELOX_USER_CHECK(
+        value->rowType()->equivalent(*rowType),
+        "All values must have the equilent type: {} vs. {}",
+        value->rowType()->toString(),
+        rowType->toString());
+    auto newValue = std::make_shared<RowVector>(
+        value->pool(),
+        rowType,
+        value->nulls(),
+        static_cast<size_t>(value->size()),
+        value->children(),
+        value->getNullCount());
+    newValues.emplace_back(std::move(newValue));
+  }
+
+  node_ = std::make_shared<ValuesNode>(nextId(), std::move(newValues));
 
   return *this;
 }
@@ -943,10 +984,19 @@ PlanBuilder& PlanBuilder::sort(const std::vector<std::string>& sortingKeys) {
   return *this;
 }
 
-PlanBuilder& PlanBuilder::limit(int32_t offset, int32_t count) {
+PlanBuilder& PlanBuilder::limit(int64_t offset, int64_t count) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Limit node cannot be a leaf node");
 
   node_ = std::make_shared<LimitNode>(nextId(), node_, offset, count);
+
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::offset(int64_t offset) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Offset node cannot be a leaf node");
+
+  node_ = std::make_shared<LimitNode>(
+      nextId(), node_, offset, std::numeric_limits<int64_t>::max());
 
   return *this;
 }

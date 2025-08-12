@@ -132,6 +132,8 @@ class PlanBuilder {
 
   PlanBuilder& values(const RowTypePtr& rowType, std::vector<Variant> rows);
 
+  PlanBuilder& values(const std::vector<RowVectorPtr>& values);
+
   /// Equivalent to SELECT col1, col2,.. FROM <tableName>.
   PlanBuilder& tableScan(
       const std::string& connectorId,
@@ -243,7 +245,9 @@ class PlanBuilder {
     return limit(0, count);
   }
 
-  PlanBuilder& limit(int32_t offset, int32_t count);
+  PlanBuilder& limit(int64_t offset, int64_t count);
+
+  PlanBuilder& offset(int64_t offset);
 
   PlanBuilder& as(const std::string& alias);
 

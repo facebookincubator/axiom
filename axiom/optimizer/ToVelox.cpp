@@ -529,6 +529,87 @@ runner::ExecutableFragment Optimization::newFragment() {
   return fragment;
 }
 
+namespace {
+core::PlanNodePtr addPartialLimit(
+    const core::PlanNodeId& id,
+    int64_t offset,
+    int64_t limit,
+    const core::PlanNodePtr& input) {
+  return std::make_shared<core::LimitNode>(
+      id,
+      offset,
+      limit,
+      /* isPartial */ true,
+      input);
+}
+
+core::PlanNodePtr addFinalLimit(
+    const core::PlanNodeId& id,
+    int64_t offset,
+    int64_t limit,
+    const core::PlanNodePtr& input) {
+  return std::make_shared<core::LimitNode>(
+      id,
+      offset,
+      limit,
+      /* isPartial */ false,
+      input);
+}
+
+core::PlanNodePtr addLocalGather(
+    const core::PlanNodeId& id,
+    const core::PlanNodePtr& input) {
+  return core::LocalPartitionNode::gather(
+      id, std::vector<core::PlanNodePtr>{input});
+}
+
+core::PlanNodePtr addLocalMerge(
+    const core::PlanNodeId& id,
+    const std::vector<core::FieldAccessTypedExprPtr>& keys,
+    const std::vector<core::SortOrder>& sortOrder,
+    const core::PlanNodePtr& input) {
+  return std::make_shared<core::LocalMergeNode>(
+      id, keys, sortOrder, std::vector<core::PlanNodePtr>{input});
+}
+
+core::PlanNodePtr addPartialTopN(
+    const core::PlanNodeId& id,
+    const std::vector<core::FieldAccessTypedExprPtr>& keys,
+    const std::vector<core::SortOrder>& sortOrder,
+    int64_t count,
+    const core::PlanNodePtr& input) {
+  return std::make_shared<core::TopNNode>(
+      id,
+      keys,
+      sortOrder,
+      count,
+      /* isPartial */ true,
+      input);
+}
+
+core::PlanNodePtr addFinalTopN(
+    const core::PlanNodeId& id,
+    const std::vector<core::FieldAccessTypedExprPtr>& keys,
+    const std::vector<core::SortOrder>& sortOrder,
+    int64_t count,
+    const core::PlanNodePtr& input) {
+  return std::make_shared<core::TopNNode>(
+      id,
+      keys,
+      sortOrder,
+      count,
+      /* isPartial */ false,
+      input);
+}
+
+core::SortOrder toSortOrder(const OrderType& order) {
+  return order == OrderType::kAscNullsFirst ? core::kAscNullsFirst
+      : order == OrderType ::kAscNullsLast  ? core::kAscNullsLast
+      : order == OrderType::kDescNullsFirst ? core::kDescNullsFirst
+                                            : core::kDescNullsLast;
+}
+} // namespace
+
 core::PlanNodePtr Optimization::makeOrderBy(
     const OrderBy& op,
     ExecutableFragment& fragment,
@@ -538,110 +619,152 @@ core::PlanNodePtr Optimization::makeOrderBy(
     toVeloxOffset_ = root_->offset;
   }
 
-  // TODO Do not add remove exchange if isSingle_ == true.
-  // TODO Add local exchange if numDrivers > 1.
-
-  auto source = newFragment();
-
-  auto input = makeFragment(op.input(), source, stages);
-
   std::vector<core::SortOrder> sortOrder;
   sortOrder.reserve(op.distribution().orderType.size());
   for (auto order : op.distribution().orderType) {
-    sortOrder.push_back(
-        order == OrderType::kAscNullsFirst        ? core::kAscNullsFirst
-            : order == OrderType ::kAscNullsLast  ? core::kAscNullsLast
-            : order == OrderType::kDescNullsFirst ? core::kDescNullsFirst
-                                                  : core::kDescNullsLast);
+    sortOrder.push_back(toSortOrder(order));
   }
+
+  if (isSingle_) {
+    auto input = makeFragment(op.input(), fragment, stages);
+
+    TempProjections projections(*this, *op.input());
+    auto keys = projections.toFieldRefs(op.distribution().order);
+    auto project = projections.maybeProject(input);
+
+    if (options_.numDrivers == 1) {
+      if (toVeloxLimit_ <= 0) {
+        return std::make_shared<core::OrderByNode>(
+            nextId(), keys, sortOrder, false, project);
+      }
+
+      auto node = addFinalTopN(
+          nextId(), keys, sortOrder, toVeloxLimit_ + toVeloxOffset_, project);
+
+      if (toVeloxOffset_ > 0) {
+        return addFinalLimit(nextId(), toVeloxOffset_, toVeloxLimit_, node);
+      }
+
+      return node;
+    }
+
+    core::PlanNodePtr node;
+    if (toVeloxLimit_ <= 0) {
+      node = std::make_shared<core::OrderByNode>(
+          nextId(), keys, sortOrder, true, project);
+    } else {
+      node = addPartialTopN(
+          nextId(), keys, sortOrder, toVeloxLimit_ + toVeloxOffset_, project);
+    }
+
+    node = addLocalMerge(nextId(), keys, sortOrder, node);
+
+    if (toVeloxLimit_ > 0) {
+      return addFinalLimit(nextId(), toVeloxOffset_, toVeloxLimit_, node);
+    }
+
+    return node;
+  }
+
+  auto source = newFragment();
+  auto input = makeFragment(op.input(), source, stages);
 
   TempProjections projections(*this, *op.input());
   auto keys = projections.toFieldRefs(op.distribution().order);
   auto project = projections.maybeProject(input);
 
-  core::PlanNodePtr orderByNode;
+  core::PlanNodePtr node;
   if (toVeloxLimit_ <= 0) {
-    orderByNode = std::make_shared<core::OrderByNode>(
+    node = std::make_shared<core::OrderByNode>(
         nextId(), keys, sortOrder, true, project);
   } else {
-    orderByNode = std::make_shared<core::TopNNode>(
-        nextId(),
-        keys,
-        sortOrder,
-        toVeloxLimit_ + toVeloxOffset_,
-        true,
-        project);
+    node = addPartialTopN(
+        nextId(), keys, sortOrder, toVeloxLimit_ + toVeloxOffset_, project);
   }
 
-  auto localMerge = std::make_shared<core::LocalMergeNode>(
-      nextId(), keys, sortOrder, std::vector<core::PlanNodePtr>{orderByNode});
+  node = addLocalMerge(nextId(), keys, sortOrder, node);
 
   source.fragment.planNode = core::PartitionedOutputNode::single(
-      nextId(),
-      localMerge->outputType(),
-      VectorSerde::Kind::kPresto,
-      localMerge);
+      nextId(), node->outputType(), exchangeSerdeKind_, node);
 
-  core::PlanNodePtr merge = std::make_shared<core::MergeExchangeNode>(
-      nextId(),
-      localMerge->outputType(),
-      keys,
-      sortOrder,
-      VectorSerde::Kind::kPresto);
+  auto merge = std::make_shared<core::MergeExchangeNode>(
+      nextId(), node->outputType(), keys, sortOrder, exchangeSerdeKind_);
 
   fragment.width = 1;
   fragment.inputStages.push_back(InputStage{merge->id(), source.taskPrefix});
   stages.push_back(std::move(source));
 
-  if (toVeloxLimit_ > 0 || toVeloxOffset_ != 0) {
-    return std::make_shared<core::LimitNode>(
-        nextId(), toVeloxOffset_, toVeloxLimit_, false, merge);
+  if (toVeloxLimit_ > 0) {
+    return addFinalLimit(nextId(), toVeloxOffset_, toVeloxLimit_, merge);
   }
   return merge;
+}
+
+velox::core::PlanNodePtr Optimization::makeOffset(
+    const Limit& op,
+    velox::runner::ExecutableFragment& fragment,
+    std::vector<velox::runner::ExecutableFragment>& stages) {
+  if (isSingle_) {
+    auto input = makeFragment(op.input(), fragment, stages);
+    return addFinalLimit(nextId(), op.offset, op.limit, input);
+  }
+
+  auto source = newFragment();
+  auto input = makeFragment(op.input(), source, stages);
+
+  source.fragment.planNode = core::PartitionedOutputNode::single(
+      nextId(), input->outputType(), exchangeSerdeKind_, input);
+
+  auto exchange = std::make_shared<core::ExchangeNode>(
+      nextId(), input->outputType(), exchangeSerdeKind_);
+
+  auto limitNode = addFinalLimit(nextId(), op.offset, op.limit, exchange);
+
+  fragment.width = 1;
+  fragment.inputStages.push_back(InputStage{exchange->id(), source.taskPrefix});
+  stages.push_back(std::move(source));
+
+  return limitNode;
 }
 
 core::PlanNodePtr Optimization::makeLimit(
     const Limit& op,
     ExecutableFragment& fragment,
     std::vector<ExecutableFragment>& stages) {
-  // TODO Add local exchange if numDrivers > 1.
+  if (op.isNoLimit()) {
+    return makeOffset(op, fragment, stages);
+  }
 
   if (isSingle_) {
     auto input = makeFragment(op.input(), fragment, stages);
-    return std::make_shared<core::LimitNode>(
-        nextId(),
-        op.offset,
-        op.limit,
-        /* isPartial */ false,
-        input);
+    if (options_.numDrivers == 1) {
+      return addFinalLimit(nextId(), op.offset, op.limit, input);
+    }
+
+    auto node = addPartialLimit(nextId(), 0, op.offset + op.limit, input);
+    node = addLocalGather(nextId(), node);
+    node = addFinalLimit(nextId(), op.offset, op.limit, node);
+
+    return node;
   }
 
   auto source = newFragment();
-
   auto input = makeFragment(op.input(), source, stages);
 
-  auto partialLimitNode = std::make_shared<core::LimitNode>(
-      nextId(),
-      op.offset,
-      op.limit,
-      /* isPartial */ true,
-      input);
+  auto node = addPartialLimit(nextId(), 0, op.offset + op.limit, input);
+
+  if (options_.numDrivers > 1) {
+    node = addLocalGather(nextId(), node);
+    node = addFinalLimit(nextId(), 0, op.offset + op.limit, node);
+  }
 
   source.fragment.planNode = core::PartitionedOutputNode::single(
-      nextId(),
-      partialLimitNode->outputType(),
-      VectorSerde::Kind::kPresto,
-      partialLimitNode);
+      nextId(), node->outputType(), exchangeSerdeKind_, node);
 
   auto exchange = std::make_shared<core::ExchangeNode>(
-      nextId(), partialLimitNode->outputType(), VectorSerde::Kind::kPresto);
+      nextId(), node->outputType(), exchangeSerdeKind_);
 
-  auto finalLimitNode = std::make_shared<core::LimitNode>(
-      nextId(),
-      op.offset,
-      op.limit,
-      /* isPartial */ false,
-      exchange);
+  auto finalLimitNode = addFinalLimit(nextId(), op.offset, op.limit, exchange);
 
   fragment.width = 1;
   fragment.inputStages.push_back(InputStage{exchange->id(), source.taskPrefix});
@@ -1080,7 +1203,7 @@ velox::core::PlanNodePtr Optimization::makeRepartition(
   auto partitionFunctionFactory = createPartitionFunctionSpec(
       partitioningInput->outputType(), keys, distribution.isBroadcast);
   if (distribution.isBroadcast) {
-    source.numBroadcastDestinations = options_.numWorkers;
+    source.numBroadcastDestinations = fragment.width;
   }
   source.fragment.planNode = std::make_shared<core::PartitionedOutputNode>(
       nextId(),
@@ -1088,16 +1211,16 @@ velox::core::PlanNodePtr Optimization::makeRepartition(
           ? core::PartitionedOutputNode::Kind::kBroadcast
           : core::PartitionedOutputNode::Kind::kPartitioned,
       keys,
-      (keys.empty()) ? 1 : options_.numWorkers,
+      keys.empty() ? 1 : fragment.width,
       false,
       std::move(partitionFunctionFactory),
       makeOutputType(repartition.columns()),
-      VectorSerde::Kind::kPresto,
+      exchangeSerdeKind_,
       partitioningInput);
 
   if (exchange == nullptr) {
     exchange = std::make_shared<core::ExchangeNode>(
-        nextId(), sourcePlan->outputType(), VectorSerde::Kind::kPresto);
+        nextId(), sourcePlan->outputType(), exchangeSerdeKind_);
   }
   fragment.inputStages.push_back(InputStage{exchange->id(), source.taskPrefix});
   stages.push_back(std::move(source));
@@ -1138,6 +1261,60 @@ velox::core::PlanNodePtr Optimization::makeUnionAll(
       localSources);
 }
 
+core::PlanNodePtr Optimization::makeValues(
+    const Values& values,
+    ExecutableFragment& fragment) {
+  fragment.width = 1;
+  const auto& newColumns = values.columns();
+  const auto newType = makeOutputType(newColumns);
+  VELOX_DCHECK_EQ(newColumns.size(), newType->size());
+
+  const auto& data = values.valuesTable.values.data();
+  std::vector<RowVectorPtr> newValues;
+  if ([[maybe_unused]] auto* row = std::get_if<std::vector<Variant>>(&data)) {
+    [[maybe_unused]] auto& newValue = newValues.emplace_back();
+    VELOX_NYI("Translate rows from vector<Variant> to RowVector");
+  } else {
+    const auto& oldValues = std::get<std::vector<RowVectorPtr>>(data);
+    newValues.reserve(oldValues.size());
+
+    VELOX_DCHECK(!oldValues.empty());
+    const auto oldType = oldValues.front()->rowType();
+
+    std::vector<uint32_t> oldColumnIdxs;
+    oldColumnIdxs.reserve(newColumns.size());
+    for (const auto& column : newColumns) {
+      auto oldColumnIdx = oldType->getChildIdx(column->name());
+      oldColumnIdxs.emplace_back(oldColumnIdx);
+    }
+
+    for (const auto& oldValue : oldValues) {
+      const auto& oldChildren = oldValue->children();
+      std::vector<VectorPtr> newChildren;
+      newChildren.reserve(oldColumnIdxs.size());
+      for (const auto columnIdx : oldColumnIdxs) {
+        newChildren.emplace_back(oldChildren[columnIdx]);
+      }
+
+      auto newValue = std::make_shared<RowVector>(
+          oldValue->pool(),
+          newType,
+          oldValue->nulls(),
+          oldValue->size(),
+          std::move(newChildren),
+          oldValue->getNullCount());
+      newValues.emplace_back(std::move(newValue));
+    }
+  }
+
+  auto valuesNode =
+      std::make_shared<core::ValuesNode>(nextId(), std::move(newValues));
+
+  makePredictionAndHistory(valuesNode->id(), &values);
+
+  return valuesNode;
+}
+
 void Optimization::makePredictionAndHistory(
     const core::PlanNodeId& id,
     const RelationOp* op) {
@@ -1173,6 +1350,8 @@ core::PlanNodePtr Optimization::makeFragment(
       return makeFragment(op->input(), fragment, stages);
     case RelType::kUnionAll:
       return makeUnionAll(*op->as<UnionAll>(), fragment, stages);
+    case RelType::kValues:
+      return makeValues(*op->as<Values>(), fragment);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

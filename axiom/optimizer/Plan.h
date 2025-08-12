@@ -177,7 +177,7 @@ using PlanPtr = Plan*;
 
 /// A set of build sides. a candidate plan tracks all builds so that they can be
 /// reused
-using BuildSet = std::vector<HashBuildPtr>;
+using HashBuildVector = std::vector<HashBuildCP>;
 
 /// Item produced by optimization and kept in memo. Corresponds to
 /// pre-costed physical plan with costs and data properties.
@@ -211,7 +211,7 @@ struct Plan {
   PlanObjectSet input;
 
   // hash join builds placed in the plan. Allows reusing a build.
-  BuildSet builds;
+  HashBuildVector builds;
 
   // the tables/derived tables that are contained in this plan and need not be
   // addressed by enclosing plans. This is all the tables in a build side join
@@ -306,7 +306,7 @@ struct NextJoin {
       const Cost& cost,
       const PlanObjectSet& placed,
       const PlanObjectSet& columns,
-      const BuildSet& builds)
+      const HashBuildVector& builds)
       : candidate(candidate),
         plan(plan),
         cost(cost),
@@ -319,7 +319,7 @@ struct NextJoin {
   Cost cost;
   PlanObjectSet placed;
   PlanObjectSet columns;
-  BuildSet newBuilds;
+  HashBuildVector newBuilds;
 
   /// If true, only 'other' should be tried. Use to compare equivalent joins
   /// with different join method or partitioning.
@@ -361,7 +361,7 @@ struct PlanState {
 
   // All the hash join builds in any branch of the partial plan constructed so
   // far.
-  BuildSet builds;
+  HashBuildVector builds;
 
   // True if we should backtrack when 'costs' exceeds the best cost with shuffle
   // from already generated plans.
@@ -384,7 +384,7 @@ struct PlanState {
   void addCost(RelationOp& op);
 
   /// Adds 'added' to all hash join builds.
-  void addBuilds(const BuildSet& added);
+  void addBuilds(const HashBuildVector& added);
 
   // Specifies that the plan to make only references 'target' columns and
   // whatever these depend on. These refer to 'columns' of 'dt'.
@@ -392,14 +392,14 @@ struct PlanState {
 
   /// Returns the  set of columns referenced in unplaced joins/filters union
   /// targetColumns. Gets smaller as more tables are placed.
-  PlanObjectSet downstreamColumns() const;
+  const PlanObjectSet& downstreamColumns() const;
 
   // Adds a placed join to the set of partial queries to be developed. No op if
   // cost exceeds best so far and cutoff is enabled.
   void addNextJoin(
       const JoinCandidate* candidate,
       RelationOpPtr plan,
-      BuildSet builds,
+      HashBuildVector builds,
       std::vector<NextJoin>& toTry) const;
 
   std::string printCost() const;
@@ -487,9 +487,6 @@ struct hash<::facebook::velox::optimizer::MemoKey> {
 namespace facebook::velox::optimizer {
 
 struct OptimizerOptions {
-  /// Do not make shuffles or final gather stage.
-  bool singleStage{false};
-
   /// Parallelizes independent projections over this many threads. 1 means no
   /// parallel projection.
   int32_t parallelProjectWidth = 1;
@@ -752,6 +749,8 @@ class Optimization {
 
   PlanObjectP makeBaseTable(const logical_plan::TableScanNode& tableScan);
 
+  PlanObjectP makeValuesTable(const logical_plan::ValuesNode& values);
+
   // Decomposes complex type columns into parts projected out as top
   // level if subfield pushdown is on.
   void makeSubfieldColumns(
@@ -1002,7 +1001,7 @@ class Optimization {
   void translateNonEqualityJoin(const velox::core::NestedLoopJoinNode& join);
 
   // Adds order by information to the enclosing DerivedTable.
-  OrderByP translateOrderBy(const velox::core::OrderByNode& order);
+  OrderByCP translateOrderBy(const velox::core::OrderByNode& order);
 
   // Adds aggregation information to the enclosing DerivedTable.
   AggregationP translateAggregation(
@@ -1167,6 +1166,12 @@ class Optimization {
       velox::runner::ExecutableFragment& fragment,
       std::vector<velox::runner::ExecutableFragment>& stages);
 
+  // @pre op.sNoLimit() is true.
+  velox::core::PlanNodePtr makeOffset(
+      const Limit& op,
+      velox::runner::ExecutableFragment& fragment,
+      std::vector<velox::runner::ExecutableFragment>& stages);
+
   velox::core::PlanNodePtr makeScan(
       const TableScan& scan,
       velox::runner::ExecutableFragment& fragment,
@@ -1199,6 +1204,10 @@ class Optimization {
       const UnionAll& unionAll,
       velox::runner::ExecutableFragment& fragment,
       std::vector<velox::runner::ExecutableFragment>& stages);
+
+  core::PlanNodePtr makeValues(
+      const Values& values,
+      runner::ExecutableFragment& fragment);
 
   // Makes a tree of PlanNode for a tree of
   // RelationOp. 'fragment' is the fragment that 'op'
@@ -1382,7 +1391,12 @@ class Optimization {
   };
 
   velox::runner::MultiFragmentPlan::Options options_;
+
+  // TODO Move this into MultiFragmentPlan::Options.
+  const VectorSerde::Kind exchangeSerdeKind_{VectorSerde::Kind::kPresto};
+
   PlanNodeIdGenerator idGenerator_;
+
   // Limit for a possible limit/top k order by for while making a Velox plan. -1
   // means no limit.
   int32_t toVeloxLimit_{-1};

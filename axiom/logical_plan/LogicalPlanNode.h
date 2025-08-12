@@ -18,6 +18,7 @@
 #include "axiom/logical_plan/Expr.h"
 #include "velox/common/Enums.h"
 #include "velox/type/Variant.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::logical_plan {
 
@@ -111,6 +112,10 @@ class LogicalPlanNode {
 /// A table whose content is embedded in the plan.
 class ValuesNode : public LogicalPlanNode {
  public:
+  using Rows = std::vector<Variant>;
+  using Values = std::vector<RowVectorPtr>;
+  using Data = std::variant<Rows, Values>;
+
   /// @param rowType Output schema. A list of column names and types. All names
   /// must be non-empty and unique.
   /// @param rows A list of rows. Each row is a list of values, one per column.
@@ -120,15 +125,24 @@ class ValuesNode : public LogicalPlanNode {
       const RowTypePtr& rowType,
       std::vector<Variant> rows);
 
-  const std::vector<Variant>& rows() const {
-    return rows_;
+  /// Memory pools used for RowVector's allocation should outlive the execution
+  /// of the plan.
+  ValuesNode(const std::string& id, std::vector<RowVectorPtr> values);
+
+  uint64_t cardinality() const {
+    return cardinality_;
+  }
+
+  const Data& data() const {
+    return data_;
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
  private:
-  const std::vector<Variant> rows_;
+  const uint64_t cardinality_ = 0;
+  const Data data_;
 };
 
 using ValuesNodePtr = std::shared_ptr<const ValuesNode>;
@@ -481,7 +495,8 @@ class LimitNode : public LogicalPlanNode {
  public:
   /// @param offset Zero-based index of the first row to return. Must be >= 0.
   /// @param count Maximum number of rows to return. Must be >= 0. If zero, the
-  /// node produces empty dataset.
+  /// node produces empty dataset. Use std::numeric_limits<int64_t>::max() to
+  /// indicate no limit, in which case offset must be > 0.
   LimitNode(
       const std::string& id,
       const LogicalPlanNodePtr& input,
@@ -492,6 +507,11 @@ class LimitNode : public LogicalPlanNode {
         count_{count} {
     VELOX_USER_CHECK_GE(offset, 0);
     VELOX_USER_CHECK_GE(count, 0);
+
+    if (count == std::numeric_limits<int64_t>::max()) {
+      VELOX_USER_CHECK_NE(
+          offset, 0, "Offset must be > zero if there is no limit");
+    }
   }
 
   int64_t offset() const {

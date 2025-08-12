@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <gtest/gtest.h>
-
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 DECLARE_string(data_path);
@@ -25,17 +23,22 @@ DECLARE_bool(create_dataset);
 
 namespace facebook::velox::optimizer::test {
 
-class ParquetTpchTest : public virtual testing::Test {
- protected:
-  static void SetUpTestCase();
-
-  static void TearDownTestCase();
+class ParquetTpchTest {
+ public:
+  /// Writes TPC-H tables in Parquet format to a temp directory. Use --data_path
+  /// GFlag to specify an alternative directory. That directory must exist.
+  ///
+  /// No-op if --data_path is specified, but --create_dataset is false.
+  ///
+  /// To create tables,
+  ///   - registers Hive and TPC-H connectors,
+  ///   - for each table, creates and runs Velox plan to read from TPC-H
+  ///   connector and
+  ///       write to Hive connector.
+  /// Unregisters Hive and TPC-H connectors before returning.
+  static void createTables();
 
  private:
-  static void saveTpchTablesAsParquet();
-
-  static std::string createPath_;
-  static std::string path_;
   static std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
 };
 

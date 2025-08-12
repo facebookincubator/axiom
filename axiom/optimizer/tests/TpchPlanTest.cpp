@@ -35,15 +35,13 @@ namespace lp = facebook::velox::logical_plan;
 namespace facebook::velox::optimizer {
 namespace {
 
-class TpchPlanTest : public virtual test::ParquetTpchTest,
-                     public virtual test::QueryTestBase {
+class TpchPlanTest : public virtual test::QueryTestBase {
  protected:
   static void SetUpTestCase() {
-    ParquetTpchTest::SetUpTestCase();
+    test::ParquetTpchTest::createTables();
+
     LocalRunnerTestBase::testDataPath_ = FLAGS_data_path;
     LocalRunnerTestBase::localFileFormat_ = "parquet";
-    connector::unregisterConnector(exec::test::kHiveConnectorId);
-    connector::unregisterConnectorFactory("hive");
     LocalRunnerTestBase::SetUpTestCase();
   }
 
@@ -52,11 +50,9 @@ class TpchPlanTest : public virtual test::ParquetTpchTest,
       suiteHistory().saveToFile(FLAGS_history_save_path);
     }
     LocalRunnerTestBase::TearDownTestCase();
-    ParquetTpchTest::TearDownTestCase();
   }
 
   void SetUp() override {
-    ParquetTpchTest::SetUp();
     QueryTestBase::SetUp();
     allocator_ = std::make_unique<HashStringAllocator>(pool_.get());
     context_ = std::make_unique<QueryGraphContext>(*allocator_);
@@ -71,7 +67,6 @@ class TpchPlanTest : public virtual test::ParquetTpchTest,
     context_.reset();
     queryCtx() = nullptr;
     allocator_.reset();
-    ParquetTpchTest::TearDown();
     QueryTestBase::TearDown();
   }
 
@@ -79,16 +74,11 @@ class TpchPlanTest : public virtual test::ParquetTpchTest,
     auto fragmentedPlan = planVelox(logicalPlan);
     auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
 
-    test::TestResult referenceResult;
-    assertSame(referencePlan, fragmentedPlan, &referenceResult);
+    auto referenceResult = assertSame(referencePlan, fragmentedPlan);
 
-    const auto numWorkers = FLAGS_num_workers;
-    if (numWorkers != 1) {
-      gflags::FlagSaver saver;
-      FLAGS_num_workers = 1;
-
-      auto singlePlan = planVelox(logicalPlan);
-      ASSERT_TRUE(singlePlan.plan != nullptr);
+    if (FLAGS_num_workers != 1) {
+      auto singlePlan =
+          planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 4});
       auto singleResult = runFragmentedPlan(singlePlan);
       exec::test::assertEqualResults(
           referenceResult.results, singleResult.results);
@@ -146,13 +136,16 @@ class TpchPlanTest : public virtual test::ParquetTpchTest,
     auto parser = makeQueryParser();
 
     auto sql = readSqlFromFile(fmt::format("tpch.queries/q{}.sql", query));
-    auto logicalPlan = parser.parse(sql);
+    auto statement = parser.parse(sql);
+
+    ASSERT_TRUE(statement->isSelect());
+
+    auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
 
     auto fragmentedPlan = planVelox(logicalPlan);
     auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
 
-    test::TestResult referenceResult;
-    assertSame(referencePlan, fragmentedPlan, &referenceResult);
+    auto referenceResult = assertSame(referencePlan, fragmentedPlan);
   }
 
   std::unique_ptr<HashStringAllocator> allocator_;

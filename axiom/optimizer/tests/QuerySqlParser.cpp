@@ -203,9 +203,7 @@ lp::LogicalPlanNodePtr toPlanNode(
       pool, rowType, nullptr, 1, std::vector<VectorPtr>{})};
 
   return std::make_shared<lp::ValuesNode>(
-      queryContext.nextNodeId(),
-      rowType,
-      std::vector<Variant>{Variant::null(TypeKind::ROW)});
+      queryContext.nextNodeId(), std::move(vectors));
 }
 
 lp::LogicalPlanNodePtr toPlanNode(
@@ -719,7 +717,7 @@ void QuerySqlParser::registerAggregateFunction(
       customAggregateFinalize);
 }
 
-lp::LogicalPlanNodePtr QuerySqlParser::parse(const std::string& sql) {
+SqlStatementPtr QuerySqlParser::parse(const std::string& sql) {
   // Disable the optimizer. Otherwise, the filter over table scan gets pushdown
   // as a callback that is impossible to recover.
   conn_.Query("PRAGMA disable_optimizer");
@@ -727,7 +725,15 @@ lp::LogicalPlanNodePtr QuerySqlParser::parse(const std::string& sql) {
   auto plan = conn_.ExtractPlan(sql);
 
   QueryContext queryContext{connectorId_};
-  return toPlanNode(*plan, pool_, queryContext);
+
+  if (plan->type == ::duckdb::LogicalOperatorType::LOGICAL_EXPLAIN) {
+    auto select = std::make_shared<SelectStatement>(
+        toPlanNode(*plan->children[0], pool_, queryContext));
+    return std::make_shared<ExplainStatement>(select);
+  }
+
+  return std::make_shared<SelectStatement>(
+      toPlanNode(*plan, pool_, queryContext));
 }
 
 } // namespace facebook::velox::optimizer::test

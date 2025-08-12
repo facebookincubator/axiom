@@ -245,6 +245,8 @@ void DerivedTable::linkTablesToJoins() {
     tables.forEachMutable([&](PlanObjectP table) {
       if (table->type() == PlanType::kTableNode) {
         table->as<BaseTable>()->addJoinedBy(join);
+      } else if (table->type() == PlanType::kValuesTable) {
+        table->as<ValuesTable>()->addJoinedBy(join);
       } else {
         VELOX_CHECK(table->type() == PlanType::kDerivedTableNode);
         table->as<DerivedTable>()->addJoinedBy(join);
@@ -522,7 +524,7 @@ void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
     return;
   }
   auto initialTables = tables;
-  if (firstDt->limit != -1 || firstDt->orderBy) {
+  if (firstDt->hasLimit() || firstDt->hasOrderBy()) {
     // tables can't be imported but are marked as used so not tried again.
     for (auto i = 1; i < tables.size(); ++i) {
       importedExistences.add(tables[i]);
@@ -747,6 +749,8 @@ void DerivedTable::distributeConjuncts() {
       if (tables[0] == this) {
         continue; // the conjunct depends on containing dt, like grouping or
                   // existence flags. Leave in place.
+      } else if (tables[0]->type() == PlanType::kValuesTableNode) {
+        continue; // ValuesTable does not have filter push-down.
       } else if (tables[0]->type() == PlanType::kDerivedTableNode) {
         // Translate the column names and add the condition to the conjuncts in
         // the dt. If the inner is a set operation, add the filter to children.
@@ -768,10 +772,6 @@ void DerivedTable::distributeConjuncts() {
             changedDts.push_back(childDt);
           }
         }
-        conjuncts.erase(conjuncts.begin() + i);
-        --numCanonicalConjuncts;
-        --i;
-        continue;
       } else {
         VELOX_CHECK(tables[0]->type() == PlanType::kTableNode);
         tables[0]->as<BaseTable>()->addFilter(conjuncts[i]);

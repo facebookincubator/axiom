@@ -15,9 +15,7 @@
  */
 
 #include "axiom/optimizer/connectors/hive/LocalHiveConnectorMetadata.h"
-#include "velox/exec/tests/utils/DistributedPlanBuilder.h"
 #include "velox/exec/tests/utils/LocalRunnerTestBase.h"
-#include "velox/exec/tests/utils/QueryAssertions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;

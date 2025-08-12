@@ -38,7 +38,7 @@ struct TestResult {
   /// Human readable Velox plan.
   std::string veloxString;
 
-  /// Human readable Verax  output.
+  /// Human readable Verax output.
   std::string planString;
 
   std::vector<exec::TaskStats> stats;
@@ -53,19 +53,30 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
   /// Reads the data directory and picks up new tables.
   void tablesCreated();
 
-  TestResult runVelox(const logical_plan::LogicalPlanNodePtr& plan);
-
-  TestResult runFragmentedPlan(optimizer::PlanAndStats& plan);
-
-  /// Checks that 'reference' and 'experiment' produce the same result.
-  void assertSame(
-      const core::PlanNodePtr& reference,
-      optimizer::PlanAndStats& experiment,
-      TestResult* referenceReturn = nullptr);
-
   optimizer::PlanAndStats planVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
       std::string* planString = nullptr);
+
+  optimizer::PlanAndStats planVelox(
+      const logical_plan::LogicalPlanNodePtr& plan,
+      const runner::MultiFragmentPlan::Options& options,
+      std::string* planString = nullptr);
+
+  TestResult runVelox(const logical_plan::LogicalPlanNodePtr& plan);
+
+  TestResult runVelox(
+      const logical_plan::LogicalPlanNodePtr& plan,
+      const runner::MultiFragmentPlan::Options& options);
+
+  TestResult runFragmentedPlan(const optimizer::PlanAndStats& plan);
+
+  TestResult runVelox(const core::PlanNodePtr& plan);
+
+  /// Checks that 'reference' and 'experiment' produce the same result.
+  /// @return 'reference' result.
+  TestResult assertSame(
+      const core::PlanNodePtr& reference,
+      const optimizer::PlanAndStats& experiment);
 
   std::shared_ptr<core::QueryCtx> getQueryCtx();
 
@@ -79,21 +90,11 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
   std::shared_ptr<optimizer::SchemaResolver> schema_;
 
  private:
-  core::PlanNodePtr toTableScan(
-      const std::string& id,
-      const std::string& name,
-      const RowTypePtr& rowType,
-      const std::vector<std::string>& columnNames);
-
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> optimizerPool_;
-  std::shared_ptr<memory::MemoryPool> schemaPool_;
-  std::shared_ptr<memory::MemoryPool> schemaRootPool_;
-  std::shared_ptr<core::QueryCtx> schemaQueryCtx_;
 
   // A QueryCtx created for each compiled query.
   std::shared_ptr<core::QueryCtx> queryCtx_;
-  std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   std::shared_ptr<connector::Connector> connector_;
   std::unique_ptr<velox::optimizer::VeloxHistory> history_;
 

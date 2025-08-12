@@ -62,23 +62,48 @@ class UniqueNameChecker {
   std::unordered_set<std::string> names_;
 };
 
+RowTypePtr getType(const std::vector<RowVectorPtr>& values) {
+  VELOX_USER_CHECK(!values.empty(), "Values must not be empty");
+  return values.front()->rowType();
+}
+
 } // namespace
 
 ValuesNode::ValuesNode(
     const std::string& id,
     const RowTypePtr& rowType,
-    std::vector<Variant> rows)
-    : LogicalPlanNode(NodeKind::kValues, id, {}, rowType),
-      rows_{std::move(rows)} {
+    Rows rows)
+    : LogicalPlanNode{NodeKind::kValues, id, {}, rowType},
+      cardinality_{rows.size()},
+      data_{std::move(rows)} {
   UniqueNameChecker::check(rowType->names());
 
-  for (const auto& row : rows_) {
+  for (const auto& row : std::get<Rows>(data_)) {
     VELOX_USER_CHECK(
         row.isTypeCompatible(rowType),
-        "Incompatible types: {} vs. {}",
+        "All rows should have compatible types: {} vs. {}",
         row.inferType()->toString(),
         rowType->toString());
   }
+}
+
+ValuesNode::ValuesNode(const std::string& id, Values values)
+    : LogicalPlanNode{NodeKind::kValues, id, {}, getType(values)},
+      cardinality_{[&] {
+        uint64_t cardinality = 0;
+        for (const auto& value : values) {
+          VELOX_USER_CHECK_NOT_NULL(value);
+          VELOX_USER_CHECK(
+              outputType()->equivalent(*value->type()),
+              "All values should have equivalent types: {} vs. {}",
+              outputType()->toString(),
+              value->type()->toString());
+          cardinality += value->size();
+        }
+        return cardinality;
+      }()},
+      data_{std::move(values)} {
+  UniqueNameChecker::check(outputType()->names());
 }
 
 void ValuesNode::accept(

@@ -22,6 +22,67 @@
 
 namespace facebook::velox::optimizer::test {
 
+enum class SqlStatementKind {
+  kSelect,
+  kExplain,
+};
+
+class SqlStatement {
+ public:
+  SqlStatement(SqlStatementKind kind) : kind_{kind} {}
+
+  virtual ~SqlStatement() = default;
+
+  SqlStatementKind kind() const {
+    return kind_;
+  }
+
+  bool isSelect() const {
+    return kind_ == SqlStatementKind::kSelect;
+  }
+
+  bool isExplain() const {
+    return kind_ == SqlStatementKind::kExplain;
+  }
+
+  template <typename T>
+  const T* asUnchecked() const {
+    return dynamic_cast<const T*>(this);
+  }
+
+ private:
+  const SqlStatementKind kind_;
+};
+
+using SqlStatementPtr = std::shared_ptr<const SqlStatement>;
+
+class SelectStatement : public SqlStatement {
+ public:
+  SelectStatement(logical_plan::LogicalPlanNodePtr plan)
+      : SqlStatement(SqlStatementKind::kSelect), plan_{std::move(plan)} {}
+
+  logical_plan::LogicalPlanNodePtr plan() const {
+    return plan_;
+  }
+
+ private:
+  const logical_plan::LogicalPlanNodePtr plan_;
+};
+
+class ExplainStatement : public SqlStatement {
+ public:
+  ExplainStatement(SqlStatementPtr statement)
+      : SqlStatement(SqlStatementKind::kExplain),
+        statement_{std::move(statement)} {}
+
+  SqlStatementPtr statement() const {
+    return statement_;
+  }
+
+ private:
+  const SqlStatementPtr statement_;
+};
+
 class QuerySqlParser {
  public:
   /// TODO Add support for queries that use tables from multiple connectors.
@@ -46,7 +107,7 @@ class QuerySqlParser {
       const std::vector<TypePtr>& argTypes,
       const TypePtr& returnType);
 
-  logical_plan::LogicalPlanNodePtr parse(const std::string& sql);
+  SqlStatementPtr parse(const std::string& sql);
 
  private:
   const std::string connectorId_;

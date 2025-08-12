@@ -18,19 +18,15 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
-#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/parse/TypeResolver.h"
 
 DEFINE_string(
     data_path,
     "",
-    "Path to TPCH data directory. If empty, the test creates a temp directory and deletes it on exit");
-DEFINE_bool(create_dataset, true, "Creates the TPCH tables");
+    "Path to TPC-H data directory. If empty, the test creates a temp directory and deletes it on exit");
+DEFINE_bool(create_dataset, true, "Creates the TPC-H tables");
 DEFINE_double(tpch_scale, 0.01, "Scale factor");
 
 using namespace facebook::velox::exec;
@@ -38,67 +34,10 @@ using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::optimizer::test {
 
-std::string ParquetTpchTest::createPath_;
-std::string ParquetTpchTest::path_;
-std::shared_ptr<TempDirectoryPath> ParquetTpchTest::tempDirectory_;
-
-//  static
-void ParquetTpchTest::SetUpTestCase() {
-  memory::MemoryManager::testingSetInstance(memory::MemoryManagerOptions{});
-
-  if (FLAGS_data_path.empty()) {
-    tempDirectory_ = TempDirectoryPath::create();
-    createPath_ = tempDirectory_->getPath();
-    path_ = createPath_;
-    FLAGS_data_path = createPath_;
-  } else if (FLAGS_create_dataset) {
-    VELOX_CHECK(!FLAGS_data_path.empty());
-    createPath_ = FLAGS_data_path;
-    path_ = createPath_;
-  }
-
-  functions::prestosql::registerAllScalarFunctions();
-  aggregate::prestosql::registerAllAggregateFunctions();
-
-  parse::registerTypeResolver();
-  filesystems::registerLocalFileSystem();
-  dwio::common::registerFileSinks();
-
-  parquet::registerParquetReaderFactory();
-  parquet::registerParquetWriterFactory();
-
-  auto emptyConfig = std::make_shared<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>());
-
-  connector::hive::HiveConnectorFactory hiveConnectorFactory;
-  auto hiveConnector = hiveConnectorFactory.newConnector(
-      std::string(PlanBuilder::kHiveDefaultConnectorId), emptyConfig);
-  connector::registerConnector(std::move(hiveConnector));
-
-  connector::tpch::TpchConnectorFactory tpchConnectorFactory;
-  auto tpchConnector = tpchConnectorFactory.newConnector(
-      std::string(PlanBuilder::kTpchDefaultConnectorId), emptyConfig);
-  connector::registerConnector(std::move(tpchConnector));
-
-  if (!createPath_.empty()) {
-    saveTpchTablesAsParquet();
-  }
-}
-
-//  static
-void ParquetTpchTest::TearDownTestCase() {
-  connector::unregisterConnector(
-      std::string(PlanBuilder::kHiveDefaultConnectorId));
-  connector::unregisterConnector(
-      std::string(PlanBuilder::kTpchDefaultConnectorId));
-  parquet::unregisterParquetReaderFactory();
-  parquet::unregisterParquetWriterFactory();
-}
-
-void ParquetTpchTest::saveTpchTablesAsParquet() {
-  std::shared_ptr<memory::MemoryPool> rootPool{
-      memory::memoryManager()->addRootPool()};
-  std::shared_ptr<memory::MemoryPool> pool{rootPool->addLeafChild("leaf")};
+namespace {
+void doCreateTables(const std::string& path) {
+  auto rootPool = memory::memoryManager()->addRootPool();
+  auto pool = rootPool->addLeafChild("leaf");
 
   for (const auto& table : tpch::tables) {
     const auto tableName = tpch::toTableName(table);
@@ -110,7 +49,7 @@ void ParquetTpchTest::saveTpchTablesAsParquet() {
       numSplits = std::min<int32_t>(FLAGS_tpch_scale, 200);
     }
 
-    const auto tableDirectory = fmt::format("{}/{}", createPath_, tableName);
+    const auto tableDirectory = fmt::format("{}/{}", path, tableName);
     auto plan =
         PlanBuilder()
             .tpchTableScan(table, tableSchema->names(), FLAGS_tpch_scale)
@@ -139,6 +78,55 @@ void ParquetTpchTest::saveTpchTablesAsParquet() {
                     .maxDrivers(numDrivers)
                     .copyResults(pool.get());
   }
+}
+
+} // namespace
+
+std::shared_ptr<TempDirectoryPath> ParquetTpchTest::tempDirectory_;
+
+//  static
+void ParquetTpchTest::createTables() {
+  memory::MemoryManager::testingSetInstance(memory::MemoryManagerOptions{});
+
+  std::string createPath;
+  if (FLAGS_data_path.empty()) {
+    tempDirectory_ = TempDirectoryPath::create();
+    createPath = tempDirectory_->getPath();
+    FLAGS_data_path = createPath;
+  } else if (FLAGS_create_dataset) {
+    createPath = FLAGS_data_path;
+  } else {
+    return;
+  }
+
+  SCOPE_EXIT {
+    connector::unregisterConnector(
+        std::string(PlanBuilder::kHiveDefaultConnectorId));
+    connector::unregisterConnector(
+        std::string(PlanBuilder::kTpchDefaultConnectorId));
+
+    parquet::unregisterParquetWriterFactory();
+  };
+
+  filesystems::registerLocalFileSystem();
+  dwio::common::registerFileSinks();
+
+  parquet::registerParquetWriterFactory();
+
+  auto emptyConfig = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>());
+
+  connector::hive::HiveConnectorFactory hiveConnectorFactory;
+  auto hiveConnector = hiveConnectorFactory.newConnector(
+      std::string(PlanBuilder::kHiveDefaultConnectorId), emptyConfig);
+  connector::registerConnector(std::move(hiveConnector));
+
+  connector::tpch::TpchConnectorFactory tpchConnectorFactory;
+  auto tpchConnector = tpchConnectorFactory.newConnector(
+      std::string(PlanBuilder::kTpchDefaultConnectorId), emptyConfig);
+  connector::registerConnector(std::move(tpchConnector));
+
+  doCreateTables(createPath);
 }
 
 } // namespace facebook::velox::optimizer::test

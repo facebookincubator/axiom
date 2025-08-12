@@ -200,9 +200,11 @@ void Optimization::getExprForField(
       resultColumn = maybeColumn->as<Column>();
       resultExpr = nullptr;
       context = nullptr;
-      VELOX_CHECK_NOT_NULL(resultColumn->relation());
-      if (resultColumn->relation()->type() == PlanType::kTableNode) {
-        VELOX_CHECK(leaf == resultColumn->relation());
+      const auto* relation = resultColumn->relation();
+      VELOX_CHECK_NOT_NULL(relation);
+      if (relation->type() == PlanType::kTableNode ||
+          relation->type() == PlanType::kValuesTableNode) {
+        VELOX_CHECK(leaf == relation);
       }
       return;
     }
@@ -483,15 +485,37 @@ BuiltinNames& Optimization::builtinNames() {
   return *builtinNames_;
 }
 
+namespace {
+
+/// If we should reverse the sides of a binary expression to canonicalize it. We
+/// invert in two cases:
+///
+///  #1. If there is a literal in the left and something else in the right:
+///    f("literal", col) => f(col, "literal")
+///
+///  #2. If none are literal, but the id on the left is higher.
+bool shouldInvert(ExprCP left, ExprCP right) {
+  if (left->type() == PlanType::kLiteral &&
+      right->type() != PlanType::kLiteral) {
+    return true;
+  } else if (
+      (left->type() != PlanType::kLiteral) &&
+      (right->type() != PlanType::kLiteral) && (left->id() > right->id())) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
+} // namespace
+
 void Optimization::canonicalizeCall(Name& name, ExprVector& args) {
   auto& names = builtinNames();
   if (!names.isCanonicalizable(name)) {
     return;
   }
   VELOX_CHECK_EQ(args.size(), 2, "Expecting binary op {}", name);
-  if ((args[0]->type() == PlanType::kLiteralExpr &&
-       args[1]->type() != PlanType::kLiteralExpr) ||
-      args[0]->id() > args[1]->id()) {
+  if (shouldInvert(args[0], args[1])) {
     std::swap(args[0], args[1]);
     name = names.reverse(name);
   }
@@ -839,7 +863,9 @@ PlanObjectP Optimization::addOrderBy(const lp::SortNode& order) {
     keys.push_back(translateExpr(field.expression));
   }
 
-  currentSelect_->orderBy = make<OrderBy>(nullptr, keys, orderType);
+  currentSelect_->orderByKeys = keys;
+  currentSelect_->orderByTypes = orderType;
+
   return currentSelect_;
 }
 
@@ -989,10 +1015,8 @@ PlanObjectP Optimization::makeBaseTable(const lp::TableScanNode& tableScan) {
   auto channels = usedChannels(&tableScan);
   const auto& type = tableScan.outputType();
   const auto& names = tableScan.columnNames();
-  for (auto i = 0; i < type->size(); ++i) {
-    if (std::find(channels.begin(), channels.end(), i) == channels.end()) {
-      continue;
-    }
+  for (auto i : channels) {
+    VELOX_DCHECK_LT(i, type->size());
 
     const auto& name = names[i];
     auto schemaColumn = schemaTable->findColumn(name);
@@ -1038,6 +1062,31 @@ PlanObjectP Optimization::makeBaseTable(const lp::TableScanNode& tableScan) {
   currentSelect_->tables.push_back(baseTable);
   currentSelect_->tableSet.add(baseTable);
   return baseTable;
+}
+
+PlanObjectP Optimization::makeValuesTable(const lp::ValuesNode& values) {
+  auto* valuesTable = make<ValuesTable>(values);
+  valuesTable->cname = newCName("vt");
+  logicalPlanLeaves_[&values] = valuesTable;
+
+  auto channels = usedChannels(&values);
+  const auto& type = values.outputType();
+  const auto& names = values.outputType()->names();
+  const auto cardinality = valuesTable->cardinality();
+  for (auto i : channels) {
+    VELOX_DCHECK_LT(i, type->size());
+
+    const auto& name = names[i];
+    Value value{type->childAt(i).get(), cardinality};
+    auto* column = make<Column>(toName(name), valuesTable, value);
+    valuesTable->columns.push_back(column);
+
+    renames_[name] = column;
+  }
+
+  currentSelect_->tables.push_back(valuesTable);
+  currentSelect_->tableSet.add(valuesTable);
+  return valuesTable;
 }
 
 namespace {
@@ -1135,7 +1184,7 @@ PlanObjectP Optimization::addAggregation(const lp::AggregateNode& aggNode) {
   return currentSelect_;
 }
 
-PlanObjectP Optimization::addLimit(const logical_plan::LimitNode& limitNode) {
+PlanObjectP Optimization::addLimit(const lp::LimitNode& limitNode) {
   currentSelect_->limit = limitNode.count();
   currentSelect_->offset = limitNode.offset();
   return currentSelect_;
@@ -1346,9 +1395,7 @@ PlanObjectP Optimization::makeQueryGraph(
     uint64_t allowedInDt) {
   switch (node.kind()) {
     case lp::NodeKind::kValues:
-      VELOX_NYI(
-          "Unsupported PlanNode {}",
-          logical_plan::NodeKindName::toName(node.kind()));
+      return makeValuesTable(*node.asUnchecked<lp::ValuesNode>());
 
     case lp::NodeKind::kTableScan:
       return makeBaseTable(*node.asUnchecked<lp::TableScanNode>());

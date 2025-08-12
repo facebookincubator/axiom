@@ -19,7 +19,6 @@
 #include "axiom/optimizer/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/exec/tests/utils/DistributedPlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
 #include "axiom/optimizer/Plan.h"
@@ -55,7 +54,6 @@ void QueryTestBase::SetUp() {
   connector_ = connector::getConnector(exec::test::kHiveConnectorId);
   rootPool_ = memory::memoryManager()->addRootPool("velox_sql");
   optimizerPool_ = rootPool_->addLeafChild("optimizer");
-  schemaPool_ = rootPool_->addLeafChild("schema");
 
   parquet::registerParquetReaderFactory();
   dwrf::registerDwrfReaderFactory();
@@ -66,38 +64,6 @@ void QueryTestBase::SetUp() {
   if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
-  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
-      connectorConfigs;
-  auto copy = hiveConfig_;
-  connectorConfigs[exec::test::kHiveConnectorId] =
-      std::make_shared<config::ConfigBase>(std::move(copy));
-
-  schemaQueryCtx_ = core::QueryCtx::create(
-      executor_.get(),
-      core::QueryConfig(config_),
-      std::move(connectorConfigs),
-      cache::AsyncDataCache::getInstance(),
-      rootPool_->shared_from_this(),
-      nullptr,
-      "schema");
-  common::SpillConfig spillConfig;
-  common::PrefixSortConfig prefixSortConfig;
-
-  schemaRootPool_ = rootPool_->addAggregateChild("schemaRoot");
-  connectorQueryCtx_ = std::make_shared<connector::ConnectorQueryCtx>(
-      schemaPool_.get(),
-      schemaRootPool_.get(),
-      schemaQueryCtx_->connectorSessionProperties(exec::test::kHiveConnectorId),
-      &spillConfig,
-      prefixSortConfig,
-      std::make_unique<exec::SimpleExpressionEvaluator>(
-          schemaQueryCtx_.get(), schemaPool_.get()),
-      schemaQueryCtx_->cache(),
-      "scan_for_schema",
-      "schema",
-      "N/a",
-      0,
-      schemaQueryCtx_->queryConfig().sessionTimezone());
 
   schema_ = std::make_shared<velox::optimizer::SchemaResolver>(connector_, "");
   if (suiteHistory_) {
@@ -120,10 +86,6 @@ void QueryTestBase::TearDown() {
   connector_.reset();
   optimizerPool_.reset();
   schema_.reset();
-  schemaQueryCtx_.reset();
-  schemaPool_.reset();
-  schemaRootPool_.reset();
-  connectorQueryCtx_.reset();
   rootPool_.reset();
   LocalRunnerTestBase::TearDown();
 }
@@ -135,39 +97,6 @@ void QueryTestBase::tablesCreated() {
   metadata->reinitialize();
 }
 
-core::PlanNodePtr QueryTestBase::toTableScan(
-    const std::string& id,
-    const std::string& name,
-    const RowTypePtr& rowType,
-    const std::vector<std::string>& columnNames) {
-  using namespace connector::hive;
-  auto handle = std::make_shared<HiveTableHandle>(
-      exec::test::kHiveConnectorId,
-      name,
-      true,
-      common::SubfieldFilters{},
-      nullptr);
-  connector::ColumnHandleMap assignments;
-
-  auto table = connector_->metadata()->findTable(name);
-  for (auto i = 0; i < rowType->size(); ++i) {
-    auto projectedName = rowType->nameOf(i);
-    auto& columnName = columnNames[i];
-    VELOX_CHECK(
-        table->columnMap().find(columnName) != table->columnMap().end(),
-        "No column {} in {}",
-        columnName,
-        name);
-    assignments[projectedName] = std::make_shared<HiveColumnHandle>(
-        columnName,
-        HiveColumnHandle::ColumnType::kRegular,
-        rowType->childAt(i),
-        rowType->childAt(i));
-  }
-  return std::make_shared<core::TableScanNode>(
-      id, rowType, handle, assignments);
-}
-
 namespace {
 void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner) {
   if (runner) {
@@ -177,33 +106,60 @@ void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner) {
     }
   }
 }
+
+void gatherScans(
+    const core::PlanNodePtr& plan,
+    std::vector<core::TableScanNodePtr>& scans) {
+  if (auto scan = std::dynamic_pointer_cast<const core::TableScanNode>(plan)) {
+    scans.push_back(scan);
+    return;
+  }
+  for (auto& source : plan->sources()) {
+    gatherScans(source, scans);
+  }
+}
+
 } // namespace
 
+TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
+  runner::MultiFragmentPlan::Options options = {
+      .queryId = fmt::format("q{}", ++queryCounter_),
+      .numWorkers = 1,
+      .numDrivers = FLAGS_num_drivers};
+
+  runner::ExecutableFragment fragment(fmt::format("{}.0", options.queryId));
+  fragment.fragment = core::PlanFragment(plan);
+  gatherScans(plan, fragment.scans);
+
+  optimizer::PlanAndStats planAndStats = {
+      .plan = std::make_shared<runner::MultiFragmentPlan>(
+          std::vector<runner::ExecutableFragment>{std::move(fragment)},
+          std::move(options))};
+
+  return runFragmentedPlan(planAndStats);
+}
+
 TestResult QueryTestBase::runFragmentedPlan(
-    optimizer::PlanAndStats& fragmentedPlan) {
+    const optimizer::PlanAndStats& fragmentedPlan) {
   TestResult result;
   result.veloxString = veloxString(fragmentedPlan.plan);
-  try {
-    result.runner = std::make_shared<runner::LocalRunner>(
-        fragmentedPlan.plan,
-        getQueryCtx(),
-        std::make_shared<connector::ConnectorSplitSourceFactory>());
 
-    while (auto rows = result.runner->next()) {
-      result.results.push_back(std::move(rows));
-    }
-    result.stats = result.runner->stats();
-    history_->recordVeloxExecution(fragmentedPlan, result.stats);
-  } catch (const std::exception& e) {
-    std::cerr << "Query terminated with: " << e.what() << std::endl;
+  SCOPE_EXIT {
     waitForCompletion(result.runner);
     queryCtx_.reset();
-    throw;
-  }
-  waitForCompletion(result.runner);
+  };
 
-  // Next query will need a different one.
-  queryCtx_.reset();
+  result.runner = std::make_shared<runner::LocalRunner>(
+      fragmentedPlan.plan,
+      getQueryCtx(),
+      std::make_shared<connector::ConnectorSplitSourceFactory>());
+
+  while (auto rows = result.runner->next()) {
+    result.results.push_back(std::move(rows));
+  }
+  result.stats = result.runner->stats();
+  history_->recordVeloxExecution(fragmentedPlan, result.stats);
+
   return result;
 }
 
@@ -211,12 +167,14 @@ std::shared_ptr<core::QueryCtx> QueryTestBase::getQueryCtx() {
   if (queryCtx_) {
     return queryCtx_;
   }
+
   ++queryCounter_;
+
   std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
-      connectorConfigs;
-  auto copy = hiveConfig_;
-  connectorConfigs[exec::test::kHiveConnectorId] =
-      std::make_shared<config::ConfigBase>(std::move(copy));
+      connectorConfigs = {
+          {exec::test::kHiveConnectorId,
+           std::make_shared<config::ConfigBase>(folly::copy(hiveConfig_))}};
+
   queryCtx_ = core::QueryCtx::create(
       executor_.get(),
       core::QueryConfig(config_),
@@ -231,13 +189,20 @@ std::shared_ptr<core::QueryCtx> QueryTestBase::getQueryCtx() {
 optimizer::PlanAndStats QueryTestBase::planVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
     std::string* planString) {
+  return planVelox(
+      plan,
+      {.numWorkers = FLAGS_num_workers, .numDrivers = FLAGS_num_drivers},
+      planString);
+}
+
+optimizer::PlanAndStats QueryTestBase::planVelox(
+    const logical_plan::LogicalPlanNodePtr& plan,
+    const runner::MultiFragmentPlan::Options& options,
+    std::string* planString) {
   auto queryCtx = getQueryCtx();
 
   // The default Locus for planning is the system and data of 'connector_'.
   optimizer::Locus locus(connector_->connectorId().c_str(), connector_.get());
-  runner::MultiFragmentPlan::Options opts;
-  opts.numWorkers = FLAGS_num_workers;
-  opts.numDrivers = FLAGS_num_drivers;
   auto allocator = std::make_unique<HashStringAllocator>(optimizerPool_.get());
   auto context =
       std::make_unique<velox::optimizer::QueryGraphContext>(*allocator);
@@ -256,22 +221,27 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
       queryCtx_,
       evaluator,
       optimizerOptions_,
-      opts);
+      options);
   auto best = opt.bestPlan();
   if (planString) {
     *planString = best->op->toString(true, false);
   }
-  return opt.toVeloxPlan(best->op, opts);
+  return opt.toVeloxPlan(best->op, options);
 }
 
 TestResult QueryTestBase::runVelox(
     const logical_plan::LogicalPlanNodePtr& plan) {
   TestResult result;
-  auto fragmentedPlan = planVelox(plan, &result.planString);
-  if (!fragmentedPlan.plan) {
-    return result;
-  }
-  return runFragmentedPlan(fragmentedPlan);
+  auto veloxPlan = planVelox(plan, &result.planString);
+  return runFragmentedPlan(veloxPlan);
+}
+
+TestResult QueryTestBase::runVelox(
+    const logical_plan::LogicalPlanNodePtr& plan,
+    const runner::MultiFragmentPlan::Options& options) {
+  TestResult result;
+  auto veloxPlan = planVelox(plan, options, &result.planString);
+  return runFragmentedPlan(veloxPlan);
 }
 
 std::string QueryTestBase::veloxString(
@@ -311,30 +281,16 @@ std::string QueryTestBase::veloxString(
   return out.str();
 }
 
-void QueryTestBase::assertSame(
+TestResult QueryTestBase::assertSame(
     const core::PlanNodePtr& reference,
-    optimizer::PlanAndStats& experiment,
-    TestResult* referenceReturn) {
-  auto refId = fmt::format("q{}", ++queryCounter_);
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  runner::MultiFragmentPlan::Options options = {
-      .queryId = refId, .numWorkers = 1, .numDrivers = FLAGS_num_drivers};
-
-  exec::test::DistributedPlanBuilder builder(options, idGenerator, pool_.get());
-  builder.addNode(
-      [&](std::string nodeId, core::PlanNodePtr) { return reference; });
-
-  auto referencePlan = std::make_shared<runner::MultiFragmentPlan>(
-      builder.fragments(), std::move(options));
-  optimizer::PlanAndStats referencePlanAndStats = {.plan = referencePlan};
-  auto referenceResult = runFragmentedPlan(referencePlanAndStats);
+    const optimizer::PlanAndStats& experiment) {
+  auto referenceResult = runVelox(reference);
   auto experimentResult = runFragmentedPlan(experiment);
 
   exec::test::assertEqualResults(
       referenceResult.results, experimentResult.results);
-  if (referenceReturn) {
-    *referenceReturn = referenceResult;
-  }
+
+  return referenceResult;
 }
 
 } // namespace facebook::velox::optimizer::test

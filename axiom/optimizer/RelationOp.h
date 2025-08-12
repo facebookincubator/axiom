@@ -153,7 +153,7 @@ class RelationOp : public Relation {
   ///     - HashJoin
   ///       - Scan(region as t3)
   ///       - Scan(nation as t2)
-  virtual std::string toString(bool recursive, bool detail) const;
+  virtual std::string toString(bool recursive, bool detail) const = 0;
 
  protected:
   // adds a line of cost information to 'out'
@@ -261,6 +261,29 @@ struct TableScan : public RelationOp {
   const ExprVector joinFilter;
 };
 
+/// Represents a values.
+struct Values : RelationOp {
+  Values(
+      const ValuesTable& valuesTable,
+      ColumnVector columns)
+      : RelationOp{
+          RelType::kValues,
+          nullptr,
+          Distribution{DistributionType{}, valuesTable.cardinality(), {}},
+          std::move(columns)},
+        valuesTable{valuesTable} {
+    cost_.fanout = valuesTable.cardinality();
+  }
+
+  void setCost(const PlanState& input) override;
+
+  const QGstring& historyKey() const override;
+
+  std::string toString(bool recursive, bool detail) const override;
+
+  const ValuesTable& valuesTable;
+};
+
 /// Represents a repartition, i.e. query fragment boundary. The distribution of
 /// the output is '_distribution'.
 class Repartition : public RelationOp {
@@ -279,7 +302,7 @@ class Repartition : public RelationOp {
   std::string toString(bool recursive, bool detail) const override;
 };
 
-using RepartitionPtr = const Repartition*;
+using RepartitionCP = const Repartition*;
 
 /// Represents a usually multitable filter not associated with any non-inner
 /// join. Non-equality constraints over inner joins become Filters.
@@ -379,7 +402,7 @@ struct Join : public RelationOp {
   std::string toString(bool recursive, bool detail) const override;
 };
 
-using JoinPtr = Join*;
+using JoinCP = const Join*;
 
 /// Occurs as right input of JoinOp with type kHash. Contains the
 /// cost and memory specific to building the table. Can be
@@ -407,7 +430,7 @@ struct HashBuild : public RelationOp {
   std::string toString(bool recursive, bool detail) const override;
 };
 
-using HashBuildPtr = HashBuild*;
+using HashBuildCP = const HashBuild*;
 
 /// Represents aggregation with or without grouping.
 struct Aggregation : public RelationOp {
@@ -449,28 +472,12 @@ struct Aggregation : public RelationOp {
 
 /// Represents an order by. The order is given by the distribution.
 struct OrderBy : public RelationOp {
-  OrderBy(
-      RelationOpPtr input,
-      ExprVector keys,
-      OrderTypeVector orderType,
-      PlanObjectSet dependentKeys = {})
-      : RelationOp(
-            RelType::kOrderBy,
-            input,
-            input ? input->distribution().copyWithOrder(keys, orderType)
-                  : Distribution(
-                        DistributionType(),
-                        1,
-                        {},
-                        std::move(keys),
-                        std::move(orderType))),
-        dependentKeys(std::move(dependentKeys)) {}
+  OrderBy(RelationOpPtr input, ExprVector keys, OrderTypeVector orderType);
 
-  // Keys where the key expression is functionally dependent on
-  // another key or keys. These can be late materialized or converted
-  // to payload.
-  PlanObjectSet dependentKeys;
+  std::string toString(bool recursive, bool detail) const override;
 };
+
+using OrderByCP = const OrderBy*;
 
 /// Represents a union all.
 struct UnionAll : public RelationOp {
@@ -491,20 +498,24 @@ struct UnionAll : public RelationOp {
   const RelationOpPtrVector inputs;
 };
 
+using UnionAllCP = const UnionAll*;
+
 struct Limit : public RelationOp {
-  Limit(RelationOpPtr input, int64_t limit, int64_t offset)
-      : RelationOp(
-            RelType::kLimit,
-            input,
-            input->distribution(),
-            input->columns()),
-        limit{limit},
-        offset{offset} {}
+  Limit(RelationOpPtr input, int64_t limit, int64_t offset);
 
   void setCost(const PlanState& input) override;
 
   const int64_t limit;
   const int64_t offset;
+
+  bool isNoLimit() const {
+    static const auto kMax = std::numeric_limits<int64_t>::max();
+    return limit >= (kMax - offset);
+  }
+
+  std::string toString(bool recursive, bool detail) const override;
 };
+
+using LimitCP = const Limit*;
 
 } // namespace facebook::velox::optimizer

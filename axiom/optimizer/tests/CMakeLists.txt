@@ -66,6 +66,7 @@ target_link_libraries(
 
 add_executable(
   velox_plan_test
+  HiveLimitQueriesTest.cpp
   PlanMatcher.cpp
   PlanTest.cpp
   Tpch.cpp

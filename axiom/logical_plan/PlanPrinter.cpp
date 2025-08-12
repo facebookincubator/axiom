@@ -32,7 +32,7 @@ class ToTextVisitor : public PlanNodeVisitor {
   void visit(const ValuesNode& node, PlanNodeVisitorContext& context)
       const override {
     appendNode(
-        "Values", node, fmt::format("{} rows", node.rows().size()), context);
+        "Values", node, fmt::format("{} rows", node.cardinality()), context);
   }
 
   void visit(const TableScanNode& node, PlanNodeVisitorContext& context)
@@ -442,7 +442,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
     }
 
     const auto indent = makeIndent(myContext.indent + 3);
-    myContext.out << indent << "rows: " << node.rows().size() << std::endl;
+    myContext.out << indent << "rows: " << node.cardinality() << std::endl;
   }
 
   void visit(const TableScanNode& node, PlanNodeVisitorContext& context)

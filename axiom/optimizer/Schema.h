@@ -146,6 +146,16 @@ struct DistributionType {
   int32_t numPartitions{1};
   LocusCP locus{nullptr};
   bool isGather{false};
+
+  static DistributionType gather() {
+    static const DistributionType kGather = {
+        .mode = ShuffleMode::kNone,
+        .numPartitions = 1,
+        .locus = nullptr,
+        .isGather = true};
+
+    return kGather;
+  }
 };
 
 // Describes output of relational operator. If base table, cardinality is
@@ -182,20 +192,7 @@ struct Distribution {
       DistributionType type,
       const ExprVector& order = {},
       const OrderTypeVector& orderType = {}) {
-    auto singleType = type;
-    singleType.numPartitions = 1;
-    singleType.isGather = true;
-    return Distribution(singleType, 1, {}, order, orderType);
-  }
-
-  /// Returns a copy of 'this' with 'order' and 'orderType' set from
-  /// arguments.
-  Distribution copyWithOrder(ExprVector order, OrderTypeVector orderType)
-      const {
-    Distribution copy = *this;
-    copy.order = std::move(order);
-    copy.orderType = std::move(orderType);
-    return copy;
+    return Distribution(DistributionType::gather(), 1, {}, order, orderType);
   }
 
   /// True if 'this' and 'other' have the same number/type of keys and same
@@ -261,6 +258,7 @@ enum class RelType {
   kOrderBy,
   kUnionAll,
   kLimit,
+  kValues,
 };
 
 /// Represents a relation (table) that is either physically stored or is the

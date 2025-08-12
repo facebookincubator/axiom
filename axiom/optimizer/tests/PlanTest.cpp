@@ -19,7 +19,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/connectors/tests/TestConnector.h"
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
@@ -28,45 +27,29 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
-DEFINE_int32(num_repeats, 1, "Number of repeats for optimization timing");
-
-DECLARE_int32(optimizer_trace);
-DECLARE_int32(num_workers);
-DECLARE_string(history_save_path);
-
 namespace lp = facebook::velox::logical_plan;
 
 namespace facebook::velox::optimizer {
 namespace {
 
-class PlanTest : public virtual test::ParquetTpchTest,
-                 public virtual test::QueryTestBase {
+class PlanTest : public test::QueryTestBase {
  protected:
   static constexpr auto kTestConnectorId = "test";
 
   static void SetUpTestCase() {
-    ParquetTpchTest::SetUpTestCase();
+    test::ParquetTpchTest::createTables();
+
     LocalRunnerTestBase::testDataPath_ = FLAGS_data_path;
     LocalRunnerTestBase::localFileFormat_ = "parquet";
-    connector::unregisterConnector(exec::test::kHiveConnectorId);
-    connector::unregisterConnectorFactory("hive");
     LocalRunnerTestBase::SetUpTestCase();
   }
 
   static void TearDownTestCase() {
-    if (!FLAGS_history_save_path.empty()) {
-      suiteHistory().saveToFile(FLAGS_history_save_path);
-    }
     LocalRunnerTestBase::TearDownTestCase();
-    ParquetTpchTest::TearDownTestCase();
   }
 
   void SetUp() override {
-    ParquetTpchTest::SetUp();
     QueryTestBase::SetUp();
-    allocator_ = std::make_unique<HashStringAllocator>(pool_.get());
-    context_ = std::make_unique<QueryGraphContext>(*allocator_);
-    queryCtx() = context_.get();
 
     testConnector_ =
         std::make_shared<connector::TestConnector>(kTestConnectorId);
@@ -74,34 +57,28 @@ class PlanTest : public virtual test::ParquetTpchTest,
   }
 
   void TearDown() override {
-    context_.reset();
-    queryCtx() = nullptr;
-    allocator_.reset();
-    ParquetTpchTest::TearDown();
-    QueryTestBase::TearDown();
     connector::unregisterConnector(kTestConnectorId);
+
+    QueryTestBase::TearDown();
   }
 
   void checkSame(
       const lp::LogicalPlanNodePtr& planNode,
-      core::PlanNodePtr referencePlan) {
+      core::PlanNodePtr referencePlan,
+      const runner::MultiFragmentPlan::Options& options = {
+          .numWorkers = 4,
+          .numDrivers = 4}) {
+    VELOX_CHECK_NOT_NULL(planNode);
     VELOX_CHECK_NOT_NULL(referencePlan);
 
-    auto fragmentedPlan = planVelox(planNode);
-    ASSERT_TRUE(fragmentedPlan.plan != nullptr);
+    auto fragmentedPlan = planVelox(planNode, options);
+    auto referenceResult = assertSame(referencePlan, fragmentedPlan);
 
-    optimizer::test::TestResult referenceResult;
-    assertSame(referencePlan, fragmentedPlan, &referenceResult);
-
-    auto numWorkers = FLAGS_num_workers;
-    if (numWorkers != 1) {
-      gflags::FlagSaver saver;
-      FLAGS_num_workers = 1;
-
-      auto singlePlan = planVelox(planNode);
-      ASSERT_TRUE(singlePlan.plan != nullptr);
-
+    if (options.numWorkers != 1) {
+      auto singlePlan = planVelox(
+          planNode, {.numWorkers = 1, .numDrivers = options.numDrivers});
       auto singleResult = runFragmentedPlan(singlePlan);
+
       exec::test::assertEqualResults(
           referenceResult.results, singleResult.results);
     }
@@ -110,20 +87,15 @@ class PlanTest : public virtual test::ParquetTpchTest,
   core::PlanNodePtr toSingleNodePlan(
       const lp::LogicalPlanNodePtr& logicalPlan,
       const std::shared_ptr<connector::Connector>& defaultConnector = nullptr) {
-    gflags::FlagSaver saver;
-    FLAGS_num_workers = 1;
-
     schema_ = std::make_shared<velox::optimizer::SchemaResolver>(
         defaultConnector == nullptr ? testConnector_ : defaultConnector, "");
 
-    auto plan = planVelox(logicalPlan).plan;
+    auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 4}).plan;
 
     EXPECT_EQ(1, plan->fragments().size());
     return plan->fragments().at(0).fragment.planNode;
   }
 
-  std::unique_ptr<HashStringAllocator> allocator_;
-  std::unique_ptr<QueryGraphContext> context_;
   std::shared_ptr<connector::TestConnector> testConnector_;
 };
 
@@ -147,6 +119,7 @@ auto lt(const std::string& name, double d) {
   return common::test::singleSubfieldFilter(name, exec::lessThanDouble(d));
 }
 
+// TODO Move this test into its own file.
 TEST_F(PlanTest, queryGraph) {
   TypePtr row1 = ROW({{"c1", ROW({{"c1a", INTEGER()}})}, {"c2", DOUBLE()}});
   TypePtr row2 = row1 =
@@ -157,6 +130,14 @@ TEST_F(PlanTest, queryGraph) {
        {"m1", MAP(INTEGER(), ARRAY(INTEGER()))}});
   TypePtr differentNames =
       ROW({{"different", ROW({{"c1a", INTEGER()}})}, {"c2", DOUBLE()}});
+
+  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
+  auto context = std::make_unique<QueryGraphContext>(*allocator);
+  queryCtx() = context.get();
+
+  SCOPE_EXIT {
+    queryCtx() = nullptr;
+  };
 
   auto* dedupRow1 = toType(row1);
   auto* dedupRow2 = toType(row2);
@@ -192,51 +173,6 @@ TEST_F(PlanTest, queryGraph) {
                     ->cardinality();
   auto interned2 = queryCtx()->toPath(path2);
   EXPECT_EQ(interned2, interned);
-}
-
-TEST_F(PlanTest, limit) {
-  testConnector_->addTable(
-      "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
-
-  auto logicalPlan = lp::PlanBuilder()
-                         .tableScan(kTestConnectorId, "numbers", {"a", "b"})
-                         .limit(5, 10)
-                         .build();
-
-  // Verify single-node plan.
-  {
-    auto plan = toSingleNodePlan(logicalPlan);
-
-    auto matcher =
-        core::PlanMatcherBuilder().tableScan().project().limit(5, 10).build();
-    ASSERT_TRUE(matcher->match(plan));
-  }
-
-  // Verify distributed plan.
-  {
-    const auto distributedPlan = planVelox(logicalPlan);
-    const auto& fragments = distributedPlan.plan->fragments();
-    ASSERT_EQ(3, fragments.size());
-
-    EXPECT_EQ(fragments.at(0).scans.size(), 1);
-    EXPECT_EQ(fragments.at(1).scans.size(), 0);
-    EXPECT_EQ(fragments.at(2).scans.size(), 0);
-
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan()
-                       .project()
-                       .limit(5, 10)
-                       .partitionedOutput()
-                       .build();
-    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
-
-    matcher = core::PlanMatcherBuilder()
-                  .exchange()
-                  .limit(5, 10)
-                  .partitionedOutput()
-                  .build();
-    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
-  }
 }
 
 TEST_F(PlanTest, agg) {
@@ -544,13 +480,13 @@ TEST_F(PlanTest, unionAll) {
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan(
-                "nation", lte("n_nationkey", 10), "1 = (n_regionkey + 1) % 3")
+                "nation", lte("n_nationkey", 10), "(n_regionkey + 1) % 3 = 1")
             .project()
             .localPartition(core::PlanMatcherBuilder()
                                 .hiveScan(
                                     "nation",
                                     gte("n_nationkey", 14),
-                                    "1 = (n_regionkey + 1) % 3")
+                                    "(n_regionkey + 1) % 3 = 1")
                                 .project()
                                 .build())
             .project()
@@ -558,11 +494,6 @@ TEST_F(PlanTest, unionAll) {
 
     ASSERT_TRUE(matcher->match(plan));
   }
-
-  // Skip distributed run. Problem with local exchange source with
-  // multiple inputs.
-  gflags::FlagSaver saver;
-  FLAGS_num_workers = 1;
 
   auto referencePlan = exec::test::PlanBuilder(pool_.get())
                            .tableScan("nation", nationType)
@@ -656,11 +587,6 @@ TEST_F(PlanTest, unionJoin) {
     ASSERT_TRUE(matcher->match(plan));
   }
 
-  // Skip distributed run. Problem with local exchange source with
-  // multiple inputs.
-  gflags::FlagSaver saver;
-  FLAGS_num_workers = 1;
-
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto referencePlan =
       exec::test::PlanBuilder(idGenerator)
@@ -682,7 +608,9 @@ TEST_F(PlanTest, unionJoin) {
           .singleAggregation({}, {"sum(1)"})
           .planNode();
 
-  checkSame(logicalPlan, referencePlan);
+  // Skip distributed run. Problem with local exchange source with
+  // multiple inputs.
+  checkSame(logicalPlan, referencePlan, {.numWorkers = 1, .numDrivers = 4});
 }
 
 TEST_F(PlanTest, intersect) {
@@ -732,7 +660,7 @@ TEST_F(PlanTest, intersect) {
                                        .hiveScan(
                                            "nation",
                                            lte("n_nationkey", 20),
-                                           "1 = (n_regionkey + 1) % 3")
+                                           "(n_regionkey + 1) % 3 = 1")
                                        .project()
                                        .build(),
                                    core::JoinType::kRightSemiFilter)
@@ -794,7 +722,7 @@ TEST_F(PlanTest, except) {
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan(
-                "nation", lte("n_nationkey", 20), "1 = (n_regionkey + 1) % 3")
+                "nation", lte("n_nationkey", 20), "(n_regionkey + 1) % 3 = 1")
             .project()
             .hashJoin(
                 core::PlanMatcherBuilder()
@@ -831,6 +759,234 @@ TEST_F(PlanTest, except) {
   checkSame(logicalPlan, referencePlan);
 }
 
+TEST_F(PlanTest, values) {
+  auto nationType =
+      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
+          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
+
+  const std::vector<std::string>& names = nationType->names();
+
+  auto rowVector = makeRowVector(
+      names,
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<StringView>({"nation1", "nation2", "nation3"}),
+          makeFlatVector<StringView>({"comment1", "comment2", "comment3"}),
+      });
+
+  lp::PlanBuilder::Context ctx{exec::test::kHiveConnectorId};
+
+  {
+    auto makeLogicalPlan = [&](const std::string& filter) {
+      return lp::PlanBuilder(ctx)
+          .values({rowVector})
+          .filter(filter)
+          .project({"n_nationkey", "n_regionkey"});
+    };
+
+    auto logicalPlanExcept =
+        lp::PlanBuilder(ctx)
+            .setOperation(
+                lp::SetOperation::kExcept,
+                {
+                    makeLogicalPlan("n_nationkey < 21"),
+                    makeLogicalPlan("n_nationkey > 16"),
+                    makeLogicalPlan("n_nationkey <= 5"),
+                })
+            .project({"n_nationkey", "n_regionkey + 1 as rk"})
+            .filter("cast(rk as integer) in (1, 2, 4, 5)")
+            .build();
+
+    auto referencePlanExcept =
+        exec::test::PlanBuilder(pool_.get())
+            .values({rowVector})
+            .filter("n_nationkey > 5 and n_nationkey <= 16")
+            .project({"n_nationkey", "n_regionkey + 1 as rk"})
+            .filter("rk in (1, 2, 4, 5)")
+            .planNode();
+
+    checkSame(logicalPlanExcept, referencePlanExcept);
+  }
+
+  // In this test, we verify that the optimizer can handle
+  // combinations of logical plans with different leaf types (table scan vs
+  // values) and that it can generate the correct physical plan for each
+  // combination.
+  // We check following cases:
+  // 1. t1 join t2
+  // 2. t1 join (t2 join t3)
+  // 3. t1 join (t2 join (t3 join t4))
+  // t* can be either table scan or values.
+  // We don't check produced plan, only that it results in the same rows as
+  // correct exection plan.
+
+  auto makeLogicalPlan = [&](uint8_t leafType,
+                             const std::string& filter,
+                             const std::string& alias) {
+    auto plan = lp::PlanBuilder(ctx);
+    if (leafType == 0) {
+      plan.tableScan("nation", names);
+    } else {
+      plan.values({rowVector});
+    }
+    return plan.filter(filter).project({
+        fmt::format("n_nationkey AS {}1", alias),
+        fmt::format("n_regionkey AS {}2", alias),
+        fmt::format("n_comment AS {}3", alias),
+    });
+  };
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto makePhysicalPlan =
+      [&](int leafType, const std::string& filter, const std::string& alias) {
+        auto plan = exec::test::PlanBuilder(idGenerator, pool_.get());
+        if (leafType == 0) {
+          plan.tableScan("nation", nationType);
+        } else {
+          plan.values({rowVector});
+        }
+        return plan.filter(filter).project({
+            fmt::format("n_nationkey AS {}1", alias),
+            fmt::format("n_regionkey AS {}2", alias),
+            fmt::format("n_comment AS {}3", alias),
+        });
+      };
+
+  auto numJoins = 1;
+  auto numCombinations = 1 << (numJoins + 1);
+  for (int32_t i = 0; i < numCombinations; ++i) {
+    const int leafType1 = bits::isBitSet(&i, 0);
+    const int leafType2 = bits::isBitSet(&i, 1);
+
+    SCOPED_TRACE(fmt::format("Join: {} x {}", leafType1, leafType2));
+
+    auto logicalPlan =
+        makeLogicalPlan(leafType1, "n_regionkey < 3", "x")
+            .join(
+                makeLogicalPlan(leafType2, "n_regionkey > 1", "y"),
+                "x2 = y2",
+                lp::JoinType::kInner)
+            .project({"x1", "x2", "y3"})
+            .build();
+
+    auto referencePlan =
+        makePhysicalPlan(leafType1, "n_regionkey < 3", "x")
+            .hashJoin(
+                {"x2"},
+                {"y2"},
+                makePhysicalPlan(leafType2, "n_regionkey > 1", "y").planNode(),
+                "",
+                {"x1", "x2", "y3"})
+            .planNode();
+
+    checkSame(logicalPlan, referencePlan);
+  }
+
+  numJoins = 2;
+  numCombinations = 1 << (numJoins + 1);
+  for (int32_t i = 0; i < numCombinations; ++i) {
+    const int leafType1 = bits::isBitSet(&i, 0);
+    const int leafType2 = bits::isBitSet(&i, 1);
+    const int leafType3 = bits::isBitSet(&i, 2);
+
+    SCOPED_TRACE(
+        fmt::format("Join: {} x {} x {}", leafType1, leafType2, leafType3));
+
+    auto logicalPlan =
+        makeLogicalPlan(leafType1, "n_regionkey < 3", "x")
+            .join(
+                makeLogicalPlan(leafType2, "n_regionkey < 3", "y")
+                    .join(
+                        makeLogicalPlan(leafType3, "n_regionkey > 1", "z"),
+                        "y2 = z2",
+                        lp::JoinType::kInner),
+                "x2 = y2",
+                lp::JoinType::kInner)
+            .project({"x1", "x2", "y1", "z3"})
+            .build();
+
+    auto referencePlan =
+        makePhysicalPlan(leafType1, "n_regionkey < 3", "x")
+            .hashJoin(
+                {"x2"},
+                {"y2"},
+                makePhysicalPlan(leafType2, "n_regionkey < 3", "y")
+                    .hashJoin(
+                        {"y2"},
+                        {"z2"},
+                        makePhysicalPlan(leafType3, "n_regionkey > 1", "z")
+                            .planNode(),
+                        "",
+                        {"y1", "y2", "z3"})
+                    .planNode(),
+                "",
+                {"x1", "x2", "y1", "z3"})
+            .planNode();
+
+    checkSame(logicalPlan, referencePlan);
+  }
+
+  numJoins = 3;
+  numCombinations = 1 << (numJoins + 1);
+  for (int32_t i = 0; i < numCombinations; ++i) {
+    const int leafType1 = bits::isBitSet(&i, 0);
+    const int leafType2 = bits::isBitSet(&i, 1);
+    const int leafType3 = bits::isBitSet(&i, 2);
+    const int leafType4 = bits::isBitSet(&i, 3);
+
+    SCOPED_TRACE(fmt::format(
+        "Join: {} x {} x {} x {}", leafType1, leafType2, leafType3, leafType4));
+
+    auto logicalPlan =
+        makeLogicalPlan(leafType1, "n_regionkey < 3", "x")
+            .join(
+                makeLogicalPlan(leafType2, "n_regionkey < 3", "y")
+                    .join(
+                        makeLogicalPlan(leafType3, "n_regionkey < 3", "z")
+                            .join(
+                                makeLogicalPlan(
+                                    leafType4, "n_regionkey > 1", "w"),
+                                "z2 == w2",
+                                lp::JoinType::kInner)
+                            .project({"z1", "z2", "w3"}),
+                        "y2 == z2",
+                        lp::JoinType::kInner)
+                    .project({"y1", "y2", "z1", "w3"}),
+                "x2 = y2",
+                lp::JoinType::kInner)
+            .project({"x1", "x2", "y1", "z1", "w3"})
+            .build();
+
+    auto referencePlan =
+        makePhysicalPlan(leafType1, "n_regionkey < 3", "x")
+            .hashJoin(
+                {"x2"},
+                {"y2"},
+                makePhysicalPlan(leafType2, "n_regionkey < 3", "y")
+                    .hashJoin(
+                        {"y2"},
+                        {"z2"},
+                        makePhysicalPlan(leafType3, "n_regionkey < 3", "z")
+                            .hashJoin(
+                                {"z2"},
+                                {"w2"},
+                                makePhysicalPlan(
+                                    leafType4, "n_regionkey > 1", "w")
+                                    .planNode(),
+                                "",
+                                {"z1", "z2", "w3"})
+                            .planNode(),
+                        "",
+                        {"y1", "y2", "z1", "w3"})
+                    .planNode(),
+                "",
+                {"x1", "x2", "y1", "z1", "w3"})
+            .planNode();
+
+    checkSame(logicalPlan, referencePlan);
+  }
+}
 } // namespace
 } // namespace facebook::velox::optimizer
 
