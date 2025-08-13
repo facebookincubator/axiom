@@ -15,9 +15,12 @@
  */
 
 #include "axiom/optimizer/Plan.h"
+#include <sys/types.h>
 #include "axiom/optimizer/Cost.h"
 
+#include <cstdint>
 #include <iostream>
+#include <stdexcept>
 
 namespace facebook::velox::optimizer {
 
@@ -1400,7 +1403,60 @@ void Optimization::crossJoin(
     const JoinCandidate& candidate,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
-  VELOX_NYI("No cross joins");
+  PlanStateSaver save(state, candidate);
+
+  PlanObjectSet broadcastTables;
+  PlanObjectSet broadcastColumns;
+  for (auto buildTable : candidate.tables) {
+    broadcastColumns.unionSet(availableColumns(buildTable));
+    broadcastTables.add(buildTable);
+  }
+  state.columns.unionSet(broadcastColumns);
+
+  auto memoKey = MemoKey{
+      candidate.tables[0], broadcastColumns, broadcastTables, candidate.existences};
+
+  auto broadcast = Distribution::broadcast(
+      plan->distribution().distributionType, plan->resultCardinality());
+  PlanObjectSet empty;
+  bool needsShuffle = false;
+  auto rightPlan = makePlan(memoKey, broadcast, empty, 1, state, needsShuffle);
+
+  PlanState broadcastState(state.optimization, state.dt, rightPlan);
+  RelationOpPtr rightOp = rightPlan->op;
+
+  if (needsShuffle) {
+    auto* repartition =
+        make<Repartition>(rightOp, broadcast, rightOp->columns());
+    broadcastState.addCost(*repartition);
+    rightOp = repartition;
+  }
+
+  auto resultColumns = plan->columns();
+  resultColumns.insert(
+      resultColumns.end(),
+      rightOp->columns().begin(),
+      rightOp->columns().end());
+
+  const auto rightCardinality = rightOp->resultCardinality();
+
+  auto* join = make<Join>(
+      JoinMethod::kCross,
+      core::JoinType::kInner,
+      std::move(plan),
+      std::move(rightOp),
+      ExprVector{},
+      ExprVector{},
+      ExprVector{},
+      rightCardinality,
+      std::move(resultColumns));
+
+  state.addCost(*join);
+  state.cost.totalBytes *= broadcastState.cost.totalBytes;
+  state.cost.transferBytes += broadcastState.cost.transferBytes;
+  state.placed.unionSet(broadcastTables);
+
+  state.addNextJoin(&candidate, join, {}, toTry);
 }
 
 void Optimization::addJoin(
@@ -1411,6 +1467,7 @@ void Optimization::addJoin(
   std::vector<NextJoin> toTry;
   if (!candidate.join) {
     crossJoin(plan, candidate, state, toTry);
+    result.insert(result.end(), toTry.begin(), toTry.end());
     return;
   }
 
