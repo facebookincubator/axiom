@@ -87,8 +87,7 @@ class PlanTest : public test::QueryTestBase {
   core::PlanNodePtr toSingleNodePlan(
       const lp::LogicalPlanNodePtr& logicalPlan,
       const std::shared_ptr<connector::Connector>& defaultConnector = nullptr) {
-    schema_ = std::make_shared<velox::optimizer::SchemaResolver>(
-        defaultConnector == nullptr ? testConnector_ : defaultConnector, "");
+    schema_ = std::make_shared<velox::optimizer::SchemaResolver>();
 
     auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 4}).plan;
 
@@ -272,6 +271,37 @@ TEST_F(PlanTest, inList) {
 
     ASSERT_TRUE(matcher->match(plan));
   }
+}
+
+TEST_F(PlanTest, multipleConnectors) {
+  auto extraConnector = std::make_shared<connector::TestConnector>("extra");
+  connector::registerConnector(extraConnector);
+  SCOPE_EXIT {
+    connector::unregisterConnector("extra");
+  };
+
+  testConnector_->createTable("table1", ROW({"a"}, {BIGINT()}));
+  extraConnector->createTable("table2", ROW({"b"}, {BIGINT()}));
+
+  lp::PlanBuilder::Context context(kTestConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("table1")
+          .join(
+              lp::PlanBuilder(context).tableScan("extra", "table2"),
+              "a = b",
+              lp::JoinType::kInner)
+          .build();
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan("table1")
+          .hashJoin(core::PlanMatcherBuilder().tableScan("table2").build())
+          .project()
+          .build();
+
+  ASSERT_TRUE(matcher->match(plan));
 }
 
 TEST_F(PlanTest, filterToJoinEdge) {

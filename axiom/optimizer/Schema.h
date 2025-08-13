@@ -449,8 +449,11 @@ class Schema {
   /// Constructs a Schema for producing executable plans, backed by 'source'.
   Schema(Name _name, SchemaResolver* source, LocusCP locus);
 
-  /// Returns the table with 'name' or nullptr if not found.
-  SchemaTableCP findTable(std::string_view name) const;
+  /// Returns the table with 'name' or nullptr if not found, using
+  /// the connector specified by connectorId to perform table lookups.
+  /// An error is thrown if no connector with the specified ID exists.
+  SchemaTableCP findTable(std::string_view connectorId, std::string_view name)
+      const;
 
   Name name() const {
     return name_;

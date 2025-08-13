@@ -65,7 +65,7 @@ void QueryTestBase::SetUp() {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
 
-  schema_ = std::make_shared<velox::optimizer::SchemaResolver>(connector_, "");
+  schema_ = std::make_shared<velox::optimizer::SchemaResolver>();
   if (suiteHistory_) {
     history_ = std::move(suiteHistory_);
   } else {

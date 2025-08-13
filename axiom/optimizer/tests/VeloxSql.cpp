@@ -186,7 +186,7 @@ class VeloxRunner : public QueryBenchmarkBase {
 
     registerHiveConnector();
 
-    schema_ = std::make_shared<optimizer::SchemaResolver>(connector_, "");
+    schema_ = std::make_shared<optimizer::SchemaResolver>();
 
     parser_ = setupQueryParser();
 

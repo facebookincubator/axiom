@@ -24,25 +24,25 @@ namespace facebook::velox::optimizer {
 
 class SchemaResolver {
  public:
-  SchemaResolver(
-      const std::shared_ptr<connector::Connector>& defaultConnector,
-      const std::string& defaultSchema)
-      : defaultConnector_(defaultConnector), defaultSchema_(defaultSchema) {}
+  SchemaResolver(const std::string& defaultSchema = "")
+      : defaultSchema_(defaultSchema) {}
 
   virtual ~SchemaResolver() = default;
 
   // Converts a table name to a resolved Table, or nullptr if the table doesn't
-  // exist. Input can be any of the following formats:
+  // exist. If a connector for the specified catalog doesn't exist, an error
+  // will be returned. Input table name can be any of the following formats:
   //   - "tablename"
   //   - "schema.tablename"
   //   - "catalog.schema.tablename"
-  // If catalog is omitted, defaultConnector will be used for the table lookup.
   // If schema is omitted, defaultSchema will be prepended prior to lookup.
-  virtual const connector::Table* findTable(const std::string& name);
+  // If the table name specifies a different catalog than the one specified
+  // as a parameter, an error will be thrown.
+  virtual const connector::Table* findTable(
+      const std::string& catalog,
+      const std::string& name);
 
  private:
-  // Connector to use if name does not specify a catalog.
-  const std::shared_ptr<connector::Connector> defaultConnector_;
   const std::string defaultSchema_;
 };
 

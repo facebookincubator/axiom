@@ -95,14 +95,16 @@ Schema::Schema(
 Schema::Schema(const char* _name, SchemaResolver* source, LocusCP locus)
     : name_(_name), source_(source), defaultLocus_(locus) {}
 
-SchemaTableCP Schema::findTable(std::string_view name) const {
+SchemaTableCP Schema::findTable(
+    std::string_view connectorId,
+    std::string_view name) const {
   auto internedName = toName(name);
   auto it = tables_.find(internedName);
   if (it != tables_.end()) {
     return it->second;
   }
   VELOX_CHECK_NOT_NULL(source_);
-  auto* table = source_->findTable(std::string(name));
+  auto* table = source_->findTable(std::string(connectorId), std::string(name));
   if (!table) {
     return nullptr;
   }

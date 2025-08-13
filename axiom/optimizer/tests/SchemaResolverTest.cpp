@@ -31,8 +31,7 @@ class SchemaResolverTest : public ::testing::Test {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     baseCatalog_ = generateCatalog("base", "baseschema");
     otherCatalog_ = generateCatalog("other", "otherschema");
-    resolver_ = std::make_shared<SchemaResolver>(
-        baseCatalog_.connector, baseCatalog_.schema);
+    resolver_ = std::make_shared<SchemaResolver>(baseCatalog_.schema);
   }
 
   void TearDown() override {
@@ -67,50 +66,69 @@ TEST_F(SchemaResolverTest, bareTable) {
   auto lookup = "table";
   auto expect = "baseschema.table";
   baseCatalog_.connector->createTable(expect);
-  auto table = resolver_->findTable(lookup);
+
+  auto table = resolver_->findTable("base", lookup);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->name(), expect);
+
+  table = resolver_->findTable("other", lookup);
+  ASSERT_EQ(table, nullptr);
 }
 
 TEST_F(SchemaResolverTest, invalidName) {
   auto lookup = "table.";
   VELOX_ASSERT_THROW(
-      resolver_->findTable(lookup),
+      resolver_->findTable("base", lookup),
       fmt::format("Invalid table name: '{}'", lookup));
 
   lookup = "...";
   VELOX_ASSERT_THROW(
-      resolver_->findTable(lookup),
+      resolver_->findTable("base", lookup),
       fmt::format("Invalid table name: '{}'", lookup));
 
   lookup = "catalog.extra.schema.table";
   VELOX_ASSERT_THROW(
-      resolver_->findTable(lookup),
+      resolver_->findTable("base", lookup),
       fmt::format("Invalid table name: '{}'", lookup));
 }
 
 TEST_F(SchemaResolverTest, tablePlusSchema) {
   auto lookup = "newschema.table";
   baseCatalog_.connector->createTable(lookup);
-  auto table = resolver_->findTable(lookup);
+  auto table = resolver_->findTable("base", lookup);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->name(), lookup);
+
+  table = resolver_->findTable("other", lookup);
+  ASSERT_EQ(table, nullptr);
 }
 
 TEST_F(SchemaResolverTest, tablePlusSchemaPlusCatalog) {
   auto lookup = "other.otherschema.table";
   auto expect = "otherschema.table";
   otherCatalog_.connector->createTable(expect);
-  auto table = resolver_->findTable(lookup);
+  auto table = resolver_->findTable("other", lookup);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->name(), expect);
 
   lookup = "base.baseschema.table";
   expect = "baseschema.table";
   baseCatalog_.connector->createTable(expect);
-  table = resolver_->findTable(lookup);
+  table = resolver_->findTable("base", lookup);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->name(), expect);
+}
+
+TEST_F(SchemaResolverTest, catalogMismatch) {
+  auto lookupName = "other.otherschema.table";
+  otherCatalog_.connector->createTable(lookupName);
+  VELOX_ASSERT_THROW(
+      resolver_->findTable("base", lookupName),
+      "Input catalog must match table catalog specifier");
+
+  lookupName = "otherschema.table";
+  auto table = resolver_->findTable("base", lookupName);
+  ASSERT_EQ(table, nullptr);
 }
 
 } // namespace

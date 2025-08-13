@@ -44,8 +44,6 @@ class TestConnectorQueryTest : public QueryTestBase {
     QueryTestBase::SetUp();
     connector_ = std::make_shared<connector::TestConnector>(kTestConnectorId);
     connector::registerConnector(connector_);
-    schema_ =
-        std::make_shared<velox::optimizer::SchemaResolver>(connector_, "");
     options_.numWorkers = 1;
     options_.numDrivers = 16;
   }
