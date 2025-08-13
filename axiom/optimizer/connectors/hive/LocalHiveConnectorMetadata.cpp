@@ -26,8 +26,7 @@
 
 namespace facebook::velox::connector::hive {
 
-std::vector<std::shared_ptr<const PartitionHandle>>
-LocalHiveSplitManager::listPartitions(
+std::vector<PartitionHandlePtr> LocalHiveSplitManager::listPartitions(
     const ConnectorTableHandlePtr& tableHandle) {
   // All tables are unpartitioned.
   std::unordered_map<std::string, std::optional<std::string>> empty;
@@ -36,7 +35,7 @@ LocalHiveSplitManager::listPartitions(
 
 std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
     const ConnectorTableHandlePtr& tableHandle,
-    std::vector<std::shared_ptr<const PartitionHandle>> partitions,
+    std::vector<PartitionHandlePtr> /*partitions*/,
     SplitOptions options) {
   // Since there are only unpartitioned tables now, always makes a SplitSource
   // that goes over all the files in the handle's layout.

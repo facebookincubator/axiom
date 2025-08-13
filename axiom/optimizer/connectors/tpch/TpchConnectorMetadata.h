@@ -56,12 +56,12 @@ class TpchSplitManager : public ConnectorSplitManager {
  public:
   TpchSplitManager(TpchConnectorMetadata* /* metadata */) {}
 
-  std::vector<std::shared_ptr<const PartitionHandle>> listPartitions(
+  std::vector<PartitionHandlePtr> listPartitions(
       const ConnectorTableHandlePtr& tableHandle) override;
 
   std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorTableHandlePtr& tableHandle,
-      std::vector<std::shared_ptr<const PartitionHandle>> partitions,
+      std::vector<PartitionHandlePtr> partitions,
       SplitOptions options = {}) override;
 };
 

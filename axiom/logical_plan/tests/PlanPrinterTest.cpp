@@ -29,13 +29,17 @@ class PlanPrinterTest : public testing::Test {
  protected:
   static constexpr auto kTestConnectorId = "test";
 
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
 
     auto connector =
         std::make_shared<connector::TestConnector>(kTestConnectorId);
-    connector->addTable(
+    connector->createTable(
         "test", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
     connector::registerConnector(connector);
   }

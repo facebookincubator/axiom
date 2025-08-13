@@ -176,7 +176,7 @@ TEST_F(PlanTest, queryGraph) {
 }
 
 TEST_F(PlanTest, agg) {
-  testConnector_->addTable(
+  testConnector_->createTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
 
   auto logicalPlan = lp::PlanBuilder()
@@ -200,7 +200,7 @@ TEST_F(PlanTest, agg) {
 // Verify that optimizer can handle connectors that do not support filter
 // pushdown.
 TEST_F(PlanTest, rejectedFilters) {
-  testConnector_->addTable(
+  testConnector_->createTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
 
   auto logicalPlan = lp::PlanBuilder()
@@ -218,7 +218,7 @@ TEST_F(PlanTest, rejectedFilters) {
 }
 
 TEST_F(PlanTest, inList) {
-  testConnector_->addTable(
+  testConnector_->createTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
 
   {

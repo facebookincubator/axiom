@@ -22,6 +22,9 @@ namespace facebook::velox::connector {
 
 class TestConnector;
 
+/// The Table and Connector objects to which this layout correspond
+/// are specified explicitly at init time. The sample API is
+/// overridden to provide placeholder counts.
 class TestTableLayout : public TableLayout {
  public:
   TestTableLayout(
@@ -34,77 +37,187 @@ class TestTableLayout : public TableLayout {
             table,
             connector,
             std::move(columns),
-            std::vector<const Column*>{},
-            std::vector<const Column*>{},
-            std::vector<SortOrder>{},
-            std::vector<const Column*>{},
-            true) {}
+            /*partitionColumns=*/{},
+            /*orderColumns=*/{},
+            /*sortOrder=*/{},
+            /*lookupKeys=*/{},
+            /*supportsScan=*/true) {}
 
   std::pair<int64_t, int64_t> sample(
-      const connector::ConnectorTableHandlePtr& /* handle */,
-      float /* pct */,
-      std::vector<core::TypedExprPtr> /* extraFilters */,
-      RowTypePtr /* outputType */ = nullptr,
-      const std::vector<common::Subfield>& /* fields */ = {},
-      HashStringAllocator* /* allocator */ = nullptr,
-      std::vector<ColumnStatistics>* /* statistics */ = nullptr) const {
+      const connector::ConnectorTableHandlePtr&,
+      float,
+      std::vector<core::TypedExprPtr>,
+      RowTypePtr,
+      const std::vector<common::Subfield>&,
+      HashStringAllocator*,
+      std::vector<ColumnStatistics>*) const override {
     return std::make_pair(1'000, 1'000);
   }
 };
 
+/// RowVectors are appended using the addData() interface and the vector
+/// of RowVectors are retrieved using the data() interface. Appended
+/// data is copied inside an internal memory pool associated with
+/// the table. Row count is determined dynamically using a summation
+/// of row counts for RowVectors currently stored within the table.
 class TestTable : public Table {
  public:
   TestTable(
       const std::string& name,
       const RowTypePtr& schema,
-      TestConnector* connector)
-      : Table(name), connector_{connector} {
-    type_ = schema;
-
-    columns_.reserve(schema->size());
-
-    std::vector<const Column*> columnPtrs;
-    columnPtrs.reserve(schema->size());
-
-    for (auto i = 0; i < schema->size(); ++i) {
-      auto column =
-          std::make_shared<Column>(schema->nameOf(i), schema->childAt(i));
-      columns_.emplace_back(column);
-      columnPtrMap_.emplace(column->name(), column.get());
-      columnPtrs.emplace_back(column.get());
-    }
-
-    layout_ =
-        std::make_shared<TestTableLayout>(name, this, connector, columnPtrs);
-    layoutPtrs_.emplace_back(layout_.get());
-  }
+      TestConnector* connector);
 
   const std::unordered_map<std::string, const Column*>& columnMap()
       const override {
-    return columnPtrMap_;
+    return columns_;
   }
 
   const std::vector<const TableLayout*>& layouts() const override {
-    return layoutPtrs_;
+    return layouts_;
   }
 
   uint64_t numRows() const override {
-    return 100;
+    uint64_t rows = 0;
+    for (const auto& vector : data_) {
+      rows += vector->size();
+    }
+    return rows;
+  }
+
+  const std::vector<RowVectorPtr>& data() const {
+    return data_;
+  }
+
+  /// Copy the specified RowVector into the internal data of the
+  /// table. The underlying types of the columns must match the
+  /// schema specified during initial table creation.
+  /// Data is copied on append so that vectors from temporary
+  /// memory pools can be appended. These copies are allocated
+  /// via the TestTable internal memory pool.
+  void addData(const RowVectorPtr& data) {
+    VELOX_CHECK(
+        data->type()->equivalent(*rowType()),
+        "appended data type {} must match table type {}",
+        data->type(),
+        rowType());
+    VELOX_CHECK(data->size() > 0, "cannot append empty RowVector");
+    auto copy = std::dynamic_pointer_cast<RowVector>(
+        BaseVector::copy(*data, pool_.get()));
+    data_.push_back(copy);
   }
 
  private:
-  TestConnector* connector_;
-  std::vector<std::shared_ptr<const Column>> columns_;
-  std::unordered_map<std::string, const Column*> columnPtrMap_;
-  std::shared_ptr<const TableLayout> layout_;
-  std::vector<const TableLayout*> layoutPtrs_;
+  connector::Connector* connector_;
+  std::unordered_map<std::string, const Column*> columns_;
+  std::vector<std::unique_ptr<Column>> exportedColumns_;
+  std::vector<const TableLayout*> layouts_;
+  std::vector<std::unique_ptr<TableLayout>> exportedLayouts_;
+  std::shared_ptr<memory::MemoryPool> pool_;
+  std::vector<RowVectorPtr> data_;
+};
+
+/// SplitSource generated via the TestSplitManager embedded in the
+/// TestConnector. Generates one default-initialized ConnectorSplit
+/// for each partition provided at initialization time. targetBytes
+/// are ignored when retrieving splits, each new call to getSplits
+/// returns just one ConnectorSplit.
+class TestSplitSource : public SplitSource {
+ public:
+  TestSplitSource(
+      const std::string& connectorId,
+      const std::vector<PartitionHandlePtr>& partitions)
+      : connectorId_(connectorId),
+        partitions_(partitions),
+        currentPartition_(0) {}
+
+  std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) override;
+
+ private:
+  const std::string connectorId_;
+  const std::vector<PartitionHandlePtr> partitions_;
+  size_t currentPartition_;
+};
+
+/// SplitManager embedded in the TestConnector. Returns one
+/// default-initialized PartitionHandle upon call to listPartitions.
+/// Generates a TestSplitSource containing the provided partition
+/// handles upon call to getSplitSource.
+class TestSplitManager : public ConnectorSplitManager {
+ public:
+  std::vector<PartitionHandlePtr> listPartitions(
+      const ConnectorTableHandlePtr& tableHandle) override;
+
+  std::shared_ptr<SplitSource> getSplitSource(
+      const ConnectorTableHandlePtr& tableHandle,
+      std::vector<PartitionHandlePtr> partitions,
+      SplitOptions options = {}) override;
 };
 
 class TestColumnHandle : public ColumnHandle {
  public:
-  explicit TestColumnHandle(const std::string& name) : name_{name} {}
+  TestColumnHandle(const std::string& name, const TypePtr& type)
+      : name_(name), type_(type) {}
 
   const std::string& name() const override {
+    return name_;
+  }
+
+  const TypePtr& type() const {
+    return type_;
+  }
+
+ private:
+  const std::string name_;
+  const TypePtr type_;
+};
+
+/// The layout corresponding to the handle is provided at
+/// initialization time.
+class TestTableHandle : public ConnectorTableHandle {
+ public:
+  TestTableHandle(
+      const TableLayout& layout,
+      std::vector<ColumnHandlePtr> columnHandles,
+      std::vector<core::TypedExprPtr> filters = {})
+      : ConnectorTableHandle(layout.connector()->connectorId()),
+        layout_(layout),
+        columnHandles_(std::move(columnHandles)),
+        filters_(std::move(filters)) {}
+
+  const std::string& name() const override {
+    return layout_.table()->name();
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  const TableLayout& layout() const {
+    return layout_;
+  }
+
+  const std::vector<core::TypedExprPtr>& filters() const {
+    return filters_;
+  }
+
+  const std::vector<ColumnHandlePtr>& columnHandles() const {
+    return columnHandles_;
+  }
+
+ private:
+  const TableLayout& layout_;
+  const std::vector<ColumnHandlePtr> columnHandles_;
+  const std::vector<core::TypedExprPtr> filters_;
+};
+
+/// The TestInsertTableHandle should be populated using the table
+/// name as the name parameter so that lookups can be performed
+/// against the ConnectorMetadata table map.
+class TestInsertTableHandle : public ConnectorInsertTableHandle {
+ public:
+  explicit TestInsertTableHandle(const std::string& name) : name_(name) {}
+
+  std::string toString() const override {
     return name_;
   }
 
@@ -112,46 +225,36 @@ class TestColumnHandle : public ColumnHandle {
   const std::string name_;
 };
 
-class TestTableHandle : public ConnectorTableHandle {
- public:
-  explicit TestTableHandle(const std::string& connectorId)
-      : ConnectorTableHandle{connectorId} {}
-
-  std::string toString() const override {
-    return "TestTableHandle";
-  }
-};
-
+/// Contains an in-memory map of TestTables inserted via the createTable
+/// API. Tables are retrieved by name using the findTable API. The
+/// splitManager API returns a TestSplitManager. createColumnHandle
+/// returns a TestColumnHandle for the specified layout and column.
+/// createTableHandle returns a TestTableHandle for the specified
+/// layout. Filter pushdown is not supported.
 class TestConnectorMetadata : public ConnectorMetadata {
  public:
   explicit TestConnectorMetadata(TestConnector* connector)
-      : connector_{connector} {}
+      : connector_(connector),
+        splitManager_(std::make_unique<TestSplitManager>()) {}
 
   void initialize() override {}
 
-  const Table* findTable(const std::string& name) override {
-    auto it = tables_.find(name);
-    VELOX_USER_CHECK(it != tables_.end(), "Test table not found: {}", name);
-    return it->second.get();
-  }
+  const Table* FOLLY_NULLABLE findTable(const std::string& name) override;
+
+  /// Non-interface method which supplies a non-const Table reference
+  /// which is capable of performing writes to the underlying table.
+  Table* FOLLY_NULLABLE findTableInternal(const std::string& name);
 
   ConnectorSplitManager* splitManager() override {
-    VELOX_NYI();
-  }
-
-  void addTable(const std::string& name, const RowTypePtr& schema) {
-    tables_.emplace(
-        name, std::make_unique<TestTable>(name, schema, connector_));
+    return splitManager_.get();
   }
 
   ColumnHandlePtr createColumnHandle(
-      const TableLayout& /* layoutData */,
+      const TableLayout& layout,
       const std::string& columnName,
-      std::vector<common::Subfield> /* subfields */,
-      std::optional<TypePtr> /* castToType */,
-      SubfieldMapping /* subfieldMapping */) override {
-    return std::make_shared<TestColumnHandle>(columnName);
-  }
+      std::vector<common::Subfield> subfields = {},
+      std::optional<TypePtr> castToType = std::nullopt,
+      SubfieldMapping subfieldMapping = {}) override;
 
   ConnectorTableHandlePtr createTableHandle(
       const TableLayout& layout,
@@ -162,11 +265,72 @@ class TestConnectorMetadata : public ConnectorMetadata {
       RowTypePtr dataColumns,
       std::optional<LookupKeys>) override;
 
+  /// Create and return a TestTable with the specified name and schema in the
+  /// in-memory map maintained in the connector metadata. If the table already
+  /// exists, an error is thrown.
+  TestTable* createTable(const std::string& name, const RowTypePtr& schema);
+
+  /// Add data rows to the specified table. This data is returned via the
+  /// DataSource corresponding to this table. The data is copied
+  /// into the internal memory pool associated with the table.
+  void appendData(const std::string& name, const RowVectorPtr& data);
+
  private:
   TestConnector* connector_;
   std::unordered_map<std::string, std::unique_ptr<TestTable>> tables_;
+  std::unique_ptr<TestSplitManager> splitManager_;
 };
 
+/// At DataSource creation time, the data contained in the corresponding Table
+/// object is retrieved and cached. On each call to next(), one RowVectorPtr
+/// returned to the caller, followed by nullptr once data is exhausted.
+/// Runtime stats are not populated for the data source.
+class TestDataSource : public DataSource {
+ public:
+  TestDataSource(
+      const RowTypePtr& outputType,
+      const ColumnHandleMap& handles,
+      const Table* table,
+      memory::MemoryPool* pool);
+
+  void addSplit(std::shared_ptr<ConnectorSplit> split) override;
+
+  std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
+      override;
+
+  void addDynamicFilter(
+      column_index_t outputChannel,
+      const std::shared_ptr<common::Filter>& filter) override;
+
+  uint64_t getCompletedBytes() override {
+    return completedBytes_;
+  }
+
+  uint64_t getCompletedRows() override {
+    return completedRows_;
+  }
+
+  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
+    return {};
+  }
+
+ private:
+  const RowTypePtr outputType_;
+  velox::memory::MemoryPool* pool_;
+  std::shared_ptr<ConnectorSplit> split_;
+  std::vector<RowVectorPtr> data_;
+  std::vector<column_index_t> outputMappings_;
+  uint64_t completedBytes_{0};
+  uint64_t completedRows_{0};
+  uint64_t idx_{0};
+};
+
+/// Contains an embedded TestConnectorMetadata to which TestTables are
+/// added at runtime using the createTable API. Data is appended to a
+/// TestTable via the appendData method. createDataSource creates a
+/// TestDataSource object which returns appended data. createDataSink
+/// creates a TestDataSink object which appends additional data to
+/// the associated table.
 class TestConnector : public Connector {
  public:
   explicit TestConnector(const std::string& id)
@@ -177,32 +341,87 @@ class TestConnector : public Connector {
     return metadata_.get();
   }
 
-  std::unique_ptr<DataSource> createDataSource(
-      const RowTypePtr& /* outputType */,
-      const ConnectorTableHandlePtr& /* tableHandle */,
-      const ColumnHandleMap& /* columnHandles */,
-      ConnectorQueryCtx* /* connectorQueryCtx */) override {
-    VELOX_NYI();
+  bool supportsSplitPreload() override {
+    return true;
   }
+
+  bool canAddDynamicFilter() const override {
+    return false;
+  }
+
+  std::unique_ptr<DataSource> createDataSource(
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const ColumnHandleMap& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx) override;
 
   std::unique_ptr<DataSink> createDataSink(
-      RowTypePtr /* inputType */,
-      ConnectorInsertTableHandlePtr /* connectorInsertTableHandle */,
-      ConnectorQueryCtx* /* connectorQueryCtx */,
-      CommitStrategy /* commitStrategy */) override {
-    VELOX_NYI();
-  }
+      RowTypePtr inputType,
+      ConnectorInsertTableHandlePtr connectorInsertTableHandle,
+      ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy) override;
 
-  void addTable(const std::string& name, const RowTypePtr& schema) {
-    metadata_->addTable(name, schema);
-  }
+  /// Add a TestTable with the specified name and schema to the
+  /// TestConnectorMetadata corresponding to this connector.
+  TestTable* createTable(
+      const std::string& name,
+      const RowTypePtr& schema = ROW({}, {}));
 
-  void addTable(const std::string& name) {
-    metadata_->addTable(name, ROW({}, {}));
-  }
+  /// Add data rows to the specified table. This data is returned via the
+  /// DataSource corresponding to this table. Appended data is copied
+  /// to the internal memory pool of the associated table.
+  void appendData(const std::string& name, const RowVectorPtr& data);
 
  private:
   const std::unique_ptr<TestConnectorMetadata> metadata_;
+};
+
+/// The ConnectorFactory for the TestConnector can be configured with
+/// any desired connector name in order to inject the TestConnector
+/// into workflows which generate connectors using factory interfaces.
+class TestConnectorFactory : public ConnectorFactory {
+ public:
+  explicit TestConnectorFactory(const char* name) : ConnectorFactory(name) {}
+
+  std::shared_ptr<Connector> newConnector(
+      const std::string& id,
+      std::shared_ptr<const config::ConfigBase> config = nullptr,
+      folly::Executor* ioExecutor = nullptr,
+      folly::Executor* cpuExecutor = nullptr) override;
+};
+
+/// Data appended to the sink is copied to the internal data vector
+/// contained in the corresponding table.
+class TestDataSink : public DataSink {
+ public:
+  explicit TestDataSink(Table* table) {
+    table_ = dynamic_cast<TestTable*>(table);
+    VELOX_CHECK(table_, "table {} not a TestTable", table->name());
+  }
+
+  /// Data is copied to the memory pool internal to the
+  /// corresponding Table object and appended to the Table's
+  /// data buffer.
+  void appendData(RowVectorPtr vector) override;
+
+  /// Data append is completed inside appendData, so the finish()
+  /// interface is treated as a no-op.
+  bool finish() override {
+    return true;
+  }
+
+  std::vector<std::string> close() override {
+    return {};
+  }
+
+  void abort() override {}
+
+  Stats stats() const override {
+    return {};
+  }
+
+ private:
+  TestTable* table_;
 };
 
 } // namespace facebook::velox::connector

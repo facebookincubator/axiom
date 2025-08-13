@@ -390,6 +390,8 @@ class PartitionHandle {
   virtual ~PartitionHandle() = default;
 };
 
+using PartitionHandlePtr = std::shared_ptr<const PartitionHandle>;
+
 /// Enumerates splits. The table and partitions to cover are given to
 /// ConnectorSplitManager.
 class SplitSource {
@@ -430,7 +432,7 @@ class ConnectorSplitManager {
 
   /// Returns the list of all partitions that match the filters in
   /// 'tableHandle'. A non-partitioned table returns one partition.
-  virtual std::vector<std::shared_ptr<const PartitionHandle>> listPartitions(
+  virtual std::vector<PartitionHandlePtr> listPartitions(
       const ConnectorTableHandlePtr& tableHandle) = 0;
 
   /// Returns a SplitSource that covers the contents of 'partitions'. The set of
@@ -439,7 +441,7 @@ class ConnectorSplitManager {
   /// cluster.
   virtual std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorTableHandlePtr& tableHandle,
-      std::vector<std::shared_ptr<const PartitionHandle>> partitions,
+      std::vector<PartitionHandlePtr> partitions,
       SplitOptions = {}) = 0;
 };
 

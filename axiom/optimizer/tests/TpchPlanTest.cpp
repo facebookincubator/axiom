@@ -54,20 +54,10 @@ class TpchPlanTest : public virtual test::QueryTestBase {
 
   void SetUp() override {
     QueryTestBase::SetUp();
-    allocator_ = std::make_unique<HashStringAllocator>(pool_.get());
-    context_ = std::make_unique<QueryGraphContext>(*allocator_);
-    queryCtx() = context_.get();
 
     referenceBuilder_ = std::make_unique<exec::test::TpchQueryBuilder>(
         dwio::common::FileFormat::PARQUET);
     referenceBuilder_->initialize(FLAGS_data_path);
-  }
-
-  void TearDown() override {
-    context_.reset();
-    queryCtx() = nullptr;
-    allocator_.reset();
-    QueryTestBase::TearDown();
   }
 
   void checkTpch(int32_t query, const lp::LogicalPlanNodePtr& logicalPlan) {
@@ -148,8 +138,6 @@ class TpchPlanTest : public virtual test::QueryTestBase {
     auto referenceResult = assertSame(referencePlan, fragmentedPlan);
   }
 
-  std::unique_ptr<HashStringAllocator> allocator_;
-  std::unique_ptr<QueryGraphContext> context_;
   std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
 };
 
