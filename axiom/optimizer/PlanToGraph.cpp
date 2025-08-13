@@ -47,12 +47,12 @@ void Optimization::setDerivedTableOutput(
 }
 
 DerivedTableP Optimization::makeQueryGraphFromLogical() {
-  markAllSubfields(logicalPlan_->outputType().get(), logicalPlan_);
+  markAllSubfields(plan_->outputType().get(), plan_);
 
   root_ = newDt();
   currentSelect_ = root_;
 
-  makeQueryGraph(*logicalPlan_, kAllAllowedInDt);
+  makeQueryGraph(*plan_, kAllAllowedInDt);
   return root_;
 }
 
@@ -253,8 +253,8 @@ std::optional<ExprCP> Optimization::translateSubfield(
         } else {
           ensureFunctionSubfields(expr);
           auto call = expr->asUnchecked<lp::CallExpr>();
-          auto it = functionSubfields_.find(call);
-          if (it != functionSubfields_.end()) {
+          auto it = logicalFunctionSubfields_.find(call);
+          if (it != logicalFunctionSubfields_.end()) {
             skyline = &it->second;
           }
         }
@@ -435,7 +435,7 @@ void Optimization::ensureFunctionSubfields(const lp::ExprPtr& expr) {
     if (!metadata) {
       return;
     }
-    if (!translatedSubfieldFuncs_.count(call)) {
+    if (!logicalTranslatedSubfieldFuncs_.count(call)) {
       translateExpr(expr);
     }
   }
@@ -691,7 +691,7 @@ ExprCP Optimization::translateLambda(const lp::LambdaExpr* lambda) {
 std::optional<ExprCP> Optimization::translateSubfieldFunction(
     const lp::CallExpr* call,
     const FunctionMetadata* metadata) {
-  translatedSubfieldFuncs_.insert(call);
+  logicalTranslatedSubfieldFuncs_.insert(call);
   auto subfields = functionSubfields(call, false, false);
   if (subfields.empty()) {
     // The function is accessed as a whole.
@@ -748,7 +748,7 @@ std::optional<ExprCP> Optimization::translateSubfieldFunction(
       translated[pair.first] = translateExpr(pair.second);
     }
     if (!translated.empty()) {
-      functionSubfields_[call] =
+      logicalFunctionSubfields_[call] =
           SubfieldProjections{.pathToExpr = std::move(translated)};
       return nullptr;
     }

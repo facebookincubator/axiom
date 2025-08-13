@@ -1338,7 +1338,7 @@ class Optimization {
   std::unordered_set<const core::CallTypedExpr*> translatedSubfieldFuncs_;
 
   std::unordered_set<const logical_plan::CallExpr*>
-      translatedSubfieldFuncs_;
+      logicalTranslatedSubfieldFuncs_;
 
   /// If subfield extraction is pushed down, then these give the skyline
   /// subfields for a column for control and payload situations. The same column

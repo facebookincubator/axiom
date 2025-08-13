@@ -546,7 +546,7 @@ lp::ExprPtr stepToLogicalPlanGetter(Step step, const lp::ExprPtr& arg) {
   }
 }
 
-std::string LogicalPlanSubfields::toString() const {
+std::string PlanSubfields::toString() const {
   std::stringstream out;
 
   auto appendPaths = [&](const auto& resultPaths) {
