@@ -15,12 +15,9 @@
  */
 
 #include "axiom/optimizer/Plan.h"
-#include <sys/types.h>
 #include "axiom/optimizer/Cost.h"
 
-#include <cstdint>
 #include <iostream>
-#include <stdexcept>
 
 namespace facebook::velox::optimizer {
 
