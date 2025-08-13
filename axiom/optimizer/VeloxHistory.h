@@ -16,7 +16,8 @@
 
 #pragma once
 
-#include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/Cost.h"
+#include "axiom/optimizer/ToVelox.h"
 #include "velox/exec/TaskStats.h"
 
 namespace facebook::velox::optimizer {
@@ -28,11 +29,6 @@ class VeloxHistory : public History {
   void recordJoinSample(const std::string& key, float lr, float rl) override;
 
   std::pair<float, float> sampleJoin(JoinEdge* edge) override;
-
-  NodePrediction* getHistory(const std::string key) override;
-
-  virtual void setHistory(const std::string& key, NodePrediction history)
-      override;
 
   virtual std::optional<Cost> findCost(RelationOp& op) override {
     return std::nullopt;

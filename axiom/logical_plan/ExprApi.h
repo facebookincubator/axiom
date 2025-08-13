@@ -224,6 +224,11 @@ ExprApi Call(std::string name, T... args) {
   return Call(std::move(name), std::vector<ExprApi>{std::forward<T>(args)...});
 }
 
+template <typename... T>
+ExprApi In(T... args) {
+  return Call("in", std::vector<ExprApi>{std::forward<T>(args)...});
+}
+
 ExprApi Cast(TypePtr type, const ExprApi& input);
 
 inline ExprApi Cast(TypePtr type, const Variant& value) {
@@ -233,6 +238,8 @@ inline ExprApi Cast(TypePtr type, const Variant& value) {
 ExprApi Lambda(std::vector<std::string> names, const ExprApi& body);
 
 ExprApi Subquery(std::shared_ptr<const LogicalPlanNode> subquery);
+
+ExprApi Exists(const ExprApi& input);
 
 ExprApi Sql(const std::string& sql);
 

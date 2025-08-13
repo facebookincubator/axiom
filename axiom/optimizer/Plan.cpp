@@ -79,23 +79,33 @@ Optimization::Optimization(
     velox::core::ExpressionEvaluator& evaluator,
     OptimizerOptions opts,
     runner::MultiFragmentPlan::Options options)
+<<<<<<< HEAD
     : schema_(schema),
       opts_(std::move(opts)),
       plan_(&plan),
+=======
+    : opts_(std::move(opts)),
+      logicalPlan_(&plan),
+>>>>>>> origin/main
       history_(history),
       queryCtx_(std::move(_queryCtx)),
-      evaluator_(evaluator),
       options_(std::move(options)),
-      isSingle_(options_.numWorkers == 1) {
+      isSingle_(options_.numWorkers == 1),
+      toGraph_{schema, evaluator, opts_},
+      toVelox_{options_, opts_} {
   queryCtx()->optimization() = this;
-  root_ = makeQueryGraphFromLogical();
+  root_ = toGraph_.makeQueryGraph(*logicalPlan_);
   root_->distributeConjuncts();
   root_->addImpliedJoins();
   root_->linkTablesToJoins();
   for (auto* join : root_->joins) {
     join->guessFanout();
   }
+<<<<<<< HEAD
   setDerivedTableOutput(root_, *plan_);
+=======
+  toGraph_.setDerivedTableOutput(root_, *logicalPlan_);
+>>>>>>> origin/main
 }
 
 void Optimization::trace(
@@ -146,9 +156,6 @@ std::string Plan::toString(bool detail) const {
 }
 
 void PlanState::addCost(RelationOp& op) {
-  if (!static_cast<bool>(op.cost().unitCost)) {
-    op.setCost(*this);
-  }
   cost.unitCost += cost.inputCardinality * cost.fanout * op.cost().unitCost;
   cost.setupCost += op.cost().setupCost;
   cost.fanout *= op.cost().fanout;
@@ -193,6 +200,7 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
   if (it != downstreamPrecomputed.end()) {
     return it->second;
   }
+
   PlanObjectSet result;
   for (auto join : dt->joins) {
     bool addFilter = false;
@@ -208,29 +216,27 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
       result.unionColumns(join->filter());
     }
   }
-  for (auto& filter : dt->conjuncts) {
-    if (!placed.contains(filter)) {
-      result.unionColumns(filter);
-    }
-  }
+
   for (auto& conjunct : dt->conjuncts) {
     if (!placed.contains(conjunct)) {
       result.unionColumns(conjunct);
     }
   }
+
   if (dt->aggregation && !placed.contains(dt->aggregation)) {
-    auto aggToPlace = dt->aggregation->aggregation;
+    auto aggToPlace = dt->aggregation;
     for (auto i = 0; i < aggToPlace->columns().size(); ++i) {
       // Grouping columns must be computed anyway, aggregates only if referenced
       // by enclosing.
-      if (i < aggToPlace->grouping.size()) {
-        result.unionColumns(aggToPlace->grouping[i]);
+      if (i < aggToPlace->groupingKeys().size()) {
+        result.unionColumns(aggToPlace->groupingKeys()[i]);
       } else if (targetColumns.contains(aggToPlace->columns()[i])) {
         result.unionColumns(
-            aggToPlace->aggregates[i - aggToPlace->grouping.size()]);
+            aggToPlace->aggregates()[i - aggToPlace->groupingKeys().size()]);
       }
     }
   }
+
   result.unionSet(targetColumns);
   return downstreamPrecomputed[placed] = std::move(result);
 }
@@ -757,11 +763,11 @@ RelationOpPtr repartitionForAgg(const RelationOpPtr& plan, PlanState& state) {
     return plan;
   }
 
-  const auto* agg = state.dt->aggregation->aggregation;
+  const auto* agg = state.dt->aggregation;
 
   // If no grouping and not yet gathered on a single node, add a gather before
   // final agg.
-  if (agg->grouping.empty() &&
+  if (agg->groupingKeys().empty() &&
       !plan->distribution().distributionType.isGather) {
     auto* gather =
         make<Repartition>(plan, Distribution::gather(), plan->columns());
@@ -772,8 +778,8 @@ RelationOpPtr repartitionForAgg(const RelationOpPtr& plan, PlanState& state) {
   // 'intermediateColumns' contains grouping keys followed by partial agg
   // results.
   ExprVector keyValues;
-  for (auto i = 0; i < agg->grouping.size(); ++i) {
-    keyValues.push_back(agg->intermediateColumns[i]);
+  for (auto i = 0; i < agg->groupingKeys().size(); ++i) {
+    keyValues.push_back(agg->intermediateColumns()[i]);
   }
 
   bool shuffle = false;
@@ -805,17 +811,31 @@ void Optimization::addPostprocess(
     RelationOpPtr& plan,
     PlanState& state) {
   if (dt->aggregation) {
+    const auto& aggPlan = dt->aggregation;
+
     auto* partialAgg = make<Aggregation>(
-        *dt->aggregation->aggregation,
         plan,
-        core::AggregationNode::Step::kPartial);
-    state.placed.add(dt->aggregation);
+        aggPlan->groupingKeys(),
+        aggPlan->aggregates(),
+        core::AggregationNode::Step::kPartial,
+        aggPlan->intermediateColumns());
+
+    state.placed.add(aggPlan);
     state.addCost(*partialAgg);
     plan = repartitionForAgg(partialAgg, state);
+
+    ExprVector finalGroupingKeys;
+    for (auto i = 0; i < aggPlan->groupingKeys().size(); ++i) {
+      finalGroupingKeys.push_back(aggPlan->intermediateColumns()[i]);
+    }
+
     auto* finalAgg = make<Aggregation>(
-        *dt->aggregation->aggregation,
         plan,
-        core::AggregationNode::Step::kFinal);
+        finalGroupingKeys,
+        aggPlan->aggregates(),
+        core::AggregationNode::Step::kFinal,
+        aggPlan->columns());
+
     state.addCost(*finalAgg);
     plan = finalAgg;
   }
@@ -825,7 +845,8 @@ void Optimization::addPostprocess(
     plan = filter;
   }
   if (dt->hasOrderBy()) {
-    auto* orderBy = make<OrderBy>(plan, dt->orderByKeys, dt->orderByTypes);
+    auto* orderBy = make<OrderBy>(
+        plan, dt->orderByKeys, dt->orderByTypes, dt->limit, dt->offset);
     state.addCost(*orderBy);
     plan = orderBy;
   }
@@ -1737,14 +1758,17 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
 
 namespace {
 RelationOpPtr makeDistinct(const RelationOpPtr& input) {
-  ExprVector exprs;
-  for (auto& c : input->columns()) {
-    exprs.push_back(c);
+  ExprVector groupingKeys;
+  for (const auto& column : input->columns()) {
+    groupingKeys.push_back(column);
   }
-  auto agg = make<Aggregation>(input, exprs);
-  agg->mutableColumns() = input->columns();
-  agg->intermediateColumns = input->columns();
-  return agg;
+
+  return make<Aggregation>(
+      input,
+      groupingKeys,
+      AggregateVector{},
+      velox::core::AggregationNode::Step::kSingle,
+      input->columns());
 }
 
 Distribution somePartition(const RelationOpPtrVector& inputs) {

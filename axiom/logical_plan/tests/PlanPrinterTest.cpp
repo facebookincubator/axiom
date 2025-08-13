@@ -170,6 +170,50 @@ TEST_F(PlanPrinterTest, values) {
           testing::Eq("- VALUES [0]: 2 fields"), testing::Eq("")));
 }
 
+TEST_F(PlanPrinterTest, inList) {
+  auto plan = PlanBuilder()
+                  .tableScan(kTestConnectorId, "test", {"a", "b"})
+                  .filter("a IN (1, 5)")
+                  .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Filter: IN(a, 1, 5)"),
+          testing::StartsWith("  - TableScan: test.test"),
+          testing::Eq("")));
+
+  lines = toSummaryLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      // clang-format off
+      testing::ElementsAre(
+          testing::Eq("- FILTER [1]: 2 fields: a BIGINT, b DOUBLE"),
+          testing::Eq("      predicate: IN(a, 1, 5)"),
+          testing::Eq("      expressions: IN: 1, constant: 2, field: 1"),
+          testing::Eq("      constants: BIGINT: 2"),
+          testing::Eq("  - TABLE_SCAN [0]: 2 fields: a BIGINT, b DOUBLE"),
+          testing::Eq("        table: test"),
+          testing::Eq("        connector: test"),
+          testing::Eq(""))
+      // clang-format on
+  );
+
+  lines = toSkeletonLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("- FILTER [1]: 2 fields"),
+          testing::Eq("  - TABLE_SCAN [0]: 2 fields"),
+          testing::Eq("        table: test"),
+          testing::Eq("        connector: test"),
+          testing::Eq("")));
+}
+
 TEST_F(PlanPrinterTest, tableScan) {
   auto plan = PlanBuilder()
                   .tableScan(kTestConnectorId, "test", {"a", "b"})
@@ -453,6 +497,135 @@ TEST_F(PlanPrinterTest, subquery) {
           testing::Eq("      predicate: gt(a, subquery(- Aggregate() -> ROW<max:INTEGER>  ..."),
           testing::Eq("      expressions: aggregate: 1, call: 2, field: 4, subquery: 1"),
           testing::Eq("      functions: eq: 1, gt: 1, max: 1"),
+          testing::Eq("  - VALUES [0]: 1 fields: a INTEGER"),
+          testing::Eq("        rows: 3"),
+          testing::Eq(""))
+      // clang-format on
+  );
+
+  lines = toSkeletonLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("- FILTER [4]: 1 fields"),
+          testing::Eq("  - VALUES [0]: 1 fields"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, inSubquery) {
+  std::vector<Variant> data{
+      Variant::row({1}),
+      Variant::row({2}),
+      Variant::row({3}),
+  };
+
+  std::vector<Variant> lookup{
+      Variant::row({1, 10}),
+      Variant::row({2, 20}),
+  };
+
+  PlanBuilder::Scope scope;
+  // In subquery
+  auto context = PlanBuilder::Context();
+  auto plan =
+      PlanBuilder(context)
+          .values(ROW({"a"}, {INTEGER()}), data)
+          .as("l")
+          .captureScope(scope)
+          .filter(In(
+              Col("a"),
+              Subquery(
+                  PlanBuilder(context, scope)
+                      .values(ROW({"a", "b"}, {INTEGER(), INTEGER()}), lookup)
+                      .as("r")
+                      .filter("l.a = r.a")
+                      .project({"b"})
+                      .build())))
+          .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Filter: IN(a, subquery"),
+          testing::StartsWith("  - Values: 3 rows"),
+          testing::Eq("")));
+
+  lines = toSummaryLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      // clang-format off
+      testing::ElementsAre(
+          testing::Eq("- FILTER [4]: 1 fields: a INTEGER"),
+          testing::Eq("      predicate: IN(a, subquery(- Project: -> ROW<b:INTEGER>     b ..."),
+          testing::Eq("      expressions: IN: 1, call: 1, field: 4, subquery: 1"),
+          testing::Eq("      functions: eq: 1"),
+          testing::Eq("  - VALUES [0]: 1 fields: a INTEGER"),
+          testing::Eq("        rows: 3"),
+          testing::Eq(""))
+      // clang-format on
+  );
+
+  lines = toSkeletonLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("- FILTER [4]: 1 fields"),
+          testing::Eq("  - VALUES [0]: 1 fields"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, existsSubquery) {
+  std::vector<Variant> data{
+      Variant::row({1}),
+      Variant::row({2}),
+      Variant::row({3}),
+  };
+
+  std::vector<Variant> lookup{
+      Variant::row({1, 10}),
+      Variant::row({2, 20}),
+  };
+
+  PlanBuilder::Scope scope;
+  // Exists subquery
+  auto context = PlanBuilder::Context();
+  auto plan =
+      PlanBuilder(context)
+          .values(ROW({"a"}, {INTEGER()}), data)
+          .as("l")
+          .captureScope(scope)
+          .filter(Exists(Subquery(
+              PlanBuilder(context, scope)
+                  .values(ROW({"a", "b"}, {INTEGER(), INTEGER()}), lookup)
+                  .as("r")
+                  .filter("l.a = r.a")
+                  .build())))
+          .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Filter: EXISTS(subquery"),
+          testing::StartsWith("  - Values: 3 rows"),
+          testing::Eq("")));
+
+  lines = toSummaryLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      // clang-format off
+      testing::ElementsAre(
+          testing::Eq("- FILTER [4]: 1 fields: a INTEGER"),
+          testing::Eq("      predicate: EXISTS(subquery(- Project: -> ROW<a:INTEGER,b:INTE..."),
+          testing::Eq("      expressions: EXISTS: 1, call: 1, field: 4, subquery: 1"),
+          testing::Eq("      functions: eq: 1"),
           testing::Eq("  - VALUES [0]: 1 fields: a INTEGER"),
           testing::Eq("        rows: 3"),
           testing::Eq(""))

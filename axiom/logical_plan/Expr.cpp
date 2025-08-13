@@ -91,6 +91,8 @@ folly::F14FastMap<SpecialForm, std::string> specialFormNames() {
       {SpecialForm::kIf, "IF"},
       {SpecialForm::kSwitch, "SWITCH"},
       {SpecialForm::kStar, "STAR"},
+      {SpecialForm::kIn, "IN"},
+      {SpecialForm::kExists, "EXISTS"},
   };
 }
 } // namespace
@@ -217,6 +219,35 @@ void validateSwitchInputs(
         elseClause->type()->toString());
   }
 }
+
+void validateInInputs(const TypePtr& type, const std::vector<ExprPtr>& inputs) {
+  VELOX_USER_CHECK_EQ(
+      type->kind(),
+      TypeKind::BOOLEAN,
+      "IN expression must return boolean type");
+  VELOX_USER_CHECK_GE(inputs.size(), 2, "IN must have at least two inputs");
+  if (inputs.at(1)->isSubquery()) {
+    VELOX_USER_CHECK_EQ(inputs.size(), 2, "IN subquery must have two inputs");
+    auto subquery = inputs.at(1)->asUnchecked<SubqueryExpr>();
+    VELOX_USER_CHECK_EQ(
+        subquery->subquery()->outputType()->size(),
+        1,
+        "Subquery must return one column");
+    VELOX_USER_CHECK(
+        subquery->subquery()->outputType()->childAt(0)->equivalent(
+            *inputs.at(0)->type()),
+        "IN subquery must return the same type as the left operand");
+  } else {
+    auto leftType = inputs.at(0)->type();
+    for (int i = 1; i < inputs.size(); ++i) {
+      VELOX_USER_CHECK(
+          inputs.at(i)->type()->equivalent(*leftType),
+          "All inputs to IN must have the same type as the left operand: {} vs {}",
+          inputs.at(i)->type()->toString(),
+          leftType->toString());
+    }
+  }
+}
 } // namespace
 
 SpecialFormExpr::SpecialFormExpr(
@@ -276,6 +307,15 @@ SpecialFormExpr::SpecialFormExpr(
       VELOX_USER_CHECK_GE(
           inputs.size(), 0, "'*' expression cannot not have any inputs");
       break;
+    case SpecialForm::kIn:
+      validateInInputs(type, inputs);
+      break;
+    case SpecialForm::kExists:
+      VELOX_USER_CHECK_EQ(inputs.size(), 1, "EXISTS must have one input");
+      VELOX_USER_CHECK(
+          inputs.at(0)->isSubquery(),
+          "EXISTS input must be a subquery expression");
+      break;
   }
 }
 
@@ -322,10 +362,10 @@ VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, BoundType, boundTypeNames)
 SubqueryExpr::SubqueryExpr(const LogicalPlanNodePtr& subquery)
     : Expr(ExprKind::kSubquery, subquery->outputType()->childAt(0), {}),
       subquery_{subquery} {
-  VELOX_USER_CHECK_EQ(
+  VELOX_USER_CHECK_LE(
       1,
       subquery->outputType()->size(),
-      "Scalar subquery must produce exactly one column");
+      "Subquery must produce at least one column");
 }
 
 } // namespace facebook::velox::logical_plan

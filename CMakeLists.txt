@@ -19,6 +19,9 @@ project(Verax)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+# Enable generation of compile_commands.json for clang tools
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 add_compile_definitions(DISABLE_META_INTERNAL_COMPRESSOR=1)
 
 # Sets new behavior for CMP0135, which controls how timestamps are extracted

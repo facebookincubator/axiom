@@ -16,6 +16,7 @@
 
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/ToGraph.h"
 #include "axiom/optimizer/tests/FeatureGen.h"
 #include "axiom/optimizer/tests/Genies.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
@@ -121,7 +122,8 @@ class SubfieldTest : public QueryTestBase,
 
       // Here, for the sake of example, we make every odd key return identity.
       if (steps[1].id % 2 == 1) {
-        result[prefixPath] = stepToLogicalPlanGetter(steps[1], args[nth]);
+        result[prefixPath] =
+            ToGraph::stepToLogicalPlanGetter(steps[1], args[nth]);
         continue;
       }
 
@@ -131,7 +133,7 @@ class SubfieldTest : public QueryTestBase,
             REAL(),
             "plus",
             std::vector<lp::ExprPtr>{
-                stepToLogicalPlanGetter(steps[1], args[nth]),
+                ToGraph::stepToLogicalPlanGetter(steps[1], args[nth]),
                 std::make_shared<lp::ConstantExpr>(
                     REAL(),
                     std::make_shared<variant>(
@@ -145,12 +147,13 @@ class SubfieldTest : public QueryTestBase,
             ARRAY(BIGINT()),
             "array_distinct",
             std::vector<lp::ExprPtr>{
-                stepToLogicalPlanGetter(steps[1], args[nth])});
+                ToGraph::stepToLogicalPlanGetter(steps[1], args[nth])});
         continue;
       }
 
       // Access to idslf. Identity.
-      result[prefixPath] = stepToLogicalPlanGetter(steps[1], args[nth]);
+      result[prefixPath] =
+          ToGraph::stepToLogicalPlanGetter(steps[1], args[nth]);
     }
     return result;
   }

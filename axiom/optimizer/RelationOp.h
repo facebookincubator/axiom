@@ -24,8 +24,6 @@
 
 namespace facebook::velox::optimizer {
 
-struct PlanState;
-
 // Represents the cost and cardinality of a RelationOp or Plan. A Cost has a
 // per-row cost, a per-row fanout and a one-time setup cost. For example, a hash
 // join probe has a fanout of 0.3 if 3 of 10 input rows are expected to hit, a
@@ -123,15 +121,19 @@ class RelationOp : public Relation {
     return cost_.inputCardinality * cost_.fanout;
   }
 
+  float inputCardinality() const {
+    if (input() == nullptr) {
+      return 1;
+    }
+
+    return input()->distribution().cardinality;
+  }
+
   /// Returns the value constraints of 'expr' at the output of
   /// 'this'. For example, a filter or join may limit values. An Expr
   /// will for example have no more distinct values than the number of
   /// rows. This is computed on first use.
   const Value& value(ExprCP expr) const;
-
-  /// Fills in 'cost_' after construction. Depends on 'input' and is defined for
-  /// each subclass.
-  virtual void setCost(const PlanState& input);
 
   /// Returns a key for retrieving/storing a historical record of execution for
   /// future costing.
@@ -204,19 +206,7 @@ struct TableScan : public RelationOp {
       ColumnVector columns,
       ExprVector lookupKeys = {},
       velox::core::JoinType joinType = velox::core::JoinType::kInner,
-      ExprVector joinFilter = {})
-      : RelationOp(
-            RelType::kTableScan,
-            input,
-            std::move(_distribution),
-            std::move(columns)),
-        baseTable(table),
-        index(_index),
-        keys(std::move(lookupKeys)),
-        joinType(joinType),
-        joinFilter(std::move(joinFilter)) {
-    cost_.fanout = fanout;
-  }
+      ExprVector joinFilter = {});
 
   /// Columns of base table available in 'index'.
   static PlanObjectSet availableColumns(
@@ -230,8 +220,6 @@ struct TableScan : public RelationOp {
       const BaseTable* baseTable,
       ColumnGroupP index,
       const ColumnVector& columns);
-
-  void setCost(const PlanState& input) override;
 
   const QGstring& historyKey() const override;
 
@@ -263,19 +251,7 @@ struct TableScan : public RelationOp {
 
 /// Represents a values.
 struct Values : RelationOp {
-  Values(
-      const ValuesTable& valuesTable,
-      ColumnVector columns)
-      : RelationOp{
-          RelType::kValues,
-          nullptr,
-          Distribution{DistributionType::gather(), valuesTable.cardinality(), {}},
-          std::move(columns)},
-        valuesTable{valuesTable} {
-    cost_.fanout = valuesTable.cardinality();
-  }
-
-  void setCost(const PlanState& input) override;
+  Values(const ValuesTable& valuesTable, ColumnVector columns);
 
   const QGstring& historyKey() const override;
 
@@ -291,14 +267,7 @@ class Repartition : public RelationOp {
   Repartition(
       RelationOpPtr input,
       Distribution distribution,
-      ColumnVector columns)
-      : RelationOp(
-            RelType::kRepartition,
-            std::move(input),
-            std::move(distribution),
-            std::move(columns)) {}
-
-  void setCost(const PlanState& input) override;
+      ColumnVector columns);
 
   std::string toString(bool recursive, bool detail) const override;
 };
@@ -309,18 +278,11 @@ using RepartitionCP = const Repartition*;
 /// join. Non-equality constraints over inner joins become Filters.
 class Filter : public RelationOp {
  public:
-  Filter(RelationOpPtr input, ExprVector exprs)
-      : RelationOp(
-            RelType::kFilter,
-            input,
-            input->distribution(),
-            input->columns()),
-        exprs_(std::move(exprs)) {}
+  Filter(RelationOpPtr input, ExprVector exprs);
+
   const ExprVector& exprs() const {
     return exprs_;
   }
-
-  void setCost(const PlanState& input) override;
 
   const QGstring& historyKey() const override;
 
@@ -333,33 +295,16 @@ class Filter : public RelationOp {
 /// Assigns names to expressions. Used to rename output from a derived table.
 class Project : public RelationOp {
  public:
-  Project(RelationOpPtr input, ExprVector exprs, ColumnVector columns)
-      : RelationOp(
-            RelType::kProject,
-            input,
-            input->distribution().rename(exprs, columns),
-            columns),
-        exprs_(std::move(exprs)),
-        columns_(std::move(columns)) {
-    VELOX_CHECK_EQ(
-        exprs_.size(),
-        columns_.size(),
-        "Projection names and exprs must match");
-  }
+  Project(RelationOpPtr input, ExprVector exprs, ColumnVector columns);
 
   const ExprVector& exprs() const {
     return exprs_;
-  }
-
-  const ColumnVector& columns() const {
-    return columns_;
   }
 
   std::string toString(bool recursive, bool detail) const override;
 
  private:
   const ExprVector exprs_;
-  const ColumnVector columns_;
 };
 
 enum class JoinMethod { kHash, kMerge, kCross };
@@ -375,16 +320,7 @@ struct Join : public RelationOp {
       ExprVector rightKeys,
       ExprVector filter,
       float fanout,
-      ColumnVector columns)
-      : RelationOp(RelType::kJoin, input, input->distribution(), columns),
-        method(_method),
-        joinType(_joinType),
-        right(std::move(right)),
-        leftKeys(std::move(leftKeys)),
-        rightKeys(std::move(rightKeys)),
-        filter(std::move(filter)) {
-    cost_.fanout = fanout;
-  }
+      ColumnVector columns);
 
   JoinMethod method;
   velox::core::JoinType joinType;
@@ -395,8 +331,6 @@ struct Join : public RelationOp {
 
   // Total cost of build side plan. For documentation.
   Cost buildCost;
-
-  void setCost(const PlanState& input) override;
 
   const QGstring& historyKey() const override;
 
@@ -411,22 +345,12 @@ using JoinCP = const Join*;
 /// cardinality of this is counted as setup cost in the first
 /// referencing join and not counted in subsequent ones.
 struct HashBuild : public RelationOp {
-  HashBuild(RelationOpPtr input, int32_t id, ExprVector _keys, PlanPtr plan)
-      : RelationOp(
-            RelType::kHashBuild,
-            input,
-            input->distribution(),
-            input->columns()),
-        buildId(id),
-        keys(std::move(_keys)),
-        plan(plan) {}
+  HashBuild(RelationOpPtr input, int32_t id, ExprVector _keys, PlanPtr plan);
 
   int32_t buildId{0};
   ExprVector keys;
   // The plan producing the build data. Used for deduplicating joins.
   PlanPtr plan;
-
-  void setCost(const PlanState& input) override;
 
   std::string toString(bool recursive, bool detail) const override;
 };
@@ -436,36 +360,15 @@ using HashBuildCP = const HashBuild*;
 /// Represents aggregation with or without grouping.
 struct Aggregation : public RelationOp {
   Aggregation(
-      const Aggregation& other,
       RelationOpPtr input,
-      velox::core::AggregationNode::Step _step);
+      ExprVector groupingKeys,
+      AggregateVector aggregates,
+      velox::core::AggregationNode::Step step,
+      ColumnVector columns);
 
-  Aggregation(RelationOpPtr input, ExprVector _grouping)
-      : RelationOp(
-            RelType::kAggregation,
-            input,
-            // TODO Remove call sites that pass null input.
-            input ? input->distribution() : Distribution::gather()),
-        grouping(std::move(_grouping)) {}
-
-  // Grouping keys.
-  ExprVector grouping;
-
-  // Keys where the key expression is functionally dependent on
-  // another key or keys. These can be late materialized or converted
-  // to any() aggregates.
-  PlanObjectSet dependentKeys;
-
-  std::vector<AggregateCP, QGAllocator<AggregateCP>> aggregates;
-
-  velox::core::AggregationNode::Step step{
-      velox::core::AggregationNode::Step::kSingle};
-
-  // 'columns' of RelationOp is the final columns. 'intermediateColumns is the
-  // output of the corresponding partial aggregation.
-  ColumnVector intermediateColumns;
-
-  void setCost(const PlanState& input) override;
+  const ExprVector groupingKeys;
+  const AggregateVector aggregates;
+  const velox::core::AggregationNode::Step step;
 
   const QGstring& historyKey() const override;
 
@@ -474,7 +377,15 @@ struct Aggregation : public RelationOp {
 
 /// Represents an order by. The order is given by the distribution.
 struct OrderBy : public RelationOp {
-  OrderBy(RelationOpPtr input, ExprVector keys, OrderTypeVector orderType);
+  OrderBy(
+      RelationOpPtr input,
+      ExprVector keys,
+      OrderTypeVector orderType,
+      int64_t limit = -1,
+      int64_t offset = 0);
+
+  const int64_t limit;
+  const int64_t offset;
 
   std::string toString(bool recursive, bool detail) const override;
 };
@@ -483,15 +394,7 @@ using OrderByCP = const OrderBy*;
 
 /// Represents a union all.
 struct UnionAll : public RelationOp {
-  UnionAll(RelationOpPtrVector inputs)
-      : RelationOp(
-            RelType::kUnionAll,
-            nullptr,
-            inputs[0]->distribution(),
-            inputs[0]->columns()),
-        inputs(std::move(inputs)) {}
-
-  void setCost(const PlanState& input) override;
+  explicit UnionAll(RelationOpPtrVector inputs);
 
   const QGstring& historyKey() const override;
 
@@ -504,8 +407,6 @@ using UnionAllCP = const UnionAll*;
 
 struct Limit : public RelationOp {
   Limit(RelationOpPtr input, int64_t limit, int64_t offset);
-
-  void setCost(const PlanState& input) override;
 
   const int64_t limit;
   const int64_t offset;

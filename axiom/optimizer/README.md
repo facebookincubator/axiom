@@ -65,7 +65,7 @@ Name
 
 Optimization class from Plan.h is a bridge between 3 main functions:
 
-1. Make query graph from Plan tree. (PlanToGraph.cpp and PlanSubfields.cpp)
+1. Make query graph from logical plan tree. (PlanToGraph.cpp and PlanSubfields.cpp)
 2. Do dynamic programming to make PlanSets. (Plan.cpp)
 3. Make a Velox plan from the chosen Plan.  (ToVelox.cpp)
 

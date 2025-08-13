@@ -15,8 +15,7 @@
  */
 
 #include "axiom/optimizer/VeloxHistory.h"
-#include "velox/exec/Operator.h"
-#include "velox/exec/TaskStats.h"
+#include "axiom/optimizer/Plan.h"
 
 #include <iostream>
 
@@ -25,10 +24,10 @@ DEFINE_double(
     5,
     "Log a warning if cardinality estimate is more than this many times off. 0 means no warnings.");
 
-namespace facebook::velox::optimizer {
-
 using namespace facebook::velox::exec;
 using namespace facebook::velox::runner;
+
+namespace facebook::velox::optimizer {
 
 void VeloxHistory::recordJoinSample(
     const std::string& key,
@@ -36,7 +35,8 @@ void VeloxHistory::recordJoinSample(
     float rl) {}
 
 std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
-  if (!queryCtx()->optimization()->opts().sampleJoins) {
+  auto optimization = queryCtx()->optimization();
+  if (!optimization->opts().sampleJoins) {
     return {0, 0};
   }
 
@@ -55,9 +55,9 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
       return it->second;
     }
   }
+  bool trace = (optimization->opts().traceFlags & Optimization::kSample) != 0;
+
   std::pair<float, float> pair;
-  bool trace = (queryCtx()->optimization()->opts().traceFlags &
-                Optimization::kSample) != 0;
   uint64_t start = getCurrentTimeMicro();
   if (keyPair.second) {
     pair = optimizer::sampleJoin(
@@ -88,12 +88,6 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
   return pair;
 }
 
-NodePrediction* VeloxHistory::getHistory(const std::string key) {
-  return nullptr;
-}
-
-void VeloxHistory::setHistory(const std::string& key, NodePrediction history) {}
-
 bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
   auto optimization = queryCtx()->optimization();
   auto handlePair = optimization->leafHandle(table.id());
@@ -117,8 +111,7 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
     }
     return false;
   }
-  bool trace = (queryCtx()->optimization()->opts().traceFlags &
-                Optimization::kSample) != 0;
+  bool trace = (optimization->opts().traceFlags & Optimization::kSample) != 0;
   uint64_t start = getCurrentTimeMicro();
   auto sample = runnerTable->layouts()[0]->sample(
       handlePair.first, 1, handlePair.second, scanType);

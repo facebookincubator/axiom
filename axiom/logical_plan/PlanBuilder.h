@@ -84,6 +84,10 @@ class ExprResolver {
 
   ExprPtr tryFoldCall(const TypePtr& type, ExprPtr input) const;
 
+  ExprPtr tryFoldSpecialForm(
+      const std::string& name,
+      const std::vector<ExprPtr>& inputs) const;
+
   std::shared_ptr<core::QueryCtx> queryCtx_;
   FunctionRewriteHook hook_;
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -118,6 +122,7 @@ class PlanBuilder {
       : planNodeIdGenerator_(std::make_shared<core::PlanNodeIdGenerator>()),
         nameAllocator_(std::make_shared<NameAllocator>()),
         outerScope_{std::move(outerScope)},
+        parseOptions_{.parseInListAsArray = false},
         resolver_(nullptr, nullptr) {}
 
   explicit PlanBuilder(const Context& context, Scope outerScope = nullptr)
@@ -125,6 +130,7 @@ class PlanBuilder {
         planNodeIdGenerator_{context.planNodeIdGenerator},
         nameAllocator_{context.nameAllocator},
         outerScope_{std::move(outerScope)},
+        parseOptions_{.parseInListAsArray = false},
         resolver_(context.queryCtx, context.hook) {
     VELOX_CHECK_NOT_NULL(planNodeIdGenerator_);
     VELOX_CHECK_NOT_NULL(nameAllocator_);

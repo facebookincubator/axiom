@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/ToVelox.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 
@@ -104,7 +104,7 @@ PlanObjectSet makeCseBorder(
 
 } // namespace
 
-core::PlanNodePtr Optimization::makeParallelProject(
+core::PlanNodePtr ToVelox::makeParallelProject(
     const core::PlanNodePtr& input,
     const PlanObjectSet& topExprs,
     const PlanObjectSet& placed,
@@ -125,7 +125,7 @@ core::PlanNodePtr Optimization::makeParallelProject(
   });
 
   // Sorted lowest cost first. Make even size groups.
-  float targetCost = totalCost / opts_.parallelProjectWidth;
+  float targetCost = totalCost / optimizerOptions_.parallelProjectWidth;
   float groupCost = 0;
   std::vector<std::vector<core::TypedExprPtr>> groups;
   groups.emplace_back();
@@ -264,7 +264,7 @@ float parallelBorder(
 }
 } // namespace
 
-core::PlanNodePtr Optimization::maybeParallelProject(
+core::PlanNodePtr ToVelox::maybeParallelProject(
     const Project* project,
     core::PlanNodePtr input) {
   PlanObjectSet top;

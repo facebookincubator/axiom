@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/RelationOp.h"
@@ -326,8 +327,8 @@ IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys) {
   const auto* distribution = dt->distribution;
   VELOX_CHECK_NOT_NULL(distribution);
   computeCardinalities(distribution->cardinality);
-  result.unique = dt->aggregation &&
-      keys.size() >= dt->aggregation->aggregation->grouping.size();
+  result.unique =
+      dt->aggregation && keys.size() >= dt->aggregation->groupingKeys().size();
   return result;
 }
 
@@ -428,6 +429,12 @@ std::string Distribution::toString() const {
     out << " first " << numKeysUnique << " unique";
   }
   return out.str();
+}
+
+float ColumnGroup::lookupCost(float range) const {
+  // Add 2 because it takes a compare and access also if hitting the
+  // same row. log(1) == 0, so this would other wise be zero cost.
+  return Costs::kKeyCompareCost * log(range + 2) / log(2);
 }
 
 } // namespace facebook::velox::optimizer

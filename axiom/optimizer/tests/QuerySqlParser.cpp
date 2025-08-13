@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/tests/QuerySqlParser.h"
+#include "axiom/logical_plan/ExprPrinter.h"
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/parse/DuckLogicalOperator.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
@@ -536,14 +537,27 @@ lp::LogicalPlanNodePtr toPlanNode(
           static_cast<int32_t>(join.join_type));
   }
 
-  const auto joinInputType =
-      sources[0]->outputType()->unionWith(sources[1]->outputType());
+  const auto& leftType = sources[0]->outputType();
+  const auto& rightType = sources[1]->outputType();
 
   lp::ExprPtr filter;
-  for (auto& condition : join.conditions) {
-    auto expr = ::duckdb::JoinCondition::CreateExpression(std::move(condition));
-    auto conjunct = toExpr(*expr, joinInputType);
+  if (!join.expressions.empty()) {
+    VELOX_CHECK_EQ(join.expressions.size(), 1);
+    const auto joinInputType = leftType->unionWith(rightType);
+    filter = toExpr(*join.expressions.front(), joinInputType);
+  }
 
+  for (auto& condition : join.conditions) {
+    VELOX_CHECK(
+        condition.comparison == ::duckdb::ExpressionType::COMPARE_EQUAL ||
+        condition.comparison ==
+            ::duckdb::ExpressionType::COMPARE_NOT_DISTINCT_FROM);
+
+    auto leftKey = toExpr(*condition.left, leftType);
+    auto rightKey = toExpr(*condition.right, rightType);
+
+    auto conjunct =
+        std::make_shared<lp::CallExpr>(BOOLEAN(), "eq", leftKey, rightKey);
     if (!filter) {
       filter = conjunct;
     } else {

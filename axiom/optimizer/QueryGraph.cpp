@@ -392,11 +392,11 @@ void BaseTable::addFilter(ExprCP expr) {
   });
   if (isSingleColumn) {
     columnFilters.push_back(expr);
-    filterUpdated(this);
+    queryCtx()->optimization()->filterUpdated(this);
     return;
   }
   filter.push_back(expr);
-  filterUpdated(this);
+  queryCtx()->optimization()->filterUpdated(this);
 }
 
 namespace {

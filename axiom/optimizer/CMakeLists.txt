@@ -29,8 +29,13 @@ target_link_libraries(velox_schema_resolver velox_connector_metadata
 add_library(
   velox_verax
   DerivedTable.cpp
+<<<<<<< HEAD
   PlanToGraph.cpp
   PlanSubfields.cpp
+=======
+  ToGraph.cpp
+  Subfields.cpp
+>>>>>>> origin/main
   Plan.cpp
   BitSet.cpp
   ParallelExpr.cpp

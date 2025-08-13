@@ -147,7 +147,7 @@ ExprApi Lambda(std::vector<std::string> names, const ExprApi& body) {
 
 ExprApi Subquery(std::shared_ptr<const LogicalPlanNode> subquery) {
   VELOX_CHECK_NOT_NULL(subquery);
-  VELOX_CHECK_EQ(1, subquery->outputType()->size());
+  VELOX_CHECK_LE(1, subquery->outputType()->size());
 
   const auto& name = subquery->outputType()->nameOf(0);
   const auto expr = std::make_shared<core::SubqueryExpr>(std::move(subquery));
@@ -156,6 +156,11 @@ ExprApi Subquery(std::shared_ptr<const LogicalPlanNode> subquery) {
   } else {
     return ExprApi(expr, name);
   }
+}
+
+ExprApi Exists(const ExprApi& input) {
+  return ExprApi{std::make_shared<core::CallExpr>(
+      "exists", std::vector<core::ExprPtr>{input.expr()}, kNoAlias)};
 }
 
 ExprApi Sql(const std::string& sql) {

@@ -34,7 +34,7 @@ ExprCP Optimization::combineLeftDeep(
   });
   ExprCP result = all[0];
   for (auto i = 1; i < all.size(); ++i) {
-    result = deduppedCall(
+    result = toGraph_.deduppedCall(
         func,
         result->value(),
         ExprVector{result, all[i]},

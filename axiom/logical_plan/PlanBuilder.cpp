@@ -502,6 +502,16 @@ ExprPtr tryResolveSpecialForm(
         rowType.childAt(zeroBasedIndex), SpecialForm::kDereference, newInputs);
   }
 
+  if (name == "in") {
+    return std::make_shared<SpecialFormExpr>(
+        BOOLEAN(), SpecialForm::kIn, resolvedInputs);
+  }
+
+  if (name == "exists") {
+    return std::make_shared<SpecialFormExpr>(
+        BOOLEAN(), SpecialForm::kExists, resolvedInputs);
+  }
+
   return nullptr;
 }
 } // namespace
@@ -736,6 +746,33 @@ ExprPtr ExprResolver::tryFoldCall(
   return nullptr;
 }
 
+ExprPtr ExprResolver::tryFoldSpecialForm(
+    const std::string& name,
+    const std::vector<ExprPtr>& inputs) const {
+  if (!queryCtx_) {
+    return nullptr;
+  }
+  if (name == "in" && inputs.at(0)->isConstant() &&
+      !inputs.at(1)->isSubquery()) {
+    auto elementType = inputs[0]->type();
+
+    std::vector<Variant> arrayElements;
+    arrayElements.reserve(inputs.size() - 1);
+    for (size_t i = 1; i < inputs.size(); i++) {
+      VELOX_USER_CHECK(inputs.at(i)->isConstant());
+      arrayElements.push_back(
+          *inputs.at(i)->asUnchecked<ConstantExpr>()->value());
+    }
+
+    auto arrayConstant = std::make_shared<ConstantExpr>(
+        ARRAY(elementType),
+        std::make_shared<Variant>(Variant::array(arrayElements)));
+
+    return tryFoldCall(BOOLEAN(), "in", {inputs[0], arrayConstant});
+  }
+  return nullptr;
+}
+
 ExprPtr ExprResolver::tryFoldCast(const TypePtr& type, const ExprPtr& input)
     const {
   if (!queryCtx_ || input->kind() != ExprKind::kConstant) {
@@ -810,6 +847,9 @@ ExprPtr ExprResolver::resolveScalarTypes(
     }
 
     if (auto specialForm = tryResolveSpecialForm(name, inputs)) {
+      if (auto folded = tryFoldSpecialForm(name, inputs)) {
+        return folded;
+      }
       return specialForm;
     }
 

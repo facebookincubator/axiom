@@ -217,6 +217,63 @@ TEST_F(PlanTest, rejectedFilters) {
   ASSERT_TRUE(matcher->match(plan));
 }
 
+TEST_F(PlanTest, inList) {
+  testConnector_->addTable(
+      "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
+
+  {
+    lp::PlanBuilder::Context ctx(std::nullopt, getQueryCtx());
+    auto logicalPlan = lp::PlanBuilder(ctx)
+                           .tableScan(kTestConnectorId, "numbers", {"a", "b"})
+                           .filter("1 in (1, 2, 3)")
+                           .map({"a + 2"})
+                           .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder().tableScan().filter("true").project().build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+  {
+    lp::PlanBuilder::Context ctx(std::nullopt, getQueryCtx());
+    auto logicalPlan = lp::PlanBuilder(ctx)
+                           .tableScan(kTestConnectorId, "numbers", {"a", "b"})
+                           .filter("4 in (1, 2, 3)")
+                           .map({"a + 2"})
+                           .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .filter("false")
+                       .project()
+                       .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+  {
+    lp::PlanBuilder::Context ctx(std::nullopt, getQueryCtx());
+    auto logicalPlan = lp::PlanBuilder(ctx)
+                           .tableScan(kTestConnectorId, "numbers", {"a", "b"})
+                           .filter("a in (1, 2, 3) and b > 1.2")
+                           .map({"a + 2"})
+                           .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .filter("\"t2.a\" in (1, 2, 3) and \"t2.b\" > 1.2")
+                       .project()
+                       .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+}
+
 TEST_F(PlanTest, filterToJoinEdge) {
   auto nationType = ROW({"n_regionkey"}, {BIGINT()});
   auto regionType = ROW({"r_regionkey"}, {BIGINT()});
@@ -795,7 +852,7 @@ TEST_F(PlanTest, values) {
                     makeLogicalPlan("n_nationkey <= 5"),
                 })
             .project({"n_nationkey", "n_regionkey + 1 as rk"})
-            .filter("cast(rk as integer) in (1, 2, 4, 5)")
+            .filter("rk in (1, 2, 4, 5)")
             .build();
 
     auto referencePlanExcept =

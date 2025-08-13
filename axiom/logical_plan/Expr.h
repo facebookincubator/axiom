@@ -345,7 +345,36 @@ enum class SpecialForm {
 
   kStar = 9,
 
-  // TODO Add IN and EXISTS.
+  /// Implements the SQL IN operator to check if a single value exists in a
+  /// subquery result or in a list of constants.
+  ///
+  /// Subquery:
+  /// Takes exactly two inputs:
+  /// - First input: The expression to check, which is a single value.
+  /// - Second input: A SubqueryExpr representing the results to search in,
+  /// which returns one column and has the same type as the first input.
+  ///
+  /// List of constants:
+  /// Takes two or more inputs:
+  /// - First input: The expression to check, which is a single value.
+  /// - Additional inputs: Constants to check against the first input.
+  ///
+  /// Example:
+  ///   x IN (SELECT y FROM table)
+  ///   x IN (1, 2, 3)
+  kIn = 10,
+
+  /// Tests whether a subquery returns any rows.
+  /// Corresponds to the SQL EXISTS operator. Takes exactly one input:
+  /// - A SubqueryExpr representing the subquery to evaluate
+  ///
+  /// Returns TRUE if the subquery returns at least one row, regardless of the
+  /// values.
+  /// Returns FALSE if the subquery returns no rows.
+  ///
+  /// Example:
+  ///   EXISTS (SELECT * FROM table WHERE condition)
+  kExists = 11,
 };
 
 VELOX_DECLARE_ENUM_NAME(SpecialForm)
