@@ -28,14 +28,14 @@ FOLLY_ALWAYS_INLINE constexpr std::string_view defaultTpchNamespace() {
   return "tiny";
 }
 
-std::vector<std::shared_ptr<const PartitionHandle>>
-TpchSplitManager::listPartitions(const ConnectorTableHandlePtr& tableHandle) {
+std::vector<PartitionHandlePtr> TpchSplitManager::listPartitions(
+    const ConnectorTableHandlePtr& /*tableHandle*/) {
   return {std::make_shared<connector::PartitionHandle>()};
 }
 
 std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
     const ConnectorTableHandlePtr& tableHandle,
-    std::vector<std::shared_ptr<const PartitionHandle>> partitions,
+    std::vector<PartitionHandlePtr> /*partitions*/,
     SplitOptions options) {
   auto* tpchTableHandle =
       dynamic_cast<const TpchTableHandle*>(tableHandle.get());

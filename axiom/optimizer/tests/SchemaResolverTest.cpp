@@ -28,6 +28,7 @@ namespace {
 class SchemaResolverTest : public ::testing::Test {
  public:
   void SetUp() override {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     baseCatalog_ = generateCatalog("base", "baseschema");
     otherCatalog_ = generateCatalog("other", "otherschema");
     resolver_ = std::make_shared<SchemaResolver>(
@@ -65,7 +66,7 @@ class SchemaResolverTest : public ::testing::Test {
 TEST_F(SchemaResolverTest, bareTable) {
   auto lookup = "table";
   auto expect = "baseschema.table";
-  baseCatalog_.connector->addTable(expect);
+  baseCatalog_.connector->createTable(expect);
   auto table = resolver_->findTable(lookup);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->name(), expect);
@@ -90,7 +91,7 @@ TEST_F(SchemaResolverTest, invalidName) {
 
 TEST_F(SchemaResolverTest, tablePlusSchema) {
   auto lookup = "newschema.table";
-  baseCatalog_.connector->addTable(lookup);
+  baseCatalog_.connector->createTable(lookup);
   auto table = resolver_->findTable(lookup);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->name(), lookup);
@@ -99,14 +100,14 @@ TEST_F(SchemaResolverTest, tablePlusSchema) {
 TEST_F(SchemaResolverTest, tablePlusSchemaPlusCatalog) {
   auto lookup = "other.otherschema.table";
   auto expect = "otherschema.table";
-  otherCatalog_.connector->addTable(expect);
+  otherCatalog_.connector->createTable(expect);
   auto table = resolver_->findTable(lookup);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->name(), expect);
 
   lookup = "base.baseschema.table";
   expect = "baseschema.table";
-  baseCatalog_.connector->addTable(expect);
+  baseCatalog_.connector->createTable(expect);
   table = resolver_->findTable(lookup);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->name(), expect);
