@@ -210,6 +210,13 @@ class ToGraph {
       Step,
       const logical_plan::ExprPtr& arg);
 
+  template <typename Func>
+  void trace(int32_t event, Func f) {
+    if ((options_.traceFlags & event) != 0) {
+      f();
+    }
+  }
+
  private:
   // For comparisons, swaps the args to have a canonical form for
   // deduplication. E.g column op constant, and Smaller plan object id

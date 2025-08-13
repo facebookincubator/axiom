@@ -360,10 +360,6 @@ namespace facebook::velox::optimizer {
 /// instance must stay live as long as a returned plan is live.
 class Optimization {
  public:
-  static constexpr int32_t kRetained = 1;
-  static constexpr int32_t kExceededBest = 2;
-  static constexpr int32_t kSample = 4;
-
   Optimization(
       const logical_plan::LogicalPlanNode& plan,
       const Schema& schema,

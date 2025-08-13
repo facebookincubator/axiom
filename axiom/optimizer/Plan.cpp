@@ -104,9 +104,10 @@ void Optimization::trace(
     const Cost& cost,
     RelationOp& plan) {
   if (event & opts_.traceFlags) {
-    std::cout << (event == kRetained ? "Retained: " : "Abandoned: ") << id
-              << ": " << cost.toString(true, true) << ": " << " "
-              << plan.toString(true, false) << std::endl;
+    std::cout << (event == OptimizerOptions::kRetained ? "Retained: "
+                                                       : "Abandoned: ")
+              << id << ": " << cost.toString(true, true) << ": "
+              << " " << plan.toString(true, false) << std::endl;
   }
 }
 
@@ -161,7 +162,7 @@ void PlanState::addNextJoin(
   if (!isOverBest()) {
     toTry.emplace_back(candidate, plan, cost, placed, columns, builds);
   } else {
-    optimization.trace(Optimization::kExceededBest, dt->id(), cost, *plan);
+    optimization.trace(OptimizerOptions::kExceededBest, dt->id(), cost, *plan);
   }
 }
 
@@ -273,7 +274,10 @@ PlanPtr PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
         // Old plan has no order and is worse than new plus shuffle. Can't win.
         // rase.
         queryCtx()->optimization()->trace(
-            Optimization::kExceededBest, state.dt->id(), old->cost, *old->op);
+            OptimizerOptions::kExceededBest,
+            state.dt->id(),
+            old->cost,
+            *old->op);
         plans.erase(plans.begin() + i);
         --i;
         continue;
@@ -1719,7 +1723,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     }
   } else {
     if (state.isOverBest()) {
-      trace(kExceededBest, dt->id(), state.cost, *plan);
+      trace(OptimizerOptions::kExceededBest, dt->id(), state.cost, *plan);
       return;
     }
     // Add multitable filters not associated to a non-inner join.
@@ -1733,7 +1737,11 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
       }
       addPostprocess(dt, plan, state);
       auto kept = state.plans.addPlan(plan, state);
-      trace(kept ? kRetained : kExceededBest, dt->id(), state.cost, *plan);
+      trace(
+          kept ? OptimizerOptions::kRetained : OptimizerOptions::kExceededBest,
+          dt->id(),
+          state.cost,
+          *plan);
 
       return;
     }

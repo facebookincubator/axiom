@@ -18,6 +18,7 @@
 #include "axiom/optimizer/PlanUtils.h"
 
 namespace facebook::velox::optimizer {
+namespace lp = facebook::velox::logical_plan;
 
 namespace {
 /// If 'object' is an Expr, returns Expr::singleTable, else nullptr.
@@ -714,9 +715,20 @@ void DerivedTable::distributeConjuncts() {
 
   expandConjuncts();
 
+  // A nondeterminstic filter can be pushed down past a cardinality
+  // neutral border. This is either a single leaf table or a union all
+  // of dts.
+  bool allowNondeterministic = tables.size() == 1 &&
+      (tables[0]->type() == PlanType::kTableNode ||
+       (tables[0]->type() == PlanType::kDerivedTableNode &&
+        tables[0]->as<DerivedTable>()->setOp.has_value() &&
+        tables[0]->as<DerivedTable>()->setOp.value() ==
+            lp::SetOperation::kUnionAll));
+
   for (auto i = 0; i < conjuncts.size(); ++i) {
-    // No pushdown of non-deterministic.
-    if (conjuncts[i]->containsNonDeterministic()) {
+    // No pushdown of non-deterministic except if only pushdown target is a
+    // union all.
+    if (conjuncts[i]->containsNonDeterministic() && !allowNondeterministic) {
       continue;
     }
     PlanObjectSet tableSet = conjuncts[i]->allTables();

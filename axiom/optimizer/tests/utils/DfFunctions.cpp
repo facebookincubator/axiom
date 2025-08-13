@@ -23,7 +23,7 @@ namespace facebook::velox::optimizer::test {
 namespace lp = facebook::velox::logical_plan;
 
 namespace {
-std::unordered_map<std::string, logical_plan::ExprResolver::FunctionRewriteHook>
+std::unordered_map<std::string, lp::ExprResolver::FunctionRewriteHook>
     functionHooks;
 }
 
@@ -39,13 +39,13 @@ lp::ExprPtr resolveDfFunction(
 
 void registerFeatureFuncHook(
     const std::string& name,
-    logical_plan::ExprResolver::FunctionRewriteHook hook) {
+    lp::ExprResolver::FunctionRewriteHook hook) {
   functionHooks[name] = hook;
 }
 
 std::pair<std::vector<Step>, int32_t> makeRowFromMapSubfield(
     const std::vector<Step>& steps,
-    const logical_plan::CallExpr& call) {
+    const lp::CallExpr& call) {
   VELOX_CHECK(steps.back().kind == StepKind::kField);
   auto& list = call.inputAt(2)
                    ->asUnchecked<lp::ConstantExpr>()
@@ -79,11 +79,11 @@ std::pair<std::vector<Step>, int32_t> makeRowFromMapSubfield(
   return std::make_pair(newFields, 0);
 }
 
-std::unordered_map<PathCP, logical_plan::ExprPtr> makeRowFromMapExplodeGeneric(
-    const logical_plan::CallExpr* call,
+std::unordered_map<PathCP, lp::ExprPtr> makeRowFromMapExplodeGeneric(
+    const lp::CallExpr* call,
     std::vector<PathCP>& paths,
     bool addCoalesce) {
-  std::unordered_map<PathCP, logical_plan::ExprPtr> result;
+  std::unordered_map<PathCP, lp::ExprPtr> result;
   for (auto& path : paths) {
     auto& steps = path->steps();
     if (steps.size() < 1) {
@@ -118,6 +118,18 @@ std::unordered_map<PathCP, logical_plan::ExprPtr> makeRowFromMapExplodeGeneric(
               REAL(),
               std::make_shared<Variant>(Variant(static_cast<float>(0))));
           break;
+        case TypeKind::ARRAY: {
+          auto emptyArray = Variant::array({});
+          deflt = std::make_shared<lp::ConstantExpr>(
+              type, std::make_shared<Variant>(Variant(emptyArray)));
+          break;
+        }
+        case TypeKind::MAP: {
+          auto emptyMap = Variant::map({});
+          deflt = std::make_shared<lp::ConstantExpr>(
+              type, std::make_shared<Variant>(Variant(emptyMap)));
+          break;
+        }
         default:
           VELOX_NYI("padded_make_row_from_map type {}", type->toString());
       }
@@ -131,14 +143,14 @@ std::unordered_map<PathCP, logical_plan::ExprPtr> makeRowFromMapExplodeGeneric(
   return result;
 }
 
-std::unordered_map<PathCP, logical_plan::ExprPtr> makeRowFromMapExplode(
-    const logical_plan::CallExpr* call,
+std::unordered_map<PathCP, lp::ExprPtr> makeRowFromMapExplode(
+    const lp::CallExpr* call,
     std::vector<PathCP>& paths) {
   return makeRowFromMapExplodeGeneric(call, paths, false);
 }
 
-std::unordered_map<PathCP, logical_plan::ExprPtr> paddedMakeRowFromMapExplode(
-    const logical_plan::CallExpr* call,
+std::unordered_map<PathCP, lp::ExprPtr> paddedMakeRowFromMapExplode(
+    const lp::CallExpr* call,
     std::vector<PathCP>& paths) {
   return makeRowFromMapExplodeGeneric(call, paths, true);
 }
@@ -181,6 +193,39 @@ lp::ExprPtr makeNamedRowHook(
       std::move(rowType), "row_constructor", std::move(values));
 }
 
+std::pair<std::vector<Step>, int32_t> makeNamedRowSubfield(
+    const std::vector<Step>& steps,
+    const lp::CallExpr& call) {
+  VELOX_CHECK(steps.back().kind == StepKind::kField);
+  auto field = steps.back().field;
+  auto idx = call.type()->as<TypeKind::ROW>().getChildIdx(field);
+  auto newFields = steps;
+  newFields.pop_back();
+  return std::make_pair(newFields, 2 * idx + 1);
+}
+
+std::unordered_map<PathCP, lp::ExprPtr> makeNamedRowExplode(
+    const lp::CallExpr* call,
+    std::vector<PathCP>& paths) {
+  std::unordered_map<PathCP, lp::ExprPtr> result;
+  for (auto& path : paths) {
+    auto& steps = path->steps();
+    if (steps.empty()) {
+      return {};
+    }
+    std::vector<Step> prefixSteps = {steps[0]};
+    auto prefixPath = toPath(std::move(prefixSteps));
+    if (result.count(prefixPath)) {
+      // There already is an expression for this path.
+      continue;
+    }
+    VELOX_CHECK(steps.front().kind == StepKind::kField);
+    auto nth = steps.front().id;
+    result[prefixPath] = call->inputAt(nth * 2 + 1);
+  }
+  return result;
+}
+
 void registerDfFunctions() {
   registerFeatureFuncHook("make_row_from_map", makeRowFromMapHook);
   registerFeatureFuncHook("padded_make_row_from_map", makeRowFromMapHook);
@@ -197,6 +242,14 @@ void registerDfFunctions() {
       "padded_make_row_from_map", std::move(meta));
 
   registerFeatureFuncHook("make_named_row", makeNamedRowHook);
+
+  {
+    auto metadata = std::make_unique<FunctionMetadata>();
+    metadata->valuePathToArgPath = makeNamedRowSubfield;
+    metadata->logicalExplode = makeNamedRowExplode;
+    FunctionRegistry::instance()->registerFunction(
+        "make_named_row", std::move(metadata));
+  }
 }
 
 } // namespace facebook::velox::optimizer::test

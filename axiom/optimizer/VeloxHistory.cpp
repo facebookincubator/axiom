@@ -55,7 +55,8 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
       return it->second;
     }
   }
-  bool trace = (optimization->opts().traceFlags & Optimization::kSample) != 0;
+  bool trace =
+      (optimization->opts().traceFlags & OptimizerOptions::kSample) != 0;
 
   std::pair<float, float> pair;
   uint64_t start = getCurrentTimeMicro();
@@ -111,7 +112,8 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
     }
     return false;
   }
-  bool trace = (optimization->opts().traceFlags & Optimization::kSample) != 0;
+  bool trace =
+      (optimization->opts().traceFlags & OptimizerOptions::kSample) != 0;
   uint64_t start = getCurrentTimeMicro();
   auto sample = runnerTable->layouts()[0]->sample(
       handlePair.first, 1, handlePair.second, scanType);
