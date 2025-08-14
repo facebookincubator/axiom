@@ -220,7 +220,7 @@ void ToGraph::getExprForField(
       auto it = renames_.find(name);
       VELOX_CHECK(it != renames_.end());
       auto maybeColumn = it->second;
-      VELOX_CHECK(maybeColumn->type() == PlanType::kColumnExpr);
+      VELOX_CHECK_EQ(maybeColumn->type(), PlanType::kColumnExpr);
       resultColumn = maybeColumn->as<Column>();
       resultExpr = nullptr;
       context = nullptr;
@@ -1171,7 +1171,7 @@ PlanObjectP ToGraph::makeValuesTable(const lp::ValuesNode& values) {
     VELOX_DCHECK_LT(i, type->size());
 
     const auto& name = names[i];
-    Value value{type->childAt(i).get(), cardinality};
+    Value value{toType(type->childAt(i)), cardinality};
     auto* column = make<Column>(toName(name), valuesTable, value);
     valuesTable->columns.push_back(column);
 

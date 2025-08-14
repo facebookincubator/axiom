@@ -169,6 +169,25 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
   const std::string remainingFilter_;
 };
 
+class ValuesMatcher : public PlanMatcherImpl<ValuesNode> {
+ public:
+  explicit ValuesMatcher(const TypePtr& type = nullptr)
+      : PlanMatcherImpl<ValuesNode>(), type_(type) {}
+
+  bool matchDetails(const ValuesNode& plan) const override {
+    if (type_) {
+      EXPECT_TRUE(type_->equivalent(*plan.outputType()))
+          << "Expected equal output types on ValuesNode, but got '"
+          << type_->toString() << "', and '" << plan.outputType()->toString()
+          << "'.";
+    }
+    return true;
+  }
+
+ private:
+  TypePtr type_;
+};
+
 class FilterMatcher : public PlanMatcherImpl<FilterNode> {
  public:
   explicit FilterMatcher(const std::shared_ptr<PlanMatcher>& matcher)
@@ -365,6 +384,18 @@ PlanMatcherBuilder& PlanMatcherBuilder::hiveScan(
   VELOX_USER_CHECK_NULL(matcher_);
   matcher_ = std::make_shared<HiveScanMatcher>(
       tableName, std::move(subfieldFilters), remainingFilter);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::values() {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<ValuesMatcher>();
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::values(const TypePtr& type) {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<ValuesMatcher>(type);
   return *this;
 }
 

@@ -48,6 +48,7 @@ Name toName(std::string_view string) {
 const Type* QueryGraphContext::toType(const TypePtr& type) {
   return dedupType(type).get();
 }
+
 TypePtr QueryGraphContext::dedupType(const TypePtr& type) {
   auto it = deduppedTypes_.find(type);
   if (it != deduppedTypes_.end()) {

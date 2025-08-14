@@ -39,6 +39,10 @@ class PlanMatcherBuilder {
       common::SubfieldFilters subfieldFilters,
       const std::string& remainingFilter = "");
 
+  PlanMatcherBuilder& values();
+
+  PlanMatcherBuilder& values(const TypePtr& type);
+
   PlanMatcherBuilder& filter();
 
   PlanMatcherBuilder& filter(const std::string& predicate);
@@ -86,6 +90,7 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& orderBy(const std::vector<std::string>& ordering);
 
   std::shared_ptr<PlanMatcher> build() {
+    VELOX_USER_CHECK_NOT_NULL(matcher_, "Cannot build an empty PlanMatcher.");
     return matcher_;
   }
 

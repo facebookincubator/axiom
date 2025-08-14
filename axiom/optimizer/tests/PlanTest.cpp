@@ -845,6 +845,36 @@ TEST_F(PlanTest, except) {
   checkSame(logicalPlan, referencePlan);
 }
 
+// Tests that value nodes can have complex literal types.
+TEST_F(PlanTest, valuesComplex) {
+  auto rowVector = makeRowVector({
+      makeArrayVector<StringView>({{"nation1.0", "nation1.1"}, {"nation2"}}),
+      makeMapVectorFromJson<int32_t, int64_t>({"{1: 10, 2: 20}", "{3: 30}"}),
+      makeRowVector({
+          makeFlatVector<int64_t>({1, 2}),
+          makeFlatVector<StringView>({"n1", "n2"}),
+      }),
+  });
+
+  const auto connectorId = exec::test::kHiveConnectorId;
+  const auto connector = connector::getConnector(connectorId);
+
+  lp::PlanBuilder::Context ctx{connectorId};
+  auto logicalPlan = lp::PlanBuilder(ctx).values({rowVector}).build();
+  auto plan = toSingleNodePlan(logicalPlan, connector);
+
+  auto expectedType = ROW({
+      ARRAY(VARCHAR()),
+      MAP(INTEGER(), BIGINT()),
+      ROW({BIGINT(), VARCHAR()}),
+  });
+
+  // TODO: extra project() node should not be here.
+  auto matcher =
+      core::PlanMatcherBuilder().values(expectedType).project().build();
+  ASSERT_TRUE(matcher->match(plan));
+}
+
 TEST_F(PlanTest, values) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
