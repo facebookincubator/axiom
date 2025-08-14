@@ -1412,22 +1412,17 @@ void Optimization::crossJoin(
 
   auto memoKey = MemoKey{
       candidate.tables[0], broadcastColumns, broadcastTables, candidate.existences};
-
+  
   auto broadcast = Distribution::broadcast(
       plan->distribution().distributionType, plan->resultCardinality());
   PlanObjectSet empty;
   bool needsShuffle = false;
-  auto rightPlan = makePlan(memoKey, broadcast, empty, 1, state, needsShuffle);
+  auto rightPlan = makePlan(memoKey, broadcast, empty, candidate.existsFanout, state, needsShuffle);
 
-  PlanState broadcastState(state.optimization, state.dt, rightPlan);
   RelationOpPtr rightOp = rightPlan->op;
-
-  if (needsShuffle) {
-    auto* repartition =
-        make<Repartition>(rightOp, broadcast, rightOp->columns());
-    broadcastState.addCost(*repartition);
-    rightOp = repartition;
-  }
+  PlanState broadcastState(state.optimization, state.dt, rightPlan);
+  rightOp = make<Repartition>(rightPlan->op, broadcast, rightOp->columns());
+  broadcastState.addCost(*rightOp);
 
   auto resultColumns = plan->columns();
   resultColumns.insert(
