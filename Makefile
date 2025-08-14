@@ -33,6 +33,7 @@ endif
 ifndef USE_CCACHE
 ifneq ($(shell which ccache), )
 USE_CCACHE=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+$(info ✓ ccache detected and enabled: USE_CCACHE=$(USE_CCACHE))
 endif
 endif
 
