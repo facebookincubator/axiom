@@ -1430,7 +1430,7 @@ void Optimization::crossJoin(
       plan->distribution().distributionType, plan->resultCardinality());
   PlanObjectSet empty;
   bool needsShuffle = false;
-  auto rightPlan = makePlan(memoKey, broadcast, empty, candidate.existsFanout, state, needsShuffle);
+  auto* rightPlan = makePlan(memoKey, broadcast, empty, candidate.existsFanout, state, needsShuffle);
 
   RelationOpPtr rightOp = rightPlan->op;
   PlanState broadcastState(state.optimization, state.dt, rightPlan);
@@ -1444,7 +1444,7 @@ void Optimization::crossJoin(
       rightOp->columns().end());
 
   auto* join = Join::makeCrossJoin(
-    std::move(plan), 
+    plan, 
     std::move(rightOp), 
     std::move(resultColumns));
 
@@ -1461,13 +1461,12 @@ void Optimization::addJoin(
     const RelationOpPtr& plan,
     PlanState& state,
     std::vector<NextJoin>& result) {
-  std::vector<NextJoin> toTry;
   if (!candidate.join) {
-    crossJoin(plan, candidate, state, toTry);
-    result.insert(result.end(), toTry.begin(), toTry.end());
+    crossJoin(plan, candidate, state, result);
     return;
   }
 
+  std::vector<NextJoin> toTry;
   joinByIndex(plan, candidate, state, toTry);
 
   const auto sizeAfterIndex = toTry.size();
