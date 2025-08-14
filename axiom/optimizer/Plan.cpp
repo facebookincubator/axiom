@@ -1511,16 +1511,8 @@ RelationOpPtr Optimization::placeSingleRowDt(
       resultColumns.end(),
       rightOp->columns().begin(),
       rightOp->columns().end());
-  auto* join = make<Join>(
-      JoinMethod::kCross,
-      core::JoinType::kInner,
-      std::move(plan),
-      std::move(rightOp),
-      ExprVector{},
-      ExprVector{},
-      ExprVector{filter},
-      0.5,
-      std::move(resultColumns));
+  auto* join = Join::makeCrossJoin(
+      std::move(plan), std::move(rightOp), std::move(resultColumns));
   state.addCost(*join);
   return join;
 }

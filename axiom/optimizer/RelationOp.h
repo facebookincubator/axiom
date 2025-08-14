@@ -335,6 +335,11 @@ struct Join : public RelationOp {
   const QGstring& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
+
+  static Join* makeCrossJoin(
+      RelationOpPtr input,
+      RelationOpPtr right,
+      ColumnVector columnns);
 };
 
 using JoinCP = const Join*;
