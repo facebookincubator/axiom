@@ -256,7 +256,7 @@ class TableLayout {
 
   /// Set of partitioning columns. The values in partitioning columns determine
   /// the location of the row. Joins on equality of partitioning columns are
-  /// co-located.
+  /// co-located. In Hive these are called bucketing columns.
   const std::vector<const Column*>& partitionColumns() const {
     return partitionColumns_;
   }

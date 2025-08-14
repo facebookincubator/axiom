@@ -80,6 +80,9 @@ class HiveTableLayout : public TableLayout {
     return fileFormat_;
   }
 
+  /// Hive partitioning columns. partitionColumns() for a Hive layout return the
+  /// bucketing columns. This returns the partitioning columns, i.e. columns
+  /// whose values define the file system path of a file.
   const std::vector<const Column*>& hivePartitionColumns() const {
     return hivePartitionColumns_;
   }
