@@ -339,7 +339,7 @@ struct Join : public RelationOp {
   static Join* makeCrossJoin(
       RelationOpPtr input,
       RelationOpPtr right,
-      ColumnVector columnns);
+      ColumnVector columns);
 };
 
 using JoinCP = const Join*;

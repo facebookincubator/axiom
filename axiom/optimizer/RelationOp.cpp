@@ -400,7 +400,8 @@ const QGstring& Join::historyKey() const {
 Join* Join::makeCrossJoin(
     RelationOpPtr input,
     RelationOpPtr right,
-    ColumnVector columnns) {
+    ColumnVector columns) {
+  float fanout = right->resultCardinality();
   return make<Join>(
       JoinMethod::kCross,
       velox::core::JoinType::kInner,
@@ -409,8 +410,8 @@ Join* Join::makeCrossJoin(
       ExprVector{},
       ExprVector{},
       ExprVector{},
-      right->resultCardinality(),
-      std::move(columnns));
+      fanout,
+      std::move(columns));
 }
 
 std::string Join::toString(bool recursive, bool detail) const {
