@@ -14,8 +14,15 @@
  * limitations under the License.
  */
 
+#include "axiom/optimizer/connectors/ConnectorSplitSource.h"
 #include "axiom/optimizer/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/DistributedPlanBuilder.h"
 #include "velox/exec/tests/utils/LocalRunnerTestBase.h"
+
+#include <folly/init/Init.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -51,6 +58,14 @@ class HiveConnectorMetadataTest : public LocalRunnerTestBase {
     // Creates the data and schema from 'testTables_'. These are created on the
     // first test fixture initialization.
     LocalRunnerTestBase::SetUpTestCase();
+    parquet::registerParquetReaderFactory();
+    parquet::registerParquetWriterFactory();
+  }
+
+  static void TearDownTestCase() {
+    LocalRunnerTestBase::TearDownTestCase();
+    parquet::unregisterParquetWriterFactory();
+    parquet::unregisterParquetReaderFactory();
   }
 
   static void makeAscending(const RowVectorPtr& rows, int32_t& counter) {
@@ -93,4 +108,123 @@ TEST_F(HiveConnectorMetadataTest, basic) {
       tableHandle, 100, {}, layout->rowType(), fields, &allocator, &stats);
   EXPECT_EQ(250'000, pair.first);
   EXPECT_EQ(250'000, pair.second);
+}
+
+TEST_F(HiveConnectorMetadataTest, createTable) {
+  constexpr int32_t kTestSize = 2048;
+  auto connector = getConnector(kHiveConnectorId);
+  auto metadata = dynamic_cast<connector::hive::HiveConnectorMetadata*>(
+      connector->metadata());
+  ASSERT_TRUE(metadata != nullptr);
+
+  auto tableType = ROW(
+      {{"key1", BIGINT()},
+       {"key2", INTEGER()},
+       {"data", BIGINT()},
+       {"ds", VARCHAR()}});
+
+  std::unordered_map<std::string, std::string> options = {
+      {"bucketed_by", "key1"},
+      {"sorted_by", "key1, key2"},
+      {"bucket_count", "4"},
+      {"partitioned_by", "ds"},
+      {"file_format", "parquet"},
+      {"compression_kind", "snappy"}};
+
+  auto session = std::make_shared<connector::hive::HiveConnectorSession>();
+
+  metadata->createTableWithOptions("test", tableType, options, session, false);
+
+  auto table = metadata->findTable("test");
+  auto& layouts = table->layouts();
+  ASSERT_EQ(1, layouts.size());
+  auto* layout =
+      dynamic_cast<const connector::hive::HiveTableLayout*>(layouts[0]);
+  ASSERT_TRUE(layout != nullptr);
+  auto& columns = layout->columns();
+  ASSERT_EQ(4, columns.size());
+
+  auto buckets = layout->partitionColumns();
+  ASSERT_EQ(1, buckets.size());
+  EXPECT_EQ(columns[0], buckets[0]);
+  auto numBuckets = layout->numBuckets();
+  EXPECT_EQ(4, numBuckets.value());
+
+  auto sorting = layout->orderColumns();
+  ASSERT_EQ(2, sorting.size());
+  EXPECT_EQ(columns[0], sorting[0]);
+  EXPECT_EQ(columns[1], sorting[1]);
+
+  auto partition = layout->hivePartitionColumns();
+  ASSERT_EQ(1, partition.size());
+  EXPECT_EQ(columns[3], partition[0]);
+
+  EXPECT_EQ(layout->fileFormat(), dwio::common::toFileFormat("parquet"));
+  EXPECT_EQ(layout->table()->options().at("compression_kind"), "snappy");
+
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(kTestSize, [](auto row) { return row; }),
+      makeFlatVector<int32_t>(kTestSize, [](auto row) { return row % 10; }),
+      makeFlatVector<int64_t>(kTestSize, [](auto row) { return row + 2; }),
+      makeFlatVector<StringView>(
+          kTestSize,
+          [](auto row) { return row % 2 == 0 ? "2022-09-01" : "2025-09-02"; }),
+  });
+
+  auto connectorHandle = metadata->createInsertTableHandle(
+      *layouts[0], tableType, {}, WriteKind::kInsert, session);
+
+  auto handle = std::make_shared<core::InsertTableHandle>(
+      kHiveConnectorId, connectorHandle);
+  auto resultType =
+      ROW({"numWrittenRows", "fragment", "tableCommitContext"},
+          {BIGINT(), VARBINARY(), VARBINARY()});
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto builder = exec::test::PlanBuilder(idGenerator).values({data});
+
+  auto plan = std::make_shared<core::TableWriteNode>(
+      idGenerator->next(),
+      builder.planNode()->outputType(),
+      tableType->names(),
+      nullptr,
+      handle,
+      false,
+      resultType,
+      connector::CommitStrategy::kNoCommit,
+      builder.planNode());
+  auto result = exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  metadata->finishWrite(
+      *layout, connectorHandle, {result}, WriteKind::kInsert, session);
+
+  std::string id = "readQ";
+  runner::MultiFragmentPlan::Options runnerOptions = {
+      .queryId = id, .numWorkers = 1, .numDrivers = 1};
+
+  connector::ColumnHandleMap assignments;
+  for (auto i = 0; i < tableType->size(); ++i) {
+    assignments[tableType->nameOf(i)] =
+        metadata->createColumnHandle(*layout, tableType->nameOf(i));
+  }
+
+  DistributedPlanBuilder rootBuilder(runnerOptions, idGenerator, pool_.get());
+  rootBuilder.tableScan("test", tableType, {}, {}, "", tableType, assignments);
+  auto readPlan = std::make_shared<runner::MultiFragmentPlan>(
+      rootBuilder.fragments(), std::move(runnerOptions));
+  auto rootPool = memory::memoryManager()->addRootPool("readQ");
+
+  auto splitSourceFactory =
+      std::make_shared<connector::ConnectorSplitSourceFactory>();
+  auto localRunner = std::make_shared<runner::LocalRunner>(
+      std::move(readPlan),
+      makeQueryCtx(id, rootPool.get()),
+      splitSourceFactory);
+  auto results = readCursor(localRunner);
+  exec::test::assertEqualResults({data}, results);
+}
+
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  folly::Init init(&argc, &argv, false);
+  return RUN_ALL_TESTS();
 }

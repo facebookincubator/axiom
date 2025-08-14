@@ -16,8 +16,32 @@
 
 #include "axiom/optimizer/connectors/ConnectorMetadata.h"
 
-namespace facebook::velox::connectors {
+namespace facebook::velox::connector {
 
-void dummy() {}
+namespace {
+folly::F14FastMap<TableKind, std::string> tableKindNames() {
+  static const folly::F14FastMap<TableKind, std::string> kNames = {
+      {TableKind::kTable, "kTable"},
+      {TableKind::kTempTable, "kTempTable"},
+  };
 
-} // namespace facebook::velox::connectors
+  return kNames;
+}
+
+folly::F14FastMap<WriteKind, std::string> writeKindNames() {
+  static const folly::F14FastMap<WriteKind, std::string> kNames = {
+      {WriteKind::kInsert, "kInsert"},
+      {WriteKind::kUpdate, "kUpdate"},
+      {WriteKind::kDelete, "kDelete"},
+  };
+
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(TableKind, tableKindNames);
+
+VELOX_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
+
+} // namespace facebook::velox::connector

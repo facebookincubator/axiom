@@ -48,10 +48,8 @@ velox_link_libraries(
 velox_add_library(velox_optimizer_tests_query_sql_parser QuerySqlParser.cpp)
 
 velox_link_libraries(
-  velox_optimizer_tests_query_sql_parser
-  velox_fe_logical_plan_builder
-  velox_parse_parser
-  velox_vector)
+  velox_optimizer_tests_query_sql_parser velox_fe_logical_plan_builder
+  velox_parse_parser velox_vector)
 
 velox_add_library(velox_optimizer_tests_plan_matcher PlanMatcher.cpp)
 
@@ -59,28 +57,26 @@ velox_link_libraries(
   velox_optimizer_tests_plan_matcher
   velox_hive_connector
   velox_parse_parser
-)
+  GTest::gmock
+  glog::glog
+  GTest::gtest
+  GTest::gtest_main)
 
-velox_add_library(
-  velox_optimizer_tests_hive_queries_test_base
-  HiveQueriesTestBase.cpp)
+velox_add_library(velox_optimizer_tests_hive_queries_test_base
+                  HiveQueriesTestBase.cpp)
 
 velox_link_libraries(
   velox_optimizer_tests_hive_queries_test_base
-  velox_optimizer_tests_parquet_tpch
-  velox_optimizer_tests_plan_matcher
-  velox_optimizer_tests_query_sql_parser
-  velox_optimizer_tests_query_test_base)
+  velox_optimizer_tests_parquet_tpch velox_optimizer_tests_plan_matcher
+  velox_optimizer_tests_query_sql_parser velox_optimizer_tests_query_test_base)
 
 add_executable(velox_optimizer_tests_tpch_plan TpchPlanTest.cpp)
 
 add_test(velox_optimizer_tests_tpch_plan velox_optimizer_tests_tpch_plan)
 
 target_link_libraries(
-  velox_optimizer_tests_tpch_plan
-  velox_dwio_common_test_utils
-  velox_optimizer_tests_parquet_tpch
-  velox_optimizer_tests_query_sql_parser
+  velox_optimizer_tests_tpch_plan velox_dwio_common_test_utils
+  velox_optimizer_tests_parquet_tpch velox_optimizer_tests_query_sql_parser
   velox_optimizer_tests_query_test_base)
 
 add_executable(

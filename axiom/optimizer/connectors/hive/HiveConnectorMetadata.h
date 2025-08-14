@@ -19,6 +19,7 @@
 #include "axiom/optimizer/connectors/ConnectorMetadata.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 
@@ -41,13 +42,18 @@ struct HivePartitionHandle : public PartitionHandle {
   const std::optional<int32_t> tableBucketNumber;
 };
 
+class HiveConnectorSession : public connector::ConnectorSession {
+ public:
+  ~HiveConnectorSession() override = default;
+};
+
 /// Describes a Hive table layout. Adds a file format and a list of
 /// Hive partitioning columns and an optional bucket count to the base
-/// TableLayout. The partitioning in TableLayout does not differentiate between
-/// bucketing and Hive partitioning columns. The bucketing columns
-/// are the 'partitioning' columns minus the
-/// 'hivePartitioningColumns'. 'numBuckets' is the number of Hive buckets if
-/// 'partitionColumns' differs from 'hivePartitionColumns'.
+/// TableLayout. The partitioning in TableLayout referes to bucketing.
+/// 'numBuckets' is the number of Hive buckets if
+/// 'partitionColumns' is not empty. 'hivePartitionColumns' refers to Hive
+/// partitioning, i.e. columns whose value gives a directory in the ile storage
+/// tree.
 class HiveTableLayout : public TableLayout {
  public:
   HiveTableLayout(
@@ -121,7 +127,38 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       RowTypePtr dataColumns = nullptr,
       std::optional<LookupKeys> lookupKeys = std::nullopt) override;
 
+  ConnectorInsertTableHandlePtr createInsertTableHandle(
+      const TableLayout& layout,
+      const RowTypePtr& rowType,
+      const std::unordered_map<std::string, std::string>& options,
+      WriteKind kind,
+      const ConnectorSessionPtr& session) override;
+
+  virtual dwio::common::FileFormat fileFormat() const {
+    VELOX_UNSUPPORTED();
+  }
+
  protected:
+  virtual void ensureInitialized() const {}
+
+  virtual void validateOptions(
+      const std::unordered_map<std::string, std::string>& options) const;
+
+  virtual std::shared_ptr<connector::hive::LocationHandle> makeLocationHandle(
+      std::string targetDirectory,
+      std::optional<std::string> writeDirectory,
+      connector::hive::LocationHandle::TableType tableType =
+          connector::hive::LocationHandle::TableType::kNew) {
+    VELOX_UNSUPPORTED();
+  }
+
+  /// Returns the path to the filesystem root for the data managed by
+  /// 'this'. Directories inside this correspond to schemas and
+  /// tables.
+  virtual std::string dataPath() const {
+    VELOX_UNSUPPORTED();
+  }
+
   HiveConnector* const hiveConnector_;
 };
 
