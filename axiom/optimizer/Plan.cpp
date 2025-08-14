@@ -1430,18 +1430,10 @@ void Optimization::crossJoin(
       rightOp->columns().begin(),
       rightOp->columns().end());
 
-  const auto rightCardinality = rightOp->resultCardinality();
-
-  auto* join = make<Join>(
-      JoinMethod::kCross,
-      core::JoinType::kInner,
-      std::move(plan),
-      std::move(rightOp),
-      ExprVector{},
-      ExprVector{},
-      ExprVector{},
-      rightCardinality,
-      std::move(resultColumns));
+  auto* join = Join::makeCrossJoin(
+    std::move(plan), 
+    std::move(rightOp), 
+    std::move(resultColumns));
 
   state.addCost(*join);
   state.cost.totalBytes *= broadcastState.cost.totalBytes;
