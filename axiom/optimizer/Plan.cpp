@@ -1146,20 +1146,14 @@ void Optimization::joinByHash(
   auto memoKey = MemoKey{
       candidate.tables[0], buildColumns, buildTables, candidate.existences};
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 6d06b01 (Revert "fix")
+
   Distribution forBuild;
   if (plan->distribution().distributionType.isGather) {
     forBuild = Distribution::gather();
   } else {
-<<<<<<< HEAD
     forBuild = Distribution(plan->distribution().distributionType, copartition);
   }
 
-=======
->>>>>>> c773436 (fix)
 =======
     forBuild =
         Distribution(plan->distribution().distributionType, 0, copartition);
@@ -1683,28 +1677,11 @@ bool Optimization::placeConjuncts(
 namespace {
 
 float startingScore(PlanObjectCP table) {
-<<<<<<< HEAD
-<<<<<<< HEAD
   if (table->type() == PlanType::kTableNode) {
     return table->as<BaseTable>()->schemaTable->cardinality;
   }
 
   if (table->type() == PlanType::kValuesTableNode) {
-=======
-  if (table->type() == PlanType::kTable) {
-=======
-  if (table->type() == PlanType::kTableNode) {
->>>>>>> 6d06b01 (Revert "fix")
-    return table->as<BaseTable>()
-        ->schemaTable->columnGroups[0]
-        ->distribution()
-        .cardinality;
-<<<<<<< HEAD
-  } else if (table->type() == PlanType::kValuesTable) {
->>>>>>> c773436 (fix)
-=======
-  } else if (table->type() == PlanType::kValuesTableNode) {
->>>>>>> 6d06b01 (Revert "fix")
     return table->as<ValuesTable>()->cardinality();
   }
 
