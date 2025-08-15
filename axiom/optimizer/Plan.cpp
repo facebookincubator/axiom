@@ -1146,7 +1146,6 @@ void Optimization::joinByHash(
   auto memoKey = MemoKey{
       candidate.tables[0], buildColumns, buildTables, candidate.existences};
 
-
   Distribution forBuild;
   if (plan->distribution().distributionType.isGather) {
     forBuild = Distribution::gather();
@@ -1154,12 +1153,6 @@ void Optimization::joinByHash(
     forBuild = Distribution(plan->distribution().distributionType, copartition);
   }
 
-=======
-    forBuild =
-        Distribution(plan->distribution().distributionType, 0, copartition);
-  }
-
->>>>>>> 6d06b01 (Revert "fix")
   PlanObjectSet empty;
   bool needsShuffle = false;
   auto buildPlan = makePlan(
