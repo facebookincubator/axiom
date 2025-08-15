@@ -338,7 +338,6 @@ struct Join : public RelationOp {
   const QGstring& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
-
 };
 
 using JoinCP = const Join*;
