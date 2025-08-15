@@ -336,10 +336,8 @@ struct Join : public RelationOp {
 
   std::string toString(bool recursive, bool detail) const override;
 
-  static Join* makeCrossJoin(
-      RelationOpPtr input,
-      RelationOpPtr right,
-      ColumnVector columns);
+  static Join*
+  makeCrossJoin(RelationOpPtr input, RelationOpPtr right, ColumnVector columns);
 };
 
 using JoinCP = const Join*;
