@@ -202,7 +202,7 @@ class ToGraph {
   ExprCP
   deduppedCall(Name name, Value value, ExprVector args, FunctionSet flags);
 
-  core::ExpressionEvaluator* evaluator() {
+  core::ExpressionEvaluator* evaluator() const {
     return &evaluator_;
   }
 
@@ -218,6 +218,12 @@ class ToGraph {
   }
 
  private:
+  static bool isSpecialForm(
+      const logical_plan::Expr* expr,
+      logical_plan::SpecialForm form) {
+    return expr->isSpecialForm() &&
+        expr->asUnchecked<logical_plan::SpecialFormExpr>()->form() == form;
+  }
   // For comparisons, swaps the args to have a canonical form for
   // deduplication. E.g column op constant, and Smaller plan object id
   // to the left.

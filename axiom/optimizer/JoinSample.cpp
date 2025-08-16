@@ -16,8 +16,8 @@
 
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/connectors/ConnectorSplitSource.h"
+#include "axiom/runner/LocalRunner.h"
 #include "velox/common/base/AsyncSource.h"
-#include "velox/runner/LocalRunner.h"
 
 namespace facebook::velox::optimizer {
 
@@ -126,7 +126,7 @@ std::shared_ptr<core::QueryCtx> sampleQueryCtx(
 
 using KeyFreq = folly::F14FastMap<uint32_t, uint32_t>;
 
-std::shared_ptr<runner::Runner> prepareSampleRunner(
+std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
     SchemaTableCP table,
     const ExprVector& keys,
     int64_t mod,
@@ -180,17 +180,15 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
       FunctionSet());
   RelationOpPtr filter = make<Filter>(proj, ExprVector{filterExpr});
 
-  runner::MultiFragmentPlan::Options& options =
-      queryCtx()->optimization()->options();
-  auto plan = queryCtx()->optimization()->toVeloxPlan(filter, options);
-  return std::make_shared<runner::LocalRunner>(
+  auto plan = queryCtx()->optimization()->toVeloxPlan(filter);
+  return std::make_shared<axiom::runner::LocalRunner>(
       plan.plan,
       sampleQueryCtx(queryCtx()->optimization()->queryCtxShared()),
       std::make_shared<connector::ConnectorSplitSourceFactory>());
 }
 
 std::unique_ptr<KeyFreq> runJoinSample(
-    runner::Runner& runner,
+    axiom::runner::Runner& runner,
     int32_t maxRows = 0) {
   auto result = std::make_unique<folly::F14FastMap<uint32_t, uint32_t>>();
   int32_t rowCount = 0;

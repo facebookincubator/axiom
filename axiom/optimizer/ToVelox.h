@@ -20,7 +20,7 @@
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/RelationOp.h"
-#include "velox/runner/MultiFragmentPlan.h"
+#include "axiom/runner/MultiFragmentPlan.h"
 
 namespace facebook::velox::optimizer {
 
@@ -34,7 +34,7 @@ using NodePredictionMap = std::unordered_map<core::PlanNodeId, NodePrediction>;
 /// Plan and specification for recording execution history amd planning ttime
 /// predictions.
 struct PlanAndStats {
-  runner::MultiFragmentPlanPtr plan;
+  axiom::runner::MultiFragmentPlanPtr plan;
   NodeHistoryMap history;
   NodePredictionMap prediction;
 };
@@ -42,7 +42,7 @@ struct PlanAndStats {
 class ToVelox {
  public:
   ToVelox(
-      const velox::runner::MultiFragmentPlan::Options& options,
+      const axiom::runner::MultiFragmentPlan::Options& options,
       const OptimizerOptions& optimizerOptions)
       : options_{options},
         optimizerOptions_{optimizerOptions},
@@ -52,7 +52,7 @@ class ToVelox {
   /// multi-fragment Velox plan.
   PlanAndStats toVeloxPlan(
       RelationOpPtr plan,
-      const velox::runner::MultiFragmentPlan::Options& options);
+      const axiom::runner::MultiFragmentPlan::Options& options);
 
   std::pair<connector::ConnectorTableHandlePtr, std::vector<core::TypedExprPtr>>
   leafHandle(int32_t id) {
@@ -130,64 +130,64 @@ class ToVelox {
   // Makes a Velox AggregationNode for a RelationOp.
   velox::core::PlanNodePtr makeAggregation(
       Aggregation& agg,
-      velox::runner::ExecutableFragment& fragment,
-      std::vector<velox::runner::ExecutableFragment>& stages);
+      axiom::runner::ExecutableFragment& fragment,
+      std::vector<axiom::runner::ExecutableFragment>& stages);
 
   // Makes partial + final order by fragments for order by with and without
   // limit.
   velox::core::PlanNodePtr makeOrderBy(
       const OrderBy& op,
-      velox::runner::ExecutableFragment& fragment,
-      std::vector<velox::runner::ExecutableFragment>& stages);
+      axiom::runner::ExecutableFragment& fragment,
+      std::vector<axiom::runner::ExecutableFragment>& stages);
 
   // Makes partial + final limit fragments.
   velox::core::PlanNodePtr makeLimit(
       const Limit& op,
-      velox::runner::ExecutableFragment& fragment,
-      std::vector<velox::runner::ExecutableFragment>& stages);
+      axiom::runner::ExecutableFragment& fragment,
+      std::vector<axiom::runner::ExecutableFragment>& stages);
 
   // @pre op.sNoLimit() is true.
   velox::core::PlanNodePtr makeOffset(
       const Limit& op,
-      velox::runner::ExecutableFragment& fragment,
-      std::vector<velox::runner::ExecutableFragment>& stages);
+      axiom::runner::ExecutableFragment& fragment,
+      std::vector<axiom::runner::ExecutableFragment>& stages);
 
   velox::core::PlanNodePtr makeScan(
       const TableScan& scan,
-      velox::runner::ExecutableFragment& fragment,
-      std::vector<velox::runner::ExecutableFragment>& stages);
+      axiom::runner::ExecutableFragment& fragment,
+      std::vector<axiom::runner::ExecutableFragment>& stages);
 
   velox::core::PlanNodePtr makeFilter(
       const Filter& filter,
-      velox::runner::ExecutableFragment& fragment,
-      std::vector<velox::runner::ExecutableFragment>& stages);
+      axiom::runner::ExecutableFragment& fragment,
+      std::vector<axiom::runner::ExecutableFragment>& stages);
 
   velox::core::PlanNodePtr makeProject(
       const Project& project,
-      velox::runner::ExecutableFragment& fragment,
-      std::vector<velox::runner::ExecutableFragment>& stages);
+      axiom::runner::ExecutableFragment& fragment,
+      std::vector<axiom::runner::ExecutableFragment>& stages);
 
   velox::core::PlanNodePtr makeJoin(
       const Join& join,
-      velox::runner::ExecutableFragment& fragment,
-      std::vector<velox::runner::ExecutableFragment>& stages);
+      axiom::runner::ExecutableFragment& fragment,
+      std::vector<axiom::runner::ExecutableFragment>& stages);
 
   velox::core::PlanNodePtr makeRepartition(
       const Repartition& repartition,
-      velox::runner::ExecutableFragment& fragment,
-      std::vector<velox::runner::ExecutableFragment>& stages,
+      axiom::runner::ExecutableFragment& fragment,
+      std::vector<axiom::runner::ExecutableFragment>& stages,
       std::shared_ptr<core::ExchangeNode>& exchange);
 
   // Makes a union all with a mix of remote and local inputs. Combines all
   // remote inputs into one ExchangeNode.
   velox::core::PlanNodePtr makeUnionAll(
       const UnionAll& unionAll,
-      velox::runner::ExecutableFragment& fragment,
-      std::vector<velox::runner::ExecutableFragment>& stages);
+      axiom::runner::ExecutableFragment& fragment,
+      std::vector<axiom::runner::ExecutableFragment>& stages);
 
   core::PlanNodePtr makeValues(
       const Values& values,
-      runner::ExecutableFragment& fragment);
+      axiom::runner::ExecutableFragment& fragment);
 
   // Makes a tree of PlanNode for a tree of
   // RelationOp. 'fragment' is the fragment that 'op'
@@ -197,8 +197,8 @@ class ToVelox {
   // 'inputStages' and are returned in 'stages'.
   velox::core::PlanNodePtr makeFragment(
       const RelationOpPtr& op,
-      velox::runner::ExecutableFragment& fragment,
-      std::vector<velox::runner::ExecutableFragment>& stages);
+      axiom::runner::ExecutableFragment& fragment,
+      std::vector<axiom::runner::ExecutableFragment>& stages);
 
   // Records the prediction for 'node' and a history key to update history
   // after the plan is executed.
@@ -223,12 +223,12 @@ class ToVelox {
       const TableScan& scan,
       const core::TableScanNodePtr& scanNode);
 
-  runner::ExecutableFragment newFragment();
+  axiom::runner::ExecutableFragment newFragment();
 
   // TODO Move this into MultiFragmentPlan::Options.
   const VectorSerde::Kind exchangeSerdeKind_{VectorSerde::Kind::kPresto};
 
-  velox::runner::MultiFragmentPlan::Options options_;
+  axiom::runner::MultiFragmentPlan::Options options_;
 
   const OptimizerOptions& optimizerOptions_;
 

@@ -123,9 +123,13 @@ struct Costs {
   static constexpr float kMinimumFilterCost = 2;
 };
 
+/// Returns shuffle cost for a single row. Depends on the number of types of
+/// columns.
 float shuffleCost(const ColumnVector& columns);
 
-float shuffleCost(const ExprVector& columns);
+/// Returns shuffle cost for a single row produced by specified expressions.
+/// Depends on the number of result types of the expressions.
+float shuffleCost(const ExprVector& exprs);
 
 /// Returns cost of 'expr' for one row, excluding cost of subexpressions.
 float selfCost(ExprCP expr);

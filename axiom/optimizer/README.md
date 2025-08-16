@@ -39,7 +39,7 @@ XxxP
 : Raw pointer to Xxx: XxxP := Xxx*
 
 XxxCP
-: Raw pointer to constant Xxx: XxxCP := const Xxx*
+: Raw pointer to constant Xxx: XxxCP := const Xxx*. Remember to place 'const' *after* the type: XxxCP const variableName. (const XxxCP doesn't produce the derired effect.)
 
 XxxVector
 : Standard vector of raw pointers to Xxx allocated from the arena: XxxVector := `std::vector<XxxP, QGAllocator<XxxP>>`.

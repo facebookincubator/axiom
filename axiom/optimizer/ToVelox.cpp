@@ -24,7 +24,7 @@
 #include "velox/vector/VariantToVector.h"
 
 using namespace facebook::velox::exec;
-using namespace facebook::velox::runner;
+using namespace facebook::axiom::runner;
 
 namespace facebook::velox::optimizer {
 
@@ -59,7 +59,7 @@ std::vector<common::Subfield> columnSubfields(BaseTableCP table, int32_t id) {
             break;
           }
           if (first &&
-              optimization->opts().isMapAsStruct(
+              optimization->options().isMapAsStruct(
                   table->schemaTable->name, columnName)) {
             elements.push_back(std::make_unique<common::Subfield::NestedField>(
                 step.field ? std::string(step.field)
@@ -202,7 +202,7 @@ PlanAndStats ToVelox::toVeloxPlan(
 
   stages.push_back(std::move(top));
   return PlanAndStats{
-      std::make_shared<velox::runner::MultiFragmentPlan>(
+      std::make_shared<axiom::runner::MultiFragmentPlan>(
           std::move(stages), options),
       std::move(nodeHistory_),
       std::move(prediction_)};
@@ -539,7 +539,7 @@ class TempProjections {
 };
 } // namespace
 
-runner::ExecutableFragment ToVelox::newFragment() {
+axiom::runner::ExecutableFragment ToVelox::newFragment() {
   ExecutableFragment fragment;
   fragment.width = options_.numWorkers;
   fragment.taskPrefix = fmt::format("stage{}", ++stageCounter_);
@@ -715,8 +715,8 @@ core::PlanNodePtr ToVelox::makeOrderBy(
 
 velox::core::PlanNodePtr ToVelox::makeOffset(
     const Limit& op,
-    velox::runner::ExecutableFragment& fragment,
-    std::vector<velox::runner::ExecutableFragment>& stages) {
+    axiom::runner::ExecutableFragment& fragment,
+    std::vector<axiom::runner::ExecutableFragment>& stages) {
   if (isSingle_) {
     auto input = makeFragment(op.input(), fragment, stages);
     return addFinalLimit(nextId(), op.offset, op.limit, input);
@@ -984,8 +984,8 @@ core::TypedExprPtr toAndWithAliases(
 
 velox::core::PlanNodePtr ToVelox::makeScan(
     const TableScan& scan,
-    velox::runner::ExecutableFragment& fragment,
-    std::vector<velox::runner::ExecutableFragment>& stages) {
+    axiom::runner::ExecutableFragment& fragment,
+    std::vector<axiom::runner::ExecutableFragment>& stages) {
   columnAlteredTypes_.clear();
   bool isSubfieldPushdown = hasSubfieldPushdown(scan);
   auto handlePair = leafHandle(scan.baseTable->id());
@@ -1038,8 +1038,8 @@ velox::core::PlanNodePtr ToVelox::makeScan(
 
 velox::core::PlanNodePtr ToVelox::makeFilter(
     const Filter& filter,
-    velox::runner::ExecutableFragment& fragment,
-    std::vector<velox::runner::ExecutableFragment>& stages) {
+    axiom::runner::ExecutableFragment& fragment,
+    std::vector<axiom::runner::ExecutableFragment>& stages) {
   auto filterNode = std::make_shared<core::FilterNode>(
       nextId(),
       toAnd(filter.exprs()),
@@ -1050,8 +1050,8 @@ velox::core::PlanNodePtr ToVelox::makeFilter(
 
 velox::core::PlanNodePtr ToVelox::makeProject(
     const Project& project,
-    velox::runner::ExecutableFragment& fragment,
-    std::vector<velox::runner::ExecutableFragment>& stages) {
+    axiom::runner::ExecutableFragment& fragment,
+    std::vector<axiom::runner::ExecutableFragment>& stages) {
   auto input = makeFragment(project.input(), fragment, stages);
   if (optimizerOptions_.parallelProjectWidth > 1) {
     auto result = maybeParallelProject(&project, input);
@@ -1095,8 +1095,8 @@ velox::core::PlanNodePtr ToVelox::makeProject(
 
 velox::core::PlanNodePtr ToVelox::makeJoin(
     const Join& join,
-    velox::runner::ExecutableFragment& fragment,
-    std::vector<velox::runner::ExecutableFragment>& stages) {
+    axiom::runner::ExecutableFragment& fragment,
+    std::vector<axiom::runner::ExecutableFragment>& stages) {
   TempProjections leftProjections(*this, *join.input());
   TempProjections rightProjections(*this, *join.right);
   auto left = makeFragment(join.input(), fragment, stages);
@@ -1225,8 +1225,8 @@ core::PlanNodePtr ToVelox::makeAggregation(
 
 velox::core::PlanNodePtr ToVelox::makeRepartition(
     const Repartition& repartition,
-    velox::runner::ExecutableFragment& fragment,
-    std::vector<velox::runner::ExecutableFragment>& stages,
+    axiom::runner::ExecutableFragment& fragment,
+    std::vector<axiom::runner::ExecutableFragment>& stages,
     std::shared_ptr<core::ExchangeNode>& exchange) {
   auto source = newFragment();
   auto sourcePlan = makeFragment(repartition.input(), source, stages);
@@ -1270,8 +1270,8 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
 
 velox::core::PlanNodePtr ToVelox::makeUnionAll(
     const UnionAll& unionAll,
-    velox::runner::ExecutableFragment& fragment,
-    std::vector<velox::runner::ExecutableFragment>& stages) {
+    axiom::runner::ExecutableFragment& fragment,
+    std::vector<axiom::runner::ExecutableFragment>& stages) {
   // If no inputs have a repartition, this is a local exchange. If
   // some have repartition and more than one have no repartition,
   // this is a local exchange with a remote exchaneg as input. All the

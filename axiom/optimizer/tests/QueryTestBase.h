@@ -20,8 +20,8 @@
 #include <gflags/gflags.h>
 #include "axiom/optimizer/SchemaResolver.h"
 #include "axiom/optimizer/VeloxHistory.h"
-#include "velox/exec/tests/utils/LocalRunnerTestBase.h"
-#include "velox/runner/LocalRunner.h"
+#include "axiom/runner/LocalRunner.h"
+#include "axiom/runner/tests/LocalRunnerTestBase.h"
 
 DECLARE_string(history_save_path);
 
@@ -29,7 +29,7 @@ namespace facebook::velox::optimizer::test {
 
 struct TestResult {
   /// Runner that produced the results. Owns results.
-  std::shared_ptr<runner::LocalRunner> runner;
+  std::shared_ptr<axiom::runner::LocalRunner> runner;
 
   /// Results. Declare after runner because results are from a pool in the
   /// runner's cursor, so runner must destruct last.
@@ -44,7 +44,7 @@ struct TestResult {
   std::vector<exec::TaskStats> stats;
 };
 
-class QueryTestBase : public exec::test::LocalRunnerTestBase {
+class QueryTestBase : public axiom::runner::test::LocalRunnerTestBase {
  protected:
   void SetUp() override;
 
@@ -59,14 +59,14 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
 
   optimizer::PlanAndStats planVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
-      const runner::MultiFragmentPlan::Options& options,
+      const axiom::runner::MultiFragmentPlan::Options& options,
       std::string* planString = nullptr);
 
   TestResult runVelox(const logical_plan::LogicalPlanNodePtr& plan);
 
   TestResult runVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
-      const runner::MultiFragmentPlan::Options& options);
+      const axiom::runner::MultiFragmentPlan::Options& options);
 
   TestResult runFragmentedPlan(const optimizer::PlanAndStats& plan);
 
@@ -80,7 +80,7 @@ class QueryTestBase : public exec::test::LocalRunnerTestBase {
 
   std::shared_ptr<core::QueryCtx> getQueryCtx();
 
-  std::string veloxString(const runner::MultiFragmentPlanPtr& plan);
+  std::string veloxString(const axiom::runner::MultiFragmentPlanPtr& plan);
 
   static VeloxHistory& suiteHistory() {
     return *suiteHistory_;

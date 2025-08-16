@@ -22,7 +22,7 @@ velox_link_libraries(
   velox_tpch_gen
   velox_connector_split_source
   velox_hive_connector_metadata
-  velox_exec_runner_test_util
+  axiom_runner_tests_utils
   velox_exec_test_lib
   velox_dwio_parquet_reader
   velox_dwio_native_parquet_reader
@@ -38,7 +38,7 @@ velox_link_libraries(
   velox_tpch_gen
   velox_connector_split_source
   velox_hive_connector_metadata
-  velox_exec_runner_test_util
+  axiom_runner_tests_utils
   velox_exec_test_lib
   velox_dwio_parquet_reader
   velox_dwio_native_parquet_reader
@@ -68,7 +68,9 @@ velox_add_library(velox_optimizer_tests_hive_queries_test_base
 velox_link_libraries(
   velox_optimizer_tests_hive_queries_test_base
   velox_optimizer_tests_parquet_tpch velox_optimizer_tests_plan_matcher
-  velox_optimizer_tests_query_sql_parser velox_optimizer_tests_query_test_base)
+  velox_optimizer_tests_query_sql_parser velox_optimizer_tests_query_test_base
+  axiom_runner_multifragment_plan
+  axiom_runner_tests_utils)
 
 add_executable(velox_optimizer_tests_tpch_plan TpchPlanTest.cpp)
 
@@ -77,7 +79,7 @@ add_test(velox_optimizer_tests_tpch_plan velox_optimizer_tests_tpch_plan)
 target_link_libraries(
   velox_optimizer_tests_tpch_plan velox_dwio_common_test_utils
   velox_optimizer_tests_parquet_tpch velox_optimizer_tests_query_sql_parser
-  velox_optimizer_tests_query_test_base)
+  velox_optimizer_tests_query_test_base axiom_runner_tests_utils)
 
 add_executable(
   velox_plan_test
@@ -102,6 +104,7 @@ target_link_libraries(
   velox_optimizer_tests_parquet_tpch
   velox_optimizer_tests_plan_matcher
   velox_optimizer_tests_query_test_base
+  axiom_runner_tests_utils
   velox_test_connector
   GTest::gmock
   glog::glog
@@ -112,7 +115,8 @@ add_executable(velox_sql VeloxSql.cpp)
 
 target_link_libraries(
   velox_sql
-  velox_local_runner
+  axiom_runner_local_runner
+  axiom_runner_multifragment_plan
   velox_verax
   velox_schema_resolver
   velox_connector_split_source

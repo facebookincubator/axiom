@@ -39,8 +39,8 @@ float shuffleCost(const ColumnVector& columns) {
   return byteSize(columns);
 }
 
-float shuffleCost(const ExprVector& columns) {
-  return byteSize(columns);
+float shuffleCost(const ExprVector& exprs) {
+  return byteSize(exprs);
 }
 
 float selfCost(ExprCP expr) {

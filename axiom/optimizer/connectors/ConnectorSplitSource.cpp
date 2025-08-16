@@ -18,8 +18,8 @@
 
 namespace facebook::velox::connector {
 
-std::vector<runner::SplitSource::SplitAndGroup> ConnectorSplitSource::getSplits(
-    uint64_t targetBytes) {
+std::vector<axiom::runner::SplitSource::SplitAndGroup>
+ConnectorSplitSource::getSplits(uint64_t targetBytes) {
   auto splits = source_->getSplits(targetBytes);
   std::vector<SplitAndGroup> runnerSplits;
   // convert the connector::SplitSource::SplitAndGroup to
@@ -30,7 +30,7 @@ std::vector<runner::SplitSource::SplitAndGroup> ConnectorSplitSource::getSplits(
   return runnerSplits;
 }
 
-std::shared_ptr<runner::SplitSource>
+std::shared_ptr<axiom::runner::SplitSource>
 ConnectorSplitSourceFactory::splitSourceForScan(
     const core::TableScanNode& scan) {
   auto handle = scan.tableHandle();

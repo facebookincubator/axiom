@@ -25,6 +25,7 @@
 #include "axiom/optimizer/SchemaResolver.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/connectors/ConnectorSplitSource.h"
+#include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/expression/Expr.h"
@@ -50,7 +51,7 @@ namespace facebook::velox::optimizer::test {
 using namespace facebook::velox::exec;
 
 void QueryTestBase::SetUp() {
-  exec::test::LocalRunnerTestBase::SetUp();
+  axiom::runner::test::LocalRunnerTestBase::SetUp();
   connector_ = connector::getConnector(exec::test::kHiveConnectorId);
   rootPool_ = memory::memoryManager()->addRootPool("velox_sql");
   optimizerPool_ = rootPool_->addLeafChild("optimizer");
@@ -98,7 +99,8 @@ void QueryTestBase::tablesCreated() {
 }
 
 namespace {
-void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner) {
+void waitForCompletion(
+    const std::shared_ptr<axiom::runner::LocalRunner>& runner) {
   if (runner) {
     try {
       runner->waitForCompletion(50000);
@@ -122,18 +124,19 @@ void gatherScans(
 } // namespace
 
 TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
-  runner::MultiFragmentPlan::Options options = {
+  axiom::runner::MultiFragmentPlan::Options options = {
       .queryId = fmt::format("q{}", ++queryCounter_),
       .numWorkers = 1,
       .numDrivers = FLAGS_num_drivers};
 
-  runner::ExecutableFragment fragment(fmt::format("{}.0", options.queryId));
+  axiom::runner::ExecutableFragment fragment(
+      fmt::format("{}.0", options.queryId));
   fragment.fragment = core::PlanFragment(plan);
   gatherScans(plan, fragment.scans);
 
   optimizer::PlanAndStats planAndStats = {
-      .plan = std::make_shared<runner::MultiFragmentPlan>(
-          std::vector<runner::ExecutableFragment>{std::move(fragment)},
+      .plan = std::make_shared<axiom::runner::MultiFragmentPlan>(
+          std::vector<axiom::runner::ExecutableFragment>{std::move(fragment)},
           std::move(options))};
 
   return runFragmentedPlan(planAndStats);
@@ -149,7 +152,7 @@ TestResult QueryTestBase::runFragmentedPlan(
     queryCtx_.reset();
   };
 
-  result.runner = std::make_shared<runner::LocalRunner>(
+  result.runner = std::make_shared<axiom::runner::LocalRunner>(
       fragmentedPlan.plan,
       getQueryCtx(),
       std::make_shared<connector::ConnectorSplitSourceFactory>());
@@ -197,7 +200,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
 
 optimizer::PlanAndStats QueryTestBase::planVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
-    const runner::MultiFragmentPlan::Options& options,
+    const axiom::runner::MultiFragmentPlan::Options& options,
     std::string* planString) {
   auto queryCtx = getQueryCtx();
 
@@ -226,7 +229,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
   if (planString) {
     *planString = best->op->toString(true, false);
   }
-  return opt.toVeloxPlan(best->op, options);
+  return opt.toVeloxPlan(best->op);
 }
 
 TestResult QueryTestBase::runVelox(
@@ -238,14 +241,14 @@ TestResult QueryTestBase::runVelox(
 
 TestResult QueryTestBase::runVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
-    const runner::MultiFragmentPlan::Options& options) {
+    const axiom::runner::MultiFragmentPlan::Options& options) {
   TestResult result;
   auto veloxPlan = planVelox(plan, options, &result.planString);
   return runFragmentedPlan(veloxPlan);
 }
 
 std::string QueryTestBase::veloxString(
-    const runner::MultiFragmentPlanPtr& plan) {
+    const axiom::runner::MultiFragmentPlanPtr& plan) {
   std::stringstream out;
   for (auto i = 0; i < plan->fragments().size(); ++i) {
     auto& fragment = plan->fragments()[i];

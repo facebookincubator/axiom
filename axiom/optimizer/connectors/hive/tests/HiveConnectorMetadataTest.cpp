@@ -16,25 +16,26 @@
 
 #include "axiom/optimizer/connectors/ConnectorSplitSource.h"
 #include "axiom/optimizer/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/runner/tests/DistributedPlanBuilder.h"
+#include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/DistributedPlanBuilder.h"
-#include "velox/exec/tests/utils/LocalRunnerTestBase.h"
 
 #include <folly/init/Init.h>
 
 using namespace facebook::velox;
-using namespace facebook::velox::exec;
-using namespace facebook::velox::exec::test;
 using namespace facebook::velox::connector;
 
-class HiveConnectorMetadataTest : public LocalRunnerTestBase {
+namespace facebook::velox::connector::hive {
+namespace {
+
+class HiveConnectorMetadataTest
+    : public axiom::runner::test::LocalRunnerTestBase {
  protected:
   static constexpr int32_t kNumFiles = 5;
   static constexpr int32_t kNumVectors = 5;
   static constexpr int32_t kRowsPerVector = 10000;
-  static constexpr int32_t kNumRows = kNumFiles * kNumVectors * kRowsPerVector;
 
   static void SetUpTestCase() {
     // The lambdas will be run after this scope returns, so make captures
@@ -47,13 +48,15 @@ class HiveConnectorMetadataTest : public LocalRunnerTestBase {
     };
 
     rowType_ = ROW({"c0"}, {BIGINT()});
-    testTables_ = {TableSpec{
-        .name = "T",
-        .columns = rowType_,
-        .rowsPerVector = kRowsPerVector,
-        .numVectorsPerFile = kNumVectors,
-        .numFiles = kNumFiles,
-        .customizeData = customize1}};
+    testTables_ = {
+        axiom::runner::test::TableSpec{
+            .name = "T",
+            .columns = rowType_,
+            .rowsPerVector = kRowsPerVector,
+            .numVectorsPerFile = kNumVectors,
+            .numFiles = kNumFiles,
+            .customizeData = customize1},
+    };
 
     // Creates the data and schema from 'testTables_'. These are created on the
     // first test fixture initialization.
@@ -80,7 +83,7 @@ class HiveConnectorMetadataTest : public LocalRunnerTestBase {
 };
 
 TEST_F(HiveConnectorMetadataTest, basic) {
-  auto connector = getConnector(kHiveConnectorId);
+  auto connector = getConnector(velox::exec::test::kHiveConnectorId);
   auto metadata = connector->metadata();
   ASSERT_TRUE(metadata != nullptr);
   auto table = metadata->findTable("T");
@@ -112,7 +115,7 @@ TEST_F(HiveConnectorMetadataTest, basic) {
 
 TEST_F(HiveConnectorMetadataTest, createTable) {
   constexpr int32_t kTestSize = 2048;
-  auto connector = getConnector(kHiveConnectorId);
+  auto connector = getConnector(velox::exec::test::kHiveConnectorId);
   auto metadata = dynamic_cast<connector::hive::HiveConnectorMetadata*>(
       connector->metadata());
   ASSERT_TRUE(metadata != nullptr);
@@ -175,7 +178,7 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
       *layouts[0], tableType, {}, WriteKind::kInsert, session);
 
   auto handle = std::make_shared<core::InsertTableHandle>(
-      kHiveConnectorId, connectorHandle);
+      velox::exec::test::kHiveConnectorId, connectorHandle);
   auto resultType =
       ROW({"numWrittenRows", "fragment", "tableCommitContext"},
           {BIGINT(), VARBINARY(), VARBINARY()});
@@ -198,7 +201,7 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
       *layout, connectorHandle, {result}, WriteKind::kInsert, session);
 
   std::string id = "readQ";
-  runner::MultiFragmentPlan::Options runnerOptions = {
+  axiom::runner::MultiFragmentPlan::Options runnerOptions = {
       .queryId = id, .numWorkers = 1, .numDrivers = 1};
 
   connector::ColumnHandleMap assignments;
@@ -207,21 +210,25 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
         metadata->createColumnHandle(*layout, tableType->nameOf(i));
   }
 
-  DistributedPlanBuilder rootBuilder(runnerOptions, idGenerator, pool_.get());
+  axiom::runner::test::DistributedPlanBuilder rootBuilder(
+      runnerOptions, idGenerator, pool_.get());
   rootBuilder.tableScan("test", tableType, {}, {}, "", tableType, assignments);
-  auto readPlan = std::make_shared<runner::MultiFragmentPlan>(
+  auto readPlan = std::make_shared<axiom::runner::MultiFragmentPlan>(
       rootBuilder.fragments(), std::move(runnerOptions));
   auto rootPool = memory::memoryManager()->addRootPool("readQ");
 
   auto splitSourceFactory =
       std::make_shared<connector::ConnectorSplitSourceFactory>();
-  auto localRunner = std::make_shared<runner::LocalRunner>(
+  auto localRunner = std::make_shared<axiom::runner::LocalRunner>(
       std::move(readPlan),
       makeQueryCtx(id, rootPool.get()),
       splitSourceFactory);
-  auto results = readCursor(localRunner);
+  auto results = axiom::runner::test::readCursor(localRunner);
   exec::test::assertEqualResults({data}, results);
 }
+
+} // namespace
+} // namespace facebook::velox::connector::hive
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

@@ -15,14 +15,14 @@
  */
 
 #include "axiom/optimizer/connectors/ConnectorMetadata.h"
-#include "velox/runner/Runner.h"
+#include "axiom/runner/Runner.h"
 
 namespace facebook::velox::connector {
 
 /// A runner::SplitSource that encapsulates a connector::SplitSource.
 /// runner::SplitSource does not depend on ConnectorMetadata.h, thus we have a
 /// proxy between the two.
-class ConnectorSplitSource : public runner::SplitSource {
+class ConnectorSplitSource : public axiom::runner::SplitSource {
  public:
   ConnectorSplitSource(std::shared_ptr<connector::SplitSource> source)
       : source_(std::move(source)) {}
@@ -34,11 +34,11 @@ class ConnectorSplitSource : public runner::SplitSource {
 };
 
 /// Generic SplitSourceFactory that delegates the work to ConnectorMetadata.
-class ConnectorSplitSourceFactory : public runner::SplitSourceFactory {
+class ConnectorSplitSourceFactory : public axiom::runner::SplitSourceFactory {
  public:
   ConnectorSplitSourceFactory(SplitOptions options = {}) : options_(options) {}
 
-  std::shared_ptr<runner::SplitSource> splitSourceForScan(
+  std::shared_ptr<axiom::runner::SplitSource> splitSourceForScan(
       const core::TableScanNode& scan) override;
 
  protected:

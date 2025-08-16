@@ -33,6 +33,7 @@
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/connectors/ConnectorSplitSource.h"
 #include "axiom/optimizer/tests/QuerySqlParser.h"
+#include "axiom/runner/LocalRunner.h"
 #include "velox/benchmarks/QueryBenchmarkBase.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -40,7 +41,6 @@
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/runner/LocalRunner.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/VectorSaver.h"
 
@@ -250,7 +250,7 @@ class VeloxRunner : public QueryBenchmarkBase {
   }
 
   std::vector<RowVectorPtr> runInner(
-      runner::LocalRunner& runner,
+      facebook::axiom::runner::LocalRunner& runner,
       RunStats& stats) {
     std::vector<RowVectorPtr> results;
     uint64_t micros = 0;
@@ -449,7 +449,7 @@ class VeloxRunner : public QueryBenchmarkBase {
                 << logical_plan::PlanPrinter::toText(*logicalPlan) << std::endl;
     }
 
-    runner::MultiFragmentPlan::Options opts;
+    facebook::axiom::runner::MultiFragmentPlan::Options opts;
     opts.numWorkers = FLAGS_num_workers;
     opts.numDrivers = FLAGS_num_drivers;
     auto allocator =
@@ -493,13 +493,13 @@ class VeloxRunner : public QueryBenchmarkBase {
                 << best->toString(true) << std::endl;
     }
 
-    return optimization.toVeloxPlan(best->op, opts);
+    return optimization.toVeloxPlan(best->op);
   }
 
   /// Runs a query and returns the result as a single vector in *resultVector,
   /// the plan text in *planString and the error message in *errorString.
   /// *errorString is not set if no error. Any of these may be nullptr.
-  std::shared_ptr<runner::LocalRunner> runSql(
+  std::shared_ptr<facebook::axiom::runner::LocalRunner> runSql(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       std::vector<RowVectorPtr>* resultVector = nullptr,
       std::string* planString = nullptr,
@@ -529,12 +529,12 @@ class VeloxRunner : public QueryBenchmarkBase {
     }
 
     RunStats runStats;
-    std::shared_ptr<runner::LocalRunner> runner;
+    std::shared_ptr<facebook::axiom::runner::LocalRunner> runner;
     try {
       connector::SplitOptions splitOptions{
           .targetSplitCount = FLAGS_num_workers * FLAGS_num_drivers * 2,
           .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
-      runner = std::make_shared<runner::LocalRunner>(
+      runner = std::make_shared<facebook::axiom::runner::LocalRunner>(
           planAndStats.plan,
           queryCtx,
           std::make_shared<connector::ConnectorSplitSourceFactory>(
@@ -609,7 +609,8 @@ class VeloxRunner : public QueryBenchmarkBase {
     }
   }
 
-  void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner) {
+  void waitForCompletion(
+      const std::shared_ptr<facebook::axiom::runner::LocalRunner>& runner) {
     if (runner) {
       try {
         runner->waitForCompletion(500000);
@@ -745,7 +746,7 @@ class VeloxRunner : public QueryBenchmarkBase {
   logical_plan::LogicalPlanNodePtr logicalPlan_;
   bool hasReferenceResult_{false};
   // Keeps live 'referenceResult_'.
-  std::shared_ptr<runner::LocalRunner> referenceRunner_;
+  std::shared_ptr<facebook::axiom::runner::LocalRunner> referenceRunner_;
   // Result from first run of flag value sweep.
   std::vector<RowVectorPtr> referenceResult_;
   std::set<std::string> modifiedFlags_;

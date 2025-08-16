@@ -52,8 +52,8 @@ class TestConnectorQueryTest : public QueryTestBase {
     QueryTestBase::TearDown();
   }
 
-  runner::MultiFragmentPlanPtr appendTableWrite(
-      const runner::MultiFragmentPlanPtr& plan,
+  axiom::runner::MultiFragmentPlanPtr appendTableWrite(
+      const axiom::runner::MultiFragmentPlanPtr& plan,
       const RowTypePtr& schema,
       const std::string& tableName) {
     EXPECT_EQ(plan->fragments().size(), 1);
@@ -75,19 +75,20 @@ class TestConnectorQueryTest : public QueryTestBase {
         connector::CommitStrategy::kTaskCommit,
         source);
 
-    runner::ExecutableFragment writeFragment(executableFragment);
+    axiom::runner::ExecutableFragment writeFragment(executableFragment);
     writeFragment.fragment = core::PlanFragment(
         write,
         fragment.executionStrategy,
         fragment.numSplitGroups,
         fragment.groupedExecutionLeafNodeIds);
-    std::vector<runner::ExecutableFragment> fragments = {writeFragment};
+    std::vector<axiom::runner::ExecutableFragment> fragments = {writeFragment};
 
-    return std::make_shared<runner::MultiFragmentPlan>(fragments, options_);
+    return std::make_shared<axiom::runner::MultiFragmentPlan>(
+        fragments, options_);
   }
 
   std::shared_ptr<connector::TestConnector> connector_;
-  const runner::MultiFragmentPlan::Options options_{
+  const axiom::runner::MultiFragmentPlan::Options options_{
       .numWorkers = 1,
       .numDrivers = 16};
 };

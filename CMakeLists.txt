@@ -137,5 +137,6 @@ include_directories(SYSTEM velox/velox/external/xxhash axiom)
 include_directories(SYSTEM ${CMAKE_BINARY_DIR}/_deps/xsimd-src/include/)
 
 add_subdirectory(velox)
-add_subdirectory(axiom/optimizer)
 add_subdirectory(axiom/logical_plan)
+add_subdirectory(axiom/runner)
+add_subdirectory(axiom/optimizer)

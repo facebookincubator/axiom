@@ -25,7 +25,6 @@ DEFINE_double(
     "Log a warning if cardinality estimate is more than this many times off. 0 means no warnings.");
 
 using namespace facebook::velox::exec;
-using namespace facebook::velox::runner;
 
 namespace facebook::velox::optimizer {
 
@@ -35,8 +34,8 @@ void VeloxHistory::recordJoinSample(
     float rl) {}
 
 std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
-  auto optimization = queryCtx()->optimization();
-  if (!optimization->opts().sampleJoins) {
+  const auto& options = queryCtx()->optimization()->options();
+  if (!options.sampleJoins) {
     return {0, 0};
   }
 
@@ -55,8 +54,8 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
       return it->second;
     }
   }
-  bool trace =
-      (optimization->opts().traceFlags & OptimizerOptions::kSample) != 0;
+
+  const bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
 
   std::pair<float, float> pair;
   uint64_t start = getCurrentTimeMicro();
@@ -113,7 +112,7 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
     return false;
   }
   bool trace =
-      (optimization->opts().traceFlags & OptimizerOptions::kSample) != 0;
+      (optimization->options().traceFlags & OptimizerOptions::kSample) != 0;
   uint64_t start = getCurrentTimeMicro();
   auto sample = runnerTable->layouts()[0]->sample(
       handlePair.first, 1, handlePair.second, scanType);
@@ -130,7 +129,7 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
 
 std::shared_ptr<const core::TableScanNode> findScan(
     const core::PlanNodeId& id,
-    const runner::MultiFragmentPlanPtr& plan) {
+    const axiom::runner::MultiFragmentPlanPtr& plan) {
   for (auto& fragment : plan->fragments()) {
     for (auto& scan : fragment.scans) {
       if (scan->id() == id) {

@@ -23,21 +23,21 @@ namespace facebook::velox::optimizer {
 
 namespace {
 
-/// True if single worker, i.e. do not plan remote exchanges
+// True if single worker, i.e. do not plan remote exchanges
 bool isSingleWorker() {
-  return queryCtx()->optimization()->options().numWorkers == 1;
+  return queryCtx()->optimization()->runnerOptions().numWorkers == 1;
 }
 
 } // namespace
 
-/// The dt for which we set a breakpoint for plan candidate.
+// The dt for which we set a breakpoint for plan candidate.
 int32_t debugDt{-1};
 
-/// Number of tables in  'debugPlacedTables'
+// Number of tables in 'debugPlacedTables'
 int32_t debugNumPlaced = 0;
 
-/// Tables for setting a breakpoint. Join order selection calls planBreakpoint()
-/// right before evaluating the cost for the tables in 'debugPlacedTables'.
+// Tables for setting a breakpoint. Join order selection calls planBreakpoint()
+// right before evaluating the cost for the tables in 'debugPlacedTables'.
 int32_t debugPlaced[10];
 
 void planBreakpoint() {
@@ -46,7 +46,7 @@ void planBreakpoint() {
   LOG(INFO) << "Join order breakpoint";
 }
 
-void PlanState::setFirstTable(int32_t id) {
+void PlanState::debugSetFirstTable(int32_t id) {
   if (dt->id() == debugDt) {
     debugPlacedTables.resize(1);
     debugPlacedTables[0] = id;
@@ -77,16 +77,16 @@ Optimization::Optimization(
     History& history,
     std::shared_ptr<core::QueryCtx> _queryCtx,
     velox::core::ExpressionEvaluator& evaluator,
-    OptimizerOptions opts,
-    runner::MultiFragmentPlan::Options options)
-    : opts_(std::move(opts)),
+    OptimizerOptions options,
+    axiom::runner::MultiFragmentPlan::Options runnerOptions)
+    : options_(std::move(options)),
+      runnerOptions_(std::move(runnerOptions)),
+      isSingleWorker_(runnerOptions_.numWorkers == 1),
       logicalPlan_(&plan),
       history_(history),
       queryCtx_(std::move(_queryCtx)),
-      options_(std::move(options)),
-      isSingle_(options_.numWorkers == 1),
-      toGraph_{schema, evaluator, opts_},
-      toVelox_{options_, opts_} {
+      toGraph_{schema, evaluator, options_},
+      toVelox_{runnerOptions_, options_} {
   queryCtx()->optimization() = this;
   root_ = toGraph_.makeQueryGraph(*logicalPlan_);
   root_->distributeConjuncts();
@@ -103,7 +103,7 @@ void Optimization::trace(
     int32_t id,
     const Cost& cost,
     RelationOp& plan) {
-  if (event & opts_.traceFlags) {
+  if (event & options_.traceFlags) {
     std::cout << (event == OptimizerOptions::kRetained ? "Retained: "
                                                        : "Abandoned: ")
               << id << ": " << cost.toString(true, true) << ": " << " "
@@ -111,12 +111,15 @@ void Optimization::trace(
   }
 }
 
-PlanPtr Optimization::bestPlan() {
-  topState_.dt = root_;
+PlanP Optimization::bestPlan() {
   PlanObjectSet targetColumns;
   targetColumns.unionColumns(root_->columns);
+
+  topState_.dt = root_;
   topState_.setTargetColumnsForDt(targetColumns);
+
   makeJoins(nullptr, topState_);
+
   Distribution empty;
   bool ignore;
   return topState_.plans.best(empty, ignore);
@@ -181,7 +184,7 @@ void PlanState::setTargetColumnsForDt(const PlanObjectSet& target) {
       targetColumns.unionColumns(dt->exprs[i]);
     }
   }
-  for (auto& having : dt->having) {
+  for (const auto& having : dt->having) {
     targetColumns.unionColumns(having);
   }
 }
@@ -216,14 +219,14 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
 
   if (dt->aggregation && !placed.contains(dt->aggregation)) {
     auto aggToPlace = dt->aggregation;
+    const auto numGroupingKeys = aggToPlace->groupingKeys().size();
     for (auto i = 0; i < aggToPlace->columns().size(); ++i) {
       // Grouping columns must be computed anyway, aggregates only if referenced
       // by enclosing.
-      if (i < aggToPlace->groupingKeys().size()) {
+      if (i < numGroupingKeys) {
         result.unionColumns(aggToPlace->groupingKeys()[i]);
       } else if (targetColumns.contains(aggToPlace->columns()[i])) {
-        result.unionColumns(
-            aggToPlace->aggregates()[i - aggToPlace->groupingKeys().size()]);
+        result.unionColumns(aggToPlace->aggregates()[i - numGroupingKeys]);
       }
     }
   }
@@ -241,26 +244,28 @@ std::string PlanState::printPlan(RelationOpPtr op, bool detail) const {
   return plan->toString(detail);
 }
 
-PlanPtr PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
-  bool insert = plans.empty();
+PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
   int32_t replaceIndex = -1;
-  float shuffle = shuffleCost(plan->columns()) * state.cost.fanout;
-  if (!insert) {
-    // Compare with existing. If there is one with same distribution
-    // and new is better, replace. If there is one with a different
-    // distribution and the new one can produce the same distribution
-    // by repartition, for cheaper, add the new one and delete the old
-    // one.
+  const float shuffleCostPerRow =
+      shuffleCost(plan->columns()) * state.cost.fanout;
+
+  if (!plans.empty()) {
+    // Compare with existing. If there is one with same distribution and new is
+    // better, replace. If there is one with a different distribution and the
+    // new one can produce the same distribution by repartition, for cheaper,
+    // add the new one and delete the old one.
     for (auto i = 0; i < plans.size(); ++i) {
       auto old = plans[i].get();
       if (!(state.input == old->input)) {
         continue;
       }
-      bool newIsBetter = old->isStateBetter(state);
-      bool newIsBetterWithShuffle = old->isStateBetter(state, shuffle);
-      bool sameDist =
+
+      const bool newIsBetter = old->isStateBetter(state);
+      const bool newIsBetterWithShuffle =
+          old->isStateBetter(state, shuffleCostPerRow);
+      const bool sameDist =
           old->op->distribution().isSamePartition(plan->distribution());
-      bool sameOrder =
+      const bool sameOrder =
           old->op->distribution().isSameOrder(plan->distribution());
       if (sameDist && sameOrder) {
         if (newIsBetter) {
@@ -270,9 +275,10 @@ PlanPtr PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
         // There's a better one with same dist and partition.
         return nullptr;
       }
+
       if (newIsBetterWithShuffle && old->op->distribution().order.empty()) {
         // Old plan has no order and is worse than new plus shuffle. Can't win.
-        // rase.
+        // Erase.
         queryCtx()->optimization()->trace(
             OptimizerOptions::kExceededBest,
             state.dt->id(),
@@ -282,16 +288,19 @@ PlanPtr PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
         --i;
         continue;
       }
+
       if (plan->distribution().order.empty() &&
-          !old->isStateBetter(state, -shuffle)) {
+          !old->isStateBetter(state, -shuffleCostPerRow)) {
         // New has no order and old would beat it even after adding shuffle.
         return nullptr;
       }
     }
   }
+
   auto newPlan = std::make_unique<Plan>(plan, state);
   auto* result = newPlan.get();
-  auto newPlanCost = result->cost.unitCost + result->cost.setupCost + shuffle;
+  auto newPlanCost =
+      result->cost.unitCost + result->cost.setupCost + shuffleCostPerRow;
   if (bestCostWithShuffle == 0 || newPlanCost < bestCostWithShuffle) {
     bestCostWithShuffle = newPlanCost;
   }
@@ -303,56 +312,63 @@ PlanPtr PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
   return result;
 }
 
-PlanPtr PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
-  PlanPtr best = nullptr;
-  PlanPtr match = nullptr;
+PlanP PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
+  PlanP best = nullptr;
+  PlanP match = nullptr;
   float bestCost = -1;
   float matchCost = -1;
-  bool single = isSingleWorker();
-  for (auto i = 0; i < plans.size(); ++i) {
-    float cost = plans[i]->cost.fanout * plans[i]->cost.unitCost +
-        plans[i]->cost.setupCost;
+
+  const bool single = isSingleWorker();
+
+  for (const auto& plan : plans) {
+    const float cost =
+        plan->cost.fanout * plan->cost.unitCost + plan->cost.setupCost;
     if (!best || bestCost > cost) {
-      best = plans[i].get();
+      best = plan.get();
       bestCost = cost;
     }
-    if (single || plans[i]->op->distribution().isSamePartition(distribution)) {
-      match = plans[i].get();
+    if (single || plan->op->distribution().isSamePartition(distribution)) {
+      match = plan.get();
       matchCost = cost;
     }
   }
+
+  VELOX_DCHECK_NOT_NULL(best);
+
   if (best != match && match) {
-    float shuffle = shuffleCost(best->op->columns()) * best->cost.fanout;
+    const float shuffle = shuffleCost(best->op->columns()) * best->cost.fanout;
     if (bestCost + shuffle < matchCost) {
       needsShuffle = true;
-      VELOX_DCHECK_NOT_NULL(best);
+
       return best;
     }
   }
+
   needsShuffle = best != match;
-  VELOX_DCHECK_NOT_NULL(best);
   return best;
 }
 
 const JoinEdgeVector& joinedBy(PlanObjectCP table) {
   if (table->type() == PlanType::kTableNode) {
     return table->as<BaseTable>()->joinedBy;
-  } else if (table->type() == PlanType::kValuesTableNode) {
+  }
+
+  if (table->type() == PlanType::kValuesTableNode) {
     return table->as<ValuesTable>()->joinedBy;
   }
+
   VELOX_DCHECK(table->type() == PlanType::kDerivedTableNode);
   return table->as<DerivedTable>()->joinedBy;
 }
 
-// Traverses joins from 'candidate'. Follows any join that goes to a
-// table not in 'visited' with a fanout <
-// 'maxFanout'. 'fanoutFromRoot' is the product of the fanouts
-// between 'candidate' and the 'candidate' of the top level call to
-// this. 'path' is the set of joined tables between this invocation
-// and the top level. 'fanoutFromRoot' is thus the selectivity of
-// the linear join sequence in 'path'.  When a reducing join
-// sequence is found, the tables on the path are added to
-// 'result'. 'reduction' is the product of the fanouts of all the
+namespace {
+// Traverses joins from 'candidate'. Follows any join that goes to a table not
+// in 'visited' with a fanout < 'maxFanout'. 'fanoutFromRoot' is the product of
+// the fanouts between 'candidate' and the 'candidate' of the top level call to
+// this. 'path' is the set of joined tables between this invocation and the top
+// level. 'fanoutFromRoot' is thus the selectivity of the linear join sequence
+// in 'path'. When a reducing join sequence is found, the tables on the path
+// are added to 'result'. 'reduction' is the product of the fanouts of all the
 // reducing join paths added to 'result'.
 void reducingJoinsRecursive(
     const PlanState& state,
@@ -418,7 +434,6 @@ void reducingJoinsRecursive(
   }
 }
 
-namespace {
 JoinCandidate reducingJoins(
     const PlanState& state,
     const JoinCandidate& candidate) {
@@ -505,6 +520,7 @@ void forJoinedTables(const PlanState& state, Func func) {
     if (!placedTable->isTable()) {
       return;
     }
+
     for (auto join : joinedBy(placedTable)) {
       if (join->isNonCommutative()) {
         if (!visited.insert(join).second) {
@@ -562,6 +578,7 @@ void JoinCandidate::addEdge(PlanState& state, JoinEdgeP edge) {
   if (!state.placed.contains(newPlacedSide.table)) {
     return;
   }
+
   auto tableSide = join->sideOf(joined);
   auto placedSide = join->sideOf(joined, true);
   for (auto i = 0; i < newPlacedSide.keys.size(); ++i) {
@@ -854,15 +871,15 @@ void Optimization::addPostprocess(
 }
 
 namespace {
-template <typename V>
-CPSpan<Column> leadingColumns(V& exprs) {
+
+CPSpan<Column> leadingColumns(const ExprVector& exprs) {
   int32_t i = 0;
   for (; i < exprs.size(); ++i) {
     if (exprs[i]->type() != PlanType::kColumnExpr) {
       break;
     }
   }
-  return CPSpan<Column>(reinterpret_cast<const Column* const*>(&exprs[0]), i);
+  return CPSpan(reinterpret_cast<ColumnCP const*>(&exprs[0]), i);
 }
 
 bool isIndexColocated(
@@ -1062,7 +1079,7 @@ PlanObjectSet availableColumns(PlanObjectCP object) {
   return set;
 }
 
-bool isBroadcastableSize(PlanPtr build, PlanState& /*state*/) {
+bool isBroadcastableSize(PlanP build, PlanState& /*state*/) {
   return build->cost.fanout < 100'000;
 }
 
@@ -1172,7 +1189,7 @@ void Optimization::joinByHash(
   RelationOpPtr buildInput = buildPlan->op;
   RelationOpPtr probeInput = plan;
 
-  if (!isSingle_) {
+  if (!isSingleWorker_) {
     if (!partKeys.empty()) {
       if (needsShuffle) {
         if (copartition.empty()) {
@@ -1324,7 +1341,7 @@ void Optimization::joinByHashRight(
   RelationOpPtr probeInput = probePlan->op;
   RelationOpPtr buildInput = plan;
 
-  if (!isSingle_) {
+  if (!isSingleWorker_) {
     // The build gets shuffled to align with probe. If probe is not partitioned
     // on its keys, shuffle the probe too.
     alignJoinSides(
@@ -1689,7 +1706,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     std::vector<float> scores(firstTables.size());
     for (auto i = 0; i < firstTables.size(); ++i) {
       auto table = firstTables[i];
-      state.setFirstTable(table->id());
+      state.debugSetFirstTable(table->id());
       scores.at(i) = startingScore(table);
     }
     std::vector<int32_t> ids(firstTables.size());
@@ -1821,7 +1838,7 @@ Distribution somePartition(const RelationOpPtrVector& inputs) {
 
   DistributionType distributionType;
   distributionType.numPartitions =
-      queryCtx()->optimization()->options().numWorkers;
+      queryCtx()->optimization()->runnerOptions().numWorkers;
   distributionType.locus = firstInput->distribution().distributionType.locus;
 
   return Distribution(distributionType, columns);
@@ -1829,9 +1846,9 @@ Distribution somePartition(const RelationOpPtrVector& inputs) {
 
 // Adds the costs in the input states to the first state and if 'distinct' is
 // not null adds the cost of that to the first state.
-PlanPtr unionPlan(
+PlanP unionPlan(
     std::vector<PlanState>& states,
-    const std::vector<PlanPtr>& inputPlans,
+    const std::vector<PlanP>& inputPlans,
     const RelationOpPtr& result,
     Aggregation* distinct) {
   auto& firstState = states[0];
@@ -1853,7 +1870,7 @@ PlanPtr unionPlan(
 }
 } // namespace
 
-PlanPtr Optimization::makePlan(
+PlanP Optimization::makePlan(
     const MemoKey& key,
     const Distribution& distribution,
     const PlanObjectSet& boundColumns,
@@ -1865,7 +1882,7 @@ PlanPtr Optimization::makePlan(
     const auto* setDt = key.firstTable->as<DerivedTable>();
 
     RelationOpPtrVector inputs;
-    std::vector<PlanPtr> inputPlans;
+    std::vector<PlanP> inputPlans;
     std::vector<PlanState> inputStates;
     std::vector<bool> inputNeedsShuffle;
 
@@ -1891,7 +1908,7 @@ PlanPtr Optimization::makePlan(
 
     const bool isDistinct =
         setDt->setOp.value() == logical_plan::SetOperation::kUnion;
-    if (isSingle_) {
+    if (isSingleWorker_) {
       RelationOpPtr result = make<UnionAll>(inputs);
       Aggregation* distinct = nullptr;
       if (isDistinct) {
@@ -1932,15 +1949,13 @@ PlanPtr Optimization::makePlan(
     }
     return unionPlan(inputStates, inputPlans, result, distinct);
   } else {
-    return makeDtPlan(
-        key, distribution, boundColumns, existsFanout, state, needsShuffle);
+    return makeDtPlan(key, distribution, existsFanout, state, needsShuffle);
   }
 }
 
-PlanPtr Optimization::makeDtPlan(
+PlanP Optimization::makeDtPlan(
     const MemoKey& key,
     const Distribution& distribution,
-    const PlanObjectSet& /*boundColumns*/,
     float existsFanout,
     PlanState& state,
     bool& needsShuffle) {
@@ -1950,12 +1965,14 @@ PlanPtr Optimization::makeDtPlan(
     DerivedTable dt;
     dt.import(
         *state.dt, key.firstTable, key.tables, key.existences, existsFanout);
+
     PlanState inner(*this, &dt);
     if (key.firstTable->type() == PlanType::kDerivedTableNode) {
       inner.setTargetColumnsForDt(key.columns);
     } else {
       inner.targetColumns = key.columns;
     }
+
     makeJoins(nullptr, inner);
     memo_[key] = std::move(inner.plans);
     plans = &memo_[key];

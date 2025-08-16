@@ -21,30 +21,20 @@
 #include "axiom/optimizer/RelationOp.h"
 #include "axiom/optimizer/ToGraph.h"
 #include "axiom/optimizer/ToVelox.h"
+#include "axiom/runner/MultiFragmentPlan.h"
 #include "velox/connectors/Connector.h"
-#include "velox/runner/MultiFragmentPlan.h"
 
 /// Planning-time data structures. Represent the state of the planning process
 /// plus utilities.
 namespace facebook::velox::optimizer {
 
-inline bool isSpecialForm(
-    const logical_plan::Expr* expr,
-    logical_plan::SpecialForm form) {
-  return expr->isSpecialForm() &&
-      expr->asUnchecked<logical_plan::SpecialFormExpr>()->form() == form;
-}
-
-/// Utility for making a getter from a Step.
-core::TypedExprPtr stepToGetter(Step, core::TypedExprPtr arg);
-
 struct Plan;
 struct PlanState;
 
-using PlanPtr = Plan*;
+using PlanP = Plan*;
 
-/// A set of build sides. a candidate plan tracks all builds so that they can be
-/// reused
+/// A set of build sides. A candidate plan tracks all builds so that they can be
+/// reused.
 using HashBuildVector = std::vector<HashBuildCP>;
 
 /// Item produced by optimization and kept in memo. Corresponds to
@@ -56,70 +46,71 @@ struct Plan {
   /// then 'other' must win by margin per row.
   bool isStateBetter(const PlanState& state, float perRowMargin = 0) const;
 
-  // Root of the plan tree.
-  RelationOpPtr op;
+  /// Root of the plan tree.
+  const RelationOpPtr op;
 
-  // Total cost of 'op'. Setup costs and memory sizes are added up. The unit
-  // cost is the sum of the unit costs of the left-deep branch of 'op', where
-  // each unit cost is multiplied by the product of the fanouts of its inputs.
-  Cost cost;
+  /// Total cost of 'op'. Setup costs and memory sizes are added up. The unit
+  /// cost is the sum of the unit costs of the left-deep branch of 'op', where
+  /// each unit cost is multiplied by the product of the fanouts of its inputs.
+  const Cost cost;
 
-  // The tables from original join graph that are included in this
-  // plan. If this is a derived table in the original plan, the
-  // covered object is the derived table, not its constituent
-  // tables.
-  PlanObjectSet tables;
+  /// The tables from original join graph that are included in this
+  /// plan. If this is a derived table in the original plan, the
+  /// covered object is the derived table, not its constituent tables.
+  const PlanObjectSet tables;
 
-  // The produced columns. Includes input columns.
-  PlanObjectSet columns;
+  /// The produced columns. Includes input columns.
+  const PlanObjectSet columns;
 
-  // Columns that are fixed on input. Applies to index path for a derived
-  // table, e.g. a left (t1 left t2) dt on dt.t1pk = a.fk. In a memo of dt
-  // inputs is dt.pkt1.
+  /// Columns that are fixed on input. Applies to index path for a derived
+  /// table, e.g. a left (t1 left t2) dt on dt.t1pk = a.fk. In a memo of dt
+  /// inputs is dt.pkt1.
   PlanObjectSet input;
 
-  // hash join builds placed in the plan. Allows reusing a build.
+  /// Hash join builds placed in the plan. Allows reusing a build.
   HashBuildVector builds;
 
-  // the tables/derived tables that are contained in this plan and need not be
-  // addressed by enclosing plans. This is all the tables in a build side join
-  // but not necessarily all tables that were added to a group by derived table.
+  /// The tables/derived tables that are contained in this plan and need not be
+  /// addressed by enclosing plans. This is all the tables in a build side join
+  /// but not necessarily all tables that were added to a group by derived
+  /// table.
   PlanObjectSet fullyImported;
 
   std::string printCost() const;
+
   std::string toString(bool detail) const;
 };
 
 /// The set of plans produced for a set of tables and columns. The plans may
-/// have different output orders and  distributions.
+/// have different output orders and distributions.
 struct PlanSet {
-  // Interesting equivalent plans.
+  /// Interesting equivalent plans.
   std::vector<std::unique_ptr<Plan>> plans;
 
-  // Cost of lowest cost  plan plus shuffle. If a cutoff is applicable, nothing
-  // more expensive than this should be tried.
+  /// Cost of lowest-cost plan plus shuffle. If a cutoff is applicable, nothing
+  /// more expensive than this should be tried.
   float bestCostWithShuffle{0};
 
-  // Returns the best plan that produces 'distribution'. If the best plan has
-  // some other distribution, sets 'needsShuffle ' to true.
-  PlanPtr best(const Distribution& distribution, bool& needShuffle);
+  /// Returns the best plan that produces 'distribution'. If the best plan has
+  /// some other distribution, sets 'needsShuffle ' to true.
+  PlanP best(const Distribution& distribution, bool& needShuffle);
 
   /// Compares 'plan' to already seen plans and retains it if it is
   /// interesting, e.g. better than the best so far or has an interesting
   /// order. Returns the plan if retained, nullptr if not.
-  PlanPtr addPlan(RelationOpPtr plan, PlanState& state);
+  PlanP addPlan(RelationOpPtr plan, PlanState& state);
 };
 
-// Represents the next table/derived table to join. May consist of several
-// tables for a bushy build side.
+/// Represents the next table/derived table to join. May consist of several
+/// tables for a bushy build side.
 struct JoinCandidate {
   JoinCandidate() = default;
 
   JoinCandidate(JoinEdgeP _join, PlanObjectCP _right, float _fanout)
       : join(_join), tables({_right}), fanout(_fanout) {}
 
-  // Returns the join side info for 'table'. If 'other' is set, returns the
-  // other side.
+  /// Returns the join side info for 'table'. If 'other' is set, returns the
+  /// other side.
   JoinSide sideOf(PlanObjectCP side, bool other = false) const;
 
   /// Adds 'other' to the set of joins between the new table and already placed
@@ -133,30 +124,30 @@ struct JoinCandidate {
 
   std::string toString() const;
 
-  // The join between already placed tables and the table(s) in 'this'.
+  /// The join between already placed tables and the table(s) in 'this'.
   JoinEdgeP join{nullptr};
 
-  // Tables to join on the build side. The tables must not be already placed in
-  // the plan.
+  /// Tables to join on the build side. The tables must not be already placed in
+  /// the plan.
   std::vector<PlanObjectCP> tables;
 
-  // Joins imported from the left side for reducing a build
-  // size. These could be ignored without affecting the result but can
-  // be included to restrict the size of build, e.g. lineitem join
-  // part left (partsupp exists part) would have the second part in
-  // 'existences' and partsupp in 'tables' because we know that
-  // partsupp will not be probed with keys that are not in part, so
-  // there is no point building with these. This may involve tables already
-  // placed in the plan.
+  /// Joins imported from the left side for reducing a build
+  /// size. These could be ignored without affecting the result but can
+  /// be included to restrict the size of build, e.g. lineitem join
+  /// part left (partsupp exists part) would have the second part in
+  /// 'existences' and partsupp in 'tables' because we know that
+  /// partsupp will not be probed with keys that are not in part, so
+  /// there is no point building with these. This may involve tables already
+  /// placed in the plan.
   std::vector<PlanObjectSet> existences;
 
-  // Number of right side hits for one row on the left. The join
-  // selectivity in 'tables' affects this but the selectivity in
-  // 'existences' does not.
+  /// Number of right side hits for one row on the left. The join
+  /// selectivity in 'tables' affects this but the selectivity in
+  /// 'existences' does not.
   float fanout;
 
-  // the selectivity from 'existences'. 0.2 means that the join of 'tables' is
-  // reduced 5x.
+  /// The selectivity from 'existences'. 0.2 means that the join of 'tables' is
+  /// reduced 5x.
   float existsFanout{1};
 
   JoinEdgeP compositeEdge{nullptr};
@@ -202,68 +193,68 @@ struct PlanState {
   PlanState(Optimization& optimization, DerivedTableCP dt)
       : optimization(optimization), dt(dt) {}
 
-  PlanState(Optimization& optimization, DerivedTableCP dt, PlanPtr plan)
+  PlanState(Optimization& optimization, DerivedTableCP dt, PlanP plan)
       : optimization(optimization), dt(dt), cost(plan->cost) {}
 
   Optimization& optimization;
 
-  // The derived table from which the tables are drawn.
-  DerivedTableCP dt{nullptr};
+  /// The derived table from which the tables are drawn.
+  DerivedTableCP dt;
 
-  // The tables that have been placed so far.
+  /// The tables that have been placed so far.
   PlanObjectSet placed;
 
-  // The columns that have a value from placed tables.
+  /// The columns that have a value from placed tables.
   PlanObjectSet columns;
 
-  // The columns that need a value at the end of the plan. A dt can be
-  // planned for just join/filter columns or all payload. Initially,
-  // columns the selected columns of the dt depend on.
+  /// The columns that need a value at the end of the plan. A dt can be
+  /// planned for just join/filter columns or all payload. Initially,
+  /// columns the selected columns of the dt depend on.
   PlanObjectSet targetColumns;
 
-  // lookup keys for an index based derived table.
+  /// lookup keys for an index based derived table.
   PlanObjectSet input;
 
-  // The total cost for the PlanObjects placed thus far.
+  /// The total cost for the PlanObjects placed thus far.
   Cost cost;
 
-  // All the hash join builds in any branch of the partial plan constructed so
-  // far.
+  /// All the hash join builds in any branch of the partial plan constructed so
+  /// far.
   HashBuildVector builds;
 
-  // True if we should backtrack when 'costs' exceeds the best cost with shuffle
-  // from already generated plans.
+  /// True if we should backtrack when 'cost' exceeds the best cost with
+  /// shuffle from already generated plans.
   bool hasCutoff{true};
 
-  // Interesting completed plans for the dt being planned. For
-  // example, best by cost and maybe plans with interesting orders.
+  /// Interesting completed plans for the dt being planned. For
+  /// example, best by cost and maybe plans with interesting orders.
   PlanSet plans;
 
-  // Caches results of downstreamColumns(). This is a pure function of
-  // 'placed' a'targetColumns' and 'dt'.
+  /// Caches results of downstreamColumns(). This is a pure function of
+  /// 'placed', 'targetColumns' and 'dt'.
   mutable std::unordered_map<PlanObjectSet, PlanObjectSet>
       downstreamPrecomputed;
 
-  // Ordered set of tables placed so far. Used for setting a
-  // breakpoint before a specific join order gets costed.
+  /// Ordered set of tables placed so far. Used for setting a
+  /// breakpoint before a specific join order gets costed.
   std::vector<int32_t> debugPlacedTables;
 
-  /// Updates 'cost_' to reflect 'op' being placed on top of the partial plan.
+  /// Updates 'cost' to reflect 'op' being placed on top of the partial plan.
   void addCost(RelationOp& op);
 
   /// Adds 'added' to all hash join builds.
   void addBuilds(const HashBuildVector& added);
 
-  // Specifies that the plan to make only references 'target' columns and
-  // whatever these depend on. These refer to 'columns' of 'dt'.
+  /// Specifies that the plan-to-make only references 'target' columns and
+  /// whatever these depend on. These refer to 'columns' of 'dt'.
   void setTargetColumnsForDt(const PlanObjectSet& target);
 
-  /// Returns the  set of columns referenced in unplaced joins/filters union
+  /// Returns the set of columns referenced in unplaced joins/filters union
   /// targetColumns. Gets smaller as more tables are placed.
   const PlanObjectSet& downstreamColumns() const;
 
-  // Adds a placed join to the set of partial queries to be developed. No op if
-  // cost exceeds best so far and cutoff is enabled.
+  /// Adds a placed join to the set of partial queries to be developed. No-op if
+  /// cost exceeds best so far and cutoff is enabled.
   void addNextJoin(
       const JoinCandidate* candidate,
       RelationOpPtr plan,
@@ -283,7 +274,7 @@ struct PlanState {
         cost.unitCost + cost.setupCost > plans.bestCostWithShuffle;
   }
 
-  void setFirstTable(int32_t id);
+  void debugSetFirstTable(int32_t id);
 };
 
 /// A scoped guard that restores fields of PlanState on destruction.
@@ -366,24 +357,24 @@ class Optimization {
       History& history,
       std::shared_ptr<core::QueryCtx> queryCtx,
       velox::core::ExpressionEvaluator& evaluator,
-      OptimizerOptions opts = OptimizerOptions(),
-      runner::MultiFragmentPlan::Options options =
-          runner::MultiFragmentPlan::Options{.numWorkers = 5, .numDrivers = 5});
+      OptimizerOptions options = OptimizerOptions(),
+      axiom::runner::MultiFragmentPlan::Options runnerOptions =
+          axiom::runner::MultiFragmentPlan::Options{
+              .numWorkers = 5,
+              .numDrivers = 5});
 
   Optimization(const Optimization& other) = delete;
 
   void operator==(Optimization& other) = delete;
 
   /// Returns the optimized RelationOp plan for 'plan' given at construction.
-  PlanPtr bestPlan();
+  PlanP bestPlan();
 
   /// Returns a set of per-stage Velox PlanNode trees. If 'historyKeys' is
   /// given, these can be used to record history data about the execution of
   /// each relevant node for costing future queries.
-  PlanAndStats toVeloxPlan(
-      RelationOpPtr plan,
-      const velox::runner::MultiFragmentPlan::Options& options) {
-    return toVelox_.toVeloxPlan(plan, options);
+  PlanAndStats toVeloxPlan(RelationOpPtr plan) {
+    return toVelox_.toVeloxPlan(std::move(plan), runnerOptions_);
   }
 
   std::pair<connector::ConnectorTableHandlePtr, std::vector<core::TypedExprPtr>>
@@ -391,7 +382,7 @@ class Optimization {
     return toVelox_.leafHandle(id);
   }
 
-  // Translates from Expr to Velox.
+  /// Translates from Expr to Velox.
   velox::core::TypedExprPtr toTypedExpr(ExprCP expr) {
     return toVelox_.toTypedExpr(expr);
   }
@@ -405,7 +396,7 @@ class Optimization {
         baseTable, leafColumns, topColumns, typeMap);
   }
 
-  /// Sets 'filterSelectivity' of 'baseTable' from history. Returns True if set.
+  /// Sets 'filterSelectivity' of 'baseTable' from history. Returns true if set.
   /// 'scanType' is the set of sampled columns with possible map to struct cast.
   bool setLeafSelectivity(BaseTable& baseTable, RowTypePtr scanType) {
     return history_.setLeafSelectivity(baseTable, std::move(scanType));
@@ -423,19 +414,19 @@ class Optimization {
     return existenceDts_;
   }
 
-  // Lists the possible joins based on 'state.placed' and adds each on top of
-  // 'plan'. This is a set of plans extending 'plan' by one join (single table
-  // or bush). Calls itself on the interesting next plans. If all tables have
-  // been used, adds postprocess and adds the plan to 'plans' in 'state'. If
-  // 'state' enables cutoff and a partial plan is worse than the best so far,
-  // discards the candidate.
+  /// Lists the possible joins based on 'state.placed' and adds each on top of
+  /// 'plan'. This is a set of plans extending 'plan' by one join (single table
+  /// or bush). Calls itself on the interesting next plans. If all tables have
+  /// been used, adds postprocess and adds the plan to 'plans' in 'state'. If
+  /// 'state' enables cutoff and a partial plan is worse than the best so far,
+  /// discards the candidate.
   void makeJoins(RelationOpPtr plan, PlanState& state);
 
-  std::shared_ptr<core::QueryCtx> queryCtxShared() const {
+  const std::shared_ptr<core::QueryCtx>& queryCtxShared() const {
     return queryCtx_;
   }
 
-  velox::core::ExpressionEvaluator* evaluator() {
+  velox::core::ExpressionEvaluator* evaluator() const {
     return toGraph_.evaluator();
   }
 
@@ -443,8 +434,12 @@ class Optimization {
     return toGraph_.newCName(prefix);
   }
 
-  const OptimizerOptions& opts() const {
-    return opts_;
+  const OptimizerOptions& options() const {
+    return options_;
+  }
+
+  const axiom::runner::MultiFragmentPlan::Options& runnerOptions() const {
+    return runnerOptions_;
   }
 
   History& history() const {
@@ -465,13 +460,9 @@ class Optimization {
     return toGraph_.builtinNames();
   }
 
-  runner::MultiFragmentPlan::Options& options() {
-    return options_;
-  }
-
-  // Returns a dedupped left deep reduction with 'func' for the
-  // elements in set1 and set2. The elements are sorted on plan object
-  // id and then combined into a left deep reduction on 'func'.
+  /// Returns a dedupped left deep reduction with 'func' for the
+  /// elements in set1 and set2. The elements are sorted on plan object
+  /// id and then combined into a left deep reduction on 'func'.
   ExprCP
   combineLeftDeep(Name func, const ExprVector& set1, const ExprVector& set2);
 
@@ -479,20 +470,21 @@ class Optimization {
   void trace(int32_t event, int32_t id, const Cost& cost, RelationOp& plan);
 
  private:
-  /// Retrieves or makes a plan from 'key'. 'key' specifies a set of
-  /// top level joined tables or a hash join build side table or
-  /// join. 'distribution' is the desired output distribution or a
-  /// distribution with no partitioning if this does
-  /// matter. 'boundColumns' is a set of columns that are lookup keys
-  /// for an index based path through the joins in
-  /// 'key'. 'existsFanout' is the selectivity for the 'existences' in
-  /// 'key', i.e. extra reducing joins for a hash join build side,
-  /// reflecting reducing joins on the probe side, 1 if none. 'state'
-  /// is the state of the caller, empty for a top level call and the
-  /// state with the planned objects so far if planning a derived
-  /// table. 'needsShuffle' is set to true if a shuffle is needed to
-  /// align the result of the made plan with 'distribution'.
-  PlanPtr makePlan(
+  // Retrieves or makes a plan from 'key'. 'key' specifies a set of top level
+  // joined tables or a hash join build side table or join.
+  //
+  // @param distribution the desired output distribution or a distribution with
+  // no partitioning if this does not matter.
+  // @param boundColumns a set of columns that are lookup keys for an index
+  // based path through the joins in 'key'.
+  // #param existsFanout the selectivity for the 'existences' in 'key', i.e.
+  // extra reducing joins for a hash join build side, reflecting reducing joins
+  // on the probe side. 1 if none.
+  // @param state the state of the caller, empty for a top level call and the
+  // state with the planned objects so far if planning a derived table.
+  // @param needsShuffle set to true if a shuffle is needed to align the result
+  // of the made plan with 'distribution'.
+  PlanP makePlan(
       const MemoKey& key,
       const Distribution& distribution,
       const PlanObjectSet& boundColumns,
@@ -501,28 +493,26 @@ class Optimization {
       bool& needsShuffle);
 
   // Non-union case of makePlan().
-  PlanPtr makeDtPlan(
+  PlanP makeDtPlan(
       const MemoKey& key,
       const Distribution& distribution,
-      const PlanObjectSet& boundColumns,
       float existsFanout,
       PlanState& state,
       bool& needsShuffle);
 
-  // Returns a sorted list of candidates to add to the plan in
-  // 'state'. The joinable tables depend on the tables already present
-  // in 'plan'. A candidate will be a single table for all the single
-  // tables that can be joined. Additionally, when the single table
-  // can be joined to more tables not in 'state' to form a reducing
-  // join, this is produced as a candidate for a bushy hash join. When
-  // a single table or join to be used as a hash build side is made,
-  // we further check if reducing joins applying to the probe can be
-  // used to furthr reduce the build. These last joins are added as
+  // Returns a sorted list of candidates to add to the plan in 'state'. The
+  // joinable tables depend on the tables already present in 'plan'. A candidate
+  // will be a single table for all the single tables that can be joined.
+  // Additionally, when the single table can be joined to more tables not in
+  // 'state' to form a reducing join, this is produced as a candidate for a
+  // bushy hash join. When a single table or join to be used as a hash build
+  // side is made, we further check if reducing joins applying to the probe can
+  // be used to further reduce the build. These last joins are added as
   // 'existences' in the candidate.
   std::vector<JoinCandidate> nextJoins(PlanState& state);
 
-  // Adds group by, order by, top k to 'plan'. Updates 'plan' if
-  // relation ops added.  Sets cost in 'state'.
+  // Adds group by, order by, top k, limit to 'plan'. Updates 'plan' if
+  // relation ops added. Sets cost in 'state'.
   void addPostprocess(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state);
 
   // Places a derived table as first table in a plan. Imports possibly reducing
@@ -533,8 +523,7 @@ class Optimization {
   // and whose prerequisite columns are placed. If conjuncts can be
   // placed, adds them to 'state.placed' and calls makeJoins()
   // recursively to make the rest of the plan. Returns false if no
-  // unplaced conjuncts were found and and plan construction should
-  // proceed.
+  // unplaced conjuncts were found and plan construction should proceed.
   bool placeConjuncts(
       RelationOpPtr plan,
       PlanState& state,
@@ -555,7 +544,7 @@ class Optimization {
       ExprCP filter,
       PlanState& state);
 
-  // Adds the join represented by'candidate' on top of 'plan'. Tries index and
+  // Adds the join represented by 'candidate' on top of 'plan'. Tries index and
   // hash based methods and adds the index and hash based plans to 'result'. If
   // one of these is clearly superior, only adds the better one.
   void addJoin(
@@ -572,9 +561,9 @@ class Optimization {
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
-  // Adds 'candidate' on top of 'plan as a hash join. Adds possibly needed
+  // Adds 'candidate' on top of 'plan' as a hash join. Adds possibly needed
   // repartitioning to both probe and build and makes a broadcast build if
-  // indicated. If 'candidate' calls for a join on the build ide, plans a
+  // indicated. If 'candidate' calls for a join on the build side, plans a
   // derived table with the build side tables and optionl 'existences' from
   // 'candidate'.
   void joinByHash(
@@ -583,7 +572,7 @@ class Optimization {
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
-  /// Tries a right hash join variant of left outer or left semijoin.
+  // Tries a right hash join variant of left outer or left semijoin.
   void joinByHashRight(
       const RelationOpPtr& plan,
       const JoinCandidate& candidate,
@@ -596,10 +585,14 @@ class Optimization {
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
-  const OptimizerOptions opts_;
+  const OptimizerOptions options_;
+
+  const axiom::runner::MultiFragmentPlan::Options runnerOptions_;
+
+  const bool isSingleWorker_;
 
   // Top level plan to optimize.
-  const logical_plan::LogicalPlanNode* logicalPlan_{nullptr};
+  const logical_plan::LogicalPlanNode* const logicalPlan_;
 
   // Source of historical cost/cardinality information.
   History& history_;
@@ -624,10 +617,6 @@ class Optimization {
 
   // Generates unique ids for build sides.
   int32_t buildCounter_{0};
-
-  velox::runner::MultiFragmentPlan::Options options_;
-
-  const bool isSingle_;
 
   bool cnamesInExpr_{true};
 

@@ -444,7 +444,7 @@ struct Equivalence {
 struct JoinSide {
   PlanObjectCP table;
   const ExprVector& keys;
-  float fanout;
+  const float fanout;
   const bool isOptional;
   const bool isNonOptionalOfOuter;
   const bool isExists;
@@ -563,13 +563,14 @@ class JoinEdge {
         !rightNotExists_;
   }
 
-  // True if all tables referenced from 'leftKeys' must be placed before placing
-  // this.
+  /// True if all tables referenced from 'leftKeys' must be placed before
+  /// placing this.
   bool isNonCommutative() const {
     // Inner and full outer joins are commutative.
     if (rightOptional_ && leftOptional_) {
       return false;
     }
+
     return !leftTable_ || rightOptional_ || leftOptional_ || rightExists_ ||
         rightNotExists_ || markColumn_ || directed_;
   }
@@ -580,9 +581,9 @@ class JoinEdge {
     return isNonCommutative() && !rightNotExists_;
   }
 
-  // Returns the join side info for 'table'. If 'other' is set, returns the
-  // other side.
-  const JoinSide sideOf(PlanObjectCP side, bool other = false) const;
+  /// Returns the join side info for 'table'. If 'other' is set, returns the
+  /// other side.
+  JoinSide sideOf(PlanObjectCP side, bool other = false) const;
 
   /// Returns the table on the other side of 'table' and the number of rows in
   /// the returned table for one row in 'table'. If the join is not inner
@@ -619,11 +620,11 @@ class JoinEdge {
 
   std::string toString() const;
 
-  //// Fills in 'lrFanout' and 'rlFanout', 'leftUnique', 'rightUnique'.
+  /// Fills in 'lrFanout' and 'rlFanout', 'leftUnique', 'rightUnique'.
   void guessFanout();
 
-  // True if a hash join build can be broadcasted. Used when building on the
-  // right. None of the right hash join variants is broadcastable.
+  /// True if a hash join build can be broadcasted. Used when building on the
+  /// right. None of the right hash join variants are broadcastable.
   bool isBroadcastableType() const;
 
   /// Returns a key string for recording a join cardinality sample. The string
@@ -657,12 +658,12 @@ class JoinEdge {
   // True if 'lrFanout_' and 'rlFanout_' are set by setFanouts.
   bool fanoutsFixed_{false};
 
-  // Join condition for any non-equality  conditions for non-inner joins.
+  // Join condition for any non-equality conditions for non-inner joins.
   const ExprVector filter_;
 
   // True if an unprobed right side row produces a result with right side
-  // columns set and left side columns as null. Possible only be hash or
-  // merge.
+  // columns set and left side columns as null (right outer join). Possible only
+  // for hash or merge.
   const bool leftOptional_;
 
   // True if a right side miss produces a row with left side columns
@@ -678,7 +679,7 @@ class JoinEdge {
   const bool rightNotExists_;
 
   // Flag to set if right side has a match.
-  const ColumnCP markColumn_;
+  ColumnCP const markColumn_;
 
   // If directed non-outer edge. For example unnest or inner dependent on
   // optional of outer.

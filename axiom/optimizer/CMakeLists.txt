@@ -55,6 +55,6 @@ target_link_libraries(
   velox_connector_metadata
   velox_fe_logical_plan
   velox_md_model
-  velox_multifragment_plan
+  axiom_runner_multifragment_plan
   velox_connector
   velox_schema_resolver)

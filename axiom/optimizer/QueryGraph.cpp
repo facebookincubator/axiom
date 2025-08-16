@@ -179,7 +179,7 @@ std::string ValuesTable::toString() const {
   return out.str();
 }
 
-const JoinSide JoinEdge::sideOf(PlanObjectCP side, bool other) const {
+JoinSide JoinEdge::sideOf(PlanObjectCP side, bool other) const {
   if ((side == rightTable_ && !other) || (side == leftTable_ && other)) {
     return {
         rightTable_,
@@ -192,6 +192,7 @@ const JoinSide JoinEdge::sideOf(PlanObjectCP side, bool other) const {
         markColumn_,
         rightUnique_};
   }
+
   return {
       leftTable_,
       leftKeys_,
