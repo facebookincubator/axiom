@@ -68,6 +68,10 @@ TEST_F(HiveQueriesTest, basic) {
           .planNode());
 }
 
+TEST_F(HiveQueriesTest, AnyJoin) {
+  checkLogicalPlanParsing("SELECT * FROM nation JOIN region on true");
+}
+
 TEST_F(HiveQueriesTest, orderOfOperations) {
   auto test = [&](lp::PlanBuilder& planBuilder,
                   core::PlanMatcherBuilder& matcherBuilder) {

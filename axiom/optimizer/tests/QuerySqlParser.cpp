@@ -537,6 +537,28 @@ lp::LogicalPlanNodePtr toPlanNode(
       /* condition */ nullptr);
 }
 
+lp::JoinType toJoinType(::duckdb::JoinType& join) {
+  switch (join) {
+    case ::duckdb::JoinType::INNER:
+    case ::duckdb::JoinType::SINGLE:
+      return lp::JoinType::kInner;
+    case ::duckdb::JoinType::LEFT:
+      return lp::JoinType::kLeft;
+    case ::duckdb::JoinType::RIGHT:
+      return lp::JoinType::kRight;
+    case ::duckdb::JoinType::OUTER:
+      return lp::JoinType::kFull;
+    default:
+      VELOX_NYI("Unsupported Duck join type: {}", static_cast<int32_t>(join));
+  }
+}
+
+std::shared_ptr<const RowType> joinInputType(
+    const std::vector<lp::LogicalPlanNodePtr>& sources) {
+  return sources[0]->outputType()->unionWith(sources[1]->outputType());
+  ;
+}
+
 lp::LogicalPlanNodePtr toPlanNode(
     ::duckdb::LogicalComparisonJoin& join,
     memory::MemoryPool* pool,
@@ -544,26 +566,7 @@ lp::LogicalPlanNodePtr toPlanNode(
     QueryContext& queryContext) {
   VELOX_CHECK_EQ(2, sources.size());
 
-  lp::JoinType joinType = lp::JoinType::kInner;
-  switch (join.join_type) {
-    case ::duckdb::JoinType::INNER:
-    case ::duckdb::JoinType::SINGLE:
-      joinType = lp::JoinType::kInner;
-      break;
-    case ::duckdb::JoinType::LEFT:
-      joinType = lp::JoinType::kLeft;
-      break;
-    case ::duckdb::JoinType::RIGHT:
-      joinType = lp::JoinType::kRight;
-      break;
-    case ::duckdb::JoinType::OUTER:
-      joinType = lp::JoinType::kFull;
-      break;
-    default:
-      VELOX_NYI(
-          "Unsupported Duck join type: {}",
-          static_cast<int32_t>(join.join_type));
-  }
+  auto joinType = toJoinType(join.join_type);
 
   const auto& leftType = sources[0]->outputType();
   const auto& rightType = sources[1]->outputType();
@@ -595,6 +598,29 @@ lp::LogicalPlanNodePtr toPlanNode(
 
   return std::make_shared<lp::JoinNode>(
       queryContext.nextNodeId(), sources[0], sources[1], joinType, filter);
+}
+
+lp::LogicalPlanNodePtr toPlanNode(
+    ::duckdb::LogicalAnyJoin& join,
+    memory::MemoryPool* pool,
+    std::vector<lp::LogicalPlanNodePtr> sources,
+    QueryContext& queryContext) {
+  VELOX_CHECK_EQ(2, sources.size());
+
+  auto joinType = toJoinType(join.join_type);
+
+  lp::ExprPtr filter;
+  if (join.condition) {
+    const auto inputType = joinInputType(sources);
+    filter = toExpr(*join.condition, inputType);
+  }
+
+  return std::make_shared<lp::JoinNode>(
+      queryContext.nextNodeId(),
+      sources[0],
+      sources[1],
+      joinType,
+      std::move(filter));
 }
 
 lp::LogicalPlanNodePtr toPlanNode(
@@ -667,6 +693,12 @@ lp::LogicalPlanNodePtr toPlanNode(
     case ::duckdb::LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
       return toPlanNode(
           dynamic_cast<::duckdb::LogicalComparisonJoin&>(plan),
+          pool,
+          std::move(sources),
+          queryContext);
+    case ::duckdb::LogicalOperatorType::LOGICAL_ANY_JOIN:
+      return toPlanNode(
+          dynamic_cast<::duckdb::LogicalAnyJoin&>(plan),
           pool,
           std::move(sources),
           queryContext);

@@ -37,6 +37,15 @@ RowTypePtr HiveQueriesTestBase::getSchema(const std::string& tableName) {
       ->rowType();
 }
 
+void HiveQueriesTestBase::checkLogicalPlanParsing(const std::string& sql) {
+  SCOPED_TRACE(sql);
+  auto statement = parser_->parse(sql);
+
+  ASSERT_TRUE(statement->isSelect());
+  auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
+  ASSERT_TRUE(logicalPlan);
+}
+
 void HiveQueriesTestBase::checkResults(
     const std::string& sql,
     const core::PlanNodePtr& referencePlan) {
