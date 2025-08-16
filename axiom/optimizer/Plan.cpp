@@ -120,9 +120,8 @@ PlanP Optimization::bestPlan() {
 
   makeJoins(nullptr, topState_);
 
-  Distribution empty;
-  bool ignore;
-  return topState_.plans.best(empty, ignore);
+  bool ignore = false;
+  return topState_.plans.best({}, ignore);
 }
 
 Plan::Plan(RelationOpPtr _op, const PlanState& state)
@@ -1549,7 +1548,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   key.firstTable = from;
   key.tables.add(from);
 
-  bool ignore;
+  bool ignore = false;
   auto plan = makePlan(key, Distribution(), PlanObjectSet(), 1, state, ignore);
 
   // Make plans based on the dt alone as first.
@@ -1573,6 +1572,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   if (reduction < 0.9) {
     key.tables = reducingSet;
     key.columns = state.downstreamColumns();
+    ignore = false;
     plan = makePlan(key, Distribution(), PlanObjectSet(), 1, state, ignore);
     // Not all reducing joins are necessarily retained in the plan. Only mark
     // the ones fully imported as placed.
