@@ -66,6 +66,16 @@ TEST_F(HiveQueriesTest, basic) {
           .localPartition({})
           .singleAggregation({"r_name"}, {"count(*)"})
           .planNode());
+            
+  checkResults(
+      "select * from nation, region",
+      scan("nation")
+        .nestedLoopJoin(
+            scan("region").planNode(),
+            "",
+            {"n_nationkey", "n_name", "n_regionkey", "n_comment", "r_regionkey", "r_name", "r_comment"})
+        .planNode()
+    );
 }
 
 TEST_F(HiveQueriesTest, orderOfOperations) {

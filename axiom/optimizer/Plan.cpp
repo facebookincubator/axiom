@@ -1413,8 +1413,7 @@ void Optimization::crossJoin(
   auto memoKey = MemoKey{
       candidate.tables[0], broadcastColumns, broadcastTables, candidate.existences};
   
-  auto broadcast = Distribution::broadcast(
-      plan->distribution().distributionType, plan->resultCardinality());
+  auto broadcast = Distribution::broadcast(plan->distribution().distributionType);
   PlanObjectSet empty;
   bool needsShuffle = false;
   auto* rightPlan = makePlan(memoKey, broadcast, empty, candidate.existsFanout, state, needsShuffle);
