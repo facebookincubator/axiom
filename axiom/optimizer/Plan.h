@@ -492,7 +492,14 @@ class Optimization {
       PlanState& state,
       bool& needsShuffle);
 
-  // Non-union case of makePlan().
+  PlanP makeUnionPlan(
+      const MemoKey& key,
+      const Distribution& distribution,
+      const PlanObjectSet& boundColumns,
+      float existsFanout,
+      PlanState& state,
+      bool& needsShuffle);
+
   PlanP makeDtPlan(
       const MemoKey& key,
       const Distribution& distribution,
