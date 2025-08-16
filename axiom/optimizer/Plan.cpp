@@ -1437,7 +1437,7 @@ void Optimization::crossJoin(
 
   RelationOpPtr rightOp = rightPlan->op;
   PlanState broadcastState(state.optimization, state.dt, rightPlan);
-  if (needsShuffle) {
+  if (needsShuffle && !isSingleWorker()) {
     rightOp = make<Repartition>(rightPlan->op, broadcast, rightOp->columns());
   }
   broadcastState.addCost(*rightOp);
@@ -1551,7 +1551,7 @@ RelationOpPtr Optimization::placeSingleRowDt(
   auto rightPlan = makePlan(memoKey, broadcast, empty, 1, state, needsShuffle);
 
   auto rightOp = rightPlan->op;
-  if (needsShuffle) {
+  if (needsShuffle && !isSingleWorker()) {
     rightOp = make<Repartition>(rightOp, broadcast, rightOp->columns());
   }
 
