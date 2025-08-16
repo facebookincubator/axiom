@@ -1437,7 +1437,9 @@ void Optimization::crossJoin(
 
   RelationOpPtr rightOp = rightPlan->op;
   PlanState broadcastState(state.optimization, state.dt, rightPlan);
-  rightOp = make<Repartition>(rightPlan->op, broadcast, rightOp->columns());
+  if (needsShuffle) {
+    rightOp = make<Repartition>(rightPlan->op, broadcast, rightOp->columns());
+  }
   broadcastState.addCost(*rightOp);
 
   auto resultColumns = plan->columns();

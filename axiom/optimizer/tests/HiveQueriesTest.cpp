@@ -68,7 +68,7 @@ TEST_F(HiveQueriesTest, basic) {
           .planNode());
             
   checkResults(
-      "select * from nation, region",
+      "SELECT * FROM nation, region",
       scan("nation")
         .nestedLoopJoin(
             scan("region").planNode(),
