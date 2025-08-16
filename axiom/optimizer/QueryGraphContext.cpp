@@ -61,6 +61,7 @@ TypePtr QueryGraphContext::dedupType(const TypePtr& type) {
     return type;
   }
   std::vector<TypePtr> children;
+  children.reserve(size);
   for (auto i = 0; i < size; ++i) {
     children.push_back(dedupType(type->childAt(i)));
   }
@@ -68,12 +69,12 @@ TypePtr QueryGraphContext::dedupType(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::ROW: {
       std::vector<std::string> names;
+      names.reserve(size);
       for (auto i = 0; i < size; ++i) {
         names.push_back(type->as<TypeKind::ROW>().nameOf(i));
       }
       newType = ROW(std::move(names), std::move(children));
-      break;
-    }
+    } break;
     case TypeKind::ARRAY:
       newType = ARRAY(children[0]);
       break;
@@ -81,10 +82,9 @@ TypePtr QueryGraphContext::dedupType(const TypePtr& type) {
       newType = MAP(children[0], children[1]);
       break;
     case TypeKind::FUNCTION: {
-      auto args = children;
-      args.pop_back();
-      newType =
-          std::make_shared<FunctionType>(std::move(args), children.back());
+      auto returnType = std::move(children.back());
+      children.pop_back();
+      newType = FUNCTION(std::move(children), std::move(returnType));
     } break;
     default:
       VELOX_FAIL("Type has size > 0 and is not row/array/map");
@@ -156,7 +156,7 @@ bool Path::operator==(const Path& other) const {
     return false;
   }
 
-  for (auto i = 0; i < steps_.size(); ++i) {
+  for (size_t i = 0; i < steps_.size(); ++i) {
     if (steps_[i] != other.steps_[i]) {
       return false;
     }
@@ -178,7 +178,7 @@ bool Path::hasPrefix(const Path& prefix) const {
     return false;
   }
 
-  for (auto i = 0; i < prefix.steps_.size(); ++i) {
+  for (size_t i = 0; i < prefix.steps_.size(); ++i) {
     if (steps_[i] != prefix.steps_[i]) {
       return false;
     }

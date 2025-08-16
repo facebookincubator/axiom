@@ -31,9 +31,7 @@ class NameMappings {
     std::optional<std::string> alias;
     std::string name;
 
-    bool operator==(const QualifiedName& other) const {
-      return alias == other.alias && name == other.name;
-    }
+    bool operator==(const QualifiedName& other) const = default;
 
     std::string toString() const;
   };

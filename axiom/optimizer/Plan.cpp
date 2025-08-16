@@ -121,7 +121,7 @@ PlanP Optimization::bestPlan() {
   makeJoins(nullptr, topState_);
 
   bool ignore = false;
-  return topState_.plans.best({}, ignore);
+  return topState_.plans.best(Distribution{}, ignore);
 }
 
 Plan::Plan(RelationOpPtr _op, const PlanState& state)
@@ -255,7 +255,7 @@ PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
     // add the new one and delete the old one.
     for (auto i = 0; i < plans.size(); ++i) {
       auto old = plans[i].get();
-      if (!(state.input == old->input)) {
+      if (state.input != old->input) {
         continue;
       }
 
@@ -810,8 +810,8 @@ RelationOpPtr repartitionForAgg(const RelationOpPtr& plan, PlanState& state) {
     return plan;
   }
 
-  Distribution distribution(
-      plan->distribution().distributionType, std::move(keyValues));
+  Distribution distribution{
+      plan->distribution().distributionType, std::move(keyValues)};
   auto* repartition =
       make<Repartition>(plan, std::move(distribution), plan->columns());
   state.addCost(*repartition);
@@ -899,8 +899,8 @@ bool isIndexColocated(
 
   // True if 'input' is partitioned so that each partitioning key is joined to
   // the corresponding partition key in 'info'.
-  if (!(input->distribution().distributionType ==
-        info.index->distribution().distributionType)) {
+  if (input->distribution().distributionType !=
+      info.index->distribution().distributionType) {
     return false;
   }
   if (input->distribution().partition.empty()) {
@@ -953,8 +953,8 @@ RelationOpPtr repartitionForIndex(
     keyExprs.push_back(lookupValues[nthKey]);
   }
 
-  Distribution distribution(
-      info.index->distribution().distributionType, std::move(keyExprs));
+  Distribution distribution{
+      info.index->distribution().distributionType, std::move(keyExprs)};
   auto* repartition =
       make<Repartition>(plan, std::move(distribution), plan->columns());
   state.addCost(*repartition);
@@ -1099,10 +1099,10 @@ void alignJoinSides(
     PlanState& otherState) {
   auto part = joinKeyPartition(input, keys);
   if (part.empty()) {
-    Distribution distribution(
-        otherInput->distribution().distributionType, keys);
+    Distribution distribution{
+        otherInput->distribution().distributionType, keys};
     auto* repartition =
-        make<Repartition>(input, distribution, input->columns());
+        make<Repartition>(input, std::move(distribution), input->columns());
     state.addCost(*repartition);
     input = repartition;
   }
@@ -1118,8 +1118,8 @@ void alignJoinSides(
     }
   }
 
-  Distribution distribution(
-      input->distribution().distributionType, std::move(distColumns));
+  Distribution distribution{
+      input->distribution().distributionType, std::move(distColumns)};
   auto* repartition = make<Repartition>(
       otherInput, std::move(distribution), otherInput->columns());
   otherState.addCost(*repartition);
@@ -1165,14 +1165,14 @@ void Optimization::joinByHash(
   buildColumns.unionSet(buildFilterColumns);
   state.columns.unionSet(buildColumns);
 
-  auto memoKey = MemoKey{
+  MemoKey memoKey{
       candidate.tables[0], buildColumns, buildTables, candidate.existences};
 
   Distribution forBuild;
   if (plan->distribution().distributionType.isGather) {
     forBuild = Distribution::gather();
   } else {
-    forBuild = Distribution(plan->distribution().distributionType, copartition);
+    forBuild = {plan->distribution().distributionType, copartition};
   }
 
   PlanObjectSet empty;
@@ -1202,10 +1202,10 @@ void Optimization::joinByHash(
             copartition.push_back(build.keys[i]);
           }
         }
-        Distribution distribution(
-            plan->distribution().distributionType, copartition);
-        auto* repartition =
-            make<Repartition>(buildInput, distribution, buildInput->columns());
+        Distribution distribution{
+            plan->distribution().distributionType, copartition};
+        auto* repartition = make<Repartition>(
+            buildInput, std::move(distribution), buildInput->columns());
         buildState.addCost(*repartition);
         buildInput = repartition;
       }
@@ -1249,7 +1249,7 @@ void Optimization::joinByHash(
       columnSet.add(object);
       return;
     }
-    if (!(!probeOnly && buildColumns.contains(column)) &&
+    if ((probeOnly || !buildColumns.contains(column)) &&
         !probeColumns.contains(column)) {
       return;
     }
@@ -1335,7 +1335,7 @@ void Optimization::joinByHashRight(
   bool needsShuffle = false;
   auto probePlan = makePlan(
       memoKey,
-      Distribution(plan->distribution().distributionType, {}),
+      Distribution{plan->distribution().distributionType, {}},
       empty,
       candidate.existsFanout,
       state,
@@ -1383,7 +1383,7 @@ void Optimization::joinByHashRight(
       return;
     }
     if (!buildColumns.contains(column) &&
-        !(!buildOnly && probeColumns.contains(column))) {
+        (buildOnly || !probeColumns.contains(column))) {
       return;
     }
     columnSet.add(object);
@@ -1508,7 +1508,7 @@ RelationOpPtr Optimization::placeSingleRowDt(
     memoKey.columns.add(column);
   }
 
-  const auto broadcast = Distribution::broadcast(DistributionType());
+  const auto broadcast = Distribution::broadcast({});
 
   PlanObjectSet empty;
   bool needsShuffle = false;
@@ -1549,7 +1549,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   key.tables.add(from);
 
   bool ignore = false;
-  auto plan = makePlan(key, Distribution(), PlanObjectSet(), 1, state, ignore);
+  auto plan = makePlan(key, Distribution{}, PlanObjectSet{}, 1, state, ignore);
 
   // Make plans based on the dt alone as first.
   makeJoins(plan->op, state);
@@ -1573,7 +1573,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
     key.tables = reducingSet;
     key.columns = state.downstreamColumns();
     ignore = false;
-    plan = makePlan(key, Distribution(), PlanObjectSet(), 1, state, ignore);
+    plan = makePlan(key, Distribution{}, PlanObjectSet{}, 1, state, ignore);
     // Not all reducing joins are necessarily retained in the plan. Only mark
     // the ones fully imported as placed.
     state.placed.unionSet(plan->fullyImported);
@@ -1808,7 +1808,7 @@ Distribution somePartition(const RelationOpPtrVector& inputs) {
       queryCtx()->optimization()->runnerOptions().numWorkers;
   distributionType.locus = firstInput->distribution().distributionType.locus;
 
-  return Distribution(distributionType, columns);
+  return {distributionType, std::move(columns)};
 }
 
 // Adds the costs in the input states to the first state and if 'distinct' is

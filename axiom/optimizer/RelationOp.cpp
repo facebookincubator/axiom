@@ -153,7 +153,7 @@ Distribution TableScan::outputDistribution(
     orderType.resize(numPrefix);
     replace(order, schemaColumns, columns.data());
   }
-  return Distribution(
+  return {
       index->distribution().distributionType,
       std::move(partition),
       std::move(order),
@@ -161,7 +161,8 @@ Distribution TableScan::outputDistribution(
       index->distribution().numKeysUnique <= numPrefix
           ? index->distribution().numKeysUnique
           : 0,
-      1.0 / baseTable->filterSelectivity);
+      1.0F / baseTable->filterSelectivity,
+  };
 }
 
 // static
@@ -286,7 +287,7 @@ std::string TableScan::toString(bool /*recursive*/, bool detail) const {
 }
 
 Values::Values(const ValuesTable& valuesTable, ColumnVector columns)
-    : RelationOp{RelType::kValues, nullptr, Distribution{DistributionType::gather(), {}}, std::move(columns)},
+    : RelationOp{RelType::kValues, nullptr, Distribution::gather(), std::move(columns)},
       valuesTable{valuesTable} {
   cost_.inputCardinality = 1;
 
@@ -676,13 +677,13 @@ std::string Project::toString(bool recursive, bool detail) const {
 namespace {
 Distribution makeOrderByDistribution(
     const RelationOpPtr& input,
-    ExprVector keys,
+    ExprVector order,
     OrderTypeVector orderType) {
   Distribution distribution = input->distribution();
 
   distribution.distributionType = DistributionType::gather();
   distribution.partition.clear();
-  distribution.order = std::move(keys);
+  distribution.order = std::move(order);
   distribution.orderType = std::move(orderType);
 
   return distribution;
@@ -763,7 +764,7 @@ UnionAll::UnionAll(RelationOpPtrVector _inputs)
     : RelationOp(
           RelType::kUnionAll,
           nullptr,
-          Distribution(DistributionType{}, ExprVector{}),
+          Distribution{},
           _inputs[0]->columns()),
       inputs(std::move(_inputs)) {
   for (auto& input : inputs) {

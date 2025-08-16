@@ -1023,7 +1023,7 @@ void DerivedTable::makeInitialPlan() {
   optimization->makeJoins(nullptr, state);
 
   bool ignore = false;
-  auto plan = state.plans.best({}, ignore)->op;
+  auto plan = state.plans.best(Distribution{}, ignore)->op;
 
   auto& distribution = plan->distribution();
   ExprVector partition = distribution.partition;
@@ -1033,7 +1033,10 @@ void DerivedTable::makeInitialPlan() {
   replace(order, exprs, columns.data());
 
   this->distribution = make<Distribution>(
-      distribution.distributionType, partition, order, orderType);
+      distribution.distributionType,
+      std::move(partition),
+      std::move(order),
+      std::move(orderType));
   optimization->memo()[key] = std::move(state.plans);
 }
 
@@ -1050,7 +1053,7 @@ PlanP DerivedTable::bestInitialPlan() const {
   VELOX_CHECK(it != memo.end(), "Expecting to find a plan for union branch");
 
   bool ignore = false;
-  return it->second.best({}, ignore);
+  return it->second.best(Distribution{}, ignore);
 }
 
 std::string DerivedTable::toString() const {

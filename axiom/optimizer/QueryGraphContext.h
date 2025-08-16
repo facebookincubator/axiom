@@ -92,10 +92,6 @@ struct QGAllocator {
       const QGAllocator& /*rhs*/) {
     return true;
   }
-
-  friend bool operator!=(const QGAllocator& lhs, const QGAllocator& rhs) {
-    return !(lhs == rhs);
-  }
 };
 
 /// Elements of subfield paths. The QueryGraphContext holds a dedupped
@@ -361,6 +357,7 @@ class QueryGraphContext {
   std::unordered_set<TypePtr, TypeHasher, TypeComparer> deduppedTypes_;
 
   // Maps raw Type* back to shared TypePtr. Used in toType()() and toTypePtr().
+  // TODO: Can be set of TypePtr instead of map.
   std::unordered_map<const velox::Type*, velox::TypePtr> toTypePtr_;
 
   std::unordered_set<PathCP, PathHasher, PathComparer> deduppedPaths_;

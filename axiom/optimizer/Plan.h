@@ -364,8 +364,7 @@ class Optimization {
               .numDrivers = 5});
 
   Optimization(const Optimization& other) = delete;
-
-  void operator==(Optimization& other) = delete;
+  Optimization& operator=(const Optimization& other) = delete;
 
   /// Returns the optimized RelationOp plan for 'plan' given at construction.
   PlanP bestPlan();

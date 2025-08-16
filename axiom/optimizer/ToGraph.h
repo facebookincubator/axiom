@@ -124,10 +124,7 @@ struct PathExpr {
   ExprCP subscriptExpr{nullptr};
   ExprCP base;
 
-  bool operator==(const PathExpr& other) const {
-    return step == other.step && subscriptExpr == other.subscriptExpr &&
-        base == other.base;
-  }
+  bool operator==(const PathExpr& other) const = default;
 };
 
 struct PathExprHasher {

@@ -119,29 +119,27 @@ using LocusCP = const Locus*;
 /// Method for determining a partition given an ordered list of partitioning
 /// keys. Hive hash is an example, range partitioning is another. Add values
 /// here for more types.
-enum class ShuffleMode { kNone, kHive };
+enum class ShuffleMode : uint8_t {
+  kNone,
+  kHive,
+};
 
 /// Distribution of data. 'numPartitions' is 1 if the data is not partitioned.
 /// There is copartitioning if the DistributionType is the same on both sides
 /// and both sides have an equal number of 1:1 type matched partitioning keys.
 struct DistributionType {
-  bool operator==(const DistributionType& other) const {
-    return mode == other.mode && numPartitions == other.numPartitions &&
-        locus == other.locus && isGather == other.isGather;
-  }
+  bool operator==(const DistributionType& other) const = default;
 
-  ShuffleMode mode{ShuffleMode::kNone};
-  int32_t numPartitions{1};
   LocusCP locus{nullptr};
+  int32_t numPartitions{1};
+  // TODO: Can we unify isGather, isBroadcast and mode?
   bool isGather{false};
+  ShuffleMode mode{ShuffleMode::kNone};
 
   static DistributionType gather() {
-    static const DistributionType kGather = {
-        .mode = ShuffleMode::kNone,
-        .numPartitions = 1,
-        .locus = nullptr,
-        .isGather = true};
-
+    static constexpr DistributionType kGather = {
+        .isGather = true,
+    };
     return kGather;
   }
 };
@@ -149,37 +147,38 @@ struct DistributionType {
 // Describes output of relational operator. If base table, cardinality is
 // after filtering.
 struct Distribution {
-  Distribution() = default;
+  explicit Distribution() = default;
   Distribution(
-      DistributionType type,
-      ExprVector _partition,
-      ExprVector _order = {},
-      OrderTypeVector _orderType = {},
-      int32_t uniquePrefix = 0,
-      float _spacing = 0)
-      : distributionType(std::move(type)),
-        partition(std::move(_partition)),
-        order(std::move(_order)),
-        orderType(std::move(_orderType)),
-        numKeysUnique(uniquePrefix),
-        spacing(_spacing) {
-    VELOX_CHECK_EQ(order.size(), orderType.size());
+      DistributionType distributionType,
+      ExprVector partition,
+      ExprVector order = {},
+      OrderTypeVector orderType = {},
+      int32_t numKeysUnique = 0,
+      float spacing = 0)
+      : distributionType{distributionType},
+        partition{std::move(partition)},
+        order{std::move(order)},
+        orderType{std::move(orderType)},
+        numKeysUnique{numKeysUnique},
+        spacing{spacing} {
+    VELOX_CHECK_EQ(this->order.size(), this->orderType.size());
   }
 
   /// Returns a Distribution for use in a broadcast shuffle.
-  static Distribution broadcast(DistributionType type) {
-    Distribution result(type, {});
-    result.isBroadcast = true;
-    return result;
+  static Distribution broadcast(DistributionType distributionType) {
+    Distribution distribution{distributionType, {}};
+    distribution.isBroadcast = true;
+    return distribution;
   }
 
   /// Returns a distribution for an end of query gather from last stage
   /// fragments. Specifying order will create a merging exchange when the
   /// Distribution occurs in a Repartition.
   static Distribution gather(
-      const ExprVector& order = {},
-      const OrderTypeVector& orderType = {}) {
-    return Distribution(DistributionType::gather(), {}, order, orderType);
+      ExprVector order = {},
+      OrderTypeVector orderType = {}) {
+    return {
+        DistributionType::gather(), {}, std::move(order), std::move(orderType)};
   }
 
   /// True if 'this' and 'other' have the same number/type of keys and same
@@ -223,6 +222,7 @@ struct Distribution {
   // because lineitem has an average of 4 repeats of orderkey.
   float spacing{-1};
 
+  // TODO: Consider moving isBroadcast to DistributionType.
   // True if the data is replicated to 'numPartitions'.
   bool isBroadcast{false};
 };
@@ -377,9 +377,9 @@ struct SchemaTable {
       int32_t numKeysUnique,
       int32_t numOrdering,
       const ColumnVector& keys,
-      DistributionType distType,
+      DistributionType distributionType,
       const ColumnVector& partition,
-      const ColumnVector& columns);
+      ColumnVector columns);
 
   /// Finds or adds a column with 'name' and 'value'.
   ColumnCP column(const std::string& name, const Value& value);

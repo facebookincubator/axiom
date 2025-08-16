@@ -50,20 +50,23 @@ ColumnGroupP SchemaTable::addIndex(
     int32_t numKeysUnique,
     int32_t numOrdering,
     const ColumnVector& keys,
-    DistributionType distType,
+    DistributionType distributionType,
     const ColumnVector& partition,
-    const ColumnVector& columns) {
+    ColumnVector columns) {
   VELOX_CHECK_LE(numKeysUnique, keys.size());
 
   Distribution distribution;
+  distribution.orderType.reserve(numOrdering);
   for (auto i = 0; i < numOrdering; ++i) {
     distribution.orderType.push_back(OrderType::kAscNullsFirst);
   }
   distribution.numKeysUnique = numKeysUnique;
   appendToVector(distribution.order, keys);
-  distribution.distributionType = distType;
+  distribution.distributionType = distributionType;
   appendToVector(distribution.partition, partition);
-  columnGroups.push_back(make<ColumnGroup>(name, this, distribution, columns));
+  columnGroups.push_back(
+      make<ColumnGroup>(
+          name, this, std::move(distribution), std::move(columns)));
   return columnGroups.back();
 }
 
@@ -125,10 +128,10 @@ SchemaTableCP Schema::findTable(
     schemaTable->columns[column->name()] = column;
     columns.push_back(column);
   }
-  DistributionType defaultDist;
-  defaultDist.locus = defaultLocus_;
-  auto* pk =
-      schemaTable->addIndex(toName("pk"), 0, 0, {}, defaultDist, {}, columns);
+  DistributionType defaultDistributionType;
+  defaultDistributionType.locus = defaultLocus_;
+  auto* pk = schemaTable->addIndex(
+      toName("pk"), 0, 0, {}, defaultDistributionType, {}, std::move(columns));
   addTable(schemaTable);
   pk->layout = connectorTable->layouts()[0];
   queryCtx()->optimization()->retainConnectorTable(std::move(connectorTable));
@@ -347,7 +350,7 @@ ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {
 }
 
 bool Distribution::isSamePartition(const Distribution& other) const {
-  if (!(distributionType == other.distributionType)) {
+  if (distributionType != other.distributionType) {
     return false;
   }
   if (isBroadcast || other.isBroadcast) {
