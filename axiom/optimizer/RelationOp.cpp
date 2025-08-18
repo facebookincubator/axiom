@@ -467,6 +467,13 @@ std::string Repartition::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+Unnest::Unnest(
+    RelationOpPtr input,
+    ExprVector unnestExprs,
+    ColumnVector unnestedColumns)
+    : RelationOp{RelType::kUnnest, input, input->distribution(), std::move(unnestedColumns)},
+      unnestExprs{std::move(unnestExprs)} {}
+
 Aggregation::Aggregation(
     RelationOpPtr input,
     ExprVector _groupingKeys,
@@ -502,6 +509,16 @@ Aggregation::Aggregation(
 
   float rowBytes = byteSize(groupingKeys) + byteSize(aggregates);
   cost_.totalBytes = nOut * rowBytes;
+}
+
+std::string Unnest::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (recursive) {
+    out << input()->toString(true, detail) << " ";
+  }
+  out << "unnest ";
+  printCost(detail, out);
+  return out.str();
 }
 
 const QGstring& Aggregation::historyKey() const {

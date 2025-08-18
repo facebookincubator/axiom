@@ -1165,6 +1165,48 @@ TEST_F(PlanTest, values) {
     checkSame(logicalPlan, referencePlan);
   }
 }
+
+TEST_F(PlanTest, unnest) {
+  auto nationType = ROW({"nation", "regions"}, {BIGINT(), ARRAY(BIGINT())});
+
+  const std::vector<std::string>& names = nationType->names();
+
+  auto rowVector = makeRowVector(
+      names,
+      {
+          makeFlatVector<int64_t>({
+              7,
+              8,
+              9,
+          }),
+          makeArrayVector<int64_t>({
+              std::vector<int64_t>{10, 20, 30},
+              std::vector<int64_t>{1, 2, 3},
+              std::vector<int64_t>{100, 200, 300},
+          }),
+      });
+
+  lp::PlanBuilder::Context ctx{exec::test::kHiveConnectorId};
+
+  {
+    auto makeLogicalPlan = [&] {
+      return lp::PlanBuilder(ctx).values({rowVector});
+    };
+
+    auto logicalPlanUnnest = makeLogicalPlan()
+                                 .unnest({"regions"}, {{"region"}})
+                                 .project({"nation", "region"})
+                                 .build();
+
+    auto referencePlanUnnest = exec::test::PlanBuilder(pool_.get())
+                                   .values({rowVector})
+                                   .unnest({"nation"}, {"regions"})
+                                   .project({"nation", "regions_e AS region"})
+                                   .planNode();
+
+    checkSame(logicalPlanUnnest, referencePlanUnnest);
+  }
+}
 } // namespace
 } // namespace facebook::velox::optimizer
 

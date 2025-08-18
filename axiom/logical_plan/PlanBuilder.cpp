@@ -270,10 +270,6 @@ void PlanBuilder::resolveProjections(
   }
 }
 
-PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
-  return project(parse(projections));
-}
-
 PlanBuilder& PlanBuilder::project(const std::vector<ExprApi>& projections) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Project node cannot be a leaf node");
 
@@ -324,6 +320,51 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
 
   node_ = std::make_shared<ProjectNode>(nextId(), node_, outputNames, exprs);
   outputMapping_ = newOutputMapping;
+
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::unnest(
+    const std::vector<ExprApi>& unnestExpressions,
+    const std::vector<std::vector<std::string>>& unnestNames) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Unnest node cannot be a leaf node");
+
+  auto newOutputMapping = std::make_shared<NameMappings>();
+
+  const auto& inputType = node_->outputType();
+
+  for (auto i = 0; i < inputType->size(); i++) {
+    const auto& id = inputType->nameOf(i);
+    const auto names = outputMapping_->reverseLookup(id);
+    for (const auto& name : names) {
+      newOutputMapping->add(name, id);
+    }
+  }
+
+  std::vector<ExprPtr> outputUnnestExpressions;
+  std::vector<std::vector<std::string>> outputUnnestNames;
+
+  for (size_t i = 0; const auto& untypedExpr : unnestExpressions) {
+    auto expr = resolveScalarTypes(untypedExpr.expr());
+    VELOX_USER_CHECK(expr->isInputReference());
+    const auto& id = expr->asUnchecked<InputReferenceExpr>()->name();
+    const auto& unnestName = unnestNames[i++];
+    VELOX_USER_CHECK(!unnestName.empty());
+    auto& outputUnnestName = outputUnnestNames.emplace_back();
+    for (const auto& name : unnestName) {
+      outputUnnestName.emplace_back(newName(name));
+      newOutputMapping->add(name, outputUnnestName.back());
+    }
+    outputUnnestExpressions.push_back(std::move(expr));
+  }
+
+  node_ = std::make_shared<UnnestNode>(
+      nextId(),
+      std::move(node_),
+      std::move(outputUnnestExpressions),
+      std::move(outputUnnestNames),
+      std::nullopt);
+  outputMapping_ = std::move(newOutputMapping);
 
   return *this;
 }

@@ -327,6 +327,8 @@ class ToGraph {
       bool isTopLevel,
       bool& isLeftLeaf);
 
+  void translateUnnest(const logical_plan::UnnestNode& logicalUnnest);
+
   AggregationPlanCP translateAggregation(
       const logical_plan::AggregateNode& aggregation);
 

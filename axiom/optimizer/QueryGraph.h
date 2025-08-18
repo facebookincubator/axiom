@@ -920,4 +920,26 @@ class AggregationPlan : public PlanObject {
 
 using AggregationPlanCP = const AggregationPlan*;
 
+class UnnestPlan : public PlanObject {
+ public:
+  UnnestPlan(ExprVector unnestExprs, ColumnVector unnestedColumns)
+      : PlanObject{PlanType::kUnnestNode},
+        unnestExprs_{std::move(unnestExprs)},
+        unnestedColumns_{std::move(unnestedColumns)} {}
+
+  const ExprVector& unnestExprs() const {
+    return unnestExprs_;
+  }
+
+  const ColumnVector& unnestedColumns() const {
+    return unnestedColumns_;
+  }
+
+ private:
+  const ExprVector unnestExprs_;
+  const ColumnVector unnestedColumns_;
+};
+
+using UnnestPlanCP = const UnnestPlan*;
+
 } // namespace facebook::velox::optimizer

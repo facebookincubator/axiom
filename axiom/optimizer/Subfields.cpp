@@ -70,6 +70,36 @@ void ToGraph::markFieldAccessed(
       return;
     }
 
+    if (kind == lp::NodeKind::kUnnest) {
+      const auto* unnest = source.planNode->asUnchecked<lp::UnnestNode>();
+      const auto& input = unnest->onlyInput();
+      if (ordinal < input->outputType()->size()) {
+        markFieldAccessed(
+            {.planNode = input.get()},
+            ordinal,
+            steps,
+            isControl,
+            context,
+            sources);
+        return;
+      }
+      ordinal -= input->outputType()->size();
+      for (size_t i = 0; const auto& name : unnest->unnestedNames()) {
+        if (ordinal < name.size()) {
+          markSubfields(
+              unnest->unnestExpressions()[i],
+              steps,
+              isControl,
+              {input->outputType().get()},
+              {LogicalContextSource{.planNode = input.get()}});
+          return;
+        }
+        ordinal -= name.size();
+        ++i;
+      }
+      VELOX_UNREACHABLE("Unnest node does not have field {}", ordinal);
+    }
+
     if (kind == lp::NodeKind::kAggregate) {
       auto* agg = source.planNode->asUnchecked<lp::AggregateNode>();
       const auto& input = agg->onlyInput();

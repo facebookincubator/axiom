@@ -215,6 +215,12 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
     }
   }
 
+  for (const auto* unnest : dt->unnests) {
+    if (!placed.contains(unnest)) {
+      result.unionColumns(unnest->unnestExprs());
+    }
+  }
+
   if (dt->aggregation && !placed.contains(dt->aggregation)) {
     auto aggToPlace = dt->aggregation;
     const auto numGroupingKeys = aggToPlace->groupingKeys().size();
@@ -823,6 +829,12 @@ void Optimization::addPostprocess(
     DerivedTableCP dt,
     RelationOpPtr& plan,
     PlanState& state) {
+  for (auto* unnest : dt->unnests) {
+    auto* unnestOp =
+        make<Unnest>(plan, unnest->unnestExprs(), unnest->unnestedColumns());
+    state.addCost(*unnestOp);
+    plan = unnestOp;
+  }
   if (dt->aggregation) {
     const auto& aggPlan = dt->aggregation;
 

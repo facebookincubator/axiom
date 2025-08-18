@@ -180,7 +180,9 @@ class PlanBuilder {
 
   PlanBuilder& filter(const ExprApi& predicate);
 
-  PlanBuilder& project(const std::vector<std::string>& projections);
+  PlanBuilder& project(const std::vector<std::string>& projections) {
+    return project(parse(projections));
+  }
 
   PlanBuilder& project(std::initializer_list<std::string> projections) {
     return project(std::vector<std::string>{projections});
@@ -223,6 +225,16 @@ class PlanBuilder {
   PlanBuilder& with(std::initializer_list<ExprApi> projections) {
     return with(std::vector<ExprApi>{projections});
   }
+
+  PlanBuilder& unnest(
+      const std::vector<std::string>& unnestExpressions,
+      const std::vector<std::vector<std::string>>& unnestNames) {
+    return unnest(parse(unnestExpressions), unnestNames);
+  }
+
+  PlanBuilder& unnest(
+      const std::vector<ExprApi>& unnestExpressions,
+      const std::vector<std::vector<std::string>>& unnestNames);
 
   PlanBuilder& aggregate(
       const std::vector<std::string>& groupingKeys,

@@ -1149,6 +1149,54 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
   return joinNode;
 }
 
+core::PlanNodePtr ToVelox::makeUnnest(
+    Unnest& op,
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+
+  // TODO: This code is suboptimal, because unfortunately currently in optimizer
+  // we don't have ability to check that column referenced only for current
+  // node. So columns that needed only for unnest are also replicated. The
+  // simple solution is change logical_plan::UnnestNode API to explicitly
+  // specify replicated columns. The more interesting solution is to change
+  // optimizer to have knowledge about which columns are used only for current
+  // node. This can also be helpful for Join Nodes, because they can project
+  // only necessary columns in such case.
+  std::vector<core::FieldAccessTypedExprPtr> replicateVariables;
+  replicateVariables.reserve(input->outputType()->size());
+  for (uint32_t i = 0; i < input->outputType()->size(); ++i) {
+    const auto& name = input->outputType()->nameOf(i);
+    const auto& type = input->outputType()->childAt(i);
+    replicateVariables.push_back(
+        std::make_shared<core::FieldAccessTypedExpr>(type, name));
+  }
+
+  std::vector<core::FieldAccessTypedExprPtr> unnestVariables;
+  unnestVariables.reserve(op.unnestExprs.size());
+  for (const auto& expr : op.unnestExprs) {
+    auto typedExpr = toTypedExpr(expr);
+    VELOX_USER_CHECK(typedExpr->isFieldAccessKind());
+    unnestVariables.push_back(
+        std::static_pointer_cast<const core::FieldAccessTypedExpr>(
+            std::move(typedExpr)));
+  }
+
+  std::vector<std::string> unnestNames;
+  for (const auto* column : op.columns()) {
+    unnestNames.emplace_back(outputName(column));
+  }
+
+  return std::make_shared<core::UnnestNode>(
+      nextId(),
+      std::move(replicateVariables),
+      std::move(unnestVariables),
+      std::move(unnestNames),
+      std::nullopt,
+      std::nullopt,
+      std::move(input));
+}
+
 core::PlanNodePtr ToVelox::makeAggregation(
     Aggregation& op,
     ExecutableFragment& fragment,
@@ -1413,6 +1461,8 @@ core::PlanNodePtr ToVelox::makeFragment(
       return makeUnionAll(*op->as<UnionAll>(), fragment, stages);
     case RelType::kValues:
       return makeValues(*op->as<Values>(), fragment);
+    case RelType::kUnnest:
+      return makeUnnest(*op->as<Unnest>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));
