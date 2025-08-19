@@ -68,8 +68,14 @@ TEST_F(HiveQueriesTest, basic) {
           .planNode());
 }
 
-TEST_F(HiveQueriesTest, AnyJoin) {
-  checkLogicalPlanParsing("SELECT * FROM nation JOIN region on true");
+TEST_F(HiveQueriesTest, anyJoin) {
+  std::string sql = "SELECT * FROM nation JOIN region ON true";
+  SCOPED_TRACE(sql);
+  auto statement = getParser()->parse(sql);
+
+  ASSERT_TRUE(statement->isSelect());
+  auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
+  ASSERT_TRUE(logicalPlan != nullptr);
 }
 
 TEST_F(HiveQueriesTest, orderOfOperations) {
