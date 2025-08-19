@@ -51,8 +51,8 @@ class HiveQueriesTestBase : public test::QueryTestBase {
       const PlanAndStats& plan,
       const std::shared_ptr<core::PlanMatcher>& matcher);
 
-  QuerySqlParser* getParser() {
-    return parser_.get();
+  QuerySqlParser& parser() {
+    return *parser_;
   }
 
  private:

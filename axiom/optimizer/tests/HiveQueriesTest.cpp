@@ -69,9 +69,7 @@ TEST_F(HiveQueriesTest, basic) {
 }
 
 TEST_F(HiveQueriesTest, anyJoin) {
-  std::string sql = "SELECT * FROM nation JOIN region ON true";
-  SCOPED_TRACE(sql);
-  auto statement = getParser()->parse(sql);
+  auto statement = parser().parse("SELECT * FROM nation JOIN region ON true");
 
   ASSERT_TRUE(statement->isSelect());
   auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
