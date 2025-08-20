@@ -17,6 +17,7 @@
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/RelationOp.h"
 
@@ -105,18 +106,20 @@ SchemaTableCP Schema::findTable(
   }
 
   VELOX_CHECK_NOT_NULL(source_);
-  auto* table = source_->findTable(std::string(connectorId), std::string(name));
-  if (!table) {
+  auto connectorTable =
+      source_->findTable(std::string(connectorId), std::string(name));
+  if (!connectorTable) {
     return nullptr;
   }
 
-  auto* schemaTable =
-      make<SchemaTable>(internedName, table->rowType(), table->numRows());
-  schemaTable->connectorTable = table;
+  auto* schemaTable = make<SchemaTable>(
+      internedName, connectorTable->rowType(), connectorTable->numRows());
+  schemaTable->connectorTable = connectorTable.get();
 
   ColumnVector columns;
-  for (const auto& [columnName, tableColumn] : table->columnMap()) {
-    float cardinality = tableColumn->approxNumDistinct(table->numRows());
+  for (const auto& [columnName, tableColumn] : connectorTable->columnMap()) {
+    float cardinality =
+        tableColumn->approxNumDistinct(connectorTable->numRows());
     Value value(toType(tableColumn->type()), cardinality);
     auto* column = make<Column>(toName(columnName), nullptr, value);
     schemaTable->columns[column->name()] = column;
@@ -127,7 +130,8 @@ SchemaTableCP Schema::findTable(
   auto* pk =
       schemaTable->addIndex(toName("pk"), 0, 0, {}, defaultDist, {}, columns);
   addTable(schemaTable);
-  pk->layout = table->layouts()[0];
+  pk->layout = connectorTable->layouts()[0];
+  queryCtx()->optimization()->retainConnectorTable(std::move(connectorTable));
   return schemaTable;
 }
 

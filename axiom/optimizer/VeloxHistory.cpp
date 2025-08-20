@@ -101,7 +101,7 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
       return true;
     }
   }
-  auto* runnerTable = table.schemaTable->connectorTable;
+  auto runnerTable = table.schemaTable->connectorTable;
   if (!runnerTable) {
     // If there is no physical table to go to: Assume 1/10 if any filters.
     if (table.columnFilters.empty() && table.filter.empty()) {

@@ -446,6 +446,13 @@ class Optimization {
     return history_;
   }
 
+  /// Retain a reference to the provided ConnectorTablePtr to ensure
+  /// the Table is retained for the duration of Optimization, even if
+  /// dropped by the corresponding ConnectorMetadata.
+  void retainConnectorTable(connector::ConnectorTablePtr table) {
+    retainedTables_.insert(std::move(table));
+  }
+
   /// If false, correlation names are not included in Column::toString(). Used
   /// for canonicalizing join cache keys.
   bool& cnamesInExpr() {
@@ -605,6 +612,9 @@ class Optimization {
   History& history_;
 
   std::shared_ptr<core::QueryCtx> queryCtx_;
+
+  // Set of tables in use by the Optimizer.
+  std::unordered_set<connector::ConnectorTablePtr> retainedTables_;
 
   // Top DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP root_;

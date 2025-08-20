@@ -38,7 +38,7 @@ class SchemaResolver {
   // If schema is omitted, defaultSchema will be prepended prior to lookup.
   // If the table name specifies a different catalog than the one specified
   // as a parameter, an error will be thrown.
-  virtual const connector::Table* findTable(
+  virtual connector::ConnectorTablePtr findTable(
       const std::string& catalog,
       const std::string& name);
 

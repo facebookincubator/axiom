@@ -111,9 +111,9 @@ std::unique_ptr<QuerySqlParser> HiveQueriesTestBase::makeQueryParser() {
       std::make_unique<QuerySqlParser>(exec::test::kHiveConnectorId, pool());
 
   auto registerTable = [&](const std::string& name) {
-    auto* table = connector::getConnector(exec::test::kHiveConnectorId)
-                      ->metadata()
-                      ->findTable(name);
+    auto table = connector::getConnector(exec::test::kHiveConnectorId)
+                     ->metadata()
+                     ->findTable(name);
     parser->registerTable(name, table->rowType());
   };
 

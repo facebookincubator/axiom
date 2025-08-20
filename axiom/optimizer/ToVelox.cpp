@@ -220,7 +220,7 @@ RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) {
         continue;
       }
 
-      auto* runnerTable = schemaTable->connectorTable;
+      auto runnerTable = schemaTable->connectorTable;
       if (runnerTable) {
         auto* runnerColumn = runnerTable->findColumn(std::string(
             column->topColumn() ? column->topColumn()->name()

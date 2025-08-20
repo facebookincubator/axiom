@@ -80,9 +80,9 @@ class TpchPlanTest : public virtual test::QueryTestBase {
         exec::test::kHiveConnectorId, pool());
 
     auto registerTable = [&](const std::string& name) {
-      auto* table = connector::getConnector(exec::test::kHiveConnectorId)
-                        ->metadata()
-                        ->findTable(name);
+      auto table = connector::getConnector(exec::test::kHiveConnectorId)
+                       ->metadata()
+                       ->findTable(name);
       parser.registerTable(name, table->rowType());
     };
 

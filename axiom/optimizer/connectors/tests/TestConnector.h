@@ -29,7 +29,7 @@ class TestTableLayout : public TableLayout {
  public:
   TestTableLayout(
       const std::string& name,
-      const Table* table,
+      Table* table,
       connector::Connector* connector,
       std::vector<const Column*> columns)
       : TableLayout(
@@ -239,11 +239,11 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   void initialize() override {}
 
-  const Table* FOLLY_NULLABLE findTable(const std::string& name) override;
+  ConnectorTablePtr findTable(const std::string& name) override;
 
   /// Non-interface method which supplies a non-const Table reference
   /// which is capable of performing writes to the underlying table.
-  Table* FOLLY_NULLABLE findTableInternal(const std::string& name);
+  std::shared_ptr<Table> findTableInternal(const std::string& name);
 
   ConnectorSplitManager* splitManager() override {
     return splitManager_.get();
@@ -268,7 +268,9 @@ class TestConnectorMetadata : public ConnectorMetadata {
   /// Create and return a TestTable with the specified name and schema in the
   /// in-memory map maintained in the connector metadata. If the table already
   /// exists, an error is thrown.
-  TestTable* createTable(const std::string& name, const RowTypePtr& schema);
+  std::shared_ptr<TestTable> createTable(
+      const std::string& name,
+      const RowTypePtr& schema);
 
   /// Add data rows to the specified table. This data is returned via the
   /// DataSource corresponding to this table. The data is copied
@@ -277,7 +279,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
  private:
   TestConnector* connector_;
-  std::unordered_map<std::string, std::unique_ptr<TestTable>> tables_;
+  std::unordered_map<std::string, std::shared_ptr<TestTable>> tables_;
   std::unique_ptr<TestSplitManager> splitManager_;
 };
 
@@ -290,7 +292,7 @@ class TestDataSource : public DataSource {
   TestDataSource(
       const RowTypePtr& outputType,
       const ColumnHandleMap& handles,
-      const Table* table,
+      ConnectorTablePtr table,
       memory::MemoryPool* pool);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
@@ -363,7 +365,7 @@ class TestConnector : public Connector {
 
   /// Add a TestTable with the specified name and schema to the
   /// TestConnectorMetadata corresponding to this connector.
-  TestTable* createTable(
+  std::shared_ptr<TestTable> createTable(
       const std::string& name,
       const RowTypePtr& schema = ROW({}, {}));
 
@@ -394,8 +396,8 @@ class TestConnectorFactory : public ConnectorFactory {
 /// contained in the corresponding table.
 class TestDataSink : public DataSink {
  public:
-  explicit TestDataSink(Table* table) {
-    table_ = dynamic_cast<TestTable*>(table);
+  explicit TestDataSink(std::shared_ptr<Table> table) {
+    table_ = std::dynamic_pointer_cast<TestTable>(table);
     VELOX_CHECK(table_, "table {} not a TestTable", table->name());
   }
 
@@ -421,7 +423,7 @@ class TestDataSink : public DataSink {
   }
 
  private:
-  TestTable* table_;
+  std::shared_ptr<TestTable> table_;
 };
 
 } // namespace facebook::velox::connector

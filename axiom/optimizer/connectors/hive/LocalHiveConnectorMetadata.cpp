@@ -50,7 +50,7 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
   // that goes over all the files in the handle's layout.
   auto tableName = tableHandle->name();
   auto* metadata = getConnector(tableHandle->connectorId())->metadata();
-  auto* table = metadata->findTable(tableName);
+  auto table = metadata->findTable(tableName);
   VELOX_CHECK_NOT_NULL(
       table, "Could not find {} in its ConnectorMetadata", tableName);
   auto* layout = dynamic_cast<const LocalHiveTableLayout*>(table->layouts()[0]);
@@ -362,7 +362,7 @@ void mergeReaderStats(
   stats->numValues += c.has_value() ? c.value() : 0;
 }
 
-LocalTable* LocalHiveConnectorMetadata::createTableFromSchema(
+std::shared_ptr<LocalTable> LocalHiveConnectorMetadata::createTableFromSchema(
     const std::string& name,
     const std::string& path) {
   auto jsons = readConcatenatedDynamicsFromFile(path + "/.schema");
@@ -371,17 +371,8 @@ LocalTable* LocalHiveConnectorMetadata::createTableFromSchema(
   }
   VELOX_CHECK_EQ(jsons.size(), 1);
   auto json = jsons[0];
-  auto* table = findTableLocked(name);
-  if (table != nullptr) {
-    auto name = table->name();
-    auto oldTable = std::move(tables_[name]);
-    oldTables_.push_back(std::move(oldTable));
-    tables_.erase(name);
-    table = nullptr;
-  }
-  auto tableUnique = std::make_unique<LocalTable>(name, format_);
-  table = tableUnique.get();
-  tables_[table->name()] = std::move(tableUnique);
+  auto table = std::make_shared<LocalTable>(name, format_);
+  tables_[table->name()] = table;
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   std::vector<std::unique_ptr<Column>> columns;
@@ -439,7 +430,7 @@ LocalTable* LocalHiveConnectorMetadata::createTableFromSchema(
   std::vector<const Column*> empty;
   auto layout = std::make_unique<LocalHiveTableLayout>(
       table->name(),
-      table,
+      table.get(),
       hiveConnector(),
       columnOrder,
       bucket,
@@ -523,7 +514,7 @@ void LocalHiveConnectorMetadata::loadTable(
   // open each file in the directory and check their type and add up the row
   // counts.
   RowTypePtr tableType;
-  LocalTable* table = createTableFromSchema(tableName, tablePath);
+  auto table = createTableFromSchema(tableName, tablePath);
   if (table) {
     tableType = table->rowType();
   }
@@ -538,10 +529,10 @@ void LocalHiveConnectorMetadata::loadTable(
   for (auto& info : files) {
     auto it = tables_.find(tableName);
     if (it != tables_.end()) {
-      table = reinterpret_cast<LocalTable*>(it->second.get());
+      table = it->second;
     } else {
-      tables_[tableName] = std::make_unique<LocalTable>(tableName, format_);
-      table = tables_[tableName].get();
+      tables_[tableName] = std::make_shared<LocalTable>(tableName, format_);
+      table = tables_[tableName];
     }
     dwio::common::ReaderOptions readerOptions{schemaPool_.get()};
     // If the table has a schema it has a layout that gives the file format.
@@ -723,19 +714,20 @@ const std::unordered_map<std::string, const Column*>& LocalTable::columnMap()
   return exportedColumns_;
 }
 
-const Table* LocalHiveConnectorMetadata::findTable(const std::string& name) {
+ConnectorTablePtr LocalHiveConnectorMetadata::findTable(
+    const std::string& name) {
   ensureInitialized();
   std::lock_guard<std::mutex> l(mutex_);
   return findTableLocked(name);
 }
 
-LocalTable* LocalHiveConnectorMetadata::findTableLocked(
+std::shared_ptr<LocalTable> LocalHiveConnectorMetadata::findTableLocked(
     const std::string& name) const {
   auto it = tables_.find(name);
   if (it == tables_.end()) {
     return nullptr;
   }
-  return it->second.get();
+  return it->second;
 }
 
 // Helper: Recursively delete directory contents
@@ -882,10 +874,6 @@ void LocalHiveConnectorMetadata::createTableWithOptions(
 
   std::lock_guard<std::mutex> l(mutex_);
   folly::writeFileAtomic(filePath, jsonStr.data(), jsonStr.size());
-  std::unique_ptr<LocalTable> oldTable = std::move(tables_[tableName]);
-  if (oldTable) {
-    oldTables_.push_back(std::move(oldTable));
-  }
   tables_.erase(tableName);
   loadTable(tableName, path);
 }
