@@ -128,7 +128,7 @@ ExprCP ToGraph::tryFoldConstant(
     if (auto constantExpr = dynamic_cast<const exec::ConstantExpr*>(first)) {
       auto typed = std::make_shared<lp::ConstantExpr>(
           constantExpr->type(),
-          std::make_shared<Variant>(vectorToVariant(constantExpr->value(), 0)));
+          std::make_shared<Variant>(constantExpr->value()->variantAt(0)));
 
       return makeConstant(*typed);
     }
