@@ -120,8 +120,7 @@ PlanP Optimization::bestPlan() {
 
   makeJoins(nullptr, topState_);
 
-  bool ignore = false;
-  return topState_.plans.best(Distribution{}, ignore);
+  return topState_.plans.best();
 }
 
 Plan::Plan(RelationOpPtr _op, const PlanState& state)
@@ -1572,7 +1571,6 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   if (reduction < 0.9) {
     key.tables = reducingSet;
     key.columns = state.downstreamColumns();
-    ignore = false;
     plan = makePlan(key, Distribution{}, PlanObjectSet{}, 1, state, ignore);
     // Not all reducing joins are necessarily retained in the plan. Only mark
     // the ones fully imported as placed.
@@ -1844,7 +1842,7 @@ PlanP Optimization::makePlan(
     float existsFanout,
     PlanState& state,
     bool& needsShuffle) {
-  VELOX_DCHECK(!needsShuffle);
+  needsShuffle = false;
   if (key.firstTable->is(PlanType::kDerivedTableNode) &&
       key.firstTable->as<DerivedTable>()->setOp.has_value()) {
     return makeUnionPlan(
