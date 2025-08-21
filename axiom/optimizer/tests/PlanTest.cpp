@@ -1167,9 +1167,7 @@ TEST_F(PlanTest, values) {
 }
 
 TEST_F(PlanTest, unnest) {
-  auto nationType = ROW({"nation", "regions"}, {BIGINT(), ARRAY(BIGINT())});
-
-  const std::vector<std::string>& names = nationType->names();
+  const std::vector<std::string> names{"nation", "regions"};
 
   auto rowVector = makeRowVector(
       names,
@@ -1179,26 +1177,22 @@ TEST_F(PlanTest, unnest) {
               8,
               9,
           }),
-          makeArrayVector<int64_t>({
-              std::vector<int64_t>{10, 20, 30},
-              std::vector<int64_t>{1, 2, 3},
-              std::vector<int64_t>{100, 200, 300},
+          makeArrayVectorFromJson<int64_t>({
+              "[10, 20, 30]",
+              "[1, 2, 3]",
+              "[100, 200, 300]",
           }),
       });
 
-  lp::PlanBuilder::Context ctx{exec::test::kHiveConnectorId};
-
+  // trivial
   {
-    auto makeLogicalPlan = [&] {
-      return lp::PlanBuilder(ctx).values({rowVector});
-    };
-
-    auto logicalPlanUnnest = makeLogicalPlan()
+    auto logicalPlanUnnest = lp::PlanBuilder{}
+                                 .values({rowVector})
                                  .unnest({"regions"}, {{"region"}})
                                  .project({"nation", "region"})
                                  .build();
 
-    auto referencePlanUnnest = exec::test::PlanBuilder(pool_.get())
+    auto referencePlanUnnest = exec::test::PlanBuilder{}
                                    .values({rowVector})
                                    .unnest({"nation"}, {"regions"})
                                    .project({"nation", "regions_e AS region"})
@@ -1207,6 +1201,7 @@ TEST_F(PlanTest, unnest) {
     checkSame(logicalPlanUnnest, referencePlanUnnest);
   }
 }
+
 } // namespace
 } // namespace facebook::velox::optimizer
 

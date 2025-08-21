@@ -129,13 +129,13 @@ class ToVelox {
 
   // Makes a Velox UnnestNode for a RelationOp.
   core::PlanNodePtr makeUnnest(
-      Unnest& op,
+      const Unnest& op,
       axiom::runner::ExecutableFragment& fragment,
       std::vector<axiom::runner::ExecutableFragment>& stages);
 
   // Makes a Velox AggregationNode for a RelationOp.
-  velox::core::PlanNodePtr makeAggregation(
-      Aggregation& agg,
+  core::PlanNodePtr makeAggregation(
+      const Aggregation& agg,
       axiom::runner::ExecutableFragment& fragment,
       std::vector<axiom::runner::ExecutableFragment>& stages);
 
