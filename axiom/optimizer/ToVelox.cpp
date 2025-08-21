@@ -1172,15 +1172,9 @@ core::PlanNodePtr ToVelox::makeUnnest(
         std::make_shared<core::FieldAccessTypedExpr>(type, name));
   }
 
-  std::vector<core::FieldAccessTypedExprPtr> unnestVariables;
-  unnestVariables.reserve(op.unnestExprs.size());
-  for (const auto& expr : op.unnestExprs) {
-    auto typedExpr = toTypedExpr(expr);
-    VELOX_USER_CHECK(typedExpr->isFieldAccessKind());
-    unnestVariables.push_back(
-        std::static_pointer_cast<const core::FieldAccessTypedExpr>(
-            std::move(typedExpr)));
-  }
+  TempProjections projections{*this, *op.input()};
+  auto unnestVariables = projections.toFieldRefs(op.unnestExprs);
+  auto project = projections.maybeProject(std::move(input));
 
   std::vector<std::string> unnestNames;
   for (const auto* column : op.columns()) {
@@ -1194,7 +1188,7 @@ core::PlanNodePtr ToVelox::makeUnnest(
       std::move(unnestNames),
       std::nullopt,
       std::nullopt,
-      std::move(input));
+      std::move(project));
 }
 
 core::PlanNodePtr ToVelox::makeAggregation(
