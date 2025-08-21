@@ -357,7 +357,6 @@ class QueryGraphContext {
   std::unordered_set<TypePtr, TypeHasher, TypeComparer> deduppedTypes_;
 
   // Maps raw Type* back to shared TypePtr. Used in toType()() and toTypePtr().
-  // TODO: Can be set of TypePtr instead of map.
   std::unordered_map<const velox::Type*, velox::TypePtr> toTypePtr_;
 
   std::unordered_set<PathCP, PathHasher, PathComparer> deduppedPaths_;

@@ -132,7 +132,6 @@ struct DistributionType {
 
   LocusCP locus{nullptr};
   int32_t numPartitions{1};
-  // TODO: Can we unify isGather, isBroadcast and mode?
   bool isGather{false};
   ShuffleMode mode{ShuffleMode::kNone};
 
@@ -222,7 +221,6 @@ struct Distribution {
   // because lineitem has an average of 4 repeats of orderkey.
   float spacing{-1};
 
-  // TODO: Consider moving isBroadcast to DistributionType.
   // True if the data is replicated to 'numPartitions'.
   bool isBroadcast{false};
 };
