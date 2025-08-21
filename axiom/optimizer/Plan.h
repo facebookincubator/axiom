@@ -94,6 +94,8 @@ struct PlanSet {
   /// Returns the best plan that produces 'distribution'. If the best plan has
   /// some other distribution, sets 'needsShuffle ' to true.
   PlanP best(const Distribution& distribution, bool& needShuffle);
+
+  /// Retruns the best plan when we're ok with any distribution.
   PlanP best() {
     bool ignore = false;
     return best(Distribution{}, ignore);
