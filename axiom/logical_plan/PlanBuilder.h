@@ -228,13 +228,21 @@ class PlanBuilder {
 
   PlanBuilder& unnest(
       const std::vector<std::string>& unnestExpressions,
-      const std::vector<std::vector<std::string>>& unnestNames) {
-    return unnest(parse(unnestExpressions), unnestNames);
+      const std::vector<std::vector<std::string>>& unnestedNames = {},
+      const std::optional<std::string>& ordinalityName = {},
+      bool flattenArrayOfRows = false) {
+    return unnest(
+        parse(unnestExpressions),
+        unnestedNames,
+        ordinalityName,
+        flattenArrayOfRows);
   }
 
   PlanBuilder& unnest(
       const std::vector<ExprApi>& unnestExpressions,
-      const std::vector<std::vector<std::string>>& unnestNames);
+      const std::vector<std::vector<std::string>>& unnestedNames = {},
+      const std::optional<std::string>& ordinalityName = {},
+      bool flattenArrayOfRows = false);
 
   PlanBuilder& aggregate(
       const std::vector<std::string>& groupingKeys,
