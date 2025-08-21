@@ -70,11 +70,11 @@ float orderPrefixDistance(
     ColumnGroupP index,
     const ExprVector& keys) {
   float selection = 1;
-  for (int32_t i = 0; i < input->distribution().order.size() &&
-       i < index->distribution().order.size() && i < keys.size();
+  for (int32_t i = 0; i < input->distribution().orderKeys.size() &&
+       i < index->distribution().orderKeys.size() && i < keys.size();
        ++i) {
-    if (input->distribution().order[i]->sameOrEqual(*keys[i])) {
-      selection *= index->distribution().order[i]->value().cardinality;
+    if (input->distribution().orderKeys[i]->sameOrEqual(*keys[i])) {
+      selection *= index->distribution().orderKeys[i]->value().cardinality;
     }
   }
   return selection;
@@ -137,27 +137,27 @@ Distribution TableScan::outputDistribution(
       columns, [](auto& column) { return column->schemaColumn(); });
 
   ExprVector partition;
-  ExprVector order;
-  OrderTypeVector orderType;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
   // if all partitioning columns are projected, the output is partitioned.
   if (isSubset(index->distribution().partition, schemaColumns)) {
     partition = index->distribution().partition;
     replace(partition, schemaColumns, columns.data());
   }
 
-  auto numPrefix = prefixSize(index->distribution().order, schemaColumns);
+  auto numPrefix = prefixSize(index->distribution().orderKeys, schemaColumns);
   if (numPrefix > 0) {
-    order = index->distribution().order;
-    order.resize(numPrefix);
-    orderType = index->distribution().orderType;
-    orderType.resize(numPrefix);
-    replace(order, schemaColumns, columns.data());
+    orderKeys = index->distribution().orderKeys;
+    orderKeys.resize(numPrefix);
+    orderTypes = index->distribution().orderTypes;
+    orderTypes.resize(numPrefix);
+    replace(orderKeys, schemaColumns, columns.data());
   }
   return {
       index->distribution().distributionType,
       std::move(partition),
-      std::move(order),
-      std::move(orderType),
+      std::move(orderKeys),
+      std::move(orderTypes),
       index->distribution().numKeysUnique <= numPrefix
           ? index->distribution().numKeysUnique
           : 0,
@@ -677,14 +677,14 @@ std::string Project::toString(bool recursive, bool detail) const {
 namespace {
 Distribution makeOrderByDistribution(
     const RelationOpPtr& input,
-    ExprVector order,
-    OrderTypeVector orderType) {
+    ExprVector orderKeys,
+    OrderTypeVector orderTypes) {
   Distribution distribution = input->distribution();
 
   distribution.distributionType = DistributionType::gather();
   distribution.partition.clear();
-  distribution.order = std::move(order);
-  distribution.orderType = std::move(orderType);
+  distribution.orderKeys = std::move(orderKeys);
+  distribution.orderTypes = std::move(orderTypes);
 
   return distribution;
 }
@@ -692,8 +692,8 @@ Distribution makeOrderByDistribution(
 
 OrderBy::OrderBy(
     RelationOpPtr input,
-    ExprVector keys,
-    OrderTypeVector orderType,
+    ExprVector orderKeys,
+    OrderTypeVector orderTypes,
     int64_t limit,
     int64_t offset)
     : RelationOp(
@@ -701,8 +701,8 @@ OrderBy::OrderBy(
           input,
           makeOrderByDistribution(
               input,
-              std::move(keys),
-              std::move(orderType))),
+              std::move(orderKeys),
+              std::move(orderTypes))),
       limit{limit},
       offset{offset} {
   cost_.inputCardinality = inputCardinality();
@@ -720,7 +720,7 @@ std::string OrderBy::toString(bool recursive, bool detail) const {
   if (detail) {
     out << "OrderBy (" << distribution_.toString() << ")\n";
   } else {
-    out << "order by " << distribution_.order.size() << " columns ";
+    out << "order by " << distribution_.orderKeys.size() << " columns ";
   }
   return out.str();
 }

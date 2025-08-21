@@ -274,7 +274,7 @@ PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
         return nullptr;
       }
 
-      if (newIsBetterWithShuffle && old->op->distribution().order.empty()) {
+      if (newIsBetterWithShuffle && old->op->distribution().orderKeys.empty()) {
         // Old plan has no order and is worse than new plus shuffle. Can't win.
         // Erase.
         queryCtx()->optimization()->trace(
@@ -287,7 +287,7 @@ PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
         continue;
       }
 
-      if (plan->distribution().order.empty() &&
+      if (plan->distribution().orderKeys.empty() &&
           !old->isStateBetter(state, -shuffleCostPerRow)) {
         // New has no order and old would beat it even after adding shuffle.
         return nullptr;
@@ -859,7 +859,7 @@ void Optimization::addPostprocess(
   }
   if (dt->hasOrderBy()) {
     auto* orderBy = make<OrderBy>(
-        plan, dt->orderByKeys, dt->orderByTypes, dt->limit, dt->offset);
+        plan, dt->orderKeys, dt->orderTypes, dt->limit, dt->offset);
     state.addCost(*orderBy);
     plan = orderBy;
   }

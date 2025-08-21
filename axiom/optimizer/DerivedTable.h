@@ -132,8 +132,8 @@ struct DerivedTable : public PlanObject {
   ExprVector having;
 
   /// Order by.
-  ExprVector orderByKeys;
-  OrderTypeVector orderByTypes;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
 
   /// Limit and offset.
   int64_t limit{-1};
@@ -190,7 +190,7 @@ struct DerivedTable : public PlanObject {
   }
 
   bool hasOrderBy() const {
-    return !orderByKeys.empty();
+    return !orderKeys.empty();
   }
 
   bool hasLimit() const {

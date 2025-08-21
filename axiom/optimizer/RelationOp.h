@@ -383,8 +383,8 @@ struct Aggregation : public RelationOp {
 struct OrderBy : public RelationOp {
   OrderBy(
       RelationOpPtr input,
-      ExprVector keys,
-      OrderTypeVector orderType,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes,
       int64_t limit = -1,
       int64_t offset = 0);
 

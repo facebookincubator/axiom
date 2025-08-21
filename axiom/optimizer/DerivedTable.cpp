@@ -1024,18 +1024,18 @@ void DerivedTable::makeInitialPlan() {
 
   auto plan = state.plans.best()->op;
 
-  auto& distribution = plan->distribution();
-  ExprVector partition = distribution.partition;
-  ExprVector order = distribution.order;
-  auto orderType = distribution.orderType;
+  const auto& distribution = plan->distribution();
+  auto partition = distribution.partition;
+  auto orderKeys = distribution.orderKeys;
+  auto orderTypes = distribution.orderTypes;
   replace(partition, exprs, columns.data());
-  replace(order, exprs, columns.data());
+  replace(orderKeys, exprs, columns.data());
 
   this->distribution = make<Distribution>(
       distribution.distributionType,
       std::move(partition),
-      std::move(order),
-      std::move(orderType));
+      std::move(orderKeys),
+      std::move(orderTypes));
   optimization->memo()[key] = std::move(state.plans);
 }
 

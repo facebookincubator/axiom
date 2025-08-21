@@ -92,9 +92,9 @@ RelationOpPtr addGather(const RelationOpPtr& op) {
   }
   if (op->relType() == RelType::kOrderBy) {
     auto order = op->distribution();
-    Distribution final = Distribution::gather(order.order, order.orderType);
+    auto final = Distribution::gather(order.orderKeys, order.orderTypes);
     auto* gather = make<Repartition>(op, final, op->columns());
-    auto* orderBy = make<OrderBy>(gather, order.order, order.orderType);
+    auto* orderBy = make<OrderBy>(gather, order.orderKeys, order.orderTypes);
     return orderBy;
   }
   auto* gather = make<Repartition>(op, Distribution::gather(), op->columns());
@@ -645,8 +645,8 @@ core::PlanNodePtr ToVelox::makeOrderBy(
     ExecutableFragment& fragment,
     std::vector<ExecutableFragment>& stages) {
   std::vector<core::SortOrder> sortOrder;
-  sortOrder.reserve(op.distribution().orderType.size());
-  for (auto order : op.distribution().orderType) {
+  sortOrder.reserve(op.distribution().orderTypes.size());
+  for (auto order : op.distribution().orderTypes) {
     sortOrder.push_back(toSortOrder(order));
   }
 
@@ -654,7 +654,7 @@ core::PlanNodePtr ToVelox::makeOrderBy(
     auto input = makeFragment(op.input(), fragment, stages);
 
     TempProjections projections(*this, *op.input());
-    auto keys = projections.toFieldRefs(op.distribution().order);
+    auto keys = projections.toFieldRefs(op.distribution().orderKeys);
     auto project = projections.maybeProject(input);
 
     if (options_.numDrivers == 1) {
@@ -695,7 +695,7 @@ core::PlanNodePtr ToVelox::makeOrderBy(
   auto input = makeFragment(op.input(), source, stages);
 
   TempProjections projections(*this, *op.input());
-  auto keys = projections.toFieldRefs(op.distribution().order);
+  auto keys = projections.toFieldRefs(op.distribution().orderKeys);
   auto project = projections.maybeProject(input);
 
   core::PlanNodePtr node;

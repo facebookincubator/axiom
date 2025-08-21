@@ -910,21 +910,23 @@ AggregationPlanCP ToGraph::translateAggregation(
 }
 
 PlanObjectP ToGraph::addOrderBy(const lp::SortNode& order) {
-  OrderTypeVector orderType;
-  ExprVector keys;
-  for (auto& field : order.ordering()) {
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  orderKeys.reserve(order.ordering().size());
+  orderTypes.reserve(order.ordering().size());
+
+  for (const auto& field : order.ordering()) {
     auto sort = field.order;
-    orderType.push_back(
+    orderKeys.push_back(translateExpr(field.expression));
+    orderTypes.push_back(
         sort.isAscending() ? (sort.isNullsFirst() ? OrderType::kAscNullsFirst
                                                   : OrderType::kAscNullsLast)
                            : (sort.isNullsFirst() ? OrderType::kDescNullsFirst
                                                   : OrderType::kDescNullsLast));
-
-    keys.push_back(translateExpr(field.expression));
   }
 
-  currentDt_->orderByKeys = keys;
-  currentDt_->orderByTypes = orderType;
+  currentDt_->orderKeys = std::move(orderKeys);
+  currentDt_->orderTypes = std::move(orderTypes);
 
   return currentDt_;
 }
@@ -1559,8 +1561,8 @@ PlanObjectP ToGraph::makeQueryGraph(
       if (currentDt_->hasAggregation() || currentDt_->hasLimit()) {
         finalizeDt(*node.onlyInput());
       } else if (currentDt_->hasOrderBy()) {
-        currentDt_->orderByKeys.clear();
-        currentDt_->orderByTypes.clear();
+        currentDt_->orderKeys.clear();
+        currentDt_->orderTypes.clear();
       }
 
       addAggregation(*node.asUnchecked<lp::AggregateNode>());
