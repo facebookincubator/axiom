@@ -64,9 +64,8 @@ ColumnGroupP SchemaTable::addIndex(
   appendToVector(distribution.orderKeys, keys);
   distribution.distributionType = distributionType;
   appendToVector(distribution.partition, partition);
-  columnGroups.push_back(
-      make<ColumnGroup>(
-          name, this, std::move(distribution), std::move(columns)));
+  columnGroups.push_back(make<ColumnGroup>(
+      name, this, std::move(distribution), std::move(columns)));
   return columnGroups.back();
 }
 
