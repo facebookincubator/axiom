@@ -1425,17 +1425,6 @@ void Optimization::processCrossJoins(
     return;
   }
 
-  PlanObjectSet crossJoinTables = state.placed;
-  for (const auto& join : crossJoins) {
-    for (const auto& table : join.tables) {
-      crossJoinTables.add(table);
-    }
-  }
-
-  if (memo_.contains(MemoKey{.tables = crossJoinTables})) {
-    return;
-  }
-
   PlanStateSaver save(state);
 
   std::sort(
