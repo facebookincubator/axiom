@@ -467,14 +467,25 @@ std::string Repartition::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+namespace {
+ColumnVector unionColumns(const ColumnVector& lhs, const ColumnVector& rhs) {
+  ColumnVector result;
+  result.reserve(lhs.size() + rhs.size());
+  result.insert(result.end(), lhs.begin(), lhs.end());
+  result.insert(result.end(), rhs.begin(), rhs.end());
+  return result;
+}
+} // namespace
+
 Unnest::Unnest(
     RelationOpPtr input,
-    ExprVector replicateExprs,
+    ColumnVector replicateColumns,
     ExprVector unnestExprs,
     ColumnVector unnestedColumns)
-    : RelationOp{RelType::kUnnest, input, input->distribution(), std::move(unnestedColumns)},
-      replicateExprs{std::move(replicateExprs)},
-      unnestExprs{std::move(unnestExprs)} {}
+    : RelationOp{RelType::kUnnest, input, input->distribution(), unionColumns(replicateColumns, unnestedColumns)},
+      replicateColumns{std::move(replicateColumns)},
+      unnestExprs{std::move(unnestExprs)},
+      unnestedColumns{std::move(unnestedColumns)} {}
 
 Aggregation::Aggregation(
     RelationOpPtr input,

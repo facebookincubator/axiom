@@ -833,18 +833,18 @@ void Optimization::addPostprocess(
     // We add unnest before compute downstream columns because we're not
     // interested in the replicating columns needed for unnesting.
     state.placed.add(unnest);
-    ExprVector replicateExprs;
+    ColumnVector replicateColumns;
     state.downstreamColumns().forEach([&](PlanObjectCP object) {
       const auto* column = object->as<Column>();
       if (state.columns.contains(column)) {
-        replicateExprs.push_back(column);
+        replicateColumns.push_back(column);
       }
     });
     state.columns.unionObjects(unnest->unnestedColumns());
 
     auto* unnestOp = make<Unnest>(
         plan,
-        std::move(replicateExprs),
+        std::move(replicateColumns),
         unnest->unnestExprs(),
         unnest->unnestedColumns());
 

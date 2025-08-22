@@ -518,9 +518,9 @@ class TempProjections {
     return fieldRef;
   }
 
-  template <typename Result = core::FieldAccessTypedExprPtr>
+  template <typename Result = core::FieldAccessTypedExprPtr, typename Container>
   std::vector<Result> toFieldRefs(
-      const ExprVector& exprs,
+      const Container& exprs,
       const std::vector<std::string>* optNames = nullptr) {
     std::vector<Result> result;
     result.reserve(exprs.size());
@@ -1156,13 +1156,13 @@ core::PlanNodePtr ToVelox::makeUnnest(
   auto input = makeFragment(op.input(), fragment, stages);
 
   TempProjections projections{*this, *op.input()};
-  auto replicateVariables = projections.toFieldRefs(op.replicateExprs);
+  auto replicateVariables = projections.toFieldRefs(op.replicateColumns);
   auto unnestVariables = projections.toFieldRefs(op.unnestExprs);
   auto project = projections.maybeProject(std::move(input));
 
   std::vector<std::string> unnestNames;
-  unnestNames.reserve(op.columns().size());
-  for (const auto* column : op.columns()) {
+  unnestNames.reserve(op.unnestedColumns.size());
+  for (const auto* column : op.unnestedColumns) {
     unnestNames.emplace_back(outputName(column));
   }
 

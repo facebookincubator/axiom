@@ -925,7 +925,14 @@ class UnnestPlan : public PlanObject {
   UnnestPlan(ExprVector unnestExprs, ColumnVector unnestedColumns)
       : PlanObject{PlanType::kUnnestNode},
         unnestExprs_{std::move(unnestExprs)},
-        unnestedColumns_{std::move(unnestedColumns)} {}
+        unnestedColumns_{std::move(unnestedColumns)} {
+    VELOX_DCHECK_GT(
+        unnestExprs_.size(), 0, "Unnest must have at least one expression");
+    VELOX_DCHECK_LE(
+        unnestExprs_.size(),
+        unnestedColumns_.size(),
+        "Unnest must have at least as many columns as expressions");
+  }
 
   const ExprVector& unnestExprs() const {
     return unnestExprs_;

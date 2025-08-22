@@ -845,16 +845,17 @@ void ToGraph::translateUnnest(const lp::UnnestNode& logicalUnnest) {
       continue;
     }
     channel -= replicateType.size();
-    for (size_t i = 0; const auto& name : logicalUnnest.unnestedNames()) {
-      if (channel >= name.size()) {
-        channel -= name.size();
+    for (size_t i = 0; const auto& names : logicalUnnest.unnestedNames()) {
+      if (channel >= names.size()) {
+        channel -= names.size();
         ++i;
         continue;
       }
       const auto* expr = translateExpr(logicalUnnest.unnestExpressions()[i]);
-      const auto& outputName = name[channel];
-      // TODO: Cardinality here should be multiply input column cardinality by
-      // the expected number of elements in unnested element.
+      const auto& outputName = names[channel];
+      // TODO: Value cardinality should be input column Value cardinality
+      // multiplied by the average expected number of elements per unnested
+      // element.
       Value value{
           expr->value().type->childAt(channel).get(),
           expr->value().cardinality * 1,
@@ -865,6 +866,10 @@ void ToGraph::translateUnnest(const lp::UnnestNode& logicalUnnest) {
       unnestExprs.emplace_back(expr);
       break;
     }
+  }
+  if (unnestExprs.empty()) {
+    VELOX_DCHECK(unnestedColumns.empty());
+    return;
   }
   currentDt_->unnests.emplace_back(
       make<UnnestPlan>(std::move(unnestExprs), std::move(unnestedColumns)));

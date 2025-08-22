@@ -364,12 +364,13 @@ using HashBuildCP = const HashBuild*;
 struct Unnest : public RelationOp {
   Unnest(
       RelationOpPtr input,
-      ExprVector replicateExprs,
+      ColumnVector replicateColumns,
       ExprVector unnestExprs,
       ColumnVector unnestedColumns);
 
-  ExprVector replicateExprs;
+  ColumnVector replicateColumns;
   ExprVector unnestExprs;
+  ColumnVector unnestedColumns;
 
   std::string toString(bool recursive, bool detail) const override;
 };

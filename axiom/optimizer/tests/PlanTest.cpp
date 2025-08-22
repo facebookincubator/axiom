@@ -1178,11 +1178,11 @@ TEST_F(PlanTest, unnest) {
               9,
               10,
           }),
-          makeArrayVectorFromJson<int64_t>({
-              "[10, 20, 30]",
-              "[1, 2, 3]",
-              "[100, 200, 300]",
-              "[0, 0, 0]",
+          makeNestedArrayVectorFromJson<int64_t>({
+              "[[10, 20, 30], [10, 20, 30]]",
+              "[[1, 2, 3], [1, 2, 3]]",
+              "[[100, 200, 300], [100, 200, 300]]",
+              "[[0, 0, 0], [0, 0, 0]]",
           }),
       });
 
@@ -1283,6 +1283,27 @@ TEST_F(PlanTest, unnest) {
             .project({"nation", "array_distinct(regions) AS regions"})
             .unnest({"nation"}, {"regions"})
             .project({"nation", "regions_e AS region"})
+            .planNode();
+
+    checkSame(logicalPlanUnnest, referencePlanUnnest);
+  }
+  // multiple unnests
+  {
+    auto logicalPlanUnnest = lp::PlanBuilder{}
+                                 .values({rowVector})
+                                 .unnest({"array_distinct(regions) AS regions"})
+                                 .unnest({"array_distinct(regions_e) AS region"})
+                                 .project({"nation", "region_e AS region"})
+                                 .build();
+
+    auto referencePlanUnnest =
+        exec::test::PlanBuilder{}
+            .values({rowVector})
+            .project({"nation", "array_distinct(regions) AS regions"})
+            .unnest({"nation"}, {"regions"})
+            .project({"nation", "array_distinct(regions_e) AS region"})
+            .unnest({"nation"}, {"region"})
+            .project({"nation", "region_e AS region"})
             .planNode();
 
     checkSame(logicalPlanUnnest, referencePlanUnnest);
