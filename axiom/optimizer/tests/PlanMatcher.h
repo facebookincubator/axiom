@@ -51,6 +51,12 @@ class PlanMatcherBuilder {
 
   PlanMatcherBuilder& project(const std::vector<std::string>& expressions);
 
+  PlanMatcherBuilder& unnest();
+
+  PlanMatcherBuilder& unnest(
+      const std::vector<std::string>& replicateExprs,
+      const std::vector<std::string>& unnestExprs);
+
   PlanMatcherBuilder& aggregation();
 
   PlanMatcherBuilder& partialAggregation();
