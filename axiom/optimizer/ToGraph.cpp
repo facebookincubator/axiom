@@ -832,6 +832,11 @@ ExprVector ToGraph::translateColumns(const std::vector<lp::ExprPtr>& source) {
 }
 
 void ToGraph::translateUnnest(const lp::UnnestNode& logicalUnnest) {
+  if (logicalUnnest.ordinalityName().has_value()) {
+    VELOX_NYI(
+        "Unnest ordinality column is not supported in Verax optimizer. Unnest node: {}",
+        logicalUnnest.id());
+  }
   const auto& replicateType = *logicalUnnest.onlyInput()->outputType();
   ExprVector unnestExprs;
   ColumnVector unnestedColumns;
@@ -846,18 +851,18 @@ void ToGraph::translateUnnest(const lp::UnnestNode& logicalUnnest) {
         ++i;
         continue;
       }
-      auto expr = logicalUnnest.unnestExpressions()[i];
-      const auto& inputName =
-          expr->asUnchecked<lp::InputReferenceExpr>()->name();
+      const auto* expr = translateExpr(logicalUnnest.unnestExpressions()[i]);
       const auto& outputName = name[channel];
       // TODO: Cardinality here should be multiply input column cardinality by
       // the expected number of elements in unnested element.
       Value value{
-          toType(replicateType.findChild(inputName)->childAt(channel)), 1};
+          expr->value().type->childAt(channel).get(),
+          expr->value().cardinality * 1,
+      };
       const auto* columnName = toName(outputName);
       renames_[outputName] = unnestedColumns.emplace_back(
           make<Column>(columnName, currentDt_, value, columnName));
-      unnestExprs.emplace_back(translateExpr(expr));
+      unnestExprs.emplace_back(expr);
       break;
     }
   }

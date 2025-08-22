@@ -645,9 +645,6 @@ class UnnestNode : public LogicalPlanNode {
       VELOX_USER_CHECK(
           !ordinalityName->empty(), "Ordinality column name must be not empty");
     }
-    if (flattenArrayOfRows_) {
-      VELOX_NYI("Unnesting ARRAY(ROW) is not yet supported");
-    }
   }
 
   const std::vector<ExprPtr>& unnestExpressions() const {

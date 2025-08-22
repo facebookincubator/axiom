@@ -1155,28 +1155,13 @@ core::PlanNodePtr ToVelox::makeUnnest(
     std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
-  // TODO: This code is suboptimal, because unfortunately currently in optimizer
-  // we don't have ability to check that column referenced only for current
-  // node. So columns that needed only for unnest are also replicated. The
-  // simple solution is change logical_plan::UnnestNode API to explicitly
-  // specify replicated columns. The more interesting solution is to change
-  // optimizer to have knowledge about which columns are used only for current
-  // node. This can also be helpful for Join Nodes, because they can project
-  // only necessary columns in such case.
-  std::vector<core::FieldAccessTypedExprPtr> replicateVariables;
-  replicateVariables.reserve(input->outputType()->size());
-  for (uint32_t i = 0; i < input->outputType()->size(); ++i) {
-    const auto& name = input->outputType()->nameOf(i);
-    const auto& type = input->outputType()->childAt(i);
-    replicateVariables.push_back(
-        std::make_shared<core::FieldAccessTypedExpr>(type, name));
-  }
-
   TempProjections projections{*this, *op.input()};
+  auto replicateVariables = projections.toFieldRefs(op.replicateExprs);
   auto unnestVariables = projections.toFieldRefs(op.unnestExprs);
   auto project = projections.maybeProject(std::move(input));
 
   std::vector<std::string> unnestNames;
+  unnestNames.reserve(op.columns().size());
   for (const auto* column : op.columns()) {
     unnestNames.emplace_back(outputName(column));
   }

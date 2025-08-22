@@ -469,9 +469,11 @@ std::string Repartition::toString(bool recursive, bool detail) const {
 
 Unnest::Unnest(
     RelationOpPtr input,
+    ExprVector replicateExprs,
     ExprVector unnestExprs,
     ColumnVector unnestedColumns)
     : RelationOp{RelType::kUnnest, input, input->distribution(), std::move(unnestedColumns)},
+      replicateExprs{std::move(replicateExprs)},
       unnestExprs{std::move(unnestExprs)} {}
 
 Aggregation::Aggregation(

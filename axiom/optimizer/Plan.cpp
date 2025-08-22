@@ -829,15 +829,29 @@ void Optimization::addPostprocess(
     DerivedTableCP dt,
     RelationOpPtr& plan,
     PlanState& state) {
-  for (auto* unnest : dt->unnests) {
-    auto* unnestOp =
-        make<Unnest>(plan, unnest->unnestExprs(), unnest->unnestedColumns());
+  for (const auto* unnest : dt->unnests) {
+    // We add unnest before compute downstream columns because we're not
+    // interested in the replicating columns needed for unnesting.
+    state.placed.add(unnest);
+    ExprVector replicateExprs;
+    state.downstreamColumns().forEach([&](PlanObjectCP object) {
+      const auto* column = object->as<Column>();
+      if (state.columns.contains(column)) {
+        replicateExprs.push_back(column);
+      }
+    });
+    state.columns.unionObjects(unnest->unnestedColumns());
+
+    auto* unnestOp = make<Unnest>(
+        plan,
+        std::move(replicateExprs),
+        unnest->unnestExprs(),
+        unnest->unnestedColumns());
+
     state.addCost(*unnestOp);
     plan = unnestOp;
   }
-  if (dt->aggregation) {
-    const auto& aggPlan = dt->aggregation;
-
+  if (const auto* aggPlan = dt->aggregation) {
     auto* partialAgg = make<Aggregation>(
         plan,
         aggPlan->groupingKeys(),
