@@ -321,7 +321,7 @@ Join::Join(
     RelationOpPtr input,
     RelationOpPtr _right,
     ExprVector _leftKeys,
-    ExprVector rightKeys,
+    ExprVector _rightKeys,
     ExprVector filter,
     float fanout,
     ColumnVector columns)
@@ -334,7 +334,7 @@ Join::Join(
       joinType(_joinType),
       right(std::move(_right)),
       leftKeys(std::move(_leftKeys)),
-      rightKeys(std::move(rightKeys)),
+      rightKeys(std::move(_rightKeys)),
       filter(std::move(filter)) {
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = fanout;
@@ -346,7 +346,7 @@ Join::Join(
 
   float buildSize = right->cost().inputCardinality;
   auto rowCost =
-      right->columns().size() * Costs::kHashExtractColumnCost;
+      right->input()->columns().size() * Costs::kHashExtractColumnCost;
   cost_.unitCost = Costs::hashProbeCost(buildSize) + cost_.fanout * rowCost +
       leftKeys.size() * Costs::kHashColumnCost;
 }

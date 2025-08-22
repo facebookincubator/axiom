@@ -667,7 +667,8 @@ bool addExtraEdges(PlanState& state, JoinCandidate& candidate) {
 }
 } // namespace
 
-std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
+std::pair<std::vector<JoinCandidate>, std::vector<JoinCandidate>>
+Optimization::nextJoins(PlanState& state) {
   std::vector<JoinCandidate> candidates;
   candidates.reserve(state.dt->tables.size());
   forJoinedTables(
@@ -701,15 +702,18 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
       [](const JoinCandidate& left, const JoinCandidate& right) {
         return left.fanout < right.fanout;
       });
+
+  std::vector<JoinCandidate> crossJoins;
   if (candidates.empty()) {
     // There are no join edges. There could still be cross joins.
     state.dt->startTables.forEach([&](PlanObjectCP object) {
       if (!state.placed.contains(object)) {
-        candidates.emplace_back(nullptr, object, tableCardinality(object));
+        crossJoins.emplace_back(nullptr, object, tableCardinality(object));
       }
     });
   }
-  return candidates;
+
+  return {candidates, crossJoins};
 }
 
 size_t MemoKey::hash() const {
@@ -1412,13 +1416,47 @@ void Optimization::joinByHashRight(
   state.addNextJoin(&candidate, join, {buildOp}, toTry);
 }
 
-void Optimization::crossJoin(
+void Optimization::processCrossJoins(
     const RelationOpPtr& plan,
-    const JoinCandidate& candidate,
+    std::vector<JoinCandidate> crossJoins,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
-  PlanStateSaver save(state, candidate);
+  if (crossJoins.empty()) {
+    return;
+  }
 
+  PlanObjectSet crossJoinTables = state.placed;
+  for (const auto& join : crossJoins) {
+    for (const auto& table : join.tables) {
+      crossJoinTables.add(table);
+    }
+  }
+
+  if (memo_.contains(MemoKey{.tables = crossJoinTables})) {
+    return;
+  }
+
+  PlanStateSaver save(state);
+
+  std::sort(
+      crossJoins.begin(),
+      crossJoins.end(),
+      [](const JoinCandidate& left, const JoinCandidate& right) {
+        return left.fanout < right.fanout;
+      });
+
+  auto crossJoinPlan = plan;
+  for (const auto& join : crossJoins) {
+    crossJoinPlan = processCrossJoin(crossJoinPlan, join, state);
+  }
+
+  state.addNextJoin(nullptr, crossJoinPlan, {}, toTry);
+}
+
+RelationOpPtr Optimization::processCrossJoin(
+    const RelationOpPtr& plan,
+    const JoinCandidate& candidate,
+    PlanState& state) {
   PlanObjectSet broadcastTables;
   PlanObjectSet broadcastColumns;
   for (auto buildTable : candidate.tables) {
@@ -1428,16 +1466,22 @@ void Optimization::crossJoin(
   state.columns.unionSet(broadcastColumns);
 
   auto memoKey = MemoKey{
-      candidate.tables[0], broadcastColumns, broadcastTables, candidate.existences};
-  
-  auto broadcast = Distribution::broadcast(plan->distribution().distributionType);
+      candidate.tables[0],
+      broadcastColumns,
+      broadcastTables,
+      candidate.existences};
+
+  auto broadcast =
+      Distribution::broadcast(plan->distribution().distributionType);
   PlanObjectSet empty;
   bool needsShuffle = false;
-  auto* rightPlan = makePlan(memoKey, broadcast, empty, candidate.existsFanout, state, needsShuffle);
+
+  auto* rightPlan = makePlan(
+      memoKey, broadcast, empty, candidate.existsFanout, state, needsShuffle);
 
   RelationOpPtr rightOp = rightPlan->op;
   PlanState broadcastState(state.optimization, state.dt, rightPlan);
-  if (needsShuffle && !isSingleWorker()) {
+  if (needsShuffle) {
     rightOp = make<Repartition>(rightPlan->op, broadcast, rightOp->columns());
   }
   broadcastState.addCost(*rightOp);
@@ -1448,17 +1492,14 @@ void Optimization::crossJoin(
       rightOp->columns().begin(),
       rightOp->columns().end());
 
-  auto* join = Join::makeCrossJoin(
-    plan, 
-    std::move(rightOp), 
-    std::move(resultColumns));
+  auto* join =
+      Join::makeCrossJoin(plan, std::move(rightOp), std::move(resultColumns));
 
   state.addCost(*join);
   state.cost.totalBytes *= broadcastState.cost.totalBytes;
   state.cost.transferBytes += broadcastState.cost.transferBytes;
   state.placed.unionSet(broadcastTables);
-
-  state.addNextJoin(&candidate, join, {}, toTry);
+  return join;
 }
 
 void Optimization::addJoin(
@@ -1467,7 +1508,6 @@ void Optimization::addJoin(
     PlanState& state,
     std::vector<NextJoin>& result) {
   if (!candidate.join) {
-    crossJoin(plan, candidate, state, result);
     return;
   }
 
@@ -1716,10 +1756,12 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     std::sort(ids.begin(), ids.end(), [&](int32_t left, int32_t right) {
       return scores[left] > scores[right];
     });
+
     for (auto i : ids) {
       auto from = firstTables.at(i);
       if (from->type() == PlanType::kTableNode) {
         auto table = from->as<BaseTable>();
+        f << i << " " << table->toString();
         auto indices = table->as<BaseTable>()->chooseLeafIndex();
         // Make plan starting with each relevant index of the table.
         const auto downstream = state.downstreamColumns();
@@ -1771,8 +1813,8 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     if (placeConjuncts(plan, state, false)) {
       return;
     }
-    auto candidates = nextJoins(state);
-    if (candidates.empty()) {
+    auto [candidates, crossJoins] = nextJoins(state);
+    if (candidates.empty() && crossJoins.empty()) {
       if (placeConjuncts(plan, state, true)) {
         return;
       }
@@ -1790,6 +1832,11 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     nextJoins.reserve(candidates.size());
     for (auto& candidate : candidates) {
       addJoin(candidate, plan, state, nextJoins);
+    }
+
+    // process cross join if we've processed connected component
+    if (nextJoins.empty()) {
+      processCrossJoins(plan, crossJoins, state, nextJoins);
     }
     tryNextJoins(state, nextJoins);
   }
