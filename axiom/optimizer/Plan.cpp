@@ -1756,12 +1756,10 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     std::sort(ids.begin(), ids.end(), [&](int32_t left, int32_t right) {
       return scores[left] > scores[right];
     });
-
     for (auto i : ids) {
       auto from = firstTables.at(i);
       if (from->type() == PlanType::kTableNode) {
         auto table = from->as<BaseTable>();
-        f << i << " " << table->toString();
         auto indices = table->as<BaseTable>()->chooseLeafIndex();
         // Make plan starting with each relevant index of the table.
         const auto downstream = state.downstreamColumns();
