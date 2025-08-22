@@ -531,6 +531,15 @@ std::string Unnest::toString(bool recursive, bool detail) const {
   }
   out << "unnest ";
   printCost(detail, out);
+  if (detail) {
+    out << "replicate columns: "
+        << itemsToString(replicateColumns.data(), replicateColumns.size());
+    out << ", unnest exprs: "
+        << itemsToString(unnestExprs.data(), unnestExprs.size());
+    out << ", unnested columns: "
+        << itemsToString(unnestedColumns.data(), unnestedColumns.size())
+        << std::endl;
+  }
   return out.str();
 }
 
