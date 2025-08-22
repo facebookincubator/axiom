@@ -1591,7 +1591,7 @@ RelationOpPtr Optimization::placeSingleRowDt(
   auto rightPlan = makePlan(memoKey, broadcast, empty, 1, state, needsShuffle);
 
   auto rightOp = rightPlan->op;
-  if (needsShuffle && !isSingleWorker()) {
+  if (needsShuffle) {
     rightOp = make<Repartition>(rightOp, broadcast, rightOp->columns());
   }
 

@@ -339,8 +339,7 @@ Join::Join(
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = fanout;
 
-  bool isCrossJoin = leftKeys.empty() && rightKeys.empty() && method == JoinMethod::kCross;
-  if (isCrossJoin) {
+  if (method == JoinMethod::kCross) {
     return;
   }
 
