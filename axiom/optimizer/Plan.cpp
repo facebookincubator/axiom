@@ -1823,7 +1823,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
 
     // process cross join if we've processed connected component
     if (nextJoins.empty()) {
-      processCrossJoins(plan, crossJoins, state, nextJoins);
+      processCrossJoins(plan, std::move(crossJoins), state, nextJoins);
     }
     tryNextJoins(state, nextJoins);
   }
