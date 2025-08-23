@@ -155,7 +155,7 @@ class Column : public Expr {
  public:
   Column(
       Name name,
-      PlanObjectP relation,
+      PlanObjectCP relation,
       const Value& value,
       Name alias = nullptr,
       Name nameInTable = nullptr,
@@ -185,7 +185,7 @@ class Column : public Expr {
 
   std::string toString() const override;
 
-  struct Equivalence* equivalence() const {
+  EquivalenceP equivalence() const {
     return equivalence_;
   }
 
@@ -202,7 +202,7 @@ class Column : public Expr {
   Name name_;
 
   // The defining BaseTable or DerivedTable.
-  PlanObjectP relation_;
+  PlanObjectCP relation_;
 
   // Optional alias copied from the the logical plan.
   Name alias_;
