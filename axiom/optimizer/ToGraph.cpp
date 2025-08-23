@@ -1252,7 +1252,7 @@ PlanObjectP ToGraph::addProjection(const lp::ProjectNode* project) {
   return currentDt_;
 }
 
-PlanObjectP ToGraph::addFilter(const lp::FilterNode* filter) {
+void ToGraph::addFilter(const lp::FilterNode* filter) {
   exprSource_ = filter->onlyInput().get();
 
   ExprVector flat;
@@ -1265,8 +1265,6 @@ PlanObjectP ToGraph::addFilter(const lp::FilterNode* filter) {
     currentDt_->conjuncts.insert(
         currentDt_->conjuncts.end(), flat.begin(), flat.end());
   }
-
-  return currentDt_;
 }
 
 PlanObjectP ToGraph::addAggregation(const lp::AggregateNode& aggNode) {
@@ -1517,30 +1515,18 @@ PlanObjectP ToGraph::makeQueryGraph(
       // filter is added to 'having', otherwise, to 'conjuncts'.
       const auto* filter = node.asUnchecked<lp::FilterNode>();
 
-      if (!isNondeterministicWrap_ &&
-          hasNondeterministic(filter->predicate())) {
-        // Force wrap the filter and its input inside a dt so the filter
-        // does not get mixed with parent nodes.
-        makeQueryGraph(*node.onlyInput(), allowedInDt);
-
-        if (currentDt_->hasLimit()) {
-          finalizeDt(*node.onlyInput());
-        }
-
-        addFilter(filter);
-        finalizeDt(node);
-
-        isNondeterministicWrap_ = true;
-        return currentDt_;
-      }
-
-      isNondeterministicWrap_ = false;
       makeQueryGraph(*node.onlyInput(), allowedInDt);
-
       if (currentDt_->hasLimit()) {
         finalizeDt(*node.onlyInput());
       }
-      return addFilter(filter);
+      addFilter(filter);
+
+      if (hasNondeterministic(filter->predicate())) {
+        // Force wrap the filter and its input inside a dt so the filter
+        // does not get mixed with parent nodes.
+        finalizeDt(node);
+      }
+      return currentDt_;
     }
 
     case lp::NodeKind::kProject:

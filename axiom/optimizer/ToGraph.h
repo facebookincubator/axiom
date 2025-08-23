@@ -334,7 +334,7 @@ class ToGraph {
 
   // Interprets a Filter node and adds its information into the DerivedTable
   // being assembled.
-  PlanObjectP addFilter(const logical_plan::FilterNode* Filter);
+  void addFilter(const logical_plan::FilterNode* filter);
 
   // Interprets an AggregationNode and adds its information to the
   // DerivedTable being assembled.
@@ -447,9 +447,6 @@ class ToGraph {
 
   // Innermost DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP currentDt_;
-
-  // True if wrapping a nondeterministic filter inside a DT in ToGraph.
-  bool isNondeterministicWrap_{false};
 
   // Source PlanNode when inside addProjection() or 'addFilter().
   const logical_plan::LogicalPlanNode* exprSource_{nullptr};
