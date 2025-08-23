@@ -73,6 +73,8 @@ class LocalRunner : public Runner,
 
   std::vector<velox::exec::TaskStats> stats() const override;
 
+  std::string printPlanWithStats(bool includeCustomStats) const override;
+
   void abort() override;
 
   void waitForCompletion(int32_t maxWaitMicros) override;

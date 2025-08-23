@@ -78,9 +78,17 @@ class Runner {
   virtual velox::RowVectorPtr next() = 0;
 
   /// Returns Task stats for each fragment of the plan. The stats correspond 1:1
-  /// to the stages in the MultiFragmentPlan. This may be called at any time.
-  /// before waitForCompletion() or abort().
+  /// to the stages in the MultiFragmentPlan, though not necessarily in the same
+  /// order in which they were specified in the fragmented plan. This may be
+  /// called at any time before waitForCompletion() or abort().
   virtual std::vector<velox::exec::TaskStats> stats() const = 0;
+
+  /// Returns human-friendly representation of the plan augmented with runtime
+  /// statistics. The implementation invokes velox::exec::printPlanWithStats().
+  /// May be called any time prior to abort() or waitForCompletion().
+  ///
+  /// @param includeCustomStats: print custom-defined OperatorStats fields
+  virtual std::string printPlanWithStats(bool includeCustomStats) const = 0;
 
   /// Returns the state of execution.
   virtual State state() const = 0;
@@ -94,7 +102,6 @@ class Runner {
   /// Waits up to 'maxWaitMicros' for all activity of the execution to cease.
   /// This is used in tests to ensure that all pools are empty and unreferenced
   /// before teradown.
-
   virtual void waitForCompletion(int32_t maxWaitMicros) = 0;
 };
 

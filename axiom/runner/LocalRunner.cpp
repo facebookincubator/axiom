@@ -17,6 +17,7 @@
 #include "axiom/runner/LocalRunner.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/PlanNodeStats.h"
 
 namespace facebook::axiom::runner {
 namespace {
@@ -334,6 +335,18 @@ std::vector<velox::exec::TaskStats> LocalRunner::stats() const {
     result.push_back(std::move(stats));
   }
   return result;
+}
+
+std::string LocalRunner::printPlanWithStats(bool includeCustomStats) const {
+  std::stringstream out;
+  auto statsResults = stats();
+  VELOX_CHECK_EQ(statsResults.size(), fragments_.size());
+  for (size_t i = 0; i < fragments_.size(); i++) {
+    out << std::endl << fmt::format("[Fragment{}]", i) << std::endl;
+    out << velox::exec::printPlanWithStats(
+        *fragments_[i].fragment.planNode, statsResults[i], includeCustomStats);
+  }
+  return out.str();
 }
 
 std::vector<SplitSource::SplitAndGroup> SimpleSplitSource::getSplits(
