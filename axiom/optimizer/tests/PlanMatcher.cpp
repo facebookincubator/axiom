@@ -269,7 +269,7 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
       }
     }
     if (!unnestExprs_.empty()) {
-      EXPECT_EQ(plan.replicateVariables().size(), unnestExprs_.size());
+      EXPECT_EQ(plan.unnestVariables().size(), unnestExprs_.size());
       if (::testing::Test::HasNonfatalFailure()) {
         return false;
       }

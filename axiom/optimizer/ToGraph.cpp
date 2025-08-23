@@ -1656,10 +1656,6 @@ PlanObjectP ToGraph::makeQueryGraph(
     }
 
     case lp::NodeKind::kUnnest: {
-      if (!contains(allowedInDt, PlanType::kUnnestNode)) {
-        return wrapInDt(node);
-      }
-
       // Multiple unnest is allowed in a DT.
       // If arrives after groupBy, orderBy, limit, then starts a new DT.
       makeQueryGraph(*node.onlyInput(), allowedInDt);
