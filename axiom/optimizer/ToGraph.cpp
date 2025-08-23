@@ -1504,7 +1504,7 @@ PlanObjectP ToGraph::makeQueryGraph(
     const lp::LogicalPlanNode& node,
     uint64_t allowedInDt) {
   ToGraphContext ctx(&node);
-  ExceptionContextSetter(makeExceptionContext(&ctx));
+  ExceptionContextSetter exceptionContext{makeExceptionContext(&ctx)};
   switch (node.kind()) {
     case lp::NodeKind::kValues:
       return makeValuesTable(*node.asUnchecked<lp::ValuesNode>());
