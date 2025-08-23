@@ -79,8 +79,8 @@ const SortOrder SortOrder::kDescNullsFirst{false, true};
 const SortOrder SortOrder::kDescNullsLast{false, false};
 
 namespace {
-const folly::F14FastMap<SpecialForm, std::string>& specialFormNames() {
-  static const folly::F14FastMap<SpecialForm, std::string> kNames{
+const auto& specialFormNames() {
+  static const folly::F14FastMap<SpecialForm, std::string_view> kNames = {
       {SpecialForm::kAnd, "AND"},
       {SpecialForm::kOr, "OR"},
       {SpecialForm::kCast, "CAST"},
@@ -94,7 +94,6 @@ const folly::F14FastMap<SpecialForm, std::string>& specialFormNames() {
       {SpecialForm::kIn, "IN"},
       {SpecialForm::kExists, "EXISTS"},
   };
-
   return kNames;
 }
 } // namespace
@@ -337,25 +336,27 @@ CallExpr::CallExpr(
 }
 
 namespace {
-folly::F14FastMap<WindowExpr::WindowType, std::string> windowTypeNames() {
-  return {
+const auto& windowTypeNames() {
+  static const folly::F14FastMap<WindowExpr::WindowType, std::string_view> kNames = {
       {WindowExpr::WindowType::kRows, "ROWS"},
       {WindowExpr::WindowType::kRange, "RANGE"},
   };
+  return kNames;
 }
 } // namespace
 
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, WindowType, windowTypeNames)
 
 namespace {
-folly::F14FastMap<WindowExpr::BoundType, std::string> boundTypeNames() {
-  return {
+const auto& boundTypeNames() {
+  static const folly::F14FastMap<WindowExpr::BoundType, std::string_view> kNames = {
       {WindowExpr::BoundType::kCurrentRow, "CURRENT ROW"},
       {WindowExpr::BoundType::kPreceding, "PRECEDING"},
       {WindowExpr::BoundType::kFollowing, "FOLLOWING"},
       {WindowExpr::BoundType::kUnboundedPreceding, "UNBOUNDED PRECEDING"},
       {WindowExpr::BoundType::kUnboundedFollowing, "UNBOUNDED FOLLOWING"},
   };
+  return kNames;
 }
 } // namespace
 

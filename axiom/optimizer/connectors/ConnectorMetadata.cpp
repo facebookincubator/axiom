@@ -19,22 +19,20 @@
 namespace facebook::velox::connector {
 
 namespace {
-folly::F14FastMap<TableKind, std::string> tableKindNames() {
-  static const folly::F14FastMap<TableKind, std::string> kNames = {
+const auto& tableKindNames() {
+  static const folly::F14FastMap<TableKind, std::string_view> kNames = {
       {TableKind::kTable, "kTable"},
       {TableKind::kTempTable, "kTempTable"},
   };
-
   return kNames;
 }
 
-folly::F14FastMap<WriteKind, std::string> writeKindNames() {
-  static const folly::F14FastMap<WriteKind, std::string> kNames = {
+const auto& writeKindNames() {
+  static const folly::F14FastMap<WriteKind, std::string_view> kNames = {
       {WriteKind::kInsert, "kInsert"},
       {WriteKind::kUpdate, "kUpdate"},
       {WriteKind::kDelete, "kDelete"},
   };
-
   return kNames;
 }
 

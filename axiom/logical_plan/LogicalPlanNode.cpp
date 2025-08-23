@@ -20,8 +20,8 @@
 namespace facebook::velox::logical_plan {
 
 namespace {
-const folly::F14FastMap<NodeKind, std::string>& nodeKindNames() {
-  static const folly::F14FastMap<NodeKind, std::string> kNames{
+const auto& nodeKindNames() {
+  static const folly::F14FastMap<NodeKind, std::string_view> kNames = {
       {NodeKind::kValues, "VALUES"},
       {NodeKind::kTableScan, "TABLE_SCAN"},
       {NodeKind::kFilter, "FILTER"},
@@ -33,7 +33,6 @@ const folly::F14FastMap<NodeKind, std::string>& nodeKindNames() {
       {NodeKind::kSet, "SET"},
       {NodeKind::kUnnest, "UNNEST"},
   };
-
   return kNames;
 }
 } // namespace
@@ -189,14 +188,13 @@ void AggregateNode::accept(
 }
 
 namespace {
-const folly::F14FastMap<JoinType, std::string>& joinTypeNames() {
-  static const folly::F14FastMap<JoinType, std::string> kNames{
+const auto& joinTypeNames() {
+  static const folly::F14FastMap<JoinType, std::string_view> kNames = {
       {JoinType::kInner, "INNER"},
       {JoinType::kLeft, "LEFT"},
       {JoinType::kRight, "RIGHT"},
       {JoinType::kFull, "FULL"},
   };
-
   return kNames;
 }
 } // namespace
@@ -233,14 +231,13 @@ void LimitNode::accept(
 }
 
 namespace {
-const folly::F14FastMap<SetOperation, std::string>& setOperationNames() {
-  static const folly::F14FastMap<SetOperation, std::string> kNames{
+const auto& setOperationNames() {
+  static const folly::F14FastMap<SetOperation, std::string_view> kNames = {
       {SetOperation::kUnion, "UNION"},
       {SetOperation::kUnionAll, "UNION ALL"},
       {SetOperation::kIntersect, "INTERSECT"},
       {SetOperation::kExcept, "EXCEPT"},
   };
-
   return kNames;
 }
 } // namespace
