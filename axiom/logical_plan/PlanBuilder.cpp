@@ -276,7 +276,9 @@ void PlanBuilder::resolveProjections(
 }
 
 PlanBuilder& PlanBuilder::project(const std::vector<ExprApi>& projections) {
-  VELOX_USER_CHECK_NOT_NULL(node_, "Project node cannot be a leaf node");
+  if (!node_) {
+    values(ROW({}), std::vector<Variant>{Variant::row({})});
+  }
 
   std::vector<std::string> outputNames;
   outputNames.reserve(projections.size());
@@ -295,7 +297,9 @@ PlanBuilder& PlanBuilder::project(const std::vector<ExprApi>& projections) {
 }
 
 PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
-  VELOX_USER_CHECK_NOT_NULL(node_, "Project node cannot be a leaf node");
+  if (!node_) {
+    values(ROW({}), std::vector<Variant>{Variant::row({})});
+  }
 
   std::vector<std::string> outputNames;
   outputNames.reserve(projections.size());
@@ -325,100 +329,6 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
 
   node_ = std::make_shared<ProjectNode>(nextId(), node_, outputNames, exprs);
   outputMapping_ = newOutputMapping;
-
-  return *this;
-}
-
-PlanBuilder& PlanBuilder::unnest(
-    const std::vector<ExprApi>& unnestExpressions,
-    const std::vector<std::vector<std::string>>& unnestedNames,
-    const std::optional<std::string>& ordinalityName,
-    bool flattenArrayOfRows) {
-  VELOX_USER_CHECK_NOT_NULL(node_, "Unnest node cannot be a leaf node");
-
-  auto newOutputMapping = std::make_shared<NameMappings>();
-
-  const auto& inputType = node_->outputType();
-
-  for (auto i = 0; i < inputType->size(); i++) {
-    const auto& id = inputType->nameOf(i);
-    const auto names = outputMapping_->reverseLookup(id);
-    for (const auto& name : names) {
-      newOutputMapping->add(name, id);
-    }
-  }
-
-  std::vector<ExprPtr> outputUnnestExpressions;
-  std::vector<std::vector<std::string>> outputUnnestedNames;
-
-  std::vector<std::string> generatedUnnestedName;
-  auto makeNames = [&](size_t i,
-                       const ExprApi& untypedExpr,
-                       const ExprPtr& expr) -> const auto& {
-    const bool unnestRow = flattenArrayOfRows && expr->type()->isArray() &&
-        expr->type()->asArray().elementType()->isRow();
-
-    if (i < unnestedNames.size()) {
-      const auto& unnestedName = unnestedNames[i];
-      const auto unnestSize = unnestRow
-          ? expr->type()->asArray().elementType()->size()
-          : expr->type()->size();
-      VELOX_USER_CHECK_EQ(
-          unnestedName.size(),
-          unnestSize,
-          "Count of unnested names must match the unnest expression type size");
-      return unnestedName;
-    }
-
-    const auto& unnestName = [&] {
-      if (const auto& alias = untypedExpr.name()) {
-        return alias.value();
-      } else if (expr->isInputReference()) {
-        return expr->asUnchecked<InputReferenceExpr>()->name();
-      } else {
-        return kDefaultExprName;
-      }
-    }();
-
-    generatedUnnestedName.clear();
-    if (unnestRow) {
-      for (const auto& name :
-           expr->type()->asArray().elementType()->asRow().names()) {
-        generatedUnnestedName.push_back(newName(unnestName + "_" + name));
-      }
-    } else if (expr->type()->isArray()) {
-      generatedUnnestedName.push_back(newName(unnestName + "_e"));
-    } else if (expr->type()->isMap()) {
-      generatedUnnestedName.push_back(newName(unnestName + "_k"));
-      generatedUnnestedName.push_back(newName(unnestName + "_v"));
-    } else {
-      VELOX_FAIL(
-          "Unnest expression must be an array or map type, got: {}",
-          expr->type()->toString());
-    }
-    return generatedUnnestedName;
-  };
-
-  for (size_t i = 0; const auto& untypedExpr : unnestExpressions) {
-    auto expr = resolveScalarTypes(untypedExpr.expr());
-    const auto& unnestName = makeNames(i++, untypedExpr, expr);
-    VELOX_USER_CHECK(!unnestName.empty());
-    auto& outputUnnestName = outputUnnestedNames.emplace_back();
-    for (const auto& name : unnestName) {
-      outputUnnestName.emplace_back(newName(name));
-      newOutputMapping->add(name, outputUnnestName.back());
-    }
-    outputUnnestExpressions.push_back(std::move(expr));
-  }
-
-  node_ = std::make_shared<UnnestNode>(
-      nextId(),
-      std::move(node_),
-      std::move(outputUnnestExpressions),
-      std::move(outputUnnestedNames),
-      ordinalityName,
-      flattenArrayOfRows);
-  outputMapping_ = std::move(newOutputMapping);
 
   return *this;
 }
@@ -475,7 +385,7 @@ PlanBuilder& PlanBuilder::aggregate(
 }
 
 PlanBuilder& PlanBuilder::unnest(
-    const std::vector<std::string>& unnestExprs,
+    const std::vector<ExprApi>& unnestExprs,
     bool withOrdinality) {
   return unnest(parse(unnestExprs), withOrdinality);
 }
@@ -491,8 +401,10 @@ PlanBuilder& PlanBuilder::unnest(
     bool withOrdinality,
     const std::optional<std::string>& alias,
     const std::vector<std::string>& unnestAliases) {
-  auto newOutputMapping =
-      node_ != nullptr ? outputMapping_ : std::make_shared<NameMappings>();
+  if (!node_) {
+    values(ROW({}), std::vector<Variant>{Variant::row({})});
+  }
+  auto newOutputMapping = outputMapping_;
 
   size_t index = 0;
 

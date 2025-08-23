@@ -226,24 +226,6 @@ class PlanBuilder {
     return with(std::vector<ExprApi>{projections});
   }
 
-  PlanBuilder& unnest(
-      const std::vector<std::string>& unnestExpressions,
-      const std::vector<std::vector<std::string>>& unnestedNames = {},
-      const std::optional<std::string>& ordinalityName = {},
-      bool flattenArrayOfRows = false) {
-    return unnest(
-        parse(unnestExpressions),
-        unnestedNames,
-        ordinalityName,
-        flattenArrayOfRows);
-  }
-
-  PlanBuilder& unnest(
-      const std::vector<ExprApi>& unnestExpressions,
-      const std::vector<std::vector<std::string>>& unnestedNames = {},
-      const std::optional<std::string>& ordinalityName = {},
-      bool flattenArrayOfRows = false);
-
   PlanBuilder& aggregate(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates);
@@ -266,7 +248,9 @@ class PlanBuilder {
   /// @param unnestExprs A list of constant expressions to unnest.
   PlanBuilder& unnest(
       const std::vector<std::string>& unnestExprs,
-      bool withOrdinality = false);
+      bool withOrdinality = false) {
+    return unnest(parse(unnestExprs), withOrdinality);
+  }
 
   PlanBuilder& unnest(
       const std::vector<ExprApi>& unnestExprs,
