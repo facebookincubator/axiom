@@ -337,10 +337,11 @@ CallExpr::CallExpr(
 
 namespace {
 const auto& windowTypeNames() {
-  static const folly::F14FastMap<WindowExpr::WindowType, std::string_view> kNames = {
-      {WindowExpr::WindowType::kRows, "ROWS"},
-      {WindowExpr::WindowType::kRange, "RANGE"},
-  };
+  static const folly::F14FastMap<WindowExpr::WindowType, std::string_view>
+      kNames = {
+          {WindowExpr::WindowType::kRows, "ROWS"},
+          {WindowExpr::WindowType::kRange, "RANGE"},
+      };
   return kNames;
 }
 } // namespace
@@ -349,13 +350,14 @@ VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, WindowType, windowTypeNames)
 
 namespace {
 const auto& boundTypeNames() {
-  static const folly::F14FastMap<WindowExpr::BoundType, std::string_view> kNames = {
-      {WindowExpr::BoundType::kCurrentRow, "CURRENT ROW"},
-      {WindowExpr::BoundType::kPreceding, "PRECEDING"},
-      {WindowExpr::BoundType::kFollowing, "FOLLOWING"},
-      {WindowExpr::BoundType::kUnboundedPreceding, "UNBOUNDED PRECEDING"},
-      {WindowExpr::BoundType::kUnboundedFollowing, "UNBOUNDED FOLLOWING"},
-  };
+  static const folly::F14FastMap<WindowExpr::BoundType, std::string_view>
+      kNames = {
+          {WindowExpr::BoundType::kCurrentRow, "CURRENT ROW"},
+          {WindowExpr::BoundType::kPreceding, "PRECEDING"},
+          {WindowExpr::BoundType::kFollowing, "FOLLOWING"},
+          {WindowExpr::BoundType::kUnboundedPreceding, "UNBOUNDED PRECEDING"},
+          {WindowExpr::BoundType::kUnboundedFollowing, "UNBOUNDED FOLLOWING"},
+      };
   return kNames;
 }
 } // namespace
