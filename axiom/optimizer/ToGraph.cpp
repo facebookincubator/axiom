@@ -240,7 +240,8 @@ void ToGraph::getExprForField(
       const auto* relation = resultColumn->relation();
       VELOX_CHECK_NOT_NULL(relation);
       if (relation->is(PlanType::kTableNode) ||
-          relation->is(PlanType::kValuesTableNode)) {
+          relation->is(PlanType::kValuesTableNode) ||
+          relation->is(PlanType::kUnnestTableNode)) {
         VELOX_CHECK(leaf == relation);
       }
       return;
@@ -831,48 +832,57 @@ ExprVector ToGraph::translateColumns(const std::vector<lp::ExprPtr>& source) {
   return result;
 }
 
-void ToGraph::translateUnnest(const lp::UnnestNode& logicalUnnest) {
-  if (logicalUnnest.ordinalityName().has_value()) {
+void ToGraph::translateUnnest(const lp::UnnestNode& unnest) {
+  if (unnest.ordinalityName().has_value()) {
     VELOX_NYI(
         "Unnest ordinality column is not supported in Verax optimizer. Unnest node: {}",
-        logicalUnnest.id());
+        unnest.id());
   }
-  const auto& replicateType = *logicalUnnest.onlyInput()->outputType();
+  PlanObjectCP leftTable = nullptr;
   ExprVector unnestExprs;
-  ColumnVector unnestedColumns;
-  for (auto channel : usedChannels(logicalUnnest)) {
-    if (channel < replicateType.size()) {
-      continue;
+  unnestExprs.reserve(unnest.unnestExpressions().size());
+  float maxCardinality = 0;
+  for (size_t i = 0; const auto& unnestedNames : unnest.unnestedNames()) {
+    const auto* unnestExpr = translateExpr(unnest.unnestExpressions()[i]);
+    unnestExprs.push_back(unnestExpr);
+    if (i++ == 0) {
+      leftTable = unnestExpr->singleTable();
+    } else if (leftTable && leftTable != unnestExpr->singleTable()) {
+      leftTable = nullptr;
     }
-    channel -= replicateType.size();
-    for (size_t i = 0; const auto& names : logicalUnnest.unnestedNames()) {
-      if (channel >= names.size()) {
-        channel -= names.size();
-        ++i;
-        continue;
-      }
-      const auto* expr = translateExpr(logicalUnnest.unnestExpressions()[i]);
-      const auto& outputName = names[channel];
-      // TODO: Value cardinality should be input column Value cardinality
-      // multiplied by the average expected number of elements per unnested
-      // element.
-      Value value{
-          expr->value().type->childAt(channel).get(),
-          expr->value().cardinality * 1,
-      };
-      const auto* columnName = toName(outputName);
-      renames_[outputName] = unnestedColumns.emplace_back(
-          make<Column>(columnName, currentDt_, value, columnName));
-      unnestExprs.emplace_back(expr);
-      break;
+    maxCardinality = std::max(maxCardinality, unnestExpr->value().cardinality);
+  }
+
+  auto* unnestTable = make<UnnestTable>();
+  unnestTable->cname = newCName("ut");
+  unnestTable->columns.reserve(
+      unnest.outputType()->size() - unnest.onlyInput()->outputType()->size());
+  for (size_t i = 0; const auto& unnestedNames : unnest.unnestedNames()) {
+    const auto* unnestExpr = unnestExprs[i++];
+    for (size_t j = 0; const auto& unnestedName : unnestedNames) {
+      const auto* unnestedType = toType(unnestExpr->value().type->childAt(j++));
+      // TODO: Value cardinality also should be multiplied by the max from all
+      // columns average expected number of elements per unnested element.
+      // Other Value properties also should be computed.
+      Value value{unnestedType, maxCardinality};
+      const auto* columnName = toName(unnestedName);
+      auto* column = make<Column>(columnName, unnestTable, value, columnName);
+      unnestTable->columns.push_back(column);
+      renames_[columnName] = column;
     }
   }
-  if (unnestExprs.empty()) {
-    VELOX_DCHECK(unnestedColumns.empty());
-    return;
-  }
-  currentDt_->unnests.emplace_back(
-      make<UnnestPlan>(std::move(unnestExprs), std::move(unnestedColumns)));
+
+  auto* edge = make<JoinEdge>(
+      leftTable,
+      unnestTable,
+      JoinEdge::Spec{.filter = std::move(unnestExprs), .directed = true});
+  // 1, 1 -- makes more sense but it's not pushdown in such case.
+  edge->setFanouts(2, 2);
+
+  planLeaves_[&unnest] = unnestTable;
+  currentDt_->tables.push_back(unnestTable);
+  currentDt_->tableSet.add(unnestTable);
+  currentDt_->joins.push_back(edge);
 }
 
 AggregationPlanCP ToGraph::translateAggregation(
@@ -1656,13 +1666,16 @@ PlanObjectP ToGraph::makeQueryGraph(
     }
 
     case lp::NodeKind::kUnnest: {
-      if (!contains(allowedInDt, PlanType::kUnnestNode)) {
+      // TODO: Unnest cannot be in single DT with Join right now.
+      // You can replace kUnnestTableNode here with kJoinNode to allow it and
+      // run tests to investigate failures.
+      if (!contains(allowedInDt, PlanType::kUnnestTableNode)) {
         return wrapInDt(node);
       }
 
       // Multiple unnest is allowed in a DT.
       // If arrives after groupBy, orderBy, limit, then starts a new DT.
-      makeQueryGraph(*node.onlyInput(), allowedInDt);
+      makeQueryGraph(*node.onlyInput(), allow(PlanType::kUnnestTableNode));
 
       if (currentDt_->hasAggregation() || currentDt_->hasOrderBy() ||
           currentDt_->hasLimit()) {

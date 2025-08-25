@@ -545,9 +545,9 @@ class JoinEdge {
         markColumn_(spec.markColumn),
         directed_(spec.directed) {
     VELOX_CHECK_NOT_NULL(rightTable);
-    if (isInner()) {
-      VELOX_CHECK(filter_.empty());
-    }
+    // Unnest is inner and direct. It's store unnest expressions in filter_.
+    // Otherwise, filter_ is only for non-inner joins.
+    VELOX_CHECK(directed_ || filter_.empty() || !isInner());
   }
 
   static JoinEdge* makeInner(PlanObjectCP leftTable, PlanObjectCP rightTable) {
@@ -816,6 +816,32 @@ struct ValuesTable : public PlanObject {
   std::string toString() const override;
 };
 
+struct UnnestTable : public PlanObject {
+  explicit UnnestTable() : PlanObject{PlanType::kUnnestTableNode} {}
+
+  // Correlation name, distinguishes between uses of the same values node.
+  Name cname{nullptr};
+
+  /// All columns from this 'UnnestTable'.
+  ColumnVector columns;
+
+  // All joins where 'this' is an end point.
+  JoinEdgeVector joinedBy;
+
+  float cardinality() const {
+    // TODO: Should be changed later to actual cardinality
+    return 1;
+  }
+
+  bool isTable() const override {
+    return true;
+  }
+
+  void addJoinedBy(JoinEdgeP join);
+
+  std::string toString() const override;
+};
+
 using TypeVector =
     std::vector<const velox::Type*, QGAllocator<const velox::Type*>>;
 
@@ -919,34 +945,5 @@ class AggregationPlan : public PlanObject {
 };
 
 using AggregationPlanCP = const AggregationPlan*;
-
-class UnnestPlan : public PlanObject {
- public:
-  UnnestPlan(ExprVector unnestExprs, ColumnVector unnestedColumns)
-      : PlanObject{PlanType::kUnnestNode},
-        unnestExprs_{std::move(unnestExprs)},
-        unnestedColumns_{std::move(unnestedColumns)} {
-    VELOX_DCHECK_GT(
-        unnestExprs_.size(), 0, "Unnest must have at least one expression");
-    VELOX_DCHECK_LE(
-        unnestExprs_.size(),
-        unnestedColumns_.size(),
-        "Unnest must have at least as many columns as expressions");
-  }
-
-  const ExprVector& unnestExprs() const {
-    return unnestExprs_;
-  }
-
-  const ColumnVector& unnestedColumns() const {
-    return unnestedColumns_;
-  }
-
- private:
-  const ExprVector unnestExprs_;
-  const ColumnVector unnestedColumns_;
-};
-
-using UnnestPlanCP = const UnnestPlan*;
 
 } // namespace facebook::velox::optimizer

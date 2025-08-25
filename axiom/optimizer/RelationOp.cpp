@@ -724,6 +724,8 @@ Distribution makeOrderByDistribution(
   distribution.partition.clear();
   distribution.orderKeys = std::move(orderKeys);
   distribution.orderTypes = std::move(orderTypes);
+  VELOX_DCHECK_EQ(
+      distribution.orderKeys.size(), distribution.orderTypes.size());
 
   return distribution;
 }

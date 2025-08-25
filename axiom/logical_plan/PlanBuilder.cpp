@@ -386,18 +386,6 @@ PlanBuilder& PlanBuilder::aggregate(
 
 PlanBuilder& PlanBuilder::unnest(
     const std::vector<ExprApi>& unnestExprs,
-    bool withOrdinality) {
-  return unnest(parse(unnestExprs), withOrdinality);
-}
-
-PlanBuilder& PlanBuilder::unnest(
-    const std::vector<ExprApi>& unnestExprs,
-    bool withOrdinality) {
-  return unnest(unnestExprs, withOrdinality, std::nullopt, {});
-}
-
-PlanBuilder& PlanBuilder::unnest(
-    const std::vector<ExprApi>& unnestExprs,
     bool withOrdinality,
     const std::optional<std::string>& alias,
     const std::vector<std::string>& unnestAliases) {

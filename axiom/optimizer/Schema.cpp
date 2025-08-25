@@ -64,6 +64,8 @@ ColumnGroupP SchemaTable::addIndex(
   appendToVector(distribution.orderKeys, keys);
   distribution.distributionType = distributionType;
   appendToVector(distribution.partition, partition);
+  VELOX_DCHECK_EQ(
+      distribution.orderKeys.size(), distribution.orderTypes.size());
   columnGroups.push_back(make<ColumnGroup>(
       name, this, std::move(distribution), std::move(columns)));
   return columnGroups.back();
@@ -148,6 +150,8 @@ float tableCardinality(PlanObjectCP table) {
         ->table->cardinality;
   } else if (table->is(PlanType::kValuesTableNode)) {
     return table->as<ValuesTable>()->cardinality();
+  } else if (table->is(PlanType::kUnnestTableNode)) {
+    return table->as<UnnestTable>()->cardinality();
   }
   VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
   return table->as<DerivedTable>()->cardinality;
@@ -331,6 +335,11 @@ IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys) {
     computeCardinalities(valuesTable->cardinality());
     return result;
   }
+  if (table->is(PlanType::kUnnestTableNode)) {
+    const auto* unnestTable = table->as<UnnestTable>();
+    computeCardinalities(unnestTable->cardinality());
+    return result;
+  }
   VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
   const auto* dt = table->as<DerivedTable>();
   computeCardinalities(dt->cardinality);
@@ -395,8 +404,11 @@ Distribution Distribution::rename(
   }
   // Ordering survives if a prefix of the previous order continues to be
   // projected out.
-  result.orderKeys.resize(prefixSize(result.orderKeys, exprs));
+  auto newOrderSize = prefixSize(result.orderKeys, exprs);
+  result.orderKeys.resize(newOrderSize);
+  result.orderTypes.resize(newOrderSize);
   replace(result.orderKeys, exprs, names);
+  VELOX_DCHECK_EQ(result.orderKeys.size(), result.orderTypes.size());
   return result;
 }
 

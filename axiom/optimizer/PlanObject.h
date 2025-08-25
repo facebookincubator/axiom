@@ -34,6 +34,7 @@ enum class PlanType {
   // Plan nodes.
   kTableNode,
   kValuesTableNode,
+  kUnnestTableNode,
   kDerivedTableNode,
   kAggregationNode,
   kProjectNode,
@@ -41,7 +42,6 @@ enum class PlanType {
   kJoinNode,
   kOrderByNode,
   kLimitNode,
-  kUnnestNode,
 };
 
 /// True if 'type' is an expression with a value.

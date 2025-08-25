@@ -604,6 +604,12 @@ class Optimization {
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
+  void unnestJoin(
+      RelationOpPtr plan,
+      const JoinCandidate& candidate,
+      PlanState& state,
+      std::vector<NextJoin>& toTry);
+
   const OptimizerOptions options_;
 
   const axiom::runner::MultiFragmentPlan::Options runnerOptions_;

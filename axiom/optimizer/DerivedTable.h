@@ -30,9 +30,6 @@ using JoinEdgeVector = std::vector<JoinEdgeP, QGAllocator<JoinEdgeP>>;
 class AggregationPlan;
 using AggregationPlanCP = const AggregationPlan*;
 
-class UnnestPlan;
-using UnnestPlanCP = const UnnestPlan*;
-
 enum class OrderType;
 using OrderTypeVector = std::vector<OrderType, QGAllocator<OrderType>>;
 
@@ -129,9 +126,7 @@ struct DerivedTable : public PlanObject {
   /// not try to further restrict this with probe side.
   bool noImportOfExists{false};
 
-  /// Postprocessing clauses: unnest, group by, having, order by, limit, offset.
-
-  std::vector<UnnestPlanCP, QGAllocator<UnnestPlanCP>> unnests;
+  /// Postprocessing clauses: group by, having, order by, limit, offset.
 
   AggregationPlanCP aggregation{nullptr};
 

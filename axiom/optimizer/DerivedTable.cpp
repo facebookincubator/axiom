@@ -227,6 +227,8 @@ void DerivedTable::linkTablesToJoins() {
         table->as<BaseTable>()->addJoinedBy(join);
       } else if (table->is(PlanType::kValuesTableNode)) {
         table->as<ValuesTable>()->addJoinedBy(join);
+      } else if (table->is(PlanType::kUnnestTableNode)) {
+        table->as<UnnestTable>()->addJoinedBy(join);
       } else {
         VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
         table->as<DerivedTable>()->addJoinedBy(join);
@@ -759,6 +761,10 @@ void DerivedTable::distributeConjuncts() {
 
       if (tables[0]->is(PlanType::kValuesTableNode)) {
         continue; // ValuesTable does not have filter push-down.
+      }
+
+      if (tables[0]->is(PlanType::kUnnestTableNode)) {
+        continue; // UnnestTable does not have filter push-down.
       }
 
       if (tables[0]->is(PlanType::kDerivedTableNode)) {

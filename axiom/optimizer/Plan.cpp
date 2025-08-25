@@ -215,12 +215,6 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
     }
   }
 
-  for (const auto* unnest : dt->unnests) {
-    if (!placed.contains(unnest)) {
-      result.unionColumns(unnest->unnestExprs());
-    }
-  }
-
   if (dt->aggregation && !placed.contains(dt->aggregation)) {
     auto aggToPlace = dt->aggregation;
     const auto numGroupingKeys = aggToPlace->groupingKeys().size();
@@ -367,6 +361,10 @@ const JoinEdgeVector& joinedBy(PlanObjectCP table) {
     return table->as<ValuesTable>()->joinedBy;
   }
 
+  if (table->is(PlanType::kUnnestTableNode)) {
+    return table->as<UnnestTable>()->joinedBy;
+  }
+
   VELOX_DCHECK(table->is(PlanType::kDerivedTableNode));
   return table->as<DerivedTable>()->joinedBy;
 }
@@ -401,7 +399,8 @@ void reducingJoinsRecursive(
       continue;
     }
     if (other.table->type() != PlanType::kTableNode &&
-        other.table->type() != PlanType::kValuesTableNode) {
+        other.table->type() != PlanType::kValuesTableNode &&
+        other.table->type() != PlanType::kUnnestTableNode) {
       continue;
     }
     if (visited.contains(other.table)) {
@@ -829,28 +828,6 @@ void Optimization::addPostprocess(
     DerivedTableCP dt,
     RelationOpPtr& plan,
     PlanState& state) {
-  for (const auto* unnest : dt->unnests) {
-    // We add unnest before compute downstream columns because we're not
-    // interested in the replicating columns needed for unnesting.
-    state.placed.add(unnest);
-    ColumnVector replicateColumns;
-    state.downstreamColumns().forEach([&](PlanObjectCP object) {
-      const auto* column = object->as<Column>();
-      if (state.columns.contains(column)) {
-        replicateColumns.push_back(column);
-      }
-    });
-    state.columns.unionObjects(unnest->unnestedColumns());
-
-    auto* unnestOp = make<Unnest>(
-        plan,
-        std::move(replicateColumns),
-        unnest->unnestExprs(),
-        unnest->unnestedColumns());
-
-    state.addCost(*unnestOp);
-    plan = unnestOp;
-  }
   if (const auto* aggPlan = dt->aggregation) {
     auto* partialAgg = make<Aggregation>(
         plan,
@@ -1097,6 +1074,10 @@ PlanObjectSet availableColumns(PlanObjectCP object) {
     }
   } else if (object->is(PlanType::kValuesTableNode)) {
     for (auto& c : object->as<ValuesTable>()->columns) {
+      set.add(c);
+    }
+  } else if (object->is(PlanType::kUnnestTableNode)) {
+    for (auto& c : object->as<UnnestTable>()->columns) {
       set.add(c);
     }
   } else if (object->is(PlanType::kDerivedTableNode)) {
@@ -1450,16 +1431,61 @@ void Optimization::crossJoin(
   VELOX_NYI("No cross joins");
 }
 
+void Optimization::unnestJoin(
+    RelationOpPtr plan,
+    const JoinCandidate& candidate,
+    PlanState& state,
+    std::vector<NextJoin>& toTry) {
+  for (const auto* table : candidate.tables) {
+    VELOX_CHECK(table->is(PlanType::kUnnestTableNode));
+    // We add unnest table before compute downstream columns because
+    // we're not interested in the replicating columns needed only for unnest.
+    state.placed.add(candidate.tables[0]);
+
+    ColumnVector replicateColumns;
+    state.downstreamColumns().forEach([&](PlanObjectCP object) {
+      const auto* column = object->as<Column>();
+      if (state.columns.contains(column)) {
+        replicateColumns.push_back(column);
+      }
+    });
+
+    // We don't use downstreamColumns() for unnestExprs/unnestedColumns
+    // because column unnest even when columns isn't used
+    // can change cardinality of the output for other columns
+    const auto& unnestExprs = candidate.join->filter();
+    const auto& unnestedColumns =
+        candidate.tables[0]->as<UnnestTable>()->columns;
+
+    plan = make<Unnest>(
+        std::move(plan),
+        std::move(replicateColumns),
+        unnestExprs,
+        unnestedColumns);
+
+    state.columns.unionColumns(unnestedColumns);
+    state.addCost(*plan);
+  }
+  state.addNextJoin(&candidate, std::move(plan), {}, toTry);
+}
+
 void Optimization::addJoin(
     const JoinCandidate& candidate,
     const RelationOpPtr& plan,
     PlanState& state,
     std::vector<NextJoin>& result) {
-  std::vector<NextJoin> toTry;
   if (!candidate.join) {
-    crossJoin(plan, candidate, state, toTry);
+    crossJoin(plan, candidate, state, result);
     return;
   }
+
+  if (candidate.tables.size() >= 1 &&
+      candidate.tables[0]->is(PlanType::kUnnestTableNode)) {
+    unnestJoin(plan, candidate, state, result);
+    return;
+  }
+
+  std::vector<NextJoin> toTry;
 
   joinByIndex(plan, candidate, state, toTry);
 
@@ -1685,6 +1711,10 @@ float startingScore(PlanObjectCP table) {
     return table->as<ValuesTable>()->cardinality();
   }
 
+  if (table->is(PlanType::kUnnestTableNode)) {
+    VELOX_FAIL("UnnestTable cannot be a starting table");
+  }
+
   return 10;
 }
 } // namespace
@@ -1745,6 +1775,8 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
         auto* scan = make<Values>(*valuesTable, std::move(columns));
         state.addCost(*scan);
         makeJoins(scan, state);
+      } else if (from->is(PlanType::kUnnestTableNode)) {
+        VELOX_FAIL("UnnestTable cannot be a starting table");
       } else {
         // Start with a derived table.
         placeDerivedTable(from->as<const DerivedTable>(), state);

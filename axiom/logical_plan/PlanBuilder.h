@@ -254,7 +254,9 @@ class PlanBuilder {
 
   PlanBuilder& unnest(
       const std::vector<ExprApi>& unnestExprs,
-      bool withOrdinality = false);
+      bool withOrdinality = false) {
+    return unnest(unnestExprs, withOrdinality, std::nullopt, {});
+  }
 
   /// An alternative way to specify aliases for unnested columns. A preferred
   /// way is by using ExprApi::unnestAs.
