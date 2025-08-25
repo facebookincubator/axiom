@@ -395,7 +395,7 @@ Distribution Distribution::rename(
   }
   // Ordering survives if a prefix of the previous order continues to be
   // projected out.
-  const auto newOrderSize = prefixSize(result.getOrderKeys(), exprs);
+  const auto newOrderSize = prefixSize(result.orderKeys, exprs);
   result.orderKeys.resize(newOrderSize);
   result.orderTypes.resize(newOrderSize);
   replace(result.orderKeys, exprs, names);
