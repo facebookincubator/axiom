@@ -38,7 +38,7 @@ const folly::F14FastMap<NodeKind, std::string>& nodeKindNames() {
 }
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(NodeKind, nodeKindNames)
+VERAX_DEFINE_ENUM_NAME(NodeKind, nodeKindNames)
 
 namespace {
 
@@ -201,7 +201,7 @@ const folly::F14FastMap<JoinType, std::string>& joinTypeNames() {
 }
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(JoinType, joinTypeNames)
+VERAX_DEFINE_ENUM_NAME(JoinType, joinTypeNames)
 
 // static
 RowTypePtr JoinNode::makeOutputType(
@@ -245,7 +245,7 @@ const folly::F14FastMap<SetOperation, std::string>& setOperationNames() {
 }
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(SetOperation, setOperationNames)
+VERAX_DEFINE_ENUM_NAME(SetOperation, setOperationNames)
 
 SetNode::SetNode(
     const std::string& id,

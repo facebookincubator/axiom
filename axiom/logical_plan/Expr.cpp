@@ -99,7 +99,7 @@ const folly::F14FastMap<SpecialForm, std::string>& specialFormNames() {
 }
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(SpecialForm, specialFormNames)
+VERAX_DEFINE_ENUM_NAME(SpecialForm, specialFormNames)
 
 namespace {
 void validateDereferenceInputs(
@@ -345,7 +345,7 @@ folly::F14FastMap<WindowExpr::WindowType, std::string> windowTypeNames() {
 }
 } // namespace
 
-VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, WindowType, windowTypeNames)
+VERAX_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, WindowType, windowTypeNames)
 
 namespace {
 folly::F14FastMap<WindowExpr::BoundType, std::string> boundTypeNames() {
@@ -359,7 +359,7 @@ folly::F14FastMap<WindowExpr::BoundType, std::string> boundTypeNames() {
 }
 } // namespace
 
-VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, BoundType, boundTypeNames)
+VERAX_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, BoundType, boundTypeNames)
 
 SubqueryExpr::SubqueryExpr(const LogicalPlanNodePtr& subquery)
     : Expr(ExprKind::kSubquery, subquery->outputType()->childAt(0), {}),
