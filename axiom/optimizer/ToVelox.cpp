@@ -537,6 +537,9 @@ class TempProjections {
     return result;
   }
 
+  // This method marked as rvalue to indicate that the TempProjections object
+  // should not be used after calling this method. It's done because
+  // maybeProject finalizes projection and consume TempProjections state.
   core::PlanNodePtr maybeProject(core::PlanNodePtr inputNode) && {
     if (nextChannel_ == input_.columns().size()) {
       return inputNode;
