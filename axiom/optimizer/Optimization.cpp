@@ -989,11 +989,12 @@ void Optimization::addJoin(
     const RelationOpPtr& plan,
     PlanState& state,
     std::vector<NextJoin>& result) {
-  std::vector<NextJoin> toTry;
   if (!candidate.join) {
-    crossJoin(plan, candidate, state, toTry);
+    crossJoin(plan, candidate, state, result);
     return;
   }
+
+  std::vector<NextJoin> toTry;
 
   joinByIndex(plan, candidate, state, toTry);
 

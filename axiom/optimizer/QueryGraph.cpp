@@ -354,7 +354,7 @@ PlanObjectSet Expr::allTables() const {
 
 Column::Column(
     Name name,
-    PlanObjectP relation,
+    PlanObjectCP relation,
     const Value& value,
     Name alias,
     Name nameInTable,

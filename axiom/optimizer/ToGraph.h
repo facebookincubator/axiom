@@ -334,7 +334,7 @@ class ToGraph {
 
   // Interprets a Filter node and adds its information into the DerivedTable
   // being assembled.
-  PlanObjectP addFilter(const logical_plan::FilterNode* Filter);
+  PlanObjectP addFilter(const logical_plan::FilterNode* filter);
 
   // Interprets an AggregationNode and adds its information to the
   // DerivedTable being assembled.

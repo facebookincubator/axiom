@@ -63,6 +63,8 @@ ColumnGroupP SchemaTable::addIndex(
   appendToVector(distribution.orderKeys, keys);
   distribution.distributionType = distributionType;
   appendToVector(distribution.partition, partition);
+  VELOX_DCHECK_EQ(
+      distribution.orderKeys.size(), distribution.orderTypes.size());
   columnGroups.push_back(make<ColumnGroup>(
       name, this, std::move(distribution), std::move(columns)));
   return columnGroups.back();
@@ -398,6 +400,7 @@ Distribution Distribution::rename(
   result.orderKeys.resize(newOrderSize);
   result.orderTypes.resize(newOrderSize);
   replace(result.orderKeys, exprs, names);
+  VELOX_DCHECK_EQ(result.orderKeys.size(), result.orderTypes.size());
   return result;
 }
 

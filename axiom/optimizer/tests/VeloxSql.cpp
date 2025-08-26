@@ -154,7 +154,7 @@ class VeloxRunner : public QueryBenchmarkBase {
  public:
   static const std::string kHiveConnectorId;
 
-  void initialize() {
+  void initialize() override {
     if (FLAGS_cache_gb) {
       memory::MemoryManagerOptions options;
       int64_t memoryBytes = FLAGS_cache_gb * (1LL << 30);
