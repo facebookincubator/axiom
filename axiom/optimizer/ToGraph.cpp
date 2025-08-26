@@ -74,7 +74,8 @@ void ToGraph::setDtOutput(
     dt->exprs.push_back(inner);
 
     Value value(toType(type), 0);
-    auto* outer = make<Column>(toName(name), dt, value, toName(name));
+    const auto* columnName = toName(name);
+    auto* outer = make<Column>(columnName, dt, value, columnName);
     dt->columns.push_back(outer);
     renames_[name] = outer;
   }
@@ -90,8 +91,9 @@ void ToGraph::setDtUsedOutput(
     const auto* inner = translateColumn(name);
     dt->exprs.push_back(inner);
 
+    const auto* columnName = toName(name);
     const auto* outer =
-        make<Column>(toName(name), dt, inner->value(), toName(name));
+        make<Column>(columnName, dt, inner->value(), columnName);
     dt->columns.push_back(outer);
     renames_[name] = outer;
   }
@@ -1161,7 +1163,8 @@ PlanObjectP ToGraph::makeValuesTable(const lp::ValuesNode& values) {
 
     const auto& name = names[i];
     Value value{toType(type->childAt(i)), cardinality};
-    auto* column = make<Column>(toName(name), valuesTable, value, toName(name));
+    const auto* columnName = toName(name);
+    auto* column = make<Column>(columnName, valuesTable, value, columnName);
     valuesTable->columns.push_back(column);
 
     renames_[name] = column;
@@ -1339,11 +1342,9 @@ DerivedTableP ToGraph::translateSetJoin(
   ColumnVector columns;
   for (auto i = 0; i < type->size(); ++i) {
     exprs.push_back(left->columns[i]);
-    columns.push_back(make<Column>(
-        toName(type->nameOf(i)),
-        setDt,
-        exprs.back()->value(),
-        toName(type->nameOf(i))));
+    const auto* columnName = toName(type->nameOf(i));
+    columns.push_back(
+        make<Column>(columnName, setDt, exprs.back()->value(), columnName));
     renames_[type->nameOf(i)] = columns.back();
   }
 
@@ -1440,8 +1441,9 @@ DerivedTableP ToGraph::translateUnion(
           newDt->exprs.push_back(inner);
 
           // The top dt has the same columns as all the unioned dts.
+          const auto* columnName = toName(name);
           auto* outer =
-              make<Column>(toName(name), setDt, inner->value(), toName(name));
+              make<Column>(columnName, setDt, inner->value(), columnName);
           setDt->columns.push_back(outer);
           newDt->columns.push_back(outer);
         }
