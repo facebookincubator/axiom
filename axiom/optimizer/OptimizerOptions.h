@@ -44,7 +44,16 @@ struct OptimizerOptions {
   /// the whole map is accessed as a map.
   std::unordered_map<std::string, std::vector<std::string>> mapAsStruct;
 
+  /// Enable join order sampling during optimization. If this flag is set, joins
+  /// are sampled to determine the optimal join order. If join sampling is
+  /// disabled, the optimizer will fall back on cardinality estimation.
   bool sampleJoins{true};
+
+  /// Enable filter selectivity sampling during optimization. If this flag is
+  /// set, filters will be evaluated against a sample of source data to
+  /// determine the estimated cardinality of the scan. If filter sampling is
+  /// disabled, a default selectivity will be used.
+  bool sampleFilters{true};
 
   /// Produce trace of plan candidates.
   int32_t traceFlags{0};
