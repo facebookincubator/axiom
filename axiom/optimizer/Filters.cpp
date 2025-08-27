@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/QueryGraph.h"
 
 namespace facebook::velox::optimizer {

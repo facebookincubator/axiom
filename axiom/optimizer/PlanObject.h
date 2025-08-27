@@ -81,6 +81,10 @@ class PlanObject {
     return type_ == PlanType::kColumnExpr;
   }
 
+  bool is(PlanType type) const {
+    return type_ == type;
+  }
+
   template <typename T>
   T* as() {
     return reinterpret_cast<T*>(this);
@@ -149,10 +153,7 @@ class PlanObjectSet : public BitSet {
 
   /// Adds ids of all columns 'expr' depends on.
   void unionColumns(ExprCP expr);
-
-  /// Adds ids of all columns 'exprs' depend on.
   void unionColumns(const ExprVector& exprs);
-  void unionColumns(const ColumnVector& exprs);
 
   /// Adds ids of all objects in 'objects'.
   template <typename V>
@@ -162,12 +163,28 @@ class PlanObjectSet : public BitSet {
     }
   }
 
+  /// Returns the objects corresponding to ids in 'this' as a vector of const
+  /// T*.
+  template <typename T = PlanObject>
+  std::vector<const T*, QGAllocator<const T*>> toObjects() const {
+    std::vector<const T*, QGAllocator<const T*>> objects;
+    objects.reserve(size());
+    forEach(
+        [&](auto object) { objects.emplace_back(object->template as<T>()); });
+    return objects;
+  }
+
   /// Applies 'func' to each object in 'this'.
   template <typename Func>
   void forEach(Func func) const {
+    forEach<PlanObject, Func>(func);
+  }
+
+  template <typename T, typename Func>
+  void forEach(Func func) const {
     auto ctx = queryCtx();
     velox::bits::forEachSetBit(bits_.data(), 0, bits_.size() * 64, [&](auto i) {
-      func(ctx->objectAt(i));
+      func(ctx->objectAt(i)->template as<T>());
     });
   }
 
@@ -177,15 +194,6 @@ class PlanObjectSet : public BitSet {
     velox::bits::forEachSetBit(bits_.data(), 0, bits_.size() * 64, [&](auto i) {
       func(ctx->mutableObjectAt(i));
     });
-  }
-
-  /// Returns the objects corresponding to ids in 'this' as a vector of T.
-  template <typename T = PlanObjectP>
-  std::vector<T> objects() const {
-    std::vector<T> result;
-    forEach(
-        [&](auto object) { result.push_back(reinterpret_cast<T>(object)); });
-    return result;
   }
 
   /// Prnts the contents with ids and the string representation of the objects

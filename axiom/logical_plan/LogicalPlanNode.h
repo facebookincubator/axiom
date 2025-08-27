@@ -68,6 +68,10 @@ class LogicalPlanNode {
     return kind_;
   }
 
+  bool is(NodeKind kind) const {
+    return kind_ == kind;
+  }
+
   template <typename T>
   const T* asUnchecked() const {
     return dynamic_cast<const T*>(this);
@@ -508,7 +512,7 @@ class LimitNode : public LogicalPlanNode {
     VELOX_USER_CHECK_GE(offset, 0);
     VELOX_USER_CHECK_GE(count, 0);
 
-    if (count == std::numeric_limits<int64_t>::max()) {
+    if (noLimit()) {
       VELOX_USER_CHECK_NE(
           offset, 0, "Offset must be > zero if there is no limit");
     }
@@ -520,6 +524,10 @@ class LimitNode : public LogicalPlanNode {
 
   int64_t count() const {
     return count_;
+  }
+
+  bool noLimit() const {
+    return count_ == std::numeric_limits<int64_t>::max();
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
@@ -602,16 +610,18 @@ using SetNodePtr = std::shared_ptr<const SetNode>;
 /// optional ordinality column of type BIGINT.
 class UnnestNode : public LogicalPlanNode {
  public:
+  /// @param input Optional input node. If not specified, 'unnestExpressions'
+  /// must be constant expressions.
+  /// @param unnestExpressions One or more expressions that produce ARRAYs
+  /// or MAPs.
+  /// @param unnestedNames Names to use for expanded relations. Must align
+  /// with 'unnestExpressions'. Each ARRAY requires one name. Each MAP
+  /// requires two maps. If 'flattenArrayOfRows' is true, each ARRAY(ROW)
+  /// requires as many names as there are fields in the ROW.
+  /// @param ordinalityName Optional name for the ordinality output column.
+  /// If not specified, ordinality column is not added. Ordinality is
+  /// 1-based.
   UnnestNode(
-      /// @param unnestExpressions One or more expressions that produce ARRAYs
-      /// or MAPs.
-      /// @param unnestedNames Names to use for expanded relations. Must align
-      /// with 'unnestExpressions'. Each ARRAY requires one name. Each MAP
-      /// requires two maps. If 'flattenArrayOfRows' is true, each ARRAY(ROW)
-      /// requires as many names as there are fields in the ROW.
-      /// @param ordinalityName Optional name for the ordinality output column.
-      /// If not specified, ordinality column is not added. Ordinality is
-      /// 1-based.
       const std::string& id,
       const LogicalPlanNodePtr& input,
       const std::vector<ExprPtr>& unnestExpressions,
@@ -621,7 +631,8 @@ class UnnestNode : public LogicalPlanNode {
       : LogicalPlanNode(
             NodeKind::kUnnest,
             id,
-            {input},
+            input == nullptr ? std::vector<LogicalPlanNodePtr>{}
+                             : std::vector<LogicalPlanNodePtr>{input},
             makeOutputType(
                 input,
                 unnestExpressions,

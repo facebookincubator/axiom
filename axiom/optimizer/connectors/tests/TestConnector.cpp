@@ -10,9 +10,10 @@
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing
- * permissions and limitations under the License.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 #include "axiom/optimizer/connectors/tests/TestConnector.h"
 
 namespace facebook::velox::connector {
@@ -71,14 +72,13 @@ std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
       tableHandle->connectorId(), std::move(partitions));
 }
 
-Table* FOLLY_NULLABLE
-TestConnectorMetadata::findTableInternal(const std::string& name) {
+std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
+    const std::string& name) {
   auto it = tables_.find(name);
-  return it != tables_.end() ? it->second.get() : nullptr;
+  return it != tables_.end() ? it->second : nullptr;
 }
 
-const Table* FOLLY_NULLABLE
-TestConnectorMetadata::findTable(const std::string& name) {
+ConnectorTablePtr TestConnectorMetadata::findTable(const std::string& name) {
   return findTableInternal(name);
 }
 
@@ -107,13 +107,13 @@ ConnectorTableHandlePtr TestConnectorMetadata::createTableHandle(
   return std::make_shared<TestTableHandle>(layout, std::move(columnHandles));
 }
 
-TestTable* TestConnectorMetadata::createTable(
+std::shared_ptr<TestTable> TestConnectorMetadata::createTable(
     const std::string& name,
     const RowTypePtr& schema) {
-  auto table = std::make_unique<TestTable>(name, schema, connector_);
+  auto table = std::make_shared<TestTable>(name, schema, connector_);
   auto [it, ok] = tables_.emplace(name, std::move(table));
   VELOX_CHECK(ok, "table {} already exists", name);
-  return it->second.get();
+  return it->second;
 }
 
 void TestConnectorMetadata::appendData(
@@ -127,10 +127,10 @@ void TestConnectorMetadata::appendData(
 TestDataSource::TestDataSource(
     const RowTypePtr& outputType,
     const ColumnHandleMap& handles,
-    const Table* table,
+    ConnectorTablePtr table,
     memory::MemoryPool* pool)
     : outputType_(outputType), pool_(pool) {
-  auto maybeTable = dynamic_cast<const TestTable*>(table);
+  auto maybeTable = std::dynamic_pointer_cast<const TestTable>(table);
   VELOX_CHECK(maybeTable, "table {} not a TestTable", table->name());
   data_ = maybeTable->data();
 
@@ -214,7 +214,7 @@ std::unique_ptr<DataSink> TestConnector::createDataSink(
   return std::make_unique<TestDataSink>(table);
 }
 
-TestTable* TestConnector::createTable(
+std::shared_ptr<TestTable> TestConnector::createTable(
     const std::string& name,
     const RowTypePtr& schema) {
   return metadata_->createTable(name, schema);

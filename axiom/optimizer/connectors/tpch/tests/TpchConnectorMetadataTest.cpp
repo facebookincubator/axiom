@@ -66,8 +66,7 @@ TEST_F(TpchConnectorMetadataTest, findAllScaleFactors) {
     auto table = metadata_->findTable(qualifiedName);
     ASSERT_NE(table, nullptr);
     EXPECT_EQ(table->name(), qualifiedName);
-    auto* tpchTable =
-        dynamic_cast<const facebook::velox::connector::tpch::TpchTable*>(table);
+    auto tpchTable = std::dynamic_pointer_cast<const TpchTable>(table);
     ASSERT_NE(tpchTable, nullptr);
     EXPECT_DOUBLE_EQ(tpchTable->getScaleFactor(), scaleFactor);
   }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -180,7 +180,6 @@ struct PlanFragmentInfo {
   std::unordered_map<std::string, std::unordered_set<std::string>>
       remoteTaskIdMap{};
   std::vector<velox::core::TableScanNodePtr> scans{};
-  int numBroadcastDestinations{0};
   int numWorkers{0};
 };
 
@@ -195,8 +194,6 @@ std::vector<ExecutableFragment> createExecutableFragments(
         velox::core::PlanFragment{planFragmentInfo.plan};
 
     executableFragment.scans = planFragmentInfo.scans;
-    executableFragment.numBroadcastDestinations =
-        planFragmentInfo.numBroadcastDestinations;
 
     std::vector<InputStage> inputStages;
     const auto& remoteTaskIdMap = planFragmentInfo.remoteTaskIdMap;
@@ -314,9 +311,7 @@ MultiFragmentPlanPtr PrestoQueryReplayRunner::deserializeSupportedPlan(
             planFragments[taskPrefix].numWorkers = 1;
           } else {
             planFragments[taskPrefix].numWorkers = width_;
-            if (isBroadcastPartition(planFragments[remoteTaskPrefix].plan)) {
-              planFragments[remoteTaskPrefix].numBroadcastDestinations = width_;
-            } else {
+            if (!isBroadcastPartition(planFragments[remoteTaskPrefix].plan)) {
               planFragments[remoteTaskPrefix].plan = updateNumOfPartitions(
                   planFragments[remoteTaskPrefix].plan, width_);
             }

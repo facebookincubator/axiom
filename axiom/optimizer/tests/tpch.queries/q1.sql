@@ -16,7 +16,7 @@ from
 	lineitem
 where
     -- TODO Fix this predicate to match the official TPC-H specification.
-    l_shipdate < '1998-09-03'::date
+    l_shipdate < date '1998-09-03'
 group by
 	l_returnflag,
 	l_linestatus

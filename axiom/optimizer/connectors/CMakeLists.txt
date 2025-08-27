@@ -11,16 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_subdirectory(hive)
+add_subdirectory(tpch)
+
+add_subdirectory(tests)
 
 velox_add_library(velox_connector_metadata ConnectorMetadata.cpp
                   StatisticsBuilder.cpp)
 
-velox_link_libraries(velox_connector_metadata velox_common_base velox_memory
-                     velox_connector velox_dwio_dwrf_writer)
-
-add_subdirectory(hive)
-
-add_subdirectory(tests)
+velox_link_libraries(
+  velox_connector_metadata
+  velox_common_base
+  velox_memory
+  velox_connector
+  velox_dwio_dwrf_writer)
 
 velox_add_library(velox_connector_split_source ConnectorSplitSource.cpp)
 

@@ -79,8 +79,8 @@ const SortOrder SortOrder::kDescNullsFirst{false, true};
 const SortOrder SortOrder::kDescNullsLast{false, false};
 
 namespace {
-folly::F14FastMap<SpecialForm, std::string> specialFormNames() {
-  return {
+const folly::F14FastMap<SpecialForm, std::string>& specialFormNames() {
+  static const folly::F14FastMap<SpecialForm, std::string> kNames{
       {SpecialForm::kAnd, "AND"},
       {SpecialForm::kOr, "OR"},
       {SpecialForm::kCast, "CAST"},
@@ -94,6 +94,8 @@ folly::F14FastMap<SpecialForm, std::string> specialFormNames() {
       {SpecialForm::kIn, "IN"},
       {SpecialForm::kExists, "EXISTS"},
   };
+
+  return kNames;
 }
 } // namespace
 

@@ -17,8 +17,8 @@
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
-#include "axiom/optimizer/RelationOp.h"
 
 namespace facebook::velox::optimizer {
 
@@ -49,20 +49,22 @@ ColumnGroupP SchemaTable::addIndex(
     int32_t numKeysUnique,
     int32_t numOrdering,
     const ColumnVector& keys,
-    DistributionType distType,
+    DistributionType distributionType,
     const ColumnVector& partition,
-    const ColumnVector& columns) {
+    ColumnVector columns) {
   VELOX_CHECK_LE(numKeysUnique, keys.size());
 
   Distribution distribution;
+  distribution.orderTypes.reserve(numOrdering);
   for (auto i = 0; i < numOrdering; ++i) {
-    distribution.orderType.push_back(OrderType::kAscNullsFirst);
+    distribution.orderTypes.push_back(OrderType::kAscNullsFirst);
   }
   distribution.numKeysUnique = numKeysUnique;
-  appendToVector(distribution.order, keys);
-  distribution.distributionType = distType;
+  appendToVector(distribution.orderKeys, keys);
+  distribution.distributionType = distributionType;
   appendToVector(distribution.partition, partition);
-  columnGroups.push_back(make<ColumnGroup>(name, this, distribution, columns));
+  columnGroups.push_back(make<ColumnGroup>(
+      name, this, std::move(distribution), std::move(columns)));
   return columnGroups.back();
 }
 
@@ -105,29 +107,32 @@ SchemaTableCP Schema::findTable(
   }
 
   VELOX_CHECK_NOT_NULL(source_);
-  auto* table = source_->findTable(std::string(connectorId), std::string(name));
-  if (!table) {
+  auto connectorTable =
+      source_->findTable(std::string(connectorId), std::string(name));
+  if (!connectorTable) {
     return nullptr;
   }
 
-  auto* schemaTable =
-      make<SchemaTable>(internedName, table->rowType(), table->numRows());
-  schemaTable->connectorTable = table;
+  auto* schemaTable = make<SchemaTable>(
+      internedName, connectorTable->rowType(), connectorTable->numRows());
+  schemaTable->connectorTable = connectorTable.get();
 
   ColumnVector columns;
-  for (const auto& [columnName, tableColumn] : table->columnMap()) {
-    float cardinality = tableColumn->approxNumDistinct(table->numRows());
+  for (const auto& [columnName, tableColumn] : connectorTable->columnMap()) {
+    float cardinality =
+        tableColumn->approxNumDistinct(connectorTable->numRows());
     Value value(toType(tableColumn->type()), cardinality);
     auto* column = make<Column>(toName(columnName), nullptr, value);
     schemaTable->columns[column->name()] = column;
     columns.push_back(column);
   }
-  DistributionType defaultDist;
-  defaultDist.locus = defaultLocus_;
-  auto* pk =
-      schemaTable->addIndex(toName("pk"), 0, 0, {}, defaultDist, {}, columns);
+  DistributionType defaultDistributionType;
+  defaultDistributionType.locus = defaultLocus_;
+  auto* pk = schemaTable->addIndex(
+      toName("pk"), 0, 0, {}, defaultDistributionType, {}, std::move(columns));
   addTable(schemaTable);
-  pk->layout = table->layouts()[0];
+  pk->layout = connectorTable->layouts()[0];
+  queryCtx()->optimization()->retainConnectorTable(std::move(connectorTable));
   return schemaTable;
 }
 
@@ -136,21 +141,21 @@ void Schema::addTable(SchemaTableCP table) const {
 }
 
 float tableCardinality(PlanObjectCP table) {
-  if (table->type() == PlanType::kTableNode) {
+  if (table->is(PlanType::kTableNode)) {
     return table->as<BaseTable>()
         ->schemaTable->columnGroups[0]
         ->table->cardinality;
-  } else if (table->type() == PlanType::kValuesTableNode) {
+  } else if (table->is(PlanType::kValuesTableNode)) {
     return table->as<ValuesTable>()->cardinality();
   }
-  VELOX_CHECK(table->type() == PlanType::kDerivedTableNode);
+  VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
   return table->as<DerivedTable>()->cardinality;
 }
 
 // The fraction of rows of a base table selected by non-join filters. 0.2
 // means 1 in 5 are selected.
 float baseSelectivity(PlanObjectCP object) {
-  if (object->type() == PlanType::kTableNode) {
+  if (object->is(PlanType::kTableNode)) {
     return object->as<BaseTable>()->filterSelectivity;
   }
   return 1;
@@ -160,7 +165,7 @@ namespace {
 template <typename T>
 ColumnCP findColumnByName(const T& columns, Name name) {
   for (auto column : columns) {
-    if (column->type() == PlanType::kColumnExpr &&
+    if (column->is(PlanType::kColumnExpr) &&
         column->template as<Column>()->name() == name) {
       return column->template as<Column>();
     }
@@ -215,13 +220,13 @@ IndexInfo SchemaTable::indexInfo(ColumnGroupP index, CPSpan<Column> columns)
   info.scanCardinality = index->table->cardinality;
   info.joinCardinality = index->table->cardinality;
 
-  const auto numSorting = index->distribution().orderType.size();
+  const auto numSorting = index->distribution().orderTypes.size();
   const auto numUnique = index->distribution().numKeysUnique;
 
   PlanObjectSet covered;
   for (auto i = 0; i < numSorting || i < numUnique; ++i) {
     auto part = findColumnByName(
-        columns, index->distribution().order[i]->as<Column>()->name());
+        columns, index->distribution().orderKeys[i]->as<Column>()->name());
     if (!part) {
       break;
     }
@@ -231,14 +236,14 @@ IndexInfo SchemaTable::indexInfo(ColumnGroupP index, CPSpan<Column> columns)
       info.scanCardinality = combine(
           info.scanCardinality,
           i,
-          index->distribution().order[i]->value().cardinality);
+          index->distribution().orderKeys[i]->value().cardinality);
       info.lookupKeys.push_back(part);
       info.joinCardinality = info.scanCardinality;
     } else {
       info.joinCardinality = combine(
           info.joinCardinality,
           i,
-          index->distribution().order[i]->value().cardinality);
+          index->distribution().orderKeys[i]->value().cardinality);
     }
     if (i == numUnique - 1) {
       info.unique = true;
@@ -306,7 +311,7 @@ IndexInfo SchemaTable::indexByColumns(CPSpan<Column> columns) const {
 }
 
 IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys) {
-  if (table->type() == PlanType::kTableNode) {
+  if (table->is(PlanType::kTableNode)) {
     auto schemaTable = table->as<BaseTable>()->schemaTable;
     return schemaTable->indexByColumns(keys);
   }
@@ -320,12 +325,12 @@ IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys) {
     }
   };
 
-  if (table->type() == PlanType::kValuesTableNode) {
+  if (table->is(PlanType::kValuesTableNode)) {
     const auto* valuesTable = table->as<ValuesTable>();
     computeCardinalities(valuesTable->cardinality());
     return result;
   }
-  VELOX_CHECK(table->type() == PlanType::kDerivedTableNode);
+  VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
   const auto* dt = table->as<DerivedTable>();
   computeCardinalities(dt->cardinality);
   result.unique =
@@ -343,7 +348,7 @@ ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {
 }
 
 bool Distribution::isSamePartition(const Distribution& other) const {
-  if (!(distributionType == other.distributionType)) {
+  if (distributionType != other.distributionType) {
     return false;
   }
   if (isBroadcast || other.isBroadcast) {
@@ -366,12 +371,12 @@ bool Distribution::isSamePartition(const Distribution& other) const {
 }
 
 bool Distribution::isSameOrder(const Distribution& other) const {
-  if (order.size() != other.order.size()) {
+  if (orderKeys.size() != other.orderKeys.size()) {
     return false;
   }
-  for (auto i = 0; i < order.size(); ++i) {
-    if (!order[i]->sameOrEqual(*other.order[i]) ||
-        orderType[i] != other.orderType[i]) {
+  for (size_t i = 0; i < orderKeys.size(); ++i) {
+    if (!orderKeys[i]->sameOrEqual(*other.orderKeys[i]) ||
+        orderTypes[i] != other.orderTypes[i]) {
       return false;
     }
   }
@@ -389,8 +394,10 @@ Distribution Distribution::rename(
   }
   // Ordering survives if a prefix of the previous order continues to be
   // projected out.
-  result.order.resize(prefixSize(result.order, exprs));
-  replace(result.order, exprs, names);
+  const auto newOrderSize = prefixSize(result.orderKeys, exprs);
+  result.orderKeys.resize(newOrderSize);
+  result.orderTypes.resize(newOrderSize);
+  replace(result.orderKeys, exprs, names);
   return result;
 }
 
@@ -422,11 +429,11 @@ std::string Distribution::toString() const {
     exprsToString(partition, out);
     out << " " << distributionType.numPartitions << " ways";
   }
-  if (!order.empty()) {
+  if (!orderKeys.empty()) {
     out << " O ";
-    exprsToString(order, out);
+    exprsToString(orderKeys, out);
   }
-  if (numKeysUnique && numKeysUnique >= order.size()) {
+  if (numKeysUnique && numKeysUnique >= orderKeys.size()) {
     out << " first " << numKeysUnique << " unique";
   }
   return out.str();

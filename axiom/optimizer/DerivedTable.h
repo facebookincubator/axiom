@@ -132,8 +132,8 @@ struct DerivedTable : public PlanObject {
   ExprVector having;
 
   /// Order by.
-  ExprVector orderByKeys;
-  OrderTypeVector orderByTypes;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
 
   /// Limit and offset.
   int64_t limit{-1};
@@ -190,7 +190,7 @@ struct DerivedTable : public PlanObject {
   }
 
   bool hasOrderBy() const {
-    return !orderByKeys.empty();
+    return !orderKeys.empty();
   }
 
   bool hasLimit() const {
@@ -208,31 +208,31 @@ struct DerivedTable : public PlanObject {
   /// more conjuncts. May call itself recursively on component dts.
   void distributeConjuncts();
 
-  /// memoizes plans for 'this' and fills in 'distribution_'. Needed
+  /// Memoizes plans for 'this' and fills in 'distribution_'. Needed
   /// before adding 'this' as a join side because join sides must have
   /// a cardinality guess.
   void makeInitialPlan();
 
-  PlanPtr bestInitialPlan() const;
+  PlanP bestInitialPlan() const;
 
   std::string toString() const override;
 
  private:
-  /// Imports the joins in 'this' inside 'firstDt', which must be a
-  /// member of 'this'. The import is possible if the join is not
-  /// through aggregates in 'firstDt'. On return, all joins that can go
-  /// inside firstDt are imported below aggregation in
-  /// firstDt. 'firstDt' is not modified, its original contents are
-  /// copied in a new dt before the import.
+  // Imports the joins in 'this' inside 'firstDt', which must be a
+  // member of 'this'. The import is possible if the join is not
+  // through aggregates in 'firstDt'. On return, all joins that can go
+  // inside firstDt are imported below aggregation in
+  // firstDt. 'firstDt' is not modified, its original contents are
+  // copied in a new dt before the import.
   void importJoinsIntoFirstDt(const DerivedTable* firstDt);
 
-  /// Sets 'dt' to be the complete contents of 'this'.
+  // Sets 'dt' to be the complete contents of 'this'.
   void flattenDt(const DerivedTable* dt);
 
-  /// Finds single row dts from non-correlated scalar subqueries.
+  // Finds single row dts from non-correlated scalar subqueries.
   void findSingleRowDts();
 
-  /// Sets 'columns' and 'exprs'.
+  // Sets 'columns' and 'exprs'.
   void makeProjection(const ExprVector& exprs);
 };
 

@@ -11,9 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 name: Preliminary Checks
-
 on:
   pull_request:
     types:
@@ -26,79 +24,56 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
+  group: >-
+    ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
   cancel-in-progress: true
 
 jobs:
-  preliminary-checks:
-    name: Preliminary Checks
+  pre-commit:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/facebookincubator/velox-dev:centos9
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Install pre-commit
+        run: python -m pip install pre-commit
+
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 2
           persist-credentials: false
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        # v4.2.3
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: |
+            pre-commit-
 
-      - name: Configure Git Safe Directory
+      - name: Run pre-commit
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git config --global --add safe.directory "*"
+          files=$(git diff --name-only HEAD^1 HEAD)
+          echo "::group::Changed files"
+          echo $files | tr ' ' '\n'
+          echo "::endgroup::"
+          pre-commit run --show-diff-on-failure --color=always --files $files
 
-      - name: Install dependencies
-        run: |
-          pip3 install regex
-          dnf install -y clang-tools-extra
-
-      - name: Check PR Title Format
+  title-check:
+    name: PR Title Format
+    runs-on: ubuntu-latest
+    steps:
+      - shell: python
         env:
           title: '${{ github.event.pull_request.title }}'
         run: |
-          python3 -c "
           import re
           import os
-          import sys
-
-          title = os.environ['title']
-          print(f'Checking PR title: {title}')
-
-          # Conventional commit format: type(scope)?: description
-          title_re = r'^(feat|fix|build|test|docs|refactor|misc)(\(.+\))?!?: ([A-Z].+)[^.]$'
+          title = os.environ["title"]
+          title_re = r"^(feat|fix|build|test|docs|refactor|misc)(\(.+\))?!?: ([A-Z].+)[^.]$"
           match = re.search(title_re, title)
 
           if match is None:
-            print('::error::Please follow conventional commit guidelines in PR titles:')
-            print('::error::Format: type(scope)?: Description')
-            print('::error::Types: feat, fix, build, test, docs, refactor, misc')
-            print('::error::Example: feat(optimizer): Add new optimization rule')
-            print('::error::Example: fix: Fix memory leak in query execution')
-            sys.exit(1)
+            print("::error::Please follow conventional commit guidelines in "
+                  + "commit titles as described in CONTRIBUTING.md")
+            exit(1)
           else:
-            print('✓ PR title follows conventional commit format')
-          "
-
-      - name: Run Format Check
-        run: |
-          echo "::group::Format Check - Changed files"
-          files=$(git diff --name-only HEAD^1 HEAD)
-          echo $files | tr ' ' '\n'
-          echo "::endgroup::"
-          echo "Running format check..."
-          python3 scripts/format-check.py format commit
-
-      - name: Run License Header Check
-        run: |
-          echo "::group::License Check - Changed files"
-          files=$(git diff --name-only HEAD^1 HEAD)
-          echo $files | tr ' ' '\n'
-          echo "::endgroup::"
-          echo "Running license header check..."
-          python3 scripts/format-check.py header commit
-
-      - name: Summary
-        run: |
-          echo "✅ All preliminary checks completed successfully!"
-          echo "  ✓ PR title format check"
-          echo "  ✓ Code format check"
-          echo "  ✓ License header check"
+            exit(0)

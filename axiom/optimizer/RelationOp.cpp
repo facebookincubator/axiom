@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/QueryGraph.h"
@@ -70,11 +71,11 @@ float orderPrefixDistance(
     ColumnGroupP index,
     const ExprVector& keys) {
   float selection = 1;
-  for (int32_t i = 0; i < input->distribution().order.size() &&
-       i < index->distribution().order.size() && i < keys.size();
+  for (int32_t i = 0; i < input->distribution().orderKeys.size() &&
+       i < index->distribution().orderKeys.size() && i < keys.size();
        ++i) {
-    if (input->distribution().order[i]->sameOrEqual(*keys[i])) {
-      selection *= index->distribution().order[i]->value().cardinality;
+    if (input->distribution().orderKeys[i]->sameOrEqual(*keys[i])) {
+      selection *= index->distribution().orderKeys[i]->value().cardinality;
     }
   }
   return selection;
@@ -137,31 +138,32 @@ Distribution TableScan::outputDistribution(
       columns, [](auto& column) { return column->schemaColumn(); });
 
   ExprVector partition;
-  ExprVector order;
-  OrderTypeVector orderType;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
   // if all partitioning columns are projected, the output is partitioned.
   if (isSubset(index->distribution().partition, schemaColumns)) {
     partition = index->distribution().partition;
     replace(partition, schemaColumns, columns.data());
   }
 
-  auto numPrefix = prefixSize(index->distribution().order, schemaColumns);
+  auto numPrefix = prefixSize(index->distribution().orderKeys, schemaColumns);
   if (numPrefix > 0) {
-    order = index->distribution().order;
-    order.resize(numPrefix);
-    orderType = index->distribution().orderType;
-    orderType.resize(numPrefix);
-    replace(order, schemaColumns, columns.data());
+    orderKeys = index->distribution().orderKeys;
+    orderKeys.resize(numPrefix);
+    orderTypes = index->distribution().orderTypes;
+    orderTypes.resize(numPrefix);
+    replace(orderKeys, schemaColumns, columns.data());
   }
-  return Distribution(
+  return {
       index->distribution().distributionType,
       std::move(partition),
-      std::move(order),
-      std::move(orderType),
+      std::move(orderKeys),
+      std::move(orderTypes),
       index->distribution().numKeysUnique <= numPrefix
           ? index->distribution().numKeysUnique
           : 0,
-      1.0 / baseTable->filterSelectivity);
+      1.0F / baseTable->filterSelectivity,
+  };
 }
 
 // static
@@ -286,7 +288,7 @@ std::string TableScan::toString(bool /*recursive*/, bool detail) const {
 }
 
 Values::Values(const ValuesTable& valuesTable, ColumnVector columns)
-    : RelationOp{RelType::kValues, nullptr, Distribution{DistributionType::gather(), {}}, std::move(columns)},
+    : RelationOp{RelType::kValues, nullptr, Distribution::gather(), std::move(columns)},
       valuesTable{valuesTable} {
   cost_.inputCardinality = 1;
 
@@ -568,7 +570,7 @@ HashBuild::HashBuild(
     RelationOpPtr input,
     int32_t id,
     ExprVector _keys,
-    PlanPtr plan)
+    PlanP plan)
     : RelationOp(
           RelType::kHashBuild,
           input,
@@ -693,14 +695,14 @@ std::string Project::toString(bool recursive, bool detail) const {
 namespace {
 Distribution makeOrderByDistribution(
     const RelationOpPtr& input,
-    ExprVector keys,
-    OrderTypeVector orderType) {
+    ExprVector orderKeys,
+    OrderTypeVector orderTypes) {
   Distribution distribution = input->distribution();
 
   distribution.distributionType = DistributionType::gather();
   distribution.partition.clear();
-  distribution.order = std::move(keys);
-  distribution.orderType = std::move(orderType);
+  distribution.orderKeys = std::move(orderKeys);
+  distribution.orderTypes = std::move(orderTypes);
 
   return distribution;
 }
@@ -708,8 +710,8 @@ Distribution makeOrderByDistribution(
 
 OrderBy::OrderBy(
     RelationOpPtr input,
-    ExprVector keys,
-    OrderTypeVector orderType,
+    ExprVector orderKeys,
+    OrderTypeVector orderTypes,
     int64_t limit,
     int64_t offset)
     : RelationOp(
@@ -717,8 +719,8 @@ OrderBy::OrderBy(
           input,
           makeOrderByDistribution(
               input,
-              std::move(keys),
-              std::move(orderType))),
+              std::move(orderKeys),
+              std::move(orderTypes))),
       limit{limit},
       offset{offset} {
   cost_.inputCardinality = inputCardinality();
@@ -736,7 +738,7 @@ std::string OrderBy::toString(bool recursive, bool detail) const {
   if (detail) {
     out << "OrderBy (" << distribution_.toString() << ")\n";
   } else {
-    out << "order by " << distribution_.order.size() << " columns ";
+    out << "order by " << distribution_.orderKeys.size() << " columns ";
   }
   return out.str();
 }
@@ -780,7 +782,7 @@ UnionAll::UnionAll(RelationOpPtrVector _inputs)
     : RelationOp(
           RelType::kUnionAll,
           nullptr,
-          Distribution(DistributionType{}, ExprVector{}),
+          Distribution{},
           _inputs[0]->columns()),
       inputs(std::move(_inputs)) {
   for (auto& input : inputs) {

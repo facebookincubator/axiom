@@ -105,7 +105,12 @@ ExprApi Col(std::string name, const ExprApi& input) {
 
 ExprApi Cast(velox::TypePtr type, const ExprApi& input) {
   return ExprApi{std::make_shared<const core::CastExpr>(
-      type, input.expr(), /* isTryCat */ false, kNoAlias)};
+      type, input.expr(), /* isTryCast */ false, kNoAlias)};
+}
+
+ExprApi TryCast(velox::TypePtr type, const ExprApi& input) {
+  return ExprApi{std::make_shared<const core::CastExpr>(
+      type, input.expr(), /* isTryCast */ true, kNoAlias)};
 }
 
 ExprApi Lit(Variant&& val) {

@@ -16,8 +16,8 @@
 
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/optimizer/FunctionRegistry.h"
-#include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
+#include "axiom/optimizer/ToGraph.h"
 
 namespace lp = facebook::velox::logical_plan;
 
@@ -194,7 +194,7 @@ lp::ConstantExprPtr ToGraph::tryFoldConstant(const lp::ExprPtr expr) {
   }
   if (looksConstant(expr)) {
     auto literal = translateExpr(expr);
-    if (literal->type() == PlanType::kLiteralExpr) {
+    if (literal->is(PlanType::kLiteralExpr)) {
       return std::make_shared<lp::ConstantExpr>(
           toTypePtr(literal->value().type),
           std::make_shared<Variant>(literal->as<Literal>()->literal()));

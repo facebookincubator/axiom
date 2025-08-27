@@ -118,7 +118,7 @@ PlanBuilder& PlanBuilder::tableScan(
   VELOX_USER_CHECK_NULL(node_, "Table scan node must be the leaf node");
 
   auto* metadata = connector::getConnector(connectorId)->metadata();
-  auto* table = metadata->findTable(tableName);
+  auto table = metadata->findTable(tableName);
   VELOX_USER_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
   const auto& schema = table->rowType();
 
@@ -163,7 +163,7 @@ PlanBuilder& PlanBuilder::tableScan(
   VELOX_USER_CHECK_NULL(node_, "Table scan node must be the leaf node");
 
   auto* metadata = connector::getConnector(connectorId)->metadata();
-  auto* table = metadata->findTable(tableName);
+  auto table = metadata->findTable(tableName);
   VELOX_USER_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
   const auto& schema = table->rowType();
 
@@ -241,21 +241,27 @@ void PlanBuilder::resolveProjections(
   for (const auto& untypedExpr : projections) {
     auto expr = resolveScalarTypes(untypedExpr.expr());
 
-    if (!untypedExpr.name().empty()) {
-      const auto& alias = untypedExpr.name();
-      outputNames.push_back(newName(alias));
-      mappings.add(alias, outputNames.back());
-    } else if (expr->isInputReference()) {
+    const auto& alias = untypedExpr.name();
+
+    if (expr->isInputReference()) {
       // Identity projection
       const auto& id = expr->asUnchecked<InputReferenceExpr>()->name();
-      outputNames.push_back(id);
+      if (!alias.has_value() || id == alias.value()) {
+        outputNames.push_back(id);
 
-      const auto names = outputMapping_->reverseLookup(id);
-      VELOX_USER_CHECK(!names.empty());
+        const auto names = outputMapping_->reverseLookup(id);
+        VELOX_USER_CHECK(!names.empty());
 
-      for (const auto& name : names) {
-        mappings.add(name, id);
+        for (const auto& name : names) {
+          mappings.add(name, id);
+        }
+      } else {
+        outputNames.push_back(newName(alias.value()));
+        mappings.add(alias.value(), outputNames.back());
       }
+    } else if (alias.has_value()) {
+      outputNames.push_back(newName(alias.value()));
+      mappings.add(alias.value(), outputNames.back());
     } else {
       outputNames.push_back(newName("expr"));
     }
@@ -325,6 +331,12 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
 PlanBuilder& PlanBuilder::aggregate(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates) {
+  return aggregate(parse(groupingKeys), parse(aggregates));
+}
+
+PlanBuilder& PlanBuilder::aggregate(
+    const std::vector<ExprApi>& groupingKeys,
+    const std::vector<ExprApi>& aggregates) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Aggregate node cannot be a leaf node");
 
   std::vector<std::string> outputNames;
@@ -335,18 +347,16 @@ PlanBuilder& PlanBuilder::aggregate(
 
   auto newOutputMapping = std::make_shared<NameMappings>();
 
-  resolveProjections(
-      parse(groupingKeys), outputNames, keyExprs, *newOutputMapping);
+  resolveProjections(groupingKeys, outputNames, keyExprs, *newOutputMapping);
 
   std::vector<AggregateExprPtr> exprs;
   exprs.reserve(aggregates.size());
 
-  for (const auto& sql : aggregates) {
-    auto untypedExpr = parse::parseExpr(sql, parseOptions_);
-    auto expr = resolveAggregateTypes(untypedExpr);
+  for (const auto& aggregate : aggregates) {
+    auto expr = resolveAggregateTypes(aggregate.expr());
 
-    if (untypedExpr->alias().has_value()) {
-      const auto& alias = untypedExpr->alias().value();
+    if (aggregate.name().has_value()) {
+      const auto& alias = aggregate.name().value();
       outputNames.push_back(newName(alias));
       newOutputMapping->add(alias, outputNames.back());
     } else {
@@ -363,6 +373,101 @@ PlanBuilder& PlanBuilder::aggregate(
       std::vector<AggregateNode::GroupingSet>{},
       exprs,
       outputNames);
+
+  outputMapping_ = newOutputMapping;
+
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::unnest(
+    const std::vector<std::string>& unnestExprs,
+    bool withOrdinality) {
+  return unnest(parse(unnestExprs), withOrdinality);
+}
+
+PlanBuilder& PlanBuilder::unnest(
+    const std::vector<ExprApi>& unnestExprs,
+    bool withOrdinality) {
+  return unnest(unnestExprs, withOrdinality, std::nullopt, {});
+}
+
+PlanBuilder& PlanBuilder::unnest(
+    const std::vector<ExprApi>& unnestExprs,
+    bool withOrdinality,
+    const std::optional<std::string>& alias,
+    const std::vector<std::string>& unnestAliases) {
+  auto newOutputMapping =
+      node_ != nullptr ? outputMapping_ : std::make_shared<NameMappings>();
+
+  size_t index = 0;
+
+  auto addOutputMapping = [&](const std::string& name, const std::string& id) {
+    if (!newOutputMapping->lookup(name)) {
+      newOutputMapping->add(name, id);
+    }
+    newOutputMapping->add({.alias = alias, .name = name}, id);
+    ++index;
+  };
+
+  std::vector<ExprPtr> exprs;
+  std::vector<std::vector<std::string>> outputNames;
+  for (const auto& unnestExpr : unnestExprs) {
+    auto expr = resolveScalarTypes(unnestExpr.expr());
+    exprs.push_back(expr);
+
+    if (!unnestExpr.unnestedAliases().empty()) {
+      outputNames.emplace_back();
+      for (const std::string& alias : unnestExpr.unnestedAliases()) {
+        outputNames.back().emplace_back(newName(alias));
+        newOutputMapping->add(alias, outputNames.back().back());
+      }
+    } else {
+      switch (expr->type()->kind()) {
+        case TypeKind::ARRAY:
+          if (!unnestAliases.empty()) {
+            VELOX_USER_CHECK_LT(index, unnestAliases.size());
+
+            const auto& outputName = unnestAliases.at(index);
+            outputNames.emplace_back(
+                std::vector<std::string>{newName(outputName)});
+
+            addOutputMapping(outputName, outputNames.back().back());
+          } else {
+            outputNames.emplace_back(std::vector<std::string>{newName("e")});
+          }
+          break;
+
+        case TypeKind::MAP:
+          if (!unnestAliases.empty()) {
+            VELOX_USER_CHECK_LT(index, unnestAliases.size());
+
+            const auto& keyName = unnestAliases.at(index);
+            const auto& valueName = unnestAliases.at(index + 1);
+            outputNames.emplace_back(
+                std::vector<std::string>{newName(keyName), newName(valueName)});
+
+            addOutputMapping(keyName, outputNames.back().at(0));
+            addOutputMapping(valueName, outputNames.back().at(1));
+          } else {
+            outputNames.emplace_back(
+                std::vector<std::string>{newName("k"), newName("v")});
+          }
+          break;
+
+        default:
+          VELOX_USER_FAIL(
+              "Unsupported type to unnest: {}", expr->type()->toString());
+      }
+    }
+  }
+
+  std::optional<std::string> ordinalityName;
+  if (withOrdinality) {
+    ordinalityName = newName("orginality");
+  }
+
+  node_ = std::make_shared<UnnestNode>(
+      nextId(), node_, exprs, outputNames, ordinalityName, withOrdinality);
 
   outputMapping_ = newOutputMapping;
 
@@ -423,11 +528,34 @@ std::string toString(
   return out.str();
 }
 
+void applyCoersions(
+    std::vector<ExprPtr>& inputs,
+    const std::vector<TypePtr>& coersions) {
+  if (coersions.empty()) {
+    return;
+  }
+
+  for (auto i = 0; i < inputs.size(); ++i) {
+    if (const auto& coersion = coersions.at(i)) {
+      inputs[i] = std::make_shared<SpecialFormExpr>(
+          coersion, SpecialForm::kCast, inputs[i]);
+    }
+  }
+}
+
 TypePtr resolveScalarFunction(
     const std::string& name,
-    const std::vector<TypePtr>& argTypes) {
-  if (auto type = resolveFunction(name, argTypes)) {
-    return type;
+    const std::vector<TypePtr>& argTypes,
+    bool allowCoersions,
+    std::vector<TypePtr>& coercions) {
+  if (allowCoersions) {
+    if (auto type = resolveFunctionWithCoercions(name, argTypes, coercions)) {
+      return type;
+    }
+  } else {
+    if (auto type = resolveFunction(name, argTypes)) {
+      return type;
+    }
   }
 
   auto allSignatures = getFunctionSignatures();
@@ -702,7 +830,10 @@ ExprPtr ExprResolver::tryResolveCallWithLambdas(
     types.push_back(child->type());
   }
 
-  auto returnType = resolveScalarFunction(callExpr->name(), types);
+  std::vector<TypePtr> coersions;
+  auto returnType = resolveScalarFunction(
+      callExpr->name(), types, enableCoersions_, coersions);
+  applyCoersions(children, coersions);
 
   return std::make_shared<CallExpr>(returnType, callExpr->name(), children);
 }
@@ -715,7 +846,7 @@ core::TypedExprPtr ExprResolver::makeConstantTypedExpr(
 }
 
 ExprPtr ExprResolver::makeConstant(const VectorPtr& vector) const {
-  auto variant = std::make_shared<Variant>(vectorToVariant(vector, 0));
+  auto variant = std::make_shared<Variant>(vector->variantAt(0));
   return std::make_shared<ConstantExpr>(vector->type(), std::move(variant));
 }
 
@@ -732,6 +863,7 @@ ExprPtr ExprResolver::tryFoldCall(
     }
   }
   std::vector<core::TypedExprPtr> args;
+  args.reserve(inputs.size());
   for (const auto& arg : inputs) {
     args.push_back(makeConstantTypedExpr(arg));
   }
@@ -809,6 +941,12 @@ ExprPtr ExprResolver::resolveScalarTypes(
 
     auto input = resolveScalarTypes(fieldAccess->input(), inputNameResolver);
 
+    VELOX_USER_CHECK_EQ(
+        input->type()->kind(),
+        TypeKind::ROW,
+        "Expected a struct, but got {}",
+        input->type()->toString());
+
     return std::make_shared<SpecialFormExpr>(
         input->type()->asRow().findChild(name),
         SpecialForm::kDereference,
@@ -859,7 +997,12 @@ ExprPtr ExprResolver::resolveScalarTypes(
       inputTypes.push_back(input->type());
     }
 
-    auto type = resolveScalarFunction(name, inputTypes);
+    std::vector<TypePtr> coersions;
+    auto type =
+        resolveScalarFunction(name, inputTypes, enableCoersions_, coersions);
+
+    applyCoersions(inputs, coersions);
+
     auto folded = tryFoldCall(type, name, inputs);
     if (folded != nullptr) {
       return folded;
@@ -873,6 +1016,7 @@ ExprPtr ExprResolver::resolveScalarTypes(
     if (folded != nullptr) {
       return folded;
     }
+
     return std::make_shared<SpecialFormExpr>(
         cast->type(),
         cast->isTryCast() ? SpecialForm::kTryCast : SpecialForm::kCast,
@@ -891,7 +1035,8 @@ AggregateExprPtr ExprResolver::resolveAggregateTypes(
     const core::ExprPtr& expr,
     const InputNameResolver& inputNameResolver) const {
   const auto* call = dynamic_cast<const core::CallExpr*>(expr.get());
-  VELOX_USER_CHECK_NOT_NULL(call, "Aggregate must be a call expression");
+  VELOX_USER_CHECK_NOT_NULL(
+      call, "Aggregate must be a call expression: {}", expr->toString());
 
   const auto& name = call->name();
 
@@ -928,6 +1073,18 @@ PlanBuilder& PlanBuilder::join(
     const PlanBuilder& right,
     const std::string& condition,
     JoinType joinType) {
+  std::optional<ExprApi> conditionExpr;
+  if (!condition.empty()) {
+    conditionExpr = parse::parseExpr(condition, parseOptions_);
+  }
+
+  return join(right, conditionExpr, joinType);
+}
+
+PlanBuilder& PlanBuilder::join(
+    const PlanBuilder& right,
+    const std::optional<ExprApi>& condition,
+    JoinType joinType) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Join node cannot be a leaf node");
   VELOX_USER_CHECK_NOT_NULL(right.node_);
 
@@ -939,10 +1096,9 @@ PlanBuilder& PlanBuilder::join(
   auto inputRowType = node_->outputType()->unionWith(right.node_->outputType());
 
   ExprPtr expr;
-  if (!condition.empty()) {
-    auto untypedExpr = parse::parseExpr(condition, parseOptions_);
+  if (condition.has_value()) {
     expr = resolver_.resolveScalarTypes(
-        untypedExpr, [&](const auto& alias, const auto& name) {
+        condition->expr(), [&](const auto& alias, const auto& name) {
           return resolveJoinInputName(
               alias, name, *outputMapping_, inputRowType);
         });
@@ -1024,6 +1180,24 @@ PlanBuilder& PlanBuilder::sort(const std::vector<std::string>& sortingKeys) {
   return *this;
 }
 
+PlanBuilder& PlanBuilder::sort(const std::vector<SortKey>& sortingKeys) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Sort node cannot be a leaf node");
+
+  std::vector<SortingField> sortingFields;
+  sortingFields.reserve(sortingKeys.size());
+
+  for (const auto& key : sortingKeys) {
+    auto expr = resolveScalarTypes(key.expr.expr());
+
+    sortingFields.push_back(
+        SortingField{expr, SortOrder(key.ascending, key.nullsFirst)});
+  }
+
+  node_ = std::make_shared<SortNode>(nextId(), node_, sortingFields);
+
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::limit(int64_t offset, int64_t count) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Limit node cannot be a leaf node");
 
@@ -1044,6 +1218,11 @@ PlanBuilder& PlanBuilder::offset(int64_t offset) {
 ExprPtr PlanBuilder::resolveInputName(
     const std::optional<std::string>& alias,
     const std::string& name) const {
+  if (outputMapping_ == nullptr) {
+    VELOX_CHECK_NOT_NULL(outerScope_);
+    return outerScope_(alias, name);
+  }
+
   if (alias.has_value()) {
     if (auto id = outputMapping_->lookup(alias.value(), name)) {
       return std::make_shared<InputReferenceExpr>(
@@ -1097,8 +1276,50 @@ std::string PlanBuilder::newName(const std::string& hint) {
   return nameAllocator_->newName(hint);
 }
 
+size_t PlanBuilder::numOutput() const {
+  VELOX_CHECK_NOT_NULL(node_);
+  return node_->outputType()->size();
+}
+
+std::vector<std::string> PlanBuilder::findOrAssignOutputNames() const {
+  auto size = numOutput();
+
+  std::vector<std::string> names;
+  names.reserve(size);
+
+  for (auto i = 0; i < size; i++) {
+    names.push_back(findOrAssignOutputNameAt(i));
+  }
+
+  return names;
+}
+
+std::string PlanBuilder::findOrAssignOutputNameAt(size_t index) const {
+  const auto size = numOutput();
+  VELOX_CHECK_LT(index, size, "{}", node_->outputType()->toString());
+
+  auto id = node_->outputType()->nameOf(index);
+
+  auto names = outputMapping_->reverseLookup(id);
+  if (names.empty()) {
+    // Assign a name to the output column.
+    outputMapping_->add(id, id);
+    return id;
+  }
+
+  // Prefer non-aliased name.
+  for (const auto& name : names) {
+    if (!name.alias.has_value()) {
+      return name.name;
+    }
+  }
+
+  return names.front().name;
+}
+
 LogicalPlanNodePtr PlanBuilder::build() {
   VELOX_USER_CHECK_NOT_NULL(node_);
+  VELOX_USER_CHECK_NOT_NULL(outputMapping_);
 
   // Use user-specified names for the output. Should we add an OutputNode?
 

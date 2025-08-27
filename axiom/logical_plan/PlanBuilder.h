@@ -45,8 +45,10 @@ class ExprResolver {
 
   ExprResolver(
       std::shared_ptr<core::QueryCtx> queryCtx,
+      bool enableCoersions,
       FunctionRewriteHook hook = nullptr)
       : queryCtx_(std::move(queryCtx)),
+        enableCoersions_{enableCoersions},
         hook_(hook),
         pool_(
             queryCtx_ ? queryCtx_->pool()->addLeafChild(
@@ -89,6 +91,7 @@ class ExprResolver {
       const std::vector<ExprPtr>& inputs) const;
 
   std::shared_ptr<core::QueryCtx> queryCtx_;
+  const bool enableCoersions_;
   FunctionRewriteHook hook_;
   std::shared_ptr<memory::MemoryPool> pool_;
   static inline int32_t literalsCounter_{0};
@@ -119,20 +122,23 @@ class PlanBuilder {
       const std::optional<std::string>& alias,
       const std::string& name)>;
 
-  PlanBuilder(Scope outerScope = nullptr)
+  PlanBuilder(bool enableCoersions = false, Scope outerScope = nullptr)
       : planNodeIdGenerator_(std::make_shared<core::PlanNodeIdGenerator>()),
         nameAllocator_(std::make_shared<NameAllocator>()),
         outerScope_{std::move(outerScope)},
         parseOptions_{.parseInListAsArray = false},
-        resolver_(nullptr, nullptr) {}
+        resolver_(nullptr, enableCoersions, nullptr) {}
 
-  explicit PlanBuilder(const Context& context, Scope outerScope = nullptr)
+  explicit PlanBuilder(
+      const Context& context,
+      bool enableCoersions = false,
+      Scope outerScope = nullptr)
       : defaultConnectorId_(context.defaultConnectorId),
         planNodeIdGenerator_{context.planNodeIdGenerator},
         nameAllocator_{context.nameAllocator},
         outerScope_{std::move(outerScope)},
         parseOptions_{.parseInListAsArray = false},
-        resolver_(context.queryCtx, context.hook) {
+        resolver_(context.queryCtx, enableCoersions, context.hook) {
     VELOX_CHECK_NOT_NULL(planNodeIdGenerator_);
     VELOX_CHECK_NOT_NULL(nameAllocator_);
   }
@@ -222,9 +228,51 @@ class PlanBuilder {
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates);
 
+  PlanBuilder& aggregate(
+      const std::vector<ExprApi>& groupingKeys,
+      const std::vector<ExprApi>& aggregates);
+
+  /// Starts or continues the plan with an Unnest node. Uses auto-generated
+  /// names for unnested columns. Use the version of 'unnest' API that takes
+  /// ExprApi together with ExprApi::unnestAs to provide aliases for unnested
+  /// columns.
+  ///
+  /// Example:
+  ///
+  ///     PlanBuilder()
+  ///       .unnest({Lit(Variant::array({1, 2, 3})).unnestAs("x")})
+  ///       .build();
+  ///
+  /// @param unnestExprs A list of constant expressions to unnest.
+  PlanBuilder& unnest(
+      const std::vector<std::string>& unnestExprs,
+      bool withOrdinality = false);
+
+  PlanBuilder& unnest(
+      const std::vector<ExprApi>& unnestExprs,
+      bool withOrdinality = false);
+
+  /// An alternative way to specify aliases for unnested columns. A preferred
+  /// way is by using ExprApi::unnestAs.
+  ///
+  /// @param alias Optional alias for the relation produced by unnest.
+  /// @param columnAliases An optional list of aliases for columns produced by
+  /// unnest. The list can be empty or must have a non-empty alias for each
+  /// column.
+  PlanBuilder& unnest(
+      const std::vector<ExprApi>& unnestExprs,
+      bool withOrdinality,
+      const std::optional<std::string>& alias,
+      const std::vector<std::string>& columnAliases);
+
   PlanBuilder& join(
       const PlanBuilder& right,
       const std::string& condition,
+      JoinType joinType);
+
+  PlanBuilder& join(
+      const PlanBuilder& right,
+      const std::optional<ExprApi>& condition,
       JoinType joinType);
 
   PlanBuilder& crossJoin(const PlanBuilder& right) {
@@ -242,6 +290,8 @@ class PlanBuilder {
       const std::vector<PlanBuilder>& inputs);
 
   PlanBuilder& sort(const std::vector<std::string>& sortingKeys);
+
+  PlanBuilder& sort(const std::vector<SortKey>& sortingKeys);
 
   /// An alias for 'sort'.
   PlanBuilder& orderBy(const std::vector<std::string>& sortingKeys) {
@@ -265,6 +315,17 @@ class PlanBuilder {
 
     return *this;
   }
+
+  /// Returns the number of output columns.
+  size_t numOutput() const;
+
+  /// Returns the names of the output columns. If some colums are anonymous,
+  /// assigns them unique names before returning.
+  std::vector<std::string> findOrAssignOutputNames() const;
+
+  /// Returns the name of the output column at the given index. If the column is
+  /// anonymous, assigns unique name before returning.
+  std::string findOrAssignOutputNameAt(size_t index) const;
 
   LogicalPlanNodePtr build();
 

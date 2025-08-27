@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
+#include "axiom/optimizer/connectors/tpch/TpchConnectorMetadata.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
@@ -35,9 +36,11 @@ using namespace facebook::velox::exec::test;
 namespace facebook::velox::optimizer::test {
 
 namespace {
-void doCreateTables(const std::string& path) {
+void doCreateTables(std::string_view path) {
   auto rootPool = memory::memoryManager()->addRootPool();
   auto pool = rootPool->addLeafChild("leaf");
+
+  LOG(INFO) << "Creating TPC-H tables in " << path;
 
   for (const auto& table : tpch::tables) {
     const auto tableName = tpch::toTableName(table);
@@ -80,24 +83,19 @@ void doCreateTables(const std::string& path) {
   }
 }
 
+void registerHiveConnector(const std::string& id) {
+  auto emptyConfig = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>());
+
+  connector::hive::HiveConnectorFactory factory;
+  connector::registerConnector(factory.newConnector(id, emptyConfig));
+}
+
 } // namespace
 
-std::shared_ptr<TempDirectoryPath> ParquetTpchTest::tempDirectory_;
-
 //  static
-void ParquetTpchTest::createTables() {
+void ParquetTpchTest::createTables(std::string_view path) {
   memory::MemoryManager::testingSetInstance(memory::MemoryManagerOptions{});
-
-  std::string createPath;
-  if (FLAGS_data_path.empty()) {
-    tempDirectory_ = TempDirectoryPath::create();
-    createPath = tempDirectory_->getPath();
-    FLAGS_data_path = createPath;
-  } else if (FLAGS_create_dataset) {
-    createPath = FLAGS_data_path;
-  } else {
-    return;
-  }
 
   SCOPE_EXIT {
     connector::unregisterConnector(
@@ -121,12 +119,21 @@ void ParquetTpchTest::createTables() {
       std::string(PlanBuilder::kHiveDefaultConnectorId), emptyConfig);
   connector::registerConnector(std::move(hiveConnector));
 
-  connector::tpch::TpchConnectorFactory tpchConnectorFactory;
-  auto tpchConnector = tpchConnectorFactory.newConnector(
-      std::string(PlanBuilder::kTpchDefaultConnectorId), emptyConfig);
-  connector::registerConnector(std::move(tpchConnector));
+  registerTpchConnector(std::string(PlanBuilder::kTpchDefaultConnectorId));
 
-  doCreateTables(createPath);
+  doCreateTables(path);
+}
+
+// static
+void ParquetTpchTest::registerTpchConnector(const std::string& id) {
+  connector::tpch::registerTpchConnectorMetadataFactory(
+      std::make_unique<connector::tpch::TpchConnectorMetadataFactoryImpl>());
+
+  auto emptyConfig = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>());
+
+  connector::tpch::TpchConnectorFactory factory;
+  connector::registerConnector(factory.newConnector(id, emptyConfig));
 }
 
 } // namespace facebook::velox::optimizer::test

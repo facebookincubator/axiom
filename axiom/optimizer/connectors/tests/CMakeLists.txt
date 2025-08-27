@@ -14,16 +14,16 @@
 
 velox_add_library(velox_test_connector TestConnector.cpp)
 
-velox_link_libraries(velox_test_connector velox_connector_metadata
-                     velox_common_base velox_memory velox_connector)
+velox_link_libraries(
+  velox_test_connector
+  velox_connector_metadata
+  velox_common_base
+  velox_memory
+  velox_connector)
 
-add_executable(
-  velox_test_connector_test
-  TestConnectorTest.cpp)
+add_executable(velox_test_connector_test TestConnectorTest.cpp)
 
-add_test(
-    velox_test_connector_test
-    velox_test_connector_test)
+add_test(velox_test_connector_test velox_test_connector_test)
 
 target_link_libraries(
   velox_test_connector_test

@@ -22,12 +22,60 @@ namespace lp = facebook::velox::logical_plan;
 namespace facebook::velox::optimizer::test {
 
 // static
-void HiveQueriesTestBase::SetUpTestCase() {
-  test::ParquetTpchTest::createTables();
+std::shared_ptr<exec::test::TempDirectoryPath>
+    HiveQueriesTestBase::tempDirectory_ = nullptr;
 
-  LocalRunnerTestBase::testDataPath_ = FLAGS_data_path;
+// static
+void HiveQueriesTestBase::SetUpTestCase() {
+  tempDirectory_ = exec::test::TempDirectoryPath::create();
+  test::ParquetTpchTest::createTables(tempDirectory_->getPath());
+
+  LocalRunnerTestBase::testDataPath_ = tempDirectory_->getPath();
   LocalRunnerTestBase::localFileFormat_ = "parquet";
   LocalRunnerTestBase::SetUpTestCase();
+}
+
+// static
+void HiveQueriesTestBase::TearDownTestCase() {
+  LocalRunnerTestBase::TearDownTestCase();
+  tempDirectory_.reset();
+}
+
+namespace {
+std::unique_ptr<DuckParser> makeDuckParser(velox::memory::MemoryPool* pool) {
+  auto parser =
+      std::make_unique<DuckParser>(exec::test::kHiveConnectorId, pool);
+
+  auto registerTable = [&](const std::string& name) {
+    auto table = connector::getConnector(exec::test::kHiveConnectorId)
+                     ->metadata()
+                     ->findTable(name);
+    parser->registerTable(name, table->rowType());
+  };
+
+  registerTable("region");
+  registerTable("nation");
+  registerTable("lineitem");
+  registerTable("orders");
+  registerTable("customer");
+  registerTable("supplier");
+  registerTable("part");
+  registerTable("partsupp");
+
+  return parser;
+}
+} // namespace
+
+void HiveQueriesTestBase::SetUp() {
+  test::QueryTestBase::SetUp();
+  test::ParquetTpchTest::registerTpchConnector(kTpchConnectorId);
+  duckParser_ = makeDuckParser(pool());
+  prestoParser_ = std::make_unique<PrestoParser>(kTpchConnectorId, pool());
+}
+
+void HiveQueriesTestBase::TearDown() {
+  connector::unregisterConnector(kTpchConnectorId);
+  test::QueryTestBase::TearDown();
 }
 
 RowTypePtr HiveQueriesTestBase::getSchema(const std::string& tableName) {
@@ -43,7 +91,7 @@ void HiveQueriesTestBase::checkResults(
   SCOPED_TRACE(sql);
   VELOX_CHECK_NOT_NULL(referencePlan);
 
-  auto statement = parser_->parse(sql);
+  auto statement = prestoParser_->parse(sql);
 
   ASSERT_TRUE(statement->isSelect());
   auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
@@ -106,26 +154,4 @@ void HiveQueriesTestBase::checkSingleNodePlan(
   ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
 }
 
-std::unique_ptr<QuerySqlParser> HiveQueriesTestBase::makeQueryParser() {
-  auto parser =
-      std::make_unique<QuerySqlParser>(exec::test::kHiveConnectorId, pool());
-
-  auto registerTable = [&](const std::string& name) {
-    auto* table = connector::getConnector(exec::test::kHiveConnectorId)
-                      ->metadata()
-                      ->findTable(name);
-    parser->registerTable(name, table->rowType());
-  };
-
-  registerTable("region");
-  registerTable("nation");
-  registerTable("lineitem");
-  registerTable("orders");
-  registerTable("customer");
-  registerTable("supplier");
-  registerTable("part");
-  registerTable("partsupp");
-
-  return parser;
-}
 } // namespace facebook::velox::optimizer::test

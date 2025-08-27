@@ -36,10 +36,11 @@ class ParquetTpchTest {
   ///   connector and
   ///       write to Hive connector.
   /// Unregisters Hive and TPC-H connectors before returning.
-  static void createTables();
+  ///
+  /// @return Returns newly created temp directory if any.
+  static void createTables(std::string_view path);
 
- private:
-  static std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
+  static void registerTpchConnector(const std::string& id);
 };
 
 } // namespace facebook::velox::optimizer::test

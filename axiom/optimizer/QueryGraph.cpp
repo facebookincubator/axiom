@@ -16,7 +16,7 @@
 
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/FunctionRegistry.h"
-#include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "velox/expression/ScopedVarSetter.h"
 
@@ -329,17 +329,16 @@ bool Expr::sameOrEqual(const Expr& other) const {
 }
 
 PlanObjectCP Expr::singleTable() const {
-  if (type() == PlanType::kColumnExpr) {
+  if (is(PlanType::kColumnExpr)) {
     return as<Column>()->relation();
   }
 
   PlanObjectCP table = nullptr;
   bool multiple = false;
-  columns_.forEach([&](PlanObjectCP object) {
-    VELOX_CHECK(object->type() == PlanType::kColumnExpr);
+  columns_.forEach<Column>([&](auto column) {
     if (!table) {
-      table = object->as<Column>()->relation();
-    } else if (table != object->as<Column>()->relation()) {
+      table = column->relation();
+    } else if (table != column->relation()) {
       multiple = true;
     }
   });
@@ -349,8 +348,7 @@ PlanObjectCP Expr::singleTable() const {
 
 PlanObjectSet Expr::allTables() const {
   PlanObjectSet set;
-  columns_.forEach(
-      [&](PlanObjectCP object) { set.add(object->as<Column>()->relation()); });
+  columns_.forEach<Column>([&](auto column) { set.add(column->relation()); });
   return set;
 }
 
@@ -370,7 +368,7 @@ Column::Column(
       path_(path) {
   columns_.add(this);
   subexpressions_.add(this);
-  if (relation_ && relation_->type() == PlanType::kTableNode) {
+  if (relation_ && relation_->is(PlanType::kTableNode)) {
     if (topColumn_) {
       schemaColumn_ = topColumn_->schemaColumn_;
     } else {
@@ -415,6 +413,13 @@ void JoinEdge::guessFanout() {
   if (fanoutsFixed_) {
     return;
   }
+
+  if (leftTable_ == nullptr) {
+    lrFanout_ = 1.1;
+    rlFanout_ = 1;
+    return;
+  }
+
   auto* opt = queryCtx()->optimization();
   auto samplePair = opt->history().sampleJoin(this);
   auto left = joinCardinality(leftTable_, toRangeCast<Column>(leftKeys_));

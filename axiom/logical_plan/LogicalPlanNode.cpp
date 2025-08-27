@@ -20,8 +20,8 @@
 namespace facebook::velox::logical_plan {
 
 namespace {
-folly::F14FastMap<NodeKind, std::string> nodeKindNames() {
-  return {
+const folly::F14FastMap<NodeKind, std::string>& nodeKindNames() {
+  static const folly::F14FastMap<NodeKind, std::string> kNames{
       {NodeKind::kValues, "VALUES"},
       {NodeKind::kTableScan, "TABLE_SCAN"},
       {NodeKind::kFilter, "FILTER"},
@@ -33,6 +33,8 @@ folly::F14FastMap<NodeKind, std::string> nodeKindNames() {
       {NodeKind::kSet, "SET"},
       {NodeKind::kUnnest, "UNNEST"},
   };
+
+  return kNames;
 }
 } // namespace
 
@@ -187,13 +189,15 @@ void AggregateNode::accept(
 }
 
 namespace {
-folly::F14FastMap<JoinType, std::string> joinTypeNames() {
-  return {
+const folly::F14FastMap<JoinType, std::string>& joinTypeNames() {
+  static const folly::F14FastMap<JoinType, std::string> kNames{
       {JoinType::kInner, "INNER"},
       {JoinType::kLeft, "LEFT"},
       {JoinType::kRight, "RIGHT"},
       {JoinType::kFull, "FULL"},
   };
+
+  return kNames;
 }
 } // namespace
 
@@ -229,13 +233,15 @@ void LimitNode::accept(
 }
 
 namespace {
-folly::F14FastMap<SetOperation, std::string> setOperationNames() {
-  return {
+const folly::F14FastMap<SetOperation, std::string>& setOperationNames() {
+  static const folly::F14FastMap<SetOperation, std::string> kNames{
       {SetOperation::kUnion, "UNION"},
       {SetOperation::kUnionAll, "UNION ALL"},
       {SetOperation::kIntersect, "INTERSECT"},
       {SetOperation::kExcept, "EXCEPT"},
   };
+
+  return kNames;
 }
 } // namespace
 
@@ -292,7 +298,14 @@ RowTypePtr UnnestNode::makeOutputType(
       0,
       "Unnest requires at least one ARRAY or MAP to expand");
 
-  auto size = input->outputType()->size();
+  RowTypePtr inputType;
+  if (input != nullptr) {
+    inputType = input->outputType();
+  } else {
+    inputType = ROW({});
+  }
+
+  auto size = inputType->size();
   for (const auto& names : unnestedNames) {
     size += names.size();
   }
@@ -303,8 +316,8 @@ RowTypePtr UnnestNode::makeOutputType(
   std::vector<TypePtr> types;
   types.reserve(size);
 
-  names = input->outputType()->names();
-  types = input->outputType()->children();
+  names = inputType->names();
+  types = inputType->children();
 
   const auto numUnnest = unnestExpressions.size();
   for (auto i = 0; i < numUnnest; ++i) {

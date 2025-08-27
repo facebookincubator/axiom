@@ -36,15 +36,26 @@ class PlanTest : public test::QueryTestBase {
   static constexpr auto kTestConnectorId = "test";
 
   static void SetUpTestCase() {
-    test::ParquetTpchTest::createTables();
+    std::string path;
+    if (FLAGS_data_path.empty()) {
+      tempDirectory_ = exec::test::TempDirectoryPath::create();
+      path = tempDirectory_->getPath();
+      test::ParquetTpchTest::createTables(path);
+    } else {
+      path = FLAGS_data_path;
+      if (FLAGS_create_dataset) {
+        test::ParquetTpchTest::createTables(path);
+      }
+    }
 
-    LocalRunnerTestBase::testDataPath_ = FLAGS_data_path;
+    LocalRunnerTestBase::testDataPath_ = path;
     LocalRunnerTestBase::localFileFormat_ = "parquet";
     LocalRunnerTestBase::SetUpTestCase();
   }
 
   static void TearDownTestCase() {
     LocalRunnerTestBase::TearDownTestCase();
+    tempDirectory_.reset();
   }
 
   void SetUp() override {
@@ -94,8 +105,14 @@ class PlanTest : public test::QueryTestBase {
     return plan->fragments().at(0).fragment.planNode;
   }
 
+  static std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
+
   std::shared_ptr<connector::TestConnector> testConnector_;
 };
+
+// static
+std::shared_ptr<exec::test::TempDirectoryPath> PlanTest::tempDirectory_ =
+    nullptr;
 
 auto gte(const std::string& name, int64_t n) {
   return common::test::singleSubfieldFilter(name, exec::greaterThanOrEqual(n));
@@ -214,6 +231,100 @@ TEST_F(PlanTest, rejectedFilters) {
   ASSERT_TRUE(matcher->match(plan));
 }
 
+TEST_F(PlanTest, specialFormConstantFold) {
+  testConnector_->createTable(
+      "numbers", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), BIGINT()}));
+
+  struct TestCase {
+    std::string expression;
+    std::optional<std::string> expectedExpression;
+  };
+
+  std::vector<TestCase> filterTestCases = {
+      {"1 in (1, 2, 3)", std::nullopt},
+      {"if(2 > 1, true, false)", std::nullopt},
+      {"true or 2 < 1", std::nullopt},
+      {"cast(1 as BOOLEAN)", std::nullopt},
+      {"try_cast(1 as BOOLEAN)", std::nullopt},
+      {"coalesce(cast(null as boolean), true)", std::nullopt},
+      {"case when 2 > 1 then true else false end", std::nullopt},
+      {"if(1 > 2, 3 + 4, 4 + 5) > 8", std::nullopt},
+      {"1 in (2, 3)", "false"},
+      {"if(2 < 1, true, false)", "false"},
+      {"1 > 2 or false", "false"},
+      {"cast(0 as BOOLEAN)", "false"},
+      {"try_cast(1 as BIGINT) > 4", "false"},
+      {"try(10 / 1) > 4", std::nullopt},
+      {"coalesce(cast(null as boolean), false)", "false"},
+      {"case when 1 > 2 then true else false end", "false"},
+      {"try_cast('a' as BIGINT) > 4", "null"},
+      {"if(a > b, 1 + 2, c) > b + 3", "if(a > b, 3, c) > b + 3"},
+      {"if(a > b, 1 + 2, 3 + 4) > b + 3", "if(a > b, 3, 7) > b + 3"},
+  };
+
+  for (const auto& testCase : filterTestCases) {
+    SCOPED_TRACE("Filter: " + testCase.expression);
+    auto logicalPlan = lp::PlanBuilder()
+                           .tableScan(kTestConnectorId, "numbers")
+                           .filter(testCase.expression)
+                           .map({"a + 2"})
+                           .build();
+
+    auto matcher = testCase.expectedExpression.has_value()
+        ? core::PlanMatcherBuilder()
+              .tableScan()
+              .filter(testCase.expectedExpression.value())
+              .project()
+              .build()
+        : core::PlanMatcherBuilder().tableScan().project().build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  std::vector<TestCase> prjectTestCases = {
+      {"if(2 > 1, 1, 0)", "1"},
+      {"if(2 < 1, 1, 0)", "0"},
+      {"cast(1 as BOOLEAN)", "true"},
+      {"cast(0 as BOOLEAN)", "false"},
+      {"try_cast(1 as BOOLEAN)", "true"},
+      {"coalesce(cast(null as bigint), 42)", "42"},
+      {"case when 2 > 1 then 100 else 200 end", "100"},
+      {"case when 1 > 2 then 100 else 200 end", "200"},
+      {"1 + 2", "3"},
+      {"10 - 5", "5"},
+      {"3 * 4", "12"},
+      {"15 / 3", "5"},
+      {"2 + 3 * 4", "14"},
+      {"(2 + 3) * 4", "20"},
+      {"if(a > b, 1 + 2, c)", "if(a > b, 3, c)"},
+      {"if(a > b, 1 + 2, 3 + 4)", "if(a > b, 3, 7)"},
+      {"case when a > 0 then 5 + 5 else b + 1 end",
+       "case when a > 0 then 10 else b + 1 end"},
+      {"try(10 / 1)", "10"},
+      {"try_cast(1 as BIGINT)", "1"},
+      {"coalesce(1 + 1, a)", "coalesce(2, a)"},
+      {"coalesce(cast(null as bigint), 5 * 2)", "10"},
+  };
+
+  for (const auto& testCase : prjectTestCases) {
+    SCOPED_TRACE("Expression: " + testCase.expression);
+    auto logicalPlan = lp::PlanBuilder()
+                           .tableScan(kTestConnectorId, "numbers")
+                           .project({testCase.expression, "a", "b"})
+                           .build();
+
+    ASSERT_TRUE(testCase.expectedExpression.has_value());
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .project({testCase.expectedExpression.value(), "a", "b"})
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    ASSERT_TRUE(matcher->match(plan));
+  }
+}
+
 TEST_F(PlanTest, inList) {
   testConnector_->createTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
@@ -228,7 +339,7 @@ TEST_F(PlanTest, inList) {
   {
     auto logicalPlan = scan().filter("1 in (1, 2, 3)").map({"a + 2"}).build();
 
-    auto matcher = scanMatcher().filter("true").project().build();
+    auto matcher = scanMatcher().project().build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     ASSERT_TRUE(matcher->match(plan));
@@ -498,7 +609,7 @@ TEST_F(PlanTest, filterBreakup) {
 
   auto referenceBuilder = std::make_unique<exec::test::TpchQueryBuilder>(
       dwio::common::FileFormat::PARQUET);
-  referenceBuilder->initialize(FLAGS_data_path);
+  referenceBuilder->initialize(LocalRunnerTestBase::testDataPath_);
 
   auto referencePlan = referenceBuilder->getQueryPlan(19).plan;
 

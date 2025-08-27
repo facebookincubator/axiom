@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/connectors/ConnectorSplitSource.h"
 #include "axiom/runner/LocalRunner.h"
@@ -183,7 +184,7 @@ std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
   auto plan = queryCtx()->optimization()->toVeloxPlan(filter);
   return std::make_shared<axiom::runner::LocalRunner>(
       plan.plan,
-      sampleQueryCtx(queryCtx()->optimization()->queryCtxShared()),
+      sampleQueryCtx(queryCtx()->optimization()->veloxQueryCtx()),
       std::make_shared<connector::ConnectorSplitSourceFactory>());
 }
 
@@ -259,8 +260,8 @@ std::pair<float, float> sampleJoin(
       [leftRunner]() { return runJoinSample(*leftRunner); });
   auto rightRun = std::make_shared<AsyncSource<KeyFreq>>(
       [rightRunner]() { return runJoinSample(*rightRunner); });
-  auto executor = queryCtx()->optimization()->queryCtxShared()->executor();
-  if (executor) {
+
+  if (auto executor = queryCtx()->optimization()->veloxQueryCtx()->executor()) {
     executor->add([leftRun]() { leftRun->prepare(); });
     executor->add([rightRun]() { rightRun->prepare(); });
   }

@@ -11,37 +11,27 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 name: Linux Build
-
 on:
   push:
     branches:
       - main
     paths:
       - axiom/**
-      - velox/**
-      - '!velox/docs/**'
       - CMakeLists.txt
       - .github/workflows/build_and_test.yml
       - Makefile
-
   pull_request:
     paths:
       - axiom/**
-      - velox/**
-      - '!velox/docs/**'
       - CMakeLists.txt
       - .github/workflows/build_and_test.yml
       - Makefile
-
 permissions:
   contents: read
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
   cancel-in-progress: true
-
 jobs:
   build-verax:
     name: Build Verax
@@ -57,30 +47,25 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           mkdir -p "$CCACHE_DIR"
-
       # Get ccache from stash
       - name: Get Ccache Stash
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-default-gcc
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           persist-credentials: false
-
       # Configure Git to trust the repository directory
       - name: Configure Git Safe Directory
         run: |
           git config --global --add safe.directory "/__w/verax/verax"
           git config --global --add safe.directory "*"
-
       - name: Clear CCache Statistics
         run: |
           ccache -sz
-
       # Build Verax
       - name: Build Verax Debug
         id: build-verax
@@ -90,26 +75,20 @@ jobs:
         run: |
           # Build with reduced parallelism
           make debug
-
       # Display ccache statistics after build
       - name: CCache Statistics After Build
-        if: always()  # Run even if build failed
+        if: always() # Run even if build failed
         run: |
           echo "CCache statistics after build:"
           ccache -vs
-
       # Save ccache for future runs
       - name: Save ccache
         uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-default-gcc
-
       # Run Verax tests (excluding velox tests)
       - name: Run Debug Tests
         working-directory: _build/debug
-        env:
-          # TODO: Fix failing tests and remove them from the GTEST_FILTER exclusion list - tracked in issue #204 (https://github.com/facebookexperimental/verax/issues/204)
-          GTEST_FILTER: "-TpchPlanTest.q01:TpchPlanTest.q03:TpchPlanTest.q05:HiveQueriesTest.basic:PlanTest.filterImport:PlanTest.intersect:PlanTest.except"
         run: |
           ctest -j 8 --output-on-failure --no-tests=error

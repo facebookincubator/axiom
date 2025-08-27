@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -170,8 +170,6 @@ velox::core::PlanNodePtr DistributedPlanBuilder::shuffleBroadcastResult() {
   auto* consumer = root_->stack_.back();
 
   VELOX_CHECK_GE(consumer->current_->width, 1);
-  VELOX_CHECK_EQ(fragments_.back().numBroadcastDestinations, 0);
-  fragments_.back().numBroadcastDestinations = consumer->current_->width;
 
   root_->appendFragments(std::move(fragments_));
 

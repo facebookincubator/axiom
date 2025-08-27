@@ -18,9 +18,7 @@
 #include <gtest/gtest.h>
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/optimizer/tests/ParquetTpchTest.h"
-#include "axiom/optimizer/tests/QuerySqlParser.h"
-#include "axiom/optimizer/tests/QueryTestBase.h"
+#include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 
@@ -35,82 +33,49 @@ namespace lp = facebook::velox::logical_plan;
 namespace facebook::velox::optimizer {
 namespace {
 
-class TpchPlanTest : public virtual test::QueryTestBase {
+class TpchPlanTest : public virtual test::HiveQueriesTestBase {
  protected:
   static void SetUpTestCase() {
-    test::ParquetTpchTest::createTables();
-
-    LocalRunnerTestBase::testDataPath_ = FLAGS_data_path;
-    LocalRunnerTestBase::localFileFormat_ = "parquet";
-    LocalRunnerTestBase::SetUpTestCase();
+    test::HiveQueriesTestBase::SetUpTestCase();
   }
 
   static void TearDownTestCase() {
     if (!FLAGS_history_save_path.empty()) {
       suiteHistory().saveToFile(FLAGS_history_save_path);
     }
-    LocalRunnerTestBase::TearDownTestCase();
+    test::HiveQueriesTestBase::TearDownTestCase();
   }
 
   void SetUp() override {
-    QueryTestBase::SetUp();
+    HiveQueriesTestBase::SetUp();
 
     referenceBuilder_ = std::make_unique<exec::test::TpchQueryBuilder>(
         dwio::common::FileFormat::PARQUET);
-    referenceBuilder_->initialize(FLAGS_data_path);
+    referenceBuilder_->initialize(LocalRunnerTestBase::testDataPath_);
+  }
+
+  void TearDown() override {
+    HiveQueriesTestBase::TearDown();
   }
 
   void checkTpch(int32_t query, const lp::LogicalPlanNodePtr& logicalPlan) {
-    auto fragmentedPlan = planVelox(logicalPlan);
     auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
-
-    auto referenceResult = assertSame(referencePlan, fragmentedPlan);
-
-    if (FLAGS_num_workers != 1) {
-      auto singlePlan =
-          planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 4});
-      auto singleResult = runFragmentedPlan(singlePlan);
-      exec::test::assertEqualResults(
-          referenceResult.results, singleResult.results);
-    }
-  }
-
-  velox::optimizer::test::QuerySqlParser makeQueryParser() {
-    velox::optimizer::test::QuerySqlParser parser(
-        exec::test::kHiveConnectorId, pool());
-
-    auto registerTable = [&](const std::string& name) {
-      auto* table = connector::getConnector(exec::test::kHiveConnectorId)
-                        ->metadata()
-                        ->findTable(name);
-      parser.registerTable(name, table->rowType());
-    };
-
-    registerTable("region");
-    registerTable("nation");
-    registerTable("lineitem");
-    registerTable("orders");
-    registerTable("customer");
-    registerTable("supplier");
-    registerTable("part");
-    registerTable("partsupp");
-
-    return parser;
+    checkResults(logicalPlan, referencePlan);
   }
 
   static std::string readSqlFromFile(const std::string& filePath) {
     auto path = velox::test::getDataFilePath("axiom/optimizer/tests", filePath);
     std::ifstream inputFile(path, std::ifstream::binary);
 
+    VELOX_CHECK(inputFile, "Failed to open SQL file: {}", path);
+
     // Find out file size.
     auto begin = inputFile.tellg();
     inputFile.seekg(0, std::ios::end);
     auto end = inputFile.tellg();
 
-    auto fileSize = end - begin;
-    if (fileSize == 0) {
-      return "";
-    }
+    const auto fileSize = end - begin;
+    VELOX_CHECK_GT(fileSize, 0, "SQL file is empty: {}", path);
 
     // Read the file.
     std::string sql;
@@ -119,23 +84,14 @@ class TpchPlanTest : public virtual test::QueryTestBase {
     inputFile.seekg(begin);
     inputFile.read(sql.data(), fileSize);
     inputFile.close();
+
     return sql;
   }
 
   void checkTpchSql(int32_t query) {
-    auto parser = makeQueryParser();
-
     auto sql = readSqlFromFile(fmt::format("tpch.queries/q{}.sql", query));
-    auto statement = parser.parse(sql);
-
-    ASSERT_TRUE(statement->isSelect());
-
-    auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
-
-    auto fragmentedPlan = planVelox(logicalPlan);
     auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
-
-    auto referenceResult = assertSame(referencePlan, fragmentedPlan);
+    checkResults(sql, referencePlan);
   }
 
   std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
@@ -244,6 +200,8 @@ TEST_F(TpchPlanTest, q06) {
           .build();
 
   checkTpch(6, logicalPlan);
+
+  checkTpchSql(6);
 }
 
 TEST_F(TpchPlanTest, q07) {
@@ -278,6 +236,8 @@ TEST_F(TpchPlanTest, q07) {
           .build();
 
   checkTpch(7, logicalPlan);
+
+  checkTpchSql(7);
 }
 
 TEST_F(TpchPlanTest, q08) {
@@ -323,6 +283,8 @@ TEST_F(TpchPlanTest, q08) {
           .build();
 
   checkTpch(8, logicalPlan);
+
+  checkTpchSql(8);
 }
 
 TEST_F(TpchPlanTest, q09) {
@@ -351,6 +313,8 @@ TEST_F(TpchPlanTest, q09) {
   // Plan does not minimize build size. To adjust build cost and check that
   // import of existences to build side does not affect join cardinality.
   checkTpch(9, logicalPlan);
+
+  checkTpchSql(9);
 }
 
 TEST_F(TpchPlanTest, q10) {
@@ -386,6 +350,8 @@ TEST_F(TpchPlanTest, q10) {
           .build();
 
   checkTpch(10, logicalPlan);
+
+  checkTpchSql(10);
 }
 
 TEST_F(TpchPlanTest, q11) {
@@ -436,6 +402,9 @@ TEST_F(TpchPlanTest, q11) {
           .build();
 
   checkTpch(11, logicalPlan);
+
+  // TODO Add subquery support to the optimizer.
+  // checkTpchSql(11);
 }
 
 TEST_F(TpchPlanTest, q12) {
@@ -461,6 +430,8 @@ TEST_F(TpchPlanTest, q12) {
 
   // Fix string in filter
   checkTpch(12, logicalPlan);
+
+  checkTpchSql(12);
 }
 
 TEST_F(TpchPlanTest, q13) {
@@ -478,6 +449,8 @@ TEST_F(TpchPlanTest, q13) {
           .build();
 
   checkTpch(13, logicalPlan);
+
+  checkTpchSql(13);
 }
 
 TEST_F(TpchPlanTest, q14) {
@@ -489,7 +462,7 @@ TEST_F(TpchPlanTest, q14) {
               "l_partkey = p_partkey "
               "and l_shipdate between '1995-09-01'::date and '1995-09-30'::date")
           .aggregate(
-              {},
+              std::vector<std::string>{},
               {
                   "sum(if(p_type like 'PROMO%', l_extendedprice * (1.0 - l_discount), 0.0)) as promo",
                   "sum(l_extendedprice * (1.0 - l_discount)) as total",
@@ -498,6 +471,8 @@ TEST_F(TpchPlanTest, q14) {
           .build();
 
   checkTpch(14, logicalPlan);
+
+  checkTpchSql(14);
 }
 
 TEST_F(TpchPlanTest, DISABLED_q15) {
@@ -548,6 +523,8 @@ TEST_F(TpchPlanTest, q19) {
           .build();
 
   checkTpch(19, logicalPlan);
+
+  checkTpchSql(19);
 }
 
 TEST_F(TpchPlanTest, DISABLED_q20) {

@@ -15,7 +15,7 @@
  */
 
 #include "axiom/optimizer/ToVelox.h"
-#include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/Optimization.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
@@ -92,9 +92,9 @@ RelationOpPtr addGather(const RelationOpPtr& op) {
   }
   if (op->relType() == RelType::kOrderBy) {
     auto order = op->distribution();
-    Distribution final = Distribution::gather(order.order, order.orderType);
+    auto final = Distribution::gather(order.orderKeys, order.orderTypes);
     auto* gather = make<Repartition>(op, final, op->columns());
-    auto* orderBy = make<OrderBy>(gather, order.order, order.orderType);
+    auto* orderBy = make<OrderBy>(gather, order.orderKeys, order.orderTypes);
     return orderBy;
   }
   auto* gather = make<Repartition>(op, Distribution::gather(), op->columns());
@@ -108,10 +108,7 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
   for (auto& filter : table->columnFilters) {
     columnSet.unionSet(filter->columns());
   }
-  ColumnVector leafColumns;
-  columnSet.forEach([&](auto obj) {
-    leafColumns.push_back(reinterpret_cast<const Column*>(obj));
-  });
+  auto leafColumns = columnSet.toObjects<Column>();
 
   columnAlteredTypes_.clear();
 
@@ -150,7 +147,7 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
       remainingFilter = std::make_shared<core::CallTypedExpr>(
           BOOLEAN(),
           std::vector<core::TypedExprPtr>{remainingFilter, conjunct},
-          "and");
+          SpecialFormCallNames::kAnd);
     }
   }
 
@@ -214,13 +211,13 @@ RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) {
   for (auto i = 0; i < columns.size(); ++i) {
     auto* column = columns[i];
     auto relation = column->relation();
-    if (relation && relation->type() == PlanType::kTableNode) {
+    if (relation && relation->is(PlanType::kTableNode)) {
       auto* schemaTable = relation->as<BaseTable>()->schemaTable;
       if (!schemaTable) {
         continue;
       }
 
-      auto* runnerTable = schemaTable->connectorTable;
+      auto runnerTable = schemaTable->connectorTable;
       if (runnerTable) {
         auto* runnerColumn = runnerTable->findColumn(std::string(
             column->topColumn() ? column->topColumn()->name()
@@ -237,6 +234,10 @@ RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) {
 }
 
 core::TypedExprPtr ToVelox::toAnd(const ExprVector& exprs) {
+  if (exprs.size() == 1) {
+    return toTypedExpr(exprs[0]);
+  }
+
   core::TypedExprPtr result;
   for (auto expr : exprs) {
     auto conjunct = toTypedExpr(expr);
@@ -244,7 +245,9 @@ core::TypedExprPtr ToVelox::toAnd(const ExprVector& exprs) {
       result = conjunct;
     } else {
       result = std::make_shared<core::CallTypedExpr>(
-          BOOLEAN(), std::vector<core::TypedExprPtr>{result, conjunct}, "and");
+          BOOLEAN(),
+          std::vector<core::TypedExprPtr>{result, conjunct},
+          SpecialFormCallNames::kAnd);
     }
   }
   return result;
@@ -269,7 +272,7 @@ core::TypedExprPtr createArrayForInList(
         "All elements of the IN list must have the same type got {} and {}",
         elementType->toString(),
         arg->value().type->toString());
-    VELOX_USER_CHECK(arg->type() == PlanType::kLiteralExpr);
+    VELOX_USER_CHECK(arg->is(PlanType::kLiteralExpr));
     arrayElements.push_back(arg->as<Literal>()->literal());
   }
   auto arrayVector = variantToVector(
@@ -341,7 +344,7 @@ ToVelox::pathToGetter(ColumnCP column, PathCP path, core::TypedExprPtr field) {
   // becomes a struct getter.
   auto alterStep = [&](ColumnCP, const Step& step, Step& newStep) {
     auto* rel = column->relation();
-    if (rel->type() == PlanType::kTableNode &&
+    if (rel->is(PlanType::kTableNode) &&
         isMapAsStruct(
             rel->as<BaseTable>()->schemaTable->name, column->name())) {
       // This column is a map to project out as struct.
@@ -395,8 +398,9 @@ core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
     case PlanType::kCallExpr: {
       std::vector<core::TypedExprPtr> inputs;
       auto call = expr->as<Call>();
+      const auto& builtinNames = queryCtx()->optimization()->builtinNames();
 
-      if (call->name() == toName("in")) {
+      if (call->name() == builtinNames.in) {
         VELOX_USER_CHECK_GE(call->args().size(), 2);
         inputs.push_back(toTypedExpr(call->args().at(0)));
         inputs.push_back(createArrayForInList(*call, inputs.back()->type()));
@@ -406,9 +410,14 @@ core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
         }
       }
 
-      if (call->name() == toName("cast")) {
+      if (call->name() == builtinNames.cast) {
         return std::make_shared<core::CastTypedExpr>(
             toTypePtr(expr->value().type), std::move(inputs), false);
+      }
+
+      if (call->name() == builtinNames.tryCast) {
+        return std::make_shared<core::CastTypedExpr>(
+            toTypePtr(expr->value().type), std::move(inputs), true);
       }
 
       return std::make_shared<core::CallTypedExpr>(
@@ -633,8 +642,8 @@ core::PlanNodePtr ToVelox::makeOrderBy(
     ExecutableFragment& fragment,
     std::vector<ExecutableFragment>& stages) {
   std::vector<core::SortOrder> sortOrder;
-  sortOrder.reserve(op.distribution().orderType.size());
-  for (auto order : op.distribution().orderType) {
+  sortOrder.reserve(op.distribution().orderTypes.size());
+  for (auto order : op.distribution().orderTypes) {
     sortOrder.push_back(toSortOrder(order));
   }
 
@@ -642,7 +651,7 @@ core::PlanNodePtr ToVelox::makeOrderBy(
     auto input = makeFragment(op.input(), fragment, stages);
 
     TempProjections projections(*this, *op.input());
-    auto keys = projections.toFieldRefs(op.distribution().order);
+    auto keys = projections.toFieldRefs(op.distribution().orderKeys);
     auto project = projections.maybeProject(input);
 
     if (options_.numDrivers == 1) {
@@ -683,7 +692,7 @@ core::PlanNodePtr ToVelox::makeOrderBy(
   auto input = makeFragment(op.input(), source, stages);
 
   TempProjections projections(*this, *op.input());
-  auto keys = projections.toFieldRefs(op.distribution().order);
+  auto keys = projections.toFieldRefs(op.distribution().orderKeys);
   auto project = projections.maybeProject(input);
 
   core::PlanNodePtr node;
@@ -971,7 +980,10 @@ namespace {
 core::TypedExprPtr toAndWithAliases(
     const std::vector<core::TypedExprPtr>& exprs,
     const BaseTable* baseTable) {
-  auto result = std::make_shared<core::CallTypedExpr>(BOOLEAN(), exprs, "and");
+  auto result = exprs.size() == 1
+      ? exprs.at(0)
+      : std::make_shared<core::CallTypedExpr>(
+            BOOLEAN(), exprs, SpecialFormCallNames::kAnd);
 
   std::unordered_map<std::string, core::TypedExprPtr> mapping;
   for (const auto& column : baseTable->columns) {
@@ -1243,9 +1255,7 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
 
   auto partitionFunctionFactory = createPartitionFunctionSpec(
       partitioningInput->outputType(), keys, distribution.isBroadcast);
-  if (distribution.isBroadcast) {
-    source.numBroadcastDestinations = fragment.width;
-  }
+
   source.fragment.planNode = std::make_shared<core::PartitionedOutputNode>(
       nextId(),
       distribution.isBroadcast
@@ -1310,11 +1320,18 @@ core::PlanNodePtr ToVelox::makeValues(
   const auto newType = makeOutputType(newColumns);
   VELOX_DCHECK_EQ(newColumns.size(), newType->size());
 
+  const auto& type = values.valuesTable.values.outputType();
   const auto& data = values.valuesTable.values.data();
   std::vector<RowVectorPtr> newValues;
-  if ([[maybe_unused]] auto* row = std::get_if<std::vector<Variant>>(&data)) {
-    [[maybe_unused]] auto& newValue = newValues.emplace_back();
-    VELOX_NYI("Translate rows from vector<Variant> to RowVector");
+  if ([[maybe_unused]] auto* rows = std::get_if<std::vector<Variant>>(&data)) {
+    auto* pool = queryCtx()->optimization()->evaluator()->pool();
+
+    newValues.reserve(rows->size());
+    for (const auto& row : *rows) {
+      newValues.emplace_back(std::dynamic_pointer_cast<RowVector>(
+          BaseVector::wrappedVectorShared(variantToVector(type, row, pool))));
+    }
+
   } else {
     const auto& oldValues = std::get<std::vector<RowVectorPtr>>(data);
     newValues.reserve(oldValues.size());

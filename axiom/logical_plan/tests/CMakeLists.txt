@@ -12,15 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_fe_logical_plan_tests
-               PlanPrinterTest.cpp NameAllocatorTest.cpp NameMappingsTest.cpp)
+add_executable(axiom_lp_tests PlanBuilderTest.cpp PlanPrinterTest.cpp
+                              NameAllocatorTest.cpp NameMappingsTest.cpp)
 
-add_test(velox_fe_logical_plan_tests velox_fe_logical_plan_tests)
+add_test(axiom_lp_tests axiom_lp_tests)
 
-target_link_libraries(velox_fe_logical_plan_tests
-                      velox_fe_logical_plan_builder
-                      velox_fe_logical_plan
-                      velox_test_connector
-                      GTest::gtest
-                      GTest::gtest_main
-                      GTest::gmock)
+target_link_libraries(
+  axiom_lp_tests
+  velox_fe_logical_plan_builder
+  velox_fe_logical_plan
+  velox_test_connector
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock)

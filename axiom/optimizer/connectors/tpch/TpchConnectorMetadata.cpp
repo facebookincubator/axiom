@@ -1,4 +1,18 @@
-// (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #include "axiom/optimizer/connectors/tpch/TpchConnectorMetadata.h"
 
@@ -188,7 +202,7 @@ void TpchConnectorMetadata::loadTable(
   const auto tableType = velox::tpch::getTableSchema(tpchTable);
   const auto numRows = velox::tpch::getRowCount(tpchTable, scaleFactor);
 
-  auto table = std::make_unique<TpchTable>(tableName, tpchTable, scaleFactor);
+  auto table = std::make_shared<TpchTable>(tableName, tpchTable, scaleFactor);
   table->numRows_ = numRows;
 
   for (auto i = 0; i < tableType->size(); ++i) {
@@ -267,14 +281,14 @@ std::string getQualifiedName(const std::string& name) {
   return qualifiedName;
 }
 
-const Table* TpchConnectorMetadata::findTable(const std::string& name) {
+ConnectorTablePtr TpchConnectorMetadata::findTable(const std::string& name) {
   ensureInitialized();
   const auto qualifiedName = getQualifiedName(name);
   auto it = tables_.find(qualifiedName);
   if (it == tables_.end()) {
     return nullptr;
   }
-  return it->second.get();
+  return it->second;
 }
 
 } // namespace facebook::velox::connector::tpch

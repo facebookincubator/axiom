@@ -33,8 +33,12 @@ if(POLICY CMP0135)
 endif()
 
 # Use ThirdPartyToolchain dependencies macros from Velox.
-list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
-     "${PROJECT_SOURCE_DIR}/velox/CMake")
+list(
+  PREPEND
+  CMAKE_MODULE_PATH
+  "${PROJECT_SOURCE_DIR}/CMake"
+  "${PROJECT_SOURCE_DIR}/CMake/resolve_dependency_modules"
+  "${PROJECT_SOURCE_DIR}/velox/CMake")
 include(ResolveDependency)
 
 set(VELOX_BUILD_VECTOR_TEST_UTILS
@@ -42,7 +46,6 @@ set(VELOX_BUILD_VECTOR_TEST_UTILS
     CACHE BOOL "Velox vector test utilities (VectorMaker).")
 
 set(VELOX_ENABLE_PARQUET ON)
-set(VELOX_ENABLE_BENCHMARKS ON)
 set(VELOX_BUILD_TEST_UTILS ON)
 set(VELOX_BUILD_TESTING OFF)
 
@@ -128,6 +131,12 @@ velox_resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 velox_set_source(folly)
 velox_resolve_dependency(folly)
 
+# Add ANTLR4 runtime dependency
+velox_set_source(antlr4-runtime)
+velox_resolve_dependency(antlr4-runtime)
+
+message(STATUS "Using ANTLR4 runtime from ${ANTLR4_INCLUDE_DIR}")
+
 # Use xxhash and xsimd from Velox for now.
 include_directories(.)
 include_directories(${CMAKE_BINARY_DIR})
@@ -135,8 +144,10 @@ include_directories(${CMAKE_BINARY_DIR}/velox)
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/velox/external/xxhash axiom)
 include_directories(SYSTEM ${CMAKE_BINARY_DIR}/_deps/xsimd-src/include/)
+include_directories(${ANTLR4_INCLUDE_DIR})
 
 add_subdirectory(velox)
+add_subdirectory(axiom/sql/presto)
 add_subdirectory(axiom/logical_plan)
 add_subdirectory(axiom/runner)
 add_subdirectory(axiom/optimizer)

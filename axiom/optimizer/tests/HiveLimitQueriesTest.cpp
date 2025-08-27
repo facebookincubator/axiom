@@ -23,7 +23,16 @@ namespace lp = facebook::velox::logical_plan;
 namespace facebook::velox::optimizer {
 namespace {
 
-class HiveLimitQueriesTest : public test::HiveQueriesTestBase {};
+class HiveLimitQueriesTest : public test::HiveQueriesTestBase {
+ public:
+  static void SetUpTestCase() {
+    test::HiveQueriesTestBase::SetUpTestCase();
+  }
+
+  static void TearDownTestCase() {
+    test::HiveQueriesTestBase::TearDownTestCase();
+  }
+};
 
 // LIMIT 10
 TEST_F(HiveLimitQueriesTest, limit) {

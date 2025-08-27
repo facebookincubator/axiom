@@ -84,10 +84,10 @@ TEST_F(ExprApiTest, alias) {
   EXPECT_EQ(Col("a").name(), "a");
   EXPECT_EQ(Col("a").as("b").name(), "b");
 
-  EXPECT_EQ(Lit(1).name(), "");
+  EXPECT_FALSE(Lit(1).name().has_value());
 
   EXPECT_EQ((Col("a") + 1).as("b").name(), "b");
-  EXPECT_EQ((Col("a") + 1).name(), "");
+  EXPECT_FALSE((Col("a") + 1).name().has_value());
 }
 
 TEST_F(ExprApiTest, inSubquery) {

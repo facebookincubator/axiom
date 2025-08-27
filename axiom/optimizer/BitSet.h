@@ -39,10 +39,6 @@ class BitSet {
 
   bool operator==(const BitSet& other) const;
 
-  bool operator!=(const BitSet& other) const {
-    return !(*this == other);
-  }
-
   size_t hash() const;
 
   // True if no members.

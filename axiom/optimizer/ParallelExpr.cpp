@@ -47,7 +47,7 @@ void makeExprLevels(
     int32_t levelIdx = levelData.size() - 1;
     exprs.forEach([&](PlanObjectCP o) {
       auto* expr = o->as<Expr>();
-      if (expr->type() == PlanType::kLiteralExpr) {
+      if (expr->is(PlanType::kLiteralExpr)) {
         return;
       }
       float self = selfCost(expr);
@@ -59,9 +59,9 @@ void makeExprLevels(
       levelData[levelIdx].exprs.add(expr);
       levelData[levelIdx].levelCost += self;
       counted.add(expr);
-      if (expr->type() == PlanType::kCallExpr) {
+      if (expr->is(PlanType::kCallExpr)) {
         for (auto& input : expr->as<Call>()->args()) {
-          if (input->type() == PlanType::kLiteralExpr) {
+          if (input->is(PlanType::kLiteralExpr)) {
             continue;
           }
           ++refCount[input];
@@ -135,7 +135,7 @@ core::PlanNodePtr ToVelox::makeParallelProject(
     groups.back().push_back(toTypedExpr(exprs[i]));
 
     auto expr = exprs[i];
-    if (expr->type() == PlanType::kColumnExpr) {
+    if (expr->is(PlanType::kColumnExpr)) {
       names.push_back(outputName(expr->as<Column>()));
     } else {
       names.push_back(fmt::format("__temp{}", expr->id()));
@@ -176,7 +176,7 @@ void columnBorder(
     ExprCP expr,
     const PlanObjectSet& placed,
     PlanObjectSet& result) {
-  if (expr->type() == PlanType::kLiteralExpr) {
+  if (expr->is(PlanType::kLiteralExpr)) {
     return;
   }
   if (placed.contains(expr)) {

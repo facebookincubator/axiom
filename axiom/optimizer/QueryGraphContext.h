@@ -70,7 +70,7 @@ struct TypeComparer {
 Name toName(std::string_view string);
 
 struct Plan;
-using PlanPtr = Plan*;
+using PlanP = Plan*;
 class Optimization;
 
 /// STL compatible allocator that manages std:: containers allocated in the
@@ -92,10 +92,6 @@ struct QGAllocator {
       const QGAllocator& /*rhs*/) {
     return true;
   }
-
-  friend bool operator!=(const QGAllocator& lhs, const QGAllocator& rhs) {
-    return !(lhs == rhs);
-  }
 };
 
 /// Elements of subfield paths. The QueryGraphContext holds a dedupped
@@ -104,16 +100,29 @@ enum class StepKind : uint8_t { kField, kSubscript, kCardinality };
 
 struct Step {
   StepKind kind;
+
+  /// Map key if kind is kSubscript. Struct field if kind is kField.
   Name field{nullptr};
+
+  /// Zero-based array index if kind is kSubscript.
   int64_t id{0};
+
   /// True if all fields/keys are accessed at this level but there is a subset
   /// of fields accessed at a child level.
   bool allFields{false};
 
   bool operator==(const Step& other) const;
+
+  bool operator!=(const Step& other) const {
+    return !(*this == other);
+  }
+
   bool operator<(const Step& other) const;
+
   size_t hash() const;
 };
+
+using StepVector = std::vector<Step, QGAllocator<Step>>;
 
 class BitSet;
 
@@ -129,7 +138,7 @@ class Path {
 
   void operator delete(void* ptr);
 
-  /// True if 'prefix' is a prefix of 'this'.
+  /// True if 'prefix' is a prefix of 'this', but doesn't equal to 'this'.
   bool hasPrefix(const Path& prefix) const;
 
   Path* field(const char* name) {
@@ -149,13 +158,14 @@ class Path {
     steps_.push_back(Step{.kind = StepKind::kSubscript, .id = id});
     return this;
   }
+
   Path* cardinality() {
     VELOX_CHECK(mutable_);
     steps_.push_back(Step{.kind = StepKind::kCardinality});
     return this;
   }
 
-  const std::vector<Step, QGAllocator<Step>>& steps() const {
+  const StepVector& steps() const {
     return steps_;
   }
 
@@ -169,6 +179,10 @@ class Path {
   }
 
   bool operator==(const Path& other) const;
+
+  bool operator!=(const Path& other) const {
+    return !(*this == other);
+  }
 
   bool operator<(const Path& other) const;
 
@@ -185,7 +199,7 @@ class Path {
   static void subfieldSkyline(BitSet& subfields);
 
  private:
-  std::vector<Step, QGAllocator<Step>> steps_;
+  StepVector steps_;
   mutable int32_t id_{-1};
   mutable bool mutable_{true};
 };
@@ -278,7 +292,7 @@ class QueryGraphContext {
 
   /// Returns the top level plan being processed when printing operator trees.
   /// If non-null, allows showing percentages.
-  Plan*& contextPlan() {
+  PlanP& contextPlan() {
     return contextPlan_;
   }
 
@@ -357,7 +371,7 @@ class QueryGraphContext {
 
   std::vector<PathCP> pathById_;
 
-  Plan* contextPlan_{nullptr};
+  PlanP contextPlan_{nullptr};
   Optimization* optimization_{nullptr};
 
   std::vector<std::unique_ptr<Variant>> allVariants_;

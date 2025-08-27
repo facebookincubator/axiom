@@ -177,7 +177,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
 
   void initialize() override;
 
-  const Table* findTable(const std::string& name) override;
+  ConnectorTablePtr findTable(const std::string& name) override;
 
   ConnectorSplitManager* splitManager() override {
     ensureInitialized();
@@ -207,7 +207,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
     return tpchConnector_;
   }
 
-  const std::unordered_map<std::string, std::unique_ptr<TpchTable>>& tables()
+  const std::unordered_map<std::string, std::shared_ptr<TpchTable>>& tables()
       const {
     ensureInitialized();
     return tables_;
@@ -228,7 +228,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   std::shared_ptr<memory::MemoryPool> rootPool_{
       memory::memoryManager()->addRootPool()};
   std::shared_ptr<core::QueryCtx> queryCtx_;
-  std::unordered_map<std::string, std::unique_ptr<TpchTable>> tables_;
+  std::unordered_map<std::string, std::shared_ptr<TpchTable>> tables_;
   TpchSplitManager splitManager_;
 };
 

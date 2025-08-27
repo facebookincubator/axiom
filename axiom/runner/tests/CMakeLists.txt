@@ -1,3 +1,16 @@
+# Copyright (c) Meta Platforms, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 # Copyright (c) Facebook, Inc. and its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,8 +25,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_runner_tests_utils
-            DistributedPlanBuilder.cpp LocalRunnerTestBase.cpp)
+add_library(axiom_runner_tests_utils DistributedPlanBuilder.cpp
+                                     LocalRunnerTestBase.cpp)
 
 target_link_libraries(
   axiom_runner_tests_utils
@@ -37,13 +50,12 @@ target_link_libraries(
   velox_parse_expression
   GTest::gtest)
 
-add_library(axiom_runner_tests_presto_query_replay_runner PrestoQueryReplayRunner.cpp)
+add_library(axiom_runner_tests_presto_query_replay_runner
+            PrestoQueryReplayRunner.cpp)
 
 target_link_libraries(
-  axiom_runner_tests_presto_query_replay_runner
-  axiom_runner_local_runner
-  velox_hive_connector
-  velox_exec_test_lib)
+  axiom_runner_tests_presto_query_replay_runner axiom_runner_local_runner
+  velox_hive_connector velox_exec_test_lib)
 
 add_executable(axiom_runner_tests_presto_query_replay_runner_test
                PrestoQueryReplayRunnerTest.cpp Main.cpp)

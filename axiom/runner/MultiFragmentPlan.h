@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include "velox/core/PlanFragment.h"
@@ -54,8 +55,6 @@ struct ExecutableFragment {
 
   /// Table scan nodes in 'this'.
   std::vector<std::shared_ptr<const velox::core::TableScanNode>> scans;
-
-  int32_t numBroadcastDestinations{0};
 };
 
 /// Describes a distributed plan handed to a Runner for parallel/distributed

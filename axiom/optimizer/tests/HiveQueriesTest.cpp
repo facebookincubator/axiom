@@ -24,7 +24,16 @@ namespace lp = facebook::velox::logical_plan;
 namespace facebook::velox::optimizer {
 namespace {
 
-class HiveQueriesTest : public test::HiveQueriesTestBase {};
+class HiveQueriesTest : public test::HiveQueriesTestBase {
+ public:
+  static void SetUpTestCase() {
+    test::HiveQueriesTestBase::SetUpTestCase();
+  }
+
+  static void TearDownTestCase() {
+    test::HiveQueriesTestBase::TearDownTestCase();
+  }
+};
 
 TEST_F(HiveQueriesTest, basic) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -76,6 +85,15 @@ TEST_F(HiveQueriesTest, basic) {
             {"n_nationkey", "n_name", "n_regionkey", "n_comment", "r_regionkey", "r_name", "r_comment"})
         .planNode()
     );
+}
+
+TEST_F(HiveQueriesTest, anyJoin) {
+  auto statement =
+      duckParser().parse("SELECT * FROM nation JOIN region ON true");
+
+  ASSERT_TRUE(statement->isSelect());
+  auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
+  ASSERT_TRUE(logicalPlan != nullptr);
 }
 
 TEST_F(HiveQueriesTest, orderOfOperations) {

@@ -206,6 +206,39 @@ class FilterMatcher : public PlanMatcherImpl<FilterNode> {
   const std::optional<std::string> predicate_;
 };
 
+class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
+ public:
+  explicit ProjectMatcher(const std::shared_ptr<PlanMatcher>& matcher)
+      : PlanMatcherImpl<ProjectNode>({matcher}) {}
+
+  ProjectMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      const std::vector<std::string>& expressions)
+      : PlanMatcherImpl<ProjectNode>({matcher}), expressions_{expressions} {}
+
+  bool matchDetails(const ProjectNode& plan) const override {
+    if (!expressions_.empty()) {
+      EXPECT_EQ(plan.projections().size(), expressions_.size());
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+
+      for (auto i = 0; i < expressions_.size(); ++i) {
+        auto expected = parse::parseExpr(expressions_[i], {});
+        EXPECT_EQ(plan.projections()[i]->toString(), expected->toString());
+      }
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+ private:
+  const std::vector<std::string> expressions_;
+};
+
 class LimitMatcher : public PlanMatcherImpl<LimitNode> {
  public:
   explicit LimitMatcher(const std::shared_ptr<PlanMatcher>& matcher)
@@ -405,8 +438,14 @@ PlanMatcherBuilder& PlanMatcherBuilder::filter(const std::string& predicate) {
 
 PlanMatcherBuilder& PlanMatcherBuilder::project() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<PlanMatcherImpl<ProjectNode>>(
-      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
+  matcher_ = std::make_shared<ProjectMatcher>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::project(
+    const std::vector<std::string>& expressions) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<ProjectMatcher>(matcher_, expressions);
   return *this;
 }
 

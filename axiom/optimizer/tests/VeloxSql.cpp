@@ -28,11 +28,13 @@
 #include "velox/parse/TypeResolver.h"
 
 #include "axiom/logical_plan/PlanPrinter.h"
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/SchemaResolver.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/connectors/ConnectorSplitSource.h"
-#include "axiom/optimizer/tests/QuerySqlParser.h"
+#include "axiom/optimizer/tests/DuckParser.h"
+#include "axiom/optimizer/tests/PrestoParser.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/benchmarks/QueryBenchmarkBase.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -55,6 +57,11 @@ DEFINE_string(
     data_path,
     "",
     "Root path of data. Data layout must follow Hive-style partitioning. ");
+
+DEFINE_bool(
+    use_duck_parser,
+    false,
+    "Use DuckDB SQL parser instead of built-in Presto SQL parser.");
 
 // Defined in velox/benchmarks/QueryBenchmarkBase.cpp
 DECLARE_string(ssd_path);
@@ -188,7 +195,9 @@ class VeloxRunner : public QueryBenchmarkBase {
 
     schema_ = std::make_shared<optimizer::SchemaResolver>();
 
-    parser_ = setupQueryParser();
+    duckParser_ = setupQueryParser();
+    prestoParser_ = std::make_unique<optimizer::test::PrestoParser>(
+        kHiveConnectorId, optimizerPool_.get());
 
     history_ = std::make_unique<optimizer::VeloxHistory>();
     history_->updateFromFile(FLAGS_data_path + "/.history");
@@ -236,8 +245,8 @@ class VeloxRunner : public QueryBenchmarkBase {
     connector::registerConnector(connector_);
   }
 
-  std::unique_ptr<optimizer::test::QuerySqlParser> setupQueryParser() {
-    auto parser = std::make_unique<optimizer::test::QuerySqlParser>(
+  std::unique_ptr<optimizer::test::DuckParser> setupQueryParser() {
+    auto parser = std::make_unique<optimizer::test::DuckParser>(
         kHiveConnectorId, optimizerPool_.get());
     auto& tables = dynamic_cast<connector::hive::LocalHiveConnectorMetadata*>(
                        connector_->metadata())
@@ -289,7 +298,11 @@ class VeloxRunner : public QueryBenchmarkBase {
   void run(const std::string& sql) {
     optimizer::test::SqlStatementPtr sqlStatement;
     try {
-      sqlStatement = parser_->parse(sql);
+      if (FLAGS_use_duck_parser) {
+        sqlStatement = duckParser_->parse(sql);
+      } else {
+        sqlStatement = prestoParser_->parse(sql);
+      }
     } catch (std::exception& e) {
       std::cerr << "Failed to parse SQL: " << e.what() << std::endl;
       return;
@@ -696,31 +709,100 @@ class VeloxRunner : public QueryBenchmarkBase {
       numRows += result->size();
     }
 
-    std::cout << "Results: " << numRows << " rows in " << results.size()
-              << " batches" << std::endl;
+    auto printFooter = [&]() {
+      std::cout << "(" << numRows << " rows in " << results.size()
+                << " batches)" << std::endl
+                << std::endl;
+    };
 
-    if (numRows > 0) {
-      std::cout << results.front()->type()->toString() << std::endl;
+    if (numRows == 0) {
+      printFooter();
+      return 0;
     }
 
-    numRows = 0;
-    for (auto vectorIndex = 0; vectorIndex < results.size(); ++vectorIndex) {
-      const auto& vector = results[vectorIndex];
-      for (vector_size_t i = 0; i < vector->size(); ++i) {
-        std::cout << vector->deprecatedToString(i, 100) << std::endl;
-        if (++numRows >= FLAGS_max_rows) {
-          int32_t numLeft = (vector->size() - (i - 1));
-          ++vectorIndex;
-          for (; vectorIndex < results.size(); ++vectorIndex) {
-            numLeft += results[vectorIndex]->size();
-          }
-          if (numLeft) {
-            std::cout << fmt::format("{} more rows.", numLeft) << std::endl;
-          }
-          return numRows + numLeft;
+    const auto type = results.front()->rowType();
+    std::cout << type->toString() << std::endl;
+
+    const auto numColumns = type->size();
+
+    std::vector<std::vector<std::string>> data;
+    std::vector<size_t> widths(numColumns, 0);
+    std::vector<bool> alignLeft(numColumns);
+
+    for (auto i = 0; i < numColumns; ++i) {
+      widths[i] = type->nameOf(i).size();
+      alignLeft[i] = type->childAt(i)->isVarchar();
+    }
+
+    auto printSeparator = [&]() {
+      std::cout << std::setfill('-');
+      for (auto i = 0; i < numColumns; ++i) {
+        if (i > 0) {
+          std::cout << "-+-";
+        }
+        std::cout << std::setw(widths[i]) << "";
+      }
+      std::cout << std::endl;
+      std::cout << std::setfill(' ');
+    };
+
+    auto printRow = [&](const auto& row) {
+      for (auto i = 0; i < numColumns; ++i) {
+        if (i > 0) {
+          std::cout << " | ";
+        }
+        std::cout << std::setw(widths[i]);
+        if (alignLeft[i]) {
+          std::cout << std::left;
+        } else {
+          std::cout << std::right;
+        }
+        std::cout << row[i];
+      }
+      std::cout << std::endl;
+    };
+
+    int32_t numPrinted = 0;
+
+    auto doPrint = [&]() {
+      printSeparator();
+      printRow(type->names());
+      printSeparator();
+
+      for (auto row : data) {
+        printRow(row);
+      }
+
+      if (numPrinted < numRows) {
+        std::cout << std::endl;
+        std::cout << "..." << (numRows - numPrinted) << " more rows."
+                  << std::endl;
+      }
+
+      printFooter();
+    };
+
+    for (const auto& result : results) {
+      for (auto row = 0; row < result->size(); ++row) {
+        data.emplace_back();
+
+        auto& rowData = data.back();
+        rowData.resize(numColumns);
+        for (auto column = 0; column < numColumns; ++column) {
+          rowData[column] = result->childAt(column)->toString(row);
+          widths[column] = std::max(widths[column], rowData[column].size());
+        }
+
+        ++numPrinted;
+        if (numPrinted >= FLAGS_max_rows) {
+          doPrint();
+          return numRows;
         }
       }
     }
+
+    doPrint();
+
     return numRows;
   }
 
@@ -735,7 +817,8 @@ class VeloxRunner : public QueryBenchmarkBase {
   std::shared_ptr<connector::Connector> connector_;
   std::shared_ptr<optimizer::SchemaResolver> schema_;
   std::unique_ptr<optimizer::VeloxHistory> history_;
-  std::unique_ptr<optimizer::test::QuerySqlParser> parser_;
+  std::unique_ptr<optimizer::test::DuckParser> duckParser_;
+  std::unique_ptr<optimizer::test::PrestoParser> prestoParser_;
   std::ofstream* record_{nullptr};
   std::ifstream* check_{nullptr};
   int32_t numPassed_{0};

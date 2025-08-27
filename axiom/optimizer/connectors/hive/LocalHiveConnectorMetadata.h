@@ -193,7 +193,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   void initialize() override;
 
-  const Table* findTable(const std::string& name) override;
+  ConnectorTablePtr findTable(const std::string& name) override;
 
   ConnectorSplitManager* splitManager() override {
     ensureInitialized();
@@ -220,7 +220,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   /// ConnectorMetadata API. This This is only needed for running the
   /// DuckDB parser on testing queries since the latter needs a set of
   /// tables for name resolution.
-  const std::unordered_map<std::string, std::unique_ptr<LocalTable>>& tables()
+  const std::unordered_map<std::string, std::shared_ptr<LocalTable>>& tables()
       const {
     ensureInitialized();
     return tables_;
@@ -262,14 +262,14 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   void ensureInitialized() const override;
   void makeQueryCtx();
   void makeConnectorQueryCtx();
-  LocalTable* createTableFromSchema(
+  std::shared_ptr<LocalTable> createTableFromSchema(
       const std::string& name,
       const std::string& path);
   void readTables(const std::string& path);
 
   void loadTable(const std::string& tableName, const fs::path& tablePath);
 
-  LocalTable* findTableLocked(const std::string& name) const;
+  std::shared_ptr<LocalTable> findTableLocked(const std::string& name) const;
 
   mutable std::mutex mutex_;
   mutable bool initialized_{false};
@@ -280,11 +280,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   std::shared_ptr<core::QueryCtx> queryCtx_;
   std::shared_ptr<ConnectorQueryCtx> connectorQueryCtx_;
   dwio::common::FileFormat format_;
-  std::unordered_map<std::string, std::unique_ptr<LocalTable>> tables_;
-
-  // Superseded versions of tables. Need to stay live because pending
-  // optimization may reference a table that has been updated since.
-  std::vector<std::unique_ptr<LocalTable>> oldTables_;
+  std::unordered_map<std::string, std::shared_ptr<LocalTable>> tables_;
   LocalHiveSplitManager splitManager_;
 };
 

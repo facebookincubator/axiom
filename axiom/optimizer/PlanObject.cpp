@@ -74,12 +74,6 @@ void PlanObjectSet::unionColumns(const ExprVector& exprs) {
   }
 }
 
-void PlanObjectSet::unionColumns(const ColumnVector& exprs) {
-  for (auto& expr : exprs) {
-    unionColumns(expr);
-  }
-}
-
 std::string PlanObjectSet::toString(bool names) const {
   std::stringstream out;
   forEach([&](auto object) {
