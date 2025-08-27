@@ -342,6 +342,7 @@ Join::Join(
   cost_.fanout = fanout;
 
   if (method == JoinMethod::kCross) {
+    cost_.setupCost = fanout * byteSize(right->input()->columns());
     return;
   }
 
@@ -420,7 +421,7 @@ std::string Join::toString(bool recursive, bool detail) const {
     out << input()->toString(true, detail);
   }
   out << "*";
-  
+
   switch (method) {
     case JoinMethod::kHash:
       out << "H";
@@ -432,7 +433,7 @@ std::string Join::toString(bool recursive, bool detail) const {
       out << "C";
       break;
   }
-  
+
   out << " " << joinTypeLabel(joinType);
   printCost(detail, out);
   if (detail) {

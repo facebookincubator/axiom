@@ -75,16 +75,60 @@ TEST_F(HiveQueriesTest, basic) {
           .localPartition({})
           .singleAggregation({"r_name"}, {"count(*)"})
           .planNode());
-            
+
   checkResults(
       "SELECT * FROM nation, region",
       scan("nation")
-        .nestedLoopJoin(
-            scan("region").planNode(),
-            "",
-            {"n_nationkey", "n_name", "n_regionkey", "n_comment", "r_regionkey", "r_name", "r_comment"})
-        .planNode()
-    );
+          .nestedLoopJoin(
+              scan("region").planNode(),
+              "",
+              {"n_nationkey",
+               "n_name",
+               "n_regionkey",
+               "n_comment",
+               "r_regionkey",
+               "r_name",
+               "r_comment"})
+          .planNode());
+
+  {
+    auto plan = scan("customer")
+                    .nestedLoopJoin(
+                        scan("nation").planNode(),
+                        "",
+                        {"c_custkey",
+                         "c_name",
+                         "c_address",
+                         "c_nationkey",
+                         "c_phone",
+                         "c_acctbal",
+                         "c_mktsegment",
+                         "c_comment",
+                         "n_nationkey",
+                         "n_name",
+                         "n_regionkey",
+                         "n_comment"})
+                    .nestedLoopJoin(
+                        scan("region").planNode(),
+                        "",
+                        {"c_custkey",
+                         "c_name",
+                         "c_address",
+                         "c_nationkey",
+                         "c_phone",
+                         "c_acctbal",
+                         "c_mktsegment",
+                         "c_comment",
+                         "n_nationkey",
+                         "n_name",
+                         "n_regionkey",
+                         "n_comment",
+                         "r_regionkey",
+                         "r_name",
+                         "r_comment"})
+                    .planNode();
+    checkResults("SELECT * FROM customer, nation, region", plan);
+  }
 }
 
 TEST_F(HiveQueriesTest, anyJoin) {
