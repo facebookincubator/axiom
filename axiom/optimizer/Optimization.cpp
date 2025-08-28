@@ -695,9 +695,9 @@ RelationOpPtr Optimization::processCrossJoin(
       memoKey, broadcast, empty, candidate.existsFanout, state, needsShuffle);
 
   RelationOpPtr rightOp = rightPlan->op;
-  // if (needsShuffle) {
-  rightOp = make<Repartition>(rightPlan->op, broadcast, rightOp->columns());
-  // }
+  if (needsShuffle) {
+    rightOp = make<Repartition>(rightPlan->op, broadcast, rightOp->columns());
+  }
 
   auto resultColumns = plan->columns();
   resultColumns.insert(

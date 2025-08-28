@@ -129,6 +129,22 @@ TEST_F(HiveQueriesTest, basic) {
                     .planNode();
     checkResults("SELECT * FROM customer, nation, region", plan);
   }
+
+  checkResults(
+      "SELECT c.c_custkey, n.n_name, r.r_name FROM customer c INNER JOIN nation n ON c.c_nationkey = n.n_regionkey CROSS JOIN region r",
+      scan("customer")
+          .project({"c_custkey", "c_nationkey"})
+          .hashJoin(
+              {"c_nationkey"},
+              {"n_regionkey"},
+              scan("nation").project({"n_name", "n_regionkey"}).planNode(),
+              "",
+              {"c_custkey", "c_nationkey", "n_name"})
+          .nestedLoopJoin(
+              scan("region").project({"r_name"}).planNode(),
+              "",
+              {"c_custkey", "n_name", "r_name"})
+          .planNode());
 }
 
 TEST_F(HiveQueriesTest, anyJoin) {
