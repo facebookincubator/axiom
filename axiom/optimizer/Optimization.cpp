@@ -374,7 +374,7 @@ Optimization::nextJoins(PlanState& state) {
     });
   }
 
-  return {candidates, crossJoins};
+  return {std::move(candidates), std::move(crossJoins)};
 }
 
 void Optimization::processCrossJoins(
@@ -736,7 +736,7 @@ RelationOpPtr Optimization::processCrossJoin(
     PlanState& state) {
   PlanObjectSet broadcastTables;
   PlanObjectSet broadcastColumns;
-  for (auto buildTable : candidate.tables) {
+  for (const auto* buildTable : candidate.tables) {
     broadcastColumns.unionSet(availableColumns(buildTable));
     broadcastTables.add(buildTable);
   }
