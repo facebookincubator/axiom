@@ -275,7 +275,9 @@ PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
 }
 
 PlanBuilder& PlanBuilder::project(const std::vector<ExprApi>& projections) {
-  VELOX_USER_CHECK_NOT_NULL(node_, "Project node cannot be a leaf node");
+  if (!node_) {
+    values(ROW({}), std::vector<Variant>{Variant::row({})});
+  }
 
   std::vector<std::string> outputNames;
   outputNames.reserve(projections.size());
@@ -294,7 +296,9 @@ PlanBuilder& PlanBuilder::project(const std::vector<ExprApi>& projections) {
 }
 
 PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
-  VELOX_USER_CHECK_NOT_NULL(node_, "Project node cannot be a leaf node");
+  if (!node_) {
+    values(ROW({}), std::vector<Variant>{Variant::row({})});
+  }
 
   std::vector<std::string> outputNames;
   outputNames.reserve(projections.size());
