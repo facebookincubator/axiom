@@ -51,6 +51,11 @@ class PlanMatcherBuilder {
 
   PlanMatcherBuilder& project(const std::vector<std::string>& expressions);
 
+  PlanMatcherBuilder& parallelProject();
+
+  PlanMatcherBuilder& parallelProject(
+      const std::vector<std::string>& expressions);
+
   PlanMatcherBuilder& aggregation();
 
   PlanMatcherBuilder& partialAggregation();

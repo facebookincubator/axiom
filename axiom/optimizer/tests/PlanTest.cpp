@@ -1165,6 +1165,52 @@ TEST_F(PlanTest, values) {
     checkSame(logicalPlan, referencePlan);
   }
 }
+
+TEST_F(PlanTest, parallelCse) {
+  testConnector_->createTable(
+      "t", ROW({"a", "b", "c"}, {INTEGER(), INTEGER(), INTEGER()}));
+
+  auto logicalPlan =
+      lp::PlanBuilder(/* allowCoersions */ true)
+          .tableScan(kTestConnectorId, "t", {"a", "b", "c"})
+          .map({"a + b + c as x"})
+          .map({
+              "contains(array[1], cast(if(cast(x as real) < 0, ceil(cast(x as real)), floor(cast(x as real))) as int)) as a",
+          })
+          .build();
+
+  optimizerOptions_.parallelProjectWidth = 2;
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .parallelProject()
+                     .project()
+                     .build();
+
+  EXPECT_TRUE(matcher->match(plan));
+
+  logicalPlan =
+      lp::PlanBuilder(/* allowCoersions */ true)
+          .tableScan(kTestConnectorId, "t", {"a", "b", "c"})
+          .with({"a + b as ab"})
+          .with({"ab + c as x"})
+          .map(
+              {"contains(array[1], cast(if(cast(x as real) < 0, ceil(cast(x as real)), floor(cast(x as real))) as int)) as a",
+               "ab"})
+          .build();
+  plan = toSingleNodePlan(logicalPlan);
+
+  matcher = core::PlanMatcherBuilder()
+                .tableScan()
+                .parallelProject({"a + b", "c"})
+                .parallelProject()
+                .project()
+                .build();
+
+  EXPECT_TRUE(matcher->match(plan));
+}
+
 } // namespace
 } // namespace facebook::velox::optimizer
 

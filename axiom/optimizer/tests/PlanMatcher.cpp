@@ -239,6 +239,40 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
   const std::vector<std::string> expressions_;
 };
 
+class ParallelProjectMatcher : public PlanMatcherImpl<ParallelProjectNode> {
+ public:
+  explicit ParallelProjectMatcher(const std::shared_ptr<PlanMatcher>& matcher)
+      : PlanMatcherImpl<ParallelProjectNode>({matcher}) {}
+
+  ParallelProjectMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      const std::vector<std::string>& expressions)
+      : PlanMatcherImpl<ParallelProjectNode>({matcher}),
+        expressions_{expressions} {}
+
+  bool matchDetails(const ParallelProjectNode& plan) const override {
+    if (!expressions_.empty()) {
+      EXPECT_EQ(plan.projections().size(), expressions_.size());
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+
+      for (auto i = 0; i < expressions_.size(); ++i) {
+        auto expected = parse::parseExpr(expressions_[i], {});
+        EXPECT_EQ(plan.projections()[i]->toString(), expected->toString());
+      }
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+ private:
+  const std::vector<std::string> expressions_;
+};
+
 class LimitMatcher : public PlanMatcherImpl<LimitNode> {
  public:
   explicit LimitMatcher(const std::shared_ptr<PlanMatcher>& matcher)
@@ -446,6 +480,19 @@ PlanMatcherBuilder& PlanMatcherBuilder::project(
     const std::vector<std::string>& expressions) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<ProjectMatcher>(matcher_, expressions);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::parallelProject() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<ParallelProjectMatcher>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::parallelProject(
+    const std::vector<std::string>& expressions) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<ParallelProjectMatcher>(matcher_, expressions);
   return *this;
 }
 
