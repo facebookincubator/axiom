@@ -75,17 +75,15 @@ enum class OrderType {
 
 using OrderTypeVector = std::vector<OrderType, QGAllocator<OrderType>>;
 
-class RelationOp;
-
-/// Represents a system that contains or produces data.For cases of federation
+/// Represents a system that contains or produces data. For cases of federation
 /// where data is only accessible via a specific instance of a specific type of
 /// system, the locus represents the instance and the subclass of Locus
-/// represents the type of system for a schema object. For a
-/// RelationOp, the  locus of its distribution means that the op is performed by
-/// the corresponding system. Distributions can be copartitioned only
-/// if their locus is equal (==) to the other locus. A Locus is referenced by
-/// raw pointer and may be allocated from outside the optimization arena. It is
-/// immutable and lives past the optimizer arena.
+/// represents the type of system for a schema object. For a RelationOp, the
+/// locus of its distribution means that the op is performed by the
+/// corresponding system. Distributions can be copartitioned only if their locus
+/// is equal (==) to the other locus. A Locus is referenced by raw pointer and
+/// may be allocated from outside the optimization arena. It is immutable and
+/// lives past the optimizer arena.
 class Locus {
  public:
   explicit Locus(Name name, connector::Connector* connector)
@@ -229,68 +227,6 @@ struct Distribution {
   bool isBroadcast{false};
 };
 
-/// Identifies a base table or the operator type producing the relation. Base
-/// data as in Index has type kBase. The result of a table scan is kTableScan.
-enum class RelType {
-  kBase,
-  kTableScan,
-  kRepartition,
-  kFilter,
-  kProject,
-  kJoin,
-  kHashBuild,
-  kAggregation,
-  kOrderBy,
-  kUnionAll,
-  kLimit,
-  kValues,
-};
-
-/// Represents a relation (table) that is either physically stored or is the
-/// streaming output of a query operator. This has a distribution describing
-/// partitioning and data order and a set of columns describing the payload.
-class Relation {
- public:
-  Relation(
-      RelType relType,
-      Distribution distribution,
-      const ColumnVector& columns)
-      : relType_(relType),
-        distribution_(std::move(distribution)),
-        columns_(columns) {}
-
-  RelType relType() const {
-    return relType_;
-  }
-
-  const Distribution& distribution() const {
-    return distribution_;
-  }
-
-  const ColumnVector& columns() const {
-    return columns_;
-  }
-
-  ColumnVector& mutableColumns() {
-    return columns_;
-  }
-
-  template <typename T>
-  const T* as() const {
-    return static_cast<const T*>(this);
-  }
-
-  template <typename T>
-  T* as() {
-    return static_cast<T*>(this);
-  }
-
- protected:
-  const RelType relType_;
-  const Distribution distribution_;
-  ColumnVector columns_;
-};
-
 struct SchemaTable;
 using SchemaTableCP = const SchemaTable*;
 
@@ -300,21 +236,24 @@ using SchemaTableCP = const SchemaTable*;
 /// payload columns. An index is a ColumnGroup that may not have all
 /// columns but is organized to facilitate retrievel. We use the name
 /// index for ColumnGroup when using it for lookup.
-struct ColumnGroup : public Relation {
+struct ColumnGroup {
   ColumnGroup(
       Name _name,
       SchemaTableCP _table,
-      Distribution distribution,
+      Distribution _distribution,
       const ColumnVector& _columns,
       const connector::TableLayout* layout = nullptr)
-      : Relation(RelType::kBase, std::move(distribution), _columns),
-        name(_name),
+      : name(_name),
         table(_table),
-        layout(layout) {}
+        layout(layout),
+        distribution(_distribution),
+        columns(_columns) {}
 
   Name name;
   SchemaTableCP table;
   const connector::TableLayout* layout;
+  const Distribution distribution;
+  const ColumnVector columns;
 
   /// Returns cost of next lookup when the hit is within 'range' rows
   /// of the previous hit. If lookups are not batched or not ordered,
@@ -322,14 +261,14 @@ struct ColumnGroup : public Relation {
   float lookupCost(float range) const;
 };
 
-using ColumnGroupP = ColumnGroup*;
+using ColumnGroupCP = const ColumnGroup*;
 
 // Describes the number of rows to look at and the number of expected matches
 // given equality constraints for a set of columns. See
 // SchemaTable::indexInfo().
 struct IndexInfo {
   // Index chosen based on columns.
-  ColumnGroupP index;
+  ColumnGroupCP index;
 
   // True if the column combination is unique. This can be true even if there
   // is no key order in 'index'.
@@ -374,14 +313,15 @@ struct SchemaTable {
 
   /// Adds an index. The arguments set the corresponding members of a
   /// Distribution.
-  ColumnGroupP addIndex(
+  ColumnGroupCP addIndex(
       Name name,
       int32_t numKeysUnique,
       int32_t numOrdering,
       const ColumnVector& keys,
       DistributionType distributionType,
       const ColumnVector& partition,
-      ColumnVector columns);
+      ColumnVector columns,
+      const connector::TableLayout* layout);
 
   /// Finds or adds a column with 'name' and 'value'.
   ColumnCP column(const std::string& name, const Value& value);
@@ -397,7 +337,7 @@ struct SchemaTable {
 
   /// Returns   uniqueness and cardinality information for a lookup on 'index'
   /// where 'columns' have an equality constraint.
-  IndexInfo indexInfo(ColumnGroupP index, CPSpan<Column> columns) const;
+  IndexInfo indexInfo(ColumnGroupCP index, CPSpan<Column> columns) const;
 
   /// Returns the best index to use for lookup where 'columns' have an
   /// equality constraint.
@@ -413,7 +353,7 @@ struct SchemaTable {
   NameMap<ColumnCP> columns;
 
   // All indices. Must contain at least one.
-  std::vector<ColumnGroupP, QGAllocator<ColumnGroupP>> columnGroups;
+  std::vector<ColumnGroupCP, QGAllocator<ColumnGroupCP>> columnGroups;
 
   // Table description from external schema. This is the
   // source-dependent representation from which 'this' was created.

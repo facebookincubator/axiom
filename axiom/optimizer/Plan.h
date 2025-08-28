@@ -104,14 +104,12 @@ struct PlanSet {
 /// Represents the next table/derived table to join. May consist of several
 /// tables for a bushy build side.
 struct JoinCandidate {
-  JoinCandidate() = default;
-
   JoinCandidate(JoinEdgeP _join, PlanObjectCP _right, float _fanout)
       : join(_join), tables({_right}), fanout(_fanout) {}
 
-  /// Returns the join side info for 'table'. If 'other' is set, returns the
-  /// other side.
-  JoinSide sideOf(PlanObjectCP side, bool other = false) const;
+  /// Returns two join sides. First is the side that contains 'tables' (build).
+  /// Second is the other side.
+  std::pair<JoinSide, JoinSide> joinSides() const;
 
   /// Adds 'other' to the set of joins between the new table and already placed
   /// tables. a.k = b.k and c.k = b.k2 and c.k3 = a.k2. When placing c after a

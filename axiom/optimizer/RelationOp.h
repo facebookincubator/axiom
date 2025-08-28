@@ -79,6 +79,23 @@ struct Cost {
 using QGstring =
     std::basic_string<char, std::char_traits<char>, QGAllocator<char>>;
 
+/// Identifies the operator type producing the relation.
+enum class RelType {
+  kTableScan,
+  kRepartition,
+  kFilter,
+  kProject,
+  kJoin,
+  kHashBuild,
+  kAggregation,
+  kOrderBy,
+  kUnionAll,
+  kLimit,
+  kValues,
+};
+
+VELOX_DECLARE_ENUM_NAME(RelType)
+
 /// Physical relational operator. This is the common base class of all
 /// elements of plan candidates. The immutable Exprs, Columns and
 /// BaseTables in the query graph are referenced from
@@ -92,14 +109,16 @@ using QGstring =
 /// atomics or keeping a separate control block. This is faster and
 /// more compact and entirely bypasses malloc.
 /// would use malloc.
-class RelationOp : public Relation {
+class RelationOp {
  public:
   RelationOp(
       RelType type,
       boost::intrusive_ptr<RelationOp> input,
       Distribution distribution,
-      ColumnVector columns = {})
-      : Relation(type, std::move(distribution), std::move(columns)),
+      ColumnVector columns)
+      : relType_(type),
+        distribution_(std::move(distribution)),
+        columns_(std::move(columns)),
         input_(std::move(input)) {}
 
   virtual ~RelationOp() = default;
@@ -108,8 +127,30 @@ class RelationOp : public Relation {
     queryCtx()->free(ptr);
   }
 
+  RelType relType() const {
+    return relType_;
+  }
+
+  const Distribution& distribution() const {
+    return distribution_;
+  }
+
+  const ColumnVector& columns() const {
+    return columns_;
+  }
+
   const boost::intrusive_ptr<class RelationOp>& input() const {
     return input_;
+  }
+
+  template <typename T>
+  const T* as() const {
+    return static_cast<const T*>(this);
+  }
+
+  template <typename T>
+  T* as() {
+    return static_cast<T*>(this);
   }
 
   const Cost& cost() const {
@@ -161,6 +202,10 @@ class RelationOp : public Relation {
   // adds a line of cost information to 'out'
   void printCost(bool detail, std::stringstream& out) const;
 
+  const RelType relType_;
+  const Distribution distribution_;
+  const ColumnVector columns_;
+
   // Input of filter/project/group by etc., Left side of join, nullptr for a
   // leaf table scan.
   boost::intrusive_ptr<class RelationOp> input_;
@@ -200,25 +245,20 @@ struct TableScan : public RelationOp {
   TableScan(
       RelationOpPtr input,
       Distribution _distribution,
-      const BaseTable* table,
-      ColumnGroupP _index,
+      BaseTableCP table,
+      ColumnGroupCP _index,
       float fanout,
       ColumnVector columns,
       ExprVector lookupKeys = {},
       velox::core::JoinType joinType = velox::core::JoinType::kInner,
       ExprVector joinFilter = {});
 
-  /// Columns of base table available in 'index'.
-  static PlanObjectSet availableColumns(
-      const BaseTable* baseTable,
-      ColumnGroupP index);
-
   /// Returns the distribution given the table, index and columns. If
   /// partitioning/ordering columns are in the output columns, the
   /// distribution reflects the distribution of the index.
   static Distribution outputDistribution(
-      const BaseTable* baseTable,
-      ColumnGroupP index,
+      BaseTableCP baseTable,
+      ColumnGroupCP index,
       const ColumnVector& columns);
 
   const QGstring& historyKey() const override;
@@ -228,11 +268,11 @@ struct TableScan : public RelationOp {
   // The base table reference. May occur in multiple scans if the base
   // table decomposes into access via secondary index joined to pk or
   // if doing another pass for late materialization.
-  const BaseTable* baseTable;
+  BaseTableCP baseTable;
 
   // Index (or other materialization of table) used for the physical data
   // access.
-  ColumnGroupP index;
+  ColumnGroupCP index;
 
   // Columns read from 'baseTable'. Can be more than 'columns' if
   // there are filters that need columns that are not projected out to

@@ -41,120 +41,155 @@ PathCP stepsToPath(const std::vector<Step>& steps) {
 } // namespace
 
 void ToGraph::markFieldAccessed(
+    const lp::CallExpr& call,
+    int32_t lambdaOrdinal,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl,
+    std::span<const RowType* const> context,
+    std::span<const LogicalContextSource> sources) {
+  // The source is a lambda arg. We apply the path to the corresponding
+  // container arg of the 2nd order function call that has the lambda.
+  const auto* md = functionMetadata(toName(call.name()));
+  const auto* lambdaInfo = md->lambdaInfo(lambdaOrdinal);
+  const auto nth = lambdaInfo->argOrdinal[ordinal];
+
+  auto callContext = context.subspan(1);
+  auto callSources = sources.subspan(1);
+  markSubfields(call.inputAt(nth), steps, isControl, callContext, callSources);
+}
+
+void ToGraph::markFieldAccessed(
+    const lp::ProjectNode& project,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl) {
+  const auto& input = project.onlyInput();
+  markSubfields(
+      project.expressionAt(ordinal),
+      steps,
+      isControl,
+      std::array{input->outputType().get()},
+      std::array{LogicalContextSource{.planNode = input.get()}});
+}
+
+void ToGraph::markFieldAccessed(
+    const lp::AggregateNode& agg,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl) {
+  const auto& input = agg.onlyInput();
+
+  const auto inputContext = std::array{input->outputType().get()};
+  const auto inputSources =
+      std::array{LogicalContextSource{.planNode = input.get()}};
+  std::vector<Step> subSteps;
+  auto mark = [&](const lp::ExprPtr& expr) {
+    markSubfields(expr, subSteps, isControl, inputContext, inputSources);
+  };
+
+  const auto& keys = agg.groupingKeys();
+  if (ordinal < keys.size()) {
+    mark(keys[ordinal]);
+    return;
+  }
+
+  const auto& aggregate = agg.aggregateAt(ordinal - keys.size());
+  for (const auto& aggregateInput : aggregate->inputs()) {
+    mark(aggregateInput);
+  }
+
+  if (aggregate->filter()) {
+    mark(aggregate->filter());
+  }
+
+  for (const auto& sortingField : aggregate->ordering()) {
+    mark(sortingField.expression);
+  }
+}
+
+void ToGraph::markFieldAccessed(
+    const lp::SetNode& set,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl) {
+  for (const auto& input : set.inputs()) {
+    const auto inputContext = std::array{input->outputType().get()};
+    const auto inputSources =
+        std::array{LogicalContextSource{.planNode = input.get()}};
+    markFieldAccessed(
+        inputSources[0], ordinal, steps, isControl, inputContext, inputSources);
+  }
+}
+
+void ToGraph::markFieldAccessed(
     const LogicalContextSource& source,
     int32_t ordinal,
     std::vector<Step>& steps,
     bool isControl,
-    const std::vector<const RowType*>& context,
-    const std::vector<LogicalContextSource>& sources) {
-  const auto fields = isControl ? &controlSubfields_ : &payloadSubfields_;
-  if (source.planNode) {
-    const auto* path = stepsToPath(steps);
-    auto& paths = fields->nodeFields[source.planNode].resultPaths[ordinal];
-    if (paths.contains(path->id())) {
-      // Already marked.
-      return;
-    }
-    paths.add(path->id());
-
-    const auto kind = source.planNode->kind();
-    if (kind == lp::NodeKind::kProject) {
-      const auto* project = source.planNode->asUnchecked<lp::ProjectNode>();
-      const auto& input = project->onlyInput();
-      markSubfields(
-          project->expressionAt(ordinal),
-          steps,
-          isControl,
-          {input->outputType().get()},
-          {LogicalContextSource{.planNode = input.get()}});
-      return;
-    }
-
-    if (kind == lp::NodeKind::kAggregate) {
-      auto* agg = source.planNode->asUnchecked<lp::AggregateNode>();
-      const auto& input = agg->onlyInput();
-
-      const std::vector<const RowType*> inputContext = {
-          input->outputType().get()};
-      const std::vector<LogicalContextSource> inputSources = {
-          {.planNode = input.get()}};
-      std::vector<Step> subSteps;
-      auto mark = [&](const lp::ExprPtr& expr) {
-        markSubfields(expr, subSteps, isControl, inputContext, inputSources);
-      };
-
-      const auto& keys = agg->groupingKeys();
-      if (ordinal < keys.size()) {
-        mark(keys[ordinal]);
-        return;
-      }
-
-      const auto& aggregate = agg->aggregateAt(ordinal - keys.size());
-      for (const auto& aggregateInput : aggregate->inputs()) {
-        mark(aggregateInput);
-      }
-
-      if (aggregate->filter()) {
-        mark(aggregate->filter());
-      }
-
-      for (const auto& sortingField : aggregate->ordering()) {
-        mark(sortingField.expression);
-      }
-
-      return;
-    }
-
-    if (kind == lp::NodeKind::kSet) {
-      const auto* set = source.planNode->asUnchecked<lp::SetNode>();
-      for (const auto& input : set->inputs()) {
-        std::vector<const RowType*> inputContext{input->outputType().get()};
-        std::vector<LogicalContextSource> inputSources{
-            {.planNode = input.get()}};
-        markFieldAccessed(
-            inputSources[0],
-            ordinal,
-            steps,
-            isControl,
-            inputContext,
-            inputSources);
-      }
-    }
-
-    const auto& sourceInputs = source.planNode->inputs();
-    if (sourceInputs.empty()) {
-      return;
-    }
-
-    const auto& fieldName = source.planNode->outputType()->nameOf(ordinal);
-    for (const auto& sourceInput : sourceInputs) {
-      const auto& type = sourceInput->outputType();
-      if (auto maybeIdx = type->getChildIdxIfExists(fieldName)) {
-        markFieldAccessed(
-            {.planNode = sourceInput.get()},
-            maybeIdx.value(),
-            steps,
-            isControl,
-            context,
-            sources);
-        return;
-      }
-    }
-    VELOX_FAIL("Should have found source for expr {}", fieldName);
+    std::span<const RowType* const> context,
+    std::span<const LogicalContextSource> sources) {
+  if (!source.planNode) {
+    markFieldAccessed(
+        *source.call,
+        source.lambdaOrdinal,
+        ordinal,
+        steps,
+        isControl,
+        context,
+        sources);
+    return;
   }
 
-  // The source is a lambda arg. We apply the path to the corresponding
-  // container arg of the 2nd order function call that has the lambda.
-  auto* md = functionMetadata(toName(source.call->name()));
-  const auto* lambdaInfo = md->lambdaInfo(source.lambdaOrdinal);
-  const auto nth = lambdaInfo->argOrdinal[ordinal];
+  auto* fields = isControl ? &controlSubfields_ : &payloadSubfields_;
 
-  auto callContext = context;
-  callContext.erase(callContext.begin());
-  auto callSources = sources;
-  callSources.erase(callSources.begin());
-  markSubfields(
-      source.call->inputAt(nth), steps, isControl, callContext, callSources);
+  const auto* path = stepsToPath(steps);
+  auto& paths = fields->nodeFields[source.planNode].resultPaths[ordinal];
+  if (paths.contains(path->id())) {
+    // Already marked.
+    return;
+  }
+  paths.add(path->id());
+
+  const auto kind = source.planNode->kind();
+  if (kind == lp::NodeKind::kProject) {
+    const auto* project = source.planNode->asUnchecked<lp::ProjectNode>();
+    markFieldAccessed(*project, ordinal, steps, isControl);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kAggregate) {
+    const auto* agg = source.planNode->asUnchecked<lp::AggregateNode>();
+    markFieldAccessed(*agg, ordinal, steps, isControl);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kSet) {
+    const auto* set = source.planNode->asUnchecked<lp::SetNode>();
+    markFieldAccessed(*set, ordinal, steps, isControl);
+    return;
+  }
+
+  const auto& sourceInputs = source.planNode->inputs();
+  if (sourceInputs.empty()) {
+    return;
+  }
+
+  const auto& fieldName = source.planNode->outputType()->nameOf(ordinal);
+  for (const auto& sourceInput : sourceInputs) {
+    const auto& type = sourceInput->outputType();
+    if (auto maybeIdx = type->getChildIdxIfExists(fieldName)) {
+      markFieldAccessed(
+          {.planNode = sourceInput.get()},
+          maybeIdx.value(),
+          steps,
+          isControl,
+          context,
+          sources);
+      return;
+    }
+  }
+  VELOX_FAIL("Should have found source for expr {}", fieldName);
 }
 
 std::optional<int32_t> ToGraph::stepToArg(
@@ -207,8 +242,8 @@ void ToGraph::markSubfields(
     const lp::Expr* expr,
     std::vector<Step>& steps,
     bool isControl,
-    const std::vector<const RowType*>& context,
-    const std::vector<LogicalContextSource>& sources) {
+    std::span<const RowType* const> context,
+    std::span<const LogicalContextSource> sources) {
   if (expr->isInputReference()) {
     const auto& name = expr->asUnchecked<lp::InputReferenceExpr>()->name();
     for (auto i = 0; i < sources.size(); ++i) {
@@ -382,9 +417,10 @@ void ToGraph::markSubfields(
 
 void ToGraph::markColumnSubfields(
     const lp::LogicalPlanNodePtr& source,
-    const std::vector<lp::ExprPtr>& columns) {
-  std::vector<const RowType*> context{source->outputType().get()};
-  std::vector<LogicalContextSource> sources{{.planNode = source.get()}};
+    std::span<const lp::ExprPtr> columns) {
+  const auto context = std::array{source->outputType().get()};
+  const auto sources =
+      std::array{LogicalContextSource{.planNode = source.get()}};
   for (const auto& column : columns) {
     std::vector<Step> steps;
     markSubfields(column, steps, /* isControl */ true, context, sources);
@@ -405,7 +441,7 @@ void ToGraph::markControl(const lp::LogicalPlanNode& node) {
     }
   } else if (kind == lp::NodeKind::kFilter) {
     const auto& filter = node.asUnchecked<lp::FilterNode>();
-    markColumnSubfields(node.onlyInput(), {filter->predicate()});
+    markColumnSubfields(node.onlyInput(), std::array{filter->predicate()});
   } else if (kind == lp::NodeKind::kAggregate) {
     const auto* agg = node.asUnchecked<lp::AggregateNode>();
     markColumnSubfields(node.onlyInput(), agg->groupingKeys());

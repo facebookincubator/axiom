@@ -74,7 +74,8 @@ void ToGraph::setDtOutput(
     dt->exprs.push_back(inner);
 
     Value value(toType(type), 0);
-    auto* outer = make<Column>(toName(name), dt, value, toName(name));
+    const auto* columnName = toName(name);
+    auto* outer = make<Column>(columnName, dt, value, columnName);
     dt->columns.push_back(outer);
     renames_[name] = outer;
   }
@@ -90,8 +91,9 @@ void ToGraph::setDtUsedOutput(
     const auto* inner = translateColumn(name);
     dt->exprs.push_back(inner);
 
+    const auto* columnName = toName(name);
     const auto* outer =
-        make<Column>(toName(name), dt, inner->value(), toName(name));
+        make<Column>(columnName, dt, inner->value(), columnName);
     dt->columns.push_back(outer);
     renames_[name] = outer;
   }
@@ -258,6 +260,7 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
   std::vector<Step> steps;
   auto* source = exprSource_;
   auto expr = inputExpr;
+
   for (;;) {
     lp::ExprPtr input;
     Step step;
@@ -267,42 +270,43 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
       if (steps.empty()) {
         return std::nullopt;
       }
+
       // if this is a field we follow to the expr assigning the field if any.
-      Step ignore;
-      lp::ExprPtr ignore2;
-      if (!isSubfield(expr.get(), ignore, ignore2)) {
-        ColumnCP column = nullptr;
-        if (expr->isInputReference()) {
-          getExprForField(expr.get(), expr, column, source);
-          if (expr) {
-            continue;
-          }
+      ColumnCP column = nullptr;
+      if (expr->isInputReference()) {
+        getExprForField(expr.get(), expr, column, source);
+        if (expr) {
+          continue;
         }
-        SubfieldProjections* skyline = nullptr;
-        if (column) {
-          auto it = allColumnSubfields_.find(column);
-          if (it != allColumnSubfields_.end()) {
-            skyline = &it->second;
-          }
-        } else {
-          ensureFunctionSubfields(expr);
-          auto call = expr->asUnchecked<lp::CallExpr>();
-          auto it = functionSubfields_.find(call);
-          if (it != functionSubfields_.end()) {
-            skyline = &it->second;
-          }
-        }
-        // 'steps is a path. 'skyline' is a map from path to Expr. If no prefix
-        // of steps occurs in skyline, then the item referenced by steps is not
-        // materialized. Otherwise, the prefix that matches one in skyline is
-        // replaced by the Expr from skyline and the tail of 'steps' are tagged
-        // on the Expr. If skyline is empty, then 'steps' simply becomes a
-        // nested sequence of getters.
-        if (steps.empty()) {
-          return std::nullopt;
-        }
-        return makeGettersOverSkyline(steps, skyline, expr, column);
       }
+
+      SubfieldProjections* skyline = nullptr;
+      if (column) {
+        auto it = allColumnSubfields_.find(column);
+        if (it != allColumnSubfields_.end()) {
+          skyline = &it->second;
+        }
+      } else {
+        ensureFunctionSubfields(expr);
+        auto call = expr->asUnchecked<lp::CallExpr>();
+        auto it = functionSubfields_.find(call);
+        if (it != functionSubfields_.end()) {
+          skyline = &it->second;
+        }
+      }
+
+      // 'steps is a path. 'skyline' is a map from path to Expr. If no prefix
+      // of steps occurs in skyline, then the item referenced by steps is not
+      // materialized. Otherwise, the prefix that matches one in skyline is
+      // replaced by the Expr from skyline and the tail of 'steps' are tagged
+      // on the Expr. If skyline is empty, then 'steps' simply becomes a
+      // nested sequence of getters.
+      auto originalExprSource = exprSource_;
+      SCOPE_EXIT {
+        exprSource_ = originalExprSource;
+      };
+      exprSource_ = source;
+      return makeGettersOverSkyline(steps, skyline, expr, column);
     }
     steps.push_back(step);
     expr = input;
@@ -364,7 +368,7 @@ ExprCP ToGraph::makeGettersOverSkyline(
       }
     }
     if (!found) {
-      // The path is not materialized. Need a longer path. to intersect skyline.
+      // The path is not materialized. Need a longer path to intersect skyline.
       return nullptr;
     }
   } else {
@@ -386,7 +390,6 @@ ExprCP ToGraph::makeGettersOverSkyline(
     last = steps.size();
   }
 
-  std::vector<Step> reverse;
   for (int32_t i = last - 1; i >= 0; --i) {
     // We make a getter over expr made so far with 'steps[i]' as first.
     PathExpr pathExpr = {steps[i], nullptr, expr};
@@ -394,39 +397,44 @@ ExprCP ToGraph::makeGettersOverSkyline(
     if (it != deduppedGetters_.end()) {
       expr = it->second;
     } else {
-      auto& step = steps[i];
+      const auto& step = steps[i];
+      auto inputType = expr->value().type;
       switch (step.kind) {
         case StepKind::kField: {
-          if (!step.field) {
-            auto* type = toType(expr->value().type->childAt(step.id));
-            expr = make<Field>(type, expr, step.id);
-            break;
+          if (step.field) {
+            auto childType = toType(inputType->asRow().findChild(step.field));
+            expr = make<Field>(childType, expr, step.field);
+          } else {
+            auto childType = toType(inputType->childAt(step.id));
+            expr = make<Field>(childType, expr, step.id);
           }
-          auto* type = toType(expr->value().type->childAt(
-              expr->value().type->as<TypeKind::ROW>().getChildIdx(step.field)));
-          expr = make<Field>(type, expr, step.field);
           break;
         }
+
         case StepKind::kSubscript: {
-          auto inputType = expr->value().type;
-          const Type* type = toType(
-              inputType->childAt(inputType->kind() == TypeKind::ARRAY ? 0 : 1));
-          auto subscriptType = toType(
-              inputType->kind() == TypeKind::ARRAY
-                  ? INTEGER()
-                  : inputType->as<TypeKind::MAP>().childAt(0));
-          auto subscriptKind = subscriptType->kind();
-          ExprVector args;
-          args.push_back(expr);
-          args.push_back(make<Literal>(
-              Value(subscriptType, 1), subscriptLiteral(subscriptKind, step)));
+          // Type of array element or map value.
+          auto valueType =
+              toType(inputType->childAt(inputType->isArray() ? 0 : 1));
+
+          // Type of array index or map key.
+          auto subscriptType =
+              toType(inputType->isArray() ? INTEGER() : inputType->childAt(0));
+
+          ExprVector args{
+              expr,
+              make<Literal>(
+                  Value(subscriptType, 1),
+                  subscriptLiteral(subscriptType->kind(), step)),
+          };
+
           expr = make<Call>(
               toName("subscript"),
-              Value(type, 1),
+              Value(valueType, 1),
               std::move(args),
               FunctionSet());
           break;
         }
+
         case StepKind::kCardinality: {
           expr = make<Call>(
               toName("cardinality"),
@@ -438,6 +446,7 @@ ExprCP ToGraph::makeGettersOverSkyline(
         default:
           VELOX_NYI();
       }
+
       deduppedGetters_[pathExpr] = expr;
     }
   }
@@ -484,12 +493,10 @@ BitSet ToGraph::functionSubfields(
 
 void ToGraph::ensureFunctionSubfields(const lp::ExprPtr& expr) {
   if (const auto* call = expr->asUnchecked<lp::CallExpr>()) {
-    auto metadata = functionMetadata(exec::sanitizeName(call->name()));
-    if (!metadata) {
-      return;
-    }
-    if (!translatedSubfieldFuncs_.count(call)) {
-      translateExpr(expr);
+    if (functionMetadata(exec::sanitizeName(call->name()))) {
+      if (!translatedSubfieldFuncs_.contains(call)) {
+        translateExpr(expr);
+      }
     }
   }
 }
@@ -641,8 +648,8 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
   if (expr->isConstant()) {
     return makeConstant(*expr->asUnchecked<lp::ConstantExpr>());
   }
-  auto path = translateSubfield(expr);
-  if (path.has_value()) {
+
+  if (auto path = translateSubfield(expr)) {
     return path.value();
   }
 
@@ -651,7 +658,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
   }
 
   ToGraphContext ctx(expr.get());
-  ExceptionContextSetter s(makeExceptionContext(&ctx));
+  ExceptionContextSetter exceptionContext(makeExceptionContext(&ctx));
 
   const auto* call = expr->asUnchecked<lp::CallExpr>();
   std::string callName;
@@ -669,23 +676,25 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
   const lp::SpecialFormExpr* specialForm = expr->isSpecialForm()
       ? expr->asUnchecked<lp::SpecialFormExpr>()
       : nullptr;
-  ExprVector args{expr->inputs().size()};
-  PlanObjectSet columns;
-  FunctionSet funcs;
-  auto& inputs = expr->inputs();
-  float cardinality = 1;
-  bool allConstant = true;
-
-  for (auto i = 0; i < inputs.size(); ++i) {
-    args[i] = translateExpr(inputs[i]);
-    allConstant &= args[i]->is(PlanType::kLiteralExpr);
-    cardinality = std::max(cardinality, args[i]->value().cardinality);
-    if (args[i]->is(PlanType::kCallExpr)) {
-      funcs = funcs | args[i]->as<Call>()->functions();
-    }
-  }
 
   if (call || specialForm) {
+    FunctionSet funcs;
+    const auto& inputs = expr->inputs();
+    ExprVector args;
+    args.reserve(inputs.size());
+    float cardinality = 1;
+    bool allConstant = true;
+
+    for (auto input : inputs) {
+      auto arg = translateExpr(input);
+      args.emplace_back(arg);
+      allConstant &= arg->is(PlanType::kLiteralExpr);
+      cardinality = std::max(cardinality, arg->value().cardinality);
+      if (arg->is(PlanType::kCallExpr)) {
+        funcs = funcs | arg->as<Call>()->functions();
+      }
+    }
+
     auto name = call
         ? toName(callName)
         : toName(SpecialFormCallNames::toCallName(specialForm->form()));
@@ -694,6 +703,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
         return literal;
       }
     }
+
     funcs = funcs | functionBits(name);
     auto* callExpr = deduppedCall(
         name, Value(toType(expr->type()), cardinality), std::move(args), funcs);
@@ -737,61 +747,71 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
     const lp::CallExpr* call,
     const FunctionMetadata* metadata) {
   translatedSubfieldFuncs_.insert(call);
+
   auto subfields = functionSubfields(call, false, false);
   if (subfields.empty()) {
     // The function is accessed as a whole.
     return std::nullopt;
   }
+
   auto* ctx = queryCtx();
   std::vector<PathCP> paths;
   subfields.forEach([&](auto id) { paths.push_back(ctx->pathById(id)); });
-  ExprVector args(call->inputs().size());
+
   BitSet usedArgs;
   bool allUsed = false;
-  if (metadata->argOrdinal.empty()) {
+
+  const auto& argOrginal = metadata->argOrdinal;
+  if (argOrginal.empty()) {
     allUsed = true;
   } else {
     for (auto i = 0; i < paths.size(); ++i) {
-      if (std::find(
-              metadata->argOrdinal.begin(), metadata->argOrdinal.end(), i) ==
-          metadata->argOrdinal.end()) {
+      if (std::find(argOrginal.begin(), argOrginal.end(), i) ==
+          argOrginal.end()) {
         // This argument is not a source of subfields over some field
-        // of the return value. Compute this in any case. accessed
+        // of the return value. Compute this in any case.
         usedArgs.add(i);
         continue;
       }
-      auto& step = paths[i]->steps()[0];
-      auto maybeArg = stepToArg(step, metadata);
-      if (maybeArg.has_value()) {
+
+      const auto& step = paths[i]->steps()[0];
+      if (auto maybeArg = stepToArg(step, metadata)) {
         usedArgs.add(maybeArg.value());
       }
     }
   }
 
+  const auto& inputs = call->inputs();
+  ExprVector args(inputs.size());
   float cardinality = 1;
   FunctionSet funcs;
-  for (auto i = 0; i < call->inputs().size(); ++i) {
+  for (auto i = 0; i < inputs.size(); ++i) {
+    const auto& input = inputs[i];
     if (allUsed || usedArgs.contains(i)) {
-      args[i] = translateExpr(call->inputs()[i]);
+      args[i] = translateExpr(input);
       cardinality = std::max(cardinality, args[i]->value().cardinality);
       if (args[i]->is(PlanType::kCallExpr)) {
         funcs = funcs | args[i]->as<Call>()->functions();
       }
     } else {
-      // make a null of the type for the unused arg to keep the tree valid.
+      // Make a null of the type for the unused arg to keep the tree valid.
+      const auto& inputType = input->type();
       args[i] = make<Literal>(
-          Value(toType(call->inputs()[i]->type()), 1),
-          make<Variant>(Variant::null(call->inputs()[i]->type()->kind())));
+          Value(toType(inputType), 1),
+          make<Variant>(Variant::null(inputType->kind())));
     }
   }
+
   auto* name = toName(exec::sanitizeName(call->name()));
   funcs = funcs | functionBits(name);
+
   if (metadata->logicalExplode) {
     auto map = metadata->logicalExplode(call, paths);
     std::unordered_map<PathCP, ExprCP> translated;
-    for (auto& pair : map) {
-      translated[pair.first] = translateExpr(pair.second);
+    for (const auto& [path, expr] : map) {
+      translated[path] = translateExpr(expr);
     }
+
     trace(OptimizerOptions::kPreprocess, [&]() {
       std::cout << "Explode=" << lp::ExprPrinter::toText(*call) << std::endl;
       std::cout << "num paths=" << paths.size() << std::endl;
@@ -1161,7 +1181,8 @@ PlanObjectP ToGraph::makeValuesTable(const lp::ValuesNode& values) {
 
     const auto& name = names[i];
     Value value{toType(type->childAt(i)), cardinality};
-    auto* column = make<Column>(toName(name), valuesTable, value, toName(name));
+    const auto* columnName = toName(name);
+    auto* column = make<Column>(columnName, valuesTable, value, columnName);
     valuesTable->columns.push_back(column);
 
     renames_[name] = column;
@@ -1231,6 +1252,7 @@ PlanObjectP ToGraph::addProjection(const lp::ProjectNode* project) {
       }
     }
   });
+
   for (auto i : channels) {
     if (exprs[i]->isInputReference()) {
       const auto& name =
@@ -1339,11 +1361,9 @@ DerivedTableP ToGraph::translateSetJoin(
   ColumnVector columns;
   for (auto i = 0; i < type->size(); ++i) {
     exprs.push_back(left->columns[i]);
-    columns.push_back(make<Column>(
-        toName(type->nameOf(i)),
-        setDt,
-        exprs.back()->value(),
-        toName(type->nameOf(i))));
+    const auto* columnName = toName(type->nameOf(i));
+    columns.push_back(
+        make<Column>(columnName, setDt, exprs.back()->value(), columnName));
     renames_[type->nameOf(i)] = columns.back();
   }
 
@@ -1440,8 +1460,9 @@ DerivedTableP ToGraph::translateUnion(
           newDt->exprs.push_back(inner);
 
           // The top dt has the same columns as all the unioned dts.
+          const auto* columnName = toName(name);
           auto* outer =
-              make<Column>(toName(name), setDt, inner->value(), toName(name));
+              make<Column>(columnName, setDt, inner->value(), columnName);
           setDt->columns.push_back(outer);
           newDt->columns.push_back(outer);
         }

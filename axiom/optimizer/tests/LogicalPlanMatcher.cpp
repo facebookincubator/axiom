@@ -72,6 +72,12 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::tableScan() {
   return *this;
 }
 
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::values() {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<LogicalPlanMatcherImpl<ValuesNode>>();
+  return *this;
+}
+
 LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::filter() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<LogicalPlanMatcherImpl<FilterNode>>(matcher_);

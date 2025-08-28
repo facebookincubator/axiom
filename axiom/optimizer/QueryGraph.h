@@ -155,7 +155,7 @@ class Column : public Expr {
  public:
   Column(
       Name name,
-      PlanObjectP relation,
+      PlanObjectCP relation,
       const Value& value,
       Name alias = nullptr,
       Name nameInTable = nullptr,
@@ -185,7 +185,7 @@ class Column : public Expr {
 
   std::string toString() const override;
 
-  struct Equivalence* equivalence() const {
+  EquivalenceP equivalence() const {
     return equivalence_;
   }
 
@@ -202,7 +202,7 @@ class Column : public Expr {
   Name name_;
 
   // The defining BaseTable or DerivedTable.
-  PlanObjectP relation_;
+  PlanObjectCP relation_;
 
   // Optional alias copied from the the logical plan.
   Name alias_;
@@ -545,9 +545,7 @@ class JoinEdge {
         markColumn_(spec.markColumn),
         directed_(spec.directed) {
     VELOX_CHECK_NOT_NULL(rightTable);
-    if (isInner()) {
-      VELOX_CHECK(filter_.empty());
-    }
+    VELOX_CHECK(directed_ || filter_.empty() || !isInner());
   }
 
   static JoinEdge* makeInner(PlanObjectCP leftTable, PlanObjectCP rightTable) {
@@ -786,7 +784,7 @@ struct BaseTable : public PlanObject {
   BitSet columnSubfields(int32_t id, bool payloadOnly, bool controlOnly) const;
 
   /// Returns possible indices for driving table scan of 'table'.
-  std::vector<ColumnGroupP> chooseLeafIndex() const {
+  std::vector<ColumnGroupCP> chooseLeafIndex() const {
     VELOX_DCHECK(!schemaTable->columnGroups.empty());
     return {schemaTable->columnGroups[0]};
   }

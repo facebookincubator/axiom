@@ -29,6 +29,30 @@ void Cost::add(const Cost& other) {
   setupCost += other.setupCost;
 }
 
+namespace {
+
+const auto& relTypeNames() {
+  static const folly::F14FastMap<RelType, std::string_view> kNames = {
+      {RelType::kTableScan, "TableScan"},
+      {RelType::kRepartition, "Repartition"},
+      {RelType::kFilter, "Filter"},
+      {RelType::kProject, "Project"},
+      {RelType::kJoin, "Join"},
+      {RelType::kHashBuild, "HashBuild"},
+      {RelType::kAggregation, "Aggregation"},
+      {RelType::kOrderBy, "OrderBy"},
+      {RelType::kUnionAll, "UnionAll"},
+      {RelType::kLimit, "Limit"},
+      {RelType::kValues, "Values"},
+  };
+
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(RelType, relTypeNames)
+
 const Value& RelationOp::value(ExprCP expr) const {
   // Compute new Value by applying restrictions from operators
   // between the place Expr is first defined and the output of
@@ -68,14 +92,15 @@ void updateLeafCost(
 
 float orderPrefixDistance(
     const RelationOpPtr& input,
-    ColumnGroupP index,
+    ColumnGroupCP index,
     const ExprVector& keys) {
+  const auto& orderKeys = index->distribution.orderKeys;
   float selection = 1;
   for (int32_t i = 0; i < input->distribution().orderKeys.size() &&
-       i < index->distribution().orderKeys.size() && i < keys.size();
+       i < orderKeys.size() && i < keys.size();
        ++i) {
     if (input->distribution().orderKeys[i]->sameOrEqual(*keys[i])) {
-      selection *= index->distribution().orderKeys[i]->value().cardinality;
+      selection *= orderKeys[i]->value().cardinality;
     }
   }
   return selection;
@@ -87,7 +112,7 @@ TableScan::TableScan(
     RelationOpPtr input,
     Distribution _distribution,
     const BaseTable* table,
-    ColumnGroupP _index,
+    ColumnGroupCP _index,
     float fanout,
     ColumnVector columns,
     ExprVector lookupKeys,
@@ -132,55 +157,38 @@ TableScan::TableScan(
 // static
 Distribution TableScan::outputDistribution(
     const BaseTable* baseTable,
-    ColumnGroupP index,
+    ColumnGroupCP index,
     const ColumnVector& columns) {
   auto schemaColumns = transform<ColumnVector>(
       columns, [](auto& column) { return column->schemaColumn(); });
+
+  const auto& distribution = index->distribution;
 
   ExprVector partition;
   ExprVector orderKeys;
   OrderTypeVector orderTypes;
   // if all partitioning columns are projected, the output is partitioned.
-  if (isSubset(index->distribution().partition, schemaColumns)) {
-    partition = index->distribution().partition;
+  if (isSubset(distribution.partition, schemaColumns)) {
+    partition = distribution.partition;
     replace(partition, schemaColumns, columns.data());
   }
 
-  auto numPrefix = prefixSize(index->distribution().orderKeys, schemaColumns);
+  auto numPrefix = prefixSize(distribution.orderKeys, schemaColumns);
   if (numPrefix > 0) {
-    orderKeys = index->distribution().orderKeys;
+    orderKeys = distribution.orderKeys;
     orderKeys.resize(numPrefix);
-    orderTypes = index->distribution().orderTypes;
+    orderTypes = distribution.orderTypes;
     orderTypes.resize(numPrefix);
     replace(orderKeys, schemaColumns, columns.data());
   }
   return {
-      index->distribution().distributionType,
+      distribution.distributionType,
       std::move(partition),
       std::move(orderKeys),
       std::move(orderTypes),
-      index->distribution().numKeysUnique <= numPrefix
-          ? index->distribution().numKeysUnique
-          : 0,
+      distribution.numKeysUnique <= numPrefix ? distribution.numKeysUnique : 0,
       1.0F / baseTable->filterSelectivity,
   };
-}
-
-// static
-PlanObjectSet TableScan::availableColumns(
-    const BaseTable* baseTable,
-    ColumnGroupP index) {
-  // The columns of base table that exist in 'index'.
-  PlanObjectSet result;
-  for (auto column : index->columns()) {
-    for (auto baseColumn : baseTable->columns) {
-      if (baseColumn->name() == column->name()) {
-        result.add(baseColumn);
-        break;
-      }
-    }
-  }
-  return result;
 }
 
 std::string Cost::toString(bool /*detail*/, bool isUnit) const {
@@ -704,6 +712,8 @@ Distribution makeOrderByDistribution(
   distribution.partition.clear();
   distribution.orderKeys = std::move(orderKeys);
   distribution.orderTypes = std::move(orderTypes);
+  VELOX_DCHECK_EQ(
+      distribution.orderKeys.size(), distribution.orderTypes.size());
 
   return distribution;
 }
@@ -721,7 +731,8 @@ OrderBy::OrderBy(
           makeOrderByDistribution(
               input,
               std::move(orderKeys),
-              std::move(orderTypes))),
+              std::move(orderTypes)),
+          input->columns()),
       limit{limit},
       offset{offset} {
   cost_.inputCardinality = inputCardinality();

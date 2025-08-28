@@ -31,6 +31,8 @@ class LogicalPlanMatcherBuilder {
  public:
   LogicalPlanMatcherBuilder& tableScan();
 
+  LogicalPlanMatcherBuilder& values();
+
   LogicalPlanMatcherBuilder& filter();
 
   LogicalPlanMatcherBuilder& project();

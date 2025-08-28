@@ -126,7 +126,8 @@ struct DerivedTable : public PlanObject {
   /// not try to further restrict this with probe side.
   bool noImportOfExists{false};
 
-  /// Postprocessing clauses, group by, having, order by, limit, offset.
+  /// Postprocessing clauses: group by, having, order by, limit, offset.
+
   AggregationPlanCP aggregation{nullptr};
 
   ExprVector having;

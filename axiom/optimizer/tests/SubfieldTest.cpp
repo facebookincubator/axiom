@@ -587,6 +587,58 @@ TEST_P(SubfieldTest, maps) {
   testParallelExpr(opts, rowType);
 }
 
+TEST_P(SubfieldTest, blackbox) {
+  auto data = makeRowVector(
+      {"id", "m"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeMapVectorFromJson<int32_t, float>(
+              {"{1: 0.1, 2: 0.2}", "{3: 0.3, 4: 0.4}"}),
+      });
+
+  createTable("t", {data});
+
+  lp::PlanBuilder::Context ctx(kHiveConnectorId);
+  ctx.hook = [](const auto& name, const auto& args) -> lp::ExprPtr {
+    if (name == "map_row_from_map") {
+      VELOX_CHECK(args.at(2)->isConstant());
+      auto names = args.at(2)
+                       ->template asUnchecked<lp::ConstantExpr>()
+                       ->value()
+                       ->template array<std::string>();
+
+      return std::make_shared<lp::CallExpr>(
+          ROW(names, std::vector<TypePtr>(names.size(), REAL())), name, args);
+    }
+
+    if (name == "make_named_row") {
+      std::vector<std::string> names;
+      for (auto i = 0; i < args.size(); i += 2) {
+        VELOX_CHECK(args.at(i)->isConstant());
+        names.push_back(args.at(i)
+                            ->template asUnchecked<lp::ConstantExpr>()
+                            ->value()
+                            ->template value<std::string>());
+      }
+      return std::make_shared<lp::CallExpr>(
+          ROW(names, std::vector<TypePtr>(names.size(), REAL())), name, args);
+    }
+
+    return nullptr;
+  };
+
+  auto logicalPlan =
+      lp::PlanBuilder(ctx)
+          .tableScan("t")
+          .project(
+              {"map_row_from_map(m, array[1, 2, 3], array['f1', 'f2', 'f3']) as m"})
+          .project({"make_named_row('x', m.f1, 'y', m.f2) as m"})
+          .project({"m.x", "m.y"})
+          .build();
+
+  ASSERT_NO_THROW(toSingleNodePlan(logicalPlan));
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     SubfieldTests,
     SubfieldTest,

@@ -31,9 +31,7 @@ class PrestoParser {
       bool enableTracing = false);
 
  private:
-  logical_plan::LogicalPlanNodePtr doParse(
-      const std::string& sql,
-      bool enableTracing);
+  SqlStatementPtr doParse(const std::string& sql, bool enableTracing);
 
   const std::string defaultConnectorId_;
 

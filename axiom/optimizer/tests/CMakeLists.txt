@@ -137,6 +137,7 @@ target_link_libraries(
   velox_schema_resolver
   velox_connector_split_source
   velox_hive_connector_metadata
+  velox_tpch_connector_metadata
   velox_optimizer_tests_duck_parser
   velox_optimizer_tests_presto_parser
   velox_query_benchmark

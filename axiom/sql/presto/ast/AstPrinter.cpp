@@ -1139,4 +1139,8 @@ void AstPrinter::visitExplainType(ExplainType* node) {
   printHeader("ExplainType", node);
 }
 
+void AstPrinter::visitShowColumns(ShowColumns* node) {
+  printHeader("ShowColumns", node);
+}
+
 } // namespace axiom::sql::presto

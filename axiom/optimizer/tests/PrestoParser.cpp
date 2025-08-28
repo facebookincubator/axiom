@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cctype>
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/optimizer/connectors/ConnectorMetadata.h"
 #include "axiom/sql/presto/ParserHelper.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
@@ -1120,20 +1121,23 @@ class RelationPlanner : public sql::AstVisitor {
 
   lp::PlanBuilder::Context context_;
   std::shared_ptr<lp::PlanBuilder> builder_;
-}; // namespace facebook::velox::optimizer::test
+};
 
 } // namespace
 
 SqlStatementPtr PrestoParser::parse(
     const std::string& sql,
     bool enableTracing) {
-  return std::make_shared<SelectStatement>(doParse(sql, enableTracing));
+  return doParse(sql, enableTracing);
 }
 
 lp::ExprPtr PrestoParser::parseExpression(
     const std::string& sql,
     bool enableTracing) {
-  auto plan = doParse("SELECT " + sql, enableTracing);
+  auto statement = doParse("SELECT " + sql, enableTracing);
+  VELOX_USER_CHECK(statement->isSelect());
+
+  auto plan = statement->asUnchecked<SelectStatement>()->plan();
 
   VELOX_USER_CHECK(plan->is(lp::NodeKind::kProject));
 
@@ -1144,7 +1148,7 @@ lp::ExprPtr PrestoParser::parseExpression(
   return project->expressionAt(0);
 }
 
-logical_plan::LogicalPlanNodePtr PrestoParser::doParse(
+SqlStatementPtr PrestoParser::doParse(
     const std::string& sql,
     bool enableTracing) {
   sql::ParserHelper helper(sql);
@@ -1163,9 +1167,40 @@ logical_plan::LogicalPlanNodePtr PrestoParser::doParse(
   }
 
   RelationPlanner planner(defaultConnectorId_);
-  query->accept(&planner);
+  if (query->is(sql::NodeType::kExplain)) {
+    query->as<sql::Explain>()->statement()->accept(&planner);
+    return std::make_shared<ExplainStatement>(
+        std::make_shared<SelectStatement>(planner.getPlan()));
+  }
 
-  return planner.getPlan();
+  if (query->is(sql::NodeType::kShowColumns)) {
+    const auto tableName = query->as<sql::ShowColumns>()->table()->suffix();
+
+    auto table = connector::getConnector(defaultConnectorId_)
+                     ->metadata()
+                     ->findTable(tableName);
+
+    VELOX_USER_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
+
+    const auto& schema = table->rowType();
+
+    std::vector<Variant> data;
+    data.reserve(schema->size());
+    for (auto i = 0; i < schema->size(); ++i) {
+      data.emplace_back(
+          Variant::row({schema->nameOf(i), schema->childAt(i)->toString()}));
+    }
+
+    lp::PlanBuilder::Context ctx(defaultConnectorId_);
+
+    return std::make_shared<SelectStatement>(
+        lp::PlanBuilder(ctx)
+            .values(ROW({"column", "type"}, {VARCHAR(), VARCHAR()}), data)
+            .build());
+  }
+
+  query->accept(&planner);
+  return std::make_shared<SelectStatement>(planner.getPlan());
 }
 
 } // namespace facebook::velox::optimizer::test

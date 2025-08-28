@@ -16,6 +16,8 @@
 
 #include "axiom/optimizer/Optimization.h"
 #include <iostream>
+#include "axiom/optimizer/VeloxHistory.h"
+#include "velox/expression/Expr.h"
 
 namespace lp = facebook::velox::logical_plan;
 
@@ -46,6 +48,41 @@ Optimization::Optimization(
     join->guessFanout();
   }
   toGraph_.setDtOutput(root_, *logicalPlan_);
+}
+
+// static
+PlanAndStats Optimization::toVeloxPlan(
+    const lp::LogicalPlanNode& logicalPlan,
+    velox::memory::MemoryPool& pool,
+    OptimizerOptions options,
+    axiom::runner::MultiFragmentPlan::Options runnerOptions) {
+  auto allocator = std::make_unique<velox::HashStringAllocator>(&pool);
+  auto context = std::make_unique<QueryGraphContext>(*allocator);
+  queryCtx() = context.get();
+  SCOPE_EXIT {
+    queryCtx() = nullptr;
+  };
+
+  auto veloxQueryCtx = velox::core::QueryCtx::create();
+  velox::exec::SimpleExpressionEvaluator evaluator(veloxQueryCtx.get(), &pool);
+
+  auto schemaResolver = std::make_shared<SchemaResolver>();
+
+  VeloxHistory history;
+
+  Schema schema("default", schemaResolver.get(), /* locus */ nullptr);
+
+  Optimization opt(
+      logicalPlan,
+      schema,
+      history,
+      veloxQueryCtx,
+      evaluator,
+      options,
+      runnerOptions);
+
+  auto best = opt.bestPlan();
+  return opt.toVeloxPlan(best->op);
 }
 
 void Optimization::trace(
@@ -146,13 +183,14 @@ void reducingJoinsRecursive(
   }
 }
 
-JoinCandidate reducingJoins(
+// For an inner join, see if can bundle reducing joins on the build.
+std::optional<JoinCandidate> reducingJoins(
     const PlanState& state,
     const JoinCandidate& candidate) {
-  // For an inner join, see if can bundle reducing joins on the build.
-  JoinCandidate reducing;
-  reducing.join = candidate.join;
-  reducing.fanout = candidate.fanout;
+  std::vector<PlanObjectCP> tables;
+  std::vector<PlanObjectSet> existences;
+  float fanout = candidate.fanout;
+
   PlanObjectSet reducingSet;
   if (candidate.join->isInner()) {
     PlanObjectSet visited = state.placed;
@@ -172,15 +210,16 @@ JoinCandidate reducingJoins(
         reduction);
     if (reduction < 0.9) {
       // The only table in 'candidate' must be first in the bushy table list.
-      reducing.tables = candidate.tables;
+      tables = candidate.tables;
       reducingSet.forEach([&](auto object) {
-        if (object != reducing.tables[0]) {
-          reducing.tables.push_back(object);
+        if (object != tables[0]) {
+          tables.push_back(object);
         }
       });
-      reducing.fanout = candidate.fanout * reduction;
+      fanout = candidate.fanout * reduction;
     }
   }
+
   if (!state.dt->noImportOfExists) {
     PlanObjectSet exists;
     float reduction = 1;
@@ -209,18 +248,24 @@ JoinCandidate reducingJoins(
             for (auto i = 1; i < path.size(); ++i) {
               added.add(path[i]);
             }
-            reducing.existences.push_back(std::move(added));
+            existences.push_back(std::move(added));
           }
         });
   }
-  if (reducing.tables.empty() && reducing.existences.empty()) {
+
+  if (tables.empty() && existences.empty()) {
     // No reduction.
-    return JoinCandidate{};
+    return std::nullopt;
   }
-  if (reducing.tables.empty()) {
+
+  if (tables.empty()) {
     // No reducing joins but reducing existences from probe side.
-    reducing.tables = candidate.tables;
+    tables = candidate.tables;
   }
+
+  JoinCandidate reducing(candidate.join, tables[0], fanout);
+  reducing.tables = std::move(tables);
+  reducing.existences = std::move(existences);
   return reducing;
 }
 
@@ -302,15 +347,15 @@ Optimization::nextJoins(PlanState& state) {
         }
       });
 
-  std::vector<JoinCandidate> bushes;
   // Take the  first hand joined tables and bundle them with reducing joins that
   // can go on the build side.
+  std::vector<JoinCandidate> bushes;
   for (auto& candidate : candidates) {
-    auto bush = reducingJoins(state, candidate);
-    if (!bush.tables.empty()) {
-      bushes.push_back(std::move(bush));
+    if (auto bush = reducingJoins(state, candidate)) {
+      bushes.push_back(std::move(bush.value()));
     }
   }
+
   candidates.insert(candidates.begin(), bushes.begin(), bushes.end());
   std::sort(
       candidates.begin(),
@@ -452,30 +497,32 @@ bool isIndexColocated(
     const IndexInfo& info,
     const ExprVector& lookupValues,
     const RelationOpPtr& input) {
-  if (info.index->distribution().isBroadcast &&
+  const auto& distribution = info.index->distribution;
+  if (distribution.isBroadcast &&
       input->distribution().distributionType.locus ==
-          info.index->distribution().distributionType.locus) {
+          distribution.distributionType.locus) {
     return true;
   }
 
   // True if 'input' is partitioned so that each partitioning key is joined to
   // the corresponding partition key in 'info'.
-  if (input->distribution().distributionType !=
-      info.index->distribution().distributionType) {
+  if (input->distribution().distributionType != distribution.distributionType) {
     return false;
   }
+
   if (input->distribution().partition.empty()) {
     return false;
   }
-  if (input->distribution().partition.size() !=
-      info.index->distribution().partition.size()) {
+
+  if (input->distribution().partition.size() != distribution.partition.size()) {
     return false;
   }
+
   for (auto i = 0; i < input->distribution().partition.size(); ++i) {
     auto nthKey = position(lookupValues, *input->distribution().partition[i]);
     if (nthKey != kNotFound) {
       if (info.schemaColumn(info.lookupKeys.at(nthKey)) !=
-          info.index->distribution().partition.at(i)) {
+          distribution.partition.at(i)) {
         return false;
       }
     } else {
@@ -494,8 +541,10 @@ RelationOpPtr repartitionForIndex(
     return plan;
   }
 
+  const auto& distribution = info.index->distribution;
+
   ExprVector keyExprs;
-  auto& partition = info.index->distribution().partition;
+  auto& partition = distribution.partition;
   for (auto key : partition) {
     // partition is in schema columns, lookupKeys is in BaseTable columns. Use
     // the schema column of lookup key for matching.
@@ -514,10 +563,10 @@ RelationOpPtr repartitionForIndex(
     keyExprs.push_back(lookupValues[nthKey]);
   }
 
-  Distribution distribution{
-      info.index->distribution().distributionType, std::move(keyExprs)};
-  auto* repartition =
-      make<Repartition>(plan, std::move(distribution), plan->columns());
+  auto* repartition = make<Repartition>(
+      plan,
+      Distribution{distribution.distributionType, std::move(keyExprs)},
+      plan->columns());
   state.addCost(*repartition);
   return repartition;
 }
@@ -566,6 +615,20 @@ PlanObjectSet availableColumns(PlanObjectCP object) {
     VELOX_UNREACHABLE("Joinable must be a table or derived table");
   }
   return set;
+}
+
+PlanObjectSet availableColumns(BaseTableCP baseTable, ColumnGroupCP index) {
+  // The columns of base table that exist in 'index'.
+  PlanObjectSet result;
+  for (auto column : index->columns) {
+    for (auto baseColumn : baseTable->columns) {
+      if (baseColumn->name() == column->name()) {
+        result.add(baseColumn);
+        break;
+      }
+    }
+  }
+  return result;
 }
 
 bool isBroadcastableSize(PlanP build, PlanState& /*state*/) {
@@ -724,14 +787,16 @@ void Optimization::joinByIndex(
     // Index applies to single base tables.
     return;
   }
-  auto rightTable = candidate.tables.at(0)->as<BaseTable>();
-  auto left = candidate.sideOf(rightTable, true);
-  auto right = candidate.sideOf(rightTable);
+
+  auto [right, left] = candidate.joinSides();
+
   auto& keys = right.keys;
   auto keyColumns = leadingColumns(keys);
   if (keyColumns.empty()) {
     return;
   }
+
+  auto rightTable = candidate.tables.at(0)->as<BaseTable>();
   for (auto& index : rightTable->schemaTable->columnGroups) {
     auto info = rightTable->schemaTable->indexInfo(index, keyColumns);
     if (info.lookupKeys.empty()) {
@@ -755,7 +820,7 @@ void Optimization::joinByIndex(
     auto lookupKeys = left.keys;
     // The number of keys is the prefix that matches index order.
     lookupKeys.resize(info.lookupKeys.size());
-    state.columns.unionSet(TableScan::availableColumns(rightTable, index));
+    state.columns.unionSet(availableColumns(rightTable, index));
     auto c = state.downstreamColumns();
     c.intersect(state.columns);
     for (auto& filter : rightTable->filter) {
@@ -785,8 +850,7 @@ void Optimization::joinByHash(
     PlanState& state,
     std::vector<NextJoin>& toTry) {
   VELOX_DCHECK(!candidate.tables.empty());
-  auto build = candidate.sideOf(candidate.tables[0]);
-  auto probe = candidate.sideOf(candidate.tables[0], true);
+  auto [build, probe] = candidate.joinSides();
 
   const auto partKeys = joinKeyPartition(plan, probe.keys);
   ExprVector copartition;
@@ -940,8 +1004,7 @@ void Optimization::joinByHashRight(
     PlanState& state,
     std::vector<NextJoin>& toTry) {
   VELOX_DCHECK(!candidate.tables.empty());
-  auto probe = candidate.sideOf(candidate.tables[0]);
-  auto build = candidate.sideOf(candidate.tables[0], true);
+  auto [probe, build] = candidate.joinSides();
 
   PlanStateSaver save(state, candidate);
 
@@ -1057,10 +1120,11 @@ void Optimization::addJoin(
     const RelationOpPtr& plan,
     PlanState& state,
     std::vector<NextJoin>& result) {
-  std::vector<NextJoin> toTry;
   if (!candidate.join) {
     return;
   }
+
+  std::vector<NextJoin> toTry;
 
   joinByIndex(plan, candidate, state, toTry);
 
@@ -1249,7 +1313,7 @@ namespace {
 ColumnVector indexColumns(
     const PlanObjectSet& downstream,
     BaseTableCP table,
-    ColumnGroupP index) {
+    ColumnGroupCP index) {
   ColumnVector result;
   downstream.forEach<Column>([&](auto column) {
     if (!column->schemaColumn()) {
@@ -1258,7 +1322,7 @@ ColumnVector indexColumns(
     if (table != column->relation()) {
       return;
     }
-    if (position(index->columns(), *column->schemaColumn()) != kNotFound) {
+    if (position(index->columns, *column->schemaColumn()) != kNotFound) {
       result.push_back(column);
     }
   });
@@ -1572,6 +1636,7 @@ PlanP Optimization::makeDtPlan(
   PlanSet* plans;
   if (it == memo_.end()) {
     DerivedTable dt;
+    dt.cname = newCName("tmp_dt");
     dt.import(
         *state.dt, key.firstTable, key.tables, key.existences, existsFanout);
 

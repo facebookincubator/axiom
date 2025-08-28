@@ -312,8 +312,8 @@ const JoinEdgeVector& joinedBy(PlanObjectCP table) {
   return table->as<DerivedTable>()->joinedBy;
 }
 
-JoinSide JoinCandidate::sideOf(PlanObjectCP side, bool other) const {
-  return join->sideOf(side, other);
+std::pair<JoinSide, JoinSide> JoinCandidate::joinSides() const {
+  return {join->sideOf(tables[0], false), join->sideOf(tables[0], true)};
 }
 
 namespace {

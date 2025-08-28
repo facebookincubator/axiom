@@ -129,7 +129,7 @@ class ToVelox {
 
   // Makes a Velox AggregationNode for a RelationOp.
   velox::core::PlanNodePtr makeAggregation(
-      Aggregation& agg,
+      const Aggregation& agg,
       axiom::runner::ExecutableFragment& fragment,
       std::vector<axiom::runner::ExecutableFragment>& stages);
 

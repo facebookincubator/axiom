@@ -334,7 +334,7 @@ class ToGraph {
 
   // Interprets a Filter node and adds its information into the DerivedTable
   // being assembled.
-  PlanObjectP addFilter(const logical_plan::FilterNode* Filter);
+  PlanObjectP addFilter(const logical_plan::FilterNode* filter);
 
   // Interprets an AggregationNode and adds its information to the
   // DerivedTable being assembled.
@@ -370,25 +370,52 @@ class ToGraph {
       const logical_plan::Expr* expr,
       std::vector<Step>& steps,
       bool isControl,
-      const std::vector<const RowType*>& context,
-      const std::vector<LogicalContextSource>& sources);
+      std::span<const RowType* const> context,
+      std::span<const LogicalContextSource> sources);
 
   void markSubfields(
       const logical_plan::ExprPtr& expr,
       std::vector<Step>& steps,
       bool isControl,
-      const std::vector<const RowType*>& context,
-      const std::vector<LogicalContextSource>& sources) {
+      std::span<const RowType* const> context,
+      std::span<const LogicalContextSource> sources) {
     markSubfields(expr.get(), steps, isControl, context, sources);
   }
+
+  void markFieldAccessed(
+      const logical_plan::CallExpr& call,
+      int32_t lambdaOrdinal,
+      int32_t ordinal,
+      std::vector<Step>& steps,
+      bool isControl,
+      std::span<const RowType* const> context,
+      std::span<const LogicalContextSource> sources);
+
+  void markFieldAccessed(
+      const logical_plan::ProjectNode& project,
+      int32_t ordinal,
+      std::vector<Step>& steps,
+      bool isControl);
+
+  void markFieldAccessed(
+      const logical_plan::AggregateNode& agg,
+      int32_t ordinal,
+      std::vector<Step>& steps,
+      bool isControl);
+
+  void markFieldAccessed(
+      const logical_plan::SetNode& set,
+      int32_t ordinal,
+      std::vector<Step>& steps,
+      bool isControl);
 
   void markFieldAccessed(
       const LogicalContextSource& source,
       int32_t ordinal,
       std::vector<Step>& steps,
       bool isControl,
-      const std::vector<const RowType*>& context,
-      const std::vector<LogicalContextSource>& sources);
+      std::span<const RowType* const> context,
+      std::span<const LogicalContextSource> sources);
 
   void markAllSubfields(
       const RowType* type,
@@ -398,7 +425,7 @@ class ToGraph {
 
   void markColumnSubfields(
       const logical_plan::LogicalPlanNodePtr& source,
-      const std::vector<logical_plan::ExprPtr>& columns);
+      std::span<const logical_plan::ExprPtr> columns);
 
   BitSet functionSubfields(
       const logical_plan::CallExpr* call,

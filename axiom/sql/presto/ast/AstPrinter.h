@@ -292,6 +292,8 @@ class AstPrinter : public AstVisitor {
 
   void visitExplainType(ExplainType* node) override;
 
+  void visitShowColumns(ShowColumns* node) override;
+
  private:
   void defaultVisit(Node* node) override {
     printIndent();

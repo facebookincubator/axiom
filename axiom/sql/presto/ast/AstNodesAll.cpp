@@ -20,8 +20,8 @@
 namespace axiom::sql::presto {
 
 namespace {
-folly::F14FastMap<NodeType, std::string> nodeTypeNames() {
-  return {
+const auto& nodeTypeNames() {
+  static const folly::F14FastMap<NodeType, std::string> kNames{
       // Base types
       {NodeType::kNode, "Node"},
       {NodeType::kStatement, "Statement"},
@@ -239,6 +239,8 @@ folly::F14FastMap<NodeType, std::string> nodeTypeNames() {
       {NodeType::kExplainType, "ExplainType"},
       {NodeType::kExplainOption, "ExplainOption"},
   };
+
+  return kNames;
 }
 } // namespace
 
@@ -755,6 +757,10 @@ void ExplainFormat::accept(AstVisitor* visitor) {
 
 void ExplainType::accept(AstVisitor* visitor) {
   visitor->visitExplainType(this);
+}
+
+void ShowColumns::accept(AstVisitor* visitor) {
+  visitor->visitShowColumns(this);
 }
 
 } // namespace axiom::sql::presto

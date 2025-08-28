@@ -703,4 +703,22 @@ class Rollback : public Statement {
   void accept(AstVisitor* visitor) override;
 };
 
+// Show Statements
+class ShowColumns : public Statement {
+ public:
+  explicit ShowColumns(
+      NodeLocation location,
+      const std::shared_ptr<QualifiedName>& table)
+      : Statement(NodeType::kShowColumns, location), table_(table) {}
+
+  const std::shared_ptr<QualifiedName>& table() const {
+    return table_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+ private:
+  std::shared_ptr<QualifiedName> table_;
+};
+
 } // namespace axiom::sql::presto

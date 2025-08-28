@@ -479,22 +479,31 @@ class TempProjections {
  public:
   TempProjections(ToVelox& tv, const RelationOp& input)
       : toVelox_(tv), input_(input) {
-    for (auto& column : input_.columns()) {
-      exprChannel_[column] = nextChannel_++;
+    exprChannel_.reserve(input_.columns().size());
+    names_.reserve(input_.columns().size());
+    exprs_.reserve(input_.columns().size());
+    fieldRefs_.reserve(input_.columns().size());
+    for (const auto& column : input_.columns()) {
+      auto [it, emplaced] = exprChannel_.emplace(column, nextChannel_);
+      if (!emplaced) {
+        continue;
+      }
+      ++nextChannel_;
       names_.push_back(ToVelox::outputName(column));
-      fieldRefs_.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-          toTypePtr(column->value().type), names_.back()));
+      auto fieldRef = std::make_shared<core::FieldAccessTypedExpr>(
+          toTypePtr(column->value().type), names_.back());
+      exprs_.push_back(fieldRef);
+      fieldRefs_.push_back(std::move(fieldRef));
     }
-    exprs_.insert(exprs_.begin(), fieldRefs_.begin(), fieldRefs_.end());
   }
 
   core::FieldAccessTypedExprPtr toFieldRef(
       ExprCP expr,
       const std::string* optName = nullptr) {
-    auto it = exprChannel_.find(expr);
-    if (it == exprChannel_.end()) {
+    auto [it, emplaced] = exprChannel_.emplace(expr, nextChannel_);
+    if (emplaced) {
       VELOX_CHECK(expr->type() != PlanType::kColumnExpr);
-      exprChannel_[expr] = nextChannel_++;
+      ++nextChannel_;
       exprs_.push_back(queryCtx()->optimization()->toTypedExpr(expr));
       names_.push_back(
           optName ? *optName : fmt::format("__r{}", nextChannel_ - 1));
@@ -528,7 +537,7 @@ class TempProjections {
     return result;
   }
 
-  core::PlanNodePtr maybeProject(core::PlanNodePtr inputNode) {
+  core::PlanNodePtr maybeProject(core::PlanNodePtr inputNode) && {
     if (nextChannel_ == input_.columns().size()) {
       return inputNode;
     }
@@ -540,11 +549,11 @@ class TempProjections {
  private:
   ToVelox& toVelox_;
   const RelationOp& input_;
-  int32_t nextChannel_{0};
+  uint32_t nextChannel_{0};
   std::vector<core::FieldAccessTypedExprPtr> fieldRefs_;
   std::vector<std::string> names_;
   std::vector<core::TypedExprPtr> exprs_;
-  std::unordered_map<ExprCP, int32_t> exprChannel_;
+  std::unordered_map<ExprCP, uint32_t> exprChannel_;
 };
 } // namespace
 
@@ -652,7 +661,7 @@ core::PlanNodePtr ToVelox::makeOrderBy(
 
     TempProjections projections(*this, *op.input());
     auto keys = projections.toFieldRefs(op.distribution().orderKeys);
-    auto project = projections.maybeProject(input);
+    auto project = std::move(projections).maybeProject(input);
 
     if (options_.numDrivers == 1) {
       if (op.limit <= 0) {
@@ -693,7 +702,7 @@ core::PlanNodePtr ToVelox::makeOrderBy(
 
   TempProjections projections(*this, *op.input());
   auto keys = projections.toFieldRefs(op.distribution().orderKeys);
-  auto project = projections.maybeProject(input);
+  auto project = std::move(projections).maybeProject(input);
 
   core::PlanNodePtr node;
   if (op.limit <= 0) {
@@ -1118,8 +1127,8 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
         nextId(),
         join.joinType,
         nullptr,
-        leftProjections.maybeProject(left),
-        rightProjections.maybeProject(right),
+        std::move(leftProjections).maybeProject(left),
+        std::move(rightProjections).maybeProject(right),
         makeOutputType(join.columns()));
     if (join.filter.empty()) {
       makePredictionAndHistory(joinNode->id(), &join);
@@ -1139,15 +1148,15 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
       leftKeys,
       rightKeys,
       toAnd(join.filter),
-      leftProjections.maybeProject(left),
-      rightProjections.maybeProject(right),
+      std::move(leftProjections).maybeProject(left),
+      std::move(rightProjections).maybeProject(right),
       makeOutputType(join.columns()));
   makePredictionAndHistory(joinNode->id(), &join);
   return joinNode;
 }
 
 core::PlanNodePtr ToVelox::makeAggregation(
-    Aggregation& op,
+    const Aggregation& op,
     ExecutableFragment& fragment,
     std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
@@ -1202,7 +1211,7 @@ core::PlanNodePtr ToVelox::makeAggregation(
   }
 
   auto keys = projections.toFieldRefs(op.groupingKeys, &keyNames);
-  auto project = projections.maybeProject(input);
+  auto project = std::move(projections).maybeProject(input);
   if (options_.numDrivers > 1 &&
       (op.step == core::AggregationNode::Step::kFinal ||
        op.step == core::AggregationNode::Step::kSingle)) {
@@ -1251,7 +1260,7 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
     fragment.width = 1;
   }
 
-  auto partitioningInput = project.maybeProject(sourcePlan);
+  auto partitioningInput = std::move(project).maybeProject(sourcePlan);
 
   auto partitionFunctionFactory = createPartitionFunctionSpec(
       partitioningInput->outputType(), keys, distribution.isBroadcast);
