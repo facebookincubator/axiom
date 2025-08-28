@@ -126,8 +126,9 @@ TEST_F(HiveQueriesTest, basic) {
                          "r_regionkey",
                          "r_name",
                          "r_comment"})
+                    .limit(0, 10, false)
                     .planNode();
-    checkResults("SELECT * FROM customer, nation, region", plan);
+    checkResults("SELECT * FROM customer, nation, region LIMIT 10", plan);
   }
 
   checkResults(

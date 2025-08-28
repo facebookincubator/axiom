@@ -342,7 +342,7 @@ Join::Join(
   cost_.fanout = fanout;
 
   if (method == JoinMethod::kCross) {
-    cost_.setupCost = fanout * byteSize(right->input()->columns());
+    cost_.setupCost = fanout * byteSize(right->columns());
     return;
   }
 
