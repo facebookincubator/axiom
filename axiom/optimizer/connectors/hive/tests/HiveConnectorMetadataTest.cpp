@@ -190,7 +190,7 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
       idGenerator->next(),
       builder.planNode()->outputType(),
       tableType->names(),
-      nullptr,
+      std::nullopt,
       handle,
       false,
       resultType,
