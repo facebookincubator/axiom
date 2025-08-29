@@ -1134,8 +1134,8 @@ velox::core::PlanNodePtr ToVelox::makeProject(
 
   const bool redundant = [&] {
     if (inputType.size() != outputTypeSize) {
-      // TODO Maybe for some plans, if this projection isn't last node
-      // we don't want to reduce projections.
+      // TODO Maybe we don't want always return false here, see
+      // https://github.com/facebookexperimental/verax/issues/311
       return false;
     }
     for (size_t i = 0; i < outputTypeSize; ++i) {
