@@ -164,7 +164,7 @@ struct PlanSubfields {
     if (it == nodeFields.end()) {
       return false;
     }
-    return it->second.resultPaths.count(ordinal) != 0;
+    return it->second.resultPaths.contains(ordinal);
   }
 
   std::string toString() const;

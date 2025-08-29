@@ -236,8 +236,7 @@ TEST_F(HiveLimitQueriesTest, orderByLimit) {
     SCOPED_TRACE("numWorkers: 1, numDrivers: 1");
     auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 1});
 
-    auto matcher =
-        core::PlanMatcherBuilder().tableScan().topN(10).project().build();
+    auto matcher = core::PlanMatcherBuilder().tableScan().topN(10).build();
 
     checkSingleNodePlan(plan, matcher);
     checkResults(plan, referenceResults);
@@ -253,7 +252,6 @@ TEST_F(HiveLimitQueriesTest, orderByLimit) {
                        .topN(10)
                        .localMerge()
                        .finalLimit(0, 10)
-                       .project()
                        .build();
 
     checkSingleNodePlan(plan, matcher);
@@ -279,11 +277,8 @@ TEST_F(HiveLimitQueriesTest, orderByLimit) {
                        .build();
     ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
 
-    matcher = core::PlanMatcherBuilder()
-                  .mergeExchange()
-                  .finalLimit(0, 10)
-                  .project()
-                  .build();
+    matcher =
+        core::PlanMatcherBuilder().mergeExchange().finalLimit(0, 10).build();
     ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
 
     checkResults(distributedPlan, referenceResults);

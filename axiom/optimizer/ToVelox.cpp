@@ -898,34 +898,30 @@ bool hasSubfieldPushdown(const TableScan& scan) {
 // 'baseTable'. This is the type to return from the table reader
 // for the map column.
 RowTypePtr skylineStruct(BaseTableCP baseTable, ColumnCP column) {
+  BitSet allFields;
+  if (auto fields = baseTable->controlSubfields.findSubfields(column->id())) {
+    allFields = *fields;
+  }
+  if (auto fields = baseTable->payloadSubfields.findSubfields(column->id())) {
+    allFields.unionSet(*fields);
+  }
+
+  const auto numOutputs = allFields.size();
   std::vector<std::string> names;
   std::vector<TypePtr> types;
-  std::unordered_set<std::string> distinct;
-  auto valueType = column->value().type->childAt(1);
+  names.reserve(numOutputs);
+  types.reserve(numOutputs);
 
   auto* ctx = queryCtx();
-  auto addTopFields = [&](const BitSet& paths) {
-    paths.forEach([&](int32_t id) {
-      auto path = ctx->pathById(id);
-      auto& first = path->steps()[0];
-      std::string name =
-          first.field ? std::string(first.field) : fmt::format("{}", first.id);
-      if (!distinct.count(name)) {
-        distinct.insert(name);
-        names.push_back(name);
-        types.push_back(valueType);
-      }
-    });
-  };
-
-  auto fields = baseTable->controlSubfields.findSubfields(column->id());
-  if (fields.has_value()) {
-    addTopFields(fields.value());
-  }
-  fields = baseTable->payloadSubfields.findSubfields(column->id());
-  if (fields.has_value()) {
-    addTopFields(fields.value());
-  }
+  auto valueType = column->value().type->childAt(1);
+  allFields.forEach([&](int32_t id) {
+    const auto* path = ctx->pathById(id);
+    const auto& first = path->steps()[0];
+    auto name =
+        first.field ? std::string{first.field} : fmt::format("{}", first.id);
+    names.push_back(name);
+    types.push_back(valueType);
+  });
 
   return ROW(std::move(names), std::move(types));
 }

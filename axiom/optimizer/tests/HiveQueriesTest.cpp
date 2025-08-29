@@ -125,12 +125,7 @@ TEST_F(HiveQueriesTest, orderOfOperations) {
           .orderBy({"n_nationkey"})
           .limit(10)
           .orderBy({"n_name desc"}),
-      scanMatcher()
-          .limit()
-          .topN()
-          .project()
-          .orderBy({"n_name desc"})
-          .project());
+      scanMatcher().limit().topN().orderBy({"n_name desc"}));
 
   // GroupBy drops preceding orderBy.
   test(
@@ -179,8 +174,7 @@ TEST_F(HiveQueriesTest, orderOfOperations) {
           .finalLimit(0, 10)
           .filter("n_nationkey < 100 AND n_regionkey > 10")
           .finalLimit(0, 5)
-          .filter("n_nationkey > 70 AND n_regionkey < 7")
-          .project());
+          .filter("n_nationkey > 70 AND n_regionkey < 7"));
 }
 
 } // namespace

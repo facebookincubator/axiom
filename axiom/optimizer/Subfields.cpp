@@ -19,6 +19,8 @@
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/ToGraph.h"
 
+#include <ranges>
+
 namespace lp = facebook::velox::logical_plan;
 
 namespace facebook::velox::optimizer {
@@ -494,19 +496,11 @@ void ToGraph::markAllSubfields(const lp::LogicalPlanNode& node) {
 std::vector<int32_t> ToGraph::usedChannels(const lp::LogicalPlanNode& node) {
   const auto& control = controlSubfields_.nodeFields[&node];
   const auto& payload = payloadSubfields_.nodeFields[&node];
-
-  BitSet unique;
   std::vector<int32_t> result;
-  for (const auto& [index, _] : control.resultPaths) {
-    result.push_back(index);
-    unique.add(index);
-  }
-
-  for (const auto& pair : payload.resultPaths) {
-    if (!unique.contains(pair.first)) {
-      result.push_back(pair.first);
-    }
-  }
+  std::ranges::set_union(
+      control.resultPaths | std::views::keys,
+      payload.resultPaths | std::views::keys,
+      std::back_inserter(result));
   return result;
 }
 
