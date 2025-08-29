@@ -1128,22 +1128,33 @@ velox::core::PlanNodePtr ToVelox::makeProject(
     }
   }
 
-  bool redundant = true;
-  for (auto i = 0; i < project.exprs().size(); ++i) {
-    auto expr = project.exprs()[i];
-    if (expr->type() != PlanType::kColumnExpr) {
-      redundant = false;
-      break;
-    }
+  const auto& inputType = *input->outputType();
+  const auto outputTypeSize = project.exprs().size();
+  VELOX_DCHECK_EQ(project.columns().size(), outputTypeSize);
 
-    auto column = project.columns()[i];
-
-    // TODO Why expr->sameOrEquals(*column) doesn't work?
-    if (input->outputType()->nameOf(i) != outputName(column)) {
-      redundant = false;
-      break;
+  // redundant == false is possible because multiple reasons:
+  // 1. Unnest should refererence all their columns
+  //    if at least one column referenced.
+  // 2. Join should reference at least one column from each side,
+  //    if at least one column referenced.
+  // 3. some project expressions are not input column references.
+  const bool redundant = [&] {
+    if (inputType.size() != outputTypeSize) {
+      return false;
     }
-  }
+    for (size_t i = 0; i < outputTypeSize; ++i) {
+      const auto* expr = project.exprs()[i];
+      if (expr->type() != PlanType::kColumnExpr) {
+        return false;
+      }
+      const auto* column = project.columns()[i];
+      // TODO Why expr->sameOrEquals(*column) doesn't work?
+      if (inputType.nameOf(i) != outputName(column)) {
+        return false;
+      }
+    }
+    return true;
+  }();
 
   if (redundant) {
     return input;
@@ -1151,14 +1162,16 @@ velox::core::PlanNodePtr ToVelox::makeProject(
 
   std::vector<std::string> names;
   std::vector<core::TypedExprPtr> exprs;
-  for (auto i = 0; i < project.exprs().size(); ++i) {
-    auto column = project.columns()[i];
+  names.reserve(outputTypeSize);
+  exprs.reserve(outputTypeSize);
+  for (auto i = 0; i < outputTypeSize; ++i) {
+    const auto* column = project.columns()[i];
     names.push_back(outputName(column));
     exprs.push_back(toTypedExpr(project.exprs()[i]));
   }
 
   return std::make_shared<core::ProjectNode>(
-      nextId(), std::move(names), std::move(exprs), input);
+      nextId(), std::move(names), std::move(exprs), std::move(input));
 }
 
 velox::core::PlanNodePtr ToVelox::makeJoin(
