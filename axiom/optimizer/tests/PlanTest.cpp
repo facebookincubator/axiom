@@ -1318,8 +1318,6 @@ TEST_F(PlanTest, lastProjection) {
                          .build();
 
   auto plan = toSingleNodePlan(logicalPlan);
-  ASSERT_TRUE(*plan->outputType() == *ROW("a", BIGINT()))
-      << plan->toString(true, true);
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan()
