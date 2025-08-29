@@ -437,6 +437,13 @@ class JoinNode : public LogicalPlanNode {
     }
   }
 
+  void setJoinCondition(ExprPtr condition) {
+    if (condition != nullptr) {
+      VELOX_USER_CHECK_EQ(condition->typeKind(), TypeKind::BOOLEAN);
+    }
+    condition_ = std::move(condition);
+  }
+
   const LogicalPlanNodePtr& left() const {
     return inputAt(0);
   }
@@ -462,7 +469,7 @@ class JoinNode : public LogicalPlanNode {
       const LogicalPlanNodePtr& right);
 
   const JoinType joinType_;
-  const ExprPtr condition_;
+  ExprPtr condition_;
 };
 
 using JoinNodePtr = std::shared_ptr<const JoinNode>;
