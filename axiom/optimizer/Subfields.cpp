@@ -316,10 +316,10 @@ void ToGraph::markSubfields(
 
     const auto* metadata = functionMetadata(toName(name));
     if (!metadata || !metadata->processSubfields()) {
-      std::vector<Step> steps;
+      std::vector<Step> argumentSteps;
       for (const auto& input : expr->inputs()) {
-        markSubfields(input, steps, isControl, context);
-        VELOX_DCHECK(steps.empty());
+        markSubfields(input, argumentSteps, isControl, context);
+        VELOX_DCHECK(argumentSteps.empty());
       }
       return;
     }
@@ -379,25 +379,30 @@ void ToGraph::markSubfields(
         const auto* lambda = expr->inputAt(i)->asUnchecked<lp::LambdaExpr>();
         const auto& argType = lambda->signature();
 
-        std::vector<const RowType*> newRowTypes = {argType.get()};
+        std::vector<const RowType*> newRowTypes;
+        newRowTypes.reserve(context.rowTypes.size() + 1);
+        newRowTypes.push_back(argType.get());
         newRowTypes.insert(
             newRowTypes.end(),
             context.rowTypes.begin(),
             context.rowTypes.end());
 
-        std::vector<LogicalContextSource> newSources = {
-            {.call = call, .lambdaOrdinal = i}};
+        std::vector<LogicalContextSource> newSources;
+        newSources.reserve(context.sources.size() + 1);
+        newSources.push_back({.call = call, .lambdaOrdinal = i});
         newSources.insert(
             newSources.end(), context.sources.begin(), context.sources.end());
 
-        std::vector<Step> steps;
+        std::vector<Step> lambdaSteps;
         markSubfields(
-            lambda->body(), steps, isControl, {newRowTypes, newSources});
+            lambda->body(), lambdaSteps, isControl, {newRowTypes, newSources});
+        VELOX_DCHECK(lambdaSteps.empty());
         continue;
       }
       // The argument is not special, just mark through without path.
-      std::vector<Step> steps;
-      markSubfields(expr->inputAt(i), steps, isControl, context);
+      std::vector<Step> argumentSteps;
+      markSubfields(expr->inputAt(i), argumentSteps, isControl, context);
+      VELOX_DCHECK(argumentSteps.empty());
     }
     return;
   }
@@ -407,10 +412,10 @@ void ToGraph::markSubfields(
   }
 
   if (expr->isSpecialForm()) {
-    std::vector<Step> steps;
+    std::vector<Step> specialFormSteps;
     for (const auto& input : expr->inputs()) {
-      markSubfields(input, steps, isControl, context);
-      VELOX_DCHECK(steps.empty());
+      markSubfields(input, specialFormSteps, isControl, context);
+      VELOX_DCHECK(specialFormSteps.empty());
     }
     return;
   }
