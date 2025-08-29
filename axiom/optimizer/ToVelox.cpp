@@ -1129,22 +1129,21 @@ velox::core::PlanNodePtr ToVelox::makeProject(
   }
 
   const auto& inputType = *input->outputType();
-  const auto outputTypeSize = project.exprs().size();
-  VELOX_DCHECK_EQ(project.columns().size(), outputTypeSize);
+  const auto numOutputs = project.exprs().size();
+  VELOX_DCHECK_EQ(project.columns().size(), numOutputs);
 
   const bool redundant = [&] {
-    if (inputType.size() != outputTypeSize) {
+    if (inputType.size() != numOutputs) {
       // TODO Maybe we don't want always return false here, see
       // https://github.com/facebookexperimental/verax/issues/311
       return false;
     }
-    for (size_t i = 0; i < outputTypeSize; ++i) {
+    for (size_t i = 0; i < numOutputs; ++i) {
       const auto* expr = project.exprs()[i];
       if (expr->type() != PlanType::kColumnExpr) {
         return false;
       }
       const auto* column = project.columns()[i];
-      // TODO Why expr->sameOrEquals(*column) doesn't work?
       if (inputType.nameOf(i) != outputName(column)) {
         return false;
       }
@@ -1158,9 +1157,9 @@ velox::core::PlanNodePtr ToVelox::makeProject(
 
   std::vector<std::string> names;
   std::vector<core::TypedExprPtr> exprs;
-  names.reserve(outputTypeSize);
-  exprs.reserve(outputTypeSize);
-  for (auto i = 0; i < outputTypeSize; ++i) {
+  names.reserve(numOutputs);
+  exprs.reserve(numOutputs);
+  for (auto i = 0; i < numOutputs; ++i) {
     const auto* column = project.columns()[i];
     names.push_back(outputName(column));
     exprs.push_back(toTypedExpr(project.exprs()[i]));
