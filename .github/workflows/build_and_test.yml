@@ -202,6 +202,47 @@ jobs:
           fi
           echo "=== End Cache Save Completion Debug ==="
 
+      - name: Upload Ccache Log for Analysis
+        if: always()  # Run even if build failed
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccache-debug-logs-${{ github.run_id }}
+          path: |
+            /__w/verax/verax/ccache/ccache.log
+            /__w/verax/verax/ccache/ccache.conf
+            /__w/verax/verax/ccache/debug/*.txt
+            /__w/verax/verax/ccache/debug/*.log
+            /__w/verax/verax/ccache/debug/*.json
+            /__w/verax/verax/_build/debug/build.ninja
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload Sample Cache Files
+        if: always()  # Run even if build failed
+        run: |
+          # Create temp directory for first 50 cache files
+          mkdir -p /tmp/ccache-sample
+          echo "Collecting first 50 cache files..."
+          # Find all files in ccache directory (excluding logs, config, and temp dirs)
+          find /__w/verax/verax/ccache -type f ! -path "*/tmp/*" ! -path "*/debug/*" ! -name "*.log" ! -name "*.conf" ! -name "stats*" 2>/dev/null | head -50 > /tmp/cache-files-list.txt
+          if [ -s /tmp/cache-files-list.txt ]; then
+            tar -czf /tmp/ccache-sample/first-50-cache-files.tar.gz -T /tmp/cache-files-list.txt 2>/dev/null || echo "Failed to create tar"
+            echo "Sample cache files collected: $(wc -l < /tmp/cache-files-list.txt)"
+            echo "Sample files included:"
+            head -10 /tmp/cache-files-list.txt
+          else
+            echo "No cache files found to sample"
+          fi
+
+      - name: Upload Cache Files Sample
+        if: always()  # Run even if build failed
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccache-sample-files-${{ github.run_id }}
+          path: /tmp/ccache-sample/
+          retention-days: 7
+          if-no-files-found: warn
+
       # Run Verax tests (excluding velox tests)
       - name: Run Debug Tests
         working-directory: _build/debug
