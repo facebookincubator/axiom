@@ -1134,8 +1134,6 @@ velox::core::PlanNodePtr ToVelox::makeProject(
 
   const bool redundant = [&] {
     if (inputType.size() != numOutputs) {
-      // TODO Maybe we don't want always return false here, see
-      // https://github.com/facebookexperimental/verax/issues/311
       return false;
     }
     for (size_t i = 0; i < numOutputs; ++i) {
