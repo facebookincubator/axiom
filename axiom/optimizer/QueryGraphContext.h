@@ -126,10 +126,10 @@ class Path {
  public:
   Path() = default;
 
-  explicit Path(std::span<const Step> steps, std::false_type reverse)
+  explicit Path(std::span<const Step> steps, std::false_type /*reverse*/)
       : steps_{steps.begin(), steps.end()} {}
 
-  explicit Path(std::span<const Step> steps, std::true_type reverse)
+  explicit Path(std::span<const Step> steps, std::true_type /*reverse*/)
       : steps_{steps.rbegin(), steps.rend()} {}
 
   void operator delete(void* ptr);
