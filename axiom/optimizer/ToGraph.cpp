@@ -317,12 +317,8 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
 }
 
 namespace {
-PathCP innerPath(const std::vector<Step>& steps, int32_t last) {
-  std::vector<Step> reverse;
-  for (int32_t i = steps.size() - 1; i >= last; --i) {
-    reverse.push_back(steps[i]);
-  }
-  return toPath(std::move(reverse));
+PathCP innerPath(std::span<const Step> steps, int32_t last) {
+  return toPath(steps.subspan(last), true);
 }
 
 Variant* subscriptLiteral(TypeKind kind, const Step& step) {

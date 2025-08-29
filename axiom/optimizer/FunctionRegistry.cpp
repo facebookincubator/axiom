@@ -64,19 +64,19 @@ std::unordered_map<PathCP, logical_plan::ExprPtr> rowConstructorExplode(
     std::vector<PathCP>& paths) {
   std::unordered_map<PathCP, logical_plan::ExprPtr> result;
   for (auto& path : paths) {
-    auto& steps = path->steps();
+    const auto& steps = path->steps();
     if (steps.empty()) {
       return {};
     }
-    std::vector<Step> prefixSteps = {steps[0]};
-    auto prefixPath = toPath(std::move(prefixSteps));
-    if (result.count(prefixPath)) {
+    const auto* prefixPath = toPath({steps.data(), 1});
+    auto [it, emplaced] = result.try_emplace(prefixPath);
+    if (!emplaced) {
       // There already is an expression for this path.
       continue;
     }
     VELOX_CHECK(steps.front().kind == StepKind::kField);
     auto nth = steps.front().id;
-    result[prefixPath] = call->inputAt(nth);
+    it->second = call->inputAt(nth);
   }
   return result;
 }

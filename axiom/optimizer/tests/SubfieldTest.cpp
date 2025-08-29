@@ -105,14 +105,14 @@ class SubfieldTest : public QueryTestBase,
     // [2], [3] followed by an integer subscript.
     std::unordered_map<PathCP, lp::ExprPtr> result;
     for (auto& path : paths) {
-      auto& steps = path->steps();
+      const auto& steps = path->steps();
       if (steps.size() < 2) {
         return {};
       }
 
-      std::vector<Step> prefixSteps = {steps[0], steps[1]};
-      auto prefixPath = toPath(std::move(prefixSteps));
-      if (result.count(prefixPath)) {
+      const auto* prefixPath = toPath({steps.data(), 2});
+      auto [it, emplaced] = result.try_emplace(prefixPath);
+      if (!emplaced) {
         // There already is an expression for this path.
         continue;
       }
@@ -123,14 +123,13 @@ class SubfieldTest : public QueryTestBase,
 
       // Here, for the sake of example, we make every odd key return identity.
       if (steps[1].id % 2 == 1) {
-        result[prefixPath] =
-            ToGraph::stepToLogicalPlanGetter(steps[1], args[nth]);
+        it->second = ToGraph::stepToLogicalPlanGetter(steps[1], args[nth]);
         continue;
       }
 
       // For changed float_features, we add the feature id to the value.
       if (nth == 1) {
-        result[prefixPath] = std::make_shared<lp::CallExpr>(
+        it->second = std::make_shared<lp::CallExpr>(
             REAL(),
             "plus",
             std::vector<lp::ExprPtr>{
@@ -144,7 +143,7 @@ class SubfieldTest : public QueryTestBase,
 
       // For changed id list features, we do array_distinct on the list.
       if (nth == 2) {
-        result[prefixPath] = std::make_shared<lp::CallExpr>(
+        it->second = std::make_shared<lp::CallExpr>(
             ARRAY(BIGINT()),
             "array_distinct",
             std::vector<lp::ExprPtr>{
@@ -153,8 +152,7 @@ class SubfieldTest : public QueryTestBase,
       }
 
       // Access to idslf. Identity.
-      result[prefixPath] =
-          ToGraph::stepToLogicalPlanGetter(steps[1], args[nth]);
+      it->second = ToGraph::stepToLogicalPlanGetter(steps[1], args[nth]);
     }
     return result;
   }

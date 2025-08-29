@@ -113,10 +113,6 @@ struct Step {
 
   bool operator==(const Step& other) const;
 
-  bool operator!=(const Step& other) const {
-    return !(*this == other);
-  }
-
   bool operator<(const Step& other) const;
 
   size_t hash() const;
@@ -130,11 +126,11 @@ class Path {
  public:
   Path() = default;
 
-  Path(std::vector<Step> steps) {
-    for (auto& step : steps) {
-      steps_.push_back(std::move(step));
-    }
-  }
+  explicit Path(std::span<const Step> steps, std::false_type reverse)
+      : steps_{steps.begin(), steps.end()} {}
+
+  explicit Path(std::span<const Step> steps, std::true_type reverse)
+      : steps_{steps.rbegin(), steps.rend()} {}
 
   void operator delete(void* ptr);
 
@@ -179,10 +175,6 @@ class Path {
   }
 
   bool operator==(const Path& other) const;
-
-  bool operator!=(const Path& other) const {
-    return !(*this == other);
-  }
 
   bool operator<(const Path& other) const;
 
@@ -408,7 +400,7 @@ const Type* toType(const TypePtr& type);
 const TypePtr& toTypePtr(const Type* type);
 
 // Shorthand for toPath in queryCtx().
-PathCP toPath(std::vector<Step> steps);
+PathCP toPath(std::span<const Step> steps, bool reverse = false);
 
 inline void Path::operator delete(void* ptr) {
   queryCtx()->free(ptr);

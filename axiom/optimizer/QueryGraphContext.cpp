@@ -286,8 +286,10 @@ void Path::subfieldSkyline(BitSet& subfields) {
   }
 }
 
-PathCP toPath(std::vector<Step> steps) {
-  return queryCtx()->toPath(make<Path>(std::move(steps)));
+PathCP toPath(std::span<const Step> steps, bool reverse) {
+  PathCP path = reverse ? make<Path>(steps, std::true_type{})
+                        : make<Path>(steps, std::false_type{});
+  return queryCtx()->toPath(path);
 }
 
 } // namespace facebook::velox::optimizer
