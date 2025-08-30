@@ -109,7 +109,9 @@ class HiveTableLayout : public TableLayout {
 class HiveConnectorMetadata : public ConnectorMetadata {
  public:
   explicit HiveConnectorMetadata(HiveConnector* hiveConnector)
-      : hiveConnector_(hiveConnector) {}
+      : hiveConnector_(hiveConnector),
+        hiveConfig_(
+            std::make_shared<HiveConfig>(hiveConnector->connectorConfig())) {}
 
   ColumnHandlePtr createColumnHandle(
       const TableLayout& layout,
@@ -185,6 +187,7 @@ class HiveConnectorMetadata : public ConnectorMetadata {
   virtual std::string dataPath() const = 0;
 
   HiveConnector* const hiveConnector_;
+  const std::shared_ptr<HiveConfig> hiveConfig_;
 };
 
 } // namespace facebook::velox::connector::hive

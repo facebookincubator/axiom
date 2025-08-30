@@ -233,9 +233,7 @@ class TestInsertTableHandle : public ConnectorInsertTableHandle {
 /// layout. Filter pushdown is not supported.
 class TestConnectorMetadata : public ConnectorMetadata {
  public:
-  explicit TestConnectorMetadata(TestConnector* connector)
-      : connector_(connector),
-        splitManager_(std::make_unique<TestSplitManager>()) {}
+  explicit TestConnectorMetadata(TestConnector* connector);
 
   void initialize() override {}
 
@@ -318,6 +316,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
  private:
   TestConnector* connector_;
+  const std::shared_ptr<const config::ConfigBase> config_;
   std::unordered_map<std::string, std::shared_ptr<TestTable>> tables_;
   std::unique_ptr<TestSplitManager> splitManager_;
 };
@@ -374,9 +373,17 @@ class TestDataSource : public DataSource {
 /// the associated table.
 class TestConnector : public Connector {
  public:
-  explicit TestConnector(const std::string& id)
+  explicit TestConnector(
+      const std::string& id,
+      std::shared_ptr<const config::ConfigBase> config = nullptr)
       : Connector(id),
+        config_(std::move(config)),
         metadata_{std::make_unique<TestConnectorMetadata>(this)} {}
+
+  const std::shared_ptr<const config::ConfigBase>& connectorConfig()
+      const override {
+    return config_;
+  }
 
   ConnectorMetadata* metadata() const override {
     return metadata_.get();
@@ -414,6 +421,7 @@ class TestConnector : public Connector {
   void appendData(const std::string& name, const RowVectorPtr& data);
 
  private:
+  const std::shared_ptr<const config::ConfigBase> config_;
   const std::unique_ptr<TestConnectorMetadata> metadata_;
 };
 

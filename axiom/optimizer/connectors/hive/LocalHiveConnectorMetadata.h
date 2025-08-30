@@ -192,7 +192,7 @@ class LocalTable : public Table {
 
 class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
  public:
-  LocalHiveConnectorMetadata(HiveConnector* hiveConector);
+  explicit LocalHiveConnectorMetadata(HiveConnector* hiveConnector);
 
   void initialize() override;
 
@@ -275,7 +275,6 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   mutable std::mutex mutex_;
   mutable bool initialized_{false};
-  std::shared_ptr<HiveConfig> hiveConfig_;
   std::shared_ptr<memory::MemoryPool> rootPool_{
       memory::memoryManager()->addRootPool()};
   std::shared_ptr<memory::MemoryPool> schemaPool_;

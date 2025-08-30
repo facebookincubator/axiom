@@ -112,7 +112,9 @@ std::vector<SplitSource::SplitAndGroup> TpchSplitSource::getSplits(
 }
 
 TpchConnectorMetadata::TpchConnectorMetadata(TpchConnector* tpchConnector)
-    : tpchConnector_(tpchConnector), splitManager_(this) {}
+    : tpchConnector_(tpchConnector),
+      config_(tpchConnector->connectorConfig()),
+      splitManager_(this) {}
 
 void TpchConnectorMetadata::initialize() {
   makeQueryCtx();

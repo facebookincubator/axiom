@@ -262,6 +262,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   mutable std::mutex mutex_;
   mutable bool initialized_{false};
   TpchConnector* tpchConnector_;
+  const std::shared_ptr<const config::ConfigBase> config_;
   std::shared_ptr<memory::MemoryPool> rootPool_{
       memory::memoryManager()->addRootPool()};
   std::shared_ptr<core::QueryCtx> queryCtx_;

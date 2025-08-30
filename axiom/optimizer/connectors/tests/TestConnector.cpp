@@ -72,6 +72,11 @@ std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
       tableHandle->connectorId(), partitions);
 }
 
+TestConnectorMetadata::TestConnectorMetadata(TestConnector* connector)
+    : connector_(connector),
+      config_(connector->connectorConfig()),
+      splitManager_(std::make_unique<TestSplitManager>()) {}
+
 std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
     const std::string& name) {
   auto it = tables_.find(name);
@@ -228,10 +233,10 @@ void TestConnector::appendData(
 
 std::shared_ptr<Connector> TestConnectorFactory::newConnector(
     const std::string& id,
-    std::shared_ptr<const config::ConfigBase>,
+    std::shared_ptr<const config::ConfigBase> config,
     folly::Executor*,
     folly::Executor*) {
-  return std::make_shared<TestConnector>(id);
+  return std::make_shared<TestConnector>(id, config);
 }
 
 void TestDataSink::appendData(RowVectorPtr vector) {
