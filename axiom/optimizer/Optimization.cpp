@@ -377,9 +377,9 @@ Optimization::nextJoins(PlanState& state) {
   return {std::move(candidates), std::move(crossJoins)};
 }
 
-void Optimization::processCrossJoins(
+void Optimization::crossJoins(
     const RelationOpPtr& plan,
-    std::vector<JoinCandidate> crossJoins,
+    std::vector<JoinCandidate>& crossJoins,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
   if (crossJoins.empty()) {
@@ -397,7 +397,8 @@ void Optimization::processCrossJoins(
 
   auto crossJoinPlan = plan;
   for (const auto& join : crossJoins) {
-    crossJoinPlan = processCrossJoin(crossJoinPlan, join, state);
+    LOG(ERROR) << "Cross join: " << join.toString();
+    crossJoinPlan = crossJoin(crossJoinPlan, join, state);
   }
 
   state.addNextJoin(nullptr, crossJoinPlan, {}, toTry);
@@ -730,7 +731,7 @@ void Optimization::addPostprocess(
   }
 }
 
-RelationOpPtr Optimization::processCrossJoin(
+RelationOpPtr Optimization::crossJoin(
     const RelationOpPtr& plan,
     const JoinCandidate& candidate,
     PlanState& state) {
@@ -1504,8 +1505,8 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     return;
   }
 
-  auto [candidates, crossJoins] = nextJoins(state);
-  if (candidates.empty() && crossJoins.empty()) {
+  auto [candidates, crossJoinCandidates] = nextJoins(state);
+  if (candidates.empty() && crossJoinCandidates.empty()) {
     if (placeConjuncts(plan, state, true)) {
       return;
     }
@@ -1528,7 +1529,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
 
   // process cross join if we've processed connected component
   if (nextJoins.empty()) {
-    processCrossJoins(plan, std::move(crossJoins), state, nextJoins);
+    crossJoins(plan, crossJoinCandidates, state, nextJoins);
   }
   tryNextJoins(state, nextJoins);
 }

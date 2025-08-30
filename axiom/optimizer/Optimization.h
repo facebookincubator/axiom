@@ -236,13 +236,13 @@ class Optimization {
   // their different permutations.
   void tryNextJoins(PlanState& state, const std::vector<NextJoin>& nextJoins);
 
-  void processCrossJoins(
+  void crossJoins(
       const RelationOpPtr& plan,
-      std::vector<JoinCandidate> crossJoins,
+      std::vector<JoinCandidate>& crossJoins,
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
-  RelationOpPtr processCrossJoin(
+  RelationOpPtr crossJoin(
       const RelationOpPtr& plan,
       const JoinCandidate& candidate,
       PlanState& state);
