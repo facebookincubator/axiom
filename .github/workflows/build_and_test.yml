@@ -39,7 +39,7 @@ jobs:
     container:
       image: ghcr.io/facebookincubator/velox-dev:centos9
     env:
-      CCACHE_DIR: ${{ github.workspace }}/ccache
+      CCACHE_DIR: /tmp/ccache
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       ICU_SOURCE: SYSTEM
     steps:
@@ -49,7 +49,6 @@ jobs:
           echo "CCACHE_DIR: $CCACHE_DIR"
           echo "Workspace: ${{ github.workspace }}"
           echo "Runner OS: ${{ runner.os }}"
-          echo "Runner Architecture: ${{ runner.arch }}"
           echo "Current directory: $(pwd)"
           echo "Available disk space:"
           df -h
@@ -59,14 +58,14 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           echo "Creating ccache directory: $CCACHE_DIR"
-          mkdir -p "$CCACHE_DIR"
-          ls -la "$CCACHE_DIR" || echo "Directory is empty (expected for first run)"
+          mkdir -p /tmp/ccache
+          ls -la /tmp/ccache || echo "Directory is empty (expected for first run)"
 
       # Get ccache from stash
       - name: Get Ccache Stash
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
-          path: ${{ env.CCACHE_DIR }}
+          path: /tmp/ccache
           key: ccache-ubuntu-debug-default-gcc
 
       - name: Debug Cache Restoration
@@ -186,7 +185,7 @@ jobs:
       - name: Save ccache
         uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
-          path: ${{ env.CCACHE_DIR }}
+          path: /tmp/ccache
           key: ccache-ubuntu-debug-default-gcc
 
       - name: Debug Cache After Save
