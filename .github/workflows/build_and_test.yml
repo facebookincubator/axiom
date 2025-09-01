@@ -43,24 +43,21 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       ICU_SOURCE: SYSTEM
     steps:
-      - name: Debug Initial Environment
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      # Configure Git to trust the repository directory
+      - name: Configure Git Safe Directory
         run: |
-          echo "=== Cache Environment Debug ==="
-          echo "CCACHE_DIR: $CCACHE_DIR"
-          echo "Workspace: ${{ github.workspace }}"
-          echo "Runner OS: ${{ runner.os }}"
-          echo "Runner Architecture: ${{ runner.arch }}"
-          echo "Current directory: $(pwd)"
-          echo "Available disk space:"
-          df -h
-          echo "=== End Environment Debug ==="
+          git config --global --add safe.directory "/__w/verax/verax"
+          git config --global --add safe.directory "*"
 
       - name: Ensure Ccache Dir Exists
         working-directory: ${{ github.workspace }}
         run: |
-          echo "Creating ccache directory: $CCACHE_DIR"
           mkdir -p "$CCACHE_DIR"
-          ls -la "$CCACHE_DIR" || echo "Directory is empty (expected for first run)"
 
       # Get ccache from stash
       - name: Get Ccache Stash
@@ -73,7 +70,6 @@ jobs:
         run: |
           echo "=== Cache Restoration Debug ==="
           if [ -d "$CCACHE_DIR" ]; then
-            echo "✓ Ccache directory exists: $CCACHE_DIR"
             echo "Directory size: $(du -sh "$CCACHE_DIR" 2>/dev/null || echo 'Unable to determine size')"
             echo "Directory contents:"
             ls -la "$CCACHE_DIR" || echo "Directory is empty or inaccessible"
@@ -83,42 +79,9 @@ jobs:
           fi
           echo "=== End Cache Restoration Debug ==="
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          persist-credentials: false
-      # Configure Git to trust the repository directory
-      - name: Configure Git Safe Directory
-        run: |
-          git config --global --add safe.directory "/__w/verax/verax"
-          git config --global --add safe.directory "*"
       - name: Clear CCache Statistics
         run: |
           ccache -sz
-
-      # Configure with CMake to see the debug logs from CMakeLists.txt
-      - name: Configure with CMake
-        env:
-          CPU_TARGET: "avx"
-        run: |
-          echo "=== CMake Configuration Step ==="
-          echo "Running cmake configure to see CMakeLists.txt debug logs..."
-          echo "CPU_TARGET: $CPU_TARGET"
-          echo "Ccache auto-detection: $(which ccache >/dev/null && echo 'ccache found' || echo 'ccache not found')"
-          make cmake BUILD_DIR=debug BUILD_TYPE=Debug
-          echo ""
-          echo "=== Verifying CMAKE_CXX_COMPILER_LAUNCHER Setting ==="
-          if [ -f "_build/debug/CMakeCache.txt" ]; then
-            echo "Checking CMakeCache.txt for compiler launcher setting:"
-            grep "CMAKE_CXX_COMPILER_LAUNCHER" _build/debug/CMakeCache.txt || echo "CMAKE_CXX_COMPILER_LAUNCHER not found in cache"
-            echo ""
-            echo "Checking other compiler launcher settings:"
-            grep "CMAKE_.*_COMPILER_LAUNCHER" _build/debug/CMakeCache.txt || echo "No compiler launcher settings found"
-          else
-            echo "CMakeCache.txt not found at _build/debug/CMakeCache.txt"
-          fi
-          echo "=== CMake Configuration Completed ==="
 
       # Build Verax
       - name: Build Verax Debug
@@ -127,60 +90,13 @@ jobs:
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
           CPU_TARGET: "avx"
         run: |
-          echo "=== Starting Build ==="
-          echo "Build environment:"
-          echo "MAKEFLAGS: $MAKEFLAGS"
-          echo "CPU_TARGET: $CPU_TARGET"
-          echo "Available memory:"
-          free -h
-          echo "Available CPU cores:"
-          nproc
-          echo ""
-          echo "=== Sample Compilation Commands (first 5) ==="
-          echo "Showing first few compilation commands to verify ccache usage:"
-          # Build with verbose output but limit the output to first few commands
-          (cd _build/debug && \
-          make VERBOSE=1 -j1 2>&1 | head -20 | grep -E "(ccache|g\+\+|clang)") || echo "No compiler commands found in first 20 lines"
-          echo ""
-          echo "=== Starting Verax Debug Build ==="
-          # Build only (cmake already done)
-          make build BUILD_DIR=debug
-          echo "=== Build Completed ==="
+          make debug
 
       # Display ccache statistics after build
       - name: CCache Statistics After Build
         if: always() # Run even if build failed
         run: |
-          echo "=== CCache Statistics After Build ==="
-          echo "Detailed ccache statistics:"
           ccache -vs
-          echo ""
-          echo "Cache hit rate summary:"
-          ccache -s
-          echo ""
-          echo "Current cache directory state:"
-          echo "Directory: $CCACHE_DIR"
-          echo "Directory size: $(du -sh "$CCACHE_DIR" 2>/dev/null || echo 'Unable to determine size')"
-          echo "Number of cached files: $(find "$CCACHE_DIR" -name "*.o" -o -name "*.d" 2>/dev/null | wc -l)"
-          echo "=== End CCache Statistics ==="
-
-      - name: Debug Cache Before Save
-        if: always()  # Run even if build failed
-        run: |
-          echo "=== Cache Save Preparation Debug ==="
-          echo "Preparing to save cache..."
-          echo "Cache directory: $CCACHE_DIR"
-          if [ -d "$CCACHE_DIR" ]; then
-            echo "✓ Cache directory exists"
-            echo "Final cache size: $(du -sh "$CCACHE_DIR" 2>/dev/null || echo 'Unable to determine size')"
-            echo "Cache permissions:"
-            ls -la "$CCACHE_DIR" | head -10
-            echo "Cache subdirectory count: $(find "$CCACHE_DIR" -type d 2>/dev/null | wc -l)"
-            echo "Cache file count: $(find "$CCACHE_DIR" -type f 2>/dev/null | wc -l)"
-          else
-            echo "✗ Cache directory does not exist - nothing to save"
-          fi
-          echo "=== End Cache Save Debug ==="
 
       # Save ccache for future runs
       - name: Save ccache
@@ -189,20 +105,7 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-default-gcc
 
-      - name: Debug Cache After Save
-        if: always()  # Run even if build failed
-        run: |
-          echo "=== Cache Save Completion Debug ==="
-          echo "Cache save operation completed"
-          echo "Final verification - cache directory still exists:"
-          if [ -d "$CCACHE_DIR" ]; then
-            echo "✓ Cache directory preserved: $CCACHE_DIR"
-          else
-            echo "⚠ Cache directory no longer exists (may be normal after save)"
-          fi
-          echo "=== End Cache Save Completion Debug ==="
-
-      # Run Verax tests (excluding velox tests)
+      # Run Verax tests
       - name: Run Debug Tests
         working-directory: _build/debug
         run: |
