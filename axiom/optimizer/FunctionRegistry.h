@@ -85,15 +85,10 @@ struct FunctionMetadata {
   /// the function applies array sort to all arrays in a map. suppose it is used
   /// in [k1][0] and [k2][1]. This could return [k1] = array_sort(arg[k1]) and
   /// k2 = array_sort(arg[k2]. 'arg'  comes from 'call'.
-  std::function<std::unordered_map<PathCP, core::TypedExprPtr>(
-      const core::CallTypedExpr* call,
-      std::vector<PathCP>& paths)>
-      explode;
-
   std::function<std::unordered_map<PathCP, logical_plan::ExprPtr>(
       const logical_plan::CallExpr* call,
       std::vector<PathCP>& paths)>
-      logicalExplode;
+      explode;
 };
 
 using FunctionMetadataCP = const FunctionMetadata*;

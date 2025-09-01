@@ -228,7 +228,7 @@ void registerDfFunctions() {
     registerFeatureFuncHook(kMakeRowFromMap, makeRowFromMapHook);
 
     auto metadata = std::make_unique<FunctionMetadata>();
-    metadata->logicalExplode = makeRowFromMapExplode;
+    metadata->explode = makeRowFromMapExplode;
     metadata->valuePathToArgPath = makeRowFromMapSubfield;
     registry->registerFunction(kMakeRowFromMap, std::move(metadata));
   }
@@ -237,7 +237,7 @@ void registerDfFunctions() {
     registerFeatureFuncHook(kPaddedMakeRowFromMap, makeRowFromMapHook);
 
     auto metadata = std::make_unique<FunctionMetadata>();
-    metadata->logicalExplode = paddedMakeRowFromMapExplode;
+    metadata->explode = paddedMakeRowFromMapExplode;
     metadata->valuePathToArgPath = makeRowFromMapSubfield;
     registry->registerFunction(kPaddedMakeRowFromMap, std::move(metadata));
   }
@@ -247,7 +247,7 @@ void registerDfFunctions() {
 
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->valuePathToArgPath = makeNamedRowSubfield;
-    metadata->logicalExplode = makeNamedRowExplode;
+    metadata->explode = makeNamedRowExplode;
     registry->registerFunction(kMakeNamedRow, std::move(metadata));
   }
 }

@@ -89,11 +89,11 @@ class SubfieldTest : public QueryTestBase,
         "genie", std::make_unique<FunctionMetadata>(*metadata));
 
     auto explodingMetadata = std::make_unique<FunctionMetadata>(*metadata);
-    explodingMetadata->logicalExplode = logicalExplodeGenie;
+    explodingMetadata->explode = explodeGenie;
     registry->registerFunction("exploding_genie", std::move(explodingMetadata));
   }
 
-  static std::unordered_map<PathCP, lp::ExprPtr> logicalExplodeGenie(
+  static std::unordered_map<PathCP, lp::ExprPtr> explodeGenie(
       const lp::CallExpr* call,
       std::vector<PathCP>& paths) {
     // This function understands paths like [1][cc], [2][cc],

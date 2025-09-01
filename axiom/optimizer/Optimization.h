@@ -41,7 +41,7 @@ class Optimization {
 
   // Simplified API for usage in testing and tooling.
   static PlanAndStats toVeloxPlan(
-      const logical_plan::LogicalPlanNode& logicalPlan,
+      const logical_plan::LogicalPlanNode& plan,
       velox::memory::MemoryPool& pool,
       OptimizerOptions options = {},
       axiom::runner::MultiFragmentPlan::Options runnerOptions = {});
@@ -290,7 +290,7 @@ class Optimization {
   const bool isSingleWorker_;
 
   // Top level plan to optimize.
-  const logical_plan::LogicalPlanNode* const logicalPlan_;
+  const logical_plan::LogicalPlanNode* const plan_;
 
   // Source of historical cost/cardinality information.
   History& history_;

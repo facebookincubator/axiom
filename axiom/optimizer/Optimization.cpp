@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/Optimization.h"
 #include <iostream>
+#include <utility>
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
 
@@ -34,25 +35,25 @@ Optimization::Optimization(
     : options_(std::move(options)),
       runnerOptions_(std::move(runnerOptions)),
       isSingleWorker_(runnerOptions_.numWorkers == 1),
-      logicalPlan_(&plan),
+      plan_(&plan),
       history_(history),
       veloxQueryCtx_(std::move(veloxQueryCtx)),
       toGraph_{schema, evaluator, options_},
       toVelox_{runnerOptions_, options_} {
   queryCtx()->optimization() = this;
-  root_ = toGraph_.makeQueryGraph(*logicalPlan_);
+  root_ = toGraph_.makeQueryGraph(*plan_);
   root_->distributeConjuncts();
   root_->addImpliedJoins();
   root_->linkTablesToJoins();
   for (auto* join : root_->joins) {
     join->guessFanout();
   }
-  toGraph_.setDtOutput(root_, *logicalPlan_);
+  toGraph_.setDtOutput(root_, *plan_);
 }
 
 // static
 PlanAndStats Optimization::toVeloxPlan(
-    const lp::LogicalPlanNode& logicalPlan,
+    const lp::LogicalPlanNode& plan,
     velox::memory::MemoryPool& pool,
     OptimizerOptions options,
     axiom::runner::MultiFragmentPlan::Options runnerOptions) {
@@ -72,14 +73,14 @@ PlanAndStats Optimization::toVeloxPlan(
 
   Schema schema("default", schemaResolver.get(), /* locus */ nullptr);
 
-  Optimization opt(
-      logicalPlan,
+  Optimization opt{
+      plan,
       schema,
       history,
       veloxQueryCtx,
       evaluator,
-      options,
-      runnerOptions);
+      std::move(options),
+      std::move(runnerOptions)};
 
   auto best = opt.bestPlan();
   return opt.toVeloxPlan(best->op);

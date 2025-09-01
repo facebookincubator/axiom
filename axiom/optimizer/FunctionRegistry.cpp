@@ -50,7 +50,7 @@ FunctionMetadataCP functionMetadata(const std::string& name) {
 namespace {
 std::pair<std::vector<Step>, int32_t> rowConstructorSubfield(
     const std::vector<Step>& steps,
-    const logical_plan::CallExpr& call) {
+    const lp::CallExpr& call) {
   VELOX_CHECK(steps.back().kind == StepKind::kField);
   auto field = steps.back().field;
   auto idx = call.type()->as<TypeKind::ROW>().getChildIdx(field);
@@ -59,10 +59,10 @@ std::pair<std::vector<Step>, int32_t> rowConstructorSubfield(
   return std::make_pair(newFields, idx);
 }
 
-std::unordered_map<PathCP, logical_plan::ExprPtr> rowConstructorExplode(
-    const logical_plan::CallExpr* call,
+std::unordered_map<PathCP, lp::ExprPtr> rowConstructorExplode(
+    const lp::CallExpr* call,
     std::vector<PathCP>& paths) {
-  std::unordered_map<PathCP, logical_plan::ExprPtr> result;
+  std::unordered_map<PathCP, lp::ExprPtr> result;
   for (auto& path : paths) {
     const auto& steps = path->steps();
     if (steps.empty()) {
@@ -121,7 +121,7 @@ bool declareBuiltIn() {
   {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->valuePathToArgPath = rowConstructorSubfield;
-    metadata->logicalExplode = rowConstructorExplode;
+    metadata->explode = rowConstructorExplode;
     FunctionRegistry::instance()->registerFunction(
         "row_constructor", std::move(metadata));
   }
