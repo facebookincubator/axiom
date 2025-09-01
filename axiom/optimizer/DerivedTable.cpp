@@ -631,7 +631,7 @@ bool isJoinEquality(
     ExprCP& right) {
   if (expr->is(PlanType::kCallExpr)) {
     auto call = expr->as<Call>();
-    if (call->name() == toName("eq")) {
+    if (call->name() == builtinNames().eq) {
       left = call->argAt(0);
       right = call->argAt(1);
       auto leftTable = singleTable(left);
@@ -850,7 +850,7 @@ ExprVector extractPerTable(
     std::vector<ExprVector>& orOfAnds) {
   PlanObjectSet tables;
   auto optimization = queryCtx()->optimization();
-  auto& names = optimization->builtinNames();
+  const auto& names = builtinNames();
   tables = disjuncts[0]->allTables();
   if (tables.size() <= 1) {
     // All must depend on the same set of more than 1 table.
@@ -900,7 +900,7 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   std::unordered_set<ExprCP> distinct;
   PlanObjectSet tableSet;
   auto optimization = queryCtx()->optimization();
-  auto& names = optimization->builtinNames();
+  const auto& names = builtinNames();
   ExprVector result;
   // Remove duplicates.
   bool changeOriginal = false;
@@ -966,7 +966,7 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
 } // namespace
 
 void DerivedTable::expandConjuncts() {
-  const auto& names = queryCtx()->optimization()->builtinNames();
+  const auto& names = builtinNames();
   bool any;
   std::unordered_set<int32_t> processed;
   auto firstUnprocessed = numCanonicalConjuncts;

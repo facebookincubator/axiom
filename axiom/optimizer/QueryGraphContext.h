@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/optimizer/ArenaCache.h"
+#include "axiom/optimizer/BuiltinNames.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/type/Variant.h"
 #include "velox/vector/BaseVector.h"
@@ -27,10 +28,6 @@
 /// Thread local context and utilities for query planning.
 
 namespace facebook::velox::optimizer {
-
-/// Pointer to an arena allocated interned copy of a null terminated string.
-/// Used for identifiers. Allows comparing strings by comparing pointers.
-using Name = const char*;
 
 /// Shorthand for a view on an array of T*
 template <typename T>
@@ -329,6 +326,8 @@ class QueryGraphContext {
 
   VectorPtr toVectorPtr(const BaseVector* vector);
 
+  const BuiltinNames& builtinNames();
+
  private:
   TypePtr dedupType(const TypePtr& type);
 
@@ -367,10 +366,14 @@ class QueryGraphContext {
   Optimization* optimization_{nullptr};
 
   std::vector<std::unique_ptr<Variant>> allVariants_;
+
+  std::unique_ptr<const BuiltinNames> builtinNames_;
 };
 
 /// Returns a mutable reference to the calling thread's QueryGraphContext.
 QueryGraphContext*& queryCtx();
+
+const BuiltinNames& builtinNames();
 
 template <class T>
 T* QGAllocator<T>::allocate(std::size_t n) {

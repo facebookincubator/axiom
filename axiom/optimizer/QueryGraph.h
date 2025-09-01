@@ -406,7 +406,7 @@ struct SpecialFormCallNames {
   static constexpr const char* kSwitch = "switch";
   static constexpr const char* kIn = "in";
 
-  static const char* toCallName(const logical_plan::SpecialForm& form) {
+  static const char* toCallName(logical_plan::SpecialForm form) {
     namespace lp = facebook::velox::logical_plan;
 
     switch (form) {

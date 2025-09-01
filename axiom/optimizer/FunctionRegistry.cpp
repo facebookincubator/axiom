@@ -17,7 +17,6 @@
 #include "axiom/optimizer/FunctionRegistry.h"
 
 namespace facebook::velox::optimizer {
-namespace lp = facebook::velox::logical_plan;
 
 FunctionMetadataCP FunctionRegistry::metadata(std::string_view name) const {
   auto it = metadata_.find(name);
@@ -90,7 +89,7 @@ bool declareBuiltIn() {
     metadata->subfieldArg = 0;
     metadata->cost = 40;
     FunctionRegistry::instance()->registerFunction(
-        "transform_values", std::move(metadata));
+        BuiltinNames::kTransformValues, std::move(metadata));
   }
   {
     LambdaInfo info{
@@ -101,7 +100,7 @@ bool declareBuiltIn() {
     metadata->subfieldArg = 0;
     metadata->cost = 20;
     FunctionRegistry::instance()->registerFunction(
-        "transform", std::move(metadata));
+        BuiltinNames::kTransform, std::move(metadata));
   }
   {
     LambdaInfo info{
@@ -112,14 +111,15 @@ bool declareBuiltIn() {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->lambdas.push_back(std::move(info));
     metadata->cost = 20;
-    FunctionRegistry::instance()->registerFunction("zip", std::move(metadata));
+    FunctionRegistry::instance()->registerFunction(
+        BuiltinNames::kZip, std::move(metadata));
   }
   {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->valuePathToArgPath = rowConstructorSubfield;
     metadata->explode = rowConstructorExplode;
     FunctionRegistry::instance()->registerFunction(
-        "row_constructor", std::move(metadata));
+        BuiltinNames::kRowConstructor, std::move(metadata));
   }
   return true;
 }

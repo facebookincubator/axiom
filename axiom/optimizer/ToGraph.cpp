@@ -178,7 +178,8 @@ bool ToGraph::isSubfield(
 
   if (const auto* call = expr->asUnchecked<lp::CallExpr>()) {
     auto name = call->name();
-    if (name == "subscript" || name == "element_at") {
+    const auto& names = builtinNames();
+    if (name == names.subscript || name == names.elementAt) {
       auto subscript = translateExpr(call->inputAt(1));
       if (subscript->is(PlanType::kLiteralExpr)) {
         step.kind = StepKind::kSubscript;
@@ -201,7 +202,7 @@ bool ToGraph::isSubfield(
       }
       return false;
     }
-    if (name == "cardinality") {
+    if (name == names.cardinality) {
       step.kind = StepKind::kCardinality;
       input = expr->inputAt(0);
       return true;
@@ -427,7 +428,7 @@ ExprCP ToGraph::makeGettersOverSkyline(
           };
 
           expr = make<Call>(
-              toName("subscript"),
+              builtinNames().subscript,
               Value(valueType, 1),
               std::move(args),
               FunctionSet());
@@ -436,8 +437,8 @@ ExprCP ToGraph::makeGettersOverSkyline(
 
         case StepKind::kCardinality: {
           expr = make<Call>(
-              toName("cardinality"),
-              Value(toType(INTEGER()), 1),
+              builtinNames().cardinality,
+              Value(toType(BIGINT()), 1),
               ExprVector{expr},
               FunctionSet());
           break;
@@ -498,57 +499,6 @@ void ToGraph::ensureFunctionSubfields(const lp::ExprPtr& expr) {
       }
     }
   }
-}
-
-BuiltinNames::BuiltinNames()
-    : eq(toName("eq")),
-      lt(toName("lt")),
-      lte(toName("lte")),
-      gt(toName("gt")),
-      gte(toName("gte")),
-      plus(toName("plus")),
-      multiply(toName("multiply")),
-      _and(toName(SpecialFormCallNames::kAnd)),
-      _or(toName(SpecialFormCallNames::kOr)),
-      cast(toName(SpecialFormCallNames::kCast)),
-      tryCast(toName(SpecialFormCallNames::kTryCast)),
-      _try(toName(SpecialFormCallNames::kTry)),
-      coalesce(toName(SpecialFormCallNames::kCoalesce)),
-      _if(toName(SpecialFormCallNames::kIf)),
-      _switch(toName(SpecialFormCallNames::kSwitch)),
-      in(toName(SpecialFormCallNames::kIn)) {
-  canonicalizable.insert(eq);
-  canonicalizable.insert(lt);
-  canonicalizable.insert(lte);
-  canonicalizable.insert(gt);
-  canonicalizable.insert(gte);
-  canonicalizable.insert(plus);
-  canonicalizable.insert(multiply);
-  canonicalizable.insert(_and);
-  canonicalizable.insert(_or);
-}
-
-Name BuiltinNames::reverse(Name name) const {
-  if (name == lt) {
-    return gt;
-  }
-  if (name == lte) {
-    return gte;
-  }
-  if (name == gt) {
-    return lt;
-  }
-  if (name == gte) {
-    return lte;
-  }
-  return name;
-}
-
-BuiltinNames& ToGraph::builtinNames() {
-  if (!builtinNames_) {
-    builtinNames_ = std::make_unique<BuiltinNames>();
-  }
-  return *builtinNames_;
 }
 
 namespace {
@@ -964,7 +914,7 @@ void extractNonInnerJoinEqualities(
     ExprVector& leftKeys,
     ExprVector& rightKeys,
     PlanObjectSet& allLeft) {
-  const auto* eq = toName("eq");
+  const auto* eq = builtinNames().eq;
 
   for (auto i = 0; i < conjuncts.size(); ++i) {
     const auto* conjunct = conjuncts[i];

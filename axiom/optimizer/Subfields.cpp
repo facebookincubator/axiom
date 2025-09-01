@@ -283,14 +283,15 @@ void ToGraph::markSubfields(
 
   if (expr->isCall()) {
     const auto& name = expr->asUnchecked<lp::CallExpr>()->name();
-    if (name == "cardinality") {
+    const auto& names = builtinNames();
+    if (name == names.cardinality) {
       steps.push_back({.kind = StepKind::kCardinality});
       markSubfields(expr->inputAt(0), steps, isControl, context);
       steps.pop_back();
       return;
     }
 
-    if (name == "subscript" || name == "element_at") {
+    if (name == names.subscript || name == names.elementAt) {
       auto constant = tryFoldConstant(expr->inputAt(1));
       if (!constant) {
         std::vector<Step> subSteps;
@@ -541,7 +542,7 @@ lp::ExprPtr ToGraph::stepToLogicalPlanGetter(
       if (argType->kind() == TypeKind::ARRAY) {
         return std::make_shared<lp::CallExpr>(
             argType->childAt(0),
-            "subscript",
+            builtinNames().subscript,
             arg,
             makeKey<int32_t>(INTEGER(), step.id));
       }
@@ -568,7 +569,7 @@ lp::ExprPtr ToGraph::stepToLogicalPlanGetter(
       }
 
       return std::make_shared<lp::CallExpr>(
-          argType->childAt(1), "subscript", arg, key);
+          argType->childAt(1), builtinNames().subscript, arg, key);
     }
 
     default:

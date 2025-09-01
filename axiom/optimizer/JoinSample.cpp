@@ -53,26 +53,30 @@ ExprCP makeHash(ExprCP expr) {
     case TypeKind::SMALLINT:
     case TypeKind::INTEGER:
       expr = make<Call>(
-          toName("cast"), bigintValue(), ExprVector{expr}, FunctionSet());
+          builtinNames()._cast, bigintValue(), ExprVector{expr}, FunctionSet());
       break;
     default: {
       ExprVector castArgs;
       castArgs.push_back(make<Call>(
-          toName("cast"),
+          builtinNames()._cast,
           Value(toType(VARCHAR()), 1),
           castArgs,
           FunctionSet()));
 
       ExprVector args;
       args.push_back(make<Call>(
-          toName("cast"),
+          builtinNames()._cast,
           Value(toType(VARBINARY()), 1),
           castArgs,
           FunctionSet()));
       ExprVector final;
       final.push_back(make<Call>(
-          toName("crc32"), Value(toType(INTEGER()), 1), args, FunctionSet()));
-      expr = make<Call>(toName("cast"), bigintValue(), final, FunctionSet());
+          builtinNames().crc32(),
+          Value(toType(INTEGER()), 1),
+          args,
+          FunctionSet()));
+      expr =
+          make<Call>(builtinNames()._cast, bigintValue(), final, FunctionSet());
     }
   }
 
@@ -80,7 +84,7 @@ ExprCP makeHash(ExprCP expr) {
   andArgs.push_back(expr);
   andArgs.push_back(bigintLit(0x7fffffff));
   return make<Call>(
-      toName("bitwise_and"), bigintValue(), andArgs, FunctionSet());
+      builtinNames().bitwiseAnd(), bigintValue(), andArgs, FunctionSet());
 }
 
 ExprCP scaleTo32(ExprCP value) {
@@ -88,12 +92,12 @@ ExprCP scaleTo32(ExprCP value) {
   andArgs.push_back(value);
   andArgs.push_back(bigintLit(0x7fffffff));
   return make<Call>(
-      toName("bitwise_and"), bigintValue(), andArgs, FunctionSet());
+      builtinNames().bitwiseAnd(), bigintValue(), andArgs, FunctionSet());
 }
 
 ExprCP mul(ExprCP a, int64_t b) {
   return scaleTo32(make<Call>(
-      toName("multiply"),
+      builtinNames().multiply,
       bigintValue(),
       ExprVector{a, bigintLit(b)},
       FunctionSet()));
@@ -101,7 +105,7 @@ ExprCP mul(ExprCP a, int64_t b) {
 
 ExprCP rightShift(ExprCP a, int32_t s) {
   return make<Call>(
-      toName("bitwise_right_shift"),
+      builtinNames().bitwiseRightShift(),
       bigintValue(),
       ExprVector{a, intLit(s)},
       FunctionSet());
@@ -109,7 +113,10 @@ ExprCP rightShift(ExprCP a, int32_t s) {
 
 ExprCP xor64(ExprCP a, ExprCP b) {
   return make<Call>(
-      toName("bitwise_xor"), bigintValue(), ExprVector{a, b}, FunctionSet());
+      builtinNames().bitwiseXor(),
+      bigintValue(),
+      ExprVector{a, b},
+      FunctionSet());
 }
 
 std::shared_ptr<core::QueryCtx> sampleQueryCtx(
@@ -166,16 +173,16 @@ std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
     }
   }
   ColumnCP hashCol =
-      make<Column>(toName("hash"), nullptr, bigintValue(), nullptr);
+      make<Column>(builtinNames().hash(), nullptr, bigintValue(), nullptr);
   RelationOpPtr proj =
       make<Project>(scan, ExprVector{hash}, ColumnVector{hashCol});
   ExprCP hashMod = make<Call>(
-      toName("mod"),
+      builtinNames().mod(),
       bigintValue(),
       ExprVector{hashCol, bigintLit(mod)},
       FunctionSet());
   ExprCP filterExpr = make<Call>(
-      toName("lt"),
+      builtinNames().lt,
       Value(toType(BOOLEAN()), 1),
       ExprVector{hashMod, bigintLit(lim)},
       FunctionSet());

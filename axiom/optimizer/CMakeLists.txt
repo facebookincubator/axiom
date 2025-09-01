@@ -28,6 +28,7 @@ target_link_libraries(
 
 add_library(
   velox_verax
+  BuiltinNames.cpp
   DerivedTable.cpp
   DerivedTablePrinter.cpp
   ToGraph.cpp

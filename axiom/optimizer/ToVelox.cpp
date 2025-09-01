@@ -343,13 +343,13 @@ core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
         return std::make_shared<core::CallTypedExpr>(
             type->as<TypeKind::MAP>().childAt(1),
             std::vector<core::TypedExprPtr>{arg, key},
-            "subscript");
+            builtinNames().subscript);
       }
       return std::make_shared<core::CallTypedExpr>(
           type->childAt(0),
           std::vector<core::TypedExprPtr>{
               arg, makeKey<int32_t>(INTEGER(), step.id)},
-          "subscript");
+          builtinNames().subscript);
     }
 
     default:
@@ -418,9 +418,9 @@ core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
     case PlanType::kCallExpr: {
       std::vector<core::TypedExprPtr> inputs;
       auto call = expr->as<Call>();
-      const auto& builtinNames = queryCtx()->optimization()->builtinNames();
+      const auto& names = builtinNames();
 
-      if (call->name() == builtinNames.in) {
+      if (call->name() == names._in) {
         VELOX_USER_CHECK_GE(call->args().size(), 2);
         inputs.push_back(toTypedExpr(call->args().at(0)));
         inputs.push_back(createArrayForInList(*call, inputs.back()->type()));
@@ -430,12 +430,12 @@ core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
         }
       }
 
-      if (call->name() == builtinNames.cast) {
+      if (call->name() == names._cast) {
         return std::make_shared<core::CastTypedExpr>(
             toTypePtr(expr->value().type), std::move(inputs), false);
       }
 
-      if (call->name() == builtinNames.tryCast) {
+      if (call->name() == names._tryCast) {
         return std::make_shared<core::CastTypedExpr>(
             toTypePtr(expr->value().type), std::move(inputs), true);
       }

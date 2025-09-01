@@ -22,35 +22,6 @@
 
 namespace facebook::velox::optimizer {
 
-struct BuiltinNames {
-  BuiltinNames();
-
-  Name reverse(Name op) const;
-
-  bool isCanonicalizable(Name name) const {
-    return canonicalizable.find(name) != canonicalizable.end();
-  }
-
-  Name eq;
-  Name lt;
-  Name lte;
-  Name gt;
-  Name gte;
-  Name plus;
-  Name multiply;
-  Name _and;
-  Name _or;
-  Name cast;
-  Name tryCast;
-  Name _try;
-  Name coalesce;
-  Name _if;
-  Name _switch;
-  Name in;
-
-  folly::F14FastSet<Name> canonicalizable;
-};
-
 /// Struct for resolving which logical PlanNode or Lambda defines which
 /// field for column and subfield tracking.
 /// Only one of planNode or call + lambdaOrdinal is set.
@@ -206,8 +177,6 @@ class ToGraph {
   Name newCName(const std::string& prefix) {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
   }
-
-  BuiltinNames& builtinNames();
 
   /// Creates or returns pre-existing function call with name+args. If
   /// deterministic, a new ExprCP is remembered for reuse.
@@ -522,8 +491,6 @@ class ToGraph {
   // Map from leaf PlanNode to corresponding PlanObject
   std::unordered_map<const logical_plan::LogicalPlanNode*, PlanObjectCP>
       planLeaves_;
-
-  std::unique_ptr<BuiltinNames> builtinNames_;
 };
 
 } // namespace facebook::velox::optimizer

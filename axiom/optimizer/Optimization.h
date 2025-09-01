@@ -147,10 +147,6 @@ class Optimization {
     return cnamesInExpr_;
   }
 
-  BuiltinNames& builtinNames() {
-    return toGraph_.builtinNames();
-  }
-
   /// Returns a dedupped left deep reduction with 'func' for the
   /// elements in set1 and set2. The elements are sorted on plan object
   /// id and then combined into a left deep reduction on 'func'.

@@ -292,4 +292,15 @@ PathCP toPath(std::span<const Step> steps, bool reverse) {
   return queryCtx()->toPath(path);
 }
 
+const BuiltinNames& QueryGraphContext::builtinNames() {
+  if (!builtinNames_) {
+    builtinNames_ = std::make_unique<const BuiltinNames>();
+  }
+  return *builtinNames_;
+}
+
+const BuiltinNames& builtinNames() {
+  return queryCtx()->builtinNames();
+}
+
 } // namespace facebook::velox::optimizer
