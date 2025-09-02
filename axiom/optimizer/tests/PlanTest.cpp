@@ -107,10 +107,13 @@ class PlanTest : public test::QueryTestBase {
   }
 
   core::PlanNodePtr toSingleNodePlan(
-      const lp::LogicalPlanNodePtr& logicalPlan) {
+      const lp::LogicalPlanNodePtr& logicalPlan,
+      int32_t numDrivers = 1) {
     schema_ = std::make_shared<velox::optimizer::SchemaResolver>();
 
-    auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 4}).plan;
+    auto plan =
+        planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers})
+            .plan;
 
     EXPECT_EQ(1, plan->fragments().size());
     return plan->fragments().at(0).fragment.planNode;
@@ -210,16 +213,26 @@ TEST_F(PlanTest, agg) {
                          .aggregate({"a"}, {"sum(b)"})
                          .build();
 
-  auto plan = toSingleNodePlan(logicalPlan);
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher = core::PlanMatcherBuilder()
-                     .tableScan()
-                     .partialAggregation()
-                     .localPartition()
-                     .finalAggregation()
-                     .build();
+    auto matcher =
+        core::PlanMatcherBuilder().tableScan().singleAggregation().build();
 
-  ASSERT_TRUE(matcher->match(plan));
+    ASSERT_TRUE(matcher->match(plan));
+  }
+  {
+    auto plan = toSingleNodePlan(logicalPlan, 2);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .partialAggregation()
+                       .localPartition()
+                       .finalAggregation()
+                       .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
 }
 
 // Verify that optimizer can handle connectors that do not support filter
@@ -591,9 +604,7 @@ TEST_F(PlanTest, filterImport) {
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("orders")
-                       .partialAggregation()
-                       .localPartition()
-                       .finalAggregation()
+                       .singleAggregation()
                        .filter("a0 > 200.0")
                        .build();
 
@@ -703,9 +714,7 @@ TEST_F(PlanTest, filterBreakup) {
                     .build())
             .filter()
             .project()
-            .partialAggregation()
-            .localPartition()
-            .finalAggregation()
+            .singleAggregation()
             .build();
 
     ASSERT_TRUE(matcher->match(plan));
@@ -843,9 +852,7 @@ TEST_F(PlanTest, unionJoin) {
                     .build(),
                 core::JoinType::kInner)
             .project()
-            .partialAggregation()
-            .localPartition()
-            .finalAggregation()
+            .singleAggregation()
             .build();
 
     ASSERT_TRUE(matcher->match(plan));
@@ -927,9 +934,7 @@ TEST_F(PlanTest, intersect) {
                                    core::JoinType::kRightSemiFilter)
                                .build(),
                            core::JoinType::kRightSemiFilter)
-                       .partialAggregation()
-                       .localPartition()
-                       .finalAggregation()
+                       .singleAggregation()
                        .project()
                        .build();
 
@@ -994,9 +999,7 @@ TEST_F(PlanTest, except) {
                     .hiveScan("nation", lte("n_nationkey", 5))
                     .build(),
                 core::JoinType::kAnti)
-            .partialAggregation()
-            .localPartition()
-            .finalAggregation()
+            .singleAggregation()
             .project()
             .build();
 
@@ -1329,9 +1332,7 @@ TEST_F(PlanTest, lastProjection) {
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan()
-                     .partialAggregation()
-                     .localPartition()
-                     .finalAggregation()
+                     .singleAggregation()
                      .project({"a"})
                      .build();
 
