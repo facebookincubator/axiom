@@ -198,7 +198,7 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
       builder.planNode());
   auto result = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   metadata->finishWrite(
-      *layout, connectorHandle, {result}, WriteKind::kInsert, session);
+			*layout, connectorHandle, true, {result}, WriteKind::kInsert, session);
 
   std::string id = "readQ";
   axiom::runner::MultiFragmentPlan::Options runnerOptions = {

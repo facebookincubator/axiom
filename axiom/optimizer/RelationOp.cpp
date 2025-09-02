@@ -827,4 +827,45 @@ std::string UnionAll::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+TableWrite::TableWrite(RelationOpPtr input, const WritePlan* write)
+    : RelationOp(RelType::kTableWrite, input, Distribution(), write->output()),
+      write(write) {
+  cost_.inputCardinality = inputCardinality();
+  cost_.unitCost = 0.01;
+}
+
+std::string TableWrite::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (recursive) {
+    out << input()->toString(true, detail) << " ";
+  }
+
+  if (detail) {
+    out << fmt::format(
+        "TableWrite to {} ({} columns)",
+        write->table(),
+        write->columns().size());
+
+    const auto& values = write->values();
+    const auto& columnNames = write->columns();
+
+    if (!values.empty()) {
+      out << " expressions:";
+      for (size_t i = 0; i < values.size() && i < columnNames.size(); ++i) {
+        out << " " << columnNames[i] << "=" << values[i]->toString();
+        if (i < values.size() - 1) {
+          out << ",";
+        }
+      }
+    }
+
+    printCost(detail, out);
+  } else {
+    out << fmt::format(
+        "TableWrite {} columns to {}", write->columns().size(), write->table());
+  }
+
+  return out.str();
+}
+
 } // namespace facebook::velox::optimizer

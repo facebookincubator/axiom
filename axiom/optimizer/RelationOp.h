@@ -92,6 +92,7 @@ enum class RelType {
   kUnionAll,
   kLimit,
   kValues,
+  kTableWrite,
 };
 
 VELOX_DECLARE_ENUM_NAME(RelType)
@@ -464,5 +465,15 @@ struct Limit : public RelationOp {
 };
 
 using LimitCP = const Limit*;
+
+struct TableWrite : public RelationOp {
+  TableWrite(RelationOpPtr input, const WritePlan* write);
+
+  const WritePlan* write;
+
+  std::string toString(bool recursive, bool detail) const override;
+};
+
+using TableWriteCP = const TableWrite*;
 
 } // namespace facebook::velox::optimizer

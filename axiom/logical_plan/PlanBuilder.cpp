@@ -1219,6 +1219,40 @@ PlanBuilder& PlanBuilder::offset(int64_t offset) {
   return *this;
 }
 
+PlanBuilder& PlanBuilder::tableWrite(
+    const std::string& connectorId,
+    const std::string& tableName,
+    WriteKind kind,
+    const std::vector<ExprApi>& values,
+    const std::vector<std::string>& columnNames,
+    const std::unordered_map<std::string, std::string> options) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Table write node cannot be a leaf node");
+
+  auto connector = connector::getConnector(connectorId);
+  VELOX_CHECK_NOT_NULL(connector);
+  VELOX_CHECK_EQ(kind, WriteKind::kInsert);
+  auto metadata = connector->metadata();
+  VELOX_CHECK_NOT_NULL(metadata);
+  std::vector<ExprPtr> exprs;
+  for (const auto& expr : values) {
+    exprs.push_back(resolveScalarTypes(expr.expr()));
+  }
+
+  node_ = std::make_shared<TableWriteNode>(
+      nextId(),
+      node_,
+      connectorId,
+      tableName,
+      kind,
+      std::move(exprs),
+      columnNames,
+      metadata->tableWriteOutputType(
+          node_->outputType(), connector::WriteKind::kInsert),
+      options);
+
+  return *this;
+}
+
 ExprPtr PlanBuilder::resolveInputName(
     const std::optional<std::string>& alias,
     const std::string& name) const {

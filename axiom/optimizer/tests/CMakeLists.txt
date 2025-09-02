@@ -107,7 +107,8 @@ add_executable(
   SubfieldTest.cpp
   FeatureGen.cpp
   Genies.cpp
-  SchemaResolverTest.cpp)
+  SchemaResolverTest.cpp
+  WritePartitionTest.cpp)
 
 add_test(velox_plan_test velox_plan_test)
 

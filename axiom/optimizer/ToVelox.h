@@ -181,6 +181,11 @@ class ToVelox {
       const Values& values,
       axiom::runner::ExecutableFragment& fragment);
 
+  core::PlanNodePtr makeWrite(
+      const TableWrite& values,
+      axiom::runner::ExecutableFragment& fragment,
+      std::vector<axiom::runner::ExecutableFragment>& stages);
+
   // Makes a tree of PlanNode for a tree of
   // RelationOp. 'fragment' is the fragment that 'op'
   // belongs to. If op or children are repartitions then the
@@ -265,6 +270,7 @@ class ToVelox {
 
   // Serial number for stages in executable plan.
   int32_t stageCounter_{0};
+  std::vector<axiom::runner::FinishWrite> finishWrites_;
 };
 
 } // namespace facebook::velox::optimizer

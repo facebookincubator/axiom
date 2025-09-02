@@ -129,18 +129,43 @@ SchemaTableCP Schema::findTable(
     schemaTable->columns[column->name()] = column;
     columns.push_back(column);
   }
-  DistributionType defaultDistributionType;
-  defaultDistributionType.locus = defaultLocus_;
+  auto findColumn = [&](const std::string& name) -> ColumnCP {
+    auto interned = toName(name);
+    for (auto* column : columns) {
+      if (column->name() == interned) {
+        return column;
+      }
+    }
+    VELOX_FAIL("Partition or order column not in layout columns");
+  };
+
+  auto layout = connectorTable->layouts()[0];
+  DistributionType distribution;
+  distribution.partitionType = layout->partitionType();
+  if (distribution.partitionType &&
+      distribution.partitionType->numPartitions().has_value()) {
+    distribution.numPartitions =
+        distribution.partitionType->numPartitions().value();
+  }
+  distribution.locus = defaultLocus_;
+  ColumnVector partition;
+  for (auto& part : layout->partitionColumns()) {
+    partition.push_back(findColumn(part->name()));
+  }
+  ColumnVector order;
+  for (auto* column : layout->orderColumns()) {
+    order.push_back(findColumn(column->name()));
+  }
+
   schemaTable->addIndex(
       toName("pk"),
-      0,
-      0,
-      {},
-      defaultDistributionType,
-      {},
-      std::move(columns),
-      connectorTable->layouts()[0]);
-  addTable(schemaTable);
+      layout->uniquePrifixColumns(),
+      order.size(),
+      order,
+      distribution,
+      partition,
+      columns,
+      layout);
   queryCtx()->optimization()->retainConnectorTable(std::move(connectorTable));
   return schemaTable;
 }
@@ -433,6 +458,9 @@ std::string Distribution::toString() const {
   std::stringstream out;
   if (!partition.empty()) {
     out << "P ";
+    if (distributionType.partitionType) {
+      out << " " << distributionType.partitionType->toString() << " ";
+    }
     exprsToString(partition, out);
     out << " " << distributionType.numPartitions << " ways";
   }

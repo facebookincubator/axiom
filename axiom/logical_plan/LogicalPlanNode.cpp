@@ -24,6 +24,7 @@ const auto& nodeKindNames() {
   static const folly::F14FastMap<NodeKind, std::string_view> kNames = {
       {NodeKind::kValues, "VALUES"},
       {NodeKind::kTableScan, "TABLE_SCAN"},
+      {NodeKind::kTableWrite, "TABLE_WRITE"},
       {NodeKind::kFilter, "FILTER"},
       {NodeKind::kProject, "PROJECT"},
       {NodeKind::kAggregate, "AGGREGATE"},
@@ -360,5 +361,26 @@ void UnnestNode::accept(
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
 }
+
+void TableWriteNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+namespace {
+folly::F14FastMap<WriteKind, std::string> writeKindNames() {
+  static const folly::F14FastMap<WriteKind, std::string> kNames = {
+      {WriteKind::kInsert, "kInsert"},
+      {WriteKind::kUpdate, "kUpdate"},
+      {WriteKind::kDelete, "kDelete"},
+  };
+
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 
 } // namespace facebook::velox::logical_plan

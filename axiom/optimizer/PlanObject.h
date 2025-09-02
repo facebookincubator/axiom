@@ -40,6 +40,7 @@ enum class PlanType {
   kFilterNode,
   kJoinNode,
   kOrderByNode,
+  kWriteNode,
   kLimitNode,
 };
 

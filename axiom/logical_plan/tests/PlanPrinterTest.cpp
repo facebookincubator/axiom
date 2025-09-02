@@ -1101,5 +1101,54 @@ TEST_F(PlanPrinterTest, coercions) {
           testing::Eq("")));
 }
 
+TEST_F(PlanPrinterTest, tableWrite) {
+  auto plan = PlanBuilder()
+                  .tableScan(kTestConnectorId, "test", {"a", "b"})
+                  .tableWrite(
+                      kTestConnectorId,
+                      "output_table",
+                      WriteKind::kInsert,
+                      {Sql("a"), Sql("cast(b as varchar)")},
+                      {"col_a", "col_b"})
+                  .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- TableWrite"),
+          testing::StartsWith("    col_a := a"),
+          testing::StartsWith("    col_b := CAST(b AS VARCHAR)"),
+          testing::StartsWith("  - TableScan"),
+          testing::Eq("")));
+
+  lines = toSummaryLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("- TABLE_WRITE [1]: 0 fields"),
+          testing::Eq("      table: output_table"),
+          testing::Eq("      connector: test"),
+          testing::Eq("      columns: 2"),
+          testing::Eq("      expressions: CAST: 1, field: 2"),
+          testing::Eq("  - TABLE_SCAN [0]: 2 fields: a BIGINT, b DOUBLE"),
+          testing::Eq("        table: test"),
+          testing::Eq("        connector: test"),
+          testing::Eq("")));
+
+  lines = toSkeletonLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("- TABLE_WRITE [1]: 0 fields"),
+          testing::Eq("  - TABLE_SCAN [0]: 2 fields"),
+          testing::Eq("        table: test"),
+          testing::Eq("        connector: test"),
+          testing::Eq("")));
+}
+
 } // namespace
 } // namespace facebook::velox::logical_plan

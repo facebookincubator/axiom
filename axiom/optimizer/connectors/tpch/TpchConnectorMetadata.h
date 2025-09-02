@@ -220,14 +220,10 @@ class TpchConnectorMetadata : public ConnectorMetadata {
     VELOX_UNSUPPORTED();
   }
 
-  WritePartitionInfo writePartitionInfo(
-      const ConnectorInsertTableHandlePtr& handle) override {
-    VELOX_UNSUPPORTED();
-  }
-
   void finishWrite(
       const TableLayout& layout,
       const ConnectorInsertTableHandlePtr& handle,
+      bool success,
       const std::vector<RowVectorPtr>& writerResult,
       WriteKind kind,
       const ConnectorSessionPtr& session) override {

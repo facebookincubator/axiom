@@ -643,12 +643,75 @@ void alignJoinSides(
   otherInput = repartition;
 }
 
+RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
+  if (isSingleWorker() || plan->distribution().distributionType.isGather) {
+    return plan;
+  }
+
+  const auto* write = state.dt->write;
+  auto& partition = write->layout()->partitionColumns();
+  if (partition.empty()) {
+    // The write is not partitioned on columns of the layout. ToVelox will add
+    // no or an arbitrary repartition regardless of plan.
+    return plan;
+  }
+
+  ExprVector keyValues;
+  for (auto i = 0; i < partition.size(); ++i) {
+    // find the value for each partition column.
+    auto name = toName(partition[i]->name());
+    auto it = std::find(write->columns().begin(), write->columns().end(), name);
+    VELOX_CHECK(
+        it != write->columns().end(), "No value for partition column {}", name);
+    keyValues.push_back(write->values()[i]);
+  }
+
+  auto copartition = copartitionType(
+      plan->distribution().distributionType.partitionType,
+      write->layout()->partitionType());
+  // Copartitioning is possible if PartitionTypes are compatible and the table
+  // has no fewer partitions than the plan.
+  bool shuffle =
+      !copartition || copartition == write->layout()->partitionType();
+  if (!shuffle) {
+    // Check that the partition keys of the plan are assigned pairwise to the
+    // partition columns of the layout.
+    for (auto i = 0; i < keyValues.size(); ++i) {
+      auto key = keyValues[i];
+      auto nthKey = position(plan->distribution().partition, *key);
+      if (nthKey != i) {
+        shuffle = true;
+        break;
+      }
+    }
+  }
+  if (!shuffle) {
+    return plan;
+  }
+
+  Distribution distribution(
+      plan->distribution().distributionType, std::move(keyValues));
+  auto* repartition =
+      make<Repartition>(plan, std::move(distribution), plan->columns());
+  state.addCost(*repartition);
+  return repartition;
+}
 } // namespace
 
 void Optimization::addPostprocess(
     DerivedTableCP dt,
     RelationOpPtr& plan,
     PlanState& state) {
+  if (dt->write) {
+    VELOX_CHECK(
+        dt->aggregation == nullptr && dt->orderKeys.empty() &&
+            dt->limit == -1 && dt->offset == 0,
+        "A write does not mix with other postprocess");
+    plan = repartitionForWrite(plan, state);
+    plan = make<TableWrite>(plan, dt->write);
+    return;
+  }
+
   if (dt->aggregation) {
     const auto& aggPlan = dt->aggregation;
 

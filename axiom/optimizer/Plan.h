@@ -345,6 +345,14 @@ namespace facebook::velox::optimizer {
 
 const JoinEdgeVector& joinedBy(PlanObjectCP table);
 
+/// Compares 'first' and 'second' and returns the one that should be
+/// the repartition partitioning to do copartition with the two. If
+/// there is no copartition possibility or if either or both are
+/// nullptr, returns nullptr.
+const connector::PartitionType* copartitionType(
+    const connector::PartitionType* first,
+    const connector::PartitionType* second);
+
 /// Returns  the inverse join type, e.g. right outer from left outer.
 /// TODO Move this function to Velox.
 core::JoinType reverseJoinType(core::JoinType joinType);

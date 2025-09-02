@@ -124,6 +124,20 @@ void ToGraph::markFieldAccessed(
 }
 
 void ToGraph::markFieldAccessed(
+    const lp::TableWriteNode& write,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl) {
+  std::vector<Step> empty;
+  const auto ctx = fromNode(write.onlyInput());
+  for (auto& expr : write.values()) {
+    std::vector<Step> empty;
+    markSubfields(expr, empty, isControl, ctx.toCtx());
+  }
+  return;
+}
+
+void ToGraph::markFieldAccessed(
     const LogicalContextSource& source,
     int32_t ordinal,
     std::vector<Step>& steps,
@@ -170,6 +184,12 @@ void ToGraph::markFieldAccessed(
   if (kind == lp::NodeKind::kSet) {
     const auto* set = source.planNode->asUnchecked<lp::SetNode>();
     markFieldAccessed(*set, ordinal, steps, isControl);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kTableWrite) {
+    const auto* write = source.planNode->asUnchecked<lp::TableWriteNode>();
+    markFieldAccessed(*write, ordinal, steps, isControl);
     return;
   }
 
