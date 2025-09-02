@@ -15,10 +15,6 @@
  */
 #pragma once
 
-#include <utility>
-
-#include <utility>
-
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/RelationOp.h"
 

@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <algorithm>
-
 #include "axiom/optimizer/QueryGraphContext.h"
 
 namespace facebook::velox::optimizer {

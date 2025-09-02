@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <utility>
-
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/NameAllocator.h"

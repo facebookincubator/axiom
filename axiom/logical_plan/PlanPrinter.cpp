@@ -27,7 +27,7 @@ class ToTextVisitor : public PlanNodeVisitor {
  public:
   struct Context : public PlanNodeVisitorContext {
     std::stringstream out;
-    uint32_t indent{0};
+    size_t indent{0};
   };
 
   void visit(const ValuesNode& node, PlanNodeVisitorContext& context)
@@ -447,7 +447,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
     explicit Context(
         const PlanSummaryOptions& options,
         bool skeletonOnly = false)
-        : options(options), skeletonOnly{skeletonOnly} {}
+        : options{options}, skeletonOnly{skeletonOnly} {}
 
     void appendExpression(const Expr& expr) {
       out << truncate(ExprPrinter::toText(expr), options.maxLength);

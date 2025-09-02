@@ -15,8 +15,6 @@
  */
 
 #include "axiom/optimizer/QueryGraph.h"
-
-#include <algorithm>
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
