@@ -62,8 +62,10 @@ ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
   return e;
 }
 
-void ToGraph::setDtOutput(DerivedTableP dt, const lp::LogicalPlanNode& plan) {
-  const auto& outputType = plan.outputType();
+void ToGraph::setDtOutput(
+    DerivedTableP dt,
+    const lp::LogicalPlanNode& logicalPlan) {
+  const auto& outputType = logicalPlan.outputType();
   for (auto i = 0; i < outputType->size(); ++i) {
     const auto& type = outputType->childAt(i);
     const auto& name = outputType->nameOf(i);
@@ -1497,11 +1499,11 @@ DerivedTableP ToGraph::translateUnion(
   return setDt;
 }
 
-DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& plan) {
-  markAllSubfields(plan);
+DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
+  markAllSubfields(logicalPlan);
 
   currentDt_ = newDt();
-  makeQueryGraph(plan, kAllAllowedInDt);
+  makeQueryGraph(logicalPlan, kAllAllowedInDt);
   return currentDt_;
 }
 

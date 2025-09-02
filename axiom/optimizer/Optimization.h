@@ -31,7 +31,7 @@ namespace facebook::velox::optimizer {
 class Optimization {
  public:
   Optimization(
-      const logical_plan::LogicalPlanNode& plan,
+      const logical_plan::LogicalPlanNode& logicalPlan,
       const Schema& schema,
       History& history,
       std::shared_ptr<core::QueryCtx> veloxQueryCtx,
@@ -41,7 +41,7 @@ class Optimization {
 
   // Simplified API for usage in testing and tooling.
   static PlanAndStats toVeloxPlan(
-      const logical_plan::LogicalPlanNode& plan,
+      const logical_plan::LogicalPlanNode& logicalPlan,
       velox::memory::MemoryPool& pool,
       OptimizerOptions options = {},
       axiom::runner::MultiFragmentPlan::Options runnerOptions = {});
@@ -290,7 +290,7 @@ class Optimization {
   const bool isSingleWorker_;
 
   // Top level plan to optimize.
-  const logical_plan::LogicalPlanNode* const plan_;
+  const logical_plan::LogicalPlanNode* const logicalPlan_;
 
   // Source of historical cost/cardinality information.
   History& history_;

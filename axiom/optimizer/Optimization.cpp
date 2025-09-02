@@ -25,7 +25,7 @@ namespace lp = facebook::velox::logical_plan;
 namespace facebook::velox::optimizer {
 
 Optimization::Optimization(
-    const lp::LogicalPlanNode& plan,
+    const lp::LogicalPlanNode& logicalPlan,
     const Schema& schema,
     History& history,
     std::shared_ptr<core::QueryCtx> veloxQueryCtx,
@@ -35,25 +35,25 @@ Optimization::Optimization(
     : options_(std::move(options)),
       runnerOptions_(std::move(runnerOptions)),
       isSingleWorker_(runnerOptions_.numWorkers == 1),
-      plan_(&plan),
+      logicalPlan_(&logicalPlan),
       history_(history),
       veloxQueryCtx_(std::move(veloxQueryCtx)),
       toGraph_{schema, evaluator, options_},
       toVelox_{runnerOptions_, options_} {
   queryCtx()->optimization() = this;
-  root_ = toGraph_.makeQueryGraph(*plan_);
+  root_ = toGraph_.makeQueryGraph(*logicalPlan_);
   root_->distributeConjuncts();
   root_->addImpliedJoins();
   root_->linkTablesToJoins();
   for (auto* join : root_->joins) {
     join->guessFanout();
   }
-  toGraph_.setDtOutput(root_, *plan_);
+  toGraph_.setDtOutput(root_, *logicalPlan_);
 }
 
 // static
 PlanAndStats Optimization::toVeloxPlan(
-    const lp::LogicalPlanNode& plan,
+    const lp::LogicalPlanNode& logicalPlan,
     velox::memory::MemoryPool& pool,
     OptimizerOptions options,
     axiom::runner::MultiFragmentPlan::Options runnerOptions) {
@@ -74,7 +74,7 @@ PlanAndStats Optimization::toVeloxPlan(
   Schema schema("default", schemaResolver.get(), /* locus */ nullptr);
 
   Optimization opt{
-      plan,
+      logicalPlan,
       schema,
       history,
       veloxQueryCtx,
