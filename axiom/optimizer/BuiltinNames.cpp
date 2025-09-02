@@ -40,7 +40,7 @@ BuiltinNames::BuiltinNames()
       _if{toName(SpecialFormCallNames::kIf)},
       _switch{toName(SpecialFormCallNames::kSwitch)},
       _in{toName(SpecialFormCallNames::kIn)},
-      canonicalizable{
+      canonicalizable_{
           eq,
           neq,
           lt,

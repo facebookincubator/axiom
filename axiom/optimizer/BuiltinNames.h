@@ -24,6 +24,13 @@ namespace facebook::velox::optimizer {
 /// Used for identifiers. Allows comparing strings by comparing pointers.
 using Name = const char*;
 
+/// This class should be created and access via queryCtx().
+/// It's needed for optimizer to have access to some hardcoded names.
+/// Right now it's names of functions with presto semantics.
+///
+/// Some members here are functions another variables: the reason is simple,
+/// it's function when it's accessed rarely in some specific code that can be
+/// disabled, e.g. join sample.
 struct BuiltinNames {
   BuiltinNames();
 
@@ -32,19 +39,26 @@ struct BuiltinNames {
   BuiltinNames& operator=(BuiltinNames&&) = delete;
   BuiltinNames& operator=(const BuiltinNames&) = delete;
 
+  // Returns names of "opposite" function if it's exists, e.g. gt for lt.
+  // Opposite means if arguments will be swapped it will be same semantics.
+  // If such name doesn't exist returns it's own input, e.g. eq for eq.
   Name reverse(Name op) const;
 
+  /// Returns true for function names that are commutative or
+  /// that have oppostite function.
   bool isCanonicalizable(Name name) const {
-    return canonicalizable.contains(name);
+    return canonicalizable_.contains(name);
   }
 
-  // Used for function registry
+  /// These function names used only for FunctionRegistry,
+  /// this is why they're not "Name" type but "std::string_view".
   static constexpr std::string_view kTransformValues = "transform_values";
   static constexpr std::string_view kTransform = "transform";
   static constexpr std::string_view kZip = "zip";
   static constexpr std::string_view kRowConstructor = "row_constructor";
 
-  // Used for join sample
+  /// These function names used only for JoinSample,
+  /// this is why they're not variables but functions.
   Name crc32() const;
   Name bitwiseAnd() const;
   Name bitwiseRightShift() const;
@@ -52,12 +66,12 @@ struct BuiltinNames {
   Name hash() const;
   Name mod() const;
 
-  // Used for subfields
+  /// These function names used for special subfields access optimizations.
   Name cardinality;
   Name subscript;
   Name elementAt;
 
-  // Used for canonicalization
+  /// These function names used for isCanonicalizable checks.
   Name eq;
   Name neq;
   Name lt;
@@ -67,6 +81,8 @@ struct BuiltinNames {
   Name plus;
   Name multiply;
 
+  /// These function names used for isCanonicalizable checks and
+  /// also it's special form callable function names.
   Name _and;
   Name _or;
   Name _cast;
@@ -77,7 +93,8 @@ struct BuiltinNames {
   Name _switch;
   Name _in;
 
-  folly::F14FastSet<Name> canonicalizable;
+ private:
+  const folly::F14FastSet<Name> canonicalizable_;
 };
 
 } // namespace facebook::velox::optimizer
