@@ -133,7 +133,7 @@ TableScan::TableScan(
 
   if (!keys.empty()) {
     float lookupRange(index->table->cardinality);
-    float orderSelectivity = orderPrefixDistance(this->input(), index, keys);
+    float orderSelectivity = orderPrefixDistance(input_, index, keys);
     auto distance = lookupRange / std::max<float>(1, orderSelectivity);
     float batchSize = std::min<float>(cost_.inputCardinality, 10000);
     if (orderSelectivity == 1) {
@@ -504,7 +504,7 @@ Aggregation::Aggregation(
   // being unique after n values is 1 - (1/d)^n.
   auto nOut = cardinality -
       cardinality *
-          std::pow(1.0F - (1.0F / cardinality), input->resultCardinality());
+          std::pow(1.0F - (1.0F / cardinality), input_->resultCardinality());
 
   cost_.fanout = nOut / cost_.inputCardinality;
   const auto numGrouppingKeys = static_cast<float>(groupingKeys.size());
