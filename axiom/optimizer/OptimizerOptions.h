@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -23,10 +25,10 @@ namespace facebook::velox::optimizer {
 
 struct OptimizerOptions {
   /// Bit masks for use in 'traceFlags'.
-  static constexpr int32_t kRetained = 1;
-  static constexpr int32_t kExceededBest = 2;
-  static constexpr int32_t kSample = 4;
-  static constexpr int32_t kPreprocess = 8;
+  static constexpr uint32_t kRetained = 1;
+  static constexpr uint32_t kExceededBest = 2;
+  static constexpr uint32_t kSample = 4;
+  static constexpr uint32_t kPreprocess = 8;
 
   /// Parallelizes independent projections over this many threads. 1 means no
   /// parallel projection.
@@ -56,7 +58,7 @@ struct OptimizerOptions {
   bool sampleFilters{true};
 
   /// Produce trace of plan candidates.
-  int32_t traceFlags{0};
+  uint32_t traceFlags{0};
 
   bool isMapAsStruct(const char* table, const char* column) const {
     if (allMapsAsStruct) {
@@ -66,9 +68,9 @@ struct OptimizerOptions {
     if (it == mapAsStruct.end()) {
       return false;
     }
-    return (
-        std::find(it->second.begin(), it->second.end(), column) !=
-        it->second.end());
+    return std::find(it->second.begin(), it->second.end(), column) !=
+        it->second.end();
   }
 };
+
 } // namespace facebook::velox::optimizer

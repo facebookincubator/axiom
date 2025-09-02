@@ -66,22 +66,22 @@ bool BitSet::isSubset(const BitSet& super) const {
 size_t BitSet::hash() const {
   // The hash is a mix of the hashes of all non-zero words.
   size_t hash = 123;
-  for (unsigned i = 0; i < bits_.size(); ++i) {
-    hash = velox::simd::crc32U64(hash, bits_[i]);
+  for (auto word : bits_) {
+    hash = velox::simd::crc32U64(hash, word);
   }
   return hash * hash;
 }
 
 void BitSet::unionSet(const BitSet& other) {
   ensureWords(other.bits_.size());
-  for (auto i = 0; i < other.bits_.size(); ++i) {
+  for (size_t i = 0; i < other.bits_.size(); ++i) {
     bits_[i] |= other.bits_[i];
   }
 }
 
 void BitSet::intersect(const BitSet& other) {
   bits_.resize(std::min(bits_.size(), other.bits_.size()));
-  for (auto i = 0; i < bits_.size(); ++i) {
+  for (size_t i = 0; i < bits_.size(); ++i) {
     VELOX_DCHECK(!other.bits_.empty());
     bits_[i] &= other.bits_[i];
   }

@@ -25,10 +25,10 @@ namespace facebook::velox::optimizer {
 struct BuiltinNames {
   BuiltinNames();
 
-  Name reverse(Name op) const;
+  Name reverse(Name name) const;
 
   bool isCanonicalizable(Name name) const {
-    return canonicalizable.find(name) != canonicalizable.end();
+    return canonicalizable.contains(name);
   }
 
   Name eq;
@@ -125,7 +125,7 @@ struct VariantPtrComparer {
 };
 
 /// Represents a path over an Expr of complex type. Used as a key
-/// for a map from unique step+optionl subscript expr pairs to the
+/// for a map from unique step+optional subscript expr pairs to the
 /// dedupped Expr that is the getter.
 struct PathExpr {
   Step step;
@@ -223,7 +223,7 @@ class ToGraph {
       const logical_plan::ExprPtr& arg);
 
   template <typename Func>
-  void trace(int32_t event, Func f) {
+  void trace(uint32_t event, Func f) {
     if ((options_.traceFlags & event) != 0) {
       f();
     }
@@ -272,7 +272,7 @@ class ToGraph {
   // set at time of call. This is before regular constant folding because
   // subscript expressions must be folded for subfield resolution.
   logical_plan::ConstantExprPtr tryFoldConstant(
-      const logical_plan::ExprPtr expr);
+      const logical_plan::ExprPtr& expr);
 
   // Returns a literal by applying the function 'callName' with return type
   // 'returnType' to the input arguments 'literals'. Returns nullptr if not
@@ -359,7 +359,7 @@ class ToGraph {
       logical_plan::ExprPtr& input);
 
   void getExprForField(
-      const logical_plan::Expr* expr,
+      const logical_plan::Expr* field,
       logical_plan::ExprPtr& resultExpr,
       ColumnCP& resultColumn,
       const logical_plan::LogicalPlanNode*& context);
@@ -460,7 +460,7 @@ class ToGraph {
   const OptimizerOptions& options_;
 
   // Innermost DerivedTable when making a QueryGraph from PlanNode.
-  DerivedTableP currentDt_;
+  DerivedTableP currentDt_{nullptr};
 
   // True if wrapping a nondeterministic filter inside a DT in ToGraph.
   bool isNondeterministicWrap_{false};

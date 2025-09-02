@@ -37,14 +37,14 @@ class FunctionSet {
   static constexpr uint64_t kAggregate = 1;
 
   /// Indicates a non-determinstic function in the set.
-  static constexpr uint64_t kNonDeterministic = 1UL << 1;
+  static constexpr uint64_t kNonDeterministic = 1UL << 1U;
 
   FunctionSet() : set_(0) {}
 
   explicit FunctionSet(uint64_t set) : set_(set) {}
 
   /// True if 'item' is in 'this'.
-  bool contains(int64_t item) const {
+  bool contains(uint64_t item) const {
     return 0 != (set_ & item);
   }
 
@@ -232,7 +232,10 @@ inline folly::Range<T*> toRange(const std::vector<T, QGAllocator<T>>& v) {
 class Field : public Expr {
  public:
   Field(const Type* type, ExprCP base, Name field)
-      : Expr(PlanType::kFieldExpr, Value(type, 1)), field_(field), base_(base) {
+      : Expr(PlanType::kFieldExpr, Value(type, 1)),
+        field_(field),
+        index_(0),
+        base_(base) {
     columns_ = base->columns();
     subexpressions_ = base->subexpressions();
   }
@@ -781,7 +784,7 @@ struct BaseTable : public PlanObject {
 
   std::optional<int32_t> columnId(Name column) const;
 
-  BitSet columnSubfields(int32_t id, bool payloadOnly, bool controlOnly) const;
+  BitSet columnSubfields(int32_t id, bool controlOnly, bool payloadOnly) const;
 
   /// Returns possible indices for driving table scan of 'table'.
   std::vector<ColumnGroupCP> chooseLeafIndex() const {
@@ -810,7 +813,7 @@ struct ValuesTable : public PlanObject {
   JoinEdgeVector joinedBy;
 
   float cardinality() const {
-    return values.cardinality();
+    return static_cast<float>(values.cardinality());
   }
 
   bool isTable() const override {
@@ -873,7 +876,7 @@ class Aggregate : public Call {
     return intermediateType_;
   }
 
-  const TypeVector rawInputType() const {
+  const TypeVector& rawInputType() const {
     return rawInputType_;
   }
 

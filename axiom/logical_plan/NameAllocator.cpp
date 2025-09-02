@@ -17,17 +17,12 @@
 #include <velox/common/base/Exceptions.h>
 
 namespace facebook::velox::logical_plan {
-
 namespace {
 
 bool isAllDigits(std::string_view str) {
-  for (auto c : str) {
-    if (!isdigit(c)) {
-      return false;
-    }
-  }
-  return true;
+  return std::ranges::all_of(str, isdigit);
 }
+
 } // namespace
 
 std::string NameAllocator::newName(const std::string& hint) {
@@ -38,8 +33,7 @@ std::string NameAllocator::newName(const std::string& hint) {
 
   auto pos = prefix.rfind('_');
   if (pos != std::string::npos &&
-      isAllDigits(
-          std::string_view(prefix.data() + pos + 1, prefix.size() - pos - 1))) {
+      isAllDigits({prefix.data() + pos + 1, prefix.size() - pos - 1})) {
     prefix = prefix.substr(0, pos);
   }
 

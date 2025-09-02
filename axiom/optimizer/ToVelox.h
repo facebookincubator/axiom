@@ -91,9 +91,9 @@ class ToVelox {
  private:
   void setLeafHandle(
       int32_t id,
-      const connector::ConnectorTableHandlePtr& handle,
-      const std::vector<core::TypedExprPtr>& extraFilters) {
-    leafHandles_[id] = std::make_pair(handle, extraFilters);
+      connector::ConnectorTableHandlePtr handle,
+      std::vector<core::TypedExprPtr> extraFilters) {
+    leafHandles_[id] = {std::move(handle), std::move(extraFilters)};
   }
 
   /// True if a scan should expose 'column' of 'table' as a struct only
@@ -104,12 +104,12 @@ class ToVelox {
 
   // Makes an output type for use in PlanNode et al. If 'columnType' is set,
   // only considers base relation columns of the given type.
-  velox::RowTypePtr makeOutputType(const ColumnVector& columns);
+  velox::RowTypePtr makeOutputType(const ColumnVector& columns) const;
 
   // Makes a getter path over a top level column and can convert the top
   // map getter into struct getter if maps extracted as structs.
   core::TypedExprPtr
-  pathToGetter(ColumnCP column, PathCP path, core::TypedExprPtr source);
+  pathToGetter(ColumnCP column, PathCP path, core::TypedExprPtr field);
 
   // Returns a filter expr that ands 'exprs'. nullptr if 'exprs' is empty.
   velox::core::TypedExprPtr toAnd(const ExprVector& exprs);
@@ -125,7 +125,7 @@ class ToVelox {
 
   // Makes a Velox AggregationNode for a RelationOp.
   velox::core::PlanNodePtr makeAggregation(
-      const Aggregation& agg,
+      const Aggregation& op,
       axiom::runner::ExecutableFragment& fragment,
       std::vector<axiom::runner::ExecutableFragment>& stages);
 
@@ -205,7 +205,7 @@ class ToVelox {
   // Returns a stack of parallel project nodes if parallelization makes sense.
   // nullptr means use regular ProjectNode in output.
   velox::core::PlanNodePtr maybeParallelProject(
-      const Project* op,
+      const Project* project,
       core::PlanNodePtr input);
 
   core::PlanNodePtr makeParallelProject(

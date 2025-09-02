@@ -28,14 +28,15 @@
 #include "velox/functions/FunctionRegistry.h"
 
 namespace facebook::velox::optimizer {
+namespace {
 
 namespace lp = facebook::velox::logical_plan;
 
 /// Trace info to add to exception messages.
 struct ToGraphContext {
-  ToGraphContext(const lp::Expr* e) : expr(e), node(nullptr) {}
+  explicit ToGraphContext(const lp::Expr* e) : expr{e} {}
 
-  ToGraphContext(const lp::LogicalPlanNode* n) : expr(nullptr), node(n) {}
+  explicit ToGraphContext(const lp::LogicalPlanNode* n) : node{n} {}
 
   const lp::Expr* expr{nullptr};
   const lp::LogicalPlanNode* node{nullptr};
@@ -61,6 +62,8 @@ ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
   e.arg = ctx;
   return e;
 }
+
+} // namespace
 
 void ToGraph::setDtOutput(
     DerivedTableP dt,
@@ -101,7 +104,7 @@ void ToGraph::setDtUsedOutput(
 
 namespace {
 bool isConstantTrue(ExprCP expr) {
-  if (expr->type() != PlanType::kLiteralExpr) {
+  if (expr->isNot(PlanType::kLiteralExpr)) {
     return false;
   }
   const auto& variant = expr->as<Literal>()->literal();
@@ -351,7 +354,7 @@ ExprCP ToGraph::makeGettersOverSkyline(
     const SubfieldProjections* skyline,
     const lp::ExprPtr& base,
     ColumnCP column) {
-  int32_t last = steps.size() - 1;
+  auto last = static_cast<int32_t>(steps.size() - 1);
   ExprCP expr = nullptr;
   if (skyline) {
     // We see how many trailing (inner) steps fall below skyline, i.e. address
@@ -386,12 +389,12 @@ ExprCP ToGraph::makeGettersOverSkyline(
       });
       expr = translateExpr(base);
     }
-    last = steps.size();
+    last = static_cast<int32_t>(steps.size());
   }
 
   for (int32_t i = last - 1; i >= 0; --i) {
     // We make a getter over expr made so far with 'steps[i]' as first.
-    PathExpr pathExpr = {steps[i], nullptr, expr};
+    PathExpr pathExpr{steps[i], nullptr, expr};
     auto it = deduppedGetters_.find(pathExpr);
     if (it != deduppedGetters_.end()) {
       expr = it->second;
@@ -561,16 +564,10 @@ namespace {
 ///
 ///  #2. If none are literal, but the id on the left is higher.
 bool shouldInvert(ExprCP left, ExprCP right) {
-  if (left->is(PlanType::kLiteralExpr) &&
-      right->type() != PlanType::kLiteralExpr) {
-    return true;
-  } else if (
-      (left->type() != PlanType::kLiteralExpr) &&
-      (right->type() != PlanType::kLiteralExpr) && (left->id() > right->id())) {
-    return true;
-  } else {
-    return false;
-  }
+  return (left->is(PlanType::kLiteralExpr) &&
+          right->isNot(PlanType::kLiteralExpr)) ||
+      (left->isNot(PlanType::kLiteralExpr) &&
+       right->isNot(PlanType::kLiteralExpr) && left->id() > right->id());
 }
 
 } // namespace
@@ -600,8 +597,7 @@ ExprCP ToGraph::deduppedCall(
   if (it != functionDedup_.end()) {
     return it->second;
   }
-  auto* call =
-      make<Call>(name, std::move(value), std::move(args), std::move(flags));
+  auto* call = make<Call>(name, value, std::move(args), flags);
   if (!call->containsNonDeterministic()) {
     key.args = &call->args();
     functionDedup_[key] = call;
@@ -684,7 +680,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     float cardinality = 1;
     bool allConstant = true;
 
-    for (auto input : inputs) {
+    for (const auto& input : inputs) {
       auto arg = translateExpr(input);
       args.emplace_back(arg);
       allConstant &= arg->is(PlanType::kLiteralExpr);
@@ -715,7 +711,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
 
 ExprCP ToGraph::translateLambda(const lp::LambdaExpr* lambda) {
   auto savedRenames = renames_;
-  auto row = lambda->signature();
+  const auto& row = lambda->signature();
   toType(row);
   toType(lambda->type());
   ColumnVector args;
@@ -733,12 +729,12 @@ ExprCP ToGraph::translateLambda(const lp::LambdaExpr* lambda) {
 namespace {
 // Returns a mask that allows 'op' in the same derived table.
 uint64_t allow(PlanType op) {
-  return 1UL << static_cast<int32_t>(op);
+  return 1UL << static_cast<uint32_t>(op);
 }
 
 // True if 'op' is in 'mask.
 bool contains(uint64_t mask, PlanType op) {
-  return 0 != (mask & (1UL << static_cast<int32_t>(op)));
+  return 0 != (mask & (1UL << static_cast<uint32_t>(op)));
 }
 } // namespace
 
@@ -1310,6 +1306,7 @@ PlanObjectP ToGraph::addLimit(const lp::LimitNode& limitNode) {
 }
 
 namespace {
+
 bool hasNondeterministic(const lp::ExprPtr& expr) {
   if (const auto* call = expr->asUnchecked<lp::CallExpr>()) {
     if (functionBits(toName(call->name()))
@@ -1317,13 +1314,9 @@ bool hasNondeterministic(const lp::ExprPtr& expr) {
       return true;
     }
   }
-  for (auto& in : expr->inputs()) {
-    if (hasNondeterministic(in)) {
-      return true;
-    }
-  }
-  return false;
+  return std::ranges::any_of(expr->inputs(), hasNondeterministic);
 }
+
 } // namespace
 
 DerivedTableP ToGraph::translateSetJoin(
@@ -1512,7 +1505,7 @@ namespace {
 // table. makeQueryGraph() starts a new derived table if it finds an operator
 // that does not belong to the mask.
 uint64_t makeDtIf(uint64_t mask, PlanType op) {
-  return mask & ~(1UL << static_cast<int32_t>(op));
+  return mask & ~(1UL << static_cast<uint32_t>(op));
 }
 } // namespace
 
@@ -1634,12 +1627,13 @@ PlanObjectP ToGraph::makeQueryGraph(
   }
 }
 
-// Debug helper functions. Must be in a namespace to be callable from gdb.
-std::string leString(const lp::Expr* e) {
+// Debug helper functions. Must be extern to be callable from debugger.
+
+extern std::string leString(const lp::Expr* e) {
   return lp::ExprPrinter::toText(*e);
 }
 
-std::string pString(const lp::LogicalPlanNode* p) {
+extern std::string pString(const lp::LogicalPlanNode* p) {
   return lp::PlanPrinter::toText(*p);
 }
 

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <ranges>
+
 #include "axiom/optimizer/ToVelox.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
@@ -90,7 +92,7 @@ void makeLevelsInner(
 }
 
 void makeExprLevels(
-    PlanObjectSet exprs,
+    const PlanObjectSet& exprs,
     std::vector<LevelData>& levelData,
     std::unordered_map<ExprCP, int32_t>& refCount) {
   PlanObjectSet counted;
@@ -104,8 +106,8 @@ PlanObjectSet makeCseBorder(
     PlanObjectSet& placed,
     std::unordered_map<ExprCP, int32_t>& refCount) {
   PlanObjectSet border;
-  for (int32_t leafLevel = levelData.size() - 1; leafLevel >= 0; --leafLevel) {
-    levelData[leafLevel].exprs.forEach<Expr>([&](auto expr) {
+  for (const auto& data : levelData | std::views::reverse) {
+    data.exprs.forEach<Expr>([&](auto expr) {
       if (placed.contains(expr)) {
         return;
       }
@@ -131,7 +133,7 @@ core::PlanNodePtr ToVelox::makeParallelProject(
     const PlanObjectSet& topExprs,
     const PlanObjectSet& placed,
     const PlanObjectSet& extraColumns) {
-  std::vector<int32_t> indices;
+  std::vector<uint32_t> indices;
   std::vector<float> costs;
   std::vector<ExprCP> exprs;
   float totalCost = 0;
@@ -141,12 +143,12 @@ core::PlanNodePtr ToVelox::makeParallelProject(
     costs.push_back(costWithChildren(expr, placed));
     totalCost += costs.back();
   });
-  std::sort(indices.begin(), indices.end(), [&](int32_t l, int32_t r) {
-    return costs[l] < costs[r];
-  });
+  std::ranges::sort(
+      indices, [&](auto l, auto r) { return costs[l] < costs[r]; });
 
   // Sorted lowest cost first. Make even size groups.
-  const float targetCost = totalCost / optimizerOptions_.parallelProjectWidth;
+  const float targetCost =
+      totalCost / static_cast<float>(optimizerOptions_.parallelProjectWidth);
 
   std::vector<std::vector<core::TypedExprPtr>> groups;
   groups.emplace_back();
@@ -261,9 +263,7 @@ float parallelBorder(
       for (auto i = 0; i < args.size(); ++i) {
         auto arg = args[i];
         auto argCost = parallelBorder(arg, placed, result);
-        if (argCost > highestArgCost) {
-          highestArgCost = argCost;
-        }
+        highestArgCost = std::max(highestArgCost, argCost);
         if (argCost == kSplit) {
           splitArgs.add(i);
         }

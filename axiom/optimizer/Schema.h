@@ -37,8 +37,8 @@ using NameMap = std::unordered_map<
 
 /// Represents constraints on a column value or intermediate result.
 struct Value {
-  Value(const velox::Type* _type, float _cardinality)
-      : type(_type), cardinality(_cardinality) {}
+  Value(const velox::Type* type, float cardinality)
+      : type{type}, cardinality{cardinality} {}
 
   /// Returns the average byte size of a value when it occurs as an intermediate
   /// result without dictionary or other encoding.
@@ -238,16 +238,16 @@ using SchemaTableCP = const SchemaTable*;
 /// index for ColumnGroup when using it for lookup.
 struct ColumnGroup {
   ColumnGroup(
-      Name _name,
-      SchemaTableCP _table,
-      Distribution _distribution,
-      const ColumnVector& _columns,
+      Name name,
+      SchemaTableCP table,
+      Distribution distribution,
+      ColumnVector columns,
       const connector::TableLayout* layout = nullptr)
-      : name(_name),
-        table(_table),
-        layout(layout),
-        distribution(_distribution),
-        columns(_columns) {}
+      : name{name},
+        table{table},
+        layout{layout},
+        distribution{std::move(distribution)},
+        columns{std::move(columns)} {}
 
   Name name;
   SchemaTableCP table;
@@ -308,8 +308,8 @@ float baseSelectivity(PlanObjectCP object);
 /// partitioned physical representations (ColumnGroups). Not all ColumnGroups
 /// (aka indices) need to contain all columns.
 struct SchemaTable {
-  SchemaTable(Name _name, const velox::RowTypePtr& _type, float _cardinality)
-      : name(_name), type(&toType(_type)->asRow()), cardinality{_cardinality} {}
+  SchemaTable(Name name, const velox::RowTypePtr& type, float cardinality)
+      : name{name}, type{&toType(type)->asRow()}, cardinality{cardinality} {}
 
   /// Adds an index. The arguments set the corresponding members of a
   /// Distribution.
@@ -329,7 +329,7 @@ struct SchemaTable {
   ColumnCP findColumn(const std::string& name) const;
 
   int64_t numRows() const {
-    return columnGroups[0]->layout->table().numRows();
+    return static_cast<int64_t>(columnGroups[0]->layout->table().numRows());
   }
 
   /// True if 'columns' match no more than one row.
@@ -343,7 +343,7 @@ struct SchemaTable {
   /// equality constraint.
   IndexInfo indexByColumns(CPSpan<Column> columns) const;
 
-  std::vector<ColumnCP> toColumns(const std::vector<std::string>& names);
+  std::vector<ColumnCP> toColumns(const std::vector<std::string>& names) const;
 
   const Name name;
   const RowType* type;
@@ -371,10 +371,10 @@ struct SchemaTable {
 class Schema {
  public:
   /// Constructs a testing schema without SchemaResolver.
-  Schema(Name _name, const std::vector<SchemaTableCP>& tables, LocusCP locus);
+  Schema(Name name, const std::vector<SchemaTableCP>& tables, LocusCP locus);
 
   /// Constructs a Schema for producing executable plans, backed by 'source'.
-  Schema(Name _name, SchemaResolver* source, LocusCP locus);
+  Schema(Name name, SchemaResolver* source, LocusCP locus);
 
   /// Returns the table with 'name' or nullptr if not found, using
   /// the connector specified by connectorId to perform table lookups.

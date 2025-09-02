@@ -134,7 +134,8 @@ bool VeloxHistory::setLeafSelectivity(
     return true;
   }
 
-  table.filterSelectivity = static_cast<float>(sample.second) / sample.first;
+  table.filterSelectivity =
+      static_cast<float>(sample.second) / static_cast<float>(sample.first);
   recordLeafSelectivity(string, table.filterSelectivity, false);
 
   bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
@@ -145,6 +146,8 @@ bool VeloxHistory::setLeafSelectivity(
   }
   return true;
 }
+
+namespace {
 
 std::shared_ptr<const core::TableScanNode> findScan(
     const core::PlanNodeId& id,
@@ -191,8 +194,7 @@ void predictionWarnings(
         predictedRows,
         historyKey));
   } else {
-    float ratio =
-        static_cast<float>(actualRows) / static_cast<float>(predictedRows);
+    auto ratio = static_cast<float>(actualRows) / predictedRows;
     auto threshold = FLAGS_cardinality_warning_threshold;
     if (ratio < 1 / threshold || ratio > threshold) {
       logPrediction(fmt::format(
@@ -204,6 +206,8 @@ void predictionWarnings(
     }
   }
 }
+
+} // namespace
 
 void VeloxHistory::recordVeloxExecution(
     const PlanAndStats& plan,
@@ -222,7 +226,7 @@ void VeloxHistory::recordVeloxExecution(
         if (keyIt == plan.history.end()) {
           continue;
         }
-        uint64_t actualRows;
+        uint64_t actualRows{};
         {
           std::lock_guard<std::mutex> l(mutex_);
           actualRows = op.outputPositions;
@@ -235,13 +239,18 @@ void VeloxHistory::recordVeloxExecution(
             std::string handle = scan->tableHandle()->toString();
             recordLeafSelectivity(
                 handle,
-                op.outputPositions / std::max<float>(1, op.rawInputPositions),
+                static_cast<float>(actualRows) /
+                    std::max(1.F, static_cast<float>(op.rawInputPositions)),
                 true);
           }
         }
         if (it != plan.prediction.end()) {
           auto predictedRows = it->second.cardinality;
-          predictionWarnings(plan, op.planNodeId, actualRows, predictedRows);
+          predictionWarnings(
+              plan,
+              op.planNodeId,
+              static_cast<int64_t>(actualRows),
+              predictedRows);
         }
       }
     }
@@ -279,19 +288,20 @@ folly::dynamic VeloxHistory::serialize() {
 }
 
 void VeloxHistory::update(folly::dynamic& serialized) {
+  auto toFloat = [](const folly::dynamic& v) {
+    // TODO Don't use atof.
+    return static_cast<float>(atof(v.asString().c_str()));
+  };
   for (auto& pair : serialized["leaves"]) {
-    leafSelectivities_[pair["key"].asString()] =
-        atof(pair["value"].asString().c_str());
+    leafSelectivities_[pair["key"].asString()] = toFloat(pair["value"]);
   }
   for (auto& pair : serialized["joins"]) {
-    joinSamples_[pair["key"].asString()] = std::make_pair<float, float>(
-        atof(pair["lr"].asString().c_str()),
-        atof(pair["rl"].asString().c_str()));
+    joinSamples_[pair["key"].asString()] =
+        std::make_pair<float, float>(toFloat(pair["lr"]), toFloat(pair["rl"]));
   }
   for (auto& pair : serialized["plans"]) {
-    planHistory_[pair["key"].asString()] = NodePrediction{
-        .cardinality =
-            static_cast<float>(atof(pair["card"].asString().c_str()))};
+    planHistory_[pair["key"].asString()] =
+        NodePrediction{.cardinality = toFloat(pair["card"])};
   }
 }
 

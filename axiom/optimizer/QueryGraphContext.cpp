@@ -20,7 +20,7 @@
 namespace facebook::velox::optimizer {
 
 QueryGraphContext*& queryCtx() {
-  thread_local QueryGraphContext* context;
+  static thread_local QueryGraphContext* context;
   return context;
 }
 
@@ -213,7 +213,7 @@ std::string Path::toString() const {
 }
 
 PathCP QueryGraphContext::toPath(PathCP path) {
-  path->setId(pathById_.size());
+  path->setId(static_cast<int32_t>(pathById_.size()));
   path->makeImmutable();
   auto pair = deduppedPaths_.insert(path);
   if (path != *pair.first) {
@@ -265,7 +265,7 @@ void Path::subfieldSkyline(BitSet& subfields) {
     for (auto path : bySize[i]) {
       // Delete paths where 'path' is a prefix.
       for (int32_t size = i + 1; size < bySize.size(); ++size) {
-        int32_t firstErase = -1;
+        ptrdiff_t firstErase = -1;
         auto& paths = bySize[size];
         auto it = std::lower_bound(paths.begin(), paths.end(), path);
         if (it != paths.end() && !(*it)->hasPrefix(*path)) {

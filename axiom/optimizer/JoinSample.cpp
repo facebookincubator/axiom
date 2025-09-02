@@ -112,15 +112,14 @@ ExprCP xor64(ExprCP a, ExprCP b) {
       toName("bitwise_xor"), bigintValue(), ExprVector{a, b}, FunctionSet());
 }
 
-std::shared_ptr<core::QueryCtx> sampleQueryCtx(
-    std::shared_ptr<core::QueryCtx> original) {
+std::shared_ptr<core::QueryCtx> sampleQueryCtx(const core::QueryCtx& original) {
   std::unordered_map<std::string, std::string> empty;
   return core::QueryCtx::create(
-      original->executor(),
+      original.executor(),
       core::QueryConfig(std::move(empty)),
-      original->connectorSessionProperties(),
-      original->cache(),
-      original->pool()->shared_from_this(),
+      original.connectorSessionProperties(),
+      original.cache(),
+      original.pool()->shared_from_this(),
       nullptr,
       fmt::format("sample:{}", ++sampleQueryCounter));
 }
@@ -154,7 +153,7 @@ std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
   if (keys.size() == 1) {
     hash = mul(hash, 1815531889);
   } else {
-    auto kMul = 0xeb382d69ULL;
+    static constexpr int64_t kMul = 0xeb382d69ULL;
 
     for (auto i = 1; i < keys.size(); ++i) {
       auto other = makeHash(keys[i]);
@@ -184,7 +183,7 @@ std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
   auto plan = queryCtx()->optimization()->toVeloxPlan(filter);
   return std::make_shared<axiom::runner::LocalRunner>(
       plan.plan,
-      sampleQueryCtx(queryCtx()->optimization()->veloxQueryCtx()),
+      sampleQueryCtx(*queryCtx()->optimization()->veloxQueryCtx()),
       std::make_shared<connector::ConnectorSplitSourceFactory>());
 }
 
@@ -218,10 +217,10 @@ float freqs(KeyFreq& l, KeyFreq& r) {
   for (auto& pair : l) {
     auto it = r.find(pair.first);
     if (it != r.end()) {
-      hits += it->second;
+      hits += static_cast<float>(it->second);
     }
   }
-  return hits / l.size();
+  return hits / static_cast<float>(l.size());
 }
 
 float keyCardinality(const ExprVector& keys) {
@@ -247,9 +246,9 @@ std::pair<float, float> sampleJoin(
     // sample all.
   } else if (leftCard > 10000 && rightCard > 10000) {
     // Keys have many values, sample a fraction.
-    auto smaller = std::min(leftRows, rightRows);
-    float ratio = smaller / 10000.0;
-    fraction = std::max<int32_t>(2, 10000 / ratio);
+    auto smaller = static_cast<float>(std::min(leftRows, rightRows));
+    float ratio = smaller / 10000.0F;
+    fraction = static_cast<int32_t>(std::max(2.F, 10000.F / ratio));
   } else {
     return std::make_pair(0, 0);
   }

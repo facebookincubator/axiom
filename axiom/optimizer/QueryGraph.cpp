@@ -15,6 +15,8 @@
  */
 
 #include "axiom/optimizer/QueryGraph.h"
+
+#include <algorithm>
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -218,9 +220,8 @@ void JoinEdge::addEquality(ExprCP left, ExprCP right, bool update) {
 }
 
 std::pair<std::string, bool> JoinEdge::sampleKey() const {
-  std::stringstream out;
-  if (!leftTable_ || leftTable_->type() != PlanType::kTableNode ||
-      rightTable_->type() != PlanType::kTableNode) {
+  if (!leftTable_ || leftTable_->isNot(PlanType::kTableNode) ||
+      rightTable_->isNot(PlanType::kTableNode)) {
     return std::make_pair("", false);
   }
   auto* opt = queryCtx()->optimization();
@@ -231,7 +232,7 @@ std::pair<std::string, bool> JoinEdge::sampleKey() const {
   for (auto& k : leftKeys_) {
     leftString.push_back(k->toString());
   }
-  std::sort(indices.begin(), indices.end(), [&](int32_t l, int32_t r) {
+  std::ranges::sort(indices, [&](int32_t l, int32_t r) {
     return leftString[l] < leftString[r];
   });
   auto left =
@@ -263,7 +264,7 @@ std::string JoinEdge::toString() const {
   } else if (rightNotExists_) {
     out << " not exists ";
   } else if (leftOptional_) {
-    out << "right";
+    out << " right ";
   } else {
     out << " inner ";
   }
@@ -301,9 +302,9 @@ bool Expr::sameOrEqual(const Expr& other) const {
       auto b = reinterpret_cast<const Aggregate*>(&other);
       if (a->isDistinct() != b->isDistinct() ||
           a->isAccumulator() != b->isAccumulator() ||
-          !(a->condition() == b->condition() ||
-            (a->condition() && b->condition() &&
-             a->condition()->sameOrEqual(*b->condition())))) {
+          (a->condition() != b->condition() &&
+           (!a->condition() || !b->condition() ||
+            !a->condition()->sameOrEqual(*b->condition())))) {
         return false;
       }
     }

@@ -43,10 +43,9 @@ namespace {
 
 class UniqueNameChecker {
  public:
-  const std::string& add(const std::string& name) {
+  void add(const std::string& name) {
     VELOX_USER_CHECK(!name.empty(), "Name must not be empty");
     VELOX_USER_CHECK(names_.insert(name).second, "Duplicate name: {}", name);
-    return name;
   }
 
   void addAll(const std::vector<std::string>& names) {

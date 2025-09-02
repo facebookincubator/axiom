@@ -623,7 +623,7 @@ ExprPtr tryResolveSpecialForm(
     VELOX_USER_CHECK_GE(index, 1);
     VELOX_USER_CHECK_LE(index, rowType.size());
 
-    const int32_t zeroBasedIndex = index - 1;
+    const auto zeroBasedIndex = static_cast<int32_t>(index - 1);
 
     std::vector<ExprPtr> newInputs = {
         resolvedInputs.at(0),
@@ -687,18 +687,14 @@ bool isLambdaArgument(const exec::TypeSignature& typeSignature) {
 }
 
 bool hasLambdaArgument(const exec::FunctionSignature& signature) {
-  for (const auto& type : signature.argumentTypes()) {
-    if (isLambdaArgument(type)) {
-      return true;
-    }
-  }
-
-  return false;
+  return std::ranges::any_of(signature.argumentTypes(), isLambdaArgument);
 }
 
-bool isLambdaArgument(const exec::TypeSignature& typeSignature, int numInputs) {
+bool isLambdaArgument(
+    const exec::TypeSignature& typeSignature,
+    size_t numInputs) {
   return isLambdaArgument(typeSignature) &&
-      (typeSignature.parameters().size() == numInputs + 1);
+      typeSignature.parameters().size() == numInputs + 1;
 }
 
 bool isLambdaSignature(
@@ -715,7 +711,7 @@ bool isLambdaSignature(
   }
 
   bool match = true;
-  for (auto i = 0; i < numArguments; ++i) {
+  for (size_t i = 0; i < numArguments; ++i) {
     if (auto lambda =
             dynamic_cast<const core::LambdaExpr*>(callExpr->inputAt(i).get())) {
       const auto numLambdaInputs = lambda->arguments().size();

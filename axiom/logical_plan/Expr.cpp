@@ -195,14 +195,14 @@ void validateSwitchInputs(
 
   const auto numCases = inputs.size() / 2;
 
-  for (auto i = 0; i < numCases; ++i) {
-    const auto& condition = inputs.at(2 * i);
+  for (size_t i = 0; i < numCases; ++i) {
+    const auto& condition = inputs[2 * i];
     VELOX_USER_CHECK_EQ(
         condition->type()->kind(),
         TypeKind::BOOLEAN,
         "SWITCH conditions must be boolean");
 
-    const auto& thenClause = inputs.at(2 * i + 1);
+    const auto& thenClause = inputs[2 * i + 1];
 
     VELOX_USER_CHECK(
         type->equivalent(*thenClause->type()),
@@ -326,11 +326,8 @@ CallExpr::CallExpr(
     const std::vector<ExprPtr>& inputs)
     : Expr(ExprKind::kCall, type, inputs), name_{name} {
   VELOX_USER_CHECK(!name.empty());
-
-  static const auto kReservedNames = Enums::invertMap(specialFormNames());
-
   VELOX_USER_CHECK(
-      !kReservedNames.contains(boost::algorithm::to_upper_copy(name)),
+      !SpecialFormName::tryToSpecialForm(boost::algorithm::to_upper_copy(name)),
       "Function name cannot match special form name: {}",
       name);
 }

@@ -17,6 +17,7 @@
 #pragma once
 
 #include <string>
+#include <utility>
 
 #include "axiom/optimizer/connectors/ConnectorMetadata.h"
 
@@ -24,8 +25,8 @@ namespace facebook::velox::optimizer {
 
 class SchemaResolver {
  public:
-  SchemaResolver(const std::string& defaultSchema = "")
-      : defaultSchema_(defaultSchema) {}
+  explicit SchemaResolver(std::string defaultSchema = "")
+      : defaultSchema_{std::move(defaultSchema)} {}
 
   virtual ~SchemaResolver() = default;
 

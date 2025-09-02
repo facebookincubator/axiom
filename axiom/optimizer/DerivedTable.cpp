@@ -255,7 +255,7 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
 
   auto optimization = queryCtx()->optimization();
   auto it = optimization->existenceDts().find(existsDtKey);
-  DerivedTableP existsDt;
+  DerivedTableP existsDt{};
   if (it == optimization->existenceDts().end()) {
     auto* newDt = make<DerivedTable>();
     existsDt = newDt;
@@ -287,14 +287,14 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
 void DerivedTable::import(
     const DerivedTable& super,
     PlanObjectCP firstTable,
-    const PlanObjectSet& _tables,
+    const PlanObjectSet& superTables,
     const std::vector<PlanObjectSet>& existences,
     float existsFanout) {
-  tableSet = _tables;
-  tables = _tables.toObjects();
+  tableSet = superTables;
+  tables = superTables.toObjects();
   for (auto join : super.joins) {
-    if (_tables.contains(join->rightTable()) && join->leftTable() &&
-        _tables.contains(join->leftTable())) {
+    if (superTables.contains(join->rightTable()) && join->leftTable() &&
+        superTables.contains(join->leftTable())) {
       joins.push_back(join);
     }
   }
@@ -327,7 +327,7 @@ void DerivedTable::import(
   if (firstTable->is(PlanType::kDerivedTableNode)) {
     importJoinsIntoFirstDt(firstTable->as<DerivedTable>());
   } else {
-    fullyImported = _tables;
+    fullyImported = superTables;
   }
   linkTablesToJoins();
 }
@@ -352,7 +352,7 @@ JoinEdgeP importedDtJoin(
   VELOX_CHECK(left);
   auto otherKey = dt->columns[0];
   auto* newJoin = !fullyImported ? JoinEdge::makeExists(left, dt)
-                                 : JoinEdge::makeExists(left, dt);
+                                 : JoinEdge::makeInner(left, dt);
   newJoin->addEquality(innerKey, otherKey);
   return newJoin;
 }
@@ -832,7 +832,7 @@ void DerivedTable::distributeConjuncts() {
 
 namespace {
 void flattenAll(ExprCP expr, Name func, ExprVector& flat) {
-  if (expr->type() != PlanType::kCallExpr || expr->as<Call>()->name() != func) {
+  if (expr->isNot(PlanType::kCallExpr) || expr->as<Call>()->name() != func) {
     flat.push_back(expr);
     return;
   }
@@ -906,13 +906,12 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   bool changeOriginal = false;
   for (auto i = 0; i < disjuncts.size(); ++i) {
     auto disjunct = disjuncts[i];
-    if (distinct.find(disjunct) != distinct.end()) {
+    if (!distinct.emplace(disjunct).second) {
       disjuncts.erase(disjuncts.begin() + i);
       --i;
       changeOriginal = true;
       continue;
     }
-    distinct.insert(disjunct);
   }
   if (disjuncts.size() == 1) {
     *replacement = disjuncts[0];
@@ -954,7 +953,7 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   }
   if (changeOriginal) {
     ExprVector ands;
-    for (auto inner : flat) {
+    for (const auto& inner : flat) {
       ands.push_back(optimization->combineLeftDeep(names._and, inner, {}));
     }
     *replacement = optimization->combineLeftDeep(names._or, ands, {});
@@ -967,12 +966,12 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
 
 void DerivedTable::expandConjuncts() {
   const auto& names = queryCtx()->optimization()->builtinNames();
-  bool any;
+  bool any{};
   std::unordered_set<int32_t> processed;
   auto firstUnprocessed = numCanonicalConjuncts;
   do {
     any = false;
-    const int32_t numProcessed = conjuncts.size();
+    const auto numProcessed = static_cast<int32_t>(conjuncts.size());
     const auto end = conjuncts.size();
     for (auto i = firstUnprocessed; i < end; ++i) {
       const auto& conjunct = conjuncts[i];

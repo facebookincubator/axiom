@@ -30,7 +30,7 @@ class VeloxHistory : public History {
 
   std::pair<float, float> sampleJoin(JoinEdge* edge) override;
 
-  virtual std::optional<Cost> findCost(RelationOp& op) override {
+  std::optional<Cost> findCost(RelationOp& op) override {
     return std::nullopt;
   }
 

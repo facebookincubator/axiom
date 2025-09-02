@@ -16,10 +16,12 @@
 
 #pragma once
 
+#include <utility>
+
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/NameAllocator.h"
-#include "velox/core/Expressions.h"
+#include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -49,10 +51,10 @@ class ExprResolver {
       FunctionRewriteHook hook = nullptr)
       : queryCtx_(std::move(queryCtx)),
         enableCoersions_{enableCoersions},
-        hook_(hook),
+        hook_(std::move(hook)),
         pool_(
             queryCtx_ ? queryCtx_->pool()->addLeafChild(
-                            fmt::format("literals{}", ++literalsCounter_))
+                            fmt::format("literals{}", ++gLiteralsCounter))
                       : nullptr) {}
 
   ExprPtr resolveScalarTypes(
@@ -94,7 +96,7 @@ class ExprResolver {
   const bool enableCoersions_;
   FunctionRewriteHook hook_;
   std::shared_ptr<memory::MemoryPool> pool_;
-  static inline int32_t literalsCounter_{0};
+  static inline int32_t gLiteralsCounter{0};
 };
 
 // Make sure to specify Context.queryCtx to enable constand folding.
@@ -107,7 +109,7 @@ class PlanBuilder {
     std::shared_ptr<core::QueryCtx> queryCtx;
     ExprResolver::FunctionRewriteHook hook;
 
-    Context(
+    explicit Context(
         const std::optional<std::string>& defaultConnectorId = std::nullopt,
         std::shared_ptr<core::QueryCtx> queryCtx = nullptr,
         ExprResolver::FunctionRewriteHook hook = nullptr)
@@ -122,7 +124,7 @@ class PlanBuilder {
       const std::optional<std::string>& alias,
       const std::string& name)>;
 
-  PlanBuilder(bool enableCoersions = false, Scope outerScope = nullptr)
+  explicit PlanBuilder(bool enableCoersions = false, Scope outerScope = nullptr)
       : planNodeIdGenerator_(std::make_shared<core::PlanNodeIdGenerator>()),
         nameAllocator_(std::make_shared<NameAllocator>()),
         outerScope_{std::move(outerScope)},
@@ -263,7 +265,7 @@ class PlanBuilder {
       const std::vector<ExprApi>& unnestExprs,
       bool withOrdinality,
       const std::optional<std::string>& alias,
-      const std::vector<std::string>& columnAliases);
+      const std::vector<std::string>& unnestAliases);
 
   PlanBuilder& join(
       const PlanBuilder& right,

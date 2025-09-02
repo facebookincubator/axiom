@@ -38,7 +38,8 @@ std::string PlanAndStats::toString() const {
         auto it = prediction.find(planNodeId);
         if (it != prediction.end()) {
           out << indentation << "Estimate: " << it->second.cardinality
-              << " rows, " << succinctBytes(it->second.peakMemory)
+              << " rows, "
+              << succinctBytes(static_cast<uint64_t>(it->second.peakMemory))
               << " peak memory" << std::endl;
         }
       });
@@ -211,7 +212,7 @@ PlanAndStats ToVelox::toVeloxPlan(
 
   ExecutableFragment top;
   std::vector<ExecutableFragment> stages;
-  top.fragment.planNode = makeFragment(std::move(plan), top, stages);
+  top.fragment.planNode = makeFragment(plan, top, stages);
   stages.push_back(std::move(top));
 
   for (const auto& stage : stages) {
@@ -225,7 +226,7 @@ PlanAndStats ToVelox::toVeloxPlan(
       std::move(prediction_)};
 }
 
-RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) {
+RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) const {
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (auto i = 0; i < columns.size(); ++i) {
@@ -301,7 +302,6 @@ core::TypedExprPtr createArrayForInList(
       queryCtx()->optimization()->evaluator()->pool());
   return std::make_shared<core::ConstantTypedExpr>(arrayVector);
 }
-} // namespace
 
 core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
   switch (step.kind) {
@@ -311,10 +311,9 @@ core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
             arg->type()->as<TypeKind::ROW>().getChildIdx(step.field));
         return std::make_shared<core::FieldAccessTypedExpr>(
             type, arg, step.field);
-      } else {
-        auto& type = arg->type()->childAt(step.id);
-        return std::make_shared<core::DereferenceTypedExpr>(type, arg, step.id);
       }
+      auto& type = arg->type()->childAt(step.id);
+      return std::make_shared<core::DereferenceTypedExpr>(type, arg, step.id);
     }
     case StepKind::kSubscript: {
       auto& type = arg->type();
@@ -325,16 +324,16 @@ core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
             key = makeKey(VARCHAR(), step.field);
             break;
           case TypeKind::BIGINT:
-            key = makeKey<int64_t>(BIGINT(), step.id);
+            key = makeKey(BIGINT(), step.id);
             break;
           case TypeKind::INTEGER:
-            key = makeKey<int32_t>(INTEGER(), step.id);
+            key = makeKey(INTEGER(), static_cast<int32_t>(step.id));
             break;
           case TypeKind::SMALLINT:
-            key = makeKey<int16_t>(SMALLINT(), step.id);
+            key = makeKey(SMALLINT(), static_cast<int16_t>(step.id));
             break;
           case TypeKind::TINYINT:
-            key = makeKey<int8_t>(TINYINT(), step.id);
+            key = makeKey(TINYINT(), static_cast<int8_t>(step.id));
             break;
           default:
             VELOX_FAIL("Unsupported key type");
@@ -348,7 +347,7 @@ core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
       return std::make_shared<core::CallTypedExpr>(
           type->childAt(0),
           std::vector<core::TypedExprPtr>{
-              arg, makeKey<int32_t>(INTEGER(), step.id)},
+              arg, makeKey(INTEGER(), static_cast<int32_t>(step.id))},
           "subscript");
     }
 
@@ -356,6 +355,8 @@ core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
       VELOX_NYI();
   }
 }
+
+} // namespace
 
 core::TypedExprPtr
 ToVelox::pathToGetter(ColumnCP column, PathCP path, core::TypedExprPtr field) {
@@ -522,7 +523,7 @@ class TempProjections {
       const std::string* optName = nullptr) {
     auto [it, emplaced] = exprChannel_.emplace(expr, nextChannel_);
     if (emplaced) {
-      VELOX_CHECK(expr->type() != PlanType::kColumnExpr);
+      VELOX_CHECK(expr->isNot(PlanType::kColumnExpr));
       ++nextChannel_;
       exprs_.push_back(queryCtx()->optimization()->toTypedExpr(expr));
       names_.push_back(
@@ -901,12 +902,8 @@ core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
 }
 
 bool hasSubfieldPushdown(const TableScan& scan) {
-  for (auto& column : scan.columns()) {
-    if (column->topColumn()) {
-      return true;
-    }
-  }
-  return false;
+  return std::ranges::any_of(
+      scan.columns(), [](ColumnCP column) { return column->topColumn(); });
 }
 
 // Returns a struct with fields for skyline map keys of 'column' in
@@ -1150,7 +1147,7 @@ velox::core::PlanNodePtr ToVelox::makeProject(
     }
     for (size_t i = 0; i < numOutputs; ++i) {
       const auto* expr = project.exprs()[i];
-      if (expr->type() != PlanType::kColumnExpr) {
+      if (expr->isNot(PlanType::kColumnExpr)) {
         return false;
       }
       const auto* column = project.columns()[i];
@@ -1228,12 +1225,12 @@ core::PlanNodePtr ToVelox::makeAggregation(
 
   const bool isRawInput = op.step == core::AggregationNode::Step::kPartial ||
       op.step == core::AggregationNode::Step::kSingle;
-  const int32_t numKeys = op.groupingKeys.size();
+  const auto numKeys = op.groupingKeys.size();
 
   TempProjections projections(*this, *op.input());
   std::vector<std::string> aggregateNames;
   std::vector<core::AggregationNode::Aggregate> aggregates;
-  for (auto i = 0; i < op.aggregates.size(); ++i) {
+  for (size_t i = 0; i < op.aggregates.size(); ++i) {
     const auto* column = op.columns()[i + numKeys];
     const auto& type = toTypePtr(column->value().type);
 
@@ -1242,7 +1239,7 @@ core::PlanNodePtr ToVelox::makeAggregation(
     const auto* aggregate = op.aggregates[i];
 
     std::vector<TypePtr> rawInputTypes;
-    for (auto type : aggregate->rawInputType()) {
+    for (const auto& type : aggregate->rawInputType()) {
       rawInputTypes.push_back(toTypePtr(type));
     }
 
@@ -1491,13 +1488,13 @@ core::PlanNodePtr ToVelox::makeFragment(
   return nullptr;
 }
 
-/// Debugging helper functions. Must be in a namespace to be
-/// callable from debugger.
-std::string veloxToString(const core::PlanNode* plan) {
+// Debug helper functions. Must be extern to be callable from debugger.
+
+extern std::string veloxToString(const core::PlanNode* plan) {
   return plan->toString(true, true);
 }
 
-std::string planString(MultiFragmentPlan* plan) {
+extern std::string planString(const MultiFragmentPlan* plan) {
   return plan->toString(true);
 }
 

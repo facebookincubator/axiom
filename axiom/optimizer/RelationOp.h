@@ -121,6 +121,30 @@ class RelationOp {
         columns_(std::move(columns)),
         input_(std::move(input)) {}
 
+  RelationOp(
+      RelType type,
+      boost::intrusive_ptr<RelationOp> input,
+      Distribution distribution)
+      : relType_{type},
+        distribution_{std::move(distribution)},
+        columns_{input->columns()},
+        input_{std::move(input)} {}
+
+  RelationOp(
+      RelType type,
+      boost::intrusive_ptr<RelationOp> input,
+      ColumnVector columns)
+      : relType_{type},
+        distribution_{input->distribution()},
+        columns_{std::move(columns)},
+        input_{std::move(input)} {}
+
+  RelationOp(RelType type, boost::intrusive_ptr<RelationOp> input)
+      : relType_{type},
+        distribution_{input->distribution()},
+        columns_{input->columns()},
+        input_{std::move(input)} {}
+
   virtual ~RelationOp() = default;
 
   void operator delete(void* ptr) {
@@ -244,9 +268,9 @@ using RelationOpPtrVector =
 struct TableScan : public RelationOp {
   TableScan(
       RelationOpPtr input,
-      Distribution _distribution,
+      Distribution distribution,
       BaseTableCP table,
-      ColumnGroupCP _index,
+      ColumnGroupCP index,
       float fanout,
       ColumnVector columns,
       ExprVector lookupKeys = {},
@@ -335,7 +359,10 @@ class Filter : public RelationOp {
 /// Assigns names to expressions. Used to rename output from a derived table.
 class Project : public RelationOp {
  public:
-  Project(RelationOpPtr input, ExprVector exprs, ColumnVector columns);
+  Project(
+      const RelationOpPtr& input,
+      ExprVector exprs,
+      const ColumnVector& columns);
 
   const ExprVector& exprs() const {
     return exprs_;
@@ -352,13 +379,13 @@ enum class JoinMethod { kHash, kMerge, kCross };
 /// Represents a hash or merge join.
 struct Join : public RelationOp {
   Join(
-      JoinMethod _method,
-      velox::core::JoinType _joinType,
-      RelationOpPtr input,
-      RelationOpPtr right,
-      ExprVector leftKeys,
-      ExprVector rightKeys,
-      ExprVector filter,
+      JoinMethod method,
+      velox::core::JoinType joinType,
+      RelationOpPtr lhs,
+      RelationOpPtr rhs,
+      ExprVector lhsKeys,
+      ExprVector rhsKeys,
+      ExprVector filterExprs,
       float fanout,
       ColumnVector columns);
 
@@ -422,7 +449,7 @@ struct Aggregation : public RelationOp {
 /// Represents an order by. The order is given by the distribution.
 struct OrderBy : public RelationOp {
   OrderBy(
-      RelationOpPtr input,
+      const RelationOpPtr& input,
       ExprVector orderKeys,
       OrderTypeVector orderTypes,
       int64_t limit = -1,
@@ -438,7 +465,7 @@ using OrderByCP = const OrderBy*;
 
 /// Represents a union all.
 struct UnionAll : public RelationOp {
-  explicit UnionAll(RelationOpPtrVector inputs);
+  explicit UnionAll(RelationOpPtrVector inputsVector);
 
   const QGstring& historyKey() const override;
 

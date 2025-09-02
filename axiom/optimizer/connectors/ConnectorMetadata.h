@@ -433,7 +433,7 @@ struct SplitOptions {
   int32_t targetSplitCount{0};
 
   /// Target size of split.
-  uint64_t fileBytesPerSplit{128LL << 20};
+  uint64_t fileBytesPerSplit{128ULL << 20U};
 };
 
 class ConnectorSplitManager {

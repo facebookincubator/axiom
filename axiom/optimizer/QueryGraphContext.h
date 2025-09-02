@@ -81,7 +81,7 @@ struct QGAllocator {
   QGAllocator() = default;
 
   template <typename U>
-  explicit QGAllocator(QGAllocator<U>) {}
+  explicit QGAllocator(QGAllocator<U> /*other*/) {}
 
   T* allocate(std::size_t n);
 
@@ -239,12 +239,12 @@ class QueryGraphContext {
   /// representing sets of objects as bitmaps.
   int32_t newId(PlanObject* object) {
     objects_.push_back(object);
-    return objects_.size() - 1;
+    return static_cast<int32_t>(objects_.size() - 1);
   }
 
   /// Allocates 'size' bytes from the arena of 'this'. The allocation lives
   /// until free() is called on it or the arena is destroyed.
-  void* allocate(size_t size) {
+  void* allocate(int32_t size) {
 #ifdef QG_TEST_USE_MALLOC
     // Benchmark-only. Dropping the arena will not free un-free'd allocs.
     return ::malloc(size);
@@ -375,7 +375,7 @@ QueryGraphContext*& queryCtx();
 template <class T>
 T* QGAllocator<T>::allocate(std::size_t n) {
   return reinterpret_cast<T*>(
-      queryCtx()->allocate(velox::checkedMultiply(n, sizeof(T)))); // NOLINT
+      queryCtx()->allocate(velox::checkedMultiply(n, sizeof(T))));
 }
 
 template <class T>
@@ -383,15 +383,10 @@ void QGAllocator<T>::deallocate(T* p, std::size_t /*n*/) noexcept {
   queryCtx()->free(p);
 }
 
-template <class _Tp, class... _Args>
-inline _Tp* make(_Args&&... __args) {
-  return new (queryCtx()->allocate(sizeof(_Tp)))
-      _Tp(std::forward<_Args>(__args)...);
+template <class T, class... Args>
+inline T* make(Args&&... args) {
+  return new (queryCtx()->allocate(sizeof(T))) T(std::forward<Args>(args)...);
 }
-
-/// Macro to use instead of make() when make() errors out from too
-/// many arguments.
-#define QGC_MAKE_IN_ARENA(_Tp) new (queryCtx()->allocate(sizeof(_Tp))) _Tp
 
 /// Shorthand for toType() in thread's QueryGraphContext.
 const Type* toType(const TypePtr& type);

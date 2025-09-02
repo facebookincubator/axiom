@@ -34,7 +34,7 @@ bool PlanObjectPComparer::operator()(
 }
 
 size_t PlanObject::hash() const {
-  size_t h = static_cast<size_t>(id_);
+  auto h = static_cast<size_t>(id_);
   for (auto& child : children()) {
     h = velox::bits::hashMix(h, child->hash());
   }
@@ -87,7 +87,9 @@ std::string PlanObjectSet::toString(bool names) const {
   return out.str();
 }
 
-std::string planObjectString(PlanObject* o) {
+// Debug helper functions. Must be extern to be callable from debugger.
+
+extern std::string planObjectString(const PlanObject* o) {
   return o->toString();
 }
 

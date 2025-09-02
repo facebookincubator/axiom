@@ -22,9 +22,10 @@
 namespace facebook::velox::logical_plan {
 
 namespace {
-constexpr auto kNoAlias = std::nullopt;
-}
 
+constexpr auto kNoAlias = std::nullopt;
+
+} // namespace
 namespace detail {
 
 core::ExprPtr
@@ -157,10 +158,9 @@ ExprApi Subquery(std::shared_ptr<const LogicalPlanNode> subquery) {
   const auto& name = subquery->outputType()->nameOf(0);
   const auto expr = std::make_shared<core::SubqueryExpr>(std::move(subquery));
   if (name.empty()) {
-    return ExprApi(expr);
-  } else {
-    return ExprApi(expr, name);
+    return {expr};
   }
+  return {expr, name};
 }
 
 ExprApi Exists(const ExprApi& input) {

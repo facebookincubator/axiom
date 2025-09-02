@@ -184,7 +184,7 @@ void ToGraph::markFieldAccessed(
     if (auto maybeIdx = type->getChildIdxIfExists(fieldName)) {
       markFieldAccessed(
           {.planNode = sourceInput.get()},
-          maybeIdx.value(),
+          static_cast<int32_t>(maybeIdx.value()),
           steps,
           isControl,
           context);
@@ -216,16 +216,12 @@ bool looksConstant(const lp::ExprPtr& expr) {
   if (expr->isInputReference()) {
     return false;
   }
-  for (auto& input : expr->inputs()) {
-    if (!looksConstant(input)) {
-      return false;
-    }
-  }
-  return true;
+  return std::ranges::all_of(expr->inputs(), looksConstant);
 }
+
 } // namespace
 
-lp::ConstantExprPtr ToGraph::tryFoldConstant(const lp::ExprPtr expr) {
+lp::ConstantExprPtr ToGraph::tryFoldConstant(const lp::ExprPtr& expr) {
   if (expr->isConstant()) {
     return std::static_pointer_cast<const lp::ConstantExpr>(expr);
   }
@@ -251,7 +247,11 @@ void ToGraph::markSubfields(
     for (auto i = 0; i < context.sources.size(); ++i) {
       if (auto maybeIdx = context.rowTypes[i]->getChildIdxIfExists(name)) {
         markFieldAccessed(
-            context.sources[i], maybeIdx.value(), steps, isControl, context);
+            context.sources[i],
+            static_cast<int32_t>(maybeIdx.value()),
+            steps,
+            isControl,
+            context);
         return;
       }
     }
@@ -521,12 +521,12 @@ lp::ExprPtr ToGraph::stepToLogicalPlanGetter(
   switch (step.kind) {
     case StepKind::kField: {
       lp::ExprPtr key;
-      const TypePtr* type;
+      const TypePtr* type{};
       if (step.field) {
         key = makeKey(VARCHAR(), step.field);
         type = &argType->asRow().findChild(step.field);
       } else {
-        key = makeKey<int32_t>(INTEGER(), step.id);
+        key = makeKey(INTEGER(), static_cast<int32_t>(step.id));
         type = &argType->childAt(step.id);
       }
 
@@ -543,7 +543,7 @@ lp::ExprPtr ToGraph::stepToLogicalPlanGetter(
             argType->childAt(0),
             "subscript",
             arg,
-            makeKey<int32_t>(INTEGER(), step.id));
+            makeKey(INTEGER(), static_cast<int32_t>(step.id)));
       }
 
       lp::ExprPtr key;
@@ -552,16 +552,16 @@ lp::ExprPtr ToGraph::stepToLogicalPlanGetter(
           key = makeKey(VARCHAR(), step.field);
           break;
         case TypeKind::BIGINT:
-          key = makeKey<int64_t>(BIGINT(), step.id);
+          key = makeKey(BIGINT(), step.id);
           break;
         case TypeKind::INTEGER:
-          key = makeKey<int32_t>(INTEGER(), step.id);
+          key = makeKey(INTEGER(), static_cast<int32_t>(step.id));
           break;
         case TypeKind::SMALLINT:
-          key = makeKey<int16_t>(SMALLINT(), step.id);
+          key = makeKey(SMALLINT(), static_cast<int16_t>(step.id));
           break;
         case TypeKind::TINYINT:
-          key = makeKey<int8_t>(TINYINT(), step.id);
+          key = makeKey(TINYINT(), static_cast<int8_t>(step.id));
           break;
         default:
           VELOX_FAIL("Unsupported key type");

@@ -18,10 +18,13 @@
 #include "axiom/optimizer/QueryGraph.h"
 
 namespace facebook::velox::optimizer {
+namespace {
 
 Cost filterCost(CPSpan<Expr> conjuncts) {
-  return Cost();
+  return {};
 }
+
+} // namespace
 
 ExprCP Optimization::combineLeftDeep(
     Name func,
@@ -29,9 +32,8 @@ ExprCP Optimization::combineLeftDeep(
     const ExprVector& set2) {
   ExprVector all = set1;
   all.insert(all.end(), set2.begin(), set2.end());
-  std::sort(all.begin(), all.end(), [&](ExprCP left, ExprCP right) {
-    return left->id() < right->id();
-  });
+  std::ranges::sort(
+      all, [&](ExprCP left, ExprCP right) { return left->id() < right->id(); });
   ExprCP result = all[0];
   for (auto i = 1; i < all.size(); ++i) {
     result = toGraph_.deduppedCall(

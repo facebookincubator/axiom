@@ -80,8 +80,8 @@ class Optimization {
 
   /// Sets 'filterSelectivity' of 'baseTable' from history. Returns true if set.
   /// 'scanType' is the set of sampled columns with possible map to struct cast.
-  bool setLeafSelectivity(BaseTable& baseTable, RowTypePtr scanType) {
-    return history_.setLeafSelectivity(baseTable, std::move(scanType));
+  bool setLeafSelectivity(BaseTable& baseTable, const RowTypePtr& scanType) {
+    return history_.setLeafSelectivity(baseTable, scanType);
   }
 
   void filterUpdated(BaseTableCP baseTable, bool updateSelectivity = true) {
@@ -158,7 +158,8 @@ class Optimization {
   combineLeftDeep(Name func, const ExprVector& set1, const ExprVector& set2);
 
   /// Produces trace output if event matches 'traceFlags_'.
-  void trace(int32_t event, int32_t id, const Cost& cost, RelationOp& plan);
+  void trace(uint32_t event, int32_t id, const Cost& cost, RelationOp& plan)
+      const;
 
  private:
   // Retrieves or makes a plan from 'key'. 'key' specifies a set of top level
@@ -211,7 +212,8 @@ class Optimization {
 
   // Adds group by, order by, top k, limit to 'plan'. Updates 'plan' if
   // relation ops added. Sets cost in 'state'.
-  void addPostprocess(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state);
+  void addPostprocess(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)
+      const;
 
   // Places a derived table as first table in a plan. Imports possibly reducing
   // joins into the plan if can.

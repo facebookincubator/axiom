@@ -24,7 +24,7 @@ namespace facebook::velox::optimizer {
 
 float Value::byteSize() const {
   if (type->isFixedWidth()) {
-    return type->cppSizeInBytes();
+    return static_cast<float>(type->cppSizeInBytes());
   }
   switch (type->kind()) {
       // Add complex types here.
@@ -34,10 +34,10 @@ float Value::byteSize() const {
 }
 
 std::vector<ColumnCP> SchemaTable::toColumns(
-    const std::vector<std::string>& names) {
+    const std::vector<std::string>& names) const {
   std::vector<ColumnCP> columns(names.size());
   VELOX_DCHECK(!columns.empty());
-  for (auto i = 0; i < names.size(); ++i) {
+  for (size_t i = 0; i < names.size(); ++i) {
     columns[i] = findColumn(name);
   }
 
@@ -51,7 +51,7 @@ ColumnGroupCP SchemaTable::addIndex(
     const ColumnVector& keys,
     DistributionType distributionType,
     const ColumnVector& partition,
-    ColumnVector _columns,
+    ColumnVector columnsVector,
     const connector::TableLayout* layout) {
   VELOX_CHECK_LE(numKeysUnique, keys.size());
 
@@ -67,7 +67,7 @@ ColumnGroupCP SchemaTable::addIndex(
   VELOX_DCHECK_EQ(
       distribution.orderKeys.size(), distribution.orderTypes.size());
   columnGroups.push_back(make<ColumnGroup>(
-      name, this, std::move(distribution), std::move(_columns), layout));
+      name, this, std::move(distribution), std::move(columnsVector), layout));
   return columnGroups.back();
 }
 
@@ -88,17 +88,17 @@ ColumnCP SchemaTable::findColumn(const std::string& name) const {
 }
 
 Schema::Schema(
-    const char* _name,
+    const char* name,
     const std::vector<SchemaTableCP>& tables,
     LocusCP locus)
-    : name_(_name), defaultLocus_(locus) {
+    : name_{name}, defaultLocus_{locus} {
   for (auto& table : tables) {
     tables_[table->name] = table;
   }
 }
 
-Schema::Schema(const char* _name, SchemaResolver* source, LocusCP locus)
-    : name_(_name), source_(source), defaultLocus_(locus) {}
+Schema::Schema(const char* name, SchemaResolver* source, LocusCP locus)
+    : name_{name}, source_{source}, defaultLocus_{locus} {}
 
 SchemaTableCP Schema::findTable(
     std::string_view connectorId,
@@ -122,8 +122,8 @@ SchemaTableCP Schema::findTable(
 
   ColumnVector columns;
   for (const auto& [columnName, tableColumn] : connectorTable->columnMap()) {
-    float cardinality =
-        tableColumn->approxNumDistinct(connectorTable->numRows());
+    const auto cardinality = static_cast<float>(tableColumn->approxNumDistinct(
+        static_cast<int64_t>(connectorTable->numRows())));
     Value value(toType(tableColumn->type()), cardinality);
     auto* column = make<Column>(toName(columnName), nullptr, value);
     schemaTable->columns[column->name()] = column;
@@ -154,7 +154,8 @@ float tableCardinality(PlanObjectCP table) {
     return table->as<BaseTable>()
         ->schemaTable->columnGroups[0]
         ->table->cardinality;
-  } else if (table->is(PlanType::kValuesTableNode)) {
+  }
+  if (table->is(PlanType::kValuesTableNode)) {
     return table->as<ValuesTable>()->cardinality();
   }
   VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
@@ -185,7 +186,7 @@ ColumnCP findColumnByName(const T& columns, Name name) {
 
 bool SchemaTable::isUnique(CPSpan<Column> columns) const {
   for (auto& column : columns) {
-    if (column->type() != PlanType::kColumnExpr) {
+    if (column->isNot(PlanType::kColumnExpr)) {
       return false;
     }
   }
@@ -211,7 +212,7 @@ bool SchemaTable::isUnique(CPSpan<Column> columns) const {
 
 namespace {
 
-float combine(float card, int32_t ith, float otherCard) {
+float combine(float card, size_t ith, float otherCard) {
   if (ith == 0) {
     return card / otherCard;
   }
@@ -222,8 +223,9 @@ float combine(float card, int32_t ith, float otherCard) {
 }
 } // namespace
 
-IndexInfo SchemaTable::indexInfo(ColumnGroupCP index, CPSpan<Column> _columns)
-    const {
+IndexInfo SchemaTable::indexInfo(
+    ColumnGroupCP index,
+    CPSpan<Column> columnsSpan) const {
   IndexInfo info;
   info.index = index;
   info.scanCardinality = index->table->cardinality;
@@ -237,7 +239,7 @@ IndexInfo SchemaTable::indexInfo(ColumnGroupCP index, CPSpan<Column> _columns)
   PlanObjectSet covered;
   for (auto i = 0; i < numSorting || i < numUnique; ++i) {
     auto orderKey = distribution.orderKeys[i];
-    auto part = findColumnByName(_columns, orderKey->as<Column>()->name());
+    auto part = findColumnByName(columnsSpan, orderKey->as<Column>()->name());
     if (!part) {
       break;
     }
@@ -257,8 +259,8 @@ IndexInfo SchemaTable::indexInfo(ColumnGroupCP index, CPSpan<Column> _columns)
     }
   }
 
-  for (auto column : _columns) {
-    if (column->type() != PlanType::kColumnExpr) {
+  for (auto column : columnsSpan) {
+    if (column->isNot(PlanType::kColumnExpr)) {
       // Join key is an expression dependent on the table.
       covered.unionColumns(column->as<Expr>());
       info.joinCardinality = combine(
@@ -411,14 +413,14 @@ Distribution Distribution::rename(
 namespace {
 
 void exprsToString(const ExprVector& exprs, std::stringstream& out) {
-  int32_t size = exprs.size();
-  for (auto i = 0; i < size; ++i) {
+  for (size_t i = 0, size = exprs.size(); i < size; ++i) {
     if (i > 0) {
       out << ", ";
     }
     out << exprs[i]->toString();
   }
 }
+
 } // namespace
 
 std::string Distribution::toString() const {
@@ -449,7 +451,8 @@ std::string Distribution::toString() const {
 float ColumnGroup::lookupCost(float range) const {
   // Add 2 because it takes a compare and access also if hitting the
   // same row. log(1) == 0, so this would other wise be zero cost.
-  return Costs::kKeyCompareCost * log(range + 2) / log(2);
+  return Costs::kKeyCompareCost * std::log(range + 2) /
+      std::numbers::ln2_v<float>;
 }
 
 } // namespace facebook::velox::optimizer

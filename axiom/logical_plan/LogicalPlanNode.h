@@ -480,7 +480,7 @@ class SortNode : public LogicalPlanNode {
     VELOX_USER_CHECK(!ordering.empty());
   }
 
-  const std::vector<SortingField> ordering() const {
+  const std::vector<SortingField>& ordering() const {
     return ordering_;
   }
 

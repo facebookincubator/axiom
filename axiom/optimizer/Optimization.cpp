@@ -87,10 +87,10 @@ PlanAndStats Optimization::toVeloxPlan(
 }
 
 void Optimization::trace(
-    int32_t event,
+    uint32_t event,
     int32_t id,
     const Cost& cost,
-    RelationOp& plan) {
+    RelationOp& plan) const {
   if (event & options_.traceFlags) {
     std::cout << (event == OptimizerOptions::kRetained ? "Retained: "
                                                        : "Abandoned: ")
@@ -129,8 +129,9 @@ void reducingJoinsRecursive(
     PlanObjectSet& visited,
     PlanObjectSet& result,
     float& reduction,
-    std::function<void(const std::vector<PlanObjectCP>& path, float reduction)>
-        resultFunc = nullptr) {
+    const std::function<
+        void(const std::vector<PlanObjectCP>& path, float reduction)>&
+        resultFunc = {}) {
   bool isLeaf = true;
   for (auto join : joinedBy(candidate)) {
     if (join->leftOptional() || join->rightOptional()) {
@@ -140,8 +141,8 @@ void reducingJoinsRecursive(
     if (!state.dt->hasTable(other.table) || !state.dt->hasJoin(join)) {
       continue;
     }
-    if (other.table->type() != PlanType::kTableNode &&
-        other.table->type() != PlanType::kValuesTableNode) {
+    if (other.table->isNot(PlanType::kTableNode) &&
+        other.table->isNot(PlanType::kValuesTableNode)) {
       continue;
     }
     if (visited.contains(other.table)) {
@@ -455,13 +456,13 @@ RelationOpPtr repartitionForAgg(const RelationOpPtr& plan, PlanState& state) {
 }
 
 CPSpan<Column> leadingColumns(const ExprVector& exprs) {
-  int32_t i = 0;
+  size_t i = 0;
   for (; i < exprs.size(); ++i) {
-    if (exprs[i]->type() != PlanType::kColumnExpr) {
+    if (exprs[i]->isNot(PlanType::kColumnExpr)) {
       break;
     }
   }
-  return CPSpan(reinterpret_cast<ColumnCP const*>(&exprs[0]), i);
+  return {reinterpret_cast<ColumnCP const*>(exprs.data()), i};
 }
 
 bool isIndexColocated(
@@ -649,7 +650,7 @@ void alignJoinSides(
 void Optimization::addPostprocess(
     DerivedTableCP dt,
     RelationOpPtr& plan,
-    PlanState& state) {
+    PlanState& state) const {
   if (dt->aggregation) {
     const auto& aggPlan = dt->aggregation;
 
@@ -720,7 +721,7 @@ void Optimization::joinByIndex(
     PlanState& state,
     std::vector<NextJoin>& toTry) {
   if (candidate.tables.size() != 1 ||
-      candidate.tables[0]->type() != PlanType::kTableNode ||
+      candidate.tables[0]->isNot(PlanType::kTableNode) ||
       !candidate.existences.empty()) {
     // Index applies to single base tables.
     return;
@@ -884,8 +885,7 @@ void Optimization::joinByHash(
   const auto joinType = build.leftJoinType();
   const bool probeOnly = joinType == core::JoinType::kLeftSemiFilter ||
       joinType == core::JoinType::kLeftSemiProject ||
-      joinType == core::JoinType::kAnti ||
-      joinType == core::JoinType::kLeftSemiProject;
+      joinType == core::JoinType::kAnti;
 
   PlanObjectSet probeColumns;
   probeColumns.unionObjects(plan->columns());
@@ -1487,9 +1487,8 @@ PlanP Optimization::makePlan(
       key.firstTable->as<DerivedTable>()->setOp.has_value()) {
     return makeUnionPlan(
         key, distribution, boundColumns, existsFanout, state, needsShuffle);
-  } else {
-    return makeDtPlan(key, distribution, existsFanout, state, needsShuffle);
   }
+  return makeDtPlan(key, distribution, existsFanout, state, needsShuffle);
 }
 
 PlanP Optimization::makeUnionPlan(
@@ -1575,7 +1574,7 @@ PlanP Optimization::makeDtPlan(
     PlanState& state,
     bool& needsShuffle) {
   auto it = memo_.find(key);
-  PlanSet* plans;
+  PlanSet* plans{};
   if (it == memo_.end()) {
     DerivedTable dt;
     dt.cname = newCName("tmp_dt");

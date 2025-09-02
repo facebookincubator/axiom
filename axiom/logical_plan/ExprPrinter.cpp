@@ -15,6 +15,7 @@
  */
 
 #include "axiom/logical_plan/ExprPrinter.h"
+#include "axiom/logical_plan/ExprVisitor.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 
 namespace facebook::velox::logical_plan {
