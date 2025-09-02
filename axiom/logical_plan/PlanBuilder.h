@@ -46,14 +46,12 @@ class ExprResolver {
   ExprResolver(
       std::shared_ptr<core::QueryCtx> queryCtx,
       bool enableCoersions,
-      FunctionRewriteHook hook = nullptr)
+      FunctionRewriteHook hook = nullptr,
+      std::shared_ptr<memory::MemoryPool> pool = nullptr)
       : queryCtx_(std::move(queryCtx)),
         enableCoersions_{enableCoersions},
         hook_(std::move(hook)),
-        pool_(
-            queryCtx_ ? queryCtx_->pool()->addLeafChild(
-                            fmt::format("literals{}", ++gLiteralsCounter))
-                      : nullptr) {}
+        pool_(std::move(pool)) {}
 
   ExprPtr resolveScalarTypes(
       const core::ExprPtr& expr,
@@ -94,7 +92,6 @@ class ExprResolver {
   const bool enableCoersions_;
   FunctionRewriteHook hook_;
   std::shared_ptr<memory::MemoryPool> pool_;
-  static inline int32_t gLiteralsCounter{0};
 };
 
 // Make sure to specify Context.queryCtx to enable constand folding.
@@ -106,16 +103,21 @@ class PlanBuilder {
     std::shared_ptr<NameAllocator> nameAllocator;
     std::shared_ptr<core::QueryCtx> queryCtx;
     ExprResolver::FunctionRewriteHook hook;
+    std::shared_ptr<memory::MemoryPool> pool;
 
     explicit Context(
         const std::optional<std::string>& defaultConnectorId = std::nullopt,
-        std::shared_ptr<core::QueryCtx> queryCtx = nullptr,
+        std::shared_ptr<core::QueryCtx> queryCtxPtr = nullptr,
         ExprResolver::FunctionRewriteHook hook = nullptr)
         : defaultConnectorId{defaultConnectorId},
           planNodeIdGenerator{std::make_shared<core::PlanNodeIdGenerator>()},
           nameAllocator{std::make_shared<NameAllocator>()},
-          queryCtx(std::move(queryCtx)),
-          hook(std::move(hook)) {}
+          queryCtx{std::move(queryCtxPtr)},
+          pool{
+              queryCtx && queryCtx->pool()
+                  ? queryCtx->pool()->addLeafChild("literals")
+                  : nullptr},
+          hook{std::move(hook)} {}
   };
 
   using Scope = std::function<ExprPtr(
@@ -123,22 +125,22 @@ class PlanBuilder {
       const std::string& name)>;
 
   explicit PlanBuilder(bool enableCoersions = false, Scope outerScope = nullptr)
-      : planNodeIdGenerator_(std::make_shared<core::PlanNodeIdGenerator>()),
-        nameAllocator_(std::make_shared<NameAllocator>()),
-        outerScope_{std::move(outerScope)},
-        parseOptions_{.parseInListAsArray = false},
-        resolver_(nullptr, enableCoersions, nullptr) {}
+      : PlanBuilder{Context{}, enableCoersions, std::move(outerScope)} {}
 
   explicit PlanBuilder(
       const Context& context,
       bool enableCoersions = false,
       Scope outerScope = nullptr)
-      : defaultConnectorId_(context.defaultConnectorId),
+      : defaultConnectorId_{context.defaultConnectorId},
         planNodeIdGenerator_{context.planNodeIdGenerator},
         nameAllocator_{context.nameAllocator},
         outerScope_{std::move(outerScope)},
         parseOptions_{.parseInListAsArray = false},
-        resolver_(context.queryCtx, enableCoersions, context.hook) {
+        resolver_{
+            context.queryCtx,
+            enableCoersions,
+            context.hook,
+            context.pool} {
     VELOX_CHECK_NOT_NULL(planNodeIdGenerator_);
     VELOX_CHECK_NOT_NULL(nameAllocator_);
   }
