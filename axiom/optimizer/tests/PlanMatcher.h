@@ -65,6 +65,8 @@ class PlanMatcherBuilder {
 
   PlanMatcherBuilder& aggregation();
 
+  PlanMatcherBuilder& singleAggregation();
+
   PlanMatcherBuilder& partialAggregation();
 
   PlanMatcherBuilder& finalAggregation();

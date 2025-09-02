@@ -551,6 +551,13 @@ PlanMatcherBuilder& PlanMatcherBuilder::aggregation() {
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::singleAggregation() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<AggregationMatcher>(
+      matcher_, AggregationNode::Step::kSingle);
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::partialAggregation() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<AggregationMatcher>(

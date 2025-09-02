@@ -653,31 +653,44 @@ void Optimization::addPostprocess(
   if (dt->aggregation) {
     const auto& aggPlan = dt->aggregation;
 
-    auto* partialAgg = make<Aggregation>(
-        plan,
-        aggPlan->groupingKeys(),
-        aggPlan->aggregates(),
-        core::AggregationNode::Step::kPartial,
-        aggPlan->intermediateColumns());
+    if (isSingleWorker_ && runnerOptions_.numDrivers == 1) {
+      auto* singleAgg = make<Aggregation>(
+          plan,
+          aggPlan->groupingKeys(),
+          aggPlan->aggregates(),
+          core::AggregationNode::Step::kSingle,
+          aggPlan->columns());
 
-    state.placed.add(aggPlan);
-    state.addCost(*partialAgg);
-    plan = repartitionForAgg(partialAgg, state);
+      state.placed.add(aggPlan);
+      state.addCost(*singleAgg);
+      plan = singleAgg;
+    } else {
+      auto* partialAgg = make<Aggregation>(
+          plan,
+          aggPlan->groupingKeys(),
+          aggPlan->aggregates(),
+          core::AggregationNode::Step::kPartial,
+          aggPlan->intermediateColumns());
 
-    ExprVector finalGroupingKeys;
-    for (auto i = 0; i < aggPlan->groupingKeys().size(); ++i) {
-      finalGroupingKeys.push_back(aggPlan->intermediateColumns()[i]);
+      state.placed.add(aggPlan);
+      state.addCost(*partialAgg);
+      plan = repartitionForAgg(partialAgg, state);
+
+      ExprVector finalGroupingKeys;
+      for (auto i = 0; i < aggPlan->groupingKeys().size(); ++i) {
+        finalGroupingKeys.push_back(aggPlan->intermediateColumns()[i]);
+      }
+
+      auto* finalAgg = make<Aggregation>(
+          plan,
+          finalGroupingKeys,
+          aggPlan->aggregates(),
+          core::AggregationNode::Step::kFinal,
+          aggPlan->columns());
+
+      state.addCost(*finalAgg);
+      plan = finalAgg;
     }
-
-    auto* finalAgg = make<Aggregation>(
-        plan,
-        finalGroupingKeys,
-        aggPlan->aggregates(),
-        core::AggregationNode::Step::kFinal,
-        aggPlan->columns());
-
-    state.addCost(*finalAgg);
-    plan = finalAgg;
   }
   if (!dt->having.empty()) {
     auto filter = make<Filter>(plan, dt->having);
