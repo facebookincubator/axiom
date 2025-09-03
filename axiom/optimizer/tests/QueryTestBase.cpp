@@ -34,7 +34,7 @@
 
 DECLARE_string(data_path);
 
-DEFINE_int32(optimizer_trace, 0, "Optimizer trace level");
+DEFINE_uint32(optimizer_trace, 0, "Optimizer trace level");
 
 DEFINE_bool(print_plan, false, "Print optimizer results");
 

@@ -64,7 +64,7 @@ DECLARE_int32(cache_gb);
 
 DEFINE_bool(use_mmap, false, "Use mmap for buffers and cache");
 
-DEFINE_int32(optimizer_trace, 0, "Optimizer trace level");
+DEFINE_uint32(optimizer_trace, 0, "Optimizer trace level");
 
 DEFINE_bool(print_logical_plan, false, "Print logical plan (optimizer input)");
 

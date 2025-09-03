@@ -27,7 +27,7 @@
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 DEFINE_string(subfield_data_path, "", "Data directory for subfield test data");
-DECLARE_int32(optimizer_trace);
+DECLARE_uint32(optimizer_trace);
 
 DECLARE_int32(num_workers);
 

@@ -24,7 +24,7 @@
 
 DEFINE_int32(num_repeats, 1, "Number of repeats for optimization timing");
 
-DECLARE_int32(optimizer_trace);
+DECLARE_uint32(optimizer_trace);
 DECLARE_int32(num_workers);
 DECLARE_string(history_save_path);
 
