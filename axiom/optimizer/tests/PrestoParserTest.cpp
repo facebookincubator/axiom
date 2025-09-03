@@ -35,7 +35,7 @@ class PrestoParserTest : public testing::Test {
   static constexpr const char* kTpchConnectorId = "tpch";
 
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManagerOptions{});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
     auto emptyConfig = std::make_shared<config::ConfigBase>(
         std::unordered_map<std::string, std::string>());

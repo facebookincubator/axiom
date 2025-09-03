@@ -195,7 +195,7 @@ class VeloxRunner : public QueryBenchmarkBase {
 
   void initializeMemoryManager() {
     if (FLAGS_cache_gb) {
-      memory::MemoryManagerOptions options;
+      memory::MemoryManager::Options options;
       int64_t memoryBytes = FLAGS_cache_gb * (1LL << 30);
       options.useMmapAllocator = FLAGS_use_mmap;
       options.allocatorCapacity = memoryBytes;
@@ -207,7 +207,7 @@ class VeloxRunner : public QueryBenchmarkBase {
           memory::memoryManager()->allocator(), setupSsdCache());
       cache::AsyncDataCache::setInstance(cache_.get());
     } else {
-      memory::MemoryManagerOptions options;
+      memory::MemoryManager::Options options;
       memory::MemoryManager::testingSetInstance(options);
     }
   }
