@@ -1383,9 +1383,11 @@ std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
 void Optimization::makeJoins(PlanState& state) {
   auto firstTables = state.dt->startTables.toObjects();
 
+#ifndef NDEBUG
   for (auto table : firstTables) {
     state.debugSetFirstTable(table->id());
   }
+#endif
 
   auto sortedIndices = sortByStartingScore(firstTables);
 
