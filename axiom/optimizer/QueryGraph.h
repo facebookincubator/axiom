@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/Names.h"
 #include "axiom/optimizer/Schema.h"
 #include "velox/core/PlanNode.h"
 
@@ -229,42 +230,6 @@ inline folly::Range<T*> toRange(const std::vector<T, QGAllocator<T>>& v) {
   return folly::Range<T const*>(v.data(), v.size());
 }
 
-class Field : public Expr {
- public:
-  Field(const Type* type, ExprCP base, Name field)
-      : Expr(PlanType::kFieldExpr, Value(type, 1)), field_(field), base_(base) {
-    columns_ = base->columns();
-    subexpressions_ = base->subexpressions();
-  }
-
-  Field(const Type* type, ExprCP base, int32_t index)
-      : Expr(PlanType::kFieldExpr, Value(type, 1)),
-        field_(nullptr),
-        index_(index),
-        base_(base) {
-    columns_ = base->columns();
-    subexpressions_ = base->subexpressions();
-  }
-
-  Name field() const {
-    return field_;
-  }
-
-  int32_t index() const {
-    return index_;
-  }
-
-  std::string toString() const override;
-
-  ExprCP base() const {
-    return base_;
-  }
-
- private:
-  Name field_;
-  int32_t index_;
-  ExprCP base_;
-};
 
 struct SubfieldSet {
   /// Id of an accessed column of complex type.

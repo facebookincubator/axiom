@@ -88,18 +88,23 @@ class ToVelox {
     return column->alias() ? column->alias() : column->toString();
   }
 
+  /// True if a scan should expose 'column' of 'table' as a struct only
+  /// containing the accessed keys. 'column' must be a top level map column.
+  bool isMapAsStruct(ColumnCP column) const {
+    VELOX_CHECK_NOT_NULL(column->schemaColumn());
+    if (column->value().type->kind() != TypeKind::MAP) {
+      return false;
+    }
+    return optimizerOptions_.isMapAsStruct(
+        column->relation()->as<BaseTable>()->schemaTable->name, column->name());
+  }
+
  private:
   void setLeafHandle(
       int32_t id,
       const connector::ConnectorTableHandlePtr& handle,
       const std::vector<core::TypedExprPtr>& extraFilters) {
     leafHandles_[id] = std::make_pair(handle, extraFilters);
-  }
-
-  /// True if a scan should expose 'column' of 'table' as a struct only
-  /// containing the accessed keys. 'column' must be a top level map column.
-  bool isMapAsStruct(Name table, Name column) {
-    return optimizerOptions_.isMapAsStruct(table, column);
   }
 
   // Makes an output type for use in PlanNode et al. If 'columnType' is set,

@@ -22,34 +22,6 @@
 
 namespace facebook::velox::optimizer {
 
-struct BuiltinNames {
-  BuiltinNames();
-
-  Name reverse(Name op) const;
-
-  bool isCanonicalizable(Name name) const {
-    return canonicalizable.find(name) != canonicalizable.end();
-  }
-
-  Name eq;
-  Name lt;
-  Name lte;
-  Name gt;
-  Name gte;
-  Name plus;
-  Name multiply;
-  Name _and;
-  Name _or;
-  Name cast;
-  Name tryCast;
-  Name _try;
-  Name coalesce;
-  Name _if;
-  Name _switch;
-  Name in;
-
-  folly::F14FastSet<Name> canonicalizable;
-};
 
 /// Struct for resolving which logical PlanNode or Lambda defines which
 /// field for column and subfield tracking.
@@ -80,20 +52,10 @@ struct ITypedExprComparer {
   }
 };
 
-// Map for deduplicating ITypedExpr trees.
-using ExprDedupMap = folly::F14FastMap<
-    const core::ITypedExpr*,
-    ExprCP,
-    ITypedExprHasher,
-    ITypedExprComparer>;
-
 struct ExprDedupKey {
   Name func;
   const ExprVector* args;
-
-  bool operator==(const ExprDedupKey& other) const {
-    return func == other.func && *args == *other.args;
-  }
+  bool operator==(const ExprDedupKey& other) const = default;
 };
 
 struct ExprDedupHasher {
@@ -107,22 +69,22 @@ struct ExprDedupHasher {
   }
 };
 
+struct VariantAndType {
+  TypeCP type;
+  const Variant* variant;
+
+  bool operator==(const VariantAndType& other) const = default;
+};
+
+struct VariantAndTypeHasher {
+  size_t operator()(const VariantAndType& variantAndType) const {
+    return bits::hashMix(
+        variantAndType.type->hashKind(), variantAndType.variant->hash());
+  }
+};
+
 using FunctionDedupMap =
     std::unordered_map<ExprDedupKey, ExprCP, ExprDedupHasher>;
-
-struct VariantPtrHasher {
-  size_t operator()(const std::shared_ptr<const Variant>& value) const {
-    return value->hash();
-  }
-};
-
-struct VariantPtrComparer {
-  bool operator()(
-      const std::shared_ptr<const Variant>& left,
-      const std::shared_ptr<const Variant>& right) const {
-    return *left == *right;
-  }
-};
 
 /// Represents a path over an Expr of complex type. Used as a key
 /// for a map from unique step+optionl subscript expr pairs to the
@@ -207,7 +169,6 @@ class ToGraph {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
   }
 
-  BuiltinNames& builtinNames();
 
   /// Creates or returns pre-existing function call with name+args. If
   /// deterministic, a new ExprCP is remembered for reuse.
@@ -266,6 +227,9 @@ class ToGraph {
 
   // Returns a deduplicated Literal from the value in 'constant'.
   ExprCP makeConstant(const logical_plan::ConstantExpr& constant);
+
+  /// Makes a deduplicated Literal from type and variant.
+  ExprCP makeConstant(TypeCP type, const std::shared_ptr<const Variant>& value);
 
   // Folds a logical expr to a constant if can. Should be called only if
   // 'expr' only depends on constants. Identifier scope will may not be not
@@ -471,17 +435,11 @@ class ToGraph {
   // Maps names in project nodes of input logical plan to deduplicated Exprs.
   std::unordered_map<std::string, ExprCP> renames_;
 
-  std::unordered_map<
-      std::shared_ptr<const Variant>,
-      ExprCP,
-      VariantPtrHasher,
-      VariantPtrComparer>
+  // Maps from dedupped variant and type to corresponding Literal. the variant
+  // can be identical for, e.g. two empty arrays of different types but the
+  // literal will be different.
+  std::unordered_map<VariantAndType, ExprCP, VariantAndTypeHasher>
       constantDedup_;
-
-  // Reverse map from dedupped literal to the shared_ptr. We put the
-  // shared ptr back into the result plan so the variant never gets
-  // copied.
-  std::map<ExprCP, std::shared_ptr<const Variant>> reverseConstantDedup_;
 
   // Dedup map from name + ExprVector to corresponding CallExpr.
   FunctionDedupMap functionDedup_;
@@ -522,8 +480,6 @@ class ToGraph {
   // Map from leaf PlanNode to corresponding PlanObject
   std::unordered_map<const logical_plan::LogicalPlanNode*, PlanObjectCP>
       planLeaves_;
-
-  std::unique_ptr<BuiltinNames> builtinNames_;
 };
 
 } // namespace facebook::velox::optimizer

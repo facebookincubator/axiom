@@ -36,12 +36,12 @@ Value intValue() {
 
 ExprCP bigintLit(int64_t n) {
   return make<Literal>(
-      bigintValue(), queryCtx()->registerVariant(std::make_unique<variant>(n)));
+      bigintValue(), queryCtx()->registerVariant(std::make_shared<variant>(n)));
 }
 
 ExprCP intLit(int32_t n) {
   return make<Literal>(
-      intValue(), queryCtx()->registerVariant(std::make_unique<variant>(n)));
+      intValue(), queryCtx()->registerVariant(std::make_shared<variant>(n)));
 }
 
 // Returns an int64 hash with low 28 bits set.

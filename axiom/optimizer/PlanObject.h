@@ -29,7 +29,6 @@ enum class PlanType {
   kLiteralExpr,
   kCallExpr,
   kAggregateExpr,
-  kFieldExpr,
   kLambdaExpr,
   // Plan nodes.
   kTableNode,

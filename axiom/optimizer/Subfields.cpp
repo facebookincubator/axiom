@@ -340,7 +340,16 @@ void ToGraph::markSubfields(
     // If the function is some kind of constructor, like
     // make_row_from_map or make_named_row, then a path over it
     // selects one argument. If there is no path, all arguments are
-    // implicitly accessed.
+    // implicitly accessed. If the whole value of make_row_from_map is accessed,
+    // this does not yet access the whole map but just the keys listed in
+    // make_row_from_map.
+    if (metadata->expandFunction && steps.empty()) {
+      auto newExpr = metadata->expandFunction(call);
+      if (newExpr) {
+        markSubfields(newExpr, steps, isControl, context);
+        return;
+      }
+    }
     if (metadata->valuePathToArgPath && !steps.empty()) {
       auto pair = metadata->valuePathToArgPath(steps, *call);
       markSubfields(expr->inputAt(pair.second), pair.first, isControl, context);
