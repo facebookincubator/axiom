@@ -17,6 +17,7 @@
 #include "axiom/optimizer/FunctionRegistry.h"
 
 namespace facebook::velox::optimizer {
+namespace lp = facebook::velox::logical_plan;
 
 FunctionMetadataCP FunctionRegistry::metadata(std::string_view name) const {
   auto it = metadata_.find(name);
