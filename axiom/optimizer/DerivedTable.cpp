@@ -850,7 +850,6 @@ ExprVector extractPerTable(
     std::vector<ExprVector>& orOfAnds) {
   PlanObjectSet tables;
   auto optimization = queryCtx()->optimization();
-  auto& names = optimization->builtinNames();
   tables = disjuncts[0]->allTables();
   if (tables.size() <= 1) {
     // All must depend on the same set of more than 1 table.
@@ -882,10 +881,10 @@ ExprVector extractPerTable(
     ExprVector tableAnds;
     for (auto& tableAnd : pair.second) {
       tableAnds.push_back(
-          optimization->combineLeftDeep(names._and, tableAnd, {}));
+          optimization->combineLeftDeep(Names::kAnd, tableAnd, {}));
     }
     conjuncts.push_back(
-        optimization->combineLeftDeep(names._or, tableAnds, {}));
+        optimization->combineLeftDeep(Names::kOr, tableAnds, {}));
   }
   return conjuncts;
 }
@@ -900,7 +899,6 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   std::unordered_set<ExprCP> distinct;
   PlanObjectSet tableSet;
   auto optimization = queryCtx()->optimization();
-  auto& names = optimization->builtinNames();
   ExprVector result;
   // Remove duplicates.
   bool changeOriginal = false;
@@ -923,7 +921,7 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   std::vector<ExprVector> flat;
   for (auto i = 0; i < disjuncts.size(); ++i) {
     flat.emplace_back();
-    flattenAll(disjuncts[i], names._and, flat.back());
+    flattenAll(disjuncts[i], Names::kAnd, flat.back());
   }
   // Check if the flat conjuncts lists have any element that occurs in all.
   // Remove all the elememts that are in all.
@@ -955,9 +953,9 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   if (changeOriginal) {
     ExprVector ands;
     for (auto inner : flat) {
-      ands.push_back(optimization->combineLeftDeep(names._and, inner, {}));
+      ands.push_back(optimization->combineLeftDeep(Names::kAnd, inner, {}));
     }
-    *replacement = optimization->combineLeftDeep(names._or, ands, {});
+    *replacement = optimization->combineLeftDeep(Names::kOr, ands, {});
   }
 
   return result;
@@ -966,7 +964,6 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
 } // namespace
 
 void DerivedTable::expandConjuncts() {
-  const auto& names = queryCtx()->optimization()->builtinNames();
   bool any;
   std::unordered_set<int32_t> processed;
   auto firstUnprocessed = numCanonicalConjuncts;
@@ -976,10 +973,10 @@ void DerivedTable::expandConjuncts() {
     const auto end = conjuncts.size();
     for (auto i = firstUnprocessed; i < end; ++i) {
       const auto& conjunct = conjuncts[i];
-      if (isCallExpr(conjunct, names._or) &&
+      if (isCallExpr(conjunct, Names::kOr) &&
           !conjunct->containsNonDeterministic()) {
         ExprVector flat;
-        flattenAll(conjunct, names._or, flat);
+        flattenAll(conjunct, Names::kOr, flat);
         ExprCP replace = nullptr;
         ExprVector common = extractCommon(flat, &replace);
         if (replace) {

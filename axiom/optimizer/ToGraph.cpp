@@ -140,7 +140,7 @@ ExprCP ToGraph::tryFoldConstant(
     if (auto constantExpr = dynamic_cast<const exec::ConstantExpr*>(first)) {
       auto typed = std::make_shared<lp::ConstantExpr>(
           constantExpr->type(),
-          std::make_shared<Variant>(constantExpr->value()->variantAt(0)));
+          std::make_shared<const Variant>(constantExpr->value()->variantAt(0)));
 
       return makeConstant(*typed);
     }
@@ -321,7 +321,7 @@ PathCP innerPath(std::span<const Step> steps, int32_t last) {
   return toPath(steps.subspan(last), true);
 }
 
-Variant* subscriptLiteral(TypeKind kind, const Step& step) {
+const Variant* subscriptLiteral(TypeKind kind, const Step& step) {
   auto* ctx = queryCtx();
   switch (kind) {
     case TypeKind::VARCHAR:
@@ -402,10 +402,28 @@ ExprCP ToGraph::makeGettersOverSkyline(
         case StepKind::kField: {
           if (step.field) {
             auto childType = toType(inputType->asRow().findChild(step.field));
-            expr = make<Field>(childType, expr, step.field);
+            ExprVector args = {
+                expr,
+                makeConstant(
+                    toType(VARCHAR()),
+                    std::make_shared<const Variant>(step.field))};
+            expr = deduppedCall(
+                Names::kSubscript,
+                Value(childType, 1),
+                std::move(args),
+                FunctionSet());
           } else {
             auto childType = toType(inputType->childAt(step.id));
-            expr = make<Field>(childType, expr, step.id);
+            ExprVector args = {
+                expr,
+                makeConstant(
+                    toType(INTEGER()),
+                    std::make_shared<const Variant>(step.id))};
+            expr = deduppedCall(
+                Names::kSubscript,
+                Value(childType, 1),
+                std::move(args),
+                FunctionSet());
           }
           break;
         }
@@ -426,7 +444,7 @@ ExprCP ToGraph::makeGettersOverSkyline(
                   subscriptLiteral(subscriptType->kind(), step)),
           };
 
-          expr = make<Call>(
+          expr = deduppedCall(
               toName("subscript"),
               Value(valueType, 1),
               std::move(args),
@@ -435,7 +453,7 @@ ExprCP ToGraph::makeGettersOverSkyline(
         }
 
         case StepKind::kCardinality: {
-          expr = make<Call>(
+          expr = deduppedCall(
               toName("cardinality"),
               Value(toType(INTEGER()), 1),
               ExprVector{expr},
@@ -500,56 +518,6 @@ void ToGraph::ensureFunctionSubfields(const lp::ExprPtr& expr) {
   }
 }
 
-BuiltinNames::BuiltinNames()
-    : eq(toName("eq")),
-      lt(toName("lt")),
-      lte(toName("lte")),
-      gt(toName("gt")),
-      gte(toName("gte")),
-      plus(toName("plus")),
-      multiply(toName("multiply")),
-      _and(toName(SpecialFormCallNames::kAnd)),
-      _or(toName(SpecialFormCallNames::kOr)),
-      cast(toName(SpecialFormCallNames::kCast)),
-      tryCast(toName(SpecialFormCallNames::kTryCast)),
-      _try(toName(SpecialFormCallNames::kTry)),
-      coalesce(toName(SpecialFormCallNames::kCoalesce)),
-      _if(toName(SpecialFormCallNames::kIf)),
-      _switch(toName(SpecialFormCallNames::kSwitch)),
-      in(toName(SpecialFormCallNames::kIn)) {
-  canonicalizable.insert(eq);
-  canonicalizable.insert(lt);
-  canonicalizable.insert(lte);
-  canonicalizable.insert(gt);
-  canonicalizable.insert(gte);
-  canonicalizable.insert(plus);
-  canonicalizable.insert(multiply);
-  canonicalizable.insert(_and);
-  canonicalizable.insert(_or);
-}
-
-Name BuiltinNames::reverse(Name name) const {
-  if (name == lt) {
-    return gt;
-  }
-  if (name == lte) {
-    return gte;
-  }
-  if (name == gt) {
-    return lt;
-  }
-  if (name == gte) {
-    return lte;
-  }
-  return name;
-}
-
-BuiltinNames& ToGraph::builtinNames() {
-  if (!builtinNames_) {
-    builtinNames_ = std::make_unique<BuiltinNames>();
-  }
-  return *builtinNames_;
-}
 
 namespace {
 
@@ -576,14 +544,13 @@ bool shouldInvert(ExprCP left, ExprCP right) {
 } // namespace
 
 void ToGraph::canonicalizeCall(Name& name, ExprVector& args) {
-  auto& names = builtinNames();
-  if (!names.isCanonicalizable(name)) {
+  if (!Names::isCanonicalizable(name)) {
     return;
   }
   VELOX_CHECK_EQ(args.size(), 2, "Expecting binary op {}", name);
   if (shouldInvert(args[0], args[1])) {
     std::swap(args[0], args[1]);
-    name = names.reverse(name);
+    name = Names::reverse(name);
   }
 }
 
@@ -609,17 +576,23 @@ ExprCP ToGraph::deduppedCall(
   return call;
 }
 
-ExprCP ToGraph::makeConstant(const lp::ConstantExpr& constant) {
-  auto temp = constant.value();
-  auto it = constantDedup_.find(temp);
+ExprCP ToGraph::makeConstant(
+    TypeCP type,
+    const std::shared_ptr<const Variant>& value) {
+  const Variant* dedupped = queryCtx()->registerVariant(value);
+  VariantAndType key = {type, dedupped};
+  auto it = constantDedup_.find(key);
   if (it != constantDedup_.end()) {
     return it->second;
   }
-  auto* literal = make<Literal>(Value(toType(constant.type()), 1), temp.get());
-  // The variant will stay live for the optimization duration.
-  reverseConstantDedup_[literal] = temp;
-  constantDedup_[std::move(temp)] = literal;
+  auto* literal = make<Literal>(Value(type, 1), dedupped);
+
+  constantDedup_[std::move(key)] = literal;
   return literal;
+}
+
+ExprCP ToGraph::makeConstant(const lp::ConstantExpr& constant) {
+  return makeConstant(toType(constant.type()), constant.value());
 }
 
 namespace {
@@ -661,14 +634,22 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
 
   const auto* call = expr->asUnchecked<lp::CallExpr>();
   std::string callName;
+  const FunctionMetadata* metadata = nullptr;
   if (call) {
     callName = exec::sanitizeName(call->name());
-    auto* metadata = functionMetadata(callName);
+    metadata = functionMetadata(callName);
     if (metadata && metadata->processSubfields()) {
       auto translated = translateSubfieldFunction(call, metadata);
       if (translated.has_value()) {
         return translated.value();
       }
+    }
+  }
+
+  if (metadata && metadata->expandFunction) {
+    auto newExpr = metadata->expandFunction(call);
+    if (newExpr) {
+      return translateExpr(newExpr);
     }
   }
 
@@ -686,6 +667,13 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
 
     for (auto input : inputs) {
       auto arg = translateExpr(input);
+      if (arg == nullptr) {
+        VELOX_FAIL(
+            fmt::format(
+                "{} is null inside {}",
+                lp::ExprPrinter::toText(*input),
+                lp::ExprPrinter::toText(*input)));
+      }
       args.emplace_back(arg);
       allConstant &= arg->is(PlanType::kLiteralExpr);
       cardinality = std::max(cardinality, arg->value().cardinality);
@@ -797,7 +785,7 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
       const auto& inputType = input->type();
       args[i] = make<Literal>(
           Value(toType(inputType), 1),
-          make<Variant>(Variant::null(inputType->kind())));
+          make<const Variant>(Variant::null(inputType->kind())));
     }
   }
 

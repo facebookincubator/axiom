@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/optimizer/ArenaCache.h"
+#include "axiom/optimizer/Names.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/type/Variant.h"
 #include "velox/vector/BaseVector.h"
@@ -48,6 +49,8 @@ struct PlanObjectPHasher {
 struct PlanObjectPComparer {
   bool operator()(const PlanObjectCP& lhs, const PlanObjectCP& rhs) const;
 };
+
+using TypeCP = const Type*;
 
 struct TypeHasher {
   size_t operator()(const TypePtr& type) const {
@@ -222,6 +225,20 @@ struct VectorDedupComparer {
   }
 };
 
+struct VariantPtrHasher {
+  size_t operator()(const std::shared_ptr<const Variant>& value) const {
+    return value->hash();
+  }
+};
+
+struct VariantPtrComparer {
+  bool operator()(
+      const std::shared_ptr<const Variant>& left,
+      const std::shared_ptr<const Variant>& right) const {
+    return *left == *right;
+  }
+};
+
 /// Context for making a query plan. Owns all memory associated to
 /// planning, except for the input PlanNode tree. The result of
 /// planning is also owned by 'this', so the planning result must be
@@ -320,10 +337,7 @@ class QueryGraphContext {
 
   /// Takes ownership of a Variant for the duration. Variants are allocated
   /// with new so not in the arena.
-  Variant* registerVariant(std::unique_ptr<Variant> value) {
-    allVariants_.push_back(std::move(value));
-    return allVariants_.back().get();
-  }
+  const Variant* registerVariant(std::shared_ptr<const Variant> value);
 
   const BaseVector* toVector(const VectorPtr& vector);
 
@@ -340,7 +354,9 @@ class QueryGraphContext {
 
   // Set of interned copies of identifiers. insert() into this returns the
   // canonical interned copy of any string. Lifetime is limited to 'allocator_'.
-  std::unordered_set<std::string_view> names_;
+  // Initailized from a map of built-in names that are statically initialized
+  // const char*.
+  std::unordered_set<std::string_view> names_{Names::builtinNames()};
 
   // Set for deduplicating planObject trees.
   std::unordered_set<PlanObjectP, PlanObjectPHasher, PlanObjectPComparer>
@@ -365,6 +381,21 @@ class QueryGraphContext {
 
   PlanP contextPlan_{nullptr};
   Optimization* optimization_{nullptr};
+
+  // all unique Variants used from the arena. Variants from here may
+  // or may not be in the output plan but will stay live at least for
+  // the duration of optimization.
+  std::unordered_set<
+      std::shared_ptr<const Variant>,
+      VariantPtrHasher,
+      VariantPtrComparer>
+      variants_;
+
+  // Reverse map from dedupped Variant  the shared_ptr. We put the
+  // shared ptr back into the result plan so the variant never gets
+  // copied.
+  std::map<const Variant*, std::shared_ptr<const Variant>>
+      reverseConstantDedup_;
 
   std::vector<std::unique_ptr<Variant>> allVariants_;
 };

@@ -39,6 +39,7 @@ add_library(
   PlanObject.cpp
   Schema.cpp
   QueryGraph.cpp
+  "Names.cpp"
   QueryGraphContext.cpp
   Filters.cpp
   Cost.cpp

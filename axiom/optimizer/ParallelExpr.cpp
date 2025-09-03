@@ -14,13 +14,32 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/ToVelox.h"
+#include "axiom/optimizer/Optimization.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
+
+#include <iostream>
 
 namespace facebook::velox::optimizer {
 
 namespace {
+
+void traceCses(std::unordered_map<ExprCP, int32_t>& refCount) {
+  std::cout << "Common subexpressions for ParallelProject\n";
+  std::vector<ExprCP> exprs;
+  for (auto& pair : refCount) {
+    if (pair.second > 1) {
+      exprs.push_back(pair.first);
+    }
+  }
+  std::sort(exprs.begin(), exprs.end(), [&](ExprCP l, ExprCP r) {
+    return refCount[l] > refCount[r];
+  });
+  for (auto& e : exprs) {
+    std::cout << refCount[e] << ": #" << e->id() << ": " << e->toString()
+              << std::endl;
+  }
+}
 
 struct LevelData {
   PlanObjectSet exprs;
@@ -39,6 +58,9 @@ void pushdownExpr(
     ExprCP expr,
     int32_t level,
     std::vector<LevelData>& levelData) {
+  if (expr->is(PlanType::kLiteralExpr)) {
+    return;
+  }
   const auto defined = levelOf(levelData, expr);
   if (defined >= level) {
     return;
@@ -49,7 +71,6 @@ void pushdownExpr(
   }
   levelData[defined].exprs.erase(expr);
   levelData[level].exprs.add(expr);
-
   if (expr->is(PlanType::kCallExpr)) {
     for (auto& input : expr->as<Call>()->args()) {
       if (!input->is(PlanType::kLiteralExpr)) {
@@ -78,10 +99,10 @@ void makeLevelsInner(
   if (level >= levelData.size()) {
     levelData.resize(level + 1);
   }
-
   counted.add(expr);
   ++refCount[expr];
   levelData[level].exprs.add(expr);
+
   if (expr->is(PlanType::kCallExpr)) {
     for (auto& input : expr->as<Call>()->args()) {
       makeLevelsInner(input, level + 1, levelData, refCount, counted);
@@ -194,8 +215,6 @@ core::PlanNodePtr ToVelox::makeParallelProject(
 
 namespace {
 
-// Returns the columns used by Exprs in 'top', excluding columns only referenced
-// from 'placed'.
 void columnBorder(
     ExprCP expr,
     const PlanObjectSet& placed,
@@ -203,7 +222,6 @@ void columnBorder(
   if (expr->is(PlanType::kLiteralExpr)) {
     return;
   }
-
   if (placed.contains(expr)) {
     result.add(expr);
     return;
@@ -227,6 +245,8 @@ void columnBorder(
   }
 }
 
+// Returns the columns used by Exprs in 'top', excluding columns only referenced
+// from 'placed'.
 PlanObjectSet columnBorder(
     const PlanObjectSet& top,
     const PlanObjectSet& placed) {
@@ -318,6 +338,11 @@ core::PlanNodePtr ToVelox::maybeParallelProject(
   std::vector<LevelData> levelData;
   std::unordered_map<ExprCP, int32_t> refCount;
   makeExprLevels(top, levelData, refCount);
+
+  if ((queryCtx()->optimization()->options().traceFlags &
+       OptimizerOptions::kPreprocess) != 0) {
+    traceCses(refCount);
+  }
 
   PlanObjectSet placed;
 

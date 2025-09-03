@@ -48,9 +48,6 @@ void PlanObjectSet::unionColumns(ExprCP expr) {
     case PlanType::kColumnExpr:
       add(expr);
       return;
-    case PlanType::kFieldExpr:
-      unionColumns(expr->as<Field>()->base());
-      return;
     case PlanType::kAggregateExpr: {
       auto condition = expr->as<Aggregate>()->condition();
       if (condition) {

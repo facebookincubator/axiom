@@ -109,17 +109,6 @@ std::string Call::toString() const {
   return out.str();
 }
 
-std::string Field::toString() const {
-  std::stringstream out;
-  out << base_->toString() << ".";
-  if (field_) {
-    out << field_;
-  } else {
-    out << fmt::format("{}", index_);
-  }
-  return out.str();
-}
-
 std::optional<BitSet> SubfieldSet::findSubfields(int32_t id) const {
   for (auto i = 0; i < ids.size(); ++i) {
     if (ids[i] == id) {

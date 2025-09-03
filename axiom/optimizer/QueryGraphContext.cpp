@@ -292,4 +292,12 @@ PathCP toPath(std::span<const Step> steps, bool reverse) {
   return queryCtx()->toPath(path);
 }
 
+const Variant* QueryGraphContext::registerVariant(
+    std::shared_ptr<const Variant> value) {
+  auto pair = variants_.insert(value);
+  auto* rawPtr = pair.first->get();
+  reverseConstantDedup_[rawPtr] = value;
+  return rawPtr;
+}
+
 } // namespace facebook::velox::optimizer

@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/optimizer/Optimization.h"
+#include "axiom/optimizer/PlanUtils.h"
 #include "velox/core/PlanConsistencyChecker.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/HashPartitionFunction.h"
@@ -49,7 +50,7 @@ namespace {
 std::vector<common::Subfield> columnSubfields(BaseTableCP table, int32_t id) {
   auto* optimization = queryCtx()->optimization();
 
-  const auto columnName = queryCtx()->objectAt(id)->as<Column>()->name();
+  const auto column = queryCtx()->objectAt(id)->as<Column>();
 
   BitSet set = table->columnSubfields(id, false, false);
 
@@ -58,7 +59,7 @@ std::vector<common::Subfield> columnSubfields(BaseTableCP table, int32_t id) {
     auto steps = queryCtx()->pathById(id)->steps();
     std::vector<std::unique_ptr<common::Subfield::PathElement>> elements;
     elements.push_back(
-        std::make_unique<common::Subfield::NestedField>(columnName));
+        std::make_unique<common::Subfield::NestedField>(column->name()));
     bool first = true;
     for (auto& step : steps) {
       switch (step.kind) {
@@ -74,12 +75,11 @@ std::vector<common::Subfield> columnSubfields(BaseTableCP table, int32_t id) {
                 std::make_unique<common::Subfield::AllSubscripts>());
             break;
           }
-          if (first &&
-              optimization->options().isMapAsStruct(
-                  table->schemaTable->name, columnName)) {
-            elements.push_back(std::make_unique<common::Subfield::NestedField>(
-                step.field ? std::string(step.field)
-                           : fmt::format("{}", step.id)));
+          if (first && optimization->isMapAsStruct(column)) {
+            elements.push_back(
+                std::make_unique<common::Subfield::NestedField>(
+                    step.field ? std::string(step.field)
+                               : fmt::format("{}", step.id)));
             break;
           }
           if (step.field) {
@@ -239,9 +239,10 @@ RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) {
 
       auto runnerTable = schemaTable->connectorTable;
       if (runnerTable) {
-        auto* runnerColumn = runnerTable->findColumn(std::string(
-            column->topColumn() ? column->topColumn()->name()
-                                : column->name()));
+        auto* runnerColumn = runnerTable->findColumn(
+            std::string(
+                column->topColumn() ? column->topColumn()->name()
+                                    : column->name()));
         VELOX_CHECK_NOT_NULL(runnerColumn);
       }
     }
@@ -364,9 +365,7 @@ ToVelox::pathToGetter(ColumnCP column, PathCP path, core::TypedExprPtr field) {
   // becomes a struct getter.
   auto alterStep = [&](ColumnCP, const Step& step, Step& newStep) {
     auto* rel = column->relation();
-    if (rel->is(PlanType::kTableNode) &&
-        isMapAsStruct(
-            rel->as<BaseTable>()->schemaTable->name, column->name())) {
+    if (rel->is(PlanType::kTableNode) && isMapAsStruct(column)) {
       // This column is a map to project out as struct.
       newStep.kind = StepKind::kField;
       if (step.field) {
@@ -418,9 +417,28 @@ core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
     case PlanType::kCallExpr: {
       std::vector<core::TypedExprPtr> inputs;
       auto call = expr->as<Call>();
-      const auto& builtinNames = queryCtx()->optimization()->builtinNames();
 
-      if (call->name() == builtinNames.in) {
+      /// Subscript over a struct makes requires a FieldAccessTypedExpr or
+      /// DereferenceTypedExpr depending on the type of the constant.
+      if (call->name() == Names::kSubscript &&
+          call->args()[0]->value().type->kind() == TypeKind::ROW) {
+        VELOX_CHECK(call->args()[1]->is(PlanType::kLiteralExpr));
+        auto* field = &call->args()[1]->as<Literal>()->literal();
+
+        if (field->kind() == TypeKind::VARCHAR) {
+          return std::make_shared<core::FieldAccessTypedExpr>(
+              toTypePtr(expr->value().type),
+              toTypedExpr(call->args()[0]),
+              field->value<TypeKind::VARCHAR>());
+        }
+        return std::make_shared<core::DereferenceTypedExpr>(
+            toTypePtr(expr->value().type),
+            toTypedExpr(call->args()[0]),
+            integerValue(field));
+        break;
+      }
+
+      if (call->name() == Names::kIn) {
         VELOX_USER_CHECK_GE(call->args().size(), 2);
         inputs.push_back(toTypedExpr(call->args().at(0)));
         inputs.push_back(createArrayForInList(*call, inputs.back()->type()));
@@ -430,32 +448,18 @@ core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
         }
       }
 
-      if (call->name() == builtinNames.cast) {
+      if (call->name() == Names::kCast) {
         return std::make_shared<core::CastTypedExpr>(
             toTypePtr(expr->value().type), std::move(inputs), false);
       }
 
-      if (call->name() == builtinNames.tryCast) {
+      if (call->name() == Names::kTryCast) {
         return std::make_shared<core::CastTypedExpr>(
             toTypePtr(expr->value().type), std::move(inputs), true);
       }
 
       return std::make_shared<core::CallTypedExpr>(
           toTypePtr(expr->value().type), std::move(inputs), call->name());
-    }
-    case PlanType::kFieldExpr: {
-      auto* field = expr->as<Field>()->field();
-      if (field) {
-        return std::make_shared<core::FieldAccessTypedExpr>(
-            toTypePtr(expr->value().type),
-            toTypedExpr(expr->as<Field>()->base()),
-            field);
-      }
-      return std::make_shared<core::DereferenceTypedExpr>(
-          toTypePtr(expr->value().type),
-          toTypedExpr(expr->as<Field>()->base()),
-          expr->as<Field>()->index());
-      break;
     }
     case PlanType::kLiteralExpr: {
       auto literal = expr->as<Literal>();
@@ -527,8 +531,9 @@ class TempProjections {
       exprs_.push_back(queryCtx()->optimization()->toTypedExpr(expr));
       names_.push_back(
           optName ? *optName : fmt::format("__r{}", nextChannel_ - 1));
-      fieldRefs_.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-          toTypePtr(expr->value().type), names_.back()));
+      fieldRefs_.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              toTypePtr(expr->value().type), names_.back()));
       return fieldRefs_.back();
     }
     auto fieldRef = fieldRefs_[it->second];
@@ -958,7 +963,7 @@ RowTypePtr ToVelox::subfieldPushdownScanType(
       top.add(topColumn);
       topColumns.push_back(topColumn);
       names.push_back(topColumn->name());
-      if (isMapAsStruct(baseTable->schemaTable->name, topColumn->name())) {
+      if (isMapAsStruct(topColumn)) {
         types.push_back(skylineStruct(baseTable, topColumn));
         typeMap[topColumn] = types.back();
       } else {
@@ -1402,8 +1407,9 @@ core::PlanNodePtr ToVelox::makeValues(
 
     newValues.reserve(rows->size());
     for (const auto& row : *rows) {
-      newValues.emplace_back(std::dynamic_pointer_cast<RowVector>(
-          BaseVector::wrappedVectorShared(variantToVector(type, row, pool))));
+      newValues.emplace_back(
+          std::dynamic_pointer_cast<RowVector>(BaseVector::wrappedVectorShared(
+              variantToVector(type, row, pool))));
     }
 
   } else {

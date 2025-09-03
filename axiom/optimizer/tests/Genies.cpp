@@ -59,9 +59,46 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<GenieFunction>());
 
+class IdentityFunction : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    VELOX_CHECK_EQ(args.size(), 1);
+
+    auto& input = args[0];
+    if (!result) {
+      // If no result vector provided, just return the input vector directly
+      result = input;
+    } else {
+      // If result vector is provided, copy input to result
+      BaseVector::ensureWritable(rows, input->type(), context.pool(), result);
+      result->copy(input.get(), rows, nullptr);
+    }
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    // T -> T (accepts any type and returns the same type)
+    return {exec::FunctionSignatureBuilder()
+                .typeVariable("T")
+                .returnType("T")
+                .argumentType("T")
+                .build()};
+  }
+};
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_identity,
+    IdentityFunction::signatures(),
+    std::make_unique<IdentityFunction>());
+
 void registerGenieUdfs() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_genie, "genie");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_genie, "exploding_genie");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_identity, "identity");
 }
 
 } // namespace facebook::velox::optimizer::test
