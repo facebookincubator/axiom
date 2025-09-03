@@ -18,12 +18,14 @@ on:
       - main
     paths:
       - axiom/**
+      - velox
       - CMakeLists.txt
       - .github/workflows/build_and_test.yml
       - Makefile
   pull_request:
     paths:
       - axiom/**
+      - velox
       - CMakeLists.txt
       - .github/workflows/build_and_test.yml
       - Makefile
