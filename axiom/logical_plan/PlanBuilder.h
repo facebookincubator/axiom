@@ -113,11 +113,11 @@ class PlanBuilder {
           planNodeIdGenerator{std::make_shared<core::PlanNodeIdGenerator>()},
           nameAllocator{std::make_shared<NameAllocator>()},
           queryCtx{std::move(queryCtxPtr)},
+          hook{std::move(hook)},
           pool{
               queryCtx && queryCtx->pool()
                   ? queryCtx->pool()->addLeafChild("literals")
-                  : nullptr},
-          hook{std::move(hook)} {}
+                  : nullptr} {}
   };
 
   using Scope = std::function<ExprPtr(
