@@ -19,7 +19,7 @@
 namespace facebook::velox::optimizer {
 namespace lp = facebook::velox::logical_plan;
 
-FunctionMetadataCP FunctionRegistry::metadata(const std::string& name) const {
+FunctionMetadataCP FunctionRegistry::metadata(std::string_view name) const {
   auto it = metadata_.find(name);
   if (it == metadata_.end()) {
     return nullptr;
@@ -28,7 +28,7 @@ FunctionMetadataCP FunctionRegistry::metadata(const std::string& name) const {
 }
 
 void FunctionRegistry::registerFunction(
-    const std::string& name,
+    std::string_view name,
     std::unique_ptr<FunctionMetadata> metadata) {
   metadata_[name] = std::move(metadata);
 }
@@ -39,11 +39,7 @@ FunctionRegistry* FunctionRegistry::instance() {
   return registry.get();
 }
 
-FunctionMetadataCP functionMetadata(Name name) {
-  return FunctionRegistry::instance()->metadata(name);
-}
-
-FunctionMetadataCP functionMetadata(const std::string& name) {
+FunctionMetadataCP functionMetadata(std::string_view name) {
   return FunctionRegistry::instance()->metadata(name);
 }
 

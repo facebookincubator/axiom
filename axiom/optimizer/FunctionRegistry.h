@@ -95,20 +95,18 @@ using FunctionMetadataCP = const FunctionMetadata*;
 
 class FunctionRegistry {
  public:
-  FunctionMetadataCP metadata(const std::string& name) const;
+  FunctionMetadataCP metadata(std::string_view name) const;
 
   void registerFunction(
-      const std::string& function,
+      std::string_view function,
       std::unique_ptr<FunctionMetadata> metadata);
 
   static FunctionRegistry* instance();
 
  private:
-  std::unordered_map<std::string, std::unique_ptr<FunctionMetadata>> metadata_;
+  folly::F14FastMap<std::string, std::unique_ptr<FunctionMetadata>> metadata_;
 };
 
-FunctionMetadataCP functionMetadata(Name name);
-
-FunctionMetadataCP functionMetadata(const std::string& name);
+FunctionMetadataCP functionMetadata(std::string_view name);
 
 } // namespace facebook::velox::optimizer
