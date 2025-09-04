@@ -89,12 +89,10 @@ class LogicalPlanNode {
     return kind_ == kind;
   }
 
-  // TODO: better to return reference to avoid ability to check result
   template <typename T>
   const T* asUnchecked() const {
     static_assert(std::is_base_of_v<LogicalPlanNode, T>);
-    VELOX_DCHECK(dynamic_cast<const T*>(this));
-    return static_cast<const T*>(this);
+    return dynamic_cast<const T*>(this);
   }
 
   const std::string& id() const {
