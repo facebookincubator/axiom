@@ -43,23 +43,23 @@ namespace {
 
 class UniqueNameChecker {
  public:
-  void add(const std::string& name) {
-    VELOX_USER_CHECK(!name.empty(), "Name must not be empty");
-    VELOX_USER_CHECK(names_.insert(name).second, "Duplicate name: {}", name);
+  static void check(std::span<const std::string> names) {
+    UniqueNameChecker{}.addAll(names);
   }
 
-  void addAll(const std::vector<std::string>& names) {
+ private:
+  void add(std::string_view name) {
+    VELOX_USER_CHECK(!name.empty(), "Name must not be empty");
+    VELOX_USER_CHECK(names_.emplace(name).second, "Duplicate name: {}", name);
+  }
+
+  void addAll(std::span<const std::string> names) {
     for (const auto& name : names) {
       add(name);
     }
   }
 
-  static void check(const std::vector<std::string>& names) {
-    UniqueNameChecker{}.addAll(names);
-  }
-
- private:
-  std::unordered_set<std::string> names_;
+  folly::F14FastSet<std::string_view> names_;
 };
 
 RowTypePtr getType(const std::vector<RowVectorPtr>& values) {
@@ -69,41 +69,38 @@ RowTypePtr getType(const std::vector<RowVectorPtr>& values) {
 
 } // namespace
 
-ValuesNode::ValuesNode(
-    const std::string& id,
-    const RowTypePtr& rowType,
-    Rows rows)
-    : LogicalPlanNode{NodeKind::kValues, id, {}, rowType},
+ValuesNode::ValuesNode(std::string id, RowTypePtr rowType, Rows rows)
+    : LogicalPlanNode{NodeKind::kValues, std::move(id), {}, std::move(rowType)},
       cardinality_{rows.size()},
       data_{std::move(rows)} {
-  UniqueNameChecker::check(rowType->names());
+  UniqueNameChecker::check(outputType_->names());
 
   for (const auto& row : std::get<Rows>(data_)) {
     VELOX_USER_CHECK(
-        row.isTypeCompatible(rowType),
+        row.isTypeCompatible(outputType_),
         "All rows should have compatible types: {} vs. {}",
         row.inferType()->toString(),
-        rowType->toString());
+        outputType_->toString());
   }
 }
 
-ValuesNode::ValuesNode(const std::string& id, Values values)
-    : LogicalPlanNode{NodeKind::kValues, id, {}, getType(values)},
+ValuesNode::ValuesNode(std::string id, Values values)
+    : LogicalPlanNode{NodeKind::kValues, std::move(id), {}, getType(values)},
       cardinality_{[&] {
         uint64_t cardinality = 0;
         for (const auto& value : values) {
           VELOX_USER_CHECK_NOT_NULL(value);
           VELOX_USER_CHECK(
-              outputType()->equivalent(*value->type()),
+              outputType_->equivalent(*value->type()),
               "All values should have equivalent types: {} vs. {}",
-              outputType()->toString(),
+              outputType_->toString(),
               value->type()->toString());
           cardinality += value->size();
         }
         return cardinality;
       }()},
       data_{std::move(values)} {
-  UniqueNameChecker::check(outputType()->names());
+  UniqueNameChecker::check(outputType_->names());
 }
 
 void ValuesNode::accept(
@@ -244,18 +241,18 @@ const auto& setOperationNames() {
 VELOX_DEFINE_ENUM_NAME(SetOperation, setOperationNames)
 
 SetNode::SetNode(
-    const std::string& id,
-    const std::vector<LogicalPlanNodePtr>& inputs,
+    std::string id,
+    std::vector<LogicalPlanNodePtr> inputs,
     SetOperation operation)
-    : LogicalPlanNode(NodeKind::kSet, id, inputs, inputs.at(0)->outputType()),
+    : LogicalPlanNode{NodeKind::kSet, std::move(id), std::move(inputs)},
       operation_{operation} {
   VELOX_USER_CHECK_GE(
-      inputs.size(), 2, "Set operation requires at least 2 inputs");
+      inputs_.size(), 2, "Set operation requires at least 2 inputs");
 
-  const auto firstRowType = inputs.at(0)->outputType();
+  const auto firstRowType = inputs_[0]->outputType();
 
-  for (auto i = 1; i < inputs.size(); ++i) {
-    const auto& rowType = inputs.at(i)->outputType();
+  for (size_t i = 1; i < inputs_.size(); ++i) {
+    const auto& rowType = inputs_[i]->outputType();
 
     // The names are different, but types must be the same.
     VELOX_USER_CHECK(
@@ -263,7 +260,7 @@ SetNode::SetNode(
         "Output schemas of all inputs to a Set operation must match");
 
     // Individual column types must match exactly.
-    for (auto j = 0; j < firstRowType->size(); ++j) {
+    for (uint32_t j = 0; j < firstRowType->size(); ++j) {
       VELOX_USER_CHECK(
           *firstRowType->childAt(j) == *rowType->childAt(j),
           "Output schemas of all inputs to a Set operation must match: {} vs. {} at {}.{}",
@@ -316,29 +313,29 @@ RowTypePtr UnnestNode::makeOutputType(
   types = inputType->children();
 
   const auto numUnnest = unnestExpressions.size();
-  for (auto i = 0; i < numUnnest; ++i) {
-    const auto& type = unnestExpressions.at(i)->type();
+  for (size_t i = 0; i < numUnnest; ++i) {
+    const auto& type = unnestExpressions[i]->type();
 
     VELOX_USER_CHECK(
         type->isArray() || type->isMap(),
         "A column to unnest must be an ARRAY or a MAP: {}",
         type->toString());
 
-    const auto& outputNames = unnestedNames.at(i);
+    const auto& outputNames = unnestedNames[i];
     const auto& numOutput = outputNames.size();
 
     if (flattenArrayOfRows && type->isArray() && type->childAt(0)->isRow()) {
       const auto& rowType = type->childAt(0);
       VELOX_USER_CHECK_EQ(numOutput, rowType->size());
 
-      for (auto j = 0; j < numOutput; ++j) {
-        names.push_back(outputNames.at(j));
+      for (size_t j = 0; j < numOutput; ++j) {
+        names.push_back(outputNames[j]);
         types.push_back(rowType->childAt(j));
       }
     } else {
       VELOX_USER_CHECK_EQ(numOutput, type->size());
-      for (auto j = 0; j < numOutput; ++j) {
-        names.push_back(outputNames.at(j));
+      for (size_t j = 0; j < numOutput; ++j) {
+        names.push_back(outputNames[j]);
         types.push_back(type->childAt(j));
       }
     }
