@@ -469,7 +469,7 @@ ExprCP ToGraph::makeGettersOverSkyline(
         case StepKind::kCardinality: {
           expr = make<Call>(
               cardinality_,
-              Value(toType(INTEGER()), 1),
+              Value(toType(BIGINT()), 1),
               ExprVector{expr},
               FunctionSet());
           break;
