@@ -211,7 +211,8 @@ bool ToGraph::isSubfield(
     return true;
   }
 
-  if (const auto* call = expr->asUnchecked<lp::CallExpr>()) {
+  if (expr->isCall()) {
+    const auto* call = expr->asUnchecked<lp::CallExpr>();
     auto name = toName(call->name());
     if (name == subscript_ || name == elementAt_) {
       auto subscript = translateExpr(call->inputAt(1));
@@ -253,9 +254,11 @@ void ToGraph::getExprForField(
   for (;;) {
     auto& name = field->asUnchecked<lp::InputReferenceExpr>()->name();
     auto ordinal = context->outputType()->getChildIdx(name);
-    if (const auto* project = context->asUnchecked<lp::ProjectNode>()) {
+    if (context->is(lp::NodeKind::kProject)) {
+      const auto* project = context->asUnchecked<lp::ProjectNode>();
       auto& def = project->expressions()[ordinal];
-      if (const auto* innerField = def->asUnchecked<lp::InputReferenceExpr>()) {
+      if (def->isInputReference()) {
+        const auto* innerField = def->asUnchecked<lp::InputReferenceExpr>();
         context = context->inputAt(0).get();
         field = innerField;
         continue;
@@ -523,7 +526,8 @@ BitSet ToGraph::functionSubfields(
 }
 
 void ToGraph::ensureFunctionSubfields(const lp::ExprPtr& expr) {
-  if (const auto* call = expr->asUnchecked<lp::CallExpr>()) {
+  if (expr->isCall()) {
+    const auto* call = expr->asUnchecked<lp::CallExpr>();
     if (functionMetadata(exec::sanitizeName(call->name()))) {
       if (!translatedSubfieldFuncs_.contains(call)) {
         translateExpr(expr);
@@ -669,7 +673,8 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
   ToGraphContext ctx(expr.get());
   ExceptionContextSetter exceptionContext(makeExceptionContext(&ctx));
 
-  const auto* call = expr->asUnchecked<lp::CallExpr>();
+  const auto* call =
+      expr->isCall() ? expr->asUnchecked<lp::CallExpr>() : nullptr;
   std::string callName;
   if (call) {
     callName = exec::sanitizeName(call->name());
@@ -682,7 +687,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     }
   }
 
-  const lp::SpecialFormExpr* specialForm = expr->isSpecialForm()
+  const auto* specialForm = expr->isSpecialForm()
       ? expr->asUnchecked<lp::SpecialFormExpr>()
       : nullptr;
 
@@ -1320,7 +1325,8 @@ PlanObjectP ToGraph::addLimit(const lp::LimitNode& limitNode) {
 namespace {
 
 bool hasNondeterministic(const lp::ExprPtr& expr) {
-  if (const auto* call = expr->asUnchecked<lp::CallExpr>()) {
+  if (expr->isCall()) {
+    const auto* call = expr->asUnchecked<lp::CallExpr>();
     if (functionBits(toName(call->name()))
             .contains(FunctionSet::kNonDeterministic)) {
       return true;

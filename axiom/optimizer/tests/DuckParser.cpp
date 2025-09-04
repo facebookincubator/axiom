@@ -104,13 +104,15 @@ lp::ConstantExprPtr tryParseInterval(
     const lp::ExprPtr& input) {
   std::optional<int64_t> value;
 
-  if (const auto* constant = input->asUnchecked<lp::ConstantExpr>()) {
+  if (input->isConstant()) {
+    const auto* constant = input->asUnchecked<lp::ConstantExpr>();
     value = extractInteger(*constant);
-  } else if (
-      const auto* specialForm = input->asUnchecked<lp::SpecialFormExpr>()) {
+  } else if (input->isSpecialForm()) {
+    const auto* specialForm = input->asUnchecked<lp::SpecialFormExpr>();
     if (specialForm->form() == lp::SpecialForm::kCast) {
-      if (auto constant =
-              specialForm->inputAt(0)->asUnchecked<lp::ConstantExpr>()) {
+      const auto& arg = *specialForm->inputAt(0);
+      if (arg.isConstant()) {
+        const auto* constant = arg.asUnchecked<lp::ConstantExpr>();
         value = extractInteger(*constant);
       }
     }
@@ -435,7 +437,8 @@ lp::LogicalPlanNodePtr toPlanNode(
       toExprs(logicalAggregate.groups, sources[0]->outputType());
 
   for (const auto& key : groupingKeys) {
-    if (auto* inputReference = key->asUnchecked<lp::InputReferenceExpr>()) {
+    if (key->isInputReference()) {
+      const auto* inputReference = key->asUnchecked<lp::InputReferenceExpr>();
       outputNames.push_back(inputReference->name());
     } else {
       queryContext.nextColumnName("_gk");
@@ -481,7 +484,8 @@ lp::LogicalPlanNodePtr toPlanNode(
       toExprs(logicalDistinct.distinct_targets, sources[0]->outputType());
 
   for (const auto& key : groupingKeys) {
-    if (auto* inputReference = key->asUnchecked<lp::InputReferenceExpr>()) {
+    if (key->isInputReference()) {
+      const auto* inputReference = key->asUnchecked<lp::InputReferenceExpr>();
       outputNames.push_back(inputReference->name());
     } else {
       queryContext.nextColumnName("_gk");
