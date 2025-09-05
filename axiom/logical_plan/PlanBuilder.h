@@ -188,7 +188,9 @@ class PlanBuilder {
 
   PlanBuilder& filter(const ExprApi& predicate);
 
-  PlanBuilder& project(const std::vector<std::string>& projections);
+  PlanBuilder& project(const std::vector<std::string>& projections) {
+    return project(parse(projections));
+  }
 
   PlanBuilder& project(std::initializer_list<std::string> projections) {
     return project(std::vector<std::string>{projections});
@@ -270,11 +272,15 @@ class PlanBuilder {
   /// @param unnestExprs A list of constant expressions to unnest.
   PlanBuilder& unnest(
       const std::vector<std::string>& unnestExprs,
-      bool withOrdinality = false);
+      bool withOrdinality = false) {
+    return unnest(parse(unnestExprs), withOrdinality);
+  }
 
   PlanBuilder& unnest(
       const std::vector<ExprApi>& unnestExprs,
-      bool withOrdinality = false);
+      bool withOrdinality = false) {
+    return unnest(unnestExprs, withOrdinality, std::nullopt, {});
+  }
 
   /// An alternative way to specify aliases for unnested columns. A preferred
   /// way is by using ExprApi::unnestAs.

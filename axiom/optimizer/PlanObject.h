@@ -34,6 +34,7 @@ enum class PlanType : uint32_t {
   // Plan nodes.
   kTableNode,
   kValuesTableNode,
+  kUnnestTableNode,
   kDerivedTableNode,
   kAggregationNode,
   kProjectNode,

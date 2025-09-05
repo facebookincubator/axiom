@@ -481,6 +481,26 @@ std::string Repartition::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+namespace {
+ColumnVector concatColumns(const ColumnVector& lhs, const ColumnVector& rhs) {
+  ColumnVector result;
+  result.reserve(lhs.size() + rhs.size());
+  result.insert(result.end(), lhs.begin(), lhs.end());
+  result.insert(result.end(), rhs.begin(), rhs.end());
+  return result;
+}
+} // namespace
+
+Unnest::Unnest(
+    RelationOpPtr input,
+    ColumnVector replicateColumns,
+    ExprVector unnestExprs,
+    ColumnVector unnestedColumns)
+    : RelationOp{RelType::kUnnest, input, input->distribution(), concatColumns(replicateColumns, unnestedColumns)},
+      replicateColumns{std::move(replicateColumns)},
+      unnestExprs{std::move(unnestExprs)},
+      unnestedColumns{std::move(unnestedColumns)} {}
+
 Aggregation::Aggregation(
     RelationOpPtr input,
     ExprVector groupingKeysVector,
@@ -514,6 +534,25 @@ Aggregation::Aggregation(
 
   float rowBytes = byteSize(groupingKeys) + byteSize(aggregates);
   cost_.totalBytes = nOut * rowBytes;
+}
+
+std::string Unnest::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (recursive) {
+    out << input()->toString(true, detail) << " ";
+  }
+  out << "unnest ";
+  printCost(detail, out);
+  if (detail) {
+    out << "replicate columns: "
+        << itemsToString(replicateColumns.data(), replicateColumns.size());
+    out << ", unnest exprs: "
+        << itemsToString(unnestExprs.data(), unnestExprs.size());
+    out << ", unnested columns: "
+        << itemsToString(unnestedColumns.data(), unnestedColumns.size())
+        << std::endl;
+  }
+  return out.str();
 }
 
 const QGString& Aggregation::historyKey() const {

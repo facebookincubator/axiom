@@ -486,10 +486,11 @@ class JoinEdge {
         rightOptional_(spec.rightOptional),
         rightExists_(spec.rightExists),
         rightNotExists_(spec.rightNotExists),
-        markColumn_(spec.markColumn),
-        directed_(spec.directed) {
+        directed_(spec.directed),
+        markColumn_(spec.markColumn) {
     VELOX_CHECK_NOT_NULL(rightTable);
-    VELOX_CHECK(directed_ || filter_.empty() || !isInner());
+    // filter_ is only for non-inner joins.
+    VELOX_CHECK(filter_.empty() || !isInner());
   }
 
   static JoinEdge* makeInner(PlanObjectCP leftTable, PlanObjectCP rightTable) {
@@ -506,12 +507,30 @@ class JoinEdge {
     return make<JoinEdge>(leftTable, rightTable, Spec{.rightNotExists = true});
   }
 
+  static JoinEdge* makeUnnest(
+      PlanObjectCP leftTable,
+      PlanObjectCP rightTable,
+      ExprVector unnestExprs) {
+    VELOX_DCHECK_NOT_NULL(leftTable);
+    auto* edge = make<JoinEdge>(leftTable, rightTable, Spec{.directed = true});
+    edge->leftKeys_ = std::move(unnestExprs);
+    // TODO Not sure to what values fanout need to be set,
+    // (1, 1) looks ok, but tests don't produce expected plans.
+    edge->setFanouts(2, 2);
+    return edge;
+  }
+
   PlanObjectCP leftTable() const {
     return leftTable_;
   }
 
   PlanObjectCP rightTable() const {
     return rightTable_;
+  }
+
+  size_t numKeys() const {
+    VELOX_DCHECK_LE(rightKeys_.size(), leftKeys_.size());
+    return rightKeys_.size();
   }
 
   const ExprVector& leftKeys() const {
@@ -536,6 +555,10 @@ class JoinEdge {
 
   bool rightOptional() const {
     return rightOptional_;
+  }
+
+  bool directed() const {
+    return directed_;
   }
 
   void addEquality(ExprCP left, ExprCP right, bool update = false);
@@ -634,11 +657,8 @@ class JoinEdge {
 
   PlanObjectCP const rightTable_;
 
-  // 'rightKeys' select max 1 'leftTable' row.
-  bool leftUnique_{false};
-
-  // 'leftKeys' select max 1 'rightTable' row.
-  bool rightUnique_{false};
+  // Join condition for any non-equality conditions for non-inner joins.
+  const ExprVector filter_;
 
   // Number of right side rows selected for one row on the left.
   float lrFanout_{1};
@@ -649,8 +669,11 @@ class JoinEdge {
   // True if 'lrFanout_' and 'rlFanout_' are set by setFanouts.
   bool fanoutsFixed_{false};
 
-  // Join condition for any non-equality conditions for non-inner joins.
-  const ExprVector filter_;
+  // 'rightKeys' select max 1 'leftTable' row.
+  bool leftUnique_{false};
+
+  // 'leftKeys' select max 1 'rightTable' row.
+  bool rightUnique_{false};
 
   // True if an unprobed right side row produces a result with right side
   // columns set and left side columns as null (right outer join). Possible only
@@ -669,12 +692,12 @@ class JoinEdge {
   // True if produces a result for left if no match on the right.
   const bool rightNotExists_;
 
-  // Flag to set if right side has a match.
-  ColumnCP const markColumn_;
-
   // If directed non-outer edge. For example unnest or inner dependent on
   // optional of outer.
-  bool directed_;
+  const bool directed_;
+
+  // Flag to set if right side has a match.
+  ColumnCP const markColumn_;
 };
 
 using JoinEdgeP = JoinEdge*;
@@ -755,6 +778,33 @@ struct ValuesTable : public PlanObject {
 
   float cardinality() const {
     return static_cast<float>(values.cardinality());
+  }
+
+  bool isTable() const override {
+    return true;
+  }
+
+  void addJoinedBy(JoinEdgeP join);
+
+  std::string toString() const override;
+};
+
+struct UnnestTable : public PlanObject {
+  explicit UnnestTable() : PlanObject{PlanType::kUnnestTableNode} {}
+
+  // Correlation name, distinguishes between uses of the same unnest node.
+  Name cname{nullptr};
+
+  /// All unnested columns from corresponding unnest node.
+  /// All replicated columns is on other (left) side of the join edge.
+  ColumnVector columns;
+
+  // All joins where 'this' is an end point.
+  JoinEdgeVector joinedBy;
+
+  float cardinality() const {
+    // TODO Should be changed later to actual cardinality.
+    return 1;
   }
 
   bool isTable() const override {

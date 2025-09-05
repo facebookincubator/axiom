@@ -311,6 +311,10 @@ class ToGraph {
       bool isTopLevel,
       bool& isLeftLeaf);
 
+  void translateUnnest(
+      const logical_plan::UnnestNode& logicalUnnest,
+      bool isNewDt);
+
   AggregationPlanCP translateAggregation(
       const logical_plan::AggregateNode& aggregation);
 
@@ -358,6 +362,12 @@ class ToGraph {
 
   void markFieldAccessed(
       const logical_plan::ProjectNode& project,
+      int32_t ordinal,
+      std::vector<Step>& steps,
+      bool isControl);
+
+  void markFieldAccessed(
+      const logical_plan::UnnestNode& unnest,
       int32_t ordinal,
       std::vector<Step>& steps,
       bool isControl);

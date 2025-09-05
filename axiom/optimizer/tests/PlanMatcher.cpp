@@ -304,6 +304,57 @@ class ParallelProjectMatcher : public PlanMatcherImpl<ParallelProjectNode> {
   const std::vector<std::string> expressions_;
 };
 
+class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
+ public:
+  explicit UnnestMatcher(const std::shared_ptr<PlanMatcher>& matcher)
+      : PlanMatcherImpl<UnnestNode>({matcher}) {}
+
+  UnnestMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      const std::vector<std::string>& replicateExprs,
+      const std::vector<std::string>& unnestExprs)
+      : PlanMatcherImpl<UnnestNode>({matcher}),
+        replicateExprs_{replicateExprs},
+        unnestExprs_{unnestExprs} {}
+
+  bool matchDetails(const UnnestNode& plan) const override {
+    if (!replicateExprs_.empty()) {
+      EXPECT_EQ(plan.replicateVariables().size(), replicateExprs_.size());
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+
+      for (auto i = 0; i < replicateExprs_.size(); ++i) {
+        auto expected = parse::parseExpr(replicateExprs_[i], {});
+        EXPECT_EQ(
+            plan.replicateVariables()[i]->toString(), expected->toString());
+      }
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+    }
+    if (!unnestExprs_.empty()) {
+      EXPECT_EQ(plan.unnestVariables().size(), unnestExprs_.size());
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+
+      for (auto i = 0; i < unnestExprs_.size(); ++i) {
+        auto expected = parse::parseExpr(unnestExprs_[i], {});
+        EXPECT_EQ(plan.unnestVariables()[i]->toString(), expected->toString());
+      }
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+ private:
+  const std::vector<std::string> replicateExprs_;
+  const std::vector<std::string> unnestExprs_;
+};
+
 class LimitMatcher : public PlanMatcherImpl<LimitNode> {
  public:
   explicit LimitMatcher(const std::shared_ptr<PlanMatcher>& matcher)
@@ -542,6 +593,21 @@ PlanMatcherBuilder& PlanMatcherBuilder::parallelProject(
     const std::vector<std::string>& expressions) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<ParallelProjectMatcher>(matcher_, expressions);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::unnest() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<UnnestMatcher>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::unnest(
+    const std::vector<std::string>& replicateExprs,
+    const std::vector<std::string>& unnestExprs) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<UnnestMatcher>(matcher_, replicateExprs, unnestExprs);
   return *this;
 }
 

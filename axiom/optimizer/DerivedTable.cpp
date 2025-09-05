@@ -91,7 +91,7 @@ void DerivedTable::addImpliedJoins() {
   EdgeSet edges;
   for (auto& join : joins) {
     if (join->isInner()) {
-      for (auto i = 0; i < join->leftKeys().size(); ++i) {
+      for (size_t i = 0; i < join->numKeys(); ++i) {
         const auto* leftKey = join->leftKeys()[i];
         const auto* rightKey = join->rightKeys()[i];
         if (leftKey->isColumn() && rightKey->isColumn()) {
@@ -105,7 +105,7 @@ void DerivedTable::addImpliedJoins() {
   JoinEdgeVector joinsCopy = joins;
   for (auto& join : joinsCopy) {
     if (join->isInner()) {
-      for (auto i = 0; i < join->leftKeys().size(); ++i) {
+      for (size_t i = 0; i < join->numKeys(); ++i) {
         const auto* leftKey = join->leftKeys()[i];
         const auto* rightKey = join->rightKeys()[i];
         if (leftKey->isColumn() && rightKey->isColumn()) {
@@ -147,7 +147,7 @@ JoinEdgeP makeExists(PlanObjectCP table, const PlanObjectSet& tables) {
         continue;
       }
       auto* exists = JoinEdge::makeExists(table, join->rightTable());
-      for (auto i = 0; i < join->leftKeys().size(); ++i) {
+      for (size_t i = 0; i < join->numKeys(); ++i) {
         exists->addEquality(join->leftKeys()[i], join->rightKeys()[i]);
       }
       return exists;
@@ -159,7 +159,7 @@ JoinEdgeP makeExists(PlanObjectCP table, const PlanObjectSet& tables) {
       }
 
       auto* exists = JoinEdge::makeExists(table, join->leftTable());
-      for (auto i = 0; i < join->leftKeys().size(); ++i) {
+      for (size_t i = 0; i < join->numKeys(); ++i) {
         exists->addEquality(join->rightKeys()[i], join->leftKeys()[i]);
       }
       return exists;
@@ -212,15 +212,19 @@ void DerivedTable::linkTablesToJoins() {
   // from all the tables it depends on.
   for (auto join : joins) {
     PlanObjectSet tables;
-    for (auto key : join->leftKeys()) {
-      tables.unionSet(key->allTables());
-    }
-    for (auto key : join->rightKeys()) {
-      tables.unionSet(key->allTables());
-    }
-    if (!join->filter().empty()) {
-      for (auto& conjunct : join->filter()) {
-        tables.unionSet(conjunct->allTables());
+    if (join->isInner() && join->directed()) {
+      tables.add(join->leftTable());
+    } else {
+      for (auto key : join->leftKeys()) {
+        tables.unionSet(key->allTables());
+      }
+      for (auto key : join->rightKeys()) {
+        tables.unionSet(key->allTables());
+      }
+      if (!join->filter().empty()) {
+        for (auto& conjunct : join->filter()) {
+          tables.unionSet(conjunct->allTables());
+        }
       }
     }
     tables.forEachMutable([&](PlanObjectP table) {
@@ -228,6 +232,8 @@ void DerivedTable::linkTablesToJoins() {
         table->as<BaseTable>()->addJoinedBy(join);
       } else if (table->is(PlanType::kValuesTableNode)) {
         table->as<ValuesTable>()->addJoinedBy(join);
+      } else if (table->is(PlanType::kUnnestTableNode)) {
+        table->as<UnnestTable>()->addJoinedBy(join);
       } else {
         VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
         table->as<DerivedTable>()->addJoinedBy(join);
@@ -277,7 +283,7 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
   }
   auto* joinWithDt = JoinEdge::makeExists(firstTable, existsDt);
   joinWithDt->setFanouts(existsFanout, 1);
-  for (auto i = 0; i < existsJoin->leftKeys().size(); ++i) {
+  for (size_t i = 0; i < existsJoin->numKeys(); ++i) {
     joinWithDt->addEquality(existsJoin->leftKeys()[i], existsDt->columns[i]);
   }
   return std::make_pair(existsDt, joinWithDt);
@@ -733,6 +739,10 @@ void DerivedTable::distributeConjuncts() {
 
       if (tables[0]->is(PlanType::kValuesTableNode)) {
         continue; // ValuesTable does not have filter push-down.
+      }
+
+      if (tables[0]->is(PlanType::kUnnestTableNode)) {
+        continue; // UnnestTable does not have filter push-down.
       }
 
       if (tables[0]->is(PlanType::kDerivedTableNode)) {

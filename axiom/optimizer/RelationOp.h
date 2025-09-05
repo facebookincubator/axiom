@@ -92,6 +92,7 @@ enum class RelType {
   kUnionAll,
   kLimit,
   kValues,
+  kUnnest,
 };
 
 VELOX_DECLARE_ENUM_NAME(RelType)
@@ -426,6 +427,22 @@ struct HashBuild : public RelationOp {
 };
 
 using HashBuildCP = const HashBuild*;
+
+struct Unnest : public RelationOp {
+  Unnest(
+      RelationOpPtr input,
+      ColumnVector replicateColumns,
+      ExprVector unnestExprs,
+      ColumnVector unnestedColumns);
+
+  ColumnVector replicateColumns;
+  ExprVector unnestExprs;
+  // Columns correspond to expressions but not 1:1,
+  // it can be 2:1 (for MAP) and 1:1 (for ARRAY).
+  ColumnVector unnestedColumns;
+
+  std::string toString(bool recursive, bool detail) const override;
+};
 
 /// Represents aggregation with or without grouping.
 struct Aggregation : public RelationOp {

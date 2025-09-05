@@ -448,6 +448,7 @@ TEST_F(PlanPrinterTest, unnest) {
         testing::ElementsAre(
             testing::Eq("- Unnest: -> ROW<e:INTEGER>"),
             testing::Eq("    [e] := [1,2,3]"),
+            testing::Eq("  - Values: 1 rows -> ROW<>"),
             testing::Eq("")));
   }
 
@@ -467,6 +468,7 @@ TEST_F(PlanPrinterTest, unnest) {
             testing::StartsWith("    expr := plus(x, CAST(1 AS INTEGER))"),
             testing::Eq("  - Unnest: -> ROW<x:INTEGER>"),
             testing::Eq("      [x] := [1,2,3]"),
+            testing::Eq("    - Values: 1 rows -> ROW<>"),
             testing::Eq("")));
   }
 
@@ -482,6 +484,7 @@ TEST_F(PlanPrinterTest, unnest) {
         testing::ElementsAre(
             testing::Eq("- Unnest: -> ROW<k:INTEGER,v:INTEGER>"),
             testing::Eq("    [k, v] := map([1,2,3], [10,20,30])"),
+            testing::Eq("  - Values: 1 rows -> ROW<>"),
             testing::Eq("")));
   }
 
@@ -501,6 +504,7 @@ TEST_F(PlanPrinterTest, unnest) {
             testing::StartsWith("    expr := plus(x, y)"),
             testing::Eq("  - Unnest: -> ROW<x:INTEGER,y:INTEGER>"),
             testing::Eq("      [x, y] := map([1,2,3], [10,20,30])"),
+            testing::Eq("    - Values: 1 rows -> ROW<>"),
             testing::Eq("")));
   }
 

@@ -80,6 +80,18 @@ void ToGraph::markFieldAccessed(
 }
 
 void ToGraph::markFieldAccessed(
+    const lp::UnnestNode& unnest,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl) {
+  const auto& input = unnest.onlyInput();
+  if (ordinal < input->outputType()->size()) {
+    const auto ctx = fromNode(input);
+    markFieldAccessed(ctx.sources[0], ordinal, steps, isControl, ctx.toCtx());
+  }
+}
+
+void ToGraph::markFieldAccessed(
     const lp::AggregateNode& agg,
     int32_t ordinal,
     std::vector<Step>& steps,
@@ -158,6 +170,12 @@ void ToGraph::markFieldAccessed(
   if (kind == lp::NodeKind::kProject) {
     const auto* project = source.planNode->asUnchecked<lp::ProjectNode>();
     markFieldAccessed(*project, ordinal, steps, isControl);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kUnnest) {
+    const auto* unnest = source.planNode->asUnchecked<lp::UnnestNode>();
+    markFieldAccessed(*unnest, ordinal, steps, isControl);
     return;
   }
 
@@ -445,13 +463,17 @@ void ToGraph::markControl(const lp::LogicalPlanNode& node) {
       markSubfields(condition, steps, true, fromNodes(join->inputs()).toCtx());
     }
 
+  } else if (kind == lp::NodeKind::kUnnest) {
+    const auto& unnest = node.asUnchecked<lp::UnnestNode>();
+    markColumnSubfields(node.onlyInput(), unnest->unnestExpressions());
+
   } else if (kind == lp::NodeKind::kFilter) {
     const auto& filter = node.asUnchecked<lp::FilterNode>();
     markColumnSubfields(node.onlyInput(), std::array{filter->predicate()});
 
   } else if (kind == lp::NodeKind::kAggregate) {
-    const auto* agg = node.asUnchecked<lp::AggregateNode>();
-    markColumnSubfields(node.onlyInput(), agg->groupingKeys());
+    const auto& agg = *node.asUnchecked<lp::AggregateNode>();
+    markColumnSubfields(node.onlyInput(), agg.groupingKeys());
 
   } else if (kind == lp::NodeKind::kSort) {
     const auto& order = *node.asUnchecked<lp::SortNode>();

@@ -577,9 +577,11 @@ class TempProjections {
     return fieldRef;
   }
 
-  template <typename Result = velox::core::FieldAccessTypedExprPtr>
+  template <
+      typename Result = velox::core::FieldAccessTypedExprPtr,
+      typename Container>
   std::vector<Result> toFieldRefs(
-      const ExprVector& exprs,
+      const Container& exprs,
       const std::vector<std::string>* optNames = nullptr) {
     std::vector<Result> result;
     result.reserve(exprs.size());
@@ -1297,6 +1299,35 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
   return joinNode;
 }
 
+velox::core::PlanNodePtr ToVelox::makeUnnest(
+    const Unnest& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+
+  // We avoid use all of the input columns in the projections
+  // because the unnest op explicitly specify what columns to replicate
+  TempProjections projections{*this, *op.input(), false};
+  auto replicateVariables = projections.toFieldRefs(op.replicateColumns);
+  auto unnestVariables = projections.toFieldRefs(op.unnestExprs);
+  auto project = std::move(projections).maybeProject(std::move(input));
+
+  std::vector<std::string> unnestNames;
+  unnestNames.reserve(op.unnestedColumns.size());
+  for (const auto* column : op.unnestedColumns) {
+    unnestNames.emplace_back(outputName(column));
+  }
+
+  return std::make_shared<velox::core::UnnestNode>(
+      nextId(),
+      std::move(replicateVariables),
+      std::move(unnestVariables),
+      std::move(unnestNames),
+      std::nullopt,
+      std::nullopt,
+      std::move(project));
+}
+
 velox::core::PlanNodePtr ToVelox::makeAggregation(
     const Aggregation& op,
     runner::ExecutableFragment& fragment,
@@ -1562,6 +1593,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeUnionAll(*op->as<UnionAll>(), fragment, stages);
     case RelType::kValues:
       return makeValues(*op->as<Values>(), fragment);
+    case RelType::kUnnest:
+      return makeUnnest(*op->as<Unnest>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));
