@@ -240,13 +240,6 @@ const auto& setOperationNames() {
 
 VELOX_DEFINE_ENUM_NAME(SetOperation, setOperationNames)
 
-SetNode::SetNode(
-    std::string id,
-    const std::vector<LogicalPlanNodePtr>& inputs,
-    SetOperation operation)
-    : LogicalPlanNode{NodeKind::kSet, std::move(id), inputs, makeOutputType(inputs)},
-      operation_{operation} {}
-
 // static
 RowTypePtr SetNode::makeOutputType(
     const std::vector<LogicalPlanNodePtr>& inputs) {

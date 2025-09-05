@@ -544,7 +544,9 @@ class SetNode : public LogicalPlanNode {
   SetNode(
       std::string id,
       const std::vector<LogicalPlanNodePtr>& inputs,
-      SetOperation operation);
+      SetOperation operation)
+      : LogicalPlanNode{NodeKind::kSet, std::move(id), inputs, makeOutputType(inputs)},
+        operation_{operation} {}
 
   SetOperation operation() const {
     return operation_;
