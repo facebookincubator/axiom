@@ -19,29 +19,48 @@
 #include "axiom/optimizer/connectors/ConnectorSplitSource.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/common/base/AsyncSource.h"
+#include "velox/functions/Macros.h"
+#include "velox/functions/Registerer.h"
 
 namespace facebook::velox::optimizer {
 
 namespace {
-// Counter for making unique query ids for sampling.
-int64_t sampleQueryCounter;
+
+template <typename TExec>
+struct HashMix {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const int64_t& firstHash,
+      const arg_type<Variadic<int64_t>>& moreHashes) {
+    result = firstHash;
+    for (const auto& hash : moreHashes) {
+      result = bits::hashMix(result, hash.value());
+    }
+  }
+};
+
+template <typename... T>
+ExprCP makeCall(std::string_view name, const TypePtr& type, T... inputs) {
+  return make<Call>(
+      toName(name),
+      Value(toType(type), 1),
+      ExprVector{inputs...},
+      FunctionSet{});
+}
+
+ExprCP makeCast(const TypePtr& type, ExprCP expr) {
+  return makeCall(SpecialFormCallNames::kCast, type, expr);
+}
 
 Value bigintValue() {
   return Value(toType(BIGINT()), 1);
 }
 
-Value intValue() {
-  return Value(toType(INTEGER()), 1);
-}
-
 ExprCP bigintLit(int64_t n) {
   return make<Literal>(
-      bigintValue(), queryCtx()->registerVariant(std::make_unique<variant>(n)));
-}
-
-ExprCP intLit(int32_t n) {
-  return make<Literal>(
-      intValue(), queryCtx()->registerVariant(std::make_unique<variant>(n)));
+      bigintValue(), queryCtx()->registerVariant(std::make_unique<Variant>(n)));
 }
 
 // Returns an int64 hash with low 28 bits set.
@@ -52,95 +71,54 @@ ExprCP makeHash(ExprCP expr) {
     case TypeKind::TINYINT:
     case TypeKind::SMALLINT:
     case TypeKind::INTEGER:
-      expr = make<Call>(
-          toName("cast"), bigintValue(), ExprVector{expr}, FunctionSet());
+      expr = makeCast(BIGINT(), expr);
       break;
     default: {
-      ExprVector castArgs;
-      castArgs.push_back(make<Call>(
-          toName("cast"),
-          Value(toType(VARCHAR()), 1),
-          castArgs,
-          FunctionSet()));
-
-      ExprVector args;
-      args.push_back(make<Call>(
-          toName("cast"),
-          Value(toType(VARBINARY()), 1),
-          castArgs,
-          FunctionSet()));
-      ExprVector final;
-      final.push_back(make<Call>(
-          toName("crc32"), Value(toType(INTEGER()), 1), args, FunctionSet()));
-      expr = make<Call>(toName("cast"), bigintValue(), final, FunctionSet());
+      auto toVarchar = makeCast(VARCHAR(), expr);
+      auto toVarbinary = makeCast(VARBINARY(), toVarchar);
+      auto crc32 = makeCall("crc32", INTEGER(), toVarbinary);
+      expr = makeCast(BIGINT(), crc32);
     }
   }
 
-  ExprVector andArgs;
-  andArgs.push_back(expr);
-  andArgs.push_back(bigintLit(0x7fffffff));
-  return make<Call>(
-      toName("bitwise_and"), bigintValue(), andArgs, FunctionSet());
+  return makeCall("bitwise_and", BIGINT(), expr, bigintLit(0x7fffffff));
 }
 
-ExprCP scaleTo32(ExprCP value) {
-  ExprVector andArgs;
-  andArgs.push_back(value);
-  andArgs.push_back(bigintLit(0x7fffffff));
-  return make<Call>(
-      toName("bitwise_and"), bigintValue(), andArgs, FunctionSet());
-}
+std::shared_ptr<core::QueryCtx> sampleQueryCtx(const core::QueryCtx& original) {
+  std::atomic<int64_t> kQueryCounter;
 
-ExprCP mul(ExprCP a, int64_t b) {
-  return scaleTo32(make<Call>(
-      toName("multiply"),
-      bigintValue(),
-      ExprVector{a, bigintLit(b)},
-      FunctionSet()));
-}
-
-ExprCP rightShift(ExprCP a, int32_t s) {
-  return make<Call>(
-      toName("bitwise_right_shift"),
-      bigintValue(),
-      ExprVector{a, intLit(s)},
-      FunctionSet());
-}
-
-ExprCP xor64(ExprCP a, ExprCP b) {
-  return make<Call>(
-      toName("bitwise_xor"), bigintValue(), ExprVector{a, b}, FunctionSet());
-}
-
-std::shared_ptr<core::QueryCtx> sampleQueryCtx(
-    std::shared_ptr<core::QueryCtx> original) {
   std::unordered_map<std::string, std::string> empty;
   return core::QueryCtx::create(
-      original->executor(),
+      original.executor(),
       core::QueryConfig(std::move(empty)),
-      original->connectorSessionProperties(),
-      original->cache(),
-      original->pool()->shared_from_this(),
+      original.connectorSessionProperties(),
+      original.cache(),
+      original.pool()->shared_from_this(),
       nullptr,
-      fmt::format("sample:{}", ++sampleQueryCounter));
+      fmt::format("sample:{}", ++kQueryCounter));
 }
-
-using KeyFreq = folly::F14FastMap<uint32_t, uint32_t>;
 
 std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
     SchemaTableCP table,
     const ExprVector& keys,
     int64_t mod,
     int64_t lim) {
+  static folly::once_flag kInitialized;
+  static const char* kHashMix = "$internal$hash_mix";
+
+  folly::call_once(kInitialized, []() {
+    registerFunction<HashMix, int64_t, int64_t, Variadic<int64_t>>({kHashMix});
+  });
+
   auto base = make<BaseTable>();
   base->schemaTable = table;
+
   PlanObjectSet sampleColumns;
-  for (auto& e : keys) {
-    sampleColumns.unionSet(e->columns());
+  for (auto key : keys) {
+    sampleColumns.unionSet(key->columns());
   }
-  ColumnVector columns;
-  sampleColumns.forEach(
-      [&](PlanObjectCP c) { columns.push_back(c->as<Column>()); });
+
+  auto columns = sampleColumns.toObjects<Column>();
   auto index = base->chooseLeafIndex()[0];
   auto* scan = make<TableScan>(
       nullptr,
@@ -150,55 +128,46 @@ std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
       index->table->cardinality,
       columns);
 
-  ExprCP hash = makeHash(keys[0]);
-  if (keys.size() == 1) {
-    hash = mul(hash, 1815531889);
-  } else {
-    auto kMul = 0xeb382d69ULL;
-
-    for (auto i = 1; i < keys.size(); ++i) {
-      auto other = makeHash(keys[i]);
-      auto a = mul(xor64(hash, other), kMul);
-      a = xor64(a, rightShift(a, 15));
-      auto b = mul(xor64(other, a), kMul);
-      b = xor64(b, rightShift(b, 13));
-      hash = mul(b, kMul);
-    }
+  ExprVector hashes;
+  hashes.reserve(keys.size());
+  for (const auto& key : keys) {
+    hashes.emplace_back(makeHash(key));
   }
-  ColumnCP hashCol =
-      make<Column>(toName("hash"), nullptr, bigintValue(), nullptr);
-  RelationOpPtr proj =
-      make<Project>(scan, ExprVector{hash}, ColumnVector{hashCol});
-  ExprCP hashMod = make<Call>(
-      toName("mod"),
-      bigintValue(),
-      ExprVector{hashCol, bigintLit(mod)},
-      FunctionSet());
-  ExprCP filterExpr = make<Call>(
-      toName("lt"),
-      Value(toType(BOOLEAN()), 1),
-      ExprVector{hashMod, bigintLit(lim)},
-      FunctionSet());
-  RelationOpPtr filter = make<Filter>(proj, ExprVector{filterExpr});
+
+  ExprCP hash =
+      make<Call>(toName(kHashMix), bigintValue(), hashes, FunctionSet{});
+
+  ColumnCP hashColumn = make<Column>(toName("hash"), nullptr, hash->value());
+  RelationOpPtr project =
+      make<Project>(scan, ExprVector{hash}, ColumnVector{hashColumn});
+
+  // (hash % mod) < lim
+  ExprCP hashMod = makeCall("mod", BIGINT(), hashColumn, bigintLit(mod));
+  ExprCP filterExpr = makeCall("lt", BOOLEAN(), hashMod, bigintLit(lim));
+  RelationOpPtr filter = make<Filter>(project, ExprVector{filterExpr});
 
   auto plan = queryCtx()->optimization()->toVeloxPlan(filter);
   return std::make_shared<axiom::runner::LocalRunner>(
       plan.plan,
-      sampleQueryCtx(queryCtx()->optimization()->veloxQueryCtx()),
+      sampleQueryCtx(*queryCtx()->optimization()->veloxQueryCtx()),
       std::make_shared<connector::ConnectorSplitSourceFactory>());
 }
+
+// Maps hash value to number of times it appears in a table.
+using KeyFreq = folly::F14FastMap<uint32_t, uint32_t>;
 
 std::unique_ptr<KeyFreq> runJoinSample(
     axiom::runner::Runner& runner,
     int32_t maxRows = 0) {
   auto result = std::make_unique<folly::F14FastMap<uint32_t, uint32_t>>();
+
   int32_t rowCount = 0;
   while (auto rows = runner.next()) {
     rowCount += rows->size();
-    auto h = rows->childAt(0)->as<FlatVector<int64_t>>();
-    for (auto i = 0; i < h->size(); ++i) {
-      if (!h->isNullAt(i)) {
-        ++(*result)[static_cast<uint32_t>(h->valueAt(i))];
+    auto hashes = rows->childAt(0)->as<FlatVector<int64_t>>();
+    for (auto i = 0; i < hashes->size(); ++i) {
+      if (!hashes->isNullAt(i)) {
+        ++(*result)[static_cast<uint32_t>(hashes->valueAt(i))];
       }
     }
     if (maxRows && rowCount > maxRows) {
@@ -206,30 +175,32 @@ std::unique_ptr<KeyFreq> runJoinSample(
       break;
     }
   }
-  runner.waitForCompletion(1000000);
+
+  runner.waitForCompletion(1'000'000);
   return result;
 }
 
-float freqs(KeyFreq& l, KeyFreq& r) {
-  if (l.empty()) {
+float freqs(const KeyFreq& left, const KeyFreq& right) {
+  if (left.empty()) {
     return 0;
   }
+
   float hits = 0;
-  for (auto& pair : l) {
-    auto it = r.find(pair.first);
-    if (it != r.end()) {
-      hits += it->second;
+  for (const auto& [hash, _] : left) {
+    auto it = right.find(hash);
+    if (it != right.end()) {
+      hits += static_cast<float>(it->second);
     }
   }
-  return hits / l.size();
+  return hits / static_cast<float>(left.size());
 }
 
 float keyCardinality(const ExprVector& keys) {
-  float card = 1;
+  float cardinality = 1;
   for (auto& key : keys) {
-    card *= key->value().cardinality;
+    cardinality *= key->value().cardinality;
   }
-  return card;
+  return cardinality;
 }
 } // namespace
 
@@ -238,24 +209,32 @@ std::pair<float, float> sampleJoin(
     const ExprVector& leftKeys,
     SchemaTableCP right,
     const ExprVector& rightKeys) {
-  uint64_t leftRows = left->numRows();
-  uint64_t rightRows = right->numRows();
-  auto leftCard = keyCardinality(leftKeys);
-  auto rightCard = keyCardinality(rightKeys);
-  int32_t fraction = 10000;
-  if (leftRows < 10000 && rightRows < 10000) {
-    // sample all.
-  } else if (leftCard > 10000 && rightCard > 10000) {
+  const uint64_t leftRows = left->numRows();
+  const uint64_t rightRows = right->numRows();
+
+  const auto leftCard = keyCardinality(leftKeys);
+  const auto rightCard = keyCardinality(rightKeys);
+
+  static const auto kMaxCardinality = 10'000;
+
+  int32_t fraction = kMaxCardinality;
+  if (leftRows < kMaxCardinality && rightRows < kMaxCardinality) {
+    // Sample all.
+  } else if (leftCard > kMaxCardinality && rightCard > kMaxCardinality) {
     // Keys have many values, sample a fraction.
-    auto smaller = std::min(leftRows, rightRows);
-    float ratio = smaller / 10000.0;
-    fraction = std::max<int32_t>(2, 10000 / ratio);
+    const auto smaller = static_cast<float>(std::min(leftRows, rightRows));
+    const float ratio = smaller / (float)kMaxCardinality;
+    fraction =
+        static_cast<int32_t>(std::max(2.F, (float)kMaxCardinality / ratio));
   } else {
     return std::make_pair(0, 0);
   }
 
-  auto leftRunner = prepareSampleRunner(left, leftKeys, 10000, fraction);
-  auto rightRunner = prepareSampleRunner(right, rightKeys, 10000, fraction);
+  auto leftRunner =
+      prepareSampleRunner(left, leftKeys, kMaxCardinality, fraction);
+  auto rightRunner =
+      prepareSampleRunner(right, rightKeys, kMaxCardinality, fraction);
+
   auto leftRun = std::make_shared<AsyncSource<KeyFreq>>(
       [leftRunner]() { return runJoinSample(*leftRunner); });
   auto rightRun = std::make_shared<AsyncSource<KeyFreq>>(

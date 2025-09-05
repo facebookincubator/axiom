@@ -24,7 +24,7 @@
 
 DEFINE_int32(num_repeats, 1, "Number of repeats for optimization timing");
 
-DECLARE_int32(optimizer_trace);
+DECLARE_uint32(optimizer_trace);
 DECLARE_int32(num_workers);
 DECLARE_string(history_save_path);
 
@@ -88,14 +88,50 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
     return sql;
   }
 
+  std::string readTpchSql(int32_t query) {
+    return readSqlFromFile(fmt::format("tpch.queries/q{}.sql", query));
+  }
+
+  void parseTpchSql(int32_t query) {
+    auto sql = readTpchSql(query);
+
+    auto statement = prestoParser_->parse(sql);
+
+    ASSERT_TRUE(statement->isSelect());
+    ASSERT_TRUE(
+        statement->asUnchecked<test::SelectStatement>()->plan() != nullptr);
+  }
+
   void checkTpchSql(int32_t query) {
-    auto sql = readSqlFromFile(fmt::format("tpch.queries/q{}.sql", query));
+    auto sql = readTpchSql(query);
     auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
     checkResults(sql, referencePlan);
   }
 
   std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
 };
+
+TEST_F(TpchPlanTest, stats) {
+  auto verifyStats = [&](const auto& tableName, auto cardinality) {
+    SCOPED_TRACE(tableName);
+
+    auto logicalPlan = lp::PlanBuilder()
+                           .tableScan(exec::test::kHiveConnectorId, tableName)
+                           .build();
+
+    auto planAndStats = planVelox(logicalPlan);
+    auto stats = planAndStats.prediction;
+    ASSERT_EQ(stats.size(), 1);
+
+    ASSERT_EQ(stats.begin()->first, logicalPlan->id());
+    ASSERT_EQ(stats.begin()->second.cardinality, cardinality);
+  };
+
+  verifyStats("region", 5);
+  verifyStats("nation", 25);
+  verifyStats("orders", 15'000);
+  verifyStats("lineitem", 60'175);
+}
 
 TEST_F(TpchPlanTest, q01) {
   auto logicalPlan =
@@ -122,8 +158,9 @@ TEST_F(TpchPlanTest, q01) {
   checkTpchSql(1);
 }
 
-TEST_F(TpchPlanTest, DISABLED_q02) {
-  // TODO Implement. Requires subqueries support.
+TEST_F(TpchPlanTest, q02) {
+  // TODO Add support for subqueries.
+  parseTpchSql(2);
 }
 
 TEST_F(TpchPlanTest, q03) {
@@ -483,8 +520,9 @@ TEST_F(TpchPlanTest, DISABLED_q16) {
   // TODO Implement.
 }
 
-TEST_F(TpchPlanTest, DISABLED_q17) {
+TEST_F(TpchPlanTest, q17) {
   // TODO Implement.
+  parseTpchSql(17);
 }
 
 TEST_F(TpchPlanTest, DISABLED_q18) {

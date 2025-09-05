@@ -37,16 +37,17 @@ struct PlanAndStats {
   axiom::runner::MultiFragmentPlanPtr plan;
   NodeHistoryMap history;
   NodePredictionMap prediction;
+
+  /// Returns a string representation of the plan annotated with estimates from
+  /// 'prediction'.
+  std::string toString() const;
 };
 
 class ToVelox {
  public:
   ToVelox(
       const axiom::runner::MultiFragmentPlan::Options& options,
-      const OptimizerOptions& optimizerOptions)
-      : options_{options},
-        optimizerOptions_{optimizerOptions},
-        isSingle_{options.numWorkers == 1} {}
+      const OptimizerOptions& optimizerOptions);
 
   /// Converts physical plan (a tree of RelationOp) to an executable
   /// multi-fragment Velox plan.
@@ -87,9 +88,9 @@ class ToVelox {
  private:
   void setLeafHandle(
       int32_t id,
-      const connector::ConnectorTableHandlePtr& handle,
-      const std::vector<core::TypedExprPtr>& extraFilters) {
-    leafHandles_[id] = std::make_pair(handle, extraFilters);
+      connector::ConnectorTableHandlePtr handle,
+      std::vector<core::TypedExprPtr> extraFilters) {
+    leafHandles_[id] = {std::move(handle), std::move(extraFilters)};
   }
 
   /// True if a scan should expose 'column' of 'table' as a struct only
@@ -100,20 +101,12 @@ class ToVelox {
 
   // Makes an output type for use in PlanNode et al. If 'columnType' is set,
   // only considers base relation columns of the given type.
-  velox::RowTypePtr makeOutputType(const ColumnVector& columns);
-
-  // Produces a scan output type with only top level columns. Returns
-  // these in scanColumns. The scan->columns() is the leaf columns,
-  // not the top level ones if subfield pushdown.
-  RowTypePtr scanOutputType(
-      const TableScan& scan,
-      ColumnVector& scanColumns,
-      std::unordered_map<ColumnCP, TypePtr>& typeMap);
+  velox::RowTypePtr makeOutputType(const ColumnVector& columns) const;
 
   // Makes a getter path over a top level column and can convert the top
   // map getter into struct getter if maps extracted as structs.
   core::TypedExprPtr
-  pathToGetter(ColumnCP column, PathCP path, core::TypedExprPtr source);
+  pathToGetter(ColumnCP column, PathCP path, core::TypedExprPtr field);
 
   // Returns a filter expr that ands 'exprs'. nullptr if 'exprs' is empty.
   velox::core::TypedExprPtr toAnd(const ExprVector& exprs);
@@ -129,7 +122,7 @@ class ToVelox {
 
   // Makes a Velox AggregationNode for a RelationOp.
   velox::core::PlanNodePtr makeAggregation(
-      const Aggregation& agg,
+      const Aggregation& op,
       axiom::runner::ExecutableFragment& fragment,
       std::vector<axiom::runner::ExecutableFragment>& stages);
 
@@ -209,7 +202,7 @@ class ToVelox {
   // Returns a stack of parallel project nodes if parallelization makes sense.
   // nullptr means use regular ProjectNode in output.
   velox::core::PlanNodePtr maybeParallelProject(
-      const Project* op,
+      const Project* project,
       core::PlanNodePtr input);
 
   core::PlanNodePtr makeParallelProject(
@@ -219,9 +212,10 @@ class ToVelox {
       const PlanObjectSet& extraColumns);
 
   // Makes projections for subfields as top level columns.
+  // @param scanNode TableScan or Filter input node.
   core::PlanNodePtr makeSubfieldProjections(
       const TableScan& scan,
-      const core::TableScanNodePtr& scanNode);
+      const core::PlanNodePtr& scanNode);
 
   axiom::runner::ExecutableFragment newFragment();
 
@@ -258,8 +252,7 @@ class ToVelox {
   std::unordered_map<ExprCP, core::TypedExprPtr> projectedExprs_;
 
   // Map from plan object id to pair of handle with pushdown filters and list
-  // of
-  // filters to eval on the result from the handle.
+  // of filters to eval on the result from the handle.
   std::unordered_map<
       int32_t,
       std::pair<
@@ -272,6 +265,8 @@ class ToVelox {
 
   // Serial number for stages in executable plan.
   int32_t stageCounter_{0};
+
+  const std::optional<std::string> subscript_;
 };
 
 } // namespace facebook::velox::optimizer

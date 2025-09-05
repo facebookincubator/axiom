@@ -44,17 +44,15 @@ class Model {
     float measure1{0};
     // measure at idx2.
     float measure2{0};
-    float projected;
-    float multiplier;
   };
 
-  Model(int32_t rank) : rank_(rank) {}
+  explicit Model(int32_t rank) : rank_(rank) {}
 
   void insert(std::vector<float> dimensions, float measure);
 
   void precompute();
 
-  float query(const std::vector<float>& point) const;
+  float query(const std::vector<float>& coords) const;
 
   /// Returns the linear index into 'measures' from indices along each
   /// dimension.
@@ -71,7 +69,7 @@ class Model {
 
   /// Maps coords to a  0..1 range along their dimension. The lowest value maps
   /// to 0, the highest to 1.
-  std::vector<float> normalizePoint(const std::vector<float>& coords) const;
+  std::vector<float> normalizePoint(const std::vector<float>& point) const;
 
   std::vector<float> coordinatesAt(const std::vector<int32_t>& point) const;
 
@@ -107,11 +105,10 @@ class Model {
   int32_t closestSlope(
       int32_t dim,
       float cutoff,
-      const std::vector<float> npoint,
+      const std::vector<float>& npoint,
       bool above) const;
 
-  float gradientAt(int32_t dim, const std::vector<float>& normalizedPoint)
-      const;
+  float gradientAt(int32_t dim, const std::vector<float>& npoint) const;
 
   float guessIntermediate(int32_t linIdx);
 
@@ -130,20 +127,22 @@ class Model {
       float& sumWeight,
       bool& exact,
       bool* outOfRange,
-      float* gradientSum,
-      float* gradientSumWeight) const;
+      float* gradient,
+      float* gradientWeight) const;
 
   void gradientsAtGridPoint(
       const std::vector<int32_t>& dims,
       float d,
-      bool* outOfRange,
+      const bool* outOfRange,
       float* gradient,
       float* gradientWeight) const;
-  const int32_t rank_;
 
   float normalizedDim(int32_t dim, int32_t idx) const;
 
-  std::vector<float> normalizedGridPoint(const std::vector<int32_t> dims) const;
+  std::vector<float> normalizedGridPoint(
+      const std::vector<int32_t>& dims) const;
+
+  const int32_t rank_;
 
   std::vector<Entry> entries_;
 

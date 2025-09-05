@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "axiom/optimizer/tests/DuckParser.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/PrestoParser.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
@@ -51,10 +50,6 @@ class HiveQueriesTestBase : public test::QueryTestBase {
       const PlanAndStats& plan,
       const std::shared_ptr<core::PlanMatcher>& matcher);
 
-  DuckParser& duckParser() {
-    return *duckParser_;
-  }
-
   PrestoParser& prestoParser() {
     return *prestoParser_;
   }
@@ -62,7 +57,6 @@ class HiveQueriesTestBase : public test::QueryTestBase {
  protected:
   static std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
 
-  std::unique_ptr<DuckParser> duckParser_;
   std::unique_ptr<PrestoParser> prestoParser_;
 };
 

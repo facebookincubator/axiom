@@ -68,10 +68,10 @@ class TestConnectorQueryTest : public QueryTestBase {
         "writenodeid",
         source->outputType(),
         schema->names(),
-        /*aggregationNode=*/nullptr,
+        /*columnStatsSpec=*/std::nullopt,
         std::move(handle),
         /*hasPartitioningScheme=*/false,
-        exec::TableWriteTraits::outputType(nullptr),
+        exec::TableWriteTraits::outputType(std::nullopt),
         connector::CommitStrategy::kTaskCommit,
         source);
 

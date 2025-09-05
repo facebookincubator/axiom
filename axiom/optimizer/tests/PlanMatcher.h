@@ -34,6 +34,13 @@ class PlanMatcherBuilder {
 
   PlanMatcherBuilder& tableScan(const std::string& tableName);
 
+  /// @param tableName The name of the table.
+  /// @param outputType The list of schema names and types of columns in the
+  /// output of the scan node.
+  PlanMatcherBuilder& tableScan(
+      const std::string& tableName,
+      const RowTypePtr& outputType);
+
   PlanMatcherBuilder& hiveScan(
       const std::string& tableName,
       common::SubfieldFilters subfieldFilters,
@@ -51,7 +58,14 @@ class PlanMatcherBuilder {
 
   PlanMatcherBuilder& project(const std::vector<std::string>& expressions);
 
+  PlanMatcherBuilder& parallelProject();
+
+  PlanMatcherBuilder& parallelProject(
+      const std::vector<std::string>& expressions);
+
   PlanMatcherBuilder& aggregation();
+
+  PlanMatcherBuilder& singleAggregation();
 
   PlanMatcherBuilder& partialAggregation();
 

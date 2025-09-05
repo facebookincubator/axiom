@@ -997,7 +997,15 @@ void AstPrinter::visitDelete(Delete* node) {
 
 // Utility Statements
 void AstPrinter::visitExplain(Explain* node) {
-  printHeader("Explain", node);
+  printHeader("Explain", node, [&](std::ostream& out) {
+    if (node->isAnalyze()) {
+      out << "analyze ";
+    }
+
+    if (node->isVerbose()) {
+      out << "verbose";
+    }
+  });
 
   indent_++;
   printChild("Statement", node->statement());

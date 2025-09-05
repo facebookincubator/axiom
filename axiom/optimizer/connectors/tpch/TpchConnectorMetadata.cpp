@@ -49,7 +49,7 @@ std::vector<PartitionHandlePtr> TpchSplitManager::listPartitions(
 
 std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
     const ConnectorTableHandlePtr& tableHandle,
-    std::vector<PartitionHandlePtr> /*partitions*/,
+    const std::vector<PartitionHandlePtr>& /*partitions*/,
     SplitOptions options) {
   auto* tpchTableHandle =
       dynamic_cast<const TpchTableHandle*>(tableHandle.get());
@@ -202,7 +202,8 @@ void TpchConnectorMetadata::loadTable(
   const auto tableType = velox::tpch::getTableSchema(tpchTable);
   const auto numRows = velox::tpch::getRowCount(tpchTable, scaleFactor);
 
-  auto table = std::make_shared<TpchTable>(tableName, tpchTable, scaleFactor);
+  auto table =
+      std::make_shared<TpchTable>(tableName, tableType, tpchTable, scaleFactor);
   table->numRows_ = numRows;
 
   for (auto i = 0; i < tableType->size(); ++i) {
@@ -211,7 +212,7 @@ void TpchConnectorMetadata::loadTable(
     table->columns()[columnName] =
         std::make_unique<Column>(columnName, columnType);
   }
-  table->setType(tableType);
+
   table->makeDefaultLayout(*this, scaleFactor);
 
   tables_[tableName] = std::move(table);
@@ -220,14 +221,14 @@ void TpchConnectorMetadata::loadTable(
 std::pair<int64_t, int64_t> TpchTableLayout::sample(
     const connector::ConnectorTableHandlePtr& handle,
     float pct,
-    std::vector<core::TypedExprPtr> /* extraFilters */,
+    const std::vector<core::TypedExprPtr>& /* extraFilters */,
     RowTypePtr /* outputType */,
     const std::vector<common::Subfield>& /* fields */,
     HashStringAllocator* /* allocator */,
     std::vector<ColumnStatistics>* /* statistics */) const {
+  // TODO Add support for filter in 'handle' and 'extraFilters'.
   const auto totalRows = velox::tpch::getRowCount(tpchTable_, scaleFactor_);
-  const auto sampleRows = static_cast<int64_t>(totalRows * (pct / 100.0));
-  return std::pair(sampleRows, sampleRows);
+  return std::pair(totalRows, totalRows);
 }
 
 void TpchTable::makeDefaultLayout(
@@ -281,7 +282,7 @@ std::string getQualifiedName(const std::string& name) {
   return qualifiedName;
 }
 
-ConnectorTablePtr TpchConnectorMetadata::findTable(const std::string& name) {
+TablePtr TpchConnectorMetadata::findTable(const std::string& name) {
   ensureInitialized();
   const auto qualifiedName = getQualifiedName(name);
   auto it = tables_.find(qualifiedName);

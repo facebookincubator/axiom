@@ -40,7 +40,6 @@ add_library(
   Schema.cpp
   QueryGraph.cpp
   QueryGraphContext.cpp
-  Filters.cpp
   Cost.cpp
   FunctionRegistry.cpp
   PlanUtils.cpp

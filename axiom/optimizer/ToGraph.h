@@ -22,41 +22,20 @@
 
 namespace facebook::velox::optimizer {
 
-struct BuiltinNames {
-  BuiltinNames();
-
-  Name reverse(Name op) const;
-
-  bool isCanonicalizable(Name name) const {
-    return canonicalizable.find(name) != canonicalizable.end();
-  }
-
-  Name eq;
-  Name lt;
-  Name lte;
-  Name gt;
-  Name gte;
-  Name plus;
-  Name multiply;
-  Name _and;
-  Name _or;
-  Name cast;
-  Name tryCast;
-  Name _try;
-  Name coalesce;
-  Name _if;
-  Name _switch;
-  Name in;
-
-  folly::F14FastSet<Name> canonicalizable;
-};
-
 /// Struct for resolving which logical PlanNode or Lambda defines which
 /// field for column and subfield tracking.
+/// Only one of planNode or call + lambdaOrdinal is set.
 struct LogicalContextSource {
   const logical_plan::LogicalPlanNode* planNode{nullptr};
   const logical_plan::CallExpr* call{nullptr};
   int32_t lambdaOrdinal{-1};
+};
+
+struct MarkFieldsAccessedContext {
+  // 1:1 with 'sources'. Either output type of the plan node or signature of a
+  // lambda.
+  std::span<const RowType* const> rowTypes;
+  std::span<const LogicalContextSource> sources;
 };
 
 struct ITypedExprHasher {
@@ -117,7 +96,7 @@ struct VariantPtrComparer {
 };
 
 /// Represents a path over an Expr of complex type. Used as a key
-/// for a map from unique step+optionl subscript expr pairs to the
+/// for a map from unique step+optional subscript expr pairs to the
 /// dedupped Expr that is the getter.
 struct PathExpr {
   Step step;
@@ -156,7 +135,7 @@ struct PlanSubfields {
     if (it == nodeFields.end()) {
       return false;
     }
-    return it->second.resultPaths.count(ordinal) != 0;
+    return it->second.resultPaths.contains(ordinal);
   }
 
   std::string toString() const;
@@ -181,8 +160,7 @@ class ToGraph {
   ToGraph(
       const Schema& schema,
       core::ExpressionEvaluator& evaluator,
-      const OptimizerOptions& options)
-      : schema_{schema}, evaluator_{evaluator}, options_{options} {}
+      const OptimizerOptions& options);
 
   /// Converts 'logicalPlan' to a tree of DerivedTables. Returns the root
   /// DerivedTable.
@@ -199,23 +177,26 @@ class ToGraph {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
   }
 
-  BuiltinNames& builtinNames();
-
   /// Creates or returns pre-existing function call with name+args. If
   /// deterministic, a new ExprCP is remembered for reuse.
   ExprCP
   deduppedCall(Name name, Value value, ExprVector args, FunctionSet flags);
 
+  /// True if 'expr' is of the form a = b where a depends on one of 'tables' and
+  /// b on the other. If true, returns the side depending on tables[0] in 'left'
+  /// and the other in 'right'.
+  bool isJoinEquality(
+      ExprCP expr,
+      std::vector<PlanObjectP>& tables,
+      ExprCP& left,
+      ExprCP& right) const;
+
   core::ExpressionEvaluator* evaluator() const {
     return &evaluator_;
   }
 
-  static logical_plan::ExprPtr stepToLogicalPlanGetter(
-      Step,
-      const logical_plan::ExprPtr& arg);
-
   template <typename Func>
-  void trace(int32_t event, Func f) {
+  void trace(uint32_t event, Func f) {
     if ((options_.traceFlags & event) != 0) {
       f();
     }
@@ -223,11 +204,12 @@ class ToGraph {
 
  private:
   static bool isSpecialForm(
-      const logical_plan::Expr* expr,
+      const logical_plan::ExprPtr& expr,
       logical_plan::SpecialForm form) {
     return expr->isSpecialForm() &&
         expr->asUnchecked<logical_plan::SpecialFormExpr>()->form() == form;
   }
+
   // For comparisons, swaps the args to have a canonical form for
   // deduplication. E.g column op constant, and Smaller plan object id
   // to the left.
@@ -263,7 +245,7 @@ class ToGraph {
   // set at time of call. This is before regular constant folding because
   // subscript expressions must be folded for subfield resolution.
   logical_plan::ConstantExprPtr tryFoldConstant(
-      const logical_plan::ExprPtr expr);
+      const logical_plan::ExprPtr& expr);
 
   // Returns a literal by applying the function 'callName' with return type
   // 'returnType' to the input arguments 'literals'. Returns nullptr if not
@@ -345,12 +327,12 @@ class ToGraph {
   PlanObjectP addOrderBy(const logical_plan::SortNode& order);
 
   bool isSubfield(
-      const logical_plan::Expr* expr,
+      const logical_plan::ExprPtr& expr,
       Step& step,
       logical_plan::ExprPtr& input);
 
   void getExprForField(
-      const logical_plan::Expr* expr,
+      const logical_plan::Expr* field,
       logical_plan::ExprPtr& resultExpr,
       ColumnCP& resultColumn,
       const logical_plan::LogicalPlanNode*& context);
@@ -367,29 +349,10 @@ class ToGraph {
       ColumnCP column);
 
   void markSubfields(
-      const logical_plan::Expr* expr,
-      std::vector<Step>& steps,
-      bool isControl,
-      std::span<const RowType* const> context,
-      std::span<const LogicalContextSource> sources);
-
-  void markSubfields(
       const logical_plan::ExprPtr& expr,
       std::vector<Step>& steps,
       bool isControl,
-      std::span<const RowType* const> context,
-      std::span<const LogicalContextSource> sources) {
-    markSubfields(expr.get(), steps, isControl, context, sources);
-  }
-
-  void markFieldAccessed(
-      const logical_plan::CallExpr& call,
-      int32_t lambdaOrdinal,
-      int32_t ordinal,
-      std::vector<Step>& steps,
-      bool isControl,
-      std::span<const RowType* const> context,
-      std::span<const LogicalContextSource> sources);
+      const MarkFieldsAccessedContext& context);
 
   void markFieldAccessed(
       const logical_plan::ProjectNode& project,
@@ -414,12 +377,9 @@ class ToGraph {
       int32_t ordinal,
       std::vector<Step>& steps,
       bool isControl,
-      std::span<const RowType* const> context,
-      std::span<const LogicalContextSource> sources);
+      const MarkFieldsAccessedContext& context);
 
-  void markAllSubfields(
-      const RowType* type,
-      const logical_plan::LogicalPlanNode& node);
+  void markAllSubfields(const logical_plan::LogicalPlanNode& node);
 
   void markControl(const logical_plan::LogicalPlanNode& node);
 
@@ -473,7 +433,7 @@ class ToGraph {
   const OptimizerOptions& options_;
 
   // Innermost DerivedTable when making a QueryGraph from PlanNode.
-  DerivedTableP currentDt_;
+  DerivedTableP currentDt_{nullptr};
 
   // True if wrapping a nondeterministic filter inside a DT in ToGraph.
   bool isNondeterministicWrap_{false};
@@ -536,7 +496,12 @@ class ToGraph {
   std::unordered_map<const logical_plan::LogicalPlanNode*, PlanObjectCP>
       planLeaves_;
 
-  std::unique_ptr<BuiltinNames> builtinNames_;
+  Name equality_;
+  Name elementAt_{nullptr};
+  Name subscript_{nullptr};
+  Name cardinality_{nullptr};
+
+  std::unordered_map<Name, Name> reversibleFunctions_;
 };
 
 } // namespace facebook::velox::optimizer

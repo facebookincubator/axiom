@@ -20,7 +20,7 @@
 
 namespace facebook::velox::optimizer {
 
-connector::ConnectorTablePtr SchemaResolver::findTable(
+connector::TablePtr SchemaResolver::findTable(
     const std::string& catalog,
     const std::string& name) {
   TableNameParser parser(name);

@@ -68,7 +68,7 @@ class LocalHiveSplitManager : public ConnectorSplitManager {
 
   std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorTableHandlePtr& tableHandle,
-      std::vector<PartitionHandlePtr> partitions,
+      const std::vector<PartitionHandlePtr>& partitions,
       SplitOptions options = {}) override;
 };
 
@@ -104,11 +104,11 @@ class LocalHiveTableLayout : public HiveTableLayout {
   std::pair<int64_t, int64_t> sample(
       const connector::ConnectorTableHandlePtr& handle,
       float pct,
-      std::vector<core::TypedExprPtr> extraFilters,
-      RowTypePtr outputType = nullptr,
-      const std::vector<common::Subfield>& fields = {},
-      HashStringAllocator* allocator = nullptr,
-      std::vector<ColumnStatistics>* statistics = nullptr) const override;
+      const std::vector<core::TypedExprPtr>& extraFilters,
+      RowTypePtr outputType,
+      const std::vector<common::Subfield>& fields,
+      HashStringAllocator* allocator,
+      std::vector<ColumnStatistics>* statistics) const override;
 
   const std::vector<std::unique_ptr<const FileInfo>>& files() const {
     return files_;
@@ -134,8 +134,15 @@ class LocalHiveTableLayout : public HiveTableLayout {
 
 class LocalTable : public Table {
  public:
-  LocalTable(const std::string& name, dwio::common::FileFormat format)
-      : Table(name) {}
+  LocalTable(
+      std::string name,
+      RowTypePtr type,
+      std::unordered_map<std::string, std::string> options = {})
+      : Table(
+            std::move(name),
+            std::move(type),
+            TableKind::kTable,
+            std::move(options)) {}
 
   std::unordered_map<std::string, std::unique_ptr<Column>>& columns() {
     return columns_;
@@ -146,10 +153,6 @@ class LocalTable : public Table {
 
   const std::unordered_map<std::string, const Column*>& columnMap()
       const override;
-
-  void setType(const RowTypePtr& type) {
-    type_ = type;
-  }
 
   void makeDefaultLayout(
       std::vector<std::unique_ptr<const FileInfo>> files,
@@ -193,7 +196,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   void initialize() override;
 
-  ConnectorTablePtr findTable(const std::string& name) override;
+  TablePtr findTable(const std::string& name) override;
 
   ConnectorSplitManager* splitManager() override {
     ensureInitialized();
@@ -226,10 +229,9 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
     return tables_;
   }
 
-  std::shared_ptr<core::QueryCtx> makeQueryCtx(
-      const std::string& queryId) override;
+  std::shared_ptr<core::QueryCtx> makeQueryCtx(const std::string& queryId);
 
-  void createTableWithOptions(
+  void createTable(
       const std::string& tableName,
       const RowTypePtr& rowType,
       const std::unordered_map<std::string, std::string>& options,

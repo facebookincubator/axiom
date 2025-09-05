@@ -34,7 +34,8 @@ class StatisticsBuilderImpl : public StatisticsBuilder {
   void add(VectorPtr& data) override;
 
   void merge(const StatisticsBuilder& other) override;
-  int64_t numAsc() const override {
+
+  int64_t numAscending() const override {
     return numAsc_;
   }
 
@@ -43,7 +44,7 @@ class StatisticsBuilderImpl : public StatisticsBuilder {
   int64_t numRepeat() const override {
     return numRepeat_;
   }
-  int64_t numDesc() const override {
+  int64_t numDescending() const override {
     return numDesc_;
   }
 
@@ -156,7 +157,7 @@ void StatisticsBuilderImpl::add(VectorPtr& data) {
   }
 }
 
-void StatisticsBuilder::updateStatsBuilders(
+void StatisticsBuilder::updateBuilders(
     const RowVectorPtr& row,
     std::vector<std::unique_ptr<StatisticsBuilder>>& builders) {
   for (auto column = 0; column < builders.size(); ++column) {

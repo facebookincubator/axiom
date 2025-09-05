@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-#include "axiom/logical_plan/Expr.h"
 #include <boost/algorithm/string.hpp>
+
+#include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/ExprVisitor.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 
@@ -79,8 +80,8 @@ const SortOrder SortOrder::kDescNullsFirst{false, true};
 const SortOrder SortOrder::kDescNullsLast{false, false};
 
 namespace {
-const folly::F14FastMap<SpecialForm, std::string>& specialFormNames() {
-  static const folly::F14FastMap<SpecialForm, std::string> kNames{
+const auto& specialFormNames() {
+  static const folly::F14FastMap<SpecialForm, std::string_view> kNames = {
       {SpecialForm::kAnd, "AND"},
       {SpecialForm::kOr, "OR"},
       {SpecialForm::kCast, "CAST"},
@@ -94,7 +95,6 @@ const folly::F14FastMap<SpecialForm, std::string>& specialFormNames() {
       {SpecialForm::kIn, "IN"},
       {SpecialForm::kExists, "EXISTS"},
   };
-
   return kNames;
 }
 } // namespace
@@ -109,22 +109,22 @@ void validateDereferenceInputs(
       inputs.size(), 2, "DEREFERENCE must have exactly two inputs");
 
   VELOX_USER_CHECK(
-      inputs.at(0)->type()->isRow(),
+      inputs[0]->type()->isRow(),
       "First input to DEREFERENCE must be a struct");
 
-  const auto& rowType = inputs.at(0)->type()->asRow();
+  const auto& rowType = inputs[0]->type()->asRow();
 
   VELOX_USER_CHECK(
-      inputs.at(1)->type()->kind() == TypeKind::VARCHAR ||
-          inputs.at(1)->type()->kind() == TypeKind::INTEGER,
+      inputs[1]->type()->kind() == TypeKind::VARCHAR ||
+          inputs[1]->type()->kind() == TypeKind::INTEGER,
       "Second input to DEREFERENCE must be a constant string or integer. Got: {}",
-      inputs.at(1)->type()->toString());
+      inputs[1]->type()->toString());
 
   VELOX_USER_CHECK(
-      inputs.at(1)->isConstant(),
+      inputs[1]->isConstant(),
       "Second input to DEREFERENCE must be a constant");
 
-  const auto* fieldExpr = inputs.at(1)->asUnchecked<ConstantExpr>();
+  const auto* fieldExpr = inputs[1]->asUnchecked<ConstantExpr>();
   VELOX_USER_CHECK(
       !fieldExpr->isNull(), "Second input to DEREFERENCE must not be null");
 
@@ -168,11 +168,11 @@ void validateIfInputs(const TypePtr& type, const std::vector<ExprPtr>& inputs) {
       inputs.size(), 3, "IF must have exactly either two or three inputs");
 
   VELOX_USER_CHECK_EQ(
-      inputs.at(0)->type()->kind(),
+      inputs[0]->type()->kind(),
       TypeKind::BOOLEAN,
       "First input to IF must be boolean");
 
-  const auto& thenType = inputs.at(1)->type();
+  const auto& thenType = inputs[1]->type();
   VELOX_USER_CHECK(
       type->equivalent(*thenType),
       "Second input to IF must have the same type as the result of the expression: {} vs {}",
@@ -180,7 +180,7 @@ void validateIfInputs(const TypePtr& type, const std::vector<ExprPtr>& inputs) {
       thenType->toString());
 
   if (inputs.size() == 3) {
-    const auto& elseType = inputs.at(2)->type();
+    const auto& elseType = inputs[2]->type();
     VELOX_USER_CHECK(
         type->equivalent(*elseType),
         "Third input to IF must have the same type as the result of the expression: {} vs {}",
@@ -196,14 +196,14 @@ void validateSwitchInputs(
 
   const auto numCases = inputs.size() / 2;
 
-  for (auto i = 0; i < numCases; ++i) {
-    const auto& condition = inputs.at(2 * i);
+  for (size_t i = 0; i < numCases; ++i) {
+    const auto& condition = inputs[2 * i];
     VELOX_USER_CHECK_EQ(
         condition->type()->kind(),
         TypeKind::BOOLEAN,
         "SWITCH conditions must be boolean");
 
-    const auto& thenClause = inputs.at(2 * i + 1);
+    const auto& thenClause = inputs[2 * i + 1];
 
     VELOX_USER_CHECK(
         type->equivalent(*thenClause->type()),
@@ -228,24 +228,24 @@ void validateInInputs(const TypePtr& type, const std::vector<ExprPtr>& inputs) {
       TypeKind::BOOLEAN,
       "IN expression must return boolean type");
   VELOX_USER_CHECK_GE(inputs.size(), 2, "IN must have at least two inputs");
-  if (inputs.at(1)->isSubquery()) {
+  if (inputs[1]->isSubquery()) {
     VELOX_USER_CHECK_EQ(inputs.size(), 2, "IN subquery must have two inputs");
-    auto subquery = inputs.at(1)->asUnchecked<SubqueryExpr>();
+    auto subquery = inputs[1]->asUnchecked<SubqueryExpr>();
     VELOX_USER_CHECK_EQ(
         subquery->subquery()->outputType()->size(),
         1,
         "Subquery must return one column");
     VELOX_USER_CHECK(
         subquery->subquery()->outputType()->childAt(0)->equivalent(
-            *inputs.at(0)->type()),
+            *inputs[0]->type()),
         "IN subquery must return the same type as the left operand");
   } else {
-    auto leftType = inputs.at(0)->type();
-    for (int i = 1; i < inputs.size(); ++i) {
+    auto leftType = inputs[0]->type();
+    for (size_t i = 1; i < inputs.size(); ++i) {
       VELOX_USER_CHECK(
-          inputs.at(i)->type()->equivalent(*leftType),
+          inputs[i]->type()->equivalent(*leftType),
           "All inputs to IN must have the same type as the left operand: {} vs {}",
-          inputs.at(i)->type()->toString(),
+          inputs[i]->type()->toString(),
           leftType->toString());
     }
   }
@@ -253,20 +253,21 @@ void validateInInputs(const TypePtr& type, const std::vector<ExprPtr>& inputs) {
 } // namespace
 
 SpecialFormExpr::SpecialFormExpr(
-    const TypePtr& type,
+    TypePtr type,
     SpecialForm form,
-    const std::vector<ExprPtr>& inputs)
-    : Expr(ExprKind::kSpecialForm, type, inputs), form_{form} {
+    std::vector<ExprPtr> inputs)
+    : Expr{ExprKind::kSpecialForm, std::move(type), std::move(inputs)},
+      form_{form} {
   switch (form) {
     case SpecialForm::kAnd:
     case SpecialForm::kOr:
       VELOX_USER_CHECK_GE(
-          inputs.size(),
+          inputs_.size(),
           2,
           "{} must have at least two inputs",
           SpecialFormName::toName(form));
 
-      for (auto& input : inputs) {
+      for (const auto& input : inputs_) {
         VELOX_USER_CHECK_EQ(
             input->type()->kind(),
             TypeKind::BOOLEAN,
@@ -277,20 +278,20 @@ SpecialFormExpr::SpecialFormExpr(
     case SpecialForm::kTryCast:
     case SpecialForm::kTry:
       VELOX_USER_CHECK_EQ(
-          inputs.size(),
+          inputs_.size(),
           1,
           "{} must have exactly one input",
           SpecialFormName::toName(form));
       break;
     case SpecialForm::kDereference:
-      validateDereferenceInputs(type, inputs);
+      validateDereferenceInputs(type_, inputs_);
       break;
-    case SpecialForm::kCoalesce: {
+    case SpecialForm::kCoalesce:
       VELOX_USER_CHECK_GE(
-          inputs.size(), 2, "COALESCE must have at least two inputs");
+          inputs_.size(), 2, "COALESCE must have at least two inputs");
 
-      const auto& firstType = inputs.at(0)->type();
-      for (auto& input : inputs) {
+      for (const auto& firstType = inputs_[0]->type();
+           const auto& input : inputs_) {
         VELOX_USER_CHECK(
             firstType->equivalent(*input->type()),
             "All inputs to COALESCE must have the same type: {} vs {}",
@@ -298,75 +299,74 @@ SpecialFormExpr::SpecialFormExpr(
             input->type()->toString());
       }
       break;
-    }
     case SpecialForm::kIf:
-      validateIfInputs(type, inputs);
+      validateIfInputs(type_, inputs_);
       break;
     case SpecialForm::kSwitch:
-      validateSwitchInputs(type, inputs);
+      validateSwitchInputs(type_, inputs_);
       break;
     case SpecialForm::kStar:
       VELOX_USER_CHECK_GE(
-          inputs.size(), 0, "'*' expression cannot not have any inputs");
+          inputs_.size(), 0, "'*' expression cannot not have any inputs");
       break;
     case SpecialForm::kIn:
-      validateInInputs(type, inputs);
+      validateInInputs(type_, inputs_);
       break;
     case SpecialForm::kExists:
-      VELOX_USER_CHECK_EQ(inputs.size(), 1, "EXISTS must have one input");
+      VELOX_USER_CHECK_EQ(inputs_.size(), 1, "EXISTS must have one input");
       VELOX_USER_CHECK(
-          inputs.at(0)->isSubquery(),
+          inputs_[0]->isSubquery(),
           "EXISTS input must be a subquery expression");
       break;
   }
 }
 
-CallExpr::CallExpr(
-    const TypePtr& type,
-    const std::string& name,
-    const std::vector<ExprPtr>& inputs)
-    : Expr(ExprKind::kCall, type, inputs), name_{name} {
-  VELOX_USER_CHECK(!name.empty());
-
-  static const auto kReservedNames = Enums::invertMap(specialFormNames());
-
+CallExpr::CallExpr(TypePtr type, std::string name, std::vector<ExprPtr> inputs)
+    : Expr{ExprKind::kCall, std::move(type), std::move(inputs)},
+      name_{std::move(name)} {
+  VELOX_USER_CHECK(!name_.empty());
   VELOX_USER_CHECK(
-      !kReservedNames.contains(boost::algorithm::to_upper_copy(name)),
+      !SpecialFormName::tryToSpecialForm(
+          boost::algorithm::to_upper_copy(name_)),
       "Function name cannot match special form name: {}",
-      name);
+      name_);
 }
 
 namespace {
-folly::F14FastMap<WindowExpr::WindowType, std::string> windowTypeNames() {
-  return {
-      {WindowExpr::WindowType::kRows, "ROWS"},
-      {WindowExpr::WindowType::kRange, "RANGE"},
-  };
+const auto& windowTypeNames() {
+  static const folly::F14FastMap<WindowExpr::WindowType, std::string_view>
+      kNames = {
+          {WindowExpr::WindowType::kRows, "ROWS"},
+          {WindowExpr::WindowType::kRange, "RANGE"},
+      };
+  return kNames;
 }
 } // namespace
 
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, WindowType, windowTypeNames)
 
 namespace {
-folly::F14FastMap<WindowExpr::BoundType, std::string> boundTypeNames() {
-  return {
-      {WindowExpr::BoundType::kCurrentRow, "CURRENT ROW"},
-      {WindowExpr::BoundType::kPreceding, "PRECEDING"},
-      {WindowExpr::BoundType::kFollowing, "FOLLOWING"},
-      {WindowExpr::BoundType::kUnboundedPreceding, "UNBOUNDED PRECEDING"},
-      {WindowExpr::BoundType::kUnboundedFollowing, "UNBOUNDED FOLLOWING"},
-  };
+const auto& boundTypeNames() {
+  static const folly::F14FastMap<WindowExpr::BoundType, std::string_view>
+      kNames = {
+          {WindowExpr::BoundType::kCurrentRow, "CURRENT ROW"},
+          {WindowExpr::BoundType::kPreceding, "PRECEDING"},
+          {WindowExpr::BoundType::kFollowing, "FOLLOWING"},
+          {WindowExpr::BoundType::kUnboundedPreceding, "UNBOUNDED PRECEDING"},
+          {WindowExpr::BoundType::kUnboundedFollowing, "UNBOUNDED FOLLOWING"},
+      };
+  return kNames;
 }
 } // namespace
 
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, BoundType, boundTypeNames)
 
-SubqueryExpr::SubqueryExpr(const LogicalPlanNodePtr& subquery)
-    : Expr(ExprKind::kSubquery, subquery->outputType()->childAt(0), {}),
-      subquery_{subquery} {
+SubqueryExpr::SubqueryExpr(LogicalPlanNodePtr subquery)
+    : Expr{ExprKind::kSubquery, subquery->outputType()->childAt(0), {}},
+      subquery_{std::move(subquery)} {
   VELOX_USER_CHECK_LE(
       1,
-      subquery->outputType()->size(),
+      subquery_->outputType()->size(),
       "Subquery must produce at least one column");
 }
 

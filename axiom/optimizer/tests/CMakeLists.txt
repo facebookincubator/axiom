@@ -77,7 +77,6 @@ velox_link_libraries(
   velox_optimizer_tests_parquet_tpch
   velox_optimizer_tests_plan_matcher
   velox_optimizer_tests_query_test_base
-  velox_optimizer_tests_duck_parser
   velox_optimizer_tests_presto_parser
   axiom_runner_multifragment_plan
   axiom_runner_tests_utils)
@@ -138,7 +137,6 @@ target_link_libraries(
   velox_connector_split_source
   velox_hive_connector_metadata
   velox_tpch_connector_metadata
-  velox_optimizer_tests_duck_parser
   velox_optimizer_tests_presto_parser
   velox_query_benchmark
   velox_exec_test_lib

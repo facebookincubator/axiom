@@ -88,7 +88,7 @@ ConnectorTableHandlePtr HiveConnectorMetadata::createTableHandle(
     }
   }
   core::TypedExprPtr remainingFilter;
-  for (auto conjunct : remainingConjuncts) {
+  for (const auto& conjunct : remainingConjuncts) {
     if (!remainingFilter) {
       remainingFilter = conjunct;
     } else {
@@ -98,14 +98,13 @@ ConnectorTableHandlePtr HiveConnectorMetadata::createTableHandle(
           "and");
     }
   }
-  return std::dynamic_pointer_cast<const ConnectorTableHandle>(
-      std::make_shared<HiveTableHandle>(
-          hiveConnector_->connectorId(),
-          hiveLayout->table()->name(),
-          true,
-          std::move(subfieldFilters),
-          remainingFilter,
-          dataColumns ? dataColumns : layout.rowType()));
+  return std::make_shared<HiveTableHandle>(
+      hiveConnector_->connectorId(),
+      hiveLayout->table().name(),
+      true,
+      std::move(subfieldFilters),
+      remainingFilter,
+      dataColumns ? dataColumns : layout.rowType());
 }
 
 ConnectorInsertTableHandlePtr HiveConnectorMetadata::createInsertTableHandle(
@@ -116,8 +115,6 @@ ConnectorInsertTableHandlePtr HiveConnectorMetadata::createInsertTableHandle(
     const ConnectorSessionPtr& session) {
   ensureInitialized();
   VELOX_CHECK_EQ(kind, WriteKind::kInsert, "Only insert supported");
-
-  std::vector<HiveColumnHandlePtr> inputColumns;
 
   auto* hiveLayout = dynamic_cast<const HiveTableLayout*>(&layout);
   VELOX_CHECK_NOT_NULL(hiveLayout);
@@ -132,17 +129,19 @@ ConnectorInsertTableHandlePtr HiveConnectorMetadata::createInsertTableHandle(
   if (it != options.end()) {
     compressionKind = common::stringToCompressionKind(it->second);
   } else {
-    it = layout.table()->options().find("compression_kind");
-    if (it != layout.table()->options().end()) {
+    it = layout.table().options().find("compression_kind");
+    if (it != layout.table().options().end()) {
       compressionKind = common::stringToCompressionKind(it->second);
     } else {
       compressionKind = common::CompressionKind::CompressionKind_ZSTD;
     }
   }
 
-  for (auto i = 0; i < rowType->size(); ++i) {
+  std::vector<HiveColumnHandlePtr> inputColumns;
+  inputColumns.reserve(rowType->size());
+  for (const auto& name : rowType->names()) {
     inputColumns.push_back(std::static_pointer_cast<const HiveColumnHandle>(
-        createColumnHandle(layout, rowType->nameOf(i))));
+        createColumnHandle(layout, name)));
   }
 
   std::shared_ptr<const HiveBucketProperty> bucketProperty;
@@ -154,6 +153,7 @@ ConnectorInsertTableHandlePtr HiveConnectorMetadata::createInsertTableHandle(
       types.push_back(column->type());
     }
     std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy;
+    sortedBy.reserve(layout.orderColumns().size());
     for (auto i = 0; i < layout.orderColumns().size(); ++i) {
       sortedBy.push_back(std::make_shared<HiveSortingColumn>(
           layout.orderColumns()[i]->name(),
@@ -172,7 +172,7 @@ ConnectorInsertTableHandlePtr HiveConnectorMetadata::createInsertTableHandle(
   return std::make_shared<HiveInsertTableHandle>(
       inputColumns,
       makeLocationHandle(
-          fmt::format("{}/{}", dataPath(), layout.table()->name()),
+          fmt::format("{}/{}", dataPath(), layout.table().name()),
           std::nullopt),
       storageFormat,
       bucketProperty,

@@ -15,11 +15,12 @@
  */
 
 #include "axiom/optimizer/FunctionRegistry.h"
+#include "velox/expression/ExprConstants.h"
 
 namespace facebook::velox::optimizer {
 namespace lp = facebook::velox::logical_plan;
 
-FunctionMetadataCP FunctionRegistry::metadata(const std::string& name) const {
+FunctionMetadataCP FunctionRegistry::metadata(std::string_view name) const {
   auto it = metadata_.find(name);
   if (it == metadata_.end()) {
     return nullptr;
@@ -27,10 +28,63 @@ FunctionMetadataCP FunctionRegistry::metadata(const std::string& name) const {
   return it->second.get();
 }
 
-void FunctionRegistry::registerFunction(
-    const std::string& name,
+bool FunctionRegistry::registerFunction(
+    std::string_view name,
     std::unique_ptr<FunctionMetadata> metadata) {
-  metadata_[name] = std::move(metadata);
+  VELOX_USER_CHECK(!name.empty());
+  return metadata_.emplace(name, std::move(metadata)).second;
+}
+
+void FunctionRegistry::registerEquality(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  equality_ = name;
+}
+
+bool FunctionRegistry::registerElementAt(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (elementAt_.has_value() && elementAt_.value() != name) {
+    return false;
+  }
+  elementAt_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerSubscript(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (subscript_.has_value() && subscript_.value() != name) {
+    return false;
+  }
+  subscript_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerCardinality(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (cardinality_.has_value() && cardinality_.value() != name) {
+    return false;
+  }
+  cardinality_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerSpecialForm(
+    lp::SpecialForm specialForm,
+    std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  return specialForms_.emplace(specialForm, name).second;
+}
+
+bool FunctionRegistry::registerReversibleFunction(
+    std::string_view name,
+    std::string_view reverseName) {
+  VELOX_USER_CHECK(!name.empty());
+  VELOX_USER_CHECK(!reverseName.empty());
+  return reversibleFunctions_.emplace(name, reverseName).second;
+}
+
+bool FunctionRegistry::registerReversibleFunction(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  return reversibleFunctions_.emplace(name, name).second;
 }
 
 // static
@@ -39,18 +93,18 @@ FunctionRegistry* FunctionRegistry::instance() {
   return registry.get();
 }
 
-FunctionMetadataCP functionMetadata(Name name) {
+FunctionMetadataCP functionMetadata(std::string_view name) {
   return FunctionRegistry::instance()->metadata(name);
 }
 
-FunctionMetadataCP functionMetadata(const std::string& name) {
-  return FunctionRegistry::instance()->metadata(name);
+std::string specialForm(lp::SpecialForm specialForm) {
+  return FunctionRegistry::instance()->specialForm(specialForm);
 }
 
 namespace {
 std::pair<std::vector<Step>, int32_t> rowConstructorSubfield(
     const std::vector<Step>& steps,
-    const logical_plan::CallExpr& call) {
+    const lp::CallExpr& call) {
   VELOX_CHECK(steps.back().kind == StepKind::kField);
   auto field = steps.back().field;
   auto idx = call.type()->as<TypeKind::ROW>().getChildIdx(field);
@@ -59,30 +113,42 @@ std::pair<std::vector<Step>, int32_t> rowConstructorSubfield(
   return std::make_pair(newFields, idx);
 }
 
-std::unordered_map<PathCP, logical_plan::ExprPtr> rowConstructorExplode(
-    const logical_plan::CallExpr* call,
+std::unordered_map<PathCP, lp::ExprPtr> rowConstructorExplode(
+    const lp::CallExpr* call,
     std::vector<PathCP>& paths) {
-  std::unordered_map<PathCP, logical_plan::ExprPtr> result;
+  std::unordered_map<PathCP, lp::ExprPtr> result;
   for (auto& path : paths) {
-    auto& steps = path->steps();
+    const auto& steps = path->steps();
     if (steps.empty()) {
       return {};
     }
-    std::vector<Step> prefixSteps = {steps[0]};
-    auto prefixPath = toPath(std::move(prefixSteps));
-    if (result.count(prefixPath)) {
+    const auto* prefixPath = toPath({steps.data(), 1});
+    auto [it, emplaced] = result.try_emplace(prefixPath);
+    if (!emplaced) {
       // There already is an expression for this path.
       continue;
     }
     VELOX_CHECK(steps.front().kind == StepKind::kField);
     auto nth = steps.front().id;
-    result[prefixPath] = call->inputAt(nth);
+    it->second = call->inputAt(nth);
   }
   return result;
 }
 } // namespace
 
-bool declareBuiltIn() {
+// static
+void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
+  auto fullName = [&](std::string_view name) {
+    return prefix.empty() ? std::string(name)
+                          : fmt::format("{}{}", prefix, name);
+  };
+
+  auto registerFunction = [&](std::string_view name,
+                              std::unique_ptr<FunctionMetadata> metadata) {
+    FunctionRegistry::instance()->registerFunction(
+        fullName(name), std::move(metadata));
+  };
+
   {
     LambdaInfo info{
         .ordinal = 1,
@@ -93,9 +159,9 @@ bool declareBuiltIn() {
     metadata->lambdas.push_back(std::move(info));
     metadata->subfieldArg = 0;
     metadata->cost = 40;
-    FunctionRegistry::instance()->registerFunction(
-        "transform_values", std::move(metadata));
+    registerFunction("transform_values", std::move(metadata));
   }
+
   {
     LambdaInfo info{
         .ordinal = 1, .lambdaArg = {LambdaArg::kElement}, .argOrdinal = {0}};
@@ -104,9 +170,9 @@ bool declareBuiltIn() {
     metadata->lambdas.push_back(std::move(info));
     metadata->subfieldArg = 0;
     metadata->cost = 20;
-    FunctionRegistry::instance()->registerFunction(
-        "transform", std::move(metadata));
+    registerFunction("transform", std::move(metadata));
   }
+
   {
     LambdaInfo info{
         .ordinal = 2,
@@ -116,20 +182,40 @@ bool declareBuiltIn() {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->lambdas.push_back(std::move(info));
     metadata->cost = 20;
-    FunctionRegistry::instance()->registerFunction("zip", std::move(metadata));
+    registerFunction("zip", std::move(metadata));
   }
+
   {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->valuePathToArgPath = rowConstructorSubfield;
-    metadata->logicalExplode = rowConstructorExplode;
-    FunctionRegistry::instance()->registerFunction(
-        "row_constructor", std::move(metadata));
+    metadata->explode = rowConstructorExplode;
+    registerFunction("row_constructor", std::move(metadata));
   }
-  return true;
-}
 
-namespace {
-bool temp = declareBuiltIn();
+  auto* registry = FunctionRegistry::instance();
+
+  registry->registerEquality(fullName("eq"));
+  registry->registerElementAt(fullName("element_at"));
+  registry->registerSubscript(fullName("subscript"));
+  registry->registerCardinality(fullName("cardinality"));
+
+  registry->registerReversibleFunction(fullName("eq"));
+  registry->registerReversibleFunction(fullName("lt"), fullName("gt"));
+  registry->registerReversibleFunction(fullName("lte"), fullName("gte"));
+  registry->registerReversibleFunction(fullName("plus"));
+  registry->registerReversibleFunction(fullName("multiply"));
+
+  registry->registerSpecialForm(lp::SpecialForm::kAnd, expression::kAnd);
+  registry->registerSpecialForm(lp::SpecialForm::kOr, expression::kOr);
+  registry->registerSpecialForm(lp::SpecialForm::kCast, expression::kCast);
+  registry->registerSpecialForm(
+      lp::SpecialForm::kTryCast, expression::kTryCast);
+  registry->registerSpecialForm(lp::SpecialForm::kTry, expression::kTry);
+  registry->registerSpecialForm(lp::SpecialForm::kIf, expression::kIf);
+  registry->registerSpecialForm(
+      lp::SpecialForm::kCoalesce, expression::kCoalesce);
+  registry->registerSpecialForm(lp::SpecialForm::kSwitch, expression::kSwitch);
+  registry->registerSpecialForm(lp::SpecialForm::kIn, fullName("in"));
 }
 
 } // namespace facebook::velox::optimizer

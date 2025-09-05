@@ -46,8 +46,7 @@ class PlanMatcherImpl : public PlanMatcher {
     }
 
     for (auto i = 0; i < sourceMatchers_.size(); ++i) {
-      EXPECT_TRUE(sourceMatchers_[i]->match(plan->sources()[i]));
-      if (::testing::Test::HasNonfatalFailure()) {
+      if (!sourceMatchers_[i]->match(plan->sources()[i])) {
         return false;
       }
     }
@@ -67,22 +66,45 @@ class TableScanMatcher : public PlanMatcherImpl<TableScanNode> {
  public:
   explicit TableScanMatcher() : PlanMatcherImpl<TableScanNode>() {}
 
-  explicit TableScanMatcher(const std::string& tableName)
-      : PlanMatcherImpl<TableScanNode>(), tableName_{tableName} {}
+  explicit TableScanMatcher(
+      const std::string& tableName,
+      const RowTypePtr& columns = nullptr)
+      : PlanMatcherImpl<TableScanNode>(),
+        tableName_{tableName},
+        columns_{columns} {}
 
   bool matchDetails(const TableScanNode& plan) const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
     if (tableName_.has_value()) {
       EXPECT_EQ(plan.tableHandle()->name(), tableName_.value());
+    }
+
+    if (columns_ != nullptr) {
+      const auto& outputType = plan.outputType();
+      const auto numColumns = outputType->size();
+
+      EXPECT_EQ(numColumns, columns_->size());
       if (::testing::Test::HasNonfatalFailure()) {
         return false;
       }
+
+      for (auto i = 0; i < numColumns; ++i) {
+        auto name = plan.assignments().at(outputType->nameOf(i))->name();
+
+        EXPECT_EQ(name, columns_->nameOf(i));
+        EXPECT_EQ(
+            outputType->childAt(i)->toString(),
+            columns_->childAt(i)->toString());
+      }
     }
 
-    return true;
+    return !::testing::Test::HasNonfatalFailure();
   }
 
  private:
   const std::optional<std::string> tableName_;
+  const RowTypePtr columns_;
 };
 
 class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
@@ -97,7 +119,8 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
         remainingFilter_{remainingFilter} {}
 
   bool matchDetails(const TableScanNode& plan) const override {
-    SCOPED_TRACE(fmt::format("HiveScanMatcher: {}", plan.toString(true, true)));
+    SCOPED_TRACE(
+        fmt::format("HiveScanMatcher: {}", plan.toString(true, false)));
 
     const auto* hiveTableHandle =
         dynamic_cast<const connector::hive::HiveTableHandle*>(
@@ -167,17 +190,19 @@ class ValuesMatcher : public PlanMatcherImpl<ValuesNode> {
       : PlanMatcherImpl<ValuesNode>(), type_(type) {}
 
   bool matchDetails(const ValuesNode& plan) const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
     if (type_) {
       EXPECT_TRUE(type_->equivalent(*plan.outputType()))
           << "Expected equal output types on ValuesNode, but got '"
           << type_->toString() << "', and '" << plan.outputType()->toString()
           << "'.";
     }
-    return true;
+    return !::testing::Test::HasNonfatalFailure();
   }
 
  private:
-  TypePtr type_;
+  const TypePtr type_;
 };
 
 class FilterMatcher : public PlanMatcherImpl<FilterNode> {
@@ -191,6 +216,8 @@ class FilterMatcher : public PlanMatcherImpl<FilterNode> {
       : PlanMatcherImpl<FilterNode>({matcher}), predicate_{predicate} {}
 
   bool matchDetails(const FilterNode& plan) const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
     if (predicate_.has_value()) {
       auto expected = parse::parseExpr(predicate_.value(), {});
       EXPECT_EQ(plan.filter()->toString(), expected->toString());
@@ -217,6 +244,44 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
       : PlanMatcherImpl<ProjectNode>({matcher}), expressions_{expressions} {}
 
   bool matchDetails(const ProjectNode& plan) const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    if (!expressions_.empty()) {
+      EXPECT_EQ(plan.projections().size(), expressions_.size());
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+
+      for (auto i = 0; i < expressions_.size(); ++i) {
+        auto expected = parse::parseExpr(expressions_[i], {});
+        EXPECT_EQ(plan.projections()[i]->toString(), expected->toString());
+      }
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+ private:
+  const std::vector<std::string> expressions_;
+};
+
+class ParallelProjectMatcher : public PlanMatcherImpl<ParallelProjectNode> {
+ public:
+  explicit ParallelProjectMatcher(const std::shared_ptr<PlanMatcher>& matcher)
+      : PlanMatcherImpl<ParallelProjectNode>({matcher}) {}
+
+  ParallelProjectMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      const std::vector<std::string>& expressions)
+      : PlanMatcherImpl<ParallelProjectNode>({matcher}),
+        expressions_{expressions} {}
+
+  bool matchDetails(const ParallelProjectNode& plan) const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
     if (!expressions_.empty()) {
       EXPECT_EQ(plan.projections().size(), expressions_.size());
       if (::testing::Test::HasNonfatalFailure()) {
@@ -255,6 +320,8 @@ class LimitMatcher : public PlanMatcherImpl<LimitNode> {
         partial_{partial} {}
 
   bool matchDetails(const LimitNode& plan) const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
     if (count_.has_value()) {
       EXPECT_EQ(plan.offset(), offset_.value());
       EXPECT_EQ(plan.count(), count_.value());
@@ -282,6 +349,8 @@ class TopNMatcher : public PlanMatcherImpl<TopNNode> {
       : PlanMatcherImpl<TopNNode>({matcher}), count_{count} {}
 
   bool matchDetails(const TopNNode& plan) const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
     if (count_.has_value()) {
       EXPECT_EQ(plan.count(), count_.value());
       if (::testing::Test::HasNonfatalFailure()) {
@@ -307,6 +376,8 @@ class OrderByMatcher : public PlanMatcherImpl<OrderByNode> {
       : PlanMatcherImpl<OrderByNode>({matcher}), ordering_{ordering} {}
 
   bool matchDetails(const OrderByNode& plan) const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
     if (!ordering_.empty()) {
       EXPECT_EQ(plan.sortingOrders().size(), ordering_.size());
       if (::testing::Test::HasNonfatalFailure()) {
@@ -343,6 +414,8 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       : PlanMatcherImpl<AggregationNode>({matcher}), step_{step} {}
 
   bool matchDetails(const AggregationNode& plan) const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
     if (step_.has_value()) {
       EXPECT_EQ(plan.step(), step_.value());
       if (::testing::Test::HasNonfatalFailure()) {
@@ -371,6 +444,8 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
       : PlanMatcherImpl<HashJoinNode>({left, right}), joinType_{joinType} {}
 
   bool matchDetails(const HashJoinNode& plan) const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
     if (joinType_.has_value()) {
       EXPECT_EQ(
           JoinTypeName::toName(plan.joinType()),
@@ -399,6 +474,14 @@ PlanMatcherBuilder& PlanMatcherBuilder::tableScan(
     const std::string& tableName) {
   VELOX_USER_CHECK_NULL(matcher_);
   matcher_ = std::make_shared<TableScanMatcher>(tableName);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::tableScan(
+    const std::string& tableName,
+    const RowTypePtr& outputType) {
+  VELOX_USER_CHECK_NULL(matcher_);
+  matcher_ = std::make_shared<TableScanMatcher>(tableName, outputType);
   return *this;
 }
 
@@ -449,9 +532,29 @@ PlanMatcherBuilder& PlanMatcherBuilder::project(
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::parallelProject() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<ParallelProjectMatcher>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::parallelProject(
+    const std::vector<std::string>& expressions) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<ParallelProjectMatcher>(matcher_, expressions);
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::aggregation() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<AggregationMatcher>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::singleAggregation() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<AggregationMatcher>(
+      matcher_, AggregationNode::Step::kSingle);
   return *this;
 }
 

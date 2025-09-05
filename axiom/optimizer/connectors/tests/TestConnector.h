@@ -46,7 +46,7 @@ class TestTableLayout : public TableLayout {
   std::pair<int64_t, int64_t> sample(
       const connector::ConnectorTableHandlePtr&,
       float,
-      std::vector<core::TypedExprPtr>,
+      const std::vector<core::TypedExprPtr>&,
       RowTypePtr,
       const std::vector<common::Subfield>&,
       HashStringAllocator*,
@@ -96,10 +96,10 @@ class TestTable : public Table {
   /// via the TestTable internal memory pool.
   void addData(const RowVectorPtr& data) {
     VELOX_CHECK(
-        data->type()->equivalent(*rowType()),
+        data->type()->equivalent(*type()),
         "appended data type {} must match table type {}",
         data->type(),
-        rowType());
+        type());
     VELOX_CHECK(data->size() > 0, "cannot append empty RowVector");
     auto copy = std::dynamic_pointer_cast<RowVector>(
         BaseVector::copy(*data, pool_.get()));
@@ -149,7 +149,7 @@ class TestSplitManager : public ConnectorSplitManager {
 
   std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorTableHandlePtr& tableHandle,
-      std::vector<PartitionHandlePtr> partitions,
+      const std::vector<PartitionHandlePtr>& partitions,
       SplitOptions options = {}) override;
 };
 
@@ -185,7 +185,7 @@ class TestTableHandle : public ConnectorTableHandle {
         filters_(std::move(filters)) {}
 
   const std::string& name() const override {
-    return layout_.table()->name();
+    return layout_.table().name();
   }
 
   std::string toString() const override {
@@ -239,7 +239,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   void initialize() override {}
 
-  ConnectorTablePtr findTable(const std::string& name) override;
+  TablePtr findTable(const std::string& name) override;
 
   /// Non-interface method which supplies a non-const Table reference
   /// which is capable of performing writes to the underlying table.
@@ -264,6 +264,45 @@ class TestConnectorMetadata : public ConnectorMetadata {
       std::vector<core::TypedExprPtr>& rejectedFilters,
       RowTypePtr dataColumns,
       std::optional<LookupKeys>) override;
+
+  void createTable(
+      const std::string& tableName,
+      const RowTypePtr& rowType,
+      const std::unordered_map<std::string, std::string>& options,
+      const ConnectorSessionPtr& session,
+      bool errorIfExists = true,
+      TableKind tableKind = TableKind::kTable) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  ConnectorInsertTableHandlePtr createInsertTableHandle(
+      const TableLayout& layout,
+      const RowTypePtr& rowType,
+      const std::unordered_map<std::string, std::string>& options,
+      WriteKind kind,
+      const ConnectorSessionPtr& session) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  WritePartitionInfo writePartitionInfo(
+      const ConnectorInsertTableHandlePtr& handle) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  void finishWrite(
+      const TableLayout& layout,
+      const ConnectorInsertTableHandlePtr& handle,
+      const std::vector<RowVectorPtr>& writerResult,
+      WriteKind kind,
+      const ConnectorSessionPtr& session) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  std::vector<ColumnHandlePtr> rowIdHandles(
+      const TableLayout& layout,
+      WriteKind kind) override {
+    VELOX_UNSUPPORTED();
+  }
 
   /// Create and return a TestTable with the specified name and schema in the
   /// in-memory map maintained in the connector metadata. If the table already
@@ -292,7 +331,7 @@ class TestDataSource : public DataSource {
   TestDataSource(
       const RowTypePtr& outputType,
       const ColumnHandleMap& handles,
-      ConnectorTablePtr table,
+      TablePtr table,
       memory::MemoryPool* pool);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
@@ -343,7 +382,7 @@ class TestConnector : public Connector {
     return metadata_.get();
   }
 
-  bool supportsSplitPreload() override {
+  bool supportsSplitPreload() const override {
     return true;
   }
 

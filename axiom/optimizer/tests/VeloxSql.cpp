@@ -27,7 +27,6 @@
 #include "axiom/optimizer/connectors/ConnectorSplitSource.h"
 #include "axiom/optimizer/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/optimizer/connectors/tpch/TpchConnectorMetadata.h"
-#include "axiom/optimizer/tests/DuckParser.h"
 #include "axiom/optimizer/tests/PrestoParser.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/benchmarks/QueryBenchmarkBase.h"
@@ -51,11 +50,6 @@ DEFINE_string(
     "",
     "Root path of data. Data layout must follow Hive-style partitioning. ");
 
-DEFINE_bool(
-    use_duck_parser,
-    false,
-    "Use DuckDB SQL parser instead of built-in Presto SQL parser.");
-
 // Defined in velox/benchmarks/QueryBenchmarkBase.cpp
 DECLARE_string(ssd_path);
 DECLARE_int32(ssd_cache_gb);
@@ -64,7 +58,7 @@ DECLARE_int32(cache_gb);
 
 DEFINE_bool(use_mmap, false, "Use mmap for buffers and cache");
 
-DEFINE_int32(optimizer_trace, 0, "Optimizer trace level");
+DEFINE_uint32(optimizer_trace, 0, "Optimizer trace level");
 
 DEFINE_bool(print_logical_plan, false, "Print logical plan (optimizer input)");
 
@@ -154,6 +148,8 @@ class VeloxRunner : public QueryBenchmarkBase {
     aggregate::prestosql::registerAllAggregateFunctions();
     parse::registerTypeResolver();
 
+    optimizer::FunctionRegistry::registerPrestoFunctions();
+
     filesystems::registerLocalFileSystem();
     parquet::registerParquetReaderFactory();
     dwrf::registerDwrfReaderFactory();
@@ -172,13 +168,8 @@ class VeloxRunner : public QueryBenchmarkBase {
 
     schema_ = std::make_shared<optimizer::SchemaResolver>();
 
-    if (FLAGS_use_duck_parser) {
-      VELOX_CHECK(!FLAGS_data_path.empty());
-      duckParser_ = setupQueryParser();
-    } else {
-      prestoParser_ = std::make_unique<optimizer::test::PrestoParser>(
-          connector_->connectorId(), optimizerPool_.get());
-    }
+    prestoParser_ = std::make_unique<optimizer::test::PrestoParser>(
+        connector_->connectorId(), optimizerPool_.get());
 
     history_ = std::make_unique<optimizer::VeloxHistory>();
 
@@ -195,7 +186,7 @@ class VeloxRunner : public QueryBenchmarkBase {
 
   void initializeMemoryManager() {
     if (FLAGS_cache_gb) {
-      memory::MemoryManagerOptions options;
+      memory::MemoryManager::Options options;
       int64_t memoryBytes = FLAGS_cache_gb * (1LL << 30);
       options.useMmapAllocator = FLAGS_use_mmap;
       options.allocatorCapacity = memoryBytes;
@@ -207,7 +198,7 @@ class VeloxRunner : public QueryBenchmarkBase {
           memory::memoryManager()->allocator(), setupSsdCache());
       cache::AsyncDataCache::setInstance(cache_.get());
     } else {
-      memory::MemoryManagerOptions options;
+      memory::MemoryManager::Options options;
       memory::MemoryManager::testingSetInstance(options);
     }
   }
@@ -261,19 +252,6 @@ class VeloxRunner : public QueryBenchmarkBase {
     return connector;
   }
 
-  std::unique_ptr<optimizer::test::DuckParser> setupQueryParser() {
-    auto parser = std::make_unique<optimizer::test::DuckParser>(
-        connector_->connectorId(), optimizerPool_.get());
-    auto& tables = dynamic_cast<connector::hive::LocalHiveConnectorMetadata*>(
-                       connector_->metadata())
-                       ->tables();
-    for (auto& pair : tables) {
-      parser->registerTable(pair.first, pair.second->rowType());
-    }
-
-    return parser;
-  }
-
   std::vector<RowVectorPtr> runInner(
       facebook::axiom::runner::LocalRunner& runner,
       RunStats& stats) {
@@ -314,19 +292,24 @@ class VeloxRunner : public QueryBenchmarkBase {
   void run(const std::string& sql) {
     optimizer::test::SqlStatementPtr sqlStatement;
     try {
-      if (FLAGS_use_duck_parser) {
-        sqlStatement = duckParser_->parse(sql);
-      } else {
-        sqlStatement = prestoParser_->parse(sql);
-      }
+      sqlStatement = prestoParser_->parse(sql);
     } catch (std::exception& e) {
       std::cerr << "Failed to parse SQL: " << e.what() << std::endl;
       return;
     }
 
     if (sqlStatement->isExplain()) {
-      runExplain(
-          *sqlStatement->asUnchecked<optimizer::test::ExplainStatement>());
+      auto* explain =
+          sqlStatement->asUnchecked<optimizer::test::ExplainStatement>();
+
+      CHECK(explain->statement()->isSelect());
+      auto* select =
+          explain->statement()->asUnchecked<optimizer::test::SelectStatement>();
+      if (explain->isAnalyze()) {
+        runExplainAnalyze(*select);
+      } else {
+        runExplain(*select);
+      }
       return;
     }
 
@@ -413,36 +396,6 @@ class VeloxRunner : public QueryBenchmarkBase {
     }
   }
 
-  const exec::OperatorStats* findOperatorStats(
-      const exec::TaskStats& taskStats,
-      const core::PlanNodeId& id) {
-    for (auto& p : taskStats.pipelineStats) {
-      for (auto& o : p.operatorStats) {
-        if (o.planNodeId == id) {
-          return &o;
-        }
-      }
-    }
-    return nullptr;
-  }
-
-  std::string predictionString(
-      const core::PlanNodeId& id,
-      const exec::TaskStats& taskStats,
-      const optimizer::NodePredictionMap& prediction) {
-    auto it = prediction.find(id);
-    if (it == prediction.end()) {
-      return "";
-    }
-    auto* operatorStats = findOperatorStats(taskStats, id);
-    if (!operatorStats) {
-      return fmt::format("*** missing stats for {}", id);
-    }
-    auto predicted = it->second.cardinality;
-    auto actual = operatorStats->outputPositions;
-    return fmt::format("predicted={} actual={} ", predicted, actual);
-  }
-
   std::shared_ptr<core::QueryCtx> newQuery() {
     ++queryCounter_;
 
@@ -456,16 +409,28 @@ class VeloxRunner : public QueryBenchmarkBase {
         fmt::format("query_{}", queryCounter_));
   }
 
-  void runExplain(const optimizer::test::ExplainStatement& statement) {
-    CHECK(statement.statement()->isSelect());
+  void runExplain(const optimizer::test::SelectStatement& statement) {
+    auto plan = optimize(statement.plan(), newQuery());
+    std::cout << plan.toString() << std::endl;
+  }
 
-    auto plan = optimize(
-        statement.statement()
-            ->asUnchecked<optimizer::test::SelectStatement>()
-            ->plan(),
-        newQuery());
+  void runExplainAnalyze(const optimizer::test::SelectStatement& statement) {
+    auto queryCtx = newQuery();
+    auto planAndStats = optimize(statement.plan(), queryCtx);
 
-    std::cout << plan.plan->toString() << std::endl;
+    auto runner = makeRunner(planAndStats, queryCtx);
+    SCOPE_EXIT {
+      waitForCompletion(runner);
+    };
+
+    RunStats unused;
+    auto results = runInner(*runner, unused);
+
+    printPlanWithStats(*runner, planAndStats.prediction);
+
+    std::cout << "(" << countResults(results) << " rows in " << results.size()
+              << " batches)" << std::endl
+              << std::endl;
   }
 
   optimizer::PlanAndStats optimize(
@@ -525,6 +490,34 @@ class VeloxRunner : public QueryBenchmarkBase {
     return optimization.toVeloxPlan(best->op);
   }
 
+  static void printPlanWithStats(
+      facebook::axiom::runner::LocalRunner& runner,
+      const optimizer::NodePredictionMap& estimates) {
+    std::cout << runner.printPlanWithStats([&](const core::PlanNodeId& nodeId,
+                                               const std::string& indentation,
+                                               std::ostream& out) {
+      auto it = estimates.find(nodeId);
+      if (it != estimates.end()) {
+        out << indentation << "Estimate: " << it->second.cardinality
+            << " rows, " << succinctBytes(it->second.peakMemory)
+            << " peak memory" << std::endl;
+      }
+    });
+  }
+
+  static std::shared_ptr<facebook::axiom::runner::LocalRunner> makeRunner(
+      const optimizer::PlanAndStats& planAndStats,
+      const std::shared_ptr<core::QueryCtx>& queryCtx) {
+    connector::SplitOptions splitOptions{
+        .targetSplitCount = FLAGS_num_workers * FLAGS_num_drivers * 2,
+        .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
+
+    return std::make_shared<facebook::axiom::runner::LocalRunner>(
+        planAndStats.plan,
+        queryCtx,
+        std::make_shared<connector::ConnectorSplitSourceFactory>(splitOptions));
+  }
+
   /// Runs a query and returns the result as a single vector in *resultVector,
   /// the plan text in *planString and the error message in *errorString.
   /// *errorString is not set if no error. Any of these may be nullptr.
@@ -536,7 +529,6 @@ class VeloxRunner : public QueryBenchmarkBase {
       std::vector<exec::TaskStats>* statsReturn = nullptr,
       RunStats* runStatsReturn = nullptr) {
     auto queryCtx = newQuery();
-
     optimizer::PlanAndStats planAndStats;
     try {
       planAndStats = optimize(logicalPlan, queryCtx, [&](const auto& best) {
@@ -557,18 +549,13 @@ class VeloxRunner : public QueryBenchmarkBase {
                 << planAndStats.plan->toString() << std::endl;
     }
 
-    RunStats runStats;
-    std::shared_ptr<facebook::axiom::runner::LocalRunner> runner;
     try {
-      connector::SplitOptions splitOptions{
-          .targetSplitCount = FLAGS_num_workers * FLAGS_num_drivers * 2,
-          .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
-      runner = std::make_shared<facebook::axiom::runner::LocalRunner>(
-          planAndStats.plan,
-          queryCtx,
-          std::make_shared<connector::ConnectorSplitSourceFactory>(
-              splitOptions));
+      auto runner = makeRunner(planAndStats, queryCtx);
+      SCOPE_EXIT {
+        waitForCompletion(runner);
+      };
 
+      RunStats runStats;
       auto results = runInner(*runner, runStats);
 
       if (resultVector) {
@@ -580,43 +567,38 @@ class VeloxRunner : public QueryBenchmarkBase {
         *statsReturn = stats;
       }
 
-      const int numRows = printResults(results);
-
       const auto& fragments = planAndStats.plan->fragments();
-      for (int32_t i = fragments.size() - 1; i >= 0; --i) {
-        for (const auto& pipeline : stats[i].pipelineStats) {
-          const auto& first = pipeline.operatorStats[0];
-          if (first.operatorType == "TableScan") {
-            runStats.rawInputBytes += first.rawInputBytes;
+      for (auto i = 0; i < fragments.size(); ++i) {
+        auto nodeStats = exec::toPlanStats(stats[i]);
+        for (const auto& scan : fragments[i].scans) {
+          auto statsIt = nodeStats.find(scan->id());
+          if (statsIt != nodeStats.end()) {
+            runStats.rawInputBytes += statsIt->second.rawInputBytes;
           }
         }
-        if (FLAGS_print_stats) {
-          std::cout << "Fragment " << i << ":" << std::endl;
-          std::cout << exec::printPlanWithStats(
-              *fragments[i].fragment.planNode,
-              stats[i],
-              FLAGS_include_custom_stats,
-              [&](auto id) {
-                return predictionString(id, stats[i], planAndStats.prediction);
-              });
-          std::cout << std::endl;
-        }
       }
+
+      if (runStatsReturn) {
+        *runStatsReturn = runStats;
+      }
+
+      const int numRows = printResults(results);
+
+      if (FLAGS_print_stats) {
+        printPlanWithStats(*runner, planAndStats.prediction);
+      }
+
       history_->recordVeloxExecution(planAndStats, stats);
       std::cout << numRows << " rows " << runStats.toString(false) << std::endl;
+
+      return runner;
     } catch (const std::exception& e) {
       std::cerr << "Query terminated with: " << e.what() << std::endl;
       if (errorString) {
         *errorString = fmt::format("Runtime error: {}", e.what());
       }
-      waitForCompletion(runner);
       return nullptr;
     }
-    waitForCompletion(runner);
-    if (runStatsReturn) {
-      *runStatsReturn = runStats;
-    }
-    return runner;
   }
 
   void runMain(std::ostream& out, RunStats& runStats) override {
@@ -643,7 +625,7 @@ class VeloxRunner : public QueryBenchmarkBase {
     if (runner) {
       try {
         runner->waitForCompletion(500000);
-      } catch (const std::exception& /*ignore*/) {
+      } catch (const std::exception&) {
       }
     }
   }
@@ -719,11 +701,16 @@ class VeloxRunner : public QueryBenchmarkBase {
     }
   }
 
-  static int32_t printResults(const std::vector<RowVectorPtr>& results) {
-    int32_t numRows = 0;
+  static int64_t countResults(const std::vector<RowVectorPtr>& results) {
+    int64_t numRows = 0;
     for (const auto& result : results) {
       numRows += result->size();
     }
+    return numRows;
+  }
+
+  static int32_t printResults(const std::vector<RowVectorPtr>& results) {
+    const auto numRows = countResults(results);
 
     auto printFooter = [&]() {
       std::cout << "(" << numRows << " rows in " << results.size()
@@ -833,7 +820,6 @@ class VeloxRunner : public QueryBenchmarkBase {
   std::shared_ptr<connector::Connector> connector_;
   std::shared_ptr<optimizer::SchemaResolver> schema_;
   std::unique_ptr<optimizer::VeloxHistory> history_;
-  std::unique_ptr<optimizer::test::DuckParser> duckParser_;
   std::unique_ptr<optimizer::test::PrestoParser> prestoParser_;
   std::ofstream* record_{nullptr};
   std::ifstream* check_{nullptr};

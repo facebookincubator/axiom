@@ -124,8 +124,8 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       core::ExpressionEvaluator& evaluator,
       std::vector<core::TypedExprPtr> filters,
       std::vector<core::TypedExprPtr>& rejectedFilters,
-      RowTypePtr dataColumns = nullptr,
-      std::optional<LookupKeys> lookupKeys = std::nullopt) override;
+      RowTypePtr dataColumns,
+      std::optional<LookupKeys> lookupKeys) override;
 
   ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
@@ -134,9 +134,38 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       WriteKind kind,
       const ConnectorSessionPtr& session) override;
 
-  virtual dwio::common::FileFormat fileFormat() const {
+  void createTable(
+      const std::string& tableName,
+      const velox::RowTypePtr& rowType,
+      const std::unordered_map<std::string, std::string>& options,
+      const velox::connector::ConnectorSessionPtr& session,
+      bool errorIfExists = true,
+      velox::connector::TableKind tableKind =
+          velox::connector::TableKind::kTable) override {
     VELOX_UNSUPPORTED();
   }
+
+  void finishWrite(
+      const velox::connector::TableLayout& layout,
+      const velox::connector::ConnectorInsertTableHandlePtr& handle,
+      const std::vector<velox::RowVectorPtr>& writerResult,
+      velox::connector::WriteKind kind,
+      const velox::connector::ConnectorSessionPtr& session) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  WritePartitionInfo writePartitionInfo(
+      const ConnectorInsertTableHandlePtr& handle) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  std::vector<ColumnHandlePtr> rowIdHandles(
+      const TableLayout& layout,
+      WriteKind kind) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  virtual dwio::common::FileFormat fileFormat() const = 0;
 
  protected:
   virtual void ensureInitialized() const {}
@@ -148,16 +177,12 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       std::string targetDirectory,
       std::optional<std::string> writeDirectory,
       connector::hive::LocationHandle::TableType tableType =
-          connector::hive::LocationHandle::TableType::kNew) {
-    VELOX_UNSUPPORTED();
-  }
+          connector::hive::LocationHandle::TableType::kNew) = 0;
 
   /// Returns the path to the filesystem root for the data managed by
   /// 'this'. Directories inside this correspond to schemas and
   /// tables.
-  virtual std::string dataPath() const {
-    VELOX_UNSUPPORTED();
-  }
+  virtual std::string dataPath() const = 0;
 
   HiveConnector* const hiveConnector_;
 };

@@ -28,14 +28,15 @@
 #include "velox/functions/FunctionRegistry.h"
 
 namespace facebook::velox::optimizer {
+namespace {
 
 namespace lp = facebook::velox::logical_plan;
 
 /// Trace info to add to exception messages.
 struct ToGraphContext {
-  ToGraphContext(const lp::Expr* e) : expr(e), node(nullptr) {}
+  explicit ToGraphContext(const lp::Expr* e) : expr{e} {}
 
-  ToGraphContext(const lp::LogicalPlanNode* n) : expr(nullptr), node(n) {}
+  explicit ToGraphContext(const lp::LogicalPlanNode* n) : node{n} {}
 
   const lp::Expr* expr{nullptr};
   const lp::LogicalPlanNode* node{nullptr};
@@ -60,6 +61,39 @@ ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
   e.messageFunc = toGraphMessage;
   e.arg = ctx;
   return e;
+}
+} // namespace
+
+ToGraph::ToGraph(
+    const Schema& schema,
+    core::ExpressionEvaluator& evaluator,
+    const OptimizerOptions& options)
+    : schema_{schema},
+      evaluator_{evaluator},
+      options_{options},
+      equality_{toName(FunctionRegistry::instance()->equality())} {
+  auto* registry = FunctionRegistry::instance();
+
+  const auto& reversibleFunctions = registry->reversibleFunctions();
+  for (const auto& [name, reverseName] : reversibleFunctions) {
+    reversibleFunctions_[toName(name)] = toName(reverseName);
+    reversibleFunctions_[toName(reverseName)] = toName(name);
+  }
+
+  reversibleFunctions_[SpecialFormCallNames::kAnd] = SpecialFormCallNames::kAnd;
+  reversibleFunctions_[SpecialFormCallNames::kOr] = SpecialFormCallNames::kOr;
+
+  if (auto elementAt = registry->elementAt()) {
+    elementAt_ = toName(elementAt.value());
+  }
+
+  if (auto subscript = registry->subscript()) {
+    subscript_ = toName(subscript.value());
+  }
+
+  if (auto cardinality = registry->cardinality()) {
+    cardinality_ = toName(cardinality.value());
+  }
 }
 
 void ToGraph::setDtOutput(
@@ -101,9 +135,10 @@ void ToGraph::setDtUsedOutput(
 
 namespace {
 bool isConstantTrue(ExprCP expr) {
-  if (expr->type() != PlanType::kLiteralExpr) {
+  if (expr->isNot(PlanType::kLiteralExpr)) {
     return false;
   }
+
   const auto& variant = expr->as<Literal>()->literal();
   return variant.kind() == TypeKind::BOOLEAN && !variant.isNull() &&
       variant.value<bool>();
@@ -114,7 +149,7 @@ void ToGraph::translateConjuncts(const lp::ExprPtr& input, ExprVector& flat) {
   if (!input) {
     return;
   }
-  if (isSpecialForm(input.get(), lp::SpecialForm::kAnd)) {
+  if (isSpecialForm(input, lp::SpecialForm::kAnd)) {
     for (auto& child : input->inputs()) {
       translateConjuncts(child, flat);
     }
@@ -151,7 +186,10 @@ ExprCP ToGraph::tryFoldConstant(
   return nullptr;
 }
 
-bool ToGraph::isSubfield(const lp::Expr* expr, Step& step, lp::ExprPtr& input) {
+bool ToGraph::isSubfield(
+    const lp::ExprPtr& expr,
+    Step& step,
+    lp::ExprPtr& input) {
   if (isSpecialForm(expr, lp::SpecialForm::kDereference)) {
     step.kind = StepKind::kField;
     auto maybeIndex =
@@ -173,9 +211,10 @@ bool ToGraph::isSubfield(const lp::Expr* expr, Step& step, lp::ExprPtr& input) {
     return true;
   }
 
-  if (const auto* call = expr->asUnchecked<lp::CallExpr>()) {
-    auto name = call->name();
-    if (name == "subscript" || name == "element_at") {
+  if (expr->isCall()) {
+    const auto* call = expr->asUnchecked<lp::CallExpr>();
+    auto name = toName(call->name());
+    if (name == subscript_ || name == elementAt_) {
       auto subscript = translateExpr(call->inputAt(1));
       if (subscript->is(PlanType::kLiteralExpr)) {
         step.kind = StepKind::kSubscript;
@@ -198,7 +237,7 @@ bool ToGraph::isSubfield(const lp::Expr* expr, Step& step, lp::ExprPtr& input) {
       }
       return false;
     }
-    if (name == "cardinality") {
+    if (name == cardinality_) {
       step.kind = StepKind::kCardinality;
       input = expr->inputAt(0);
       return true;
@@ -215,9 +254,11 @@ void ToGraph::getExprForField(
   for (;;) {
     auto& name = field->asUnchecked<lp::InputReferenceExpr>()->name();
     auto ordinal = context->outputType()->getChildIdx(name);
-    if (const auto* project = context->asUnchecked<lp::ProjectNode>()) {
+    if (context->is(lp::NodeKind::kProject)) {
+      const auto* project = context->asUnchecked<lp::ProjectNode>();
       auto& def = project->expressions()[ordinal];
-      if (const auto* innerField = def->asUnchecked<lp::InputReferenceExpr>()) {
+      if (def->isInputReference()) {
+        const auto* innerField = def->asUnchecked<lp::InputReferenceExpr>();
         context = context->inputAt(0).get();
         field = innerField;
         continue;
@@ -265,7 +306,7 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
     lp::ExprPtr input;
     Step step;
     VELOX_CHECK_NOT_NULL(expr);
-    bool isStep = isSubfield(expr.get(), step, input);
+    bool isStep = isSubfield(expr, step, input);
     if (!isStep) {
       if (steps.empty()) {
         return std::nullopt;
@@ -314,12 +355,8 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
 }
 
 namespace {
-PathCP innerPath(const std::vector<Step>& steps, int32_t last) {
-  std::vector<Step> reverse;
-  for (int32_t i = steps.size() - 1; i >= last; --i) {
-    reverse.push_back(steps[i]);
-  }
-  return toPath(std::move(reverse));
+PathCP innerPath(std::span<const Step> steps, int32_t last) {
+  return toPath(steps.subspan(last), true);
 }
 
 Variant* subscriptLiteral(TypeKind kind, const Step& step) {
@@ -352,7 +389,7 @@ ExprCP ToGraph::makeGettersOverSkyline(
     const SubfieldProjections* skyline,
     const lp::ExprPtr& base,
     ColumnCP column) {
-  int32_t last = steps.size() - 1;
+  auto last = static_cast<int32_t>(steps.size() - 1);
   ExprCP expr = nullptr;
   if (skyline) {
     // We see how many trailing (inner) steps fall below skyline, i.e. address
@@ -387,12 +424,12 @@ ExprCP ToGraph::makeGettersOverSkyline(
       });
       expr = translateExpr(base);
     }
-    last = steps.size();
+    last = static_cast<int32_t>(steps.size());
   }
 
   for (int32_t i = last - 1; i >= 0; --i) {
     // We make a getter over expr made so far with 'steps[i]' as first.
-    PathExpr pathExpr = {steps[i], nullptr, expr};
+    PathExpr pathExpr{steps[i], nullptr, expr};
     auto it = deduppedGetters_.find(pathExpr);
     if (it != deduppedGetters_.end()) {
       expr = it->second;
@@ -428,17 +465,14 @@ ExprCP ToGraph::makeGettersOverSkyline(
           };
 
           expr = make<Call>(
-              toName("subscript"),
-              Value(valueType, 1),
-              std::move(args),
-              FunctionSet());
+              subscript_, Value(valueType, 1), std::move(args), FunctionSet());
           break;
         }
 
         case StepKind::kCardinality: {
           expr = make<Call>(
-              toName("cardinality"),
-              Value(toType(INTEGER()), 1),
+              cardinality_,
+              Value(toType(BIGINT()), 1),
               ExprVector{expr},
               FunctionSet());
           break;
@@ -492,64 +526,14 @@ BitSet ToGraph::functionSubfields(
 }
 
 void ToGraph::ensureFunctionSubfields(const lp::ExprPtr& expr) {
-  if (const auto* call = expr->asUnchecked<lp::CallExpr>()) {
+  if (expr->isCall()) {
+    const auto* call = expr->asUnchecked<lp::CallExpr>();
     if (functionMetadata(exec::sanitizeName(call->name()))) {
       if (!translatedSubfieldFuncs_.contains(call)) {
         translateExpr(expr);
       }
     }
   }
-}
-
-BuiltinNames::BuiltinNames()
-    : eq(toName("eq")),
-      lt(toName("lt")),
-      lte(toName("lte")),
-      gt(toName("gt")),
-      gte(toName("gte")),
-      plus(toName("plus")),
-      multiply(toName("multiply")),
-      _and(toName(SpecialFormCallNames::kAnd)),
-      _or(toName(SpecialFormCallNames::kOr)),
-      cast(toName(SpecialFormCallNames::kCast)),
-      tryCast(toName(SpecialFormCallNames::kTryCast)),
-      _try(toName(SpecialFormCallNames::kTry)),
-      coalesce(toName(SpecialFormCallNames::kCoalesce)),
-      _if(toName(SpecialFormCallNames::kIf)),
-      _switch(toName(SpecialFormCallNames::kSwitch)),
-      in(toName(SpecialFormCallNames::kIn)) {
-  canonicalizable.insert(eq);
-  canonicalizable.insert(lt);
-  canonicalizable.insert(lte);
-  canonicalizable.insert(gt);
-  canonicalizable.insert(gte);
-  canonicalizable.insert(plus);
-  canonicalizable.insert(multiply);
-  canonicalizable.insert(_and);
-  canonicalizable.insert(_or);
-}
-
-Name BuiltinNames::reverse(Name name) const {
-  if (name == lt) {
-    return gt;
-  }
-  if (name == lte) {
-    return gte;
-  }
-  if (name == gt) {
-    return lt;
-  }
-  if (name == gte) {
-    return lte;
-  }
-  return name;
-}
-
-BuiltinNames& ToGraph::builtinNames() {
-  if (!builtinNames_) {
-    builtinNames_ = std::make_unique<BuiltinNames>();
-  }
-  return *builtinNames_;
 }
 
 namespace {
@@ -563,28 +547,33 @@ namespace {
 ///  #2. If none are literal, but the id on the left is higher.
 bool shouldInvert(ExprCP left, ExprCP right) {
   if (left->is(PlanType::kLiteralExpr) &&
-      right->type() != PlanType::kLiteralExpr) {
+      right->isNot(PlanType::kLiteralExpr)) {
     return true;
-  } else if (
-      (left->type() != PlanType::kLiteralExpr) &&
-      (right->type() != PlanType::kLiteralExpr) && (left->id() > right->id())) {
-    return true;
-  } else {
-    return false;
   }
+
+  if (left->isNot(PlanType::kLiteralExpr) &&
+      right->isNot(PlanType::kLiteralExpr) && (left->id() > right->id())) {
+    return true;
+  }
+
+  return false;
 }
 
 } // namespace
 
 void ToGraph::canonicalizeCall(Name& name, ExprVector& args) {
-  auto& names = builtinNames();
-  if (!names.isCanonicalizable(name)) {
+  if (args.size() != 2) {
     return;
   }
-  VELOX_CHECK_EQ(args.size(), 2, "Expecting binary op {}", name);
+
+  auto it = reversibleFunctions_.find(name);
+  if (it == reversibleFunctions_.end()) {
+    return;
+  }
+
   if (shouldInvert(args[0], args[1])) {
     std::swap(args[0], args[1]);
-    name = names.reverse(name);
+    name = it->second;
   }
 }
 
@@ -593,21 +582,45 @@ ExprCP ToGraph::deduppedCall(
     Value value,
     ExprVector args,
     FunctionSet flags) {
-  if (args.size() == 2) {
-    canonicalizeCall(name, args);
-  }
+  canonicalizeCall(name, args);
   ExprDedupKey key = {name, &args};
+
   auto it = functionDedup_.find(key);
   if (it != functionDedup_.end()) {
     return it->second;
   }
-  auto* call =
-      make<Call>(name, std::move(value), std::move(args), std::move(flags));
+  auto* call = make<Call>(name, value, std::move(args), flags);
   if (!call->containsNonDeterministic()) {
     key.args = &call->args();
     functionDedup_[key] = call;
   }
   return call;
+}
+
+bool ToGraph::isJoinEquality(
+    ExprCP expr,
+    std::vector<PlanObjectP>& tables,
+    ExprCP& left,
+    ExprCP& right) const {
+  if (expr->is(PlanType::kCallExpr)) {
+    auto call = expr->as<Call>();
+    if (call->name() == equality_) {
+      left = call->argAt(0);
+      right = call->argAt(1);
+
+      auto leftTable = left->singleTable();
+      auto rightTable = right->singleTable();
+      if (!leftTable || !rightTable) {
+        return false;
+      }
+
+      if (leftTable == tables[1]) {
+        std::swap(left, right);
+      }
+      return true;
+    }
+  }
+  return false;
 }
 
 ExprCP ToGraph::makeConstant(const lp::ConstantExpr& constant) {
@@ -660,7 +673,8 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
   ToGraphContext ctx(expr.get());
   ExceptionContextSetter exceptionContext(makeExceptionContext(&ctx));
 
-  const auto* call = expr->asUnchecked<lp::CallExpr>();
+  const auto* call =
+      expr->isCall() ? expr->asUnchecked<lp::CallExpr>() : nullptr;
   std::string callName;
   if (call) {
     callName = exec::sanitizeName(call->name());
@@ -673,7 +687,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     }
   }
 
-  const lp::SpecialFormExpr* specialForm = expr->isSpecialForm()
+  const auto* specialForm = expr->isSpecialForm()
       ? expr->asUnchecked<lp::SpecialFormExpr>()
       : nullptr;
 
@@ -685,7 +699,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     float cardinality = 1;
     bool allConstant = true;
 
-    for (auto input : inputs) {
+    for (const auto& input : inputs) {
       auto arg = translateExpr(input);
       args.emplace_back(arg);
       allConstant &= arg->is(PlanType::kLiteralExpr);
@@ -695,9 +709,8 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       }
     }
 
-    auto name = call
-        ? toName(callName)
-        : toName(SpecialFormCallNames::toCallName(specialForm->form()));
+    auto name = call ? toName(callName)
+                     : SpecialFormCallNames::toCallName(specialForm->form());
     if (allConstant) {
       if (auto literal = tryFoldConstant(expr->type(), name, args)) {
         return literal;
@@ -716,7 +729,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
 
 ExprCP ToGraph::translateLambda(const lp::LambdaExpr* lambda) {
   auto savedRenames = renames_;
-  auto row = lambda->signature();
+  const auto& row = lambda->signature();
   toType(row);
   toType(lambda->type());
   ColumnVector args;
@@ -734,12 +747,12 @@ ExprCP ToGraph::translateLambda(const lp::LambdaExpr* lambda) {
 namespace {
 // Returns a mask that allows 'op' in the same derived table.
 uint64_t allow(PlanType op) {
-  return 1UL << static_cast<int32_t>(op);
+  return 1UL << static_cast<uint32_t>(op);
 }
 
 // True if 'op' is in 'mask.
 bool contains(uint64_t mask, PlanType op) {
-  return 0 != (mask & (1UL << static_cast<int32_t>(op)));
+  return 0 != (mask & (1UL << static_cast<uint32_t>(op)));
 }
 } // namespace
 
@@ -805,8 +818,8 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
   auto* name = toName(exec::sanitizeName(call->name()));
   funcs = funcs | functionBits(name);
 
-  if (metadata->logicalExplode) {
-    auto map = metadata->logicalExplode(call, paths);
+  if (metadata->explode) {
+    auto map = metadata->explode(call, paths);
     std::unordered_map<PathCP, ExprCP> translated;
     for (const auto& [path, expr] : map) {
       translated[path] = translateExpr(expr);
@@ -849,20 +862,19 @@ ExprVector ToGraph::translateColumns(const std::vector<lp::ExprPtr>& source) {
   return result;
 }
 
-AggregationPlanCP ToGraph::translateAggregation(
-    const lp::AggregateNode& logicalAgg) {
-  ExprVector groupingKeys = translateColumns(logicalAgg.groupingKeys());
+AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
+  ExprVector groupingKeys = translateColumns(agg.groupingKeys());
   AggregateVector aggregates;
   ColumnVector columns;
 
-  for (auto i = 0; i < logicalAgg.groupingKeys().size(); ++i) {
-    auto name = toName(logicalAgg.outputType()->nameOf(i));
+  for (auto i = 0; i < agg.groupingKeys().size(); ++i) {
+    auto name = toName(agg.outputType()->nameOf(i));
     auto* key = groupingKeys[i];
 
     if (key->is(PlanType::kColumnExpr)) {
       columns.push_back(key->as<Column>());
     } else {
-      toType(logicalAgg.outputType()->childAt(i));
+      toType(agg.outputType()->childAt(i));
 
       auto* column = make<Column>(name, currentDt_, key->value(), name);
       columns.push_back(column);
@@ -873,13 +885,13 @@ AggregationPlanCP ToGraph::translateAggregation(
 
   // The keys for intermediate are the same as for final.
   ColumnVector intermediateColumns = columns;
-  for (auto channel : usedChannels(logicalAgg)) {
-    if (channel < logicalAgg.groupingKeys().size()) {
+  for (auto channel : usedChannels(agg)) {
+    if (channel < agg.groupingKeys().size()) {
       continue;
     }
 
-    const auto i = channel - logicalAgg.groupingKeys().size();
-    const auto& aggregate = logicalAgg.aggregates()[i];
+    const auto i = channel - agg.groupingKeys().size();
+    const auto& aggregate = agg.aggregates()[i];
     ExprVector args = translateColumns(aggregate->inputs());
 
     FunctionSet funcs;
@@ -898,7 +910,7 @@ AggregationPlanCP ToGraph::translateAggregation(
     auto accumulatorType = toType(
         exec::resolveAggregateFunction(aggregate->name(), argTypes).second);
     Value finalValue = Value(toType(aggregate->type()), 1);
-    auto* agg = make<Aggregate>(
+    auto* aggregateExpr = make<Aggregate>(
         aggName,
         finalValue,
         args,
@@ -907,16 +919,16 @@ AggregationPlanCP ToGraph::translateAggregation(
         condition,
         false,
         accumulatorType);
-    auto name = toName(logicalAgg.outputNames()[channel]);
-    auto* column = make<Column>(name, currentDt_, agg->value(), name);
+    auto name = toName(agg.outputNames()[channel]);
+    auto* column = make<Column>(name, currentDt_, aggregateExpr->value(), name);
     columns.push_back(column);
 
-    auto intermediateValue = agg->value();
+    auto intermediateValue = aggregateExpr->value();
     intermediateValue.type = accumulatorType;
     auto* intermediateColumn =
         make<Column>(name, currentDt_, intermediateValue, name);
     intermediateColumns.push_back(intermediateColumn);
-    auto dedupped = queryCtx()->dedup(agg);
+    auto dedupped = queryCtx()->dedup(aggregateExpr);
     aggregates.push_back(dedupped->as<Aggregate>());
 
     renames_[name] = columns.back();
@@ -961,13 +973,12 @@ namespace {
 // conjuncts that are not equalities or have both sides depending
 // on right and something else are left in 'conjuncts'.
 void extractNonInnerJoinEqualities(
+    Name eq,
     ExprVector& conjuncts,
     PlanObjectCP right,
     ExprVector& leftKeys,
     ExprVector& rightKeys,
     PlanObjectSet& allLeft) {
-  const auto* eq = toName("eq");
-
   for (auto i = 0; i < conjuncts.size(); ++i) {
     const auto* conjunct = conjuncts[i];
     if (isCallExpr(conjunct, eq)) {
@@ -1041,7 +1052,7 @@ void ToGraph::translateJoin(const lp::JoinNode& join) {
     ExprVector rightKeys;
     PlanObjectSet leftTables;
     extractNonInnerJoinEqualities(
-        conjuncts, rightTable, leftKeys, rightKeys, leftTables);
+        equality_, conjuncts, rightTable, leftKeys, rightKeys, leftTables);
 
     auto leftTableVector = leftTables.toObjects();
 
@@ -1312,20 +1323,18 @@ PlanObjectP ToGraph::addLimit(const lp::LimitNode& limitNode) {
 }
 
 namespace {
+
 bool hasNondeterministic(const lp::ExprPtr& expr) {
-  if (const auto* call = expr->asUnchecked<lp::CallExpr>()) {
+  if (expr->isCall()) {
+    const auto* call = expr->asUnchecked<lp::CallExpr>();
     if (functionBits(toName(call->name()))
             .contains(FunctionSet::kNonDeterministic)) {
       return true;
     }
   }
-  for (auto& in : expr->inputs()) {
-    if (hasNondeterministic(in)) {
-      return true;
-    }
-  }
-  return false;
+  return std::ranges::any_of(expr->inputs(), hasNondeterministic);
 }
+
 } // namespace
 
 DerivedTableP ToGraph::translateSetJoin(
@@ -1502,7 +1511,7 @@ DerivedTableP ToGraph::translateUnion(
 }
 
 DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
-  markAllSubfields(logicalPlan.outputType().get(), logicalPlan);
+  markAllSubfields(logicalPlan);
 
   currentDt_ = newDt();
   makeQueryGraph(logicalPlan, kAllAllowedInDt);
@@ -1514,7 +1523,7 @@ namespace {
 // table. makeQueryGraph() starts a new derived table if it finds an operator
 // that does not belong to the mask.
 uint64_t makeDtIf(uint64_t mask, PlanType op) {
-  return mask & ~(1UL << static_cast<int32_t>(op));
+  return mask & ~(1UL << static_cast<uint32_t>(op));
 }
 } // namespace
 
@@ -1636,12 +1645,13 @@ PlanObjectP ToGraph::makeQueryGraph(
   }
 }
 
-// Debug helper functions. Must be in a namespace to be callable from gdb.
-std::string leString(const lp::Expr* e) {
+// Debug helper functions. Must be extern to be callable from debugger.
+
+extern std::string leString(const lp::Expr* e) {
   return lp::ExprPrinter::toText(*e);
 }
 
-std::string pString(const lp::LogicalPlanNode* p) {
+extern std::string pString(const lp::LogicalPlanNode* p) {
   return lp::PlanPrinter::toText(*p);
 }
 

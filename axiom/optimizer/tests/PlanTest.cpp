@@ -22,6 +22,7 @@
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "axiom/optimizer/tests/utils/DfFunctions.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -51,6 +52,8 @@ class PlanTest : public test::QueryTestBase {
     LocalRunnerTestBase::testDataPath_ = path;
     LocalRunnerTestBase::localFileFormat_ = "parquet";
     LocalRunnerTestBase::SetUpTestCase();
+
+    test::registerDfFunctions();
   }
 
   static void TearDownTestCase() {
@@ -85,21 +88,32 @@ class PlanTest : public test::QueryTestBase {
     auto referenceResult = assertSame(referencePlan, fragmentedPlan);
 
     if (options.numWorkers != 1) {
-      auto singlePlan = planVelox(
+      auto singleNodePlan = planVelox(
           planNode, {.numWorkers = 1, .numDrivers = options.numDrivers});
-      auto singleResult = runFragmentedPlan(singlePlan);
+      auto singleNodeResult = runFragmentedPlan(singleNodePlan);
 
       exec::test::assertEqualResults(
-          referenceResult.results, singleResult.results);
+          referenceResult.results, singleNodeResult.results);
+
+      if (options.numDrivers != 1) {
+        auto singleThreadPlan =
+            planVelox(planNode, {.numWorkers = 1, .numDrivers = 1});
+        auto singleThreadResult = runFragmentedPlan(singleThreadPlan);
+
+        exec::test::assertEqualResults(
+            referenceResult.results, singleThreadResult.results);
+      }
     }
   }
 
   core::PlanNodePtr toSingleNodePlan(
       const lp::LogicalPlanNodePtr& logicalPlan,
-      const std::shared_ptr<connector::Connector>& defaultConnector = nullptr) {
+      int32_t numDrivers = 1) {
     schema_ = std::make_shared<velox::optimizer::SchemaResolver>();
 
-    auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 4}).plan;
+    auto plan =
+        planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers})
+            .plan;
 
     EXPECT_EQ(1, plan->fragments().size());
     return plan->fragments().at(0).fragment.planNode;
@@ -199,36 +213,139 @@ TEST_F(PlanTest, agg) {
                          .aggregate({"a"}, {"sum(b)"})
                          .build();
 
-  auto plan = toSingleNodePlan(logicalPlan);
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher = core::PlanMatcherBuilder()
-                     .tableScan()
-                     .partialAggregation()
-                     .localPartition()
-                     .finalAggregation()
-                     .build();
+    auto matcher =
+        core::PlanMatcherBuilder().tableScan().singleAggregation().build();
 
-  ASSERT_TRUE(matcher->match(plan));
+    ASSERT_TRUE(matcher->match(plan));
+  }
+  {
+    auto plan = toSingleNodePlan(logicalPlan, 2);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .partialAggregation()
+                       .localPartition()
+                       .finalAggregation()
+                       .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
 }
 
 // Verify that optimizer can handle connectors that do not support filter
 // pushdown.
 TEST_F(PlanTest, rejectedFilters) {
+  const auto mapType = MAP(BIGINT(), DOUBLE());
   testConnector_->createTable(
-      "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
+      "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), mapType}));
 
-  auto logicalPlan = lp::PlanBuilder()
-                         .tableScan(kTestConnectorId, "numbers", {"a", "b"})
-                         .filter("a > 10")
-                         .map({"a + 2"})
-                         .build();
+  auto scan = [&]() {
+    lp::PlanBuilder::Context ctx(
+        kTestConnectorId, getQueryCtx(), test::resolveDfFunction);
+    return lp::PlanBuilder(ctx, /* enableCoersions */ true).tableScan("t");
+  };
 
-  auto plan = toSingleNodePlan(logicalPlan);
+  // SELECT a + 2 FROM t WHERE a > 10.
+  {
+    auto logicalPlan = scan().filter("a > 10").map({"a + 2"});
 
-  auto matcher =
-      core::PlanMatcherBuilder().tableScan().filter().project().build();
+    auto plan = toSingleNodePlan(logicalPlan.build());
 
-  ASSERT_TRUE(matcher->match(plan));
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("t", ROW("a", BIGINT()))
+                       .filter("a > 10")
+                       .project()
+                       .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  // SELECT a + 2 FROM t WHERE b > 10.
+  {
+    auto logicalPlan = scan().filter("b > 10").map({"a + 2"});
+
+    auto plan = toSingleNodePlan(logicalPlan.build());
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("t", ROW({"a", "b"}, {BIGINT(), DOUBLE()}))
+                       .filter("b > 10")
+                       .project()
+                       .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  optimizerOptions_.pushdownSubfields = true;
+
+  // SELECT * FROM t WHERE c.x > 10.
+  {
+    auto logicalPlan =
+        scan()
+            .map(
+                {"make_row_from_map(c, array[1,2,3], array['x', 'y', 'z']) as c"})
+            .filter("c.x > 10")
+            .map({"c.x + 1", "c.y + 2", "c.z + 3"})
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("t", ROW("c", mapType))
+                       .filter()
+                       .project() // project top-level columns c.x, c.y, c.z
+                       .project() // project c.x + 1, c.y + 2, c.z + 3
+                       .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  // SELECT 1 FROM t WHERE c.x > 10.
+  // -- Filter uses column that's not otherwise used.
+  {
+    auto logicalPlan =
+        scan()
+            .map(
+                {"make_row_from_map(c, array[1, 2, 3], array['x', 'y', 'z']) as c"})
+            .filter("c.x > 10")
+            .map({"1"})
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("t", ROW("c", mapType))
+                       .filter("c[1] > 10")
+                       .project({"1"})
+                       .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  // SELECT c.y + 1 FROM t WHERE c.x > 10.
+  // -- Filter uses subfield that's not otherwise used.
+  {
+    auto logicalPlan =
+        scan()
+            .map(
+                {"make_row_from_map(c, array[1, 2, 3], array['x', 'y', 'z']) as c"})
+            .filter("c.x > 10")
+            .map({"c.y + 1"})
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("t", ROW("c", mapType))
+                       .filter("c[1] > 10")
+                       .project() // project top-level column c.y
+                       .project() // project c.y + 1
+                       .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
 }
 
 TEST_F(PlanTest, specialFormConstantFold) {
@@ -410,7 +527,7 @@ TEST_F(PlanTest, filterToJoinEdge) {
                          .build();
 
   {
-    auto plan = toSingleNodePlan(logicalPlan, connector);
+    auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("region")
                        .project()
@@ -450,7 +567,7 @@ TEST_F(PlanTest, filterToJoinEdge) {
           .build();
 
   {
-    auto plan = toSingleNodePlan(logicalPlan, connector);
+    auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
                        // TODO Why is this filter not pushed down into scan?
@@ -484,12 +601,10 @@ TEST_F(PlanTest, filterImport) {
                          .build();
 
   {
-    auto plan = toSingleNodePlan(logicalPlan, connector);
+    auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("orders")
-                       .partialAggregation()
-                       .localPartition()
-                       .finalAggregation()
+                       .singleAggregation()
                        .filter("a0 > 200.0")
                        .build();
 
@@ -577,7 +692,7 @@ TEST_F(PlanTest, filterBreakup) {
                 exec::in(std::vector<std::string>{"AIR", "AIR REG"}))
             .build();
 
-    auto plan = toSingleNodePlan(logicalPlan, connector);
+    auto plan = toSingleNodePlan(logicalPlan);
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan(
@@ -599,9 +714,7 @@ TEST_F(PlanTest, filterBreakup) {
                     .build())
             .filter()
             .project()
-            .partialAggregation()
-            .localPartition()
-            .finalAggregation()
+            .singleAggregation()
             .build();
 
     ASSERT_TRUE(matcher->match(plan));
@@ -640,7 +753,7 @@ TEST_F(PlanTest, unionAll) {
                          .build();
 
   {
-    auto plan = toSingleNodePlan(logicalPlan, connector);
+    auto plan = toSingleNodePlan(logicalPlan);
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan(
@@ -713,7 +826,7 @@ TEST_F(PlanTest, unionJoin) {
           .build();
 
   {
-    auto plan = toSingleNodePlan(logicalPlan, connector);
+    auto plan = toSingleNodePlan(logicalPlan);
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan("partsupp", lte("ps_availqty", 999))
@@ -739,9 +852,7 @@ TEST_F(PlanTest, unionJoin) {
                     .build(),
                 core::JoinType::kInner)
             .project()
-            .partialAggregation()
-            .localPartition()
-            .finalAggregation()
+            .singleAggregation()
             .build();
 
     ASSERT_TRUE(matcher->match(plan));
@@ -805,7 +916,7 @@ TEST_F(PlanTest, intersect) {
           .build();
 
   {
-    auto plan = toSingleNodePlan(logicalPlan, connector);
+    auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = core::PlanMatcherBuilder()
                        // TODO Fix this plan to push down (n_regionkey + 1) % 3
                        // = 1 to all branches of 'intersect'.
@@ -823,9 +934,7 @@ TEST_F(PlanTest, intersect) {
                                    core::JoinType::kRightSemiFilter)
                                .build(),
                            core::JoinType::kRightSemiFilter)
-                       .partialAggregation()
-                       .localPartition()
-                       .finalAggregation()
+                       .singleAggregation()
                        .project()
                        .build();
 
@@ -873,7 +982,7 @@ TEST_F(PlanTest, except) {
                          .build();
 
   {
-    auto plan = toSingleNodePlan(logicalPlan, connector);
+    auto plan = toSingleNodePlan(logicalPlan);
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan(
@@ -890,9 +999,7 @@ TEST_F(PlanTest, except) {
                     .hiveScan("nation", lte("n_nationkey", 5))
                     .build(),
                 core::JoinType::kAnti)
-            .partialAggregation()
-            .localPartition()
-            .finalAggregation()
+            .singleAggregation()
             .project()
             .build();
 
@@ -925,7 +1032,7 @@ TEST_F(PlanTest, valuesComplex) {
 
   lp::PlanBuilder::Context ctx{connectorId};
   auto logicalPlan = lp::PlanBuilder(ctx).values({rowVector}).build();
-  auto plan = toSingleNodePlan(logicalPlan, connector);
+  auto plan = toSingleNodePlan(logicalPlan);
 
   auto expectedType = ROW({
       ARRAY(VARCHAR()),
@@ -1165,6 +1272,73 @@ TEST_F(PlanTest, values) {
     checkSame(logicalPlan, referencePlan);
   }
 }
+
+TEST_F(PlanTest, parallelCse) {
+  testConnector_->createTable(
+      "t", ROW({"a", "b", "c"}, {INTEGER(), INTEGER(), INTEGER()}));
+
+  auto logicalPlan =
+      lp::PlanBuilder(/* allowCoersions */ true)
+          .tableScan(kTestConnectorId, "t", {"a", "b", "c"})
+          .map({"a + b + c as x"})
+          .map({
+              "contains(array[1], cast(if(cast(x as real) < 0, ceil(cast(x as real)), floor(cast(x as real))) as int)) as a",
+          })
+          .build();
+
+  optimizerOptions_.parallelProjectWidth = 2;
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .parallelProject()
+                     .project()
+                     .build();
+
+  EXPECT_TRUE(matcher->match(plan));
+
+  logicalPlan =
+      lp::PlanBuilder(/* allowCoersions */ true)
+          .tableScan(kTestConnectorId, "t", {"a", "b", "c"})
+          .with({"a + b as ab"})
+          .with({"ab + c as x"})
+          .map(
+              {"contains(array[1], cast(if(cast(x as real) < 0, ceil(cast(x as real)), floor(cast(x as real))) as int)) as a",
+               "ab"})
+          .build();
+  plan = toSingleNodePlan(logicalPlan);
+
+  matcher = core::PlanMatcherBuilder()
+                .tableScan()
+                .parallelProject({"a + b", "c"})
+                .parallelProject()
+                .project()
+                .build();
+
+  EXPECT_TRUE(matcher->match(plan));
+}
+
+TEST_F(PlanTest, lastProjection) {
+  testConnector_->createTable(
+      "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
+
+  auto logicalPlan = lp::PlanBuilder{}
+                         .tableScan(kTestConnectorId, "numbers", {"a", "b"})
+                         .aggregate({"a", "b"}, {"count(1)"})
+                         .project({"a"})
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .singleAggregation()
+                     .project({"a"})
+                     .build();
+
+  ASSERT_TRUE(matcher->match(plan));
+}
+
 } // namespace
 } // namespace facebook::velox::optimizer
 

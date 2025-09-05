@@ -470,6 +470,8 @@ std::any AstBuilder::visitExplain(PrestoSqlParser::ExplainContext* ctx) {
   return std::static_pointer_cast<Statement>(std::make_shared<Explain>(
       getLocation(ctx),
       visitTyped<Statement>(ctx->statement()),
+      ctx->ANALYZE() != nullptr,
+      ctx->VERBOSE() != nullptr,
       visitTyped<ExplainOption>(ctx->explainOption())));
 }
 
@@ -1644,7 +1646,9 @@ std::any AstBuilder::visitComparisonQuantifier(
 std::any AstBuilder::visitBooleanValue(
     PrestoSqlParser::BooleanValueContext* ctx) {
   trace("visitBooleanValue");
-  return visitChildren(ctx);
+
+  return std::static_pointer_cast<Expression>(std::make_shared<BooleanLiteral>(
+      getLocation(ctx), ctx->TRUE() != nullptr));
 }
 
 namespace {

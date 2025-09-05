@@ -16,11 +16,29 @@
 
 #include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/BitSet.h"
+#include "axiom/optimizer/QueryGraph.h"
 
 namespace facebook::velox::optimizer {
 
+QueryGraphContext::QueryGraphContext(velox::HashStringAllocator& allocator)
+    : allocator_(allocator), cache_(allocator_) {
+  auto addName = [&](const char* name) {
+    names_.emplace(std::string_view(name, strlen(name)));
+  };
+
+  addName(SpecialFormCallNames::kAnd);
+  addName(SpecialFormCallNames::kOr);
+  addName(SpecialFormCallNames::kCast);
+  addName(SpecialFormCallNames::kTryCast);
+  addName(SpecialFormCallNames::kTry);
+  addName(SpecialFormCallNames::kCoalesce);
+  addName(SpecialFormCallNames::kIf);
+  addName(SpecialFormCallNames::kSwitch);
+  addName(SpecialFormCallNames::kIn);
+}
+
 QueryGraphContext*& queryCtx() {
-  thread_local QueryGraphContext* context;
+  static thread_local QueryGraphContext* context;
   return context;
 }
 
@@ -34,6 +52,7 @@ const char* QueryGraphContext::toName(std::string_view str) {
   if (it != names_.end()) {
     return it->data();
   }
+
   char* data = allocator_.allocate(str.size() + 1)->begin(); // NOLINT
   memcpy(data, str.data(), str.size());
   data[str.size()] = 0;
@@ -213,7 +232,7 @@ std::string Path::toString() const {
 }
 
 PathCP QueryGraphContext::toPath(PathCP path) {
-  path->setId(pathById_.size());
+  path->setId(static_cast<int32_t>(pathById_.size()));
   path->makeImmutable();
   auto pair = deduppedPaths_.insert(path);
   if (path != *pair.first) {
@@ -265,7 +284,7 @@ void Path::subfieldSkyline(BitSet& subfields) {
     for (auto path : bySize[i]) {
       // Delete paths where 'path' is a prefix.
       for (int32_t size = i + 1; size < bySize.size(); ++size) {
-        int32_t firstErase = -1;
+        ptrdiff_t firstErase = -1;
         auto& paths = bySize[size];
         auto it = std::lower_bound(paths.begin(), paths.end(), path);
         if (it != paths.end() && !(*it)->hasPrefix(*path)) {
@@ -286,8 +305,10 @@ void Path::subfieldSkyline(BitSet& subfields) {
   }
 }
 
-PathCP toPath(std::vector<Step> steps) {
-  return queryCtx()->toPath(make<Path>(std::move(steps)));
+PathCP toPath(std::span<const Step> steps, bool reverse) {
+  PathCP path = reverse ? make<Path>(steps, std::true_type{})
+                        : make<Path>(steps, std::false_type{});
+  return queryCtx()->toPath(path);
 }
 
 } // namespace facebook::velox::optimizer

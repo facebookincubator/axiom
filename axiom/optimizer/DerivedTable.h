@@ -166,7 +166,7 @@ struct DerivedTable : public PlanObject {
   void import(
       const DerivedTable& super,
       PlanObjectCP firstTable,
-      const PlanObjectSet& tables,
+      const PlanObjectSet& superTables,
       const std::vector<PlanObjectSet>& existences,
       float existsFanout = 1);
 

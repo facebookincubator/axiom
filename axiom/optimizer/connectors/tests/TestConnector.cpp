@@ -22,12 +22,12 @@ TestTable::TestTable(
     const std::string& name,
     const RowTypePtr& schema,
     TestConnector* connector)
-    : Table(name), connector_(connector) {
-  Table::type_ = schema;
-  std::vector<const Column*> columnVector;
-
+    : Table(name, schema), connector_(connector) {
   exportedColumns_.reserve(schema->size());
+
+  std::vector<const Column*> columnVector;
   columnVector.reserve(schema->size());
+
   for (auto i = 0; i < schema->size(); ++i) {
     const auto& columnName = schema->nameOf(i);
     const auto& columnType = schema->childAt(i);
@@ -66,10 +66,10 @@ std::vector<PartitionHandlePtr> TestSplitManager::listPartitions(
 
 std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
     const ConnectorTableHandlePtr& tableHandle,
-    std::vector<PartitionHandlePtr> partitions,
+    const std::vector<PartitionHandlePtr>& partitions,
     SplitOptions) {
   return std::make_shared<TestSplitSource>(
-      tableHandle->connectorId(), std::move(partitions));
+      tableHandle->connectorId(), partitions);
 }
 
 std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
@@ -78,7 +78,7 @@ std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
   return it != tables_.end() ? it->second : nullptr;
 }
 
-ConnectorTablePtr TestConnectorMetadata::findTable(const std::string& name) {
+TablePtr TestConnectorMetadata::findTable(const std::string& name) {
   return findTableInternal(name);
 }
 
@@ -127,14 +127,14 @@ void TestConnectorMetadata::appendData(
 TestDataSource::TestDataSource(
     const RowTypePtr& outputType,
     const ColumnHandleMap& handles,
-    ConnectorTablePtr table,
+    TablePtr table,
     memory::MemoryPool* pool)
     : outputType_(outputType), pool_(pool) {
   auto maybeTable = std::dynamic_pointer_cast<const TestTable>(table);
   VELOX_CHECK(maybeTable, "table {} not a TestTable", table->name());
   data_ = maybeTable->data();
 
-  auto tableType = table->rowType();
+  auto tableType = table->type();
   outputMappings_.reserve(outputType_->size());
   for (const auto& name : outputType->names()) {
     VELOX_CHECK(

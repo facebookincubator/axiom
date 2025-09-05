@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Schema.h"
 #include "velox/core/PlanNode.h"
 
@@ -28,39 +29,6 @@
 /// representing constraints on partial plans but otherwise these stay
 /// constant.
 namespace facebook::velox::optimizer {
-
-/// A bit set that qualifies an Expr. Represents which functions/kinds
-/// of functions are found inside the children of an Expr.
-class FunctionSet {
- public:
-  /// Indicates an aggregate function in the set.
-  static constexpr uint64_t kAggregate = 1;
-
-  /// Indicates a non-determinstic function in the set.
-  static constexpr uint64_t kNonDeterministic = 1UL << 1;
-
-  FunctionSet() : set_(0) {}
-
-  explicit FunctionSet(uint64_t set) : set_(set) {}
-
-  /// True if 'item' is in 'this'.
-  bool contains(int64_t item) const {
-    return 0 != (set_ & item);
-  }
-
-  /// Unions 'this' and 'other' and returns the result.
-  FunctionSet operator|(const FunctionSet& other) const {
-    return FunctionSet(set_ | other.set_);
-  }
-
-  /// Unions 'this' and 'other' and returns the result.
-  FunctionSet operator|(uint64_t other) const {
-    return FunctionSet(set_ | other);
-  }
-
- private:
-  uint64_t set_;
-};
 
 /// Superclass for all expressions.
 class Expr : public PlanObject {
@@ -232,7 +200,10 @@ inline folly::Range<T*> toRange(const std::vector<T, QGAllocator<T>>& v) {
 class Field : public Expr {
  public:
   Field(const Type* type, ExprCP base, Name field)
-      : Expr(PlanType::kFieldExpr, Value(type, 1)), field_(field), base_(base) {
+      : Expr(PlanType::kFieldExpr, Value(type, 1)),
+        field_(field),
+        index_(0),
+        base_(base) {
     columns_ = base->columns();
     subexpressions_ = base->subexpressions();
   }
@@ -275,57 +246,6 @@ struct SubfieldSet {
   std::vector<BitSet, QGAllocator<BitSet>> subfields;
 
   std::optional<BitSet> findSubfields(int32_t id) const;
-};
-
-/// Describes where the args given to a lambda come from.
-enum class LambdaArg : int8_t { kKey, kValue, kElement };
-
-// Lambda function process arrays or maps using lambda expressions.
-// Example:
-//
-//    filter(array, x -> x > 0)
-//
-//    LambdaInfo{.ordinal = 1, .lambdaArg = {kElement}, .argOrdinal = {0}}
-//
-// , where .ordinal = 1 says that lambda expression is the second argument of
-// the function; .lambdaArg = {kElement} together with .argOrdinal = {0} say
-// that the lambda expression takes one argument, which is the element of the
-// array, which is to be found in the first argument of the function.
-//
-// clang-format off
-//    transform_values(map, (k, v) -> v + 1)
-//
-//    LambdaInfo{.ordinal = 1, .lambdaArg = {kKey, kValue}, .argOrdinal = {0, 0}}
-// clang-format on
-//
-// , where ordinal = 1 says that lambda expression is the second argument of the
-// function; .lambdaArg = {kKey, kValue} together with .argOrdinal = {0, 0} say
-// that lambda expression takes two arguments, which are the key and the value
-// of the same map, which is to be found in the first argument of the function.
-//
-// clang-format off
-//    zip(a, b, (x, y) -> x + y)
-//
-//    LambdaInfo{.ordinal = 2, .lambdaArg = {kElement, kElement}, .argOrdinal = {0, 1}}
-// clang-format on
-//
-// , where ordinal = 2 says that lambda expression is the third argument of the
-// function; .lambdaArg = {kElement, kElement} together with .argOrdinal = {0,
-// 1} say that lambda expression takes two arguments: first is an element of the
-// array in the first argument of the function; second is an element of the
-// array in the second argument of the function.
-//
-struct LambdaInfo {
-  /// The ordinal of the lambda in the function's args.
-  int32_t ordinal;
-
-  /// Getter applied to the collection given in corresponding 'argOrdinal' to
-  /// get each argument of the lambda.
-  std::vector<LambdaArg> lambdaArg;
-
-  /// The ordinal of the array or map that provides the lambda argument in the
-  /// function's args. 1:1 with lambdaArg.
-  std::vector<int32_t> argOrdinal;
 };
 
 struct FunctionMetadata;
@@ -396,50 +316,80 @@ class Call : public Expr {
 using CallCP = const Call*;
 
 struct SpecialFormCallNames {
-  static constexpr const char* kAnd = "and";
-  static constexpr const char* kOr = "or";
-  static constexpr const char* kCast = "cast";
-  static constexpr const char* kTryCast = "trycast";
-  static constexpr const char* kTry = "try";
-  static constexpr const char* kCoalesce = "coalesce";
-  static constexpr const char* kIf = "if";
-  static constexpr const char* kSwitch = "switch";
-  static constexpr const char* kIn = "in";
+  static const char* kAnd;
+  static const char* kOr;
+  static const char* kCast;
+  static const char* kTryCast;
+  static const char* kTry;
+  static const char* kCoalesce;
+  static const char* kIf;
+  static const char* kSwitch;
+  static const char* kIn;
 
   static const char* toCallName(const logical_plan::SpecialForm& form) {
-    namespace lp = facebook::velox::logical_plan;
-
     switch (form) {
-      case lp::SpecialForm::kAnd:
+      case logical_plan::SpecialForm::kAnd:
         return SpecialFormCallNames::kAnd;
-      case lp::SpecialForm::kOr:
+      case logical_plan::SpecialForm::kOr:
         return SpecialFormCallNames::kOr;
-      case lp::SpecialForm::kCast:
+      case logical_plan::SpecialForm::kCast:
         return SpecialFormCallNames::kCast;
-      case lp::SpecialForm::kTryCast:
+      case logical_plan::SpecialForm::kTryCast:
         return SpecialFormCallNames::kTryCast;
-      case lp::SpecialForm::kTry:
+      case logical_plan::SpecialForm::kTry:
         return SpecialFormCallNames::kTry;
-      case lp::SpecialForm::kCoalesce:
+      case logical_plan::SpecialForm::kCoalesce:
         return SpecialFormCallNames::kCoalesce;
-      case lp::SpecialForm::kIf:
+      case logical_plan::SpecialForm::kIf:
         return SpecialFormCallNames::kIf;
-      case lp::SpecialForm::kSwitch:
+      case logical_plan::SpecialForm::kSwitch:
         return SpecialFormCallNames::kSwitch;
-      case lp::SpecialForm::kIn:
+      case logical_plan::SpecialForm::kIn:
         return SpecialFormCallNames::kIn;
       default:
         VELOX_FAIL(
             "No function call name for special form: {}",
-            lp::SpecialFormName::toName(form));
+            logical_plan::SpecialFormName::toName(form));
     }
+  }
+
+  static std::optional<logical_plan::SpecialForm> tryFromCallName(
+      const char* name) {
+    if (name == kAnd) {
+      return logical_plan::SpecialForm::kAnd;
+    }
+    if (name == kOr) {
+      return logical_plan::SpecialForm::kOr;
+    }
+    if (name == kCast) {
+      return logical_plan::SpecialForm::kCast;
+    }
+    if (name == kTryCast) {
+      return logical_plan::SpecialForm::kTryCast;
+    }
+    if (name == kTry) {
+      return logical_plan::SpecialForm::kTry;
+    }
+    if (name == kCoalesce) {
+      return logical_plan::SpecialForm::kCoalesce;
+    }
+    if (name == kIf) {
+      return logical_plan::SpecialForm::kIf;
+    }
+    if (name == kSwitch) {
+      return logical_plan::SpecialForm::kSwitch;
+    }
+    if (name == kIn) {
+      return logical_plan::SpecialForm::kIn;
+    }
+
+    return std::nullopt;
   }
 };
 
 /// True if 'expr' is a call to function 'name'.
 inline bool isCallExpr(ExprCP expr, Name name) {
-  return expr->type() == PlanType::kCallExpr &&
-      expr->as<Call>()->name() == name;
+  return expr->is(PlanType::kCallExpr) && expr->as<Call>()->name() == name;
 }
 
 /// Represents a lambda. May occur as an immediate argument of selected
@@ -781,7 +731,7 @@ struct BaseTable : public PlanObject {
 
   std::optional<int32_t> columnId(Name column) const;
 
-  BitSet columnSubfields(int32_t id, bool payloadOnly, bool controlOnly) const;
+  BitSet columnSubfields(int32_t id, bool controlOnly, bool payloadOnly) const;
 
   /// Returns possible indices for driving table scan of 'table'.
   std::vector<ColumnGroupCP> chooseLeafIndex() const {
@@ -810,7 +760,7 @@ struct ValuesTable : public PlanObject {
   JoinEdgeVector joinedBy;
 
   float cardinality() const {
-    return values.cardinality();
+    return static_cast<float>(values.cardinality());
   }
 
   bool isTable() const override {
@@ -873,7 +823,7 @@ class Aggregate : public Call {
     return intermediateType_;
   }
 
-  const TypeVector rawInputType() const {
+  const TypeVector& rawInputType() const {
     return rawInputType_;
   }
 

@@ -54,7 +54,7 @@ class History {
   /// cost and plan cardinality.
   virtual bool setLeafSelectivity(
       BaseTable& baseTable,
-      RowTypePtr scanType) = 0;
+      const RowTypePtr& scanType) = 0;
 
   virtual void recordJoinSample(const std::string& key, float lr, float rl) = 0;
 
@@ -65,8 +65,7 @@ class History {
       float selectivity,
       bool overwrite = true) {
     std::lock_guard<std::mutex> l(mutex_);
-    if (!overwrite &&
-        leafSelectivities_.find(handle) != leafSelectivities_.end()) {
+    if (!overwrite && leafSelectivities_.contains(handle)) {
       return;
     }
     leafSelectivities_[handle] = selectivity;
@@ -146,6 +145,6 @@ std::pair<float, float> sampleJoin(
     SchemaTableCP left,
     const ExprVector& leftKeys,
     SchemaTableCP right,
-    const ExprVector& rightColumns);
+    const ExprVector& rightKeys);
 
 } // namespace facebook::velox::optimizer

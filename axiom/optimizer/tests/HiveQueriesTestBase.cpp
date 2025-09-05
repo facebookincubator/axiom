@@ -41,35 +41,10 @@ void HiveQueriesTestBase::TearDownTestCase() {
   tempDirectory_.reset();
 }
 
-namespace {
-std::unique_ptr<DuckParser> makeDuckParser(velox::memory::MemoryPool* pool) {
-  auto parser =
-      std::make_unique<DuckParser>(exec::test::kHiveConnectorId, pool);
-
-  auto registerTable = [&](const std::string& name) {
-    auto table = connector::getConnector(exec::test::kHiveConnectorId)
-                     ->metadata()
-                     ->findTable(name);
-    parser->registerTable(name, table->rowType());
-  };
-
-  registerTable("region");
-  registerTable("nation");
-  registerTable("lineitem");
-  registerTable("orders");
-  registerTable("customer");
-  registerTable("supplier");
-  registerTable("part");
-  registerTable("partsupp");
-
-  return parser;
-}
-} // namespace
-
 void HiveQueriesTestBase::SetUp() {
   test::QueryTestBase::SetUp();
   test::ParquetTpchTest::registerTpchConnector(kTpchConnectorId);
-  duckParser_ = makeDuckParser(pool());
+
   prestoParser_ = std::make_unique<PrestoParser>(kTpchConnectorId, pool());
 }
 
@@ -82,7 +57,7 @@ RowTypePtr HiveQueriesTestBase::getSchema(const std::string& tableName) {
   return connector::getConnector(exec::test::kHiveConnectorId)
       ->metadata()
       ->findTable(tableName)
-      ->rowType();
+      ->type();
 }
 
 void HiveQueriesTestBase::checkResults(

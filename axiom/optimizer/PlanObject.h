@@ -23,9 +23,9 @@ namespace facebook::velox::optimizer {
 /// Enum for types of query graph nodes. Used when making a tree into
 /// a query graph and later to differentiate between tables, derived
 /// tables and different expressions.
-enum class PlanType {
+enum class PlanType : uint32_t {
   // Expressions.
-  kColumnExpr,
+  kColumnExpr = 0,
   kLiteralExpr,
   kCallExpr,
   kAggregateExpr,
@@ -60,8 +60,8 @@ inline bool isExprType(PlanType type) {
 /// planning is complete.
 class PlanObject {
  public:
-  explicit PlanObject(PlanType _type)
-      : type_(_type), id_(queryCtx()->newId(this)) {}
+  explicit PlanObject(PlanType type)
+      : type_(type), id_(queryCtx()->newId(this)) {}
 
   virtual ~PlanObject() = default;
 
@@ -83,6 +83,10 @@ class PlanObject {
 
   bool is(PlanType type) const {
     return type_ == type;
+  }
+
+  bool isNot(PlanType type) const {
+    return type_ != type;
   }
 
   template <typename T>

@@ -255,7 +255,7 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
 
   auto optimization = queryCtx()->optimization();
   auto it = optimization->existenceDts().find(existsDtKey);
-  DerivedTableP existsDt;
+  DerivedTableP existsDt{};
   if (it == optimization->existenceDts().end()) {
     auto* newDt = make<DerivedTable>();
     existsDt = newDt;
@@ -287,14 +287,14 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
 void DerivedTable::import(
     const DerivedTable& super,
     PlanObjectCP firstTable,
-    const PlanObjectSet& _tables,
+    const PlanObjectSet& superTables,
     const std::vector<PlanObjectSet>& existences,
     float existsFanout) {
-  tableSet = _tables;
-  tables = _tables.toObjects();
+  tableSet = superTables;
+  tables = superTables.toObjects();
   for (auto join : super.joins) {
-    if (_tables.contains(join->rightTable()) && join->leftTable() &&
-        _tables.contains(join->leftTable())) {
+    if (superTables.contains(join->rightTable()) && join->leftTable() &&
+        superTables.contains(join->leftTable())) {
       joins.push_back(join);
     }
   }
@@ -327,7 +327,7 @@ void DerivedTable::import(
   if (firstTable->is(PlanType::kDerivedTableNode)) {
     importJoinsIntoFirstDt(firstTable->as<DerivedTable>());
   } else {
-    fullyImported = _tables;
+    fullyImported = superTables;
   }
   linkTablesToJoins();
 }
@@ -352,7 +352,7 @@ JoinEdgeP importedDtJoin(
   VELOX_CHECK(left);
   auto otherKey = dt->columns[0];
   auto* newJoin = !fullyImported ? JoinEdge::makeExists(left, dt)
-                                 : JoinEdge::makeExists(left, dt);
+                                 : JoinEdge::makeInner(left, dt);
   newJoin->addEquality(innerKey, otherKey);
   return newJoin;
 }
@@ -492,7 +492,7 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
     }
       [[fallthrough]];
     default:
-      VELOX_UNREACHABLE();
+      VELOX_UNREACHABLE("{}", expr->toString());
   }
 }
 
@@ -621,32 +621,6 @@ void DerivedTable::makeProjection(const ExprVector& exprs) {
 }
 
 namespace {
-// True if 'expr' is of the form a = b where a depends on one of ''tables' and
-// b on the other. If true, returns the side depending on tables[0] in 'left'
-// and the other in 'right'.
-bool isJoinEquality(
-    ExprCP expr,
-    std::vector<PlanObjectP>& tables,
-    ExprCP& left,
-    ExprCP& right) {
-  if (expr->is(PlanType::kCallExpr)) {
-    auto call = expr->as<Call>();
-    if (call->name() == toName("eq")) {
-      left = call->argAt(0);
-      right = call->argAt(1);
-      auto leftTable = singleTable(left);
-      auto rightTable = singleTable(right);
-      if (!leftTable || !rightTable) {
-        return false;
-      }
-      if (leftTable == tables[1]) {
-        std::swap(left, right);
-      }
-      return true;
-    }
-  }
-  return false;
-}
 
 // Finds a JoinEdge between tables[0] and tables[1]. Sets tables[0] to the
 // left and [1] to the right table of the found join. Returns the JoinEdge. If
@@ -802,7 +776,8 @@ void DerivedTable::distributeConjuncts() {
       // there is no edge or the edge is inner, add the equality. For other
       // cases, leave the conjunct in place, to be evaluated when its
       // dependences are known.
-      if (isJoinEquality(conjuncts[i], tables, left, right)) {
+      if (queryCtx()->optimization()->isJoinEquality(
+              conjuncts[i], tables, left, right)) {
         auto join = findJoin(this, tables, true);
         if (join->isInner()) {
           if (left->is(PlanType::kColumnExpr) &&
@@ -832,7 +807,7 @@ void DerivedTable::distributeConjuncts() {
 
 namespace {
 void flattenAll(ExprCP expr, Name func, ExprVector& flat) {
-  if (expr->type() != PlanType::kCallExpr || expr->as<Call>()->name() != func) {
+  if (expr->isNot(PlanType::kCallExpr) || expr->as<Call>()->name() != func) {
     flat.push_back(expr);
     return;
   }
@@ -848,16 +823,13 @@ void flattenAll(ExprCP expr, Name func, ExprVector& flat) {
 ExprVector extractPerTable(
     const ExprVector& disjuncts,
     std::vector<ExprVector>& orOfAnds) {
-  PlanObjectSet tables;
-  auto optimization = queryCtx()->optimization();
-  auto& names = optimization->builtinNames();
-  tables = disjuncts[0]->allTables();
+  PlanObjectSet tables = disjuncts[0]->allTables();
   if (tables.size() <= 1) {
     // All must depend on the same set of more than 1 table.
     return {};
   }
-  std::unordered_map<int32_t, std::vector<ExprVector>> perTable;
 
+  std::unordered_map<int32_t, std::vector<ExprVector>> perTable;
   for (auto i = 0; i < disjuncts.size(); ++i) {
     if (i > 0 && disjuncts[i]->allTables() != tables) {
       // Does not  depend on the same tables as the other disjuncts.
@@ -877,15 +849,17 @@ ExprVector extractPerTable(
       perTable[pair.first].push_back(pair.second);
     }
   }
+
+  auto optimization = queryCtx()->optimization();
   ExprVector conjuncts;
   for (auto& pair : perTable) {
     ExprVector tableAnds;
     for (auto& tableAnd : pair.second) {
       tableAnds.push_back(
-          optimization->combineLeftDeep(names._and, tableAnd, {}));
+          optimization->combineLeftDeep(SpecialFormCallNames::kAnd, tableAnd));
     }
     conjuncts.push_back(
-        optimization->combineLeftDeep(names._or, tableAnds, {}));
+        optimization->combineLeftDeep(SpecialFormCallNames::kOr, tableAnds));
   }
   return conjuncts;
 }
@@ -897,36 +871,33 @@ ExprVector extractPerTable(
 /// changed in place. If 'replacement' is set, then this replaces
 /// the whole OR from which 'disjuncts' was flattened.
 ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
-  std::unordered_set<ExprCP> distinct;
-  PlanObjectSet tableSet;
-  auto optimization = queryCtx()->optimization();
-  auto& names = optimization->builtinNames();
-  ExprVector result;
   // Remove duplicates.
+  std::unordered_set<ExprCP> uniqueDisjuncts;
   bool changeOriginal = false;
   for (auto i = 0; i < disjuncts.size(); ++i) {
     auto disjunct = disjuncts[i];
-    if (distinct.find(disjunct) != distinct.end()) {
+    if (!uniqueDisjuncts.emplace(disjunct).second) {
       disjuncts.erase(disjuncts.begin() + i);
       --i;
       changeOriginal = true;
-      continue;
     }
-    distinct.insert(disjunct);
   }
+
   if (disjuncts.size() == 1) {
     *replacement = disjuncts[0];
     return {};
   }
 
-  // The conjuncts  in each of the disjuncts.
+  // The conjuncts in each of the disjuncts.
   std::vector<ExprVector> flat;
   for (auto i = 0; i < disjuncts.size(); ++i) {
     flat.emplace_back();
-    flattenAll(disjuncts[i], names._and, flat.back());
+    flattenAll(disjuncts[i], SpecialFormCallNames::kAnd, flat.back());
   }
+
   // Check if the flat conjuncts lists have any element that occurs in all.
   // Remove all the elememts that are in all.
+  ExprVector result;
   for (auto j = 0; j < flat[0].size(); ++j) {
     auto item = flat[0][j];
     bool inAll = true;
@@ -946,6 +917,8 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
       }
     }
   }
+
+  auto optimization = queryCtx()->optimization();
   auto perTable = extractPerTable(disjuncts, flat);
   if (!perTable.empty()) {
     // The per-table extraction does not alter the original but can surface
@@ -954,10 +927,12 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   }
   if (changeOriginal) {
     ExprVector ands;
-    for (auto inner : flat) {
-      ands.push_back(optimization->combineLeftDeep(names._and, inner, {}));
+    for (const auto& inner : flat) {
+      ands.push_back(
+          optimization->combineLeftDeep(SpecialFormCallNames::kAnd, inner));
     }
-    *replacement = optimization->combineLeftDeep(names._or, ands, {});
+    *replacement =
+        optimization->combineLeftDeep(SpecialFormCallNames::kOr, ands);
   }
 
   return result;
@@ -966,20 +941,19 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
 } // namespace
 
 void DerivedTable::expandConjuncts() {
-  const auto& names = queryCtx()->optimization()->builtinNames();
-  bool any;
+  bool any{};
   std::unordered_set<int32_t> processed;
   auto firstUnprocessed = numCanonicalConjuncts;
   do {
     any = false;
-    const int32_t numProcessed = conjuncts.size();
+    const auto numProcessed = static_cast<int32_t>(conjuncts.size());
     const auto end = conjuncts.size();
     for (auto i = firstUnprocessed; i < end; ++i) {
       const auto& conjunct = conjuncts[i];
-      if (isCallExpr(conjunct, names._or) &&
+      if (isCallExpr(conjunct, SpecialFormCallNames::kOr) &&
           !conjunct->containsNonDeterministic()) {
         ExprVector flat;
-        flattenAll(conjunct, names._or, flat);
+        flattenAll(conjunct, SpecialFormCallNames::kOr, flat);
         ExprCP replace = nullptr;
         ExprVector common = extractCommon(flat, &replace);
         if (replace) {

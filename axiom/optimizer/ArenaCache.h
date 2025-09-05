@@ -34,7 +34,7 @@ class ArenaCache {
   explicit ArenaCache(velox::HashStringAllocator& allocator)
       : allocator_(allocator), allocated_(kMaxSize / kGranularity) {}
 
-  void* allocate(size_t size) {
+  void* allocate(int32_t size) {
     auto sizeClass = velox::bits::roundUp(size, kGranularity) / kGranularity;
     if (sizeClass < kMaxSize / kGranularity) {
       if (!allocated_[sizeClass].empty()) {

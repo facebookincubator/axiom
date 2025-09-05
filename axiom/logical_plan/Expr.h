@@ -42,10 +42,10 @@ class ExprVisitorContext;
 /// Call may have many inputs.
 class Expr {
  public:
-  Expr(ExprKind kind, const TypePtr& type, const std::vector<ExprPtr>& inputs)
-      : kind_{kind}, type_{type}, inputs_{inputs} {
-    VELOX_USER_CHECK_NOT_NULL(type);
-    for (const auto& input : inputs) {
+  Expr(ExprKind kind, TypePtr type, std::vector<ExprPtr> inputs)
+      : kind_{kind}, type_{std::move(type)}, inputs_{std::move(inputs)} {
+    VELOX_USER_CHECK_NOT_NULL(type_);
+    for (const auto& input : inputs_) {
       VELOX_USER_CHECK_NOT_NULL(input);
     }
   }
@@ -69,12 +69,12 @@ class Expr {
     return inputs_;
   }
 
-  /// Convenience getter for the input at the specified index. A shortcut for
-  /// inputs().at(index).
+  /// Convenience getter for the input at the specified index.
+  /// A shortcut for inputs().at(index).
   const ExprPtr& inputAt(int32_t index) const {
     VELOX_USER_CHECK_GE(index, 0);
     VELOX_USER_CHECK_LT(index, inputs_.size());
-    return inputs_.at(index);
+    return inputs_[index];
   }
 
   bool isInputReference() const {
@@ -111,13 +111,14 @@ class Expr {
 
   template <typename T>
   const T* asUnchecked() const {
+    static_assert(std::is_base_of_v<Expr, T>);
     return dynamic_cast<const T*>(this);
   }
 
   virtual void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
       const = 0;
 
- private:
+ protected:
   const ExprKind kind_;
   const TypePtr type_;
   const std::vector<ExprPtr> inputs_;
@@ -131,8 +132,9 @@ class InputReferenceExpr : public Expr {
   /// be unique. Columns that are being passed through without modifications can
   /// keep their names. Two columns with the same name must represent the same
   /// data. Names cannot be empty.
-  InputReferenceExpr(const TypePtr& type, const std::string& name)
-      : Expr(ExprKind::kInputReference, type, {}), name_{name} {}
+  InputReferenceExpr(TypePtr type, std::string name)
+      : Expr{ExprKind::kInputReference, std::move(type), {}},
+        name_{std::move(name)} {}
 
   const std::string& name() const {
     return name_;
@@ -150,11 +152,12 @@ using InputReferenceExprPtr = std::shared_ptr<const InputReferenceExpr>;
 /// Literal value.
 class ConstantExpr : public Expr {
  public:
-  ConstantExpr(const TypePtr& type, std::shared_ptr<const Variant> value)
-      : Expr(ExprKind::kConstant, type, {}), value_{std::move(value)} {
+  ConstantExpr(TypePtr type, std::shared_ptr<const Variant> value)
+      : Expr{ExprKind::kConstant, std::move(type), {}},
+        value_{std::move(value)} {
     VELOX_USER_CHECK_NOT_NULL(value_);
     VELOX_USER_CHECK(
-        value_->isTypeCompatible(type),
+        value_->isTypeCompatible(type_),
         "Constant value doesn't match its type: {} vs. {}",
         type->toString(),
         value_->inferType()->toString());
@@ -184,17 +187,14 @@ class CallExpr : public Expr {
   /// @param name Name of the scalar function. Cannot be any of the special
   /// forms.
   /// @param inputs Zero or more inputs / arguments.
-  CallExpr(
-      const TypePtr& type,
-      const std::string& name,
-      const std::vector<ExprPtr>& inputs);
+  CallExpr(TypePtr type, std::string name, std::vector<ExprPtr> inputs);
 
   template <typename... T>
-  CallExpr(const TypePtr& type, const std::string& name, T... inputs)
-      : CallExpr(
-            type,
-            name,
-            std::vector<ExprPtr>{std::forward<ExprPtr>(inputs)...}) {}
+  CallExpr(TypePtr type, std::string name, T... inputs)
+      : CallExpr{
+            std::move(type),
+            std::move(name),
+            std::vector<ExprPtr>{std::forward<ExprPtr>(inputs)...}} {}
 
   const std::string& name() const {
     return name_;
@@ -388,17 +388,14 @@ VELOX_DECLARE_ENUM_NAME(SpecialForm)
 /// they are special and are not represented using CallExpr.
 class SpecialFormExpr : public Expr {
  public:
-  SpecialFormExpr(
-      const TypePtr& type,
-      SpecialForm form,
-      const std::vector<ExprPtr>& inputs);
+  SpecialFormExpr(TypePtr type, SpecialForm form, std::vector<ExprPtr> inputs);
 
   template <typename... T>
-  SpecialFormExpr(const TypePtr& type, SpecialForm form, T... inputs)
-      : SpecialFormExpr(
-            type,
+  SpecialFormExpr(TypePtr type, SpecialForm form, T... inputs)
+      : SpecialFormExpr{
+            std::move(type),
             form,
-            std::vector<ExprPtr>{std::forward<ExprPtr>(inputs)...}) {}
+            std::vector<ExprPtr>{std::forward<ExprPtr>(inputs)...}} {}
 
   SpecialForm form() const {
     return form_;
@@ -421,7 +418,7 @@ class SortOrder {
   static const SortOrder kDescNullsLast;
 
   SortOrder(bool ascending, bool nullsFirst)
-      : ascending_(ascending), nullsFirst_(nullsFirst) {}
+      : ascending_{ascending}, nullsFirst_{nullsFirst} {}
 
   bool isAscending() const {
     return ascending_;
@@ -473,25 +470,25 @@ class AggregateExpr : public Expr {
   /// @param distinct Whether to deduplicate input rows before passing to the
   /// aggregate function.
   AggregateExpr(
-      const TypePtr& type,
-      const std::string& name,
-      const std::vector<ExprPtr>& inputs,
-      const ExprPtr& filter = nullptr,
-      const std::vector<SortingField>& ordering = {},
+      TypePtr type,
+      std::string name,
+      std::vector<ExprPtr> inputs,
+      ExprPtr filter = nullptr,
+      std::vector<SortingField> ordering = {},
       bool distinct = false)
-      : Expr(ExprKind::kAggregate, type, inputs),
-        name_{name},
-        filter_{filter},
-        ordering_{ordering},
+      : Expr{ExprKind::kAggregate, std::move(type), std::move(inputs)},
+        name_{std::move(name)},
+        filter_{std::move(filter)},
+        ordering_{std::move(ordering)},
         distinct_{distinct} {
-    VELOX_USER_CHECK(!name.empty());
+    VELOX_USER_CHECK(!name_.empty());
 
-    if (filter != nullptr) {
-      VELOX_USER_CHECK_EQ(filter->typeKind(), TypeKind::BOOLEAN);
+    if (filter_ != nullptr) {
+      VELOX_USER_CHECK_EQ(filter_->typeKind(), TypeKind::BOOLEAN);
     }
 
-    if (distinct) {
-      VELOX_USER_CHECK_GT(inputs.size(), 0);
+    if (distinct_) {
+      VELOX_USER_CHECK_GT(inputs_.size(), 0);
     }
   }
 
@@ -528,7 +525,11 @@ using AggregateExprPtr = std::shared_ptr<const AggregateExpr>;
 // https://prestodb.io/docs/current/functions/window.html
 class WindowExpr : public Expr {
  public:
-  enum class WindowType { kRange, kRows, kGroups };
+  enum class WindowType {
+    kRange,
+    kRows,
+    kGroups,
+  };
   VELOX_DECLARE_EMBEDDED_ENUM_NAME(WindowType)
 
   enum class BoundType {
@@ -536,7 +537,7 @@ class WindowExpr : public Expr {
     kPreceding,
     kCurrentRow,
     kFollowing,
-    kUnboundedFollowing
+    kUnboundedFollowing,
   };
   VELOX_DECLARE_EMBEDDED_ENUM_NAME(BoundType)
 
@@ -560,18 +561,18 @@ class WindowExpr : public Expr {
   /// @param frame The window frame within the current partition that
   /// determines what to include in the window.
   WindowExpr(
-      const TypePtr& type,
-      const std::string& name,
-      const std::vector<ExprPtr>& inputs,
-      const std::vector<ExprPtr>& partitionKeys,
-      const std::vector<SortingField>& ordering,
-      const Frame& frame,
+      TypePtr type,
+      std::string name,
+      std::vector<ExprPtr> inputs,
+      std::vector<ExprPtr> partitionKeys,
+      std::vector<SortingField> ordering,
+      Frame frame,
       bool ignoreNulls)
-      : Expr(ExprKind::kWindow, type, inputs),
-        name_{name},
-        partitionKeys_{partitionKeys},
-        ordering_{ordering},
-        frame_{frame},
+      : Expr{ExprKind::kWindow, std::move(type), std::move(inputs)},
+        name_{std::move(name)},
+        partitionKeys_{std::move(partitionKeys)},
+        ordering_{std::move(ordering)},
+        frame_{std::move(frame)},
         ignoreNulls_{ignoreNulls} {}
 
   const std::string& name() const {
@@ -625,16 +626,11 @@ using WindowExprPtr = std::shared_ptr<const WindowExpr>;
 /// also visible to LambdaExpr.
 class LambdaExpr : public Expr {
  public:
-  LambdaExpr(const RowTypePtr& signature, const ExprPtr& body)
-      : Expr(
-            ExprKind::kLambda,
-            std::make_shared<FunctionType>(
-                std::vector<TypePtr>(signature->children()),
-                body->type()),
-            {}),
-        signature_(signature),
-        body_(body) {
-    VELOX_USER_CHECK_GT(signature->size(), 0);
+  LambdaExpr(RowTypePtr signature, ExprPtr body)
+      : Expr{ExprKind::kLambda, std::make_shared<FunctionType>(std::vector{signature->children()}, body->type()), {}},
+        signature_{std::move(signature)},
+        body_{std::move(body)} {
+    VELOX_USER_CHECK_GT(signature_->size(), 0);
   }
 
   const RowTypePtr& signature() const {
@@ -662,7 +658,7 @@ using LogicalPlanNodePtr = std::shared_ptr<const LogicalPlanNode>;
 /// anywhere a scalar function call can be used.
 class SubqueryExpr : public Expr {
  public:
-  explicit SubqueryExpr(const LogicalPlanNodePtr& subquery);
+  explicit SubqueryExpr(LogicalPlanNodePtr subquery);
 
   const LogicalPlanNodePtr& subquery() const {
     return subquery_;

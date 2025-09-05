@@ -252,7 +252,7 @@ class RelationPlanner : public sql::AstVisitor {
       case sql::ArithmeticBinaryExpression::Operator::kDivide:
         return "divide";
       case sql::ArithmeticBinaryExpression::Operator::kModulus:
-        return "modulus";
+        return "mod";
     }
 
     folly::assume_unreachable();
@@ -454,7 +454,10 @@ class RelationPlanner : public sql::AstVisitor {
         if (query->is(sql::NodeType::kQuery)) {
           auto builder = std::move(builder_);
 
-          builder_ = newBuilder();
+          lp::PlanBuilder::Scope scope;
+          builder->captureScope(scope);
+
+          builder_ = newBuilder(scope);
           processQuery(query->as<sql::Query>());
           auto subqueryBuider = builder_;
 
@@ -626,6 +629,9 @@ class RelationPlanner : public sql::AstVisitor {
 
       case sql::NodeType::kNullLiteral:
         return lp::Lit(Variant::null(TypeKind::UNKNOWN));
+
+      case sql::NodeType::kBooleanLiteral:
+        return lp::Lit(node->as<sql::BooleanLiteral>()->value());
 
       case sql::NodeType::kLongLiteral:
         return lp::Lit(node->as<sql::LongLiteral>()->value());
@@ -1168,9 +1174,11 @@ SqlStatementPtr PrestoParser::doParse(
 
   RelationPlanner planner(defaultConnectorId_);
   if (query->is(sql::NodeType::kExplain)) {
-    query->as<sql::Explain>()->statement()->accept(&planner);
+    auto* explain = query->as<sql::Explain>();
+    explain->statement()->accept(&planner);
     return std::make_shared<ExplainStatement>(
-        std::make_shared<SelectStatement>(planner.getPlan()));
+        std::make_shared<SelectStatement>(planner.getPlan()),
+        explain->isAnalyze());
   }
 
   if (query->is(sql::NodeType::kShowColumns)) {
@@ -1182,7 +1190,7 @@ SqlStatementPtr PrestoParser::doParse(
 
     VELOX_USER_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
 
-    const auto& schema = table->rowType();
+    const auto& schema = table->type();
 
     std::vector<Variant> data;
     data.reserve(schema->size());

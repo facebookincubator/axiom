@@ -179,7 +179,7 @@ TEST_F(TpchConnectorMetadataTest, splitGeneration) {
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   folly::Init init(&argc, &argv, false);
-  facebook::velox::memory::MemoryManagerOptions options;
+  facebook::velox::memory::MemoryManager::Options options;
   facebook::velox::memory::initializeMemoryManager(options);
   return RUN_ALL_TESTS();
 }

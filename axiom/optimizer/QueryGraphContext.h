@@ -81,7 +81,7 @@ struct QGAllocator {
   QGAllocator() = default;
 
   template <typename U>
-  explicit QGAllocator(QGAllocator<U>) {}
+  explicit QGAllocator(QGAllocator<U> /*other*/) {}
 
   T* allocate(std::size_t n);
 
@@ -113,10 +113,6 @@ struct Step {
 
   bool operator==(const Step& other) const;
 
-  bool operator!=(const Step& other) const {
-    return !(*this == other);
-  }
-
   bool operator<(const Step& other) const;
 
   size_t hash() const;
@@ -130,11 +126,11 @@ class Path {
  public:
   Path() = default;
 
-  Path(std::vector<Step> steps) {
-    for (auto& step : steps) {
-      steps_.push_back(std::move(step));
-    }
-  }
+  explicit Path(std::span<const Step> steps, std::false_type /*reverse*/)
+      : steps_{steps.begin(), steps.end()} {}
+
+  explicit Path(std::span<const Step> steps, std::true_type /*reverse*/)
+      : steps_{steps.rbegin(), steps.rend()} {}
 
   void operator delete(void* ptr);
 
@@ -179,10 +175,6 @@ class Path {
   }
 
   bool operator==(const Path& other) const;
-
-  bool operator!=(const Path& other) const {
-    return !(*this == other);
-  }
 
   bool operator<(const Path& other) const;
 
@@ -239,20 +231,19 @@ struct VectorDedupComparer {
 /// references this via a thread local through queryCtx().
 class QueryGraphContext {
  public:
-  explicit QueryGraphContext(velox::HashStringAllocator& allocator)
-      : allocator_(allocator), cache_(allocator_) {}
+  explicit QueryGraphContext(velox::HashStringAllocator& allocator);
 
   /// Returns a new unique id to use for 'object' and associates 'object' to
   /// this id. Tagging objects with integere ids is useful for efficiently
   /// representing sets of objects as bitmaps.
   int32_t newId(PlanObject* object) {
     objects_.push_back(object);
-    return objects_.size() - 1;
+    return static_cast<int32_t>(objects_.size() - 1);
   }
 
   /// Allocates 'size' bytes from the arena of 'this'. The allocation lives
   /// until free() is called on it or the arena is destroyed.
-  void* allocate(size_t size) {
+  void* allocate(int32_t size) {
 #ifdef QG_TEST_USE_MALLOC
     // Benchmark-only. Dropping the arena will not free un-free'd allocs.
     return ::malloc(size);
@@ -319,7 +310,7 @@ class QueryGraphContext {
   /// Returns the interned instance of 'path'. 'path' is either
   /// retained if it is not previously known or it is deleted. Must be
   /// allocated from the arena of 'this'.
-  PathCP toPath(PathCP);
+  PathCP toPath(PathCP path);
 
   PathCP pathById(uint32_t id) {
     VELOX_DCHECK_LT(id, pathById_.size());
@@ -383,7 +374,7 @@ QueryGraphContext*& queryCtx();
 template <class T>
 T* QGAllocator<T>::allocate(std::size_t n) {
   return reinterpret_cast<T*>(
-      queryCtx()->allocate(velox::checkedMultiply(n, sizeof(T)))); // NOLINT
+      queryCtx()->allocate(velox::checkedMultiply(n, sizeof(T))));
 }
 
 template <class T>
@@ -391,15 +382,10 @@ void QGAllocator<T>::deallocate(T* p, std::size_t /*n*/) noexcept {
   queryCtx()->free(p);
 }
 
-template <class _Tp, class... _Args>
-inline _Tp* make(_Args&&... __args) {
-  return new (queryCtx()->allocate(sizeof(_Tp)))
-      _Tp(std::forward<_Args>(__args)...);
+template <class T, class... Args>
+inline T* make(Args&&... args) {
+  return new (queryCtx()->allocate(sizeof(T))) T(std::forward<Args>(args)...);
 }
-
-/// Macro to use instead of make() when make() errors out from too
-/// many arguments.
-#define QGC_MAKE_IN_ARENA(_Tp) new (queryCtx()->allocate(sizeof(_Tp))) _Tp
 
 /// Shorthand for toType() in thread's QueryGraphContext.
 const Type* toType(const TypePtr& type);
@@ -408,7 +394,7 @@ const Type* toType(const TypePtr& type);
 const TypePtr& toTypePtr(const Type* type);
 
 // Shorthand for toPath in queryCtx().
-PathCP toPath(std::vector<Step> steps);
+PathCP toPath(std::span<const Step> steps, bool reverse = false);
 
 inline void Path::operator delete(void* ptr) {
   queryCtx()->free(ptr);

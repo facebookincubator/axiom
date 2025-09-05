@@ -29,6 +29,8 @@ bool isSingleWorker() {
 
 } // namespace
 
+#ifndef NDEBUG
+// NOLINTBEGIN
 // The dt for which we set a breakpoint for plan candidate.
 int32_t debugDt{-1};
 
@@ -51,9 +53,12 @@ void PlanState::debugSetFirstTable(int32_t id) {
     debugPlacedTables[0] = id;
   }
 }
+// NOLINTEND
+#endif
 
 PlanStateSaver::PlanStateSaver(PlanState& state, const JoinCandidate& candidate)
     : PlanStateSaver(state) {
+#ifndef NDEBUG
   if (state.dt->id() != debugDt) {
     return;
   }
@@ -68,10 +73,11 @@ PlanStateSaver::PlanStateSaver(PlanState& state, const JoinCandidate& candidate)
     }
   }
   planBreakpoint();
+#endif
 }
 
-Plan::Plan(RelationOpPtr _op, const PlanState& state)
-    : op(std::move(_op)),
+Plan::Plan(RelationOpPtr op, const PlanState& state)
+    : op(std::move(op)),
       cost(state.cost),
       tables(state.placed),
       columns(state.targetColumns),
@@ -108,7 +114,8 @@ void PlanState::addNextJoin(
     HashBuildVector builds,
     std::vector<NextJoin>& toTry) const {
   if (!isOverBest()) {
-    toTry.emplace_back(candidate, plan, cost, placed, columns, builds);
+    toTry.emplace_back(
+        candidate, std::move(plan), cost, placed, columns, std::move(builds));
   } else {
     optimization.trace(OptimizerOptions::kExceededBest, dt->id(), cost, *plan);
   }
@@ -185,7 +192,7 @@ std::string PlanState::printCost() const {
 }
 
 std::string PlanState::printPlan(RelationOpPtr op, bool detail) const {
-  auto plan = std::make_unique<Plan>(op, *this);
+  auto plan = std::make_unique<Plan>(std::move(op), *this);
   return plan->toString(detail);
 }
 
@@ -242,7 +249,7 @@ PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
     }
   }
 
-  auto newPlan = std::make_unique<Plan>(plan, state);
+  auto newPlan = std::make_unique<Plan>(std::move(plan), state);
   auto* result = newPlan.get();
   auto newPlanCost =
       result->cost.unitCost + result->cost.setupCost + shuffleCostPerRow;
@@ -318,18 +325,12 @@ std::pair<JoinSide, JoinSide> JoinCandidate::joinSides() const {
 
 namespace {
 bool hasEqual(ExprCP key, const ExprVector& keys) {
-  if (key->type() != PlanType::kColumnExpr ||
-      !key->as<Column>()->equivalence()) {
+  if (key->isNot(PlanType::kColumnExpr) || !key->as<Column>()->equivalence()) {
     return false;
   }
 
-  for (auto& e : keys) {
-    if (key->sameOrEqual(*e)) {
-      return true;
-    }
-  }
-
-  return false;
+  return std::ranges::any_of(
+      keys, [&](ExprCP e) { return key->sameOrEqual(*e); });
 }
 } // namespace
 

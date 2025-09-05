@@ -15,7 +15,9 @@
  */
 #pragma once
 
-#include "axiom/logical_plan/ExprVisitor.h"
+#include <string>
+
+#include "axiom/logical_plan/Expr.h"
 
 namespace facebook::velox::logical_plan {
 

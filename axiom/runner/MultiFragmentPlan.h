@@ -91,7 +91,16 @@ class MultiFragmentPlan {
 
   /// @param detailed If true, includes details of each plan node. Otherwise,
   /// only node types are included.
-  std::string toString(bool detailed = true) const;
+  /// @param addContext Optional lambda to add context to plan nodes. Receives
+  /// plan node ID, indentation and std::ostream where to append the context.
+  /// Start each line of context with 'indentation' and end with a new-line
+  /// character.
+  std::string toString(
+      bool detailed = true,
+      const std::function<void(
+          const velox::core::PlanNodeId& nodeId,
+          const std::string& indentation,
+          std::ostream& out)>& addContext = nullptr) const;
 
   /// Prints the summary of the plan using PlanNode::toSummaryString() API.
   std::string toSummaryString(

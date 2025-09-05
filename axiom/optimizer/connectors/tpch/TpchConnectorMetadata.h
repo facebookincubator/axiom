@@ -61,7 +61,7 @@ class TpchSplitManager : public ConnectorSplitManager {
 
   std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorTableHandlePtr& tableHandle,
-      std::vector<PartitionHandlePtr> partitions,
+      const std::vector<PartitionHandlePtr>& partitions,
       SplitOptions options = {}) override;
 };
 
@@ -103,7 +103,7 @@ class TpchTableLayout : public TableLayout {
   std::pair<int64_t, int64_t> sample(
       const connector::ConnectorTableHandlePtr& handle,
       float pct,
-      std::vector<core::TypedExprPtr> extraFilters,
+      const std::vector<core::TypedExprPtr>& extraFilters,
       RowTypePtr outputType = nullptr,
       const std::vector<common::Subfield>& fields = {},
       HashStringAllocator* allocator = nullptr,
@@ -117,10 +117,13 @@ class TpchTableLayout : public TableLayout {
 class TpchTable : public Table {
  public:
   TpchTable(
-      const std::string& tableName,
+      std::string name,
+      RowTypePtr type,
       velox::tpch::Table tpchTable,
       double scaleFactor)
-      : Table(tableName), tpchTable_(tpchTable), scaleFactor_(scaleFactor) {}
+      : Table(std::move(name), std::move(type)),
+        tpchTable_(tpchTable),
+        scaleFactor_(scaleFactor) {}
 
   std::unordered_map<std::string, std::unique_ptr<Column>>& columns() {
     return columns_;
@@ -132,10 +135,6 @@ class TpchTable : public Table {
 
   const std::unordered_map<std::string, const Column*>& columnMap()
       const override;
-
-  void setType(const RowTypePtr& type) {
-    type_ = type;
-  }
 
   void makeDefaultLayout(TpchConnectorMetadata& metadata, double scaleFactor);
 
@@ -177,15 +176,14 @@ class TpchConnectorMetadata : public ConnectorMetadata {
 
   void initialize() override;
 
-  ConnectorTablePtr findTable(const std::string& name) override;
+  TablePtr findTable(const std::string& name) override;
 
   ConnectorSplitManager* splitManager() override {
     ensureInitialized();
     return &splitManager_;
   }
 
-  std::shared_ptr<core::QueryCtx> makeQueryCtx(
-      const std::string& queryId) override;
+  std::shared_ptr<core::QueryCtx> makeQueryCtx(const std::string& queryId);
 
   ColumnHandlePtr createColumnHandle(
       const TableLayout& layoutData,
@@ -202,6 +200,45 @@ class TpchConnectorMetadata : public ConnectorMetadata {
       std::vector<core::TypedExprPtr>& rejectedFilters,
       RowTypePtr dataColumns = nullptr,
       std::optional<LookupKeys> = std::nullopt) override;
+
+  void createTable(
+      const std::string& tableName,
+      const RowTypePtr& rowType,
+      const std::unordered_map<std::string, std::string>& options,
+      const ConnectorSessionPtr& session,
+      bool errorIfExists = true,
+      TableKind tableKind = TableKind::kTable) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  ConnectorInsertTableHandlePtr createInsertTableHandle(
+      const TableLayout& layout,
+      const RowTypePtr& rowType,
+      const std::unordered_map<std::string, std::string>& options,
+      WriteKind kind,
+      const ConnectorSessionPtr& session) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  WritePartitionInfo writePartitionInfo(
+      const ConnectorInsertTableHandlePtr& handle) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  void finishWrite(
+      const TableLayout& layout,
+      const ConnectorInsertTableHandlePtr& handle,
+      const std::vector<RowVectorPtr>& writerResult,
+      WriteKind kind,
+      const ConnectorSessionPtr& session) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  std::vector<ColumnHandlePtr> rowIdHandles(
+      const TableLayout& layout,
+      WriteKind kind) override {
+    VELOX_UNSUPPORTED();
+  }
 
   TpchConnector* tpchConnector() const {
     return tpchConnector_;

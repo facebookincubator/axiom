@@ -136,7 +136,7 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
 
   auto session = std::make_shared<connector::hive::HiveConnectorSession>();
 
-  metadata->createTableWithOptions("test", tableType, options, session, false);
+  metadata->createTable("test", tableType, options, session, false);
 
   auto table = metadata->findTable("test");
   auto& layouts = table->layouts();
@@ -163,7 +163,7 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
   EXPECT_EQ(columns[3], partition[0]);
 
   EXPECT_EQ(layout->fileFormat(), dwio::common::toFileFormat("parquet"));
-  EXPECT_EQ(layout->table()->options().at("compression_kind"), "snappy");
+  EXPECT_EQ(layout->table().options().at("compression_kind"), "snappy");
 
   auto data = makeRowVector({
       makeFlatVector<int64_t>(kTestSize, [](auto row) { return row; }),
@@ -190,7 +190,7 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
       idGenerator->next(),
       builder.planNode()->outputType(),
       tableType->names(),
-      nullptr,
+      std::nullopt,
       handle,
       false,
       resultType,

@@ -148,9 +148,9 @@ TEST_F(HiveQueriesTest, basic) {
           .planNode());
 }
 
-TEST_F(HiveQueriesTest, anyJoin) {
+TEST_F(HiveQueriesTest, crossJoin) {
   auto statement =
-      duckParser().parse("SELECT * FROM nation JOIN region ON true");
+      prestoParser_->parse("SELECT * FROM nation JOIN region ON true", true);
 
   ASSERT_TRUE(statement->isSelect());
   auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
@@ -196,12 +196,7 @@ TEST_F(HiveQueriesTest, orderOfOperations) {
           .orderBy({"n_nationkey"})
           .limit(10)
           .orderBy({"n_name desc"}),
-      scanMatcher()
-          .limit()
-          .topN()
-          .project()
-          .orderBy({"n_name desc"})
-          .project());
+      scanMatcher().limit().topN().orderBy({"n_name desc"}));
 
   // GroupBy drops preceding orderBy.
   test(
@@ -215,8 +210,7 @@ TEST_F(HiveQueriesTest, orderOfOperations) {
           // TODO Fix this plan. There should be no project for literal '1'
           // that's the input to count.
           .project()
-          .partialAggregation()
-          .finalAggregation()
+          .singleAggregation()
           .orderBy({"n_name desc"}));
 
   // Multiple filters after groupBy. Filters that depend solely on grouping
@@ -232,8 +226,7 @@ TEST_F(HiveQueriesTest, orderOfOperations) {
           // TODO Fix this plan. There should be no project for literal '1'
           // that's the input to count.
           .project()
-          .partialAggregation()
-          .finalAggregation()
+          .singleAggregation()
           .filter("cnt > 10 and cnt > length(n_name)"));
 
   // Multiple filters are allowed before a limit.
@@ -250,8 +243,7 @@ TEST_F(HiveQueriesTest, orderOfOperations) {
           .finalLimit(0, 10)
           .filter("n_nationkey < 100 AND n_regionkey > 10")
           .finalLimit(0, 5)
-          .filter("n_nationkey > 70 AND n_regionkey < 7")
-          .project());
+          .filter("n_nationkey > 70 AND n_regionkey < 7"));
 }
 
 } // namespace

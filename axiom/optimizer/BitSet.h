@@ -43,12 +43,7 @@ class BitSet {
 
   // True if no members.
   bool empty() const {
-    for (auto word : bits_) {
-      if (word) {
-        return false;
-      }
-    }
-    return true;
+    return std::ranges::all_of(bits_, [](auto word) { return word == 0; });
   }
 
   /// Returns true if 'this' is a subset of 'super'.
@@ -62,14 +57,18 @@ class BitSet {
 
   void except(const BitSet& other) {
     velox::bits::forEachSetBit(
-        other.bits_.data(), 0, other.bits_.size() * 64, [&](auto id) {
+        other.bits_.data(),
+        0,
+        static_cast<int32_t>(other.bits_.size() * 64),
+        [&](auto id) {
           if (id < bits_.size() * 64) {
             velox::bits::clearBit(bits_.data(), id);
           }
         });
   }
   size_t size() const {
-    return bits::countBits(bits_.data(), 0, 64 * bits_.size());
+    return bits::countBits(
+        bits_.data(), 0, static_cast<int32_t>(bits_.size() * 64));
   }
 
   template <typename Func>
@@ -78,11 +77,11 @@ class BitSet {
   }
 
  protected:
-  void ensureSize(int32_t id) {
+  void ensureSize(size_t id) {
     ensureWords(velox::bits::nwords(id + 1));
   }
 
-  void ensureWords(int32_t size) {
+  void ensureWords(size_t size) {
     if (bits_.size() < size) {
       bits_.resize(size);
     }

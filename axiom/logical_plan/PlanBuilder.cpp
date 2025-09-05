@@ -120,7 +120,7 @@ PlanBuilder& PlanBuilder::tableScan(
   auto* metadata = connector::getConnector(connectorId)->metadata();
   auto table = metadata->findTable(tableName);
   VELOX_USER_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
-  const auto& schema = table->rowType();
+  const auto& schema = table->type();
 
   const auto numColumns = schema->size();
 
@@ -165,7 +165,7 @@ PlanBuilder& PlanBuilder::tableScan(
   auto* metadata = connector::getConnector(connectorId)->metadata();
   auto table = metadata->findTable(tableName);
   VELOX_USER_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
-  const auto& schema = table->rowType();
+  const auto& schema = table->type();
 
   const auto numColumns = columnNames.size();
 
@@ -205,7 +205,7 @@ PlanBuilder& PlanBuilder::filter(const std::string& predicate) {
 PlanBuilder& PlanBuilder::filter(const ExprApi& predicate) {
   auto expr = resolveScalarTypes(predicate.expr());
 
-  node_ = std::make_shared<FilterNode>(nextId(), node_, expr);
+  node_ = std::make_shared<FilterNode>(nextId(), node_, std::move(expr));
 
   return *this;
 }
@@ -266,7 +266,7 @@ void PlanBuilder::resolveProjections(
       outputNames.push_back(newName("expr"));
     }
 
-    exprs.push_back(expr);
+    exprs.push_back(std::move(expr));
   }
 }
 
@@ -275,7 +275,9 @@ PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
 }
 
 PlanBuilder& PlanBuilder::project(const std::vector<ExprApi>& projections) {
-  VELOX_USER_CHECK_NOT_NULL(node_, "Project node cannot be a leaf node");
+  if (!node_) {
+    values(ROW({}), std::vector<Variant>{Variant::row({})});
+  }
 
   std::vector<std::string> outputNames;
   outputNames.reserve(projections.size());
@@ -287,14 +289,18 @@ PlanBuilder& PlanBuilder::project(const std::vector<ExprApi>& projections) {
 
   resolveProjections(projections, outputNames, exprs, *newOutputMapping);
 
-  node_ = std::make_shared<ProjectNode>(nextId(), node_, outputNames, exprs);
-  outputMapping_ = newOutputMapping;
+  node_ = std::make_shared<ProjectNode>(
+      nextId(), std::move(node_), std::move(outputNames), std::move(exprs));
+
+  outputMapping_ = std::move(newOutputMapping);
 
   return *this;
 }
 
 PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
-  VELOX_USER_CHECK_NOT_NULL(node_, "Project node cannot be a leaf node");
+  if (!node_) {
+    values(ROW({}), std::vector<Variant>{Variant::row({})});
+  }
 
   std::vector<std::string> outputNames;
   outputNames.reserve(projections.size());
@@ -322,8 +328,10 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
 
   resolveProjections(projections, outputNames, exprs, *newOutputMapping);
 
-  node_ = std::make_shared<ProjectNode>(nextId(), node_, outputNames, exprs);
-  outputMapping_ = newOutputMapping;
+  node_ = std::make_shared<ProjectNode>(
+      nextId(), std::move(node_), std::move(outputNames), std::move(exprs));
+
+  outputMapping_ = std::move(newOutputMapping);
 
   return *this;
 }
@@ -368,13 +376,13 @@ PlanBuilder& PlanBuilder::aggregate(
 
   node_ = std::make_shared<AggregateNode>(
       nextId(),
-      node_,
-      keyExprs,
+      std::move(node_),
+      std::move(keyExprs),
       std::vector<AggregateNode::GroupingSet>{},
-      exprs,
-      outputNames);
+      std::move(exprs),
+      std::move(outputNames));
 
-  outputMapping_ = newOutputMapping;
+  outputMapping_ = std::move(newOutputMapping);
 
   return *this;
 }
@@ -466,10 +474,17 @@ PlanBuilder& PlanBuilder::unnest(
     ordinalityName = newName("orginality");
   }
 
-  node_ = std::make_shared<UnnestNode>(
-      nextId(), node_, exprs, outputNames, ordinalityName, withOrdinality);
+  bool flattenArrayOfRows = false;
 
-  outputMapping_ = newOutputMapping;
+  node_ = std::make_shared<UnnestNode>(
+      nextId(),
+      std::move(node_),
+      std::move(exprs),
+      std::move(outputNames),
+      std::move(ordinalityName),
+      flattenArrayOfRows);
+
+  outputMapping_ = std::move(newOutputMapping);
 
   return *this;
 }
@@ -619,7 +634,7 @@ ExprPtr tryResolveSpecialForm(
     VELOX_USER_CHECK_GE(index, 1);
     VELOX_USER_CHECK_LE(index, rowType.size());
 
-    const int32_t zeroBasedIndex = index - 1;
+    const auto zeroBasedIndex = static_cast<int32_t>(index - 1);
 
     std::vector<ExprPtr> newInputs = {
         resolvedInputs.at(0),
@@ -683,18 +698,14 @@ bool isLambdaArgument(const exec::TypeSignature& typeSignature) {
 }
 
 bool hasLambdaArgument(const exec::FunctionSignature& signature) {
-  for (const auto& type : signature.argumentTypes()) {
-    if (isLambdaArgument(type)) {
-      return true;
-    }
-  }
-
-  return false;
+  return std::ranges::any_of(signature.argumentTypes(), isLambdaArgument);
 }
 
-bool isLambdaArgument(const exec::TypeSignature& typeSignature, int numInputs) {
+bool isLambdaArgument(
+    const exec::TypeSignature& typeSignature,
+    size_t numInputs) {
   return isLambdaArgument(typeSignature) &&
-      (typeSignature.parameters().size() == numInputs + 1);
+      typeSignature.parameters().size() == numInputs + 1;
 }
 
 bool isLambdaSignature(
@@ -711,7 +722,7 @@ bool isLambdaSignature(
   }
 
   bool match = true;
-  for (auto i = 0; i < numArguments; ++i) {
+  for (size_t i = 0; i < numArguments; ++i) {
     if (auto lambda =
             dynamic_cast<const core::LambdaExpr*>(callExpr->inputAt(i).get())) {
       const auto numLambdaInputs = lambda->arguments().size();
@@ -1104,8 +1115,8 @@ PlanBuilder& PlanBuilder::join(
         });
   }
 
-  node_ =
-      std::make_shared<JoinNode>(nextId(), node_, right.node_, joinType, expr);
+  node_ = std::make_shared<JoinNode>(
+      nextId(), std::move(node_), right.node_, joinType, std::move(expr));
 
   return *this;
 }
@@ -1128,7 +1139,7 @@ PlanBuilder& PlanBuilder::intersect(const PlanBuilder& other) {
 
   node_ = std::make_shared<SetNode>(
       nextId(),
-      std::vector<LogicalPlanNodePtr>{node_, other.node_},
+      std::vector<LogicalPlanNodePtr>{std::move(node_), other.node_},
       SetOperation::kIntersect);
 
   return *this;
@@ -1140,7 +1151,7 @@ PlanBuilder& PlanBuilder::except(const PlanBuilder& other) {
 
   node_ = std::make_shared<SetNode>(
       nextId(),
-      std::vector<LogicalPlanNodePtr>{node_, other.node_},
+      std::vector<LogicalPlanNodePtr>{std::move(node_), other.node_},
       SetOperation::kExcept);
 
   return *this;
@@ -1175,7 +1186,8 @@ PlanBuilder& PlanBuilder::sort(const std::vector<std::string>& sortingKeys) {
         SortingField{expr, SortOrder(orderBy.ascending, orderBy.nullsFirst)});
   }
 
-  node_ = std::make_shared<SortNode>(nextId(), node_, sortingFields);
+  node_ = std::make_shared<SortNode>(
+      nextId(), std::move(node_), std::move(sortingFields));
 
   return *this;
 }
@@ -1193,7 +1205,8 @@ PlanBuilder& PlanBuilder::sort(const std::vector<SortKey>& sortingKeys) {
         SortingField{expr, SortOrder(key.ascending, key.nullsFirst)});
   }
 
-  node_ = std::make_shared<SortNode>(nextId(), node_, sortingFields);
+  node_ = std::make_shared<SortNode>(
+      nextId(), std::move(node_), std::move(sortingFields));
 
   return *this;
 }
@@ -1201,7 +1214,8 @@ PlanBuilder& PlanBuilder::sort(const std::vector<SortKey>& sortingKeys) {
 PlanBuilder& PlanBuilder::limit(int64_t offset, int64_t count) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Limit node cannot be a leaf node");
 
-  node_ = std::make_shared<LimitNode>(nextId(), node_, offset, count);
+  node_ =
+      std::make_shared<LimitNode>(nextId(), std::move(node_), offset, count);
 
   return *this;
 }
@@ -1210,7 +1224,7 @@ PlanBuilder& PlanBuilder::offset(int64_t offset) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Offset node cannot be a leaf node");
 
   node_ = std::make_shared<LimitNode>(
-      nextId(), node_, offset, std::numeric_limits<int64_t>::max());
+      nextId(), std::move(node_), offset, std::numeric_limits<int64_t>::max());
 
   return *this;
 }

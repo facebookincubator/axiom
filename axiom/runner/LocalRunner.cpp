@@ -17,6 +17,7 @@
 #include "axiom/runner/LocalRunner.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/PlanNodeStats.h"
 
 namespace facebook::axiom::runner {
 namespace {
@@ -95,8 +96,8 @@ LocalRunner::LocalRunner(
     std::shared_ptr<velox::core::QueryCtx> queryCtx,
     std::shared_ptr<SplitSourceFactory> splitSourceFactory,
     std::shared_ptr<velox::memory::MemoryPool> outputPool)
-    : fragments_(topologicalSort(plan->fragments())),
-      options_(plan->options()),
+    : plan_{plan},
+      fragments_(topologicalSort(plan->fragments())),
       splitSourceFactory_(std::move(splitSourceFactory)) {
   params_.queryCtx = std::move(queryCtx);
   params_.outputPool = outputPool;
@@ -117,7 +118,7 @@ velox::RowVectorPtr LocalRunner::next() {
 void LocalRunner::start() {
   VELOX_CHECK_EQ(state_, State::kInitialized);
 
-  params_.maxDrivers = options_.numDrivers;
+  params_.maxDrivers = plan_->options().numDrivers;
   params_.planNode = fragments_.back().fragment.planNode;
 
   auto cursor = velox::exec::TaskCursor::create(params_);
@@ -155,7 +156,7 @@ void LocalRunner::abort() {
     }
   }
   VELOX_CHECK(state_ != State::kInitialized);
-  // Setting errors is thred safe. The stages do not change after
+  // Setting errors is thread safe. The stages do not change after
   // initialization.
   for (auto& stage : stages_) {
     for (auto& task : stage) {
@@ -216,7 +217,7 @@ void LocalRunner::makeStages(
         return;
       }
       state_ = State::kError;
-      error_ = error;
+      error_ = std::move(error);
     }
     if (cursor_) {
       abort();
@@ -247,7 +248,7 @@ void LocalRunner::makeStages(
           onError);
       stages_.back().push_back(task);
 
-      task->start(options_.numDrivers);
+      task->start(plan_->options().numDrivers);
     }
   }
 
@@ -336,6 +337,38 @@ std::vector<velox::exec::TaskStats> LocalRunner::stats() const {
   return result;
 }
 
+std::string LocalRunner::printPlanWithStats(
+    const std::function<void(
+        const velox::core::PlanNodeId& nodeId,
+        const std::string& indentation,
+        std::ostream& out)>& addContext) const {
+  std::unordered_set<velox::core::PlanNodeId> leafNodeIds;
+  for (const auto& fragment : fragments_) {
+    for (const auto& nodeId : fragment.fragment.planNode->leafPlanNodeIds()) {
+      leafNodeIds.insert(nodeId);
+    }
+  }
+
+  const auto taskStats = stats();
+  std::unordered_map<velox::core::PlanNodeId, std::string> planNodeStats;
+  for (const auto& stats : taskStats) {
+    auto planStats = velox::exec::toPlanStats(stats);
+    for (const auto& [id, nodeStats] : planStats) {
+      planNodeStats[id] = nodeStats.toString(leafNodeIds.contains(id));
+    }
+  }
+
+  return plan_->toString(
+      true, [&](const auto& planNodeId, const auto& indentation, auto& out) {
+        addContext(planNodeId, indentation, out);
+
+        auto statsIt = planNodeStats.find(planNodeId);
+        if (statsIt != planNodeStats.end()) {
+          out << indentation << statsIt->second << std::endl;
+        }
+      });
+}
+
 std::vector<SplitSource::SplitAndGroup> SimpleSplitSource::getSplits(
     uint64_t /*targetBytes*/) {
   if (splitIdx_ >= splits_.size()) {
@@ -348,7 +381,7 @@ std::shared_ptr<SplitSource> SimpleSplitSourceFactory::splitSourceForScan(
     const velox::core::TableScanNode& scan) {
   auto it = nodeSplitMap_.find(scan.id());
   if (it == nodeSplitMap_.end()) {
-    VELOX_FAIL("Splits aare not provided for scan {}", scan.id());
+    VELOX_FAIL("Splits are not provided for scan {}", scan.id());
   }
   return std::make_shared<SimpleSplitSource>(it->second);
 }

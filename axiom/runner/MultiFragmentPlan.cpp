@@ -18,25 +18,72 @@
 
 namespace facebook::axiom::runner {
 
-namespace {
+std::string MultiFragmentPlan::toString(
+    bool detailed,
+    const std::function<void(
+        const velox::core::PlanNodeId& nodeId,
+        const std::string& indentation,
+        std::ostream& out)>& addContext) const {
+  // Map task prefix to fragment index.
+  std::unordered_map<std::string, int32_t> taskPrefixToIndex;
+  for (auto i = 0; i < fragments_.size(); ++i) {
+    taskPrefixToIndex[fragments_[i].taskPrefix] = i;
+  }
 
-std::string toFragmentsString(
-    const std::vector<ExecutableFragment>& fragments,
-    const std::function<std::string(const velox::core::PlanNode&)>&
-        planNodeToString) {
+  // Map plan node to the index of the input fragment.
+  std::unordered_map<velox::core::PlanNodeId, int32_t> planNodeToIndex;
+  for (const auto& fragment : fragments_) {
+    for (const auto& input : fragment.inputStages) {
+      planNodeToIndex[input.consumerNodeId] =
+          taskPrefixToIndex[input.producerTaskPrefix];
+    }
+  }
+
   std::stringstream out;
-  for (auto i = 0; i < fragments.size(); ++i) {
-    const auto& fragment = fragments[i];
+  for (auto i = 0; i < fragments_.size(); ++i) {
+    const auto& fragment = fragments_[i];
     out << fmt::format(
                "Fragment {}: {} numWorkers={}:",
                i,
                fragment.taskPrefix,
                fragment.width)
         << std::endl;
-    out << planNodeToString(*fragment.fragment.planNode) << std::endl;
+
+    out << fragment.fragment.planNode->toString(
+               detailed,
+               true,
+               [&](const velox::core::PlanNodeId& planNodeId,
+                   const std::string& indentation,
+                   std::ostream& stream) {
+                 if (addContext != nullptr) {
+                   addContext(planNodeId, indentation, stream);
+                 }
+                 auto it = planNodeToIndex.find(planNodeId);
+                 if (it != planNodeToIndex.end()) {
+                   stream << indentation << "Input Fragment " << it->second
+                          << std::endl;
+                 }
+               })
+        << std::endl;
+  }
+  return out.str();
+}
+
+std::string MultiFragmentPlan::toSummaryString(
+    velox::core::PlanSummaryOptions options) const {
+  std::stringstream out;
+  for (auto i = 0; i < fragments_.size(); ++i) {
+    const auto& fragment = fragments_[i];
+    out << fmt::format(
+               "Fragment {}: {} numWorkers={}:",
+               i,
+               fragment.taskPrefix,
+               fragment.width)
+        << std::endl;
+    out << fragment.fragment.planNode->toSummaryString(options) << std::endl;
     if (!fragment.inputStages.empty()) {
       out << "Inputs: ";
-      for (auto& input : fragment.inputStages) {
+      for (const auto& input : fragment.inputStages) {
         out << fmt::format(
             " {} <- {} ", input.consumerNodeId, input.producerTaskPrefix);
       }
@@ -44,21 +91,6 @@ std::string toFragmentsString(
     }
   }
   return out.str();
-}
-
-} // namespace
-
-std::string MultiFragmentPlan::toString(bool detailed) const {
-  return toFragmentsString(fragments_, [&](const auto& planNode) {
-    return planNode.toString(detailed, true);
-  });
-}
-
-std::string MultiFragmentPlan::toSummaryString(
-    velox::core::PlanSummaryOptions options) const {
-  return toFragmentsString(fragments_, [&](const auto& planNode) {
-    return planNode.toSummaryString(options);
-  });
 }
 
 } // namespace facebook::axiom::runner

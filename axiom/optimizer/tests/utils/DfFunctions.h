@@ -16,15 +16,18 @@
 
 #pragma once
 
-#include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/logical_plan/Expr.h"
 
 namespace facebook::velox::optimizer::test {
 
+/// Add map_row_from_map, padded_make_row_from_map, and make_named_row
+/// functions to the Optimizer's registry.
 void registerDfFunctions();
+
+/// Pass to logical_plan::PlanBuilder to allow it to resolve types for
+/// make-row functions.
 logical_plan::ExprPtr resolveDfFunction(
     const std::string& name,
     const std::vector<logical_plan::ExprPtr>& args);
-
-void registerRowUdfs();
 
 } // namespace facebook::velox::optimizer::test

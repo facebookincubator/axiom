@@ -31,7 +31,7 @@ namespace facebook::velox::optimizer {
 class Optimization {
  public:
   Optimization(
-      const logical_plan::LogicalPlanNode& plan,
+      const logical_plan::LogicalPlanNode& logicalPlan,
       const Schema& schema,
       History& history,
       std::shared_ptr<core::QueryCtx> veloxQueryCtx,
@@ -80,8 +80,8 @@ class Optimization {
 
   /// Sets 'filterSelectivity' of 'baseTable' from history. Returns true if set.
   /// 'scanType' is the set of sampled columns with possible map to struct cast.
-  bool setLeafSelectivity(BaseTable& baseTable, RowTypePtr scanType) {
-    return history_.setLeafSelectivity(baseTable, std::move(scanType));
+  bool setLeafSelectivity(BaseTable& baseTable, const RowTypePtr& scanType) {
+    return history_.setLeafSelectivity(baseTable, scanType);
   }
 
   void filterUpdated(BaseTableCP baseTable, bool updateSelectivity = true) {
@@ -118,6 +118,14 @@ class Optimization {
     return toGraph_.newCName(prefix);
   }
 
+  bool isJoinEquality(
+      ExprCP expr,
+      std::vector<PlanObjectP>& tables,
+      ExprCP& left,
+      ExprCP& right) const {
+    return toGraph_.isJoinEquality(expr, tables, left, right);
+  }
+
   const OptimizerOptions& options() const {
     return options_;
   }
@@ -130,10 +138,10 @@ class Optimization {
     return history_;
   }
 
-  /// Retain a reference to the provided ConnectorTablePtr to ensure
+  /// Retain a reference to the provided TablePtr to ensure
   /// the Table is retained for the duration of Optimization, even if
   /// dropped by the corresponding ConnectorMetadata.
-  void retainConnectorTable(connector::ConnectorTablePtr table) {
+  void retainConnectorTable(connector::TablePtr table) {
     retainedTables_.insert(std::move(table));
   }
 
@@ -147,18 +155,14 @@ class Optimization {
     return cnamesInExpr_;
   }
 
-  BuiltinNames& builtinNames() {
-    return toGraph_.builtinNames();
-  }
-
   /// Returns a dedupped left deep reduction with 'func' for the
-  /// elements in set1 and set2. The elements are sorted on plan object
+  /// elements in 'expr'. The elements are sorted on plan object
   /// id and then combined into a left deep reduction on 'func'.
-  ExprCP
-  combineLeftDeep(Name func, const ExprVector& set1, const ExprVector& set2);
+  ExprCP combineLeftDeep(Name func, const ExprVector& exprs);
 
   /// Produces trace output if event matches 'traceFlags_'.
-  void trace(int32_t event, int32_t id, const Cost& cost, RelationOp& plan);
+  void trace(uint32_t event, int32_t id, const Cost& cost, RelationOp& plan)
+      const;
 
  private:
   // Retrieves or makes a plan from 'key'. 'key' specifies a set of top level
@@ -212,7 +216,8 @@ class Optimization {
 
   // Adds group by, order by, top k, limit to 'plan'. Updates 'plan' if
   // relation ops added. Sets cost in 'state'.
-  void addPostprocess(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state);
+  void addPostprocess(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)
+      const;
 
   // Places a derived table as first table in a plan. Imports possibly reducing
   // joins into the plan if can.
@@ -304,7 +309,7 @@ class Optimization {
   std::shared_ptr<core::QueryCtx> veloxQueryCtx_;
 
   // Set of tables in use by the Optimizer.
-  std::unordered_set<connector::ConnectorTablePtr> retainedTables_;
+  std::unordered_set<connector::TablePtr> retainedTables_;
 
   // Top DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP root_;

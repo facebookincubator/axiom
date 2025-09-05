@@ -34,7 +34,7 @@
 
 DECLARE_string(data_path);
 
-DEFINE_int32(optimizer_trace, 0, "Optimizer trace level");
+DEFINE_uint32(optimizer_trace, 0, "Optimizer trace level");
 
 DEFINE_bool(print_plan, false, "Print optimizer results");
 
@@ -75,6 +75,8 @@ void QueryTestBase::SetUp() {
   }
   optimizerOptions_ = OptimizerOptions();
   optimizerOptions_.traceFlags = FLAGS_optimizer_trace;
+
+  velox::optimizer::FunctionRegistry::registerPrestoFunctions();
 }
 
 void QueryTestBase::TearDown() {
@@ -250,39 +252,26 @@ TestResult QueryTestBase::runVelox(
 
 std::string QueryTestBase::veloxString(
     const axiom::runner::MultiFragmentPlanPtr& plan) {
-  std::stringstream out;
-  for (auto i = 0; i < plan->fragments().size(); ++i) {
-    auto& fragment = plan->fragments()[i];
-    out << "Fragment " << i << ":\n";
-    auto* fragmentRoot = fragment.fragment.planNode.get();
-    auto planNodeDetails = [&](const core::PlanNodeId& planNodeId,
-                               const std::string& indentation,
-                               std::stringstream& stream) {
-      auto node = core::PlanNode::findFirstNode(
-          fragmentRoot, [&](auto* node) { return node->id() == planNodeId; });
-      if (!node) {
-        return;
-      }
-      if (auto* scan = dynamic_cast<const core::TableScanNode*>(node)) {
-        stream << std::endl;
-        for (auto& pair : scan->assignments()) {
-          auto* hiveColumn =
-              dynamic_cast<const connector::hive::HiveColumnHandle*>(
-                  pair.second.get());
-          if (!hiveColumn) {
-            continue;
-          }
-          stream << indentation << pair.first << " = " << hiveColumn->toString()
-                 << std::endl;
-        }
-      }
-    };
-
-    out << fragment.fragment.planNode->toString(true, true, planNodeDetails)
-        << std::endl;
+  std::unordered_map<core::PlanNodeId, const core::TableScanNode*> scans;
+  for (const auto& fragment : plan->fragments()) {
+    for (const auto& scan : fragment.scans) {
+      scans.emplace(scan->id(), scan.get());
+    }
   }
-  out << std::endl;
-  return out.str();
+
+  auto planNodeDetails = [&](const core::PlanNodeId& planNodeId,
+                             const std::string& indentation,
+                             std::ostream& stream) {
+    auto it = scans.find(planNodeId);
+    if (it != scans.end()) {
+      const auto* scan = it->second;
+      for (const auto& [name, handle] : scan->assignments()) {
+        stream << indentation << name << " = " << handle->name() << std::endl;
+      }
+    }
+  };
+
+  return plan->toString(true, planNodeDetails);
 }
 
 TestResult QueryTestBase::assertSame(

@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/tests/utils/DfFunctions.h"
+#include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/QueryGraph.h"
 
@@ -25,17 +26,6 @@ namespace lp = facebook::velox::logical_plan;
 namespace {
 std::unordered_map<std::string, lp::ExprResolver::FunctionRewriteHook>
     functionHooks;
-}
-
-lp::ExprPtr resolveDfFunction(
-    const std::string& name,
-    const std::vector<lp::ExprPtr>& args) {
-  auto it = functionHooks.find(name);
-  if (it == functionHooks.end()) {
-    return nullptr;
-  }
-  return it->second(name, args);
-}
 
 void registerFeatureFuncHook(
     const std::string& name,
@@ -85,13 +75,13 @@ std::unordered_map<PathCP, lp::ExprPtr> makeRowFromMapExplodeGeneric(
     bool addCoalesce) {
   std::unordered_map<PathCP, lp::ExprPtr> result;
   for (auto& path : paths) {
-    auto& steps = path->steps();
-    if (steps.size() < 1) {
+    const auto& steps = path->steps();
+    if (steps.empty()) {
       return {};
     }
-    std::vector<Step> prefixSteps = {steps[0]};
-    auto prefixPath = toPath(std::move(prefixSteps));
-    if (result.count(prefixPath)) {
+    const auto* prefixPath = toPath({steps.data(), 1});
+    auto [it, emplaced] = result.try_emplace(prefixPath);
+    if (!emplaced) {
       // There already is an expression for this path.
       continue;
     }
@@ -138,7 +128,7 @@ std::unordered_map<PathCP, lp::ExprPtr> makeRowFromMapExplodeGeneric(
           lp::SpecialForm::kCoalesce,
           std::vector<lp::ExprPtr>{getter, deflt});
     }
-    result[prefixPath] = getter;
+    it->second = getter;
   }
   return result;
 }
@@ -209,47 +199,67 @@ std::unordered_map<PathCP, lp::ExprPtr> makeNamedRowExplode(
     std::vector<PathCP>& paths) {
   std::unordered_map<PathCP, lp::ExprPtr> result;
   for (auto& path : paths) {
-    auto& steps = path->steps();
+    const auto& steps = path->steps();
     if (steps.empty()) {
       return {};
     }
-    std::vector<Step> prefixSteps = {steps[0]};
-    auto prefixPath = toPath(std::move(prefixSteps));
-    if (result.count(prefixPath)) {
+    const auto* prefixPath = toPath({steps.data(), 1});
+    auto [it, emplaced] = result.try_emplace(prefixPath);
+    if (!emplaced) {
       // There already is an expression for this path.
       continue;
     }
     VELOX_CHECK(steps.front().kind == StepKind::kField);
     auto nth = steps.front().id;
-    result[prefixPath] = call->inputAt(nth * 2 + 1);
+    it->second = call->inputAt(nth * 2 + 1);
   }
   return result;
 }
+} // namespace
 
 void registerDfFunctions() {
-  registerFeatureFuncHook("make_row_from_map", makeRowFromMapHook);
-  registerFeatureFuncHook("padded_make_row_from_map", makeRowFromMapHook);
-  auto meta = std::make_unique<FunctionMetadata>();
-  meta->logicalExplode = makeRowFromMapExplode;
-  meta->valuePathToArgPath = makeRowFromMapSubfield;
-  FunctionRegistry::instance()->registerFunction(
-      "make_row_from_map", std::move(meta));
+  static const auto kMakeRowFromMap = "make_row_from_map";
+  static const auto kPaddedMakeRowFromMap = "padded_make_row_from_map";
+  static const auto kMakeNamedRow = "make_named_row";
 
-  meta = std::make_unique<FunctionMetadata>();
-  meta->logicalExplode = paddedMakeRowFromMapExplode;
-  meta->valuePathToArgPath = makeRowFromMapSubfield;
-  FunctionRegistry::instance()->registerFunction(
-      "padded_make_row_from_map", std::move(meta));
-
-  registerFeatureFuncHook("make_named_row", makeNamedRowHook);
+  auto registry = FunctionRegistry::instance();
 
   {
+    registerFeatureFuncHook(kMakeRowFromMap, makeRowFromMapHook);
+
+    auto metadata = std::make_unique<FunctionMetadata>();
+    metadata->explode = makeRowFromMapExplode;
+    metadata->valuePathToArgPath = makeRowFromMapSubfield;
+    registry->registerFunction(kMakeRowFromMap, std::move(metadata));
+  }
+
+  {
+    registerFeatureFuncHook(kPaddedMakeRowFromMap, makeRowFromMapHook);
+
+    auto metadata = std::make_unique<FunctionMetadata>();
+    metadata->explode = paddedMakeRowFromMapExplode;
+    metadata->valuePathToArgPath = makeRowFromMapSubfield;
+    registry->registerFunction(kPaddedMakeRowFromMap, std::move(metadata));
+  }
+
+  {
+    registerFeatureFuncHook(kMakeNamedRow, makeNamedRowHook);
+
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->valuePathToArgPath = makeNamedRowSubfield;
-    metadata->logicalExplode = makeNamedRowExplode;
-    FunctionRegistry::instance()->registerFunction(
-        "make_named_row", std::move(metadata));
+    metadata->explode = makeNamedRowExplode;
+    registry->registerFunction(kMakeNamedRow, std::move(metadata));
   }
+}
+
+lp::ExprPtr resolveDfFunction(
+    const std::string& name,
+    const std::vector<lp::ExprPtr>& args) {
+  auto it = functionHooks.find(name);
+  if (it == functionHooks.end()) {
+    return nullptr;
+  }
+  return it->second(name, args);
 }
 
 } // namespace facebook::velox::optimizer::test

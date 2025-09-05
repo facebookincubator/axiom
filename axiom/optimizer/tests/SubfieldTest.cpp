@@ -16,7 +16,6 @@
 
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/FunctionRegistry.h"
-#include "axiom/optimizer/ToGraph.h"
 #include "axiom/optimizer/tests/FeatureGen.h"
 #include "axiom/optimizer/tests/Genies.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
@@ -27,7 +26,7 @@
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 DEFINE_string(subfield_data_path, "", "Data directory for subfield test data");
-DECLARE_int32(optimizer_trace);
+DECLARE_uint32(optimizer_trace);
 
 DECLARE_int32(num_workers);
 
@@ -37,6 +36,73 @@ using namespace facebook::velox::exec::test;
 namespace lp = facebook::velox::logical_plan;
 
 namespace facebook::velox::optimizer {
+namespace {
+
+template <typename T>
+lp::ExprPtr makeKey(const TypePtr& type, T value) {
+  return std::make_shared<lp::ConstantExpr>(
+      type, std::make_shared<Variant>(value));
+}
+
+lp::ExprPtr stepToLogicalPlanGetter(Step step, const lp::ExprPtr& arg) {
+  const auto& argType = arg->type();
+  switch (step.kind) {
+    case StepKind::kField: {
+      lp::ExprPtr key;
+      const TypePtr* type{};
+      if (step.field) {
+        key = makeKey(VARCHAR(), step.field);
+        type = &argType->asRow().findChild(step.field);
+      } else {
+        key = makeKey(INTEGER(), static_cast<int32_t>(step.id));
+        type = &argType->childAt(step.id);
+      }
+
+      return std::make_shared<lp::SpecialFormExpr>(
+          *type,
+          lp::SpecialForm::kDereference,
+          arg,
+          makeKey(VARCHAR(), step.field));
+    }
+
+    case StepKind::kSubscript: {
+      if (argType->kind() == TypeKind::ARRAY) {
+        return std::make_shared<lp::CallExpr>(
+            argType->childAt(0),
+            "subscript",
+            arg,
+            makeKey(INTEGER(), static_cast<int32_t>(step.id)));
+      }
+
+      lp::ExprPtr key;
+      switch (argType->childAt(0)->kind()) {
+        case TypeKind::VARCHAR:
+          key = makeKey(VARCHAR(), step.field);
+          break;
+        case TypeKind::BIGINT:
+          key = makeKey(BIGINT(), step.id);
+          break;
+        case TypeKind::INTEGER:
+          key = makeKey(INTEGER(), static_cast<int32_t>(step.id));
+          break;
+        case TypeKind::SMALLINT:
+          key = makeKey(SMALLINT(), static_cast<int16_t>(step.id));
+          break;
+        case TypeKind::TINYINT:
+          key = makeKey(TINYINT(), static_cast<int8_t>(step.id));
+          break;
+        default:
+          VELOX_FAIL("Unsupported key type");
+      }
+
+      return std::make_shared<lp::CallExpr>(
+          argType->childAt(1), "subscript", arg, key);
+    }
+
+    default:
+      VELOX_NYI();
+  }
+}
 
 class SubfieldTest : public QueryTestBase,
                      public testing::WithParamInterface<int32_t> {
@@ -46,7 +112,6 @@ class SubfieldTest : public QueryTestBase,
     LocalRunnerTestBase::localFileFormat_ = "dwrf";
     LocalRunnerTestBase::SetUpTestCase();
     registerDfFunctions();
-    registerRowUdfs();
   }
 
   static void TearDownTestCase() {
@@ -90,11 +155,11 @@ class SubfieldTest : public QueryTestBase,
         "genie", std::make_unique<FunctionMetadata>(*metadata));
 
     auto explodingMetadata = std::make_unique<FunctionMetadata>(*metadata);
-    explodingMetadata->logicalExplode = logicalExplodeGenie;
+    explodingMetadata->explode = explodeGenie;
     registry->registerFunction("exploding_genie", std::move(explodingMetadata));
   }
 
-  static std::unordered_map<PathCP, lp::ExprPtr> logicalExplodeGenie(
+  static std::unordered_map<PathCP, lp::ExprPtr> explodeGenie(
       const lp::CallExpr* call,
       std::vector<PathCP>& paths) {
     // This function understands paths like [1][cc], [2][cc],
@@ -106,14 +171,14 @@ class SubfieldTest : public QueryTestBase,
     // [2], [3] followed by an integer subscript.
     std::unordered_map<PathCP, lp::ExprPtr> result;
     for (auto& path : paths) {
-      auto& steps = path->steps();
+      const auto& steps = path->steps();
       if (steps.size() < 2) {
         return {};
       }
 
-      std::vector<Step> prefixSteps = {steps[0], steps[1]};
-      auto prefixPath = toPath(std::move(prefixSteps));
-      if (result.count(prefixPath)) {
+      const auto* prefixPath = toPath({steps.data(), 2});
+      auto [it, emplaced] = result.try_emplace(prefixPath);
+      if (!emplaced) {
         // There already is an expression for this path.
         continue;
       }
@@ -124,18 +189,17 @@ class SubfieldTest : public QueryTestBase,
 
       // Here, for the sake of example, we make every odd key return identity.
       if (steps[1].id % 2 == 1) {
-        result[prefixPath] =
-            ToGraph::stepToLogicalPlanGetter(steps[1], args[nth]);
+        it->second = stepToLogicalPlanGetter(steps[1], args[nth]);
         continue;
       }
 
       // For changed float_features, we add the feature id to the value.
       if (nth == 1) {
-        result[prefixPath] = std::make_shared<lp::CallExpr>(
+        it->second = std::make_shared<lp::CallExpr>(
             REAL(),
             "plus",
             std::vector<lp::ExprPtr>{
-                ToGraph::stepToLogicalPlanGetter(steps[1], args[nth]),
+                stepToLogicalPlanGetter(steps[1], args[nth]),
                 std::make_shared<lp::ConstantExpr>(
                     REAL(),
                     std::make_shared<variant>(
@@ -145,17 +209,16 @@ class SubfieldTest : public QueryTestBase,
 
       // For changed id list features, we do array_distinct on the list.
       if (nth == 2) {
-        result[prefixPath] = std::make_shared<lp::CallExpr>(
+        it->second = std::make_shared<lp::CallExpr>(
             ARRAY(BIGINT()),
             "array_distinct",
             std::vector<lp::ExprPtr>{
-                ToGraph::stepToLogicalPlanGetter(steps[1], args[nth])});
+                stepToLogicalPlanGetter(steps[1], args[nth])});
         continue;
       }
 
       // Access to idslf. Identity.
-      result[prefixPath] =
-          ToGraph::stepToLogicalPlanGetter(steps[1], args[nth]);
+      it->second = stepToLogicalPlanGetter(steps[1], args[nth]);
     }
     return result;
   }
@@ -644,4 +707,5 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     SubfieldTest,
     testing::ValuesIn(std::vector<int32_t>{1, 2, 3}));
 
+} // namespace
 } // namespace facebook::velox::optimizer

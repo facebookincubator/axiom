@@ -87,7 +87,7 @@ struct PlanSet {
 
   /// Returns the best plan that produces 'distribution'. If the best plan has
   /// some other distribution, sets 'needsShuffle ' to true.
-  PlanP best(const Distribution& distribution, bool& needShuffle);
+  PlanP best(const Distribution& distribution, bool& needsShuffle);
 
   /// Retruns the best plan when we're ok with any distribution.
   PlanP best() {
@@ -104,21 +104,21 @@ struct PlanSet {
 /// Represents the next table/derived table to join. May consist of several
 /// tables for a bushy build side.
 struct JoinCandidate {
-  JoinCandidate(JoinEdgeP _join, PlanObjectCP _right, float _fanout)
-      : join(_join), tables({_right}), fanout(_fanout) {}
+  JoinCandidate(JoinEdgeP join, PlanObjectCP right, float fanout)
+      : join(join), tables({right}), fanout(fanout) {}
 
   /// Returns two join sides. First is the side that contains 'tables' (build).
   /// Second is the other side.
   std::pair<JoinSide, JoinSide> joinSides() const;
 
-  /// Adds 'other' to the set of joins between the new table and already placed
+  /// Adds 'edge' to the set of joins between the new table and already placed
   /// tables. a.k = b.k and c.k = b.k2 and c.k3 = a.k2. When placing c after a
   /// and b the edges to both a and b must be combined.
-  void addEdge(PlanState& state, JoinEdgeP other);
+  void addEdge(PlanState& state, JoinEdgeP edge);
 
-  /// True if 'other' has all the equalities to placed columns that 'join' of
+  /// True if 'edge' has all the equalities to placed columns that 'join' of
   /// 'this' has and has more equalities.
-  bool isDominantEdge(PlanState& state, JoinEdgeP other);
+  bool isDominantEdge(PlanState& state, JoinEdgeP edge);
 
   std::string toString() const;
 
@@ -159,17 +159,17 @@ struct JoinCandidate {
 struct NextJoin {
   NextJoin(
       const JoinCandidate* candidate,
-      const RelationOpPtr& plan,
+      RelationOpPtr plan,
       const Cost& cost,
-      const PlanObjectSet& placed,
-      const PlanObjectSet& columns,
-      const HashBuildVector& builds)
-      : candidate(candidate),
-        plan(plan),
-        cost(cost),
-        placed(placed),
-        columns(columns),
-        newBuilds(builds) {}
+      PlanObjectSet placed,
+      PlanObjectSet columns,
+      HashBuildVector builds)
+      : candidate{candidate},
+        plan{std::move(plan)},
+        cost{cost},
+        placed{std::move(placed)},
+        columns{std::move(columns)},
+        newBuilds{std::move(builds)} {}
 
   const JoinCandidate* candidate;
   RelationOpPtr plan;
@@ -301,8 +301,8 @@ struct PlanStateSaver {
   PlanObjectSet placed_;
   PlanObjectSet columns_;
   const Cost cost_;
-  const int32_t numBuilds_;
-  const int32_t numPlaced_;
+  const uint32_t numBuilds_;
+  const uint32_t numPlaced_;
 };
 
 /// Key for collection of memoized partial plans. Any table or derived

@@ -59,7 +59,7 @@ class SelectStatement : public SqlStatement {
   explicit SelectStatement(logical_plan::LogicalPlanNodePtr plan)
       : SqlStatement(SqlStatementKind::kSelect), plan_{std::move(plan)} {}
 
-  logical_plan::LogicalPlanNodePtr plan() const {
+  const logical_plan::LogicalPlanNodePtr& plan() const {
     return plan_;
   }
 
@@ -69,16 +69,22 @@ class SelectStatement : public SqlStatement {
 
 class ExplainStatement : public SqlStatement {
  public:
-  explicit ExplainStatement(SqlStatementPtr statement)
+  explicit ExplainStatement(SqlStatementPtr statement, bool analyze = false)
       : SqlStatement(SqlStatementKind::kExplain),
-        statement_{std::move(statement)} {}
+        statement_{std::move(statement)},
+        analyze_{analyze} {}
 
-  SqlStatementPtr statement() const {
+  const SqlStatementPtr& statement() const {
     return statement_;
+  }
+
+  bool isAnalyze() const {
+    return analyze_;
   }
 
  private:
   const SqlStatementPtr statement_;
+  const bool analyze_;
 };
 
 } // namespace facebook::velox::optimizer::test

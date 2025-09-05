@@ -29,7 +29,7 @@ namespace facebook::velox::optimizer {
 /// a table name present will be marked as invalid.
 class TableNameParser {
  public:
-  explicit TableNameParser(const std::string& name);
+  explicit TableNameParser(std::string_view name);
 
   /// False if the input name was invalid.
   bool valid() const {

@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/Optimization.h"
 #include <iostream>
+#include <utility>
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
 
@@ -24,7 +25,7 @@ namespace lp = facebook::velox::logical_plan;
 namespace facebook::velox::optimizer {
 
 Optimization::Optimization(
-    const lp::LogicalPlanNode& plan,
+    const lp::LogicalPlanNode& logicalPlan,
     const Schema& schema,
     History& history,
     std::shared_ptr<core::QueryCtx> veloxQueryCtx,
@@ -34,7 +35,7 @@ Optimization::Optimization(
     : options_(std::move(options)),
       runnerOptions_(std::move(runnerOptions)),
       isSingleWorker_(runnerOptions_.numWorkers == 1),
-      logicalPlan_(&plan),
+      logicalPlan_(&logicalPlan),
       history_(history),
       veloxQueryCtx_(std::move(veloxQueryCtx)),
       toGraph_{schema, evaluator, options_},
@@ -72,24 +73,24 @@ PlanAndStats Optimization::toVeloxPlan(
 
   Schema schema("default", schemaResolver.get(), /* locus */ nullptr);
 
-  Optimization opt(
+  Optimization opt{
       logicalPlan,
       schema,
       history,
       veloxQueryCtx,
       evaluator,
-      options,
-      runnerOptions);
+      std::move(options),
+      std::move(runnerOptions)};
 
   auto best = opt.bestPlan();
   return opt.toVeloxPlan(best->op);
 }
 
 void Optimization::trace(
-    int32_t event,
+    uint32_t event,
     int32_t id,
     const Cost& cost,
-    RelationOp& plan) {
+    RelationOp& plan) const {
   if (event & options_.traceFlags) {
     std::cout << (event == OptimizerOptions::kRetained ? "Retained: "
                                                        : "Abandoned: ")
@@ -128,8 +129,9 @@ void reducingJoinsRecursive(
     PlanObjectSet& visited,
     PlanObjectSet& result,
     float& reduction,
-    std::function<void(const std::vector<PlanObjectCP>& path, float reduction)>
-        resultFunc = nullptr) {
+    const std::function<
+        void(const std::vector<PlanObjectCP>& path, float reduction)>&
+        resultFunc = {}) {
   bool isLeaf = true;
   for (auto join : joinedBy(candidate)) {
     if (join->leftOptional() || join->rightOptional()) {
@@ -139,8 +141,8 @@ void reducingJoinsRecursive(
     if (!state.dt->hasTable(other.table) || !state.dt->hasJoin(join)) {
       continue;
     }
-    if (other.table->type() != PlanType::kTableNode &&
-        other.table->type() != PlanType::kValuesTableNode) {
+    if (other.table->isNot(PlanType::kTableNode) &&
+        other.table->isNot(PlanType::kValuesTableNode)) {
       continue;
     }
     if (visited.contains(other.table)) {
@@ -485,13 +487,13 @@ RelationOpPtr repartitionForAgg(const RelationOpPtr& plan, PlanState& state) {
 }
 
 CPSpan<Column> leadingColumns(const ExprVector& exprs) {
-  int32_t i = 0;
+  size_t i = 0;
   for (; i < exprs.size(); ++i) {
-    if (exprs[i]->type() != PlanType::kColumnExpr) {
+    if (exprs[i]->isNot(PlanType::kColumnExpr)) {
       break;
     }
   }
-  return CPSpan(reinterpret_cast<ColumnCP const*>(&exprs[0]), i);
+  return {reinterpret_cast<ColumnCP const*>(exprs.data()), i};
 }
 
 bool isIndexColocated(
@@ -679,35 +681,48 @@ void alignJoinSides(
 void Optimization::addPostprocess(
     DerivedTableCP dt,
     RelationOpPtr& plan,
-    PlanState& state) {
+    PlanState& state) const {
   if (dt->aggregation) {
     const auto& aggPlan = dt->aggregation;
 
-    auto* partialAgg = make<Aggregation>(
-        plan,
-        aggPlan->groupingKeys(),
-        aggPlan->aggregates(),
-        core::AggregationNode::Step::kPartial,
-        aggPlan->intermediateColumns());
+    if (isSingleWorker_ && runnerOptions_.numDrivers == 1) {
+      auto* singleAgg = make<Aggregation>(
+          plan,
+          aggPlan->groupingKeys(),
+          aggPlan->aggregates(),
+          core::AggregationNode::Step::kSingle,
+          aggPlan->columns());
 
-    state.placed.add(aggPlan);
-    state.addCost(*partialAgg);
-    plan = repartitionForAgg(partialAgg, state);
+      state.placed.add(aggPlan);
+      state.addCost(*singleAgg);
+      plan = singleAgg;
+    } else {
+      auto* partialAgg = make<Aggregation>(
+          plan,
+          aggPlan->groupingKeys(),
+          aggPlan->aggregates(),
+          core::AggregationNode::Step::kPartial,
+          aggPlan->intermediateColumns());
 
-    ExprVector finalGroupingKeys;
-    for (auto i = 0; i < aggPlan->groupingKeys().size(); ++i) {
-      finalGroupingKeys.push_back(aggPlan->intermediateColumns()[i]);
+      state.placed.add(aggPlan);
+      state.addCost(*partialAgg);
+      plan = repartitionForAgg(partialAgg, state);
+
+      ExprVector finalGroupingKeys;
+      for (auto i = 0; i < aggPlan->groupingKeys().size(); ++i) {
+        finalGroupingKeys.push_back(aggPlan->intermediateColumns()[i]);
+      }
+
+      auto* finalAgg = make<Aggregation>(
+          plan,
+          finalGroupingKeys,
+          aggPlan->aggregates(),
+          core::AggregationNode::Step::kFinal,
+          aggPlan->columns());
+
+      state.addCost(*finalAgg);
+      plan = finalAgg;
     }
-
-    auto* finalAgg = make<Aggregation>(
-        plan,
-        finalGroupingKeys,
-        aggPlan->aggregates(),
-        core::AggregationNode::Step::kFinal,
-        aggPlan->columns());
-
-    state.addCost(*finalAgg);
-    plan = finalAgg;
   }
   if (!dt->having.empty()) {
     auto filter = make<Filter>(plan, dt->having);
@@ -783,7 +798,7 @@ void Optimization::joinByIndex(
     PlanState& state,
     std::vector<NextJoin>& toTry) {
   if (candidate.tables.size() != 1 ||
-      candidate.tables[0]->type() != PlanType::kTableNode ||
+      candidate.tables[0]->isNot(PlanType::kTableNode) ||
       !candidate.existences.empty()) {
     // Index applies to single base tables.
     return;
@@ -947,8 +962,7 @@ void Optimization::joinByHash(
   const auto joinType = build.leftJoinType();
   const bool probeOnly = joinType == core::JoinType::kLeftSemiFilter ||
       joinType == core::JoinType::kLeftSemiProject ||
-      joinType == core::JoinType::kAnti ||
-      joinType == core::JoinType::kLeftSemiProject;
+      joinType == core::JoinType::kAnti;
 
   PlanObjectSet probeColumns;
   probeColumns.unionObjects(plan->columns());
@@ -1437,9 +1451,11 @@ std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
 void Optimization::makeJoins(PlanState& state) {
   auto firstTables = state.dt->startTables.toObjects();
 
+#ifndef NDEBUG
   for (auto table : firstTables) {
     state.debugSetFirstTable(table->id());
   }
+#endif
 
   auto sortedIndices = sortByStartingScore(firstTables);
 
@@ -1546,9 +1562,8 @@ PlanP Optimization::makePlan(
       key.firstTable->as<DerivedTable>()->setOp.has_value()) {
     return makeUnionPlan(
         key, distribution, boundColumns, existsFanout, state, needsShuffle);
-  } else {
-    return makeDtPlan(key, distribution, existsFanout, state, needsShuffle);
   }
+  return makeDtPlan(key, distribution, existsFanout, state, needsShuffle);
 }
 
 PlanP Optimization::makeUnionPlan(
@@ -1634,7 +1649,7 @@ PlanP Optimization::makeDtPlan(
     PlanState& state,
     bool& needsShuffle) {
   auto it = memo_.find(key);
-  PlanSet* plans;
+  PlanSet* plans{};
   if (it == memo_.end()) {
     DerivedTable dt;
     dt.cname = newCName("tmp_dt");
@@ -1655,6 +1670,22 @@ PlanP Optimization::makeDtPlan(
     plans = &it->second;
   }
   return plans->best(distribution, needsShuffle);
+}
+
+ExprCP Optimization::combineLeftDeep(Name func, const ExprVector& exprs) {
+  ExprVector copy = exprs;
+  std::ranges::sort(copy, [&](ExprCP left, ExprCP right) {
+    return left->id() < right->id();
+  });
+  ExprCP result = copy[0];
+  for (auto i = 1; i < copy.size(); ++i) {
+    result = toGraph_.deduppedCall(
+        func,
+        result->value(),
+        ExprVector{result, copy[i]},
+        result->functions() | copy[i]->functions());
+  }
+  return result;
 }
 
 } // namespace facebook::velox::optimizer

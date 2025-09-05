@@ -599,13 +599,25 @@ class Explain : public Statement {
   Explain(
       NodeLocation location,
       const StatementPtr& statement,
+      bool analyze,
+      bool verbose,
       const std::vector<std::shared_ptr<ExplainOption>>& options)
       : Statement(NodeType::kExplain, location),
         statement_(statement),
+        analyze_(analyze),
+        verbose_(verbose),
         options_(options) {}
 
   const StatementPtr& statement() const {
     return statement_;
+  }
+
+  bool isAnalyze() const {
+    return analyze_;
+  }
+
+  bool isVerbose() const {
+    return verbose_;
   }
 
   const std::vector<std::shared_ptr<ExplainOption>>& options() const {
@@ -615,8 +627,10 @@ class Explain : public Statement {
   void accept(AstVisitor* visitor) override;
 
  private:
-  StatementPtr statement_;
-  std::vector<std::shared_ptr<ExplainOption>> options_;
+  const StatementPtr statement_;
+  const bool analyze_;
+  const bool verbose_;
+  const std::vector<std::shared_ptr<ExplainOption>> options_;
 };
 
 class Analyze : public Statement {

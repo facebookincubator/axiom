@@ -69,10 +69,40 @@ class LocalRunner : public Runner,
       std::shared_ptr<SplitSourceFactory> splitSourceFactory,
       std::shared_ptr<velox::memory::MemoryPool> outputPool = nullptr);
 
+  /// First call starts execution.
   velox::RowVectorPtr next() override;
 
+  /// Returns a list of fragments from the 'plan' specified in constructor
+  /// sorted in topological order.
+  ///
+  /// Note: Topological sort is a linear ordering of nodes in a directed acyclic
+  /// graph (DAG), where for every directed edge from node A to node B, A
+  /// appears before B in the sequence. It's essentially a way to arrange tasks
+  /// or items with dependencies so that all prerequisites are completed before
+  /// the dependent tasks.
+  const std::vector<ExecutableFragment>& fragments() const {
+    return fragments_;
+  }
+
+  /// Returns aggregated runtime stats for each fragment in 'fragments()'.
+  /// Corresponds 1:1 to 'fragments()'. For multi-task fragments, stats from all
+  /// tasks are aggregated together.
   std::vector<velox::exec::TaskStats> stats() const override;
 
+  /// Prints the distributed plan annotated with runtime stats. Similar to
+  /// velox::exec::printPlanWithStats and velox::exec::Task::printPlanWithStats
+  /// APIs.
+  /// @param addContext Optional lambda to add context to plan nodes. Receives
+  /// plan node ID, indentation and std::ostream where to append the context.
+  /// Start each line of context with 'indentation' and end with a new-line
+  /// character.
+  std::string printPlanWithStats(
+      const std::function<void(
+          const velox::core::PlanNodeId& nodeId,
+          const std::string& indentation,
+          std::ostream& out)>& addContext = nullptr) const;
+
+  /// Best-effort attempt to cancel the execution.
   void abort() override;
 
   void waitForCompletion(int32_t maxWaitMicros) override;
@@ -92,8 +122,8 @@ class LocalRunner : public Runner,
   // Serializes 'cursor_' and 'error_'.
   mutable std::mutex mutex_;
 
+  const MultiFragmentPlanPtr plan_;
   const std::vector<ExecutableFragment> fragments_;
-  const MultiFragmentPlan::Options options_;
 
   velox::exec::CursorParameters params_;
 

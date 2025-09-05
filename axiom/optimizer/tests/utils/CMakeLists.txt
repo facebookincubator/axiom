@@ -12,18 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_optimizer_test_utils DfFunctions.cpp RowFunctions.cpp)
+add_library(velox_optimizer_test_utils DfFunctions.cpp)
 
 target_link_libraries(
-  velox_optimizer_test_utils
-  velox_verax
-  velox_fe_logical_plan_builder
-  velox_test_connector
-  velox_schema_resolver
-  velox_tpch_gen
-  velox_connector_split_source
-  velox_hive_connector_metadata
-  axiom_runner_tests_utils
-  velox_exec_test_lib
-  velox_dwio_parquet_reader
-  velox_dwio_native_parquet_reader)
+  velox_optimizer_test_utils velox_verax velox_fe_logical_plan_builder)

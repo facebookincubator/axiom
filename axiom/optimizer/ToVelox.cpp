@@ -15,7 +15,9 @@
  */
 
 #include "axiom/optimizer/ToVelox.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
+#include "velox/core/PlanConsistencyChecker.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
@@ -26,7 +28,33 @@
 using namespace facebook::velox::exec;
 using namespace facebook::axiom::runner;
 
+namespace lp = facebook::velox::logical_plan;
+
 namespace facebook::velox::optimizer {
+
+std::string PlanAndStats::toString() const {
+  return plan->toString(
+      true,
+      [&](const core::PlanNodeId& planNodeId,
+          const std::string& indentation,
+          std::ostream& out) {
+        auto it = prediction.find(planNodeId);
+        if (it != prediction.end()) {
+          out << indentation << "Estimate: " << it->second.cardinality
+              << " rows, "
+              << succinctBytes(static_cast<uint64_t>(it->second.peakMemory))
+              << " peak memory" << std::endl;
+        }
+      });
+}
+
+ToVelox::ToVelox(
+    const axiom::runner::MultiFragmentPlan::Options& options,
+    const OptimizerOptions& optimizerOptions)
+    : options_{options},
+      optimizerOptions_{optimizerOptions},
+      isSingle_{options.numWorkers == 1},
+      subscript_{FunctionRegistry::instance()->subscript()} {}
 
 namespace {
 
@@ -146,14 +174,15 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
     } else {
       remainingFilter = std::make_shared<core::CallTypedExpr>(
           BOOLEAN(),
-          std::vector<core::TypedExprPtr>{remainingFilter, conjunct},
-          SpecialFormCallNames::kAnd);
+          specialForm(lp::SpecialForm::kAnd),
+          remainingFilter,
+          conjunct);
     }
   }
 
   columnAlteredTypes_.clear();
 
-  auto& dataColumns = table->schemaTable->connectorTable->rowType();
+  auto& dataColumns = table->schemaTable->connectorTable->type();
   auto* layout = table->schemaTable->columnGroups[0]->layout;
   auto connector = layout->connector();
   std::vector<connector::ColumnHandlePtr> columns;
@@ -195,9 +224,13 @@ PlanAndStats ToVelox::toVeloxPlan(
 
   ExecutableFragment top;
   std::vector<ExecutableFragment> stages;
-  top.fragment.planNode = makeFragment(std::move(plan), top, stages);
-
+  top.fragment.planNode = makeFragment(plan, top, stages);
   stages.push_back(std::move(top));
+
+  for (const auto& stage : stages) {
+    velox::core::PlanConsistencyChecker::check(stage.fragment.planNode);
+  }
+
   return PlanAndStats{
       std::make_shared<axiom::runner::MultiFragmentPlan>(
           std::move(stages), options),
@@ -205,7 +238,7 @@ PlanAndStats ToVelox::toVeloxPlan(
       std::move(prediction_)};
 }
 
-RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) {
+RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) const {
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (auto i = 0; i < columns.size(); ++i) {
@@ -245,9 +278,7 @@ core::TypedExprPtr ToVelox::toAnd(const ExprVector& exprs) {
       result = conjunct;
     } else {
       result = std::make_shared<core::CallTypedExpr>(
-          BOOLEAN(),
-          std::vector<core::TypedExprPtr>{result, conjunct},
-          SpecialFormCallNames::kAnd);
+          BOOLEAN(), specialForm(lp::SpecialForm::kAnd), result, conjunct);
     }
   }
   return result;
@@ -281,9 +312,9 @@ core::TypedExprPtr createArrayForInList(
       queryCtx()->optimization()->evaluator()->pool());
   return std::make_shared<core::ConstantTypedExpr>(arrayVector);
 }
-} // namespace
 
-core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
+core::TypedExprPtr
+stepToGetter(Step step, core::TypedExprPtr arg, const std::string& subscript) {
   switch (step.kind) {
     case StepKind::kField: {
       if (step.field) {
@@ -291,10 +322,9 @@ core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
             arg->type()->as<TypeKind::ROW>().getChildIdx(step.field));
         return std::make_shared<core::FieldAccessTypedExpr>(
             type, arg, step.field);
-      } else {
-        auto& type = arg->type()->childAt(step.id);
-        return std::make_shared<core::DereferenceTypedExpr>(type, arg, step.id);
       }
+      auto& type = arg->type()->childAt(step.id);
+      return std::make_shared<core::DereferenceTypedExpr>(type, arg, step.id);
     }
     case StepKind::kSubscript: {
       auto& type = arg->type();
@@ -305,37 +335,37 @@ core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
             key = makeKey(VARCHAR(), step.field);
             break;
           case TypeKind::BIGINT:
-            key = makeKey<int64_t>(BIGINT(), step.id);
+            key = makeKey(BIGINT(), step.id);
             break;
           case TypeKind::INTEGER:
-            key = makeKey<int32_t>(INTEGER(), step.id);
+            key = makeKey(INTEGER(), static_cast<int32_t>(step.id));
             break;
           case TypeKind::SMALLINT:
-            key = makeKey<int16_t>(SMALLINT(), step.id);
+            key = makeKey(SMALLINT(), static_cast<int16_t>(step.id));
             break;
           case TypeKind::TINYINT:
-            key = makeKey<int8_t>(TINYINT(), step.id);
+            key = makeKey(TINYINT(), static_cast<int8_t>(step.id));
             break;
           default:
             VELOX_FAIL("Unsupported key type");
         }
 
         return std::make_shared<core::CallTypedExpr>(
-            type->as<TypeKind::MAP>().childAt(1),
-            std::vector<core::TypedExprPtr>{arg, key},
-            "subscript");
+            type->childAt(1), subscript, arg, key);
       }
       return std::make_shared<core::CallTypedExpr>(
           type->childAt(0),
-          std::vector<core::TypedExprPtr>{
-              arg, makeKey<int32_t>(INTEGER(), step.id)},
-          "subscript");
+          subscript,
+          arg,
+          makeKey(INTEGER(), static_cast<int32_t>(step.id)));
     }
 
     default:
       VELOX_NYI();
   }
 }
+
+} // namespace
 
 core::TypedExprPtr
 ToVelox::pathToGetter(ColumnCP column, PathCP path, core::TypedExprPtr field) {
@@ -362,12 +392,12 @@ ToVelox::pathToGetter(ColumnCP column, PathCP path, core::TypedExprPtr field) {
   for (auto& step : path->steps()) {
     Step newStep;
     if (first && alterStep(column, step, newStep)) {
-      field = stepToGetter(newStep, field);
+      field = stepToGetter(newStep, field, subscript_.value());
       first = false;
       continue;
     }
     first = false;
-    field = stepToGetter(step, field);
+    field = stepToGetter(step, field, subscript_.value());
   }
   return field;
 }
@@ -398,9 +428,8 @@ core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
     case PlanType::kCallExpr: {
       std::vector<core::TypedExprPtr> inputs;
       auto call = expr->as<Call>();
-      const auto& builtinNames = queryCtx()->optimization()->builtinNames();
 
-      if (call->name() == builtinNames.in) {
+      if (call->name() == SpecialFormCallNames::kIn) {
         VELOX_USER_CHECK_GE(call->args().size(), 2);
         inputs.push_back(toTypedExpr(call->args().at(0)));
         inputs.push_back(createArrayForInList(*call, inputs.back()->type()));
@@ -410,14 +439,22 @@ core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
         }
       }
 
-      if (call->name() == builtinNames.cast) {
-        return std::make_shared<core::CastTypedExpr>(
-            toTypePtr(expr->value().type), std::move(inputs), false);
-      }
+      if (auto form =
+              SpecialFormCallNames::tryFromCallName(toName(call->name()))) {
+        if (form == lp::SpecialForm::kCast) {
+          return std::make_shared<core::CastTypedExpr>(
+              toTypePtr(expr->value().type), std::move(inputs), false);
+        }
 
-      if (call->name() == builtinNames.tryCast) {
-        return std::make_shared<core::CastTypedExpr>(
-            toTypePtr(expr->value().type), std::move(inputs), true);
+        if (form == lp::SpecialForm::kTryCast) {
+          return std::make_shared<core::CastTypedExpr>(
+              toTypePtr(expr->value().type), std::move(inputs), true);
+        }
+
+        return std::make_shared<core::CallTypedExpr>(
+            toTypePtr(expr->value().type),
+            std::move(inputs),
+            specialForm(form.value()));
       }
 
       return std::make_shared<core::CallTypedExpr>(
@@ -502,7 +539,7 @@ class TempProjections {
       const std::string* optName = nullptr) {
     auto [it, emplaced] = exprChannel_.emplace(expr, nextChannel_);
     if (emplaced) {
-      VELOX_CHECK(expr->type() != PlanType::kColumnExpr);
+      VELOX_CHECK(expr->isNot(PlanType::kColumnExpr));
       ++nextChannel_;
       exprs_.push_back(queryCtx()->optimization()->toTypedExpr(expr));
       names_.push_back(
@@ -881,62 +918,42 @@ core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
 }
 
 bool hasSubfieldPushdown(const TableScan& scan) {
-  for (auto& column : scan.columns()) {
-    if (column->topColumn()) {
-      return true;
-    }
-  }
-  return false;
+  return std::ranges::any_of(
+      scan.columns(), [](ColumnCP column) { return column->topColumn(); });
 }
 
 // Returns a struct with fields for skyline map keys of 'column' in
 // 'baseTable'. This is the type to return from the table reader
 // for the map column.
 RowTypePtr skylineStruct(BaseTableCP baseTable, ColumnCP column) {
+  BitSet allFields;
+  if (auto fields = baseTable->controlSubfields.findSubfields(column->id())) {
+    allFields = *fields;
+  }
+  if (auto fields = baseTable->payloadSubfields.findSubfields(column->id())) {
+    allFields.unionSet(*fields);
+  }
+
+  const auto numOutputs = allFields.size();
   std::vector<std::string> names;
   std::vector<TypePtr> types;
-  std::unordered_set<std::string> distinct;
-  auto valueType = column->value().type->childAt(1);
+  names.reserve(numOutputs);
+  types.reserve(numOutputs);
 
   auto* ctx = queryCtx();
-  auto addTopFields = [&](const BitSet& paths) {
-    paths.forEach([&](int32_t id) {
-      auto path = ctx->pathById(id);
-      auto& first = path->steps()[0];
-      std::string name =
-          first.field ? std::string(first.field) : fmt::format("{}", first.id);
-      if (!distinct.count(name)) {
-        distinct.insert(name);
-        names.push_back(name);
-        types.push_back(valueType);
-      }
-    });
-  };
-
-  auto fields = baseTable->controlSubfields.findSubfields(column->id());
-  if (fields.has_value()) {
-    addTopFields(fields.value());
-  }
-  fields = baseTable->payloadSubfields.findSubfields(column->id());
-  if (fields.has_value()) {
-    addTopFields(fields.value());
-  }
+  auto valueType = column->value().type->childAt(1);
+  allFields.forEach([&](int32_t id) {
+    const auto* path = ctx->pathById(id);
+    const auto& first = path->steps()[0];
+    auto name =
+        first.field ? std::string{first.field} : fmt::format("{}", first.id);
+    names.push_back(name);
+    types.push_back(valueType);
+  });
 
   return ROW(std::move(names), std::move(types));
 }
 } // namespace
-
-RowTypePtr ToVelox::scanOutputType(
-    const TableScan& scan,
-    ColumnVector& scanColumns,
-    std::unordered_map<ColumnCP, TypePtr>& typeMap) {
-  if (!hasSubfieldPushdown(scan)) {
-    scanColumns = scan.columns();
-    return makeOutputType(scan.columns());
-  }
-  return subfieldPushdownScanType(
-      scan.baseTable, scan.columns(), scanColumns, typeMap);
-}
 
 RowTypePtr ToVelox::subfieldPushdownScanType(
     BaseTableCP baseTable,
@@ -961,6 +978,9 @@ RowTypePtr ToVelox::subfieldPushdownScanType(
         types.push_back(toTypePtr(topColumn->value().type));
       }
     } else {
+      if (top.contains(column)) {
+        continue;
+      }
       topColumns.push_back(column);
       names.push_back(column->name());
       types.push_back(toTypePtr(column->value().type));
@@ -972,7 +992,7 @@ RowTypePtr ToVelox::subfieldPushdownScanType(
 
 core::PlanNodePtr ToVelox::makeSubfieldProjections(
     const TableScan& scan,
-    const std::shared_ptr<const core::TableScanNode>& scanNode) {
+    const core::PlanNodePtr& scanNode) {
   ScopedVarSetter getters(&getterForPushdownSubfield_, true);
   ScopedVarSetter noAlias(&makeVeloxExprWithNoAlias_, true);
   std::vector<std::string> names;
@@ -986,21 +1006,61 @@ core::PlanNodePtr ToVelox::makeSubfieldProjections(
 }
 
 namespace {
+
+void collectFieldNames(
+    const core::TypedExprPtr& expr,
+    std::unordered_set<Name>& names) {
+  if (expr->isFieldAccessKind()) {
+    auto fieldAccess = expr->asUnchecked<core::FieldAccessTypedExpr>();
+    if (fieldAccess->isInputColumn()) {
+      names.insert(queryCtx()->toName(fieldAccess->name()));
+    }
+  }
+
+  for (auto& input : expr->inputs()) {
+    collectFieldNames(input, names);
+  }
+}
+
+// Combines 'conjuncts' into a single expression using AND. Rewrites inputs to
+// replace column names from the table schema to correlated names used in the
+// output of table scan (foo -> t1.foo). Appends columns used in 'conjuncts'
+// to 'columns' unless these are already present.
 core::TypedExprPtr toAndWithAliases(
-    const std::vector<core::TypedExprPtr>& exprs,
-    const BaseTable* baseTable) {
-  auto result = exprs.size() == 1
-      ? exprs.at(0)
+    const std::vector<core::TypedExprPtr>& conjuncts,
+    const BaseTable* baseTable,
+    ColumnVector& columns) {
+  auto result = conjuncts.size() == 1
+      ? conjuncts.at(0)
       : std::make_shared<core::CallTypedExpr>(
-            BOOLEAN(), exprs, SpecialFormCallNames::kAnd);
+            BOOLEAN(), conjuncts, specialForm(lp::SpecialForm::kAnd));
+
+  std::unordered_set<Name> usedFieldNames;
+  collectFieldNames(result, usedFieldNames);
+
+  PlanObjectSet columnSet;
+  columnSet.unionObjects(columns);
 
   std::unordered_map<std::string, core::TypedExprPtr> mapping;
   for (const auto& column : baseTable->columns) {
-    mapping[column->name()] = std::make_shared<core::FieldAccessTypedExpr>(
+    auto name = column->name();
+    mapping[name] = std::make_shared<core::FieldAccessTypedExpr>(
         toTypePtr(column->value().type), ToVelox::outputName(column));
+
+    if (usedFieldNames.contains(name)) {
+      if (!columnSet.contains(column)) {
+        columns.push_back(column);
+      }
+      usedFieldNames.erase(name);
+    }
   }
+
+  // Verify that all fields used in 'conjuncts' are mapped to columns.
+  VELOX_CHECK_EQ(0, usedFieldNames.size());
+
   return result->rewriteInputNames(mapping);
 }
+
 } // namespace
 
 velox::core::PlanNodePtr ToVelox::makeScan(
@@ -1008,48 +1068,60 @@ velox::core::PlanNodePtr ToVelox::makeScan(
     axiom::runner::ExecutableFragment& fragment,
     std::vector<axiom::runner::ExecutableFragment>& stages) {
   columnAlteredTypes_.clear();
-  bool isSubfieldPushdown = hasSubfieldPushdown(scan);
-  auto handlePair = leafHandle(scan.baseTable->id());
-  if (!handlePair.first) {
-    queryCtx()->optimization()->filterUpdated(scan.baseTable, false);
-    handlePair = leafHandle(scan.baseTable->id());
+
+  const bool isSubfieldPushdown = hasSubfieldPushdown(scan);
+
+  auto [tableHandle, rejectedFilters] = leafHandle(scan.baseTable->id());
+  if (tableHandle == nullptr) {
+    filterUpdated(scan.baseTable, false);
+    std::tie(tableHandle, rejectedFilters) = leafHandle(scan.baseTable->id());
     VELOX_CHECK_NOT_NULL(
-        handlePair.first, "No table for scan {}", scan.toString(true, true));
+        tableHandle, "No table for scan {}", scan.toString(true, true));
   }
 
+  // Add columns used by rejected filters to scan columns.
+  ColumnVector allColumns = scan.columns();
+  core::TypedExprPtr filter;
+  if (!rejectedFilters.empty()) {
+    filter = toAndWithAliases(rejectedFilters, scan.baseTable, allColumns);
+  }
+
+  RowTypePtr outputType;
   ColumnVector scanColumns;
-  auto outputType = scanOutputType(scan, scanColumns, columnAlteredTypes_);
+  if (!isSubfieldPushdown) {
+    scanColumns = allColumns;
+    outputType = makeOutputType(allColumns);
+  } else {
+    outputType = subfieldPushdownScanType(
+        scan.baseTable, allColumns, scanColumns, columnAlteredTypes_);
+  }
+
+  auto connectorMetadata = scan.index->layout->connector()->metadata();
   connector::ColumnHandleMap assignments;
   for (auto column : scanColumns) {
-    // TODO: Make assignments have a ConnectorTableHandlePtr instead of
-    // non-const shared_ptr.
     std::vector<common::Subfield> subfields =
         columnSubfields(scan.baseTable, column->id());
     // No correlation name in scan output if pushed down subfield projection
     // follows.
     auto scanColumnName =
         isSubfieldPushdown ? column->name() : outputName(column);
-    assignments[scanColumnName] =
-        std::const_pointer_cast<connector::ColumnHandle>(
-            scan.index->layout->connector()->metadata()->createColumnHandle(
-                *scan.index->layout, column->name(), std::move(subfields)));
+    assignments[scanColumnName] = connectorMetadata->createColumnHandle(
+        *scan.index->layout, column->name(), std::move(subfields));
   }
 
   auto scanNode = std::make_shared<core::TableScanNode>(
-      nextId(), outputType, handlePair.first, assignments);
+      nextId(), outputType, tableHandle, assignments);
 
   core::PlanNodePtr result = scanNode;
-  if (hasSubfieldPushdown(scan)) {
-    result = makeSubfieldProjections(scan, scanNode);
+  if (filter != nullptr) {
+    result = std::make_shared<core::FilterNode>(nextId(), filter, result);
   }
 
-  if (!handlePair.second.empty()) {
-    result = std::make_shared<core::FilterNode>(
-        nextId(), toAndWithAliases(handlePair.second, scan.baseTable), result);
-    makePredictionAndHistory(result->id(), &scan);
-  } else {
-    makePredictionAndHistory(scanNode->id(), &scan);
+  if (isSubfieldPushdown) {
+    result = makeSubfieldProjections(scan, result);
   }
+
+  makePredictionAndHistory(result->id(), &scan);
 
   fragment.scans.push_back(scanNode);
 
@@ -1081,22 +1153,26 @@ velox::core::PlanNodePtr ToVelox::makeProject(
     }
   }
 
-  bool redundant = true;
-  for (auto i = 0; i < project.exprs().size(); ++i) {
-    auto expr = project.exprs()[i];
-    if (expr->type() != PlanType::kColumnExpr) {
-      redundant = false;
-      break;
-    }
+  const auto& inputType = *input->outputType();
+  const auto numOutputs = project.exprs().size();
+  VELOX_DCHECK_EQ(project.columns().size(), numOutputs);
 
-    auto column = project.columns()[i];
-
-    // TODO Why expr->sameOrEquals(*column) doesn't work?
-    if (input->outputType()->nameOf(i) != outputName(column)) {
-      redundant = false;
-      break;
+  const bool redundant = [&] {
+    if (inputType.size() != numOutputs) {
+      return false;
     }
-  }
+    for (size_t i = 0; i < numOutputs; ++i) {
+      const auto* expr = project.exprs()[i];
+      if (expr->isNot(PlanType::kColumnExpr)) {
+        return false;
+      }
+      const auto* column = project.columns()[i];
+      if (inputType.nameOf(i) != outputName(column)) {
+        return false;
+      }
+    }
+    return true;
+  }();
 
   if (redundant) {
     return input;
@@ -1104,14 +1180,16 @@ velox::core::PlanNodePtr ToVelox::makeProject(
 
   std::vector<std::string> names;
   std::vector<core::TypedExprPtr> exprs;
-  for (auto i = 0; i < project.exprs().size(); ++i) {
-    auto column = project.columns()[i];
+  names.reserve(numOutputs);
+  exprs.reserve(numOutputs);
+  for (auto i = 0; i < numOutputs; ++i) {
+    const auto* column = project.columns()[i];
     names.push_back(outputName(column));
     exprs.push_back(toTypedExpr(project.exprs()[i]));
   }
 
   return std::make_shared<core::ProjectNode>(
-      nextId(), std::move(names), std::move(exprs), input);
+      nextId(), std::move(names), std::move(exprs), std::move(input));
 }
 
 velox::core::PlanNodePtr ToVelox::makeJoin(
@@ -1163,12 +1241,12 @@ core::PlanNodePtr ToVelox::makeAggregation(
 
   const bool isRawInput = op.step == core::AggregationNode::Step::kPartial ||
       op.step == core::AggregationNode::Step::kSingle;
-  const int32_t numKeys = op.groupingKeys.size();
+  const auto numKeys = op.groupingKeys.size();
 
   TempProjections projections(*this, *op.input());
   std::vector<std::string> aggregateNames;
   std::vector<core::AggregationNode::Aggregate> aggregates;
-  for (auto i = 0; i < op.aggregates.size(); ++i) {
+  for (size_t i = 0; i < op.aggregates.size(); ++i) {
     const auto* column = op.columns()[i + numKeys];
     const auto& type = toTypePtr(column->value().type);
 
@@ -1177,7 +1255,7 @@ core::PlanNodePtr ToVelox::makeAggregation(
     const auto* aggregate = op.aggregates[i];
 
     std::vector<TypePtr> rawInputTypes;
-    for (auto type : aggregate->rawInputType()) {
+    for (const auto& type : aggregate->rawInputType()) {
       rawInputTypes.push_back(toTypePtr(type));
     }
 
@@ -1190,17 +1268,14 @@ core::PlanNodePtr ToVelox::makeAggregation(
           type,
           projections.toFieldRefs<core::TypedExprPtr>(aggregate->args()),
           aggregate->name());
-      aggregates.push_back({call, rawInputTypes, mask, {}, {}, false});
+      aggregates.push_back({.call = call, .rawInputTypes = rawInputTypes});
     } else {
       auto call = std::make_shared<core::CallTypedExpr>(
           type,
-          std::vector<core::TypedExprPtr>{
-              std::make_shared<core::FieldAccessTypedExpr>(
-                  toTypePtr(aggregate->intermediateType()),
-                  aggregateNames.back())},
-          aggregate->name());
-      aggregates.push_back(
-          {call, rawInputTypes, /* mask */ nullptr, {}, {}, false});
+          aggregate->name(),
+          std::make_shared<core::FieldAccessTypedExpr>(
+              toTypePtr(aggregate->intermediateType()), aggregateNames.back()));
+      aggregates.push_back({.call = call, .rawInputTypes = rawInputTypes});
     }
   }
 
@@ -1426,13 +1501,13 @@ core::PlanNodePtr ToVelox::makeFragment(
   return nullptr;
 }
 
-/// Debugging helper functions. Must be in a namespace to be
-/// callable from debugger.
-std::string veloxToString(const core::PlanNode* plan) {
+// Debug helper functions. Must be extern to be callable from debugger.
+
+extern std::string veloxToString(const core::PlanNode* plan) {
   return plan->toString(true, true);
 }
 
-std::string planString(MultiFragmentPlan* plan) {
+extern std::string planString(const MultiFragmentPlan* plan) {
   return plan->toString(true);
 }
 

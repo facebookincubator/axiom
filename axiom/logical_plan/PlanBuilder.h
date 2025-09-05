@@ -19,7 +19,7 @@
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/NameAllocator.h"
-#include "velox/core/Expressions.h"
+#include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -46,14 +46,12 @@ class ExprResolver {
   ExprResolver(
       std::shared_ptr<core::QueryCtx> queryCtx,
       bool enableCoersions,
-      FunctionRewriteHook hook = nullptr)
+      FunctionRewriteHook hook = nullptr,
+      std::shared_ptr<memory::MemoryPool> pool = nullptr)
       : queryCtx_(std::move(queryCtx)),
         enableCoersions_{enableCoersions},
-        hook_(hook),
-        pool_(
-            queryCtx_ ? queryCtx_->pool()->addLeafChild(
-                            fmt::format("literals{}", ++literalsCounter_))
-                      : nullptr) {}
+        hook_(std::move(hook)),
+        pool_(std::move(pool)) {}
 
   ExprPtr resolveScalarTypes(
       const core::ExprPtr& expr,
@@ -94,7 +92,6 @@ class ExprResolver {
   const bool enableCoersions_;
   FunctionRewriteHook hook_;
   std::shared_ptr<memory::MemoryPool> pool_;
-  static inline int32_t literalsCounter_{0};
 };
 
 // Make sure to specify Context.queryCtx to enable constand folding.
@@ -106,39 +103,44 @@ class PlanBuilder {
     std::shared_ptr<NameAllocator> nameAllocator;
     std::shared_ptr<core::QueryCtx> queryCtx;
     ExprResolver::FunctionRewriteHook hook;
+    std::shared_ptr<memory::MemoryPool> pool;
 
-    Context(
+    explicit Context(
         const std::optional<std::string>& defaultConnectorId = std::nullopt,
-        std::shared_ptr<core::QueryCtx> queryCtx = nullptr,
+        std::shared_ptr<core::QueryCtx> queryCtxPtr = nullptr,
         ExprResolver::FunctionRewriteHook hook = nullptr)
         : defaultConnectorId{defaultConnectorId},
           planNodeIdGenerator{std::make_shared<core::PlanNodeIdGenerator>()},
           nameAllocator{std::make_shared<NameAllocator>()},
-          queryCtx(std::move(queryCtx)),
-          hook(std::move(hook)) {}
+          queryCtx{std::move(queryCtxPtr)},
+          hook{std::move(hook)},
+          pool{
+              queryCtx && queryCtx->pool()
+                  ? queryCtx->pool()->addLeafChild("literals")
+                  : nullptr} {}
   };
 
   using Scope = std::function<ExprPtr(
       const std::optional<std::string>& alias,
       const std::string& name)>;
 
-  PlanBuilder(bool enableCoersions = false, Scope outerScope = nullptr)
-      : planNodeIdGenerator_(std::make_shared<core::PlanNodeIdGenerator>()),
-        nameAllocator_(std::make_shared<NameAllocator>()),
-        outerScope_{std::move(outerScope)},
-        parseOptions_{.parseInListAsArray = false},
-        resolver_(nullptr, enableCoersions, nullptr) {}
+  explicit PlanBuilder(bool enableCoersions = false, Scope outerScope = nullptr)
+      : PlanBuilder{Context{}, enableCoersions, std::move(outerScope)} {}
 
   explicit PlanBuilder(
       const Context& context,
       bool enableCoersions = false,
       Scope outerScope = nullptr)
-      : defaultConnectorId_(context.defaultConnectorId),
+      : defaultConnectorId_{context.defaultConnectorId},
         planNodeIdGenerator_{context.planNodeIdGenerator},
         nameAllocator_{context.nameAllocator},
         outerScope_{std::move(outerScope)},
         parseOptions_{.parseInListAsArray = false},
-        resolver_(context.queryCtx, enableCoersions, context.hook) {
+        resolver_{
+            context.queryCtx,
+            enableCoersions,
+            context.hook,
+            context.pool} {
     VELOX_CHECK_NOT_NULL(planNodeIdGenerator_);
     VELOX_CHECK_NOT_NULL(nameAllocator_);
   }
@@ -263,7 +265,7 @@ class PlanBuilder {
       const std::vector<ExprApi>& unnestExprs,
       bool withOrdinality,
       const std::optional<std::string>& alias,
-      const std::vector<std::string>& columnAliases);
+      const std::vector<std::string>& unnestAliases);
 
   PlanBuilder& join(
       const PlanBuilder& right,

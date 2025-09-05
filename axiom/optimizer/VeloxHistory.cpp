@@ -56,27 +56,25 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
     }
   }
 
-  const bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
+  auto rightTable = edge->rightTable()->as<BaseTable>()->schemaTable;
+  auto leftTable = edge->leftTable()->as<BaseTable>()->schemaTable;
 
   std::pair<float, float> pair;
   uint64_t start = getCurrentTimeMicro();
   if (keyPair.second) {
     pair = optimizer::sampleJoin(
-        edge->rightTable()->as<BaseTable>()->schemaTable,
-        edge->rightKeys(),
-        edge->leftTable()->as<BaseTable>()->schemaTable,
-        edge->leftKeys());
+        rightTable, edge->rightKeys(), leftTable, edge->leftKeys());
   } else {
     pair = optimizer::sampleJoin(
-        edge->leftTable()->as<BaseTable>()->schemaTable,
-        edge->leftKeys(),
-        edge->rightTable()->as<BaseTable>()->schemaTable,
-        edge->rightKeys());
+        leftTable, edge->leftKeys(), rightTable, edge->rightKeys());
   }
+
   {
     std::lock_guard<std::mutex> l(mutex_);
     joinSamples_[keyPair.first] = pair;
   }
+
+  const bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
   if (trace) {
     std::cout << "Sample join " << keyPair.first << ": " << pair.first << " :"
               << pair.second
@@ -89,11 +87,13 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
   return pair;
 }
 
-bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
+bool VeloxHistory::setLeafSelectivity(
+    BaseTable& table,
+    const RowTypePtr& scanType) {
   auto options = queryCtx()->optimization()->options();
-  auto handlePair = queryCtx()->optimization()->leafHandle(table.id());
-  auto handle = handlePair.first;
-  auto string = handle->toString();
+  auto [tableHandle, filters] =
+      queryCtx()->optimization()->leafHandle(table.id());
+  const auto string = tableHandle->toString();
 
   // Check whether leaf selectivity is already cached for this handle.
   {
@@ -105,7 +105,7 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
     }
   }
 
-  auto runnerTable = table.schemaTable->connectorTable;
+  auto* runnerTable = table.schemaTable->connectorTable;
 
   // If there is no physical table to go to or filter sampling
   // has been explicitly disabled, assume 1/10 if any filters
@@ -121,11 +121,19 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
 
   // Determine and cache leaf selectivity for the table handle
   // by sampling the layout for the physical table.
-  uint64_t start = getCurrentTimeMicro();
-  auto sample = runnerTable->layouts()[0]->sample(
-      handlePair.first, 1, handlePair.second, scanType);
+  const uint64_t start = getCurrentTimeMicro();
+  auto sample =
+      runnerTable->layouts()[0]->sample(tableHandle, 1, filters, scanType);
+  VELOX_CHECK_GE(sample.first, 0);
+  VELOX_CHECK_GE(sample.first, sample.second);
+
+  if (sample.first == 0) {
+    table.filterSelectivity = 1;
+    return true;
+  }
+
   table.filterSelectivity =
-      static_cast<float>(sample.second) / (sample.first + 1);
+      static_cast<float>(sample.second) / static_cast<float>(sample.first);
   recordLeafSelectivity(string, table.filterSelectivity, false);
 
   bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
@@ -136,6 +144,8 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
   }
   return true;
 }
+
+namespace {
 
 std::shared_ptr<const core::TableScanNode> findScan(
     const core::PlanNodeId& id,
@@ -182,8 +192,7 @@ void predictionWarnings(
         predictedRows,
         historyKey));
   } else {
-    float ratio =
-        static_cast<float>(actualRows) / static_cast<float>(predictedRows);
+    auto ratio = static_cast<float>(actualRows) / predictedRows;
     auto threshold = FLAGS_cardinality_warning_threshold;
     if (ratio < 1 / threshold || ratio > threshold) {
       logPrediction(fmt::format(
@@ -195,6 +204,8 @@ void predictionWarnings(
     }
   }
 }
+
+} // namespace
 
 void VeloxHistory::recordVeloxExecution(
     const PlanAndStats& plan,
@@ -213,7 +224,7 @@ void VeloxHistory::recordVeloxExecution(
         if (keyIt == plan.history.end()) {
           continue;
         }
-        uint64_t actualRows;
+        uint64_t actualRows{};
         {
           std::lock_guard<std::mutex> l(mutex_);
           actualRows = op.outputPositions;
@@ -226,13 +237,18 @@ void VeloxHistory::recordVeloxExecution(
             std::string handle = scan->tableHandle()->toString();
             recordLeafSelectivity(
                 handle,
-                op.outputPositions / std::max<float>(1, op.rawInputPositions),
+                static_cast<float>(actualRows) /
+                    std::max(1.F, static_cast<float>(op.rawInputPositions)),
                 true);
           }
         }
         if (it != plan.prediction.end()) {
           auto predictedRows = it->second.cardinality;
-          predictionWarnings(plan, op.planNodeId, actualRows, predictedRows);
+          predictionWarnings(
+              plan,
+              op.planNodeId,
+              static_cast<int64_t>(actualRows),
+              predictedRows);
         }
       }
     }
@@ -270,19 +286,20 @@ folly::dynamic VeloxHistory::serialize() {
 }
 
 void VeloxHistory::update(folly::dynamic& serialized) {
+  auto toFloat = [](const folly::dynamic& v) {
+    // TODO Don't use atof.
+    return static_cast<float>(atof(v.asString().c_str()));
+  };
   for (auto& pair : serialized["leaves"]) {
-    leafSelectivities_[pair["key"].asString()] =
-        atof(pair["value"].asString().c_str());
+    leafSelectivities_[pair["key"].asString()] = toFloat(pair["value"]);
   }
   for (auto& pair : serialized["joins"]) {
-    joinSamples_[pair["key"].asString()] = std::make_pair<float, float>(
-        atof(pair["lr"].asString().c_str()),
-        atof(pair["rl"].asString().c_str()));
+    joinSamples_[pair["key"].asString()] =
+        std::make_pair<float, float>(toFloat(pair["lr"]), toFloat(pair["rl"]));
   }
   for (auto& pair : serialized["plans"]) {
-    planHistory_[pair["key"].asString()] = NodePrediction{
-        .cardinality =
-            static_cast<float>(atof(pair["card"].asString().c_str()))};
+    planHistory_[pair["key"].asString()] =
+        NodePrediction{.cardinality = toFloat(pair["card"])};
   }
 }
 

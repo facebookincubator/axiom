@@ -16,6 +16,7 @@
 
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/logical_plan/ExprPrinter.h"
+#include "axiom/logical_plan/ExprVisitor.h"
 #include "axiom/logical_plan/PlanNodeVisitor.h"
 
 namespace facebook::velox::logical_plan {
@@ -26,7 +27,7 @@ class ToTextVisitor : public PlanNodeVisitor {
  public:
   struct Context : public PlanNodeVisitorContext {
     std::stringstream out;
-    int32_t indent{0};
+    size_t indent{0};
   };
 
   void visit(const ValuesNode& node, PlanNodeVisitorContext& context)
@@ -175,7 +176,7 @@ class ToTextVisitor : public PlanNodeVisitor {
   }
 
  private:
-  static std::string makeIndent(int32_t size) {
+  static std::string makeIndent(size_t size) {
     return std::string(size * 2, ' ');
   }
 
@@ -444,9 +445,9 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
     int32_t indent{0};
 
     explicit Context(
-        const PlanSummaryOptions& _options,
-        bool _skeletonOnly = false)
-        : options(_options), skeletonOnly{_skeletonOnly} {}
+        const PlanSummaryOptions& options,
+        bool skeletonOnly = false)
+        : options{options}, skeletonOnly{skeletonOnly} {}
 
     void appendExpression(const Expr& expr) {
       out << truncate(ExprPrinter::toText(expr), options.maxLength);
@@ -609,7 +610,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   }
 
  private:
-  static std::string makeIndent(int32_t size) {
+  static std::string makeIndent(size_t size) {
     return std::string(size * 2, ' ');
   }
 
