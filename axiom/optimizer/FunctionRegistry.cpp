@@ -145,8 +145,7 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
 
   auto registerFunction = [&](std::string_view name,
                               std::unique_ptr<FunctionMetadata> metadata) {
-    FunctionRegistry::instance()->registerFunction(
-        fullName(name), std::move(metadata));
+    FunctionRegistry::instance()->registerFunction(name, std::move(metadata));
   };
 
   {
@@ -159,7 +158,7 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
     metadata->lambdas.push_back(std::move(info));
     metadata->subfieldArg = 0;
     metadata->cost = 40;
-    registerFunction("transform_values", std::move(metadata));
+    registerFunction(fullName("transform_values"), std::move(metadata));
   }
 
   {
@@ -170,7 +169,7 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
     metadata->lambdas.push_back(std::move(info));
     metadata->subfieldArg = 0;
     metadata->cost = 20;
-    registerFunction("transform", std::move(metadata));
+    registerFunction(fullName("transform"), std::move(metadata));
   }
 
   {
@@ -182,13 +181,15 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->lambdas.push_back(std::move(info));
     metadata->cost = 20;
-    registerFunction("zip", std::move(metadata));
+    registerFunction(fullName("zip"), std::move(metadata));
   }
 
   {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->valuePathToArgPath = rowConstructorSubfield;
     metadata->explode = rowConstructorExplode;
+    // Presto row_constructor created without prefix, so we register it without
+    // prefix too.
     registerFunction("row_constructor", std::move(metadata));
   }
 
@@ -205,6 +206,8 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
   registry->registerReversibleFunction(fullName("plus"));
   registry->registerReversibleFunction(fullName("multiply"));
 
+  // Presto special form functions created without prefix, so we register them
+  // without prefix too.
   registry->registerSpecialForm(lp::SpecialForm::kAnd, expression::kAnd);
   registry->registerSpecialForm(lp::SpecialForm::kOr, expression::kOr);
   registry->registerSpecialForm(lp::SpecialForm::kCast, expression::kCast);
@@ -215,7 +218,7 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
   registry->registerSpecialForm(
       lp::SpecialForm::kCoalesce, expression::kCoalesce);
   registry->registerSpecialForm(lp::SpecialForm::kSwitch, expression::kSwitch);
-  registry->registerSpecialForm(lp::SpecialForm::kIn, fullName("in"));
+  registry->registerSpecialForm(lp::SpecialForm::kIn, "in");
 }
 
 } // namespace facebook::velox::optimizer
