@@ -244,15 +244,19 @@ SetNode::SetNode(
     std::string id,
     const std::vector<LogicalPlanNodePtr>& inputs,
     SetOperation operation)
-    : LogicalPlanNode{NodeKind::kSet, std::move(id), inputs, inputs.empty() ? nullptr : inputs[0]->outputType()},
-      operation_{operation} {
+    : LogicalPlanNode{NodeKind::kSet, std::move(id), inputs, makeOutputType(inputs)},
+      operation_{operation} {}
+
+// static
+RowTypePtr SetNode::makeOutputType(
+    const std::vector<LogicalPlanNodePtr>& inputs) {
   VELOX_USER_CHECK_GE(
-      inputs_.size(), 2, "Set operation requires at least 2 inputs");
+      inputs.size(), 2, "Set operation requires at least 2 inputs");
 
-  const auto firstRowType = inputs_[0]->outputType();
+  const auto firstRowType = inputs[0]->outputType();
 
-  for (size_t i = 1; i < inputs_.size(); ++i) {
-    const auto& rowType = inputs_[i]->outputType();
+  for (size_t i = 1; i < inputs.size(); ++i) {
+    const auto& rowType = inputs[i]->outputType();
 
     // The names are different, but types must be the same.
     VELOX_USER_CHECK(
@@ -270,6 +274,8 @@ SetNode::SetNode(
           firstRowType->nameOf(j));
     }
   }
+
+  return firstRowType;
 }
 
 void SetNode::accept(

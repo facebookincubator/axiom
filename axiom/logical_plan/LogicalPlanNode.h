@@ -554,6 +554,9 @@ class SetNode : public LogicalPlanNode {
       const override;
 
  private:
+  static RowTypePtr makeOutputType(
+      const std::vector<LogicalPlanNodePtr>& inputs);
+
   const SetOperation operation_;
 };
 
