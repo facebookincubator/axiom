@@ -29,7 +29,7 @@ const char* SpecialFormCallNames::kOr = "__or";
 // static
 const char* SpecialFormCallNames::kCast = "__cast";
 // static
-const char* SpecialFormCallNames::kTryCast = "__trycast";
+const char* SpecialFormCallNames::kTryCast = "__try_cast";
 // static
 const char* SpecialFormCallNames::kTry = "__try";
 // static
