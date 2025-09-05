@@ -58,7 +58,7 @@ velox_link_libraries(
   velox_optimizer_tests_duck_parser velox_fe_logical_plan_builder
   velox_parse_parser velox_vector)
 
-velox_add_library(velox_optimizer_tests_plan_matcher PlanMatcher.cpp)
+velox_add_library(velox_optimizer_tests_plan_matcher PlanMatcher.cpp LogicalPlanMatcher.cpp)
 
 velox_link_libraries(
   velox_optimizer_tests_plan_matcher
@@ -106,6 +106,9 @@ add_executable(
   SubfieldTest.cpp
   FeatureGen.cpp
   Genies.cpp
+  PrestoParserTest.cpp
+  TestConnectorQueryTest.cpp
+  SchemaUtilsTest.cpp
   SchemaResolverTest.cpp)
 
 add_test(velox_plan_test velox_plan_test)

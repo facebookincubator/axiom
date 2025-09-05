@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(axiom_lp_tests PlanBuilderTest.cpp PlanPrinterTest.cpp
-                              NameAllocatorTest.cpp NameMappingsTest.cpp)
+add_executable(axiom_lp_tests 
+  NameAllocatorTest.cpp 
+  NameMappingsTest.cpp
+  ExprApiTest.cpp
+  PlanBuilderTest.cpp 
+  PlanPrinterTest.cpp)
 
 add_test(axiom_lp_tests axiom_lp_tests)
 
