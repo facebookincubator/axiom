@@ -168,16 +168,13 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
     remainingConjuncts.push_back(toTypedExpr(expr));
   }
   core::TypedExprPtr remainingFilter;
-  for (const auto& conjunct : remainingConjuncts) {
-    if (!remainingFilter) {
-      remainingFilter = conjunct;
-    } else {
-      remainingFilter = std::make_shared<core::CallTypedExpr>(
-          BOOLEAN(),
-          specialForm(lp::SpecialForm::kAnd),
-          remainingFilter,
-          conjunct);
-    }
+  if (remainingConjuncts.size() == 1) {
+    remainingFilter = std::move(remainingConjuncts[0]);
+  } else if (!remainingConjuncts.empty()) {
+    remainingFilter = std::make_shared<core::CallTypedExpr>(
+        BOOLEAN(),
+        specialForm(lp::SpecialForm::kAnd),
+        std::move(remainingConjuncts));
   }
 
   columnAlteredTypes_.clear();
@@ -267,21 +264,19 @@ RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) const {
 }
 
 core::TypedExprPtr ToVelox::toAnd(const ExprVector& exprs) {
+  if (exprs.empty()) {
+    return nullptr;
+  }
   if (exprs.size() == 1) {
     return toTypedExpr(exprs[0]);
   }
-
-  core::TypedExprPtr result;
+  std::vector<core::TypedExprPtr> conjuncts;
+  conjuncts.reserve(exprs.size());
   for (auto expr : exprs) {
-    auto conjunct = toTypedExpr(expr);
-    if (!result) {
-      result = conjunct;
-    } else {
-      result = std::make_shared<core::CallTypedExpr>(
-          BOOLEAN(), specialForm(lp::SpecialForm::kAnd), result, conjunct);
-    }
+    conjuncts.push_back(toTypedExpr(expr));
   }
-  return result;
+  return std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(), specialForm(lp::SpecialForm::kAnd), std::move(conjuncts));
 }
 
 namespace {
@@ -1027,13 +1022,17 @@ void collectFieldNames(
 // output of table scan (foo -> t1.foo). Appends columns used in 'conjuncts'
 // to 'columns' unless these are already present.
 core::TypedExprPtr toAndWithAliases(
-    const std::vector<core::TypedExprPtr>& conjuncts,
+    std::vector<core::TypedExprPtr> conjuncts,
     const BaseTable* baseTable,
     ColumnVector& columns) {
-  auto result = conjuncts.size() == 1
-      ? conjuncts.at(0)
-      : std::make_shared<core::CallTypedExpr>(
-            BOOLEAN(), conjuncts, specialForm(lp::SpecialForm::kAnd));
+  VELOX_DCHECK(!conjuncts.empty());
+  core::TypedExprPtr result;
+  if (conjuncts.size() == 1) {
+    result = std::move(conjuncts[0]);
+  } else {
+    result = std::make_shared<core::CallTypedExpr>(
+        BOOLEAN(), std::move(conjuncts), specialForm(lp::SpecialForm::kAnd));
+  }
 
   std::unordered_set<Name> usedFieldNames;
   collectFieldNames(result, usedFieldNames);
@@ -1083,7 +1082,8 @@ velox::core::PlanNodePtr ToVelox::makeScan(
   ColumnVector allColumns = scan.columns();
   core::TypedExprPtr filter;
   if (!rejectedFilters.empty()) {
-    filter = toAndWithAliases(rejectedFilters, scan.baseTable, allColumns);
+    filter = toAndWithAliases(
+        std::move(rejectedFilters), scan.baseTable, allColumns);
   }
 
   RowTypePtr outputType;
