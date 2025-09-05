@@ -426,7 +426,7 @@ core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
 
       if (call->name() == SpecialFormCallNames::kIn) {
         VELOX_USER_CHECK_GE(call->args().size(), 2);
-        inputs.push_back(toTypedExpr(call->args().at(0)));
+        inputs.push_back(toTypedExpr(call->args()[0]));
         inputs.push_back(createArrayForInList(*call, inputs.back()->type()));
       } else {
         for (auto arg : call->args()) {
@@ -434,8 +434,7 @@ core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
         }
       }
 
-      if (auto form =
-              SpecialFormCallNames::tryFromCallName(toName(call->name()))) {
+      if (auto form = SpecialFormCallNames::tryFromCallName(call->name())) {
         if (form == lp::SpecialForm::kCast) {
           return std::make_shared<core::CastTypedExpr>(
               toTypePtr(expr->value().type), std::move(inputs), false);
@@ -449,7 +448,7 @@ core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
         return std::make_shared<core::CallTypedExpr>(
             toTypePtr(expr->value().type),
             std::move(inputs),
-            specialForm(form.value()));
+            specialForm(*form));
       }
 
       return std::make_shared<core::CallTypedExpr>(
