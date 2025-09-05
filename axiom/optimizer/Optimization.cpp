@@ -698,17 +698,23 @@ void Optimization::addPostprocess(
     state.addCost(*filter);
     plan = filter;
   }
+  // We probably want to make this decision based on cost.
+  static constexpr int64_t kMaxLimitBeforeProject = 8192;
   if (dt->hasOrderBy()) {
     auto* orderBy = make<OrderBy>(
         plan, dt->orderKeys, dt->orderTypes, dt->limit, dt->offset);
     state.addCost(*orderBy);
     plan = orderBy;
+  } else if (dt->hasLimit() && dt->limit <= kMaxLimitBeforeProject) {
+    auto limit = make<Limit>(plan, dt->limit, dt->offset);
+    state.addCost(*limit);
+    plan = limit;
   }
   if (!dt->columns.empty()) {
     auto* project = make<Project>(plan, dt->exprs, dt->columns);
     plan = project;
   }
-  if (!dt->hasOrderBy() && dt->hasLimit()) {
+  if (dt->limit > kMaxLimitBeforeProject) {
     auto limit = make<Limit>(plan, dt->limit, dt->offset);
     state.addCost(*limit);
     plan = limit;

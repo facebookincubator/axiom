@@ -1273,6 +1273,38 @@ TEST_F(PlanTest, values) {
   }
 }
 
+TEST_F(PlanTest, limitBeforeProject) {
+  testConnector_->createTable("t", ROW({"a", "b"}, {INTEGER(), INTEGER()}));
+  {
+    auto logicalPlan = lp::PlanBuilder{}
+                           .tableScan(kTestConnectorId, "t", {"a", "b"})
+                           .limit(10)
+                           .project({"a + b as c"})
+                           .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder{}.tableScan().limit().project().build();
+
+    EXPECT_TRUE(matcher->match(plan));
+  }
+  {
+    auto logicalPlan = lp::PlanBuilder{}
+                           .tableScan(kTestConnectorId, "t", {"a", "b"})
+                           .limit(10'000)
+                           .project({"a + b as c"})
+                           .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder{}.tableScan().project().limit().build();
+
+    EXPECT_TRUE(matcher->match(plan));
+  }
+}
+
 TEST_F(PlanTest, parallelCse) {
   testConnector_->createTable(
       "t", ROW({"a", "b", "c"}, {INTEGER(), INTEGER(), INTEGER()}));
