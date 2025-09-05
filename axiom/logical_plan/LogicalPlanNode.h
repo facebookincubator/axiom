@@ -65,20 +65,6 @@ class LogicalPlanNode {
     }
   }
 
-  LogicalPlanNode(
-      NodeKind kind,
-      std::string id,
-      std::vector<LogicalPlanNodePtr> inputs)
-      : kind_{kind},
-        id_{std::move(id)},
-        inputs_{std::move(inputs)},
-        outputType_{inputs_.empty() ? nullptr : inputs_[0]->outputType()} {
-    VELOX_USER_CHECK_NOT_NULL(outputType_);
-    for (const auto& input : inputs_) {
-      VELOX_USER_CHECK_NOT_NULL(input);
-    }
-  }
-
   virtual ~LogicalPlanNode() = default;
 
   NodeKind kind() const {
@@ -460,9 +446,9 @@ class SortNode : public LogicalPlanNode {
  public:
   SortNode(
       std::string id,
-      LogicalPlanNodePtr input,
+      const LogicalPlanNodePtr& input,
       std::vector<SortingField> ordering)
-      : LogicalPlanNode{NodeKind::kSort, std::move(id), {std::move(input)}},
+      : LogicalPlanNode{NodeKind::kSort, std::move(id), {input}, input->outputType()},
         ordering_{std::move(ordering)} {
     VELOX_USER_CHECK(!ordering_.empty());
   }
@@ -490,10 +476,10 @@ class LimitNode : public LogicalPlanNode {
   /// indicate no limit, in which case offset must be > 0.
   LimitNode(
       std::string id,
-      LogicalPlanNodePtr input,
+      const LogicalPlanNodePtr& input,
       int64_t offset,
       int64_t count)
-      : LogicalPlanNode{NodeKind::kLimit, std::move(id), {std::move(input)}},
+      : LogicalPlanNode{NodeKind::kLimit, std::move(id), {input}, input->outputType()},
         offset_{offset},
         count_{count} {
     VELOX_USER_CHECK_GE(offset_, 0);
@@ -557,7 +543,7 @@ class SetNode : public LogicalPlanNode {
  public:
   SetNode(
       std::string id,
-      std::vector<LogicalPlanNodePtr> inputs,
+      const std::vector<LogicalPlanNodePtr>& inputs,
       SetOperation operation);
 
   SetOperation operation() const {

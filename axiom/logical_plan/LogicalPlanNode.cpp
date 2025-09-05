@@ -242,9 +242,9 @@ VELOX_DEFINE_ENUM_NAME(SetOperation, setOperationNames)
 
 SetNode::SetNode(
     std::string id,
-    std::vector<LogicalPlanNodePtr> inputs,
+    const std::vector<LogicalPlanNodePtr>& inputs,
     SetOperation operation)
-    : LogicalPlanNode{NodeKind::kSet, std::move(id), std::move(inputs)},
+    : LogicalPlanNode{NodeKind::kSet, std::move(id), inputs, inputs.empty() ? nullptr : inputs[0]->outputType()},
       operation_{operation} {
   VELOX_USER_CHECK_GE(
       inputs_.size(), 2, "Set operation requires at least 2 inputs");
