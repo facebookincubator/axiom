@@ -89,7 +89,7 @@ bool FunctionRegistry::registerReversibleFunction(std::string_view name) {
 
 // static
 FunctionRegistry* FunctionRegistry::instance() {
-  static auto registry = std::make_unique<FunctionRegistry>();
+  static std::unique_ptr<FunctionRegistry> registry{new FunctionRegistry{}};
   return registry.get();
 }
 
@@ -97,7 +97,7 @@ FunctionMetadataCP functionMetadata(std::string_view name) {
   return FunctionRegistry::instance()->metadata(name);
 }
 
-std::string specialForm(lp::SpecialForm specialForm) {
+const std::string& specialForm(lp::SpecialForm specialForm) {
   return FunctionRegistry::instance()->specialForm(specialForm);
 }
 
@@ -152,7 +152,8 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
     LambdaInfo info{
         .ordinal = 1,
         .lambdaArg = {LambdaArg::kKey, LambdaArg::kValue},
-        .argOrdinal = {0, 0}};
+        .argOrdinal = {0, 0},
+    };
 
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->lambdas.push_back(std::move(info));
@@ -163,7 +164,10 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
 
   {
     LambdaInfo info{
-        .ordinal = 1, .lambdaArg = {LambdaArg::kElement}, .argOrdinal = {0}};
+        .ordinal = 1,
+        .lambdaArg = {LambdaArg::kElement},
+        .argOrdinal = {0},
+    };
 
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->lambdas.push_back(std::move(info));
@@ -176,7 +180,8 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
     LambdaInfo info{
         .ordinal = 2,
         .lambdaArg = {LambdaArg::kElement, LambdaArg::kElement},
-        .argOrdinal = {0, 1}};
+        .argOrdinal = {0, 1},
+    };
 
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->lambdas.push_back(std::move(info));

@@ -180,7 +180,12 @@ struct FunctionMetadata {
 using FunctionMetadataCP = const FunctionMetadata*;
 
 class FunctionRegistry {
+  FunctionRegistry() = default;
+
  public:
+  FunctionRegistry(FunctionRegistry&&) = delete;
+  FunctionRegistry(const FunctionRegistry&) = delete;
+
   /// @return metadata for function 'name' or nullptr if 'name' is not
   /// registered.
   FunctionMetadataCP metadata(std::string_view name) const;
@@ -201,7 +206,7 @@ class FunctionRegistry {
     return cardinality_;
   }
 
-  std::string specialForm(logical_plan::SpecialForm specialForm) {
+  const std::string& specialForm(logical_plan::SpecialForm specialForm) {
     auto it = specialForms_.find(specialForm);
     VELOX_USER_CHECK(it != specialForms_.end());
     return it->second;
@@ -284,6 +289,6 @@ class FunctionRegistry {
 /// Shortcut for FunctionRegistry::instance()->metadata(name).
 FunctionMetadataCP functionMetadata(std::string_view name);
 
-std::string specialForm(logical_plan::SpecialForm specialForm);
+const std::string& specialForm(logical_plan::SpecialForm specialForm);
 
 } // namespace facebook::velox::optimizer
