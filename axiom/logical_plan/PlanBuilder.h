@@ -233,10 +233,6 @@ class PlanBuilder {
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates);
 
-  PlanBuilder& aggregate(
-      const std::vector<ExprApi>& groupingKeys,
-      const std::vector<ExprApi>& aggregates);
-
   /// Starts or continues the plan with an Unnest node. Uses auto-generated
   /// names for unnested columns. Use the version of 'unnest' API that takes
   /// ExprApi together with ExprApi::unnestAs to provide aliases for unnested
