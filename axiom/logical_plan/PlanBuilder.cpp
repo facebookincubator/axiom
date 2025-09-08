@@ -247,7 +247,7 @@ void PlanBuilder::resolveProjections(
     if (expr->isInputReference()) {
       // Identity projection
       const auto& id = expr->asUnchecked<InputReferenceExpr>()->name();
-      if (!alias.has_value() || id == alias.value()) {
+      if (!alias.has_vaflue() || id == alias.value()) {
         outputNames.push_back(id);
 
         const auto names = outputMapping_->reverseLookup(id);
@@ -361,9 +361,9 @@ PlanBuilder& PlanBuilder::aggregate(
   std::vector<AggregateExprPtr> exprs;
   exprs.reserve(aggregates.size());
 
-<<<<<<< HEAD
-  for (const auto& sql : aggregates) {
-    auto aggregateExpr = duckdb::parseAggregateExpr(sql, {});
+  for (const auto& aggregate : aggregates) {
+    auto aggregateExpr =
+        duckdb::parseAggregateExpr(aggregate.sql(), {});
 
     std::vector<SortingField> ordering;
     for (const auto& orderBy : aggregateExpr.orderBy) {
@@ -380,15 +380,8 @@ PlanBuilder& PlanBuilder::aggregate(
     auto expr = resolveAggregateTypes(
         aggregateExpr.expr, filter, ordering, aggregateExpr.distinct);
 
-    if (aggregateExpr.expr->alias().has_value()) {
-      const auto& alias = aggregateExpr.expr->alias().value();
-=======
-  for (const auto& aggregate : aggregates) {
-    auto expr = resolveAggregateTypes(aggregate.expr());
-
     if (aggregate.name().has_value()) {
       const auto& alias = aggregate.name().value();
->>>>>>> upstream/main
       outputNames.push_back(newName(alias));
       newOutputMapping->add(alias, outputNames.back());
     } else {
@@ -1068,14 +1061,10 @@ ExprPtr ExprResolver::resolveScalarTypes(
 
 AggregateExprPtr ExprResolver::resolveAggregateTypes(
     const core::ExprPtr& expr,
-<<<<<<< HEAD
     const InputNameResolver& inputNameResolver,
-    const ExprPtr& filter = nullptr,
-    const std::vector<SortingField>& ordering = {},
-    bool distinct = false) {
-=======
-    const InputNameResolver& inputNameResolver) const {
->>>>>>> upstream/main
+    const ExprPtr& filter,
+    const std::vector<SortingField>& ordering,
+    bool distinct) const {
   const auto* call = dynamic_cast<const core::CallExpr*>(expr.get());
   VELOX_USER_CHECK_NOT_NULL(
       call, "Aggregate must be a call expression: {}", expr->toString());
