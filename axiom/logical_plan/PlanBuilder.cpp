@@ -18,6 +18,7 @@
 #include "axiom/logical_plan/NameMappings.h"
 #include "axiom/optimizer/connectors/ConnectorMetadata.h"
 #include "velox/connectors/Connector.h"
+#include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/SignatureBinder.h"
@@ -232,11 +233,25 @@ PlanBuilder& PlanBuilder::aggregate(
   exprs.reserve(aggregates.size());
 
   for (const auto& sql : aggregates) {
-    auto untypedExpr = parse::parseExpr(sql, parseOptions_);
-    auto expr = resolveAggregateTypes(untypedExpr);
+    auto aggregateExpr = duckdb::parseAggregateExpr(sql, {});
 
-    if (untypedExpr->alias().has_value()) {
-      const auto& alias = untypedExpr->alias().value();
+    std::vector<SortingField> ordering;
+    for (const auto& orderBy : aggregateExpr.orderBy) {
+      auto sortKeyExpr = resolveScalarTypes(orderBy.expr);
+      SortOrder order{orderBy.ascending, orderBy.nullsFirst};
+      ordering.emplace_back(sortKeyExpr, order);
+    }
+
+    ExprPtr filter;
+    if (aggregateExpr.maskExpr != nullptr) {
+      filter = resolveScalarTypes(aggregateExpr.maskExpr);
+    }
+
+    auto expr = resolveAggregateTypes(
+        aggregateExpr.expr, filter, ordering, aggregateExpr.distinct);
+
+    if (aggregateExpr.expr->alias().has_value()) {
+      const auto& alias = aggregateExpr.expr->alias().value();
       outputNames.push_back(newName(alias));
       newOutputMapping->add(alias, outputNames.back());
     } else {
@@ -675,7 +690,10 @@ ExprPtr resolveScalarTypesImpl(
 
 AggregateExprPtr resolveAggregateTypesImpl(
     const core::ExprPtr& expr,
-    const InputNameResolver& inputNameResolver) {
+    const InputNameResolver& inputNameResolver,
+    const ExprPtr& filter = nullptr,
+    const std::vector<SortingField>& ordering = {},
+    bool distinct = false) {
   const auto* call = dynamic_cast<const core::CallExpr*>(expr.get());
   VELOX_USER_CHECK_NOT_NULL(call, "Aggregate must be a call expression");
 
@@ -694,7 +712,8 @@ AggregateExprPtr resolveAggregateTypesImpl(
   }
 
   if (auto type = exec::resolveAggregateFunction(name, inputTypes).first) {
-    return std::make_shared<AggregateExpr>(type, name, inputs);
+    return std::make_shared<AggregateExpr>(
+        type, name, inputs, filter, ordering, distinct);
   }
 
   auto allSignatures = exec::getAggregateFunctionSignatures();
@@ -864,6 +883,21 @@ AggregateExprPtr PlanBuilder::resolveAggregateTypes(
       expr, [&](const auto& alias, const auto& name) {
         return resolveInputName(alias, name);
       });
+}
+
+AggregateExprPtr PlanBuilder::resolveAggregateTypes(
+    const core::ExprPtr& expr,
+    const ExprPtr& filter,
+    const std::vector<SortingField>& ordering,
+    bool distinct) const {
+  return resolveAggregateTypesImpl(
+      expr,
+      [&](const auto& alias, const auto& name) {
+        return resolveInputName(alias, name);
+      },
+      filter,
+      ordering,
+      distinct);
 }
 
 PlanBuilder& PlanBuilder::as(const std::string& alias) {

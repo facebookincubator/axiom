@@ -171,6 +171,12 @@ class PlanBuilder {
 
   AggregateExprPtr resolveAggregateTypes(const core::ExprPtr& expr) const;
 
+  AggregateExprPtr resolveAggregateTypes(
+      const core::ExprPtr& expr,
+      const ExprPtr& filter,
+      const std::vector<SortingField>& ordering,
+      bool distinct) const;
+
   std::vector<ExprApi> parse(const std::vector<std::string>& exprs);
 
   void resolveProjections(
