@@ -389,51 +389,6 @@ PlanBuilder& PlanBuilder::aggregate(
   return *this;
 }
 
-PlanBuilder& PlanBuilder::aggregate(
-    const std::vector<ExprApi>& groupingKeys,
-    const std::vector<ExprApi>& aggregates) {
-  VELOX_USER_CHECK_NOT_NULL(node_, "Aggregate node cannot be a leaf node");
-
-  std::vector<std::string> outputNames;
-  outputNames.reserve(groupingKeys.size() + aggregates.size());
-
-  std::vector<ExprPtr> keyExprs;
-  keyExprs.reserve(groupingKeys.size());
-
-  auto newOutputMapping = std::make_shared<NameMappings>();
-
-  resolveProjections(groupingKeys, outputNames, keyExprs, *newOutputMapping);
-
-  std::vector<AggregateExprPtr> exprs;
-  exprs.reserve(aggregates.size());
-
-  for (const auto& aggregate : aggregates) {
-    auto expr = resolveAggregateTypes(aggregate.expr());
-
-    if (aggregate.name().has_value()) {
-      const auto& alias = aggregate.name().value();
-      outputNames.push_back(newName(alias));
-      newOutputMapping->add(alias, outputNames.back());
-    } else {
-      outputNames.push_back(newName(expr->name()));
-    }
-
-    exprs.push_back(expr);
-  }
-
-  node_ = std::make_shared<AggregateNode>(
-      nextId(),
-      std::move(node_),
-      std::move(keyExprs),
-      std::vector<AggregateNode::GroupingSet>{},
-      std::move(exprs),
-      std::move(outputNames));
-
-  outputMapping_ = std::move(newOutputMapping);
-
-  return *this;
-}
-
 PlanBuilder& PlanBuilder::unnest(
     const std::vector<std::string>& unnestExprs,
     bool withOrdinality) {
