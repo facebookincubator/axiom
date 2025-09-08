@@ -14,21 +14,12 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/FunctionRegistry.h"
-#include "axiom/optimizer/tests/FeatureGen.h"
-#include "axiom/optimizer/tests/QueryTestBase.h"
-#include "velox/common/base/tests/GTestUtils.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/parse/Expressions.h"
-#include "velox/vector/tests/utils/VectorMaker.h"
+#include "axiom/optimizer/tests/Genies.h"
+#include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::optimizer::test {
-using namespace facebook::velox;
-using namespace facebook::velox::optimizer;
-using namespace facebook::velox::optimizer::test;
-using namespace facebook::velox::exec::test;
 
-TypePtr makeGenieType() {
+RowTypePtr makeGenieType() {
   return ROW(
       {"uid", "ff", "idlf", "idslf"},
       {BIGINT(),

@@ -18,21 +18,21 @@ add_subdirectory(connectors)
 
 add_library(velox_md_model Model.cpp)
 
-target_link_libraries(velox_md_model velox_exception)
-
+target_link_libraries(
+  velox_md_model velox_exception)
 
 add_library(velox_schema_resolver SchemaResolver.cpp SchemaUtils.cpp)
 
-target_link_libraries(velox_schema_resolver velox_connector_metadata
-                      velox_exception velox_vector)
+target_link_libraries(
+  velox_schema_resolver velox_connector_metadata velox_exception velox_vector)
 
 add_library(
   velox_verax
   DerivedTable.cpp
+  DerivedTablePrinter.cpp
   ToGraph.cpp
-  LogicalPlanToGraph.cpp
   Subfields.cpp
-  LogicalPlanSubfields.cpp
+  Optimization.cpp
   Plan.cpp
   BitSet.cpp
   ParallelExpr.cpp
@@ -40,7 +40,6 @@ add_library(
   Schema.cpp
   QueryGraph.cpp
   QueryGraphContext.cpp
-  Filters.cpp
   Cost.cpp
   FunctionRegistry.cpp
   PlanUtils.cpp
@@ -57,6 +56,6 @@ target_link_libraries(
   velox_connector_metadata
   velox_fe_logical_plan
   velox_md_model
-  velox_multifragment_plan
+  axiom_runner_multifragment_plan
   velox_connector
   velox_schema_resolver)

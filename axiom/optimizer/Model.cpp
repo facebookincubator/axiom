@@ -31,20 +31,13 @@ bool nearZero(float f) {
   return f < 1e-6 && f > -1e-6;
 }
 
-float distance(const std::vector<int32_t>& p1, const std::vector<int32_t>& p2) {
-  float sum = 0.0f;
+template <typename T>
+float distance(const std::vector<T>& p1, const std::vector<T>& p2) {
+  float sum = 0.0F;
   for (size_t i = 0; i < p1.size(); ++i) {
-    sum += pow(p1[i] - p2[i], 2);
+    sum += static_cast<float>(std::pow(p1[i] - p2[i], 2));
   }
-  return sqrt(sum);
-}
-
-float distance(const std::vector<float>& p1, const std::vector<float>& p2) {
-  float sum = 0.0f;
-  for (size_t i = 0; i < p1.size(); ++i) {
-    sum += pow(p1[i] - p2[i], 2);
-  }
-  return sqrt(sum);
+  return std::sqrt(sum);
 }
 
 std::vector<float> midPoint(
@@ -78,17 +71,17 @@ void Model::precompute() {
         "A dimension must have more than one"
         "values: dim={}",
         dim);
+    values.reserve(set.size());
     for (auto v : set) {
       values.push_back(v);
     }
-    std::sort(
-        values.begin(), values.end(), [](float l, float r) { return l < r; });
+    std::ranges::sort(values, [](float l, float r) { return l < r; });
     stride_.push_back(numCells);
-    sizes_.push_back(values.size());
-    numCells *= values.size();
+    sizes_.push_back(static_cast<int32_t>(values.size()));
+    numCells *= sizes_.back();
     axis_.push_back(std::move(values));
   }
-  measures_.resize(numCells, std::nan(""));
+  measures_.resize(numCells, std::nanf(""));
   for (auto& e : entries_) {
     auto dims = findDims(e.coordinates);
     normalizedIndices_.push_back(dims);
@@ -175,7 +168,7 @@ float Model::guessIntermediate(int32_t linIdx) {
 int32_t Model::closestSlope(
     int32_t dim,
     float cutoff,
-    const std::vector<float> npoint,
+    const std::vector<float>& npoint,
     bool above) const {
   int32_t best = -1;
   float bestDist = -1;
@@ -215,7 +208,7 @@ float Model::gradientAt(int32_t dim, const std::vector<float>& npoint) const {
     if (nearZero(d)) {
       return slope.k;
     }
-    float w = 1.0 / d;
+    float w = 1.0F / d;
     sum += slope.k * w;
     sumWeight += w;
   }
@@ -264,16 +257,17 @@ std::vector<int32_t> Model::pointAtLinIdx(int32_t linIdx) const {
 
 std::vector<int32_t> Model::findDims(const std::vector<float>& point) const {
   std::vector<int32_t> result;
+  result.reserve(rank_);
   for (auto i = 0; i < rank_; ++i) {
     auto it = std::lower_bound(axis_[i].begin(), axis_[i].end(), point[i]);
-    result.push_back(
-        it == axis_[i].end() ? axis_[i].size() - 1 : it - axis_[i].begin());
+    result.push_back(static_cast<int32_t>(
+        it == axis_[i].end() ? axis_[i].size() - 1 : it - axis_[i].begin()));
   }
   return result;
 }
 
 std::vector<float> Model::normalizedGridPoint(
-    const std::vector<int32_t> dims) const {
+    const std::vector<int32_t>& dims) const {
   std::vector<float> result(rank_);
   for (auto i = 0; i < rank_; ++i) {
     result[i] =
@@ -289,7 +283,7 @@ float Model::normalizedDim(int32_t dim, int32_t idx) const {
 void Model::gradientsAtGridPoint(
     const std::vector<int32_t>& dims,
     float d,
-    bool* outOfRange,
+    const bool* outOfRange,
     float* gradient,
     float* gradientWeight) const {
   for (auto i = 0; i < rank_; ++i) {
@@ -300,8 +294,8 @@ void Model::gradientsAtGridPoint(
       if (nearZero(d)) {
         gradient[i] = k;
       } else {
-        gradient[i] += k * (1.0 / d);
-        gradientWeight[i] += 1.0 / d;
+        gradient[i] += k * (1.0F / d);
+        gradientWeight[i] += 1.0F / d;
       }
     }
   }
@@ -328,8 +322,8 @@ void Model::neighbors(
       gradientsAtGridPoint(dims, 0, outOfRange, gradient, gradientWeight);
       return;
     }
-    sum += measure * (1.0 / d);
-    sumWeight += 1.0 / d;
+    sum += measure * (1.0F / d);
+    sumWeight += 1.0F / d;
     gradientsAtGridPoint(dims, d, outOfRange, gradient, gradientWeight);
     return;
   }

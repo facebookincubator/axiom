@@ -15,7 +15,6 @@
  */
 
 #include "axiom/optimizer/QueryGraph.h"
-#include "velox/common/base/SimdUtil.h"
 
 namespace facebook::velox::optimizer {
 
@@ -35,7 +34,7 @@ bool PlanObjectPComparer::operator()(
 }
 
 size_t PlanObject::hash() const {
-  size_t h = static_cast<size_t>(id_);
+  auto h = static_cast<size_t>(id_);
   for (auto& child : children()) {
     h = velox::bits::hashMix(h, child->hash());
   }
@@ -44,22 +43,22 @@ size_t PlanObject::hash() const {
 
 void PlanObjectSet::unionColumns(ExprCP expr) {
   switch (expr->type()) {
-    case PlanType::kLiteral:
+    case PlanType::kLiteralExpr:
       return;
-    case PlanType::kColumn:
+    case PlanType::kColumnExpr:
       add(expr);
       return;
-    case PlanType::kField:
+    case PlanType::kFieldExpr:
       unionColumns(expr->as<Field>()->base());
       return;
-    case PlanType::kAggregate: {
+    case PlanType::kAggregateExpr: {
       auto condition = expr->as<Aggregate>()->condition();
       if (condition) {
         unionColumns(condition);
       }
     }
       [[fallthrough]];
-    case PlanType::kCall: {
+    case PlanType::kCallExpr: {
       auto call = reinterpret_cast<const Call*>(expr);
       unionSet(call->columns());
       return;
@@ -70,12 +69,6 @@ void PlanObjectSet::unionColumns(ExprCP expr) {
 }
 
 void PlanObjectSet::unionColumns(const ExprVector& exprs) {
-  for (auto& expr : exprs) {
-    unionColumns(expr);
-  }
-}
-
-void PlanObjectSet::unionColumns(const ColumnVector& exprs) {
   for (auto& expr : exprs) {
     unionColumns(expr);
   }
@@ -94,7 +87,9 @@ std::string PlanObjectSet::toString(bool names) const {
   return out.str();
 }
 
-std::string planObjectString(PlanObject* o) {
+// Debug helper functions. Must be extern to be callable from debugger.
+
+extern std::string planObjectString(const PlanObject* o) {
   return o->toString();
 }
 

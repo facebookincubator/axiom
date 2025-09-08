@@ -15,15 +15,16 @@
  */
 
 #include "axiom/optimizer/Schema.h"
+#include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
-#include "axiom/optimizer/RelationOp.h"
 
 namespace facebook::velox::optimizer {
 
 float Value::byteSize() const {
   if (type->isFixedWidth()) {
-    return type->cppSizeInBytes();
+    return static_cast<float>(type->cppSizeInBytes());
   }
   switch (type->kind()) {
       // Add complex types here.
@@ -33,35 +34,40 @@ float Value::byteSize() const {
 }
 
 std::vector<ColumnCP> SchemaTable::toColumns(
-    const std::vector<std::string>& names) {
+    const std::vector<std::string>& names) const {
   std::vector<ColumnCP> columns(names.size());
-  assert(!columns.empty()); // lint
-  for (auto i = 0; i < names.size(); ++i) {
+  VELOX_DCHECK(!columns.empty());
+  for (size_t i = 0; i < names.size(); ++i) {
     columns[i] = findColumn(name);
   }
 
   return columns;
 }
 
-ColumnGroupP SchemaTable::addIndex(
+ColumnGroupCP SchemaTable::addIndex(
     const char* name,
-    float cardinality,
     int32_t numKeysUnique,
     int32_t numOrdering,
     const ColumnVector& keys,
-    DistributionType distType,
+    DistributionType distributionType,
     const ColumnVector& partition,
-    const ColumnVector& columns) {
+    ColumnVector columnsVector,
+    const connector::TableLayout* layout) {
+  VELOX_CHECK_LE(numKeysUnique, keys.size());
+
   Distribution distribution;
-  distribution.cardinality = cardinality;
+  distribution.orderTypes.reserve(numOrdering);
   for (auto i = 0; i < numOrdering; ++i) {
-    distribution.orderType.push_back(OrderType::kAscNullsFirst);
+    distribution.orderTypes.push_back(OrderType::kAscNullsFirst);
   }
   distribution.numKeysUnique = numKeysUnique;
-  appendToVector(distribution.order, keys);
-  distribution.distributionType = distType;
+  appendToVector(distribution.orderKeys, keys);
+  distribution.distributionType = distributionType;
   appendToVector(distribution.partition, partition);
-  columnGroups.push_back(make<ColumnGroup>(name, this, distribution, columns));
+  VELOX_DCHECK_EQ(
+      distribution.orderKeys.size(), distribution.orderTypes.size());
+  columnGroups.push_back(make<ColumnGroup>(
+      name, this, std::move(distribution), std::move(columnsVector), layout));
   return columnGroups.back();
 }
 
@@ -82,47 +88,60 @@ ColumnCP SchemaTable::findColumn(const std::string& name) const {
 }
 
 Schema::Schema(
-    const char* _name,
+    const char* name,
     const std::vector<SchemaTableCP>& tables,
     LocusCP locus)
-    : name_(_name), defaultLocus_(locus) {
+    : name_{name}, defaultLocus_{locus} {
   for (auto& table : tables) {
     tables_[table->name] = table;
   }
 }
 
-Schema::Schema(const char* _name, SchemaResolver* source, LocusCP locus)
-    : name_(_name), source_(source), defaultLocus_(locus) {}
+Schema::Schema(const char* name, SchemaResolver* source, LocusCP locus)
+    : name_{name}, source_{source}, defaultLocus_{locus} {}
 
-SchemaTableCP Schema::findTable(std::string_view name) const {
+SchemaTableCP Schema::findTable(
+    std::string_view connectorId,
+    std::string_view name) const {
   auto internedName = toName(name);
   auto it = tables_.find(internedName);
   if (it != tables_.end()) {
     return it->second;
   }
+
   VELOX_CHECK_NOT_NULL(source_);
-  auto* table = source_->findTable(std::string(name));
-  if (!table) {
+  auto connectorTable =
+      source_->findTable(std::string(connectorId), std::string(name));
+  if (!connectorTable) {
     return nullptr;
   }
-  auto* schemaTable = make<SchemaTable>(internedName, table->rowType());
-  schemaTable->connectorTable = table;
+
+  auto* schemaTable = make<SchemaTable>(
+      internedName, connectorTable->type(), connectorTable->numRows());
+  schemaTable->connectorTable = connectorTable.get();
+
   ColumnVector columns;
-  for (auto& pair : table->columnMap()) {
-    auto& tableColumn = *pair.second;
-    float cardinality = tableColumn.approxNumDistinct(table->numRows());
-    Value value(toType(tableColumn.type()), cardinality);
-    auto columnName = toName(pair.first);
-    auto* column = make<Column>(columnName, nullptr, value);
-    schemaTable->columns[columnName] = column;
+  for (const auto& [columnName, tableColumn] : connectorTable->columnMap()) {
+    const auto cardinality = static_cast<float>(tableColumn->approxNumDistinct(
+        static_cast<int64_t>(connectorTable->numRows())));
+    Value value(toType(tableColumn->type()), cardinality);
+    auto* column = make<Column>(toName(columnName), nullptr, value);
+    schemaTable->columns[column->name()] = column;
     columns.push_back(column);
   }
-  DistributionType defaultDist;
-  defaultDist.locus = defaultLocus_;
-  auto* pk = schemaTable->addIndex(
-      toName("pk"), table->numRows(), 0, 0, {}, defaultDist, {}, columns);
+  DistributionType defaultDistributionType;
+  defaultDistributionType.locus = defaultLocus_;
+  schemaTable->addIndex(
+      toName("pk"),
+      0,
+      0,
+      {},
+      defaultDistributionType,
+      {},
+      std::move(columns),
+      connectorTable->layouts()[0]);
   addTable(schemaTable);
-  pk->layout = table->layouts()[0];
+  queryCtx()->optimization()->retainConnectorTable(std::move(connectorTable));
   return schemaTable;
 }
 
@@ -130,40 +149,55 @@ void Schema::addTable(SchemaTableCP table) const {
   tables_[table->name] = table;
 }
 
+float tableCardinality(PlanObjectCP table) {
+  if (table->is(PlanType::kTableNode)) {
+    return table->as<BaseTable>()
+        ->schemaTable->columnGroups[0]
+        ->table->cardinality;
+  }
+  if (table->is(PlanType::kValuesTableNode)) {
+    return table->as<ValuesTable>()->cardinality();
+  }
+  VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
+  return table->as<DerivedTable>()->cardinality;
+}
+
 // The fraction of rows of a base table selected by non-join filters. 0.2
 // means 1 in 5 are selected.
 float baseSelectivity(PlanObjectCP object) {
-  if (object->type() == PlanType::kTable) {
+  if (object->is(PlanType::kTableNode)) {
     return object->as<BaseTable>()->filterSelectivity;
   }
   return 1;
 }
 
+namespace {
 template <typename T>
 ColumnCP findColumnByName(const T& columns, Name name) {
   for (auto column : columns) {
-    if (column->type() == PlanType::kColumn &&
+    if (column->is(PlanType::kColumnExpr) &&
         column->template as<Column>()->name() == name) {
       return column->template as<Column>();
     }
   }
   return nullptr;
 }
+} // namespace
 
 bool SchemaTable::isUnique(CPSpan<Column> columns) const {
   for (auto& column : columns) {
-    if (column->type() != PlanType::kColumn) {
+    if (column->isNot(PlanType::kColumnExpr)) {
       return false;
     }
   }
   for (auto index : columnGroups) {
-    auto nUnique = index->distribution().numKeysUnique;
+    auto nUnique = index->distribution.numKeysUnique;
     if (!nUnique) {
       continue;
     }
     bool unique = true;
     for (auto i = 0; i < nUnique; ++i) {
-      auto part = findColumnByName(columns, index->columns()[i]->name());
+      auto part = findColumnByName(columns, index->columns[i]->name());
       if (!part) {
         unique = false;
         break;
@@ -176,7 +210,9 @@ bool SchemaTable::isUnique(CPSpan<Column> columns) const {
   return false;
 }
 
-float combine(float card, int32_t ith, float otherCard) {
+namespace {
+
+float combine(float card, size_t ith, float otherCard) {
   if (ith == 0) {
     return card / otherCard;
   }
@@ -185,63 +221,62 @@ float combine(float card, int32_t ith, float otherCard) {
   }
   return card / otherCard;
 }
+} // namespace
 
-IndexInfo SchemaTable::indexInfo(ColumnGroupP index, CPSpan<Column> columns)
-    const {
+IndexInfo SchemaTable::indexInfo(
+    ColumnGroupCP index,
+    CPSpan<Column> columnsSpan) const {
   IndexInfo info;
   info.index = index;
-  info.scanCardinality = index->distribution().cardinality;
-  info.joinCardinality = index->distribution().cardinality;
+  info.scanCardinality = index->table->cardinality;
+  info.joinCardinality = index->table->cardinality;
+
+  const auto& distribution = index->distribution;
+
+  const auto numSorting = distribution.orderTypes.size();
+  const auto numUnique = distribution.numKeysUnique;
+
   PlanObjectSet covered;
-  int32_t numCovered = 0;
-  int32_t numSorting = index->distribution().orderType.size();
-  int32_t numUnique = index->distribution().numKeysUnique;
   for (auto i = 0; i < numSorting || i < numUnique; ++i) {
-    auto part = findColumnByName(
-        columns, index->distribution().order[i]->as<Column>()->name());
+    auto orderKey = distribution.orderKeys[i];
+    auto part = findColumnByName(columnsSpan, orderKey->as<Column>()->name());
     if (!part) {
       break;
     }
-    ++numCovered;
+
     covered.add(part);
     if (i < numSorting) {
-      info.scanCardinality = combine(
-          info.scanCardinality,
-          i,
-          index->distribution().order[i]->value().cardinality);
+      info.scanCardinality =
+          combine(info.scanCardinality, i, orderKey->value().cardinality);
       info.lookupKeys.push_back(part);
       info.joinCardinality = info.scanCardinality;
     } else {
-      info.joinCardinality = combine(
-          info.joinCardinality,
-          i,
-          index->distribution().order[i]->value().cardinality);
+      info.joinCardinality =
+          combine(info.joinCardinality, i, orderKey->value().cardinality);
     }
     if (i == numUnique - 1) {
       info.unique = true;
     }
   }
 
-  for (auto i = 0; i < columns.size(); ++i) {
-    auto column = columns[i];
-    if (column->type() != PlanType::kColumn) {
+  for (auto column : columnsSpan) {
+    if (column->isNot(PlanType::kColumnExpr)) {
       // Join key is an expression dependent on the table.
       covered.unionColumns(column->as<Expr>());
       info.joinCardinality = combine(
-          info.joinCardinality, numCovered, column->value().cardinality);
+          info.joinCardinality, covered.size(), column->value().cardinality);
       continue;
     }
     if (covered.contains(column)) {
       continue;
     }
-    auto part = findColumnByName(index->columns(), column->name());
+    auto part = findColumnByName(index->columns, column->name());
     if (!part) {
       continue;
     }
     covered.add(column);
-    ++numCovered;
-    info.joinCardinality =
-        combine(info.joinCardinality, numCovered, column->value().cardinality);
+    info.joinCardinality = combine(
+        info.joinCardinality, covered.size(), column->value().cardinality);
   }
   info.coveredColumns = std::move(covered);
   return info;
@@ -284,33 +319,35 @@ IndexInfo SchemaTable::indexByColumns(CPSpan<Column> columns) const {
 }
 
 IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys) {
-  if (table->type() == PlanType::kTable) {
+  if (table->is(PlanType::kTableNode)) {
     auto schemaTable = table->as<BaseTable>()->schemaTable;
     return schemaTable->indexByColumns(keys);
   }
-  VELOX_CHECK(table->type() == PlanType::kDerivedTable);
-  auto dt = table->as<DerivedTable>();
-  auto distribution = dt->distribution;
-  assert(distribution);
   IndexInfo result;
-  result.scanCardinality = distribution->cardinality;
-  const ExprVector* groupingKeys = nullptr;
-  if (dt->aggregation) {
-    groupingKeys = &dt->aggregation->aggregation->grouping;
+  auto computeCardinalities = [&](float scanCardinality) {
+    result.scanCardinality = scanCardinality;
+    result.joinCardinality = scanCardinality;
+    for (size_t i = 0; i < keys.size(); ++i) {
+      result.joinCardinality =
+          combine(result.joinCardinality, i, keys[i]->value().cardinality);
+    }
+  };
+
+  if (table->is(PlanType::kValuesTableNode)) {
+    const auto* valuesTable = table->as<ValuesTable>();
+    computeCardinalities(valuesTable->cardinality());
+    return result;
   }
-  result.joinCardinality = result.scanCardinality;
-  for (auto i = 0; i < keys.size(); ++i) {
-    result.joinCardinality =
-        combine(result.joinCardinality, i, keys[i]->value().cardinality);
-  }
-  if (groupingKeys && keys.size() >= groupingKeys->size()) {
-    result.unique = true;
-  }
+  VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
+  const auto* dt = table->as<DerivedTable>();
+  computeCardinalities(dt->cardinality);
+  result.unique =
+      dt->aggregation && keys.size() >= dt->aggregation->groupingKeys().size();
   return result;
 }
 
 ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {
-  for (auto& column : index->columns()) {
+  for (auto& column : index->columns) {
     if (column->name() == keyValue->name()) {
       return column;
     }
@@ -319,7 +356,7 @@ ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {
 }
 
 bool Distribution::isSamePartition(const Distribution& other) const {
-  if (!(distributionType == other.distributionType)) {
+  if (distributionType != other.distributionType) {
     return false;
   }
   if (isBroadcast || other.isBroadcast) {
@@ -342,12 +379,12 @@ bool Distribution::isSamePartition(const Distribution& other) const {
 }
 
 bool Distribution::isSameOrder(const Distribution& other) const {
-  if (order.size() != other.order.size()) {
+  if (orderKeys.size() != other.orderKeys.size()) {
     return false;
   }
-  for (auto i = 0; i < order.size(); ++i) {
-    if (!order[i]->sameOrEqual(*other.order[i]) ||
-        orderType[i] != other.orderType[i]) {
+  for (size_t i = 0; i < orderKeys.size(); ++i) {
+    if (!orderKeys[i]->sameOrEqual(*other.orderKeys[i]) ||
+        orderTypes[i] != other.orderTypes[i]) {
       return false;
     }
   }
@@ -365,29 +402,57 @@ Distribution Distribution::rename(
   }
   // Ordering survives if a prefix of the previous order continues to be
   // projected out.
-  result.order.resize(prefixSize(result.order, exprs));
-  replace(result.order, exprs, names);
+  const auto newOrderSize = prefixSize(result.orderKeys, exprs);
+  result.orderKeys.resize(newOrderSize);
+  result.orderTypes.resize(newOrderSize);
+  replace(result.orderKeys, exprs, names);
+  VELOX_DCHECK_EQ(result.orderKeys.size(), result.orderTypes.size());
   return result;
 }
+
+namespace {
+
+void exprsToString(const ExprVector& exprs, std::stringstream& out) {
+  for (size_t i = 0, size = exprs.size(); i < size; ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << exprs[i]->toString();
+  }
+}
+
+} // namespace
 
 std::string Distribution::toString() const {
   if (isBroadcast) {
     return "broadcast";
   }
+
+  if (distributionType.isGather) {
+    return "gather";
+  }
+
   std::stringstream out;
   if (!partition.empty()) {
     out << "P ";
     exprsToString(partition, out);
     out << " " << distributionType.numPartitions << " ways";
   }
-  if (!order.empty()) {
+  if (!orderKeys.empty()) {
     out << " O ";
-    exprsToString(order, out);
+    exprsToString(orderKeys, out);
   }
-  if (numKeysUnique && numKeysUnique >= order.size()) {
+  if (numKeysUnique && numKeysUnique >= orderKeys.size()) {
     out << " first " << numKeysUnique << " unique";
   }
   return out.str();
+}
+
+float ColumnGroup::lookupCost(float range) const {
+  // Add 2 because it takes a compare and access also if hitting the
+  // same row. log(1) == 0, so this would other wise be zero cost.
+  return Costs::kKeyCompareCost * std::log(range + 2) /
+      std::numbers::ln2_v<float>;
 }
 
 } // namespace facebook::velox::optimizer

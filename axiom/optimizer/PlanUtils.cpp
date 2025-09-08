@@ -18,6 +18,7 @@
 #include "axiom/optimizer/QueryGraph.h"
 
 namespace facebook::velox::optimizer {
+namespace {
 
 /// Match the input 'value' to the most appropriate unit and return
 /// a string value. The units are specified in the 'units' array.
@@ -45,6 +46,8 @@ std::string succinctPrint(
       << units[offset];
   return out.str();
 }
+
+} // namespace
 
 std::string succinctNumber(double value, int32_t precision) {
   static constexpr std::string_view kUnit[] = {

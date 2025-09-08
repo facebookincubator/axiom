@@ -20,12 +20,9 @@
 #include "axiom/optimizer/Schema.h"
 
 /// Plan candidates.
-/// A candidate plan is constructed based  on the join graph/derived table
-/// tree.
+/// A candidate plan is constructed based on the join graph/derived table tree.
 
 namespace facebook::velox::optimizer {
-
-struct PlanState;
 
 // Represents the cost and cardinality of a RelationOp or Plan. A Cost has a
 // per-row cost, a per-row fanout and a one-time setup cost. For example, a hash
@@ -82,6 +79,23 @@ struct Cost {
 using QGstring =
     std::basic_string<char, std::char_traits<char>, QGAllocator<char>>;
 
+/// Identifies the operator type producing the relation.
+enum class RelType {
+  kTableScan,
+  kRepartition,
+  kFilter,
+  kProject,
+  kJoin,
+  kHashBuild,
+  kAggregation,
+  kOrderBy,
+  kUnionAll,
+  kLimit,
+  kValues,
+};
+
+VELOX_DECLARE_ENUM_NAME(RelType)
+
 /// Physical relational operator. This is the common base class of all
 /// elements of plan candidates. The immutable Exprs, Columns and
 /// BaseTables in the query graph are referenced from
@@ -95,15 +109,41 @@ using QGstring =
 /// atomics or keeping a separate control block. This is faster and
 /// more compact and entirely bypasses malloc.
 /// would use malloc.
-class RelationOp : public Relation {
+class RelationOp {
  public:
   RelationOp(
       RelType type,
       boost::intrusive_ptr<RelationOp> input,
       Distribution distribution,
-      ColumnVector columns = {})
-      : Relation(type, std::move(distribution), std::move(columns)),
+      ColumnVector columns)
+      : relType_(type),
+        distribution_(std::move(distribution)),
+        columns_(std::move(columns)),
         input_(std::move(input)) {}
+
+  RelationOp(
+      RelType type,
+      boost::intrusive_ptr<RelationOp> input,
+      Distribution distribution)
+      : relType_{type},
+        distribution_{std::move(distribution)},
+        columns_{input->columns()},
+        input_{std::move(input)} {}
+
+  RelationOp(
+      RelType type,
+      boost::intrusive_ptr<RelationOp> input,
+      ColumnVector columns)
+      : relType_{type},
+        distribution_{input->distribution()},
+        columns_{std::move(columns)},
+        input_{std::move(input)} {}
+
+  RelationOp(RelType type, boost::intrusive_ptr<RelationOp> input)
+      : relType_{type},
+        distribution_{input->distribution()},
+        columns_{input->columns()},
+        input_{std::move(input)} {}
 
   virtual ~RelationOp() = default;
 
@@ -111,8 +151,30 @@ class RelationOp : public Relation {
     queryCtx()->free(ptr);
   }
 
+  RelType relType() const {
+    return relType_;
+  }
+
+  const Distribution& distribution() const {
+    return distribution_;
+  }
+
+  const ColumnVector& columns() const {
+    return columns_;
+  }
+
   const boost::intrusive_ptr<class RelationOp>& input() const {
     return input_;
+  }
+
+  template <typename T>
+  const T* as() const {
+    return static_cast<const T*>(this);
+  }
+
+  template <typename T>
+  T* as() {
+    return static_cast<T*>(this);
   }
 
   const Cost& cost() const {
@@ -124,15 +186,19 @@ class RelationOp : public Relation {
     return cost_.inputCardinality * cost_.fanout;
   }
 
+  float inputCardinality() const {
+    if (input() == nullptr) {
+      return 1;
+    }
+
+    return input()->resultCardinality();
+  }
+
   /// Returns the value constraints of 'expr' at the output of
   /// 'this'. For example, a filter or join may limit values. An Expr
   /// will for example have no more distinct values than the number of
   /// rows. This is computed on first use.
   const Value& value(ExprCP expr) const;
-
-  /// Fills in 'cost_' after construction. Depends on 'input' and is defined for
-  /// each subclass.
-  virtual void setCost(const PlanState& input);
 
   /// Returns a key for retrieving/storing a historical record of execution for
   /// future costing.
@@ -154,11 +220,15 @@ class RelationOp : public Relation {
   ///     - HashJoin
   ///       - Scan(region as t3)
   ///       - Scan(nation as t2)
-  virtual std::string toString(bool recursive, bool detail) const;
+  virtual std::string toString(bool recursive, bool detail) const = 0;
 
  protected:
   // adds a line of cost information to 'out'
   void printCost(bool detail, std::stringstream& out) const;
+
+  const RelType relType_;
+  const Distribution distribution_;
+  const ColumnVector columns_;
 
   // Input of filter/project/group by etc., Left side of join, nullptr for a
   // leaf table scan.
@@ -198,41 +268,22 @@ using RelationOpPtrVector =
 struct TableScan : public RelationOp {
   TableScan(
       RelationOpPtr input,
-      Distribution _distribution,
-      const BaseTable* table,
-      ColumnGroupP _index,
+      Distribution distribution,
+      BaseTableCP table,
+      ColumnGroupCP index,
       float fanout,
       ColumnVector columns,
       ExprVector lookupKeys = {},
       velox::core::JoinType joinType = velox::core::JoinType::kInner,
-      ExprVector joinFilter = {})
-      : RelationOp(
-            RelType::kTableScan,
-            input,
-            std::move(_distribution),
-            std::move(columns)),
-        baseTable(table),
-        index(_index),
-        keys(std::move(lookupKeys)),
-        joinType(joinType),
-        joinFilter(std::move(joinFilter)) {
-    cost_.fanout = fanout;
-  }
-
-  /// Columns of base table available in 'index'.
-  static PlanObjectSet availableColumns(
-      const BaseTable* baseTable,
-      ColumnGroupP index);
+      ExprVector joinFilter = {});
 
   /// Returns the distribution given the table, index and columns. If
   /// partitioning/ordering columns are in the output columns, the
   /// distribution reflects the distribution of the index.
   static Distribution outputDistribution(
-      const BaseTable* baseTable,
-      ColumnGroupP index,
+      BaseTableCP baseTable,
+      ColumnGroupCP index,
       const ColumnVector& columns);
-
-  void setCost(const PlanState& input) override;
 
   const QGstring& historyKey() const override;
 
@@ -241,11 +292,11 @@ struct TableScan : public RelationOp {
   // The base table reference. May occur in multiple scans if the base
   // table decomposes into access via secondary index joined to pk or
   // if doing another pass for late materialization.
-  const BaseTable* baseTable;
+  BaseTableCP baseTable;
 
   // Index (or other materialization of table) used for the physical data
   // access.
-  ColumnGroupP index;
+  ColumnGroupCP index;
 
   // Columns read from 'baseTable'. Can be more than 'columns' if
   // there are filters that need columns that are not projected out to
@@ -262,6 +313,17 @@ struct TableScan : public RelationOp {
   const ExprVector joinFilter;
 };
 
+/// Represents a values.
+struct Values : RelationOp {
+  Values(const ValuesTable& valuesTable, ColumnVector columns);
+
+  const QGstring& historyKey() const override;
+
+  std::string toString(bool recursive, bool detail) const override;
+
+  const ValuesTable& valuesTable;
+};
+
 /// Represents a repartition, i.e. query fragment boundary. The distribution of
 /// the output is '_distribution'.
 class Repartition : public RelationOp {
@@ -269,35 +331,22 @@ class Repartition : public RelationOp {
   Repartition(
       RelationOpPtr input,
       Distribution distribution,
-      ColumnVector columns)
-      : RelationOp(
-            RelType::kRepartition,
-            std::move(input),
-            std::move(distribution),
-            std::move(columns)) {}
+      ColumnVector columns);
 
-  void setCost(const PlanState& input) override;
   std::string toString(bool recursive, bool detail) const override;
 };
 
-using RepartitionPtr = const Repartition*;
+using RepartitionCP = const Repartition*;
 
 /// Represents a usually multitable filter not associated with any non-inner
 /// join. Non-equality constraints over inner joins become Filters.
 class Filter : public RelationOp {
  public:
-  Filter(RelationOpPtr input, ExprVector exprs)
-      : RelationOp(
-            RelType::kFilter,
-            input,
-            input->distribution(),
-            input->columns()),
-        exprs_(std::move(exprs)) {}
+  Filter(RelationOpPtr input, ExprVector exprs);
+
   const ExprVector& exprs() const {
     return exprs_;
   }
-
-  void setCost(const PlanState& input) override;
 
   const QGstring& historyKey() const override;
 
@@ -310,33 +359,19 @@ class Filter : public RelationOp {
 /// Assigns names to expressions. Used to rename output from a derived table.
 class Project : public RelationOp {
  public:
-  Project(RelationOpPtr input, ExprVector exprs, ColumnVector columns)
-      : RelationOp(
-            RelType::kProject,
-            input,
-            input->distribution().rename(exprs, columns),
-            columns),
-        exprs_(std::move(exprs)),
-        columns_(std::move(columns)) {
-    VELOX_CHECK_EQ(
-        exprs_.size(),
-        columns_.size(),
-        "Projection names and exprs must match");
-  }
+  Project(
+      const RelationOpPtr& input,
+      ExprVector exprs,
+      const ColumnVector& columns);
 
   const ExprVector& exprs() const {
     return exprs_;
-  }
-
-  const ColumnVector& columns() const {
-    return columns_;
   }
 
   std::string toString(bool recursive, bool detail) const override;
 
  private:
   const ExprVector exprs_;
-  const ColumnVector columns_;
 };
 
 enum class JoinMethod { kHash, kMerge, kCross };
@@ -344,24 +379,18 @@ enum class JoinMethod { kHash, kMerge, kCross };
 /// Represents a hash or merge join.
 struct Join : public RelationOp {
   Join(
-      JoinMethod _method,
-      velox::core::JoinType _joinType,
-      RelationOpPtr input,
-      RelationOpPtr right,
-      ExprVector leftKeys,
-      ExprVector rightKeys,
-      ExprVector filter,
+      JoinMethod method,
+      velox::core::JoinType joinType,
+      RelationOpPtr lhs,
+      RelationOpPtr rhs,
+      ExprVector lhsKeys,
+      ExprVector rhsKeys,
+      ExprVector filterExprs,
       float fanout,
-      ColumnVector columns)
-      : RelationOp(RelType::kJoin, input, input->distribution(), columns),
-        method(_method),
-        joinType(_joinType),
-        right(std::move(right)),
-        leftKeys(std::move(leftKeys)),
-        rightKeys(std::move(rightKeys)),
-        filter(std::move(filter)) {
-    cost_.fanout = fanout;
-  }
+      ColumnVector columns);
+
+  static Join*
+  makeCrossJoin(RelationOpPtr input, RelationOpPtr right, ColumnVector columns);
 
   JoinMethod method;
   velox::core::JoinType joinType;
@@ -373,14 +402,12 @@ struct Join : public RelationOp {
   // Total cost of build side plan. For documentation.
   Cost buildCost;
 
-  void setCost(const PlanState& input) override;
-
   const QGstring& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 };
 
-using JoinPtr = Join*;
+using JoinCP = const Join*;
 
 /// Occurs as right input of JoinOp with type kHash. Contains the
 /// cost and memory specific to building the table. Can be
@@ -388,60 +415,31 @@ using JoinPtr = Join*;
 /// cardinality of this is counted as setup cost in the first
 /// referencing join and not counted in subsequent ones.
 struct HashBuild : public RelationOp {
-  HashBuild(RelationOpPtr input, int32_t id, ExprVector _keys, PlanPtr plan)
-      : RelationOp(
-            RelType::kHashBuild,
-            input,
-            input->distribution(),
-            input->columns()),
-        buildId(id),
-        keys(std::move(_keys)),
-        plan(plan) {}
+  HashBuild(RelationOpPtr input, int32_t id, ExprVector keys, PlanP plan);
 
   int32_t buildId{0};
+
   ExprVector keys;
   // The plan producing the build data. Used for deduplicating joins.
-  PlanPtr plan;
-
-  void setCost(const PlanState& input) override;
+  PlanP plan;
 
   std::string toString(bool recursive, bool detail) const override;
 };
 
-using HashBuildPtr = HashBuild*;
+using HashBuildCP = const HashBuild*;
 
 /// Represents aggregation with or without grouping.
 struct Aggregation : public RelationOp {
   Aggregation(
-      const Aggregation& other,
       RelationOpPtr input,
-      velox::core::AggregationNode::Step _step);
+      ExprVector groupingKeys,
+      AggregateVector aggregates,
+      velox::core::AggregationNode::Step step,
+      ColumnVector columns);
 
-  Aggregation(RelationOpPtr input, ExprVector _grouping)
-      : RelationOp(
-            RelType::kAggregation,
-            input,
-            input ? input->distribution() : Distribution()),
-        grouping(std::move(_grouping)) {}
-
-  // Grouping keys.
-  ExprVector grouping;
-
-  // Keys where the key expression is functionally dependent on
-  // another key or keys. These can be late materialized or converted
-  // to any() aggregates.
-  PlanObjectSet dependentKeys;
-
-  std::vector<AggregateCP, QGAllocator<AggregateCP>> aggregates;
-
-  velox::core::AggregationNode::Step step{
-      velox::core::AggregationNode::Step::kSingle};
-
-  // 'columns' of RelationOp is the final columns. 'intermediateColumns is the
-  // output of the corresponding partial aggregation.
-  ColumnVector intermediateColumns;
-
-  void setCost(const PlanState& input) override;
+  const ExprVector groupingKeys;
+  const AggregateVector aggregates;
+  const velox::core::AggregationNode::Step step;
 
   const QGstring& historyKey() const override;
 
@@ -451,39 +449,23 @@ struct Aggregation : public RelationOp {
 /// Represents an order by. The order is given by the distribution.
 struct OrderBy : public RelationOp {
   OrderBy(
-      RelationOpPtr input,
-      ExprVector keys,
-      OrderTypeVector orderType,
-      PlanObjectSet dependentKeys = {})
-      : RelationOp(
-            RelType::kOrderBy,
-            input,
-            input ? input->distribution().copyWithOrder(keys, orderType)
-                  : Distribution(
-                        DistributionType(),
-                        1,
-                        {},
-                        std::move(keys),
-                        std::move(orderType))),
-        dependentKeys(std::move(dependentKeys)) {}
+      const RelationOpPtr& input,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes,
+      int64_t limit = -1,
+      int64_t offset = 0);
 
-  // Keys where the key expression is functionally dependent on
-  // another key or keys. These can be late materialized or converted
-  // to payload.
-  PlanObjectSet dependentKeys;
+  const int64_t limit;
+  const int64_t offset;
+
+  std::string toString(bool recursive, bool detail) const override;
 };
+
+using OrderByCP = const OrderBy*;
 
 /// Represents a union all.
 struct UnionAll : public RelationOp {
-  UnionAll(RelationOpPtrVector inputs)
-      : RelationOp(
-            RelType::kUnionAll,
-            nullptr,
-            inputs[0]->distribution(),
-            inputs[0]->columns()),
-        inputs(std::move(inputs)) {}
-
-  void setCost(const PlanState& input) override;
+  explicit UnionAll(RelationOpPtrVector inputsVector);
 
   const QGstring& historyKey() const override;
 
@@ -491,5 +473,23 @@ struct UnionAll : public RelationOp {
 
   const RelationOpPtrVector inputs;
 };
+
+using UnionAllCP = const UnionAll*;
+
+struct Limit : public RelationOp {
+  Limit(RelationOpPtr input, int64_t limit, int64_t offset);
+
+  const int64_t limit;
+  const int64_t offset;
+
+  bool isNoLimit() const {
+    static const auto kMax = std::numeric_limits<int64_t>::max();
+    return limit >= (kMax - offset);
+  }
+
+  std::string toString(bool recursive, bool detail) const override;
+};
+
+using LimitCP = const Limit*;
 
 } // namespace facebook::velox::optimizer

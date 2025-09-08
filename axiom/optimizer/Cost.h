@@ -54,25 +54,18 @@ class History {
   /// cost and plan cardinality.
   virtual bool setLeafSelectivity(
       BaseTable& baseTable,
-      RowTypePtr scanType) = 0;
+      const RowTypePtr& scanType) = 0;
 
   virtual void recordJoinSample(const std::string& key, float lr, float rl) = 0;
 
   virtual std::pair<float, float> sampleJoin(JoinEdge* edge) = 0;
-
-  /// Returns the history record for the plan fragment represented in 'key'.
-  /// nullptr if not recorded.
-  virtual NodePrediction* getHistory(const std::string key) = 0;
-
-  virtual void setHistory(const std::string& key, NodePrediction history) = 0;
 
   virtual void recordLeafSelectivity(
       const std::string& handle,
       float selectivity,
       bool overwrite = true) {
     std::lock_guard<std::mutex> l(mutex_);
-    if (!overwrite &&
-        leafSelectivities_.find(handle) != leafSelectivities_.end()) {
+    if (!overwrite && leafSelectivities_.contains(handle)) {
       return;
     }
     leafSelectivities_[handle] = selectivity;
@@ -95,9 +88,47 @@ class History {
   std::unordered_map<std::string, float> leafSelectivities_;
 };
 
+/// Collection of per operation costs for a target system.  The base
+/// unit is the time to memcpy a cache line in a large memcpy on one
+/// core. This is ~6GB/s, so ~10ns. Other times are expressed as
+/// multiples of that.
+struct Costs {
+  static float byteShuffleCost() {
+    return 12; // ~500MB/s
+  }
+
+  static float hashProbeCost(float cardinality) {
+    return cardinality < 10000 ? kArrayProbeCost
+        : cardinality < 500000 ? kSmallHashCost
+                               : kLargeHashCost;
+  }
+
+  static constexpr float kKeyCompareCost =
+      6; // ~30 instructions to find, decode and an compare
+  static constexpr float kArrayProbeCost = 2; // ~10 instructions.
+  static constexpr float kSmallHashCost = 10; // 50 instructions
+  static constexpr float kLargeHashCost = 40; // 2 LLC misses
+  static constexpr float kColumnRowCost = 5;
+  static constexpr float kColumnByteCost = 0.1;
+
+  /// Cost of hash function on one column.
+  static constexpr float kHashColumnCost = 0.5;
+
+  /// Cost of getting a column from a hash table
+  static constexpr float kHashExtractColumnCost = 0.5;
+
+  /// Minimal cost of calling a filter function, e.g. comparing two numeric
+  /// exprss.
+  static constexpr float kMinimumFilterCost = 2;
+};
+
+/// Returns shuffle cost for a single row. Depends on the number of types of
+/// columns.
 float shuffleCost(const ColumnVector& columns);
 
-float shuffleCost(const ExprVector& columns);
+/// Returns shuffle cost for a single row produced by specified expressions.
+/// Depends on the number of result types of the expressions.
+float shuffleCost(const ExprVector& exprs);
 
 /// Returns cost of 'expr' for one row, excluding cost of subexpressions.
 float selfCost(ExprCP expr);
@@ -114,6 +145,6 @@ std::pair<float, float> sampleJoin(
     SchemaTableCP left,
     const ExprVector& leftKeys,
     SchemaTableCP right,
-    const ExprVector& rightColumns);
+    const ExprVector& rightKeys);
 
 } // namespace facebook::velox::optimizer

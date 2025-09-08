@@ -30,14 +30,24 @@ class PlanPrinterTest : public testing::Test {
  protected:
   static constexpr auto kTestConnectorId = "test";
 
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
 
     auto connector =
         std::make_shared<connector::TestConnector>(kTestConnectorId);
-    connector->addTable(
-        "test", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
+    connector->createTable(
+        "test",
+        ROW({"a", "b", "c", "d", "e"},
+            {BIGINT(),
+             DOUBLE(),
+             VARCHAR(),
+             ARRAY(BIGINT()),
+             MAP(INTEGER(), REAL())}));
     connector::registerConnector(connector);
   }
 
@@ -67,7 +77,7 @@ class PlanPrinterTest : public testing::Test {
     LOG(INFO) << std::endl << text;
 
     std::vector<std::string> lines;
-    folly::split("\n", text, lines);
+    folly::split('\n', text, lines);
 
     return lines;
   }
@@ -169,6 +179,50 @@ TEST_F(PlanPrinterTest, values) {
       lines,
       testing::ElementsAre(
           testing::Eq("- VALUES [0]: 2 fields"), testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, inList) {
+  auto plan = PlanBuilder()
+                  .tableScan(kTestConnectorId, "test", {"a", "b"})
+                  .filter("a IN (1, 5)")
+                  .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Filter: IN(a, 1, 5)"),
+          testing::StartsWith("  - TableScan: test.test"),
+          testing::Eq("")));
+
+  lines = toSummaryLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      // clang-format off
+      testing::ElementsAre(
+          testing::Eq("- FILTER [1]: 2 fields: a BIGINT, b DOUBLE"),
+          testing::Eq("      predicate: IN(a, 1, 5)"),
+          testing::Eq("      expressions: IN: 1, constant: 2, field: 1"),
+          testing::Eq("      constants: BIGINT: 2"),
+          testing::Eq("  - TABLE_SCAN [0]: 2 fields: a BIGINT, b DOUBLE"),
+          testing::Eq("        table: test"),
+          testing::Eq("        connector: test"),
+          testing::Eq(""))
+      // clang-format on
+  );
+
+  lines = toSkeletonLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("- FILTER [1]: 2 fields"),
+          testing::Eq("  - TABLE_SCAN [0]: 2 fields"),
+          testing::Eq("        table: test"),
+          testing::Eq("        connector: test"),
+          testing::Eq("")));
 }
 
 TEST_F(PlanPrinterTest, tableScan) {
@@ -278,6 +332,124 @@ TEST_F(PlanPrinterTest, aggregate) {
           testing::Eq("")));
 }
 
+TEST_F(PlanPrinterTest, unnest) {
+  {
+    auto plan = PlanBuilder().unnest({"array[1, 2, 3]"}).build();
+
+    auto lines = toLines(plan);
+
+    EXPECT_THAT(
+        lines,
+        testing::ElementsAre(
+            testing::Eq("- Unnest: -> ROW<e:INTEGER>"),
+            testing::Eq("    [e] := [1,2,3]"),
+            testing::Eq("")));
+  }
+
+  {
+    auto plan = PlanBuilder()
+                    .unnest({Lit(Variant::array({1, 2, 3})).unnestAs("x")})
+                    .with({"x + 1::int"})
+                    .build();
+
+    auto lines = toLines(plan);
+
+    EXPECT_THAT(
+        lines,
+        testing::ElementsAre(
+            testing::StartsWith("- Project:"),
+            testing::StartsWith("    x := x"),
+            testing::StartsWith("    expr := plus(x, CAST(1 AS INTEGER))"),
+            testing::Eq("  - Unnest: -> ROW<x:INTEGER>"),
+            testing::Eq("      [x] := [1,2,3]"),
+            testing::Eq("")));
+  }
+
+  {
+    auto plan = PlanBuilder()
+                    .unnest({"map(array[1, 2, 3], array[10, 20, 30])"})
+                    .build();
+
+    auto lines = toLines(plan);
+
+    EXPECT_THAT(
+        lines,
+        testing::ElementsAre(
+            testing::Eq("- Unnest: -> ROW<k:INTEGER,v:INTEGER>"),
+            testing::Eq("    [k, v] := map([1,2,3], [10,20,30])"),
+            testing::Eq("")));
+  }
+
+  {
+    auto plan = PlanBuilder(/* enableCorsions */ true)
+                    .unnest({Sql("map(array[1, 2, 3], array[10, 20, 30])")
+                                 .unnestAs("x", "y")})
+                    .project({"x + y"})
+                    .build();
+
+    auto lines = toLines(plan);
+
+    EXPECT_THAT(
+        lines,
+        testing::ElementsAre(
+            testing::StartsWith("- Project:"),
+            testing::StartsWith("    expr := plus(x, y)"),
+            testing::Eq("  - Unnest: -> ROW<x:INTEGER,y:INTEGER>"),
+            testing::Eq("      [x, y] := map([1,2,3], [10,20,30])"),
+            testing::Eq("")));
+  }
+
+  {
+    auto plan =
+        PlanBuilder(/* enableCoersions */ true)
+            .tableScan(kTestConnectorId, "test", {"a", "d", "e"})
+            .unnest({Col("d").unnestAs("x"), Col("e").unnestAs("y", "z")})
+            .project({"a + x", "x + y", "z"})
+            .build();
+
+    auto lines = toLines(plan);
+
+    EXPECT_THAT(
+        lines,
+        testing::ElementsAre(
+            testing::StartsWith("- Project:"),
+            testing::StartsWith("    expr := plus(a, x)"),
+            testing::StartsWith("    expr_0 := plus(x, CAST(y AS BIGINT))"),
+            testing::StartsWith("    z := z"),
+            testing::StartsWith("  - Unnest:"),
+            testing::StartsWith("      [x] := d"),
+            testing::StartsWith("      [y, z] := e"),
+            testing::StartsWith("    - TableScan: test.test"),
+            testing::Eq("")));
+  }
+}
+
+TEST_F(PlanPrinterTest, sort) {
+  auto type = ROW({"a", "b"}, {INTEGER(), DOUBLE()});
+
+  std::vector<Variant> data{
+      Variant::row({1, 1.2}),
+      Variant::row({2, 3.4}),
+  };
+
+  auto plan = PlanBuilder()
+                  .values(type, data)
+                  .sort({
+                      SortKey(Col("a"), DESC),
+                      SortKey(Col("b"), DESC_NULLS_FIRST),
+                  })
+                  .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Sort: a DESC NULLS LAST, b DESC NULLS FIRS"),
+          testing::StartsWith("  - Values: 2 rows"),
+          testing::Eq("")));
+}
+
 TEST_F(PlanPrinterTest, union) {
   auto type = ROW({"a", "b"}, {INTEGER(), DOUBLE()});
 
@@ -366,7 +538,7 @@ TEST_F(PlanPrinterTest, subquery) {
           .with({
               Col("a") + 1,
               Subquery(
-                  PlanBuilder(context, scope)
+                  PlanBuilder(context, false, scope)
                       .values(ROW({"a", "b"}, {INTEGER(), INTEGER()}), lookup)
                       .as("r")
                       .filter("l.a = r.a")
@@ -427,7 +599,7 @@ TEST_F(PlanPrinterTest, subquery) {
           .filter(
               Col("a") >
               Subquery(
-                  PlanBuilder(context, scope)
+                  PlanBuilder(context, false, scope)
                       .values(ROW({"a", "b"}, {INTEGER(), INTEGER()}), lookup)
                       .as("r")
                       .filter("l.a = r.a")
@@ -454,6 +626,135 @@ TEST_F(PlanPrinterTest, subquery) {
           testing::Eq("      predicate: gt(a, subquery(- Aggregate() -> ROW<max:INTEGER>  ..."),
           testing::Eq("      expressions: aggregate: 1, call: 2, field: 4, subquery: 1"),
           testing::Eq("      functions: eq: 1, gt: 1, max: 1"),
+          testing::Eq("  - VALUES [0]: 1 fields: a INTEGER"),
+          testing::Eq("        rows: 3"),
+          testing::Eq(""))
+      // clang-format on
+  );
+
+  lines = toSkeletonLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("- FILTER [4]: 1 fields"),
+          testing::Eq("  - VALUES [0]: 1 fields"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, inSubquery) {
+  std::vector<Variant> data{
+      Variant::row({1}),
+      Variant::row({2}),
+      Variant::row({3}),
+  };
+
+  std::vector<Variant> lookup{
+      Variant::row({1, 10}),
+      Variant::row({2, 20}),
+  };
+
+  PlanBuilder::Scope scope;
+  // In subquery
+  auto context = PlanBuilder::Context();
+  auto plan =
+      PlanBuilder(context)
+          .values(ROW({"a"}, {INTEGER()}), data)
+          .as("l")
+          .captureScope(scope)
+          .filter(In(
+              Col("a"),
+              Subquery(
+                  PlanBuilder(context, false, scope)
+                      .values(ROW({"a", "b"}, {INTEGER(), INTEGER()}), lookup)
+                      .as("r")
+                      .filter("l.a = r.a")
+                      .project({"b"})
+                      .build())))
+          .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Filter: IN(a, subquery"),
+          testing::StartsWith("  - Values: 3 rows"),
+          testing::Eq("")));
+
+  lines = toSummaryLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      // clang-format off
+      testing::ElementsAre(
+          testing::Eq("- FILTER [4]: 1 fields: a INTEGER"),
+          testing::Eq("      predicate: IN(a, subquery(- Project: -> ROW<b:INTEGER>     b ..."),
+          testing::Eq("      expressions: IN: 1, call: 1, field: 4, subquery: 1"),
+          testing::Eq("      functions: eq: 1"),
+          testing::Eq("  - VALUES [0]: 1 fields: a INTEGER"),
+          testing::Eq("        rows: 3"),
+          testing::Eq(""))
+      // clang-format on
+  );
+
+  lines = toSkeletonLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("- FILTER [4]: 1 fields"),
+          testing::Eq("  - VALUES [0]: 1 fields"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, existsSubquery) {
+  std::vector<Variant> data{
+      Variant::row({1}),
+      Variant::row({2}),
+      Variant::row({3}),
+  };
+
+  std::vector<Variant> lookup{
+      Variant::row({1, 10}),
+      Variant::row({2, 20}),
+  };
+
+  PlanBuilder::Scope scope;
+  // Exists subquery
+  auto context = PlanBuilder::Context();
+  auto plan =
+      PlanBuilder(context)
+          .values(ROW({"a"}, {INTEGER()}), data)
+          .as("l")
+          .captureScope(scope)
+          .filter(Exists(Subquery(
+              PlanBuilder(context, false, scope)
+                  .values(ROW({"a", "b"}, {INTEGER(), INTEGER()}), lookup)
+                  .as("r")
+                  .filter("l.a = r.a")
+                  .build())))
+          .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Filter: EXISTS(subquery"),
+          testing::StartsWith("  - Values: 3 rows"),
+          testing::Eq("")));
+
+  lines = toSummaryLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      // clang-format off
+      testing::ElementsAre(
+          testing::Eq("- FILTER [4]: 1 fields: a INTEGER"),
+          testing::Eq("      predicate: EXISTS(subquery(- Project: -> ROW<a:INTEGER,b:INTE..."),
+          testing::Eq("      expressions: EXISTS: 1, call: 1, field: 4, subquery: 1"),
+          testing::Eq("      functions: eq: 1"),
           testing::Eq("  - VALUES [0]: 1 fields: a INTEGER"),
           testing::Eq("        rows: 3"),
           testing::Eq(""))
@@ -935,6 +1236,30 @@ TEST_F(PlanPrinterTest, aggregateExprComplex) {
           testing::StartsWith("- Aggregate"),
           testing::StartsWith(
               "    complex_agg := array_agg(DISTINCT b ORDER BY c DESC"),
+          testing::StartsWith("  - Values"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, coercions) {
+  auto rowType = ROW({"a", "b"}, {INTEGER(), BIGINT()});
+  std::vector<Variant> data{
+      Variant::row({1, 10L}),
+      Variant::row({2, 20L}),
+  };
+
+  auto plan = PlanBuilder(/* enableCoersions */ true)
+                  .values(rowType, data)
+                  .map({"a * 0.5", "a + b"})
+                  .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Project"),
+          testing::StartsWith("    expr := multiply(CAST(a AS DOUBLE), 0.5)"),
+          testing::StartsWith("    expr_0 := plus(CAST(a AS BIGINT), b)"),
           testing::StartsWith("  - Values"),
           testing::Eq("")));
 }

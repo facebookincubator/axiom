@@ -16,6 +16,7 @@
 
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/logical_plan/ExprPrinter.h"
+#include "axiom/logical_plan/ExprVisitor.h"
 #include "axiom/logical_plan/PlanNodeVisitor.h"
 
 namespace facebook::velox::logical_plan {
@@ -26,13 +27,13 @@ class ToTextVisitor : public PlanNodeVisitor {
  public:
   struct Context : public PlanNodeVisitorContext {
     std::stringstream out;
-    int32_t indent{0};
+    size_t indent{0};
   };
 
   void visit(const ValuesNode& node, PlanNodeVisitorContext& context)
       const override {
     appendNode(
-        "Values", node, fmt::format("{} rows", node.rows().size()), context);
+        "Values", node, fmt::format("{} rows", node.cardinality()), context);
   }
 
   void visit(const TableScanNode& node, PlanNodeVisitorContext& context)
@@ -134,13 +135,17 @@ class ToTextVisitor : public PlanNodeVisitor {
 
   void visit(const LimitNode& node, PlanNodeVisitorContext& context)
       const override {
-    appendNode(
-        "Limit",
-        node,
-        node.offset() > 0
-            ? fmt::format("{} (offset: {})", node.count(), node.offset())
-            : fmt::format("{}", node.count()),
-        context);
+    if (node.noLimit()) {
+      appendNode("Offset", node, fmt::to_string(node.offset()), context);
+    } else {
+      appendNode(
+          "Limit",
+          node,
+          node.offset() > 0
+              ? fmt::format("{} (offset: {})", node.count(), node.offset())
+              : fmt::format("{}", node.count()),
+          context);
+    }
   }
 
   void visit(const SetNode& node, PlanNodeVisitorContext& context)
@@ -150,11 +155,28 @@ class ToTextVisitor : public PlanNodeVisitor {
 
   void visit(const UnnestNode& node, PlanNodeVisitorContext& context)
       const override {
-    appendNode("Unnest", node, context);
+    auto& myContext = static_cast<Context&>(context);
+
+    myContext.out << makeIndent(myContext.indent) << "- Unnest:";
+    appendOutputType(node, myContext);
+    myContext.out << std::endl;
+
+    const auto size = node.unnestExpressions().size();
+    const auto indent = makeIndent(myContext.indent + 2);
+
+    for (auto i = 0; i < size; ++i) {
+      myContext.out << indent << "["
+                    << folly::join(", ", node.unnestedNames().at(i)) << "]"
+                    << " := "
+                    << ExprPrinter::toText(*node.unnestExpressions().at(i))
+                    << std::endl;
+    }
+
+    appendInputs(node, myContext);
   }
 
  private:
-  static std::string makeIndent(int32_t size) {
+  static std::string makeIndent(size_t size) {
     return std::string(size * 2, ' ');
   }
 
@@ -423,9 +445,9 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
     int32_t indent{0};
 
     explicit Context(
-        const PlanSummaryOptions& _options,
-        bool _skeletonOnly = false)
-        : options(_options), skeletonOnly{_skeletonOnly} {}
+        const PlanSummaryOptions& options,
+        bool skeletonOnly = false)
+        : options{options}, skeletonOnly{skeletonOnly} {}
 
     void appendExpression(const Expr& expr) {
       out << truncate(ExprPrinter::toText(expr), options.maxLength);
@@ -442,7 +464,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
     }
 
     const auto indent = makeIndent(myContext.indent + 3);
-    myContext.out << indent << "rows: " << node.rows().size() << std::endl;
+    myContext.out << indent << "rows: " << node.cardinality() << std::endl;
   }
 
   void visit(const TableScanNode& node, PlanNodeVisitorContext& context)
@@ -588,7 +610,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   }
 
  private:
-  static std::string makeIndent(int32_t size) {
+  static std::string makeIndent(size_t size) {
     return std::string(size * 2, ' ');
   }
 

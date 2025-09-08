@@ -84,10 +84,38 @@ TEST_F(ExprApiTest, alias) {
   EXPECT_EQ(Col("a").name(), "a");
   EXPECT_EQ(Col("a").as("b").name(), "b");
 
-  EXPECT_EQ(Lit(1).name(), "");
+  EXPECT_FALSE(Lit(1).name().has_value());
 
   EXPECT_EQ((Col("a") + 1).as("b").name(), "b");
-  EXPECT_EQ((Col("a") + 1).name(), "");
+  EXPECT_FALSE((Col("a") + 1).name().has_value());
+}
+
+TEST_F(ExprApiTest, inSubquery) {
+  auto subquery = Subquery(PlanBuilder()
+                               .values(
+                                   ROW({"a"}, {BIGINT()}),
+                                   std::vector<Variant>{Variant::row({123LL})})
+                               .build());
+  EXPECT_EQ(toString(In(Col("a"), subquery)), "in(\"a\",<subquery>)");
+}
+
+TEST_F(ExprApiTest, existsSubquery) {
+  auto subquery = Subquery(PlanBuilder()
+                               .values(
+                                   ROW({"a"}, {BIGINT()}),
+                                   std::vector<Variant>{Variant::row({123LL})})
+                               .build());
+  EXPECT_EQ(toString(Exists(subquery)), "exists(<subquery>)");
+}
+
+TEST_F(ExprApiTest, inList) {
+  EXPECT_EQ(toString(In(Col("a"), Lit(1), Lit(2), Lit(3))), "in(\"a\",1,2,3)");
+  EXPECT_EQ(
+      toString(In(Col("a"), Lit("hello"), Lit("world"))),
+      "in(\"a\",hello,world)");
+  EXPECT_EQ(
+      toString(In(Col("a"), Lit(1.1), Lit(2.2), Lit(3.3))),
+      "in(\"a\",1.1,2.2,3.3)");
 }
 
 } // namespace

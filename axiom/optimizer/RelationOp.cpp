@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/QueryGraph.h"
@@ -28,6 +29,30 @@ void Cost::add(const Cost& other) {
   setupCost += other.setupCost;
 }
 
+namespace {
+
+const auto& relTypeNames() {
+  static const folly::F14FastMap<RelType, std::string_view> kNames = {
+      {RelType::kTableScan, "TableScan"},
+      {RelType::kRepartition, "Repartition"},
+      {RelType::kFilter, "Filter"},
+      {RelType::kProject, "Project"},
+      {RelType::kJoin, "Join"},
+      {RelType::kHashBuild, "HashBuild"},
+      {RelType::kAggregation, "Aggregation"},
+      {RelType::kOrderBy, "OrderBy"},
+      {RelType::kUnionAll, "UnionAll"},
+      {RelType::kLimit, "Limit"},
+      {RelType::kValues, "Values"},
+  };
+
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(RelType, relTypeNames)
+
 const Value& RelationOp::value(ExprCP expr) const {
   // Compute new Value by applying restrictions from operators
   // between the place Expr is first defined and the output of
@@ -37,9 +62,9 @@ const Value& RelationOp::value(ExprCP expr) const {
 
 namespace {
 template <typename T>
-std::string itemsToString(const T* items, int32_t n) {
+std::string itemsToString(const T* items, size_t n) {
   std::stringstream out;
-  for (auto i = 0; i < n; ++i) {
+  for (size_t i = 0; i < n; ++i) {
     out << items[i]->toString();
     if (i < n - 1) {
       out << ", ";
@@ -47,66 +72,123 @@ std::string itemsToString(const T* items, int32_t n) {
   }
   return out.str();
 }
+
+// For leaf nodes, the fanout represents the cardinality, and the unitCost is
+// the total cost.
+// For non-leaf nodes, the fanout represents the change in cardinality (output
+// cardinality / input cardinality), and the unitCost is the per-row cost.
+void updateLeafCost(
+    float cardinality,
+    const ColumnVector& columns,
+    Cost& cost) {
+  cost.fanout = cardinality;
+
+  const auto size = byteSize(columns);
+  const auto numColumns = static_cast<float>(columns.size());
+  const auto rowCost = numColumns * Costs::kColumnRowCost +
+      std::max<float>(0, size - 8 * numColumns) * Costs::kColumnByteCost;
+  cost.unitCost += cost.fanout * rowCost;
+}
+
+float orderPrefixDistance(
+    const RelationOpPtr& input,
+    ColumnGroupCP index,
+    const ExprVector& keys) {
+  const auto& orderKeys = index->distribution.orderKeys;
+  float selection = 1;
+  for (int32_t i = 0; i < input->distribution().orderKeys.size() &&
+       i < orderKeys.size() && i < keys.size();
+       ++i) {
+    if (input->distribution().orderKeys[i]->sameOrEqual(*keys[i])) {
+      selection *= orderKeys[i]->value().cardinality;
+    }
+  }
+  return selection;
+}
+
 } // namespace
 
-std::string RelationOp::toString(bool recursive, bool detail) const {
-  if (input_ && recursive) {
-    return input_->toString(true, detail);
+TableScan::TableScan(
+    RelationOpPtr input,
+    Distribution distribution,
+    const BaseTable* table,
+    ColumnGroupCP index,
+    float fanout,
+    ColumnVector columns,
+    ExprVector lookupKeys,
+    velox::core::JoinType joinType,
+    ExprVector joinFilter)
+    : RelationOp(
+          RelType::kTableScan,
+          std::move(input),
+          std::move(distribution),
+          std::move(columns)),
+      baseTable(table),
+      index(index),
+      keys(std::move(lookupKeys)),
+      joinType(joinType),
+      joinFilter(std::move(joinFilter)) {
+  cost_.inputCardinality = inputCardinality();
+  cost_.fanout = fanout;
+
+  if (!keys.empty()) {
+    float lookupRange(index->table->cardinality);
+    float orderSelectivity = orderPrefixDistance(input_, index, keys);
+    auto distance = lookupRange / std::max<float>(1, orderSelectivity);
+    float batchSize = std::min<float>(cost_.inputCardinality, 10000);
+    if (orderSelectivity == 1) {
+      // The data does not come in key order.
+      float batchCost = index->lookupCost(lookupRange) +
+          index->lookupCost(lookupRange / batchSize) *
+              std::max<float>(1, batchSize);
+      cost_.unitCost = batchCost / batchSize;
+    } else {
+      float batchCost = index->lookupCost(lookupRange) +
+          index->lookupCost(distance) * std::max<float>(1, batchSize);
+      cost_.unitCost = batchCost / batchSize;
+    }
+    return;
   }
-  return "";
+  const auto cardinality =
+      index->table->cardinality * baseTable->filterSelectivity;
+  updateLeafCost(cardinality, columns_, cost_);
 }
 
 // static
 Distribution TableScan::outputDistribution(
     const BaseTable* baseTable,
-    ColumnGroupP index,
+    ColumnGroupCP index,
     const ColumnVector& columns) {
   auto schemaColumns = transform<ColumnVector>(
-      columns, [](auto& c) { return c->schemaColumn(); });
+      columns, [](auto& column) { return column->schemaColumn(); });
+
+  const auto& distribution = index->distribution;
 
   ExprVector partition;
-  ExprVector order;
-  OrderTypeVector orderType;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
   // if all partitioning columns are projected, the output is partitioned.
-  if (isSubset(index->distribution().partition, schemaColumns)) {
-    partition = index->distribution().partition;
+  if (isSubset(distribution.partition, schemaColumns)) {
+    partition = distribution.partition;
     replace(partition, schemaColumns, columns.data());
   }
-  auto numPrefix = prefixSize(index->distribution().order, schemaColumns);
-  if (numPrefix > 0) {
-    order = index->distribution().order;
-    order.resize(numPrefix);
-    orderType = index->distribution().orderType;
-    orderType.resize(numPrefix);
-    replace(order, schemaColumns, columns.data());
-  }
-  return Distribution(
-      index->distribution().distributionType,
-      index->distribution().cardinality * baseTable->filterSelectivity,
-      std::move(partition),
-      std::move(order),
-      std::move(orderType),
-      index->distribution().numKeysUnique <= numPrefix
-          ? index->distribution().numKeysUnique
-          : 0,
-      1.0 / baseTable->filterSelectivity);
-}
 
-// static
-PlanObjectSet TableScan::availableColumns(
-    const BaseTable* baseTable,
-    ColumnGroupP index) {
-  // The columns of base table that exist in 'index'.
-  PlanObjectSet result;
-  for (auto column : index->columns()) {
-    for (auto baseColumn : baseTable->columns) {
-      if (baseColumn->name() == column->name()) {
-        result.add(baseColumn);
-        break;
-      }
-    }
+  auto numPrefix = prefixSize(distribution.orderKeys, schemaColumns);
+  if (numPrefix > 0) {
+    orderKeys = distribution.orderKeys;
+    orderKeys.resize(numPrefix);
+    orderTypes = distribution.orderTypes;
+    orderTypes.resize(numPrefix);
+    replace(orderKeys, schemaColumns, columns.data());
   }
-  return result;
+  return {
+      distribution.distributionType,
+      std::move(partition),
+      std::move(orderKeys),
+      std::move(orderTypes),
+      distribution.numKeysUnique <= numPrefix ? distribution.numKeysUnique : 0,
+      1.0F / baseTable->filterSelectivity,
+  };
 }
 
 std::string Cost::toString(bool /*detail*/, bool isUnit) const {
@@ -117,11 +199,13 @@ std::string Cost::toString(bool /*detail*/, bool isUnit) const {
   if (setupCost > 0) {
     out << ", setup " << succinctNumber(setupCost) << "CU";
   }
-  if (static_cast<bool>(totalBytes)) {
-    out << " build= " << velox::succinctBytes(totalBytes);
+  if (totalBytes > 0) {
+    out << " build= "
+        << velox::succinctBytes(static_cast<uint64_t>(totalBytes));
   }
-  if (static_cast<bool>(transferBytes)) {
-    out << " network= " << velox::succinctBytes(transferBytes);
+  if (transferBytes > 0) {
+    out << " network= "
+        << velox::succinctBytes(static_cast<uint64_t>(transferBytes));
   }
   return out.str();
 }
@@ -138,6 +222,8 @@ void RelationOp::printCost(bool detail, std::stringstream& out) const {
     out << " " << cost_.toString(detail, false) << std::endl;
   }
 }
+
+namespace {
 
 const char* joinTypeLabel(velox::core::JoinType type) {
   switch (type) {
@@ -169,6 +255,8 @@ QGstring sanitizeHistoryKey(std::string in) {
   }
   return QGstring(in);
 }
+
+} // namespace
 
 const QGstring& TableScan::historyKey() const {
   if (!key_.empty()) {
@@ -213,6 +301,66 @@ std::string TableScan::toString(bool /*recursive*/, bool detail) const {
   return out.str();
 }
 
+Values::Values(const ValuesTable& valuesTable, ColumnVector columns)
+    : RelationOp{RelType::kValues, nullptr, Distribution::gather(), std::move(columns)},
+      valuesTable{valuesTable} {
+  cost_.inputCardinality = 1;
+
+  const auto cardinality = valuesTable.cardinality();
+  updateLeafCost(cardinality, columns_, cost_);
+}
+
+const QGstring& Values::historyKey() const {
+  if (!key_.empty()) {
+    return key_;
+  }
+  std::stringstream out;
+  out << "values " << valuesTable.values.id();
+  key_ = sanitizeHistoryKey(out.str());
+  return key_;
+}
+
+std::string Values::toString(bool /*recursive*/, bool detail) const {
+  VELOX_DCHECK(!input());
+  std::stringstream out;
+  out << valuesTable.values.id() << " " << valuesTable.cname;
+  if (detail) {
+    printCost(detail, out);
+    out << distribution_.toString() << std::endl;
+  }
+  return out.str();
+}
+
+Join::Join(
+    JoinMethod method,
+    velox::core::JoinType joinType,
+    RelationOpPtr lhs,
+    RelationOpPtr rhs,
+    ExprVector lhsKeys,
+    ExprVector rhsKeys,
+    ExprVector filterExprs,
+    float fanout,
+    ColumnVector columns)
+    : RelationOp{RelType::kJoin, std::move(lhs), std::move(columns)},
+      method{method},
+      joinType{joinType},
+      right{std::move(rhs)},
+      leftKeys{std::move(lhsKeys)},
+      rightKeys{std::move(rhsKeys)},
+      filter{std::move(filterExprs)} {
+  cost_.inputCardinality = inputCardinality();
+  cost_.fanout = fanout;
+
+  const float buildSize = right->cost().inputCardinality;
+  const auto numRightColumns =
+      static_cast<float>(right->input()->columns().size());
+  auto rowCost = numRightColumns * Costs::kHashExtractColumnCost;
+  const auto numLeftKeys = static_cast<float>(leftKeys.size());
+  cost_.unitCost = Costs::hashProbeCost(buildSize) + cost_.fanout * rowCost +
+      numLeftKeys * Costs::kHashColumnCost;
+}
+
+namespace {
 std::pair<std::string, std::string> joinKeysString(
     const ExprVector& left,
     const ExprVector& right) {
@@ -224,9 +372,8 @@ std::pair<std::string, std::string> joinKeysString(
   for (auto& k : left) {
     strings.push_back(k->toString());
   }
-  std::sort(indices.begin(), indices.end(), [&](int32_t l, int32_t r) {
-    return strings[l] < strings[r];
-  });
+  std::ranges::sort(
+      indices, [&](int32_t l, int32_t r) { return strings[l] < strings[r]; });
   std::stringstream leftStream;
   std::stringstream rightStream;
   for (auto i : indices) {
@@ -235,6 +382,7 @@ std::pair<std::string, std::string> joinKeysString(
   }
   return std::make_pair(leftStream.str(), rightStream.str());
 }
+} // namespace
 
 const QGstring& Join::historyKey() const {
   if (!key_.empty()) {
@@ -254,6 +402,23 @@ const QGstring& Join::historyKey() const {
   }
   key_ = sanitizeHistoryKey(out.str());
   return key_;
+}
+
+Join* Join::makeCrossJoin(
+    RelationOpPtr input,
+    RelationOpPtr right,
+    ColumnVector columns) {
+  float fanout = right->resultCardinality();
+  return make<Join>(
+      JoinMethod::kCross,
+      velox::core::JoinType::kInner,
+      std::move(input),
+      std::move(right),
+      ExprVector{},
+      ExprVector{},
+      ExprVector{},
+      fanout,
+      std::move(columns));
 }
 
 std::string Join::toString(bool recursive, bool detail) const {
@@ -280,6 +445,25 @@ std::string Join::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+Repartition::Repartition(
+    RelationOpPtr input,
+    Distribution distribution,
+    ColumnVector columns)
+    : RelationOp(
+          RelType::kRepartition,
+          std::move(input),
+          std::move(distribution),
+          std::move(columns)) {
+  cost_.inputCardinality = inputCardinality();
+  cost_.fanout = 1;
+
+  auto size = shuffleCost(columns_);
+
+  cost_.unitCost = size;
+  cost_.transferBytes =
+      cost_.inputCardinality * size * Costs::byteShuffleCost();
+}
+
 std::string Repartition::toString(bool recursive, bool detail) const {
   std::stringstream out;
   if (recursive) {
@@ -296,22 +480,38 @@ std::string Repartition::toString(bool recursive, bool detail) const {
 }
 
 Aggregation::Aggregation(
-    const Aggregation& other,
     RelationOpPtr input,
-    velox::core::AggregationNode::Step _step)
-    : Aggregation(other) {
-  *const_cast<Distribution*>(&distribution_) = input->distribution();
-  input_ = std::move(input);
-  step = _step;
-  using velox::core::AggregationNode;
-  if (step == AggregationNode::Step::kPartial ||
-      step == AggregationNode::Step::kIntermediate) {
-    *const_cast<ColumnVector*>(&columns_) = intermediateColumns;
-  } else if (step == AggregationNode::Step::kFinal) {
-    for (auto i = 0; i < grouping.size(); ++i) {
-      grouping[i] = intermediateColumns[i];
-    }
+    ExprVector groupingKeysVector,
+    AggregateVector aggregatesVector,
+    velox::core::AggregationNode::Step step,
+    ColumnVector columns)
+    : RelationOp{RelType::kAggregation, std::move(input), std::move(columns)},
+      groupingKeys{std::move(groupingKeysVector)},
+      aggregates{std::move(aggregatesVector)},
+      step{step} {
+  cost_.inputCardinality = inputCardinality();
+
+  float cardinality = 1;
+  for (auto key : groupingKeys) {
+    cardinality *= key->value().cardinality;
   }
+
+  // The estimated output is input minus the times an input is a
+  // duplicate of a key already in the input. The cardinality of the
+  // result is (d - d * 1 - (1 / d))^n. where d is the number of
+  // potentially distinct keys and n is the number of elements in the
+  // input. This approaches d as n goes to infinity. The chance of one in d
+  // being unique after n values is 1 - (1/d)^n.
+  auto nOut = cardinality -
+      cardinality *
+          std::pow(1.0F - (1.0F / cardinality), input_->resultCardinality());
+
+  cost_.fanout = nOut / cost_.inputCardinality;
+  const auto numGrouppingKeys = static_cast<float>(groupingKeys.size());
+  cost_.unitCost = numGrouppingKeys * Costs::hashProbeCost(nOut);
+
+  float rowBytes = byteSize(groupingKeys) + byteSize(aggregates);
+  cost_.totalBytes = nOut * rowBytes;
 }
 
 const QGstring& Aggregation::historyKey() const {
@@ -329,7 +529,7 @@ const QGstring& Aggregation::historyKey() const {
   auto* opt = queryCtx()->optimization();
   ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
   std::vector<std::string> strings;
-  for (auto& key : grouping) {
+  for (auto& key : groupingKeys) {
     strings.push_back(key->toString());
   }
   std::sort(strings.begin(), strings.end());
@@ -348,14 +548,34 @@ std::string Aggregation::toString(bool recursive, bool detail) const {
   out << velox::core::AggregationNode::toName(step) << " agg";
   printCost(detail, out);
   if (detail) {
-    if (grouping.empty()) {
+    if (groupingKeys.empty()) {
       out << "global";
     } else {
-      out << itemsToString(grouping.data(), grouping.size());
+      out << itemsToString(groupingKeys.data(), groupingKeys.size());
     }
     out << aggregates.size() << " aggregates" << std::endl;
   }
   return out.str();
+}
+
+HashBuild::HashBuild(
+    RelationOpPtr input,
+    int32_t id,
+    ExprVector keysVector,
+    PlanP plan)
+    : RelationOp{RelType::kHashBuild, std::move(input)},
+      buildId{id},
+      keys{std::move(keysVector)},
+      plan{plan} {
+  cost_.inputCardinality = inputCardinality();
+  cost_.fanout = 1;
+
+  const auto numKeys = static_cast<float>(keys.size());
+  const auto numColumns = static_cast<float>(columns().size());
+  cost_.unitCost = numKeys * Costs::kHashColumnCost +
+      Costs::hashProbeCost(cost_.inputCardinality) +
+      numColumns * Costs::kHashExtractColumnCost * 2;
+  cost_.totalBytes = cost_.inputCardinality * byteSize(columns());
 }
 
 std::string HashBuild::toString(bool recursive, bool detail) const {
@@ -366,6 +586,18 @@ std::string HashBuild::toString(bool recursive, bool detail) const {
   out << " Build ";
   printCost(detail, out);
   return out.str();
+}
+
+Filter::Filter(RelationOpPtr input, ExprVector exprs)
+    : RelationOp{RelType::kFilter, std::move(input)}, exprs_{std::move(exprs)} {
+  cost_.inputCardinality = inputCardinality();
+  const auto numExprs = static_cast<float>(exprs_.size());
+  cost_.unitCost = Costs::kMinimumFilterCost * numExprs;
+
+  // We assume each filter selects 4/5. Small effect makes it so
+  // join and scan selectivities that are better known have more
+  // influence on plan cardinality. To be filled in from history.
+  cost_.fanout = std::pow(0.8F, numExprs);
 }
 
 const QGstring& Filter::historyKey() const {
@@ -409,6 +641,21 @@ std::string Filter::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+Project::Project(
+    const RelationOpPtr& input,
+    ExprVector exprs,
+    const ColumnVector& columns)
+    : RelationOp{RelType::kProject, input, input->distribution().rename(exprs, columns), columns},
+      exprs_{std::move(exprs)} {
+  VELOX_CHECK_EQ(
+      exprs_.size(), columns_.size(), "Projection names and exprs must match");
+
+  cost_.inputCardinality = inputCardinality();
+  cost_.fanout = 1;
+
+  // TODO Fill in cost_.unitCost and others.
+}
+
 std::string Project::toString(bool recursive, bool detail) const {
   std::stringstream out;
   if (recursive) {
@@ -429,15 +676,107 @@ std::string Project::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+namespace {
+Distribution makeOrderByDistribution(
+    const RelationOpPtr& input,
+    ExprVector orderKeys,
+    OrderTypeVector orderTypes) {
+  Distribution distribution = input->distribution();
+
+  distribution.distributionType = DistributionType::gather();
+  distribution.partition.clear();
+  distribution.orderKeys = std::move(orderKeys);
+  distribution.orderTypes = std::move(orderTypes);
+  VELOX_DCHECK_EQ(
+      distribution.orderKeys.size(), distribution.orderTypes.size());
+
+  return distribution;
+}
+} // namespace
+
+OrderBy::OrderBy(
+    const RelationOpPtr& input,
+    ExprVector orderKeys,
+    OrderTypeVector orderTypes,
+    int64_t limit,
+    int64_t offset)
+    : RelationOp{RelType::kOrderBy, input, makeOrderByDistribution(input, std::move(orderKeys), std::move(orderTypes))},
+      limit{limit},
+      offset{offset} {
+  cost_.inputCardinality = inputCardinality();
+  cost_.fanout = 1;
+
+  // TODO Fill in cost_.unitCost and others.
+}
+
+std::string OrderBy::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (recursive) {
+    out << input()->toString(true, detail) << " ";
+  }
+
+  if (detail) {
+    out << "OrderBy (" << distribution_.toString() << ")\n";
+  } else {
+    out << "order by " << distribution_.orderKeys.size() << " columns ";
+  }
+  return out.str();
+}
+
+Limit::Limit(RelationOpPtr input, int64_t limit, int64_t offset)
+    : RelationOp{RelType::kLimit, std::move(input), Distribution::gather()},
+      limit{limit},
+      offset{offset} {
+  cost_.inputCardinality = inputCardinality();
+  cost_.unitCost = 0.01;
+  const auto cardinality = static_cast<float>(limit);
+  if (cost_.inputCardinality <= cardinality) {
+    // Input cardinality does not exceed the limit. The limit is no-op. Doesn't
+    // change cardinality.
+    cost_.fanout = 1;
+  } else {
+    // Input cardinality exceeds the limit. Calculate fanout to ensure that
+    // fanout * limit = input-cardinality.
+    cost_.fanout = cardinality / cost_.inputCardinality;
+  }
+}
+
+std::string Limit::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (recursive) {
+    out << input()->toString(true, detail) << " ";
+  }
+
+  if (detail) {
+    out << "Limit (" << offset << ", " << limit << ")\n";
+  } else {
+    out << "offset " << offset << " limit " << limit << " ";
+  }
+  return out.str();
+}
+
+UnionAll::UnionAll(RelationOpPtrVector inputsVector)
+    : RelationOp{RelType::kUnionAll, nullptr, Distribution{}, inputsVector[0]->columns()},
+      inputs{std::move(inputsVector)} {
+  for (auto& input : inputs) {
+    cost_.inputCardinality +=
+        input->cost().inputCardinality * input->cost().fanout;
+  }
+
+  cost_.fanout = 1;
+
+  // TODO Fill in cost_.unitCost and others.
+}
+
 const QGstring& UnionAll::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
   std::vector<QGstring> keys;
-  for (auto in : inputs) {
+  for (const auto& in : inputs) {
     keys.push_back(in->historyKey());
   }
-  std::sort(keys.begin(), keys.end());
+  std::ranges::sort(keys);
   std::stringstream out;
   out << "unionall(";
   for (const auto& key : keys) {

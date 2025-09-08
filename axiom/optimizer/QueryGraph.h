@@ -16,7 +16,8 @@
 
 #pragma once
 
-#include "axiom/logical_plan/Expr.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Schema.h"
 #include "velox/core/PlanNode.h"
 
@@ -29,50 +30,6 @@
 /// constant.
 namespace facebook::velox::optimizer {
 
-/// The join structure is described as a tree of derived tables with
-/// base tables as leaves. Joins are described as join graph
-/// edges. Edges describe direction for non-inner joins. Scalar and
-/// existence subqueries are flattened into derived tables or base
-/// tables. The join graph would represent select ... from t where
-/// exists(x) or exists(y) as a derived table of three joined tables
-/// where the edge from t to x and t to y is directed and qualified as
-/// left semijoin. The semijoins project out one column, an existence
-/// flag. The filter would be expresssed as a conjunct under the top
-/// derived table with x-exists or y-exists.
-
-/// A bit set that qualifies an Expr. Represents which functions/kinds
-/// of functions are found inside the children of an Expr.
-class FunctionSet {
- public:
-  /// Indicates an aggregate function in the set.
-  static constexpr uint64_t kAggregate = 1;
-
-  /// Indicates a non-determinstic function in the set.
-  static constexpr uint64_t kNonDeterministic = 1UL << 1;
-
-  FunctionSet() : set_(0) {}
-
-  explicit FunctionSet(uint64_t set) : set_(set) {}
-
-  /// True if 'item' is in 'this'.
-  bool contains(int64_t item) const {
-    return 0 != (set_ & item);
-  }
-
-  /// Unions 'this' and 'other' and returns the result.
-  FunctionSet operator|(const FunctionSet& other) const {
-    return FunctionSet(set_ | other.set_);
-  }
-
-  /// Unions 'this' and 'other' and returns the result.
-  FunctionSet operator|(uint64_t other) const {
-    return FunctionSet(set_ | other);
-  }
-
- private:
-  uint64_t set_;
-};
-
 /// Superclass for all expressions.
 class Expr : public PlanObject {
  public:
@@ -82,8 +39,8 @@ class Expr : public PlanObject {
     return true;
   }
 
-  // Returns the single base or derived table 'this' depends on, nullptr if
-  // 'this' depends on none or multiple tables.
+  /// Returns the single base or derived table 'this' depends on, nullptr if
+  /// 'this' depends on none or multiple tables.
   PlanObjectCP singleTable() const;
 
   /// Returns all tables 'this' depends on.
@@ -134,10 +91,12 @@ using EquivalenceP = Equivalence*;
 class Literal : public Expr {
  public:
   Literal(const Value& value, const velox::variant* literal)
-      : Expr(PlanType::kLiteral, value), literal_(literal), vector_(nullptr) {}
+      : Expr(PlanType::kLiteralExpr, value),
+        literal_(literal),
+        vector_(nullptr) {}
 
   Literal(const Value& value, const BaseVector* vector)
-      : Expr(PlanType::kLiteral, value), literal_{}, vector_(vector) {}
+      : Expr(PlanType::kLiteralExpr, value), literal_{}, vector_(vector) {}
 
   const velox::variant& literal() const {
     return *literal_;
@@ -163,9 +122,10 @@ class Literal : public Expr {
 class Column : public Expr {
  public:
   Column(
-      Name _name,
-      PlanObjectP _relation,
+      Name name,
+      PlanObjectCP relation,
       const Value& value,
+      Name alias = nullptr,
       Name nameInTable = nullptr,
       ColumnCP topColumn = nullptr,
       PathCP path = nullptr);
@@ -176,6 +136,10 @@ class Column : public Expr {
 
   PlanObjectCP relation() const {
     return relation_;
+  }
+
+  Name alias() const {
+    return alias_;
   }
 
   ColumnCP schemaColumn() const {
@@ -189,7 +153,7 @@ class Column : public Expr {
 
   std::string toString() const override;
 
-  struct Equivalence* equivalence() const {
+  EquivalenceP equivalence() const {
     return equivalence_;
   }
 
@@ -206,7 +170,10 @@ class Column : public Expr {
   Name name_;
 
   // The defining BaseTable or DerivedTable.
-  PlanObjectP relation_;
+  PlanObjectCP relation_;
+
+  // Optional alias copied from the the logical plan.
+  Name alias_;
 
   // Equivalence class. Lists all columns directly or indirectly asserted equal
   // to 'this'.
@@ -233,13 +200,16 @@ inline folly::Range<T*> toRange(const std::vector<T, QGAllocator<T>>& v) {
 class Field : public Expr {
  public:
   Field(const Type* type, ExprCP base, Name field)
-      : Expr(PlanType::kField, Value(type, 1)), field_(field), base_(base) {
+      : Expr(PlanType::kFieldExpr, Value(type, 1)),
+        field_(field),
+        index_(0),
+        base_(base) {
     columns_ = base->columns();
     subexpressions_ = base->subexpressions();
   }
 
   Field(const Type* type, ExprCP base, int32_t index)
-      : Expr(PlanType::kField, Value(type, 1)),
+      : Expr(PlanType::kFieldExpr, Value(type, 1)),
         field_(nullptr),
         index_(index),
         base_(base) {
@@ -271,137 +241,15 @@ struct SubfieldSet {
   /// Id of an accessed column of complex type.
   std::vector<int32_t, QGAllocator<int32_t>> ids;
 
-  // Set of subfield paths that are accessed for the corresponding 'column'.
-  // empty means that all subfields are accessed.
+  /// Set of subfield paths that are accessed for the corresponding 'column'.
+  /// empty means that all subfields are accessed.
   std::vector<BitSet, QGAllocator<BitSet>> subfields;
 
   std::optional<BitSet> findSubfields(int32_t id) const;
 };
 
-/// Describes where the args given to a lambda come from.
-enum class LambdaArg : int8_t { kKey, kValue, kElement };
-
-// Lambda function process arrays or maps using lambda expressions.
-// Example:
-//
-//    filter(array, x -> x > 0)
-//
-//    LambdaInfo{.ordinal = 1, .lambdaArg = {kElement}, .argOrdinal = {0}}
-//
-// , where .ordinal = 1 says that lambda expression is the second argument of
-// the function; .lambdaArg = {kElement} together with .argOrdinal = {0} say
-// that the lambda expression takes one argument, which is the element of the
-// array, which is to be found in the first argument of the function.
-//
-// clang-format off
-//    transform_values(map, (k, v) -> v + 1)
-//
-//    LambdaInfo{.ordinal = 1, .lambdaArg = {kKey, kValue}, .argOrdinal = {0, 0}}
-// clang-format on
-//
-// , where ordinal = 1 says that lambda expression is the second argument of the
-// function; .lambdaArg = {kKey, kValue} together with .argOrdinal = {0, 0} say
-// that lambda expression takes two arguments, which are the key and the value
-// of the same map, which is to be found in the first argument of the function.
-//
-// clang-format off
-//    zip(a, b, (x, y) -> x + y)
-//
-//    LambdaInfo{.ordinal = 2, .lambdaArg = {kElement, kElement}, .argOrdinal = {0, 1}}
-// clang-format on
-//
-// , where ordinal = 2 says that lambda expression is the third argument of the
-// function; .lambdaArg = {kElement, kElement} together with .argOrdinal = {0,
-// 1} say that lambda expression takes two arguments: first is an element of the
-// array in the first argument of the function; second is an element of the
-// array in the second argument of the function.
-//
-struct LambdaInfo {
-  /// The ordinal of the lambda in the function's args.
-  int32_t ordinal;
-
-  /// Getter applied to the collection given in corresponding 'argOrdinal' to
-  /// get each argument of the lambda.
-  std::vector<LambdaArg> lambdaArg;
-
-  /// The ordinal of the array or map that provides the lambda argument in the
-  /// function's args. 1:1 with lambdaArg.
-  std::vector<int32_t> argOrdinal;
-};
-
-class Call;
-
-struct ResultAccess;
-
-/// Describes functions accepting lambdas and functions with special treatment
-/// of subfields.
-struct FunctionMetadata {
-  bool processSubfields() const {
-    return subfieldArg.has_value() || !fieldIndexForArg.empty() ||
-        isArrayConstructor || isMapConstructor;
-  }
-
-  const LambdaInfo* lambdaInfo(int32_t index) const {
-    for (const auto& lambda : lambdas) {
-      if (lambda.ordinal == index) {
-        return &lambda;
-      }
-    }
-    return nullptr;
-  }
-
-  std::vector<LambdaInfo> lambdas;
-
-  /// If accessing a subfield on the result means that the same subfield is
-  /// required in an argument, this is the ordinal of the argument. This is 1
-  /// for transform_values, which means that transform_values(map, <lambda>)[1]
-  /// implies that key 1 is accessed in 'map'.
-  std::optional<int32_t> subfieldArg;
-
-  /// If true, then access of subscript 'i' in result means that argument 'i' is
-  /// accessed.
-  bool isArrayConstructor{false};
-
-  /// If key 'k' in result is accessed, then the argument that corresponds to
-  /// this key is accessed.
-  bool isMapConstructor{false};
-
-  /// If ordinal fieldIndexForArg_[i] is accessed, then argument argOrdinal_[i]
-  /// is accessed.
-  std::vector<int32_t> fieldIndexForArg;
-
-  /// Ordinal of argument that produces the result subfield in the corresponding
-  /// element of 'fieldIndexForArg_'.
-  std::vector<int32_t> argOrdinal;
-
-  /// bits of FunctionSet for the function.
-  FunctionSet functionSet;
-
-  /// Static fixed cost for processing one row. use 'costFunc' for non-constant
-  /// cost.
-  float cost{1};
-
-  /// Function for evaluating the per-row cost when the cost depends on
-  /// arguments and their stats.
-  std::function<float(const Call*)> costFunc;
-
-  /// Translates a set of paths into path, expression pairs if the complex type
-  /// returning function is decomposable into per-path subexpressions. Suppose
-  /// the function applies array sort to all arrays in a map. suppose it is used
-  /// in [k1][0] and [k2][1]. This could return [k1] = array_sort(arg[k1]) and
-  /// k2 = array_sort(arg[k2]. 'arg'  comes from 'call'.
-  std::function<std::unordered_map<PathCP, core::TypedExprPtr>(
-      const core::CallTypedExpr* call,
-      std::vector<PathCP>& paths)>
-      explode;
-
-  std::function<std::unordered_map<PathCP, logical_plan::ExprPtr>(
-      const logical_plan::CallExpr* call,
-      std::vector<PathCP>& paths)>
-      logicalExplode;
-};
-
-const FunctionMetadata* functionMetadata(Name name);
+struct FunctionMetadata;
+using FunctionMetadataCP = const FunctionMetadata*;
 
 /// Represents a function call or a special form, any expression with
 /// subexpressions.
@@ -412,21 +260,10 @@ class Call : public Expr {
       Name name,
       const Value& value,
       ExprVector args,
-      FunctionSet functions)
-      : Expr(type, value),
-        name_(name),
-        args_(std::move(args)),
-        functions_(functions),
-        metadata_(functionMetadata(name_)) {
-    for (auto arg : args_) {
-      columns_.unionSet(arg->columns());
-      subexpressions_.unionSet(arg->subexpressions());
-      subexpressions_.add(arg);
-    }
-  }
+      FunctionSet functions);
 
   Call(Name name, Value value, ExprVector args, FunctionSet functions)
-      : Call(PlanType::kCall, name, value, std::move(args), functions) {}
+      : Call(PlanType::kCallExpr, name, value, std::move(args), functions) {}
 
   Name name() const {
     return name_;
@@ -453,13 +290,13 @@ class Call : public Expr {
   }
 
   CPSpan<PlanObject> children() const override {
-    return folly::Range<const PlanObject* const*>(
-        reinterpret_cast<const PlanObject* const*>(args_.data()), args_.size());
+    return folly::Range<PlanObjectCP const*>(
+        reinterpret_cast<PlanObjectCP const*>(args_.data()), args_.size());
   }
 
   std::string toString() const override;
 
-  const FunctionMetadata* metadata() const {
+  FunctionMetadataCP metadata() const {
     return metadata_;
   }
 
@@ -473,14 +310,86 @@ class Call : public Expr {
   // Set of functions used in 'this' and 'args'.
   const FunctionSet functions_;
 
-  const FunctionMetadata* metadata_;
+  FunctionMetadataCP metadata_;
 };
 
 using CallCP = const Call*;
 
+struct SpecialFormCallNames {
+  static const char* kAnd;
+  static const char* kOr;
+  static const char* kCast;
+  static const char* kTryCast;
+  static const char* kTry;
+  static const char* kCoalesce;
+  static const char* kIf;
+  static const char* kSwitch;
+  static const char* kIn;
+
+  static const char* toCallName(const logical_plan::SpecialForm& form) {
+    switch (form) {
+      case logical_plan::SpecialForm::kAnd:
+        return SpecialFormCallNames::kAnd;
+      case logical_plan::SpecialForm::kOr:
+        return SpecialFormCallNames::kOr;
+      case logical_plan::SpecialForm::kCast:
+        return SpecialFormCallNames::kCast;
+      case logical_plan::SpecialForm::kTryCast:
+        return SpecialFormCallNames::kTryCast;
+      case logical_plan::SpecialForm::kTry:
+        return SpecialFormCallNames::kTry;
+      case logical_plan::SpecialForm::kCoalesce:
+        return SpecialFormCallNames::kCoalesce;
+      case logical_plan::SpecialForm::kIf:
+        return SpecialFormCallNames::kIf;
+      case logical_plan::SpecialForm::kSwitch:
+        return SpecialFormCallNames::kSwitch;
+      case logical_plan::SpecialForm::kIn:
+        return SpecialFormCallNames::kIn;
+      default:
+        VELOX_FAIL(
+            "No function call name for special form: {}",
+            logical_plan::SpecialFormName::toName(form));
+    }
+  }
+
+  static std::optional<logical_plan::SpecialForm> tryFromCallName(
+      const char* name) {
+    if (name == kAnd) {
+      return logical_plan::SpecialForm::kAnd;
+    }
+    if (name == kOr) {
+      return logical_plan::SpecialForm::kOr;
+    }
+    if (name == kCast) {
+      return logical_plan::SpecialForm::kCast;
+    }
+    if (name == kTryCast) {
+      return logical_plan::SpecialForm::kTryCast;
+    }
+    if (name == kTry) {
+      return logical_plan::SpecialForm::kTry;
+    }
+    if (name == kCoalesce) {
+      return logical_plan::SpecialForm::kCoalesce;
+    }
+    if (name == kIf) {
+      return logical_plan::SpecialForm::kIf;
+    }
+    if (name == kSwitch) {
+      return logical_plan::SpecialForm::kSwitch;
+    }
+    if (name == kIn) {
+      return logical_plan::SpecialForm::kIn;
+    }
+
+    return std::nullopt;
+  }
+};
+
 /// True if 'expr' is a call to function 'name'.
 inline bool isCallExpr(ExprCP expr, Name name) {
-  return expr->type() == PlanType::kCall && expr->as<Call>()->name() == name;
+  return expr->is(PlanType::kCallExpr) && expr->as<Call>()->name() == name;
 }
 
 /// Represents a lambda. May occur as an immediate argument of selected
@@ -488,7 +397,7 @@ inline bool isCallExpr(ExprCP expr, Name name) {
 class Lambda : public Expr {
  public:
   Lambda(ColumnVector args, const Type* type, ExprCP body)
-      : Expr(PlanType::kLambda, Value(type, 1)),
+      : Expr(PlanType::kLambdaExpr, Value(type, 1)),
         args_(std::move(args)),
         body_(body) {}
   const ColumnVector& args() const {
@@ -506,16 +415,27 @@ class Lambda : public Expr {
 
 /// Represens a set of transitively equal columns.
 struct Equivalence {
-  // Each element has a direct or implied equality edge to every other.
+  /// Each element has a direct or implied equality edge to every other.
   ColumnVector columns;
 };
+
+/// The join structure is described as a tree of derived tables with
+/// base tables as leaves. Joins are described as join graph
+/// edges. Edges describe direction for non-inner joins. Scalar and
+/// existence subqueries are flattened into derived tables or base
+/// tables. The join graph would represent select ... from t where
+/// exists(x) or exists(y) as a derived table of three joined tables
+/// where the edge from t to x and t to y is directed and qualified as
+/// left semijoin. The semijoins project out one column, an existence
+/// flag. The filter would be expresssed as a conjunct under the top
+/// derived table with x-exists or y-exists.
 
 /// Represents one side of a join. See Join below for the meaning of the
 /// members.
 struct JoinSide {
   PlanObjectCP table;
   const ExprVector& keys;
-  float fanout;
+  const float fanout;
   const bool isOptional;
   const bool isNonOptionalOfOuter;
   const bool isExists;
@@ -553,29 +473,43 @@ struct JoinSide {
 /// decomposable and reorderable conjuncts.
 class JoinEdge {
  public:
-  JoinEdge(
-      PlanObjectCP leftTable,
-      PlanObjectCP rightTable,
-      ExprVector filter,
-      bool leftOptional,
-      bool rightOptional,
-      bool rightExists,
-      bool rightNotExists,
-      ColumnCP markColumn = nullptr,
-      bool directed = false)
+  /// Default is INNER JOIN.
+  struct Spec {
+    ExprVector filter;
+    bool leftOptional{false};
+    bool rightOptional{false};
+    bool rightExists{false};
+    bool rightNotExists{false};
+    ColumnCP markColumn{nullptr};
+    bool directed{false};
+  };
+
+  JoinEdge(PlanObjectCP leftTable, PlanObjectCP rightTable, Spec spec)
       : leftTable_(leftTable),
         rightTable_(rightTable),
-        filter_(std::move(filter)),
-        leftOptional_(leftOptional),
-        rightOptional_(rightOptional),
-        rightExists_(rightExists),
-        rightNotExists_(rightNotExists),
-        markColumn_(markColumn),
-        directed_(directed) {
+        filter_(std::move(spec.filter)),
+        leftOptional_(spec.leftOptional),
+        rightOptional_(spec.rightOptional),
+        rightExists_(spec.rightExists),
+        rightNotExists_(spec.rightNotExists),
+        markColumn_(spec.markColumn),
+        directed_(spec.directed) {
     VELOX_CHECK_NOT_NULL(rightTable);
-    if (isInner()) {
-      VELOX_CHECK(filter_.empty());
-    }
+    VELOX_CHECK(directed_ || filter_.empty() || !isInner());
+  }
+
+  static JoinEdge* makeInner(PlanObjectCP leftTable, PlanObjectCP rightTable) {
+    return make<JoinEdge>(leftTable, rightTable, Spec{});
+  }
+
+  static JoinEdge* makeExists(PlanObjectCP leftTable, PlanObjectCP rightTable) {
+    return make<JoinEdge>(leftTable, rightTable, Spec{.rightExists = true});
+  }
+
+  static JoinEdge* makeNotExists(
+      PlanObjectCP leftTable,
+      PlanObjectCP rightTable) {
+    return make<JoinEdge>(leftTable, rightTable, Spec{.rightNotExists = true});
   }
 
   PlanObjectCP leftTable() const {
@@ -618,13 +552,22 @@ class JoinEdge {
         !rightNotExists_;
   }
 
-  // True if all tables referenced from 'leftKeys' must be placed before placing
-  // this.
+  bool isSemi() const {
+    return rightExists_;
+  }
+
+  bool isAnti() const {
+    return rightNotExists_;
+  }
+
+  /// True if all tables referenced from 'leftKeys' must be placed before
+  /// placing this.
   bool isNonCommutative() const {
     // Inner and full outer joins are commutative.
     if (rightOptional_ && leftOptional_) {
       return false;
     }
+
     return !leftTable_ || rightOptional_ || leftOptional_ || rightExists_ ||
         rightNotExists_ || markColumn_ || directed_;
   }
@@ -635,9 +578,9 @@ class JoinEdge {
     return isNonCommutative() && !rightNotExists_;
   }
 
-  // Returns the join side info for 'table'. If 'other' is set, returns the
-  // other side.
-  const JoinSide sideOf(PlanObjectCP side, bool other = false) const;
+  /// Returns the join side info for 'table'. If 'other' is set, returns the
+  /// other side.
+  JoinSide sideOf(PlanObjectCP side, bool other = false) const;
 
   /// Returns the table on the other side of 'table' and the number of rows in
   /// the returned table for one row in 'table'. If the join is not inner
@@ -674,11 +617,11 @@ class JoinEdge {
 
   std::string toString() const;
 
-  //// Fills in 'lrFanout' and 'rlFanout', 'leftUnique', 'rightUnique'.
+  /// Fills in 'lrFanout' and 'rlFanout', 'leftUnique', 'rightUnique'.
   void guessFanout();
 
-  // True if a hash join build can be broadcasted. Used when building on the
-  // right. None of the right hash join variants is broadcastable.
+  /// True if a hash join build can be broadcasted. Used when building on the
+  /// right. None of the right hash join variants are broadcastable.
   bool isBroadcastableType() const;
 
   /// Returns a key string for recording a join cardinality sample. The string
@@ -712,12 +655,12 @@ class JoinEdge {
   // True if 'lrFanout_' and 'rlFanout_' are set by setFanouts.
   bool fanoutsFixed_{false};
 
-  // Join condition for any non-equality  conditions for non-inner joins.
+  // Join condition for any non-equality conditions for non-inner joins.
   const ExprVector filter_;
 
   // True if an unprobed right side row produces a result with right side
-  // columns set and left side columns as null. Possible only be hash or
-  // merge.
+  // columns set and left side columns as null (right outer join). Possible only
+  // for hash or merge.
   const bool leftOptional_;
 
   // True if a right side miss produces a row with left side columns
@@ -733,7 +676,7 @@ class JoinEdge {
   const bool rightNotExists_;
 
   // Flag to set if right side has a match.
-  const ColumnCP markColumn_;
+  ColumnCP const markColumn_;
 
   // If directed non-outer edge. For example unnest or inner dependent on
   // optional of outer.
@@ -741,7 +684,6 @@ class JoinEdge {
 };
 
 using JoinEdgeP = JoinEdge*;
-
 using JoinEdgeVector = std::vector<JoinEdgeP, QGAllocator<JoinEdgeP>>;
 
 /// Represents a reference to a table from a query. There is one of these
@@ -749,9 +691,9 @@ using JoinEdgeVector = std::vector<JoinEdgeP, QGAllocator<JoinEdgeP>>;
 /// BaseTable but the same BaseTable can be referenced from many TableScans, for
 /// example if accessing different indices in a secondary to primary key lookup.
 struct BaseTable : public PlanObject {
-  BaseTable() : PlanObject(PlanType::kTable) {}
+  BaseTable() : PlanObject(PlanType::kTableNode) {}
 
-  // Correlation name, distinguishes between uses of the same schema table.
+  /// Correlation name, distinguishes between uses of the same schema table.
   Name cname{nullptr};
 
   SchemaTableCP schemaTable{nullptr};
@@ -761,20 +703,21 @@ struct BaseTable : public PlanObject {
   /// 'columns'.
   ColumnVector columns;
 
-  // All joins where 'this' is an end point.
+  /// All joins where 'this' is an end point.
   JoinEdgeVector joinedBy;
 
-  // Top level conjuncts on single columns and literals, column to the left.
+  /// Top level conjuncts on single columns and literals, column to the left.
   ExprVector columnFilters;
 
-  // Multicolumn filters dependent on 'this' alone.
+  /// Multicolumn filters dependent on 'this' alone.
   ExprVector filter;
 
-  // the fraction of base table rows selected by all filters involving this
-  // table only.
+  /// The fraction of base table rows selected by all filters involving this
+  /// table only.
   float filterSelectivity{1};
 
   SubfieldSet controlSubfields;
+
   SubfieldSet payloadSubfields;
 
   bool isTable() const override {
@@ -788,12 +731,46 @@ struct BaseTable : public PlanObject {
 
   std::optional<int32_t> columnId(Name column) const;
 
-  BitSet columnSubfields(int32_t id, bool payloadOnly, bool controlOnly) const;
+  BitSet columnSubfields(int32_t id, bool controlOnly, bool payloadOnly) const;
+
+  /// Returns possible indices for driving table scan of 'table'.
+  std::vector<ColumnGroupCP> chooseLeafIndex() const {
+    VELOX_DCHECK(!schemaTable->columnGroups.empty());
+    return {schemaTable->columnGroups[0]};
+  }
 
   std::string toString() const override;
 };
 
 using BaseTableCP = const BaseTable*;
+
+struct ValuesTable : public PlanObject {
+  explicit ValuesTable(const logical_plan::ValuesNode& values)
+      : PlanObject{PlanType::kValuesTableNode}, values{values} {}
+
+  /// Correlation name, distinguishes between uses of the same values node.
+  Name cname{nullptr};
+
+  const logical_plan::ValuesNode& values;
+
+  /// All columns referenced from this 'ValuesNode'.
+  ColumnVector columns;
+
+  /// All joins where 'this' is an end point.
+  JoinEdgeVector joinedBy;
+
+  float cardinality() const {
+    return static_cast<float>(values.cardinality());
+  }
+
+  bool isTable() const override {
+    return true;
+  }
+
+  void addJoinedBy(JoinEdgeP join);
+
+  std::string toString() const override;
+};
 
 using TypeVector =
     std::vector<const velox::Type*, QGAllocator<const velox::Type*>>;
@@ -813,7 +790,7 @@ class Aggregate : public Call {
       bool isAccumulator,
       const velox::Type* intermediateType)
       : Call(
-            PlanType::kAggregate,
+            PlanType::kAggregateExpr,
             name,
             value,
             std::move(args),
@@ -846,7 +823,7 @@ class Aggregate : public Call {
     return intermediateType_;
   }
 
-  const TypeVector rawInputType() const {
+  const TypeVector& rawInputType() const {
     return rawInputType_;
   }
 
@@ -859,43 +836,44 @@ class Aggregate : public Call {
 };
 
 using AggregateCP = const Aggregate*;
+using AggregateVector = std::vector<AggregateCP, QGAllocator<AggregateCP>>;
 
-struct Aggregation;
-using AggregationP = Aggregation*;
+class AggregationPlan : public PlanObject {
+ public:
+  AggregationPlan(
+      ExprVector groupingKeys,
+      AggregateVector aggregates,
+      ColumnVector columns,
+      ColumnVector intermediateColumns)
+      : PlanObject(PlanType::kAggregationNode),
+        groupingKeys_(std::move(groupingKeys)),
+        aggregates_(std::move(aggregates)),
+        columns_(std::move(columns)),
+        intermediateColumns_(std::move(intermediateColumns)) {}
 
-/// Wraps an Aggregation RelationOp. This gives the aggregation a PlanObject id
-struct AggregationPlan : public PlanObject {
-  AggregationPlan(AggregationP agg)
-      : PlanObject(PlanType::kAggregate), aggregation(agg) {}
+  const ExprVector& groupingKeys() const {
+    return groupingKeys_;
+  }
 
-  AggregationP aggregation;
+  const AggregateVector& aggregates() const {
+    return aggregates_;
+  }
+
+  const ColumnVector& columns() const {
+    return columns_;
+  }
+
+  const ColumnVector& intermediateColumns() const {
+    return intermediateColumns_;
+  }
+
+ private:
+  const ExprVector groupingKeys_;
+  const AggregateVector aggregates_;
+  const ColumnVector columns_;
+  const ColumnVector intermediateColumns_;
 };
 
 using AggregationPlanCP = const AggregationPlan*;
-
-float tableCardinality(PlanObjectCP table);
-
-/// Returns all distinct tables 'exprs' depend on.
-PlanObjectSet allTables(CPSpan<Expr> exprs);
-
-/// Fills 'leftKeys' and 'rightKeys's from 'conjuncts' so that
-/// equalities with one side only depending on 'right' go to
-/// 'rightKeys' and the other side not depending on 'right' goes to
-/// 'leftKeys'. The left side may depend on more than one table. The
-/// tables 'leftKeys' depend on are returned in 'allLeft'. The
-/// conjuncts that are not equalities or have both sides depending
-/// on right and something else are left in 'conjuncts'.
-void extractNonInnerJoinEqualities(
-    ExprVector& conjuncts,
-    PlanObjectCP right,
-    ExprVector& leftKeys,
-    ExprVector& rightKeys,
-    PlanObjectSet& allLeft);
-
-/// Appends the string representation of 'exprs' to 'out'.
-void exprsToString(const ExprVector& exprs, std::stringstream& out);
-
-ExprCP
-importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner);
 
 } // namespace facebook::velox::optimizer

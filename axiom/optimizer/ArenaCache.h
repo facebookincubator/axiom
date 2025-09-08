@@ -23,7 +23,7 @@
 namespace facebook::velox::optimizer {
 
 /// Single threaded cache in front of HashStringAllocator free
-/// list. Speeds up allocation and fre of plan candidates. This is
+/// list. Speeds up allocation and free of plan candidates. This is
 /// about 2x faster than uncached HashStringAllocator. Overall amounts
 /// to ~2% of optimization time.
 class ArenaCache {
@@ -34,7 +34,7 @@ class ArenaCache {
   explicit ArenaCache(velox::HashStringAllocator& allocator)
       : allocator_(allocator), allocated_(kMaxSize / kGranularity) {}
 
-  void* allocate(size_t size) {
+  void* allocate(int32_t size) {
     auto sizeClass = velox::bits::roundUp(size, kGranularity) / kGranularity;
     if (sizeClass < kMaxSize / kGranularity) {
       if (!allocated_[sizeClass].empty()) {

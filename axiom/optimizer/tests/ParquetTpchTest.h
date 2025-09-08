@@ -16,54 +16,31 @@
 
 #pragma once
 
-#include <vector>
-
-#include "velox/common/file/FileSystems.h"
-#include "velox/connectors/tpch/TpchConnector.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/exec/tests/utils/TpchQueryBuilder.h"
-#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
-#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/parse/TypeResolver.h"
 
 DECLARE_string(data_path);
 DECLARE_bool(create_dataset);
 
 namespace facebook::velox::optimizer::test {
 
-class ParquetTpchTest : public virtual testing::Test {
- protected:
-  static void SetUpTestCase();
+class ParquetTpchTest {
+ public:
+  /// Writes TPC-H tables in Parquet format to a temp directory. Use --data_path
+  /// GFlag to specify an alternative directory. That directory must exist.
+  ///
+  /// No-op if --data_path is specified, but --create_dataset is false.
+  ///
+  /// To create tables,
+  ///   - registers Hive and TPC-H connectors,
+  ///   - for each table, creates and runs Velox plan to read from TPC-H
+  ///   connector and
+  ///       write to Hive connector.
+  /// Unregisters Hive and TPC-H connectors before returning.
+  ///
+  /// @return Returns newly created temp directory if any.
+  static void createTables(std::string_view path);
 
-  static void TearDownTestCase();
-
-  static void saveTpchTablesAsParquet();
-
-  void assertQuery(
-      int queryId,
-      const std::optional<std::vector<uint32_t>>& sortingKeys = {}) {
-    auto tpchPlan = tpchBuilder_->getQueryPlan(queryId);
-    auto duckDbSql = tpch::getQuery(queryId);
-    assertQuery(tpchPlan, duckDbSql, sortingKeys);
-  }
-
-  std::shared_ptr<exec::Task> assertQuery(
-      const exec::test::TpchPlan& tpchPlan,
-      const std::string& duckQuery,
-      const std::optional<std::vector<uint32_t>>& sortingKeys) const;
-
-  static std::shared_ptr<exec::test::DuckDbQueryRunner> duckDb_;
-  static std::string createPath_;
-  static std::string path_;
-  static std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
-  static std::shared_ptr<exec::test::TpchQueryBuilder> tpchBuilder_;
-
-  static constexpr char const* kTpchConnectorId{"test-tpch"};
+  static void registerTpchConnector(const std::string& id);
 };
 
 } // namespace facebook::velox::optimizer::test

@@ -45,7 +45,7 @@ class SubqueryExpr : public core::IExpr {
  public:
   // @param subquery A plan tree that produces a single column.
   explicit SubqueryExpr(logical_plan::LogicalPlanNodePtr subquery)
-      : IExpr({}), subquery_(std::move(subquery)) {}
+      : IExpr(IExpr::Kind::kSubquery, {}), subquery_(std::move(subquery)) {}
 
   const logical_plan::LogicalPlanNodePtr& subquery() const {
     return subquery_;
@@ -53,6 +53,29 @@ class SubqueryExpr : public core::IExpr {
 
   std::string toString() const override {
     return "<subquery>";
+  }
+
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    VELOX_CHECK_EQ(newInputs.size(), 0);
+    return std::make_shared<SubqueryExpr>(subquery_);
+  }
+
+  bool operator==(const IExpr& other) const override {
+    if (!other.is(Kind::kSubquery)) {
+      return false;
+    }
+
+    auto* otherSubquery = other.as<SubqueryExpr>();
+    // Compare the subquery plan pointers. Two SubqueryExprs are equal if they
+    // reference the same logical plan node.
+    return subquery_ == otherSubquery->subquery_ &&
+        compareAliasAndInputs(other);
+  }
+
+ protected:
+  size_t localHash() const override {
+    // Hash the pointer to the logical plan node
+    return std::hash<logical_plan::LogicalPlanNodePtr>{}(subquery_);
   }
 
  private:
@@ -77,7 +100,7 @@ VELOX_MAKE_BINARY_CALLER(Plus, "plus")
 VELOX_MAKE_BINARY_CALLER(Minus, "minus")
 VELOX_MAKE_BINARY_CALLER(Multiply, "multiply")
 VELOX_MAKE_BINARY_CALLER(Divide, "divide")
-VELOX_MAKE_BINARY_CALLER(Modulus, "modulus")
+VELOX_MAKE_BINARY_CALLER(Modulus, "mod")
 VELOX_MAKE_BINARY_CALLER(Lt, "lt")
 VELOX_MAKE_BINARY_CALLER(Gt, "gt")
 VELOX_MAKE_BINARY_CALLER(Lte, "lte")
@@ -92,10 +115,23 @@ VELOX_MAKE_BINARY_CALLER(Or, "or")
 class ExprApi {
  public:
   /* implicit */ ExprApi(core::ExprPtr expr)
-      : expr_{std::move(expr)}, name_{expr_->alias().value_or("")} {}
+      : expr_{std::move(expr)}, alias_{expr_->alias()} {}
 
-  ExprApi(core::ExprPtr expr, std::string name)
-      : expr_{std::move(expr)}, name_{std::move(name)} {}
+  ExprApi(
+      core::ExprPtr expr,
+      std::optional<std::string> alias,
+      std::vector<std::string> unnestedAliases = {})
+      : expr_{std::move(expr)},
+        alias_{std::move(alias)},
+        unnestedAliases_{std::move(unnestedAliases)} {
+    if (alias_.has_value()) {
+      VELOX_CHECK(!alias_.value().empty());
+    }
+
+    for (const auto& alias : unnestedAliases_) {
+      VELOX_CHECK(!alias.empty());
+    }
+  }
 
   ExprApi(const ExprApi& other) = default;
 
@@ -187,17 +223,36 @@ class ExprApi {
 
   ExprApi operator!=(const Variant& value) const;
 
-  const std::string& name() const {
-    return name_;
+  // TODO Remove in favor of 'alias'.
+  const std::optional<std::string>& name() const {
+    return alias_;
   }
 
-  ExprApi as(std::string name) const {
-    return ExprApi(expr_, std::move(name));
+  const std::optional<std::string>& alias() const {
+    return alias_;
+  }
+
+  const std::vector<std::string>& unnestedAliases() const {
+    return unnestedAliases_;
+  }
+
+  ExprApi as(std::string alias) const {
+    return ExprApi(expr_, std::move(alias));
+  }
+
+  ExprApi unnestAs(std::vector<std::string> aliases) const {
+    return ExprApi(expr_, alias_, aliases);
+  }
+
+  template <typename... T>
+  ExprApi unnestAs(T... aliases) const {
+    return unnestAs(std::vector<std::string>{std::forward<T>(aliases)...});
   }
 
  private:
   core::ExprPtr expr_;
-  std::string name_;
+  std::optional<std::string> alias_;
+  std::vector<std::string> unnestedAliases_;
 };
 
 ExprApi Lit(Variant&& val);
@@ -224,7 +279,14 @@ ExprApi Call(std::string name, T... args) {
   return Call(std::move(name), std::vector<ExprApi>{std::forward<T>(args)...});
 }
 
+template <typename... T>
+ExprApi In(T... args) {
+  return Call("in", std::vector<ExprApi>{std::forward<T>(args)...});
+}
+
 ExprApi Cast(TypePtr type, const ExprApi& input);
+
+ExprApi TryCast(TypePtr type, const ExprApi& input);
 
 inline ExprApi Cast(TypePtr type, const Variant& value) {
   return Cast(std::move(type), Lit(value));
@@ -234,6 +296,43 @@ ExprApi Lambda(std::vector<std::string> names, const ExprApi& body);
 
 ExprApi Subquery(std::shared_ptr<const LogicalPlanNode> subquery);
 
+ExprApi Exists(const ExprApi& input);
+
 ExprApi Sql(const std::string& sql);
+
+// SortKey to use with sort operation.
+// e.g.
+//
+//  SortKey(Col("name"))                  -- name ASC
+//  SortKey(Col("name"), DESC)            -- name DESC
+//  SortKey(Col("name"), ASC_NULLS_LAST)  -- name ASC NULLS LAST
+
+namespace sorting {
+// Default is ASC NULLS LAST.
+template <bool ascending = true, bool nullsFirst = false>
+struct Order {};
+} // namespace sorting
+
+constexpr sorting::Order<true> ASC;
+constexpr sorting::Order<false> DESC;
+
+constexpr sorting::Order<true, true> ASC_NULLS_FIRST;
+constexpr sorting::Order<true, false> ASC_NULLS_LAST;
+
+constexpr sorting::Order<false, true> DESC_NULLS_FIRST;
+constexpr sorting::Order<false, false> DESC_NULLS_LAST;
+
+struct SortKey {
+  template <bool ascending = true, bool nullsFirst = false>
+  explicit SortKey(ExprApi input, sorting::Order<ascending, nullsFirst> = ASC)
+      : expr{std::move(input)}, ascending{ascending}, nullsFirst(nullsFirst) {}
+
+  SortKey(ExprApi input, bool ascending, bool nullsFirst)
+      : expr{std::move(input)}, ascending{ascending}, nullsFirst(nullsFirst) {}
+
+  const ExprApi expr;
+  const bool ascending;
+  const bool nullsFirst;
+};
 
 } // namespace facebook::velox::logical_plan

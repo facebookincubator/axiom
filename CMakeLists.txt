@@ -19,6 +19,9 @@ project(Verax)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+# Enable generation of compile_commands.json for clang tools
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 add_compile_definitions(DISABLE_META_INTERNAL_COMPRESSOR=1)
 
 # Sets new behavior for CMP0135, which controls how timestamps are extracted
@@ -30,8 +33,12 @@ if(POLICY CMP0135)
 endif()
 
 # Use ThirdPartyToolchain dependencies macros from Velox.
-list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
-     "${PROJECT_SOURCE_DIR}/velox/CMake")
+list(
+  PREPEND
+  CMAKE_MODULE_PATH
+  "${PROJECT_SOURCE_DIR}/CMake"
+  "${PROJECT_SOURCE_DIR}/CMake/resolve_dependency_modules"
+  "${PROJECT_SOURCE_DIR}/velox/CMake")
 include(ResolveDependency)
 
 set(VELOX_BUILD_VECTOR_TEST_UTILS
@@ -39,11 +46,14 @@ set(VELOX_BUILD_VECTOR_TEST_UTILS
     CACHE BOOL "Velox vector test utilities (VectorMaker).")
 
 set(VELOX_ENABLE_PARQUET ON)
-set(VELOX_ENABLE_BENCHMARKS ON)
+set(VELOX_BUILD_TEST_UTILS ON)
+set(VELOX_BUILD_TESTING OFF)
 
 set(VELOX_DEPENDENCY_SOURCE
     AUTO
     CACHE STRING "Default dependency source: AUTO SYSTEM or BUNDLED.")
+
+option(VERAX_ENABLE_CCACHE "Use ccache if installed." ON)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
@@ -104,6 +114,22 @@ endif()
 message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
 
+if(VERAX_ENABLE_CCACHE
+   AND NOT CMAKE_C_COMPILER_LAUNCHER
+   AND NOT CMAKE_CXX_COMPILER_LAUNCHER
+   AND NOT CMAKE_CUDA_COMPILER_LAUNCHER)
+
+  find_program(CCACHE_FOUND ccache)
+
+  if(CCACHE_FOUND)
+    set(CMAKE_C_COMPILER_LAUNCHER ${CCACHE_FOUND})
+    set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_FOUND})
+    set(CMAKE_CUDA_COMPILER_LAUNCHER ${CCACHE_FOUND})
+    # keep comments as they might matter to the compiler
+    set(ENV{CCACHE_COMMENTS} "1")
+  endif()
+endif()
+
 message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
 include(CTest) # include after project() but before add_subdirectory()
@@ -123,6 +149,12 @@ velox_resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 velox_set_source(folly)
 velox_resolve_dependency(folly)
 
+# Add ANTLR4 runtime dependency
+velox_set_source(antlr4-runtime)
+velox_resolve_dependency(antlr4-runtime)
+
+message(STATUS "Using ANTLR4 runtime from ${ANTLR4_INCLUDE_DIR}")
+
 # Use xxhash and xsimd from Velox for now.
 include_directories(.)
 include_directories(${CMAKE_BINARY_DIR})
@@ -130,7 +162,10 @@ include_directories(${CMAKE_BINARY_DIR}/velox)
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/velox/external/xxhash axiom)
 include_directories(SYSTEM ${CMAKE_BINARY_DIR}/_deps/xsimd-src/include/)
+include_directories(${ANTLR4_INCLUDE_DIR})
 
 add_subdirectory(velox)
-add_subdirectory(axiom/optimizer)
+add_subdirectory(axiom/sql/presto)
 add_subdirectory(axiom/logical_plan)
+add_subdirectory(axiom/runner)
+add_subdirectory(axiom/optimizer)

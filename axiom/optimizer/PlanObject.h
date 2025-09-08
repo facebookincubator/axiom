@@ -17,34 +17,36 @@
 #pragma once
 
 #include "axiom/optimizer/BitSet.h"
-#include "axiom/optimizer/QueryGraphContext.h"
 
 namespace facebook::velox::optimizer {
 
 /// Enum for types of query graph nodes. Used when making a tree into
 /// a query graph and later to differentiate between tables, derived
 /// tables and different expressions.
-enum class PlanType {
-  kTable,
-  kDerivedTable,
-  kColumn,
-  kLiteral,
-  kCall,
-  kAggregate,
-  kAggregation,
-  kProject,
-  kFilter,
-  kJoin,
-  kOrderBy,
-  kLimit,
-  kField,
-  kLambda
+enum class PlanType : uint32_t {
+  // Expressions.
+  kColumnExpr = 0,
+  kLiteralExpr,
+  kCallExpr,
+  kAggregateExpr,
+  kFieldExpr,
+  kLambdaExpr,
+  // Plan nodes.
+  kTableNode,
+  kValuesTableNode,
+  kDerivedTableNode,
+  kAggregationNode,
+  kProjectNode,
+  kFilterNode,
+  kJoinNode,
+  kOrderByNode,
+  kLimitNode,
 };
 
 /// True if 'type' is an expression with a value.
 inline bool isExprType(PlanType type) {
-  return type == PlanType::kColumn || type == PlanType::kCall ||
-      type == PlanType::kLiteral;
+  return type == PlanType::kColumnExpr || type == PlanType::kCallExpr ||
+      type == PlanType::kLiteralExpr;
 }
 
 /// Common superclass of all vertices of a query graph. This
@@ -58,8 +60,8 @@ inline bool isExprType(PlanType type) {
 /// planning is complete.
 class PlanObject {
  public:
-  explicit PlanObject(PlanType _type)
-      : type_(_type), id_(queryCtx()->newId(this)) {}
+  explicit PlanObject(PlanType type)
+      : type_(type), id_(queryCtx()->newId(this)) {}
 
   virtual ~PlanObject() = default;
 
@@ -76,7 +78,15 @@ class PlanObject {
   }
 
   bool isColumn() const {
-    return type_ == PlanType::kColumn;
+    return type_ == PlanType::kColumnExpr;
+  }
+
+  bool is(PlanType type) const {
+    return type_ == type;
+  }
+
+  bool isNot(PlanType type) const {
+    return type_ != type;
   }
 
   template <typename T>
@@ -121,6 +131,10 @@ class PlanObject {
   const int32_t id_;
 };
 
+using PlanObjectP = PlanObject*;
+using PlanObjectCP = const PlanObject*;
+using PlanObjectVector = std::vector<PlanObjectCP, QGAllocator<PlanObjectCP>>;
+
 /// Set of PlanObjects. Uses the objects id() as an index into a bitmap.
 class PlanObjectSet : public BitSet {
  public:
@@ -143,10 +157,7 @@ class PlanObjectSet : public BitSet {
 
   /// Adds ids of all columns 'expr' depends on.
   void unionColumns(ExprCP expr);
-
-  /// Adds ids of all columns 'exprs' depend on.
   void unionColumns(const ExprVector& exprs);
-  void unionColumns(const ColumnVector& exprs);
 
   /// Adds ids of all objects in 'objects'.
   template <typename V>
@@ -156,12 +167,28 @@ class PlanObjectSet : public BitSet {
     }
   }
 
+  /// Returns the objects corresponding to ids in 'this' as a vector of const
+  /// T*.
+  template <typename T = PlanObject>
+  std::vector<const T*, QGAllocator<const T*>> toObjects() const {
+    std::vector<const T*, QGAllocator<const T*>> objects;
+    objects.reserve(size());
+    forEach(
+        [&](auto object) { objects.emplace_back(object->template as<T>()); });
+    return objects;
+  }
+
   /// Applies 'func' to each object in 'this'.
   template <typename Func>
   void forEach(Func func) const {
+    forEach<PlanObject, Func>(func);
+  }
+
+  template <typename T, typename Func>
+  void forEach(Func func) const {
     auto ctx = queryCtx();
     velox::bits::forEachSetBit(bits_.data(), 0, bits_.size() * 64, [&](auto i) {
-      func(ctx->objectAt(i));
+      func(ctx->objectAt(i)->template as<T>());
     });
   }
 
@@ -173,21 +200,10 @@ class PlanObjectSet : public BitSet {
     });
   }
 
-  /// Returns the objects corresponding to ids in 'this' as a vector of T.
-  template <typename T = PlanObjectP>
-  std::vector<T> objects() const {
-    std::vector<T> result;
-    forEach(
-        [&](auto object) { result.push_back(reinterpret_cast<T>(object)); });
-    return result;
-  }
-
   /// Prnts the contents with ids and the string representation of the objects
   /// if 'names' is true.
   std::string toString(bool names) const;
 };
-
-using PlanObjectVector = std::vector<PlanObjectCP, QGAllocator<PlanObjectCP>>;
 
 } // namespace facebook::velox::optimizer
 

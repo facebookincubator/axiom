@@ -32,8 +32,9 @@ inline std::vector<folly::dynamic> readConcatenatedDynamicsFromFile(
   int braceCount = 0;
   for (size_t i = 0; i < content.size(); ++i) {
     if (content[i] == '{') {
-      if (braceCount == 0)
+      if (braceCount == 0) {
         start = i;
+      }
       ++braceCount;
     } else if (content[i] == '}') {
       --braceCount;

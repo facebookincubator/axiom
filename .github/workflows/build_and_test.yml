@@ -11,32 +11,29 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 name: Linux Build
-
 on:
   push:
     branches:
       - main
     paths:
-      - '**'
-      - '!*.md'
-      - '!docs/**'
-      - '!.github/workflows/*.md'
+      - axiom/**
+      - velox
+      - CMakeLists.txt
+      - .github/workflows/build_and_test.yml
+      - Makefile
   pull_request:
     paths:
-      - '**'
-      - '!*.md'
-      - '!docs/**'
-      - '!.github/workflows/*.md'
-
+      - axiom/**
+      - velox
+      - CMakeLists.txt
+      - .github/workflows/build_and_test.yml
+      - Makefile
 permissions:
   contents: read
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
   cancel-in-progress: true
-
 jobs:
   build-verax:
     name: Build Verax
@@ -48,6 +45,17 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       ICU_SOURCE: SYSTEM
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      # Configure Git to trust the repository directory
+      - name: Configure Git Safe Directory
+        run: |
+          git config --global --add safe.directory "/__w/verax/verax"
+          git config --global --add safe.directory "*"
+
       - name: Ensure Ccache Dir Exists
         working-directory: ${{ github.workspace }}
         run: |
@@ -60,17 +68,18 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-default-gcc
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          persist-credentials: false
-
-      # Configure Git to trust the repository directory
-      - name: Configure Git Safe Directory
+      - name: Debug Cache Restoration
         run: |
-          git config --global --add safe.directory "/__w/verax/verax"
-          git config --global --add safe.directory "*"
+          echo "=== Cache Restoration Debug ==="
+          if [ -d "$CCACHE_DIR" ]; then
+            echo "Directory size: $(du -sh "$CCACHE_DIR" 2>/dev/null || echo 'Unable to determine size')"
+            echo "Directory contents:"
+            ls -la "$CCACHE_DIR" || echo "Directory is empty or inaccessible"
+            echo "File count: $(find "$CCACHE_DIR" -type f 2>/dev/null | wc -l)"
+          else
+            echo "✗ Ccache directory does not exist"
+          fi
+          echo "=== End Cache Restoration Debug ==="
 
       - name: Clear CCache Statistics
         run: |
@@ -83,14 +92,12 @@ jobs:
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
           CPU_TARGET: "avx"
         run: |
-          # Build with reduced parallelism
           make debug
 
       # Display ccache statistics after build
       - name: CCache Statistics After Build
-        if: always()  # Run even if build failed
+        if: always() # Run even if build failed
         run: |
-          echo "CCache statistics after build:"
           ccache -vs
 
       # Save ccache for future runs
@@ -100,8 +107,8 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-default-gcc
 
-      # Run Verax tests (excluding velox tests)
+      # Run Verax tests
       - name: Run Debug Tests
         working-directory: _build/debug
         run: |
-          ctest -j 8 --output-on-failure --no-tests=error -E "velox"
+          ctest -j 8 --output-on-failure --no-tests=error

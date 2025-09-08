@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/FunctionRegistry.h"
-#include "axiom/optimizer/tests/FeatureGen.h"
-#include "axiom/optimizer/tests/QueryTestBase.h"
-#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::optimizer::test {
-TypePtr makeGenieType();
+
+RowTypePtr makeGenieType();
+
 void registerGenieUdfs();
+
 } // namespace facebook::velox::optimizer::test

@@ -70,7 +70,7 @@ struct TypeComparer {
 Name toName(std::string_view string);
 
 struct Plan;
-using PlanPtr = Plan*;
+using PlanP = Plan*;
 class Optimization;
 
 /// STL compatible allocator that manages std:: containers allocated in the
@@ -81,7 +81,7 @@ struct QGAllocator {
   QGAllocator() = default;
 
   template <typename U>
-  explicit QGAllocator(QGAllocator<U>) {}
+  explicit QGAllocator(QGAllocator<U> /*other*/) {}
 
   T* allocate(std::size_t n);
 
@@ -92,10 +92,6 @@ struct QGAllocator {
       const QGAllocator& /*rhs*/) {
     return true;
   }
-
-  friend bool operator!=(const QGAllocator& lhs, const QGAllocator& rhs) {
-    return !(lhs == rhs);
-  }
 };
 
 /// Elements of subfield paths. The QueryGraphContext holds a dedupped
@@ -104,16 +100,25 @@ enum class StepKind : uint8_t { kField, kSubscript, kCardinality };
 
 struct Step {
   StepKind kind;
+
+  /// Map key if kind is kSubscript. Struct field if kind is kField.
   Name field{nullptr};
+
+  /// Zero-based array index if kind is kSubscript.
   int64_t id{0};
+
   /// True if all fields/keys are accessed at this level but there is a subset
   /// of fields accessed at a child level.
   bool allFields{false};
 
   bool operator==(const Step& other) const;
+
   bool operator<(const Step& other) const;
+
   size_t hash() const;
 };
+
+using StepVector = std::vector<Step, QGAllocator<Step>>;
 
 class BitSet;
 
@@ -121,15 +126,15 @@ class Path {
  public:
   Path() = default;
 
-  Path(std::vector<Step> steps) {
-    for (auto& step : steps) {
-      steps_.push_back(std::move(step));
-    }
-  }
+  explicit Path(std::span<const Step> steps, std::false_type /*reverse*/)
+      : steps_{steps.begin(), steps.end()} {}
+
+  explicit Path(std::span<const Step> steps, std::true_type /*reverse*/)
+      : steps_{steps.rbegin(), steps.rend()} {}
 
   void operator delete(void* ptr);
 
-  /// True if 'prefix' is a prefix of 'this'.
+  /// True if 'prefix' is a prefix of 'this', but doesn't equal to 'this'.
   bool hasPrefix(const Path& prefix) const;
 
   Path* field(const char* name) {
@@ -149,13 +154,14 @@ class Path {
     steps_.push_back(Step{.kind = StepKind::kSubscript, .id = id});
     return this;
   }
+
   Path* cardinality() {
     VELOX_CHECK(mutable_);
     steps_.push_back(Step{.kind = StepKind::kCardinality});
     return this;
   }
 
-  const std::vector<Step, QGAllocator<Step>>& steps() const {
+  const StepVector& steps() const {
     return steps_;
   }
 
@@ -185,7 +191,7 @@ class Path {
   static void subfieldSkyline(BitSet& subfields);
 
  private:
-  std::vector<Step, QGAllocator<Step>> steps_;
+  StepVector steps_;
   mutable int32_t id_{-1};
   mutable bool mutable_{true};
 };
@@ -225,20 +231,19 @@ struct VectorDedupComparer {
 /// references this via a thread local through queryCtx().
 class QueryGraphContext {
  public:
-  explicit QueryGraphContext(velox::HashStringAllocator& allocator)
-      : allocator_(allocator), cache_(allocator_) {}
+  explicit QueryGraphContext(velox::HashStringAllocator& allocator);
 
   /// Returns a new unique id to use for 'object' and associates 'object' to
   /// this id. Tagging objects with integere ids is useful for efficiently
   /// representing sets of objects as bitmaps.
   int32_t newId(PlanObject* object) {
     objects_.push_back(object);
-    return objects_.size() - 1;
+    return static_cast<int32_t>(objects_.size() - 1);
   }
 
   /// Allocates 'size' bytes from the arena of 'this'. The allocation lives
   /// until free() is called on it or the arena is destroyed.
-  void* allocate(size_t size) {
+  void* allocate(int32_t size) {
 #ifdef QG_TEST_USE_MALLOC
     // Benchmark-only. Dropping the arena will not free un-free'd allocs.
     return ::malloc(size);
@@ -278,7 +283,7 @@ class QueryGraphContext {
 
   /// Returns the top level plan being processed when printing operator trees.
   /// If non-null, allows showing percentages.
-  Plan*& contextPlan() {
+  PlanP& contextPlan() {
     return contextPlan_;
   }
 
@@ -305,16 +310,16 @@ class QueryGraphContext {
   /// Returns the interned instance of 'path'. 'path' is either
   /// retained if it is not previously known or it is deleted. Must be
   /// allocated from the arena of 'this'.
-  PathCP toPath(PathCP);
+  PathCP toPath(PathCP path);
 
   PathCP pathById(uint32_t id) {
     VELOX_DCHECK_LT(id, pathById_.size());
     return pathById_[id];
   }
 
-  /// Takes ownership of a  variant for the duration. Variants are allocated
+  /// Takes ownership of a Variant for the duration. Variants are allocated
   /// with new so not in the arena.
-  variant* registerVariant(std::unique_ptr<variant> value) {
+  Variant* registerVariant(std::unique_ptr<Variant> value) {
     allVariants_.push_back(std::move(value));
     return allVariants_.back().get();
   }
@@ -341,6 +346,7 @@ class QueryGraphContext {
       deduppedObjects_;
 
   std::unordered_set<TypePtr, TypeHasher, TypeComparer> deduppedTypes_;
+
   // Maps raw Type* back to shared TypePtr. Used in toType()() and toTypePtr().
   std::unordered_map<const velox::Type*, velox::TypePtr> toTypePtr_;
 
@@ -356,10 +362,10 @@ class QueryGraphContext {
 
   std::vector<PathCP> pathById_;
 
-  Plan* contextPlan_{nullptr};
+  PlanP contextPlan_{nullptr};
   Optimization* optimization_{nullptr};
 
-  std::vector<std::unique_ptr<variant>> allVariants_;
+  std::vector<std::unique_ptr<Variant>> allVariants_;
 };
 
 /// Returns a mutable reference to the calling thread's QueryGraphContext.
@@ -368,7 +374,7 @@ QueryGraphContext*& queryCtx();
 template <class T>
 T* QGAllocator<T>::allocate(std::size_t n) {
   return reinterpret_cast<T*>(
-      queryCtx()->allocate(velox::checkedMultiply(n, sizeof(T)))); // NOLINT
+      queryCtx()->allocate(velox::checkedMultiply(n, sizeof(T))));
 }
 
 template <class T>
@@ -376,23 +382,19 @@ void QGAllocator<T>::deallocate(T* p, std::size_t /*n*/) noexcept {
   queryCtx()->free(p);
 }
 
-template <class _Tp, class... _Args>
-inline _Tp* make(_Args&&... __args) {
-  return new (queryCtx()->allocate(sizeof(_Tp)))
-      _Tp(std::forward<_Args>(__args)...);
+template <class T, class... Args>
+inline T* make(Args&&... args) {
+  return new (queryCtx()->allocate(sizeof(T))) T(std::forward<Args>(args)...);
 }
-
-/// Macro to use instead of make() when make() errors out from too
-/// many arguments.
-#define QGC_MAKE_IN_ARENA(_Tp) new (queryCtx()->allocate(sizeof(_Tp))) _Tp
 
 /// Shorthand for toType() in thread's QueryGraphContext.
 const Type* toType(const TypePtr& type);
+
 /// Shorthand for toTypePtr() in thread's QueryGraphContext.
 const TypePtr& toTypePtr(const Type* type);
 
 // Shorthand for toPath in queryCtx().
-PathCP toPath(std::vector<Step> steps);
+PathCP toPath(std::span<const Step> steps, bool reverse = false);
 
 inline void Path::operator delete(void* ptr) {
   queryCtx()->free(ptr);
@@ -401,9 +403,10 @@ inline void Path::operator delete(void* ptr) {
 // Forward declarations of common types and collections.
 class Expr;
 using ExprCP = const Expr*;
+using ExprVector = std::vector<ExprCP, QGAllocator<ExprCP>>;
+
 class Column;
 using ColumnCP = const Column*;
-using ExprVector = std::vector<ExprCP, QGAllocator<ExprCP>>;
 using ColumnVector = std::vector<ColumnCP, QGAllocator<ColumnCP>>;
 
 } // namespace facebook::velox::optimizer

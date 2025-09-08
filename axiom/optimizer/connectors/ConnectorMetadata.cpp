@@ -16,8 +16,103 @@
 
 #include "axiom/optimizer/connectors/ConnectorMetadata.h"
 
-namespace facebook::velox::connectors {
+namespace facebook::velox::connector {
 
-void dummy() {}
+namespace {
+const auto& tableKindNames() {
+  static const folly::F14FastMap<TableKind, std::string_view> kNames = {
+      {TableKind::kTable, "kTable"},
+      {TableKind::kTempTable, "kTempTable"},
+  };
+  return kNames;
+}
 
-} // namespace facebook::velox::connectors
+const auto& writeKindNames() {
+  static const folly::F14FastMap<WriteKind, std::string_view> kNames = {
+      {WriteKind::kInsert, "kInsert"},
+      {WriteKind::kUpdate, "kUpdate"},
+      {WriteKind::kDelete, "kDelete"},
+  };
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(TableKind, tableKindNames);
+
+VELOX_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
+
+namespace {
+RowTypePtr makeRowType(const std::vector<const Column*>& columns) {
+  std::unordered_set<std::string> uniqueNames;
+
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+
+  names.reserve(columns.size());
+  types.reserve(columns.size());
+
+  for (auto* column : columns) {
+    VELOX_CHECK_NOT_NULL(column);
+
+    const auto& name = column->name();
+
+    VELOX_CHECK(!name.empty());
+    VELOX_CHECK(uniqueNames.insert(name).second);
+
+    names.emplace_back(name);
+    types.emplace_back(column->type());
+  }
+
+  return ROW(std::move(names), std::move(types));
+}
+} // namespace
+
+TableLayout::TableLayout(
+    std::string name,
+    const Table* table,
+    connector::Connector* connector,
+    std::vector<const Column*> columns,
+    std::vector<const Column*> partitionColumns,
+    std::vector<const Column*> orderColumns,
+    std::vector<SortOrder> sortOrder,
+    std::vector<const Column*> lookupKeys,
+    bool supportsScan)
+    : name_(std::move(name)),
+      table_(table),
+      connector_(connector),
+      columns_(std::move(columns)),
+      partitionColumns_(std::move(partitionColumns)),
+      orderColumns_(std::move(orderColumns)),
+      sortOrder_(std::move(sortOrder)),
+      lookupKeys_(std::move(lookupKeys)),
+      supportsScan_(supportsScan),
+      rowType_{makeRowType(columns_)} {
+  VELOX_CHECK_NOT_NULL(table);
+  VELOX_CHECK_NOT_NULL(connector);
+
+  for (auto column : partitionColumns_) {
+    VELOX_CHECK_NOT_NULL(column);
+  }
+
+  for (auto column : orderColumns_) {
+    VELOX_CHECK_NOT_NULL(column);
+  }
+
+  VELOX_CHECK_EQ(orderColumns_.size(), sortOrder_.size());
+
+  for (auto column : lookupKeys_) {
+    VELOX_CHECK_NOT_NULL(column);
+  }
+}
+
+const Column* TableLayout::findColumn(const std::string& name) const {
+  for (const auto& column : columns_) {
+    if (column->name() == name) {
+      return column;
+    }
+  }
+  return nullptr;
+}
+
+} // namespace facebook::velox::connector

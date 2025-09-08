@@ -18,6 +18,7 @@
 #include "axiom/logical_plan/Expr.h"
 #include "velox/common/Enums.h"
 #include "velox/type/Variant.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::logical_plan {
 
@@ -51,11 +52,14 @@ class LogicalPlanNode {
  public:
   LogicalPlanNode(
       NodeKind kind,
-      const std::string& id,
-      const std::vector<LogicalPlanNodePtr>& inputs,
-      const RowTypePtr& outputType)
-      : kind_{kind}, id_{id}, inputs_{inputs}, outputType_{outputType} {
-    VELOX_USER_CHECK_NOT_NULL(outputType);
+      std::string id,
+      std::vector<LogicalPlanNodePtr> inputs,
+      RowTypePtr outputType)
+      : kind_{kind},
+        id_{std::move(id)},
+        inputs_{std::move(inputs)},
+        outputType_{std::move(outputType)} {
+    VELOX_USER_CHECK_NOT_NULL(outputType_);
     for (const auto& input : inputs_) {
       VELOX_USER_CHECK_NOT_NULL(input);
     }
@@ -67,8 +71,13 @@ class LogicalPlanNode {
     return kind_;
   }
 
+  bool is(NodeKind kind) const {
+    return kind_ == kind;
+  }
+
   template <typename T>
   const T* asUnchecked() const {
+    static_assert(std::is_base_of_v<LogicalPlanNode, T>);
     return dynamic_cast<const T*>(this);
   }
 
@@ -83,14 +92,14 @@ class LogicalPlanNode {
   /// Returns the only input. Throws if there are zero or more than one inputs.
   const LogicalPlanNodePtr& onlyInput() const {
     VELOX_USER_CHECK_EQ(1, inputs_.size());
-    return inputs_.at(0);
+    return inputs_[0];
   }
 
-  /// Convenience getter for the input at the specified index. A shortcut for
-  /// inputs().at(index).
+  /// Convenience getter for the input at the specified index.
+  /// A shortcut for inputs().at(index).
   const LogicalPlanNodePtr& inputAt(size_t index) const {
     VELOX_USER_CHECK_LT(index, inputs_.size());
-    return inputs_.at(index);
+    return inputs_[index];
   }
 
   const RowTypePtr& outputType() const {
@@ -101,7 +110,7 @@ class LogicalPlanNode {
       const PlanNodeVisitor& visitor,
       PlanNodeVisitorContext& context) const = 0;
 
- private:
+ protected:
   const NodeKind kind_;
   const std::string id_;
   const std::vector<LogicalPlanNodePtr> inputs_;
@@ -111,24 +120,34 @@ class LogicalPlanNode {
 /// A table whose content is embedded in the plan.
 class ValuesNode : public LogicalPlanNode {
  public:
+  using Rows = std::vector<Variant>;
+  using Values = std::vector<RowVectorPtr>;
+  using Data = std::variant<Rows, Values>;
+
   /// @param rowType Output schema. A list of column names and types. All names
   /// must be non-empty and unique.
   /// @param rows A list of rows. Each row is a list of values, one per column.
   /// The number, order and types of columns must match 'rowType'.
-  ValuesNode(
-      const std::string& id,
-      const RowTypePtr& rowType,
-      std::vector<Variant> rows);
+  ValuesNode(std::string id, RowTypePtr rowType, std::vector<Variant> rows);
 
-  const std::vector<Variant>& rows() const {
-    return rows_;
+  /// Memory pools used for RowVector's allocation should outlive the execution
+  /// of the plan.
+  ValuesNode(std::string id, std::vector<RowVectorPtr> values);
+
+  uint64_t cardinality() const {
+    return cardinality_;
+  }
+
+  const Data& data() const {
+    return data_;
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
  private:
-  const std::vector<Variant> rows_;
+  const uint64_t cardinality_ = 0;
+  const Data data_;
 };
 
 using ValuesNodePtr = std::shared_ptr<const ValuesNode>;
@@ -143,21 +162,21 @@ class TableScanNode : public LogicalPlanNode {
   /// @param columnNames A list of column names. Must align with 'outputType',
   /// which may expose columns under different names.
   TableScanNode(
-      const std::string& id,
-      const RowTypePtr& outputType,
-      const std::string& connectorId,
-      const std::string& tableName,
-      const std::vector<std::string>& columnNames)
-      : LogicalPlanNode(NodeKind::kTableScan, id, {}, outputType),
-        connectorId_{connectorId},
-        tableName_(tableName),
-        columnNames_(columnNames) {
-    VELOX_USER_CHECK_EQ(outputType->size(), columnNames.size());
+      std::string id,
+      RowTypePtr outputType,
+      std::string connectorId,
+      std::string tableName,
+      std::vector<std::string> columnNames)
+      : LogicalPlanNode{NodeKind::kTableScan, std::move(id), {}, std::move(outputType)},
+        connectorId_{std::move(connectorId)},
+        tableName_{std::move(tableName)},
+        columnNames_{std::move(columnNames)} {
+    VELOX_USER_CHECK_EQ(outputType_->size(), columnNames_.size());
 
-    const auto numColumns = outputType->size();
-    for (auto i = 0; i < numColumns; ++i) {
-      VELOX_USER_CHECK(!outputType->nameOf(i).empty());
-      VELOX_USER_CHECK(!columnNames.at(i).empty());
+    const auto numColumns = outputType_->size();
+    for (size_t i = 0; i < numColumns; ++i) {
+      VELOX_USER_CHECK(!outputType_->nameOf(i).empty());
+      VELOX_USER_CHECK(!columnNames_[i].empty());
     }
   }
 
@@ -189,14 +208,11 @@ using TableScanNodePtr = std::shared_ptr<const TableScanNode>;
 /// cardinality of the dataset, but it cannot increase it.
 class FilterNode : public LogicalPlanNode {
  public:
-  FilterNode(
-      const std::string& id,
-      const LogicalPlanNodePtr& input,
-      const ExprPtr& predicate)
-      : LogicalPlanNode(NodeKind::kFilter, id, {input}, input->outputType()),
-        predicate_{predicate} {
-    VELOX_USER_CHECK_NOT_NULL(predicate);
-    VELOX_USER_CHECK_EQ(predicate->type()->kind(), TypeKind::BOOLEAN);
+  FilterNode(std::string id, const LogicalPlanNodePtr& input, ExprPtr predicate)
+      : LogicalPlanNode{NodeKind::kFilter, std::move(id), {input}, input->outputType()},
+        predicate_{std::move(predicate)} {
+    VELOX_USER_CHECK_NOT_NULL(predicate_);
+    VELOX_USER_CHECK_EQ(predicate_->type()->kind(), TypeKind::BOOLEAN);
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
@@ -224,17 +240,13 @@ class ProjectNode : public LogicalPlanNode {
   /// the root expression can be a window function call. Scalar expressions
   /// over window function calls are not supported.
   ProjectNode(
-      const std::string& id,
-      const LogicalPlanNodePtr& input,
-      const std::vector<std::string>& names,
-      const std::vector<ExprPtr>& expressions)
-      : LogicalPlanNode(
-            NodeKind::kProject,
-            id,
-            {input},
-            makeOutputType(names, expressions)),
-        names_{names},
-        expressions_{expressions} {}
+      std::string id,
+      LogicalPlanNodePtr input,
+      std::vector<std::string> names,
+      std::vector<ExprPtr> expressions)
+      : LogicalPlanNode{NodeKind::kProject, std::move(id), {std::move(input)}, makeOutputType(names, expressions)},
+        names_{std::move(names)},
+        expressions_{std::move(expressions)} {}
 
   const std::vector<std::string>& names() const {
     return names_;
@@ -246,7 +258,7 @@ class ProjectNode : public LogicalPlanNode {
 
   const ExprPtr& expressionAt(size_t index) const {
     VELOX_USER_CHECK_LT(index, expressions_.size());
-    return expressions_.at(index);
+    return expressions_[index];
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
@@ -288,40 +300,24 @@ class AggregateNode : public LogicalPlanNode {
   /// by the name of a column that contains grouping set index if 'groupingSets'
   /// is not empty. Names must be unique.
   AggregateNode(
-      const std::string& id,
-      const LogicalPlanNodePtr& input,
-      const std::vector<ExprPtr>& groupingKeys,
-      const std::vector<GroupingSet>& groupingSets,
-      const std::vector<AggregateExprPtr>& aggregates,
-      const std::vector<std::string>& outputNames)
-      : LogicalPlanNode(
-            NodeKind::kAggregate,
-            id,
-            {input},
-            makeOutputType(
-                groupingKeys,
-                groupingSets,
-                aggregates,
-                outputNames)),
-        groupingKeys_{groupingKeys},
-        groupingSets_{groupingSets},
-        aggregates_{aggregates},
-        outputNames_{outputNames} {
-    if (groupingKeys.empty()) {
-      VELOX_USER_CHECK(
-          !aggregates.empty(),
-          "Aggregation node must specify at least one aggregate or grouping key");
-    }
+      std::string id,
+      LogicalPlanNodePtr input,
+      std::vector<ExprPtr> groupingKeys,
+      std::vector<GroupingSet> groupingSets,
+      std::vector<AggregateExprPtr> aggregates,
+      std::vector<std::string> outputNames)
+      : LogicalPlanNode{NodeKind::kAggregate, std::move(id), {std::move(input)}, makeOutputType(groupingKeys, groupingSets, aggregates, outputNames)},
+        groupingKeys_{std::move(groupingKeys)},
+        groupingSets_{std::move(groupingSets)},
+        aggregates_{std::move(aggregates)},
+        outputNames_{std::move(outputNames)} {
+    VELOX_USER_CHECK(
+        !groupingKeys_.empty() || !aggregates_.empty(),
+        "Aggregation node must specify at least one aggregate or grouping key");
 
-    if (aggregates.empty()) {
-      VELOX_USER_CHECK(
-          !groupingKeys.empty(),
-          "Aggregation node must specify at least one aggregate or grouping key");
-    }
-
-    for (const auto& groupingSet : groupingSets) {
+    for (const auto& groupingSet : groupingSets_) {
       for (const auto& key : groupingSet) {
-        VELOX_USER_CHECK_LT(key, groupingKeys.size());
+        VELOX_USER_CHECK_LT(key, groupingKeys_.size());
       }
     }
   }
@@ -336,11 +332,15 @@ class AggregateNode : public LogicalPlanNode {
 
   const std::vector<std::string>& outputNames() const {
     return outputNames_;
-    ;
   }
 
   const std::vector<AggregateExprPtr>& aggregates() const {
     return aggregates_;
+  }
+
+  const AggregateExprPtr& aggregateAt(size_t index) const {
+    VELOX_USER_CHECK_LT(index, aggregates_.size());
+    return aggregates_[index];
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
@@ -394,23 +394,19 @@ VELOX_DECLARE_ENUM_NAME(JoinType)
 /// followed by all columns from the right input.
 class JoinNode : public LogicalPlanNode {
  public:
-  /// @param condition Optional join condition. If nullptr, the output is a
-  /// cross product of the inputs.
+  /// @param condition Optional join condition.
+  /// If nullptr, the output is a cross product of the inputs.
   JoinNode(
-      const std::string& id,
+      std::string id,
       const LogicalPlanNodePtr& left,
       const LogicalPlanNodePtr& right,
       JoinType joinType,
-      const ExprPtr& condition)
-      : LogicalPlanNode(
-            NodeKind::kJoin,
-            id,
-            {left, right},
-            makeOutputType(left, right)),
+      ExprPtr condition)
+      : LogicalPlanNode{NodeKind::kJoin, std::move(id), {left, right}, makeOutputType(left, right)},
         joinType_{joinType},
-        condition_{condition} {
-    if (condition != nullptr) {
-      VELOX_USER_CHECK_EQ(condition->typeKind(), TypeKind::BOOLEAN);
+        condition_{std::move(condition)} {
+    if (condition_ != nullptr) {
+      VELOX_USER_CHECK_EQ(condition_->typeKind(), TypeKind::BOOLEAN);
     }
   }
 
@@ -449,15 +445,15 @@ using JoinNodePtr = std::shared_ptr<const JoinNode>;
 class SortNode : public LogicalPlanNode {
  public:
   SortNode(
-      const std::string& id,
+      std::string id,
       const LogicalPlanNodePtr& input,
-      const std::vector<SortingField>& ordering)
-      : LogicalPlanNode(NodeKind::kSort, id, {input}, input->outputType()),
-        ordering_{ordering} {
-    VELOX_USER_CHECK(!ordering.empty());
+      std::vector<SortingField> ordering)
+      : LogicalPlanNode{NodeKind::kSort, std::move(id), {input}, input->outputType()},
+        ordering_{std::move(ordering)} {
+    VELOX_USER_CHECK(!ordering_.empty());
   }
 
-  const std::vector<SortingField> ordering() const {
+  const std::vector<SortingField>& ordering() const {
     return ordering_;
   }
 
@@ -476,17 +472,23 @@ class LimitNode : public LogicalPlanNode {
  public:
   /// @param offset Zero-based index of the first row to return. Must be >= 0.
   /// @param count Maximum number of rows to return. Must be >= 0. If zero, the
-  /// node produces empty dataset.
+  /// node produces empty dataset. Use std::numeric_limits<int64_t>::max() to
+  /// indicate no limit, in which case offset must be > 0.
   LimitNode(
-      const std::string& id,
+      std::string id,
       const LogicalPlanNodePtr& input,
       int64_t offset,
       int64_t count)
-      : LogicalPlanNode(NodeKind::kLimit, id, {input}, input->outputType()),
+      : LogicalPlanNode{NodeKind::kLimit, std::move(id), {input}, input->outputType()},
         offset_{offset},
         count_{count} {
-    VELOX_USER_CHECK_GE(offset, 0);
-    VELOX_USER_CHECK_GE(count, 0);
+    VELOX_USER_CHECK_GE(offset_, 0);
+    VELOX_USER_CHECK_GE(count_, 0);
+
+    if (noLimit()) {
+      VELOX_USER_CHECK_NE(
+          offset_, 0, "Offset must be > zero if there is no limit");
+    }
   }
 
   int64_t offset() const {
@@ -495,6 +497,10 @@ class LimitNode : public LogicalPlanNode {
 
   int64_t count() const {
     return count_;
+  }
+
+  bool noLimit() const {
+    return count_ == std::numeric_limits<int64_t>::max();
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
@@ -536,9 +542,11 @@ VELOX_DECLARE_ENUM_NAME(SetOperation)
 class SetNode : public LogicalPlanNode {
  public:
   SetNode(
-      const std::string& id,
+      std::string id,
       const std::vector<LogicalPlanNodePtr>& inputs,
-      SetOperation operation);
+      SetOperation operation)
+      : LogicalPlanNode{NodeKind::kSet, std::move(id), inputs, makeOutputType(inputs)},
+        operation_{operation} {}
 
   SetOperation operation() const {
     return operation_;
@@ -548,6 +556,9 @@ class SetNode : public LogicalPlanNode {
       const override;
 
  private:
+  static RowTypePtr makeOutputType(
+      const std::vector<LogicalPlanNodePtr>& inputs);
+
   const SetOperation operation_;
 };
 
@@ -577,39 +588,33 @@ using SetNodePtr = std::shared_ptr<const SetNode>;
 /// optional ordinality column of type BIGINT.
 class UnnestNode : public LogicalPlanNode {
  public:
+  /// @param input Optional input node. If not specified, 'unnestExpressions'
+  /// must be constant expressions.
+  /// @param unnestExpressions One or more expressions that produce ARRAYs
+  /// or MAPs.
+  /// @param unnestedNames Names to use for expanded relations. Must align
+  /// with 'unnestExpressions'. Each ARRAY requires one name. Each MAP
+  /// requires two maps. If 'flattenArrayOfRows' is true, each ARRAY(ROW)
+  /// requires as many names as there are fields in the ROW.
+  /// @param ordinalityName Optional name for the ordinality output column.
+  /// If not specified, ordinality column is not added. Ordinality is
+  /// 1-based.
   UnnestNode(
-      /// @param unnestExpressions One or more expressions that produce ARRAYs
-      /// or MAPs.
-      /// @param unnestedNames Names to use for expanded relations. Must align
-      /// with 'unnestExpressions'. Each ARRAY requires one name. Each MAP
-      /// requires two maps. If 'flattenArrayOfRows' is true, each ARRAY(ROW)
-      /// requires as many names as there are fields in the ROW.
-      /// @param ordinalityName Optional name for the ordinality output column.
-      /// If not specified, ordinality column is not added. Ordinality is
-      /// 1-based.
-      const std::string& id,
+      std::string id,
       const LogicalPlanNodePtr& input,
-      const std::vector<ExprPtr>& unnestExpressions,
-      const std::vector<std::vector<std::string>>& unnestedNames,
-      const std::optional<std::string>& ordinalityName,
+      std::vector<ExprPtr> unnestExpressions,
+      std::vector<std::vector<std::string>> unnestedNames,
+      std::optional<std::string> ordinalityName,
       bool flattenArrayOfRows = false)
-      : LogicalPlanNode(
-            NodeKind::kUnnest,
-            id,
-            {input},
-            makeOutputType(
-                input,
-                unnestExpressions,
-                unnestedNames,
-                ordinalityName,
-                flattenArrayOfRows)),
-        unnestExpressions_(unnestExpressions),
-        unnestedNames_(unnestedNames),
-        ordinalityName_{ordinalityName},
+      : LogicalPlanNode{NodeKind::kUnnest, std::move(id), input == nullptr ? std::vector<LogicalPlanNodePtr>{} : std::vector<LogicalPlanNodePtr>{input}, makeOutputType(input, unnestExpressions, unnestedNames, ordinalityName, flattenArrayOfRows)},
+        unnestExpressions_{std::move(unnestExpressions)},
+        unnestedNames_{std::move(unnestedNames)},
+        ordinalityName_{std::move(ordinalityName)},
         flattenArrayOfRows_{flattenArrayOfRows} {
-    if (ordinalityName.has_value()) {
+    if (ordinalityName_.has_value()) {
       VELOX_USER_CHECK(
-          !ordinalityName->empty(), "Ordinality column name must be not empty");
+          !ordinalityName_->empty(),
+          "Ordinality column name must be not empty");
     }
   }
 

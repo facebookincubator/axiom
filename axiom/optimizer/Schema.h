@@ -37,8 +37,8 @@ using NameMap = std::unordered_map<
 
 /// Represents constraints on a column value or intermediate result.
 struct Value {
-  Value(const velox::Type* _type, float _cardinality)
-      : type(_type), cardinality(_cardinality) {}
+  Value(const velox::Type* type, float cardinality)
+      : type{type}, cardinality{cardinality} {}
 
   /// Returns the average byte size of a value when it occurs as an intermediate
   /// result without dictionary or other encoding.
@@ -75,17 +75,15 @@ enum class OrderType {
 
 using OrderTypeVector = std::vector<OrderType, QGAllocator<OrderType>>;
 
-class RelationOp;
-
-/// Represents a system that contains or produces data.For cases of federation
+/// Represents a system that contains or produces data. For cases of federation
 /// where data is only accessible via a specific instance of a specific type of
 /// system, the locus represents the instance and the subclass of Locus
-/// represents the type of system for a schema object. For a
-/// RelationOp, the  locus of its distribution means that the op is performed by
-/// the corresponding system. Distributions can be copartitioned only
-/// if their locus is equal (==) to the other locus. A Locus is referenced by
-/// raw pointer and may be allocated from outside the optimization arena. It is
-/// immutable and lives past the optimizer arena.
+/// represents the type of system for a schema object. For a RelationOp, the
+/// locus of its distribution means that the op is performed by the
+/// corresponding system. Distributions can be copartitioned only if their locus
+/// is equal (==) to the other locus. A Locus is referenced by raw pointer and
+/// may be allocated from outside the optimization arena. It is immutable and
+/// lives past the optimizer arena.
 class Locus {
  public:
   explicit Locus(Name name, connector::Connector* connector)
@@ -105,18 +103,6 @@ class Locus {
     return connector_;
   }
 
-  /// Sets the cardinality in op. Returns true if set. If false, default
-  /// cardinality determination.
-  virtual bool setCardinality(RelationOp& /*op*/) const {
-    return false;
-  }
-
-  /// Sets the cost. Returns true if set. If false, the default cost is set with
-  /// RelationOp::setCost.
-  virtual bool setCost(RelationOp& /*op*/) const {
-    return false;
-  }
-
   std::string toString() const {
     return name_;
   }
@@ -131,71 +117,69 @@ using LocusCP = const Locus*;
 /// Method for determining a partition given an ordered list of partitioning
 /// keys. Hive hash is an example, range partitioning is another. Add values
 /// here for more types.
-enum class ShuffleMode { kNone, kHive };
+enum class ShuffleMode : uint8_t {
+  kNone,
+  kHive,
+};
 
 /// Distribution of data. 'numPartitions' is 1 if the data is not partitioned.
 /// There is copartitioning if the DistributionType is the same on both sides
 /// and both sides have an equal number of 1:1 type matched partitioning keys.
 struct DistributionType {
-  bool operator==(const DistributionType& other) const {
-    return mode == other.mode && numPartitions == other.numPartitions &&
-        locus == other.locus && isGather == other.isGather;
-  }
+  bool operator==(const DistributionType& other) const = default;
 
-  ShuffleMode mode{ShuffleMode::kNone};
-  int32_t numPartitions{1};
   LocusCP locus{nullptr};
+  int32_t numPartitions{1};
   bool isGather{false};
+  ShuffleMode mode{ShuffleMode::kNone};
+
+  static DistributionType gather() {
+    static constexpr DistributionType kGather = {
+        .isGather = true,
+    };
+    return kGather;
+  }
 };
 
 // Describes output of relational operator. If base table, cardinality is
 // after filtering.
 struct Distribution {
-  Distribution() = default;
+  explicit Distribution() = default;
   Distribution(
-      DistributionType type,
-      float cardinality,
-      ExprVector _partition,
-      ExprVector _order = {},
-      OrderTypeVector _orderType = {},
-      int32_t uniquePrefix = 0,
-      float _spacing = 0)
-      : distributionType(std::move(type)),
-        cardinality(cardinality),
-        partition(std::move(_partition)),
-        order(std::move(_order)),
-        orderType(std::move(_orderType)),
-        numKeysUnique(uniquePrefix),
-        spacing(_spacing) {}
+      DistributionType distributionType,
+      ExprVector partition,
+      ExprVector orderKeys = {},
+      OrderTypeVector orderTypes = {},
+      int32_t numKeysUnique = 0,
+      float spacing = 0)
+      : distributionType{distributionType},
+        partition{std::move(partition)},
+        orderKeys{std::move(orderKeys)},
+        orderTypes{std::move(orderTypes)},
+        numKeysUnique{numKeysUnique},
+        spacing{spacing} {
+    VELOX_CHECK_EQ(this->orderKeys.size(), this->orderTypes.size());
+  }
 
   /// Returns a Distribution for use in a broadcast shuffle.
-  static Distribution broadcast(DistributionType type, float cardinality) {
-    Distribution result(type, cardinality, {});
-    result.isBroadcast = true;
-    return result;
+  static Distribution broadcast(DistributionType distributionType) {
+    Distribution distribution{distributionType, {}};
+    distribution.isBroadcast = true;
+    return distribution;
   }
 
   /// Returns a distribution for an end of query gather from last stage
   /// fragments. Specifying order will create a merging exchange when the
   /// Distribution occurs in a Repartition.
   static Distribution gather(
-      DistributionType type,
-      const ExprVector& order = {},
-      const OrderTypeVector& orderType = {}) {
-    auto singleType = type;
-    singleType.numPartitions = 1;
-    singleType.isGather = true;
-    return Distribution(singleType, 1, {}, order, orderType);
-  }
-
-  /// Returns a copy of 'this' with 'order' and 'orderType' set from
-  /// arguments.
-  Distribution copyWithOrder(ExprVector order, OrderTypeVector orderType)
-      const {
-    Distribution copy = *this;
-    copy.order = std::move(order);
-    copy.orderType = std::move(orderType);
-    return copy;
+      ExprVector orderKeys = {},
+      OrderTypeVector orderTypes = {}) {
+    return {
+        DistributionType::gather(),
+        {},
+        std::move(orderKeys),
+        std::move(orderTypes),
+    };
   }
 
   /// True if 'this' and 'other' have the same number/type of keys and same
@@ -212,10 +196,6 @@ struct Distribution {
 
   DistributionType distributionType;
 
-  // Number of rows 'this' applies to. This is the size in rows if 'this'
-  // occurs in a table or index.
-  float cardinality;
-
   // Partitioning columns. The values of these columns determine which of
   // 'numPartitions' contains any given row. This does not specify the
   // partition function (e.g. Hive bucket or range partition).
@@ -223,11 +203,11 @@ struct Distribution {
 
   // Ordering columns. Each partition is ordered by these. Specifies that
   // streaming group by or merge join are possible.
-  ExprVector order;
+  ExprVector orderKeys;
 
   // Corresponds 1:1 to 'order'. The size of this gives the number of leading
   // columns of 'order' on which the data is sorted.
-  OrderTypeVector orderType;
+  OrderTypeVector orderTypes;
 
   // Number of leading elements of 'order' such that these uniquely
   // identify a row. 0 if there is no uniqueness. This can be non-0 also if
@@ -247,66 +227,6 @@ struct Distribution {
   bool isBroadcast{false};
 };
 
-/// Identifies a base table or the operator type producing the relation. Base
-/// data as in Index has type kBase. The result of a table scan is kTableScan.
-enum class RelType {
-  kBase,
-  kTableScan,
-  kRepartition,
-  kFilter,
-  kProject,
-  kJoin,
-  kHashBuild,
-  kAggregation,
-  kOrderBy,
-  kUnionAll
-};
-
-/// Represents a relation (table) that is either physically stored or is the
-/// streaming output of a query operator. This has a distribution describing
-/// partitioning and data order and a set of columns describing the payload.
-class Relation {
- public:
-  Relation(
-      RelType relType,
-      Distribution distribution,
-      const ColumnVector& columns)
-      : relType_(relType),
-        distribution_(std::move(distribution)),
-        columns_(columns) {}
-
-  RelType relType() const {
-    return relType_;
-  }
-
-  const Distribution& distribution() const {
-    return distribution_;
-  }
-
-  const ColumnVector& columns() const {
-    return columns_;
-  }
-
-  ColumnVector& mutableColumns() {
-    return columns_;
-  }
-
-  template <typename T>
-  const T* as() const {
-    return static_cast<const T*>(this);
-  }
-
-  template <typename T>
-  T* as() {
-    return static_cast<T*>(this);
-  }
-
- protected:
-  const RelType relType_;
-  const Distribution distribution_;
-  ColumnVector columns_;
-};
-
 struct SchemaTable;
 using SchemaTableCP = const SchemaTable*;
 
@@ -316,21 +236,24 @@ using SchemaTableCP = const SchemaTable*;
 /// payload columns. An index is a ColumnGroup that may not have all
 /// columns but is organized to facilitate retrievel. We use the name
 /// index for ColumnGroup when using it for lookup.
-struct ColumnGroup : public Relation {
+struct ColumnGroup {
   ColumnGroup(
-      Name _name,
-      SchemaTableCP _table,
+      Name name,
+      SchemaTableCP table,
       Distribution distribution,
-      const ColumnVector& _columns,
+      ColumnVector columns,
       const connector::TableLayout* layout = nullptr)
-      : Relation(RelType::kBase, std::move(distribution), _columns),
-        name(_name),
-        table(_table),
-        layout(layout) {}
+      : name{name},
+        table{table},
+        layout{layout},
+        distribution{std::move(distribution)},
+        columns{std::move(columns)} {}
 
   Name name;
   SchemaTableCP table;
   const connector::TableLayout* layout;
+  const Distribution distribution;
+  const ColumnVector columns;
 
   /// Returns cost of next lookup when the hit is within 'range' rows
   /// of the previous hit. If lookups are not batched or not ordered,
@@ -338,14 +261,14 @@ struct ColumnGroup : public Relation {
   float lookupCost(float range) const;
 };
 
-using ColumnGroupP = ColumnGroup*;
+using ColumnGroupCP = const ColumnGroup*;
 
 // Describes the number of rows to look at and the number of expected matches
 // given equality constraints for a set of columns. See
 // SchemaTable::indexInfo().
 struct IndexInfo {
   // Index chosen based on columns.
-  ColumnGroupP index;
+  ColumnGroupCP index;
 
   // True if the column combination is unique. This can be true even if there
   // is no key order in 'index'.
@@ -377,26 +300,28 @@ struct IndexInfo {
 
 IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys);
 
+float tableCardinality(PlanObjectCP table);
+
 float baseSelectivity(PlanObjectCP object);
 
 /// A table in a schema. The table may have multiple differently ordered and
 /// partitioned physical representations (ColumnGroups). Not all ColumnGroups
 /// (aka indices) need to contain all columns.
 struct SchemaTable {
-  SchemaTable(Name _name, const velox::RowTypePtr& _type)
-      : name(_name), type(reinterpret_cast<const RowType*>(toType(_type))) {}
+  SchemaTable(Name name, const velox::RowTypePtr& type, float cardinality)
+      : name{name}, type{&toType(type)->asRow()}, cardinality{cardinality} {}
 
   /// Adds an index. The arguments set the corresponding members of a
   /// Distribution.
-  ColumnGroupP addIndex(
+  ColumnGroupCP addIndex(
       Name name,
-      float cardinality,
       int32_t numKeysUnique,
       int32_t numOrdering,
       const ColumnVector& keys,
-      DistributionType distType,
+      DistributionType distributionType,
       const ColumnVector& partition,
-      const ColumnVector& columns);
+      ColumnVector columns,
+      const connector::TableLayout* layout);
 
   /// Finds or adds a column with 'name' and 'value'.
   ColumnCP column(const std::string& name, const Value& value);
@@ -404,7 +329,7 @@ struct SchemaTable {
   ColumnCP findColumn(const std::string& name) const;
 
   int64_t numRows() const {
-    return columnGroups[0]->layout->table()->numRows();
+    return static_cast<int64_t>(columnGroups[0]->layout->table().numRows());
   }
 
   /// True if 'columns' match no more than one row.
@@ -412,21 +337,23 @@ struct SchemaTable {
 
   /// Returns   uniqueness and cardinality information for a lookup on 'index'
   /// where 'columns' have an equality constraint.
-  IndexInfo indexInfo(ColumnGroupP index, CPSpan<Column> columns) const;
+  IndexInfo indexInfo(ColumnGroupCP index, CPSpan<Column> columns) const;
 
   /// Returns the best index to use for lookup where 'columns' have an
   /// equality constraint.
   IndexInfo indexByColumns(CPSpan<Column> columns) const;
 
-  std::vector<ColumnCP> toColumns(const std::vector<std::string>& names);
-  Name name;
+  std::vector<ColumnCP> toColumns(const std::vector<std::string>& names) const;
+
+  const Name name;
   const RowType* type;
+  const float cardinality;
 
   // Lookup from name to column.
   NameMap<ColumnCP> columns;
 
   // All indices. Must contain at least one.
-  std::vector<ColumnGroupP, QGAllocator<ColumnGroupP>> columnGroups;
+  std::vector<ColumnGroupCP, QGAllocator<ColumnGroupCP>> columnGroups;
 
   // Table description from external schema. This is the
   // source-dependent representation from which 'this' was created.
@@ -444,13 +371,16 @@ struct SchemaTable {
 class Schema {
  public:
   /// Constructs a testing schema without SchemaResolver.
-  Schema(Name _name, const std::vector<SchemaTableCP>& tables, LocusCP locus);
+  Schema(Name name, const std::vector<SchemaTableCP>& tables, LocusCP locus);
 
   /// Constructs a Schema for producing executable plans, backed by 'source'.
-  Schema(Name _name, SchemaResolver* source, LocusCP locus);
+  Schema(Name name, SchemaResolver* source, LocusCP locus);
 
-  /// Returns the table with 'name' or nullptr if not found.
-  SchemaTableCP findTable(std::string_view name) const;
+  /// Returns the table with 'name' or nullptr if not found, using
+  /// the connector specified by connectorId to perform table lookups.
+  /// An error is thrown if no connector with the specified ID exists.
+  SchemaTableCP findTable(std::string_view connectorId, std::string_view name)
+      const;
 
   Name name() const {
     return name_;

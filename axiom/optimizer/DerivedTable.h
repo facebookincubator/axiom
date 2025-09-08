@@ -21,16 +21,17 @@
 namespace facebook::velox::optimizer {
 
 struct Distribution;
+using DistributionP = Distribution*;
 
 class JoinEdge;
 using JoinEdgeP = JoinEdge*;
-using JoinEdgeVector = std::vector<JoinEdge*, QGAllocator<JoinEdge*>>;
+using JoinEdgeVector = std::vector<JoinEdgeP, QGAllocator<JoinEdgeP>>;
 
-struct AggregationPlan;
+class AggregationPlan;
 using AggregationPlanCP = const AggregationPlan*;
 
-struct OrderBy;
-using OrderByP = OrderBy*;
+enum class OrderType;
+using OrderTypeVector = std::vector<OrderType, QGAllocator<OrderType>>;
 
 /// Represents a derived table, i.e. a SELECT in a FROM clause. This is the
 /// basic unit of planning. Derived tables can be merged and split apart from
@@ -38,98 +39,112 @@ using OrderByP = OrderBy*;
 /// derived table is likewise a reorderable unit inside its parent derived
 /// table. Joins can move between derived tables within limits, considering the
 /// semantics of e.g. group by.
+///
+/// A derived table represets an ordered list of operations that matches SQL
+/// semantics. Some operations might be missing. The logical order of operations
+/// is:
+///
+///   1. FROM (scans, joins)
+///   2. WHERE (filters)
+///   3. GROUP BY (aggregation)
+///   4. HAVING (more filters)
+///   5. SELECT (projections)
+///   6. ORDER BY (sort)
+///   7. OFFSET and LIMIT (limit)
+///
 struct DerivedTable : public PlanObject {
-  DerivedTable() : PlanObject(PlanType::kDerivedTable) {}
+  DerivedTable() : PlanObject(PlanType::kDerivedTableNode) {}
 
-  // Distribution that gives partition, cardinality and
-  // order/uniqueness for the dt alone. This is expressed in terms of
-  // outside visible 'columns'. Actual uses of the dt in candidate
-  // plans may be modified from this by e.g. importing restrictions
-  // from enclosing query. Set for a non-top level dt.
-  Distribution* distribution{nullptr};
+  /// Distribution that gives partition, cardinality and
+  /// order/uniqueness for the dt alone. This is expressed in terms of
+  /// outside visible 'columns'. Actual uses of the dt in candidate
+  /// plans may be modified from this by e.g. importing restrictions
+  /// from enclosing query. Set for a non-top level dt.
+  DistributionP distribution{nullptr};
 
-  // Correlation name.
+  float cardinality{};
+
+  /// Correlation name.
   Name cname{nullptr};
 
-  // Columns projected out. Visible in the enclosing query.
+  /// Columns projected out. Visible in the enclosing query.
   ColumnVector columns;
 
-  // Exprs projected out. 1:1 to 'columns'.
+  /// Exprs projected out. 1:1 to 'columns'.
   ExprVector exprs;
 
-  // References all joins where 'this' is an end point.
+  /// References all joins where 'this' is an end point.
   JoinEdgeVector joinedBy;
 
-  // All tables in FROM, either Table or DerivedTable. If Table, all
-  // filters resolvable with the table alone are in single column filters or
-  // 'filter' of BaseTable.
+  /// All tables in FROM, either Table or DerivedTable. If Table, all
+  /// filters resolvable with the table alone are in single column filters or
+  /// 'filter' of BaseTable.
   std::vector<PlanObjectCP, QGAllocator<PlanObjectCP>> tables;
 
-  // Repeats the contents of 'tables'. Used for membership check. A DerivedTable
-  // can be a subset of another, for example when planning a join for a build
-  // side. In this case joins that refer to tables not in 'tableSet' are not
-  // considered.
+  /// Repeats the contents of 'tables'. Used for membership check. A
+  /// DerivedTable can be a subset of another, for example when planning a join
+  /// for a build side. In this case joins that refer to tables not in
+  /// 'tableSet' are not considered.
   PlanObjectSet tableSet;
 
-  // Set if this is a set operation. If set, 'children' has the operands.
+  /// Set if this is a set operation. If set, 'children' has the operands.
   std::optional<logical_plan::SetOperation> setOp;
 
   /// Operands if 'this' is a set operation, e.g. union.
   std::vector<DerivedTable*, QGAllocator<DerivedTable*>> children;
 
-  // Single row tables from non-correlated scalar subqueries.
+  /// Single row tables from non-correlated scalar subqueries.
   PlanObjectSet singleRowDts;
 
-  // Tables that are not to the right sides of non-commutative joins.
+  /// Tables that are not to the right sides of non-commutative joins.
   PlanObjectSet startTables;
 
-  // Joins between 'tables'.
+  /// Joins between 'tables'.
   JoinEdgeVector joins;
 
-  // Filters in WHERE that are not single table expressions and not join
-  // conditions of explicit joins and not equalities between columns of joined
-  // tables.
+  /// Filters in WHERE that are not single table expressions and not join
+  /// conditions of explicit joins and not equalities between columns of joined
+  /// tables.
   ExprVector conjuncts;
 
-  // Number of fully processed leading elements of 'conjuncts'.
+  /// Number of fully processed leading elements of 'conjuncts'.
   int32_t numCanonicalConjuncts{0};
 
-  // Set of reducing joined tables imported to reduce build size. Set if 'this'
-  // represents a build side join.
+  /// Set of reducing joined tables imported to reduce build size. Set if 'this'
+  /// represents a build side join.
   PlanObjectSet importedExistences;
 
-  // The set of tables in import() '_tables' that are fully covered by this dt
-  // and need not be considered outside of it. If 'firstTable' in import is a
-  // group by dt, for example, some joins may be imported as reducing existences
-  // but will still have to be considered by the enclosing query. Such tables
-  // are not included in 'fullyImported' If 'firstTable' in import is a base
-  // table, then 'fullyImported' is '_tables'.
+  /// The set of tables in import() '_tables' that are fully covered by this dt
+  /// and need not be considered outside of it. If 'firstTable' in import is a
+  /// group by dt, for example, some joins may be imported as reducing
+  /// existences but will still have to be considered by the enclosing query.
+  /// Such tables are not included in 'fullyImported' If 'firstTable' in import
+  /// is a base table, then 'fullyImported' is '_tables'.
   PlanObjectSet fullyImported;
 
-  // True if this dt is already a reducing join imported to a build side. Do not
-  // try to further restrict this with probe side.
+  /// True if this dt is already a reducing join imported to a build side. Do
+  /// not try to further restrict this with probe side.
   bool noImportOfExists{false};
 
-  // Postprocessing clauses, group by, having, order by, limit, offset.
+  /// Postprocessing clauses: group by, having, order by, limit, offset.
+
   AggregationPlanCP aggregation{nullptr};
+
   ExprVector having;
-  OrderByP orderBy{nullptr};
-  int32_t limit{-1};
-  int32_t offset{0};
 
-  /// Adds an equijoin edge between 'left' and 'right'. The flags correspond to
-  /// the like-named members in Join.
-  void addJoinEquality(
-      ExprCP left,
-      ExprCP right,
-      const ExprVector& filter,
-      bool leftOptional,
-      bool rightOptional,
-      bool rightExists,
-      bool rightNotExists);
+  /// Order by.
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
 
-  // after 'joins' is filled in, links tables to their direct and
-  // equivalence-implied joins.
+  /// Limit and offset.
+  int64_t limit{-1};
+  int64_t offset{0};
+
+  /// Adds an equijoin edge between 'left' and 'right'.
+  void addJoinEquality(ExprCP left, ExprCP right);
+
+  /// After 'joins' is filled in, links tables to their direct and
+  /// equivalence-implied joins.
   void linkTablesToJoins();
 
   /// Completes 'joins' with edges implied by column equivalences.
@@ -151,7 +166,7 @@ struct DerivedTable : public PlanObject {
   void import(
       const DerivedTable& super,
       PlanObjectCP firstTable,
-      const PlanObjectSet& tables,
+      const PlanObjectSet& superTables,
       const std::vector<PlanObjectSet>& existences,
       float existsFanout = 1);
 
@@ -159,16 +174,28 @@ struct DerivedTable : public PlanObject {
     return true;
   }
 
-  //// True if 'table' is of 'this'.
+  /// True if 'table' is of 'this'.
   bool hasTable(PlanObjectCP table) const {
-    return std::find(tables.begin(), tables.end(), table) != tables.end();
+    return tableSet.contains(table);
   }
 
-  // True if 'join' exists in 'this'. Tables link to joins that may be
-  // in different speculative candidate dts. So only consider joins
-  // inside the current dt wen planning.
+  /// True if 'join' exists in 'this'. Tables link to joins that may be
+  /// in different speculative candidate dts. So only consider joins
+  /// inside the current dt when planning.
   bool hasJoin(JoinEdgeP join) const {
     return std::find(joins.begin(), joins.end(), join) != joins.end();
+  }
+
+  bool hasAggregation() const {
+    return aggregation != nullptr;
+  }
+
+  bool hasOrderBy() const {
+    return !orderKeys.empty();
+  }
+
+  bool hasLimit() const {
+    return limit >= 0;
   }
 
   /// Fills in 'startTables_' to 'tables_' that are not to the right of
@@ -182,10 +209,12 @@ struct DerivedTable : public PlanObject {
   /// more conjuncts. May call itself recursively on component dts.
   void distributeConjuncts();
 
-  /// memoizes plans for 'this' and fills in 'distribution_'. Needed
+  /// Memoizes plans for 'this' and fills in 'distribution_'. Needed
   /// before adding 'this' as a join side because join sides must have
   /// a cardinality guess.
   void makeInitialPlan();
+
+  PlanP bestInitialPlan() const;
 
   std::string toString() const override;
 

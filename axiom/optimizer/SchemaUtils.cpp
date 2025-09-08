@@ -20,31 +20,29 @@
 
 namespace facebook::velox::optimizer {
 
-TableNameParser::TableNameParser(const std::string& name) {
-  std::vector<std::string> parts;
+TableNameParser::TableNameParser(std::string_view name) {
+  std::vector<std::string_view> parts;
   folly::split('.', name, parts);
 
-  bool anyempty =
-      std::any_of(parts.begin(), parts.end(), [](const std::string& part) {
-        return part.empty();
-      });
-  if (anyempty) {
+  const bool anyEmpty = std::ranges::any_of(
+      parts, [](std::string_view part) { return part.empty(); });
+  if (anyEmpty) {
     return;
   }
 
   valid_ = true;
   switch (parts.size()) {
     case 1:
-      table_ = std::move(parts[0]);
+      table_ = parts[0];
       break;
     case 2:
-      schema_ = std::move(parts[0]);
-      table_ = std::move(parts[1]);
+      schema_ = parts[0];
+      table_ = parts[1];
       break;
     case 3:
-      catalog_ = std::move(parts[0]);
-      schema_ = std::move(parts[1]);
-      table_ = std::move(parts[2]);
+      catalog_ = parts[0];
+      schema_ = parts[1];
+      table_ = parts[2];
       break;
     default:
       valid_ = false;

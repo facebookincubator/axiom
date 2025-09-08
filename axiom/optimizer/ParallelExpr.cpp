@@ -14,20 +14,21 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/Plan.h"
+#include <ranges>
+
+#include "axiom/optimizer/ToVelox.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 
 namespace facebook::velox::optimizer {
 
 namespace {
+
 struct LevelData {
-  int32_t exprCount{0};
-  float levelCost{0};
   PlanObjectSet exprs;
 };
 
-int32_t definitionLevel(std::vector<LevelData>& levels, ExprCP expr) {
+size_t levelOf(std::vector<LevelData>& levels, ExprCP expr) {
   for (auto i = 0; i < levels.size(); ++i) {
     if (levels[i].exprs.contains(expr)) {
       return i;
@@ -36,44 +37,68 @@ int32_t definitionLevel(std::vector<LevelData>& levels, ExprCP expr) {
   VELOX_UNREACHABLE();
 }
 
+void pushdownExpr(
+    ExprCP expr,
+    int32_t level,
+    std::vector<LevelData>& levelData) {
+  const auto defined = levelOf(levelData, expr);
+  if (defined >= level) {
+    return;
+  }
+
+  if (level >= levelData.size()) {
+    levelData.resize(level + 1);
+  }
+  levelData[defined].exprs.erase(expr);
+  levelData[level].exprs.add(expr);
+
+  if (expr->is(PlanType::kCallExpr)) {
+    for (auto& input : expr->as<Call>()->args()) {
+      if (!input->is(PlanType::kLiteralExpr)) {
+        pushdownExpr(input, level + 1, levelData);
+      }
+    }
+  }
+}
+
+void makeLevelsInner(
+    ExprCP expr,
+    int32_t level,
+    std::vector<LevelData>& levelData,
+    std::unordered_map<ExprCP, int32_t>& refCount,
+    PlanObjectSet& counted) {
+  if (expr->is(PlanType::kLiteralExpr)) {
+    return;
+  }
+
+  if (counted.contains(expr)) {
+    ++refCount[expr];
+    pushdownExpr(expr, level, levelData);
+    return;
+  }
+
+  if (level >= levelData.size()) {
+    levelData.resize(level + 1);
+  }
+
+  counted.add(expr);
+  ++refCount[expr];
+  levelData[level].exprs.add(expr);
+  if (expr->is(PlanType::kCallExpr)) {
+    for (auto& input : expr->as<Call>()->args()) {
+      makeLevelsInner(input, level + 1, levelData, refCount, counted);
+    }
+  }
+}
+
 void makeExprLevels(
-    PlanObjectSet exprs,
+    const PlanObjectSet& exprs,
     std::vector<LevelData>& levelData,
     std::unordered_map<ExprCP, int32_t>& refCount) {
   PlanObjectSet counted;
-  for (;;) {
-    PlanObjectSet inputs;
-    levelData.emplace_back();
-    int32_t levelIdx = levelData.size() - 1;
-    exprs.forEach([&](PlanObjectCP o) {
-      auto* expr = o->as<Expr>();
-      if (expr->type() == PlanType::kLiteral) {
-        return;
-      }
-      float self = selfCost(expr);
-      if (counted.contains(expr)) {
-        auto i = definitionLevel(levelData, expr);
-        levelData[i].exprs.erase(expr);
-        levelData[i].levelCost -= self;
-      }
-      levelData[levelIdx].exprs.add(expr);
-      levelData[levelIdx].levelCost += self;
-      counted.add(expr);
-      if (expr->type() == PlanType::kCall) {
-        for (auto& input : expr->as<Call>()->args()) {
-          if (input->type() == PlanType::kLiteral) {
-            continue;
-          }
-          ++refCount[input];
-          inputs.add(input);
-        }
-      }
-    });
-    if (inputs.empty()) {
-      return;
-    }
-    exprs = std::move(inputs);
-  }
+  exprs.forEach<Expr>([&](ExprCP expr) {
+    makeLevelsInner(expr, 0, levelData, refCount, counted);
+  });
 }
 
 PlanObjectSet makeCseBorder(
@@ -81,9 +106,8 @@ PlanObjectSet makeCseBorder(
     PlanObjectSet& placed,
     std::unordered_map<ExprCP, int32_t>& refCount) {
   PlanObjectSet border;
-  for (int32_t leafLevel = levelData.size() - 1; leafLevel >= 0; --leafLevel) {
-    levelData[leafLevel].exprs.forEach([&](PlanObjectCP o) {
-      ExprCP expr = o->as<const Expr>();
+  for (const auto& data : levelData | std::views::reverse) {
+    data.exprs.forEach<Expr>([&](auto expr) {
       if (placed.contains(expr)) {
         return;
       }
@@ -91,8 +115,8 @@ PlanObjectSet makeCseBorder(
         auto subexprs = expr->subexpressions();
         subexprs.intersect(border);
         if (!subexprs.empty()) {
-          // Is a multiply refd over another multiply refd in the same border.
-          // Not a member.
+          // Mmultiply referenced over another multiply referenced in the
+          // same border. Not a member.
           return;
         }
         border.add(expr);
@@ -104,59 +128,68 @@ PlanObjectSet makeCseBorder(
 
 } // namespace
 
-core::PlanNodePtr Optimization::makeParallelProject(
+core::PlanNodePtr ToVelox::makeParallelProject(
     const core::PlanNodePtr& input,
     const PlanObjectSet& topExprs,
     const PlanObjectSet& placed,
     const PlanObjectSet& extraColumns) {
-  std::vector<std::string> names;
-  std::vector<int32_t> indices;
+  std::vector<uint32_t> indices;
   std::vector<float> costs;
   std::vector<ExprCP> exprs;
   float totalCost = 0;
-  topExprs.forEach([&](PlanObjectCP o) {
-    exprs.push_back(o->as<Expr>());
+  topExprs.forEach<Expr>([&](auto expr) {
+    exprs.push_back(expr);
     indices.push_back(indices.size());
-    costs.push_back(costWithChildren(o->as<Expr>(), placed));
+    costs.push_back(costWithChildren(expr, placed));
     totalCost += costs.back();
   });
-  std::sort(indices.begin(), indices.end(), [&](int32_t l, int32_t r) {
-    return costs[l] < costs[r];
-  });
+  std::ranges::sort(
+      indices, [&](auto l, auto r) { return costs[l] < costs[r]; });
 
   // Sorted lowest cost first. Make even size groups.
-  float targetCost = totalCost / opts_.parallelProjectWidth;
-  float groupCost = 0;
+  const float targetCost =
+      totalCost / static_cast<float>(optimizerOptions_.parallelProjectWidth);
+
   std::vector<std::vector<core::TypedExprPtr>> groups;
   groups.emplace_back();
-  for (auto nth = 0; nth < indices.size(); ++nth) {
-    auto i = indices[nth];
-    groupCost += costs[i];
-    groups.back().push_back(toTypedExpr(exprs[i]));
-    names.push_back(fmt::format("__temp{}", exprs[i]->id()));
-    auto fieldAccess = std::make_shared<core::FieldAccessTypedExpr>(
-        groups.back().back()->type(), names.back());
-    projectedExprs_[exprs[i]] = fieldAccess;
+
+  auto* group = &groups.back();
+  float groupCost = 0;
+
+  std::vector<std::string> names;
+  for (auto i : indices) {
     if (groupCost > targetCost) {
-      if (nth == indices.size() - 1) {
-        break;
-      }
       // Start new group after placing target cost worth.
       groups.emplace_back();
+
+      group = &groups.back();
       groupCost = 0;
     }
+
+    auto expr = exprs[i];
+
+    groupCost += costs[i];
+    group->emplace_back(toTypedExpr(expr));
+
+    if (expr->is(PlanType::kColumnExpr)) {
+      names.push_back(outputName(expr->as<Column>()));
+    } else {
+      names.push_back(fmt::format("__temp{}", expr->id()));
+    }
+
+    auto fieldAccess = std::make_shared<core::FieldAccessTypedExpr>(
+        group->back()->type(), names.back());
+    projectedExprs_[expr] = fieldAccess;
   }
 
   std::vector<std::string> extra;
-  extraColumns.forEach([&](PlanObjectCP o) {
-    auto e = toTypedExpr(o->as<Expr>());
-    if (auto* field =
-            dynamic_cast<const core::FieldAccessTypedExpr*>(e.get())) {
-      extra.push_back(field->name());
-    } else {
-      VELOX_UNREACHABLE();
-    }
+  extraColumns.forEach<Expr>([&](ExprCP expr) {
+    auto veloxExpr = toTypedExpr(expr);
+    VELOX_CHECK(veloxExpr->isFieldAccessKind());
+    extra.push_back(
+        veloxExpr->asUnchecked<core::FieldAccessTypedExpr>()->name());
   });
+
   return std::make_shared<core::ParallelProjectNode>(
       nextId(), std::move(names), std::move(groups), std::move(extra), input);
 }
@@ -169,24 +202,27 @@ void columnBorder(
     ExprCP expr,
     const PlanObjectSet& placed,
     PlanObjectSet& result) {
-  if (expr->type() == PlanType::kLiteral) {
+  if (expr->is(PlanType::kLiteralExpr)) {
     return;
   }
+
   if (placed.contains(expr)) {
     result.add(expr);
     return;
   }
+
   switch (expr->type()) {
-    case PlanType::kColumn:
+    case PlanType::kColumnExpr:
       result.add(expr);
       return;
-    case PlanType::kCall: {
-      for (auto& in : expr->as<Call>()->args()) {
-        columnBorder(in, placed, result);
+
+    case PlanType::kCallExpr:
+      for (auto arg : expr->as<Call>()->args()) {
+        columnBorder(arg, placed, result);
       }
       return;
-    }
-    case PlanType::kAggregate:
+
+    case PlanType::kAggregateExpr:
       VELOX_UNREACHABLE();
     default:
       return;
@@ -197,9 +233,7 @@ PlanObjectSet columnBorder(
     const PlanObjectSet& top,
     const PlanObjectSet& placed) {
   PlanObjectSet result;
-  top.forEach(
-      [&](PlanObjectCP o) { columnBorder(o->as<Expr>(), placed, result); });
-
+  top.forEach<Expr>([&](auto expr) { columnBorder(expr, placed, result); });
   return result;
 }
 
@@ -207,18 +241,20 @@ float parallelBorder(
     ExprCP expr,
     const PlanObjectSet& placed,
     PlanObjectSet& result) {
-  // Cost returned for a subexpressoin that is parallelized. Siblings of these
+  // Cost returned for a subexpression that is parallelized. Siblings of these
   // that are themselves not split should b members of the border.
   constexpr float kSplit = -1;
   constexpr float kTargetCost = 50;
   if (placed.contains(expr)) {
     return 0;
   }
+
   switch (expr->type()) {
-    case PlanType::kColumn:
+    case PlanType::kColumnExpr:
       return selfCost(expr);
-    case PlanType::kCall: {
-      float cost = selfCost(expr);
+
+    case PlanType::kCallExpr: {
+      const float cost = selfCost(expr);
       auto call = expr->as<Call>();
       BitSet splitArgs;
       auto args = call->args();
@@ -227,97 +263,112 @@ float parallelBorder(
       for (auto i = 0; i < args.size(); ++i) {
         auto arg = args[i];
         auto argCost = parallelBorder(arg, placed, result);
-        if (argCost > highestArgCost) {
-          highestArgCost = argCost;
-        }
+        highestArgCost = std::max(highestArgCost, argCost);
         if (argCost == kSplit) {
           splitArgs.add(i);
         }
         allArgsCost += argCost;
       }
+
       if (!splitArgs.empty()) {
         // If some arg produced parallel pieces, the non-parallelized siblings
         // are added to the border.
         for (auto i = 0; i < args.size(); ++i) {
-          if (!splitArgs.contains(i)) {
+          if (!splitArgs.contains(i) && !args[i]->is(PlanType::kLiteralExpr)) {
             result.add(args[i]);
           }
         }
         return kSplit;
       }
+
       if (allArgsCost > kTargetCost && highestArgCost < allArgsCost / 2) {
         // The args are above the target and the biggest is less than half the
         // total. Add the args to the border.
-        for (auto i = 0; i < args.size(); ++i) {
-          result.add(args[i]);
+        for (auto arg : args) {
+          if (!arg->is(PlanType::kLiteralExpr)) {
+            result.add(arg);
+          }
         }
+
         return kSplit;
       }
       return cost + allArgsCost;
     }
 
-    case PlanType::kAggregate:
+    case PlanType::kAggregateExpr:
       VELOX_UNREACHABLE();
+
     default:
       return 0;
   }
 }
 } // namespace
 
-core::PlanNodePtr Optimization::maybeParallelProject(
+core::PlanNodePtr ToVelox::maybeParallelProject(
     const Project* project,
     core::PlanNodePtr input) {
   PlanObjectSet top;
   PlanObjectSet allColumns;
-  PlanObjectSet placed;
-  auto& exprs = project->exprs();
-  auto& columns = project->columns();
-  for (auto e : exprs) {
-    allColumns.unionSet(e->columns());
-    top.add(e);
+  const auto& exprs = project->exprs();
+  for (auto expr : exprs) {
+    allColumns.unionSet(expr->columns());
+    top.add(expr);
   }
+
   std::vector<LevelData> levelData;
   std::unordered_map<ExprCP, int32_t> refCount;
   makeExprLevels(top, levelData, refCount);
+
+  PlanObjectSet placed;
 
   for (;;) {
     auto cses = makeCseBorder(levelData, placed, refCount);
     if (cses.empty()) {
       break;
     }
+
     auto previousPlaced = placed;
-    cses.forEach([&](PlanObjectCP o) {
-      placed.unionSet(o->as<Expr>()->subexpressions());
-    });
+    cses.forEach<Expr>(
+        [&](auto expr) { placed.unionSet(expr->subexpressions()); });
     placed.unionSet(cses);
+
     auto extraColumns = columnBorder(top, placed);
     extraColumns.except(cses);
     input = makeParallelProject(input, cses, previousPlaced, extraColumns);
   }
 
-  // Common prerequisites are placed, the expressions that are left  are a tree
-  // with no order
+  // Common prerequisites are placed, the expressions that are left are a tree
+  // with no order.
   PlanObjectSet parallel;
-  top.forEach(
-      [&](PlanObjectCP o) { parallelBorder(o->as<Expr>(), placed, parallel); });
-  auto previousPlaced = placed;
-  parallel.forEach([&](PlanObjectCP o) {
-    placed.unionSet(o->as<Expr>()->subexpressions());
-  });
-  placed.unionSet(parallel);
-  auto extra = columnBorder(top, placed);
-  // The projected through columns are loaded here, so these go into the
-  // parallel exprs and not in the 'noLoadIdentities'.
-  parallel.unionSet(extra);
-  PlanObjectSet empty;
-  input = makeParallelProject(input, parallel, previousPlaced, empty);
-  // one final project for the renames and final functions.
+  top.forEach<Expr>([&](auto expr) { parallelBorder(expr, placed, parallel); });
+
+  if (!parallel.empty()) {
+    auto previousPlaced = placed;
+    parallel.forEach<Expr>(
+        [&](auto expr) { placed.unionSet(expr->subexpressions()); });
+    placed.unionSet(parallel);
+
+    auto extra = columnBorder(top, placed);
+    // The projected through columns are loaded here, so these go into the
+    // parallel exprs and not in the 'noLoadIdentities'.
+    parallel.unionSet(extra);
+
+    PlanObjectSet empty;
+    input = makeParallelProject(input, parallel, previousPlaced, empty);
+  }
+  // One final project for the renames and final functions.
+  auto& columns = project->columns();
+
   std::vector<std::string> names;
   std::vector<core::TypedExprPtr> finalExprs;
+  names.reserve(exprs.size());
+  finalExprs.reserve(exprs.size());
+
   for (auto i = 0; i < exprs.size(); ++i) {
-    names.push_back(columns[i]->toString());
-    finalExprs.push_back(toTypedExpr(exprs[i]));
+    names.emplace_back(outputName(columns[i]));
+    finalExprs.emplace_back(toTypedExpr(exprs[i]));
   }
+
   return std::make_shared<core::ProjectNode>(
       nextId(), std::move(names), std::move(finalExprs), input);
 }

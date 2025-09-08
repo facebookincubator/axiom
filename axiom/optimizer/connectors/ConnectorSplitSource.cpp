@@ -18,28 +18,51 @@
 
 namespace facebook::velox::connector {
 
-std::vector<runner::SplitSource::SplitAndGroup> ConnectorSplitSource::getSplits(
-    uint64_t targetBytes) {
+namespace {
+
+/// A runner::SplitSource that encapsulates a connector::SplitSource.
+/// runner::SplitSource does not depend on ConnectorMetadata.h, thus we have a
+/// proxy between the two.
+class ConnectorSplitSource : public axiom::runner::SplitSource {
+ public:
+  ConnectorSplitSource(std::shared_ptr<connector::SplitSource> source)
+      : source_(std::move(source)) {}
+
+  std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) override;
+
+ private:
+  std::shared_ptr<connector::SplitSource> source_;
+};
+
+std::vector<axiom::runner::SplitSource::SplitAndGroup>
+ConnectorSplitSource::getSplits(uint64_t targetBytes) {
   auto splits = source_->getSplits(targetBytes);
-  std::vector<SplitAndGroup> runnerSplits;
-  // convert the connector::SplitSource::SplitAndGroup to
+
+  std::vector<axiom::runner::SplitSource::SplitAndGroup> runnerSplits;
+  runnerSplits.reserve(splits.size());
+
+  // Convert the connector::SplitSource::SplitAndGroup to
   // runner::SplitSource::SplitAndGroup.
-  for (auto& s : splits) {
-    runnerSplits.push_back({s.split, s.group});
+  for (const auto& split : splits) {
+    runnerSplits.emplace_back(
+        axiom::runner::SplitSource::SplitAndGroup{split.split, split.group});
   }
   return runnerSplits;
 }
 
-std::shared_ptr<runner::SplitSource>
+} // namespace
+
+std::shared_ptr<axiom::runner::SplitSource>
 ConnectorSplitSourceFactory::splitSourceForScan(
     const core::TableScanNode& scan) {
-  auto handle = scan.tableHandle();
+  const auto& handle = scan.tableHandle();
   auto connector = connector::getConnector(handle->connectorId());
   auto partitions =
       connector->metadata()->splitManager()->listPartitions(handle);
-  auto source = connector->metadata()->splitManager()->getSplitSource(
-      handle, partitions, options_);
-  return std::make_shared<ConnectorSplitSource>(std::move(source));
+
+  return std::make_shared<ConnectorSplitSource>(
+      connector->metadata()->splitManager()->getSplitSource(
+          handle, partitions, options_));
 }
 
 } // namespace facebook::velox::connector

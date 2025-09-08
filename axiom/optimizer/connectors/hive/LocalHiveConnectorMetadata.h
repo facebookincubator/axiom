@@ -17,19 +17,26 @@
 #pragma once
 
 #include "axiom/optimizer/connectors/hive/HiveConnectorMetadata.h"
+#include "axiom/optimizer/connectors/hive/StatisticsBuilder.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::connector::hive {
 
+/// Describes a file in a table. Input to split enumeration.
+struct FileInfo {
+  std::string path;
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+  std::optional<int32_t> bucketNumber;
+};
+
 class LocalHiveSplitSource : public SplitSource {
  public:
   LocalHiveSplitSource(
-      std::vector<std::string> files,
+      std::vector<const FileInfo*> files,
       dwio::common::FileFormat format,
       const std::string& connectorId,
       SplitOptions options)
@@ -45,7 +52,7 @@ class LocalHiveSplitSource : public SplitSource {
   const SplitOptions options_;
   const dwio::common::FileFormat format_;
   const std::string connectorId_;
-  std::vector<std::string> files_;
+  std::vector<const FileInfo*> files_;
   std::vector<std::shared_ptr<connector::ConnectorSplit>> fileSplits_;
   int32_t currentFile_{-1};
   int32_t currentSplit_{0};
@@ -56,12 +63,12 @@ class LocalHiveConnectorMetadata;
 class LocalHiveSplitManager : public ConnectorSplitManager {
  public:
   LocalHiveSplitManager(LocalHiveConnectorMetadata* /* metadata */) {}
-  std::vector<std::shared_ptr<const PartitionHandle>> listPartitions(
+  std::vector<PartitionHandlePtr> listPartitions(
       const ConnectorTableHandlePtr& tableHandle) override;
 
   std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorTableHandlePtr& tableHandle,
-      std::vector<std::shared_ptr<const PartitionHandle>> partitions,
+      const std::vector<PartitionHandlePtr>& partitions,
       SplitOptions options = {}) override;
 };
 
@@ -97,17 +104,17 @@ class LocalHiveTableLayout : public HiveTableLayout {
   std::pair<int64_t, int64_t> sample(
       const connector::ConnectorTableHandlePtr& handle,
       float pct,
-      std::vector<core::TypedExprPtr> extraFilters,
-      RowTypePtr outputType = nullptr,
-      const std::vector<common::Subfield>& fields = {},
-      HashStringAllocator* allocator = nullptr,
-      std::vector<ColumnStatistics>* statistics = nullptr) const override;
+      const std::vector<core::TypedExprPtr>& extraFilters,
+      RowTypePtr outputType,
+      const std::vector<common::Subfield>& fields,
+      HashStringAllocator* allocator,
+      std::vector<ColumnStatistics>* statistics) const override;
 
-  const std::vector<std::string>& files() const {
+  const std::vector<std::unique_ptr<const FileInfo>>& files() const {
     return files_;
   }
 
-  void setFiles(std::vector<std::string> files) {
+  void setFiles(std::vector<std::unique_ptr<const FileInfo>> files) {
     files_ = std::move(files);
   }
 
@@ -121,13 +128,21 @@ class LocalHiveTableLayout : public HiveTableLayout {
       std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders) const;
 
  private:
-  std::vector<std::string> files_;
+  std::vector<std::unique_ptr<const FileInfo>> files_;
+  std::vector<std::unique_ptr<const FileInfo>> ownedFiles_;
 };
 
 class LocalTable : public Table {
  public:
-  LocalTable(const std::string& name, dwio::common::FileFormat format)
-      : Table(name) {}
+  LocalTable(
+      std::string name,
+      RowTypePtr type,
+      std::unordered_map<std::string, std::string> options = {})
+      : Table(
+            std::move(name),
+            std::move(type),
+            TableKind::kTable,
+            std::move(options)) {}
 
   std::unordered_map<std::string, std::unique_ptr<Column>>& columns() {
     return columns_;
@@ -139,12 +154,8 @@ class LocalTable : public Table {
   const std::unordered_map<std::string, const Column*>& columnMap()
       const override;
 
-  void setType(const RowTypePtr& type) {
-    type_ = type;
-  }
-
   void makeDefaultLayout(
-      std::vector<std::string> files,
+      std::vector<std::unique_ptr<const FileInfo>> files,
       LocalHiveConnectorMetadata& metadata);
 
   uint64_t numRows() const override {
@@ -185,14 +196,14 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   void initialize() override;
 
-  const Table* findTable(const std::string& name) override;
+  TablePtr findTable(const std::string& name) override;
 
   ConnectorSplitManager* splitManager() override {
     ensureInitialized();
     return &splitManager_;
   }
 
-  dwio::common::FileFormat fileFormat() const {
+  dwio::common::FileFormat fileFormat() const override {
     return format_;
   }
 
@@ -212,22 +223,55 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   /// ConnectorMetadata API. This This is only needed for running the
   /// DuckDB parser on testing queries since the latter needs a set of
   /// tables for name resolution.
-  const std::unordered_map<std::string, std::unique_ptr<LocalTable>>& tables()
+  const std::unordered_map<std::string, std::shared_ptr<LocalTable>>& tables()
       const {
     ensureInitialized();
     return tables_;
   }
 
-  std::shared_ptr<core::QueryCtx> makeQueryCtx(
-      const std::string& queryId) override;
+  std::shared_ptr<core::QueryCtx> makeQueryCtx(const std::string& queryId);
+
+  void createTable(
+      const std::string& tableName,
+      const RowTypePtr& rowType,
+      const std::unordered_map<std::string, std::string>& options,
+      const ConnectorSessionPtr& session,
+      bool errorIfExists = true,
+      TableKind kind = TableKind::kTable) override;
+
+  void finishWrite(
+      const TableLayout& layout,
+      const ConnectorInsertTableHandlePtr& /*handle*/,
+      const std::vector<RowVectorPtr>& /*writerResult*/,
+      WriteKind /*kind*/,
+      const ConnectorSessionPtr& /*session*/) override;
+
+ protected:
+  std::string dataPath() const override {
+    return hiveConfig_->hiveLocalDataPath();
+  }
+
+  std::shared_ptr<connector::hive::LocationHandle> makeLocationHandle(
+      std::string targetDirectory,
+      std::optional<std::string> writeDirectory = std::nullopt,
+      connector::hive::LocationHandle::TableType tableType =
+          connector::hive::LocationHandle::TableType::kNew) override {
+    return std::make_shared<connector::hive::LocationHandle>(
+        targetDirectory, writeDirectory.value_or(targetDirectory), tableType);
+  }
 
  private:
-  void ensureInitialized() const;
+  void ensureInitialized() const override;
   void makeQueryCtx();
   void makeConnectorQueryCtx();
+  std::shared_ptr<LocalTable> createTableFromSchema(
+      const std::string& name,
+      const std::string& path);
   void readTables(const std::string& path);
 
   void loadTable(const std::string& tableName, const fs::path& tablePath);
+
+  std::shared_ptr<LocalTable> findTableLocked(const std::string& name) const;
 
   mutable std::mutex mutex_;
   mutable bool initialized_{false};
@@ -238,7 +282,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   std::shared_ptr<core::QueryCtx> queryCtx_;
   std::shared_ptr<ConnectorQueryCtx> connectorQueryCtx_;
   dwio::common::FileFormat format_;
-  std::unordered_map<std::string, std::unique_ptr<LocalTable>> tables_;
+  std::unordered_map<std::string, std::shared_ptr<LocalTable>> tables_;
   LocalHiveSplitManager splitManager_;
 };
 

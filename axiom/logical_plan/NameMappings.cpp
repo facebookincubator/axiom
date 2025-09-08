@@ -94,7 +94,7 @@ void NameMappings::setAlias(const std::string& alias) {
 
 void NameMappings::merge(const NameMappings& other) {
   for (const auto& [name, id] : other.mappings_) {
-    if (mappings_.count(name)) {
+    if (mappings_.contains(name)) {
       VELOX_CHECK(!name.alias.has_value());
       mappings_.erase(name);
     } else {
@@ -136,6 +136,6 @@ size_t NameMappings::QualifiedNameHasher::operator()(
 
   size_t h2 = std::hash<std::string>()(value.name);
 
-  return h1 ^ (h2 << 1);
+  return h1 ^ (h2 << 1U);
 }
 } // namespace facebook::velox::logical_plan

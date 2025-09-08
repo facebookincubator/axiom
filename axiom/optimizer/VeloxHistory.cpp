@@ -15,8 +15,8 @@
  */
 
 #include "axiom/optimizer/VeloxHistory.h"
-#include "velox/exec/Operator.h"
-#include "velox/exec/TaskStats.h"
+#include "axiom/optimizer/Optimization.h"
+#include "axiom/optimizer/Plan.h"
 
 #include <iostream>
 
@@ -25,10 +25,9 @@ DEFINE_double(
     5,
     "Log a warning if cardinality estimate is more than this many times off. 0 means no warnings.");
 
-namespace facebook::velox::optimizer {
-
 using namespace facebook::velox::exec;
-using namespace facebook::velox::runner;
+
+namespace facebook::velox::optimizer {
 
 void VeloxHistory::recordJoinSample(
     const std::string& key,
@@ -36,7 +35,8 @@ void VeloxHistory::recordJoinSample(
     float rl) {}
 
 std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
-  if (!queryCtx()->optimization()->opts().sampleJoins) {
+  const auto& options = queryCtx()->optimization()->options();
+  if (!options.sampleJoins) {
     return {0, 0};
   }
 
@@ -55,27 +55,26 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
       return it->second;
     }
   }
+
+  auto rightTable = edge->rightTable()->as<BaseTable>()->schemaTable;
+  auto leftTable = edge->leftTable()->as<BaseTable>()->schemaTable;
+
   std::pair<float, float> pair;
-  bool trace = (queryCtx()->optimization()->opts().traceFlags &
-                Optimization::kSample) != 0;
   uint64_t start = getCurrentTimeMicro();
   if (keyPair.second) {
     pair = optimizer::sampleJoin(
-        edge->rightTable()->as<BaseTable>()->schemaTable,
-        edge->rightKeys(),
-        edge->leftTable()->as<BaseTable>()->schemaTable,
-        edge->leftKeys());
+        rightTable, edge->rightKeys(), leftTable, edge->leftKeys());
   } else {
     pair = optimizer::sampleJoin(
-        edge->leftTable()->as<BaseTable>()->schemaTable,
-        edge->leftKeys(),
-        edge->rightTable()->as<BaseTable>()->schemaTable,
-        edge->rightKeys());
+        leftTable, edge->leftKeys(), rightTable, edge->rightKeys());
   }
+
   {
     std::lock_guard<std::mutex> l(mutex_);
     joinSamples_[keyPair.first] = pair;
   }
+
+  const bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
   if (trace) {
     std::cout << "Sample join " << keyPair.first << ": " << pair.first << " :"
               << pair.second
@@ -88,17 +87,15 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
   return pair;
 }
 
-NodePrediction* VeloxHistory::getHistory(const std::string key) {
-  return nullptr;
-}
+bool VeloxHistory::setLeafSelectivity(
+    BaseTable& table,
+    const RowTypePtr& scanType) {
+  auto options = queryCtx()->optimization()->options();
+  auto [tableHandle, filters] =
+      queryCtx()->optimization()->leafHandle(table.id());
+  const auto string = tableHandle->toString();
 
-void VeloxHistory::setHistory(const std::string& key, NodePrediction history) {}
-
-bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
-  auto optimization = queryCtx()->optimization();
-  auto handlePair = optimization->leafHandle(table.id());
-  auto handle = handlePair.first;
-  auto string = handle->toString();
+  // Check whether leaf selectivity is already cached for this handle.
   {
     auto it = leafSelectivities_.find(string);
     if (it != leafSelectivities_.end()) {
@@ -107,9 +104,13 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
       return true;
     }
   }
+
   auto* runnerTable = table.schemaTable->connectorTable;
-  if (!runnerTable) {
-    // If there is no physical table to go to: Assume 1/10 if any filters.
+
+  // If there is no physical table to go to or filter sampling
+  // has been explicitly disabled, assume 1/10 if any filters
+  // are present for the table.
+  if (!runnerTable || !options.sampleFilters) {
     if (table.columnFilters.empty() && table.filter.empty()) {
       table.filterSelectivity = 1;
     } else {
@@ -117,25 +118,38 @@ bool VeloxHistory::setLeafSelectivity(BaseTable& table, RowTypePtr scanType) {
     }
     return false;
   }
-  bool trace = (queryCtx()->optimization()->opts().traceFlags &
-                Optimization::kSample) != 0;
-  uint64_t start = getCurrentTimeMicro();
-  auto sample = runnerTable->layouts()[0]->sample(
-      handlePair.first, 1, handlePair.second, scanType);
+
+  // Determine and cache leaf selectivity for the table handle
+  // by sampling the layout for the physical table.
+  const uint64_t start = getCurrentTimeMicro();
+  auto sample =
+      runnerTable->layouts()[0]->sample(tableHandle, 1, filters, scanType);
+  VELOX_CHECK_GE(sample.first, 0);
+  VELOX_CHECK_GE(sample.first, sample.second);
+
+  if (sample.first == 0) {
+    table.filterSelectivity = 1;
+    return true;
+  }
+
   table.filterSelectivity =
-      static_cast<float>(sample.second) / (sample.first + 1);
+      static_cast<float>(sample.second) / static_cast<float>(sample.first);
+  recordLeafSelectivity(string, table.filterSelectivity, false);
+
+  bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
   if (trace) {
     std::cout << "Sampled scan " << string << "= " << table.filterSelectivity
               << " time= " << succinctMicros(getCurrentTimeMicro() - start)
               << std::endl;
   }
-  recordLeafSelectivity(string, table.filterSelectivity, false);
   return true;
 }
 
+namespace {
+
 std::shared_ptr<const core::TableScanNode> findScan(
     const core::PlanNodeId& id,
-    const runner::MultiFragmentPlanPtr& plan) {
+    const axiom::runner::MultiFragmentPlanPtr& plan) {
   for (auto& fragment : plan->fragments()) {
     for (auto& scan : fragment.scans) {
       if (scan->id() == id) {
@@ -156,10 +170,15 @@ void predictionWarnings(
     const PlanAndStats& plan,
     const core::PlanNodeId& id,
     int64_t actualRows,
-    int64_t predictedRows) {
+    float predictedRows) {
   if (actualRows == 0 && predictedRows == 0) {
     return;
   }
+
+  if (std::isnan(predictedRows)) {
+    return;
+  }
+
   std::string historyKey;
   auto it = plan.history.find(id);
   if (it != plan.history.end()) {
@@ -173,8 +192,7 @@ void predictionWarnings(
         predictedRows,
         historyKey));
   } else {
-    float ratio =
-        static_cast<float>(actualRows) / static_cast<float>(predictedRows);
+    auto ratio = static_cast<float>(actualRows) / predictedRows;
     auto threshold = FLAGS_cardinality_warning_threshold;
     if (ratio < 1 / threshold || ratio > threshold) {
       logPrediction(fmt::format(
@@ -186,6 +204,8 @@ void predictionWarnings(
     }
   }
 }
+
+} // namespace
 
 void VeloxHistory::recordVeloxExecution(
     const PlanAndStats& plan,
@@ -204,7 +224,7 @@ void VeloxHistory::recordVeloxExecution(
         if (keyIt == plan.history.end()) {
           continue;
         }
-        uint64_t actualRows;
+        uint64_t actualRows{};
         {
           std::lock_guard<std::mutex> l(mutex_);
           actualRows = op.outputPositions;
@@ -217,13 +237,18 @@ void VeloxHistory::recordVeloxExecution(
             std::string handle = scan->tableHandle()->toString();
             recordLeafSelectivity(
                 handle,
-                op.outputPositions / std::max<float>(1, op.rawInputPositions),
+                static_cast<float>(actualRows) /
+                    std::max(1.F, static_cast<float>(op.rawInputPositions)),
                 true);
           }
         }
         if (it != plan.prediction.end()) {
           auto predictedRows = it->second.cardinality;
-          predictionWarnings(plan, op.planNodeId, actualRows, predictedRows);
+          predictionWarnings(
+              plan,
+              op.planNodeId,
+              static_cast<int64_t>(actualRows),
+              predictedRows);
         }
       }
     }
@@ -261,19 +286,20 @@ folly::dynamic VeloxHistory::serialize() {
 }
 
 void VeloxHistory::update(folly::dynamic& serialized) {
+  auto toFloat = [](const folly::dynamic& v) {
+    // TODO Don't use atof.
+    return static_cast<float>(atof(v.asString().c_str()));
+  };
   for (auto& pair : serialized["leaves"]) {
-    leafSelectivities_[pair["key"].asString()] =
-        atof(pair["value"].asString().c_str());
+    leafSelectivities_[pair["key"].asString()] = toFloat(pair["value"]);
   }
   for (auto& pair : serialized["joins"]) {
-    joinSamples_[pair["key"].asString()] = std::make_pair<float, float>(
-        atof(pair["lr"].asString().c_str()),
-        atof(pair["rl"].asString().c_str()));
+    joinSamples_[pair["key"].asString()] =
+        std::make_pair<float, float>(toFloat(pair["lr"]), toFloat(pair["rl"]));
   }
   for (auto& pair : serialized["plans"]) {
-    planHistory_[pair["key"].asString()] = NodePrediction{
-        .cardinality =
-            static_cast<float>(atof(pair["card"].asString().c_str()))};
+    planHistory_[pair["key"].asString()] =
+        NodePrediction{.cardinality = toFloat(pair["card"])};
   }
 }
 

@@ -16,11 +16,29 @@
 
 #include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/BitSet.h"
+#include "axiom/optimizer/QueryGraph.h"
 
 namespace facebook::velox::optimizer {
 
+QueryGraphContext::QueryGraphContext(velox::HashStringAllocator& allocator)
+    : allocator_(allocator), cache_(allocator_) {
+  auto addName = [&](const char* name) {
+    names_.emplace(std::string_view(name, strlen(name)));
+  };
+
+  addName(SpecialFormCallNames::kAnd);
+  addName(SpecialFormCallNames::kOr);
+  addName(SpecialFormCallNames::kCast);
+  addName(SpecialFormCallNames::kTryCast);
+  addName(SpecialFormCallNames::kTry);
+  addName(SpecialFormCallNames::kCoalesce);
+  addName(SpecialFormCallNames::kIf);
+  addName(SpecialFormCallNames::kSwitch);
+  addName(SpecialFormCallNames::kIn);
+}
+
 QueryGraphContext*& queryCtx() {
-  thread_local QueryGraphContext* context;
+  static thread_local QueryGraphContext* context;
   return context;
 }
 
@@ -34,6 +52,7 @@ const char* QueryGraphContext::toName(std::string_view str) {
   if (it != names_.end()) {
     return it->data();
   }
+
   char* data = allocator_.allocate(str.size() + 1)->begin(); // NOLINT
   memcpy(data, str.data(), str.size());
   data[str.size()] = 0;
@@ -48,6 +67,7 @@ Name toName(std::string_view string) {
 const Type* QueryGraphContext::toType(const TypePtr& type) {
   return dedupType(type).get();
 }
+
 TypePtr QueryGraphContext::dedupType(const TypePtr& type) {
   auto it = deduppedTypes_.find(type);
   if (it != deduppedTypes_.end()) {
@@ -60,6 +80,7 @@ TypePtr QueryGraphContext::dedupType(const TypePtr& type) {
     return type;
   }
   std::vector<TypePtr> children;
+  children.reserve(size);
   for (auto i = 0; i < size; ++i) {
     children.push_back(dedupType(type->childAt(i)));
   }
@@ -67,12 +88,12 @@ TypePtr QueryGraphContext::dedupType(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::ROW: {
       std::vector<std::string> names;
+      names.reserve(size);
       for (auto i = 0; i < size; ++i) {
         names.push_back(type->as<TypeKind::ROW>().nameOf(i));
       }
       newType = ROW(std::move(names), std::move(children));
-      break;
-    }
+    } break;
     case TypeKind::ARRAY:
       newType = ARRAY(children[0]);
       break;
@@ -80,10 +101,9 @@ TypePtr QueryGraphContext::dedupType(const TypePtr& type) {
       newType = MAP(children[0], children[1]);
       break;
     case TypeKind::FUNCTION: {
-      auto args = children;
-      args.pop_back();
-      newType =
-          std::make_shared<FunctionType>(std::move(args), children.back());
+      auto returnType = std::move(children.back());
+      children.pop_back();
+      newType = FUNCTION(std::move(children), std::move(returnType));
     } break;
     default:
       VELOX_FAIL("Type has size > 0 and is not row/array/map");
@@ -154,8 +174,9 @@ bool Path::operator==(const Path& other) const {
   if (steps_.size() != other.steps_.size()) {
     return false;
   }
-  for (auto i = 0; i < steps_.size(); ++i) {
-    if (!(steps_[i] == other.steps_[i])) {
+
+  for (size_t i = 0; i < steps_.size(); ++i) {
+    if (steps_[i] != other.steps_[i]) {
       return false;
     }
   }
@@ -175,8 +196,9 @@ bool Path::hasPrefix(const Path& prefix) const {
   if (prefix.steps_.size() >= steps_.size()) {
     return false;
   }
-  for (auto i = 0; i < prefix.steps_.size(); ++i) {
-    if (!(steps_[i] == prefix.steps_[i])) {
+
+  for (size_t i = 0; i < prefix.steps_.size(); ++i) {
+    if (steps_[i] != prefix.steps_[i]) {
       return false;
     }
   }
@@ -200,9 +222,9 @@ std::string Path::toString() const {
       case StepKind::kSubscript:
         if (step.field) {
           out << "[" << step.field << "]";
-          break;
+        } else {
+          out << "[" << step.id << "]";
         }
-        out << "[" << step.id << "]";
         break;
     }
   }
@@ -210,7 +232,7 @@ std::string Path::toString() const {
 }
 
 PathCP QueryGraphContext::toPath(PathCP path) {
-  path->setId(pathById_.size());
+  path->setId(static_cast<int32_t>(pathById_.size()));
   path->makeImmutable();
   auto pair = deduppedPaths_.insert(path);
   if (path != *pair.first) {
@@ -222,11 +244,13 @@ PathCP QueryGraphContext::toPath(PathCP path) {
 }
 
 void Path::subfieldSkyline(BitSet& subfields) {
-  // Expand the ids to fields and  remove subfields where there exists a shorter
-  // prefix.
   if (subfields.empty()) {
     return;
   }
+
+  // Expand the ids to fields and remove subfields where there exists a shorter
+  // prefix.
+
   auto ctx = queryCtx();
   bool allFields = false;
   std::vector<std::vector<PathCP>> bySize;
@@ -244,20 +268,23 @@ void Path::subfieldSkyline(BitSet& subfields) {
       bySize[size].push_back(path);
     }
   });
+
   if (allFields) {
     subfields = BitSet();
     return;
   }
+
   for (auto& set : bySize) {
     std::sort(set.begin(), set.end(), [](PathCP left, PathCP right) {
       return *left < *right;
     });
   }
+
   for (int32_t i = 0; i < bySize.size() - 1; ++i) {
     for (auto path : bySize[i]) {
       // Delete paths where 'path' is a prefix.
       for (int32_t size = i + 1; size < bySize.size(); ++size) {
-        int32_t firstErase = -1;
+        ptrdiff_t firstErase = -1;
         auto& paths = bySize[size];
         auto it = std::lower_bound(paths.begin(), paths.end(), path);
         if (it != paths.end() && !(*it)->hasPrefix(*path)) {
@@ -278,8 +305,10 @@ void Path::subfieldSkyline(BitSet& subfields) {
   }
 }
 
-PathCP toPath(std::vector<Step> steps) {
-  return queryCtx()->toPath(make<Path>(std::move(steps)));
+PathCP toPath(std::span<const Step> steps, bool reverse) {
+  PathCP path = reverse ? make<Path>(steps, std::true_type{})
+                        : make<Path>(steps, std::false_type{});
+  return queryCtx()->toPath(path);
 }
 
 } // namespace facebook::velox::optimizer

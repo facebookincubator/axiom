@@ -14,255 +14,359 @@
  * limitations under the License.
  */
 
+#include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/optimizer/FunctionRegistry.h"
-#include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/PlanUtils.h"
+#include "axiom/optimizer/ToGraph.h"
+
+#include <ranges>
+
+namespace lp = facebook::velox::logical_plan;
 
 namespace facebook::velox::optimizer {
-
-using namespace facebook::velox;
-
 namespace {
-template <typename T>
-int64_t integerValueInner(const BaseVector* vector) {
-  return vector->as<ConstantVector<T>>()->valueAt(0);
+
+PathCP stepsToPath(std::span<const Step> steps) {
+  return toPath(steps, true);
 }
 
-int64_t integerValue(const BaseVector* vector) {
-  switch (vector->typeKind()) {
-    case TypeKind::TINYINT:
-      return integerValueInner<int8_t>(vector);
-    case TypeKind::SMALLINT:
-      return integerValueInner<int16_t>(vector);
-    case TypeKind::INTEGER:
-      return integerValueInner<int32_t>(vector);
-    case TypeKind::BIGINT:
-      return integerValueInner<int64_t>(vector);
-    default:
-      VELOX_FAIL();
+struct MarkFieldsAccessedContextArray {
+  std::array<const RowType* const, 1> rowTypes;
+  std::array<const LogicalContextSource, 1> sources;
+
+  MarkFieldsAccessedContext toCtx() const {
+    return {rowTypes, sources};
+  }
+};
+
+struct MarkFieldsAccessedContextVector {
+  std::vector<const RowType*> rowTypes;
+  std::vector<LogicalContextSource> sources;
+
+  MarkFieldsAccessedContext toCtx() const {
+    return {rowTypes, sources};
+  }
+};
+
+MarkFieldsAccessedContextArray fromNode(const lp::LogicalPlanNodePtr& node) {
+  return {
+      {node->outputType().get()},
+      {LogicalContextSource{.planNode = node.get()}}};
+}
+
+MarkFieldsAccessedContextVector fromNodes(
+    const std::vector<lp::LogicalPlanNodePtr>& nodes) {
+  std::vector<const RowType*> rowTypes;
+  std::vector<LogicalContextSource> sources;
+  rowTypes.reserve(nodes.size());
+  sources.reserve(nodes.size());
+  for (const auto& node : nodes) {
+    rowTypes.push_back(node->outputType().get());
+    sources.push_back(LogicalContextSource{.planNode = node.get()});
+  }
+  return {std::move(rowTypes), std::move(sources)};
+}
+
+} // namespace
+
+void ToGraph::markFieldAccessed(
+    const lp::ProjectNode& project,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl) {
+  const auto& input = project.onlyInput();
+  const auto ctx = fromNode(input);
+  markSubfields(project.expressionAt(ordinal), steps, isControl, ctx.toCtx());
+}
+
+void ToGraph::markFieldAccessed(
+    const lp::AggregateNode& agg,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl) {
+  const auto& input = agg.onlyInput();
+
+  std::vector<Step> subSteps;
+  const auto ctx = fromNode(input);
+  auto mark = [&](const lp::ExprPtr& expr) {
+    markSubfields(expr, subSteps, isControl, ctx.toCtx());
+  };
+
+  const auto& keys = agg.groupingKeys();
+  if (ordinal < keys.size()) {
+    mark(keys[ordinal]);
+    return;
+  }
+
+  const auto& aggregate = agg.aggregateAt(ordinal - keys.size());
+  for (const auto& aggregateInput : aggregate->inputs()) {
+    mark(aggregateInput);
+  }
+
+  if (aggregate->filter()) {
+    mark(aggregate->filter());
+  }
+
+  for (const auto& sortingField : aggregate->ordering()) {
+    mark(sortingField.expression);
   }
 }
 
-RowTypePtr lambdaArgType(const core::ITypedExpr* expr) {
-  auto* l = dynamic_cast<const core::LambdaTypedExpr*>(expr);
-  VELOX_CHECK_NOT_NULL(l);
-  return l->signature();
+void ToGraph::markFieldAccessed(
+    const lp::SetNode& set,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl) {
+  for (const auto& input : set.inputs()) {
+    const auto ctx = fromNode(input);
+    markFieldAccessed(ctx.sources[0], ordinal, steps, isControl, ctx.toCtx());
+  }
 }
-} // namespace
 
-void Optimization::markFieldAccessed(
-    const ContextSource& source,
+void ToGraph::markFieldAccessed(
+    const LogicalContextSource& source,
     int32_t ordinal,
     std::vector<Step>& steps,
     bool isControl,
-    const std::vector<const RowType*>& context,
-    const std::vector<ContextSource>& sources) {
-  auto fields = isControl ? &controlSubfields_ : &payloadSubfields_;
-  if (source.planNode) {
-    auto name = source.planNode->name();
-    auto path = stepsToPath(steps);
-    fields->nodeFields[source.planNode].resultPaths[ordinal].add(path->id());
-    if (name == "Project") {
-      auto* project =
-          reinterpret_cast<const core::ProjectNode*>(source.planNode);
-      markSubfields(
-          project->projections()[ordinal].get(),
+    const MarkFieldsAccessedContext& context) {
+  if (!source.planNode) {
+    // The source is a lambda arg. We apply the path to the corresponding
+    // container arg of the 2nd order function call that has the lambda.
+    const auto* metadata = functionMetadata(toName(source.call->name()));
+    const auto* lambdaInfo = metadata->lambdaInfo(source.lambdaOrdinal);
+    const auto nth = lambdaInfo->argOrdinal[ordinal];
+
+    markSubfields(
+        source.call->inputAt(nth),
+        steps,
+        isControl,
+        {context.rowTypes.subspan(1), context.sources.subspan(1)});
+    return;
+  }
+
+  auto* fields = isControl ? &controlSubfields_ : &payloadSubfields_;
+
+  const auto* path = stepsToPath(steps);
+  auto& paths = fields->nodeFields[source.planNode].resultPaths[ordinal];
+  if (paths.contains(path->id())) {
+    // Already marked.
+    return;
+  }
+  paths.add(path->id());
+
+  const auto kind = source.planNode->kind();
+  if (kind == lp::NodeKind::kProject) {
+    const auto* project = source.planNode->asUnchecked<lp::ProjectNode>();
+    markFieldAccessed(*project, ordinal, steps, isControl);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kAggregate) {
+    const auto* agg = source.planNode->asUnchecked<lp::AggregateNode>();
+    markFieldAccessed(*agg, ordinal, steps, isControl);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kSet) {
+    const auto* set = source.planNode->asUnchecked<lp::SetNode>();
+    markFieldAccessed(*set, ordinal, steps, isControl);
+    return;
+  }
+
+  const auto& sourceInputs = source.planNode->inputs();
+  if (sourceInputs.empty()) {
+    return;
+  }
+
+  const auto& fieldName = source.planNode->outputType()->nameOf(ordinal);
+  for (const auto& sourceInput : sourceInputs) {
+    const auto& type = sourceInput->outputType();
+    if (auto maybeIdx = type->getChildIdxIfExists(fieldName)) {
+      markFieldAccessed(
+          {.planNode = sourceInput.get()},
+          static_cast<int32_t>(maybeIdx.value()),
           steps,
           isControl,
-          std::vector<const RowType*>{
-              project->sources()[0]->outputType().get()},
-          std::vector<ContextSource>{
-              ContextSource{.planNode = project->sources()[0].get()}});
+          context);
       return;
     }
-    if (name == "Aggregation") {
-      auto* agg =
-          reinterpret_cast<const core::AggregationNode*>(source.planNode);
-      std::vector<const RowType*> inputContext = {
-          agg->sources()[0]->outputType().get()};
-      std::vector<ContextSource> inputSources = {
-          ContextSource{.planNode = agg->sources()[0].get()}};
-      auto& keys = agg->groupingKeys();
-      std::vector<Step> empty;
-      if (ordinal < keys.size()) {
-        markSubfields(
-            keys[ordinal].get(), empty, isControl, inputContext, inputSources);
-        return;
-      }
-      auto& aggregate = agg->aggregates()[ordinal - keys.size()];
-      markSubfields(
-          aggregate.call.get(), empty, isControl, inputContext, inputSources);
-      if (aggregate.mask) {
-        markSubfields(
-            aggregate.mask.get(), empty, isControl, inputContext, inputSources);
-      }
-      markColumnSubfields(agg, aggregate.sortingKeys, 0);
-      return;
-    }
-    if (auto* join =
-            dynamic_cast<const core::AbstractJoinNode*>(source.planNode)) {
-      // Check for flag column produced by semi join filter.
-      if (join->isLeftSemiProjectJoin() || join->isRightSemiProjectJoin()) {
-        if (ordinal == join->outputType()->size() - 1) {
-          return;
-        }
-      }
-    }
-    auto& sourceInputs = source.planNode->sources();
-    if (sourceInputs.empty()) {
-      return;
-    }
-    auto fieldName = source.planNode->outputType()->nameOf(ordinal);
-    for (auto i = 0; i < sourceInputs.size(); ++i) {
-      auto& type = sourceInputs[i]->outputType();
-      auto maybeIdx = type->getChildIdxIfExists(fieldName);
-      if (maybeIdx.has_value()) {
-        ContextSource s{.planNode = sourceInputs[i].get()};
-        markFieldAccessed(
-            s, maybeIdx.value(), steps, isControl, context, sources);
-        return;
-      }
-    }
-    VELOX_FAIL("Should have found source for expr {}", fieldName);
   }
-  // The source is a lambda arg. We apply the path to the corresponding
-  // container arg of the 2nd order function call that has the lambda.
-  auto callContext = context;
-  callContext.erase(callContext.begin());
-  auto callSources = sources;
-  callSources.erase(callSources.begin());
-
-  auto* md =
-      FunctionRegistry::instance()->metadata(toName(source.call->name()));
-  const auto* lambdaInfo = md->lambdaInfo(source.lambdaOrdinal);
-  const auto nth = lambdaInfo->argOrdinal[ordinal];
-
-  markSubfields(
-      source.call->inputs()[nth].get(),
-      steps,
-      isControl,
-      callContext,
-      callSources);
+  VELOX_FAIL("Should have found source for expr {}", fieldName);
 }
 
-void Optimization::markSubfields(
-    const core::ITypedExpr* expr,
+std::optional<int32_t> ToGraph::stepToArg(
+    const Step& step,
+    const FunctionMetadata* metadata) {
+  const auto begin = metadata->fieldIndexForArg.begin();
+  const auto end = metadata->fieldIndexForArg.end();
+  auto it = std::find(begin, end, step.id);
+  if (it != end) {
+    // The arg corresponding to the step is accessed.
+    return metadata->argOrdinal[it - begin];
+  }
+  return std::nullopt;
+}
+
+namespace {
+
+bool looksConstant(const lp::ExprPtr& expr) {
+  if (expr->isConstant()) {
+    return true;
+  }
+  if (expr->isInputReference()) {
+    return false;
+  }
+  return std::ranges::all_of(expr->inputs(), looksConstant);
+}
+
+} // namespace
+
+lp::ConstantExprPtr ToGraph::tryFoldConstant(const lp::ExprPtr& expr) {
+  if (expr->isConstant()) {
+    return std::static_pointer_cast<const lp::ConstantExpr>(expr);
+  }
+
+  if (looksConstant(expr)) {
+    auto literal = translateExpr(expr);
+    if (literal->is(PlanType::kLiteralExpr)) {
+      return std::make_shared<lp::ConstantExpr>(
+          toTypePtr(literal->value().type),
+          std::make_shared<Variant>(literal->as<Literal>()->literal()));
+    }
+  }
+  return nullptr;
+}
+
+void ToGraph::markSubfields(
+    const lp::ExprPtr& expr,
     std::vector<Step>& steps,
     bool isControl,
-    const std::vector<const RowType*>& context,
-    const std::vector<ContextSource>& sources) {
-  if (auto* field = dynamic_cast<const core::DereferenceTypedExpr*>(expr)) {
-    auto* input = field->inputs()[0].get();
-    auto& name = input->type()->as<TypeKind::ROW>().nameOf(field->index());
-    steps.push_back(Step{
-        .kind = StepKind::kField,
-        .field = (name.empty() ? nullptr : toName(name)),
-        .id = field->index()});
-    markSubfields(input, steps, isControl, context, sources);
-    steps.pop_back();
-    return;
-  }
-  if (auto* field = dynamic_cast<const core::FieldAccessTypedExpr*>(expr)) {
-    auto* input = field->inputs().empty() ? nullptr : field->inputs()[0].get();
-    bool isLeaf =
-        !input || dynamic_cast<const core::InputTypedExpr*>(input) != nullptr;
-    if (isLeaf) {
-      for (auto i = 0; i < sources.size(); ++i) {
-        auto maybeIdx = context[i]->getChildIdxIfExists(field->name());
-        if (maybeIdx.has_value()) {
-          auto source = sources[i];
-          markFieldAccessed(
-              source, maybeIdx.value(), steps, isControl, context, sources);
-          return;
-        }
-      }
-      VELOX_FAIL("Field not found {}", field->name());
-    }
-    steps.push_back(
-        Step{.kind = StepKind::kField, .field = toName(field->name())});
-    markSubfields(input, steps, isControl, context, sources);
-    steps.pop_back();
-    return;
-  }
-  if (auto* call = dynamic_cast<const core::CallTypedExpr*>(expr)) {
-    auto& name = call->name();
-    if (name == "cardinality") {
-      steps.push_back(Step{.kind = StepKind::kCardinality});
-      markSubfields(
-          call->inputs()[0].get(), steps, isControl, context, sources);
-      steps.pop_back();
-      return;
-    }
-    if (name == "subscript" || name == "element_at") {
-      auto constant = foldConstant(call->inputs()[1]);
-      if (!constant) {
-        std::vector<Step> subSteps;
-        markSubfields(
-            call->inputs()[1].get(), subSteps, isControl, context, sources);
-        steps.push_back(Step{.kind = StepKind::kSubscript, .allFields = true});
-        markSubfields(
-            call->inputs()[0].get(), steps, isControl, context, sources);
-        steps.pop_back();
-        return;
-      }
-      auto value = constant->value();
-      if (value->type()->kind() == TypeKind::VARCHAR) {
-        std::string str = value->as<ConstantVector<StringView>>()->valueAt(0);
-        steps.push_back(
-            Step{.kind = StepKind::kSubscript, .field = toName(str)});
-        markSubfields(
-            call->inputs()[0].get(), steps, isControl, context, sources);
-        steps.pop_back();
-        return;
-      }
-      auto id = integerValue(constant->value().get());
-      steps.push_back(Step{.kind = StepKind::kSubscript, .id = id});
-      markSubfields(
-          call->inputs()[0].get(), steps, isControl, context, sources);
-      steps.pop_back();
-      return;
-    }
-    auto* metadata = FunctionRegistry::instance()->metadata(toName(name));
-    if (!metadata || !metadata->processSubfields()) {
-      for (auto i = 0; i < call->inputs().size(); ++i) {
-        std::vector<Step> steps;
-        markSubfields(
-            call->inputs()[i].get(), steps, isControl, context, sources);
-      }
-      return;
-    }
-    // The function has non-default metadata. Record subfields.
-    auto* fields = isControl ? &controlSubfields_ : &payloadSubfields_;
-    auto path = stepsToPath(steps);
-    fields->argFields[call].resultPaths[ResultAccess::kSelf].add(path->id());
-    for (auto i = 0; i < call->inputs().size(); ++i) {
-      if (metadata->subfieldArg.has_value() &&
-          i == metadata->subfieldArg.value()) {
-        // A subfield of func is a subfield of one arg.
-        markSubfields(
-            call->inputs()[metadata->subfieldArg.value()].get(),
+    const MarkFieldsAccessedContext& context) {
+  if (expr->isInputReference()) {
+    const auto& name = expr->asUnchecked<lp::InputReferenceExpr>()->name();
+    for (auto i = 0; i < context.sources.size(); ++i) {
+      if (auto maybeIdx = context.rowTypes[i]->getChildIdxIfExists(name)) {
+        markFieldAccessed(
+            context.sources[i],
+            static_cast<int32_t>(maybeIdx.value()),
             steps,
             isControl,
-            context,
-            sources);
+            context);
+        return;
+      }
+    }
+    VELOX_FAIL("Field not found {}", name);
+  }
+
+  if (isSpecialForm(expr, lp::SpecialForm::kDereference)) {
+    VELOX_CHECK(expr->inputAt(1)->isConstant());
+    const auto* field = expr->inputAt(1)->asUnchecked<lp::ConstantExpr>();
+    const auto& input = expr->inputAt(0);
+
+    // Always fill both index and name for a struct getter.
+    auto fieldIndex = maybeIntegerLiteral(field);
+    Name name = nullptr;
+    if (fieldIndex.has_value()) {
+      name = toName(input->type()->asRow().nameOf(fieldIndex.value()));
+    } else {
+      const auto& fieldName = field->value()->value<TypeKind::VARCHAR>();
+      fieldIndex = input->type()->asRow().getChildIdx(fieldName);
+      name = toName(fieldName);
+    }
+
+    steps.push_back(
+        {.kind = StepKind::kField, .field = name, .id = fieldIndex.value()});
+    markSubfields(input, steps, isControl, context);
+    steps.pop_back();
+    return;
+  }
+
+  if (expr->isCall()) {
+    auto name = toName(expr->asUnchecked<lp::CallExpr>()->name());
+    if (name == cardinality_) {
+      steps.push_back({.kind = StepKind::kCardinality});
+      markSubfields(expr->inputAt(0), steps, isControl, context);
+      steps.pop_back();
+      return;
+    }
+
+    if (name == subscript_ || name == elementAt_) {
+      auto constant = tryFoldConstant(expr->inputAt(1));
+      if (!constant) {
+        std::vector<Step> subSteps;
+        markSubfields(expr->inputAt(1), subSteps, isControl, context);
+
+        steps.push_back({.kind = StepKind::kSubscript, .allFields = true});
+        markSubfields(expr->inputAt(0), steps, isControl, context);
+        steps.pop_back();
+        return;
+      }
+
+      const auto& value = constant->value();
+      if (value->kind() == TypeKind::VARCHAR) {
+        const auto& str = value->value<TypeKind::VARCHAR>();
+        steps.push_back({.kind = StepKind::kSubscript, .field = toName(str)});
+      } else {
+        const auto& id = integerValue(value.get());
+        steps.push_back({.kind = StepKind::kSubscript, .id = id});
+      }
+
+      markSubfields(expr->inputAt(0), steps, isControl, context);
+      steps.pop_back();
+      return;
+    }
+
+    const auto* metadata = functionMetadata(toName(name));
+    if (!metadata || !metadata->processSubfields()) {
+      std::vector<Step> argumentSteps;
+      for (const auto& input : expr->inputs()) {
+        markSubfields(input, argumentSteps, isControl, context);
+        VELOX_DCHECK(argumentSteps.empty());
+      }
+      return;
+    }
+
+    // The function has non-default metadata. Record subfields.
+    const auto* call = expr->asUnchecked<lp::CallExpr>();
+    const auto* path = stepsToPath(steps);
+    auto* fields = isControl ? &controlSubfields_ : &payloadSubfields_;
+    auto& paths = fields->argFields[call].resultPaths[ResultAccess::kSelf];
+    if (paths.contains(path->id())) {
+      // Already marked.
+      return;
+    }
+    paths.add(path->id());
+
+    // If the function is some kind of constructor, like
+    // make_row_from_map or make_named_row, then a path over it
+    // selects one argument. If there is no path, all arguments are
+    // implicitly accessed.
+    if (metadata->valuePathToArgPath && !steps.empty()) {
+      auto pair = metadata->valuePathToArgPath(steps, *call);
+      markSubfields(expr->inputAt(pair.second), pair.first, isControl, context);
+      return;
+    }
+    for (auto i = 0; i < expr->inputs().size(); ++i) {
+      if (metadata->subfieldArg == i) {
+        // A subfield of func is a subfield of one arg.
+        markSubfields(expr->inputAt(i), steps, isControl, context);
         continue;
       }
+
       if (!steps.empty() && steps.back().kind == StepKind::kField) {
-        auto maybeNth = stepToArg(steps.back(), metadata);
+        const auto maybeNth = stepToArg(steps.back(), metadata);
         if (maybeNth.has_value() && maybeNth.value() == i) {
           auto newSteps = steps;
-          auto argPath = stepsToPath(newSteps);
-          fields->argFields[call].resultPaths[maybeNth.value()].add(
+          const auto* argPath = stepsToPath(newSteps);
+          fields->argFields[expr.get()].resultPaths[maybeNth.value()].add(
               argPath->id());
           newSteps.pop_back();
           markSubfields(
-              call->inputs()[maybeNth.value()].get(),
-              newSteps,
-              isControl,
-              context,
-              sources);
+              expr->inputs()[maybeNth.value()], newSteps, isControl, context);
           continue;
-        } else if (
-            std::find(
+        }
+
+        if (std::find(
                 metadata->fieldIndexForArg.begin(),
                 metadata->fieldIndexForArg.end(),
                 i) != metadata->fieldIndexForArg.end()) {
@@ -272,209 +376,159 @@ void Optimization::markSubfields(
           continue;
         }
       }
-      if (metadata->lambdaInfo(i)) {
-        auto argType = lambdaArgType(call->inputs()[i].get());
-        std::vector<const RowType*> newContext = {argType.get()};
-        newContext.insert(newContext.end(), context.begin(), context.end());
-        std::vector<ContextSource> newSources = {
-            ContextSource{.call = call, .lambdaOrdinal = i}};
-        newSources.insert(newSources.end(), sources.begin(), sources.end());
 
-        auto* l = reinterpret_cast<const core::LambdaTypedExpr*>(
-            call->inputs()[i].get());
-        std::vector<Step> empty;
+      if (metadata->lambdaInfo(i)) {
+        const auto* lambda = expr->inputAt(i)->asUnchecked<lp::LambdaExpr>();
+        const auto& argType = lambda->signature();
+
+        std::vector<const RowType*> newRowTypes;
+        newRowTypes.reserve(context.rowTypes.size() + 1);
+        newRowTypes.push_back(argType.get());
+        newRowTypes.insert(
+            newRowTypes.end(),
+            context.rowTypes.begin(),
+            context.rowTypes.end());
+
+        std::vector<LogicalContextSource> newSources;
+        newSources.reserve(context.sources.size() + 1);
+        newSources.push_back({.call = call, .lambdaOrdinal = i});
+        newSources.insert(
+            newSources.end(), context.sources.begin(), context.sources.end());
+
+        std::vector<Step> lambdaSteps;
         markSubfields(
-            l->body().get(), empty, isControl, newContext, newSources);
-        continue;
-        markSubfields(
-            call->inputs()[i].get(), empty, isControl, context, sources);
+            lambda->body(), lambdaSteps, isControl, {newRowTypes, newSources});
+        VELOX_DCHECK(lambdaSteps.empty());
         continue;
       }
       // The argument is not special, just mark through without path.
-      std::vector<Step> empty;
-      markSubfields(
-          call->inputs()[i].get(), empty, isControl, context, sources);
+      std::vector<Step> argumentSteps;
+      markSubfields(expr->inputAt(i), argumentSteps, isControl, context);
+      VELOX_DCHECK(argumentSteps.empty());
     }
     return;
   }
-  if (dynamic_cast<const core::ConstantTypedExpr*>(expr)) {
+
+  if (expr->isConstant()) {
     return;
   }
-  if (auto* castExpr = dynamic_cast<const core::CastTypedExpr*>(expr)) {
-    std::vector<Step> steps;
-    markSubfields(
-        castExpr->inputs()[0].get(), steps, isControl, context, sources);
+
+  if (expr->isSpecialForm()) {
+    std::vector<Step> specialFormSteps;
+    for (const auto& input : expr->inputs()) {
+      markSubfields(input, specialFormSteps, isControl, context);
+      VELOX_DCHECK(specialFormSteps.empty());
+    }
     return;
   }
-  VELOX_UNREACHABLE("Unhandled expr: {}", expr->toString());
+
+  VELOX_UNREACHABLE("Unhandled expr: {}", lp::ExprPrinter::toText(*expr));
 }
 
-void Optimization::markColumnSubfields(
-    const core::PlanNode* node,
-    const std::vector<core::FieldAccessTypedExprPtr>& columns,
-    int32_t source) {
-  std::vector<const RowType*> context = {
-      node->sources()[source]->outputType().get()};
-  std::vector<ContextSource> sources = {
-      {.planNode = node->sources()[source].get()}};
-  for (auto i = 0; i < columns.size(); ++i) {
-    std::vector<Step> steps;
-    markSubfields(columns[i].get(), steps, true, context, sources);
+void ToGraph::markColumnSubfields(
+    const lp::LogicalPlanNodePtr& source,
+    std::span<const lp::ExprPtr> columns) {
+  const auto ctx = fromNode(source);
+  std::vector<Step> steps;
+  for (const auto& column : columns) {
+    markSubfields(column, steps, true, ctx.toCtx());
+    VELOX_DCHECK(steps.empty());
   }
 }
 
-void Optimization::markControl(const core::PlanNode* node) {
-  auto name = node->name();
-  if (auto* join = dynamic_cast<const core::AbstractJoinNode*>(node)) {
-    markColumnSubfields(node, join->leftKeys(), 0);
-    markColumnSubfields(node, join->rightKeys(), 1);
-    if (auto* filter = join->filter().get()) {
-      std::vector<const RowType*> context = {
-          join->sources()[0]->outputType().get(),
-          join->sources()[1]->outputType().get()};
-      std::vector<ContextSource> sources = {
-          {.planNode = join->sources()[0].get()},
-          {.planNode = join->sources()[1].get()}};
+void ToGraph::markControl(const lp::LogicalPlanNode& node) {
+  const auto kind = node.kind();
+  if (kind == lp::NodeKind::kJoin) {
+    const auto* join = node.asUnchecked<lp::JoinNode>();
+    if (const auto& condition = join->condition()) {
       std::vector<Step> steps;
-      markSubfields(filter, steps, true, context, sources);
+      markSubfields(condition, steps, true, fromNodes(join->inputs()).toCtx());
     }
-  } else if (name == "Filter") {
-    std::vector<const RowType*> context = {
-        node->sources()[0]->outputType().get()};
-    std::vector<ContextSource> sources = {
-        {.planNode = node->sources()[0].get()}};
+
+  } else if (kind == lp::NodeKind::kFilter) {
+    const auto& filter = node.asUnchecked<lp::FilterNode>();
+    markColumnSubfields(node.onlyInput(), std::array{filter->predicate()});
+
+  } else if (kind == lp::NodeKind::kAggregate) {
+    const auto* agg = node.asUnchecked<lp::AggregateNode>();
+    markColumnSubfields(node.onlyInput(), agg->groupingKeys());
+
+  } else if (kind == lp::NodeKind::kSort) {
+    const auto& order = *node.asUnchecked<lp::SortNode>();
+    const auto ctx = fromNode(node.onlyInput());
     std::vector<Step> steps;
-    markSubfields(
-        reinterpret_cast<const core::FilterNode*>(node)->filter().get(),
-        steps,
-        true,
-        context,
-        sources);
-  } else if (name == "Aggregation") {
-    auto* agg = dynamic_cast<const core::AggregationNode*>(node);
-    markColumnSubfields(node, agg->groupingKeys(), 0);
-  } else if (name == "OrderBy") {
-    auto* order = dynamic_cast<const core::OrderByNode*>(node);
-    markColumnSubfields(node, order->sortingKeys(), 0);
-  }
-  for (auto& source : node->sources()) {
-    markControl(source.get());
-  }
-}
-
-void Optimization::markAllSubfields(
-    const RowType* type,
-    const core::PlanNode* node) {
-  markControl(node);
-  ContextSource source = {.planNode = node};
-  std::vector<const RowType*> context;
-  std::vector<ContextSource> sources;
-  for (auto i = 0; i < type->size(); ++i) {
-    std::vector<Step> steps;
-    markFieldAccessed(source, i, steps, false, context, sources);
-  }
-}
-
-std::vector<int32_t> Optimization::usedChannels(const core::PlanNode* node) {
-  auto& control = controlSubfields_.nodeFields[node];
-  auto& payload = payloadSubfields_.nodeFields[node];
-  BitSet unique;
-  std::vector<int32_t> result;
-  for (auto& pair : control.resultPaths) {
-    result.push_back(pair.first);
-    unique.add(pair.first);
-  }
-  for (auto& pair : payload.resultPaths) {
-    if (!unique.contains(pair.first)) {
-      result.push_back(pair.first);
+    for (const auto& key : order.ordering()) {
+      markSubfields(key.expression, steps, true, ctx.toCtx());
+      VELOX_DCHECK(steps.empty());
     }
-  }
-  return result;
-}
 
-namespace {
-
-template <typename T>
-core::TypedExprPtr makeKey(const TypePtr& type, T v) {
-  return std::make_shared<core::ConstantTypedExpr>(type, variant(v));
-}
-} // namespace
-core::TypedExprPtr stepToGetter(Step step, core::TypedExprPtr arg) {
-  switch (step.kind) {
-    case StepKind::kField: {
-      if (step.field) {
-        auto& type = arg->type()->childAt(
-            arg->type()->as<TypeKind::ROW>().getChildIdx(step.field));
-        return std::make_shared<core::FieldAccessTypedExpr>(
-            type, arg, step.field);
-      } else {
-        auto& type = arg->type()->childAt(step.id);
-        return std::make_shared<core::DereferenceTypedExpr>(type, arg, step.id);
-      }
-    }
-    case StepKind::kSubscript: {
-      auto& type = arg->type();
-      if (type->kind() == TypeKind::MAP) {
-        core::TypedExprPtr key;
-        switch (type->as<TypeKind::MAP>().childAt(0)->kind()) {
-          case TypeKind::VARCHAR:
-            key = makeKey(VARCHAR(), step.field);
-            break;
-          case TypeKind::BIGINT:
-            key = makeKey<int64_t>(BIGINT(), step.id);
-            break;
-          case TypeKind::INTEGER:
-            key = makeKey<int32_t>(INTEGER(), step.id);
-            break;
-          case TypeKind::SMALLINT:
-            key = makeKey<int16_t>(SMALLINT(), step.id);
-            break;
-          case TypeKind::TINYINT:
-            key = makeKey<int8_t>(TINYINT(), step.id);
-            break;
-          default:
-            VELOX_FAIL("Unsupported key type");
+  } else if (kind == lp::NodeKind::kSet) {
+    const auto& set = *node.asUnchecked<lp::SetNode>();
+    // If this is with a distinct every column is a control column.
+    if (set.operation() != lp::SetOperation::kUnionAll) {
+      std::vector<Step> steps;
+      for (auto i = 0; i < set.outputType()->size(); ++i) {
+        for (const auto& input : set.inputs()) {
+          const auto ctx = fromNode(input);
+          markFieldAccessed(ctx.sources[0], i, steps, true, ctx.toCtx());
+          VELOX_CHECK(steps.empty());
         }
-
-        return std::make_shared<core::CallTypedExpr>(
-            type->as<TypeKind::MAP>().childAt(1),
-            std::vector<core::TypedExprPtr>{arg, key},
-            "subscript");
       }
-      return std::make_shared<core::CallTypedExpr>(
-          type->childAt(0),
-          std::vector<core::TypedExprPtr>{
-              arg, makeKey<int32_t>(INTEGER(), step.id)},
-          "subscript");
     }
-
-    default:
-      VELOX_NYI();
   }
+
+  for (const auto& source : node.inputs()) {
+    markControl(*source);
+  }
+}
+
+void ToGraph::markAllSubfields(const lp::LogicalPlanNode& node) {
+  markControl(node);
+
+  LogicalContextSource source = {.planNode = &node};
+  std::vector<Step> steps;
+  for (auto i = 0; i < node.outputType()->size(); ++i) {
+    markFieldAccessed(source, i, steps, false, {});
+    VELOX_CHECK(steps.empty());
+  }
+}
+
+std::vector<int32_t> ToGraph::usedChannels(const lp::LogicalPlanNode& node) {
+  const auto& control = controlSubfields_.nodeFields[&node];
+  const auto& payload = payloadSubfields_.nodeFields[&node];
+  std::vector<int32_t> result;
+  std::ranges::set_union(
+      control.resultPaths | std::views::keys,
+      payload.resultPaths | std::views::keys,
+      std::back_inserter(result));
+  return result;
 }
 
 std::string PlanSubfields::toString() const {
   std::stringstream out;
-  out << "Nodes:";
-  for (auto& pair : nodeFields) {
-    out << "Node " << pair.first->id() << " = {";
-    for (auto& s : pair.second.resultPaths) {
-      out << s.first << " -> {";
-      s.second.forEach(
+
+  auto appendPaths = [&](const auto& resultPaths) {
+    for (const auto& [index, paths] : resultPaths) {
+      out << index << " -> {";
+      paths.forEach(
           [&](auto i) { out << queryCtx()->pathById(i)->toString(); });
-      out << "}\n";
+      out << "}" << std::endl;
     }
+  };
+
+  out << "Nodes: ";
+  for (const auto& [node, access] : nodeFields) {
+    out << "Node " << node->id() << " = {";
+    appendPaths(access.resultPaths);
+    out << "}" << std::endl;
   }
+
   if (!argFields.empty()) {
-    out << "Functions:";
-    for (auto& pair : argFields) {
-      out << "Func " << pair.first->toString() << " = {";
-      for (auto& s : pair.second.resultPaths) {
-        out << s.first << " -> {";
-        s.second.forEach(
-            [&](auto i) { out << queryCtx()->pathById(i)->toString(); });
-        out << "}\n";
-      }
+    out << "Functions: ";
+    for (const auto& [expr, access] : argFields) {
+      out << "Func " << lp::ExprPrinter::toText(*expr) << " = {";
+      appendPaths(access.resultPaths);
+      out << "}" << std::endl;
     }
   }
   return out.str();
