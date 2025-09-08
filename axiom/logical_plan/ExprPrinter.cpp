@@ -60,9 +60,39 @@ class ToTextVisitor : public ExprVisitor {
     auto& out = toOut(context);
 
     out << expr.name();
-    appendInputs(expr, out, context);
 
-    // TODO Add filter, order by and distinct.
+    out << "(";
+
+    if (expr.isDistinct()) {
+      out << "DISTINCT ";
+    }
+
+    const auto numInputs = expr.inputs().size();
+    for (auto i = 0; i < numInputs; ++i) {
+      if (i > 0) {
+        out << ", ";
+      }
+      expr.inputAt(i)->accept(*this, context);
+    }
+
+    if (!expr.ordering().empty()) {
+      out << " ORDER BY ";
+      for (auto i = 0; i < expr.ordering().size(); ++i) {
+        if (i > 0) {
+          out << ", ";
+        }
+        expr.ordering()[i].expression->accept(*this, context);
+        out << " " << expr.ordering()[i].order.toString();
+      }
+    }
+
+    out << ")";
+
+    if (expr.filter() != nullptr) {
+      out << " FILTER (WHERE ";
+      expr.filter()->accept(*this, context);
+      out << ")";
+    }
   }
 
   void visit(const WindowExpr& expr, ExprVisitorContext& context)
