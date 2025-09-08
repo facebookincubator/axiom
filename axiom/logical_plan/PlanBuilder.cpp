@@ -18,7 +18,6 @@
 #include "axiom/logical_plan/NameMappings.h"
 #include "axiom/optimizer/connectors/ConnectorMetadata.h"
 #include "velox/connectors/Connector.h"
-#include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/Expr.h"
@@ -247,7 +246,7 @@ void PlanBuilder::resolveProjections(
     if (expr->isInputReference()) {
       // Identity projection
       const auto& id = expr->asUnchecked<InputReferenceExpr>()->name();
-      if (!alias.has_vaflue() || id == alias.value()) {
+      if (!alias.has_value() || id == alias.value()) {
         outputNames.push_back(id);
 
         const auto names = outputMapping_->reverseLookup(id);
@@ -362,23 +361,7 @@ PlanBuilder& PlanBuilder::aggregate(
   exprs.reserve(aggregates.size());
 
   for (const auto& aggregate : aggregates) {
-    auto aggregateExpr =
-        duckdb::parseAggregateExpr(aggregate.sql(), {});
-
-    std::vector<SortingField> ordering;
-    for (const auto& orderBy : aggregateExpr.orderBy) {
-      auto sortKeyExpr = resolveScalarTypes(orderBy.expr);
-      SortOrder order{orderBy.ascending, orderBy.nullsFirst};
-      ordering.emplace_back(sortKeyExpr, order);
-    }
-
-    ExprPtr filter;
-    if (aggregateExpr.maskExpr != nullptr) {
-      filter = resolveScalarTypes(aggregateExpr.maskExpr);
-    }
-
-    auto expr = resolveAggregateTypes(
-        aggregateExpr.expr, filter, ordering, aggregateExpr.distinct);
+    auto expr = resolveAggregateTypes(aggregate.expr());
 
     if (aggregate.name().has_value()) {
       const auto& alias = aggregate.name().value();
@@ -1061,10 +1044,7 @@ ExprPtr ExprResolver::resolveScalarTypes(
 
 AggregateExprPtr ExprResolver::resolveAggregateTypes(
     const core::ExprPtr& expr,
-    const InputNameResolver& inputNameResolver,
-    const ExprPtr& filter,
-    const std::vector<SortingField>& ordering,
-    bool distinct) const {
+    const InputNameResolver& inputNameResolver) const {
   const auto* call = dynamic_cast<const core::CallExpr*>(expr.get());
   VELOX_USER_CHECK_NOT_NULL(
       call, "Aggregate must be a call expression: {}", expr->toString());
@@ -1084,8 +1064,7 @@ AggregateExprPtr ExprResolver::resolveAggregateTypes(
   }
 
   if (auto type = exec::resolveAggregateFunction(name, inputTypes).first) {
-    return std::make_shared<AggregateExpr>(
-        type, name, inputs, filter, ordering, distinct);
+    return std::make_shared<AggregateExpr>(type, name, inputs);
   }
 
   auto allSignatures = exec::getAggregateFunctionSignatures();
@@ -1300,21 +1279,6 @@ AggregateExprPtr PlanBuilder::resolveAggregateTypes(
       expr, [&](const auto& alias, const auto& name) {
         return resolveInputName(alias, name);
       });
-}
-
-AggregateExprPtr PlanBuilder::resolveAggregateTypes(
-    const core::ExprPtr& expr,
-    const ExprPtr& filter,
-    const std::vector<SortingField>& ordering,
-    bool distinct) const {
-  return resolveAggregateTypesImpl(
-      expr,
-      [&](const auto& alias, const auto& name) {
-        return resolveInputName(alias, name);
-      },
-      filter,
-      ordering,
-      distinct);
 }
 
 PlanBuilder& PlanBuilder::as(const std::string& alias) {
