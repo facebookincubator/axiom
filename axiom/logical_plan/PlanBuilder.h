@@ -59,7 +59,10 @@ class ExprResolver {
 
   AggregateExprPtr resolveAggregateTypes(
       const core::ExprPtr& expr,
-      const InputNameResolver& inputNameResolver) const;
+      const InputNameResolver& inputNameResolver,
+      const ExprPtr& filter = nullptr,
+      const std::vector<SortingField>& ordering = {},
+      bool distinct = false) const;
 
  private:
   ExprPtr resolveLambdaExpr(
@@ -344,7 +347,11 @@ class PlanBuilder {
 
   ExprPtr resolveScalarTypes(const core::ExprPtr& expr) const;
 
-  AggregateExprPtr resolveAggregateTypes(const core::ExprPtr& expr) const;
+  AggregateExprPtr resolveAggregateTypes(
+      const core::ExprPtr& expr,
+      const ExprPtr& filter = nullptr,
+      const std::vector<SortingField>& ordering = {},
+      bool distinct = false) const;
 
   std::vector<ExprApi> parse(const std::vector<std::string>& exprs);
 

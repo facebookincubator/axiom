@@ -18,6 +18,7 @@
 #include "axiom/logical_plan/NameMappings.h"
 #include "axiom/optimizer/connectors/ConnectorMetadata.h"
 #include "velox/connectors/Connector.h"
+#include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/Expr.h"
@@ -339,7 +340,53 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
 PlanBuilder& PlanBuilder::aggregate(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates) {
-  return aggregate(parse(groupingKeys), parse(aggregates));
+  VELOX_USER_CHECK_NOT_NULL(node_, "Aggregate node cannot be a leaf node");
+  std::vector<std::string> outputNames;
+  outputNames.reserve(groupingKeys.size() + aggregates.size());
+  std::vector<ExprPtr> keyExprs;
+  keyExprs.reserve(groupingKeys.size());
+  auto newOutputMapping = std::make_shared<NameMappings>();
+  resolveProjections(
+      parse(groupingKeys), outputNames, keyExprs, *newOutputMapping);
+  std::vector<AggregateExprPtr> exprs;
+  exprs.reserve(aggregates.size());
+
+  for (const auto& sql : aggregates) {
+    auto aggregateExpr = duckdb::parseAggregateExpr(sql, {});
+
+    std::vector<SortingField> ordering;
+    for (const auto& orderBy : aggregateExpr.orderBy) {
+      auto sortKeyExpr = resolveScalarTypes(orderBy.expr);
+      SortOrder order{orderBy.ascending, orderBy.nullsFirst};
+      ordering.emplace_back(sortKeyExpr, order);
+    }
+
+    ExprPtr filter;
+    if (aggregateExpr.maskExpr != nullptr) {
+      filter = resolveScalarTypes(aggregateExpr.maskExpr);
+    }
+
+    auto expr = resolveAggregateTypes(
+        aggregateExpr.expr, filter, ordering, aggregateExpr.distinct);
+
+    if (aggregateExpr.expr->alias().has_value()) {
+      const auto& alias = aggregateExpr.expr->alias().value();
+      outputNames.push_back(newName(alias));
+      newOutputMapping->add(alias, outputNames.back());
+    } else {
+      outputNames.push_back(newName(expr->name()));
+    }
+    exprs.push_back(expr);
+  }
+  node_ = std::make_shared<AggregateNode>(
+      nextId(),
+      node_,
+      keyExprs,
+      std::vector<AggregateNode::GroupingSet>{},
+      exprs,
+      outputNames);
+  outputMapping_ = newOutputMapping;
+  return *this;
 }
 
 PlanBuilder& PlanBuilder::aggregate(
@@ -1044,7 +1091,10 @@ ExprPtr ExprResolver::resolveScalarTypes(
 
 AggregateExprPtr ExprResolver::resolveAggregateTypes(
     const core::ExprPtr& expr,
-    const InputNameResolver& inputNameResolver) const {
+    const InputNameResolver& inputNameResolver,
+    const ExprPtr& filter,
+    const std::vector<SortingField>& ordering,
+    bool distinct) const {
   const auto* call = dynamic_cast<const core::CallExpr*>(expr.get());
   VELOX_USER_CHECK_NOT_NULL(
       call, "Aggregate must be a call expression: {}", expr->toString());
@@ -1064,7 +1114,8 @@ AggregateExprPtr ExprResolver::resolveAggregateTypes(
   }
 
   if (auto type = exec::resolveAggregateFunction(name, inputTypes).first) {
-    return std::make_shared<AggregateExpr>(type, name, inputs);
+    return std::make_shared<AggregateExpr>(
+        type, name, inputs, filter, ordering, distinct);
   }
 
   auto allSignatures = exec::getAggregateFunctionSignatures();
@@ -1274,11 +1325,18 @@ ExprPtr PlanBuilder::resolveScalarTypes(const core::ExprPtr& expr) const {
 }
 
 AggregateExprPtr PlanBuilder::resolveAggregateTypes(
-    const core::ExprPtr& expr) const {
+    const core::ExprPtr& expr,
+    const ExprPtr& filter,
+    const std::vector<SortingField>& ordering,
+    bool distinct) const {
   return resolver_.resolveAggregateTypes(
-      expr, [&](const auto& alias, const auto& name) {
+      expr,
+      [&](const auto& alias, const auto& name) {
         return resolveInputName(alias, name);
-      });
+      },
+      filter,
+      ordering,
+      distinct);
 }
 
 PlanBuilder& PlanBuilder::as(const std::string& alias) {

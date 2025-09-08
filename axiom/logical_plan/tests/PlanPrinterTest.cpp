@@ -17,7 +17,6 @@
 #include "axiom/logical_plan/PlanPrinter.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/connectors/tests/TestConnector.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -329,6 +328,110 @@ TEST_F(PlanPrinterTest, aggregate) {
       testing::ElementsAre(
           testing::Eq("- AGGREGATE [1]: 4 fields"),
           testing::Eq("  - VALUES [0]: 2 fields"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, aggregateExprDistinct) {
+  auto rowType = ROW({"a", "b"}, {INTEGER(), INTEGER()});
+  std::vector<Variant> data{
+      Variant::row({1, 10}),
+      Variant::row({1, 10}),
+      Variant::row({2, 20}),
+  };
+
+  auto plan = PlanBuilder()
+                  .values(rowType, data)
+                  .aggregate({"a"}, {"sum(distinct b) as distinct_sum"})
+                  .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Aggregate"),
+          testing::StartsWith("    distinct_sum := sum(DISTINCT b)"),
+          testing::StartsWith("  - Values"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, aggregateExprOrderBy) {
+  auto rowType = ROW({"a", "b", "c"}, {INTEGER(), INTEGER(), INTEGER()});
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100}),
+      Variant::row({1, 20, 200}),
+      Variant::row({2, 30, 300}),
+  };
+
+  auto plan =
+      PlanBuilder()
+          .values(rowType, data)
+          .aggregate({"a"}, {"array_agg(b order by c desc) as ordered_array"})
+          .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Aggregate"),
+          testing::StartsWith(
+              "    ordered_array := array_agg(b ORDER BY c DESC"),
+          testing::StartsWith("  - Values"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, aggregateExprFilter) {
+  auto rowType = ROW({"a", "b", "d"}, {INTEGER(), INTEGER(), BOOLEAN()});
+  std::vector<Variant> data{
+      Variant::row({1, 10, true}),
+      Variant::row({1, 20, false}),
+      Variant::row({2, 30, true}),
+  };
+
+  auto plan = PlanBuilder()
+                  .values(rowType, data)
+                  .aggregate({"a"}, {"sum(b) filter (where d) as filtered_sum"})
+                  .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Aggregate"),
+          testing::StartsWith("    filtered_sum := sum(b) FILTER (WHERE d)"),
+          testing::StartsWith("  - Values"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, aggregateExprComplex) {
+  auto rowType =
+      ROW({"a", "b", "c", "d"}, {INTEGER(), INTEGER(), INTEGER(), BOOLEAN()});
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100, true}),
+      Variant::row({1, 10, 200, true}),
+      Variant::row({1, 20, 300, false}),
+      Variant::row({2, 30, 400, true}),
+  };
+
+  auto plan =
+      PlanBuilder()
+          .values(rowType, data)
+          .aggregate(
+              {"a"},
+              {"array_agg(distinct b order by c desc) filter (where d) as complex_agg"})
+          .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Aggregate"),
+          testing::StartsWith(
+              "    complex_agg := array_agg(DISTINCT b ORDER BY c DESC NULLS LAST) FILTER (WHERE d)"),
+          testing::StartsWith("  - Values"),
           testing::Eq("")));
 }
 
@@ -1076,168 +1179,6 @@ TEST_F(PlanPrinterTest, lambda) {
       lines,
       testing::ElementsAre(
           testing::Eq("- VALUES [0]: 2 fields"), testing::Eq("")));
-}
-
-TEST_F(PlanPrinterTest, aggregateExprBasic) {
-  auto rowType = ROW({"a", "b", "c"}, {INTEGER(), INTEGER(), INTEGER()});
-  std::vector<Variant> data{
-      Variant::row({1, 10, 100}),
-      Variant::row({2, 20, 200}),
-      Variant::row({2, 21, 201}),
-      Variant::row({3, 30, 300}),
-  };
-
-  auto plan = PlanBuilder()
-                  .values(rowType, data)
-                  .aggregate(
-                      {"a"},
-                      {"sum(b) as total",
-                       "avg(b) as mean",
-                       "count(*) as count_all",
-                       "count(b) as count_b",
-                       "min(c) as min_c",
-                       "max(c) as max_c"})
-                  .build();
-
-  auto lines = toLines(plan);
-
-  EXPECT_THAT(
-      lines,
-      testing::ElementsAre(
-          testing::StartsWith("- Aggregate"),
-          testing::StartsWith("    total := sum(b)"),
-          testing::StartsWith("    mean := avg(b)"),
-          testing::StartsWith("    count_all := count()"),
-          testing::StartsWith("    count_b := count(b)"),
-          testing::StartsWith("    min_c := min(c)"),
-          testing::StartsWith("    max_c := max(c)"),
-          testing::StartsWith("  - Values"),
-          testing::Eq("")));
-
-  lines = toSummaryLines(plan);
-
-  EXPECT_THAT(
-      lines,
-      testing::ElementsAre(
-          testing::Eq(
-              "- AGGREGATE [1]: 7 fields: a INTEGER, total BIGINT, mean DOUBLE, count_all BIGINT, count_b BIGINT, ..."),
-          testing::Eq(
-              "  - VALUES [0]: 3 fields: a INTEGER, b INTEGER, c INTEGER"),
-          testing::Eq("        rows: 4"),
-          testing::Eq("")));
-
-  lines = toSkeletonLines(plan);
-
-  EXPECT_THAT(
-      lines,
-      testing::ElementsAre(
-          testing::Eq("- AGGREGATE [1]: 7 fields"),
-          testing::Eq("  - VALUES [0]: 3 fields"),
-          testing::Eq("")));
-}
-
-TEST_F(PlanPrinterTest, aggregateExprDistinct) {
-  auto rowType = ROW({"a", "b"}, {INTEGER(), INTEGER()});
-  std::vector<Variant> data{
-      Variant::row({1, 10}),
-      Variant::row({1, 10}), // duplicate value
-      Variant::row({2, 20}),
-  };
-
-  auto plan = PlanBuilder()
-                  .values(rowType, data)
-                  .aggregate({"a"}, {"sum(distinct b) as distinct_sum"})
-                  .build();
-
-  auto lines = toLines(plan);
-
-  EXPECT_THAT(
-      lines,
-      testing::ElementsAre(
-          testing::StartsWith("- Aggregate"),
-          testing::StartsWith("    distinct_sum := sum(DISTINCT b)"),
-          testing::StartsWith("  - Values"),
-          testing::Eq("")));
-}
-
-TEST_F(PlanPrinterTest, aggregateExprOrderBy) {
-  auto rowType = ROW({"a", "b", "c"}, {INTEGER(), INTEGER(), INTEGER()});
-  std::vector<Variant> data{
-      Variant::row({1, 10, 100}),
-      Variant::row({1, 20, 200}),
-      Variant::row({2, 30, 300}),
-  };
-
-  auto plan =
-      PlanBuilder()
-          .values(rowType, data)
-          .aggregate({"a"}, {"array_agg(b order by c desc) as ordered_array"})
-          .build();
-
-  auto lines = toLines(plan);
-
-  EXPECT_THAT(
-      lines,
-      testing::ElementsAre(
-          testing::StartsWith("- Aggregate"),
-          testing::StartsWith(
-              "    ordered_array := array_agg(b ORDER BY c DESC"),
-          testing::StartsWith("  - Values"),
-          testing::Eq("")));
-}
-
-TEST_F(PlanPrinterTest, aggregateExprFilter) {
-  auto rowType = ROW({"a", "b", "d"}, {INTEGER(), INTEGER(), BOOLEAN()});
-  std::vector<Variant> data{
-      Variant::row({1, 10, true}),
-      Variant::row({1, 20, false}),
-      Variant::row({2, 30, true}),
-  };
-
-  auto plan = PlanBuilder()
-                  .values(rowType, data)
-                  .aggregate({"a"}, {"sum(b) filter (where d) as filtered_sum"})
-                  .build();
-
-  auto lines = toLines(plan);
-
-  EXPECT_THAT(
-      lines,
-      testing::ElementsAre(
-          testing::StartsWith("- Aggregate"),
-          testing::StartsWith("    filtered_sum := sum(b)"),
-          testing::StartsWith("  - Values"),
-          testing::Eq("")));
-}
-
-TEST_F(PlanPrinterTest, aggregateExprComplex) {
-  auto rowType =
-      ROW({"a", "b", "c", "d"}, {INTEGER(), INTEGER(), INTEGER(), BOOLEAN()});
-  std::vector<Variant> data{
-      Variant::row({1, 10, 100, true}),
-      Variant::row({1, 10, 200, true}), // duplicate b value
-      Variant::row({1, 20, 300, false}),
-      Variant::row({2, 30, 400, true}),
-  };
-
-  auto plan =
-      PlanBuilder()
-          .values(rowType, data)
-          .aggregate(
-              {"a"},
-              {"array_agg(distinct b order by c desc) filter (where d) as complex_agg"})
-          .build();
-
-  auto lines = toLines(plan);
-
-  EXPECT_THAT(
-      lines,
-      testing::ElementsAre(
-          testing::StartsWith("- Aggregate"),
-          testing::StartsWith(
-              "    complex_agg := array_agg(DISTINCT b ORDER BY c DESC"),
-          testing::StartsWith("  - Values"),
-          testing::Eq("")));
 }
 
 TEST_F(PlanPrinterTest, coercions) {
