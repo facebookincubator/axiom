@@ -137,10 +137,7 @@ std::vector<SplitSource::SplitAndGroup> LocalHiveSplitSource::getSplits(
 
 LocalHiveConnectorMetadata::LocalHiveConnectorMetadata(
     HiveConnector* hiveConnector)
-    : HiveConnectorMetadata(hiveConnector),
-      hiveConfig_(
-          std::make_shared<HiveConfig>(hiveConnector_->connectorConfig())),
-      splitManager_(this) {}
+    : HiveConnectorMetadata(hiveConnector), splitManager_(this) {}
 
 void LocalHiveConnectorMetadata::reinitialize() {
   std::lock_guard<std::mutex> l(mutex_);

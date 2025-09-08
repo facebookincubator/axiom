@@ -228,10 +228,10 @@ void TestConnector::appendData(
 
 std::shared_ptr<Connector> TestConnectorFactory::newConnector(
     const std::string& id,
-    std::shared_ptr<const config::ConfigBase>,
+    std::shared_ptr<const config::ConfigBase> config,
     folly::Executor*,
     folly::Executor*) {
-  return std::make_shared<TestConnector>(id);
+  return std::make_shared<TestConnector>(id, std::move(config));
 }
 
 void TestDataSink::appendData(RowVectorPtr vector) {

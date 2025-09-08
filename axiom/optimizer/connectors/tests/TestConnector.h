@@ -374,8 +374,10 @@ class TestDataSource : public DataSource {
 /// the associated table.
 class TestConnector : public Connector {
  public:
-  explicit TestConnector(const std::string& id)
-      : Connector(id),
+  explicit TestConnector(
+      const std::string& id,
+      std::shared_ptr<const config::ConfigBase> config = nullptr)
+      : Connector(id, std::move(config)),
         metadata_{std::make_unique<TestConnectorMetadata>(this)} {}
 
   ConnectorMetadata* metadata() const override {
