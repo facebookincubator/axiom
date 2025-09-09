@@ -17,7 +17,7 @@
 #include "axiom/sql/presto/ast/AstPrinter.h"
 #include <fmt/format.h>
 
-namespace facebook::axiom::sql::presto {
+namespace axiom::sql::presto {
 
 void AstPrinter::visitQuery(Query* node) {
   printHeader("Query", node);
@@ -1151,4 +1151,4 @@ void AstPrinter::visitShowColumns(ShowColumns* node) {
   printHeader("ShowColumns", node);
 }
 
-} // namespace facebook::axiom::sql::presto
+} // namespace axiom::sql::presto

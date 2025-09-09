@@ -25,7 +25,7 @@
 #include "axiom/sql/presto/ast/AstStatements.h"
 #include "axiom/sql/presto/ast/AstSupport.h"
 
-namespace facebook::axiom::sql::presto {
+namespace axiom::sql::presto {
 
 class AstVisitor {
  public:
@@ -561,4 +561,4 @@ class AstVisitor {
   }
 };
 
-} // namespace facebook::axiom::sql::presto
+} // namespace axiom::sql::presto

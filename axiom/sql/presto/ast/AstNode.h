@@ -18,7 +18,7 @@
 #include <memory>
 #include "velox/common/Enums.h"
 
-namespace facebook::axiom::sql::presto {
+namespace axiom::sql::presto {
 
 class AstVisitor;
 
@@ -308,16 +308,16 @@ class Relation : public Node {
 
 using RelationPtr = std::shared_ptr<Relation>;
 
-} // namespace facebook::axiom::sql::presto
+} // namespace axiom::sql::presto
 
 template <>
-struct fmt::formatter<facebook::axiom::sql::presto::NodeType>
+struct fmt::formatter<axiom::sql::presto::NodeType>
     : fmt::formatter<string_view> {
   template <typename FormatContext>
   auto format(
-      facebook::axiom::sql::presto::NodeType nodeType,
+      axiom::sql::presto::NodeType nodeType,
       FormatContext& ctx) const {
     return formatter<string_view>::format(
-        facebook::axiom::sql::presto::NodeTypeName::toName(nodeType), ctx);
+        axiom::sql::presto::NodeTypeName::toName(nodeType), ctx);
   }
 };

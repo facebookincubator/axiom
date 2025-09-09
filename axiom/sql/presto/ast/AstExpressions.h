@@ -18,7 +18,7 @@
 #include <vector>
 #include "axiom/sql/presto/ast/AstNode.h"
 
-namespace facebook::axiom::sql::presto {
+namespace axiom::sql::presto {
 
 // Forward declarations
 class QualifiedName;
@@ -492,4 +492,4 @@ class NotExpression : public Expression {
   ExpressionPtr value_;
 };
 
-} // namespace facebook::axiom::sql::presto
+} // namespace axiom::sql::presto

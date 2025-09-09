@@ -25,7 +25,7 @@
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv, false);
 
-  using namespace facebook::axiom::sql::presto;
+  using namespace axiom::sql::presto;
 
   const std::string sql =
       "SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id";

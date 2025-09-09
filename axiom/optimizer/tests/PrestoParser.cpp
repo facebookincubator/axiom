@@ -24,12 +24,13 @@
 #include "axiom/sql/presto/ast/AstPrinter.h"
 #include "velox/exec/Aggregate.h"
 
+namespace sql = axiom::sql::presto;
+
 namespace facebook::axiom::optimizer::test {
 namespace {
 
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
-namespace sql = facebook::axiom::sql::presto;
 
 using ExprMap = folly::
     F14FastMap<core::ExprPtr, core::ExprPtr, core::IExprHash, core::IExprEqual>;

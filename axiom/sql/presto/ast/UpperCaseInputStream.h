@@ -20,7 +20,7 @@
 
 #include <antlr4-runtime.h>
 
-namespace facebook::axiom::sql::presto {
+namespace axiom::sql::presto {
 /**
  * This class is a thin wrapper around ANTLRInputStream to allow streams to be
  * case-insensitive by always forcing the stream to be upper case. This is done
@@ -43,4 +43,4 @@ class UpperCaseInputStream final : public antlr4::ANTLRInputStream {
   }
 };
 
-} // namespace facebook::axiom::sql::presto
+} // namespace axiom::sql::presto

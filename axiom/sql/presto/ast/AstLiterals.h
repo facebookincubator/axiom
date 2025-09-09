@@ -19,7 +19,7 @@
 #include <string>
 #include "axiom/sql/presto/ast/AstNode.h"
 
-namespace facebook::axiom::sql::presto {
+namespace axiom::sql::presto {
 
 class TypeSignature;
 using TypeSignaturePtr = std::shared_ptr<TypeSignature>;
@@ -261,4 +261,4 @@ class EnumLiteral : public Literal {
   std::string value_;
 };
 
-} // namespace facebook::axiom::sql::presto
+} // namespace axiom::sql::presto

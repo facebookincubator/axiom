@@ -22,7 +22,7 @@
 #include "axiom/sql/presto/grammar/PrestoSqlParser.h"
 #include "axiom/sql/presto/grammar/PrestoSqlVisitor.h"
 
-namespace facebook::axiom::sql::presto {
+namespace axiom::sql::presto {
 
 class AstBuilder : public PrestoSqlVisitor {
  public:
@@ -667,4 +667,4 @@ class AstBuilder : public PrestoSqlVisitor {
   const bool enableTracing_;
 };
 
-} // namespace facebook::axiom::sql::presto
+} // namespace axiom::sql::presto
