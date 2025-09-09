@@ -11,13 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_hive_connector_metadata_test HiveConnectorMetadataTest.cpp)
+add_executable(axiom_hive_connector_metadata_test HiveConnectorMetadataTest.cpp)
 
-add_test(velox_hive_connector_metadata_test velox_hive_connector_metadata_test)
+add_test(axiom_hive_connector_metadata_test axiom_hive_connector_metadata_test)
 
 target_link_libraries(
-  velox_hive_connector_metadata_test
-  velox_hive_connector_metadata
+  axiom_hive_connector_metadata_test
+  axiom_hive_connector_metadata
   velox_hive_connector
   axiom_runner_tests_utils
   velox_hive_partition_function

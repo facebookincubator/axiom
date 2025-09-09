@@ -13,15 +13,15 @@
 # limitations under the License.
 
 velox_add_library(
-  velox_hive_connector_metadata
+  axiom_hive_connector_metadata
   OBJECT
   HiveConnectorMetadata.cpp
   LocalHiveConnectorMetadata.cpp
   StatisticsBuilder.cpp)
 
 velox_link_libraries(
-  velox_hive_connector_metadata
-  velox_connector_metadata
+  axiom_hive_connector_metadata
+  axiom_connector_metadata
   velox_hive_connector
   velox_type_fbhive
   velox_dwio_catalog_fbhive
