@@ -23,11 +23,11 @@
 #include "axiom/sql/presto/ast/AstStatements.h"
 #include "axiom/sql/presto/ast/AstSupport.h"
 
-namespace axiom::sql::presto {
+namespace facebook::axiom::sql::presto {
 
 using AstNodePtr = std::shared_ptr<Node>;
 using AstExpressionPtr = std::shared_ptr<Expression>;
 using AstStatementPtr = std::shared_ptr<Statement>;
 using AstRelationPtr = std::shared_ptr<Relation>;
 
-} // namespace axiom::sql::presto
+} // namespace facebook::axiom::sql::presto

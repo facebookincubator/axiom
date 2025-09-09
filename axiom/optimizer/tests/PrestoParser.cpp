@@ -24,11 +24,12 @@
 #include "axiom/sql/presto/ast/AstPrinter.h"
 #include "velox/exec/Aggregate.h"
 
-namespace lp = facebook::velox::logical_plan;
-namespace sql = axiom::sql::presto;
-
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
+namespace sql = facebook::axiom::sql::presto;
 
 using ExprMap = folly::
     F14FastMap<core::ExprPtr, core::ExprPtr, core::IExprHash, core::IExprEqual>;
@@ -1210,4 +1211,4 @@ SqlStatementPtr PrestoParser::doParse(
   return std::make_shared<SelectStatement>(planner.getPlan());
 }
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

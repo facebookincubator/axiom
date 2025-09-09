@@ -38,14 +38,14 @@ class Optimization {
       std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
       velox::core::ExpressionEvaluator& evaluator,
       OptimizerOptions options = {},
-      axiom::runner::MultiFragmentPlan::Options runnerOptions = {});
+      runner::MultiFragmentPlan::Options runnerOptions = {});
 
   // Simplified API for usage in testing and tooling.
   static PlanAndStats toVeloxPlan(
       const logical_plan::LogicalPlanNode& logicalPlan,
       velox::memory::MemoryPool& pool,
       OptimizerOptions options = {},
-      axiom::runner::MultiFragmentPlan::Options runnerOptions = {});
+      runner::MultiFragmentPlan::Options runnerOptions = {});
 
   Optimization(const Optimization& other) = delete;
   Optimization& operator=(const Optimization& other) = delete;
@@ -135,7 +135,7 @@ class Optimization {
     return options_;
   }
 
-  const axiom::runner::MultiFragmentPlan::Options& runnerOptions() const {
+  const runner::MultiFragmentPlan::Options& runnerOptions() const {
     return runnerOptions_;
   }
 
@@ -295,7 +295,7 @@ class Optimization {
 
   const OptimizerOptions options_;
 
-  const axiom::runner::MultiFragmentPlan::Options runnerOptions_;
+  const runner::MultiFragmentPlan::Options runnerOptions_;
 
   const bool isSingleWorker_;
 

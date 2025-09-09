@@ -20,7 +20,7 @@
 #include "axiom/logical_plan/NameAllocator.h"
 #include "axiom/logical_plan/NameMappings.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 TEST(NameMappingsTest, basic) {
   NameAllocator allocator;
@@ -150,4 +150,4 @@ TEST(NameMappingsTest, basic) {
   }
 }
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

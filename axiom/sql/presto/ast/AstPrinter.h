@@ -19,7 +19,7 @@
 
 #include "axiom/sql/presto/ast/AstVisitor.h"
 
-namespace axiom::sql::presto {
+namespace facebook::axiom::sql::presto {
 
 class AstPrinter : public AstVisitor {
  public:
@@ -319,4 +319,4 @@ class AstPrinter : public AstVisitor {
   std::ostream& out_;
   int indent_ = 0;
 };
-} // namespace axiom::sql::presto
+} // namespace facebook::axiom::sql::presto

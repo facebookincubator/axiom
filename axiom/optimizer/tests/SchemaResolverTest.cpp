@@ -22,7 +22,9 @@
 #include "axiom/optimizer/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/connectors/tests/TestConnector.h"
 
-namespace facebook::velox::optimizer::test {
+using namespace facebook::velox;
+
+namespace facebook::axiom::optimizer::test {
 namespace {
 
 class SchemaResolverTest : public ::testing::Test {
@@ -132,4 +134,4 @@ TEST_F(SchemaResolverTest, catalogMismatch) {
 }
 
 } // namespace
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

@@ -21,10 +21,10 @@
 
 #include <ranges>
 
-namespace lp = facebook::axiom::logical_plan;
-
 namespace facebook::axiom::optimizer {
 namespace {
+
+namespace lp = facebook::axiom::logical_plan;
 
 PathCP stepsToPath(std::span<const Step> steps) {
   return toPath(steps, true);

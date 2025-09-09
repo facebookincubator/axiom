@@ -19,7 +19,7 @@
 #include <vector>
 #include "axiom/sql/presto/ast/AstNode.h"
 
-namespace axiom::sql::presto {
+namespace facebook::axiom::sql::presto {
 
 // Forward declarations
 class Identifier;
@@ -559,4 +559,4 @@ class TableVersionExpression : public Expression {
   ExpressionPtr expression_;
 };
 
-} // namespace axiom::sql::presto
+} // namespace facebook::axiom::sql::presto

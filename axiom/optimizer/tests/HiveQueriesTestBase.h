@@ -54,7 +54,8 @@ class HiveQueriesTestBase : public test::QueryTestBase {
     return *prestoParser_;
   }
 
-  static std::shared_ptr<velox::exec::test::TempDirectoryPath> gTempDirectory;
+  inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
+      gTempDirectory;
 
   std::unique_ptr<PrestoParser> prestoParser_;
 };

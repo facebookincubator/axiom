@@ -47,7 +47,9 @@ DEFINE_string(
     "",
     "Path to save sampling after the test suite");
 
-namespace facebook::velox::optimizer::test {
+using namespace facebook::velox;
+
+namespace facebook::axiom::optimizer::test {
 using namespace facebook::velox::exec;
 
 void QueryTestBase::SetUp() {
@@ -66,23 +68,23 @@ void QueryTestBase::SetUp() {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
 
-  schema_ = std::make_shared<velox::optimizer::SchemaResolver>();
-  if (suiteHistory_) {
-    history_ = std::move(suiteHistory_);
+  schema_ = std::make_shared<optimizer::SchemaResolver>();
+  if (gSuiteHistory) {
+    history_ = std::move(gSuiteHistory);
   } else {
-    history_ = std::make_unique<velox::optimizer::VeloxHistory>();
+    history_ = std::make_unique<optimizer::VeloxHistory>();
   }
   optimizerOptions_ = OptimizerOptions();
   optimizerOptions_.traceFlags = FLAGS_optimizer_trace;
 
-  velox::optimizer::FunctionRegistry::registerPrestoFunctions();
+  optimizer::FunctionRegistry::registerPrestoFunctions();
 }
 
 void QueryTestBase::TearDown() {
   // If we mean to save the history of running the suite, move the local history
   // to its static location.
   if (!FLAGS_history_save_path.empty()) {
-    suiteHistory_ = std::move(history_);
+    gSuiteHistory = std::move(history_);
   }
   queryCtx_.reset();
   connector::unregisterConnector(exec::test::kHiveConnectorId);
@@ -127,7 +129,7 @@ void gatherScans(
 
 TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
   axiom::runner::MultiFragmentPlan::Options options = {
-      .queryId = fmt::format("q{}", ++queryCounter_),
+      .queryId = fmt::format("q{}", ++gQueryCounter),
       .numWorkers = 1,
       .numDrivers = FLAGS_num_drivers};
 
@@ -171,7 +173,7 @@ std::shared_ptr<core::QueryCtx> QueryTestBase::getQueryCtx() {
     return queryCtx_;
   }
 
-  ++queryCounter_;
+  ++gQueryCounter;
 
   std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
       connectorConfigs = {
@@ -185,7 +187,7 @@ std::shared_ptr<core::QueryCtx> QueryTestBase::getQueryCtx() {
       cache::AsyncDataCache::getInstance(),
       rootPool_->shared_from_this(),
       spillExecutor_.get(),
-      fmt::format("query_{}", queryCounter_));
+      fmt::format("query_{}", gQueryCounter));
   return queryCtx_;
 }
 
@@ -207,17 +209,16 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
   // The default Locus for planning is the system and data of 'connector_'.
   optimizer::Locus locus(connector_->connectorId().c_str(), connector_.get());
   auto allocator = std::make_unique<HashStringAllocator>(optimizerPool_.get());
-  auto context =
-      std::make_unique<velox::optimizer::QueryGraphContext>(*allocator);
-  velox::optimizer::queryCtx() = context.get();
+  auto context = std::make_unique<optimizer::QueryGraphContext>(*allocator);
+  optimizer::queryCtx() = context.get();
   SCOPE_EXIT {
-    velox::optimizer::queryCtx() = nullptr;
+    optimizer::queryCtx() = nullptr;
   };
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx_.get(), optimizerPool_.get());
 
-  velox::optimizer::Schema veraxSchema("test", schema_.get(), &locus);
-  velox::optimizer::Optimization opt(
+  optimizer::Schema veraxSchema("test", schema_.get(), &locus);
+  optimizer::Optimization opt(
       *plan,
       veraxSchema,
       *history_,
@@ -283,4 +284,4 @@ TestResult QueryTestBase::assertSame(
   return referenceResult;
 }
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

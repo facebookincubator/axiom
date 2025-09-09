@@ -25,10 +25,11 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 class PrestoParserTest : public testing::Test {
  public:
@@ -470,4 +471,4 @@ TEST_F(PrestoParserTest, describe) {
 }
 
 } // namespace
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

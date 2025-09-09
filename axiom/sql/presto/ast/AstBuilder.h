@@ -22,7 +22,7 @@
 #include "axiom/sql/presto/grammar/PrestoSqlParser.h"
 #include "axiom/sql/presto/grammar/PrestoSqlVisitor.h"
 
-namespace axiom::sql::presto {
+namespace facebook::axiom::sql::presto {
 
 class AstBuilder : public PrestoSqlVisitor {
  public:
@@ -635,13 +635,12 @@ class AstBuilder : public PrestoSqlVisitor {
   }
 
   template <typename TContext>
-  axiom::sql::presto::ExpressionPtr visitExpression(TContext* ctx) {
-    return visitTyped<axiom::sql::presto::Expression>(ctx);
+  ExpressionPtr visitExpression(TContext* ctx) {
+    return visitTyped<Expression>(ctx);
   }
 
-  axiom::sql::presto::IdentifierPtr visitIdentifier(
-      PrestoSqlParser::IdentifierContext* ctx) {
-    return visitTyped<axiom::sql::presto::Identifier>(ctx);
+  IdentifierPtr visitIdentifier(PrestoSqlParser::IdentifierContext* ctx) {
+    return visitTyped<Identifier>(ctx);
   }
 
   std::any aggregateResult(std::any aggregate, std::any nextResult) override {
@@ -661,12 +660,11 @@ class AstBuilder : public PrestoSqlVisitor {
     return PrestoSqlVisitor::visitChildren(node);
   }
 
-  axiom::sql::presto::QualifiedNamePtr getQualifiedName(
-      PrestoSqlParser::QualifiedNameContext* ctx);
+  QualifiedNamePtr getQualifiedName(PrestoSqlParser::QualifiedNameContext* ctx);
 
   void trace(const std::string& name) const;
 
   const bool enableTracing_;
 };
 
-} // namespace axiom::sql::presto
+} // namespace facebook::axiom::sql::presto

@@ -20,7 +20,7 @@
 #include <vector>
 #include "axiom/sql/presto/ast/AstNode.h"
 
-namespace axiom::sql::presto {
+namespace facebook::axiom::sql::presto {
 
 // Forward declarations
 class QualifiedName;
@@ -574,4 +574,4 @@ class Except : public SetOperation {
   void accept(AstVisitor* visitor) override;
 };
 
-} // namespace axiom::sql::presto
+} // namespace facebook::axiom::sql::presto

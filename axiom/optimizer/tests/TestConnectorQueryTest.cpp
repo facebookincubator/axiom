@@ -23,10 +23,11 @@
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "velox/exec/TableWriter.h"
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 class TestConnectorQueryTest : public QueryTestBase {
  protected:
@@ -137,4 +138,4 @@ TEST_F(TestConnectorQueryTest, writeFiltered) {
 }
 
 } // namespace
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

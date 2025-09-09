@@ -18,6 +18,7 @@
 #include "velox/expression/ExprConstants.h"
 
 namespace facebook::axiom::optimizer {
+
 namespace lp = facebook::axiom::logical_plan;
 
 FunctionMetadataCP FunctionRegistry::metadata(std::string_view name) const {

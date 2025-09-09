@@ -21,7 +21,7 @@
 #include "axiom/sql/presto/grammar/PrestoSqlLexer.h"
 #include "axiom/sql/presto/grammar/PrestoSqlParser.h"
 
-namespace axiom::sql::presto {
+namespace facebook::axiom::sql::presto {
 
 namespace detail {
 class ErrorListener : public antlr4::BaseErrorListener {
@@ -79,4 +79,4 @@ class ParserHelper {
   std::unique_ptr<PrestoSqlParser> parser_;
   detail::ErrorListener errorListener_;
 };
-} // namespace axiom::sql::presto
+} // namespace facebook::axiom::sql::presto

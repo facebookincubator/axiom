@@ -17,7 +17,7 @@
 #include "axiom/sql/presto/ast/AstNodesAll.h"
 #include "axiom/sql/presto/ast/AstVisitor.h"
 
-namespace axiom::sql::presto {
+namespace facebook::axiom::sql::presto {
 
 namespace {
 const auto& nodeTypeNames() {
@@ -762,4 +762,4 @@ void ShowColumns::accept(AstVisitor* visitor) {
   visitor->visitShowColumns(this);
 }
 
-} // namespace axiom::sql::presto
+} // namespace facebook::axiom::sql::presto

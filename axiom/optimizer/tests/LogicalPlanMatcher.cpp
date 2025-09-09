@@ -17,7 +17,7 @@
 #include "axiom/optimizer/tests/LogicalPlanMatcher.h"
 #include <gtest/gtest.h>
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 namespace {
 
 template <typename T = LogicalPlanNode>
@@ -120,4 +120,4 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::sort() {
   return *this;
 }
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

@@ -18,7 +18,7 @@
 
 #include "axiom/optimizer/SchemaUtils.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 namespace {
 
 TEST(SchemaUtilsTest, basic) {
@@ -80,4 +80,4 @@ TEST(SchemaUtilsTest, invalidInput) {
 }
 
 } // namespace
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

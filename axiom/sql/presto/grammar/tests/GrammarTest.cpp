@@ -21,7 +21,7 @@
 #include "axiom/sql/presto/grammar/PrestoSqlLexer.h"
 #include "axiom/sql/presto/grammar/PrestoSqlParser.h"
 
-namespace axiom::sql::presto {
+namespace facebook::axiom::sql::presto {
 namespace {
 
 void parseQuery(const std::string& sql) {
@@ -91,4 +91,4 @@ TEST(GrammarTest, selectQueries) {
   }
 }
 } // namespace
-} // namespace axiom::sql::presto
+} // namespace facebook::axiom::sql::presto

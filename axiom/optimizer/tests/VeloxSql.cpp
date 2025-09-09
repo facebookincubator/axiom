@@ -108,7 +108,7 @@ DEFINE_bool(
 
 using namespace facebook::velox;
 
-namespace axiom {
+namespace facebook::axiom {
 
 const char* helpText =
     "Velox Interactive SQL\n"
@@ -997,7 +997,7 @@ void checkQueries(VeloxRunner& runner) {
   exit(runner.checkStatus());
 }
 
-} // namespace axiom
+} // namespace facebook::axiom
 
 int main(int argc, char** argv) {
   gflags::SetUsageMessage(
@@ -1007,17 +1007,17 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv, false);
 
   try {
-    axiom::VeloxRunner runner;
+    facebook::axiom::VeloxRunner runner;
     runner.initialize();
 
-    axiom::initCommands(runner);
+    facebook::axiom::initCommands(runner);
 
     if (!FLAGS_query.empty()) {
       runner.run(FLAGS_query);
     } else if (!FLAGS_record.empty()) {
-      axiom::recordQueries(runner);
+      facebook::axiom::recordQueries(runner);
     } else if (!FLAGS_check.empty()) {
-      axiom::checkQueries(runner);
+      facebook::axiom::checkQueries(runner);
     } else {
       std::cout << "Velox SQL. Type statement and end with ;.\n"
                    "flag name = value; sets a gflag.\n"

@@ -99,7 +99,7 @@ std::shared_ptr<velox::core::QueryCtx> sampleQueryCtx(
       fmt::format("sample:{}", ++kQueryCounter));
 }
 
-std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
+std::shared_ptr<runner::Runner> prepareSampleRunner(
     SchemaTableCP table,
     const ExprVector& keys,
     int64_t mod,
@@ -159,7 +159,7 @@ std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
   RelationOpPtr filter = make<Filter>(project, ExprVector{filterExpr});
 
   auto plan = queryCtx()->optimization()->toVeloxPlan(filter);
-  return std::make_shared<axiom::runner::LocalRunner>(
+  return std::make_shared<runner::LocalRunner>(
       plan.plan, sampleQueryCtx(*queryCtx()->optimization()->veloxQueryCtx()));
 }
 
@@ -167,7 +167,7 @@ std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
 using KeyFreq = folly::F14FastMap<uint32_t, uint32_t>;
 
 std::unique_ptr<KeyFreq> runJoinSample(
-    axiom::runner::Runner& runner,
+    runner::Runner& runner,
     int32_t maxRows = 0) {
   auto result = std::make_unique<folly::F14FastMap<uint32_t, uint32_t>>();
 

@@ -20,7 +20,7 @@
 #include <vector>
 #include "axiom/sql/presto/ast/AstNode.h"
 
-namespace axiom::sql::presto {
+namespace facebook::axiom::sql::presto {
 
 // Forward declarations
 class Identifier;
@@ -735,4 +735,4 @@ class ShowColumns : public Statement {
   std::shared_ptr<QualifiedName> table_;
 };
 
-} // namespace axiom::sql::presto
+} // namespace facebook::axiom::sql::presto

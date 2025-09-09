@@ -27,10 +27,11 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 class PlanTest : public test::QueryTestBase {
  protected:
@@ -39,8 +40,8 @@ class PlanTest : public test::QueryTestBase {
   static void SetUpTestCase() {
     std::string path;
     if (FLAGS_data_path.empty()) {
-      tempDirectory_ = exec::test::TempDirectoryPath::create();
-      path = tempDirectory_->getPath();
+      gTempDirectory = exec::test::TempDirectoryPath::create();
+      path = gTempDirectory->getPath();
       test::ParquetTpchTest::createTables(path);
     } else {
       path = FLAGS_data_path;
@@ -58,7 +59,7 @@ class PlanTest : public test::QueryTestBase {
 
   static void TearDownTestCase() {
     LocalRunnerTestBase::TearDownTestCase();
-    tempDirectory_.reset();
+    gTempDirectory.reset();
   }
 
   void SetUp() override {
@@ -109,7 +110,7 @@ class PlanTest : public test::QueryTestBase {
   core::PlanNodePtr toSingleNodePlan(
       const lp::LogicalPlanNodePtr& logicalPlan,
       int32_t numDrivers = 1) {
-    schema_ = std::make_shared<velox::optimizer::SchemaResolver>();
+    schema_ = std::make_shared<optimizer::SchemaResolver>();
 
     auto plan =
         planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers})
@@ -119,13 +120,13 @@ class PlanTest : public test::QueryTestBase {
     return plan->fragments().at(0).fragment.planNode;
   }
 
-  static std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
+  static std::shared_ptr<exec::test::TempDirectoryPath> gTempDirectory;
 
   std::shared_ptr<connector::TestConnector> testConnector_;
 };
 
 // static
-std::shared_ptr<exec::test::TempDirectoryPath> PlanTest::tempDirectory_ =
+std::shared_ptr<exec::test::TempDirectoryPath> PlanTest::gTempDirectory =
     nullptr;
 
 auto gte(const std::string& name, int64_t n) {
@@ -1418,7 +1419,7 @@ TEST_F(PlanTest, lastProjection) {
 }
 
 } // namespace
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

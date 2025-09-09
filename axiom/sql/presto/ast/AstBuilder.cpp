@@ -18,7 +18,7 @@
 
 #include "velox/common/base/Exceptions.h"
 
-namespace axiom::sql::presto {
+namespace facebook::axiom::sql::presto {
 
 namespace {
 template <typename T>
@@ -2020,4 +2020,4 @@ std::any AstBuilder::visitNonReserved(
   return visitChildren(ctx);
 }
 
-} // namespace axiom::sql::presto
+} // namespace facebook::axiom::sql::presto

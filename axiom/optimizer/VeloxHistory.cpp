@@ -148,7 +148,7 @@ namespace {
 
 std::shared_ptr<const velox::core::TableScanNode> findScan(
     const velox::core::PlanNodeId& id,
-    const axiom::runner::MultiFragmentPlanPtr& plan) {
+    const runner::MultiFragmentPlanPtr& plan) {
   for (auto& fragment : plan->fragments()) {
     for (auto& scan : fragment.scans) {
       if (scan->id() == id) {
