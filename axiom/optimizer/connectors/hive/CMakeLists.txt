@@ -12,14 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(
+axiom_add_library(
   axiom_hive_connector_metadata
   OBJECT
   HiveConnectorMetadata.cpp
   LocalHiveConnectorMetadata.cpp
   StatisticsBuilder.cpp)
 
-velox_link_libraries(
+axiom_link_libraries(
   axiom_hive_connector_metadata
   axiom_connector_metadata
   velox_hive_connector

@@ -25,10 +25,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(axiom_runner_tests_utils DistributedPlanBuilder.cpp
+add_library(axiom_runner_tests_utils DistributedPlanBuilder.cpp
                                      LocalRunnerTestBase.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   axiom_runner_tests_utils
   axiom_runner_local_runner
   velox_hive_connector_metadata
@@ -51,10 +51,10 @@ target_link_libraries(
   velox_parse_expression
   GTest::gtest)
 
-velox_add_library(axiom_runner_presto_query_replay_runner_test_utils
+add_library(axiom_runner_presto_query_replay_runner_test_utils
             PrestoQueryReplayRunner.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   axiom_runner_presto_query_replay_runner_test_utils axiom_runner_local_runner
   velox_hive_connector velox_exec_test_lib)
 
