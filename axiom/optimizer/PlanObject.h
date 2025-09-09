@@ -41,6 +41,7 @@ enum class PlanType : uint32_t {
   kFilterNode,
   kJoinNode,
   kOrderByNode,
+  kWriteNode,
   kLimitNode,
 };
 

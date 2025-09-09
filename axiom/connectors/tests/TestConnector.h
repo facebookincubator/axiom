@@ -286,21 +286,23 @@ class TestConnectorMetadata : public ConnectorMetadata {
     VELOX_UNSUPPORTED();
   }
 
-  WritePartitionInfo writePartitionInfo(
-      const velox::connector::ConnectorInsertTableHandlePtr& handle) override {
-    VELOX_UNSUPPORTED();
-  }
-
   void finishWrite(
       const TableLayout& layout,
-      const velox::connector::ConnectorInsertTableHandlePtr& handle,
-      const std::vector<velox::RowVectorPtr>& writerResult,
+      const ConnectorInsertTableHandlePtr& handle,
+      bool success,
+      const std::vector<RowVectorPtr>& writerResult,
       WriteKind kind,
       const ConnectorSessionPtr& session) override {
     VELOX_UNSUPPORTED();
   }
 
-  std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
+  RowTypePtr tableWriteOutputType(
+      const RowTypePtr& /*rowType*/,
+      WriteKind /*kind*/) const override {
+    return ROW({}, {});
+  }
+
+  std::vector<ColumnHandlePtr> rowIdHandles(
       const TableLayout& layout,
       WriteKind kind) override {
     VELOX_UNSUPPORTED();

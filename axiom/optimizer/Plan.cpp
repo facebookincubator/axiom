@@ -47,6 +47,15 @@ void planBreakpoint() {
   LOG(INFO) << "Join order breakpoint";
 }
 
+const connector::PartitionType* copartitionType(
+    const connector::PartitionType* first,
+    const connector::PartitionType* second) {
+  if (!first || !second) {
+    return nullptr;
+  }
+  return first->copartition(*second);
+}
+
 void PlanState::debugSetFirstTable(int32_t id) {
   if (dt->id() == debugDt) {
     debugPlacedTables.resize(1);
@@ -180,6 +189,11 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
       } else if (targetColumns.contains(aggToPlace->columns()[i])) {
         result.unionColumns(aggToPlace->aggregates()[i - numGroupingKeys]);
       }
+    }
+  }
+  if (dt->write && !placed.contains(dt->write)) {
+    for (auto i = 0; i < dt->write->columns().size(); ++i) {
+      result.unionColumns(dt->write->values()[i]);
     }
   }
 

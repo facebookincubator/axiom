@@ -919,4 +919,108 @@ class AggregationPlan : public PlanObject {
 
 using AggregationPlanCP = const AggregationPlan*;
 
+using NameVector = std::vector<Name, QGAllocator<Name>>;
+
+class WritePlan : public PlanObject {
+ public:
+  WritePlan(
+      Name table,
+      const connector::TableLayout* layout,
+      logical_plan::WriteKind kind,
+      ExprVector values,
+      NameVector columns,
+      ColumnVector output)
+      : PlanObject(PlanType::kWriteNode),
+        table_(table),
+        layout_(layout),
+        kind_(kind),
+        values_(values),
+        columns_(columns),
+        output_(output) {}
+
+  Name table() const {
+    return table_;
+  }
+
+  const connector::TableLayout* layout() const {
+    return layout_;
+  }
+
+  logical_plan::WriteKind kind() const {
+    return kind_;
+  }
+
+  const ExprVector values() const {
+    return values_;
+  }
+
+  const NameVector& columns() const {
+    return columns_;
+  }
+
+  const ColumnVector& output() const {
+    return output_;
+  }
+
+ private:
+  Name table_;
+  const connector::TableLayout* layout_;
+  logical_plan::WriteKind kind_;
+  ExprVector values_;
+  NameVector columns_;
+  ColumnVector output_;
+};
+
+using NameVector = std::vector<Name, QGAllocator<Name>>;
+
+class WritePlan : public PlanObject {
+ public:
+  WritePlan(
+      Name table,
+      const connector::TableLayout* layout,
+      logical_plan::WriteKind kind,
+      ExprVector values,
+      NameVector columns,
+      ColumnVector output)
+      : PlanObject(PlanType::kWriteNode),
+        table_(table),
+        layout_(layout),
+        kind_(kind),
+        values_(values),
+        columns_(columns),
+        output_(output) {}
+
+  Name table() const {
+    return table_;
+  }
+
+  const connector::TableLayout* layout() const {
+    return layout_;
+  }
+
+  logical_plan::WriteKind kind() const {
+    return kind_;
+  }
+
+  const ExprVector values() const {
+    return values_;
+  }
+
+  const NameVector& columns() const {
+    return columns_;
+  }
+
+  const ColumnVector& output() const {
+    return output_;
+  }
+
+ private:
+  Name table_;
+  const connector::TableLayout* layout_;
+  logical_plan::WriteKind kind_;
+  ExprVector values_;
+  NameVector columns_;
+  ColumnVector output_;
+};
+
 } // namespace facebook::axiom::optimizer

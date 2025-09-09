@@ -130,6 +130,10 @@ class LocalRunner : public Runner,
   }
 
  private:
+  // Reads all results and calls 'finishWrite_'  on the results. Calls
+  // 'finishWrite_' with false and rethrows if exception.
+  void runWrite();
+
   void start();
 
   void makeStages(const std::shared_ptr<velox::exec::Task>& lastStageTask);
@@ -142,7 +146,7 @@ class LocalRunner : public Runner,
 
   const MultiFragmentPlanPtr plan_;
   const std::vector<ExecutableFragment> fragments_;
-
+  const FinishWrite finishWrite_;
   velox::exec::CursorParameters params_;
 
   velox::tsan_atomic<State> state_{State::kInitialized};

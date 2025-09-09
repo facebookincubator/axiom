@@ -244,8 +244,9 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   void finishWrite(
       const TableLayout& layout,
-      const velox::connector::ConnectorInsertTableHandlePtr& /*handle*/,
-      const std::vector<velox::RowVectorPtr>& /*writerResult*/,
+      const ConnectorInsertTableHandlePtr& /*handle*/,
+      bool success,
+      const std::vector<RowVectorPtr>& /*writerResult*/,
       WriteKind /*kind*/,
       const ConnectorSessionPtr& /*session*/) override;
 
@@ -253,6 +254,10 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   std::string dataPath() const override {
     return hiveConfig_->hiveLocalDataPath();
   }
+
+  std::string makeStagingDirectory() override;
+
+  std::string makeStagingDirectory() override;
 
   std::shared_ptr<velox::connector::hive::LocationHandle> makeLocationHandle(
       std::string targetDirectory,
