@@ -21,7 +21,7 @@
 DECLARE_string(data_path);
 DECLARE_bool(create_dataset);
 
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 
 class ParquetTpchTest {
  public:
@@ -43,4 +43,4 @@ class ParquetTpchTest {
   static void registerTpchConnector(const std::string& id);
 };
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

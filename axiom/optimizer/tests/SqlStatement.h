@@ -18,7 +18,7 @@
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
 
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 
 enum class SqlStatementKind {
   kSelect,
@@ -87,4 +87,4 @@ class ExplainStatement : public SqlStatement {
   const bool analyze_;
 };
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

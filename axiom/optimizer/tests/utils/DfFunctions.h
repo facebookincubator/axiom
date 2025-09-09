@@ -18,7 +18,7 @@
 
 #include "axiom/logical_plan/Expr.h"
 
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 
 /// Add map_row_from_map, padded_make_row_from_map, and make_named_row
 /// functions to the Optimizer's registry.
@@ -30,4 +30,4 @@ logical_plan::ExprPtr resolveDfFunction(
     const std::string& name,
     const std::vector<logical_plan::ExprPtr>& args);
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

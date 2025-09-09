@@ -21,7 +21,7 @@
 
 #include <duckdb.hpp> // @manual
 
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 
 class DuckParser {
  public:
@@ -29,23 +29,23 @@ class DuckParser {
   ///
   /// @param connectorId The ID of the connector that can read all tables in the
   /// query.
-  DuckParser(const std::string& connectorId, memory::MemoryPool* pool)
+  DuckParser(const std::string& connectorId, velox::memory::MemoryPool* pool)
       : connectorId_{connectorId}, pool_{pool} {}
 
-  void registerTable(const std::string& name, const RowTypePtr& type);
+  void registerTable(const std::string& name, const velox::RowTypePtr& type);
 
   void registerScalarFunction(
       const std::string& name,
-      const std::vector<TypePtr>& argTypes,
-      const TypePtr& returnType);
+      const std::vector<velox::TypePtr>& argTypes,
+      const velox::TypePtr& returnType);
 
   // TODO Allow replacing built-in DuckDB functions. Currently, replacing "sum"
   // causes a crash (a bug in DuckDB). Replacing existing functions is useful
   // when signatures don't match.
   void registerAggregateFunction(
       const std::string& name,
-      const std::vector<TypePtr>& argTypes,
-      const TypePtr& returnType);
+      const std::vector<velox::TypePtr>& argTypes,
+      const velox::TypePtr& returnType);
 
   SqlStatementPtr parse(const std::string& sql);
 
@@ -53,8 +53,8 @@ class DuckParser {
   const std::string connectorId_;
   ::duckdb::DuckDB db_;
   ::duckdb::Connection conn_{db_};
-  memory::MemoryPool* pool_;
-  std::unordered_map<std::string, std::vector<RowVectorPtr>> tables_;
+  velox::memory::MemoryPool* pool_;
+  std::unordered_map<std::string, std::vector<velox::RowVectorPtr>> tables_;
 };
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

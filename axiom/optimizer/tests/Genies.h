@@ -16,10 +16,10 @@
 
 #include "velox/type/Type.h"
 
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 
-RowTypePtr makeGenieType();
+velox::RowTypePtr makeGenieType();
 
 void registerGenieUdfs();
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test
