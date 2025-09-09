@@ -376,8 +376,10 @@ PlanBuilder& PlanBuilder::aggregate(
     } else {
       outputNames.push_back(newName(expr->name()));
     }
+
     exprs.push_back(expr);
   }
+
   node_ = std::make_shared<AggregateNode>(
       nextId(),
       std::move(node_),
@@ -385,7 +387,9 @@ PlanBuilder& PlanBuilder::aggregate(
       std::vector<AggregateNode::GroupingSet>{},
       std::move(exprs),
       std::move(outputNames));
+
   outputMapping_ = std::move(newOutputMapping);
+
   return *this;
 }
 
