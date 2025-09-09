@@ -16,7 +16,7 @@
 
 #include "axiom/optimizer/QueryGraph.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 size_t PlanObjectPHasher::operator()(const PlanObjectCP& object) const {
   return object->hash();
@@ -93,4 +93,4 @@ extern std::string planObjectString(const PlanObject* o) {
   return o->toString();
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

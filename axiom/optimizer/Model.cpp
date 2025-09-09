@@ -20,7 +20,7 @@
 #include <unordered_set>
 #include "velox/common/base/Exceptions.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 namespace {
 
@@ -259,7 +259,7 @@ std::vector<int32_t> Model::findDims(const std::vector<float>& point) const {
   std::vector<int32_t> result;
   result.reserve(rank_);
   for (auto i = 0; i < rank_; ++i) {
-    auto it = std::lower_bound(axis_[i].begin(), axis_[i].end(), point[i]);
+    auto it = std::ranges::lower_bound(axis_[i], point[i]);
     result.push_back(static_cast<int32_t>(
         it == axis_[i].end() ? axis_[i].size() - 1 : it - axis_[i].begin()));
   }
@@ -403,4 +403,4 @@ float Model::query(const std::vector<float>& coords) const {
   return sum;
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

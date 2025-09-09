@@ -18,7 +18,7 @@
 
 #include "folly/String.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 TableNameParser::TableNameParser(std::string_view name) {
   std::vector<std::string_view> parts;
@@ -50,4 +50,4 @@ TableNameParser::TableNameParser(std::string_view name) {
   }
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

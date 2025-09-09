@@ -25,7 +25,7 @@
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 class NameMappings;
 
@@ -44,54 +44,54 @@ class ExprResolver {
       ExprPtr(const std::string& name, const std::vector<ExprPtr>& args)>;
 
   ExprResolver(
-      std::shared_ptr<core::QueryCtx> queryCtx,
+      std::shared_ptr<velox::core::QueryCtx> queryCtx,
       bool enableCoersions,
       FunctionRewriteHook hook = nullptr,
-      std::shared_ptr<memory::MemoryPool> pool = nullptr)
+      std::shared_ptr<velox::memory::MemoryPool> pool = nullptr)
       : queryCtx_(std::move(queryCtx)),
         enableCoersions_{enableCoersions},
         hook_(std::move(hook)),
         pool_(std::move(pool)) {}
 
   ExprPtr resolveScalarTypes(
-      const core::ExprPtr& expr,
+      const velox::core::ExprPtr& expr,
       const InputNameResolver& inputNameResolver) const;
 
   AggregateExprPtr resolveAggregateTypes(
-      const core::ExprPtr& expr,
+      const velox::core::ExprPtr& expr,
       const InputNameResolver& inputNameResolver) const;
 
  private:
   ExprPtr resolveLambdaExpr(
-      const core::LambdaExpr* lambdaExpr,
-      const std::vector<TypePtr>& lambdaInputTypes,
+      const velox::core::LambdaExpr* lambdaExpr,
+      const std::vector<velox::TypePtr>& lambdaInputTypes,
       const InputNameResolver& inputNameResolver) const;
 
   ExprPtr tryResolveCallWithLambdas(
-      const std::shared_ptr<const core::CallExpr>& callExpr,
+      const std::shared_ptr<const velox::core::CallExpr>& callExpr,
       const InputNameResolver& inputNameResolver) const;
 
   ExprPtr tryFoldCall(
-      const TypePtr& type,
+      const velox::TypePtr& type,
       const std::string& name,
       const std::vector<ExprPtr>& inputs) const;
 
-  ExprPtr tryFoldCast(const TypePtr& type, const ExprPtr& input) const;
+  ExprPtr tryFoldCast(const velox::TypePtr& type, const ExprPtr& input) const;
 
-  core::TypedExprPtr makeConstantTypedExpr(const ExprPtr& expr) const;
+  velox::core::TypedExprPtr makeConstantTypedExpr(const ExprPtr& expr) const;
 
-  ExprPtr makeConstant(const VectorPtr& vector) const;
+  ExprPtr makeConstant(const velox::VectorPtr& vector) const;
 
-  ExprPtr tryFoldCall(const TypePtr& type, ExprPtr input) const;
+  ExprPtr tryFoldCall(const velox::TypePtr& type, ExprPtr input) const;
 
   ExprPtr tryFoldSpecialForm(
       const std::string& name,
       const std::vector<ExprPtr>& inputs) const;
 
-  std::shared_ptr<core::QueryCtx> queryCtx_;
+  std::shared_ptr<velox::core::QueryCtx> queryCtx_;
   const bool enableCoersions_;
   FunctionRewriteHook hook_;
-  std::shared_ptr<memory::MemoryPool> pool_;
+  std::shared_ptr<velox::memory::MemoryPool> pool_;
 };
 
 // Make sure to specify Context.queryCtx to enable constand folding.
@@ -99,18 +99,19 @@ class PlanBuilder {
  public:
   struct Context {
     std::optional<std::string> defaultConnectorId;
-    std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator;
+    std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator;
     std::shared_ptr<NameAllocator> nameAllocator;
-    std::shared_ptr<core::QueryCtx> queryCtx;
+    std::shared_ptr<velox::core::QueryCtx> queryCtx;
     ExprResolver::FunctionRewriteHook hook;
-    std::shared_ptr<memory::MemoryPool> pool;
+    std::shared_ptr<velox::memory::MemoryPool> pool;
 
     explicit Context(
         const std::optional<std::string>& defaultConnectorId = std::nullopt,
-        std::shared_ptr<core::QueryCtx> queryCtxPtr = nullptr,
+        std::shared_ptr<velox::core::QueryCtx> queryCtxPtr = nullptr,
         ExprResolver::FunctionRewriteHook hook = nullptr)
         : defaultConnectorId{defaultConnectorId},
-          planNodeIdGenerator{std::make_shared<core::PlanNodeIdGenerator>()},
+          planNodeIdGenerator{
+              std::make_shared<velox::core::PlanNodeIdGenerator>()},
           nameAllocator{std::make_shared<NameAllocator>()},
           queryCtx{std::move(queryCtxPtr)},
           hook{std::move(hook)},
@@ -145,9 +146,11 @@ class PlanBuilder {
     VELOX_CHECK_NOT_NULL(nameAllocator_);
   }
 
-  PlanBuilder& values(const RowTypePtr& rowType, std::vector<Variant> rows);
+  PlanBuilder& values(
+      const velox::RowTypePtr& rowType,
+      std::vector<velox::Variant> rows);
 
-  PlanBuilder& values(const std::vector<RowVectorPtr>& values);
+  PlanBuilder& values(const std::vector<velox::RowVectorPtr>& values);
 
   /// Equivalent to SELECT col1, col2,.. FROM <tableName>.
   PlanBuilder& tableScan(
@@ -342,9 +345,10 @@ class PlanBuilder {
       const std::optional<std::string>& alias,
       const std::string& name) const;
 
-  ExprPtr resolveScalarTypes(const core::ExprPtr& expr) const;
+  ExprPtr resolveScalarTypes(const velox::core::ExprPtr& expr) const;
 
-  AggregateExprPtr resolveAggregateTypes(const core::ExprPtr& expr) const;
+  AggregateExprPtr resolveAggregateTypes(
+      const velox::core::ExprPtr& expr) const;
 
   std::vector<ExprApi> parse(const std::vector<std::string>& exprs);
 
@@ -355,10 +359,10 @@ class PlanBuilder {
       NameMappings& mappings);
 
   const std::optional<std::string> defaultConnectorId_;
-  const std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_;
+  const std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator_;
   const std::shared_ptr<NameAllocator> nameAllocator_;
   const Scope outerScope_;
-  const parse::ParseOptions parseOptions_;
+  const velox::parse::ParseOptions parseOptions_;
 
   LogicalPlanNodePtr node_;
 
@@ -368,4 +372,4 @@ class PlanBuilder {
   ExprResolver resolver_;
 };
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

@@ -20,7 +20,7 @@
 #include "axiom/optimizer/PlanUtils.h"
 #include "velox/expression/ScopedVarSetter.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 // static
 const char* SpecialFormCallNames::kAnd = "__and";
@@ -242,7 +242,7 @@ std::pair<std::string, bool> JoinEdge::sampleKey() const {
     return std::make_pair("", false);
   }
   auto* opt = queryCtx()->optimization();
-  ScopedVarSetter pref(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter pref(&opt->cnamesInExpr(), false);
   std::vector<int32_t> indices(leftKeys_.size());
   std::iota(indices.begin(), indices.end(), 0);
   std::vector<std::string> leftString;
@@ -465,4 +465,4 @@ void JoinEdge::guessFanout() {
   }
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

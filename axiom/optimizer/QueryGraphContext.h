@@ -26,7 +26,7 @@
 
 /// Thread local context and utilities for query planning.
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// Pointer to an arena allocated interned copy of a null terminated string.
 /// Used for identifiers. Allows comparing strings by comparing pointers.
@@ -50,7 +50,7 @@ struct PlanObjectPComparer {
 };
 
 struct TypeHasher {
-  size_t operator()(const TypePtr& type) const {
+  size_t operator()(const velox::TypePtr& type) const {
     // hash on recursive TypeKind. Structs that differ in field names
     // only or decimals with different precisions will collide, no
     // other collisions expected.
@@ -59,7 +59,7 @@ struct TypeHasher {
 };
 
 struct TypeComparer {
-  bool operator()(const TypePtr& lhs, const TypePtr& rhs) const {
+  bool operator()(const velox::TypePtr& lhs, const velox::TypePtr& rhs) const {
     return *lhs == *rhs;
   }
 };
@@ -211,13 +211,14 @@ struct PathComparer {
 };
 
 struct VectorDedupHasher {
-  size_t operator()(const BaseVector* vector) const {
+  size_t operator()(const velox::BaseVector* vector) const {
     return vector->hashValueAt(0);
   }
 };
 
 struct VectorDedupComparer {
-  bool operator()(const BaseVector* left, const BaseVector* right) const {
+  bool operator()(const velox::BaseVector* left, const velox::BaseVector* right)
+      const {
     return left->type() == right->type() && left->equalValueAt(right, 0, 0);
   }
 };
@@ -301,11 +302,11 @@ class QueryGraphContext {
   // Records the use of a TypePtr in optimization. Returns a canonical
   // representative of the type, allowing pointer equality for exact match.
   // Allows mapping from the Type* back to TypePtr.
-  const Type* toType(const velox::TypePtr& type);
+  const velox::Type* toType(const velox::TypePtr& type);
 
   /// Returns the canonical TypePtr corresponding to 'type'. 'type' must have
   /// been previously returned by toType().
-  const TypePtr& toTypePtr(const Type* type);
+  const velox::TypePtr& toTypePtr(const velox::Type* type);
 
   /// Returns the interned instance of 'path'. 'path' is either
   /// retained if it is not previously known or it is deleted. Must be
@@ -319,17 +320,17 @@ class QueryGraphContext {
 
   /// Takes ownership of a Variant for the duration. Variants are allocated
   /// with new so not in the arena.
-  Variant* registerVariant(std::unique_ptr<Variant> value) {
+  velox::Variant* registerVariant(std::unique_ptr<velox::Variant> value) {
     allVariants_.push_back(std::move(value));
     return allVariants_.back().get();
   }
 
-  const BaseVector* toVector(const VectorPtr& vector);
+  const velox::BaseVector* toVector(const velox::VectorPtr& vector);
 
-  VectorPtr toVectorPtr(const BaseVector* vector);
+  velox::VectorPtr toVectorPtr(const velox::BaseVector* vector);
 
  private:
-  TypePtr dedupType(const TypePtr& type);
+  velox::TypePtr dedupType(const velox::TypePtr& type);
 
   velox::HashStringAllocator& allocator_;
   ArenaCache cache_;
@@ -345,7 +346,7 @@ class QueryGraphContext {
   std::unordered_set<PlanObjectP, PlanObjectPHasher, PlanObjectPComparer>
       deduppedObjects_;
 
-  std::unordered_set<TypePtr, TypeHasher, TypeComparer> deduppedTypes_;
+  std::unordered_set<velox::TypePtr, TypeHasher, TypeComparer> deduppedTypes_;
 
   // Maps raw Type* back to shared TypePtr. Used in toType()() and toTypePtr().
   std::unordered_map<const velox::Type*, velox::TypePtr> toTypePtr_;
@@ -354,8 +355,8 @@ class QueryGraphContext {
 
   // Complex type literals. Referenced with raw pointer from PlanObject.
   std::unordered_map<
-      const BaseVector*,
-      VectorPtr,
+      const velox::BaseVector*,
+      velox::VectorPtr,
       VectorDedupHasher,
       VectorDedupComparer>
       deduppedVectors_;
@@ -365,7 +366,7 @@ class QueryGraphContext {
   PlanP contextPlan_{nullptr};
   Optimization* optimization_{nullptr};
 
-  std::vector<std::unique_ptr<Variant>> allVariants_;
+  std::vector<std::unique_ptr<velox::Variant>> allVariants_;
 };
 
 /// Returns a mutable reference to the calling thread's QueryGraphContext.
@@ -388,10 +389,10 @@ inline T* make(Args&&... args) {
 }
 
 /// Shorthand for toType() in thread's QueryGraphContext.
-const Type* toType(const TypePtr& type);
+const velox::Type* toType(const velox::TypePtr& type);
 
 /// Shorthand for toTypePtr() in thread's QueryGraphContext.
-const TypePtr& toTypePtr(const Type* type);
+const velox::TypePtr& toTypePtr(const velox::Type* type);
 
 // Shorthand for toPath in queryCtx().
 PathCP toPath(std::span<const Step> steps, bool reverse = false);
@@ -409,4 +410,4 @@ class Column;
 using ColumnCP = const Column*;
 using ColumnVector = std::vector<ColumnCP, QGAllocator<ColumnCP>>;
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

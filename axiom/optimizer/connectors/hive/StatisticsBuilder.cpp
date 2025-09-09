@@ -192,8 +192,8 @@ void StatisticsBuilderImpl::build(
     auto min = ints->getMinimum();
     auto max = ints->getMaximum();
     if (min.has_value() && max.has_value()) {
-      result.min = variant(min.value());
-      result.max = variant(max.value());
+      result.min = Variant(min.value());
+      result.max = Variant(max.value());
     }
   } else if (
       auto* dbl =
@@ -201,8 +201,8 @@ void StatisticsBuilderImpl::build(
     auto min = dbl->getMinimum();
     auto max = dbl->getMaximum();
     if (min.has_value() && max.has_value()) {
-      result.min = variant(min.value());
-      result.max = variant(max.value());
+      result.min = Variant(min.value());
+      result.max = Variant(max.value());
     }
   } else if (
       auto* str =
@@ -210,8 +210,8 @@ void StatisticsBuilderImpl::build(
     auto min = str->getMinimum();
     auto max = str->getMaximum();
     if (min.has_value() && max.has_value()) {
-      result.min = variant(min.value());
-      result.max = variant(max.value());
+      result.min = Variant(min.value());
+      result.max = Variant(max.value());
     }
     if (numValues) {
       result.avgLength = str->getTotalLength().value() / numValues;

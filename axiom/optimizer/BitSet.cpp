@@ -16,7 +16,7 @@
 
 #include "axiom/optimizer/BitSet.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 namespace {
 template <typename V>
@@ -87,4 +87,4 @@ void BitSet::intersect(const BitSet& other) {
   }
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

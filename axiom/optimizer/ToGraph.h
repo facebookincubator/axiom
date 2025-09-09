@@ -20,7 +20,7 @@
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// Struct for resolving which logical PlanNode or Lambda defines which
 /// field for column and subfield tracking.
@@ -34,26 +34,27 @@ struct LogicalContextSource {
 struct MarkFieldsAccessedContext {
   // 1:1 with 'sources'. Either output type of the plan node or signature of a
   // lambda.
-  std::span<const RowType* const> rowTypes;
+  std::span<const velox::RowType* const> rowTypes;
   std::span<const LogicalContextSource> sources;
 };
 
 struct ITypedExprHasher {
-  size_t operator()(const core::ITypedExpr* expr) const {
+  size_t operator()(const velox::core::ITypedExpr* expr) const {
     return expr->hash();
   }
 };
 
 struct ITypedExprComparer {
-  bool operator()(const core::ITypedExpr* lhs, const core::ITypedExpr* rhs)
-      const {
+  bool operator()(
+      const velox::core::ITypedExpr* lhs,
+      const velox::core::ITypedExpr* rhs) const {
     return *lhs == *rhs;
   }
 };
 
 // Map for deduplicating ITypedExpr trees.
 using ExprDedupMap = folly::F14FastMap<
-    const core::ITypedExpr*,
+    const velox::core::ITypedExpr*,
     ExprCP,
     ITypedExprHasher,
     ITypedExprComparer>;
@@ -72,7 +73,7 @@ struct ExprDedupHasher {
     size_t h =
         folly::hasher<uintptr_t>()(reinterpret_cast<uintptr_t>(key.func));
     for (auto& a : *key.args) {
-      h = bits::hashMix(h, folly::hasher<ExprCP>()(a));
+      h = velox::bits::hashMix(h, folly::hasher<ExprCP>()(a));
     }
     return h;
   }
@@ -82,15 +83,15 @@ using FunctionDedupMap =
     std::unordered_map<ExprDedupKey, ExprCP, ExprDedupHasher>;
 
 struct VariantPtrHasher {
-  size_t operator()(const std::shared_ptr<const Variant>& value) const {
+  size_t operator()(const std::shared_ptr<const velox::Variant>& value) const {
     return value->hash();
   }
 };
 
 struct VariantPtrComparer {
   bool operator()(
-      const std::shared_ptr<const Variant>& left,
-      const std::shared_ptr<const Variant>& right) const {
+      const std::shared_ptr<const velox::Variant>& left,
+      const std::shared_ptr<const velox::Variant>& right) const {
     return *left == *right;
   }
 };
@@ -108,9 +109,10 @@ struct PathExpr {
 
 struct PathExprHasher {
   size_t operator()(const PathExpr& expr) const {
-    size_t hash = bits::hashMix(expr.step.hash(), expr.base->id());
-    return expr.subscriptExpr ? bits::hashMix(hash, expr.subscriptExpr->id())
-                              : hash;
+    size_t hash = velox::bits::hashMix(expr.step.hash(), expr.base->id());
+    return expr.subscriptExpr
+        ? velox::bits::hashMix(hash, expr.subscriptExpr->id())
+        : hash;
   }
 };
 
@@ -159,7 +161,7 @@ class ToGraph {
  public:
   ToGraph(
       const Schema& schema,
-      core::ExpressionEvaluator& evaluator,
+      velox::core::ExpressionEvaluator& evaluator,
       const OptimizerOptions& options);
 
   /// Converts 'logicalPlan' to a tree of DerivedTables. Returns the root
@@ -191,7 +193,7 @@ class ToGraph {
       ExprCP& left,
       ExprCP& right) const;
 
-  core::ExpressionEvaluator* evaluator() const {
+  velox::core::ExpressionEvaluator* evaluator() const {
     return &evaluator_;
   }
 
@@ -251,7 +253,7 @@ class ToGraph {
   // 'returnType' to the input arguments 'literals'. Returns nullptr if not
   // successful. if not successful.
   ExprCP tryFoldConstant(
-      const TypePtr& returnType,
+      const velox::TypePtr& returnType,
       const std::string& callName,
       const ExprVector& literals);
 
@@ -428,7 +430,7 @@ class ToGraph {
 
   const Schema& schema_;
 
-  core::ExpressionEvaluator& evaluator_;
+  velox::core::ExpressionEvaluator& evaluator_;
 
   const OptimizerOptions& options_;
 
@@ -445,7 +447,7 @@ class ToGraph {
   std::unordered_map<std::string, ExprCP> renames_;
 
   std::unordered_map<
-      std::shared_ptr<const Variant>,
+      std::shared_ptr<const velox::Variant>,
       ExprCP,
       VariantPtrHasher,
       VariantPtrComparer>
@@ -454,7 +456,7 @@ class ToGraph {
   // Reverse map from dedupped literal to the shared_ptr. We put the
   // shared ptr back into the result plan so the variant never gets
   // copied.
-  std::map<ExprCP, std::shared_ptr<const Variant>> reverseConstantDedup_;
+  std::map<ExprCP, std::shared_ptr<const velox::Variant>> reverseConstantDedup_;
 
   // Dedup map from name + ExprVector to corresponding CallExpr.
   FunctionDedupMap functionDedup_;
@@ -504,4 +506,4 @@ class ToGraph {
   std::unordered_map<Name, Name> reversibleFunctions_;
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

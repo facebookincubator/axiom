@@ -20,7 +20,7 @@
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 float Value::byteSize() const {
   if (type->isFixedWidth()) {
@@ -52,7 +52,7 @@ ColumnGroupCP SchemaTable::addIndex(
     DistributionType distributionType,
     const ColumnVector& partition,
     ColumnVector columnsVector,
-    const connector::TableLayout* layout) {
+    const velox::connector::TableLayout* layout) {
   VELOX_CHECK_LE(numKeysUnique, keys.size());
 
   Distribution distribution;
@@ -455,4 +455,4 @@ float ColumnGroup::lookupCost(float range) const {
       std::numbers::ln2_v<float>;
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

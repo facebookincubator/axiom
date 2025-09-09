@@ -16,7 +16,7 @@
 #include "axiom/logical_plan/NameMappings.h"
 #include <velox/common/base/Exceptions.h>
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 std::string NameMappings::QualifiedName::toString() const {
   if (alias.has_value()) {
@@ -138,4 +138,4 @@ size_t NameMappings::QualifiedNameHasher::operator()(
 
   return h1 ^ (h2 << 1U);
 }
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

@@ -20,7 +20,7 @@
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/optimizer/QueryGraph.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 template <typename T, typename U>
 bool isSubset(const T& subset, const U& superset) {
@@ -99,7 +99,7 @@ inline void pushBackUnique(V& vector, E& element) {
 }
 
 /// Returns the integer value of 'variant'. Throws if this is not an integer.
-int64_t integerValue(const Variant* variant);
+int64_t integerValue(const velox::Variant* variant);
 
 /// Returns the integer value of 'expr' if the type is an integer,
 /// std::nullopt otherwise.
@@ -108,4 +108,4 @@ std::optional<int64_t> maybeIntegerLiteral(
 
 std::string conjunctsToString(const ExprVector& conjuncts);
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

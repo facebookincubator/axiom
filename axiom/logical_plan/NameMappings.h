@@ -20,7 +20,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 /// Maintains a mapping from user-visible names to auto-generated IDs.
 /// Unique names may be accessed by name alone. Non-unique names must be
@@ -91,4 +91,4 @@ class NameMappings {
   std::unordered_map<QualifiedName, std::string, QualifiedNameHasher> mappings_;
 };
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

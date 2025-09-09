@@ -357,7 +357,7 @@ void LocalTable::makeDefaultLayout(
 std::shared_ptr<LocalTable> LocalHiveConnectorMetadata::createTableFromSchema(
     const std::string& name,
     const std::string& path) {
-  auto jsons = readConcatenatedDynamicsFromFile(path + "/.schema");
+  auto jsons = axiom::readConcatenatedDynamicsFromFile(path + "/.schema");
   if (jsons.empty()) {
     return nullptr;
   }

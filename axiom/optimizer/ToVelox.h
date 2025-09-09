@@ -22,14 +22,15 @@
 #include "axiom/optimizer/RelationOp.h"
 #include "axiom/runner/MultiFragmentPlan.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// A map from PlanNodeId of an executable plan to a key for
 /// recording the execution for use in cost model. The key is a
 /// canonical summary of the node and its inputs.
-using NodeHistoryMap = std::unordered_map<core::PlanNodeId, std::string>;
+using NodeHistoryMap = std::unordered_map<velox::core::PlanNodeId, std::string>;
 
-using NodePredictionMap = std::unordered_map<core::PlanNodeId, NodePrediction>;
+using NodePredictionMap =
+    std::unordered_map<velox::core::PlanNodeId, NodePrediction>;
 
 /// Plan and specification for recording execution history amd planning ttime
 /// predictions.
@@ -55,23 +56,25 @@ class ToVelox {
       RelationOpPtr plan,
       const axiom::runner::MultiFragmentPlan::Options& options);
 
-  std::pair<connector::ConnectorTableHandlePtr, std::vector<core::TypedExprPtr>>
+  std::pair<
+      velox::connector::ConnectorTableHandlePtr,
+      std::vector<velox::core::TypedExprPtr>>
   leafHandle(int32_t id) {
     auto it = leafHandles_.find(id);
     return it != leafHandles_.end()
         ? it->second
         : std::make_pair<
               std::shared_ptr<velox::connector::ConnectorTableHandle>,
-              std::vector<core::TypedExprPtr>>(nullptr, {});
+              std::vector<velox::core::TypedExprPtr>>(nullptr, {});
   }
 
   velox::core::TypedExprPtr toTypedExpr(ExprCP expr);
 
-  RowTypePtr subfieldPushdownScanType(
+  velox::RowTypePtr subfieldPushdownScanType(
       BaseTableCP baseTable,
       const ColumnVector& leafColumns,
       ColumnVector& topColumns,
-      std::unordered_map<ColumnCP, TypePtr>& typeMap);
+      std::unordered_map<ColumnCP, velox::TypePtr>& typeMap);
 
   // Returns a new PlanNodeId.
   velox::core::PlanNodeId nextId() {
@@ -88,8 +91,8 @@ class ToVelox {
  private:
   void setLeafHandle(
       int32_t id,
-      connector::ConnectorTableHandlePtr handle,
-      std::vector<core::TypedExprPtr> extraFilters) {
+      velox::connector::ConnectorTableHandlePtr handle,
+      std::vector<velox::core::TypedExprPtr> extraFilters) {
     leafHandles_[id] = {std::move(handle), std::move(extraFilters)};
   }
 
@@ -105,8 +108,8 @@ class ToVelox {
 
   // Makes a getter path over a top level column and can convert the top
   // map getter into struct getter if maps extracted as structs.
-  core::TypedExprPtr
-  pathToGetter(ColumnCP column, PathCP path, core::TypedExprPtr field);
+  velox::core::TypedExprPtr
+  pathToGetter(ColumnCP column, PathCP path, velox::core::TypedExprPtr field);
 
   // Returns a filter expr that ands 'exprs'. nullptr if 'exprs' is empty.
   velox::core::TypedExprPtr toAnd(const ExprVector& exprs);
@@ -169,7 +172,7 @@ class ToVelox {
       const Repartition& repartition,
       axiom::runner::ExecutableFragment& fragment,
       std::vector<axiom::runner::ExecutableFragment>& stages,
-      std::shared_ptr<core::ExchangeNode>& exchange);
+      std::shared_ptr<velox::core::ExchangeNode>& exchange);
 
   // Makes a union all with a mix of remote and local inputs. Combines all
   // remote inputs into one ExchangeNode.
@@ -178,7 +181,7 @@ class ToVelox {
       axiom::runner::ExecutableFragment& fragment,
       std::vector<axiom::runner::ExecutableFragment>& stages);
 
-  core::PlanNodePtr makeValues(
+  velox::core::PlanNodePtr makeValues(
       const Values& values,
       axiom::runner::ExecutableFragment& fragment);
 
@@ -196,31 +199,32 @@ class ToVelox {
   // Records the prediction for 'node' and a history key to update history
   // after the plan is executed.
   void makePredictionAndHistory(
-      const core::PlanNodeId& id,
+      const velox::core::PlanNodeId& id,
       const RelationOp* op);
 
   // Returns a stack of parallel project nodes if parallelization makes sense.
   // nullptr means use regular ProjectNode in output.
   velox::core::PlanNodePtr maybeParallelProject(
       const Project* project,
-      core::PlanNodePtr input);
+      velox::core::PlanNodePtr input);
 
-  core::PlanNodePtr makeParallelProject(
-      const core::PlanNodePtr& input,
+  velox::core::PlanNodePtr makeParallelProject(
+      const velox::core::PlanNodePtr& input,
       const PlanObjectSet& topExprs,
       const PlanObjectSet& placed,
       const PlanObjectSet& extraColumns);
 
   // Makes projections for subfields as top level columns.
   // @param scanNode TableScan or Filter input node.
-  core::PlanNodePtr makeSubfieldProjections(
+  velox::core::PlanNodePtr makeSubfieldProjections(
       const TableScan& scan,
-      const core::PlanNodePtr& scanNode);
+      const velox::core::PlanNodePtr& scanNode);
 
   axiom::runner::ExecutableFragment newFragment();
 
   // TODO Move this into MultiFragmentPlan::Options.
-  const VectorSerde::Kind exchangeSerdeKind_{VectorSerde::Kind::kPresto};
+  const velox::VectorSerde::Kind exchangeSerdeKind_{
+      velox::VectorSerde::Kind::kPresto};
 
   axiom::runner::MultiFragmentPlan::Options options_;
 
@@ -244,20 +248,20 @@ class ToVelox {
 
   // Map from top level map column  accessed as struct to the struct type.
   // Used only when generating a leaf scan for result Velox plan.
-  std::unordered_map<ColumnCP, TypePtr> columnAlteredTypes_;
+  std::unordered_map<ColumnCP, velox::TypePtr> columnAlteredTypes_;
 
   // When generating parallel projections with intermediate assignment for
   // common subexpressions, maps from ExprCP to the FieldAccessTypedExppr with
   // the value.
-  std::unordered_map<ExprCP, core::TypedExprPtr> projectedExprs_;
+  std::unordered_map<ExprCP, velox::core::TypedExprPtr> projectedExprs_;
 
   // Map from plan object id to pair of handle with pushdown filters and list
   // of filters to eval on the result from the handle.
   std::unordered_map<
       int32_t,
       std::pair<
-          connector::ConnectorTableHandlePtr,
-          std::vector<core::TypedExprPtr>>>
+          velox::connector::ConnectorTableHandlePtr,
+          std::vector<velox::core::TypedExprPtr>>>
       leafHandles_;
 
   // Serial number for plan nodes in executable plan.
@@ -269,4 +273,4 @@ class ToVelox {
   const std::optional<std::string> subscript_;
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

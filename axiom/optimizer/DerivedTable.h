@@ -18,7 +18,7 @@
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/PlanObject.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 struct Distribution;
 using DistributionP = Distribution*;
@@ -240,4 +240,4 @@ struct DerivedTable : public PlanObject {
 using DerivedTableP = DerivedTable*;
 using DerivedTableCP = const DerivedTable*;
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

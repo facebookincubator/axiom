@@ -20,7 +20,7 @@
 #include "axiom/optimizer/ToVelox.h"
 #include "velox/exec/TaskStats.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// Records and retrieves estimated and actual cardinalities based on Velox
 /// handles and execution stats.
@@ -38,7 +38,7 @@ class VeloxHistory : public History {
 
   /// Sets the filter selectivity of a table scan. Returns true if there is data
   /// to back the estimate and false if this is a pure guess.
-  bool setLeafSelectivity(BaseTable& table, const RowTypePtr& scanType)
+  bool setLeafSelectivity(BaseTable& table, const velox::RowTypePtr& scanType)
       override;
 
   /// Stores observed costs and cardinalities from a query execution. If 'op' is
@@ -57,4 +57,4 @@ class VeloxHistory : public History {
   std::unordered_map<std::string, NodePrediction> planHistory_;
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer
