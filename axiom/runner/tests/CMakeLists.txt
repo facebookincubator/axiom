@@ -41,7 +41,7 @@ target_link_libraries(
 
 add_executable(axiom_runner_local_runner_test LocalRunnerTest.cpp Main.cpp)
 
-add_test(axiom_runner_local_runner_test axiom_runner__local_runner_test)
+add_test(axiom_runner_local_runner_test axiom_runner_local_runner_test)
 
 target_link_libraries(
   axiom_runner_local_runner_test
