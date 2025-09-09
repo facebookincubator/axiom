@@ -22,6 +22,6 @@ velox_link_libraries(
   velox_tpch_connector
   velox_tpch_gen)
 
-if(${VELOX_BUILD_TESTING})
+if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()

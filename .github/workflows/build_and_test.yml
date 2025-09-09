@@ -35,8 +35,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
   cancel-in-progress: true
 jobs:
-  build-verax:
-    name: Build Verax
+  build-axiom:
+    name: Build Axiom
     runs-on: 16-core-ubuntu
     container:
       image: ghcr.io/facebookincubator/velox-dev:centos9
@@ -85,9 +85,9 @@ jobs:
         run: |
           ccache -sz
 
-      # Build Verax
-      - name: Build Verax Debug
-        id: build-verax
+      # Build Axiom
+      - name: Build Axiom Debug
+        id: build-axiom
         env:
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
           CPU_TARGET: "avx"
@@ -107,7 +107,7 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-default-gcc
 
-      # Run Verax tests
+      # Run Axiom tests
       - name: Run Debug Tests
         working-directory: _build/debug
         run: |

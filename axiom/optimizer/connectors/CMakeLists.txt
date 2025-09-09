@@ -14,7 +14,9 @@
 add_subdirectory(hive)
 add_subdirectory(tpch)
 
-add_subdirectory(tests)
+if(AXIOM_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
 
 velox_add_library(velox_connector_metadata ConnectorMetadata.cpp)
 
