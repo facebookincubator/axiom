@@ -22,8 +22,8 @@ axiom_add_library(
 
 axiom_link_libraries(axiom_logical_plan velox_type)
 
-axiom_add_library(axiom_logical_plan_builder PlanBuilder.cpp
-                  NameAllocator.cpp NameMappings.cpp)
+axiom_add_library(axiom_logical_plan_builder PlanBuilder.cpp NameAllocator.cpp
+                  NameMappings.cpp)
 
 axiom_link_libraries(
   axiom_logical_plan_builder

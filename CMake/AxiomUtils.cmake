@@ -18,7 +18,9 @@ function(axiom_get_rpath_origin VAR)
   else()
     set(_origin "\$ORIGIN")
   endif()
-  set(${VAR} ${_origin} PARENT_SCOPE)
+  set(${VAR}
+      ${_origin}
+      PARENT_SCOPE)
 endfunction()
 
 # TODO use file sets
@@ -29,9 +31,10 @@ function(axiom_install_library_headers)
     cmake_path(
       RELATIVE_PATH
       CMAKE_CURRENT_SOURCE_DIR
-      BASE_DIRECTORY "${CMAKE_SOURCE_DIR}"
-      OUTPUT_VARIABLE _hdr_dir
-    )
+      BASE_DIRECTORY
+      "${CMAKE_SOURCE_DIR}"
+      OUTPUT_VARIABLE
+      _hdr_dir)
     install(FILES ${_hdrs} DESTINATION include/${_hdr_dir})
   endif()
 endfunction()
@@ -48,7 +51,12 @@ function(axiom_add_library TARGET)
   set(options OBJECT STATIC SHARED INTERFACE)
   set(oneValueArgs)
   set(multiValueArgs)
-  cmake_parse_arguments(AXIOM "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  cmake_parse_arguments(
+    AXIOM
+    "${options}"
+    "${oneValueArgs}"
+    "${multiValueArgs}"
+    ${ARGN})
 
   # Remove library type specifiers from ARGN
   set(library_type)
@@ -78,8 +86,10 @@ function(axiom_add_library TARGET)
       endif()
       # Create the target if this is the first invocation.
       add_library(axiom ${_type} ${ARGN})
-      set_target_properties(axiom PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
-      set_target_properties(axiom PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+      set_target_properties(axiom PROPERTIES LIBRARY_OUTPUT_DIRECTORY
+                                             ${PROJECT_BINARY_DIR}/lib)
+      set_target_properties(axiom PROPERTIES ARCHIVE_OUTPUT_DIRECTORY
+                                             ${PROJECT_BINARY_DIR}/lib)
       install(TARGETS axiom DESTINATION lib/axiom)
     endif()
     # create alias for compatability
@@ -100,17 +110,7 @@ function(axiom_link_libraries TARGET)
     # These targets follow the axiom_* name for consistency but are NOT actually
     # aliases to axiom when building the mono lib and need to be linked
     # explicitly (this is a hack)
-    set(
-      explicit_targets
-      axiom_exec_test_lib
-      # see axiom/experimental/wave/README.md
-      axiom_wave_common
-      axiom_wave_decode
-      axiom_wave_dwio
-      axiom_wave_exec
-      axiom_wave_stream
-      axiom_wave_vector
-    )
+    set(explicit_targets)
 
     foreach(_arg ${ARGN})
       list(FIND explicit_targets ${_arg} _explicit)

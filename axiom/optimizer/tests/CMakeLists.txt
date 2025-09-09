@@ -57,7 +57,7 @@ target_link_libraries(
   velox_parse_parser velox_vector)
 
 add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp
-                  LogicalPlanMatcher.cpp)
+                                               LogicalPlanMatcher.cpp)
 
 target_link_libraries(
   axiom_optimizer_tests_plan_matcher
@@ -69,7 +69,7 @@ target_link_libraries(
   GTest::gtest_main)
 
 add_library(axiom_optimizer_tests_hive_queries_test_base
-                  HiveQueriesTestBase.cpp)
+            HiveQueriesTestBase.cpp)
 
 target_link_libraries(
   axiom_optimizer_tests_hive_queries_test_base
