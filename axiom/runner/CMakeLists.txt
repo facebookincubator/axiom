@@ -18,8 +18,8 @@ endif()
 
 add_library(axiom_runner_multifragment_plan MultiFragmentPlan.cpp)
 
-target_link_libraries(axiom_runner_multifragment_plan velox_common_base
-                     velox_memory velox_core)
+target_link_libraries(
+  axiom_runner_multifragment_plan velox_common_base velox_memory velox_core)
 
 add_library(axiom_runner_local_runner LocalRunner.cpp Runner.cpp)
 

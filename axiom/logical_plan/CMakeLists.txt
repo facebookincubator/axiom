@@ -20,10 +20,11 @@ add_library(
   PlanPrinter.cpp
   ExprApi.cpp)
 
-target_link_libraries(axiom_logical_plan velox_type)
+target_link_libraries(
+  axiom_logical_plan velox_type)
 
 add_library(axiom_logical_plan_builder PlanBuilder.cpp NameAllocator.cpp
-                  NameMappings.cpp)
+                                       NameMappings.cpp)
 
 target_link_libraries(
   axiom_logical_plan_builder

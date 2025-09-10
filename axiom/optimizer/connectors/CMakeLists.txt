@@ -20,5 +20,5 @@ endif()
 
 add_library(axiom_connector_metadata ConnectorMetadata.cpp)
 
-target_link_libraries(axiom_connector_metadata velox_common_base velox_memory
-                     velox_connector)
+target_link_libraries(
+  axiom_connector_metadata velox_common_base velox_memory velox_connector)

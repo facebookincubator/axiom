@@ -20,12 +20,13 @@ add_subdirectory(connectors)
 
 add_library(axiom_model Model.cpp)
 
-target_link_libraries(axiom_model velox_exception)
+target_link_libraries(
+  axiom_model velox_exception)
 
 add_library(axiom_schema_resolver SchemaResolver.cpp SchemaUtils.cpp)
 
-target_link_libraries(axiom_schema_resolver axiom_connector_metadata
-                     velox_exception velox_vector)
+target_link_libraries(
+  axiom_schema_resolver axiom_connector_metadata velox_exception velox_vector)
 
 add_library(
   axiom_optimizer
