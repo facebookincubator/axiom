@@ -100,6 +100,7 @@ add_executable(
   HiveQueriesTest.cpp
   PlanTest.cpp
   ParquetTpchTest.cpp
+  QueryTestBase.cpp
   SubfieldTest.cpp
   FeatureGen.cpp
   Genies.cpp
