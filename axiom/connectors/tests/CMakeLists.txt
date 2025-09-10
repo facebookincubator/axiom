@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(axiom_test_connector TestConnector.cpp)
+velox_add_library(axiom_test_connector OBJECT TestConnector.cpp)
 
 velox_link_libraries(
   axiom_test_connector

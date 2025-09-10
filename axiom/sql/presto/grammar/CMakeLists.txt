@@ -16,7 +16,7 @@ if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
-add_library(
+velox_add_library(
   axiom_sql_presto_grammar
   PrestoSqlBaseListener.cpp
   PrestoSqlBaseVisitor.cpp
@@ -25,5 +25,4 @@ add_library(
   PrestoSqlParser.cpp
   PrestoSqlVisitor.cpp)
 
-target_link_libraries(
-  axiom_sql_presto_grammar antlr4_shared)
+velox_link_libraries(axiom_sql_presto_grammar antlr4_shared)
