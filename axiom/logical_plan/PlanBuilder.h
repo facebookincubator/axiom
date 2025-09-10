@@ -240,14 +240,14 @@ class PlanBuilder {
     AggregateOptions(
         ExprPtr filters,
         std::vector<SortingField> orderings,
-        bool distincts)
+        bool distinct)
         : filters(std::move(filters)),
           orderings(std::move(orderings)),
-          distincts(distincts) {}
+          distinct(distinct) {}
 
     ExprPtr filters;
     std::vector<SortingField> orderings;
-    bool distincts{false};
+    bool distinct{false};
   };
   PlanBuilder& aggregate(
       const std::vector<ExprApi>& groupingKeys,

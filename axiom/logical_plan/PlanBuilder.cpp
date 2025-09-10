@@ -399,7 +399,7 @@ PlanBuilder& PlanBuilder::aggregate(
           aggregate.expr(),
           options[i].filters,
           options[i].orderings,
-          options[i].distincts);
+          options[i].distinct);
     } else {
       expr = resolveAggregateTypes(aggregate.expr());
     }
