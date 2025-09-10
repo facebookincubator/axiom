@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_optimizer_tests_parquet_tpch ParquetTpchTest.cpp)
+velox_add_library(axiom_optimizer_tests_parquet_tpch ParquetTpchTest.cpp)
 
-target_link_libraries(
+velox_link_libraries(
   axiom_optimizer_tests_parquet_tpch
   axiom_logical_plan_builder
   axiom_optimizer
@@ -29,9 +29,9 @@ target_link_libraries(
   gtest
   gtest_main)
 
-add_library(axiom_optimizer_tests_query_test_base QueryTestBase.cpp)
+velox_add_library(axiom_optimizer_tests_query_test_base QueryTestBase.cpp)
 
-target_link_libraries(
+velox_link_libraries(
   axiom_optimizer_tests_query_test_base
   axiom_optimizer
   axiom_schema_resolver
@@ -44,22 +44,21 @@ target_link_libraries(
   gtest
   gtest_main)
 
-add_library(axiom_optimizer_tests_presto_parser PrestoParser.cpp)
+velox_add_library(axiom_optimizer_tests_presto_parser PrestoParser.cpp)
 
-target_link_libraries(
+velox_link_libraries(
   axiom_optimizer_tests_presto_parser axiom_logical_plan_builder
   axiom_sql_presto_ast antlr4_shared)
 
-add_library(axiom_optimizer_tests_duck_parser DuckParser.cpp)
+velox_add_library(axiom_optimizer_tests_duck_parser DuckParser.cpp)
 
-target_link_libraries(
-  axiom_optimizer_tests_duck_parser axiom_logical_plan_builder
-  velox_parse_parser velox_vector)
+velox_link_libraries(axiom_optimizer_tests_duck_parser
+                     axiom_logical_plan_builder velox_parse_parser velox_vector)
 
-add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp
-                                               LogicalPlanMatcher.cpp)
+velox_add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp
+                  LogicalPlanMatcher.cpp)
 
-target_link_libraries(
+velox_link_libraries(
   axiom_optimizer_tests_plan_matcher
   velox_hive_connector
   velox_parse_parser
@@ -68,10 +67,10 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main)
 
-add_library(axiom_optimizer_tests_hive_queries_test_base
-            HiveQueriesTestBase.cpp)
+velox_add_library(axiom_optimizer_tests_hive_queries_test_base
+                  HiveQueriesTestBase.cpp)
 
-target_link_libraries(
+velox_link_libraries(
   axiom_optimizer_tests_hive_queries_test_base
   axiom_optimizer_tests_parquet_tpch
   axiom_optimizer_tests_plan_matcher
