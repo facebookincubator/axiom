@@ -18,10 +18,11 @@
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 class HiveLimitQueriesTest : public test::HiveQueriesTestBase {
  public:
@@ -308,4 +309,4 @@ TEST_F(HiveLimitQueriesTest, orderByOffsetLimit) {
 }
 
 } // namespace
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

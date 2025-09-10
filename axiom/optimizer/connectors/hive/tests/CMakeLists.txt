@@ -18,9 +18,8 @@ add_test(velox_hive_connector_metadata_test velox_hive_connector_metadata_test)
 target_link_libraries(
   velox_hive_connector_metadata_test
   velox_hive_connector_metadata
-  velox_connector_split_source
   velox_hive_connector
-  velox_exec_runner_test_util
+  axiom_runner_tests_utils
   velox_hive_partition_function
   velox_dwio_common_exception
   velox_vector_fuzzer

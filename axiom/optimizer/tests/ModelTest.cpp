@@ -22,7 +22,7 @@
 #include <sstream>
 
 using namespace facebook::velox;
-using namespace facebook::velox::optimizer;
+using namespace facebook::axiom::optimizer;
 
 class ModelTest : public testing::Test {
  protected:

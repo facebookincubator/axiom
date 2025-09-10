@@ -20,7 +20,7 @@
 #include "axiom/optimizer/tests/PrestoParser.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 
 class HiveQueriesTestBase : public test::QueryTestBase {
  protected:
@@ -34,30 +34,30 @@ class HiveQueriesTestBase : public test::QueryTestBase {
 
   static void TearDownTestCase();
 
-  RowTypePtr getSchema(const std::string& tableName);
+  velox::RowTypePtr getSchema(const std::string& tableName);
 
   void checkResults(
       const std::string& sql,
-      const core::PlanNodePtr& referencePlan);
+      const velox::core::PlanNodePtr& referencePlan);
 
   void checkResults(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
-      const core::PlanNodePtr& referencePlan);
+      const velox::core::PlanNodePtr& referencePlan);
 
   void checkResults(const PlanAndStats& plan, const test::TestResult& expected);
 
   void checkSingleNodePlan(
       const PlanAndStats& plan,
-      const std::shared_ptr<core::PlanMatcher>& matcher);
+      const std::shared_ptr<velox::core::PlanMatcher>& matcher);
 
   PrestoParser& prestoParser() {
     return *prestoParser_;
   }
 
- protected:
-  static std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
+  inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
+      gTempDirectory;
 
   std::unique_ptr<PrestoParser> prestoParser_;
 };
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

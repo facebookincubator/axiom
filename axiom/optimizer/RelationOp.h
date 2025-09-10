@@ -22,7 +22,7 @@
 /// Plan candidates.
 /// A candidate plan is constructed based on the join graph/derived table tree.
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 // Represents the cost and cardinality of a RelationOp or Plan. A Cost has a
 // per-row cost, a per-row fanout and a one-time setup cost. For example, a hash
@@ -492,4 +492,4 @@ struct Limit : public RelationOp {
 
 using LimitCP = const Limit*;
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

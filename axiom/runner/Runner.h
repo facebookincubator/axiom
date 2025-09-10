@@ -17,46 +17,10 @@
 #pragma once
 
 #include "velox/common/Enums.h"
-#include "velox/connectors/Connector.h"
-#include "velox/core/PlanNode.h"
 #include "velox/exec/TaskStats.h"
 
 /// Base classes for multifragment Velox query execution.
 namespace facebook::axiom::runner {
-
-/// Iterator for obtaining splits for a scan. One is created for each table
-/// scan.
-class SplitSource {
- public:
-  static constexpr uint32_t kUngroupedGroupId =
-      std::numeric_limits<uint32_t>::max();
-
-  /// Result of getSplits. Each split belongs to a group. A nullptr split for
-  /// group means that there are on more splits for the group. In ungrouped
-  /// execution, the group is kUngroupedGroupId.
-  struct SplitAndGroup {
-    std::shared_ptr<velox::connector::ConnectorSplit> split;
-    uint32_t group{kUngroupedGroupId};
-  };
-
-  virtual ~SplitSource() = default;
-
-  /// Returns a set of splits that cover up to 'targetBytes' of data.
-  virtual std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) = 0;
-};
-
-/// A factory for getting a SplitSource for each TableScan. The splits produced
-/// may depend on partition keys, buckets etc mentioned by each tableScan.
-class SplitSourceFactory {
- public:
-  virtual ~SplitSourceFactory() = default;
-
-  /// Returns a splitSource for one TableScan across all Tasks of
-  /// the fragment. The source will be invoked to produce splits for
-  /// each individual worker running the scan.
-  virtual std::shared_ptr<SplitSource> splitSourceForScan(
-      const velox::core::TableScanNode& scan) = 0;
-};
 
 /// Base class for executing multifragment Velox queries. One instance
 /// of a Runner coordinates the execution of one multifragment

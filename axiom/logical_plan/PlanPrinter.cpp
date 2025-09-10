@@ -15,11 +15,13 @@
  */
 
 #include "axiom/logical_plan/PlanPrinter.h"
+
+#include <algorithm>
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/ExprVisitor.h"
 #include "axiom/logical_plan/PlanNodeVisitor.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 namespace {
 
@@ -712,15 +714,13 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
     }
 
     if (sortByKey) {
-      std::sort(
-          sortedCounts.begin(),
-          sortedCounts.end(),
-          [&](const auto& a, const auto& b) { return a.first < b.first; });
+      std::ranges::sort(sortedCounts, [&](const auto& a, const auto& b) {
+        return a.first < b.first;
+      });
     } else {
-      std::sort(
-          sortedCounts.begin(),
-          sortedCounts.end(),
-          [&](const auto& a, const auto& b) { return a.second > b.second; });
+      std::ranges::sort(sortedCounts, [&](const auto& a, const auto& b) {
+        return a.second > b.second;
+      });
     }
 
     bool first = true;
@@ -855,4 +855,4 @@ std::string PlanPrinter::toSkeletonText(const LogicalPlanNode& root) {
   return context.out.str();
 }
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

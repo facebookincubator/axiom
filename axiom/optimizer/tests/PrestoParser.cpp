@@ -24,11 +24,13 @@
 #include "axiom/sql/presto/ast/AstPrinter.h"
 #include "velox/exec/Aggregate.h"
 
-namespace lp = facebook::velox::logical_plan;
 namespace sql = axiom::sql::presto;
 
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 using ExprMap = folly::
     F14FastMap<core::ExprPtr, core::ExprPtr, core::IExprHash, core::IExprEqual>;
@@ -1184,8 +1186,7 @@ SqlStatementPtr PrestoParser::doParse(
   if (query->is(sql::NodeType::kShowColumns)) {
     const auto tableName = query->as<sql::ShowColumns>()->table()->suffix();
 
-    auto table = connector::getConnector(defaultConnectorId_)
-                     ->metadata()
+    auto table = connector::ConnectorMetadata::metadata(defaultConnectorId_)
                      ->findTable(tableName);
 
     VELOX_USER_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
@@ -1211,4 +1212,4 @@ SqlStatementPtr PrestoParser::doParse(
   return std::make_shared<SelectStatement>(planner.getPlan());
 }
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

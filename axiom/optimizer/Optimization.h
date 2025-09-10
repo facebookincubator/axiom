@@ -23,7 +23,7 @@
 #include "axiom/runner/MultiFragmentPlan.h"
 #include "velox/core/QueryCtx.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// Instance of query optimization. Converts a plan and schema into an
 /// optimized plan. Depends on QueryGraphContext being set on the
@@ -35,17 +35,17 @@ class Optimization {
       const logical_plan::LogicalPlanNode& logicalPlan,
       const Schema& schema,
       History& history,
-      std::shared_ptr<core::QueryCtx> veloxQueryCtx,
+      std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
       velox::core::ExpressionEvaluator& evaluator,
       OptimizerOptions options = {},
-      axiom::runner::MultiFragmentPlan::Options runnerOptions = {});
+      runner::MultiFragmentPlan::Options runnerOptions = {});
 
   // Simplified API for usage in testing and tooling.
   static PlanAndStats toVeloxPlan(
       const logical_plan::LogicalPlanNode& logicalPlan,
       velox::memory::MemoryPool& pool,
       OptimizerOptions options = {},
-      axiom::runner::MultiFragmentPlan::Options runnerOptions = {});
+      runner::MultiFragmentPlan::Options runnerOptions = {});
 
   Optimization(const Optimization& other) = delete;
   Optimization& operator=(const Optimization& other) = delete;
@@ -60,7 +60,9 @@ class Optimization {
     return toVelox_.toVeloxPlan(std::move(plan), runnerOptions_);
   }
 
-  std::pair<connector::ConnectorTableHandlePtr, std::vector<core::TypedExprPtr>>
+  std::pair<
+      velox::connector::ConnectorTableHandlePtr,
+      std::vector<velox::core::TypedExprPtr>>
   leafHandle(int32_t id) {
     return toVelox_.leafHandle(id);
   }
@@ -70,18 +72,20 @@ class Optimization {
     return toVelox_.toTypedExpr(expr);
   }
 
-  RowTypePtr subfieldPushdownScanType(
+  velox::RowTypePtr subfieldPushdownScanType(
       BaseTableCP baseTable,
       const ColumnVector& leafColumns,
       ColumnVector& topColumns,
-      std::unordered_map<ColumnCP, TypePtr>& typeMap) {
+      std::unordered_map<ColumnCP, velox::TypePtr>& typeMap) {
     return toVelox_.subfieldPushdownScanType(
         baseTable, leafColumns, topColumns, typeMap);
   }
 
   /// Sets 'filterSelectivity' of 'baseTable' from history. Returns true if set.
   /// 'scanType' is the set of sampled columns with possible map to struct cast.
-  bool setLeafSelectivity(BaseTable& baseTable, const RowTypePtr& scanType) {
+  bool setLeafSelectivity(
+      BaseTable& baseTable,
+      const velox::RowTypePtr& scanType) {
     return history_.setLeafSelectivity(baseTable, scanType);
   }
 
@@ -107,7 +111,7 @@ class Optimization {
 
   void makeJoins(PlanState& state);
 
-  const std::shared_ptr<core::QueryCtx>& veloxQueryCtx() const {
+  const std::shared_ptr<velox::core::QueryCtx>& veloxQueryCtx() const {
     return veloxQueryCtx_;
   }
 
@@ -131,7 +135,7 @@ class Optimization {
     return options_;
   }
 
-  const axiom::runner::MultiFragmentPlan::Options& runnerOptions() const {
+  const runner::MultiFragmentPlan::Options& runnerOptions() const {
     return runnerOptions_;
   }
 
@@ -142,7 +146,7 @@ class Optimization {
   /// Retain a reference to the provided TablePtr to ensure
   /// the Table is retained for the duration of Optimization, even if
   /// dropped by the corresponding ConnectorMetadata.
-  void retainConnectorTable(connector::TablePtr table) {
+  void retainConnectorTable(velox::connector::TablePtr table) {
     retainedTables_.insert(std::move(table));
   }
 
@@ -291,7 +295,7 @@ class Optimization {
 
   const OptimizerOptions options_;
 
-  const axiom::runner::MultiFragmentPlan::Options runnerOptions_;
+  const runner::MultiFragmentPlan::Options runnerOptions_;
 
   const bool isSingleWorker_;
 
@@ -301,10 +305,10 @@ class Optimization {
   // Source of historical cost/cardinality information.
   History& history_;
 
-  std::shared_ptr<core::QueryCtx> veloxQueryCtx_;
+  std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx_;
 
   // Set of tables in use by the Optimizer.
-  std::unordered_set<connector::TablePtr> retainedTables_;
+  std::unordered_set<velox::connector::TablePtr> retainedTables_;
 
   // Top DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP root_;
@@ -332,4 +336,4 @@ class Optimization {
   ToVelox toVelox_;
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

@@ -18,7 +18,7 @@
 
 #include "axiom/optimizer/QueryGraphContext.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 class BitSet {
  public:
@@ -67,13 +67,13 @@ class BitSet {
         });
   }
   size_t size() const {
-    return bits::countBits(
+    return velox::bits::countBits(
         bits_.data(), 0, static_cast<int32_t>(bits_.size() * 64));
   }
 
   template <typename Func>
   void forEach(Func f) const {
-    bits::forEachSetBit(bits_.data(), 0, bits_.size() * 64, f);
+    velox::bits::forEachSetBit(bits_.data(), 0, bits_.size() * 64, f);
   }
 
  protected:
@@ -91,4 +91,4 @@ class BitSet {
   std::vector<uint64_t, QGAllocator<uint64_t>> bits_;
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

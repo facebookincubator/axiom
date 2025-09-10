@@ -18,7 +18,9 @@
 #include <gtest/gtest.h>
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
-namespace facebook::velox::logical_plan {
+using namespace facebook::velox;
+
+namespace facebook::axiom::logical_plan {
 namespace {
 
 class PlanBuilderTest : public testing::Test {
@@ -55,4 +57,4 @@ TEST_F(PlanBuilderTest, outputNames) {
 }
 
 } // namespace
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

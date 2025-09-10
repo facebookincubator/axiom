@@ -21,7 +21,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 struct OptimizerOptions {
   /// Bit masks for use in 'traceFlags'.
@@ -73,4 +73,4 @@ struct OptimizerOptions {
   }
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

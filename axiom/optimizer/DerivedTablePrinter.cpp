@@ -18,7 +18,7 @@
 #include <sstream>
 #include "axiom/optimizer/PlanUtils.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 namespace {
 
@@ -234,4 +234,4 @@ std::string DerivedTablePrinter::toText(const DerivedTable& root) {
   return visitDerivedTable(root);
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

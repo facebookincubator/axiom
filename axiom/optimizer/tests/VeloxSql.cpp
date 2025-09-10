@@ -25,7 +25,6 @@
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/SchemaResolver.h"
 #include "axiom/optimizer/VeloxHistory.h"
-#include "axiom/optimizer/connectors/ConnectorSplitSource.h"
 #include "axiom/optimizer/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/optimizer/tests/PrestoParser.h"
 #include "axiom/runner/LocalRunner.h"
@@ -109,7 +108,7 @@ DEFINE_bool(
 
 using namespace facebook::velox;
 
-namespace axiom {
+namespace facebook::axiom {
 
 const char* helpText =
     "Velox Interactive SQL\n"
@@ -221,15 +220,18 @@ class VeloxRunner : public QueryBenchmarkBase {
   }
 
   std::shared_ptr<connector::Connector> registerTpchConnector() {
-    connector::tpch::registerTpchConnectorMetadataFactory(
-        std::make_unique<connector::tpch::TpchConnectorMetadataFactoryImpl>());
-
     auto emptyConfig = std::make_shared<config::ConfigBase>(
         std::unordered_map<std::string, std::string>());
 
     connector::tpch::TpchConnectorFactory factory;
     auto connector = factory.newConnector("tpch", emptyConfig);
     connector::registerConnector(connector);
+
+    connector::ConnectorMetadata::registerMetadata(
+        connector->connectorId(),
+        std::make_shared<connector::tpch::TpchConnectorMetadata>(
+            dynamic_cast<connector::tpch::TpchConnector*>(connector.get())));
+
     return connector;
   }
 
@@ -515,7 +517,8 @@ class VeloxRunner : public QueryBenchmarkBase {
     return std::make_shared<facebook::axiom::runner::LocalRunner>(
         planAndStats.plan,
         queryCtx,
-        std::make_shared<connector::ConnectorSplitSourceFactory>(splitOptions));
+        std::make_shared<facebook::axiom::runner::ConnectorSplitSourceFactory>(
+            splitOptions));
   }
 
   /// Runs a query and returns the result as a single vector in *resultVector,
@@ -997,7 +1000,7 @@ void checkQueries(VeloxRunner& runner) {
   exit(runner.checkStatus());
 }
 
-} // namespace axiom
+} // namespace facebook::axiom
 
 int main(int argc, char** argv) {
   gflags::SetUsageMessage(
@@ -1007,17 +1010,17 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv, false);
 
   try {
-    axiom::VeloxRunner runner;
+    facebook::axiom::VeloxRunner runner;
     runner.initialize();
 
-    axiom::initCommands(runner);
+    facebook::axiom::initCommands(runner);
 
     if (!FLAGS_query.empty()) {
       runner.run(FLAGS_query);
     } else if (!FLAGS_record.empty()) {
-      axiom::recordQueries(runner);
+      facebook::axiom::recordQueries(runner);
     } else if (!FLAGS_check.empty()) {
-      axiom::checkQueries(runner);
+      facebook::axiom::checkQueries(runner);
     } else {
       std::cout << "Velox SQL. Type statement and end with ;.\n"
                    "flag name = value; sets a gflag.\n"

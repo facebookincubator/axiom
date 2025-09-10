@@ -18,10 +18,9 @@
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
 
-namespace facebook::velox::optimizer {
-namespace lp = facebook::velox::logical_plan;
-
+namespace facebook::axiom::optimizer {
 namespace {
+
 // If 'object' is an Expr, returns Expr::singleTable, else nullptr.
 PlanObjectCP singleTable(PlanObjectCP object) {
   if (isExprType(object->type())) {
@@ -29,6 +28,7 @@ PlanObjectCP singleTable(PlanObjectCP object) {
   }
   return nullptr;
 }
+
 } // namespace
 
 void DerivedTable::addJoinEquality(ExprCP left, ExprCP right) {
@@ -714,7 +714,7 @@ void DerivedTable::distributeConjuncts() {
        (tables[0]->is(PlanType::kDerivedTableNode) &&
         tables[0]->as<DerivedTable>()->setOp.has_value() &&
         tables[0]->as<DerivedTable>()->setOp.value() ==
-            lp::SetOperation::kUnionAll));
+            logical_plan::SetOperation::kUnionAll));
 
   for (auto i = 0; i < conjuncts.size(); ++i) {
     // No pushdown of non-deterministic except if only pushdown target is a
@@ -1069,4 +1069,4 @@ void DerivedTable::addJoinedBy(JoinEdgeP join) {
   pushBackUnique(joinedBy, join);
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

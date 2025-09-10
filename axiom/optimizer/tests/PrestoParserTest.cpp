@@ -25,10 +25,11 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 class PrestoParserTest : public testing::Test {
  public:
@@ -40,20 +41,23 @@ class PrestoParserTest : public testing::Test {
     auto emptyConfig = std::make_shared<config::ConfigBase>(
         std::unordered_map<std::string, std::string>());
 
-    velox::connector::tpch::registerTpchConnectorMetadataFactory(
-        std::make_unique<
-            velox::connector::tpch::TpchConnectorMetadataFactoryImpl>());
-
     connector::tpch::TpchConnectorFactory tpchConnectorFactory;
     auto tpchConnector =
         tpchConnectorFactory.newConnector(kTpchConnectorId, emptyConfig);
-    connector::registerConnector(std::move(tpchConnector));
+    connector::registerConnector(tpchConnector);
+
+    connector::ConnectorMetadata::registerMetadata(
+        kTpchConnectorId,
+        std::make_shared<connector::tpch::TpchConnectorMetadata>(
+            dynamic_cast<connector::tpch::TpchConnector*>(
+                tpchConnector.get())));
 
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
   }
 
   static void TearDownTestCase() {
+    connector::ConnectorMetadata::unregisterMetadata(kTpchConnectorId);
     connector::unregisterConnector(kTpchConnectorId);
   }
 
@@ -470,4 +474,4 @@ TEST_F(PrestoParserTest, describe) {
 }
 
 } // namespace
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

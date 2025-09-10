@@ -18,7 +18,7 @@
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/Optimization.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 namespace {
 
@@ -410,7 +410,7 @@ bool NextJoin::isWorse(const NextJoin& other) const {
 size_t MemoKey::hash() const {
   size_t hash = tables.hash();
   for (auto& exists : existences) {
-    hash = bits::commutativeHashMix(hash, exists.hash());
+    hash = velox::bits::commutativeHashMix(hash, exists.hash());
   }
   return hash;
 }
@@ -433,19 +433,19 @@ bool MemoKey::operator==(const MemoKey& other) const {
   return false;
 }
 
-core::JoinType reverseJoinType(core::JoinType joinType) {
+velox::core::JoinType reverseJoinType(velox::core::JoinType joinType) {
   switch (joinType) {
-    case core::JoinType::kLeft:
-      return core::JoinType::kRight;
-    case core::JoinType::kRight:
-      return core::JoinType::kLeft;
-    case core::JoinType::kLeftSemiFilter:
-      return core::JoinType::kRightSemiFilter;
-    case core::JoinType::kLeftSemiProject:
-      return core::JoinType::kRightSemiProject;
+    case velox::core::JoinType::kLeft:
+      return velox::core::JoinType::kRight;
+    case velox::core::JoinType::kRight:
+      return velox::core::JoinType::kLeft;
+    case velox::core::JoinType::kLeftSemiFilter:
+      return velox::core::JoinType::kRightSemiFilter;
+    case velox::core::JoinType::kLeftSemiProject:
+      return velox::core::JoinType::kRightSemiProject;
     default:
       return joinType;
   }
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

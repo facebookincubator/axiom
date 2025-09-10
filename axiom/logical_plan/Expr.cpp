@@ -20,7 +20,7 @@
 #include "axiom/logical_plan/ExprVisitor.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 void InputReferenceExpr::accept(
     const ExprVisitor& visitor,
@@ -103,7 +103,7 @@ VELOX_DEFINE_ENUM_NAME(SpecialForm, specialFormNames)
 
 namespace {
 void validateDereferenceInputs(
-    const TypePtr& type,
+    const velox::TypePtr& type,
     const std::vector<ExprPtr>& inputs) {
   VELOX_USER_CHECK_EQ(
       inputs.size(), 2, "DEREFERENCE must have exactly two inputs");
@@ -115,8 +115,8 @@ void validateDereferenceInputs(
   const auto& rowType = inputs[0]->type()->asRow();
 
   VELOX_USER_CHECK(
-      inputs[1]->type()->kind() == TypeKind::VARCHAR ||
-          inputs[1]->type()->kind() == TypeKind::INTEGER,
+      inputs[1]->type()->kind() == velox::TypeKind::VARCHAR ||
+          inputs[1]->type()->kind() == velox::TypeKind::INTEGER,
       "Second input to DEREFERENCE must be a constant string or integer. Got: {}",
       inputs[1]->type()->toString());
 
@@ -128,8 +128,9 @@ void validateDereferenceInputs(
   VELOX_USER_CHECK(
       !fieldExpr->isNull(), "Second input to DEREFERENCE must not be null");
 
-  if (fieldExpr->type()->kind() == TypeKind::VARCHAR) {
-    const auto& fieldName = fieldExpr->value()->value<TypeKind::VARCHAR>();
+  if (fieldExpr->type()->kind() == velox::TypeKind::VARCHAR) {
+    const auto& fieldName =
+        fieldExpr->value()->value<velox::TypeKind::VARCHAR>();
     VELOX_USER_CHECK(
         !fieldName.empty(),
         "Second input to DEREFERENCE must not be emtpy string");
@@ -161,7 +162,9 @@ void validateDereferenceInputs(
   }
 }
 
-void validateIfInputs(const TypePtr& type, const std::vector<ExprPtr>& inputs) {
+void validateIfInputs(
+    const velox::TypePtr& type,
+    const std::vector<ExprPtr>& inputs) {
   VELOX_USER_CHECK_GE(
       inputs.size(), 2, "IF must have exactly either two or three inputs");
   VELOX_USER_CHECK_LE(
@@ -169,7 +172,7 @@ void validateIfInputs(const TypePtr& type, const std::vector<ExprPtr>& inputs) {
 
   VELOX_USER_CHECK_EQ(
       inputs[0]->type()->kind(),
-      TypeKind::BOOLEAN,
+      velox::TypeKind::BOOLEAN,
       "First input to IF must be boolean");
 
   const auto& thenType = inputs[1]->type();
@@ -190,7 +193,7 @@ void validateIfInputs(const TypePtr& type, const std::vector<ExprPtr>& inputs) {
 }
 
 void validateSwitchInputs(
-    const TypePtr& type,
+    const velox::TypePtr& type,
     const std::vector<ExprPtr>& inputs) {
   VELOX_USER_CHECK_GE(inputs.size(), 2, "SWITCH must have at least two inputs");
 
@@ -200,7 +203,7 @@ void validateSwitchInputs(
     const auto& condition = inputs[2 * i];
     VELOX_USER_CHECK_EQ(
         condition->type()->kind(),
-        TypeKind::BOOLEAN,
+        velox::TypeKind::BOOLEAN,
         "SWITCH conditions must be boolean");
 
     const auto& thenClause = inputs[2 * i + 1];
@@ -222,10 +225,12 @@ void validateSwitchInputs(
   }
 }
 
-void validateInInputs(const TypePtr& type, const std::vector<ExprPtr>& inputs) {
+void validateInInputs(
+    const velox::TypePtr& type,
+    const std::vector<ExprPtr>& inputs) {
   VELOX_USER_CHECK_EQ(
       type->kind(),
-      TypeKind::BOOLEAN,
+      velox::TypeKind::BOOLEAN,
       "IN expression must return boolean type");
   VELOX_USER_CHECK_GE(inputs.size(), 2, "IN must have at least two inputs");
   if (inputs[1]->isSubquery()) {
@@ -253,7 +258,7 @@ void validateInInputs(const TypePtr& type, const std::vector<ExprPtr>& inputs) {
 } // namespace
 
 SpecialFormExpr::SpecialFormExpr(
-    TypePtr type,
+    velox::TypePtr type,
     SpecialForm form,
     std::vector<ExprPtr> inputs)
     : Expr{ExprKind::kSpecialForm, std::move(type), std::move(inputs)},
@@ -270,7 +275,7 @@ SpecialFormExpr::SpecialFormExpr(
       for (const auto& input : inputs_) {
         VELOX_USER_CHECK_EQ(
             input->type()->kind(),
-            TypeKind::BOOLEAN,
+            velox::TypeKind::BOOLEAN,
             "All inputs to AND and OR must be boolean");
       }
       break;
@@ -321,7 +326,10 @@ SpecialFormExpr::SpecialFormExpr(
   }
 }
 
-CallExpr::CallExpr(TypePtr type, std::string name, std::vector<ExprPtr> inputs)
+CallExpr::CallExpr(
+    velox::TypePtr type,
+    std::string name,
+    std::vector<ExprPtr> inputs)
     : Expr{ExprKind::kCall, std::move(type), std::move(inputs)},
       name_{std::move(name)} {
   VELOX_USER_CHECK(!name_.empty());
@@ -370,4 +378,4 @@ SubqueryExpr::SubqueryExpr(LogicalPlanNodePtr subquery)
       "Subquery must produce at least one column");
 }
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

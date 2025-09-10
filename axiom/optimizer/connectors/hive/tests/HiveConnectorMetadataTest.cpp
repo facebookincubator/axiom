@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/connectors/ConnectorSplitSource.h"
 #include "axiom/optimizer/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/runner/tests/DistributedPlanBuilder.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
@@ -83,8 +82,8 @@ class HiveConnectorMetadataTest
 };
 
 TEST_F(HiveConnectorMetadataTest, basic) {
-  auto connector = getConnector(velox::exec::test::kHiveConnectorId);
-  auto metadata = connector->metadata();
+  auto metadata =
+      ConnectorMetadata::metadata(velox::exec::test::kHiveConnectorId);
   ASSERT_TRUE(metadata != nullptr);
   auto table = metadata->findTable("T");
   ASSERT_TRUE(table != nullptr);
@@ -115,9 +114,9 @@ TEST_F(HiveConnectorMetadataTest, basic) {
 
 TEST_F(HiveConnectorMetadataTest, createTable) {
   constexpr int32_t kTestSize = 2048;
-  auto connector = getConnector(velox::exec::test::kHiveConnectorId);
+
   auto metadata = dynamic_cast<connector::hive::HiveConnectorMetadata*>(
-      connector->metadata());
+      ConnectorMetadata::metadata(velox::exec::test::kHiveConnectorId));
   ASSERT_TRUE(metadata != nullptr);
 
   auto tableType = ROW(
@@ -217,12 +216,8 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
       rootBuilder.fragments(), std::move(runnerOptions));
   auto rootPool = memory::memoryManager()->addRootPool("readQ");
 
-  auto splitSourceFactory =
-      std::make_shared<connector::ConnectorSplitSourceFactory>();
   auto localRunner = std::make_shared<axiom::runner::LocalRunner>(
-      std::move(readPlan),
-      makeQueryCtx(id, rootPool.get()),
-      splitSourceFactory);
+      std::move(readPlan), makeQueryCtx(id, rootPool.get()));
   auto results = axiom::runner::test::readCursor(localRunner);
   exec::test::assertEqualResults({data}, results);
 }

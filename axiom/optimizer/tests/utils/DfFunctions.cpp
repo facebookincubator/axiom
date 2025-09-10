@@ -19,11 +19,12 @@
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/QueryGraph.h"
 
-namespace facebook::velox::optimizer::test {
-
-namespace lp = facebook::velox::logical_plan;
-
+namespace facebook::axiom::optimizer::test {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
+
 std::unordered_map<std::string, lp::ExprResolver::FunctionRewriteHook>
     functionHooks;
 
@@ -262,4 +263,4 @@ lp::ExprPtr resolveDfFunction(
   return it->second(name, args);
 }
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

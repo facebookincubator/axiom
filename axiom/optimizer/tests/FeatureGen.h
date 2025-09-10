@@ -22,7 +22,7 @@
 
 #pragma once
 
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 
 struct FeatureOptions {
   int32_t numFloat{10};
@@ -35,9 +35,9 @@ struct FeatureOptions {
 
   /// Structs for use in reading the features. One field for each
   /// key. Filled in by makeFeatures().
-  RowTypePtr floatStruct;
-  RowTypePtr idListStruct;
-  RowTypePtr idScoreListStruct;
+  velox::RowTypePtr floatStruct;
+  velox::RowTypePtr idListStruct;
+  velox::RowTypePtr idScoreListStruct;
 
   // Parameters for generating test exprs.
   /// Number of projections for float one feature.
@@ -64,20 +64,20 @@ struct FeatureOptions {
   }
 };
 
-std::vector<RowVectorPtr> makeFeatures(
+std::vector<velox::RowVectorPtr> makeFeatures(
     int32_t numBatches,
     int32_t batchSize,
     FeatureOptions& opts,
-    memory::MemoryPool* pool);
+    velox::memory::MemoryPool* pool);
 
 void makeExprs(
     const FeatureOptions& opts,
     std::vector<std::string>& names,
-    std::vector<core::TypedExprPtr>& exprs);
+    std::vector<velox::core::TypedExprPtr>& exprs);
 
 void makeLogicalExprs(
     const FeatureOptions& opts,
     std::vector<std::string>& names,
     std::vector<logical_plan::ExprPtr>& exprs);
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

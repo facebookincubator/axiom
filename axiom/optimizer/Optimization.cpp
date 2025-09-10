@@ -15,23 +15,22 @@
  */
 
 #include "axiom/optimizer/Optimization.h"
+#include <algorithm>
 #include <iostream>
 #include <utility>
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 Optimization::Optimization(
-    const lp::LogicalPlanNode& logicalPlan,
+    const logical_plan::LogicalPlanNode& logicalPlan,
     const Schema& schema,
     History& history,
-    std::shared_ptr<core::QueryCtx> veloxQueryCtx,
+    std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
     velox::core::ExpressionEvaluator& evaluator,
     OptimizerOptions options,
-    axiom::runner::MultiFragmentPlan::Options runnerOptions)
+    runner::MultiFragmentPlan::Options runnerOptions)
     : options_(std::move(options)),
       runnerOptions_(std::move(runnerOptions)),
       isSingleWorker_(runnerOptions_.numWorkers == 1),
@@ -53,10 +52,10 @@ Optimization::Optimization(
 
 // static
 PlanAndStats Optimization::toVeloxPlan(
-    const lp::LogicalPlanNode& logicalPlan,
+    const logical_plan::LogicalPlanNode& logicalPlan,
     velox::memory::MemoryPool& pool,
     OptimizerOptions options,
-    axiom::runner::MultiFragmentPlan::Options runnerOptions) {
+    runner::MultiFragmentPlan::Options runnerOptions) {
   auto allocator = std::make_unique<velox::HashStringAllocator>(&pool);
   auto context = std::make_unique<QueryGraphContext>(*allocator);
   queryCtx() = context.get();
@@ -358,10 +357,8 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   }
 
   candidates.insert(candidates.begin(), bushes.begin(), bushes.end());
-  std::sort(
-      candidates.begin(),
-      candidates.end(),
-      [](const JoinCandidate& left, const JoinCandidate& right) {
+  std::ranges::sort(
+      candidates, [](const JoinCandidate& left, const JoinCandidate& right) {
         return left.fanout < right.fanout;
       });
   if (candidates.empty()) {
@@ -543,16 +540,16 @@ RelationOpPtr repartitionForIndex(
   return repartition;
 }
 
-float fanoutJoinTypeLimit(core::JoinType joinType, float fanout) {
+float fanoutJoinTypeLimit(velox::core::JoinType joinType, float fanout) {
   switch (joinType) {
-    case core::JoinType::kLeft:
+    case velox::core::JoinType::kLeft:
       return std::max<float>(1, fanout);
-    case core::JoinType::kLeftSemiFilter:
+    case velox::core::JoinType::kLeftSemiFilter:
       return std::min<float>(1, fanout);
-    case core::JoinType::kAnti:
+    case velox::core::JoinType::kAnti:
       return 1 - std::min<float>(1, fanout);
-    case core::JoinType::kLeftSemiProject:
-    case core::JoinType::kRightSemiProject:
+    case velox::core::JoinType::kLeftSemiProject:
+    case velox::core::JoinType::kRightSemiProject:
       return 1;
     default:
       return fanout;
@@ -659,7 +656,7 @@ void Optimization::addPostprocess(
           plan,
           aggPlan->groupingKeys(),
           aggPlan->aggregates(),
-          core::AggregationNode::Step::kSingle,
+          velox::core::AggregationNode::Step::kSingle,
           aggPlan->columns());
 
       state.placed.add(aggPlan);
@@ -670,7 +667,7 @@ void Optimization::addPostprocess(
           plan,
           aggPlan->groupingKeys(),
           aggPlan->aggregates(),
-          core::AggregationNode::Step::kPartial,
+          velox::core::AggregationNode::Step::kPartial,
           aggPlan->intermediateColumns());
 
       state.placed.add(aggPlan);
@@ -686,7 +683,7 @@ void Optimization::addPostprocess(
           plan,
           finalGroupingKeys,
           aggPlan->aggregates(),
-          core::AggregationNode::Step::kFinal,
+          velox::core::AggregationNode::Step::kFinal,
           aggPlan->columns());
 
       state.addCost(*finalAgg);
@@ -754,8 +751,8 @@ void Optimization::joinByIndex(
     }
     state.placed.add(candidate.tables.at(0));
     auto joinType = right.leftJoinType();
-    if (joinType == core::JoinType::kFull ||
-        joinType == core::JoinType::kRight) {
+    if (joinType == velox::core::JoinType::kFull ||
+        joinType == velox::core::JoinType::kRight) {
       // Not available by index.
       return;
     }
@@ -889,9 +886,9 @@ void Optimization::joinByHash(
   buildState.addCost(*buildOp);
 
   const auto joinType = build.leftJoinType();
-  const bool probeOnly = joinType == core::JoinType::kLeftSemiFilter ||
-      joinType == core::JoinType::kLeftSemiProject ||
-      joinType == core::JoinType::kAnti;
+  const bool probeOnly = joinType == velox::core::JoinType::kLeftSemiFilter ||
+      joinType == velox::core::JoinType::kLeftSemiProject ||
+      joinType == velox::core::JoinType::kAnti;
 
   PlanObjectSet probeColumns;
   probeColumns.unionObjects(plan->columns());
@@ -1010,8 +1007,9 @@ void Optimization::joinByHashRight(
       leftJoinType != rightJoinType,
       "Join type does not have right hash join variant");
 
-  const bool buildOnly = rightJoinType == core::JoinType::kRightSemiFilter ||
-      rightJoinType == core::JoinType::kRightSemiProject;
+  const bool buildOnly =
+      rightJoinType == velox::core::JoinType::kRightSemiFilter ||
+      rightJoinType == velox::core::JoinType::kRightSemiProject;
 
   ColumnVector columns;
   PlanObjectSet columnSet;
@@ -1303,17 +1301,14 @@ Distribution somePartition(const RelationOpPtrVector& inputs) {
   auto score = [&](ColumnCP column) {
     const auto& value = column->value();
     const auto card = value.cardinality;
-    return value.type->kind() >= TypeKind::ARRAY ? card / 10000 : card;
+    return value.type->kind() >= velox::TypeKind::ARRAY ? card / 10000 : card;
   };
 
   const auto& firstInput = inputs[0];
   auto inputColumns = firstInput->columns();
-  std::sort(
-      inputColumns.begin(),
-      inputColumns.end(),
-      [&](ColumnCP left, ColumnCP right) {
-        return score(left) > score(right);
-      });
+  std::ranges::sort(inputColumns, [&](ColumnCP left, ColumnCP right) {
+    return score(left) > score(right);
+  });
 
   ExprVector columns;
   for (const auto* column : inputColumns) {
@@ -1378,7 +1373,7 @@ std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
 
   std::vector<int32_t> indices(tables.size());
   std::iota(indices.begin(), indices.end(), 0);
-  std::sort(indices.begin(), indices.end(), [&](int32_t left, int32_t right) {
+  std::ranges::sort(indices, [&](int32_t left, int32_t right) {
     return scores[left] > scores[right];
   });
 
@@ -1533,7 +1528,8 @@ PlanP Optimization::makeUnionPlan(
     inputNeedsShuffle.push_back(inputShuffle);
   }
 
-  const bool isDistinct = setDt->setOp.value() == lp::SetOperation::kUnion;
+  const bool isDistinct =
+      setDt->setOp.value() == logical_plan::SetOperation::kUnion;
   if (isSingleWorker_) {
     RelationOpPtr result = make<UnionAll>(inputs);
     Aggregation* distinct = nullptr;
@@ -1621,4 +1617,4 @@ ExprCP Optimization::combineLeftDeep(Name func, const ExprVector& exprs) {
   return result;
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

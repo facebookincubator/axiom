@@ -20,7 +20,7 @@
 
 /// Planning-time data structures. Represent the state of the planning process
 /// plus utilities.
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 struct Plan;
 struct PlanState;
@@ -330,23 +330,23 @@ struct MemoKey {
   std::vector<PlanObjectSet> existences;
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer
 
 namespace std {
 template <>
-struct hash<::facebook::velox::optimizer::MemoKey> {
-  size_t operator()(const ::facebook::velox::optimizer::MemoKey& key) const {
+struct hash<::facebook::axiom::optimizer::MemoKey> {
+  size_t operator()(const ::facebook::axiom::optimizer::MemoKey& key) const {
     return key.hash();
   }
 };
 } // namespace std
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 const JoinEdgeVector& joinedBy(PlanObjectCP table);
 
 /// Returns  the inverse join type, e.g. right outer from left outer.
 /// TODO Move this function to Velox.
-core::JoinType reverseJoinType(core::JoinType joinType);
+velox::core::JoinType reverseJoinType(velox::core::JoinType joinType);
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

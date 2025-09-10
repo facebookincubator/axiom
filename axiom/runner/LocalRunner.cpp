@@ -20,11 +20,11 @@
 #include "velox/exec/PlanNodeStats.h"
 
 namespace facebook::axiom::runner {
-
 namespace {
+
 /// Testing proxy for a split source managed by a system with full metadata
 /// access.
-class SimpleSplitSource : public SplitSource {
+class SimpleSplitSource : public velox::connector::SplitSource {
  public:
   explicit SimpleSplitSource(
       std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits)
@@ -41,10 +41,10 @@ class SimpleSplitSource : public SplitSource {
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits_;
   int32_t splitIdx_{0};
 };
-
 } // namespace
 
-std::shared_ptr<SplitSource> SimpleSplitSourceFactory::splitSourceForScan(
+std::shared_ptr<velox::connector::SplitSource>
+SimpleSplitSourceFactory::splitSourceForScan(
     const velox::core::TableScanNode& scan) {
   auto it = nodeSplitMap_.find(scan.id());
   if (it == nodeSplitMap_.end()) {
@@ -53,14 +53,27 @@ std::shared_ptr<SplitSource> SimpleSplitSourceFactory::splitSourceForScan(
   return std::make_shared<SimpleSplitSource>(it->second);
 }
 
+std::shared_ptr<velox::connector::SplitSource>
+ConnectorSplitSourceFactory::splitSourceForScan(
+    const velox::core::TableScanNode& scan) {
+  const auto& handle = scan.tableHandle();
+  auto metadata =
+      velox::connector::ConnectorMetadata::metadata(handle->connectorId());
+  auto splitManager = metadata->splitManager();
+
+  auto partitions = splitManager->listPartitions(handle);
+  return splitManager->getSplitSource(handle, partitions, options_);
+}
+
 namespace {
+
 std::shared_ptr<velox::exec::RemoteConnectorSplit> remoteSplit(
     const std::string& taskId) {
   return std::make_shared<velox::exec::RemoteConnectorSplit>(taskId);
 }
 
 std::vector<velox::exec::Split> listAllSplits(
-    const std::shared_ptr<SplitSource>& source) {
+    const std::shared_ptr<velox::connector::SplitSource>& source) {
   std::vector<velox::exec::Split> result;
   for (;;) {
     auto splits = source->getSplits(std::numeric_limits<uint64_t>::max());
@@ -171,7 +184,7 @@ void LocalRunner::start() {
   }
 }
 
-std::shared_ptr<SplitSource> LocalRunner::splitSourceForScan(
+std::shared_ptr<velox::connector::SplitSource> LocalRunner::splitSourceForScan(
     const velox::core::TableScanNode& scan) {
   return splitSourceFactory_->splitSourceForScan(scan);
 }
@@ -299,7 +312,7 @@ void LocalRunner::makeStages(
     for (const auto& scan : fragment.scans) {
       auto source = splitSourceForScan(*scan);
 
-      std::vector<SplitSource::SplitAndGroup> splits;
+      std::vector<velox::connector::SplitSource::SplitAndGroup> splits;
       int32_t splitIdx = 0;
       auto getNextSplit = [&]() {
         if (splitIdx < splits.size()) {

@@ -14,24 +14,11 @@
 add_subdirectory(hive)
 add_subdirectory(tpch)
 
-add_subdirectory(tests)
+if(AXIOM_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
 
 velox_add_library(velox_connector_metadata ConnectorMetadata.cpp)
 
 velox_link_libraries(velox_connector_metadata velox_common_base velox_memory
                      velox_connector)
-
-velox_add_library(velox_connector_split_source ConnectorSplitSource.cpp)
-
-velox_link_libraries(
-  velox_connector_split_source
-  velox_connector_metadata
-  axiom_runner_local_runner
-  axiom_runner_multifragment_plan
-  velox_common_base
-  velox_memory
-  velox_hive_connector
-  velox_dwio_common
-  velox_dwio_dwrf_writer
-  velox_exec
-  velox_cursor)

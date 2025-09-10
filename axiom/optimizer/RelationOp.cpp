@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <algorithm>
+
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -21,7 +23,7 @@
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/expression/ScopedVarSetter.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 void Cost::add(const Cost& other) {
   inputCardinality += other.inputCardinality;
@@ -265,7 +267,7 @@ const QGstring& TableScan::historyKey() const {
   std::stringstream out;
   out << "scan " << baseTable->schemaTable->name << "(";
   auto* opt = queryCtx()->optimization();
-  ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
   for (auto& key : keys) {
     out << "lookup " << key->toString() << ", ";
   }
@@ -276,7 +278,7 @@ const QGstring& TableScan::historyKey() const {
   for (auto& f : baseTable->filter) {
     filters.push_back(f->toString());
   }
-  std::sort(filters.begin(), filters.end());
+  std::ranges::sort(filters);
   for (auto& f : filters) {
     out << "f: " << f << ", ";
   }
@@ -367,7 +369,7 @@ std::pair<std::string, std::string> joinKeysString(
   std::vector<int32_t> indices(left.size());
   std::iota(indices.begin(), indices.end(), 0);
   auto* opt = queryCtx()->optimization();
-  ScopedVarSetter cname(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cname(&opt->cnamesInExpr(), false);
   std::vector<std::string> strings;
   for (auto& k : left) {
     strings.push_back(k->toString());
@@ -392,7 +394,7 @@ const QGstring& Join::historyKey() const {
   auto& rightTree = right->historyKey();
   std::stringstream out;
   auto [leftText, rightText] = joinKeysString(leftKeys, rightKeys);
-  if (leftTree < rightTree || joinType != core::JoinType::kInner) {
+  if (leftTree < rightTree || joinType != velox::core::JoinType::kInner) {
     out << "join " << joinTypeLabel(joinType) << "(" << leftTree << " keys "
         << leftText << " = " << rightText << rightTree << ")";
   } else {
@@ -527,12 +529,12 @@ const QGstring& Aggregation::historyKey() const {
   out << input_->historyKey();
   out << " group by ";
   auto* opt = queryCtx()->optimization();
-  ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
   std::vector<std::string> strings;
   for (auto& key : groupingKeys) {
     strings.push_back(key->toString());
   }
-  std::sort(strings.begin(), strings.end());
+  std::ranges::sort(strings);
   for (auto& s : strings) {
     out << s << ", ";
   }
@@ -606,13 +608,13 @@ const QGstring& Filter::historyKey() const {
   }
   std::stringstream out;
   auto* opt = queryCtx()->optimization();
-  ScopedVarSetter cname(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cname(&opt->cnamesInExpr(), false);
   out << input_->historyKey() << " filter " << "(";
   std::vector<std::string> strings;
   for (auto& e : exprs_) {
     strings.push_back(e->toString());
   }
-  std::sort(strings.begin(), strings.end());
+  std::ranges::sort(strings);
   for (auto& s : strings) {
     out << s << ", ";
   }
@@ -806,4 +808,4 @@ std::string UnionAll::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

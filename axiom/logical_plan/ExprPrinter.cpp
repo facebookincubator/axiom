@@ -18,7 +18,7 @@
 #include "axiom/logical_plan/ExprVisitor.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 namespace {
 
@@ -108,7 +108,8 @@ class ToTextVisitor : public ExprVisitor {
 
   void visit(const ConstantExpr& expr, ExprVisitorContext& context)
       const override {
-    // TODO Avoid using Variant::toString as we do not control its output.
+    // TODO Avoid using velox::Variant::toString as we do not control its
+    // output.
     toOut(context) << expr.value()->toString(expr.type());
   }
 
@@ -174,4 +175,4 @@ std::string ExprPrinter::toText(const Expr& root) {
   return context.out.str();
 }
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

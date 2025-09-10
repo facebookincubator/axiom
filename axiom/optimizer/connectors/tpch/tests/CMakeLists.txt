@@ -19,7 +19,7 @@ target_link_libraries(
   velox_tpch_connector_metadata_test
   velox_tpch_connector_metadata
   velox_tpch_connector
-  velox_exec_runner_test_util
+  axiom_runner_tests_utils
   velox_vector_fuzzer
   velox_vector_test_lib
   velox_schema_resolver

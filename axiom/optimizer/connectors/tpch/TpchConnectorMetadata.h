@@ -269,11 +269,4 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   TpchSplitManager splitManager_;
 };
 
-class TpchConnectorMetadataFactoryImpl : public TpchConnectorMetadataFactory {
- public:
-  std::shared_ptr<ConnectorMetadata> create(TpchConnector* connector) override {
-    return std::make_shared<TpchConnectorMetadata>(connector);
-  }
-};
-
 } // namespace facebook::velox::connector::tpch

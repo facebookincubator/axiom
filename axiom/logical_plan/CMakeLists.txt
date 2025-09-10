@@ -37,4 +37,6 @@ velox_link_libraries(
   velox_parse_parser
   velox_parse_utils)
 
-add_subdirectory(tests)
+if(AXIOM_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

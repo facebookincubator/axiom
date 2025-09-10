@@ -30,11 +30,11 @@
 #include <duckdb/planner/expression/bound_reference_expression.hpp> // @manual
 #include <duckdb/planner/operator/logical_dummy_scan.hpp> // @manual
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer::test {
-
+namespace facebook::axiom::optimizer::test {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 class ColumnNameGenerator {
  public:
@@ -821,4 +821,4 @@ SqlStatementPtr DuckParser::parse(const std::string& sql) {
       toPlanNode(*plan, pool_, queryContext));
 }
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

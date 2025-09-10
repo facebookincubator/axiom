@@ -38,6 +38,6 @@ velox_link_libraries(
   velox_gcs
   velox_abfs)
 
-if(${VELOX_BUILD_TESTING})
+if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()

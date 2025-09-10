@@ -18,7 +18,7 @@
 
 #include "axiom/optimizer/BitSet.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// Enum for types of query graph nodes. Used when making a tree into
 /// a query graph and later to differentiate between tables, derived
@@ -205,13 +205,13 @@ class PlanObjectSet : public BitSet {
   std::string toString(bool names) const;
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer
 
 namespace std {
 template <>
-struct hash<::facebook::velox::optimizer::PlanObjectSet> {
+struct hash<::facebook::axiom::optimizer::PlanObjectSet> {
   size_t operator()(
-      const ::facebook::velox::optimizer::PlanObjectSet& set) const {
+      const ::facebook::axiom::optimizer::PlanObjectSet& set) const {
     return set.hash();
   }
 };

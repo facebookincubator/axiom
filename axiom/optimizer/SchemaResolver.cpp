@@ -18,9 +18,9 @@
 #include "axiom/optimizer/SchemaUtils.h"
 #include "velox/connectors/Connector.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
-connector::TablePtr SchemaResolver::findTable(
+velox::connector::TablePtr SchemaResolver::findTable(
     const std::string& catalog,
     const std::string& name) {
   TableNameParser parser(name);
@@ -32,8 +32,6 @@ connector::TablePtr SchemaResolver::findTable(
         parser.catalog().value(),
         "Input catalog must match table catalog specifier");
   }
-  connector::Connector* connector =
-      velox::connector::getConnector(catalog).get();
 
   std::string lookupName;
   if (parser.schema().has_value()) {
@@ -43,7 +41,8 @@ connector::TablePtr SchemaResolver::findTable(
   } else {
     lookupName = parser.table();
   }
-  return connector->metadata()->findTable(lookupName);
+  return velox::connector::ConnectorMetadata::metadata(catalog)->findTable(
+      lookupName);
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

@@ -17,20 +17,17 @@
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
 
-namespace lp = facebook::velox::logical_plan;
+namespace facebook::axiom::optimizer::test {
 
-namespace facebook::velox::optimizer::test {
-
-// static
-std::shared_ptr<exec::test::TempDirectoryPath>
-    HiveQueriesTestBase::tempDirectory_ = nullptr;
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 // static
 void HiveQueriesTestBase::SetUpTestCase() {
-  tempDirectory_ = exec::test::TempDirectoryPath::create();
-  test::ParquetTpchTest::createTables(tempDirectory_->getPath());
+  gTempDirectory = exec::test::TempDirectoryPath::create();
+  test::ParquetTpchTest::createTables(gTempDirectory->getPath());
 
-  LocalRunnerTestBase::testDataPath_ = tempDirectory_->getPath();
+  LocalRunnerTestBase::testDataPath_ = gTempDirectory->getPath();
   LocalRunnerTestBase::localFileFormat_ = "parquet";
   LocalRunnerTestBase::SetUpTestCase();
 }
@@ -38,7 +35,7 @@ void HiveQueriesTestBase::SetUpTestCase() {
 // static
 void HiveQueriesTestBase::TearDownTestCase() {
   LocalRunnerTestBase::TearDownTestCase();
-  tempDirectory_.reset();
+  gTempDirectory.reset();
 }
 
 void HiveQueriesTestBase::SetUp() {
@@ -49,13 +46,12 @@ void HiveQueriesTestBase::SetUp() {
 }
 
 void HiveQueriesTestBase::TearDown() {
-  connector::unregisterConnector(kTpchConnectorId);
+  test::ParquetTpchTest::unregisterTpchConnector(kTpchConnectorId);
   test::QueryTestBase::TearDown();
 }
 
 RowTypePtr HiveQueriesTestBase::getSchema(const std::string& tableName) {
-  return connector::getConnector(exec::test::kHiveConnectorId)
-      ->metadata()
+  return connector::ConnectorMetadata::metadata(exec::test::kHiveConnectorId)
       ->findTable(tableName)
       ->type();
 }
@@ -129,4 +125,4 @@ void HiveQueriesTestBase::checkSingleNodePlan(
   ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
 }
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

@@ -18,7 +18,7 @@
 
 #include "axiom/optimizer/RelationOp.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// Record the history data for a tracked PlanNode.
 struct NodePrediction {
@@ -54,7 +54,7 @@ class History {
   /// cost and plan cardinality.
   virtual bool setLeafSelectivity(
       BaseTable& baseTable,
-      const RowTypePtr& scanType) = 0;
+      const velox::RowTypePtr& scanType) = 0;
 
   virtual void recordJoinSample(const std::string& key, float lr, float rl) = 0;
 
@@ -147,4 +147,4 @@ std::pair<float, float> sampleJoin(
     SchemaTableCP right,
     const ExprVector& rightKeys);
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

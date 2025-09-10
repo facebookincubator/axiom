@@ -16,7 +16,7 @@
 #include "axiom/logical_plan/NameAllocator.h"
 #include <velox/common/base/Exceptions.h>
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 namespace {
 
 bool isAllDigits(std::string_view str) {
@@ -46,4 +46,4 @@ std::string NameAllocator::newName(const std::string& hint) {
   } while (true);
 }
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

@@ -18,7 +18,7 @@
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/optimizer/QueryGraphContext.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// A bit set that qualifies an Expr. Represents which functions/kinds
 /// of functions are found inside the children of an Expr.
@@ -291,4 +291,4 @@ FunctionMetadataCP functionMetadata(std::string_view name);
 
 const std::string& specialForm(logical_plan::SpecialForm specialForm);
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

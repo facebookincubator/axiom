@@ -374,12 +374,16 @@ class TestDataSource : public DataSource {
 /// the associated table.
 class TestConnector : public Connector {
  public:
-  explicit TestConnector(const std::string& id)
-      : Connector(id),
-        metadata_{std::make_unique<TestConnectorMetadata>(this)} {}
+  explicit TestConnector(
+      const std::string& id,
+      std::shared_ptr<const config::ConfigBase> config = nullptr)
+      : Connector(id, std::move(config)),
+        metadata_{std::make_shared<TestConnectorMetadata>(this)} {
+    ConnectorMetadata::registerMetadata(id, metadata_);
+  }
 
-  ConnectorMetadata* metadata() const override {
-    return metadata_.get();
+  ~TestConnector() override {
+    ConnectorMetadata::unregisterMetadata(connectorId());
   }
 
   bool supportsSplitPreload() const override {
@@ -414,7 +418,7 @@ class TestConnector : public Connector {
   void appendData(const std::string& name, const RowVectorPtr& data);
 
  private:
-  const std::unique_ptr<TestConnectorMetadata> metadata_;
+  const std::shared_ptr<TestConnectorMetadata> metadata_;
 };
 
 /// The ConnectorFactory for the TestConnector can be configured with

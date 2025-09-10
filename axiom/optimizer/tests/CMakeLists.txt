@@ -20,7 +20,6 @@ velox_link_libraries(
   velox_verax
   velox_schema_resolver
   velox_tpch_gen
-  velox_connector_split_source
   velox_tpch_connector_metadata
   velox_hive_connector_metadata
   axiom_runner_tests_utils
@@ -37,7 +36,6 @@ velox_link_libraries(
   velox_verax
   velox_schema_resolver
   velox_tpch_gen
-  velox_connector_split_source
   velox_hive_connector_metadata
   axiom_runner_tests_utils
   velox_exec_test_lib
@@ -138,7 +136,6 @@ target_link_libraries(
   axiom_runner_multifragment_plan
   velox_verax
   velox_schema_resolver
-  velox_connector_split_source
   velox_hive_connector_metadata
   velox_tpch_connector_metadata
   velox_optimizer_tests_presto_parser

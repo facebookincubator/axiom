@@ -18,7 +18,7 @@
 #include <string>
 #include <unordered_set>
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 /// Generate unique names based on user-provided hints.
 class NameAllocator {
@@ -45,4 +45,4 @@ class NameAllocator {
   int32_t nextId_{0};
 };
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

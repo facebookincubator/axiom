@@ -17,8 +17,9 @@
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "velox/expression/ExprConstants.h"
 
-namespace facebook::velox::optimizer {
-namespace lp = facebook::velox::logical_plan;
+namespace facebook::axiom::optimizer {
+
+namespace lp = facebook::axiom::logical_plan;
 
 FunctionMetadataCP FunctionRegistry::metadata(std::string_view name) const {
   auto it = metadata_.find(name);
@@ -107,7 +108,7 @@ std::pair<std::vector<Step>, int32_t> rowConstructorSubfield(
     const lp::CallExpr& call) {
   VELOX_CHECK(steps.back().kind == StepKind::kField);
   auto field = steps.back().field;
-  auto idx = call.type()->as<TypeKind::ROW>().getChildIdx(field);
+  auto idx = call.type()->as<velox::TypeKind::ROW>().getChildIdx(field);
   auto newFields = steps;
   newFields.pop_back();
   return std::make_pair(newFields, idx);
@@ -213,17 +214,19 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
 
   // Presto special form functions created without prefix, so we register them
   // without prefix too.
-  registry->registerSpecialForm(lp::SpecialForm::kAnd, expression::kAnd);
-  registry->registerSpecialForm(lp::SpecialForm::kOr, expression::kOr);
-  registry->registerSpecialForm(lp::SpecialForm::kCast, expression::kCast);
+  registry->registerSpecialForm(lp::SpecialForm::kAnd, velox::expression::kAnd);
+  registry->registerSpecialForm(lp::SpecialForm::kOr, velox::expression::kOr);
   registry->registerSpecialForm(
-      lp::SpecialForm::kTryCast, expression::kTryCast);
-  registry->registerSpecialForm(lp::SpecialForm::kTry, expression::kTry);
-  registry->registerSpecialForm(lp::SpecialForm::kIf, expression::kIf);
+      lp::SpecialForm::kCast, velox::expression::kCast);
   registry->registerSpecialForm(
-      lp::SpecialForm::kCoalesce, expression::kCoalesce);
-  registry->registerSpecialForm(lp::SpecialForm::kSwitch, expression::kSwitch);
+      lp::SpecialForm::kTryCast, velox::expression::kTryCast);
+  registry->registerSpecialForm(lp::SpecialForm::kTry, velox::expression::kTry);
+  registry->registerSpecialForm(lp::SpecialForm::kIf, velox::expression::kIf);
+  registry->registerSpecialForm(
+      lp::SpecialForm::kCoalesce, velox::expression::kCoalesce);
+  registry->registerSpecialForm(
+      lp::SpecialForm::kSwitch, velox::expression::kSwitch);
   registry->registerSpecialForm(lp::SpecialForm::kIn, "in");
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

@@ -25,9 +25,7 @@ DEFINE_double(
     5,
     "Log a warning if cardinality estimate is more than this many times off. 0 means no warnings.");
 
-using namespace facebook::velox::exec;
-
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 void VeloxHistory::recordJoinSample(
     const std::string& key,
@@ -60,7 +58,7 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
   auto leftTable = edge->leftTable()->as<BaseTable>()->schemaTable;
 
   std::pair<float, float> pair;
-  uint64_t start = getCurrentTimeMicro();
+  uint64_t start = velox::getCurrentTimeMicro();
   if (keyPair.second) {
     pair = optimizer::sampleJoin(
         rightTable, edge->rightKeys(), leftTable, edge->leftKeys());
@@ -77,8 +75,8 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
   const bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
   if (trace) {
     std::cout << "Sample join " << keyPair.first << ": " << pair.first << " :"
-              << pair.second
-              << " time=" << succinctMicros(getCurrentTimeMicro() - start)
+              << pair.second << " time="
+              << velox::succinctMicros(velox::getCurrentTimeMicro() - start)
               << std::endl;
   }
   if (keyPair.second) {
@@ -89,7 +87,7 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
 
 bool VeloxHistory::setLeafSelectivity(
     BaseTable& table,
-    const RowTypePtr& scanType) {
+    const velox::RowTypePtr& scanType) {
   auto options = queryCtx()->optimization()->options();
   auto [tableHandle, filters] =
       queryCtx()->optimization()->leafHandle(table.id());
@@ -121,7 +119,7 @@ bool VeloxHistory::setLeafSelectivity(
 
   // Determine and cache leaf selectivity for the table handle
   // by sampling the layout for the physical table.
-  const uint64_t start = getCurrentTimeMicro();
+  const uint64_t start = velox::getCurrentTimeMicro();
   auto sample =
       runnerTable->layouts()[0]->sample(tableHandle, 1, filters, scanType);
   VELOX_CHECK_GE(sample.first, 0);
@@ -139,7 +137,8 @@ bool VeloxHistory::setLeafSelectivity(
   bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
   if (trace) {
     std::cout << "Sampled scan " << string << "= " << table.filterSelectivity
-              << " time= " << succinctMicros(getCurrentTimeMicro() - start)
+              << " time= "
+              << velox::succinctMicros(velox::getCurrentTimeMicro() - start)
               << std::endl;
   }
   return true;
@@ -147,9 +146,9 @@ bool VeloxHistory::setLeafSelectivity(
 
 namespace {
 
-std::shared_ptr<const core::TableScanNode> findScan(
-    const core::PlanNodeId& id,
-    const axiom::runner::MultiFragmentPlanPtr& plan) {
+std::shared_ptr<const velox::core::TableScanNode> findScan(
+    const velox::core::PlanNodeId& id,
+    const runner::MultiFragmentPlanPtr& plan) {
   for (auto& fragment : plan->fragments()) {
     for (auto& scan : fragment.scans) {
       if (scan->id() == id) {
@@ -168,7 +167,7 @@ void logPrediction(const std::string& message) {
 
 void predictionWarnings(
     const PlanAndStats& plan,
-    const core::PlanNodeId& id,
+    const velox::core::PlanNodeId& id,
     int64_t actualRows,
     float predictedRows) {
   if (actualRows == 0 && predictedRows == 0) {
@@ -303,4 +302,4 @@ void VeloxHistory::update(folly::dynamic& serialized) {
   }
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

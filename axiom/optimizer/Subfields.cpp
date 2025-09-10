@@ -21,17 +21,17 @@
 
 #include <ranges>
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 namespace {
+
+namespace lp = facebook::axiom::logical_plan;
 
 PathCP stepsToPath(std::span<const Step> steps) {
   return toPath(steps, true);
 }
 
 struct MarkFieldsAccessedContextArray {
-  std::array<const RowType* const, 1> rowTypes;
+  std::array<const velox::RowType* const, 1> rowTypes;
   std::array<const LogicalContextSource, 1> sources;
 
   MarkFieldsAccessedContext toCtx() const {
@@ -40,7 +40,7 @@ struct MarkFieldsAccessedContextArray {
 };
 
 struct MarkFieldsAccessedContextVector {
-  std::vector<const RowType*> rowTypes;
+  std::vector<const velox::RowType*> rowTypes;
   std::vector<LogicalContextSource> sources;
 
   MarkFieldsAccessedContext toCtx() const {
@@ -56,7 +56,7 @@ MarkFieldsAccessedContextArray fromNode(const lp::LogicalPlanNodePtr& node) {
 
 MarkFieldsAccessedContextVector fromNodes(
     const std::vector<lp::LogicalPlanNodePtr>& nodes) {
-  std::vector<const RowType*> rowTypes;
+  std::vector<const velox::RowType*> rowTypes;
   std::vector<LogicalContextSource> sources;
   rowTypes.reserve(nodes.size());
   sources.reserve(nodes.size());
@@ -231,7 +231,7 @@ lp::ConstantExprPtr ToGraph::tryFoldConstant(const lp::ExprPtr& expr) {
     if (literal->is(PlanType::kLiteralExpr)) {
       return std::make_shared<lp::ConstantExpr>(
           toTypePtr(literal->value().type),
-          std::make_shared<Variant>(literal->as<Literal>()->literal()));
+          std::make_shared<velox::Variant>(literal->as<Literal>()->literal()));
     }
   }
   return nullptr;
@@ -269,7 +269,7 @@ void ToGraph::markSubfields(
     if (fieldIndex.has_value()) {
       name = toName(input->type()->asRow().nameOf(fieldIndex.value()));
     } else {
-      const auto& fieldName = field->value()->value<TypeKind::VARCHAR>();
+      const auto& fieldName = field->value()->value<velox::TypeKind::VARCHAR>();
       fieldIndex = input->type()->asRow().getChildIdx(fieldName);
       name = toName(fieldName);
     }
@@ -303,8 +303,8 @@ void ToGraph::markSubfields(
       }
 
       const auto& value = constant->value();
-      if (value->kind() == TypeKind::VARCHAR) {
-        const auto& str = value->value<TypeKind::VARCHAR>();
+      if (value->kind() == velox::TypeKind::VARCHAR) {
+        const auto& str = value->value<velox::TypeKind::VARCHAR>();
         steps.push_back({.kind = StepKind::kSubscript, .field = toName(str)});
       } else {
         const auto& id = integerValue(value.get());
@@ -381,7 +381,7 @@ void ToGraph::markSubfields(
         const auto* lambda = expr->inputAt(i)->asUnchecked<lp::LambdaExpr>();
         const auto& argType = lambda->signature();
 
-        std::vector<const RowType*> newRowTypes;
+        std::vector<const velox::RowType*> newRowTypes;
         newRowTypes.reserve(context.rowTypes.size() + 1);
         newRowTypes.push_back(argType.get());
         newRowTypes.insert(
@@ -534,4 +534,4 @@ std::string PlanSubfields::toString() const {
   return out.str();
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

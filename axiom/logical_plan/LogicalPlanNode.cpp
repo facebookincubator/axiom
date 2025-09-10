@@ -17,7 +17,7 @@
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/PlanNodeVisitor.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 namespace {
 const auto& nodeKindNames() {
@@ -62,14 +62,14 @@ class UniqueNameChecker {
   folly::F14FastSet<std::string_view> names_;
 };
 
-RowTypePtr getType(const std::vector<RowVectorPtr>& values) {
+velox::RowTypePtr getType(const std::vector<velox::RowVectorPtr>& values) {
   VELOX_USER_CHECK(!values.empty(), "Values must not be empty");
   return values.front()->rowType();
 }
 
 } // namespace
 
-ValuesNode::ValuesNode(std::string id, RowTypePtr rowType, Rows rows)
+ValuesNode::ValuesNode(std::string id, velox::RowTypePtr rowType, Rows rows)
     : LogicalPlanNode{NodeKind::kValues, std::move(id), {}, std::move(rowType)},
       cardinality_{rows.size()},
       data_{std::move(rows)} {
@@ -122,14 +122,14 @@ void FilterNode::accept(
 }
 
 // static
-RowTypePtr ProjectNode::makeOutputType(
+velox::RowTypePtr ProjectNode::makeOutputType(
     const std::vector<std::string>& names,
     const std::vector<ExprPtr>& expressions) {
   VELOX_USER_CHECK_EQ(names.size(), expressions.size());
 
   UniqueNameChecker::check(names);
 
-  std::vector<TypePtr> types;
+  std::vector<velox::TypePtr> types;
   types.reserve(names.size());
   for (const auto& expression : expressions) {
     VELOX_USER_CHECK_NOT_NULL(expression);
@@ -146,7 +146,7 @@ void ProjectNode::accept(
 }
 
 // static
-RowTypePtr AggregateNode::makeOutputType(
+velox::RowTypePtr AggregateNode::makeOutputType(
     const std::vector<ExprPtr>& groupingKeys,
     const std::vector<GroupingSet>& groupingSets,
     const std::vector<AggregateExprPtr>& aggregates,
@@ -157,7 +157,7 @@ RowTypePtr AggregateNode::makeOutputType(
   VELOX_USER_CHECK_EQ(outputNames.size(), size);
 
   std::vector<std::string> names = outputNames;
-  std::vector<TypePtr> types;
+  std::vector<velox::TypePtr> types;
   types.reserve(size);
 
   for (const auto& groupingKey : groupingKeys) {
@@ -169,7 +169,7 @@ RowTypePtr AggregateNode::makeOutputType(
   }
 
   if (!groupingSets.empty()) {
-    types.push_back(BIGINT());
+    types.push_back(velox::BIGINT());
   }
 
   UniqueNameChecker::check(names);
@@ -198,7 +198,7 @@ const auto& joinTypeNames() {
 VELOX_DEFINE_ENUM_NAME(JoinType, joinTypeNames)
 
 // static
-RowTypePtr JoinNode::makeOutputType(
+velox::RowTypePtr JoinNode::makeOutputType(
     const LogicalPlanNodePtr& left,
     const LogicalPlanNodePtr& right) {
   auto type = left->outputType()->unionWith(right->outputType());
@@ -241,7 +241,7 @@ const auto& setOperationNames() {
 VELOX_DEFINE_ENUM_NAME(SetOperation, setOperationNames)
 
 // static
-RowTypePtr SetNode::makeOutputType(
+velox::RowTypePtr SetNode::makeOutputType(
     const std::vector<LogicalPlanNodePtr>& inputs) {
   VELOX_USER_CHECK_GE(
       inputs.size(), 2, "Set operation requires at least 2 inputs");
@@ -278,7 +278,7 @@ void SetNode::accept(
 }
 
 // static
-RowTypePtr UnnestNode::makeOutputType(
+velox::RowTypePtr UnnestNode::makeOutputType(
     const LogicalPlanNodePtr& input,
     const std::vector<ExprPtr>& unnestExpressions,
     const std::vector<std::vector<std::string>>& unnestedNames,
@@ -290,11 +290,11 @@ RowTypePtr UnnestNode::makeOutputType(
       0,
       "Unnest requires at least one ARRAY or MAP to expand");
 
-  RowTypePtr inputType;
+  velox::RowTypePtr inputType;
   if (input != nullptr) {
     inputType = input->outputType();
   } else {
-    inputType = ROW({});
+    inputType = velox::ROW({});
   }
 
   auto size = inputType->size();
@@ -305,7 +305,7 @@ RowTypePtr UnnestNode::makeOutputType(
   std::vector<std::string> names;
   names.reserve(size);
 
-  std::vector<TypePtr> types;
+  std::vector<velox::TypePtr> types;
   types.reserve(size);
 
   names = inputType->names();
@@ -342,7 +342,7 @@ RowTypePtr UnnestNode::makeOutputType(
 
   if (ordinalityName.has_value()) {
     names.push_back(ordinalityName.value());
-    types.push_back(BIGINT());
+    types.push_back(velox::BIGINT());
   }
 
   UniqueNameChecker::check(names);
@@ -356,4 +356,4 @@ void UnnestNode::accept(
   visitor.visit(*this, context);
 }
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

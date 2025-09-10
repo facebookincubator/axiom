@@ -25,7 +25,7 @@
 
 DECLARE_string(history_save_path);
 
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 
 struct TestResult {
   /// Runner that produced the results. Owns results.
@@ -33,7 +33,7 @@ struct TestResult {
 
   /// Results. Declare after runner because results are from a pool in the
   /// runner's cursor, so runner must destruct last.
-  std::vector<RowVectorPtr> results;
+  std::vector<velox::RowVectorPtr> results;
 
   /// Human readable Velox plan.
   std::string veloxString;
@@ -41,7 +41,7 @@ struct TestResult {
   /// Human readable Verax output.
   std::string planString;
 
-  std::vector<exec::TaskStats> stats;
+  std::vector<velox::exec::TaskStats> stats;
 };
 
 class QueryTestBase : public axiom::runner::test::LocalRunnerTestBase {
@@ -70,35 +70,35 @@ class QueryTestBase : public axiom::runner::test::LocalRunnerTestBase {
 
   TestResult runFragmentedPlan(const optimizer::PlanAndStats& plan);
 
-  TestResult runVelox(const core::PlanNodePtr& plan);
+  TestResult runVelox(const velox::core::PlanNodePtr& plan);
 
   /// Checks that 'reference' and 'experiment' produce the same result.
   /// @return 'reference' result.
   TestResult assertSame(
-      const core::PlanNodePtr& reference,
+      const velox::core::PlanNodePtr& reference,
       const optimizer::PlanAndStats& experiment);
 
-  std::shared_ptr<core::QueryCtx> getQueryCtx();
+  std::shared_ptr<velox::core::QueryCtx> getQueryCtx();
 
   std::string veloxString(const axiom::runner::MultiFragmentPlanPtr& plan);
 
   static VeloxHistory& suiteHistory() {
-    return *suiteHistory_;
+    return *gSuiteHistory;
   }
 
   OptimizerOptions optimizerOptions_;
   std::shared_ptr<optimizer::SchemaResolver> schema_;
 
  private:
-  std::shared_ptr<memory::MemoryPool> rootPool_;
-  std::shared_ptr<memory::MemoryPool> optimizerPool_;
+  std::shared_ptr<velox::memory::MemoryPool> rootPool_;
+  std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
 
   // A QueryCtx created for each compiled query.
-  std::shared_ptr<core::QueryCtx> queryCtx_;
-  std::shared_ptr<connector::Connector> connector_;
-  std::unique_ptr<velox::optimizer::VeloxHistory> history_;
+  std::shared_ptr<velox::core::QueryCtx> queryCtx_;
+  std::shared_ptr<velox::connector::Connector> connector_;
+  std::unique_ptr<axiom::optimizer::VeloxHistory> history_;
 
-  inline static int32_t queryCounter_{0};
-  inline static std::unique_ptr<VeloxHistory> suiteHistory_;
+  inline static int32_t gQueryCounter{0};
+  inline static std::unique_ptr<VeloxHistory> gSuiteHistory;
 };
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

@@ -20,7 +20,7 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 namespace {
 
@@ -115,7 +115,7 @@ PlanObjectSet makeCseBorder(
         auto subexprs = expr->subexpressions();
         subexprs.intersect(border);
         if (!subexprs.empty()) {
-          // Mmultiply referenced over another multiply referenced in the
+          // Multiply referenced over another multiply referenced in the
           // same border. Not a member.
           return;
         }
@@ -128,8 +128,8 @@ PlanObjectSet makeCseBorder(
 
 } // namespace
 
-core::PlanNodePtr ToVelox::makeParallelProject(
-    const core::PlanNodePtr& input,
+velox::core::PlanNodePtr ToVelox::makeParallelProject(
+    const velox::core::PlanNodePtr& input,
     const PlanObjectSet& topExprs,
     const PlanObjectSet& placed,
     const PlanObjectSet& extraColumns) {
@@ -150,7 +150,7 @@ core::PlanNodePtr ToVelox::makeParallelProject(
   const float targetCost =
       totalCost / static_cast<float>(optimizerOptions_.parallelProjectWidth);
 
-  std::vector<std::vector<core::TypedExprPtr>> groups;
+  std::vector<std::vector<velox::core::TypedExprPtr>> groups;
   groups.emplace_back();
 
   auto* group = &groups.back();
@@ -177,7 +177,7 @@ core::PlanNodePtr ToVelox::makeParallelProject(
       names.push_back(fmt::format("__temp{}", expr->id()));
     }
 
-    auto fieldAccess = std::make_shared<core::FieldAccessTypedExpr>(
+    auto fieldAccess = std::make_shared<velox::core::FieldAccessTypedExpr>(
         group->back()->type(), names.back());
     projectedExprs_[expr] = fieldAccess;
   }
@@ -187,10 +187,10 @@ core::PlanNodePtr ToVelox::makeParallelProject(
     auto veloxExpr = toTypedExpr(expr);
     VELOX_CHECK(veloxExpr->isFieldAccessKind());
     extra.push_back(
-        veloxExpr->asUnchecked<core::FieldAccessTypedExpr>()->name());
+        veloxExpr->asUnchecked<velox::core::FieldAccessTypedExpr>()->name());
   });
 
-  return std::make_shared<core::ParallelProjectNode>(
+  return std::make_shared<velox::core::ParallelProjectNode>(
       nextId(), std::move(names), std::move(groups), std::move(extra), input);
 }
 
@@ -304,9 +304,9 @@ float parallelBorder(
 }
 } // namespace
 
-core::PlanNodePtr ToVelox::maybeParallelProject(
+velox::core::PlanNodePtr ToVelox::maybeParallelProject(
     const Project* project,
-    core::PlanNodePtr input) {
+    velox::core::PlanNodePtr input) {
   PlanObjectSet top;
   PlanObjectSet allColumns;
   const auto& exprs = project->exprs();
@@ -360,7 +360,7 @@ core::PlanNodePtr ToVelox::maybeParallelProject(
   auto& columns = project->columns();
 
   std::vector<std::string> names;
-  std::vector<core::TypedExprPtr> finalExprs;
+  std::vector<velox::core::TypedExprPtr> finalExprs;
   names.reserve(exprs.size());
   finalExprs.reserve(exprs.size());
 
@@ -369,8 +369,8 @@ core::PlanNodePtr ToVelox::maybeParallelProject(
     finalExprs.emplace_back(toTypedExpr(exprs[i]));
   }
 
-  return std::make_shared<core::ProjectNode>(
+  return std::make_shared<velox::core::ProjectNode>(
       nextId(), std::move(names), std::move(finalExprs), input);
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

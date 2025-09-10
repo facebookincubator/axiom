@@ -112,7 +112,9 @@ std::vector<SplitSource::SplitAndGroup> TpchSplitSource::getSplits(
 }
 
 TpchConnectorMetadata::TpchConnectorMetadata(TpchConnector* tpchConnector)
-    : tpchConnector_(tpchConnector), splitManager_(this) {}
+    : tpchConnector_(tpchConnector), splitManager_(this) {
+  VELOX_CHECK_NOT_NULL(tpchConnector);
+}
 
 void TpchConnectorMetadata::initialize() {
   makeQueryCtx();
@@ -269,7 +271,7 @@ const std::unordered_map<std::string, const Column*>& TpchTable::columnMap()
 }
 
 std::string getQualifiedName(const std::string& name) {
-  velox::optimizer::TableNameParser parser(name);
+  axiom::optimizer::TableNameParser parser(name);
   VELOX_CHECK(parser.valid(), "invalid table name '{}'", name);
   std::string qualifiedName;
   if (parser.schema().has_value()) {

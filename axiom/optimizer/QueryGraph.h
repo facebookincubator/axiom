@@ -28,7 +28,7 @@
 /// generation. Sometimes new derived tables may be added for
 /// representing constraints on partial plans but otherwise these stay
 /// constant.
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// Superclass for all expressions.
 class Expr : public PlanObject {
@@ -90,15 +90,15 @@ using EquivalenceP = Equivalence*;
 /// Represents a literal.
 class Literal : public Expr {
  public:
-  Literal(const Value& value, const velox::variant* literal)
+  Literal(const Value& value, const velox::Variant* literal)
       : Expr(PlanType::kLiteralExpr, value),
         literal_(literal),
         vector_(nullptr) {}
 
-  Literal(const Value& value, const BaseVector* vector)
+  Literal(const Value& value, const velox::BaseVector* vector)
       : Expr(PlanType::kLiteralExpr, value), literal_{}, vector_(vector) {}
 
-  const velox::variant& literal() const {
+  const velox::Variant& literal() const {
     return *literal_;
   }
 
@@ -106,15 +106,15 @@ class Literal : public Expr {
     return vector_ != nullptr;
   }
 
-  const BaseVector* vector() const {
+  const velox::BaseVector* vector() const {
     return vector_;
   }
 
   std::string toString() const override;
 
  private:
-  const velox::variant* const literal_;
-  const BaseVector* const vector_;
+  const velox::Variant* const literal_;
+  const velox::BaseVector* const vector_;
 };
 
 /// Represents a column. A column is always defined by a relation, whether table
@@ -199,7 +199,7 @@ inline folly::Range<T*> toRange(const std::vector<T, QGAllocator<T>>& v) {
 
 class Field : public Expr {
  public:
-  Field(const Type* type, ExprCP base, Name field)
+  Field(const velox::Type* type, ExprCP base, Name field)
       : Expr(PlanType::kFieldExpr, Value(type, 1)),
         field_(field),
         index_(0),
@@ -208,7 +208,7 @@ class Field : public Expr {
     subexpressions_ = base->subexpressions();
   }
 
-  Field(const Type* type, ExprCP base, int32_t index)
+  Field(const velox::Type* type, ExprCP base, int32_t index)
       : Expr(PlanType::kFieldExpr, Value(type, 1)),
         field_(nullptr),
         index_(index),
@@ -396,7 +396,7 @@ inline bool isCallExpr(ExprCP expr, Name name) {
 /// functions.
 class Lambda : public Expr {
  public:
-  Lambda(ColumnVector args, const Type* type, ExprCP body)
+  Lambda(ColumnVector args, const velox::Type* type, ExprCP body)
       : Expr(PlanType::kLambdaExpr, Value(type, 1)),
         args_(std::move(args)),
         body_(body) {}
@@ -876,4 +876,4 @@ class AggregationPlan : public PlanObject {
 
 using AggregationPlanCP = const AggregationPlan*;
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

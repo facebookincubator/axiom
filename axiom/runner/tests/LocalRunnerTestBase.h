@@ -54,7 +54,7 @@ class LocalRunnerTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   void SetUp() override;
 
-  void ensureTestData();
+  void TearDown() override;
 
   /// Re-creates the connector with kHiveConnectorId with a config
   /// that points to the temp directory created by 'this'. If the

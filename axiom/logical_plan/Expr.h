@@ -18,7 +18,7 @@
 #include "velox/common/Enums.h"
 #include "velox/type/Variant.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 enum class ExprKind {
   kInputReference = 0,
@@ -42,7 +42,7 @@ class ExprVisitorContext;
 /// Call may have many inputs.
 class Expr {
  public:
-  Expr(ExprKind kind, TypePtr type, std::vector<ExprPtr> inputs)
+  Expr(ExprKind kind, velox::TypePtr type, std::vector<ExprPtr> inputs)
       : kind_{kind}, type_{std::move(type)}, inputs_{std::move(inputs)} {
     VELOX_USER_CHECK_NOT_NULL(type_);
     for (const auto& input : inputs_) {
@@ -56,12 +56,12 @@ class Expr {
     return kind_;
   }
 
-  const TypePtr& type() const {
+  const velox::TypePtr& type() const {
     return type_;
   }
 
   /// Convenience getter for the type kind. A shortcut for type()->kind().
-  TypeKind typeKind() const {
+  velox::TypeKind typeKind() const {
     return type_->kind();
   }
 
@@ -120,7 +120,7 @@ class Expr {
 
  protected:
   const ExprKind kind_;
-  const TypePtr type_;
+  const velox::TypePtr type_;
   const std::vector<ExprPtr> inputs_;
 };
 
@@ -132,7 +132,7 @@ class InputReferenceExpr : public Expr {
   /// be unique. Columns that are being passed through without modifications can
   /// keep their names. Two columns with the same name must represent the same
   /// data. Names cannot be empty.
-  InputReferenceExpr(TypePtr type, std::string name)
+  InputReferenceExpr(velox::TypePtr type, std::string name)
       : Expr{ExprKind::kInputReference, std::move(type), {}},
         name_{std::move(name)} {}
 
@@ -152,7 +152,7 @@ using InputReferenceExprPtr = std::shared_ptr<const InputReferenceExpr>;
 /// Literal value.
 class ConstantExpr : public Expr {
  public:
-  ConstantExpr(TypePtr type, std::shared_ptr<const Variant> value)
+  ConstantExpr(velox::TypePtr type, std::shared_ptr<const velox::Variant> value)
       : Expr{ExprKind::kConstant, std::move(type), {}},
         value_{std::move(value)} {
     VELOX_USER_CHECK_NOT_NULL(value_);
@@ -163,7 +163,7 @@ class ConstantExpr : public Expr {
         value_->inferType()->toString());
   }
 
-  const std::shared_ptr<const Variant>& value() const {
+  const std::shared_ptr<const velox::Variant>& value() const {
     return value_;
   }
 
@@ -175,7 +175,7 @@ class ConstantExpr : public Expr {
       const override;
 
  private:
-  const std::shared_ptr<const Variant> value_;
+  const std::shared_ptr<const velox::Variant> value_;
 };
 
 using ConstantExprPtr = std::shared_ptr<const ConstantExpr>;
@@ -187,10 +187,10 @@ class CallExpr : public Expr {
   /// @param name Name of the scalar function. Cannot be any of the special
   /// forms.
   /// @param inputs Zero or more inputs / arguments.
-  CallExpr(TypePtr type, std::string name, std::vector<ExprPtr> inputs);
+  CallExpr(velox::TypePtr type, std::string name, std::vector<ExprPtr> inputs);
 
   template <typename... T>
-  CallExpr(TypePtr type, std::string name, T... inputs)
+  CallExpr(velox::TypePtr type, std::string name, T... inputs)
       : CallExpr{
             std::move(type),
             std::move(name),
@@ -388,10 +388,13 @@ VELOX_DECLARE_ENUM_NAME(SpecialForm)
 /// they are special and are not represented using CallExpr.
 class SpecialFormExpr : public Expr {
  public:
-  SpecialFormExpr(TypePtr type, SpecialForm form, std::vector<ExprPtr> inputs);
+  SpecialFormExpr(
+      velox::TypePtr type,
+      SpecialForm form,
+      std::vector<ExprPtr> inputs);
 
   template <typename... T>
-  SpecialFormExpr(TypePtr type, SpecialForm form, T... inputs)
+  SpecialFormExpr(velox::TypePtr type, SpecialForm form, T... inputs)
       : SpecialFormExpr{
             std::move(type),
             form,
@@ -470,7 +473,7 @@ class AggregateExpr : public Expr {
   /// @param distinct Whether to deduplicate input rows before passing to the
   /// aggregate function.
   AggregateExpr(
-      TypePtr type,
+      velox::TypePtr type,
       std::string name,
       std::vector<ExprPtr> inputs,
       ExprPtr filter = nullptr,
@@ -484,7 +487,7 @@ class AggregateExpr : public Expr {
     VELOX_USER_CHECK(!name_.empty());
 
     if (filter_ != nullptr) {
-      VELOX_USER_CHECK_EQ(filter_->typeKind(), TypeKind::BOOLEAN);
+      VELOX_USER_CHECK_EQ(filter_->typeKind(), velox::TypeKind::BOOLEAN);
     }
 
     if (distinct_) {
@@ -561,7 +564,7 @@ class WindowExpr : public Expr {
   /// @param frame The window frame within the current partition that
   /// determines what to include in the window.
   WindowExpr(
-      TypePtr type,
+      velox::TypePtr type,
       std::string name,
       std::vector<ExprPtr> inputs,
       std::vector<ExprPtr> partitionKeys,
@@ -626,14 +629,14 @@ using WindowExprPtr = std::shared_ptr<const WindowExpr>;
 /// also visible to LambdaExpr.
 class LambdaExpr : public Expr {
  public:
-  LambdaExpr(RowTypePtr signature, ExprPtr body)
-      : Expr{ExprKind::kLambda, std::make_shared<FunctionType>(std::vector{signature->children()}, body->type()), {}},
+  LambdaExpr(velox::RowTypePtr signature, ExprPtr body)
+      : Expr{ExprKind::kLambda, std::make_shared<velox::FunctionType>(std::vector{signature->children()}, body->type()), {}},
         signature_{std::move(signature)},
         body_{std::move(body)} {
     VELOX_USER_CHECK_GT(signature_->size(), 0);
   }
 
-  const RowTypePtr& signature() const {
+  const velox::RowTypePtr& signature() const {
     return signature_;
   }
 
@@ -645,7 +648,7 @@ class LambdaExpr : public Expr {
       const override;
 
  private:
-  const RowTypePtr signature_;
+  const velox::RowTypePtr signature_;
   const ExprPtr body_;
 };
 
@@ -673,4 +676,4 @@ class SubqueryExpr : public Expr {
 
 using SubqueryExprPtr = std::shared_ptr<const SubqueryExpr>;
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

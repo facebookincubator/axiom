@@ -17,7 +17,7 @@
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 class PlanNodeVisitorContext {
  public:
@@ -66,4 +66,4 @@ class PlanNodeVisitor {
     }
   }
 };
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

@@ -31,7 +31,7 @@ format:
     - target_sources
     - target_link_libraries
 parse:
-  # No custom functions defined - verax uses standard CMake functions
+  # No custom functions defined - Axiom uses standard CMake functions
   additional_commands: {}
 markup:
   first_comment_is_literal: true

@@ -14,7 +14,7 @@
 cmake_minimum_required(VERSION 3.14)
 
 # Set the project name.
-project(Verax)
+project(axiom)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -53,7 +53,7 @@ set(VELOX_DEPENDENCY_SOURCE
     AUTO
     CACHE STRING "Default dependency source: AUTO SYSTEM or BUNDLED.")
 
-option(VERAX_ENABLE_CCACHE "Use ccache if installed." ON)
+option(AXIOM_ENABLE_CCACHE "Use ccache if installed." ON)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
@@ -100,7 +100,7 @@ if(COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
   string(APPEND CMAKE_CXX_FLAGS " -Wno-nullability-completeness")
 endif()
 
-# Verax, Velox and folly need to be compiled with the same compiler flags.
+# Axiom, Velox and folly need to be compiled with the same compiler flags.
 execute_process(
   COMMAND
     bash -c
@@ -114,14 +114,14 @@ endif()
 message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
 
-if(VERAX_ENABLE_CCACHE
+if(AXIOM_ENABLE_CCACHE
    AND NOT CMAKE_C_COMPILER_LAUNCHER
    AND NOT CMAKE_CXX_COMPILER_LAUNCHER
    AND NOT CMAKE_CUDA_COMPILER_LAUNCHER)
-
   find_program(CCACHE_FOUND ccache)
 
   if(CCACHE_FOUND)
+    message(STATUS "Using ccache: ${CCACHE_FOUND}")
     set(CMAKE_C_COMPILER_LAUNCHER ${CCACHE_FOUND})
     set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_FOUND})
     set(CMAKE_CUDA_COMPILER_LAUNCHER ${CCACHE_FOUND})

@@ -17,7 +17,9 @@
 #include "axiom/optimizer/tests/Genies.h"
 #include "velox/expression/VectorFunction.h"
 
-namespace facebook::velox::optimizer::test {
+using namespace facebook::velox;
+
+namespace facebook::axiom::optimizer::test {
 
 RowTypePtr makeGenieType() {
   return ROW(
@@ -64,4 +66,4 @@ void registerGenieUdfs() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_genie, "exploding_genie");
 }
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

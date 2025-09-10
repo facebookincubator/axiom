@@ -17,7 +17,7 @@
 
 #include "axiom/logical_plan/Expr.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 class ExprVisitorContext {
  public:
@@ -61,4 +61,4 @@ class ExprVisitor {
   }
 };
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

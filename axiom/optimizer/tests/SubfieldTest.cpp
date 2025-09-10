@@ -30,13 +30,13 @@ DECLARE_uint32(optimizer_trace);
 
 DECLARE_int32(num_workers);
 
-using namespace facebook::velox::optimizer::test;
-using namespace facebook::velox::exec::test;
-
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 namespace {
+
+using namespace facebook::velox;
+using namespace facebook::velox::exec::test;
+using namespace facebook::axiom::optimizer::test;
+namespace lp = facebook::axiom::logical_plan;
 
 template <typename T>
 lp::ExprPtr makeKey(const TypePtr& type, T value) {
@@ -708,4 +708,4 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn(std::vector<int32_t>{1, 2, 3}));
 
 } // namespace
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

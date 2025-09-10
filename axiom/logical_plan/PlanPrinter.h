@@ -17,7 +17,7 @@
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 struct PlanSummaryOptions {
   /// Options that apply specifically to PROJECT nodes.
@@ -77,4 +77,4 @@ class PlanPrinter {
   static std::string toSkeletonText(const LogicalPlanNode& root);
 };
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

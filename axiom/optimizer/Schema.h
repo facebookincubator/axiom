@@ -25,7 +25,7 @@
 /// instantiate the relevant schema objects based on the query. The
 /// arena for these can be different from that for the PlanObjects,
 /// though, so that a schema cache can have its own lifetime.
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 template <typename T>
 using NameMap = std::unordered_map<
@@ -45,8 +45,8 @@ struct Value {
   float byteSize() const;
 
   const velox::Type* type;
-  const velox::variant* min{nullptr};
-  const velox::variant* max{nullptr};
+  const velox::Variant* min{nullptr};
+  const velox::Variant* max{nullptr};
 
   // Count of distinct values. Is not exact and is used for estimating
   // cardinalities of group bys or joins.
@@ -86,7 +86,7 @@ using OrderTypeVector = std::vector<OrderType, QGAllocator<OrderType>>;
 /// lives past the optimizer arena.
 class Locus {
  public:
-  explicit Locus(Name name, connector::Connector* connector)
+  explicit Locus(Name name, velox::connector::Connector* connector)
       : name_(name), connector_(connector) {}
 
   virtual ~Locus() = default;
@@ -97,7 +97,7 @@ class Locus {
     return toName(name_);
   }
 
-  const connector::Connector* connector() const {
+  const velox::connector::Connector* connector() const {
     // // 'connector_' can be nullptr if no executable plans are made.
     VELOX_CHECK_NOT_NULL(connector_);
     return connector_;
@@ -109,7 +109,7 @@ class Locus {
 
  private:
   const Name name_;
-  const connector::Connector* connector_;
+  const velox::connector::Connector* connector_;
 };
 
 using LocusCP = const Locus*;
@@ -242,7 +242,7 @@ struct ColumnGroup {
       SchemaTableCP table,
       Distribution distribution,
       ColumnVector columns,
-      const connector::TableLayout* layout = nullptr)
+      const velox::connector::TableLayout* layout = nullptr)
       : name{name},
         table{table},
         layout{layout},
@@ -251,7 +251,7 @@ struct ColumnGroup {
 
   Name name;
   SchemaTableCP table;
-  const connector::TableLayout* layout;
+  const velox::connector::TableLayout* layout;
   const Distribution distribution;
   const ColumnVector columns;
 
@@ -321,7 +321,7 @@ struct SchemaTable {
       DistributionType distributionType,
       const ColumnVector& partition,
       ColumnVector columns,
-      const connector::TableLayout* layout);
+      const velox::connector::TableLayout* layout);
 
   /// Finds or adds a column with 'name' and 'value'.
   ColumnCP column(const std::string& name, const Value& value);
@@ -346,7 +346,7 @@ struct SchemaTable {
   std::vector<ColumnCP> toColumns(const std::vector<std::string>& names) const;
 
   const Name name;
-  const RowType* type;
+  const velox::RowType* type;
   const float cardinality;
 
   // Lookup from name to column.
@@ -397,4 +397,4 @@ class Schema {
 
 using SchemaP = Schema*;
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer
