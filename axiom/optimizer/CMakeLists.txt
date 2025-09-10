@@ -50,6 +50,8 @@ add_library(
   VeloxHistory.cpp
   JoinSample.cpp)
 
+add_dependencies(axiom_optimizer velox_hive_connector)
+
 target_link_libraries(
   axiom_optimizer
   velox_core
