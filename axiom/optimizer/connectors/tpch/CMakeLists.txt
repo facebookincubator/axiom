@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-axiom_add_library(axiom_tpch_connector_metadata OBJECT
+add_library(axiom_tpch_connector_metadata OBJECT
                   TpchConnectorMetadata.cpp)
 
-axiom_link_libraries(
+target_link_libraries(
   axiom_tpch_connector_metadata
   axiom_connector_metadata
   axiom_schema_resolver

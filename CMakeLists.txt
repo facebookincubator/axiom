@@ -40,7 +40,6 @@ list(
   "${PROJECT_SOURCE_DIR}/CMake/resolve_dependency_modules"
   "${PROJECT_SOURCE_DIR}/velox/CMake")
 include(ResolveDependency)
-include(AxiomUtils)
 
 set(VELOX_BUILD_VECTOR_TEST_UTILS
     ON

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-axiom_add_library(
+add_library(
   axiom_logical_plan
   Expr.cpp
   ExprPrinter.cpp
@@ -20,12 +20,12 @@ axiom_add_library(
   PlanPrinter.cpp
   ExprApi.cpp)
 
-axiom_link_libraries(axiom_logical_plan velox_type)
+target_link_libraries(axiom_logical_plan velox_type)
 
-axiom_add_library(axiom_logical_plan_builder PlanBuilder.cpp NameAllocator.cpp
+add_library(axiom_logical_plan_builder PlanBuilder.cpp NameAllocator.cpp
                   NameMappings.cpp)
 
-axiom_link_libraries(
+target_link_libraries(
   axiom_logical_plan_builder
   axiom_logical_plan
   axiom_connector_metadata
