@@ -26,7 +26,7 @@ add_library(axiom_runner_local_runner LocalRunner.cpp Runner.cpp)
 target_link_libraries(
   axiom_runner_local_runner
   axiom_runner_multifragment_plan
-  velox_connector_metadata
+  axiom_connector_metadata
   velox_common_base
   velox_memory
   velox_hive_connector
