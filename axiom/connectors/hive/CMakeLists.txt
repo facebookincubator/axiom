@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
+axiom_add_library(
   axiom_hive_connector_metadata
   OBJECT
   HiveConnectorMetadata.cpp
@@ -20,7 +20,7 @@ add_library(
   StatisticsBuilder.cpp
 )
 
-target_link_libraries(
+axiom_link_libraries(
   axiom_hive_connector_metadata
   axiom_connector_metadata
   velox_hive_connector
