@@ -236,6 +236,24 @@ class PlanBuilder {
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates);
 
+  struct AggregateOptions {
+    AggregateOptions(
+        ExprPtr filters,
+        std::vector<SortingField> orderings,
+        bool distincts)
+        : filters(std::move(filters)),
+          orderings(std::move(orderings)),
+          distincts(distincts) {}
+
+    ExprPtr filters;
+    std::vector<SortingField> orderings;
+    bool distincts{false};
+  };
+  PlanBuilder& aggregate(
+      const std::vector<ExprApi>& groupingKeys,
+      const std::vector<ExprApi>& aggregates,
+      const std::vector<AggregateOptions>& options = {});
+
   /// Starts or continues the plan with an Unnest node. Uses auto-generated
   /// names for unnested columns. Use the version of 'unnest' API that takes
   /// ExprApi together with ExprApi::unnestAs to provide aliases for unnested

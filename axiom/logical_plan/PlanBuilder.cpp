@@ -15,6 +15,8 @@
  */
 
 #include "axiom/logical_plan/PlanBuilder.h"
+#include <velox/common/base/Exceptions.h>
+#include <vector>
 #include "axiom/logical_plan/NameMappings.h"
 #include "axiom/optimizer/connectors/ConnectorMetadata.h"
 #include "velox/connectors/Connector.h"
@@ -343,17 +345,8 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
 PlanBuilder& PlanBuilder::aggregate(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates) {
-  VELOX_USER_CHECK_NOT_NULL(node_, "Aggregate node cannot be a leaf node");
-  std::vector<std::string> outputNames;
-  outputNames.reserve(groupingKeys.size() + aggregates.size());
-  std::vector<ExprPtr> keyExprs;
-  keyExprs.reserve(groupingKeys.size());
-  auto newOutputMapping = std::make_shared<NameMappings>();
-  resolveProjections(
-      parse(groupingKeys), outputNames, keyExprs, *newOutputMapping);
-  std::vector<AggregateExprPtr> exprs;
-  exprs.reserve(aggregates.size());
-
+  std::vector<AggregateOptions> options;
+  options.reserve(aggregates.size());
   for (const auto& sql : aggregates) {
     auto aggregateExpr = velox::duckdb::parseAggregateExpr(sql, {});
 
@@ -369,18 +362,57 @@ PlanBuilder& PlanBuilder::aggregate(
       filter = resolveScalarTypes(aggregateExpr.maskExpr);
     }
 
-    auto expr = resolveAggregateTypes(
-        aggregateExpr.expr, filter, ordering, aggregateExpr.distinct);
+    options.emplace_back(
+        std::move(filter), std::move(ordering), aggregateExpr.distinct);
+  }
 
-    if (aggregateExpr.expr->alias().has_value()) {
-      const auto& alias = aggregateExpr.expr->alias().value();
+  return aggregate(parse(groupingKeys), parse(aggregates), options);
+}
+
+PlanBuilder& PlanBuilder::aggregate(
+    const std::vector<ExprApi>& groupingKeys,
+    const std::vector<ExprApi>& aggregates,
+    const std::vector<AggregateOptions>& options) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Aggregate node cannot be a leaf node");
+
+  std::vector<std::string> outputNames;
+  outputNames.reserve(groupingKeys.size() + aggregates.size());
+
+  std::vector<ExprPtr> keyExprs;
+  keyExprs.reserve(groupingKeys.size());
+
+  auto newOutputMapping = std::make_shared<NameMappings>();
+
+  resolveProjections(groupingKeys, outputNames, keyExprs, *newOutputMapping);
+
+  std::vector<AggregateExprPtr> exprs;
+  exprs.reserve(aggregates.size());
+
+  bool optionsProvided = !options.empty();
+  VELOX_USER_CHECK(options.empty() || options.size() == aggregates.size());
+  for (size_t i = 0; i < aggregates.size(); ++i) {
+    const auto& aggregate = aggregates[i];
+
+    AggregateExprPtr expr;
+    if (optionsProvided) {
+      expr = resolveAggregateTypes(
+          aggregate.expr(),
+          options[i].filters,
+          options[i].orderings,
+          options[i].distincts);
+    } else {
+      expr = resolveAggregateTypes(aggregate.expr());
+    }
+
+    if (aggregate.name().has_value()) {
+      const auto& alias = aggregate.name().value();
       outputNames.push_back(newName(alias));
       newOutputMapping->add(alias, outputNames.back());
     } else {
       outputNames.push_back(newName(expr->name()));
     }
 
-    exprs.push_back(expr);
+    exprs.emplace_back(std::move(expr));
   }
 
   node_ = std::make_shared<AggregateNode>(
@@ -1080,7 +1112,8 @@ AggregateExprPtr ExprResolver::resolveAggregateTypes(
     inputTypes.push_back(input->type());
   }
 
-  if (auto type = velox::exec::resolveAggregateFunction(name, inputTypes).first) {
+  if (auto type =
+          velox::exec::resolveAggregateFunction(name, inputTypes).first) {
     return std::make_shared<AggregateExpr>(
         type, name, inputs, filter, ordering, distinct);
   }
