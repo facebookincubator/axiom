@@ -1053,18 +1053,12 @@ ExprPtr ExprResolver::resolveScalarTypes(
 }
 
 AggregateExprPtr ExprResolver::resolveAggregateTypes(
-<<<<<<< HEAD
-    const core::ExprPtr& expr,
+    const velox::core::ExprPtr& expr,
     const InputNameResolver& inputNameResolver,
     const ExprPtr& filter,
     const std::vector<SortingField>& ordering,
     bool distinct) const {
-  const auto* call = dynamic_cast<const core::CallExpr*>(expr.get());
-=======
-    const velox::core::ExprPtr& expr,
-    const InputNameResolver& inputNameResolver) const {
   const auto* call = dynamic_cast<const velox::core::CallExpr*>(expr.get());
->>>>>>> upstream/main
   VELOX_USER_CHECK_NOT_NULL(
       call, "Aggregate must be a call expression: {}", expr->toString());
 
@@ -1082,15 +1076,9 @@ AggregateExprPtr ExprResolver::resolveAggregateTypes(
     inputTypes.push_back(input->type());
   }
 
-<<<<<<< HEAD
-  if (auto type = exec::resolveAggregateFunction(name, inputTypes).first) {
+  if (auto type = velox::exec::resolveAggregateFunction(name, inputTypes).first) {
     return std::make_shared<AggregateExpr>(
         type, name, inputs, filter, ordering, distinct);
-=======
-  if (auto type =
-          velox::exec::resolveAggregateFunction(name, inputTypes).first) {
-    return std::make_shared<AggregateExpr>(type, name, inputs);
->>>>>>> upstream/main
   }
 
   auto allSignatures = velox::exec::getAggregateFunctionSignatures();
@@ -1301,14 +1289,10 @@ ExprPtr PlanBuilder::resolveScalarTypes(
 }
 
 AggregateExprPtr PlanBuilder::resolveAggregateTypes(
-<<<<<<< HEAD
-    const core::ExprPtr& expr,
+    const velox::core::ExprPtr& expr,
     const ExprPtr& filter,
     const std::vector<SortingField>& ordering,
     bool distinct) const {
-=======
-    const velox::core::ExprPtr& expr) const {
->>>>>>> upstream/main
   return resolver_.resolveAggregateTypes(
       expr,
       [&](const auto& alias, const auto& name) {
