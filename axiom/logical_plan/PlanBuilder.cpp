@@ -379,16 +379,20 @@ PlanBuilder& PlanBuilder::aggregate(
     } else {
       outputNames.push_back(newName(expr->name()));
     }
+
     exprs.push_back(expr);
   }
+
   node_ = std::make_shared<AggregateNode>(
       nextId(),
-      node_,
-      keyExprs,
+      std::move(node_),
+      std::move(keyExprs),
       std::vector<AggregateNode::GroupingSet>{},
-      exprs,
-      outputNames);
-  outputMapping_ = newOutputMapping;
+      std::move(exprs),
+      std::move(outputNames));
+
+  outputMapping_ = std::move(newOutputMapping);
+
   return *this;
 }
 
