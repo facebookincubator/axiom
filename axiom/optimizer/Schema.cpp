@@ -24,6 +24,15 @@
 
 namespace facebook::axiom::optimizer {
 
+const velox::connector::PartitionType* copartitionType(
+    const velox::connector::PartitionType* first,
+    const velox::connector::PartitionType* second) {
+  if (!first || !second) {
+    return nullptr;
+  }
+  return first->copartition(*second);
+}
+
 float Value::byteSize() const {
   if (type->isFixedWidth()) {
     return static_cast<float>(type->cppSizeInBytes());
@@ -107,7 +116,7 @@ SchemaTableCP Schema::findTable(
   VELOX_CHECK_NOT_NULL(source_);
   auto connectorTable = source_->findTable(connectorId, name);
   if (!connectorTable) {
-    return nullptr;
+    return {};
   }
 
   auto* schemaTable = make<SchemaTable>(
@@ -160,12 +169,9 @@ SchemaTableCP Schema::findTable(
       partition,
       columns,
       layout);
-  queryCtx()->optimization()->retainConnectorTable(std::move(connectorTable));
-  return schemaTable;
-}
 
-void Schema::addTable(SchemaTableCP table) const {
-  tables_[table->name] = table;
+  table = {schemaTable, std::move(connectorTable)};
+  return table.schemaTable;
 }
 
 float tableCardinality(PlanObjectCP table) {

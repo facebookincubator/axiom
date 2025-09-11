@@ -53,7 +53,7 @@ class HivePartitionType : public connector::PartitionType {
       : numBuckets_(numBuckets),
         partitionKeyTypes_(std::move(partitionKeyTypes)) {}
 
-  virtual std::optional<int32_t> numPartitions() const {
+  std::optional<int32_t> numPartitions() const override {
     return numBuckets_;
   }
 
@@ -88,7 +88,7 @@ class HivePartitionType : public connector::PartitionType {
 class HiveTableLayout : public TableLayout {
  public:
   HiveTableLayout(
-      const std::string& name,
+      std::string name,
       const Table* table,
       velox::connector::Connector* connector,
       std::vector<const Column*> columns,
@@ -99,22 +99,13 @@ class HiveTableLayout : public TableLayout {
       std::vector<const Column*> hivePartitionColumns,
       velox::dwio::common::FileFormat fileFormat,
       std::optional<int32_t> numBuckets = std::nullopt)
-      : TableLayout(
-            name,
-            table,
-            connector,
-            columns,
-            partitioning,
-            orderColumns,
-            sortOrder,
-            lookupKeys,
-            true),
-        fileFormat_(fileFormat),
-        hivePartitionColumns_(hivePartitionColumns),
-        numBuckets_(numBuckets),
+      : TableLayout{std::move(name), table, connector, std::move(columns), std::move(partitioning), std::move(orderColumns), std::move(sortOrder), std::move(lookupKeys), true},
+        fileFormat_{fileFormat},
+        hivePartitionColumns_{std::move(hivePartitionColumns)},
+        numBuckets_{numBuckets},
         partitionType_{
-            numBuckets.has_value() ? numBuckets.value() : 0,
-            extractPartitionKeyTypes(partitioning)} {}
+            numBuckets.value_or(0),
+            extractPartitionKeyTypes(partitionColumns())} {}
 
   const PartitionType* partitionType() const override {
     return partitionColumns().empty() ? nullptr : &partitionType_;
@@ -177,31 +168,18 @@ class HiveConnectorMetadata : public ConnectorMetadata {
 
   velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
-      const velox::RowTypePtr& rowType,
+      const RowTypePtr& rowType,
       const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) override;
 
-  RowTypePtr tableWriteOutputType(const RowTypePtr& rowType, WriteKind kind)
-      const override;
-
-  void createTable(
-      const std::string& tableName,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options,
-      const ConnectorSessionPtr& session,
-      bool errorIfExists = true,
-      TableKind tableKind = TableKind::kTable) override {
-    VELOX_UNSUPPORTED();
-  }
-
   void finishWrite(
       const TableLayout& layout,
       const velox::connector::ConnectorInsertTableHandlePtr& handle,
-      bool success,
-      const std::vector<velox::RowVectorPtr>& writerResult,
       WriteKind kind,
-      const ConnectorSessionPtr& session) override {
+      const ConnectorSessionPtr& session,
+      bool success,
+      const std::vector<velox::RowVectorPtr>& results) override {
     VELOX_UNSUPPORTED();
   }
 

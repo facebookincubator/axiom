@@ -54,7 +54,7 @@ using WritePlanCP = const WritePlan*;
 ///   5. SELECT (projections)
 ///   6. ORDER BY (sort)
 ///   7. OFFSET and LIMIT (limit)
-/// 8. TableWriter: (insert/delete/update)
+///   8. TABLE_WRITE (insert/delete/update)
 ///
 struct DerivedTable : public PlanObject {
   DerivedTable() : PlanObject(PlanType::kDerivedTableNode) {}

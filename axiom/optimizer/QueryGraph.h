@@ -924,103 +924,51 @@ using NameVector = std::vector<Name, QGAllocator<Name>>;
 class WritePlan : public PlanObject {
  public:
   WritePlan(
-      Name table,
-      const connector::TableLayout* layout,
-      logical_plan::WriteKind kind,
-      ExprVector values,
-      NameVector columns,
-      ColumnVector output)
-      : PlanObject(PlanType::kWriteNode),
-        table_(table),
-        layout_(layout),
-        kind_(kind),
-        values_(values),
-        columns_(columns),
-        output_(output) {}
+      const velox::connector::TableLayout& layout,
+      velox::connector::WriteKind kind,
+      NameVector columnNames,
+      ExprVector columnExpressions,
+      ColumnVector output,
+      const folly::F14FastMap<std::string, std::string>& options)
+      : PlanObject{PlanType::kWriteNode},
+        layout_{layout},
+        kind_{kind},
+        columnNames_{std::move(columnNames)},
+        columnExpressions_{std::move(columnExpressions)},
+        output_{std::move(output)},
+        options_{options} {}
 
-  Name table() const {
-    return table_;
-  }
-
-  const connector::TableLayout* layout() const {
+  const velox::connector::TableLayout& layout() const {
     return layout_;
   }
 
-  logical_plan::WriteKind kind() const {
+  velox::connector::WriteKind kind() const {
     return kind_;
   }
 
-  const ExprVector values() const {
-    return values_;
+  const NameVector& columnNames() const {
+    return columnNames_;
   }
 
-  const NameVector& columns() const {
-    return columns_;
+  const ExprVector& columnExpressions() const {
+    return columnExpressions_;
   }
 
   const ColumnVector& output() const {
     return output_;
   }
 
- private:
-  Name table_;
-  const connector::TableLayout* layout_;
-  logical_plan::WriteKind kind_;
-  ExprVector values_;
-  NameVector columns_;
-  ColumnVector output_;
-};
-
-using NameVector = std::vector<Name, QGAllocator<Name>>;
-
-class WritePlan : public PlanObject {
- public:
-  WritePlan(
-      Name table,
-      const connector::TableLayout* layout,
-      logical_plan::WriteKind kind,
-      ExprVector values,
-      NameVector columns,
-      ColumnVector output)
-      : PlanObject(PlanType::kWriteNode),
-        table_(table),
-        layout_(layout),
-        kind_(kind),
-        values_(values),
-        columns_(columns),
-        output_(output) {}
-
-  Name table() const {
-    return table_;
-  }
-
-  const connector::TableLayout* layout() const {
-    return layout_;
-  }
-
-  logical_plan::WriteKind kind() const {
-    return kind_;
-  }
-
-  const ExprVector values() const {
-    return values_;
-  }
-
-  const NameVector& columns() const {
-    return columns_;
-  }
-
-  const ColumnVector& output() const {
-    return output_;
+  const folly::F14FastMap<std::string, std::string>& options() const {
+    return options_;
   }
 
  private:
-  Name table_;
-  const connector::TableLayout* layout_;
-  logical_plan::WriteKind kind_;
-  ExprVector values_;
-  NameVector columns_;
+  const velox::connector::TableLayout& layout_;
+  velox::connector::WriteKind kind_;
+  NameVector columnNames_;
+  ExprVector columnExpressions_;
   ColumnVector output_;
+  const folly::F14FastMap<std::string, std::string>& options_;
 };
 
 } // namespace facebook::axiom::optimizer

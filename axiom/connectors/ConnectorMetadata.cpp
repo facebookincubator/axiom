@@ -20,9 +20,9 @@ namespace facebook::axiom::connector {
 
 Variant Column::makeDefaultValue(
     const TypePtr& type,
-    std::optional<Variant>& value) {
+    std::optional<Variant>&& value) {
   if (value.has_value()) {
-    return value.value();
+    return std::move(value).value();
   }
   return Variant::null(type->kind());
 }

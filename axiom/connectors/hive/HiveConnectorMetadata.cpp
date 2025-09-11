@@ -160,7 +160,7 @@ HiveConnectorMetadata::createTableHandle(
 velox::connector::ConnectorInsertTableHandlePtr
 HiveConnectorMetadata::createInsertTableHandle(
     const TableLayout& layout,
-    const velox::RowTypePtr& rowType,
+    const RowTypePtr& rowType,
     const folly::F14FastMap<std::string, std::string>& options,
     WriteKind kind,
     const ConnectorSessionPtr& session) {
@@ -241,27 +241,19 @@ HiveConnectorMetadata::createInsertTableHandle(
 
 void HiveConnectorMetadata::validateOptions(
     const folly::F14FastMap<std::string, std::string>& options) const {
-  static folly::F14FastSet<std::string> allowed = {
+  static const folly::F14FastSet<std::string> kAllowed = {
       "bucketed_by",
       "sorted_by",
       "bucket_count",
       "partitioned_by",
       "file_format",
-      "compression_kind"};
+      "compression_kind",
+  };
   for (auto& pair : options) {
-    if (allowed.find(pair.first) == allowed.end()) {
+    if (!kAllowed.contains(pair.first)) {
       VELOX_USER_FAIL("Option {} is not supported", pair.first);
     }
   }
-}
-
-RowTypePtr HiveConnectorMetadata::tableWriteOutputType(
-    const RowTypePtr& /*rowType*/,
-    WriteKind kind) const {
-  VELOX_CHECK_EQ(kind, WriteKind::kInsert);
-  return ROW(
-      {"numWrittenRows", "fragment", "tableCommitContext"},
-      {BIGINT(), VARBINARY(), VARBINARY()});
 }
 
 } // namespace facebook::velox::connector::hive

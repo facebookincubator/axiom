@@ -14,18 +14,19 @@
  * limitations under the License.
  */
 
+#include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/optimizer/connectors/hive/HiveConnectorMetadata.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 namespace {
+
+using namespace velox;
+namespace lp = facebook::axiom::logical_plan;
 
 class WritePartitionTest : public test::HiveQueriesTestBase {
  protected:
@@ -39,9 +40,9 @@ class WritePartitionTest : public test::HiveQueriesTestBase {
 
   void SetUp() override {
     HiveQueriesTestBase::SetUp();
-    connector_ = connector::getConnector(velox::exec::test::kHiveConnectorId);
-    metadata_ = dynamic_cast<connector::hive::HiveConnectorMetadata*>(
-        connector_->metadata());
+    connector_ = connector::getConnector(exec::test::kHiveConnectorId);
+    metadata_ = dynamic_cast<connector::hive::LocalHiveConnectorMetadata*>(
+        connector::ConnectorMetadata::metadata(exec::test::kHiveConnectorId));
     optimizerOptions_.session =
         std::make_shared<connector::hive::HiveConnectorSession>();
     parquet::registerParquetReaderFactory();
@@ -63,21 +64,26 @@ class WritePartitionTest : public test::HiveQueriesTestBase {
       std::string str;
       data.push_back(makeRowVector(
           {"key1", "key2", "data", "ds"},
-          {makeFlatVector<int64_t>(
-               batchSize, [&](auto row) { return row + start; }),
-           makeFlatVector<int32_t>(
-               batchSize, [&](auto row) { return (row + start) % 19; }),
-           makeFlatVector<int64_t>(
-               batchSize, [&](auto row) { return row + start + 2; }),
-           makeFlatVector<StringView>(batchSize, [&](auto row) {
-             str = fmt::format("2025-09-{}", dayOffset + ((row + start) % 2));
-             return StringView(str);
-           })}));
+          {
+              makeFlatVector<int64_t>(
+                  batchSize, [&](auto row) { return row + start; }),
+              makeFlatVector<int32_t>(
+                  batchSize, [&](auto row) { return (row + start) % 19; }),
+              makeFlatVector<int64_t>(
+                  batchSize, [&](auto row) { return row + start + 2; }),
+              makeFlatVector<StringView>(
+                  batchSize,
+                  [&](auto row) {
+                    str = fmt::format(
+                        "2025-09-{}", dayOffset + ((row + start) % 2));
+                    return StringView(str);
+                  }),
+          }));
     }
     return data;
   }
 
-  std::vector<lp::ExprApi> exprs(std::vector<std::string> strings) {
+  std::vector<lp::ExprApi> exprs(const std::vector<std::string>& strings) {
     std::vector<lp::ExprApi> exprs;
     for (auto& string : strings) {
       exprs.push_back(lp::Sql(string));
@@ -86,9 +92,12 @@ class WritePartitionTest : public test::HiveQueriesTestBase {
   }
 
   std::shared_ptr<connector::Connector> connector_;
-  connector::ConnectorMetadata* metadata_;
-  connector::ConnectorSessionPtr session{
+  connector::hive::LocalHiveConnectorMetadata* metadata_;
+  connector::ConnectorSessionPtr session_{
       std::make_shared<connector::hive::HiveConnectorSession>()};
+  RowTypePtr writeOutputType_{
+      ROW({"numWrittenRows", "fragment", "tableCommitContext"},
+          {BIGINT(), VARBINARY(), VARBINARY()})};
 };
 
 TEST_F(WritePartitionTest, write) {
@@ -96,21 +105,23 @@ TEST_F(WritePartitionTest, write) {
 
   constexpr int32_t kTestBatchSize = 2048;
 
-  auto tableType = ROW(
-      {{"key1", BIGINT()},
-       {"key2", INTEGER()},
-       {"data", BIGINT()},
-       {"data2", VARCHAR()},
-       {"ds", VARCHAR()}});
+  auto tableType = ROW({
+      {"key1", BIGINT()},
+      {"key2", INTEGER()},
+      {"data", BIGINT()},
+      {"data2", VARCHAR()},
+      {"ds", VARCHAR()},
+  });
 
-  std::unordered_map<std::string, std::string> options = {
+  folly::F14FastMap<std::string, std::string> options = {
       {"bucketed_by", "key1,key2"},
       {"bucket_count", "16"},
       {"partitioned_by", "ds"},
       {"file_format", "parquet"},
-      {"compression_kind", "snappy"}};
+      {"compression_kind", "snappy"},
+  };
 
-  metadata_->createTable("test", tableType, options, session, false);
+  metadata_->createTable("test", tableType, options, session_, false);
 
   auto data = makeTestData(10, kTestBatchSize);
 
@@ -120,8 +131,9 @@ TEST_F(WritePartitionTest, write) {
                         exec::test::kHiveConnectorId,
                         "test",
                         lp::WriteKind::kInsert,
+                        {"key1", "key2", "data", "ds"},
                         exprs({"key1", "key2", "data", "ds"}),
-                        {"key1", "key2", "data", "ds"})
+                        writeOutputType_)
                     .build();
   runVelox(write1);
 
@@ -145,8 +157,9 @@ TEST_F(WritePartitionTest, write) {
               exec::test::kHiveConnectorId,
               "test",
               lp::WriteKind::kInsert,
+              {"key1", "key2", "data", "ds"},
               exprs({"key1", "key2", "key1 % (key1 - 200000)", "ds"}),
-              {"key1", "key2", "data", "ds"})
+              writeOutputType_)
           .build();
   VELOX_ASSERT_THROW(runVelox(errorPlan), "ivide by");
 
@@ -173,13 +186,14 @@ TEST_F(WritePartitionTest, write) {
 
   // Create a second table to copy the first one into. Values runs single node,
   // the copy runs distributed.
-  std::unordered_map<std::string, std::string> options2 = {
+  folly::F14FastMap<std::string, std::string> options2 = {
       {"bucketed_by", "key1"},
       {"bucket_count", "16"},
       {"partitioned_by", "ds"},
       {"file_format", "parquet"},
-      {"compression_kind", "snappy"}};
-  metadata_->createTable("test2", tableType, options2, session, false);
+      {"compression_kind", "snappy"},
+  };
+  metadata_->createTable("test2", tableType, options2, session_, false);
 
   auto copyPlan = lp::PlanBuilder(context)
                       .tableScan(
@@ -190,8 +204,9 @@ TEST_F(WritePartitionTest, write) {
                           exec::test::kHiveConnectorId,
                           "test2",
                           lp::WriteKind::kInsert,
+                          {"key1", "key2", "data", "data2", "ds"},
                           exprs({"key1", "key2", "data", "data2", "ds"}),
-                          {"key1", "key2", "data", "data2", "ds"})
+                          writeOutputType_)
                       .build();
   runVelox(copyPlan);
 
@@ -209,5 +224,6 @@ TEST_F(WritePartitionTest, write) {
     exec::test::assertEqualResults(data, result.results);
   }
 }
+
 } // namespace
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

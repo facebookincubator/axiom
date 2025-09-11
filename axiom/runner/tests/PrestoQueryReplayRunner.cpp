@@ -176,10 +176,10 @@ velox::core::PlanNodePtr getDeserializedPlan(
 }
 
 struct PlanFragmentInfo {
-  velox::core::PlanNodePtr plan{nullptr};
+  velox::core::PlanNodePtr plan;
   folly::F14FastMap<std::string, folly::F14FastSet<std::string>>
-      remoteTaskIdMap{};
-  std::vector<velox::core::TableScanNodePtr> scans{};
+      remoteTaskIdMap;
+  std::vector<velox::core::TableScanNodePtr> scans;
   int numWorkers{0};
 };
 

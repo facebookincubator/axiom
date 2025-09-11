@@ -204,11 +204,6 @@ class ToGraph {
     }
   }
 
-  std::unordered_map<int32_t, connector::ConnectorInsertTableHandlePtr>&
-  writeHandles() {
-    return writeHandles_;
-  }
-
  private:
   static bool isSpecialForm(
       const logical_plan::ExprPtr& expr,
@@ -337,7 +332,7 @@ class ToGraph {
 
   PlanObjectP addOrderBy(const logical_plan::SortNode& order);
 
-  PlanObjectP addWrite(const logical_plan::TableWriteNode& TableWriteNode);
+  PlanObjectP addWrite(const logical_plan::TableWriteNode& tableWrite);
 
   bool isSubfield(
       const logical_plan::ExprPtr& expr,
@@ -392,12 +387,6 @@ class ToGraph {
       bool isControl);
 
   void markFieldAccessed(
-      const logical_plan::TableWriteNode& write,
-      int32_t ordinal,
-      std::vector<Step>& steps,
-      bool isControl);
-
-  void markFieldAccessed(
       const LogicalContextSource& source,
       int32_t ordinal,
       std::vector<Step>& steps,
@@ -410,7 +399,8 @@ class ToGraph {
 
   void markColumnSubfields(
       const logical_plan::LogicalPlanNodePtr& source,
-      std::span<const logical_plan::ExprPtr> columns);
+      std::span<const logical_plan::ExprPtr> columns,
+      bool isControl = true);
 
   BitSet functionSubfields(
       const logical_plan::CallExpr* call,
@@ -528,8 +518,6 @@ class ToGraph {
   Name cardinality_{nullptr};
 
   folly::F14FastMap<Name, Name> reversibleFunctions_;
-  std::unordered_map<int32_t, connector::ConnectorInsertTableHandlePtr>
-      writeHandles_;
 };
 
 } // namespace facebook::axiom::optimizer

@@ -162,14 +162,6 @@ class Optimization {
   void trace(uint32_t event, int32_t id, const Cost& cost, RelationOp& plan)
       const;
 
-  connector::ConnectorInsertTableHandlePtr writeHandle(int32_t id) {
-    return toGraph_.writeHandles().at(id);
-  }
-
-  const std::unordered_set<connector::TablePtr> retainedTables() const {
-    return retainedTables_;
-  }
-
  private:
   // Retrieves or makes a plan from 'key'. 'key' specifies a set of top level
   // joined tables or a hash join build side table or join.

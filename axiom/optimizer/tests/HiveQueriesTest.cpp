@@ -132,7 +132,6 @@ TEST_F(HiveQueriesTest, orderOfOperations) {
   test(
       scan("nation")
           .orderBy({"n_nationkey"})
-
           .aggregate({"n_name"}, {"count(1)"})
           .orderBy({"n_name desc"}),
       // Fix this plan. There should be no partial agg.
@@ -147,7 +146,6 @@ TEST_F(HiveQueriesTest, orderOfOperations) {
   // keys are pushed down below the groupBy.
   test(
       scan("nation")
-
           .aggregate({"n_name"}, {"count(1) as cnt"})
           .filter("n_name > 'a'")
           .filter("cnt > 10")

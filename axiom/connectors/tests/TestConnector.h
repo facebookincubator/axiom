@@ -267,19 +267,9 @@ class TestConnectorMetadata : public ConnectorMetadata {
       velox::RowTypePtr dataColumns,
       std::optional<LookupKeys>) override;
 
-  void createTable(
-      const std::string& tableName,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options,
-      const ConnectorSessionPtr& session,
-      bool errorIfExists = true,
-      TableKind tableKind = TableKind::kTable) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
+  ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
-      const velox::RowTypePtr& rowType,
+      const RowTypePtr& rowType,
       const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) override {
@@ -289,17 +279,11 @@ class TestConnectorMetadata : public ConnectorMetadata {
   void finishWrite(
       const TableLayout& layout,
       const ConnectorInsertTableHandlePtr& handle,
-      bool success,
-      const std::vector<RowVectorPtr>& writerResult,
       WriteKind kind,
-      const ConnectorSessionPtr& session) override {
+      const ConnectorSessionPtr& session,
+      bool success,
+      const std::vector<RowVectorPtr>& results) override {
     VELOX_UNSUPPORTED();
-  }
-
-  RowTypePtr tableWriteOutputType(
-      const RowTypePtr& /*rowType*/,
-      WriteKind /*kind*/) const override {
-    return ROW({}, {});
   }
 
   std::vector<ColumnHandlePtr> rowIdHandles(

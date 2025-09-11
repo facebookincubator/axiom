@@ -27,6 +27,14 @@
 /// though, so that a schema cache can have its own lifetime.
 namespace facebook::axiom::optimizer {
 
+/// Compares 'first' and 'second' and returns the one that should be
+/// the repartition partitioning to do copartition with the two. If
+/// there is no copartition possibility or if either or both are
+/// nullptr, returns nullptr.
+const velox::connector::PartitionType* copartitionType(
+    const velox::connector::PartitionType* first,
+    const velox::connector::PartitionType* second);
+
 // TODO: It seems like QGAllocator doesn't work for folly F14 containers.
 // Investigate and fix.
 template <typename T>
@@ -36,8 +44,6 @@ using NameMap = std::unordered_map<
     std::hash<Name>,
     std::equal_to<Name>,
     QGAllocator<std::pair<const Name, T>>>;
-
-using TypeCP = const Type*;
 
 /// Represents constraints on a column value or intermediate result.
 struct Value {
@@ -131,29 +137,22 @@ struct DistributionType {
   }
 
   static bool typesCompatible(
-      const connector::PartitionType* left,
-      const connector::PartitionType* right) {
-    if (left != nullptr && right != nullptr &&
-        left->copartition(*right) != nullptr) {
-      return true;
-    }
-    return false;
+      const velox::connector::PartitionType* left,
+      const velox::connector::PartitionType* right) {
+    return copartitionType(left, right) != nullptr;
   }
 
-  /// Partition function. nullptr means Velox default, copartitioned only with
-  /// itself.
-  const connector::PartitionType* partitionType{nullptr};
-  int32_t numPartitions{1};
   LocusCP locus{nullptr};
+  /// Partition function. nullptr means Velox default,
+  /// copartitioned only with itself.
+  const velox::connector::PartitionType* partitionType{nullptr};
+  int32_t numPartitions{1};
   bool isGather{false};
 
   static DistributionType gather() {
-    static const DistributionType kGather = {
-        .partitionType = nullptr,
-        .numPartitions = 1,
-        .locus = nullptr,
-        .isGather = true};
-
+    static constexpr DistributionType kGather = {
+        .isGather = true,
+    };
     return kGather;
   }
 };
@@ -390,6 +389,11 @@ class Schema {
  public:
   /// Constructs a Schema for producing executable plans, backed by 'source'.
   Schema(Name name, SchemaResolver* source, LocusCP locus);
+
+  struct Table {
+    SchemaTableCP schemaTable{nullptr};
+    velox::connector::TablePtr connectorTable;
+  };
 
   /// Returns the table with 'name' or nullptr if not found, using
   /// the connector specified by connectorId to perform table lookups.

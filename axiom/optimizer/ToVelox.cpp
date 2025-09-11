@@ -228,11 +228,12 @@ PlanAndStats ToVelox::toVeloxPlan(
   top.fragment.planNode = makeFragment(plan, top, stages);
   stages.push_back(std::move(top));
 
-  axiom::runner::FinishWrite finishWrites = nullptr;
+  runner::FinishWrite finishWrite;
   if (!finishWrites_.empty()) {
-    finishWrites = [finishes = std::move(finishWrites_)](
-                       bool success, const std::vector<RowVectorPtr>& results) {
-      for (auto& finish : finishes) {
+    finishWrite = [finishWrites = std::move(finishWrites_)](
+                      bool success,
+                      const std::vector<velox::RowVectorPtr>& results) {
+      for (auto& finish : finishWrites) {
         finish(success, results);
       }
     };
@@ -243,7 +244,8 @@ PlanAndStats ToVelox::toVeloxPlan(
   }
 
   return PlanAndStats{
-      std::make_shared<runner::MultiFragmentPlan>(std::move(stages), options, finishWrites),
+      std::make_shared<runner::MultiFragmentPlan>(
+          std::move(stages), options, std::move(finishWrite)),
       std::move(nodeHistory_),
       std::move(prediction_)};
 }
@@ -574,7 +576,7 @@ class TempProjections {
     numUsedChannels_ += it->second.used ? 0 : 1;
     it->second.used = true;
     auto fieldRef = fieldRefs_[it->second.idx];
-    if (optName && *optName != fieldRef->name()) {
+    if (forceNewName && optName && *optName != fieldRef->name()) {
       auto aliasFieldRef = std::make_shared<velox::core::FieldAccessTypedExpr>(
           toTypePtr(expr->value().type), *optName);
       names_.push_back(*optName);
@@ -1569,79 +1571,101 @@ velox::core::PlanNodePtr ToVelox::makeValues(
   return valuesNode;
 }
 
-core::PlanNodePtr ToVelox::makeWrite(
-    const TableWrite& op,
-    ExecutableFragment& fragment,
-    std::vector<axiom::runner::ExecutableFragment>& stages) {
-  core::PlanNodePtr input = makeFragment(op.input(), fragment, stages);
-  TempProjections projections(*this, *op.input());
-  auto* write = op.write;
-  auto* layout = write->layout();
-  auto handle = queryCtx()->optimization()->writeHandle(write->id());
-  std::vector<std::string> names;
-  std::vector<core::FieldAccessTypedExprPtr> fields;
-  for (auto i = 0; i < write->values().size(); ++i) {
-    std::string name = write->columns()[i];
-    names.push_back(name);
-    fields.push_back(projections.toFieldRef(write->values()[i], &name));
-  }
-  input = projections.projectNamed(input, names);
+velox::core::PlanNodePtr ToVelox::makeWrite(
+    const TableWrite& tableWrite,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeFragment(tableWrite.input(), fragment, stages);
+  const auto& write = *tableWrite.write;
+  const auto& tableLayout = write.layout();
+  const auto& partitionColumns = tableLayout.partitionColumns();
+  const bool needsLocalShuffle =
+      options_.numDrivers != 1 && !partitionColumns.empty();
 
-  auto& partitionColumns = layout->partitionColumns();
-  if (!partitionColumns.empty()) {
-    std::vector<column_index_t> channels;
-    std::vector<VectorPtr> constants;
-    for (auto i = 0; i < partitionColumns.size(); ++i) {
-      channels.push_back(
-          input->outputType()->getChildIdx(partitionColumns[i]->name()));
-      constants.push_back(nullptr);
+  TempProjections projections{*this, *tableWrite.input(), false};
+  std::vector<std::string> columnNames;
+  std::vector<std::string> inputNames;
+  std::vector<velox::TypePtr> inputTypes;
+  columnNames.reserve(write.columnNames().size());
+  inputNames.reserve(write.columnNames().size());
+  inputTypes.reserve(write.columnNames().size());
+  for (size_t i = 0; i < write.columnNames().size(); ++i) {
+    const auto* name = write.columnNames()[i];
+    columnNames.emplace_back(name);
+    auto fieldRef = projections.toFieldRef(
+        write.columnExpressions()[i], &columnNames.back(), needsLocalShuffle);
+    inputNames.emplace_back(fieldRef->name());
+    inputTypes.emplace_back(fieldRef->type());
+  }
+  input = std::move(projections).maybeProject(std::move(input));
+
+  if (needsLocalShuffle) {
+    const auto& outputType = *input->outputType();
+    std::vector<velox::column_index_t> channels;
+    channels.reserve(partitionColumns.size());
+    for (const auto* partitionColumn : partitionColumns) {
+      channels.push_back(outputType.getChildIdx(partitionColumn->name()));
     }
 
-    auto spec =
-        write->layout()->partitionType()->makeSpec(channels, constants, true);
-    auto inputs = std::vector<core::PlanNodePtr>{input};
-    input = std::make_shared<core::LocalPartitionNode>(
+    auto spec = tableLayout.partitionType()->makeSpec(channels, {}, true);
+    input = std::make_shared<velox::core::LocalPartitionNode>(
         nextId(),
-        core::LocalPartitionNode::Type::kRepartition,
+        velox::core::LocalPartitionNode::Type::kRepartition,
         false,
-        spec,
-        inputs);
+        std::move(spec),
+        std::vector{std::move(input)});
   }
-  std::vector<std::string> columnNames;
-  for (auto* name : write->columns()) {
-    columnNames.push_back(name);
+
+  std::vector<std::string> outputNames;
+  std::vector<velox::TypePtr> outputTypes;
+  const auto& outputColumns = tableWrite.write->output();
+  outputNames.reserve(outputColumns.size());
+  outputTypes.reserve(outputColumns.size());
+  for (const auto* column : outputColumns) {
+    outputNames.push_back(outputName(column));
+    outputTypes.push_back(toTypePtr(column->value().type));
   }
-  auto* metadata = write->layout()->connector()->metadata();
+
+  auto* metadata =
+      velox::connector::ConnectorMetadata::metadata(tableLayout.connector());
   auto session = queryCtx()->optimization()->options().session;
-  std::unordered_set<connector::TablePtr> retainedTables =
-      queryCtx()->optimization()->retainedTables();
-  // The finish function needs to capture the retained tables, which also keeps
-  // layout live past the Optimization.
-  finishWrites_.push_back(
-      [handle, metadata, layout, session, retainedTables](
-          bool success, const std::vector<RowVectorPtr>& results) {
+  auto handle = metadata->createInsertTableHandle(
+      tableLayout,
+      tableLayout.rowType(),
+      write.options(),
+      write.kind(),
+      session);
+  const auto kind = write.kind();
+
+  // The finish function needs to capture the connector table,
+  // to make layout live past the Optimization.
+  finishWrites_.emplace_back(
+      [metadata,
+       connectorTable = tableLayout.table().shared_from_this(),
+       handle,
+       &tableLayout,
+       kind,
+       session = std::move(session)](
+          bool success,
+          const std::vector<velox::RowVectorPtr>& results) mutable {
         metadata->finishWrite(
-            *layout,
-            handle,
-            success,
-            results,
-            connector::WriteKind::kInsert,
-            session);
+            tableLayout, handle, kind, session, success, results);
+        handle.reset();
+        connectorTable.reset();
+        session.reset();
       });
 
-  auto outputType = metadata->tableWriteOutputType(
-      layout->rowType(), connector::WriteKind::kInsert);
-  return std::make_shared<core::TableWriteNode>(
+  return std::make_shared<velox::core::TableWriteNode>(
       nextId(),
-      input->outputType(),
-      columnNames,
+      ROW(std::move(inputNames), std::move(inputTypes)),
+      std::move(columnNames),
       std::nullopt,
-      std::make_shared<const core::InsertTableHandle>(
-          write->layout()->connector()->connectorId(), handle),
+      std::make_shared<const velox::core::InsertTableHandle>(
+          tableLayout.connector()->connectorId(), std::move(handle)),
       false,
-      outputType,
-      connector::CommitStrategy::kNoCommit,
-      input);
+      ROW(std::move(outputNames), std::move(outputTypes)),
+      velox::connector::CommitStrategy::kNoCommit,
+      std::move(input));
 }
 
 void ToVelox::makePredictionAndHistory(

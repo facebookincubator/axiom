@@ -234,21 +234,48 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   std::shared_ptr<velox::core::QueryCtx> makeQueryCtx(
       const std::string& queryId);
 
+  void finishWrite(
+      const TableLayout& layout,
+      const ConnectorInsertTableHandlePtr& handle,
+      WriteKind /*kind*/,
+      const ConnectorSessionPtr& /*session*/,
+      bool success,
+      const std::vector<RowVectorPtr>& /*results*/) override;
+
+  /// Creates a table. 'tableName' is a name with optional 'schema.'
+  /// followed by table name. The connector gives the first part of
+  /// the three part name. The table properties are in 'options'. All
+  /// options must be understood by the connector. To create a table,
+  /// first make a ConnectorSession in a connector dependent manner,
+  /// then call createTable, then access the created layout(s) and
+  /// make an insert table handle for writing each. Insert data into
+  /// each layout and then call finishWrite on each. Normally a table
+  /// has one layout but if many exist, as in secondary indices or
+  /// materializations that are not transparently handled by an
+  /// outside system, the optimizer is expected to make plans that
+  /// write to all. In such cases the plan typically has a different
+  /// table writer for each materialization. Any transaction semantics
+  /// are connector dependent. Throws an error if the table exists,
+  /// unless 'errorIfExists' is false, in which case the operation returns
+  /// silently.  finishWrite should be called for all insert table handles
+  /// to complete the write also if no data is added. To create an empty
+  /// table, call createTable and then commit if the connector is
+  /// transactional. to create the table with data, insert into all
+  /// materializations, call finishWrite on each and then commit the whole
+  /// transaction if the connector requires that.
+  ///
+  /// This is not part of the ConnectorMetadata API.
+  /// Because different system create tables in a different way.
+  /// It's not part of query frontend how to create tables.
   void createTable(
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
       const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
-      TableKind kind = TableKind::kTable) override;
+      TableKind kind = TableKind::kTable);
 
-  void finishWrite(
-      const TableLayout& layout,
-      const ConnectorInsertTableHandlePtr& /*handle*/,
-      bool success,
-      const std::vector<RowVectorPtr>& /*writerResult*/,
-      WriteKind /*kind*/,
-      const ConnectorSessionPtr& /*session*/) override;
+  void dropTable(const std::string& tableName);
 
  protected:
   std::string dataPath() const override {
@@ -283,12 +310,12 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   mutable std::mutex mutex_;
   mutable bool initialized_{false};
-  std::shared_ptr<velox::memory::MemoryPool> rootPool_{
-      velox::memory::memoryManager()->addRootPool()};
-  std::shared_ptr<velox::memory::MemoryPool> schemaPool_;
-  std::shared_ptr<velox::core::QueryCtx> queryCtx_;
-  std::shared_ptr<velox::connector::ConnectorQueryCtx> connectorQueryCtx_;
-  velox::dwio::common::FileFormat format_;
+  std::shared_ptr<memory::MemoryPool> rootPool_{
+      memory::memoryManager()->addRootPool()};
+  std::shared_ptr<memory::MemoryPool> schemaPool_;
+  std::shared_ptr<core::QueryCtx> queryCtx_;
+  std::shared_ptr<ConnectorQueryCtx> connectorQueryCtx_;
+  dwio::common::FileFormat format_;
   folly::F14FastMap<std::string, std::shared_ptr<LocalTable>> tables_;
   LocalHiveSplitManager splitManager_;
 };

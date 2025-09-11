@@ -24,7 +24,6 @@ const auto& nodeKindNames() {
   static const folly::F14FastMap<NodeKind, std::string_view> kNames = {
       {NodeKind::kValues, "VALUES"},
       {NodeKind::kTableScan, "TABLE_SCAN"},
-      {NodeKind::kTableWrite, "TABLE_WRITE"},
       {NodeKind::kFilter, "FILTER"},
       {NodeKind::kProject, "PROJECT"},
       {NodeKind::kAggregate, "AGGREGATE"},

@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -65,7 +66,7 @@ struct OptimizerOptions {
   uint32_t traceFlags{0};
 
   /// ConnectorSession, needed for write operations.
-  std::shared_ptr<connector::ConnectorSession> session{nullptr};
+  std::shared_ptr<velox::connector::ConnectorSession> session;
 
   bool isMapAsStruct(const char* table, const char* column) const {
     if (allMapsAsStruct) {

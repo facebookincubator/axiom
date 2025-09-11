@@ -23,7 +23,7 @@ namespace facebook::axiom::optimizer {
 connector::TablePtr SchemaResolver::findTable(
     std::string_view catalog,
     std::string_view name) {
-  TableNameParser parser(name);
+  TableNameParser parser{name};
   VELOX_USER_CHECK(parser.valid(), "Invalid table name: '{}'", name);
 
   if (parser.catalog().has_value()) {
