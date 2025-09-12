@@ -11,8 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_subdirectory(hive)
-add_subdirectory(tpch)
+
+if(VELOX_ENABLE_HIVE_CONNECTOR)
+  add_subdirectory(hive)
+endif()
+
+if(VELOX_ENABLE_TPCH_CONNECTOR)
+  add_subdirectory(tpch)
+endif()
 
 if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
