@@ -393,12 +393,11 @@ PlanBuilder& PlanBuilder::aggregate(
     const auto& aggregate = aggregates[i];
 
     AggregateExprPtr expr;
-      expr = resolveAggregateTypes(
-          aggregate.expr(),
-          options[i].filters,
-          options[i].orderings,
-          options[i].distinct);
-    
+    expr = resolveAggregateTypes(
+        aggregate.expr(),
+        options[i].filters,
+        options[i].orderings,
+        options[i].distinct);
 
     if (aggregate.name().has_value()) {
       const auto& alias = aggregate.name().value();
