@@ -20,6 +20,7 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <iostream>
+#include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/Optimization.h"
@@ -133,6 +134,8 @@ const char* helpText =
     "print_stats - Prints the Velox stats of after execution. Annotates operators with predicted and acttual output cardinality.\n"
     "\n"
     "include_custom_stats - Prints per operator runtime stats.\n";
+
+static const std::string kHiveConnectorId = "hive";
 
 class VeloxRunner : public velox::QueryBenchmarkBase {
  public:
@@ -250,8 +253,15 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
         std::make_shared<config::ConfigBase>(std::move(connectorConfig));
 
     velox::connector::hive::HiveConnectorFactory factory;
-    auto connector = factory.newConnector("hive", config, ioExecutor_.get());
+    auto connector =
+        factory.newConnector(kHiveConnectorId, config, ioExecutor_.get());
     velox::connector::registerConnector(connector);
+
+    connector::ConnectorMetadata::registerMetadata(
+        kHiveConnectorId,
+        std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
+            dynamic_cast<velox::connector::hive::HiveConnector*>(
+                connector.get())));
 
     return connector;
   }
