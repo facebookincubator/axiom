@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/connectors/tpch/TpchConnectorMetadata.h"
+#include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 
 #include "axiom/optimizer/SchemaUtils.h"
 #include "velox/connectors/Connector.h"

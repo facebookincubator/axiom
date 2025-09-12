@@ -15,7 +15,7 @@
  */
 
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
-#include "axiom/optimizer/connectors/tpch/TpchConnectorMetadata.h"
+#include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"

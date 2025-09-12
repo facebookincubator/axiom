@@ -13,22 +13,22 @@
 # limitations under the License.
 
 velox_add_library(
-  velox_fe_logical_plan
+  axiom_logical_plan
   Expr.cpp
   ExprPrinter.cpp
   LogicalPlanNode.cpp
   PlanPrinter.cpp
   ExprApi.cpp)
 
-velox_link_libraries(velox_fe_logical_plan velox_type)
+velox_link_libraries(axiom_logical_plan velox_type)
 
-velox_add_library(velox_fe_logical_plan_builder PlanBuilder.cpp
-                  NameAllocator.cpp NameMappings.cpp)
+velox_add_library(axiom_logical_plan_builder PlanBuilder.cpp NameAllocator.cpp
+                  NameMappings.cpp)
 
 velox_link_libraries(
-  velox_fe_logical_plan_builder
-  velox_fe_logical_plan
-  velox_connector_metadata
+  axiom_logical_plan_builder
+  axiom_logical_plan
+  axiom_connector_metadata
   velox_exec
   velox_function_registry
   velox_functions_prestosql

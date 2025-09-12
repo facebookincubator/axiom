@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/connectors/tests/TestConnector.h"
+#include "axiom/connectors/tests/TestConnector.h"
 
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>

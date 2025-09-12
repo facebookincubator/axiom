@@ -11,33 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_executable(axiom_tpch_connector_metadata_test TpchConnectorMetadataTest.cpp)
 
-velox_add_library(
-  velox_hive_connector_metadata
-  OBJECT
-  HiveConnectorMetadata.cpp
-  LocalHiveConnectorMetadata.cpp
-  StatisticsBuilder.cpp)
+add_test(axiom_tpch_connector_metadata_test axiom_tpch_connector_metadata_test)
 
-velox_link_libraries(
-  velox_hive_connector_metadata
-  velox_connector_metadata
-  velox_hive_connector
-  velox_type_fbhive
-  velox_dwio_catalog_fbhive
-  velox_dwio_dwrf_reader
-  velox_dwio_dwrf_writer
-  velox_dwio_orc_reader
-  velox_dwio_parquet_reader
-  velox_dwio_parquet_writer
-  velox_file
-  velox_hive_partition_function
-  velox_type_tz
-  velox_s3fs
-  velox_hdfs
-  velox_gcs
-  velox_abfs)
-
-if(AXIOM_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
+target_link_libraries(
+  axiom_tpch_connector_metadata_test
+  axiom_tpch_connector_metadata
+  velox_tpch_connector
+  axiom_runner_tests_utils
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  axiom_schema_resolver
+  velox_exec
+  velox_exec_test_lib
+  GTest::gtest
+  GTest::gtest_main)

@@ -17,8 +17,8 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include <velox/common/base/Exceptions.h>
 #include <vector>
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/NameMappings.h"
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
 #include "velox/connectors/Connector.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/Aggregate.h"

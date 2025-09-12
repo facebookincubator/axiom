@@ -15,7 +15,7 @@
  */
 
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
-#include "axiom/optimizer/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"

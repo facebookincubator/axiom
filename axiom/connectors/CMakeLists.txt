@@ -11,17 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-velox_add_library(velox_tpch_connector_metadata OBJECT
-                  TpchConnectorMetadata.cpp)
-
-velox_link_libraries(
-  velox_tpch_connector_metadata
-  velox_connector_metadata
-  velox_schema_resolver
-  velox_tpch_connector
-  velox_tpch_gen)
+add_subdirectory(hive)
+add_subdirectory(tpch)
 
 if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
+
+velox_add_library(axiom_connector_metadata ConnectorMetadata.cpp)
+
+velox_link_libraries(axiom_connector_metadata velox_common_base velox_memory
+                     velox_connector)

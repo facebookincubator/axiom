@@ -16,7 +16,7 @@
 
 #include "axiom/optimizer/tests/QueryTestBase.h"
 
-#include "axiom/optimizer/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"

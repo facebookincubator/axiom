@@ -13,20 +13,20 @@
 # limitations under the License.
 
 add_executable(
-  axiom_lp_tests
+  axiom_logical_plan_tests
   NameAllocatorTest.cpp
   NameMappingsTest.cpp
   ExprApiTest.cpp
   PlanBuilderTest.cpp
   PlanPrinterTest.cpp)
 
-add_test(axiom_lp_tests axiom_lp_tests)
+add_test(axiom_logical_plan_tests axiom_logical_plan_tests)
 
 target_link_libraries(
-  axiom_lp_tests
-  velox_fe_logical_plan_builder
-  velox_fe_logical_plan
-  velox_test_connector
+  axiom_logical_plan_tests
+  axiom_logical_plan_builder
+  axiom_logical_plan
+  axiom_test_connector
   GTest::gtest
   GTest::gtest_main
   GTest::gmock)

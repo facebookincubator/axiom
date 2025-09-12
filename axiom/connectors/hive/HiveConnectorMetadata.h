@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/Options.h"

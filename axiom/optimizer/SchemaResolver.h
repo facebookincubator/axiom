@@ -19,7 +19,7 @@
 #include <string>
 #include <utility>
 
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 
 namespace facebook::axiom::optimizer {
 

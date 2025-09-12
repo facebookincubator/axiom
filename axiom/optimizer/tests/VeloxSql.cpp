@@ -20,12 +20,12 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <iostream>
+#include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/SchemaResolver.h"
 #include "axiom/optimizer/VeloxHistory.h"
-#include "axiom/optimizer/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/optimizer/tests/PrestoParser.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/benchmarks/QueryBenchmarkBase.h"

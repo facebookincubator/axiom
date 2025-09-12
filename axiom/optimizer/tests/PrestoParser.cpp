@@ -17,8 +17,8 @@
 #include "axiom/optimizer/tests/PrestoParser.h"
 #include <algorithm>
 #include <cctype>
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
 #include "axiom/sql/presto/ParserHelper.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"

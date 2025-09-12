@@ -11,14 +11,27 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_subdirectory(hive)
-add_subdirectory(tpch)
 
-if(AXIOM_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
+velox_add_library(axiom_test_connector TestConnector.cpp)
 
-velox_add_library(velox_connector_metadata ConnectorMetadata.cpp)
+velox_link_libraries(
+  axiom_test_connector
+  axiom_connector_metadata
+  velox_common_base
+  velox_memory
+  velox_connector)
 
-velox_link_libraries(velox_connector_metadata velox_common_base velox_memory
-                     velox_connector)
+add_executable(axiom_test_connector_test TestConnectorTest.cpp)
+
+add_test(axiom_test_connector_test axiom_test_connector_test)
+
+target_link_libraries(
+  axiom_test_connector_test
+  axiom_test_connector
+  velox_common_base
+  velox_memory
+  velox_connector
+  velox_exec
+  velox_vector_test_lib
+  gtest
+  gtest_main)

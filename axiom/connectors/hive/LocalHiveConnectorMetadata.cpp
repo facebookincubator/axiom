@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include <dirent.h>
 #include <folly/Conv.h>
 #include <folly/FileUtil.h>

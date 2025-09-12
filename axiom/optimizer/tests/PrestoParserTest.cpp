@@ -17,9 +17,9 @@
 #include "axiom/optimizer/tests/PrestoParser.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
-#include "axiom/optimizer/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/optimizer/tests/LogicalPlanMatcher.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"

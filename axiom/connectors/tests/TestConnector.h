@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 
 namespace facebook::velox::connector {
 

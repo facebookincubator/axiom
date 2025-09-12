@@ -18,9 +18,9 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 
+#include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/optimizer/SchemaResolver.h"
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
-#include "axiom/optimizer/connectors/tests/TestConnector.h"
 
 using namespace facebook::velox;
 

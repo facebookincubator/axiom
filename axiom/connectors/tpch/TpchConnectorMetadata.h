@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/core/QueryCtx.h"

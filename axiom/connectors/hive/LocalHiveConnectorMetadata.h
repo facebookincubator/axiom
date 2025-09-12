@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "axiom/optimizer/connectors/hive/HiveConnectorMetadata.h"
-#include "axiom/optimizer/connectors/hive/StatisticsBuilder.h"
+#include "axiom/connectors/hive/HiveConnectorMetadata.h"
+#include "axiom/connectors/hive/StatisticsBuilder.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/hive/HiveConnector.h"

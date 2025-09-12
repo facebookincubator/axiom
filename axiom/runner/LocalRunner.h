@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/runner/MultiFragmentPlan.h"
 #include "axiom/runner/Runner.h"
 #include "velox/connectors/Connector.h"

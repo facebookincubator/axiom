@@ -31,7 +31,7 @@ add_library(axiom_runner_tests_utils DistributedPlanBuilder.cpp
 target_link_libraries(
   axiom_runner_tests_utils
   axiom_runner_local_runner
-  velox_hive_connector_metadata
+  axiom_hive_connector_metadata
   velox_temp_path
   velox_exec_test_lib
   velox_exec
@@ -39,34 +39,34 @@ target_link_libraries(
   velox_hive_connector
   velox_tpch_connector)
 
-add_executable(axiom_runner_tests_local_runner LocalRunnerTest.cpp Main.cpp)
+add_executable(axiom_runner_local_runner_test LocalRunnerTest.cpp Main.cpp)
 
-add_test(axiom_runner_tests_local_runner axiom_runner_tests_local_runner)
+add_test(axiom_runner_local_runner_test axiom_runner_local_runner_test)
 
 target_link_libraries(
-  axiom_runner_tests_local_runner
+  axiom_runner_local_runner_test
   axiom_runner_tests_utils
   velox_exec_test_lib
   velox_parse_parser
   velox_parse_expression
   GTest::gtest)
 
-add_library(axiom_runner_tests_presto_query_replay_runner
+add_library(axiom_runner_presto_query_replay_runner_test_utils
             PrestoQueryReplayRunner.cpp)
 
 target_link_libraries(
-  axiom_runner_tests_presto_query_replay_runner axiom_runner_local_runner
+  axiom_runner_presto_query_replay_runner_test_utils axiom_runner_local_runner
   velox_hive_connector velox_exec_test_lib)
 
-add_executable(axiom_runner_tests_presto_query_replay_runner_test
+add_executable(axiom_runner_presto_query_replay_runner_test
                PrestoQueryReplayRunnerTest.cpp Main.cpp)
 
-add_test(axiom_runner_tests_presto_query_replay_runner_test
-         axiom_runner_tests_presto_query_replay_runner_test)
+add_test(axiom_runner_presto_query_replay_runner_test
+         axiom_runner_presto_query_replay_runner_test)
 
 target_link_libraries(
-  axiom_runner_tests_presto_query_replay_runner_test
-  axiom_runner_tests_presto_query_replay_runner
+  axiom_runner_presto_query_replay_runner_test
+  axiom_runner_presto_query_replay_runner_test_utils
   velox_exec_test_lib
   velox_exec
   GTest::gtest)

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/runner/tests/DistributedPlanBuilder.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"

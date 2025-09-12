@@ -17,8 +17,8 @@
 #include "axiom/logical_plan/PlanPrinter.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/optimizer/connectors/tests/TestConnector.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
