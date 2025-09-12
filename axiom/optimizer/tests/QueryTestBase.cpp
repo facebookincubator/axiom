@@ -55,7 +55,7 @@ using namespace facebook::velox::exec;
 void QueryTestBase::SetUp() {
   axiom::runner::test::LocalRunnerTestBase::SetUp();
   connector_ = velox::connector::getConnector(exec::test::kHiveConnectorId);
-  rootPool_ = memory::memoryManager()->addRootPool("velox_sql");
+  rootPool_ = memory::memoryManager()->addRootPool("axiom_sql");
   optimizerPool_ = rootPool_->addLeafChild("optimizer");
 
   parquet::registerParquetReaderFactory();
