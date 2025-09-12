@@ -791,8 +791,9 @@ class RelationPlanner : public sql::AstVisitor {
         std::vector<lp::ExprApi> renames;
         renames.reserve(numColumns);
         for (auto i = 0; i < numColumns; ++i) {
-          renames.push_back(lp::Col(builder_->findOrAssignOutputNameAt(i))
-                                .as(columnAliases.at(i)->value()));
+          renames.push_back(
+              lp::Col(builder_->findOrAssignOutputNameAt(i))
+                  .as(columnAliases.at(i)->value()));
         }
 
         builder_->project(renames);
@@ -988,7 +989,8 @@ class RelationPlanner : public sql::AstVisitor {
       projections.emplace_back(expr);
     }
 
-    builder_->aggregate(groupingKeys, aggregates);
+    std::vector<lp::PlanBuilder::AggregateOptions> options(aggregates.size());
+    builder_->aggregate(groupingKeys, aggregates, options);
 
     const auto outputNames = builder_->findOrAssignOutputNames();
 

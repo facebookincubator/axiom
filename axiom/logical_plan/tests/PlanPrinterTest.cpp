@@ -333,7 +333,7 @@ TEST_F(PlanPrinterTest, aggregate) {
           testing::Eq("")));
 }
 
-TEST_F(PlanPrinterTest, aggregateExprDistinct) {
+TEST_F(PlanPrinterTest, distinctAgg) {
   auto rowType = ROW({"a", "b"}, {INTEGER(), INTEGER()});
   std::vector<Variant> data{
       Variant::row({1, 10}),
@@ -357,7 +357,7 @@ TEST_F(PlanPrinterTest, aggregateExprDistinct) {
           testing::Eq("")));
 }
 
-TEST_F(PlanPrinterTest, aggregateExprOrderBy) {
+TEST_F(PlanPrinterTest, sortedAgg) {
   auto rowType = ROW({"a", "b", "c"}, {INTEGER(), INTEGER(), INTEGER()});
   std::vector<Variant> data{
       Variant::row({1, 10, 100}),
@@ -383,7 +383,7 @@ TEST_F(PlanPrinterTest, aggregateExprOrderBy) {
           testing::Eq("")));
 }
 
-TEST_F(PlanPrinterTest, aggregateExprFilter) {
+TEST_F(PlanPrinterTest, maskedAgg) {
   auto rowType = ROW({"a", "b", "d"}, {INTEGER(), INTEGER(), BOOLEAN()});
   std::vector<Variant> data{
       Variant::row({1, 10, true}),
@@ -407,7 +407,7 @@ TEST_F(PlanPrinterTest, aggregateExprFilter) {
           testing::Eq("")));
 }
 
-TEST_F(PlanPrinterTest, aggregateExprComplex) {
+TEST_F(PlanPrinterTest, distinctSortedMaskedAgg) {
   auto rowType =
       ROW({"a", "b", "c", "d"}, {INTEGER(), INTEGER(), INTEGER(), BOOLEAN()});
   std::vector<Variant> data{

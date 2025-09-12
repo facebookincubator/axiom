@@ -388,21 +388,17 @@ PlanBuilder& PlanBuilder::aggregate(
   std::vector<AggregateExprPtr> exprs;
   exprs.reserve(aggregates.size());
 
-  bool optionsProvided = !options.empty();
-  VELOX_USER_CHECK(options.empty() || options.size() == aggregates.size());
+  VELOX_USER_CHECK(options.size() == aggregates.size());
   for (size_t i = 0; i < aggregates.size(); ++i) {
     const auto& aggregate = aggregates[i];
 
     AggregateExprPtr expr;
-    if (optionsProvided) {
       expr = resolveAggregateTypes(
           aggregate.expr(),
           options[i].filters,
           options[i].orderings,
           options[i].distinct);
-    } else {
-      expr = resolveAggregateTypes(aggregate.expr());
-    }
+    
 
     if (aggregate.name().has_value()) {
       const auto& alias = aggregate.name().value();
