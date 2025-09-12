@@ -127,10 +127,10 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main)
 
-add_executable(velox_sql VeloxSql.cpp)
+add_executable(axiom_sql AxiomSql.cpp)
 
 target_link_libraries(
-  velox_sql
+  axiom_sql
   axiom_runner_local_runner
   axiom_runner_multifragment_plan
   axiom_optimizer
@@ -149,12 +149,12 @@ target_link_libraries(
 
 add_subdirectory(utils)
 
-add_executable(velox_model_test ModelTest.cpp)
+add_executable(axiom_model_test ModelTest.cpp)
 
-add_test(velox_model_test velox_model_test)
+add_test(axiom_model_test axiom_model_test)
 
 target_link_libraries(
-  velox_model_test
+  axiom_model_test
   axiom_model
   Boost::headers
   glog::glog
