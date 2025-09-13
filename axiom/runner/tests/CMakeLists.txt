@@ -30,8 +30,8 @@ add_library(axiom_runner_tests_utils DistributedPlanBuilder.cpp
 
 target_link_libraries(
   axiom_runner_tests_utils
-  axiom_runner_local_runner
-  axiom_hive_connector_metadata
+  axiom_runner
+  axiom_hive_connector
   velox_temp_path
   velox_exec_test_lib
   velox_exec
@@ -55,7 +55,7 @@ add_library(axiom_runner_presto_query_replay_runner_test_utils
             PrestoQueryReplayRunner.cpp)
 
 target_link_libraries(
-  axiom_runner_presto_query_replay_runner_test_utils axiom_runner_local_runner
+  axiom_runner_presto_query_replay_runner_test_utils axiom_runner
   velox_hive_connector velox_exec_test_lib)
 
 add_executable(axiom_runner_presto_query_replay_runner_test

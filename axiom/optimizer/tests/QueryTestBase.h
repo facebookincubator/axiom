@@ -18,7 +18,7 @@
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <gflags/gflags.h>
-#include "axiom/optimizer/SchemaResolver.h"
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
@@ -87,7 +87,7 @@ class QueryTestBase : public axiom::runner::test::LocalRunnerTestBase {
   }
 
   OptimizerOptions optimizerOptions_;
-  std::shared_ptr<optimizer::SchemaResolver> schema_;
+  std::shared_ptr<connector::SchemaResolver> schema_;
 
  private:
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;

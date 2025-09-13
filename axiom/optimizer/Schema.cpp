@@ -99,7 +99,10 @@ Schema::Schema(
   }
 }
 
-Schema::Schema(const char* name, SchemaResolver* source, LocusCP locus)
+Schema::Schema(
+    const char* name,
+    connector::SchemaResolver* source,
+    LocusCP locus)
     : name_{name}, source_{source}, defaultLocus_{locus} {}
 
 SchemaTableCP Schema::findTable(

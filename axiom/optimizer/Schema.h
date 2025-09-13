@@ -16,8 +16,8 @@
 
 #pragma once
 
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/PlanObject.h"
-#include "axiom/optimizer/SchemaResolver.h"
 
 /// Schema representation for use in query planning. All objects are
 /// arena allocated for the duration of planning the query. We do
@@ -374,7 +374,7 @@ class Schema {
   Schema(Name name, const std::vector<SchemaTableCP>& tables, LocusCP locus);
 
   /// Constructs a Schema for producing executable plans, backed by 'source'.
-  Schema(Name name, SchemaResolver* source, LocusCP locus);
+  Schema(Name name, connector::SchemaResolver* source, LocusCP locus);
 
   /// Returns the table with 'name' or nullptr if not found, using
   /// the connector specified by connectorId to perform table lookups.
@@ -391,7 +391,7 @@ class Schema {
  private:
   Name name_;
   mutable NameMap<SchemaTableCP> tables_;
-  SchemaResolver* source_{nullptr};
+  connector::SchemaResolver* source_{nullptr};
   LocusCP defaultLocus_;
 };
 

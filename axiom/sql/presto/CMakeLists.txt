@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_library(axiom_sql_presto)
+
 add_subdirectory(grammar)
 add_subdirectory(ast)
-add_subdirectory(example)
+
+if(AXIOM_BUILD_TESTING)
+  add_subdirectory(example)
+endif()

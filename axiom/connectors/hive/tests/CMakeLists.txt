@@ -17,7 +17,7 @@ add_test(axiom_hive_connector_metadata_test axiom_hive_connector_metadata_test)
 
 target_link_libraries(
   axiom_hive_connector_metadata_test
-  axiom_hive_connector_metadata
+  axiom_hive_connector
   velox_hive_connector
   axiom_runner_tests_utils
   velox_hive_partition_function

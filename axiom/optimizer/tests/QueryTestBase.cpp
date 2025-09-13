@@ -21,9 +21,9 @@
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
-#include "axiom/optimizer/SchemaResolver.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -68,7 +68,7 @@ void QueryTestBase::SetUp() {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
 
-  schema_ = std::make_shared<optimizer::SchemaResolver>();
+  schema_ = std::make_shared<connector::SchemaResolver>();
   if (gSuiteHistory) {
     history_ = std::move(gSuiteHistory);
   } else {

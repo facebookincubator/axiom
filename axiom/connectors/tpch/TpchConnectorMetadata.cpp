@@ -16,7 +16,7 @@
 
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 
-#include "axiom/optimizer/SchemaUtils.h"
+#include "axiom/connectors/SchemaUtils.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
@@ -276,7 +276,7 @@ const std::unordered_map<std::string, const Column*>& TpchTable::columnMap()
 }
 
 std::string getQualifiedName(const std::string& name) {
-  axiom::optimizer::TableNameParser parser(name);
+  axiom::connector::TableNameParser parser(name);
   VELOX_CHECK(parser.valid(), "invalid table name '{}'", name);
   std::string qualifiedName;
   if (parser.schema().has_value()) {

@@ -16,9 +16,9 @@
 
 #include <gtest/gtest.h>
 
-#include "axiom/optimizer/SchemaUtils.h"
+#include "axiom/connectors/SchemaUtils.h"
 
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::connector {
 namespace {
 
 TEST(SchemaUtilsTest, basic) {
@@ -80,4 +80,4 @@ TEST(SchemaUtilsTest, invalidInput) {
 }
 
 } // namespace
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::connector

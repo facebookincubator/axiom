@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(axiom_test_connector TestConnector.cpp)
+add_library(axiom_test_connector TestConnector.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   axiom_test_connector
-  axiom_connector_metadata
+  axiom_connectors
   velox_common_base
   velox_memory
   velox_connector)
@@ -33,5 +33,17 @@ target_link_libraries(
   velox_connector
   velox_exec
   velox_vector_test_lib
+  gtest
+  gtest_main)
+
+add_executable(axiom_connectors_tests SchemaUtilsTest.cpp
+                                      SchemaResolverTest.cpp)
+
+add_test(axiom_connectors_tests axiom_connectors_tests)
+
+target_link_libraries(
+  axiom_connectors_tests
+  axiom_connectors
+  axiom_test_connector
   gtest
   gtest_main)

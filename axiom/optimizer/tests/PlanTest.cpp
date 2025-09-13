@@ -110,7 +110,7 @@ class PlanTest : public test::QueryTestBase {
   core::PlanNodePtr toSingleNodePlan(
       const lp::LogicalPlanNodePtr& logicalPlan,
       int32_t numDrivers = 1) {
-    schema_ = std::make_shared<optimizer::SchemaResolver>();
+    schema_ = std::make_shared<connector::SchemaResolver>();
 
     auto plan =
         planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers})
