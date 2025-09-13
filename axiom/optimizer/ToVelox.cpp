@@ -1627,7 +1627,7 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
   }
 
   auto* metadata =
-      velox::connector::ConnectorMetadata::metadata(tableLayout.connector());
+      connector::ConnectorMetadata::metadata(tableLayout.connector());
   auto session = queryCtx()->optimization()->options().session;
   auto handle = metadata->createInsertTableHandle(
       tableLayout,

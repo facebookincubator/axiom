@@ -122,7 +122,7 @@ TEST_F(TpchConnectorMetadataTest, createColumnHandle) {
   ASSERT_NE(columnHandle, nullptr);
 
   auto* tpchColumnHandle =
-      dynamic_cast<const connector::tpch::TpchColumnHandle*>(
+      dynamic_cast<const velox::connector::tpch::TpchColumnHandle*>(
           columnHandle.get());
   ASSERT_NE(tpchColumnHandle, nullptr);
   EXPECT_EQ(tpchColumnHandle->name(), "orderkey");
@@ -137,16 +137,16 @@ TEST_F(TpchConnectorMetadataTest, createTableHandle) {
   auto* tpchLayout =
       dynamic_cast<const connector::tpch::TpchTableLayout*>(layouts[0]);
 
-  std::vector<connector::ColumnHandlePtr> columnHandles;
-  std::vector<core::TypedExprPtr> empty;
+  std::vector<velox::connector::ColumnHandlePtr> columnHandles;
+  std::vector<velox::core::TypedExprPtr> empty;
   auto evaluator =
-      std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
+      std::make_unique<velox::exec::SimpleExpressionEvaluator>(nullptr, nullptr);
   auto tableHandle = metadata_->createTableHandle(
       *layouts[0], columnHandles, *evaluator, empty, empty);
   ASSERT_NE(tableHandle, nullptr);
 
   auto* tpchTableHandle =
-      dynamic_cast<const connector::tpch::TpchTableHandle*>(tableHandle.get());
+      dynamic_cast<const velox::connector::tpch::TpchTableHandle*>(tableHandle.get());
   ASSERT_NE(tpchTableHandle, nullptr);
 
   EXPECT_EQ(tpchTableHandle->getTable(), tpchLayout->getTpchTable());
@@ -164,10 +164,10 @@ TEST_F(TpchConnectorMetadataTest, splitGeneration) {
   auto splitManager = metadata_->splitManager();
   ASSERT_NE(splitManager, nullptr);
 
-  std::vector<connector::ColumnHandlePtr> columnHandles;
-  std::vector<core::TypedExprPtr> empty;
+  std::vector<velox::connector::ColumnHandlePtr> columnHandles;
+  std::vector<velox::core::TypedExprPtr> empty;
   auto evaluator =
-      std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
+      std::make_unique<velox::exec::SimpleExpressionEvaluator>(nullptr, nullptr);
   auto tableHandle = metadata_->createTableHandle(
       *layouts[0], columnHandles, *evaluator, empty, empty);
   ASSERT_NE(tableHandle, nullptr);

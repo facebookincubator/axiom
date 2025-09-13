@@ -49,7 +49,7 @@ class HivePartitionType : public connector::PartitionType {
  public:
   HivePartitionType(
       int32_t numBuckets,
-      std::vector<TypePtr> partitionKeyTypes = {})
+      std::vector<velox::TypePtr> partitionKeyTypes = {})
       : numBuckets_(numBuckets),
         partitionKeyTypes_(std::move(partitionKeyTypes)) {}
 
@@ -62,12 +62,12 @@ class HivePartitionType : public connector::PartitionType {
   // buckets.
   const PartitionType* copartition(const PartitionType& any) const override;
 
-  core::PartitionFunctionSpecPtr makeSpec(
-      const std::vector<column_index_t>& channels,
-      const std::vector<VectorPtr>& constants,
+  velox::core::PartitionFunctionSpecPtr makeSpec(
+      const std::vector<velox::column_index_t>& channels,
+      const std::vector<velox::VectorPtr>& constants,
       bool isLocal) const override;
 
-  const std::vector<TypePtr>& partitionKeyTypes() const override {
+  const std::vector<velox::TypePtr>& partitionKeyTypes() const override {
     return partitionKeyTypes_;
   }
 
@@ -75,7 +75,7 @@ class HivePartitionType : public connector::PartitionType {
 
  private:
   const int32_t numBuckets_;
-  const std::vector<TypePtr> partitionKeyTypes_;
+  const std::vector<velox::TypePtr> partitionKeyTypes_;
 };
 
 /// Describes a Hive table layout. Adds a file format and a list of
@@ -111,7 +111,7 @@ class HiveTableLayout : public TableLayout {
     return partitionColumns().empty() ? nullptr : &partitionType_;
   }
 
-  dwio::common::FileFormat fileFormat() const {
+  velox::dwio::common::FileFormat fileFormat() const {
     return fileFormat_;
   }
 
@@ -129,9 +129,9 @@ class HiveTableLayout : public TableLayout {
   const std::optional<int32_t> numBuckets_;
 
  private:
-  static std::vector<TypePtr> extractPartitionKeyTypes(
+  static std::vector<velox::TypePtr> extractPartitionKeyTypes(
       const std::vector<const Column*>& partitionColumns) {
-    std::vector<TypePtr> types;
+    std::vector<velox::TypePtr> types;
     types.reserve(partitionColumns.size());
     for (const auto* column : partitionColumns) {
       types.push_back(column->type());
@@ -168,7 +168,7 @@ class HiveConnectorMetadata : public ConnectorMetadata {
 
   velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
-      const RowTypePtr& rowType,
+      const velox::RowTypePtr& rowType,
       const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) override;

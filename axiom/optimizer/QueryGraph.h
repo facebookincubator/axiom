@@ -924,8 +924,8 @@ using NameVector = std::vector<Name, QGAllocator<Name>>;
 class WritePlan : public PlanObject {
  public:
   WritePlan(
-      const velox::connector::TableLayout& layout,
-      velox::connector::WriteKind kind,
+      const connector::TableLayout& layout,
+      connector::WriteKind kind,
       NameVector columnNames,
       ExprVector columnExpressions,
       ColumnVector output,
@@ -938,11 +938,11 @@ class WritePlan : public PlanObject {
         output_{std::move(output)},
         options_{options} {}
 
-  const velox::connector::TableLayout& layout() const {
+  const connector::TableLayout& layout() const {
     return layout_;
   }
 
-  velox::connector::WriteKind kind() const {
+  connector::WriteKind kind() const {
     return kind_;
   }
 
@@ -963,8 +963,8 @@ class WritePlan : public PlanObject {
   }
 
  private:
-  const velox::connector::TableLayout& layout_;
-  velox::connector::WriteKind kind_;
+  const connector::TableLayout& layout_;
+  connector::WriteKind kind_;
   NameVector columnNames_;
   ExprVector columnExpressions_;
   ColumnVector output_;

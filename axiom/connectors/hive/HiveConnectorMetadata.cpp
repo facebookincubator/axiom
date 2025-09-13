@@ -49,11 +49,11 @@ const PartitionType* HivePartitionType::copartition(
   return nullptr;
 }
 
-core::PartitionFunctionSpecPtr HivePartitionType::makeSpec(
-    const std::vector<column_index_t>& channels,
-    const std::vector<VectorPtr>& constants,
+velox::core::PartitionFunctionSpecPtr HivePartitionType::makeSpec(
+    const std::vector<velox::column_index_t>& channels,
+    const std::vector<velox::VectorPtr>& constants,
     bool isLocal) const {
-  return std::make_shared<HivePartitionFunctionSpec>(
+  return std::make_shared<velox::connector::hive::HivePartitionFunctionSpec>(
       numBuckets_, channels, constants);
 }
 
@@ -160,7 +160,7 @@ HiveConnectorMetadata::createTableHandle(
 velox::connector::ConnectorInsertTableHandlePtr
 HiveConnectorMetadata::createInsertTableHandle(
     const TableLayout& layout,
-    const RowTypePtr& rowType,
+    const velox::RowTypePtr& rowType,
     const folly::F14FastMap<std::string, std::string>& options,
     WriteKind kind,
     const ConnectorSessionPtr& session) {
@@ -256,4 +256,4 @@ void HiveConnectorMetadata::validateOptions(
   }
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::axiom::connector::hive

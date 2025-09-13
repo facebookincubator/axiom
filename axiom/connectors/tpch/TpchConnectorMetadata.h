@@ -199,9 +199,9 @@ class TpchConnectorMetadata : public ConnectorMetadata {
       velox::RowTypePtr dataColumns = nullptr,
       std::optional<LookupKeys> = std::nullopt) override;
 
-  ConnectorInsertTableHandlePtr createInsertTableHandle(
+  velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
-      const RowTypePtr& rowType,
+      const velox::RowTypePtr& rowType,
       const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) override {
@@ -210,11 +210,11 @@ class TpchConnectorMetadata : public ConnectorMetadata {
 
   void finishWrite(
       const TableLayout& layout,
-      const ConnectorInsertTableHandlePtr& handle,
+      const velox::connector::ConnectorInsertTableHandlePtr& handle,
       WriteKind kind,
       const ConnectorSessionPtr& session,
       bool success,
-      const std::vector<RowVectorPtr>& results) override {
+      const std::vector<velox::RowVectorPtr>& results) override {
     VELOX_UNSUPPORTED();
   }
 

@@ -24,9 +24,9 @@
 
 namespace facebook::axiom::optimizer {
 
-const velox::connector::PartitionType* copartitionType(
-    const velox::connector::PartitionType* first,
-    const velox::connector::PartitionType* second) {
+const connector::PartitionType* copartitionType(
+    const connector::PartitionType* first,
+    const connector::PartitionType* second) {
   if (!first || !second) {
     return nullptr;
   }

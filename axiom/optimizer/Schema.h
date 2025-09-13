@@ -31,9 +31,9 @@ namespace facebook::axiom::optimizer {
 /// the repartition partitioning to do copartition with the two. If
 /// there is no copartition possibility or if either or both are
 /// nullptr, returns nullptr.
-const velox::connector::PartitionType* copartitionType(
-    const velox::connector::PartitionType* first,
-    const velox::connector::PartitionType* second);
+const connector::PartitionType* copartitionType(
+    const connector::PartitionType* first,
+    const connector::PartitionType* second);
 
 // TODO: It seems like QGAllocator doesn't work for folly F14 containers.
 // Investigate and fix.
@@ -137,15 +137,15 @@ struct DistributionType {
   }
 
   static bool typesCompatible(
-      const velox::connector::PartitionType* left,
-      const velox::connector::PartitionType* right) {
+      const connector::PartitionType* left,
+      const connector::PartitionType* right) {
     return copartitionType(left, right) != nullptr;
   }
 
   LocusCP locus{nullptr};
   /// Partition function. nullptr means Velox default,
   /// copartitioned only with itself.
-  const velox::connector::PartitionType* partitionType{nullptr};
+  const connector::PartitionType* partitionType{nullptr};
   int32_t numPartitions{1};
   bool isGather{false};
 
@@ -392,7 +392,7 @@ class Schema {
 
   struct Table {
     SchemaTableCP schemaTable{nullptr};
-    velox::connector::TablePtr connectorTable;
+    connector::TablePtr connectorTable;
   };
 
   /// Returns the table with 'name' or nullptr if not found, using

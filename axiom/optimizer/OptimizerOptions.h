@@ -21,11 +21,11 @@
 #include <string>
 #include <vector>
 
-namespace facebook::velox::connector {
+namespace facebook::axiom::connector {
 
 class ConnectorSession;
 
-} // namespace facebook::velox::connector
+} // namespace facebook::axiom::connector
 namespace facebook::axiom::optimizer {
 
 struct OptimizerOptions {
@@ -66,7 +66,7 @@ struct OptimizerOptions {
   uint32_t traceFlags{0};
 
   /// ConnectorSession, needed for write operations.
-  std::shared_ptr<velox::connector::ConnectorSession> session;
+  std::shared_ptr<connector::ConnectorSession> session;
 
   bool isMapAsStruct(const char* table, const char* column) const {
     if (allMapsAsStruct) {

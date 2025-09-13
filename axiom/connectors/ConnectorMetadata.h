@@ -101,8 +101,8 @@ class Column {
 
   Column(
       std::string name,
-      TypePtr type,
-      std::optional<Variant> defaultValue = {})
+      velox::TypePtr type,
+      std::optional<velox::Variant> defaultValue = {})
       : name_{std::move(name)},
         type_{std::move(type)},
         defaultValue_{makeDefaultValue(type_, std::move(defaultValue))} {}
@@ -135,7 +135,7 @@ class Column {
     return type_;
   }
 
-  const Variant& defaultValue() const {
+  const velox::Variant& defaultValue() const {
     return defaultValue_;
   }
 
@@ -150,8 +150,8 @@ class Column {
 
  protected:
   const std::string name_;
-  const TypePtr type_;
-  const Variant defaultValue_;
+  const velox::TypePtr type_;
+  const velox::Variant defaultValue_;
 
   // The latest element added to 'allStats_'.
   velox::tsan_atomic<ColumnStatistics*> latestStats_{nullptr};
@@ -161,9 +161,9 @@ class Column {
   std::vector<std::unique_ptr<ColumnStatistics>> allStats_;
 
  private:
-  static Variant makeDefaultValue(
-      const TypePtr& type,
-      std::optional<Variant>&& value);
+  static velox::Variant makeDefaultValue(
+      const velox::TypePtr& type,
+      std::optional<velox::Variant>&& value);
 
   // Serializes changes to statistics.
   std::mutex mutex_;
@@ -204,7 +204,7 @@ class PartitionType {
   }
 
   /// Returns the types of the partitioning keys. Empty if no partitioning.
-  virtual const std::vector<TypePtr>& partitionKeyTypes() const = 0;
+  virtual const std::vector<velox::TypePtr>& partitionKeyTypes() const = 0;
 
   /// Returns a factory that makes partition functions. The function
   /// gets a RowVector and calculates a partition number from the
@@ -212,9 +212,9 @@ class PartitionType {
   /// kConstantChannel then the corresponding element of 'constants'
   /// is used. 'isLocal' differentiates between remote and ocal
   /// exchange.
-  virtual core::PartitionFunctionSpecPtr makeSpec(
-      const std::vector<column_index_t>& channels,
-      const std::vector<VectorPtr>& constants,
+  virtual velox::core::PartitionFunctionSpecPtr makeSpec(
+      const std::vector<velox::column_index_t>& channels,
+      const std::vector<velox::VectorPtr>& constants,
       bool isLocal) const = 0;
 
   virtual std::string toString() const = 0;
@@ -657,7 +657,7 @@ class ConnectorMetadata {
   /// Returns column handles whose value uniquely identifies a row for creating
   /// an update or delete record. These may be for example some connector
   /// specific opaque row id or primary key columns.
-  virtual std::vector<ColumnHandlePtr> rowIdHandles(
+  virtual std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
       const TableLayout& layout,
       WriteKind kind) = 0;
 
@@ -691,11 +691,11 @@ class ConnectorMetadata {
   /// In this case 'result' may be empty.
   virtual void finishWrite(
       const TableLayout& layout,
-      const ConnectorInsertTableHandlePtr& handle,
+      const velox::connector::ConnectorInsertTableHandlePtr& handle,
       WriteKind kind,
       const ConnectorSessionPtr& session,
       bool success,
-      const std::vector<RowVectorPtr>& results) = 0;
+      const std::vector<velox::RowVectorPtr>& results) = 0;
 };
 
 } // namespace facebook::axiom::connector

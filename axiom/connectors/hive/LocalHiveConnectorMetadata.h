@@ -236,11 +236,11 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   void finishWrite(
       const TableLayout& layout,
-      const ConnectorInsertTableHandlePtr& handle,
+      const velox::connector::ConnectorInsertTableHandlePtr& handle,
       WriteKind /*kind*/,
       const ConnectorSessionPtr& /*session*/,
       bool success,
-      const std::vector<RowVectorPtr>& /*results*/) override;
+      const std::vector<velox::RowVectorPtr>& /*results*/) override;
 
   /// Creates a table. 'tableName' is a name with optional 'schema.'
   /// followed by table name. The connector gives the first part of
@@ -284,8 +284,6 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   std::string makeStagingDirectory() override;
 
-  std::string makeStagingDirectory() override;
-
   std::shared_ptr<velox::connector::hive::LocationHandle> makeLocationHandle(
       std::string targetDirectory,
       std::optional<std::string> writeDirectory = std::nullopt,
@@ -310,12 +308,12 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   mutable std::mutex mutex_;
   mutable bool initialized_{false};
-  std::shared_ptr<memory::MemoryPool> rootPool_{
-      memory::memoryManager()->addRootPool()};
-  std::shared_ptr<memory::MemoryPool> schemaPool_;
-  std::shared_ptr<core::QueryCtx> queryCtx_;
-  std::shared_ptr<ConnectorQueryCtx> connectorQueryCtx_;
-  dwio::common::FileFormat format_;
+  std::shared_ptr<velox::memory::MemoryPool> rootPool_{
+      velox::memory::memoryManager()->addRootPool()};
+  std::shared_ptr<velox::memory::MemoryPool> schemaPool_;
+  std::shared_ptr<velox::core::QueryCtx> queryCtx_;
+  std::shared_ptr<velox::connector::ConnectorQueryCtx> connectorQueryCtx_;
+  velox::dwio::common::FileFormat format_;
   folly::F14FastMap<std::string, std::shared_ptr<LocalTable>> tables_;
   LocalHiveSplitManager splitManager_;
 };

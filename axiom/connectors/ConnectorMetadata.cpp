@@ -18,13 +18,13 @@
 
 namespace facebook::axiom::connector {
 
-Variant Column::makeDefaultValue(
-    const TypePtr& type,
-    std::optional<Variant>&& value) {
+velox::Variant Column::makeDefaultValue(
+    const velox::TypePtr& type,
+    std::optional<velox::Variant>&& value) {
   if (value.has_value()) {
     return std::move(value).value();
   }
-  return Variant::null(type->kind());
+  return velox::Variant::null(type->kind());
 }
 
 namespace {

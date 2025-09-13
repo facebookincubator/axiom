@@ -806,7 +806,7 @@ fs::path createTemporaryDirectory(const fs::path& parentDir) {
       uint32_t randomNumber = dis(gen);
       tempDirPath = parentDir / ("temp_" + std::to_string(randomNumber));
     } while (fs::exists(tempDirPath));
-    if (common::generateFileDirectory(tempDirPath.c_str())) {
+    if (velox::common::generateFileDirectory(tempDirPath.c_str())) {
       return tempDirPath;
     }
   }
@@ -859,7 +859,7 @@ void createDir(const std::string& path) {
 
 void LocalHiveConnectorMetadata::createTable(
     const std::string& tableName,
-    const RowTypePtr& rowType,
+    const velox::RowTypePtr& rowType,
     const folly::F14FastMap<std::string, std::string>& options,
     const ConnectorSessionPtr& session,
     bool errorIfExists,
@@ -977,12 +977,14 @@ void LocalHiveConnectorMetadata::dropTable(const std::string& tableName) {
 
 void LocalHiveConnectorMetadata::finishWrite(
     const TableLayout& layout,
-    const ConnectorInsertTableHandlePtr& handle,
+    const velox::connector::ConnectorInsertTableHandlePtr& handle,
     WriteKind /*kind*/,
     const ConnectorSessionPtr& /*session*/,
     bool success,
-    const std::vector<RowVectorPtr>& /*results*/) {
-  auto localHandle = dynamic_cast<const HiveInsertTableHandle*>(handle.get());
+    const std::vector<velox::RowVectorPtr>& /*results*/) {
+  auto localHandle =
+      dynamic_cast<const velox::connector::hive::HiveInsertTableHandle*>(
+          handle.get());
   std::lock_guard l{mutex_};
   if (!success) {
     deleteDirectoryContents(localHandle->locationHandle()->writePath());
@@ -992,10 +994,6 @@ void LocalHiveConnectorMetadata::finishWrite(
       localHandle->locationHandle()->writePath(),
       localHandle->locationHandle()->targetPath());
   loadTable(layout.table().name(), localHandle->locationHandle()->targetPath());
-}
-
-std::string LocalHiveConnectorMetadata::makeStagingDirectory() {
-  return createTemporaryDirectory(fmt::format("{}/.staging", dataPath()));
 }
 
 std::string LocalHiveConnectorMetadata::makeStagingDirectory() {

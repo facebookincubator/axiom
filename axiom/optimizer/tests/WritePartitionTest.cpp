@@ -40,7 +40,7 @@ class WritePartitionTest : public test::HiveQueriesTestBase {
 
   void SetUp() override {
     HiveQueriesTestBase::SetUp();
-    connector_ = connector::getConnector(exec::test::kHiveConnectorId);
+    connector_ = velox::connector::getConnector(exec::test::kHiveConnectorId);
     metadata_ = dynamic_cast<connector::hive::LocalHiveConnectorMetadata*>(
         connector::ConnectorMetadata::metadata(exec::test::kHiveConnectorId));
     optimizerOptions_.session =
@@ -91,7 +91,7 @@ class WritePartitionTest : public test::HiveQueriesTestBase {
     return exprs;
   }
 
-  std::shared_ptr<connector::Connector> connector_;
+  std::shared_ptr<velox::connector::Connector> connector_;
   connector::hive::LocalHiveConnectorMetadata* metadata_;
   connector::ConnectorSessionPtr session_{
       std::make_shared<connector::hive::HiveConnectorSession>()};

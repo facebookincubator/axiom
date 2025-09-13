@@ -1453,7 +1453,7 @@ PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
 
   currentDt_->write = make<WritePlan>(
       *tableLayout,
-      static_cast<velox::connector::WriteKind>(tableWrite.kind()),
+      static_cast<connector::WriteKind>(tableWrite.kind()),
       std::move(columnNames),
       std::move(columnExpressions),
       std::move(outputColumns),
