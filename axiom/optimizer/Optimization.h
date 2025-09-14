@@ -242,13 +242,13 @@ class Optimization {
   void tryNextJoins(PlanState& state, const std::vector<NextJoin>& nextJoins);
 
   void crossJoins(
-      const RelationOpPtr& plan,
+      RelationOpPtr plan,
       std::vector<JoinCandidate>& crossJoins,
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
   RelationOpPtr crossJoin(
-      const RelationOpPtr& plan,
+      RelationOpPtr plan,
       const JoinCandidate& candidate,
       PlanState& state);
 

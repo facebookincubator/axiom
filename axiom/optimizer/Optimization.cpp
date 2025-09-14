@@ -380,27 +380,19 @@ Optimization::nextJoins(PlanState& state) {
 }
 
 void Optimization::crossJoins(
-    const RelationOpPtr& plan,
+    RelationOpPtr plan,
     std::vector<JoinCandidate>& crossJoins,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
-  if (crossJoins.empty()) {
-    return;
-  }
+  PlanStateSaver save{state};
 
-  PlanStateSaver save(state);
+  std::ranges::sort(crossJoins, [](const auto& left, const auto& right) {
+    return left.fanout > right.fanout;
+  });
 
-  std::sort(
-      crossJoins.begin(),
-      crossJoins.end(),
-      [](const JoinCandidate& left, const JoinCandidate& right) {
-        return left.fanout > right.fanout;
-      });
-
-  auto crossJoinPlan = plan;
+  auto crossJoinPlan = std::move(plan);
   for (const auto& join : crossJoins) {
-    LOG(ERROR) << "Cross join: " << join.toString();
-    crossJoinPlan = crossJoin(crossJoinPlan, join, state);
+    crossJoinPlan = crossJoin(std::move(crossJoinPlan), join, state);
   }
 
   state.addNextJoin(nullptr, crossJoinPlan, {}, toTry);
@@ -747,7 +739,7 @@ void Optimization::addPostprocess(
 }
 
 RelationOpPtr Optimization::crossJoin(
-    const RelationOpPtr& plan,
+    RelationOpPtr plan,
     const JoinCandidate& candidate,
     PlanState& state) {
   PlanObjectSet broadcastTables;
