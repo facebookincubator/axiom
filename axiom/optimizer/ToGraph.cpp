@@ -1800,7 +1800,6 @@ PlanObjectP ToGraph::makeQueryGraph(
       return currentDt_;
     }
 
-
     case lp::NodeKind::kTableWrite:
       wrapInDt(*node.onlyInput());
       return addWrite(*node.asUnchecked<lp::TableWriteNode>());

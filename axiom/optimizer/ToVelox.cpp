@@ -559,7 +559,8 @@ class TempProjections {
 
   velox::core::FieldAccessTypedExprPtr toFieldRef(
       ExprCP expr,
-      const std::string* optName = nullptr) {
+      const std::string* optName = nullptr,
+      bool forceNewName = true) {
     auto [it, emplaced] =
         exprChannel_.emplace(expr, Channel{nextChannel_, true});
     if (emplaced) {

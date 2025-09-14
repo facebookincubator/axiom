@@ -57,8 +57,8 @@ std::vector<ColumnCP> SchemaTable::toColumns(
 
 ColumnGroupCP SchemaTable::addIndex(
     const char* name,
-    int32_t numKeysUnique,
-    int32_t numOrdering,
+    uint32_t numKeysUnique,
+    uint32_t numOrdering,
     const ColumnVector& keys,
     DistributionType distributionType,
     const ColumnVector& partition,
@@ -162,7 +162,7 @@ SchemaTableCP Schema::findTable(
 
   schemaTable->addIndex(
       toName("pk"),
-      layout->uniquePrifixColumns(),
+      layout->uniquePrefixColumns(),
       order.size(),
       order,
       distribution,

@@ -301,9 +301,9 @@ class TableLayout {
     return lookupKeys_;
   }
 
-  ///  Numb er of leading equalities  on orderColumns or lookupKeys needed to
-  ///  get exactly one or zero matches.
-  virtual int32_t uniquePrifixColumns() const {
+  /// Number of leading equalities on orderColumns or lookupKeys needed to get
+  /// exactly one or zero matches.
+  virtual uint32_t uniquePrefixColumns() const {
     return 0;
   }
 

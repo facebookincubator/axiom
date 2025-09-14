@@ -139,14 +139,15 @@ TEST_F(TpchConnectorMetadataTest, createTableHandle) {
 
   std::vector<velox::connector::ColumnHandlePtr> columnHandles;
   std::vector<velox::core::TypedExprPtr> empty;
-  auto evaluator =
-      std::make_unique<velox::exec::SimpleExpressionEvaluator>(nullptr, nullptr);
+  auto evaluator = std::make_unique<velox::exec::SimpleExpressionEvaluator>(
+      nullptr, nullptr);
   auto tableHandle = metadata_->createTableHandle(
       *layouts[0], columnHandles, *evaluator, empty, empty);
   ASSERT_NE(tableHandle, nullptr);
 
   auto* tpchTableHandle =
-      dynamic_cast<const velox::connector::tpch::TpchTableHandle*>(tableHandle.get());
+      dynamic_cast<const velox::connector::tpch::TpchTableHandle*>(
+          tableHandle.get());
   ASSERT_NE(tpchTableHandle, nullptr);
 
   EXPECT_EQ(tpchTableHandle->getTable(), tpchLayout->getTpchTable());
@@ -166,8 +167,8 @@ TEST_F(TpchConnectorMetadataTest, splitGeneration) {
 
   std::vector<velox::connector::ColumnHandlePtr> columnHandles;
   std::vector<velox::core::TypedExprPtr> empty;
-  auto evaluator =
-      std::make_unique<velox::exec::SimpleExpressionEvaluator>(nullptr, nullptr);
+  auto evaluator = std::make_unique<velox::exec::SimpleExpressionEvaluator>(
+      nullptr, nullptr);
   auto tableHandle = metadata_->createTableHandle(
       *layouts[0], columnHandles, *evaluator, empty, empty);
   ASSERT_NE(tableHandle, nullptr);

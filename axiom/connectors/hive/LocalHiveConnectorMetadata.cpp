@@ -815,15 +815,13 @@ fs::path createTemporaryDirectory(const fs::path& parentDir) {
 void moveFilesRecursively(
     const fs::path& sourceDir,
     const fs::path& targetDir) {
-  if (!fs::exists(sourceDir) || !fs::is_directory(sourceDir)) {
+  if (!fs::is_directory(sourceDir)) {
     throw std::runtime_error(
         "Source directory does not exist or is not a directory: " +
         sourceDir.string());
   }
   // Create the target directory if it doesn't exist
-  if (!fs::exists(targetDir)) {
-    fs::create_directories(targetDir);
-  }
+  fs::create_directories(targetDir);
   // Recursively iterate through the source directory
   for (const auto& entry : fs::recursive_directory_iterator(sourceDir)) {
     if (entry.is_regular_file()) {

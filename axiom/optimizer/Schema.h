@@ -167,7 +167,7 @@ struct Distribution {
       ExprVector partition,
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {},
-      int32_t numKeysUnique = 0,
+      uint32_t numKeysUnique = 0,
       float spacing = 0)
       : distributionType{distributionType},
         partition{std::move(partition)},
@@ -229,7 +229,7 @@ struct Distribution {
   // Number of leading elements of 'order' such that these uniquely
   // identify a row. 0 if there is no uniqueness. This can be non-0 also if
   // data is not sorted. This indicates a uniqueness for joining.
-  int32_t numKeysUnique{0};
+  uint32_t numKeysUnique{0};
 
   // Specifies the selectivity between the source of the ordered data
   // and 'this'. For example, if orders join lineitem and both are
@@ -332,8 +332,8 @@ struct SchemaTable {
   /// Distribution.
   ColumnGroupCP addIndex(
       Name name,
-      int32_t numKeysUnique,
-      int32_t numOrdering,
+      uint32_t numKeysUnique,
+      uint32_t numOrdering,
       const ColumnVector& keys,
       DistributionType distributionType,
       const ColumnVector& partition,
@@ -389,11 +389,6 @@ class Schema {
  public:
   /// Constructs a Schema for producing executable plans, backed by 'source'.
   Schema(Name name, SchemaResolver* source, LocusCP locus);
-
-  struct Table {
-    SchemaTableCP schemaTable{nullptr};
-    connector::TablePtr connectorTable;
-  };
 
   /// Returns the table with 'name' or nullptr if not found, using
   /// the connector specified by connectorId to perform table lookups.
