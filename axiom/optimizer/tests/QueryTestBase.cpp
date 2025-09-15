@@ -37,8 +37,8 @@ DEFINE_uint32(optimizer_trace, 0, "Optimizer trace level");
 
 DEFINE_bool(print_plan, false, "Print optimizer results");
 
-DEFINE_int32(num_drivers, 4, "Number of drivers");
-DEFINE_int32(num_workers, 4, "Number of in-process workers");
+DEFINE_uint32(num_drivers, 4, "Number of drivers");
+DEFINE_uint32(num_workers, 4, "Number of in-process workers");
 
 DEFINE_string(data_format, "parquet", "Data format");
 

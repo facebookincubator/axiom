@@ -211,7 +211,7 @@ void LocalRunner::abort() {
   }
 }
 
-void LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
+void LocalRunner::waitForCompletion(uint32_t maxWaitMicros) {
   VELOX_CHECK_NE(state_, State::kInitialized);
   std::vector<velox::ContinueFuture> futures;
   {

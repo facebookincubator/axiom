@@ -78,7 +78,7 @@ DECLARE_bool(include_custom_stats);
 
 DEFINE_int32(max_rows, 100, "Max number of printed result rows");
 
-DEFINE_int32(num_workers, 4, "Number of in-process workers");
+DEFINE_uint32(num_workers, 4, "Number of in-process workers");
 
 // Defined in velox/benchmarks/QueryBenchmarkBase.cpp
 DECLARE_int32(num_drivers);
@@ -523,8 +523,10 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       const optimizer::PlanAndStats& planAndStats,
       const std::shared_ptr<core::QueryCtx>& queryCtx) {
     connector::SplitOptions splitOptions{
-        .targetSplitCount = FLAGS_num_workers * FLAGS_num_drivers * 2,
-        .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
+        .targetSplitCount =
+            static_cast<int32_t>(FLAGS_num_workers * FLAGS_num_drivers * 2),
+        .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes),
+    };
 
     return std::make_shared<facebook::axiom::runner::LocalRunner>(
         planAndStats.plan,

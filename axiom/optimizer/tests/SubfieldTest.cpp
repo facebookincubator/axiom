@@ -28,7 +28,7 @@
 DEFINE_string(subfield_data_path, "", "Data directory for subfield test data");
 DECLARE_uint32(optimizer_trace);
 
-DECLARE_int32(num_workers);
+DECLARE_uint32(num_workers);
 
 namespace facebook::axiom::optimizer {
 namespace {

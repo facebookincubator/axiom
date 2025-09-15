@@ -76,7 +76,7 @@ void HiveQueriesTestBase::checkResults(
   }
 
   // Single node.
-  for (auto numDrivers : {1, 4}) {
+  for (uint32_t numDrivers : {1, 4}) {
     SCOPED_TRACE(fmt::format("numWorkers: 1, numDrivers: {}", numDrivers));
     auto plan =
         planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers});
@@ -99,7 +99,7 @@ void HiveQueriesTestBase::checkResults(
   }
 
   // Single node.
-  for (auto numDrivers : {1, 4}) {
+  for (uint32_t numDrivers : {1, 4}) {
     SCOPED_TRACE(fmt::format("numWorkers: 1, numDrivers: {}", numDrivers));
     auto plan =
         planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers});

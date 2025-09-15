@@ -84,7 +84,7 @@ class LocalRunner : public Runner,
       std::shared_ptr<velox::core::QueryCtx> queryCtx)
       : LocalRunner(
             plan,
-            queryCtx,
+            std::move(queryCtx),
             std::make_shared<ConnectorSplitSourceFactory>()) {}
 
   /// First call starts execution.
@@ -123,7 +123,7 @@ class LocalRunner : public Runner,
   /// Best-effort attempt to cancel the execution.
   void abort() override;
 
-  void waitForCompletion(int32_t maxWaitMicros) override;
+  void waitForCompletion(uint32_t maxWaitMicros) override;
 
   State state() const override {
     return state_;

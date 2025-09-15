@@ -100,7 +100,7 @@ class PlanTest : public test::QueryTestBase {
 
   velox::core::PlanNodePtr toSingleNodePlan(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
-      int32_t numDrivers = 1) {
+      uint32_t numDrivers = 1) {
     schema_ = std::make_shared<SchemaResolver>();
 
     auto plan =

@@ -40,19 +40,17 @@ std::vector<velox::RowVectorPtr> readCursor(
   }
   return result;
 }
-} // namespace
 
 const std::string kHiveConnectorId = "test-hive";
-const int32_t kWaitTimeoutUs = 5'000'000;
-const int32_t kDefaultWidth = 2;
-const int32_t kDefaultMaxDrivers = 4;
 const std::string kFinalTaskPrefix = "final";
+
+} // namespace
 
 PrestoQueryReplayRunner::PrestoQueryReplayRunner(
     velox::memory::MemoryPool* pool,
     TaskPrefixExtractor taskPrefixExtractor,
-    int32_t width,
-    int32_t maxDrivers,
+    uint32_t width,
+    uint32_t maxDrivers,
     const std::unordered_map<std::string, std::string>& config,
     const std::unordered_map<std::string, std::string>& hiveConfig)
     : pool_{pool},
