@@ -390,6 +390,9 @@ std::string JoinCandidate::toString() const {
   std::stringstream out;
   if (join) {
     out << join->toString();
+  } else {
+    out << "cross join ";
+    out << tables[0]->toString();
   }
   out << " fanout " << fanout;
   for (auto i = 1; i < tables.size(); ++i) {
