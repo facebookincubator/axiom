@@ -55,18 +55,12 @@ class QueryTestBase : public axiom::runner::test::LocalRunnerTestBase {
 
   optimizer::PlanAndStats planVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
+      const axiom::runner::MultiFragmentPlan::Options& options = {},
       std::string* planString = nullptr);
-
-  optimizer::PlanAndStats planVelox(
-      const logical_plan::LogicalPlanNodePtr& plan,
-      const axiom::runner::MultiFragmentPlan::Options& options,
-      std::string* planString = nullptr);
-
-  TestResult runVelox(const logical_plan::LogicalPlanNodePtr& plan);
 
   TestResult runVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
-      const axiom::runner::MultiFragmentPlan::Options& options);
+      const axiom::runner::MultiFragmentPlan::Options& options = {});
 
   TestResult runFragmentedPlan(const optimizer::PlanAndStats& plan);
 

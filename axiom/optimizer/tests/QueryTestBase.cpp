@@ -193,15 +193,6 @@ std::shared_ptr<core::QueryCtx> QueryTestBase::getQueryCtx() {
 
 optimizer::PlanAndStats QueryTestBase::planVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
-    std::string* planString) {
-  return planVelox(
-      plan,
-      {.numWorkers = FLAGS_num_workers, .numDrivers = FLAGS_num_drivers},
-      planString);
-}
-
-optimizer::PlanAndStats QueryTestBase::planVelox(
-    const logical_plan::LogicalPlanNodePtr& plan,
     const axiom::runner::MultiFragmentPlan::Options& options,
     std::string* planString) {
   auto queryCtx = getQueryCtx();
@@ -231,13 +222,6 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     *planString = best->op->toString(true, false);
   }
   return opt.toVeloxPlan(best->op);
-}
-
-TestResult QueryTestBase::runVelox(
-    const logical_plan::LogicalPlanNodePtr& plan) {
-  TestResult result;
-  auto veloxPlan = planVelox(plan, &result.planString);
-  return runFragmentedPlan(veloxPlan);
 }
 
 TestResult QueryTestBase::runVelox(
