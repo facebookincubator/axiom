@@ -788,7 +788,9 @@ class Aggregate : public Call {
       bool isDistinct,
       ExprCP condition,
       bool isAccumulator,
-      const velox::Type* intermediateType)
+      const velox::Type* intermediateType,
+      ExprVector orderKeys = {},
+      OrderTypeVector orderTypes = {})
       : Call(
             PlanType::kAggregateExpr,
             name,
@@ -798,12 +800,17 @@ class Aggregate : public Call {
         isDistinct_(isDistinct),
         condition_(condition),
         isAccumulator_(isAccumulator),
-        intermediateType_(intermediateType) {
+        intermediateType_(intermediateType),
+        orderKeys_(std::move(orderKeys)),
+        orderTypes_(std::move(orderTypes)) {
     for (auto& arg : this->args()) {
       rawInputType_.push_back(arg->value().type);
     }
     if (condition_) {
       columns_.unionSet(condition_->columns());
+    }
+    for (auto& key : orderKeys_) {
+      columns_.unionSet(key->columns());
     }
   }
 
@@ -827,12 +834,22 @@ class Aggregate : public Call {
     return rawInputType_;
   }
 
+  const ExprVector& orderKeys() const {
+    return orderKeys_;
+  }
+
+  const OrderTypeVector& orderTypes() const {
+    return orderTypes_;
+  }
+
  private:
   bool isDistinct_;
   ExprCP condition_;
   bool isAccumulator_;
   const velox::Type* intermediateType_;
   TypeVector rawInputType_;
+  ExprVector orderKeys_;
+  OrderTypeVector orderTypes_;
 };
 
 using AggregateCP = const Aggregate*;

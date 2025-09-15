@@ -72,6 +72,10 @@ class QueryTestBase : public axiom::runner::test::LocalRunnerTestBase {
 
   TestResult runVelox(const velox::core::PlanNodePtr& plan);
 
+  TestResult runVelox(
+      const velox::core::PlanNodePtr& plan,
+      axiom::runner::MultiFragmentPlan::Options options);
+
   /// Checks that 'reference' and 'experiment' produce the same result.
   /// @return 'reference' result.
   TestResult assertSame(

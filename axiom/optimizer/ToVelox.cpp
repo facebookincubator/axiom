@@ -1287,7 +1287,26 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
           type,
           projections.toFieldRefs<velox::core::TypedExprPtr>(aggregate->args()),
           aggregate->name());
-      aggregates.push_back({.call = call, .rawInputTypes = rawInputTypes});
+
+      std::vector<velox::core::FieldAccessTypedExprPtr> sortingKeys;
+      std::vector<velox::core::SortOrder> sortingOrders;
+      sortingKeys.reserve(aggregate->orderKeys().size());
+      sortingOrders.reserve(aggregate->orderKeys().size());
+
+      for (size_t i = 0; i < aggregate->orderKeys().size(); ++i) {
+        sortingKeys.push_back(
+            projections.toFieldRef(aggregate->orderKeys()[i]));
+        sortingOrders.push_back(toSortOrder(aggregate->orderTypes()[i]));
+      }
+
+      aggregates.push_back({
+          .call = call,
+          .rawInputTypes = rawInputTypes,
+          .mask = mask,
+          .sortingKeys = std::move(sortingKeys),
+          .sortingOrders = std::move(sortingOrders),
+          .distinct = aggregate->isDistinct(),
+      });
     } else {
       auto call = std::make_shared<velox::core::CallTypedExpr>(
           type,
