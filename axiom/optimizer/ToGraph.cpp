@@ -1431,7 +1431,7 @@ DerivedTableP ToGraph::translateUnion(
     bool isTopLevel,
     bool& isLeftLeaf) {
   auto initialRenames = renames_;
-  std::vector<DerivedTableP, QGAllocator<DerivedTable*>> children;
+  QGVector<DerivedTableP> children;
   bool isFirst = true;
   DerivedTableP previousDt = currentDt_;
   for (auto& input : set.inputs()) {

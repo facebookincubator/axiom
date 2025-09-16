@@ -192,11 +192,6 @@ class Column : public Expr {
   PathCP path_;
 };
 
-template <typename T>
-inline folly::Range<T*> toRange(const std::vector<T, QGAllocator<T>>& v) {
-  return folly::Range<T const*>(v.data(), v.size());
-}
-
 class Field : public Expr {
  public:
   Field(const velox::Type* type, ExprCP base, Name field)
@@ -239,11 +234,11 @@ class Field : public Expr {
 
 struct SubfieldSet {
   /// Id of an accessed column of complex type.
-  std::vector<int32_t, QGAllocator<int32_t>> ids;
+  QGVector<int32_t> ids;
 
   /// Set of subfield paths that are accessed for the corresponding 'column'.
   /// empty means that all subfields are accessed.
-  std::vector<BitSet, QGAllocator<BitSet>> subfields;
+  QGVector<BitSet> subfields;
 
   std::optional<BitSet> findSubfields(int32_t id) const;
 };
@@ -290,8 +285,7 @@ class Call : public Expr {
   }
 
   CPSpan<PlanObject> children() const override {
-    return folly::Range<PlanObjectCP const*>(
-        reinterpret_cast<PlanObjectCP const*>(args_.data()), args_.size());
+    return {reinterpret_cast<PlanObjectCP const*>(args_.data()), args_.size()};
   }
 
   std::string toString() const override;
@@ -684,7 +678,7 @@ class JoinEdge {
 };
 
 using JoinEdgeP = JoinEdge*;
-using JoinEdgeVector = std::vector<JoinEdgeP, QGAllocator<JoinEdgeP>>;
+using JoinEdgeVector = QGVector<JoinEdgeP>;
 
 /// Represents a reference to a table from a query. There is one of these
 /// for each occurrence of the schema table. A TableScan references one
@@ -772,8 +766,7 @@ struct ValuesTable : public PlanObject {
   std::string toString() const override;
 };
 
-using TypeVector =
-    std::vector<const velox::Type*, QGAllocator<const velox::Type*>>;
+using TypeVector = QGVector<const velox::Type*>;
 
 // Aggregate function. The aggregation and arguments are in the
 // inherited Call. The Value pertains to the aggregation
@@ -836,7 +829,7 @@ class Aggregate : public Call {
 };
 
 using AggregateCP = const Aggregate*;
-using AggregateVector = std::vector<AggregateCP, QGAllocator<AggregateCP>>;
+using AggregateVector = QGVector<AggregateCP>;
 
 class AggregationPlan : public PlanObject {
  public:

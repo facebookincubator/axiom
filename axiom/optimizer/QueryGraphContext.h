@@ -34,7 +34,7 @@ using Name = const char*;
 
 /// Shorthand for a view on an array of T*
 template <typename T>
-using CPSpan = folly::Range<const T* const*>;
+using CPSpan = std::span<const T* const>;
 
 class PlanObject;
 
@@ -94,6 +94,9 @@ struct QGAllocator {
   }
 };
 
+template <typename T>
+using QGVector = std::vector<T, QGAllocator<T>>;
+
 /// Elements of subfield paths. The QueryGraphContext holds a dedupped
 /// collection of distinct paths.
 enum class StepKind : uint8_t { kField, kSubscript, kCardinality };
@@ -118,7 +121,7 @@ struct Step {
   size_t hash() const;
 };
 
-using StepVector = std::vector<Step, QGAllocator<Step>>;
+using StepVector = QGVector<Step>;
 
 class BitSet;
 
@@ -404,10 +407,10 @@ inline void Path::operator delete(void* ptr) {
 // Forward declarations of common types and collections.
 class Expr;
 using ExprCP = const Expr*;
-using ExprVector = std::vector<ExprCP, QGAllocator<ExprCP>>;
+using ExprVector = QGVector<ExprCP>;
 
 class Column;
 using ColumnCP = const Column*;
-using ColumnVector = std::vector<ColumnCP, QGAllocator<ColumnCP>>;
+using ColumnVector = QGVector<ColumnCP>;
 
 } // namespace facebook::axiom::optimizer

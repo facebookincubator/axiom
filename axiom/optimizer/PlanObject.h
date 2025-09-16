@@ -102,7 +102,7 @@ class PlanObject {
 
   /// Returns a view on children, e.g. arguments of a function call.
   virtual CPSpan<PlanObject> children() const {
-    return CPSpan<PlanObject>(nullptr, nullptr);
+    return {};
   }
 
   /// Returns true if 'this' is an expression with a value.
@@ -133,7 +133,7 @@ class PlanObject {
 
 using PlanObjectP = PlanObject*;
 using PlanObjectCP = const PlanObject*;
-using PlanObjectVector = std::vector<PlanObjectCP, QGAllocator<PlanObjectCP>>;
+using PlanObjectVector = QGVector<PlanObjectCP>;
 
 /// Set of PlanObjects. Uses the objects id() as an index into a bitmap.
 class PlanObjectSet : public BitSet {
@@ -170,8 +170,8 @@ class PlanObjectSet : public BitSet {
   /// Returns the objects corresponding to ids in 'this' as a vector of const
   /// T*.
   template <typename T = PlanObject>
-  std::vector<const T*, QGAllocator<const T*>> toObjects() const {
-    std::vector<const T*, QGAllocator<const T*>> objects;
+  QGVector<const T*> toObjects() const {
+    QGVector<const T*> objects;
     objects.reserve(size());
     forEach(
         [&](auto object) { objects.emplace_back(object->template as<T>()); });

@@ -73,7 +73,7 @@ enum class OrderType {
   kDescNullsLast
 };
 
-using OrderTypeVector = std::vector<OrderType, QGAllocator<OrderType>>;
+using OrderTypeVector = QGVector<OrderType>;
 
 /// Represents a system that contains or produces data. For cases of federation
 /// where data is only accessible via a specific instance of a specific type of
@@ -353,7 +353,7 @@ struct SchemaTable {
   NameMap<ColumnCP> columns;
 
   // All indices. Must contain at least one.
-  std::vector<ColumnGroupCP, QGAllocator<ColumnGroupCP>> columnGroups;
+  QGVector<ColumnGroupCP> columnGroups;
 
   // Table description from external schema. This is the
   // source-dependent representation from which 'this' was created.
