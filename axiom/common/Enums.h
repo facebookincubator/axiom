@@ -21,7 +21,7 @@
 #include "folly/container/F14Map.h"
 #include "velox/common/base/Exceptions.h"
 
-namespace facebook::axiom {
+namespace facebook::axiom::detail {
 
 struct Enums {
   /// Helper function to invert a mapping from enum type to name.
@@ -38,7 +38,7 @@ struct Enums {
   }
 };
 
-} // namespace facebook::axiom
+} // namespace facebook::axiom::detail
 
 /// Helper macros to implement bi-direction mappings between enum values and
 /// names.
@@ -84,36 +84,37 @@ struct Enums {
   };                                                                       \
   std::ostream& operator<<(std::ostream& os, const EnumType& value);
 
-#define AXIOM_DEFINE_ENUM_NAME(EnumType, Names)                             \
-  std::string_view EnumType##Name::toName(EnumType value) {                 \
-    const auto& names = Names();                                            \
-    auto it = names.find(value);                                            \
-    VELOX_CHECK(                                                            \
-        it != names.end(),                                                  \
-        "Invalid enum value: {}",                                           \
-        static_cast<std::underlying_type_t<EnumType>>(value));              \
-    return it->second;                                                      \
-  }                                                                         \
-                                                                            \
-  std::optional<EnumType> EnumType##Name::tryTo##EnumType(                  \
-      std::string_view name) {                                              \
-    static const auto kValues = facebook::axiom::Enums::invertMap(Names()); \
-                                                                            \
-    auto it = kValues.find(name);                                           \
-    if (it == kValues.end()) {                                              \
-      return std::nullopt;                                                  \
-    }                                                                       \
-    return it->second;                                                      \
-  }                                                                         \
-  std::ostream& operator<<(std::ostream& os, const EnumType& value) {       \
-    os << EnumType##Name::toName(value);                                    \
-    return os;                                                              \
-  }                                                                         \
-                                                                            \
-  EnumType EnumType##Name::to##EnumType(std::string_view name) {            \
-    const auto maybeType = EnumType##Name::tryTo##EnumType(name);           \
-    VELOX_CHECK(maybeType, "Invalid enum name: {}", name);                  \
-    return *maybeType;                                                      \
+#define AXIOM_DEFINE_ENUM_NAME(EnumType, Names)                       \
+  std::string_view EnumType##Name::toName(EnumType value) {           \
+    const auto& names = Names();                                      \
+    auto it = names.find(value);                                      \
+    VELOX_CHECK(                                                      \
+        it != names.end(),                                            \
+        "Invalid enum value: {}",                                     \
+        static_cast<std::underlying_type_t<EnumType>>(value));        \
+    return it->second;                                                \
+  }                                                                   \
+                                                                      \
+  std::optional<EnumType> EnumType##Name::tryTo##EnumType(            \
+      std::string_view name) {                                        \
+    static const auto kValues =                                       \
+        ::facebook::axiom::detail::Enums::invertMap(Names());         \
+                                                                      \
+    auto it = kValues.find(name);                                     \
+    if (it == kValues.end()) {                                        \
+      return std::nullopt;                                            \
+    }                                                                 \
+    return it->second;                                                \
+  }                                                                   \
+  std::ostream& operator<<(std::ostream& os, const EnumType& value) { \
+    os << EnumType##Name::toName(value);                              \
+    return os;                                                        \
+  }                                                                   \
+                                                                      \
+  EnumType EnumType##Name::to##EnumType(std::string_view name) {      \
+    const auto maybeType = EnumType##Name::tryTo##EnumType(name);     \
+    VELOX_CHECK(maybeType, "Invalid enum name: {}", name);            \
+    return *maybeType;                                                \
   }
 
 #define AXIOM_DECLARE_EMBEDDED_ENUM_NAME(EnumType)     \
@@ -121,33 +122,45 @@ struct Enums {
   static EnumType to##EnumType(std::string_view name); \
   static std::optional<EnumType> tryTo##EnumType(std::string_view name);
 
-#define AXIOM_DEFINE_EMBEDDED_ENUM_NAME(Class, EnumType, Names)             \
-  std::string_view Class::toName(Class::EnumType value) {                   \
-    const auto& names = Names();                                            \
-    auto it = names.find(value);                                            \
-    VELOX_CHECK(                                                            \
-        it != names.end(),                                                  \
-        "Invalid enum value: {}",                                           \
-        static_cast<std::underlying_type_t<Class::EnumType>>(value));       \
-    return it->second;                                                      \
-  }                                                                         \
-                                                                            \
-  std::optional<Class::EnumType> Class::tryTo##EnumType(                    \
-      std::string_view name) {                                              \
-    static const auto kValues = facebook::axiom::Enums::invertMap(Names()); \
-                                                                            \
-    auto it = kValues.find(name);                                           \
-    if (it == kValues.end()) {                                              \
-      return std::nullopt;                                                  \
-    }                                                                       \
-    return it->second;                                                      \
-  }                                                                         \
-                                                                            \
-  Class::EnumType Class::to##EnumType(std::string_view name) {              \
-    const auto maybeType = Class::tryTo##EnumType(name);                    \
-    VELOX_CHECK(maybeType, "Invalid enum name: {}", name);                  \
-    return *maybeType;                                                      \
+#define AXIOM_DEFINE_EMBEDDED_ENUM_NAME(Class, EnumType, Names)       \
+  std::string_view Class::toName(Class::EnumType value) {             \
+    const auto& names = Names();                                      \
+    auto it = names.find(value);                                      \
+    VELOX_CHECK(                                                      \
+        it != names.end(),                                            \
+        "Invalid enum value: {}",                                     \
+        static_cast<std::underlying_type_t<Class::EnumType>>(value)); \
+    return it->second;                                                \
+  }                                                                   \
+                                                                      \
+  std::optional<Class::EnumType> Class::tryTo##EnumType(              \
+      std::string_view name) {                                        \
+    static const auto kValues =                                       \
+        ::facebook::axiom::detail::Enums::invertMap(Names());         \
+                                                                      \
+    auto it = kValues.find(name);                                     \
+    if (it == kValues.end()) {                                        \
+      return std::nullopt;                                            \
+    }                                                                 \
+    return it->second;                                                \
+  }                                                                   \
+                                                                      \
+  Class::EnumType Class::to##EnumType(std::string_view name) {        \
+    const auto maybeType = Class::tryTo##EnumType(name);              \
+    VELOX_CHECK(maybeType, "Invalid enum name: {}", name);            \
+    return *maybeType;                                                \
   }
+
+/// Helper macros to define fmt formatters
+/// that will use the toName function for enum serialization.
+///
+/// To use them you need to write
+/// AXIOM_ENUM_FORMATTER(full::namespace::path::to::Foo);
+/// It should be written in global namespace after
+/// AXIOM_DECLARE_ENUM_NAME or AXIOM_DEFINE_ENUM_NAME.
+///
+/// Use _EMBEDDED_ version of the macros to define fmt formatters for enums
+/// embedded in other classes.
 
 #define AXIOM_ENUM_FORMATTER(enum)                                   \
   template <>                                                        \
