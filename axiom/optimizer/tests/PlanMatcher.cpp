@@ -462,6 +462,39 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
   const std::optional<JoinType> joinType_;
 };
 
+class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
+ public:
+  explicit NestedLoopJoinMatcher(
+      const std::shared_ptr<PlanMatcher>& left,
+      const std::shared_ptr<PlanMatcher>& right)
+      : PlanMatcherImpl<NestedLoopJoinNode>({left, right}) {}
+
+  NestedLoopJoinMatcher(
+      const std::shared_ptr<PlanMatcher>& left,
+      const std::shared_ptr<PlanMatcher>& right,
+      JoinType joinType)
+      : PlanMatcherImpl<NestedLoopJoinNode>({left, right}),
+        joinType_{joinType} {}
+
+  bool matchDetails(const NestedLoopJoinNode& plan) const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    if (joinType_.has_value()) {
+      EXPECT_EQ(
+          JoinTypeName::toName(plan.joinType()),
+          JoinTypeName::toName(joinType_.value()));
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+ private:
+  const std::optional<JoinType> joinType_;
+};
+
 } // namespace
 
 PlanMatcherBuilder& PlanMatcherBuilder::tableScan() {
@@ -673,6 +706,22 @@ PlanMatcherBuilder& PlanMatcherBuilder::orderBy(
     const std::vector<std::string>& ordering) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<OrderByMatcher>(matcher_, ordering);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(
+    const std::shared_ptr<PlanMatcher>& rightMatcher) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<NestedLoopJoinMatcher>(matcher_, rightMatcher);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(
+    const std::shared_ptr<PlanMatcher>& rightMatcher,
+    JoinType joinType) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<NestedLoopJoinMatcher>(matcher_, rightMatcher, joinType);
   return *this;
 }
 

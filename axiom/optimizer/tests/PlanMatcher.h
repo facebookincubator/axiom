@@ -21,6 +21,8 @@
 
 namespace facebook::velox::core {
 
+using JoinType = facebook::velox::core::JoinType;
+
 class PlanMatcher {
  public:
   virtual ~PlanMatcher() = default;
@@ -104,6 +106,13 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& orderBy();
 
   PlanMatcherBuilder& orderBy(const std::vector<std::string>& ordering);
+
+  PlanMatcherBuilder& nestedLoopJoin(
+      const std::shared_ptr<PlanMatcher>& rightMatcher);
+
+  PlanMatcherBuilder& nestedLoopJoin(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      JoinType joinType);
 
   std::shared_ptr<PlanMatcher> build() {
     VELOX_USER_CHECK_NOT_NULL(matcher_, "Cannot build an empty PlanMatcher.");

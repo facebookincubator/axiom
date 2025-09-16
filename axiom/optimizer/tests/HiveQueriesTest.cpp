@@ -96,39 +96,16 @@ TEST_F(HiveQueriesTest, basic) {
                     .nestedLoopJoin(
                         scan("nation").planNode(),
                         "",
-                        {"c_custkey",
-                         "c_name",
-                         "c_address",
-                         "c_nationkey",
-                         "c_phone",
-                         "c_acctbal",
-                         "c_mktsegment",
-                         "c_comment",
-                         "n_nationkey",
-                         "n_name",
-                         "n_regionkey",
-                         "n_comment"})
-                    .nestedLoopJoin(
-                        scan("region").planNode(),
-                        "",
-                        {"c_custkey",
-                         "c_name",
-                         "c_address",
-                         "c_nationkey",
-                         "c_phone",
-                         "c_acctbal",
-                         "c_mktsegment",
-                         "c_comment",
-                         "n_nationkey",
-                         "n_name",
-                         "n_regionkey",
-                         "n_comment",
-                         "r_regionkey",
-                         "r_name",
-                         "r_comment"})
+                        {
+                            "c_name",
+                            "n_name",
+                        })
+                    .nestedLoopJoin(scan("region").planNode(), "", {"r_name"})
                     .limit(0, 10, false)
                     .planNode();
-    checkResults("SELECT * FROM customer, nation, region LIMIT 10", plan);
+    checkResults(
+        "SELECT c_name, n_name, r_name FROM customer, nation, region LIMIT 10",
+        plan);
   }
 
   checkResults(

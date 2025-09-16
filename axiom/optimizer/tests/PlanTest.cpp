@@ -1339,6 +1339,46 @@ TEST_F(PlanTest, lastProjection) {
   ASSERT_TRUE(matcher->match(plan));
 }
 
+TEST_F(PlanTest, crossJoinMultipleTables) {
+  auto nationType =
+      ROW({"n_nationkey", "n_name", "n_regionkey"},
+          {BIGINT(), VARCHAR(), BIGINT()});
+  auto regionType = ROW({"r_regionkey", "r_name"}, {BIGINT(), VARCHAR()});
+  auto customerType = ROW(
+      {"c_custkey", "c_name", "c_nationkey"}, {BIGINT(), VARCHAR(), BIGINT()});
+  auto lineitemType = ROW({"l_orderkey", "l_partkey"}, {BIGINT(), BIGINT()});
+
+  const auto connectorId = exec::test::kHiveConnectorId;
+  const auto connector = velox::connector::getConnector(connectorId);
+
+  lp::PlanBuilder::Context context;
+  auto logicalPlan = lp::PlanBuilder(context)
+                         .tableScan(connectorId, "nation", nationType->names())
+                         .crossJoin(lp::PlanBuilder(context).tableScan(
+                             connectorId, "region", regionType->names()))
+                         .crossJoin(lp::PlanBuilder(context).tableScan(
+                             connectorId, "customer", customerType->names()))
+                         .crossJoin(lp::PlanBuilder(context).tableScan(
+                             connectorId, "lineitem", lineitemType->names()))
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto expectedMatcher =
+      core::PlanMatcherBuilder()
+          .tableScan("lineitem")
+          .nestedLoopJoin(
+              core::PlanMatcherBuilder().tableScan("region").build())
+          .nestedLoopJoin(
+              core::PlanMatcherBuilder().tableScan("nation").build())
+          .nestedLoopJoin(
+              core::PlanMatcherBuilder().tableScan("customer").build())
+          .project()
+          .build();
+
+  ASSERT_TRUE(expectedMatcher->match(plan));
+}
+
 } // namespace
 } // namespace facebook::velox::optimizer
 

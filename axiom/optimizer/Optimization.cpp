@@ -387,7 +387,7 @@ void Optimization::crossJoins(
   PlanStateSaver save{state};
 
   std::ranges::sort(crossJoins, [](const auto& left, const auto& right) {
-    return left.fanout > right.fanout;
+    return left.fanout < right.fanout;
   });
 
   auto crossJoinPlan = std::move(plan);
