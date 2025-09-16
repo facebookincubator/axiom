@@ -392,7 +392,10 @@ class Schema {
   };
 
   Name name_;
-  mutable NameMap<NameMap<Table>> connectors_;
+  // This map from connector ID to map of tables in that connector.
+  // In the tables map, the key is the full table name and the value is
+  // schema table (optimizer object) and connector table (connector object).
+  mutable NameMap<NameMap<Table>> connectorTables_;
   SchemaResolver* source_{nullptr};
   LocusCP defaultLocus_;
 };

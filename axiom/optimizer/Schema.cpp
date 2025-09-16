@@ -97,7 +97,8 @@ SchemaTableCP Schema::findTable(
     std::string_view name) const {
   Name internedConnectorId = toName(connectorId);
   Name internedName = toName(name);
-  auto& tables = connectors_.try_emplace(internedConnectorId).first->second;
+  auto& tables =
+      connectorTables_.try_emplace(internedConnectorId).first->second;
   auto& table = tables.try_emplace(internedName, Table{}).first->second;
   if (table.schemaTable) {
     return table.schemaTable;
