@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "axiom/common/Enums.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/Connector.h"
 #include "velox/type/Subfield.h"
@@ -156,7 +157,7 @@ class Column {
 /// Describes the kind of table, e.g. durable vs. temporary.
 enum class TableKind { kTable, kTempTable };
 
-VELOX_DECLARE_ENUM_NAME(TableKind);
+AXIOM_DECLARE_ENUM_NAME(TableKind);
 
 class Table;
 
@@ -523,7 +524,7 @@ enum class WriteKind {
   kUpdate
 };
 
-VELOX_DECLARE_ENUM_NAME(WriteKind);
+AXIOM_DECLARE_ENUM_NAME(WriteKind);
 
 class ConnectorMetadata {
  public:
@@ -673,24 +674,6 @@ class ConnectorMetadata {
 
 } // namespace facebook::axiom::connector
 
-template <>
-struct fmt::formatter<facebook::axiom::connector::TableKind>
-    : fmt::formatter<string_view> {
-  template <typename FormatContext>
-  auto format(facebook::axiom::connector::TableKind k, FormatContext& ctx)
-      const {
-    return formatter<string_view>::format(
-        facebook::axiom::connector::TableKindName::toName(k), ctx);
-  }
-};
+AXIOM_ENUM_FORMATTER(facebook::axiom::connector::TableKind);
 
-template <>
-struct fmt::formatter<facebook::axiom::connector::WriteKind>
-    : fmt::formatter<string_view> {
-  template <typename FormatContext>
-  auto format(facebook::axiom::connector::WriteKind k, FormatContext& ctx)
-      const {
-    return formatter<string_view>::format(
-        facebook::axiom::connector::WriteKindName::toName(k), ctx);
-  }
-};
+AXIOM_ENUM_FORMATTER(facebook::axiom::connector::WriteKind);

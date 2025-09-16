@@ -53,7 +53,7 @@ const auto& relTypeNames() {
 
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(RelType, relTypeNames)
+AXIOM_DEFINE_ENUM_NAME(RelType, relTypeNames)
 
 const Value& RelationOp::value(ExprCP expr) const {
   // Compute new Value by applying restrictions from operators

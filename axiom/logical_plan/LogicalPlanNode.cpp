@@ -37,7 +37,7 @@ const auto& nodeKindNames() {
 }
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(NodeKind, nodeKindNames)
+AXIOM_DEFINE_ENUM_NAME(NodeKind, nodeKindNames)
 
 namespace {
 
@@ -195,7 +195,7 @@ const auto& joinTypeNames() {
 }
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(JoinType, joinTypeNames)
+AXIOM_DEFINE_ENUM_NAME(JoinType, joinTypeNames)
 
 // static
 velox::RowTypePtr JoinNode::makeOutputType(
@@ -238,7 +238,7 @@ const auto& setOperationNames() {
 }
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(SetOperation, setOperationNames)
+AXIOM_DEFINE_ENUM_NAME(SetOperation, setOperationNames)
 
 // static
 velox::RowTypePtr SetNode::makeOutputType(

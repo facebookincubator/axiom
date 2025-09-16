@@ -99,7 +99,7 @@ const auto& specialFormNames() {
 }
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(SpecialForm, specialFormNames)
+AXIOM_DEFINE_ENUM_NAME(SpecialForm, specialFormNames)
 
 namespace {
 void validateDereferenceInputs(
@@ -351,7 +351,7 @@ const auto& windowTypeNames() {
 }
 } // namespace
 
-VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, WindowType, windowTypeNames)
+AXIOM_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, WindowType, windowTypeNames)
 
 namespace {
 const auto& boundTypeNames() {
@@ -367,7 +367,7 @@ const auto& boundTypeNames() {
 }
 } // namespace
 
-VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, BoundType, boundTypeNames)
+AXIOM_DEFINE_EMBEDDED_ENUM_NAME(WindowExpr, BoundType, boundTypeNames)
 
 SubqueryExpr::SubqueryExpr(LogicalPlanNodePtr subquery)
     : Expr{ExprKind::kSubquery, subquery->outputType()->childAt(0), {}},

@@ -32,6 +32,6 @@ const auto& stateNames() {
 }
 } // namespace
 
-VELOX_DEFINE_EMBEDDED_ENUM_NAME(Runner, State, stateNames);
+AXIOM_DEFINE_EMBEDDED_ENUM_NAME(Runner, State, stateNames);
 
 } // namespace facebook::axiom::runner

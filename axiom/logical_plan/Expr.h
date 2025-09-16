@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/common/Enums.h"
+#include "axiom/common/Enums.h"
 #include "velox/type/Variant.h"
 
 namespace facebook::axiom::logical_plan {
@@ -377,7 +377,7 @@ enum class SpecialForm {
   kExists = 11,
 };
 
-VELOX_DECLARE_ENUM_NAME(SpecialForm)
+AXIOM_DECLARE_ENUM_NAME(SpecialForm)
 
 /// SpecialFormExpr is similar to CallExpr, but has different semantics.
 /// CallExpr represents a function call. It is executed by evaluating all
@@ -533,7 +533,7 @@ class WindowExpr : public Expr {
     kRows,
     kGroups,
   };
-  VELOX_DECLARE_EMBEDDED_ENUM_NAME(WindowType)
+  AXIOM_DECLARE_EMBEDDED_ENUM_NAME(WindowType)
 
   enum class BoundType {
     kUnboundedPreceding,
@@ -542,7 +542,7 @@ class WindowExpr : public Expr {
     kFollowing,
     kUnboundedFollowing,
   };
-  VELOX_DECLARE_EMBEDDED_ENUM_NAME(BoundType)
+  AXIOM_DECLARE_EMBEDDED_ENUM_NAME(BoundType)
 
   /// A sliding window of rows to be processed by the function for a given
   /// input row. A frame can be ROWS type, RANGE type or GROUPS type, and it

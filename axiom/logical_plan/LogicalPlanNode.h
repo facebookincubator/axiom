@@ -15,8 +15,8 @@
  */
 #pragma once
 
+#include "axiom/common/Enums.h"
 #include "axiom/logical_plan/Expr.h"
-#include "velox/common/Enums.h"
 #include "velox/type/Variant.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -35,7 +35,7 @@ enum class NodeKind {
   kUnnest = 9,
 };
 
-VELOX_DECLARE_ENUM_NAME(NodeKind)
+AXIOM_DECLARE_ENUM_NAME(NodeKind)
 
 class LogicalPlanNode;
 using LogicalPlanNodePtr = std::shared_ptr<const LogicalPlanNode>;
@@ -390,7 +390,7 @@ enum class JoinType {
   kFull = 3,
 };
 
-VELOX_DECLARE_ENUM_NAME(JoinType)
+AXIOM_DECLARE_ENUM_NAME(JoinType)
 
 /// Combines two separate inputs into a single output, based on a boolean join
 /// condition. The output schema contains all columns from the left input
@@ -531,7 +531,7 @@ enum class SetOperation {
   kExcept = 3,
 };
 
-VELOX_DECLARE_ENUM_NAME(SetOperation)
+AXIOM_DECLARE_ENUM_NAME(SetOperation)
 
 /// Set-level operation that supports combining datasets, possibly excluding
 /// rows based on various types of row level matching.
