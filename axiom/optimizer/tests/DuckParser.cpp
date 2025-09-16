@@ -50,7 +50,7 @@ class ColumnNameGenerator {
   }
 
  private:
-  std::unordered_set<std::string> names_;
+  folly::F14FastSet<std::string> names_;
   int nextId_{0};
 };
 
@@ -157,7 +157,7 @@ lp::ConstantExprPtr tryParseInterval(
 }
 
 std::string mapScalarFunctionName(const std::string& name) {
-  static const std::unordered_map<std::string, std::string> kMapping = {
+  static const folly::F14FastMap<std::string, std::string> kMapping = {
       {"+", "plus"},
       {"-", "minus"},
       {"*", "multiply"},
@@ -177,7 +177,7 @@ std::string mapScalarFunctionName(const std::string& name) {
 }
 
 std::string mapAggregateFunctionName(const std::string& name) {
-  static const std::unordered_map<std::string, std::string> kMapping = {
+  static const folly::F14FastMap<std::string, std::string> kMapping = {
       {"count_star", "count"},
   };
 

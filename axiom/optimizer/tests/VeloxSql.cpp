@@ -224,7 +224,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
 
   std::shared_ptr<velox::connector::Connector> registerTpchConnector() {
     auto emptyConfig = std::make_shared<config::ConfigBase>(
-        std::unordered_map<std::string, std::string>());
+        std::unordered_map<std::string, std::string>{});
 
     velox::connector::tpch::TpchConnectorFactory factory;
     auto connector = factory.newConnector("tpch", emptyConfig);

@@ -824,7 +824,7 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
 
   if (metadata->explode) {
     auto map = metadata->explode(call, paths);
-    std::unordered_map<PathCP, ExprCP> translated;
+    folly::F14FastMap<PathCP, ExprCP> translated;
     for (const auto& [path, expr] : map) {
       translated[path] = translateExpr(expr);
     }
@@ -1173,7 +1173,7 @@ PlanObjectP ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
   optimization->filterUpdated(baseTable, false);
 
   ColumnVector top;
-  std::unordered_map<ColumnCP, velox::TypePtr> map;
+  folly::F14FastMap<ColumnCP, velox::TypePtr> map;
   auto scanType = optimization->subfieldPushdownScanType(
       baseTable, baseTable->columns, top, map);
 

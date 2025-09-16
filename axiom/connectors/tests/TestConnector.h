@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include "axiom/connectors/ConnectorMetadata.h"
 
 namespace facebook::axiom::connector {
@@ -67,7 +68,7 @@ class TestTable : public Table {
       const velox::RowTypePtr& schema,
       TestConnector* connector);
 
-  const std::unordered_map<std::string, const Column*>& columnMap()
+  const folly::F14FastMap<std::string, const Column*>& columnMap()
       const override {
     return columns_;
   }
@@ -108,7 +109,7 @@ class TestTable : public Table {
 
  private:
   velox::connector::Connector* connector_;
-  std::unordered_map<std::string, const Column*> columns_;
+  folly::F14FastMap<std::string, const Column*> columns_;
   std::vector<std::unique_ptr<Column>> exportedColumns_;
   std::vector<const TableLayout*> layouts_;
   std::vector<std::unique_ptr<TableLayout>> exportedLayouts_;
@@ -269,7 +270,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
   void createTable(
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
       TableKind tableKind = TableKind::kTable) override {
@@ -279,7 +280,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
   velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) override {
     VELOX_UNSUPPORTED();
@@ -319,7 +320,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
  private:
   TestConnector* connector_;
-  std::unordered_map<std::string, std::shared_ptr<TestTable>> tables_;
+  folly::F14FastMap<std::string, std::shared_ptr<TestTable>> tables_;
   std::unique_ptr<TestSplitManager> splitManager_;
 };
 

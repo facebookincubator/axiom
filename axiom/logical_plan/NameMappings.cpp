@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "axiom/logical_plan/NameMappings.h"
+#include <folly/container/F14Map.h>
 #include <velox/common/base/Exceptions.h>
 
 namespace facebook::axiom::logical_plan {
@@ -103,8 +104,8 @@ void NameMappings::merge(const NameMappings& other) {
   }
 }
 
-std::unordered_map<std::string, std::string> NameMappings::uniqueNames() const {
-  std::unordered_map<std::string, std::string> names;
+folly::F14FastMap<std::string, std::string> NameMappings::uniqueNames() const {
+  folly::F14FastMap<std::string, std::string> names;
   for (const auto& [name, id] : mappings_) {
     if (!name.alias.has_value()) {
       names.emplace(id, name.name);

@@ -27,10 +27,10 @@ namespace facebook::axiom::optimizer {
 /// A map from PlanNodeId of an executable plan to a key for
 /// recording the execution for use in cost model. The key is a
 /// canonical summary of the node and its inputs.
-using NodeHistoryMap = std::unordered_map<velox::core::PlanNodeId, std::string>;
+using NodeHistoryMap = folly::F14FastMap<velox::core::PlanNodeId, std::string>;
 
 using NodePredictionMap =
-    std::unordered_map<velox::core::PlanNodeId, NodePrediction>;
+    folly::F14FastMap<velox::core::PlanNodeId, NodePrediction>;
 
 /// Plan and specification for recording execution history amd planning ttime
 /// predictions.
@@ -74,7 +74,7 @@ class ToVelox {
       BaseTableCP baseTable,
       const ColumnVector& leafColumns,
       ColumnVector& topColumns,
-      std::unordered_map<ColumnCP, velox::TypePtr>& typeMap);
+      folly::F14FastMap<ColumnCP, velox::TypePtr>& typeMap);
 
   // Returns a new PlanNodeId.
   velox::core::PlanNodeId nextId() {
@@ -248,16 +248,16 @@ class ToVelox {
 
   // Map from top level map column  accessed as struct to the struct type.
   // Used only when generating a leaf scan for result Velox plan.
-  std::unordered_map<ColumnCP, velox::TypePtr> columnAlteredTypes_;
+  folly::F14FastMap<ColumnCP, velox::TypePtr> columnAlteredTypes_;
 
   // When generating parallel projections with intermediate assignment for
   // common subexpressions, maps from ExprCP to the FieldAccessTypedExppr with
   // the value.
-  std::unordered_map<ExprCP, velox::core::TypedExprPtr> projectedExprs_;
+  folly::F14FastMap<ExprCP, velox::core::TypedExprPtr> projectedExprs_;
 
   // Map from plan object id to pair of handle with pushdown filters and list
   // of filters to eval on the result from the handle.
-  std::unordered_map<
+  folly::F14FastMap<
       int32_t,
       std::pair<
           velox::connector::ConnectorTableHandlePtr,

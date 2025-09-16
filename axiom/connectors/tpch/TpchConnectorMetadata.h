@@ -125,7 +125,7 @@ class TpchTable : public Table {
         tpchTable_(tpchTable),
         scaleFactor_(scaleFactor) {}
 
-  std::unordered_map<std::string, std::unique_ptr<Column>>& columns() {
+  folly::F14FastMap<std::string, std::unique_ptr<Column>>& columns() {
     return columns_;
   }
 
@@ -133,7 +133,7 @@ class TpchTable : public Table {
     return exportedLayouts_;
   }
 
-  const std::unordered_map<std::string, const Column*>& columnMap()
+  const folly::F14FastMap<std::string, const Column*>& columnMap()
       const override;
 
   void makeDefaultLayout(TpchConnectorMetadata& metadata, double scaleFactor);
@@ -153,9 +153,9 @@ class TpchTable : public Table {
  private:
   mutable std::mutex mutex_;
 
-  std::unordered_map<std::string, std::unique_ptr<Column>> columns_;
+  folly::F14FastMap<std::string, std::unique_ptr<Column>> columns_;
 
-  mutable std::unordered_map<std::string, const Column*> exportedColumns_;
+  mutable folly::F14FastMap<std::string, const Column*> exportedColumns_;
 
   std::vector<std::unique_ptr<TableLayout>> layouts_;
 
@@ -206,7 +206,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   void createTable(
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
       TableKind tableKind = TableKind::kTable) override {
@@ -216,7 +216,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) override {
     VELOX_UNSUPPORTED();
@@ -246,7 +246,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
     return tpchConnector_;
   }
 
-  const std::unordered_map<std::string, std::shared_ptr<TpchTable>>& tables()
+  const folly::F14FastMap<std::string, std::shared_ptr<TpchTable>>& tables()
       const {
     ensureInitialized();
     return tables_;
@@ -267,7 +267,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   std::shared_ptr<velox::memory::MemoryPool> rootPool_{
       velox::memory::memoryManager()->addRootPool()};
   std::shared_ptr<velox::core::QueryCtx> queryCtx_;
-  std::unordered_map<std::string, std::shared_ptr<TpchTable>> tables_;
+  folly::F14FastMap<std::string, std::shared_ptr<TpchTable>> tables_;
   TpchSplitManager splitManager_;
 };
 

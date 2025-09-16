@@ -596,7 +596,7 @@ class TempProjections {
   std::vector<velox::core::FieldAccessTypedExprPtr> fieldRefs_;
   std::vector<std::string> names_;
   std::vector<velox::core::TypedExprPtr> exprs_;
-  std::unordered_map<ExprCP, uint32_t> exprChannel_;
+  folly::F14FastMap<ExprCP, uint32_t> exprChannel_;
 };
 } // namespace
 
@@ -967,7 +967,7 @@ velox::RowTypePtr ToVelox::subfieldPushdownScanType(
     BaseTableCP baseTable,
     const ColumnVector& leafColumns,
     ColumnVector& topColumns,
-    std::unordered_map<ColumnCP, velox::TypePtr>& typeMap) {
+    folly::F14FastMap<ColumnCP, velox::TypePtr>& typeMap) {
   PlanObjectSet top;
   std::vector<std::string> names;
   std::vector<velox::TypePtr> types;
@@ -1017,7 +1017,7 @@ namespace {
 
 void collectFieldNames(
     const velox::core::TypedExprPtr& expr,
-    std::unordered_set<Name>& names) {
+    folly::F14FastSet<Name>& names) {
   if (expr->isFieldAccessKind()) {
     auto fieldAccess = expr->asUnchecked<velox::core::FieldAccessTypedExpr>();
     if (fieldAccess->isInputColumn()) {
@@ -1049,7 +1049,7 @@ velox::core::TypedExprPtr toAndWithAliases(
         specialForm(logical_plan::SpecialForm::kAnd));
   }
 
-  std::unordered_set<Name> usedFieldNames;
+  folly::F14FastSet<Name> usedFieldNames;
   collectFieldNames(result, usedFieldNames);
 
   PlanObjectSet columnSet;

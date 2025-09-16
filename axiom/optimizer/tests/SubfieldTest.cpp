@@ -159,7 +159,7 @@ class SubfieldTest : public QueryTestBase,
     registry->registerFunction("exploding_genie", std::move(explodingMetadata));
   }
 
-  static std::unordered_map<PathCP, lp::ExprPtr> explodeGenie(
+  static folly::F14FastMap<PathCP, lp::ExprPtr> explodeGenie(
       const lp::CallExpr* call,
       std::vector<PathCP>& paths) {
     // This function understands paths like [1][cc], [2][cc],
@@ -169,7 +169,7 @@ class SubfieldTest : public QueryTestBase,
     // idslf[11][1], then the trailing part is ignored. The returned map will
     // have the expression for each distinct path that begins with one of [1],
     // [2], [3] followed by an integer subscript.
-    std::unordered_map<PathCP, lp::ExprPtr> result;
+    folly::F14FastMap<PathCP, lp::ExprPtr> result;
     for (auto& path : paths) {
       const auto& steps = path->steps();
       if (steps.size() < 2) {
@@ -391,7 +391,7 @@ class SubfieldTest : public QueryTestBase,
   // TODO Move to PlanMatcher.
   static void verifyRequiredSubfields(
       const core::PlanNodePtr& plan,
-      const std::unordered_map<std::string, std::vector<std::string>>&
+      const folly::F14FastMap<std::string, std::vector<std::string>>&
           expectedSubfields) {
     auto* scanNode = core::PlanNode::findFirstNode(
         plan.get(), [](const core::PlanNode* node) {

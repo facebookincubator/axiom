@@ -53,7 +53,7 @@ void DerivedTable::addJoinEquality(ExprCP left, ExprCP right) {
 
 namespace {
 
-using EdgeSet = std::unordered_set<std::pair<int32_t, int32_t>>;
+using EdgeSet = folly::F14FastSet<std::pair<int32_t, int32_t>>;
 
 void addEdge(EdgeSet& edges, int32_t id1, int32_t id2) {
   if (id1 > id2) {
@@ -829,13 +829,13 @@ ExprVector extractPerTable(
     return {};
   }
 
-  std::unordered_map<int32_t, std::vector<ExprVector>> perTable;
+  folly::F14FastMap<int32_t, std::vector<ExprVector>> perTable;
   for (auto i = 0; i < disjuncts.size(); ++i) {
     if (i > 0 && disjuncts[i]->allTables() != tables) {
       // Does not  depend on the same tables as the other disjuncts.
       return {};
     }
-    std::unordered_map<int32_t, ExprVector> perTableAnd;
+    folly::F14FastMap<int32_t, ExprVector> perTableAnd;
     ExprVector& inner = orOfAnds[i];
     // do the inner conjuncts each depend on a single table?
     for (auto j = 0; j < inner.size(); ++j) {
@@ -872,7 +872,7 @@ ExprVector extractPerTable(
 /// the whole OR from which 'disjuncts' was flattened.
 ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   // Remove duplicates.
-  std::unordered_set<ExprCP> uniqueDisjuncts;
+  folly::F14FastSet<ExprCP> uniqueDisjuncts;
   bool changeOriginal = false;
   for (auto i = 0; i < disjuncts.size(); ++i) {
     auto disjunct = disjuncts[i];
@@ -942,7 +942,7 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
 
 void DerivedTable::expandConjuncts() {
   bool any{};
-  std::unordered_set<int32_t> processed;
+  folly::F14FastSet<int32_t> processed;
   auto firstUnprocessed = numCanonicalConjuncts;
   do {
     any = false;

@@ -85,7 +85,7 @@ class History {
 
   /// Memo for selectivity keyed on ConnectorTableHandle::toString().
   /// Values between 0 and 1.
-  std::unordered_map<std::string, float> leafSelectivities_;
+  folly::F14FastMap<std::string, float> leafSelectivities_;
 };
 
 /// Collection of per operation costs for a target system.  The base

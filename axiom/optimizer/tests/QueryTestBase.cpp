@@ -250,7 +250,7 @@ TestResult QueryTestBase::runVelox(
 
 std::string QueryTestBase::veloxString(
     const axiom::runner::MultiFragmentPlanPtr& plan) {
-  std::unordered_map<core::PlanNodeId, const core::TableScanNode*> scans;
+  folly::F14FastMap<core::PlanNodeId, const core::TableScanNode*> scans;
   for (const auto& fragment : plan->fragments()) {
     for (const auto& scan : fragment.scans) {
       scans.emplace(scan->id(), scan.get());

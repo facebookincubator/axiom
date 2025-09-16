@@ -294,7 +294,7 @@ class Table {
       std::string name,
       velox::RowTypePtr type,
       TableKind kind = TableKind::kTable,
-      std::unordered_map<std::string, std::string> options = {})
+      folly::F14FastMap<std::string, std::string> options = {})
       : name_(std::move(name)),
         type_(std::move(type)),
         kind_(kind),
@@ -320,7 +320,7 @@ class Table {
   /// non-owned columns. Implementations may have different Column
   /// implementations with different options, so we do not return the
   /// implementation's columns but an abstract form.
-  virtual const std::unordered_map<std::string, const Column*>& columnMap()
+  virtual const folly::F14FastMap<std::string, const Column*>& columnMap()
       const = 0;
 
   const Column* findColumn(const std::string& name) const {
@@ -334,7 +334,7 @@ class Table {
   /// Returns an estimate of the number of rows in 'this'.
   virtual uint64_t numRows() const = 0;
 
-  virtual const std::unordered_map<std::string, std::string>& options() const {
+  virtual const folly::F14FastMap<std::string, std::string>& options() const {
     return options_;
   }
 
@@ -347,7 +347,7 @@ class Table {
 
   const TableKind kind_;
 
-  const std::unordered_map<std::string, std::string> options_;
+  const folly::F14FastMap<std::string, std::string> options_;
 };
 
 using TablePtr = std::shared_ptr<const Table>;
@@ -436,7 +436,7 @@ struct TargetSubfield {
   velox::Variant defaultValue;
 };
 
-using SubfieldMapping = std::unordered_map<
+using SubfieldMapping = folly::F14FastMap<
     SubfieldPtr,
     TargetSubfield,
     SubfieldPtrHasher,
@@ -620,7 +620,7 @@ class ConnectorMetadata {
   virtual void createTable(
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
       TableKind tableKind = TableKind::kTable) = 0;
@@ -643,7 +643,7 @@ class ConnectorMetadata {
   createInsertTableHandle(
       const TableLayout& layout,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) = 0;
 

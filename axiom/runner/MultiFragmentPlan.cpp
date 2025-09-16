@@ -25,13 +25,13 @@ std::string MultiFragmentPlan::toString(
         const std::string& indentation,
         std::ostream& out)>& addContext) const {
   // Map task prefix to fragment index.
-  std::unordered_map<std::string, int32_t> taskPrefixToIndex;
+  folly::F14FastMap<std::string, int32_t> taskPrefixToIndex;
   for (auto i = 0; i < fragments_.size(); ++i) {
     taskPrefixToIndex[fragments_[i].taskPrefix] = i;
   }
 
   // Map plan node to the index of the input fragment.
-  std::unordered_map<velox::core::PlanNodeId, int32_t> planNodeToIndex;
+  folly::F14FastMap<velox::core::PlanNodeId, int32_t> planNodeToIndex;
   for (const auto& fragment : fragments_) {
     for (const auto& input : fragment.inputStages) {
       planNodeToIndex[input.consumerNodeId] =

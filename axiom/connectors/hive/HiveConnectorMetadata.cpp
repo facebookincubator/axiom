@@ -114,7 +114,7 @@ velox::connector::ConnectorInsertTableHandlePtr
 HiveConnectorMetadata::createInsertTableHandle(
     const TableLayout& layout,
     const velox::RowTypePtr& rowType,
-    const std::unordered_map<std::string, std::string>& options,
+    const folly::F14FastMap<std::string, std::string>& options,
     WriteKind kind,
     const ConnectorSessionPtr& session) {
   ensureInitialized();
@@ -193,8 +193,8 @@ HiveConnectorMetadata::createInsertTableHandle(
 }
 
 void HiveConnectorMetadata::validateOptions(
-    const std::unordered_map<std::string, std::string>& options) const {
-  static std::unordered_set<std::string> allowed = {
+    const folly::F14FastMap<std::string, std::string>& options) const {
+  static folly::F14FastSet<std::string> allowed = {
       "bucketed_by",
       "sorted_by",
       "bucket_count",

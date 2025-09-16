@@ -40,7 +40,7 @@ class SplitSourceFactory {
 class SimpleSplitSourceFactory : public SplitSourceFactory {
  public:
   explicit SimpleSplitSourceFactory(
-      std::unordered_map<
+      folly::F14FastMap<
           velox::core::PlanNodeId,
           std::vector<std::shared_ptr<velox::connector::ConnectorSplit>>>
           nodeSplitMap)
@@ -50,7 +50,7 @@ class SimpleSplitSourceFactory : public SplitSourceFactory {
       const velox::core::TableScanNode& scan) override;
 
  private:
-  std::unordered_map<
+  folly::F14FastMap<
       velox::core::PlanNodeId,
       std::vector<std::shared_ptr<velox::connector::ConnectorSplit>>>
       nodeSplitMap_;

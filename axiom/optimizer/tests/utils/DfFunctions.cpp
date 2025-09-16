@@ -25,7 +25,7 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-std::unordered_map<std::string, lp::ExprResolver::FunctionRewriteHook>
+folly::F14FastMap<std::string, lp::ExprResolver::FunctionRewriteHook>
     functionHooks;
 
 void registerFeatureFuncHook(
@@ -70,11 +70,11 @@ std::pair<std::vector<Step>, int32_t> makeRowFromMapSubfield(
   return std::make_pair(newFields, 0);
 }
 
-std::unordered_map<PathCP, lp::ExprPtr> makeRowFromMapExplodeGeneric(
+folly::F14FastMap<PathCP, lp::ExprPtr> makeRowFromMapExplodeGeneric(
     const lp::CallExpr* call,
     std::vector<PathCP>& paths,
     bool addCoalesce) {
-  std::unordered_map<PathCP, lp::ExprPtr> result;
+  folly::F14FastMap<PathCP, lp::ExprPtr> result;
   for (auto& path : paths) {
     const auto& steps = path->steps();
     if (steps.empty()) {
@@ -134,13 +134,13 @@ std::unordered_map<PathCP, lp::ExprPtr> makeRowFromMapExplodeGeneric(
   return result;
 }
 
-std::unordered_map<PathCP, lp::ExprPtr> makeRowFromMapExplode(
+folly::F14FastMap<PathCP, lp::ExprPtr> makeRowFromMapExplode(
     const lp::CallExpr* call,
     std::vector<PathCP>& paths) {
   return makeRowFromMapExplodeGeneric(call, paths, false);
 }
 
-std::unordered_map<PathCP, lp::ExprPtr> paddedMakeRowFromMapExplode(
+folly::F14FastMap<PathCP, lp::ExprPtr> paddedMakeRowFromMapExplode(
     const lp::CallExpr* call,
     std::vector<PathCP>& paths) {
   return makeRowFromMapExplodeGeneric(call, paths, true);
@@ -195,10 +195,10 @@ std::pair<std::vector<Step>, int32_t> makeNamedRowSubfield(
   return std::make_pair(newFields, 2 * idx + 1);
 }
 
-std::unordered_map<PathCP, lp::ExprPtr> makeNamedRowExplode(
+folly::F14FastMap<PathCP, lp::ExprPtr> makeNamedRowExplode(
     const lp::CallExpr* call,
     std::vector<PathCP>& paths) {
-  std::unordered_map<PathCP, lp::ExprPtr> result;
+  folly::F14FastMap<PathCP, lp::ExprPtr> result;
   for (auto& path : paths) {
     const auto& steps = path->steps();
     if (steps.empty()) {

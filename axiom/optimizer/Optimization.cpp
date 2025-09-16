@@ -273,7 +273,7 @@ std::optional<JoinCandidate> reducingJoins(
 // Calls 'func' with join, joined table and fanout for the joinable tables.
 template <typename Func>
 void forJoinedTables(const PlanState& state, Func func) {
-  std::unordered_set<JoinEdgeP> visited;
+  folly::F14FastSet<JoinEdgeP> visited;
   state.placed.forEach([&](PlanObjectCP placedTable) {
     if (!placedTable->isTable()) {
       return;

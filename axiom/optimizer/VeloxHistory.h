@@ -53,8 +53,8 @@ class VeloxHistory : public History {
   void update(folly::dynamic& serialized) override;
 
  private:
-  std::unordered_map<std::string, std::pair<float, float>> joinSamples_;
-  std::unordered_map<std::string, NodePrediction> planHistory_;
+  folly::F14FastMap<std::string, std::pair<float, float>> joinSamples_;
+  folly::F14FastMap<std::string, NodePrediction> planHistory_;
 };
 
 } // namespace facebook::axiom::optimizer

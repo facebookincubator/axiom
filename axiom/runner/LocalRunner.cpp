@@ -90,7 +90,7 @@ std::vector<velox::exec::Split> listAllSplits(
 void getTopologicalOrder(
     const std::vector<ExecutableFragment>& fragments,
     int32_t index,
-    const std::unordered_map<std::string, int32_t>& taskPrefixToIndex,
+    const folly::F14FastMap<std::string, int32_t>& taskPrefixToIndex,
     std::vector<bool>& visited,
     std::stack<int32_t>& indices) {
   visited[index] = true;
@@ -109,7 +109,7 @@ void getTopologicalOrder(
 
 std::vector<ExecutableFragment> topologicalSort(
     const std::vector<ExecutableFragment>& fragments) {
-  std::unordered_map<std::string, int32_t> taskPrefixToIndex;
+  folly::F14FastMap<std::string, int32_t> taskPrefixToIndex;
   for (auto i = 0; i < fragments.size(); ++i) {
     taskPrefixToIndex[fragments[i].taskPrefix] = i;
   }
@@ -272,7 +272,7 @@ void LocalRunner::makeStages(
   };
 
   // Mapping from task prefix to the stage index and whether it is a broadcast.
-  std::unordered_map<std::string, std::pair<int32_t, bool>> stageMap;
+  folly::F14FastMap<std::string, std::pair<int32_t, bool>> stageMap;
   for (auto fragmentIndex = 0; fragmentIndex < fragments_.size() - 1;
        ++fragmentIndex) {
     const auto& fragment = fragments_[fragmentIndex];
@@ -391,7 +391,7 @@ std::string LocalRunner::printPlanWithStats(
         const velox::core::PlanNodeId& nodeId,
         const std::string& indentation,
         std::ostream& out)>& addContext) const {
-  std::unordered_set<velox::core::PlanNodeId> leafNodeIds;
+  folly::F14FastSet<velox::core::PlanNodeId> leafNodeIds;
   for (const auto& fragment : fragments_) {
     for (const auto& nodeId : fragment.fragment.planNode->leafPlanNodeIds()) {
       leafNodeIds.insert(nodeId);
@@ -399,7 +399,7 @@ std::string LocalRunner::printPlanWithStats(
   }
 
   const auto taskStats = stats();
-  std::unordered_map<velox::core::PlanNodeId, std::string> planNodeStats;
+  folly::F14FastMap<velox::core::PlanNodeId, std::string> planNodeStats;
   for (const auto& stats : taskStats) {
     auto planStats = velox::exec::toPlanStats(stats);
     for (const auto& [id, nodeStats] : planStats) {

@@ -340,21 +340,21 @@ class QueryGraphContext {
 
   // Set of interned copies of identifiers. insert() into this returns the
   // canonical interned copy of any string. Lifetime is limited to 'allocator_'.
-  std::unordered_set<std::string_view> names_;
+  folly::F14FastSet<std::string_view> names_;
 
   // Set for deduplicating planObject trees.
-  std::unordered_set<PlanObjectP, PlanObjectPHasher, PlanObjectPComparer>
+  folly::F14FastSet<PlanObjectP, PlanObjectPHasher, PlanObjectPComparer>
       deduppedObjects_;
 
-  std::unordered_set<velox::TypePtr, TypeHasher, TypeComparer> deduppedTypes_;
+  folly::F14FastSet<velox::TypePtr, TypeHasher, TypeComparer> deduppedTypes_;
 
   // Maps raw Type* back to shared TypePtr. Used in toType()() and toTypePtr().
-  std::unordered_map<const velox::Type*, velox::TypePtr> toTypePtr_;
+  folly::F14FastMap<const velox::Type*, velox::TypePtr> toTypePtr_;
 
-  std::unordered_set<PathCP, PathHasher, PathComparer> deduppedPaths_;
+  folly::F14FastSet<PathCP, PathHasher, PathComparer> deduppedPaths_;
 
   // Complex type literals. Referenced with raw pointer from PlanObject.
-  std::unordered_map<
+  folly::F14FastMap<
       const velox::BaseVector*,
       velox::VectorPtr,
       VectorDedupHasher,

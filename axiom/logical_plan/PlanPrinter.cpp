@@ -228,27 +228,27 @@ std::string truncate(const std::string& str, size_t maxLength = 50) {
 
 class ExprStats : public ExprVisitorContext {
  public:
-  std::unordered_map<std::string, int64_t>& functionCounts() {
+  folly::F14FastMap<std::string, int64_t>& functionCounts() {
     return functionCounts_;
   }
 
-  const std::unordered_map<std::string, int64_t>& functionCounts() const {
+  const folly::F14FastMap<std::string, int64_t>& functionCounts() const {
     return functionCounts_;
   }
 
-  std::unordered_map<std::string, int64_t>& expressionCounts() {
+  folly::F14FastMap<std::string, int64_t>& expressionCounts() {
     return expressionCounts_;
   }
 
-  const std::unordered_map<std::string, int64_t>& expressionCounts() const {
+  const folly::F14FastMap<std::string, int64_t>& expressionCounts() const {
     return expressionCounts_;
   }
 
-  std::unordered_map<velox::TypePtr, int64_t>& constantCounts() {
+  folly::F14FastMap<velox::TypePtr, int64_t>& constantCounts() {
     return constantCounts_;
   }
 
-  const std::unordered_map<velox::TypePtr, int64_t>& constantCounts() const {
+  const folly::F14FastMap<velox::TypePtr, int64_t>& constantCounts() const {
     return constantCounts_;
   }
 
@@ -267,9 +267,9 @@ class ExprStats : public ExprVisitorContext {
   }
 
  private:
-  std::unordered_map<std::string, int64_t> functionCounts_;
-  std::unordered_map<std::string, int64_t> expressionCounts_;
-  std::unordered_map<velox::TypePtr, int64_t> constantCounts_;
+  folly::F14FastMap<std::string, int64_t> functionCounts_;
+  folly::F14FastMap<std::string, int64_t> expressionCounts_;
+  folly::F14FastMap<velox::TypePtr, int64_t> constantCounts_;
 };
 
 class CollectExprStatsPlanNodeVisitor : public PlanNodeVisitor {
@@ -690,7 +690,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
 
     if (!stats.constantCounts().empty()) {
       context.out << indent << "constants: ";
-      std::unordered_map<std::string, int64_t> counts;
+      folly::F14FastMap<std::string, int64_t> counts;
       for (const auto& [type, count] : stats.constantCounts()) {
         counts[type->toSummaryString(
             {.maxChildren = (uint32_t)context.options.maxChildTypes})] += count;
@@ -704,7 +704,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   // @param sortByKey Indicates whether to sort counts by key asc (default) or
   // 'count' desc.
   static void appendCounts(
-      const std::unordered_map<std::string, int64_t>& counts,
+      const folly::F14FastMap<std::string, int64_t>& counts,
       std::ostream& text,
       bool sortByKey = true) {
     std::vector<std::pair<std::string, int64_t>> sortedCounts;

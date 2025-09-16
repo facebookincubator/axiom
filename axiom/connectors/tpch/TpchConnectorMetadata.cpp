@@ -24,8 +24,8 @@
 
 namespace facebook::axiom::connector::tpch {
 
-const std::unordered_map<std::string, double>& scaleFactorNamespaceMap() {
-  const static std::unordered_map<std::string, double> sfmap = {
+const folly::F14FastMap<std::string, double>& scaleFactorNamespaceMap() {
+  const static folly::F14FastMap<std::string, double> sfmap = {
       {"tiny", 0.01},
       {"sf1", 1},
       {"sf100", 100},
@@ -263,7 +263,7 @@ void TpchTable::makeDefaultLayout(
   layouts_.push_back(std::move(layout));
 }
 
-const std::unordered_map<std::string, const Column*>& TpchTable::columnMap()
+const folly::F14FastMap<std::string, const Column*>& TpchTable::columnMap()
     const {
   std::lock_guard<std::mutex> l(mutex_);
   if (columns_.empty()) {

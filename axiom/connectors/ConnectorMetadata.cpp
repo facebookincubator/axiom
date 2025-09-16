@@ -44,7 +44,7 @@ VELOX_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 
 namespace {
 velox::RowTypePtr makeRowType(const std::vector<const Column*>& columns) {
-  std::unordered_set<std::string> uniqueNames;
+  folly::F14FastSet<std::string> uniqueNames;
 
   std::vector<std::string> names;
   std::vector<velox::TypePtr> types;

@@ -76,7 +76,7 @@ class Optimization {
       BaseTableCP baseTable,
       const ColumnVector& leafColumns,
       ColumnVector& topColumns,
-      std::unordered_map<ColumnCP, velox::TypePtr>& typeMap) {
+      folly::F14FastMap<ColumnCP, velox::TypePtr>& typeMap) {
     return toVelox_.subfieldPushdownScanType(
         baseTable, leafColumns, topColumns, typeMap);
   }
@@ -308,16 +308,16 @@ class Optimization {
   std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx_;
 
   // Set of tables in use by the Optimizer.
-  std::unordered_set<connector::TablePtr> retainedTables_;
+  folly::F14FastSet<connector::TablePtr> retainedTables_;
 
   // Top DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP root_;
 
-  std::unordered_map<MemoKey, PlanSet> memo_;
+  folly::F14FastMap<MemoKey, PlanSet> memo_;
 
   // Set of previously planned dts for importing probe side reducing joins to a
   // build side
-  std::unordered_map<MemoKey, DerivedTableP> existenceDts_;
+  folly::F14FastMap<MemoKey, DerivedTableP> existenceDts_;
 
   // The top level PlanState. Contains the set of top level interesting plans.
   // Must stay alive as long as the Plans and RelationOps are reeferenced.

@@ -36,7 +36,7 @@ namespace facebook::axiom::connector::hive {
 std::vector<PartitionHandlePtr> LocalHiveSplitManager::listPartitions(
     const velox::connector::ConnectorTableHandlePtr& tableHandle) {
   // All tables are unpartitioned.
-  std::unordered_map<std::string, std::optional<std::string>> empty;
+  folly::F14FastMap<std::string, std::optional<std::string>> empty;
   return {std::make_shared<HivePartitionHandle>(empty, std::nullopt)};
 }
 
@@ -389,7 +389,7 @@ std::shared_ptr<LocalTable> LocalHiveConnectorMetadata::createTableFromSchema(
     partition.push_back(columns.back().get());
   }
 
-  std::unordered_map<std::string, std::string> options;
+  folly::F14FastMap<std::string, std::string> options;
   if (json.count("compressionKind")) {
     options["compression_kind"] = json["compressionKind"].asString();
   }
@@ -732,7 +732,7 @@ void LocalTable::sampleNumDistincts(
   }
 }
 
-const std::unordered_map<std::string, const Column*>& LocalTable::columnMap()
+const folly::F14FastMap<std::string, const Column*>& LocalTable::columnMap()
     const {
   std::lock_guard<std::mutex> l(mutex_);
   if (columns_.empty()) {
@@ -805,7 +805,7 @@ void createDir(const std::string& path) {
 void LocalHiveConnectorMetadata::createTable(
     const std::string& tableName,
     const velox::RowTypePtr& rowType,
-    const std::unordered_map<std::string, std::string>& options,
+    const folly::F14FastMap<std::string, std::string>& options,
     const ConnectorSessionPtr& session,
     bool errorIfExists,
     TableKind kind) {

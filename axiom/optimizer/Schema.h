@@ -27,6 +27,8 @@
 /// though, so that a schema cache can have its own lifetime.
 namespace facebook::axiom::optimizer {
 
+// TODO: It seems like QGAllocator doesn't work for folly F14 containers.
+// Investigate and fix.
 template <typename T>
 using NameMap = std::unordered_map<
     Name,

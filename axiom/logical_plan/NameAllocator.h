@@ -15,8 +15,8 @@
  */
 #pragma once
 
+#include <folly/container/F14Set.h>
 #include <string>
-#include <unordered_set>
 
 namespace facebook::axiom::logical_plan {
 
@@ -41,7 +41,7 @@ class NameAllocator {
   }
 
  private:
-  std::unordered_set<std::string> names_;
+  folly::F14FastSet<std::string> names_;
   int32_t nextId_{0};
 };
 

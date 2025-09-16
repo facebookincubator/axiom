@@ -29,7 +29,7 @@ namespace facebook::axiom::connector::hive {
 /// Describes a file in a table. Input to split enumeration.
 struct FileInfo {
   std::string path;
-  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+  folly::F14FastMap<std::string, std::optional<std::string>> partitionKeys;
   std::optional<int32_t> bucketNumber;
 };
 
@@ -137,21 +137,21 @@ class LocalTable : public Table {
   LocalTable(
       std::string name,
       velox::RowTypePtr type,
-      std::unordered_map<std::string, std::string> options = {})
+      folly::F14FastMap<std::string, std::string> options = {})
       : Table(
             std::move(name),
             std::move(type),
             TableKind::kTable,
             std::move(options)) {}
 
-  std::unordered_map<std::string, std::unique_ptr<Column>>& columns() {
+  folly::F14FastMap<std::string, std::unique_ptr<Column>>& columns() {
     return columns_;
   }
   const std::vector<const TableLayout*>& layouts() const override {
     return exportedLayouts_;
   }
 
-  const std::unordered_map<std::string, const Column*>& columnMap()
+  const folly::F14FastMap<std::string, const Column*>& columnMap()
       const override;
 
   void makeDefaultLayout(
@@ -171,11 +171,11 @@ class LocalTable : public Table {
   mutable std::mutex mutex_;
 
   // All columns. Filled by loadTable().
-  std::unordered_map<std::string, std::unique_ptr<Column>> columns_;
+  folly::F14FastMap<std::string, std::unique_ptr<Column>> columns_;
 
   // Non-owning columns map used for exporting the column set as abstract
   // columns.
-  mutable std::unordered_map<std::string, const Column*> exportedColumns_;
+  mutable folly::F14FastMap<std::string, const Column*> exportedColumns_;
 
   ///  Table layouts. For a Hive table this is normally one layout with all
   ///  columns included.
@@ -225,7 +225,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   /// ConnectorMetadata API. This This is only needed for running the
   /// DuckDB parser on testing queries since the latter needs a set of
   /// tables for name resolution.
-  const std::unordered_map<std::string, std::shared_ptr<LocalTable>>& tables()
+  const folly::F14FastMap<std::string, std::shared_ptr<LocalTable>>& tables()
       const {
     ensureInitialized();
     return tables_;
@@ -237,7 +237,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   void createTable(
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
       TableKind kind = TableKind::kTable) override;
@@ -284,7 +284,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   std::shared_ptr<velox::core::QueryCtx> queryCtx_;
   std::shared_ptr<velox::connector::ConnectorQueryCtx> connectorQueryCtx_;
   velox::dwio::common::FileFormat format_;
-  std::unordered_map<std::string, std::shared_ptr<LocalTable>> tables_;
+  folly::F14FastMap<std::string, std::shared_ptr<LocalTable>> tables_;
   LocalHiveSplitManager splitManager_;
 };
 
