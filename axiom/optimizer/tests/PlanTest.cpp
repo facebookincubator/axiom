@@ -216,7 +216,6 @@ TEST_F(PlanTest, agg) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    std::cerr << plan->toString(true, true) << std::endl;
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
