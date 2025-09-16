@@ -32,6 +32,7 @@ const auto& nodeKindNames() {
       {NodeKind::kLimit, "LIMIT"},
       {NodeKind::kSet, "SET"},
       {NodeKind::kUnnest, "UNNEST"},
+      {NodeKind::kTableWrite, "TABLE_WRITE"},
   };
   return kNames;
 }
@@ -355,5 +356,27 @@ void UnnestNode::accept(
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
 }
+
+void TableWriteNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+namespace {
+
+folly::F14FastMap<WriteKind, std::string_view> writeKindNames() {
+  static const folly::F14FastMap<WriteKind, std::string_view> kNames = {
+      {WriteKind::kInsert, "INSERT"},
+      {WriteKind::kUpdate, "UPDATE"},
+      {WriteKind::kDelete, "DELETE"},
+  };
+
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 
 } // namespace facebook::axiom::logical_plan

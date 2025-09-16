@@ -510,18 +510,18 @@ enum class WriteKind {
   // Rows are added and all columns must be specified for the TableWriter. This
   // covers insert, create table and replacing a Hive partition and any other
   // use that adds whole rows.
-  kInsert,
+  kInsert = 1,
 
   // Individual rows are deleted. Only row ids as per
   // ConnectorMetadata::rowIdHandles() are passed to the TableWriter.
-  kDelete,
+  kDelete = 2,
 
   // Column values in individual rows are changed. The TableWriter
   // gets first the row ids as per ConnectorMetadata::rowIdHandles()
   // and then new values for the columns being changed. The new values
   // may overlap with row ids if the row id is a set of primary key
   // columns.
-  kUpdate
+  kUpdate = 3,
 };
 
 AXIOM_DECLARE_ENUM_NAME(WriteKind);
