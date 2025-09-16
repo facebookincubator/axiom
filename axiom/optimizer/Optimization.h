@@ -143,13 +143,6 @@ class Optimization {
     return history_;
   }
 
-  /// Retain a reference to the provided TablePtr to ensure
-  /// the Table is retained for the duration of Optimization, even if
-  /// dropped by the corresponding ConnectorMetadata.
-  void retainConnectorTable(connector::TablePtr table) {
-    retainedTables_.insert(std::move(table));
-  }
-
   /// If false, correlation names are not included in Column::toString(). Used
   /// for canonicalizing join cache keys.
   bool& cnamesInExpr() {
@@ -306,9 +299,6 @@ class Optimization {
   History& history_;
 
   std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx_;
-
-  // Set of tables in use by the Optimizer.
-  folly::F14FastSet<connector::TablePtr> retainedTables_;
 
   // Top DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP root_;

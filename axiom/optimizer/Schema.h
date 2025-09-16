@@ -372,9 +372,6 @@ struct SchemaTable {
 /// repository. The objects have a default Locus for convenience.
 class Schema {
  public:
-  /// Constructs a testing schema without SchemaResolver.
-  Schema(Name name, const std::vector<SchemaTableCP>& tables, LocusCP locus);
-
   /// Constructs a Schema for producing executable plans, backed by 'source'.
   Schema(Name name, SchemaResolver* source, LocusCP locus);
 
@@ -388,11 +385,14 @@ class Schema {
     return name_;
   }
 
-  void addTable(SchemaTableCP table) const;
-
  private:
+  struct Table {
+    SchemaTableCP schemaTable{nullptr};
+    connector::TablePtr connectorTable;
+  };
+
   Name name_;
-  mutable NameMap<SchemaTableCP> tables_;
+  mutable NameMap<NameMap<Table>> connectors_;
   SchemaResolver* source_{nullptr};
   LocusCP defaultLocus_;
 };
