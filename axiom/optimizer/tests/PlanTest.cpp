@@ -207,18 +207,22 @@ TEST_F(PlanTest, queryGraph) {
 
 TEST_F(PlanTest, agg) {
   testConnector_->createTable(
-      "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
+      "numbers", ROW({"a", "b", "c"}, {DOUBLE(), DOUBLE(), VARCHAR()}));
 
   auto logicalPlan = lp::PlanBuilder()
                          .tableScan(kTestConnectorId, "numbers", {"a", "b"})
-                         .aggregate({"a"}, {"sum(b)"})
+                         .aggregate({"a"}, {"sum(a + b)"})
                          .build();
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
+    std::cerr << plan->toString(true, true) << std::endl;
 
-    auto matcher =
-        core::PlanMatcherBuilder().tableScan().singleAggregation().build();
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .project({"a", "a + b"})
+                       .singleAggregation()
+                       .build();
 
     ASSERT_TRUE(matcher->match(plan));
   }
@@ -227,6 +231,7 @@ TEST_F(PlanTest, agg) {
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
+                       .project({"a", "a + b"})
                        .partialAggregation()
                        .localPartition()
                        .finalAggregation()
