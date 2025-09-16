@@ -303,7 +303,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     check_ = ref;
   }
 
-  void run(const std::string& sql) {
+  void run(std::string_view sql) {
     optimizer::test::SqlStatementPtr sqlStatement;
     try {
       sqlStatement = prestoParser_->parse(sql);
@@ -508,7 +508,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       facebook::axiom::runner::LocalRunner& runner,
       const optimizer::NodePredictionMap& estimates) {
     std::cout << runner.printPlanWithStats([&](const core::PlanNodeId& nodeId,
-                                               const std::string& indentation,
+                                               std::string_view indentation,
                                                std::ostream& out) {
       auto it = estimates.find(nodeId);
       if (it != estimates.end()) {
@@ -694,7 +694,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     return result;
   }
 
-  static void writeString(const std::string& string, std::ostream& out) {
+  static void writeString(std::string_view string, std::ostream& out) {
     write<int32_t>(string.size(), out);
     out.write(string.data(), string.size());
   }
@@ -901,7 +901,7 @@ std::string readCommand(std::istream& in, bool& end) {
 
 void readCommands(
     VeloxRunner& runner,
-    const std::string& prompt,
+    std::string_view prompt,
     std::istream& in) {
   for (;;) {
     std::cout << prompt;

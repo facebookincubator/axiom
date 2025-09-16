@@ -66,7 +66,6 @@ struct TypeComparer {
 
 /// Converts std::string to name used in query graph objects. raw pointer to
 /// arena allocated const chars.
-// Name toName(const std::string& string);
 Name toName(std::string_view string);
 
 struct Plan;

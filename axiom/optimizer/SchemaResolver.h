@@ -40,8 +40,8 @@ class SchemaResolver {
   // If the table name specifies a different catalog than the one specified
   // as a parameter, an error will be thrown.
   virtual connector::TablePtr findTable(
-      const std::string& catalog,
-      const std::string& name);
+      std::string_view catalog,
+      std::string_view name);
 
  private:
   const std::string defaultSchema_;

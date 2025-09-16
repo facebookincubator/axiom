@@ -31,7 +31,7 @@ std::string PlanAndStats::toString() const {
   return plan->toString(
       true,
       [&](const velox::core::PlanNodeId& planNodeId,
-          const std::string& indentation,
+          std::string_view indentation,
           std::ostream& out) {
         auto it = prediction.find(planNodeId);
         if (it != prediction.end()) {

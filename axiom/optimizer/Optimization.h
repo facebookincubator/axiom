@@ -119,7 +119,7 @@ class Optimization {
     return toGraph_.evaluator();
   }
 
-  Name newCName(const std::string& prefix) {
+  Name newCName(std::string_view prefix) {
     return toGraph_.newCName(prefix);
   }
 

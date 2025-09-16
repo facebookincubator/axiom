@@ -258,7 +258,7 @@ std::string QueryTestBase::veloxString(
   }
 
   auto planNodeDetails = [&](const core::PlanNodeId& planNodeId,
-                             const std::string& indentation,
+                             std::string_view indentation,
                              std::ostream& stream) {
     auto it = scans.find(planNodeId);
     if (it != scans.end()) {

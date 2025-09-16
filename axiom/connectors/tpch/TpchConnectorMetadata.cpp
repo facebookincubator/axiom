@@ -202,7 +202,7 @@ void TpchConnectorMetadata::initializeTables() {
 
 void TpchConnectorMetadata::loadTable(
     velox::tpch::Table tpchTable,
-    const std::string& ns,
+    std::string_view ns,
     double scaleFactor) {
   const auto tableName =
       fmt::format("{}.{}", ns, velox::tpch::toTableName(tpchTable));
@@ -275,7 +275,7 @@ const folly::F14FastMap<std::string, const Column*>& TpchTable::columnMap()
   return exportedColumns_;
 }
 
-std::string getQualifiedName(const std::string& name) {
+std::string getQualifiedName(std::string_view name) {
   axiom::optimizer::TableNameParser parser(name);
   VELOX_CHECK(parser.valid(), "invalid table name '{}'", name);
   std::string qualifiedName;
@@ -289,7 +289,7 @@ std::string getQualifiedName(const std::string& name) {
   return qualifiedName;
 }
 
-TablePtr TpchConnectorMetadata::findTable(const std::string& name) {
+TablePtr TpchConnectorMetadata::findTable(std::string_view name) {
   ensureInitialized();
   const auto qualifiedName = getQualifiedName(name);
   auto it = tables_.find(qualifiedName);

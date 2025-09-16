@@ -326,9 +326,9 @@ struct SchemaTable {
       const connector::TableLayout* layout);
 
   /// Finds or adds a column with 'name' and 'value'.
-  ColumnCP column(const std::string& name, const Value& value);
+  ColumnCP column(std::string_view name, const Value& value);
 
-  ColumnCP findColumn(const std::string& name) const;
+  ColumnCP findColumn(std::string_view name) const;
 
   int64_t numRows() const {
     return static_cast<int64_t>(columnGroups[0]->layout->table().numRows());

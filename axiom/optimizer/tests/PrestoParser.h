@@ -26,14 +26,14 @@ class PrestoParser {
       velox::memory::MemoryPool* pool)
       : defaultConnectorId_{defaultConnectorId}, pool_{pool} {}
 
-  SqlStatementPtr parse(const std::string& sql, bool enableTracing = false);
+  SqlStatementPtr parse(std::string_view sql, bool enableTracing = false);
 
   logical_plan::ExprPtr parseExpression(
-      const std::string& sql,
+      std::string_view sql,
       bool enableTracing = false);
 
  private:
-  SqlStatementPtr doParse(const std::string& sql, bool enableTracing);
+  SqlStatementPtr doParse(std::string_view sql, bool enableTracing);
 
   const std::string defaultConnectorId_;
 

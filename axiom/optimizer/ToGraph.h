@@ -175,7 +175,7 @@ class ToGraph {
       DerivedTableP dt,
       const logical_plan::LogicalPlanNode& logicalPlan);
 
-  Name newCName(const std::string& prefix) {
+  Name newCName(std::string_view prefix) {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
   }
 
@@ -254,13 +254,13 @@ class ToGraph {
   // successful. if not successful.
   ExprCP tryFoldConstant(
       const velox::TypePtr& returnType,
-      const std::string& callName,
+      std::string_view callName,
       const ExprVector& literals);
 
   // Converts 'name' to a deduplicated ExprCP. If 'name' is assigned to an
   // expression in a projection, returns the deduplicated ExprPtr of the
   // expression.
-  ExprCP translateColumn(const std::string& name);
+  ExprCP translateColumn(std::string_view name);
 
   //  Applies translateColumn to a 'source'.
   ExprVector translateColumns(const std::vector<logical_plan::ExprPtr>& source);

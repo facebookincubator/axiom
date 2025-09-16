@@ -197,7 +197,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   void initialize() override;
 
-  TablePtr findTable(const std::string& name) override;
+  TablePtr findTable(std::string_view name) override;
 
   ConnectorSplitManager* splitManager() override {
     ensureInitialized();
@@ -268,13 +268,13 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   void makeQueryCtx();
   void makeConnectorQueryCtx();
   std::shared_ptr<LocalTable> createTableFromSchema(
-      const std::string& name,
-      const std::string& path);
-  void readTables(const std::string& path);
+      std::string_view name,
+      std::string_view path);
+  void readTables(std::string_view path);
 
-  void loadTable(const std::string& tableName, const fs::path& tablePath);
+  void loadTable(std::string_view tableName, const fs::path& tablePath);
 
-  std::shared_ptr<LocalTable> findTableLocked(const std::string& name) const;
+  std::shared_ptr<LocalTable> findTableLocked(std::string_view name) const;
 
   mutable std::mutex mutex_;
   mutable bool initialized_{false};

@@ -219,11 +219,11 @@ class ToTextVisitor : public PlanNodeVisitor {
   }
 };
 
-std::string truncate(const std::string& str, size_t maxLength = 50) {
+std::string truncate(std::string_view str, size_t maxLength = 50) {
   if (str.size() > maxLength) {
-    return str.substr(0, maxLength) + "...";
+    return fmt::format("{}...", str.substr(0, maxLength));
   }
-  return str;
+  return std::string{str};
 }
 
 class ExprStats : public ExprVisitorContext {
@@ -622,7 +622,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   }
 
   void appendNode(
-      const std::string& name,
+      std::string_view name,
       const LogicalPlanNode& node,
       PlanNodeVisitorContext& context) const {
     auto& myContext = static_cast<Context&>(context);
@@ -639,7 +639,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   }
 
   void appendHeader(
-      const std::string& name,
+      std::string_view name,
       const LogicalPlanNode& node,
       Context& context) const {
     context.out << makeIndent(context.indent) << "- " << name << " ["
@@ -676,7 +676,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   //    constants: VARCHAR: 4
   static void appendExpressionStats(
       const ExprStats& stats,
-      const std::string& indent,
+      std::string_view indent,
       Context& context) {
     context.out << indent << "expressions: ";
     appendCounts(stats.expressionCounts(), context.out);
@@ -771,7 +771,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   }
 
   static void appendProjections(
-      const std::string& indent,
+      std::string_view indent,
       const ProjectNode& node,
       const std::vector<size_t>& projections,
       size_t cnt,

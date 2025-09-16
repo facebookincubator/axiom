@@ -26,7 +26,7 @@ namespace facebook::axiom::optimizer {
 /// handles and execution stats.
 class VeloxHistory : public History {
  public:
-  void recordJoinSample(const std::string& key, float lr, float rl) override;
+  void recordJoinSample(std::string_view key, float lr, float rl) override;
 
   std::pair<float, float> sampleJoin(JoinEdge* edge) override;
 

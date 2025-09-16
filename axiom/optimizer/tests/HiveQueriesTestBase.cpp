@@ -50,14 +50,14 @@ void HiveQueriesTestBase::TearDown() {
   test::QueryTestBase::TearDown();
 }
 
-RowTypePtr HiveQueriesTestBase::getSchema(const std::string& tableName) {
+RowTypePtr HiveQueriesTestBase::getSchema(std::string_view tableName) {
   return connector::ConnectorMetadata::metadata(exec::test::kHiveConnectorId)
       ->findTable(tableName)
       ->type();
 }
 
 void HiveQueriesTestBase::checkResults(
-    const std::string& sql,
+    std::string_view sql,
     const core::PlanNodePtr& referencePlan) {
   SCOPED_TRACE(sql);
   VELOX_CHECK_NOT_NULL(referencePlan);

@@ -1111,25 +1111,24 @@ TEST_F(PlanTest, values) {
   // We don't check produced plan, only that it results in the same rows as
   // correct exection plan.
 
-  auto makeLogicalPlan = [&](uint8_t leafType,
-                             const std::string& filter,
-                             const std::string& alias) {
-    auto plan = lp::PlanBuilder(ctx);
-    if (leafType == 0) {
-      plan.tableScan("nation", names);
-    } else {
-      plan.values({rowVector});
-    }
-    return plan.filter(filter).project({
-        fmt::format("n_nationkey AS {}1", alias),
-        fmt::format("n_regionkey AS {}2", alias),
-        fmt::format("n_comment AS {}3", alias),
-    });
-  };
+  auto makeLogicalPlan =
+      [&](uint8_t leafType, const std::string& filter, std::string_view alias) {
+        auto plan = lp::PlanBuilder(ctx);
+        if (leafType == 0) {
+          plan.tableScan("nation", names);
+        } else {
+          plan.values({rowVector});
+        }
+        return plan.filter(filter).project({
+            fmt::format("n_nationkey AS {}1", alias),
+            fmt::format("n_regionkey AS {}2", alias),
+            fmt::format("n_comment AS {}3", alias),
+        });
+      };
 
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto makePhysicalPlan =
-      [&](int leafType, const std::string& filter, const std::string& alias) {
+      [&](int leafType, const std::string& filter, std::string_view alias) {
         auto plan = exec::test::PlanBuilder(idGenerator, pool_.get());
         if (leafType == 0) {
           plan.tableScan("nation", nationType);

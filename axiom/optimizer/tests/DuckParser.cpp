@@ -38,15 +38,13 @@ namespace lp = facebook::axiom::logical_plan;
 
 class ColumnNameGenerator {
  public:
-  std::string next(const std::string& prefix = "_c") {
-    if (names_.count(prefix)) {
+  std::string next(std::string_view prefix = "_c") {
+    auto [it, emplaced] = names_.emplace(prefix);
+    if (!emplaced) {
       auto name = fmt::format("{}{}", prefix, nextId_++);
-      names_.insert(name);
-      return name;
+      return *names_.emplace(std::move(name)).first;
     }
-
-    names_.insert(prefix);
-    return prefix;
+    return *it;
   }
 
  private:
@@ -70,7 +68,7 @@ struct QueryContext {
     return columnNameGenerator.next();
   }
 
-  std::string nextColumnName(const std::string& prefix) {
+  std::string nextColumnName(std::string_view prefix) {
     return columnNameGenerator.next(prefix);
   }
 };
@@ -100,7 +98,7 @@ std::optional<int64_t> extractInteger(const lp::ConstantExpr& constant) {
 }
 
 lp::ConstantExprPtr tryParseInterval(
-    const std::string& functionName,
+    std::string_view functionName,
     const lp::ExprPtr& input) {
   std::optional<int64_t> value;
 
@@ -156,37 +154,39 @@ lp::ConstantExprPtr tryParseInterval(
       std::make_shared<Variant>(value.value() * multiplier));
 }
 
-std::string mapScalarFunctionName(const std::string& name) {
-  static const folly::F14FastMap<std::string, std::string> kMapping = {
-      {"+", "plus"},
-      {"-", "minus"},
-      {"*", "multiply"},
-      {"/", "divide"},
-      {"%", "mod"},
-      {"~~", "like"},
-      {"!~~", "not_like"},
-      {"list_value", "array_constructor"},
-  };
+std::string mapScalarFunctionName(std::string_view name) {
+  static const folly::F14FastMap<std::string_view, std::string_view> kMapping =
+      {
+          {"+", "plus"},
+          {"-", "minus"},
+          {"*", "multiply"},
+          {"/", "divide"},
+          {"%", "mod"},
+          {"~~", "like"},
+          {"!~~", "not_like"},
+          {"list_value", "array_constructor"},
+      };
 
   auto it = kMapping.find(name);
   if (it != kMapping.end()) {
-    return it->second;
+    return std::string{it->second};
   }
 
-  return name;
+  return std::string{name};
 }
 
-std::string mapAggregateFunctionName(const std::string& name) {
-  static const folly::F14FastMap<std::string, std::string> kMapping = {
-      {"count_star", "count"},
-  };
+std::string mapAggregateFunctionName(std::string_view name) {
+  static const folly::F14FastMap<std::string_view, std::string_view> kMapping =
+      {
+          {"count_star", "count"},
+      };
 
   auto it = kMapping.find(name);
   if (it != kMapping.end()) {
-    return it->second;
+    return std::string{it->second};
   }
 
-  return name;
+  return std::string{name};
 }
 
 lp::LogicalPlanNodePtr toPlanNode(
@@ -414,13 +414,13 @@ lp::LogicalPlanNodePtr toPlanNode(
 }
 
 namespace {
-std::string translateAggregateName(const std::string& name) {
+std::string translateAggregateName(std::string_view name) {
   // first(x) is used to get one element of a set. The closes Velox
   // counterpart is arbitrary, which usually returns the first value it sees.
   if (name == "first") {
     return "arbitrary";
   }
-  return name;
+  return std::string{name};
 }
 } // namespace
 

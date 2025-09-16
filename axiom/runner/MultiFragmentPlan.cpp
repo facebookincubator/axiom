@@ -22,7 +22,7 @@ std::string MultiFragmentPlan::toString(
     bool detailed,
     const std::function<void(
         const velox::core::PlanNodeId& nodeId,
-        const std::string& indentation,
+        std::string_view indentation,
         std::ostream& out)>& addContext) const {
   // Map task prefix to fragment index.
   folly::F14FastMap<std::string, int32_t> taskPrefixToIndex;
@@ -53,7 +53,7 @@ std::string MultiFragmentPlan::toString(
                detailed,
                true,
                [&](const velox::core::PlanNodeId& planNodeId,
-                   const std::string& indentation,
+                   std::string_view indentation,
                    std::ostream& stream) {
                  if (addContext != nullptr) {
                    addContext(planNodeId, indentation, stream);

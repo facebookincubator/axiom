@@ -267,7 +267,7 @@ class TableLayout {
       std::vector<ColumnStatistics>* statistics = nullptr) const = 0;
 
   /// Return a column with the matching name. Returns nullptr if not found.
-  const Column* findColumn(const std::string& name) const;
+  const Column* findColumn(std::string_view name) const;
 
  private:
   const std::string name_;
@@ -323,7 +323,7 @@ class Table {
   virtual const folly::F14FastMap<std::string, const Column*>& columnMap()
       const = 0;
 
-  const Column* findColumn(const std::string& name) const {
+  const Column* findColumn(std::string_view name) const {
     const auto& map = columnMap();
     auto it = map.find(name);
     return it == map.end() ? nullptr : it->second;
@@ -590,7 +590,7 @@ class ConnectorMetadata {
   /// reference ot the Table object at any time, and callers are required
   /// to retain a reference to the Table to prevent it from being reclaimed
   /// in the case of Table removal by the ConnectorMetadata.
-  virtual TablePtr findTable(const std::string& name) = 0;
+  virtual TablePtr findTable(std::string_view name) = 0;
 
   /// Returns a SplitManager for split enumeration for TableLayouts accessed
   /// through 'this'.

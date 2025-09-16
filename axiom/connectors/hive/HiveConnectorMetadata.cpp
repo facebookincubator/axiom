@@ -24,7 +24,7 @@ namespace facebook::axiom::connector::hive {
 namespace {
 velox::connector::hive::HiveColumnHandle::ColumnType columnType(
     const HiveTableLayout& layout,
-    const std::string& columnName) {
+    std::string_view columnName) {
   auto& columns = layout.hivePartitionColumns();
   for (auto& column : columns) {
     if (column->name() == columnName) {
@@ -47,14 +47,12 @@ velox::connector::ColumnHandlePtr HiveConnectorMetadata::createColumnHandle(
   VELOX_CHECK(subfieldMapping.empty());
   auto* hiveLayout = reinterpret_cast<const HiveTableLayout*>(&layout);
   auto* column = hiveLayout->findColumn(columnName);
-  auto handle = std::make_shared<velox::connector::hive::HiveColumnHandle>(
+  return std::make_shared<velox::connector::hive::HiveColumnHandle>(
       columnName,
       columnType(*hiveLayout, columnName),
       column->type(),
       column->type(),
       std::move(subfields));
-  return std::dynamic_pointer_cast<const velox::connector::ColumnHandle>(
-      handle);
 }
 
 velox::connector::ConnectorTableHandlePtr

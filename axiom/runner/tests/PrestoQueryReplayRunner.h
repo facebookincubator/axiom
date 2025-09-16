@@ -26,7 +26,7 @@ extern const int32_t kDefaultWidth;
 extern const int32_t kDefaultMaxDrivers;
 extern const int32_t kWaitTimeoutUs;
 
-typedef std::string (*TaskPrefixExtractor)(const std::string&);
+using TaskPrefixExtractor = std::string (*)(std::string_view);
 using ConnectorSplitPtr = std::shared_ptr<velox::connector::ConnectorSplit>;
 
 class PrestoQueryReplayRunner {

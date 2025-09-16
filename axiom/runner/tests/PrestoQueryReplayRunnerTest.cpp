@@ -29,7 +29,7 @@ namespace {
 // Presto 'taskId' is in the format of
 // queryId.stageId.stageExecutionId.taskId.attemptNumber. return stage id from
 // the given taskId.
-std::string getTaskPrefix(const std::string& taskId) {
+std::string getTaskPrefix(std::string_view taskId) {
   std::vector<std::string_view> parts;
   folly::split('.', taskId, parts);
   VELOX_CHECK_EQ(parts.size(), 5);

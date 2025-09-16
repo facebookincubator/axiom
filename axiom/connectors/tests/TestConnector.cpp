@@ -32,19 +32,20 @@ TestTable::TestTable(
     const auto& columnName = schema->nameOf(i);
     const auto& columnType = schema->childAt(i);
     VELOX_CHECK(
-        !columnName.empty(), "column {} in table {} has empty name", i, name);
+        !columnName.empty(), "column {} in table {} has empty name", i, name_);
     exportedColumns_.emplace_back(
         std::make_unique<Column>(columnName, columnType));
     columnVector.emplace_back(exportedColumns_.back().get());
     auto [_, ok] = columns_.emplace(columnName, exportedColumns_.back().get());
-    VELOX_CHECK(ok, "duplicate column name '{}' in table {}", columnName, name);
+    VELOX_CHECK(
+        ok, "duplicate column name '{}' in table {}", columnName, name_);
   }
 
   auto layout =
       std::make_unique<TestTableLayout>(name_, this, connector_, columnVector);
   layouts_.push_back(layout.get());
   exportedLayouts_.push_back(std::move(layout));
-  pool_ = velox::memory::memoryManager()->addLeafPool(name + "_table");
+  pool_ = velox::memory::memoryManager()->addLeafPool(name_ + "_table");
 }
 
 std::vector<SplitSource::SplitAndGroup> TestSplitSource::getSplits(uint64_t) {
@@ -74,12 +75,12 @@ std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
 }
 
 std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
-    const std::string& name) {
+    std::string_view name) {
   auto it = tables_.find(name);
   return it != tables_.end() ? it->second : nullptr;
 }
 
-TablePtr TestConnectorMetadata::findTable(const std::string& name) {
+TablePtr TestConnectorMetadata::findTable(std::string_view name) {
   return findTableInternal(name);
 }
 
@@ -119,7 +120,7 @@ std::shared_ptr<TestTable> TestConnectorMetadata::createTable(
 }
 
 void TestConnectorMetadata::appendData(
-    const std::string& name,
+    std::string_view name,
     const velox::RowVectorPtr& data) {
   auto it = tables_.find(name);
   VELOX_CHECK(it != tables_.end(), "no table {} exists", name);
@@ -224,7 +225,7 @@ std::shared_ptr<TestTable> TestConnector::createTable(
 }
 
 void TestConnector::appendData(
-    const std::string& name,
+    std::string_view name,
     const velox::RowVectorPtr& data) {
   metadata_->appendData(name, data);
 }

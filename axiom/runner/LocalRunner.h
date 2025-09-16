@@ -117,7 +117,7 @@ class LocalRunner : public Runner,
   std::string printPlanWithStats(
       const std::function<void(
           const velox::core::PlanNodeId& nodeId,
-          const std::string& indentation,
+          std::string_view indentation,
           std::ostream& out)>& addContext = nullptr) const;
 
   /// Best-effort attempt to cancel the execution.

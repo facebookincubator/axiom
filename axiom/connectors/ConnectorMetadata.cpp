@@ -106,7 +106,7 @@ TableLayout::TableLayout(
   }
 }
 
-const Column* TableLayout::findColumn(const std::string& name) const {
+const Column* TableLayout::findColumn(std::string_view name) const {
   for (const auto& column : columns_) {
     if (column->name() == name) {
       return column;

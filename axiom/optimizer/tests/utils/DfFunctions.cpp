@@ -29,7 +29,7 @@ folly::F14FastMap<std::string, lp::ExprResolver::FunctionRewriteHook>
     functionHooks;
 
 void registerFeatureFuncHook(
-    const std::string& name,
+    std::string_view name,
     lp::ExprResolver::FunctionRewriteHook hook) {
   functionHooks[name] = hook;
 }
@@ -165,7 +165,7 @@ lp::ExprPtr makeRowFromMapHook(
 }
 
 lp::ExprPtr makeNamedRowHook(
-    const std::string& name,
+    std::string_view name,
     const std::vector<lp::ExprPtr>& args) {
   std::vector<std::string> newNames;
   std::vector<lp::ExprPtr> values;

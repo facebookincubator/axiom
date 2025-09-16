@@ -73,7 +73,7 @@ ColumnGroupCP SchemaTable::addIndex(
   return columnGroups.back();
 }
 
-ColumnCP SchemaTable::column(const std::string& name, const Value& value) {
+ColumnCP SchemaTable::column(std::string_view name, const Value& value) {
   auto it = columns.find(toName(name));
   if (it != columns.end()) {
     return it->second;
@@ -83,7 +83,7 @@ ColumnCP SchemaTable::column(const std::string& name, const Value& value) {
   return column;
 }
 
-ColumnCP SchemaTable::findColumn(const std::string& name) const {
+ColumnCP SchemaTable::findColumn(std::string_view name) const {
   auto it = columns.find(toName(name));
   VELOX_CHECK(it != columns.end(), "Column not found: {}", name);
   return it->second;

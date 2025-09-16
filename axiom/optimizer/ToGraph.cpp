@@ -165,7 +165,7 @@ void ToGraph::translateConjuncts(const lp::ExprPtr& input, ExprVector& flat) {
 
 ExprCP ToGraph::tryFoldConstant(
     const velox::TypePtr& returnType,
-    const std::string& callName,
+    std::string_view callName,
     const ExprVector& literals) {
   try {
     Value value(toType(returnType), 1);
@@ -850,7 +850,7 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
   return callExpr;
 }
 
-ExprCP ToGraph::translateColumn(const std::string& name) {
+ExprCP ToGraph::translateColumn(std::string_view name) {
   auto it = renames_.find(name);
   if (it != renames_.end()) {
     return it->second;

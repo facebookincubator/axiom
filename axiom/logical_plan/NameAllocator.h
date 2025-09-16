@@ -33,7 +33,7 @@ class NameAllocator {
   ///   newName("a") -> "a_0"
   ///   newName("a") -> "a_1"
   ///   newName("a_0") -> "a_2"
-  std::string newName(const std::string& hint);
+  std::string newName(std::string_view hint);
 
   void reset() {
     names_.clear();

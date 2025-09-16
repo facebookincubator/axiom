@@ -241,11 +241,11 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   void initialize() override {}
 
-  TablePtr findTable(const std::string& name) override;
+  TablePtr findTable(std::string_view name) override;
 
   /// Non-interface method which supplies a non-const Table reference
   /// which is capable of performing writes to the underlying table.
-  std::shared_ptr<Table> findTableInternal(const std::string& name);
+  std::shared_ptr<Table> findTableInternal(std::string_view name);
 
   ConnectorSplitManager* splitManager() override {
     return splitManager_.get();
@@ -316,7 +316,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
   /// Add data rows to the specified table. This data is returned via the
   /// DataSource corresponding to this table. The data is copied
   /// into the internal memory pool associated with the table.
-  void appendData(const std::string& name, const velox::RowVectorPtr& data);
+  void appendData(std::string_view name, const velox::RowVectorPtr& data);
 
  private:
   TestConnector* connector_;
@@ -421,7 +421,7 @@ class TestConnector : public velox::connector::Connector {
   /// Add data rows to the specified table. This data is returned via the
   /// DataSource corresponding to this table. Appended data is copied
   /// to the internal memory pool of the associated table.
-  void appendData(const std::string& name, const velox::RowVectorPtr& data);
+  void appendData(std::string_view name, const velox::RowVectorPtr& data);
 
  private:
   const std::shared_ptr<TestConnectorMetadata> metadata_;

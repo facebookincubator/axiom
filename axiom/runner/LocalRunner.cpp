@@ -389,7 +389,7 @@ std::vector<velox::exec::TaskStats> LocalRunner::stats() const {
 std::string LocalRunner::printPlanWithStats(
     const std::function<void(
         const velox::core::PlanNodeId& nodeId,
-        const std::string& indentation,
+        std::string_view indentation,
         std::ostream& out)>& addContext) const {
   folly::F14FastSet<velox::core::PlanNodeId> leafNodeIds;
   for (const auto& fragment : fragments_) {

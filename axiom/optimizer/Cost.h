@@ -56,12 +56,12 @@ class History {
       BaseTable& baseTable,
       const velox::RowTypePtr& scanType) = 0;
 
-  virtual void recordJoinSample(const std::string& key, float lr, float rl) = 0;
+  virtual void recordJoinSample(std::string_view key, float lr, float rl) = 0;
 
   virtual std::pair<float, float> sampleJoin(JoinEdge* edge) = 0;
 
   virtual void recordLeafSelectivity(
-      const std::string& handle,
+      std::string_view handle,
       float selectivity,
       bool overwrite = true) {
     std::lock_guard<std::mutex> l(mutex_);

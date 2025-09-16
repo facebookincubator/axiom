@@ -314,7 +314,7 @@ class RelationPlanner : public sql::AstVisitor {
     }
   }
 
-  static lp::ExprApi parseDecimal(const std::string& value) {
+  static lp::ExprApi parseDecimal(std::string_view value) {
     VELOX_USER_CHECK(!value.empty(), "Invalid decimal value: '{}'", value);
 
     size_t startPos = 0;
@@ -364,7 +364,8 @@ class RelationPlanner : public sql::AstVisitor {
         precision = value.size() - firstNonZeroPos - 1;
       }
 
-      unscaledValue = value.substr(0, periodPos) + value.substr(periodPos + 1);
+      unscaledValue = fmt::format(
+          "{}{}", value.substr(0, periodPos), value.substr(periodPos + 1));
     }
 
     if (precision <= velox::ShortDecimalType::kMaxPrecision) {
@@ -1134,16 +1135,14 @@ class RelationPlanner : public sql::AstVisitor {
 
 } // namespace
 
-SqlStatementPtr PrestoParser::parse(
-    const std::string& sql,
-    bool enableTracing) {
+SqlStatementPtr PrestoParser::parse(std::string_view sql, bool enableTracing) {
   return doParse(sql, enableTracing);
 }
 
 lp::ExprPtr PrestoParser::parseExpression(
-    const std::string& sql,
+    std::string_view sql,
     bool enableTracing) {
-  auto statement = doParse("SELECT " + sql, enableTracing);
+  auto statement = doParse(fmt::format("SELECT {}", sql), enableTracing);
   VELOX_USER_CHECK(statement->isSelect());
 
   auto plan = statement->asUnchecked<SelectStatement>()->plan();
@@ -1158,7 +1157,7 @@ lp::ExprPtr PrestoParser::parseExpression(
 }
 
 SqlStatementPtr PrestoParser::doParse(
-    const std::string& sql,
+    std::string_view sql,
     bool enableTracing) {
   sql::ParserHelper helper(sql);
   auto* context = helper.parse();

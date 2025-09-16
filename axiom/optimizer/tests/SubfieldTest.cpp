@@ -314,7 +314,7 @@ class SubfieldTest : public QueryTestBase,
     assertSame(veloxPlan, fragmentedPlan);
   }
 
-  std::string subfield(const std::string& first, const std::string& rest = "")
+  std::string subfield(std::string_view first, std::string_view rest = "")
       const {
     return GetParam() == 3 ? fmt::format(".{}{}", first, rest)
                            : fmt::format("[{}]{}", first, rest);

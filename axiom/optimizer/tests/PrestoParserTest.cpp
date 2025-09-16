@@ -65,7 +65,7 @@ class PrestoParserTest : public testing::Test {
     return pool_.get();
   }
 
-  void testSql(const std::string& sql, lp::LogicalPlanMatcherBuilder& matcher) {
+  void testSql(std::string_view sql, lp::LogicalPlanMatcherBuilder& matcher) {
     SCOPED_TRACE(sql);
     test::PrestoParser parser(kTpchConnectorId, pool());
 
@@ -77,7 +77,7 @@ class PrestoParserTest : public testing::Test {
   }
 
   template <typename T>
-  void testDecimal(const std::string& sql, T value, const TypePtr& type) {
+  void testDecimal(std::string_view sql, T value, const TypePtr& type) {
     SCOPED_TRACE(sql);
 
     test::PrestoParser parser(kTpchConnectorId, pool());
@@ -156,7 +156,7 @@ TEST_F(PrestoParserTest, syntaxErrors) {
 TEST_F(PrestoParserTest, types) {
   test::PrestoParser parser(kTpchConnectorId, pool());
 
-  auto test = [&](const std::string& sql, const TypePtr& expectedType) {
+  auto test = [&](std::string_view sql, const TypePtr& expectedType) {
     SCOPED_TRACE(sql);
     auto expr = parser.parseExpression(sql);
 
@@ -186,7 +186,7 @@ TEST_F(PrestoParserTest, types) {
 TEST_F(PrestoParserTest, intervalDayTime) {
   test::PrestoParser parser(kTpchConnectorId, pool());
 
-  auto test = [&](const std::string& sql, int64_t expected) {
+  auto test = [&](std::string_view sql, int64_t expected) {
     SCOPED_TRACE(sql);
     auto expr = parser.parseExpression(sql);
 
@@ -216,15 +216,14 @@ TEST_F(PrestoParserTest, decimal) {
   test::PrestoParser parser(kTpchConnectorId, pool());
 
   auto testShort =
-      [&](const std::string& sql, int64_t value, const TypePtr& type) {
+      [&](std::string_view sql, int64_t value, const TypePtr& type) {
         testDecimal<int64_t>(sql, value, type);
       };
 
-  auto testLong = [&](const std::string& sql,
-                      const std::string& value,
-                      const TypePtr& type) {
-    testDecimal<int128_t>(sql, folly::to<int128_t>(value), type);
-  };
+  auto testLong =
+      [&](std::string_view sql, std::string_view value, const TypePtr& type) {
+        testDecimal<int128_t>(sql, folly::to<int128_t>(value), type);
+      };
 
   // Short decimals.
   testShort("DECIMAL '1.2'", 12, DECIMAL(2, 1));
@@ -276,7 +275,7 @@ TEST_F(PrestoParserTest, decimal) {
 TEST_F(PrestoParserTest, intervalYearMonth) {
   test::PrestoParser parser(kTpchConnectorId, pool());
 
-  auto test = [&](const std::string& sql, int64_t expected) {
+  auto test = [&](std::string_view sql, int64_t expected) {
     auto expr = parser.parseExpression(sql);
 
     ASSERT_TRUE(expr->isConstant());

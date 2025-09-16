@@ -25,11 +25,11 @@ bool isAllDigits(std::string_view str) {
 
 } // namespace
 
-std::string NameAllocator::newName(const std::string& hint) {
+std::string NameAllocator::newName(std::string_view hint) {
   VELOX_CHECK(!hint.empty(), "Hint cannot be empty");
 
   // Strip suffix past '_' if all digits.
-  std::string prefix = hint;
+  std::string_view prefix = hint;
 
   auto pos = prefix.rfind('_');
   if (pos != std::string::npos &&
@@ -37,7 +37,7 @@ std::string NameAllocator::newName(const std::string& hint) {
     prefix = prefix.substr(0, pos);
   }
 
-  std::string name = prefix;
+  std::string name{prefix};
   do {
     if (names_.insert(name).second) {
       return name;

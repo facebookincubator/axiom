@@ -177,7 +177,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
 
   void initialize() override;
 
-  TablePtr findTable(const std::string& name) override;
+  TablePtr findTable(std::string_view name) override;
 
   ConnectorSplitManager* splitManager() override {
     ensureInitialized();
@@ -258,7 +258,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   void initializeTables();
   void loadTable(
       velox::tpch::Table tpchTable,
-      const std::string& ns,
+      std::string_view ns,
       double scaleFactor);
 
   mutable std::mutex mutex_;
