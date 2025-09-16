@@ -705,14 +705,7 @@ class TableWriteNode : public LogicalPlanNode {
       std::vector<std::string> columnNames,
       std::vector<ExprPtr> columnExpressions,
       velox::RowTypePtr outputType,
-      folly::F14FastMap<std::string, std::string> options = {})
-      : LogicalPlanNode{NodeKind::kTableWrite, std::move(id), {std::move(input)}, std::move(outputType)},
-        connectorId_{std::move(connectorId)},
-        tableName_{std::move(tableName)},
-        kind_{kind},
-        columnNames_{std::move(columnNames)},
-        columnExpressions_{std::move(columnExpressions)},
-        options_{std::move(options)} {}
+      folly::F14FastMap<std::string, std::string> options = {});
 
   const std::string& connectorId() const {
     return connectorId_;
