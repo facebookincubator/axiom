@@ -530,8 +530,8 @@ class TempProjections {
     exprs_.reserve(input_.columns().size());
     fieldRefs_.reserve(input_.columns().size());
     for (const auto& column : input_.columns()) {
-      auto [it, emplaced] =
-          exprChannel_.emplace(column, Channel{nextChannel_, useAllColumns});
+      auto [it, emplaced] = exprChannel_.emplace(
+          column, ChannelInfo{nextChannel_, useAllColumns});
       if (!emplaced) {
         continue;
       }
@@ -549,7 +549,7 @@ class TempProjections {
       ExprCP expr,
       const std::string* optName = nullptr) {
     auto [it, emplaced] =
-        exprChannel_.emplace(expr, Channel{nextChannel_, true});
+        exprChannel_.emplace(expr, ChannelInfo{nextChannel_, true});
     if (emplaced) {
       VELOX_CHECK(expr->isNot(PlanType::kColumnExpr));
       ++nextChannel_;
@@ -637,11 +637,11 @@ class TempProjections {
   std::vector<velox::core::FieldAccessTypedExprPtr> fieldRefs_;
   std::vector<std::string> names_;
   std::vector<velox::core::TypedExprPtr> exprs_;
-  struct Channel {
+  struct ChannelInfo {
     uint32_t idx = 0;
     bool used = false;
   };
-  folly::F14FastMap<ExprCP, Channel> exprChannel_;
+  folly::F14FastMap<ExprCP, ChannelInfo> exprChannel_;
 };
 
 } // namespace
