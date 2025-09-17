@@ -28,8 +28,6 @@
 DEFINE_string(subfield_data_path, "", "Data directory for subfield test data");
 DECLARE_uint32(optimizer_trace);
 
-DECLARE_uint32(num_workers);
-
 namespace facebook::axiom::optimizer {
 namespace {
 
@@ -364,11 +362,11 @@ class SubfieldTest : public QueryTestBase,
   }
 
   core::PlanNodePtr toSingleNodePlan(
-      const lp::LogicalPlanNodePtr& logicalPlan) {
-    gflags::FlagSaver saver;
-    FLAGS_num_workers = 1;
-
-    auto plan = planVelox(logicalPlan).plan;
+      const lp::LogicalPlanNodePtr& logicalPlan,
+      uint32_t numDrivers = 1) {
+    auto plan =
+        planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers})
+            .plan;
 
     EXPECT_EQ(1, plan->fragments().size());
     return plan->fragments().at(0).fragment.planNode;
