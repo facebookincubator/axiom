@@ -49,8 +49,8 @@ const std::string kFinalTaskPrefix = "final";
 PrestoQueryReplayRunner::PrestoQueryReplayRunner(
     velox::memory::MemoryPool* pool,
     TaskPrefixExtractor taskPrefixExtractor,
-    uint32_t width,
-    uint32_t maxDrivers,
+    int32_t width,
+    int32_t maxDrivers,
     const std::unordered_map<std::string, std::string>& config,
     const std::unordered_map<std::string, std::string>& hiveConfig)
     : pool_{pool},
@@ -174,11 +174,11 @@ velox::core::PlanNodePtr getDeserializedPlan(
 }
 
 struct PlanFragmentInfo {
-  velox::core::PlanNodePtr plan{nullptr};
+  velox::core::PlanNodePtr plan;
   folly::F14FastMap<std::string, folly::F14FastSet<std::string>>
-      remoteTaskIdMap{};
-  std::vector<velox::core::TableScanNodePtr> scans{};
-  int numWorkers{0};
+      remoteTaskIdMap;
+  std::vector<velox::core::TableScanNodePtr> scans;
+  int32_t numWorkers{0};
 };
 
 std::vector<ExecutableFragment> createExecutableFragments(

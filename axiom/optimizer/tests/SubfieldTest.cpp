@@ -363,7 +363,7 @@ class SubfieldTest : public QueryTestBase,
 
   core::PlanNodePtr toSingleNodePlan(
       const lp::LogicalPlanNodePtr& logicalPlan,
-      uint32_t numDrivers = 1) {
+      int32_t numDrivers = 1) {
     auto plan =
         planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers})
             .plan;

@@ -22,9 +22,9 @@
 
 namespace facebook::axiom::runner {
 
-inline constexpr uint32_t kDefaultWidth = 2;
-inline constexpr uint32_t kDefaultMaxDrivers = 4;
-inline constexpr uint32_t kWaitTimeoutUs = 5'000'000;
+inline constexpr int32_t kDefaultWidth = 2;
+inline constexpr int32_t kDefaultMaxDrivers = 4;
+inline constexpr int32_t kWaitTimeoutUs = 5'000'000;
 
 using TaskPrefixExtractor = std::string (*)(std::string_view);
 using ConnectorSplitPtr = std::shared_ptr<velox::connector::ConnectorSplit>;
@@ -42,8 +42,8 @@ class PrestoQueryReplayRunner {
   explicit PrestoQueryReplayRunner(
       velox::memory::MemoryPool* pool,
       TaskPrefixExtractor taskPrefixExtractor,
-      uint32_t width = kDefaultWidth,
-      uint32_t maxDrivers = kDefaultMaxDrivers,
+      int32_t width = kDefaultWidth,
+      int32_t maxDrivers = kDefaultMaxDrivers,
       const std::unordered_map<std::string, std::string>& config = {},
       const std::unordered_map<std::string, std::string>& hiveConfig = {});
 
@@ -82,9 +82,9 @@ class PrestoQueryReplayRunner {
   /// A function that extracts the stage id from a task id.
   TaskPrefixExtractor taskPrefixExtractor_;
   /// The number of workers for each stage except the gathering stages.
-  uint32_t width_;
+  int32_t width_;
   /// The maximum number of drivers for each worker.
-  uint32_t maxDrivers_;
+  int32_t maxDrivers_;
 
   const std::unordered_map<std::string, std::string> config_;
   const std::unordered_map<std::string, std::string> hiveConfig_;

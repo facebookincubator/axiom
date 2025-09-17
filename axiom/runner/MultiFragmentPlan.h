@@ -71,11 +71,11 @@ class MultiFragmentPlan {
 
     /// Maximum Number of independent Tasks for one stage of execution. If 1,
     /// there are no exchanges.
-    uint32_t numWorkers{1};
+    int32_t numWorkers{1};
 
     /// Number of threads in a fragment in a worker. If 1, there are no local
     /// exchanges.
-    uint32_t numDrivers{4};
+    int32_t numDrivers{4};
   };
 
   MultiFragmentPlan(std::vector<ExecutableFragment> fragments, Options options)

@@ -23,7 +23,7 @@ namespace {
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
-constexpr int kWaitTimeoutUs = 500'000;
+constexpr int32_t kWaitTimeoutUs = 500'000;
 
 class LocalRunnerTest : public test::LocalRunnerTestBase {
  public:
@@ -85,7 +85,7 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
   // Returns a plan with a table scan. This is a single stage if 'numWorkers' is
   // 1, otherwise this is a scan stage plus shuffle to a stage that gathers the
   // scan results.
-  MultiFragmentPlanPtr makeScanPlan(uint32_t numWorkers) {
+  MultiFragmentPlanPtr makeScanPlan(int32_t numWorkers) {
     MultiFragmentPlan::Options options = {
         .queryId = makeQueryId(), .numWorkers = numWorkers, .numDrivers = 2};
 
