@@ -21,13 +21,58 @@
 
 namespace facebook::axiom::runner {
 namespace {
+
+/// Testing proxy for a split source managed by a system with full metadata
+/// access.
+class SimpleSplitSource : public connector::SplitSource {
+ public:
+  explicit SimpleSplitSource(
+      std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits)
+      : splits_(std::move(splits)) {}
+
+  std::vector<SplitAndGroup> getSplits(uint64_t /* targetBytes */) override {
+    if (splitIdx_ >= splits_.size()) {
+      return {{nullptr, 0}};
+    }
+    return {SplitAndGroup{std::move(splits_[splitIdx_++]), 0}};
+  }
+
+ private:
+  std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits_;
+  int32_t splitIdx_{0};
+};
+} // namespace
+
+std::shared_ptr<connector::SplitSource>
+SimpleSplitSourceFactory::splitSourceForScan(
+    const velox::core::TableScanNode& scan) {
+  auto it = nodeSplitMap_.find(scan.id());
+  if (it == nodeSplitMap_.end()) {
+    VELOX_FAIL("Splits are not provided for scan {}", scan.id());
+  }
+  return std::make_shared<SimpleSplitSource>(it->second);
+}
+
+std::shared_ptr<connector::SplitSource>
+ConnectorSplitSourceFactory::splitSourceForScan(
+    const velox::core::TableScanNode& scan) {
+  const auto& handle = scan.tableHandle();
+  auto metadata = connector::ConnectorMetadata::metadata(handle->connectorId());
+  auto splitManager = metadata->splitManager();
+
+  auto partitions = splitManager->listPartitions(handle);
+  return splitManager->getSplitSource(handle, partitions, options_);
+}
+
+namespace {
+
 std::shared_ptr<velox::exec::RemoteConnectorSplit> remoteSplit(
     const std::string& taskId) {
   return std::make_shared<velox::exec::RemoteConnectorSplit>(taskId);
 }
 
 std::vector<velox::exec::Split> listAllSplits(
-    std::shared_ptr<SplitSource> source) {
+    const std::shared_ptr<connector::SplitSource>& source) {
   std::vector<velox::exec::Split> result;
   for (;;) {
     auto splits = source->getSplits(std::numeric_limits<uint64_t>::max());
@@ -35,7 +80,6 @@ std::vector<velox::exec::Split> listAllSplits(
     for (auto& split : splits) {
       if (split.split == nullptr) {
         return result;
-        break;
       }
       result.push_back(velox::exec::Split(std::move(split.split)));
     }
@@ -46,7 +90,7 @@ std::vector<velox::exec::Split> listAllSplits(
 void getTopologicalOrder(
     const std::vector<ExecutableFragment>& fragments,
     int32_t index,
-    const std::unordered_map<std::string, int32_t>& taskPrefixToIndex,
+    const folly::F14FastMap<std::string, int32_t>& taskPrefixToIndex,
     std::vector<bool>& visited,
     std::stack<int32_t>& indices) {
   visited[index] = true;
@@ -65,7 +109,7 @@ void getTopologicalOrder(
 
 std::vector<ExecutableFragment> topologicalSort(
     const std::vector<ExecutableFragment>& fragments) {
-  std::unordered_map<std::string, int32_t> taskPrefixToIndex;
+  folly::F14FastMap<std::string, int32_t> taskPrefixToIndex;
   for (auto i = 0; i < fragments.size(); ++i) {
     taskPrefixToIndex[fragments[i].taskPrefix] = i;
   }
@@ -100,15 +144,15 @@ LocalRunner::LocalRunner(
       fragments_(topologicalSort(plan->fragments())),
       splitSourceFactory_(std::move(splitSourceFactory)) {
   params_.queryCtx = std::move(queryCtx);
-  params_.outputPool = outputPool;
+  params_.outputPool = std::move(outputPool);
 }
 
 velox::RowVectorPtr LocalRunner::next() {
   if (!cursor_) {
     start();
   }
-  bool hasNext = cursor_->moveNext();
-  if (!hasNext) {
+
+  if (!cursor_->moveNext()) {
     state_ = State::kFinished;
     return nullptr;
   }
@@ -122,7 +166,6 @@ void LocalRunner::start() {
   params_.planNode = fragments_.back().fragment.planNode;
 
   auto cursor = velox::exec::TaskCursor::create(params_);
-
   makeStages(cursor->task());
 
   {
@@ -140,7 +183,7 @@ void LocalRunner::start() {
   }
 }
 
-std::shared_ptr<SplitSource> LocalRunner::splitSourceForScan(
+std::shared_ptr<connector::SplitSource> LocalRunner::splitSourceForScan(
     const velox::core::TableScanNode& scan) {
   return splitSourceFactory_->splitSourceForScan(scan);
 }
@@ -168,7 +211,7 @@ void LocalRunner::abort() {
   }
 }
 
-void LocalRunner::waitForCompletion(int32_t maxWaitUs) {
+void LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
   VELOX_CHECK_NE(state_, State::kInitialized);
   std::vector<velox::ContinueFuture> futures;
   {
@@ -180,14 +223,19 @@ void LocalRunner::waitForCompletion(int32_t maxWaitUs) {
       stage.clear();
     }
   }
-  auto startTime = velox::getCurrentTimeMicro();
+
+  const auto startTime = velox::getCurrentTimeMicro();
   for (auto& future : futures) {
+    const auto elapsedTime = velox::getCurrentTimeMicro() - startTime;
+    VELOX_CHECK_LT(
+        elapsedTime,
+        maxWaitMicros,
+        "LocalRunner did not finish within {} us",
+        maxWaitMicros);
+
     auto& executor = folly::QueuedImmediateExecutor::instance();
-    if (velox::getCurrentTimeMicro() - startTime > maxWaitUs) {
-      VELOX_FAIL("LocalRunner did not finish within {} us", maxWaitUs);
-    }
     std::move(future)
-        .within(std::chrono::microseconds(maxWaitUs))
+        .within(std::chrono::microseconds(maxWaitMicros - elapsedTime))
         .via(&executor)
         .wait();
   }
@@ -208,7 +256,6 @@ bool isBroadcast(const velox::core::PlanFragment& fragment) {
 
 void LocalRunner::makeStages(
     const std::shared_ptr<velox::exec::Task>& lastStageTask) {
-  std::unordered_map<std::string, std::pair<int32_t, bool>> stageMap;
   auto sharedRunner = shared_from_this();
   auto onError = [self = sharedRunner, this](std::exception_ptr error) {
     {
@@ -224,6 +271,8 @@ void LocalRunner::makeStages(
     }
   };
 
+  // Mapping from task prefix to the stage index and whether it is a broadcast.
+  folly::F14FastMap<std::string, std::pair<int32_t, bool>> stageMap;
   for (auto fragmentIndex = 0; fragmentIndex < fragments_.size() - 1;
        ++fragmentIndex) {
     const auto& fragment = fragments_[fragmentIndex];
@@ -259,9 +308,10 @@ void LocalRunner::makeStages(
     const auto& fragment = fragments_[fragmentIndex];
     const auto& stage = stages_[fragmentIndex];
 
-    for (auto& scan : fragment.scans) {
+    for (const auto& scan : fragment.scans) {
       auto source = splitSourceForScan(*scan);
-      std::vector<SplitSource::SplitAndGroup> splits;
+
+      std::vector<connector::SplitSource::SplitAndGroup> splits;
       int32_t splitIdx = 0;
       auto getNextSplit = [&]() {
         if (splitIdx < splits.size()) {
@@ -272,26 +322,25 @@ void LocalRunner::makeStages(
         return velox::exec::Split(std::move(splits[0].split));
       };
 
+      // Distribute splits across tasks using round-robin.
       bool allDone = false;
       do {
-        for (auto i = 0; i < stage.size(); ++i) {
+        for (auto& task : stage) {
           auto split = getNextSplit();
           if (!split.hasConnectorSplit()) {
             allDone = true;
             break;
           }
-          stage[i]->addSplit(scan->id(), std::move(split));
+          task->addSplit(scan->id(), std::move(split));
         }
       } while (!allDone);
-    }
 
-    for (auto& scan : fragment.scans) {
-      for (const auto& task : stages_[fragmentIndex]) {
+      for (auto& task : stage) {
         task->noMoreSplits(scan->id());
       }
     }
 
-    for (auto& input : fragment.inputStages) {
+    for (const auto& input : fragment.inputStages) {
       const auto [sourceStage, broadcast] = stageMap[input.producerTaskPrefix];
 
       std::vector<std::shared_ptr<velox::exec::RemoteConnectorSplit>>
@@ -304,7 +353,7 @@ void LocalRunner::makeStages(
         }
       }
 
-      for (auto& task : stages_[fragmentIndex]) {
+      for (auto& task : stage) {
         for (const auto& remote : sourceSplits) {
           task->addSplit(input.consumerNodeId, velox::exec::Split(remote));
         }
@@ -317,12 +366,12 @@ void LocalRunner::makeStages(
 std::vector<velox::exec::TaskStats> LocalRunner::stats() const {
   std::vector<velox::exec::TaskStats> result;
   std::lock_guard<std::mutex> l(mutex_);
-  for (auto i = 0; i < stages_.size(); ++i) {
-    const auto& tasks = stages_[i];
+  for (const auto& tasks : stages_) {
     VELOX_CHECK(!tasks.empty());
+
     auto stats = tasks[0]->taskStats();
-    for (auto j = 1; j < tasks.size(); ++j) {
-      const auto moreStats = tasks[j]->taskStats();
+    for (auto i = 1; i < tasks.size(); ++i) {
+      const auto moreStats = tasks[i]->taskStats();
       for (auto pipeline = 0; pipeline < stats.pipelineStats.size();
            ++pipeline) {
         auto& pipelineStats = stats.pipelineStats[pipeline];
@@ -340,9 +389,9 @@ std::vector<velox::exec::TaskStats> LocalRunner::stats() const {
 std::string LocalRunner::printPlanWithStats(
     const std::function<void(
         const velox::core::PlanNodeId& nodeId,
-        const std::string& indentation,
+        std::string_view indentation,
         std::ostream& out)>& addContext) const {
-  std::unordered_set<velox::core::PlanNodeId> leafNodeIds;
+  folly::F14FastSet<velox::core::PlanNodeId> leafNodeIds;
   for (const auto& fragment : fragments_) {
     for (const auto& nodeId : fragment.fragment.planNode->leafPlanNodeIds()) {
       leafNodeIds.insert(nodeId);
@@ -350,7 +399,7 @@ std::string LocalRunner::printPlanWithStats(
   }
 
   const auto taskStats = stats();
-  std::unordered_map<velox::core::PlanNodeId, std::string> planNodeStats;
+  folly::F14FastMap<velox::core::PlanNodeId, std::string> planNodeStats;
   for (const auto& stats : taskStats) {
     auto planStats = velox::exec::toPlanStats(stats);
     for (const auto& [id, nodeStats] : planStats) {
@@ -367,23 +416,6 @@ std::string LocalRunner::printPlanWithStats(
           out << indentation << statsIt->second << std::endl;
         }
       });
-}
-
-std::vector<SplitSource::SplitAndGroup> SimpleSplitSource::getSplits(
-    uint64_t /*targetBytes*/) {
-  if (splitIdx_ >= splits_.size()) {
-    return {{nullptr, 0}};
-  }
-  return {SplitAndGroup{std::move(splits_[splitIdx_++]), 0}};
-}
-
-std::shared_ptr<SplitSource> SimpleSplitSourceFactory::splitSourceForScan(
-    const velox::core::TableScanNode& scan) {
-  auto it = nodeSplitMap_.find(scan.id());
-  if (it == nodeSplitMap_.end()) {
-    VELOX_FAIL("Splits are not provided for scan {}", scan.id());
-  }
-  return std::make_shared<SimpleSplitSource>(it->second);
 }
 
 } // namespace facebook::axiom::runner

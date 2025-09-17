@@ -27,10 +27,10 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/FunctionRegistry.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 namespace {
 
-namespace lp = facebook::velox::logical_plan;
+namespace lp = facebook::axiom::logical_plan;
 
 /// Trace info to add to exception messages.
 struct ToGraphContext {
@@ -42,7 +42,9 @@ struct ToGraphContext {
   const lp::LogicalPlanNode* node{nullptr};
 };
 
-std::string toGraphMessage(VeloxException::Type exceptionType, void* arg) {
+std::string toGraphMessage(
+    velox::VeloxException::Type exceptionType,
+    void* arg) {
   auto ctx = reinterpret_cast<ToGraphContext*>(arg);
   if (ctx->expr != nullptr) {
     return fmt::format("Expr: {}", lp::ExprPrinter::toText(*ctx->expr));
@@ -56,8 +58,8 @@ std::string toGraphMessage(VeloxException::Type exceptionType, void* arg) {
   return "";
 }
 
-ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
-  ExceptionContext e;
+velox::ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
+  velox::ExceptionContext e;
   e.messageFunc = toGraphMessage;
   e.arg = ctx;
   return e;
@@ -66,7 +68,7 @@ ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
 
 ToGraph::ToGraph(
     const Schema& schema,
-    core::ExpressionEvaluator& evaluator,
+    velox::core::ExpressionEvaluator& evaluator,
     const OptimizerOptions& options)
     : schema_{schema},
       evaluator_{evaluator},
@@ -140,7 +142,7 @@ bool isConstantTrue(ExprCP expr) {
   }
 
   const auto& variant = expr->as<Literal>()->literal();
-  return variant.kind() == TypeKind::BOOLEAN && !variant.isNull() &&
+  return variant.kind() == velox::TypeKind::BOOLEAN && !variant.isNull() &&
       variant.value<bool>();
 }
 } // namespace
@@ -162,8 +164,8 @@ void ToGraph::translateConjuncts(const lp::ExprPtr& input, ExprVector& flat) {
 }
 
 ExprCP ToGraph::tryFoldConstant(
-    const TypePtr& returnType,
-    const std::string& callName,
+    const velox::TypePtr& returnType,
+    std::string_view callName,
     const ExprVector& literals) {
   try {
     Value value(toType(returnType), 1);
@@ -172,10 +174,12 @@ ExprCP ToGraph::tryFoldConstant(
     auto typedExpr = queryCtx()->optimization()->toTypedExpr(veraxExpr);
     auto exprSet = evaluator_.compile(typedExpr);
     auto first = exprSet->exprs().front().get();
-    if (auto constantExpr = dynamic_cast<const exec::ConstantExpr*>(first)) {
+    if (auto constantExpr =
+            dynamic_cast<const velox::exec::ConstantExpr*>(first)) {
       auto typed = std::make_shared<lp::ConstantExpr>(
           constantExpr->type(),
-          std::make_shared<Variant>(constantExpr->value()->variantAt(0)));
+          std::make_shared<velox::Variant>(
+              constantExpr->value()->variantAt(0)));
 
       return makeConstant(*typed);
     }
@@ -196,13 +200,13 @@ bool ToGraph::isSubfield(
         maybeIntegerLiteral(expr->inputAt(1)->asUnchecked<lp::ConstantExpr>());
     Name name = nullptr;
     int64_t id = 0;
-    auto& rowType = expr->inputAt(0)->type()->as<TypeKind::ROW>();
+    auto& rowType = expr->inputAt(0)->type()->as<velox::TypeKind::ROW>();
     if (maybeIndex.has_value()) {
       id = maybeIndex.value();
       name = toName(rowType.nameOf(maybeIndex.value()));
     } else {
       auto& field = expr->inputAt(1)->asUnchecked<lp::ConstantExpr>()->value();
-      name = toName(field->value<TypeKind::VARCHAR>());
+      name = toName(field->value<velox::TypeKind::VARCHAR>());
       id = rowType.getChildIdx(name);
     }
     step.field = name;
@@ -220,13 +224,13 @@ bool ToGraph::isSubfield(
         step.kind = StepKind::kSubscript;
         auto& literal = subscript->as<Literal>()->literal();
         switch (subscript->value().type->kind()) {
-          case TypeKind::VARCHAR:
-            step.field = toName(literal.value<TypeKind::VARCHAR>());
+          case velox::TypeKind::VARCHAR:
+            step.field = toName(literal.value<velox::TypeKind::VARCHAR>());
             break;
-          case TypeKind::BIGINT:
-          case TypeKind::INTEGER:
-          case TypeKind::SMALLINT:
-          case TypeKind::TINYINT:
+          case velox::TypeKind::BIGINT:
+          case velox::TypeKind::INTEGER:
+          case velox::TypeKind::SMALLINT:
+          case velox::TypeKind::TINYINT:
             step.id = integerValue(&literal);
             break;
           default:
@@ -251,29 +255,37 @@ void ToGraph::getExprForField(
     lp::ExprPtr& resultExpr,
     ColumnCP& resultColumn,
     const lp::LogicalPlanNode*& context) {
-  for (;;) {
-    auto& name = field->asUnchecked<lp::InputReferenceExpr>()->name();
+  while (context) {
+    const auto& name = field->asUnchecked<lp::InputReferenceExpr>()->name();
     auto ordinal = context->outputType()->getChildIdx(name);
     if (context->is(lp::NodeKind::kProject)) {
       const auto* project = context->asUnchecked<lp::ProjectNode>();
       auto& def = project->expressions()[ordinal];
+      context = context->inputAt(0).get();
       if (def->isInputReference()) {
         const auto* innerField = def->asUnchecked<lp::InputReferenceExpr>();
-        context = context->inputAt(0).get();
         field = innerField;
         continue;
       }
       resultExpr = def;
-      context = project->inputAt(0).get();
       return;
     }
 
     const auto& sources = context->inputs();
-    if (sources.empty()) {
-      auto leaf = findLeaf(context);
+
+    const bool checkInContext = [&] {
+      if (context->is(lp::NodeKind::kUnnest)) {
+        const auto* unnest = context->asUnchecked<lp::UnnestNode>();
+        return ordinal >= unnest->onlyInput()->outputType()->size();
+      }
+      return sources.empty();
+    }();
+
+    if (checkInContext) {
+      const auto* leaf = findLeaf(context);
       auto it = renames_.find(name);
       VELOX_CHECK(it != renames_.end());
-      auto maybeColumn = it->second;
+      const auto* maybeColumn = it->second;
       VELOX_CHECK(maybeColumn->is(PlanType::kColumnExpr));
       resultColumn = maybeColumn->as<Column>();
       resultExpr = nullptr;
@@ -281,7 +293,8 @@ void ToGraph::getExprForField(
       const auto* relation = resultColumn->relation();
       VELOX_CHECK_NOT_NULL(relation);
       if (relation->is(PlanType::kTableNode) ||
-          relation->is(PlanType::kValuesTableNode)) {
+          relation->is(PlanType::kValuesTableNode) ||
+          relation->is(PlanType::kUnnestTableNode)) {
         VELOX_CHECK(leaf == relation);
       }
       return;
@@ -295,6 +308,7 @@ void ToGraph::getExprForField(
       }
     }
   }
+  VELOX_FAIL();
 }
 
 std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
@@ -359,24 +373,24 @@ PathCP innerPath(std::span<const Step> steps, int32_t last) {
   return toPath(steps.subspan(last), true);
 }
 
-Variant* subscriptLiteral(TypeKind kind, const Step& step) {
+velox::Variant* subscriptLiteral(velox::TypeKind kind, const Step& step) {
   auto* ctx = queryCtx();
   switch (kind) {
-    case TypeKind::VARCHAR:
+    case velox::TypeKind::VARCHAR:
       return ctx->registerVariant(
-          std::make_unique<Variant>(std::string(step.field)));
-    case TypeKind::BIGINT:
+          std::make_unique<velox::Variant>(std::string(step.field)));
+    case velox::TypeKind::BIGINT:
       return ctx->registerVariant(
-          std::make_unique<Variant>(static_cast<int64_t>(step.id)));
-    case TypeKind::INTEGER:
+          std::make_unique<velox::Variant>(static_cast<int64_t>(step.id)));
+    case velox::TypeKind::INTEGER:
       return ctx->registerVariant(
-          std::make_unique<Variant>(static_cast<int32_t>(step.id)));
-    case TypeKind::SMALLINT:
+          std::make_unique<velox::Variant>(static_cast<int32_t>(step.id)));
+    case velox::TypeKind::SMALLINT:
       return ctx->registerVariant(
-          std::make_unique<Variant>(static_cast<int16_t>(step.id)));
-    case TypeKind::TINYINT:
+          std::make_unique<velox::Variant>(static_cast<int16_t>(step.id)));
+    case velox::TypeKind::TINYINT:
       return ctx->registerVariant(
-          std::make_unique<Variant>(static_cast<int8_t>(step.id)));
+          std::make_unique<velox::Variant>(static_cast<int8_t>(step.id)));
     default:
       VELOX_FAIL("Unsupported key type");
   }
@@ -454,8 +468,8 @@ ExprCP ToGraph::makeGettersOverSkyline(
               toType(inputType->childAt(inputType->isArray() ? 0 : 1));
 
           // Type of array index or map key.
-          auto subscriptType =
-              toType(inputType->isArray() ? INTEGER() : inputType->childAt(0));
+          auto subscriptType = toType(
+              inputType->isArray() ? velox::INTEGER() : inputType->childAt(0));
 
           ExprVector args{
               expr,
@@ -472,7 +486,7 @@ ExprCP ToGraph::makeGettersOverSkyline(
         case StepKind::kCardinality: {
           expr = make<Call>(
               cardinality_,
-              Value(toType(BIGINT()), 1),
+              Value(toType(velox::BIGINT()), 1),
               ExprVector{expr},
               FunctionSet());
           break;
@@ -528,7 +542,7 @@ BitSet ToGraph::functionSubfields(
 void ToGraph::ensureFunctionSubfields(const lp::ExprPtr& expr) {
   if (expr->isCall()) {
     const auto* call = expr->asUnchecked<lp::CallExpr>();
-    if (functionMetadata(exec::sanitizeName(call->name()))) {
+    if (functionMetadata(velox::exec::sanitizeName(call->name()))) {
       if (!translatedSubfieldFuncs_.contains(call)) {
         translateExpr(expr);
       }
@@ -671,13 +685,13 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
   }
 
   ToGraphContext ctx(expr.get());
-  ExceptionContextSetter exceptionContext(makeExceptionContext(&ctx));
+  velox::ExceptionContextSetter exceptionContext(makeExceptionContext(&ctx));
 
   const auto* call =
       expr->isCall() ? expr->asUnchecked<lp::CallExpr>() : nullptr;
   std::string callName;
   if (call) {
-    callName = exec::sanitizeName(call->name());
+    callName = velox::exec::sanitizeName(call->name());
     auto* metadata = functionMetadata(callName);
     if (metadata && metadata->processSubfields()) {
       auto translated = translateSubfieldFunction(call, metadata);
@@ -811,16 +825,16 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
       const auto& inputType = input->type();
       args[i] = make<Literal>(
           Value(toType(inputType), 1),
-          make<Variant>(Variant::null(inputType->kind())));
+          make<velox::Variant>(velox::Variant::null(inputType->kind())));
     }
   }
 
-  auto* name = toName(exec::sanitizeName(call->name()));
+  auto* name = toName(velox::exec::sanitizeName(call->name()));
   funcs = funcs | functionBits(name);
 
   if (metadata->explode) {
     auto map = metadata->explode(call, paths);
-    std::unordered_map<PathCP, ExprCP> translated;
+    folly::F14FastMap<PathCP, ExprCP> translated;
     for (const auto& [path, expr] : map) {
       translated[path] = translateExpr(expr);
     }
@@ -846,7 +860,7 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
   return callExpr;
 }
 
-ExprCP ToGraph::translateColumn(const std::string& name) {
+ExprCP ToGraph::translateColumn(std::string_view name) {
   auto it = renames_.find(name);
   if (it != renames_.end()) {
     return it->second;
@@ -860,6 +874,63 @@ ExprVector ToGraph::translateColumns(const std::vector<lp::ExprPtr>& source) {
     result[i] = translateExpr(source[i]); // NOLINT
   }
   return result;
+}
+
+void ToGraph::translateUnnest(const lp::UnnestNode& unnest, bool isNewDt) {
+  if (unnest.ordinalityName().has_value()) {
+    VELOX_NYI(
+        "Unnest ordinality column is not supported in Verax optimizer. Unnest node: {}",
+        unnest.id());
+  }
+  PlanObjectCP leftTable = nullptr;
+  ExprVector unnestExprs;
+  unnestExprs.reserve(unnest.unnestExpressions().size());
+  float maxCardinality = 0;
+  for (size_t i = 0; i < unnest.unnestExpressions().size(); ++i) {
+    const auto* unnestExpr = translateExpr(unnest.unnestExpressions()[i]);
+    unnestExprs.push_back(unnestExpr);
+    if (i == 0) {
+      leftTable = unnestExpr->singleTable();
+    } else if (leftTable && leftTable != unnestExpr->singleTable()) {
+      leftTable = nullptr;
+    }
+    maxCardinality = std::max(maxCardinality, unnestExpr->value().cardinality);
+  }
+
+  if (!leftTable) {
+    leftTable = currentDt_;
+    if (!isNewDt) {
+      finalizeDt(*unnest.onlyInput());
+    }
+  }
+
+  auto* unnestTable = make<UnnestTable>();
+  unnestTable->cname = newCName("ut");
+  unnestTable->columns.reserve(
+      unnest.outputType()->size() - unnest.onlyInput()->outputType()->size());
+  for (size_t i = 0; i < unnestExprs.size(); ++i) {
+    const auto* unnestExpr = unnestExprs[i];
+    const auto& unnestedNames = unnest.unnestedNames()[i];
+    for (size_t j = 0; j < unnestedNames.size(); ++j) {
+      const auto* unnestedType = unnestExpr->value().type->childAt(j).get();
+      // TODO Value cardinality also should be multiplied by the max from all
+      // columns average expected number of elements per unnested element.
+      // Other Value properties also should be computed.
+      Value value{unnestedType, maxCardinality};
+      const auto* columnName = toName(unnestedNames[j]);
+      auto* column = make<Column>(columnName, unnestTable, value, columnName);
+      unnestTable->columns.push_back(column);
+      renames_[columnName] = column;
+    }
+  }
+
+  auto* edge =
+      JoinEdge::makeUnnest(leftTable, unnestTable, std::move(unnestExprs));
+
+  planLeaves_[&unnest] = unnestTable;
+  currentDt_->tables.push_back(unnestTable);
+  currentDt_->tableSet.add(unnestTable);
+  currentDt_->joins.push_back(edge);
 }
 
 AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
@@ -895,7 +966,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     ExprVector args = translateColumns(aggregate->inputs());
 
     FunctionSet funcs;
-    std::vector<TypePtr> argTypes;
+    std::vector<velox::TypePtr> argTypes;
     for (auto& arg : args) {
       funcs = funcs | arg->functions();
       argTypes.push_back(toTypePtr(arg->value().type));
@@ -908,7 +979,8 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 
     Name aggName = toName(aggregate->name());
     auto accumulatorType = toType(
-        exec::resolveAggregateFunction(aggregate->name(), argTypes).second);
+        velox::exec::resolveAggregateFunction(aggregate->name(), argTypes)
+            .second);
     Value finalValue = Value(toType(aggregate->type()), 1);
     auto* aggregateExpr = make<Aggregate>(
         aggName,
@@ -1014,7 +1086,10 @@ void ToGraph::translateJoin(const lp::JoinNode& join) {
   const auto joinType = join.joinType();
   const bool isInner = joinType == lp::JoinType::kInner;
 
-  makeQueryGraph(*joinLeft, allow(PlanType::kJoinNode));
+  // TODO Allow mixing Unnest with Join in a single DT.
+  // https://github.com/facebookexperimental/verax/issues/286
+  const auto allowedInDt = allow(PlanType::kJoinNode);
+  makeQueryGraph(*joinLeft, allowedInDt);
 
   // For an inner join a join tree on the right can be flattened, for all other
   // kinds it must be kept together in its own dt.
@@ -1026,7 +1101,7 @@ void ToGraph::translateJoin(const lp::JoinNode& join) {
 
     isNondeterministicWrap_ = false;
   }
-  makeQueryGraph(*joinRight, isInner ? allow(PlanType::kJoinNode) : 0);
+  makeQueryGraph(*joinRight, isInner ? allowedInDt : 0);
 
   if (previousDt) {
     finalizeDt(*joinRight, previousDt);
@@ -1132,8 +1207,8 @@ PlanObjectP ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
     baseTable->columns.push_back(column);
 
     const auto kind = column->value().type->kind();
-    if (kind == TypeKind::ARRAY || kind == TypeKind::ROW ||
-        kind == TypeKind::MAP) {
+    if (kind == velox::TypeKind::ARRAY || kind == velox::TypeKind::ROW ||
+        kind == velox::TypeKind::MAP) {
       BitSet allPaths;
       if (controlSubfields_.hasColumn(&tableScan, i)) {
         baseTable->controlSubfields.ids.push_back(column->id());
@@ -1168,7 +1243,7 @@ PlanObjectP ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
   optimization->filterUpdated(baseTable, false);
 
   ColumnVector top;
-  std::unordered_map<ColumnCP, TypePtr> map;
+  folly::F14FastMap<ColumnCP, velox::TypePtr> map;
   auto scanType = optimization->subfieldPushdownScanType(
       baseTable, baseTable->columns, top, map);
 
@@ -1205,20 +1280,21 @@ PlanObjectP ToGraph::makeValuesTable(const lp::ValuesNode& values) {
 }
 
 namespace {
-const Type* pathType(const Type* type, PathCP path) {
+const velox::Type* pathType(const velox::Type* type, PathCP path) {
   for (auto& step : path->steps()) {
     switch (step.kind) {
       case StepKind::kField:
         if (step.field) {
-          type =
-              type->childAt(type->as<TypeKind::ROW>().getChildIdx(step.field))
-                  .get();
+          type = type->childAt(type->as<velox::TypeKind::ROW>().getChildIdx(
+                                   step.field))
+                     .get();
           break;
         }
         type = type->childAt(step.id).get();
         break;
       case StepKind::kSubscript:
-        type = type->childAt(type->kind() == TypeKind::ARRAY ? 0 : 1).get();
+        type =
+            type->childAt(type->kind() == velox::TypeKind::ARRAY ? 0 : 1).get();
         break;
       default:
         VELOX_NYI();
@@ -1425,7 +1501,7 @@ DerivedTableP ToGraph::translateUnion(
     bool isTopLevel,
     bool& isLeftLeaf) {
   auto initialRenames = renames_;
-  std::vector<DerivedTableP, QGAllocator<DerivedTable*>> children;
+  QGVector<DerivedTableP> children;
   bool isFirst = true;
   DerivedTableP previousDt = currentDt_;
   for (auto& input : set.inputs()) {
@@ -1530,8 +1606,8 @@ uint64_t makeDtIf(uint64_t mask, PlanType op) {
 PlanObjectP ToGraph::makeQueryGraph(
     const lp::LogicalPlanNode& node,
     uint64_t allowedInDt) {
-  ToGraphContext ctx(&node);
-  ExceptionContextSetter exceptionContext{makeExceptionContext(&ctx)};
+  ToGraphContext ctx{&node};
+  velox::ExceptionContextSetter exceptionContext{makeExceptionContext(&ctx)};
   switch (node.kind()) {
     case lp::NodeKind::kValues:
       return makeValuesTable(*node.asUnchecked<lp::ValuesNode>());
@@ -1638,7 +1714,26 @@ PlanObjectP ToGraph::makeQueryGraph(
       currentDt_->tableSet.add(setDt);
       return currentDt_;
     }
-    case lp::NodeKind::kUnnest:
+
+    case lp::NodeKind::kUnnest: {
+      if (!contains(allowedInDt, PlanType::kUnnestTableNode)) {
+        return wrapInDt(node);
+      }
+
+      // Multiple unnest is allowed in a DT.
+      // If arrives after groupBy, orderBy, limit then starts a new DT.
+      const auto& input = *node.onlyInput();
+      makeQueryGraph(input, allowedInDt);
+
+      const bool isNewDt = currentDt_->hasAggregation() ||
+          currentDt_->hasOrderBy() || currentDt_->hasLimit();
+      if (isNewDt) {
+        finalizeDt(input);
+      }
+      translateUnnest(*node.asUnchecked<lp::UnnestNode>(), isNewDt);
+      return currentDt_;
+    }
+
     default:
       VELOX_NYI(
           "Unsupported PlanNode {}", lp::NodeKindName::toName(node.kind()));
@@ -1655,4 +1750,4 @@ extern std::string pString(const lp::LogicalPlanNode* p) {
   return lp::PlanPrinter::toText(*p);
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

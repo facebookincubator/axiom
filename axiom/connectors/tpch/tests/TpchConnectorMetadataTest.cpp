@@ -14,29 +14,29 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/connectors/tpch/TpchConnectorMetadata.h"
+#include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/expression/Expr.h"
 
-namespace facebook::velox::connector::tpch {
+namespace facebook::axiom::connector::tpch {
 namespace {
 
 class TpchConnectorMetadataTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    auto config = std::make_shared<config::ConfigBase>(
+    auto config = std::make_shared<velox::config::ConfigBase>(
         std::unordered_map<std::string, std::string>{});
-    connector_ = std::make_unique<TpchConnector>(
-        connector::tpch::TpchConnectorFactory::kTpchConnectorName,
+    connector_ = std::make_unique<velox::connector::tpch::TpchConnector>(
+        velox::connector::tpch::TpchConnectorFactory::kTpchConnectorName,
         config,
         nullptr);
     metadata_ = std::make_unique<TpchConnectorMetadata>(connector_.get());
   }
 
-  std::unique_ptr<TpchConnector> connector_;
+  std::unique_ptr<velox::connector::tpch::TpchConnector> connector_;
   std::unique_ptr<TpchConnectorMetadata> metadata_;
 };
 
@@ -58,24 +58,33 @@ TEST_F(TpchConnectorMetadataTest, findAllTables) {
 }
 
 TEST_F(TpchConnectorMetadataTest, findAllScaleFactors) {
-  std::vector<int> scaleFactors = {
-      1, 100, 1000, 10000, 100000, 300, 3000, 30000};
-  auto tableName = "customer";
+  const std::vector<int> scaleFactors = {
+      1, 10, 100, 1000, 10000, 100000, 30, 300, 3000, 30000};
+
   for (const auto& scaleFactor : scaleFactors) {
-    auto qualifiedName = fmt::format("sf{}.{}", scaleFactor, tableName);
+    const auto qualifiedName = fmt::format("sf{}.customer", scaleFactor);
+
     auto table = metadata_->findTable(qualifiedName);
     ASSERT_NE(table, nullptr);
     EXPECT_EQ(table->name(), qualifiedName);
+
     auto tpchTable = std::dynamic_pointer_cast<const TpchTable>(table);
     ASSERT_NE(tpchTable, nullptr);
-    EXPECT_DOUBLE_EQ(tpchTable->getScaleFactor(), scaleFactor);
+    EXPECT_DOUBLE_EQ(tpchTable->scaleFactor(), scaleFactor);
   }
 }
 
 TEST_F(TpchConnectorMetadataTest, invalidLookups) {
   auto table = metadata_->findTable("invalidtable");
   EXPECT_EQ(table, nullptr);
+
   table = metadata_->findTable("invalidschema.lineitem");
+  EXPECT_EQ(table, nullptr);
+
+  table = metadata_->findTable("sflarge.customer");
+  EXPECT_EQ(table, nullptr);
+
+  table = metadata_->findTable("sf000.supplier");
   EXPECT_EQ(table, nullptr);
 }
 
@@ -113,7 +122,7 @@ TEST_F(TpchConnectorMetadataTest, createColumnHandle) {
   ASSERT_NE(columnHandle, nullptr);
 
   auto* tpchColumnHandle =
-      dynamic_cast<const facebook::velox::connector::tpch::TpchColumnHandle*>(
+      dynamic_cast<const velox::connector::tpch::TpchColumnHandle*>(
           columnHandle.get());
   ASSERT_NE(tpchColumnHandle, nullptr);
   EXPECT_EQ(tpchColumnHandle->name(), "orderkey");
@@ -126,19 +135,19 @@ TEST_F(TpchConnectorMetadataTest, createTableHandle) {
   const auto& layouts = table->layouts();
   ASSERT_EQ(layouts.size(), 1);
   auto* tpchLayout =
-      dynamic_cast<const facebook::velox::connector::tpch::TpchTableLayout*>(
+      dynamic_cast<const facebook::axiom::connector::tpch::TpchTableLayout*>(
           layouts[0]);
 
-  std::vector<facebook::velox::connector::ColumnHandlePtr> columnHandles;
-  std::vector<facebook::velox::core::TypedExprPtr> empty;
-  auto evaluator =
-      std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
+  std::vector<velox::connector::ColumnHandlePtr> columnHandles;
+  std::vector<velox::core::TypedExprPtr> empty;
+  auto evaluator = std::make_unique<velox::exec::SimpleExpressionEvaluator>(
+      nullptr, nullptr);
   auto tableHandle = metadata_->createTableHandle(
       *layouts[0], columnHandles, *evaluator, empty, empty);
   ASSERT_NE(tableHandle, nullptr);
 
   auto* tpchTableHandle =
-      dynamic_cast<const facebook::velox::connector::tpch::TpchTableHandle*>(
+      dynamic_cast<const velox::connector::tpch::TpchTableHandle*>(
           tableHandle.get());
   ASSERT_NE(tpchTableHandle, nullptr);
 
@@ -157,10 +166,10 @@ TEST_F(TpchConnectorMetadataTest, splitGeneration) {
   auto splitManager = metadata_->splitManager();
   ASSERT_NE(splitManager, nullptr);
 
-  std::vector<facebook::velox::connector::ColumnHandlePtr> columnHandles;
-  std::vector<facebook::velox::core::TypedExprPtr> empty;
-  auto evaluator =
-      std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
+  std::vector<velox::connector::ColumnHandlePtr> columnHandles;
+  std::vector<velox::core::TypedExprPtr> empty;
+  auto evaluator = std::make_unique<velox::exec::SimpleExpressionEvaluator>(
+      nullptr, nullptr);
   auto tableHandle = metadata_->createTableHandle(
       *layouts[0], columnHandles, *evaluator, empty, empty);
   ASSERT_NE(tableHandle, nullptr);
@@ -174,7 +183,7 @@ TEST_F(TpchConnectorMetadataTest, splitGeneration) {
   ASSERT_FALSE(splits.empty());
 }
 } // namespace
-} // namespace facebook::velox::connector::tpch
+} // namespace facebook::axiom::connector::tpch
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);

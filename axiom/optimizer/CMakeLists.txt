@@ -12,22 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(tests)
+if(AXIOM_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
 
-add_subdirectory(connectors)
-
-add_library(velox_md_model Model.cpp)
-
-target_link_libraries(
-  velox_md_model velox_exception)
-
-add_library(velox_schema_resolver SchemaResolver.cpp SchemaUtils.cpp)
+add_library(axiom_model Model.cpp)
 
 target_link_libraries(
-  velox_schema_resolver velox_connector_metadata velox_exception velox_vector)
+  axiom_model velox_exception)
+
+add_library(axiom_schema_resolver SchemaResolver.cpp SchemaUtils.cpp)
+
+target_link_libraries(
+  axiom_schema_resolver axiom_connector_metadata velox_exception velox_vector)
 
 add_library(
-  velox_verax
+  axiom_optimizer
   DerivedTable.cpp
   DerivedTablePrinter.cpp
   ToGraph.cpp
@@ -48,14 +48,14 @@ add_library(
   VeloxHistory.cpp
   JoinSample.cpp)
 
-add_dependencies(velox_verax velox_hive_connector)
+add_dependencies(axiom_optimizer velox_hive_connector)
 
 target_link_libraries(
-  velox_verax
+  axiom_optimizer
   velox_core
-  velox_connector_metadata
-  velox_fe_logical_plan
-  velox_md_model
+  axiom_connector_metadata
+  axiom_logical_plan
+  axiom_model
   axiom_runner_multifragment_plan
   velox_connector
-  velox_schema_resolver)
+  axiom_schema_resolver)

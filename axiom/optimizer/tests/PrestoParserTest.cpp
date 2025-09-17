@@ -17,18 +17,19 @@
 #include "axiom/optimizer/tests/PrestoParser.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
-#include "axiom/optimizer/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/optimizer/tests/LogicalPlanMatcher.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 class PrestoParserTest : public testing::Test {
  public:
@@ -38,30 +39,33 @@ class PrestoParserTest : public testing::Test {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
     auto emptyConfig = std::make_shared<config::ConfigBase>(
-        std::unordered_map<std::string, std::string>());
+        std::unordered_map<std::string, std::string>{});
 
-    velox::connector::tpch::registerTpchConnectorMetadataFactory(
-        std::make_unique<
-            velox::connector::tpch::TpchConnectorMetadataFactoryImpl>());
-
-    connector::tpch::TpchConnectorFactory tpchConnectorFactory;
+    velox::connector::tpch::TpchConnectorFactory tpchConnectorFactory;
     auto tpchConnector =
         tpchConnectorFactory.newConnector(kTpchConnectorId, emptyConfig);
-    connector::registerConnector(std::move(tpchConnector));
+    velox::connector::registerConnector(tpchConnector);
+
+    connector::ConnectorMetadata::registerMetadata(
+        kTpchConnectorId,
+        std::make_shared<connector::tpch::TpchConnectorMetadata>(
+            dynamic_cast<velox::connector::tpch::TpchConnector*>(
+                tpchConnector.get())));
 
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
   }
 
   static void TearDownTestCase() {
-    connector::unregisterConnector(kTpchConnectorId);
+    connector::ConnectorMetadata::unregisterMetadata(kTpchConnectorId);
+    velox::connector::unregisterConnector(kTpchConnectorId);
   }
 
   memory::MemoryPool* pool() {
     return pool_.get();
   }
 
-  void testSql(const std::string& sql, lp::LogicalPlanMatcherBuilder& matcher) {
+  void testSql(std::string_view sql, lp::LogicalPlanMatcherBuilder& matcher) {
     SCOPED_TRACE(sql);
     test::PrestoParser parser(kTpchConnectorId, pool());
 
@@ -73,7 +77,7 @@ class PrestoParserTest : public testing::Test {
   }
 
   template <typename T>
-  void testDecimal(const std::string& sql, T value, const TypePtr& type) {
+  void testDecimal(std::string_view sql, T value, const TypePtr& type) {
     SCOPED_TRACE(sql);
 
     test::PrestoParser parser(kTpchConnectorId, pool());
@@ -95,7 +99,7 @@ class PrestoParserTest : public testing::Test {
 
 TEST_F(PrestoParserTest, unnest) {
   {
-    auto matcher = lp::LogicalPlanMatcherBuilder().unnest();
+    auto matcher = lp::LogicalPlanMatcherBuilder().values().unnest();
     testSql("SELECT * FROM unnest(array[1, 2, 3])", matcher);
 
     testSql(
@@ -108,7 +112,7 @@ TEST_F(PrestoParserTest, unnest) {
   }
 
   {
-    auto matcher = lp::LogicalPlanMatcherBuilder().unnest().project();
+    auto matcher = lp::LogicalPlanMatcherBuilder().values().unnest().project();
     testSql("SELECT * FROM unnest(array[1, 2, 3]) as t(x)", matcher);
 
     testSql(
@@ -152,7 +156,7 @@ TEST_F(PrestoParserTest, syntaxErrors) {
 TEST_F(PrestoParserTest, types) {
   test::PrestoParser parser(kTpchConnectorId, pool());
 
-  auto test = [&](const std::string& sql, const TypePtr& expectedType) {
+  auto test = [&](std::string_view sql, const TypePtr& expectedType) {
     SCOPED_TRACE(sql);
     auto expr = parser.parseExpression(sql);
 
@@ -182,7 +186,7 @@ TEST_F(PrestoParserTest, types) {
 TEST_F(PrestoParserTest, intervalDayTime) {
   test::PrestoParser parser(kTpchConnectorId, pool());
 
-  auto test = [&](const std::string& sql, int64_t expected) {
+  auto test = [&](std::string_view sql, int64_t expected) {
     SCOPED_TRACE(sql);
     auto expr = parser.parseExpression(sql);
 
@@ -212,15 +216,14 @@ TEST_F(PrestoParserTest, decimal) {
   test::PrestoParser parser(kTpchConnectorId, pool());
 
   auto testShort =
-      [&](const std::string& sql, int64_t value, const TypePtr& type) {
+      [&](std::string_view sql, int64_t value, const TypePtr& type) {
         testDecimal<int64_t>(sql, value, type);
       };
 
-  auto testLong = [&](const std::string& sql,
-                      const std::string& value,
-                      const TypePtr& type) {
-    testDecimal<int128_t>(sql, folly::to<int128_t>(value), type);
-  };
+  auto testLong =
+      [&](std::string_view sql, std::string_view value, const TypePtr& type) {
+        testDecimal<int128_t>(sql, folly::to<int128_t>(value), type);
+      };
 
   // Short decimals.
   testShort("DECIMAL '1.2'", 12, DECIMAL(2, 1));
@@ -272,7 +275,7 @@ TEST_F(PrestoParserTest, decimal) {
 TEST_F(PrestoParserTest, intervalYearMonth) {
   test::PrestoParser parser(kTpchConnectorId, pool());
 
-  auto test = [&](const std::string& sql, int64_t expected) {
+  auto test = [&](std::string_view sql, int64_t expected) {
     auto expr = parser.parseExpression(sql);
 
     ASSERT_TRUE(expr->isConstant());
@@ -470,4 +473,4 @@ TEST_F(PrestoParserTest, describe) {
 }
 
 } // namespace
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

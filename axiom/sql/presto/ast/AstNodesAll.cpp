@@ -243,7 +243,7 @@ const auto& nodeTypeNames() {
 }
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(NodeType, nodeTypeNames);
+AXIOM_DEFINE_ENUM_NAME(NodeType, nodeTypeNames);
 
 // Literal implementations
 void BooleanLiteral::accept(AstVisitor* visitor) {

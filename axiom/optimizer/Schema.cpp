@@ -20,7 +20,9 @@
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
 
-namespace facebook::velox::optimizer {
+#include <numbers>
+
+namespace facebook::axiom::optimizer {
 
 float Value::byteSize() const {
   if (type->isFixedWidth()) {
@@ -71,7 +73,7 @@ ColumnGroupCP SchemaTable::addIndex(
   return columnGroups.back();
 }
 
-ColumnCP SchemaTable::column(const std::string& name, const Value& value) {
+ColumnCP SchemaTable::column(std::string_view name, const Value& value) {
   auto it = columns.find(toName(name));
   if (it != columns.end()) {
     return it->second;
@@ -81,20 +83,10 @@ ColumnCP SchemaTable::column(const std::string& name, const Value& value) {
   return column;
 }
 
-ColumnCP SchemaTable::findColumn(const std::string& name) const {
+ColumnCP SchemaTable::findColumn(std::string_view name) const {
   auto it = columns.find(toName(name));
   VELOX_CHECK(it != columns.end(), "Column not found: {}", name);
   return it->second;
-}
-
-Schema::Schema(
-    const char* name,
-    const std::vector<SchemaTableCP>& tables,
-    LocusCP locus)
-    : name_{name}, defaultLocus_{locus} {
-  for (auto& table : tables) {
-    tables_[table->name] = table;
-  }
 }
 
 Schema::Schema(const char* name, SchemaResolver* source, LocusCP locus)
@@ -103,15 +95,17 @@ Schema::Schema(const char* name, SchemaResolver* source, LocusCP locus)
 SchemaTableCP Schema::findTable(
     std::string_view connectorId,
     std::string_view name) const {
-  auto internedName = toName(name);
-  auto it = tables_.find(internedName);
-  if (it != tables_.end()) {
-    return it->second;
+  Name internedConnectorId = toName(connectorId);
+  Name internedName = toName(name);
+  auto& tables =
+      connectorTables_.try_emplace(internedConnectorId).first->second;
+  auto& table = tables.try_emplace(internedName, Table{}).first->second;
+  if (table.schemaTable) {
+    return table.schemaTable;
   }
 
   VELOX_CHECK_NOT_NULL(source_);
-  auto connectorTable =
-      source_->findTable(std::string(connectorId), std::string(name));
+  auto connectorTable = source_->findTable(connectorId, name);
   if (!connectorTable) {
     return nullptr;
   }
@@ -140,13 +134,8 @@ SchemaTableCP Schema::findTable(
       {},
       std::move(columns),
       connectorTable->layouts()[0]);
-  addTable(schemaTable);
-  queryCtx()->optimization()->retainConnectorTable(std::move(connectorTable));
-  return schemaTable;
-}
-
-void Schema::addTable(SchemaTableCP table) const {
-  tables_[table->name] = table;
+  table = {schemaTable, std::move(connectorTable)};
+  return table.schemaTable;
 }
 
 float tableCardinality(PlanObjectCP table) {
@@ -157,6 +146,8 @@ float tableCardinality(PlanObjectCP table) {
   }
   if (table->is(PlanType::kValuesTableNode)) {
     return table->as<ValuesTable>()->cardinality();
+  } else if (table->is(PlanType::kUnnestTableNode)) {
+    return table->as<UnnestTable>()->cardinality();
   }
   VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
   return table->as<DerivedTable>()->cardinality;
@@ -338,6 +329,11 @@ IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys) {
     computeCardinalities(valuesTable->cardinality());
     return result;
   }
+  if (table->is(PlanType::kUnnestTableNode)) {
+    const auto* unnestTable = table->as<UnnestTable>();
+    computeCardinalities(unnestTable->cardinality());
+    return result;
+  }
   VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
   const auto* dt = table->as<DerivedTable>();
   computeCardinalities(dt->cardinality);
@@ -455,4 +451,4 @@ float ColumnGroup::lookupCost(float range) const {
       std::numbers::ln2_v<float>;
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

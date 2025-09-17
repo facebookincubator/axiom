@@ -42,10 +42,10 @@ XxxCP
 : Raw pointer to constant Xxx: XxxCP := const Xxx*. Remember to place 'const' *after* the type: XxxCP const variableName. (const XxxCP doesn't produce the derired effect.)
 
 XxxVector
-: Standard vector of raw pointers to Xxx allocated from the arena: XxxVector := `std::vector<XxxP, QGAllocator<XxxP>>`.
+: Standard vector of raw pointers to Xxx allocated from the arena: XxxVector := `QGVector<XxxP>`.
 
 CPSpan<T>
-: A view on an array of const raw pointers `CPSpan<T> := folly::Range<const T* const*>`;
+: A view on an array of const raw pointers `CPSpan<T> := std::span<const T* const>`;
 
 LRFanout
 : Left-to-Right Fanout. The average number of right side rows selected for one row on the left.

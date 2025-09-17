@@ -16,13 +16,13 @@
 
 #pragma once
 
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/tpch/gen/TpchGen.h"
 
-namespace facebook::velox::connector::tpch {
+namespace facebook::axiom::connector::tpch {
 
 static const SplitSource::SplitAndGroup kNoMoreSplits{nullptr, 0};
 
@@ -48,7 +48,7 @@ class TpchSplitSource : public SplitSource {
   const velox::tpch::Table table_;
   const double scaleFactor_;
   const std::string connectorId_;
-  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits_;
+  std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits_;
   int32_t currentSplit_{0};
 };
 
@@ -57,10 +57,10 @@ class TpchSplitManager : public ConnectorSplitManager {
   TpchSplitManager(TpchConnectorMetadata* /* metadata */) {}
 
   std::vector<PartitionHandlePtr> listPartitions(
-      const ConnectorTableHandlePtr& tableHandle) override;
+      const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
 
   std::shared_ptr<SplitSource> getSplitSource(
-      const ConnectorTableHandlePtr& tableHandle,
+      const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       SplitOptions options = {}) override;
 };
@@ -71,7 +71,7 @@ class TpchTableLayout : public TableLayout {
   TpchTableLayout(
       const std::string& name,
       const Table* table,
-      connector::Connector* connector,
+      velox::connector::Connector* connector,
       std::vector<const Column*> columns,
       std::vector<const Column*> partitioning,
       std::vector<const Column*> orderColumns,
@@ -101,12 +101,12 @@ class TpchTableLayout : public TableLayout {
   }
 
   std::pair<int64_t, int64_t> sample(
-      const connector::ConnectorTableHandlePtr& handle,
+      const velox::connector::ConnectorTableHandlePtr& handle,
       float pct,
-      const std::vector<core::TypedExprPtr>& extraFilters,
-      RowTypePtr outputType = nullptr,
-      const std::vector<common::Subfield>& fields = {},
-      HashStringAllocator* allocator = nullptr,
+      const std::vector<velox::core::TypedExprPtr>& extraFilters,
+      velox::RowTypePtr outputType = nullptr,
+      const std::vector<velox::common::Subfield>& fields = {},
+      velox::HashStringAllocator* allocator = nullptr,
       std::vector<ColumnStatistics>* statistics = nullptr) const override;
 
  private:
@@ -118,14 +118,16 @@ class TpchTable : public Table {
  public:
   TpchTable(
       std::string name,
-      RowTypePtr type,
+      velox::RowTypePtr type,
       velox::tpch::Table tpchTable,
-      double scaleFactor)
+      double scaleFactor,
+      int64_t numRows)
       : Table(std::move(name), std::move(type)),
         tpchTable_(tpchTable),
-        scaleFactor_(scaleFactor) {}
+        scaleFactor_(scaleFactor),
+        numRows_{numRows} {}
 
-  std::unordered_map<std::string, std::unique_ptr<Column>>& columns() {
+  folly::F14FastMap<std::string, std::unique_ptr<Column>>& columns() {
     return columns_;
   }
 
@@ -133,7 +135,7 @@ class TpchTable : public Table {
     return exportedLayouts_;
   }
 
-  const std::unordered_map<std::string, const Column*>& columnMap()
+  const folly::F14FastMap<std::string, const Column*>& columnMap()
       const override;
 
   void makeDefaultLayout(TpchConnectorMetadata& metadata, double scaleFactor);
@@ -142,20 +144,20 @@ class TpchTable : public Table {
     return numRows_;
   }
 
-  velox::tpch::Table getTpchTable() const {
+  velox::tpch::Table tpchTable() const {
     return tpchTable_;
   }
 
-  double getScaleFactor() const {
+  double scaleFactor() const {
     return scaleFactor_;
   }
 
  private:
   mutable std::mutex mutex_;
 
-  std::unordered_map<std::string, std::unique_ptr<Column>> columns_;
+  folly::F14FastMap<std::string, std::unique_ptr<Column>> columns_;
 
-  mutable std::unordered_map<std::string, const Column*> exportedColumns_;
+  mutable folly::F14FastMap<std::string, const Column*> exportedColumns_;
 
   std::vector<std::unique_ptr<TableLayout>> layouts_;
 
@@ -165,115 +167,86 @@ class TpchTable : public Table {
 
   const double scaleFactor_;
 
-  int64_t numRows_{0};
-
-  friend class TpchConnectorMetadata;
+  const int64_t numRows_;
 };
 
 class TpchConnectorMetadata : public ConnectorMetadata {
  public:
-  explicit TpchConnectorMetadata(TpchConnector* tpchConnector);
+  explicit TpchConnectorMetadata(
+      velox::connector::tpch::TpchConnector* tpchConnector);
 
-  void initialize() override;
+  void initialize() override {}
 
-  TablePtr findTable(const std::string& name) override;
+  TablePtr findTable(std::string_view name) override;
 
   ConnectorSplitManager* splitManager() override {
-    ensureInitialized();
     return &splitManager_;
   }
 
-  std::shared_ptr<core::QueryCtx> makeQueryCtx(const std::string& queryId);
-
-  ColumnHandlePtr createColumnHandle(
+  velox::connector::ColumnHandlePtr createColumnHandle(
       const TableLayout& layoutData,
       const std::string& columnName,
-      std::vector<common::Subfield> subfields = {},
-      std::optional<TypePtr> castToType = std::nullopt,
+      std::vector<velox::common::Subfield> subfields = {},
+      std::optional<velox::TypePtr> castToType = std::nullopt,
       SubfieldMapping subfieldMapping = {}) override;
 
-  ConnectorTableHandlePtr createTableHandle(
+  velox::connector::ConnectorTableHandlePtr createTableHandle(
       const TableLayout& layout,
-      std::vector<ColumnHandlePtr> columnHandles,
-      core::ExpressionEvaluator& evaluator,
-      std::vector<core::TypedExprPtr> filters,
-      std::vector<core::TypedExprPtr>& rejectedFilters,
-      RowTypePtr dataColumns = nullptr,
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
+      velox::core::ExpressionEvaluator& evaluator,
+      std::vector<velox::core::TypedExprPtr> filters,
+      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
+      velox::RowTypePtr dataColumns = nullptr,
       std::optional<LookupKeys> = std::nullopt) override;
 
   void createTable(
       const std::string& tableName,
-      const RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const velox::RowTypePtr& rowType,
+      const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
       TableKind tableKind = TableKind::kTable) override {
     VELOX_UNSUPPORTED();
   }
 
-  ConnectorInsertTableHandlePtr createInsertTableHandle(
+  velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
-      const RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const velox::RowTypePtr& rowType,
+      const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) override {
     VELOX_UNSUPPORTED();
   }
 
   WritePartitionInfo writePartitionInfo(
-      const ConnectorInsertTableHandlePtr& handle) override {
+      const velox::connector::ConnectorInsertTableHandlePtr& handle) override {
     VELOX_UNSUPPORTED();
   }
 
   void finishWrite(
       const TableLayout& layout,
-      const ConnectorInsertTableHandlePtr& handle,
-      const std::vector<RowVectorPtr>& writerResult,
+      const velox::connector::ConnectorInsertTableHandlePtr& handle,
+      const std::vector<velox::RowVectorPtr>& writerResult,
       WriteKind kind,
       const ConnectorSessionPtr& session) override {
     VELOX_UNSUPPORTED();
   }
 
-  std::vector<ColumnHandlePtr> rowIdHandles(
+  std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
       const TableLayout& layout,
       WriteKind kind) override {
     VELOX_UNSUPPORTED();
   }
 
-  TpchConnector* tpchConnector() const {
+  velox::connector::tpch::TpchConnector* tpchConnector() const {
     return tpchConnector_;
   }
 
-  const std::unordered_map<std::string, std::shared_ptr<TpchTable>>& tables()
-      const {
-    ensureInitialized();
-    return tables_;
-  }
-
  private:
-  void ensureInitialized() const;
-  void makeQueryCtx();
-  void initializeTables();
-  void loadTable(
-      velox::tpch::Table tpchTable,
-      const std::string& ns,
-      double scaleFactor);
-
-  mutable std::mutex mutex_;
-  mutable bool initialized_{false};
-  TpchConnector* tpchConnector_;
-  std::shared_ptr<memory::MemoryPool> rootPool_{
-      memory::memoryManager()->addRootPool()};
-  std::shared_ptr<core::QueryCtx> queryCtx_;
-  std::unordered_map<std::string, std::shared_ptr<TpchTable>> tables_;
+  velox::connector::tpch::TpchConnector* tpchConnector_;
+  std::shared_ptr<velox::memory::MemoryPool> rootPool_{
+      velox::memory::memoryManager()->addRootPool()};
   TpchSplitManager splitManager_;
 };
 
-class TpchConnectorMetadataFactoryImpl : public TpchConnectorMetadataFactory {
- public:
-  std::shared_ptr<ConnectorMetadata> create(TpchConnector* connector) override {
-    return std::make_shared<TpchConnectorMetadata>(connector);
-  }
-};
-
-} // namespace facebook::velox::connector::tpch
+} // namespace facebook::axiom::connector::tpch

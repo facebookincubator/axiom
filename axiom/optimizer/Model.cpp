@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/Model.h"
+#include <folly/container/F14Set.h>
 #include <algorithm>
 #include <cmath>
-#include <unordered_set>
+
+#include "axiom/optimizer/Model.h"
 #include "velox/common/base/Exceptions.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 namespace {
 
@@ -60,7 +61,7 @@ void Model::insert(std::vector<float> dimensions, float measure) {
 void Model::precompute() {
   int32_t numCells = 1;
   for (auto dim = 0; dim < rank_; ++dim) {
-    std::unordered_set<float> set;
+    folly::F14FastSet<float> set;
     for (auto& e : entries_) {
       set.insert(e.coordinates[dim]);
     }
@@ -188,7 +189,7 @@ int32_t Model::closestSlope(
 }
 
 float Model::gradientAt(int32_t dim, const std::vector<float>& npoint) const {
-  std::unordered_set<int32_t> slopeIdx;
+  folly::F14FastSet<int32_t> slopeIdx;
   for (auto i = 0; i < rank_; ++i) {
     auto above = closestSlope(i, npoint[i], npoint, true);
     auto below = closestSlope(i, npoint[i], npoint, false);
@@ -259,7 +260,7 @@ std::vector<int32_t> Model::findDims(const std::vector<float>& point) const {
   std::vector<int32_t> result;
   result.reserve(rank_);
   for (auto i = 0; i < rank_; ++i) {
-    auto it = std::lower_bound(axis_[i].begin(), axis_[i].end(), point[i]);
+    auto it = std::ranges::lower_bound(axis_[i], point[i]);
     result.push_back(static_cast<int32_t>(
         it == axis_[i].end() ? axis_[i].size() - 1 : it - axis_[i].begin()));
   }
@@ -403,4 +404,4 @@ float Model::query(const std::vector<float>& coords) const {
   return sum;
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

@@ -18,7 +18,7 @@
 
 #include "velox/common/base/Exceptions.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// Parses table names of the following formats:
 ///    - "tablename"
@@ -63,4 +63,4 @@ class TableNameParser {
   std::string table_;
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

@@ -16,7 +16,7 @@
 #pragma once
 
 #include <memory>
-#include "velox/common/Enums.h"
+#include "axiom/common/Enums.h"
 
 namespace axiom::sql::presto {
 
@@ -240,7 +240,7 @@ enum class NodeType {
   kExplainOption
 };
 
-VELOX_DECLARE_ENUM_NAME(NodeType);
+AXIOM_DECLARE_ENUM_NAME(NodeType);
 
 struct NodeLocation {
   int32_t line{-1};
@@ -310,12 +310,4 @@ using RelationPtr = std::shared_ptr<Relation>;
 
 } // namespace axiom::sql::presto
 
-template <>
-struct fmt::formatter<axiom::sql::presto::NodeType>
-    : fmt::formatter<string_view> {
-  template <typename FormatContext>
-  auto format(axiom::sql::presto::NodeType nodeType, FormatContext& ctx) const {
-    return formatter<string_view>::format(
-        axiom::sql::presto::NodeTypeName::toName(nodeType), ctx);
-  }
-};
+AXIOM_ENUM_FORMATTER(axiom::sql::presto::NodeType);

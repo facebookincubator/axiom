@@ -20,7 +20,7 @@
 #include <string>
 #include <vector>
 
-namespace facebook::velox {
+namespace facebook::axiom {
 
 inline std::vector<folly::dynamic> readConcatenatedDynamicsFromFile(
     const std::string& filename) {
@@ -47,4 +47,4 @@ inline std::vector<folly::dynamic> readConcatenatedDynamicsFromFile(
   return result;
 }
 
-} // namespace facebook::velox
+} // namespace facebook::axiom

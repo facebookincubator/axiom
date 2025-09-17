@@ -22,7 +22,7 @@
 /// Plan candidates.
 /// A candidate plan is constructed based on the join graph/derived table tree.
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 // Represents the cost and cardinality of a RelationOp or Plan. A Cost has a
 // per-row cost, a per-row fanout and a one-time setup cost. For example, a hash
@@ -76,7 +76,7 @@ struct Cost {
 /// A std::string with lifetime of the optimization. These are
 /// freeable unlike Names but can be held in objects that are
 /// dropped without destruction with the optimization arena.
-using QGstring =
+using QGString =
     std::basic_string<char, std::char_traits<char>, QGAllocator<char>>;
 
 /// Identifies the operator type producing the relation.
@@ -92,9 +92,10 @@ enum class RelType {
   kUnionAll,
   kLimit,
   kValues,
+  kUnnest,
 };
 
-VELOX_DECLARE_ENUM_NAME(RelType)
+AXIOM_DECLARE_ENUM_NAME(RelType)
 
 /// Physical relational operator. This is the common base class of all
 /// elements of plan candidates. The immutable Exprs, Columns and
@@ -202,7 +203,7 @@ class RelationOp {
 
   /// Returns a key for retrieving/storing a historical record of execution for
   /// future costing.
-  virtual const QGstring& historyKey() const {
+  virtual const QGString& historyKey() const {
     VELOX_CHECK_NOT_NULL(input_, "Leaf RelationOps must specify a history key");
     return input_->historyKey();
   }
@@ -237,7 +238,7 @@ class RelationOp {
   Cost cost_;
 
   // Cache of history lookup key.
-  mutable QGstring key_;
+  mutable QGString key_;
 
  private:
   // thread local reference count. PlanObjects are freed when the
@@ -261,8 +262,7 @@ inline void intrusive_ptr_release(RelationOp* op) {
   }
 }
 
-using RelationOpPtrVector =
-    std::vector<RelationOpPtr, QGAllocator<RelationOpPtr>>;
+using RelationOpPtrVector = QGVector<RelationOpPtr>;
 
 /// Represents a full table scan or an index lookup.
 struct TableScan : public RelationOp {
@@ -285,7 +285,7 @@ struct TableScan : public RelationOp {
       ColumnGroupCP index,
       const ColumnVector& columns);
 
-  const QGstring& historyKey() const override;
+  const QGString& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 
@@ -317,7 +317,7 @@ struct TableScan : public RelationOp {
 struct Values : RelationOp {
   Values(const ValuesTable& valuesTable, ColumnVector columns);
 
-  const QGstring& historyKey() const override;
+  const QGString& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 
@@ -348,7 +348,7 @@ class Filter : public RelationOp {
     return exprs_;
   }
 
-  const QGstring& historyKey() const override;
+  const QGString& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 
@@ -402,7 +402,7 @@ struct Join : public RelationOp {
   // Total cost of build side plan. For documentation.
   Cost buildCost;
 
-  const QGstring& historyKey() const override;
+  const QGString& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 };
@@ -428,6 +428,22 @@ struct HashBuild : public RelationOp {
 
 using HashBuildCP = const HashBuild*;
 
+struct Unnest : public RelationOp {
+  Unnest(
+      RelationOpPtr input,
+      ColumnVector replicateColumns,
+      ExprVector unnestExprs,
+      ColumnVector unnestedColumns);
+
+  ColumnVector replicateColumns;
+  ExprVector unnestExprs;
+  // Columns correspond to expressions but not 1:1,
+  // it can be 2:1 (for MAP) and 1:1 (for ARRAY).
+  ColumnVector unnestedColumns;
+
+  std::string toString(bool recursive, bool detail) const override;
+};
+
 /// Represents aggregation with or without grouping.
 struct Aggregation : public RelationOp {
   Aggregation(
@@ -441,7 +457,7 @@ struct Aggregation : public RelationOp {
   const AggregateVector aggregates;
   const velox::core::AggregationNode::Step step;
 
-  const QGstring& historyKey() const override;
+  const QGString& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 };
@@ -467,7 +483,7 @@ using OrderByCP = const OrderBy*;
 struct UnionAll : public RelationOp {
   explicit UnionAll(RelationOpPtrVector inputsVector);
 
-  const QGstring& historyKey() const override;
+  const QGString& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
 
@@ -492,4 +508,4 @@ struct Limit : public RelationOp {
 
 using LimitCP = const Limit*;
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

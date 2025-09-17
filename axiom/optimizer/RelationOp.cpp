@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <algorithm>
+
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -21,7 +23,7 @@
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/expression/ScopedVarSetter.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 void Cost::add(const Cost& other) {
   inputCardinality += other.inputCardinality;
@@ -51,7 +53,7 @@ const auto& relTypeNames() {
 
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(RelType, relTypeNames)
+AXIOM_DEFINE_ENUM_NAME(RelType, relTypeNames)
 
 const Value& RelationOp::value(ExprCP expr) const {
   // Compute new Value by applying restrictions from operators
@@ -246,26 +248,26 @@ const char* joinTypeLabel(velox::core::JoinType type) {
   }
 }
 
-QGstring sanitizeHistoryKey(std::string in) {
+QGString sanitizeHistoryKey(std::string in) {
   for (auto i = 0; i < in.size(); ++i) {
     unsigned char c = in[i];
     if (c < 32 || c > 127 || c == '{' || c == '}' || c == '"') {
       in[i] = '?';
     }
   }
-  return QGstring(in);
+  return QGString(in);
 }
 
 } // namespace
 
-const QGstring& TableScan::historyKey() const {
+const QGString& TableScan::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
   std::stringstream out;
   out << "scan " << baseTable->schemaTable->name << "(";
   auto* opt = queryCtx()->optimization();
-  ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
   for (auto& key : keys) {
     out << "lookup " << key->toString() << ", ";
   }
@@ -276,7 +278,7 @@ const QGstring& TableScan::historyKey() const {
   for (auto& f : baseTable->filter) {
     filters.push_back(f->toString());
   }
-  std::sort(filters.begin(), filters.end());
+  std::ranges::sort(filters);
   for (auto& f : filters) {
     out << "f: " << f << ", ";
   }
@@ -310,7 +312,7 @@ Values::Values(const ValuesTable& valuesTable, ColumnVector columns)
   updateLeafCost(cardinality, columns_, cost_);
 }
 
-const QGstring& Values::historyKey() const {
+const QGString& Values::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
@@ -371,7 +373,7 @@ std::pair<std::string, std::string> joinKeysString(
   std::vector<int32_t> indices(left.size());
   std::iota(indices.begin(), indices.end(), 0);
   auto* opt = queryCtx()->optimization();
-  ScopedVarSetter cname(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cname(&opt->cnamesInExpr(), false);
   std::vector<std::string> strings;
   for (auto& k : left) {
     strings.push_back(k->toString());
@@ -388,7 +390,7 @@ std::pair<std::string, std::string> joinKeysString(
 }
 } // namespace
 
-const QGstring& Join::historyKey() const {
+const QGString& Join::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
@@ -396,7 +398,7 @@ const QGstring& Join::historyKey() const {
   auto& rightTree = right->historyKey();
   std::stringstream out;
   auto [leftText, rightText] = joinKeysString(leftKeys, rightKeys);
-  if (leftTree < rightTree || joinType != core::JoinType::kInner) {
+  if (leftTree < rightTree || joinType != velox::core::JoinType::kInner) {
     out << "join " << joinTypeLabel(joinType) << "(" << leftTree << " keys "
         << leftText << " = " << rightText << rightTree << ")";
   } else {
@@ -496,6 +498,26 @@ std::string Repartition::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+namespace {
+ColumnVector concatColumns(const ColumnVector& lhs, const ColumnVector& rhs) {
+  ColumnVector result;
+  result.reserve(lhs.size() + rhs.size());
+  result.insert(result.end(), lhs.begin(), lhs.end());
+  result.insert(result.end(), rhs.begin(), rhs.end());
+  return result;
+}
+} // namespace
+
+Unnest::Unnest(
+    RelationOpPtr input,
+    ColumnVector replicateColumns,
+    ExprVector unnestExprs,
+    ColumnVector unnestedColumns)
+    : RelationOp{RelType::kUnnest, input, input->distribution(), concatColumns(replicateColumns, unnestedColumns)},
+      replicateColumns{std::move(replicateColumns)},
+      unnestExprs{std::move(unnestExprs)},
+      unnestedColumns{std::move(unnestedColumns)} {}
+
 Aggregation::Aggregation(
     RelationOpPtr input,
     ExprVector groupingKeysVector,
@@ -531,7 +553,26 @@ Aggregation::Aggregation(
   cost_.totalBytes = nOut * rowBytes;
 }
 
-const QGstring& Aggregation::historyKey() const {
+std::string Unnest::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (recursive) {
+    out << input()->toString(true, detail) << " ";
+  }
+  out << "unnest ";
+  printCost(detail, out);
+  if (detail) {
+    out << "replicate columns: "
+        << itemsToString(replicateColumns.data(), replicateColumns.size());
+    out << ", unnest exprs: "
+        << itemsToString(unnestExprs.data(), unnestExprs.size());
+    out << ", unnested columns: "
+        << itemsToString(unnestedColumns.data(), unnestedColumns.size())
+        << std::endl;
+  }
+  return out.str();
+}
+
+const QGString& Aggregation::historyKey() const {
   using velox::core::AggregationNode;
   if (step == AggregationNode::Step::kPartial ||
       step == AggregationNode::Step::kIntermediate) {
@@ -544,12 +585,12 @@ const QGstring& Aggregation::historyKey() const {
   out << input_->historyKey();
   out << " group by ";
   auto* opt = queryCtx()->optimization();
-  ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
   std::vector<std::string> strings;
   for (auto& key : groupingKeys) {
     strings.push_back(key->toString());
   }
-  std::sort(strings.begin(), strings.end());
+  std::ranges::sort(strings);
   for (auto& s : strings) {
     out << s << ", ";
   }
@@ -617,19 +658,19 @@ Filter::Filter(RelationOpPtr input, ExprVector exprs)
   cost_.fanout = std::pow(0.8F, numExprs);
 }
 
-const QGstring& Filter::historyKey() const {
+const QGString& Filter::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
   std::stringstream out;
   auto* opt = queryCtx()->optimization();
-  ScopedVarSetter cname(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter cname(&opt->cnamesInExpr(), false);
   out << input_->historyKey() << " filter " << "(";
   std::vector<std::string> strings;
   for (auto& e : exprs_) {
     strings.push_back(e->toString());
   }
-  std::sort(strings.begin(), strings.end());
+  std::ranges::sort(strings);
   for (auto& s : strings) {
     out << s << ", ";
   }
@@ -785,11 +826,11 @@ UnionAll::UnionAll(RelationOpPtrVector inputsVector)
   // TODO Fill in cost_.unitCost and others.
 }
 
-const QGstring& UnionAll::historyKey() const {
+const QGString& UnionAll::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
-  std::vector<QGstring> keys;
+  std::vector<QGString> keys;
   for (const auto& in : inputs) {
     keys.push_back(in->historyKey());
   }
@@ -823,4 +864,4 @@ std::string UnionAll::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

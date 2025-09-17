@@ -24,7 +24,7 @@
 namespace axiom::sql::presto {
 namespace {
 
-void parseQuery(const std::string& sql) {
+void parseQuery(std::string_view sql) {
   UpperCaseInputStream input(sql);
   PrestoSqlLexer lexer(&input);
   antlr4::CommonTokenStream tokens(&lexer);

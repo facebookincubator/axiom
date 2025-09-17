@@ -19,14 +19,14 @@
 #include <gflags/gflags.h>
 #include <sys/resource.h>
 #include <sys/time.h>
+#include <iostream>
+#include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/SchemaResolver.h"
 #include "axiom/optimizer/VeloxHistory.h"
-#include "axiom/optimizer/connectors/ConnectorSplitSource.h"
-#include "axiom/optimizer/connectors/hive/LocalHiveConnectorMetadata.h"
-#include "axiom/optimizer/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/optimizer/tests/PrestoParser.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/benchmarks/QueryBenchmarkBase.h"
@@ -109,7 +109,7 @@ DEFINE_bool(
 
 using namespace facebook::velox;
 
-namespace axiom {
+namespace facebook::axiom {
 
 const char* helpText =
     "Velox Interactive SQL\n"
@@ -135,11 +135,13 @@ const char* helpText =
     "\n"
     "include_custom_stats - Prints per operator runtime stats.\n";
 
-class VeloxRunner : public QueryBenchmarkBase {
+static const std::string kHiveConnectorId = "hive";
+
+class VeloxRunner : public velox::QueryBenchmarkBase {
  public:
   void initialize() override {
     initializeMemoryManager();
-    rootPool_ = memory::memoryManager()->addRootPool("velox_sql");
+    rootPool_ = memory::memoryManager()->addRootPool("axiom_sql");
 
     optimizerPool_ = rootPool_->addLeafChild("optimizer");
     checkPool_ = rootPool_->addLeafChild("check");
@@ -220,34 +222,46 @@ class VeloxRunner : public QueryBenchmarkBase {
     return nullptr;
   }
 
-  std::shared_ptr<connector::Connector> registerTpchConnector() {
-    connector::tpch::registerTpchConnectorMetadataFactory(
-        std::make_unique<connector::tpch::TpchConnectorMetadataFactoryImpl>());
-
+  std::shared_ptr<velox::connector::Connector> registerTpchConnector() {
     auto emptyConfig = std::make_shared<config::ConfigBase>(
-        std::unordered_map<std::string, std::string>());
+        std::unordered_map<std::string, std::string>{});
 
-    connector::tpch::TpchConnectorFactory factory;
+    velox::connector::tpch::TpchConnectorFactory factory;
     auto connector = factory.newConnector("tpch", emptyConfig);
-    connector::registerConnector(connector);
+    velox::connector::registerConnector(connector);
+
+    connector::ConnectorMetadata::registerMetadata(
+        connector->connectorId(),
+        std::make_shared<connector::tpch::TpchConnectorMetadata>(
+            dynamic_cast<velox::connector::tpch::TpchConnector*>(
+                connector.get())));
+
     return connector;
   }
 
-  std::shared_ptr<connector::Connector> registerHiveConnector(
+  std::shared_ptr<velox::connector::Connector> registerHiveConnector(
       const std::string& dataPath) {
     ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(8);
 
     std::unordered_map<std::string, std::string> connectorConfig = {
-        {connector::hive::HiveConfig::kLocalDataPath, dataPath},
-        {connector::hive::HiveConfig::kLocalFileFormat, FLAGS_data_format},
+        {velox::connector::hive::HiveConfig::kLocalDataPath, dataPath},
+        {velox::connector::hive::HiveConfig::kLocalFileFormat,
+         FLAGS_data_format},
     };
 
     auto config =
         std::make_shared<config::ConfigBase>(std::move(connectorConfig));
 
-    connector::hive::HiveConnectorFactory factory;
-    auto connector = factory.newConnector("hive", config, ioExecutor_.get());
-    connector::registerConnector(connector);
+    velox::connector::hive::HiveConnectorFactory factory;
+    auto connector =
+        factory.newConnector(kHiveConnectorId, config, ioExecutor_.get());
+    velox::connector::registerConnector(connector);
+
+    connector::ConnectorMetadata::registerMetadata(
+        kHiveConnectorId,
+        std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
+            dynamic_cast<velox::connector::hive::HiveConnector*>(
+                connector.get())));
 
     return connector;
   }
@@ -289,7 +303,7 @@ class VeloxRunner : public QueryBenchmarkBase {
     check_ = ref;
   }
 
-  void run(const std::string& sql) {
+  void run(std::string_view sql) {
     optimizer::test::SqlStatementPtr sqlStatement;
     try {
       sqlStatement = prestoParser_->parse(sql);
@@ -494,7 +508,7 @@ class VeloxRunner : public QueryBenchmarkBase {
       facebook::axiom::runner::LocalRunner& runner,
       const optimizer::NodePredictionMap& estimates) {
     std::cout << runner.printPlanWithStats([&](const core::PlanNodeId& nodeId,
-                                               const std::string& indentation,
+                                               std::string_view indentation,
                                                std::ostream& out) {
       auto it = estimates.find(nodeId);
       if (it != estimates.end()) {
@@ -515,7 +529,8 @@ class VeloxRunner : public QueryBenchmarkBase {
     return std::make_shared<facebook::axiom::runner::LocalRunner>(
         planAndStats.plan,
         queryCtx,
-        std::make_shared<connector::ConnectorSplitSourceFactory>(splitOptions));
+        std::make_shared<facebook::axiom::runner::ConnectorSplitSourceFactory>(
+            splitOptions));
   }
 
   /// Runs a query and returns the result as a single vector in *resultVector,
@@ -679,7 +694,7 @@ class VeloxRunner : public QueryBenchmarkBase {
     return result;
   }
 
-  static void writeString(const std::string& string, std::ostream& out) {
+  static void writeString(std::string_view string, std::ostream& out) {
     write<int32_t>(string.size(), out);
     out.write(string.data(), string.size());
   }
@@ -817,7 +832,7 @@ class VeloxRunner : public QueryBenchmarkBase {
   std::unique_ptr<folly::IOThreadPoolExecutor> cacheExecutor_;
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<folly::IOThreadPoolExecutor> spillExecutor_;
-  std::shared_ptr<connector::Connector> connector_;
+  std::shared_ptr<velox::connector::Connector> connector_;
   std::shared_ptr<optimizer::SchemaResolver> schema_;
   std::unique_ptr<optimizer::VeloxHistory> history_;
   std::unique_ptr<optimizer::test::PrestoParser> prestoParser_;
@@ -886,7 +901,7 @@ std::string readCommand(std::istream& in, bool& end) {
 
 void readCommands(
     VeloxRunner& runner,
-    const std::string& prompt,
+    std::string_view prompt,
     std::istream& in) {
   for (;;) {
     std::cout << prompt;
@@ -997,29 +1012,29 @@ void checkQueries(VeloxRunner& runner) {
   exit(runner.checkStatus());
 }
 
-} // namespace axiom
+} // namespace facebook::axiom
 
 int main(int argc, char** argv) {
   gflags::SetUsageMessage(
-      "Velox local SQL command line. "
-      "Run 'velox_sql --help' for available options.\n");
+      "Axiom local SQL command line. "
+      "Run 'axiom_sql --help' for available options.\n");
 
   folly::Init init(&argc, &argv, false);
 
   try {
-    axiom::VeloxRunner runner;
+    facebook::axiom::VeloxRunner runner;
     runner.initialize();
 
-    axiom::initCommands(runner);
+    facebook::axiom::initCommands(runner);
 
     if (!FLAGS_query.empty()) {
       runner.run(FLAGS_query);
     } else if (!FLAGS_record.empty()) {
-      axiom::recordQueries(runner);
+      facebook::axiom::recordQueries(runner);
     } else if (!FLAGS_check.empty()) {
-      axiom::checkQueries(runner);
+      facebook::axiom::checkQueries(runner);
     } else {
-      std::cout << "Velox SQL. Type statement and end with ;.\n"
+      std::cout << "Axiom SQL. Type statement and end with ;.\n"
                    "flag name = value; sets a gflag.\n"
                    "help; prints help text."
                 << std::endl;

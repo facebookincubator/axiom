@@ -25,8 +25,10 @@
 /// instantiate the relevant schema objects based on the query. The
 /// arena for these can be different from that for the PlanObjects,
 /// though, so that a schema cache can have its own lifetime.
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
+// TODO: It seems like QGAllocator doesn't work for folly F14 containers.
+// Investigate and fix.
 template <typename T>
 using NameMap = std::unordered_map<
     Name,
@@ -45,8 +47,8 @@ struct Value {
   float byteSize() const;
 
   const velox::Type* type;
-  const velox::variant* min{nullptr};
-  const velox::variant* max{nullptr};
+  const velox::Variant* min{nullptr};
+  const velox::Variant* max{nullptr};
 
   // Count of distinct values. Is not exact and is used for estimating
   // cardinalities of group bys or joins.
@@ -73,7 +75,7 @@ enum class OrderType {
   kDescNullsLast
 };
 
-using OrderTypeVector = std::vector<OrderType, QGAllocator<OrderType>>;
+using OrderTypeVector = QGVector<OrderType>;
 
 /// Represents a system that contains or produces data. For cases of federation
 /// where data is only accessible via a specific instance of a specific type of
@@ -86,7 +88,7 @@ using OrderTypeVector = std::vector<OrderType, QGAllocator<OrderType>>;
 /// lives past the optimizer arena.
 class Locus {
  public:
-  explicit Locus(Name name, connector::Connector* connector)
+  explicit Locus(Name name, velox::connector::Connector* connector)
       : name_(name), connector_(connector) {}
 
   virtual ~Locus() = default;
@@ -97,7 +99,7 @@ class Locus {
     return toName(name_);
   }
 
-  const connector::Connector* connector() const {
+  const velox::connector::Connector* connector() const {
     // // 'connector_' can be nullptr if no executable plans are made.
     VELOX_CHECK_NOT_NULL(connector_);
     return connector_;
@@ -109,7 +111,7 @@ class Locus {
 
  private:
   const Name name_;
-  const connector::Connector* connector_;
+  const velox::connector::Connector* connector_;
 };
 
 using LocusCP = const Locus*;
@@ -324,9 +326,9 @@ struct SchemaTable {
       const connector::TableLayout* layout);
 
   /// Finds or adds a column with 'name' and 'value'.
-  ColumnCP column(const std::string& name, const Value& value);
+  ColumnCP column(std::string_view name, const Value& value);
 
-  ColumnCP findColumn(const std::string& name) const;
+  ColumnCP findColumn(std::string_view name) const;
 
   int64_t numRows() const {
     return static_cast<int64_t>(columnGroups[0]->layout->table().numRows());
@@ -346,18 +348,18 @@ struct SchemaTable {
   std::vector<ColumnCP> toColumns(const std::vector<std::string>& names) const;
 
   const Name name;
-  const RowType* type;
+  const velox::RowType* type;
   const float cardinality;
 
   // Lookup from name to column.
   NameMap<ColumnCP> columns;
 
   // All indices. Must contain at least one.
-  std::vector<ColumnGroupCP, QGAllocator<ColumnGroupCP>> columnGroups;
+  QGVector<ColumnGroupCP> columnGroups;
 
   // Table description from external schema. This is the
   // source-dependent representation from which 'this' was created.
-  const velox::connector::Table* connectorTable{nullptr};
+  const connector::Table* connectorTable{nullptr};
 };
 
 /// Represents a collection of tables. Normally filled in ad hoc given
@@ -370,9 +372,6 @@ struct SchemaTable {
 /// repository. The objects have a default Locus for convenience.
 class Schema {
  public:
-  /// Constructs a testing schema without SchemaResolver.
-  Schema(Name name, const std::vector<SchemaTableCP>& tables, LocusCP locus);
-
   /// Constructs a Schema for producing executable plans, backed by 'source'.
   Schema(Name name, SchemaResolver* source, LocusCP locus);
 
@@ -386,15 +385,21 @@ class Schema {
     return name_;
   }
 
-  void addTable(SchemaTableCP table) const;
-
  private:
+  struct Table {
+    SchemaTableCP schemaTable{nullptr};
+    connector::TablePtr connectorTable;
+  };
+
   Name name_;
-  mutable NameMap<SchemaTableCP> tables_;
+  // This map from connector ID to map of tables in that connector.
+  // In the tables map, the key is the full table name and the value is
+  // schema table (optimizer object) and connector table (connector object).
+  mutable NameMap<NameMap<Table>> connectorTables_;
   SchemaResolver* source_{nullptr};
   LocusCP defaultLocus_;
 };
 
 using SchemaP = Schema*;
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

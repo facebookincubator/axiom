@@ -19,9 +19,9 @@
 #include <string>
 #include <utility>
 
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 class SchemaResolver {
  public:
@@ -40,11 +40,11 @@ class SchemaResolver {
   // If the table name specifies a different catalog than the one specified
   // as a parameter, an error will be thrown.
   virtual connector::TablePtr findTable(
-      const std::string& catalog,
-      const std::string& name);
+      std::string_view catalog,
+      std::string_view name);
 
  private:
   const std::string defaultSchema_;
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

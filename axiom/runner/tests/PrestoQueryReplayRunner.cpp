@@ -177,14 +177,14 @@ velox::core::PlanNodePtr getDeserializedPlan(
 
 struct PlanFragmentInfo {
   velox::core::PlanNodePtr plan{nullptr};
-  std::unordered_map<std::string, std::unordered_set<std::string>>
+  folly::F14FastMap<std::string, folly::F14FastSet<std::string>>
       remoteTaskIdMap{};
   std::vector<velox::core::TableScanNodePtr> scans{};
   int numWorkers{0};
 };
 
 std::vector<ExecutableFragment> createExecutableFragments(
-    const std::unordered_map<std::string, PlanFragmentInfo>& planFragments) {
+    const folly::F14FastMap<std::string, PlanFragmentInfo>& planFragments) {
   std::vector<ExecutableFragment> executableFragments;
   for (const auto& [taskPrefix, planFragmentInfo] : planFragments) {
     ExecutableFragment executableFragment{taskPrefix};
@@ -251,8 +251,8 @@ bool isSupported(
 namespace {
 std::string findRootTaskPrefix(
     const std::vector<std::string>& taskPrefixes,
-    const std::unordered_map<std::string, PlanFragmentInfo>& planFragments) {
-  std::unordered_set<std::string> inputTaskPrefixes;
+    const folly::F14FastMap<std::string, PlanFragmentInfo>& planFragments) {
+  folly::F14FastSet<std::string> inputTaskPrefixes;
   for (const auto& [_, planFragmentInfo] : planFragments) {
     for (const auto& [_, remoteTaskPrefixes] :
          planFragmentInfo.remoteTaskIdMap) {
@@ -278,7 +278,7 @@ MultiFragmentPlanPtr PrestoQueryReplayRunner::deserializeSupportedPlan(
   VELOX_CHECK_EQ(jsonRecords.size(), serializedPlanFragments.size());
   VELOX_CHECK_EQ(taskPrefixes.size(), serializedPlanFragments.size());
 
-  std::unordered_map<std::string, PlanFragmentInfo> planFragments;
+  folly::F14FastMap<std::string, PlanFragmentInfo> planFragments;
   for (auto i = 0; i < serializedPlanFragments.size(); ++i) {
     auto& taskPrefix = taskPrefixes[i];
     VELOX_CHECK_EQ(planFragments.count(taskPrefix), 0);
@@ -294,12 +294,12 @@ MultiFragmentPlanPtr PrestoQueryReplayRunner::deserializeSupportedPlan(
   for (auto i = 0; i < serializedPlanFragments.size(); ++i) {
     auto& taskPrefix = taskPrefixes[i];
     auto jsonRemoteTaskIdMaps = jsonRecords[i].at("remote_task_ids");
-    std::unordered_map<std::string, std::unordered_set<std::string>>
+    folly::F14FastMap<std::string, folly::F14FastSet<std::string>>
         remoteTaskIdMap;
     for (const auto& [planNodeId, remoteTaskIds] :
          jsonRemoteTaskIdMaps.items()) {
       auto remoteTaskIdList = getStringListFromJson(remoteTaskIds);
-      std::unordered_set<std::string> remoteTaskIdPrefixSet;
+      folly::F14FastSet<std::string> remoteTaskIdPrefixSet;
       for (const auto& remoteTaskId : remoteTaskIdList) {
         auto remoteTaskPrefix = taskPrefixExtractor_(remoteTaskId);
         const auto [_, inserted] =
@@ -363,10 +363,10 @@ MultiFragmentPlanPtr PrestoQueryReplayRunner::deserializeSupportedPlan(
       std::move(executableFragments), std::move(options));
 }
 
-std::unordered_map<velox::core::PlanNodeId, std::vector<ConnectorSplitPtr>>
+folly::F14FastMap<velox::core::PlanNodeId, std::vector<ConnectorSplitPtr>>
 PrestoQueryReplayRunner::deserializeConnectorSplits(
     const std::vector<std::string>& serializedSplits) {
-  std::unordered_map<velox::core::PlanNodeId, std::vector<ConnectorSplitPtr>>
+  folly::F14FastMap<velox::core::PlanNodeId, std::vector<ConnectorSplitPtr>>
       nodeSplitsMap;
   for (auto& serializedSplit : serializedSplits) {
     auto json = folly::parseJson(serializedSplit);

@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/connectors/ConnectorSplitSource.h"
-#include "axiom/optimizer/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/runner/tests/DistributedPlanBuilder.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
@@ -25,9 +24,9 @@
 #include <folly/init/Init.h>
 
 using namespace facebook::velox;
-using namespace facebook::velox::connector;
+using namespace facebook::axiom::connector;
 
-namespace facebook::velox::connector::hive {
+namespace facebook::axiom::connector::hive {
 namespace {
 
 class HiveConnectorMetadataTest
@@ -83,8 +82,8 @@ class HiveConnectorMetadataTest
 };
 
 TEST_F(HiveConnectorMetadataTest, basic) {
-  auto connector = getConnector(velox::exec::test::kHiveConnectorId);
-  auto metadata = connector->metadata();
+  auto metadata =
+      ConnectorMetadata::metadata(velox::exec::test::kHiveConnectorId);
   ASSERT_TRUE(metadata != nullptr);
   auto table = metadata->findTable("T");
   ASSERT_TRUE(table != nullptr);
@@ -93,7 +92,7 @@ TEST_F(HiveConnectorMetadataTest, basic) {
   EXPECT_EQ(250'000, table->numRows());
   auto* layout = table->layouts()[0];
   auto columnHandle = metadata->createColumnHandle(*layout, "c0");
-  std::vector<ColumnHandlePtr> columns = {columnHandle};
+  std::vector<velox::connector::ColumnHandlePtr> columns = {columnHandle};
   std::vector<core::TypedExprPtr> filters;
   std::vector<core::TypedExprPtr> rejectedFilters;
   auto ctx = dynamic_cast<hive::LocalHiveConnectorMetadata*>(metadata)
@@ -115,9 +114,9 @@ TEST_F(HiveConnectorMetadataTest, basic) {
 
 TEST_F(HiveConnectorMetadataTest, createTable) {
   constexpr int32_t kTestSize = 2048;
-  auto connector = getConnector(velox::exec::test::kHiveConnectorId);
+
   auto metadata = dynamic_cast<connector::hive::HiveConnectorMetadata*>(
-      connector->metadata());
+      ConnectorMetadata::metadata(velox::exec::test::kHiveConnectorId));
   ASSERT_TRUE(metadata != nullptr);
 
   auto tableType = ROW(
@@ -126,7 +125,7 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
        {"data", BIGINT()},
        {"ds", VARCHAR()}});
 
-  std::unordered_map<std::string, std::string> options = {
+  folly::F14FastMap<std::string, std::string> options = {
       {"bucketed_by", "key1"},
       {"sorted_by", "key1, key2"},
       {"bucket_count", "4"},
@@ -194,7 +193,7 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
       handle,
       false,
       resultType,
-      connector::CommitStrategy::kNoCommit,
+      velox::connector::CommitStrategy::kNoCommit,
       builder.planNode());
   auto result = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   metadata->finishWrite(
@@ -204,7 +203,7 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
   axiom::runner::MultiFragmentPlan::Options runnerOptions = {
       .queryId = id, .numWorkers = 1, .numDrivers = 1};
 
-  connector::ColumnHandleMap assignments;
+  velox::connector::ColumnHandleMap assignments;
   for (auto i = 0; i < tableType->size(); ++i) {
     assignments[tableType->nameOf(i)] =
         metadata->createColumnHandle(*layout, tableType->nameOf(i));
@@ -217,18 +216,14 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
       rootBuilder.fragments(), std::move(runnerOptions));
   auto rootPool = memory::memoryManager()->addRootPool("readQ");
 
-  auto splitSourceFactory =
-      std::make_shared<connector::ConnectorSplitSourceFactory>();
   auto localRunner = std::make_shared<axiom::runner::LocalRunner>(
-      std::move(readPlan),
-      makeQueryCtx(id, rootPool.get()),
-      splitSourceFactory);
+      std::move(readPlan), makeQueryCtx(id, rootPool.get()));
   auto results = axiom::runner::test::readCursor(localRunner);
   exec::test::assertEqualResults({data}, results);
 }
 
 } // namespace
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::axiom::connector::hive
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

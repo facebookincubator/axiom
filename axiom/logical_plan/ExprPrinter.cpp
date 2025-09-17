@@ -18,7 +18,7 @@
 #include "axiom/logical_plan/ExprVisitor.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 namespace {
 
@@ -61,9 +61,39 @@ class ToTextVisitor : public ExprVisitor {
     auto& out = toOut(context);
 
     out << expr.name();
-    appendInputs(expr, out, context);
 
-    // TODO Add filter, order by and distinct.
+    out << "(";
+
+    if (expr.isDistinct()) {
+      out << "DISTINCT ";
+    }
+
+    const auto numInputs = expr.inputs().size();
+    for (auto i = 0; i < numInputs; ++i) {
+      if (i > 0) {
+        out << ", ";
+      }
+      expr.inputAt(i)->accept(*this, context);
+    }
+
+    if (!expr.ordering().empty()) {
+      out << " ORDER BY ";
+      for (auto i = 0; i < expr.ordering().size(); ++i) {
+        if (i > 0) {
+          out << ", ";
+        }
+        expr.ordering()[i].expression->accept(*this, context);
+        out << " " << expr.ordering()[i].order.toString();
+      }
+    }
+
+    out << ")";
+
+    if (expr.filter() != nullptr) {
+      out << " FILTER (WHERE ";
+      expr.filter()->accept(*this, context);
+      out << ")";
+    }
   }
 
   void visit(const WindowExpr& expr, ExprVisitorContext& context)
@@ -78,7 +108,8 @@ class ToTextVisitor : public ExprVisitor {
 
   void visit(const ConstantExpr& expr, ExprVisitorContext& context)
       const override {
-    // TODO Avoid using Variant::toString as we do not control its output.
+    // TODO Avoid using velox::Variant::toString as we do not control its
+    // output.
     toOut(context) << expr.value()->toString(expr.type());
   }
 
@@ -144,4 +175,4 @@ std::string ExprPrinter::toText(const Expr& root) {
   return context.out.str();
 }
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

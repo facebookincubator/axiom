@@ -16,14 +16,12 @@
 
 #pragma once
 
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
-#include "velox/connectors/hive/HiveConfig.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/Options.h"
-#include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::axiom::connector::hive {
 
 /// Describes a single partition of a Hive table. If the table is
 /// bucketed, this resolves to a single file. If the table is
@@ -32,17 +30,17 @@ namespace facebook::velox::connector::hive {
 /// this resolves to the directory corresponding to the table.
 struct HivePartitionHandle : public PartitionHandle {
   HivePartitionHandle(
-      const std::unordered_map<std::string, std::optional<std::string>>
-          partitionKeys,
+      folly::F14FastMap<std::string, std::optional<std::string>> partitionKeys,
       std::optional<int32_t> tableBucketNumber)
-      : partitionKeys(partitionKeys), tableBucketNumber(tableBucketNumber) {}
+      : partitionKeys(std::move(partitionKeys)),
+        tableBucketNumber(tableBucketNumber) {}
 
-  const std::unordered_map<std::string, std::optional<std::string>>
+  const folly::F14FastMap<std::string, std::optional<std::string>>
       partitionKeys;
   const std::optional<int32_t> tableBucketNumber;
 };
 
-class HiveConnectorSession : public connector::ConnectorSession {
+class HiveConnectorSession : public ConnectorSession {
  public:
   ~HiveConnectorSession() override = default;
 };
@@ -59,14 +57,14 @@ class HiveTableLayout : public TableLayout {
   HiveTableLayout(
       const std::string& name,
       const Table* table,
-      connector::Connector* connector,
+      velox::connector::Connector* connector,
       std::vector<const Column*> columns,
       std::vector<const Column*> partitioning,
       std::vector<const Column*> orderColumns,
       std::vector<SortOrder> sortOrder,
       std::vector<const Column*> lookupKeys,
       std::vector<const Column*> hivePartitionColumns,
-      dwio::common::FileFormat fileFormat,
+      velox::dwio::common::FileFormat fileFormat,
       std::optional<int32_t> numBuckets = std::nullopt)
       : TableLayout(
             name,
@@ -82,7 +80,7 @@ class HiveTableLayout : public TableLayout {
         hivePartitionColumns_(hivePartitionColumns),
         numBuckets_(numBuckets) {}
 
-  dwio::common::FileFormat fileFormat() const {
+  velox::dwio::common::FileFormat fileFormat() const {
     return fileFormat_;
   }
 
@@ -95,96 +93,94 @@ class HiveTableLayout : public TableLayout {
   }
 
  protected:
-  const dwio::common::FileFormat fileFormat_;
+  const velox::dwio::common::FileFormat fileFormat_;
   const std::vector<const Column*> hivePartitionColumns_;
-  std::optional<int32_t> numBuckets_;
-
-  // Feeds 'data' into 'builders'. Builders and children of 'data' correspond
-  // pairwise. 'builders' may have a nullptr for some columns.
-  void updateStatsBuilders(
-      const RowVectorPtr& data,
-      std::vector<std::unique_ptr<dwrf::StatisticsBuilder>>& builders);
+  const std::optional<int32_t> numBuckets_;
 };
 
 class HiveConnectorMetadata : public ConnectorMetadata {
  public:
-  explicit HiveConnectorMetadata(HiveConnector* hiveConnector)
-      : hiveConnector_(hiveConnector) {}
+  explicit HiveConnectorMetadata(
+      velox::connector::hive::HiveConnector* hiveConnector)
+      : hiveConnector_(hiveConnector),
+        hiveConfig_(std::make_shared<velox::connector::hive::HiveConfig>(
+            hiveConnector->connectorConfig())) {}
 
-  ColumnHandlePtr createColumnHandle(
+  velox::connector::ColumnHandlePtr createColumnHandle(
       const TableLayout& layout,
       const std::string& columnName,
-      std::vector<common::Subfield> subfields = {},
-      std::optional<TypePtr> castToType = std::nullopt,
+      std::vector<velox::common::Subfield> subfields = {},
+      std::optional<velox::TypePtr> castToType = std::nullopt,
       SubfieldMapping subfieldMapping = {}) override;
 
-  ConnectorTableHandlePtr createTableHandle(
+  velox::connector::ConnectorTableHandlePtr createTableHandle(
       const TableLayout& layout,
-      std::vector<ColumnHandlePtr> columnHandles,
-      core::ExpressionEvaluator& evaluator,
-      std::vector<core::TypedExprPtr> filters,
-      std::vector<core::TypedExprPtr>& rejectedFilters,
-      RowTypePtr dataColumns,
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
+      velox::core::ExpressionEvaluator& evaluator,
+      std::vector<velox::core::TypedExprPtr> filters,
+      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
+      velox::RowTypePtr dataColumns,
       std::optional<LookupKeys> lookupKeys) override;
 
-  ConnectorInsertTableHandlePtr createInsertTableHandle(
+  velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
-      const RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const velox::RowTypePtr& rowType,
+      const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) override;
 
   void createTable(
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
-      const velox::connector::ConnectorSessionPtr& session,
+      const folly::F14FastMap<std::string, std::string>& options,
+      const ConnectorSessionPtr& session,
       bool errorIfExists = true,
-      velox::connector::TableKind tableKind =
-          velox::connector::TableKind::kTable) override {
+      TableKind tableKind = TableKind::kTable) override {
     VELOX_UNSUPPORTED();
   }
 
   void finishWrite(
-      const velox::connector::TableLayout& layout,
+      const TableLayout& layout,
       const velox::connector::ConnectorInsertTableHandlePtr& handle,
       const std::vector<velox::RowVectorPtr>& writerResult,
-      velox::connector::WriteKind kind,
-      const velox::connector::ConnectorSessionPtr& session) override {
+      WriteKind kind,
+      const ConnectorSessionPtr& session) override {
     VELOX_UNSUPPORTED();
   }
 
   WritePartitionInfo writePartitionInfo(
-      const ConnectorInsertTableHandlePtr& handle) override {
+      const velox::connector::ConnectorInsertTableHandlePtr& handle) override {
     VELOX_UNSUPPORTED();
   }
 
-  std::vector<ColumnHandlePtr> rowIdHandles(
+  std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
       const TableLayout& layout,
       WriteKind kind) override {
     VELOX_UNSUPPORTED();
   }
 
-  virtual dwio::common::FileFormat fileFormat() const = 0;
+  virtual velox::dwio::common::FileFormat fileFormat() const = 0;
 
  protected:
   virtual void ensureInitialized() const {}
 
   virtual void validateOptions(
-      const std::unordered_map<std::string, std::string>& options) const;
+      const folly::F14FastMap<std::string, std::string>& options) const;
 
-  virtual std::shared_ptr<connector::hive::LocationHandle> makeLocationHandle(
+  virtual std::shared_ptr<velox::connector::hive::LocationHandle>
+  makeLocationHandle(
       std::string targetDirectory,
       std::optional<std::string> writeDirectory,
-      connector::hive::LocationHandle::TableType tableType =
-          connector::hive::LocationHandle::TableType::kNew) = 0;
+      velox::connector::hive::LocationHandle::TableType tableType =
+          velox::connector::hive::LocationHandle::TableType::kNew) = 0;
 
   /// Returns the path to the filesystem root for the data managed by
   /// 'this'. Directories inside this correspond to schemas and
   /// tables.
   virtual std::string dataPath() const = 0;
 
-  HiveConnector* const hiveConnector_;
+  velox::connector::hive::HiveConnector* const hiveConnector_;
+  const std::shared_ptr<velox::connector::hive::HiveConfig> hiveConfig_;
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::axiom::connector::hive

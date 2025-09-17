@@ -12,26 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_test_connector TestConnector.cpp)
+if(VELOX_ENABLE_HIVE_CONNECTOR)
+  add_subdirectory(hive)
+endif()
 
-velox_link_libraries(
-  velox_test_connector
-  velox_connector_metadata
-  velox_common_base
-  velox_memory
-  velox_connector)
+if(VELOX_ENABLE_TPCH_CONNECTOR)
+  add_subdirectory(tpch)
+endif()
 
-add_executable(velox_test_connector_test TestConnectorTest.cpp)
+if(AXIOM_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
 
-add_test(velox_test_connector_test velox_test_connector_test)
+velox_add_library(axiom_connector_metadata ConnectorMetadata.cpp)
 
-target_link_libraries(
-  velox_test_connector_test
-  velox_test_connector
-  velox_common_base
-  velox_memory
-  velox_connector
-  velox_exec
-  velox_vector_test_lib
-  gtest
-  gtest_main)
+velox_link_libraries(axiom_connector_metadata velox_common_base velox_memory
+                     velox_connector)

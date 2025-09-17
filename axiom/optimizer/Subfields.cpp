@@ -21,17 +21,17 @@
 
 #include <ranges>
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 namespace {
+
+namespace lp = facebook::axiom::logical_plan;
 
 PathCP stepsToPath(std::span<const Step> steps) {
   return toPath(steps, true);
 }
 
 struct MarkFieldsAccessedContextArray {
-  std::array<const RowType* const, 1> rowTypes;
+  std::array<const velox::RowType* const, 1> rowTypes;
   std::array<const LogicalContextSource, 1> sources;
 
   MarkFieldsAccessedContext toCtx() const {
@@ -40,7 +40,7 @@ struct MarkFieldsAccessedContextArray {
 };
 
 struct MarkFieldsAccessedContextVector {
-  std::vector<const RowType*> rowTypes;
+  std::vector<const velox::RowType*> rowTypes;
   std::vector<LogicalContextSource> sources;
 
   MarkFieldsAccessedContext toCtx() const {
@@ -56,7 +56,7 @@ MarkFieldsAccessedContextArray fromNode(const lp::LogicalPlanNodePtr& node) {
 
 MarkFieldsAccessedContextVector fromNodes(
     const std::vector<lp::LogicalPlanNodePtr>& nodes) {
-  std::vector<const RowType*> rowTypes;
+  std::vector<const velox::RowType*> rowTypes;
   std::vector<LogicalContextSource> sources;
   rowTypes.reserve(nodes.size());
   sources.reserve(nodes.size());
@@ -77,6 +77,18 @@ void ToGraph::markFieldAccessed(
   const auto& input = project.onlyInput();
   const auto ctx = fromNode(input);
   markSubfields(project.expressionAt(ordinal), steps, isControl, ctx.toCtx());
+}
+
+void ToGraph::markFieldAccessed(
+    const lp::UnnestNode& unnest,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl) {
+  const auto& input = unnest.onlyInput();
+  if (ordinal < input->outputType()->size()) {
+    const auto ctx = fromNode(input);
+    markFieldAccessed(ctx.sources[0], ordinal, steps, isControl, ctx.toCtx());
+  }
 }
 
 void ToGraph::markFieldAccessed(
@@ -161,6 +173,12 @@ void ToGraph::markFieldAccessed(
     return;
   }
 
+  if (kind == lp::NodeKind::kUnnest) {
+    const auto* unnest = source.planNode->asUnchecked<lp::UnnestNode>();
+    markFieldAccessed(*unnest, ordinal, steps, isControl);
+    return;
+  }
+
   if (kind == lp::NodeKind::kAggregate) {
     const auto* agg = source.planNode->asUnchecked<lp::AggregateNode>();
     markFieldAccessed(*agg, ordinal, steps, isControl);
@@ -231,7 +249,7 @@ lp::ConstantExprPtr ToGraph::tryFoldConstant(const lp::ExprPtr& expr) {
     if (literal->is(PlanType::kLiteralExpr)) {
       return std::make_shared<lp::ConstantExpr>(
           toTypePtr(literal->value().type),
-          std::make_shared<Variant>(literal->as<Literal>()->literal()));
+          std::make_shared<velox::Variant>(literal->as<Literal>()->literal()));
     }
   }
   return nullptr;
@@ -269,7 +287,7 @@ void ToGraph::markSubfields(
     if (fieldIndex.has_value()) {
       name = toName(input->type()->asRow().nameOf(fieldIndex.value()));
     } else {
-      const auto& fieldName = field->value()->value<TypeKind::VARCHAR>();
+      const auto& fieldName = field->value()->value<velox::TypeKind::VARCHAR>();
       fieldIndex = input->type()->asRow().getChildIdx(fieldName);
       name = toName(fieldName);
     }
@@ -303,8 +321,8 @@ void ToGraph::markSubfields(
       }
 
       const auto& value = constant->value();
-      if (value->kind() == TypeKind::VARCHAR) {
-        const auto& str = value->value<TypeKind::VARCHAR>();
+      if (value->kind() == velox::TypeKind::VARCHAR) {
+        const auto& str = value->value<velox::TypeKind::VARCHAR>();
         steps.push_back({.kind = StepKind::kSubscript, .field = toName(str)});
       } else {
         const auto& id = integerValue(value.get());
@@ -381,7 +399,7 @@ void ToGraph::markSubfields(
         const auto* lambda = expr->inputAt(i)->asUnchecked<lp::LambdaExpr>();
         const auto& argType = lambda->signature();
 
-        std::vector<const RowType*> newRowTypes;
+        std::vector<const velox::RowType*> newRowTypes;
         newRowTypes.reserve(context.rowTypes.size() + 1);
         newRowTypes.push_back(argType.get());
         newRowTypes.insert(
@@ -445,13 +463,17 @@ void ToGraph::markControl(const lp::LogicalPlanNode& node) {
       markSubfields(condition, steps, true, fromNodes(join->inputs()).toCtx());
     }
 
+  } else if (kind == lp::NodeKind::kUnnest) {
+    const auto& unnest = node.asUnchecked<lp::UnnestNode>();
+    markColumnSubfields(node.onlyInput(), unnest->unnestExpressions());
+
   } else if (kind == lp::NodeKind::kFilter) {
     const auto& filter = node.asUnchecked<lp::FilterNode>();
     markColumnSubfields(node.onlyInput(), std::array{filter->predicate()});
 
   } else if (kind == lp::NodeKind::kAggregate) {
-    const auto* agg = node.asUnchecked<lp::AggregateNode>();
-    markColumnSubfields(node.onlyInput(), agg->groupingKeys());
+    const auto& agg = *node.asUnchecked<lp::AggregateNode>();
+    markColumnSubfields(node.onlyInput(), agg.groupingKeys());
 
   } else if (kind == lp::NodeKind::kSort) {
     const auto& order = *node.asUnchecked<lp::SortNode>();
@@ -534,4 +556,4 @@ std::string PlanSubfields::toString() const {
   return out.str();
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

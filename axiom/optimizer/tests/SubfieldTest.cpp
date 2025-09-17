@@ -30,13 +30,13 @@ DECLARE_uint32(optimizer_trace);
 
 DECLARE_int32(num_workers);
 
-using namespace facebook::velox::optimizer::test;
-using namespace facebook::velox::exec::test;
-
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 namespace {
+
+using namespace facebook::velox;
+using namespace facebook::velox::exec::test;
+using namespace facebook::axiom::optimizer::test;
+namespace lp = facebook::axiom::logical_plan;
 
 template <typename T>
 lp::ExprPtr makeKey(const TypePtr& type, T value) {
@@ -159,7 +159,7 @@ class SubfieldTest : public QueryTestBase,
     registry->registerFunction("exploding_genie", std::move(explodingMetadata));
   }
 
-  static std::unordered_map<PathCP, lp::ExprPtr> explodeGenie(
+  static folly::F14FastMap<PathCP, lp::ExprPtr> explodeGenie(
       const lp::CallExpr* call,
       std::vector<PathCP>& paths) {
     // This function understands paths like [1][cc], [2][cc],
@@ -169,7 +169,7 @@ class SubfieldTest : public QueryTestBase,
     // idslf[11][1], then the trailing part is ignored. The returned map will
     // have the expression for each distinct path that begins with one of [1],
     // [2], [3] followed by an integer subscript.
-    std::unordered_map<PathCP, lp::ExprPtr> result;
+    folly::F14FastMap<PathCP, lp::ExprPtr> result;
     for (auto& path : paths) {
       const auto& steps = path->steps();
       if (steps.size() < 2) {
@@ -314,7 +314,7 @@ class SubfieldTest : public QueryTestBase,
     assertSame(veloxPlan, fragmentedPlan);
   }
 
-  std::string subfield(const std::string& first, const std::string& rest = "")
+  std::string subfield(std::string_view first, std::string_view rest = "")
       const {
     return GetParam() == 3 ? fmt::format(".{}{}", first, rest)
                            : fmt::format("[{}]{}", first, rest);
@@ -391,7 +391,7 @@ class SubfieldTest : public QueryTestBase,
   // TODO Move to PlanMatcher.
   static void verifyRequiredSubfields(
       const core::PlanNodePtr& plan,
-      const std::unordered_map<std::string, std::vector<std::string>>&
+      const folly::F14FastMap<std::string, std::vector<std::string>>&
           expectedSubfields) {
     auto* scanNode = core::PlanNode::findFirstNode(
         plan.get(), [](const core::PlanNode* node) {
@@ -409,7 +409,8 @@ class SubfieldTest : public QueryTestBase,
 
     for (const auto& [_, handle] : assignments) {
       auto hiveHandle =
-          dynamic_cast<const connector::hive::HiveColumnHandle*>(handle.get());
+          dynamic_cast<const velox::connector::hive::HiveColumnHandle*>(
+              handle.get());
       ASSERT_TRUE(hiveHandle != nullptr);
 
       const auto& name = hiveHandle->name();
@@ -708,4 +709,4 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn(std::vector<int32_t>{1, 2, 3}));
 
 } // namespace
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

@@ -20,7 +20,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// Single threaded cache in front of HashStringAllocator free
 /// list. Speeds up allocation and free of plan candidates. This is
@@ -64,4 +64,4 @@ class ArenaCache {
   uint64_t totalSize_{0};
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

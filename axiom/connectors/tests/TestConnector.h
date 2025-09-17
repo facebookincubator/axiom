@@ -16,9 +16,10 @@
 
 #pragma once
 
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
+#include <folly/container/F14Map.h>
+#include "axiom/connectors/ConnectorMetadata.h"
 
-namespace facebook::velox::connector {
+namespace facebook::axiom::connector {
 
 class TestConnector;
 
@@ -30,7 +31,7 @@ class TestTableLayout : public TableLayout {
   TestTableLayout(
       const std::string& name,
       Table* table,
-      connector::Connector* connector,
+      velox::connector::Connector* connector,
       std::vector<const Column*> columns)
       : TableLayout(
             name,
@@ -44,12 +45,12 @@ class TestTableLayout : public TableLayout {
             /*supportsScan=*/true) {}
 
   std::pair<int64_t, int64_t> sample(
-      const connector::ConnectorTableHandlePtr&,
+      const velox::connector::ConnectorTableHandlePtr&,
       float,
-      const std::vector<core::TypedExprPtr>&,
-      RowTypePtr,
-      const std::vector<common::Subfield>&,
-      HashStringAllocator*,
+      const std::vector<velox::core::TypedExprPtr>&,
+      velox::RowTypePtr,
+      const std::vector<velox::common::Subfield>&,
+      velox::HashStringAllocator*,
       std::vector<ColumnStatistics>*) const override {
     return std::make_pair(1'000, 1'000);
   }
@@ -64,10 +65,10 @@ class TestTable : public Table {
  public:
   TestTable(
       const std::string& name,
-      const RowTypePtr& schema,
+      const velox::RowTypePtr& schema,
       TestConnector* connector);
 
-  const std::unordered_map<std::string, const Column*>& columnMap()
+  const folly::F14FastMap<std::string, const Column*>& columnMap()
       const override {
     return columns_;
   }
@@ -84,7 +85,7 @@ class TestTable : public Table {
     return rows;
   }
 
-  const std::vector<RowVectorPtr>& data() const {
+  const std::vector<velox::RowVectorPtr>& data() const {
     return data_;
   }
 
@@ -94,26 +95,26 @@ class TestTable : public Table {
   /// Data is copied on append so that vectors from temporary
   /// memory pools can be appended. These copies are allocated
   /// via the TestTable internal memory pool.
-  void addData(const RowVectorPtr& data) {
+  void addData(const velox::RowVectorPtr& data) {
     VELOX_CHECK(
         data->type()->equivalent(*type()),
         "appended data type {} must match table type {}",
         data->type(),
         type());
     VELOX_CHECK(data->size() > 0, "cannot append empty RowVector");
-    auto copy = std::dynamic_pointer_cast<RowVector>(
-        BaseVector::copy(*data, pool_.get()));
+    auto copy = std::dynamic_pointer_cast<velox::RowVector>(
+        velox::BaseVector::copy(*data, pool_.get()));
     data_.push_back(copy);
   }
 
  private:
-  connector::Connector* connector_;
-  std::unordered_map<std::string, const Column*> columns_;
+  velox::connector::Connector* connector_;
+  folly::F14FastMap<std::string, const Column*> columns_;
   std::vector<std::unique_ptr<Column>> exportedColumns_;
   std::vector<const TableLayout*> layouts_;
   std::vector<std::unique_ptr<TableLayout>> exportedLayouts_;
-  std::shared_ptr<memory::MemoryPool> pool_;
-  std::vector<RowVectorPtr> data_;
+  std::shared_ptr<velox::memory::MemoryPool> pool_;
+  std::vector<velox::RowVectorPtr> data_;
 };
 
 /// SplitSource generated via the TestSplitManager embedded in the
@@ -145,40 +146,40 @@ class TestSplitSource : public SplitSource {
 class TestSplitManager : public ConnectorSplitManager {
  public:
   std::vector<PartitionHandlePtr> listPartitions(
-      const ConnectorTableHandlePtr& tableHandle) override;
+      const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
 
   std::shared_ptr<SplitSource> getSplitSource(
-      const ConnectorTableHandlePtr& tableHandle,
+      const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       SplitOptions options = {}) override;
 };
 
-class TestColumnHandle : public ColumnHandle {
+class TestColumnHandle : public velox::connector::ColumnHandle {
  public:
-  TestColumnHandle(const std::string& name, const TypePtr& type)
+  TestColumnHandle(const std::string& name, const velox::TypePtr& type)
       : name_(name), type_(type) {}
 
   const std::string& name() const override {
     return name_;
   }
 
-  const TypePtr& type() const {
+  const velox::TypePtr& type() const {
     return type_;
   }
 
  private:
   const std::string name_;
-  const TypePtr type_;
+  const velox::TypePtr type_;
 };
 
 /// The layout corresponding to the handle is provided at
 /// initialization time.
-class TestTableHandle : public ConnectorTableHandle {
+class TestTableHandle : public velox::connector::ConnectorTableHandle {
  public:
   TestTableHandle(
       const TableLayout& layout,
-      std::vector<ColumnHandlePtr> columnHandles,
-      std::vector<core::TypedExprPtr> filters = {})
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
+      std::vector<velox::core::TypedExprPtr> filters = {})
       : ConnectorTableHandle(layout.connector()->connectorId()),
         layout_(layout),
         columnHandles_(std::move(columnHandles)),
@@ -196,24 +197,25 @@ class TestTableHandle : public ConnectorTableHandle {
     return layout_;
   }
 
-  const std::vector<core::TypedExprPtr>& filters() const {
+  const std::vector<velox::core::TypedExprPtr>& filters() const {
     return filters_;
   }
 
-  const std::vector<ColumnHandlePtr>& columnHandles() const {
+  const std::vector<velox::connector::ColumnHandlePtr>& columnHandles() const {
     return columnHandles_;
   }
 
  private:
   const TableLayout& layout_;
-  const std::vector<ColumnHandlePtr> columnHandles_;
-  const std::vector<core::TypedExprPtr> filters_;
+  const std::vector<velox::connector::ColumnHandlePtr> columnHandles_;
+  const std::vector<velox::core::TypedExprPtr> filters_;
 };
 
 /// The TestInsertTableHandle should be populated using the table
 /// name as the name parameter so that lookups can be performed
 /// against the ConnectorMetadata table map.
-class TestInsertTableHandle : public ConnectorInsertTableHandle {
+class TestInsertTableHandle
+    : public velox::connector::ConnectorInsertTableHandle {
  public:
   explicit TestInsertTableHandle(const std::string& name) : name_(name) {}
 
@@ -239,66 +241,66 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   void initialize() override {}
 
-  TablePtr findTable(const std::string& name) override;
+  TablePtr findTable(std::string_view name) override;
 
   /// Non-interface method which supplies a non-const Table reference
   /// which is capable of performing writes to the underlying table.
-  std::shared_ptr<Table> findTableInternal(const std::string& name);
+  std::shared_ptr<Table> findTableInternal(std::string_view name);
 
   ConnectorSplitManager* splitManager() override {
     return splitManager_.get();
   }
 
-  ColumnHandlePtr createColumnHandle(
+  velox::connector::ColumnHandlePtr createColumnHandle(
       const TableLayout& layout,
       const std::string& columnName,
-      std::vector<common::Subfield> subfields = {},
-      std::optional<TypePtr> castToType = std::nullopt,
+      std::vector<velox::common::Subfield> subfields = {},
+      std::optional<velox::TypePtr> castToType = std::nullopt,
       SubfieldMapping subfieldMapping = {}) override;
 
-  ConnectorTableHandlePtr createTableHandle(
+  velox::connector::ConnectorTableHandlePtr createTableHandle(
       const TableLayout& layout,
-      std::vector<ColumnHandlePtr> columnHandles,
-      core::ExpressionEvaluator& evaluator,
-      std::vector<core::TypedExprPtr> filters,
-      std::vector<core::TypedExprPtr>& rejectedFilters,
-      RowTypePtr dataColumns,
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
+      velox::core::ExpressionEvaluator& evaluator,
+      std::vector<velox::core::TypedExprPtr> filters,
+      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
+      velox::RowTypePtr dataColumns,
       std::optional<LookupKeys>) override;
 
   void createTable(
       const std::string& tableName,
-      const RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const velox::RowTypePtr& rowType,
+      const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
       TableKind tableKind = TableKind::kTable) override {
     VELOX_UNSUPPORTED();
   }
 
-  ConnectorInsertTableHandlePtr createInsertTableHandle(
+  velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
-      const RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const velox::RowTypePtr& rowType,
+      const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) override {
     VELOX_UNSUPPORTED();
   }
 
   WritePartitionInfo writePartitionInfo(
-      const ConnectorInsertTableHandlePtr& handle) override {
+      const velox::connector::ConnectorInsertTableHandlePtr& handle) override {
     VELOX_UNSUPPORTED();
   }
 
   void finishWrite(
       const TableLayout& layout,
-      const ConnectorInsertTableHandlePtr& handle,
-      const std::vector<RowVectorPtr>& writerResult,
+      const velox::connector::ConnectorInsertTableHandlePtr& handle,
+      const std::vector<velox::RowVectorPtr>& writerResult,
       WriteKind kind,
       const ConnectorSessionPtr& session) override {
     VELOX_UNSUPPORTED();
   }
 
-  std::vector<ColumnHandlePtr> rowIdHandles(
+  std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
       const TableLayout& layout,
       WriteKind kind) override {
     VELOX_UNSUPPORTED();
@@ -309,16 +311,16 @@ class TestConnectorMetadata : public ConnectorMetadata {
   /// exists, an error is thrown.
   std::shared_ptr<TestTable> createTable(
       const std::string& name,
-      const RowTypePtr& schema);
+      const velox::RowTypePtr& schema);
 
   /// Add data rows to the specified table. This data is returned via the
   /// DataSource corresponding to this table. The data is copied
   /// into the internal memory pool associated with the table.
-  void appendData(const std::string& name, const RowVectorPtr& data);
+  void appendData(std::string_view name, const velox::RowVectorPtr& data);
 
  private:
   TestConnector* connector_;
-  std::unordered_map<std::string, std::shared_ptr<TestTable>> tables_;
+  folly::F14FastMap<std::string, std::shared_ptr<TestTable>> tables_;
   std::unique_ptr<TestSplitManager> splitManager_;
 };
 
@@ -326,22 +328,24 @@ class TestConnectorMetadata : public ConnectorMetadata {
 /// object is retrieved and cached. On each call to next(), one RowVectorPtr
 /// returned to the caller, followed by nullptr once data is exhausted.
 /// Runtime stats are not populated for the data source.
-class TestDataSource : public DataSource {
+class TestDataSource : public velox::connector::DataSource {
  public:
   TestDataSource(
-      const RowTypePtr& outputType,
-      const ColumnHandleMap& handles,
+      const velox::RowTypePtr& outputType,
+      const velox::connector::ColumnHandleMap& handles,
       TablePtr table,
-      memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool);
 
-  void addSplit(std::shared_ptr<ConnectorSplit> split) override;
+  void addSplit(
+      std::shared_ptr<velox::connector::ConnectorSplit> split) override;
 
-  std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
-      override;
+  std::optional<velox::RowVectorPtr> next(
+      uint64_t size,
+      velox::ContinueFuture& future) override;
 
   void addDynamicFilter(
-      column_index_t outputChannel,
-      const std::shared_ptr<common::Filter>& filter) override;
+      velox::column_index_t outputChannel,
+      const std::shared_ptr<velox::common::Filter>& filter) override;
 
   uint64_t getCompletedBytes() override {
     return completedBytes_;
@@ -351,16 +355,17 @@ class TestDataSource : public DataSource {
     return completedRows_;
   }
 
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
+  std::unordered_map<std::string, velox::RuntimeCounter> runtimeStats()
+      override {
     return {};
   }
 
  private:
-  const RowTypePtr outputType_;
+  const velox::RowTypePtr outputType_;
   velox::memory::MemoryPool* pool_;
-  std::shared_ptr<ConnectorSplit> split_;
-  std::vector<RowVectorPtr> data_;
-  std::vector<column_index_t> outputMappings_;
+  std::shared_ptr<velox::connector::ConnectorSplit> split_;
+  std::vector<velox::RowVectorPtr> data_;
+  std::vector<velox::column_index_t> outputMappings_;
   uint64_t completedBytes_{0};
   uint64_t completedRows_{0};
   uint64_t idx_{0};
@@ -372,14 +377,18 @@ class TestDataSource : public DataSource {
 /// TestDataSource object which returns appended data. createDataSink
 /// creates a TestDataSink object which appends additional data to
 /// the associated table.
-class TestConnector : public Connector {
+class TestConnector : public velox::connector::Connector {
  public:
-  explicit TestConnector(const std::string& id)
-      : Connector(id),
-        metadata_{std::make_unique<TestConnectorMetadata>(this)} {}
+  explicit TestConnector(
+      const std::string& id,
+      std::shared_ptr<const velox::config::ConfigBase> config = nullptr)
+      : Connector(id, std::move(config)),
+        metadata_{std::make_shared<TestConnectorMetadata>(this)} {
+    ConnectorMetadata::registerMetadata(id, metadata_);
+  }
 
-  ConnectorMetadata* metadata() const override {
-    return metadata_.get();
+  ~TestConnector() override {
+    ConnectorMetadata::unregisterMetadata(connectorId());
   }
 
   bool supportsSplitPreload() const override {
@@ -390,50 +399,51 @@ class TestConnector : public Connector {
     return false;
   }
 
-  std::unique_ptr<DataSource> createDataSource(
-      const RowTypePtr& outputType,
-      const ConnectorTableHandlePtr& tableHandle,
-      const ColumnHandleMap& columnHandles,
-      ConnectorQueryCtx* connectorQueryCtx) override;
+  std::unique_ptr<velox::connector::DataSource> createDataSource(
+      const velox::RowTypePtr& outputType,
+      const velox::connector::ConnectorTableHandlePtr& tableHandle,
+      const velox::connector::ColumnHandleMap& columnHandles,
+      velox::connector::ConnectorQueryCtx* connectorQueryCtx) override;
 
-  std::unique_ptr<DataSink> createDataSink(
-      RowTypePtr inputType,
-      ConnectorInsertTableHandlePtr connectorInsertTableHandle,
-      ConnectorQueryCtx* connectorQueryCtx,
-      CommitStrategy commitStrategy) override;
+  std::unique_ptr<velox::connector::DataSink> createDataSink(
+      velox::RowTypePtr inputType,
+      velox::connector::ConnectorInsertTableHandlePtr
+          connectorInsertTableHandle,
+      velox::connector::ConnectorQueryCtx* connectorQueryCtx,
+      velox::connector::CommitStrategy commitStrategy) override;
 
   /// Add a TestTable with the specified name and schema to the
   /// TestConnectorMetadata corresponding to this connector.
   std::shared_ptr<TestTable> createTable(
       const std::string& name,
-      const RowTypePtr& schema = ROW({}, {}));
+      const velox::RowTypePtr& schema = velox::ROW({}, {}));
 
   /// Add data rows to the specified table. This data is returned via the
   /// DataSource corresponding to this table. Appended data is copied
   /// to the internal memory pool of the associated table.
-  void appendData(const std::string& name, const RowVectorPtr& data);
+  void appendData(std::string_view name, const velox::RowVectorPtr& data);
 
  private:
-  const std::unique_ptr<TestConnectorMetadata> metadata_;
+  const std::shared_ptr<TestConnectorMetadata> metadata_;
 };
 
 /// The ConnectorFactory for the TestConnector can be configured with
 /// any desired connector name in order to inject the TestConnector
 /// into workflows which generate connectors using factory interfaces.
-class TestConnectorFactory : public ConnectorFactory {
+class TestConnectorFactory : public velox::connector::ConnectorFactory {
  public:
   explicit TestConnectorFactory(const char* name) : ConnectorFactory(name) {}
 
-  std::shared_ptr<Connector> newConnector(
+  std::shared_ptr<velox::connector::Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const config::ConfigBase> config = nullptr,
+      std::shared_ptr<const velox::config::ConfigBase> config = nullptr,
       folly::Executor* ioExecutor = nullptr,
       folly::Executor* cpuExecutor = nullptr) override;
 };
 
 /// Data appended to the sink is copied to the internal data vector
 /// contained in the corresponding table.
-class TestDataSink : public DataSink {
+class TestDataSink : public velox::connector::DataSink {
  public:
   explicit TestDataSink(std::shared_ptr<Table> table) {
     table_ = std::dynamic_pointer_cast<TestTable>(table);
@@ -443,7 +453,7 @@ class TestDataSink : public DataSink {
   /// Data is copied to the memory pool internal to the
   /// corresponding Table object and appended to the Table's
   /// data buffer.
-  void appendData(RowVectorPtr vector) override;
+  void appendData(velox::RowVectorPtr vector) override;
 
   /// Data append is completed inside appendData, so the finish()
   /// interface is treated as a no-op.
@@ -465,4 +475,4 @@ class TestDataSink : public DataSink {
   std::shared_ptr<TestTable> table_;
 };
 
-} // namespace facebook::velox::connector
+} // namespace facebook::axiom::connector

@@ -20,7 +20,7 @@
 #include "axiom/optimizer/PlanUtils.h"
 #include "velox/expression/ScopedVarSetter.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 // static
 const char* SpecialFormCallNames::kAnd = "__and";
@@ -29,7 +29,7 @@ const char* SpecialFormCallNames::kOr = "__or";
 // static
 const char* SpecialFormCallNames::kCast = "__cast";
 // static
-const char* SpecialFormCallNames::kTryCast = "__trycast";
+const char* SpecialFormCallNames::kTryCast = "__try_cast";
 // static
 const char* SpecialFormCallNames::kTry = "__try";
 // static
@@ -79,6 +79,9 @@ std::string Column::toString() const {
         break;
       case PlanType::kValuesTableNode:
         cname = relation_->as<ValuesTable>()->cname;
+        break;
+      case PlanType::kUnnestTableNode:
+        cname = relation_->as<UnnestTable>()->cname;
         break;
       case PlanType::kDerivedTableNode:
         cname = relation_->as<DerivedTable>()->cname;
@@ -198,6 +201,17 @@ std::string ValuesTable::toString() const {
   return out.str();
 }
 
+void UnnestTable::addJoinedBy(JoinEdgeP join) {
+  pushBackUnique(joinedBy, join);
+}
+
+std::string UnnestTable::toString() const {
+  std::stringstream out;
+  out << "{" << PlanObject::toString();
+  out << cname << "}";
+  return out.str();
+}
+
 JoinSide JoinEdge::sideOf(PlanObjectCP side, bool other) const {
   if ((side == rightTable_ && !other) || (side == leftTable_ && other)) {
     return {
@@ -242,7 +256,7 @@ std::pair<std::string, bool> JoinEdge::sampleKey() const {
     return std::make_pair("", false);
   }
   auto* opt = queryCtx()->optimization();
-  ScopedVarSetter pref(&opt->cnamesInExpr(), false);
+  velox::ScopedVarSetter pref(&opt->cnamesInExpr(), false);
   std::vector<int32_t> indices(leftKeys_.size());
   std::iota(indices.begin(), indices.end(), 0);
   std::vector<std::string> leftString;
@@ -282,14 +296,21 @@ std::string JoinEdge::toString() const {
     out << " not exists ";
   } else if (leftOptional_) {
     out << " right ";
+  } else if (directed_) {
+    out << " unnest ";
   } else {
     out << " inner ";
   }
   out << rightTable_->toString();
   out << " on ";
-  for (auto i = 0; i < leftKeys_.size(); ++i) {
-    out << leftKeys_[i]->toString() << " = " << rightKeys_[i]->toString()
-        << (i < leftKeys_.size() - 1 ? " and " : "");
+  for (size_t i = 0; i < leftKeys_.size(); ++i) {
+    if (i > 0) {
+      out << " and ";
+    }
+    out << leftKeys_[i]->toString();
+    if (i < rightKeys_.size()) {
+      out << " = " << rightKeys_[i]->toString();
+    }
   }
   if (!filter_.empty()) {
     out << " filter " << conjunctsToString(filter_);
@@ -465,4 +486,4 @@ void JoinEdge::guessFanout() {
   }
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

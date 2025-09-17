@@ -17,8 +17,9 @@
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "velox/expression/ExprConstants.h"
 
-namespace facebook::velox::optimizer {
-namespace lp = facebook::velox::logical_plan;
+namespace facebook::axiom::optimizer {
+
+namespace lp = facebook::axiom::logical_plan;
 
 FunctionMetadataCP FunctionRegistry::metadata(std::string_view name) const {
   auto it = metadata_.find(name);
@@ -89,7 +90,7 @@ bool FunctionRegistry::registerReversibleFunction(std::string_view name) {
 
 // static
 FunctionRegistry* FunctionRegistry::instance() {
-  static auto registry = std::make_unique<FunctionRegistry>();
+  static std::unique_ptr<FunctionRegistry> registry{new FunctionRegistry{}};
   return registry.get();
 }
 
@@ -97,7 +98,7 @@ FunctionMetadataCP functionMetadata(std::string_view name) {
   return FunctionRegistry::instance()->metadata(name);
 }
 
-std::string specialForm(lp::SpecialForm specialForm) {
+const std::string& specialForm(lp::SpecialForm specialForm) {
   return FunctionRegistry::instance()->specialForm(specialForm);
 }
 
@@ -107,16 +108,16 @@ std::pair<std::vector<Step>, int32_t> rowConstructorSubfield(
     const lp::CallExpr& call) {
   VELOX_CHECK(steps.back().kind == StepKind::kField);
   auto field = steps.back().field;
-  auto idx = call.type()->as<TypeKind::ROW>().getChildIdx(field);
+  auto idx = call.type()->as<velox::TypeKind::ROW>().getChildIdx(field);
   auto newFields = steps;
   newFields.pop_back();
   return std::make_pair(newFields, idx);
 }
 
-std::unordered_map<PathCP, lp::ExprPtr> rowConstructorExplode(
+folly::F14FastMap<PathCP, lp::ExprPtr> rowConstructorExplode(
     const lp::CallExpr* call,
     std::vector<PathCP>& paths) {
-  std::unordered_map<PathCP, lp::ExprPtr> result;
+  folly::F14FastMap<PathCP, lp::ExprPtr> result;
   for (auto& path : paths) {
     const auto& steps = path->steps();
     if (steps.empty()) {
@@ -145,50 +146,56 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
 
   auto registerFunction = [&](std::string_view name,
                               std::unique_ptr<FunctionMetadata> metadata) {
-    FunctionRegistry::instance()->registerFunction(
-        fullName(name), std::move(metadata));
+    FunctionRegistry::instance()->registerFunction(name, std::move(metadata));
   };
 
   {
     LambdaInfo info{
         .ordinal = 1,
         .lambdaArg = {LambdaArg::kKey, LambdaArg::kValue},
-        .argOrdinal = {0, 0}};
+        .argOrdinal = {0, 0},
+    };
 
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->lambdas.push_back(std::move(info));
     metadata->subfieldArg = 0;
     metadata->cost = 40;
-    registerFunction("transform_values", std::move(metadata));
+    registerFunction(fullName("transform_values"), std::move(metadata));
   }
 
   {
     LambdaInfo info{
-        .ordinal = 1, .lambdaArg = {LambdaArg::kElement}, .argOrdinal = {0}};
+        .ordinal = 1,
+        .lambdaArg = {LambdaArg::kElement},
+        .argOrdinal = {0},
+    };
 
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->lambdas.push_back(std::move(info));
     metadata->subfieldArg = 0;
     metadata->cost = 20;
-    registerFunction("transform", std::move(metadata));
+    registerFunction(fullName("transform"), std::move(metadata));
   }
 
   {
     LambdaInfo info{
         .ordinal = 2,
         .lambdaArg = {LambdaArg::kElement, LambdaArg::kElement},
-        .argOrdinal = {0, 1}};
+        .argOrdinal = {0, 1},
+    };
 
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->lambdas.push_back(std::move(info));
     metadata->cost = 20;
-    registerFunction("zip", std::move(metadata));
+    registerFunction(fullName("zip"), std::move(metadata));
   }
 
   {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->valuePathToArgPath = rowConstructorSubfield;
     metadata->explode = rowConstructorExplode;
+    // Presto row_constructor created without prefix, so we register it without
+    // prefix too.
     registerFunction("row_constructor", std::move(metadata));
   }
 
@@ -205,17 +212,21 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
   registry->registerReversibleFunction(fullName("plus"));
   registry->registerReversibleFunction(fullName("multiply"));
 
-  registry->registerSpecialForm(lp::SpecialForm::kAnd, expression::kAnd);
-  registry->registerSpecialForm(lp::SpecialForm::kOr, expression::kOr);
-  registry->registerSpecialForm(lp::SpecialForm::kCast, expression::kCast);
+  // Presto special form functions created without prefix, so we register them
+  // without prefix too.
+  registry->registerSpecialForm(lp::SpecialForm::kAnd, velox::expression::kAnd);
+  registry->registerSpecialForm(lp::SpecialForm::kOr, velox::expression::kOr);
   registry->registerSpecialForm(
-      lp::SpecialForm::kTryCast, expression::kTryCast);
-  registry->registerSpecialForm(lp::SpecialForm::kTry, expression::kTry);
-  registry->registerSpecialForm(lp::SpecialForm::kIf, expression::kIf);
+      lp::SpecialForm::kCast, velox::expression::kCast);
   registry->registerSpecialForm(
-      lp::SpecialForm::kCoalesce, expression::kCoalesce);
-  registry->registerSpecialForm(lp::SpecialForm::kSwitch, expression::kSwitch);
-  registry->registerSpecialForm(lp::SpecialForm::kIn, fullName("in"));
+      lp::SpecialForm::kTryCast, velox::expression::kTryCast);
+  registry->registerSpecialForm(lp::SpecialForm::kTry, velox::expression::kTry);
+  registry->registerSpecialForm(lp::SpecialForm::kIf, velox::expression::kIf);
+  registry->registerSpecialForm(
+      lp::SpecialForm::kCoalesce, velox::expression::kCoalesce);
+  registry->registerSpecialForm(
+      lp::SpecialForm::kSwitch, velox::expression::kSwitch);
+  registry->registerSpecialForm(lp::SpecialForm::kIn, "in");
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

@@ -46,7 +46,7 @@ class ErrorListener : public antlr4::BaseErrorListener {
 /// Creates Presto SQL parser.
 class ParserHelper {
  public:
-  explicit ParserHelper(const std::string& sql)
+  explicit ParserHelper(std::string_view sql)
       : inputStream_(std::make_unique<UpperCaseInputStream>(sql)),
         lexer_(std::make_unique<PrestoSqlLexer>(inputStream_.get())),
         tokenStream_(std::make_unique<antlr4::CommonTokenStream>(lexer_.get())),

@@ -30,7 +30,7 @@ namespace axiom::sql::presto {
  */
 class UpperCaseInputStream final : public antlr4::ANTLRInputStream {
  public:
-  explicit UpperCaseInputStream(const std::string& input)
+  explicit UpperCaseInputStream(std::string_view input)
       : antlr4::ANTLRInputStream(input) {}
   // Force the casing to be upper case
   size_t LA(ssize_t i) override {

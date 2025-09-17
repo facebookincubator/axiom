@@ -17,11 +17,11 @@
 
 #include "axiom/optimizer/DerivedTable.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 class DerivedTablePrinter {
  public:
   static std::string toText(const DerivedTable& root);
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

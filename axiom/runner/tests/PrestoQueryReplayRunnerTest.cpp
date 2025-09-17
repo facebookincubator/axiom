@@ -16,6 +16,7 @@
 
 #include "axiom/runner/tests/PrestoQueryReplayRunner.h"
 
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
@@ -28,7 +29,7 @@ namespace {
 // Presto 'taskId' is in the format of
 // queryId.stageId.stageExecutionId.taskId.attemptNumber. return stage id from
 // the given taskId.
-std::string getTaskPrefix(const std::string& taskId) {
+std::string getTaskPrefix(std::string_view taskId) {
   std::vector<std::string_view> parts;
   folly::split('.', taskId, parts);
   VELOX_CHECK_EQ(parts.size(), 5);
@@ -43,8 +44,7 @@ class PrestoQueryReplayRunnerTest : public HiveConnectorTestBase {
     velox::Type::registerSerDe();
     velox::core::PlanNode::registerSerDe();
     velox::core::ITypedExpr::registerSerDe();
-    velox::connector::hive::HiveTableHandle::registerSerDe();
-    velox::connector::hive::HiveColumnHandle::registerSerDe();
+    velox::connector::hive::HiveConnector::registerSerDe();
     velox::exec::registerPartitionFunctionSerDe();
 
     velox::exec::ExchangeSource::registerFactory(

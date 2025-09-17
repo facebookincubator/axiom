@@ -17,13 +17,15 @@
 #include "axiom/optimizer/tests/FeatureGen.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
-namespace facebook::velox::optimizer::test {
-namespace lp = facebook::velox::logical_plan;
+namespace facebook::axiom::optimizer::test {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 RowTypePtr makeRowType(
     const std::vector<RowVectorPtr>& vectors,
     int32_t column) {
-  std::unordered_set<int32_t> keys;
+  folly::F14FastSet<int32_t> keys;
   TypePtr valueType;
   for (auto& row : vectors) {
     auto map = row->childAt(column)->as<MapVector>();
@@ -365,4 +367,4 @@ void makeLogicalExprs(
   }
 }
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

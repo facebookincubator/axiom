@@ -18,7 +18,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 ///  A linear model for predicting cost of operations from samples
 ///  over n dimensions. The dataset has measures in n dimensional
@@ -167,4 +167,4 @@ class Model {
   std::vector<std::vector<Interval>> intervals_;
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

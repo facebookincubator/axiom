@@ -28,10 +28,11 @@ DECLARE_uint32(optimizer_trace);
 DECLARE_int32(num_workers);
 DECLARE_string(history_save_path);
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 class TpchPlanTest : public virtual test::HiveQueriesTestBase {
  protected:
@@ -578,7 +579,7 @@ TEST_F(TpchPlanTest, DISABLED_q22) {
 }
 
 } // namespace
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/runner/MultiFragmentPlan.h"
 #include "axiom/runner/Runner.h"
 #include "velox/connectors/Connector.h"
@@ -23,40 +24,49 @@
 
 namespace facebook::axiom::runner {
 
-/// Testing proxy for a split source managed by a system with full metadata
-/// access.
-class SimpleSplitSource : public SplitSource {
+/// A factory for getting a SplitSource for each TableScan. The splits produced
+/// may depend on partition keys, buckets etc mentioned by each tableScan.
+class SplitSourceFactory {
  public:
-  explicit SimpleSplitSource(
-      std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits)
-      : splits_(std::move(splits)) {}
+  virtual ~SplitSourceFactory() = default;
 
-  virtual std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) override;
-
- private:
-  std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits_;
-  int32_t splitIdx_{0};
+  /// Returns a splitSource for one TableScan across all Tasks of
+  /// the fragment. The source will be invoked to produce splits for
+  /// each individual worker running the scan.
+  virtual std::shared_ptr<connector::SplitSource> splitSourceForScan(
+      const velox::core::TableScanNode& scan) = 0;
 };
 
-/// Testing proxy for a split source factory that uses connector metadata to
-/// enumerate splits. This takes a precomputed split list for each scan.
 class SimpleSplitSourceFactory : public SplitSourceFactory {
  public:
   explicit SimpleSplitSourceFactory(
-      std::unordered_map<
+      folly::F14FastMap<
           velox::core::PlanNodeId,
           std::vector<std::shared_ptr<velox::connector::ConnectorSplit>>>
           nodeSplitMap)
       : nodeSplitMap_(std::move(nodeSplitMap)) {}
 
-  std::shared_ptr<SplitSource> splitSourceForScan(
+  std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const velox::core::TableScanNode& scan) override;
 
  private:
-  std::unordered_map<
+  folly::F14FastMap<
       velox::core::PlanNodeId,
       std::vector<std::shared_ptr<velox::connector::ConnectorSplit>>>
       nodeSplitMap_;
+};
+
+/// Generic SplitSourceFactory that delegates the work to ConnectorSplitManager.
+class ConnectorSplitSourceFactory : public SplitSourceFactory {
+ public:
+  ConnectorSplitSourceFactory(connector::SplitOptions options = {})
+      : options_(std::move(options)) {}
+
+  std::shared_ptr<connector::SplitSource> splitSourceForScan(
+      const velox::core::TableScanNode& scan) override;
+
+ protected:
+  const connector::SplitOptions options_;
 };
 
 /// Runner for in-process execution of a distributed plan.
@@ -68,6 +78,14 @@ class LocalRunner : public Runner,
       std::shared_ptr<velox::core::QueryCtx> queryCtx,
       std::shared_ptr<SplitSourceFactory> splitSourceFactory,
       std::shared_ptr<velox::memory::MemoryPool> outputPool = nullptr);
+
+  LocalRunner(
+      const MultiFragmentPlanPtr& plan,
+      std::shared_ptr<velox::core::QueryCtx> queryCtx)
+      : LocalRunner(
+            plan,
+            queryCtx,
+            std::make_shared<ConnectorSplitSourceFactory>()) {}
 
   /// First call starts execution.
   velox::RowVectorPtr next() override;
@@ -99,7 +117,7 @@ class LocalRunner : public Runner,
   std::string printPlanWithStats(
       const std::function<void(
           const velox::core::PlanNodeId& nodeId,
-          const std::string& indentation,
+          std::string_view indentation,
           std::ostream& out)>& addContext = nullptr) const;
 
   /// Best-effort attempt to cancel the execution.
@@ -116,7 +134,7 @@ class LocalRunner : public Runner,
 
   void makeStages(const std::shared_ptr<velox::exec::Task>& lastStageTask);
 
-  std::shared_ptr<SplitSource> splitSourceForScan(
+  std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const velox::core::TableScanNode& scan);
 
   // Serializes 'cursor_' and 'error_'.

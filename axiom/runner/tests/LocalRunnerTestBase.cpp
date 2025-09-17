@@ -15,6 +15,7 @@
  */
 
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
+#include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
@@ -26,7 +27,20 @@ void LocalRunnerTestBase::SetUp() {
   velox::exec::ExchangeSource::factories().clear();
   velox::exec::ExchangeSource::registerFactory(
       velox::exec::test::createLocalExchangeSource);
-  ensureTestData();
+
+  if (!files_) {
+    makeTables(testTables_, files_);
+  }
+  // Destroy and rebuild the testing connector. The connector will
+  // show the metadata if the connector is wired for metadata.
+  setupConnector();
+}
+
+void LocalRunnerTestBase::TearDown() {
+  connector::ConnectorMetadata::unregisterMetadata(
+      velox::exec::test::kHiveConnectorId);
+  velox::connector::unregisterConnector(velox::exec::test::kHiveConnectorId);
+  HiveConnectorTestBase::TearDown();
 }
 
 std::shared_ptr<velox::core::QueryCtx> LocalRunnerTestBase::makeQueryCtx(
@@ -49,15 +63,6 @@ std::shared_ptr<velox::core::QueryCtx> LocalRunnerTestBase::makeQueryCtx(
       queryId);
 }
 
-void LocalRunnerTestBase::ensureTestData() {
-  if (!files_) {
-    makeTables(testTables_, files_);
-  }
-  // Destroy and rebuild the testing connector. The connector will
-  // show the metadata if the connector is wired for metadata.
-  setupConnector();
-}
-
 void LocalRunnerTestBase::setupConnector() {
   velox::connector::unregisterConnector(velox::exec::test::kHiveConnectorId);
 
@@ -65,14 +70,19 @@ void LocalRunnerTestBase::setupConnector() {
   configs[velox::connector::hive::HiveConfig::kLocalDataPath] = testDataPath_;
   configs[velox::connector::hive::HiveConfig::kLocalFileFormat] =
       localFileFormat_;
-  auto hiveConnector =
-      velox::connector::getConnectorFactory(
-          velox::connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(
-              velox::exec::test::kHiveConnectorId,
-              std::make_shared<velox::config::ConfigBase>(std::move(configs)),
-              ioExecutor_.get());
+
+  velox::connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector(
+      velox::exec::test::kHiveConnectorId,
+      std::make_shared<velox::config::ConfigBase>(std::move(configs)),
+      ioExecutor_.get());
   velox::connector::registerConnector(hiveConnector);
+
+  connector::ConnectorMetadata::registerMetadata(
+      velox::exec::test::kHiveConnectorId,
+      std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
+          dynamic_cast<velox::connector::hive::HiveConnector*>(
+              hiveConnector.get())));
 }
 
 void LocalRunnerTestBase::makeTables(
@@ -108,7 +118,7 @@ void LocalRunnerTestBase::makeTables(
 std::shared_ptr<runner::SimpleSplitSourceFactory>
 LocalRunnerTestBase::makeSimpleSplitSourceFactory(
     const runner::MultiFragmentPlanPtr& plan) {
-  std::unordered_map<
+  folly::F14FastMap<
       velox::core::PlanNodeId,
       std::vector<std::shared_ptr<velox::connector::ConnectorSplit>>>
       nodeSplitMap;

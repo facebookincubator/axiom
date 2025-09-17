@@ -15,12 +15,12 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 /// Maintains a mapping from user-visible names to auto-generated IDs.
 /// Unique names may be accessed by name alone. Non-unique names must be
@@ -73,7 +73,7 @@ class NameMappings {
   /// unique names.
   ///
   /// Used to produce final output.
-  std::unordered_map<std::string, std::string> uniqueNames() const;
+  folly::F14FastMap<std::string, std::string> uniqueNames() const;
 
   std::string toString() const;
 
@@ -88,7 +88,7 @@ class NameMappings {
 
   // Mapping from names to IDs. Unique names may appear twice: w/ and w/o an
   // alias.
-  std::unordered_map<QualifiedName, std::string, QualifiedNameHasher> mappings_;
+  folly::F14FastMap<QualifiedName, std::string, QualifiedNameHasher> mappings_;
 };
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

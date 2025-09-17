@@ -16,46 +16,11 @@
 
 #pragma once
 
-#include "velox/connectors/Connector.h"
-#include "velox/core/PlanNode.h"
+#include "axiom/common/Enums.h"
 #include "velox/exec/TaskStats.h"
 
 /// Base classes for multifragment Velox query execution.
 namespace facebook::axiom::runner {
-
-/// Iterator for obtaining splits for a scan. One is created for each table
-/// scan.
-class SplitSource {
- public:
-  static constexpr uint32_t kUngroupedGroupId =
-      std::numeric_limits<uint32_t>::max();
-
-  /// Result of getSplits. Each split belongs to a group. A nullptr split for
-  /// group means that there are on more splits for the group. In ungrouped
-  /// execution, the group is kUngroupedGroupId.
-  struct SplitAndGroup {
-    std::shared_ptr<velox::connector::ConnectorSplit> split;
-    uint32_t group{kUngroupedGroupId};
-  };
-
-  virtual ~SplitSource() = default;
-
-  /// Returns a set of splits that cover up to 'targetBytes' of data.
-  virtual std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) = 0;
-};
-
-/// A factory for getting a SplitSource for each TableScan. The splits produced
-/// may depend on partition keys, buckets etc mentioned by each tableScan.
-class SplitSourceFactory {
- public:
-  virtual ~SplitSourceFactory() = default;
-
-  /// Returns a splitSource for one TableScan across all Tasks of
-  /// the fragment. The source will be invoked to produce splits for
-  /// each individual worker running the scan.
-  virtual std::shared_ptr<SplitSource> splitSourceForScan(
-      const velox::core::TableScanNode& scan) = 0;
-};
 
 /// Base class for executing multifragment Velox queries. One instance
 /// of a Runner coordinates the execution of one multifragment
@@ -67,7 +32,7 @@ class Runner {
  public:
   enum class State { kInitialized, kRunning, kFinished, kError, kCancelled };
 
-  static std::string stateString(Runner::State state);
+  AXIOM_DECLARE_EMBEDDED_ENUM_NAME(State);
 
   virtual ~Runner() = default;
 
@@ -93,19 +58,10 @@ class Runner {
 
   /// Waits up to 'maxWaitMicros' for all activity of the execution to cease.
   /// This is used in tests to ensure that all pools are empty and unreferenced
-  /// before teradown.
-
+  /// before teardown.
   virtual void waitForCompletion(int32_t maxWaitMicros) = 0;
 };
 
 } // namespace facebook::axiom::runner
 
-template <>
-struct fmt::formatter<facebook::axiom::runner::Runner::State>
-    : formatter<std::string> {
-  auto format(facebook::axiom::runner::Runner::State state, format_context& ctx)
-      const {
-    return formatter<std::string>::format(
-        facebook::axiom::runner::Runner::stateString(state), ctx);
-  }
-};
+AXIOM_EMBEDDED_ENUM_FORMATTER(facebook::axiom::runner::Runner, State);

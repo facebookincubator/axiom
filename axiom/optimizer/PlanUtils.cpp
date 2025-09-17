@@ -17,7 +17,7 @@
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/QueryGraph.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 namespace {
 
 /// Match the input 'value' to the most appropriate unit and return
@@ -64,20 +64,20 @@ std::string succinctNumber(double value, int32_t precision) {
 
 namespace {
 template <typename T>
-int64_t integerValueInner(const variant* variant) {
+int64_t integerValueInner(const velox::Variant* variant) {
   return variant->value<T>();
 }
 } // namespace
 
-int64_t integerValue(const Variant* variant) {
+int64_t integerValue(const velox::Variant* variant) {
   switch (variant->kind()) {
-    case TypeKind::TINYINT:
+    case velox::TypeKind::TINYINT:
       return integerValueInner<int8_t>(variant);
-    case TypeKind::SMALLINT:
+    case velox::TypeKind::SMALLINT:
       return integerValueInner<int16_t>(variant);
-    case TypeKind::INTEGER:
+    case velox::TypeKind::INTEGER:
       return integerValueInner<int32_t>(variant);
-    case TypeKind::BIGINT:
+    case velox::TypeKind::BIGINT:
       return integerValueInner<int64_t>(variant);
     default:
       VELOX_FAIL();
@@ -87,10 +87,10 @@ int64_t integerValue(const Variant* variant) {
 std::optional<int64_t> maybeIntegerLiteral(
     const logical_plan::ConstantExpr* expr) {
   switch (expr->typeKind()) {
-    case TypeKind::TINYINT:
-    case TypeKind::SMALLINT:
-    case TypeKind::INTEGER:
-    case TypeKind::BIGINT:
+    case velox::TypeKind::TINYINT:
+    case velox::TypeKind::SMALLINT:
+    case velox::TypeKind::INTEGER:
+    case velox::TypeKind::BIGINT:
       return integerValue(expr->value().get());
     default:
       return std::nullopt;
@@ -106,4 +106,4 @@ std::string conjunctsToString(const ExprVector& conjuncts) {
   return out.str();
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

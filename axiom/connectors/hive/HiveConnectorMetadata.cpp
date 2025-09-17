@@ -14,61 +14,61 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/connectors/hive/HiveConnectorMetadata.h"
+#include "axiom/connectors/hive/HiveConnectorMetadata.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
-#include "velox/expression/FieldReference.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::axiom::connector::hive {
 
 namespace {
-HiveColumnHandle::ColumnType columnType(
+velox::connector::hive::HiveColumnHandle::ColumnType columnType(
     const HiveTableLayout& layout,
-    const std::string& columnName) {
+    std::string_view columnName) {
   auto& columns = layout.hivePartitionColumns();
   for (auto& column : columns) {
     if (column->name() == columnName) {
-      return HiveColumnHandle::ColumnType::kPartitionKey;
+      return velox::connector::hive::HiveColumnHandle::ColumnType::
+          kPartitionKey;
     }
   }
   // TODO recognize special names like $path, $bucket etc.
-  return HiveColumnHandle::ColumnType::kRegular;
+  return velox::connector::hive::HiveColumnHandle::ColumnType::kRegular;
 }
 } // namespace
 
-ColumnHandlePtr HiveConnectorMetadata::createColumnHandle(
+velox::connector::ColumnHandlePtr HiveConnectorMetadata::createColumnHandle(
     const TableLayout& layout,
     const std::string& columnName,
-    std::vector<common::Subfield> subfields,
-    std::optional<TypePtr> castToType,
+    std::vector<velox::common::Subfield> subfields,
+    std::optional<velox::TypePtr> castToType,
     SubfieldMapping subfieldMapping) {
   // castToType and subfieldMapping are not yet supported.
   VELOX_CHECK(subfieldMapping.empty());
   auto* hiveLayout = reinterpret_cast<const HiveTableLayout*>(&layout);
   auto* column = hiveLayout->findColumn(columnName);
-  auto handle = std::make_shared<HiveColumnHandle>(
+  return std::make_shared<velox::connector::hive::HiveColumnHandle>(
       columnName,
       columnType(*hiveLayout, columnName),
       column->type(),
       column->type(),
       std::move(subfields));
-  return std::dynamic_pointer_cast<const ColumnHandle>(handle);
 }
 
-ConnectorTableHandlePtr HiveConnectorMetadata::createTableHandle(
+velox::connector::ConnectorTableHandlePtr
+HiveConnectorMetadata::createTableHandle(
     const TableLayout& layout,
-    std::vector<ColumnHandlePtr> columnHandles,
+    std::vector<velox::connector::ColumnHandlePtr> columnHandles,
     velox::core::ExpressionEvaluator& evaluator,
-    std::vector<core::TypedExprPtr> filters,
-    std::vector<core::TypedExprPtr>& rejectedFilters,
-    RowTypePtr dataColumns,
+    std::vector<velox::core::TypedExprPtr> filters,
+    std::vector<velox::core::TypedExprPtr>& rejectedFilters,
+    velox::RowTypePtr dataColumns,
     std::optional<LookupKeys> lookupKeys) {
   VELOX_CHECK(!lookupKeys.has_value(), "Hive does not support lookup keys");
   auto* hiveLayout = dynamic_cast<const HiveTableLayout*>(&layout);
 
-  std::vector<core::TypedExprPtr> remainingConjuncts;
-  common::SubfieldFilters subfieldFilters;
+  std::vector<velox::core::TypedExprPtr> remainingConjuncts;
+  velox::common::SubfieldFilters subfieldFilters;
   for (auto& typedExpr : filters) {
     try {
       auto pair = velox::exec::toSubfieldFilter(typedExpr, &evaluator);
@@ -87,18 +87,19 @@ ConnectorTableHandlePtr HiveConnectorMetadata::createTableHandle(
       remainingConjuncts.push_back(std::move(typedExpr));
     }
   }
-  core::TypedExprPtr remainingFilter;
+
+  velox::core::TypedExprPtr remainingFilter;
   for (const auto& conjunct : remainingConjuncts) {
     if (!remainingFilter) {
       remainingFilter = conjunct;
     } else {
-      remainingFilter = std::make_shared<core::CallTypedExpr>(
-          BOOLEAN(),
-          std::vector<core::TypedExprPtr>{remainingFilter, conjunct},
+      remainingFilter = std::make_shared<velox::core::CallTypedExpr>(
+          velox::BOOLEAN(),
+          std::vector<velox::core::TypedExprPtr>{remainingFilter, conjunct},
           "and");
     }
   }
-  return std::make_shared<HiveTableHandle>(
+  return std::make_shared<velox::connector::hive::HiveTableHandle>(
       hiveConnector_->connectorId(),
       hiveLayout->table().name(),
       true,
@@ -107,10 +108,11 @@ ConnectorTableHandlePtr HiveConnectorMetadata::createTableHandle(
       dataColumns ? dataColumns : layout.rowType());
 }
 
-ConnectorInsertTableHandlePtr HiveConnectorMetadata::createInsertTableHandle(
+velox::connector::ConnectorInsertTableHandlePtr
+HiveConnectorMetadata::createInsertTableHandle(
     const TableLayout& layout,
-    const RowTypePtr& rowType,
-    const std::unordered_map<std::string, std::string>& options,
+    const velox::RowTypePtr& rowType,
+    const folly::F14FastMap<std::string, std::string>& options,
     WriteKind kind,
     const ConnectorSessionPtr& session) {
   ensureInitialized();
@@ -121,55 +123,61 @@ ConnectorInsertTableHandlePtr HiveConnectorMetadata::createInsertTableHandle(
   auto storageFormat = hiveLayout->fileFormat();
 
   std::unordered_map<std::string, std::string> serdeParameters;
-  const std::shared_ptr<dwio::common::WriterOptions> writerOptions;
+  const std::shared_ptr<velox::dwio::common::WriterOptions> writerOptions;
 
-  common::CompressionKind compressionKind;
+  velox::common::CompressionKind compressionKind;
 
   auto it = options.find("compression_kind");
   if (it != options.end()) {
-    compressionKind = common::stringToCompressionKind(it->second);
+    compressionKind = velox::common::stringToCompressionKind(it->second);
   } else {
     it = layout.table().options().find("compression_kind");
     if (it != layout.table().options().end()) {
-      compressionKind = common::stringToCompressionKind(it->second);
+      compressionKind = velox::common::stringToCompressionKind(it->second);
     } else {
-      compressionKind = common::CompressionKind::CompressionKind_ZSTD;
+      compressionKind = velox::common::CompressionKind::CompressionKind_ZSTD;
     }
   }
 
-  std::vector<HiveColumnHandlePtr> inputColumns;
+  std::vector<velox::connector::hive::HiveColumnHandlePtr> inputColumns;
   inputColumns.reserve(rowType->size());
   for (const auto& name : rowType->names()) {
-    inputColumns.push_back(std::static_pointer_cast<const HiveColumnHandle>(
+    inputColumns.push_back(std::static_pointer_cast<
+                           const velox::connector::hive::HiveColumnHandle>(
         createColumnHandle(layout, name)));
   }
 
-  std::shared_ptr<const HiveBucketProperty> bucketProperty;
+  std::shared_ptr<const velox::connector::hive::HiveBucketProperty>
+      bucketProperty;
   if (hiveLayout->numBuckets().has_value()) {
     std::vector<std::string> names;
-    std::vector<TypePtr> types;
+    std::vector<velox::TypePtr> types;
     for (auto& column : layout.partitionColumns()) {
       names.push_back(column->name());
       types.push_back(column->type());
     }
-    std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy;
+    std::vector<
+        std::shared_ptr<const velox::connector::hive::HiveSortingColumn>>
+        sortedBy;
     sortedBy.reserve(layout.orderColumns().size());
     for (auto i = 0; i < layout.orderColumns().size(); ++i) {
-      sortedBy.push_back(std::make_shared<HiveSortingColumn>(
-          layout.orderColumns()[i]->name(),
-          core::SortOrder(
-              layout.sortOrder()[i].isAscending,
-              layout.sortOrder()[i].isNullsFirst)));
+      sortedBy.push_back(
+          std::make_shared<velox::connector::hive::HiveSortingColumn>(
+              layout.orderColumns()[i]->name(),
+              velox::core::SortOrder(
+                  layout.sortOrder()[i].isAscending,
+                  layout.sortOrder()[i].isNullsFirst)));
     }
 
-    bucketProperty = std::make_shared<HiveBucketProperty>(
-        HiveBucketProperty::Kind::kHiveCompatible,
-        hiveLayout->numBuckets().value(),
-        std::move(names),
-        std::move(types),
-        std::move(sortedBy));
+    bucketProperty =
+        std::make_shared<velox::connector::hive::HiveBucketProperty>(
+            velox::connector::hive::HiveBucketProperty::Kind::kHiveCompatible,
+            hiveLayout->numBuckets().value(),
+            std::move(names),
+            std::move(types),
+            std::move(sortedBy));
   }
-  return std::make_shared<HiveInsertTableHandle>(
+  return std::make_shared<velox::connector::hive::HiveInsertTableHandle>(
       inputColumns,
       makeLocationHandle(
           fmt::format("{}/{}", dataPath(), layout.table().name()),
@@ -183,8 +191,8 @@ ConnectorInsertTableHandlePtr HiveConnectorMetadata::createInsertTableHandle(
 }
 
 void HiveConnectorMetadata::validateOptions(
-    const std::unordered_map<std::string, std::string>& options) const {
-  static std::unordered_set<std::string> allowed = {
+    const folly::F14FastMap<std::string, std::string>& options) const {
+  static folly::F14FastSet<std::string> allowed = {
       "bucketed_by",
       "sorted_by",
       "bucket_count",
@@ -198,4 +206,4 @@ void HiveConnectorMetadata::validateOptions(
   }
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::axiom::connector::hive

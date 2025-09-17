@@ -18,11 +18,13 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 
+#include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/optimizer/SchemaResolver.h"
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
-#include "axiom/optimizer/connectors/tests/TestConnector.h"
 
-namespace facebook::velox::optimizer::test {
+using namespace facebook::velox;
+
+namespace facebook::axiom::optimizer {
 namespace {
 
 class SchemaResolverTest : public ::testing::Test {
@@ -35,8 +37,8 @@ class SchemaResolverTest : public ::testing::Test {
   }
 
   void TearDown() override {
-    connector::unregisterConnector("base");
-    connector::unregisterConnector("other");
+    velox::connector::unregisterConnector("base");
+    velox::connector::unregisterConnector("other");
   }
 
   struct Catalog {
@@ -49,7 +51,7 @@ class SchemaResolverTest : public ::testing::Test {
       const std::string& id,
       const std::string& schema) {
     auto connector = std::make_shared<connector::TestConnector>(id);
-    connector::registerConnector(connector);
+    velox::connector::registerConnector(connector);
     return Catalog{
         .id = id,
         .schema = schema,
@@ -132,4 +134,4 @@ TEST_F(SchemaResolverTest, catalogMismatch) {
 }
 
 } // namespace
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer

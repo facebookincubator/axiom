@@ -33,21 +33,22 @@
 /// - Col("a") * 10
 /// - Col("a") < 0
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
+
 class LogicalPlanNode;
 using LogicalPlanNodePtr = std::shared_ptr<const LogicalPlanNode>;
-} // namespace facebook::velox::logical_plan
 
+} // namespace facebook::axiom::logical_plan
 namespace facebook::velox::core {
 
 // A scalar, possibly correlated, subquery expression.
 class SubqueryExpr : public core::IExpr {
  public:
   // @param subquery A plan tree that produces a single column.
-  explicit SubqueryExpr(logical_plan::LogicalPlanNodePtr subquery)
+  explicit SubqueryExpr(axiom::logical_plan::LogicalPlanNodePtr subquery)
       : IExpr(IExpr::Kind::kSubquery, {}), subquery_(std::move(subquery)) {}
 
-  const logical_plan::LogicalPlanNodePtr& subquery() const {
+  const axiom::logical_plan::LogicalPlanNodePtr& subquery() const {
     return subquery_;
   }
 
@@ -75,24 +76,27 @@ class SubqueryExpr : public core::IExpr {
  protected:
   size_t localHash() const override {
     // Hash the pointer to the logical plan node
-    return std::hash<logical_plan::LogicalPlanNodePtr>{}(subquery_);
+    return std::hash<axiom::logical_plan::LogicalPlanNodePtr>{}(subquery_);
   }
 
  private:
-  const logical_plan::LogicalPlanNodePtr subquery_;
+  const axiom::logical_plan::LogicalPlanNodePtr subquery_;
 };
 
 } // namespace facebook::velox::core
-
-namespace facebook::velox::logical_plan {
-
+namespace facebook::axiom::logical_plan {
 namespace detail {
-core::ExprPtr
-BinaryCall(std::string name, core::ExprPtr left, core::ExprPtr right);
+
+velox::core::ExprPtr BinaryCall(
+    std::string name,
+    velox::core::ExprPtr left,
+    velox::core::ExprPtr right);
+
 } // namespace detail
 
 #define VELOX_MAKE_BINARY_CALLER(OutName, InName)                         \
-  inline core::ExprPtr OutName(core::ExprPtr left, core::ExprPtr right) { \
+  inline velox::core::ExprPtr OutName(                                    \
+      velox::core::ExprPtr left, velox::core::ExprPtr right) {            \
     return detail::BinaryCall(InName, std::move(left), std::move(right)); \
   }
 
@@ -114,11 +118,11 @@ VELOX_MAKE_BINARY_CALLER(Or, "or")
 
 class ExprApi {
  public:
-  /* implicit */ ExprApi(core::ExprPtr expr)
+  /* implicit */ ExprApi(velox::core::ExprPtr expr)
       : expr_{std::move(expr)}, alias_{expr_->alias()} {}
 
   ExprApi(
-      core::ExprPtr expr,
+      velox::core::ExprPtr expr,
       std::optional<std::string> alias,
       std::vector<std::string> unnestedAliases = {})
       : expr_{std::move(expr)},
@@ -141,7 +145,7 @@ class ExprApi {
 
   ExprApi& operator=(ExprApi&& other) = default;
 
-  const core::ExprPtr& expr() const {
+  const velox::core::ExprPtr& expr() const {
     return expr_;
   }
 
@@ -149,79 +153,79 @@ class ExprApi {
     return Plus(expr_, other.expr_);
   }
 
-  ExprApi operator+(const Variant& value) const;
+  ExprApi operator+(const velox::Variant& value) const;
 
   ExprApi operator-(const ExprApi& other) const {
     return Minus(expr_, other.expr_);
   }
 
-  ExprApi operator-(const Variant& value) const;
+  ExprApi operator-(const velox::Variant& value) const;
 
   ExprApi operator*(const ExprApi& other) const {
     return Multiply(expr_, other.expr_);
   }
 
-  ExprApi operator*(const Variant& value) const;
+  ExprApi operator*(const velox::Variant& value) const;
 
   ExprApi operator/(const ExprApi& other) const {
     return Divide(expr_, other.expr_);
   }
 
-  ExprApi operator/(const Variant& value) const;
+  ExprApi operator/(const velox::Variant& value) const;
 
   ExprApi operator%(const ExprApi& other) const {
     return Modulus(expr_, other.expr_);
   }
 
-  ExprApi operator%(const Variant& value) const;
+  ExprApi operator%(const velox::Variant& value) const;
 
   ExprApi operator<(const ExprApi& other) const {
     return Lt(expr_, other.expr_);
   }
 
-  ExprApi operator<(const Variant& value) const;
+  ExprApi operator<(const velox::Variant& value) const;
 
   ExprApi operator<=(const ExprApi& other) const {
     return Lte(expr_, other.expr_);
   }
 
-  ExprApi operator<=(const Variant& value) const;
+  ExprApi operator<=(const velox::Variant& value) const;
 
   ExprApi operator>(const ExprApi& other) const {
     return Gt(expr_, other.expr_);
   }
 
-  ExprApi operator>(const Variant& value) const;
+  ExprApi operator>(const velox::Variant& value) const;
 
   ExprApi operator>=(const ExprApi& other) const {
     return Gte(expr_, other.expr_);
   }
 
-  ExprApi operator>=(const Variant& value) const;
+  ExprApi operator>=(const velox::Variant& value) const;
 
   ExprApi operator&&(const ExprApi& other) const {
     return And(expr_, other.expr_);
   }
 
-  ExprApi operator&&(const Variant& value) const;
+  ExprApi operator&&(const velox::Variant& value) const;
 
   ExprApi operator||(const ExprApi& other) const {
     return Or(expr_, other.expr_);
   }
 
-  ExprApi operator||(const Variant& value) const;
+  ExprApi operator||(const velox::Variant& value) const;
 
   ExprApi operator==(const ExprApi& other) const {
     return Eq(expr_, other.expr_);
   }
 
-  ExprApi operator==(const Variant& value) const;
+  ExprApi operator==(const velox::Variant& value) const;
 
   ExprApi operator!=(const ExprApi& other) const {
     return NEq(expr_, other.expr_);
   }
 
-  ExprApi operator!=(const Variant& value) const;
+  ExprApi operator!=(const velox::Variant& value) const;
 
   // TODO Remove in favor of 'alias'.
   const std::optional<std::string>& name() const {
@@ -250,22 +254,22 @@ class ExprApi {
   }
 
  private:
-  core::ExprPtr expr_;
+  velox::core::ExprPtr expr_;
   std::optional<std::string> alias_;
   std::vector<std::string> unnestedAliases_;
 };
 
-ExprApi Lit(Variant&& val);
+ExprApi Lit(velox::Variant&& val);
 
-ExprApi Lit(Variant&& val, TypePtr type);
+ExprApi Lit(velox::Variant&& val, velox::TypePtr type);
 
-ExprApi Lit(const Variant& val);
+ExprApi Lit(const velox::Variant& val);
 
-ExprApi Lit(const Variant& val, TypePtr type);
+ExprApi Lit(const velox::Variant& val, velox::TypePtr type);
 
 template <typename T>
 inline ExprApi Lit(T&& val) {
-  return Lit(Variant(std::forward<T>(val)));
+  return Lit(velox::Variant(std::forward<T>(val)));
 }
 
 ExprApi Col(std::string name);
@@ -284,11 +288,11 @@ ExprApi In(T... args) {
   return Call("in", std::vector<ExprApi>{std::forward<T>(args)...});
 }
 
-ExprApi Cast(TypePtr type, const ExprApi& input);
+ExprApi Cast(velox::TypePtr type, const ExprApi& input);
 
-ExprApi TryCast(TypePtr type, const ExprApi& input);
+ExprApi TryCast(velox::TypePtr type, const ExprApi& input);
 
-inline ExprApi Cast(TypePtr type, const Variant& value) {
+inline ExprApi Cast(velox::TypePtr type, const velox::Variant& value) {
   return Cast(std::move(type), Lit(value));
 }
 
@@ -335,4 +339,4 @@ struct SortKey {
   const bool nullsFirst;
 };
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

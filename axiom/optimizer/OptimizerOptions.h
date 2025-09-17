@@ -18,10 +18,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 struct OptimizerOptions {
   /// Bit masks for use in 'traceFlags'.
@@ -44,7 +43,7 @@ struct OptimizerOptions {
 
   /// Map from table name to  list of map columns to be read as structs unless
   /// the whole map is accessed as a map.
-  std::unordered_map<std::string, std::vector<std::string>> mapAsStruct;
+  folly::F14FastMap<std::string, std::vector<std::string>> mapAsStruct;
 
   /// Enable join order sampling during optimization. If this flag is set, joins
   /// are sampled to determine the optimal join order. If join sampling is
@@ -73,4 +72,4 @@ struct OptimizerOptions {
   }
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

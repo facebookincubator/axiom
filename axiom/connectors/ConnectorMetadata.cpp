@@ -14,40 +14,40 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 
-namespace facebook::velox::connector {
+namespace facebook::axiom::connector {
 
 namespace {
 const auto& tableKindNames() {
   static const folly::F14FastMap<TableKind, std::string_view> kNames = {
-      {TableKind::kTable, "kTable"},
-      {TableKind::kTempTable, "kTempTable"},
+      {TableKind::kTable, "TABLE"},
+      {TableKind::kTempTable, "TEMP_TABLE"},
   };
   return kNames;
 }
 
 const auto& writeKindNames() {
   static const folly::F14FastMap<WriteKind, std::string_view> kNames = {
-      {WriteKind::kInsert, "kInsert"},
-      {WriteKind::kUpdate, "kUpdate"},
-      {WriteKind::kDelete, "kDelete"},
+      {WriteKind::kInsert, "INSERT"},
+      {WriteKind::kUpdate, "UPDATE"},
+      {WriteKind::kDelete, "DELETE"},
   };
   return kNames;
 }
 
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(TableKind, tableKindNames);
+AXIOM_DEFINE_ENUM_NAME(TableKind, tableKindNames);
 
-VELOX_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
+AXIOM_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 
 namespace {
-RowTypePtr makeRowType(const std::vector<const Column*>& columns) {
-  std::unordered_set<std::string> uniqueNames;
+velox::RowTypePtr makeRowType(const std::vector<const Column*>& columns) {
+  folly::F14FastSet<std::string> uniqueNames;
 
   std::vector<std::string> names;
-  std::vector<TypePtr> types;
+  std::vector<velox::TypePtr> types;
 
   names.reserve(columns.size());
   types.reserve(columns.size());
@@ -71,7 +71,7 @@ RowTypePtr makeRowType(const std::vector<const Column*>& columns) {
 TableLayout::TableLayout(
     std::string name,
     const Table* table,
-    connector::Connector* connector,
+    velox::connector::Connector* connector,
     std::vector<const Column*> columns,
     std::vector<const Column*> partitionColumns,
     std::vector<const Column*> orderColumns,
@@ -106,7 +106,7 @@ TableLayout::TableLayout(
   }
 }
 
-const Column* TableLayout::findColumn(const std::string& name) const {
+const Column* TableLayout::findColumn(std::string_view name) const {
   for (const auto& column : columns_) {
     if (column->name() == name) {
       return column;
@@ -115,4 +115,53 @@ const Column* TableLayout::findColumn(const std::string& name) const {
   return nullptr;
 }
 
-} // namespace facebook::velox::connector
+namespace {
+
+folly::F14FastMap<std::string, std::shared_ptr<ConnectorMetadata>>&
+metadataRegistry() {
+  static folly::F14FastMap<std::string, std::shared_ptr<ConnectorMetadata>>
+      kRegistry;
+  return kRegistry;
+}
+} // namespace
+
+// static
+ConnectorMetadata* ConnectorMetadata::tryMetadata(
+    std::string_view connectorId) {
+  auto it = metadataRegistry().find(connectorId);
+  if (it != metadataRegistry().end()) {
+    return it->second.get();
+  }
+
+  return nullptr;
+}
+
+// static
+ConnectorMetadata* ConnectorMetadata::metadata(std::string_view connectorId) {
+  auto* metadata = tryMetadata(connectorId);
+  VELOX_CHECK_NOT_NULL(
+      metadata, "Connector metadata is not registered: {}", connectorId);
+  return metadata;
+}
+
+// static
+ConnectorMetadata* ConnectorMetadata::metadata(
+    velox::connector::Connector* connector) {
+  return ConnectorMetadata::metadata(connector->connectorId());
+}
+
+// static
+void ConnectorMetadata::registerMetadata(
+    std::string_view connectorId,
+    std::shared_ptr<ConnectorMetadata> metadata) {
+  VELOX_CHECK_NOT_NULL(metadata);
+  VELOX_CHECK(!connectorId.empty());
+  metadataRegistry().emplace(connectorId, std::move(metadata));
+}
+
+// static
+void ConnectorMetadata::unregisterMetadata(std::string_view connectorId) {
+  metadataRegistry().erase(connectorId);
+}
+
+} // namespace facebook::axiom::connector

@@ -18,20 +18,20 @@
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/PlanObject.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 struct Distribution;
 using DistributionP = Distribution*;
 
 class JoinEdge;
 using JoinEdgeP = JoinEdge*;
-using JoinEdgeVector = std::vector<JoinEdgeP, QGAllocator<JoinEdgeP>>;
+using JoinEdgeVector = QGVector<JoinEdgeP>;
 
 class AggregationPlan;
 using AggregationPlanCP = const AggregationPlan*;
 
 enum class OrderType;
-using OrderTypeVector = std::vector<OrderType, QGAllocator<OrderType>>;
+using OrderTypeVector = QGVector<OrderType>;
 
 /// Represents a derived table, i.e. a SELECT in a FROM clause. This is the
 /// basic unit of planning. Derived tables can be merged and split apart from
@@ -79,7 +79,7 @@ struct DerivedTable : public PlanObject {
   /// All tables in FROM, either Table or DerivedTable. If Table, all
   /// filters resolvable with the table alone are in single column filters or
   /// 'filter' of BaseTable.
-  std::vector<PlanObjectCP, QGAllocator<PlanObjectCP>> tables;
+  QGVector<PlanObjectCP> tables;
 
   /// Repeats the contents of 'tables'. Used for membership check. A
   /// DerivedTable can be a subset of another, for example when planning a join
@@ -91,7 +91,7 @@ struct DerivedTable : public PlanObject {
   std::optional<logical_plan::SetOperation> setOp;
 
   /// Operands if 'this' is a set operation, e.g. union.
-  std::vector<DerivedTable*, QGAllocator<DerivedTable*>> children;
+  QGVector<DerivedTable*> children;
 
   /// Single row tables from non-correlated scalar subqueries.
   PlanObjectSet singleRowDts;
@@ -240,4 +240,4 @@ struct DerivedTable : public PlanObject {
 using DerivedTableP = DerivedTable*;
 using DerivedTableCP = const DerivedTable*;
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

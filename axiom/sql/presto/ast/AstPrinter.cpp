@@ -372,7 +372,7 @@ void AstPrinter::visitComparisonExpression(ComparisonExpression* node) {
 }
 
 void AstPrinter::printHeader(
-    const std::string& name,
+    std::string_view name,
     Node* node,
     const std::function<void(std::ostream& out)>& printDetails) const {
   out_ << std::string(indent_ * 2, ' ') << name << " ";
@@ -390,7 +390,7 @@ void AstPrinter::printHeader(
 }
 
 void AstPrinter::printHeader(
-    const std::string& name,
+    std::string_view name,
     const std::shared_ptr<Node>& node,
     const std::function<void(std::ostream& out)>& printDetails) const {
   if (node != nullptr) {
@@ -399,7 +399,7 @@ void AstPrinter::printHeader(
 }
 
 void AstPrinter::printChild(
-    const std::string& name,
+    std::string_view name,
     const std::shared_ptr<Node>& node) {
   printHeader(name, node);
   indent_++;

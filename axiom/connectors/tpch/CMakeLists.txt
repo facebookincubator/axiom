@@ -11,19 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_tpch_connector_metadata_test TpchConnectorMetadataTest.cpp)
 
-add_test(velox_tpch_connector_metadata_test velox_tpch_connector_metadata_test)
+velox_add_library(axiom_tpch_connector_metadata OBJECT
+                  TpchConnectorMetadata.cpp)
 
-target_link_libraries(
-  velox_tpch_connector_metadata_test
-  velox_tpch_connector_metadata
+velox_link_libraries(
+  axiom_tpch_connector_metadata
+  axiom_connector_metadata
+  axiom_schema_resolver
   velox_tpch_connector
-  velox_exec_runner_test_util
-  velox_vector_fuzzer
-  velox_vector_test_lib
-  velox_schema_resolver
-  velox_exec
-  velox_exec_test_lib
-  GTest::gtest
-  GTest::gtest_main)
+  velox_tpch_gen)
+
+if(AXIOM_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

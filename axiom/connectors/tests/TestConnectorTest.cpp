@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/connectors/tests/TestConnector.h"
+#include "axiom/connectors/tests/TestConnector.h"
 
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
@@ -24,8 +24,10 @@
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-namespace facebook::velox::connector {
+namespace facebook::axiom::connector {
 namespace {
+
+using namespace facebook::velox;
 
 class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
  protected:
@@ -34,34 +36,43 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
   }
 
   void SetUp() override {
-    connector_ = std::make_shared<TestConnector>(connectorId_);
+    connector_ = std::make_shared<TestConnector>("test");
+    velox::connector::registerConnector(connector_);
+    metadata_ = ConnectorMetadata::metadata(connector_->connectorId());
+  }
+
+  void TearDown() override {
+    velox::connector::unregisterConnector(connector_->connectorId());
   }
 
   std::shared_ptr<TestConnector> connector_;
-  std::string connectorId_{"test"};
+  ConnectorMetadata* metadata_;
 };
 
 TEST_F(TestConnectorTest, connectorRegister) {
+  const auto connectorId = "registration-test";
   VELOX_ASSERT_THROW(
-      getConnector(connectorId_), "Connector with ID 'test' not registered");
-  registerConnector(connector_);
+      velox::connector::getConnector(connectorId),
+      "Connector with ID 'registration-test' not registered");
 
-  auto connector = getConnector(connectorId_);
-  EXPECT_EQ(connector_.get(), connector.get());
-  EXPECT_EQ(connector->connectorId(), connectorId_);
-  EXPECT_NE(connector->metadata(), nullptr);
+  auto connector = std::make_shared<TestConnector>(connectorId);
+  EXPECT_EQ(connector->connectorId(), connectorId);
 
-  unregisterConnector(connectorId_);
+  registerConnector(connector);
+
+  EXPECT_EQ(velox::connector::getConnector(connectorId).get(), connector.get());
+  EXPECT_NE(ConnectorMetadata::metadata(connectorId), nullptr);
+
+  velox::connector::unregisterConnector(connectorId);
   VELOX_ASSERT_THROW(
-      getConnector(connectorId_), "Connector with ID 'test' not registered");
+      velox::connector::getConnector(connectorId),
+      "Connector with ID 'registration-test' not registered");
 }
 
 TEST_F(TestConnectorTest, table) {
-  auto metadata = connector_->metadata();
-
   auto schema = ROW({{"a", INTEGER()}, {"b", VARCHAR()}});
   connector_->createTable("table", schema);
-  auto table = metadata->findTable("table");
+  auto table = metadata_->findTable("table");
   EXPECT_NE(table, nullptr);
   EXPECT_EQ(table->name(), "table");
   EXPECT_EQ(table->numRows(), 0);
@@ -81,12 +92,12 @@ TEST_F(TestConnectorTest, table) {
       "appended data type ROW<c0:INTEGER> must match table type ROW<a:INTEGER,b:VARCHAR>");
 
   connector_->createTable("noschema");
-  table = metadata->findTable("noschema");
+  table = metadata_->findTable("noschema");
   EXPECT_NE(table, nullptr);
   EXPECT_EQ(table->numRows(), 0);
   EXPECT_EQ(table->columnMap().size(), 0);
 
-  table = metadata->findTable("notable");
+  table = metadata_->findTable("notable");
   EXPECT_EQ(table, nullptr);
 }
 
@@ -94,11 +105,10 @@ TEST_F(TestConnectorTest, columnHandle) {
   auto schema = ROW({{"a", INTEGER()}, {"b", VARCHAR()}});
   connector_->createTable("table", schema);
 
-  auto metadata = connector_->metadata();
-  auto table = metadata->findTable("table");
+  auto table = metadata_->findTable("table");
   auto& layout = *table->layouts()[0];
 
-  auto columnHandle = metadata->createColumnHandle(layout, "a");
+  auto columnHandle = metadata_->createColumnHandle(layout, "a");
   EXPECT_NE(columnHandle, nullptr);
 
   auto testColumnHandle =
@@ -112,14 +122,14 @@ TEST_F(TestConnectorTest, splitManager) {
   auto schema = ROW({"a"}, {INTEGER()});
   connector_->createTable("test_table", schema);
 
-  auto metadata = connector_->metadata();
-  auto splitManager = metadata->splitManager();
+  auto splitManager = metadata_->splitManager();
   EXPECT_NE(splitManager, nullptr);
 }
 
 TEST_F(TestConnectorTest, splits) {
-  auto split = std::make_shared<ConnectorSplit>(connectorId_);
-  EXPECT_EQ(split->connectorId, connectorId_);
+  auto split = std::make_shared<velox::connector::ConnectorSplit>(
+      connector_->connectorId());
+  EXPECT_EQ(split->connectorId, connector_->connectorId());
 }
 
 TEST_F(TestConnectorTest, dataSink) {
@@ -129,7 +139,7 @@ TEST_F(TestConnectorTest, dataSink) {
   EXPECT_EQ(table->numRows(), 0);
 
   auto dataSink = connector_->createDataSink(
-      schema, handle, nullptr, CommitStrategy::kNoCommit);
+      schema, handle, nullptr, velox::connector::CommitStrategy::kNoCommit);
   EXPECT_NE(dataSink, nullptr);
 
   auto vector = makeRowVector({makeFlatVector<int>({0, 1, 2})});
@@ -151,16 +161,15 @@ TEST_F(TestConnectorTest, dataSource) {
   auto schema = ROW({"a", "b"}, {INTEGER(), VARCHAR()});
   auto table = connector_->createTable("table", schema);
   auto& layout = *table->layouts()[0];
-  auto metadata = connector_->metadata();
 
-  std::vector<ColumnHandlePtr> columns;
-  columns.push_back(metadata->createColumnHandle(layout, "a"));
-  columns.push_back(metadata->createColumnHandle(layout, "b"));
+  std::vector<velox::connector::ColumnHandlePtr> columns;
+  columns.push_back(metadata_->createColumnHandle(layout, "a"));
+  columns.push_back(metadata_->createColumnHandle(layout, "b"));
 
   auto evaluator =
       std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
   std::vector<core::TypedExprPtr> empty;
-  auto tableHandle = metadata->createTableHandle(
+  auto tableHandle = metadata_->createTableHandle(
       layout, std::move(columns), *evaluator, empty, empty);
 
   auto vector1 = makeRowVector(
@@ -170,14 +179,15 @@ TEST_F(TestConnectorTest, dataSource) {
       {makeFlatVector<int>({3, 4}), makeFlatVector<StringView>({"d", "e"})});
   connector_->appendData("table", vector2);
 
-  ColumnHandleMap handleMap;
-  handleMap.emplace("a", metadata->createColumnHandle(layout, "a"));
-  handleMap.emplace("b", metadata->createColumnHandle(layout, "b"));
+  velox::connector::ColumnHandleMap handleMap;
+  handleMap.emplace("a", metadata_->createColumnHandle(layout, "a"));
+  handleMap.emplace("b", metadata_->createColumnHandle(layout, "b"));
   auto dataSource = std::make_shared<TestDataSource>(
       schema, std::move(handleMap), table, pool());
   EXPECT_EQ(dataSource->getCompletedRows(), 0);
 
-  auto split = std::make_shared<ConnectorSplit>(connectorId_);
+  auto split = std::make_shared<velox::connector::ConnectorSplit>(
+      connector_->connectorId());
   dataSource->addSplit(split);
 
   velox::ContinueFuture future;
@@ -230,7 +240,7 @@ TEST_F(TestConnectorTest, tableLayout) {
 }
 
 } // namespace
-} // namespace facebook::velox::connector
+} // namespace facebook::axiom::connector
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

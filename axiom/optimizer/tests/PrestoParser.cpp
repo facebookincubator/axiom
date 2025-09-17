@@ -17,18 +17,20 @@
 #include "axiom/optimizer/tests/PrestoParser.h"
 #include <algorithm>
 #include <cctype>
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/optimizer/connectors/ConnectorMetadata.h"
 #include "axiom/sql/presto/ParserHelper.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
 #include "velox/exec/Aggregate.h"
 
-namespace lp = facebook::velox::logical_plan;
 namespace sql = axiom::sql::presto;
 
-namespace facebook::velox::optimizer::test {
+namespace facebook::axiom::optimizer::test {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 using ExprMap = folly::
     F14FastMap<core::ExprPtr, core::ExprPtr, core::IExprHash, core::IExprEqual>;
@@ -312,7 +314,7 @@ class RelationPlanner : public sql::AstVisitor {
     }
   }
 
-  static lp::ExprApi parseDecimal(const std::string& value) {
+  static lp::ExprApi parseDecimal(std::string_view value) {
     VELOX_USER_CHECK(!value.empty(), "Invalid decimal value: '{}'", value);
 
     size_t startPos = 0;
@@ -362,7 +364,8 @@ class RelationPlanner : public sql::AstVisitor {
         precision = value.size() - firstNonZeroPos - 1;
       }
 
-      unscaledValue = value.substr(0, periodPos) + value.substr(periodPos + 1);
+      unscaledValue = fmt::format(
+          "{}{}", value.substr(0, periodPos), value.substr(periodPos + 1));
     }
 
     if (precision <= velox::ShortDecimalType::kMaxPrecision) {
@@ -986,7 +989,8 @@ class RelationPlanner : public sql::AstVisitor {
       projections.emplace_back(expr);
     }
 
-    builder_->aggregate(groupingKeys, aggregates);
+    std::vector<lp::PlanBuilder::AggregateOptions> options(aggregates.size());
+    builder_->aggregate(groupingKeys, aggregates, options);
 
     const auto outputNames = builder_->findOrAssignOutputNames();
 
@@ -1131,16 +1135,14 @@ class RelationPlanner : public sql::AstVisitor {
 
 } // namespace
 
-SqlStatementPtr PrestoParser::parse(
-    const std::string& sql,
-    bool enableTracing) {
+SqlStatementPtr PrestoParser::parse(std::string_view sql, bool enableTracing) {
   return doParse(sql, enableTracing);
 }
 
 lp::ExprPtr PrestoParser::parseExpression(
-    const std::string& sql,
+    std::string_view sql,
     bool enableTracing) {
-  auto statement = doParse("SELECT " + sql, enableTracing);
+  auto statement = doParse(fmt::format("SELECT {}", sql), enableTracing);
   VELOX_USER_CHECK(statement->isSelect());
 
   auto plan = statement->asUnchecked<SelectStatement>()->plan();
@@ -1155,7 +1157,7 @@ lp::ExprPtr PrestoParser::parseExpression(
 }
 
 SqlStatementPtr PrestoParser::doParse(
-    const std::string& sql,
+    std::string_view sql,
     bool enableTracing) {
   sql::ParserHelper helper(sql);
   auto* context = helper.parse();
@@ -1184,8 +1186,7 @@ SqlStatementPtr PrestoParser::doParse(
   if (query->is(sql::NodeType::kShowColumns)) {
     const auto tableName = query->as<sql::ShowColumns>()->table()->suffix();
 
-    auto table = connector::getConnector(defaultConnectorId_)
-                     ->metadata()
+    auto table = connector::ConnectorMetadata::metadata(defaultConnectorId_)
                      ->findTable(tableName);
 
     VELOX_USER_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
@@ -1211,4 +1212,4 @@ SqlStatementPtr PrestoParser::doParse(
   return std::make_shared<SelectStatement>(planner.getPlan());
 }
 
-} // namespace facebook::velox::optimizer::test
+} // namespace facebook::axiom::optimizer::test

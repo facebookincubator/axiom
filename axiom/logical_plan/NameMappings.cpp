@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 #include "axiom/logical_plan/NameMappings.h"
+#include <folly/container/F14Map.h>
 #include <velox/common/base/Exceptions.h>
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 std::string NameMappings::QualifiedName::toString() const {
   if (alias.has_value()) {
@@ -103,8 +104,8 @@ void NameMappings::merge(const NameMappings& other) {
   }
 }
 
-std::unordered_map<std::string, std::string> NameMappings::uniqueNames() const {
-  std::unordered_map<std::string, std::string> names;
+folly::F14FastMap<std::string, std::string> NameMappings::uniqueNames() const {
+  folly::F14FastMap<std::string, std::string> names;
   for (const auto& [name, id] : mappings_) {
     if (!name.alias.has_value()) {
       names.emplace(id, name.name);
@@ -138,4 +139,4 @@ size_t NameMappings::QualifiedNameHasher::operator()(
 
   return h1 ^ (h2 << 1U);
 }
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

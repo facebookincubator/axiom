@@ -15,12 +15,12 @@
  */
 #pragma once
 
+#include "axiom/common/Enums.h"
 #include "axiom/logical_plan/Expr.h"
-#include "velox/common/Enums.h"
 #include "velox/type/Variant.h"
 #include "velox/vector/ComplexVector.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 enum class NodeKind {
   kValues = 0,
@@ -35,7 +35,7 @@ enum class NodeKind {
   kUnnest = 9,
 };
 
-VELOX_DECLARE_ENUM_NAME(NodeKind)
+AXIOM_DECLARE_ENUM_NAME(NodeKind)
 
 class LogicalPlanNode;
 using LogicalPlanNodePtr = std::shared_ptr<const LogicalPlanNode>;
@@ -54,7 +54,7 @@ class LogicalPlanNode {
       NodeKind kind,
       std::string id,
       std::vector<LogicalPlanNodePtr> inputs,
-      RowTypePtr outputType)
+      velox::RowTypePtr outputType)
       : kind_{kind},
         id_{std::move(id)},
         inputs_{std::move(inputs)},
@@ -102,7 +102,7 @@ class LogicalPlanNode {
     return inputs_[index];
   }
 
-  const RowTypePtr& outputType() const {
+  const velox::RowTypePtr& outputType() const {
     return outputType_;
   }
 
@@ -114,25 +114,28 @@ class LogicalPlanNode {
   const NodeKind kind_;
   const std::string id_;
   const std::vector<LogicalPlanNodePtr> inputs_;
-  const RowTypePtr outputType_;
+  const velox::RowTypePtr outputType_;
 };
 
 /// A table whose content is embedded in the plan.
 class ValuesNode : public LogicalPlanNode {
  public:
-  using Rows = std::vector<Variant>;
-  using Values = std::vector<RowVectorPtr>;
+  using Rows = std::vector<velox::Variant>;
+  using Values = std::vector<velox::RowVectorPtr>;
   using Data = std::variant<Rows, Values>;
 
   /// @param rowType Output schema. A list of column names and types. All names
   /// must be non-empty and unique.
   /// @param rows A list of rows. Each row is a list of values, one per column.
   /// The number, order and types of columns must match 'rowType'.
-  ValuesNode(std::string id, RowTypePtr rowType, std::vector<Variant> rows);
+  ValuesNode(
+      std::string id,
+      velox::RowTypePtr rowType,
+      std::vector<velox::Variant> rows);
 
   /// Memory pools used for RowVector's allocation should outlive the execution
   /// of the plan.
-  ValuesNode(std::string id, std::vector<RowVectorPtr> values);
+  ValuesNode(std::string id, std::vector<velox::RowVectorPtr> values);
 
   uint64_t cardinality() const {
     return cardinality_;
@@ -163,7 +166,7 @@ class TableScanNode : public LogicalPlanNode {
   /// which may expose columns under different names.
   TableScanNode(
       std::string id,
-      RowTypePtr outputType,
+      velox::RowTypePtr outputType,
       std::string connectorId,
       std::string tableName,
       std::vector<std::string> columnNames)
@@ -212,7 +215,7 @@ class FilterNode : public LogicalPlanNode {
       : LogicalPlanNode{NodeKind::kFilter, std::move(id), {input}, input->outputType()},
         predicate_{std::move(predicate)} {
     VELOX_USER_CHECK_NOT_NULL(predicate_);
-    VELOX_USER_CHECK_EQ(predicate_->type()->kind(), TypeKind::BOOLEAN);
+    VELOX_USER_CHECK_EQ(predicate_->type()->kind(), velox::TypeKind::BOOLEAN);
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
@@ -265,7 +268,7 @@ class ProjectNode : public LogicalPlanNode {
       const override;
 
  private:
-  static RowTypePtr makeOutputType(
+  static velox::RowTypePtr makeOutputType(
       const std::vector<std::string>& names,
       const std::vector<ExprPtr>& expressions);
 
@@ -347,7 +350,7 @@ class AggregateNode : public LogicalPlanNode {
       const override;
 
  private:
-  static RowTypePtr makeOutputType(
+  static velox::RowTypePtr makeOutputType(
       const std::vector<ExprPtr>& groupingKeys,
       const std::vector<GroupingSet>& groupingSets,
       const std::vector<AggregateExprPtr>& aggregates,
@@ -387,7 +390,7 @@ enum class JoinType {
   kFull = 3,
 };
 
-VELOX_DECLARE_ENUM_NAME(JoinType)
+AXIOM_DECLARE_ENUM_NAME(JoinType)
 
 /// Combines two separate inputs into a single output, based on a boolean join
 /// condition. The output schema contains all columns from the left input
@@ -406,7 +409,7 @@ class JoinNode : public LogicalPlanNode {
         joinType_{joinType},
         condition_{std::move(condition)} {
     if (condition_ != nullptr) {
-      VELOX_USER_CHECK_EQ(condition_->typeKind(), TypeKind::BOOLEAN);
+      VELOX_USER_CHECK_EQ(condition_->typeKind(), velox::TypeKind::BOOLEAN);
     }
   }
 
@@ -430,7 +433,7 @@ class JoinNode : public LogicalPlanNode {
       const override;
 
  private:
-  static RowTypePtr makeOutputType(
+  static velox::RowTypePtr makeOutputType(
       const LogicalPlanNodePtr& left,
       const LogicalPlanNodePtr& right);
 
@@ -528,7 +531,7 @@ enum class SetOperation {
   kExcept = 3,
 };
 
-VELOX_DECLARE_ENUM_NAME(SetOperation)
+AXIOM_DECLARE_ENUM_NAME(SetOperation)
 
 /// Set-level operation that supports combining datasets, possibly excluding
 /// rows based on various types of row level matching.
@@ -556,7 +559,7 @@ class SetNode : public LogicalPlanNode {
       const override;
 
  private:
-  static RowTypePtr makeOutputType(
+  static velox::RowTypePtr makeOutputType(
       const std::vector<LogicalPlanNodePtr>& inputs);
 
   const SetOperation operation_;
@@ -588,8 +591,7 @@ using SetNodePtr = std::shared_ptr<const SetNode>;
 /// optional ordinality column of type BIGINT.
 class UnnestNode : public LogicalPlanNode {
  public:
-  /// @param input Optional input node. If not specified, 'unnestExpressions'
-  /// must be constant expressions.
+  /// @param input Input node.
   /// @param unnestExpressions One or more expressions that produce ARRAYs
   /// or MAPs.
   /// @param unnestedNames Names to use for expanded relations. Must align
@@ -606,7 +608,7 @@ class UnnestNode : public LogicalPlanNode {
       std::vector<std::vector<std::string>> unnestedNames,
       std::optional<std::string> ordinalityName,
       bool flattenArrayOfRows = false)
-      : LogicalPlanNode{NodeKind::kUnnest, std::move(id), input == nullptr ? std::vector<LogicalPlanNodePtr>{} : std::vector<LogicalPlanNodePtr>{input}, makeOutputType(input, unnestExpressions, unnestedNames, ordinalityName, flattenArrayOfRows)},
+      : LogicalPlanNode{NodeKind::kUnnest, std::move(id), {input}, makeOutputType(input, unnestExpressions, unnestedNames, ordinalityName, flattenArrayOfRows)},
         unnestExpressions_{std::move(unnestExpressions)},
         unnestedNames_{std::move(unnestedNames)},
         ordinalityName_{std::move(ordinalityName)},
@@ -638,7 +640,7 @@ class UnnestNode : public LogicalPlanNode {
       const override;
 
  private:
-  static RowTypePtr makeOutputType(
+  static velox::RowTypePtr makeOutputType(
       const LogicalPlanNodePtr& input,
       const std::vector<ExprPtr>& unnestExpressions,
       const std::vector<std::vector<std::string>>& unnestedNames,
@@ -653,4 +655,4 @@ class UnnestNode : public LogicalPlanNode {
 
 using UnnestNodePtr = std::shared_ptr<const UnnestNode>;
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

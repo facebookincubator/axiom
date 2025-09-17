@@ -18,7 +18,7 @@
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/optimizer/QueryGraphContext.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// A bit set that qualifies an Expr. Represents which functions/kinds
 /// of functions are found inside the children of an Expr.
@@ -171,7 +171,7 @@ struct FunctionMetadata {
   /// the function applies array sort to all arrays in a map. suppose it is used
   /// in [k1][0] and [k2][1]. This could return [k1] = array_sort(arg[k1]) and
   /// k2 = array_sort(arg[k2]. 'arg'  comes from 'call'.
-  std::function<std::unordered_map<PathCP, logical_plan::ExprPtr>(
+  std::function<folly::F14FastMap<PathCP, logical_plan::ExprPtr>(
       const logical_plan::CallExpr* call,
       std::vector<PathCP>& paths)>
       explode;
@@ -180,7 +180,12 @@ struct FunctionMetadata {
 using FunctionMetadataCP = const FunctionMetadata*;
 
 class FunctionRegistry {
+  FunctionRegistry() = default;
+
  public:
+  FunctionRegistry(FunctionRegistry&&) = delete;
+  FunctionRegistry(const FunctionRegistry&) = delete;
+
   /// @return metadata for function 'name' or nullptr if 'name' is not
   /// registered.
   FunctionMetadataCP metadata(std::string_view name) const;
@@ -201,7 +206,7 @@ class FunctionRegistry {
     return cardinality_;
   }
 
-  std::string specialForm(logical_plan::SpecialForm specialForm) {
+  const std::string& specialForm(logical_plan::SpecialForm specialForm) {
     auto it = specialForms_.find(specialForm);
     VELOX_USER_CHECK(it != specialForms_.end());
     return it->second;
@@ -284,6 +289,6 @@ class FunctionRegistry {
 /// Shortcut for FunctionRegistry::instance()->metadata(name).
 FunctionMetadataCP functionMetadata(std::string_view name);
 
-std::string specialForm(logical_plan::SpecialForm specialForm);
+const std::string& specialForm(logical_plan::SpecialForm specialForm);
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

@@ -19,10 +19,11 @@
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-namespace lp = facebook::velox::logical_plan;
-
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
 
 class HiveQueriesTest : public test::HiveQueriesTestBase {
  public:
@@ -129,7 +130,7 @@ TEST_F(HiveQueriesTest, basic) {
 
 TEST_F(HiveQueriesTest, crossJoin) {
   auto statement =
-      prestoParser_->parse("SELECT * FROM nation JOIN region ON true", true);
+      prestoParser_->parse("SELECT * FROM nation JOIN region ON true");
 
   ASSERT_TRUE(statement->isSelect());
   auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
@@ -226,4 +227,4 @@ TEST_F(HiveQueriesTest, orderOfOperations) {
 }
 
 } // namespace
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

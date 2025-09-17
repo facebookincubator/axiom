@@ -18,7 +18,7 @@
 
 #include "axiom/logical_plan/NameAllocator.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 TEST(NameAllocatorTest, basic) {
   NameAllocator allocator;
@@ -34,4 +34,4 @@ TEST(NameAllocatorTest, basic) {
   EXPECT_EQ(allocator.newName("foo_bar"), "foo_bar_3");
 }
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

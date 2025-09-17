@@ -301,18 +301,18 @@ class AstPrinter : public AstVisitor {
   }
 
   void printHeader(
-      const std::string& name,
+      std::string_view name,
       Node* node,
       const std::function<void(std::ostream& out)>& printDetails =
           nullptr) const;
 
   void printHeader(
-      const std::string& name,
+      std::string_view name,
       const std::shared_ptr<Node>& node,
       const std::function<void(std::ostream& out)>& printDetails =
           nullptr) const;
 
-  void printChild(const std::string& name, const std::shared_ptr<Node>& node);
+  void printChild(std::string_view name, const std::shared_ptr<Node>& node);
 
   void printIndent();
 

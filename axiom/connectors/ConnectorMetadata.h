@@ -15,9 +15,9 @@
  */
 #pragma once
 
+#include "axiom/common/Enums.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/Connector.h"
-#include "velox/core/QueryCtx.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
@@ -42,7 +42,7 @@ class PartitionFunctionSpec;
 /// scan or index lookup PlanNode and for split enumeration. Derived classes of
 /// the above connect to different metadata stores and provide different
 /// metadata, e.g. order, partitioning, bucketing etc.
-namespace facebook::velox::connector {
+namespace facebook::axiom::connector {
 
 /// Represents statistics of a column. The statistics may represent the column
 /// across the table or may be calculated over a sample of a layout of the
@@ -59,10 +59,10 @@ struct ColumnStatistics {
   float nullPct{0};
 
   /// Minimum observed value for comparable scalar column.
-  std::optional<Variant> min;
+  std::optional<velox::Variant> min;
 
   /// Maximum observed value for a comparable scalar column.
-  std::optional<Variant> max;
+  std::optional<velox::Variant> max;
 
   /// For string, varbinary, array and map, the maximum observed number of
   /// characters/bytes/elements/key-value pairs.
@@ -91,51 +91,13 @@ struct ColumnStatistics {
   std::vector<ColumnStatistics> children;
 };
 
-/// Options for StatisticsBuilder.
-struct StatisticsBuilderOptions {
-  int32_t maxStringLength{100};
-  int32_t initialSize{0};
-  bool countDistincts{false};
-  HashStringAllocator* allocator{nullptr};
-};
-
-/// Abstract class for building statistics from samples.
-class StatisticsBuilder {
- public:
-  virtual ~StatisticsBuilder() = default;
-
-  static std::unique_ptr<StatisticsBuilder> create(
-      const TypePtr& type,
-      const StatisticsBuilderOptions& opts);
-
-  static void updateBuilders(
-      const RowVectorPtr& data,
-      std::vector<std::unique_ptr<StatisticsBuilder>>& builders);
-
-  virtual TypePtr type() const = 0;
-
-  /// Accumulates elements of 'vector' into stats.
-  virtual void add(VectorPtr& data) = 0;
-
-  /// Merges the statistics of 'other' into 'this'.
-  virtual void merge(const StatisticsBuilder& other) = 0;
-
-  /// Fills 'result' with the accumulated stats. Scales up counts by
-  /// 'sampleFraction', e.g. 0.1 means 10x.
-  virtual void build(ColumnStatistics& result, float sampleFraction = 1) = 0;
-
-  virtual int64_t numAscending() const = 0;
-  virtual int64_t numRepeat() const = 0;
-  virtual int64_t numDescending() const = 0;
-};
-
 /// Base class for column. The column's name and type are immutable but the
 /// stats may be set multiple times.
 class Column {
  public:
   virtual ~Column() = default;
 
-  Column(std::string name, TypePtr type)
+  Column(std::string name, velox::TypePtr type)
       : name_(std::move(name)), type_(std::move(type)) {}
 
   const ColumnStatistics* stats() const {
@@ -162,7 +124,7 @@ class Column {
     return name_;
   }
 
-  const TypePtr& type() const {
+  const velox::TypePtr& type() const {
     return type_;
   }
 
@@ -178,10 +140,10 @@ class Column {
 
  protected:
   const std::string name_;
-  const TypePtr type_;
+  const velox::TypePtr type_;
 
   // The latest element added to 'allStats_'.
-  tsan_atomic<ColumnStatistics*> latestStats_{nullptr};
+  velox::tsan_atomic<ColumnStatistics*> latestStats_{nullptr};
 
   // All statistics recorded for this column. Old values can be purged when the
   // containing Schema is not in use.
@@ -195,7 +157,7 @@ class Column {
 /// Describes the kind of table, e.g. durable vs. temporary.
 enum class TableKind { kTable, kTempTable };
 
-VELOX_DECLARE_ENUM_NAME(TableKind);
+AXIOM_DECLARE_ENUM_NAME(TableKind);
 
 class Table;
 
@@ -217,7 +179,7 @@ class TableLayout {
   TableLayout(
       std::string name,
       const Table* table,
-      connector::Connector* connector,
+      velox::connector::Connector* connector,
       std::vector<const Column*> columns,
       std::vector<const Column*> partitionColumns,
       std::vector<const Column*> orderColumns,
@@ -233,7 +195,7 @@ class TableLayout {
 
   /// The Connector to use for generating ColumnHandles and TableHandles for
   /// operations against this layout.
-  connector::Connector* connector() const {
+  velox::connector::Connector* connector() const {
     return connector_;
   }
 
@@ -282,7 +244,7 @@ class TableLayout {
   }
 
   /// The columns and their names as a RowType.
-  const RowTypePtr& rowType() const {
+  const velox::RowTypePtr& rowType() const {
     return rowType_;
   }
 
@@ -297,31 +259,29 @@ class TableLayout {
   /// statistics. 'outputType' can specify a cast from map to struct. Filter
   /// expressions see the 'outputType' and 'subfields' are relative to that.
   virtual std::pair<int64_t, int64_t> sample(
-      const connector::ConnectorTableHandlePtr& handle,
+      const velox::connector::ConnectorTableHandlePtr& handle,
       float pct,
-      const std::vector<core::TypedExprPtr>& extraFilters,
-      RowTypePtr outputType = nullptr,
-      const std::vector<common::Subfield>& fields = {},
-      HashStringAllocator* allocator = nullptr,
+      const std::vector<velox::core::TypedExprPtr>& extraFilters,
+      velox::RowTypePtr outputType = nullptr,
+      const std::vector<velox::common::Subfield>& fields = {},
+      velox::HashStringAllocator* allocator = nullptr,
       std::vector<ColumnStatistics>* statistics = nullptr) const = 0;
 
   /// Return a column with the matching name. Returns nullptr if not found.
-  const Column* findColumn(const std::string& name) const;
+  const Column* findColumn(std::string_view name) const;
 
  private:
   const std::string name_;
   const Table* table_;
-  connector::Connector* connector_;
+  velox::connector::Connector* connector_;
   const std::vector<const Column*> columns_;
   const std::vector<const Column*> partitionColumns_;
   const std::vector<const Column*> orderColumns_;
   const std::vector<SortOrder> sortOrder_;
   const std::vector<const Column*> lookupKeys_;
   const bool supportsScan_;
-  const RowTypePtr rowType_;
+  const velox::RowTypePtr rowType_;
 };
-
-class Schema;
 
 /// Base class for table. This is used for name resolution. A TableLayout is
 /// used for accessing physical organization like partitioning and sort order.
@@ -333,9 +293,9 @@ class Table {
 
   Table(
       std::string name,
-      RowTypePtr type,
+      velox::RowTypePtr type,
       TableKind kind = TableKind::kTable,
-      std::unordered_map<std::string, std::string> options = {})
+      folly::F14FastMap<std::string, std::string> options = {})
       : name_(std::move(name)),
         type_(std::move(type)),
         kind_(kind),
@@ -349,7 +309,7 @@ class Table {
   }
 
   /// Returns all columns as RowType.
-  const RowTypePtr& type() const {
+  const velox::RowTypePtr& type() const {
     return type_;
   }
 
@@ -361,10 +321,10 @@ class Table {
   /// non-owned columns. Implementations may have different Column
   /// implementations with different options, so we do not return the
   /// implementation's columns but an abstract form.
-  virtual const std::unordered_map<std::string, const Column*>& columnMap()
+  virtual const folly::F14FastMap<std::string, const Column*>& columnMap()
       const = 0;
 
-  const Column* findColumn(const std::string& name) const {
+  const Column* findColumn(std::string_view name) const {
     const auto& map = columnMap();
     auto it = map.find(name);
     return it == map.end() ? nullptr : it->second;
@@ -375,7 +335,7 @@ class Table {
   /// Returns an estimate of the number of rows in 'this'.
   virtual uint64_t numRows() const = 0;
 
-  virtual const std::unordered_map<std::string, std::string>& options() const {
+  virtual const folly::F14FastMap<std::string, std::string>& options() const {
     return options_;
   }
 
@@ -384,11 +344,11 @@ class Table {
 
   // Discovered from data. In the event of different types, we take the
   // latest (i.e. widest) table type.
-  const RowTypePtr type_;
+  const velox::RowTypePtr type_;
 
   const TableKind kind_;
 
-  const std::unordered_map<std::string, std::string> options_;
+  const folly::F14FastMap<std::string, std::string> options_;
 };
 
 using TablePtr = std::shared_ptr<const Table>;
@@ -413,7 +373,7 @@ class SplitSource {
   /// group means that there are no more splits for the group. In ungrouped
   /// execution, the group is always kUngroupedGroupId.
   struct SplitAndGroup {
-    std::shared_ptr<ConnectorSplit> split;
+    std::shared_ptr<velox::connector::ConnectorSplit> split;
     uint32_t group{kUngroupedGroupId};
   };
 
@@ -440,23 +400,23 @@ class ConnectorSplitManager {
  public:
   virtual ~ConnectorSplitManager() = default;
 
-  /// Returns the list of all partitions that match the filters in
+  /// Returns a list of all partitions that match the filters in
   /// 'tableHandle'. A non-partitioned table returns one partition.
   virtual std::vector<PartitionHandlePtr> listPartitions(
-      const ConnectorTableHandlePtr& tableHandle) = 0;
+      const velox::connector::ConnectorTableHandlePtr& tableHandle) = 0;
 
   /// Returns a SplitSource that covers the contents of 'partitions'. The set of
   /// partitions is exposed separately so that the caller may process the
   /// partitions in a specific order or distribute them to specific nodes in a
   /// cluster.
   virtual std::shared_ptr<SplitSource> getSplitSource(
-      const ConnectorTableHandlePtr& tableHandle,
+      const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       SplitOptions = {}) = 0;
 };
 
 // TODO Move to velox/type/Subfield.h
-using SubfieldPtr = std::shared_ptr<const common::Subfield>;
+using SubfieldPtr = std::shared_ptr<const velox::common::Subfield>;
 
 struct SubfieldPtrHasher {
   size_t operator()(const SubfieldPtr& subfield) const {
@@ -474,10 +434,10 @@ struct SubfieldPtrComparer {
 /// a ColumnHandle.
 struct TargetSubfield {
   SubfieldPtr target;
-  Variant defaultValue;
+  velox::Variant defaultValue;
 };
 
-using SubfieldMapping = std::unordered_map<
+using SubfieldMapping = folly::F14FastMap<
     SubfieldPtr,
     TargetSubfield,
     SubfieldPtrHasher,
@@ -525,7 +485,7 @@ struct WritePartitionInfo {
   const std::vector<std::string> columns;
 
   /// Specifies the partition function. nullptr if 'columns' is empty.
-  const std::shared_ptr<const core::PartitionFunctionSpec> partitionSpec;
+  const std::shared_ptr<const velox::core::PartitionFunctionSpec> partitionSpec;
 
   /// Maximum number of workers. For example, having more workers than there are
   /// partitions makes no sense.
@@ -564,10 +524,20 @@ enum class WriteKind {
   kUpdate
 };
 
-VELOX_DECLARE_ENUM_NAME(WriteKind);
+AXIOM_DECLARE_ENUM_NAME(WriteKind);
 
 class ConnectorMetadata {
  public:
+  /// Temporary APIs to assist in removing dependency on ConnectorMetadata from
+  /// Velox.
+  static ConnectorMetadata* metadata(std::string_view connectorId);
+  static ConnectorMetadata* tryMetadata(std::string_view connectorId);
+  static ConnectorMetadata* metadata(velox::connector::Connector* connector);
+  static void registerMetadata(
+      std::string_view connectorId,
+      std::shared_ptr<ConnectorMetadata> metadata);
+  static void unregisterMetadata(std::string_view connectorId);
+
   virtual ~ConnectorMetadata() = default;
 
   /// Post-construction initialization. This is called after adding
@@ -586,11 +556,11 @@ class ConnectorMetadata {
   /// that are not covered by 'subfieldMapping' are set to null if 'castToType'
   /// is a struct and are absent if 'castToType' is a map. See implementing
   /// Connector for exact set of cast and subfield semantics.
-  virtual ColumnHandlePtr createColumnHandle(
+  virtual velox::connector::ColumnHandlePtr createColumnHandle(
       const TableLayout& layoutData,
       const std::string& columnName,
-      std::vector<common::Subfield> subfields = {},
-      std::optional<TypePtr> castToType = std::nullopt,
+      std::vector<velox::common::Subfield> subfields = {},
+      std::optional<velox::TypePtr> castToType = std::nullopt,
       SubfieldMapping subfieldMapping = {}) = 0;
 
   /// Returns a ConnectorTableHandle for use in createDataSource. 'filters' are
@@ -603,13 +573,13 @@ class ConnectorMetadata {
   /// lookupKeys() in 'layout'. If 'dataColumns' is given, it must have all the
   /// existing columns and may additionally specify casting from maps to structs
   /// by giving a struct in the place of a map.
-  virtual ConnectorTableHandlePtr createTableHandle(
+  virtual velox::connector::ConnectorTableHandlePtr createTableHandle(
       const TableLayout& layout,
-      std::vector<ColumnHandlePtr> columnHandles,
-      core::ExpressionEvaluator& evaluator,
-      std::vector<core::TypedExprPtr> filters,
-      std::vector<core::TypedExprPtr>& rejectedFilters,
-      RowTypePtr dataColumns = nullptr,
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
+      velox::core::ExpressionEvaluator& evaluator,
+      std::vector<velox::core::TypedExprPtr> filters,
+      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
+      velox::RowTypePtr dataColumns = nullptr,
       std::optional<LookupKeys> = std::nullopt) = 0;
 
   /// Return a ConnectorTablePtr given the table name. Table name is provided
@@ -621,7 +591,7 @@ class ConnectorMetadata {
   /// reference ot the Table object at any time, and callers are required
   /// to retain a reference to the Table to prevent it from being reclaimed
   /// in the case of Table removal by the ConnectorMetadata.
-  virtual TablePtr findTable(const std::string& name) = 0;
+  virtual TablePtr findTable(std::string_view name) = 0;
 
   /// Returns a SplitManager for split enumeration for TableLayouts accessed
   /// through 'this'.
@@ -650,8 +620,8 @@ class ConnectorMetadata {
   /// transaction if the connector requires that.
   virtual void createTable(
       const std::string& tableName,
-      const RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const velox::RowTypePtr& rowType,
+      const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
       TableKind tableKind = TableKind::kTable) = 0;
@@ -670,17 +640,18 @@ class ConnectorMetadata {
   /// data is added to the table, finishWrite must be called after the
   /// last writer is finished. Whether this autocommits a transaction
   /// depends on the connector and session settings.
-  virtual ConnectorInsertTableHandlePtr createInsertTableHandle(
+  virtual velox::connector::ConnectorInsertTableHandlePtr
+  createInsertTableHandle(
       const TableLayout& layout,
-      const RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const velox::RowTypePtr& rowType,
+      const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) = 0;
 
   /// Returns specification for repartitioning data before the table writer
   /// stage.
   virtual WritePartitionInfo writePartitionInfo(
-      const ConnectorInsertTableHandlePtr& handle) = 0;
+      const velox::connector::ConnectorInsertTableHandlePtr& handle) = 0;
 
   /// Finalizes a table write. This runs once after all the table writers have
   /// finished. The result sets from the table writer fragments are passed as
@@ -688,39 +659,21 @@ class ConnectorMetadata {
   /// RowType is given by the outputType() of the TableWriter.
   virtual void finishWrite(
       const TableLayout& layout,
-      const ConnectorInsertTableHandlePtr& handle,
-      const std::vector<RowVectorPtr>& writerResult,
+      const velox::connector::ConnectorInsertTableHandlePtr& handle,
+      const std::vector<velox::RowVectorPtr>& writerResult,
       WriteKind kind,
       const ConnectorSessionPtr& session) = 0;
 
   /// Returns column handles whose value uniquely identifies a row for creating
   /// an update or delete record. These may be for example some connector
   /// specific opaque row id or primary key columns.
-  virtual std::vector<ColumnHandlePtr> rowIdHandles(
+  virtual std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
       const TableLayout& layout,
       WriteKind kind) = 0;
 };
 
-} // namespace facebook::velox::connector
+} // namespace facebook::axiom::connector
 
-template <>
-struct fmt::formatter<facebook::velox::connector::TableKind>
-    : fmt::formatter<string_view> {
-  template <typename FormatContext>
-  auto format(facebook::velox::connector::TableKind k, FormatContext& ctx)
-      const {
-    return formatter<string_view>::format(
-        facebook::velox::connector::TableKindName::toName(k), ctx);
-  }
-};
+AXIOM_ENUM_FORMATTER(facebook::axiom::connector::TableKind);
 
-template <>
-struct fmt::formatter<facebook::velox::connector::WriteKind>
-    : fmt::formatter<string_view> {
-  template <typename FormatContext>
-  auto format(facebook::velox::connector::WriteKind k, FormatContext& ctx)
-      const {
-    return formatter<string_view>::format(
-        facebook::velox::connector::WriteKindName::toName(k), ctx);
-  }
-};
+AXIOM_ENUM_FORMATTER(facebook::axiom::connector::WriteKind);

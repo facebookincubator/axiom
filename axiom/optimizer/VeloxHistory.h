@@ -20,13 +20,13 @@
 #include "axiom/optimizer/ToVelox.h"
 #include "velox/exec/TaskStats.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// Records and retrieves estimated and actual cardinalities based on Velox
 /// handles and execution stats.
 class VeloxHistory : public History {
  public:
-  void recordJoinSample(const std::string& key, float lr, float rl) override;
+  void recordJoinSample(std::string_view key, float lr, float rl) override;
 
   std::pair<float, float> sampleJoin(JoinEdge* edge) override;
 
@@ -38,7 +38,7 @@ class VeloxHistory : public History {
 
   /// Sets the filter selectivity of a table scan. Returns true if there is data
   /// to back the estimate and false if this is a pure guess.
-  bool setLeafSelectivity(BaseTable& table, const RowTypePtr& scanType)
+  bool setLeafSelectivity(BaseTable& table, const velox::RowTypePtr& scanType)
       override;
 
   /// Stores observed costs and cardinalities from a query execution. If 'op' is
@@ -53,8 +53,8 @@ class VeloxHistory : public History {
   void update(folly::dynamic& serialized) override;
 
  private:
-  std::unordered_map<std::string, std::pair<float, float>> joinSamples_;
-  std::unordered_map<std::string, NodePrediction> planHistory_;
+  folly::F14FastMap<std::string, std::pair<float, float>> joinSamples_;
+  folly::F14FastMap<std::string, NodePrediction> planHistory_;
 };
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

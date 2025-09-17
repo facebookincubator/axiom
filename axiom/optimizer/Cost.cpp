@@ -19,7 +19,7 @@
 #include "axiom/optimizer/JsonUtil.h"
 #include "axiom/optimizer/PlanUtils.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 void History::saveToFile(const std::string& path) {
   auto json = serialize();
@@ -47,7 +47,7 @@ float selfCost(ExprCP expr) {
   switch (expr->type()) {
     case PlanType::kColumnExpr: {
       auto kind = expr->value().type->kind();
-      if (kind == TypeKind::ARRAY || kind == TypeKind::MAP) {
+      if (kind == velox::TypeKind::ARRAY || kind == velox::TypeKind::MAP) {
         return 200;
       }
       return 10;
@@ -86,4 +86,4 @@ float costWithChildren(ExprCP expr, const PlanObjectSet& notCounting) {
   }
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

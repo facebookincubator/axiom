@@ -16,15 +16,25 @@
 
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
-#include "axiom/optimizer/connectors/ConnectorSplitSource.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 
-namespace facebook::velox::optimizer {
-
+namespace facebook::axiom::optimizer {
 namespace {
+
+// Returns an int64 hash with low 28 bits set.
+template <typename TExec>
+struct Hash {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<velox::Any>& value) {
+    result = value.hash() & 0x7fffffff;
+  }
+};
 
 template <typename TExec>
 struct HashMix {
@@ -33,16 +43,30 @@ struct HashMix {
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const int64_t& firstHash,
-      const arg_type<Variadic<int64_t>>& moreHashes) {
+      const arg_type<velox::Variadic<int64_t>>& moreHashes) {
     result = firstHash;
     for (const auto& hash : moreHashes) {
-      result = bits::hashMix(result, hash.value());
+      result = velox::bits::hashMix(result, hash.value());
     }
   }
 };
 
+template <typename TExec>
+struct Sample {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void call(
+      bool& result,
+      const int64_t& value,
+      const int64_t& mod,
+      const int64_t& limit) {
+    result = (value % mod) < limit;
+  }
+};
+
 template <typename... T>
-ExprCP makeCall(std::string_view name, const TypePtr& type, T... inputs) {
+ExprCP
+makeCall(std::string_view name, const velox::TypePtr& type, T... inputs) {
   return make<Call>(
       toName(name),
       Value(toType(type), 1),
@@ -50,47 +74,24 @@ ExprCP makeCall(std::string_view name, const TypePtr& type, T... inputs) {
       FunctionSet{});
 }
 
-ExprCP makeCast(const TypePtr& type, ExprCP expr) {
-  return makeCall(SpecialFormCallNames::kCast, type, expr);
-}
-
 Value bigintValue() {
-  return Value(toType(BIGINT()), 1);
+  return Value(toType(velox::BIGINT()), 1);
 }
 
 ExprCP bigintLit(int64_t n) {
   return make<Literal>(
-      bigintValue(), queryCtx()->registerVariant(std::make_unique<Variant>(n)));
+      bigintValue(),
+      queryCtx()->registerVariant(std::make_unique<velox::Variant>(n)));
 }
 
-// Returns an int64 hash with low 28 bits set.
-ExprCP makeHash(ExprCP expr) {
-  switch (expr->value().type->kind()) {
-    case TypeKind::BIGINT:
-      break;
-    case TypeKind::TINYINT:
-    case TypeKind::SMALLINT:
-    case TypeKind::INTEGER:
-      expr = makeCast(BIGINT(), expr);
-      break;
-    default: {
-      auto toVarchar = makeCast(VARCHAR(), expr);
-      auto toVarbinary = makeCast(VARBINARY(), toVarchar);
-      auto crc32 = makeCall("crc32", INTEGER(), toVarbinary);
-      expr = makeCast(BIGINT(), crc32);
-    }
-  }
-
-  return makeCall("bitwise_and", BIGINT(), expr, bigintLit(0x7fffffff));
-}
-
-std::shared_ptr<core::QueryCtx> sampleQueryCtx(const core::QueryCtx& original) {
+std::shared_ptr<velox::core::QueryCtx> sampleQueryCtx(
+    const velox::core::QueryCtx& original) {
   std::atomic<int64_t> kQueryCounter;
 
   std::unordered_map<std::string, std::string> empty;
-  return core::QueryCtx::create(
+  return velox::core::QueryCtx::create(
       original.executor(),
-      core::QueryConfig(std::move(empty)),
+      velox::core::QueryConfig(std::move(empty)),
       original.connectorSessionProperties(),
       original.cache(),
       original.pool()->shared_from_this(),
@@ -98,16 +99,27 @@ std::shared_ptr<core::QueryCtx> sampleQueryCtx(const core::QueryCtx& original) {
       fmt::format("sample:{}", ++kQueryCounter));
 }
 
-std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
+std::shared_ptr<runner::Runner> prepareSampleRunner(
     SchemaTableCP table,
     const ExprVector& keys,
     int64_t mod,
     int64_t lim) {
   static folly::once_flag kInitialized;
+  static const char* kHash = "$internal$hash";
   static const char* kHashMix = "$internal$hash_mix";
+  static const char* kSample = "$internal$sample";
 
   folly::call_once(kInitialized, []() {
-    registerFunction<HashMix, int64_t, int64_t, Variadic<int64_t>>({kHashMix});
+    velox::registerFunction<Hash, int64_t, velox::Any>({kHash});
+    velox::
+        registerFunction<HashMix, int64_t, int64_t, velox::Variadic<int64_t>>(
+            {kHashMix});
+    velox::registerFunction<
+        Sample,
+        bool,
+        int64_t,
+        velox::Constant<int64_t>,
+        velox::Constant<int64_t>>({kSample});
   });
 
   auto base = make<BaseTable>();
@@ -131,7 +143,7 @@ std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
   ExprVector hashes;
   hashes.reserve(keys.size());
   for (const auto& key : keys) {
-    hashes.emplace_back(makeHash(key));
+    hashes.emplace_back(makeCall(kHash, velox::BIGINT(), key));
   }
 
   ExprCP hash =
@@ -142,29 +154,27 @@ std::shared_ptr<axiom::runner::Runner> prepareSampleRunner(
       make<Project>(scan, ExprVector{hash}, ColumnVector{hashColumn});
 
   // (hash % mod) < lim
-  ExprCP hashMod = makeCall("mod", BIGINT(), hashColumn, bigintLit(mod));
-  ExprCP filterExpr = makeCall("lt", BOOLEAN(), hashMod, bigintLit(lim));
+  ExprCP filterExpr = makeCall(
+      kSample, velox::BOOLEAN(), hashColumn, bigintLit(mod), bigintLit(lim));
   RelationOpPtr filter = make<Filter>(project, ExprVector{filterExpr});
 
   auto plan = queryCtx()->optimization()->toVeloxPlan(filter);
-  return std::make_shared<axiom::runner::LocalRunner>(
-      plan.plan,
-      sampleQueryCtx(*queryCtx()->optimization()->veloxQueryCtx()),
-      std::make_shared<connector::ConnectorSplitSourceFactory>());
+  return std::make_shared<runner::LocalRunner>(
+      plan.plan, sampleQueryCtx(*queryCtx()->optimization()->veloxQueryCtx()));
 }
 
 // Maps hash value to number of times it appears in a table.
 using KeyFreq = folly::F14FastMap<uint32_t, uint32_t>;
 
 std::unique_ptr<KeyFreq> runJoinSample(
-    axiom::runner::Runner& runner,
+    runner::Runner& runner,
     int32_t maxRows = 0) {
   auto result = std::make_unique<folly::F14FastMap<uint32_t, uint32_t>>();
 
   int32_t rowCount = 0;
   while (auto rows = runner.next()) {
     rowCount += rows->size();
-    auto hashes = rows->childAt(0)->as<FlatVector<int64_t>>();
+    auto hashes = rows->childAt(0)->as<velox::FlatVector<int64_t>>();
     for (auto i = 0; i < hashes->size(); ++i) {
       if (!hashes->isNullAt(i)) {
         ++(*result)[static_cast<uint32_t>(hashes->valueAt(i))];
@@ -235,9 +245,9 @@ std::pair<float, float> sampleJoin(
   auto rightRunner =
       prepareSampleRunner(right, rightKeys, kMaxCardinality, fraction);
 
-  auto leftRun = std::make_shared<AsyncSource<KeyFreq>>(
+  auto leftRun = std::make_shared<velox::AsyncSource<KeyFreq>>(
       [leftRunner]() { return runJoinSample(*leftRunner); });
-  auto rightRun = std::make_shared<AsyncSource<KeyFreq>>(
+  auto rightRun = std::make_shared<velox::AsyncSource<KeyFreq>>(
       [rightRunner]() { return runJoinSample(*rightRunner); });
 
   if (auto executor = queryCtx()->optimization()->veloxQueryCtx()->executor()) {
@@ -251,4 +261,4 @@ std::pair<float, float> sampleJoin(
       freqs(*rightFreq, *leftFreq), freqs(*leftFreq, *rightFreq));
 }
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

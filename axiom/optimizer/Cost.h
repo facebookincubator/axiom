@@ -18,7 +18,7 @@
 
 #include "axiom/optimizer/RelationOp.h"
 
-namespace facebook::velox::optimizer {
+namespace facebook::axiom::optimizer {
 
 /// Record the history data for a tracked PlanNode.
 struct NodePrediction {
@@ -54,14 +54,14 @@ class History {
   /// cost and plan cardinality.
   virtual bool setLeafSelectivity(
       BaseTable& baseTable,
-      const RowTypePtr& scanType) = 0;
+      const velox::RowTypePtr& scanType) = 0;
 
-  virtual void recordJoinSample(const std::string& key, float lr, float rl) = 0;
+  virtual void recordJoinSample(std::string_view key, float lr, float rl) = 0;
 
   virtual std::pair<float, float> sampleJoin(JoinEdge* edge) = 0;
 
   virtual void recordLeafSelectivity(
-      const std::string& handle,
+      std::string_view handle,
       float selectivity,
       bool overwrite = true) {
     std::lock_guard<std::mutex> l(mutex_);
@@ -85,7 +85,7 @@ class History {
 
   /// Memo for selectivity keyed on ConnectorTableHandle::toString().
   /// Values between 0 and 1.
-  std::unordered_map<std::string, float> leafSelectivities_;
+  folly::F14FastMap<std::string, float> leafSelectivities_;
 };
 
 /// Collection of per operation costs for a target system.  The base
@@ -147,4 +147,4 @@ std::pair<float, float> sampleJoin(
     SchemaTableCP right,
     const ExprVector& rightKeys);
 
-} // namespace facebook::velox::optimizer
+} // namespace facebook::axiom::optimizer

@@ -15,11 +15,13 @@
  */
 
 #include "axiom/logical_plan/PlanPrinter.h"
+
+#include <algorithm>
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/ExprVisitor.h"
 #include "axiom/logical_plan/PlanNodeVisitor.h"
 
-namespace facebook::velox::logical_plan {
+namespace facebook::axiom::logical_plan {
 
 namespace {
 
@@ -217,36 +219,36 @@ class ToTextVisitor : public PlanNodeVisitor {
   }
 };
 
-std::string truncate(const std::string& str, size_t maxLength = 50) {
+std::string truncate(std::string_view str, size_t maxLength = 50) {
   if (str.size() > maxLength) {
-    return str.substr(0, maxLength) + "...";
+    return fmt::format("{}...", str.substr(0, maxLength));
   }
-  return str;
+  return std::string{str};
 }
 
 class ExprStats : public ExprVisitorContext {
  public:
-  std::unordered_map<std::string, int64_t>& functionCounts() {
+  folly::F14FastMap<std::string, int64_t>& functionCounts() {
     return functionCounts_;
   }
 
-  const std::unordered_map<std::string, int64_t>& functionCounts() const {
+  const folly::F14FastMap<std::string, int64_t>& functionCounts() const {
     return functionCounts_;
   }
 
-  std::unordered_map<std::string, int64_t>& expressionCounts() {
+  folly::F14FastMap<std::string, int64_t>& expressionCounts() {
     return expressionCounts_;
   }
 
-  const std::unordered_map<std::string, int64_t>& expressionCounts() const {
+  const folly::F14FastMap<std::string, int64_t>& expressionCounts() const {
     return expressionCounts_;
   }
 
-  std::unordered_map<velox::TypePtr, int64_t>& constantCounts() {
+  folly::F14FastMap<velox::TypePtr, int64_t>& constantCounts() {
     return constantCounts_;
   }
 
-  const std::unordered_map<velox::TypePtr, int64_t>& constantCounts() const {
+  const folly::F14FastMap<velox::TypePtr, int64_t>& constantCounts() const {
     return constantCounts_;
   }
 
@@ -265,9 +267,9 @@ class ExprStats : public ExprVisitorContext {
   }
 
  private:
-  std::unordered_map<std::string, int64_t> functionCounts_;
-  std::unordered_map<std::string, int64_t> expressionCounts_;
-  std::unordered_map<velox::TypePtr, int64_t> constantCounts_;
+  folly::F14FastMap<std::string, int64_t> functionCounts_;
+  folly::F14FastMap<std::string, int64_t> expressionCounts_;
+  folly::F14FastMap<velox::TypePtr, int64_t> constantCounts_;
 };
 
 class CollectExprStatsPlanNodeVisitor : public PlanNodeVisitor {
@@ -620,7 +622,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   }
 
   void appendNode(
-      const std::string& name,
+      std::string_view name,
       const LogicalPlanNode& node,
       PlanNodeVisitorContext& context) const {
     auto& myContext = static_cast<Context&>(context);
@@ -637,7 +639,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   }
 
   void appendHeader(
-      const std::string& name,
+      std::string_view name,
       const LogicalPlanNode& node,
       Context& context) const {
     context.out << makeIndent(context.indent) << "- " << name << " ["
@@ -674,7 +676,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   //    constants: VARCHAR: 4
   static void appendExpressionStats(
       const ExprStats& stats,
-      const std::string& indent,
+      std::string_view indent,
       Context& context) {
     context.out << indent << "expressions: ";
     appendCounts(stats.expressionCounts(), context.out);
@@ -688,7 +690,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
 
     if (!stats.constantCounts().empty()) {
       context.out << indent << "constants: ";
-      std::unordered_map<std::string, int64_t> counts;
+      folly::F14FastMap<std::string, int64_t> counts;
       for (const auto& [type, count] : stats.constantCounts()) {
         counts[type->toSummaryString(
             {.maxChildren = (uint32_t)context.options.maxChildTypes})] += count;
@@ -702,7 +704,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   // @param sortByKey Indicates whether to sort counts by key asc (default) or
   // 'count' desc.
   static void appendCounts(
-      const std::unordered_map<std::string, int64_t>& counts,
+      const folly::F14FastMap<std::string, int64_t>& counts,
       std::ostream& text,
       bool sortByKey = true) {
     std::vector<std::pair<std::string, int64_t>> sortedCounts;
@@ -712,15 +714,13 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
     }
 
     if (sortByKey) {
-      std::sort(
-          sortedCounts.begin(),
-          sortedCounts.end(),
-          [&](const auto& a, const auto& b) { return a.first < b.first; });
+      std::ranges::sort(sortedCounts, [&](const auto& a, const auto& b) {
+        return a.first < b.first;
+      });
     } else {
-      std::sort(
-          sortedCounts.begin(),
-          sortedCounts.end(),
-          [&](const auto& a, const auto& b) { return a.second > b.second; });
+      std::ranges::sort(sortedCounts, [&](const auto& a, const auto& b) {
+        return a.second > b.second;
+      });
     }
 
     bool first = true;
@@ -771,7 +771,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   }
 
   static void appendProjections(
-      const std::string& indent,
+      std::string_view indent,
       const ProjectNode& node,
       const std::vector<size_t>& projections,
       size_t cnt,
@@ -855,4 +855,4 @@ std::string PlanPrinter::toSkeletonText(const LogicalPlanNode& root) {
   return context.out.str();
 }
 
-} // namespace facebook::velox::logical_plan
+} // namespace facebook::axiom::logical_plan

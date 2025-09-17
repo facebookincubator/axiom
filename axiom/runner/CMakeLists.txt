@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(tests)
+if(AXIOM_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
 
 velox_add_library(axiom_runner_multifragment_plan MultiFragmentPlan.cpp)
 
@@ -24,6 +26,7 @@ velox_add_library(axiom_runner_local_runner LocalRunner.cpp Runner.cpp)
 velox_link_libraries(
   axiom_runner_local_runner
   axiom_runner_multifragment_plan
+  axiom_connector_metadata
   velox_common_base
   velox_memory
   velox_hive_connector
