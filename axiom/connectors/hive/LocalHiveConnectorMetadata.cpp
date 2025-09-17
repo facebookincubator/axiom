@@ -33,6 +33,8 @@
 
 namespace facebook::axiom::connector::hive {
 
+namespace fs = std::filesystem;
+
 std::vector<PartitionHandlePtr> LocalHiveSplitManager::listPartitions(
     const velox::connector::ConnectorTableHandlePtr& tableHandle) {
   // All tables are unpartitioned.
@@ -792,6 +794,52 @@ void deleteDirectoryContents(const std::string& path) {
   closedir(dir);
 }
 
+fs::path createTemporaryDirectory(const fs::path& parentDir) {
+  static std::mt19937_64 gen{std::random_device{}()};
+  static std::uniform_int_distribution<uint32_t> dis{1, 1'000'000};
+  static std::mutex mutex;
+  fs::path tempDirPath;
+  std::lock_guard l{mutex};
+  for (;;) {
+    do {
+      uint32_t randomNumber = dis(gen);
+      tempDirPath = parentDir / ("temp_" + std::to_string(randomNumber));
+    } while (fs::exists(tempDirPath));
+    if (velox::common::generateFileDirectory(tempDirPath.c_str())) {
+      return tempDirPath;
+    }
+  }
+}
+
+void moveFilesRecursively(
+    const fs::path& sourceDir,
+    const fs::path& targetDir) {
+  if (!fs::is_directory(sourceDir)) {
+    throw std::runtime_error(
+        "Source directory does not exist or is not a directory: " +
+        sourceDir.string());
+  }
+  // Create the target directory if it doesn't exist
+  fs::create_directories(targetDir);
+  // Recursively iterate through the source directory
+  for (const auto& entry : fs::recursive_directory_iterator(sourceDir)) {
+    if (entry.is_regular_file()) {
+      // Compute the relative path from the source directory
+      fs::path relPath = fs::relative(entry.path(), sourceDir);
+      fs::path destPath = targetDir / relPath;
+      // Create enclosing directories in the target if they don't exist
+      fs::create_directories(destPath.parent_path());
+      // Move the file
+      fs::rename(entry.path(), destPath);
+    }
+  }
+  // Optionally, remove empty directories in the source
+  deleteDirectoryContents(sourceDir);
+  if (fs::is_empty(sourceDir)) {
+    fs::remove(sourceDir);
+  }
+}
+
 // Helper: Check if directory exists.
 bool dirExists(const std::string& path) {
   struct stat info;
@@ -896,7 +944,7 @@ void LocalHiveConnectorMetadata::createTable(
     c["type"] =
         velox::type::fbhive::HiveTypeSerializer::serialize(rowType->childAt(i));
 
-    if (std::find(tokens.begin(), tokens.end(), name) == tokens.end()) {
+    if (std::ranges::find(tokens, name) == tokens.end()) {
       if (isPartition) {
         VELOX_USER_FAIL("Partitioning columns must be last");
       }
@@ -912,22 +960,41 @@ void LocalHiveConnectorMetadata::createTable(
   std::string filePath = path + "/.schema";
 
   std::lock_guard<std::mutex> l(mutex_);
-  folly::writeFileAtomic(filePath, jsonStr.data(), jsonStr.size());
+  folly::writeFileAtomic(filePath, jsonStr);
   tables_.erase(tableName);
   loadTable(tableName, path);
+}
+
+void LocalHiveConnectorMetadata::dropTable(const std::string& tableName) {
+  auto path = dataPath() + "/" + tableName;
+  std::lock_guard l{mutex_};
+  tables_.erase(tableName);
+  deleteDirectoryContents(path);
 }
 
 void LocalHiveConnectorMetadata::finishWrite(
     const TableLayout& layout,
     const velox::connector::ConnectorInsertTableHandlePtr& handle,
-    const std::vector<velox::RowVectorPtr>& /*writerResult*/,
     WriteKind /*kind*/,
-    const ConnectorSessionPtr& /*session*/) {
-  std::lock_guard<std::mutex> l(mutex_);
+    const ConnectorSessionPtr& /*session*/,
+    bool success,
+    const std::vector<velox::RowVectorPtr>& /*results*/) {
   auto localHandle =
       dynamic_cast<const velox::connector::hive::HiveInsertTableHandle*>(
           handle.get());
+  std::lock_guard l{mutex_};
+  if (!success) {
+    deleteDirectoryContents(localHandle->locationHandle()->writePath());
+    return;
+  }
+  moveFilesRecursively(
+      localHandle->locationHandle()->writePath(),
+      localHandle->locationHandle()->targetPath());
   loadTable(layout.table().name(), localHandle->locationHandle()->targetPath());
+}
+
+std::string LocalHiveConnectorMetadata::makeStagingDirectory() {
+  return createTemporaryDirectory(fmt::format("{}/.staging", dataPath()));
 }
 
 } // namespace facebook::axiom::connector::hive

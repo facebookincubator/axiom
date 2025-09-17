@@ -123,17 +123,22 @@ SchemaTableCP Schema::findTable(
     schemaTable->columns[column->name()] = column;
     columns.push_back(column);
   }
-  DistributionType defaultDistributionType;
-  defaultDistributionType.locus = defaultLocus_;
+  DistributionType distribution;
+  distribution.locus = defaultLocus_;
+
+  const auto& layouts = connectorTable->layouts();
+  VELOX_CHECK_EQ(layouts.size(), 1);
+  const auto* layout = layouts[0];
+  distribution.partitionType = layout->partitionType();
+  if (distribution.partitionType) {
+    const auto numPartitions = distribution.partitionType->numPartitions();
+    if (numPartitions > 0) {
+      distribution.numPartitions = numPartitions;
+    }
+  }
+
   schemaTable->addIndex(
-      toName("pk"),
-      0,
-      0,
-      {},
-      defaultDistributionType,
-      {},
-      std::move(columns),
-      connectorTable->layouts()[0]);
+      toName("pk"), 0, 0, {}, distribution, {}, columns, layout);
   table = {schemaTable, std::move(connectorTable)};
   return table.schemaTable;
 }
@@ -431,6 +436,11 @@ std::string Distribution::toString() const {
   std::stringstream out;
   if (!partition.empty()) {
     out << "P ";
+    out << " "
+        << (distributionType.partitionType
+                ? distributionType.partitionType->toString()
+                : " Velox default ")
+        << " ";
     exprsToString(partition, out);
     out << " " << distributionType.numPartitions << " ways";
   }

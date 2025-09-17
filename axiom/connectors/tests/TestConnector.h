@@ -267,16 +267,6 @@ class TestConnectorMetadata : public ConnectorMetadata {
       velox::RowTypePtr dataColumns,
       std::optional<LookupKeys>) override;
 
-  void createTable(
-      const std::string& tableName,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options,
-      const ConnectorSessionPtr& session,
-      bool errorIfExists = true,
-      TableKind tableKind = TableKind::kTable) override {
-    VELOX_UNSUPPORTED();
-  }
-
   velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
       const velox::RowTypePtr& rowType,
@@ -286,17 +276,13 @@ class TestConnectorMetadata : public ConnectorMetadata {
     VELOX_UNSUPPORTED();
   }
 
-  WritePartitionInfo writePartitionInfo(
-      const velox::connector::ConnectorInsertTableHandlePtr& handle) override {
-    VELOX_UNSUPPORTED();
-  }
-
   void finishWrite(
       const TableLayout& layout,
       const velox::connector::ConnectorInsertTableHandlePtr& handle,
-      const std::vector<velox::RowVectorPtr>& writerResult,
       WriteKind kind,
-      const ConnectorSessionPtr& session) override {
+      const ConnectorSessionPtr& session,
+      bool success,
+      const std::vector<velox::RowVectorPtr>& results) override {
     VELOX_UNSUPPORTED();
   }
 

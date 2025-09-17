@@ -21,7 +21,52 @@
 
 namespace facebook::axiom::connector::hive {
 
+const PartitionType* HivePartitionType::copartition(
+    const PartitionType& other) const {
+  const auto* right = dynamic_cast<const HivePartitionType*>(&other);
+  if (right == nullptr) {
+    return nullptr;
+  }
+  if (keyTypes_.size() != right->keyTypes_.size()) {
+    return nullptr;
+  }
+  for (size_t i = 0; i < keyTypes_.size(); ++i) {
+    if (!keyTypes_[i]->equivalent(*right->keyTypes_[i])) {
+      return nullptr;
+    }
+  }
+  if (right->numBuckets_ % numBuckets_ == 0) {
+    return this;
+  }
+  if (numBuckets_ % right->numBuckets_ == 0) {
+    return right;
+  }
+  return nullptr;
+}
+
+velox::core::PartitionFunctionSpecPtr HivePartitionType::makeSpec(
+    const std::vector<velox::column_index_t>& channels,
+    const std::vector<velox::VectorPtr>& constants,
+    bool isLocal) const {
+  return std::make_shared<velox::connector::hive::HivePartitionFunctionSpec>(
+      numBuckets_, channels, constants);
+}
+
+std::string HivePartitionType::toString() const {
+  if (keyTypes_.empty()) {
+    return fmt::format("Hive {} buckets", numBuckets_);
+  }
+  std::vector<std::string> typeStrs;
+  typeStrs.reserve(keyTypes_.size());
+  for (const auto& type : keyTypes_) {
+    typeStrs.push_back(type->toString());
+  }
+  return fmt::format(
+      "Hive {} buckets [{}]", numBuckets_, folly::join(", ", typeStrs));
+}
+
 namespace {
+
 velox::connector::hive::HiveColumnHandle::ColumnType columnType(
     const HiveTableLayout& layout,
     std::string_view columnName) {
@@ -35,7 +80,38 @@ velox::connector::hive::HiveColumnHandle::ColumnType columnType(
   // TODO recognize special names like $path, $bucket etc.
   return velox::connector::hive::HiveColumnHandle::ColumnType::kRegular;
 }
+
+std::vector<velox::TypePtr> extractPartitionKeyTypes(
+    const std::vector<const Column*>& partitionColumns) {
+  std::vector<velox::TypePtr> types;
+  types.reserve(partitionColumns.size());
+  for (const auto* column : partitionColumns) {
+    types.push_back(column->type());
+  }
+  return types;
+}
+
 } // namespace
+
+HiveTableLayout::HiveTableLayout(
+    std::string name,
+    const Table* table,
+    velox::connector::Connector* connector,
+    std::vector<const Column*> columns,
+    std::vector<const Column*> partitioning,
+    std::vector<const Column*> orderColumns,
+    std::vector<SortOrder> sortOrder,
+    std::vector<const Column*> lookupKeys,
+    std::vector<const Column*> hivePartitionColumns,
+    velox::dwio::common::FileFormat fileFormat,
+    std::optional<uint32_t> numBuckets)
+    : TableLayout{std::move(name), table, connector, std::move(columns), std::move(partitioning), std::move(orderColumns), std::move(sortOrder), std::move(lookupKeys), true},
+      fileFormat_{fileFormat},
+      hivePartitionColumns_{std::move(hivePartitionColumns)},
+      numBuckets_{numBuckets},
+      partitionType_{
+          numBuckets_.value_or(0),
+          extractPartitionKeyTypes(partitionColumns())} {}
 
 velox::connector::ColumnHandlePtr HiveConnectorMetadata::createColumnHandle(
     const TableLayout& layout,
@@ -181,7 +257,7 @@ HiveConnectorMetadata::createInsertTableHandle(
       inputColumns,
       makeLocationHandle(
           fmt::format("{}/{}", dataPath(), layout.table().name()),
-          std::nullopt),
+          makeStagingDirectory()),
       storageFormat,
       bucketProperty,
       compressionKind,
@@ -192,15 +268,16 @@ HiveConnectorMetadata::createInsertTableHandle(
 
 void HiveConnectorMetadata::validateOptions(
     const folly::F14FastMap<std::string, std::string>& options) const {
-  static folly::F14FastSet<std::string> allowed = {
+  static const folly::F14FastSet<std::string> kAllowed = {
       "bucketed_by",
       "sorted_by",
       "bucket_count",
       "partitioned_by",
       "file_format",
-      "compression_kind"};
+      "compression_kind",
+  };
   for (auto& pair : options) {
-    if (allowed.find(pair.first) == allowed.end()) {
+    if (!kAllowed.contains(pair.first)) {
       VELOX_USER_FAIL("Option {} is not supported", pair.first);
     }
   }

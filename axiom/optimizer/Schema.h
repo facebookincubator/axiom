@@ -116,24 +116,21 @@ class Locus {
 
 using LocusCP = const Locus*;
 
-/// Method for determining a partition given an ordered list of partitioning
-/// keys. Hive hash is an example, range partitioning is another. Add values
-/// here for more types.
-enum class ShuffleMode : uint8_t {
-  kNone,
-  kHive,
-};
-
 /// Distribution of data. 'numPartitions' is 1 if the data is not partitioned.
 /// There is copartitioning if the DistributionType is the same on both sides
 /// and both sides have an equal number of 1:1 type matched partitioning keys.
 struct DistributionType {
-  bool operator==(const DistributionType& other) const = default;
+  bool operator==(const DistributionType& other) const {
+    return copartitionType(partitionType, other.partitionType) &&
+        locus == other.locus && isGather == other.isGather;
+  }
 
   LocusCP locus{nullptr};
+  /// Partition function.
+  /// nullptr means Velox default, copartitioned only with itself.
+  const connector::PartitionType* partitionType{nullptr};
   int32_t numPartitions{1};
   bool isGather{false};
-  ShuffleMode mode{ShuffleMode::kNone};
 
   static DistributionType gather() {
     static constexpr DistributionType kGather = {

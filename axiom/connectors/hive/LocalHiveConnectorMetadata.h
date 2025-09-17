@@ -234,6 +234,14 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   std::shared_ptr<velox::core::QueryCtx> makeQueryCtx(
       const std::string& queryId);
 
+  void finishWrite(
+      const TableLayout& layout,
+      const velox::connector::ConnectorInsertTableHandlePtr& handle,
+      WriteKind /*kind*/,
+      const ConnectorSessionPtr& /*session*/,
+      bool success,
+      const std::vector<velox::RowVectorPtr>& /*results*/) override;
+
   void createTable(
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
@@ -242,17 +250,14 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       bool errorIfExists = true,
       TableKind kind = TableKind::kTable) override;
 
-  void finishWrite(
-      const TableLayout& layout,
-      const velox::connector::ConnectorInsertTableHandlePtr& /*handle*/,
-      const std::vector<velox::RowVectorPtr>& /*writerResult*/,
-      WriteKind /*kind*/,
-      const ConnectorSessionPtr& /*session*/) override;
+  void dropTable(const std::string& tableName) override;
 
  protected:
   std::string dataPath() const override {
     return hiveConfig_->hiveLocalDataPath();
   }
+
+  std::string makeStagingDirectory() override;
 
   std::shared_ptr<velox::connector::hive::LocationHandle> makeLocationHandle(
       std::string targetDirectory,

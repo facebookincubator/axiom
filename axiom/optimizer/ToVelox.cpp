@@ -951,8 +951,8 @@ template <typename ExprType>
 velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const velox::RowTypePtr& inputType,
     const std::vector<ExprType>& keys,
-    bool isBroadcast) {
-  if (isBroadcast) {
+    const Distribution& distribution) {
+  if (distribution.isBroadcast) {
     return std::make_shared<BroadcastPartitionFunctionSpec>();
   }
 
@@ -966,6 +966,10 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     keyIndices.push_back(inputType->getChildIdx(
         dynamic_cast<const velox::core::FieldAccessTypedExpr*>(key.get())
             ->name()));
+  }
+  if (distribution.distributionType.partitionType) {
+    return distribution.distributionType.partitionType->makeSpec(
+        keyIndices, {}, false);
   }
   return std::make_shared<HashPartitionFunctionSpec>(
       inputType, std::move(keyIndices));
@@ -1394,8 +1398,8 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
           velox::core::LocalPartitionNode::gather(nextId(), std::move(inputs));
       fragment.width = 1;
     } else {
-      auto partition =
-          createPartitionFunctionSpec(project->outputType(), keys, false);
+      auto partition = createPartitionFunctionSpec(
+          project->outputType(), keys, Distribution{});
       project = std::make_shared<velox::core::LocalPartitionNode>(
           nextId(),
           velox::core::LocalPartitionNode::Type::kRepartition,
@@ -1435,7 +1439,7 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   auto partitioningInput = std::move(project).maybeProject(sourcePlan);
 
   auto partitionFunctionFactory = createPartitionFunctionSpec(
-      partitioningInput->outputType(), keys, distribution.isBroadcast);
+      partitioningInput->outputType(), keys, distribution);
 
   source.fragment.planNode =
       std::make_shared<velox::core::PartitionedOutputNode>(
