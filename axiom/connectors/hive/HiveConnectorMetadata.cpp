@@ -104,7 +104,7 @@ HiveTableLayout::HiveTableLayout(
     std::vector<const Column*> lookupKeys,
     std::vector<const Column*> hivePartitionColumns,
     velox::dwio::common::FileFormat fileFormat,
-    std::optional<uint32_t> numBuckets)
+    std::optional<int32_t> numBuckets)
     : TableLayout{std::move(name), table, connector, std::move(columns), std::move(partitioning), std::move(orderColumns), std::move(sortOrder), std::move(lookupKeys), true},
       fileFormat_{fileFormat},
       hivePartitionColumns_{std::move(hivePartitionColumns)},

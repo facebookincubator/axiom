@@ -48,7 +48,7 @@ class HiveConnectorSession : public ConnectorSession {
 class HivePartitionType final : public PartitionType {
  public:
   explicit HivePartitionType(
-      uint32_t numBuckets,
+      int32_t numBuckets,
       std::vector<velox::TypePtr> keyTypes = {})
       : numBuckets_{numBuckets}, keyTypes_{std::move(keyTypes)} {}
 
@@ -71,7 +71,7 @@ class HivePartitionType final : public PartitionType {
   std::string toString() const final;
 
  private:
-  const uint32_t numBuckets_;
+  const int32_t numBuckets_;
   const std::vector<velox::TypePtr> keyTypes_;
 };
 
@@ -95,7 +95,7 @@ class HiveTableLayout : public TableLayout {
       std::vector<const Column*> lookupKeys,
       std::vector<const Column*> hivePartitionColumns,
       velox::dwio::common::FileFormat fileFormat,
-      std::optional<uint32_t> numBuckets = std::nullopt);
+      std::optional<int32_t> numBuckets = std::nullopt);
 
   const PartitionType* partitionType() const final {
     return partitionColumns().empty() ? nullptr : &partitionType_;
@@ -109,14 +109,14 @@ class HiveTableLayout : public TableLayout {
     return hivePartitionColumns_;
   }
 
-  std::optional<uint32_t> numBuckets() const {
+  std::optional<int32_t> numBuckets() const {
     return numBuckets_;
   }
 
  protected:
   const velox::dwio::common::FileFormat fileFormat_;
   const std::vector<const Column*> hivePartitionColumns_;
-  const std::optional<uint32_t> numBuckets_;
+  const std::optional<int32_t> numBuckets_;
   const HivePartitionType partitionType_;
 };
 
@@ -176,10 +176,14 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
-      TableKind kind = TableKind::kTable) = 0;
+      TableKind kind = TableKind::kTable) {
+    VELOX_UNSUPPORTED();
+  }
 
   /// Drop a Hive table.
-  virtual void dropTable(const std::string& tableName) = 0;
+  virtual void dropTable(const std::string& tableName) {
+    VELOX_UNSUPPORTED();
+  }
 
  protected:
   virtual void ensureInitialized() const {}
