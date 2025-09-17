@@ -1536,7 +1536,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
   }
 
   // process cross join if we've processed connected component
-  if (nextJoins.empty()) {
+  if (nextJoins.empty() && !crossJoinCandidates.empty()) {
     crossJoins(plan, crossJoinCandidates, state, nextJoins);
   }
   tryNextJoins(state, nextJoins);

@@ -92,19 +92,21 @@ TEST_F(HiveQueriesTest, basic) {
           .planNode());
 
   {
-    auto plan = scan("customer")
-                    .nestedLoopJoin(
-                        scan("nation").planNode(),
-                        "",
-                        {
-                            "c_name",
-                            "n_name",
-                        })
-                    .nestedLoopJoin(scan("region").planNode(), "", {"r_name"})
-                    .limit(0, 10, false)
-                    .planNode();
+    auto secondRegion =
+        scan("region").project({"r_name as r2_name"}).planNode();
+    auto plan =
+        scan("nation")
+            .nestedLoopJoin(
+                scan("region").planNode(),
+                "",
+                {
+                    "n_name",
+                    "r_name",
+                })
+            .nestedLoopJoin(secondRegion, "", {"n_name", "r_name", "r2_name"})
+            .planNode();
     checkResults(
-        "SELECT c_name, n_name, r_name FROM customer, nation, region LIMIT 10",
+        "SELECT n.n_name, r1.r_name AS r_name, r2.r_name AS r2_name FROM nation n, region r1, region r2",
         plan);
   }
 
