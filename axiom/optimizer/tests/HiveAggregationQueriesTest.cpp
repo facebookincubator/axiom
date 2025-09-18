@@ -271,5 +271,45 @@ TEST_F(HiveAggregationQueriesTest, aggOrderBy) {
   checkSame(logicalPlan, referencePlan, options);
 }
 
+TEST_F(HiveAggregationQueriesTest, aggFilterOrderBy) {
+  auto nationType =
+      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
+          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
+
+  const auto connectorId = exec::test::kHiveConnectorId;
+
+  auto logicalPlan =
+      lp::PlanBuilder()
+          .tableScan(connectorId, "nation", nationType->names())
+          .aggregate(
+              {"n_regionkey"},
+              {"array_agg(n_name ORDER BY n_nationkey) FILTER (WHERE n_nationkey < 20)"})
+          .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("nation")
+                     .project()
+                     .singleAggregation()
+                     .build();
+
+  ASSERT_TRUE(matcher->match(plan));
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", nationType)
+          .filter("n_nationkey < 20")
+          .singleAggregation(
+              {"n_regionkey"}, {"array_agg(n_name ORDER BY n_nationkey)"})
+          .planNode();
+
+  // TODO with options:
+  // https://github.com/facebookexperimental/verax/issues/397
+  auto options = axiom::runner::MultiFragmentPlan::Options{
+      .numWorkers = 1, .numDrivers = 1};
+  checkSame(logicalPlan, referencePlan, options);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
