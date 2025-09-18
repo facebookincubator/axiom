@@ -130,7 +130,9 @@ void gatherScans(
 TestResult QueryTestBase::runVelox(
     const velox::core::PlanNodePtr& plan,
     axiom::runner::MultiFragmentPlan::Options options) {
-  options.queryId = fmt::format("q{}", ++gQueryCounter);
+  if (options.queryId.empty()) {
+    options.queryId = fmt::format("q{}", ++gQueryCounter);
+  }
   axiom::runner::ExecutableFragment fragment(
       fmt::format("{}.0", options.queryId));
   fragment.fragment = core::PlanFragment(plan);

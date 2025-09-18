@@ -126,14 +126,10 @@ class HiveAggregationQueriesTest : public test::QueryTestBase {
     return plan->fragments().at(0).fragment.planNode;
   }
 
-  static std::shared_ptr<exec::test::TempDirectoryPath> gTempDirectory;
+  inline static std::shared_ptr<exec::test::TempDirectoryPath> gTempDirectory;
 
   std::shared_ptr<connector::TestConnector> testConnector_;
 };
-
-// static
-std::shared_ptr<exec::test::TempDirectoryPath>
-    HiveAggregationQueriesTest::gTempDirectory = nullptr;
 
 TEST_F(HiveAggregationQueriesTest, agg) {
   testConnector_->createTable(
@@ -246,7 +242,8 @@ TEST_F(HiveAggregationQueriesTest, aggOrderBy) {
           .tableScan(connectorId, "nation", nationType->names())
           .aggregate(
               {"n_regionkey"},
-              {"array_agg(n_nationkey ORDER BY n_nationkey DESC)"})
+              {"array_agg(n_nationkey ORDER BY n_nationkey DESC)",
+               "array_agg(n_name ORDER BY n_nationkey)"})
           .build();
 
   auto plan = toSingleNodePlan(logicalPlan);
@@ -258,13 +255,13 @@ TEST_F(HiveAggregationQueriesTest, aggOrderBy) {
 
   ASSERT_TRUE(matcher->match(plan));
 
-  // Simple reference plan that returns expected constant result
   auto referencePlan =
       exec::test::PlanBuilder()
           .tableScan("nation", nationType)
           .singleAggregation(
               {"n_regionkey"},
-              {"array_agg(n_nationkey ORDER BY n_nationkey DESC)"})
+              {"array_agg(n_nationkey ORDER BY n_nationkey DESC)",
+               "array_agg(n_name ORDER BY n_nationkey)"})
           .planNode();
 
   // TODO with options:

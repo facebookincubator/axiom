@@ -205,37 +205,6 @@ TEST_F(PlanTest, queryGraph) {
   EXPECT_EQ(interned2, interned);
 }
 
-TEST_F(PlanTest, agg) {
-  testConnector_->createTable(
-      "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
-
-  auto logicalPlan = lp::PlanBuilder()
-                         .tableScan(kTestConnectorId, "numbers", {"a", "b"})
-                         .aggregate({"a"}, {"sum(b)"})
-                         .build();
-
-  {
-    auto plan = toSingleNodePlan(logicalPlan);
-
-    auto matcher =
-        core::PlanMatcherBuilder().tableScan().singleAggregation().build();
-
-    ASSERT_TRUE(matcher->match(plan));
-  }
-  {
-    auto plan = toSingleNodePlan(logicalPlan, 2);
-
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan()
-                       .partialAggregation()
-                       .localPartition()
-                       .finalAggregation()
-                       .build();
-
-    ASSERT_TRUE(matcher->match(plan));
-  }
-}
-
 // Verify that optimizer can handle connectors that do not support filter
 // pushdown.
 TEST_F(PlanTest, rejectedFilters) {
