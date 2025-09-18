@@ -854,9 +854,7 @@ void Optimization::joinByHash(
         candidate.join->isBroadcastableType() &&
         isBroadcastableSize(buildPlan, state)) {
       auto* broadcast = make<Repartition>(
-          buildInput,
-          Distribution::broadcast(plan->distribution().distributionType),
-          buildInput->columns());
+          buildInput, Distribution::broadcast(), buildInput->columns());
       buildState.addCost(*broadcast);
       buildInput = broadcast;
     } else {
@@ -1153,7 +1151,7 @@ RelationOpPtr Optimization::placeSingleRowDt(
   memoKey.tables.add(subquery);
   memoKey.columns.unionObjects(subquery->columns);
 
-  const auto broadcast = Distribution::broadcast({});
+  const auto broadcast = Distribution::broadcast();
 
   PlanObjectSet empty;
   bool needsShuffle = false;

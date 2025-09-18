@@ -951,8 +951,8 @@ template <typename ExprType>
 velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const velox::RowTypePtr& inputType,
     const std::vector<ExprType>& keys,
-    const Distribution& distribution) {
-  if (distribution.isBroadcast) {
+    const DistributionType& distributionType) {
+  if (distributionType.isBroadcast) {
     return std::make_shared<BroadcastPartitionFunctionSpec>();
   }
 
@@ -967,9 +967,8 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
         dynamic_cast<const velox::core::FieldAccessTypedExpr*>(key.get())
             ->name()));
   }
-  if (distribution.distributionType.partitionType) {
-    return distribution.distributionType.partitionType->makeSpec(
-        keyIndices, {}, false);
+  if (distributionType.partitionType) {
+    return distributionType.partitionType->makeSpec(keyIndices, {}, false);
   }
   return std::make_shared<HashPartitionFunctionSpec>(
       inputType, std::move(keyIndices));
@@ -1399,7 +1398,7 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       fragment.width = 1;
     } else {
       auto partition = createPartitionFunctionSpec(
-          project->outputType(), keys, Distribution{});
+          project->outputType(), keys, DistributionType{});
       project = std::make_shared<velox::core::LocalPartitionNode>(
           nextId(),
           velox::core::LocalPartitionNode::Type::kRepartition,
@@ -1439,12 +1438,12 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   auto partitioningInput = std::move(project).maybeProject(sourcePlan);
 
   auto partitionFunctionFactory = createPartitionFunctionSpec(
-      partitioningInput->outputType(), keys, distribution);
+      partitioningInput->outputType(), keys, distribution.distributionType);
 
   source.fragment.planNode =
       std::make_shared<velox::core::PartitionedOutputNode>(
           nextId(),
-          distribution.isBroadcast
+          distribution.distributionType.isBroadcast
               ? velox::core::PartitionedOutputNode::Kind::kBroadcast
               : velox::core::PartitionedOutputNode::Kind::kPartitioned,
           keys,

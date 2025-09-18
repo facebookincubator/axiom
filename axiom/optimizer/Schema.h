@@ -123,6 +123,7 @@ struct DistributionType {
   LocusCP locus{nullptr};
   const connector::PartitionType* partitionType{nullptr};
   bool isGather{false};
+  bool isBroadcast{false};
 
   static DistributionType gather() {
     static constexpr DistributionType kGather = {
@@ -153,10 +154,11 @@ struct Distribution {
   }
 
   /// Returns a Distribution for use in a broadcast shuffle.
-  static Distribution broadcast(DistributionType distributionType) {
-    Distribution distribution{distributionType, {}};
-    distribution.isBroadcast = true;
-    return distribution;
+  static Distribution broadcast() {
+    static constexpr DistributionType kBroadcast = {
+        .isBroadcast = true,
+    };
+    return {kBroadcast, {}};
   }
 
   /// Returns a distribution for an end of query gather from last stage
@@ -218,9 +220,6 @@ struct Distribution {
   // index join with lineitem would skip 4000 rows between hits
   // because lineitem has an average of 4 repeats of orderkey.
   float spacing{-1};
-
-  // True if the data is replicated to 'numPartitions'.
-  bool isBroadcast{false};
 };
 
 struct SchemaTable;

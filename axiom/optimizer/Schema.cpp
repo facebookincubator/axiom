@@ -372,7 +372,7 @@ std::optional<bool> Distribution::canBeSamePartition(
     // If one is gather and the other is not, they cannot be copartitioned.
     return false;
   }
-  if (isBroadcast || other.isBroadcast) {
+  if (lhsType.isBroadcast || rhsType.isBroadcast) {
     // If either is broadcast, they are copartitioned,
     // because broadcast data is available everywhere.
     return true;
@@ -449,7 +449,7 @@ void exprsToString(const ExprVector& exprs, std::stringstream& out) {
 } // namespace
 
 std::string Distribution::toString() const {
-  if (isBroadcast) {
+  if (distributionType.isBroadcast) {
     return "broadcast";
   }
 

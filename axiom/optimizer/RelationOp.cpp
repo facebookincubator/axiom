@@ -471,11 +471,18 @@ std::string Repartition::toString(bool recursive, bool detail) const {
   if (recursive) {
     out << input()->toString(true, detail) << " ";
   }
-  out << (distribution().isBroadcast ? "broadcast" : "shuffle") << " ";
-  if (detail && !distribution().isBroadcast) {
-    out << distribution().toString();
-    printCost(detail, out);
-  } else if (detail) {
+  const auto& distributionType = distribution().distributionType;
+  if (distributionType.isBroadcast) {
+    out << "broadcast ";
+  } else if (distributionType.isGather) {
+    out << "gather ";
+  } else {
+    out << "shuffle ";
+    if (detail) {
+      out << distribution().toString() << " ";
+    }
+  }
+  if (detail) {
     printCost(detail, out);
   }
   return out.str();
