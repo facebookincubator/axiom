@@ -361,17 +361,6 @@ class SubfieldTest : public QueryTestBase,
     ASSERT_TRUE(matcher->match(plan));
   }
 
-  core::PlanNodePtr toSingleNodePlan(
-      const lp::LogicalPlanNodePtr& logicalPlan,
-      int32_t numDrivers = 1) {
-    auto plan =
-        planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers})
-            .plan;
-
-    EXPECT_EQ(1, plan->fragments().size());
-    return plan->fragments().at(0).fragment.planNode;
-  }
-
   void createTable(
       const std::string& name,
       const std ::vector<RowVectorPtr>& vectors,

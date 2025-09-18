@@ -56,14 +56,18 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   optimizer::PlanAndStats planVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
       const runner::MultiFragmentPlan::Options& options =
-          {.numWorkers = 4, .numDrivers = 4},
+          {
+              .numWorkers = 4,
+              .numDrivers = 4,
+          },
       std::string* planString = nullptr);
 
   TestResult runVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
       const runner::MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
-          .numDrivers = 4});
+          .numDrivers = 4,
+      });
 
   TestResult runFragmentedPlan(const optimizer::PlanAndStats& plan);
 
@@ -71,7 +75,8 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
       const velox::core::PlanNodePtr& plan,
       runner::MultiFragmentPlan::Options options = {
           .numWorkers = 1,
-          .numDrivers = 4});
+          .numDrivers = 4,
+      });
 
   /// Checks that 'reference' and 'experiment' produce the same result.
   /// @return 'reference' result.
@@ -80,7 +85,20 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
       const optimizer::PlanAndStats& experiment,
       const runner::MultiFragmentPlan::Options& options = {
           .numWorkers = 1,
-          .numDrivers = 4});
+          .numDrivers = 4,
+      });
+
+  void checkSame(
+      const logical_plan::LogicalPlanNodePtr& planNode,
+      const velox::core::PlanNodePtr& referencePlan,
+      const axiom::runner::MultiFragmentPlan::Options& options = {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      });
+
+  velox::core::PlanNodePtr toSingleNodePlan(
+      const logical_plan::LogicalPlanNodePtr& logicalPlan,
+      int32_t numDrivers = 1);
 
   std::shared_ptr<velox::core::QueryCtx> getQueryCtx();
 

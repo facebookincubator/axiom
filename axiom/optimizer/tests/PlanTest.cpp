@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/tests/PlanTest.h"
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/optimizer/tests/ParquetTpchTest.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
+#include "axiom/optimizer/tests/QueryTestBase.h"
+#include "axiom/optimizer/tests/utils/DfFunctions.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -30,6 +32,55 @@ namespace {
 
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
+
+class PlanTest : public test::QueryTestBase {
+ protected:
+  static constexpr auto kTestConnectorId = "test";
+
+  static void SetUpTestCase() {
+    std::string path;
+    if (FLAGS_data_path.empty()) {
+      gTempDirectory = velox::exec::test::TempDirectoryPath::create();
+      path = gTempDirectory->getPath();
+      test::ParquetTpchTest::createTables(path);
+    } else {
+      path = FLAGS_data_path;
+      if (FLAGS_create_dataset) {
+        test::ParquetTpchTest::createTables(path);
+      }
+    }
+
+    LocalRunnerTestBase::testDataPath_ = path;
+    LocalRunnerTestBase::localFileFormat_ = "parquet";
+    LocalRunnerTestBase::SetUpTestCase();
+
+    test::registerDfFunctions();
+  }
+
+  static void TearDownTestCase() {
+    LocalRunnerTestBase::TearDownTestCase();
+    gTempDirectory.reset();
+  }
+
+  void SetUp() override {
+    QueryTestBase::SetUp();
+
+    testConnector_ =
+        std::make_shared<connector::TestConnector>(kTestConnectorId);
+    velox::connector::registerConnector(testConnector_);
+  }
+
+  void TearDown() override {
+    velox::connector::unregisterConnector(kTestConnectorId);
+
+    QueryTestBase::TearDown();
+  }
+
+  inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
+      gTempDirectory;
+
+  std::shared_ptr<connector::TestConnector> testConnector_;
+};
 
 auto gte(const std::string& name, int64_t n) {
   return common::test::singleSubfieldFilter(name, exec::greaterThanOrEqual(n));

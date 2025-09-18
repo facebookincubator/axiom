@@ -64,44 +64,7 @@ class UnnestTest : public test::QueryTestBase {
 
   velox::core::PlanNodePtr toSingleThreadPlan(
       const logical_plan::LogicalPlanNodePtr& logicalPlan) {
-    schema_ = std::make_shared<SchemaResolver>();
-
-    auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 1}).plan;
-
-    EXPECT_EQ(1, plan->fragments().size());
-    return plan->fragments().at(0).fragment.planNode;
-  }
-
-  void checkSame(
-      const logical_plan::LogicalPlanNodePtr& planNode,
-      const velox::core::PlanNodePtr& referencePlan) {
-    VELOX_CHECK_NOT_NULL(planNode);
-    VELOX_CHECK_NOT_NULL(referencePlan);
-
-    const axiom::runner::MultiFragmentPlan::Options options{
-        .numWorkers = 4,
-        .numDrivers = 4,
-    };
-
-    // Distributed plan.
-    auto fragmentedPlan = planVelox(planNode, options);
-    auto referenceResult = assertSame(referencePlan, fragmentedPlan);
-
-    // Single-node multi-threaded plan.
-    auto singleNodePlan = planVelox(
-        planNode, {.numWorkers = 1, .numDrivers = options.numDrivers});
-    auto singleNodeResult = runFragmentedPlan(singleNodePlan);
-
-    velox::exec::test::assertEqualResults(
-        referenceResult.results, singleNodeResult.results);
-
-    // Single-node single-threaded plan.
-    auto singleThreadPlan =
-        planVelox(planNode, {.numWorkers = 1, .numDrivers = 1});
-    auto singleThreadResult = runFragmentedPlan(singleThreadPlan);
-
-    velox::exec::test::assertEqualResults(
-        referenceResult.results, singleThreadResult.results);
+    return toSingleNodePlan(logicalPlan);
   }
 
   RowVectorPtr rowVector_;

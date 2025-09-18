@@ -265,4 +265,63 @@ TestResult QueryTestBase::assertSame(
   return referenceResult;
 }
 
+void QueryTestBase::checkSame(
+    const logical_plan::LogicalPlanNodePtr& planNode,
+    const velox::core::PlanNodePtr& referencePlan,
+    const axiom::runner::MultiFragmentPlan::Options& options) {
+  VELOX_CHECK_NOT_NULL(planNode);
+  VELOX_CHECK_NOT_NULL(referencePlan);
+
+  auto referenceResult = runVelox(referencePlan);
+  SCOPED_TRACE("reference plan:\n" + referencePlan->toString(true, true));
+  {
+    SCOPED_TRACE("single node and single thread");
+    auto plan = planVelox(planNode, {.numWorkers = 1, .numDrivers = 1});
+    SCOPED_TRACE("plan:\n" + plan.plan->toString());
+    auto result = runFragmentedPlan(plan);
+    velox::exec::test::assertEqualResults(
+        referenceResult.results, result.results);
+  }
+  if (options.numDrivers > 1) {
+    SCOPED_TRACE("single node and multi thread");
+    auto plan = planVelox(
+        planNode, {.numWorkers = 1, .numDrivers = options.numDrivers});
+    SCOPED_TRACE("plan:\n" + plan.plan->toString());
+    auto result = runFragmentedPlan(plan);
+    velox::exec::test::assertEqualResults(
+        referenceResult.results, result.results);
+  }
+  if (options.numWorkers > 1) {
+    SCOPED_TRACE("multi node and single thread");
+    auto plan = planVelox(
+        planNode, {.numWorkers = options.numWorkers, .numDrivers = 1});
+    SCOPED_TRACE("plan:\n" + plan.plan->toString());
+    auto result = runFragmentedPlan(plan);
+    velox::exec::test::assertEqualResults(
+        referenceResult.results, result.results);
+  }
+  if (options.numWorkers > 1 && options.numDrivers > 1) {
+    SCOPED_TRACE("multi node and multi thread");
+    auto plan = planVelox(
+        planNode,
+        {.numWorkers = options.numWorkers, .numDrivers = options.numDrivers});
+    SCOPED_TRACE("plan:\n" + plan.plan->toString());
+    auto result = runFragmentedPlan(plan);
+    velox::exec::test::assertEqualResults(
+        referenceResult.results, result.results);
+  }
+}
+
+velox::core::PlanNodePtr QueryTestBase::toSingleNodePlan(
+    const logical_plan::LogicalPlanNodePtr& logicalPlan,
+    int32_t numDrivers) {
+  schema_ = std::make_shared<SchemaResolver>();
+
+  auto plan =
+      planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers}).plan;
+
+  EXPECT_EQ(1, plan->fragments().size());
+  return plan->fragments().at(0).fragment.planNode;
+}
+
 } // namespace facebook::axiom::optimizer::test
