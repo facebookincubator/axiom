@@ -368,8 +368,9 @@ std::optional<bool> Distribution::canBeSamePartition(
     // Different locus cannot be copartitioned.
     return false;
   }
-  if (lhsType.isGather != rhsType.isGather) {
-    // If one is gather and the other is not, they cannot be copartitioned.
+  if (lhsType.isGather || rhsType.isGather) {
+    // If either is gather, they cannot be copartitioned,
+    // because we don't know where it will be.
     return false;
   }
   if (lhsType.isBroadcast || rhsType.isBroadcast) {

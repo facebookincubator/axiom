@@ -118,19 +118,12 @@ using LocusCP = const Locus*;
 
 /// Distribution of data.
 /// 'partitionType' is nullptr if the data is not partitioned
-/// by some specific functions.
+/// by some connector specific function.
 struct DistributionType {
   LocusCP locus{nullptr};
   const connector::PartitionType* partitionType{nullptr};
   bool isGather{false};
   bool isBroadcast{false};
-
-  static DistributionType gather() {
-    static constexpr DistributionType kGather = {
-        .isGather = true,
-    };
-    return kGather;
-  }
 };
 
 // Describes output of relational operator. If base table, cardinality is
@@ -167,8 +160,11 @@ struct Distribution {
   static Distribution gather(
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {}) {
+    static constexpr DistributionType kGather = {
+        .isGather = true,
+    };
     return {
-        DistributionType::gather(),
+        kGather,
         {},
         std::move(orderKeys),
         std::move(orderTypes),
