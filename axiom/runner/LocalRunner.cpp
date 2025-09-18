@@ -409,7 +409,9 @@ std::string LocalRunner::printPlanWithStats(
 
   return plan_->toString(
       true, [&](const auto& planNodeId, const auto& indentation, auto& out) {
-        addContext(planNodeId, indentation, out);
+        if (addContext) {
+          addContext(planNodeId, indentation, out);
+        }
 
         auto statsIt = planNodeStats.find(planNodeId);
         if (statsIt != planNodeStats.end()) {
