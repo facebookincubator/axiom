@@ -177,6 +177,26 @@ class ToTextVisitor : public PlanNodeVisitor {
     appendInputs(node, myContext);
   }
 
+  void visit(const TableWriteNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& myContext = static_cast<Context&>(context);
+
+    myContext.out << makeIndent(myContext.indent) << "- TableWrite:";
+    appendOutputType(node, myContext);
+    myContext.out << std::endl;
+
+    const auto size = node.columnNames().size();
+    const auto indent = makeIndent(myContext.indent + 2);
+
+    for (size_t i = 0; i < size; ++i) {
+      myContext.out << indent << node.columnNames()[i] << " := "
+                    << ExprPrinter::toText(*node.columnExpressions()[i])
+                    << std::endl;
+    }
+
+    appendInputs(node, myContext);
+  }
+
  private:
   static std::string makeIndent(size_t size) {
     return std::string(size * 2, ' ');
@@ -219,36 +239,36 @@ class ToTextVisitor : public PlanNodeVisitor {
   }
 };
 
-std::string truncate(const std::string& str, size_t maxLength = 50) {
+std::string truncate(std::string_view str, size_t maxLength = 50) {
   if (str.size() > maxLength) {
-    return str.substr(0, maxLength) + "...";
+    return fmt::format("{}...", str.substr(0, maxLength));
   }
-  return str;
+  return std::string{str};
 }
 
 class ExprStats : public ExprVisitorContext {
  public:
-  std::unordered_map<std::string, int64_t>& functionCounts() {
+  folly::F14FastMap<std::string, int64_t>& functionCounts() {
     return functionCounts_;
   }
 
-  const std::unordered_map<std::string, int64_t>& functionCounts() const {
+  const folly::F14FastMap<std::string, int64_t>& functionCounts() const {
     return functionCounts_;
   }
 
-  std::unordered_map<std::string, int64_t>& expressionCounts() {
+  folly::F14FastMap<std::string, int64_t>& expressionCounts() {
     return expressionCounts_;
   }
 
-  const std::unordered_map<std::string, int64_t>& expressionCounts() const {
+  const folly::F14FastMap<std::string, int64_t>& expressionCounts() const {
     return expressionCounts_;
   }
 
-  std::unordered_map<velox::TypePtr, int64_t>& constantCounts() {
+  folly::F14FastMap<velox::TypePtr, int64_t>& constantCounts() {
     return constantCounts_;
   }
 
-  const std::unordered_map<velox::TypePtr, int64_t>& constantCounts() const {
+  const folly::F14FastMap<velox::TypePtr, int64_t>& constantCounts() const {
     return constantCounts_;
   }
 
@@ -267,9 +287,9 @@ class ExprStats : public ExprVisitorContext {
   }
 
  private:
-  std::unordered_map<std::string, int64_t> functionCounts_;
-  std::unordered_map<std::string, int64_t> expressionCounts_;
-  std::unordered_map<velox::TypePtr, int64_t> constantCounts_;
+  folly::F14FastMap<std::string, int64_t> functionCounts_;
+  folly::F14FastMap<std::string, int64_t> expressionCounts_;
+  folly::F14FastMap<velox::TypePtr, int64_t> constantCounts_;
 };
 
 class CollectExprStatsPlanNodeVisitor : public PlanNodeVisitor {
@@ -344,6 +364,13 @@ class CollectExprStatsPlanNodeVisitor : public PlanNodeVisitor {
       const override {
     auto& stats = static_cast<Context&>(context).stats;
     collectExprStats(node.unnestExpressions(), stats);
+    visitInputs(node, context);
+  }
+
+  void visit(const TableWriteNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& stats = static_cast<Context&>(context).stats;
+    collectExprStats(node.columnExpressions(), stats);
     visitInputs(node, context);
   }
 
@@ -611,6 +638,24 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
     appendNode(node, context);
   }
 
+  void visit(const TableWriteNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& myContext = static_cast<Context&>(context);
+    appendHeader(node, myContext);
+
+    if (!myContext.skeletonOnly) {
+      const auto indent = makeIndent(myContext.indent + 3);
+      myContext.out << indent << "table: " << node.tableName() << std::endl;
+      myContext.out << indent << "connector: " << node.connectorId()
+                    << std::endl;
+      myContext.out << indent << "columns: " << node.columnNames().size()
+                    << std::endl;
+      appendExpressions(node.columnExpressions(), myContext);
+    }
+
+    appendInputs(node, myContext);
+  }
+
  private:
   static std::string makeIndent(size_t size) {
     return std::string(size * 2, ' ');
@@ -622,7 +667,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   }
 
   void appendNode(
-      const std::string& name,
+      std::string_view name,
       const LogicalPlanNode& node,
       PlanNodeVisitorContext& context) const {
     auto& myContext = static_cast<Context&>(context);
@@ -639,7 +684,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   }
 
   void appendHeader(
-      const std::string& name,
+      std::string_view name,
       const LogicalPlanNode& node,
       Context& context) const {
     context.out << makeIndent(context.indent) << "- " << name << " ["
@@ -676,7 +721,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   //    constants: VARCHAR: 4
   static void appendExpressionStats(
       const ExprStats& stats,
-      const std::string& indent,
+      std::string_view indent,
       Context& context) {
     context.out << indent << "expressions: ";
     appendCounts(stats.expressionCounts(), context.out);
@@ -690,7 +735,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
 
     if (!stats.constantCounts().empty()) {
       context.out << indent << "constants: ";
-      std::unordered_map<std::string, int64_t> counts;
+      folly::F14FastMap<std::string, int64_t> counts;
       for (const auto& [type, count] : stats.constantCounts()) {
         counts[type->toSummaryString(
             {.maxChildren = (uint32_t)context.options.maxChildTypes})] += count;
@@ -704,7 +749,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   // @param sortByKey Indicates whether to sort counts by key asc (default) or
   // 'count' desc.
   static void appendCounts(
-      const std::unordered_map<std::string, int64_t>& counts,
+      const folly::F14FastMap<std::string, int64_t>& counts,
       std::ostream& text,
       bool sortByKey = true) {
     std::vector<std::pair<std::string, int64_t>> sortedCounts;
@@ -771,7 +816,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   }
 
   static void appendProjections(
-      const std::string& indent,
+      std::string_view indent,
       const ProjectNode& node,
       const std::vector<size_t>& projections,
       size_t cnt,

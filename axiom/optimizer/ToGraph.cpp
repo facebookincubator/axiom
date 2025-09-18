@@ -174,7 +174,7 @@ void ToGraph::translateConjuncts(const lp::ExprPtr& input, ExprVector& flat) {
 
 ExprCP ToGraph::tryFoldConstant(
     const velox::TypePtr& returnType,
-    const std::string& callName,
+    std::string_view callName,
     const ExprVector& literals) {
   try {
     Value value(toType(returnType), 1);
@@ -264,29 +264,37 @@ void ToGraph::getExprForField(
     lp::ExprPtr& resultExpr,
     ColumnCP& resultColumn,
     const lp::LogicalPlanNode*& context) {
-  for (;;) {
-    auto& name = field->asUnchecked<lp::InputReferenceExpr>()->name();
+  while (context) {
+    const auto& name = field->asUnchecked<lp::InputReferenceExpr>()->name();
     auto ordinal = context->outputType()->getChildIdx(name);
     if (context->is(lp::NodeKind::kProject)) {
       const auto* project = context->asUnchecked<lp::ProjectNode>();
       auto& def = project->expressions()[ordinal];
+      context = context->inputAt(0).get();
       if (def->isInputReference()) {
         const auto* innerField = def->asUnchecked<lp::InputReferenceExpr>();
-        context = context->inputAt(0).get();
         field = innerField;
         continue;
       }
       resultExpr = def;
-      context = project->inputAt(0).get();
       return;
     }
 
     const auto& sources = context->inputs();
-    if (sources.empty()) {
-      auto leaf = findLeaf(context);
+
+    const bool checkInContext = [&] {
+      if (context->is(lp::NodeKind::kUnnest)) {
+        const auto* unnest = context->asUnchecked<lp::UnnestNode>();
+        return ordinal >= unnest->onlyInput()->outputType()->size();
+      }
+      return sources.empty();
+    }();
+
+    if (checkInContext) {
+      const auto* leaf = findLeaf(context);
       auto it = renames_.find(name);
       VELOX_CHECK(it != renames_.end());
-      auto maybeColumn = it->second;
+      const auto* maybeColumn = it->second;
       VELOX_CHECK(maybeColumn->is(PlanType::kColumnExpr));
       resultColumn = maybeColumn->as<Column>();
       resultExpr = nullptr;
@@ -294,7 +302,8 @@ void ToGraph::getExprForField(
       const auto* relation = resultColumn->relation();
       VELOX_CHECK_NOT_NULL(relation);
       if (relation->is(PlanType::kTableNode) ||
-          relation->is(PlanType::kValuesTableNode)) {
+          relation->is(PlanType::kValuesTableNode) ||
+          relation->is(PlanType::kUnnestTableNode)) {
         VELOX_CHECK(leaf == relation);
       }
       return;
@@ -308,6 +317,7 @@ void ToGraph::getExprForField(
       }
     }
   }
+  VELOX_FAIL();
 }
 
 std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
@@ -833,7 +843,7 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
 
   if (metadata->explode) {
     auto map = metadata->explode(call, paths);
-    std::unordered_map<PathCP, ExprCP> translated;
+    folly::F14FastMap<PathCP, ExprCP> translated;
     for (const auto& [path, expr] : map) {
       translated[path] = translateExpr(expr);
     }
@@ -859,7 +869,7 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
   return callExpr;
 }
 
-ExprCP ToGraph::translateColumn(const std::string& name) {
+ExprCP ToGraph::translateColumn(std::string_view name) {
   auto it = renames_.find(name);
   if (it != renames_.end()) {
     return it->second;
@@ -873,6 +883,63 @@ ExprVector ToGraph::translateColumns(const std::vector<lp::ExprPtr>& source) {
     result[i] = translateExpr(source[i]); // NOLINT
   }
   return result;
+}
+
+void ToGraph::translateUnnest(const lp::UnnestNode& unnest, bool isNewDt) {
+  if (unnest.ordinalityName().has_value()) {
+    VELOX_NYI(
+        "Unnest ordinality column is not supported in Verax optimizer. Unnest node: {}",
+        unnest.id());
+  }
+  PlanObjectCP leftTable = nullptr;
+  ExprVector unnestExprs;
+  unnestExprs.reserve(unnest.unnestExpressions().size());
+  float maxCardinality = 0;
+  for (size_t i = 0; i < unnest.unnestExpressions().size(); ++i) {
+    const auto* unnestExpr = translateExpr(unnest.unnestExpressions()[i]);
+    unnestExprs.push_back(unnestExpr);
+    if (i == 0) {
+      leftTable = unnestExpr->singleTable();
+    } else if (leftTable && leftTable != unnestExpr->singleTable()) {
+      leftTable = nullptr;
+    }
+    maxCardinality = std::max(maxCardinality, unnestExpr->value().cardinality);
+  }
+
+  if (!leftTable) {
+    leftTable = currentDt_;
+    if (!isNewDt) {
+      finalizeDt(*unnest.onlyInput());
+    }
+  }
+
+  auto* unnestTable = make<UnnestTable>();
+  unnestTable->cname = newCName("ut");
+  unnestTable->columns.reserve(
+      unnest.outputType()->size() - unnest.onlyInput()->outputType()->size());
+  for (size_t i = 0; i < unnestExprs.size(); ++i) {
+    const auto* unnestExpr = unnestExprs[i];
+    const auto& unnestedNames = unnest.unnestedNames()[i];
+    for (size_t j = 0; j < unnestedNames.size(); ++j) {
+      const auto* unnestedType = unnestExpr->value().type->childAt(j).get();
+      // TODO Value cardinality also should be multiplied by the max from all
+      // columns average expected number of elements per unnested element.
+      // Other Value properties also should be computed.
+      Value value{unnestedType, maxCardinality};
+      const auto* columnName = toName(unnestedNames[j]);
+      auto* column = make<Column>(columnName, unnestTable, value, columnName);
+      unnestTable->columns.push_back(column);
+      renames_[columnName] = column;
+    }
+  }
+
+  auto* edge =
+      JoinEdge::makeUnnest(leftTable, unnestTable, std::move(unnestExprs));
+
+  planLeaves_[&unnest] = unnestTable;
+  currentDt_->tables.push_back(unnestTable);
+  currentDt_->tableSet.add(unnestTable);
+  currentDt_->joins.push_back(edge);
 }
 
 AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
@@ -1036,7 +1103,10 @@ void ToGraph::translateJoin(const lp::JoinNode& join) {
   const auto joinType = join.joinType();
   const bool isInner = joinType == lp::JoinType::kInner;
 
-  makeQueryGraph(*joinLeft, allow(PlanType::kJoinNode));
+  // TODO Allow mixing Unnest with Join in a single DT.
+  // https://github.com/facebookexperimental/verax/issues/286
+  const auto allowedInDt = allow(PlanType::kJoinNode);
+  makeQueryGraph(*joinLeft, allowedInDt);
 
   // For an inner join a join tree on the right can be flattened, for all other
   // kinds it must be kept together in its own dt.
@@ -1048,7 +1118,7 @@ void ToGraph::translateJoin(const lp::JoinNode& join) {
 
     isNondeterministicWrap_ = false;
   }
-  makeQueryGraph(*joinRight, isInner ? allow(PlanType::kJoinNode) : 0);
+  makeQueryGraph(*joinRight, isInner ? allowedInDt : 0);
 
   if (previousDt) {
     finalizeDt(*joinRight, previousDt);
@@ -1190,7 +1260,7 @@ PlanObjectP ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
   optimization->filterUpdated(baseTable, false);
 
   ColumnVector top;
-  std::unordered_map<ColumnCP, velox::TypePtr> map;
+  folly::F14FastMap<ColumnCP, velox::TypePtr> map;
   auto scanType = optimization->subfieldPushdownScanType(
       baseTable, baseTable->columns, top, map);
 
@@ -1448,7 +1518,7 @@ DerivedTableP ToGraph::translateUnion(
     bool isTopLevel,
     bool& isLeftLeaf) {
   auto initialRenames = renames_;
-  std::vector<DerivedTableP, QGAllocator<DerivedTable*>> children;
+  QGVector<DerivedTableP> children;
   bool isFirst = true;
   DerivedTableP previousDt = currentDt_;
   for (auto& input : set.inputs()) {
@@ -1553,7 +1623,7 @@ uint64_t makeDtIf(uint64_t mask, PlanType op) {
 PlanObjectP ToGraph::makeQueryGraph(
     const lp::LogicalPlanNode& node,
     uint64_t allowedInDt) {
-  ToGraphContext ctx(&node);
+  ToGraphContext ctx{&node};
   velox::ExceptionContextSetter exceptionContext{makeExceptionContext(&ctx)};
   switch (node.kind()) {
     case lp::NodeKind::kValues:
@@ -1661,7 +1731,26 @@ PlanObjectP ToGraph::makeQueryGraph(
       currentDt_->tableSet.add(setDt);
       return currentDt_;
     }
-    case lp::NodeKind::kUnnest:
+
+    case lp::NodeKind::kUnnest: {
+      if (!contains(allowedInDt, PlanType::kUnnestTableNode)) {
+        return wrapInDt(node);
+      }
+
+      // Multiple unnest is allowed in a DT.
+      // If arrives after groupBy, orderBy, limit then starts a new DT.
+      const auto& input = *node.onlyInput();
+      makeQueryGraph(input, allowedInDt);
+
+      const bool isNewDt = currentDt_->hasAggregation() ||
+          currentDt_->hasOrderBy() || currentDt_->hasLimit();
+      if (isNewDt) {
+        finalizeDt(input);
+      }
+      translateUnnest(*node.asUnchecked<lp::UnnestNode>(), isNewDt);
+      return currentDt_;
+    }
+
     default:
       VELOX_NYI(
           "Unsupported PlanNode {}", lp::NodeKindName::toName(node.kind()));

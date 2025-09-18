@@ -114,10 +114,10 @@ std::pair<std::vector<Step>, int32_t> rowConstructorSubfield(
   return std::make_pair(newFields, idx);
 }
 
-std::unordered_map<PathCP, lp::ExprPtr> rowConstructorExplode(
+folly::F14FastMap<PathCP, lp::ExprPtr> rowConstructorExplode(
     const lp::CallExpr* call,
     std::vector<PathCP>& paths) {
-  std::unordered_map<PathCP, lp::ExprPtr> result;
+  folly::F14FastMap<PathCP, lp::ExprPtr> result;
   for (auto& path : paths) {
     const auto& steps = path->steps();
     if (steps.empty()) {

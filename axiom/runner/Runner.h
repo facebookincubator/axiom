@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/common/Enums.h"
+#include "axiom/common/Enums.h"
 #include "velox/exec/TaskStats.h"
 
 /// Base classes for multifragment Velox query execution.
@@ -32,7 +32,7 @@ class Runner {
  public:
   enum class State { kInitialized, kRunning, kFinished, kError, kCancelled };
 
-  VELOX_DECLARE_EMBEDDED_ENUM_NAME(State);
+  AXIOM_DECLARE_EMBEDDED_ENUM_NAME(State);
 
   virtual ~Runner() = default;
 
@@ -64,12 +64,4 @@ class Runner {
 
 } // namespace facebook::axiom::runner
 
-template <>
-struct fmt::formatter<facebook::axiom::runner::Runner::State>
-    : formatter<std::string_view> {
-  auto format(facebook::axiom::runner::Runner::State state, format_context& ctx)
-      const {
-    return formatter<std::string_view>::format(
-        facebook::axiom::runner::Runner::toName(state), ctx);
-  }
-};
+AXIOM_EMBEDDED_ENUM_FORMATTER(facebook::axiom::runner::Runner, State);

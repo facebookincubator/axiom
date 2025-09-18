@@ -58,24 +58,33 @@ TEST_F(TpchConnectorMetadataTest, findAllTables) {
 }
 
 TEST_F(TpchConnectorMetadataTest, findAllScaleFactors) {
-  std::vector<int> scaleFactors = {
-      1, 100, 1000, 10000, 100000, 300, 3000, 30000};
-  auto tableName = "customer";
+  const std::vector<int> scaleFactors = {
+      1, 10, 100, 1000, 10000, 100000, 30, 300, 3000, 30000};
+
   for (const auto& scaleFactor : scaleFactors) {
-    auto qualifiedName = fmt::format("sf{}.{}", scaleFactor, tableName);
+    const auto qualifiedName = fmt::format("sf{}.customer", scaleFactor);
+
     auto table = metadata_->findTable(qualifiedName);
     ASSERT_NE(table, nullptr);
     EXPECT_EQ(table->name(), qualifiedName);
+
     auto tpchTable = std::dynamic_pointer_cast<const TpchTable>(table);
     ASSERT_NE(tpchTable, nullptr);
-    EXPECT_DOUBLE_EQ(tpchTable->getScaleFactor(), scaleFactor);
+    EXPECT_DOUBLE_EQ(tpchTable->scaleFactor(), scaleFactor);
   }
 }
 
 TEST_F(TpchConnectorMetadataTest, invalidLookups) {
   auto table = metadata_->findTable("invalidtable");
   EXPECT_EQ(table, nullptr);
+
   table = metadata_->findTable("invalidschema.lineitem");
+  EXPECT_EQ(table, nullptr);
+
+  table = metadata_->findTable("sflarge.customer");
+  EXPECT_EQ(table, nullptr);
+
+  table = metadata_->findTable("sf000.supplier");
   EXPECT_EQ(table, nullptr);
 }
 

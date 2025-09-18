@@ -36,7 +36,7 @@ namespace facebook::axiom::connector::hive {
 std::vector<PartitionHandlePtr> LocalHiveSplitManager::listPartitions(
     const velox::connector::ConnectorTableHandlePtr& tableHandle) {
   // All tables are unpartitioned.
-  std::unordered_map<std::string, std::optional<std::string>> empty;
+  folly::F14FastMap<std::string, std::optional<std::string>> empty;
   return {std::make_shared<HivePartitionHandle>(empty, std::nullopt)};
 }
 
@@ -210,13 +210,13 @@ void LocalHiveConnectorMetadata::makeConnectorQueryCtx() {
       queryCtx_->queryConfig().sessionTimezone());
 }
 
-void LocalHiveConnectorMetadata::readTables(const std::string& path) {
+void LocalHiveConnectorMetadata::readTables(std::string_view path) {
   for (auto const& dirEntry : fs::directory_iterator{path}) {
     if (!dirEntry.is_directory() ||
         dirEntry.path().filename().c_str()[0] == '.') {
       continue;
     }
-    loadTable(dirEntry.path().filename(), dirEntry.path());
+    loadTable(dirEntry.path().filename().native(), dirEntry.path());
   }
 }
 
@@ -361,9 +361,10 @@ void LocalTable::makeDefaultLayout(
 }
 
 std::shared_ptr<LocalTable> LocalHiveConnectorMetadata::createTableFromSchema(
-    const std::string& name,
-    const std::string& path) {
-  auto jsons = axiom::readConcatenatedDynamicsFromFile(path + "/.schema");
+    std::string_view name,
+    std::string_view path) {
+  auto jsons =
+      axiom::readConcatenatedDynamicsFromFile(fmt::format("{}/.schema", path));
   if (jsons.empty()) {
     return nullptr;
   }
@@ -389,13 +390,15 @@ std::shared_ptr<LocalTable> LocalHiveConnectorMetadata::createTableFromSchema(
     partition.push_back(columns.back().get());
   }
 
-  std::unordered_map<std::string, std::string> options;
+  folly::F14FastMap<std::string, std::string> options;
   if (json.count("compressionKind")) {
     options["compression_kind"] = json["compressionKind"].asString();
   }
 
   auto table = std::make_shared<LocalTable>(
-      name, ROW(std::move(names), std::move(types)), std::move(options));
+      std::string{name},
+      ROW(std::move(names), std::move(types)),
+      std::move(options));
   tables_[name] = table;
 
   std::vector<const Column*> columnOrder;
@@ -457,7 +460,7 @@ namespace {
 
 // Extracts the digits after the last / in the file path and returns them as an
 // integer.
-int32_t extractDigitsAfterLastSlash(const std::string& path) {
+int32_t extractDigitsAfterLastSlash(std::string_view path) {
   size_t lastSlashPos = path.find_last_of('/');
   VELOX_CHECK(lastSlashPos != std::string::npos, "No slash found in {}", path);
   std::string digits;
@@ -477,8 +480,8 @@ int32_t extractDigitsAfterLastSlash(const std::string& path) {
 }
 
 void listFiles(
-    const std::string& path,
-    std::function<int32_t(const std::string&)> parseBucketNumber,
+    std::string_view path,
+    std::function<int32_t(std::string_view)> parseBucketNumber,
     int32_t prefixSize,
     std::vector<std::unique_ptr<const FileInfo>>& result) {
   for (auto const& dirEntry : fs::directory_iterator{path}) {
@@ -517,18 +520,18 @@ void listFiles(
 } // namespace
 
 void LocalHiveConnectorMetadata::loadTable(
-    const std::string& tableName,
+    std::string_view tableName,
     const fs::path& tablePath) {
   // open each file in the directory and check their type and add up the row
   // counts.
-  auto table = createTableFromSchema(tableName, tablePath);
+  auto table = createTableFromSchema(tableName, tablePath.native());
 
   velox::RowTypePtr tableType;
   if (table) {
     tableType = table->type();
   }
 
-  std::function<int32_t(const std::string&)> parseBucketNumber = nullptr;
+  std::function<int32_t(std::string_view)> parseBucketNumber = nullptr;
   if (table && !table->layouts()[0]->partitionColumns().empty()) {
     parseBucketNumber = extractDigitsAfterLastSlash;
   }
@@ -566,7 +569,8 @@ void LocalHiveConnectorMetadata::loadTable(
     if (it != tables_.end()) {
       table = it->second;
     } else {
-      tables_[tableName] = std::make_shared<LocalTable>(tableName, tableType);
+      tables_[tableName] =
+          std::make_shared<LocalTable>(std::string{tableName}, tableType);
       table = tables_[tableName];
     }
 
@@ -732,7 +736,7 @@ void LocalTable::sampleNumDistincts(
   }
 }
 
-const std::unordered_map<std::string, const Column*>& LocalTable::columnMap()
+const folly::F14FastMap<std::string, const Column*>& LocalTable::columnMap()
     const {
   std::lock_guard<std::mutex> l(mutex_);
   if (columns_.empty()) {
@@ -744,14 +748,14 @@ const std::unordered_map<std::string, const Column*>& LocalTable::columnMap()
   return exportedColumns_;
 }
 
-TablePtr LocalHiveConnectorMetadata::findTable(const std::string& name) {
+TablePtr LocalHiveConnectorMetadata::findTable(std::string_view name) {
   ensureInitialized();
   std::lock_guard<std::mutex> l(mutex_);
   return findTableLocked(name);
 }
 
 std::shared_ptr<LocalTable> LocalHiveConnectorMetadata::findTableLocked(
-    const std::string& name) const {
+    std::string_view name) const {
   auto it = tables_.find(name);
   if (it == tables_.end()) {
     return nullptr;
@@ -805,14 +809,14 @@ void createDir(const std::string& path) {
 void LocalHiveConnectorMetadata::createTable(
     const std::string& tableName,
     const velox::RowTypePtr& rowType,
-    const std::unordered_map<std::string, std::string>& options,
+    const folly::F14FastMap<std::string, std::string>& options,
     const ConnectorSessionPtr& session,
     bool errorIfExists,
     TableKind kind) {
   VELOX_CHECK_EQ(kind, TableKind::kTable);
   validateOptions(options);
   ensureInitialized();
-  auto path = dataPath() + "/" + tableName;
+  auto path = fmt::format("{}/{}", dataPath(), tableName);
   if (dirExists(path)) {
     if (errorIfExists) {
       VELOX_USER_FAIL("Table {} already exists", tableName);

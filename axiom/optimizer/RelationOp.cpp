@@ -53,7 +53,7 @@ const auto& relTypeNames() {
 
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(RelType, relTypeNames)
+AXIOM_DEFINE_ENUM_NAME(RelType, relTypeNames)
 
 const Value& RelationOp::value(ExprCP expr) const {
   // Compute new Value by applying restrictions from operators
@@ -248,19 +248,19 @@ const char* joinTypeLabel(velox::core::JoinType type) {
   }
 }
 
-QGstring sanitizeHistoryKey(std::string in) {
+QGString sanitizeHistoryKey(std::string in) {
   for (auto i = 0; i < in.size(); ++i) {
     unsigned char c = in[i];
     if (c < 32 || c > 127 || c == '{' || c == '}' || c == '"') {
       in[i] = '?';
     }
   }
-  return QGstring(in);
+  return QGString(in);
 }
 
 } // namespace
 
-const QGstring& TableScan::historyKey() const {
+const QGString& TableScan::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
@@ -312,7 +312,7 @@ Values::Values(const ValuesTable& valuesTable, ColumnVector columns)
   updateLeafCost(cardinality, columns_, cost_);
 }
 
-const QGstring& Values::historyKey() const {
+const QGString& Values::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
@@ -386,7 +386,7 @@ std::pair<std::string, std::string> joinKeysString(
 }
 } // namespace
 
-const QGstring& Join::historyKey() const {
+const QGString& Join::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
@@ -481,6 +481,26 @@ std::string Repartition::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+namespace {
+ColumnVector concatColumns(const ColumnVector& lhs, const ColumnVector& rhs) {
+  ColumnVector result;
+  result.reserve(lhs.size() + rhs.size());
+  result.insert(result.end(), lhs.begin(), lhs.end());
+  result.insert(result.end(), rhs.begin(), rhs.end());
+  return result;
+}
+} // namespace
+
+Unnest::Unnest(
+    RelationOpPtr input,
+    ColumnVector replicateColumns,
+    ExprVector unnestExprs,
+    ColumnVector unnestedColumns)
+    : RelationOp{RelType::kUnnest, input, input->distribution(), concatColumns(replicateColumns, unnestedColumns)},
+      replicateColumns{std::move(replicateColumns)},
+      unnestExprs{std::move(unnestExprs)},
+      unnestedColumns{std::move(unnestedColumns)} {}
+
 Aggregation::Aggregation(
     RelationOpPtr input,
     ExprVector groupingKeysVector,
@@ -516,7 +536,26 @@ Aggregation::Aggregation(
   cost_.totalBytes = nOut * rowBytes;
 }
 
-const QGstring& Aggregation::historyKey() const {
+std::string Unnest::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (recursive) {
+    out << input()->toString(true, detail) << " ";
+  }
+  out << "unnest ";
+  printCost(detail, out);
+  if (detail) {
+    out << "replicate columns: "
+        << itemsToString(replicateColumns.data(), replicateColumns.size());
+    out << ", unnest exprs: "
+        << itemsToString(unnestExprs.data(), unnestExprs.size());
+    out << ", unnested columns: "
+        << itemsToString(unnestedColumns.data(), unnestedColumns.size())
+        << std::endl;
+  }
+  return out.str();
+}
+
+const QGString& Aggregation::historyKey() const {
   using velox::core::AggregationNode;
   if (step == AggregationNode::Step::kPartial ||
       step == AggregationNode::Step::kIntermediate) {
@@ -602,7 +641,7 @@ Filter::Filter(RelationOpPtr input, ExprVector exprs)
   cost_.fanout = std::pow(0.8F, numExprs);
 }
 
-const QGstring& Filter::historyKey() const {
+const QGString& Filter::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
@@ -770,11 +809,11 @@ UnionAll::UnionAll(RelationOpPtrVector inputsVector)
   // TODO Fill in cost_.unitCost and others.
 }
 
-const QGstring& UnionAll::historyKey() const {
+const QGString& UnionAll::historyKey() const {
   if (!key_.empty()) {
     return key_;
   }
-  std::vector<QGstring> keys;
+  std::vector<QGString> keys;
   for (const auto& in : inputs) {
     keys.push_back(in->historyKey());
   }

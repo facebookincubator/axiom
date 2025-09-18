@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "axiom/common/Enums.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/Connector.h"
 #include "velox/type/Subfield.h"
@@ -156,7 +157,7 @@ class Column {
 /// Describes the kind of table, e.g. durable vs. temporary.
 enum class TableKind { kTable, kTempTable };
 
-VELOX_DECLARE_ENUM_NAME(TableKind);
+AXIOM_DECLARE_ENUM_NAME(TableKind);
 
 class Table;
 
@@ -267,7 +268,7 @@ class TableLayout {
       std::vector<ColumnStatistics>* statistics = nullptr) const = 0;
 
   /// Return a column with the matching name. Returns nullptr if not found.
-  const Column* findColumn(const std::string& name) const;
+  const Column* findColumn(std::string_view name) const;
 
  private:
   const std::string name_;
@@ -294,7 +295,7 @@ class Table {
       std::string name,
       velox::RowTypePtr type,
       TableKind kind = TableKind::kTable,
-      std::unordered_map<std::string, std::string> options = {})
+      folly::F14FastMap<std::string, std::string> options = {})
       : name_(std::move(name)),
         type_(std::move(type)),
         kind_(kind),
@@ -320,10 +321,10 @@ class Table {
   /// non-owned columns. Implementations may have different Column
   /// implementations with different options, so we do not return the
   /// implementation's columns but an abstract form.
-  virtual const std::unordered_map<std::string, const Column*>& columnMap()
+  virtual const folly::F14FastMap<std::string, const Column*>& columnMap()
       const = 0;
 
-  const Column* findColumn(const std::string& name) const {
+  const Column* findColumn(std::string_view name) const {
     const auto& map = columnMap();
     auto it = map.find(name);
     return it == map.end() ? nullptr : it->second;
@@ -334,7 +335,7 @@ class Table {
   /// Returns an estimate of the number of rows in 'this'.
   virtual uint64_t numRows() const = 0;
 
-  virtual const std::unordered_map<std::string, std::string>& options() const {
+  virtual const folly::F14FastMap<std::string, std::string>& options() const {
     return options_;
   }
 
@@ -347,7 +348,7 @@ class Table {
 
   const TableKind kind_;
 
-  const std::unordered_map<std::string, std::string> options_;
+  const folly::F14FastMap<std::string, std::string> options_;
 };
 
 using TablePtr = std::shared_ptr<const Table>;
@@ -436,7 +437,7 @@ struct TargetSubfield {
   velox::Variant defaultValue;
 };
 
-using SubfieldMapping = std::unordered_map<
+using SubfieldMapping = folly::F14FastMap<
     SubfieldPtr,
     TargetSubfield,
     SubfieldPtrHasher,
@@ -509,21 +510,21 @@ enum class WriteKind {
   // Rows are added and all columns must be specified for the TableWriter. This
   // covers insert, create table and replacing a Hive partition and any other
   // use that adds whole rows.
-  kInsert,
+  kInsert = 1,
 
   // Individual rows are deleted. Only row ids as per
   // ConnectorMetadata::rowIdHandles() are passed to the TableWriter.
-  kDelete,
+  kDelete = 2,
 
   // Column values in individual rows are changed. The TableWriter
   // gets first the row ids as per ConnectorMetadata::rowIdHandles()
   // and then new values for the columns being changed. The new values
   // may overlap with row ids if the row id is a set of primary key
   // columns.
-  kUpdate
+  kUpdate = 3,
 };
 
-VELOX_DECLARE_ENUM_NAME(WriteKind);
+AXIOM_DECLARE_ENUM_NAME(WriteKind);
 
 class ConnectorMetadata {
  public:
@@ -590,7 +591,7 @@ class ConnectorMetadata {
   /// reference ot the Table object at any time, and callers are required
   /// to retain a reference to the Table to prevent it from being reclaimed
   /// in the case of Table removal by the ConnectorMetadata.
-  virtual TablePtr findTable(const std::string& name) = 0;
+  virtual TablePtr findTable(std::string_view name) = 0;
 
   /// Returns a SplitManager for split enumeration for TableLayouts accessed
   /// through 'this'.
@@ -620,7 +621,7 @@ class ConnectorMetadata {
   virtual void createTable(
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
       TableKind tableKind = TableKind::kTable) = 0;
@@ -643,7 +644,7 @@ class ConnectorMetadata {
   createInsertTableHandle(
       const TableLayout& layout,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) = 0;
 
@@ -673,24 +674,6 @@ class ConnectorMetadata {
 
 } // namespace facebook::axiom::connector
 
-template <>
-struct fmt::formatter<facebook::axiom::connector::TableKind>
-    : fmt::formatter<string_view> {
-  template <typename FormatContext>
-  auto format(facebook::axiom::connector::TableKind k, FormatContext& ctx)
-      const {
-    return formatter<string_view>::format(
-        facebook::axiom::connector::TableKindName::toName(k), ctx);
-  }
-};
+AXIOM_ENUM_FORMATTER(facebook::axiom::connector::TableKind);
 
-template <>
-struct fmt::formatter<facebook::axiom::connector::WriteKind>
-    : fmt::formatter<string_view> {
-  template <typename FormatContext>
-  auto format(facebook::axiom::connector::WriteKind k, FormatContext& ctx)
-      const {
-    return formatter<string_view>::format(
-        facebook::axiom::connector::WriteKindName::toName(k), ctx);
-  }
-};
+AXIOM_ENUM_FORMATTER(facebook::axiom::connector::WriteKind);

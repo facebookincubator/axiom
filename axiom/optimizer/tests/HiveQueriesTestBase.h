@@ -34,10 +34,10 @@ class HiveQueriesTestBase : public test::QueryTestBase {
 
   static void TearDownTestCase();
 
-  velox::RowTypePtr getSchema(const std::string& tableName);
+  velox::RowTypePtr getSchema(std::string_view tableName);
 
   void checkResults(
-      const std::string& sql,
+      std::string_view sql,
       const velox::core::PlanNodePtr& referencePlan);
 
   void checkResults(

@@ -30,12 +30,12 @@ namespace facebook::axiom::connector::hive {
 /// this resolves to the directory corresponding to the table.
 struct HivePartitionHandle : public PartitionHandle {
   HivePartitionHandle(
-      std::unordered_map<std::string, std::optional<std::string>> partitionKeys,
+      folly::F14FastMap<std::string, std::optional<std::string>> partitionKeys,
       std::optional<int32_t> tableBucketNumber)
       : partitionKeys(std::move(partitionKeys)),
         tableBucketNumber(tableBucketNumber) {}
 
-  const std::unordered_map<std::string, std::optional<std::string>>
+  const folly::F14FastMap<std::string, std::optional<std::string>>
       partitionKeys;
   const std::optional<int32_t> tableBucketNumber;
 };
@@ -125,14 +125,14 @@ class HiveConnectorMetadata : public ConnectorMetadata {
   velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) override;
 
   void createTable(
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
       TableKind tableKind = TableKind::kTable) override {
@@ -165,7 +165,7 @@ class HiveConnectorMetadata : public ConnectorMetadata {
   virtual void ensureInitialized() const {}
 
   virtual void validateOptions(
-      const std::unordered_map<std::string, std::string>& options) const;
+      const folly::F14FastMap<std::string, std::string>& options) const;
 
   virtual std::shared_ptr<velox::connector::hive::LocationHandle>
   makeLocationHandle(

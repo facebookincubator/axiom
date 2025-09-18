@@ -88,7 +88,7 @@ class BitSet {
   }
 
   // A one bit corresponds to the id of each member.
-  std::vector<uint64_t, QGAllocator<uint64_t>> bits_;
+  QGVector<uint64_t> bits_;
 };
 
 } // namespace facebook::axiom::optimizer

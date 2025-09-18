@@ -40,8 +40,8 @@ struct InputStage {
 struct ExecutableFragment {
   ExecutableFragment() = default;
 
-  explicit ExecutableFragment(const std::string& taskPrefix)
-      : taskPrefix(taskPrefix) {}
+  explicit ExecutableFragment(std::string taskPrefix)
+      : taskPrefix{std::move(taskPrefix)} {}
 
   std::string taskPrefix;
 
@@ -99,7 +99,7 @@ class MultiFragmentPlan {
       bool detailed = true,
       const std::function<void(
           const velox::core::PlanNodeId& nodeId,
-          const std::string& indentation,
+          std::string_view indentation,
           std::ostream& out)>& addContext = nullptr) const;
 
   /// Prints the summary of the plan using PlanNode::toSummaryString() API.

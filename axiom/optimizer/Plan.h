@@ -230,8 +230,7 @@ struct PlanState {
 
   /// Caches results of downstreamColumns(). This is a pure function of
   /// 'placed', 'targetColumns' and 'dt'.
-  mutable std::unordered_map<PlanObjectSet, PlanObjectSet>
-      downstreamPrecomputed;
+  mutable folly::F14FastMap<PlanObjectSet, PlanObjectSet> downstreamPrecomputed;
 
   /// Ordered set of tables placed so far. Used for setting a
   /// breakpoint before a specific join order gets costed.

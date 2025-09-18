@@ -315,6 +315,10 @@ const JoinEdgeVector& joinedBy(PlanObjectCP table) {
     return table->as<ValuesTable>()->joinedBy;
   }
 
+  if (table->is(PlanType::kUnnestTableNode)) {
+    return table->as<UnnestTable>()->joinedBy;
+  }
+
   VELOX_DCHECK(table->is(PlanType::kDerivedTableNode));
   return table->as<DerivedTable>()->joinedBy;
 }

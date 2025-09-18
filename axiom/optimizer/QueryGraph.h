@@ -192,11 +192,6 @@ class Column : public Expr {
   PathCP path_;
 };
 
-template <typename T>
-inline folly::Range<T*> toRange(const std::vector<T, QGAllocator<T>>& v) {
-  return folly::Range<T const*>(v.data(), v.size());
-}
-
 class Field : public Expr {
  public:
   Field(const velox::Type* type, ExprCP base, Name field)
@@ -239,11 +234,11 @@ class Field : public Expr {
 
 struct SubfieldSet {
   /// Id of an accessed column of complex type.
-  std::vector<int32_t, QGAllocator<int32_t>> ids;
+  QGVector<int32_t> ids;
 
   /// Set of subfield paths that are accessed for the corresponding 'column'.
   /// empty means that all subfields are accessed.
-  std::vector<BitSet, QGAllocator<BitSet>> subfields;
+  QGVector<BitSet> subfields;
 
   std::optional<BitSet> findSubfields(int32_t id) const;
 };
@@ -290,8 +285,7 @@ class Call : public Expr {
   }
 
   CPSpan<PlanObject> children() const override {
-    return folly::Range<PlanObjectCP const*>(
-        reinterpret_cast<PlanObjectCP const*>(args_.data()), args_.size());
+    return {reinterpret_cast<PlanObjectCP const*>(args_.data()), args_.size()};
   }
 
   std::string toString() const override;
@@ -492,10 +486,11 @@ class JoinEdge {
         rightOptional_(spec.rightOptional),
         rightExists_(spec.rightExists),
         rightNotExists_(spec.rightNotExists),
-        markColumn_(spec.markColumn),
-        directed_(spec.directed) {
+        directed_(spec.directed),
+        markColumn_(spec.markColumn) {
     VELOX_CHECK_NOT_NULL(rightTable);
-    VELOX_CHECK(directed_ || filter_.empty() || !isInner());
+    // filter_ is only for non-inner joins.
+    VELOX_CHECK(filter_.empty() || !isInner());
   }
 
   static JoinEdge* makeInner(PlanObjectCP leftTable, PlanObjectCP rightTable) {
@@ -512,12 +507,30 @@ class JoinEdge {
     return make<JoinEdge>(leftTable, rightTable, Spec{.rightNotExists = true});
   }
 
+  static JoinEdge* makeUnnest(
+      PlanObjectCP leftTable,
+      PlanObjectCP rightTable,
+      ExprVector unnestExprs) {
+    VELOX_DCHECK_NOT_NULL(leftTable);
+    auto* edge = make<JoinEdge>(leftTable, rightTable, Spec{.directed = true});
+    edge->leftKeys_ = std::move(unnestExprs);
+    // TODO Not sure to what values fanout need to be set,
+    // (1, 1) looks ok, but tests don't produce expected plans.
+    edge->setFanouts(2, 2);
+    return edge;
+  }
+
   PlanObjectCP leftTable() const {
     return leftTable_;
   }
 
   PlanObjectCP rightTable() const {
     return rightTable_;
+  }
+
+  size_t numKeys() const {
+    VELOX_DCHECK_LE(rightKeys_.size(), leftKeys_.size());
+    return rightKeys_.size();
   }
 
   const ExprVector& leftKeys() const {
@@ -542,6 +555,10 @@ class JoinEdge {
 
   bool rightOptional() const {
     return rightOptional_;
+  }
+
+  bool directed() const {
+    return directed_;
   }
 
   void addEquality(ExprCP left, ExprCP right, bool update = false);
@@ -640,11 +657,8 @@ class JoinEdge {
 
   PlanObjectCP const rightTable_;
 
-  // 'rightKeys' select max 1 'leftTable' row.
-  bool leftUnique_{false};
-
-  // 'leftKeys' select max 1 'rightTable' row.
-  bool rightUnique_{false};
+  // Join condition for any non-equality conditions for non-inner joins.
+  const ExprVector filter_;
 
   // Number of right side rows selected for one row on the left.
   float lrFanout_{1};
@@ -655,8 +669,11 @@ class JoinEdge {
   // True if 'lrFanout_' and 'rlFanout_' are set by setFanouts.
   bool fanoutsFixed_{false};
 
-  // Join condition for any non-equality conditions for non-inner joins.
-  const ExprVector filter_;
+  // 'rightKeys' select max 1 'leftTable' row.
+  bool leftUnique_{false};
+
+  // 'leftKeys' select max 1 'rightTable' row.
+  bool rightUnique_{false};
 
   // True if an unprobed right side row produces a result with right side
   // columns set and left side columns as null (right outer join). Possible only
@@ -675,16 +692,16 @@ class JoinEdge {
   // True if produces a result for left if no match on the right.
   const bool rightNotExists_;
 
-  // Flag to set if right side has a match.
-  ColumnCP const markColumn_;
-
   // If directed non-outer edge. For example unnest or inner dependent on
   // optional of outer.
-  bool directed_;
+  const bool directed_;
+
+  // Flag to set if right side has a match.
+  ColumnCP const markColumn_;
 };
 
 using JoinEdgeP = JoinEdge*;
-using JoinEdgeVector = std::vector<JoinEdgeP, QGAllocator<JoinEdgeP>>;
+using JoinEdgeVector = QGVector<JoinEdgeP>;
 
 /// Represents a reference to a table from a query. There is one of these
 /// for each occurrence of the schema table. A TableScan references one
@@ -772,8 +789,34 @@ struct ValuesTable : public PlanObject {
   std::string toString() const override;
 };
 
-using TypeVector =
-    std::vector<const velox::Type*, QGAllocator<const velox::Type*>>;
+struct UnnestTable : public PlanObject {
+  explicit UnnestTable() : PlanObject{PlanType::kUnnestTableNode} {}
+
+  // Correlation name, distinguishes between uses of the same unnest node.
+  Name cname{nullptr};
+
+  /// All unnested columns from corresponding unnest node.
+  /// All replicated columns is on other (left) side of the join edge.
+  ColumnVector columns;
+
+  // All joins where 'this' is an end point.
+  JoinEdgeVector joinedBy;
+
+  float cardinality() const {
+    // TODO Should be changed later to actual cardinality.
+    return 1;
+  }
+
+  bool isTable() const override {
+    return true;
+  }
+
+  void addJoinedBy(JoinEdgeP join);
+
+  std::string toString() const override;
+};
+
+using TypeVector = QGVector<const velox::Type*>;
 
 // Aggregate function. The aggregation and arguments are in the
 // inherited Call. The Value pertains to the aggregation
@@ -853,7 +896,7 @@ class Aggregate : public Call {
 };
 
 using AggregateCP = const Aggregate*;
-using AggregateVector = std::vector<AggregateCP, QGAllocator<AggregateCP>>;
+using AggregateVector = QGVector<AggregateCP>;
 
 class AggregationPlan : public PlanObject {
  public:

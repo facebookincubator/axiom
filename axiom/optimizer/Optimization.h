@@ -76,7 +76,7 @@ class Optimization {
       BaseTableCP baseTable,
       const ColumnVector& leafColumns,
       ColumnVector& topColumns,
-      std::unordered_map<ColumnCP, velox::TypePtr>& typeMap) {
+      folly::F14FastMap<ColumnCP, velox::TypePtr>& typeMap) {
     return toVelox_.subfieldPushdownScanType(
         baseTable, leafColumns, topColumns, typeMap);
   }
@@ -119,7 +119,7 @@ class Optimization {
     return toGraph_.evaluator();
   }
 
-  Name newCName(const std::string& prefix) {
+  Name newCName(std::string_view prefix) {
     return toGraph_.newCName(prefix);
   }
 
@@ -141,13 +141,6 @@ class Optimization {
 
   History& history() const {
     return history_;
-  }
-
-  /// Retain a reference to the provided TablePtr to ensure
-  /// the Table is retained for the duration of Optimization, even if
-  /// dropped by the corresponding ConnectorMetadata.
-  void retainConnectorTable(connector::TablePtr table) {
-    retainedTables_.insert(std::move(table));
   }
 
   /// If false, correlation names are not included in Column::toString(). Used
@@ -293,6 +286,12 @@ class Optimization {
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
+  void crossJoinUnnest(
+      RelationOpPtr plan,
+      const JoinCandidate& candidate,
+      PlanState& state,
+      std::vector<NextJoin>& toTry);
+
   const OptimizerOptions options_;
 
   const runner::MultiFragmentPlan::Options runnerOptions_;
@@ -307,17 +306,14 @@ class Optimization {
 
   std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx_;
 
-  // Set of tables in use by the Optimizer.
-  std::unordered_set<connector::TablePtr> retainedTables_;
-
   // Top DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP root_;
 
-  std::unordered_map<MemoKey, PlanSet> memo_;
+  folly::F14FastMap<MemoKey, PlanSet> memo_;
 
   // Set of previously planned dts for importing probe side reducing joins to a
   // build side
-  std::unordered_map<MemoKey, DerivedTableP> existenceDts_;
+  folly::F14FastMap<MemoKey, DerivedTableP> existenceDts_;
 
   // The top level PlanState. Contains the set of top level interesting plans.
   // Must stay alive as long as the Plans and RelationOps are reeferenced.

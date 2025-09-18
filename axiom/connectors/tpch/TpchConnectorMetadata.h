@@ -120,12 +120,14 @@ class TpchTable : public Table {
       std::string name,
       velox::RowTypePtr type,
       velox::tpch::Table tpchTable,
-      double scaleFactor)
+      double scaleFactor,
+      int64_t numRows)
       : Table(std::move(name), std::move(type)),
         tpchTable_(tpchTable),
-        scaleFactor_(scaleFactor) {}
+        scaleFactor_(scaleFactor),
+        numRows_{numRows} {}
 
-  std::unordered_map<std::string, std::unique_ptr<Column>>& columns() {
+  folly::F14FastMap<std::string, std::unique_ptr<Column>>& columns() {
     return columns_;
   }
 
@@ -133,7 +135,7 @@ class TpchTable : public Table {
     return exportedLayouts_;
   }
 
-  const std::unordered_map<std::string, const Column*>& columnMap()
+  const folly::F14FastMap<std::string, const Column*>& columnMap()
       const override;
 
   void makeDefaultLayout(TpchConnectorMetadata& metadata, double scaleFactor);
@@ -142,20 +144,20 @@ class TpchTable : public Table {
     return numRows_;
   }
 
-  velox::tpch::Table getTpchTable() const {
+  velox::tpch::Table tpchTable() const {
     return tpchTable_;
   }
 
-  double getScaleFactor() const {
+  double scaleFactor() const {
     return scaleFactor_;
   }
 
  private:
   mutable std::mutex mutex_;
 
-  std::unordered_map<std::string, std::unique_ptr<Column>> columns_;
+  folly::F14FastMap<std::string, std::unique_ptr<Column>> columns_;
 
-  mutable std::unordered_map<std::string, const Column*> exportedColumns_;
+  mutable folly::F14FastMap<std::string, const Column*> exportedColumns_;
 
   std::vector<std::unique_ptr<TableLayout>> layouts_;
 
@@ -165,9 +167,7 @@ class TpchTable : public Table {
 
   const double scaleFactor_;
 
-  int64_t numRows_{0};
-
-  friend class TpchConnectorMetadata;
+  const int64_t numRows_;
 };
 
 class TpchConnectorMetadata : public ConnectorMetadata {
@@ -175,17 +175,13 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   explicit TpchConnectorMetadata(
       velox::connector::tpch::TpchConnector* tpchConnector);
 
-  void initialize() override;
+  void initialize() override {}
 
-  TablePtr findTable(const std::string& name) override;
+  TablePtr findTable(std::string_view name) override;
 
   ConnectorSplitManager* splitManager() override {
-    ensureInitialized();
     return &splitManager_;
   }
-
-  std::shared_ptr<velox::core::QueryCtx> makeQueryCtx(
-      const std::string& queryId);
 
   velox::connector::ColumnHandlePtr createColumnHandle(
       const TableLayout& layoutData,
@@ -206,7 +202,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   void createTable(
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
       TableKind tableKind = TableKind::kTable) override {
@@ -216,7 +212,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) override {
     VELOX_UNSUPPORTED();
@@ -246,28 +242,10 @@ class TpchConnectorMetadata : public ConnectorMetadata {
     return tpchConnector_;
   }
 
-  const std::unordered_map<std::string, std::shared_ptr<TpchTable>>& tables()
-      const {
-    ensureInitialized();
-    return tables_;
-  }
-
  private:
-  void ensureInitialized() const;
-  void makeQueryCtx();
-  void initializeTables();
-  void loadTable(
-      velox::tpch::Table tpchTable,
-      const std::string& ns,
-      double scaleFactor);
-
-  mutable std::mutex mutex_;
-  mutable bool initialized_{false};
   velox::connector::tpch::TpchConnector* tpchConnector_;
   std::shared_ptr<velox::memory::MemoryPool> rootPool_{
       velox::memory::memoryManager()->addRootPool()};
-  std::shared_ptr<velox::core::QueryCtx> queryCtx_;
-  std::unordered_map<std::string, std::shared_ptr<TpchTable>> tables_;
   TpchSplitManager splitManager_;
 };
 

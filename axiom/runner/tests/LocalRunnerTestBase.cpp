@@ -118,7 +118,7 @@ void LocalRunnerTestBase::makeTables(
 std::shared_ptr<runner::SimpleSplitSourceFactory>
 LocalRunnerTestBase::makeSimpleSplitSourceFactory(
     const runner::MultiFragmentPlanPtr& plan) {
-  std::unordered_map<
+  folly::F14FastMap<
       velox::core::PlanNodeId,
       std::vector<std::shared_ptr<velox::connector::ConnectorSplit>>>
       nodeSplitMap;

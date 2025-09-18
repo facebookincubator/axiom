@@ -14,15 +14,13 @@
  * limitations under the License.
  */
 
+#include "axiom/optimizer/tests/PlanTest.h"
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/optimizer/tests/ParquetTpchTest.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
-#include "axiom/optimizer/tests/QueryTestBase.h"
-#include "axiom/optimizer/tests/utils/DfFunctions.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -32,102 +30,6 @@ namespace {
 
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
-
-class PlanTest : public test::QueryTestBase {
- protected:
-  static constexpr auto kTestConnectorId = "test";
-
-  static void SetUpTestCase() {
-    std::string path;
-    if (FLAGS_data_path.empty()) {
-      gTempDirectory = exec::test::TempDirectoryPath::create();
-      path = gTempDirectory->getPath();
-      test::ParquetTpchTest::createTables(path);
-    } else {
-      path = FLAGS_data_path;
-      if (FLAGS_create_dataset) {
-        test::ParquetTpchTest::createTables(path);
-      }
-    }
-
-    LocalRunnerTestBase::testDataPath_ = path;
-    LocalRunnerTestBase::localFileFormat_ = "parquet";
-    LocalRunnerTestBase::SetUpTestCase();
-
-    test::registerDfFunctions();
-  }
-
-  static void TearDownTestCase() {
-    LocalRunnerTestBase::TearDownTestCase();
-    gTempDirectory.reset();
-  }
-
-  void SetUp() override {
-    QueryTestBase::SetUp();
-
-    testConnector_ =
-        std::make_shared<connector::TestConnector>(kTestConnectorId);
-    velox::connector::registerConnector(testConnector_);
-  }
-
-  void TearDown() override {
-    velox::connector::unregisterConnector(kTestConnectorId);
-
-    QueryTestBase::TearDown();
-  }
-
-  void checkSame(
-      const lp::LogicalPlanNodePtr& planNode,
-      core::PlanNodePtr referencePlan,
-      const axiom::runner::MultiFragmentPlan::Options& options = {
-          .numWorkers = 4,
-          .numDrivers = 4}) {
-    VELOX_CHECK_NOT_NULL(planNode);
-    VELOX_CHECK_NOT_NULL(referencePlan);
-
-    auto fragmentedPlan = planVelox(planNode, options);
-    auto referenceResult = assertSame(referencePlan, fragmentedPlan);
-
-    if (options.numWorkers != 1) {
-      auto singleNodePlan = planVelox(
-          planNode, {.numWorkers = 1, .numDrivers = options.numDrivers});
-      auto singleNodeResult = runFragmentedPlan(singleNodePlan);
-
-      exec::test::assertEqualResults(
-          referenceResult.results, singleNodeResult.results);
-
-      if (options.numDrivers != 1) {
-        auto singleThreadPlan =
-            planVelox(planNode, {.numWorkers = 1, .numDrivers = 1});
-        auto singleThreadResult = runFragmentedPlan(singleThreadPlan);
-
-        exec::test::assertEqualResults(
-            referenceResult.results, singleThreadResult.results);
-      }
-    }
-  }
-
-  core::PlanNodePtr toSingleNodePlan(
-      const lp::LogicalPlanNodePtr& logicalPlan,
-      int32_t numDrivers = 1) {
-    schema_ = std::make_shared<optimizer::SchemaResolver>();
-
-    auto plan =
-        planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers})
-            .plan;
-
-    EXPECT_EQ(1, plan->fragments().size());
-    return plan->fragments().at(0).fragment.planNode;
-  }
-
-  static std::shared_ptr<exec::test::TempDirectoryPath> gTempDirectory;
-
-  std::shared_ptr<connector::TestConnector> testConnector_;
-};
-
-// static
-std::shared_ptr<exec::test::TempDirectoryPath> PlanTest::gTempDirectory =
-    nullptr;
 
 auto gte(const std::string& name, int64_t n) {
   return common::test::singleSubfieldFilter(name, exec::greaterThanOrEqual(n));
@@ -1076,25 +978,24 @@ TEST_F(PlanTest, values) {
   // We don't check produced plan, only that it results in the same rows as
   // correct exection plan.
 
-  auto makeLogicalPlan = [&](uint8_t leafType,
-                             const std::string& filter,
-                             const std::string& alias) {
-    auto plan = lp::PlanBuilder(ctx);
-    if (leafType == 0) {
-      plan.tableScan("nation", names);
-    } else {
-      plan.values({rowVector});
-    }
-    return plan.filter(filter).project({
-        fmt::format("n_nationkey AS {}1", alias),
-        fmt::format("n_regionkey AS {}2", alias),
-        fmt::format("n_comment AS {}3", alias),
-    });
-  };
+  auto makeLogicalPlan =
+      [&](uint8_t leafType, const std::string& filter, std::string_view alias) {
+        auto plan = lp::PlanBuilder(ctx);
+        if (leafType == 0) {
+          plan.tableScan("nation", names);
+        } else {
+          plan.values({rowVector});
+        }
+        return plan.filter(filter).project({
+            fmt::format("n_nationkey AS {}1", alias),
+            fmt::format("n_regionkey AS {}2", alias),
+            fmt::format("n_comment AS {}3", alias),
+        });
+      };
 
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto makePhysicalPlan =
-      [&](int leafType, const std::string& filter, const std::string& alias) {
+      [&](int leafType, const std::string& filter, std::string_view alias) {
         auto plan = exec::test::PlanBuilder(idGenerator, pool_.get());
         if (leafType == 0) {
           plan.tableScan("nation", nationType);

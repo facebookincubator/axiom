@@ -53,7 +53,7 @@ void DerivedTable::addJoinEquality(ExprCP left, ExprCP right) {
 
 namespace {
 
-using EdgeSet = std::unordered_set<std::pair<int32_t, int32_t>>;
+using EdgeSet = folly::F14FastSet<std::pair<int32_t, int32_t>>;
 
 void addEdge(EdgeSet& edges, int32_t id1, int32_t id2) {
   if (id1 > id2) {
@@ -91,7 +91,7 @@ void DerivedTable::addImpliedJoins() {
   EdgeSet edges;
   for (auto& join : joins) {
     if (join->isInner()) {
-      for (auto i = 0; i < join->leftKeys().size(); ++i) {
+      for (size_t i = 0; i < join->numKeys(); ++i) {
         const auto* leftKey = join->leftKeys()[i];
         const auto* rightKey = join->rightKeys()[i];
         if (leftKey->isColumn() && rightKey->isColumn()) {
@@ -105,7 +105,7 @@ void DerivedTable::addImpliedJoins() {
   JoinEdgeVector joinsCopy = joins;
   for (auto& join : joinsCopy) {
     if (join->isInner()) {
-      for (auto i = 0; i < join->leftKeys().size(); ++i) {
+      for (size_t i = 0; i < join->numKeys(); ++i) {
         const auto* leftKey = join->leftKeys()[i];
         const auto* rightKey = join->rightKeys()[i];
         if (leftKey->isColumn() && rightKey->isColumn()) {
@@ -147,7 +147,7 @@ JoinEdgeP makeExists(PlanObjectCP table, const PlanObjectSet& tables) {
         continue;
       }
       auto* exists = JoinEdge::makeExists(table, join->rightTable());
-      for (auto i = 0; i < join->leftKeys().size(); ++i) {
+      for (size_t i = 0; i < join->numKeys(); ++i) {
         exists->addEquality(join->leftKeys()[i], join->rightKeys()[i]);
       }
       return exists;
@@ -159,7 +159,7 @@ JoinEdgeP makeExists(PlanObjectCP table, const PlanObjectSet& tables) {
       }
 
       auto* exists = JoinEdge::makeExists(table, join->leftTable());
-      for (auto i = 0; i < join->leftKeys().size(); ++i) {
+      for (size_t i = 0; i < join->numKeys(); ++i) {
         exists->addEquality(join->rightKeys()[i], join->leftKeys()[i]);
       }
       return exists;
@@ -212,15 +212,19 @@ void DerivedTable::linkTablesToJoins() {
   // from all the tables it depends on.
   for (auto join : joins) {
     PlanObjectSet tables;
-    for (auto key : join->leftKeys()) {
-      tables.unionSet(key->allTables());
-    }
-    for (auto key : join->rightKeys()) {
-      tables.unionSet(key->allTables());
-    }
-    if (!join->filter().empty()) {
-      for (auto& conjunct : join->filter()) {
-        tables.unionSet(conjunct->allTables());
+    if (join->isInner() && join->directed()) {
+      tables.add(join->leftTable());
+    } else {
+      for (auto key : join->leftKeys()) {
+        tables.unionSet(key->allTables());
+      }
+      for (auto key : join->rightKeys()) {
+        tables.unionSet(key->allTables());
+      }
+      if (!join->filter().empty()) {
+        for (auto& conjunct : join->filter()) {
+          tables.unionSet(conjunct->allTables());
+        }
       }
     }
     tables.forEachMutable([&](PlanObjectP table) {
@@ -228,6 +232,8 @@ void DerivedTable::linkTablesToJoins() {
         table->as<BaseTable>()->addJoinedBy(join);
       } else if (table->is(PlanType::kValuesTableNode)) {
         table->as<ValuesTable>()->addJoinedBy(join);
+      } else if (table->is(PlanType::kUnnestTableNode)) {
+        table->as<UnnestTable>()->addJoinedBy(join);
       } else {
         VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
         table->as<DerivedTable>()->addJoinedBy(join);
@@ -277,7 +283,7 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
   }
   auto* joinWithDt = JoinEdge::makeExists(firstTable, existsDt);
   joinWithDt->setFanouts(existsFanout, 1);
-  for (auto i = 0; i < existsJoin->leftKeys().size(); ++i) {
+  for (size_t i = 0; i < existsJoin->numKeys(); ++i) {
     joinWithDt->addEquality(existsJoin->leftKeys()[i], existsDt->columns[i]);
   }
   return std::make_pair(existsDt, joinWithDt);
@@ -735,6 +741,10 @@ void DerivedTable::distributeConjuncts() {
         continue; // ValuesTable does not have filter push-down.
       }
 
+      if (tables[0]->is(PlanType::kUnnestTableNode)) {
+        continue; // UnnestTable does not have filter push-down.
+      }
+
       if (tables[0]->is(PlanType::kDerivedTableNode)) {
         // Translate the column names and add the condition to the conjuncts in
         // the dt. If the inner is a set operation, add the filter to children.
@@ -829,13 +839,13 @@ ExprVector extractPerTable(
     return {};
   }
 
-  std::unordered_map<int32_t, std::vector<ExprVector>> perTable;
+  folly::F14FastMap<int32_t, std::vector<ExprVector>> perTable;
   for (auto i = 0; i < disjuncts.size(); ++i) {
     if (i > 0 && disjuncts[i]->allTables() != tables) {
       // Does not  depend on the same tables as the other disjuncts.
       return {};
     }
-    std::unordered_map<int32_t, ExprVector> perTableAnd;
+    folly::F14FastMap<int32_t, ExprVector> perTableAnd;
     ExprVector& inner = orOfAnds[i];
     // do the inner conjuncts each depend on a single table?
     for (auto j = 0; j < inner.size(); ++j) {
@@ -872,7 +882,7 @@ ExprVector extractPerTable(
 /// the whole OR from which 'disjuncts' was flattened.
 ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   // Remove duplicates.
-  std::unordered_set<ExprCP> uniqueDisjuncts;
+  folly::F14FastSet<ExprCP> uniqueDisjuncts;
   bool changeOriginal = false;
   for (auto i = 0; i < disjuncts.size(); ++i) {
     auto disjunct = disjuncts[i];
@@ -942,7 +952,7 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
 
 void DerivedTable::expandConjuncts() {
   bool any{};
-  std::unordered_set<int32_t> processed;
+  folly::F14FastSet<int32_t> processed;
   auto firstUnprocessed = numCanonicalConjuncts;
   do {
     any = false;

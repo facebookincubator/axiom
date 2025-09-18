@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include "axiom/connectors/ConnectorMetadata.h"
 
 namespace facebook::axiom::connector {
@@ -67,7 +68,7 @@ class TestTable : public Table {
       const velox::RowTypePtr& schema,
       TestConnector* connector);
 
-  const std::unordered_map<std::string, const Column*>& columnMap()
+  const folly::F14FastMap<std::string, const Column*>& columnMap()
       const override {
     return columns_;
   }
@@ -108,7 +109,7 @@ class TestTable : public Table {
 
  private:
   velox::connector::Connector* connector_;
-  std::unordered_map<std::string, const Column*> columns_;
+  folly::F14FastMap<std::string, const Column*> columns_;
   std::vector<std::unique_ptr<Column>> exportedColumns_;
   std::vector<const TableLayout*> layouts_;
   std::vector<std::unique_ptr<TableLayout>> exportedLayouts_;
@@ -240,11 +241,11 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   void initialize() override {}
 
-  TablePtr findTable(const std::string& name) override;
+  TablePtr findTable(std::string_view name) override;
 
   /// Non-interface method which supplies a non-const Table reference
   /// which is capable of performing writes to the underlying table.
-  std::shared_ptr<Table> findTableInternal(const std::string& name);
+  std::shared_ptr<Table> findTableInternal(std::string_view name);
 
   ConnectorSplitManager* splitManager() override {
     return splitManager_.get();
@@ -269,7 +270,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
   void createTable(
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       const ConnectorSessionPtr& session,
       bool errorIfExists = true,
       TableKind tableKind = TableKind::kTable) override {
@@ -279,7 +280,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
   velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
       const TableLayout& layout,
       const velox::RowTypePtr& rowType,
-      const std::unordered_map<std::string, std::string>& options,
+      const folly::F14FastMap<std::string, std::string>& options,
       WriteKind kind,
       const ConnectorSessionPtr& session) override {
     VELOX_UNSUPPORTED();
@@ -315,11 +316,11 @@ class TestConnectorMetadata : public ConnectorMetadata {
   /// Add data rows to the specified table. This data is returned via the
   /// DataSource corresponding to this table. The data is copied
   /// into the internal memory pool associated with the table.
-  void appendData(const std::string& name, const velox::RowVectorPtr& data);
+  void appendData(std::string_view name, const velox::RowVectorPtr& data);
 
  private:
   TestConnector* connector_;
-  std::unordered_map<std::string, std::shared_ptr<TestTable>> tables_;
+  folly::F14FastMap<std::string, std::shared_ptr<TestTable>> tables_;
   std::unique_ptr<TestSplitManager> splitManager_;
 };
 
@@ -420,7 +421,7 @@ class TestConnector : public velox::connector::Connector {
   /// Add data rows to the specified table. This data is returned via the
   /// DataSource corresponding to this table. Appended data is copied
   /// to the internal memory pool of the associated table.
-  void appendData(const std::string& name, const velox::RowVectorPtr& data);
+  void appendData(std::string_view name, const velox::RowVectorPtr& data);
 
  private:
   const std::shared_ptr<TestConnectorMetadata> metadata_;

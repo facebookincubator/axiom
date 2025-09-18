@@ -26,7 +26,7 @@ namespace facebook::axiom::optimizer {
 /// handles and execution stats.
 class VeloxHistory : public History {
  public:
-  void recordJoinSample(const std::string& key, float lr, float rl) override;
+  void recordJoinSample(std::string_view key, float lr, float rl) override;
 
   std::pair<float, float> sampleJoin(JoinEdge* edge) override;
 
@@ -53,8 +53,8 @@ class VeloxHistory : public History {
   void update(folly::dynamic& serialized) override;
 
  private:
-  std::unordered_map<std::string, std::pair<float, float>> joinSamples_;
-  std::unordered_map<std::string, NodePrediction> planHistory_;
+  folly::F14FastMap<std::string, std::pair<float, float>> joinSamples_;
+  folly::F14FastMap<std::string, NodePrediction> planHistory_;
 };
 
 } // namespace facebook::axiom::optimizer

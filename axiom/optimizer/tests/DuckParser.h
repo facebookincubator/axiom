@@ -54,7 +54,7 @@ class DuckParser {
   ::duckdb::DuckDB db_;
   ::duckdb::Connection conn_{db_};
   velox::memory::MemoryPool* pool_;
-  std::unordered_map<std::string, std::vector<velox::RowVectorPtr>> tables_;
+  folly::F14FastMap<std::string, std::vector<velox::RowVectorPtr>> tables_;
 };
 
 } // namespace facebook::axiom::optimizer::test

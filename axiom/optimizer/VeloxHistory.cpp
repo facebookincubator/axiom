@@ -27,10 +27,7 @@ DEFINE_double(
 
 namespace facebook::axiom::optimizer {
 
-void VeloxHistory::recordJoinSample(
-    const std::string& key,
-    float lr,
-    float rl) {}
+void VeloxHistory::recordJoinSample(std::string_view key, float lr, float rl) {}
 
 std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
   const auto& options = queryCtx()->optimization()->options();
@@ -159,7 +156,7 @@ std::shared_ptr<const velox::core::TableScanNode> findScan(
   return nullptr;
 }
 
-void logPrediction(const std::string& message) {
+void logPrediction(std::string_view message) {
   if (FLAGS_cardinality_warning_threshold != 0) {
     LOG(WARNING) << message;
   }

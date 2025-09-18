@@ -274,14 +274,9 @@ void PlanBuilder::resolveProjections(
   }
 }
 
-PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
-  return project(parse(projections));
-}
-
 PlanBuilder& PlanBuilder::project(const std::vector<ExprApi>& projections) {
   if (!node_) {
-    values(
-        velox::ROW({}), std::vector<velox::Variant>{velox::Variant::row({})});
+    values(velox::ROW({}), {velox::Variant::row({})});
   }
 
   std::vector<std::string> outputNames;
@@ -304,8 +299,7 @@ PlanBuilder& PlanBuilder::project(const std::vector<ExprApi>& projections) {
 
 PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
   if (!node_) {
-    values(
-        velox::ROW({}), std::vector<velox::Variant>{velox::Variant::row({})});
+    values(velox::ROW({}), {velox::Variant::row({})});
   }
 
   std::vector<std::string> outputNames;
@@ -424,24 +418,15 @@ PlanBuilder& PlanBuilder::aggregate(
 }
 
 PlanBuilder& PlanBuilder::unnest(
-    const std::vector<std::string>& unnestExprs,
-    bool withOrdinality) {
-  return unnest(parse(unnestExprs), withOrdinality);
-}
-
-PlanBuilder& PlanBuilder::unnest(
-    const std::vector<ExprApi>& unnestExprs,
-    bool withOrdinality) {
-  return unnest(unnestExprs, withOrdinality, std::nullopt, {});
-}
-
-PlanBuilder& PlanBuilder::unnest(
     const std::vector<ExprApi>& unnestExprs,
     bool withOrdinality,
     const std::optional<std::string>& alias,
     const std::vector<std::string>& unnestAliases) {
-  auto newOutputMapping =
-      node_ != nullptr ? outputMapping_ : std::make_shared<NameMappings>();
+  if (!node_) {
+    values(velox::ROW({}), {velox::Variant::row({})});
+  }
+
+  auto newOutputMapping = outputMapping_;
 
   size_t index = 0;
 
@@ -1271,6 +1256,36 @@ PlanBuilder& PlanBuilder::offset(int64_t offset) {
 
   node_ = std::make_shared<LimitNode>(
       nextId(), std::move(node_), offset, std::numeric_limits<int64_t>::max());
+
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::tableWrite(
+    std::string connectorId,
+    std::string tableName,
+    WriteKind kind,
+    std::vector<std::string> columnNames,
+    const std::vector<ExprApi>& columnExprs,
+    velox::RowTypePtr outputType,
+    folly::F14FastMap<std::string, std::string> options) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Table write node cannot be a leaf node");
+
+  std::vector<ExprPtr> columnExpressions;
+  columnExpressions.reserve(columnExprs.size());
+  for (const auto& expr : columnExprs) {
+    columnExpressions.push_back(resolveScalarTypes(expr.expr()));
+  }
+
+  node_ = std::make_shared<TableWriteNode>(
+      nextId(),
+      std::move(node_),
+      std::move(connectorId),
+      std::move(tableName),
+      kind,
+      std::move(columnNames),
+      std::move(columnExpressions),
+      std::move(outputType),
+      std::move(options));
 
   return *this;
 }

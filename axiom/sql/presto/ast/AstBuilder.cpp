@@ -47,13 +47,13 @@ NodeLocation getLocation(antlr4::tree::TerminalNode* terminalNode) {
 }
 
 // Remove leading and trailing quotes.
-std::string unquote(const std::string& value) {
-  return value.substr(1, value.length() - 2);
+std::string unquote(std::string_view value) {
+  return std::string{value.substr(1, value.length() - 2)};
 }
 
 } // namespace
 
-void AstBuilder::trace(const std::string& name) const {
+void AstBuilder::trace(std::string_view name) const {
   if (enableTracing_) {
     std::cout << name << std::endl;
   }
@@ -1463,7 +1463,7 @@ std::any AstBuilder::visitCurrentUser(
 }
 
 namespace {
-Extract::Field toField(const std::string& name) {
+Extract::Field toField(std::string_view name) {
   if (equalsIgnoreCase(name, "YEAR")) {
     return Extract::Field::kYear;
   }

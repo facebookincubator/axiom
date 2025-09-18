@@ -34,7 +34,7 @@ using Name = const char*;
 
 /// Shorthand for a view on an array of T*
 template <typename T>
-using CPSpan = folly::Range<const T* const*>;
+using CPSpan = std::span<const T* const>;
 
 class PlanObject;
 
@@ -66,7 +66,6 @@ struct TypeComparer {
 
 /// Converts std::string to name used in query graph objects. raw pointer to
 /// arena allocated const chars.
-// Name toName(const std::string& string);
 Name toName(std::string_view string);
 
 struct Plan;
@@ -94,6 +93,9 @@ struct QGAllocator {
   }
 };
 
+template <typename T>
+using QGVector = std::vector<T, QGAllocator<T>>;
+
 /// Elements of subfield paths. The QueryGraphContext holds a dedupped
 /// collection of distinct paths.
 enum class StepKind : uint8_t { kField, kSubscript, kCardinality };
@@ -118,7 +120,7 @@ struct Step {
   size_t hash() const;
 };
 
-using StepVector = std::vector<Step, QGAllocator<Step>>;
+using StepVector = QGVector<Step>;
 
 class BitSet;
 
@@ -340,21 +342,21 @@ class QueryGraphContext {
 
   // Set of interned copies of identifiers. insert() into this returns the
   // canonical interned copy of any string. Lifetime is limited to 'allocator_'.
-  std::unordered_set<std::string_view> names_;
+  folly::F14FastSet<std::string_view> names_;
 
   // Set for deduplicating planObject trees.
-  std::unordered_set<PlanObjectP, PlanObjectPHasher, PlanObjectPComparer>
+  folly::F14FastSet<PlanObjectP, PlanObjectPHasher, PlanObjectPComparer>
       deduppedObjects_;
 
-  std::unordered_set<velox::TypePtr, TypeHasher, TypeComparer> deduppedTypes_;
+  folly::F14FastSet<velox::TypePtr, TypeHasher, TypeComparer> deduppedTypes_;
 
   // Maps raw Type* back to shared TypePtr. Used in toType()() and toTypePtr().
-  std::unordered_map<const velox::Type*, velox::TypePtr> toTypePtr_;
+  folly::F14FastMap<const velox::Type*, velox::TypePtr> toTypePtr_;
 
-  std::unordered_set<PathCP, PathHasher, PathComparer> deduppedPaths_;
+  folly::F14FastSet<PathCP, PathHasher, PathComparer> deduppedPaths_;
 
   // Complex type literals. Referenced with raw pointer from PlanObject.
-  std::unordered_map<
+  folly::F14FastMap<
       const velox::BaseVector*,
       velox::VectorPtr,
       VectorDedupHasher,
@@ -404,10 +406,10 @@ inline void Path::operator delete(void* ptr) {
 // Forward declarations of common types and collections.
 class Expr;
 using ExprCP = const Expr*;
-using ExprVector = std::vector<ExprCP, QGAllocator<ExprCP>>;
+using ExprVector = QGVector<ExprCP>;
 
 class Column;
 using ColumnCP = const Column*;
-using ColumnVector = std::vector<ColumnCP, QGAllocator<ColumnCP>>;
+using ColumnVector = QGVector<ColumnCP>;
 
 } // namespace facebook::axiom::optimizer

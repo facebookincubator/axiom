@@ -40,7 +40,7 @@ class SplitSourceFactory {
 class SimpleSplitSourceFactory : public SplitSourceFactory {
  public:
   explicit SimpleSplitSourceFactory(
-      std::unordered_map<
+      folly::F14FastMap<
           velox::core::PlanNodeId,
           std::vector<std::shared_ptr<velox::connector::ConnectorSplit>>>
           nodeSplitMap)
@@ -50,7 +50,7 @@ class SimpleSplitSourceFactory : public SplitSourceFactory {
       const velox::core::TableScanNode& scan) override;
 
  private:
-  std::unordered_map<
+  folly::F14FastMap<
       velox::core::PlanNodeId,
       std::vector<std::shared_ptr<velox::connector::ConnectorSplit>>>
       nodeSplitMap_;
@@ -117,7 +117,7 @@ class LocalRunner : public Runner,
   std::string printPlanWithStats(
       const std::function<void(
           const velox::core::PlanNodeId& nodeId,
-          const std::string& indentation,
+          std::string_view indentation,
           std::ostream& out)>& addContext = nullptr) const;
 
   /// Best-effort attempt to cancel the execution.

@@ -87,7 +87,7 @@ void doCreateTables(std::string_view path) {
 
 void registerHiveConnector(const std::string& id) {
   auto emptyConfig = std::make_shared<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>());
+      std::unordered_map<std::string, std::string>{});
 
   velox::connector::hive::HiveConnectorFactory factory;
   velox::connector::registerConnector(factory.newConnector(id, emptyConfig));
@@ -113,7 +113,7 @@ void ParquetTpchTest::createTables(std::string_view path) {
   parquet::registerParquetWriterFactory();
 
   auto emptyConfig = std::make_shared<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>());
+      std::unordered_map<std::string, std::string>{});
 
   velox::connector::hive::HiveConnectorFactory hiveConnectorFactory;
   auto hiveConnector = hiveConnectorFactory.newConnector(
@@ -128,7 +128,7 @@ void ParquetTpchTest::createTables(std::string_view path) {
 // static
 void ParquetTpchTest::registerTpchConnector(const std::string& id) {
   auto emptyConfig = std::make_shared<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>());
+      std::unordered_map<std::string, std::string>{});
 
   velox::connector::tpch::TpchConnectorFactory factory;
   auto connector = factory.newConnector(id, emptyConfig);

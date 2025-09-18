@@ -55,7 +55,7 @@ using namespace facebook::velox::exec;
 void QueryTestBase::SetUp() {
   axiom::runner::test::LocalRunnerTestBase::SetUp();
   connector_ = velox::connector::getConnector(exec::test::kHiveConnectorId);
-  rootPool_ = memory::memoryManager()->addRootPool("velox_sql");
+  rootPool_ = memory::memoryManager()->addRootPool("axiom_sql");
   optimizerPool_ = rootPool_->addLeafChild("optimizer");
 
   parquet::registerParquetReaderFactory();
@@ -257,7 +257,7 @@ TestResult QueryTestBase::runVelox(
 
 std::string QueryTestBase::veloxString(
     const axiom::runner::MultiFragmentPlanPtr& plan) {
-  std::unordered_map<core::PlanNodeId, const core::TableScanNode*> scans;
+  folly::F14FastMap<core::PlanNodeId, const core::TableScanNode*> scans;
   for (const auto& fragment : plan->fragments()) {
     for (const auto& scan : fragment.scans) {
       scans.emplace(scan->id(), scan.get());
@@ -265,7 +265,7 @@ std::string QueryTestBase::veloxString(
   }
 
   auto planNodeDetails = [&](const core::PlanNodeId& planNodeId,
-                             const std::string& indentation,
+                             std::string_view indentation,
                              std::ostream& stream) {
     auto it = scans.find(planNodeId);
     if (it != scans.end()) {

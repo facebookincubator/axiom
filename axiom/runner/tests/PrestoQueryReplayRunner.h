@@ -26,7 +26,7 @@ extern const int32_t kDefaultWidth;
 extern const int32_t kDefaultMaxDrivers;
 extern const int32_t kWaitTimeoutUs;
 
-typedef std::string (*TaskPrefixExtractor)(const std::string&);
+using TaskPrefixExtractor = std::string (*)(std::string_view);
 using ConnectorSplitPtr = std::shared_ptr<velox::connector::ConnectorSplit>;
 
 class PrestoQueryReplayRunner {
@@ -75,7 +75,7 @@ class PrestoQueryReplayRunner {
 
   /// Deserialize a list of serialized splits into a map from plan node id to
   /// connector splits.
-  std::unordered_map<velox::core::PlanNodeId, std::vector<ConnectorSplitPtr>>
+  folly::F14FastMap<velox::core::PlanNodeId, std::vector<ConnectorSplitPtr>>
   deserializeConnectorSplits(const std::vector<std::string>& serializedSplits);
 
   velox::memory::MemoryPool* pool_{nullptr};

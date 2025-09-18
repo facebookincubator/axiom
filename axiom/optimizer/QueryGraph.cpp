@@ -80,6 +80,9 @@ std::string Column::toString() const {
       case PlanType::kValuesTableNode:
         cname = relation_->as<ValuesTable>()->cname;
         break;
+      case PlanType::kUnnestTableNode:
+        cname = relation_->as<UnnestTable>()->cname;
+        break;
       case PlanType::kDerivedTableNode:
         cname = relation_->as<DerivedTable>()->cname;
         break;
@@ -198,6 +201,17 @@ std::string ValuesTable::toString() const {
   return out.str();
 }
 
+void UnnestTable::addJoinedBy(JoinEdgeP join) {
+  pushBackUnique(joinedBy, join);
+}
+
+std::string UnnestTable::toString() const {
+  std::stringstream out;
+  out << "{" << PlanObject::toString();
+  out << cname << "}";
+  return out.str();
+}
+
 JoinSide JoinEdge::sideOf(PlanObjectCP side, bool other) const {
   if ((side == rightTable_ && !other) || (side == leftTable_ && other)) {
     return {
@@ -282,14 +296,21 @@ std::string JoinEdge::toString() const {
     out << " not exists ";
   } else if (leftOptional_) {
     out << " right ";
+  } else if (directed_) {
+    out << " unnest ";
   } else {
     out << " inner ";
   }
   out << rightTable_->toString();
   out << " on ";
-  for (auto i = 0; i < leftKeys_.size(); ++i) {
-    out << leftKeys_[i]->toString() << " = " << rightKeys_[i]->toString()
-        << (i < leftKeys_.size() - 1 ? " and " : "");
+  for (size_t i = 0; i < leftKeys_.size(); ++i) {
+    if (i > 0) {
+      out << " and ";
+    }
+    out << leftKeys_[i]->toString();
+    if (i < rightKeys_.size()) {
+      out << " = " << rightKeys_[i]->toString();
+    }
   }
   if (!filter_.empty()) {
     out << " filter " << conjunctsToString(filter_);

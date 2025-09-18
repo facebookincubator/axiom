@@ -31,7 +31,7 @@ std::string PlanAndStats::toString() const {
   return plan->toString(
       true,
       [&](const velox::core::PlanNodeId& planNodeId,
-          const std::string& indentation,
+          std::string_view indentation,
           std::ostream& out) {
         auto it = prediction.find(planNodeId);
         if (it != prediction.end()) {
@@ -520,18 +520,23 @@ namespace {
 // related functions.
 class TempProjections {
  public:
-  TempProjections(ToVelox& tv, const RelationOp& input)
-      : toVelox_(tv), input_(input) {
+  TempProjections(
+      ToVelox& toVelox,
+      const RelationOp& input,
+      bool useAllColumns = true)
+      : toVelox_{toVelox}, input_{input} {
     exprChannel_.reserve(input_.columns().size());
     names_.reserve(input_.columns().size());
     exprs_.reserve(input_.columns().size());
     fieldRefs_.reserve(input_.columns().size());
     for (const auto& column : input_.columns()) {
-      auto [it, emplaced] = exprChannel_.emplace(column, nextChannel_);
+      auto [it, emplaced] =
+          exprChannel_.emplace(column, Channel{nextChannel_, useAllColumns});
       if (!emplaced) {
         continue;
       }
       ++nextChannel_;
+      numUsedChannels_ += useAllColumns ? 1 : 0;
       names_.push_back(ToVelox::outputName(column));
       auto fieldRef = std::make_shared<velox::core::FieldAccessTypedExpr>(
           toTypePtr(column->value().type), names_.back());
@@ -543,10 +548,12 @@ class TempProjections {
   velox::core::FieldAccessTypedExprPtr toFieldRef(
       ExprCP expr,
       const std::string* optName = nullptr) {
-    auto [it, emplaced] = exprChannel_.emplace(expr, nextChannel_);
+    auto [it, emplaced] =
+        exprChannel_.emplace(expr, Channel{nextChannel_, true});
     if (emplaced) {
       VELOX_CHECK(expr->isNot(PlanType::kColumnExpr));
       ++nextChannel_;
+      ++numUsedChannels_;
       exprs_.push_back(queryCtx()->optimization()->toTypedExpr(expr));
       names_.push_back(
           optName ? *optName : fmt::format("__r{}", nextChannel_ - 1));
@@ -554,22 +561,27 @@ class TempProjections {
           toTypePtr(expr->value().type), names_.back()));
       return fieldRefs_.back();
     }
-    auto fieldRef = fieldRefs_[it->second];
+    numUsedChannels_ += it->second.used ? 0 : 1;
+    it->second.used = true;
+    auto fieldRef = fieldRefs_[it->second.idx];
     if (optName && *optName != fieldRef->name()) {
       auto aliasFieldRef = std::make_shared<velox::core::FieldAccessTypedExpr>(
           toTypePtr(expr->value().type), *optName);
       names_.push_back(*optName);
       exprs_.push_back(fieldRef);
       fieldRefs_.push_back(aliasFieldRef);
-      exprChannel_[expr] = nextChannel_++;
+      exprChannel_[expr] = {nextChannel_++, true};
+      ++numUsedChannels_;
       return aliasFieldRef;
     }
     return fieldRef;
   }
 
-  template <typename Result = velox::core::FieldAccessTypedExprPtr>
+  template <
+      typename Result = velox::core::FieldAccessTypedExprPtr,
+      typename Container>
   std::vector<Result> toFieldRefs(
-      const ExprVector& exprs,
+      const Container& exprs,
       const std::vector<std::string>* optNames = nullptr) {
     std::vector<Result> result;
     result.reserve(exprs.size());
@@ -581,23 +593,57 @@ class TempProjections {
   }
 
   velox::core::PlanNodePtr maybeProject(velox::core::PlanNodePtr inputNode) && {
+    VELOX_DCHECK_LE(numUsedChannels_, nextChannel_);
     if (nextChannel_ == input_.columns().size()) {
+      // TODO: Maybe for some plans we want to reduce projections
+      // if numUsedChannels_ < nextChannel_.
       return inputNode;
     }
 
+    const auto notNeededChannels = nextChannel_ - numUsedChannels_;
+    if (notNeededChannels != 0) {
+      folly::F14FastSet<uint32_t> unusedChannels;
+      unusedChannels.reserve(notNeededChannels);
+      for (const auto& expr : exprChannel_) {
+        if (!expr.second.used) {
+          unusedChannels.emplace(expr.second.idx);
+        }
+      }
+      VELOX_DCHECK_EQ(notNeededChannels, unusedChannels.size());
+
+      uint32_t i = 0;
+      std::erase_if(names_, [&](const auto&) mutable {
+        return unusedChannels.contains(i++);
+      });
+
+      i = 0;
+      std::erase_if(exprs_, [&](const auto&) mutable {
+        return unusedChannels.contains(i++);
+      });
+    }
+
     return std::make_shared<velox::core::ProjectNode>(
-        toVelox_.nextId(), std::move(names_), std::move(exprs_), inputNode);
+        toVelox_.nextId(),
+        std::move(names_),
+        std::move(exprs_),
+        std::move(inputNode));
   }
 
  private:
   ToVelox& toVelox_;
   const RelationOp& input_;
+  uint32_t numUsedChannels_{0};
   uint32_t nextChannel_{0};
   std::vector<velox::core::FieldAccessTypedExprPtr> fieldRefs_;
   std::vector<std::string> names_;
   std::vector<velox::core::TypedExprPtr> exprs_;
-  std::unordered_map<ExprCP, uint32_t> exprChannel_;
+  struct Channel {
+    uint32_t idx = 0;
+    bool used = false;
+  };
+  folly::F14FastMap<ExprCP, Channel> exprChannel_;
 };
+
 } // namespace
 
 runner::ExecutableFragment ToVelox::newFragment() {
@@ -967,7 +1013,7 @@ velox::RowTypePtr ToVelox::subfieldPushdownScanType(
     BaseTableCP baseTable,
     const ColumnVector& leafColumns,
     ColumnVector& topColumns,
-    std::unordered_map<ColumnCP, velox::TypePtr>& typeMap) {
+    folly::F14FastMap<ColumnCP, velox::TypePtr>& typeMap) {
   PlanObjectSet top;
   std::vector<std::string> names;
   std::vector<velox::TypePtr> types;
@@ -1017,7 +1063,7 @@ namespace {
 
 void collectFieldNames(
     const velox::core::TypedExprPtr& expr,
-    std::unordered_set<Name>& names) {
+    folly::F14FastSet<Name>& names) {
   if (expr->isFieldAccessKind()) {
     auto fieldAccess = expr->asUnchecked<velox::core::FieldAccessTypedExpr>();
     if (fieldAccess->isInputColumn()) {
@@ -1049,7 +1095,7 @@ velox::core::TypedExprPtr toAndWithAliases(
         specialForm(logical_plan::SpecialForm::kAnd));
   }
 
-  std::unordered_set<Name> usedFieldNames;
+  folly::F14FastSet<Name> usedFieldNames;
   collectFieldNames(result, usedFieldNames);
 
   PlanObjectSet columnSet;
@@ -1214,8 +1260,6 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
     const Join& join,
     runner::ExecutableFragment& fragment,
     std::vector<runner::ExecutableFragment>& stages) {
-  TempProjections leftProjections(*this, *join.input());
-  TempProjections rightProjections(*this, *join.right);
   auto left = makeFragment(join.input(), fragment, stages);
   auto right = makeFragment(join.right, fragment, stages);
   if (join.method == JoinMethod::kCross) {
@@ -1223,8 +1267,8 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
         nextId(),
         join.joinType,
         nullptr,
-        std::move(leftProjections).maybeProject(left),
-        std::move(rightProjections).maybeProject(right),
+        std::move(left),
+        std::move(right),
         makeOutputType(join.columns()));
     if (join.filter.empty()) {
       makePredictionAndHistory(joinNode->id(), &join);
@@ -1233,6 +1277,10 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
     return std::make_shared<velox::core::FilterNode>(
         nextId(), toAnd(join.filter), joinNode);
   }
+  // TODO: We can avoid to project extra columns here if join.columns() isn't
+  // all lhs and rhs columns concatenated.
+  TempProjections leftProjections{*this, *join.input()};
+  TempProjections rightProjections{*this, *join.right};
 
   auto leftKeys = leftProjections.toFieldRefs(join.leftKeys);
   auto rightKeys = rightProjections.toFieldRefs(join.rightKeys);
@@ -1251,6 +1299,35 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
   return joinNode;
 }
 
+velox::core::PlanNodePtr ToVelox::makeUnnest(
+    const Unnest& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+
+  // We avoid use all of the input columns in the projections
+  // because the unnest op explicitly specify what columns to replicate
+  TempProjections projections{*this, *op.input(), false};
+  auto replicateVariables = projections.toFieldRefs(op.replicateColumns);
+  auto unnestVariables = projections.toFieldRefs(op.unnestExprs);
+  auto project = std::move(projections).maybeProject(std::move(input));
+
+  std::vector<std::string> unnestNames;
+  unnestNames.reserve(op.unnestedColumns.size());
+  for (const auto* column : op.unnestedColumns) {
+    unnestNames.emplace_back(outputName(column));
+  }
+
+  return std::make_shared<velox::core::UnnestNode>(
+      nextId(),
+      std::move(replicateVariables),
+      std::move(unnestVariables),
+      std::move(unnestNames),
+      std::nullopt,
+      std::nullopt,
+      std::move(project));
+}
+
 velox::core::PlanNodePtr ToVelox::makeAggregation(
     const Aggregation& op,
     runner::ExecutableFragment& fragment,
@@ -1262,7 +1339,7 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       op.step == velox::core::AggregationNode::Step::kSingle;
   const auto numKeys = op.groupingKeys.size();
 
-  TempProjections projections(*this, *op.input());
+  TempProjections projections{*this, *op.input(), false};
   std::vector<std::string> aggregateNames;
   std::vector<velox::core::AggregationNode::Aggregate> aggregates;
   for (size_t i = 0; i < op.aggregates.size(); ++i) {
@@ -1535,6 +1612,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeUnionAll(*op->as<UnionAll>(), fragment, stages);
     case RelType::kValues:
       return makeValues(*op->as<Values>(), fragment);
+    case RelType::kUnnest:
+      return makeUnnest(*op->as<Unnest>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

@@ -662,7 +662,7 @@ class AstBuilder : public PrestoSqlVisitor {
 
   QualifiedNamePtr getQualifiedName(PrestoSqlParser::QualifiedNameContext* ctx);
 
-  void trace(const std::string& name) const;
+  void trace(std::string_view name) const;
 
   const bool enableTracing_;
 };

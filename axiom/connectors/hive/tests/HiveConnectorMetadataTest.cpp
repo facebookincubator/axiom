@@ -125,7 +125,7 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
        {"data", BIGINT()},
        {"ds", VARCHAR()}});
 
-  std::unordered_map<std::string, std::string> options = {
+  folly::F14FastMap<std::string, std::string> options = {
       {"bucketed_by", "key1"},
       {"sorted_by", "key1, key2"},
       {"bucket_count", "4"},

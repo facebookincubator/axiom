@@ -80,7 +80,7 @@ struct ExprDedupHasher {
 };
 
 using FunctionDedupMap =
-    std::unordered_map<ExprDedupKey, ExprCP, ExprDedupHasher>;
+    folly::F14FastMap<ExprDedupKey, ExprCP, ExprDedupHasher>;
 
 struct VariantPtrHasher {
   size_t operator()(const std::shared_ptr<const velox::Variant>& value) const {
@@ -127,9 +127,9 @@ struct ResultAccess {
 
 /// PlanNode output columns and function arguments with accessed subfields.
 struct PlanSubfields {
-  std::unordered_map<const logical_plan::LogicalPlanNode*, ResultAccess>
+  folly::F14FastMap<const logical_plan::LogicalPlanNode*, ResultAccess>
       nodeFields;
-  std::unordered_map<const logical_plan::Expr*, ResultAccess> argFields;
+  folly::F14FastMap<const logical_plan::Expr*, ResultAccess> argFields;
 
   bool hasColumn(const logical_plan::LogicalPlanNode* node, int32_t ordinal)
       const {
@@ -154,7 +154,7 @@ struct PlanSubfields {
 /// = xx2, where xx is the name of a top level column returned by
 /// the scan.
 struct SubfieldProjections {
-  std::unordered_map<PathCP, ExprCP> pathToExpr;
+  folly::F14FastMap<PathCP, ExprCP> pathToExpr;
 };
 
 class ToGraph {
@@ -175,7 +175,7 @@ class ToGraph {
       DerivedTableP dt,
       const logical_plan::LogicalPlanNode& logicalPlan);
 
-  Name newCName(const std::string& prefix) {
+  Name newCName(std::string_view prefix) {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
   }
 
@@ -254,13 +254,13 @@ class ToGraph {
   // successful. if not successful.
   ExprCP tryFoldConstant(
       const velox::TypePtr& returnType,
-      const std::string& callName,
+      std::string_view callName,
       const ExprVector& literals);
 
   // Converts 'name' to a deduplicated ExprCP. If 'name' is assigned to an
   // expression in a projection, returns the deduplicated ExprPtr of the
   // expression.
-  ExprCP translateColumn(const std::string& name);
+  ExprCP translateColumn(std::string_view name);
 
   //  Applies translateColumn to a 'source'.
   ExprVector translateColumns(const std::vector<logical_plan::ExprPtr>& source);
@@ -311,6 +311,10 @@ class ToGraph {
       bool isTopLevel,
       bool& isLeftLeaf);
 
+  void translateUnnest(
+      const logical_plan::UnnestNode& logicalUnnest,
+      bool isNewDt);
+
   AggregationPlanCP translateAggregation(
       const logical_plan::AggregateNode& aggregation);
 
@@ -358,6 +362,12 @@ class ToGraph {
 
   void markFieldAccessed(
       const logical_plan::ProjectNode& project,
+      int32_t ordinal,
+      std::vector<Step>& steps,
+      bool isControl);
+
+  void markFieldAccessed(
+      const logical_plan::UnnestNode& unnest,
       int32_t ordinal,
       std::vector<Step>& steps,
       bool isControl);
@@ -444,9 +454,9 @@ class ToGraph {
   const logical_plan::LogicalPlanNode* exprSource_{nullptr};
 
   // Maps names in project nodes of input logical plan to deduplicated Exprs.
-  std::unordered_map<std::string, ExprCP> renames_;
+  folly::F14FastMap<std::string, ExprCP> renames_;
 
-  std::unordered_map<
+  folly::F14FastMap<
       std::shared_ptr<const velox::Variant>,
       ExprCP,
       VariantPtrHasher,
@@ -456,7 +466,8 @@ class ToGraph {
   // Reverse map from dedupped literal to the shared_ptr. We put the
   // shared ptr back into the result plan so the variant never gets
   // copied.
-  std::map<ExprCP, std::shared_ptr<const velox::Variant>> reverseConstantDedup_;
+  folly::F14FastMap<ExprCP, std::shared_ptr<const velox::Variant>>
+      reverseConstantDedup_;
 
   // Dedup map from name + ExprVector to corresponding CallExpr.
   FunctionDedupMap functionDedup_;
@@ -474,17 +485,17 @@ class ToGraph {
 
   /// Expressions corresponding to skyline paths over a subfield decomposable
   /// function.
-  std::unordered_map<const logical_plan::CallExpr*, SubfieldProjections>
+  folly::F14FastMap<const logical_plan::CallExpr*, SubfieldProjections>
       functionSubfields_;
 
   // Every unique path step, expr pair. For paths c.f1.f2 and c.f1.f3 there
   // are 3 entries: c.f1 and c.f1.f2 and c1.f1.f3, where the last two share
   // the same c.f1.
-  std::unordered_map<PathExpr, ExprCP, PathExprHasher> deduppedGetters_;
+  folly::F14FastMap<PathExpr, ExprCP, PathExprHasher> deduppedGetters_;
 
   // Complex type functions that have been checked for explode and
   // 'functionSubfields_'.
-  std::unordered_set<const logical_plan::CallExpr*> translatedSubfieldFuncs_;
+  folly::F14FastSet<const logical_plan::CallExpr*> translatedSubfieldFuncs_;
 
   /// If subfield extraction is pushed down, then these give the skyline
   /// subfields for a column for control and payload situations. The same
@@ -492,10 +503,10 @@ class ToGraph {
   /// is struct<a int, b int> and only c.a is accessed, there may be no
   /// representation for c, but only for c.a. In this case the skyline is .a =
   /// xx where xx is a synthetic leaf column name for c.a.
-  std::unordered_map<ColumnCP, SubfieldProjections> allColumnSubfields_;
+  folly::F14FastMap<ColumnCP, SubfieldProjections> allColumnSubfields_;
 
   // Map from leaf PlanNode to corresponding PlanObject
-  std::unordered_map<const logical_plan::LogicalPlanNode*, PlanObjectCP>
+  folly::F14FastMap<const logical_plan::LogicalPlanNode*, PlanObjectCP>
       planLeaves_;
 
   Name equality_;
@@ -503,7 +514,7 @@ class ToGraph {
   Name subscript_{nullptr};
   Name cardinality_{nullptr};
 
-  std::unordered_map<Name, Name> reversibleFunctions_;
+  folly::F14FastMap<Name, Name> reversibleFunctions_;
 };
 
 } // namespace facebook::axiom::optimizer

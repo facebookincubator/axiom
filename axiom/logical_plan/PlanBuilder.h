@@ -188,7 +188,9 @@ class PlanBuilder {
 
   PlanBuilder& filter(const ExprApi& predicate);
 
-  PlanBuilder& project(const std::vector<std::string>& projections);
+  PlanBuilder& project(const std::vector<std::string>& projections) {
+    return project(parse(projections));
+  }
 
   PlanBuilder& project(std::initializer_list<std::string> projections) {
     return project(std::vector<std::string>{projections});
@@ -270,11 +272,15 @@ class PlanBuilder {
   /// @param unnestExprs A list of constant expressions to unnest.
   PlanBuilder& unnest(
       const std::vector<std::string>& unnestExprs,
-      bool withOrdinality = false);
+      bool withOrdinality = false) {
+    return unnest(parse(unnestExprs), withOrdinality);
+  }
 
   PlanBuilder& unnest(
       const std::vector<ExprApi>& unnestExprs,
-      bool withOrdinality = false);
+      bool withOrdinality = false) {
+    return unnest(unnestExprs, withOrdinality, std::nullopt, {});
+  }
 
   /// An alternative way to specify aliases for unnested columns. A preferred
   /// way is by using ExprApi::unnestAs.
@@ -329,6 +335,51 @@ class PlanBuilder {
   PlanBuilder& limit(int64_t offset, int64_t count);
 
   PlanBuilder& offset(int64_t offset);
+
+  PlanBuilder& tableWrite(
+      std::string connectorId,
+      std::string tableName,
+      WriteKind kind,
+      std::vector<std::string> columnNames,
+      std::initializer_list<std::string> columnExprs,
+      velox::RowTypePtr outputType = velox::ROW({}),
+      folly::F14FastMap<std::string, std::string> options = {}) {
+    return tableWrite(
+        std::move(connectorId),
+        std::move(tableName),
+        kind,
+        std::move(columnNames),
+        std::vector<std::string>{columnExprs},
+        std::move(outputType),
+        std::move(options));
+  }
+
+  PlanBuilder& tableWrite(
+      std::string connectorId,
+      std::string tableName,
+      WriteKind kind,
+      std::vector<std::string> columnNames,
+      const std::vector<std::string>& columnExprs,
+      velox::RowTypePtr outputType = velox::ROW({}),
+      folly::F14FastMap<std::string, std::string> options = {}) {
+    return tableWrite(
+        std::move(connectorId),
+        std::move(tableName),
+        kind,
+        std::move(columnNames),
+        parse(columnExprs),
+        std::move(outputType),
+        std::move(options));
+  }
+
+  PlanBuilder& tableWrite(
+      std::string connectorId,
+      std::string tableName,
+      WriteKind kind,
+      std::vector<std::string> columnNames,
+      const std::vector<ExprApi>& columnExprs,
+      velox::RowTypePtr outputType = velox::ROW({}),
+      folly::F14FastMap<std::string, std::string> options = {});
 
   PlanBuilder& as(const std::string& alias);
 

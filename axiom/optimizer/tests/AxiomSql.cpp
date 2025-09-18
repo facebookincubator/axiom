@@ -141,7 +141,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
  public:
   void initialize() override {
     initializeMemoryManager();
-    rootPool_ = memory::memoryManager()->addRootPool("velox_sql");
+    rootPool_ = memory::memoryManager()->addRootPool("axiom_sql");
 
     optimizerPool_ = rootPool_->addLeafChild("optimizer");
     checkPool_ = rootPool_->addLeafChild("check");
@@ -224,7 +224,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
 
   std::shared_ptr<velox::connector::Connector> registerTpchConnector() {
     auto emptyConfig = std::make_shared<config::ConfigBase>(
-        std::unordered_map<std::string, std::string>());
+        std::unordered_map<std::string, std::string>{});
 
     velox::connector::tpch::TpchConnectorFactory factory;
     auto connector = factory.newConnector("tpch", emptyConfig);
@@ -303,7 +303,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     check_ = ref;
   }
 
-  void run(const std::string& sql) {
+  void run(std::string_view sql) {
     optimizer::test::SqlStatementPtr sqlStatement;
     try {
       sqlStatement = prestoParser_->parse(sql);
@@ -508,7 +508,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       facebook::axiom::runner::LocalRunner& runner,
       const optimizer::NodePredictionMap& estimates) {
     std::cout << runner.printPlanWithStats([&](const core::PlanNodeId& nodeId,
-                                               const std::string& indentation,
+                                               std::string_view indentation,
                                                std::ostream& out) {
       auto it = estimates.find(nodeId);
       if (it != estimates.end()) {
@@ -694,7 +694,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     return result;
   }
 
-  static void writeString(const std::string& string, std::ostream& out) {
+  static void writeString(std::string_view string, std::ostream& out) {
     write<int32_t>(string.size(), out);
     out.write(string.data(), string.size());
   }
@@ -901,7 +901,7 @@ std::string readCommand(std::istream& in, bool& end) {
 
 void readCommands(
     VeloxRunner& runner,
-    const std::string& prompt,
+    std::string_view prompt,
     std::istream& in) {
   for (;;) {
     std::cout << prompt;
@@ -1016,8 +1016,8 @@ void checkQueries(VeloxRunner& runner) {
 
 int main(int argc, char** argv) {
   gflags::SetUsageMessage(
-      "Velox local SQL command line. "
-      "Run 'velox_sql --help' for available options.\n");
+      "Axiom local SQL command line. "
+      "Run 'axiom_sql --help' for available options.\n");
 
   folly::Init init(&argc, &argv, false);
 
@@ -1034,7 +1034,7 @@ int main(int argc, char** argv) {
     } else if (!FLAGS_check.empty()) {
       facebook::axiom::checkQueries(runner);
     } else {
-      std::cout << "Velox SQL. Type statement and end with ;.\n"
+      std::cout << "Axiom SQL. Type statement and end with ;.\n"
                    "flag name = value; sets a gflag.\n"
                    "help; prints help text."
                 << std::endl;

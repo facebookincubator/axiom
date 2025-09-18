@@ -448,6 +448,7 @@ TEST_F(PlanPrinterTest, unnest) {
         testing::ElementsAre(
             testing::Eq("- Unnest: -> ROW<e:INTEGER>"),
             testing::Eq("    [e] := [1,2,3]"),
+            testing::Eq("  - Values: 1 rows -> ROW<>"),
             testing::Eq("")));
   }
 
@@ -467,6 +468,7 @@ TEST_F(PlanPrinterTest, unnest) {
             testing::StartsWith("    expr := plus(x, CAST(1 AS INTEGER))"),
             testing::Eq("  - Unnest: -> ROW<x:INTEGER>"),
             testing::Eq("      [x] := [1,2,3]"),
+            testing::Eq("    - Values: 1 rows -> ROW<>"),
             testing::Eq("")));
   }
 
@@ -482,6 +484,7 @@ TEST_F(PlanPrinterTest, unnest) {
         testing::ElementsAre(
             testing::Eq("- Unnest: -> ROW<k:INTEGER,v:INTEGER>"),
             testing::Eq("    [k, v] := map([1,2,3], [10,20,30])"),
+            testing::Eq("  - Values: 1 rows -> ROW<>"),
             testing::Eq("")));
   }
 
@@ -501,6 +504,7 @@ TEST_F(PlanPrinterTest, unnest) {
             testing::StartsWith("    expr := plus(x, y)"),
             testing::Eq("  - Unnest: -> ROW<x:INTEGER,y:INTEGER>"),
             testing::Eq("      [x, y] := map([1,2,3], [10,20,30])"),
+            testing::Eq("    - Values: 1 rows -> ROW<>"),
             testing::Eq("")));
   }
 
@@ -1204,6 +1208,55 @@ TEST_F(PlanPrinterTest, coercions) {
           testing::StartsWith("    expr := multiply(CAST(a AS DOUBLE), 0.5)"),
           testing::StartsWith("    expr_0 := plus(CAST(a AS BIGINT), b)"),
           testing::StartsWith("  - Values"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, tableWrite) {
+  auto plan = PlanBuilder()
+                  .tableScan(kTestConnectorId, "test", {"a", "b"})
+                  .tableWrite(
+                      kTestConnectorId,
+                      "output_table",
+                      WriteKind::kInsert,
+                      {"col_a", "col_b"},
+                      {"a", "cast(b as varchar)"})
+                  .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- TableWrite"),
+          testing::StartsWith("    col_a := a"),
+          testing::StartsWith("    col_b := CAST(b AS VARCHAR)"),
+          testing::StartsWith("  - TableScan"),
+          testing::Eq("")));
+
+  lines = toSummaryLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("- TABLE_WRITE [1]: 0 fields"),
+          testing::Eq("      table: output_table"),
+          testing::Eq("      connector: test"),
+          testing::Eq("      columns: 2"),
+          testing::Eq("      expressions: CAST: 1, field: 2"),
+          testing::Eq("  - TABLE_SCAN [0]: 2 fields: a BIGINT, b DOUBLE"),
+          testing::Eq("        table: test"),
+          testing::Eq("        connector: test"),
+          testing::Eq("")));
+
+  lines = toSkeletonLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("- TABLE_WRITE [1]: 0 fields"),
+          testing::Eq("  - TABLE_SCAN [0]: 2 fields"),
+          testing::Eq("        table: test"),
+          testing::Eq("        connector: test"),
           testing::Eq("")));
 }
 

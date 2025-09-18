@@ -21,30 +21,30 @@ namespace facebook::axiom::connector {
 namespace {
 const auto& tableKindNames() {
   static const folly::F14FastMap<TableKind, std::string_view> kNames = {
-      {TableKind::kTable, "kTable"},
-      {TableKind::kTempTable, "kTempTable"},
+      {TableKind::kTable, "TABLE"},
+      {TableKind::kTempTable, "TEMP_TABLE"},
   };
   return kNames;
 }
 
 const auto& writeKindNames() {
   static const folly::F14FastMap<WriteKind, std::string_view> kNames = {
-      {WriteKind::kInsert, "kInsert"},
-      {WriteKind::kUpdate, "kUpdate"},
-      {WriteKind::kDelete, "kDelete"},
+      {WriteKind::kInsert, "INSERT"},
+      {WriteKind::kUpdate, "UPDATE"},
+      {WriteKind::kDelete, "DELETE"},
   };
   return kNames;
 }
 
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(TableKind, tableKindNames);
+AXIOM_DEFINE_ENUM_NAME(TableKind, tableKindNames);
 
-VELOX_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
+AXIOM_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 
 namespace {
 velox::RowTypePtr makeRowType(const std::vector<const Column*>& columns) {
-  std::unordered_set<std::string> uniqueNames;
+  folly::F14FastSet<std::string> uniqueNames;
 
   std::vector<std::string> names;
   std::vector<velox::TypePtr> types;
@@ -106,7 +106,7 @@ TableLayout::TableLayout(
   }
 }
 
-const Column* TableLayout::findColumn(const std::string& name) const {
+const Column* TableLayout::findColumn(std::string_view name) const {
   for (const auto& column : columns_) {
     if (column->name() == name) {
       return column;

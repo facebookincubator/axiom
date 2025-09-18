@@ -65,7 +65,7 @@ void makeLevelsInner(
     ExprCP expr,
     int32_t level,
     std::vector<LevelData>& levelData,
-    std::unordered_map<ExprCP, int32_t>& refCount,
+    folly::F14FastMap<ExprCP, int32_t>& refCount,
     PlanObjectSet& counted) {
   if (expr->is(PlanType::kLiteralExpr)) {
     return;
@@ -94,7 +94,7 @@ void makeLevelsInner(
 void makeExprLevels(
     const PlanObjectSet& exprs,
     std::vector<LevelData>& levelData,
-    std::unordered_map<ExprCP, int32_t>& refCount) {
+    folly::F14FastMap<ExprCP, int32_t>& refCount) {
   PlanObjectSet counted;
   exprs.forEach<Expr>([&](ExprCP expr) {
     makeLevelsInner(expr, 0, levelData, refCount, counted);
@@ -104,7 +104,7 @@ void makeExprLevels(
 PlanObjectSet makeCseBorder(
     const std::vector<LevelData>& levelData,
     PlanObjectSet& placed,
-    std::unordered_map<ExprCP, int32_t>& refCount) {
+    folly::F14FastMap<ExprCP, int32_t>& refCount) {
   PlanObjectSet border;
   for (const auto& data : levelData | std::views::reverse) {
     data.exprs.forEach<Expr>([&](auto expr) {
@@ -316,7 +316,7 @@ velox::core::PlanNodePtr ToVelox::maybeParallelProject(
   }
 
   std::vector<LevelData> levelData;
-  std::unordered_map<ExprCP, int32_t> refCount;
+  folly::F14FastMap<ExprCP, int32_t> refCount;
   makeExprLevels(top, levelData, refCount);
 
   PlanObjectSet placed;
