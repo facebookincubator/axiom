@@ -185,10 +185,6 @@ struct SortOrder {
 /// Represents a partitioning function.
 class PartitionType {
  public:
-  /// Returns the number of partitions if the data is partitioned.
-  /// If unknown returns 0.
-  virtual int32_t numPartitions() const = 0;
-
   /// Returns 'this' or '&other' if the partitions are compatible.
   /// Otherwise returns nullptr.
   /// Partitions are compatible if data in one partitioned dataset can only
@@ -221,15 +217,6 @@ class PartitionType {
   // This is because PartitionType is used only as "view".
   ~PartitionType() = default;
 };
-
-inline const PartitionType* copartitionType(
-    const PartitionType* lhs,
-    const PartitionType* rhs) {
-  if (!lhs || !rhs) {
-    return nullptr;
-  }
-  return lhs->copartition(*rhs);
-}
 
 /// Represents a physical manifestation of a table. There is at least
 /// one layout but for tables that have multiple sort orders, partitionings,

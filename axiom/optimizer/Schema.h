@@ -116,20 +116,12 @@ class Locus {
 
 using LocusCP = const Locus*;
 
-/// Distribution of data. 'numPartitions' is 1 if the data is not partitioned.
-/// There is copartitioning if the DistributionType is the same on both sides
-/// and both sides have an equal number of 1:1 type matched partitioning keys.
+/// Distribution of data.
+/// 'partitionType' is nullptr if the data is not partitioned
+/// by some specific functions.
 struct DistributionType {
-  bool operator==(const DistributionType& other) const {
-    return copartitionType(partitionType, other.partitionType) &&
-        locus == other.locus && isGather == other.isGather;
-  }
-
   LocusCP locus{nullptr};
-  /// Partition function.
-  /// nullptr means Velox default, copartitioned only with itself.
   const connector::PartitionType* partitionType{nullptr};
-  int32_t numPartitions{1};
   bool isGather{false};
 
   static DistributionType gather() {
@@ -180,6 +172,11 @@ struct Distribution {
         std::move(orderTypes),
     };
   }
+
+  /// Returns true if 'this' and 'other' can be the same partitioning.
+  /// Returns false if definitely not the same partitioning.
+  /// Returns nullopt if not enough information to decide.
+  std::optional<bool> canBeSamePartition(const Distribution& other) const;
 
   /// True if 'this' and 'other' have the same number/type of keys and same
   /// distribution type. Data is copartitioned if both sides have a 1:1

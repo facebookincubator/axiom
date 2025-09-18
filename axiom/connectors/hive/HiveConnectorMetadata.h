@@ -47,16 +47,7 @@ class HiveConnectorSession : public ConnectorSession {
 
 class HivePartitionType final : public PartitionType {
  public:
-  explicit HivePartitionType(
-      int32_t numBuckets,
-      std::vector<velox::TypePtr> keyTypes = {})
-      : numBuckets_{numBuckets}, keyTypes_{std::move(keyTypes)} {}
-
-  /// We do not number of partitions up front in case of Hive.
-  /// It's determined later by query optimizer.
-  int32_t numPartitions() const final {
-    return 0;
-  }
+  explicit HivePartitionType(int32_t numBuckets) : numBuckets_{numBuckets} {}
 
   /// Types are compatible if the bucket count one is an integer multiple of
   /// the other. The partition to use for copartitioning is the one with the
@@ -72,7 +63,6 @@ class HivePartitionType final : public PartitionType {
 
  private:
   const int32_t numBuckets_;
-  const std::vector<velox::TypePtr> keyTypes_;
 };
 
 /// Describes a Hive table layout. Adds a file format and a list of

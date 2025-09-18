@@ -130,12 +130,6 @@ SchemaTableCP Schema::findTable(
   VELOX_CHECK_EQ(layouts.size(), 1);
   const auto* layout = layouts[0];
   distribution.partitionType = layout->partitionType();
-  if (distribution.partitionType) {
-    const auto numPartitions = distribution.partitionType->numPartitions();
-    if (numPartitions > 0) {
-      distribution.numPartitions = numPartitions;
-    }
-  }
 
   schemaTable->addIndex(
       toName("pk"), 0, 0, {}, distribution, {}, columns, layout);
@@ -217,6 +211,16 @@ float combine(float card, size_t ith, float otherCard) {
   }
   return card / otherCard;
 }
+
+bool hasCopartition(
+    const connector::PartitionType* lhs,
+    const connector::PartitionType* rhs) {
+  if (!lhs || !rhs) {
+    return lhs == rhs;
+  }
+  return lhs->copartition(*rhs);
+}
+
 } // namespace
 
 IndexInfo SchemaTable::indexInfo(
@@ -356,22 +360,42 @@ ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {
   return nullptr;
 }
 
-bool Distribution::isSamePartition(const Distribution& other) const {
-  if (distributionType != other.distributionType) {
+std::optional<bool> Distribution::canBeSamePartition(
+    const Distribution& other) const {
+  const auto& lhsType = distributionType;
+  const auto& rhsType = other.distributionType;
+  if (lhsType.locus != rhsType.locus) {
+    // Different locus cannot be copartitioned.
+    return false;
+  }
+  if (lhsType.isGather != rhsType.isGather) {
+    // If one is gather and the other is not, they cannot be copartitioned.
     return false;
   }
   if (isBroadcast || other.isBroadcast) {
+    // If either is broadcast, they are copartitioned,
+    // because broadcast data is available everywhere.
     return true;
   }
+  if (partition.empty() || other.partition.empty()) {
+    // If either has no partitioning columns, they cannot be copartitioned.
+    return false;
+  }
   if (partition.size() != other.partition.size()) {
+    // Different number of partitioning columns cannot be copartitioned.
     return false;
   }
-  if (partition.size() == 0) {
-    // If the partitioning columns are not in the columns or if there
-    // are no partitioning columns, there can be  no copartitioning.
+  if (!hasCopartition(lhsType.partitionType, rhsType.partitionType)) {
     return false;
   }
-  for (auto i = 0; i < partition.size(); ++i) {
+  return std::nullopt;
+}
+
+bool Distribution::isSamePartition(const Distribution& other) const {
+  if (auto canBe = canBeSamePartition(other)) {
+    return *canBe;
+  }
+  for (size_t i = 0; i < partition.size(); ++i) {
     if (!partition[i]->sameOrEqual(*other.partition[i])) {
       return false;
     }
@@ -436,13 +460,12 @@ std::string Distribution::toString() const {
   std::stringstream out;
   if (!partition.empty()) {
     out << "P ";
-    out << " "
-        << (distributionType.partitionType
-                ? distributionType.partitionType->toString()
-                : " Velox default ")
-        << " ";
     exprsToString(partition, out);
-    out << " " << distributionType.numPartitions << " ways";
+    if (distributionType.partitionType) {
+      out << " " << distributionType.partitionType->toString();
+    } else {
+      out << " Velox hash";
+    }
   }
   if (!orderKeys.empty()) {
     out << " O ";

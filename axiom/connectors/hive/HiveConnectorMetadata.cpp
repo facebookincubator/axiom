@@ -27,14 +27,6 @@ const PartitionType* HivePartitionType::copartition(
   if (right == nullptr) {
     return nullptr;
   }
-  if (keyTypes_.size() != right->keyTypes_.size()) {
-    return nullptr;
-  }
-  for (size_t i = 0; i < keyTypes_.size(); ++i) {
-    if (!keyTypes_[i]->equivalent(*right->keyTypes_[i])) {
-      return nullptr;
-    }
-  }
   if (right->numBuckets_ % numBuckets_ == 0) {
     return this;
   }
@@ -53,16 +45,7 @@ velox::core::PartitionFunctionSpecPtr HivePartitionType::makeSpec(
 }
 
 std::string HivePartitionType::toString() const {
-  if (keyTypes_.empty()) {
-    return fmt::format("Hive {} buckets", numBuckets_);
-  }
-  std::vector<std::string> typeStrs;
-  typeStrs.reserve(keyTypes_.size());
-  for (const auto& type : keyTypes_) {
-    typeStrs.push_back(type->toString());
-  }
-  return fmt::format(
-      "Hive {} buckets [{}]", numBuckets_, folly::join(", ", typeStrs));
+  return fmt::format("Hive {} buckets", numBuckets_);
 }
 
 namespace {
@@ -79,16 +62,6 @@ velox::connector::hive::HiveColumnHandle::ColumnType columnType(
   }
   // TODO recognize special names like $path, $bucket etc.
   return velox::connector::hive::HiveColumnHandle::ColumnType::kRegular;
-}
-
-std::vector<velox::TypePtr> extractPartitionKeyTypes(
-    const std::vector<const Column*>& partitionColumns) {
-  std::vector<velox::TypePtr> types;
-  types.reserve(partitionColumns.size());
-  for (const auto* column : partitionColumns) {
-    types.push_back(column->type());
-  }
-  return types;
 }
 
 } // namespace
@@ -109,9 +82,7 @@ HiveTableLayout::HiveTableLayout(
       fileFormat_{fileFormat},
       hivePartitionColumns_{std::move(hivePartitionColumns)},
       numBuckets_{numBuckets},
-      partitionType_{
-          numBuckets_.value_or(0),
-          extractPartitionKeyTypes(partitionColumns())} {}
+      partitionType_{numBuckets_.value_or(0)} {}
 
 velox::connector::ColumnHandlePtr HiveConnectorMetadata::createColumnHandle(
     const TableLayout& layout,
