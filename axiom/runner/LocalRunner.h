@@ -129,6 +129,10 @@ class LocalRunner : public Runner,
     return state_;
   }
 
+  void setSingleThreadedExecution() {
+    params_.serialExecution = true;
+  }
+
  private:
   void start();
 
