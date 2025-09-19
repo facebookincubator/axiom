@@ -530,51 +530,54 @@ class TempProjections {
     exprs_.reserve(input_.columns().size());
     fieldRefs_.reserve(input_.columns().size());
     for (const auto& column : input_.columns()) {
-      auto [it, emplaced] =
-          exprChannel_.emplace(column, Channel{nextChannel_, useAllColumns});
-      if (!emplaced) {
-        continue;
-      }
-      ++nextChannel_;
-      numUsedChannels_ += useAllColumns ? 1 : 0;
+      auto [it, emplaced] = exprChannel_.emplace(column, nextField_);
+      VELOX_CHECK(emplaced);
+      ++nextField_;
       names_.push_back(ToVelox::outputName(column));
       auto fieldRef = std::make_shared<velox::core::FieldAccessTypedExpr>(
           toTypePtr(column->value().type), names_.back());
-      exprs_.push_back(fieldRef);
-      fieldRefs_.push_back(std::move(fieldRef));
+      if (useAllColumns) {
+        ++numUsedFields_;
+        fieldRefs_.push_back(fieldRef);
+      } else {
+        fieldRefs_.push_back(nullptr);
+      }
+      exprs_.push_back(std::move(fieldRef));
     }
   }
 
   velox::core::FieldAccessTypedExprPtr toFieldRef(
       ExprCP expr,
       const std::string* optName = nullptr) {
-    auto [it, emplaced] =
-        exprChannel_.emplace(expr, Channel{nextChannel_, true});
+    auto [it, emplaced] = exprChannel_.emplace(expr, nextField_);
     if (emplaced) {
       VELOX_CHECK(expr->isNot(PlanType::kColumnExpr));
-      ++nextChannel_;
-      ++numUsedChannels_;
       exprs_.push_back(queryCtx()->optimization()->toTypedExpr(expr));
-      names_.push_back(
-          optName ? *optName : fmt::format("__r{}", nextChannel_ - 1));
-      fieldRefs_.push_back(std::make_shared<velox::core::FieldAccessTypedExpr>(
-          toTypePtr(expr->value().type), names_.back()));
-      return fieldRefs_.back();
+      return addFieldRef(optName ? *optName : fmt::format("__r{}", nextField_));
     }
-    numUsedChannels_ += it->second.used ? 0 : 1;
-    it->second.used = true;
-    auto fieldRef = fieldRefs_[it->second.idx];
-    if (optName && *optName != fieldRef->name()) {
-      auto aliasFieldRef = std::make_shared<velox::core::FieldAccessTypedExpr>(
-          toTypePtr(expr->value().type), *optName);
-      names_.push_back(*optName);
-      exprs_.push_back(fieldRef);
-      fieldRefs_.push_back(aliasFieldRef);
-      exprChannel_[expr] = {nextChannel_++, true};
-      ++numUsedChannels_;
-      return aliasFieldRef;
+
+    auto& fieldRef = fieldRefs_[it->second];
+    auto& fieldExpr = exprs_[it->second];
+    if (!optName || *optName == names_[it->second]) {
+      if (fieldRef) {
+        return fieldRef;
+      }
+      VELOX_DCHECK(fieldExpr->isFieldAccessKind());
+      ++numUsedFields_;
+      return fieldRef = std::static_pointer_cast<
+                 const velox::core::FieldAccessTypedExpr>(fieldExpr);
     }
-    return fieldRef;
+    if (fieldRef) {
+      // We probably want to push fieldRef here. But it's invalid,
+      // we cannot reference different output column as our own input.
+      // So we will rely on Velox common subexpression detection
+      // to eliminate duplicated computation.
+      exprs_.push_back(fieldExpr);
+    } else {
+      exprs_.push_back(std::move(fieldExpr));
+      it->second = nextField_;
+    }
+    return addFieldRef(*optName);
   }
 
   template <
@@ -593,32 +596,23 @@ class TempProjections {
   }
 
   velox::core::PlanNodePtr maybeProject(velox::core::PlanNodePtr inputNode) && {
-    VELOX_DCHECK_LE(numUsedChannels_, nextChannel_);
-    if (nextChannel_ == input_.columns().size()) {
+    VELOX_DCHECK_LE(numUsedFields_, nextField_);
+    if (nextField_ == input_.columns().size()) {
       // TODO: Maybe for some plans we want to reduce projections
-      // if numUsedChannels_ < nextChannel_.
+      // if numUsedFields_ < nextField_.
       return inputNode;
     }
 
-    const auto notNeededChannels = nextChannel_ - numUsedChannels_;
-    if (notNeededChannels != 0) {
-      folly::F14FastSet<uint32_t> unusedChannels;
-      unusedChannels.reserve(notNeededChannels);
-      for (const auto& expr : exprChannel_) {
-        if (!expr.second.used) {
-          unusedChannels.emplace(expr.second.idx);
-        }
-      }
-      VELOX_DCHECK_EQ(notNeededChannels, unusedChannels.size());
-
+    const auto notNeededFields = nextField_ - numUsedFields_;
+    if (notNeededFields != 0) {
       uint32_t i = 0;
       std::erase_if(names_, [&](const auto&) mutable {
-        return unusedChannels.contains(i++);
+        return fieldRefs_[i++] == nullptr;
       });
 
       i = 0;
       std::erase_if(exprs_, [&](const auto&) mutable {
-        return unusedChannels.contains(i++);
+        return fieldRefs_[i++] == nullptr;
       });
     }
 
@@ -630,18 +624,23 @@ class TempProjections {
   }
 
  private:
+  velox::core::FieldAccessTypedExprPtr addFieldRef(std::string name) {
+    names_.emplace_back(std::move(name));
+    fieldRefs_.push_back(std::make_shared<velox::core::FieldAccessTypedExpr>(
+        exprs_.back()->type(), names_.back()));
+    ++nextField_;
+    ++numUsedFields_;
+    return fieldRefs_.back();
+  }
+
   ToVelox& toVelox_;
   const RelationOp& input_;
-  uint32_t numUsedChannels_{0};
-  uint32_t nextChannel_{0};
+  uint32_t numUsedFields_{0};
+  uint32_t nextField_{0};
   std::vector<velox::core::FieldAccessTypedExprPtr> fieldRefs_;
   std::vector<std::string> names_;
   std::vector<velox::core::TypedExprPtr> exprs_;
-  struct Channel {
-    uint32_t idx = 0;
-    bool used = false;
-  };
-  folly::F14FastMap<ExprCP, Channel> exprChannel_;
+  folly::F14FastMap<ExprCP, uint32_t> exprChannel_;
 };
 
 } // namespace
