@@ -733,6 +733,78 @@ velox::core::SortOrder toSortOrder(const OrderType& order) {
       : order == OrderType::kDescNullsFirst ? velox::core::kDescNullsFirst
                                             : velox::core::kDescNullsLast;
 }
+
+velox::core::WindowNode::Frame toVeloxFrame(
+    const WindowFrame& frame,
+    ToVelox& converter) {
+  auto veloxWindowType = velox::core::WindowNode::WindowType::kRange;
+  switch (frame.type) {
+    case logical_plan::WindowExpr::WindowType::kRange:
+      veloxWindowType = velox::core::WindowNode::WindowType::kRange;
+      break;
+    case logical_plan::WindowExpr::WindowType::kRows:
+      veloxWindowType = velox::core::WindowNode::WindowType::kRows;
+      break;
+    case logical_plan::WindowExpr::WindowType::kGroups:
+      VELOX_FAIL("GROUPS window frame not supported in velox");
+      break;
+  }
+
+  auto veloxStartType = velox::core::WindowNode::BoundType::kUnboundedPreceding;
+  switch (frame.startType) {
+    case logical_plan::WindowExpr::BoundType::kUnboundedPreceding:
+      veloxStartType = velox::core::WindowNode::BoundType::kUnboundedPreceding;
+      break;
+    case logical_plan::WindowExpr::BoundType::kPreceding:
+      veloxStartType = velox::core::WindowNode::BoundType::kPreceding;
+      break;
+    case logical_plan::WindowExpr::BoundType::kCurrentRow:
+      veloxStartType = velox::core::WindowNode::BoundType::kCurrentRow;
+      break;
+    case logical_plan::WindowExpr::BoundType::kFollowing:
+      veloxStartType = velox::core::WindowNode::BoundType::kFollowing;
+      break;
+    case logical_plan::WindowExpr::BoundType::kUnboundedFollowing:
+      veloxStartType = velox::core::WindowNode::BoundType::kUnboundedFollowing;
+      break;
+  }
+
+  auto veloxEndType = velox::core::WindowNode::BoundType::kUnboundedFollowing;
+  switch (frame.endType) {
+    case logical_plan::WindowExpr::BoundType::kUnboundedPreceding:
+      veloxEndType = velox::core::WindowNode::BoundType::kUnboundedPreceding;
+      break;
+    case logical_plan::WindowExpr::BoundType::kPreceding:
+      veloxEndType = velox::core::WindowNode::BoundType::kPreceding;
+      break;
+    case logical_plan::WindowExpr::BoundType::kCurrentRow:
+      veloxEndType = velox::core::WindowNode::BoundType::kCurrentRow;
+      break;
+    case logical_plan::WindowExpr::BoundType::kFollowing:
+      veloxEndType = velox::core::WindowNode::BoundType::kFollowing;
+      break;
+    case logical_plan::WindowExpr::BoundType::kUnboundedFollowing:
+      veloxEndType = velox::core::WindowNode::BoundType::kUnboundedFollowing;
+      break;
+  }
+
+  velox::core::TypedExprPtr startExpr = nullptr;
+  if (frame.startValue) {
+    startExpr = converter.toTypedExpr(frame.startValue);
+  }
+
+  velox::core::TypedExprPtr endExpr = nullptr;
+  if (frame.endValue) {
+    endExpr = converter.toTypedExpr(frame.endValue);
+  }
+
+  return velox::core::WindowNode::Frame{
+      veloxWindowType,
+      veloxStartType,
+      startExpr,
+      veloxEndType,
+      endExpr};
+}
 } // namespace
 
 velox::core::PlanNodePtr ToVelox::makeOrderBy(
@@ -1416,6 +1488,70 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       project);
 }
 
+velox::core::PlanNodePtr ToVelox::makeWindow(
+    const WindowOp& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+
+  TempProjections projections{*this, *op.input(), false};
+
+  std::vector<velox::core::FieldAccessTypedExprPtr> partitionKeys;
+  partitionKeys.reserve(op.partitionKeys.size());
+  for (const auto& key : op.partitionKeys) {
+    partitionKeys.emplace_back(projections.toFieldRef(key));
+  }
+
+  std::vector<velox::core::FieldAccessTypedExprPtr> sortingKeys;
+  std::vector<velox::core::SortOrder> sortingOrders;
+  sortingKeys.reserve(op.orderKeys.size());
+  sortingOrders.reserve(op.orderKeys.size());
+  for (size_t i = 0; i < op.orderKeys.size(); ++i) {
+    sortingKeys.push_back(projections.toFieldRef(op.orderKeys[i]));
+    sortingOrders.push_back(toSortOrder(op.orderTypes[i]));
+  }
+
+  std::vector<std::string> windowColumnNames;
+  std::vector<velox::core::WindowNode::Function> windowFunctions;
+  windowColumnNames.reserve(op.windows.size());
+  windowFunctions.reserve(op.windows.size());
+  for (size_t i = 0; i < op.windows.size(); ++i) {
+    const auto* column = op.getWindowExprColumn(i);
+    const auto* window = op.windows[i];
+
+    windowColumnNames.emplace_back(outputName(column));
+
+    std::vector<velox::core::TypedExprPtr> functionArgs;
+    functionArgs.reserve(window->args().size());
+    for (const auto& arg : window->args()) {
+      functionArgs.emplace_back(toTypedExpr(arg));
+    }
+
+    auto functionCall = std::make_shared<velox::core::CallTypedExpr>(
+        toTypePtr(window->value().type),
+        std::move(functionArgs),
+        std::string(window->name()));
+
+    auto frame = toVeloxFrame(window->frame(), *this);
+    windowFunctions.emplace_back(
+            std::move(functionCall),
+            std::move(frame),
+            window->ignoreNulls());
+  }
+
+  auto project = std::move(projections).maybeProject(input);
+
+  return std::make_shared<velox::core::WindowNode>(
+      nextId(),
+      partitionKeys,
+      sortingKeys,
+      sortingOrders,
+      windowColumnNames,
+      windowFunctions,
+      false, // inputsSorted
+      project);
+}
+
 velox::core::PlanNodePtr ToVelox::makeRepartition(
     const Repartition& repartition,
     runner::ExecutableFragment& fragment,
@@ -1575,6 +1711,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeFilter(*op->as<Filter>(), fragment, stages);
     case RelType::kAggregation:
       return makeAggregation(*op->as<Aggregation>(), fragment, stages);
+    case RelType::kWindow:
+      return makeWindow(*op->as<WindowOp>(), fragment, stages);
     case RelType::kOrderBy:
       return makeOrderBy(*op->as<OrderBy>(), fragment, stages);
     case RelType::kLimit:

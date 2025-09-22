@@ -881,6 +881,50 @@ class Aggregate : public Call {
 using AggregateCP = const Aggregate*;
 using AggregateVector = QGVector<AggregateCP>;
 
+/// Window frame specification for window functions
+struct WindowFrame {
+  logical_plan::WindowExpr::WindowType type;
+  logical_plan::WindowExpr::BoundType startType;
+  ExprCP startValue{nullptr};
+  logical_plan::WindowExpr::BoundType endType;
+  ExprCP endValue{nullptr};
+};
+
+class Window : public Call {
+ public:
+  Window(
+      Name name,
+      const Value& value,
+      ExprVector args,
+      FunctionSet functions,
+      WindowFrame frame,
+      bool ignoreNulls)
+      : Call(
+            PlanType::kWindowExpr,
+            name,
+            value,
+            std::move(args),
+            functions),
+        frame_(std::move(frame)),
+        ignoreNulls_(ignoreNulls) {
+  }
+
+  const WindowFrame& frame() const {
+    return frame_;
+  }
+
+  bool ignoreNulls() const {
+    return ignoreNulls_;
+  }
+
+ private:
+  WindowFrame frame_;
+  bool ignoreNulls_;
+};
+
+using WindowCP = const Window*;
+using WindowVector = QGVector<WindowCP>;
+
 class AggregationPlan : public PlanObject {
  public:
   AggregationPlan(
@@ -918,5 +962,52 @@ class AggregationPlan : public PlanObject {
 };
 
 using AggregationPlanCP = const AggregationPlan*;
+
+struct WindowSpec {
+  WindowSpec(
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes)
+      : partitionKeys(std::move(partitionKeys)),
+        orderKeys(std::move(orderKeys)),
+        orderTypes(std::move(orderTypes)) {
+    VELOX_CHECK_EQ(orderKeys.size(), orderTypes.size());
+  }
+
+  ExprVector partitionKeys;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+
+  bool operator==(const WindowSpec& other) const;
+};
+
+struct WindowSet {
+  WindowSet(WindowSpec spec, WindowVector windows, ColumnVector columns)
+      : spec(std::move(spec)),
+        windows(std::move(windows)),
+        columns(std::move(columns)) {}
+  
+  WindowSpec spec;
+  WindowVector windows;
+  ColumnVector columns;
+};
+
+using WindowSetVector = QGVector<WindowSet>;
+
+class WindowPlan : public PlanObject {
+ public:
+  explicit WindowPlan(WindowSetVector windowSets)
+      : PlanObject(PlanType::kWindowNode),
+        windowSets_(std::move(windowSets)) {}
+
+  const WindowSetVector& windowSets() const {
+    return windowSets_;
+  }
+
+ private:
+  const WindowSetVector windowSets_;
+};
+
+using WindowPlanCP = const WindowPlan*;
 
 } // namespace facebook::axiom::optimizer

@@ -58,6 +58,9 @@ class PlanNodeVisitor {
   virtual void visit(const UnnestNode& node, PlanNodeVisitorContext& context)
       const = 0;
 
+  virtual void visit(const WindowNode& node, PlanNodeVisitorContext& context)
+      const = 0;
+
   virtual void visit(
       const TableWriteNode& node,
       PlanNodeVisitorContext& context) const = 0;

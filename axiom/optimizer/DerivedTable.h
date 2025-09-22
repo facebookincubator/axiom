@@ -30,6 +30,9 @@ using JoinEdgeVector = QGVector<JoinEdgeP>;
 class AggregationPlan;
 using AggregationPlanCP = const AggregationPlan*;
 
+class WindowPlan;
+using WindowPlanCP = const WindowPlan*;
+
 enum class OrderType;
 using OrderTypeVector = QGVector<OrderType>;
 
@@ -129,6 +132,8 @@ struct DerivedTable : public PlanObject {
   /// Postprocessing clauses: group by, having, order by, limit, offset.
 
   AggregationPlanCP aggregation{nullptr};
+
+  WindowPlanCP windowPlan{nullptr};
 
   ExprVector having;
 

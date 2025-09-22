@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#include <optimizer/QueryGraph.h>
+#include <velox/common/base/Exceptions.h>
+#include <algorithm>
 #include <iostream>
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
@@ -63,6 +66,18 @@ velox::ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
   e.messageFunc = toGraphMessage;
   e.arg = ctx;
   return e;
+}
+
+OrderType toOrderType(const logical_plan::SortOrder& order) {
+  if (order.isAscending() && order.isNullsFirst()) {
+    return OrderType::kAscNullsFirst;
+  } else if (order.isAscending() && !order.isNullsFirst()) {
+    return OrderType::kAscNullsLast;
+  } else if (!order.isAscending() && order.isNullsFirst()) {
+    return OrderType::kDescNullsFirst;
+  } else {
+    return OrderType::kDescNullsLast;
+  }
 }
 } // namespace
 
@@ -1013,6 +1028,91 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       std::move(intermediateColumns));
 }
 
+WindowPlanCP ToGraph::translateWindow(const lp::WindowNode& windowNode) {
+  const auto& windowExprs = windowNode.windowExprs();
+  const auto& outputNames = windowNode.outputNames();
+  WindowSetVector windowSets;
+  windowSets.reserve(windowExprs.size());
+
+  for (size_t i = 0; i < windowExprs.size(); ++i) {
+    const auto [translatedWindow, spec] = translateWindowExpr(windowExprs[i]);
+    const auto* window = translatedWindow->as<Window>();
+
+    auto it = std::ranges::find_if(windowSets,
+        [&](const WindowSet& ws) {
+          return ws.spec == spec;
+        });
+
+    const auto* outputName = toName(outputNames[i]);
+    auto* column = make<Column>(
+        outputName,
+        currentDt_,
+        window->value(),
+        outputName);
+
+    renames_[outputName] = column;
+
+    if (it != windowSets.end()) {
+      it->windows.push_back(window);
+      it->columns.push_back(column);
+    } else {
+      windowSets.emplace_back(spec, WindowVector{window}, ColumnVector{column});
+    }
+  }
+
+  return make<WindowPlan>(std::move(windowSets));
+}
+
+std::pair<ExprCP, WindowSpec> ToGraph::translateWindowExpr(const lp::WindowExprPtr& windowExpr) {
+  ExprVector args;
+  args.reserve(windowExpr->inputs().size());
+  for (const auto& input : windowExpr->inputs()) {
+    args.emplace_back(translateExpr(input));
+  }
+
+  ExprVector partitionKeys;
+  partitionKeys.reserve(windowExpr->partitionKeys().size());
+  for (const auto& key : windowExpr->partitionKeys()) {
+    partitionKeys.emplace_back(translateExpr(key));
+  }
+
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  orderKeys.reserve(windowExpr->ordering().size());
+  orderTypes.reserve(windowExpr->ordering().size());
+  for (const auto& sorting : windowExpr->ordering()) {
+    orderKeys.emplace_back(translateExpr(sorting.expression));
+    orderTypes.emplace_back(toOrderType(sorting.order));
+  }
+
+  const auto& lpFrame = windowExpr->frame();
+  WindowFrame frame;
+  frame.type = lpFrame.type;
+  frame.startType = lpFrame.startType;
+  if (lpFrame.startValue) {
+    frame.startValue = translateExpr(lpFrame.startValue);
+  }
+  frame.endType = lpFrame.endType;
+  if (lpFrame.endValue) {
+    frame.endValue = translateExpr(lpFrame.endValue);
+  }
+
+  const auto* name = toName(windowExpr->name());
+  auto value = Value(toType(windowExpr->type()), 1);
+  auto functions = FunctionSet{};
+
+  auto* window = make<Window>(
+      name,
+      value,
+      std::move(args),
+      functions,
+      std::move(frame),
+      windowExpr->ignoreNulls());
+
+  auto spec = WindowSpec(std::move(partitionKeys), std::move(orderKeys), std::move(orderTypes));
+  return {window, std::move(spec)};
+}
+
 PlanObjectP ToGraph::addOrderBy(const lp::SortNode& order) {
   ExprVector orderKeys;
   OrderTypeVector orderTypes;
@@ -1020,13 +1120,8 @@ PlanObjectP ToGraph::addOrderBy(const lp::SortNode& order) {
   orderTypes.reserve(order.ordering().size());
 
   for (const auto& field : order.ordering()) {
-    auto sort = field.order;
     orderKeys.push_back(translateExpr(field.expression));
-    orderTypes.push_back(
-        sort.isAscending() ? (sort.isNullsFirst() ? OrderType::kAscNullsFirst
-                                                  : OrderType::kAscNullsLast)
-                           : (sort.isNullsFirst() ? OrderType::kDescNullsFirst
-                                                  : OrderType::kDescNullsLast));
+    orderTypes.push_back(toOrderType(field.order));
   }
 
   currentDt_->orderKeys = std::move(orderKeys);
@@ -1380,6 +1475,11 @@ PlanObjectP ToGraph::addAggregation(const lp::AggregateNode& aggNode) {
   return currentDt_;
 }
 
+PlanObjectP ToGraph::addWindow(const lp::WindowNode& windowNode) {
+  currentDt_->windowPlan = translateWindow(windowNode);
+  return currentDt_;
+}
+
 PlanObjectP ToGraph::addLimit(const lp::LimitNode& limitNode) {
   if (currentDt_->hasLimit()) {
     currentDt_->offset += limitNode.offset();
@@ -1671,6 +1771,11 @@ PlanObjectP ToGraph::makeQueryGraph(
       addAggregation(*node.asUnchecked<lp::AggregateNode>());
 
       return currentDt_;
+
+    case lp::NodeKind::kWindow:
+      // Windows are projections and always allowed in a DT
+      makeQueryGraph(*node.onlyInput(), allowedInDt);
+      return addWindow(*node.asUnchecked<lp::WindowNode>());
 
     case lp::NodeKind::kJoin:
       if (!contains(allowedInDt, PlanType::kJoinNode)) {

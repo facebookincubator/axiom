@@ -29,6 +29,7 @@ enum class PlanType : uint32_t {
   kLiteralExpr,
   kCallExpr,
   kAggregateExpr,
+  kWindowExpr,
   kFieldExpr,
   kLambdaExpr,
   // Plan nodes.
@@ -37,6 +38,7 @@ enum class PlanType : uint32_t {
   kUnnestTableNode,
   kDerivedTableNode,
   kAggregationNode,
+  kWindowNode,
   kProjectNode,
   kFilterNode,
   kJoinNode,

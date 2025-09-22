@@ -33,6 +33,7 @@ const auto& nodeKindNames() {
       {NodeKind::kSet, "SET"},
       {NodeKind::kUnnest, "UNNEST"},
       {NodeKind::kTableWrite, "TABLE_WRITE"},
+      {NodeKind::kWindow, "WINDOW"},
   };
   return kNames;
 }
@@ -401,5 +402,31 @@ folly::F14FastMap<WriteKind, std::string_view> writeKindNames() {
 } // namespace
 
 VELOX_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
+
+// static
+velox::RowTypePtr WindowNode::makeOutputType(
+    const velox::RowTypePtr& inputType,
+    const std::vector<std::string>& outputNames) {
+  auto inputNames = inputType->names();
+  auto inputTypes = inputType->children();
+
+  std::vector<std::string> allNames = inputNames;
+  std::vector<velox::TypePtr> allTypes = inputTypes;
+
+  for (const auto& name : outputNames) {
+    allNames.push_back(name);
+    allTypes.push_back(velox::BIGINT());
+  }
+
+  UniqueNameChecker::check(allNames);
+
+  return ROW(std::move(allNames), std::move(allTypes));
+}
+
+void WindowNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
 
 } // namespace facebook::axiom::logical_plan

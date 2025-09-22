@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <optimizer/QueryGraphContext.h>
+#include <cstddef>
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
 
@@ -88,6 +90,7 @@ enum class RelType {
   kJoin,
   kHashBuild,
   kAggregation,
+  kWindow,
   kOrderBy,
   kUnionAll,
   kLimit,
@@ -456,6 +459,31 @@ struct Aggregation : public RelationOp {
   const ExprVector groupingKeys;
   const AggregateVector aggregates;
   const velox::core::AggregationNode::Step step;
+
+  const QGString& historyKey() const override;
+
+  std::string toString(bool recursive, bool detail) const override;
+};
+
+/// Represents window functions with the same window specification.
+struct WindowOp : public RelationOp {
+  WindowOp(
+      RelationOpPtr input,
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes,
+      WindowVector windows,
+      ColumnVector columns);
+
+  const ExprVector partitionKeys;
+  const ExprVector orderKeys;
+  const OrderTypeVector orderTypes;
+  const WindowVector windows;
+
+  ColumnCP getWindowExprColumn(size_t windowIndex) const {
+    VELOX_CHECK(input_->columns().size() + windowIndex < columns_.size());
+    return columns_.at(input_->columns().size() + windowIndex);
+  }
 
   const QGString& historyKey() const override;
 

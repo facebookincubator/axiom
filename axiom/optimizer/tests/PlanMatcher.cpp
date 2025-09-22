@@ -742,4 +742,11 @@ PlanMatcherBuilder& PlanMatcherBuilder::orderBy(
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::window() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<PlanMatcherImpl<WindowNode>>(
+      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
+  return *this;
+}
+
 } // namespace facebook::velox::core

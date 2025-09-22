@@ -486,4 +486,26 @@ void JoinEdge::guessFanout() {
   }
 }
 
+bool WindowSpec::operator==(const WindowSpec& other) const {
+  if (partitionKeys.size() != other.partitionKeys.size() ||
+      orderKeys.size() != other.orderKeys.size() ||
+      orderTypes.size() != other.orderTypes.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < partitionKeys.size(); ++i) {
+    if (!partitionKeys[i]->sameOrEqual(*other.partitionKeys[i])) {
+      return false;
+    }
+  }
+
+  for (size_t i = 0; i < orderKeys.size(); ++i) {
+    if (!orderKeys[i]->sameOrEqual(*other.orderKeys[i])) {
+      return false;
+    }
+  }
+
+  return orderTypes == other.orderTypes;
+}
+
 } // namespace facebook::axiom::optimizer

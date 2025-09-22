@@ -136,6 +136,42 @@ void ToGraph::markFieldAccessed(
 }
 
 void ToGraph::markFieldAccessed(
+    const lp::WindowNode& window,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl) {
+  const auto& input = window.onlyInput();
+  const auto inputSize = input->outputType()->size();
+
+  if (ordinal < inputSize) {
+    const auto ctx = fromNode(input);
+    markFieldAccessed(ctx.sources[0], ordinal, steps, isControl, ctx.toCtx());
+    return;
+  }
+
+  const auto windowExprIndex = ordinal - inputSize;
+  const auto& windowExpr = window.windowExprAt(windowExprIndex);
+
+  std::vector<Step> subSteps;
+  const auto ctx = fromNode(input);
+  auto mark = [&](const lp::ExprPtr& expr) {
+    markSubfields(expr, subSteps, isControl, ctx.toCtx());
+  };
+
+  for (const auto& functionInput : windowExpr->inputs()) {
+    mark(functionInput);
+  }
+
+  for (const auto& partitionKey : windowExpr->partitionKeys()) {
+    mark(partitionKey);
+  }
+
+  for (const auto& sortingField : windowExpr->ordering()) {
+    mark(sortingField.expression);
+  }
+}
+
+void ToGraph::markFieldAccessed(
     const LogicalContextSource& source,
     int32_t ordinal,
     std::vector<Step>& steps,
@@ -188,6 +224,12 @@ void ToGraph::markFieldAccessed(
   if (kind == lp::NodeKind::kSet) {
     const auto* set = source.planNode->asUnchecked<lp::SetNode>();
     markFieldAccessed(*set, ordinal, steps, isControl);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kWindow) {
+    const auto* window = source.planNode->asUnchecked<lp::WindowNode>();
+    markFieldAccessed(*window, ordinal, steps, isControl);
     return;
   }
 

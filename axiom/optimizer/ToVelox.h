@@ -135,6 +135,12 @@ class ToVelox {
       runner::ExecutableFragment& fragment,
       std::vector<runner::ExecutableFragment>& stages);
 
+  // Makes a Velox WindowNode for a WindowOp.
+  velox::core::PlanNodePtr makeWindow(
+      const WindowOp& op,
+      runner::ExecutableFragment& fragment,
+      std::vector<runner::ExecutableFragment>& stages);
+
   // Makes partial + final order by fragments for order by with and without
   // limit.
   velox::core::PlanNodePtr makeOrderBy(

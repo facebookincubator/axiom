@@ -15,6 +15,8 @@
  */
 
 #include "axiom/optimizer/Optimization.h"
+#include <optimizer/QueryGraph.h>
+#include <optimizer/QueryGraphContext.h>
 #include <algorithm>
 #include <iostream>
 #include <utility>
@@ -693,6 +695,27 @@ void Optimization::addPostprocess(
       plan = finalAgg;
     }
   }
+
+  // Process window functions grouped by window specification
+  if (dt->windowPlan) {
+    const auto& windowPlan = dt->windowPlan;
+    ColumnVector allColumns = plan->columns();
+    for (const auto& windowSet : windowPlan->windowSets()) {
+      allColumns.insert(allColumns.end(), windowSet.columns.begin(), windowSet.columns.end());
+      auto* windowOp = make<WindowOp>(
+          plan,
+          windowSet.spec.partitionKeys,
+          windowSet.spec.orderKeys,
+          windowSet.spec.orderTypes,
+          windowSet.windows,
+          allColumns);
+
+      state.placed.add(windowPlan);
+      state.addCost(*windowOp);
+      plan = windowOp;
+    }
+  }
+
   if (!dt->having.empty()) {
     auto filter = make<Filter>(plan, dt->having);
     state.addCost(*filter);
