@@ -250,8 +250,8 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       const ConnectorSessionPtr& /*session*/) override;
 
  protected:
-  std::string dataPath() const override {
-    return hiveConfig_->hiveLocalDataPath();
+  std::string tablePath(std::string_view table) const override {
+    return fmt::format("{}/{}", hiveConfig_->hiveLocalDataPath(), table);
   }
 
   std::shared_ptr<velox::connector::hive::LocationHandle> makeLocationHandle(

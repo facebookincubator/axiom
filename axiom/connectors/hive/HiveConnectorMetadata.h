@@ -174,10 +174,8 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       velox::connector::hive::LocationHandle::TableType tableType =
           velox::connector::hive::LocationHandle::TableType::kNew) = 0;
 
-  /// Returns the path to the filesystem root for the data managed by
-  /// 'this'. Directories inside this correspond to schemas and
-  /// tables.
-  virtual std::string dataPath() const = 0;
+  /// Return the filesystem path for the storage of the specified table.
+  virtual std::string tablePath(std::string_view table) const = 0;
 
   velox::connector::hive::HiveConnector* const hiveConnector_;
   const std::shared_ptr<velox::connector::hive::HiveConfig> hiveConfig_;

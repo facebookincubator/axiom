@@ -179,9 +179,7 @@ HiveConnectorMetadata::createInsertTableHandle(
   }
   return std::make_shared<velox::connector::hive::HiveInsertTableHandle>(
       inputColumns,
-      makeLocationHandle(
-          fmt::format("{}/{}", dataPath(), layout.table().name()),
-          std::nullopt),
+      makeLocationHandle(tablePath(layout.table().name()), std::nullopt),
       storageFormat,
       bucketProperty,
       compressionKind,
