@@ -21,6 +21,7 @@
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -28,7 +29,12 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class HiveWindowQueriesTest : public test::HiveQueriesTestBase {};
+class HiveWindowQueriesTest : public test::HiveQueriesTestBase {
+  void SetUp() override {
+    test::HiveQueriesTestBase::SetUp();
+    window::prestosql::registerAllWindowFunctions();
+  }
+};
 
 TEST_F(HiveWindowQueriesTest, basicRowNumber) {
   auto nationType =
