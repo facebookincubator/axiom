@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <optimizer/QueryGraph.h>
 #include <velox/common/base/Exceptions.h>
 #include <algorithm>
 #include <iostream>
@@ -24,6 +23,7 @@
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
+#include "axiom/optimizer/QueryGraph.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
@@ -1038,17 +1038,12 @@ WindowPlanCP ToGraph::translateWindow(const lp::WindowNode& windowNode) {
     const auto [translatedWindow, spec] = translateWindowExpr(windowExprs[i]);
     const auto* window = translatedWindow->as<Window>();
 
-    auto it = std::ranges::find_if(windowSets,
-        [&](const WindowSet& ws) {
-          return ws.spec == spec;
-        });
+    auto it = std::ranges::find_if(
+        windowSets, [&](const WindowSet& ws) { return ws.spec == spec; });
 
     const auto* outputName = toName(outputNames[i]);
-    auto* column = make<Column>(
-        outputName,
-        currentDt_,
-        window->value(),
-        outputName);
+    auto* column =
+        make<Column>(outputName, currentDt_, window->value(), outputName);
 
     renames_[outputName] = column;
 
@@ -1063,7 +1058,8 @@ WindowPlanCP ToGraph::translateWindow(const lp::WindowNode& windowNode) {
   return make<WindowPlan>(std::move(windowSets));
 }
 
-std::pair<ExprCP, WindowSpec> ToGraph::translateWindowExpr(const lp::WindowExprPtr& windowExpr) {
+std::pair<ExprCP, WindowSpec> ToGraph::translateWindowExpr(
+    const lp::WindowExprPtr& windowExpr) {
   ExprVector args;
   args.reserve(windowExpr->inputs().size());
   for (const auto& input : windowExpr->inputs()) {
@@ -1109,7 +1105,8 @@ std::pair<ExprCP, WindowSpec> ToGraph::translateWindowExpr(const lp::WindowExprP
       std::move(frame),
       windowExpr->ignoreNulls());
 
-  auto spec = WindowSpec(std::move(partitionKeys), std::move(orderKeys), std::move(orderTypes));
+  auto spec = WindowSpec(
+      std::move(partitionKeys), std::move(orderKeys), std::move(orderTypes));
   return {window, std::move(spec)};
 }
 
@@ -1773,7 +1770,6 @@ PlanObjectP ToGraph::makeQueryGraph(
       return currentDt_;
 
     case lp::NodeKind::kWindow:
-      // Windows are projections and always allowed in a DT
       makeQueryGraph(*node.onlyInput(), allowedInDt);
       return addWindow(*node.asUnchecked<lp::WindowNode>());
 

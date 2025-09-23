@@ -16,9 +16,8 @@
 
 #pragma once
 
-#include <optimizer/QueryGraphContext.h>
-#include <cstddef>
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/Schema.h"
 
 /// Plan candidates.

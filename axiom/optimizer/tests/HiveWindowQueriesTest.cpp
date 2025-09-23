@@ -213,7 +213,6 @@ TEST_F(HiveWindowQueriesTest, rangeFrameTypes) {
   checkSame(logicalPlan, referencePlan);
 }
 
-
 TEST_F(HiveWindowQueriesTest, mixedFrameTypesAndBounds) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
@@ -234,10 +233,8 @@ TEST_F(HiveWindowQueriesTest, mixedFrameTypesAndBounds) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
-                       .window()
-                       .build();
+    auto matcher =
+        core::PlanMatcherBuilder().tableScan("nation").window().build();
     ASSERT_TRUE(matcher->match(plan));
   }
 
@@ -323,7 +320,6 @@ TEST_F(HiveWindowQueriesTest, multipleOrderByColumns) {
 
   checkSame(logicalPlan, referencePlan);
 }
-
 
 } // namespace
 } // namespace facebook::axiom::optimizer

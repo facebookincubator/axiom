@@ -320,7 +320,8 @@ class ToGraph {
 
   WindowPlanCP translateWindow(const logical_plan::WindowNode& windowNode);
 
-  std::pair<ExprCP, WindowSpec> translateWindowExpr(const logical_plan::WindowExprPtr& windowExpr);
+  std::pair<ExprCP, WindowSpec> translateWindowExpr(
+      const logical_plan::WindowExprPtr& windowExpr);
 
   PlanObjectP addProjection(const logical_plan::ProjectNode* project);
 

@@ -863,8 +863,6 @@ WindowOp::WindowOp(
       windows{std::move(windowsVector)} {
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = 1;
-
-  // TODO Fill in cost_.unitCost and others.
 }
 
 const QGString& WindowOp::historyKey() const {

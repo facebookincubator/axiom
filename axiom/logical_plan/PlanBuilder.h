@@ -22,10 +22,10 @@
 #include "axiom/logical_plan/NameAllocator.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
-#include "velox/duckdb/conversion/DuckParser.h"
 
 namespace facebook::axiom::logical_plan {
 

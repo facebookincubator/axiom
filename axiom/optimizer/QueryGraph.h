@@ -899,15 +899,9 @@ class Window : public Call {
       FunctionSet functions,
       WindowFrame frame,
       bool ignoreNulls)
-      : Call(
-            PlanType::kWindowExpr,
-            name,
-            value,
-            std::move(args),
-            functions),
+      : Call(PlanType::kWindowExpr, name, value, std::move(args), functions),
         frame_(std::move(frame)),
-        ignoreNulls_(ignoreNulls) {
-  }
+        ignoreNulls_(ignoreNulls) {}
 
   const WindowFrame& frame() const {
     return frame_;
@@ -986,7 +980,7 @@ struct WindowSet {
       : spec(std::move(spec)),
         windows(std::move(windows)),
         columns(std::move(columns)) {}
-  
+
   WindowSpec spec;
   WindowVector windows;
   ColumnVector columns;
@@ -997,8 +991,7 @@ using WindowSetVector = QGVector<WindowSet>;
 class WindowPlan : public PlanObject {
  public:
   explicit WindowPlan(WindowSetVector windowSets)
-      : PlanObject(PlanType::kWindowNode),
-        windowSets_(std::move(windowSets)) {}
+      : PlanObject(PlanType::kWindowNode), windowSets_(std::move(windowSets)) {}
 
   const WindowSetVector& windowSets() const {
     return windowSets_;

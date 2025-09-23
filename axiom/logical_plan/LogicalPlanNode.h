@@ -746,13 +746,19 @@ class TableWriteNode : public LogicalPlanNode {
 
 using TableWriteNodePtr = std::shared_ptr<const TableWriteNode>;
 
-/// Window function node. Applies window functions to the input.
-/// Window expressions may have different window specifications.
-/// They will be grouped by specification during query graph conversion.
+/// Applies window functions to input data using specified window frames and
+/// partitioning. Window functions compute values over a set of rows related
+/// to the current row. The order of columns in the output schema is: all input
+/// columns, followed by window function results. Window expressions with
+/// different window specifications are grouped by specification during query
+/// graph conversion.
 class WindowNode : public LogicalPlanNode {
  public:
-  /// @param windowExprs Zero or more window expressions.
-  /// @param outputNames List of names for the window function outputs.
+  /// @param windowExprs Zero or more window expressions. Must be aligned with
+  /// 'outputNames'. At least one window expression must be specified.
+  /// @param outputNames List of names of the output columns: one name for each
+  /// input column, followed by one name for each window expression. Window
+  /// expressions are appended to the input columns with the specified names.
   /// Names must be unique.
   WindowNode(
       std::string id,
@@ -762,7 +768,9 @@ class WindowNode : public LogicalPlanNode {
       : LogicalPlanNode{NodeKind::kWindow, std::move(id), {input}, makeOutputType(input->outputType(), outputNames)},
         windowExprs_{std::move(windowExprs)},
         outputNames_{std::move(outputNames)} {
-    VELOX_USER_CHECK(!windowExprs_.empty(), "Window node must specify at least one window expression");
+    VELOX_USER_CHECK(
+        !windowExprs_.empty(),
+        "Window node must specify at least one window expression");
     VELOX_USER_CHECK_EQ(
         windowExprs_.size(),
         outputNames_.size(),

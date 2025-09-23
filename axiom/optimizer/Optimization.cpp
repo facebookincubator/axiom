@@ -15,11 +15,11 @@
  */
 
 #include "axiom/optimizer/Optimization.h"
-#include <optimizer/QueryGraph.h>
-#include <optimizer/QueryGraphContext.h>
 #include <algorithm>
 #include <iostream>
 #include <utility>
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
 
@@ -701,7 +701,8 @@ void Optimization::addPostprocess(
     const auto& windowPlan = dt->windowPlan;
     ColumnVector allColumns = plan->columns();
     for (const auto& windowSet : windowPlan->windowSets()) {
-      allColumns.insert(allColumns.end(), windowSet.columns.begin(), windowSet.columns.end());
+      allColumns.insert(
+          allColumns.end(), windowSet.columns.begin(), windowSet.columns.end());
       auto* windowOp = make<WindowOp>(
           plan,
           windowSet.spec.partitionKeys,

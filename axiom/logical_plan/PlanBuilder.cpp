@@ -15,12 +15,12 @@
  */
 
 #include "axiom/logical_plan/PlanBuilder.h"
-#include <logical_plan/Expr.h>
 #include <velox/common/base/Exceptions.h>
 #include <velox/exec/WindowFunction.h>
 #include <velox/type/Type.h>
 #include <vector>
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/NameMappings.h"
 #include "velox/connectors/Connector.h"
 #include "velox/duckdb/conversion/DuckParser.h"
@@ -488,7 +488,6 @@ PlanBuilder& PlanBuilder::window(const std::vector<std::string>& windowExprs) {
     if (windowExpr.frame.endValue != nullptr) {
       frame.endValue = resolveScalarTypes(windowExpr.frame.endValue);
     }
-    
 
     std::vector<ExprPtr> partitionBy;
     partitionBy.reserve(windowExpr.partitionBy.size());
@@ -553,10 +552,7 @@ PlanBuilder& PlanBuilder::window(
   }
 
   node_ = std::make_shared<WindowNode>(
-      nextId(),
-      std::move(node_),
-      std::move(exprs),
-      std::move(outputNames));
+      nextId(), std::move(node_), std::move(exprs), std::move(outputNames));
 
   outputMapping_ = std::move(newOutputMapping);
 
@@ -1302,12 +1298,16 @@ ExprResolver::WindowResolveResult ExprResolver::resolveWindowTypes(
   if (!windowSignatures.has_value() && !aggregateSignatures.has_value()) {
     VELOX_USER_FAIL("Window Function doesn't exist: {}.", name);
   } else {
-    std::string errorMsg = "Window function signature is not supported: " + toString(name, inputTypes) + ". ";
+    std::string errorMsg = "Window function signature is not supported: " +
+        toString(name, inputTypes) + ". ";
     if (windowSignatures.has_value()) {
-      errorMsg += "Window function signatures: " + toString(windowSignatures.value()) + ". ";
+      errorMsg +=
+          "Window function signatures: " + toString(windowSignatures.value()) +
+          ". ";
     }
     if (aggregateSignatures.has_value()) {
-      errorMsg += "Aggregate function signatures: " + toString(aggregateSignatures.value()) + ".";
+      errorMsg += "Aggregate function signatures: " +
+          toString(aggregateSignatures.value()) + ".";
     }
     VELOX_USER_FAIL(errorMsg);
   }
@@ -1542,8 +1542,7 @@ ExprPtr PlanBuilder::resolveScalarTypes(
 PlanBuilder::AggregateResolveResult PlanBuilder::resolveAggregateTypes(
     const velox::core::ExprPtr& expr) const {
   return resolver_.resolveAggregateTypes(
-      expr,
-      [&](const auto& alias, const auto& name) {
+      expr, [&](const auto& alias, const auto& name) {
         return resolveInputName(alias, name);
       });
 }

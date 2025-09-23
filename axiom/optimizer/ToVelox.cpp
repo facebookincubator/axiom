@@ -799,11 +799,7 @@ velox::core::WindowNode::Frame toVeloxFrame(
   }
 
   return velox::core::WindowNode::Frame{
-      veloxWindowType,
-      veloxStartType,
-      startExpr,
-      veloxEndType,
-      endExpr};
+      veloxWindowType, veloxStartType, startExpr, veloxEndType, endExpr};
 }
 } // namespace
 
@@ -1534,9 +1530,7 @@ velox::core::PlanNodePtr ToVelox::makeWindow(
 
     auto frame = toVeloxFrame(window->frame(), *this);
     windowFunctions.emplace_back(
-            std::move(functionCall),
-            std::move(frame),
-            window->ignoreNulls());
+        std::move(functionCall), std::move(frame), window->ignoreNulls());
   }
 
   auto project = std::move(projections).maybeProject(input);
