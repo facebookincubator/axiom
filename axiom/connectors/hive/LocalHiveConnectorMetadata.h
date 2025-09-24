@@ -204,7 +204,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
     return &splitManager_;
   }
 
-  velox::dwio::common::FileFormat fileFormat() const override {
+  velox::dwio::common::FileFormat fileFormat() const {
     return format_;
   }
 
@@ -250,17 +250,8 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       const ConnectorSessionPtr& /*session*/) override;
 
  protected:
-  std::string dataPath() const override {
-    return hiveConfig_->hiveLocalDataPath();
-  }
-
-  std::shared_ptr<velox::connector::hive::LocationHandle> makeLocationHandle(
-      std::string targetDirectory,
-      std::optional<std::string> writeDirectory = std::nullopt,
-      velox::connector::hive::LocationHandle::TableType tableType =
-          velox::connector::hive::LocationHandle::TableType::kNew) override {
-    return std::make_shared<velox::connector::hive::LocationHandle>(
-        targetDirectory, writeDirectory.value_or(targetDirectory), tableType);
+  std::string tablePath(std::string_view table) const override {
+    return fmt::format("{}/{}", hiveConfig_->hiveLocalDataPath(), table);
   }
 
  private:

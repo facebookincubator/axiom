@@ -84,7 +84,7 @@ class LocalRunner : public Runner,
       std::shared_ptr<velox::core::QueryCtx> queryCtx)
       : LocalRunner(
             plan,
-            queryCtx,
+            std::move(queryCtx),
             std::make_shared<ConnectorSplitSourceFactory>()) {}
 
   /// First call starts execution.

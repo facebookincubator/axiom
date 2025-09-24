@@ -40,13 +40,11 @@ std::vector<velox::RowVectorPtr> readCursor(
   }
   return result;
 }
-} // namespace
 
 const std::string kHiveConnectorId = "test-hive";
-const int32_t kWaitTimeoutUs = 5'000'000;
-const int32_t kDefaultWidth = 2;
-const int32_t kDefaultMaxDrivers = 4;
 const std::string kFinalTaskPrefix = "final";
+
+} // namespace
 
 PrestoQueryReplayRunner::PrestoQueryReplayRunner(
     velox::memory::MemoryPool* pool,
@@ -176,11 +174,11 @@ velox::core::PlanNodePtr getDeserializedPlan(
 }
 
 struct PlanFragmentInfo {
-  velox::core::PlanNodePtr plan{nullptr};
+  velox::core::PlanNodePtr plan;
   folly::F14FastMap<std::string, folly::F14FastSet<std::string>>
-      remoteTaskIdMap{};
-  std::vector<velox::core::TableScanNodePtr> scans{};
-  int numWorkers{0};
+      remoteTaskIdMap;
+  std::vector<velox::core::TableScanNodePtr> scans;
+  int32_t numWorkers{0};
 };
 
 std::vector<ExecutableFragment> createExecutableFragments(

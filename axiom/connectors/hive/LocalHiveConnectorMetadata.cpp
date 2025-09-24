@@ -364,7 +364,7 @@ std::shared_ptr<LocalTable> LocalHiveConnectorMetadata::createTableFromSchema(
     std::string_view name,
     std::string_view path) {
   auto jsons =
-      axiom::readConcatenatedDynamicsFromFile(fmt::format("{}/.schema", path));
+      readConcatenatedDynamicsFromFile(fmt::format("{}/.schema", path));
   if (jsons.empty()) {
     return nullptr;
   }
@@ -816,7 +816,7 @@ void LocalHiveConnectorMetadata::createTable(
   VELOX_CHECK_EQ(kind, TableKind::kTable);
   validateOptions(options);
   ensureInitialized();
-  auto path = fmt::format("{}/{}", dataPath(), tableName);
+  auto path = tablePath(tableName);
   if (dirExists(path)) {
     if (errorIfExists) {
       VELOX_USER_FAIL("Table {} already exists", tableName);

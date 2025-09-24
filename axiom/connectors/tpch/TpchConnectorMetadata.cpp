@@ -235,7 +235,7 @@ const folly::F14FastMap<std::string, const Column*>& TpchTable::columnMap()
 }
 
 TablePtr TpchConnectorMetadata::findTable(std::string_view name) {
-  axiom::optimizer::TableNameParser parser(name);
+  optimizer::TableNameParser parser{name};
   if (!parser.valid() || !isValidTpchTableName(parser.table()) ||
       (parser.schema().has_value() &&
        !isValidTpchSchema(parser.schema().value()))) {

@@ -22,9 +22,9 @@
 
 namespace facebook::axiom::runner {
 
-extern const int32_t kDefaultWidth;
-extern const int32_t kDefaultMaxDrivers;
-extern const int32_t kWaitTimeoutUs;
+inline constexpr int32_t kDefaultWidth = 2;
+inline constexpr int32_t kDefaultMaxDrivers = 4;
+inline constexpr int32_t kWaitTimeoutUs = 5'000'000;
 
 using TaskPrefixExtractor = std::string (*)(std::string_view);
 using ConnectorSplitPtr = std::shared_ptr<velox::connector::ConnectorSplit>;
