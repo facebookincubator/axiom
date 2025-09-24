@@ -223,8 +223,6 @@ TEST_F(HiveAggregationQueriesTest, aggDistinct) {
                            .singleAggregation({}, {"count(1)"})
                            .planNode();
 
-  // TODO with options:
-  // https://github.com/facebookexperimental/verax/issues/396
   auto options = axiom::runner::MultiFragmentPlan::Options{
       .numWorkers = 1, .numDrivers = 1};
   checkSame(logicalPlan, referencePlan, options);
@@ -264,8 +262,6 @@ TEST_F(HiveAggregationQueriesTest, aggOrderBy) {
                "array_agg(n_name ORDER BY n_nationkey)"})
           .planNode();
 
-  // TODO with options:
-  // https://github.com/facebookexperimental/verax/issues/397
   auto options = axiom::runner::MultiFragmentPlan::Options{
       .numWorkers = 1, .numDrivers = 1};
   checkSame(logicalPlan, referencePlan, options);
@@ -304,8 +300,6 @@ TEST_F(HiveAggregationQueriesTest, aggFilterOrderBy) {
               {"n_regionkey"}, {"array_agg(n_name ORDER BY n_nationkey)"})
           .planNode();
 
-  // TODO with options:
-  // https://github.com/facebookexperimental/verax/issues/397
   auto options = axiom::runner::MultiFragmentPlan::Options{
       .numWorkers = 1, .numDrivers = 1};
   checkSame(logicalPlan, referencePlan, options);

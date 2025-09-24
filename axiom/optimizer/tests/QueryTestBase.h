@@ -78,10 +78,6 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
           .numDrivers = 4,
       });
 
-  TestResult runVelox(
-      const velox::core::PlanNodePtr& plan,
-      axiom::runner::MultiFragmentPlan::Options options);
-
   /// Checks that 'reference' and 'experiment' produce the same result.
   /// @return 'reference' result.
   TestResult assertSame(

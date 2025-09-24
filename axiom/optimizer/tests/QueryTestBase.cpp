@@ -142,13 +142,6 @@ TestResult QueryTestBase::runVelox(
   return runFragmentedPlan(planAndStats);
 }
 
-TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
-  axiom::runner::MultiFragmentPlan::Options options = {
-      .numWorkers = 1, .numDrivers = FLAGS_num_drivers};
-
-  return runVelox(plan, options);
-}
-
 TestResult QueryTestBase::runFragmentedPlan(
     const optimizer::PlanAndStats& fragmentedPlan) {
   TestResult result;
