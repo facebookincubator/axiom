@@ -73,6 +73,10 @@ class PlanMatcherBuilder {
 
   PlanMatcherBuilder& singleAggregation();
 
+  PlanMatcherBuilder& singleAggregation(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates);
+
   PlanMatcherBuilder& partialAggregation();
 
   PlanMatcherBuilder& finalAggregation();

@@ -902,7 +902,10 @@ class AggregationPlan : public PlanObject {
         groupingKeys_(std::move(groupingKeys)),
         aggregates_(std::move(aggregates)),
         columns_(std::move(columns)),
-        intermediateColumns_(std::move(intermediateColumns)) {}
+        intermediateColumns_(std::move(intermediateColumns)) {
+    VELOX_CHECK_EQ(groupingKeys.size() + aggregates.size(), columns.size());
+    VELOX_CHECK_EQ(aggregates.size(), intermediateColumns.size());
+  }
 
   const ExprVector& groupingKeys() const {
     return groupingKeys_;
