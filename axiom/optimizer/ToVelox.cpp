@@ -1172,10 +1172,10 @@ velox::core::PlanNodePtr ToVelox::makeScan(
         *scan.index->layout, column->name(), std::move(subfields));
   }
 
-  auto scanNode = std::make_shared<velox::core::TableScanNode>(
-      nextId(), outputType, tableHandle, assignments);
+  velox::core::PlanNodePtr result =
+      std::make_shared<velox::core::TableScanNode>(
+          nextId(), outputType, tableHandle, assignments);
 
-  velox::core::PlanNodePtr result = scanNode;
   if (filter != nullptr) {
     result =
         std::make_shared<velox::core::FilterNode>(nextId(), filter, result);
@@ -1186,8 +1186,6 @@ velox::core::PlanNodePtr ToVelox::makeScan(
   }
 
   makePredictionAndHistory(result->id(), &scan);
-
-  fragment.scans.push_back(scanNode);
 
   columnAlteredTypes_.clear();
   return result;

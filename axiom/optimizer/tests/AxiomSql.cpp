@@ -587,12 +587,18 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       const auto& fragments = planAndStats.plan->fragments();
       for (auto i = 0; i < fragments.size(); ++i) {
         auto nodeStats = exec::toPlanStats(stats[i]);
-        for (const auto& scan : fragments[i].scans) {
-          auto statsIt = nodeStats.find(scan->id());
-          if (statsIt != nodeStats.end()) {
-            runStats.rawInputBytes += statsIt->second.rawInputBytes;
-          }
-        }
+        velox::core::PlanNode::findFirstNode(
+            fragments[i].fragment.planNode.get(), [&](const auto* node) {
+              if (const auto* scan =
+                      dynamic_cast<const core::TableScanNode*>(node)) {
+                auto statsIt = nodeStats.find(scan->id());
+                if (statsIt != nodeStats.end()) {
+                  runStats.rawInputBytes += statsIt->second.rawInputBytes;
+                }
+              }
+
+              return false;
+            });
       }
 
       if (runStatsReturn) {

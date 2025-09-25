@@ -830,7 +830,6 @@ class Aggregate : public Call {
       FunctionSet functions,
       bool isDistinct,
       ExprCP condition,
-      bool isAccumulator,
       const velox::Type* intermediateType,
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {})
@@ -842,7 +841,6 @@ class Aggregate : public Call {
             functions | FunctionSet::kAggregate),
         isDistinct_(isDistinct),
         condition_(condition),
-        isAccumulator_(isAccumulator),
         intermediateType_(intermediateType),
         orderKeys_(std::move(orderKeys)),
         orderTypes_(std::move(orderTypes)) {
@@ -865,10 +863,6 @@ class Aggregate : public Call {
     return isDistinct_;
   }
 
-  bool isAccumulator() const {
-    return isAccumulator_;
-  }
-
   const velox::Type* intermediateType() const {
     return intermediateType_;
   }
@@ -888,7 +882,6 @@ class Aggregate : public Call {
  private:
   bool isDistinct_;
   ExprCP condition_;
-  bool isAccumulator_;
   const velox::Type* intermediateType_;
   TypeVector rawInputType_;
   ExprVector orderKeys_;

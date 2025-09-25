@@ -38,27 +38,6 @@ struct MarkFieldsAccessedContext {
   std::span<const LogicalContextSource> sources;
 };
 
-struct ITypedExprHasher {
-  size_t operator()(const velox::core::ITypedExpr* expr) const {
-    return expr->hash();
-  }
-};
-
-struct ITypedExprComparer {
-  bool operator()(
-      const velox::core::ITypedExpr* lhs,
-      const velox::core::ITypedExpr* rhs) const {
-    return *lhs == *rhs;
-  }
-};
-
-// Map for deduplicating ITypedExpr trees.
-using ExprDedupMap = folly::F14FastMap<
-    const velox::core::ITypedExpr*,
-    ExprCP,
-    ITypedExprHasher,
-    ITypedExprComparer>;
-
 struct ExprDedupKey {
   Name func;
   const ExprVector* args;

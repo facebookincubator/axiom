@@ -44,11 +44,6 @@ QueryGraphContext*& queryCtx() {
   return context;
 }
 
-PlanObjectP QueryGraphContext::dedup(PlanObjectP object) {
-  auto pair = deduppedObjects_.insert(object);
-  return *pair.first;
-}
-
 const char* QueryGraphContext::toName(std::string_view str) {
   auto it = names_.find(str);
   if (it != names_.end()) {

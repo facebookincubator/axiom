@@ -85,9 +85,6 @@ TEST_F(HiveLimitQueriesTest, limit) {
     const auto& fragments = distributedPlan.plan->fragments();
     ASSERT_EQ(2, fragments.size());
 
-    EXPECT_EQ(fragments.at(0).scans.size(), 1);
-    EXPECT_EQ(fragments.at(1).scans.size(), 0);
-
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
                        .partialLimit(0, 10)
@@ -154,9 +151,6 @@ TEST_F(HiveLimitQueriesTest, offset) {
         planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
     const auto& fragments = distributedPlan.plan->fragments();
     ASSERT_EQ(2, fragments.size());
-
-    EXPECT_EQ(fragments.at(0).scans.size(), 1);
-    EXPECT_EQ(fragments.at(1).scans.size(), 0);
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
@@ -266,9 +260,6 @@ TEST_F(HiveLimitQueriesTest, orderByLimit) {
         planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
     const auto& fragments = distributedPlan.plan->fragments();
     ASSERT_EQ(2, fragments.size());
-
-    EXPECT_EQ(fragments.at(0).scans.size(), 1);
-    EXPECT_EQ(fragments.at(1).scans.size(), 0);
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()

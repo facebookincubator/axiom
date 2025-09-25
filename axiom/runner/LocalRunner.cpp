@@ -252,6 +252,19 @@ bool isBroadcast(const velox::core::PlanFragment& fragment) {
 
   return false;
 }
+
+void gatherScans(
+    const velox::core::PlanNodePtr& plan,
+    std::vector<velox::core::TableScanNodePtr>& scans) {
+  if (auto scan =
+          std::dynamic_pointer_cast<const velox::core::TableScanNode>(plan)) {
+    scans.push_back(scan);
+    return;
+  }
+  for (const auto& source : plan->sources()) {
+    gatherScans(source, scans);
+  }
+}
 } // namespace
 
 void LocalRunner::makeStages(
@@ -308,7 +321,10 @@ void LocalRunner::makeStages(
     const auto& fragment = fragments_[fragmentIndex];
     const auto& stage = stages_[fragmentIndex];
 
-    for (const auto& scan : fragment.scans) {
+    std::vector<velox::core::TableScanNodePtr> scans;
+    gatherScans(fragment.fragment.planNode, scans);
+
+    for (const auto& scan : scans) {
       auto source = splitSourceForScan(*scan);
 
       std::vector<connector::SplitSource::SplitAndGroup> splits;

@@ -108,19 +108,6 @@ void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner) {
     }
   }
 }
-
-void gatherScans(
-    const core::PlanNodePtr& plan,
-    std::vector<core::TableScanNodePtr>& scans) {
-  if (auto scan = std::dynamic_pointer_cast<const core::TableScanNode>(plan)) {
-    scans.push_back(scan);
-    return;
-  }
-  for (auto& source : plan->sources()) {
-    gatherScans(source, scans);
-  }
-}
-
 } // namespace
 
 TestResult QueryTestBase::runVelox(
@@ -132,7 +119,6 @@ TestResult QueryTestBase::runVelox(
 
   runner::ExecutableFragment fragment(fmt::format("{}.0", options.queryId));
   fragment.fragment = core::PlanFragment(plan);
-  gatherScans(plan, fragment.scans);
 
   optimizer::PlanAndStats planAndStats = {
       .plan = std::make_shared<runner::MultiFragmentPlan>(
@@ -232,9 +218,13 @@ std::string QueryTestBase::veloxString(
     const runner::MultiFragmentPlanPtr& plan) {
   folly::F14FastMap<core::PlanNodeId, const core::TableScanNode*> scans;
   for (const auto& fragment : plan->fragments()) {
-    for (const auto& scan : fragment.scans) {
-      scans.emplace(scan->id(), scan.get());
-    }
+    velox::core::PlanNode::findFirstNode(
+        fragment.fragment.planNode.get(), [&](const auto* node) {
+          if (auto scan = dynamic_cast<const core::TableScanNode*>(node)) {
+            scans.emplace(scan->id(), scan);
+          }
+          return false;
+        });
   }
 
   auto planNodeDetails = [&](const core::PlanNodeId& planNodeId,

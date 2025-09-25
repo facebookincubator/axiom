@@ -1008,7 +1008,6 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
         funcs,
         aggregate->isDistinct(),
         condition,
-        false,
         accumulatorType,
         std::move(orderKeys),
         std::move(orderTypes));
@@ -1021,8 +1020,10 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     auto* intermediateColumn =
         make<Column>(name, currentDt_, intermediateValue, name);
     intermediateColumns.push_back(intermediateColumn);
-    auto dedupped = queryCtx()->dedup(aggregateExpr);
-    aggregates.push_back(dedupped->as<Aggregate>());
+
+    // TODO Dedup aggregate expression using something similar to
+    // deduppedCall.
+    aggregates.push_back(aggregateExpr);
 
     renames_[name] = columns.back();
   }

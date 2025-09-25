@@ -18,21 +18,6 @@
 
 namespace facebook::axiom::optimizer {
 
-size_t PlanObjectPHasher::operator()(const PlanObjectCP& object) const {
-  return object->hash();
-}
-
-bool PlanObjectPComparer::operator()(
-    const PlanObjectCP& lhs,
-    const PlanObjectCP& rhs) const {
-  if (rhs == lhs) {
-    return true;
-  }
-  return rhs && lhs && lhs->isExpr() && rhs->isExpr() &&
-      reinterpret_cast<const Expr*>(lhs)->sameOrEqual(
-          *reinterpret_cast<const Expr*>(rhs));
-}
-
 size_t PlanObject::hash() const {
   auto h = static_cast<size_t>(id_);
   for (auto& child : children()) {

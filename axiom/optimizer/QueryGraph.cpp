@@ -339,7 +339,6 @@ bool Expr::sameOrEqual(const Expr& other) const {
       auto a = reinterpret_cast<const Aggregate*>(this);
       auto b = reinterpret_cast<const Aggregate*>(&other);
       if (a->isDistinct() != b->isDistinct() ||
-          a->isAccumulator() != b->isAccumulator() ||
           (a->condition() != b->condition() &&
            (!a->condition() || !b->condition() ||
             !a->condition()->sameOrEqual(*b->condition())))) {

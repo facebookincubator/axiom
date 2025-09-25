@@ -492,7 +492,6 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
             functions,
             aggregate->isDistinct(),
             newCondition,
-            aggregate->isAccumulator(),
             aggregate->intermediateType());
       }
     }
