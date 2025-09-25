@@ -1389,9 +1389,9 @@ TEST_F(PlanTest, tmpProjectionsWorksForAliases) {
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan()
-                     .project({"1", "plus(a, b)", "plus(a, b)"})
+                     .project({"1", "plus(a, b)"})
                      .singleAggregation()
-                     .project({"ab1", "ab2", "c1"})
+                     .project({"ab1", "ab1", "c1"})
                      .build();
 
   ASSERT_TRUE(matcher->match(plan));

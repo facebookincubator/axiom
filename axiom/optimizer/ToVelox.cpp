@@ -514,10 +514,9 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
 
 namespace {
 
-// Translates ExprPtrs to FieldAccessTypedExprs. Maintains a set of
-// projections and produces a ProjectNode to evaluate distinct
-// expressions for non-column Exprs given to toFieldref() and
-// related functions.
+// Translates ExprPtrs to FieldAccessTypedExprs by creating a projection node.
+// This class handles the case where we need to reference non-column expressions
+// as if they were columns that was produced by previous node.
 class TempProjections {
  public:
   TempProjections(
@@ -525,59 +524,84 @@ class TempProjections {
       const RelationOp& input,
       bool useAllColumns = true)
       : toVelox_{toVelox}, input_{input} {
+    // Pre-populate with input columns - these become our base fields.
     exprChannel_.reserve(input_.columns().size());
     names_.reserve(input_.columns().size());
     exprs_.reserve(input_.columns().size());
     fieldRefs_.reserve(input_.columns().size());
+
     for (const auto& column : input_.columns()) {
+      // Map each column expression to a field index.
       auto [it, emplaced] = exprChannel_.emplace(column, nextField_);
       VELOX_CHECK(emplaced);
       ++nextField_;
+
       names_.push_back(ToVelox::outputName(column));
       auto fieldRef = std::make_shared<velox::core::FieldAccessTypedExpr>(
           toTypePtr(column->value().type), names_.back());
+
       if (useAllColumns) {
+        // Mark this field as wanted to be produced by our projection.
         ++numUsedFields_;
         fieldRefs_.push_back(fieldRef);
       } else {
+        // Field exists but won't be included in our projection
+        // unless explicitly referenced.
         fieldRefs_.push_back(nullptr);
       }
       exprs_.push_back(std::move(fieldRef));
     }
   }
 
+  // Convert an expression to a field reference.
+  // If the expression is already mapped, returns existing reference.
+  // Otherwise creates a new field.
   velox::core::FieldAccessTypedExprPtr toFieldRef(
       ExprCP expr,
       const std::string* optName = nullptr) {
     auto [it, emplaced] = exprChannel_.emplace(expr, nextField_);
     if (emplaced) {
+      // New expression - must be computed by our projection.
       VELOX_CHECK(expr->isNot(PlanType::kColumnExpr));
       exprs_.push_back(queryCtx()->optimization()->toTypedExpr(expr));
-      return addFieldRef(optName ? *optName : fmt::format("__r{}", nextField_));
+      return fieldForLastExpr(
+          optName ? *optName : fmt::format("__r{}", nextField_));
     }
 
+    // Expression already exists in our mapping.
     auto& fieldRef = fieldRefs_[it->second];
     auto& fieldExpr = exprs_[it->second];
+
     if (!optName || *optName == names_[it->second]) {
+      // No name conflict - return existing field reference.
       if (fieldRef) {
         return fieldRef;
       }
-      VELOX_DCHECK(fieldExpr->isFieldAccessKind());
+      // Field exists but was not referenced before - mark it as used now.
       ++numUsedFields_;
-      return fieldRef = std::static_pointer_cast<
-                 const velox::core::FieldAccessTypedExpr>(fieldExpr);
+      // It's possible only for field that was added in ctor,
+      // so we know they're all FieldAccessTypedExpr.
+      VELOX_DCHECK(fieldExpr->isFieldAccessKind());
+      fieldRef =
+          std::static_pointer_cast<const velox::core::FieldAccessTypedExpr>(
+              fieldExpr);
+      return fieldRef;
     }
+
+    // Name conflict - need to create a new projection with the different name.
     if (fieldRef) {
       // We probably want to push fieldRef here. But it's invalid,
       // we cannot reference different output column as our own input.
       // So we will rely on Velox common subexpression detection
-      // to eliminate duplicated computation.
+      // to eliminate duplicated computation for now.
       exprs_.push_back(fieldExpr);
     } else {
       exprs_.push_back(std::move(fieldExpr));
+      // Move the expression to new slot to be able reuse it
+      // when name isn't needed or same.
       it->second = nextField_;
     }
-    return addFieldRef(*optName);
+    return fieldForLastExpr(*optName);
   }
 
   template <
@@ -595,14 +619,20 @@ class TempProjections {
     return result;
   }
 
+  // Finalize the projection - returns either the original input node
+  // or a ProjectNode if any additional expressions were computed.
   velox::core::PlanNodePtr maybeProject(velox::core::PlanNodePtr inputNode) && {
     VELOX_DCHECK_LE(numUsedFields_, nextField_);
+
+    // No additional expressions beyond input columns - no projection needed
     if (nextField_ == input_.columns().size()) {
       // TODO: Maybe for some plans we want to reduce projections
       // if numUsedFields_ < nextField_.
       return inputNode;
     }
 
+    // Remove unused fields from our projection
+    // to don't produce not needed fields.
     const auto notNeededFields = nextField_ - numUsedFields_;
     if (notNeededFields != 0) {
       uint32_t i = 0;
@@ -624,7 +654,7 @@ class TempProjections {
   }
 
  private:
-  velox::core::FieldAccessTypedExprPtr addFieldRef(std::string name) {
+  velox::core::FieldAccessTypedExprPtr fieldForLastExpr(std::string name) {
     names_.emplace_back(std::move(name));
     fieldRefs_.push_back(std::make_shared<velox::core::FieldAccessTypedExpr>(
         exprs_.back()->type(), names_.back()));
@@ -635,11 +665,19 @@ class TempProjections {
 
   ToVelox& toVelox_;
   const RelationOp& input_;
+
+  // Track how much fields are actually referenced.
   uint32_t numUsedFields_{0};
+  // Next available field index.
   uint32_t nextField_{0};
+
+  // Field references that will be used by subsequent plan nodes.
   std::vector<velox::core::FieldAccessTypedExprPtr> fieldRefs_;
+  // Output column names for our projection.
   std::vector<std::string> names_;
+  // Expressions to compute (input field accesses or computed expressions).
   std::vector<velox::core::TypedExprPtr> exprs_;
+  // Maps original expressions to their field indices.
   folly::F14FastMap<ExprCP, uint32_t> exprChannel_;
 };
 
