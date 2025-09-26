@@ -1215,6 +1215,8 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       op.step == velox::core::AggregationNode::Step::kSingle;
   const auto numKeys = op.groupingKeys.size();
 
+  auto keys = toFieldRefs(op.groupingKeys);
+
   std::vector<std::string> aggregateNames;
   std::vector<velox::core::AggregationNode::Aggregate> aggregates;
   for (size_t i = 0; i < op.aggregates.size(); ++i) {
@@ -1249,8 +1251,6 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       aggregates.push_back({.call = call, .rawInputTypes = rawInputTypes});
     }
   }
-
-  auto keys = toFieldRefs(op.groupingKeys);
 
   if (options_.numDrivers > 1 &&
       (op.step == velox::core::AggregationNode::Step::kFinal ||

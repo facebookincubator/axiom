@@ -93,5 +93,27 @@ TEST_F(AggregationPlanTest, dedupGroupingKeysAndAggregates) {
   }
 }
 
+TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
+  testConnector_->createTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  auto logicalPlan = lp::PlanBuilder{}
+                         .tableScan(kTestConnectorId, "t")
+                         .project({"a + b AS ab1", "a + b AS ab2"})
+                         .aggregate({"ab1", "ab2"}, {"count(ab2) AS c1"})
+                         .project({"ab1 AS x", "ab2 AS y", "c1 AS z"})
+                         .build();
+
+  auto plan = planVelox(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .project({"plus(a, b)"})
+                     .singleAggregation({"ab1"}, {"count(ab1)"})
+                     .project({"ab1", "ab1", "c1"})
+                     .build();
+
+  ASSERT_TRUE(matcher->match(plan));
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

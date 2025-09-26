@@ -971,6 +971,8 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
   ExprVector deduppedGroupingKeys;
   deduppedGroupingKeys.reserve(agg.groupingKeys().size());
 
+  auto newRenames = renames_;
+
   folly::F14FastMap<ExprCP, ColumnCP> uniqueGroupingKeys;
   for (auto i = 0; i < agg.groupingKeys().size(); ++i) {
     auto name = toName(agg.outputType()->nameOf(i));
@@ -978,7 +980,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 
     auto it = uniqueGroupingKeys.try_emplace(key).first;
     if (it->second) {
-      renames_[name] = it->second;
+      newRenames[name] = it->second;
     } else {
       if (key->is(PlanType::kColumnExpr)) {
         columns.push_back(key->as<Column>());
@@ -989,7 +991,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 
       deduppedGroupingKeys.emplace_back(key);
       it->second = columns.back();
-      renames_[name] = columns.back();
+      newRenames[name] = columns.back();
     }
   }
 
@@ -1027,7 +1029,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 
     auto it = uniqueAggregates.try_emplace(key).first;
     if (it->second) {
-      renames_[name] = it->second;
+      newRenames[name] = it->second;
     } else {
       auto accumulatorType = toType(
           velox::exec::resolveAggregateFunction(aggregate->name(), argTypes)
@@ -1055,9 +1057,11 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 
       deduppedAggregates.push_back(aggregateExpr);
       it->second = column;
-      renames_[name] = column;
+      newRenames[name] = column;
     }
   }
+
+  renames_ = std::move(newRenames);
 
   return make<AggregationPlan>(
       std::move(deduppedGroupingKeys),
