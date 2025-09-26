@@ -241,8 +241,8 @@ class ToGraph {
   // expression.
   ExprCP translateColumn(std::string_view name);
 
-  //  Applies translateColumn to a 'source'.
-  ExprVector translateColumns(const std::vector<logical_plan::ExprPtr>& source);
+  //  Applies translateExpr to a 'source'.
+  ExprVector translateExprs(const std::vector<logical_plan::ExprPtr>& source);
 
   // Makes a deduplicated Expr tree from 'expr'.
   ExprCP translateExpr(const logical_plan::ExprPtr& expr);
