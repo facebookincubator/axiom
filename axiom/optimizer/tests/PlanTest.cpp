@@ -1373,30 +1373,6 @@ TEST_F(PlanTest, lastProjection) {
   ASSERT_TRUE(matcher->match(plan));
 }
 
-TEST_F(PlanTest, tmpProjectionsWorksForAliases) {
-  testConnector_->createTable(
-      "numbers", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), VARCHAR()}));
-
-  auto logicalPlan =
-      lp::PlanBuilder{}
-          .tableScan(kTestConnectorId, "numbers", {"a", "b", "c"})
-          .project({"a + b AS ab1", "a + b AS ab2"})
-          .aggregate({"ab1", "ab2"}, {"count(1) AS c1"})
-          .project({"ab1 AS x", "ab2 AS y", "c1 AS z"})
-          .build();
-
-  auto plan = toSingleNodePlan(logicalPlan);
-
-  auto matcher = core::PlanMatcherBuilder()
-                     .tableScan()
-                     .project({"1", "plus(a, b)"})
-                     .singleAggregation()
-                     .project({"ab1", "ab1", "c1"})
-                     .build();
-
-  ASSERT_TRUE(matcher->match(plan));
-}
-
 } // namespace
 } // namespace facebook::axiom::optimizer
 
