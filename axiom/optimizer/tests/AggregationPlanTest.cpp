@@ -77,10 +77,8 @@ TEST_F(AggregationPlanTest, dedupGroupingKeysAndAggregates) {
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
-                       // TODO Fix the optiimizer to not create projections for
-                       // constant inputs to aggregate functions.
-                       .project({"1", "a + b"})
-                       .singleAggregation({"x"}, {"count(__r2)"})
+                       .project({"a + b"})
+                       .singleAggregation({"x"}, {"count(1)"})
                        .project({"x", "x", "count", "count"})
                        .build();
 

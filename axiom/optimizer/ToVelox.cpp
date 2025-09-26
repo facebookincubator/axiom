@@ -1358,10 +1358,19 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       if (aggregate->condition()) {
         mask = projections.toFieldRef(aggregate->condition());
       }
+
+      std::vector<velox::core::TypedExprPtr> argExprs;
+      argExprs.reserve(aggregate->args().size());
+      for (const auto& arg : aggregate->args()) {
+        if (arg->type() != PlanType::kLiteralExpr) {
+          argExprs.push_back(projections.toFieldRef(arg));
+        } else {
+          argExprs.push_back(toTypedExpr(arg));
+        }
+      }
+
       auto call = std::make_shared<velox::core::CallTypedExpr>(
-          type,
-          projections.toFieldRefs<velox::core::TypedExprPtr>(aggregate->args()),
-          aggregate->name());
+          type, argExprs, aggregate->name());
 
       std::vector<velox::core::FieldAccessTypedExprPtr> sortingKeys;
       std::vector<velox::core::SortOrder> sortingOrders;

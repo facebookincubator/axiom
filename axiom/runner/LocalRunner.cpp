@@ -15,6 +15,7 @@
  */
 
 #include "axiom/runner/LocalRunner.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
