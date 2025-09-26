@@ -597,16 +597,15 @@ ExprCP ToGraph::deduppedCall(
     ExprVector args,
     FunctionSet flags) {
   canonicalizeCall(name, args);
-  ExprDedupKey key = {name, &args};
+  ExprDedupKey key = {name, args};
 
-  auto it = functionDedup_.find(key);
-  if (it != functionDedup_.end()) {
+  auto [it, emplaced] = functionDedup_.try_emplace(key);
+  if (it->second) {
     return it->second;
   }
   auto* call = make<Call>(name, value, std::move(args), flags);
-  if (!call->containsNonDeterministic()) {
-    key.args = &call->args();
-    functionDedup_[key] = call;
+  if (emplaced && !call->containsNonDeterministic()) {
+    it->second = call;
   }
   return call;
 }
