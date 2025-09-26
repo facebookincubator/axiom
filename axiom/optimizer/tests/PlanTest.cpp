@@ -1373,6 +1373,26 @@ TEST_F(PlanTest, lastProjection) {
   ASSERT_TRUE(matcher->match(plan));
 }
 
+TEST_F(PlanTest, orderByDuplicateKeys) {
+  testConnector_->createTable("t", ROW({"a"}, {BIGINT()}));
+
+  auto logicalPlan = lp::PlanBuilder{}
+                         .tableScan(kTestConnectorId, "t")
+                         .project({"2 * a AS x", "a * 2 AS y"})
+                         .orderBy({"x DESC", "y ASC"})
+                         .build();
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("t")
+                     .project({"a", "multiply(a, 2)"})
+                     .orderBy({"__r1 DESC"})
+                     .project()
+                     .build();
+
+  ASSERT_TRUE(matcher->match(plan));
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
 

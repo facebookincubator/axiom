@@ -1082,23 +1082,28 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 }
 
 PlanObjectP ToGraph::addOrderBy(const lp::SortNode& order) {
-  ExprVector orderKeys;
-  OrderTypeVector orderTypes;
-  orderKeys.reserve(order.ordering().size());
-  orderTypes.reserve(order.ordering().size());
+  ExprVector deduppedOrderKeys;
+  OrderTypeVector deduppedOrderTypes;
+  deduppedOrderKeys.reserve(order.ordering().size());
+  deduppedOrderTypes.reserve(order.ordering().size());
 
+  folly::F14FastSet<ExprCP> uniqueOrderKeys;
   for (const auto& field : order.ordering()) {
+    auto* key = translateExpr(field.expression);
+    if (!uniqueOrderKeys.emplace(key).second) {
+      continue;
+    }
     auto sort = field.order;
-    orderKeys.push_back(translateExpr(field.expression));
-    orderTypes.push_back(
+    deduppedOrderKeys.push_back(key);
+    deduppedOrderTypes.push_back(
         sort.isAscending() ? (sort.isNullsFirst() ? OrderType::kAscNullsFirst
                                                   : OrderType::kAscNullsLast)
                            : (sort.isNullsFirst() ? OrderType::kDescNullsFirst
                                                   : OrderType::kDescNullsLast));
   }
 
-  currentDt_->orderKeys = std::move(orderKeys);
-  currentDt_->orderTypes = std::move(orderTypes);
+  currentDt_->orderKeys = std::move(deduppedOrderKeys);
+  currentDt_->orderTypes = std::move(deduppedOrderTypes);
 
   return currentDt_;
 }
