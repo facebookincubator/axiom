@@ -67,7 +67,7 @@ void Column::equals(ColumnCP other) const {
 
 std::string Column::toString() const {
   const auto* opt = queryCtx()->optimization();
-  if (!-opt->cnamesInExpr()) {
+  if (!opt->cnamesInExpr()) {
     return name_;
   }
 
