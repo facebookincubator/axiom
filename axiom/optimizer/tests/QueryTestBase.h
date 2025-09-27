@@ -29,7 +29,7 @@ namespace facebook::axiom::optimizer::test {
 
 struct TestResult {
   /// Runner that produced the results. Owns results.
-  std::shared_ptr<axiom::runner::LocalRunner> runner;
+  std::shared_ptr<runner::LocalRunner> runner;
 
   /// Results. Declare after runner because results are from a pool in the
   /// runner's cursor, so runner must destruct last.
@@ -44,7 +44,7 @@ struct TestResult {
   std::vector<velox::exec::TaskStats> stats;
 };
 
-class QueryTestBase : public axiom::runner::test::LocalRunnerTestBase {
+class QueryTestBase : public runner::test::LocalRunnerTestBase {
  protected:
   void SetUp() override;
 
@@ -55,32 +55,54 @@ class QueryTestBase : public axiom::runner::test::LocalRunnerTestBase {
 
   optimizer::PlanAndStats planVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
+      const runner::MultiFragmentPlan::Options& options =
+          {
+              .numWorkers = 4,
+              .numDrivers = 4,
+          },
       std::string* planString = nullptr);
-
-  optimizer::PlanAndStats planVelox(
-      const logical_plan::LogicalPlanNodePtr& plan,
-      const axiom::runner::MultiFragmentPlan::Options& options,
-      std::string* planString = nullptr);
-
-  TestResult runVelox(const logical_plan::LogicalPlanNodePtr& plan);
 
   TestResult runVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
-      const axiom::runner::MultiFragmentPlan::Options& options);
+      const runner::MultiFragmentPlan::Options& options = {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      });
 
   TestResult runFragmentedPlan(const optimizer::PlanAndStats& plan);
 
-  TestResult runVelox(const velox::core::PlanNodePtr& plan);
+  TestResult runVelox(
+      const velox::core::PlanNodePtr& plan,
+      runner::MultiFragmentPlan::Options options = {
+          .numWorkers = 1,
+          .numDrivers = 4,
+      });
 
   /// Checks that 'reference' and 'experiment' produce the same result.
   /// @return 'reference' result.
   TestResult assertSame(
       const velox::core::PlanNodePtr& reference,
-      const optimizer::PlanAndStats& experiment);
+      const optimizer::PlanAndStats& experiment,
+      const runner::MultiFragmentPlan::Options& options = {
+          .numWorkers = 1,
+          .numDrivers = 4,
+      });
+
+  void checkSame(
+      const logical_plan::LogicalPlanNodePtr& planNode,
+      const velox::core::PlanNodePtr& referencePlan,
+      const axiom::runner::MultiFragmentPlan::Options& options = {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      });
+
+  velox::core::PlanNodePtr toSingleNodePlan(
+      const logical_plan::LogicalPlanNodePtr& logicalPlan,
+      int32_t numDrivers = 1);
 
   std::shared_ptr<velox::core::QueryCtx> getQueryCtx();
 
-  std::string veloxString(const axiom::runner::MultiFragmentPlanPtr& plan);
+  std::string veloxString(const runner::MultiFragmentPlanPtr& plan);
 
   static VeloxHistory& suiteHistory() {
     return *gSuiteHistory;
@@ -96,7 +118,7 @@ class QueryTestBase : public axiom::runner::test::LocalRunnerTestBase {
   // A QueryCtx created for each compiled query.
   std::shared_ptr<velox::core::QueryCtx> queryCtx_;
   std::shared_ptr<velox::connector::Connector> connector_;
-  std::unique_ptr<axiom::optimizer::VeloxHistory> history_;
+  std::unique_ptr<optimizer::VeloxHistory> history_;
 
   inline static int32_t gQueryCounter{0};
   inline static std::unique_ptr<VeloxHistory> gSuiteHistory;

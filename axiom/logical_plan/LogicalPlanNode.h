@@ -33,6 +33,7 @@ enum class NodeKind {
   kLimit = 7,
   kSet = 8,
   kUnnest = 9,
+  kTableWrite = 10,
 };
 
 AXIOM_DECLARE_ENUM_NAME(NodeKind)
@@ -655,4 +656,95 @@ class UnnestNode : public LogicalPlanNode {
 
 using UnnestNodePtr = std::shared_ptr<const UnnestNode>;
 
+/// Values of enum corresponds to axiom::connector::WriteKind.
+/// Specifies what type of write is intended when initiating or concluding a
+/// write operation.
+enum class WriteKind {
+  // Rows are added and all columns must be specified for the TableWriter. This
+  // covers insert, create table and replacing a Hive partition and any other
+  // use that adds whole rows.
+  kInsert = 1,
+
+  // Individual rows are deleted. Only row ids as per
+  // ConnectorMetadata::rowIdHandles() are passed to the TableWriter.
+  kDelete = 2,
+
+  // Column values in individual rows are changed. The TableWriter
+  // gets first the row ids as per ConnectorMetadata::rowIdHandles()
+  // and then new values for the columns being changed. The new values
+  // may overlap with row ids if the row id is a set of primary key
+  // columns.
+  kUpdate = 3,
+};
+
+AXIOM_DECLARE_ENUM_NAME(WriteKind);
+
+/// Implements insert/delete/update as per 'kind'.
+class TableWriteNode : public LogicalPlanNode {
+ public:
+  /// @param id Unique ID of the plan node.
+  /// @param connectorId ID of the connector to use to access the table.
+  /// @param tableName Table name.
+  /// @param kind Indicates the type of write (insert/delete/update)
+  /// @param columnNames A List of columns in the table being written.
+  /// Correspond 1:1 to 'columnExpressions'. 'columnNames' must refer to columns
+  /// in the table but their number or order does not have to correspond to the
+  /// table. Missing columns in insert get their default from the table.
+  /// @param columnExpressions Expressions producing the values to write.
+  /// Correspond 1:1 to 'names'.
+  /// @param outputType Writer dependent output type.
+  /// @param options Writer dependent options. May specify compression or
+  /// encoding options. The table always specifies partitioning.
+  /// 'options' are only for advanced/testing features.
+  TableWriteNode(
+      std::string id,
+      LogicalPlanNodePtr input,
+      std::string connectorId,
+      std::string tableName,
+      WriteKind kind,
+      std::vector<std::string> columnNames,
+      std::vector<ExprPtr> columnExpressions,
+      velox::RowTypePtr outputType,
+      folly::F14FastMap<std::string, std::string> options = {});
+
+  const std::string& connectorId() const {
+    return connectorId_;
+  }
+
+  const std::string& tableName() const {
+    return tableName_;
+  }
+
+  WriteKind kind() const {
+    return kind_;
+  }
+
+  const std::vector<std::string>& columnNames() const {
+    return columnNames_;
+  }
+
+  const std::vector<ExprPtr>& columnExpressions() const {
+    return columnExpressions_;
+  }
+
+  const folly::F14FastMap<std::string, std::string>& options() const {
+    return options_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+ private:
+  const std::string connectorId_;
+  const std::string tableName_;
+  const WriteKind kind_;
+  const std::vector<std::string> columnNames_;
+  const std::vector<ExprPtr> columnExpressions_;
+  const folly::F14FastMap<std::string, std::string> options_;
+};
+
+using TableWriteNodePtr = std::shared_ptr<const TableWriteNode>;
+
 } // namespace facebook::axiom::logical_plan
+
+AXIOM_ENUM_FORMATTER(facebook::axiom::logical_plan::WriteKind);

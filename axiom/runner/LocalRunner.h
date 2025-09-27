@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/connectors/ConnectorSplitManager.h"
 #include "axiom/runner/MultiFragmentPlan.h"
 #include "axiom/runner/Runner.h"
 #include "velox/connectors/Connector.h"
@@ -84,7 +84,7 @@ class LocalRunner : public Runner,
       std::shared_ptr<velox::core::QueryCtx> queryCtx)
       : LocalRunner(
             plan,
-            queryCtx,
+            std::move(queryCtx),
             std::make_shared<ConnectorSplitSourceFactory>()) {}
 
   /// First call starts execution.

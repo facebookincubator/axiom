@@ -135,8 +135,7 @@ TEST_F(TpchConnectorMetadataTest, createTableHandle) {
   const auto& layouts = table->layouts();
   ASSERT_EQ(layouts.size(), 1);
   auto* tpchLayout =
-      dynamic_cast<const facebook::axiom::connector::tpch::TpchTableLayout*>(
-          layouts[0]);
+      dynamic_cast<const connector::tpch::TpchTableLayout*>(layouts[0]);
 
   std::vector<velox::connector::ColumnHandlePtr> columnHandles;
   std::vector<velox::core::TypedExprPtr> empty;

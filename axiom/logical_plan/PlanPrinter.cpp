@@ -177,6 +177,26 @@ class ToTextVisitor : public PlanNodeVisitor {
     appendInputs(node, myContext);
   }
 
+  void visit(const TableWriteNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& myContext = static_cast<Context&>(context);
+
+    myContext.out << makeIndent(myContext.indent) << "- TableWrite:";
+    appendOutputType(node, myContext);
+    myContext.out << std::endl;
+
+    const auto size = node.columnNames().size();
+    const auto indent = makeIndent(myContext.indent + 2);
+
+    for (size_t i = 0; i < size; ++i) {
+      myContext.out << indent << node.columnNames()[i] << " := "
+                    << ExprPrinter::toText(*node.columnExpressions()[i])
+                    << std::endl;
+    }
+
+    appendInputs(node, myContext);
+  }
+
  private:
   static std::string makeIndent(size_t size) {
     return std::string(size * 2, ' ');
@@ -344,6 +364,13 @@ class CollectExprStatsPlanNodeVisitor : public PlanNodeVisitor {
       const override {
     auto& stats = static_cast<Context&>(context).stats;
     collectExprStats(node.unnestExpressions(), stats);
+    visitInputs(node, context);
+  }
+
+  void visit(const TableWriteNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& stats = static_cast<Context&>(context).stats;
+    collectExprStats(node.columnExpressions(), stats);
     visitInputs(node, context);
   }
 
@@ -609,6 +636,24 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   void visit(const UnnestNode& node, PlanNodeVisitorContext& context)
       const override {
     appendNode(node, context);
+  }
+
+  void visit(const TableWriteNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& myContext = static_cast<Context&>(context);
+    appendHeader(node, myContext);
+
+    if (!myContext.skeletonOnly) {
+      const auto indent = makeIndent(myContext.indent + 3);
+      myContext.out << indent << "table: " << node.tableName() << std::endl;
+      myContext.out << indent << "connector: " << node.connectorId()
+                    << std::endl;
+      myContext.out << indent << "columns: " << node.columnNames().size()
+                    << std::endl;
+      appendExpressions(node.columnExpressions(), myContext);
+    }
+
+    appendInputs(node, myContext);
   }
 
  private:

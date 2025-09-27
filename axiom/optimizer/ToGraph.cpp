@@ -597,16 +597,15 @@ ExprCP ToGraph::deduppedCall(
     ExprVector args,
     FunctionSet flags) {
   canonicalizeCall(name, args);
-  ExprDedupKey key = {name, &args};
+  ExprDedupKey key = {name, args};
 
-  auto it = functionDedup_.find(key);
-  if (it != functionDedup_.end()) {
+  auto [it, emplaced] = functionDedup_.try_emplace(key);
+  if (it->second) {
     return it->second;
   }
   auto* call = make<Call>(name, value, std::move(args), flags);
-  if (!call->containsNonDeterministic()) {
-    key.args = &call->args();
-    functionDedup_[key] = call;
+  if (emplaced && !call->containsNonDeterministic()) {
+    it->second = call;
   }
   return call;
 }
@@ -754,7 +753,7 @@ ExprCP ToGraph::translateLambda(const lp::LambdaExpr* lambda) {
     renames_[row->nameOf(i)] = col;
   }
   auto body = translateExpr(lambda->body());
-  renames_ = savedRenames;
+  renames_ = std::move(savedRenames);
   return make<Lambda>(std::move(args), toType(lambda->type()), body);
 }
 
@@ -868,7 +867,7 @@ ExprCP ToGraph::translateColumn(std::string_view name) {
   VELOX_FAIL("Cannot resolve column name: {}", name);
 }
 
-ExprVector ToGraph::translateColumns(const std::vector<lp::ExprPtr>& source) {
+ExprVector ToGraph::translateExprs(const std::vector<lp::ExprPtr>& source) {
   ExprVector result{source.size()};
   for (auto i = 0; i < source.size(); ++i) {
     result[i] = translateExpr(source[i]); // NOLINT
@@ -933,26 +932,72 @@ void ToGraph::translateUnnest(const lp::UnnestNode& unnest, bool isNewDt) {
   currentDt_->joins.push_back(edge);
 }
 
-AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
-  ExprVector groupingKeys = translateColumns(agg.groupingKeys());
-  AggregateVector aggregates;
-  ColumnVector columns;
+namespace {
+struct AggregateDedupKey {
+  Name func;
+  bool isDistinct;
+  ExprCP condition;
+  std::span<const ExprCP> args;
 
-  for (auto i = 0; i < agg.groupingKeys().size(); ++i) {
-    auto name = toName(agg.outputType()->nameOf(i));
-    auto* key = groupingKeys[i];
+  bool operator==(const AggregateDedupKey& other) const {
+    return func == other.func && isDistinct == other.isDistinct &&
+        condition == other.condition && std::ranges::equal(args, other.args);
+  }
+};
 
-    if (key->is(PlanType::kColumnExpr)) {
-      columns.push_back(key->as<Column>());
-    } else {
-      toType(agg.outputType()->childAt(i));
+struct AggregateDedupHasher {
+  size_t operator()(const AggregateDedupKey& key) const {
+    size_t hash =
+        folly::hasher<uintptr_t>()(reinterpret_cast<uintptr_t>(key.func));
 
-      auto* column = make<Column>(name, currentDt_, key->value(), name);
-      columns.push_back(column);
+    hash = velox::bits::hashMix(hash, folly::hasher<bool>()(key.isDistinct));
+
+    if (key.condition != nullptr) {
+      hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(key.condition));
     }
 
-    renames_[name] = columns.back();
+    for (auto& a : key.args) {
+      hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(a));
+    }
+
+    return hash;
   }
+};
+} // namespace
+
+AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
+  ColumnVector columns;
+
+  ExprVector deduppedGroupingKeys;
+  deduppedGroupingKeys.reserve(agg.groupingKeys().size());
+
+  auto newRenames = renames_;
+
+  folly::F14FastMap<ExprCP, ColumnCP> uniqueGroupingKeys;
+  for (auto i = 0; i < agg.groupingKeys().size(); ++i) {
+    auto name = toName(agg.outputType()->nameOf(i));
+    auto* key = translateExpr(agg.groupingKeys()[i]);
+
+    auto it = uniqueGroupingKeys.try_emplace(key).first;
+    if (it->second) {
+      newRenames[name] = it->second;
+    } else {
+      if (key->is(PlanType::kColumnExpr)) {
+        columns.push_back(key->as<Column>());
+      } else {
+        auto* column = make<Column>(name, currentDt_, key->value(), name);
+        columns.push_back(column);
+      }
+
+      deduppedGroupingKeys.emplace_back(key);
+      it->second = columns.back();
+      newRenames[name] = columns.back();
+    }
+  }
+
+  AggregateVector deduppedAggregates;
+  folly::F14FastMap<AggregateDedupKey, ColumnCP, AggregateDedupHasher>
+      uniqueAggregates;
 
   // The keys for intermediate are the same as for final.
   ColumnVector intermediateColumns = columns;
@@ -963,7 +1008,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 
     const auto i = channel - agg.groupingKeys().size();
     const auto& aggregate = agg.aggregates()[i];
-    ExprVector args = translateColumns(aggregate->inputs());
+    ExprVector args = translateExprs(aggregate->inputs());
 
     FunctionSet funcs;
     std::vector<velox::TypePtr> argTypes;
@@ -977,60 +1022,77 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     }
     VELOX_CHECK(aggregate->ordering().empty());
 
-    Name aggName = toName(aggregate->name());
-    auto accumulatorType = toType(
-        velox::exec::resolveAggregateFunction(aggregate->name(), argTypes)
-            .second);
-    Value finalValue = Value(toType(aggregate->type()), 1);
-    auto* aggregateExpr = make<Aggregate>(
-        aggName,
-        finalValue,
-        args,
-        funcs,
-        false,
-        condition,
-        false,
-        accumulatorType);
+    auto aggName = toName(aggregate->name());
     auto name = toName(agg.outputNames()[channel]);
-    auto* column = make<Column>(name, currentDt_, aggregateExpr->value(), name);
-    columns.push_back(column);
 
-    auto intermediateValue = aggregateExpr->value();
-    intermediateValue.type = accumulatorType;
-    auto* intermediateColumn =
-        make<Column>(name, currentDt_, intermediateValue, name);
-    intermediateColumns.push_back(intermediateColumn);
-    auto dedupped = queryCtx()->dedup(aggregateExpr);
-    aggregates.push_back(dedupped->as<Aggregate>());
+    AggregateDedupKey key{aggName, aggregate->isDistinct(), condition, args};
 
-    renames_[name] = columns.back();
+    auto it = uniqueAggregates.try_emplace(key).first;
+    if (it->second) {
+      newRenames[name] = it->second;
+    } else {
+      auto accumulatorType = toType(
+          velox::exec::resolveAggregateFunction(aggregate->name(), argTypes)
+              .second);
+      Value finalValue(toType(aggregate->type()), 1);
+
+      AggregateCP aggregateExpr = make<Aggregate>(
+          aggName,
+          finalValue,
+          std::move(args),
+          funcs,
+          aggregate->isDistinct(),
+          condition,
+          accumulatorType);
+
+      auto* column =
+          make<Column>(name, currentDt_, aggregateExpr->value(), name);
+      columns.push_back(column);
+
+      auto intermediateValue = aggregateExpr->value();
+      intermediateValue.type = accumulatorType;
+      auto* intermediateColumn =
+          make<Column>(name, currentDt_, intermediateValue, name);
+      intermediateColumns.push_back(intermediateColumn);
+
+      deduppedAggregates.push_back(aggregateExpr);
+      it->second = column;
+      newRenames[name] = column;
+    }
   }
 
+  renames_ = std::move(newRenames);
+
   return make<AggregationPlan>(
-      std::move(groupingKeys),
-      std::move(aggregates),
+      std::move(deduppedGroupingKeys),
+      std::move(deduppedAggregates),
       std::move(columns),
       std::move(intermediateColumns));
 }
 
 PlanObjectP ToGraph::addOrderBy(const lp::SortNode& order) {
-  ExprVector orderKeys;
-  OrderTypeVector orderTypes;
-  orderKeys.reserve(order.ordering().size());
-  orderTypes.reserve(order.ordering().size());
+  ExprVector deduppedOrderKeys;
+  OrderTypeVector deduppedOrderTypes;
+  deduppedOrderKeys.reserve(order.ordering().size());
+  deduppedOrderTypes.reserve(order.ordering().size());
 
+  folly::F14FastSet<ExprCP> uniqueOrderKeys;
   for (const auto& field : order.ordering()) {
+    auto* key = translateExpr(field.expression);
+    if (!uniqueOrderKeys.emplace(key).second) {
+      continue;
+    }
     auto sort = field.order;
-    orderKeys.push_back(translateExpr(field.expression));
-    orderTypes.push_back(
+    deduppedOrderKeys.push_back(key);
+    deduppedOrderTypes.push_back(
         sort.isAscending() ? (sort.isNullsFirst() ? OrderType::kAscNullsFirst
                                                   : OrderType::kAscNullsLast)
                            : (sort.isNullsFirst() ? OrderType::kDescNullsFirst
                                                   : OrderType::kDescNullsLast));
   }
 
-  currentDt_->orderKeys = std::move(orderKeys);
-  currentDt_->orderTypes = std::move(orderTypes);
+  currentDt_->orderKeys = std::move(deduppedOrderKeys);
+  currentDt_->orderTypes = std::move(deduppedOrderTypes);
 
   return currentDt_;
 }
@@ -1332,7 +1394,7 @@ PlanObjectP ToGraph::addProjection(const lp::ProjectNode* project) {
   auto channels = usedChannels(*project);
   trace(OptimizerOptions::kPreprocess, [&]() {
     for (auto i = 0; i < exprs.size(); ++i) {
-      if (std::find(channels.begin(), channels.end(), i) == channels.end()) {
+      if (std::ranges::find(channels, i) == channels.end()) {
         std::cout << "P=" << project->id()
                   << " dropped projection name=" << names[i] << " = "
                   << lp::ExprPrinter::toText(*exprs[i]) << std::endl;
@@ -1500,16 +1562,11 @@ DerivedTableP ToGraph::translateUnion(
     DerivedTableP setDt,
     bool isTopLevel,
     bool& isLeftLeaf) {
-  auto initialRenames = renames_;
+  auto initialRenames = std::move(renames_);
   QGVector<DerivedTableP> children;
-  bool isFirst = true;
   DerivedTableP previousDt = currentDt_;
   for (auto& input : set.inputs()) {
-    if (!isFirst) {
-      renames_ = initialRenames;
-    } else {
-      isFirst = false;
-    }
+    renames_ = initialRenames;
 
     currentDt_ = newDt();
 
@@ -1574,7 +1631,7 @@ DerivedTableP ToGraph::translateUnion(
 
     makeUnionDistributionAndStats(setDt);
 
-    renames_ = initialRenames;
+    renames_ = std::move(initialRenames);
     for (const auto* column : setDt->columns) {
       renames_[column->name()] = column;
     }

@@ -29,8 +29,7 @@ using namespace facebook::axiom::connector;
 namespace facebook::axiom::connector::hive {
 namespace {
 
-class HiveConnectorMetadataTest
-    : public axiom::runner::test::LocalRunnerTestBase {
+class HiveConnectorMetadataTest : public runner::test::LocalRunnerTestBase {
  protected:
   static constexpr int32_t kNumFiles = 5;
   static constexpr int32_t kNumVectors = 5;
@@ -48,7 +47,7 @@ class HiveConnectorMetadataTest
 
     rowType_ = ROW({"c0"}, {BIGINT()});
     testTables_ = {
-        axiom::runner::test::TableSpec{
+        runner::test::TableSpec{
             .name = "T",
             .columns = rowType_,
             .rowsPerVector = kRowsPerVector,
@@ -200,7 +199,7 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
       *layout, connectorHandle, {result}, WriteKind::kInsert, session);
 
   std::string id = "readQ";
-  axiom::runner::MultiFragmentPlan::Options runnerOptions = {
+  runner::MultiFragmentPlan::Options runnerOptions = {
       .queryId = id, .numWorkers = 1, .numDrivers = 1};
 
   velox::connector::ColumnHandleMap assignments;
@@ -209,16 +208,16 @@ TEST_F(HiveConnectorMetadataTest, createTable) {
         metadata->createColumnHandle(*layout, tableType->nameOf(i));
   }
 
-  axiom::runner::test::DistributedPlanBuilder rootBuilder(
+  runner::test::DistributedPlanBuilder rootBuilder(
       runnerOptions, idGenerator, pool_.get());
   rootBuilder.tableScan("test", tableType, {}, {}, "", tableType, assignments);
-  auto readPlan = std::make_shared<axiom::runner::MultiFragmentPlan>(
+  auto readPlan = std::make_shared<runner::MultiFragmentPlan>(
       rootBuilder.fragments(), std::move(runnerOptions));
   auto rootPool = memory::memoryManager()->addRootPool("readQ");
 
-  auto localRunner = std::make_shared<axiom::runner::LocalRunner>(
+  auto localRunner = std::make_shared<runner::LocalRunner>(
       std::move(readPlan), makeQueryCtx(id, rootPool.get()));
-  auto results = axiom::runner::test::readCursor(localRunner);
+  auto results = runner::test::readCursor(localRunner);
   exec::test::assertEqualResults({data}, results);
 }
 

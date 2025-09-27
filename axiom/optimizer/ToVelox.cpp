@@ -273,15 +273,11 @@ velox::core::TypedExprPtr ToVelox::toAnd(const ExprVector& exprs) {
   if (exprs.size() == 1) {
     return toTypedExpr(exprs[0]);
   }
-  std::vector<velox::core::TypedExprPtr> conjuncts;
-  conjuncts.reserve(exprs.size());
-  for (auto expr : exprs) {
-    conjuncts.push_back(toTypedExpr(expr));
-  }
+
   return std::make_shared<velox::core::CallTypedExpr>(
       velox::BOOLEAN(),
       specialForm(logical_plan::SpecialForm::kAnd),
-      std::move(conjuncts));
+      toTypedExprs(exprs));
 }
 
 namespace {
@@ -408,6 +404,16 @@ velox::core::TypedExprPtr ToVelox::pathToGetter(
   return field;
 }
 
+std::vector<velox::core::TypedExprPtr> ToVelox::toTypedExprs(
+    const ExprVector& exprs) {
+  std::vector<velox::core::TypedExprPtr> typedExprs;
+  typedExprs.reserve(exprs.size());
+  for (auto expr : exprs) {
+    typedExprs.emplace_back(toTypedExpr(expr));
+  }
+  return typedExprs;
+}
+
 velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
   auto it = projectedExprs_.find(expr);
   if (it != projectedExprs_.end()) {
@@ -512,140 +518,6 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
   }
 }
 
-namespace {
-
-// Translates ExprPtrs to FieldAccessTypedExprs. Maintains a set of
-// projections and produces a ProjectNode to evaluate distinct
-// expressions for non-column Exprs given to toFieldref() and
-// related functions.
-class TempProjections {
- public:
-  TempProjections(
-      ToVelox& toVelox,
-      const RelationOp& input,
-      bool useAllColumns = true)
-      : toVelox_{toVelox}, input_{input} {
-    exprChannel_.reserve(input_.columns().size());
-    names_.reserve(input_.columns().size());
-    exprs_.reserve(input_.columns().size());
-    fieldRefs_.reserve(input_.columns().size());
-    for (const auto& column : input_.columns()) {
-      auto [it, emplaced] =
-          exprChannel_.emplace(column, Channel{nextChannel_, useAllColumns});
-      if (!emplaced) {
-        continue;
-      }
-      ++nextChannel_;
-      numUsedChannels_ += useAllColumns ? 1 : 0;
-      names_.push_back(ToVelox::outputName(column));
-      auto fieldRef = std::make_shared<velox::core::FieldAccessTypedExpr>(
-          toTypePtr(column->value().type), names_.back());
-      exprs_.push_back(fieldRef);
-      fieldRefs_.push_back(std::move(fieldRef));
-    }
-  }
-
-  velox::core::FieldAccessTypedExprPtr toFieldRef(
-      ExprCP expr,
-      const std::string* optName = nullptr) {
-    auto [it, emplaced] =
-        exprChannel_.emplace(expr, Channel{nextChannel_, true});
-    if (emplaced) {
-      VELOX_CHECK(expr->isNot(PlanType::kColumnExpr));
-      ++nextChannel_;
-      ++numUsedChannels_;
-      exprs_.push_back(queryCtx()->optimization()->toTypedExpr(expr));
-      names_.push_back(
-          optName ? *optName : fmt::format("__r{}", nextChannel_ - 1));
-      fieldRefs_.push_back(std::make_shared<velox::core::FieldAccessTypedExpr>(
-          toTypePtr(expr->value().type), names_.back()));
-      return fieldRefs_.back();
-    }
-    numUsedChannels_ += it->second.used ? 0 : 1;
-    it->second.used = true;
-    auto fieldRef = fieldRefs_[it->second.idx];
-    if (optName && *optName != fieldRef->name()) {
-      auto aliasFieldRef = std::make_shared<velox::core::FieldAccessTypedExpr>(
-          toTypePtr(expr->value().type), *optName);
-      names_.push_back(*optName);
-      exprs_.push_back(fieldRef);
-      fieldRefs_.push_back(aliasFieldRef);
-      exprChannel_[expr] = {nextChannel_++, true};
-      ++numUsedChannels_;
-      return aliasFieldRef;
-    }
-    return fieldRef;
-  }
-
-  template <
-      typename Result = velox::core::FieldAccessTypedExprPtr,
-      typename Container>
-  std::vector<Result> toFieldRefs(
-      const Container& exprs,
-      const std::vector<std::string>* optNames = nullptr) {
-    std::vector<Result> result;
-    result.reserve(exprs.size());
-    for (auto i = 0; i < exprs.size(); ++i) {
-      result.push_back(
-          toFieldRef(exprs[i], optNames ? &(*optNames)[i] : nullptr));
-    }
-    return result;
-  }
-
-  velox::core::PlanNodePtr maybeProject(velox::core::PlanNodePtr inputNode) && {
-    VELOX_DCHECK_LE(numUsedChannels_, nextChannel_);
-    if (nextChannel_ == input_.columns().size()) {
-      // TODO: Maybe for some plans we want to reduce projections
-      // if numUsedChannels_ < nextChannel_.
-      return inputNode;
-    }
-
-    const auto notNeededChannels = nextChannel_ - numUsedChannels_;
-    if (notNeededChannels != 0) {
-      folly::F14FastSet<uint32_t> unusedChannels;
-      unusedChannels.reserve(notNeededChannels);
-      for (const auto& expr : exprChannel_) {
-        if (!expr.second.used) {
-          unusedChannels.emplace(expr.second.idx);
-        }
-      }
-      VELOX_DCHECK_EQ(notNeededChannels, unusedChannels.size());
-
-      uint32_t i = 0;
-      std::erase_if(names_, [&](const auto&) mutable {
-        return unusedChannels.contains(i++);
-      });
-
-      i = 0;
-      std::erase_if(exprs_, [&](const auto&) mutable {
-        return unusedChannels.contains(i++);
-      });
-    }
-
-    return std::make_shared<velox::core::ProjectNode>(
-        toVelox_.nextId(),
-        std::move(names_),
-        std::move(exprs_),
-        std::move(inputNode));
-  }
-
- private:
-  ToVelox& toVelox_;
-  const RelationOp& input_;
-  uint32_t numUsedChannels_{0};
-  uint32_t nextChannel_{0};
-  std::vector<velox::core::FieldAccessTypedExprPtr> fieldRefs_;
-  std::vector<std::string> names_;
-  std::vector<velox::core::TypedExprPtr> exprs_;
-  struct Channel {
-    uint32_t idx = 0;
-    bool used = false;
-  };
-  folly::F14FastMap<ExprCP, Channel> exprChannel_;
-};
-
-} // namespace
-
 runner::ExecutableFragment ToVelox::newFragment() {
   runner::ExecutableFragment fragment;
   fragment.width = options_.numWorkers;
@@ -735,6 +607,29 @@ velox::core::SortOrder toSortOrder(const OrderType& order) {
 }
 } // namespace
 
+velox::core::FieldAccessTypedExprPtr ToVelox::toFieldRef(ExprCP expr) {
+  VELOX_CHECK(
+      expr->is(PlanType::kColumnExpr),
+      "Expected column expression, but got: {} {}",
+      PlanTypeName::toName(expr->type()),
+      expr->toString());
+
+  auto column = expr->as<Column>();
+  return std::make_shared<velox::core::FieldAccessTypedExpr>(
+      toTypePtr(column->value().type), outputName(column));
+}
+
+std::vector<velox::core::FieldAccessTypedExprPtr> ToVelox::toFieldRefs(
+    const ExprVector& exprs) {
+  std::vector<velox::core::FieldAccessTypedExprPtr> fields;
+  fields.reserve(exprs.size());
+  for (const auto& expr : exprs) {
+    fields.push_back(toFieldRef(expr));
+  }
+
+  return fields;
+}
+
 velox::core::PlanNodePtr ToVelox::makeOrderBy(
     const OrderBy& op,
     runner::ExecutableFragment& fragment,
@@ -745,21 +640,19 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
     sortOrder.push_back(toSortOrder(order));
   }
 
+  auto keys = toFieldRefs(op.distribution().orderKeys);
+
   if (isSingle_) {
     auto input = makeFragment(op.input(), fragment, stages);
-
-    TempProjections projections(*this, *op.input());
-    auto keys = projections.toFieldRefs(op.distribution().orderKeys);
-    auto project = std::move(projections).maybeProject(input);
 
     if (options_.numDrivers == 1) {
       if (op.limit <= 0) {
         return std::make_shared<velox::core::OrderByNode>(
-            nextId(), keys, sortOrder, false, project);
+            nextId(), keys, sortOrder, false, input);
       }
 
-      auto node = addFinalTopN(
-          nextId(), keys, sortOrder, op.limit + op.offset, project);
+      auto node =
+          addFinalTopN(nextId(), keys, sortOrder, op.limit + op.offset, input);
 
       if (op.offset > 0) {
         return addFinalLimit(nextId(), op.offset, op.limit, node);
@@ -771,10 +664,10 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
     velox::core::PlanNodePtr node;
     if (op.limit <= 0) {
       node = std::make_shared<velox::core::OrderByNode>(
-          nextId(), keys, sortOrder, true, project);
+          nextId(), keys, sortOrder, true, input);
     } else {
       node = addPartialTopN(
-          nextId(), keys, sortOrder, op.limit + op.offset, project);
+          nextId(), keys, sortOrder, op.limit + op.offset, input);
     }
 
     node = addLocalMerge(nextId(), keys, sortOrder, node);
@@ -789,17 +682,13 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   auto source = newFragment();
   auto input = makeFragment(op.input(), source, stages);
 
-  TempProjections projections(*this, *op.input());
-  auto keys = projections.toFieldRefs(op.distribution().orderKeys);
-  auto project = std::move(projections).maybeProject(input);
-
   velox::core::PlanNodePtr node;
   if (op.limit <= 0) {
     node = std::make_shared<velox::core::OrderByNode>(
-        nextId(), keys, sortOrder, true, project);
+        nextId(), keys, sortOrder, true, input);
   } else {
-    node = addPartialTopN(
-        nextId(), keys, sortOrder, op.limit + op.offset, project);
+    node =
+        addPartialTopN(nextId(), keys, sortOrder, op.limit + op.offset, input);
   }
 
   node = addLocalMerge(nextId(), keys, sortOrder, node);
@@ -1172,10 +1061,10 @@ velox::core::PlanNodePtr ToVelox::makeScan(
         *scan.index->layout, column->name(), std::move(subfields));
   }
 
-  auto scanNode = std::make_shared<velox::core::TableScanNode>(
-      nextId(), outputType, tableHandle, assignments);
+  velox::core::PlanNodePtr result =
+      std::make_shared<velox::core::TableScanNode>(
+          nextId(), outputType, tableHandle, assignments);
 
-  velox::core::PlanNodePtr result = scanNode;
   if (filter != nullptr) {
     result =
         std::make_shared<velox::core::FilterNode>(nextId(), filter, result);
@@ -1186,8 +1075,6 @@ velox::core::PlanNodePtr ToVelox::makeScan(
   }
 
   makePredictionAndHistory(result->id(), &scan);
-
-  fragment.scans.push_back(scanNode);
 
   columnAlteredTypes_.clear();
   return result;
@@ -1277,13 +1164,9 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
     return std::make_shared<velox::core::FilterNode>(
         nextId(), toAnd(join.filter), joinNode);
   }
-  // TODO: We can avoid to project extra columns here if join.columns() isn't
-  // all lhs and rhs columns concatenated.
-  TempProjections leftProjections{*this, *join.input()};
-  TempProjections rightProjections{*this, *join.right};
 
-  auto leftKeys = leftProjections.toFieldRefs(join.leftKeys);
-  auto rightKeys = rightProjections.toFieldRefs(join.rightKeys);
+  auto leftKeys = toFieldRefs(join.leftKeys);
+  auto rightKeys = toFieldRefs(join.rightKeys);
 
   auto joinNode = std::make_shared<velox::core::HashJoinNode>(
       nextId(),
@@ -1292,8 +1175,8 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
       leftKeys,
       rightKeys,
       toAnd(join.filter),
-      std::move(leftProjections).maybeProject(left),
-      std::move(rightProjections).maybeProject(right),
+      left,
+      right,
       makeOutputType(join.columns()));
   makePredictionAndHistory(joinNode->id(), &join);
   return joinNode;
@@ -1305,13 +1188,6 @@ velox::core::PlanNodePtr ToVelox::makeUnnest(
     std::vector<runner::ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
-  // We avoid use all of the input columns in the projections
-  // because the unnest op explicitly specify what columns to replicate
-  TempProjections projections{*this, *op.input(), false};
-  auto replicateVariables = projections.toFieldRefs(op.replicateColumns);
-  auto unnestVariables = projections.toFieldRefs(op.unnestExprs);
-  auto project = std::move(projections).maybeProject(std::move(input));
-
   std::vector<std::string> unnestNames;
   unnestNames.reserve(op.unnestedColumns.size());
   for (const auto* column : op.unnestedColumns) {
@@ -1320,12 +1196,12 @@ velox::core::PlanNodePtr ToVelox::makeUnnest(
 
   return std::make_shared<velox::core::UnnestNode>(
       nextId(),
-      std::move(replicateVariables),
-      std::move(unnestVariables),
+      toFieldRefs(op.replicateColumns),
+      toFieldRefs(op.unnestExprs),
       std::move(unnestNames),
       std::nullopt,
       std::nullopt,
-      std::move(project));
+      std::move(input));
 }
 
 velox::core::PlanNodePtr ToVelox::makeAggregation(
@@ -1339,7 +1215,8 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       op.step == velox::core::AggregationNode::Step::kSingle;
   const auto numKeys = op.groupingKeys.size();
 
-  TempProjections projections{*this, *op.input(), false};
+  auto keys = toFieldRefs(op.groupingKeys);
+
   std::vector<std::string> aggregateNames;
   std::vector<velox::core::AggregationNode::Aggregate> aggregates;
   for (size_t i = 0; i < op.aggregates.size(); ++i) {
@@ -1358,13 +1235,13 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
     if (isRawInput) {
       velox::core::FieldAccessTypedExprPtr mask;
       if (aggregate->condition()) {
-        mask = projections.toFieldRef(aggregate->condition());
+        mask = toFieldRef(aggregate->condition());
       }
+
       auto call = std::make_shared<velox::core::CallTypedExpr>(
-          type,
-          projections.toFieldRefs<velox::core::TypedExprPtr>(aggregate->args()),
-          aggregate->name());
-      aggregates.push_back({.call = call, .rawInputTypes = rawInputTypes});
+          type, toTypedExprs(aggregate->args()), aggregate->name());
+      aggregates.push_back(
+          {.call = call, .rawInputTypes = rawInputTypes, .mask = mask});
     } else {
       auto call = std::make_shared<velox::core::CallTypedExpr>(
           type,
@@ -1375,28 +1252,20 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
     }
   }
 
-  std::vector<std::string> keyNames;
-  keyNames.reserve(op.groupingKeys.size());
-  for (auto i = 0; i < op.groupingKeys.size(); ++i) {
-    keyNames.push_back(outputName(op.columns()[i]));
-  }
-
-  auto keys = projections.toFieldRefs(op.groupingKeys, &keyNames);
-  auto project = std::move(projections).maybeProject(input);
   if (options_.numDrivers > 1 &&
       (op.step == velox::core::AggregationNode::Step::kFinal ||
        op.step == velox::core::AggregationNode::Step::kSingle)) {
-    std::vector<velox::core::PlanNodePtr> inputs = {project};
+    std::vector<velox::core::PlanNodePtr> inputs = {input};
     if (keys.empty()) {
       // Final agg with no grouping is single worker and has a local gather
       // before the final aggregation.
-      project =
+      input =
           velox::core::LocalPartitionNode::gather(nextId(), std::move(inputs));
       fragment.width = 1;
     } else {
       auto partition =
-          createPartitionFunctionSpec(project->outputType(), keys, false);
-      project = std::make_shared<velox::core::LocalPartitionNode>(
+          createPartitionFunctionSpec(input->outputType(), keys, false);
+      input = std::make_shared<velox::core::LocalPartitionNode>(
           nextId(),
           velox::core::LocalPartitionNode::Type::kRepartition,
           false,
@@ -1413,7 +1282,7 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       aggregateNames,
       aggregates,
       false,
-      project);
+      input);
 }
 
 velox::core::PlanNodePtr ToVelox::makeRepartition(
@@ -1424,18 +1293,15 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   auto source = newFragment();
   auto sourcePlan = makeFragment(repartition.input(), source, stages);
 
-  TempProjections project(*this, *repartition.input());
-  auto keys = project.toFieldRefs<velox::core::TypedExprPtr>(
-      repartition.distribution().partition);
-  auto& distribution = repartition.distribution();
+  auto keys = toTypedExprs(repartition.distribution().partition);
+
+  const auto& distribution = repartition.distribution();
   if (distribution.distributionType.isGather) {
     fragment.width = 1;
   }
 
-  auto partitioningInput = std::move(project).maybeProject(sourcePlan);
-
   auto partitionFunctionFactory = createPartitionFunctionSpec(
-      partitioningInput->outputType(), keys, distribution.isBroadcast);
+      sourcePlan->outputType(), keys, distribution.isBroadcast);
 
   source.fragment.planNode =
       std::make_shared<velox::core::PartitionedOutputNode>(
@@ -1449,7 +1315,7 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
           std::move(partitionFunctionFactory),
           makeOutputType(repartition.columns()),
           exchangeSerdeKind_,
-          partitioningInput);
+          sourcePlan);
 
   if (exchange == nullptr) {
     exchange = std::make_shared<velox::core::ExchangeNode>(

@@ -23,7 +23,7 @@ namespace {
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
-constexpr int kWaitTimeoutUs = 500'000;
+constexpr int32_t kWaitTimeoutUs = 500'000;
 
 class LocalRunnerTest : public test::LocalRunnerTestBase {
  public:

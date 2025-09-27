@@ -50,24 +50,8 @@ runner::MultiFragmentPlanPtr DistributedPlanBuilder::build() {
   return std::make_shared<runner::MultiFragmentPlan>(fragments(), options_);
 }
 
-namespace {
-void gatherScans(
-    const velox::core::PlanNodePtr& plan,
-    std::vector<velox::core::TableScanNodePtr>& scans) {
-  if (auto scan =
-          std::dynamic_pointer_cast<const velox::core::TableScanNode>(plan)) {
-    scans.push_back(scan);
-    return;
-  }
-  for (auto& source : plan->sources()) {
-    gatherScans(source, scans);
-  }
-}
-} // namespace
-
 void DistributedPlanBuilder::newFragment(int32_t width) {
   if (current_) {
-    gatherScans(planNode_, current_->scans);
     current_->fragment = velox::core::PlanFragment(std::move(planNode_));
     fragments_.push_back(std::move(*current_));
   }

@@ -523,8 +523,10 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       const optimizer::PlanAndStats& planAndStats,
       const std::shared_ptr<core::QueryCtx>& queryCtx) {
     connector::SplitOptions splitOptions{
-        .targetSplitCount = FLAGS_num_workers * FLAGS_num_drivers * 2,
-        .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes)};
+        .targetSplitCount =
+            static_cast<int32_t>(FLAGS_num_workers * FLAGS_num_drivers * 2),
+        .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes),
+    };
 
     return std::make_shared<facebook::axiom::runner::LocalRunner>(
         planAndStats.plan,
@@ -585,12 +587,18 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       const auto& fragments = planAndStats.plan->fragments();
       for (auto i = 0; i < fragments.size(); ++i) {
         auto nodeStats = exec::toPlanStats(stats[i]);
-        for (const auto& scan : fragments[i].scans) {
-          auto statsIt = nodeStats.find(scan->id());
-          if (statsIt != nodeStats.end()) {
-            runStats.rawInputBytes += statsIt->second.rawInputBytes;
-          }
-        }
+        velox::core::PlanNode::findFirstNode(
+            fragments[i].fragment.planNode.get(), [&](const auto* node) {
+              if (const auto* scan =
+                      dynamic_cast<const core::TableScanNode*>(node)) {
+                auto statsIt = nodeStats.find(scan->id());
+                if (statsIt != nodeStats.end()) {
+                  runStats.rawInputBytes += statsIt->second.rawInputBytes;
+                }
+              }
+
+              return false;
+            });
       }
 
       if (runStatsReturn) {

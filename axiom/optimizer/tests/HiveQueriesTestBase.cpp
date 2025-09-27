@@ -67,21 +67,7 @@ void HiveQueriesTestBase::checkResults(
   ASSERT_TRUE(statement->isSelect());
   auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
 
-  auto referenceResults = runVelox(referencePlan);
-
-  // Distributed.
-  {
-    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
-    checkResults(plan, referenceResults);
-  }
-
-  // Single node.
-  for (auto numDrivers : {1, 4}) {
-    SCOPED_TRACE(fmt::format("numWorkers: 1, numDrivers: {}", numDrivers));
-    auto plan =
-        planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers});
-    checkResults(plan, referenceResults);
-  }
+  checkResults(logicalPlan, referencePlan);
 }
 
 void HiveQueriesTestBase::checkResults(
@@ -90,20 +76,31 @@ void HiveQueriesTestBase::checkResults(
   VELOX_CHECK_NOT_NULL(logicalPlan);
   VELOX_CHECK_NOT_NULL(referencePlan);
 
-  auto referenceResults = runVelox(referencePlan);
-
-  // Distributed.
+  auto referenceResult = runVelox(referencePlan);
+  SCOPED_TRACE("reference plan:\n" + referencePlan->toString(true, true));
   {
-    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
-    checkResults(plan, referenceResults);
+    SCOPED_TRACE("single node and single thread");
+    auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 1});
+    SCOPED_TRACE("plan:\n" + plan.plan->toString());
+    checkResults(plan, referenceResult);
   }
-
-  // Single node.
-  for (auto numDrivers : {1, 4}) {
-    SCOPED_TRACE(fmt::format("numWorkers: 1, numDrivers: {}", numDrivers));
-    auto plan =
-        planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers});
-    checkResults(plan, referenceResults);
+  {
+    SCOPED_TRACE("single node and multi thread");
+    auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 4});
+    SCOPED_TRACE("plan:\n" + plan.plan->toString());
+    checkResults(plan, referenceResult);
+  }
+  {
+    SCOPED_TRACE("multi node and single thread");
+    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 1});
+    SCOPED_TRACE("plan:\n" + plan.plan->toString());
+    checkResults(plan, referenceResult);
+  }
+  {
+    SCOPED_TRACE("multi node and multi thread");
+    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+    SCOPED_TRACE("plan:\n" + plan.plan->toString());
+    checkResults(plan, referenceResult);
   }
 }
 

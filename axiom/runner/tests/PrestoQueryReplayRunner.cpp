@@ -40,13 +40,11 @@ std::vector<velox::RowVectorPtr> readCursor(
   }
   return result;
 }
-} // namespace
 
 const std::string kHiveConnectorId = "test-hive";
-const int32_t kWaitTimeoutUs = 5'000'000;
-const int32_t kDefaultWidth = 2;
-const int32_t kDefaultMaxDrivers = 4;
 const std::string kFinalTaskPrefix = "final";
+
+} // namespace
 
 PrestoQueryReplayRunner::PrestoQueryReplayRunner(
     velox::memory::MemoryPool* pool,
@@ -91,27 +89,6 @@ std::vector<std::string> getStringListFromJson(const folly::dynamic& json) {
       json.begin(), json.end(), result.begin(), [](const folly::dynamic& json) {
         return json.getString();
       });
-  return result;
-}
-
-void getScanNodesImpl(
-    const velox::core::PlanNodePtr& plan,
-    std::vector<velox::core::TableScanNodePtr>& result) {
-  if (auto tableScan =
-          std::dynamic_pointer_cast<const velox::core::TableScanNode>(plan)) {
-    result.push_back(tableScan);
-    return;
-  }
-  for (const auto& child : plan->sources()) {
-    getScanNodesImpl(child, result);
-  }
-}
-
-// Return all table scan nodes in 'plan'.
-std::vector<velox::core::TableScanNodePtr> getScanNodes(
-    const velox::core::PlanNodePtr& plan) {
-  std::vector<velox::core::TableScanNodePtr> result;
-  getScanNodesImpl(plan, result);
   return result;
 }
 
@@ -176,11 +153,10 @@ velox::core::PlanNodePtr getDeserializedPlan(
 }
 
 struct PlanFragmentInfo {
-  velox::core::PlanNodePtr plan{nullptr};
+  velox::core::PlanNodePtr plan;
   folly::F14FastMap<std::string, folly::F14FastSet<std::string>>
-      remoteTaskIdMap{};
-  std::vector<velox::core::TableScanNodePtr> scans{};
-  int numWorkers{0};
+      remoteTaskIdMap;
+  int32_t numWorkers{0};
 };
 
 std::vector<ExecutableFragment> createExecutableFragments(
@@ -192,8 +168,6 @@ std::vector<ExecutableFragment> createExecutableFragments(
         (planFragmentInfo.numWorkers > 0) ? planFragmentInfo.numWorkers : 1;
     executableFragment.fragment =
         velox::core::PlanFragment{planFragmentInfo.plan};
-
-    executableFragment.scans = planFragmentInfo.scans;
 
     std::vector<InputStage> inputStages;
     const auto& remoteTaskIdMap = planFragmentInfo.remoteTaskIdMap;
@@ -287,7 +261,7 @@ MultiFragmentPlanPtr PrestoQueryReplayRunner::deserializeSupportedPlan(
     if (!isSupported(jsonRecords[i], plan)) {
       return nullptr;
     }
-    planFragments[taskPrefix].scans = getScanNodes(plan);
+
     planFragments[taskPrefix].plan = plan;
   }
 

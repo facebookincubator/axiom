@@ -41,14 +41,6 @@ class PlanObject;
 using PlanObjectP = PlanObject*;
 using PlanObjectCP = const PlanObject*;
 
-struct PlanObjectPHasher {
-  size_t operator()(const PlanObjectCP& object) const;
-};
-
-struct PlanObjectPComparer {
-  bool operator()(const PlanObjectCP& lhs, const PlanObjectCP& rhs) const;
-};
-
 struct TypeHasher {
   size_t operator()(const velox::TypePtr& type) const {
     // hash on recursive TypeKind. Structs that differ in field names
@@ -270,11 +262,6 @@ class QueryGraphContext {
 #endif
   }
 
-  /// Returns a canonical instance for all logically equal values of 'object'.
-  /// Returns 'object' on first call with object, thereafter the same physical
-  /// object if the argument is equal.
-  PlanObjectP dedup(PlanObjectP object);
-
   /// Returns the object associated to 'id'. See newId()
   PlanObjectCP objectAt(int32_t id) {
     return objects_[id];
@@ -343,10 +330,6 @@ class QueryGraphContext {
   // Set of interned copies of identifiers. insert() into this returns the
   // canonical interned copy of any string. Lifetime is limited to 'allocator_'.
   folly::F14FastSet<std::string_view> names_;
-
-  // Set for deduplicating planObject trees.
-  folly::F14FastSet<PlanObjectP, PlanObjectPHasher, PlanObjectPComparer>
-      deduppedObjects_;
 
   folly::F14FastSet<velox::TypePtr, TypeHasher, TypeComparer> deduppedTypes_;
 
