@@ -135,41 +135,6 @@ void ToGraph::markFieldAccessed(
   }
 }
 
-void ToGraph::markFieldAccessed(
-    const lp::WindowNode& window,
-    int32_t ordinal,
-    std::vector<Step>& steps,
-    bool isControl) {
-  const auto& input = window.onlyInput();
-  const auto inputSize = input->outputType()->size();
-
-  if (ordinal < inputSize) {
-    const auto ctx = fromNode(input);
-    markFieldAccessed(ctx.sources[0], ordinal, steps, isControl, ctx.toCtx());
-    return;
-  }
-
-  const auto windowExprIndex = ordinal - inputSize;
-  const auto& windowExpr = window.windowExprAt(windowExprIndex);
-
-  std::vector<Step> subSteps;
-  const auto ctx = fromNode(input);
-  auto mark = [&](const lp::ExprPtr& expr) {
-    markSubfields(expr, subSteps, isControl, ctx.toCtx());
-  };
-
-  for (const auto& functionInput : windowExpr->inputs()) {
-    mark(functionInput);
-  }
-
-  for (const auto& partitionKey : windowExpr->partitionKeys()) {
-    mark(partitionKey);
-  }
-
-  for (const auto& sortingField : windowExpr->ordering()) {
-    mark(sortingField.expression);
-  }
-}
 
 void ToGraph::markFieldAccessed(
     const LogicalContextSource& source,
@@ -227,11 +192,6 @@ void ToGraph::markFieldAccessed(
     return;
   }
 
-  if (kind == lp::NodeKind::kWindow) {
-    const auto* window = source.planNode->asUnchecked<lp::WindowNode>();
-    markFieldAccessed(*window, ordinal, steps, isControl);
-    return;
-  }
 
   const auto& sourceInputs = source.planNode->inputs();
   if (sourceInputs.empty()) {
@@ -479,6 +439,31 @@ void ToGraph::markSubfields(
       markSubfields(input, specialFormSteps, isControl, context);
       VELOX_DCHECK(specialFormSteps.empty());
     }
+    return;
+  }
+
+  if (expr->isWindow()) {
+    const auto* windowExpr = expr->asUnchecked<lp::WindowExpr>();
+    std::vector<Step> windowSteps;
+
+    // Mark all window function inputs
+    for (const auto& input : windowExpr->inputs()) {
+      markSubfields(input, windowSteps, isControl, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+
+    // Mark partition keys
+    for (const auto& partitionKey : windowExpr->partitionKeys()) {
+      markSubfields(partitionKey, windowSteps, isControl, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+
+    // Mark ordering expressions
+    for (const auto& sortingField : windowExpr->ordering()) {
+      markSubfields(sortingField.expression, windowSteps, isControl, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+
     return;
   }
 

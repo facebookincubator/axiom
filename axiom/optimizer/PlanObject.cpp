@@ -63,6 +63,11 @@ void PlanObjectSet::unionColumns(ExprCP expr) {
       unionSet(call->columns());
       return;
     }
+    case PlanType::kWindowExpr: {
+      auto window = expr->as<Window>();
+      unionSet(window->columns());
+      return;
+    }
     default:
       VELOX_UNREACHABLE();
   }

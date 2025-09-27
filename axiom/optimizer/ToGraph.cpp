@@ -699,6 +699,11 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     return translateLambda(expr->asUnchecked<lp::LambdaExpr>());
   }
 
+  if (expr->isWindow()) {
+    const auto [translatedWindow, spec] = translateWindowExpr(std::static_pointer_cast<const lp::WindowExpr>(expr));
+    return translatedWindow;
+  }
+
   ToGraphContext ctx(expr.get());
   velox::ExceptionContextSetter exceptionContext(makeExceptionContext(&ctx));
 
@@ -1028,35 +1033,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       std::move(intermediateColumns));
 }
 
-WindowPlanCP ToGraph::translateWindow(const lp::WindowNode& windowNode) {
-  const auto& windowExprs = windowNode.windowExprs();
-  const auto& outputNames = windowNode.outputNames();
-  WindowSetVector windowSets;
-  windowSets.reserve(windowExprs.size());
-
-  for (size_t i = 0; i < windowExprs.size(); ++i) {
-    const auto [translatedWindow, spec] = translateWindowExpr(windowExprs[i]);
-    const auto* window = translatedWindow->as<Window>();
-
-    auto it = std::ranges::find_if(
-        windowSets, [&](const WindowSet& ws) { return ws.spec == spec; });
-
-    const auto* outputName = toName(outputNames[i]);
-    auto* column =
-        make<Column>(outputName, currentDt_, window->value(), outputName);
-
-    renames_[outputName] = column;
-
-    if (it != windowSets.end()) {
-      it->windows.push_back(window);
-      it->columns.push_back(column);
-    } else {
-      windowSets.emplace_back(spec, WindowVector{window}, ColumnVector{column});
-    }
-  }
-
-  return make<WindowPlan>(std::move(windowSets));
-}
+// translateWindow method removed - window expressions now handled directly in translateExpr
 
 std::pair<ExprCP, WindowSpec> ToGraph::translateWindowExpr(
     const lp::WindowExprPtr& windowExpr) {
@@ -1432,7 +1409,15 @@ PlanObjectP ToGraph::addProjection(const lp::ProjectNode* project) {
     }
   });
 
+  // Separate window expressions from regular expressions
+  std::vector<std::pair<size_t, lp::WindowExprPtr>> windowExprs;
+
   for (auto i : channels) {
+    if (exprs[i]->isWindow()) {
+      windowExprs.emplace_back(i, std::static_pointer_cast<const lp::WindowExpr>(exprs[i]));
+      continue;
+    }
+
     if (exprs[i]->isInputReference()) {
       const auto& name =
           exprs[i]->asUnchecked<lp::InputReferenceExpr>()->name();
@@ -1445,6 +1430,32 @@ PlanObjectP ToGraph::addProjection(const lp::ProjectNode* project) {
 
     auto expr = translateExpr(exprs.at(i));
     renames_[names[i]] = expr;
+  }
+
+  if (!windowExprs.empty()) {
+    WindowSetVector windowSets;
+    windowSets.reserve(windowExprs.size());
+
+    for (const auto& [idx, windowExpr] : windowExprs) {
+      const auto [translatedWindow, spec] = translateWindowExpr(windowExpr);
+      const auto* window = translatedWindow->as<Window>();
+
+      auto it = std::ranges::find_if(
+          windowSets, [&](const WindowSet& ws) { return ws.spec == spec; });
+
+      const auto* outputName = toName(names[idx]);
+      auto* column = make<Column>(outputName, currentDt_, window->value(), outputName);
+      renames_[outputName] = column;
+
+      if (it != windowSets.end()) {
+        it->windows.push_back(window);
+        it->columns.push_back(column);
+      } else {
+        windowSets.emplace_back(spec, WindowVector{window}, ColumnVector{column});
+      }
+    }
+
+    currentDt_->windowPlan = make<WindowPlan>(std::move(windowSets));
   }
 
   return currentDt_;
@@ -1472,10 +1483,6 @@ PlanObjectP ToGraph::addAggregation(const lp::AggregateNode& aggNode) {
   return currentDt_;
 }
 
-PlanObjectP ToGraph::addWindow(const lp::WindowNode& windowNode) {
-  currentDt_->windowPlan = translateWindow(windowNode);
-  return currentDt_;
-}
 
 PlanObjectP ToGraph::addLimit(const lp::LimitNode& limitNode) {
   if (currentDt_->hasLimit()) {
@@ -1769,9 +1776,6 @@ PlanObjectP ToGraph::makeQueryGraph(
 
       return currentDt_;
 
-    case lp::NodeKind::kWindow:
-      makeQueryGraph(*node.onlyInput(), allowedInDt);
-      return addWindow(*node.asUnchecked<lp::WindowNode>());
 
     case lp::NodeKind::kJoin:
       if (!contains(allowedInDt, PlanType::kJoinNode)) {

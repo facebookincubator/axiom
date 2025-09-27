@@ -34,7 +34,6 @@ enum class NodeKind {
   kSet = 8,
   kUnnest = 9,
   kTableWrite = 10,
-  kWindow = 11,
 };
 
 AXIOM_DECLARE_ENUM_NAME(NodeKind)
@@ -746,63 +745,6 @@ class TableWriteNode : public LogicalPlanNode {
 
 using TableWriteNodePtr = std::shared_ptr<const TableWriteNode>;
 
-/// Applies window functions to input data using specified window frames and
-/// partitioning. Window functions compute values over a set of rows related
-/// to the current row. The order of columns in the output schema is: all input
-/// columns, followed by window function results. Window expressions with
-/// different window specifications are grouped by specification during query
-/// graph conversion.
-class WindowNode : public LogicalPlanNode {
- public:
-  /// @param windowExprs Zero or more window expressions. Must be aligned with
-  /// 'outputNames'. At least one window expression must be specified.
-  /// @param outputNames List of names of the output columns: one name for each
-  /// input column, followed by one name for each window expression. Window
-  /// expressions are appended to the input columns with the specified names.
-  /// Names must be unique.
-  WindowNode(
-      std::string id,
-      LogicalPlanNodePtr input,
-      std::vector<WindowExprPtr> windowExprs,
-      std::vector<std::string> outputNames)
-      : LogicalPlanNode{NodeKind::kWindow, std::move(id), {input}, makeOutputType(input->outputType(), outputNames)},
-        windowExprs_{std::move(windowExprs)},
-        outputNames_{std::move(outputNames)} {
-    VELOX_USER_CHECK(
-        !windowExprs_.empty(),
-        "Window node must specify at least one window expression");
-    VELOX_USER_CHECK_EQ(
-        windowExprs_.size(),
-        outputNames_.size(),
-        "Number of window expressions must match number of output names");
-  }
-
-  const std::vector<WindowExprPtr>& windowExprs() const {
-    return windowExprs_;
-  }
-
-  const std::vector<std::string>& outputNames() const {
-    return outputNames_;
-  }
-
-  const WindowExprPtr& windowExprAt(size_t index) const {
-    VELOX_USER_CHECK_LT(index, windowExprs_.size());
-    return windowExprs_[index];
-  }
-
-  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
-      const override;
-
- private:
-  static velox::RowTypePtr makeOutputType(
-      const velox::RowTypePtr& inputType,
-      const std::vector<std::string>& outputNames);
-
-  const std::vector<WindowExprPtr> windowExprs_;
-  const std::vector<std::string> outputNames_;
-};
-
-using WindowNodePtr = std::shared_ptr<const WindowNode>;
 
 } // namespace facebook::axiom::logical_plan
 

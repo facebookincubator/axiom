@@ -551,8 +551,25 @@ PlanBuilder& PlanBuilder::window(
     exprs.emplace_back(std::move(expr));
   }
 
-  node_ = std::make_shared<WindowNode>(
-      nextId(), std::move(node_), std::move(exprs), std::move(outputNames));
+  // Create a project node with all input columns plus window expressions
+  std::vector<std::string> allNames;
+  std::vector<ExprPtr> allExprs;
+
+  // Add all input columns
+  const auto& inputType = node_->outputType();
+  for (size_t i = 0; i < inputType->size(); ++i) {
+    allNames.push_back(inputType->nameOf(i));
+    allExprs.push_back(std::make_shared<InputReferenceExpr>(inputType->childAt(i), inputType->nameOf(i)));
+  }
+
+  // Add window expressions
+  for (size_t i = 0; i < exprs.size(); ++i) {
+    allNames.push_back(outputNames[i]);
+    allExprs.push_back(exprs[i]);
+  }
+
+  node_ = std::make_shared<ProjectNode>(
+      nextId(), std::move(node_), std::move(allNames), std::move(allExprs));
 
   outputMapping_ = std::move(newOutputMapping);
 

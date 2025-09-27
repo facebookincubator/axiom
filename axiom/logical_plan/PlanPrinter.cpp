@@ -228,23 +228,6 @@ class ToTextVisitor : public PlanNodeVisitor {
     appendNode(name, node, std::nullopt, context);
   }
 
-  void visit(const WindowNode& node, PlanNodeVisitorContext& context)
-      const override {
-    auto& myContext = static_cast<Context&>(context);
-    myContext.out << makeIndent(myContext.indent) << "- Window:";
-
-    appendOutputType(node, myContext);
-
-    myContext.out << std::endl;
-
-    const auto indent = makeIndent(myContext.indent + 2);
-
-    for (const auto& expr : node.windowExprs()) {
-      myContext.out << indent << ExprPrinter::toText(*expr) << std::endl;
-    }
-
-    appendInputs(node, myContext);
-  }
 
   void appendOutputType(const LogicalPlanNode& node, Context& context) const {
     context.out << " -> " << node.outputType()->toString();
@@ -392,14 +375,6 @@ class CollectExprStatsPlanNodeVisitor : public PlanNodeVisitor {
     visitInputs(node, context);
   }
 
-  void visit(const WindowNode& node, PlanNodeVisitorContext& context)
-      const override {
-    auto& stats = static_cast<Context&>(context).stats;
-    for (const auto& windowExpr : node.windowExprs()) {
-      collectExprStats(*windowExpr, stats);
-    }
-    visitInputs(node, context);
-  }
 
  private:
   static void collectExprStats(const Expr& expr, ExprStats& stats);
@@ -683,21 +658,6 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
     appendInputs(node, myContext);
   }
 
-  void visit(const WindowNode& node, PlanNodeVisitorContext& context)
-      const override {
-    auto& myContext = static_cast<Context&>(context);
-    appendHeader(node, myContext);
-
-    if (!myContext.skeletonOnly) {
-      std::vector<ExprPtr> windowExprs;
-      for (const auto& windowExpr : node.windowExprs()) {
-        windowExprs.push_back(windowExpr);
-      }
-      appendExpressions(windowExprs, myContext);
-    }
-
-    appendInputs(node, myContext);
-  }
 
  private:
   static std::string makeIndent(size_t size) {

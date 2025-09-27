@@ -327,5 +327,41 @@ TEST_F(HiveWindowQueriesTest, multipleOrderByColumns) {
   checkSame(logicalPlan, referencePlan);
 }
 
+TEST_F(HiveWindowQueriesTest, windowExpressionWithAliasOrderByAlias) {
+  auto nationType =
+      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
+          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
+
+  const auto connectorId = exec::test::kHiveConnectorId;
+  const std::vector<std::string>& names = nationType->names();
+
+  auto logicalPlan =
+      lp::PlanBuilder()
+          .tableScan(connectorId, "nation", names)
+          .project({"row_number() over (partition by n_regionkey order by n_nationkey) as rn", "n_nationkey", "n_regionkey", "n_name", "n_comment"})
+          .orderBy({"rn"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .orderBy()
+                       .build();
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", nationType)
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey)"})
+          .orderBy({"row_number() over (partition by n_regionkey order by n_nationkey)"}, false)
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
