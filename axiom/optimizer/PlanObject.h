@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/common/Enums.h"
 #include "axiom/optimizer/BitSet.h"
 
 namespace facebook::axiom::optimizer {
@@ -43,6 +44,8 @@ enum class PlanType : uint32_t {
   kOrderByNode,
   kLimitNode,
 };
+
+AXIOM_DECLARE_ENUM_NAME(PlanType);
 
 /// True if 'type' is an expression with a value.
 inline bool isExprType(PlanType type) {

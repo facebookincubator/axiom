@@ -100,6 +100,7 @@ add_executable(
   AggregationPlanTest.cpp
   HiveLimitQueriesTest.cpp
   HiveQueriesTest.cpp
+  PrecomputeProjectionTest.cpp
   PlanTest.cpp
   UnnestTest.cpp
   ParquetTpchTest.cpp

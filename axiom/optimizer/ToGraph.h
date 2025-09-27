@@ -40,10 +40,10 @@ struct MarkFieldsAccessedContext {
 
 struct ExprDedupKey {
   Name func;
-  const ExprVector* args;
+  std::span<const ExprCP> args;
 
   bool operator==(const ExprDedupKey& other) const {
-    return func == other.func && *args == *other.args;
+    return func == other.func && std::ranges::equal(args, other.args);
   }
 };
 
@@ -51,7 +51,7 @@ struct ExprDedupHasher {
   size_t operator()(const ExprDedupKey& key) const {
     size_t h =
         folly::hasher<uintptr_t>()(reinterpret_cast<uintptr_t>(key.func));
-    for (auto& a : *key.args) {
+    for (auto& a : key.args) {
       h = velox::bits::hashMix(h, folly::hasher<ExprCP>()(a));
     }
     return h;
@@ -241,8 +241,8 @@ class ToGraph {
   // expression.
   ExprCP translateColumn(std::string_view name);
 
-  //  Applies translateColumn to a 'source'.
-  ExprVector translateColumns(const std::vector<logical_plan::ExprPtr>& source);
+  //  Applies translateExpr to a 'source'.
+  ExprVector translateExprs(const std::vector<logical_plan::ExprPtr>& source);
 
   // Makes a deduplicated Expr tree from 'expr'.
   ExprCP translateExpr(const logical_plan::ExprPtr& expr);

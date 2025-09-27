@@ -482,10 +482,12 @@ std::string Repartition::toString(bool recursive, bool detail) const {
 }
 
 namespace {
-ColumnVector concatColumns(const ColumnVector& lhs, const ColumnVector& rhs) {
+ColumnVector concatColumns(const ExprVector& lhs, const ColumnVector& rhs) {
   ColumnVector result;
   result.reserve(lhs.size() + rhs.size());
-  result.insert(result.end(), lhs.begin(), lhs.end());
+  for (const auto& expr : lhs) {
+    result.push_back(expr->as<Column>());
+  }
   result.insert(result.end(), rhs.begin(), rhs.end());
   return result;
 }
@@ -493,7 +495,7 @@ ColumnVector concatColumns(const ColumnVector& lhs, const ColumnVector& rhs) {
 
 Unnest::Unnest(
     RelationOpPtr input,
-    ColumnVector replicateColumns,
+    ExprVector replicateColumns,
     ExprVector unnestExprs,
     ColumnVector unnestedColumns)
     : RelationOp{RelType::kUnnest, input, input->distribution(), concatColumns(replicateColumns, unnestedColumns)},

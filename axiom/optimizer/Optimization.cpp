@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <iostream>
 #include <utility>
+#include "axiom/optimizer/PrecomputeProjection.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
 
@@ -654,11 +655,36 @@ void Optimization::addPostprocess(
   if (dt->aggregation) {
     const auto& aggPlan = dt->aggregation;
 
+    PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
+    auto groupingKeys =
+        precompute.toColumns(aggPlan->groupingKeys(), &aggPlan->columns());
+
+    AggregateVector aggregates;
+    aggregates.reserve(aggPlan->aggregates().size());
+
+    for (const auto& agg : aggPlan->aggregates()) {
+      ExprCP condition = nullptr;
+      if (agg->condition()) {
+        condition = precompute.toColumn(agg->condition());
+      }
+      auto args = precompute.toColumns(
+          agg->args(), /*aliases=*/nullptr, /*preserveLiterals=*/true);
+      aggregates.emplace_back(make<Aggregate>(
+          agg->name(),
+          agg->value(),
+          std::move(args),
+          agg->functions(),
+          agg->isDistinct(),
+          condition,
+          agg->intermediateType()));
+    }
+    plan = std::move(precompute).maybeProject();
+
     if (isSingleWorker_ && runnerOptions_.numDrivers == 1) {
       auto* singleAgg = make<Aggregation>(
           plan,
-          aggPlan->groupingKeys(),
-          aggPlan->aggregates(),
+          std::move(groupingKeys),
+          std::move(aggregates),
           velox::core::AggregationNode::Step::kSingle,
           aggPlan->columns());
 
@@ -668,8 +694,8 @@ void Optimization::addPostprocess(
     } else {
       auto* partialAgg = make<Aggregation>(
           plan,
-          aggPlan->groupingKeys(),
-          aggPlan->aggregates(),
+          std::move(groupingKeys),
+          aggregates,
           velox::core::AggregationNode::Step::kPartial,
           aggPlan->intermediateColumns());
 
@@ -677,15 +703,18 @@ void Optimization::addPostprocess(
       state.addCost(*partialAgg);
       plan = repartitionForAgg(partialAgg, state);
 
+      const auto numKeys = aggPlan->groupingKeys().size();
+
       ExprVector finalGroupingKeys;
-      for (auto i = 0; i < aggPlan->groupingKeys().size(); ++i) {
+      finalGroupingKeys.reserve(numKeys);
+      for (auto i = 0; i < numKeys; ++i) {
         finalGroupingKeys.push_back(aggPlan->intermediateColumns()[i]);
       }
 
       auto* finalAgg = make<Aggregation>(
           plan,
-          finalGroupingKeys,
-          aggPlan->aggregates(),
+          std::move(finalGroupingKeys),
+          std::move(aggregates),
           velox::core::AggregationNode::Step::kFinal,
           aggPlan->columns());
 
@@ -701,8 +730,15 @@ void Optimization::addPostprocess(
   // We probably want to make this decision based on cost.
   static constexpr int64_t kMaxLimitBeforeProject = 8192;
   if (dt->hasOrderBy()) {
+    PrecomputeProjection precompute(plan, dt);
+    auto orderKeys = precompute.toColumns(dt->orderKeys);
+
     auto* orderBy = make<OrderBy>(
-        plan, dt->orderKeys, dt->orderTypes, dt->limit, dt->offset);
+        std::move(precompute).maybeProject(),
+        std::move(orderKeys),
+        dt->orderTypes,
+        dt->limit,
+        dt->offset);
     state.addCost(*orderBy);
     plan = orderBy;
   } else if (dt->hasLimit() && dt->limit <= kMaxLimitBeforeProject) {
@@ -884,6 +920,10 @@ void Optimization::joinByHash(
     }
   }
 
+  PrecomputeProjection precomputeBuild(buildInput, state.dt);
+  auto buildKeys = precomputeBuild.toColumns(build.keys);
+  buildInput = std::move(precomputeBuild).maybeProject();
+
   auto* buildOp =
       make<HashBuild>(buildInput, ++buildCounter_, build.keys, buildPlan);
   buildState.addCost(*buildOp);
@@ -924,16 +964,22 @@ void Optimization::joinByHash(
   }
   state.columns = columnSet;
   const auto fanout = fanoutJoinTypeLimit(joinType, candidate.fanout);
+
+  PrecomputeProjection precomputeProbe(probeInput, state.dt);
+  auto probeKeys = precomputeProbe.toColumns(probe.keys);
+  probeInput = std::move(precomputeProbe).maybeProject();
+
   auto* join = make<Join>(
       JoinMethod::kHash,
       joinType,
       probeInput,
       buildOp,
-      probe.keys,
-      build.keys,
+      std::move(probeKeys),
+      std::move(buildKeys),
       candidate.join->filter(),
       fanout,
       std::move(columns));
+
   state.addCost(*join);
   state.cost.setupCost += buildState.cost.unitCost + buildState.cost.setupCost;
   state.cost.totalBytes += buildState.cost.totalBytes;
@@ -994,6 +1040,10 @@ void Optimization::joinByHashRight(
         probeInput, probe.keys, probeState, buildInput, build.keys, state);
   }
 
+  PrecomputeProjection precomputeBuild(buildInput, state.dt);
+  auto buildKeys = precomputeBuild.toColumns(build.keys);
+  buildInput = std::move(precomputeBuild).maybeProject();
+
   auto* buildOp =
       make<HashBuild>(buildInput, ++buildCounter_, build.keys, nullptr);
   state.addCost(*buildOp);
@@ -1045,13 +1095,17 @@ void Optimization::joinByHashRight(
   state.cost = probeState.cost;
   state.cost.setupCost += buildCost;
 
+  PrecomputeProjection precomputeProbe(probeInput, state.dt);
+  auto probeKeys = precomputeProbe.toColumns(probe.keys);
+  probeInput = std::move(precomputeProbe).maybeProject();
+
   auto* join = make<Join>(
       JoinMethod::kHash,
       rightJoinType,
       probeInput,
       buildOp,
-      probe.keys,
-      build.keys,
+      std::move(probeKeys),
+      std::move(buildKeys),
       candidate.join->filter(),
       fanout,
       std::move(columns));
@@ -1079,10 +1133,12 @@ void Optimization::crossJoinUnnest(
     // we're not interested in the replicating columns needed only for unnest.
     state.placed.add(table);
 
-    ColumnVector replicateColumns;
+    PrecomputeProjection precompute(plan, state.dt, /*projectAllInputs=*/false);
+
+    ExprVector replicateColumns;
     state.downstreamColumns().forEach<Column>([&](auto column) {
       if (state.columns.contains(column)) {
-        replicateColumns.push_back(column);
+        replicateColumns.push_back(precompute.toColumn(column));
       }
     });
 
@@ -1094,10 +1150,14 @@ void Optimization::crossJoinUnnest(
 
     // Plan is updated here,
     // because we can have multiple unnest joins in single JoinCandidate.
+
+    auto unnestColumns = precompute.toColumns(unnestExprs);
+    plan = std::move(precompute).maybeProject();
+
     plan = make<Unnest>(
         std::move(plan),
         std::move(replicateColumns),
-        unnestExprs,
+        std::move(unnestColumns),
         unnestedColumns);
 
     state.columns.unionObjects(unnestedColumns);

@@ -89,6 +89,13 @@ class ToVelox {
   }
 
  private:
+  velox::core::FieldAccessTypedExprPtr toFieldRef(ExprCP expr);
+
+  std::vector<velox::core::FieldAccessTypedExprPtr> toFieldRefs(
+      const ExprVector& exprs);
+
+  std::vector<velox::core::TypedExprPtr> toTypedExprs(const ExprVector& exprs);
+
   void setLeafHandle(
       int32_t id,
       velox::connector::ConnectorTableHandlePtr handle,

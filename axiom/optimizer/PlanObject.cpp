@@ -18,6 +18,32 @@
 
 namespace facebook::axiom::optimizer {
 
+namespace {
+const auto& planTypeNames() {
+  static const folly::F14FastMap<PlanType, std::string_view> kNames = {
+      {PlanType::kColumnExpr, "ColumnExpr"},
+      {PlanType::kLiteralExpr, "LiteralExpr"},
+      {PlanType::kCallExpr, "CallExpr"},
+      {PlanType::kAggregateExpr, "AggregateExpr"},
+      {PlanType::kFieldExpr, "FieldExpr"},
+      {PlanType::kLambdaExpr, "LambdaExpr"},
+      {PlanType::kTableNode, "TableNode"},
+      {PlanType::kValuesTableNode, "ValuesTableNode"},
+      {PlanType::kUnnestTableNode, "UnnestTableNode"},
+      {PlanType::kDerivedTableNode, "DerivedTableNode"},
+      {PlanType::kAggregationNode, "AggregationNode"},
+      {PlanType::kProjectNode, "ProjectNode"},
+      {PlanType::kFilterNode, "FilterNode"},
+      {PlanType::kJoinNode, "JoinNode"},
+      {PlanType::kOrderByNode, "OrderByNode"},
+      {PlanType::kLimitNode, "LimitNode"},
+  };
+  return kNames;
+}
+} // namespace
+
+AXIOM_DEFINE_ENUM_NAME(PlanType, planTypeNames);
+
 size_t PlanObject::hash() const {
   auto h = static_cast<size_t>(id_);
   for (auto& child : children()) {
