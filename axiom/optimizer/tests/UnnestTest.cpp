@@ -189,9 +189,9 @@ TEST_F(UnnestTest, unnest) {
         core::PlanMatcherBuilder()
             .values()
             .project({"x", "array_distinct(a_a_y)", "array_distinct(a_a_z)"})
-            .unnest({"x"}, {"__r3", "__r4"})
+            .unnest({"x"}, {"\"dt1.__p5\"", "\"dt1.__p6\""})
             .project({"x", "array_distinct(a_y)", "array_distinct(a_z)"})
-            .unnest({"x"}, {"__r3", "__r4"})
+            .unnest({"x"}, {"\"dt1.__p10\"", "\"dt1.__p11\""})
             .project(expectedNames)
             .build();
     ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);

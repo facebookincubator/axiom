@@ -115,6 +115,21 @@ void LocalRunnerTestBase::makeTables(
   }
 }
 
+namespace {
+void gatherScans(
+    const velox::core::PlanNodePtr& plan,
+    std::vector<velox::core::TableScanNodePtr>& scans) {
+  if (auto scan =
+          std::dynamic_pointer_cast<const velox::core::TableScanNode>(plan)) {
+    scans.push_back(scan);
+    return;
+  }
+  for (const auto& source : plan->sources()) {
+    gatherScans(source, scans);
+  }
+}
+} // namespace
+
 std::shared_ptr<runner::SimpleSplitSourceFactory>
 LocalRunnerTestBase::makeSimpleSplitSourceFactory(
     const runner::MultiFragmentPlanPtr& plan) {
@@ -123,12 +138,16 @@ LocalRunnerTestBase::makeSimpleSplitSourceFactory(
       std::vector<std::shared_ptr<velox::connector::ConnectorSplit>>>
       nodeSplitMap;
   for (auto& fragment : plan->fragments()) {
-    for (auto& scan : fragment.scans) {
-      auto& name = scan->tableHandle()->name();
-      auto files = tableFilePaths_[name];
+    std::vector<velox::core::TableScanNodePtr> scans;
+    gatherScans(fragment.fragment.planNode, scans);
+
+    for (const auto& scan : scans) {
+      const auto& name = scan->tableHandle()->name();
+      const auto& files = tableFilePaths_[name];
       VELOX_CHECK(!files.empty(), "No splits known for {}", name);
+
       std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
-      for (auto& file : files) {
+      for (const auto& file : files) {
         splits.push_back(velox::connector::hive::HiveConnectorSplitBuilder(file)
                              .connectorId(velox::exec::test::kHiveConnectorId)
                              .fileFormat(velox::dwio::common::FileFormat::DWRF)

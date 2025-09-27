@@ -464,6 +464,18 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       AggregationNode::Step step)
       : PlanMatcherImpl<AggregationNode>({matcher}), step_{step} {}
 
+  AggregationMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      AggregationNode::Step step,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates)
+      : PlanMatcherImpl<AggregationNode>({matcher}),
+        step_{step},
+        groupingKeys_{groupingKeys},
+        aggregates_{aggregates} {
+    VELOX_CHECK(!groupingKeys_.empty() || !aggregates_.empty());
+  }
+
   bool matchDetails(const AggregationNode& plan) const override {
     SCOPED_TRACE(plan.toString(true, false));
 
@@ -474,11 +486,43 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       }
     }
 
+    if (!groupingKeys_.empty() || !aggregates_.empty()) {
+      // Verify grouping keys.
+      EXPECT_EQ(plan.groupingKeys().size(), groupingKeys_.size());
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+
+      for (auto i = 0; i < groupingKeys_.size(); ++i) {
+        auto expected = parse::parseExpr(groupingKeys_[i], {});
+        EXPECT_EQ(plan.groupingKeys()[i]->toString(), expected->toString());
+      }
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+
+      // Verify aggregates.
+      EXPECT_EQ(plan.aggregates().size(), aggregates_.size());
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+
+      for (auto i = 0; i < aggregates_.size(); ++i) {
+        auto expected = parse::parseExpr(aggregates_[i], {});
+        EXPECT_EQ(plan.aggregates()[i].call->toString(), expected->toString());
+      }
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+    }
+
     return true;
   }
 
  private:
   const std::optional<AggregationNode::Step> step_;
+  const std::vector<std::string> groupingKeys_;
+  const std::vector<std::string> aggregates_;
 };
 
 class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
@@ -621,6 +665,15 @@ PlanMatcherBuilder& PlanMatcherBuilder::singleAggregation() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<AggregationMatcher>(
       matcher_, AggregationNode::Step::kSingle);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::singleAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<AggregationMatcher>(
+      matcher_, AggregationNode::Step::kSingle, groupingKeys, aggregates);
   return *this;
 }
 

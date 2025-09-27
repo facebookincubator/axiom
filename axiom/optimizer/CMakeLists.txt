@@ -33,6 +33,7 @@ add_library(
   ToGraph.cpp
   Subfields.cpp
   Optimization.cpp
+  PrecomputeProjection.cpp
   Plan.cpp
   BitSet.cpp
   ParallelExpr.cpp

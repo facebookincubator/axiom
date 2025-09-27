@@ -52,9 +52,6 @@ struct ExecutableFragment {
   /// Source fragments and Exchange node ids for remote shuffles producing input
   /// for 'this'.
   std::vector<InputStage> inputStages;
-
-  /// Table scan nodes in 'this'.
-  std::vector<std::shared_ptr<const velox::core::TableScanNode>> scans;
 };
 
 /// Describes a distributed plan handed to a Runner for parallel/distributed

@@ -143,16 +143,17 @@ bool VeloxHistory::setLeafSelectivity(
 
 namespace {
 
-std::shared_ptr<const velox::core::TableScanNode> findScan(
+const velox::core::TableScanNode* findScan(
     const velox::core::PlanNodeId& id,
     const runner::MultiFragmentPlanPtr& plan) {
-  for (auto& fragment : plan->fragments()) {
-    for (auto& scan : fragment.scans) {
-      if (scan->id() == id) {
-        return scan;
-      }
+  for (const auto& fragment : plan->fragments()) {
+    if (auto node = velox::core::PlanNode::findFirstNode(
+            fragment.fragment.planNode.get(),
+            [&](const auto* node) { return node->id() == id; })) {
+      return dynamic_cast<const velox::core::TableScanNode*>(node);
     }
   }
+
   return nullptr;
 }
 
@@ -228,8 +229,7 @@ void VeloxHistory::recordVeloxExecution(
               NodePrediction{.cardinality = static_cast<float>(actualRows)};
         }
         if (op.operatorType == "TableScanOperator") {
-          auto scan = findScan(op.planNodeId, plan.plan);
-          if (scan) {
+          if (const auto* scan = findScan(op.planNodeId, plan.plan)) {
             std::string handle = scan->tableHandle()->toString();
             recordLeafSelectivity(
                 handle,

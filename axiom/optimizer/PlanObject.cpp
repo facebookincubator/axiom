@@ -18,20 +18,31 @@
 
 namespace facebook::axiom::optimizer {
 
-size_t PlanObjectPHasher::operator()(const PlanObjectCP& object) const {
-  return object->hash();
+namespace {
+const auto& planTypeNames() {
+  static const folly::F14FastMap<PlanType, std::string_view> kNames = {
+      {PlanType::kColumnExpr, "ColumnExpr"},
+      {PlanType::kLiteralExpr, "LiteralExpr"},
+      {PlanType::kCallExpr, "CallExpr"},
+      {PlanType::kAggregateExpr, "AggregateExpr"},
+      {PlanType::kFieldExpr, "FieldExpr"},
+      {PlanType::kLambdaExpr, "LambdaExpr"},
+      {PlanType::kTableNode, "TableNode"},
+      {PlanType::kValuesTableNode, "ValuesTableNode"},
+      {PlanType::kUnnestTableNode, "UnnestTableNode"},
+      {PlanType::kDerivedTableNode, "DerivedTableNode"},
+      {PlanType::kAggregationNode, "AggregationNode"},
+      {PlanType::kProjectNode, "ProjectNode"},
+      {PlanType::kFilterNode, "FilterNode"},
+      {PlanType::kJoinNode, "JoinNode"},
+      {PlanType::kOrderByNode, "OrderByNode"},
+      {PlanType::kLimitNode, "LimitNode"},
+  };
+  return kNames;
 }
+} // namespace
 
-bool PlanObjectPComparer::operator()(
-    const PlanObjectCP& lhs,
-    const PlanObjectCP& rhs) const {
-  if (rhs == lhs) {
-    return true;
-  }
-  return rhs && lhs && lhs->isExpr() && rhs->isExpr() &&
-      reinterpret_cast<const Expr*>(lhs)->sameOrEqual(
-          *reinterpret_cast<const Expr*>(rhs));
-}
+AXIOM_DEFINE_ENUM_NAME(PlanType, planTypeNames);
 
 size_t PlanObject::hash() const {
   auto h = static_cast<size_t>(id_);

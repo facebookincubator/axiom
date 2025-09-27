@@ -159,8 +159,6 @@ class HiveConnectorMetadata : public ConnectorMetadata {
     VELOX_UNSUPPORTED();
   }
 
-  virtual velox::dwio::common::FileFormat fileFormat() const = 0;
-
  protected:
   virtual void ensureInitialized() const {}
 
@@ -172,12 +170,13 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       std::string targetDirectory,
       std::optional<std::string> writeDirectory,
       velox::connector::hive::LocationHandle::TableType tableType =
-          velox::connector::hive::LocationHandle::TableType::kNew) = 0;
+          velox::connector::hive::LocationHandle::TableType::kNew) {
+    return std::make_shared<velox::connector::hive::LocationHandle>(
+        targetDirectory, writeDirectory.value_or(targetDirectory), tableType);
+  }
 
-  /// Returns the path to the filesystem root for the data managed by
-  /// 'this'. Directories inside this correspond to schemas and
-  /// tables.
-  virtual std::string dataPath() const = 0;
+  /// Return the filesystem path for the storage of the specified table.
+  virtual std::string tablePath(std::string_view table) const = 0;
 
   velox::connector::hive::HiveConnector* const hiveConnector_;
   const std::shared_ptr<velox::connector::hive::HiveConfig> hiveConfig_;

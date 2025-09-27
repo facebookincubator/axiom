@@ -816,7 +816,7 @@ void LocalHiveConnectorMetadata::createTable(
   VELOX_CHECK_EQ(kind, TableKind::kTable);
   validateOptions(options);
   ensureInitialized();
-  auto path = fmt::format("{}/{}", dataPath(), tableName);
+  auto path = tablePath(tableName);
   if (dirExists(path)) {
     if (errorIfExists) {
       VELOX_USER_FAIL("Table {} already exists", tableName);
