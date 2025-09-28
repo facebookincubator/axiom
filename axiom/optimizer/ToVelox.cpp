@@ -15,7 +15,6 @@
  */
 
 #include "axiom/optimizer/ToVelox.h"
-#include <optimizer/DerivedTable.h>
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "velox/core/PlanConsistencyChecker.h"
