@@ -947,10 +947,14 @@ struct AggregateDedupKey {
   bool isDistinct;
   ExprCP condition;
   std::span<const ExprCP> args;
+  std::span<const ExprCP> orderKeys;
+  std::span<const OrderType> orderTypes;
 
   bool operator==(const AggregateDedupKey& other) const {
     return func == other.func && isDistinct == other.isDistinct &&
-        condition == other.condition && std::ranges::equal(args, other.args);
+        condition == other.condition && std::ranges::equal(args, other.args) &&
+        std::ranges::equal(orderKeys, other.orderKeys) &&
+        std::ranges::equal(orderTypes, other.orderTypes);
   }
 };
 
@@ -967,6 +971,14 @@ struct AggregateDedupHasher {
 
     for (auto& a : key.args) {
       hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(a));
+    }
+
+    for (auto& k : key.orderKeys) {
+      hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(k));
+    }
+
+    for (auto& t : key.orderTypes) {
+      hash = velox::bits::hashMix(hash, folly::hasher<OrderType>()(t));
     }
 
     return hash;
@@ -1035,16 +1047,27 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     orderKeys.reserve(aggregate->ordering().size());
     orderTypes.reserve(aggregate->ordering().size());
 
+    folly::F14FastSet<ExprCP> uniqueOrderKeys;
     for (const auto& field : aggregate->ordering()) {
+      auto* key = translateExpr(field.expression);
+      if (!uniqueOrderKeys.emplace(key).second) {
+        continue;
+      }
       auto sort = field.order;
-      orderKeys.push_back(translateExpr(field.expression));
+      orderKeys.push_back(key);
       orderTypes.push_back(toOrderType(sort));
     }
 
     auto aggName = toName(aggregate->name());
     auto name = toName(agg.outputNames()[channel]);
 
-    AggregateDedupKey key{aggName, aggregate->isDistinct(), condition, args};
+    AggregateDedupKey key{
+        aggName,
+        aggregate->isDistinct(),
+        condition,
+        args,
+        orderKeys,
+        orderTypes};
 
     auto it = uniqueAggregates.try_emplace(key).first;
     if (it->second) {

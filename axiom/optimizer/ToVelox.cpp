@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/ToVelox.h"
+#include <optimizer/DerivedTable.h>
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "velox/core/PlanConsistencyChecker.h"
@@ -604,6 +605,16 @@ velox::core::SortOrder toSortOrder(const OrderType& order) {
       : order == OrderType ::kAscNullsLast  ? velox::core::kAscNullsLast
       : order == OrderType::kDescNullsFirst ? velox::core::kDescNullsFirst
                                             : velox::core::kDescNullsLast;
+}
+
+std::vector<velox::core::SortOrder> toSortOrders(
+    const OrderTypeVector& orders) {
+  std::vector<velox::core::SortOrder> sortOrders;
+  sortOrders.reserve(orders.size());
+  for (auto order : orders) {
+    sortOrders.emplace_back(toSortOrder(order));
+  }
+  return sortOrders;
 }
 } // namespace
 
@@ -1241,23 +1252,12 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       auto call = std::make_shared<velox::core::CallTypedExpr>(
           type, toTypedExprs(aggregate->args()), aggregate->name());
 
-      std::vector<velox::core::FieldAccessTypedExprPtr> sortingKeys;
-      std::vector<velox::core::SortOrder> sortingOrders;
-      sortingKeys.reserve(aggregate->orderKeys().size());
-      sortingOrders.reserve(aggregate->orderKeys().size());
-
-      for (size_t i = 0; i < aggregate->orderKeys().size(); ++i) {
-        sortingKeys.push_back(
-            projections.toFieldRef(aggregate->orderKeys()[i]));
-        sortingOrders.push_back(toSortOrder(aggregate->orderTypes()[i]));
-      }
-
       aggregates.push_back({
           .call = call,
           .rawInputTypes = rawInputTypes,
           .mask = mask,
-          .sortingKeys = std::move(sortingKeys),
-          .sortingOrders = std::move(sortingOrders),
+          .sortingKeys = toFieldRefs(aggregate->orderKeys()),
+          .sortingOrders = toSortOrders(aggregate->orderTypes()),
           .distinct = aggregate->isDistinct(),
       });
     } else {
