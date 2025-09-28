@@ -36,20 +36,23 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build-axiom:
-    name: Build Axiom
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [none, address, undefined, thread]
+    name: Build Axiom with ${{ matrix.sanitizer }} sanitizer
     runs-on: 16-core-ubuntu
     container:
       image: ghcr.io/facebookincubator/velox-dev:centos9
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
-      VELOX_DEPENDENCY_SOURCE: SYSTEM
-      ICU_SOURCE: SYSTEM
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           persist-credentials: false
+
       # Configure Git to trust the repository directory
       - name: Configure Git Safe Directory
         run: |
@@ -85,14 +88,26 @@ jobs:
         run: |
           ccache -sz
 
-      # Build Axiom
+      # Build Axiom Debug
       - name: Build Axiom Debug
-        id: build-axiom
+        if: ${{ matrix.sanitizer == 'none' }}
         env:
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
           CPU_TARGET: "avx"
+          VELOX_DEPENDENCY_SOURCE: SYSTEM
+          ICU_SOURCE: SYSTEM
         run: |
           make debug
+
+      - name: Build Axiom Debug with ${{ matrix.sanitizer }} sanitizer
+        if: ${{ matrix.sanitizer != 'none' }}
+        env:
+          MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
+          CPU_TARGET: "avx"
+          VELOX_DEPENDENCY_SOURCE: BUNDLED
+          ICU_SOURCE: BUNDLED
+        run: |
+          make debug-${{ matrix.sanitizer }}
 
       # Display ccache statistics after build
       - name: CCache Statistics After Build
