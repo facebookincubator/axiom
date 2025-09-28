@@ -698,10 +698,10 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     return translateLambda(expr->asUnchecked<lp::LambdaExpr>());
   }
 
-  if (expr->isWindow()) {
-    const auto [translatedWindow, spec] = translateWindowExpr(std::static_pointer_cast<const lp::WindowExpr>(expr));
-    return translatedWindow;
-  }
+  // if (expr->isWindow()) {
+  //   const auto [translatedWindow, spec] = translateWindowExpr(std::static_pointer_cast<const lp::WindowExpr>(expr));
+  //   return translatedWindow;
+  // }
 
   ToGraphContext ctx(expr.get());
   velox::ExceptionContextSetter exceptionContext(makeExceptionContext(&ctx));
@@ -1090,8 +1090,6 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       std::move(intermediateColumns));
 }
 
-// translateWindow method removed - window expressions now handled directly in translateExpr
-
 std::pair<ExprCP, WindowSpec> ToGraph::translateWindowExpr(
     const lp::WindowExprPtr& windowExpr) {
   ExprVector args;
@@ -1476,9 +1474,7 @@ PlanObjectP ToGraph::addProjection(const lp::ProjectNode* project) {
     }
   });
 
-  // Separate window expressions from regular expressions
   std::vector<std::pair<size_t, lp::WindowExprPtr>> windowExprs;
-
   for (auto i : channels) {
     if (exprs[i]->isWindow()) {
       windowExprs.emplace_back(i, std::static_pointer_cast<const lp::WindowExpr>(exprs[i]));

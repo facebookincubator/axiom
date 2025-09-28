@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/ToVelox.h"
+#include <optimizer/DerivedTable.h>
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "velox/core/PlanConsistencyChecker.h"
@@ -604,6 +605,15 @@ velox::core::SortOrder toSortOrder(const OrderType& order) {
       : order == OrderType ::kAscNullsLast  ? velox::core::kAscNullsLast
       : order == OrderType::kDescNullsFirst ? velox::core::kDescNullsFirst
                                             : velox::core::kDescNullsLast;
+}
+
+std::vector<velox::core::SortOrder> toSortOrders(const OrderTypeVector& orders) {
+  std::vector<velox::core::SortOrder> sortOrders;
+  sortOrders.reserve(orders.size());
+  for (auto order : orders) {
+    sortOrders.push_back(toSortOrder(order));
+  }
+  return sortOrders;
 }
 
 velox::core::WindowNode::Frame toVeloxFrame(
@@ -1359,22 +1369,13 @@ velox::core::PlanNodePtr ToVelox::makeWindow(
     std::vector<runner::ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
-  TempProjections projections{*this, *op.input(), false};
+  std::vector<velox::core::FieldAccessTypedExprPtr> partitionKeys = toFieldRefs(
+      op.partitionKeys);
 
-  std::vector<velox::core::FieldAccessTypedExprPtr> partitionKeys;
-  partitionKeys.reserve(op.partitionKeys.size());
-  for (const auto& key : op.partitionKeys) {
-    partitionKeys.emplace_back(projections.toFieldRef(key));
-  }
-
-  std::vector<velox::core::FieldAccessTypedExprPtr> sortingKeys;
-  std::vector<velox::core::SortOrder> sortingOrders;
-  sortingKeys.reserve(op.orderKeys.size());
-  sortingOrders.reserve(op.orderKeys.size());
-  for (size_t i = 0; i < op.orderKeys.size(); ++i) {
-    sortingKeys.push_back(projections.toFieldRef(op.orderKeys[i]));
-    sortingOrders.push_back(toSortOrder(op.orderTypes[i]));
-  }
+  std::vector<velox::core::FieldAccessTypedExprPtr> sortingKeys = toFieldRefs(
+      op.orderKeys);
+  std::vector<velox::core::SortOrder> sortingOrders = toSortOrders(
+      op.orderTypes);
 
   std::vector<std::string> windowColumnNames;
   std::vector<velox::core::WindowNode::Function> windowFunctions;
@@ -1402,8 +1403,6 @@ velox::core::PlanNodePtr ToVelox::makeWindow(
         std::move(functionCall), std::move(frame), window->ignoreNulls());
   }
 
-  auto project = std::move(projections).maybeProject(input);
-
   return std::make_shared<velox::core::WindowNode>(
       nextId(),
       partitionKeys,
@@ -1412,7 +1411,7 @@ velox::core::PlanNodePtr ToVelox::makeWindow(
       windowColumnNames,
       windowFunctions,
       false, // inputsSorted
-      project);
+      input);
 }
 
 velox::core::PlanNodePtr ToVelox::makeRepartition(

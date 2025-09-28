@@ -17,7 +17,9 @@
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <iostream>
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -327,7 +329,48 @@ TEST_F(HiveWindowQueriesTest, multipleOrderByColumns) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveWindowQueriesTest, windowExpressionWithAliasOrderByAlias) {
+// TEST_F(HiveWindowQueriesTest, orderByWindow) {
+//   auto nationType =
+//       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
+//           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
+
+//   const auto connectorId = exec::test::kHiveConnectorId;
+//   const std::vector<std::string>& names = nationType->names();
+
+//   auto logicalPlan =
+//       lp::PlanBuilder()
+//           .tableScan(connectorId, "nation", names)
+//           .window(
+//               {"rank() over (order by n_regionkey, n_nationkey desc, n_name)"})
+//           .orderBy(
+//               {"row_number() over (partition by n_regionkey order by n_nationkey) desc"})
+//           .build();
+
+// //   {
+// //     auto plan = toSingleNodePlan(logicalPlan);
+// //     std::cerr << "Actual plan structure:\n" << plan->toString() << "\n";
+// //     auto matcher = core::PlanMatcherBuilder()
+// //                        .tableScan("nation")
+// //                        .project()
+// //                        .orderBy()
+// //                        .build();
+// //     ASSERT_TRUE(matcher->match(plan));
+// //   }
+
+//   auto referencePlan =
+//       exec::test::PlanBuilder()
+//           .tableScan("nation", nationType)
+//           .window(
+//               {"rank() over (partition by n_regionkey order by n_nationkey)", 
+//                "row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+//           .orderBy(
+//               {"rn desc"}, false)
+//           .planNode();
+
+//   checkSame(logicalPlan, referencePlan);
+// }
+
+TEST_F(HiveWindowQueriesTest, orderByWindowAlias) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -338,10 +381,12 @@ TEST_F(HiveWindowQueriesTest, windowExpressionWithAliasOrderByAlias) {
   auto logicalPlan =
       lp::PlanBuilder()
           .tableScan(connectorId, "nation", names)
-          .project({"row_number() over (partition by n_regionkey order by n_nationkey) as rn", "n_nationkey", "n_regionkey", "n_name", "n_comment"})
-          .orderBy({"rn"})
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .orderBy({"2 *n_nationkey + 3", "rn desc"})
           .build();
 
+  std::cerr << "Logical plan structure:\n" << lp::PlanPrinter::toText(*logicalPlan) << "\n";
   {
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = core::PlanMatcherBuilder()
@@ -356,8 +401,8 @@ TEST_F(HiveWindowQueriesTest, windowExpressionWithAliasOrderByAlias) {
       exec::test::PlanBuilder()
           .tableScan("nation", nationType)
           .window(
-              {"row_number() over (partition by n_regionkey order by n_nationkey)"})
-          .orderBy({"row_number() over (partition by n_regionkey order by n_nationkey)"}, false)
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .orderBy({"rn desc"}, false)
           .planNode();
 
   checkSame(logicalPlan, referencePlan);
