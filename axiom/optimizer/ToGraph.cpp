@@ -1042,21 +1042,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       condition = translateExpr(aggregate->filter());
     }
 
-    ExprVector orderKeys;
-    OrderTypeVector orderTypes;
-    orderKeys.reserve(aggregate->ordering().size());
-    orderTypes.reserve(aggregate->ordering().size());
-
-    folly::F14FastSet<ExprCP> uniqueOrderKeys;
-    for (const auto& field : aggregate->ordering()) {
-      auto* key = translateExpr(field.expression);
-      if (!uniqueOrderKeys.emplace(key).second) {
-        continue;
-      }
-      auto sort = field.order;
-      orderKeys.push_back(key);
-      orderTypes.push_back(toOrderType(sort));
-    }
+    auto [orderKeys, orderTypes] = dedupOrdering(aggregate->ordering());
 
     auto aggName = toName(aggregate->name());
     auto name = toName(agg.outputNames()[channel]);
@@ -1115,21 +1101,8 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 }
 
 PlanObjectP ToGraph::addOrderBy(const lp::SortNode& order) {
-  ExprVector deduppedOrderKeys;
-  OrderTypeVector deduppedOrderTypes;
-  deduppedOrderKeys.reserve(order.ordering().size());
-  deduppedOrderTypes.reserve(order.ordering().size());
-
-  folly::F14FastSet<ExprCP> uniqueOrderKeys;
-  for (const auto& field : order.ordering()) {
-    auto* key = translateExpr(field.expression);
-    if (!uniqueOrderKeys.emplace(key).second) {
-      continue;
-    }
-    auto sort = field.order;
-    deduppedOrderKeys.push_back(key);
-    deduppedOrderTypes.push_back(toOrderType(sort));
-  }
+  auto [deduppedOrderKeys, deduppedOrderTypes] =
+      dedupOrdering(order.ordering());
 
   currentDt_->orderKeys = std::move(deduppedOrderKeys);
   currentDt_->orderTypes = std::move(deduppedOrderTypes);
@@ -1835,6 +1808,26 @@ PlanObjectP ToGraph::makeQueryGraph(
       VELOX_NYI(
           "Unsupported PlanNode {}", lp::NodeKindName::toName(node.kind()));
   }
+}
+
+std::pair<ExprVector, OrderTypeVector> ToGraph::dedupOrdering(
+    const std::vector<lp::SortingField>& ordering) {
+  ExprVector deduppedOrderKeys;
+  OrderTypeVector deduppedOrderTypes;
+  deduppedOrderKeys.reserve(ordering.size());
+  deduppedOrderTypes.reserve(ordering.size());
+
+  folly::F14FastSet<ExprCP> uniqueOrderKeys;
+  for (const auto& field : ordering) {
+    const auto* key = translateExpr(field.expression);
+    if (!uniqueOrderKeys.emplace(key).second) {
+      continue;
+    }
+    deduppedOrderKeys.push_back(key);
+    deduppedOrderTypes.push_back(toOrderType(field.order));
+  }
+
+  return {std::move(deduppedOrderKeys), std::move(deduppedOrderTypes)};
 }
 
 // Debug helper functions. Must be extern to be callable from debugger.

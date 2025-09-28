@@ -831,8 +831,8 @@ class Aggregate : public Call {
       bool isDistinct,
       ExprCP condition,
       const velox::Type* intermediateType,
-      ExprVector orderKeys = {},
-      OrderTypeVector orderTypes = {})
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes)
       : Call(
             PlanType::kAggregateExpr,
             name,
@@ -844,6 +844,8 @@ class Aggregate : public Call {
         intermediateType_(intermediateType),
         orderKeys_(std::move(orderKeys)),
         orderTypes_(std::move(orderTypes)) {
+    VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
+
     for (auto& arg : this->args()) {
       rawInputType_.push_back(arg->value().type);
     }

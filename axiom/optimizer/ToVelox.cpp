@@ -644,12 +644,7 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
     const OrderBy& op,
     runner::ExecutableFragment& fragment,
     std::vector<runner::ExecutableFragment>& stages) {
-  std::vector<velox::core::SortOrder> sortOrder;
-  sortOrder.reserve(op.distribution().orderTypes.size());
-  for (auto order : op.distribution().orderTypes) {
-    sortOrder.push_back(toSortOrder(order));
-  }
-
+  auto sortOrder = toSortOrders(op.distribution().orderTypes);
   auto keys = toFieldRefs(op.distribution().orderKeys);
 
   if (isSingle_) {

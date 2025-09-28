@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/Optimization.h"
+#include <velox/common/base/Exceptions.h>
 #include <algorithm>
 #include <iostream>
 #include <utility>
@@ -670,6 +671,19 @@ void Optimization::addPostprocess(
       auto args = precompute.toColumns(
           agg->args(), /*aliases=*/nullptr, /*preserveLiterals=*/true);
       auto orderKeys = precompute.toColumns(agg->orderKeys());
+
+      if (agg->isDistinct()) {
+        VELOX_CHECK(
+            isSingleWorker_ && runnerOptions_.numDrivers == 1,
+            "DISTINCT option for aggregation is supported only in single worker, single thread mode");
+      }
+
+      if (!orderKeys.empty()) {
+        VELOX_CHECK(
+            isSingleWorker_ && runnerOptions_.numDrivers == 1,
+            "ORDER BY option for aggregation is supported only in single worker, single thread mode");
+      }
+
       aggregates.emplace_back(make<Aggregate>(
           agg->name(),
           agg->value(),
