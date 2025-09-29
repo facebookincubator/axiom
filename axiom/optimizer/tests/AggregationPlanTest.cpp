@@ -119,7 +119,7 @@ TEST_F(AggregationPlanTest, dedupAggSameOptions) {
   testConnector_->createTable("t", ROW({"a", "b"}, {INTEGER(), INTEGER()}));
 
   auto logicalPlan =
-      lp::PlanBuilder()
+      lp::PlanBuilder(/*enableCoersions=*/true)
           .tableScan(kTestConnectorId, "t")
           .aggregate(
               {},
@@ -127,12 +127,12 @@ TEST_F(AggregationPlanTest, dedupAggSameOptions) {
                "array_agg(a ORDER BY a DESC) AS agg2",
                "array_agg(a ORDER BY a, a ASC) AS agg3",
                "array_agg(a ORDER BY a ASC) AS agg4",
-               "sum(a) FILTER (WHERE b > CAST(0 AS INTEGER)) AS sum1",
-               "sum(a) FILTER (WHERE b < CAST(0 AS INTEGER)) AS sum2",
-               "sum(a) FILTER (WHERE b > CAST(0 AS INTEGER)) AS sum3",
-               "array_agg(a ORDER BY a ASC) FILTER (WHERE b > CAST(0 AS INTEGER)) AS combo1",
-               "array_agg(a ORDER BY a DESC) FILTER (WHERE b > CAST(0 AS INTEGER)) AS combo2",
-               "array_agg(a ORDER BY a ASC) FILTER (WHERE b > CAST(0 AS INTEGER)) AS combo3"})
+               "sum(a) FILTER (WHERE b > 0) AS sum1",
+               "sum(a) FILTER (WHERE b < 0) AS sum2",
+               "sum(a) FILTER (WHERE b > 0) AS sum3",
+               "array_agg(a ORDER BY a ASC) FILTER (WHERE b > 0) AS combo1",
+               "array_agg(a ORDER BY a DESC) FILTER (WHERE b > 0) AS combo2",
+               "array_agg(a ORDER BY a ASC) FILTER (WHERE b > 0) AS combo3"})
           .build();
 
   auto plan = planVelox(logicalPlan);
@@ -165,7 +165,7 @@ TEST_F(AggregationPlanTest, dedupAggSameOptions) {
 }
 
 TEST_F(AggregationPlanTest, orderByDedupInAggregates) {
-  testConnector_->createTable("t", ROW({"a", "b"}, {INTEGER(), INTEGER()}));
+  testConnector_->createTable("t", ROW({"a", "b"}, INTEGER()));
 
   auto logicalPlan = lp::PlanBuilder()
                          .tableScan(kTestConnectorId, "t")
