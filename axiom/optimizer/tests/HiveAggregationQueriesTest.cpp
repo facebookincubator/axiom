@@ -18,6 +18,7 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::axiom::optimizer {
@@ -101,7 +102,10 @@ TEST_F(HiveAggregationQueriesTest, aggFilter) {
   auto logicalPlan =
       lp::PlanBuilder(context)
           .tableScan("nation")
-          .aggregate({}, {"sum(n_nationkey) FILTER (WHERE n_nationkey > 10)"})
+          .aggregate(
+              {},
+              {"sum(n_nationkey) FILTER (WHERE n_nationkey > 10)",
+               "avg(n_regionkey)"})
           .build();
 
   {
@@ -129,12 +133,14 @@ TEST_F(HiveAggregationQueriesTest, aggFilter) {
     ASSERT_TRUE(matcher->match(plan));
   }
 
-  auto referencePlan = exec::test::PlanBuilder()
-                           .tableScan("nation", getSchema("nation"))
-                           .project({"n_nationkey"})
-                           .filter("n_nationkey > 10")
-                           .singleAggregation({}, {"sum(n_nationkey)"})
-                           .planNode();
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .project({"n_nationkey", "n_regionkey", "n_nationkey > 10 as mask_0"})
+          .singleAggregation(
+              {},
+              {"sum(n_nationkey) FILTER (WHERE mask_0)", "avg(n_regionkey)"})
+          .planNode();
 
   checkSame(logicalPlan, referencePlan);
 }
@@ -167,6 +173,9 @@ TEST_F(HiveAggregationQueriesTest, aggDistinct) {
   auto options = axiom::runner::MultiFragmentPlan::Options{
       .numWorkers = 1, .numDrivers = 1};
   checkSame(logicalPlan, referencePlan, options);
+  VELOX_ASSERT_THROW(
+      checkSame(logicalPlan, referencePlan),
+      "DISTINCT option for aggregation is supported only in single worker, single thread mode");
 }
 
 TEST_F(HiveAggregationQueriesTest, aggOrderBy) {
@@ -201,6 +210,9 @@ TEST_F(HiveAggregationQueriesTest, aggOrderBy) {
   auto options = axiom::runner::MultiFragmentPlan::Options{
       .numWorkers = 1, .numDrivers = 1};
   checkSame(logicalPlan, referencePlan, options);
+  VELOX_ASSERT_THROW(
+      checkSame(logicalPlan, referencePlan),
+      "ORDER BY option for aggregation is supported only in single worker, single thread mode");
 }
 
 TEST_F(HiveAggregationQueriesTest, aggFilterOrderBy) {
@@ -226,14 +238,22 @@ TEST_F(HiveAggregationQueriesTest, aggFilterOrderBy) {
   auto referencePlan =
       exec::test::PlanBuilder()
           .tableScan("nation", getSchema("nation"))
-          .filter("n_nationkey < 20")
+          .project(
+              {"n_name",
+               "n_regionkey",
+               "n_nationkey",
+               "n_nationkey < 20 as mask_0"})
           .singleAggregation(
-              {"n_regionkey"}, {"array_agg(n_name ORDER BY n_nationkey)"})
+              {"n_regionkey"},
+              {"array_agg(n_name ORDER BY n_nationkey) FILTER (WHERE mask_0)"})
           .planNode();
 
   auto options = axiom::runner::MultiFragmentPlan::Options{
       .numWorkers = 1, .numDrivers = 1};
   checkSame(logicalPlan, referencePlan, options);
+  VELOX_ASSERT_THROW(
+      checkSame(logicalPlan, referencePlan),
+      "ORDER BY option for aggregation is supported only in single worker, single thread mode");
 }
 
 } // namespace
