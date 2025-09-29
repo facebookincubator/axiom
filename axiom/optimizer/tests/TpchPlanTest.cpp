@@ -92,20 +92,24 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
     return readSqlFromFile(fmt::format("tpch.queries/q{}.sql", query));
   }
 
-  void parseTpchSql(int32_t query) {
+  lp::LogicalPlanNodePtr parseTpchSql(int32_t query) {
     auto sql = readTpchSql(query);
 
-    auto statement = prestoParser_->parse(sql);
+    test::PrestoParser prestoParser(exec::test::kHiveConnectorId, pool());
+    auto statement = prestoParser.parse(sql);
 
-    ASSERT_TRUE(statement->isSelect());
-    ASSERT_TRUE(
-        statement->asUnchecked<test::SelectStatement>()->plan() != nullptr);
+    VELOX_CHECK(statement->isSelect());
+
+    auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
+    VELOX_CHECK_NOT_NULL(logicalPlan);
+
+    return logicalPlan;
   }
 
   void checkTpchSql(int32_t query) {
-    auto sql = readTpchSql(query);
+    auto logicalPlan = parseTpchSql(query);
     auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
-    checkResults(sql, referencePlan);
+    checkResults(logicalPlan, referencePlan);
   }
 
   std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
@@ -465,7 +469,6 @@ TEST_F(TpchPlanTest, q12) {
           .orderBy({"l_shipmode"})
           .build();
 
-  // Fix string in filter
   checkTpch(12, logicalPlan);
 
   checkTpchSql(12);

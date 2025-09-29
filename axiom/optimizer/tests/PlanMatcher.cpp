@@ -22,6 +22,11 @@
 namespace facebook::velox::core {
 namespace {
 
+#define AXIOM_TEST_RETURN_IF_FAILURE           \
+  if (::testing::Test::HasNonfatalFailure()) { \
+    return false;                              \
+  }
+
 template <typename T = PlanNode>
 class PlanMatcherImpl : public PlanMatcher {
  public:
@@ -36,14 +41,10 @@ class PlanMatcherImpl : public PlanMatcher {
     EXPECT_TRUE(specificNode != nullptr)
         << "Expected " << folly::demangle(typeid(T).name()) << ", but got "
         << plan->toString(false, false);
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_TEST_RETURN_IF_FAILURE
 
     EXPECT_EQ(plan->sources().size(), sourceMatchers_.size());
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_TEST_RETURN_IF_FAILURE
 
     for (auto i = 0; i < sourceMatchers_.size(); ++i) {
       if (!sourceMatchers_[i]->match(plan->sources()[i])) {
@@ -85,9 +86,7 @@ class TableScanMatcher : public PlanMatcherImpl<TableScanNode> {
       const auto numColumns = outputType->size();
 
       EXPECT_EQ(numColumns, columns_->size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < numColumns; ++i) {
         auto name = plan.assignments().at(outputType->nameOf(i))->name();
@@ -99,7 +98,8 @@ class TableScanMatcher : public PlanMatcherImpl<TableScanNode> {
       }
     }
 
-    return !::testing::Test::HasNonfatalFailure();
+    AXIOM_TEST_RETURN_IF_FAILURE
+    return true;
   }
 
  private:
@@ -126,36 +126,26 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
         dynamic_cast<const connector::hive::HiveTableHandle*>(
             plan.tableHandle().get());
     EXPECT_TRUE(hiveTableHandle != nullptr);
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_TEST_RETURN_IF_FAILURE
 
     EXPECT_EQ(hiveTableHandle->name(), tableName_);
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_TEST_RETURN_IF_FAILURE
 
     const auto& filters = hiveTableHandle->subfieldFilters();
     EXPECT_EQ(filters.size(), subfieldFilters_.size());
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_TEST_RETURN_IF_FAILURE
 
     for (const auto& [name, filter] : filters) {
       EXPECT_TRUE(subfieldFilters_.contains(name))
           << "Expected filter on " << name;
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       const auto& expected = subfieldFilters_.at(name);
 
       EXPECT_TRUE(filter->testingEquals(*expected))
           << "Expected filter on " << name << ": " << expected->toString()
           << ", but got " << filter->toString();
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
     const auto& remainingFilter = hiveTableHandle->remainingFilter();
@@ -171,9 +161,7 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
       EXPECT_EQ(remainingFilter->toString(), expected->toString());
     }
 
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_TEST_RETURN_IF_FAILURE
 
     return true;
   }
@@ -197,8 +185,9 @@ class ValuesMatcher : public PlanMatcherImpl<ValuesNode> {
           << "Expected equal output types on ValuesNode, but got '"
           << type_->toString() << "', and '" << plan.outputType()->toString()
           << "'.";
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
-    return !::testing::Test::HasNonfatalFailure();
+    return true;
   }
 
  private:
@@ -221,9 +210,7 @@ class FilterMatcher : public PlanMatcherImpl<FilterNode> {
     if (predicate_.has_value()) {
       auto expected = parse::parseExpr(predicate_.value(), {});
       EXPECT_EQ(plan.filter()->toString(), expected->toString());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
     return true;
@@ -248,17 +235,13 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
 
     if (!expressions_.empty()) {
       EXPECT_EQ(plan.projections().size(), expressions_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < expressions_.size(); ++i) {
         auto expected = parse::parseExpr(expressions_[i], {});
         EXPECT_EQ(plan.projections()[i]->toString(), expected->toString());
       }
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
     return true;
@@ -284,17 +267,13 @@ class ParallelProjectMatcher : public PlanMatcherImpl<ParallelProjectNode> {
 
     if (!expressions_.empty()) {
       EXPECT_EQ(plan.projections().size(), expressions_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < expressions_.size(); ++i) {
         auto expected = parse::parseExpr(expressions_[i], {});
         EXPECT_EQ(plan.projections()[i]->toString(), expected->toString());
       }
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
     return true;
@@ -320,32 +299,24 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
   bool matchDetails(const UnnestNode& plan) const override {
     if (!replicateExprs_.empty()) {
       EXPECT_EQ(plan.replicateVariables().size(), replicateExprs_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < replicateExprs_.size(); ++i) {
         auto expected = parse::parseExpr(replicateExprs_[i], {});
         EXPECT_EQ(
             plan.replicateVariables()[i]->toString(), expected->toString());
       }
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
     if (!unnestExprs_.empty()) {
       EXPECT_EQ(plan.unnestVariables().size(), unnestExprs_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < unnestExprs_.size(); ++i) {
         auto expected = parse::parseExpr(unnestExprs_[i], {});
         EXPECT_EQ(plan.unnestVariables()[i]->toString(), expected->toString());
       }
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
     return true;
   }
@@ -377,9 +348,7 @@ class LimitMatcher : public PlanMatcherImpl<LimitNode> {
       EXPECT_EQ(plan.offset(), offset_.value());
       EXPECT_EQ(plan.count(), count_.value());
       EXPECT_EQ(plan.isPartial(), partial_.value());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
     return true;
@@ -404,9 +373,7 @@ class TopNMatcher : public PlanMatcherImpl<TopNNode> {
 
     if (count_.has_value()) {
       EXPECT_EQ(plan.count(), count_.value());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
     return true;
@@ -431,9 +398,7 @@ class OrderByMatcher : public PlanMatcherImpl<OrderByNode> {
 
     if (!ordering_.empty()) {
       EXPECT_EQ(plan.sortingOrders().size(), ordering_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < ordering_.size(); ++i) {
         const auto expected = parse::parseOrderByExpr(ordering_[i]);
@@ -441,9 +406,7 @@ class OrderByMatcher : public PlanMatcherImpl<OrderByNode> {
         EXPECT_EQ(plan.sortingKeys()[i]->toString(), expected.expr->toString());
         EXPECT_EQ(plan.sortingOrders()[i].isAscending(), expected.ascending);
         EXPECT_EQ(plan.sortingOrders()[i].isNullsFirst(), expected.nullsFirst);
-        if (::testing::Test::HasNonfatalFailure()) {
-          return false;
-        }
+        AXIOM_TEST_RETURN_IF_FAILURE
       }
     }
 
@@ -481,39 +444,29 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
 
     if (step_.has_value()) {
       EXPECT_EQ(plan.step(), step_.value());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
     if (!groupingKeys_.empty() || !aggregates_.empty()) {
       // Verify grouping keys.
       EXPECT_EQ(plan.groupingKeys().size(), groupingKeys_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < groupingKeys_.size(); ++i) {
         auto expected = parse::parseExpr(groupingKeys_[i], {});
         EXPECT_EQ(plan.groupingKeys()[i]->toString(), expected->toString());
       }
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       // Verify aggregates.
       EXPECT_EQ(plan.aggregates().size(), aggregates_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < aggregates_.size(); ++i) {
         auto expected = parse::parseExpr(aggregates_[i], {});
         EXPECT_EQ(plan.aggregates()[i].call->toString(), expected->toString());
       }
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
     return true;
@@ -545,9 +498,7 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
       EXPECT_EQ(
           JoinTypeName::toName(plan.joinType()),
           JoinTypeName::toName(joinType_.value()));
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
     return true;
@@ -556,6 +507,8 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
  private:
   const std::optional<JoinType> joinType_;
 };
+
+#undef AXIOM_TEST_RETURN_IF_FAILURE
 
 } // namespace
 
