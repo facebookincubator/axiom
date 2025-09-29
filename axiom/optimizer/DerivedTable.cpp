@@ -17,6 +17,8 @@
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
+#include "axiom/optimizer/DerivedTablePrinter.h"
+#include <iostream>
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -999,6 +1001,8 @@ void DerivedTable::makeInitialPlan() {
   for (auto expr : exprs) {
     state.targetColumns.unionColumns(expr);
   }
+
+  std::cout << "DerivedTable structure:\n" << DerivedTablePrinter::toText(*this) << "\n";
 
   optimization->makeJoins(state);
 

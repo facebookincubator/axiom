@@ -297,9 +297,7 @@ class ToGraph {
   AggregationPlanCP translateAggregation(
       const logical_plan::AggregateNode& aggregation);
 
-
-  std::pair<ExprCP, WindowSpec> translateWindowExpr(
-      const logical_plan::WindowExprPtr& windowExpr);
+  ExprCP translateWindow(const logical_plan::WindowExpr* windowExpr);
 
   PlanObjectP addProjection(const logical_plan::ProjectNode* project);
 
@@ -310,7 +308,6 @@ class ToGraph {
   // Interprets an AggregationNode and adds its information to the
   // DerivedTable being assembled.
   PlanObjectP addAggregation(const logical_plan::AggregateNode& aggNode);
-
 
   PlanObjectP addLimit(const logical_plan::LimitNode& limitNode);
 
@@ -367,7 +364,6 @@ class ToGraph {
       int32_t ordinal,
       std::vector<Step>& steps,
       bool isControl);
-
 
   void markFieldAccessed(
       const LogicalContextSource& source,

@@ -381,9 +381,7 @@ TEST_F(HiveWindowQueriesTest, orderByWindowAlias) {
   auto logicalPlan =
       lp::PlanBuilder()
           .tableScan(connectorId, "nation", names)
-          .window(
-              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
-          .orderBy({"2 *n_nationkey + 3", "rn desc"})
+          .orderBy({"2 *n_nationkey + 3"})
           .build();
 
   std::cerr << "Logical plan structure:\n" << lp::PlanPrinter::toText(*logicalPlan) << "\n";

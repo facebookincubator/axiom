@@ -970,32 +970,25 @@ struct WindowSpec {
   OrderTypeVector orderTypes;
 
   bool operator==(const WindowSpec& other) const;
+
+  struct Hasher {
+    size_t operator()(const WindowSpec& spec) const;
+  };
 };
 
 struct WindowSet {
-  WindowSet(WindowSpec spec, WindowVector windows, ColumnVector columns)
-      : spec(std::move(spec)),
-        windows(std::move(windows)),
-        columns(std::move(columns)) {}
-
-  WindowSpec spec;
   WindowVector windows;
   ColumnVector columns;
 };
 
 using WindowSetVector = QGVector<WindowSet>;
+using WindowSpecMap = folly::F14FastMap<WindowSpec, WindowSetVector, WindowSpec::Hasher>;
 
 class WindowPlan : public PlanObject {
  public:
-  explicit WindowPlan(WindowSetVector windowSets)
-      : PlanObject(PlanType::kWindowNode), windowSets_(std::move(windowSets)) {}
+  WindowPlan() : PlanObject(PlanType::kWindowNode) {}
 
-  const WindowSetVector& windowSets() const {
-    return windowSets_;
-  }
-
- private:
-  const WindowSetVector windowSets_;
+  WindowSpecMap specToWindowSets;
 };
 
 using WindowPlanCP = const WindowPlan*;

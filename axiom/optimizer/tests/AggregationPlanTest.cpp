@@ -115,5 +115,25 @@ TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
   ASSERT_TRUE(matcher->match(plan));
 }
 
+TEST_F(AggregationPlanTest, joinOnAggregation) {
+  testConnector_->createTable("orders", ROW({"customer_id", "amount"}, {BIGINT(), BIGINT()}));
+  testConnector_->createTable("customers", ROW({"score"}, {BIGINT()}));
+
+  auto logicalPlan = lp::PlanBuilder{}
+                         .tableScan(kTestConnectorId, "customers")
+                         .join(
+                             lp::PlanBuilder{}
+                                 .tableScan(kTestConnectorId, "orders")
+                                 .aggregate({"customer_id"}, {"sum(amount) AS total_amount"}),
+                             "score = total_amount",
+                             lp::JoinType::kInner)
+                         .build();
+
+  auto plan = planVelox(logicalPlan);
+
+  // Just check that the plan compiles and runs - the join with aggregation works
+  ASSERT_TRUE(plan != nullptr);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

@@ -507,4 +507,18 @@ bool WindowSpec::operator==(const WindowSpec& other) const {
   return orderTypes == other.orderTypes;
 }
 
+size_t WindowSpec::Hasher::operator()(const WindowSpec& spec) const {
+  size_t hash = 0;
+  for (const auto& key : spec.partitionKeys) {
+    hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(key));
+  }
+  for (const auto& key : spec.orderKeys) {
+    hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(key));
+  }
+  for (const auto& type : spec.orderTypes) {
+    hash = velox::bits::hashMix(hash, folly::hasher<int>()(static_cast<int>(type)));
+  }
+  return hash;
+}
+
 } // namespace facebook::axiom::optimizer

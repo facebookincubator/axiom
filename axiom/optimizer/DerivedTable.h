@@ -17,6 +17,7 @@
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/PlanObject.h"
+#include <folly/container/F14Map.h>
 
 namespace facebook::axiom::optimizer {
 
