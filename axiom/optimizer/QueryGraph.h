@@ -883,6 +883,28 @@ struct WindowFrame {
   ExprCP endValue{nullptr};
 };
 
+struct WindowSpec {
+  WindowSpec(
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes)
+      : partitionKeys(std::move(partitionKeys)),
+        orderKeys(std::move(orderKeys)),
+        orderTypes(std::move(orderTypes)) {
+    VELOX_CHECK_EQ(orderKeys.size(), orderTypes.size());
+  }
+
+  ExprVector partitionKeys;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+
+  bool operator==(const WindowSpec& other) const;
+
+  struct Hasher {
+    size_t operator()(const WindowSpec& spec) const;
+  };
+};
+
 class Window : public Call {
  public:
   Window(
@@ -890,9 +912,11 @@ class Window : public Call {
       const Value& value,
       ExprVector args,
       FunctionSet functions,
+      WindowSpec spec,
       WindowFrame frame,
       bool ignoreNulls)
       : Call(PlanType::kWindowExpr, name, value, std::move(args), functions),
+        spec_(std::move(spec)),
         frame_(std::move(frame)),
         ignoreNulls_(ignoreNulls) {}
 
@@ -905,6 +929,7 @@ class Window : public Call {
   }
 
  private:
+  WindowSpec spec_;
   WindowFrame frame_;
   bool ignoreNulls_;
 };
@@ -954,43 +979,5 @@ class AggregationPlan : public PlanObject {
 
 using AggregationPlanCP = const AggregationPlan*;
 
-struct WindowSpec {
-  WindowSpec(
-      ExprVector partitionKeys,
-      ExprVector orderKeys,
-      OrderTypeVector orderTypes)
-      : partitionKeys(std::move(partitionKeys)),
-        orderKeys(std::move(orderKeys)),
-        orderTypes(std::move(orderTypes)) {
-    VELOX_CHECK_EQ(orderKeys.size(), orderTypes.size());
-  }
-
-  ExprVector partitionKeys;
-  ExprVector orderKeys;
-  OrderTypeVector orderTypes;
-
-  bool operator==(const WindowSpec& other) const;
-
-  struct Hasher {
-    size_t operator()(const WindowSpec& spec) const;
-  };
-};
-
-struct WindowSet {
-  WindowVector windows;
-  ColumnVector columns;
-};
-
-using WindowSetVector = QGVector<WindowSet>;
-using WindowSpecMap = folly::F14FastMap<WindowSpec, WindowSetVector, WindowSpec::Hasher>;
-
-class WindowPlan : public PlanObject {
- public:
-  WindowPlan() : PlanObject(PlanType::kWindowNode) {}
-
-  WindowSpecMap specToWindowSets;
-};
-
-using WindowPlanCP = const WindowPlan*;
 
 } // namespace facebook::axiom::optimizer

@@ -134,8 +134,6 @@ struct DerivedTable : public PlanObject {
 
   AggregationPlanCP aggregation{nullptr};
 
-  WindowPlanCP windowPlan{nullptr};
-
   ExprVector having;
 
   /// Order by.

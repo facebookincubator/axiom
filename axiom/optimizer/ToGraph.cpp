@@ -17,6 +17,7 @@
 #include <velox/common/base/Exceptions.h>
 #include <algorithm>
 #include <iostream>
+#include <utility>
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/FunctionRegistry.h"
@@ -1090,16 +1091,19 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 }
 
 ExprCP ToGraph::translateWindow(const lp::WindowExpr* windowExpr) {
+  FunctionSet functions;
   ExprVector args;
   args.reserve(windowExpr->inputs().size());
   for (const auto& input : windowExpr->inputs()) {
     args.emplace_back(translateExpr(input));
+    functions = functions | args.back()->functions();
   }
 
   ExprVector partitionKeys;
   partitionKeys.reserve(windowExpr->partitionKeys().size());
   for (const auto& key : windowExpr->partitionKeys()) {
     partitionKeys.emplace_back(translateExpr(key));
+    functions = functions | partitionKeys.back()->functions();
   }
 
   ExprVector orderKeys;
@@ -1107,8 +1111,9 @@ ExprCP ToGraph::translateWindow(const lp::WindowExpr* windowExpr) {
   orderKeys.reserve(windowExpr->ordering().size());
   orderTypes.reserve(windowExpr->ordering().size());
   for (const auto& sorting : windowExpr->ordering()) {
-    orderKeys.emplace_back(translateExpr(sorting.expression));
     orderTypes.emplace_back(toOrderType(sorting.order));
+    orderKeys.emplace_back(translateExpr(sorting.expression));
+    functions = functions | orderKeys.back()->functions();
   }
 
   const auto& lpFrame = windowExpr->frame();
@@ -1117,35 +1122,25 @@ ExprCP ToGraph::translateWindow(const lp::WindowExpr* windowExpr) {
   frame.startType = lpFrame.startType;
   if (lpFrame.startValue) {
     frame.startValue = translateExpr(lpFrame.startValue);
+    functions = functions | frame.startValue->functions();
   }
   frame.endType = lpFrame.endType;
   if (lpFrame.endValue) {
     frame.endValue = translateExpr(lpFrame.endValue);
+    functions = functions | frame.endValue->functions();
   }
 
   const auto* name = toName(windowExpr->name());
   auto value = Value(toType(windowExpr->type()), 1);
-  auto functions = FunctionSet{};
-
-  auto* window = make<Window>(
+  WindowSpec spec{std::move(partitionKeys), std::move(orderKeys), std::move(orderTypes)};
+  return make<Window>(
       name,
       value,
       std::move(args),
       functions,
+      std::move(spec),
       std::move(frame),
-      windowExpr->ignoreNulls());
-
-  if (!currentDt_->windowPlan) {
-    currentDt_->windowPlan = make<WindowPlan>();
-  }
-
-  const auto& windowSets = currentDt_->windowPlan->specToWindowSets;
-
-  auto spec = WindowSpec(
-      std::move(partitionKeys), std::move(orderKeys), std::move(orderTypes));
-  // windowSets.try_emplace(spec, WindowSet{});
-
-  return window;
+      windowExpr->ignoreNulls());;
 }
 
 PlanObjectP ToGraph::addOrderBy(const lp::SortNode& order) {
