@@ -170,8 +170,7 @@ TEST_F(HiveAggregationQueriesTest, distinct) {
 
   auto referencePlan =
       exec::test::PlanBuilder()
-          .tableScan("nation", getSchema("nation"))
-          .project({"n_regionkey"})
+          .tableScan("nation", ROW({"n_regionkey"}, {BIGINT()}))
           .singleAggregation({}, {"count(distinct n_regionkey)"})
           .planNode();
 
