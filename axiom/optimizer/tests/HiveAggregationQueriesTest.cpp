@@ -83,10 +83,7 @@ class HiveAggregationQueriesTest : public test::HiveQueriesTestBase {
       const lp::LogicalPlanNodePtr& logicalPlan) {
     schema_ = std::make_shared<optimizer::SchemaResolver>();
 
-    auto plan =
-        planVelox(
-            logicalPlan, {.numWorkers = 4, .numDrivers = 4})
-            .plan;
+    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan;
 
     EXPECT_GT(plan->fragments().size(), 1);
     return plan->fragments().at(0).fragment.planNode;
@@ -134,8 +131,7 @@ TEST_F(HiveAggregationQueriesTest, mask) {
           .tableScan("nation", getSchema("nation"))
           .project({"n_nationkey", "n_regionkey", "n_nationkey > 10 as mask"})
           .singleAggregation(
-              {},
-              {"sum(n_nationkey) FILTER (WHERE mask)", "avg(n_regionkey)"})
+              {}, {"sum(n_nationkey) FILTER (WHERE mask)", "avg(n_regionkey)"})
           .planNode();
 
   checkSame(logicalPlan, referencePlan);
@@ -157,19 +153,20 @@ TEST_F(HiveAggregationQueriesTest, distinct) {
                        .build();
 
     ASSERT_TRUE(matcher->match(plan));
+
+    VELOX_ASSERT_THROW(
+        toDistributedPlan(logicalPlan),
+        "DISTINCT option for aggregation is supported only in single worker, single thread mode");
   }
 
-  auto referencePlan = exec::test::PlanBuilder()
-                           .tableScan("nation", getSchema("nation"))
-                           .project({"n_regionkey"})
-                           .singleAggregation({}, {"count(distinct n_regionkey)"})
-                           .planNode();
-
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .project({"n_regionkey"})
+          .singleAggregation({}, {"count(distinct n_regionkey)"})
+          .planNode();
 
   checkSame(logicalPlan, referencePlan, {.numWorkers = 1, .numDrivers = 1});
-  VELOX_ASSERT_THROW(
-      checkSame(logicalPlan, referencePlan),
-      "DISTINCT option for aggregation is supported only in single worker, single thread mode");
 }
 
 TEST_F(HiveAggregationQueriesTest, orderBy) {
@@ -192,6 +189,10 @@ TEST_F(HiveAggregationQueriesTest, orderBy) {
 
   ASSERT_TRUE(matcher->match(plan));
 
+  VELOX_ASSERT_THROW(
+      toDistributedPlan(logicalPlan),
+      "ORDER BY option for aggregation is supported only in single worker, single thread mode");
+
   auto referencePlan =
       exec::test::PlanBuilder()
           .tableScan("nation", getSchema("nation"))
@@ -202,9 +203,6 @@ TEST_F(HiveAggregationQueriesTest, orderBy) {
           .planNode();
 
   checkSame(logicalPlan, referencePlan, {.numWorkers = 1, .numDrivers = 1});
-  VELOX_ASSERT_THROW(
-      checkSame(logicalPlan, referencePlan),
-      "ORDER BY option for aggregation is supported only in single worker, single thread mode");
 }
 
 TEST_F(HiveAggregationQueriesTest, maskWithOrderBy) {
@@ -227,6 +225,10 @@ TEST_F(HiveAggregationQueriesTest, maskWithOrderBy) {
 
   ASSERT_TRUE(matcher->match(plan));
 
+  VELOX_ASSERT_THROW(
+      toDistributedPlan(logicalPlan),
+      "ORDER BY option for aggregation is supported only in single worker, single thread mode");
+
   auto referencePlan =
       exec::test::PlanBuilder()
           .tableScan("nation", getSchema("nation"))
@@ -240,11 +242,7 @@ TEST_F(HiveAggregationQueriesTest, maskWithOrderBy) {
               {"array_agg(n_name ORDER BY n_nationkey) FILTER (WHERE mask)"})
           .planNode();
 
-
   checkSame(logicalPlan, referencePlan, {.numWorkers = 1, .numDrivers = 1});
-  VELOX_ASSERT_THROW(
-      checkSame(logicalPlan, referencePlan),
-      "ORDER BY option for aggregation is supported only in single worker, single thread mode");
 }
 
 } // namespace
