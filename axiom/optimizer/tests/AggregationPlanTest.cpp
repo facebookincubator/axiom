@@ -123,16 +123,16 @@ TEST_F(AggregationPlanTest, dedupAggSameOptions) {
           .tableScan(kTestConnectorId, "t")
           .aggregate(
               {},
-              {"array_agg(a ORDER BY a, a, a ASC) AS agg1",
+              {"array_agg(a ORDER BY a, a, a) AS agg1",
                "array_agg(a ORDER BY a DESC) AS agg2",
-               "array_agg(a ORDER BY a, a ASC) AS agg3",
-               "array_agg(a ORDER BY a ASC) AS agg4",
+               "array_agg(a ORDER BY a, a) AS agg3",
+               "array_agg(a ORDER BY a) AS agg4",
                "sum(a) FILTER (WHERE b > 0) AS sum1",
                "sum(a) FILTER (WHERE b < 0) AS sum2",
                "sum(a) FILTER (WHERE b > 0) AS sum3",
-               "array_agg(a ORDER BY a ASC) FILTER (WHERE b > 0) AS combo1",
+               "array_agg(a ORDER BY a) FILTER (WHERE b > 0) AS combo1",
                "array_agg(a ORDER BY a DESC) FILTER (WHERE b > 0) AS combo2",
-               "array_agg(a ORDER BY a ASC) FILTER (WHERE b > 0) AS combo3"})
+               "array_agg(a ORDER BY a) FILTER (WHERE b > 0) AS combo3"})
           .build();
 
   auto plan = planVelox(logicalPlan);
@@ -144,11 +144,11 @@ TEST_F(AggregationPlanTest, dedupAggSameOptions) {
               {"a", "gt(cast(b as BIGINT), 0)", "lt(cast(b as BIGINT), 0)"})
           .singleAggregation(
               {},
-              {"array_agg(a ORDER BY a ASC)",
+              {"array_agg(a ORDER BY a)",
                "array_agg(a ORDER BY a DESC)",
                "sum(a) FILTER (WHERE \"dt1.__p14\")",
                "sum(a) FILTER (WHERE \"dt1.__p18\")",
-               "array_agg(a ORDER BY a ASC) FILTER (WHERE \"dt1.__p14\")",
+               "array_agg(a ORDER BY a) FILTER (WHERE \"dt1.__p14\")",
                "array_agg(a ORDER BY a DESC) FILTER (WHERE \"dt1.__p14\")"})
           .project(
               {"agg1",
@@ -179,13 +179,12 @@ TEST_F(AggregationPlanTest, orderByDedupInAggregates) {
 
   auto plan = planVelox(logicalPlan);
 
-  auto matcher = core::PlanMatcherBuilder()
-                     .tableScan()
-                     .singleAggregation(
-                         {},
-                         {"array_agg(a ORDER BY a ASC)",
-                          "array_agg(b ORDER BY b ASC, a ASC)"})
-                     .build();
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan()
+          .singleAggregation(
+              {}, {"array_agg(a ORDER BY a)", "array_agg(b ORDER BY b, a)"})
+          .build();
 
   ASSERT_TRUE(matcher->match(plan));
 }

@@ -35,35 +35,8 @@ class HiveAggregationQueriesTest : public test::HiveQueriesTestBase {
       const axiom::runner::MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
           .numDrivers = 4}) {
-    VELOX_CHECK_NOT_NULL(planNode);
-    VELOX_CHECK_NOT_NULL(referencePlan);
-
-    axiom::runner::MultiFragmentPlan::Options singleNodeOptions = {
-        .numWorkers = 1, .numDrivers = 1};
-    auto referenceResult = runVelox(referencePlan, singleNodeOptions);
-    auto fragmentedPlan = planVelox(planNode, options);
-    auto experimentResult = runFragmentedPlan(fragmentedPlan);
-
-    exec::test::assertEqualResults(
-        referenceResult.results, experimentResult.results);
-
-    if (options.numWorkers != 1) {
-      auto singleNodePlan = planVelox(
-          planNode, {.numWorkers = 1, .numDrivers = options.numDrivers});
-      auto singleNodeResult = runFragmentedPlan(singleNodePlan);
-
-      exec::test::assertEqualResults(
-          referenceResult.results, singleNodeResult.results);
-
-      if (options.numDrivers != 1) {
-        auto singleThreadPlan =
-            planVelox(planNode, {.numWorkers = 1, .numDrivers = 1});
-        auto singleThreadResult = runFragmentedPlan(singleThreadPlan);
-
-        exec::test::assertEqualResults(
-            referenceResult.results, singleThreadResult.results);
-      }
-    }
+    test::QueryTestBase::checkSame(
+        planNode, referencePlan, options, {.numWorkers = 1, .numDrivers = 1});
   }
 
   core::PlanNodePtr toSingleNodePlan(
