@@ -211,5 +211,23 @@ TEST_F(HiveAggregationQueriesTest, maskWithOrderBy) {
   checkSame(logicalPlan, referencePlan, {.numWorkers = 1, .numDrivers = 1});
 }
 
+TEST_F(HiveAggregationQueriesTest, distinctWithOrderBy) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .aggregate(
+              {"n_regionkey"},
+              {"array_agg(DISTINCT n_name ORDER BY n_nationkey)"})
+          .build();
+
+  VELOX_ASSERT_THROW(
+      toSingleNodePlan(logicalPlan),
+      "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
+  VELOX_ASSERT_THROW(
+      toDistributedPlan(logicalPlan),
+      "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <velox/common/base/Exceptions.h>
 #include <iostream>
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
@@ -1044,19 +1045,22 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 
     auto [orderKeys, orderTypes] = dedupOrdering(aggregate->ordering());
 
+    if (aggregate->isDistinct() && !orderKeys.empty()) {
+      VELOX_FAIL(
+          "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
+    }
+
     if (aggregate->isDistinct()) {
       const auto& options = queryCtx()->optimization()->runnerOptions();
       VELOX_CHECK(
-          options.numWorkers == 1 &&
-              options.numDrivers == 1,
+          options.numWorkers == 1 && options.numDrivers == 1,
           "DISTINCT option for aggregation is supported only in single worker, single thread mode");
     }
 
     if (!orderKeys.empty()) {
       const auto& options = queryCtx()->optimization()->runnerOptions();
       VELOX_CHECK(
-          options.numWorkers == 1 &&
-              options.numDrivers == 1,
+          options.numWorkers == 1 && options.numDrivers == 1,
           "ORDER BY option for aggregation is supported only in single worker, single thread mode");
     }
 
