@@ -15,7 +15,6 @@
  */
 
 #include "axiom/optimizer/Optimization.h"
-#include <velox/common/base/Exceptions.h>
 #include <algorithm>
 #include <iostream>
 #include <utility>
