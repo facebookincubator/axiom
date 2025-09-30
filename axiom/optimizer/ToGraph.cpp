@@ -1044,6 +1044,22 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 
     auto [orderKeys, orderTypes] = dedupOrdering(aggregate->ordering());
 
+    if (aggregate->isDistinct()) {
+      auto* optimization = queryCtx()->optimization();
+      VELOX_CHECK(
+          optimization->runnerOptions().numWorkers == 1 &&
+              optimization->runnerOptions().numDrivers == 1,
+          "DISTINCT option for aggregation is supported only in single worker, single thread mode");
+    }
+
+    if (!orderKeys.empty()) {
+      auto* optimization = queryCtx()->optimization();
+      VELOX_CHECK(
+          optimization->runnerOptions().numWorkers == 1 &&
+              optimization->runnerOptions().numDrivers == 1,
+          "ORDER BY option for aggregation is supported only in single worker, single thread mode");
+    }
+
     auto aggName = toName(aggregate->name());
     auto name = toName(agg.outputNames()[channel]);
 
