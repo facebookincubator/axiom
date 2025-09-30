@@ -499,7 +499,6 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
 
       if (expr->is(PlanType::kAggregateExpr)) {
         const auto* aggregate = expr->as<Aggregate>();
-
         return make<Aggregate>(
             aggregate->name(),
             aggregate->value(),
