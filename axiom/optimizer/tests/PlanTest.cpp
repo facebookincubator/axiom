@@ -38,6 +38,8 @@ class PlanTest : public test::QueryTestBase {
   static constexpr auto kTestConnectorId = "test";
 
   static void SetUpTestCase() {
+    test::QueryTestBase::SetUpTestCase();
+
     std::string path;
     if (FLAGS_data_path.empty()) {
       gTempDirectory = velox::exec::test::TempDirectoryPath::create();
@@ -50,16 +52,16 @@ class PlanTest : public test::QueryTestBase {
       }
     }
 
-    LocalRunnerTestBase::testDataPath_ = path;
-    LocalRunnerTestBase::localFileFormat_ = "parquet";
-    LocalRunnerTestBase::SetUpTestCase();
+    LocalRunnerTestBase::localDataPath_ = path;
+    LocalRunnerTestBase::localFileFormat_ =
+        velox::dwio::common::FileFormat::PARQUET;
 
     test::registerDfFunctions();
   }
 
   static void TearDownTestCase() {
-    LocalRunnerTestBase::TearDownTestCase();
     gTempDirectory.reset();
+    test::QueryTestBase::TearDownTestCase();
   }
 
   void SetUp() override {
@@ -679,8 +681,8 @@ TEST_F(PlanTest, filterBreakup) {
   }
 
   auto referenceBuilder = std::make_unique<exec::test::TpchQueryBuilder>(
-      dwio::common::FileFormat::PARQUET);
-  referenceBuilder->initialize(LocalRunnerTestBase::testDataPath_);
+      LocalRunnerTestBase::localFileFormat_);
+  referenceBuilder->initialize(LocalRunnerTestBase::localDataPath_);
 
   auto referencePlan = referenceBuilder->getQueryPlan(19).plan;
 

@@ -25,20 +25,20 @@ namespace facebook::axiom::runner::test {
 struct TableSpec {
   std::string name;
   velox::RowTypePtr columns;
-  int32_t rowsPerVector{10000};
+  int32_t rowsPerVector{10'000};
   int32_t numVectorsPerFile{5};
   int32_t numFiles{5};
 
-  /// Function  Applied to generated RowVectors for the table before writing.
-  /// May be used to insert non-random data on top of the random datafrom
+  /// Function applied to generated RowVectors for the table before writing.
+  /// May be used to insert non-random data on top of the random data from
   /// HiveConnectorTestBase::makeVectors.
   std::function<void(const velox::RowVectorPtr& vector)> customizeData;
 };
 
 /// Test helper class that manages a TestCase with a set of generated
 /// tables and a HiveConnector that exposes the files and their
-/// metadata. The lifetime the test data is the test case consisting
-/// of multiple google unit test cases.
+/// metadata. The lifetime of the test data is the test case consisting
+/// of multiple Google unit test cases.
 class LocalRunnerTestBase : public velox::exec::test::HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
@@ -52,51 +52,56 @@ class LocalRunnerTestBase : public velox::exec::test::HiveConnectorTestBase {
     HiveConnectorTestBase::TearDownTestCase();
   }
 
+  /// Creates test tables with randomly-generated data using 'testTables_'
+  /// specs. Writes tables to 'localDataPath_' in 'localFileFormat_' format. If
+  /// 'localDataPath_' is not set, creates a temp directory. Initializes
+  /// LocalHiveConnectorMetadata to provide metadata access to newly created
+  /// tables.
   void SetUp() override;
 
   void TearDown() override;
 
-  /// Re-creates the connector with kHiveConnectorId with a config
-  /// that points to the temp directory created by 'this'. If the
-  /// connector factory is wired to capture metadata then the metadata
-  /// will be available through the connector.
-  void setupConnector();
+  /// Reads 'localDataPath_' directory and picks up new tables.
+  void tablesCreated();
 
-  /// Returns a split source factory that contains splits for the table scans in
-  /// 'plan'. 'plan' should refer to testing tables created by 'this'.
-  std::shared_ptr<runner::SimpleSplitSourceFactory>
-  makeSimpleSplitSourceFactory(const runner::MultiFragmentPlanPtr& plan);
+  /// Creates a QueryCtx with 'pool'. 'pool' must be a root pool.
+  std::shared_ptr<velox::core::QueryCtx> makeQueryCtx(
+      const std::string& queryId);
 
-  void makeTables(
-      std::vector<TableSpec> specs,
-      std::shared_ptr<velox::exec::test::TempDirectoryPath>& directory);
+  /// Fetch all remaining data from the 'runner'. Calls LocalRunner::next() in a
+  /// loop until it returns nullptr.
+  static std::vector<velox::RowVectorPtr> readCursor(
+      const std::shared_ptr<LocalRunner>& runner);
 
-  // Creates a QueryCtx with 'pool'. 'pool' must be a root pool.
-  static std::shared_ptr<velox::core::QueryCtx> makeQueryCtx(
-      const std::string& queryId,
-      velox::memory::MemoryPool* pool);
-
-  // Configs for creating QueryCtx.
+  /// Configs for creating QueryCtx. Must be set before calling
+  /// 'makeQueryCtx()'.
   inline static std::unordered_map<std::string, std::string> config_;
   inline static std::unordered_map<std::string, std::string> hiveConfig_;
 
-  // The specification of the test data. The data is created in ensureTestData()
-  // called from each SetUp()(.
+  /// The specification of the test data. The data is created in
+  /// ensureTestData() called from each SetUp()(.
   inline static std::vector<TableSpec> testTables_;
 
-  // The top level directory with the test data.
+  /// The top level directory with the test data.
+  inline static std::string localDataPath_;
+  inline static velox::dwio::common::FileFormat localFileFormat_{
+      velox::dwio::common::FileFormat::DWRF};
+
+ private:
+  void makeTables();
+
+  // Re-creates the connector with kHiveConnectorId with a config
+  // that points to the temp directory created by 'this'. If the
+  // connector factory is wired to capture metadata then the metadata
+  // will be available through the connector.
+  void setupConnector();
+
   inline static bool initialized_;
-  inline static std::string testDataPath_;
-  inline static std::string localFileFormat_{"dwrf"};
   inline static std::shared_ptr<velox::exec::test::TempDirectoryPath> files_;
   /// Map from table name to list of file system paths.
   inline static std::unordered_map<std::string, std::vector<std::string>>
       tableFilePaths_;
   inline static std::unique_ptr<folly::CPUThreadPoolExecutor> schemaExecutor_;
 };
-
-/// Reads all results from 'runner'.
-std::vector<velox::RowVectorPtr> readCursor(
-    std::shared_ptr<runner::LocalRunner> runner);
 
 } // namespace facebook::axiom::runner::test

@@ -50,8 +50,8 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
     HiveQueriesTestBase::SetUp();
 
     referenceBuilder_ = std::make_unique<exec::test::TpchQueryBuilder>(
-        dwio::common::FileFormat::PARQUET);
-    referenceBuilder_->initialize(LocalRunnerTestBase::testDataPath_);
+        LocalRunnerTestBase::localFileFormat_);
+    referenceBuilder_->initialize(LocalRunnerTestBase::localDataPath_);
   }
 
   void TearDown() override {

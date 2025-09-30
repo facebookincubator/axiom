@@ -24,29 +24,30 @@ namespace lp = facebook::axiom::logical_plan;
 
 // static
 void HiveQueriesTestBase::SetUpTestCase() {
+  test::QueryTestBase::SetUpTestCase();
+
   gTempDirectory = exec::test::TempDirectoryPath::create();
   test::ParquetTpchTest::createTables(gTempDirectory->getPath());
 
-  LocalRunnerTestBase::testDataPath_ = gTempDirectory->getPath();
-  LocalRunnerTestBase::localFileFormat_ = "parquet";
-  LocalRunnerTestBase::SetUpTestCase();
+  LocalRunnerTestBase::localDataPath_ = gTempDirectory->getPath();
+  LocalRunnerTestBase::localFileFormat_ =
+      velox::dwio::common::FileFormat::PARQUET;
 }
 
 // static
 void HiveQueriesTestBase::TearDownTestCase() {
-  LocalRunnerTestBase::TearDownTestCase();
   gTempDirectory.reset();
+  test::QueryTestBase::TearDownTestCase();
 }
 
 void HiveQueriesTestBase::SetUp() {
   test::QueryTestBase::SetUp();
-  test::ParquetTpchTest::registerTpchConnector(kTpchConnectorId);
 
-  prestoParser_ = std::make_unique<PrestoParser>(kTpchConnectorId, pool());
+  prestoParser_ =
+      std::make_unique<PrestoParser>(exec::test::kHiveConnectorId, pool());
 }
 
 void HiveQueriesTestBase::TearDown() {
-  test::ParquetTpchTest::unregisterTpchConnector(kTpchConnectorId);
   test::QueryTestBase::TearDown();
 }
 

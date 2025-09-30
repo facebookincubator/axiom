@@ -97,8 +97,6 @@ void registerHiveConnector(const std::string& id) {
 
 //  static
 void ParquetTpchTest::createTables(std::string_view path) {
-  memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-
   SCOPE_EXIT {
     velox::connector::unregisterConnector(
         std::string(PlanBuilder::kHiveDefaultConnectorId));
