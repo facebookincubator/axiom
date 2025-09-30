@@ -29,33 +29,18 @@ namespace lp = facebook::axiom::logical_plan;
 
 class HiveAggregationQueriesTest : public test::HiveQueriesTestBase {
  protected:
-  void checkSame(
-      const lp::LogicalPlanNodePtr& planNode,
-      const core::PlanNodePtr& referencePlan,
-      const axiom::runner::MultiFragmentPlan::Options& options = {
-          .numWorkers = 4,
-          .numDrivers = 4}) {
-    test::QueryTestBase::checkSame(
-        planNode, referencePlan, options, {.numWorkers = 1, .numDrivers = 1});
-  }
-
   core::PlanNodePtr toSingleNodePlan(
       const lp::LogicalPlanNodePtr& logicalPlan,
       int32_t numDrivers = 1) {
-    schema_ = std::make_shared<optimizer::SchemaResolver>();
-
     auto plan =
         planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers})
             .plan;
-
     EXPECT_EQ(1, plan->fragments().size());
     return plan->fragments().at(0).fragment.planNode;
   }
 
   runner::MultiFragmentPlanPtr toDistributedPlan(
       const lp::LogicalPlanNodePtr& logicalPlan) {
-    schema_ = std::make_shared<optimizer::SchemaResolver>();
-
     auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan;
     EXPECT_GT(plan->fragments().size(), 1);
     return plan;

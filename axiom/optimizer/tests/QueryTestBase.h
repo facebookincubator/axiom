@@ -86,12 +86,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   void checkSame(
       const logical_plan::LogicalPlanNodePtr& planNode,
       const velox::core::PlanNodePtr& referencePlan,
-      const axiom::runner::MultiFragmentPlan::Options& planNodeOptions =
-          {
-              .numWorkers = 4,
-              .numDrivers = 4,
-          },
-      const axiom::runner::MultiFragmentPlan::Options& refPlanOptions = {
+      const axiom::runner::MultiFragmentPlan::Options& planNodeOptions = {
           .numWorkers = 4,
           .numDrivers = 4,
       });

@@ -176,12 +176,11 @@ TestResult QueryTestBase::checkSame(
 void QueryTestBase::checkSame(
     const logical_plan::LogicalPlanNodePtr& planNode,
     const velox::core::PlanNodePtr& referencePlan,
-    const axiom::runner::MultiFragmentPlan::Options& planNodeOptions,
-    const axiom::runner::MultiFragmentPlan::Options& refPlanOptions) {
+    const axiom::runner::MultiFragmentPlan::Options& options) {
   VELOX_CHECK_NOT_NULL(planNode);
   VELOX_CHECK_NOT_NULL(referencePlan);
 
-  auto referenceResult = runVelox(referencePlan, refPlanOptions);
+  auto referenceResult = runVelox(referencePlan);
   SCOPED_TRACE("reference plan:\n" + referencePlan->toString(true, true));
   {
     SCOPED_TRACE("single node and single thread");
@@ -191,30 +190,29 @@ void QueryTestBase::checkSame(
     velox::exec::test::assertEqualResults(
         referenceResult.results, result.results);
   }
-  if (planNodeOptions.numDrivers > 1) {
+  if (options.numDrivers > 1) {
     SCOPED_TRACE("single node and multi thread");
     auto plan = planVelox(
-        planNode, {.numWorkers = 1, .numDrivers = planNodeOptions.numDrivers});
+        planNode, {.numWorkers = 1, .numDrivers = options.numDrivers});
     SCOPED_TRACE("plan:\n" + plan.plan->toString());
     auto result = runFragmentedPlan(plan);
     velox::exec::test::assertEqualResults(
         referenceResult.results, result.results);
   }
-  if (planNodeOptions.numWorkers > 1) {
+  if (options.numWorkers > 1) {
     SCOPED_TRACE("multi node and single thread");
     auto plan = planVelox(
-        planNode, {.numWorkers = planNodeOptions.numWorkers, .numDrivers = 1});
+        planNode, {.numWorkers = options.numWorkers, .numDrivers = 1});
     SCOPED_TRACE("plan:\n" + plan.plan->toString());
     auto result = runFragmentedPlan(plan);
     velox::exec::test::assertEqualResults(
         referenceResult.results, result.results);
   }
-  if (planNodeOptions.numWorkers > 1 && planNodeOptions.numDrivers > 1) {
+  if (options.numWorkers > 1 && options.numDrivers > 1) {
     SCOPED_TRACE("multi node and multi thread");
     auto plan = planVelox(
         planNode,
-        {.numWorkers = planNodeOptions.numWorkers,
-         .numDrivers = planNodeOptions.numDrivers});
+        {.numWorkers = options.numWorkers, .numDrivers = options.numDrivers});
     SCOPED_TRACE("plan:\n" + plan.plan->toString());
     auto result = runFragmentedPlan(plan);
     velox::exec::test::assertEqualResults(
