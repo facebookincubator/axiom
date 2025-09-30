@@ -732,10 +732,6 @@ void Optimization::addPostprocess(
     plan = filter;
   }
 
-  // TODO: Process window functions grouped by window specification
-  // This will be handled via PrecomputeProjection::maybeProject() which calls
-  // makeProjectWithWindows()
-
   // We probably want to make this decision based on cost.
   static constexpr int64_t kMaxLimitBeforeProject = 8192;
   if (dt->hasOrderBy()) {
