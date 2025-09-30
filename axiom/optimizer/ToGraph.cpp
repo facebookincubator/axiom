@@ -1053,10 +1053,10 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     }
 
     if (!orderKeys.empty()) {
-      auto* optimization = queryCtx()->optimization();
+      const auto& options = queryCtx()->optimization()->runnerOptions();
       VELOX_CHECK(
-          optimization->runnerOptions().numWorkers == 1 &&
-              optimization->runnerOptions().numDrivers == 1,
+          options.numWorkers == 1 &&
+              options.numDrivers == 1,
           "ORDER BY option for aggregation is supported only in single worker, single thread mode");
     }
 
