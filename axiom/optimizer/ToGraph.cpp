@@ -1045,10 +1045,10 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     auto [orderKeys, orderTypes] = dedupOrdering(aggregate->ordering());
 
     if (aggregate->isDistinct()) {
-      auto* optimization = queryCtx()->optimization();
+      const auto& options = queryCtx()->optimization()->runnerOptions();
       VELOX_CHECK(
-          optimization->runnerOptions().numWorkers == 1 &&
-              optimization->runnerOptions().numDrivers == 1,
+          options.numWorkers == 1 &&
+              options.numDrivers == 1,
           "DISTINCT option for aggregation is supported only in single worker, single thread mode");
     }
 
