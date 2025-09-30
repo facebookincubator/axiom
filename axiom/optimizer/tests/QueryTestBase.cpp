@@ -263,29 +263,12 @@ void QueryTestBase::checkSame(
   VELOX_CHECK_NOT_NULL(referencePlan);
 
   auto referenceResult = runVelox(referencePlan);
-
+  SCOPED_TRACE("reference plan:\n" + referencePlan->toString(true, true));
   {
     SCOPED_TRACE("single node and single thread");
     auto plan = planVelox(planNode, {.numWorkers = 1, .numDrivers = 1});
     SCOPED_TRACE("plan:\n" + plan.plan->toString());
     auto result = runFragmentedPlan(plan);
-
-    // Debug output for experimental results
-    std::cerr << "Experimental results (single node, single thread):\n";
-    for (size_t i = 0; i < result.results.size(); ++i) {
-      auto materializedRows = velox::exec::test::materialize(result.results[i]);
-      std::cerr << "Batch " << i << ":\n";
-      for (const auto& row : materializedRows) {
-        std::cerr << "  ";
-        auto type = result.results[i]->type();
-        for (size_t j = 0; j < row.size(); ++j) {
-          if (j > 0) std::cerr << " | ";
-          std::cerr << row[j].toJson(type->childAt(j));
-        }
-        std::cerr << "\n";
-      }
-    }
-
     velox::exec::test::assertEqualResults(
         referenceResult.results, result.results);
   }
@@ -295,23 +278,6 @@ void QueryTestBase::checkSame(
         planNode, {.numWorkers = 1, .numDrivers = options.numDrivers});
     SCOPED_TRACE("plan:\n" + plan.plan->toString());
     auto result = runFragmentedPlan(plan);
-
-    // Debug output for experimental results
-    std::cerr << "Experimental results (single node, multi thread):\n";
-    for (size_t i = 0; i < result.results.size(); ++i) {
-      auto materializedRows = velox::exec::test::materialize(result.results[i]);
-      std::cerr << "Batch " << i << ":\n";
-      for (const auto& row : materializedRows) {
-        std::cerr << "  ";
-        auto type = result.results[i]->type();
-        for (size_t j = 0; j < row.size(); ++j) {
-          if (j > 0) std::cerr << " | ";
-          std::cerr << row[j].toJson(type->childAt(j));
-        }
-        std::cerr << "\n";
-      }
-    }
-
     velox::exec::test::assertEqualResults(
         referenceResult.results, result.results);
   }
@@ -321,23 +287,6 @@ void QueryTestBase::checkSame(
         planNode, {.numWorkers = options.numWorkers, .numDrivers = 1});
     SCOPED_TRACE("plan:\n" + plan.plan->toString());
     auto result = runFragmentedPlan(plan);
-
-    // Debug output for experimental results
-    std::cerr << "Experimental results (multi node, single thread):\n";
-    for (size_t i = 0; i < result.results.size(); ++i) {
-      auto materializedRows = velox::exec::test::materialize(result.results[i]);
-      std::cerr << "Batch " << i << ":\n";
-      for (const auto& row : materializedRows) {
-        std::cerr << "  ";
-        auto type = result.results[i]->type();
-        for (size_t j = 0; j < row.size(); ++j) {
-          if (j > 0) std::cerr << " | ";
-          std::cerr << row[j].toJson(type->childAt(j));
-        }
-        std::cerr << "\n";
-      }
-    }
-
     velox::exec::test::assertEqualResults(
         referenceResult.results, result.results);
   }
@@ -348,23 +297,6 @@ void QueryTestBase::checkSame(
         {.numWorkers = options.numWorkers, .numDrivers = options.numDrivers});
     SCOPED_TRACE("plan:\n" + plan.plan->toString());
     auto result = runFragmentedPlan(plan);
-
-    // Debug output for experimental results
-    std::cerr << "Experimental results (multi node, multi thread):\n";
-    for (size_t i = 0; i < result.results.size(); ++i) {
-      auto materializedRows = velox::exec::test::materialize(result.results[i]);
-      std::cerr << "Batch " << i << ":\n";
-      for (const auto& row : materializedRows) {
-        std::cerr << "  ";
-        auto type = result.results[i]->type();
-        for (size_t j = 0; j < row.size(); ++j) {
-          if (j > 0) std::cerr << " | ";
-          std::cerr << row[j].toJson(type->childAt(j));
-        }
-        std::cerr << "\n";
-      }
-    }
-
     velox::exec::test::assertEqualResults(
         referenceResult.results, result.results);
   }
