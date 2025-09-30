@@ -19,6 +19,7 @@
 #include <folly/Range.h>
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/RelationOp.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -107,5 +108,14 @@ std::optional<int64_t> maybeIntegerLiteral(
     const logical_plan::ConstantExpr* expr);
 
 std::string conjunctsToString(const ExprVector& conjuncts);
+
+/// Creates project node above WindowOps and WindowOps also nodes
+/// depending on whether the expressions contain window functions.
+/// Groups window functions by their window specification and creates a
+/// WindowOp for each unique specification.
+RelationOpPtr makeProjectWithWindows(
+    RelationOpPtr input,
+    ExprVector projectExprs,
+    ColumnVector projectColumns);
 
 } // namespace facebook::axiom::optimizer

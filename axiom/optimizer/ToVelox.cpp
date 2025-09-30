@@ -253,9 +253,10 @@ velox::RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) const {
 
       auto runnerTable = schemaTable->connectorTable;
       if (runnerTable) {
-        auto* runnerColumn = runnerTable->findColumn(std::string(
-            column->topColumn() ? column->topColumn()->name()
-                                : column->name()));
+        auto* runnerColumn = runnerTable->findColumn(
+            std::string(
+                column->topColumn() ? column->topColumn()->name()
+                                    : column->name()));
         VELOX_CHECK_NOT_NULL(runnerColumn);
       }
     }
@@ -607,7 +608,8 @@ velox::core::SortOrder toSortOrder(const OrderType& order) {
                                             : velox::core::kDescNullsLast;
 }
 
-std::vector<velox::core::SortOrder> toSortOrders(const OrderTypeVector& orders) {
+std::vector<velox::core::SortOrder> toSortOrders(
+    const OrderTypeVector& orders) {
   std::vector<velox::core::SortOrder> sortOrders;
   sortOrders.reserve(orders.size());
   for (auto order : orders) {
@@ -1369,20 +1371,20 @@ velox::core::PlanNodePtr ToVelox::makeWindow(
     std::vector<runner::ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
-  std::vector<velox::core::FieldAccessTypedExprPtr> partitionKeys = toFieldRefs(
-      op.partitionKeys);
+  std::vector<velox::core::FieldAccessTypedExprPtr> partitionKeys =
+      toFieldRefs(op.partitionKeys);
 
-  std::vector<velox::core::FieldAccessTypedExprPtr> sortingKeys = toFieldRefs(
-      op.orderKeys);
-  std::vector<velox::core::SortOrder> sortingOrders = toSortOrders(
-      op.orderTypes);
+  std::vector<velox::core::FieldAccessTypedExprPtr> sortingKeys =
+      toFieldRefs(op.orderKeys);
+  std::vector<velox::core::SortOrder> sortingOrders =
+      toSortOrders(op.orderTypes);
 
   std::vector<std::string> windowColumnNames;
   std::vector<velox::core::WindowNode::Function> windowFunctions;
   windowColumnNames.reserve(op.windows.size());
   windowFunctions.reserve(op.windows.size());
   for (size_t i = 0; i < op.windows.size(); ++i) {
-    const auto* column = op.getWindowExprColumn(i);
+    const auto* column = op.windowExprColumn(i);
     const auto* window = op.windows[i];
 
     windowColumnNames.emplace_back(outputName(column));
@@ -1505,9 +1507,10 @@ velox::core::PlanNodePtr ToVelox::makeValues(
 
     newValues.reserve(rows->size());
     for (const auto& row : *rows) {
-      newValues.emplace_back(std::dynamic_pointer_cast<velox::RowVector>(
-          velox::BaseVector::wrappedVectorShared(
-              variantToVector(type, row, pool))));
+      newValues.emplace_back(
+          std::dynamic_pointer_cast<velox::RowVector>(
+              velox::BaseVector::wrappedVectorShared(
+                  variantToVector(type, row, pool))));
     }
 
   } else {

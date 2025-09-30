@@ -484,7 +484,7 @@ struct WindowOp : public RelationOp {
   const OrderTypeVector orderTypes;
   const WindowVector windows;
 
-  ColumnCP getWindowExprColumn(size_t windowIndex) const {
+  ColumnCP windowExprColumn(size_t windowIndex) const {
     VELOX_CHECK(input_->columns().size() + windowIndex < columns_.size());
     return columns_.at(input_->columns().size() + windowIndex);
   }

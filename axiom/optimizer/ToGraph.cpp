@@ -1140,7 +1140,7 @@ ExprCP ToGraph::translateWindow(const lp::WindowExpr* windowExpr) {
       functions,
       std::move(spec),
       std::move(frame),
-      windowExpr->ignoreNulls());;
+      windowExpr->ignoreNulls());
 }
 
 PlanObjectP ToGraph::addOrderBy(const lp::SortNode& order) {

@@ -15,7 +15,11 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
+#include <optimizer/PlanObject.h>
+#include <optimizer/QueryGraph.h>
 #include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/RelationOp.h"
 
 namespace facebook::axiom::optimizer {
@@ -97,7 +101,7 @@ class PrecomputeProjection {
   /// @returns the original 'input' with an optional ProjectOp on top.
   RelationOpPtr maybeProject() && {
     if (needsProject_) {
-      return make<Project>(input_, projectExprs_, projectColumns_);
+      return makeProjectWithWindows(input_, projectExprs_, projectColumns_);
     }
 
     return input_;

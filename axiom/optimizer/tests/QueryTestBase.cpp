@@ -263,23 +263,7 @@ void QueryTestBase::checkSame(
   VELOX_CHECK_NOT_NULL(referencePlan);
 
   auto referenceResult = runVelox(referencePlan);
-  SCOPED_TRACE("reference plan:\n" + referencePlan->toString(true, true));
 
-  // Debug output for reference results
-  std::cerr << "Reference results:\n";
-  for (size_t i = 0; i < referenceResult.results.size(); ++i) {
-    auto materializedRows = velox::exec::test::materialize(referenceResult.results[i]);
-    std::cerr << "Batch " << i << ":\n";
-    for (const auto& row : materializedRows) {
-      std::cerr << "  ";
-      auto type = referenceResult.results[i]->type();
-      for (size_t j = 0; j < row.size(); ++j) {
-        if (j > 0) std::cerr << " | ";
-        std::cerr << row[j].toJson(type->childAt(j));
-      }
-      std::cerr << "\n";
-    }
-  }
   {
     SCOPED_TRACE("single node and single thread");
     auto plan = planVelox(planNode, {.numWorkers = 1, .numDrivers = 1});

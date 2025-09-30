@@ -15,7 +15,9 @@
  */
 
 #include "axiom/optimizer/PlanUtils.h"
+#include <folly/container/F14Map.h>
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/RelationOp.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -104,6 +106,47 @@ std::string conjunctsToString(const ExprVector& conjuncts) {
         << (i == conjuncts.size() - 1 ? "" : " and ");
   }
   return out.str();
+}
+
+RelationOpPtr makeProjectWithWindows(
+    RelationOpPtr input,
+    ExprVector projectExprs,
+    ColumnVector projectColumns) {
+  folly::F14FastMap<WindowSpec, std::vector<size_t>, WindowSpec::Hasher>
+      specToWindows;
+
+  for (size_t i = 0; i < projectExprs.size(); ++i) {
+    if (projectExprs[i]->is(PlanType::kWindowExpr)) {
+      const auto* window = projectExprs[i]->as<Window>();
+      specToWindows[window->spec()].emplace_back(i);
+    }
+  }
+
+  if (specToWindows.empty()) {
+    return make<Project>(input, projectExprs, projectColumns);
+  }
+
+  RelationOpPtr result = input;
+  ColumnVector allColumns = result->columns();
+  for (const auto& [spec, indices] : specToWindows) {
+    WindowVector windows;
+    windows.reserve(indices.size());
+    for (size_t idx : indices) {
+      windows.push_back(projectExprs[idx]->as<Window>());
+      allColumns.push_back(projectColumns[idx]);
+      projectExprs[idx] = projectColumns[idx];
+    }
+
+    result = make<WindowOp>(
+        result,
+        spec.partitionKeys,
+        spec.orderKeys,
+        spec.orderTypes,
+        windows,
+        allColumns);
+  }
+
+  return make<Project>(result, projectExprs, projectColumns);
 }
 
 } // namespace facebook::axiom::optimizer

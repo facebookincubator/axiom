@@ -920,6 +920,10 @@ class Window : public Call {
         frame_(std::move(frame)),
         ignoreNulls_(ignoreNulls) {}
 
+  const WindowSpec& spec() const {
+    return spec_;
+  }
+
   const WindowFrame& frame() const {
     return frame_;
   }

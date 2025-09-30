@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <iostream>
 #include <utility>
+#include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
@@ -731,27 +732,10 @@ void Optimization::addPostprocess(
     plan = filter;
   }
 
-  // Process window functions grouped by window specification
-  if (dt->windowPlan) {
-    // ColumnVector allColumns = plan->columns();
-    // for (const auto& [spec, windowSets] : dt->windowPlan->windowSets()) {
-    //   for (const auto& windowSet : windowSets) {
-    //     allColumns.insert(
-    //         allColumns.end(), windowSet.columns.begin(), windowSet.columns.end());
-    //     auto* windowOp = make<WindowOp>(
-    //         plan,
-    //         windowSet.spec.partitionKeys,
-    //         windowSet.spec.orderKeys,
-    //         windowSet.spec.orderTypes,
-    //         windowSet.windows,
-    //         allColumns);
+  // TODO: Process window functions grouped by window specification
+  // This will be handled via PrecomputeProjection::maybeProject() which calls
+  // makeProjectWithWindows()
 
-    //     state.addCost(*windowOp);
-    //     plan = windowOp;
-    //   }
-    // }
-  }
-  
   // We probably want to make this decision based on cost.
   static constexpr int64_t kMaxLimitBeforeProject = 8192;
   if (dt->hasOrderBy()) {
@@ -772,8 +756,7 @@ void Optimization::addPostprocess(
     plan = limit;
   }
   if (!dt->columns.empty()) {
-    auto* project = make<Project>(plan, dt->exprs, dt->columns);
-    plan = project;
+    plan = makeProjectWithWindows(plan, dt->exprs, dt->columns);
   }
   if (!dt->hasOrderBy() && dt->limit > kMaxLimitBeforeProject) {
     auto limit = make<Limit>(plan, dt->limit, dt->offset);
