@@ -134,16 +134,6 @@ RelationOpPtr makeProjectWithWindows(
     WindowVector windows;
     windows.reserve(indices.size());
     for (size_t idx : indices) {
-      if (auto it =
-              std::ranges::find_if(input->columns(), [&](const ColumnCP& col) {
-                col->as<Column>().;
-            return col->sameOrEqual(*projectExprs[idx]);
-          });
-          it != input->columns().end()) {
-        projectExprs[idx] = *it;
-        continue;
-      }
-      
       windows.push_back(projectExprs[idx]->as<Window>());
       allColumns.push_back(projectColumns[idx]);
       projectExprs[idx] = projectColumns[idx];
