@@ -137,29 +137,31 @@ TEST_F(AggregationPlanTest, dedupAggSameOptions) {
 
   auto plan = planVelox(logicalPlan);
 
-  auto matcher = core::PlanMatcherBuilder()
-                     .tableScan()
-                     .project({"a", "gt(b, 0)", "lt(b, 0)"})
-                     .singleAggregation(
-                         {},
-                         {"array_agg(a)",
-                          "array_agg(a)",
-                          "sum(a)",
-                          "sum(a)",
-                          "array_agg(a)",
-                          "array_agg(a)"})
-                     .project(
-                         {"agg1",
-                          "agg2",
-                          "agg1",
-                          "agg1",
-                          "sum1",
-                          "sum2",
-                          "sum1",
-                          "combo1",
-                          "combo2",
-                          "combo1"})
-                     .build();
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan()
+          .project(
+              {"a", "gt(cast(b as BIGINT), 0)", "lt(cast(b as BIGINT), 0)"})
+          .singleAggregation(
+              {},
+              {"array_agg(a ORDER BY a ASC)",
+               "array_agg(a ORDER BY a DESC)",
+               "sum(a) FILTER (WHERE \"dt1.__p14\")",
+               "sum(a) FILTER (WHERE \"dt1.__p18\")",
+               "array_agg(a ORDER BY a ASC) FILTER (WHERE \"dt1.__p14\")",
+               "array_agg(a ORDER BY a DESC) FILTER (WHERE \"dt1.__p14\")"})
+          .project(
+              {"agg1",
+               "agg2",
+               "agg1",
+               "agg1",
+               "sum1",
+               "sum2",
+               "sum1",
+               "combo1",
+               "combo2",
+               "combo1"})
+          .build();
 
   ASSERT_TRUE(matcher->match(plan));
 }
@@ -179,7 +181,10 @@ TEST_F(AggregationPlanTest, orderByDedupInAggregates) {
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan()
-                     .singleAggregation({}, {"array_agg(a)", "array_agg(b)"})
+                     .singleAggregation(
+                         {},
+                         {"array_agg(a ORDER BY a ASC)",
+                          "array_agg(b ORDER BY b ASC, a ASC)"})
                      .build();
 
   ASSERT_TRUE(matcher->match(plan));

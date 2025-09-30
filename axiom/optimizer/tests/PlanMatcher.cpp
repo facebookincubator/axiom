@@ -17,6 +17,7 @@
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include <gtest/gtest.h>
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/parse/ExpressionsParser.h"
 
 namespace facebook::velox::core {
@@ -463,8 +464,37 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < aggregates_.size(); ++i) {
-        auto expected = parse::parseExpr(aggregates_[i], {});
-        EXPECT_EQ(plan.aggregates()[i].call->toString(), expected->toString());
+        auto expected = velox::duckdb::parseAggregateExpr(aggregates_[i], {});
+        const auto& agg = plan.aggregates()[i];
+
+        EXPECT_EQ(agg.call->toString(), expected.expr->toString());
+        AXIOM_TEST_RETURN_IF_FAILURE
+
+        EXPECT_EQ(agg.sortingKeys.size(), expected.orderBy.size());
+        AXIOM_TEST_RETURN_IF_FAILURE
+
+        for (size_t j = 0; j < agg.sortingKeys.size(); ++j) {
+          EXPECT_EQ(
+              agg.sortingKeys[j]->toString(),
+              expected.orderBy[j].expr->toString());
+          EXPECT_EQ(
+              agg.sortingOrders[j].isAscending(),
+              expected.orderBy[j].ascending);
+          EXPECT_EQ(
+              agg.sortingOrders[j].isNullsFirst(),
+              expected.orderBy[j].nullsFirst);
+          AXIOM_TEST_RETURN_IF_FAILURE
+        }
+
+        if (expected.maskExpr != nullptr) {
+          EXPECT_NE(agg.mask, nullptr);
+          AXIOM_TEST_RETURN_IF_FAILURE
+          EXPECT_EQ(agg.mask->toString(), expected.maskExpr->toString());
+          AXIOM_TEST_RETURN_IF_FAILURE
+        } else {
+          EXPECT_EQ(agg.mask, nullptr);
+          AXIOM_TEST_RETURN_IF_FAILURE
+        }
       }
       AXIOM_TEST_RETURN_IF_FAILURE
     }

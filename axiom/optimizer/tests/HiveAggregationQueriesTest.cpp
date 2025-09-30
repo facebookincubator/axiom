@@ -79,14 +79,13 @@ class HiveAggregationQueriesTest : public test::HiveQueriesTestBase {
     return plan->fragments().at(0).fragment.planNode;
   }
 
-  core::PlanNodePtr toDistributedPlan(
+  runner::MultiFragmentPlanPtr toDistributedPlan(
       const lp::LogicalPlanNodePtr& logicalPlan) {
     schema_ = std::make_shared<optimizer::SchemaResolver>();
 
     auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan;
-
     EXPECT_GT(plan->fragments().size(), 1);
-    return plan->fragments().at(0).fragment.planNode;
+    return plan;
   }
 };
 
@@ -115,6 +114,8 @@ TEST_F(HiveAggregationQueriesTest, mask) {
 
   {
     auto plan = toDistributedPlan(logicalPlan);
+    const auto& fragments = plan->fragments();
+    ASSERT_EQ(2, fragments.size());
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
@@ -123,7 +124,15 @@ TEST_F(HiveAggregationQueriesTest, mask) {
                        .partitionedOutput()
                        .build();
 
-    ASSERT_TRUE(matcher->match(plan));
+    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
+
+    matcher = core::PlanMatcherBuilder()
+                  .exchange()
+                  .localPartition()
+                  .finalAggregation()
+                  .build();
+
+    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
   }
 
   auto referencePlan =
