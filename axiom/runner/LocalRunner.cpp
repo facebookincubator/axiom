@@ -16,6 +16,8 @@
 
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "folly/ExceptionWrapper.h"
+#include "velox/common/future/VeloxPromise.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -140,12 +142,17 @@ LocalRunner::LocalRunner(
     const MultiFragmentPlanPtr& plan,
     std::shared_ptr<velox::core::QueryCtx> queryCtx,
     std::shared_ptr<SplitSourceFactory> splitSourceFactory,
-    std::shared_ptr<velox::memory::MemoryPool> outputPool)
+    std::shared_ptr<velox::memory::MemoryPool> outputPool,
+    folly::Executor* splitExecutor)
     : plan_{plan},
       fragments_(topologicalSort(plan->fragments())),
       splitSourceFactory_(std::move(splitSourceFactory)) {
   params_.queryCtx = std::move(queryCtx);
   params_.outputPool = std::move(outputPool);
+  auto executor = splitExecutor ? splitExecutor
+                                : &folly::QueuedImmediateExecutor::instance();
+  splitGenerator_ =
+      std::make_shared<LocalSplitGenerator>(splitSourceFactory_, executor);
 }
 
 velox::RowVectorPtr LocalRunner::next() {
@@ -184,11 +191,6 @@ void LocalRunner::start() {
   }
 }
 
-std::shared_ptr<connector::SplitSource> LocalRunner::splitSourceForScan(
-    const velox::core::TableScanNode& scan) {
-  return splitSourceFactory_->splitSourceForScan(scan);
-}
-
 void LocalRunner::abort() {
   // If called without previous error, we set the error to be cancellation.
   if (!error_) {
@@ -200,6 +202,13 @@ void LocalRunner::abort() {
     }
   }
   VELOX_CHECK(state_ != State::kInitialized);
+
+  splitGenerator_->interrupt();
+  for (auto& fut : splitters_) {
+    std::move(fut).wait();
+  }
+  splitters_.clear();
+
   // Setting errors is thread safe. The stages do not change after
   // initialization.
   for (auto& stage : stages_) {
@@ -217,6 +226,11 @@ void LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
   std::vector<velox::ContinueFuture> futures;
   {
     std::lock_guard<std::mutex> l(mutex_);
+    for (auto& fut : splitters_) {
+      std::move(fut).get();
+    }
+    splitters_.clear();
+
     for (auto& stage : stages_) {
       for (auto& task : stage) {
         futures.push_back(task->taskDeletionFuture());
@@ -326,35 +340,8 @@ void LocalRunner::makeStages(
     gatherScans(fragment.fragment.planNode, scans);
 
     for (const auto& scan : scans) {
-      auto source = splitSourceForScan(*scan);
-
-      std::vector<connector::SplitSource::SplitAndGroup> splits;
-      int32_t splitIdx = 0;
-      auto getNextSplit = [&]() {
-        if (splitIdx < splits.size()) {
-          return velox::exec::Split(std::move(splits[splitIdx++].split));
-        }
-        splits = source->getSplits(std::numeric_limits<int64_t>::max());
-        splitIdx = 1;
-        return velox::exec::Split(std::move(splits[0].split));
-      };
-
-      // Distribute splits across tasks using round-robin.
-      bool allDone = false;
-      do {
-        for (auto& task : stage) {
-          auto split = getNextSplit();
-          if (!split.hasConnectorSplit()) {
-            allDone = true;
-            break;
-          }
-          task->addSplit(scan->id(), std::move(split));
-        }
-      } while (!allDone);
-
-      for (auto& task : stage) {
-        task->noMoreSplits(scan->id());
-      }
+      auto future = splitGenerator_->generateSplits(stage, scan);
+      splitters_.push_back(std::move(future));
     }
 
     for (const auto& input : fragment.inputStages) {
@@ -433,6 +420,58 @@ std::string LocalRunner::printPlanWithStats(
           out << indentation << statsIt->second << std::endl;
         }
       });
+}
+
+velox::ContinueFuture LocalSplitGenerator::generateSplits(
+    const std::vector<std::shared_ptr<velox::exec::Task>>& stage,
+    velox::core::TableScanNodePtr node) {
+  auto contract = velox::makeVeloxContinuePromiseContract(
+      "LocalSplitGenerator::generateSplits");
+  executor_->add([promise = std::move(contract.first),
+                  node = node,
+                  stage = stage,
+                  splitSourceFactory = splitSourceFactory_,
+                  interrupted = &interrupted_]() mutable {
+    try {
+      auto source = splitSourceFactory->splitSourceForScan(*node);
+      std::vector<connector::SplitSource::SplitAndGroup> splits;
+      int32_t next = 0;
+
+      auto getNextSplit =
+          [&]() -> std::shared_ptr<velox::connector::ConnectorSplit> {
+        if (next < splits.size()) {
+          return std::move(splits[next++].split);
+        }
+        splits = source->getSplits(kTargetBytesPerSplitCall);
+        next = 0;
+        if (splits.empty() || splits[0].split == nullptr) {
+          return nullptr;
+        }
+        return std::move(splits[next++].split);
+      };
+
+      uint32_t idx = 0;
+      std::shared_ptr<velox::connector::ConnectorSplit> split;
+      while ((split = getNextSplit()) != nullptr) {
+        if (UNLIKELY(interrupted->load())) {
+          throw std::runtime_error("split generation interrupted");
+        }
+        stage[idx++ % stage.size()]->addSplit(
+            node->id(), velox::exec::Split(std::move(split)));
+      }
+      promise.setValue();
+      for (auto& task : stage) {
+        task->noMoreSplits(node->id());
+      }
+    } catch (...) {
+      promise.setException(folly::exception_wrapper(std::current_exception()));
+      for (auto& task : stage) {
+        task->setError(std::current_exception());
+      }
+    }
+  });
+
+  return std::move(contract.second);
 }
 
 } // namespace facebook::axiom::runner

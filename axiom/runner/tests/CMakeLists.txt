@@ -39,7 +39,8 @@ target_link_libraries(
   velox_hive_connector
   velox_tpch_connector)
 
-add_executable(axiom_runner_local_runner_test LocalRunnerTest.cpp Main.cpp)
+add_executable(axiom_runner_local_runner_test
+               LocalRunnerTest.cpp LocalSplitGeneratorTest.cpp Main.cpp)
 
 add_test(axiom_runner_local_runner_test axiom_runner_local_runner_test)
 

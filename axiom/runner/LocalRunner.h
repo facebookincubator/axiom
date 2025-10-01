@@ -19,8 +19,12 @@
 #include "axiom/connectors/ConnectorSplitManager.h"
 #include "axiom/runner/MultiFragmentPlan.h"
 #include "axiom/runner/Runner.h"
+#include "folly/Executor.h"
+#include "velox/common/future/VeloxPromise.h"
 #include "velox/connectors/Connector.h"
+#include "velox/core/PlanNode.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/Task.h"
 
 namespace facebook::axiom::runner {
 
@@ -77,7 +81,8 @@ class LocalRunner : public Runner,
       const MultiFragmentPlanPtr& plan,
       std::shared_ptr<velox::core::QueryCtx> queryCtx,
       std::shared_ptr<SplitSourceFactory> splitSourceFactory,
-      std::shared_ptr<velox::memory::MemoryPool> outputPool = nullptr);
+      std::shared_ptr<velox::memory::MemoryPool> outputPool = nullptr,
+      folly::Executor* splitExecutor = nullptr);
 
   LocalRunner(
       const MultiFragmentPlanPtr& plan,
@@ -134,9 +139,6 @@ class LocalRunner : public Runner,
 
   void makeStages(const std::shared_ptr<velox::exec::Task>& lastStageTask);
 
-  std::shared_ptr<connector::SplitSource> splitSourceForScan(
-      const velox::core::TableScanNode& scan);
-
   // Serializes 'cursor_' and 'error_'.
   mutable std::mutex mutex_;
 
@@ -151,6 +153,38 @@ class LocalRunner : public Runner,
   std::vector<std::vector<std::shared_ptr<velox::exec::Task>>> stages_;
   std::exception_ptr error_;
   std::shared_ptr<SplitSourceFactory> splitSourceFactory_;
+  std::shared_ptr<SplitGenerator> splitGenerator_;
+  std::vector<velox::ContinueFuture> splitters_;
+};
+
+/// SplitGenerator implementation for local execution. Split generation is
+/// scheduled on the provided executor. If synchronous split generation is
+/// desired, an ImmediateExecutor can be provided. Interruption relies on
+/// on the SplitSource returning periodically. If the SplitSource blocks for
+/// a long period of time, interruption may not be honored until it returns.
+class LocalSplitGenerator : public SplitGenerator {
+ public:
+  explicit LocalSplitGenerator(
+      std::shared_ptr<SplitSourceFactory> splitSourceFactory,
+      folly::Executor* executor)
+      : splitSourceFactory_(std::move(splitSourceFactory)),
+        executor_(executor),
+        interrupted_(false) {}
+
+  void interrupt() override {
+    interrupted_.store(true);
+  }
+
+  velox::ContinueFuture generateSplits(
+      const std::vector<std::shared_ptr<velox::exec::Task>>& stage,
+      velox::core::TableScanNodePtr node) override;
+
+ private:
+  static constexpr uint64_t kTargetBytesPerSplitCall{4ULL << 30U};
+
+  std::shared_ptr<SplitSourceFactory> splitSourceFactory_;
+  folly::Executor* executor_;
+  std::atomic<bool> interrupted_;
 };
 
 } // namespace facebook::axiom::runner

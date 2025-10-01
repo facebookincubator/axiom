@@ -22,6 +22,37 @@
 /// Base classes for multifragment Velox query execution.
 namespace facebook::axiom::runner {
 
+/// Base class for asynchronous split generation. Splits generation may
+/// be started in parallel for all scans present in the task. Concurrency
+/// details are dependent on the specific implementation
+/// of derived classes and are not mandated by the interface.
+class SplitGenerator {
+ public:
+  virtual ~SplitGenerator() = default;
+
+  /// Interrupt any running split generation processes. This method should
+  /// set a flag that causes ongoing split generation to stop voluntarily.
+  /// Split generation should avoid long-blocking calls in order to remain
+  /// responsive to interruption. If split generation is already complete
+  /// at the time of the interruption, this may have no effect.
+  virtual void interrupt() = 0;
+
+  /// Generate splits asynchronously for the given stage and table scan node.
+  /// Returns a ContinueFuture that will be fulfilled when split generation
+  /// is complete. Synchronous split generators may perform split generation
+  /// immediately and return a fulfilled future, while asynchronous generators
+  /// should schedule generation on a separate executor and return the
+  /// corresponding future.
+  ///
+  /// @param stage The stage that will receive the splits
+  /// @param node The table scan node for which to generate splits
+  /// @return A ContinueFuture that completes when all splits are generated
+  /// or the SplitGenerator has received an interrupt.
+  virtual velox::ContinueFuture generateSplits(
+      const std::vector<std::shared_ptr<velox::exec::Task>>& stage,
+      velox::core::TableScanNodePtr node) = 0;
+};
+
 /// Base class for executing multifragment Velox queries. One instance
 /// of a Runner coordinates the execution of one multifragment
 /// query. Different derived classes can support different shuffles
