@@ -127,6 +127,7 @@ RelationOpPtr makeProjectWithWindows(
   if (specToWindows.empty()) {
     return make<Project>(input, projectExprs, projectColumns);
   }
+  // projectExprs[0].()
 
   RelationOpPtr result = input;
   ColumnVector allColumns = result->columns();
