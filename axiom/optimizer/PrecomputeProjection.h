@@ -97,7 +97,8 @@ class PrecomputeProjection {
   /// @returns the original 'input' with an optional ProjectOp on top.
   RelationOpPtr maybeProject() && {
     if (needsProject_) {
-      return make<Project>(input_, projectExprs_, projectColumns_);
+      return make<Project>(
+          input_, projectExprs_, projectColumns_, /*redundant=*/false);
     }
 
     return input_;

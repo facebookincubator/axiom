@@ -50,11 +50,6 @@ velox_link_libraries(
   axiom_optimizer_tests_presto_parser axiom_logical_plan_builder
   axiom_sql_presto_ast antlr4_shared)
 
-velox_add_library(axiom_optimizer_tests_duck_parser DuckParser.cpp)
-
-velox_link_libraries(axiom_optimizer_tests_duck_parser
-                     axiom_logical_plan_builder velox_parse_parser velox_vector)
-
 velox_add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp
                   LogicalPlanMatcher.cpp)
 

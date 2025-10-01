@@ -83,11 +83,6 @@ class ToVelox {
 
   void filterUpdated(BaseTableCP baseTable, bool updateSelectivity = true);
 
-  // Returns column name to use in the Velox plan.
-  static std::string outputName(ColumnCP column) {
-    return column->alias() ? column->alias() : column->toString();
-  }
-
  private:
   velox::core::FieldAccessTypedExprPtr toFieldRef(ExprCP expr);
 

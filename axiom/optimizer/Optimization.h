@@ -220,6 +220,9 @@ class Optimization {
   void addPostprocess(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)
       const;
 
+  void addAggregation(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)
+      const;
+
   // Places a derived table as first table in a plan. Imports possibly reducing
   // joins into the plan if can.
   void placeDerivedTable(DerivedTableCP from, PlanState& state);
