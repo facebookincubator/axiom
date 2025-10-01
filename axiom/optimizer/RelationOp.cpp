@@ -687,11 +687,22 @@ std::string Filter::toString(bool recursive, bool detail) const {
 Project::Project(
     const RelationOpPtr& input,
     ExprVector exprs,
-    const ColumnVector& columns)
+    const ColumnVector& columns,
+    bool redundant)
     : RelationOp{RelType::kProject, input, input->distribution().rename(exprs, columns), columns},
-      exprs_{std::move(exprs)} {
+      exprs_{std::move(exprs)},
+      redundant_{redundant} {
   VELOX_CHECK_EQ(
       exprs_.size(), columns_.size(), "Projection names and exprs must match");
+
+  if (redundant) {
+    for (const auto& expr : exprs_) {
+      VELOX_CHECK(
+          expr->is(PlanType::kColumnExpr),
+          "Redundant Project must not contain expressions: {}",
+          expr->toString());
+    }
+  }
 
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = 1;

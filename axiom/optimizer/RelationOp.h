@@ -363,19 +363,29 @@ class Filter : public RelationOp {
 /// Assigns names to expressions. Used to rename output from a derived table.
 class Project : public RelationOp {
  public:
+  /// @param redundant Indicates if this Project node is redundant and is not
+  /// expected to appear in the final Velox plan. It is convenient to keep these
+  /// nodes in the tree to allow for easier tracking of the origins of
+  /// individual symbols.
   Project(
       const RelationOpPtr& input,
       ExprVector exprs,
-      const ColumnVector& columns);
+      const ColumnVector& columns,
+      bool redundant);
 
   const ExprVector& exprs() const {
     return exprs_;
+  }
+
+  bool isRedundant() const {
+    return redundant_;
   }
 
   std::string toString(bool recursive, bool detail) const override;
 
  private:
   const ExprVector exprs_;
+  const bool redundant_;
 };
 
 enum class JoinMethod { kHash, kMerge, kCross };

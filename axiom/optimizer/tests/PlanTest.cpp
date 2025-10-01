@@ -1387,8 +1387,8 @@ TEST_F(PlanTest, orderByDuplicateKeys) {
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan("t")
-                     .project({"a", "multiply(a, 2)"})
-                     .orderBy({"\"dt1.__p5\" DESC"})
+                     .project({"a", "multiply(a, 2) as x"})
+                     .orderBy({"x DESC"})
                      .project({"a * 2", "a * 2"})
                      .build();
 

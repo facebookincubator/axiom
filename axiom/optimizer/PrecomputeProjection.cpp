@@ -45,7 +45,9 @@ ExprCP PrecomputeProjection::toColumn(
     return it->second;
   }
 
-  if (expr->is(PlanType::kColumnExpr) && (alias == nullptr || alias == expr)) {
+  if (expr->is(PlanType::kColumnExpr) &&
+      (alias == nullptr ||
+       expr->as<Column>()->outputName() == alias->outputName())) {
     addToProject(expr, expr->as<Column>());
     return expr;
   }

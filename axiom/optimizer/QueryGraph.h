@@ -146,6 +146,11 @@ class Column : public Expr {
     return schemaColumn_;
   }
 
+  // Returns column name to use in the Velox plan.
+  std::string outputName() const {
+    return alias_ != nullptr ? alias_ : toString();
+  }
+
   /// Asserts that 'this' and 'other' are joined on equality. This has a
   /// transitive effect, so if a and b are previously asserted equal and c is
   /// asserted equal to b, a and c are also equal.

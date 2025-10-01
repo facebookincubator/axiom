@@ -61,6 +61,10 @@ class SubqueryExpr : public core::IExpr {
     return std::make_shared<SubqueryExpr>(subquery_);
   }
 
+  ExprPtr dropAlias() const {
+    return std::make_shared<SubqueryExpr>(subquery_);
+  }
+
   bool operator==(const IExpr& other) const override {
     if (!other.is(Kind::kSubquery)) {
       return false;
