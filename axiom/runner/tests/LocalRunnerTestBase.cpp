@@ -18,18 +18,22 @@
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 
 namespace facebook::axiom::runner::test {
 
 void LocalRunnerTestBase::SetUp() {
   HiveConnectorTestBase::SetUp();
+
+  velox::parquet::registerParquetReaderFactory();
+
   velox::exec::ExchangeSource::factories().clear();
   velox::exec::ExchangeSource::registerFactory(
       velox::exec::test::createLocalExchangeSource);
 
   if (!files_) {
-    makeTables(testTables_, files_);
+    makeTables();
   }
   // Destroy and rebuild the testing connector. The connector will
   // show the metadata if the connector is wired for metadata.
@@ -39,44 +43,39 @@ void LocalRunnerTestBase::SetUp() {
 void LocalRunnerTestBase::TearDown() {
   connector::ConnectorMetadata::unregisterMetadata(
       velox::exec::test::kHiveConnectorId);
-  velox::connector::unregisterConnector(velox::exec::test::kHiveConnectorId);
+  velox::exec::ExchangeSource::factories().clear();
+  velox::parquet::unregisterParquetReaderFactory();
   HiveConnectorTestBase::TearDown();
 }
 
 std::shared_ptr<velox::core::QueryCtx> LocalRunnerTestBase::makeQueryCtx(
-    const std::string& queryId,
-    velox::memory::MemoryPool* rootPool) {
-  auto& config = config_;
-  auto hiveConfig = hiveConfig_;
+    const std::string& queryId) {
   std::unordered_map<std::string, std::shared_ptr<velox::config::ConfigBase>>
       connectorConfigs;
   connectorConfigs[velox::exec::test::kHiveConnectorId] =
-      std::make_shared<velox::config::ConfigBase>(std::move(hiveConfig));
+      std::make_shared<velox::config::ConfigBase>(folly::copy(hiveConfig_));
 
   return velox::core::QueryCtx::create(
       schemaExecutor_.get(),
-      velox::core::QueryConfig(config),
+      velox::core::QueryConfig(folly::copy(config_)),
       std::move(connectorConfigs),
       velox::cache::AsyncDataCache::getInstance(),
-      rootPool->shared_from_this(),
-      nullptr,
+      /*pool=*/nullptr,
+      /*spillExecutor=*/nullptr,
       queryId);
 }
 
 void LocalRunnerTestBase::setupConnector() {
-  velox::connector::unregisterConnector(velox::exec::test::kHiveConnectorId);
-
   std::unordered_map<std::string, std::string> configs;
-  configs[velox::connector::hive::HiveConfig::kLocalDataPath] = testDataPath_;
+  configs[velox::connector::hive::HiveConfig::kLocalDataPath] = localDataPath_;
   configs[velox::connector::hive::HiveConfig::kLocalFileFormat] =
-      localFileFormat_;
+      velox::dwio::common::toString(localFileFormat_);
 
-  velox::connector::hive::HiveConnectorFactory factory;
-  auto hiveConnector = factory.newConnector(
-      velox::exec::test::kHiveConnectorId,
-      std::make_shared<velox::config::ConfigBase>(std::move(configs)),
-      ioExecutor_.get());
-  velox::connector::registerConnector(hiveConnector);
+  resetHiveConnector(
+      std::make_shared<velox::config::ConfigBase>(std::move(configs)));
+
+  auto hiveConnector =
+      velox::connector::getConnector(velox::exec::test::kHiveConnectorId);
 
   connector::ConnectorMetadata::registerMetadata(
       velox::exec::test::kHiveConnectorId,
@@ -85,26 +84,26 @@ void LocalRunnerTestBase::setupConnector() {
               hiveConnector.get())));
 }
 
-void LocalRunnerTestBase::makeTables(
-    std::vector<TableSpec> specs,
-    std::shared_ptr<velox::exec::test::TempDirectoryPath>& directory) {
+void LocalRunnerTestBase::makeTables() {
   if (initialized_) {
     return;
   }
   initialized_ = true;
-  if (testDataPath_.empty()) {
-    directory = velox::exec::test::TempDirectoryPath::create();
-    testDataPath_ = directory->getPath();
+
+  if (localDataPath_.empty()) {
+    files_ = velox::exec::test::TempDirectoryPath::create();
+    localDataPath_ = files_->getPath();
   }
-  for (auto& spec : specs) {
-    auto tablePath = fmt::format("{}/{}", testDataPath_, spec.name);
-    auto fs = velox::filesystems::getFileSystem(tablePath, {});
+
+  auto fs = velox::filesystems::getFileSystem(localDataPath_, {});
+  for (const auto& spec : testTables_) {
+    const auto tablePath = fmt::format("{}/{}", localDataPath_, spec.name);
     fs->mkdir(tablePath);
     for (auto i = 0; i < spec.numFiles; ++i) {
       auto vectors = HiveConnectorTestBase::makeVectors(
           spec.columns, spec.numVectorsPerFile, spec.rowsPerVector);
       if (spec.customizeData) {
-        for (auto& vector : vectors) {
+        for (const auto& vector : vectors) {
           spec.customizeData(vector);
         }
       }
@@ -115,58 +114,23 @@ void LocalRunnerTestBase::makeTables(
   }
 }
 
-namespace {
-void gatherScans(
-    const velox::core::PlanNodePtr& plan,
-    std::vector<velox::core::TableScanNodePtr>& scans) {
-  if (auto scan =
-          std::dynamic_pointer_cast<const velox::core::TableScanNode>(plan)) {
-    scans.push_back(scan);
-    return;
-  }
-  for (const auto& source : plan->sources()) {
-    gatherScans(source, scans);
-  }
-}
-} // namespace
+void LocalRunnerTestBase::tablesCreated() {
+  auto hiveConnector =
+      velox::connector::getConnector(velox::exec::test::kHiveConnectorId);
 
-std::shared_ptr<runner::SimpleSplitSourceFactory>
-LocalRunnerTestBase::makeSimpleSplitSourceFactory(
-    const runner::MultiFragmentPlanPtr& plan) {
-  folly::F14FastMap<
-      velox::core::PlanNodeId,
-      std::vector<std::shared_ptr<velox::connector::ConnectorSplit>>>
-      nodeSplitMap;
-  for (auto& fragment : plan->fragments()) {
-    std::vector<velox::core::TableScanNodePtr> scans;
-    gatherScans(fragment.fragment.planNode, scans);
-
-    for (const auto& scan : scans) {
-      const auto& name = scan->tableHandle()->name();
-      const auto& files = tableFilePaths_[name];
-      VELOX_CHECK(!files.empty(), "No splits known for {}", name);
-
-      std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
-      for (const auto& file : files) {
-        splits.push_back(velox::connector::hive::HiveConnectorSplitBuilder(file)
-                             .connectorId(velox::exec::test::kHiveConnectorId)
-                             .fileFormat(velox::dwio::common::FileFormat::DWRF)
-                             .build());
-      }
-      nodeSplitMap[scan->id()] = std::move(splits);
-    }
-  };
-  return std::make_shared<runner::SimpleSplitSourceFactory>(
-      std::move(nodeSplitMap));
+  auto metadata = dynamic_cast<connector::hive::LocalHiveConnectorMetadata*>(
+      connector::ConnectorMetadata::metadata(hiveConnector.get()));
+  VELOX_CHECK_NOT_NULL(metadata);
+  metadata->reinitialize();
 }
 
-std::vector<velox::RowVectorPtr> readCursor(
-    std::shared_ptr<runner::LocalRunner> runner) {
-  // 'result' borrows memory from cursor so the life cycle must be shorter.
+// static
+std::vector<velox::RowVectorPtr> LocalRunnerTestBase::readCursor(
+    const std::shared_ptr<LocalRunner>& runner) {
   std::vector<velox::RowVectorPtr> result;
 
-  while (auto rows = runner->next()) {
-    result.push_back(rows);
+  while (auto rowVector = runner->next()) {
+    result.push_back(rowVector);
   }
   return result;
 }

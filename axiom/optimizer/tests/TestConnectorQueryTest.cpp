@@ -18,7 +18,6 @@
 #include <gtest/gtest.h>
 
 #include "axiom/connectors/tests/TestConnector.h"
-#include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "velox/exec/TableWriter.h"
@@ -32,14 +31,6 @@ namespace lp = facebook::axiom::logical_plan;
 class TestConnectorQueryTest : public QueryTestBase {
  protected:
   static constexpr auto kTestConnectorId = "test";
-
-  static void SetUpTestCase() {
-    LocalRunnerTestBase::SetUpTestCase();
-  }
-
-  static void TearDownTestCase() {
-    LocalRunnerTestBase::TearDownTestCase();
-  }
 
   void SetUp() override {
     QueryTestBase::SetUp();

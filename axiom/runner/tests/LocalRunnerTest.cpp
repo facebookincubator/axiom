@@ -33,6 +33,10 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
   static constexpr int32_t kNumRows = kNumFiles * kNumVectors * kRowsPerVector;
 
   static void SetUpTestCase() {
+    // Creates the data and schema from 'testTables_'. These are created on the
+    // first test fixture initialization.
+    LocalRunnerTestBase::SetUpTestCase();
+
     // The lambdas will be run after this scope returns, so make captures
     // static.
     static int32_t counter1;
@@ -64,22 +68,10 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
             .numVectorsPerFile = kNumVectors,
             .numFiles = kNumFiles,
             .customizeData = customize2}};
-
-    // Creates the data and schema from 'testTables_'. These are created on the
-    // first test fixture initialization.
-    LocalRunnerTestBase::SetUpTestCase();
   }
 
   void TearDown() override {
-    rootPool_.reset();
     LocalRunnerTestBase::TearDown();
-  }
-
-  std::shared_ptr<velox::memory::MemoryPool> makeRootPool(
-      const std::string& queryId) {
-    static std::atomic_uint64_t poolId{0};
-    return velox::memory::memoryManager()->addRootPool(
-        fmt::format("{}_{}", queryId, poolId++));
   }
 
   // Returns a plan with a table scan. This is a single stage if 'numWorkers' is
@@ -156,7 +148,7 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
     auto scan = makeScanPlan(numWorkers);
     auto localRunner = makeRunner(scan);
 
-    auto results = test::readCursor(localRunner);
+    auto results = readCursor(localRunner);
 
     int32_t count = 0;
     for (auto& rows : results) {
@@ -168,18 +160,14 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
 
   std::shared_ptr<LocalRunner> makeRunner(const MultiFragmentPlanPtr& plan) {
     const auto queryId = plan->options().queryId;
-    rootPool_ = makeRootPool(queryId);
-    auto splitSourceFactory = makeSimpleSplitSourceFactory(plan);
+
     return std::make_shared<LocalRunner>(
-        std::move(plan),
-        makeQueryCtx(queryId, rootPool_.get()),
-        splitSourceFactory);
+        std::move(plan), makeQueryCtx(queryId));
   }
 
   std::shared_ptr<velox::core::PlanNodeIdGenerator> idGenerator_{
       std::make_shared<velox::core::PlanNodeIdGenerator>()};
 
-  std::shared_ptr<velox::memory::MemoryPool> rootPool_;
   int32_t queryCounter_{0};
 
   // The below are declared static to be scoped to TestCase so as to reuse the
@@ -196,7 +184,7 @@ TEST_F(LocalRunnerTest, count) {
   auto join = makeJoinPlan();
   auto localRunner = makeRunner(join);
 
-  auto results = test::readCursor(localRunner);
+  auto results = readCursor(localRunner);
   auto stats = localRunner->stats();
   EXPECT_EQ(1, results.size());
   EXPECT_EQ(1, results[0]->size());
@@ -210,7 +198,7 @@ TEST_F(LocalRunnerTest, error) {
   auto join = makeJoinPlan("if (c0 = 111, c0 / 0, c0 + 1) as c0");
   auto localRunner = makeRunner(join);
 
-  EXPECT_THROW(test::readCursor(localRunner), velox::VeloxUserError);
+  EXPECT_THROW(readCursor(localRunner), velox::VeloxUserError);
   EXPECT_EQ(Runner::State::kError, localRunner->state());
   localRunner->waitForCompletion(kWaitTimeoutUs);
 }
@@ -224,7 +212,7 @@ TEST_F(LocalRunnerTest, broadcast) {
   auto join = makeJoinPlan("c0", true);
   auto localRunner = makeRunner(join);
 
-  auto results = test::readCursor(localRunner);
+  auto results = readCursor(localRunner);
   auto stats = localRunner->stats();
   EXPECT_EQ(1, results.size());
   EXPECT_EQ(1, results[0]->size());
@@ -253,7 +241,7 @@ TEST_F(LocalRunnerTest, lastStageWithMultipleInputs) {
   auto plan = rootBuilder.build();
 
   auto localRunner = makeRunner(plan);
-  auto results = test::readCursor(localRunner);
+  auto results = readCursor(localRunner);
   auto stats = localRunner->stats();
 
   size_t numRows = 0;

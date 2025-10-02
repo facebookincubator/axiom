@@ -76,11 +76,19 @@ PlanStateSaver::PlanStateSaver(PlanState& state, const JoinCandidate& candidate)
 #endif
 }
 
+namespace {
+PlanObjectSet exprColumns(const PlanObjectSet& exprs) {
+  PlanObjectSet columns;
+  exprs.forEach<Expr>([&](ExprCP expr) { columns.unionSet(expr->columns()); });
+  return columns;
+}
+} // namespace
+
 Plan::Plan(RelationOpPtr op, const PlanState& state)
     : op(std::move(op)),
       cost(state.cost),
       tables(state.placed),
-      columns(state.targetColumns),
+      columns(exprColumns(state.targetExprs)),
       fullyImported(state.dt->fullyImported) {}
 
 bool Plan::isStateBetter(const PlanState& state, float perRowMargin) const {
@@ -129,62 +137,101 @@ void PlanState::addBuilds(const HashBuildVector& added) {
   }
 }
 
-void PlanState::setTargetColumnsForDt(const PlanObjectSet& target) {
-  targetColumns = target;
+void PlanState::setTargetExprsForDt(const PlanObjectSet& target) {
   for (auto i = 0; i < dt->columns.size(); ++i) {
     if (target.contains(dt->columns[i])) {
-      targetColumns.unionColumns(dt->exprs[i]);
+      targetExprs.add(dt->exprs[i]);
     }
-  }
-  for (const auto& having : dt->having) {
-    targetColumns.unionColumns(having);
   }
 }
 
 const PlanObjectSet& PlanState::downstreamColumns() const {
-  auto it = downstreamPrecomputed.find(placed);
-  if (it != downstreamPrecomputed.end()) {
+  auto it = downstreamColumnsCache.find(placed);
+  if (it != downstreamColumnsCache.end()) {
     return it->second;
   }
 
   PlanObjectSet result;
+
+  auto addExpr = [&](ExprCP expr) {
+    auto it = exprToColumn.find(expr);
+    if (it != exprToColumn.end()) {
+      result.unionColumns(it->second);
+    } else {
+      result.unionColumns(expr);
+    }
+  };
+
+  auto addExprs = [&](ExprVector exprs) {
+    for (auto expr : exprs) {
+      addExpr(expr);
+    }
+  };
+
+  // Joins.
   for (auto join : dt->joins) {
     bool addFilter = false;
     if (!placed.contains(join->rightTable())) {
       addFilter = true;
-      result.unionColumns(join->leftKeys());
+      addExprs(join->leftKeys());
     }
     if (join->leftTable() && !placed.contains(join->leftTable())) {
       addFilter = true;
-      result.unionColumns(join->rightKeys());
+      addExprs(join->rightKeys());
     }
     if (addFilter && !join->filter().empty()) {
-      result.unionColumns(join->filter());
+      addExprs(join->filter());
     }
   }
 
-  for (auto& conjunct : dt->conjuncts) {
+  // Filters.
+  for (const auto* conjunct : dt->conjuncts) {
     if (!placed.contains(conjunct)) {
-      result.unionColumns(conjunct);
+      addExpr(conjunct);
     }
   }
 
+  // Aggregations.
   if (dt->aggregation && !placed.contains(dt->aggregation)) {
     auto aggToPlace = dt->aggregation;
-    const auto numGroupingKeys = aggToPlace->groupingKeys().size();
-    for (auto i = 0; i < aggToPlace->columns().size(); ++i) {
-      // Grouping columns must be computed anyway, aggregates only if referenced
-      // by enclosing.
-      if (i < numGroupingKeys) {
-        result.unionColumns(aggToPlace->groupingKeys()[i]);
-      } else if (targetColumns.contains(aggToPlace->columns()[i])) {
-        result.unionColumns(aggToPlace->aggregates()[i - numGroupingKeys]);
-      }
+    addExprs(aggToPlace->groupingKeys());
+    for (auto& aggregate : aggToPlace->aggregates()) {
+      addExpr(aggregate);
     }
   }
 
-  result.unionSet(targetColumns);
-  return downstreamPrecomputed[placed] = std::move(result);
+  // Filters after aggregation.
+  for (const auto* conjunct : dt->having) {
+    if (!placed.contains(conjunct)) {
+      addExpr(conjunct);
+    }
+  }
+
+  // Order by.
+  for (const auto* key : dt->orderKeys) {
+    if (!placed.contains(key)) {
+      addExpr(key);
+    }
+  }
+
+  // Output expressions.
+  targetExprs.forEach<Expr>([&](ExprCP expr) { addExpr(expr); });
+
+  return downstreamColumnsCache[placed] = std::move(result);
+}
+
+ExprVector PlanState::exprsToColumns(const ExprVector& exprs) const {
+  ExprVector newExprs;
+  newExprs.reserve(exprs.size());
+  for (auto expr : exprs) {
+    auto it = exprToColumn.find(expr);
+    if (it != exprToColumn.end()) {
+      newExprs.emplace_back(it->second);
+    } else {
+      newExprs.emplace_back(expr);
+    }
+  }
+  return newExprs;
 }
 
 std::string PlanState::printCost() const {

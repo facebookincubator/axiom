@@ -25,7 +25,30 @@ class PlanMatcher {
  public:
   virtual ~PlanMatcher() = default;
 
-  virtual bool match(const PlanNodePtr& plan) const = 0;
+  struct MatchResult {
+    const bool match;
+
+    /// Mapping from an alias specified in the PlanMatcher to the actual symbol
+    /// found in the plan.
+    const std::unordered_map<std::string, std::string> symbols;
+
+    static MatchResult success(
+        std::unordered_map<std::string, std::string> symbols = {}) {
+      return MatchResult{true, std::move(symbols)};
+    }
+
+    static MatchResult failure() {
+      return MatchResult{false, {}};
+    }
+  };
+
+  bool match(const PlanNodePtr& plan) const {
+    return match(plan, {}).match;
+  }
+
+  virtual MatchResult match(
+      const PlanNodePtr& plan,
+      const std::unordered_map<std::string, std::string>& symbols) const = 0;
 };
 
 class PlanMatcherBuilder {

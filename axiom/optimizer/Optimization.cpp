@@ -107,7 +107,7 @@ PlanP Optimization::bestPlan() {
   targetColumns.unionObjects(root_->columns);
 
   topState_.dt = root_;
-  topState_.setTargetColumnsForDt(targetColumns);
+  topState_.setTargetExprsForDt(targetColumns);
 
   makeJoins(topState_);
 
@@ -649,6 +649,29 @@ void alignJoinSides(
   otherInput = repartition;
 }
 
+bool isRedundantProject(
+    const RelationOpPtr& input,
+    const ExprVector& exprs,
+    const ColumnVector& columns) {
+  const auto& inputColumns = input->columns();
+
+  if (inputColumns.size() != exprs.size()) {
+    return false;
+  }
+
+  for (auto i = 0; i < inputColumns.size(); ++i) {
+    if (inputColumns[i] != exprs[i]) {
+      return false;
+    }
+
+    if (inputColumns[i]->outputName() != columns[i]->outputName()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 } // namespace
 
 void Optimization::addPostprocess(
@@ -656,109 +679,145 @@ void Optimization::addPostprocess(
     RelationOpPtr& plan,
     PlanState& state) const {
   if (dt->aggregation) {
-    const auto& aggPlan = dt->aggregation;
-
-    PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
-    auto groupingKeys =
-        precompute.toColumns(aggPlan->groupingKeys(), &aggPlan->columns());
-
-    AggregateVector aggregates;
-    aggregates.reserve(aggPlan->aggregates().size());
-
-    for (const auto& agg : aggPlan->aggregates()) {
-      ExprCP condition = nullptr;
-      if (agg->condition()) {
-        condition = precompute.toColumn(agg->condition());
-      }
-      auto args = precompute.toColumns(
-          agg->args(), /*aliases=*/nullptr, /*preserveLiterals=*/true);
-      aggregates.emplace_back(make<Aggregate>(
-          agg->name(),
-          agg->value(),
-          std::move(args),
-          agg->functions(),
-          agg->isDistinct(),
-          condition,
-          agg->intermediateType()));
-    }
-    plan = std::move(precompute).maybeProject();
-
-    if (isSingleWorker_ && runnerOptions_.numDrivers == 1) {
-      auto* singleAgg = make<Aggregation>(
-          plan,
-          std::move(groupingKeys),
-          std::move(aggregates),
-          velox::core::AggregationNode::Step::kSingle,
-          aggPlan->columns());
-
-      state.placed.add(aggPlan);
-      state.addCost(*singleAgg);
-      plan = singleAgg;
-    } else {
-      auto* partialAgg = make<Aggregation>(
-          plan,
-          std::move(groupingKeys),
-          aggregates,
-          velox::core::AggregationNode::Step::kPartial,
-          aggPlan->intermediateColumns());
-
-      state.placed.add(aggPlan);
-      state.addCost(*partialAgg);
-      plan = repartitionForAgg(partialAgg, state);
-
-      const auto numKeys = aggPlan->groupingKeys().size();
-
-      ExprVector finalGroupingKeys;
-      finalGroupingKeys.reserve(numKeys);
-      for (auto i = 0; i < numKeys; ++i) {
-        finalGroupingKeys.push_back(aggPlan->intermediateColumns()[i]);
-      }
-
-      auto* finalAgg = make<Aggregation>(
-          plan,
-          std::move(finalGroupingKeys),
-          std::move(aggregates),
-          velox::core::AggregationNode::Step::kFinal,
-          aggPlan->columns());
-
-      state.addCost(*finalAgg);
-      plan = finalAgg;
-    }
+    addAggregation(dt, plan, state);
   }
 
   if (!dt->having.empty()) {
     auto filter = make<Filter>(plan, dt->having);
+    state.placed.unionObjects(dt->having);
     state.addCost(*filter);
     plan = filter;
   }
 
   // We probably want to make this decision based on cost.
-  static constexpr int64_t kMaxLimitBeforeProject = 8192;
+  static constexpr int64_t kMaxLimitBeforeProject = 8'192;
   if (dt->hasOrderBy()) {
-    PrecomputeProjection precompute(plan, dt);
-    auto orderKeys = precompute.toColumns(dt->orderKeys);
-
-    auto* orderBy = make<OrderBy>(
-        std::move(precompute).maybeProject(),
-        std::move(orderKeys),
-        dt->orderTypes,
-        dt->limit,
-        dt->offset);
-    state.addCost(*orderBy);
-    plan = orderBy;
+    addOrderBy(dt, plan, state);
   } else if (dt->hasLimit() && dt->limit <= kMaxLimitBeforeProject) {
     auto limit = make<Limit>(plan, dt->limit, dt->offset);
     state.addCost(*limit);
     plan = limit;
   }
+
   if (!dt->columns.empty()) {
-    plan = makeProjectWithWindows(plan, dt->exprs, dt->columns);
+    ExprVector exprs = state.exprsToColumns(dt->exprs);
+    plan = makeProjectWithWindows(
+        plan,
+        exprs,
+        dt->columns,
+        isRedundantProject(plan, exprs, dt->columns));
   }
+
   if (!dt->hasOrderBy() && dt->limit > kMaxLimitBeforeProject) {
     auto limit = make<Limit>(plan, dt->limit, dt->offset);
     state.addCost(*limit);
     plan = limit;
   }
+}
+
+void Optimization::addAggregation(
+    DerivedTableCP dt,
+    RelationOpPtr& plan,
+    PlanState& state) const {
+  const auto* aggPlan = dt->aggregation;
+
+  PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
+  auto groupingKeys =
+      precompute.toColumns(aggPlan->groupingKeys(), &aggPlan->columns());
+
+  AggregateVector aggregates;
+  aggregates.reserve(aggPlan->aggregates().size());
+
+  for (const auto& agg : aggPlan->aggregates()) {
+    ExprCP condition = nullptr;
+    if (agg->condition()) {
+      condition = precompute.toColumn(agg->condition());
+    }
+    auto args = precompute.toColumns(
+        agg->args(), /*aliases=*/nullptr, /*preserveLiterals=*/true);
+    aggregates.emplace_back(make<Aggregate>(
+        agg->name(),
+        agg->value(),
+        std::move(args),
+        agg->functions(),
+        agg->isDistinct(),
+        condition,
+        agg->intermediateType()));
+  }
+
+  plan = std::move(precompute).maybeProject();
+
+  if (isSingleWorker_ && runnerOptions_.numDrivers == 1) {
+    auto* singleAgg = make<Aggregation>(
+        plan,
+        std::move(groupingKeys),
+        std::move(aggregates),
+        velox::core::AggregationNode::Step::kSingle,
+        aggPlan->columns());
+
+    state.placed.add(aggPlan);
+    state.addCost(*singleAgg);
+    plan = singleAgg;
+  } else {
+    auto* partialAgg = make<Aggregation>(
+        plan,
+        std::move(groupingKeys),
+        aggregates,
+        velox::core::AggregationNode::Step::kPartial,
+        aggPlan->intermediateColumns());
+
+    state.placed.add(aggPlan);
+    state.addCost(*partialAgg);
+    plan = repartitionForAgg(partialAgg, state);
+
+    const auto numKeys = aggPlan->groupingKeys().size();
+
+    ExprVector finalGroupingKeys;
+    finalGroupingKeys.reserve(numKeys);
+    for (auto i = 0; i < numKeys; ++i) {
+      finalGroupingKeys.push_back(aggPlan->intermediateColumns()[i]);
+    }
+
+    auto* finalAgg = make<Aggregation>(
+        plan,
+        std::move(finalGroupingKeys),
+        std::move(aggregates),
+        velox::core::AggregationNode::Step::kFinal,
+        aggPlan->columns());
+
+    state.addCost(*finalAgg);
+    plan = finalAgg;
+  }
+}
+
+void Optimization::addOrderBy(
+    DerivedTableCP dt,
+    RelationOpPtr& plan,
+    PlanState& state) const {
+  PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
+  auto orderKeys = precompute.toColumns(dt->orderKeys);
+
+  for (auto i = 0; i < orderKeys.size(); ++i) {
+    state.exprToColumn[dt->orderKeys[i]] = orderKeys[i];
+  }
+
+  state.placed.unionObjects(dt->orderKeys);
+
+  const auto& downstreamColumns = state.downstreamColumns();
+  for (auto* column : plan->columns()) {
+    if (downstreamColumns.contains(column)) {
+      precompute.toColumn(column);
+    }
+  }
+
+  auto* orderBy = make<OrderBy>(
+      std::move(precompute).maybeProject(),
+      std::move(orderKeys),
+      dt->orderTypes,
+      dt->limit,
+      dt->offset);
+  state.addCost(*orderBy);
+  plan = orderBy;
 }
 
 void Optimization::joinByIndex(
@@ -1709,9 +1768,9 @@ PlanP Optimization::makeDtPlan(
 
     PlanState inner(*this, &dt);
     if (key.firstTable->is(PlanType::kDerivedTableNode)) {
-      inner.setTargetColumnsForDt(key.columns);
+      inner.setTargetExprsForDt(key.columns);
     } else {
-      inner.targetColumns = key.columns;
+      inner.targetExprs = key.columns;
     }
 
     makeJoins(inner);

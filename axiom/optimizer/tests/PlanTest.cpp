@@ -38,6 +38,8 @@ class PlanTest : public test::QueryTestBase {
   static constexpr auto kTestConnectorId = "test";
 
   static void SetUpTestCase() {
+    test::QueryTestBase::SetUpTestCase();
+
     std::string path;
     if (FLAGS_data_path.empty()) {
       gTempDirectory = velox::exec::test::TempDirectoryPath::create();
@@ -50,16 +52,16 @@ class PlanTest : public test::QueryTestBase {
       }
     }
 
-    LocalRunnerTestBase::testDataPath_ = path;
-    LocalRunnerTestBase::localFileFormat_ = "parquet";
-    LocalRunnerTestBase::SetUpTestCase();
+    LocalRunnerTestBase::localDataPath_ = path;
+    LocalRunnerTestBase::localFileFormat_ =
+        velox::dwio::common::FileFormat::PARQUET;
 
     test::registerDfFunctions();
   }
 
   static void TearDownTestCase() {
-    LocalRunnerTestBase::TearDownTestCase();
     gTempDirectory.reset();
+    test::QueryTestBase::TearDownTestCase();
   }
 
   void SetUp() override {
@@ -679,8 +681,8 @@ TEST_F(PlanTest, filterBreakup) {
   }
 
   auto referenceBuilder = std::make_unique<exec::test::TpchQueryBuilder>(
-      dwio::common::FileFormat::PARQUET);
-  referenceBuilder->initialize(LocalRunnerTestBase::testDataPath_);
+      LocalRunnerTestBase::localFileFormat_);
+  referenceBuilder->initialize(LocalRunnerTestBase::localDataPath_);
 
   auto referencePlan = referenceBuilder->getQueryPlan(19).plan;
 
@@ -1262,45 +1264,23 @@ TEST_F(PlanTest, limitBeforeProject) {
 }
 
 TEST_F(PlanTest, limitAfterOrderBy) {
-  testConnector_->createTable("t", ROW({"a", "b"}, {INTEGER(), INTEGER()}));
-  {
+  testConnector_->createTable("t", ROW({"a", "b"}, INTEGER()));
+
+  for (auto limit : {10, 10'000}) {
     auto logicalPlan = lp::PlanBuilder{}
                            .tableScan(kTestConnectorId, "t", {"a", "b"})
                            .project({"a + b as c"})
                            .orderBy({"c"})
-                           .limit(10)
+                           .limit(limit)
                            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
 
-    // Extra projection is a bug:
-    // https://github.com/facebookexperimental/verax/issues/357
     auto matcher = core::PlanMatcherBuilder{}
                        .tableScan()
-                       .project({"a", "b", "a + b"})
-                       .topN(10)
-                       .project({"a + b"})
-                       .build();
-
-    EXPECT_TRUE(matcher->match(plan));
-  }
-  {
-    auto logicalPlan = lp::PlanBuilder{}
-                           .tableScan(kTestConnectorId, "t", {"a", "b"})
-                           .project({"a + b as c"})
-                           .orderBy({"c"})
-                           .limit(10'000)
-                           .build();
-
-    auto plan = toSingleNodePlan(logicalPlan);
-
-    // Extra projection is a bug:
-    // https://github.com/facebookexperimental/verax/issues/357
-    auto matcher = core::PlanMatcherBuilder{}
-                       .tableScan()
-                       .project({"a", "b", "a + b"})
-                       .topN(10'000)
-                       .project({"a + b"})
+                       .project({"a + b as c"})
+                       .topN(limit)
+                       .project({"c"})
                        .build();
 
     EXPECT_TRUE(matcher->match(plan));
@@ -1308,8 +1288,7 @@ TEST_F(PlanTest, limitAfterOrderBy) {
 }
 
 TEST_F(PlanTest, parallelCse) {
-  testConnector_->createTable(
-      "t", ROW({"a", "b", "c"}, {INTEGER(), INTEGER(), INTEGER()}));
+  testConnector_->createTable("t", ROW({"a", "b", "c"}, INTEGER()));
 
   auto logicalPlan =
       lp::PlanBuilder(/* allowCoersions */ true)
@@ -1385,9 +1364,9 @@ TEST_F(PlanTest, orderByDuplicateKeys) {
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan("t")
-                     .project({"a", "multiply(a, 2)"})
-                     .orderBy({"\"dt1.__p5\" DESC"})
-                     .project({"a * 2", "a * 2"})
+                     .project({"multiply(a, 2) as x"})
+                     .orderBy({"x DESC"})
+                     .project({"x", "x"})
                      .build();
 
   ASSERT_TRUE(matcher->match(plan));

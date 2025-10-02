@@ -998,9 +998,7 @@ void DerivedTable::makeInitialPlan() {
 
   auto optimization = queryCtx()->optimization();
   PlanState state(*optimization, this);
-  for (auto expr : exprs) {
-    state.targetColumns.unionColumns(expr);
-  }
+  state.targetExprs.unionObjects(exprs);
 
   std::cout << "DerivedTable structure:\n" << DerivedTablePrinter::toText(*this) << "\n";
 
