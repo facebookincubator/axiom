@@ -115,5 +115,36 @@ TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
   ASSERT_TRUE(matcher->match(plan));
 }
 
+TEST_F(AggregationPlanTest, dedupMask) {
+  testConnector_->createTable("t", ROW({"a", "b"}, {INTEGER(), INTEGER()}));
+
+  auto logicalPlan =
+      lp::PlanBuilder(/*enableCoersions=*/true)
+          .tableScan(kTestConnectorId, "t")
+          .project({"b > 0 as mask1", "b < 0 as mask2", "a", "b"})
+          .aggregate(
+              {},
+              {"sum(a) FILTER (WHERE mask1) AS sum1",
+               "sum(a) FILTER (WHERE mask2) AS sum2",
+               "sum(a) FILTER (WHERE mask1) AS sum3"})
+          .build();
+
+  auto plan = planVelox(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .project({"b > 0 as mask1", "a", "b < 0 as mask2"})
+                     .singleAggregation(
+                         {},
+                         {
+                             "sum(a) FILTER (WHERE mask1)",
+                             "sum(a) FILTER (WHERE mask2)",
+                         })
+                     .project({"sum1", "sum2", "sum1"})
+                     .build();
+
+  ASSERT_TRUE(matcher->match(plan));
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
