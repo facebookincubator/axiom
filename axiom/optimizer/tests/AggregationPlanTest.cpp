@@ -133,12 +133,15 @@ TEST_F(AggregationPlanTest, dedupMask) {
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan()
-                     .project({"b > 0 as mask1", "a", "b < 0 as mask2"})
+                     .project(
+                         {"cast(b as BIGINT) > 0 as mask1",
+                          "a",
+                          "cast(b as BIGINT) < 0 as mask2"})
                      .singleAggregation(
                          {},
                          {
-                             "sum(a) FILTER (WHERE mask1) as sum1",
-                             "sum(a) FILTER (WHERE mask2) as sum2",
+                             "sum(a) FILTER (WHERE mask1)",
+                             "sum(a) FILTER (WHERE mask2)",
                          })
                      .project({"sum1", "sum2", "sum1"})
                      .build();
