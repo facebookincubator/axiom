@@ -18,11 +18,11 @@ add_test(axiom_tpch_connector_metadata_test axiom_tpch_connector_metadata_test)
 target_link_libraries(
   axiom_tpch_connector_metadata_test
   axiom_tpch_connector_metadata
+  axiom_optimizer
   velox_tpch_connector
   axiom_runner_tests_utils
   velox_vector_fuzzer
   velox_vector_test_lib
-  axiom_schema_resolver
   velox_exec
   velox_exec_test_lib
   GTest::gtest

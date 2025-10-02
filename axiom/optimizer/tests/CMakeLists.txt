@@ -18,7 +18,6 @@ target_link_libraries(
   axiom_optimizer_tests_parquet_tpch
   axiom_logical_plan_builder
   axiom_optimizer
-  axiom_schema_resolver
   velox_tpch_gen
   axiom_tpch_connector_metadata
   axiom_hive_connector_metadata
@@ -34,7 +33,6 @@ add_library(axiom_optimizer_tests_query_test_base QueryTestBase.cpp)
 target_link_libraries(
   axiom_optimizer_tests_query_test_base
   axiom_optimizer
-  axiom_schema_resolver
   velox_tpch_gen
   axiom_hive_connector_metadata
   axiom_runner_tests_utils
@@ -132,7 +130,6 @@ target_link_libraries(
   axiom_runner_local_runner
   axiom_runner_multifragment_plan
   axiom_optimizer
-  axiom_schema_resolver
   axiom_hive_connector_metadata
   axiom_tpch_connector_metadata
   axiom_optimizer_tests_presto_parser
@@ -153,7 +150,7 @@ add_test(axiom_model_test axiom_model_test)
 
 target_link_libraries(
   axiom_model_test
-  axiom_model
+  axiom_optimizer
   Boost::headers
   glog::glog
   GTest::gtest
