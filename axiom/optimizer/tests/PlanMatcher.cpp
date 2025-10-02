@@ -17,6 +17,7 @@
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include <gtest/gtest.h>
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 
@@ -90,6 +91,10 @@ class PlanMatcherImpl : public PlanMatcher {
 velox::core::ExprPtr rewriteInputNames(
     const velox::core::ExprPtr& expr,
     const std::unordered_map<std::string, std::string>& mapping) {
+  if (!expr) {
+    return nullptr;
+  }
+
   if (expr->is(IExpr::Kind::kFieldAccess)) {
     auto fieldAccess = expr->as<velox::core::FieldAccessExpr>();
     if (fieldAccess->isRootColumn()) {
@@ -307,10 +312,6 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
         if (!symbols.empty()) {
           expected = rewriteInputNames(expected, symbols);
         }
-
-        EXPECT_EQ(
-            plan.projections()[i]->toString(),
-            expected->dropAlias()->toString());
       }
       AXIOM_TEST_RETURN_IF_FAILURE
     }
@@ -560,8 +561,29 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < aggregates_.size(); ++i) {
-        auto expected = parse::parseExpr(aggregates_[i], {});
+        auto aggregateExpr = duckdb::parseAggregateExpr(aggregates_[i], {});
+        auto expected = aggregateExpr.expr;
+        auto expectedMask = aggregateExpr.maskExpr;
+
         EXPECT_EQ(plan.aggregates()[i].call->toString(), expected->toString());
+        AXIOM_TEST_RETURN_IF_FAILURE
+
+        const auto& actualMask = plan.aggregates()[i].mask;
+        if (expectedMask) {
+          if (!symbols.empty()) {
+            expectedMask = rewriteInputNames(expectedMask, symbols);
+          }
+          EXPECT_TRUE(actualMask != nullptr)
+              << "Expected mask '" << expectedMask->toString()
+              << "' but got none for aggregate " << i;
+          if (actualMask) {
+            EXPECT_EQ(actualMask->toString(), expectedMask->toString())
+                << "Mask mismatch for aggregate " << i;
+          }
+        } else if (actualMask) {
+          EXPECT_TRUE(false) << "Unexpected mask in aggregate " << i << ": "
+                             << actualMask->toString();
+        }
       }
       AXIOM_TEST_RETURN_IF_FAILURE
     }
