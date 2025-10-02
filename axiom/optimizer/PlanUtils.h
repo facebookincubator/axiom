@@ -116,6 +116,7 @@ std::string conjunctsToString(const ExprVector& conjuncts);
 RelationOpPtr makeProjectWithWindows(
     RelationOpPtr input,
     ExprVector projectExprs,
-    ColumnVector projectColumns);
+    ColumnVector projectColumns,
+    bool isRedundant);
 
 } // namespace facebook::axiom::optimizer

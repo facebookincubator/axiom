@@ -57,8 +57,12 @@ TEST_F(HiveWindowQueriesTest, basicRowNumber) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        core::PlanMatcherBuilder().tableScan("nation").window().build();
+    std::cerr << plan->toString(true, false) << std::endl;
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .build();
     ASSERT_TRUE(matcher->match(plan));
   }
 
@@ -85,12 +89,16 @@ TEST_F(HiveWindowQueriesTest, exprFromWindows) {
   auto logicalPlan =
       lp::PlanBuilder()
           .tableScan(connectorId, "nation", names)
-          .project(
-              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn",
+               "rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          //   .project({"rnk + rn"})
+          .orderBy({"rnk + rn"})
           .build();
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
+    std::cerr << plan->toString(true, false) << std::endl;
     auto matcher =
         core::PlanMatcherBuilder().tableScan("nation").window().build();
     ASSERT_TRUE(matcher->match(plan));
@@ -382,6 +390,7 @@ TEST_F(HiveWindowQueriesTest, orderByWindowAlias) {
           .orderBy({"rn desc"})
           .build();
 
+  // DEDUP IT
   //   {
   //     auto plan = toSingleNodePlan(logicalPlan);
   //     std::cerr << plan->toString(true, true) << "\n";

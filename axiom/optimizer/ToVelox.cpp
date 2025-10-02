@@ -1369,7 +1369,7 @@ velox::core::PlanNodePtr ToVelox::makeWindow(
     const auto* column = op.windowExprColumn(i);
     const auto* window = op.windows[i];
 
-    windowColumnNames.emplace_back(outputName(column));
+    windowColumnNames.emplace_back(column->outputName());
 
     std::vector<velox::core::TypedExprPtr> functionArgs;
     functionArgs.reserve(window->args().size());

@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/PlanUtils.h"
 #include <folly/container/F14Map.h>
+#include <optimizer/PlanObject.h>
 #include <optimizer/QueryGraphContext.h>
 #include <algorithm>
 #include "axiom/optimizer/QueryGraph.h"
@@ -110,46 +111,57 @@ std::string conjunctsToString(const ExprVector& conjuncts) {
   return out.str();
 }
 
+class WindowsCollector {
+ public:
+  using SpecToWindows = folly::F14FastMap<WindowSpec, WindowVector, WindowSpec::Hasher>;
+  SpecToWindows collect(const ExprVector& exprs) {
+    for (const auto& expr : exprs) {
+      collect(*expr);
+    }
+    return specToWindows_;
+  }
+
+ private:
+  void collect(const Expr& expr) {
+    if (expr.is(PlanType::kWindowExpr)) {
+      const auto* window = expr.as<Window>();
+      specToWindows_.emplace(window->spec(), window);
+    }
+    
+    expr.subexpressions().forEach([&](const PlanObject& subexpr) {
+      if (subexpr.isExpr()) {
+        collect(*subexpr.as<Expr>());
+      }
+    });
+  }
+
+  SpecToWindows specToWindows_;
+};
+
 RelationOpPtr makeProjectWithWindows(
     RelationOpPtr input,
     ExprVector projectExprs,
-    ColumnVector projectColumns) {
-  folly::F14FastMap<WindowSpec, std::vector<size_t>, WindowSpec::Hasher>
-      specToWindows;
-
-  for (size_t i = 0; i < projectExprs.size(); ++i) {
-    if (projectExprs[i]->is(PlanType::kWindowExpr)) {
-      const auto* window = projectExprs[i]->as<Window>();
-      specToWindows[window->spec()].emplace_back(i);
-    }
-  }
+    ColumnVector projectColumns,
+    bool isRedundant) {
+  auto specToWindows = WindowsCollector().collect(projectExprs);
 
   if (specToWindows.empty()) {
-    return make<Project>(input, projectExprs, projectColumns);
+    return make<Project>(input, projectExprs, projectColumns, isRedundant);
   }
-  // projectExprs[0].()
 
   RelationOpPtr result = input;
   ColumnVector allColumns = result->columns();
-  for (const auto& [spec, indices] : specToWindows) {
-    WindowVector windows;
-    windows.reserve(indices.size());
-    for (size_t idx : indices) {
-      windows.push_back(projectExprs[idx]->as<Window>());
-      allColumns.push_back(projectColumns[idx]);
-      projectExprs[idx] = projectColumns[idx];
-    }
-
+  for (auto&& [spec, windows] : specToWindows) {
     result = make<WindowOp>(
-        result,
+        std::move(result),
         spec.partitionKeys,
         spec.orderKeys,
         spec.orderTypes,
-        windows,
+        std::move(windows),
         allColumns);
   }
 
-  return make<Project>(result, projectExprs, projectColumns);
+  return make<Project>(result, projectExprs, projectColumns, isRedundant);
 }
 
 } // namespace facebook::axiom::optimizer
