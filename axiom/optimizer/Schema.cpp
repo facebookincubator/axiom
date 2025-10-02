@@ -432,7 +432,6 @@ std::string Distribution::toString() const {
   if (!partition.empty()) {
     out << "P ";
     exprsToString(partition, out);
-    out << " " << distributionType.numPartitions << " ways";
   }
   if (!orderKeys.empty()) {
     out << " O ";

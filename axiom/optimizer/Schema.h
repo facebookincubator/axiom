@@ -124,14 +124,13 @@ enum class ShuffleMode : uint8_t {
   kHive,
 };
 
-/// Distribution of data. 'numPartitions' is 1 if the data is not partitioned.
+/// Distribution of data.
 /// There is copartitioning if the DistributionType is the same on both sides
 /// and both sides have an equal number of 1:1 type matched partitioning keys.
 struct DistributionType {
   bool operator==(const DistributionType& other) const = default;
 
   LocusCP locus{nullptr};
-  int32_t numPartitions{1};
   bool isGather{false};
   ShuffleMode mode{ShuffleMode::kNone};
 
@@ -199,7 +198,7 @@ struct Distribution {
   DistributionType distributionType;
 
   // Partitioning columns. The values of these columns determine which of
-  // 'numPartitions' contains any given row. This does not specify the
+  // paritions contains any given row. This does not specify the
   // partition function (e.g. Hive bucket or range partition).
   ExprVector partition;
 
@@ -225,7 +224,7 @@ struct Distribution {
   // because lineitem has an average of 4 repeats of orderkey.
   float spacing{-1};
 
-  // True if the data is replicated to 'numPartitions'.
+  // True if the data is replicated to all partitions.
   bool isBroadcast{false};
 };
 
