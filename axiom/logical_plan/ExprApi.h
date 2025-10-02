@@ -61,7 +61,7 @@ class SubqueryExpr : public core::IExpr {
     return std::make_shared<SubqueryExpr>(subquery_);
   }
 
-  ExprPtr dropAlias() const {
+  ExprPtr dropAlias() const final {
     return std::make_shared<SubqueryExpr>(subquery_);
   }
 
