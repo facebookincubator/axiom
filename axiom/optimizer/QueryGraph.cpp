@@ -131,22 +131,6 @@ std::string Call::toString() const {
   return out.str();
 }
 
-std::string Aggregate::toString() const {
-  std::stringstream out;
-  out << name() << "(";
-  if (isDistinct_) {
-    out << "DISTINCT ";
-  }
-  for (auto i = 0; i < args().size(); ++i) {
-    out << args()[i]->toString() << (i == args().size() - 1 ? "" : ", ");
-  }
-  out << ")";
-  if (condition_) {
-    out << " FILTER (WHERE " << condition_->toString() << ")";
-  }
-  return out.str();
-}
-
 std::string Field::toString() const {
   std::stringstream out;
   out << base_->toString() << ".";

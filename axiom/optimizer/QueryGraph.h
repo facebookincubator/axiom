@@ -869,8 +869,6 @@ class Aggregate : public Call {
     return rawInputType_;
   }
 
-  std::string toString() const override;
-
  private:
   bool isDistinct_;
   ExprCP condition_;

@@ -116,7 +116,7 @@ TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
 }
 
 TEST_F(AggregationPlanTest, dedupMask) {
-  testConnector_->createTable("t", ROW({"a", "b"}, {INTEGER(), INTEGER()}));
+  testConnector_->createTable("t", ROW({"a", "b"}, {INTEGER()}));
 
   auto logicalPlan =
       lp::PlanBuilder(/*enableCoersions=*/true)
