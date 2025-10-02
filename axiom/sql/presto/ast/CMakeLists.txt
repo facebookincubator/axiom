@@ -14,5 +14,4 @@
 
 add_library(axiom_sql_presto_ast AstBuilder.cpp AstNodesAll.cpp AstPrinter.cpp)
 
-target_link_libraries(
-  axiom_sql_presto_ast axiom_sql_presto_grammar velox_exception)
+target_link_libraries(axiom_sql_presto_ast axiom_sql_presto_grammar velox_exception)

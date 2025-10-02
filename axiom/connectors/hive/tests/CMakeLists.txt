@@ -27,4 +27,5 @@ target_link_libraries(
   velox_exec
   velox_exec_test_lib
   GTest::gtest
-  GTest::gtest_main)
+  GTest::gtest_main
+)

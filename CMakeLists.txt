@@ -38,34 +38,33 @@ list(
   CMAKE_MODULE_PATH
   "${PROJECT_SOURCE_DIR}/CMake"
   "${PROJECT_SOURCE_DIR}/CMake/resolve_dependency_modules"
-  "${PROJECT_SOURCE_DIR}/velox/CMake")
+  "${PROJECT_SOURCE_DIR}/velox/CMake"
+)
 include(ResolveDependency)
 
-set(VELOX_BUILD_VECTOR_TEST_UTILS
-    ON
-    CACHE BOOL "Velox vector test utilities (VectorMaker).")
+set(VELOX_BUILD_VECTOR_TEST_UTILS ON CACHE BOOL "Velox vector test utilities (VectorMaker).")
 
 set(VELOX_ENABLE_PARQUET ON)
 set(VELOX_BUILD_TEST_UTILS ON)
 set(VELOX_BUILD_TESTING OFF)
 
-set(VELOX_DEPENDENCY_SOURCE
-    AUTO
-    CACHE STRING "Default dependency source: AUTO SYSTEM or BUNDLED.")
+set(VELOX_DEPENDENCY_SOURCE AUTO CACHE STRING "Default dependency source: AUTO SYSTEM or BUNDLED.")
 
 option(AXIOM_ENABLE_CCACHE "Use ccache if installed." ON)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
-set(BOOST_INCLUDE_LIBRARIES
-    atomic
-    context
-    date_time
-    filesystem
-    program_options
-    regex
-    system
-    thread)
+set(
+  BOOST_INCLUDE_LIBRARIES
+  atomic
+  context
+  date_time
+  filesystem
+  program_options
+  regex
+  system
+  thread
+)
 
 velox_set_source(Boost)
 velox_resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
@@ -76,26 +75,22 @@ if(COMPILER_HAS_W_STRINGOP_OVERREAD)
   string(APPEND CMAKE_CXX_FLAGS " -Wno-stringop-overread")
 endif()
 
-check_cxx_compiler_flag("-Wdeprecated-declarations"
-                        COMPILER_HAS_W_DEPRECATED_DECLARATIONS)
+check_cxx_compiler_flag("-Wdeprecated-declarations" COMPILER_HAS_W_DEPRECATED_DECLARATIONS)
 if(COMPILER_HAS_W_DEPRECATED_DECLARATIONS)
   string(APPEND CMAKE_CXX_FLAGS " -Wno-deprecated-declarations")
 endif()
 
-check_cxx_compiler_flag("-Wmaybe-uninitialized"
-                        COMPILER_HAS_W_MAYBE_UNINITIALIZED)
+check_cxx_compiler_flag("-Wmaybe-uninitialized" COMPILER_HAS_W_MAYBE_UNINITIALIZED)
 if(COMPILER_HAS_W_MAYBE_UNINITIALIZED)
   string(APPEND CMAKE_CXX_FLAGS " -Wno-maybe-uninitialized")
 endif()
 
-check_cxx_compiler_flag("-Wunknown-warning-option"
-                        COMPILER_HAS_W_UNKNOWN_WARNING_OPTION)
+check_cxx_compiler_flag("-Wunknown-warning-option" COMPILER_HAS_W_UNKNOWN_WARNING_OPTION)
 if(COMPILER_HAS_W_UNKNOWN_WARNING_OPTION)
   string(APPEND CMAKE_CXX_FLAGS " -Wno-unknown-warning-option")
 endif()
 
-check_cxx_compiler_flag("-Wnullability-completeness"
-                        COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
+check_cxx_compiler_flag("-Wnullability-completeness" COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
 if(COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
   string(APPEND CMAKE_CXX_FLAGS " -Wno-nullability-completeness")
 endif()
@@ -106,7 +101,8 @@ execute_process(
     bash -c
     "( source ${CMAKE_CURRENT_SOURCE_DIR}/velox/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
   OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
-  RESULT_VARIABLE COMMAND_STATUS)
+  RESULT_VARIABLE COMMAND_STATUS
+)
 
 if(COMMAND_STATUS EQUAL "1")
   message(FATAL_ERROR "Unable to determine compiler flags!")
@@ -114,10 +110,12 @@ endif()
 message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
 
-if(AXIOM_ENABLE_CCACHE
-   AND NOT CMAKE_C_COMPILER_LAUNCHER
-   AND NOT CMAKE_CXX_COMPILER_LAUNCHER
-   AND NOT CMAKE_CUDA_COMPILER_LAUNCHER)
+if(
+  AXIOM_ENABLE_CCACHE
+  AND NOT CMAKE_C_COMPILER_LAUNCHER
+  AND NOT CMAKE_CXX_COMPILER_LAUNCHER
+  AND NOT CMAKE_CUDA_COMPILER_LAUNCHER
+)
   find_program(CCACHE_FOUND ccache)
 
   if(CCACHE_FOUND)

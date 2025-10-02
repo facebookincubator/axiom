@@ -40,7 +40,8 @@ add_library(
   Subfields.cpp
   ToGraph.cpp
   ToVelox.cpp
-  VeloxHistory.cpp)
+  VeloxHistory.cpp
+)
 
 add_dependencies(axiom_optimizer velox_hive_connector)
 
@@ -50,4 +51,5 @@ target_link_libraries(
   axiom_connector_metadata
   axiom_logical_plan
   axiom_runner_multifragment_plan
-  velox_connector)
+  velox_connector
+)

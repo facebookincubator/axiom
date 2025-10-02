@@ -15,8 +15,11 @@
 add_library(axiom_tpch_connector_metadata OBJECT TpchConnectorMetadata.cpp)
 
 target_link_libraries(
-  axiom_tpch_connector_metadata axiom_connector_metadata velox_tpch_connector
-  velox_tpch_gen)
+  axiom_tpch_connector_metadata
+  axiom_connector_metadata
+  velox_tpch_connector
+  velox_tpch_gen
+)
 
 if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
