@@ -13,9 +13,12 @@
 # limitations under the License.
 
 add_library(
-  axiom_hive_connector_metadata OBJECT
-  HiveConnectorMetadata.cpp LocalHiveConnectorMetadata.cpp
-  StatisticsBuilder.cpp)
+  axiom_hive_connector_metadata
+  OBJECT
+  HiveConnectorMetadata.cpp
+  LocalHiveConnectorMetadata.cpp
+  StatisticsBuilder.cpp
+)
 
 target_link_libraries(
   axiom_hive_connector_metadata
@@ -34,7 +37,8 @@ target_link_libraries(
   velox_s3fs
   velox_hdfs
   velox_gcs
-  velox_abfs)
+  velox_abfs
+)
 
 if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)

@@ -21,4 +21,5 @@ target_link_libraries(
   axiom_sql_presto_grammar
   GTest::gtest
   GTest::gtest_main
-  antlr4_shared)
+  antlr4_shared
+)

@@ -19,7 +19,8 @@ target_link_libraries(
   axiom_connector_metadata
   velox_common_base
   velox_memory
-  velox_connector)
+  velox_connector
+)
 
 add_executable(axiom_test_connector_test TestConnectorTest.cpp)
 
@@ -34,4 +35,5 @@ target_link_libraries(
   velox_exec
   velox_vector_test_lib
   gtest
-  gtest_main)
+  gtest_main
+)
