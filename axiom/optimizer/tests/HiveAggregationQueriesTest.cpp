@@ -58,19 +58,22 @@ TEST_F(HiveAggregationQueriesTest, mask) {
     const auto& fragments = plan->fragments();
     ASSERT_EQ(2, fragments.size());
 
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
-                       .project()
-                       .aggregation()
-                       .partitionedOutput()
-                       .build();
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .project({"n_nationkey > 10 as mask", "n_nationkey", "n_regionkey"})
+            .partialAggregation(
+                {}, {"sum(n_nationkey) FILTER (mask)", "avg(n_regionkey)"})
+            .partitionedOutput()
+            .build();
 
     ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
 
+    // Verify mask is NOT present in final aggregation
     matcher = core::PlanMatcherBuilder()
                   .exchange()
                   .localPartition()
-                  .finalAggregation()
+                  .finalAggregation({}, {"sum(sum)", "avg(avg)"})
                   .build();
 
     ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));

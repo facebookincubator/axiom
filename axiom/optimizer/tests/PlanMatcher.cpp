@@ -759,10 +759,28 @@ PlanMatcherBuilder& PlanMatcherBuilder::partialAggregation() {
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::partialAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<AggregationMatcher>(
+      matcher_, AggregationNode::Step::kPartial, groupingKeys, aggregates);
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::finalAggregation() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<AggregationMatcher>(
       matcher_, AggregationNode::Step::kFinal);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::finalAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<AggregationMatcher>(
+      matcher_, AggregationNode::Step::kFinal, groupingKeys, aggregates);
   return *this;
 }
 
