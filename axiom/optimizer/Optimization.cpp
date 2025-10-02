@@ -67,7 +67,7 @@ PlanAndStats Optimization::toVeloxPlan(
   auto veloxQueryCtx = velox::core::QueryCtx::create();
   velox::exec::SimpleExpressionEvaluator evaluator(veloxQueryCtx.get(), &pool);
 
-  auto schemaResolver = std::make_shared<SchemaResolver>();
+  auto schemaResolver = std::make_shared<connector::SchemaResolver>();
 
   VeloxHistory history;
 

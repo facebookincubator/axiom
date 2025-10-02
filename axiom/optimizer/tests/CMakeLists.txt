@@ -109,8 +109,6 @@ add_executable(
   Genies.cpp
   PrestoParserTest.cpp
   TestConnectorQueryTest.cpp
-  SchemaUtilsTest.cpp
-  SchemaResolverTest.cpp
 )
 
 add_test(axiom_optimizer_tests axiom_optimizer_tests)

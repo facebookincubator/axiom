@@ -22,7 +22,7 @@ add_library(
 
 target_link_libraries(
   axiom_hive_connector_metadata
-  axiom_connector_metadata
+  axiom_connectors
   velox_hive_connector
   velox_type_fbhive
   velox_dwio_catalog_fbhive

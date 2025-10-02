@@ -15,9 +15,9 @@
  */
 
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
-#include "axiom/optimizer/SchemaResolver.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -136,7 +136,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
 
-  optimizer::SchemaResolver schemaResolver;
+  connector::SchemaResolver schemaResolver;
   optimizer::Schema veraxSchema("test", &schemaResolver, /*locus=*/nullptr);
 
   optimizer::Optimization opt(

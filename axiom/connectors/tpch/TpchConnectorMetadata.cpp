@@ -16,7 +16,7 @@
 
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 
-#include "axiom/optimizer/SchemaUtils.h"
+#include "axiom/connectors/SchemaUtils.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
@@ -235,7 +235,7 @@ const folly::F14FastMap<std::string, const Column*>& TpchTable::columnMap()
 }
 
 TablePtr TpchConnectorMetadata::findTable(std::string_view name) {
-  optimizer::TableNameParser parser{name};
+  TableNameParser parser{name};
   if (!parser.valid() || !isValidTpchTableName(parser.table()) ||
       (parser.schema().has_value() &&
        !isValidTpchSchema(parser.schema().value()))) {
