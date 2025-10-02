@@ -41,6 +41,7 @@ list(
   "${PROJECT_SOURCE_DIR}/velox/CMake"
 )
 include(ResolveDependency)
+include(AxiomUtils)
 
 set(VELOX_BUILD_VECTOR_TEST_UTILS ON CACHE BOOL "Velox vector test utilities (VectorMaker).")
 

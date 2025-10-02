@@ -12,14 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_test_connector TestConnector.cpp)
+axiom_add_library(axiom_test_connector OBJECT TestConnector.cpp)
 
-target_link_libraries(
-  axiom_test_connector
-  axiom_connector_metadata
-  velox_common_base
-  velox_memory
-  velox_connector
+axiom_link_libraries(axiom_test_connector axiom_connector_metadata
+                     velox_common_base velox_memory velox_connector
 )
 
 add_executable(axiom_test_connector_test TestConnectorTest.cpp)

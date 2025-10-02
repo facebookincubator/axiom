@@ -16,7 +16,7 @@ if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
-add_library(
+axiom_add_library(
   axiom_optimizer
   BitSet.cpp
   Cost.cpp
@@ -43,13 +43,7 @@ add_library(
   VeloxHistory.cpp
 )
 
-add_dependencies(axiom_optimizer velox_hive_connector)
-
-target_link_libraries(
-  axiom_optimizer
-  velox_core
-  axiom_connector_metadata
-  axiom_logical_plan
-  axiom_runner_multifragment_plan
-  velox_connector
+axiom_link_libraries(
+  axiom_optimizer velox_core axiom_connector_metadata axiom_logical_plan
+  axiom_runner_multifragment_plan velox_connector
 )
