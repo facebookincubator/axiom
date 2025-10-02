@@ -14,7 +14,6 @@
 
 add_library(
   axiom_hive_connector_metadata
-  OBJECT
   HiveConnectorMetadata.cpp
   LocalHiveConnectorMetadata.cpp
   StatisticsBuilder.cpp

@@ -103,7 +103,6 @@ add_executable(
   PlanTest.cpp
   UnnestTest.cpp
   ParquetTpchTest.cpp
-  QueryTestBase.cpp
   SubfieldTest.cpp
   FeatureGen.cpp
   Genies.cpp
