@@ -92,15 +92,20 @@ TEST_F(HiveWindowQueriesTest, exprFromWindows) {
           .window(
               {"row_number() over (partition by n_regionkey order by n_nationkey) as rn",
                "rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
-          //   .project({"rnk + rn"})
           .orderBy({"rnk + rn"})
+          .project({"rn", "rnk", "rnk + rn"})
           .build();
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    std::cerr << plan->toString(true, false) << std::endl;
-    auto matcher =
-        core::PlanMatcherBuilder().tableScan("nation").window().build();
+    std::cerr << plan->toString(true, true) << std::endl;
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .window()
+                       .project()
+                       .orderBy()
+                       .build();
     ASSERT_TRUE(matcher->match(plan));
   }
 
@@ -114,7 +119,7 @@ TEST_F(HiveWindowQueriesTest, exprFromWindows) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveWindowQueriesTest, multipleWindowFunctions) {
+TEST_F(HiveWindowQueriesTest, manyWindowsSameSpec) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -135,8 +140,11 @@ TEST_F(HiveWindowQueriesTest, multipleWindowFunctions) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        core::PlanMatcherBuilder().tableScan("nation").window().build();
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .build();
     ASSERT_TRUE(matcher->match(plan));
   }
 
@@ -284,8 +292,11 @@ TEST_F(HiveWindowQueriesTest, mixedFrameTypesAndBounds) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher =
-        core::PlanMatcherBuilder().tableScan("nation").window().build();
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .build();
     ASSERT_TRUE(matcher->match(plan));
   }
 
@@ -412,7 +423,7 @@ TEST_F(HiveWindowQueriesTest, orderByWindowAlias) {
           .orderBy({"rn desc"}, false)
           .planNode();
 
-  checkSame(logicalPlan, referencePlan);
+  checkSame(logicalPlan, referencePlan);`
 }
 
 } // namespace

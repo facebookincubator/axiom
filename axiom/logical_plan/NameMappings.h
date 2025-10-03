@@ -88,7 +88,7 @@ class NameMappings {
 
   // Mapping from names to IDs. Unique names may appear twice: w/ and w/o an
   // alias.
-  folly::F14FastMap<QualifiedName, std::string, QualifiedNameHasher> mappings_;
+  std::unordered_map<QualifiedName, std::string, QualifiedNameHasher> mappings_;
 };
 
 } // namespace facebook::axiom::logical_plan

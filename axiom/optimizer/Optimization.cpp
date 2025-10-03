@@ -705,7 +705,8 @@ void Optimization::addPostprocess(
         plan,
         exprs,
         dt->columns,
-        isRedundantProject(plan, exprs, dt->columns));
+        isRedundantProject(plan, exprs, dt->columns),
+        dt);
   }
 
   if (!dt->hasOrderBy() && dt->limit > kMaxLimitBeforeProject) {

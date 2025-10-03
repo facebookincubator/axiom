@@ -551,18 +551,17 @@ PlanBuilder& PlanBuilder::window(
     exprs.emplace_back(std::move(expr));
   }
 
-  // Create a project node with all input columns plus window expressions
-  std::vector<std::string> allNames;
-  std::vector<ExprPtr> allExprs;
-
-  // Add all input columns
   const auto& inputType = node_->outputType();
+  std::vector<std::string> allNames;
+  allNames.reserve(inputType->size() + exprs.size());
+  std::vector<ExprPtr> allExprs;
+  allExprs.reserve(inputType->size() + exprs.size());
+
   for (size_t i = 0; i < inputType->size(); ++i) {
     allNames.push_back(inputType->nameOf(i));
     allExprs.push_back(std::make_shared<InputReferenceExpr>(inputType->childAt(i), inputType->nameOf(i)));
   }
 
-  // Add window expressions
   for (size_t i = 0; i < exprs.size(); ++i) {
     allNames.push_back(outputNames[i]);
     allExprs.push_back(exprs[i]);

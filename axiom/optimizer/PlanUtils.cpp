@@ -19,6 +19,7 @@
 #include <optimizer/PlanObject.h>
 #include <optimizer/QueryGraphContext.h>
 #include <algorithm>
+#include <unordered_map>
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/RelationOp.h"
 
@@ -113,7 +114,7 @@ std::string conjunctsToString(const ExprVector& conjuncts) {
 
 class WindowsCollector {
  public:
-  using SpecToWindows = folly::F14FastMap<WindowSpec, WindowVector, WindowSpec::Hasher>;
+  using SpecToWindows = std::unordered_map<WindowSpec, WindowVector, WindowSpec::Hasher>;
   SpecToWindows collect(const ExprVector& exprs) {
     for (const auto& expr : exprs) {
       collect(*expr);
@@ -123,14 +124,18 @@ class WindowsCollector {
 
  private:
   void collect(const Expr& expr) {
+    if (expr.is(PlanType::kColumnExpr)) {
+      return;
+    }
+
     if (expr.is(PlanType::kWindowExpr)) {
       const auto* window = expr.as<Window>();
-      specToWindows_.emplace(window->spec(), window);
+      specToWindows_[window->spec()].emplace_back(window);
     }
-    
-    expr.subexpressions().forEach([&](const PlanObject& subexpr) {
-      if (subexpr.isExpr()) {
-        collect(*subexpr.as<Expr>());
+
+    expr.subexpressions().forEach([&](const PlanObject* subexpr) {
+      if (subexpr->isExpr()) {
+        collect(*subexpr->as<Expr>());
       }
     });
   }
@@ -138,11 +143,59 @@ class WindowsCollector {
   SpecToWindows specToWindows_;
 };
 
+// Recursively replaces Window expressions with their corresponding columns
+ExprCP replaceWindows(
+    ExprCP expr,
+    const folly::F14FastMap<const Window*, ColumnCP>& windowToColumn) {
+  if (expr->is(PlanType::kColumnExpr)) {
+    return expr;
+  }
+
+  if (expr->is(PlanType::kWindowExpr)) {
+    auto it = windowToColumn.find(expr->as<Window>());
+    VELOX_CHECK(
+        it != windowToColumn.end(),
+        "Window expression not found in mapping");
+    return it->second;
+  }
+
+  // Recursively replace in subexpressions
+  ExprVector newArgs;
+  bool changed = false;
+  expr->subexpressions().forEach([&](const PlanObject* subexpr) {
+    if (subexpr->isExpr()) {
+      auto newExpr = replaceWindows(subexpr->as<Expr>(), windowToColumn);
+      newArgs.push_back(newExpr);
+      if (newExpr != subexpr) {
+        changed = true;
+      }
+    }
+  });
+
+  if (!changed) {
+    return expr;
+  }
+
+  if (expr->is(PlanType::kCallExpr)) {
+    const auto* call = expr->as<Call>();
+    return make<Call>(
+        call->name(),
+        call->value(),
+        std::move(newArgs),
+        call->functions());
+  }
+
+  // For other expression types, return the original
+  // (they shouldn't contain Window expressions in practice)
+  return expr;
+}
+
 RelationOpPtr makeProjectWithWindows(
     RelationOpPtr input,
     ExprVector projectExprs,
     ColumnVector projectColumns,
-    bool isRedundant) {
+    bool isRedundant,
+    DerivedTableCP dt) {
   auto specToWindows = WindowsCollector().collect(projectExprs);
 
   if (specToWindows.empty()) {
@@ -150,18 +203,40 @@ RelationOpPtr makeProjectWithWindows(
   }
 
   RelationOpPtr result = input;
+  folly::F14FastMap<const Window*, ColumnCP> windowToColumn;
+
   ColumnVector allColumns = result->columns();
   for (auto&& [spec, windows] : specToWindows) {
-    result = make<WindowOp>(
+
+    for (const auto* window : windows) {
+      auto* windowColumn = make<Column>(
+          toName(fmt::format("__window{}", window->id())),
+          dt,
+          window->value());
+
+      allColumns.push_back(windowColumn);
+      windowToColumn[window] = windowColumn;
+    }
+
+    auto* windowOp = make<WindowOp>(
         std::move(result),
         spec.partitionKeys,
         spec.orderKeys,
         spec.orderTypes,
-        std::move(windows),
+        windows,
         allColumns);
+
+    result = windowOp;
   }
 
-  return make<Project>(result, projectExprs, projectColumns, isRedundant);
+  // Replace Window expressions with their corresponding columns
+  ExprVector replacedExprs;
+  replacedExprs.reserve(projectExprs.size());
+  for (const auto* expr : projectExprs) {
+    replacedExprs.emplace_back(replaceWindows(expr, windowToColumn));
+  }
+
+  return make<Project>(result, std::move(replacedExprs), projectColumns, isRedundant);
 }
 
 } // namespace facebook::axiom::optimizer

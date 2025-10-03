@@ -101,7 +101,7 @@ class PrecomputeProjection {
   /// @returns the original 'input' with an optional ProjectOp on top.
   RelationOpPtr maybeProject() && {
     if (needsProject_) {
-      return makeProjectWithWindows(input_, projectExprs_, projectColumns_, /*redundant=*/false);
+      return makeProjectWithWindows(input_, projectExprs_, projectColumns_, /*redundant=*/false, dt_);
     }
 
     return input_;

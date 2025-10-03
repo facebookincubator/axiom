@@ -18,6 +18,7 @@
 
 #include <folly/Range.h>
 #include "axiom/logical_plan/Expr.h"
+#include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/RelationOp.h"
 
@@ -117,6 +118,7 @@ RelationOpPtr makeProjectWithWindows(
     RelationOpPtr input,
     ExprVector projectExprs,
     ColumnVector projectColumns,
-    bool isRedundant);
+    bool isRedundant,
+    DerivedTableCP dt);
 
 } // namespace facebook::axiom::optimizer
