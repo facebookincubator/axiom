@@ -34,9 +34,10 @@ TEST_F(HiveAggregationQueriesTest, mask) {
   auto logicalPlan =
       lp::PlanBuilder(context)
           .tableScan("nation")
-          .project({"n_nationkey > 10 as mask", "n_nationkey", "n_regionkey"})
           .aggregate(
-              {}, {"sum(n_nationkey) FILTER (WHERE mask)", "avg(n_regionkey)"})
+              {},
+              {"sum(n_nationkey) FILTER (WHERE n_nationkey > 10)",
+               "avg(n_regionkey)"})
           .build();
 
   {

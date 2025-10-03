@@ -118,16 +118,14 @@ TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
 TEST_F(AggregationPlanTest, dedupMask) {
   testConnector_->createTable("t", ROW({"a", "b"}, {INTEGER()}));
 
-  auto logicalPlan =
-      lp::PlanBuilder(/*enableCoersions=*/true)
-          .tableScan(kTestConnectorId, "t")
-          .project({"b > 0 as mask1", "b < 0 as mask2", "a", "b"})
-          .aggregate(
-              {},
-              {"sum(a) FILTER (WHERE mask1) AS sum1",
-               "sum(a) FILTER (WHERE mask2) AS sum2",
-               "sum(a) FILTER (WHERE mask1) AS sum3"})
-          .build();
+  auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
+                         .tableScan(kTestConnectorId, "t")
+                         .aggregate(
+                             {},
+                             {"sum(a) FILTER (WHERE b > 0) AS sum1",
+                              "sum(a) FILTER (WHERE b < 0) AS sum2",
+                              "sum(a) FILTER (WHERE b > 0) AS sum3"})
+                         .build();
 
   auto plan = planVelox(logicalPlan);
 
