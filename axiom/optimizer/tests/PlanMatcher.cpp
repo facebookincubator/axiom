@@ -545,6 +545,7 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
     }
 
+    std::unordered_map<std::string, std::string> newSymbols = symbols;
     if (!groupingKeys_.empty() || !aggregates_.empty()) {
       // Verify grouping keys.
       EXPECT_EQ(plan.groupingKeys().size(), groupingKeys_.size());
@@ -563,9 +564,14 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       for (auto i = 0; i < aggregates_.size(); ++i) {
         auto aggregateExpr = duckdb::parseAggregateExpr(aggregates_[i], {});
         auto expected = aggregateExpr.expr;
+        if (expected->alias()) {
+          newSymbols[expected->alias().value()] = plan.aggregateNames()[i];
+        }
         auto expectedMask = aggregateExpr.maskExpr;
 
-        EXPECT_EQ(plan.aggregates()[i].call->toString(), expected->toString());
+        EXPECT_EQ(
+            plan.aggregates()[i].call->toString(),
+            expected->dropAlias()->toString());
         AXIOM_TEST_RETURN_IF_FAILURE
 
         const auto& actualMask = plan.aggregates()[i].mask;
@@ -587,7 +593,7 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
     }
 
-    return MatchResult::success();
+    return MatchResult::success(std::move(newSymbols));
   }
 
  private:

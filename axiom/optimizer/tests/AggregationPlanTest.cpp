@@ -138,10 +138,10 @@ TEST_F(AggregationPlanTest, dedupMask) {
                      .singleAggregation(
                          {},
                          {
-                             "sum(a) FILTER (WHERE mask1)",
-                             "sum(a) FILTER (WHERE mask2)",
+                             "sum(a) FILTER (WHERE mask1) as s1",
+                             "sum(a) FILTER (WHERE mask2) as s2",
                          })
-                     .project({"sum1", "sum2", "sum1"})
+                     .project({"s1", "s2", "s1"})
                      .build();
 
   ASSERT_TRUE(matcher->match(plan));
