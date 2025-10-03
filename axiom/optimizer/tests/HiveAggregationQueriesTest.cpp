@@ -70,7 +70,7 @@ TEST_F(HiveAggregationQueriesTest, mask) {
 
     ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
 
-    // Verify mask is NOT present in final aggregation
+    // Verify mask is NOT present in final aggregation.
     matcher = core::PlanMatcherBuilder()
                   .exchange()
                   .localPartition()

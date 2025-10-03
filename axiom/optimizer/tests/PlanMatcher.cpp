@@ -574,20 +574,16 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
             expected->dropAlias()->toString());
         AXIOM_TEST_RETURN_IF_FAILURE
 
-        const auto& actualMask = plan.aggregates()[i].mask;
+        const auto& mask = plan.aggregates()[i].mask;
+        EXPECT_EQ(mask != nullptr, expectedMask != nullptr);
+        AXIOM_TEST_RETURN_IF_FAILURE
+
         if (expectedMask) {
           if (!symbols.empty()) {
             expectedMask = rewriteInputNames(expectedMask, symbols);
           }
-          EXPECT_TRUE(actualMask != nullptr)
-              << "Expected mask '" << expectedMask->toString()
-              << "' but got none for aggregate " << i;
-          AXIOM_TEST_RETURN_IF_FAILURE
-          EXPECT_EQ(actualMask->toString(), expectedMask->toString())
+          EXPECT_EQ(mask->toString(), expectedMask->toString())
               << "Mask mismatch for aggregate " << i;
-        } else if (actualMask) {
-          EXPECT_TRUE(false) << "Unexpected mask in aggregate " << i << ": "
-                             << actualMask->toString();
         }
       }
       AXIOM_TEST_RETURN_IF_FAILURE
