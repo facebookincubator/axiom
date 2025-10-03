@@ -308,6 +308,7 @@ void LocalRunner::makeStages(
           velox::exec::Task::ExecutionMode::kParallel,
           consumer,
           0,
+          /*spillDiskOpts=*/std::nullopt,
           onError);
       stages_.back().push_back(task);
 
