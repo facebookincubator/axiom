@@ -656,7 +656,6 @@ class UnnestNode : public LogicalPlanNode {
 
 using UnnestNodePtr = std::shared_ptr<const UnnestNode>;
 
-/// Values of enum corresponds to axiom::connector::WriteKind.
 /// Specifies what type of write is intended when initiating or concluding a
 /// write operation.
 enum class WriteKind {

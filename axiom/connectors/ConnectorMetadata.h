@@ -417,21 +417,32 @@ struct LookupKeys {
   bool isAscending{true};
 };
 
-/// Describes how to repartition data before a TableWriter.
-struct WritePartitionInfo {
-  /// Columns for partitioning. Names refer to the column names in the insert
-  /// table handle. Empty if any worker can write any row.
-  const std::vector<std::string> columns;
+/// Contains the information for an in-progress write operation. This may
+/// include insert, update, or delete of an existing table, or insertion into a
+/// new table. The ConnectorWriteHandle is generated when a table write
+/// operation is initiated in beginWrite and used to commit or abort any
+/// completed write operations in finishWrite or abortWrite. Derived classes of
+/// the write handle must contain all the information required by the connector
+/// to finish or abort a write operation.
+class ConnectorWriteHandle {
+ public:
+  explicit ConnectorWriteHandle(
+      velox::connector::ConnectorInsertTableHandlePtr veloxHandle)
+      : veloxHandle_(std::move(veloxHandle)) {}
 
-  /// Specifies the partition function. nullptr if 'columns' is empty.
-  const std::shared_ptr<const velox::core::PartitionFunctionSpec> partitionSpec;
+  virtual ~ConnectorWriteHandle() = default;
 
-  /// Maximum number of workers. For example, having more workers than there are
-  /// partitions makes no sense.
-  const int32_t maxWorkers;
+  const velox::connector::ConnectorInsertTableHandlePtr& veloxHandle() const {
+    return veloxHandle_;
+  }
+
+ private:
+  const velox::connector::ConnectorInsertTableHandlePtr veloxHandle_;
 };
 
-/// Representts session status for update operations. May for example
+using ConnectorWriteHandlePtr = std::shared_ptr<ConnectorWriteHandle>;
+
+/// Represents session status for update operations. May for example
 /// encapsulate a transaction state. The minimal implementation does nothing,
 /// which amounts to all write operations being non-isolated and autocommitting.
 /// Connector specific implementations have their specific transaction
@@ -446,21 +457,25 @@ using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;
 /// Specifies what type of write is intended when initiating or concluding a
 /// write operation.
 enum class WriteKind {
-  // Rows are added and all columns must be specified for the TableWriter. This
-  // covers insert, create table and replacing a Hive partition and any other
-  // use that adds whole rows.
-  kInsert = 1,
+  // A write operation to a new table which does not yet exist in the connector.
+  // Covers both creation of an empty table and create as select operations.
+  kCreate = 1,
+
+  // Rows are added and all columns must be specified for the TableWriter.
+  // Covers insert, Hive partition replacement or any other operation which adds
+  // whole rows.
+  kInsert = 2,
 
   // Individual rows are deleted. Only row ids as per
   // ConnectorMetadata::rowIdHandles() are passed to the TableWriter.
-  kDelete = 2,
+  kDelete = 3,
 
   // Column values in individual rows are changed. The TableWriter
   // gets first the row ids as per ConnectorMetadata::rowIdHandles()
   // and then new values for the columns being changed. The new values
   // may overlap with row ids if the row id is a set of primary key
   // columns.
-  kUpdate = 3,
+  kUpdate = 4,
 };
 
 AXIOM_DECLARE_ENUM_NAME(WriteKind);
@@ -536,79 +551,80 @@ class ConnectorMetadata {
   /// through 'this'.
   virtual ConnectorSplitManager* splitManager() = 0;
 
-  /// Creates a table. 'tableName' is a name with optional 'schema.'
-  /// followed by table name. The connector gives the first part of
-  /// the three part name. The table properties are in 'options'. All
-  /// options must be understood by the connector. To create a table,
-  /// first make a ConnectorSession in a connector dependent manner,
-  /// then call createTable, then access the created layout(s) and
-  /// make an insert table handle for writing each. Insert data into
-  /// each layout and then call finishWrite on each. Normally a table
-  /// has one layout but if many exist, as in secondary indices or
-  /// materializations that are not transparently handled by an
-  /// outside system, the optimizer is expected to make plans that
-  /// write to all. In such cases the plan typically has a different
-  /// table writer for each materialization. Any transaction semantics
-  /// are connector dependent. Throws an error if the table exists,
-  /// unless 'errorIfExists' is false, in which case the operation returns
-  /// silently.  finishWrite should be called for all insert table handles
-  /// to complete the write also if no data is added. To create an empty
-  /// table, call createTable and then commit if the connector is
-  /// transactional. to create the table with data, insert into all
-  /// materializations, call finishWrite on each and then commit the whole
-  /// transaction if the connector requires that.
-  virtual void createTable(
+  /// Creates a table. 'tableName' is a name with optional 'schema.' followed by
+  /// table name. The connector gives the first part of the three part name. The
+  /// table properties are in 'options'. All options must be understood by the
+  /// connector. To create a table, first make a ConnectorSession in a connector
+  /// dependent manner, then call createTable to retrieve a Table object. Any
+  /// transaction semantics are connector-dependent, and the ConnectorSession
+  /// may be null for connectors which do not require it. Throws an error if the
+  /// table exists. finishWrite should be called to commit the new table and any
+  /// writes even if no data is added. To create an empty table, call
+  /// createTable, then beginWrite/finishWrite with the generated table object.
+  /// To create the table with data, call createTable to generate a Table, call
+  /// beginWrite with the Table object, perform writes against the table using
+  /// the returned insert handle, then finishWrite to commit the changes. The
+  /// table is not available via the findTable interface until after finishWrite
+  /// completes.
+  virtual TablePtr createTable(
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
       const folly::F14FastMap<std::string, std::string>& options,
-      const ConnectorSessionPtr& session,
-      bool errorIfExists = true,
-      TableKind tableKind = TableKind::kTable) = 0;
+      const ConnectorSessionPtr& session) {
+    VELOX_UNSUPPORTED();
+  }
 
-  /// Creates an insert table handle for use with Velox TableWriter. '
-  /// 'rowType' is the type of one row, including any partitioning or
-  /// bucketing columns. The order may be significant, for example
-  /// Hive needs partitioning columns to be last in column order. If
-  /// the write is a delete or update the row will reflect this,
-  /// starting with the columns identified by rowIdHandles().  The set
-  /// of options and their meaning is connector dependent. A connector
-  /// is expected to throw an error if it does not understand all
-  /// options. if the connector has transaction support, sets up a
-  /// transaction if one does not exist. The handle is created in one
-  /// process, which is considered to initiate the transaction. If
-  /// data is added to the table, finishWrite must be called after the
-  /// last writer is finished. Whether this autocommits a transaction
-  /// depends on the connector and session settings.
-  virtual velox::connector::ConnectorInsertTableHandlePtr
-  createInsertTableHandle(
-      const TableLayout& layout,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options,
+  /// Begins the process of a write operation by creating an associated write
+  /// handle. This handle must contain a valid physical insert handle for use
+  /// with Velox TableWriter. To perform a write operation, first make a
+  /// ConnectorSession in a connector dependent manner, then call beginWrite to
+  /// generate the write handle. Insert data using the insert handle provided by
+  /// the write handle and call finishWrite. Transaction semantics are
+  /// connector-dependent, and ConnectorSession may be null for connectors which
+  /// do not require it.
+  virtual ConnectorWriteHandlePtr beginWrite(
+      const TablePtr& table,
       WriteKind kind,
-      const ConnectorSessionPtr& session) = 0;
+      const ConnectorSessionPtr& session) {
+    VELOX_UNSUPPORTED();
+  }
 
-  /// Returns specification for repartitioning data before the table writer
-  /// stage.
-  virtual WritePartitionInfo writePartitionInfo(
-      const velox::connector::ConnectorInsertTableHandlePtr& handle) = 0;
-
-  /// Finalizes a table write. This runs once after all the table writers have
-  /// finished. The result sets from the table writer fragments are passed as
-  /// 'writerResults'. Their format and meaning is connector specific. the
-  /// RowType is given by the outputType() of the TableWriter.
-  virtual void finishWrite(
-      const TableLayout& layout,
-      const velox::connector::ConnectorInsertTableHandlePtr& handle,
+  /// Finalizes the table write operation represented by the provided handle.
+  /// This runs once after all the table writers have finished. The result sets
+  /// from the table writer fragments are passed as 'writerResults'. Their
+  /// format and meaning is connector-specific. finishWrite returns a
+  /// ContinueFuture which must be waited for to finalize the commit. If the
+  /// implementation is synchronous, finishWrite should return an
+  /// already-fulfilled future to the caller. ConnectorSession may be null for
+  /// connectors which do not require it.
+  virtual velox::ContinueFuture finishWrite(
+      const ConnectorWriteHandlePtr& handle,
       const std::vector<velox::RowVectorPtr>& writerResult,
-      WriteKind kind,
-      const ConnectorSessionPtr& session) = 0;
+      const ConnectorSessionPtr& session) {
+    VELOX_UNSUPPORTED();
+  }
+
+  /// Aborts an abandoned or failed write operation. Abort is not guaranteed to
+  /// run in all failure cases. After abort is triggered for the write operation
+  /// represented by ConnectorWriteHandle, this handle can no longer be used to
+  /// commit a write operation with finishWrite. If this function is not
+  /// implemented by a connector, abort will be a no-op. If the abort is a
+  /// synchronous operation, the connector should perform the abort and return
+  /// an already-fulfilled future.
+  virtual velox::ContinueFuture abortWrite(
+      const ConnectorWriteHandlePtr& handle,
+      const ConnectorSessionPtr& session) {
+    return velox::ContinueFuture();
+  }
 
   /// Returns column handles whose value uniquely identifies a row for creating
   /// an update or delete record. These may be for example some connector
   /// specific opaque row id or primary key columns.
   virtual std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
       const TableLayout& layout,
-      WriteKind kind) = 0;
+      WriteKind kind) {
+    VELOX_UNSUPPORTED();
+  }
 };
 
 } // namespace facebook::axiom::connector

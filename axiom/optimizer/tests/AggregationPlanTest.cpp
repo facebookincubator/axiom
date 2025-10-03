@@ -70,7 +70,7 @@ class AggregationPlanTest : public testing::Test {
 };
 
 TEST_F(AggregationPlanTest, dedupGroupingKeysAndAggregates) {
-  testConnector_->createTable(
+  testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
 
   {
@@ -94,7 +94,7 @@ TEST_F(AggregationPlanTest, dedupGroupingKeysAndAggregates) {
 }
 
 TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
-  testConnector_->createTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
 
   auto logicalPlan = lp::PlanBuilder{}
                          .tableScan(kTestConnectorId, "t")
@@ -116,7 +116,7 @@ TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
 }
 
 TEST_F(AggregationPlanTest, dedupMask) {
-  testConnector_->createTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
   auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
                          .tableScan(kTestConnectorId, "t")

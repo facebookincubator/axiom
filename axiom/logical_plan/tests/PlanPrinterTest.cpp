@@ -41,7 +41,7 @@ class PlanPrinterTest : public testing::Test {
 
     auto connector =
         std::make_shared<connector::TestConnector>(kTestConnectorId);
-    connector->createTable(
+    connector->addTable(
         "test",
         ROW({"a", "b", "c", "d", "e"},
             {BIGINT(),

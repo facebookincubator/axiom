@@ -108,17 +108,17 @@ HiveConnectorMetadata::createTableHandle(
       dataColumns ? dataColumns : layout.rowType());
 }
 
-velox::connector::ConnectorInsertTableHandlePtr
-HiveConnectorMetadata::createInsertTableHandle(
-    const TableLayout& layout,
-    const velox::RowTypePtr& rowType,
-    const folly::F14FastMap<std::string, std::string>& options,
+ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
+    const TablePtr& table,
     WriteKind kind,
     const ConnectorSessionPtr& session) {
   ensureInitialized();
-  VELOX_CHECK_EQ(kind, WriteKind::kInsert, "Only insert supported");
+  VELOX_CHECK(
+      kind == WriteKind::kCreate || kind == WriteKind::kInsert,
+      "Only CREATE/INSERT supported, not {}",
+      WriteKindName::toName(kind));
 
-  auto* hiveLayout = dynamic_cast<const HiveTableLayout*>(&layout);
+  auto* hiveLayout = dynamic_cast<const HiveTableLayout*>(table->layouts()[0]);
   VELOX_CHECK_NOT_NULL(hiveLayout);
   auto storageFormat = hiveLayout->fileFormat();
 
@@ -126,25 +126,20 @@ HiveConnectorMetadata::createInsertTableHandle(
   const std::shared_ptr<velox::dwio::common::WriterOptions> writerOptions;
 
   velox::common::CompressionKind compressionKind;
-
-  auto it = options.find("compression_kind");
-  if (it != options.end()) {
+  auto it =
+      hiveLayout->table().options().find(HiveWriteOptions::kCompressionKind);
+  if (it != hiveLayout->table().options().end()) {
     compressionKind = velox::common::stringToCompressionKind(it->second);
   } else {
-    it = layout.table().options().find("compression_kind");
-    if (it != layout.table().options().end()) {
-      compressionKind = velox::common::stringToCompressionKind(it->second);
-    } else {
-      compressionKind = velox::common::CompressionKind::CompressionKind_ZSTD;
-    }
+    compressionKind = velox::common::CompressionKind::CompressionKind_ZSTD;
   }
 
   std::vector<velox::connector::hive::HiveColumnHandlePtr> inputColumns;
-  inputColumns.reserve(rowType->size());
-  for (const auto& name : rowType->names()) {
+  inputColumns.reserve(hiveLayout->rowType()->size());
+  for (const auto& name : hiveLayout->rowType()->names()) {
     inputColumns.push_back(std::static_pointer_cast<
                            const velox::connector::hive::HiveColumnHandle>(
-        createColumnHandle(layout, name)));
+        createColumnHandle(*hiveLayout, name)));
   }
 
   std::shared_ptr<const velox::connector::hive::HiveBucketProperty>
@@ -152,21 +147,21 @@ HiveConnectorMetadata::createInsertTableHandle(
   if (hiveLayout->numBuckets().has_value()) {
     std::vector<std::string> names;
     std::vector<velox::TypePtr> types;
-    for (auto& column : layout.partitionColumns()) {
+    for (auto& column : hiveLayout->partitionColumns()) {
       names.push_back(column->name());
       types.push_back(column->type());
     }
     std::vector<
         std::shared_ptr<const velox::connector::hive::HiveSortingColumn>>
         sortedBy;
-    sortedBy.reserve(layout.orderColumns().size());
-    for (auto i = 0; i < layout.orderColumns().size(); ++i) {
+    sortedBy.reserve(hiveLayout->orderColumns().size());
+    for (auto i = 0; i < hiveLayout->orderColumns().size(); ++i) {
       sortedBy.push_back(
           std::make_shared<velox::connector::hive::HiveSortingColumn>(
-              layout.orderColumns()[i]->name(),
+              hiveLayout->orderColumns()[i]->name(),
               velox::core::SortOrder(
-                  layout.sortOrder()[i].isAscending,
-                  layout.sortOrder()[i].isNullsFirst)));
+                  hiveLayout->sortOrder()[i].isAscending,
+                  hiveLayout->sortOrder()[i].isNullsFirst)));
     }
 
     bucketProperty =
@@ -177,26 +172,28 @@ HiveConnectorMetadata::createInsertTableHandle(
             std::move(types),
             std::move(sortedBy));
   }
-  return std::make_shared<velox::connector::hive::HiveInsertTableHandle>(
-      inputColumns,
-      makeLocationHandle(tablePath(layout.table().name()), std::nullopt),
-      storageFormat,
-      bucketProperty,
-      compressionKind,
-      serdeParameters,
-      writerOptions,
-      false);
+  auto insertHandle =
+      std::make_shared<velox::connector::hive::HiveInsertTableHandle>(
+          inputColumns,
+          makeLocationHandle(tablePath(table->name()), std::nullopt),
+          storageFormat,
+          bucketProperty,
+          compressionKind,
+          serdeParameters,
+          writerOptions);
+  return std::make_shared<HiveConnectorWriteHandle>(
+      std::move(insertHandle), table, kind);
 }
 
 void HiveConnectorMetadata::validateOptions(
     const folly::F14FastMap<std::string, std::string>& options) const {
   static folly::F14FastSet<std::string> allowed = {
-      "bucketed_by",
-      "sorted_by",
-      "bucket_count",
-      "partitioned_by",
-      "file_format",
-      "compression_kind"};
+      HiveWriteOptions::kBucketedBy,
+      HiveWriteOptions::kBucketCount,
+      HiveWriteOptions::kPartitionedBy,
+      HiveWriteOptions::kSortedBy,
+      HiveWriteOptions::kFileFormat,
+      HiveWriteOptions::kCompressionKind};
   for (auto& pair : options) {
     if (allowed.find(pair.first) == allowed.end()) {
       VELOX_USER_FAIL("Option {} is not supported", pair.first);

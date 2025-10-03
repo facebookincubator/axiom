@@ -67,7 +67,7 @@ class SchemaResolverTest : public ::testing::Test {
 TEST_F(SchemaResolverTest, bareTable) {
   auto lookup = "table";
   auto expect = "baseschema.table";
-  baseCatalog_.connector->createTable(expect);
+  baseCatalog_.connector->addTable(expect);
 
   auto table = resolver_->findTable("base", lookup);
   ASSERT_NE(table, nullptr);
@@ -96,7 +96,7 @@ TEST_F(SchemaResolverTest, invalidName) {
 
 TEST_F(SchemaResolverTest, tablePlusSchema) {
   auto lookup = "newschema.table";
-  baseCatalog_.connector->createTable(lookup);
+  baseCatalog_.connector->addTable(lookup);
   auto table = resolver_->findTable("base", lookup);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->name(), lookup);
@@ -108,14 +108,14 @@ TEST_F(SchemaResolverTest, tablePlusSchema) {
 TEST_F(SchemaResolverTest, tablePlusSchemaPlusCatalog) {
   auto lookup = "other.otherschema.table";
   auto expect = "otherschema.table";
-  otherCatalog_.connector->createTable(expect);
+  otherCatalog_.connector->addTable(expect);
   auto table = resolver_->findTable("other", lookup);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->name(), expect);
 
   lookup = "base.baseschema.table";
   expect = "baseschema.table";
-  baseCatalog_.connector->createTable(expect);
+  baseCatalog_.connector->addTable(expect);
   table = resolver_->findTable("base", lookup);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->name(), expect);
@@ -123,7 +123,7 @@ TEST_F(SchemaResolverTest, tablePlusSchemaPlusCatalog) {
 
 TEST_F(SchemaResolverTest, catalogMismatch) {
   auto lookupName = "other.otherschema.table";
-  otherCatalog_.connector->createTable(lookupName);
+  otherCatalog_.connector->addTable(lookupName);
   VELOX_ASSERT_THROW(
       resolver_->findTable("base", lookupName),
       "Input catalog must match table catalog specifier");
