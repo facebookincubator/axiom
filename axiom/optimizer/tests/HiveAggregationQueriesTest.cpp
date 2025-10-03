@@ -27,25 +27,7 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class HiveAggregationQueriesTest : public test::HiveQueriesTestBase {
- protected:
-  core::PlanNodePtr toSingleNodePlan(
-      const lp::LogicalPlanNodePtr& logicalPlan,
-      int32_t numDrivers = 1) {
-    auto plan =
-        planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers})
-            .plan;
-    EXPECT_EQ(1, plan->fragments().size());
-    return plan->fragments().at(0).fragment.planNode;
-  }
-
-  runner::MultiFragmentPlanPtr toDistributedPlan(
-      const lp::LogicalPlanNodePtr& logicalPlan) {
-    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan;
-    EXPECT_GT(plan->fragments().size(), 1);
-    return plan;
-  }
-};
+class HiveAggregationQueriesTest : public test::HiveQueriesTestBase {};
 
 TEST_F(HiveAggregationQueriesTest, mask) {
   lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
@@ -61,33 +43,38 @@ TEST_F(HiveAggregationQueriesTest, mask) {
   {
     auto plan = toSingleNodePlan(logicalPlan);
 
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
-                       .project()
-                       .singleAggregation()
-                       .build();
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .project({"n_nationkey > 10 as mask", "n_nationkey", "n_regionkey"})
+            .singleAggregation(
+                {}, {"sum(n_nationkey) FILTER (mask)", "avg(n_regionkey)"})
+            .build();
 
     ASSERT_TRUE(matcher->match(plan));
   }
 
   {
-    auto plan = toDistributedPlan(logicalPlan);
+    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan;
     const auto& fragments = plan->fragments();
     ASSERT_EQ(2, fragments.size());
 
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
-                       .project()
-                       .aggregation()
-                       .partitionedOutput()
-                       .build();
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .project({"n_nationkey > 10 as mask", "n_nationkey", "n_regionkey"})
+            .partialAggregation(
+                {}, {"sum(n_nationkey) FILTER (mask)", "avg(n_regionkey)"})
+            .partitionedOutput()
+            .build();
 
     ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
 
+    // Verify mask is NOT present in final aggregation.
     matcher = core::PlanMatcherBuilder()
                   .exchange()
                   .localPartition()
-                  .finalAggregation()
+                  .finalAggregation({}, {"sum(sum)", "avg(avg)"})
                   .build();
 
     ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
@@ -116,13 +103,13 @@ TEST_F(HiveAggregationQueriesTest, distinct) {
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
-                       .singleAggregation()
+                       .singleAggregation({}, {"count(distinct n_regionkey)"})
                        .build();
 
     ASSERT_TRUE(matcher->match(plan));
 
     VELOX_ASSERT_THROW(
-        toDistributedPlan(logicalPlan),
+        planVelox(logicalPlan),
         "DISTINCT option for aggregation is supported only in single worker, single thread mode");
   }
 
@@ -150,13 +137,16 @@ TEST_F(HiveAggregationQueriesTest, orderBy) {
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan("nation")
-                     .singleAggregation()
+                     .singleAggregation(
+                         {"n_regionkey"},
+                         {"array_agg(n_nationkey ORDER BY n_nationkey DESC)",
+                          "array_agg(n_name ORDER BY n_nationkey)"})
                      .build();
 
   ASSERT_TRUE(matcher->match(plan));
 
   VELOX_ASSERT_THROW(
-      toDistributedPlan(logicalPlan),
+      planVelox(logicalPlan),
       "ORDER BY option for aggregation is supported only in single worker, single thread mode");
 
   auto referencePlan =
@@ -192,7 +182,7 @@ TEST_F(HiveAggregationQueriesTest, maskWithOrderBy) {
   ASSERT_TRUE(matcher->match(plan));
 
   VELOX_ASSERT_THROW(
-      toDistributedPlan(logicalPlan),
+      planVelox(logicalPlan),
       "ORDER BY option for aggregation is supported only in single worker, single thread mode");
 
   auto referencePlan =
@@ -225,7 +215,7 @@ TEST_F(HiveAggregationQueriesTest, distinctWithOrderBy) {
       toSingleNodePlan(logicalPlan),
       "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
   VELOX_ASSERT_THROW(
-      toDistributedPlan(logicalPlan),
+      planVelox(logicalPlan),
       "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
 }
 

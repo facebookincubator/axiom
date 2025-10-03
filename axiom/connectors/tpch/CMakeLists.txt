@@ -12,15 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(axiom_tpch_connector_metadata OBJECT
-                  TpchConnectorMetadata.cpp)
+add_library(axiom_tpch_connector_metadata OBJECT TpchConnectorMetadata.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   axiom_tpch_connector_metadata
   axiom_connector_metadata
-  axiom_schema_resolver
   velox_tpch_connector
-  velox_tpch_gen)
+  velox_tpch_gen
+)
 
 if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)

@@ -16,14 +16,13 @@ if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
-velox_add_library(axiom_runner_multifragment_plan MultiFragmentPlan.cpp)
+add_library(axiom_runner_multifragment_plan MultiFragmentPlan.cpp)
 
-velox_link_libraries(axiom_runner_multifragment_plan velox_common_base
-                     velox_memory velox_core)
+target_link_libraries(axiom_runner_multifragment_plan velox_common_base velox_memory velox_core)
 
-velox_add_library(axiom_runner_local_runner LocalRunner.cpp Runner.cpp)
+add_library(axiom_runner_local_runner LocalRunner.cpp Runner.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   axiom_runner_local_runner
   axiom_runner_multifragment_plan
   axiom_connector_metadata
@@ -33,4 +32,5 @@ velox_link_libraries(
   velox_dwio_common
   velox_dwio_dwrf_writer
   velox_exec
-  velox_cursor)
+  velox_cursor
+)

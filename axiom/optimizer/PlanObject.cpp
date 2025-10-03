@@ -53,30 +53,7 @@ size_t PlanObject::hash() const {
 }
 
 void PlanObjectSet::unionColumns(ExprCP expr) {
-  switch (expr->type()) {
-    case PlanType::kLiteralExpr:
-      return;
-    case PlanType::kColumnExpr:
-      add(expr);
-      return;
-    case PlanType::kFieldExpr:
-      unionColumns(expr->as<Field>()->base());
-      return;
-    case PlanType::kAggregateExpr: {
-      auto condition = expr->as<Aggregate>()->condition();
-      if (condition) {
-        unionColumns(condition);
-      }
-    }
-      [[fallthrough]];
-    case PlanType::kCallExpr: {
-      auto call = reinterpret_cast<const Call*>(expr);
-      unionSet(call->columns());
-      return;
-    }
-    default:
-      VELOX_UNREACHABLE();
-  }
+  unionSet(expr->columns());
 }
 
 void PlanObjectSet::unionColumns(const ExprVector& exprs) {

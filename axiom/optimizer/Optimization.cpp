@@ -104,7 +104,7 @@ PlanP Optimization::bestPlan() {
   targetColumns.unionObjects(root_->columns);
 
   topState_.dt = root_;
-  topState_.setTargetColumnsForDt(targetColumns);
+  topState_.setTargetExprsForDt(targetColumns);
 
   makeJoins(topState_);
 
@@ -681,6 +681,7 @@ void Optimization::addPostprocess(
 
   if (!dt->having.empty()) {
     auto filter = make<Filter>(plan, dt->having);
+    state.placed.unionObjects(dt->having);
     state.addCost(*filter);
     plan = filter;
   }
@@ -688,17 +689,7 @@ void Optimization::addPostprocess(
   // We probably want to make this decision based on cost.
   static constexpr int64_t kMaxLimitBeforeProject = 8'192;
   if (dt->hasOrderBy()) {
-    PrecomputeProjection precompute(plan, dt);
-    auto orderKeys = precompute.toColumns(dt->orderKeys);
-
-    auto* orderBy = make<OrderBy>(
-        std::move(precompute).maybeProject(),
-        std::move(orderKeys),
-        dt->orderTypes,
-        dt->limit,
-        dt->offset);
-    state.addCost(*orderBy);
-    plan = orderBy;
+    addOrderBy(dt, plan, state);
   } else if (dt->hasLimit() && dt->limit <= kMaxLimitBeforeProject) {
     auto limit = make<Limit>(plan, dt->limit, dt->offset);
     state.addCost(*limit);
@@ -706,11 +697,9 @@ void Optimization::addPostprocess(
   }
 
   if (!dt->columns.empty()) {
+    ExprVector exprs = state.exprsToColumns(dt->exprs);
     plan = make<Project>(
-        plan,
-        dt->exprs,
-        dt->columns,
-        isRedundantProject(plan, dt->exprs, dt->columns));
+        plan, exprs, dt->columns, isRedundantProject(plan, exprs, dt->columns));
   }
 
   if (!dt->hasOrderBy() && dt->limit > kMaxLimitBeforeProject) {
@@ -740,6 +729,7 @@ void Optimization::addAggregation(
     }
     auto args = precompute.toColumns(
         agg->args(), /*aliases=*/nullptr, /*preserveLiterals=*/true);
+    auto orderKeys = precompute.toColumns(agg->orderKeys());
     aggregates.emplace_back(make<Aggregate>(
         agg->name(),
         agg->value(),
@@ -747,7 +737,9 @@ void Optimization::addAggregation(
         agg->functions(),
         agg->isDistinct(),
         condition,
-        agg->intermediateType()));
+        agg->intermediateType(),
+        std::move(orderKeys),
+        agg->orderTypes()));
   }
 
   plan = std::move(precompute).maybeProject();
@@ -793,6 +785,36 @@ void Optimization::addAggregation(
     state.addCost(*finalAgg);
     plan = finalAgg;
   }
+}
+
+void Optimization::addOrderBy(
+    DerivedTableCP dt,
+    RelationOpPtr& plan,
+    PlanState& state) const {
+  PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
+  auto orderKeys = precompute.toColumns(dt->orderKeys);
+
+  for (auto i = 0; i < orderKeys.size(); ++i) {
+    state.exprToColumn[dt->orderKeys[i]] = orderKeys[i];
+  }
+
+  state.placed.unionObjects(dt->orderKeys);
+
+  const auto& downstreamColumns = state.downstreamColumns();
+  for (auto* column : plan->columns()) {
+    if (downstreamColumns.contains(column)) {
+      precompute.toColumn(column);
+    }
+  }
+
+  auto* orderBy = make<OrderBy>(
+      std::move(precompute).maybeProject(),
+      std::move(orderKeys),
+      dt->orderTypes,
+      dt->limit,
+      dt->offset);
+  state.addCost(*orderBy);
+  plan = orderBy;
 }
 
 void Optimization::joinByIndex(
@@ -1743,9 +1765,9 @@ PlanP Optimization::makeDtPlan(
 
     PlanState inner(*this, &dt);
     if (key.firstTable->is(PlanType::kDerivedTableNode)) {
-      inner.setTargetColumnsForDt(key.columns);
+      inner.setTargetExprsForDt(key.columns);
     } else {
-      inner.targetColumns = key.columns;
+      inner.targetExprs = key.columns;
     }
 
     makeJoins(inner);

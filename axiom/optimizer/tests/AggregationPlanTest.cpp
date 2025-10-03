@@ -15,6 +15,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <velox/type/Type.h>
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/Optimization.h"
@@ -115,58 +116,36 @@ TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
   ASSERT_TRUE(matcher->match(plan));
 }
 
-TEST_F(AggregationPlanTest, dedupAggSameOptions) {
-  testConnector_->createTable("t", ROW({"a", "b"}, {INTEGER(), INTEGER()}));
+TEST_F(AggregationPlanTest, dedupMask) {
+  testConnector_->createTable("t", ROW({"a", "b"}, BIGINT()));
 
-  auto logicalPlan =
-      lp::PlanBuilder(/*enableCoersions=*/true)
-          .tableScan(kTestConnectorId, "t")
-          .aggregate(
-              {},
-              {"array_agg(a ORDER BY a, a, a) AS agg1",
-               "array_agg(a ORDER BY a DESC) AS agg2",
-               "array_agg(a ORDER BY a, a) AS agg3",
-               "array_agg(a ORDER BY a) AS agg4",
-               "sum(a) FILTER (WHERE b > 0) AS sum1",
-               "sum(a) FILTER (WHERE b < 0) AS sum2",
-               "sum(a) FILTER (WHERE b > 0) AS sum3",
-               "array_agg(a ORDER BY a) FILTER (WHERE b > 0) AS combo1",
-               "array_agg(a ORDER BY a DESC) FILTER (WHERE b > 0) AS combo2",
-               "array_agg(a ORDER BY a) FILTER (WHERE b > 0) AS combo3"})
-          .build();
+  auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
+                         .tableScan(kTestConnectorId, "t")
+                         .aggregate(
+                             {},
+                             {"sum(a) FILTER (WHERE b > 0)",
+                              "sum(a) FILTER (WHERE b < 0)",
+                              "sum(a) FILTER (WHERE b > 0)"})
+                         .build();
 
   auto plan = planVelox(logicalPlan);
 
-  auto matcher =
-      core::PlanMatcherBuilder()
-          .tableScan()
-          .project(
-              {"a", "gt(cast(b as BIGINT), 0)", "lt(cast(b as BIGINT), 0)"})
-          .singleAggregation(
-              {},
-              {"array_agg(a ORDER BY a)",
-               "array_agg(a ORDER BY a DESC)",
-               "sum(a) FILTER (WHERE \"dt1.__p14\")",
-               "sum(a) FILTER (WHERE \"dt1.__p18\")",
-               "array_agg(a ORDER BY a) FILTER (WHERE \"dt1.__p14\")",
-               "array_agg(a ORDER BY a DESC) FILTER (WHERE \"dt1.__p14\")"})
-          .project(
-              {"agg1",
-               "agg2",
-               "agg1",
-               "agg1",
-               "sum1",
-               "sum2",
-               "sum1",
-               "combo1",
-               "combo2",
-               "combo1"})
-          .build();
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .project({"b > 0 as m1", "a", "b < 0 as m2"})
+                     .singleAggregation(
+                         {},
+                         {
+                             "sum(a) FILTER (WHERE m1) as s1",
+                             "sum(a) FILTER (WHERE m2) as s2",
+                         })
+                     .project({"s1", "s2", "s1"})
+                     .build();
 
   ASSERT_TRUE(matcher->match(plan));
 }
 
-TEST_F(AggregationPlanTest, orderByDedupInAggregates) {
+TEST_F(AggregationPlanTest, orderByDedup) {
   testConnector_->createTable("t", ROW({"a", "b"}, INTEGER()));
 
   auto logicalPlan = lp::PlanBuilder()
@@ -184,6 +163,56 @@ TEST_F(AggregationPlanTest, orderByDedupInAggregates) {
           .tableScan()
           .singleAggregation(
               {}, {"array_agg(a ORDER BY a)", "array_agg(b ORDER BY b, a)"})
+          .build();
+
+  ASSERT_TRUE(matcher->match(plan));
+}
+
+TEST_F(AggregationPlanTest, dedupSameOptions) {
+  testConnector_->createTable("t", ROW({"a", "b"}, BIGINT()));
+
+  auto logicalPlan =
+      lp::PlanBuilder(/*enableCoersions=*/true)
+          .tableScan(kTestConnectorId, "t")
+          .aggregate(
+              {},
+              {"array_agg(a ORDER BY a, a, a)",
+               "array_agg(a ORDER BY a DESC)",
+               "array_agg(a ORDER BY a, a)",
+               "array_agg(a ORDER BY a)",
+               "sum(a) FILTER (WHERE b > 0)",
+               "sum(a) FILTER (WHERE b < 0)",
+               "sum(a) FILTER (WHERE b > 0)",
+               "array_agg(a ORDER BY a) FILTER (WHERE b > 0)",
+               "array_agg(a ORDER BY a DESC) FILTER (WHERE b > 0)",
+               "array_agg(a ORDER BY a) FILTER (WHERE b > 0)"})
+          .build();
+
+  auto plan = planVelox(logicalPlan);
+
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan()
+          .project({"a", "gt(b, 0) as m1", "lt(b, 0) as m2"})
+          .singleAggregation(
+              {},
+              {"array_agg(a ORDER BY a) as agg1",
+               "array_agg(a ORDER BY a DESC) as agg2",
+               "sum(a) FILTER (WHERE m1) as sum1",
+               "sum(a) FILTER (WHERE m2) as sum2",
+               "array_agg(a ORDER BY a) FILTER (WHERE m1) as combo1",
+               "array_agg(a ORDER BY a DESC) FILTER (WHERE m1) as combo2"})
+          .project(
+              {"agg1",
+               "agg2",
+               "agg1",
+               "agg1",
+               "sum1",
+               "sum2",
+               "sum1",
+               "combo1",
+               "combo2",
+               "combo1"})
           .build();
 
   ASSERT_TRUE(matcher->match(plan));

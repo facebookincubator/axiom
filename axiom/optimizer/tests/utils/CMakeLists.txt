@@ -14,5 +14,4 @@
 
 add_library(axiom_optimizer_test_utils DfFunctions.cpp)
 
-target_link_libraries(
-  axiom_optimizer_test_utils axiom_optimizer axiom_logical_plan_builder)
+target_link_libraries(axiom_optimizer_test_utils axiom_optimizer axiom_logical_plan_builder)

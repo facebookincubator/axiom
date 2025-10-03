@@ -18,7 +18,8 @@ add_executable(
   NameMappingsTest.cpp
   ExprApiTest.cpp
   PlanBuilderTest.cpp
-  PlanPrinterTest.cpp)
+  PlanPrinterTest.cpp
+)
 
 add_test(axiom_logical_plan_tests axiom_logical_plan_tests)
 
@@ -29,4 +30,5 @@ target_link_libraries(
   axiom_test_connector
   GTest::gtest
   GTest::gtest_main
-  GTest::gmock)
+  GTest::gmock
+)
