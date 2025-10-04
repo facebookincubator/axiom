@@ -474,6 +474,7 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
         }
 
         const auto* aggregate = expr->as<Aggregate>();
+        ExprVector newOrderKeys;
         newOrderKeys.reserve(aggregate->orderKeys().size());
         for (const auto& key : aggregate->orderKeys()) {
           newOrderKeys.push_back(importExpr(key, outer, inner));
