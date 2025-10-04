@@ -147,15 +147,16 @@ TEST_F(AggregationPlanTest, dedupMask) {
 TEST_F(AggregationPlanTest, orderByDedup) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
 
-  auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
-                         .tableScan(kTestConnectorId, "t")
-                         .aggregate(
-                             {},
-                             {"array_agg(a ORDER BY a, a) AS agg1",
-                              "array_agg(b ORDER BY b, a, b, a) AS agg2",
-                              "array_agg(a ORDER BY a + b, a + b DESC, c) AS agg3",
-                              "array_agg(c ORDER BY b * 2, b * 2) AS agg4"})
-                         .build();
+  auto logicalPlan =
+      lp::PlanBuilder(/*enableCoersions=*/true)
+          .tableScan(kTestConnectorId, "t")
+          .aggregate(
+              {},
+              {"array_agg(a ORDER BY a, a) AS agg1",
+               "array_agg(b ORDER BY b, a, b, a) AS agg2",
+               "array_agg(a ORDER BY a + b, a + b DESC, c) AS agg3",
+               "array_agg(c ORDER BY b * 2, b * 2) AS agg4"})
+          .build();
 
   auto plan = planVelox(logicalPlan);
 
