@@ -569,8 +569,8 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
         }
 
         EXPECT_EQ(
-          plan.aggregates()[i].call->toString(),
-          expected->dropAlias()->toString());
+            plan.aggregates()[i].call->toString(),
+            expected->dropAlias()->toString());
 
         AXIOM_TEST_RETURN_IF_FAILURE
 

@@ -15,7 +15,6 @@
  */
 
 #include <gtest/gtest.h>
-#include <velox/type/Type.h>
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/Optimization.h"
