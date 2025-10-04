@@ -15,6 +15,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <velox/type/Type.h>
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/Optimization.h"
@@ -145,14 +146,16 @@ TEST_F(AggregationPlanTest, dedupMask) {
 }
 
 TEST_F(AggregationPlanTest, orderByDedup) {
-  testConnector_->addTable("t", ROW({"a", "b"}, INTEGER()));
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
 
-  auto logicalPlan = lp::PlanBuilder()
+  auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
                          .tableScan(kTestConnectorId, "t")
                          .aggregate(
                              {},
                              {"array_agg(a ORDER BY a, a) AS agg1",
-                              "array_agg(b ORDER BY b, a, b, a) AS agg2"})
+                              "array_agg(b ORDER BY b, a, b, a) AS agg2",
+                              "array_agg(a ORDER BY a + b, a + b, c) AS agg3",
+                              "array_agg(c ORDER BY b * 2, b * 2) AS agg4"})
                          .build();
 
   auto plan = planVelox(logicalPlan);
@@ -160,8 +163,13 @@ TEST_F(AggregationPlanTest, orderByDedup) {
   auto matcher =
       core::PlanMatcherBuilder()
           .tableScan()
+          .project({"a", "b", "plus(a, b) as p0", "c", "multiply(b, 2) as p1"})
           .singleAggregation(
-              {}, {"array_agg(a ORDER BY a)", "array_agg(b ORDER BY b, a)"})
+              {},
+              {"array_agg(a ORDER BY a)",
+               "array_agg(b ORDER BY b, a)",
+               "array_agg(a ORDER BY p0, c)",
+               "array_agg(c ORDER BY p1)"})
           .build();
 
   ASSERT_TRUE(matcher->match(plan));
