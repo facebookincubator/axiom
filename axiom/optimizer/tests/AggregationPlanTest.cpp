@@ -153,7 +153,7 @@ TEST_F(AggregationPlanTest, orderByDedup) {
                              {},
                              {"array_agg(a ORDER BY a, a) AS agg1",
                               "array_agg(b ORDER BY b, a, b, a) AS agg2",
-                              "array_agg(a ORDER BY a + b, a + b, c) AS agg3",
+                              "array_agg(a ORDER BY a + b, a + b DESC, c) AS agg3",
                               "array_agg(c ORDER BY b * 2, b * 2) AS agg4"})
                          .build();
 
