@@ -131,6 +131,55 @@ std::string Call::toString() const {
   return out.str();
 }
 
+std::string Aggregate::toString() const {
+  std::stringstream out;
+  out << name() << "(";
+
+  if (isDistinct_) {
+    out << "DISTINCT ";
+  }
+
+  for (auto i = 0; i < args().size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << args()[i]->toString();
+  }
+
+  if (!orderKeys_.empty()) {
+    out << " ORDER BY ";
+    for (auto i = 0; i < orderKeys_.size(); ++i) {
+      if (i > 0) {
+        out << ", ";
+      }
+      out << orderKeys_[i]->toString();
+
+      switch (orderTypes_[i]) {
+        case OrderType::kAscNullsFirst:
+          out << " ASC NULLS FIRST";
+          break;
+        case OrderType::kAscNullsLast:
+          out << " ASC NULLS LAST";
+          break;
+        case OrderType::kDescNullsFirst:
+          out << " DESC NULLS FIRST";
+          break;
+        case OrderType::kDescNullsLast:
+          out << " DESC NULLS LAST";
+          break;
+      }
+    }
+  }
+
+  out << ")";
+
+  if (condition_) {
+    out << " FILTER (WHERE " << condition_->toString() << ")";
+  }
+
+  return out.str();
+}
+
 std::string Field::toString() const {
   std::stringstream out;
   out << base_->toString() << ".";

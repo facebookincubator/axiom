@@ -886,6 +886,8 @@ class Aggregate : public Call {
     return orderTypes_;
   }
 
+  std::string toString() const override;
+
  private:
   bool isDistinct_;
   ExprCP condition_;

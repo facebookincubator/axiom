@@ -147,30 +147,28 @@ TEST_F(AggregationPlanTest, dedupMask) {
 TEST_F(AggregationPlanTest, orderByDedup) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
 
-  auto logicalPlan =
-      lp::PlanBuilder(/*enableCoersions=*/true)
-          .tableScan(kTestConnectorId, "t")
-          .aggregate(
-              {},
-              {"array_agg(a ORDER BY a, a) AS agg1",
-               "array_agg(b ORDER BY b, a, b, a) AS agg2",
-               "array_agg(a ORDER BY a + b, a + b DESC, c) AS agg3",
-               "array_agg(c ORDER BY b * 2, b * 2) AS agg4"})
-          .build();
+  auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
+                         .tableScan(kTestConnectorId, "t")
+                         .aggregate(
+                             {},
+                             {"array_agg(a ORDER BY a, a)",
+                              "array_agg(b ORDER BY b, a, b, a)",
+                              "array_agg(a ORDER BY a + b, a + b DESC, c)",
+                              "array_agg(c ORDER BY b * 2, b * 2)"})
+                         .build();
 
   auto plan = planVelox(logicalPlan);
 
-  auto matcher =
-      core::PlanMatcherBuilder()
-          .tableScan()
-          .project({"a", "b", "plus(a, b) as p0", "c", "multiply(b, 2) as p1"})
-          .singleAggregation(
-              {},
-              {"array_agg(a ORDER BY a)",
-               "array_agg(b ORDER BY b, a)",
-               "array_agg(a ORDER BY p0, c)",
-               "array_agg(c ORDER BY p1)"})
-          .build();
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .project({"a", "b", "a + b as p0", "c", "b * 2 as p1"})
+                     .singleAggregation(
+                         {},
+                         {"array_agg(a ORDER BY a)",
+                          "array_agg(b ORDER BY b, a)",
+                          "array_agg(a ORDER BY p0, c)",
+                          "array_agg(c ORDER BY p1)"})
+                     .build();
 
   ASSERT_TRUE(matcher->match(plan));
 }
@@ -200,7 +198,7 @@ TEST_F(AggregationPlanTest, dedupSameOptions) {
   auto matcher =
       core::PlanMatcherBuilder()
           .tableScan()
-          .project({"a", "gt(b, 0) as m1", "lt(b, 0) as m2"})
+          .project({"a", "b > 0 as m1", "b < 0 as m2"})
           .singleAggregation(
               {},
               {"array_agg(a ORDER BY a) as agg1",
