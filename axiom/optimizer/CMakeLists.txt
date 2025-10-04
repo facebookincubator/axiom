@@ -35,20 +35,16 @@ add_library(
   QueryGraphContext.cpp
   RelationOp.cpp
   Schema.cpp
-  SchemaResolver.cpp
-  SchemaUtils.cpp
   Subfields.cpp
   ToGraph.cpp
   ToVelox.cpp
   VeloxHistory.cpp
 )
 
-add_dependencies(axiom_optimizer velox_hive_connector)
-
 target_link_libraries(
   axiom_optimizer
   velox_core
-  axiom_connector_metadata
+  axiom_connectors
   axiom_logical_plan
   axiom_runner_multifragment_plan
   velox_connector

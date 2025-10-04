@@ -199,45 +199,6 @@ class TpchConnectorMetadata : public ConnectorMetadata {
       velox::RowTypePtr dataColumns = nullptr,
       std::optional<LookupKeys> = std::nullopt) override;
 
-  void createTable(
-      const std::string& tableName,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options,
-      const ConnectorSessionPtr& session,
-      bool errorIfExists = true,
-      TableKind tableKind = TableKind::kTable) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
-      const TableLayout& layout,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options,
-      WriteKind kind,
-      const ConnectorSessionPtr& session) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  WritePartitionInfo writePartitionInfo(
-      const velox::connector::ConnectorInsertTableHandlePtr& handle) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  void finishWrite(
-      const TableLayout& layout,
-      const velox::connector::ConnectorInsertTableHandlePtr& handle,
-      const std::vector<velox::RowVectorPtr>& writerResult,
-      WriteKind kind,
-      const ConnectorSessionPtr& session) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
-      const TableLayout& layout,
-      WriteKind kind) override {
-    VELOX_UNSUPPORTED();
-  }
-
   velox::connector::tpch::TpchConnector* tpchConnector() const {
     return tpchConnector_;
   }

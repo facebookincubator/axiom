@@ -20,12 +20,12 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <iostream>
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
-#include "axiom/optimizer/SchemaResolver.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/tests/PrestoParser.h"
 #include "axiom/runner/LocalRunner.h"
@@ -168,7 +168,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       connector_ = registerTpchConnector();
     }
 
-    schema_ = std::make_shared<optimizer::SchemaResolver>();
+    schema_ = std::make_shared<connector::SchemaResolver>();
 
     prestoParser_ = std::make_unique<optimizer::test::PrestoParser>(
         connector_->connectorId(), optimizerPool_.get());
@@ -841,7 +841,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<folly::IOThreadPoolExecutor> spillExecutor_;
   std::shared_ptr<velox::connector::Connector> connector_;
-  std::shared_ptr<optimizer::SchemaResolver> schema_;
+  std::shared_ptr<connector::SchemaResolver> schema_;
   std::unique_ptr<optimizer::VeloxHistory> history_;
   std::unique_ptr<optimizer::test::PrestoParser> prestoParser_;
   std::ofstream* record_{nullptr};

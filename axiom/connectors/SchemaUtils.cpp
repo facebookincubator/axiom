@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/SchemaUtils.h"
+#include "axiom/connectors/SchemaUtils.h"
 
 #include "folly/String.h"
 
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::connector {
 
 TableNameParser::TableNameParser(std::string_view name) {
   std::vector<std::string_view> parts;
@@ -50,4 +50,4 @@ TableNameParser::TableNameParser(std::string_view name) {
   }
 }
 
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::connector

@@ -98,6 +98,62 @@ class HiveTableLayout : public TableLayout {
   const std::optional<int32_t> numBuckets_;
 };
 
+class HiveConnectorWriteHandle : public ConnectorWriteHandle {
+ public:
+  HiveConnectorWriteHandle(
+      velox::connector::hive::HiveInsertTableHandlePtr insertHandle,
+      TablePtr table,
+      WriteKind kind)
+      : ConnectorWriteHandle(std::move(insertHandle)),
+        table_(std::move(table)),
+        kind_(kind) {}
+
+  const TablePtr& table() const {
+    return table_;
+  }
+
+  WriteKind kind() const {
+    return kind_;
+  }
+
+ private:
+  const TablePtr table_;
+  const WriteKind kind_;
+};
+
+/// The full list of options accepted for createTable.
+/// Any specified options not listed below will trigger
+/// a validation error during table create.
+class HiveWriteOptions {
+ public:
+  /// Comma-delimited list of columns to bucket the table by.
+  /// "bucket_count" must also be specified if this option is set.
+  /// The default is no bucketing columns.
+  static constexpr auto kBucketedBy = "bucketed_by";
+
+  /// The number of buckets to create the table with. The number
+  /// of buckets must be an integer power of 2. "bucketed_by" must
+  /// also be specified if this option is set.
+  static constexpr auto kBucketCount = "bucket_count";
+
+  /// Comma-delimited list of columns to partition the table by.
+  /// The default is no partition columns.
+  static constexpr auto kPartitionedBy = "partitioned_by";
+
+  /// Comma-delimited list of sorting columns. Sorting is only
+  /// supported for bucketed tables and sorting is only applied
+  /// to individual buckets. The default is no sorting columns.
+  static constexpr auto kSortedBy = "sorted_by";
+
+  /// The table storage format. See velox::dwio::common::FileFormat.
+  /// The default is DWRF format.
+  static constexpr auto kFileFormat = "file_format";
+
+  /// The table compression kind. See velox::common::CompressionKind.
+  /// The default is ZSTD compression.
+  static constexpr auto kCompressionKind = "compression_kind";
+};
+
 class HiveConnectorMetadata : public ConnectorMetadata {
  public:
   explicit HiveConnectorMetadata(
@@ -122,42 +178,10 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       velox::RowTypePtr dataColumns,
       std::optional<LookupKeys> lookupKeys) override;
 
-  velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
-      const TableLayout& layout,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options,
+  ConnectorWriteHandlePtr beginWrite(
+      const TablePtr& table,
       WriteKind kind,
       const ConnectorSessionPtr& session) override;
-
-  void createTable(
-      const std::string& tableName,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options,
-      const ConnectorSessionPtr& session,
-      bool errorIfExists = true,
-      TableKind tableKind = TableKind::kTable) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  void finishWrite(
-      const TableLayout& layout,
-      const velox::connector::ConnectorInsertTableHandlePtr& handle,
-      const std::vector<velox::RowVectorPtr>& writerResult,
-      WriteKind kind,
-      const ConnectorSessionPtr& session) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  WritePartitionInfo writePartitionInfo(
-      const velox::connector::ConnectorInsertTableHandlePtr& handle) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
-      const TableLayout& layout,
-      WriteKind kind) override {
-    VELOX_UNSUPPORTED();
-  }
 
  protected:
   virtual void ensureInitialized() const {}

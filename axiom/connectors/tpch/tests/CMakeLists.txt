@@ -18,7 +18,6 @@ add_test(axiom_tpch_connector_metadata_test axiom_tpch_connector_metadata_test)
 target_link_libraries(
   axiom_tpch_connector_metadata_test
   axiom_tpch_connector_metadata
-  axiom_optimizer
   velox_tpch_connector
   axiom_runner_tests_utils
   velox_vector_fuzzer

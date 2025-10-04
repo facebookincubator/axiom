@@ -29,6 +29,7 @@ const auto& tableKindNames() {
 
 const auto& writeKindNames() {
   static const folly::F14FastMap<WriteKind, std::string_view> kNames = {
+      {WriteKind::kCreate, "CREATE"},
       {WriteKind::kInsert, "INSERT"},
       {WriteKind::kUpdate, "UPDATE"},
       {WriteKind::kDelete, "DELETE"},

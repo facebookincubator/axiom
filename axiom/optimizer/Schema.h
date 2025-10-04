@@ -16,8 +16,8 @@
 
 #pragma once
 
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/PlanObject.h"
-#include "axiom/optimizer/SchemaResolver.h"
 
 /// Schema representation for use in query planning. All objects are
 /// arena allocated for the duration of planning the query. We do
@@ -373,7 +373,7 @@ struct SchemaTable {
 class Schema {
  public:
   /// Constructs a Schema for producing executable plans, backed by 'source'.
-  Schema(Name name, SchemaResolver* source, LocusCP locus);
+  Schema(Name name, connector::SchemaResolver* source, LocusCP locus);
 
   /// Returns the table with 'name' or nullptr if not found, using
   /// the connector specified by connectorId to perform table lookups.
@@ -396,7 +396,7 @@ class Schema {
   // In the tables map, the key is the full table name and the value is
   // schema table (optimizer object) and connector table (connector object).
   mutable NameMap<NameMap<Table>> connectorTables_;
-  SchemaResolver* source_{nullptr};
+  connector::SchemaResolver* source_{nullptr};
   LocusCP defaultLocus_;
 };
 

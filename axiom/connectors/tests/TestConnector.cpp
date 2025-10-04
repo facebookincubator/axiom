@@ -110,7 +110,7 @@ TestConnectorMetadata::createTableHandle(
   return std::make_shared<TestTableHandle>(layout, std::move(columnHandles));
 }
 
-std::shared_ptr<TestTable> TestConnectorMetadata::createTable(
+std::shared_ptr<TestTable> TestConnectorMetadata::addTable(
     const std::string& name,
     const velox::RowTypePtr& schema) {
   auto table = std::make_shared<TestTable>(name, schema, connector_);
@@ -218,10 +218,10 @@ std::unique_ptr<velox::connector::DataSink> TestConnector::createDataSink(
   return std::make_unique<TestDataSink>(table);
 }
 
-std::shared_ptr<TestTable> TestConnector::createTable(
+std::shared_ptr<TestTable> TestConnector::addTable(
     const std::string& name,
     const velox::RowTypePtr& schema) {
-  return metadata_->createTable(name, schema);
+  return metadata_->addTable(name, schema);
 }
 
 void TestConnector::appendData(
