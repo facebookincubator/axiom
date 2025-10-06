@@ -70,7 +70,7 @@ class AggregationPlanTest : public testing::Test {
 };
 
 TEST_F(AggregationPlanTest, dedupGroupingKeysAndAggregates) {
-  testConnector_->createTable(
+  testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
 
   {
@@ -94,7 +94,7 @@ TEST_F(AggregationPlanTest, dedupGroupingKeysAndAggregates) {
 }
 
 TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
-  testConnector_->createTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
 
   auto logicalPlan = lp::PlanBuilder{}
                          .tableScan(kTestConnectorId, "t")
@@ -110,6 +110,35 @@ TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
                      .project({"plus(a, b)"})
                      .singleAggregation({"ab1"}, {"count(ab1)"})
                      .project({"ab1", "ab1", "c1"})
+                     .build();
+
+  ASSERT_TRUE(matcher->match(plan));
+}
+
+TEST_F(AggregationPlanTest, dedupMask) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+
+  auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
+                         .tableScan(kTestConnectorId, "t")
+                         .aggregate(
+                             {},
+                             {"sum(a) FILTER (WHERE b > 0)",
+                              "sum(a) FILTER (WHERE b < 0)",
+                              "sum(a) FILTER (WHERE b > 0)"})
+                         .build();
+
+  auto plan = planVelox(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .project({"b > 0 as m1", "a", "b < 0 as m2"})
+                     .singleAggregation(
+                         {},
+                         {
+                             "sum(a) FILTER (WHERE m1) as s1",
+                             "sum(a) FILTER (WHERE m2) as s2",
+                         })
+                     .project({"s1", "s2", "s1"})
                      .build();
 
   ASSERT_TRUE(matcher->match(plan));

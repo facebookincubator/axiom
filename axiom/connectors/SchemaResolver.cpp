@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/SchemaResolver.h"
-#include "axiom/optimizer/SchemaUtils.h"
+#include "axiom/connectors/SchemaResolver.h"
+#include "axiom/connectors/SchemaUtils.h"
 #include "velox/connectors/Connector.h"
 
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::connector {
 
-connector::TablePtr SchemaResolver::findTable(
+TablePtr SchemaResolver::findTable(
     std::string_view catalog,
     std::string_view name) {
   TableNameParser parser(name);
@@ -41,7 +41,7 @@ connector::TablePtr SchemaResolver::findTable(
   } else {
     lookupName = parser.table();
   }
-  return connector::ConnectorMetadata::metadata(catalog)->findTable(lookupName);
+  return ConnectorMetadata::metadata(catalog)->findTable(lookupName);
 }
 
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::connector

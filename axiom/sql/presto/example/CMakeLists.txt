@@ -14,5 +14,4 @@
 
 add_executable(axiom_sql_presto_example ParserExample.cpp)
 
-target_link_libraries(
-  axiom_sql_presto_example axiom_sql_presto_ast Folly::folly)
+target_link_libraries(axiom_sql_presto_example axiom_sql_presto_ast Folly::folly)

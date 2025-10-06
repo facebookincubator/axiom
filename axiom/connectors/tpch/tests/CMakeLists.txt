@@ -22,8 +22,8 @@ target_link_libraries(
   axiom_runner_tests_utils
   velox_vector_fuzzer
   velox_vector_test_lib
-  axiom_schema_resolver
   velox_exec
   velox_exec_test_lib
   GTest::gtest
-  GTest::gtest_main)
+  GTest::gtest_main
+)

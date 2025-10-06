@@ -17,7 +17,7 @@ BUILD_BASE_DIR=_build
 BUILD_DIR=release
 BUILD_TYPE=Release
 
-CMAKE_FLAGS := -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) -DAXIOM_BUILD_TESTING=ON
+CMAKE_FLAGS := -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) -DAXIOM_BUILD_TESTING=ON -DVELOX_MONO_LIBRARY=ON
 
 # Use Ninja if available. If Ninja is used, pass through parallelism control flags.
 USE_NINJA ?= 1
@@ -72,19 +72,6 @@ release:          #: Build the release version
 
 unittest: debug   #: Build with debugging and run unit tests
 	cd $(BUILD_BASE_DIR)/debug && ctest -j ${NUM_THREADS} -VV --output-on-failure
-
-format-fix:       #: Fix formatting issues in the main branch
-	scripts/format-check.py format main --fix
-
-format-check:     #: Check for formatting issues on the main branch
-	clang-format --version
-	scripts/format-check.py format main
-
-header-fix:       #: Fix license header issues in the current branch
-	scripts/format-check.py header main --fix
-
-header-check:     #: Check for license header issues on the main branch
-	scripts/format-check.py header main
 
 help:             #: Show the help messages
 	@cat $(firstword $(MAKEFILE_LIST)) | \

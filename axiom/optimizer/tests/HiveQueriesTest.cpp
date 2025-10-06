@@ -25,16 +25,7 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class HiveQueriesTest : public test::HiveQueriesTestBase {
- public:
-  static void SetUpTestCase() {
-    test::HiveQueriesTestBase::SetUpTestCase();
-  }
-
-  static void TearDownTestCase() {
-    test::HiveQueriesTestBase::TearDownTestCase();
-  }
-};
+class HiveQueriesTest : public test::HiveQueriesTestBase {};
 
 TEST_F(HiveQueriesTest, basic) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -130,7 +121,7 @@ TEST_F(HiveQueriesTest, basic) {
 
 TEST_F(HiveQueriesTest, crossJoin) {
   auto statement =
-      prestoParser_->parse("SELECT * FROM nation JOIN region ON true");
+      prestoParser().parse("SELECT * FROM nation JOIN region ON true");
 
   ASSERT_TRUE(statement->isSelect());
   auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();

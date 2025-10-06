@@ -71,7 +71,7 @@ TEST_F(TestConnectorTest, connectorRegister) {
 
 TEST_F(TestConnectorTest, table) {
   auto schema = ROW({{"a", INTEGER()}, {"b", VARCHAR()}});
-  connector_->createTable("table", schema);
+  connector_->addTable("table", schema);
   auto table = metadata_->findTable("table");
   EXPECT_NE(table, nullptr);
   EXPECT_EQ(table->name(), "table");
@@ -91,7 +91,7 @@ TEST_F(TestConnectorTest, table) {
       connector_->appendData("table", vector),
       "appended data type ROW<c0:INTEGER> must match table type ROW<a:INTEGER,b:VARCHAR>");
 
-  connector_->createTable("noschema");
+  connector_->addTable("noschema");
   table = metadata_->findTable("noschema");
   EXPECT_NE(table, nullptr);
   EXPECT_EQ(table->numRows(), 0);
@@ -103,7 +103,7 @@ TEST_F(TestConnectorTest, table) {
 
 TEST_F(TestConnectorTest, columnHandle) {
   auto schema = ROW({{"a", INTEGER()}, {"b", VARCHAR()}});
-  connector_->createTable("table", schema);
+  connector_->addTable("table", schema);
 
   auto table = metadata_->findTable("table");
   auto& layout = *table->layouts()[0];
@@ -120,7 +120,7 @@ TEST_F(TestConnectorTest, columnHandle) {
 
 TEST_F(TestConnectorTest, splitManager) {
   auto schema = ROW({"a"}, {INTEGER()});
-  connector_->createTable("test_table", schema);
+  connector_->addTable("test_table", schema);
 
   auto splitManager = metadata_->splitManager();
   EXPECT_NE(splitManager, nullptr);
@@ -135,7 +135,7 @@ TEST_F(TestConnectorTest, splits) {
 TEST_F(TestConnectorTest, dataSink) {
   auto schema = ROW({"a"}, {INTEGER()});
   auto handle = std::make_shared<TestInsertTableHandle>("table");
-  auto table = connector_->createTable("table", schema);
+  auto table = connector_->addTable("table", schema);
   EXPECT_EQ(table->numRows(), 0);
 
   auto dataSink = connector_->createDataSink(
@@ -159,7 +159,7 @@ TEST_F(TestConnectorTest, dataSink) {
 
 TEST_F(TestConnectorTest, dataSource) {
   auto schema = ROW({"a", "b"}, {INTEGER(), VARCHAR()});
-  auto table = connector_->createTable("table", schema);
+  auto table = connector_->addTable("table", schema);
   auto& layout = *table->layouts()[0];
 
   std::vector<velox::connector::ColumnHandlePtr> columns;
@@ -216,7 +216,7 @@ TEST_F(TestConnectorTest, testColumnHandleCreation) {
 
 TEST_F(TestConnectorTest, tableLayout) {
   auto schema = ROW({"a", "b"}, {INTEGER(), VARCHAR()});
-  auto table = connector_->createTable("table", schema);
+  auto table = connector_->addTable("table", schema);
 
   auto& layout = *table->layouts()[0];
   EXPECT_EQ(layout.name(), "table");

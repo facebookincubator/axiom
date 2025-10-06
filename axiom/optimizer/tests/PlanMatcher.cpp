@@ -17,10 +17,24 @@
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include <gtest/gtest.h>
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/duckdb/conversion/DuckParser.h"
+#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 
 namespace facebook::velox::core {
 namespace {
+
+#define AXIOM_TEST_RETURN_IF_FAILURE           \
+  if (::testing::Test::HasNonfatalFailure()) { \
+    return MatchResult::failure();             \
+  }
+
+#define AXIOM_TEST_RETURN                      \
+  if (::testing::Test::HasNonfatalFailure()) { \
+    return MatchResult::failure();             \
+  } else {                                     \
+    return MatchResult::success();             \
+  }
 
 template <typename T = PlanNode>
 class PlanMatcherImpl : public PlanMatcher {
@@ -31,36 +45,72 @@ class PlanMatcherImpl : public PlanMatcher {
       const std::vector<std::shared_ptr<PlanMatcher>>& sourceMatchers)
       : sourceMatchers_{sourceMatchers} {}
 
-  bool match(const PlanNodePtr& plan) const override {
+  MatchResult match(
+      const PlanNodePtr& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     const auto* specificNode = dynamic_cast<const T*>(plan.get());
     EXPECT_TRUE(specificNode != nullptr)
         << "Expected " << folly::demangle(typeid(T).name()) << ", but got "
         << plan->toString(false, false);
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_TEST_RETURN_IF_FAILURE
 
     EXPECT_EQ(plan->sources().size(), sourceMatchers_.size());
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    std::unordered_map<std::string, std::string> newSymbols;
 
     for (auto i = 0; i < sourceMatchers_.size(); ++i) {
-      if (!sourceMatchers_[i]->match(plan->sources()[i])) {
-        return false;
+      auto result = sourceMatchers_[i]->match(plan->sources()[i], symbols);
+      if (!result.match) {
+        return MatchResult::failure();
       }
+
+      // TODO Combine symbols from all sources.
+      newSymbols = std::move(result.symbols);
     }
 
-    return matchDetails(*specificNode);
+    if (sourceMatchers_.size() > 1) {
+      // TODO Add support for multiple sources.
+      newSymbols.clear();
+    }
+
+    return matchDetails(*specificNode, newSymbols);
   }
 
  protected:
-  virtual bool matchDetails(const T& plan) const {
-    return true;
+  virtual MatchResult matchDetails(
+      const T& plan,
+      const std::unordered_map<std::string, std::string>& /* symbols */) const {
+    return MatchResult::success();
   }
 
   const std::vector<std::shared_ptr<PlanMatcher>> sourceMatchers_;
 };
+
+velox::core::ExprPtr rewriteInputNames(
+    const velox::core::ExprPtr& expr,
+    const std::unordered_map<std::string, std::string>& mapping) {
+  if (expr->is(IExpr::Kind::kFieldAccess)) {
+    auto fieldAccess = expr->as<velox::core::FieldAccessExpr>();
+    if (fieldAccess->isRootColumn()) {
+      auto it = mapping.find(fieldAccess->name());
+      if (it == mapping.end()) {
+        return expr;
+      }
+
+      return std::make_shared<velox::core::FieldAccessExpr>(
+          it->second, fieldAccess->alias());
+    }
+  }
+
+  std::vector<velox::core::ExprPtr> newInputs;
+  for (const auto& input : expr->inputs()) {
+    newInputs.push_back(rewriteInputNames(input, mapping));
+  }
+
+  return expr->replaceInputs(newInputs);
+}
 
 class TableScanMatcher : public PlanMatcherImpl<TableScanNode> {
  public:
@@ -73,7 +123,10 @@ class TableScanMatcher : public PlanMatcherImpl<TableScanNode> {
         tableName_{tableName},
         columns_{columns} {}
 
-  bool matchDetails(const TableScanNode& plan) const override {
+  MatchResult matchDetails(
+      const TableScanNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (tableName_.has_value()) {
@@ -85,9 +138,7 @@ class TableScanMatcher : public PlanMatcherImpl<TableScanNode> {
       const auto numColumns = outputType->size();
 
       EXPECT_EQ(numColumns, columns_->size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < numColumns; ++i) {
         auto name = plan.assignments().at(outputType->nameOf(i))->name();
@@ -99,7 +150,7 @@ class TableScanMatcher : public PlanMatcherImpl<TableScanNode> {
       }
     }
 
-    return !::testing::Test::HasNonfatalFailure();
+    AXIOM_TEST_RETURN
   }
 
  private:
@@ -118,7 +169,10 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
         subfieldFilters_{std::move(subfieldFilters)},
         remainingFilter_{remainingFilter} {}
 
-  bool matchDetails(const TableScanNode& plan) const override {
+  MatchResult matchDetails(
+      const TableScanNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     SCOPED_TRACE(
         fmt::format("HiveScanMatcher: {}", plan.toString(true, false)));
 
@@ -126,36 +180,26 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
         dynamic_cast<const connector::hive::HiveTableHandle*>(
             plan.tableHandle().get());
     EXPECT_TRUE(hiveTableHandle != nullptr);
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_TEST_RETURN_IF_FAILURE
 
     EXPECT_EQ(hiveTableHandle->name(), tableName_);
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_TEST_RETURN_IF_FAILURE
 
     const auto& filters = hiveTableHandle->subfieldFilters();
     EXPECT_EQ(filters.size(), subfieldFilters_.size());
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_TEST_RETURN_IF_FAILURE
 
     for (const auto& [name, filter] : filters) {
       EXPECT_TRUE(subfieldFilters_.contains(name))
           << "Expected filter on " << name;
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       const auto& expected = subfieldFilters_.at(name);
 
       EXPECT_TRUE(filter->testingEquals(*expected))
           << "Expected filter on " << name << ": " << expected->toString()
           << ", but got " << filter->toString();
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
     const auto& remainingFilter = hiveTableHandle->remainingFilter();
@@ -171,11 +215,7 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
       EXPECT_EQ(remainingFilter->toString(), expected->toString());
     }
 
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
-
-    return true;
+    AXIOM_TEST_RETURN
   }
 
  private:
@@ -189,7 +229,10 @@ class ValuesMatcher : public PlanMatcherImpl<ValuesNode> {
   explicit ValuesMatcher(const TypePtr& type = nullptr)
       : PlanMatcherImpl<ValuesNode>(), type_(type) {}
 
-  bool matchDetails(const ValuesNode& plan) const override {
+  MatchResult matchDetails(
+      const ValuesNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (type_) {
@@ -198,7 +241,8 @@ class ValuesMatcher : public PlanMatcherImpl<ValuesNode> {
           << type_->toString() << "', and '" << plan.outputType()->toString()
           << "'.";
     }
-    return !::testing::Test::HasNonfatalFailure();
+
+    AXIOM_TEST_RETURN
   }
 
  private:
@@ -215,18 +259,18 @@ class FilterMatcher : public PlanMatcherImpl<FilterNode> {
       const std::string& predicate)
       : PlanMatcherImpl<FilterNode>({matcher}), predicate_{predicate} {}
 
-  bool matchDetails(const FilterNode& plan) const override {
+  MatchResult matchDetails(
+      const FilterNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (predicate_.has_value()) {
       auto expected = parse::parseExpr(predicate_.value(), {});
       EXPECT_EQ(plan.filter()->toString(), expected->toString());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
     }
 
-    return true;
+    AXIOM_TEST_RETURN
   }
 
  private:
@@ -243,25 +287,36 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
       const std::vector<std::string>& expressions)
       : PlanMatcherImpl<ProjectNode>({matcher}), expressions_{expressions} {}
 
-  bool matchDetails(const ProjectNode& plan) const override {
+  MatchResult matchDetails(
+      const ProjectNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     SCOPED_TRACE(plan.toString(true, false));
+
+    std::unordered_map<std::string, std::string> newSymbols;
 
     if (!expressions_.empty()) {
       EXPECT_EQ(plan.projections().size(), expressions_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < expressions_.size(); ++i) {
         auto expected = parse::parseExpr(expressions_[i], {});
-        EXPECT_EQ(plan.projections()[i]->toString(), expected->toString());
+        if (expected->alias()) {
+          newSymbols[expected->alias().value()] = plan.names()[i];
+        }
+
+        if (!symbols.empty()) {
+          expected = rewriteInputNames(expected, symbols);
+        }
+
+        EXPECT_EQ(
+            plan.projections()[i]->toString(),
+            expected->dropAlias()->toString());
       }
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
-    return true;
+    return MatchResult::success(newSymbols);
   }
 
  private:
@@ -279,25 +334,24 @@ class ParallelProjectMatcher : public PlanMatcherImpl<ParallelProjectNode> {
       : PlanMatcherImpl<ParallelProjectNode>({matcher}),
         expressions_{expressions} {}
 
-  bool matchDetails(const ParallelProjectNode& plan) const override {
+  MatchResult matchDetails(
+      const ParallelProjectNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (!expressions_.empty()) {
       EXPECT_EQ(plan.projections().size(), expressions_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < expressions_.size(); ++i) {
         auto expected = parse::parseExpr(expressions_[i], {});
         EXPECT_EQ(plan.projections()[i]->toString(), expected->toString());
       }
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
-    return true;
+    return MatchResult::success();
   }
 
  private:
@@ -317,37 +371,38 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
         replicateExprs_{replicateExprs},
         unnestExprs_{unnestExprs} {}
 
-  bool matchDetails(const UnnestNode& plan) const override {
+  MatchResult matchDetails(
+      const UnnestNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     if (!replicateExprs_.empty()) {
       EXPECT_EQ(plan.replicateVariables().size(), replicateExprs_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < replicateExprs_.size(); ++i) {
         auto expected = parse::parseExpr(replicateExprs_[i], {});
         EXPECT_EQ(
             plan.replicateVariables()[i]->toString(), expected->toString());
       }
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
+
     if (!unnestExprs_.empty()) {
       EXPECT_EQ(plan.unnestVariables().size(), unnestExprs_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < unnestExprs_.size(); ++i) {
         auto expected = parse::parseExpr(unnestExprs_[i], {});
+        if (!symbols.empty()) {
+          expected = rewriteInputNames(expected, symbols);
+        }
+
         EXPECT_EQ(plan.unnestVariables()[i]->toString(), expected->toString());
       }
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
-    return true;
+
+    return MatchResult::success();
   }
 
  private:
@@ -370,19 +425,19 @@ class LimitMatcher : public PlanMatcherImpl<LimitNode> {
         count_{count},
         partial_{partial} {}
 
-  bool matchDetails(const LimitNode& plan) const override {
+  MatchResult matchDetails(
+      const LimitNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (count_.has_value()) {
       EXPECT_EQ(plan.offset(), offset_.value());
       EXPECT_EQ(plan.count(), count_.value());
       EXPECT_EQ(plan.isPartial(), partial_.value());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
     }
 
-    return true;
+    AXIOM_TEST_RETURN
   }
 
  private:
@@ -399,17 +454,17 @@ class TopNMatcher : public PlanMatcherImpl<TopNNode> {
   TopNMatcher(const std::shared_ptr<PlanMatcher>& matcher, int64_t count)
       : PlanMatcherImpl<TopNNode>({matcher}), count_{count} {}
 
-  bool matchDetails(const TopNNode& plan) const override {
+  MatchResult matchDetails(
+      const TopNNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (count_.has_value()) {
       EXPECT_EQ(plan.count(), count_.value());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
     }
 
-    return true;
+    return MatchResult::success(symbols);
   }
 
  private:
@@ -426,28 +481,31 @@ class OrderByMatcher : public PlanMatcherImpl<OrderByNode> {
       const std::vector<std::string>& ordering)
       : PlanMatcherImpl<OrderByNode>({matcher}), ordering_{ordering} {}
 
-  bool matchDetails(const OrderByNode& plan) const override {
+  MatchResult matchDetails(
+      const OrderByNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (!ordering_.empty()) {
       EXPECT_EQ(plan.sortingOrders().size(), ordering_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < ordering_.size(); ++i) {
-        const auto expected = parse::parseOrderByExpr(ordering_[i]);
+        auto expected = parse::parseOrderByExpr(ordering_[i]);
+        auto expectedExpr = expected.expr;
+        if (!symbols.empty()) {
+          expectedExpr = rewriteInputNames(expectedExpr, symbols);
+        }
 
-        EXPECT_EQ(plan.sortingKeys()[i]->toString(), expected.expr->toString());
+        EXPECT_EQ(plan.sortingKeys()[i]->toString(), expectedExpr->toString());
         EXPECT_EQ(plan.sortingOrders()[i].isAscending(), expected.ascending);
         EXPECT_EQ(plan.sortingOrders()[i].isNullsFirst(), expected.nullsFirst);
-        if (::testing::Test::HasNonfatalFailure()) {
-          return false;
-        }
+        AXIOM_TEST_RETURN_IF_FAILURE
       }
     }
 
-    return true;
+    return MatchResult::success(symbols);
   }
 
  private:
@@ -476,47 +534,62 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
     VELOX_CHECK(!groupingKeys_.empty() || !aggregates_.empty());
   }
 
-  bool matchDetails(const AggregationNode& plan) const override {
+  MatchResult matchDetails(
+      const AggregationNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (step_.has_value()) {
       EXPECT_EQ(plan.step(), step_.value());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
+    std::unordered_map<std::string, std::string> newSymbols = symbols;
     if (!groupingKeys_.empty() || !aggregates_.empty()) {
       // Verify grouping keys.
       EXPECT_EQ(plan.groupingKeys().size(), groupingKeys_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < groupingKeys_.size(); ++i) {
         auto expected = parse::parseExpr(groupingKeys_[i], {});
         EXPECT_EQ(plan.groupingKeys()[i]->toString(), expected->toString());
       }
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       // Verify aggregates.
       EXPECT_EQ(plan.aggregates().size(), aggregates_.size());
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < aggregates_.size(); ++i) {
-        auto expected = parse::parseExpr(aggregates_[i], {});
-        EXPECT_EQ(plan.aggregates()[i].call->toString(), expected->toString());
+        auto aggregateExpr = duckdb::parseAggregateExpr(aggregates_[i], {});
+        auto expected = aggregateExpr.expr;
+        if (expected->alias()) {
+          newSymbols[expected->alias().value()] = plan.aggregateNames()[i];
+        }
+        auto expectedMask = aggregateExpr.maskExpr;
+
+        EXPECT_EQ(
+            plan.aggregates()[i].call->toString(),
+            expected->dropAlias()->toString());
+        AXIOM_TEST_RETURN_IF_FAILURE
+
+        const auto& mask = plan.aggregates()[i].mask;
+        EXPECT_EQ(mask != nullptr, expectedMask != nullptr);
+        AXIOM_TEST_RETURN_IF_FAILURE
+
+        if (expectedMask) {
+          if (!symbols.empty()) {
+            expectedMask = rewriteInputNames(expectedMask, symbols);
+          }
+          EXPECT_EQ(mask->toString(), expectedMask->toString())
+              << "Mask mismatch for aggregate " << i;
+        }
       }
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_TEST_RETURN_IF_FAILURE
     }
 
-    return true;
+    return MatchResult::success(std::move(newSymbols));
   }
 
  private:
@@ -538,19 +611,19 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
       JoinType joinType)
       : PlanMatcherImpl<HashJoinNode>({left, right}), joinType_{joinType} {}
 
-  bool matchDetails(const HashJoinNode& plan) const override {
+  MatchResult matchDetails(
+      const HashJoinNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (joinType_.has_value()) {
       EXPECT_EQ(
           JoinTypeName::toName(plan.joinType()),
           JoinTypeName::toName(joinType_.value()));
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
     }
 
-    return true;
+    AXIOM_TEST_RETURN
   }
 
  private:
@@ -589,6 +662,9 @@ class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
  private:
   const std::optional<JoinType> joinType_;
 };
+
+#undef AXIOM_TEST_RETURN
+#undef AXIOM_TEST_RETURN_IF_FAILURE
 
 } // namespace
 
@@ -717,10 +793,28 @@ PlanMatcherBuilder& PlanMatcherBuilder::partialAggregation() {
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::partialAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<AggregationMatcher>(
+      matcher_, AggregationNode::Step::kPartial, groupingKeys, aggregates);
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::finalAggregation() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<AggregationMatcher>(
       matcher_, AggregationNode::Step::kFinal);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::finalAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<AggregationMatcher>(
+      matcher_, AggregationNode::Step::kFinal, groupingKeys, aggregates);
   return *this;
 }
 

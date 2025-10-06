@@ -12,30 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(
+add_library(
   axiom_logical_plan
   Expr.cpp
   ExprPrinter.cpp
   LogicalPlanNode.cpp
   PlanPrinter.cpp
-  ExprApi.cpp)
+  ExprApi.cpp
+)
 
-velox_link_libraries(axiom_logical_plan velox_type)
+target_link_libraries(axiom_logical_plan velox_type)
 
-velox_add_library(axiom_logical_plan_builder PlanBuilder.cpp NameAllocator.cpp
-                  NameMappings.cpp)
+add_library(axiom_logical_plan_builder PlanBuilder.cpp NameAllocator.cpp NameMappings.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   axiom_logical_plan_builder
   axiom_logical_plan
-  axiom_connector_metadata
+  axiom_connectors
   velox_exec
   velox_function_registry
   velox_functions_prestosql
   velox_aggregates
   velox_parse_expression
   velox_parse_parser
-  velox_parse_utils)
+  velox_parse_utils
+)
 
 if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)

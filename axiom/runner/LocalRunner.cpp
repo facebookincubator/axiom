@@ -295,7 +295,6 @@ void LocalRunner::makeStages(
     stages_.emplace_back();
 
     for (auto i = 0; i < fragment.width; ++i) {
-      velox::exec::Consumer consumer = nullptr;
       auto task = velox::exec::Task::create(
           fmt::format(
               "local://{}/{}.{}",
@@ -306,7 +305,7 @@ void LocalRunner::makeStages(
           i,
           params_.queryCtx,
           velox::exec::Task::ExecutionMode::kParallel,
-          consumer,
+          velox::exec::ConsumerSupplier{},
           0,
           onError);
       stages_.back().push_back(task);

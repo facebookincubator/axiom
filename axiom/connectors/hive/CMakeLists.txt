@@ -12,16 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(
+add_library(
   axiom_hive_connector_metadata
-  OBJECT
   HiveConnectorMetadata.cpp
   LocalHiveConnectorMetadata.cpp
-  StatisticsBuilder.cpp)
+  StatisticsBuilder.cpp
+)
 
-velox_link_libraries(
+target_link_libraries(
   axiom_hive_connector_metadata
-  axiom_connector_metadata
+  axiom_connectors
   velox_hive_connector
   velox_type_fbhive
   velox_dwio_catalog_fbhive
@@ -36,7 +36,8 @@ velox_link_libraries(
   velox_s3fs
   velox_hdfs
   velox_gcs
-  velox_abfs)
+  velox_abfs
+)
 
 if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)

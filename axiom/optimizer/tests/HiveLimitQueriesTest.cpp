@@ -24,16 +24,7 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class HiveLimitQueriesTest : public test::HiveQueriesTestBase {
- public:
-  static void SetUpTestCase() {
-    test::HiveQueriesTestBase::SetUpTestCase();
-  }
-
-  static void TearDownTestCase() {
-    test::HiveQueriesTestBase::TearDownTestCase();
-  }
-};
+class HiveLimitQueriesTest : public test::HiveQueriesTestBase {};
 
 // LIMIT 10
 TEST_F(HiveLimitQueriesTest, limit) {

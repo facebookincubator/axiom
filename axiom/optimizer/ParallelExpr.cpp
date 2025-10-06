@@ -172,7 +172,7 @@ velox::core::PlanNodePtr ToVelox::makeParallelProject(
     group->emplace_back(toTypedExpr(expr));
 
     if (expr->is(PlanType::kColumnExpr)) {
-      names.push_back(outputName(expr->as<Column>()));
+      names.push_back(expr->as<Column>()->outputName());
     } else {
       names.push_back(fmt::format("__temp{}", expr->id()));
     }
@@ -365,7 +365,7 @@ velox::core::PlanNodePtr ToVelox::maybeParallelProject(
   finalExprs.reserve(exprs.size());
 
   for (auto i = 0; i < exprs.size(); ++i) {
-    names.emplace_back(outputName(columns[i]));
+    names.emplace_back(columns[i]->outputName());
     finalExprs.emplace_back(toTypedExpr(exprs[i]));
   }
 

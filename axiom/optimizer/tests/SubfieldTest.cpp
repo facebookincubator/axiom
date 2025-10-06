@@ -106,14 +106,15 @@ class SubfieldTest : public QueryTestBase,
                      public testing::WithParamInterface<int32_t> {
  protected:
   static void SetUpTestCase() {
-    testDataPath_ = FLAGS_subfield_data_path;
-    LocalRunnerTestBase::localFileFormat_ = "dwrf";
-    LocalRunnerTestBase::SetUpTestCase();
+    QueryTestBase::SetUpTestCase();
+    LocalRunnerTestBase::localDataPath_ = FLAGS_subfield_data_path;
+    LocalRunnerTestBase::localFileFormat_ =
+        velox::dwio::common::FileFormat::DWRF;
     registerDfFunctions();
   }
 
   static void TearDownTestCase() {
-    LocalRunnerTestBase::TearDownTestCase();
+    QueryTestBase::TearDownTestCase();
   }
 
   void SetUp() override {
@@ -263,7 +264,7 @@ class SubfieldTest : public QueryTestBase,
   }
 
   void testParallelExpr(FeatureOptions& opts, const RowTypePtr& rowType) {
-    core::PlanNodePtr veloxPlan;
+    core::PlanNodePtr referencePlan;
     // No randoms in test expr, different runs must come out the same.
     opts.randomPct = 0;
 
@@ -274,13 +275,13 @@ class SubfieldTest : public QueryTestBase,
       opts.rng.seed(1);
       makeExprs(opts, names, exprs);
 
-      auto builder = PlanBuilder()
-                         .tableScan("features", rowType)
-                         .addNode([&](std::string id, auto node) {
-                           return std::make_shared<core::ProjectNode>(
-                               id, std::move(names), std::move(exprs), node);
-                         });
-      veloxPlan = builder.planNode();
+      referencePlan = PlanBuilder()
+                          .tableScan("features", rowType)
+                          .addNode([&](std::string id, auto node) {
+                            return std::make_shared<core::ProjectNode>(
+                                id, std::move(names), std::move(exprs), node);
+                          })
+                          .planNode();
     }
 
     std::vector<std::string> names;
@@ -309,7 +310,7 @@ class SubfieldTest : public QueryTestBase,
 
     ASSERT_TRUE(parallelProject != nullptr);
 
-    assertSame(veloxPlan, fragmentedPlan);
+    checkSame(fragmentedPlan, referencePlan);
   }
 
   std::string subfield(std::string_view first, std::string_view rest = "")
@@ -366,11 +367,11 @@ class SubfieldTest : public QueryTestBase,
       const std ::vector<RowVectorPtr>& vectors,
       const std::shared_ptr<dwrf::Config>& config =
           std::make_shared<dwrf::Config>()) {
-    auto fs = filesystems::getFileSystem(testDataPath_, {});
-    fs->mkdir(fmt::format("{}/{}", testDataPath_, name));
+    auto fs = filesystems::getFileSystem(localDataPath_, {});
+    fs->mkdir(fmt::format("{}/{}", localDataPath_, name));
 
     const auto filePath =
-        fmt::format("{}/{}/{}.dwrf", testDataPath_, name, name);
+        fmt::format("{}/{}/{}.dwrf", localDataPath_, name, name);
     writeToFile(filePath, vectors, config);
     tablesCreated();
   }
@@ -417,8 +418,35 @@ class SubfieldTest : public QueryTestBase,
     }
   }
 
-  core::PlanNodePtr extractPlanNode(const PlanAndStats& plan) {
+  static core::PlanNodePtr extractPlanNode(const PlanAndStats& plan) {
     return plan.plan->fragments().at(0).fragment.planNode;
+  }
+
+  static std::string veloxString(const runner::MultiFragmentPlanPtr& plan) {
+    folly::F14FastMap<core::PlanNodeId, const core::TableScanNode*> scans;
+    for (const auto& fragment : plan->fragments()) {
+      velox::core::PlanNode::findFirstNode(
+          fragment.fragment.planNode.get(), [&](const auto* node) {
+            if (auto scan = dynamic_cast<const core::TableScanNode*>(node)) {
+              scans.emplace(scan->id(), scan);
+            }
+            return false;
+          });
+    }
+
+    auto planNodeDetails = [&](const core::PlanNodeId& planNodeId,
+                               std::string_view indentation,
+                               std::ostream& stream) {
+      auto it = scans.find(planNodeId);
+      if (it != scans.end()) {
+        const auto* scan = it->second;
+        for (const auto& [name, handle] : scan->assignments()) {
+          stream << indentation << name << " = " << handle->name() << std::endl;
+        }
+      }
+    };
+
+    return plan->toString(true, planNodeDetails);
   }
 };
 
@@ -447,7 +475,7 @@ TEST_P(SubfieldTest, structs) {
                            .project({"s.s1", "s.s3[1]"})
                            .planNode();
 
-  assertSame(referencePlan, fragmentedPlan);
+  checkSame(fragmentedPlan, referencePlan);
 }
 
 TEST_P(SubfieldTest, maps) {

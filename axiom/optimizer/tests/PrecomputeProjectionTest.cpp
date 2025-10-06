@@ -61,7 +61,7 @@ class PrecomputeProjectionTest : public ::testing::Test {
 
     VeloxHistory history;
 
-    auto schemaResolver = std::make_shared<SchemaResolver>();
+    auto schemaResolver = std::make_shared<connector::SchemaResolver>();
     Schema schema("default", schemaResolver.get(), /* locus */ nullptr);
 
     Optimization opt{

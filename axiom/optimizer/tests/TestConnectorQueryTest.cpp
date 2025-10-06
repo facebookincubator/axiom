@@ -18,7 +18,6 @@
 #include <gtest/gtest.h>
 
 #include "axiom/connectors/tests/TestConnector.h"
-#include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "velox/exec/TableWriter.h"
@@ -32,14 +31,6 @@ namespace lp = facebook::axiom::logical_plan;
 class TestConnectorQueryTest : public QueryTestBase {
  protected:
   static constexpr auto kTestConnectorId = "test";
-
-  static void SetUpTestCase() {
-    LocalRunnerTestBase::SetUpTestCase();
-  }
-
-  static void TearDownTestCase() {
-    LocalRunnerTestBase::TearDownTestCase();
-  }
 
   void SetUp() override {
     QueryTestBase::SetUp();
@@ -97,7 +88,7 @@ TEST_F(TestConnectorQueryTest, selectFiltered) {
   auto vector = makeRowVector({"a"}, {makeFlatVector<int64_t>({0, 1, 2})});
   auto schema = vector->rowType();
 
-  connector_->createTable("t", schema);
+  connector_->addTable("t", schema);
   connector_->appendData("t", vector);
 
   lp::PlanBuilder::Context context(kTestConnectorId);
@@ -116,7 +107,7 @@ TEST_F(TestConnectorQueryTest, writeFiltered) {
        makeFlatVector<StringView>({"str", "ing", "val"})});
   auto schema = vector->rowType();
 
-  auto table = connector_->createTable("u", schema);
+  auto table = connector_->addTable("u", schema);
   EXPECT_NE(table, nullptr);
 
   lp::PlanBuilder::Context context;

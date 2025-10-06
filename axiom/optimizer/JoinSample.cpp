@@ -150,8 +150,8 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
       make<Call>(toName(kHashMix), bigintValue(), hashes, FunctionSet{});
 
   ColumnCP hashColumn = make<Column>(toName("hash"), nullptr, hash->value());
-  RelationOpPtr project =
-      make<Project>(scan, ExprVector{hash}, ColumnVector{hashColumn});
+  RelationOpPtr project = make<Project>(
+      scan, ExprVector{hash}, ColumnVector{hashColumn}, /*redundant=*/false);
 
   // (hash % mod) < lim
   ExprCP filterExpr = makeCall(
