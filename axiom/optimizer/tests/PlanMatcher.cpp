@@ -651,9 +651,7 @@ class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (joinType_.has_value()) {
-      EXPECT_EQ(
-          JoinTypeName::toName(plan.joinType()),
-          JoinTypeName::toName(joinType_.value()));
+      EXPECT_EQ(plan.joinType(), joinType_.value());
     }
 
     AXIOM_TEST_RETURN
