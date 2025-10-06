@@ -923,7 +923,18 @@ class Window : public Call {
       : Call(PlanType::kWindowExpr, name, value, std::move(args), functions),
         spec_(std::move(spec)),
         frame_(std::move(frame)),
-        ignoreNulls_(ignoreNulls) {}
+        ignoreNulls_(ignoreNulls) {
+    columns_.unionColumns(spec_.partitionKeys);
+    columns_.unionColumns(spec_.orderKeys);
+
+    if (frame_.startValue) {
+      columns_.unionColumns(frame_.startValue);
+    }
+    
+    if (frame_.endValue) {
+      columns_.unionColumns(frame_.endValue);
+    }
+  }
 
   const WindowSpec& spec() const {
     return spec_;

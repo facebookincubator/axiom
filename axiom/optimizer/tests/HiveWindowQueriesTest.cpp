@@ -57,7 +57,6 @@ TEST_F(HiveWindowQueriesTest, basicRowNumber) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    std::cerr << plan->toString(true, true) << std::endl;
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
                        .window()
@@ -99,7 +98,6 @@ TEST_F(HiveWindowQueriesTest, orderByWindowExpr) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    std::cerr << plan->toString(true, true) << std::endl;
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
                        .window()
