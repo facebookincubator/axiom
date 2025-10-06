@@ -57,7 +57,7 @@ TEST_F(HiveWindowQueriesTest, basicRowNumber) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    std::cerr << plan->toString(true, false) << std::endl;
+    std::cerr << plan->toString(true, true) << std::endl;
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
                        .window()
@@ -76,7 +76,7 @@ TEST_F(HiveWindowQueriesTest, basicRowNumber) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveWindowQueriesTest, exprFromWindows) {
+TEST_F(HiveWindowQueriesTest, orderByWindowExpr) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -90,10 +90,11 @@ TEST_F(HiveWindowQueriesTest, exprFromWindows) {
       lp::PlanBuilder()
           .tableScan(connectorId, "nation", names)
           .window(
-              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn",
-               "rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
           .orderBy({"rnk + rn"})
-          .project({"rn", "rnk", "rnk + rn"})
+          .project({"rnk + rn"})
           .build();
 
   {
@@ -105,6 +106,7 @@ TEST_F(HiveWindowQueriesTest, exprFromWindows) {
                        .window()
                        .project()
                        .orderBy()
+                       .project()
                        .build();
     ASSERT_TRUE(matcher->match(plan));
   }
@@ -113,7 +115,11 @@ TEST_F(HiveWindowQueriesTest, exprFromWindows) {
       exec::test::PlanBuilder()
           .tableScan("nation", nationType)
           .window(
-              {"row_number() over (partition by n_regionkey order by n_nationkey)"})
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .project({"rnk + rn as s"})
+          .orderBy({"s"}, false)
           .planNode();
 
   checkSame(logicalPlan, referencePlan);
@@ -401,17 +407,18 @@ TEST_F(HiveWindowQueriesTest, orderByWindowAlias) {
           .orderBy({"rn desc"})
           .build();
 
-  // DEDUP IT
-  //   {
-  //     auto plan = toSingleNodePlan(logicalPlan);
-  //     std::cerr << plan->toString(true, true) << "\n";
-  //     auto matcher = core::PlanMatcherBuilder()
-  //                        .tableScan("nation")
-  //                        .orderBy()
-  //                        .project()
-  //                        .build();
-  //     ASSERT_TRUE(matcher->match(plan));
-  //   }
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .orderBy()
+                       .window()
+                       .project()
+                       .build();
+    ASSERT_TRUE(matcher->match(plan));
+  }
 
   auto referencePlan =
       exec::test::PlanBuilder()
@@ -423,7 +430,7 @@ TEST_F(HiveWindowQueriesTest, orderByWindowAlias) {
           .orderBy({"rn desc"}, false)
           .planNode();
 
-  checkSame(logicalPlan, referencePlan);`
+  checkSame(logicalPlan, referencePlan);
 }
 
 } // namespace
