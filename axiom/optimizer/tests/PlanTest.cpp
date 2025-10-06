@@ -1352,7 +1352,65 @@ TEST_F(PlanTest, lastProjection) {
   ASSERT_TRUE(matcher->match(plan));
 }
 
-TEST_F(PlanTest, crossJoinMultipleTables) {
+TEST_F(PlanTest, filterDependsXJoin) {
+  auto nationType = ROW({"n_regionkey"}, {BIGINT()});
+  auto regionType = ROW({"r_regionkey"}, {BIGINT()});
+  auto customerType = ROW({"c_custkey"}, {BIGINT()});
+
+  const auto connectorId = exec::test::kHiveConnectorId;
+  const auto connector = velox::connector::getConnector(connectorId);
+
+  lp::PlanBuilder::Context context;
+  auto logicalPlan = lp::PlanBuilder(context)
+                         .tableScan(connectorId, "nation", nationType->names())
+                         .crossJoin(lp::PlanBuilder(context).tableScan(
+                             connectorId, "region", regionType->names()))
+                         .crossJoin(lp::PlanBuilder(context).tableScan(
+                             connectorId, "customer", customerType->names()))
+                         .filter("n_regionkey != r_regionkey")
+                         .filter("c_custkey = 1")
+                         .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("customer")
+            .nestedLoopJoin(
+                core::PlanMatcherBuilder().tableScan("region").build())
+            .nestedLoopJoin(
+                core::PlanMatcherBuilder().tableScan("nation").build())
+            .filter("n_regionkey != r_regionkey")
+            .project()
+            .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto referencePlan =
+      exec::test::PlanBuilder(planNodeIdGenerator)
+          .tableScan("nation", nationType)
+          .nestedLoopJoin(
+              exec::test::PlanBuilder(planNodeIdGenerator)
+                  .tableScan("region", regionType)
+                  .nestedLoopJoin(
+                      exec::test::PlanBuilder(planNodeIdGenerator)
+                          .tableScan("customer", customerType)
+                          .filter("c_custkey = 1")
+                          .planNode(),
+                      {"r_regionkey", "c_custkey"},
+                      core::JoinType::kInner)
+                  .planNode(),
+              {"n_regionkey", "r_regionkey", "c_custkey"},
+              core::JoinType::kInner)
+          .filter("n_regionkey != r_regionkey")
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(PlanTest, xJoinManyTables) {
   auto nationType =
       ROW({"n_nationkey", "n_name", "n_regionkey"},
           {BIGINT(), VARCHAR(), BIGINT()});

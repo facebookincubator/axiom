@@ -639,25 +639,24 @@ class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
 
   NestedLoopJoinMatcher(
       const std::shared_ptr<PlanMatcher>& left,
-     4 const std::shared_ptr<PlanMatcher>& right,
+      const std::shared_ptr<PlanMatcher>& right,
       JoinType joinType)
       : PlanMatcherImpl<NestedLoopJoinNode>({left, right}),
         joinType_{joinType} {}
 
-  MatchResult matchDetails(const NestedLoopJoinNode& plan,
-  const std::unordered_map<std::string, std::string>& symbols) const override {
+  MatchResult matchDetails(
+      const NestedLoopJoinNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (joinType_.has_value()) {
       EXPECT_EQ(
           JoinTypeName::toName(plan.joinType()),
           JoinTypeName::toName(joinType_.value()));
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
     }
 
-    return true;
+    AXIOM_TEST_RETURN
   }
 
  private:
