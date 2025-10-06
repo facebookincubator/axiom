@@ -448,8 +448,7 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
       return expr;
     case PlanType::kLiteralExpr:
       return expr;
-    case PlanType::kCallExpr:
-    case PlanType::kAggregateExpr: {
+    case PlanType::kCallExpr: {
       auto children = expr->children();
       ExprVector newChildren(children.size());
       FunctionSet functions;
@@ -462,53 +461,13 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
         }
       }
 
-      ExprCP newCondition = nullptr;
-      ExprVector newOrderKeys;
-      if (expr->is(PlanType::kAggregateExpr)) {
-        newCondition =
-            importExpr(expr->as<Aggregate>()->condition(), outer, inner);
-        anyChange |= newCondition != expr->as<Aggregate>()->condition();
-
-        if (newCondition && newCondition->isFunction()) {
-          functions = functions | newCondition->as<Call>()->functions();
-        }
-
-        const auto* aggregate = expr->as<Aggregate>();
-        newOrderKeys.reserve(aggregate->orderKeys().size());
-        for (const auto& key : aggregate->orderKeys()) {
-          newOrderKeys.push_back(importExpr(key, outer, inner));
-          anyChange |= newOrderKeys.back() != key;
-
-          if (newOrderKeys.back()->isFunction()) {
-            functions =
-                functions | newOrderKeys.back()->as<Call>()->functions();
-          }
-        }
-      }
-
       if (!anyChange) {
         return expr;
       }
 
-      if (expr->is(PlanType::kCallExpr)) {
-        const auto* call = expr->as<Call>();
-        return make<Call>(
-            call->name(), call->value(), std::move(newChildren), functions);
-      }
-
-      if (expr->is(PlanType::kAggregateExpr)) {
-        const auto* aggregate = expr->as<Aggregate>();
-        return make<Aggregate>(
-            aggregate->name(),
-            aggregate->value(),
-            std::move(newChildren),
-            functions,
-            aggregate->isDistinct(),
-            newCondition,
-            aggregate->intermediateType(),
-            std::move(newOrderKeys),
-            aggregate->orderTypes());
-      }
+      const auto* call = expr->as<Call>();
+      return make<Call>(
+          call->name(), call->value(), std::move(newChildren), functions);
     }
       [[fallthrough]];
     default:
