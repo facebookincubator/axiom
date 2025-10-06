@@ -639,12 +639,13 @@ class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
 
   NestedLoopJoinMatcher(
       const std::shared_ptr<PlanMatcher>& left,
-      const std::shared_ptr<PlanMatcher>& right,
+     4 const std::shared_ptr<PlanMatcher>& right,
       JoinType joinType)
       : PlanMatcherImpl<NestedLoopJoinNode>({left, right}),
         joinType_{joinType} {}
 
-  bool matchDetails(const NestedLoopJoinNode& plan) const override {
+  MatchResult matchDetails(const NestedLoopJoinNode& plan,
+  const std::unordered_map<std::string, std::string>& symbols) const override {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (joinType_.has_value()) {
