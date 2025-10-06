@@ -469,7 +469,6 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
       return make<Call>(
           call->name(), call->value(), std::move(newChildren), functions);
     }
-      [[fallthrough]];
     default:
       VELOX_UNREACHABLE("{}", expr->toString());
   }
