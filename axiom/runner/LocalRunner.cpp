@@ -306,7 +306,8 @@ void LocalRunner::makeStages(
           params_.queryCtx,
           velox::exec::Task::ExecutionMode::kParallel,
           velox::exec::ConsumerSupplier{},
-          0,
+          /*memoryArbitrationPriority=*/0,
+          /*spillDiskOpts=*/std::nullopt,
           onError);
       stages_.back().push_back(task);
 
