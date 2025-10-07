@@ -145,12 +145,18 @@ LocalRunner::LocalRunner(
     std::shared_ptr<velox::memory::MemoryPool> outputPool)
     : plan_{std::move(plan)},
       fragments_{topologicalSort(plan_->fragments())},
+      finishWrite_{plan_->finishWrite()},
       splitSourceFactory_{std::move(splitSourceFactory)} {
   params_.queryCtx = std::move(queryCtx);
   params_.outputPool = std::move(outputPool);
 }
 
 velox::RowVectorPtr LocalRunner::next() {
+  if (finishWrite_) {
+    runWrite();
+    return nullptr;
+  }
+
   if (!cursor_) {
     start();
   }
@@ -161,6 +167,28 @@ velox::RowVectorPtr LocalRunner::next() {
   }
 
   return cursor_->current();
+}
+
+void LocalRunner::runWrite() {
+  std::vector<velox::RowVectorPtr> result;
+  try {
+    start();
+    while (cursor_->moveNext()) {
+      result.push_back(cursor_->current());
+    }
+    finishWrite_(true, result);
+    state_ = State::kFinished;
+  } catch (const std::exception&) {
+    try {
+      waitForCompletion(1'000'000);
+    } catch (const std::exception& e) {
+      LOG(ERROR) << e.what()
+                 << " while waiting for completion after error in write query";
+    }
+    finishWrite_(false, result);
+    state_ = State::kError;
+    throw;
+  }
 }
 
 void LocalRunner::start() {

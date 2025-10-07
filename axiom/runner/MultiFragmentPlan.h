@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/core/PlanFragment.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::axiom::runner {
 
@@ -28,6 +29,14 @@ struct InputStage {
   /// Task prefix of producer stage.
   std::string producerTaskPrefix;
 };
+
+/// Connector-supplied function for indicating completion of a write query.
+/// 'success' is true if the results should be persisted. If 'success' is true,
+/// 'results' can be the concatenation of the results from tableWrite
+/// operators. if 'success' is false, the write should not be persisted and
+/// 'results' can be empty. Possible ACID properties depend on the connector.
+using FinishWrite = std::function<
+    void(bool success, const std::vector<velox::RowVectorPtr>& results)>;
 
 /// Describes a fragment of a distributed plan. This allows a run
 /// time to distribute fragments across workers and to set up
@@ -75,8 +84,13 @@ class MultiFragmentPlan {
     int32_t numDrivers{4};
   };
 
-  MultiFragmentPlan(std::vector<ExecutableFragment> fragments, Options options)
-      : fragments_{std::move(fragments)}, options_{std::move(options)} {}
+  MultiFragmentPlan(
+      std::vector<ExecutableFragment> fragments,
+      Options options,
+      FinishWrite finishWrite = {})
+      : fragments_{std::move(fragments)},
+        options_{std::move(options)},
+        finishWrite_{std::move(finishWrite)} {}
 
   const std::vector<ExecutableFragment>& fragments() const {
     return fragments_;
@@ -84,6 +98,10 @@ class MultiFragmentPlan {
 
   const Options& options() const {
     return options_;
+  }
+
+  const FinishWrite& finishWrite() const {
+    return finishWrite_;
   }
 
   /// @param detailed If true, includes details of each plan node. Otherwise,
@@ -106,6 +124,7 @@ class MultiFragmentPlan {
  private:
   const std::vector<ExecutableFragment> fragments_;
   const Options options_;
+  const FinishWrite finishWrite_;
 };
 
 using MultiFragmentPlanPtr = std::shared_ptr<const MultiFragmentPlan>;

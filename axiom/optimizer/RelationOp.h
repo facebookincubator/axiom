@@ -93,6 +93,7 @@ enum class RelType {
   kLimit,
   kValues,
   kUnnest,
+  kTableWrite,
 };
 
 AXIOM_DECLARE_ENUM_NAME(RelType)
@@ -524,5 +525,21 @@ struct Limit : public RelationOp {
 };
 
 using LimitCP = const Limit*;
+
+struct TableWrite : public RelationOp {
+  // 'inputColumns' are the columns from 'input' that correspond to
+  // the 'write->table()->type()' 1:1.
+  TableWrite(
+      RelationOpPtr input,
+      ExprVector inputColumns,
+      const WritePlan* write);
+
+  std::string toString(bool recursive, bool detail) const override;
+
+  ExprVector inputColumns;
+  const WritePlan* write;
+};
+
+using TableWriteCP = const TableWrite*;
 
 } // namespace facebook::axiom::optimizer

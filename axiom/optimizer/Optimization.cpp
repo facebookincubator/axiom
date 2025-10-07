@@ -707,6 +707,19 @@ void Optimization::addPostprocess(
     DerivedTableCP dt,
     RelationOpPtr& plan,
     PlanState& state) const {
+  if (dt->write) {
+    VELOX_DCHECK(!dt->hasAggregation());
+    VELOX_DCHECK(!dt->hasOrderBy());
+    VELOX_DCHECK(!dt->hasLimit());
+    VELOX_DCHECK(dt->columns == dt->write->output());
+    PrecomputeProjection precompute{plan, dt, /*projectAllInputs=*/false};
+    auto writeColumns = precompute.toColumns(dt->write->columnExprs());
+    plan = std::move(precompute).maybeProject();
+    state.addCost(*plan);
+    plan = make<TableWrite>(plan, std::move(writeColumns), dt->write);
+    return;
+  }
+
   if (dt->aggregation) {
     addAggregation(dt, plan, state);
   }

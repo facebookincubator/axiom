@@ -245,6 +245,12 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
     }
   }
 
+  // Write.
+  if (dt->write) {
+    VELOX_DCHECK(!placed.contains(dt->write));
+    addExprs(dt->write->columnExprs());
+  }
+
   // Output expressions.
   targetExprs.forEach<Expr>([&](ExprCP expr) { addExpr(expr); });
 

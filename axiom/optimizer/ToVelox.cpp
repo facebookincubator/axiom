@@ -240,12 +240,24 @@ PlanAndStats ToVelox::toVeloxPlan(
   top.fragment.planNode = makeFragment(plan, top, stages);
   stages.push_back(std::move(top));
 
+  runner::FinishWrite finishWrite;
+  if (!finishWrites_.empty()) {
+    finishWrite = [finishWrites = std::move(finishWrites_)](
+                      bool success,
+                      const std::vector<velox::RowVectorPtr>& results) {
+      for (auto& finish : finishWrites) {
+        finish(success, results);
+      }
+    };
+  }
+
   for (const auto& stage : stages) {
     velox::core::PlanConsistencyChecker::check(stage.fragment.planNode);
   }
 
   return PlanAndStats{
-      std::make_shared<runner::MultiFragmentPlan>(std::move(stages), options),
+      std::make_shared<runner::MultiFragmentPlan>(
+          std::move(stages), options, std::move(finishWrite)),
       std::move(nodeHistory_),
       std::move(prediction_)};
 }
@@ -1433,6 +1445,67 @@ velox::core::PlanNodePtr ToVelox::makeValues(
   return valuesNode;
 }
 
+velox::core::PlanNodePtr ToVelox::makeWrite(
+    const TableWrite& tableWrite,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeFragment(tableWrite.input(), fragment, stages);
+  const auto& write = *tableWrite.write;
+  const auto& table = write.table();
+
+  std::vector<std::string> inputNames;
+  std::vector<velox::TypePtr> inputTypes;
+  inputNames.reserve(tableWrite.inputColumns.size());
+  inputTypes.reserve(tableWrite.inputColumns.size());
+  for (const auto* column : tableWrite.inputColumns) {
+    inputNames.push_back(column->as<Column>()->outputName());
+    inputTypes.push_back(toTypePtr(column->value().type));
+  }
+
+  auto columnNames = table.type()->names();
+
+  std::vector<std::string> outputNames;
+  std::vector<velox::TypePtr> outputTypes;
+  const auto& outputColumns = write.output();
+  outputNames.reserve(outputColumns.size());
+  outputTypes.reserve(outputColumns.size());
+  for (const auto* column : outputColumns) {
+    outputNames.push_back(column->outputName());
+    outputTypes.push_back(toTypePtr(column->value().type));
+  }
+
+  auto* connector = table.layouts().front()->connector();
+  auto* metadata = connector::ConnectorMetadata::metadata(connector);
+  auto handle =
+      metadata->beginWrite(table.shared_from_this(), write.kind(), {});
+
+  // The finish function needs to capture the connector table,
+  // to make layout live past the Optimization.
+  finishWrites_.emplace_back(
+      [metadata, handle](
+          bool success,
+          const std::vector<velox::RowVectorPtr>& results) mutable {
+        if (success) {
+          metadata->finishWrite(handle, results, {});
+        } else {
+          metadata->abortWrite(handle, {});
+        }
+        handle.reset();
+      });
+
+  return std::make_shared<velox::core::TableWriteNode>(
+      nextId(),
+      ROW(std::move(inputNames), std::move(inputTypes)),
+      std::move(columnNames),
+      std::nullopt,
+      std::make_shared<const velox::core::InsertTableHandle>(
+          connector->connectorId(), handle->veloxHandle()),
+      false,
+      ROW(std::move(outputNames), std::move(outputTypes)),
+      velox::connector::CommitStrategy::kNoCommit,
+      std::move(input));
+}
+
 void ToVelox::makePredictionAndHistory(
     const velox::core::PlanNodeId& id,
     const RelationOp* op) {
@@ -1472,6 +1545,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeValues(*op->as<Values>(), fragment);
     case RelType::kUnnest:
       return makeUnnest(*op->as<Unnest>(), fragment, stages);
+    case RelType::kTableWrite:
+      return makeWrite(*op->as<TableWrite>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

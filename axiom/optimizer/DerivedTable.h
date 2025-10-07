@@ -33,6 +33,9 @@ using AggregationPlanCP = const AggregationPlan*;
 enum class OrderType;
 using OrderTypeVector = QGVector<OrderType>;
 
+class WritePlan;
+using WritePlanCP = const WritePlan*;
+
 /// Represents a derived table, i.e. a SELECT in a FROM clause. This is the
 /// basic unit of planning. Derived tables can be merged and split apart from
 /// other ones. Join types and orders are decided within each derived table. A
@@ -51,6 +54,7 @@ using OrderTypeVector = QGVector<OrderType>;
 ///   5. SELECT (projections)
 ///   6. ORDER BY (sort)
 ///   7. OFFSET and LIMIT (limit)
+///   8. WRITE (create/insert/delete/update)
 ///
 struct DerivedTable : public PlanObject {
   DerivedTable() : PlanObject(PlanType::kDerivedTableNode) {}
@@ -144,6 +148,9 @@ struct DerivedTable : public PlanObject {
   /// Limit and offset.
   int64_t limit{-1};
   int64_t offset{0};
+
+  // Write.
+  WritePlanCP write{nullptr};
 
   /// Adds an equijoin edge between 'left' and 'right'.
   void addJoinEquality(ExprCP left, ExprCP right);

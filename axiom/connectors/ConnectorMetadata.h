@@ -100,7 +100,15 @@ class Column {
   virtual ~Column() = default;
 
   Column(std::string name, velox::TypePtr type)
-      : name_(std::move(name)), type_(std::move(type)) {}
+      : name_{std::move(name)},
+        type_{std::move(type)},
+        defaultValue_{velox::Variant::null(type_->kind())} {}
+
+  /// Default value can be specified to be used for table write.
+  Column(std::string name, velox::TypePtr type, velox::Variant defaultValue)
+      : name_{std::move(name)},
+        type_{std::move(type)},
+        defaultValue_{std::move(defaultValue)} {}
 
   const ColumnStatistics* stats() const {
     return latestStats_;
@@ -130,6 +138,10 @@ class Column {
     return type_;
   }
 
+  const velox::Variant& defaultValue() const {
+    return defaultValue_;
+  }
+
   /// Returns approximate number of distinct values. Returns 'defaultValue' if
   /// no information.
   int64_t approxNumDistinct(int64_t defaultValue = 1000) const {
@@ -143,6 +155,7 @@ class Column {
  protected:
   const std::string name_;
   const velox::TypePtr type_;
+  const velox::Variant defaultValue_;
 
   // The latest element added to 'allStats_'.
   velox::tsan_atomic<ColumnStatistics*> latestStats_{nullptr};
@@ -289,7 +302,7 @@ class TableLayout {
 /// used for accessing physical organization like partitioning and sort order.
 /// The Table object maintains ownership over the objects it contains, including
 /// the TableLayout and Columns contained in the Table.
-class Table {
+class Table : public std::enable_shared_from_this<Table> {
  public:
   virtual ~Table() = default;
 

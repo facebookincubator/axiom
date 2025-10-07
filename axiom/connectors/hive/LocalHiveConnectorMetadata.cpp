@@ -1002,6 +1002,9 @@ velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
   if (hiveHandle->kind() == WriteKind::kCreate) {
     const auto& targetPath = veloxHandle->locationHandle()->targetPath();
     deleteDirectoryRecursive(targetPath);
+  } else if (hiveHandle->kind() == WriteKind::kInsert) {
+    const auto& writePath = veloxHandle->locationHandle()->writePath();
+    deleteDirectoryRecursive(writePath);
   }
   return {};
 }

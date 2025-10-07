@@ -63,6 +63,9 @@ class LogicalPlanNode {
     VELOX_USER_CHECK_NOT_NULL(outputType_);
     for (const auto& input : inputs_) {
       VELOX_USER_CHECK_NOT_NULL(input);
+      VELOX_USER_CHECK(
+          input->kind() != NodeKind::kTableWrite,
+          "TableWrite cannot be non-root logical plan node");
     }
   }
 
@@ -682,13 +685,13 @@ enum class WriteKind {
 
 AXIOM_DECLARE_ENUM_NAME(WriteKind);
 
-/// Implements insert/delete/update as per 'kind'.
+/// Implements create/insert/delete/update as per 'kind'.
 class TableWriteNode : public LogicalPlanNode {
  public:
   /// @param id Unique ID of the plan node.
   /// @param connectorId ID of the connector to use to access the table.
   /// @param tableName Table name.
-  /// @param kind Indicates the type of write (insert/delete/update)
+  /// @param kind Indicates the type of write (create/insert/delete/update)
   /// @param columnNames A List of columns in the table being written.
   /// Correspond 1:1 to 'columnExpressions'. 'columnNames' must refer to columns
   /// in the table but their number or order does not have to correspond to the

@@ -932,4 +932,46 @@ class AggregationPlan : public PlanObject {
 
 using AggregationPlanCP = const AggregationPlan*;
 
+class WritePlan : public PlanObject {
+ public:
+  /// @param table The table to write to.
+  /// @param kind Indicates the type of write (create/insert/delete/update)
+  /// @param columnExpressions Expressions producing the values to write.
+  /// @param output Table write dependent output columns.
+  WritePlan(
+      const connector::Table& table,
+      connector::WriteKind kind,
+      ExprVector columnExprs,
+      ColumnVector output)
+      : PlanObject{PlanType::kWriteNode},
+        table_{table},
+        kind_{kind},
+        columnExprs_{std::move(columnExprs)},
+        output_{std::move(output)} {}
+
+  const connector::Table& table() const {
+    return table_;
+  }
+
+  connector::WriteKind kind() const {
+    return kind_;
+  }
+
+  const ExprVector& columnExprs() const {
+    return columnExprs_;
+  }
+
+  const ColumnVector& output() const {
+    return output_;
+  }
+
+ private:
+  const connector::Table& table_;
+  const connector::WriteKind kind_;
+  const ExprVector columnExprs_;
+  const ColumnVector output_;
+};
+
+using WritePlanCP = const WritePlan*;
+
 } // namespace facebook::axiom::optimizer

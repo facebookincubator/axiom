@@ -860,4 +860,48 @@ std::string UnionAll::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+TableWrite::TableWrite(
+    RelationOpPtr input,
+    ExprVector inputColumns,
+    const WritePlan* write)
+    : RelationOp{RelType::kTableWrite, std::move(input), Distribution{}, write->output()},
+      inputColumns{std::move(inputColumns)},
+      write{write} {
+  cost_.inputCardinality = inputCardinality();
+  cost_.unitCost = 0.01;
+  VELOX_DCHECK_EQ(
+      this->inputColumns.size(), this->write->table().type()->size());
+}
+
+std::string TableWrite::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (recursive) {
+    out << input()->toString(true, detail) << " ";
+  }
+
+  const auto& table = write->table();
+  const auto& type = *table.type();
+  if (detail) {
+    out << fmt::format(
+        "TableWrite to {} ({} columns)", table.name(), type.size());
+
+    if (type.size() != 0) {
+      out << " columns:";
+      for (uint32_t i = 0; i < type.size(); ++i) {
+        out << " " << type.nameOf(i) << "=" << inputColumns[i]->toString();
+        if (i < inputColumns.size() - 1) {
+          out << ", ";
+        }
+      }
+    }
+
+    printCost(detail, out);
+  } else {
+    out << fmt::format(
+        "TableWrite {} columns to {}", type.size(), table.name());
+  }
+
+  return out.str();
+}
+
 } // namespace facebook::axiom::optimizer
