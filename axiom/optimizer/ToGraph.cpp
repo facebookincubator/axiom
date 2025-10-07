@@ -108,40 +108,35 @@ ToGraph::ToGraph(
   }
 }
 
-void ToGraph::setDtOutput(
-    DerivedTableP dt,
-    const lp::LogicalPlanNode& logicalPlan) {
-  const auto& outputType = logicalPlan.outputType();
-  for (auto i = 0; i < outputType->size(); ++i) {
-    const auto& type = outputType->childAt(i);
-    const auto& name = outputType->nameOf(i);
+void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
+  const auto* inner = translateColumn(name);
+  dt->exprs.push_back(inner);
 
-    auto inner = translateColumn(name);
-    dt->exprs.push_back(inner);
-
-    Value value(toType(type), 0);
+  ColumnCP outer = nullptr;
+  if (inner->isColumn() && inner->as<Column>()->relation() == dt &&
+      inner->as<Column>()->outputName() == name) {
+    outer = inner->as<Column>();
+  } else {
     const auto* columnName = toName(name);
-    auto* outer = make<Column>(columnName, dt, value, columnName);
-    dt->columns.push_back(outer);
-    renames_[name] = outer;
+    outer = make<Column>(columnName, dt, inner->value(), columnName);
+  }
+  dt->columns.push_back(outer);
+  renames_[name] = outer;
+}
+
+void ToGraph::setDtOutput(DerivedTableP dt, const lp::LogicalPlanNode& node) {
+  const auto& type = *node.outputType();
+  for (const auto& name : type.names()) {
+    addDtColumn(dt, name);
   }
 }
 
 void ToGraph::setDtUsedOutput(
     DerivedTableP dt,
     const lp::LogicalPlanNode& node) {
-  const auto& type = node.outputType();
+  const auto& type = *node.outputType();
   for (auto i : usedChannels(node)) {
-    const auto& name = type->nameOf(i);
-
-    const auto* inner = translateColumn(name);
-    dt->exprs.push_back(inner);
-
-    const auto* columnName = toName(name);
-    const auto* outer =
-        make<Column>(columnName, dt, inner->value(), columnName);
-    dt->columns.push_back(outer);
-    renames_[name] = outer;
+    addDtColumn(dt, type.nameOf(i));
   }
 }
 
@@ -1850,7 +1845,7 @@ extern std::string leString(const lp::Expr* e) {
   return lp::ExprPrinter::toText(*e);
 }
 
-extern std::string pString(const lp::LogicalPlanNode* p) {
+extern std::string lpString(const lp::LogicalPlanNode* p) {
   return lp::PlanPrinter::toText(*p);
 }
 

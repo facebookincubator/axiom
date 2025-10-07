@@ -156,9 +156,7 @@ class ToGraph {
 
   // Sets the columns to project out from the root DerivedTable based on
   // 'logicalPlan'.
-  void setDtOutput(
-      DerivedTableP dt,
-      const logical_plan::LogicalPlanNode& logicalPlan);
+  void setDtOutput(DerivedTableP dt, const logical_plan::LogicalPlanNode& node);
 
   Name newCName(std::string_view prefix) {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
@@ -414,6 +412,9 @@ class ToGraph {
   void finalizeDt(
       const logical_plan::LogicalPlanNode& node,
       DerivedTableP outerDt = nullptr);
+
+  // Adds a column 'name' from current DerivedTable to the 'dt'.
+  void addDtColumn(DerivedTableP dt, std::string_view name);
 
   void setDtUsedOutput(
       DerivedTableP dt,
