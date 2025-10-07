@@ -704,7 +704,7 @@ class TableWriteNode : public LogicalPlanNode {
       LogicalPlanNodePtr input,
       std::string connectorId,
       std::string tableName,
-      WriteKind kind,
+      WriteKind writeKind,
       std::vector<std::string> columnNames,
       std::vector<ExprPtr> columnExpressions,
       velox::RowTypePtr outputType,
@@ -718,8 +718,8 @@ class TableWriteNode : public LogicalPlanNode {
     return tableName_;
   }
 
-  WriteKind kind() const {
-    return kind_;
+  WriteKind writeKind() const {
+    return writeKind_;
   }
 
   const std::vector<std::string>& columnNames() const {
@@ -740,7 +740,7 @@ class TableWriteNode : public LogicalPlanNode {
  private:
   const std::string connectorId_;
   const std::string tableName_;
-  const WriteKind kind_;
+  const WriteKind writeKind_;
   const std::vector<std::string> columnNames_;
   const std::vector<ExprPtr> columnExpressions_;
   const folly::F14FastMap<std::string, std::string> options_;
