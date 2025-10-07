@@ -711,52 +711,6 @@ void Optimization::addPostprocess(
   }
 }
 
-RelationOpPtr Optimization::crossJoin(
-    RelationOpPtr plan,
-    const JoinCandidate& candidate,
-    PlanState& state) {
-  PlanObjectSet broadcastTables;
-  PlanObjectSet broadcastColumns;
-  for (const auto* buildTable : candidate.tables) {
-    broadcastColumns.unionSet(availableColumns(buildTable));
-    broadcastTables.add(buildTable);
-  }
-
-  state.columns.unionSet(broadcastColumns);
-
-  auto memoKey = MemoKey{
-      candidate.tables[0],
-      broadcastColumns,
-      broadcastTables,
-      candidate.existences};
-
-  auto broadcast =
-      Distribution::broadcast(plan->distribution().distributionType);
-  PlanObjectSet empty;
-  bool needsShuffle = false;
-
-  auto* rightPlan = makePlan(
-      memoKey, broadcast, empty, candidate.existsFanout, state, needsShuffle);
-
-  RelationOpPtr rightOp = rightPlan->op;
-  if (needsShuffle) {
-    rightOp = make<Repartition>(rightPlan->op, broadcast, rightOp->columns());
-  }
-
-  auto resultColumns = plan->columns();
-  resultColumns.insert(
-      resultColumns.end(),
-      rightOp->columns().begin(),
-      rightOp->columns().end());
-
-  auto* join =
-      Join::makeCrossJoin(plan, std::move(rightOp), std::move(resultColumns));
-
-  state.cost = join->cost();
-  state.placed.unionSet(broadcastTables);
-  return join;
-}
-
 void Optimization::addAggregation(
     DerivedTableCP dt,
     RelationOpPtr& plan,
@@ -1217,6 +1171,52 @@ void Optimization::joinByHashRight(
   state.addCost(*join);
 
   state.addNextJoin(&candidate, join, {buildOp}, toTry);
+}
+
+void Optimization::crossJoin(
+    RelationOpPtr plan,
+    const JoinCandidate& candidate,
+    PlanState& state,
+    std::vector<NextJoin>& toTry) {
+  PlanObjectSet broadcastTables;
+  PlanObjectSet broadcastColumns;
+  for (const auto* buildTable : candidate.tables) {
+    broadcastColumns.unionSet(availableColumns(buildTable));
+    broadcastTables.add(buildTable);
+  }
+
+  state.columns.unionSet(broadcastColumns);
+
+  auto memoKey = MemoKey{
+      candidate.tables[0],
+      broadcastColumns,
+      broadcastTables,
+      candidate.existences};
+
+  auto broadcast =
+      Distribution::broadcast(plan->distribution().distributionType);
+  PlanObjectSet empty;
+  bool needsShuffle = false;
+
+  auto* rightPlan = makePlan(
+      memoKey, broadcast, empty, candidate.existsFanout, state, needsShuffle);
+
+  RelationOpPtr rightOp = rightPlan->op;
+  if (needsShuffle) {
+    rightOp = make<Repartition>(rightPlan->op, broadcast, rightOp->columns());
+  }
+
+  auto resultColumns = plan->columns();
+  resultColumns.insert(
+      resultColumns.end(),
+      rightOp->columns().begin(),
+      rightOp->columns().end());
+
+  auto* join =
+      Join::makeCrossJoin(std::move(plan), std::move(rightOp), std::move(resultColumns));
+
+  state.cost = join->cost();
+  state.placed.unionSet(broadcastTables);
 }
 
 void Optimization::crossJoinUnnest(

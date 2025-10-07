@@ -290,7 +290,7 @@ class Optimization {
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
-  RelationOpPtr crossJoin(
+  void crossJoin(
       RelationOpPtr plan,
       const JoinCandidate& candidate,
       PlanState& state,
