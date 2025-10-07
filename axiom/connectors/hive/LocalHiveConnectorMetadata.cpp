@@ -765,8 +765,16 @@ std::shared_ptr<LocalTable> LocalHiveConnectorMetadata::findTableLocked(
 
 namespace {
 
+// Recursively delete directory contents.
+void deleteDirectoryContents(const std::string& path);
+
 // Recursively delete directory.
 void deleteDirectoryRecursive(const std::string& path) {
+  deleteDirectoryContents(path);
+  rmdir(path.c_str());
+}
+
+void deleteDirectoryContents(const std::string& path) {
   DIR* dir = opendir(path.c_str());
   if (!dir) {
     return;
@@ -783,14 +791,12 @@ void deleteDirectoryRecursive(const std::string& path) {
     if (stat(fullPath.c_str(), &st) == 0) {
       if (S_ISDIR(st.st_mode)) {
         deleteDirectoryRecursive(fullPath);
-        rmdir(fullPath.c_str());
       } else {
         unlink(fullPath.c_str());
       }
     }
   }
   closedir(dir);
-  rmdir(path.c_str());
 }
 
 // Check if directory exists.
@@ -934,9 +940,9 @@ velox::ContinueFuture LocalHiveConnectorMetadata::finishWrite(
       const velox::connector::hive::HiveInsertTableHandle>(
       handle->veloxHandle());
   VELOX_CHECK_NOT_NULL(veloxHandle, "expecting a Hive insert handle");
-  auto targetPath = veloxHandle->locationHandle()->targetPath();
+  const auto& targetPath = veloxHandle->locationHandle()->targetPath();
   loadTable(hiveHandle->table()->name(), targetPath);
-  return velox::ContinueFuture();
+  return {};
 }
 
 velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
@@ -945,11 +951,15 @@ velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
   auto hiveHandle =
       std::dynamic_pointer_cast<const HiveConnectorWriteHandle>(handle);
   VELOX_CHECK_NOT_NULL(hiveHandle, "expecting a Hive write handle");
+  auto veloxHandle = std::dynamic_pointer_cast<
+      const velox::connector::hive::HiveInsertTableHandle>(
+      handle->veloxHandle());
+  VELOX_CHECK_NOT_NULL(veloxHandle, "expecting a Hive insert handle");
   if (hiveHandle->kind() == WriteKind::kCreate) {
-    auto path = tablePath(hiveHandle->table()->name());
-    deleteDirectoryRecursive(path);
+    const auto& targetPath = veloxHandle->locationHandle()->targetPath();
+    deleteDirectoryRecursive(targetPath);
   }
-  return velox::ContinueFuture();
+  return {};
 }
 
 } // namespace facebook::axiom::connector::hive
