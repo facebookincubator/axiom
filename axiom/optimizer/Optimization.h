@@ -249,17 +249,6 @@ class Optimization {
   // their different permutations.
   void tryNextJoins(PlanState& state, const std::vector<NextJoin>& nextJoins);
 
-  void crossJoins(
-      RelationOpPtr plan,
-      std::vector<JoinCandidate>& crossJoins,
-      PlanState& state,
-      std::vector<NextJoin>& toTry);
-
-  RelationOpPtr crossJoin(
-      RelationOpPtr plan,
-      const JoinCandidate& candidate,
-      PlanState& state);
-
   // Adds a cross join to access a single row from a non-correlated subquery.
   RelationOpPtr placeSingleRowDt(
       RelationOpPtr plan,
@@ -301,6 +290,11 @@ class Optimization {
       const JoinCandidate& candidate,
       PlanState& state,
       std::vector<NextJoin>& toTry);
+
+  RelationOpPtr crossJoin(
+      RelationOpPtr plan,
+      const JoinCandidate& candidate,
+      PlanState& state);
 
   void crossJoinUnnest(
       RelationOpPtr plan,
