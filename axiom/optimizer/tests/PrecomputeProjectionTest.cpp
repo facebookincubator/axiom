@@ -192,6 +192,23 @@ TEST_F(PrecomputeProjectionTest, basic) {
     {
       PrecomputeProjection precompute(input, dt, /*projectAllInputs=*/false);
 
+      const auto* aliasName = toName("aaa");
+      auto* outputColumn =
+          make<Column>(aliasName, dt, Value(toType(INTEGER()), 1), aliasName);
+
+      auto* column = precompute.toColumn(agg->groupingKeys()[0], outputColumn);
+      ASSERT_NE(column, agg->groupingKeys()[0]);
+
+      auto project = std::move(precompute).maybeProject();
+      ASSERT_NE(project.get(), input.get());
+      ASSERT_EQ(project->columns().size(), 1);
+      ASSERT_EQ(project->as<Project>()->columns().back()->alias(), aliasName);
+    }
+
+    // Output name as alias column.
+    {
+      PrecomputeProjection precompute(input, dt, /*projectAllInputs=*/false);
+
       auto* outputColumn =
           make<Column>(toName("aaa"), dt, Value(toType(INTEGER()), 1));
 
@@ -202,7 +219,7 @@ TEST_F(PrecomputeProjectionTest, basic) {
       ASSERT_NE(project.get(), input.get());
       ASSERT_EQ(project->columns().size(), 1);
       ASSERT_EQ(
-          project->as<Project>()->columns().back()->alias(), toName("aaa"));
+          project->as<Project>()->columns().back()->outputName(), "dt1.aaa");
     }
   });
 }
