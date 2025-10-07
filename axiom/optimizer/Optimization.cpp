@@ -1174,7 +1174,7 @@ void Optimization::joinByHashRight(
 }
 
 void Optimization::crossJoin(
-    RelationOpPtr plan,
+    const RelationOpPtr& plan,
     const JoinCandidate& candidate,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
@@ -1212,8 +1212,8 @@ void Optimization::crossJoin(
       rightOp->columns().begin(),
       rightOp->columns().end());
 
-  auto* join =
-      Join::makeCrossJoin(std::move(plan), std::move(rightOp), std::move(resultColumns));
+  auto* join = Join::makeCrossJoin(
+      std::move(plan), std::move(rightOp), std::move(resultColumns));
 
   state.cost = join->cost();
   state.placed.unionSet(broadcastTables);
