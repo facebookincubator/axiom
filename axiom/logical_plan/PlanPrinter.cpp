@@ -650,6 +650,8 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
                     << std::endl;
       myContext.out << indent << "columns: " << node.columnNames().size()
                     << std::endl;
+      myContext.out << indent << "kind: " << WriteKindName::toName(node.kind())
+                    << std::endl;
       appendExpressions(node.columnExpressions(), myContext);
     }
 

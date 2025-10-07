@@ -1242,6 +1242,7 @@ TEST_F(PlanPrinterTest, tableWrite) {
           testing::Eq("      table: output_table"),
           testing::Eq("      connector: test"),
           testing::Eq("      columns: 2"),
+          testing::Eq("      kind: INSERT"),
           testing::Eq("      expressions: CAST: 1, field: 2"),
           testing::Eq("  - TABLE_SCAN [0]: 2 fields: a BIGINT, b DOUBLE"),
           testing::Eq("        table: test"),
