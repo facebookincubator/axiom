@@ -181,6 +181,9 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       const TablePtr& table,
       WriteKind kind) override;
 
+  velox::RowTypePtr writeResultType(const Table& table, WriteKind kind)
+      const override;
+
  protected:
   virtual void ensureInitialized() const {}
 

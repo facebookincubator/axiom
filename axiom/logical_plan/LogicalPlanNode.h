@@ -698,7 +698,6 @@ class TableWriteNode : public LogicalPlanNode {
   /// table. Missing columns in insert get their default from the table.
   /// @param columnExpressions Expressions producing the values to write.
   /// Correspond 1:1 to 'names'.
-  /// @param outputType Writer dependent output type.
   /// @param options Writer dependent options. May specify compression or
   /// encoding options. The table always specifies partitioning.
   /// 'options' are only for advanced/testing features.
@@ -710,7 +709,6 @@ class TableWriteNode : public LogicalPlanNode {
       WriteKind writeKind,
       std::vector<std::string> columnNames,
       std::vector<ExprPtr> columnExpressions,
-      velox::RowTypePtr outputType,
       folly::F14FastMap<std::string, std::string> options = {});
 
   const std::string& connectorId() const {

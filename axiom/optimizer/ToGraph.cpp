@@ -1490,7 +1490,9 @@ PlanObjectP ToGraph::addLimit(const lp::LimitNode& limitNode) {
 }
 
 PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
-  if (tableWrite.writeKind() != lp::WriteKind::kInsert) {
+  const auto writeKind =
+      static_cast<connector::WriteKind>(tableWrite.writeKind());
+  if (writeKind != connector::WriteKind::kInsert) {
     VELOX_NYI("Only INSERT supported for TableWrite");
   }
   VELOX_CHECK_NULL(
@@ -1528,22 +1530,24 @@ PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
 
   renames_.clear();
   ColumnVector outputColumns;
-  const auto& outputType = *tableWrite.outputType();
-  outputColumns.reserve(outputType.size());
-  for (uint32_t i = 0; i < outputType.size(); ++i) {
-    const auto& name = outputType.nameOf(i);
+  auto* connector = connectorTable->layouts().front()->connector();
+  auto* metadata = connector::ConnectorMetadata::metadata(connector);
+  const auto outputType = metadata->writeResultType(*connectorTable, writeKind);
+  outputColumns.reserve(outputType->size());
+  for (uint32_t i = 0; i < outputType->size(); ++i) {
+    const auto& name = outputType->nameOf(i);
     const auto* columnName = toName(name);
     outputColumns.push_back(make<Column>(
         columnName,
         currentDt_,
-        Value{toType(outputType.childAt(i)), 1},
+        Value{toType(outputType->childAt(i)), 1},
         columnName));
     renames_[name] = outputColumns.back();
   }
 
   currentDt_->write = make<WritePlan>(
       *connectorTable,
-      static_cast<connector::WriteKind>(tableWrite.writeKind()),
+      writeKind,
       std::move(columnExprs),
       std::move(outputColumns));
 

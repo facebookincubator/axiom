@@ -93,9 +93,6 @@ class WriteTest : public test::HiveQueriesTestBase {
 
   std::shared_ptr<velox::connector::Connector> connector_;
   connector::hive::LocalHiveConnectorMetadata* metadata_;
-  RowTypePtr writeOutputType_{
-      ROW({"numWrittenRows", "fragment", "tableCommitContext"},
-          {BIGINT(), VARBINARY(), VARBINARY()})};
 };
 
 TEST_F(WriteTest, write) {
@@ -127,8 +124,7 @@ TEST_F(WriteTest, write) {
                         "test",
                         lp::WriteKind::kInsert,
                         {"key1", "key2", "data", "ds"},
-                        exprs({"key1", "key2", "data", "ds"}),
-                        writeOutputType_)
+                        exprs({"key1", "key2", "data", "ds"}))
                     .build();
   runVelox(write1);
 
@@ -153,8 +149,7 @@ TEST_F(WriteTest, write) {
               "test",
               lp::WriteKind::kInsert,
               {"key1", "key2", "data", "ds"},
-              exprs({"key1", "key2", "key1 % (key1 - 200000)", "ds"}),
-              writeOutputType_)
+              exprs({"key1", "key2", "key1 % (key1 - 200000)", "ds"}))
           .build();
   VELOX_ASSERT_THROW(runVelox(errorPlan), "divide by");
 
@@ -187,8 +182,7 @@ TEST_F(WriteTest, write) {
                           "test2",
                           lp::WriteKind::kInsert,
                           {"key1", "key2", "data", "data2", "ds"},
-                          exprs({"key1", "key2", "data", "data2", "ds"}),
-                          writeOutputType_)
+                          exprs({"key1", "key2", "data", "data2", "ds"}))
                       .build();
   runVelox(copyPlan);
 

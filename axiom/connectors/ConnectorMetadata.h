@@ -641,6 +641,13 @@ class ConnectorMetadata {
       WriteKind kind) {
     VELOX_UNSUPPORTED();
   }
+
+  /// Returns the RowType of the result of a write operation of 'kind' against
+  /// 'table'. This is the type of the result vectors passed to finishWrite.
+  virtual velox::RowTypePtr writeResultType(const Table& table, WriteKind kind)
+      const {
+    VELOX_UNSUPPORTED();
+  }
 };
 
 } // namespace facebook::axiom::connector

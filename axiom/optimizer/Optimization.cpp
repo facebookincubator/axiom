@@ -711,7 +711,7 @@ void Optimization::addPostprocess(
     VELOX_DCHECK(!dt->hasAggregation());
     VELOX_DCHECK(!dt->hasOrderBy());
     VELOX_DCHECK(!dt->hasLimit());
-    VELOX_DCHECK(dt->columns == dt->write->output());
+    VELOX_DCHECK(dt->columns.empty());
     PrecomputeProjection precompute{plan, dt, /*projectAllInputs=*/false};
     auto writeColumns = precompute.toColumns(dt->write->columnExprs());
     plan = std::move(precompute).maybeProject();
