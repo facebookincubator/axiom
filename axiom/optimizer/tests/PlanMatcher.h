@@ -21,8 +21,6 @@
 
 namespace facebook::velox::core {
 
-using JoinType = facebook::velox::core::JoinType;
-
 class PlanMatcher {
  public:
   virtual ~PlanMatcher() = default;
