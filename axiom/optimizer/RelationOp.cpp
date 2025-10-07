@@ -357,8 +357,8 @@ Join::Join(
     const float rightByteSize = byteSize(right->columns());
     cost_.setupCost = rightCardinality * rightByteSize;
     const auto numRightColumns = static_cast<float>(right->columns().size());
-    cost_.unitCost = fanout * (Costs::kColumnRowCost +
-                                numRightColumns * Costs::kColumnByteCost);
+    cost_.unitCost = fanout *
+        (Costs::kColumnRowCost + numRightColumns * Costs::kColumnByteCost);
     cost_.totalBytes = rightCardinality * rightByteSize;
     return;
   }
