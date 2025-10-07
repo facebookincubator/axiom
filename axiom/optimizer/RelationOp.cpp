@@ -353,7 +353,13 @@ Join::Join(
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = fanout;
   if (method == JoinMethod::kCross) {
-    cost_.setupCost = fanout * byteSize(right->columns());
+    const float rightCardinality = right->resultCardinality();
+    const float rightByteSize = byteSize(right->columns());
+    cost_.setupCost = rightCardinality * rightByteSize;
+    const auto numRightColumns = static_cast<float>(right->columns().size());
+    cost_.unitCost = fanout * (Costs::kColumnRowCost +
+                                numRightColumns * Costs::kColumnByteCost);
+    cost_.totalBytes = rightCardinality * rightByteSize;
     return;
   }
 

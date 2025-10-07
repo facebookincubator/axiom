@@ -920,6 +920,13 @@ PlanMatcherBuilder& PlanMatcherBuilder::orderBy(
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<NestedLoopJoinMatcher>(
+      matcher_, std::make_shared<PlanMatcherImpl<>>());
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(
     const std::shared_ptr<PlanMatcher>& rightMatcher) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);

@@ -1177,7 +1177,7 @@ void Optimization::crossJoin(
     const JoinCandidate& candidate,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
-  PlanStateSaver save{state, candidate};
+  PlanStateSaver save(state);
 
   PlanObjectSet broadcastTables;
   PlanObjectSet broadcastColumns;
@@ -1218,6 +1218,7 @@ void Optimization::crossJoin(
 
   state.cost = join->cost();
   state.placed.unionSet(broadcastTables);
+  state.addNextJoin(&candidate, join, {}, toTry);
 }
 
 void Optimization::crossJoinUnnest(

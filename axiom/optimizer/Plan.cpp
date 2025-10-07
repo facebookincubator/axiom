@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <iostream>
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/Optimization.h"
