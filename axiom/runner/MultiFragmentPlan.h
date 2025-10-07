@@ -76,7 +76,7 @@ class MultiFragmentPlan {
   };
 
   MultiFragmentPlan(std::vector<ExecutableFragment> fragments, Options options)
-      : fragments_(std::move(fragments)), options_(std::move(options)) {}
+      : fragments_{std::move(fragments)}, options_{std::move(options)} {}
 
   const std::vector<ExecutableFragment>& fragments() const {
     return fragments_;

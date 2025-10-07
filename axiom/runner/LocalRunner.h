@@ -74,18 +74,18 @@ class LocalRunner : public Runner,
                     public std::enable_shared_from_this<LocalRunner> {
  public:
   LocalRunner(
-      const MultiFragmentPlanPtr& plan,
+      MultiFragmentPlanPtr plan,
       std::shared_ptr<velox::core::QueryCtx> queryCtx,
       std::shared_ptr<SplitSourceFactory> splitSourceFactory,
       std::shared_ptr<velox::memory::MemoryPool> outputPool = nullptr);
 
   LocalRunner(
-      const MultiFragmentPlanPtr& plan,
+      MultiFragmentPlanPtr plan,
       std::shared_ptr<velox::core::QueryCtx> queryCtx)
-      : LocalRunner(
-            plan,
+      : LocalRunner{
+            std::move(plan),
             std::move(queryCtx),
-            std::make_shared<ConnectorSplitSourceFactory>()) {}
+            std::make_shared<ConnectorSplitSourceFactory>()} {}
 
   /// First call starts execution.
   velox::RowVectorPtr next() override;
