@@ -348,20 +348,20 @@ inline T* make(Args&&... args) {
   return new (queryCtx()->allocate(sizeof(T))) T(std::forward<Args>(args)...);
 }
 
-/// Shorthand for toType() in thread's QueryGraphContext.
+/// Shorthand for toType() in queryCtx().
 const velox::Type* toType(const velox::TypePtr& type);
 
-/// Shorthand for toTypePtr() in thread's QueryGraphContext.
+/// Shorthand for toTypePtr() in queryCtx().
 const velox::TypePtr& toTypePtr(const velox::Type* type);
 
-/// Shorthand for toPath in queryCtx().
+/// Shorthand for toPath() in queryCtx().
 PathCP toPath(std::span<const Step> steps, bool reverse = false);
 
 inline void Path::operator delete(void* ptr) {
   queryCtx()->free(ptr);
 }
 
-/// Shorthand for registerVariant in queryCtx().
+/// Shorthand for registerVariant() in queryCtx().
 template <typename... Args>
 velox::Variant* registerVariant(Args&&... args) {
   return queryCtx()->registerVariant(
