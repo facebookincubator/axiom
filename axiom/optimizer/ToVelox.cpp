@@ -240,16 +240,8 @@ PlanAndStats ToVelox::toVeloxPlan(
   top.fragment.planNode = makeFragment(plan, top, stages);
   stages.push_back(std::move(top));
 
-  runner::FinishWrite finishWrite;
-  if (!finishWrites_.empty()) {
-    finishWrite = [finishWrites = std::move(finishWrites_)](
-                      bool success,
-                      const std::vector<velox::RowVectorPtr>& results) {
-      for (auto& finish : finishWrites) {
-        finish(success, results);
-      }
-    };
-  }
+  runner::FinishWrite finishWrite = std::move(finishWrite_);
+  VELOX_DCHECK(!finishWrite_);
 
   for (const auto& stage : stages) {
     velox::core::PlanConsistencyChecker::check(stage.fragment.planNode);
@@ -1479,28 +1471,26 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
   auto handle =
       metadata->beginWrite(table.shared_from_this(), write.kind(), {});
 
-  // The finish function needs to capture the connector table,
-  // to make layout live past the Optimization.
-  finishWrites_.emplace_back(
-      [metadata, handle](
-          bool success,
-          const std::vector<velox::RowVectorPtr>& results) mutable {
-        if (success) {
-          metadata->finishWrite(handle, results, {});
-        } else {
-          metadata->abortWrite(handle, {});
-        }
-        handle.reset();
-      });
+  VELOX_CHECK(!finishWrite_, "Only single TableWrite per query supported");
+  finishWrite_ = [metadata, handle](
+                     bool success,
+                     const std::vector<velox::RowVectorPtr>& results) mutable {
+    if (success) {
+      metadata->finishWrite(handle, results, {}).get();
+    } else {
+      metadata->abortWrite(handle, {}).get();
+    }
+    handle.reset();
+  };
 
   return std::make_shared<velox::core::TableWriteNode>(
       nextId(),
       ROW(std::move(inputNames), std::move(inputTypes)),
       std::move(columnNames),
-      std::nullopt,
+      /*columnStatsSpec=*/std::nullopt,
       std::make_shared<const velox::core::InsertTableHandle>(
           connector->connectorId(), handle->veloxHandle()),
-      false,
+      /*hasPartitioningScheme*/ false,
       ROW(std::move(outputNames), std::move(outputTypes)),
       velox::connector::CommitStrategy::kNoCommit,
       std::move(input));

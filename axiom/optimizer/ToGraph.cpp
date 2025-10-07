@@ -1504,13 +1504,13 @@ PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
       tableWrite.connectorId());
   const auto* connectorTable = schemaTable->connectorTable;
   VELOX_DCHECK_NOT_NULL(connectorTable);
-  const auto& tableRow = *connectorTable->type();
+  const auto& tableSchema = *connectorTable->type();
 
   ExprVector columnExprs;
-  columnExprs.reserve(tableRow.size());
-  for (uint32_t i = 0; i < tableRow.size(); ++i) {
-    const auto& columnName = tableRow.nameOf(i);
-    const auto& columnType = tableRow.childAt(i);
+  columnExprs.reserve(tableSchema.size());
+  for (uint32_t i = 0; i < tableSchema.size(); ++i) {
+    const auto& columnName = tableSchema.nameOf(i);
+    const auto& columnType = tableSchema.childAt(i);
 
     auto it = std::ranges::find(tableWrite.columnNames(), columnName);
     if (it != tableWrite.columnNames().end()) {
@@ -1520,9 +1520,8 @@ PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
     } else {
       const auto* tableColumn = connectorTable->findColumn(columnName);
       VELOX_DCHECK_NOT_NULL(tableColumn);
-      auto& defaultValue = tableColumn->defaultValue();
       columnExprs.push_back(make<Literal>(
-          Value{toType(defaultValue.inferType()), 1}, &defaultValue));
+          Value{toType(tableColumn->type()), 1}, &tableColumn->defaultValue()));
     }
     VELOX_DCHECK(*columnType == *columnExprs.back()->value().type);
   }

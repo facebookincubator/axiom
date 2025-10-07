@@ -936,7 +936,7 @@ class WritePlan : public PlanObject {
  public:
   /// @param table The table to write to.
   /// @param kind Indicates the type of write (create/insert/delete/update)
-  /// @param columnExpressions Expressions producing the values to write.
+  /// @param columnExprs Expressions producing the values to write.
   /// @param output Table write dependent output columns.
   WritePlan(
       const connector::Table& table,
@@ -947,7 +947,9 @@ class WritePlan : public PlanObject {
         table_{table},
         kind_{kind},
         columnExprs_{std::move(columnExprs)},
-        output_{std::move(output)} {}
+        output_{std::move(output)} {
+    VELOX_DCHECK_EQ(columnExprs_.size(), table_.type()->size());
+  }
 
   const connector::Table& table() const {
     return table_;

@@ -289,7 +289,7 @@ class ToVelox {
 
   const std::optional<std::string> subscript_;
 
-  std::vector<runner::FinishWrite> finishWrites_;
+  runner::FinishWrite finishWrite_;
 };
 
 } // namespace facebook::axiom::optimizer

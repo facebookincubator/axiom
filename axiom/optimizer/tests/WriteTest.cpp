@@ -28,16 +28,8 @@ namespace {
 using namespace velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class WritePartitionTest : public test::HiveQueriesTestBase {
+class WriteTest : public test::HiveQueriesTestBase {
  protected:
-  static void SetUpTestCase() {
-    test::HiveQueriesTestBase::SetUpTestCase();
-  }
-
-  static void TearDownTestCase() {
-    test::HiveQueriesTestBase::TearDownTestCase();
-  }
-
   void SetUp() override {
     HiveQueriesTestBase::SetUp();
     connector_ = velox::connector::getConnector(exec::test::kHiveConnectorId);
@@ -48,10 +40,21 @@ class WritePartitionTest : public test::HiveQueriesTestBase {
   }
 
   void TearDown() override {
+    parquet::unregisterParquetWriterFactory();
+    parquet::unregisterParquetReaderFactory();
+    metadata_ = nullptr;
     connector_.reset();
     HiveQueriesTestBase::TearDown();
-    parquet::unregisterParquetReaderFactory();
-    parquet::unregisterParquetWriterFactory();
+  }
+
+  void addTable(
+      const std::string& name,
+      const RowTypePtr& tableType,
+      const folly::F14FastMap<std::string, std::string>& options) {
+    auto table = metadata_->createTable(name, tableType, options, {});
+    auto handle =
+        metadata_->beginWrite(table, connector::WriteKind::kCreate, {});
+    metadata_->finishWrite(handle, {}, {}).get();
   }
 
   std::vector<RowVectorPtr>
@@ -97,7 +100,7 @@ class WritePartitionTest : public test::HiveQueriesTestBase {
           {BIGINT(), VARBINARY(), VARBINARY()})};
 };
 
-TEST_F(WritePartitionTest, write) {
+TEST_F(WriteTest, write) {
   lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
 
   constexpr int32_t kTestBatchSize = 2048;
@@ -115,12 +118,7 @@ TEST_F(WritePartitionTest, write) {
       {"compression_kind", "snappy"},
   };
 
-  {
-    auto table = metadata_->createTable("test", tableType, options, {});
-    auto handle =
-        metadata_->beginWrite(table, connector::WriteKind::kCreate, {});
-    metadata_->finishWrite(handle, {}, {}).get();
-  }
+  addTable("test", tableType, options);
 
   auto data = makeTestData(10, kTestBatchSize);
 
@@ -136,18 +134,18 @@ TEST_F(WritePartitionTest, write) {
                     .build();
   runVelox(write1);
 
-  auto countPlan =
-      lp::PlanBuilder(context)
-          .tableScan(exec::test::kHiveConnectorId, "test", {"key1"})
-          .aggregate({}, {"count(1)"})
-          .build();
+  auto countTestTable = [&] {
+    auto countPlan = lp::PlanBuilder(context)
+                         .tableScan(exec::test::kHiveConnectorId, "test")
+                         .aggregate({}, {"count(1)"})
+                         .build();
 
-  {
     auto result = runVelox(countPlan);
-    EXPECT_EQ(
-        kTestBatchSize * 10,
-        result.results[0]->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0));
-  }
+    return result.results[0]->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  };
+
+  EXPECT_EQ(kTestBatchSize * 10, countTestTable());
+
   auto errorData = makeTestData(100, kTestBatchSize, 3);
   auto errorPlan =
       lp::PlanBuilder(context)
@@ -162,12 +160,7 @@ TEST_F(WritePartitionTest, write) {
           .build();
   VELOX_ASSERT_THROW(runVelox(errorPlan), "divide by");
 
-  {
-    auto result = runVelox(countPlan);
-    EXPECT_EQ(
-        kTestBatchSize * 10,
-        result.results[0]->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0));
-  }
+  EXPECT_EQ(kTestBatchSize * 10, countTestTable());
 
   auto readPlan = lp::PlanBuilder(context)
                       .tableScan(
@@ -183,18 +176,8 @@ TEST_F(WritePartitionTest, write) {
     exec::test::assertEqualResults(data, result.results);
   }
 
-  // Create a second table to copy the first one into. Values runs single node,
-  // the copy runs distributed.
-  folly::F14FastMap<std::string, std::string> options2 = {
-      {"file_format", "parquet"},
-      {"compression_kind", "snappy"},
-  };
-  {
-    auto table = metadata_->createTable("test2", tableType, options, {});
-    auto handle =
-        metadata_->beginWrite(table, connector::WriteKind::kCreate, {});
-    metadata_->finishWrite(handle, {}, {}).get();
-  }
+  // Create a second table to copy the first one into.
+  addTable("test2", tableType, options);
 
   auto copyPlan = lp::PlanBuilder(context)
                       .tableScan(

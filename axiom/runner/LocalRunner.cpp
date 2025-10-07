@@ -171,13 +171,15 @@ velox::RowVectorPtr LocalRunner::next() {
 
 void LocalRunner::runWrite() {
   std::vector<velox::RowVectorPtr> result;
+  auto state = State::kError;
+  SCOPE_EXIT {
+    state_ = state;
+  };
   try {
     start();
     while (cursor_->moveNext()) {
       result.push_back(cursor_->current());
     }
-    finishWrite_(true, result);
-    state_ = State::kFinished;
   } catch (const std::exception&) {
     try {
       waitForCompletion(1'000'000);
@@ -186,9 +188,10 @@ void LocalRunner::runWrite() {
                  << " while waiting for completion after error in write query";
     }
     finishWrite_(false, result);
-    state_ = State::kError;
     throw;
   }
+  finishWrite_(true, result);
+  state = State::kFinished;
 }
 
 void LocalRunner::start() {

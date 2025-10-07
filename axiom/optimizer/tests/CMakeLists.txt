@@ -111,7 +111,7 @@ add_executable(
   Genies.cpp
   PrestoParserTest.cpp
   TestConnectorQueryTest.cpp
-  WritePartitionTest.cpp
+  WriteTest.cpp
 )
 
 add_test(axiom_optimizer_tests axiom_optimizer_tests)
