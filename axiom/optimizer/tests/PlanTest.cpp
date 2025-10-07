@@ -1364,56 +1364,40 @@ TEST_F(PlanTest, lastProjection) {
 }
 
 TEST_F(PlanTest, xJoinFilterPushdown) {
-  auto nationType = ROW({"n_regionkey"}, {BIGINT()});
-  auto regionType = ROW({"r_regionkey"}, {BIGINT()});
-  auto customerType = ROW({"c_custkey"}, {BIGINT()});
+  auto aType = ROW({"a_id", "a_field"}, {BIGINT(), BIGINT()});
+  auto bType = ROW({"b_id", "b_field"}, {BIGINT(), BIGINT()});
+  auto cType = ROW({"c_id", "c_field"}, {BIGINT(), BIGINT()});
 
-  const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
+  testConnector_->addTable("a", aType);
+  testConnector_->addTable("b", bType);
+  testConnector_->addTable("c", cType);
 
-  lp::PlanBuilder::Context context;
+  lp::PlanBuilder::Context context(kTestConnectorId);
   auto logicalPlan =
       lp::PlanBuilder(context)
-          .tableScan(connectorId, "nation", nationType->names())
+          .tableScan("a", aType->names())
           .crossJoin(
-              lp::PlanBuilder(context).tableScan(
-                  connectorId, "region", regionType->names()))
+              lp::PlanBuilder(context).tableScan("b", bType->names()))
           .crossJoin(
-              lp::PlanBuilder(context).tableScan(
-                  connectorId, "customer", customerType->names()))
-          .filter("n_regionkey != r_regionkey")
+              lp::PlanBuilder(context).tableScan("c", cType->names()))
+          .filter("a_field != b_field")
           .build();
 
-  {
-    auto plan = planVelox(logicalPlan);
-    std::cerr << plan.plan->toString(true) << "\n";
-    // auto matcher =
-    //     core::PlanMatcherBuilder()
-    //         .tableScan("customer")
-    //         .nestedLoopJoin(
-    //             core::PlanMatcherBuilder()
-    //                 .tableScan("nation")
-    //                 .nestedLoopJoin(
-    //                     core::PlanMatcherBuilder().tableScan("region").build())
-    //                 .filter()
-    //                 .build())
-    //         .build();
-    // // ASSERT_TRUE(matcher->match(plan));
-  }
+  auto plan = toSingleNodePlan(logicalPlan);
 
-  // auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  // auto referencePlan = exec::test::PlanBuilder(planNodeIdGenerator)
-  //                          .tableScan("nation", nationType)
-  //                          .nestedLoopJoin(
-  //                              exec::test::PlanBuilder(planNodeIdGenerator)
-  //                                  .tableScan("region", regionType)
-  //                                  .planNode(),
-  //                              {"n_regionkey", "r_regionkey"},
-  //                              core::JoinType::kInner)
-  //                          .filter("n_regionkey != r_regionkey")
-  //                          .planNode();
-
-  // checkSame(logicalPlan, referencePlan);
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("a")
+                     .nestedLoopJoin(
+                         core::PlanMatcherBuilder()
+                             .tableScan("b")
+                             .build())
+                     .filter("a_field != b_field")
+                     .nestedLoopJoin(
+                         core::PlanMatcherBuilder()
+                             .tableScan("c")
+                             .build())
+                     .build();
+  ASSERT_TRUE(matcher->match(plan));
 }
 
 TEST_F(PlanTest, xJoinManyTables) {
