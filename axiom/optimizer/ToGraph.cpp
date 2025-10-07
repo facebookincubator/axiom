@@ -384,23 +384,17 @@ PathCP innerPath(std::span<const Step> steps, int32_t last) {
 }
 
 velox::Variant* subscriptLiteral(velox::TypeKind kind, const Step& step) {
-  auto* ctx = queryCtx();
   switch (kind) {
     case velox::TypeKind::VARCHAR:
-      return ctx->registerVariant(
-          std::make_unique<velox::Variant>(std::string(step.field)));
+      return registerVariant(std::string{step.field});
     case velox::TypeKind::BIGINT:
-      return ctx->registerVariant(
-          std::make_unique<velox::Variant>(static_cast<int64_t>(step.id)));
+      return registerVariant(static_cast<int64_t>(step.id));
     case velox::TypeKind::INTEGER:
-      return ctx->registerVariant(
-          std::make_unique<velox::Variant>(static_cast<int32_t>(step.id)));
+      return registerVariant(static_cast<int32_t>(step.id));
     case velox::TypeKind::SMALLINT:
-      return ctx->registerVariant(
-          std::make_unique<velox::Variant>(static_cast<int16_t>(step.id)));
+      return registerVariant(static_cast<int16_t>(step.id));
     case velox::TypeKind::TINYINT:
-      return ctx->registerVariant(
-          std::make_unique<velox::Variant>(static_cast<int8_t>(step.id)));
+      return registerVariant(static_cast<int8_t>(step.id));
     default:
       VELOX_FAIL("Unsupported key type");
   }

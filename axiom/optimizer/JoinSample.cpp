@@ -75,13 +75,11 @@ makeCall(std::string_view name, const velox::TypePtr& type, T... inputs) {
 }
 
 Value bigintValue() {
-  return Value(toType(velox::BIGINT()), 1);
+  return {toType(velox::BIGINT()), 1};
 }
 
 ExprCP bigintLit(int64_t n) {
-  return make<Literal>(
-      bigintValue(),
-      queryCtx()->registerVariant(std::make_unique<velox::Variant>(n)));
+  return make<Literal>(bigintValue(), registerVariant(n));
 }
 
 std::shared_ptr<velox::core::QueryCtx> sampleQueryCtx(

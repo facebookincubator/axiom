@@ -354,11 +354,18 @@ const velox::Type* toType(const velox::TypePtr& type);
 /// Shorthand for toTypePtr() in thread's QueryGraphContext.
 const velox::TypePtr& toTypePtr(const velox::Type* type);
 
-// Shorthand for toPath in queryCtx().
+/// Shorthand for toPath in queryCtx().
 PathCP toPath(std::span<const Step> steps, bool reverse = false);
 
 inline void Path::operator delete(void* ptr) {
   queryCtx()->free(ptr);
+}
+
+/// Shorthand for registerVariant in queryCtx().
+template <typename... Args>
+velox::Variant* registerVariant(Args&&... args) {
+  return queryCtx()->registerVariant(
+      std::make_unique<velox::Variant>(std::forward<Args>(args)...));
 }
 
 // Forward declarations of common types and collections.
