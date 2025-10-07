@@ -1431,7 +1431,6 @@ TEST_F(PlanTest, orderByDuplicateKeys) {
                      .tableScan("t")
                      .project({"multiply(a, 2) as x"})
                      .orderBy({"x DESC"})
-                     .project()
                      .project({"x", "x"})
                      .build();
 
