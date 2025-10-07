@@ -1178,7 +1178,7 @@ void Optimization::crossJoin(
     PlanState& state,
     std::vector<NextJoin>& toTry) {
   PlanStateSaver save{state, candidate};
-  
+
   PlanObjectSet broadcastTables;
   PlanObjectSet broadcastColumns;
   for (const auto* buildTable : candidate.tables) {
@@ -1691,7 +1691,6 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
   for (auto& candidate : candidates) {
     addJoin(candidate, plan, state, nextJoins);
   }
-
   tryNextJoins(state, nextJoins);
 }
 
