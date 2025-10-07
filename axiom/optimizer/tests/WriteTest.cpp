@@ -35,13 +35,11 @@ class WriteTest : public test::HiveQueriesTestBase {
     connector_ = velox::connector::getConnector(exec::test::kHiveConnectorId);
     metadata_ = dynamic_cast<connector::hive::LocalHiveConnectorMetadata*>(
         connector::ConnectorMetadata::metadata(exec::test::kHiveConnectorId));
-    parquet::registerParquetReaderFactory();
     parquet::registerParquetWriterFactory();
   }
 
   void TearDown() override {
     parquet::unregisterParquetWriterFactory();
-    parquet::unregisterParquetReaderFactory();
     metadata_ = nullptr;
     connector_.reset();
     HiveQueriesTestBase::TearDown();
