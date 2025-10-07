@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <iostream>
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/RelationOp.h"
 
@@ -272,7 +271,6 @@ struct PlanState {
   /// True if the costs accumulated so far are so high that this should not be
   /// explored further.
   bool isOverBest() const {
-    return false;
     return hasCutoff && plans.bestCostWithShuffle != 0 &&
         cost.unitCost + cost.setupCost > plans.bestCostWithShuffle;
   }

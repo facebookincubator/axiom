@@ -15,7 +15,6 @@
  */
 
 #include "axiom/optimizer/Optimization.h"
-#include <optimizer/Plan.h>
 #include <algorithm>
 #include <iostream>
 #include <utility>
