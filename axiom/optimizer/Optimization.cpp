@@ -331,8 +331,7 @@ bool addExtraEdges(PlanState& state, JoinCandidate& candidate) {
 }
 } // namespace
 
-std::pair<std::vector<JoinCandidate>, std::vector<JoinCandidate>>
-Optimization::nextJoins(PlanState& state) {
+std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   std::vector<JoinCandidate> candidates;
   candidates.reserve(state.dt->tables.size());
   forJoinedTables(
@@ -365,36 +364,16 @@ Optimization::nextJoins(PlanState& state) {
         return left.fanout < right.fanout;
       });
 
-  std::vector<JoinCandidate> crossJoins;
   if (candidates.empty()) {
     // There are no join edges. There could still be cross joins.
     state.dt->startTables.forEach([&](PlanObjectCP object) {
       if (!state.placed.contains(object)) {
-        crossJoins.emplace_back(nullptr, object, tableCardinality(object));
+        candidates.emplace_back(nullptr, object, tableCardinality(object));
       }
     });
   }
 
-  return {std::move(candidates), std::move(crossJoins)};
-}
-
-void Optimization::crossJoins(
-    RelationOpPtr plan,
-    std::vector<JoinCandidate>& crossJoins,
-    PlanState& state,
-    std::vector<NextJoin>& toTry) {
-  PlanStateSaver save{state};
-
-  std::ranges::sort(crossJoins, [](const auto& left, const auto& right) {
-    return left.fanout < right.fanout;
-  });
-
-  auto crossJoinPlan = std::move(plan);
-  for (const auto& join : crossJoins) {
-    crossJoinPlan = crossJoin(std::move(crossJoinPlan), join, state);
-  }
-
-  state.addNextJoin(nullptr, crossJoinPlan, {}, toTry);
+  return candidates;
 }
 
 namespace {
@@ -1290,6 +1269,7 @@ void Optimization::addJoin(
     PlanState& state,
     std::vector<NextJoin>& result) {
   if (!candidate.join) {
+    crossJoin(plan, candidate, state, result);
     return;
   }
 
@@ -1689,8 +1669,8 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     return;
   }
 
-  auto [candidates, crossJoinCandidates] = nextJoins(state);
-  if (candidates.empty() && crossJoinCandidates.empty()) {
+  auto candidates = nextJoins(state);
+  if (candidates.empty()) {
     if (placeConjuncts(plan, state, true)) {
       return;
     }
@@ -1711,10 +1691,6 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     addJoin(candidate, plan, state, nextJoins);
   }
 
-  // process cross join if we've processed connected component
-  if (nextJoins.empty() && !crossJoinCandidates.empty()) {
-    crossJoins(plan, crossJoinCandidates, state, nextJoins);
-  }
   tryNextJoins(state, nextJoins);
 }
 

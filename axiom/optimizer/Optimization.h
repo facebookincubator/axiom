@@ -213,8 +213,7 @@ class Optimization {
   // side is made, we further check if reducing joins applying to the probe can
   // be used to further reduce the build. These last joins are added as
   // 'existences' in the candidate.
-  std::pair<std::vector<JoinCandidate>, std::vector<JoinCandidate>> nextJoins(
-      PlanState& state);
+  std::vector<JoinCandidate> nextJoins(PlanState& state);
 
   // Adds group by, order by, top k, limit to 'plan'. Updates 'plan' if
   // relation ops added. Sets cost in 'state'.
@@ -294,7 +293,8 @@ class Optimization {
   RelationOpPtr crossJoin(
       RelationOpPtr plan,
       const JoinCandidate& candidate,
-      PlanState& state);
+      PlanState& state,
+    std::vector<NextJoin>& toTry);
 
   void crossJoinUnnest(
       RelationOpPtr plan,
