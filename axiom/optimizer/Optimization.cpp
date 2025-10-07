@@ -363,7 +363,6 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
       candidates, [](const JoinCandidate& left, const JoinCandidate& right) {
         return left.fanout < right.fanout;
       });
-
   if (candidates.empty()) {
     // There are no join edges. There could still be cross joins.
     state.dt->startTables.forEach([&](PlanObjectCP object) {
@@ -372,7 +371,6 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
       }
     });
   }
-
   return candidates;
 }
 
