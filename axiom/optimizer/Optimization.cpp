@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/Optimization.h"
+#include <optimizer/Plan.h>
 #include <algorithm>
 #include <iostream>
 #include <utility>
@@ -1176,6 +1177,8 @@ void Optimization::crossJoin(
     const JoinCandidate& candidate,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
+  PlanStateSaver save{state, candidate};
+  
   PlanObjectSet broadcastTables;
   PlanObjectSet broadcastColumns;
   for (const auto* buildTable : candidate.tables) {
