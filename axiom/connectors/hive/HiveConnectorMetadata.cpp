@@ -187,15 +187,16 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
 
 void HiveConnectorMetadata::validateOptions(
     const folly::F14FastMap<std::string, std::string>& options) const {
-  static folly::F14FastSet<std::string> allowed = {
+  static const folly::F14FastSet<std::string_view> kAllowed = {
       HiveWriteOptions::kBucketedBy,
       HiveWriteOptions::kBucketCount,
       HiveWriteOptions::kPartitionedBy,
       HiveWriteOptions::kSortedBy,
       HiveWriteOptions::kFileFormat,
-      HiveWriteOptions::kCompressionKind};
+      HiveWriteOptions::kCompressionKind,
+  };
   for (auto& pair : options) {
-    if (allowed.find(pair.first) == allowed.end()) {
+    if (!kAllowed.contains(pair.first)) {
       VELOX_USER_FAIL("Option {} is not supported", pair.first);
     }
   }
