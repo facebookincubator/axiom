@@ -174,11 +174,13 @@ class RelationOp {
 
   template <typename T>
   const T* as() const {
+    VELOX_DCHECK_NOT_NULL(dynamic_cast<const T*>(this));
     return static_cast<const T*>(this);
   }
 
   template <typename T>
   T* as() {
+    VELOX_DCHECK_NOT_NULL(dynamic_cast<T*>(this));
     return static_cast<T*>(this);
   }
 

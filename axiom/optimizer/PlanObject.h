@@ -95,12 +95,14 @@ class PlanObject {
 
   template <typename T>
   T* as() {
+    VELOX_DCHECK_NOT_NULL(dynamic_cast<T*>(this));
     return reinterpret_cast<T*>(this);
   }
 
   /// Returns 'this' as const T.
   template <typename T>
   const T* as() const {
+    VELOX_DCHECK_NOT_NULL(dynamic_cast<const T*>(this));
     return reinterpret_cast<const T*>(this);
   }
 
