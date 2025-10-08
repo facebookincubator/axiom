@@ -20,6 +20,7 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::axiom::optimizer::test {
 namespace {
@@ -29,10 +30,68 @@ namespace lp = facebook::axiom::logical_plan;
 
 class HiveCrossJoinQueriesTest : public test::HiveQueriesTestBase {
  protected:
-  static core::PlanMatcherBuilder startMatcher(const std::string& tableName) {
+  static core::PlanMatcherBuilder matcherScan(const std::string& tableName) {
     return core::PlanMatcherBuilder().tableScan(tableName);
   }
 };
+
+TEST_F(HiveCrossJoinQueriesTest, basicExecution) {
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto scan = [&](const std::string& tableName) {
+    return exec::test::PlanBuilder(planNodeIdGenerator)
+        .tableScan(tableName, getSchema(tableName));
+  };
+
+  checkResults(
+      "SELECT * FROM nation, region",
+      scan("nation")
+          .nestedLoopJoin(
+              scan("region").planNode(),
+              "",
+              {"n_nationkey",
+               "n_name",
+               "n_regionkey",
+               "n_comment",
+               "r_regionkey",
+               "r_name",
+               "r_comment"})
+          .planNode());
+
+  {
+    auto secondRegion =
+        scan("region").project({"r_name as r2_name"}).planNode();
+    auto plan =
+        scan("nation")
+            .nestedLoopJoin(
+                scan("region").planNode(),
+                "",
+                {
+                    "n_name",
+                    "r_name",
+                })
+            .nestedLoopJoin(secondRegion, "", {"n_name", "r_name", "r2_name"})
+            .planNode();
+    checkResults(
+        "SELECT n.n_name, r1.r_name AS r_name, r2.r_name AS r2_name FROM nation n, region r1, region r2",
+        plan);
+  }
+
+  checkResults(
+      "SELECT c.c_custkey, n.n_name, r.r_name FROM customer c INNER JOIN nation n ON c.c_nationkey = n.n_regionkey CROSS JOIN region r",
+      scan("customer")
+          .project({"c_custkey", "c_nationkey"})
+          .hashJoin(
+              {"c_nationkey"},
+              {"n_regionkey"},
+              scan("nation").project({"n_name", "n_regionkey"}).planNode(),
+              "",
+              {"c_custkey", "c_nationkey", "n_name"})
+          .nestedLoopJoin(
+              scan("region").project({"r_name"}).planNode(),
+              "",
+              {"c_custkey", "n_name", "r_name"})
+          .planNode());
+}
 
 TEST_F(HiveCrossJoinQueriesTest, filterPushdown) {
   const auto connectorId = exec::test::kHiveConnectorId;
@@ -51,10 +110,10 @@ TEST_F(HiveCrossJoinQueriesTest, filterPushdown) {
   {
     auto plan = toSingleNodePlan(logicalPlan);
 
-    auto matcher = startMatcher("nation")
-                       .nestedLoopJoin(startMatcher("region").build())
+    auto matcher = matcherScan("nation")
+                       .nestedLoopJoin(matcherScan("region").build())
                        .filter("n_regionkey != r_regionkey")
-                       .nestedLoopJoin(startMatcher("customer").build())
+                       .nestedLoopJoin(matcherScan("customer").build())
                        .build();
     ASSERT_TRUE(matcher->match(plan));
   }
@@ -64,10 +123,10 @@ TEST_F(HiveCrossJoinQueriesTest, filterPushdown) {
     const auto& fragments = plan.plan->fragments();
     ASSERT_EQ(2, fragments.size());
 
-    auto matcher = startMatcher("nation")
-                       .nestedLoopJoin(startMatcher("region").build())
+    auto matcher = matcherScan("nation")
+                       .nestedLoopJoin(matcherScan("region").build())
                        .filter("n_regionkey != r_regionkey")
-                       .nestedLoopJoin(startMatcher("customer").build())
+                       .nestedLoopJoin(matcherScan("customer").build())
                        .partitionedOutput()
                        .build();
 
@@ -97,10 +156,10 @@ TEST_F(HiveCrossJoinQueriesTest, manyTables) {
   {
     auto plan = toSingleNodePlan(logicalPlan);
 
-    auto matcher = startMatcher("lineitem")
-                       .nestedLoopJoin(startMatcher("nation").build())
-                       .nestedLoopJoin(startMatcher("customer").build())
-                       .nestedLoopJoin(startMatcher("region").build())
+    auto matcher = matcherScan("lineitem")
+                       .nestedLoopJoin(matcherScan("nation").build())
+                       .nestedLoopJoin(matcherScan("customer").build())
+                       .nestedLoopJoin(matcherScan("region").build())
                        .project()
                        .build();
     ASSERT_TRUE(matcher->match(plan));
@@ -111,10 +170,10 @@ TEST_F(HiveCrossJoinQueriesTest, manyTables) {
     const auto& fragments = plan.plan->fragments();
     ASSERT_EQ(2, fragments.size());
 
-    auto matcher = startMatcher("lineitem")
-                       .nestedLoopJoin(startMatcher("nation").build())
-                       .nestedLoopJoin(startMatcher("customer").build())
-                       .nestedLoopJoin(startMatcher("region").build())
+    auto matcher = matcherScan("lineitem")
+                       .nestedLoopJoin(matcherScan("nation").build())
+                       .nestedLoopJoin(matcherScan("customer").build())
+                       .nestedLoopJoin(matcherScan("region").build())
                        .project()
                        .partitionedOutput()
                        .build();
@@ -145,9 +204,9 @@ TEST_F(HiveCrossJoinQueriesTest, innerJoin) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = startMatcher("customer")
-                       .nestedLoopJoin(startMatcher("region").build())
-                       .hashJoin(startMatcher("nation").build())
+    auto matcher = matcherScan("customer")
+                       .nestedLoopJoin(matcherScan("region").build())
+                       .hashJoin(matcherScan("nation").build())
                        .build();
 
     ASSERT_TRUE(matcher->match(plan));
@@ -158,11 +217,11 @@ TEST_F(HiveCrossJoinQueriesTest, innerJoin) {
     const auto& fragments = plan.plan->fragments();
     ASSERT_EQ(3, fragments.size());
 
-    auto matcher = startMatcher("nation").partitionedOutput().build();
+    auto matcher = matcherScan("nation").partitionedOutput().build();
     ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
 
-    matcher = startMatcher("customer")
-                  .nestedLoopJoin(startMatcher("region").build())
+    matcher = matcherScan("customer")
+                  .nestedLoopJoin(matcherScan("region").build())
                   .hashJoin(core::PlanMatcherBuilder().exchange().build())
                   .partitionedOutput()
                   .build();
