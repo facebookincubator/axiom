@@ -1034,12 +1034,14 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       condition = translateExpr(aggregate->filter());
     }
 
-    const auto* aggrEntry = velox::exec::getAggregateFunctionEntry(aggregate->name());
+    const auto* aggrEntry =
+        velox::exec::getAggregateFunctionEntry(aggregate->name());
     VELOX_CHECK(
         aggrEntry, "Aggregate function not registered: {}", aggregate->name());
     const auto& metadata = aggrEntry->metadata;
 
-    const bool isDistinct = !metadata.ignoreDuplicates && aggregate->isDistinct();
+    const bool isDistinct =
+        !metadata.ignoreDuplicates && aggregate->isDistinct();
 
     ExprVector orderKeys;
     OrderTypeVector orderTypes;
@@ -1088,8 +1090,8 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
         std::stringstream error;
         error << "Aggregate function signature is not supported: "
               << velox::exec::toString(aggregate->name(), argTypes)
-              << ". Supported signatures: "
-              << velox::exec::toString(signatures) << ".";
+              << ". Supported signatures: " << velox::exec::toString(signatures)
+              << ".";
         VELOX_USER_FAIL(error.str());
       };
       const auto* accumulatorType = resolveAccumulatorType();
