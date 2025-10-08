@@ -249,10 +249,10 @@ TEST_F(HiveAggregationQueriesTest, ignoreDuplicates) {
                 {},
                 {"bool_and(m1) as agg1",
                  "bool_or(m2) as agg2",
-                 "bool_or(m1) as agg4",
-                 "bool_and(m1) FILTER (WHERE m3) as agg5",
-                 "bool_or(m1) FILTER (WHERE m4) as agg6"})
-            .project({"agg1", "agg2", "agg1", "agg4", "agg5", "agg6"})
+                 "bool_or(m1) as agg3",
+                 "bool_and(m1) FILTER (WHERE m3) as agg4",
+                 "bool_or(m1) FILTER (WHERE m4) as agg5"})
+            .project({"agg1", "agg2", "agg1", "agg3", "agg4", "agg5"})
             .build();
 
     ASSERT_TRUE(matcher->match(plan));
@@ -304,11 +304,10 @@ TEST_F(HiveAggregationQueriesTest, ignoreDuplicates) {
               {},
               {"bool_and(m1) as agg1",
                "bool_or(m2) as agg2",
-               "bool_and(m1) as agg3",
-               "bool_or(m1) as agg4",
-               "bool_and(m1) FILTER (WHERE m3) as agg5",
-               "bool_or(m1) FILTER (WHERE m4) as agg6"})
-          .project({"agg1", "agg2", "agg3", "agg4", "agg5", "agg6"})
+               "bool_or(m1) as agg3",
+               "bool_and(m1) FILTER (WHERE m3) as agg4",
+               "bool_or(m1) FILTER (WHERE m4) as agg5"})
+          .project({"agg1", "agg2", "agg1", "agg3", "agg4", "agg5"})
           .planNode();
 
   checkSame(logicalPlan, referencePlan);
