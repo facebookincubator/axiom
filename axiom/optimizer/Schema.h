@@ -75,6 +75,8 @@ enum class OrderType {
   kDescNullsLast
 };
 
+AXIOM_DECLARE_ENUM_NAME(OrderType);
+
 using OrderTypeVector = QGVector<OrderType>;
 
 /// Represents a system that contains or produces data. For cases of federation

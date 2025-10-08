@@ -448,8 +448,7 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
       return expr;
     case PlanType::kLiteralExpr:
       return expr;
-    case PlanType::kCallExpr:
-    case PlanType::kAggregateExpr: {
+    case PlanType::kCallExpr: {
       auto children = expr->children();
       ExprVector newChildren(children.size());
       FunctionSet functions;
@@ -462,40 +461,14 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
         }
       }
 
-      ExprCP newCondition = nullptr;
-      if (expr->is(PlanType::kAggregateExpr)) {
-        newCondition =
-            importExpr(expr->as<Aggregate>()->condition(), outer, inner);
-        anyChange |= newCondition != expr->as<Aggregate>()->condition();
-
-        if (newCondition && newCondition->isFunction()) {
-          functions = functions | newCondition->as<Call>()->functions();
-        }
-      }
-
       if (!anyChange) {
         return expr;
       }
 
-      if (expr->is(PlanType::kCallExpr)) {
-        const auto* call = expr->as<Call>();
-        return make<Call>(
-            call->name(), call->value(), std::move(newChildren), functions);
-      }
-
-      if (expr->is(PlanType::kAggregateExpr)) {
-        const auto* aggregate = expr->as<Aggregate>();
-        return make<Aggregate>(
-            aggregate->name(),
-            aggregate->value(),
-            std::move(newChildren),
-            functions,
-            aggregate->isDistinct(),
-            newCondition,
-            aggregate->intermediateType());
-      }
+      const auto* call = expr->as<Call>();
+      return make<Call>(
+          call->name(), call->value(), std::move(newChildren), functions);
     }
-      [[fallthrough]];
     default:
       VELOX_UNREACHABLE("{}", expr->toString());
   }

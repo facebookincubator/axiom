@@ -95,6 +95,14 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       int32_t numDrivers = 1);
 
+  void checkSameSingleNode(
+      const logical_plan::LogicalPlanNodePtr& planNode,
+      const velox::core::PlanNodePtr& referencePlan,
+      int32_t numDrivers = 1) {
+    checkSame(
+        planNode, referencePlan, {.numWorkers = 1, .numDrivers = numDrivers});
+  }
+
   std::shared_ptr<velox::core::QueryCtx>& getQueryCtx();
 
   static VeloxHistory& suiteHistory() {

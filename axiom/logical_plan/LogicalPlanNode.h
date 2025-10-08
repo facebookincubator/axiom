@@ -659,21 +659,25 @@ using UnnestNodePtr = std::shared_ptr<const UnnestNode>;
 /// Specifies what type of write is intended when initiating or concluding a
 /// write operation.
 enum class WriteKind {
-  // Rows are added and all columns must be specified for the TableWriter. This
-  // covers insert, create table and replacing a Hive partition and any other
-  // use that adds whole rows.
-  kInsert = 1,
+  // A write operation to a new table which does not yet exist in the connector.
+  // Covers both creation of an empty table and create as select operations.
+  kCreate = 1,
+
+  // Rows are added and all columns must be specified for the TableWriter.
+  // Covers insert, Hive partition replacement or any other operation which adds
+  // whole rows.
+  kInsert = 2,
 
   // Individual rows are deleted. Only row ids as per
   // ConnectorMetadata::rowIdHandles() are passed to the TableWriter.
-  kDelete = 2,
+  kDelete = 3,
 
   // Column values in individual rows are changed. The TableWriter
   // gets first the row ids as per ConnectorMetadata::rowIdHandles()
   // and then new values for the columns being changed. The new values
   // may overlap with row ids if the row id is a set of primary key
   // columns.
-  kUpdate = 3,
+  kUpdate = 4,
 };
 
 AXIOM_DECLARE_ENUM_NAME(WriteKind);
@@ -700,7 +704,7 @@ class TableWriteNode : public LogicalPlanNode {
       LogicalPlanNodePtr input,
       std::string connectorId,
       std::string tableName,
-      WriteKind kind,
+      WriteKind writeKind,
       std::vector<std::string> columnNames,
       std::vector<ExprPtr> columnExpressions,
       velox::RowTypePtr outputType,
@@ -714,8 +718,8 @@ class TableWriteNode : public LogicalPlanNode {
     return tableName_;
   }
 
-  WriteKind kind() const {
-    return kind_;
+  WriteKind writeKind() const {
+    return writeKind_;
   }
 
   const std::vector<std::string>& columnNames() const {
@@ -736,7 +740,7 @@ class TableWriteNode : public LogicalPlanNode {
  private:
   const std::string connectorId_;
   const std::string tableName_;
-  const WriteKind kind_;
+  const WriteKind writeKind_;
   const std::vector<std::string> columnNames_;
   const std::vector<ExprPtr> columnExpressions_;
   const folly::F14FastMap<std::string, std::string> options_;

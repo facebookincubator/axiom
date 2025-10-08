@@ -94,16 +94,6 @@ std::string Column::toString() const {
   return fmt::format("{}.{}", cname, name_);
 }
 
-std::string Literal::toString() const {
-  std::stringstream out;
-  if (vector_) {
-    out << vector_->toString(0);
-  } else {
-    out << *literal_;
-  }
-  return out.str();
-}
-
 Call::Call(
     PlanType type,
     Name name,
@@ -128,6 +118,34 @@ std::string Call::toString() const {
   for (auto i = 0; i < args_.size(); ++i) {
     out << args_[i]->toString() << (i == args_.size() - 1 ? ")" : ", ");
   }
+  return out.str();
+}
+
+std::string Aggregate::toString() const {
+  std::stringstream out;
+  out << name() << "(";
+
+  if (isDistinct_) {
+    out << "DISTINCT ";
+  }
+
+  for (auto i = 0; i < args().size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << args()[i]->toString();
+  }
+
+  if (!orderKeys_.empty()) {
+    out << " ORDER BY " << orderByToString(orderKeys_, orderTypes_);
+  }
+
+  out << ")";
+
+  if (condition_) {
+    out << " FILTER (WHERE " << condition_->toString() << ")";
+  }
+
   return out.str();
 }
 
@@ -419,23 +437,15 @@ Column::Column(
 
 void BaseTable::addFilter(ExprCP expr) {
   const auto& columns = expr->columns();
-  bool isMultiColumn = false;
-  bool isSingleColumn = false;
-  columns.forEach([&](PlanObjectCP object) {
-    if (!isMultiColumn) {
-      if (isSingleColumn) {
-        isMultiColumn = true;
-      } else {
-        isSingleColumn = true;
-      }
-    };
-  });
-  if (isSingleColumn) {
+
+  VELOX_CHECK_GT(columns.size(), 0);
+
+  if (columns.size() == 1) {
     columnFilters.push_back(expr);
-    queryCtx()->optimization()->filterUpdated(this);
-    return;
+  } else {
+    filter.push_back(expr);
   }
-  filter.push_back(expr);
+
   queryCtx()->optimization()->filterUpdated(this);
 }
 

@@ -108,4 +108,8 @@ std::optional<int64_t> maybeIntegerLiteral(
 
 std::string conjunctsToString(const ExprVector& conjuncts);
 
+std::string orderByToString(
+    const ExprVector& orderKeys,
+    const OrderTypeVector& orderTypes);
+
 } // namespace facebook::axiom::optimizer

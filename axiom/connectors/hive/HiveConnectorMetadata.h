@@ -101,12 +101,13 @@ class HiveTableLayout : public TableLayout {
 class HiveConnectorWriteHandle : public ConnectorWriteHandle {
  public:
   HiveConnectorWriteHandle(
-      velox::connector::hive::HiveInsertTableHandlePtr insertHandle,
+      velox::connector::hive::HiveInsertTableHandlePtr veloxHandle,
+      velox::RowTypePtr resultType,
       TablePtr table,
       WriteKind kind)
-      : ConnectorWriteHandle(std::move(insertHandle)),
-        table_(std::move(table)),
-        kind_(kind) {}
+      : ConnectorWriteHandle{std::move(veloxHandle), std::move(resultType)},
+        table_{std::move(table)},
+        kind_{kind} {}
 
   const TablePtr& table() const {
     return table_;
@@ -189,18 +190,15 @@ class HiveConnectorMetadata : public ConnectorMetadata {
   virtual void validateOptions(
       const folly::F14FastMap<std::string, std::string>& options) const;
 
-  virtual std::shared_ptr<velox::connector::hive::LocationHandle>
-  makeLocationHandle(
-      std::string targetDirectory,
-      std::optional<std::string> writeDirectory,
-      velox::connector::hive::LocationHandle::TableType tableType =
-          velox::connector::hive::LocationHandle::TableType::kNew) {
-    return std::make_shared<velox::connector::hive::LocationHandle>(
-        targetDirectory, writeDirectory.value_or(targetDirectory), tableType);
-  }
-
   /// Return the filesystem path for the storage of the specified table.
   virtual std::string tablePath(std::string_view table) const = 0;
+
+  /// Optionally, create a staging directory for the specified table.
+  /// This directory, if provided, will be used for insert/delete/update into
+  /// this table.
+  /// @return The filesystem path of the staging directory.
+  virtual std::optional<std::string> makeStagingDirectory(
+      std::string_view table) const = 0;
 
   velox::connector::hive::HiveConnector* const hiveConnector_;
   const std::shared_ptr<velox::connector::hive::HiveConfig> hiveConfig_;

@@ -56,7 +56,7 @@ ExprCP PrecomputeProjection::toColumn(
       toName(fmt::format("__p{}", expr->id())),
       dt_,
       expr->value(),
-      alias != nullptr ? alias->name() : nullptr);
+      alias != nullptr ? toName(alias->outputName()) : nullptr);
 
   addToProject(expr, column);
   needsProject_ = true;

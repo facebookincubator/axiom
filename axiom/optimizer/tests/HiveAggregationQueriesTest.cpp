@@ -91,5 +91,133 @@ TEST_F(HiveAggregationQueriesTest, mask) {
   checkSame(logicalPlan, referencePlan);
 }
 
+TEST_F(HiveAggregationQueriesTest, distinct) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan = lp::PlanBuilder(context)
+                         .tableScan("nation")
+                         .aggregate({}, {"count(distinct n_regionkey)"})
+                         .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .singleAggregation({}, {"count(distinct n_regionkey)"})
+                       .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+
+    VELOX_ASSERT_THROW(
+        planVelox(logicalPlan),
+        "DISTINCT option for aggregation is supported only in single worker, single thread mode");
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", ROW({"n_regionkey"}, BIGINT()))
+          .singleAggregation({}, {"count(distinct n_regionkey)"})
+          .planNode();
+
+  checkSameSingleNode(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveAggregationQueriesTest, orderBy) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .aggregate(
+              {"n_regionkey"},
+              {"array_agg(n_nationkey ORDER BY n_nationkey DESC)",
+               "array_agg(n_name ORDER BY n_nationkey)"})
+          .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("nation")
+                     .singleAggregation(
+                         {"n_regionkey"},
+                         {"array_agg(n_nationkey ORDER BY n_nationkey DESC)",
+                          "array_agg(n_name ORDER BY n_nationkey)"})
+                     .build();
+
+  ASSERT_TRUE(matcher->match(plan));
+
+  VELOX_ASSERT_THROW(
+      planVelox(logicalPlan),
+      "ORDER BY option for aggregation is supported only in single worker, single thread mode");
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .singleAggregation(
+              {"n_regionkey"},
+              {"array_agg(n_nationkey ORDER BY n_nationkey DESC)",
+               "array_agg(n_name ORDER BY n_nationkey)"})
+          .planNode();
+
+  checkSameSingleNode(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveAggregationQueriesTest, maskWithOrderBy) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .aggregate(
+              {"n_regionkey"},
+              {"array_agg(n_name ORDER BY n_nationkey) FILTER (WHERE n_nationkey < 20)"})
+          .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("nation")
+                     .project()
+                     .singleAggregation()
+                     .build();
+
+  ASSERT_TRUE(matcher->match(plan));
+
+  VELOX_ASSERT_THROW(
+      planVelox(logicalPlan),
+      "ORDER BY option for aggregation is supported only in single worker, single thread mode");
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .project(
+              {"n_name",
+               "n_regionkey",
+               "n_nationkey",
+               "n_nationkey < 20 as mask"})
+          .singleAggregation(
+              {"n_regionkey"},
+              {"array_agg(n_name ORDER BY n_nationkey) FILTER (WHERE mask)"})
+          .planNode();
+
+  checkSameSingleNode(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveAggregationQueriesTest, distinctWithOrderBy) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .aggregate(
+              {"n_regionkey"},
+              {"array_agg(DISTINCT n_name ORDER BY n_nationkey)"})
+          .build();
+
+  VELOX_ASSERT_THROW(
+      toSingleNodePlan(logicalPlan),
+      "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
+  VELOX_ASSERT_THROW(
+      planVelox(logicalPlan),
+      "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

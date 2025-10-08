@@ -487,11 +487,7 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
       break;
     }
     case PlanType::kLiteralExpr: {
-      auto literal = expr->as<Literal>();
-      if (literal->vector()) {
-        return std::make_shared<velox::core::ConstantTypedExpr>(
-            queryCtx()->toVectorPtr(literal->vector()));
-      }
+      const auto* literal = expr->as<Literal>();
       // Complex constants must be vectors for constant folding to work.
       if (literal->value().type->kind() >= velox::TypeKind::ARRAY) {
         return std::make_shared<velox::core::ConstantTypedExpr>(variantToVector(
@@ -605,6 +601,16 @@ velox::core::SortOrder toSortOrder(const OrderType& order) {
       : order == OrderType::kDescNullsFirst ? velox::core::kDescNullsFirst
                                             : velox::core::kDescNullsLast;
 }
+
+std::vector<velox::core::SortOrder> toSortOrders(
+    const OrderTypeVector& orders) {
+  std::vector<velox::core::SortOrder> sortOrders;
+  sortOrders.reserve(orders.size());
+  for (auto order : orders) {
+    sortOrders.emplace_back(toSortOrder(order));
+  }
+  return sortOrders;
+}
 } // namespace
 
 velox::core::FieldAccessTypedExprPtr ToVelox::toFieldRef(ExprCP expr) {
@@ -634,12 +640,7 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
     const OrderBy& op,
     runner::ExecutableFragment& fragment,
     std::vector<runner::ExecutableFragment>& stages) {
-  std::vector<velox::core::SortOrder> sortOrder;
-  sortOrder.reserve(op.distribution().orderTypes.size());
-  for (auto order : op.distribution().orderTypes) {
-    sortOrder.push_back(toSortOrder(order));
-  }
-
+  auto sortOrder = toSortOrders(op.distribution().orderTypes);
   auto keys = toFieldRefs(op.distribution().orderKeys);
 
   if (isSingle_) {
@@ -1222,8 +1223,15 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
 
       auto call = std::make_shared<velox::core::CallTypedExpr>(
           type, toTypedExprs(aggregate->args()), aggregate->name());
-      aggregates.push_back(
-          {.call = call, .rawInputTypes = rawInputTypes, .mask = mask});
+
+      aggregates.push_back({
+          .call = call,
+          .rawInputTypes = rawInputTypes,
+          .mask = mask,
+          .sortingKeys = toFieldRefs(aggregate->orderKeys()),
+          .sortingOrders = toSortOrders(aggregate->orderTypes()),
+          .distinct = aggregate->isDistinct(),
+      });
     } else {
       auto call = std::make_shared<velox::core::CallTypedExpr>(
           type,

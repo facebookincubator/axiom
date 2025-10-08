@@ -137,13 +137,13 @@ std::vector<ExecutableFragment> topologicalSort(
 } // namespace
 
 LocalRunner::LocalRunner(
-    const MultiFragmentPlanPtr& plan,
+    MultiFragmentPlanPtr plan,
     std::shared_ptr<velox::core::QueryCtx> queryCtx,
     std::shared_ptr<SplitSourceFactory> splitSourceFactory,
     std::shared_ptr<velox::memory::MemoryPool> outputPool)
-    : plan_{plan},
-      fragments_(topologicalSort(plan->fragments())),
-      splitSourceFactory_(std::move(splitSourceFactory)) {
+    : plan_{std::move(plan)},
+      fragments_{topologicalSort(plan_->fragments())},
+      splitSourceFactory_{std::move(splitSourceFactory)} {
   params_.queryCtx = std::move(queryCtx);
   params_.outputPool = std::move(outputPool);
 }
@@ -157,6 +157,7 @@ velox::RowVectorPtr LocalRunner::next() {
     state_ = State::kFinished;
     return nullptr;
   }
+
   return cursor_->current();
 }
 
@@ -306,7 +307,8 @@ void LocalRunner::makeStages(
           params_.queryCtx,
           velox::exec::Task::ExecutionMode::kParallel,
           velox::exec::ConsumerSupplier{},
-          0,
+          /*memoryArbitrationPriority=*/0,
+          /*spillDiskOpts=*/std::nullopt,
           onError);
       stages_.back().push_back(task);
 

@@ -181,7 +181,8 @@ class ToTextVisitor : public PlanNodeVisitor {
       const override {
     auto& myContext = static_cast<Context&>(context);
 
-    myContext.out << makeIndent(myContext.indent) << "- TableWrite:";
+    myContext.out << makeIndent(myContext.indent)
+                  << fmt::format("- TableWrite {}:", node.writeKind());
     appendOutputType(node, myContext);
     myContext.out << std::endl;
 
@@ -641,7 +642,13 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
   void visit(const TableWriteNode& node, PlanNodeVisitorContext& context)
       const override {
     auto& myContext = static_cast<Context&>(context);
-    appendHeader(node, myContext);
+    appendHeader(
+        fmt::format(
+            "{} {}",
+            NodeKindName::toName(node.kind()),
+            WriteKindName::toName(node.writeKind())),
+        node,
+        myContext);
 
     if (!myContext.skeletonOnly) {
       const auto indent = makeIndent(myContext.indent + 3);

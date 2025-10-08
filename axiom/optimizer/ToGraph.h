@@ -61,17 +61,23 @@ struct ExprDedupHasher {
 using FunctionDedupMap =
     folly::F14FastMap<ExprDedupKey, ExprCP, ExprDedupHasher>;
 
-struct VariantPtrHasher {
-  size_t operator()(const std::shared_ptr<const velox::Variant>& value) const {
-    return value->hash();
+struct TypedVariant {
+  /// Canonical Type pointer returned by QueryGraphContext::toType.
+  const velox::Type* type;
+  std::shared_ptr<const velox::Variant> value;
+};
+
+struct TypedVariantHasher {
+  size_t operator()(const TypedVariant& value) const {
+    return velox::bits::hashMix(
+        std::hash<const velox::Type*>()(value.type), value.value->hash());
   }
 };
 
-struct VariantPtrComparer {
-  bool operator()(
-      const std::shared_ptr<const velox::Variant>& left,
-      const std::shared_ptr<const velox::Variant>& right) const {
-    return *left == *right;
+struct TypedVariantComparer {
+  bool operator()(const TypedVariant& left, const TypedVariant& right) const {
+    // Types have been deduped, hence, we compare pointers.
+    return left.type == right.type && *left.value == *right.value;
   }
 };
 
@@ -150,9 +156,7 @@ class ToGraph {
 
   // Sets the columns to project out from the root DerivedTable based on
   // 'logicalPlan'.
-  void setDtOutput(
-      DerivedTableP dt,
-      const logical_plan::LogicalPlanNode& logicalPlan);
+  void setDtOutput(DerivedTableP dt, const logical_plan::LogicalPlanNode& node);
 
   Name newCName(std::string_view prefix) {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
@@ -409,11 +413,25 @@ class ToGraph {
       const logical_plan::LogicalPlanNode& node,
       DerivedTableP outerDt = nullptr);
 
+  // Adds a column 'name' from current DerivedTable to the 'dt'.
+  void addDtColumn(DerivedTableP dt, std::string_view name);
+
   void setDtUsedOutput(
       DerivedTableP dt,
       const logical_plan::LogicalPlanNode& node);
 
   DerivedTableP newDt();
+
+  // Removes duplicate ordering keys from the input vector of SortingField
+  // objects, returning a pair of vectors containing the deduplicated keys and
+  // their corresponding order types. It dedups by comparing the expressions of
+  // the SortingField objects and ignores order-type. This is correct because
+  // if the same expression appears multiple times with different sort orders,
+  // only the first occurrence determines the actual sort behavior - subsequent
+  // occurrences of the same expression are redundant since the column is
+  // already sorted by the first occurrence.
+  std::pair<ExprVector, OrderTypeVector> dedupOrdering(
+      const std::vector<logical_plan::SortingField>& ordering);
 
   static constexpr uint64_t kAllAllowedInDt = ~0UL;
 
@@ -435,18 +453,9 @@ class ToGraph {
   // Maps names in project nodes of input logical plan to deduplicated Exprs.
   folly::F14FastMap<std::string, ExprCP> renames_;
 
-  folly::F14FastMap<
-      std::shared_ptr<const velox::Variant>,
-      ExprCP,
-      VariantPtrHasher,
-      VariantPtrComparer>
-      constantDedup_;
-
-  // Reverse map from dedupped literal to the shared_ptr. We put the
-  // shared ptr back into the result plan so the variant never gets
-  // copied.
-  folly::F14FastMap<ExprCP, std::shared_ptr<const velox::Variant>>
-      reverseConstantDedup_;
+  folly::
+      F14FastMap<TypedVariant, ExprCP, TypedVariantHasher, TypedVariantComparer>
+          constantDedup_;
 
   // Dedup map from name + ExprVector to corresponding CallExpr.
   FunctionDedupMap functionDedup_;

@@ -253,6 +253,9 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
     return fmt::format("{}/{}", hiveConfig_->hiveLocalDataPath(), table);
   }
 
+  std::optional<std::string> makeStagingDirectory(
+      std::string_view table) const override;
+
  private:
   void ensureInitialized() const override;
   void makeQueryCtx();

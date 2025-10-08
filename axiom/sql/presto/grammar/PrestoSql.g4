@@ -16,6 +16,9 @@
 
 /*
  * Originally copied from Presto's SqlBase.g4.
+ *
+ * Changes:
+ * - Add 'GRAPH' to explainType.
  */
 
 grammar PrestoSql;
@@ -530,7 +533,7 @@ updateAssignment
 
 explainOption
     : FORMAT value=(TEXT | GRAPHVIZ | JSON)                 #explainFormat
-    | TYPE value=(LOGICAL | DISTRIBUTED | VALIDATE | IO)    #explainType
+    | TYPE value=(LOGICAL | GRAPH | DISTRIBUTED | VALIDATE | IO)    #explainType
     ;
 
 transactionMode
@@ -644,7 +647,7 @@ nonReserved
     | DATA | DATE | DAY | DEFINER | DESC | DETERMINISTIC | DISABLED | DISTRIBUTED
     | ENABLED | ENFORCED | EXCLUDING | EXPLAIN | EXTERNAL
     | FETCH | FILTER | FIRST | FOLLOWING | FORMAT | FUNCTION | FUNCTIONS
-    | GRANT | GRANTED | GRANTS | GRAPHVIZ | GROUPS
+    | GRANT | GRANTED | GRANTS | GRAPH | GRAPHVIZ | GROUPS
     | HOUR
     | IF | IGNORE | INCLUDING | INPUT | INTERVAL | INVOKER | IO | ISOLATION
     | JSON
@@ -740,6 +743,7 @@ FUNCTIONS: 'FUNCTIONS';
 GRANT: 'GRANT';
 GRANTED: 'GRANTED';
 GRANTS: 'GRANTS';
+GRAPH: 'GRAPH';
 GRAPHVIZ: 'GRAPHVIZ';
 GROUP: 'GROUP';
 GROUPING: 'GROUPING';

@@ -204,19 +204,6 @@ struct PathComparer {
   }
 };
 
-struct VectorDedupHasher {
-  size_t operator()(const velox::BaseVector* vector) const {
-    return vector->hashValueAt(0);
-  }
-};
-
-struct VectorDedupComparer {
-  bool operator()(const velox::BaseVector* left, const velox::BaseVector* right)
-      const {
-    return left->type() == right->type() && left->equalValueAt(right, 0, 0);
-  }
-};
-
 /// Context for making a query plan. Owns all memory associated to
 /// planning, except for the input PlanNode tree. The result of
 /// planning is also owned by 'this', so the planning result must be
@@ -314,10 +301,6 @@ class QueryGraphContext {
     return allVariants_.back().get();
   }
 
-  const velox::BaseVector* toVector(const velox::VectorPtr& vector);
-
-  velox::VectorPtr toVectorPtr(const velox::BaseVector* vector);
-
  private:
   velox::TypePtr dedupType(const velox::TypePtr& type);
 
@@ -337,14 +320,6 @@ class QueryGraphContext {
   folly::F14FastMap<const velox::Type*, velox::TypePtr> toTypePtr_;
 
   folly::F14FastSet<PathCP, PathHasher, PathComparer> deduppedPaths_;
-
-  // Complex type literals. Referenced with raw pointer from PlanObject.
-  folly::F14FastMap<
-      const velox::BaseVector*,
-      velox::VectorPtr,
-      VectorDedupHasher,
-      VectorDedupComparer>
-      deduppedVectors_;
 
   std::vector<PathCP> pathById_;
 
@@ -373,17 +348,24 @@ inline T* make(Args&&... args) {
   return new (queryCtx()->allocate(sizeof(T))) T(std::forward<Args>(args)...);
 }
 
-/// Shorthand for toType() in thread's QueryGraphContext.
+/// Shorthand for toType() in queryCtx().
 const velox::Type* toType(const velox::TypePtr& type);
 
-/// Shorthand for toTypePtr() in thread's QueryGraphContext.
+/// Shorthand for toTypePtr() in queryCtx().
 const velox::TypePtr& toTypePtr(const velox::Type* type);
 
-// Shorthand for toPath in queryCtx().
+/// Shorthand for toPath() in queryCtx().
 PathCP toPath(std::span<const Step> steps, bool reverse = false);
 
 inline void Path::operator delete(void* ptr) {
   queryCtx()->free(ptr);
+}
+
+/// Shorthand for registerVariant() in queryCtx().
+template <typename... Args>
+velox::Variant* registerVariant(Args&&... args) {
+  return queryCtx()->registerVariant(
+      std::make_unique<velox::Variant>(std::forward<Args>(args)...));
 }
 
 // Forward declarations of common types and collections.

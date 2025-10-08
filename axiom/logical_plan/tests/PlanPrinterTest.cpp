@@ -1212,52 +1212,64 @@ TEST_F(PlanPrinterTest, coercions) {
 }
 
 TEST_F(PlanPrinterTest, tableWrite) {
-  auto plan = PlanBuilder()
-                  .tableScan(kTestConnectorId, "test", {"a", "b"})
-                  .tableWrite(
-                      kTestConnectorId,
-                      "output_table",
-                      WriteKind::kInsert,
-                      {"col_a", "col_b"},
-                      {"a", "cast(b as varchar)"})
-                  .build();
+  for (const auto& [expectedKind, actualKind] : {
+           std::pair{"CREATE", WriteKind::kCreate},
+           {"INSERT", WriteKind::kInsert},
+           {"DELETE", WriteKind::kDelete},
+           {"UPDATE", WriteKind::kUpdate},
+       }) {
+    SCOPED_TRACE(
+        fmt::format("TableWrite kind: {}, {}", expectedKind, actualKind));
 
-  auto lines = toLines(plan);
+    auto plan = PlanBuilder()
+                    .tableScan(kTestConnectorId, "test", {"a", "b"})
+                    .tableWrite(
+                        kTestConnectorId,
+                        "output_table",
+                        actualKind,
+                        {"col_a", "col_b"},
+                        {"a", "cast(b as varchar)"})
+                    .build();
 
-  EXPECT_THAT(
-      lines,
-      testing::ElementsAre(
-          testing::StartsWith("- TableWrite"),
-          testing::StartsWith("    col_a := a"),
-          testing::StartsWith("    col_b := CAST(b AS VARCHAR)"),
-          testing::StartsWith("  - TableScan"),
-          testing::Eq("")));
+    auto lines = toLines(plan);
 
-  lines = toSummaryLines(plan);
+    EXPECT_THAT(
+        lines,
+        testing::ElementsAre(
+            testing::StartsWith(fmt::format("- TableWrite {}", expectedKind)),
+            testing::StartsWith("    col_a := a"),
+            testing::StartsWith("    col_b := CAST(b AS VARCHAR)"),
+            testing::StartsWith("  - TableScan"),
+            testing::Eq("")));
 
-  EXPECT_THAT(
-      lines,
-      testing::ElementsAre(
-          testing::Eq("- TABLE_WRITE [1]: 0 fields"),
-          testing::Eq("      table: output_table"),
-          testing::Eq("      connector: test"),
-          testing::Eq("      columns: 2"),
-          testing::Eq("      expressions: CAST: 1, field: 2"),
-          testing::Eq("  - TABLE_SCAN [0]: 2 fields: a BIGINT, b DOUBLE"),
-          testing::Eq("        table: test"),
-          testing::Eq("        connector: test"),
-          testing::Eq("")));
+    lines = toSummaryLines(plan);
 
-  lines = toSkeletonLines(plan);
+    EXPECT_THAT(
+        lines,
+        testing::ElementsAre(
+            testing::Eq(
+                fmt::format("- TABLE_WRITE {} [1]: 0 fields", expectedKind)),
+            testing::Eq("      table: output_table"),
+            testing::Eq("      connector: test"),
+            testing::Eq("      columns: 2"),
+            testing::Eq("      expressions: CAST: 1, field: 2"),
+            testing::Eq("  - TABLE_SCAN [0]: 2 fields: a BIGINT, b DOUBLE"),
+            testing::Eq("        table: test"),
+            testing::Eq("        connector: test"),
+            testing::Eq("")));
 
-  EXPECT_THAT(
-      lines,
-      testing::ElementsAre(
-          testing::Eq("- TABLE_WRITE [1]: 0 fields"),
-          testing::Eq("  - TABLE_SCAN [0]: 2 fields"),
-          testing::Eq("        table: test"),
-          testing::Eq("        connector: test"),
-          testing::Eq("")));
+    lines = toSkeletonLines(plan);
+
+    EXPECT_THAT(
+        lines,
+        testing::ElementsAre(
+            testing::Eq(
+                fmt::format("- TABLE_WRITE {} [1]: 0 fields", expectedKind)),
+            testing::Eq("  - TABLE_SCAN [0]: 2 fields"),
+            testing::Eq("        table: test"),
+            testing::Eq("        connector: test"),
+            testing::Eq("")));
+  }
 }
 
 } // namespace

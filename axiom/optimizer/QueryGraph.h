@@ -91,30 +91,20 @@ using EquivalenceP = Equivalence*;
 class Literal : public Expr {
  public:
   Literal(const Value& value, const velox::Variant* literal)
-      : Expr(PlanType::kLiteralExpr, value),
-        literal_(literal),
-        vector_(nullptr) {}
-
-  Literal(const Value& value, const velox::BaseVector* vector)
-      : Expr(PlanType::kLiteralExpr, value), literal_{}, vector_(vector) {}
+      : Expr(PlanType::kLiteralExpr, value), literal_(literal) {
+    VELOX_CHECK_NOT_NULL(literal_);
+  }
 
   const velox::Variant& literal() const {
     return *literal_;
   }
 
-  bool hasVector() const {
-    return vector_ != nullptr;
+  std::string toString() const override {
+    return literal_->toJson(*value().type);
   }
-
-  const velox::BaseVector* vector() const {
-    return vector_;
-  }
-
-  std::string toString() const override;
 
  private:
   const velox::Variant* const literal_;
-  const velox::BaseVector* const vector_;
 };
 
 /// Represents a column. A column is always defined by a relation, whether table
@@ -835,7 +825,9 @@ class Aggregate : public Call {
       FunctionSet functions,
       bool isDistinct,
       ExprCP condition,
-      const velox::Type* intermediateType)
+      const velox::Type* intermediateType,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes)
       : Call(
             PlanType::kAggregateExpr,
             name,
@@ -844,12 +836,19 @@ class Aggregate : public Call {
             functions | FunctionSet::kAggregate),
         isDistinct_(isDistinct),
         condition_(condition),
-        intermediateType_(intermediateType) {
+        intermediateType_(intermediateType),
+        orderKeys_(std::move(orderKeys)),
+        orderTypes_(std::move(orderTypes)) {
+    VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
+
     for (auto& arg : this->args()) {
       rawInputType_.push_back(arg->value().type);
     }
     if (condition_) {
       columns_.unionSet(condition_->columns());
+    }
+    for (auto& key : orderKeys_) {
+      columns_.unionSet(key->columns());
     }
   }
 
@@ -869,11 +868,23 @@ class Aggregate : public Call {
     return rawInputType_;
   }
 
+  const ExprVector& orderKeys() const {
+    return orderKeys_;
+  }
+
+  const OrderTypeVector& orderTypes() const {
+    return orderTypes_;
+  }
+
+  std::string toString() const override;
+
  private:
   bool isDistinct_;
   ExprCP condition_;
   const velox::Type* intermediateType_;
   TypeVector rawInputType_;
+  ExprVector orderKeys_;
+  OrderTypeVector orderTypes_;
 };
 
 using AggregateCP = const Aggregate*;

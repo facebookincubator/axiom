@@ -159,7 +159,7 @@ class ConstantExpr : public Expr {
     VELOX_USER_CHECK(
         value_->isTypeCompatible(type_),
         "Constant value doesn't match its type: {} vs. {}",
-        type->toString(),
+        type_->toString(),
         value_->inferType()->toString());
   }
 

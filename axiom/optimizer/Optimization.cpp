@@ -729,6 +729,7 @@ void Optimization::addAggregation(
     }
     auto args = precompute.toColumns(
         agg->args(), /*aliases=*/nullptr, /*preserveLiterals=*/true);
+    auto orderKeys = precompute.toColumns(agg->orderKeys());
     aggregates.emplace_back(make<Aggregate>(
         agg->name(),
         agg->value(),
@@ -736,7 +737,9 @@ void Optimization::addAggregation(
         agg->functions(),
         agg->isDistinct(),
         condition,
-        agg->intermediateType()));
+        agg->intermediateType(),
+        std::move(orderKeys),
+        agg->orderTypes()));
   }
 
   plan = std::move(precompute).maybeProject();

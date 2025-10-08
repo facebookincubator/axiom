@@ -362,7 +362,7 @@ TableWriteNode::TableWriteNode(
     LogicalPlanNodePtr input,
     std::string connectorId,
     std::string tableName,
-    WriteKind kind,
+    WriteKind writeKind,
     std::vector<std::string> columnNames,
     std::vector<ExprPtr> columnExpressions,
     velox::RowTypePtr outputType,
@@ -370,7 +370,7 @@ TableWriteNode::TableWriteNode(
     : LogicalPlanNode{NodeKind::kTableWrite, std::move(id), {std::move(input)}, std::move(outputType)},
       connectorId_{std::move(connectorId)},
       tableName_{std::move(tableName)},
-      kind_{kind},
+      writeKind_{writeKind},
       columnNames_{std::move(columnNames)},
       columnExpressions_{std::move(columnExpressions)},
       options_{std::move(options)} {
@@ -378,6 +378,9 @@ TableWriteNode::TableWriteNode(
   VELOX_USER_CHECK(!tableName_.empty());
   VELOX_USER_CHECK_EQ(columnNames_.size(), columnExpressions_.size());
   UniqueNameChecker::check(columnNames_);
+  VELOX_USER_CHECK(
+      writeKind_ == WriteKind::kCreate || options_.empty(),
+      "Options can be needed only for create table");
 }
 
 void TableWriteNode::accept(
@@ -390,6 +393,7 @@ namespace {
 
 folly::F14FastMap<WriteKind, std::string_view> writeKindNames() {
   static const folly::F14FastMap<WriteKind, std::string_view> kNames = {
+      {WriteKind::kCreate, "CREATE"},
       {WriteKind::kInsert, "INSERT"},
       {WriteKind::kUpdate, "UPDATE"},
       {WriteKind::kDelete, "DELETE"},

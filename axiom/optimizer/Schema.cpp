@@ -17,12 +17,25 @@
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/DerivedTable.h"
-#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
 
 #include <numbers>
 
 namespace facebook::axiom::optimizer {
+
+namespace {
+const auto& orderTypeNames() {
+  static const folly::F14FastMap<OrderType, std::string_view> kNames = {
+      {OrderType::kAscNullsFirst, "ASC NULLS FIRST"},
+      {OrderType::kAscNullsLast, "ASC NULLS LAST"},
+      {OrderType::kDescNullsFirst, "DESC NULLS FIRST"},
+      {OrderType::kDescNullsLast, "DESC NULLS LAST"},
+  };
+  return kNames;
+}
+} // namespace
+
+AXIOM_DEFINE_ENUM_NAME(OrderType, orderTypeNames);
 
 float Value::byteSize() const {
   if (type->isFixedWidth()) {

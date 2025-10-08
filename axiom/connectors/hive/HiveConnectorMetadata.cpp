@@ -17,6 +17,7 @@
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/exec/TableWriter.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 
 namespace facebook::axiom::connector::hive {
@@ -108,6 +109,17 @@ HiveConnectorMetadata::createTableHandle(
       dataColumns ? dataColumns : layout.rowType());
 }
 
+namespace {
+std::shared_ptr<velox::connector::hive::LocationHandle> makeLocationHandle(
+    std::string targetDirectory,
+    std::optional<std::string> writeDirectory) {
+  return std::make_shared<velox::connector::hive::LocationHandle>(
+      targetDirectory,
+      writeDirectory.value_or(targetDirectory),
+      velox::connector::hive::LocationHandle::TableType::kNew);
+}
+} // namespace
+
 ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
     const TablePtr& table,
     WriteKind kind,
@@ -172,30 +184,36 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
             std::move(types),
             std::move(sortedBy));
   }
-  auto insertHandle =
+
+  auto veloxHandle =
       std::make_shared<velox::connector::hive::HiveInsertTableHandle>(
           inputColumns,
-          makeLocationHandle(tablePath(table->name()), std::nullopt),
+          makeLocationHandle(
+              tablePath(table->name()), makeStagingDirectory(table->name())),
           storageFormat,
           bucketProperty,
           compressionKind,
           serdeParameters,
           writerOptions);
   return std::make_shared<HiveConnectorWriteHandle>(
-      std::move(insertHandle), table, kind);
+      std::move(veloxHandle),
+      velox::exec::TableWriteTraits::outputType(std::nullopt),
+      table,
+      kind);
 }
 
 void HiveConnectorMetadata::validateOptions(
     const folly::F14FastMap<std::string, std::string>& options) const {
-  static folly::F14FastSet<std::string> allowed = {
+  static const folly::F14FastSet<std::string_view> kAllowed = {
       HiveWriteOptions::kBucketedBy,
       HiveWriteOptions::kBucketCount,
       HiveWriteOptions::kPartitionedBy,
       HiveWriteOptions::kSortedBy,
       HiveWriteOptions::kFileFormat,
-      HiveWriteOptions::kCompressionKind};
+      HiveWriteOptions::kCompressionKind,
+  };
   for (auto& pair : options) {
-    if (allowed.find(pair.first) == allowed.end()) {
+    if (!kAllowed.contains(pair.first)) {
       VELOX_USER_FAIL("Option {} is not supported", pair.first);
     }
   }

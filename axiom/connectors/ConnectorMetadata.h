@@ -427,8 +427,13 @@ struct LookupKeys {
 class ConnectorWriteHandle {
  public:
   explicit ConnectorWriteHandle(
-      velox::connector::ConnectorInsertTableHandlePtr veloxHandle)
-      : veloxHandle_(std::move(veloxHandle)) {}
+      velox::connector::ConnectorInsertTableHandlePtr veloxHandle,
+      velox::RowTypePtr resultType)
+      : veloxHandle_{std::move(veloxHandle)},
+        resultType_{std::move(resultType)} {
+    VELOX_CHECK_NOT_NULL(veloxHandle_);
+    VELOX_CHECK_NOT_NULL(resultType_);
+  }
 
   virtual ~ConnectorWriteHandle() = default;
 
@@ -436,8 +441,13 @@ class ConnectorWriteHandle {
     return veloxHandle_;
   }
 
+  const velox::RowTypePtr& resultType() const {
+    return resultType_;
+  }
+
  private:
   const velox::connector::ConnectorInsertTableHandlePtr veloxHandle_;
+  const velox::RowTypePtr resultType_;
 };
 
 using ConnectorWriteHandlePtr = std::shared_ptr<ConnectorWriteHandle>;
@@ -591,12 +601,13 @@ class ConnectorMetadata {
 
   /// Finalizes the table write operation represented by the provided handle.
   /// This runs once after all the table writers have finished. The result sets
-  /// from the table writer fragments are passed as 'writerResults'. Their
-  /// format and meaning is connector-specific. finishWrite returns a
-  /// ContinueFuture which must be waited for to finalize the commit. If the
-  /// implementation is synchronous, finishWrite should return an
-  /// already-fulfilled future to the caller. ConnectorSession may be null for
-  /// connectors which do not require it.
+  /// from the table writer fragments are passed as 'writerResult'. Their
+  /// format and meaning is connector-specific. The type of 'writerResult' must
+  /// match ConnectorWriteHandle::resultType returned from beginWrite.
+  /// finishWrite returns a ContinueFuture which must be waited for to finalize
+  /// the commit. If the implementation is synchronous, finishWrite should
+  /// return an already-fulfilled future to the caller. ConnectorSession may be
+  /// null for connectors which do not require it.
   virtual velox::ContinueFuture finishWrite(
       const ConnectorWriteHandlePtr& handle,
       const std::vector<velox::RowVectorPtr>& writerResult,
@@ -621,7 +632,7 @@ class ConnectorMetadata {
   /// an update or delete record. These may be for example some connector
   /// specific opaque row id or primary key columns.
   virtual std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
-      const TableLayout& layout,
+      const Table& table,
       WriteKind kind) {
     VELOX_UNSUPPORTED();
   }

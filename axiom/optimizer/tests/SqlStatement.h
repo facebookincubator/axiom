@@ -69,10 +69,17 @@ class SelectStatement : public SqlStatement {
 
 class ExplainStatement : public SqlStatement {
  public:
-  explicit ExplainStatement(SqlStatementPtr statement, bool analyze = false)
+  enum class Type { kLogical, kGraph, kDistributed };
+
+  /// 'type' applies only when 'analyze' is false.
+  explicit ExplainStatement(
+      SqlStatementPtr statement,
+      bool analyze = false,
+      Type type = Type::kLogical)
       : SqlStatement(SqlStatementKind::kExplain),
         statement_{std::move(statement)},
-        analyze_{analyze} {}
+        analyze_{analyze},
+        type_{type} {}
 
   const SqlStatementPtr& statement() const {
     return statement_;
@@ -82,9 +89,14 @@ class ExplainStatement : public SqlStatement {
     return analyze_;
   }
 
+  Type type() const {
+    return type_;
+  }
+
  private:
   const SqlStatementPtr statement_;
   const bool analyze_;
+  const Type type_;
 };
 
 } // namespace facebook::axiom::optimizer::test

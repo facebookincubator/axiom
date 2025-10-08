@@ -106,4 +106,18 @@ std::string conjunctsToString(const ExprVector& conjuncts) {
   return out.str();
 }
 
+std::string orderByToString(
+    const ExprVector& orderKeys,
+    const OrderTypeVector& orderTypes) {
+  std::stringstream out;
+  for (auto i = 0; i < orderKeys.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << orderKeys[i]->toString() << " "
+        << OrderTypeName::toName(orderTypes[i]);
+  }
+  return out.str();
+}
+
 } // namespace facebook::axiom::optimizer

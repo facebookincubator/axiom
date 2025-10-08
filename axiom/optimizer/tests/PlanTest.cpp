@@ -160,6 +160,30 @@ TEST_F(PlanTest, queryGraph) {
   EXPECT_EQ(interned2, interned);
 }
 
+TEST_F(PlanTest, dedupEmptyArrays) {
+  auto logicalPlan =
+      lp::PlanBuilder()
+          .values(ROW({}), {variant::row({})})
+          .map({
+              lp::Lit(variant::array({}), ARRAY(ARRAY(REAL()))).as("a"),
+              lp::Lit(variant::array({}), ARRAY(MAP(INTEGER(), VARCHAR())))
+                  .as("b"),
+          })
+          .map({
+              "typeof(a)",
+              "typeof(b)",
+          })
+          .build();
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .values({makeRowVector(ROW({}), 1)})
+          .project({"'array(array(real))'", "'array(map(integer, varchar))'"})
+          .planNode();
+
+  checkSameSingleNode(logicalPlan, referencePlan);
+}
+
 TEST_F(PlanTest, agg) {
   testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {DOUBLE(), DOUBLE(), VARCHAR()}));
