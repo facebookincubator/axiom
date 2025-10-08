@@ -427,16 +427,26 @@ struct LookupKeys {
 class ConnectorWriteHandle {
  public:
   explicit ConnectorWriteHandle(
+      velox::RowTypePtr resultType,
       velox::connector::ConnectorInsertTableHandlePtr veloxHandle)
-      : veloxHandle_(std::move(veloxHandle)) {}
+      : resultType_{std::move(resultType)},
+        veloxHandle_{std::move(veloxHandle)} {
+    VELOX_CHECK_NOT_NULL(resultType_);
+    VELOX_CHECK_NOT_NULL(veloxHandle_);
+  }
 
   virtual ~ConnectorWriteHandle() = default;
+
+  const velox::RowTypePtr& resultType() const {
+    return resultType_;
+  }
 
   const velox::connector::ConnectorInsertTableHandlePtr& veloxHandle() const {
     return veloxHandle_;
   }
 
  private:
+  const velox::RowTypePtr resultType_;
   const velox::connector::ConnectorInsertTableHandlePtr veloxHandle_;
 };
 
@@ -621,7 +631,7 @@ class ConnectorMetadata {
   /// an update or delete record. These may be for example some connector
   /// specific opaque row id or primary key columns.
   virtual std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
-      const TableLayout& layout,
+      const Table& table,
       WriteKind kind) {
     VELOX_UNSUPPORTED();
   }

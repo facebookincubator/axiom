@@ -101,12 +101,13 @@ class HiveTableLayout : public TableLayout {
 class HiveConnectorWriteHandle : public ConnectorWriteHandle {
  public:
   HiveConnectorWriteHandle(
-      velox::connector::hive::HiveInsertTableHandlePtr insertHandle,
+      velox::RowTypePtr resultType,
+      velox::connector::hive::HiveInsertTableHandlePtr veloxHandle,
       TablePtr table,
       WriteKind kind)
-      : ConnectorWriteHandle(std::move(insertHandle)),
-        table_(std::move(table)),
-        kind_(kind) {}
+      : ConnectorWriteHandle{std::move(resultType), std::move(veloxHandle)},
+        table_{std::move(table)},
+        kind_{kind} {}
 
   const TablePtr& table() const {
     return table_;
@@ -201,6 +202,11 @@ class HiveConnectorMetadata : public ConnectorMetadata {
 
   /// Return the filesystem path for the storage of the specified table.
   virtual std::string tablePath(std::string_view table) const = 0;
+
+  /// Create a staging directory for the specified table.
+  /// This directory can be used for insert/delete/update into this table.
+  /// Return the filesystem path of this directory.
+  virtual std::string makeStagingDirectory(std::string_view table) const = 0;
 
   velox::connector::hive::HiveConnector* const hiveConnector_;
   const std::shared_ptr<velox::connector::hive::HiveConfig> hiveConfig_;

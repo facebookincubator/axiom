@@ -799,6 +799,41 @@ void deleteDirectoryContents(const std::string& path) {
   closedir(dir);
 }
 
+// Create a temporary directory.
+// Its path contains two parts 'path' as prefix, 'name' as middle part and
+// unique id as suffix.
+std::string createTemporaryDirectory(
+    std::string_view path,
+    std::string_view name) {
+  auto templatePath = fmt::format("{}_{}_XXXXXX", path, name);
+  const char* resultPath = ::mkdtemp(templatePath.data());
+  VELOX_CHECK_NOT_NULL(
+      resultPath,
+      "Cannot create temp directory, template was {}",
+      templatePath);
+  return resultPath;
+}
+
+// Move all files and directories from sourceDir to targetDir.
+void move(const fs::path& sourceDir, const fs::path& targetDir) {
+  VELOX_CHECK(
+      fs::is_directory(sourceDir),
+      "Source directory does not exist or is not a directory: " +
+          sourceDir.string());
+  // Create the target directory if it doesn't exist
+  fs::create_directories(targetDir);
+  // Iterate through the source directory
+  for (const auto& entry : fs::directory_iterator(sourceDir)) {
+    // Compute the relative path from the source directory
+    fs::path relPath = fs::relative(entry.path(), sourceDir);
+    fs::path destPath = targetDir / relPath;
+    // Create enclosing directories in the target if they don't exist
+    fs::create_directories(destPath.parent_path());
+    // Move the file/directory to the target directory
+    fs::rename(entry.path(), destPath);
+  }
+}
+
 // Check if directory exists.
 bool dirExists(const std::string& path) {
   struct stat info;
@@ -941,6 +976,9 @@ velox::ContinueFuture LocalHiveConnectorMetadata::finishWrite(
       handle->veloxHandle());
   VELOX_CHECK_NOT_NULL(veloxHandle, "expecting a Hive insert handle");
   const auto& targetPath = veloxHandle->locationHandle()->targetPath();
+  const auto& writePath = veloxHandle->locationHandle()->writePath();
+  move(writePath, targetPath);
+  deleteDirectoryRecursive(writePath);
   loadTable(hiveHandle->table()->name(), targetPath);
   return {};
 }
@@ -948,6 +986,7 @@ velox::ContinueFuture LocalHiveConnectorMetadata::finishWrite(
 velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
     const ConnectorWriteHandlePtr& handle,
     const ConnectorSessionPtr& session) {
+  std::lock_guard<std::mutex> l(mutex_);
   auto hiveHandle =
       std::dynamic_pointer_cast<const HiveConnectorWriteHandle>(handle);
   VELOX_CHECK_NOT_NULL(hiveHandle, "expecting a Hive write handle");
@@ -955,11 +994,18 @@ velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
       const velox::connector::hive::HiveInsertTableHandle>(
       handle->veloxHandle());
   VELOX_CHECK_NOT_NULL(veloxHandle, "expecting a Hive insert handle");
+  const auto& writePath = veloxHandle->locationHandle()->writePath();
+  deleteDirectoryRecursive(writePath);
   if (hiveHandle->kind() == WriteKind::kCreate) {
     const auto& targetPath = veloxHandle->locationHandle()->targetPath();
     deleteDirectoryRecursive(targetPath);
   }
   return {};
+}
+
+std::string LocalHiveConnectorMetadata::makeStagingDirectory(
+    std::string_view table) const {
+  return createTemporaryDirectory(hiveConfig_->hiveLocalDataPath(), table);
 }
 
 } // namespace facebook::axiom::connector::hive

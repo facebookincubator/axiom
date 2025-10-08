@@ -172,17 +172,23 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
             std::move(types),
             std::move(sortedBy));
   }
-  auto insertHandle =
+  auto veloxHandle =
       std::make_shared<velox::connector::hive::HiveInsertTableHandle>(
           inputColumns,
-          makeLocationHandle(tablePath(table->name()), std::nullopt),
+          makeLocationHandle(
+              tablePath(table->name()), makeStagingDirectory(table->name())),
           storageFormat,
           bucketProperty,
           compressionKind,
           serdeParameters,
           writerOptions);
   return std::make_shared<HiveConnectorWriteHandle>(
-      std::move(insertHandle), table, kind);
+      velox::ROW(
+          {"numWrittenRows", "fragment", "tableCommitContext"},
+          {velox::BIGINT(), velox::VARBINARY(), velox::VARBINARY()}),
+      std::move(veloxHandle),
+      table,
+      kind);
 }
 
 void HiveConnectorMetadata::validateOptions(
