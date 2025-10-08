@@ -48,6 +48,21 @@ TEST_F(HiveWindowQueriesTest, basicRowNumber) {
 
   const std::vector<std::string>& names = nationType->names();
 
+  {
+    auto logicalPlan =
+        lp::PlanBuilder()
+            .tableScan(
+                connectorId,
+                "orders",
+                {"o_clerk", "o_orderdate", "o_orderkey", "o_totalprice"})
+            .window(
+                {"rank() OVER (PARTITION BY o_clerk ORDER BY o_totalprice) AS rnk"})
+                .orderBy({"o_clerk", "rnk"})
+            .build();
+
+    std::cerr << toSingleNodePlan(logicalPlan)->toString(true, true) << std::endl;
+}
+  
   auto logicalPlan =
       lp::PlanBuilder()
           .tableScan(connectorId, "nation", names)

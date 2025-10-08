@@ -185,7 +185,6 @@ void QueryTestBase::checkSame(
   {
     SCOPED_TRACE("single node and single thread");
     auto plan = planVelox(planNode, {.numWorkers = 1, .numDrivers = 1});
-    std::cerr << plan.toString() << std::endl;
     SCOPED_TRACE("plan:\n" + plan.plan->toString());
     auto result = runFragmentedPlan(plan);
     velox::exec::test::assertEqualResults(
