@@ -1039,12 +1039,13 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
         aggrEntry, "Aggregate function not registered: {}", aggregate->name());
     const auto& metadata = aggrEntry->metadata;
 
+    const bool isDistinct = !metadata.ignoreDuplicates && aggregate->isDistinct();
+
     ExprVector orderKeys;
     OrderTypeVector orderTypes;
     if (metadata.orderSensitive) {
       std::tie(orderKeys, orderTypes) = dedupOrdering(aggregate->ordering());
     }
-    bool isDistinct = aggregate->isDistinct() && !metadata.ignoreDuplicates;
 
     if (isDistinct && !orderKeys.empty()) {
       VELOX_FAIL(
