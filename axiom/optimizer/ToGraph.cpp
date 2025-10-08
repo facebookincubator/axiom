@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <optimizer/QueryGraphContext.h>
 #include <velox/common/base/Exceptions.h>
 #include <iostream>
 #include "axiom/logical_plan/ExprPrinter.h"
@@ -1034,11 +1035,8 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       condition = translateExpr(aggregate->filter());
     }
 
-    const auto* aggrEntry =
-        velox::exec::getAggregateFunctionEntry(aggregate->name());
-    VELOX_CHECK(
-        aggrEntry, "Aggregate function not registered: {}", aggregate->name());
-    const auto& metadata = aggrEntry->metadata;
+    const auto& metadata =
+        velox::exec::getAggregateFunctionMetadata(aggregate->name());
 
     const bool isDistinct =
         !metadata.ignoreDuplicates && aggregate->isDistinct();
@@ -1078,23 +1076,8 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     if (it->second) {
       newRenames[name] = it->second;
     } else {
-      auto resolveAccumulatorType = [&]() {
-        const auto& signatures = aggrEntry->signatures;
-        for (const auto& signature : signatures) {
-          velox::exec::SignatureBinder binder(*signature, argTypes);
-          if (binder.tryBind()) {
-            return toType(binder.tryResolveType(signature->intermediateType()));
-          }
-        }
-
-        std::stringstream error;
-        error << "Aggregate function signature is not supported: "
-              << velox::exec::toString(aggregate->name(), argTypes)
-              << ". Supported signatures: " << velox::exec::toString(signatures)
-              << ".";
-        VELOX_USER_FAIL(error.str());
-      };
-      const auto* accumulatorType = resolveAccumulatorType();
+      const auto* accumulatorType = toType(
+          velox::exec::resolveAggregateFunction(aggName, argTypes).second);
       Value finalValue(toType(aggregate->type()), 1);
 
       AggregateCP aggregateExpr = make<Aggregate>(
