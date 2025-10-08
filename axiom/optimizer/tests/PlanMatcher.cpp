@@ -563,7 +563,7 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
 
       for (auto i = 0; i < aggregates_.size(); ++i) {
         auto aggregateExpr = duckdb::parseAggregateExpr(aggregates_[i], {});
-        auto expected = aggregateExpr.expr;
+        auto expected = rewriteInputNames(aggregateExpr.expr, newSymbols);
         if (expected->alias()) {
           newSymbols[expected->alias().value()] = plan.aggregateNames()[i];
         }
