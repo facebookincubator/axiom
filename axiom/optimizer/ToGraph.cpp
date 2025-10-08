@@ -1529,27 +1529,9 @@ PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
   }
 
   renames_.clear();
-  ColumnVector outputColumns;
-  auto* connector = connectorTable->layouts().front()->connector();
-  auto* metadata = connector::ConnectorMetadata::metadata(connector);
-  const auto outputType = metadata->writeResultType(*connectorTable, writeKind);
-  outputColumns.reserve(outputType->size());
-  for (uint32_t i = 0; i < outputType->size(); ++i) {
-    const auto& name = outputType->nameOf(i);
-    const auto* columnName = toName(name);
-    outputColumns.push_back(make<Column>(
-        columnName,
-        currentDt_,
-        Value{toType(outputType->childAt(i)), 1},
-        columnName));
-    renames_[name] = outputColumns.back();
-  }
 
-  currentDt_->write = make<WritePlan>(
-      *connectorTable,
-      writeKind,
-      std::move(columnExprs),
-      std::move(outputColumns));
+  currentDt_->write =
+      make<WritePlan>(*connectorTable, writeKind, std::move(columnExprs));
 
   finalizeDt(tableWrite, nullptr);
 

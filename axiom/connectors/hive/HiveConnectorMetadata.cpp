@@ -204,14 +204,6 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
       kind);
 }
 
-velox::RowTypePtr HiveConnectorMetadata::writeResultType(
-    const Table& /*table*/,
-    WriteKind /*kind*/) const {
-  return velox::ROW(
-      {"numWrittenRows", "fragment", "tableCommitContext"},
-      {velox::BIGINT(), velox::VARBINARY(), velox::VARBINARY()});
-}
-
 void HiveConnectorMetadata::validateOptions(
     const folly::F14FastMap<std::string, std::string>& options) const {
   static const folly::F14FastSet<std::string_view> kAllowed = {

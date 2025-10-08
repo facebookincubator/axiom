@@ -1456,20 +1456,12 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
 
   auto columnNames = table.type()->names();
 
-  std::vector<std::string> outputNames;
-  std::vector<velox::TypePtr> outputTypes;
-  const auto& outputColumns = write.output();
-  outputNames.reserve(outputColumns.size());
-  outputTypes.reserve(outputColumns.size());
-  for (const auto* column : outputColumns) {
-    outputNames.push_back(column->outputName());
-    outputTypes.push_back(toTypePtr(column->value().type));
-  }
-
   auto* connector = table.layouts().front()->connector();
   auto* metadata = connector::ConnectorMetadata::metadata(connector);
   auto handle =
       metadata->beginWrite(table.shared_from_this(), write.kind(), {});
+
+  auto outputType = handle->resultType();
 
   VELOX_CHECK(!finishWrite_, "Only single TableWrite per query supported");
   finishWrite_ = [metadata, handle](
@@ -1490,8 +1482,8 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
       /*columnStatsSpec=*/std::nullopt,
       std::make_shared<const velox::core::InsertTableHandle>(
           connector->connectorId(), handle->veloxHandle()),
-      /*hasPartitioningScheme*/ false,
-      ROW(std::move(outputNames), std::move(outputTypes)),
+      /*hasPartitioningScheme=*/false,
+      std::move(outputType),
       velox::connector::CommitStrategy::kNoCommit,
       std::move(input));
 }

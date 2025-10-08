@@ -864,7 +864,7 @@ TableWrite::TableWrite(
     RelationOpPtr input,
     ExprVector inputColumns,
     const WritePlan* write)
-    : RelationOp{RelType::kTableWrite, std::move(input), Distribution{}, write->output()},
+    : RelationOp{RelType::kTableWrite, std::move(input), Distribution::gather(), {}},
       inputColumns{std::move(inputColumns)},
       write{write} {
   cost_.inputCardinality = inputCardinality();
