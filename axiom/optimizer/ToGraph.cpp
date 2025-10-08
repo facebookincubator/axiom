@@ -1074,7 +1074,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     if (it->second) {
       newRenames[name] = it->second;
     } else {
-      const auto* accumulatorType = toType(
+      auto accumulatorType = toType(
           velox::exec::resolveAggregateFunction(aggregate->name(), argTypes)
               .second);
       Value finalValue(toType(aggregate->type()), 1);
