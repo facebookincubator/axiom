@@ -15,6 +15,8 @@
  */
 
 #include <velox/common/base/Exceptions.h>
+#include <velox/exec/Aggregate.h>
+#include <velox/expression/FunctionMetadata.h>
 #include <iostream>
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
@@ -26,6 +28,7 @@
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/expression/SignatureBinder.h"
 #include "velox/functions/FunctionRegistry.h"
 
 namespace facebook::axiom::optimizer {
@@ -1031,14 +1034,25 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       condition = translateExpr(aggregate->filter());
     }
 
-    auto [orderKeys, orderTypes] = dedupOrdering(aggregate->ordering());
+    const auto* aggrEntry = velox::exec::getAggregateFunctionEntry(
+        velox::exec::sanitizeName(aggregate->name()));
+    VELOX_CHECK(
+        aggrEntry, "Aggregate function not registered: {}", aggregate->name());
+    const auto& metadata = aggrEntry->metadata;
 
-    if (aggregate->isDistinct() && !orderKeys.empty()) {
+    ExprVector orderKeys;
+    OrderTypeVector orderTypes;
+    if (metadata.orderSensitive) {
+      std::tie(orderKeys, orderTypes) = dedupOrdering(aggregate->ordering());
+    }
+    bool isDistinct = aggregate->isDistinct() && !metadata.ignoreDuplicates;
+
+    if (isDistinct && !orderKeys.empty()) {
       VELOX_FAIL(
           "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
     }
 
-    if (aggregate->isDistinct()) {
+    if (isDistinct) {
       const auto& options = queryCtx()->optimization()->runnerOptions();
       VELOX_CHECK(
           options.numWorkers == 1 && options.numDrivers == 1,
@@ -1056,20 +1070,29 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     auto name = toName(agg.outputNames()[channel]);
 
     AggregateDedupKey key{
-        aggName,
-        aggregate->isDistinct(),
-        condition,
-        args,
-        orderKeys,
-        orderTypes};
+        aggName, isDistinct, condition, args, orderKeys, orderTypes};
 
     auto it = uniqueAggregates.try_emplace(key).first;
     if (it->second) {
       newRenames[name] = it->second;
     } else {
-      auto accumulatorType = toType(
-          velox::exec::resolveAggregateFunction(aggregate->name(), argTypes)
-              .second);
+      auto resolveAccumulatorType = [&]() {
+        const auto& signatures = aggrEntry->signatures;
+        for (const auto& signature : aggrEntry->signatures) {
+          velox::exec::SignatureBinder binder(*signature, argTypes);
+          if (binder.tryBind()) {
+            return toType(binder.tryResolveType(signature->intermediateType()));
+          }
+        }
+
+        std::stringstream error;
+        error << "Aggregate function signature is not supported: "
+              << velox::exec::toString(aggregate->name(), argTypes)
+              << ". Supported signatures: "
+              << velox::exec::toString(aggrEntry->signatures) << ".";
+        VELOX_USER_FAIL(error.str());
+      };
+      const auto* accumulatorType = resolveAccumulatorType();
       Value finalValue(toType(aggregate->type()), 1);
 
       AggregateCP aggregateExpr = make<Aggregate>(
@@ -1077,7 +1100,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
           finalValue,
           std::move(args),
           funcs,
-          aggregate->isDistinct(),
+          isDistinct,
           condition,
           accumulatorType,
           std::move(orderKeys),
