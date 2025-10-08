@@ -15,8 +15,6 @@
  */
 
 #include <velox/common/base/Exceptions.h>
-#include <velox/exec/Aggregate.h>
-#include <velox/expression/FunctionMetadata.h>
 #include <iostream>
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
@@ -24,9 +22,11 @@
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/FunctionMetadata.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/functions/FunctionRegistry.h"
