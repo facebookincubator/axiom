@@ -98,6 +98,7 @@ add_executable(
   axiom_optimizer_tests
   AggregationPlanTest.cpp
   HiveAggregationQueriesTest.cpp
+  HiveCrossJoinQueriesTest.cpp
   HiveLimitQueriesTest.cpp
   HiveQueriesTest.cpp
   PrecomputeProjectionTest.cpp

@@ -1352,71 +1352,6 @@ TEST_F(PlanTest, lastProjection) {
   ASSERT_TRUE(matcher->match(plan));
 }
 
-TEST_F(PlanTest, xJoinFilterPushdown) {
-  auto aType = ROW({"a_id", "a_field"}, {BIGINT(), BIGINT()});
-  auto bType = ROW({"b_id", "b_field"}, {BIGINT(), BIGINT()});
-  auto cType = ROW({"c_id", "c_field"}, {BIGINT(), BIGINT()});
-
-  testConnector_->addTable("a", aType);
-  testConnector_->addTable("b", bType);
-  testConnector_->addTable("c", cType);
-
-  lp::PlanBuilder::Context context(kTestConnectorId);
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .tableScan("a", aType->names())
-          .crossJoin(lp::PlanBuilder(context).tableScan("b", bType->names()))
-          .crossJoin(lp::PlanBuilder(context).tableScan("c", cType->names()))
-          .filter("a_field != b_field")
-          .build();
-
-  auto plan = toSingleNodePlan(logicalPlan);
-
-  auto matcher =
-      core::PlanMatcherBuilder()
-          .tableScan("a")
-          .nestedLoopJoin(core::PlanMatcherBuilder().tableScan("b").build())
-          .filter("a_field != b_field")
-          .nestedLoopJoin(core::PlanMatcherBuilder().tableScan("c").build())
-          .build();
-  ASSERT_TRUE(matcher->match(plan));
-}
-
-TEST_F(PlanTest, xJoinManyTables) {
-  auto nationType =
-      ROW({"n_nationkey", "n_name", "n_regionkey"},
-          {BIGINT(), VARCHAR(), BIGINT()});
-  auto regionType = ROW({"r_regionkey", "r_name"}, {BIGINT(), VARCHAR()});
-  auto customerType = ROW(
-      {"c_custkey", "c_name", "c_nationkey"}, {BIGINT(), VARCHAR(), BIGINT()});
-  auto lineitemType = ROW({"l_orderkey", "l_partkey"}, {BIGINT(), BIGINT()});
-
-  const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
-
-  lp::PlanBuilder::Context context;
-  auto logicalPlan = lp::PlanBuilder(context)
-                         .tableScan(connectorId, "nation", nationType->names())
-                         .crossJoin(lp::PlanBuilder(context).tableScan(
-                             connectorId, "region", regionType->names()))
-                         .crossJoin(lp::PlanBuilder(context).tableScan(
-                             connectorId, "customer", customerType->names()))
-                         .crossJoin(lp::PlanBuilder(context).tableScan(
-                             connectorId, "lineitem", lineitemType->names()))
-                         .build();
-
-  auto plan = toSingleNodePlan(logicalPlan);
-
-  auto matcher = core::PlanMatcherBuilder()
-                     .tableScan("lineitem")
-                     .nestedLoopJoin()
-                     .nestedLoopJoin()
-                     .nestedLoopJoin()
-                     .project()
-                     .build();
-  ASSERT_TRUE(matcher->match(plan));
-}
-
 TEST_F(PlanTest, orderByDuplicateKeys) {
   testConnector_->addTable("t", ROW({"a"}, {BIGINT()}));
 
@@ -1433,39 +1368,6 @@ TEST_F(PlanTest, orderByDuplicateKeys) {
                      .orderBy({"x DESC"})
                      .project({"x", "x"})
                      .build();
-
-  ASSERT_TRUE(matcher->match(plan));
-}
-
-TEST_F(PlanTest, xJoinWithInnerJoin) {
-  auto nationType = ROW({"n_nationkey", "n_regionkey"}, {BIGINT(), BIGINT()});
-  auto regionType = ROW({"r_regionkey", "r_name"}, {BIGINT(), VARCHAR()});
-  auto customerType = ROW({"c_custkey", "c_nationkey"}, {BIGINT(), BIGINT()});
-  auto ordersType = ROW({"o_orderkey", "o_custkey"}, {BIGINT(), BIGINT()});
-
-  const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
-
-  lp::PlanBuilder::Context context;
-  auto logicalPlan = lp::PlanBuilder(context)
-                         .tableScan(connectorId, "nation", nationType->names())
-                         .join(
-                             lp::PlanBuilder(context).tableScan(
-                                 connectorId, "region", regionType->names()),
-                             "n_regionkey = r_regionkey",
-                             lp::JoinType::kInner)
-                         .crossJoin(lp::PlanBuilder(context).tableScan(
-                             connectorId, "customer", customerType->names()))
-                         .build();
-
-  auto plan = toSingleNodePlan(logicalPlan);
-  auto matcher =
-      core::PlanMatcherBuilder()
-          .tableScan("customer")
-          .nestedLoopJoin(
-              core::PlanMatcherBuilder().tableScan("region").build())
-          .hashJoin(core::PlanMatcherBuilder().tableScan("nation").build())
-          .build();
 
   ASSERT_TRUE(matcher->match(plan));
 }
