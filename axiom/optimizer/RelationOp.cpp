@@ -356,10 +356,10 @@ Join::Join(
   if (method == JoinMethod::kCross) {
     const float rightCardinality = right->resultCardinality();
     const float rightByteSize = byteSize(right->columns());
-    cost_.setupCost = rightCardinality * rightByteSize;
+    cost_.setupCost = rightCardinality * rightByteSize; // broadcast of the right side
     cost_.unitCost = fanout *
         (Costs::kColumnRowCost + numRightColumns * Costs::kColumnByteCost);
-    cost_.totalBytes = rightCardinality * rightByteSize;
+    cost_.totalBytes = cost_.setupCost;
     return;
   }
 
