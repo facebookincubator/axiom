@@ -1196,7 +1196,7 @@ void Optimization::crossJoin(
       broadcastTables,
       candidate.existences};
 
-  auto broadcast =
+  Distribution broadcast =
       Distribution::broadcast(plan->distribution().distributionType);
   PlanObjectSet empty;
   bool needsShuffle = false;
