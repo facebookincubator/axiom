@@ -1274,19 +1274,6 @@ TEST_F(PlanTest, limitBeforeProject) {
   }
 }
 
-TEST_F(PlanTest, kal) {
-  testConnector_->createTable("t", ROW({"a", "b", "c", "d"}, INTEGER()));
-
-  auto logicalPlan = lp::PlanBuilder{}
-                         .tableScan(kTestConnectorId, "t", {"a", "b", "c", "d"})
-                         .project({"a + b as ab", "c + d as cd"})
-                         .orderBy({"cd + ab"})
-                         .project({"cd", "ab"})
-                         .build();
-  auto plan = toSingleNodePlan(logicalPlan);
-  std::cerr << plan->toString(true, true) << std::endl;
-}
-
 TEST_F(PlanTest, limitAfterOrderBy) {
   testConnector_->createTable("t", ROW({"a", "b"}, INTEGER()));
 
