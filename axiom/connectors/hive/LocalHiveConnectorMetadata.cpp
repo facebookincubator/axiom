@@ -818,8 +818,8 @@ std::string createTemporaryDirectory(
 void move(const fs::path& sourceDir, const fs::path& targetDir) {
   VELOX_CHECK(
       fs::is_directory(sourceDir),
-      "Source directory does not exist or is not a directory: " +
-          sourceDir.string());
+      "Source directory does not exist or is not a directory: {}",
+      sourceDir.string());
   // Create the target directory if it doesn't exist
   fs::create_directories(targetDir);
   // Iterate through the source directory
