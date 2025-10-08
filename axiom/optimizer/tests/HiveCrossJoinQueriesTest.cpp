@@ -27,105 +27,150 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class HiveCrossJoinQueriesTest : public test::HiveQueriesTestBase {};
+class HiveCrossJoinQueriesTest : public test::HiveQueriesTestBase {
+ protected:
+  static core::PlanMatcherBuilder startMatcher(const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  }
+};
 
 TEST_F(HiveCrossJoinQueriesTest, filterPushdown) {
   const auto connectorId = exec::test::kHiveConnectorId;
 
-  auto startLogicalPlan = [&](lp::PlanBuilder::Context& ctx) {
-    return lp::PlanBuilder(ctx);
-  };
-
-  auto startMatcher = [](const std::string& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
   lp::PlanBuilder::Context context;
   auto logicalPlan =
-      startLogicalPlan(context)
+      lp::PlanBuilder(context)
           .tableScan(connectorId, "nation", getSchema("nation")->names())
-          .crossJoin(startLogicalPlan(context).tableScan(
+          .crossJoin(lp::PlanBuilder(context).tableScan(
               connectorId, "region", getSchema("region")->names()))
-          .crossJoin(startLogicalPlan(context).tableScan(
+          .crossJoin(lp::PlanBuilder(context).tableScan(
               connectorId, "customer", getSchema("customer")->names()))
           .filter("n_regionkey != r_regionkey")
           .build();
 
-  auto plan = toSingleNodePlan(logicalPlan);
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher = startMatcher("nation")
-                     .nestedLoopJoin(startMatcher("region").build())
-                     .filter("n_regionkey != r_regionkey")
-                     .nestedLoopJoin(startMatcher("customer").build())
-                     .build();
-  ASSERT_TRUE(matcher->match(plan));
+    auto matcher = startMatcher("nation")
+                       .nestedLoopJoin(startMatcher("region").build())
+                       .filter("n_regionkey != r_regionkey")
+                       .nestedLoopJoin(startMatcher("customer").build())
+                       .build();
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  {
+    auto plan = planVelox(logicalPlan);
+    const auto& fragments = plan.plan->fragments();
+    ASSERT_EQ(2, fragments.size());
+
+    auto matcher = startMatcher("nation")
+                       .nestedLoopJoin(startMatcher("region").build())
+                       .filter("n_regionkey != r_regionkey")
+                       .nestedLoopJoin(startMatcher("customer").build())
+                       .partitionedOutput()
+                       .build();
+
+    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
+
+    matcher = core::PlanMatcherBuilder().exchange().build();
+
+    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+  }
 }
 
 TEST_F(HiveCrossJoinQueriesTest, manyTables) {
   const auto connectorId = exec::test::kHiveConnectorId;
 
-  auto startLogicalPlan = [&](lp::PlanBuilder::Context& ctx) {
-    return lp::PlanBuilder(ctx);
-  };
-
-  auto startMatcher = [](const std::string& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
   lp::PlanBuilder::Context context;
   auto logicalPlan =
-      startLogicalPlan(context)
+      lp::PlanBuilder(context)
           .tableScan(connectorId, "nation", getSchema("nation")->names())
-          .crossJoin(startLogicalPlan(context).tableScan(
+          .crossJoin(lp::PlanBuilder(context).tableScan(
               connectorId, "region", getSchema("region")->names()))
-          .crossJoin(startLogicalPlan(context).tableScan(
+          .crossJoin(lp::PlanBuilder(context).tableScan(
               connectorId, "customer", getSchema("customer")->names()))
-          .crossJoin(startLogicalPlan(context).tableScan(
+          .crossJoin(lp::PlanBuilder(context).tableScan(
               connectorId, "lineitem", getSchema("lineitem")->names()))
           .build();
 
-  auto plan = toSingleNodePlan(logicalPlan);
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
 
-  auto matcher = startMatcher("lineitem")
-                     .nestedLoopJoin(startMatcher("region").build())
-                     .nestedLoopJoin(startMatcher("customer").build())
-                     .nestedLoopJoin(startMatcher("lineitem").build())
-                     .project()
-                     .build();
-  ASSERT_TRUE(matcher->match(plan));
+    auto matcher = startMatcher("lineitem")
+                       .nestedLoopJoin(startMatcher("nation").build())
+                       .nestedLoopJoin(startMatcher("customer").build())
+                       .nestedLoopJoin(startMatcher("region").build())
+                       .project()
+                       .build();
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  {
+    auto plan = planVelox(logicalPlan);
+    const auto& fragments = plan.plan->fragments();
+    ASSERT_EQ(2, fragments.size());
+
+    auto matcher = startMatcher("lineitem")
+                       .nestedLoopJoin(startMatcher("nation").build())
+                       .nestedLoopJoin(startMatcher("customer").build())
+                       .nestedLoopJoin(startMatcher("region").build())
+                       .project()
+                       .partitionedOutput()
+                       .build();
+
+    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
+
+    matcher = core::PlanMatcherBuilder().exchange().build();
+
+    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+  }
 }
 
 TEST_F(HiveCrossJoinQueriesTest, innerJoin) {
   const auto connectorId = exec::test::kHiveConnectorId;
 
-  auto startLogicalPlan = [&](lp::PlanBuilder::Context& ctx) {
-    return lp::PlanBuilder(ctx);
-  };
-
-  auto startMatcher = [](const std::string& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
   lp::PlanBuilder::Context context;
   auto logicalPlan =
-      startLogicalPlan(context)
+      lp::PlanBuilder(context)
           .tableScan(connectorId, "nation", getSchema("nation")->names())
           .join(
-              startLogicalPlan(context).tableScan(
+              lp::PlanBuilder(context).tableScan(
                   connectorId, "region", getSchema("region")->names()),
               "n_regionkey = r_regionkey",
               lp::JoinType::kInner)
-          .crossJoin(startLogicalPlan(context).tableScan(
+          .crossJoin(lp::PlanBuilder(context).tableScan(
               connectorId, "customer", getSchema("customer")->names()))
           .build();
 
-  auto plan = toSingleNodePlan(logicalPlan);
-  auto matcher = startMatcher("customer")
-                     .nestedLoopJoin(startMatcher("region").build())
-                     .hashJoin(startMatcher("nation").build())
-                     .build();
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = startMatcher("customer")
+                       .nestedLoopJoin(startMatcher("region").build())
+                       .hashJoin(startMatcher("nation").build())
+                       .build();
 
-  ASSERT_TRUE(matcher->match(plan));
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  {
+    auto plan = planVelox(logicalPlan);
+    const auto& fragments = plan.plan->fragments();
+    ASSERT_EQ(3, fragments.size());
+
+    auto matcher = startMatcher("nation").partitionedOutput().build();
+    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
+
+    matcher = startMatcher("customer")
+                  .nestedLoopJoin(startMatcher("region").build())
+                  .hashJoin(core::PlanMatcherBuilder().exchange().build())
+                  .partitionedOutput()
+                  .build();
+    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+
+    matcher = core::PlanMatcherBuilder().exchange().build();
+    ASSERT_TRUE(matcher->match(fragments.at(2).fragment.planNode));
+  }
 }
 
 } // namespace
