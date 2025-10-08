@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <optimizer/QueryGraphContext.h>
 #include <velox/common/base/Exceptions.h>
 #include <iostream>
 #include "axiom/logical_plan/ExprPrinter.h"
@@ -27,9 +26,7 @@
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
-#include "velox/expression/FunctionMetadata.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/expression/SignatureBinder.h"
 #include "velox/functions/FunctionRegistry.h"
 
 namespace facebook::axiom::optimizer {
@@ -1077,7 +1074,8 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       newRenames[name] = it->second;
     } else {
       const auto* accumulatorType = toType(
-          velox::exec::resolveAggregateFunction(aggName, argTypes).second);
+          velox::exec::resolveAggregateFunction(aggregate->name(), argTypes)
+              .second);
       Value finalValue(toType(aggregate->type()), 1);
 
       AggregateCP aggregateExpr = make<Aggregate>(
