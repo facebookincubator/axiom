@@ -223,6 +223,13 @@ std::string visitDerivedTable(const DerivedTable& dt) {
     out << "  limit: " << dt.limit << std::endl;
   }
 
+  if (dt.write) {
+    out << fmt::format("  write ({}) to: ", dt.write->kind())
+        << dt.write->table().name() << std::endl;
+    out << "    columns: " << exprsToString(dt.write->columnExprs())
+        << std::endl;
+  }
+
   for (const auto& table : dt.tables) {
     out << std::endl;
     switch (table->type()) {
