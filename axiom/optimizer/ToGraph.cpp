@@ -1040,8 +1040,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       condition = translateExpr(aggregate->filter());
     }
 
-    const auto* aggrEntry = velox::exec::getAggregateFunctionEntry(
-        velox::exec::sanitizeName(aggregate->name()));
+    const auto* aggrEntry = velox::exec::getAggregateFunctionEntry(aggregate->name());
     VELOX_CHECK(
         aggrEntry, "Aggregate function not registered: {}", aggregate->name());
     const auto& metadata = aggrEntry->metadata;
@@ -1084,7 +1083,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     } else {
       auto resolveAccumulatorType = [&]() {
         const auto& signatures = aggrEntry->signatures;
-        for (const auto& signature : aggrEntry->signatures) {
+        for (const auto& signature : signatures) {
           velox::exec::SignatureBinder binder(*signature, argTypes);
           if (binder.tryBind()) {
             return toType(binder.tryResolveType(signature->intermediateType()));
@@ -1095,7 +1094,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
         error << "Aggregate function signature is not supported: "
               << velox::exec::toString(aggregate->name(), argTypes)
               << ". Supported signatures: "
-              << velox::exec::toString(aggrEntry->signatures) << ".";
+              << velox::exec::toString(signatures) << ".";
         VELOX_USER_FAIL(error.str());
       };
       const auto* accumulatorType = resolveAccumulatorType();
