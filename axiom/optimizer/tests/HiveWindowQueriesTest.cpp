@@ -306,7 +306,7 @@ TEST_F(HiveWindowQueriesTest, specsWithoutOrderBy) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveWindowQueriesTest, multipleOrderByColumnsInSpec) {
+TEST_F(HiveWindowQueriesTest, multipleOrderByInSpec) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -349,7 +349,7 @@ TEST_F(HiveWindowQueriesTest, multipleOrderByColumnsInSpec) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveWindowQueriesTest, orderByWindow) {
+TEST_F(HiveWindowQueriesTest, orderBy) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -392,7 +392,7 @@ TEST_F(HiveWindowQueriesTest, orderByWindow) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveWindowQueriesTest, orderByExprOfWindows) {
+TEST_F(HiveWindowQueriesTest, orderByExprs) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -440,7 +440,7 @@ TEST_F(HiveWindowQueriesTest, orderByExprOfWindows) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveWindowQueriesTest, filter) {
+TEST_F(HiveWindowQueriesTest, aggregate) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -454,16 +454,20 @@ TEST_F(HiveWindowQueriesTest, filter) {
       lp::PlanBuilder()
           .tableScan(connectorId, "nation", names)
           .window(
-              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
-          .filter("rnk = 1")
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk",
+               "row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .aggregate({"rnk"}, {"max(rn)"})
           .build();
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
+
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
                        .window()
-                       .filter()
+                       .window()
+                       .project()
+                       .singleAggregation()
                        .build();
     ASSERT_TRUE(matcher->match(plan));
   }
@@ -472,10 +476,12 @@ TEST_F(HiveWindowQueriesTest, filter) {
       exec::test::PlanBuilder()
           .tableScan("nation", nationType)
           .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .window(
               {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
-          .filter("rnk = 1")
+          .singleAggregation({"rnk"}, {"max(rn)"})
           .planNode();
-
+  
   checkSame(logicalPlan, referencePlan);
 }
 
