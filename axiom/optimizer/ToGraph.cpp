@@ -22,6 +22,7 @@
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
@@ -1031,14 +1032,24 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       condition = translateExpr(aggregate->filter());
     }
 
-    auto [orderKeys, orderTypes] = dedupOrdering(aggregate->ordering());
+    const auto& metadata =
+        velox::exec::getAggregateFunctionMetadata(aggregate->name());
 
-    if (aggregate->isDistinct() && !orderKeys.empty()) {
+    const bool isDistinct =
+        !metadata.ignoreDuplicates && aggregate->isDistinct();
+
+    ExprVector orderKeys;
+    OrderTypeVector orderTypes;
+    if (metadata.orderSensitive) {
+      std::tie(orderKeys, orderTypes) = dedupOrdering(aggregate->ordering());
+    }
+
+    if (isDistinct && !orderKeys.empty()) {
       VELOX_FAIL(
           "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
     }
 
-    if (aggregate->isDistinct()) {
+    if (isDistinct) {
       const auto& options = queryCtx()->optimization()->runnerOptions();
       VELOX_CHECK(
           options.numWorkers == 1 && options.numDrivers == 1,
@@ -1056,12 +1067,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     auto name = toName(agg.outputNames()[channel]);
 
     AggregateDedupKey key{
-        aggName,
-        aggregate->isDistinct(),
-        condition,
-        args,
-        orderKeys,
-        orderTypes};
+        aggName, isDistinct, condition, args, orderKeys, orderTypes};
 
     auto it = uniqueAggregates.try_emplace(key).first;
     if (it->second) {
@@ -1077,7 +1083,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
           finalValue,
           std::move(args),
           funcs,
-          aggregate->isDistinct(),
+          isDistinct,
           condition,
           accumulatorType,
           std::move(orderKeys),
