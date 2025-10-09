@@ -99,6 +99,7 @@ add_executable(
   AggregationPlanTest.cpp
   DerivedTablePrinterTest.cpp
   HiveAggregationQueriesTest.cpp
+  HiveCrossJoinQueriesTest.cpp
   HiveLimitQueriesTest.cpp
   HiveQueriesTest.cpp
   PrecomputeProjectionTest.cpp
