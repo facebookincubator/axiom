@@ -885,13 +885,12 @@ std::string TableWrite::toString(bool recursive, bool detail) const {
     out << fmt::format(
         "TableWrite to {} ({} columns)", table.name(), type.size());
 
-    if (type.size() != 0) {
-      out << " columns:";
-      for (uint32_t i = 0; i < type.size(); ++i) {
-        out << " " << type.nameOf(i) << "=" << inputColumns[i]->toString();
-        if (i < inputColumns.size() - 1) {
-          out << ", ";
-        }
+    out << " columns:";
+    VELOX_DCHECK_LT(0, type.size(), "Table must have at least one column");
+    for (uint32_t i = 0; i < type.size(); ++i) {
+      out << " " << type.nameOf(i) << "=" << inputColumns[i]->toString();
+      if (i < inputColumns.size() - 1) {
+        out << ", ";
       }
     }
 

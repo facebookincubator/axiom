@@ -1529,11 +1529,19 @@ PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
   }
 
   renames_.clear();
+  auto& outputType = *tableWrite.outputType();
+  for (uint32_t i = 0; i < outputType.size(); ++i) {
+    const auto& outputName = outputType.nameOf(i);
+    const auto* outputColumn = toName(outputName);
+    renames_[outputName] = make<Column>(
+        outputColumn,
+        currentDt_,
+        Value{toType(outputType.childAt(i)), 1},
+        outputColumn);
+  }
 
   currentDt_->write =
       make<WritePlan>(*connectorTable, writeKind, std::move(columnExprs));
-
-  finalizeDt(tableWrite, nullptr);
 
   return currentDt_;
 }

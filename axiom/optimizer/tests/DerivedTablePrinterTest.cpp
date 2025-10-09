@@ -187,44 +187,38 @@ TEST_F(DerivedTablePrinterTest, basic) {
 TEST_F(DerivedTablePrinterTest, write) {
   connector_->addTable("c", ROW({"a", "b"}, INTEGER()));
   connector_->addTable("z", ROW({"x", "y"}, INTEGER()));
-  for (const auto& [expectedKind, actualKind] : {
-           std::pair{"INSERT", lp::WriteKind::kInsert},
-       }) {
-    SCOPED_TRACE(
-        fmt::format("TableWrite kind: {}, {}", expectedKind, actualKind));
 
-    auto plan =
-        lp::PlanBuilder()
-            .tableScan(kTestConnectorId, "c")
-            .tableWrite(
-                kTestConnectorId, "z", actualKind, {"y", "x"}, {"a", "b"})
-            .build();
+  auto plan = lp::PlanBuilder()
+                  .tableScan(kTestConnectorId, "c")
+                  .tableWrite(
+                      kTestConnectorId,
+                      "z",
+                      lp::WriteKind::kInsert,
+                      {"y", "x"},
+                      {"a", "b"})
+                  .build();
 
-    auto lines = toLines(*plan);
+  auto lines = toLines(*plan);
 
-    EXPECT_THAT(
-        lines,
-        testing::ElementsAre(
-            testing::Eq("dt4: "),
-            testing::Eq("  output:"),
-            testing::Eq("  tables: dt1"),
-            testing::Eq(""),
-            testing::Eq("dt1: "),
-            testing::Eq("  output:"),
-            testing::Eq("  tables: dt2"),
-            testing::Eq("  write (INSERT) to: z"),
-            testing::Eq("    columns: dt2.b, dt2.a"),
-            testing::Eq(""),
-            testing::Eq("dt2: a, b"),
-            testing::Eq("  output:"),
-            testing::Eq("    a := t3.a"),
-            testing::Eq("    b := t3.b"),
-            testing::Eq("  tables: t3"),
-            testing::Eq(""),
-            testing::Eq("t3: a, b"),
-            testing::Eq("  table: c"),
-            testing::Eq("")));
-  }
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("dt1: rows"),
+          testing::Eq("  output:"),
+          testing::Eq("    rows := dt1.rows"),
+          testing::Eq("  tables: dt2"),
+          testing::Eq("  write (INSERT) to: z"),
+          testing::Eq("    columns: dt2.b, dt2.a"),
+          testing::Eq(""),
+          testing::Eq("dt2: a, b"),
+          testing::Eq("  output:"),
+          testing::Eq("    a := t3.a"),
+          testing::Eq("    b := t3.b"),
+          testing::Eq("  tables: t3"),
+          testing::Eq(""),
+          testing::Eq("t3: a, b"),
+          testing::Eq("  table: c"),
+          testing::Eq("")));
 }
 
 } // namespace

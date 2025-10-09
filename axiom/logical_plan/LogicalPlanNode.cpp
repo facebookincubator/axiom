@@ -366,10 +366,7 @@ TableWriteNode::TableWriteNode(
     std::vector<std::string> columnNames,
     std::vector<ExprPtr> columnExpressions,
     folly::F14FastMap<std::string, std::string> options)
-    // This outputType isn't correct, but it's used only for
-    // VELOX_USER_CHECK_NOT_NULL, so it's ok.
-    // It's not used because table write can't be followed by any other node.
-    : LogicalPlanNode{NodeKind::kTableWrite, std::move(id), {std::move(input)}, velox::ROW({})},
+    : LogicalPlanNode{NodeKind::kTableWrite, std::move(id), {std::move(input)}, velox::ROW("rows", velox::BIGINT())},
       connectorId_{std::move(connectorId)},
       tableName_{std::move(tableName)},
       writeKind_{writeKind},

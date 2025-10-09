@@ -125,16 +125,16 @@ TEST_F(WriteTest, write) {
 
   auto data = makeTestData(10, kTestBatchSize);
 
-  auto write1 = lp::PlanBuilder(context)
-                    .values({data})
-                    .tableWrite(
-                        exec::test::kHiveConnectorId,
-                        "test",
-                        lp::WriteKind::kInsert,
-                        {"key1", "key2", "data", "ds"},
-                        {"key1", "key2", "data", "ds"})
-                    .build();
-  checkWriteResults(runVelox(write1), kTestBatchSize * 10);
+  auto writePlan = lp::PlanBuilder(context)
+                       .values({data})
+                       .tableWrite(
+                           exec::test::kHiveConnectorId,
+                           "test",
+                           lp::WriteKind::kInsert,
+                           {"key1", "key2", "data", "ds"},
+                           {"key1", "key2", "data", "ds"})
+                       .build();
+  checkWriteResults(runVelox(writePlan), kTestBatchSize * 10);
 
   auto countTestTable = [&] {
     auto countPlan = lp::PlanBuilder(context)

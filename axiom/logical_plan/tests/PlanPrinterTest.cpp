@@ -1247,8 +1247,8 @@ TEST_F(PlanPrinterTest, tableWrite) {
     EXPECT_THAT(
         lines,
         testing::ElementsAre(
-            testing::Eq(
-                fmt::format("- TABLE_WRITE {} [1]: 0 fields", expectedKind)),
+            testing::Eq(fmt::format(
+                "- TABLE_WRITE {} [1]: 1 fields: rows BIGINT", expectedKind)),
             testing::Eq("      table: output_table"),
             testing::Eq("      connector: test"),
             testing::Eq("      columns: 2"),
@@ -1264,7 +1264,7 @@ TEST_F(PlanPrinterTest, tableWrite) {
         lines,
         testing::ElementsAre(
             testing::Eq(
-                fmt::format("- TABLE_WRITE {} [1]: 0 fields", expectedKind)),
+                fmt::format("- TABLE_WRITE {} [1]: 1 fields", expectedKind)),
             testing::Eq("  - TABLE_SCAN [0]: 2 fields"),
             testing::Eq("        table: test"),
             testing::Eq("        connector: test"),

@@ -711,14 +711,12 @@ void Optimization::addPostprocess(
     VELOX_DCHECK(!dt->hasAggregation());
     VELOX_DCHECK(!dt->hasOrderBy());
     VELOX_DCHECK(!dt->hasLimit());
-    VELOX_DCHECK(dt->columns.empty());
     PrecomputeProjection precompute{plan, dt, /*projectAllInputs=*/false};
     auto writeColumns = precompute.toColumns(dt->write->columnExprs());
     plan = std::move(precompute).maybeProject();
     state.addCost(*plan);
     // Because table write will be in every plan and it will be root node,
-    // it would not affect the choice of plan. And it's also not clear
-    // how to estimate the cost of the write, because it's connector specific.
+    // it would not affect the choice of plan.
     // So we're not adding the cost of the write itself to the plan cost.
     plan = make<TableWrite>(plan, std::move(writeColumns), dt->write);
     return;
