@@ -1533,8 +1533,6 @@ Distribution somePartition(const RelationOpPtrVector& inputs) {
   }
 
   DistributionType distributionType;
-  distributionType.numPartitions =
-      queryCtx()->optimization()->runnerOptions().numWorkers;
   distributionType.locus = firstInput->distribution().distributionType.locus;
 
   return {distributionType, std::move(columns)};
