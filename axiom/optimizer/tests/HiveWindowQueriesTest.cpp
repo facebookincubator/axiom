@@ -51,18 +51,12 @@ TEST_F(HiveWindowQueriesTest, basicRowNumber) {
   {
     auto logicalPlan =
         lp::PlanBuilder()
-            .tableScan(
-                connectorId,
-                "orders",
-                {"o_clerk", "o_orderdate", "o_orderkey", "o_totalprice"})
+            .tableScan(connectorId, "nation", nationType->names())
             .window(
-                {"rank() OVER (PARTITION BY o_clerk ORDER BY o_totalprice) AS rnk"})
-                .orderBy({"o_clerk", "rnk"})
+                {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
             .build();
+  }
 
-    std::cerr << toSingleNodePlan(logicalPlan)->toString(true, true) << std::endl;
-}
-  
   auto logicalPlan =
       lp::PlanBuilder()
           .tableScan(connectorId, "nation", names)
@@ -90,55 +84,7 @@ TEST_F(HiveWindowQueriesTest, basicRowNumber) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveWindowQueriesTest, orderByWindowExpr) {
-  auto nationType =
-      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
-          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
-
-  const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
-
-  const std::vector<std::string>& names = nationType->names();
-
-  auto logicalPlan =
-      lp::PlanBuilder()
-          .tableScan(connectorId, "nation", names)
-          .window(
-              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
-          .window(
-              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
-          .orderBy({"rnk + rn"})
-          .project({"rnk + rn"})
-          .build();
-
-  {
-    auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
-                       .window()
-                       .window()
-                       .project()
-                       .orderBy()
-                       .project()
-                       .build();
-    ASSERT_TRUE(matcher->match(plan));
-  }
-
-  auto referencePlan =
-      exec::test::PlanBuilder()
-          .tableScan("nation", nationType)
-          .window(
-              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
-          .window(
-              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
-          .project({"rnk + rn as s"})
-          .orderBy({"s"}, false)
-          .planNode();
-
-  checkSame(logicalPlan, referencePlan);
-}
-
-TEST_F(HiveWindowQueriesTest, manyWindowsSameSpec) {
+TEST_F(HiveWindowQueriesTest, manySameSpec) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -179,7 +125,7 @@ TEST_F(HiveWindowQueriesTest, manyWindowsSameSpec) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveWindowQueriesTest, differentWindowSpecs) {
+TEST_F(HiveWindowQueriesTest, differentSpecs) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -332,7 +278,7 @@ TEST_F(HiveWindowQueriesTest, mixedFrameTypesAndBounds) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveWindowQueriesTest, frameTypesWithoutOrderBy) {
+TEST_F(HiveWindowQueriesTest, specsWithoutOrderBy) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -360,7 +306,7 @@ TEST_F(HiveWindowQueriesTest, frameTypesWithoutOrderBy) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveWindowQueriesTest, multipleOrderByColumns) {
+TEST_F(HiveWindowQueriesTest, multipleOrderByColumnsInSpec) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -403,7 +349,7 @@ TEST_F(HiveWindowQueriesTest, multipleOrderByColumns) {
   checkSame(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveWindowQueriesTest, orderByWindowAlias) {
+TEST_F(HiveWindowQueriesTest, orderByWindow) {
   auto nationType =
       ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
@@ -441,6 +387,93 @@ TEST_F(HiveWindowQueriesTest, orderByWindowAlias) {
           .window(
               {"rank() over (order by n_regionkey, n_nationkey desc, n_name)"})
           .orderBy({"rn desc"}, false)
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, orderByExprOfWindows) {
+  auto nationType =
+      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
+          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
+
+  const auto connectorId = exec::test::kHiveConnectorId;
+  const auto connector = velox::connector::getConnector(connectorId);
+
+  const std::vector<std::string>& names = nationType->names();
+
+  auto logicalPlan =
+      lp::PlanBuilder()
+          .tableScan(connectorId, "nation", names)
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .orderBy({"rnk + rn"})
+          .project({"rnk + rn"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .window()
+                       .project()
+                       .orderBy()
+                       .project()
+                       .build();
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", nationType)
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .project({"rnk + rn as s"})
+          .orderBy({"s"}, false)
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, filter) {
+  auto nationType =
+      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
+          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
+
+  const auto connectorId = exec::test::kHiveConnectorId;
+  const auto connector = velox::connector::getConnector(connectorId);
+
+  const std::vector<std::string>& names = nationType->names();
+
+  auto logicalPlan =
+      lp::PlanBuilder()
+          .tableScan(connectorId, "nation", names)
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .filter("rnk = 1")
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .filter()
+                       .build();
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", nationType)
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .filter("rnk = 1")
           .planNode();
 
   checkSame(logicalPlan, referencePlan);

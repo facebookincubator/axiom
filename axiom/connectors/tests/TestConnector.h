@@ -227,7 +227,7 @@ class TestInsertTableHandle
   const std::string name_;
 };
 
-/// Contains an in-memory map of TestTables inserted via the createTable
+/// Contains an in-memory map of TestTables inserted via the addTable
 /// API. Tables are retrieved by name using the findTable API. The
 /// splitManager API returns a TestSplitManager. createColumnHandle
 /// returns a TestColumnHandle for the specified layout and column.
@@ -267,49 +267,10 @@ class TestConnectorMetadata : public ConnectorMetadata {
       velox::RowTypePtr dataColumns,
       std::optional<LookupKeys>) override;
 
-  void createTable(
-      const std::string& tableName,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options,
-      const ConnectorSessionPtr& session,
-      bool errorIfExists = true,
-      TableKind tableKind = TableKind::kTable) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  velox::connector::ConnectorInsertTableHandlePtr createInsertTableHandle(
-      const TableLayout& layout,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options,
-      WriteKind kind,
-      const ConnectorSessionPtr& session) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  WritePartitionInfo writePartitionInfo(
-      const velox::connector::ConnectorInsertTableHandlePtr& handle) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  void finishWrite(
-      const TableLayout& layout,
-      const velox::connector::ConnectorInsertTableHandlePtr& handle,
-      const std::vector<velox::RowVectorPtr>& writerResult,
-      WriteKind kind,
-      const ConnectorSessionPtr& session) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
-      const TableLayout& layout,
-      WriteKind kind) override {
-    VELOX_UNSUPPORTED();
-  }
-
   /// Create and return a TestTable with the specified name and schema in the
   /// in-memory map maintained in the connector metadata. If the table already
   /// exists, an error is thrown.
-  std::shared_ptr<TestTable> createTable(
+  std::shared_ptr<TestTable> addTable(
       const std::string& name,
       const velox::RowTypePtr& schema);
 
@@ -372,7 +333,7 @@ class TestDataSource : public velox::connector::DataSource {
 };
 
 /// Contains an embedded TestConnectorMetadata to which TestTables are
-/// added at runtime using the createTable API. Data is appended to a
+/// added at runtime using the addTable API. Data is appended to a
 /// TestTable via the appendData method. createDataSource creates a
 /// TestDataSource object which returns appended data. createDataSink
 /// creates a TestDataSink object which appends additional data to
@@ -414,7 +375,7 @@ class TestConnector : public velox::connector::Connector {
 
   /// Add a TestTable with the specified name and schema to the
   /// TestConnectorMetadata corresponding to this connector.
-  std::shared_ptr<TestTable> createTable(
+  std::shared_ptr<TestTable> addTable(
       const std::string& name,
       const velox::RowTypePtr& schema = velox::ROW({}, {}));
 

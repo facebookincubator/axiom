@@ -160,8 +160,32 @@ TEST_F(PlanTest, queryGraph) {
   EXPECT_EQ(interned2, interned);
 }
 
+TEST_F(PlanTest, dedupEmptyArrays) {
+  auto logicalPlan =
+      lp::PlanBuilder()
+          .values(ROW({}), {variant::row({})})
+          .map({
+              lp::Lit(variant::array({}), ARRAY(ARRAY(REAL()))).as("a"),
+              lp::Lit(variant::array({}), ARRAY(MAP(INTEGER(), VARCHAR())))
+                  .as("b"),
+          })
+          .map({
+              "typeof(a)",
+              "typeof(b)",
+          })
+          .build();
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .values({makeRowVector(ROW({}), 1)})
+          .project({"'array(array(real))'", "'array(map(integer, varchar))'"})
+          .planNode();
+
+  checkSameSingleNode(logicalPlan, referencePlan);
+}
+
 TEST_F(PlanTest, agg) {
-  testConnector_->createTable(
+  testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {DOUBLE(), DOUBLE(), VARCHAR()}));
 
   auto logicalPlan = lp::PlanBuilder()
@@ -199,7 +223,7 @@ TEST_F(PlanTest, agg) {
 // pushdown.
 TEST_F(PlanTest, rejectedFilters) {
   const auto mapType = MAP(BIGINT(), DOUBLE());
-  testConnector_->createTable(
+  testConnector_->addTable(
       "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), mapType}));
 
   auto scan = [&]() {
@@ -309,7 +333,7 @@ TEST_F(PlanTest, rejectedFilters) {
 }
 
 TEST_F(PlanTest, specialFormConstantFold) {
-  testConnector_->createTable(
+  testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), BIGINT()}));
 
   struct TestCase {
@@ -403,7 +427,7 @@ TEST_F(PlanTest, specialFormConstantFold) {
 }
 
 TEST_F(PlanTest, inList) {
-  testConnector_->createTable(
+  testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
 
   auto scan = [&]() {
@@ -448,8 +472,8 @@ TEST_F(PlanTest, multipleConnectors) {
     velox::connector::unregisterConnector("extra");
   };
 
-  testConnector_->createTable("table1", ROW({"a"}, {BIGINT()}));
-  extraConnector->createTable("table2", ROW({"b"}, {BIGINT()}));
+  testConnector_->addTable("table1", ROW({"a"}, {BIGINT()}));
+  extraConnector->addTable("table2", ROW({"b"}, {BIGINT()}));
 
   lp::PlanBuilder::Context context(kTestConnectorId);
   auto logicalPlan =
@@ -1243,7 +1267,7 @@ TEST_F(PlanTest, values) {
 }
 
 TEST_F(PlanTest, limitBeforeProject) {
-  testConnector_->createTable("t", ROW({"a", "b"}, {INTEGER(), INTEGER()}));
+  testConnector_->addTable("t", ROW({"a", "b"}, {INTEGER(), INTEGER()}));
   {
     auto logicalPlan = lp::PlanBuilder{}
                            .tableScan(kTestConnectorId, "t", {"a", "b"})
@@ -1275,7 +1299,7 @@ TEST_F(PlanTest, limitBeforeProject) {
 }
 
 TEST_F(PlanTest, limitAfterOrderBy) {
-  testConnector_->createTable("t", ROW({"a", "b"}, INTEGER()));
+  testConnector_->addTable("t", ROW({"a", "b"}, INTEGER()));
 
   for (auto limit : {10, 10'000}) {
     auto logicalPlan = lp::PlanBuilder{}
@@ -1299,7 +1323,7 @@ TEST_F(PlanTest, limitAfterOrderBy) {
 }
 
 TEST_F(PlanTest, parallelCse) {
-  testConnector_->createTable("t", ROW({"a", "b", "c"}, INTEGER()));
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, INTEGER()));
 
   auto logicalPlan =
       lp::PlanBuilder(/* allowCoersions */ true)
@@ -1343,7 +1367,7 @@ TEST_F(PlanTest, parallelCse) {
 }
 
 TEST_F(PlanTest, lastProjection) {
-  testConnector_->createTable(
+  testConnector_->addTable(
       "numbers", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}));
 
   auto logicalPlan = lp::PlanBuilder{}
@@ -1364,7 +1388,7 @@ TEST_F(PlanTest, lastProjection) {
 }
 
 TEST_F(PlanTest, orderByDuplicateKeys) {
-  testConnector_->createTable("t", ROW({"a"}, {BIGINT()}));
+  testConnector_->addTable("t", ROW({"a"}, {BIGINT()}));
 
   auto logicalPlan = lp::PlanBuilder{}
                          .tableScan(kTestConnectorId, "t")

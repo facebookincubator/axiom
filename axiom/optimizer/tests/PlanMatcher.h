@@ -102,7 +102,15 @@ class PlanMatcherBuilder {
 
   PlanMatcherBuilder& partialAggregation();
 
+  PlanMatcherBuilder& partialAggregation(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates);
+
   PlanMatcherBuilder& finalAggregation();
+
+  PlanMatcherBuilder& finalAggregation(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates);
 
   PlanMatcherBuilder& hashJoin(
       const std::shared_ptr<PlanMatcher>& rightMatcher);

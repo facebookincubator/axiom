@@ -36,6 +36,15 @@ namespace {
 
 namespace lp = facebook::axiom::logical_plan;
 
+OrderType toOrderType(lp::SortOrder sort) {
+  if (sort.isAscending()) {
+    return sort.isNullsFirst() ? OrderType::kAscNullsFirst
+                               : OrderType::kAscNullsLast;
+  }
+  return sort.isNullsFirst() ? OrderType::kDescNullsFirst
+                             : OrderType::kDescNullsLast;
+}
+
 /// Trace info to add to exception messages.
 struct ToGraphContext {
   explicit ToGraphContext(const lp::Expr* e) : expr{e} {}
@@ -69,17 +78,6 @@ velox::ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
   return e;
 }
 
-OrderType toOrderType(const logical_plan::SortOrder& order) {
-  if (order.isAscending() && order.isNullsFirst()) {
-    return OrderType::kAscNullsFirst;
-  } else if (order.isAscending() && !order.isNullsFirst()) {
-    return OrderType::kAscNullsLast;
-  } else if (!order.isAscending() && order.isNullsFirst()) {
-    return OrderType::kDescNullsFirst;
-  } else {
-    return OrderType::kDescNullsLast;
-  }
-}
 } // namespace
 
 ToGraph::ToGraph(
@@ -114,40 +112,35 @@ ToGraph::ToGraph(
   }
 }
 
-void ToGraph::setDtOutput(
-    DerivedTableP dt,
-    const lp::LogicalPlanNode& logicalPlan) {
-  const auto& outputType = logicalPlan.outputType();
-  for (auto i = 0; i < outputType->size(); ++i) {
-    const auto& type = outputType->childAt(i);
-    const auto& name = outputType->nameOf(i);
+void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
+  const auto* inner = translateColumn(name);
+  dt->exprs.push_back(inner);
 
-    auto inner = translateColumn(name);
-    dt->exprs.push_back(inner);
-
-    Value value(toType(type), 0);
+  ColumnCP outer = nullptr;
+  if (inner->isColumn() && inner->as<Column>()->relation() == dt &&
+      inner->as<Column>()->outputName() == name) {
+    outer = inner->as<Column>();
+  } else {
     const auto* columnName = toName(name);
-    auto* outer = make<Column>(columnName, dt, value, columnName);
-    dt->columns.push_back(outer);
-    renames_[name] = outer;
+    outer = make<Column>(columnName, dt, inner->value(), columnName);
+  }
+  dt->columns.push_back(outer);
+  renames_[name] = outer;
+}
+
+void ToGraph::setDtOutput(DerivedTableP dt, const lp::LogicalPlanNode& node) {
+  const auto& type = *node.outputType();
+  for (const auto& name : type.names()) {
+    addDtColumn(dt, name);
   }
 }
 
 void ToGraph::setDtUsedOutput(
     DerivedTableP dt,
     const lp::LogicalPlanNode& node) {
-  const auto& type = node.outputType();
+  const auto& type = *node.outputType();
   for (auto i : usedChannels(node)) {
-    const auto& name = type->nameOf(i);
-
-    const auto* inner = translateColumn(name);
-    dt->exprs.push_back(inner);
-
-    const auto* columnName = toName(name);
-    const auto* outer =
-        make<Column>(columnName, dt, inner->value(), columnName);
-    dt->columns.push_back(outer);
-    renames_[name] = outer;
+    addDtColumn(dt, type.nameOf(i));
   }
 }
 
@@ -390,23 +383,17 @@ PathCP innerPath(std::span<const Step> steps, int32_t last) {
 }
 
 velox::Variant* subscriptLiteral(velox::TypeKind kind, const Step& step) {
-  auto* ctx = queryCtx();
   switch (kind) {
     case velox::TypeKind::VARCHAR:
-      return ctx->registerVariant(
-          std::make_unique<velox::Variant>(std::string(step.field)));
+      return registerVariant(std::string{step.field});
     case velox::TypeKind::BIGINT:
-      return ctx->registerVariant(
-          std::make_unique<velox::Variant>(static_cast<int64_t>(step.id)));
+      return registerVariant(static_cast<int64_t>(step.id));
     case velox::TypeKind::INTEGER:
-      return ctx->registerVariant(
-          std::make_unique<velox::Variant>(static_cast<int32_t>(step.id)));
+      return registerVariant(static_cast<int32_t>(step.id));
     case velox::TypeKind::SMALLINT:
-      return ctx->registerVariant(
-          std::make_unique<velox::Variant>(static_cast<int16_t>(step.id)));
+      return registerVariant(static_cast<int16_t>(step.id));
     case velox::TypeKind::TINYINT:
-      return ctx->registerVariant(
-          std::make_unique<velox::Variant>(static_cast<int8_t>(step.id)));
+      return registerVariant(static_cast<int8_t>(step.id));
     default:
       VELOX_FAIL("Unsupported key type");
   }
@@ -653,14 +640,14 @@ bool ToGraph::isJoinEquality(
 }
 
 ExprCP ToGraph::makeConstant(const lp::ConstantExpr& constant) {
-  auto temp = constant.value();
+  TypedVariant temp{toType(constant.type()), constant.value()};
   auto it = constantDedup_.find(temp);
   if (it != constantDedup_.end()) {
     return it->second;
   }
-  auto* literal = make<Literal>(Value(toType(constant.type()), 1), temp.get());
-  // The variant will stay live for the optimization duration.
-  reverseConstantDedup_[literal] = temp;
+
+  auto* literal = make<Literal>(Value(temp.type, 1), temp.value.get());
+
   constantDedup_[std::move(temp)] = literal;
   return literal;
 }
@@ -958,10 +945,14 @@ struct AggregateDedupKey {
   bool isDistinct;
   ExprCP condition;
   std::span<const ExprCP> args;
+  std::span<const ExprCP> orderKeys;
+  std::span<const OrderType> orderTypes;
 
   bool operator==(const AggregateDedupKey& other) const {
     return func == other.func && isDistinct == other.isDistinct &&
-        condition == other.condition && std::ranges::equal(args, other.args);
+        condition == other.condition && std::ranges::equal(args, other.args) &&
+        std::ranges::equal(orderKeys, other.orderKeys) &&
+        std::ranges::equal(orderTypes, other.orderTypes);
   }
 };
 
@@ -978,6 +969,14 @@ struct AggregateDedupHasher {
 
     for (auto& a : key.args) {
       hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(a));
+    }
+
+    for (auto& k : key.orderKeys) {
+      hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(k));
+    }
+
+    for (auto& t : key.orderTypes) {
+      hash = velox::bits::hashMix(hash, folly::hasher<OrderType>()(t));
     }
 
     return hash;
@@ -1040,12 +1039,38 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     if (aggregate->filter()) {
       condition = translateExpr(aggregate->filter());
     }
-    VELOX_CHECK(aggregate->ordering().empty());
+
+    auto [orderKeys, orderTypes] = dedupOrdering(aggregate->ordering());
+
+    if (aggregate->isDistinct() && !orderKeys.empty()) {
+      VELOX_FAIL(
+          "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
+    }
+
+    if (aggregate->isDistinct()) {
+      const auto& options = queryCtx()->optimization()->runnerOptions();
+      VELOX_CHECK(
+          options.numWorkers == 1 && options.numDrivers == 1,
+          "DISTINCT option for aggregation is supported only in single worker, single thread mode");
+    }
+
+    if (!orderKeys.empty()) {
+      const auto& options = queryCtx()->optimization()->runnerOptions();
+      VELOX_CHECK(
+          options.numWorkers == 1 && options.numDrivers == 1,
+          "ORDER BY option for aggregation is supported only in single worker, single thread mode");
+    }
 
     auto aggName = toName(aggregate->name());
     auto name = toName(agg.outputNames()[channel]);
 
-    AggregateDedupKey key{aggName, aggregate->isDistinct(), condition, args};
+    AggregateDedupKey key{
+        aggName,
+        aggregate->isDistinct(),
+        condition,
+        args,
+        orderKeys,
+        orderTypes};
 
     auto it = uniqueAggregates.try_emplace(key).first;
     if (it->second) {
@@ -1063,7 +1088,9 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
           funcs,
           aggregate->isDistinct(),
           condition,
-          accumulatorType);
+          accumulatorType,
+          std::move(orderKeys),
+          std::move(orderTypes));
 
       auto* column =
           make<Column>(name, currentDt_, aggregateExpr->value(), name);
@@ -1144,25 +1171,8 @@ ExprCP ToGraph::translateWindow(const lp::WindowExpr* windowExpr) {
 }
 
 PlanObjectP ToGraph::addOrderBy(const lp::SortNode& order) {
-  ExprVector deduppedOrderKeys;
-  OrderTypeVector deduppedOrderTypes;
-  deduppedOrderKeys.reserve(order.ordering().size());
-  deduppedOrderTypes.reserve(order.ordering().size());
-
-  folly::F14FastSet<ExprCP> uniqueOrderKeys;
-  for (const auto& field : order.ordering()) {
-    auto* key = translateExpr(field.expression);
-    if (!uniqueOrderKeys.emplace(key).second) {
-      continue;
-    }
-    auto sort = field.order;
-    deduppedOrderKeys.push_back(key);
-    deduppedOrderTypes.push_back(
-        sort.isAscending() ? (sort.isNullsFirst() ? OrderType::kAscNullsFirst
-                                                  : OrderType::kAscNullsLast)
-                           : (sort.isNullsFirst() ? OrderType::kDescNullsFirst
-                                                  : OrderType::kDescNullsLast));
-  }
+  auto [deduppedOrderKeys, deduppedOrderTypes] =
+      dedupOrdering(order.ordering());
 
   currentDt_->orderKeys = std::move(deduppedOrderKeys);
   currentDt_->orderTypes = std::move(deduppedOrderTypes);
@@ -1870,13 +1880,33 @@ PlanObjectP ToGraph::makeQueryGraph(
   }
 }
 
+std::pair<ExprVector, OrderTypeVector> ToGraph::dedupOrdering(
+    const std::vector<lp::SortingField>& ordering) {
+  ExprVector deduppedOrderKeys;
+  OrderTypeVector deduppedOrderTypes;
+  deduppedOrderKeys.reserve(ordering.size());
+  deduppedOrderTypes.reserve(ordering.size());
+
+  folly::F14FastSet<ExprCP> uniqueOrderKeys;
+  for (const auto& field : ordering) {
+    const auto* key = translateExpr(field.expression);
+    if (!uniqueOrderKeys.emplace(key).second) {
+      continue;
+    }
+    deduppedOrderKeys.push_back(key);
+    deduppedOrderTypes.push_back(toOrderType(field.order));
+  }
+
+  return {std::move(deduppedOrderKeys), std::move(deduppedOrderTypes)};
+}
+
 // Debug helper functions. Must be extern to be callable from debugger.
 
 extern std::string leString(const lp::Expr* e) {
   return lp::ExprPrinter::toText(*e);
 }
 
-extern std::string pString(const lp::LogicalPlanNode* p) {
+extern std::string lpString(const lp::LogicalPlanNode* p) {
   return lp::PlanPrinter::toText(*p);
 }
 

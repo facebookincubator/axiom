@@ -25,8 +25,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_runner_tests_utils DistributedPlanBuilder.cpp
-                                     LocalRunnerTestBase.cpp)
+add_library(axiom_runner_tests_utils DistributedPlanBuilder.cpp LocalRunnerTestBase.cpp)
 
 target_link_libraries(
   axiom_runner_tests_utils
@@ -37,7 +36,8 @@ target_link_libraries(
   velox_exec
   velox_file_test_utils
   velox_hive_connector
-  velox_tpch_connector)
+  velox_tpch_connector
+)
 
 add_executable(axiom_runner_local_runner_test LocalRunnerTest.cpp Main.cpp)
 
@@ -49,24 +49,30 @@ target_link_libraries(
   velox_exec_test_lib
   velox_parse_parser
   velox_parse_expression
-  GTest::gtest)
+  GTest::gtest
+)
 
-add_library(axiom_runner_presto_query_replay_runner_test_utils
-            PrestoQueryReplayRunner.cpp)
+add_library(axiom_runner_presto_query_replay_runner_test_utils PrestoQueryReplayRunner.cpp)
 
 target_link_libraries(
-  axiom_runner_presto_query_replay_runner_test_utils axiom_runner_local_runner
-  velox_hive_connector velox_exec_test_lib)
+  axiom_runner_presto_query_replay_runner_test_utils
+  axiom_runner_local_runner
+  velox_hive_connector
+  velox_exec_test_lib
+)
 
-add_executable(axiom_runner_presto_query_replay_runner_test
-               PrestoQueryReplayRunnerTest.cpp Main.cpp)
+add_executable(
+  axiom_runner_presto_query_replay_runner_test
+  PrestoQueryReplayRunnerTest.cpp
+  Main.cpp
+)
 
-add_test(axiom_runner_presto_query_replay_runner_test
-         axiom_runner_presto_query_replay_runner_test)
+add_test(axiom_runner_presto_query_replay_runner_test axiom_runner_presto_query_replay_runner_test)
 
 target_link_libraries(
   axiom_runner_presto_query_replay_runner_test
   axiom_runner_presto_query_replay_runner_test_utils
   velox_exec_test_lib
   velox_exec
-  GTest::gtest)
+  GTest::gtest
+)

@@ -765,7 +765,15 @@ std::shared_ptr<LocalTable> LocalHiveConnectorMetadata::findTableLocked(
 
 namespace {
 
-// Helper: Recursively delete directory contents
+// Recursively delete directory contents.
+void deleteDirectoryContents(const std::string& path);
+
+// Recursively delete directory.
+void deleteDirectoryRecursive(const std::string& path) {
+  deleteDirectoryContents(path);
+  rmdir(path.c_str());
+}
+
 void deleteDirectoryContents(const std::string& path) {
   DIR* dir = opendir(path.c_str());
   if (!dir) {
@@ -782,8 +790,7 @@ void deleteDirectoryContents(const std::string& path) {
     struct stat st;
     if (stat(fullPath.c_str(), &st) == 0) {
       if (S_ISDIR(st.st_mode)) {
-        deleteDirectoryContents(fullPath);
-        rmdir(fullPath.c_str());
+        deleteDirectoryRecursive(fullPath);
       } else {
         unlink(fullPath.c_str());
       }
@@ -792,50 +799,87 @@ void deleteDirectoryContents(const std::string& path) {
   closedir(dir);
 }
 
-// Helper: Check if directory exists.
+// Create a temporary directory.
+// Its path contains two parts 'path' as prefix, 'name' as middle part and
+// unique id as suffix.
+std::string createTemporaryDirectory(
+    std::string_view path,
+    std::string_view name) {
+  auto templatePath = fmt::format("{}_{}_XXXXXX", path, name);
+  const char* resultPath = ::mkdtemp(templatePath.data());
+  VELOX_CHECK_NOT_NULL(
+      resultPath,
+      "Cannot create temp directory, template was {}",
+      templatePath);
+  return resultPath;
+}
+
+// Move all files and directories from sourceDir to targetDir.
+void move(const fs::path& sourceDir, const fs::path& targetDir) {
+  VELOX_CHECK(
+      fs::is_directory(sourceDir),
+      "Source directory does not exist or is not a directory: {}",
+      sourceDir.string());
+  // Create the target directory if it doesn't exist
+  fs::create_directories(targetDir);
+  // Iterate through the source directory
+  for (const auto& entry : fs::directory_iterator(sourceDir)) {
+    // Compute the relative path from the source directory
+    fs::path relPath = fs::relative(entry.path(), sourceDir);
+    fs::path destPath = targetDir / relPath;
+    // Create enclosing directories in the target if they don't exist
+    fs::create_directories(destPath.parent_path());
+    // Move the file/directory to the target directory
+    fs::rename(entry.path(), destPath);
+  }
+}
+
+// Check if directory exists.
 bool dirExists(const std::string& path) {
   struct stat info;
   return stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
 }
 
-// Helper: Create directory (recursively)
+// Create directory (recursively).
 void createDir(const std::string& path) {
   if (mkdir(path.c_str(), 0755) != 0 && errno != EEXIST) {
     throw std::runtime_error("Failed to create directory: " + path);
   }
 }
+
+// Split a set of string tokens with ',' delimiter.
+void parseTokens(const std::string& option, folly::dynamic& array) {
+  std::vector<std::string> tokens;
+  folly::split(",", option, tokens);
+  for (auto& token : tokens) {
+    array.push_back(folly::trimWhitespace(token));
+  }
+}
 } // namespace
 
-void LocalHiveConnectorMetadata::createTable(
+TablePtr LocalHiveConnectorMetadata::createTable(
     const std::string& tableName,
     const velox::RowTypePtr& rowType,
     const folly::F14FastMap<std::string, std::string>& options,
-    const ConnectorSessionPtr& session,
-    bool errorIfExists,
-    TableKind kind) {
-  VELOX_CHECK_EQ(kind, TableKind::kTable);
+    const ConnectorSessionPtr& session) {
   validateOptions(options);
   ensureInitialized();
   auto path = tablePath(tableName);
   if (dirExists(path)) {
-    if (errorIfExists) {
-      VELOX_USER_FAIL("Table {} already exists", tableName);
-    } else {
-      return;
-    }
+    VELOX_USER_FAIL("Table {} already exists", tableName);
   } else {
     createDir(path);
   }
 
   folly::dynamic schema = folly::dynamic::object;
 
-  auto it = options.find("compression_kind");
+  auto it = options.find(HiveWriteOptions::kCompressionKind);
   if (it != options.end()) {
     //  Check the kind is recognized.
     velox::common::stringToCompressionKind(it->second);
     schema["compressionKind"] = it->second;
   }
-  it = options.find("file_format");
+  it = options.find(HiveWriteOptions::kFileFormat);
   std::string fileFormat;
   if (it != options.end()) {
     VELOX_USER_CHECK(
@@ -849,43 +893,41 @@ void LocalHiveConnectorMetadata::createTable(
   }
   schema["fileFormat"] = fileFormat;
   folly::dynamic buckets = folly::dynamic::object;
-  it = options.find("bucketed_by");
+  it = options.find(HiveWriteOptions::kBucketedBy);
   if (it != options.end()) {
     folly::dynamic columns = folly::dynamic::array;
-    std::vector<std::string> tokens;
-    folly::split(",", it->second, tokens);
-    for (auto& token : tokens) {
-      token = folly::trimWhitespace(token);
-      columns.push_back(token);
-    }
-    it = options.find("bucket_count");
+    parseTokens(it->second, columns);
+    it = options.find(HiveWriteOptions::kBucketCount);
     VELOX_USER_CHECK(
         it != options.end(),
-        "bucket_count is required if bucketed_by is specified");
-    auto numBuckets = atoi(it->second.c_str());
-    VELOX_USER_CHECK_GT(numBuckets, 1);
-    buckets["bucketCount"] = fmt::format("{}", numBuckets);
+        "{} is required if {} is specified",
+        HiveWriteOptions::kBucketCount,
+        HiveWriteOptions::kBucketedBy);
+    auto count = atoi(it->second.c_str());
+    VELOX_USER_CHECK(
+        (count > 0) && ((count & (count - 1)) == 0),
+        "bucket_count({}) must be >0 and a power of 2",
+        it->second);
+    buckets["bucketCount"] = fmt::format("{}", count);
     buckets["bucketedBy"] = columns;
     folly::dynamic sorted = folly::dynamic::array;
     it = options.find("sorted_by");
     if (it != options.end()) {
-      tokens.clear();
-      folly::split(",", it->second, tokens);
-      for (auto& token : tokens) {
-        token = folly::trimWhitespace(token);
-        sorted.push_back(token);
-      }
+      parseTokens(it->second, sorted);
     }
     buckets["sortedBy"] = sorted;
   }
   schema["bucketProperty"] = buckets;
+
   folly::dynamic dataColumns = folly::dynamic::array;
   folly::dynamic hivePartitionColumns = folly::dynamic::array;
-  it = options.find("partitioned_by");
   std::vector<std::string> tokens;
-  folly::split(",", it->second, tokens);
-  for (auto& token : tokens) {
-    token = folly::trimWhitespace(token);
+  it = options.find(HiveWriteOptions::kPartitionedBy);
+  if (it != options.end()) {
+    folly::split(",", it->second, tokens);
+    for (auto& token : tokens) {
+      token = folly::trimWhitespace(token);
+    }
   }
 
   bool isPartition = false;
@@ -912,22 +954,58 @@ void LocalHiveConnectorMetadata::createTable(
   std::string filePath = path + "/.schema";
 
   std::lock_guard<std::mutex> l(mutex_);
+  VELOX_USER_CHECK_NULL(
+      findTableLocked(tableName), "table {} already exists", tableName);
   folly::writeFileAtomic(filePath, jsonStr.data(), jsonStr.size());
-  tables_.erase(tableName);
   loadTable(tableName, path);
+  auto table = findTableLocked(tableName);
+  tables_.erase(tableName);
+  return table;
 }
 
-void LocalHiveConnectorMetadata::finishWrite(
-    const TableLayout& layout,
-    const velox::connector::ConnectorInsertTableHandlePtr& handle,
+velox::ContinueFuture LocalHiveConnectorMetadata::finishWrite(
+    const ConnectorWriteHandlePtr& handle,
     const std::vector<velox::RowVectorPtr>& /*writerResult*/,
-    WriteKind /*kind*/,
     const ConnectorSessionPtr& /*session*/) {
   std::lock_guard<std::mutex> l(mutex_);
-  auto localHandle =
-      dynamic_cast<const velox::connector::hive::HiveInsertTableHandle*>(
-          handle.get());
-  loadTable(layout.table().name(), localHandle->locationHandle()->targetPath());
+  auto hiveHandle =
+      std::dynamic_pointer_cast<const HiveConnectorWriteHandle>(handle);
+  VELOX_CHECK_NOT_NULL(hiveHandle, "expecting a Hive write handle");
+  auto veloxHandle = std::dynamic_pointer_cast<
+      const velox::connector::hive::HiveInsertTableHandle>(
+      handle->veloxHandle());
+  VELOX_CHECK_NOT_NULL(veloxHandle, "expecting a Hive insert handle");
+  const auto& targetPath = veloxHandle->locationHandle()->targetPath();
+  const auto& writePath = veloxHandle->locationHandle()->writePath();
+  move(writePath, targetPath);
+  deleteDirectoryRecursive(writePath);
+  loadTable(hiveHandle->table()->name(), targetPath);
+  return {};
+}
+
+velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
+    const ConnectorWriteHandlePtr& handle,
+    const ConnectorSessionPtr& session) {
+  std::lock_guard<std::mutex> l(mutex_);
+  auto hiveHandle =
+      std::dynamic_pointer_cast<const HiveConnectorWriteHandle>(handle);
+  VELOX_CHECK_NOT_NULL(hiveHandle, "expecting a Hive write handle");
+  auto veloxHandle = std::dynamic_pointer_cast<
+      const velox::connector::hive::HiveInsertTableHandle>(
+      handle->veloxHandle());
+  VELOX_CHECK_NOT_NULL(veloxHandle, "expecting a Hive insert handle");
+  const auto& writePath = veloxHandle->locationHandle()->writePath();
+  deleteDirectoryRecursive(writePath);
+  if (hiveHandle->kind() == WriteKind::kCreate) {
+    const auto& targetPath = veloxHandle->locationHandle()->targetPath();
+    deleteDirectoryRecursive(targetPath);
+  }
+  return {};
+}
+
+std::optional<std::string> LocalHiveConnectorMetadata::makeStagingDirectory(
+    std::string_view table) const {
+  return createTemporaryDirectory(hiveConfig_->hiveLocalDataPath(), table);
 }
 
 } // namespace facebook::axiom::connector::hive

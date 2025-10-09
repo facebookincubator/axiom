@@ -450,17 +450,64 @@ TEST_F(PrestoParserTest, everything) {
 TEST_F(PrestoParserTest, explain) {
   test::PrestoParser parser(kTpchConnectorId, pool());
 
-  auto statement = parser.parse("EXPLAIN SELECT * FROM nation");
-  ASSERT_TRUE(statement->isExplain());
+  {
+    auto statement = parser.parse("EXPLAIN SELECT * FROM nation");
+    ASSERT_TRUE(statement->isExplain());
 
-  auto selectStatement =
-      statement->asUnchecked<test::ExplainStatement>()->statement();
-  ASSERT_TRUE(selectStatement->isSelect());
+    auto explainStatement = statement->asUnchecked<test::ExplainStatement>();
+    ASSERT_FALSE(explainStatement->isAnalyze());
+    ASSERT_TRUE(
+        explainStatement->type() == test::ExplainStatement::Type::kDistributed);
 
-  auto matcher = lp::LogicalPlanMatcherBuilder().tableScan();
+    auto selectStatement = explainStatement->statement();
+    ASSERT_TRUE(selectStatement->isSelect());
 
-  auto logicalPlan = selectStatement->asUnchecked<SelectStatement>()->plan();
-  ASSERT_TRUE(matcher.build()->match(logicalPlan));
+    auto matcher = lp::LogicalPlanMatcherBuilder().tableScan();
+
+    auto logicalPlan = selectStatement->asUnchecked<SelectStatement>()->plan();
+    ASSERT_TRUE(matcher.build()->match(logicalPlan));
+  }
+
+  {
+    auto statement = parser.parse("EXPLAIN ANALYZE SELECT * FROM nation");
+    ASSERT_TRUE(statement->isExplain());
+
+    auto explainStatement = statement->asUnchecked<test::ExplainStatement>();
+    ASSERT_TRUE(explainStatement->isAnalyze());
+  }
+
+  {
+    auto statement =
+        parser.parse("EXPLAIN (TYPE LOGICAL) SELECT * FROM nation", true);
+    ASSERT_TRUE(statement->isExplain());
+
+    auto explainStatement = statement->asUnchecked<test::ExplainStatement>();
+    ASSERT_FALSE(explainStatement->isAnalyze());
+    ASSERT_TRUE(
+        explainStatement->type() == test::ExplainStatement::Type::kLogical);
+  }
+
+  {
+    auto statement =
+        parser.parse("EXPLAIN (TYPE GRAPH) SELECT * FROM nation", true);
+    ASSERT_TRUE(statement->isExplain());
+
+    auto explainStatement = statement->asUnchecked<test::ExplainStatement>();
+    ASSERT_FALSE(explainStatement->isAnalyze());
+    ASSERT_TRUE(
+        explainStatement->type() == test::ExplainStatement::Type::kGraph);
+  }
+
+  {
+    auto statement =
+        parser.parse("EXPLAIN (TYPE DISTRIBUTED) SELECT * FROM nation");
+    ASSERT_TRUE(statement->isExplain());
+
+    auto explainStatement = statement->asUnchecked<test::ExplainStatement>();
+    ASSERT_FALSE(explainStatement->isAnalyze());
+    ASSERT_TRUE(
+        explainStatement->type() == test::ExplainStatement::Type::kDistributed);
+  }
 }
 
 TEST_F(PrestoParserTest, describe) {

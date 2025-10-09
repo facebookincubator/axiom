@@ -20,12 +20,13 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <iostream>
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/PlanPrinter.h"
+#include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
-#include "axiom/optimizer/SchemaResolver.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/optimizer/tests/PrestoParser.h"
 #include "axiom/runner/LocalRunner.h"
@@ -168,7 +169,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       connector_ = registerTpchConnector();
     }
 
-    schema_ = std::make_shared<optimizer::SchemaResolver>();
+    schema_ = std::make_shared<connector::SchemaResolver>();
 
     prestoParser_ = std::make_unique<optimizer::test::PrestoParser>(
         connector_->connectorId(), optimizerPool_.get());
@@ -267,7 +268,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   }
 
   std::vector<RowVectorPtr> runInner(
-      facebook::axiom::runner::LocalRunner& runner,
+      runner::LocalRunner& runner,
       RunStats& stats) {
     std::vector<RowVectorPtr> results;
     uint64_t micros = 0;
@@ -322,7 +323,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       if (explain->isAnalyze()) {
         runExplainAnalyze(*select);
       } else {
-        runExplain(*select);
+        runExplain(*select, explain->type());
       }
       return;
     }
@@ -423,9 +424,27 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
         fmt::format("query_{}", queryCounter_));
   }
 
-  void runExplain(const optimizer::test::SelectStatement& statement) {
-    auto plan = optimize(statement.plan(), newQuery());
-    std::cout << plan.toString() << std::endl;
+  void runExplain(
+      const optimizer::test::SelectStatement& statement,
+      optimizer::test::ExplainStatement::Type type) {
+    switch (type) {
+      case optimizer::test::ExplainStatement::Type::kLogical:
+        std::cout << logical_plan::PlanPrinter::toText(*statement.plan())
+                  << std::endl;
+        break;
+
+      case optimizer::test::ExplainStatement::Type::kGraph:
+        optimize(statement.plan(), newQuery(), [](const auto& dt) {
+          std::cout << optimizer::DerivedTablePrinter::toText(dt) << std::endl;
+          return false; // Stop optimization.
+        });
+        break;
+
+      case optimizer::test::ExplainStatement::Type::kDistributed:
+        std::cout << optimize(statement.plan(), newQuery()).toString()
+                  << std::endl;
+        break;
+    }
   }
 
   void runExplainAnalyze(const optimizer::test::SelectStatement& statement) {
@@ -447,17 +466,26 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
               << std::endl;
   }
 
+  // Optimizes provided logical plan.
+  // @param checkDerivedTable Optional lambda to call after to-graph stage of
+  // optimization. If returns 'false', the optimization stops and returns an
+  // empty result.
+  // @param checkBestPlan Optional lambda to call after selecting best physical
+  // plan. If returns 'false', the optimization stops and returns an empty
+  // result.
   optimizer::PlanAndStats optimize(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       const std::shared_ptr<core::QueryCtx>& queryCtx,
-      const std::function<void(const optimizer::Plan&)>& peakAtBestPlan =
+      const std::function<bool(const optimizer::DerivedTable&)>&
+          checkDerivedTable = nullptr,
+      const std::function<bool(const optimizer::Plan&)>& checkBestPlan =
           nullptr) {
     if (FLAGS_print_logical_plan) {
       std::cout << "Logical plan: " << std::endl
                 << logical_plan::PlanPrinter::toText(*logicalPlan) << std::endl;
     }
 
-    facebook::axiom::runner::MultiFragmentPlan::Options opts;
+    runner::MultiFragmentPlan::Options opts;
     opts.numWorkers = FLAGS_num_workers;
     opts.numDrivers = FLAGS_num_drivers;
     auto allocator =
@@ -485,10 +513,14 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
         {.traceFlags = FLAGS_optimizer_trace},
         opts);
 
+    if (checkDerivedTable && !checkDerivedTable(*optimization.rootDt())) {
+      return {};
+    }
+
     auto best = optimization.bestPlan();
 
-    if (peakAtBestPlan) {
-      peakAtBestPlan(*best);
+    if (checkBestPlan && !checkBestPlan(*best)) {
+      return {};
     }
 
     if (FLAGS_print_short_plan) {
@@ -505,7 +537,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   }
 
   static void printPlanWithStats(
-      facebook::axiom::runner::LocalRunner& runner,
+      runner::LocalRunner& runner,
       const optimizer::NodePredictionMap& estimates) {
     std::cout << runner.printPlanWithStats([&](const core::PlanNodeId& nodeId,
                                                std::string_view indentation,
@@ -519,7 +551,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     });
   }
 
-  static std::shared_ptr<facebook::axiom::runner::LocalRunner> makeRunner(
+  static std::shared_ptr<runner::LocalRunner> makeRunner(
       const optimizer::PlanAndStats& planAndStats,
       const std::shared_ptr<core::QueryCtx>& queryCtx) {
     connector::SplitOptions splitOptions{
@@ -528,17 +560,16 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
         .fileBytesPerSplit = static_cast<uint64_t>(FLAGS_split_target_bytes),
     };
 
-    return std::make_shared<facebook::axiom::runner::LocalRunner>(
+    return std::make_shared<runner::LocalRunner>(
         planAndStats.plan,
         queryCtx,
-        std::make_shared<facebook::axiom::runner::ConnectorSplitSourceFactory>(
-            splitOptions));
+        std::make_shared<runner::ConnectorSplitSourceFactory>(splitOptions));
   }
 
   /// Runs a query and returns the result as a single vector in *resultVector,
   /// the plan text in *planString and the error message in *errorString.
   /// *errorString is not set if no error. Any of these may be nullptr.
-  std::shared_ptr<facebook::axiom::runner::LocalRunner> runSql(
+  std::shared_ptr<runner::LocalRunner> runSql(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       std::vector<RowVectorPtr>* resultVector = nullptr,
       std::string* planString = nullptr,
@@ -548,11 +579,16 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     auto queryCtx = newQuery();
     optimizer::PlanAndStats planAndStats;
     try {
-      planAndStats = optimize(logicalPlan, queryCtx, [&](const auto& best) {
-        if (planString) {
-          *planString = best.op->toString(true, false);
-        }
-      });
+      planAndStats = optimize(
+          logicalPlan,
+          queryCtx,
+          /*checkDerivedTable=*/nullptr,
+          [&](const auto& best) {
+            if (planString) {
+              *planString = best.op->toString(true, false);
+            }
+            return true; // Continue the optimization.
+          });
     } catch (const std::exception& e) {
       std::cerr << "Failed to optimize: " << e.what() << std::endl;
       if (errorString) {
@@ -643,8 +679,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     }
   }
 
-  void waitForCompletion(
-      const std::shared_ptr<facebook::axiom::runner::LocalRunner>& runner) {
+  void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner) {
     if (runner) {
       try {
         runner->waitForCompletion(500000);
@@ -841,7 +876,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<folly::IOThreadPoolExecutor> spillExecutor_;
   std::shared_ptr<velox::connector::Connector> connector_;
-  std::shared_ptr<optimizer::SchemaResolver> schema_;
+  std::shared_ptr<connector::SchemaResolver> schema_;
   std::unique_ptr<optimizer::VeloxHistory> history_;
   std::unique_ptr<optimizer::test::PrestoParser> prestoParser_;
   std::ofstream* record_{nullptr};
@@ -854,7 +889,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   logical_plan::LogicalPlanNodePtr logicalPlan_;
   bool hasReferenceResult_{false};
   // Keeps live 'referenceResult_'.
-  std::shared_ptr<facebook::axiom::runner::LocalRunner> referenceRunner_;
+  std::shared_ptr<runner::LocalRunner> referenceRunner_;
   // Result from first run of flag value sweep.
   std::vector<RowVectorPtr> referenceResult_;
   std::set<std::string> modifiedFlags_;

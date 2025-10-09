@@ -1178,9 +1178,39 @@ SqlStatementPtr PrestoParser::doParse(
   if (query->is(sql::NodeType::kExplain)) {
     auto* explain = query->as<sql::Explain>();
     explain->statement()->accept(&planner);
-    return std::make_shared<ExplainStatement>(
-        std::make_shared<SelectStatement>(planner.getPlan()),
-        explain->isAnalyze());
+
+    if (explain->isAnalyze()) {
+      return std::make_shared<ExplainStatement>(
+          std::make_shared<SelectStatement>(planner.getPlan()),
+          /*analyze=*/true);
+    } else {
+      ExplainStatement::Type type = ExplainStatement::Type::kDistributed;
+
+      for (const auto& option : explain->options()) {
+        if (option->is(sql::NodeType::kExplainType)) {
+          const auto explainType =
+              option->as<sql::ExplainType>()->explainType();
+          switch (explainType) {
+            case sql::ExplainType::Type::kLogical:
+              type = ExplainStatement::Type::kLogical;
+              break;
+            case sql::ExplainType::Type::kGraph:
+              type = ExplainStatement::Type::kGraph;
+              break;
+            case sql::ExplainType::Type::kDistributed:
+              type = ExplainStatement::Type::kDistributed;
+              break;
+            default:
+              VELOX_USER_FAIL("Unsupported EXPLAIN type");
+          }
+        }
+      }
+
+      return std::make_shared<ExplainStatement>(
+          std::make_shared<SelectStatement>(planner.getPlan()),
+          /*analyze=*/false,
+          type);
+    }
   }
 
   if (query->is(sql::NodeType::kShowColumns)) {

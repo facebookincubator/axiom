@@ -806,7 +806,7 @@ class ExplainFormat : public ExplainOption {
 
 class ExplainType : public ExplainOption {
  public:
-  enum class Type { kLogical, kDistributed, kValidate, kIo };
+  enum class Type { kLogical, kGraph, kDistributed, kValidate, kIo };
 
   explicit ExplainType(NodeLocation location, Type explainType)
       : ExplainOption(NodeType::kExplainType, location),

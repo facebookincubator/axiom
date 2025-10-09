@@ -18,7 +18,6 @@ target_link_libraries(
   axiom_optimizer_tests_parquet_tpch
   axiom_logical_plan_builder
   axiom_optimizer
-  axiom_schema_resolver
   velox_tpch_gen
   axiom_tpch_connector_metadata
   axiom_hive_connector_metadata
@@ -27,14 +26,14 @@ target_link_libraries(
   velox_dwio_parquet_reader
   velox_dwio_native_parquet_reader
   gtest
-  gtest_main)
+  gtest_main
+)
 
 add_library(axiom_optimizer_tests_query_test_base QueryTestBase.cpp)
 
 target_link_libraries(
   axiom_optimizer_tests_query_test_base
   axiom_optimizer
-  axiom_schema_resolver
   velox_tpch_gen
   axiom_hive_connector_metadata
   axiom_runner_tests_utils
@@ -42,16 +41,19 @@ target_link_libraries(
   velox_dwio_parquet_reader
   velox_dwio_native_parquet_reader
   gtest
-  gtest_main)
+  gtest_main
+)
 
 add_library(axiom_optimizer_tests_presto_parser PrestoParser.cpp)
 
 target_link_libraries(
-  axiom_optimizer_tests_presto_parser axiom_logical_plan_builder
-  axiom_sql_presto_ast antlr4_shared)
+  axiom_optimizer_tests_presto_parser
+  axiom_logical_plan_builder
+  axiom_sql_presto_ast
+  antlr4_shared
+)
 
-add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp
-                                               LogicalPlanMatcher.cpp)
+add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp LogicalPlanMatcher.cpp)
 
 target_link_libraries(
   axiom_optimizer_tests_plan_matcher
@@ -60,10 +62,10 @@ target_link_libraries(
   GTest::gmock
   glog::glog
   GTest::gtest
-  GTest::gtest_main)
+  GTest::gtest_main
+)
 
-add_library(axiom_optimizer_tests_hive_queries_test_base
-            HiveQueriesTestBase.cpp)
+add_library(axiom_optimizer_tests_hive_queries_test_base HiveQueriesTestBase.cpp)
 
 target_link_libraries(
   axiom_optimizer_tests_hive_queries_test_base
@@ -72,14 +74,16 @@ target_link_libraries(
   axiom_optimizer_tests_query_test_base
   axiom_optimizer_tests_presto_parser
   axiom_runner_multifragment_plan
-  axiom_runner_tests_utils)
+  axiom_runner_tests_utils
+)
 
 add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp)
 
 add_test(
   NAME axiom_optimizer_tpch_plan_test
   COMMAND axiom_optimizer_tpch_plan_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 target_link_libraries(
   axiom_optimizer_tpch_plan_test
@@ -87,11 +91,14 @@ target_link_libraries(
   axiom_optimizer_tests_parquet_tpch
   axiom_optimizer_tests_query_test_base
   axiom_optimizer_tests_hive_queries_test_base
-  axiom_runner_tests_utils)
+  axiom_runner_tests_utils
+)
 
 add_executable(
   axiom_optimizer_tests
   AggregationPlanTest.cpp
+  DerivedTablePrinterTest.cpp
+  HiveAggregationQueriesTest.cpp
   HiveLimitQueriesTest.cpp
   HiveWindowQueriesTest.cpp
   HiveQueriesTest.cpp
@@ -99,14 +106,12 @@ add_executable(
   PlanTest.cpp
   UnnestTest.cpp
   ParquetTpchTest.cpp
-  QueryTestBase.cpp
   SubfieldTest.cpp
   FeatureGen.cpp
   Genies.cpp
   PrestoParserTest.cpp
   TestConnectorQueryTest.cpp
-  SchemaUtilsTest.cpp
-  SchemaResolverTest.cpp)
+)
 
 add_test(axiom_optimizer_tests axiom_optimizer_tests)
 
@@ -125,7 +130,8 @@ target_link_libraries(
   GTest::gmock
   glog::glog
   GTest::gtest
-  GTest::gtest_main)
+  GTest::gtest_main
+)
 
 add_executable(axiom_sql AxiomSql.cpp)
 
@@ -134,7 +140,6 @@ target_link_libraries(
   axiom_runner_local_runner
   axiom_runner_multifragment_plan
   axiom_optimizer
-  axiom_schema_resolver
   axiom_hive_connector_metadata
   axiom_tpch_connector_metadata
   axiom_optimizer_tests_presto_parser
@@ -145,7 +150,8 @@ target_link_libraries(
   velox_dwio_native_parquet_reader
   velox_parse_parser
   velox_parse_expression
-  velox_parse_utils)
+  velox_parse_utils
+)
 
 add_subdirectory(utils)
 
@@ -155,9 +161,10 @@ add_test(axiom_model_test axiom_model_test)
 
 target_link_libraries(
   axiom_model_test
-  axiom_model
+  axiom_optimizer
   Boost::headers
   glog::glog
   GTest::gtest
   GTest::gtest_main
-  pthread)
+  pthread
+)

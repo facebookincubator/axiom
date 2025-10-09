@@ -17,6 +17,7 @@
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include <gtest/gtest.h>
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 
@@ -544,6 +545,7 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
     }
 
+    std::unordered_map<std::string, std::string> newSymbols = symbols;
     if (!groupingKeys_.empty() || !aggregates_.empty()) {
       // Verify grouping keys.
       EXPECT_EQ(plan.groupingKeys().size(), groupingKeys_.size());
@@ -560,13 +562,62 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < aggregates_.size(); ++i) {
-        auto expected = parse::parseExpr(aggregates_[i], {});
-        EXPECT_EQ(plan.aggregates()[i].call->toString(), expected->toString());
+        auto aggregateExpr = duckdb::parseAggregateExpr(aggregates_[i], {});
+        auto expected = aggregateExpr.expr;
+        if (expected->alias()) {
+          newSymbols[expected->alias().value()] = plan.aggregateNames()[i];
+        }
+
+        EXPECT_EQ(
+            plan.aggregates()[i].call->toString(),
+            expected->dropAlias()->toString());
+
+        AXIOM_TEST_RETURN_IF_FAILURE
+
+        auto expectedMask = aggregateExpr.maskExpr;
+        const auto& mask = plan.aggregates()[i].mask;
+        EXPECT_EQ(mask != nullptr, expectedMask != nullptr);
+        AXIOM_TEST_RETURN_IF_FAILURE
+
+        if (expectedMask) {
+          if (!symbols.empty()) {
+            expectedMask = rewriteInputNames(expectedMask, symbols);
+          }
+          EXPECT_EQ(mask->toString(), expectedMask->toString())
+              << "Mask mismatch for aggregate " << i;
+        }
+
+        // Verify ORDER BY.
+        const auto& expectedOrderBy = aggregateExpr.orderBy;
+        const auto& sortingKeys = plan.aggregates()[i].sortingKeys;
+        const auto& sortingOrders = plan.aggregates()[i].sortingOrders;
+
+        EXPECT_EQ(sortingKeys.size(), expectedOrderBy.size())
+            << "ORDER BY clause size mismatch for aggregate " << i;
+        AXIOM_TEST_RETURN_IF_FAILURE
+
+        for (auto j = 0; j < expectedOrderBy.size(); ++j) {
+          auto expectedKey = expectedOrderBy[j].expr;
+          if (!symbols.empty()) {
+            expectedKey = rewriteInputNames(expectedKey, symbols);
+          }
+
+          EXPECT_EQ(sortingKeys[j]->toString(), expectedKey->toString())
+              << "ORDER BY key mismatch for aggregate " << i << ", key " << j;
+          EXPECT_EQ(
+              sortingOrders[j].isAscending(), expectedOrderBy[j].ascending)
+              << "ORDER BY ascending mismatch for aggregate " << i << ", key "
+              << j;
+          EXPECT_EQ(
+              sortingOrders[j].isNullsFirst(), expectedOrderBy[j].nullsFirst)
+              << "ORDER BY nullsFirst mismatch for aggregate " << i << ", key "
+              << j;
+        }
       }
       AXIOM_TEST_RETURN_IF_FAILURE
     }
 
-    return MatchResult::success();
+    return MatchResult::success(std::move(newSymbols));
   }
 
  private:
@@ -737,10 +788,28 @@ PlanMatcherBuilder& PlanMatcherBuilder::partialAggregation() {
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::partialAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<AggregationMatcher>(
+      matcher_, AggregationNode::Step::kPartial, groupingKeys, aggregates);
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::finalAggregation() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<AggregationMatcher>(
       matcher_, AggregationNode::Step::kFinal);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::finalAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<AggregationMatcher>(
+      matcher_, AggregationNode::Step::kFinal, groupingKeys, aggregates);
   return *this;
 }
 

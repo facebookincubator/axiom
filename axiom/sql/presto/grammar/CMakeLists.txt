@@ -23,7 +23,7 @@ add_library(
   PrestoSqlLexer.cpp
   PrestoSqlListener.cpp
   PrestoSqlParser.cpp
-  PrestoSqlVisitor.cpp)
+  PrestoSqlVisitor.cpp
+)
 
-target_link_libraries(
-  axiom_sql_presto_grammar antlr4_shared)
+target_link_libraries(axiom_sql_presto_grammar antlr4_shared)

@@ -1791,10 +1791,28 @@ std::any AstBuilder::visitExplainFormat(
   return visitChildren(ctx);
 }
 
+ExplainType::Type toExplainType(PrestoSqlParser::ExplainTypeContext* ctx) {
+  switch (ctx->value->getType()) {
+    case PrestoSqlParser::IO:
+      return ExplainType::Type::kIo;
+    case PrestoSqlParser::LOGICAL:
+      return ExplainType::Type::kLogical;
+    case PrestoSqlParser::GRAPH:
+      return ExplainType::Type::kGraph;
+    case PrestoSqlParser::DISTRIBUTED:
+      return ExplainType::Type::kDistributed;
+    case PrestoSqlParser::VALIDATE:
+      return ExplainType::Type::kValidate;
+    default:
+      VELOX_USER_FAIL("Unsupported EXPLAIN type: {}", ctx->value->getText());
+  }
+}
+
 std::any AstBuilder::visitExplainType(
     PrestoSqlParser::ExplainTypeContext* ctx) {
   trace("visitExplainType");
-  return visitChildren(ctx);
+  return std::static_pointer_cast<ExplainOption>(
+      std::make_shared<ExplainType>(getLocation(ctx), toExplainType(ctx)));
 }
 
 std::any AstBuilder::visitIsolationLevel(

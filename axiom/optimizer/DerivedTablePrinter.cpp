@@ -145,7 +145,7 @@ std::string visitDerivedTable(const DerivedTable& dt) {
     VELOX_CHECK_EQ(dt.columns.size(), dt.exprs.size());
   }
 
-  out << "  output: " << std::endl;
+  out << "  output:" << std::endl;
   for (auto i = 0; i < dt.columns.size(); ++i) {
     if (dt.setOp.has_value()) {
       out << "    " << dt.columns.at(i)->name() << std::endl;
@@ -169,7 +169,7 @@ std::string visitDerivedTable(const DerivedTable& dt) {
   }
 
   if (!dt.joins.empty()) {
-    out << "  joins: " << std::endl;
+    out << "  joins:" << std::endl;
     for (const auto& joinEdge : dt.joins) {
       out << "    " << visitJoinEdge(*joinEdge) << std::endl;
     }
@@ -200,7 +200,7 @@ std::string visitDerivedTable(const DerivedTable& dt) {
     }
 
     if (!dt.having.empty()) {
-      out << "  having: " << conjunctsToString(dt.having);
+      out << "  having: " << conjunctsToString(dt.having) << std::endl;
     }
   }
 
@@ -209,7 +209,8 @@ std::string visitDerivedTable(const DerivedTable& dt) {
   }
 
   if (dt.hasOrderBy()) {
-    out << "  orderBy: " << exprsToString(dt.orderKeys) << std::endl;
+    out << "  orderBy: " << orderByToString(dt.orderKeys, dt.orderTypes)
+        << std::endl;
   }
 
   if (dt.hasLimit()) {

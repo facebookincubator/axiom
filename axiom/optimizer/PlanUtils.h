@@ -121,4 +121,8 @@ RelationOpPtr makeProjectWithWindows(
     bool isRedundant,
     DerivedTableCP dt);
 
+std::string orderByToString(
+    const ExprVector& orderKeys,
+    const OrderTypeVector& orderTypes);
+
 } // namespace facebook::axiom::optimizer

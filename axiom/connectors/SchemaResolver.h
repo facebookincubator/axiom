@@ -21,7 +21,7 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::connector {
 
 class SchemaResolver {
  public:
@@ -39,12 +39,10 @@ class SchemaResolver {
   // If schema is omitted, defaultSchema will be prepended prior to lookup.
   // If the table name specifies a different catalog than the one specified
   // as a parameter, an error will be thrown.
-  virtual connector::TablePtr findTable(
-      std::string_view catalog,
-      std::string_view name);
+  virtual TablePtr findTable(std::string_view catalog, std::string_view name);
 
  private:
   const std::string defaultSchema_;
 };
 
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::connector

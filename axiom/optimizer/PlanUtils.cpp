@@ -236,7 +236,22 @@ RelationOpPtr makeProjectWithWindows(
     replacedExprs.emplace_back(replaceWindows(expr, windowToColumn));
   }
 
-  return make<Project>(result, std::move(replacedExprs), projectColumns, isRedundant);
+  return make<Project>(
+      result, std::move(replacedExprs), projectColumns, isRedundant);
+}
+
+std::string orderByToString(
+    const ExprVector& orderKeys,
+    const OrderTypeVector& orderTypes) {
+  std::stringstream out;
+  for (auto i = 0; i < orderKeys.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << orderKeys[i]->toString() << " "
+        << OrderTypeName::toName(orderTypes[i]);
+  }
+  return out.str();
 }
 
 } // namespace facebook::axiom::optimizer
