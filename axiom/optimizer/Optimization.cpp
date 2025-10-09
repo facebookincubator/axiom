@@ -716,6 +716,10 @@ void Optimization::addPostprocess(
     auto writeColumns = precompute.toColumns(dt->write->columnExprs());
     plan = std::move(precompute).maybeProject();
     state.addCost(*plan);
+    // Because table write will be in every plan and it will be root node,
+    // it would not affect the choice of plan. And it's also not clear
+    // how to estimate the cost of the write, because it's connector specific.
+    // So we're not adding the cost of the write itself to the plan cost.
     plan = make<TableWrite>(plan, std::move(writeColumns), dt->write);
     return;
   }
