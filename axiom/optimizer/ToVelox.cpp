@@ -1458,21 +1458,23 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
 
   auto* connector = table.layouts().front()->connector();
   auto* metadata = connector::ConnectorMetadata::metadata(connector);
+  auto session = session_->toConnectorSession(connector->connectorId());
   auto handle =
-      metadata->beginWrite(table.shared_from_this(), write.kind(), {});
+      metadata->beginWrite(session, table.shared_from_this(), write.kind());
 
   auto outputType = handle->resultType();
 
   VELOX_CHECK(!finishWrite_, "Only single TableWrite per query supported");
-  finishWrite_ = [metadata, handle](
+  finishWrite_ = [metadata, session, handle](
                      bool success,
                      const std::vector<velox::RowVectorPtr>& results) mutable {
     if (success) {
-      metadata->finishWrite(handle, results, {}).get();
+      metadata->finishWrite(session, handle, results).get();
     } else {
-      metadata->abortWrite(handle, {}).get();
+      metadata->abortWrite(session, handle).get();
     }
     handle.reset();
+    session.reset();
   };
 
   return std::make_shared<velox::core::TableWriteNode>(

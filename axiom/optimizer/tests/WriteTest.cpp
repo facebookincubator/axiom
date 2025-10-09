@@ -45,14 +45,19 @@ class WriteTest : public test::HiveQueriesTestBase {
     HiveQueriesTestBase::TearDown();
   }
 
+  auto createSession() {
+    return std::make_shared<connector::ConnectorSession>("test");
+  }
+
   void addTable(
       const std::string& name,
       const RowTypePtr& tableType,
       const folly::F14FastMap<std::string, std::string>& options) {
-    auto table = metadata_->createTable(name, tableType, options, {});
+    auto session = createSession();
+    auto table = metadata_->createTable(session, name, tableType, options);
     auto handle =
-        metadata_->beginWrite(table, connector::WriteKind::kCreate, {});
-    metadata_->finishWrite(handle, {}, {}).get();
+        metadata_->beginWrite(session, table, connector::WriteKind::kCreate);
+    metadata_->finishWrite(session, handle, {}).get();
   }
 
   std::vector<RowVectorPtr>
