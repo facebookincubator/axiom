@@ -78,17 +78,11 @@ class LocalRunner : public Runner,
  public:
   LocalRunner(
       MultiFragmentPlanPtr plan,
+      FinishWrite finishWrite,
       std::shared_ptr<velox::core::QueryCtx> queryCtx,
-      std::shared_ptr<SplitSourceFactory> splitSourceFactory,
+      std::shared_ptr<SplitSourceFactory> splitSourceFactory =
+          std::make_shared<ConnectorSplitSourceFactory>(),
       std::shared_ptr<velox::memory::MemoryPool> outputPool = nullptr);
-
-  LocalRunner(
-      MultiFragmentPlanPtr plan,
-      std::shared_ptr<velox::core::QueryCtx> queryCtx)
-      : LocalRunner{
-            std::move(plan),
-            std::move(queryCtx),
-            std::make_shared<ConnectorSplitSourceFactory>()} {}
 
   /// First call starts execution.
   velox::RowVectorPtr next() override;
@@ -133,9 +127,14 @@ class LocalRunner : public Runner,
   }
 
  private:
-  // Reads all results and calls 'finishWrite_'  on the results.
-  // Calls 'finishWrite_' with false and rethrows if exception.
-  void runWrite();
+  // Reads all results and calls commit(...) on the results if successful.
+  // Catches exceptions, calls abort() and rethrows if there is an error.
+  // Returns the number of rows written.
+  [[nodiscard]] uint64_t runWrite();
+
+  // Call runWrite() and returns a single-row vector
+  // with the number of rows written in 'rows' column.
+  [[nodiscard]] velox::RowVectorPtr nextWrite();
 
   void start();
 
@@ -150,7 +149,8 @@ class LocalRunner : public Runner,
 
   const MultiFragmentPlanPtr plan_;
   const std::vector<ExecutableFragment> fragments_;
-  const FinishWrite finishWrite_;
+  FinishWrite finishWrite_;
+  std::shared_ptr<velox::memory::MemoryPool> rowsPool_;
 
   velox::exec::CursorParameters params_;
 

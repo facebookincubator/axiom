@@ -449,9 +449,9 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
 
   void runExplainAnalyze(const optimizer::test::SelectStatement& statement) {
     auto queryCtx = newQuery();
-    auto planAndStats = optimize(statement.plan(), queryCtx);
+    auto planAndWrite = optimize(statement.plan(), queryCtx);
 
-    auto runner = makeRunner(planAndStats, queryCtx);
+    auto runner = makeRunner(planAndWrite, queryCtx);
     SCOPE_EXIT {
       waitForCompletion(runner);
     };
@@ -459,7 +459,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     RunStats unused;
     auto results = runInner(*runner, unused);
 
-    printPlanWithStats(*runner, planAndStats.prediction);
+    printPlanWithStats(*runner, planAndWrite.prediction);
 
     std::cout << "(" << countResults(results) << " rows in " << results.size()
               << " batches)" << std::endl
@@ -473,7 +473,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   // @param checkBestPlan Optional lambda to call after selecting best physical
   // plan. If returns 'false', the optimization stops and returns an empty
   // result.
-  optimizer::PlanAndStats optimize(
+  optimizer::PlanAndWrite optimize(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       const std::shared_ptr<core::QueryCtx>& queryCtx,
       const std::function<bool(const optimizer::DerivedTable&)>&
@@ -555,7 +555,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   }
 
   static std::shared_ptr<runner::LocalRunner> makeRunner(
-      const optimizer::PlanAndStats& planAndStats,
+      optimizer::PlanAndWrite& planAndWrite,
       const std::shared_ptr<core::QueryCtx>& queryCtx) {
     connector::SplitOptions splitOptions{
         .targetSplitCount =
@@ -564,7 +564,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     };
 
     return std::make_shared<runner::LocalRunner>(
-        planAndStats.plan,
+        planAndWrite.plan,
+        std::move(planAndWrite.finishWrite),
         queryCtx,
         std::make_shared<runner::ConnectorSplitSourceFactory>(splitOptions));
   }
@@ -580,7 +581,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       std::vector<exec::TaskStats>* statsReturn = nullptr,
       RunStats* runStatsReturn = nullptr) {
     auto queryCtx = newQuery();
-    optimizer::PlanAndStats planAndStats;
+    optimizer::PlanAndWrite planAndStats;
     try {
       planAndStats = optimize(
           logicalPlan,

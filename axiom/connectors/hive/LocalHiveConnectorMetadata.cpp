@@ -966,10 +966,21 @@ TablePtr LocalHiveConnectorMetadata::createTable(
   return table;
 }
 
-velox::ContinueFuture LocalHiveConnectorMetadata::finishWrite(
+RowsFuture LocalHiveConnectorMetadata::finishWrite(
     const ConnectorSessionPtr& /*session*/,
     const ConnectorWriteHandlePtr& handle,
-    const std::vector<velox::RowVectorPtr>& /*writerResult*/) {
+    const std::vector<velox::RowVectorPtr>& writeResults) {
+  uint64_t rows = 0;
+  velox::DecodedVector decoded;
+  for (const auto& result : writeResults) {
+    decoded.decode(*result->childAt(0));
+    for (velox::vector_size_t i = 0; i < decoded.size(); ++i) {
+      if (decoded.isNullAt(i)) {
+        continue;
+      }
+      rows += decoded.valueAt<int64_t>(i);
+    }
+  }
   std::lock_guard<std::mutex> l(mutex_);
   auto hiveHandle =
       std::dynamic_pointer_cast<const HiveConnectorWriteHandle>(handle);
@@ -983,12 +994,12 @@ velox::ContinueFuture LocalHiveConnectorMetadata::finishWrite(
   move(writePath, targetPath);
   deleteDirectoryRecursive(writePath);
   loadTable(hiveHandle->table()->name(), targetPath);
-  return {};
+  return rows;
 }
 
 velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
     const ConnectorSessionPtr& session,
-    const ConnectorWriteHandlePtr& handle) {
+    const ConnectorWriteHandlePtr& handle) noexcept try {
   std::lock_guard<std::mutex> l(mutex_);
   auto hiveHandle =
       std::dynamic_pointer_cast<const HiveConnectorWriteHandle>(handle);
@@ -1004,6 +1015,9 @@ velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
     deleteDirectoryRecursive(targetPath);
   }
   return {};
+} catch (const std::exception& e) {
+  LOG(ERROR) << e.what() << " while aborting write to Local Hive table";
+  return folly::exception_wrapper{folly::current_exception()};
 }
 
 std::optional<std::string> LocalHiveConnectorMetadata::makeStagingDirectory(

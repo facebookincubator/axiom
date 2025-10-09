@@ -45,6 +45,10 @@ struct PlanAndStats {
   std::string toString() const;
 };
 
+struct PlanAndWrite : PlanAndStats {
+  runner::FinishWrite finishWrite;
+};
+
 class ToVelox {
  public:
   ToVelox(
@@ -54,7 +58,7 @@ class ToVelox {
 
   /// Converts physical plan (a tree of RelationOp) to an executable
   /// multi-fragment Velox plan.
-  PlanAndStats toVeloxPlan(
+  PlanAndWrite toVeloxPlan(
       RelationOpPtr plan,
       const runner::MultiFragmentPlan::Options& options);
 

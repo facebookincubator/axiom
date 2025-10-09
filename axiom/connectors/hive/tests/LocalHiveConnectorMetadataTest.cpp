@@ -381,7 +381,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
   auto staged =
       metadata_->createTable(session, "test_insert", tableType, /*options=*/{});
   auto handle = metadata_->beginWrite(session, staged, WriteKind::kCreate);
-  metadata_->finishWrite(session, handle, /*writerResult=*/{}).get();
+  metadata_->finishWrite(session, handle, /*writeResults=*/{}).get();
 
   auto created = metadata_->findTable("test_insert");
   compareTableLayout(staged, created);
@@ -434,7 +434,7 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
   table =
       metadata_->createTable(session, "test_abort", tableType, /*options=*/{});
   handle = metadata_->beginWrite(session, table, WriteKind::kCreate);
-  metadata_->finishWrite(session, handle, /*writerResult=*/{}).get();
+  metadata_->finishWrite(session, handle, /*writeResults=*/{}).get();
   EXPECT_TRUE(std::filesystem::exists(tablePath));
   auto created = metadata_->findTable("test_abort");
   EXPECT_NE(created, nullptr);

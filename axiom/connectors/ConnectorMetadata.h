@@ -493,6 +493,8 @@ enum class WriteKind {
 
 AXIOM_DECLARE_ENUM_NAME(WriteKind);
 
+using RowsFuture = folly::SemiFuture<uint64_t>;
+
 class ConnectorMetadata {
  public:
   /// Temporary APIs to assist in removing dependency on ConnectorMetadata from
@@ -606,17 +608,18 @@ class ConnectorMetadata {
 
   /// Finalizes the table write operation represented by the provided handle.
   /// This runs once after all the table writers have finished. The result sets
-  /// from the table writer fragments are passed as 'writerResult'. Their
-  /// format and meaning is connector-specific. The type of 'writerResult' must
+  /// from the table writer fragments are passed as 'writeResults'. Their
+  /// format and meaning is connector-specific. The type of 'writeResults' must
   /// match ConnectorWriteHandle::resultType returned from beginWrite.
   /// finishWrite returns a ContinueFuture which must be waited for to finalize
   /// the commit. If the implementation is synchronous, finishWrite should
   /// return an already-fulfilled future to the caller. ConnectorSession may be
   /// null for connectors which do not require it.
-  virtual velox::ContinueFuture finishWrite(
+  /// The returned future contains the number of rows "written".
+  virtual RowsFuture finishWrite(
       const ConnectorSessionPtr& session,
       const ConnectorWriteHandlePtr& handle,
-      const std::vector<velox::RowVectorPtr>& writerResult) {
+      const std::vector<velox::RowVectorPtr>& writeResults) {
     VELOX_UNSUPPORTED();
   }
 
@@ -629,8 +632,8 @@ class ConnectorMetadata {
   /// an already-fulfilled future.
   virtual velox::ContinueFuture abortWrite(
       const ConnectorSessionPtr& session,
-      const ConnectorWriteHandlePtr& handle) {
-    return velox::ContinueFuture();
+      const ConnectorWriteHandlePtr& handle) noexcept {
+    return {};
   }
 
   /// Returns column handles whose value uniquely identifies a row for creating

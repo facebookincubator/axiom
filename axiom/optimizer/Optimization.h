@@ -43,7 +43,7 @@ class Optimization {
       runner::MultiFragmentPlan::Options runnerOptions = {});
 
   /// Simplified API for usage in testing and tooling.
-  static PlanAndStats toVeloxPlan(
+  static PlanAndWrite toVeloxPlan(
       const logical_plan::LogicalPlanNode& logicalPlan,
       velox::memory::MemoryPool& pool,
       OptimizerOptions options = {},
@@ -58,7 +58,7 @@ class Optimization {
   /// Returns a set of per-stage Velox PlanNode trees. If 'historyKeys' is
   /// given, these can be used to record history data about the execution of
   /// each relevant node for costing future queries.
-  PlanAndStats toVeloxPlan(RelationOpPtr plan) {
+  PlanAndWrite toVeloxPlan(RelationOpPtr plan) {
     return toVelox_.toVeloxPlan(std::move(plan), runnerOptions_);
   }
 

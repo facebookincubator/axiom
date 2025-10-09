@@ -57,7 +57,7 @@ Optimization::Optimization(
 }
 
 // static
-PlanAndStats Optimization::toVeloxPlan(
+PlanAndWrite Optimization::toVeloxPlan(
     const logical_plan::LogicalPlanNode& logicalPlan,
     velox::memory::MemoryPool& pool,
     OptimizerOptions options,

@@ -45,7 +45,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
 
   void TearDown() override;
 
-  optimizer::PlanAndStats planVelox(
+  optimizer::PlanAndWrite planVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
       const runner::MultiFragmentPlan::Options& options =
           {
@@ -61,7 +61,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
           .numDrivers = 4,
       });
 
-  TestResult runFragmentedPlan(const optimizer::PlanAndStats& plan);
+  TestResult runFragmentedPlan(optimizer::PlanAndWrite& plan);
 
   /// Runs the given single-stage Velox plan single-threaded.
   TestResult runVelox(const velox::core::PlanNodePtr& plan);
@@ -70,7 +70,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   /// Runs 'reference' plan single-threaded.
   /// @return 'reference' result.
   TestResult checkSame(
-      const optimizer::PlanAndStats& experiment,
+      optimizer::PlanAndWrite& experiment,
       const velox::core::PlanNodePtr& reference);
 
   /// Checks that 'reference' and 'velox' produce the same result.

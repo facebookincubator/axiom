@@ -243,14 +243,14 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       const velox::RowTypePtr& rowType,
       const folly::F14FastMap<std::string, std::string>& options) override;
 
-  velox::ContinueFuture finishWrite(
+  RowsFuture finishWrite(
       const ConnectorSessionPtr& session,
       const ConnectorWriteHandlePtr& handle,
-      const std::vector<velox::RowVectorPtr>& writerResult) override;
+      const std::vector<velox::RowVectorPtr>& writeResults) override;
 
   velox::ContinueFuture abortWrite(
       const ConnectorSessionPtr& session,
-      const ConnectorWriteHandlePtr& handle) override;
+      const ConnectorWriteHandlePtr& handle) noexcept override;
 
   std::string tablePath(std::string_view table) const override {
     return fmt::format("{}/{}", hiveConfig_->hiveLocalDataPath(), table);

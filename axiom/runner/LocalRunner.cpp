@@ -140,12 +140,13 @@ std::vector<ExecutableFragment> topologicalSort(
 
 LocalRunner::LocalRunner(
     MultiFragmentPlanPtr plan,
+    FinishWrite finishWrite,
     std::shared_ptr<velox::core::QueryCtx> queryCtx,
     std::shared_ptr<SplitSourceFactory> splitSourceFactory,
     std::shared_ptr<velox::memory::MemoryPool> outputPool)
     : plan_{std::move(plan)},
       fragments_{topologicalSort(plan_->fragments())},
-      finishWrite_{plan_->finishWrite()},
+      finishWrite_{std::move(finishWrite)},
       splitSourceFactory_{std::move(splitSourceFactory)} {
   params_.queryCtx = std::move(queryCtx);
   params_.outputPool = std::move(outputPool);
@@ -153,8 +154,7 @@ LocalRunner::LocalRunner(
 
 velox::RowVectorPtr LocalRunner::next() {
   if (finishWrite_) {
-    runWrite();
-    return nullptr;
+    return nextWrite();
   }
 
   if (!cursor_) {
@@ -169,8 +169,9 @@ velox::RowVectorPtr LocalRunner::next() {
   return cursor_->current();
 }
 
-void LocalRunner::runWrite() {
+uint64_t LocalRunner::runWrite() {
   std::vector<velox::RowVectorPtr> result;
+  auto finishWrite = std::move(finishWrite_);
   auto state = State::kError;
   SCOPE_EXIT {
     state_ = state;
@@ -186,12 +187,34 @@ void LocalRunner::runWrite() {
     } catch (const std::exception& e) {
       LOG(ERROR) << e.what()
                  << " while waiting for completion after error in write query";
+      throw;
     }
-    finishWrite_(false, result);
+    std::move(finishWrite).abort().get();
     throw;
   }
-  finishWrite_(true, result);
+
+  auto rows = std::move(finishWrite).commit(result).get();
   state = State::kFinished;
+  return rows;
+}
+
+velox::RowVectorPtr LocalRunner::nextWrite() {
+  VELOX_DCHECK(finishWrite_);
+  VELOX_DCHECK_NULL(rowsPool_);
+  rowsPool_ =
+      params_.queryCtx->pool()->addLeafChild("rows written vector", false);
+  auto child = velox::BaseVector::create<velox::FlatVector<int64_t>>(
+      velox::BIGINT(), 1, rowsPool_.get());
+  auto* childPtr = child.get();
+  auto result = std::make_shared<velox::RowVector>(
+      rowsPool_.get(),
+      velox::ROW("rows", velox::BIGINT()),
+      nullptr,
+      1,
+      std::vector<velox::VectorPtr>{std::move(child)});
+  const auto rows = runWrite();
+  childPtr->set(0, static_cast<int64_t>(rows));
+  return result;
 }
 
 void LocalRunner::start() {

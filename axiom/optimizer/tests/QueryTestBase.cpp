@@ -84,16 +84,19 @@ TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
   runner::ExecutableFragment fragment(fmt::format("{}.0", options.queryId));
   fragment.fragment = core::PlanFragment(plan);
 
-  optimizer::PlanAndStats planAndStats = {
-      .plan = std::make_shared<runner::MultiFragmentPlan>(
-          std::vector<runner::ExecutableFragment>{std::move(fragment)},
-          std::move(options))};
+  optimizer::PlanAndWrite planAndWrite = {
+      optimizer::PlanAndStats{
+          std::make_shared<runner::MultiFragmentPlan>(
+              std::vector<runner::ExecutableFragment>{std::move(fragment)},
+              std::move(options)),
+      },
+  };
 
-  return runFragmentedPlan(planAndStats);
+  return runFragmentedPlan(planAndWrite);
 }
 
 TestResult QueryTestBase::runFragmentedPlan(
-    const optimizer::PlanAndStats& fragmentedPlan) {
+    optimizer::PlanAndWrite& planAndWrite) {
   TestResult result;
 
   SCOPE_EXIT {
@@ -101,11 +104,11 @@ TestResult QueryTestBase::runFragmentedPlan(
     queryCtx_.reset();
   };
 
-  result.runner =
-      std::make_shared<runner::LocalRunner>(fragmentedPlan.plan, getQueryCtx());
+  result.runner = std::make_shared<runner::LocalRunner>(
+      planAndWrite.plan, std::move(planAndWrite.finishWrite), getQueryCtx());
   result.results = readCursor(result.runner);
   result.stats = result.runner->stats();
-  history_->recordVeloxExecution(fragmentedPlan, result.stats);
+  history_->recordVeloxExecution(planAndWrite, result.stats);
 
   return result;
 }
@@ -121,7 +124,7 @@ std::shared_ptr<core::QueryCtx>& QueryTestBase::getQueryCtx() {
   return queryCtx_;
 }
 
-optimizer::PlanAndStats QueryTestBase::planVelox(
+optimizer::PlanAndWrite QueryTestBase::planVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
     const runner::MultiFragmentPlan::Options& options,
     std::string* planString) {
@@ -165,7 +168,7 @@ TestResult QueryTestBase::runVelox(
 }
 
 TestResult QueryTestBase::checkSame(
-    const optimizer::PlanAndStats& experiment,
+    optimizer::PlanAndWrite& experiment,
     const core::PlanNodePtr& reference) {
   auto referenceResult = runVelox(reference);
   auto experimentResult = runFragmentedPlan(experiment);

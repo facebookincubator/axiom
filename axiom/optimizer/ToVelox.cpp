@@ -223,7 +223,7 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
   }
 }
 
-PlanAndStats ToVelox::toVeloxPlan(
+PlanAndWrite ToVelox::toVeloxPlan(
     RelationOpPtr plan,
     const runner::MultiFragmentPlan::Options& options) {
   options_ = options;
@@ -247,11 +247,15 @@ PlanAndStats ToVelox::toVeloxPlan(
     velox::core::PlanConsistencyChecker::check(stage.fragment.planNode);
   }
 
-  return PlanAndStats{
-      std::make_shared<runner::MultiFragmentPlan>(
-          std::move(stages), options, std::move(finishWrite)),
-      std::move(nodeHistory_),
-      std::move(prediction_)};
+  return PlanAndWrite{
+      PlanAndStats{
+          std::make_shared<runner::MultiFragmentPlan>(
+              std::move(stages), options),
+          std::move(nodeHistory_),
+          std::move(prediction_),
+      },
+      std::move(finishWrite),
+  };
 }
 
 velox::RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) const {
@@ -1465,25 +1469,17 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
   auto outputType = handle->resultType();
 
   VELOX_CHECK(!finishWrite_, "Only single TableWrite per query supported");
-  finishWrite_ = [metadata, session, handle](
-                     bool success,
-                     const std::vector<velox::RowVectorPtr>& results) mutable {
-    if (success) {
-      metadata->finishWrite(session, handle, results).get();
-    } else {
-      metadata->abortWrite(session, handle).get();
-    }
-    handle.reset();
-    session.reset();
-  };
+  auto insertTableHandle =
+      std::make_shared<const velox::core::InsertTableHandle>(
+          connector->connectorId(), handle->veloxHandle());
+  finishWrite_ = {metadata, std::move(session), std::move(handle)};
 
   return std::make_shared<velox::core::TableWriteNode>(
       nextId(),
       ROW(std::move(inputNames), std::move(inputTypes)),
       std::move(columnNames),
       /*columnStatsSpec=*/std::nullopt,
-      std::make_shared<const velox::core::InsertTableHandle>(
-          connector->connectorId(), handle->veloxHandle()),
+      insertTableHandle,
       /*hasPartitioningScheme=*/false,
       std::move(outputType),
       velox::connector::CommitStrategy::kNoCommit,

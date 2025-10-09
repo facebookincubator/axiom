@@ -60,11 +60,23 @@ class WriteTest : public test::HiveQueriesTestBase {
     metadata_->finishWrite(session, handle, {}).get();
   }
 
+  void checkWriteResults(const test::TestResult& result, int64_t expected) {
+    ASSERT_EQ(1, result.results.size());
+    ASSERT_EQ(1, result.results[0]->size());
+    const auto& child = result.results[0]->childAt(0);
+    ASSERT_TRUE(child);
+    auto* flat = result.results[0]->childAt(0)->as<FlatVector<int64_t>>();
+    ASSERT_TRUE(flat);
+    ASSERT_EQ(flat->size(), 1);
+    ASSERT_TRUE(!flat->isNullAt(0));
+    EXPECT_EQ(flat->valueAt(0), expected);
+  }
+
   std::vector<RowVectorPtr> makeTestData(
-      int32_t numBatches,
-      int32_t batchSize) {
+      size_t numBatches,
+      vector_size_t batchSize) {
     std::vector<RowVectorPtr> data;
-    for (auto i = 0; i < numBatches; ++i) {
+    for (size_t i = 0; i < numBatches; ++i) {
       auto start = i * batchSize;
       std::string str;
       data.push_back(makeRowVector(
@@ -94,7 +106,7 @@ class WriteTest : public test::HiveQueriesTestBase {
 TEST_F(WriteTest, write) {
   lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
 
-  constexpr int32_t kTestBatchSize = 2048;
+  static constexpr vector_size_t kTestBatchSize = 2048;
 
   auto tableType = ROW({
       {"key1", BIGINT()},
@@ -122,7 +134,7 @@ TEST_F(WriteTest, write) {
                         {"key1", "key2", "data", "ds"},
                         {"key1", "key2", "data", "ds"})
                     .build();
-  runVelox(write1);
+  checkWriteResults(runVelox(write1), kTestBatchSize * 10);
 
   auto countTestTable = [&] {
     auto countPlan = lp::PlanBuilder(context)
@@ -179,7 +191,7 @@ TEST_F(WriteTest, write) {
                           {"key1", "key2", "data", "data2", "ds"},
                           {"key1", "key2", "data", "data2", "ds"})
                       .build();
-  runVelox(copyPlan);
+  checkWriteResults(runVelox(copyPlan), kTestBatchSize * 10);
 
   readPlan = lp::PlanBuilder(context)
                  .tableScan(
