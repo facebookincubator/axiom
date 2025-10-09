@@ -60,8 +60,9 @@ class WriteTest : public test::HiveQueriesTestBase {
     metadata_->finishWrite(session, handle, {}).get();
   }
 
-  std::vector<RowVectorPtr>
-  makeTestData(int32_t numBatches, int32_t batchSize, int32_t dayOffset = 0) {
+  std::vector<RowVectorPtr> makeTestData(
+      int32_t numBatches,
+      int32_t batchSize) {
     std::vector<RowVectorPtr> data;
     for (auto i = 0; i < numBatches; ++i) {
       auto start = i * batchSize;
@@ -78,22 +79,12 @@ class WriteTest : public test::HiveQueriesTestBase {
               makeFlatVector<StringView>(
                   batchSize,
                   [&](auto row) {
-                    str = fmt::format(
-                        "2025-09-{}", dayOffset + ((row + start) % 2));
+                    str = fmt::format("2025-09-{}", ((row + start) % 2));
                     return StringView(str);
                   }),
           }));
     }
     return data;
-  }
-
-  std::vector<lp::ExprApi> exprs(const std::vector<std::string>& strings) {
-    std::vector<lp::ExprApi> exprs;
-    exprs.reserve(strings.size());
-    for (auto& string : strings) {
-      exprs.push_back(lp::Sql(string));
-    }
-    return exprs;
   }
 
   std::shared_ptr<velox::connector::Connector> connector_;
@@ -129,7 +120,7 @@ TEST_F(WriteTest, write) {
                         "test",
                         lp::WriteKind::kInsert,
                         {"key1", "key2", "data", "ds"},
-                        exprs({"key1", "key2", "data", "ds"}))
+                        {"key1", "key2", "data", "ds"})
                     .build();
   runVelox(write1);
 
@@ -145,17 +136,16 @@ TEST_F(WriteTest, write) {
 
   EXPECT_EQ(kTestBatchSize * 10, countTestTable());
 
-  auto errorData = makeTestData(100, kTestBatchSize, 3);
-  auto errorPlan =
-      lp::PlanBuilder(context)
-          .values(errorData)
-          .tableWrite(
-              exec::test::kHiveConnectorId,
-              "test",
-              lp::WriteKind::kInsert,
-              {"key1", "key2", "data", "ds"},
-              exprs({"key1", "key2", "key1 % (key1 - 200000)", "ds"}))
-          .build();
+  auto errorData = makeTestData(100, kTestBatchSize);
+  auto errorPlan = lp::PlanBuilder(context)
+                       .values(errorData)
+                       .tableWrite(
+                           exec::test::kHiveConnectorId,
+                           "test",
+                           lp::WriteKind::kInsert,
+                           {"key1", "key2", "data", "ds"},
+                           {"key1", "key2", "key1 % (key1 - 200000)", "ds"})
+                       .build();
   VELOX_ASSERT_THROW(runVelox(errorPlan), "divide by");
 
   EXPECT_EQ(kTestBatchSize * 10, countTestTable());
@@ -187,7 +177,7 @@ TEST_F(WriteTest, write) {
                           "test2",
                           lp::WriteKind::kInsert,
                           {"key1", "key2", "data", "data2", "ds"},
-                          exprs({"key1", "key2", "data", "data2", "ds"}))
+                          {"key1", "key2", "data", "data2", "ds"})
                       .build();
   runVelox(copyPlan);
 
