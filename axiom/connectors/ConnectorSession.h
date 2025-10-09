@@ -16,13 +16,16 @@
 #pragma once
 
 #include <memory>
+#include <string>
+#include <utility>
 
 namespace facebook::axiom::connector {
 
 /// Read-only query-specific information.
 class ConnectorSession final {
  public:
-  ConnectorSession(std::string queryId) : queryId_{queryId} {}
+  explicit ConnectorSession(std::string queryId)
+      : queryId_{std::move(queryId)} {}
 
   const std::string& queryId() const {
     return queryId_;
