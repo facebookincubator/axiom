@@ -55,14 +55,17 @@ class DerivedTablePrinterTest : public ::testing::Test {
   void TearDown() override {
     velox::connector::unregisterConnector(kTestConnectorId);
   }
-
   std::vector<std::string> toLines(const std::string& sql) {
     test::PrestoParser parser{kTestConnectorId, optimizerPool_.get()};
     auto statement = parser.parse(sql);
     VELOX_CHECK(statement->isSelect());
 
-    const auto& plan = statement->asUnchecked<test::SelectStatement>()->plan();
+    const auto& plan = *statement->asUnchecked<test::SelectStatement>()->plan();
 
+    return toLines(plan);
+  }
+
+  std::vector<std::string> toLines(const lp::LogicalPlanNode& plan) {
     auto allocator =
         std::make_unique<velox::HashStringAllocator>(optimizerPool_.get());
     auto context = std::make_unique<QueryGraphContext>(*allocator);
@@ -84,7 +87,7 @@ class DerivedTablePrinterTest : public ::testing::Test {
 
     Optimization opt{
         session,
-        *plan,
+        plan,
         schema,
         history,
         veloxQueryCtx,
@@ -177,6 +180,49 @@ TEST_F(DerivedTablePrinterTest, basic) {
             testing::Eq(""),
             testing::Eq("t3: x, y"),
             testing::Eq("  table: u"),
+            testing::Eq("")));
+  }
+}
+
+TEST_F(DerivedTablePrinterTest, write) {
+  connector_->addTable("c", ROW({"a", "b"}, INTEGER()));
+  connector_->addTable("z", ROW({"x", "y"}, INTEGER()));
+  for (const auto& [expectedKind, actualKind] : {
+           std::pair{"INSERT", lp::WriteKind::kInsert},
+       }) {
+    SCOPED_TRACE(
+        fmt::format("TableWrite kind: {}, {}", expectedKind, actualKind));
+
+    auto plan =
+        lp::PlanBuilder()
+            .tableScan(kTestConnectorId, "c")
+            .tableWrite(
+                kTestConnectorId, "z", actualKind, {"y", "x"}, {"a", "b"})
+            .build();
+
+    auto lines = toLines(*plan);
+
+    EXPECT_THAT(
+        lines,
+        testing::ElementsAre(
+            testing::Eq("dt4: "),
+            testing::Eq("  output:"),
+            testing::Eq("  tables: dt1"),
+            testing::Eq(""),
+            testing::Eq("dt1: "),
+            testing::Eq("  output:"),
+            testing::Eq("  tables: dt2"),
+            testing::Eq("  write (INSERT) to: z"),
+            testing::Eq("    columns: dt2.b, dt2.a"),
+            testing::Eq(""),
+            testing::Eq("dt2: a, b"),
+            testing::Eq("  output:"),
+            testing::Eq("    a := t3.a"),
+            testing::Eq("    b := t3.b"),
+            testing::Eq("  tables: t3"),
+            testing::Eq(""),
+            testing::Eq("t3: a, b"),
+            testing::Eq("  table: c"),
             testing::Eq("")));
   }
 }
