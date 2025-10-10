@@ -66,6 +66,19 @@ debug:            #: Build with debugging symbols
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug
 	$(MAKE) build BUILD_DIR=debug -j ${NUM_THREADS}
 
+debug-sanitizer:  #: Build with debugging symbols and some sanitizer
+	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug EXTRA_CMAKE_FLAGS="-DVELOX_DEPENDENCY_SOURCE=BUNDLED -DCMAKE_CXX_FLAGS='-fsanitize=$(SANITIZER)' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=$(SANITIZER)' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=$(SANITIZER)' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=$(SANITIZER)' $(EXTRA_CMAKE_FLAGS)"
+	$(MAKE) build BUILD_DIR=debug -j ${NUM_THREADS}
+
+debug-address:    #: Build with debugging symbols and address sanitizer
+	$(MAKE) debug-sanitizer SANITIZER=address
+
+debug-undefined:  #: Build with debugging symbols and undefined sanitizer
+	$(MAKE) debug-sanitizer SANITIZER=undefined
+
+debug-thread:     #: Build with debugging symbols and thread sanitizer
+	$(MAKE) debug-sanitizer SANITIZER=thread
+
 release:          #: Build the release version
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=Release && \
 	$(MAKE) build BUILD_DIR=release
