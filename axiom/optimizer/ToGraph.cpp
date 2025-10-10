@@ -1512,7 +1512,6 @@ PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
   columnExprs.reserve(tableSchema.size());
   for (uint32_t i = 0; i < tableSchema.size(); ++i) {
     const auto& columnName = tableSchema.nameOf(i);
-    const auto& columnType = tableSchema.childAt(i);
 
     auto it = std::ranges::find(tableWrite.columnNames(), columnName);
     if (it != tableWrite.columnNames().end()) {
@@ -1525,7 +1524,7 @@ PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
       columnExprs.push_back(make<Literal>(
           Value{toType(tableColumn->type()), 1}, &tableColumn->defaultValue()));
     }
-    VELOX_DCHECK(*columnType == *columnExprs.back()->value().type);
+    VELOX_DCHECK(*tableSchema.childAt(i) == *columnExprs.back()->value().type);
   }
 
   renames_.clear();
