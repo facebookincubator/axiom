@@ -72,9 +72,9 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-${{ matrix.build_type }}-default-gcc
 
-      - name: Debug Cache Restoration
+      - name: ${{ matrix.build_type }} Cache Restoration
         run: |
-          echo "=== Cache Restoration Debug ==="
+          echo "=== Cache Restoration ${{ matrix.build_type }} ==="
           if [ -d "$CCACHE_DIR" ]; then
             echo "Directory size: $(du -sh "$CCACHE_DIR" 2>/dev/null || echo 'Unable to determine size')"
             echo "Directory contents:"
@@ -83,7 +83,7 @@ jobs:
           else
             echo "✗ Ccache directory does not exist"
           fi
-          echo "=== End Cache Restoration Debug ==="
+          echo "=== End Cache Restoration ${{ matrix.build_type }} ==="
 
       - name: Clear CCache Statistics
         run: |
