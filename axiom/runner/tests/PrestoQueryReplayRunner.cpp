@@ -383,6 +383,7 @@ PrestoQueryReplayRunner::run(
   auto nodeSplitMap = deserializeConnectorSplits(serializedConnectorSplits);
   auto localRunner = std::make_shared<LocalRunner>(
       std::move(multiFragmentPlan),
+      FinishWrite{},
       makeQueryCtx(queryId, queryRootPool),
       std::make_shared<runner::SimpleSplitSourceFactory>(nodeSplitMap));
 

@@ -365,9 +365,8 @@ TableWriteNode::TableWriteNode(
     WriteKind writeKind,
     std::vector<std::string> columnNames,
     std::vector<ExprPtr> columnExpressions,
-    velox::RowTypePtr outputType,
     folly::F14FastMap<std::string, std::string> options)
-    : LogicalPlanNode{NodeKind::kTableWrite, std::move(id), {std::move(input)}, std::move(outputType)},
+    : LogicalPlanNode{NodeKind::kTableWrite, std::move(id), {std::move(input)}, velox::ROW("rows", velox::BIGINT())},
       connectorId_{std::move(connectorId)},
       tableName_{std::move(tableName)},
       writeKind_{writeKind},
@@ -377,10 +376,12 @@ TableWriteNode::TableWriteNode(
   VELOX_USER_CHECK(!connectorId_.empty());
   VELOX_USER_CHECK(!tableName_.empty());
   VELOX_USER_CHECK_EQ(columnNames_.size(), columnExpressions_.size());
+
   UniqueNameChecker::check(columnNames_);
   VELOX_USER_CHECK(
-      writeKind_ == WriteKind::kCreate || options_.empty(),
-      "Options can be needed only for create table");
+      writeKind_ == WriteKind::kCreate || writeKind == WriteKind::kInsert ||
+          options_.empty(),
+      "Options are supported only for create or insert");
 }
 
 void TableWriteNode::accept(

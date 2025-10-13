@@ -179,6 +179,11 @@ void ToGraph::markFieldAccessed(
     return;
   }
 
+  if (kind == lp::NodeKind::kTableWrite) {
+    // We cannout pushdown subfield access to TableWriteNode output.
+    return;
+  }
+
   if (kind == lp::NodeKind::kAggregate) {
     const auto* agg = source.planNode->asUnchecked<lp::AggregateNode>();
     markFieldAccessed(*agg, ordinal, steps, isControl);
@@ -445,11 +450,12 @@ void ToGraph::markSubfields(
 
 void ToGraph::markColumnSubfields(
     const lp::LogicalPlanNodePtr& source,
-    std::span<const lp::ExprPtr> columns) {
+    std::span<const lp::ExprPtr> columns,
+    bool isControl) {
   const auto ctx = fromNode(source);
   std::vector<Step> steps;
   for (const auto& column : columns) {
-    markSubfields(column, steps, true, ctx.toCtx());
+    markSubfields(column, steps, isControl, ctx.toCtx());
     VELOX_DCHECK(steps.empty());
   }
 }
@@ -470,6 +476,11 @@ void ToGraph::markControl(const lp::LogicalPlanNode& node) {
   } else if (kind == lp::NodeKind::kFilter) {
     const auto& filter = node.asUnchecked<lp::FilterNode>();
     markColumnSubfields(node.onlyInput(), std::array{filter->predicate()});
+
+  } else if (kind == lp::NodeKind::kTableWrite) {
+    const auto& write = *node.asUnchecked<lp::TableWriteNode>();
+    // All columns are needed for write, but they are all not control columns.
+    markColumnSubfields(node.onlyInput(), write.columnExpressions(), false);
 
   } else if (kind == lp::NodeKind::kAggregate) {
     const auto& agg = *node.asUnchecked<lp::AggregateNode>();

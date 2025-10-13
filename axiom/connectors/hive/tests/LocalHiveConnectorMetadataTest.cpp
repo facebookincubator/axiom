@@ -17,7 +17,6 @@
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -125,8 +124,8 @@ class LocalHiveConnectorMetadataTest
       WriteKind kind,
       dwio::common::FileFormat format) {
     std::string outputPath = metadata_->tablePath(table->name());
-    auto session = std::make_shared<HiveConnectorSession>();
-    auto handle = metadata_->beginWrite(table, kind, session);
+    auto session = std::make_shared<ConnectorSession>("q-test");
+    auto handle = metadata_->beginWrite(session, table, kind);
 
     auto builder = exec::test::PlanBuilder().values({values});
     auto insertHandle = std::make_shared<core::InsertTableHandle>(
@@ -139,7 +138,7 @@ class LocalHiveConnectorMetadataTest
                     .endTableWriter()
                     .planNode();
     auto result = exec::test::AssertQueryBuilder(plan).copyResults(pool());
-    metadata_->finishWrite(handle, {result}, session).get();
+    metadata_->finishWrite(session, handle, {result}).get();
   }
 
   /// Read the specified files from the table. All the files must belong to
@@ -166,8 +165,8 @@ class LocalHiveConnectorMetadataTest
     velox::connector::ColumnHandleMap assignments;
     const auto* layout = getLayout(table);
     for (auto i = 0; i < tableType->size(); ++i) {
-      assignments[tableType->nameOf(i)] =
-          metadata_->createColumnHandle(*layout, tableType->nameOf(i));
+      assignments[tableType->nameOf(i)] = metadata_->createColumnHandle(
+          /*session=*/nullptr, *layout, tableType->nameOf(i));
     }
     auto plan = exec::test::PlanBuilder()
                     .tableScan(
@@ -232,13 +231,15 @@ TEST_F(LocalHiveConnectorMetadataTest, basic) {
   ASSERT_TRUE(column != nullptr);
   EXPECT_EQ(250'000, table->numRows());
   auto* layout = table->layouts()[0];
-  auto columnHandle = metadata_->createColumnHandle(*layout, "c0");
+  auto columnHandle =
+      metadata_->createColumnHandle(/*session=*/nullptr, *layout, "c0");
   std::vector<velox::connector::ColumnHandlePtr> columns = {columnHandle};
   std::vector<core::TypedExprPtr> filters;
   std::vector<core::TypedExprPtr> rejectedFilters;
   auto ctx = metadata_->connectorQueryCtx();
 
   auto tableHandle = metadata_->createTableHandle(
+      /*session=*/nullptr,
       *layout,
       columns,
       *ctx->expressionEvaluator(),
@@ -273,8 +274,8 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
       {HiveWriteOptions::kFileFormat, "parquet"},
       {HiveWriteOptions::kCompressionKind, "zstd"}};
 
-  auto session = std::make_shared<HiveConnectorSession>();
-  auto table = metadata_->createTable("test", tableType, options, session);
+  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto table = metadata_->createTable(session, "test", tableType, options);
 
   constexpr int32_t kTestSize = 2048;
   auto data = makeRowVector(
@@ -347,9 +348,9 @@ TEST_F(LocalHiveConnectorMetadataTest, createEmptyTable) {
        {"ts", VARCHAR()},
        {"ds", VARCHAR()}});
 
-  auto session = std::make_shared<HiveConnectorSession>();
+  auto session = std::make_shared<ConnectorSession>("q-test");
   auto table =
-      metadata_->createTable("test_empty", tableType, /*options=*/{}, session);
+      metadata_->createTable(session, "test_empty", tableType, /*options=*/{});
 
   auto emptyData = makeRowVector(tableType, 0);
   EXPECT_EQ(emptyData->size(), 0);
@@ -376,11 +377,11 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
   auto tableType =
       ROW({{"key1", BIGINT()}, {"key2", BIGINT()}, {"ds", VARCHAR()}});
 
-  auto session = std::make_shared<HiveConnectorSession>();
+  auto session = std::make_shared<ConnectorSession>("q-test");
   auto staged =
-      metadata_->createTable("test_insert", tableType, /*options=*/{}, session);
-  auto handle = metadata_->beginWrite(staged, WriteKind::kCreate, session);
-  metadata_->finishWrite(handle, /*writerResult=*/{}, session).get();
+      metadata_->createTable(session, "test_insert", tableType, /*options=*/{});
+  auto handle = metadata_->beginWrite(session, staged, WriteKind::kCreate);
+  metadata_->finishWrite(session, handle, /*writeResults=*/{}).get();
 
   auto created = metadata_->findTable("test_insert");
   compareTableLayout(staged, created);
@@ -406,34 +407,34 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
       dwio::common::FileFormat::DWRF);
 
   VELOX_ASSERT_THROW(
-      metadata_->beginWrite(created, WriteKind::kUpdate, session),
+      metadata_->beginWrite(session, created, WriteKind::kUpdate),
       "Only CREATE/INSERT supported, not UPDATE");
   VELOX_ASSERT_THROW(
-      metadata_->beginWrite(created, WriteKind::kDelete, session),
+      metadata_->beginWrite(session, created, WriteKind::kDelete),
       "Only CREATE/INSERT supported, not DELETE");
 }
 
 TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
   auto tableType =
       ROW({{"key1", BIGINT()}, {"key2", BIGINT()}, {"ds", VARCHAR()}});
-  auto session = std::make_shared<HiveConnectorSession>();
+  auto session = std::make_shared<ConnectorSession>("q-test");
   std::string tablePath = metadata_->tablePath("test_abort");
 
   auto table =
-      metadata_->createTable("test_abort", tableType, /*options=*/{}, session);
-  auto handle = metadata_->beginWrite(table, WriteKind::kCreate, session);
+      metadata_->createTable(session, "test_abort", tableType, /*options=*/{});
+  auto handle = metadata_->beginWrite(session, table, WriteKind::kCreate);
   EXPECT_TRUE(std::filesystem::exists(tablePath));
 
   VELOX_ASSERT_THROW(
-      metadata_->createTable("test_abort", tableType, /*options=*/{}, session),
+      metadata_->createTable(session, "test_abort", tableType, /*options=*/{}),
       "Table test_abort already exists");
-  metadata_->abortWrite(handle, session).get();
+  metadata_->abortWrite(session, handle).get();
   EXPECT_FALSE(std::filesystem::exists(tablePath));
 
   table =
-      metadata_->createTable("test_abort", tableType, /*options=*/{}, session);
-  handle = metadata_->beginWrite(table, WriteKind::kCreate, session);
-  metadata_->finishWrite(handle, /*writerResult=*/{}, session).get();
+      metadata_->createTable(session, "test_abort", tableType, /*options=*/{});
+  handle = metadata_->beginWrite(session, table, WriteKind::kCreate);
+  metadata_->finishWrite(session, handle, /*writeResults=*/{}).get();
   EXPECT_TRUE(std::filesystem::exists(tablePath));
   auto created = metadata_->findTable("test_abort");
   EXPECT_NE(created, nullptr);

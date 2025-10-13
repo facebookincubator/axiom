@@ -298,38 +298,49 @@ void DerivedTable::import(
     float existsFanout) {
   tableSet = superTables;
   tables = superTables.toObjects();
+
+  for (auto id : super.joinOrder) {
+    if (tableSet.BitSet::contains(id)) {
+      joinOrder.push_back(id);
+    }
+  }
+
   for (auto join : super.joins) {
     if (superTables.contains(join->rightTable()) && join->leftTable() &&
         superTables.contains(join->leftTable())) {
       joins.push_back(join);
     }
   }
-  for (auto& exists : existences) {
-    // We filter the derived table by importing reducing semijoins.
-    // These are based on joins on the outer query but become
-    // existences so as not to change cardinality. The reducing join
-    // is against one or more tables. If more than one table, the join
-    // of these tables goes into its own derived table which is joined
-    // with exists to the main table(s) in the 'this'.
-    importedExistences.unionSet(exists);
-    auto existsTables = exists.toObjects();
-    auto existsJoin = makeExists(firstTable, exists);
-    if (existsTables.size() > 1) {
-      // There is a join on the right of exists. Needs its own dt.
-      auto [existsDt, joinWithDt] = makeExistsDtAndJoin(
-          super, firstTable, existsFanout, existsTables, existsJoin);
-      joins.push_back(joinWithDt);
-      tables.push_back(existsDt);
-      tableSet.add(existsDt);
-      noImportOfExists = true;
-    } else {
-      joins.push_back(existsJoin);
-      VELOX_DCHECK(!existsTables.empty());
-      tables.push_back(existsTables[0]);
-      tableSet.add(existsTables[0]);
-      noImportOfExists = true;
+
+  if (!existences.empty()) {
+    if (!queryCtx()->optimization()->options().syntacticJoinOrder) {
+      for (auto& exists : existences) {
+        // We filter the derived table by importing reducing semijoins.
+        // These are based on joins on the outer query but become
+        // existences so as not to change cardinality. The reducing join
+        // is against one or more tables. If more than one table, the join
+        // of these tables goes into its own derived table which is joined
+        // with exists to the main table(s) in the 'this'.
+        importedExistences.unionSet(exists);
+        auto existsTables = exists.toObjects();
+        auto existsJoin = makeExists(firstTable, exists);
+        if (existsTables.size() > 1) {
+          // There is a join on the right of exists. Needs its own dt.
+          auto [existsDt, joinWithDt] = makeExistsDtAndJoin(
+              super, firstTable, existsFanout, existsTables, existsJoin);
+          joins.push_back(joinWithDt);
+          addTable(existsDt);
+        } else {
+          joins.push_back(existsJoin);
+          VELOX_DCHECK(!existsTables.empty());
+          addTable(existsTables[0]);
+        }
+      }
     }
+
+    noImportOfExists = true;
   }
+
   if (firstTable->is(PlanType::kDerivedTableNode)) {
     importJoinsIntoFirstDt(firstTable->as<DerivedTable>());
   } else {
@@ -342,11 +353,8 @@ namespace {
 template <typename V, typename E>
 void eraseFirst(V& set, E element) {
   auto it = std::find(set.begin(), set.end(), element);
-  if (it != set.end()) {
-    set.erase(it);
-  } else {
-    LOG(INFO) << "suspect erase";
-  }
+  VELOX_CHECK(it != set.end());
+  set.erase(it);
 }
 
 JoinEdgeP importedDtJoin(
@@ -529,8 +537,7 @@ void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
         const_cast<PlanObject*>(other)->as<DerivedTable>()->makeInitialPlan();
       }
 
-      newFirst->tables.push_back(other);
-      newFirst->tableSet.add(other);
+      newFirst->addTable(other);
       newFirst->joins.push_back(
           importedJoin(join, other, innerKey, fullyImported));
       if (fullyImported) {
@@ -552,8 +559,7 @@ void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
       chainDt->makeProjection(otherSide.keys);
       chainDt->import(*this, other, chainSet, {}, 1);
       chainDt->makeInitialPlan();
-      newFirst->tables.push_back(chainDt);
-      newFirst->tableSet.add(chainDt);
+      newFirst->addTable(chainDt);
       newFirst->joins.push_back(
           importedDtJoin(join, chainDt, innerKey, fullyImported));
     }
@@ -580,6 +586,7 @@ void DerivedTable::flattenDt(const DerivedTable* dt) {
   cname = dt->cname;
   tableSet = dt->tableSet;
   joins = dt->joins;
+  joinOrder = dt->joinOrder;
   columns = dt->columns;
   exprs = dt->exprs;
   fullyImported = dt->fullyImported;

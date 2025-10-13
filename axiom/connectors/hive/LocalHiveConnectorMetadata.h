@@ -63,10 +63,13 @@ class LocalHiveConnectorMetadata;
 class LocalHiveSplitManager : public ConnectorSplitManager {
  public:
   LocalHiveSplitManager(LocalHiveConnectorMetadata* /* metadata */) {}
+
   std::vector<PartitionHandlePtr> listPartitions(
+      const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
 
   std::shared_ptr<SplitSource> getSplitSource(
+      const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       SplitOptions options = {}) override;
@@ -235,19 +238,19 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       const std::string& queryId);
 
   TablePtr createTable(
+      const ConnectorSessionPtr& session,
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options,
-      const ConnectorSessionPtr& session) override;
+      const folly::F14FastMap<std::string, std::string>& options) override;
 
-  velox::ContinueFuture finishWrite(
+  RowsFuture finishWrite(
+      const ConnectorSessionPtr& session,
       const ConnectorWriteHandlePtr& handle,
-      const std::vector<velox::RowVectorPtr>& /*writerResult*/,
-      const ConnectorSessionPtr& /*session*/) override;
+      const std::vector<velox::RowVectorPtr>& writeResults) override;
 
   velox::ContinueFuture abortWrite(
-      const ConnectorWriteHandlePtr& handle,
-      const ConnectorSessionPtr& session) override;
+      const ConnectorSessionPtr& session,
+      const ConnectorWriteHandlePtr& handle) noexcept override;
 
   std::string tablePath(std::string_view table) const override {
     return fmt::format("{}/{}", hiveConfig_->hiveLocalDataPath(), table);

@@ -16,6 +16,7 @@
 #pragma once
 
 #include <velox/connectors/Connector.h>
+#include "axiom/connectors/ConnectorSession.h"
 
 namespace facebook::axiom::connector {
 
@@ -69,6 +70,7 @@ class ConnectorSplitManager {
   /// Returns a list of all partitions that match the filters in
   /// 'tableHandle'. A non-partitioned table returns one partition.
   virtual std::vector<PartitionHandlePtr> listPartitions(
+      const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) = 0;
 
   /// Returns a SplitSource that covers the contents of 'partitions'. The set of
@@ -76,6 +78,7 @@ class ConnectorSplitManager {
   /// partitions in a specific order or distribute them to specific nodes in a
   /// cluster.
   virtual std::shared_ptr<SplitSource> getSplitSource(
+      const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       SplitOptions = {}) = 0;

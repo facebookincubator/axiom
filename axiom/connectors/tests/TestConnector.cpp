@@ -62,11 +62,13 @@ std::vector<SplitSource::SplitAndGroup> TestSplitSource::getSplits(uint64_t) {
 }
 
 std::vector<PartitionHandlePtr> TestSplitManager::listPartitions(
+    const ConnectorSessionPtr& session,
     const velox::connector::ConnectorTableHandlePtr&) {
   return {std::make_shared<PartitionHandle>()};
 }
 
 std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
+    const ConnectorSessionPtr& session,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& partitions,
     SplitOptions) {
@@ -85,6 +87,7 @@ TablePtr TestConnectorMetadata::findTable(std::string_view name) {
 }
 
 velox::connector::ColumnHandlePtr TestConnectorMetadata::createColumnHandle(
+    const ConnectorSessionPtr& session,
     const TableLayout& layout,
     const std::string& columnName,
     std::vector<velox::common::Subfield>,
@@ -99,6 +102,7 @@ velox::connector::ColumnHandlePtr TestConnectorMetadata::createColumnHandle(
 
 velox::connector::ConnectorTableHandlePtr
 TestConnectorMetadata::createTableHandle(
+    const ConnectorSessionPtr& session,
     const TableLayout& layout,
     std::vector<velox::connector::ColumnHandlePtr> columnHandles,
     velox::core::ExpressionEvaluator& /* evaluator */,

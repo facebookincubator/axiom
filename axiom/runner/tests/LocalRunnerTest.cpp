@@ -158,11 +158,11 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
     EXPECT_EQ(250'000, count);
   }
 
-  std::shared_ptr<LocalRunner> makeRunner(const MultiFragmentPlanPtr& plan) {
+  std::shared_ptr<LocalRunner> makeRunner(MultiFragmentPlanPtr plan) {
     const auto queryId = plan->options().queryId;
 
     return std::make_shared<LocalRunner>(
-        std::move(plan), makeQueryCtx(queryId));
+        std::move(plan), FinishWrite{}, makeQueryCtx(queryId));
   }
 
   std::shared_ptr<velox::core::PlanNodeIdGenerator> idGenerator_{

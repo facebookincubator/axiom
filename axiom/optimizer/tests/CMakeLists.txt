@@ -106,11 +106,13 @@ add_executable(
   PlanTest.cpp
   UnnestTest.cpp
   ParquetTpchTest.cpp
+  SyntacticJoinOrderTest.cpp
   SubfieldTest.cpp
   FeatureGen.cpp
   Genies.cpp
   PrestoParserTest.cpp
   TestConnectorQueryTest.cpp
+  WriteTest.cpp
 )
 
 add_test(axiom_optimizer_tests axiom_optimizer_tests)

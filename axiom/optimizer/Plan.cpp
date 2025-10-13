@@ -29,6 +29,17 @@ bool isSingleWorker() {
 
 } // namespace
 
+PlanState::PlanState(Optimization& optimization, DerivedTableCP dt)
+    : optimization(optimization),
+      dt(dt),
+      syntacticJoinOrder_{optimization.options().syntacticJoinOrder} {}
+
+PlanState::PlanState(Optimization& optimization, DerivedTableCP dt, PlanP plan)
+    : optimization(optimization),
+      dt(dt),
+      cost(plan->cost),
+      syntacticJoinOrder_{optimization.options().syntacticJoinOrder} {}
+
 #ifndef NDEBUG
 // NOLINTBEGIN
 // The dt for which we set a breakpoint for plan candidate.
@@ -116,6 +127,26 @@ void PlanState::addCost(RelationOp& op) {
   cost.transferBytes += op.cost().transferBytes;
 }
 
+bool PlanState::mayConsiderNext(PlanObjectCP table) const {
+  if (!syntacticJoinOrder_) {
+    return true;
+  }
+
+  const auto id = table->id();
+  auto it = std::find(dt->joinOrder.begin(), dt->joinOrder.end(), id);
+  if (it == dt->joinOrder.end()) {
+    return true;
+  }
+
+  const auto end = it - dt->joinOrder.begin();
+  for (auto i = 0; i < end; ++i) {
+    if (!placed.BitSet::contains(dt->joinOrder[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void PlanState::addNextJoin(
     const JoinCandidate* candidate,
     RelationOpPtr plan,
@@ -146,8 +177,8 @@ void PlanState::setTargetExprsForDt(const PlanObjectSet& target) {
 }
 
 const PlanObjectSet& PlanState::downstreamColumns() const {
-  auto it = downstreamColumnsCache.find(placed);
-  if (it != downstreamColumnsCache.end()) {
+  auto it = downstreamColumnsCache_.find(placed);
+  if (it != downstreamColumnsCache_.end()) {
     return it->second;
   }
 
@@ -214,24 +245,25 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
     }
   }
 
+  // Write.
+  if (dt->write) {
+    VELOX_DCHECK(!placed.contains(dt->write));
+    addExprs(dt->write->columnExprs());
+  }
+
   // Output expressions.
   targetExprs.forEach<Expr>([&](ExprCP expr) { addExpr(expr); });
 
-  return downstreamColumnsCache[placed] = std::move(result);
+  return downstreamColumnsCache_[placed] = std::move(result);
 }
 
-ExprVector PlanState::exprsToColumns(const ExprVector& exprs) const {
-  ExprVector newExprs;
-  newExprs.reserve(exprs.size());
-  for (auto expr : exprs) {
-    auto it = exprToColumn.find(expr);
-    if (it != exprToColumn.end()) {
-      newExprs.emplace_back(it->second);
-    } else {
-      newExprs.emplace_back(expr);
-    }
+ExprCP PlanState::toColumn(ExprCP expr) const {
+  auto it = exprToColumn.find(expr);
+  if (it != exprToColumn.end()) {
+    return it->second;
+  } else {
+    return expr;
   }
-  return newExprs;
 }
 
 std::string PlanState::printCost() const {
@@ -439,19 +471,20 @@ bool JoinCandidate::isDominantEdge(PlanState& state, JoinEdgeP edge) {
 
 std::string JoinCandidate::toString() const {
   std::stringstream out;
-  if (join) {
-    out << join->toString();
+  if (join != nullptr) {
+    out << join->toString() << " fanout " << fanout;
   } else {
-    out << "cross join ";
-    out << tables[0]->toString();
+    out << "x-join: " << tables[0]->toString();
   }
-  out << " fanout " << fanout;
+
   for (auto i = 1; i < tables.size(); ++i) {
     out << " + " << tables[i]->toString();
   }
+
   if (!existences.empty()) {
     out << " exists " << existences[0].toString(false);
   }
+
   return out.str();
 }
 

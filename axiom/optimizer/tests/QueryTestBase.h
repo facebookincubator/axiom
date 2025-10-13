@@ -61,7 +61,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
           .numDrivers = 4,
       });
 
-  TestResult runFragmentedPlan(const optimizer::PlanAndStats& plan);
+  TestResult runFragmentedPlan(optimizer::PlanAndStats& plan);
 
   /// Runs the given single-stage Velox plan single-threaded.
   TestResult runVelox(const velox::core::PlanNodePtr& plan);
@@ -70,7 +70,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   /// Runs 'reference' plan single-threaded.
   /// @return 'reference' result.
   TestResult checkSame(
-      const optimizer::PlanAndStats& experiment,
+      optimizer::PlanAndStats& experiment,
       const velox::core::PlanNodePtr& reference);
 
   /// Checks that 'reference' and 'velox' produce the same result.
@@ -91,6 +91,14 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
           .numDrivers = 4,
       });
 
+  void checkSame(
+      const logical_plan::LogicalPlanNodePtr& planNode,
+      const std::vector<velox::RowVectorPtr>& referenceResult,
+      const axiom::runner::MultiFragmentPlan::Options& options = {
+          .numWorkers = 4,
+          .numDrivers = 4,
+      });
+
   velox::core::PlanNodePtr toSingleNodePlan(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       int32_t numDrivers = 1);
@@ -101,6 +109,10 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
       int32_t numDrivers = 1) {
     checkSame(
         planNode, referencePlan, {.numWorkers = 1, .numDrivers = numDrivers});
+  }
+
+  velox::memory::MemoryPool& optimizerPool() const {
+    return *optimizerPool_;
   }
 
   std::shared_ptr<velox::core::QueryCtx>& getQueryCtx();

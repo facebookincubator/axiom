@@ -43,6 +43,7 @@ enum class PlanType : uint32_t {
   kJoinNode,
   kOrderByNode,
   kLimitNode,
+  kWriteNode,
 };
 
 AXIOM_DECLARE_ENUM_NAME(PlanType);

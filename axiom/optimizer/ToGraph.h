@@ -315,6 +315,8 @@ class ToGraph {
 
   PlanObjectP addOrderBy(const logical_plan::SortNode& order);
 
+  PlanObjectP addWrite(const logical_plan::TableWriteNode& tableWrite);
+
   bool isSubfield(
       const logical_plan::ExprPtr& expr,
       Step& step,
@@ -380,7 +382,8 @@ class ToGraph {
 
   void markColumnSubfields(
       const logical_plan::LogicalPlanNodePtr& source,
-      std::span<const logical_plan::ExprPtr> columns);
+      std::span<const logical_plan::ExprPtr> columns,
+      bool isControl = true);
 
   BitSet functionSubfields(
       const logical_plan::CallExpr* call,

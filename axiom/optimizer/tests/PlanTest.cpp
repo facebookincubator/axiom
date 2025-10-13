@@ -383,7 +383,7 @@ TEST_F(PlanTest, specialFormConstantFold) {
     ASSERT_TRUE(matcher->match(plan));
   }
 
-  std::vector<TestCase> prjectTestCases = {
+  std::vector<TestCase> projectTestCases = {
       {"if(2 > 1, 1, 0)", "1"},
       {"if(2 < 1, 1, 0)", "0"},
       {"cast(1 as BOOLEAN)", "true"},
@@ -408,7 +408,7 @@ TEST_F(PlanTest, specialFormConstantFold) {
       {"coalesce(cast(null as bigint), 5 * 2)", "10"},
   };
 
-  for (const auto& testCase : prjectTestCases) {
+  for (const auto& testCase : projectTestCases) {
     SCOPED_TRACE("Expression: " + testCase.expression);
     auto logicalPlan = lp::PlanBuilder()
                            .tableScan(kTestConnectorId, "numbers")
@@ -576,7 +576,6 @@ TEST_F(PlanTest, filterImport) {
   auto ordersType = ROW({"o_custkey", "o_totalprice"}, {BIGINT(), DOUBLE()});
 
   const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
 
   auto logicalPlan = lp::PlanBuilder()
                          .tableScan(connectorId, "orders", ordersType->names())

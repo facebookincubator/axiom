@@ -39,6 +39,7 @@ velox::connector::hive::HiveColumnHandle::ColumnType columnType(
 } // namespace
 
 velox::connector::ColumnHandlePtr HiveConnectorMetadata::createColumnHandle(
+    const ConnectorSessionPtr& session,
     const TableLayout& layout,
     const std::string& columnName,
     std::vector<velox::common::Subfield> subfields,
@@ -58,6 +59,7 @@ velox::connector::ColumnHandlePtr HiveConnectorMetadata::createColumnHandle(
 
 velox::connector::ConnectorTableHandlePtr
 HiveConnectorMetadata::createTableHandle(
+    const ConnectorSessionPtr& session,
     const TableLayout& layout,
     std::vector<velox::connector::ColumnHandlePtr> columnHandles,
     velox::core::ExpressionEvaluator& evaluator,
@@ -121,9 +123,9 @@ std::shared_ptr<velox::connector::hive::LocationHandle> makeLocationHandle(
 } // namespace
 
 ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
+    const ConnectorSessionPtr& session,
     const TablePtr& table,
-    WriteKind kind,
-    const ConnectorSessionPtr& session) {
+    WriteKind kind) {
   ensureInitialized();
   VELOX_CHECK(
       kind == WriteKind::kCreate || kind == WriteKind::kInsert,
@@ -151,7 +153,7 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
   for (const auto& name : hiveLayout->rowType()->names()) {
     inputColumns.push_back(std::static_pointer_cast<
                            const velox::connector::hive::HiveColumnHandle>(
-        createColumnHandle(*hiveLayout, name)));
+        createColumnHandle(session, *hiveLayout, name)));
   }
 
   std::shared_ptr<const velox::connector::hive::HiveBucketProperty>

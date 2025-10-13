@@ -45,9 +45,11 @@ std::string PlanAndStats::toString() const {
 }
 
 ToVelox::ToVelox(
+    SessionPtr session,
     const runner::MultiFragmentPlan::Options& options,
     const OptimizerOptions& optimizerOptions)
-    : options_{options},
+    : session_{std::move(session)},
+      options_{options},
       optimizerOptions_{optimizerOptions},
       isSingle_{options.numWorkers == 1},
       subscript_{FunctionRegistry::instance()->subscript()} {}
@@ -184,6 +186,8 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
   auto* layout = table->schemaTable->columnGroups[0]->layout;
 
   auto connector = layout->connector();
+  auto connectorSession =
+      session_->toConnectorSession(connector->connectorId());
   auto* metadata = connector::ConnectorMetadata::metadata(connector);
 
   std::vector<velox::connector::ColumnHandlePtr> columns;
@@ -195,7 +199,10 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
     auto subfields = columnSubfields(table, id.value());
 
     columns.push_back(metadata->createColumnHandle(
-        *layout, dataColumns->nameOf(i), std::move(subfields)));
+        connectorSession,
+        *layout,
+        dataColumns->nameOf(i),
+        std::move(subfields)));
   }
   auto allFilters = std::move(pushdownConjuncts);
   if (remainingFilter) {
@@ -203,7 +210,12 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
   }
   std::vector<velox::core::TypedExprPtr> rejectedFilters;
   auto handle = metadata->createTableHandle(
-      *layout, columns, *evaluator, std::move(allFilters), rejectedFilters);
+      connectorSession,
+      *layout,
+      columns,
+      *evaluator,
+      std::move(allFilters),
+      rejectedFilters);
 
   setLeafHandle(table->id(), handle, std::move(rejectedFilters));
   if (updateSelectivity) {
@@ -228,6 +240,9 @@ PlanAndStats ToVelox::toVeloxPlan(
   top.fragment.planNode = makeFragment(plan, top, stages);
   stages.push_back(std::move(top));
 
+  runner::FinishWrite finishWrite = std::move(finishWrite_);
+  VELOX_DCHECK(!finishWrite_);
+
   for (const auto& stage : stages) {
     velox::core::PlanConsistencyChecker::check(stage.fragment.planNode);
   }
@@ -235,7 +250,8 @@ PlanAndStats ToVelox::toVeloxPlan(
   return PlanAndStats{
       std::make_shared<runner::MultiFragmentPlan>(std::move(stages), options),
       std::move(nodeHistory_),
-      std::move(prediction_)};
+      std::move(prediction_),
+      std::move(finishWrite)};
 }
 
 velox::RowTypePtr ToVelox::makeOutputType(const ColumnVector& columns) const {
@@ -853,8 +869,12 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
   std::vector<velox::column_index_t> keyIndices;
   keyIndices.reserve(keys.size());
   for (const auto& key : keys) {
+    VELOX_CHECK(
+        key->isFieldAccessKind(),
+        "Expected field reference, but got: {}",
+        key->toString());
     keyIndices.push_back(inputType->getChildIdx(
-        dynamic_cast<const velox::core::FieldAccessTypedExpr*>(key.get())
+        key->template asUnchecked<velox::core::FieldAccessTypedExpr>()
             ->name()));
   }
   return std::make_shared<HashPartitionFunctionSpec>(
@@ -1047,8 +1067,10 @@ velox::core::PlanNodePtr ToVelox::makeScan(
         scan.baseTable, allColumns, scanColumns, columnAlteredTypes_);
   }
 
-  auto* connectorMetadata =
-      connector::ConnectorMetadata::metadata(scan.index->layout->connector());
+  auto* connector = scan.index->layout->connector();
+  auto connectorSession =
+      session_->toConnectorSession(connector->connectorId());
+  auto* connectorMetadata = connector::ConnectorMetadata::metadata(connector);
 
   velox::connector::ColumnHandleMap assignments;
   for (auto column : scanColumns) {
@@ -1059,7 +1081,10 @@ velox::core::PlanNodePtr ToVelox::makeScan(
     auto scanColumnName =
         isSubfieldPushdown ? column->name() : column->outputName();
     assignments[scanColumnName] = connectorMetadata->createColumnHandle(
-        *scan.index->layout, column->name(), std::move(subfields));
+        connectorSession,
+        *scan.index->layout,
+        column->name(),
+        std::move(subfields));
   }
 
   velox::core::PlanNodePtr result =
@@ -1412,6 +1437,51 @@ velox::core::PlanNodePtr ToVelox::makeValues(
   return valuesNode;
 }
 
+velox::core::PlanNodePtr ToVelox::makeWrite(
+    const TableWrite& tableWrite,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeFragment(tableWrite.input(), fragment, stages);
+  const auto& write = *tableWrite.write;
+  const auto& table = write.table();
+
+  std::vector<std::string> inputNames;
+  std::vector<velox::TypePtr> inputTypes;
+  inputNames.reserve(tableWrite.inputColumns.size());
+  inputTypes.reserve(tableWrite.inputColumns.size());
+  for (const auto* column : tableWrite.inputColumns) {
+    inputNames.push_back(column->as<Column>()->outputName());
+    inputTypes.push_back(toTypePtr(column->value().type));
+  }
+
+  auto columnNames = table.type()->names();
+
+  auto* connector = table.layouts().front()->connector();
+  auto* metadata = connector::ConnectorMetadata::metadata(connector);
+  auto session = session_->toConnectorSession(connector->connectorId());
+  auto handle =
+      metadata->beginWrite(session, table.shared_from_this(), write.kind());
+
+  auto outputType = handle->resultType();
+
+  VELOX_CHECK(!finishWrite_, "Only single TableWrite per query supported");
+  auto insertTableHandle =
+      std::make_shared<const velox::core::InsertTableHandle>(
+          connector->connectorId(), handle->veloxHandle());
+  finishWrite_ = {metadata, std::move(session), std::move(handle)};
+
+  return std::make_shared<velox::core::TableWriteNode>(
+      nextId(),
+      ROW(std::move(inputNames), std::move(inputTypes)),
+      std::move(columnNames),
+      /*columnStatsSpec=*/std::nullopt,
+      insertTableHandle,
+      /*hasPartitioningScheme=*/false,
+      std::move(outputType),
+      velox::connector::CommitStrategy::kNoCommit,
+      std::move(input));
+}
+
 void ToVelox::makePredictionAndHistory(
     const velox::core::PlanNodeId& id,
     const RelationOp* op) {
@@ -1451,6 +1521,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeValues(*op->as<Values>(), fragment);
     case RelType::kUnnest:
       return makeUnnest(*op->as<Unnest>(), fragment, stages);
+    case RelType::kTableWrite:
+      return makeWrite(*op->as<TableWrite>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

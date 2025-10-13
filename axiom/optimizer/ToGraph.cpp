@@ -926,8 +926,7 @@ void ToGraph::translateUnnest(const lp::UnnestNode& unnest, bool isNewDt) {
       JoinEdge::makeUnnest(leftTable, unnestTable, std::move(unnestExprs));
 
   planLeaves_[&unnest] = unnestTable;
-  currentDt_->tables.push_back(unnestTable);
-  currentDt_->tableSet.add(unnestTable);
+  currentDt_->addTable(unnestTable);
   currentDt_->joins.push_back(edge);
 }
 
@@ -1141,6 +1140,11 @@ void extractNonInnerJoinEqualities(
       const auto* eq = conjunct->as<Call>();
       const auto leftTables = eq->argAt(0)->allTables();
       const auto rightTables = eq->argAt(1)->allTables();
+
+      if (leftTables.empty() || rightTables.empty()) {
+        continue;
+      }
+
       if (rightTables.size() == 1 && rightTables.contains(right) &&
           !leftTables.contains(right)) {
         allLeft.unionSet(leftTables);
@@ -1185,7 +1189,11 @@ void ToGraph::translateJoin(const lp::JoinNode& join) {
 
     isNondeterministicWrap_ = false;
   }
-  makeQueryGraph(*joinRight, isInner ? allowedInDt : 0);
+  makeQueryGraph(
+      *joinRight,
+      (isInner && !queryCtx()->optimization()->options().syntacticJoinOrder)
+          ? allowedInDt
+          : 0);
 
   if (previousDt) {
     finalizeDt(*joinRight, previousDt);
@@ -1253,8 +1261,7 @@ void ToGraph::finalizeDt(
   setDtUsedOutput(dt, node);
 
   currentDt_ = outerDt != nullptr ? outerDt : newDt();
-  currentDt_->tables.push_back(dt);
-  currentDt_->tableSet.add(dt);
+  currentDt_->addTable(dt);
 
   dt->makeInitialPlan();
 }
@@ -1332,8 +1339,8 @@ PlanObjectP ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
       baseTable, baseTable->columns, top, map);
 
   optimization->setLeafSelectivity(*baseTable, scanType);
-  currentDt_->tables.push_back(baseTable);
-  currentDt_->tableSet.add(baseTable);
+  currentDt_->addTable(baseTable);
+
   return baseTable;
 }
 
@@ -1358,8 +1365,8 @@ PlanObjectP ToGraph::makeValuesTable(const lp::ValuesNode& values) {
     renames_[name] = column;
   }
 
-  currentDt_->tables.push_back(valuesTable);
-  currentDt_->tableSet.add(valuesTable);
+  currentDt_->addTable(valuesTable);
+
   return valuesTable;
 }
 
@@ -1478,6 +1485,62 @@ PlanObjectP ToGraph::addLimit(const lp::LimitNode& limitNode) {
     currentDt_->limit = limitNode.count();
     currentDt_->offset = limitNode.offset();
   }
+
+  return currentDt_;
+}
+
+PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
+  const auto writeKind =
+      static_cast<connector::WriteKind>(tableWrite.writeKind());
+  if (writeKind != connector::WriteKind::kInsert) {
+    VELOX_NYI("Only INSERT supported for TableWrite");
+  }
+  VELOX_CHECK_NULL(
+      currentDt_->write, "Only one TableWrite per DerivedTable is allowed");
+  const auto* schemaTable =
+      schema_.findTable(tableWrite.connectorId(), tableWrite.tableName());
+  VELOX_CHECK_NOT_NULL(
+      schemaTable,
+      "Table not found: {} via connector {}",
+      tableWrite.tableName(),
+      tableWrite.connectorId());
+  const auto* connectorTable = schemaTable->connectorTable;
+  VELOX_DCHECK_NOT_NULL(connectorTable);
+  const auto& tableSchema = *connectorTable->type();
+
+  ExprVector columnExprs;
+  columnExprs.reserve(tableSchema.size());
+  for (uint32_t i = 0; i < tableSchema.size(); ++i) {
+    const auto& columnName = tableSchema.nameOf(i);
+
+    auto it = std::ranges::find(tableWrite.columnNames(), columnName);
+    if (it != tableWrite.columnNames().end()) {
+      const auto nth = it - tableWrite.columnNames().begin();
+      const auto& columnExpr = tableWrite.columnExpressions()[nth];
+      columnExprs.push_back(translateExpr(columnExpr));
+    } else {
+      const auto* tableColumn = connectorTable->findColumn(columnName);
+      VELOX_DCHECK_NOT_NULL(tableColumn);
+      columnExprs.push_back(make<Literal>(
+          Value{toType(tableColumn->type()), 1}, &tableColumn->defaultValue()));
+    }
+    VELOX_DCHECK(*tableSchema.childAt(i) == *columnExprs.back()->value().type);
+  }
+
+  renames_.clear();
+  auto& outputType = *tableWrite.outputType();
+  for (uint32_t i = 0; i < outputType.size(); ++i) {
+    const auto& outputName = outputType.nameOf(i);
+    const auto* outputColumn = toName(outputName);
+    renames_[outputName] = make<Column>(
+        outputColumn,
+        currentDt_,
+        Value{toType(outputType.childAt(i)), 1},
+        outputColumn);
+  }
+
+  currentDt_->write =
+      make<WritePlan>(*connectorTable, writeKind, std::move(columnExprs));
 
   return currentDt_;
 }
@@ -1789,8 +1852,7 @@ PlanObjectP ToGraph::makeQueryGraph(
       } else {
         translateSetJoin(*set, setDt);
       }
-      currentDt_->tables.push_back(setDt);
-      currentDt_->tableSet.add(setDt);
+      currentDt_->addTable(setDt);
       return currentDt_;
     }
 
@@ -1812,6 +1874,10 @@ PlanObjectP ToGraph::makeQueryGraph(
       translateUnnest(*node.asUnchecked<lp::UnnestNode>(), isNewDt);
       return currentDt_;
     }
+
+    case lp::NodeKind::kTableWrite:
+      wrapInDt(*node.onlyInput());
+      return addWrite(*node.asUnchecked<lp::TableWriteNode>());
 
     default:
       VELOX_NYI(

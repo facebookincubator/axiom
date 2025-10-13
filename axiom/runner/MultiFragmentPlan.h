@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/core/PlanFragment.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::axiom::runner {
 
@@ -27,6 +29,64 @@ struct InputStage {
 
   /// Task prefix of producer stage.
   std::string producerTaskPrefix;
+};
+
+/// Callbacks to finalize writing to a connector after the query completes.
+/// On success, the runner calls 'commit'. On failure, 'abort'. Only one of the
+/// 'commit' or 'abort' is called.
+class FinishWrite {
+ public:
+  FinishWrite() = default;
+  FinishWrite(const FinishWrite&) = delete;
+  FinishWrite(FinishWrite&& other) noexcept = default;
+  FinishWrite& operator=(const FinishWrite&) = delete;
+  FinishWrite& operator=(FinishWrite&& other) noexcept = default;
+
+  FinishWrite(
+      connector::ConnectorMetadata* metadata,
+      connector::ConnectorSessionPtr session,
+      connector::ConnectorWriteHandlePtr handle)
+      : metadata_{metadata},
+        session_{std::move(session)},
+        handle_{std::move(handle)} {
+    VELOX_CHECK_NOT_NULL(metadata_);
+    VELOX_CHECK_NOT_NULL(session_);
+    VELOX_CHECK_NOT_NULL(handle_);
+  }
+
+  ~FinishWrite() {
+    if (*this) {
+      // Best-effort attempt to abort if not already committed or aborted.
+      // We don't wait for the abort to complete, because it's destructor.
+      std::ignore = std::move(*this).abort();
+    }
+  }
+
+  explicit operator bool() const {
+    return handle_ != nullptr;
+  }
+
+  [[nodiscard]] connector::RowsFuture commit(
+      const std::vector<velox::RowVectorPtr>& writeResults) && {
+    VELOX_CHECK(*this);
+    SCOPE_EXIT {
+      *this = {};
+    };
+    return metadata_->finishWrite(session_, handle_, writeResults);
+  }
+
+  [[nodiscard]] velox::ContinueFuture abort() && noexcept {
+    VELOX_CHECK(*this);
+    SCOPE_EXIT {
+      *this = {};
+    };
+    return metadata_->abortWrite(session_, handle_);
+  }
+
+ private:
+  connector::ConnectorMetadata* metadata_{nullptr};
+  connector::ConnectorSessionPtr session_;
+  connector::ConnectorWriteHandlePtr handle_;
 };
 
 /// Describes a fragment of a distributed plan. This allows a run
