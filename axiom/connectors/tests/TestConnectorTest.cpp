@@ -108,7 +108,8 @@ TEST_F(TestConnectorTest, columnHandle) {
   auto table = metadata_->findTable("table");
   auto& layout = *table->layouts()[0];
 
-  auto columnHandle = metadata_->createColumnHandle(layout, "a");
+  auto columnHandle =
+      metadata_->createColumnHandle(/*session=*/nullptr, layout, "a");
   EXPECT_NE(columnHandle, nullptr);
 
   auto testColumnHandle =
@@ -163,14 +164,21 @@ TEST_F(TestConnectorTest, dataSource) {
   auto& layout = *table->layouts()[0];
 
   std::vector<velox::connector::ColumnHandlePtr> columns;
-  columns.push_back(metadata_->createColumnHandle(layout, "a"));
-  columns.push_back(metadata_->createColumnHandle(layout, "b"));
+  columns.push_back(
+      metadata_->createColumnHandle(/*session=*/nullptr, layout, "a"));
+  columns.push_back(
+      metadata_->createColumnHandle(/*session=*/nullptr, layout, "b"));
 
   auto evaluator =
       std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
   std::vector<core::TypedExprPtr> empty;
   auto tableHandle = metadata_->createTableHandle(
-      layout, std::move(columns), *evaluator, empty, empty);
+      /*session=*/nullptr,
+      layout,
+      std::move(columns),
+      *evaluator,
+      empty,
+      empty);
 
   auto vector1 = makeRowVector(
       {makeFlatVector<int>({0, 1}), makeFlatVector<StringView>({"a", "b"})});
@@ -180,8 +188,10 @@ TEST_F(TestConnectorTest, dataSource) {
   connector_->appendData("table", vector2);
 
   velox::connector::ColumnHandleMap handleMap;
-  handleMap.emplace("a", metadata_->createColumnHandle(layout, "a"));
-  handleMap.emplace("b", metadata_->createColumnHandle(layout, "b"));
+  handleMap.emplace(
+      "a", metadata_->createColumnHandle(/*session=*/nullptr, layout, "a"));
+  handleMap.emplace(
+      "b", metadata_->createColumnHandle(/*session=*/nullptr, layout, "b"));
   auto dataSource = std::make_shared<TestDataSource>(
       schema, std::move(handleMap), table, pool());
   EXPECT_EQ(dataSource->getCompletedRows(), 0);

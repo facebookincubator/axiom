@@ -21,6 +21,8 @@
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/QueryGraphContext.h"
+#include "axiom/optimizer/DerivedTablePrinter.h"
+#include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
@@ -28,6 +30,7 @@
 namespace facebook::axiom::optimizer {
 
 Optimization::Optimization(
+    SessionPtr session,
     const logical_plan::LogicalPlanNode& logicalPlan,
     const Schema& schema,
     History& history,
@@ -35,14 +38,16 @@ Optimization::Optimization(
     velox::core::ExpressionEvaluator& evaluator,
     OptimizerOptions options,
     runner::MultiFragmentPlan::Options runnerOptions)
-    : options_(std::move(options)),
+    : session_{std::move(session)},
+      options_(std::move(options)),
       runnerOptions_(std::move(runnerOptions)),
       isSingleWorker_(runnerOptions_.numWorkers == 1),
       logicalPlan_(&logicalPlan),
       history_(history),
       veloxQueryCtx_(std::move(veloxQueryCtx)),
+      topState_{*this, nullptr},
       toGraph_{schema, evaluator, options_},
-      toVelox_{runnerOptions_, options_} {
+      toVelox_{session_, runnerOptions_, options_} {
   queryCtx()->optimization() = this;
   root_ = toGraph_.makeQueryGraph(*logicalPlan_);
   root_->distributeConjuncts();
@@ -76,7 +81,10 @@ PlanAndStats Optimization::toVeloxPlan(
 
   Schema schema("default", schemaResolver.get(), /* locus */ nullptr);
 
+  auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
+
   Optimization opt{
+      session,
       logicalPlan,
       schema,
       history,
@@ -297,12 +305,12 @@ void forJoinedTables(const PlanState& state, Func func) {
             break;
           }
         }
-        if (usable) {
+        if (usable && state.mayConsiderNext(join->rightTable())) {
           func(join, join->rightTable(), join->lrFanout());
         }
       } else {
         auto [table, fanout] = join->otherTable(placedTable);
-        if (!state.dt->hasTable(table)) {
+        if (!state.dt->hasTable(table) || !state.mayConsiderNext(table)) {
           continue;
         }
         func(join, table, fanout);
@@ -344,7 +352,7 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
           candidates.emplace_back(join, joined, fanout);
           if (join->isInner()) {
             if (!addExtraEdges(state, candidates.back())) {
-              // Drop the candidate if the edge was a subsumed in some other
+              // Drop the candidate if the edge was subsumed in some other
               // edge.
               candidates.pop_back();
             }
@@ -352,16 +360,18 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
         }
       });
 
-  // Take the  first hand joined tables and bundle them with reducing joins that
+  // Take the first hand joined tables and bundle them with reducing joins that
   // can go on the build side.
   std::vector<JoinCandidate> bushes;
-  for (auto& candidate : candidates) {
-    if (auto bush = reducingJoins(state, candidate)) {
-      bushes.push_back(std::move(bush.value()));
+  if (!options_.syntacticJoinOrder) {
+    for (auto& candidate : candidates) {
+      if (auto bush = reducingJoins(state, candidate)) {
+        bushes.push_back(std::move(bush.value()));
+      }
     }
+    candidates.insert(candidates.begin(), bushes.begin(), bushes.end());
   }
 
-  candidates.insert(candidates.begin(), bushes.begin(), bushes.end());
   std::ranges::sort(
       candidates, [](const JoinCandidate& left, const JoinCandidate& right) {
         return left.fanout < right.fanout;
@@ -369,7 +379,7 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   if (candidates.empty()) {
     // There are no join edges. There could still be cross joins.
     state.dt->startTables.forEach([&](PlanObjectCP object) {
-      if (!state.placed.contains(object)) {
+      if (!state.placed.contains(object) && state.mayConsiderNext(object)) {
         candidates.emplace_back(nullptr, object, tableCardinality(object));
       }
     });
@@ -672,12 +682,49 @@ bool isRedundantProject(
   return true;
 }
 
+// Check if 'plan' is an identity projection. If so, return its input.
+// Otherwise, return 'plan'.
+const RelationOpPtr& maybeDropProject(const RelationOpPtr& plan) {
+  if (plan->is(RelType::kProject)) {
+    bool redundant = true;
+
+    const auto* project = plan->as<Project>();
+    for (auto i = 0; i < project->columns().size(); ++i) {
+      if (project->columns()[i] != project->exprs()[i]) {
+        redundant = false;
+        break;
+      }
+    }
+
+    if (redundant) {
+      return plan->input();
+    }
+  }
+
+  return plan;
+}
+
 } // namespace
 
 void Optimization::addPostprocess(
     DerivedTableCP dt,
     RelationOpPtr& plan,
     PlanState& state) const {
+  if (dt->write) {
+    VELOX_DCHECK(!dt->hasAggregation());
+    VELOX_DCHECK(!dt->hasOrderBy());
+    VELOX_DCHECK(!dt->hasLimit());
+    PrecomputeProjection precompute{plan, dt, /*projectAllInputs=*/false};
+    auto writeColumns = precompute.toColumns(dt->write->columnExprs());
+    plan = std::move(precompute).maybeProject();
+    state.addCost(*plan);
+    // Because table write will be in every plan and it will be root node,
+    // it would not affect the choice of plan.
+    // So we're not adding the cost of the write itself to the plan cost.
+    plan = make<TableWrite>(plan, std::move(writeColumns), dt->write);
+    return;
+  }
+
   if (dt->aggregation) {
     addAggregation(dt, plan, state);
   }
@@ -700,13 +747,21 @@ void Optimization::addPostprocess(
   }
 
   if (!dt->columns.empty()) {
-    ExprVector exprs = state.exprsToColumns(dt->exprs);
+    ColumnVector usedColumns;
+    ExprVector usedExprs;
+    for (auto i = 0; i < dt->exprs.size(); ++i) {
+      const auto* expr = dt->exprs[i];
+      if (state.targetExprs.contains(expr)) {
+        usedColumns.emplace_back(dt->columns[i]);
+        usedExprs.emplace_back(state.toColumn(expr));
+      }
+    }
+
     plan = makeProjectWithWindows(
-        plan,
-        exprs,
-        dt->columns,
-        isRedundantProject(plan, exprs, dt->columns),
-        dt);
+        maybeDropProject(plan),
+        usedExprs,
+        usedColumns,
+        isRedundantProject(plan, usedExprs, usedColumns));
   }
 
   if (!dt->hasOrderBy() && dt->limit > kMaxLimitBeforeProject) {
@@ -1251,12 +1306,13 @@ void Optimization::addJoin(
   }
 
   std::vector<NextJoin> toTry;
-
   joinByIndex(plan, candidate, state, toTry);
 
   const auto sizeAfterIndex = toTry.size();
   joinByHash(plan, candidate, state, toTry);
-  if (toTry.size() > sizeAfterIndex && candidate.join->isNonCommutative() &&
+
+  if (!options_.syntacticJoinOrder && toTry.size() > sizeAfterIndex &&
+      candidate.join->isNonCommutative() &&
       candidate.join->hasRightHashVariant()) {
     // There is a hash based candidate with a non-commutative join. Try a right
     // join variant.
@@ -1563,13 +1619,22 @@ std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
 } // namespace
 
 void Optimization::makeJoins(PlanState& state) {
-  auto firstTables = state.dt->startTables.toObjects();
+  PlanObjectVector firstTables;
+
+  if (options_.syntacticJoinOrder) {
+    const auto firstTableId = state.dt->joinOrder[0];
+    VELOX_CHECK(state.dt->startTables.BitSet::contains(firstTableId));
+
+    firstTables.push_back(queryCtx()->objectAt(firstTableId));
+  } else {
+    firstTables = state.dt->startTables.toObjects();
 
 #ifndef NDEBUG
-  for (auto table : firstTables) {
-    state.debugSetFirstTable(table->id());
-  }
+    for (auto table : firstTables) {
+      state.debugSetFirstTable(table->id());
+    }
 #endif
+  }
 
   auto sortedIndices = sortByStartingScore(firstTables);
 
@@ -1660,6 +1725,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
   for (auto& candidate : candidates) {
     addJoin(candidate, plan, state, nextJoins);
   }
+
   tryNextJoins(state, nextJoins);
 }
 

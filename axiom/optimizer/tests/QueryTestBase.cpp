@@ -85,15 +85,16 @@ TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
   fragment.fragment = core::PlanFragment(plan);
 
   optimizer::PlanAndStats planAndStats = {
-      .plan = std::make_shared<runner::MultiFragmentPlan>(
+      std::make_shared<runner::MultiFragmentPlan>(
           std::vector<runner::ExecutableFragment>{std::move(fragment)},
-          std::move(options))};
+          std::move(options)),
+  };
 
   return runFragmentedPlan(planAndStats);
 }
 
 TestResult QueryTestBase::runFragmentedPlan(
-    const optimizer::PlanAndStats& fragmentedPlan) {
+    optimizer::PlanAndStats& planAndStats) {
   TestResult result;
 
   SCOPE_EXIT {
@@ -101,11 +102,15 @@ TestResult QueryTestBase::runFragmentedPlan(
     queryCtx_.reset();
   };
 
-  result.runner =
-      std::make_shared<runner::LocalRunner>(fragmentedPlan.plan, getQueryCtx());
+  result.runner = std::make_shared<runner::LocalRunner>(
+      planAndStats.plan,
+      std::move(planAndStats.finishWrite),
+      getQueryCtx(),
+      std::make_shared<runner::ConnectorSplitSourceFactory>(),
+      optimizerPool_);
   result.results = readCursor(result.runner);
   result.stats = result.runner->stats();
-  history_->recordVeloxExecution(fragmentedPlan, result.stats);
+  history_->recordVeloxExecution(planAndStats, result.stats);
 
   return result;
 }
@@ -139,7 +144,10 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
   connector::SchemaResolver schemaResolver;
   optimizer::Schema veraxSchema("test", &schemaResolver, /*locus=*/nullptr);
 
+  auto session = std::make_shared<Session>(queryCtx->queryId());
+
   optimizer::Optimization opt(
+      session,
       *plan,
       veraxSchema,
       *history_,
@@ -162,7 +170,7 @@ TestResult QueryTestBase::runVelox(
 }
 
 TestResult QueryTestBase::checkSame(
-    const optimizer::PlanAndStats& experiment,
+    optimizer::PlanAndStats& experiment,
     const core::PlanNodePtr& reference) {
   auto referenceResult = runVelox(reference);
   auto experimentResult = runFragmentedPlan(experiment);
@@ -180,43 +188,42 @@ void QueryTestBase::checkSame(
   VELOX_CHECK_NOT_NULL(planNode);
   VELOX_CHECK_NOT_NULL(referencePlan);
 
-  auto referenceResult = runVelox(referencePlan);
   SCOPED_TRACE("reference plan:\n" + referencePlan->toString(true, true));
-  {
-    SCOPED_TRACE("single node and single thread");
-    auto plan = planVelox(planNode, {.numWorkers = 1, .numDrivers = 1});
-    SCOPED_TRACE("plan:\n" + plan.plan->toString());
-    auto result = runFragmentedPlan(plan);
-    velox::exec::test::assertEqualResults(
-        referenceResult.results, result.results);
-  }
+  auto referenceResult = runVelox(referencePlan);
+  checkSame(planNode, referenceResult.results, options);
+}
+
+void QueryTestBase::checkSame(
+    const logical_plan::LogicalPlanNodePtr& planNode,
+    const std::vector<velox::RowVectorPtr>& referenceResult,
+    const axiom::runner::MultiFragmentPlan::Options& options) {
+  VELOX_CHECK_NOT_NULL(planNode);
+
+  std::vector<axiom::runner::MultiFragmentPlan::Options> testOptions = {
+      {.numWorkers = 1, .numDrivers = 1},
+  };
+
   if (options.numDrivers > 1) {
-    SCOPED_TRACE("single node and multi thread");
-    auto plan = planVelox(
-        planNode, {.numWorkers = 1, .numDrivers = options.numDrivers});
-    SCOPED_TRACE("plan:\n" + plan.plan->toString());
-    auto result = runFragmentedPlan(plan);
-    velox::exec::test::assertEqualResults(
-        referenceResult.results, result.results);
+    testOptions.push_back({.numWorkers = 1, .numDrivers = options.numDrivers});
   }
+
   if (options.numWorkers > 1) {
-    SCOPED_TRACE("multi node and single thread");
-    auto plan = planVelox(
-        planNode, {.numWorkers = options.numWorkers, .numDrivers = 1});
-    SCOPED_TRACE("plan:\n" + plan.plan->toString());
-    auto result = runFragmentedPlan(plan);
-    velox::exec::test::assertEqualResults(
-        referenceResult.results, result.results);
+    testOptions.push_back({.numWorkers = options.numWorkers, .numDrivers = 1});
   }
+
   if (options.numWorkers > 1 && options.numDrivers > 1) {
-    SCOPED_TRACE("multi node and multi thread");
-    auto plan = planVelox(
-        planNode,
-        {.numWorkers = options.numWorkers, .numDrivers = options.numDrivers});
+    testOptions.push_back(options);
+  }
+
+  for (const auto& test : testOptions) {
+    SCOPED_TRACE(fmt::format(
+        "workers: {}, drivers: {}", test.numWorkers, test.numDrivers));
+
+    auto plan = planVelox(planNode, test);
+
     SCOPED_TRACE("plan:\n" + plan.plan->toString());
     auto result = runFragmentedPlan(plan);
-    velox::exec::test::assertEqualResults(
-        referenceResult.results, result.results);
+    velox::exec::test::assertEqualResults(referenceResult, result.results);
   }
 }
 

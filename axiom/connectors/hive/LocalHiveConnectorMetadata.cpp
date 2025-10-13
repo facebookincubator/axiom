@@ -34,6 +34,7 @@
 namespace facebook::axiom::connector::hive {
 
 std::vector<PartitionHandlePtr> LocalHiveSplitManager::listPartitions(
+    const ConnectorSessionPtr& session,
     const velox::connector::ConnectorTableHandlePtr& tableHandle) {
   // All tables are unpartitioned.
   folly::F14FastMap<std::string, std::optional<std::string>> empty;
@@ -41,6 +42,7 @@ std::vector<PartitionHandlePtr> LocalHiveSplitManager::listPartitions(
 }
 
 std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
+    const ConnectorSessionPtr& session,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& /*partitions*/,
     SplitOptions options) {
@@ -672,7 +674,8 @@ void LocalTable::sampleNumDistincts(
   std::vector<velox::connector::ColumnHandlePtr> columns;
   columns.reserve(type_->size());
   for (auto i = 0; i < type_->size(); ++i) {
-    columns.push_back(metadata->createColumnHandle(*layout, type_->nameOf(i)));
+    columns.push_back(metadata->createColumnHandle(
+        /*session=*/nullptr, *layout, type_->nameOf(i)));
   }
 
   auto* localHiveMetadata =
@@ -681,8 +684,8 @@ void LocalTable::sampleNumDistincts(
       *localHiveMetadata->connectorQueryCtx()->expressionEvaluator();
 
   std::vector<velox::core::TypedExprPtr> ignore;
-  auto handle =
-      metadata->createTableHandle(*layout, columns, evaluator, {}, ignore);
+  auto handle = metadata->createTableHandle(
+      /*session=*/nullptr, *layout, columns, evaluator, {}, ignore);
 
   auto* localLayout = dynamic_cast<LocalHiveTableLayout*>(layout);
   VELOX_CHECK_NOT_NULL(localLayout, "Expecting a local hive layout");
@@ -858,10 +861,10 @@ void parseTokens(const std::string& option, folly::dynamic& array) {
 } // namespace
 
 TablePtr LocalHiveConnectorMetadata::createTable(
+    const ConnectorSessionPtr& session,
     const std::string& tableName,
     const velox::RowTypePtr& rowType,
-    const folly::F14FastMap<std::string, std::string>& options,
-    const ConnectorSessionPtr& session) {
+    const folly::F14FastMap<std::string, std::string>& options) {
   validateOptions(options);
   ensureInitialized();
   auto path = tablePath(tableName);
@@ -963,10 +966,21 @@ TablePtr LocalHiveConnectorMetadata::createTable(
   return table;
 }
 
-velox::ContinueFuture LocalHiveConnectorMetadata::finishWrite(
+RowsFuture LocalHiveConnectorMetadata::finishWrite(
+    const ConnectorSessionPtr& /*session*/,
     const ConnectorWriteHandlePtr& handle,
-    const std::vector<velox::RowVectorPtr>& /*writerResult*/,
-    const ConnectorSessionPtr& /*session*/) {
+    const std::vector<velox::RowVectorPtr>& writeResults) {
+  uint64_t rows = 0;
+  velox::DecodedVector decoded;
+  for (const auto& result : writeResults) {
+    decoded.decode(*result->childAt(0));
+    for (velox::vector_size_t i = 0; i < decoded.size(); ++i) {
+      if (decoded.isNullAt(i)) {
+        continue;
+      }
+      rows += decoded.valueAt<int64_t>(i);
+    }
+  }
   std::lock_guard<std::mutex> l(mutex_);
   auto hiveHandle =
       std::dynamic_pointer_cast<const HiveConnectorWriteHandle>(handle);
@@ -980,12 +994,12 @@ velox::ContinueFuture LocalHiveConnectorMetadata::finishWrite(
   move(writePath, targetPath);
   deleteDirectoryRecursive(writePath);
   loadTable(hiveHandle->table()->name(), targetPath);
-  return {};
+  return rows;
 }
 
 velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
-    const ConnectorWriteHandlePtr& handle,
-    const ConnectorSessionPtr& session) {
+    const ConnectorSessionPtr& session,
+    const ConnectorWriteHandlePtr& handle) noexcept try {
   std::lock_guard<std::mutex> l(mutex_);
   auto hiveHandle =
       std::dynamic_pointer_cast<const HiveConnectorWriteHandle>(handle);
@@ -1001,6 +1015,9 @@ velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
     deleteDirectoryRecursive(targetPath);
   }
   return {};
+} catch (const std::exception& e) {
+  LOG(ERROR) << e.what() << " while aborting write to Local Hive table";
+  return folly::exception_wrapper{folly::current_exception()};
 }
 
 std::optional<std::string> LocalHiveConnectorMetadata::makeStagingDirectory(

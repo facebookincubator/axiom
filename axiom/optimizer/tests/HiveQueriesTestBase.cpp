@@ -106,7 +106,7 @@ void HiveQueriesTestBase::checkResults(
 }
 
 void HiveQueriesTestBase::checkResults(
-    const PlanAndStats& plan,
+    PlanAndStats& plan,
     const test::TestResult& expected) {
   auto results = runFragmentedPlan(plan);
   exec::test::assertEqualResults(expected.results, results.results);

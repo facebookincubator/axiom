@@ -46,6 +46,7 @@ class SimpleSplitSource : public connector::SplitSource {
 
 std::shared_ptr<connector::SplitSource>
 SimpleSplitSourceFactory::splitSourceForScan(
+    const connector::ConnectorSessionPtr& /* session */,
     const velox::core::TableScanNode& scan) {
   auto it = nodeSplitMap_.find(scan.id());
   if (it == nodeSplitMap_.end()) {
@@ -56,13 +57,14 @@ SimpleSplitSourceFactory::splitSourceForScan(
 
 std::shared_ptr<connector::SplitSource>
 ConnectorSplitSourceFactory::splitSourceForScan(
+    const connector::ConnectorSessionPtr& session,
     const velox::core::TableScanNode& scan) {
   const auto& handle = scan.tableHandle();
   auto metadata = connector::ConnectorMetadata::metadata(handle->connectorId());
   auto splitManager = metadata->splitManager();
 
-  auto partitions = splitManager->listPartitions(handle);
-  return splitManager->getSplitSource(handle, partitions, options_);
+  auto partitions = splitManager->listPartitions(session, handle);
+  return splitManager->getSplitSource(session, handle, partitions, options_);
 }
 
 namespace {
@@ -138,17 +140,26 @@ std::vector<ExecutableFragment> topologicalSort(
 
 LocalRunner::LocalRunner(
     MultiFragmentPlanPtr plan,
+    FinishWrite finishWrite,
     std::shared_ptr<velox::core::QueryCtx> queryCtx,
     std::shared_ptr<SplitSourceFactory> splitSourceFactory,
     std::shared_ptr<velox::memory::MemoryPool> outputPool)
     : plan_{std::move(plan)},
       fragments_{topologicalSort(plan_->fragments())},
+      finishWrite_{std::move(finishWrite)},
       splitSourceFactory_{std::move(splitSourceFactory)} {
   params_.queryCtx = std::move(queryCtx);
   params_.outputPool = std::move(outputPool);
+
+  VELOX_CHECK_NOT_NULL(splitSourceFactory_);
+  VELOX_CHECK(!finishWrite_ || params_.outputPool != nullptr);
 }
 
 velox::RowVectorPtr LocalRunner::next() {
+  if (finishWrite_) {
+    return nextWrite();
+  }
+
   if (!cursor_) {
     start();
   }
@@ -159,6 +170,52 @@ velox::RowVectorPtr LocalRunner::next() {
   }
 
   return cursor_->current();
+}
+
+int64_t LocalRunner::runWrite() {
+  std::vector<velox::RowVectorPtr> result;
+  auto finishWrite = std::move(finishWrite_);
+  auto state = State::kError;
+  SCOPE_EXIT {
+    state_ = state;
+  };
+  try {
+    start();
+    while (cursor_->moveNext()) {
+      result.push_back(cursor_->current());
+    }
+  } catch (const std::exception&) {
+    try {
+      waitForCompletion(1'000'000);
+    } catch (const std::exception& e) {
+      LOG(ERROR) << e.what()
+                 << " while waiting for completion after error in write query";
+      throw;
+    }
+    std::move(finishWrite).abort().get();
+    throw;
+  }
+
+  auto rows = std::move(finishWrite).commit(result).get();
+  state = State::kFinished;
+  return rows;
+}
+
+velox::RowVectorPtr LocalRunner::nextWrite() {
+  VELOX_DCHECK(finishWrite_);
+
+  const int64_t rows = runWrite();
+
+  auto child = velox::BaseVector::create<velox::FlatVector<int64_t>>(
+      velox::BIGINT(), /*length=*/1, params_.outputPool.get());
+  child->set(0, rows);
+
+  return std::make_shared<velox::RowVector>(
+      params_.outputPool.get(),
+      velox::ROW("rows", velox::BIGINT()),
+      /*nulls=*/nullptr,
+      /*length=*/1,
+      std::vector<velox::VectorPtr>{std::move(child)});
 }
 
 void LocalRunner::start() {
@@ -186,8 +243,9 @@ void LocalRunner::start() {
 }
 
 std::shared_ptr<connector::SplitSource> LocalRunner::splitSourceForScan(
+    const connector::ConnectorSessionPtr& session,
     const velox::core::TableScanNode& scan) {
-  return splitSourceFactory_->splitSourceForScan(scan);
+  return splitSourceFactory_->splitSourceForScan(session, scan);
 }
 
 void LocalRunner::abort() {
@@ -327,7 +385,7 @@ void LocalRunner::makeStages(
     gatherScans(fragment.fragment.planNode, scans);
 
     for (const auto& scan : scans) {
-      auto source = splitSourceForScan(*scan);
+      auto source = splitSourceForScan(/*session=*/nullptr, *scan);
 
       std::vector<connector::SplitSource::SplitAndGroup> splits;
       int32_t splitIdx = 0;

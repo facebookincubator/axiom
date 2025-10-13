@@ -63,6 +63,9 @@ class LogicalPlanNode {
     VELOX_USER_CHECK_NOT_NULL(outputType_);
     for (const auto& input : inputs_) {
       VELOX_USER_CHECK_NOT_NULL(input);
+      VELOX_USER_CHECK(
+          input->kind() != NodeKind::kTableWrite,
+          "TableWrite cannot be non-root logical plan node");
     }
   }
 
@@ -682,23 +685,28 @@ enum class WriteKind {
 
 AXIOM_DECLARE_ENUM_NAME(WriteKind);
 
-/// Implements insert/delete/update as per 'kind'.
+/// Implements create/insert/delete/update as per 'writeKind'.
+///
+/// The output schema contains a single BIGINT column named 'rows'. The value of
+/// 'rows' is the total number of rows written. The output has exactly one row.
 class TableWriteNode : public LogicalPlanNode {
  public:
   /// @param id Unique ID of the plan node.
+  /// @param input Input node.
   /// @param connectorId ID of the connector to use to access the table.
   /// @param tableName Table name.
-  /// @param kind Indicates the type of write (insert/delete/update)
-  /// @param columnNames A List of columns in the table being written.
+  /// @param writeKind The type of write (create/insert/delete/update).
+  /// @param columnNames A subset of columns in the table being written.
   /// Correspond 1:1 to 'columnExpressions'. 'columnNames' must refer to columns
   /// in the table but their number or order does not have to correspond to the
-  /// table. Missing columns in insert get their default from the table.
+  /// table. Missing columns get their default from the table schema. Column
+  /// names must be unique.
   /// @param columnExpressions Expressions producing the values to write.
-  /// Correspond 1:1 to 'names'.
-  /// @param outputType Writer dependent output type.
+  /// Correspond 1:1 to 'columnNames'.
   /// @param options Writer dependent options. May specify compression or
-  /// encoding options. The table always specifies partitioning.
-  /// 'options' are only for advanced/testing features.
+  /// encoding. Partitioning, is available, comes from the table schema.
+  /// 'options' are provided for advanced usage or testing. Supported only for
+  /// writeKind of insert or create.
   TableWriteNode(
       std::string id,
       LogicalPlanNodePtr input,
@@ -707,7 +715,6 @@ class TableWriteNode : public LogicalPlanNode {
       WriteKind writeKind,
       std::vector<std::string> columnNames,
       std::vector<ExprPtr> columnExpressions,
-      velox::RowTypePtr outputType,
       folly::F14FastMap<std::string, std::string> options = {});
 
   const std::string& connectorId() const {

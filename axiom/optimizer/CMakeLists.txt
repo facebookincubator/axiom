@@ -44,6 +44,7 @@ add_library(
 target_link_libraries(
   axiom_optimizer
   velox_core
+  axiom_common
   axiom_connectors
   axiom_logical_plan
   axiom_runner_multifragment_plan

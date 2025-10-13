@@ -1486,7 +1486,6 @@ PlanBuilder& PlanBuilder::tableWrite(
     WriteKind kind,
     std::vector<std::string> columnNames,
     const std::vector<ExprApi>& columnExprs,
-    velox::RowTypePtr outputType,
     folly::F14FastMap<std::string, std::string> options) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Table write node cannot be a leaf node");
 
@@ -1504,7 +1503,6 @@ PlanBuilder& PlanBuilder::tableWrite(
       kind,
       std::move(columnNames),
       std::move(columnExpressions),
-      std::move(outputType),
       std::move(options));
 
   return *this;

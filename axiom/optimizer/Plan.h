@@ -188,11 +188,9 @@ class Optimization;
 /// Tracks the set of tables / columns that have been placed or are still needed
 /// when constructing a partial plan.
 struct PlanState {
-  PlanState(Optimization& optimization, DerivedTableCP dt)
-      : optimization(optimization), dt(dt) {}
+  PlanState(Optimization& optimization, DerivedTableCP dt);
 
-  PlanState(Optimization& optimization, DerivedTableCP dt, PlanP plan)
-      : optimization(optimization), dt(dt), cost(plan->cost) {}
+  PlanState(Optimization& optimization, DerivedTableCP dt, PlanP plan);
 
   Optimization& optimization;
 
@@ -250,12 +248,18 @@ struct PlanState {
   /// targetColumns. Gets smaller as more tables are placed.
   const PlanObjectSet& downstreamColumns() const;
 
-  /// Replace expressions with pre-computed columns using 'exprToColumn'
+  /// Replace expression with pre-computed column using 'exprToColumn'
   /// mapping.
-  ExprVector exprsToColumns(const ExprVector& exprs) const;
+  ExprCP toColumn(ExprCP expr) const;
 
-  /// Adds a placed join to the set of partial queries to be developed. No-op if
-  /// cost exceeds best so far and cutoff is enabled.
+  /// If OptimizerOptions::syntacticJoinOrder is true, returns true if all
+  /// tables that must be placed before 'table' have been placed. If
+  /// OptimizerOptions::syntacticJoinOrder is false, returns true
+  /// unconditionally.
+  bool mayConsiderNext(PlanObjectCP table) const;
+
+  /// Adds a placed join to the set of partial queries to be developed.
+  /// No-op if cost exceeds best so far and cutoff is enabled.
   void addNextJoin(
       const JoinCandidate* candidate,
       RelationOpPtr plan,
@@ -281,7 +285,9 @@ struct PlanState {
   /// Caches results of downstreamColumns(). This is a pure function of
   /// 'placed', 'targetExprs' and 'dt'.
   mutable folly::F14FastMap<PlanObjectSet, PlanObjectSet>
-      downstreamColumnsCache;
+      downstreamColumnsCache_;
+
+  const bool syntacticJoinOrder_;
 };
 
 /// A scoped guard that restores fields of PlanState on destruction.

@@ -118,7 +118,8 @@ TEST_F(TpchConnectorMetadataTest, createColumnHandle) {
   const auto& layouts = table->layouts();
   ASSERT_FALSE(layouts.empty());
 
-  auto columnHandle = metadata_->createColumnHandle(*layouts[0], "orderkey");
+  auto columnHandle = metadata_->createColumnHandle(
+      /*session=*/nullptr, *layouts[0], "orderkey");
   ASSERT_NE(columnHandle, nullptr);
 
   auto* tpchColumnHandle =
@@ -142,7 +143,12 @@ TEST_F(TpchConnectorMetadataTest, createTableHandle) {
   auto evaluator = std::make_unique<velox::exec::SimpleExpressionEvaluator>(
       nullptr, nullptr);
   auto tableHandle = metadata_->createTableHandle(
-      *layouts[0], columnHandles, *evaluator, empty, empty);
+      /*session=*/nullptr,
+      *layouts[0],
+      columnHandles,
+      *evaluator,
+      empty,
+      empty);
   ASSERT_NE(tableHandle, nullptr);
 
   auto* tpchTableHandle =
@@ -170,13 +176,20 @@ TEST_F(TpchConnectorMetadataTest, splitGeneration) {
   auto evaluator = std::make_unique<velox::exec::SimpleExpressionEvaluator>(
       nullptr, nullptr);
   auto tableHandle = metadata_->createTableHandle(
-      *layouts[0], columnHandles, *evaluator, empty, empty);
+      /*session=*/nullptr,
+      *layouts[0],
+      columnHandles,
+      *evaluator,
+      empty,
+      empty);
   ASSERT_NE(tableHandle, nullptr);
 
-  auto partitions = splitManager->listPartitions(tableHandle);
+  auto partitions =
+      splitManager->listPartitions(/*session=*/nullptr, tableHandle);
   ASSERT_EQ(partitions.size(), 1);
 
-  auto splitSource = splitManager->getSplitSource(tableHandle, partitions);
+  auto splitSource = splitManager->getSplitSource(
+      /*session=*/nullptr, tableHandle, partitions);
   ASSERT_NE(splitSource, nullptr);
   auto splits = splitSource->getSplits(1024 * 1024); // 1MB target
   ASSERT_FALSE(splits.empty());

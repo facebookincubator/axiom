@@ -37,6 +37,9 @@ using WindowPlanCP = const WindowPlan*;
 enum class OrderType;
 using OrderTypeVector = QGVector<OrderType>;
 
+class WritePlan;
+using WritePlanCP = const WritePlan*;
+
 /// Represents a derived table, i.e. a SELECT in a FROM clause. This is the
 /// basic unit of planning. Derived tables can be merged and split apart from
 /// other ones. Join types and orders are decided within each derived table. A
@@ -55,6 +58,7 @@ using OrderTypeVector = QGVector<OrderType>;
 ///   5. SELECT (projections)
 ///   6. ORDER BY (sort)
 ///   7. OFFSET and LIMIT (limit)
+///   8. WRITE (create/insert/delete/update)
 ///
 struct DerivedTable : public PlanObject {
   DerivedTable() : PlanObject(PlanType::kDerivedTableNode) {}
@@ -130,6 +134,11 @@ struct DerivedTable : public PlanObject {
   /// not try to further restrict this with probe side.
   bool noImportOfExists{false};
 
+  /// A list of PlanObject IDs for 'tables' in the order of appearance in the
+  /// query. Used to produce syntactic join order if requested. Table with id
+  /// joinOrder[i] can only be placed after tables before it are placed.
+  std::vector<int32_t, QGAllocator<int32_t>> joinOrder;
+
   /// Postprocessing clauses: group by, having, order by, limit, offset.
 
   AggregationPlanCP aggregation{nullptr};
@@ -143,6 +152,9 @@ struct DerivedTable : public PlanObject {
   /// Limit and offset.
   int64_t limit{-1};
   int64_t offset{0};
+
+  // Write.
+  WritePlanCP write{nullptr};
 
   /// Adds an equijoin edge between 'left' and 'right'.
   void addJoinEquality(ExprCP left, ExprCP right);
@@ -176,6 +188,13 @@ struct DerivedTable : public PlanObject {
 
   bool isTable() const override {
     return true;
+  }
+
+  void addTable(PlanObjectCP table) {
+    tables.push_back(table);
+    tableSet.add(table);
+
+    joinOrder.push_back(table->id());
   }
 
   /// True if 'table' is of 'this'.

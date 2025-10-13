@@ -67,7 +67,7 @@ std::string PlanObjectSet::toString(bool names) const {
   forEach([&](auto object) {
     out << object->id();
     if (names) {
-      out << ": " << object->toString() << std::endl;
+      out << ": " << object->toString() << " ";
     } else {
       out << " ";
     }

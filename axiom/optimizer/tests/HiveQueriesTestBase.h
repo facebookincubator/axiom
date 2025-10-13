@@ -44,7 +44,7 @@ class HiveQueriesTestBase : public test::QueryTestBase {
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       const velox::core::PlanNodePtr& referencePlan);
 
-  void checkResults(const PlanAndStats& plan, const test::TestResult& expected);
+  void checkResults(PlanAndStats& plan, const test::TestResult& expected);
 
   void checkSingleNodePlan(
       const PlanAndStats& plan,

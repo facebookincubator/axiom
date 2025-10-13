@@ -173,6 +173,9 @@ std::string visitDerivedTable(const DerivedTable& dt) {
     for (const auto& joinEdge : dt.joins) {
       out << "    " << visitJoinEdge(*joinEdge) << std::endl;
     }
+
+    out << "  syntactic join order: " << folly::join(", ", dt.joinOrder)
+        << std::endl;
   }
 
   if (dt.hasAggregation()) {
@@ -218,6 +221,13 @@ std::string visitDerivedTable(const DerivedTable& dt) {
       out << "  offset: " << dt.offset << std::endl;
     }
     out << "  limit: " << dt.limit << std::endl;
+  }
+
+  if (dt.write) {
+    out << fmt::format("  write ({}) to: ", dt.write->kind())
+        << dt.write->table().name() << std::endl;
+    out << "    columns: " << exprsToString(dt.write->columnExprs())
+        << std::endl;
   }
 
   for (const auto& table : dt.tables) {

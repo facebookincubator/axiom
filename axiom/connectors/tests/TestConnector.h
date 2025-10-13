@@ -146,9 +146,11 @@ class TestSplitSource : public SplitSource {
 class TestSplitManager : public ConnectorSplitManager {
  public:
   std::vector<PartitionHandlePtr> listPartitions(
+      const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
 
   std::shared_ptr<SplitSource> getSplitSource(
+      const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       SplitOptions options = {}) override;
@@ -252,6 +254,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
   }
 
   velox::connector::ColumnHandlePtr createColumnHandle(
+      const ConnectorSessionPtr& session,
       const TableLayout& layout,
       const std::string& columnName,
       std::vector<velox::common::Subfield> subfields = {},
@@ -259,6 +262,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
       SubfieldMapping subfieldMapping = {}) override;
 
   velox::connector::ConnectorTableHandlePtr createTableHandle(
+      const ConnectorSessionPtr& session,
       const TableLayout& layout,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       velox::core::ExpressionEvaluator& evaluator,

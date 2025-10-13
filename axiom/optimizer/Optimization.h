@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "axiom/common/Session.h"
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/Plan.h"
@@ -32,6 +33,7 @@ namespace facebook::axiom::optimizer {
 class Optimization {
  public:
   Optimization(
+      SessionPtr session,
       const logical_plan::LogicalPlanNode& logicalPlan,
       const Schema& schema,
       History& history,
@@ -133,6 +135,10 @@ class Optimization {
       ExprCP& left,
       ExprCP& right) const {
     return toGraph_.isJoinEquality(expr, tables, left, right);
+  }
+
+  const SessionPtr& session() const {
+    return session_;
   }
 
   const OptimizerOptions& options() const {
@@ -302,6 +308,8 @@ class Optimization {
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
+  const SessionPtr session_;
+
   const OptimizerOptions options_;
 
   const runner::MultiFragmentPlan::Options runnerOptions_;
@@ -327,7 +335,7 @@ class Optimization {
 
   // The top level PlanState. Contains the set of top level interesting plans.
   // Must stay alive as long as the Plans and RelationOps are reeferenced.
-  PlanState topState_{*this, nullptr};
+  PlanState topState_;
 
   // Controls tracing.
   int32_t traceFlags_{0};

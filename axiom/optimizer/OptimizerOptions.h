@@ -15,10 +15,9 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <algorithm>
 #include <cstdint>
-#include <string>
-#include <vector>
 
 namespace facebook::axiom::optimizer {
 
@@ -58,6 +57,11 @@ struct OptimizerOptions {
 
   /// Produce trace of plan candidates.
   uint32_t traceFlags{0};
+
+  /// Disable cost-based join order selection. Perform the joins in the exact
+  /// sequence specified in the query.
+  /// TODO Make this work for non-inner joins.
+  bool syntacticJoinOrder = false;
 
   bool isMapAsStruct(const char* table, const char* column) const {
     if (allMapsAsStruct) {

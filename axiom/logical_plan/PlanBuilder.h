@@ -384,7 +384,6 @@ class PlanBuilder {
       WriteKind kind,
       std::vector<std::string> columnNames,
       std::initializer_list<std::string> columnExprs,
-      velox::RowTypePtr outputType = velox::ROW({}),
       folly::F14FastMap<std::string, std::string> options = {}) {
     return tableWrite(
         std::move(connectorId),
@@ -392,7 +391,6 @@ class PlanBuilder {
         kind,
         std::move(columnNames),
         std::vector<std::string>{columnExprs},
-        std::move(outputType),
         std::move(options));
   }
 
@@ -402,7 +400,6 @@ class PlanBuilder {
       WriteKind kind,
       std::vector<std::string> columnNames,
       const std::vector<std::string>& columnExprs,
-      velox::RowTypePtr outputType = velox::ROW({}),
       folly::F14FastMap<std::string, std::string> options = {}) {
     return tableWrite(
         std::move(connectorId),
@@ -410,7 +407,6 @@ class PlanBuilder {
         kind,
         std::move(columnNames),
         parse(columnExprs),
-        std::move(outputType),
         std::move(options));
   }
 
@@ -420,7 +416,6 @@ class PlanBuilder {
       WriteKind kind,
       std::vector<std::string> columnNames,
       const std::vector<ExprApi>& columnExprs,
-      velox::RowTypePtr outputType = velox::ROW({}),
       folly::F14FastMap<std::string, std::string> options = {});
 
   PlanBuilder& as(const std::string& alias);

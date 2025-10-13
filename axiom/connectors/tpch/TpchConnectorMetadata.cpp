@@ -69,11 +69,13 @@ double getScaleFactor(const std::string& schema) {
 } // namespace
 
 std::vector<PartitionHandlePtr> TpchSplitManager::listPartitions(
+    const connector::ConnectorSessionPtr& session,
     const velox::connector::ConnectorTableHandlePtr& /*tableHandle*/) {
   return {std::make_shared<connector::PartitionHandle>()};
 }
 
 std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
+    const connector::ConnectorSessionPtr& session,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& /*partitions*/,
     SplitOptions options) {
@@ -146,6 +148,7 @@ TpchConnectorMetadata::TpchConnectorMetadata(
 }
 
 velox::connector::ColumnHandlePtr TpchConnectorMetadata::createColumnHandle(
+    const ConnectorSessionPtr& session,
     const TableLayout& layoutData,
     const std::string& columnName,
     std::vector<velox::common::Subfield> subfields,
@@ -156,6 +159,7 @@ velox::connector::ColumnHandlePtr TpchConnectorMetadata::createColumnHandle(
 
 velox::connector::ConnectorTableHandlePtr
 TpchConnectorMetadata::createTableHandle(
+    const ConnectorSessionPtr& session,
     const TableLayout& layout,
     std::vector<velox::connector::ColumnHandlePtr> /*columnHandles*/,
     velox::core::ExpressionEvaluator& /*evaluator*/,

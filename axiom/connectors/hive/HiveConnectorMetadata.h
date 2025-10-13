@@ -40,11 +40,6 @@ struct HivePartitionHandle : public PartitionHandle {
   const std::optional<int32_t> tableBucketNumber;
 };
 
-class HiveConnectorSession : public ConnectorSession {
- public:
-  ~HiveConnectorSession() override = default;
-};
-
 /// Describes a Hive table layout. Adds a file format and a list of
 /// Hive partitioning columns and an optional bucket count to the base
 /// TableLayout. The partitioning in TableLayout referes to bucketing.
@@ -164,6 +159,7 @@ class HiveConnectorMetadata : public ConnectorMetadata {
             hiveConnector->connectorConfig())) {}
 
   velox::connector::ColumnHandlePtr createColumnHandle(
+      const ConnectorSessionPtr& session,
       const TableLayout& layout,
       const std::string& columnName,
       std::vector<velox::common::Subfield> subfields = {},
@@ -171,6 +167,7 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       SubfieldMapping subfieldMapping = {}) override;
 
   velox::connector::ConnectorTableHandlePtr createTableHandle(
+      const ConnectorSessionPtr& session,
       const TableLayout& layout,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       velox::core::ExpressionEvaluator& evaluator,
@@ -180,9 +177,9 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       std::optional<LookupKeys> lookupKeys) override;
 
   ConnectorWriteHandlePtr beginWrite(
+      const ConnectorSessionPtr& session,
       const TablePtr& table,
-      WriteKind kind,
-      const ConnectorSessionPtr& session) override;
+      WriteKind kind) override;
 
  protected:
   virtual void ensureInitialized() const {}

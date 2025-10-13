@@ -163,8 +163,17 @@ include_directories(SYSTEM ${CMAKE_BINARY_DIR}/_deps/xsimd-src/include/)
 include_directories(${ANTLR4_INCLUDE_DIR})
 
 add_subdirectory(velox)
+add_subdirectory(axiom/common)
 add_subdirectory(axiom/sql/presto)
 add_subdirectory(axiom/logical_plan)
 add_subdirectory(axiom/runner)
 add_subdirectory(axiom/connectors)
 add_subdirectory(axiom/optimizer)
+
+add_library(axiom_mono INTERFACE)
+add_library(Axiom::axiom ALIAS axiom_mono)
+
+target_link_libraries(
+  axiom_mono
+  INTERFACE axiom_connector_metadata axiom_optimizer axiom_runner_local_runner
+)

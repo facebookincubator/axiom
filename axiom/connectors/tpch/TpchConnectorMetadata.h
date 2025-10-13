@@ -19,7 +19,6 @@
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/tpch/TpchConnector.h"
-#include "velox/core/QueryCtx.h"
 #include "velox/tpch/gen/TpchGen.h"
 
 namespace facebook::axiom::connector::tpch {
@@ -57,9 +56,11 @@ class TpchSplitManager : public ConnectorSplitManager {
   TpchSplitManager(TpchConnectorMetadata* /* metadata */) {}
 
   std::vector<PartitionHandlePtr> listPartitions(
+      const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
 
   std::shared_ptr<SplitSource> getSplitSource(
+      const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       SplitOptions options = {}) override;
@@ -184,6 +185,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   }
 
   velox::connector::ColumnHandlePtr createColumnHandle(
+      const ConnectorSessionPtr& session,
       const TableLayout& layoutData,
       const std::string& columnName,
       std::vector<velox::common::Subfield> subfields = {},
@@ -191,6 +193,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
       SubfieldMapping subfieldMapping = {}) override;
 
   velox::connector::ConnectorTableHandlePtr createTableHandle(
+      const ConnectorSessionPtr& session,
       const TableLayout& layout,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       velox::core::ExpressionEvaluator& evaluator,

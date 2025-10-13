@@ -158,7 +158,9 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
 
   auto plan = queryCtx()->optimization()->toVeloxPlan(filter);
   return std::make_shared<runner::LocalRunner>(
-      plan.plan, sampleQueryCtx(*queryCtx()->optimization()->veloxQueryCtx()));
+      std::move(plan.plan),
+      std::move(plan.finishWrite),
+      sampleQueryCtx(*queryCtx()->optimization()->veloxQueryCtx()));
 }
 
 // Maps hash value to number of times it appears in a table.
