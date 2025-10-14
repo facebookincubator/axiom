@@ -79,34 +79,18 @@ AXIOM_DECLARE_ENUM_NAME(OrderType);
 
 using OrderTypeVector = QGVector<OrderType>;
 
-/// Method for determining a partition given an ordered list of partitioning
-/// keys. Hive hash is an example, range partitioning is another. Add values
-/// here for more types.
-enum class ShuffleMode : uint8_t {
-  kNone,
-  kHive,
-};
-
-/// Distribution of data. 'numPartitions' is 1 if the data is not partitioned.
-/// There is copartitioning if the DistributionType is the same on both sides
-/// and both sides have an equal number of 1:1 type matched partitioning keys.
+/// Type of data distribution. It can be
+/// - broadcast to all nodes
+/// - gather to the single node
+/// - some partitioning to some nodes, now uses Velox hash partitioning
 struct DistributionType {
-  bool operator==(const DistributionType& other) const = default;
-
-  int32_t numPartitions{1};
   bool isGather{false};
-  ShuffleMode mode{ShuffleMode::kNone};
+  // TODO: Implement and use connector specific partitionType.
 
-  static DistributionType gather() {
-    static constexpr DistributionType kGather = {
-        .isGather = true,
-    };
-    return kGather;
-  }
+  bool operator==(const DistributionType& other) const = default;
 };
 
-// Describes output of relational operator. If base table, cardinality is
-// after filtering.
+/// Describes output of relational operator.
 struct Distribution {
   explicit Distribution() = default;
   Distribution(
@@ -126,8 +110,8 @@ struct Distribution {
   }
 
   /// Returns a Distribution for use in a broadcast shuffle.
-  static Distribution broadcast(DistributionType distributionType) {
-    Distribution distribution{distributionType, {}};
+  static Distribution broadcast() {
+    Distribution distribution;
     distribution.isBroadcast = true;
     return distribution;
   }
@@ -138,8 +122,11 @@ struct Distribution {
   static Distribution gather(
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {}) {
+    static constexpr DistributionType kGather = {
+        .isGather = true,
+    };
     return {
-        DistributionType::gather(),
+        kGather,
         {},
         std::move(orderKeys),
         std::move(orderTypes),
@@ -187,7 +174,6 @@ struct Distribution {
   // because lineitem has an average of 4 repeats of orderkey.
   float spacing{-1};
 
-  // True if the data is replicated to 'numPartitions'.
   bool isBroadcast{false};
 };
 
@@ -279,14 +265,7 @@ struct SchemaTable {
       Distribution distribution,
       ColumnVector columns);
 
-  /// Finds or adds a column with 'name' and 'value'.
-  ColumnCP column(std::string_view name, const Value& value);
-
   ColumnCP findColumn(Name name) const;
-
-  int64_t numRows() const {
-    return static_cast<int64_t>(columnGroups[0]->layout->table().numRows());
-  }
 
   /// True if 'columns' match no more than one row.
   bool isUnique(CPSpan<Column> columns) const;
@@ -298,8 +277,6 @@ struct SchemaTable {
   /// Returns the best index to use for lookup where 'columns' have an
   /// equality constraint.
   IndexInfo indexByColumns(CPSpan<Column> columns) const;
-
-  std::vector<ColumnCP> toColumns(const std::vector<std::string>& names) const;
 
   const Name name;
   const float cardinality;

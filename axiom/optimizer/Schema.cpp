@@ -48,17 +48,6 @@ float Value::byteSize() const {
   }
 }
 
-std::vector<ColumnCP> SchemaTable::toColumns(
-    const std::vector<std::string>& names) const {
-  std::vector<ColumnCP> columns(names.size());
-  VELOX_DCHECK(!columns.empty());
-  for (size_t i = 0; i < names.size(); ++i) {
-    columns[i] = findColumn(name);
-  }
-
-  return columns;
-}
-
 ColumnGroupCP SchemaTable::addIndex(
     const connector::TableLayout& layout,
     Distribution distribution,
@@ -439,7 +428,7 @@ std::string Distribution::toString() const {
   if (!partition.empty()) {
     out << "P ";
     exprsToString(partition, out);
-    out << " " << distributionType.numPartitions << " ways";
+    out << " Velox hash";
   }
   if (!orderKeys.empty()) {
     out << " O ";

@@ -471,11 +471,18 @@ std::string Repartition::toString(bool recursive, bool detail) const {
   if (recursive) {
     out << input()->toString(true, detail) << " ";
   }
-  out << (distribution().isBroadcast ? "broadcast" : "shuffle") << " ";
-  if (detail && !distribution().isBroadcast) {
-    out << distribution().toString();
-    printCost(detail, out);
-  } else if (detail) {
+  const auto& distributionType = distribution().distributionType;
+  if (distribution().isBroadcast) {
+    out << "broadcast ";
+  } else if (distributionType.isGather) {
+    out << "gather ";
+  } else {
+    out << "shuffle ";
+    if (detail) {
+      out << distribution().toString() << " ";
+    }
+  }
+  if (detail) {
     printCost(detail, out);
   }
   return out.str();
@@ -732,31 +739,13 @@ std::string Project::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
-namespace {
-Distribution makeOrderByDistribution(
-    const RelationOpPtr& input,
-    ExprVector orderKeys,
-    OrderTypeVector orderTypes) {
-  Distribution distribution = input->distribution();
-
-  distribution.distributionType = DistributionType::gather();
-  distribution.partition.clear();
-  distribution.orderKeys = std::move(orderKeys);
-  distribution.orderTypes = std::move(orderTypes);
-  VELOX_DCHECK_EQ(
-      distribution.orderKeys.size(), distribution.orderTypes.size());
-
-  return distribution;
-}
-} // namespace
-
 OrderBy::OrderBy(
-    const RelationOpPtr& input,
+    RelationOpPtr input,
     ExprVector orderKeys,
     OrderTypeVector orderTypes,
     int64_t limit,
     int64_t offset)
-    : RelationOp{RelType::kOrderBy, input, makeOrderByDistribution(input, std::move(orderKeys), std::move(orderTypes))},
+    : RelationOp{RelType::kOrderBy, std::move(input), Distribution::gather(std::move(orderKeys), std::move(orderTypes))},
       limit{limit},
       offset{offset} {
   cost_.inputCardinality = inputCardinality();

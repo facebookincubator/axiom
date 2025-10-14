@@ -427,10 +427,9 @@ RelationOpPtr repartitionForAgg(const RelationOpPtr& plan, PlanState& state) {
 
   const auto* agg = state.dt->aggregation;
 
-  // If no grouping and not yet gathered on a single node, add a gather before
-  // final agg.
-  if (agg->groupingKeys().empty() &&
-      !plan->distribution().distributionType.isGather) {
+  // If no grouping and not yet gathered on a single node,
+  // add a gather before final agg.
+  if (agg->groupingKeys().empty()) {
     auto* gather =
         make<Repartition>(plan, Distribution::gather(), plan->columns());
     state.addCost(*gather);
@@ -1024,9 +1023,7 @@ void Optimization::joinByHash(
         candidate.join->isBroadcastableType() &&
         isBroadcastableSize(buildPlan, state)) {
       auto* broadcast = make<Repartition>(
-          buildInput,
-          Distribution::broadcast(plan->distribution().distributionType),
-          buildInput->columns());
+          buildInput, Distribution::broadcast(), buildInput->columns());
       buildState.addCost(*broadcast);
       buildInput = broadcast;
     } else {
@@ -1348,7 +1345,7 @@ RelationOpPtr Optimization::placeSingleRowDt(
   memoKey.tables.add(subquery);
   memoKey.columns.unionObjects(subquery->columns);
 
-  const auto broadcast = Distribution::broadcast({});
+  const auto broadcast = Distribution::broadcast();
 
   PlanObjectSet empty;
   bool needsShuffle = false;
@@ -1545,11 +1542,7 @@ Distribution somePartition(const RelationOpPtrVector& inputs) {
     }
   }
 
-  DistributionType distributionType;
-  distributionType.numPartitions =
-      queryCtx()->optimization()->runnerOptions().numWorkers;
-
-  return {distributionType, std::move(columns)};
+  return {DistributionType{}, std::move(columns)};
 }
 
 // Adds the costs in the input states to the first state and if 'distinct' is

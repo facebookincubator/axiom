@@ -219,8 +219,8 @@ std::pair<float, float> sampleJoin(
     const ExprVector& leftKeys,
     SchemaTableCP right,
     const ExprVector& rightKeys) {
-  const uint64_t leftRows = left->numRows();
-  const uint64_t rightRows = right->numRows();
+  const auto leftRows = left->cardinality;
+  const auto rightRows = right->cardinality;
 
   const auto leftCard = keyCardinality(leftKeys);
   const auto rightCard = keyCardinality(rightKeys);
