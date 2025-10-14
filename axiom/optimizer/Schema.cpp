@@ -371,8 +371,11 @@ bool Distribution::isSamePartition(const Distribution& other) const {
   if (distributionType != other.distributionType) {
     return false;
   }
-  if (isBroadcast || other.isBroadcast) {
+  if (isBroadcast) {
     return true;
+  }
+  if (other.isBroadcast) {
+    return false;
   }
   if (partition.size() != other.partition.size()) {
     return false;
