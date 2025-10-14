@@ -498,10 +498,12 @@ Unnest::Unnest(
     ExprVector replicateColumns,
     ExprVector unnestExprs,
     ColumnVector unnestedColumns)
-    : RelationOp{RelType::kUnnest, input, input->distribution(), concatColumns(replicateColumns, unnestedColumns)},
+    : RelationOp{RelType::kUnnest, std::move(input), concatColumns(replicateColumns, unnestedColumns)},
       replicateColumns{std::move(replicateColumns)},
       unnestExprs{std::move(unnestExprs)},
-      unnestedColumns{std::move(unnestedColumns)} {}
+      unnestedColumns{std::move(unnestedColumns)} {
+  cost_.inputCardinality = inputCardinality();
+}
 
 Aggregation::Aggregation(
     RelationOpPtr input,
