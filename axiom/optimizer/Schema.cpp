@@ -60,44 +60,15 @@ std::vector<ColumnCP> SchemaTable::toColumns(
 }
 
 ColumnGroupCP SchemaTable::addIndex(
-    const char* name,
-    int32_t numKeysUnique,
-    int32_t numOrdering,
-    const ColumnVector& keys,
-    DistributionType distributionType,
-    const ColumnVector& partition,
-    ColumnVector columnsVector,
-    const connector::TableLayout* layout) {
-  VELOX_CHECK_LE(numKeysUnique, keys.size());
-
-  Distribution distribution;
-  distribution.orderTypes.reserve(numOrdering);
-  for (auto i = 0; i < numOrdering; ++i) {
-    distribution.orderTypes.push_back(OrderType::kAscNullsFirst);
-  }
-  distribution.numKeysUnique = numKeysUnique;
-  appendToVector(distribution.orderKeys, keys);
-  distribution.distributionType = distributionType;
-  appendToVector(distribution.partition, partition);
-  VELOX_DCHECK_EQ(
-      distribution.orderKeys.size(), distribution.orderTypes.size());
-  columnGroups.push_back(make<ColumnGroup>(
-      name, this, std::move(distribution), std::move(columnsVector), layout));
-  return columnGroups.back();
+    const connector::TableLayout& layout,
+    Distribution distribution,
+    ColumnVector columns) {
+  return columnGroups.emplace_back(make<ColumnGroup>(
+      *this, layout, std::move(distribution), std::move(columns)));
 }
 
-ColumnCP SchemaTable::column(std::string_view name, const Value& value) {
-  auto it = columns.find(toName(name));
-  if (it != columns.end()) {
-    return it->second;
-  }
-  auto* column = make<Column>(toName(name), nullptr, value);
-  columns[toName(name)] = column;
-  return column;
-}
-
-ColumnCP SchemaTable::findColumn(std::string_view name) const {
-  auto it = columns.find(toName(name));
+ColumnCP SchemaTable::findColumn(Name name) const {
+  auto it = columns.find(name);
   VELOX_CHECK(it != columns.end(), "Column not found: {}", name);
   return it->second;
 }
@@ -123,29 +94,53 @@ SchemaTableCP Schema::findTable(
     return nullptr;
   }
 
-  auto* schemaTable = make<SchemaTable>(
-      internedName, connectorTable->type(), connectorTable->numRows());
-  schemaTable->connectorTable = connectorTable.get();
+  auto* schemaTable = make<SchemaTable>(*connectorTable, internedName);
+  auto& schemaColumns = schemaTable->columns;
 
-  ColumnVector columns;
-  for (const auto& [columnName, tableColumn] : connectorTable->columnMap()) {
+  auto& tableColumns = connectorTable->columnMap();
+  schemaColumns.reserve(tableColumns.size());
+  for (const auto& [columnName, tableColumn] : tableColumns) {
     const auto cardinality = static_cast<float>(tableColumn->approxNumDistinct(
         static_cast<int64_t>(connectorTable->numRows())));
     Value value(toType(tableColumn->type()), cardinality);
     auto* column = make<Column>(toName(columnName), nullptr, value);
-    schemaTable->columns[column->name()] = column;
-    columns.push_back(column);
+    schemaColumns[column->name()] = column;
   }
-  DistributionType defaultDistributionType;
-  schemaTable->addIndex(
-      toName("pk"),
-      0,
-      0,
-      {},
-      defaultDistributionType,
-      {},
-      std::move(columns),
-      connectorTable->layouts()[0]);
+
+  auto appendColumns = [&](const auto& from, auto& to) {
+    VELOX_DCHECK(to.empty());
+    to.reserve(from.size());
+    for (const auto* column : from) {
+      VELOX_CHECK_NOT_NULL(column);
+      const auto& name = column->name();
+      auto it = schemaColumns.find(toName(name));
+      VELOX_CHECK(it != schemaColumns.end(), "Column not found: {}", name);
+      to.push_back(it->second);
+    }
+  };
+
+  for (const auto* layout : connectorTable->layouts()) {
+    VELOX_CHECK_NOT_NULL(layout);
+    Distribution distribution;
+    appendColumns(layout->partitionColumns(), distribution.partition);
+    appendColumns(layout->orderColumns(), distribution.orderKeys);
+
+    distribution.orderTypes.reserve(distribution.orderKeys.size());
+    for (auto orderType : layout->sortOrder()) {
+      distribution.orderTypes.push_back(
+          orderType.isAscending
+              ? (orderType.isNullsFirst ? OrderType::kAscNullsFirst
+                                        : OrderType::kAscNullsLast)
+              : (orderType.isNullsFirst ? OrderType::kDescNullsFirst
+                                        : OrderType::kDescNullsLast));
+    }
+    VELOX_CHECK_EQ(
+        distribution.orderKeys.size(), distribution.orderTypes.size());
+
+    ColumnVector columns;
+    appendColumns(layout->columns(), columns);
+    schemaTable->addIndex(*layout, std::move(distribution), std::move(columns));
+  }
   table = {schemaTable, std::move(connectorTable)};
   return table.schemaTable;
 }

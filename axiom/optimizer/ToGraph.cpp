@@ -1293,10 +1293,11 @@ PlanObjectP ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
     VELOX_DCHECK_LT(i, type->size());
 
     const auto& name = names[i];
-    auto schemaColumn = schemaTable->findColumn(name);
+    auto* columnName = toName(name);
+    auto schemaColumn = schemaTable->findColumn(columnName);
     auto value = schemaColumn->value();
     auto* column = make<Column>(
-        toName(name),
+        columnName,
         baseTable,
         value,
         toName(type->nameOf(i)),

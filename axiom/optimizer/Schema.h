@@ -198,22 +198,19 @@ using SchemaTableCP = const SchemaTable*;
 /// of a table. A ColumnGroup may have a uniqueness constraint over a
 /// set of columns, a partitioning and an ordering plus a set of
 /// payload columns. An index is a ColumnGroup that may not have all
-/// columns but is organized to facilitate retrievel. We use the name
+/// columns but is organized to facilitate retrieval. We use the name
 /// index for ColumnGroup when using it for lookup.
 struct ColumnGroup {
   ColumnGroup(
-      Name name,
-      SchemaTableCP table,
+      const SchemaTable& table,
+      const connector::TableLayout& layout,
       Distribution distribution,
-      ColumnVector columns,
-      const connector::TableLayout* layout = nullptr)
-      : name{name},
-        table{table},
-        layout{layout},
+      ColumnVector columns)
+      : table{&table},
+        layout{&layout},
         distribution{std::move(distribution)},
         columns{std::move(columns)} {}
 
-  Name name;
   SchemaTableCP table;
   const connector::TableLayout* layout;
   const Distribution distribution;
@@ -272,25 +269,20 @@ float baseSelectivity(PlanObjectCP object);
 /// partitioned physical representations (ColumnGroups). Not all ColumnGroups
 /// (aka indices) need to contain all columns.
 struct SchemaTable {
-  SchemaTable(Name name, const velox::RowTypePtr& type, float cardinality)
-      : name{name}, type{&toType(type)->asRow()}, cardinality{cardinality} {}
+  explicit SchemaTable(const connector::Table& connectorTable, Name name)
+      : connectorTable{&connectorTable},
+        name{name},
+        cardinality{static_cast<float>(connectorTable.numRows())} {}
 
-  /// Adds an index. The arguments set the corresponding members of a
-  /// Distribution.
   ColumnGroupCP addIndex(
-      Name name,
-      int32_t numKeysUnique,
-      int32_t numOrdering,
-      const ColumnVector& keys,
-      DistributionType distributionType,
-      const ColumnVector& partition,
-      ColumnVector columns,
-      const connector::TableLayout* layout);
+      const connector::TableLayout& layout,
+      Distribution distribution,
+      ColumnVector columns);
 
   /// Finds or adds a column with 'name' and 'value'.
   ColumnCP column(std::string_view name, const Value& value);
 
-  ColumnCP findColumn(std::string_view name) const;
+  ColumnCP findColumn(Name name) const;
 
   int64_t numRows() const {
     return static_cast<int64_t>(columnGroups[0]->layout->table().numRows());
@@ -310,7 +302,6 @@ struct SchemaTable {
   std::vector<ColumnCP> toColumns(const std::vector<std::string>& names) const;
 
   const Name name;
-  const velox::RowType* type;
   const float cardinality;
 
   // Lookup from name to column.
