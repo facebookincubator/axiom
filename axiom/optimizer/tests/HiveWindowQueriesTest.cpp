@@ -398,16 +398,54 @@ TEST_F(HiveWindowQueriesTest, aggregate) {
   checkSame(logicalPlan, referencePlan);
 }
 
+TEST_F(HiveWindowQueriesTest, filters) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn",
+               "rank() over (partition by n_regionkey order by n_nationkey) as rnk"})
+          .filter("(rn + rnk > 5) and (rn > 2 or n_regionkey < 3)")
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    std::cerr << plan->toString(true, true) << std::endl;
+    // auto matcher = core::PlanMatcherBuilder()
+    //                    .tableScan("nation")
+    //                    .window()
+    //                    .project()
+    //                    .filter()
+    //                    .project()
+    //                    .build();
+    // ASSERT_TRUE(matcher->match(plan));
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn",
+               "rank() over (partition by n_regionkey order by n_nationkey) as rnk"})
+          .filter("(rn + rnk > 5) and (rn > 2 or n_regionkey < 3)")
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
 // TEST_F(HiveWindowQueriesTest, joinOn) {
 //   lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
 //   auto logicalPlan =
 //       lp::PlanBuilder(context)
 //           .tableScan("nation")
 //           .window(
-//               {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+//               {"row_number() over (partition by n_regionkey order by
+//               n_nationkey) as rn"})
 //           .join(
 //               lp::PlanBuilder(context).tableScan("nation").window(
-//                   {"row_number() over (partition by n_regionkey order by n_nationkey) as rn2"}),
+//                   {"row_number() over (partition by n_regionkey order by
+//                   n_nationkey) as rn2"}),
 //               "rn = rn2",
 //               lp::JoinType::kInner)
 //           .build();
@@ -432,14 +470,16 @@ TEST_F(HiveWindowQueriesTest, aggregate) {
 //       exec::test::PlanBuilder()
 //           .tableScan("nation", getSchema("nation"))
 //           .window(
-//               {"row_number() over (partition by n_regionkey order by n_nationkey) as rn2"})
+//               {"row_number() over (partition by n_regionkey order by
+//               n_nationkey) as rn2"})
 //           .planNode();
 
 //   auto referencePlan =
 //       exec::test::PlanBuilder()
 //           .tableScan("nation", getSchema("nation"))
 //           .window(
-//               {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+//               {"row_number() over (partition by n_regionkey order by
+//               n_nationkey) as rn"})
 //           .hashJoin({"rn"}, {"rn2"}, rightRef, "", {})
 //           .planNode();
 

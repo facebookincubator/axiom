@@ -903,6 +903,7 @@ const QGString& WindowOp::historyKey() const {
 }
 
 std::string WindowOp::toString(bool recursive, bool detail) const {
+  std::stringstream out;
   if (detail) {
     out << "Window (";
     out << "partition by: ";
@@ -930,7 +931,7 @@ std::string WindowOp::toString(bool recursive, bool detail) const {
   } else {
     out << "window " << windows.size() << " functions ";
   }
-  
+
   return out.str();
 }
 

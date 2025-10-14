@@ -19,7 +19,6 @@
 #include <folly/Range.h>
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/optimizer/DerivedTable.h"
-#include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/RelationOp.h"
 
 namespace facebook::axiom::optimizer {

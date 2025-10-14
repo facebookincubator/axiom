@@ -114,7 +114,8 @@ std::string conjunctsToString(const ExprVector& conjuncts) {
 
 class WindowsCollector {
  public:
-  using SpecToWindows = std::unordered_map<WindowSpec, WindowVector, WindowSpec::Hasher>;
+  using SpecToWindows =
+      std::unordered_map<WindowSpec, WindowVector, WindowSpec::Hasher>;
   SpecToWindows collect(const ExprVector& exprs) {
     for (const auto& expr : exprs) {
       collect(*expr);
@@ -124,6 +125,10 @@ class WindowsCollector {
 
  private:
   void collect(const Expr& expr) {
+    if (!expr.containsWindow()) {
+      return;
+    }
+
     if (expr.is(PlanType::kColumnExpr)) {
       return;
     }
@@ -134,8 +139,9 @@ class WindowsCollector {
     }
 
     expr.subexpressions().forEach([&](const PlanObject* subexpr) {
-      if (subexpr->isExpr()) {
-        collect(*subexpr->as<Expr>());
+      if (subexpr->is(PlanType::kWindowExpr)) {
+        const auto* window = subexpr->as<Window>();
+        specToWindows_[window->spec()].emplace_back(window);
       }
     });
   }
@@ -147,47 +153,41 @@ class WindowsCollector {
 ExprCP replaceWindows(
     ExprCP expr,
     const folly::F14FastMap<const Window*, ColumnCP>& windowToColumn) {
-  if (expr->is(PlanType::kColumnExpr)) {
-    return expr;
-  }
-
-  if (expr->is(PlanType::kWindowExpr)) {
-    auto it = windowToColumn.find(expr->as<Window>());
-    VELOX_CHECK(
-        it != windowToColumn.end(),
-        "Window expression not found in mapping");
-    return it->second;
-  }
-
-  // Recursively replace in subexpressions
-  ExprVector newArgs;
-  bool changed = false;
-  expr->subexpressions().forEach([&](const PlanObject* subexpr) {
-    if (subexpr->isExpr()) {
-      auto newExpr = replaceWindows(subexpr->as<Expr>(), windowToColumn);
-      newArgs.push_back(newExpr);
-      if (newExpr != subexpr) {
-        changed = true;
-      }
+  switch (expr->type()) {
+    case PlanType::kColumnExpr:
+      return expr;
+    case PlanType::kLiteralExpr:
+      return expr;
+    case PlanType::kWindowExpr: {
+      auto it = windowToColumn.find(expr->as<Window>());
+      VELOX_CHECK(
+          it != windowToColumn.end(), "Window expression not found in mapping");
+      return it->second;
     }
-  });
+    case PlanType::kCallExpr: {
+      auto children = expr->children();
+      ExprVector newChildren(children.size());
+      FunctionSet functions;
+      bool anyChange = false;
+      for (auto i = 0; i < children.size(); ++i) {
+        newChildren[i] = replaceWindows(children[i]->as<Expr>(), windowToColumn);
+        anyChange |= newChildren[i] != children[i];
+        if (newChildren[i]->isFunction()) {
+          functions = functions | newChildren[i]->as<Call>()->functions();
+        }
+      }
 
-  if (!changed) {
-    return expr;
+      if (!anyChange) {
+        return expr;
+      }
+
+      const auto* call = expr->as<Call>();
+      return make<Call>(
+          call->name(), call->value(), std::move(newChildren), functions);
+    }
+    default:
+      VELOX_UNREACHABLE("{}", expr->toString());
   }
-
-  if (expr->is(PlanType::kCallExpr)) {
-    const auto* call = expr->as<Call>();
-    return make<Call>(
-        call->name(),
-        call->value(),
-        std::move(newArgs),
-        call->functions());
-  }
-
-  // For other expression types, return the original
-  // (they shouldn't contain Window expressions in practice)
-  return expr;
 }
 
 RelationOpPtr makeProjectWithWindows(
@@ -207,12 +207,9 @@ RelationOpPtr makeProjectWithWindows(
 
   ColumnVector allColumns = result->columns();
   for (auto&& [spec, windows] : specToWindows) {
-
     for (const auto* window : windows) {
       auto* windowColumn = make<Column>(
-          toName(fmt::format("__window{}", window->id())),
-          dt,
-          window->value());
+          toName(fmt::format("__window{}", window->id())), dt, window->value());
 
       allColumns.push_back(windowColumn);
       windowToColumn[window] = windowColumn;

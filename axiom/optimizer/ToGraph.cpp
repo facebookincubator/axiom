@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <optimizer/PlanObject.h>
 #include <velox/common/base/Exceptions.h>
 #include <algorithm>
 #include <iostream>
@@ -724,7 +725,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       args.emplace_back(arg);
       allConstant &= arg->is(PlanType::kLiteralExpr);
       cardinality = std::max(cardinality, arg->value().cardinality);
-      if (arg->is(PlanType::kCallExpr)) {
+      if (arg->is(PlanType::kCallExpr) || arg->is(PlanType::kWindowExpr)) {
         funcs = funcs | arg->as<Call>()->functions();
       }
     }

@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 #include "axiom/optimizer/DerivedTable.h"
+#include <iostream>
+#include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
-#include "axiom/optimizer/DerivedTablePrinter.h"
-#include <iostream>
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -706,7 +706,7 @@ void DerivedTable::distributeConjuncts() {
   for (auto i = 0; i < conjuncts.size(); ++i) {
     // No pushdown of non-deterministic except if only pushdown target is a
     // union all.
-    if (conjuncts[i]->containsNonDeterministic() && !allowNondeterministic) {
+    if (conjuncts[i]->containsWindow() || conjuncts[i]->containsNonDeterministic() && !allowNondeterministic) {
       continue;
     }
     PlanObjectSet tableSet = conjuncts[i]->allTables();
@@ -980,7 +980,8 @@ void DerivedTable::makeInitialPlan() {
   PlanState state(*optimization, this);
   state.targetExprs.unionObjects(exprs);
 
-  std::cout << "DerivedTable structure:\n" << DerivedTablePrinter::toText(*this) << "\n";
+  std::cout << "DerivedTable structure:\n"
+            << DerivedTablePrinter::toText(*this) << "\n";
 
   optimization->makeJoins(state);
 

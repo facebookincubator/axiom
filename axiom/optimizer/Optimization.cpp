@@ -18,12 +18,12 @@
 #include <algorithm>
 #include <iostream>
 #include <utility>
-#include "axiom/optimizer/PlanUtils.h"
-#include "axiom/optimizer/QueryGraph.h"
-#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
 
@@ -761,7 +761,8 @@ void Optimization::addPostprocess(
         maybeDropProject(plan),
         usedExprs,
         usedColumns,
-        isRedundantProject(plan, usedExprs, usedColumns));
+        isRedundantProject(plan, usedExprs, usedColumns),
+        dt);
   }
 
   if (!dt->hasOrderBy() && dt->limit > kMaxLimitBeforeProject) {
@@ -1481,9 +1482,15 @@ bool Optimization::placeConjuncts(
     for (auto& filter : filters) {
       state.placed.add(filter);
     }
-    auto* filter = make<Filter>(plan, std::move(filters));
-    state.addCost(*filter);
-    makeJoins(filter, state);
+
+    PrecomputeProjection precompute(plan, state.dt, true);
+    auto windowDependingColumns = precompute.toColumns(filters);
+    plan = make<Filter>(
+        std::move(precompute).maybeProject(),
+        std::move(windowDependingColumns));
+    state.addCost(*plan);
+
+    makeJoins(plan, state);
     return true;
   }
   return false;

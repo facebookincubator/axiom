@@ -66,6 +66,11 @@ class Expr : public PlanObject {
     return containsFunction(FunctionSet::kNonDeterministic);
   }
 
+  // whether function contains window exprs or not
+  bool containsWindow() const {
+    return containsFunction(FunctionSet::kWindow);
+  }
+
   /// True if 'this' contains any function from 'set'. See FunctionSet.
   virtual bool containsFunction(uint64_t /*set*/) const {
     return false;
@@ -931,7 +936,12 @@ class Window : public Call {
       WindowSpec spec,
       WindowFrame frame,
       bool ignoreNulls)
-      : Call(PlanType::kWindowExpr, name, value, std::move(args), functions),
+      : Call(
+            PlanType::kWindowExpr,
+            name,
+            value,
+            std::move(args),
+            functions | FunctionSet::kWindow),
         spec_(std::move(spec)),
         frame_(std::move(frame)),
         ignoreNulls_(ignoreNulls) {
@@ -941,7 +951,7 @@ class Window : public Call {
     if (frame_.startValue) {
       columns_.unionColumns(frame_.startValue);
     }
-    
+
     if (frame_.endValue) {
       columns_.unionColumns(frame_.endValue);
     }
