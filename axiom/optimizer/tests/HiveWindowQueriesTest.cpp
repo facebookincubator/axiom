@@ -478,5 +478,55 @@ TEST_F(HiveWindowQueriesTest, joinOn) {
   checkSame(logicalPlan, referencePlan);
 }
 
+TEST_F(HiveWindowQueriesTest, joinDependent) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .as("n1")
+          .join(
+              lp::PlanBuilder(context).tableScan("region").as("r1"),
+              "n1.n_regionkey = r1.r_regionkey",
+              lp::JoinType::kInner)
+          .window(
+              {"row_number() over (partition by r1.r_regionkey order by n1.n_nationkey) as rn1",
+               "rank() over (partition by n1.n_nationkey order by r1.r_name) as rn2"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .hashJoin(core::PlanMatcherBuilder()
+                                     .tableScan("region")
+                                     .build())
+                       .window()
+                       .window()
+                       .project()
+                       .build();
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto referencePlan =
+      exec::test::PlanBuilder(planNodeIdGenerator)
+          .tableScan("nation", getSchema("nation"))
+          .hashJoin(
+              {"n_regionkey"},
+              {"r_regionkey"},
+              exec::test::PlanBuilder(planNodeIdGenerator)
+                  .tableScan("region", getSchema("region"))
+                  .planNode(),
+              "",
+              {})
+          .window(
+              {"row_number() over (partition by r_regionkey order by n_nationkey) as rn1"})
+          .window(
+              {"rank() over (partition by n_nationkey order by r_name) as rn2"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

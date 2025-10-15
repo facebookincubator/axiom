@@ -197,6 +197,9 @@ RelationOpPtr addWindowOps(
     std::span<ExprCP> maybeWindowDependentExprs,
     PlanState& state) {
   auto specToWindows = WindowsCollector().collect(maybeWindowDependentExprs);
+  if (specToWindows.empty()) {
+    return input;
+  }
   RelationOpPtr result = std::move(input);
   folly::F14FastMap<const Window*, ColumnCP> windowToColumn;
 
