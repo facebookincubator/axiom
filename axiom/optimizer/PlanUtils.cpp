@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/PlanUtils.h"
 #include <folly/container/F14Map.h>
+#include <optimizer/Plan.h>
 #include <optimizer/PlanObject.h>
 #include <optimizer/QueryGraphContext.h>
 #include <algorithm>
@@ -116,7 +117,7 @@ class WindowsCollector {
  public:
   using SpecToWindows =
       std::unordered_map<WindowSpec, WindowVector, WindowSpec::Hasher>;
-  SpecToWindows collect(const ExprVector& exprs) {
+  SpecToWindows collect(std::span<const ExprCP> exprs) {
     for (const auto& expr : exprs) {
       collect(*expr);
     }
@@ -170,7 +171,8 @@ ExprCP replaceWindows(
       FunctionSet functions;
       bool anyChange = false;
       for (auto i = 0; i < children.size(); ++i) {
-        newChildren[i] = replaceWindows(children[i]->as<Expr>(), windowToColumn);
+        newChildren[i] =
+            replaceWindows(children[i]->as<Expr>(), windowToColumn);
         anyChange |= newChildren[i] != children[i];
         if (newChildren[i]->isFunction()) {
           functions = functions | newChildren[i]->as<Call>()->functions();
@@ -190,29 +192,23 @@ ExprCP replaceWindows(
   }
 }
 
-RelationOpPtr makeProjectWithWindows(
+RelationOpPtr addWindowOps(
     RelationOpPtr input,
-    ExprVector projectExprs,
-    ColumnVector projectColumns,
-    bool isRedundant,
-    DerivedTableCP dt) {
-  auto specToWindows = WindowsCollector().collect(projectExprs);
-
-  if (specToWindows.empty()) {
-    return make<Project>(input, projectExprs, projectColumns, isRedundant);
-  }
-
-  RelationOpPtr result = input;
+    std::span<ExprCP> maybeWindowDependentExprs,
+    PlanState& state) {
+  auto specToWindows = WindowsCollector().collect(maybeWindowDependentExprs);
+  RelationOpPtr result = std::move(input);
   folly::F14FastMap<const Window*, ColumnCP> windowToColumn;
 
   ColumnVector allColumns = result->columns();
   for (auto&& [spec, windows] : specToWindows) {
     for (const auto* window : windows) {
       auto* windowColumn = make<Column>(
-          toName(fmt::format("__window{}", window->id())), dt, window->value());
+          toName(fmt::format("__p{}", window->id())), state.dt, window->value());
 
       allColumns.push_back(windowColumn);
       windowToColumn[window] = windowColumn;
+      state.exprToColumn[window] = windowColumn;
     }
 
     auto* windowOp = make<WindowOp>(
@@ -226,15 +222,11 @@ RelationOpPtr makeProjectWithWindows(
     result = windowOp;
   }
 
-  // Replace Window expressions with their corresponding columns
-  ExprVector replacedExprs;
-  replacedExprs.reserve(projectExprs.size());
-  for (const auto* expr : projectExprs) {
-    replacedExprs.emplace_back(replaceWindows(expr, windowToColumn));
+  for (auto& expr : maybeWindowDependentExprs) {
+    expr = replaceWindows(expr, windowToColumn);
   }
 
-  return make<Project>(
-      result, std::move(replacedExprs), projectColumns, isRedundant);
+  return result;
 }
 
 std::string orderByToString(

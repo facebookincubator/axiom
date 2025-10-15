@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/container/F14Map.h>
+#include <optimizer/Plan.h>
 #include <optimizer/PlanObject.h>
 #include <optimizer/QueryGraph.h>
 #include "axiom/optimizer/DerivedTable.h"
@@ -99,9 +100,14 @@ class PrecomputeProjection {
       bool preserveLiterals = false);
 
   /// @returns the original 'input' with an optional ProjectOp on top.
-  RelationOpPtr maybeProject() && {
+  RelationOpPtr maybeProject(PlanState& state) && {
     if (needsProject_) {
-      return makeProjectWithWindows(input_, projectExprs_, projectColumns_, /*redundant=*/false, dt_);
+      auto result = addWindowOps(input_, projectExprs_, state);
+      return make<Project>(
+          std::move(result),
+          std::move(projectExprs_),
+          std::move(projectColumns_),
+          /*redundant=*/false);
     }
 
     return input_;

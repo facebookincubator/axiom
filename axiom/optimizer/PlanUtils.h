@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/Range.h>
+#include <optimizer/Plan.h>
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/RelationOp.h"
@@ -109,16 +110,10 @@ std::optional<int64_t> maybeIntegerLiteral(
 
 std::string conjunctsToString(const ExprVector& conjuncts);
 
-/// Creates project node above WindowOps and WindowOps also nodes
-/// depending on whether the expressions contain window functions.
-/// Groups window functions by their window specification and creates a
-/// WindowOp for each unique specification.
-RelationOpPtr makeProjectWithWindows(
+RelationOpPtr addWindowOps(
     RelationOpPtr input,
-    ExprVector projectExprs,
-    ColumnVector projectColumns,
-    bool isRedundant,
-    DerivedTableCP dt);
+    std::span<ExprCP> maybeWindowDependentExprs,
+    PlanState& state);
 
 std::string orderByToString(
     const ExprVector& orderKeys,

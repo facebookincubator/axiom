@@ -706,13 +706,17 @@ void DerivedTable::distributeConjuncts() {
   for (auto i = 0; i < conjuncts.size(); ++i) {
     // No pushdown of non-deterministic except if only pushdown target is a
     // union all.
-    if (conjuncts[i]->containsWindow() || conjuncts[i]->containsNonDeterministic() && !allowNondeterministic) {
+    if (conjuncts[i]->containsNonDeterministic() && !allowNondeterministic) {
       continue;
     }
     PlanObjectSet tableSet = conjuncts[i]->allTables();
     std::vector<PlanObjectP> tables;
     tableSet.forEachMutable([&](auto table) { tables.push_back(table); });
     if (tables.size() == 1) {
+      if (conjuncts[i]->containsWindow()) {
+        continue;
+      }
+
       if (tables[0] == this) {
         continue; // the conjunct depends on containing dt, like grouping or
                   // existence flags. Leave in place.

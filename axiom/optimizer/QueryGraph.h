@@ -646,6 +646,14 @@ class JoinEdge {
   /// before left.
   std::pair<std::string, bool> sampleKey() const;
 
+  bool isWindowDependent() const {
+    auto isWindowDependent = [](const ExprCP& expr) {
+      return expr->containsWindow();
+    };
+    return std::ranges::any_of(leftKeys_, isWindowDependent) ||
+        std::ranges::any_of(rightKeys_, isWindowDependent);
+  }
+
  private:
   // Leading left side join keys.
   ExprVector leftKeys_;

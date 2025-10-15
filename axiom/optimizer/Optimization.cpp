@@ -17,6 +17,7 @@
 #include "axiom/optimizer/Optimization.h"
 #include <algorithm>
 #include <iostream>
+#include <span>
 #include <utility>
 #include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Plan.h"
@@ -716,7 +717,7 @@ void Optimization::addPostprocess(
     VELOX_DCHECK(!dt->hasLimit());
     PrecomputeProjection precompute{plan, dt, /*projectAllInputs=*/false};
     auto writeColumns = precompute.toColumns(dt->write->columnExprs());
-    plan = std::move(precompute).maybeProject();
+    plan = std::move(precompute).maybeProject(state);
     state.addCost(*plan);
     // Because table write will be in every plan and it will be root node,
     // it would not affect the choice of plan.
@@ -757,12 +758,12 @@ void Optimization::addPostprocess(
       }
     }
 
-    plan = makeProjectWithWindows(
+    plan = addWindowOps(std::move(plan), usedExprs, state);
+    plan = make<Project>(
         maybeDropProject(plan),
         usedExprs,
         usedColumns,
-        isRedundantProject(plan, usedExprs, usedColumns),
-        dt);
+        isRedundantProject(plan, usedExprs, usedColumns));
   }
 
   if (!dt->hasOrderBy() && dt->limit > kMaxLimitBeforeProject) {
@@ -805,7 +806,7 @@ void Optimization::addAggregation(
         agg->orderTypes()));
   }
 
-  plan = std::move(precompute).maybeProject();
+  plan = std::move(precompute).maybeProject(state);
 
   if (isSingleWorker_ && runnerOptions_.numDrivers == 1) {
     auto* singleAgg = make<Aggregation>(
@@ -871,7 +872,7 @@ void Optimization::addOrderBy(
   }
 
   auto* orderBy = make<OrderBy>(
-      std::move(precompute).maybeProject(),
+      std::move(precompute).maybeProject(state),
       std::move(orderKeys),
       dt->orderTypes,
       dt->limit,
@@ -1045,7 +1046,7 @@ void Optimization::joinByHash(
 
   PrecomputeProjection precomputeBuild(buildInput, state.dt);
   auto buildKeys = precomputeBuild.toColumns(build.keys);
-  buildInput = std::move(precomputeBuild).maybeProject();
+  buildInput = std::move(precomputeBuild).maybeProject(state);
 
   auto* buildOp =
       make<HashBuild>(buildInput, ++buildCounter_, build.keys, buildPlan);
@@ -1090,7 +1091,7 @@ void Optimization::joinByHash(
 
   PrecomputeProjection precomputeProbe(probeInput, state.dt);
   auto probeKeys = precomputeProbe.toColumns(probe.keys);
-  probeInput = std::move(precomputeProbe).maybeProject();
+  probeInput = std::move(precomputeProbe).maybeProject(state);
 
   auto* join = make<Join>(
       JoinMethod::kHash,
@@ -1165,7 +1166,7 @@ void Optimization::joinByHashRight(
 
   PrecomputeProjection precomputeBuild(buildInput, state.dt);
   auto buildKeys = precomputeBuild.toColumns(build.keys);
-  buildInput = std::move(precomputeBuild).maybeProject();
+  buildInput = std::move(precomputeBuild).maybeProject(state);
 
   auto* buildOp =
       make<HashBuild>(buildInput, ++buildCounter_, build.keys, nullptr);
@@ -1220,7 +1221,7 @@ void Optimization::joinByHashRight(
 
   PrecomputeProjection precomputeProbe(probeInput, state.dt);
   auto probeKeys = precomputeProbe.toColumns(probe.keys);
-  probeInput = std::move(precomputeProbe).maybeProject();
+  probeInput = std::move(precomputeProbe).maybeProject(state);
 
   auto* join = make<Join>(
       JoinMethod::kHash,
@@ -1275,7 +1276,7 @@ void Optimization::crossJoinUnnest(
     // because we can have multiple unnest joins in single JoinCandidate.
 
     auto unnestColumns = precompute.toColumns(unnestExprs);
-    plan = std::move(precompute).maybeProject();
+    plan = std::move(precompute).maybeProject(state);
 
     plan = make<Unnest>(
         std::move(plan),
@@ -1483,11 +1484,8 @@ bool Optimization::placeConjuncts(
       state.placed.add(filter);
     }
 
-    PrecomputeProjection precompute(plan, state.dt, true);
-    auto windowDependingColumns = precompute.toColumns(filters);
-    plan = make<Filter>(
-        std::move(precompute).maybeProject(),
-        std::move(windowDependingColumns));
+    plan = addWindowOps(std::move(plan), filters, state);
+    plan = make<Filter>(std::move(plan), std::move(filters));
     state.addCost(*plan);
 
     makeJoins(plan, state);

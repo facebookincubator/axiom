@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/QueryGraph.h"
+#include <algorithm>
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -270,7 +271,7 @@ void JoinEdge::addEquality(ExprCP left, ExprCP right, bool update) {
 
 std::pair<std::string, bool> JoinEdge::sampleKey() const {
   if (!leftTable_ || leftTable_->isNot(PlanType::kTableNode) ||
-      rightTable_->isNot(PlanType::kTableNode)) {
+      rightTable_->isNot(PlanType::kTableNode) || isWindowDependent()) {
     return std::make_pair("", false);
   }
   auto* opt = queryCtx()->optimization();
@@ -526,7 +527,8 @@ size_t WindowSpec::Hasher::operator()(const WindowSpec& spec) const {
     hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(key));
   }
   for (const auto& type : spec.orderTypes) {
-    hash = velox::bits::hashMix(hash, folly::hasher<int>()(static_cast<int>(type)));
+    hash = velox::bits::hashMix(
+        hash, folly::hasher<int>()(static_cast<int>(type)));
   }
   return hash;
 }

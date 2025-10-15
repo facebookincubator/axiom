@@ -411,15 +411,13 @@ TEST_F(HiveWindowQueriesTest, filters) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    std::cerr << plan->toString(true, true) << std::endl;
-    // auto matcher = core::PlanMatcherBuilder()
-    //                    .tableScan("nation")
-    //                    .window()
-    //                    .project()
-    //                    .filter()
-    //                    .project()
-    //                    .build();
-    // ASSERT_TRUE(matcher->match(plan));
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .filter()
+                       .project()
+                       .build();
+    ASSERT_TRUE(matcher->match(plan));
   }
 
   auto referencePlan =
@@ -434,57 +432,51 @@ TEST_F(HiveWindowQueriesTest, filters) {
   checkSame(logicalPlan, referencePlan);
 }
 
-// TEST_F(HiveWindowQueriesTest, joinOn) {
-//   lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
-//   auto logicalPlan =
-//       lp::PlanBuilder(context)
-//           .tableScan("nation")
-//           .window(
-//               {"row_number() over (partition by n_regionkey order by
-//               n_nationkey) as rn"})
-//           .join(
-//               lp::PlanBuilder(context).tableScan("nation").window(
-//                   {"row_number() over (partition by n_regionkey order by
-//                   n_nationkey) as rn2"}),
-//               "rn = rn2",
-//               lp::JoinType::kInner)
-//           .build();
+TEST_F(HiveWindowQueriesTest, joinOn) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"}).as("n1")
+          .join(
+              lp::PlanBuilder(context).tableScan("nation").window(
+                  {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"}).as("n2"),
+              "n1.rn = n2.rn",
+              lp::JoinType::kInner)
+          .build();
 
-//   {
-//     auto plan = toSingleNodePlan(logicalPlan);
-//     auto matcher = core::PlanMatcherBuilder()
-//                        .tableScan("nation")
-//                        .window()
-//                        .project()
-//                        .hashJoin(
-//                            core::PlanMatcherBuilder()
-//                                .tableScan("nation")
-//                                .window()
-//                                .project()
-//                                .build())
-//                        .build();
-//     ASSERT_TRUE(matcher->match(plan));
-//   }
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    std::cerr << plan->toString(true, true) << std::endl;
+    // auto matcher = core::PlanMatcherBuilder()
+    //                    .tableScan("nation")
+    //                    .window()
+    //                    .project()
+    //                    .hashJoin(core::PlanMatcherBuilder()
+    //                                  .tableScan("nation")
+    //                                  .window()
+    //                                  .project()
+    //                                  .build())
+    //                    .build();
+    // ASSERT_TRUE(matcher->match(plan));
+  }
 
-//   auto rightRef =
-//       exec::test::PlanBuilder()
-//           .tableScan("nation", getSchema("nation"))
-//           .window(
-//               {"row_number() over (partition by n_regionkey order by
-//               n_nationkey) as rn2"})
-//           .planNode();
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto referencePlan =
+      exec::test::PlanBuilder(planNodeIdGenerator)
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .hashJoin({"rn"}, {"rn2"}, exec::test::PlanBuilder(planNodeIdGenerator)
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn2"})
+          .planNode(), "", {})
+          .planNode();
 
-//   auto referencePlan =
-//       exec::test::PlanBuilder()
-//           .tableScan("nation", getSchema("nation"))
-//           .window(
-//               {"row_number() over (partition by n_regionkey order by
-//               n_nationkey) as rn"})
-//           .hashJoin({"rn"}, {"rn2"}, rightRef, "", {})
-//           .planNode();
-
-//   checkSame(logicalPlan, referencePlan);
-// }
+  checkSame(logicalPlan, referencePlan);
+}
 
 } // namespace
 } // namespace facebook::axiom::optimizer
