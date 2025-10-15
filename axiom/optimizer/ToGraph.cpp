@@ -1496,10 +1496,8 @@ PlanObjectP ToGraph::addLimit(const lp::LimitNode& limitNode) {
 }
 
 PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
-  const auto writeKind =
-      static_cast<connector::WriteKind>(tableWrite.writeKind());
-  if (writeKind != connector::WriteKind::kInsert &&
-      writeKind != connector::WriteKind::kCreate) {
+  const auto writeKind = tableWrite.writeKind();
+  if (writeKind != WriteKind::kInsert && writeKind != WriteKind::kCreate) {
     VELOX_NYI("Only INSERT supported for TableWrite");
   }
   VELOX_CHECK_NULL(
