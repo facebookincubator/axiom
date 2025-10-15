@@ -102,11 +102,8 @@ ColumnCP SchemaTable::findColumn(std::string_view name) const {
   return it->second;
 }
 
-Schema::Schema(
-    const char* name,
-    connector::SchemaResolver* source,
-    LocusCP locus)
-    : name_{name}, source_{source}, defaultLocus_{locus} {}
+Schema::Schema(Name name, connector::SchemaResolver* source)
+    : name_{name}, source_{source} {}
 
 SchemaTableCP Schema::findTable(
     std::string_view connectorId,
@@ -140,7 +137,6 @@ SchemaTableCP Schema::findTable(
     columns.push_back(column);
   }
   DistributionType defaultDistributionType;
-  defaultDistributionType.locus = defaultLocus_;
   schemaTable->addIndex(
       toName("pk"),
       0,

@@ -79,45 +79,6 @@ AXIOM_DECLARE_ENUM_NAME(OrderType);
 
 using OrderTypeVector = QGVector<OrderType>;
 
-/// Represents a system that contains or produces data. For cases of federation
-/// where data is only accessible via a specific instance of a specific type of
-/// system, the locus represents the instance and the subclass of Locus
-/// represents the type of system for a schema object. For a RelationOp, the
-/// locus of its distribution means that the op is performed by the
-/// corresponding system. Distributions can be copartitioned only if their locus
-/// is equal (==) to the other locus. A Locus is referenced by raw pointer and
-/// may be allocated from outside the optimization arena. It is immutable and
-/// lives past the optimizer arena.
-class Locus {
- public:
-  explicit Locus(Name name, velox::connector::Connector* connector)
-      : name_(name), connector_(connector) {}
-
-  virtual ~Locus() = default;
-
-  Name name() const {
-    // Make sure the name is in the current optimization
-    // arena. 'this' may live across several arenas.
-    return toName(name_);
-  }
-
-  const velox::connector::Connector* connector() const {
-    // // 'connector_' can be nullptr if no executable plans are made.
-    VELOX_CHECK_NOT_NULL(connector_);
-    return connector_;
-  }
-
-  std::string toString() const {
-    return name_;
-  }
-
- private:
-  const Name name_;
-  const velox::connector::Connector* connector_;
-};
-
-using LocusCP = const Locus*;
-
 /// Method for determining a partition given an ordered list of partitioning
 /// keys. Hive hash is an example, range partitioning is another. Add values
 /// here for more types.
@@ -132,7 +93,6 @@ enum class ShuffleMode : uint8_t {
 struct DistributionType {
   bool operator==(const DistributionType& other) const = default;
 
-  LocusCP locus{nullptr};
   int32_t numPartitions{1};
   bool isGather{false};
   ShuffleMode mode{ShuffleMode::kNone};
@@ -371,11 +331,11 @@ struct SchemaTable {
 /// optimization arena.  Objects of different catalogs/schemas get
 /// added to 'this' on first use. The Schema feeds from a
 /// SchemaResolver which interfaces to a local/remote metadata
-/// repository. The objects have a default Locus for convenience.
+/// repository.
 class Schema {
  public:
   /// Constructs a Schema for producing executable plans, backed by 'source'.
-  Schema(Name name, connector::SchemaResolver* source, LocusCP locus);
+  Schema(Name name, connector::SchemaResolver* source);
 
   /// Returns the table with 'name' or nullptr if not found, using
   /// the connector specified by connectorId to perform table lookups.
@@ -399,7 +359,6 @@ class Schema {
   // schema table (optimizer object) and connector table (connector object).
   mutable NameMap<NameMap<Table>> connectorTables_;
   connector::SchemaResolver* source_{nullptr};
-  LocusCP defaultLocus_;
 };
 
 using SchemaP = Schema*;

@@ -497,10 +497,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       optimizer::queryCtx() = nullptr;
     };
 
-    // The default Locus for planning is the system and data of
-    // 'connector_'.
-    optimizer::Locus locus(connector_->connectorId().c_str(), connector_.get());
-    optimizer::Schema veraxSchema("test", schema_.get(), &locus);
+    optimizer::Schema veraxSchema("test", schema_.get());
     exec::SimpleExpressionEvaluator evaluator(
         queryCtx.get(), optimizerPool_.get());
 

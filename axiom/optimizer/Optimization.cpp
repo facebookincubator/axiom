@@ -76,7 +76,7 @@ PlanAndStats Optimization::toVeloxPlan(
 
   VeloxHistory history;
 
-  Schema schema("default", schemaResolver.get(), /* locus */ nullptr);
+  Schema schema("default", schemaResolver.get());
 
   auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
 
@@ -479,9 +479,7 @@ bool isIndexColocated(
     const ExprVector& lookupValues,
     const RelationOpPtr& input) {
   const auto& distribution = info.index->distribution;
-  if (distribution.isBroadcast &&
-      input->distribution().distributionType.locus ==
-          distribution.distributionType.locus) {
+  if (distribution.isBroadcast) {
     return true;
   }
 
@@ -1550,7 +1548,6 @@ Distribution somePartition(const RelationOpPtrVector& inputs) {
   DistributionType distributionType;
   distributionType.numPartitions =
       queryCtx()->optimization()->runnerOptions().numWorkers;
-  distributionType.locus = firstInput->distribution().distributionType.locus;
 
   return {distributionType, std::move(columns)};
 }
