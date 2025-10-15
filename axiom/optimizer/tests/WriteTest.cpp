@@ -56,8 +56,7 @@ class WriteTest : public test::HiveQueriesTestBase {
 
     auto session = std::make_shared<connector::ConnectorSession>("test");
     auto table = metadata_->createTable(session, name, tableType, options);
-    auto handle =
-        metadata_->beginWrite(session, table, connector::WriteKind::kCreate);
+    auto handle = metadata_->beginWrite(session, table, WriteKind::kCreate);
     metadata_->finishWrite(session, handle, {}).get();
   }
 
@@ -213,7 +212,7 @@ TEST_F(WriteTest, basic) {
                        .tableWrite(
                            exec::test::kHiveConnectorId,
                            "test",
-                           lp::WriteKind::kInsert,
+                           WriteKind::kInsert,
                            {"key1", "key2", "data", "ds"},
                            {"key1", "key2", "data", "ds"})
                        .build();
@@ -236,7 +235,7 @@ TEST_F(WriteTest, basic) {
                        .tableWrite(
                            exec::test::kHiveConnectorId,
                            "test",
-                           lp::WriteKind::kInsert,
+                           WriteKind::kInsert,
                            {"key1", "key2", "data", "ds"},
                            {"key1", "key2", "key1 % (key1 - 200000)", "ds"})
                        .build();
@@ -269,7 +268,7 @@ TEST_F(WriteTest, basic) {
                       .tableWrite(
                           exec::test::kHiveConnectorId,
                           "test2",
-                          lp::WriteKind::kInsert,
+                          WriteKind::kInsert,
                           {"key1", "key2", "data", "data2", "ds"},
                           {"key1", "key2", "data", "data2", "ds"})
                       .build();

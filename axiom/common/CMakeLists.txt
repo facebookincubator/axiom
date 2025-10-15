@@ -12,6 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_common Session.cpp)
+add_library(axiom_common Session.cpp WriteKind.cpp)
 
 target_link_libraries(axiom_common axiom_connectors)

@@ -17,8 +17,8 @@
 #include "axiom/connectors/ConnectorMetadata.h"
 
 namespace facebook::axiom::connector {
-
 namespace {
+
 const auto& tableKindNames() {
   static const folly::F14FastMap<TableKind, std::string_view> kNames = {
       {TableKind::kTable, "TABLE"},
@@ -27,21 +27,9 @@ const auto& tableKindNames() {
   return kNames;
 }
 
-const auto& writeKindNames() {
-  static const folly::F14FastMap<WriteKind, std::string_view> kNames = {
-      {WriteKind::kCreate, "CREATE"},
-      {WriteKind::kInsert, "INSERT"},
-      {WriteKind::kUpdate, "UPDATE"},
-      {WriteKind::kDelete, "DELETE"},
-  };
-  return kNames;
-}
-
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(TableKind, tableKindNames);
-
-AXIOM_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 
 namespace {
 velox::RowTypePtr makeRowType(const std::vector<const Column*>& columns) {
