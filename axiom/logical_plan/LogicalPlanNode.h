@@ -16,6 +16,7 @@
 #pragma once
 
 #include "axiom/common/Enums.h"
+#include "axiom/common/WriteKind.h"
 #include "axiom/logical_plan/Expr.h"
 #include "velox/type/Variant.h"
 #include "velox/vector/ComplexVector.h"
@@ -667,32 +668,6 @@ class UnnestNode : public LogicalPlanNode {
 
 using UnnestNodePtr = std::shared_ptr<const UnnestNode>;
 
-/// Specifies what type of write is intended when initiating or concluding a
-/// write operation.
-enum class WriteKind {
-  // A write operation to a new table which does not yet exist in the connector.
-  // Covers both creation of an empty table and create as select operations.
-  kCreate = 1,
-
-  // Rows are added and all columns must be specified for the TableWriter.
-  // Covers insert, Hive partition replacement or any other operation which adds
-  // whole rows.
-  kInsert = 2,
-
-  // Individual rows are deleted. Only row ids as per
-  // ConnectorMetadata::rowIdHandles() are passed to the TableWriter.
-  kDelete = 3,
-
-  // Column values in individual rows are changed. The TableWriter
-  // gets first the row ids as per ConnectorMetadata::rowIdHandles()
-  // and then new values for the columns being changed. The new values
-  // may overlap with row ids if the row id is a set of primary key
-  // columns.
-  kUpdate = 4,
-};
-
-AXIOM_DECLARE_ENUM_NAME(WriteKind);
-
 /// Implements create/insert/delete/update as per 'writeKind'.
 ///
 /// The output schema contains a single BIGINT column named 'rows'. The value of
@@ -764,5 +739,3 @@ class TableWriteNode : public LogicalPlanNode {
 using TableWriteNodePtr = std::shared_ptr<const TableWriteNode>;
 
 } // namespace facebook::axiom::logical_plan
-
-AXIOM_ENUM_FORMATTER(facebook::axiom::logical_plan::WriteKind);
