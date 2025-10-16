@@ -128,9 +128,9 @@ Call::Call(PlanType type, Name name, const Value& value, ExprVector args)
     columns_.unionSet(arg->columns());
     subexpressions_.unionSet(arg->subexpressions());
     subexpressions_.add(arg);
+    functions_ |= availableFunctions(arg);
   }
 
-  functions_ |= availableFunctions(args_);
 }
 
 std::string Call::toString() const {
