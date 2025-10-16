@@ -1486,8 +1486,7 @@ void ToVelox::makePredictionAndHistory(
     const velox::core::PlanNodeId& id,
     const RelationOp* op) {
   nodeHistory_[id] = op->historyKey();
-  prediction_[id] = NodePrediction{
-      .cardinality = op->cost().inputCardinality * op->cost().fanout};
+  prediction_[id] = NodePrediction{.cardinality = op->resultCardinality()};
 }
 
 velox::core::PlanNodePtr ToVelox::makeFragment(

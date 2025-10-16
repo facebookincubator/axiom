@@ -1565,9 +1565,12 @@ PlanP unionPlan(
   for (auto i = 1; i < states.size(); ++i) {
     const auto& otherCost = states[i].cost;
     fullyImported.intersect(inputPlans[i]->fullyImported);
-    firstState.cost.add(otherCost);
-    // The input cardinality is not additive, the fanout and other metrics are.
-    firstState.cost.inputCardinality -= otherCost.inputCardinality;
+    // The input cardinality is not additive.
+    firstState.cost.setupCost += otherCost.setupCost;
+    firstState.cost.unitCost += otherCost.unitCost;
+    firstState.cost.fanout += otherCost.fanout;
+    firstState.cost.totalBytes += otherCost.totalBytes;
+    firstState.cost.transferBytes += otherCost.transferBytes;
   }
   if (distinct) {
     firstState.addCost(*distinct);

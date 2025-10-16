@@ -24,13 +24,6 @@
 #include "velox/expression/ScopedVarSetter.h"
 
 namespace facebook::axiom::optimizer {
-
-void Cost::add(const Cost& other) {
-  inputCardinality += other.inputCardinality;
-  fanout += other.fanout;
-  setupCost += other.setupCost;
-}
-
 namespace {
 
 const auto& relTypeNames() {
@@ -353,7 +346,7 @@ Join::Join(
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = fanout;
 
-  const float buildSize = right->cost().inputCardinality;
+  const float buildSize = right->resultCardinality();
   const auto numRightColumns =
       static_cast<float>(right->input()->columns().size());
   auto rowCost = numRightColumns * Costs::kHashExtractColumnCost;

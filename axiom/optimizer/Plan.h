@@ -81,9 +81,9 @@ struct PlanSet {
   /// Interesting equivalent plans.
   std::vector<std::unique_ptr<Plan>> plans;
 
-  /// Cost of lowest-cost plan plus shuffle. If a cutoff is applicable, nothing
-  /// more expensive than this should be tried.
-  float bestCostWithShuffle{0};
+  /// Cost of lowest-cost plan plus shuffle. If a cutoff is applicable,
+  /// nothing more expensive than this should be tried.
+  float bestCostWithShuffle{std::numeric_limits<float>::infinity()};
 
   /// Returns the best plan that produces 'distribution'. If the best plan has
   /// some other distribution, sets 'needsShuffle ' to true.
@@ -275,7 +275,7 @@ struct PlanState {
   /// True if the costs accumulated so far are so high that this should not be
   /// explored further.
   bool isOverBest() const {
-    return hasCutoff && plans.bestCostWithShuffle != 0 &&
+    return hasCutoff &&
         cost.unitCost + cost.setupCost > plans.bestCostWithShuffle;
   }
 

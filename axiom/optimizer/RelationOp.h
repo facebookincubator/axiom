@@ -66,8 +66,6 @@ struct Cost {
   // amount of spill is 'totalBytes' - 'peakResidentBytes'.
   float peakResidentBytes{0};
 
-  void add(const Cost& other);
-
   /// If 'isUnit' shows the cost/cardinality for one row, else for
   /// 'inputCardinality' rows.
   std::string toString(bool detail, bool isUnit = false) const;

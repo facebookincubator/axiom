@@ -120,7 +120,8 @@ std::string Plan::toString(bool detail) const {
 }
 
 void PlanState::addCost(RelationOp& op) {
-  cost.unitCost += cost.inputCardinality * cost.fanout * op.cost().unitCost;
+  VELOX_DCHECK_EQ(cost.inputCardinality, 1);
+  cost.unitCost += cost.fanout * op.cost().unitCost;
   cost.setupCost += op.cost().setupCost;
   cost.fanout *= op.cost().fanout;
   cost.totalBytes += op.cost().totalBytes;
@@ -332,9 +333,7 @@ PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
   auto* result = newPlan.get();
   auto newPlanCost =
       result->cost.unitCost + result->cost.setupCost + shuffleCostPerRow;
-  if (bestCostWithShuffle == 0 || newPlanCost < bestCostWithShuffle) {
-    bestCostWithShuffle = newPlanCost;
-  }
+  bestCostWithShuffle = std::min(bestCostWithShuffle, newPlanCost);
   if (replaceIndex >= 0) {
     plans[replaceIndex] = std::move(newPlan);
   } else {
