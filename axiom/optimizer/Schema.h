@@ -269,11 +269,15 @@ float baseSelectivity(PlanObjectCP object);
 /// partitioned physical representations (ColumnGroups). Not all ColumnGroups
 /// (aka indices) need to contain all columns.
 struct SchemaTable {
-  explicit SchemaTable(const connector::Table& connectorTable, Name name)
+  SchemaTable(Name name, const connector::Table& connectorTable)
       : connectorTable{&connectorTable},
         name{name},
         cardinality{static_cast<float>(connectorTable.numRows())} {}
 
+  /// Adds a ColumnGroup with 'layout', 'distribution' and 'columns'.
+  /// 'distribution' should be created from 'layout' and 'this'.
+  /// 'columns' should be created from 'layout' and 'this'.
+  /// Returns the added ColumnGroup.
   ColumnGroupCP addIndex(
       const connector::TableLayout& layout,
       Distribution distribution,
@@ -301,6 +305,10 @@ struct SchemaTable {
 
   std::vector<ColumnCP> toColumns(const std::vector<std::string>& names) const;
 
+  // Table description from external schema. This is the
+  // source-dependent representation from which 'this' was created.
+  const connector::Table* connectorTable{nullptr};
+
   const Name name;
   const float cardinality;
 
@@ -309,10 +317,6 @@ struct SchemaTable {
 
   // All indices. Must contain at least one.
   QGVector<ColumnGroupCP> columnGroups;
-
-  // Table description from external schema. This is the
-  // source-dependent representation from which 'this' was created.
-  const connector::Table* connectorTable{nullptr};
 };
 
 /// Represents a collection of tables. Normally filled in ad hoc given
