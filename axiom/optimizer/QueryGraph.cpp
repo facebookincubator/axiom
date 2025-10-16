@@ -97,22 +97,14 @@ std::string Column::toString() const {
 
 namespace {
 
+// Helper to efficiently collect function sets from arguments.
+// Only calls the virtual functions() method for Call expressions.
 FunctionSet availableFunctions(const ExprCP& arg) {
   if (arg->is(PlanType::kCallExpr) || arg->is(PlanType::kAggregateExpr)) {
     return arg->as<Call>()->functions();
   }
 
   return FunctionSet(0);
-}
-
-// Helper to efficiently collect function sets from arguments.
-// Only calls the virtual functions() method for Call expressions.
-FunctionSet availableFunctions(const ExprVector& args) {
-  FunctionSet result;
-  for (auto arg : args) {
-    result |= availableFunctions(arg);
-  }
-  return result;
 }
 
 } // namespace
