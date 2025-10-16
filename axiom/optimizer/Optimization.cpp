@@ -1565,7 +1565,7 @@ PlanP unionPlan(
   for (auto i = 1; i < states.size(); ++i) {
     const auto& otherCost = states[i].cost;
     fullyImported.intersect(inputPlans[i]->fullyImported);
-    // The input cardinality is not additive.
+    // We don't sum up inputCardinality because it is not additive.
     firstState.cost.setupCost += otherCost.setupCost;
     firstState.cost.unitCost += otherCost.unitCost;
     firstState.cost.fanout += otherCost.fanout;
