@@ -94,7 +94,7 @@ SchemaTableCP Schema::findTable(
     return nullptr;
   }
 
-  auto* schemaTable = make<SchemaTable>(*connectorTable, internedName);
+  auto* schemaTable = make<SchemaTable>(internedName, *connectorTable);
   auto& schemaColumns = schemaTable->columns;
 
   auto& tableColumns = connectorTable->columnMap();
