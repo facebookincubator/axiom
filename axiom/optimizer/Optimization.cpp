@@ -793,7 +793,6 @@ void Optimization::addAggregation(
         agg->name(),
         agg->value(),
         std::move(args),
-        agg->functions(),
         agg->isDistinct(),
         condition,
         agg->intermediateType(),
@@ -1857,10 +1856,7 @@ ExprCP Optimization::combineLeftDeep(Name func, const ExprVector& exprs) {
   ExprCP result = copy[0];
   for (auto i = 1; i < copy.size(); ++i) {
     result = toGraph_.deduppedCall(
-        func,
-        result->value(),
-        ExprVector{result, copy[i]},
-        result->functions() | copy[i]->functions());
+        func, result->value(), ExprVector{result, copy[i]});
   }
   return result;
 }

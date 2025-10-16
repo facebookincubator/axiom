@@ -459,14 +459,10 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
     case PlanType::kCallExpr: {
       auto children = expr->children();
       ExprVector newChildren(children.size());
-      FunctionSet functions;
       bool anyChange = false;
       for (auto i = 0; i < children.size(); ++i) {
         newChildren[i] = importExpr(children[i]->as<Expr>(), outer, inner);
         anyChange |= newChildren[i] != children[i];
-        if (newChildren[i]->isFunction()) {
-          functions = functions | newChildren[i]->as<Call>()->functions();
-        }
       }
 
       if (!anyChange) {
@@ -474,8 +470,7 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
       }
 
       const auto* call = expr->as<Call>();
-      return make<Call>(
-          call->name(), call->value(), std::move(newChildren), functions);
+      return make<Call>(call->name(), call->value(), std::move(newChildren));
     }
     default:
       VELOX_UNREACHABLE("{}", expr->toString());

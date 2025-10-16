@@ -39,6 +39,11 @@ class FunctionSet {
     return 0 != (set_ & item);
   }
 
+  FunctionSet& operator|=(const FunctionSet& other) {
+    set_ |= other.set_;
+    return *this;
+  }
+
   /// Unions 'this' and 'other' and returns the result.
   FunctionSet operator|(const FunctionSet& other) const {
     return FunctionSet(set_ | other.set_);

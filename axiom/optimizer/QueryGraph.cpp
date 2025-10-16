@@ -19,6 +19,7 @@
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "velox/expression/ScopedVarSetter.h"
+#include "velox/functions/FunctionRegistry.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -94,22 +95,50 @@ std::string Column::toString() const {
   return fmt::format("{}.{}", cname, name_);
 }
 
-Call::Call(
-    PlanType type,
-    Name name,
-    const Value& value,
-    ExprVector args,
-    FunctionSet functions)
+namespace {
+
+FunctionSet availableFunctions(const ExprCP& arg) {
+  if (arg->is(PlanType::kCallExpr) || arg->is(PlanType::kAggregateExpr)) {
+    return arg->as<Call>()->functions();
+  }
+
+  return FunctionSet(0);
+}
+
+// Helper to efficiently collect function sets from arguments.
+// Only calls the virtual functions() method for Call expressions.
+FunctionSet availableFunctions(const ExprVector& args) {
+  FunctionSet result;
+  for (auto arg : args) {
+    result |= availableFunctions(arg);
+  }
+  return result;
+}
+
+} // namespace
+
+Call::Call(PlanType type, Name name, const Value& value, ExprVector args)
     : Expr(type, value),
       name_(name),
       args_(std::move(args)),
-      functions_(functions),
+      functions_(),
       metadata_(functionMetadata(name_)) {
+  if (metadata_) {
+    functions_ |= metadata_->functionSet;
+  }
+
+  const auto deterministic = velox::isDeterministic(name);
+  if (deterministic.has_value() && !deterministic.value()) {
+    functions_ |= FunctionSet(FunctionSet::kNonDeterministic);
+  }
+
   for (auto arg : args_) {
     columns_.unionSet(arg->columns());
     subexpressions_.unionSet(arg->subexpressions());
     subexpressions_.add(arg);
   }
+
+  functions_ |= availableFunctions(args_);
 }
 
 std::string Call::toString() const {
@@ -119,6 +148,39 @@ std::string Call::toString() const {
     out << args_[i]->toString() << (i == args_.size() - 1 ? ")" : ", ");
   }
   return out.str();
+}
+
+Aggregate::Aggregate(
+    Name name,
+    const Value& value,
+    ExprVector args,
+    bool isDistinct,
+    ExprCP condition,
+    const velox::Type* intermediateType,
+    ExprVector orderKeys,
+    OrderTypeVector orderTypes)
+    : Call(PlanType::kAggregateExpr, name, value, std::move(args)),
+      isDistinct_(isDistinct),
+      condition_(condition),
+      intermediateType_(intermediateType),
+      orderKeys_(std::move(orderKeys)),
+      orderTypes_(std::move(orderTypes)) {
+  VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
+  functions_ |= FunctionSet(FunctionSet::kAggregate);
+
+  for (const auto& arg : this->args()) {
+    rawInputType_.push_back(arg->value().type);
+  }
+
+  if (condition_) {
+    columns_.unionSet(condition_->columns());
+    functions_ |= availableFunctions(condition_);
+  }
+
+  for (auto& key : orderKeys_) {
+    columns_.unionSet(key->columns());
+    functions_ |= availableFunctions(key);
+  }
 }
 
 std::string Aggregate::toString() const {
