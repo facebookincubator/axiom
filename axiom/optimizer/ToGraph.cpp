@@ -1325,7 +1325,7 @@ PlanObjectP ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
         if (!allPaths.empty()) {
           trace(OptimizerOptions::kPreprocess, [&]() {
             std::cout << "Subfields: " << baseTable->cname << "."
-                      << baseTable->schemaTable->name << " " << column->name()
+                      << baseTable->schemaTable->name() << " " << column->name()
                       << ":" << allPaths.size() << std::endl;
           });
           makeSubfieldColumns(baseTable, column, allPaths);

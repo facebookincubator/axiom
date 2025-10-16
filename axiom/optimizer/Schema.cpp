@@ -62,17 +62,11 @@ ColumnCP SchemaTable::findColumn(Name name) const {
   return it->second;
 }
 
-Schema::Schema(Name name, const connector::SchemaResolver* source)
-    : name_{name}, source_{source} {}
-
 SchemaTableCP Schema::findTable(
     std::string_view connectorId,
     std::string_view name) const {
-  Name internedConnectorId = toName(connectorId);
-  Name internedName = toName(name);
-  auto& tables =
-      connectorTables_.try_emplace(internedConnectorId).first->second;
-  auto& table = tables.try_emplace(internedName, Table{}).first->second;
+  auto& tables = connectorTables_.try_emplace(connectorId).first->second;
+  auto& table = tables.try_emplace(name, Table{}).first->second;
   if (table.schemaTable) {
     return table.schemaTable;
   }
@@ -83,7 +77,7 @@ SchemaTableCP Schema::findTable(
     return nullptr;
   }
 
-  auto* schemaTable = make<SchemaTable>(*connectorTable, internedName);
+  auto* schemaTable = make<SchemaTable>(*connectorTable);
   auto& schemaColumns = schemaTable->columns;
 
   auto& tableColumns = connectorTable->columnMap();
@@ -131,8 +125,8 @@ SchemaTableCP Schema::findTable(
     appendColumns(layout->columns(), columns);
     schemaTable->addIndex(*layout, std::move(distribution), std::move(columns));
   }
-  table = {schemaTable, std::move(connectorTable)};
-  return table.schemaTable;
+  table = {std::move(connectorTable), schemaTable};
+  return schemaTable;
 }
 
 float tableCardinality(PlanObjectCP table) {

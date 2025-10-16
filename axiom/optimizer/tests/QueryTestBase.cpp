@@ -150,7 +150,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
   exec::SimpleExpressionEvaluator evaluator(
       queryCtx.get(), optimizerPool_.get());
 
-  optimizer::Schema veraxSchema("test", &schemaResolver);
+  optimizer::Schema veraxSchema{schemaResolver};
 
   auto session = std::make_shared<Session>(queryCtx->queryId());
 

@@ -66,7 +66,7 @@ std::string tableName(PlanObjectCP table) {
 std::string visitBaseTable(const BaseTable& table) {
   std::stringstream out;
   out << table.cname << ": " << columnNames(table.columns) << std::endl;
-  out << "  table: " << table.schemaTable->name << std::endl;
+  out << "  table: " << table.schemaTable->name() << std::endl;
   if (!table.columnFilters.empty()) {
     out << "  single-column filters: " << conjunctsToString(table.columnFilters)
         << std::endl;

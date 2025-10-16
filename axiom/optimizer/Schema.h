@@ -283,10 +283,9 @@ float baseSelectivity(PlanObjectCP object);
 /// partitioned physical representations (ColumnGroups). Not all ColumnGroups
 /// (aka indices) need to contain all columns.
 struct SchemaTable {
-  SchemaTable(const connector::Table& connectorTable, Name name)
-      : name{name},
-        cardinality{static_cast<float>(connectorTable.numRows())},
-        connectorTable{&connectorTable} {}
+  explicit SchemaTable(const connector::Table& connectorTable)
+      : connectorTable{&connectorTable},
+        cardinality{static_cast<float>(connectorTable.numRows())} {}
 
   ColumnGroupCP addIndex(
       const connector::TableLayout& layout,
@@ -306,7 +305,14 @@ struct SchemaTable {
   /// equality constraint.
   IndexInfo indexByColumns(CPSpan<Column> columns) const;
 
-  const Name name;
+  const std::string& name() const {
+    return connectorTable->name();
+  }
+
+  // Table description from external schema.
+  // This is the source-dependent representation from which 'this' was created.
+  const connector::Table* const connectorTable;
+
   const float cardinality;
 
   // Lookup from name to column.
@@ -314,10 +320,6 @@ struct SchemaTable {
 
   // All indices. Must contain at least one.
   QGVector<ColumnGroupCP> columnGroups;
-
-  // Table description from external schema. This is the
-  // source-dependent representation from which 'this' was created.
-  const connector::Table* connectorTable;
 };
 
 /// Represents a collection of tables. Normally filled in ad hoc given
@@ -331,7 +333,7 @@ struct SchemaTable {
 class Schema {
  public:
   /// Constructs a Schema for producing executable plans, backed by 'source'.
-  Schema(Name name, const connector::SchemaResolver* source);
+  explicit Schema(const connector::SchemaResolver& source) : source_{&source} {}
 
   /// Returns the table with 'name' or nullptr if not found, using
   /// the connector specified by connectorId to perform table lookups.
@@ -339,22 +341,20 @@ class Schema {
   SchemaTableCP findTable(std::string_view connectorId, std::string_view name)
       const;
 
-  Name name() const {
-    return name_;
-  }
-
  private:
   struct Table {
-    SchemaTableCP schemaTable{nullptr};
     connector::TablePtr connectorTable;
+    SchemaTableCP schemaTable{nullptr};
   };
 
-  Name name_;
   // This map from connector ID to map of tables in that connector.
   // In the tables map, the key is the full table name and the value is
   // schema table (optimizer object) and connector table (connector object).
-  mutable NameMap<NameMap<Table>> connectorTables_;
+  template <typename T>
+  using Map = folly::F14FastMap<std::string_view, T>;
+
   const connector::SchemaResolver* source_;
+  mutable Map<Map<Table>> connectorTables_;
 };
 
 using SchemaP = Schema*;

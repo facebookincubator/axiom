@@ -89,7 +89,7 @@ std::vector<velox::common::Subfield> columnSubfields(
           }
           if (first &&
               optimization->options().isMapAsStruct(
-                  table->schemaTable->name, columnName)) {
+                  table->schemaTable->name(), columnName)) {
             elements.push_back(
                 std::make_unique<velox::common::Subfield::NestedField>(
                     step.field ? std::string(step.field)
@@ -394,7 +394,7 @@ velox::core::TypedExprPtr ToVelox::pathToGetter(
     auto* rel = column->relation();
     if (rel->is(PlanType::kTableNode) &&
         isMapAsStruct(
-            rel->as<BaseTable>()->schemaTable->name, column->name())) {
+            rel->as<BaseTable>()->schemaTable->name(), column->name())) {
       // This column is a map to project out as struct.
       newStep.kind = StepKind::kField;
       if (step.field) {
@@ -886,7 +886,7 @@ velox::RowTypePtr ToVelox::subfieldPushdownScanType(
       top.add(topColumn);
       topColumns.push_back(topColumn);
       names.push_back(topColumn->name());
-      if (isMapAsStruct(baseTable->schemaTable->name, topColumn->name())) {
+      if (isMapAsStruct(baseTable->schemaTable->name(), topColumn->name())) {
         types.push_back(skylineStruct(baseTable, topColumn));
         typeMap[topColumn] = types.back();
       } else {

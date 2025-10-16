@@ -258,7 +258,7 @@ const QGString& TableScan::historyKey() const {
     return key_;
   }
   std::stringstream out;
-  out << "scan " << baseTable->schemaTable->name << "(";
+  out << "scan " << baseTable->schemaTable->name() << "(";
   auto* opt = queryCtx()->optimization();
   velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
   for (auto& key : keys) {
@@ -286,7 +286,7 @@ std::string TableScan::toString(bool /*recursive*/, bool detail) const {
     out << input()->toString(true, detail);
     out << " *I " << joinTypeLabel(joinType);
   }
-  out << baseTable->schemaTable->name << " " << baseTable->cname;
+  out << baseTable->schemaTable->name() << " " << baseTable->cname;
   if (detail) {
     printCost(detail, out);
     if (!input()) {

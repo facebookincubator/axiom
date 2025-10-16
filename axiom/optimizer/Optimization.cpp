@@ -76,7 +76,7 @@ PlanAndStats Optimization::toVeloxPlan(
 
   VeloxHistory history;
 
-  Schema schema("default", schemaResolver.get());
+  Schema schema{*schemaResolver};
 
   auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
 
