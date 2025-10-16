@@ -130,7 +130,6 @@ Call::Call(PlanType type, Name name, const Value& value, ExprVector args)
     subexpressions_.add(arg);
     functions_ |= availableFunctions(arg);
   }
-
 }
 
 std::string Call::toString() const {
