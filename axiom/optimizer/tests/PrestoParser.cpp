@@ -1287,7 +1287,7 @@ SqlStatementPtr PrestoParser::doParse(
     planner.builder().tableWrite(
         defaultConnectorId_,
         tableName,
-        lp::WriteKind::kInsert,
+        WriteKind::kInsert,
         columnNames,
         inputColumns);
 
@@ -1329,7 +1329,7 @@ SqlStatementPtr PrestoParser::doParse(
       planBuilder.tableWrite(
           defaultConnectorId_,
           tableName,
-          lp::WriteKind::kCreate,
+          WriteKind::kCreate,
           columnNames,
           columnNames);
     } else {
@@ -1343,7 +1343,7 @@ SqlStatementPtr PrestoParser::doParse(
       planBuilder.tableWrite(
           defaultConnectorId_,
           tableName,
-          lp::WriteKind::kCreate,
+          WriteKind::kCreate,
           columnNames,
           planBuilder.findOrAssignOutputNames());
     }
