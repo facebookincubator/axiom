@@ -79,20 +79,46 @@ AXIOM_DECLARE_ENUM_NAME(OrderType);
 
 using OrderTypeVector = QGVector<OrderType>;
 
-/// Type of data distribution. It can be
-/// - broadcast to all nodes
-/// - gather to the single node
-/// - some partitioning to some nodes, now uses Velox hash partitioning
-struct DistributionType {
-  bool isGather{false};
-  // TODO: Implement and use connector specific partitionType.
+/// Distribution of data. Describes a possible partition function that assigns a
+/// row of data to a partition based on some combination of partition keys. For
+/// a join to be copartitioned, both sides must have compatible partition
+/// functions and the join keys must include the partition keys.
+class DistributionType {
+ public:
+  DistributionType(bool isGather = false)
+      : isGather_{isGather}, partitionType_{nullptr} {}
+
+  DistributionType(const connector::PartitionType* partitionType)
+      : isGather_{false}, partitionType_{partitionType} {}
 
   bool operator==(const DistributionType& other) const = default;
+
+  static DistributionType gather() {
+    static const DistributionType kGather(true);
+    return kGather;
+  }
+
+  bool isGather() const {
+    return isGather_;
+  }
+
+  const connector::PartitionType* partitionType() const {
+    return partitionType_;
+  }
+
+ private:
+  bool isGather_;
+
+  /// Partition function. nullptr is not partitioned.
+  const connector::PartitionType* partitionType_;
 };
 
-/// Describes output of relational operator.
+/// Describes output of relational operator. If this is partitioned on
+/// some keys, distributionType gives the partition function and
+/// 'partition' gives the input for the partition function.
 struct Distribution {
   explicit Distribution() = default;
+
   Distribution(
       DistributionType distributionType,
       ExprVector partition,
@@ -122,9 +148,7 @@ struct Distribution {
   static Distribution gather(
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {}) {
-    static constexpr DistributionType kGather = {
-        .isGather = true,
-    };
+    static const DistributionType kGather(/*isGather=*/true);
     return {
         kGather,
         {},
@@ -141,37 +165,41 @@ struct Distribution {
   /// True if 'other' has the same ordering columns and order type.
   bool isSameOrder(const Distribution& other) const;
 
+  bool isGather() const {
+    return distributionType.isGather();
+  }
+
   Distribution rename(const ExprVector& exprs, const ColumnVector& names) const;
 
   std::string toString() const;
 
   DistributionType distributionType;
 
-  // Partitioning columns. The values of these columns determine which of
-  // 'numPartitions' contains any given row. This does not specify the
-  // partition function (e.g. Hive bucket or range partition).
+  /// Partitioning columns. The values of these columns determine which of
+  /// partition contains any given row. Should be used together with
+  /// DistributionType::partitionType.
   ExprVector partition;
 
-  // Ordering columns. Each partition is ordered by these. Specifies that
-  // streaming group by or merge join are possible.
+  /// Ordering columns. Each partition is ordered by these. Specifies that
+  /// streaming group by or merge join are possible.
   ExprVector orderKeys;
 
-  // Corresponds 1:1 to 'order'. The size of this gives the number of leading
-  // columns of 'order' on which the data is sorted.
+  /// Corresponds 1:1 to 'order'. The size of this gives the number of leading
+  /// columns of 'order' on which the data is sorted.
   OrderTypeVector orderTypes;
 
-  // Number of leading elements of 'order' such that these uniquely
-  // identify a row. 0 if there is no uniqueness. This can be non-0 also if
-  // data is not sorted. This indicates a uniqueness for joining.
+  /// Number of leading elements of 'order' such that these uniquely identify a
+  /// row. 0 if there is no uniqueness. This can be non-0 also if data is not
+  /// sorted. This indicates a uniqueness for joining.
   int32_t numKeysUnique{0};
 
-  // Specifies the selectivity between the source of the ordered data
-  // and 'this'. For example, if orders join lineitem and both are
-  // ordered on orderkey and there is a 1/1000 selection on orders,
-  // the distribution after the filter would have a spacing of 1000,
-  // meaning that lineitem is hit every 1000 orders, meaning that an
-  // index join with lineitem would skip 4000 rows between hits
-  // because lineitem has an average of 4 repeats of orderkey.
+  /// Specifies the selectivity between the source of the ordered data and
+  /// 'this'. For example, if orders join lineitem and both are ordered on
+  /// orderkey and there is a 1/1000 selection on orders, the distribution after
+  /// the filter would have a spacing of 1000, meaning that lineitem is hit
+  /// every 1000 orders, meaning that an index join with lineitem would skip
+  /// 4000 rows between hits because lineitem has an average of 4 repeats of
+  /// orderkey.
   float spacing{-1};
 
   bool isBroadcast{false};

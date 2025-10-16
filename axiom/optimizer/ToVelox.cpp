@@ -118,7 +118,7 @@ std::vector<velox::common::Subfield> columnSubfields(
 }
 
 RelationOpPtr addGather(const RelationOpPtr& op) {
-  if (op->distribution().distributionType.isGather) {
+  if (op->distribution().isGather()) {
     return op;
   }
   if (op->relType() == RelType::kOrderBy) {
@@ -240,7 +240,7 @@ PlanAndStats ToVelox::toVeloxPlan(
   top.fragment.planNode = makeFragment(plan, top, stages);
   stages.push_back(std::move(top));
 
-  runner::FinishWrite finishWrite = std::move(finishWrite_);
+  auto finishWrite = std::move(finishWrite_);
   VELOX_DCHECK(!finishWrite_);
 
   for (const auto& stage : stages) {
@@ -800,69 +800,13 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
 }
 
 namespace {
-class HashPartitionFunctionSpec : public velox::core::PartitionFunctionSpec {
- public:
-  HashPartitionFunctionSpec(
-      velox::RowTypePtr inputType,
-      std::vector<velox::column_index_t> keys)
-      : inputType_{std::move(inputType)}, keys_{std::move(keys)} {}
-
-  std::unique_ptr<velox::core::PartitionFunction> create(
-      int numPartitions,
-      bool localExchange = false) const override {
-    return std::make_unique<velox::exec::HashPartitionFunction>(
-        localExchange, numPartitions, inputType_, keys_);
-  }
-
-  folly::dynamic serialize() const override {
-    VELOX_UNREACHABLE();
-  }
-
-  std::string toString() const override {
-    return "<Verax partition function spec>";
-  }
-
- private:
-  const velox::RowTypePtr inputType_;
-  const std::vector<velox::column_index_t> keys_;
-};
-
-class BroadcastPartitionFunctionSpec
-    : public velox::core::PartitionFunctionSpec {
- public:
-  std::unique_ptr<velox::core::PartitionFunction> create(
-      int /* numPartitions */,
-      bool /*localExchange*/) const override {
-    return nullptr;
-  }
-
-  std::string toString() const override {
-    return "broadcast";
-  }
-
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "BroadcastPartitionFunctionSpec";
-    return obj;
-  }
-
-  static velox::core::PartitionFunctionSpecPtr deserialize(
-      const folly::dynamic& /* obj */,
-      void* /* context */) {
-    return std::make_shared<BroadcastPartitionFunctionSpec>();
-  }
-};
 
 template <typename ExprType>
 velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const velox::RowTypePtr& inputType,
     const std::vector<ExprType>& keys,
-    bool isBroadcast) {
-  if (isBroadcast) {
-    return std::make_shared<BroadcastPartitionFunctionSpec>();
-  }
-
-  if (keys.empty()) {
+    const Distribution& distribution) {
+  if (distribution.isBroadcast || keys.empty()) {
     return std::make_shared<velox::core::GatherPartitionFunctionSpec>();
   }
 
@@ -877,7 +821,14 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
         key->template asUnchecked<velox::core::FieldAccessTypedExpr>()
             ->name()));
   }
-  return std::make_shared<HashPartitionFunctionSpec>(
+
+  if (const auto* partitionType =
+          distribution.distributionType.partitionType()) {
+    return partitionType->makeSpec(
+        keyIndices, /*constants=*/{}, /*isLocal=*/false);
+  }
+
+  return std::make_shared<velox::exec::HashPartitionFunctionSpec>(
       inputType, std::move(keyIndices));
 }
 
@@ -1278,8 +1229,8 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
           velox::core::LocalPartitionNode::gather(nextId(), std::move(inputs));
       fragment.width = 1;
     } else {
-      auto partition =
-          createPartitionFunctionSpec(input->outputType(), keys, false);
+      auto partition = createPartitionFunctionSpec(
+          input->outputType(), keys, Distribution{});
       input = std::make_shared<velox::core::LocalPartitionNode>(
           nextId(),
           velox::core::LocalPartitionNode::Type::kRepartition,
@@ -1308,29 +1259,40 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   auto source = newFragment();
   auto sourcePlan = makeFragment(repartition.input(), source, stages);
 
-  auto keys = toTypedExprs(repartition.distribution().partition);
+  // TODO Figure out a cleaner solution to setting 'columns' for TableWrite.
+  auto outputType = repartition.columns().empty()
+      ? sourcePlan->outputType()
+      : makeOutputType(repartition.columns());
+
+  const auto keys = toTypedExprs(repartition.distribution().partition);
 
   const auto& distribution = repartition.distribution();
-  if (distribution.distributionType.isGather) {
+  if (distribution.isBroadcast) {
+    VELOX_CHECK_EQ(0, keys.size());
+    source.fragment.planNode = velox::core::PartitionedOutputNode::broadcast(
+        nextId(), 1, outputType, exchangeSerdeKind_, sourcePlan);
+  } else if (distribution.isGather()) {
+    VELOX_CHECK_EQ(0, keys.size());
     fragment.width = 1;
+    source.fragment.planNode = velox::core::PartitionedOutputNode::single(
+        nextId(), outputType, exchangeSerdeKind_, sourcePlan);
+  } else {
+    VELOX_CHECK_NE(0, keys.size());
+    auto partitionFunctionFactory = createPartitionFunctionSpec(
+        sourcePlan->outputType(), keys, distribution);
+
+    source.fragment.planNode =
+        std::make_shared<velox::core::PartitionedOutputNode>(
+            nextId(),
+            velox::core::PartitionedOutputNode::Kind::kPartitioned,
+            keys,
+            fragment.width,
+            /*replicateNullsAndAny=*/false,
+            std::move(partitionFunctionFactory),
+            outputType,
+            exchangeSerdeKind_,
+            sourcePlan);
   }
-
-  auto partitionFunctionFactory = createPartitionFunctionSpec(
-      sourcePlan->outputType(), keys, distribution.isBroadcast);
-
-  source.fragment.planNode =
-      std::make_shared<velox::core::PartitionedOutputNode>(
-          nextId(),
-          distribution.isBroadcast
-              ? velox::core::PartitionedOutputNode::Kind::kBroadcast
-              : velox::core::PartitionedOutputNode::Kind::kPartitioned,
-          keys,
-          keys.empty() ? 1 : fragment.width,
-          false,
-          std::move(partitionFunctionFactory),
-          makeOutputType(repartition.columns()),
-          exchangeSerdeKind_,
-          sourcePlan);
 
   if (exchange == nullptr) {
     exchange = std::make_shared<velox::core::ExchangeNode>(
@@ -1454,9 +1416,34 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
     inputTypes.push_back(toTypePtr(column->value().type));
   }
 
+  auto* layout = table.layouts().front();
+
+  if (options_.numDrivers > 1) {
+    const auto& partitionColumns = layout->partitionColumns();
+    if (!partitionColumns.empty()) {
+      std::vector<velox::column_index_t> channels;
+      std::vector<velox::VectorPtr> constants;
+      for (auto i = 0; i < partitionColumns.size(); ++i) {
+        channels.push_back(
+            input->outputType()->getChildIdx(partitionColumns[i]->name()));
+        constants.push_back(nullptr);
+      }
+
+      auto spec = layout->partitionType()->makeSpec(
+          channels, constants, /*isLocal=*/true);
+      auto inputs = std::vector<velox::core::PlanNodePtr>{input};
+      input = std::make_shared<velox::core::LocalPartitionNode>(
+          nextId(),
+          velox::core::LocalPartitionNode::Type::kRepartition,
+          false,
+          spec,
+          inputs);
+    }
+  }
+
   auto columnNames = table.type()->names();
 
-  auto* connector = table.layouts().front()->connector();
+  auto* connector = layout->connector();
   auto* metadata = connector::ConnectorMetadata::metadata(connector);
   auto session = session_->toConnectorSession(connector->connectorId());
   auto handle =

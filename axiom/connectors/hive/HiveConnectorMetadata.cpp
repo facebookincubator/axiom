@@ -22,6 +22,89 @@
 
 namespace facebook::axiom::connector::hive {
 
+const PartitionType* HivePartitionType::copartition(
+    const PartitionType& other) const {
+  if (const auto* otherPartitionType = other.as<HivePartitionType>()) {
+    const auto& thisTypes = partitionKeyTypes_;
+    const auto& otherTypes = otherPartitionType->partitionKeyTypes_;
+
+    if (thisTypes.size() == otherTypes.size()) {
+      for (size_t i = 0; i < thisTypes.size(); ++i) {
+        if (!thisTypes[i]->equivalent(*otherTypes[i])) {
+          return nullptr;
+        }
+      }
+
+      if (otherPartitionType->numPartitions_ % numPartitions_ == 0) {
+        return this;
+      }
+
+      if (numPartitions_ % otherPartitionType->numPartitions_ == 0) {
+        return otherPartitionType;
+      }
+    }
+  }
+  return nullptr;
+}
+
+velox::core::PartitionFunctionSpecPtr HivePartitionType::makeSpec(
+    const std::vector<velox::column_index_t>& channels,
+    const std::vector<velox::VectorPtr>& constants,
+    bool isLocal) const {
+  return std::make_shared<velox::connector::hive::HivePartitionFunctionSpec>(
+      numPartitions_, channels, constants);
+}
+
+std::string HivePartitionType::toString() const {
+  return fmt::format("{} Hive buckets", numPartitions_);
+}
+
+namespace {
+std::vector<velox::TypePtr> extractPartitionKeyTypes(
+    const std::vector<const Column*>& partitionedByColumns) {
+  std::vector<velox::TypePtr> types;
+  types.reserve(partitionedByColumns.size());
+  for (const auto* column : partitionedByColumns) {
+    types.push_back(column->type());
+  }
+  return types;
+}
+} // namespace
+
+HiveTableLayout::HiveTableLayout(
+    const std::string& name,
+    const Table* table,
+    velox::connector::Connector* connector,
+    std::vector<const Column*> columns,
+    std::optional<int32_t> numPartitions,
+    std::vector<const Column*> partitionedByColumns,
+    std::vector<const Column*> sortedByColumns,
+    std::vector<SortOrder> sortOrder,
+    std::vector<const Column*> lookupKeys,
+    std::vector<const Column*> hivePartitionedByColumns,
+    velox::dwio::common::FileFormat fileFormat)
+    : TableLayout(
+          name,
+          table,
+          connector,
+          columns,
+          partitionedByColumns,
+          sortedByColumns,
+          sortOrder,
+          lookupKeys,
+          /*supportsScan=*/true),
+      fileFormat_(fileFormat),
+      hivePartitionColumns_(hivePartitionedByColumns),
+      numBuckets_(numPartitions),
+      partitionType_{
+          numPartitions.has_value()
+              ? std::make_optional<HivePartitionType>(
+                    numPartitions.value(),
+                    extractPartitionKeyTypes(partitionedByColumns))
+              : std::nullopt} {
+  VELOX_CHECK_EQ(sortedByColumns.size(), sortOrder.size());
+}
+
 namespace {
 velox::connector::hive::HiveColumnHandle::ColumnType columnType(
     const HiveTableLayout& layout,

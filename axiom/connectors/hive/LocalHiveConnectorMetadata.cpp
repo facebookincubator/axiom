@@ -251,7 +251,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
 std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     float pct,
-    velox::RowTypePtr scanType,
+    velox::RowTypePtr /*scanType*/,
     const std::vector<velox::common::Subfield>& fields,
     velox::HashStringAllocator* allocator,
     std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders) const {
@@ -279,6 +279,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
             velox::connector::hive::HiveColumnHandle::ColumnType::kRegular,
             type,
             type);
+    LOG(ERROR) << "Making StatisticsBuilder: " << type->toString();
     builders.push_back(StatisticsBuilder::create(type, options));
   }
 
@@ -290,9 +291,12 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
 
   const auto maxRowsToScan = table().numRows() * (pct / 100);
 
+  LOG(ERROR) << "Reading " << outputType->toString();
+
   int64_t passingRows = 0;
   int64_t scannedRows = 0;
   for (const auto& file : files_) {
+    LOG(ERROR) << "Reading " << file->path;
     auto dataSource = connector()->createDataSource(
         outputType, tableHandle, columnHandles, connectorQueryCtx.get());
 
@@ -308,6 +312,15 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
       if (data == nullptr) {
         scannedRows += dataSource->getCompletedRows();
         break;
+      }
+
+      LOG(ERROR) << "Got " << data->size() << " rows: " << data->toString();
+      for (auto i = 0; i < data->childrenSize(); ++i) {
+        auto& child = data->childAt(i);
+        LOG(ERROR) << "Column: " << i;
+        LOG(ERROR) << child->toString();
+        LOG(ERROR) << child->toString(0, 5);
+        LOG(ERROR) << velox::BaseVector::loadedVectorShared(child)->toString();
       }
 
       passingRows += data->size();
@@ -349,13 +362,13 @@ void LocalTable::makeDefaultLayout(
       this,
       metadata.hiveConnector(),
       std::move(columns),
+      std::nullopt,
       empty,
       empty,
       std::vector<SortOrder>{},
       empty,
       empty,
-      metadata.fileFormat(),
-      std::nullopt);
+      metadata.fileFormat());
   layout->setFiles(std::move(files));
   exportedLayouts_.push_back(layout.get());
   layouts_.push_back(std::move(layout));
@@ -663,13 +676,13 @@ std::shared_ptr<LocalTable> createLocalTable(
       table.get(),
       connector,
       columns,
+      numBuckets,
       bucketedBy,
       sortedBy,
       sortOrders,
       /*lookupKeys=*/std::vector<const Column*>{},
       partitionedBy,
-      createTableOptions.fileFormat.value(),
-      numBuckets);
+      createTableOptions.fileFormat.value());
   table->addLayout(std::move(layout));
   return table;
 }

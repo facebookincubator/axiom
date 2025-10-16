@@ -1393,6 +1393,24 @@ size_t PlanBuilder::numOutput() const {
   return node_->outputType()->size();
 }
 
+namespace {
+std::optional<std::string> pickName(
+    const std::vector<NameMappings::QualifiedName>& names) {
+  if (names.empty()) {
+    return std::nullopt;
+  }
+
+  // Prefer non-aliased name.
+  for (const auto& name : names) {
+    if (!name.alias.has_value()) {
+      return name.name;
+    }
+  }
+
+  return names.front().name;
+}
+} // namespace
+
 std::vector<std::optional<std::string>> PlanBuilder::outputNames() const {
   auto size = numOutput();
 
@@ -1400,13 +1418,8 @@ std::vector<std::optional<std::string>> PlanBuilder::outputNames() const {
   names.reserve(size);
 
   for (auto i = 0; i < size; i++) {
-    auto id = node_->outputType()->nameOf(i);
-
-    if (outputMapping_->reverseLookup(id).empty()) {
-      names.push_back(std::nullopt);
-    } else {
-      names.push_back(id);
-    }
+    const auto id = node_->outputType()->nameOf(i);
+    names.push_back(pickName(outputMapping_->reverseLookup(id)));
   }
 
   return names;
@@ -1434,23 +1447,15 @@ std::string PlanBuilder::findOrAssignOutputNameAt(size_t index) const {
   const auto size = numOutput();
   VELOX_CHECK_LT(index, size, "{}", node_->outputType()->toString());
 
-  auto id = node_->outputType()->nameOf(index);
+  const auto id = node_->outputType()->nameOf(index);
 
-  auto names = outputMapping_->reverseLookup(id);
-  if (names.empty()) {
-    // Assign a name to the output column.
-    outputMapping_->add(id, id);
-    return id;
+  if (auto name = pickName(outputMapping_->reverseLookup(id))) {
+    return name.value();
   }
 
-  // Prefer non-aliased name.
-  for (const auto& name : names) {
-    if (!name.alias.has_value()) {
-      return name.name;
-    }
-  }
-
-  return names.front().name;
+  // Assign a name to the output column.
+  outputMapping_->add(id, id);
+  return id;
 }
 
 LogicalPlanNodePtr PlanBuilder::build() {

@@ -146,6 +146,8 @@ class PlanMatcherBuilder {
 
   PlanMatcherBuilder& orderBy(const std::vector<std::string>& ordering);
 
+  PlanMatcherBuilder& tableWrite();
+
   std::shared_ptr<PlanMatcher> build() {
     VELOX_USER_CHECK_NOT_NULL(matcher_, "Cannot build an empty PlanMatcher.");
     return matcher_;

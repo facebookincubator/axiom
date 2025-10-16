@@ -464,13 +464,13 @@ std::string Repartition::toString(bool recursive, bool detail) const {
   if (recursive) {
     out << input()->toString(true, detail) << " ";
   }
-  const auto& distributionType = distribution().distributionType;
+
   if (distribution().isBroadcast) {
     out << "broadcast ";
-  } else if (distributionType.isGather) {
+  } else if (distribution().isGather()) {
     out << "gather ";
   } else {
-    out << "shuffle ";
+    out << "repartition ";
     if (detail) {
       out << distribution().toString() << " ";
     }
@@ -844,11 +844,12 @@ std::string UnionAll::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+// TODO Figure out a cleaner solution to setting 'distribution' and 'columns'.
 TableWrite::TableWrite(
     RelationOpPtr input,
     ExprVector inputColumns,
     const WritePlan* write)
-    : RelationOp{RelType::kTableWrite, std::move(input), Distribution::gather(), {}},
+    : RelationOp{RelType::kTableWrite, input, input->distribution().isGather() ? Distribution::gather() : Distribution(), {}},
       inputColumns{std::move(inputColumns)},
       write{write} {
   cost_.inputCardinality = inputCardinality();

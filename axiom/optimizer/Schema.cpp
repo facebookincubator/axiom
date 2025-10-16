@@ -111,6 +111,7 @@ SchemaTableCP Schema::findTable(
   for (const auto* layout : connectorTable->layouts()) {
     VELOX_CHECK_NOT_NULL(layout);
     Distribution distribution;
+    distribution.distributionType = DistributionType(layout->partitionType());
     appendColumns(layout->partitionColumns(), distribution.partition);
     appendColumns(layout->orderColumns(), distribution.orderKeys);
 
@@ -420,7 +421,7 @@ std::string Distribution::toString() const {
     return "broadcast";
   }
 
-  if (distributionType.isGather) {
+  if (distributionType.isGather()) {
     return "gather";
   }
 
@@ -428,7 +429,11 @@ std::string Distribution::toString() const {
   if (!partition.empty()) {
     out << "P ";
     exprsToString(partition, out);
-    out << " Velox hash";
+    if (distributionType.partitionType() != nullptr) {
+      out << " " << distributionType.partitionType()->toString();
+    } else {
+      out << " Velox hash";
+    }
   }
   if (!orderKeys.empty()) {
     out << " O ";

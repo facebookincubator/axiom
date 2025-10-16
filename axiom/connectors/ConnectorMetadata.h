@@ -32,6 +32,8 @@ class ITypedExpr;
 using TypedExprPtr = std::shared_ptr<const ITypedExpr>;
 
 class PartitionFunctionSpec;
+using PartitionFunctionSpecPtr =
+    std::shared_ptr<const core::PartitionFunctionSpec>;
 } // namespace facebook::velox::core
 
 /// Base classes for schema elements used in execution. A ConnectorMetadata
@@ -182,6 +184,41 @@ struct SortOrder {
   bool isNullsFirst{false};
 };
 
+/// Represents a partitioning function. Partitions can be copartitioned if the
+/// types are compatible.
+class PartitionType {
+ public:
+  virtual ~PartitionType() = default;
+
+  /// Returns 'this' or '&other' if the partitions are compatible. Partitions
+  /// are compatible if data in one partitioned dataset can only match data in
+  /// the same partition of another dataset if joined on equality of partition
+  /// keys. Compatibility is not strict equality in the case of e.g. Hive where
+  /// a dataset partitioned 8 ways is compatible with one partitioned 16 ways if
+  /// the function is the same. In such a case the partition to use is the 8 way
+  /// one. On the 16 side data from partitions 0 and 1 match 0 on the 8 side and
+  /// 2, 3 match 1 and so on.
+  virtual const PartitionType* copartition(
+      const PartitionType& other) const = 0;
+
+  /// Returns a factory that makes partition functions. The function takes a
+  /// RowVector and calculates a partition number from the columns identified by
+  /// 'channels'. If channels[i] == kConstantChannel then the corresponding
+  /// element of 'constants' is used. 'isLocal' differentiates between remote
+  /// and local exchange.
+  virtual velox::core::PartitionFunctionSpecPtr makeSpec(
+      const std::vector<velox::column_index_t>& channels,
+      const std::vector<velox::VectorPtr>& constants,
+      bool isLocal) const = 0;
+
+  virtual std::string toString() const = 0;
+
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+};
+
 /// Represents a physical manifestation of a table. There is at least
 /// one layout but for tables that have multiple sort orders, partitionings,
 /// indices, column groups, etc. there is a separate layout for each. The layout
@@ -229,6 +266,14 @@ class TableLayout {
   /// co-located.
   const std::vector<const Column*>& partitionColumns() const {
     return partitionColumns_;
+  }
+
+  /// Describes how the value in partitionColumns() determines a partition. The
+  /// returned value is owned by 'this'. nullptr if 'partitionColumns_' is
+  /// empty.
+  virtual const PartitionType* partitionType() const {
+    VELOX_CHECK(partitionColumns_.empty());
+    return nullptr;
   }
 
   /// Columns on which content is ordered within the range of rows covered by a

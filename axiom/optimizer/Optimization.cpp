@@ -421,7 +421,7 @@ bool isSingleWorker() {
 
 RelationOpPtr repartitionForAgg(const RelationOpPtr& plan, PlanState& state) {
   // No shuffle if all grouping keys are in partitioning.
-  if (isSingleWorker() || plan->distribution().distributionType.isGather) {
+  if (isSingleWorker() || plan->distribution().isGather()) {
     return plan;
   }
 
@@ -698,6 +698,78 @@ const RelationOpPtr& maybeDropProject(const RelationOpPtr& plan) {
   return plan;
 }
 
+const connector::PartitionType* copartitionType(
+    const connector::PartitionType* first,
+    const connector::PartitionType* second) {
+  if (first != nullptr && second != nullptr) {
+    return first->copartition(*second);
+  }
+
+  return nullptr;
+}
+
+RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
+  if (isSingleWorker() || plan->distribution().isGather()) {
+    return plan;
+  }
+
+  const auto* write = state.dt->write;
+
+  // TODO Introduce layout-for-write or primary layout to remove the assumption
+  // that first layout is the right one.
+  VELOX_CHECK_EQ(
+      1,
+      write->table().layouts().size(),
+      "Writes to tables with multiple-layouts are not supported yet");
+
+  const auto* layout = write->table().layouts().at(0);
+  const auto& partitionColumns = layout->partitionColumns();
+  if (partitionColumns.empty()) {
+    // Unpartitioned write.
+    return plan;
+  }
+
+  const auto& tableSchema = write->table().type();
+
+  // Find values for all partition columns.
+  ExprVector keyValues;
+  keyValues.reserve(partitionColumns.size());
+  for (const auto* column : partitionColumns) {
+    const auto index = tableSchema->getChildIdx(column->name());
+    keyValues.emplace_back(write->columnExprs().at(index));
+  }
+
+  const auto* planPartitionType =
+      plan->distribution().distributionType.partitionType();
+
+  auto copartition =
+      copartitionType(planPartitionType, layout->partitionType());
+
+  // Copartitioning is possible if PartitionTypes are compatible and the table
+  // has no fewer partitions than the plan.
+  bool shuffle = !copartition || copartition != planPartitionType;
+  if (!shuffle) {
+    // Check that the partition keys of the plan are assigned pairwise to the
+    // partition columns of the layout.
+    for (auto i = 0; i < keyValues.size(); ++i) {
+      if (!plan->distribution().partition[i]->sameOrEqual(*keyValues[i])) {
+        shuffle = true;
+        break;
+      }
+    }
+
+    if (!shuffle) {
+      return plan;
+    }
+  }
+
+  Distribution distribution(layout->partitionType(), std::move(keyValues));
+  auto* repartition =
+      make<Repartition>(plan, std::move(distribution), plan->columns());
+  state.addCost(*repartition);
+  return repartition;
+}
+
 } // namespace
 
 void Optimization::addPostprocess(
@@ -712,10 +784,13 @@ void Optimization::addPostprocess(
     auto writeColumns = precompute.toColumns(dt->write->columnExprs());
     plan = std::move(precompute).maybeProject();
     state.addCost(*plan);
-    // Because table write will be in every plan and it will be root node,
-    // it would not affect the choice of plan.
-    // So we're not adding the cost of the write itself to the plan cost.
+
+    plan = repartitionForWrite(plan, state);
     plan = make<TableWrite>(plan, std::move(writeColumns), dt->write);
+
+    // Table write is present in every candidate plan and it is the root node.
+    // Hence, it doesn't affect the choice of candidate plan. Hence, no need to
+    // track the cost.
     return;
   }
 
@@ -979,7 +1054,7 @@ void Optimization::joinByHash(
       candidate.tables[0], buildColumns, buildTables, candidate.existences};
 
   Distribution forBuild;
-  if (plan->distribution().distributionType.isGather) {
+  if (plan->distribution().isGather()) {
     forBuild = Distribution::gather();
   } else {
     forBuild = {plan->distribution().distributionType, copartition};

@@ -84,25 +84,25 @@ class LocalHiveTableLayout : public HiveTableLayout {
       const Table* table,
       velox::connector::Connector* connector,
       std::vector<const Column*> columns,
+      std::optional<int32_t> numBuckets,
       std::vector<const Column*> partitioning,
       std::vector<const Column*> orderColumns,
       std::vector<SortOrder> sortOrder,
       std::vector<const Column*> lookupKeys,
       std::vector<const Column*> hivePartitionColumns,
-      velox::dwio::common::FileFormat fileFormat,
-      std::optional<int32_t> numBuckets = std::nullopt)
+      velox::dwio::common::FileFormat fileFormat)
       : HiveTableLayout(
             name,
             table,
             connector,
             columns,
+            numBuckets,
             partitioning,
             orderColumns,
             sortOrder,
             lookupKeys,
             hivePartitionColumns,
-            fileFormat,
-            numBuckets) {}
+            fileFormat) {}
 
   std::pair<int64_t, int64_t> sample(
       const velox::connector::ConnectorTableHandlePtr& handle,

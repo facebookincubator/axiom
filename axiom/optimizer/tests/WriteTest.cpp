@@ -19,6 +19,7 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/expression/Expr.h"
 
@@ -27,6 +28,9 @@ namespace {
 
 using namespace velox;
 namespace lp = facebook::axiom::logical_plan;
+
+#define AXIOM_ASSERT_PLAN(plan, matcher) \
+  ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
 
 class WriteTest : public test::HiveQueriesTestBase {
  protected:
@@ -75,6 +79,8 @@ class WriteTest : public test::HiveQueriesTestBase {
   void runCtas(
       const std::string& sql,
       int64_t writtenRows,
+      const std::function<void(const runner::MultiFragmentPlan& plan)>&
+          verifyPlan = nullptr,
       const runner::MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
           .numDrivers = 4,
@@ -94,9 +100,27 @@ class WriteTest : public test::HiveQueriesTestBase {
     connector::SchemaResolver schemaResolver;
     schemaResolver.setTargetTable(exec::test::kHiveConnectorId, table);
 
-    auto result = runVelox(ctasStatement->plan(), schemaResolver, options);
+    auto plan = planVelox(ctasStatement->plan(), schemaResolver, options);
+    if (verifyPlan != nullptr) {
+      verifyPlan(*plan.plan);
+      if (::testing::Test::HasNonfatalFailure()) {
+        return;
+      }
+    }
+
+    auto result = runFragmentedPlan(plan);
 
     checkWrittenRows(result, writtenRows);
+  }
+
+  const connector::hive::LocalHiveTableLayout& getLayout(
+      std::string_view tableName) {
+    auto table = metadata_->findTable(tableName);
+    VELOX_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
+
+    VELOX_CHECK_EQ(1, table->layouts().size());
+
+    return *table->layouts().at(0)->as<connector::hive::LocalHiveTableLayout>();
   }
 
   static void checkWrittenRows(
@@ -376,64 +400,226 @@ TEST_F(WriteTest, createTableAsSelectPartitionedSql) {
   ASSERT_EQ(0, layout->partitionColumns().size());
 }
 
+const velox::core::PlanNodePtr nodeAt(
+    const runner::MultiFragmentPlan& plan,
+    size_t index) {
+  return plan.fragments().at(index).fragment.planNode;
+}
+
+// Verify that distributed plan has exchange before table write.
+void verifyPartitionedWrite(const runner::MultiFragmentPlan& plan) {
+  const auto& fragments = plan.fragments();
+  ASSERT_EQ(3, fragments.size());
+
+  {
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .project()
+                       .partitionedOutput()
+                       .build();
+    AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
+  }
+  {
+    auto matcher = core::PlanMatcherBuilder()
+                       .exchange()
+                       .localPartition()
+                       .tableWrite()
+                       .partitionedOutput()
+                       .build();
+    AXIOM_ASSERT_PLAN(nodeAt(plan, 1), matcher);
+  }
+  {
+    auto matcher = core::PlanMatcherBuilder().exchange().build();
+    AXIOM_ASSERT_PLAN(fragments[2].fragment.planNode, matcher);
+  }
+}
+
+// Verify that table write is collocated with table scan (no exchange between
+// the two).
+void verifyCollocatedWrite(const runner::MultiFragmentPlan& plan) {
+  const auto& fragments = plan.fragments();
+  ASSERT_EQ(2, fragments.size());
+
+  {
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .project()
+            // TODO Enhance the optimizer to eliminate local exchange.
+            .localPartition()
+            .tableWrite()
+            .partitionedOutput()
+            .build();
+    AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
+  }
+  {
+    auto matcher = core::PlanMatcherBuilder().exchange().build();
+    AXIOM_ASSERT_PLAN(nodeAt(plan, 1), matcher);
+  }
+}
+
+void verifyPartitionedLayout(
+    const connector::hive::LocalHiveTableLayout& layout,
+    const std::string& partitionedByColumn,
+    int numBuckets,
+    const std::optional<std::string>& sortedByColumn = std::nullopt) {
+  SCOPED_TRACE(layout.table().name());
+
+  ASSERT_EQ(1, layout.partitionColumns().size());
+  ASSERT_EQ(partitionedByColumn, layout.partitionColumns().at(0)->name());
+
+  ASSERT_EQ(numBuckets, layout.numBuckets());
+  ASSERT_EQ(numBuckets, layout.files().size());
+
+  if (sortedByColumn.has_value()) {
+    ASSERT_EQ(1, layout.orderColumns().size());
+    ASSERT_EQ(1, layout.sortOrder().size());
+
+    ASSERT_EQ(sortedByColumn.value(), layout.orderColumns().at(0)->name());
+  } else {
+    ASSERT_EQ(0, layout.orderColumns().size());
+    ASSERT_EQ(0, layout.sortOrder().size());
+  }
+
+  ASSERT_EQ(0, layout.hivePartitionColumns().size());
+}
+
+TEST_F(WriteTest, xxx) {
+  SCOPE_EXIT {
+    metadata_->dropTableIfExists("test");
+    metadata_->dropTableIfExists("test2");
+  };
+
+  runCtas(
+      "CREATE TABLE test WITH (file_format = 'parquet') AS "
+      "SELECT rand() as key, l_linenumber, cast(rand() as varchar) as x FROM lineitem",
+      60175);
+}
+
 TEST_F(WriteTest, createTableAsSelectBucketedSql) {
   {
     SCOPE_EXIT {
-      metadata_->dropTableIfExists("test");
+      for (const auto& name : {"test", "test2", "test3", "test4"}) {
+        metadata_->dropTableIfExists(name);
+      }
     };
 
+    // Set partitioned output buffer size very small (1 bytes) to ensure it
+    // produces as many batches as possible.
+    config_.emplace(
+        velox::core::QueryConfig::kMaxPartitionedOutputBufferSize, "1");
+
     runCtas(
-        "CREATE TABLE test WITH (bucket_count = 4, bucketed_by = ARRAY['b']) AS "
-        "SELECT n_nationkey, n_name, n_nationkey % 4 as b FROM nation",
-        25);
+        "CREATE TABLE test WITH (bucket_count = 8, bucketed_by = ARRAY['key']) AS "
+        "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber, 'foo' as x FROM lineitem",
+        60175,
+        verifyPartitionedWrite);
 
-    auto table = metadata_->findTable("test");
-    ASSERT_TRUE(table != nullptr);
+    verifyPartitionedLayout(getLayout("test"), "key", 8);
 
-    ASSERT_EQ(1, table->layouts().size());
+    // Copy bucketed table with a larger bucket_count. Expect no shuffle.
+    runCtas(
+        "CREATE TABLE test3 WITH (bucket_count = 16, bucketed_by = ARRAY['key']) AS "
+        "SELECT key, l_orderkey, 'l_linenumber + 1' as x FROM test",
+        60175,
+        verifyCollocatedWrite);
 
-    auto layout =
-        table->layouts().at(0)->as<connector::hive::LocalHiveTableLayout>();
-    ASSERT_EQ(1, layout->partitionColumns().size());
-    ASSERT_EQ("b", layout->partitionColumns().at(0)->name());
+    verifyPartitionedLayout(getLayout("test3"), "key", 16);
 
-    ASSERT_EQ(4, layout->numBuckets());
+    // Copy bucketed table with same bucket_count. Expect no shuffle.
+    runCtas(
+        "CREATE TABLE test2 WITH (bucket_count = 8, bucketed_by = ARRAY['key']) AS "
+        "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
+        60175,
+        verifyCollocatedWrite);
 
-    ASSERT_EQ(0, layout->orderColumns().size());
-    ASSERT_EQ(0, layout->sortOrder().size());
-    ASSERT_EQ(0, layout->hivePartitionColumns().size());
+    verifyPartitionedLayout(getLayout("test2"), "key", 8);
+
+    // Copy bucketed table with a larger bucket_count. Expect no shuffle.
+    runCtas(
+        "CREATE TABLE test3 WITH (bucket_count = 16, bucketed_by = ARRAY['key']) AS "
+        "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
+        60175,
+        verifyCollocatedWrite);
+
+    verifyPartitionedLayout(getLayout("test3"), "key", 16);
+
+    // Copy bucketed table a smaller bucket_count. Expect shuffle.
+    runCtas(
+        "CREATE TABLE test4 WITH (bucket_count = 2, bucketed_by = ARRAY['key']) AS "
+        "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
+        60175,
+        verifyPartitionedWrite);
+
+    verifyPartitionedLayout(getLayout("test4"), "key", 2);
   }
 
+  // Single-node execution.
   {
     SCOPE_EXIT {
       metadata_->dropTableIfExists("test");
     };
 
     runCtas(
-        "CREATE TABLE test WITH (bucket_count = 4, bucketed_by = ARRAY['b'], sorted_by = ARRAY['b']) AS "
-        "SELECT n_nationkey, n_name, n_nationkey % 4 as b FROM nation",
-        25);
+        "CREATE TABLE test WITH (bucket_count = 128, bucketed_by = ARRAY['key']) AS "
+        "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber FROM lineitem",
+        60175,
+        [](const auto& plan) {
+          const auto& fragments = plan.fragments();
+          ASSERT_EQ(1, fragments.size());
 
-    auto table = metadata_->findTable("test");
-    ASSERT_TRUE(table != nullptr);
+          auto matcher = core::PlanMatcherBuilder()
+                             .tableScan()
+                             .project()
+                             .localPartition()
+                             .tableWrite()
+                             .build();
+          AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
+        },
+        {.numWorkers = 1, .numDrivers = 3});
 
-    ASSERT_EQ(1, table->layouts().size());
+    verifyPartitionedLayout(getLayout("test"), "key", 128);
+  }
 
-    auto layout =
-        table->layouts().at(0)->as<connector::hive::LocalHiveTableLayout>();
-    ASSERT_EQ(1, layout->partitionColumns().size());
-    ASSERT_EQ("b", layout->partitionColumns().at(0)->name());
+  // Single-threaded execution.
+  {
+    SCOPE_EXIT {
+      metadata_->dropTableIfExists("test");
+    };
 
-    ASSERT_EQ(1, layout->orderColumns().size());
-    ASSERT_EQ("b", layout->orderColumns().at(0)->name());
+    runCtas(
+        "CREATE TABLE test WITH (bucket_count = 64, bucketed_by = ARRAY['key']) AS "
+        "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber FROM lineitem",
+        60175,
+        [](const auto& plan) {
+          const auto& fragments = plan.fragments();
+          ASSERT_EQ(1, fragments.size());
 
-    ASSERT_EQ(1, layout->sortOrder().size());
-    ASSERT_TRUE(layout->sortOrder().at(0).isAscending);
-    ASSERT_TRUE(layout->sortOrder().at(0).isNullsFirst);
+          auto matcher = core::PlanMatcherBuilder()
+                             .tableScan()
+                             .project()
+                             .tableWrite()
+                             .build();
+          AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
+        },
+        {.numWorkers = 1, .numDrivers = 1});
 
-    ASSERT_EQ(4, layout->numBuckets());
+    verifyPartitionedLayout(getLayout("test"), "key", 64);
+  }
 
-    ASSERT_EQ(0, layout->hivePartitionColumns().size());
+  // Bucketed and sorted.
+  {
+    SCOPE_EXIT {
+      metadata_->dropTableIfExists("test");
+    };
+
+    runCtas(
+        "CREATE TABLE test WITH (bucket_count = 16, bucketed_by = ARRAY['n_nationkey'], sorted_by = ARRAY['n_name']) AS "
+        "SELECT n_nationkey, n_name, 'bar' as y FROM nation",
+        25,
+        verifyPartitionedWrite);
+
+    verifyPartitionedLayout(getLayout("test"), "n_nationkey", 16, "n_name");
   }
 }
 
@@ -513,6 +699,8 @@ velox::Variant WriteTest::evaluateConstantExpr(const lp::Expr& expr) {
 
   return result->variantAt(0);
 }
+
+#undef AXIOM_ASSERT_PLAN
 
 } // namespace
 } // namespace facebook::axiom::optimizer

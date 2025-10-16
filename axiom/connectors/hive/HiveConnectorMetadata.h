@@ -40,6 +40,32 @@ struct HivePartitionHandle : public PartitionHandle {
   const std::optional<int32_t> tableBucketNumber;
 };
 
+/// For Hive, 'partition' means 'bucket'.
+class HivePartitionType : public connector::PartitionType {
+ public:
+  HivePartitionType(
+      int32_t numPartitions,
+      std::vector<velox::TypePtr> partitionKeyTypes)
+      : numPartitions_(numPartitions),
+        partitionKeyTypes_(std::move(partitionKeyTypes)) {}
+
+  /// Types are compatible if numPartitions of one is an interger multiple of
+  /// the other. The partition to use for copartitioning is the one with the
+  /// fewer partitions. If numPartitions is the same, returns 'this'.
+  const PartitionType* copartition(const PartitionType& any) const override;
+
+  velox::core::PartitionFunctionSpecPtr makeSpec(
+      const std::vector<velox::column_index_t>& channels,
+      const std::vector<velox::VectorPtr>& constants,
+      bool isLocal) const override;
+
+  std::string toString() const override;
+
+ private:
+  const int32_t numPartitions_;
+  const std::vector<velox::TypePtr> partitionKeyTypes_;
+};
+
 /// Describes a Hive table layout. Adds a file format and a list of
 /// Hive partitioning columns and an optional bucket count to the base
 /// TableLayout. The partitioning in TableLayout referes to bucketing.
@@ -49,31 +75,25 @@ struct HivePartitionHandle : public PartitionHandle {
 /// tree.
 class HiveTableLayout : public TableLayout {
  public:
+  /// @param numPartitions Hive's bucket count.
+  /// @param partitionedByColumns Hive's bucketed-by keys.
+  /// @param sortedByColumns Hive's sorted-by keys. Applies within a single
+  /// bucket.
+  /// @param sortOrder Sorting order for 'sortedByColumns'. 1:1 with
+  /// 'sortedByColumns'.
+  /// @param hivePartitionedByColumns Hive's partitioned-by keys.
   HiveTableLayout(
       const std::string& name,
       const Table* table,
       velox::connector::Connector* connector,
       std::vector<const Column*> columns,
-      std::vector<const Column*> partitioning,
-      std::vector<const Column*> orderColumns,
+      std::optional<int32_t> numPartitions,
+      std::vector<const Column*> partitionedByColumns,
+      std::vector<const Column*> sortedByColumns,
       std::vector<SortOrder> sortOrder,
       std::vector<const Column*> lookupKeys,
-      std::vector<const Column*> hivePartitionColumns,
-      velox::dwio::common::FileFormat fileFormat,
-      std::optional<int32_t> numBuckets = std::nullopt)
-      : TableLayout(
-            name,
-            table,
-            connector,
-            columns,
-            partitioning,
-            orderColumns,
-            sortOrder,
-            lookupKeys,
-            true),
-        fileFormat_(fileFormat),
-        hivePartitionColumns_(hivePartitionColumns),
-        numBuckets_(numBuckets) {}
+      std::vector<const Column*> hivePartitionedByColumns,
+      velox::dwio::common::FileFormat fileFormat);
 
   velox::dwio::common::FileFormat fileFormat() const {
     return fileFormat_;
@@ -87,10 +107,15 @@ class HiveTableLayout : public TableLayout {
     return numBuckets_;
   }
 
+  const PartitionType* partitionType() const override {
+    return partitionType_.has_value() ? &partitionType_.value() : nullptr;
+  }
+
  protected:
   const velox::dwio::common::FileFormat fileFormat_;
   const std::vector<const Column*> hivePartitionColumns_;
   const std::optional<int32_t> numBuckets_;
+  const std::optional<HivePartitionType> partitionType_;
 };
 
 class HiveConnectorWriteHandle : public ConnectorWriteHandle {

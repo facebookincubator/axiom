@@ -101,6 +101,11 @@ template <typename Builder, typename T>
 void StatisticsBuilderImpl::addStats(
     velox::dwrf::StatisticsBuilder* builder,
     const velox::BaseVector& vector) {
+  VELOX_CHECK(
+      vector.type()->equivalent(*type_),
+      "Type mismatch: {} vs. {}",
+      vector.type()->toString(),
+      type_->toString());
   auto* typedVector = vector.asUnchecked<velox::SimpleVector<T>>();
   T previous{};
   bool hasPrevious = false;
