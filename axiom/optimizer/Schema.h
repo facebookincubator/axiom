@@ -357,6 +357,4 @@ class Schema {
   mutable Map<Map<Table>> connectorTables_;
 };
 
-using SchemaP = Schema*;
-
 } // namespace facebook::axiom::optimizer

@@ -145,7 +145,7 @@ struct SubfieldProjections {
 class ToGraph {
  public:
   ToGraph(
-      const Schema& schema,
+      const connector::SchemaResolver& schemaResolver,
       velox::core::ExpressionEvaluator& evaluator,
       const OptimizerOptions& options);
 
@@ -438,7 +438,8 @@ class ToGraph {
 
   static constexpr uint64_t kAllAllowedInDt = ~0UL;
 
-  const Schema& schema_;
+  // Cache of schema resolver for table schemas.
+  Schema schema_;
 
   velox::core::ExpressionEvaluator& evaluator_;
 

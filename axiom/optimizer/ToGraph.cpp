@@ -78,7 +78,7 @@ velox::ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
 } // namespace
 
 ToGraph::ToGraph(
-    const Schema& schema,
+    const connector::SchemaResolver& schema,
     velox::core::ExpressionEvaluator& evaluator,
     const OptimizerOptions& options)
     : schema_{schema},
