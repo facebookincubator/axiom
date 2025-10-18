@@ -806,7 +806,7 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const velox::RowTypePtr& inputType,
     const std::vector<ExprType>& keys,
     const Distribution& distribution) {
-  if (distribution.isBroadcast || keys.empty()) {
+  if (distribution.isBroadcast() || keys.empty()) {
     return std::make_shared<velox::core::GatherPartitionFunctionSpec>();
   }
 
@@ -822,8 +822,7 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
             ->name()));
   }
 
-  if (const auto* partitionType =
-          distribution.distributionType.partitionType()) {
+  if (const auto* partitionType = distribution.partitionType()) {
     return partitionType->makeSpec(
         keyIndices, /*constants=*/{}, /*isLocal=*/false);
   }
@@ -1267,7 +1266,7 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   const auto keys = toTypedExprs(repartition.distribution().partition);
 
   const auto& distribution = repartition.distribution();
-  if (distribution.isBroadcast) {
+  if (distribution.isBroadcast()) {
     VELOX_CHECK_EQ(0, keys.size());
     source.fragment.planNode = velox::core::PartitionedOutputNode::broadcast(
         nextId(), 1, outputType, exchangeSerdeKind_, sourcePlan);
