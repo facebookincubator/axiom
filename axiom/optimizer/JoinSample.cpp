@@ -68,10 +68,7 @@ template <typename... T>
 ExprCP
 makeCall(std::string_view name, const velox::TypePtr& type, T... inputs) {
   return make<Call>(
-      toName(name),
-      Value(toType(type), 1),
-      ExprVector{inputs...},
-      FunctionSet{});
+      toName(name), Value(toType(type), 1), ExprVector{inputs...});
 }
 
 Value bigintValue() {
@@ -144,8 +141,7 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
     hashes.emplace_back(makeCall(kHash, velox::BIGINT(), key));
   }
 
-  ExprCP hash =
-      make<Call>(toName(kHashMix), bigintValue(), hashes, FunctionSet{});
+  ExprCP hash = make<Call>(toName(kHashMix), bigintValue(), hashes);
 
   ColumnCP hashColumn = make<Column>(toName("hash"), nullptr, hash->value());
   RelationOpPtr project = make<Project>(
