@@ -491,9 +491,9 @@ bool NextJoin::isWorse(const NextJoin& other) const {
   float shuffle =
       plan->distribution().isSamePartition(other.plan->distribution())
       ? 0
-      : plan->cost().fanout * shuffleCost(plan->columns());
-  return cost.unitCost + cost.setupCost + shuffle >
-      other.cost.unitCost + other.cost.setupCost;
+      : other.cost.fanout * shuffleCost(other.plan->columns());
+  return cost.unitCost + cost.setupCost >
+      other.cost.unitCost + other.cost.setupCost + shuffle;
 }
 
 size_t MemoKey::hash() const {
