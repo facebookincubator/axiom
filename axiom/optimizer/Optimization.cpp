@@ -1060,6 +1060,13 @@ void Optimization::joinByHash(
   PlanObjectSet probeColumns;
   probeColumns.unionObjects(plan->columns());
 
+  PrecomputeProjection precomputeProbe(probeInput, state.dt);
+  auto probeKeys = precomputeProbe.toColumns(probe.keys);
+  probeInput = std::move(precomputeProbe).maybeProject(state);
+
+  buildColumns.unionColumns(buildKeys);
+  probeColumns.unionColumns(probeKeys);
+
   ColumnVector columns;
   PlanObjectSet columnSet;
   ColumnCP mark = nullptr;
@@ -1088,10 +1095,6 @@ void Optimization::joinByHash(
   }
   state.columns = columnSet;
   const auto fanout = fanoutJoinTypeLimit(joinType, candidate.fanout);
-
-  PrecomputeProjection precomputeProbe(probeInput, state.dt);
-  auto probeKeys = precomputeProbe.toColumns(probe.keys);
-  probeInput = std::move(precomputeProbe).maybeProject(state);
 
   auto* join = make<Join>(
       JoinMethod::kHash,

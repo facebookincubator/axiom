@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/core.h>
 #include <optimizer/PlanObject.h>
 #include <velox/common/base/Exceptions.h>
 #include <algorithm>
@@ -1160,13 +1161,14 @@ ExprCP ToGraph::translateWindow(const lp::WindowExpr* windowExpr) {
   const auto* name = toName(windowExpr->name());
   auto value = Value(toType(windowExpr->type()), 1);
   WindowSpec spec{std::move(partitionKeys), std::move(orderKeys), std::move(orderTypes)};
+
   return make<Window>(
       name,
       value,
       std::move(args),
       functions,
       std::move(spec),
-      std::move(frame),
+      frame,
       windowExpr->ignoreNulls());
 }
 

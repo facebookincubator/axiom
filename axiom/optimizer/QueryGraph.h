@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <optimizer/QueryGraphContext.h>
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Schema.h"
@@ -951,8 +952,13 @@ class Window : public Call {
             std::move(args),
             functions | FunctionSet::kWindow),
         spec_(std::move(spec)),
-        frame_(std::move(frame)),
+        frame_(frame),
+        column_([&]() {
+          auto windowName = toName(fmt::format("{}_{}", name, id()));
+          return make<Column>(windowName, nullptr, value, windowName);
+        }()),
         ignoreNulls_(ignoreNulls) {
+    columns_.unionColumns(column_);
     columns_.unionColumns(spec_.partitionKeys);
     columns_.unionColumns(spec_.orderKeys);
 
@@ -977,9 +983,14 @@ class Window : public Call {
     return ignoreNulls_;
   }
 
+  const ColumnCP& column() const {
+    return column_;
+  }
+
  private:
   WindowSpec spec_;
   WindowFrame frame_;
+  const ColumnCP column_;
   bool ignoreNulls_;
 };
 

@@ -20,6 +20,8 @@
 #include <optimizer/PlanObject.h>
 #include <optimizer/QueryGraphContext.h>
 #include <algorithm>
+#include <ranges>
+#include <span>
 #include <unordered_map>
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/RelationOp.h"
@@ -204,22 +206,31 @@ RelationOpPtr addWindowOps(
   folly::F14FastMap<const Window*, ColumnCP> windowToColumn;
 
   ColumnVector allColumns = result->columns();
+  PlanObjectSet placedWindows;
   for (auto&& [spec, windows] : specToWindows) {
     for (const auto* window : windows) {
-      auto* windowColumn = make<Column>(
-          toName(fmt::format("__p{}", window->id())), state.dt, window->value());
-
-      allColumns.push_back(windowColumn);
-      windowToColumn[window] = windowColumn;
-      state.exprToColumn[window] = windowColumn;
+      allColumns.push_back(window->column());
+      windowToColumn[window] = window->column();
+      state.exprToColumn[window] = window->column();
+      placedWindows.add(window);
     }
+
+    auto [removeBegin, removeEnd] = std::ranges::remove_if(windows, [&](const WindowCP window) {
+      auto kal = state.placed.contains(window);
+      return kal;
+    });
+    windows.erase(removeBegin, removeEnd);
+    if (windows.empty()) {
+      continue;
+    }
+    state.placed.unionSet(placedWindows);
 
     auto* windowOp = make<WindowOp>(
         std::move(result),
         spec.partitionKeys,
         spec.orderKeys,
         spec.orderTypes,
-        windows,
+        std::move(windows),
         allColumns);
 
     result = windowOp;

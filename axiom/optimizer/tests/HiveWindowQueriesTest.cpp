@@ -36,7 +36,32 @@ class HiveWindowQueriesTest : public test::HiveQueriesTestBase {
   }
 };
 
-TEST_F(HiveWindowQueriesTest, basicRowNumber) {
+TEST_F(HiveWindowQueriesTest, emptySpecRowNumber) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan = lp::PlanBuilder(context)
+                         .tableScan("nation")
+                         .window({"row_number() over ()"})
+                         .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .build();
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  auto referencePlan = exec::test::PlanBuilder()
+                           .tableScan("nation", getSchema("nation"))
+                           .window({"row_number() over ()"})
+                           .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, fullSpecRowNumber) {
   lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
   auto logicalPlan =
       lp::PlanBuilder(context)
@@ -411,6 +436,7 @@ TEST_F(HiveWindowQueriesTest, filters) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
+    std::cerr << plan->toString(true, true) << std::endl;
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
                        .window()
@@ -438,28 +464,34 @@ TEST_F(HiveWindowQueriesTest, joinOn) {
       lp::PlanBuilder(context)
           .tableScan("nation")
           .window(
-              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"}).as("n1")
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .as("n1")
           .join(
-              lp::PlanBuilder(context).tableScan("nation").window(
-                  {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"}).as("n2"),
+              lp::PlanBuilder(context)
+                  .tableScan("nation")
+                  .window(
+                      {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+                  .as("n2"),
               "n1.rn = n2.rn",
               lp::JoinType::kInner)
+          .filter("n1.rn > 993")
           .build();
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    std::cerr << plan->toString(true, true) << std::endl;
-    // auto matcher = core::PlanMatcherBuilder()
-    //                    .tableScan("nation")
-    //                    .window()
-    //                    .project()
-    //                    .hashJoin(core::PlanMatcherBuilder()
-    //                                  .tableScan("nation")
-    //                                  .window()
-    //                                  .project()
-    //                                  .build())
-    //                    .build();
-    // ASSERT_TRUE(matcher->match(plan));
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .hashJoin(core::PlanMatcherBuilder()
+                                     .tableScan("nation")
+                                     .window()
+                                     .project()
+                                     .build())
+                       .filter()
+                       .project()
+                       .build();
+    ASSERT_TRUE(matcher->match(plan));
   }
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -468,11 +500,33 @@ TEST_F(HiveWindowQueriesTest, joinOn) {
           .tableScan("nation", getSchema("nation"))
           .window(
               {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
-          .hashJoin({"rn"}, {"rn2"}, exec::test::PlanBuilder(planNodeIdGenerator)
-          .tableScan("nation", getSchema("nation"))
-          .window(
-              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn2"})
-          .planNode(), "", {})
+          .project({"n_nationkey", "n_name", "n_regionkey", "n_comment", "rn"})
+          .hashJoin(
+              {"rn"},
+              {"rn2"},
+              exec::test::PlanBuilder(planNodeIdGenerator)
+                  .tableScan("nation", getSchema("nation"))
+                  .window(
+                      {"row_number() over (partition by n_regionkey order by n_nationkey) as rn2"})
+                  .project(
+                      {"n_nationkey as n_nationkey_0",
+                       "n_name as n_name_1",
+                       "n_regionkey as n_regionkey_2",
+                       "n_comment as n_comment_3",
+                       "rn2"})
+                  .planNode(),
+              "",
+              {"n_nationkey",
+               "n_name",
+               "n_regionkey",
+               "n_comment",
+               "rn",
+               "n_nationkey_0",
+               "n_name_1",
+               "n_regionkey_2",
+               "n_comment_3",
+               "rn2"})
+          .filter("rn > 993")
           .planNode();
 
   checkSame(logicalPlan, referencePlan);
@@ -495,15 +549,14 @@ TEST_F(HiveWindowQueriesTest, joinDependent) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
-                       .hashJoin(core::PlanMatcherBuilder()
-                                     .tableScan("region")
-                                     .build())
-                       .window()
-                       .window()
-                       .project()
-                       .build();
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .hashJoin(core::PlanMatcherBuilder().tableScan("region").build())
+            .window()
+            .window()
+            .project()
+            .build();
     ASSERT_TRUE(matcher->match(plan));
   }
 
