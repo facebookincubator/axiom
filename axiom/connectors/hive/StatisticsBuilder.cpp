@@ -124,7 +124,12 @@ void StatisticsBuilderImpl::addStats(
         previous = value;
       }
 
-      reinterpret_cast<Builder*>(builder)->addValues(value);
+      // TODO: Remove explicit std::string_view cast.
+      if constexpr (std::is_same_v<T, velox::StringView>) {
+        reinterpret_cast<Builder*>(builder)->addValues(std::string_view(value));
+      } else {
+        reinterpret_cast<Builder*>(builder)->addValues(value);
+      }
       previous = value;
       hasPrevious = true;
     }
