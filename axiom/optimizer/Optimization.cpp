@@ -717,7 +717,7 @@ void Optimization::addPostprocess(
     VELOX_DCHECK(!dt->hasLimit());
     PrecomputeProjection precompute{plan, dt, /*projectAllInputs=*/false};
     auto writeColumns = precompute.toColumns(dt->write->columnExprs());
-    plan = std::move(precompute).maybeProject(state);
+    plan = std::move(precompute).maybeProject();
     state.addCost(*plan);
     // Because table write will be in every plan and it will be root node,
     // it would not affect the choice of plan.
@@ -794,19 +794,20 @@ void Optimization::addAggregation(
     auto args = precompute.toColumns(
         agg->args(), /*aliases=*/nullptr, /*preserveLiterals=*/true);
     auto orderKeys = precompute.toColumns(agg->orderKeys());
-    aggregates.emplace_back(make<Aggregate>(
-        agg->name(),
-        agg->value(),
-        std::move(args),
-        agg->functions(),
-        agg->isDistinct(),
-        condition,
-        agg->intermediateType(),
-        std::move(orderKeys),
-        agg->orderTypes()));
+    aggregates.emplace_back(
+        make<Aggregate>(
+            agg->name(),
+            agg->value(),
+            std::move(args),
+            agg->functions(),
+            agg->isDistinct(),
+            condition,
+            agg->intermediateType(),
+            std::move(orderKeys),
+            agg->orderTypes()));
   }
 
-  plan = std::move(precompute).maybeProject(state);
+  plan = std::move(precompute).maybeProject();
 
   if (isSingleWorker_ && runnerOptions_.numDrivers == 1) {
     auto* singleAgg = make<Aggregation>(
@@ -872,7 +873,7 @@ void Optimization::addOrderBy(
   }
 
   auto* orderBy = make<OrderBy>(
-      std::move(precompute).maybeProject(state),
+      std::move(precompute).maybeProject(),
       std::move(orderKeys),
       dt->orderTypes,
       dt->limit,
@@ -1046,7 +1047,7 @@ void Optimization::joinByHash(
 
   PrecomputeProjection precomputeBuild(buildInput, state.dt);
   auto buildKeys = precomputeBuild.toColumns(build.keys);
-  buildInput = std::move(precomputeBuild).maybeProject(state);
+  buildInput = std::move(precomputeBuild).maybeProject();
 
   auto* buildOp =
       make<HashBuild>(buildInput, ++buildCounter_, build.keys, buildPlan);
@@ -1062,7 +1063,7 @@ void Optimization::joinByHash(
 
   PrecomputeProjection precomputeProbe(probeInput, state.dt);
   auto probeKeys = precomputeProbe.toColumns(probe.keys);
-  probeInput = std::move(precomputeProbe).maybeProject(state);
+  probeInput = std::move(precomputeProbe).maybeProject();
 
   buildColumns.unionColumns(buildKeys);
   probeColumns.unionColumns(probeKeys);
@@ -1169,7 +1170,7 @@ void Optimization::joinByHashRight(
 
   PrecomputeProjection precomputeBuild(buildInput, state.dt);
   auto buildKeys = precomputeBuild.toColumns(build.keys);
-  buildInput = std::move(precomputeBuild).maybeProject(state);
+  buildInput = std::move(precomputeBuild).maybeProject();
 
   auto* buildOp =
       make<HashBuild>(buildInput, ++buildCounter_, build.keys, nullptr);
@@ -1224,7 +1225,7 @@ void Optimization::joinByHashRight(
 
   PrecomputeProjection precomputeProbe(probeInput, state.dt);
   auto probeKeys = precomputeProbe.toColumns(probe.keys);
-  probeInput = std::move(precomputeProbe).maybeProject(state);
+  probeInput = std::move(precomputeProbe).maybeProject();
 
   auto* join = make<Join>(
       JoinMethod::kHash,
@@ -1279,7 +1280,7 @@ void Optimization::crossJoinUnnest(
     // because we can have multiple unnest joins in single JoinCandidate.
 
     auto unnestColumns = precompute.toColumns(unnestExprs);
-    plan = std::move(precompute).maybeProject(state);
+    plan = std::move(precompute).maybeProject();
 
     plan = make<Unnest>(
         std::move(plan),

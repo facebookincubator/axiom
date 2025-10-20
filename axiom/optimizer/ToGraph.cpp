@@ -1496,6 +1496,9 @@ PlanObjectP ToGraph::addProjection(const lp::ProjectNode* project) {
   });
 
   for (auto i : channels) {
+  }
+
+  for (auto i : channels) {
     if (exprs[i]->isInputReference()) {
       const auto& name =
           exprs[i]->asUnchecked<lp::InputReferenceExpr>()->name();

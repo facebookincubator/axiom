@@ -100,11 +100,10 @@ class PrecomputeProjection {
       bool preserveLiterals = false);
 
   /// @returns the original 'input' with an optional ProjectOp on top.
-  RelationOpPtr maybeProject(PlanState& state) && {
+  RelationOpPtr maybeProject() && {
     if (needsProject_) {
-      auto result = addWindowOps(input_, projectExprs_, state);
       return make<Project>(
-          std::move(result),
+          std::move(input_),
           std::move(projectExprs_),
           std::move(projectColumns_),
           /*redundant=*/false);
