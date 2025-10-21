@@ -92,6 +92,7 @@ add_executable(
   DerivedTablePrinterTest.cpp
   FilterPushdownTest.cpp
   HiveAggregationQueriesTest.cpp
+  HiveCrossJoinQueriesTest.cpp
   HiveLimitQueriesTest.cpp
   HiveQueriesTest.cpp
   JoinTest.cpp
