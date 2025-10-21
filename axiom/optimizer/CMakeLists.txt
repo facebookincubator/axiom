@@ -35,6 +35,7 @@ add_library(
   QueryGraph.cpp
   QueryGraphContext.cpp
   RelationOp.cpp
+  RelationOpPrinter.cpp
   Schema.cpp
   Subfields.cpp
   ToGraph.cpp

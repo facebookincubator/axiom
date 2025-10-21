@@ -20,6 +20,7 @@
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/RelationOpVisitor.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/expression/ScopedVarSetter.h"
 
@@ -296,6 +297,12 @@ std::string TableScan::toString(bool /*recursive*/, bool detail) const {
   return out.str();
 }
 
+void TableScan::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 Values::Values(const ValuesTable& valuesTable, ColumnVector columns)
     : RelationOp{RelType::kValues, nullptr, Distribution::gather(), std::move(columns)},
       valuesTable{valuesTable} {
@@ -324,6 +331,12 @@ std::string Values::toString(bool /*recursive*/, bool detail) const {
     out << distribution_.toString() << std::endl;
   }
   return out.str();
+}
+
+void Values::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 Join::Join(
@@ -440,6 +453,12 @@ std::string Join::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+void Join::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 Repartition::Repartition(
     RelationOpPtr input,
     Distribution distribution,
@@ -479,6 +498,12 @@ std::string Repartition::toString(bool recursive, bool detail) const {
     printCost(detail, out);
   }
   return out.str();
+}
+
+void Repartition::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 namespace {
@@ -559,6 +584,12 @@ std::string Unnest::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+void Unnest::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 const QGString& Aggregation::historyKey() const {
   using velox::core::AggregationNode;
   if (step == AggregationNode::Step::kPartial ||
@@ -603,6 +634,12 @@ std::string Aggregation::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+void Aggregation::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 HashBuild::HashBuild(
     RelationOpPtr input,
     int32_t id,
@@ -631,6 +668,12 @@ std::string HashBuild::toString(bool recursive, bool detail) const {
   out << " Build ";
   printCost(detail, out);
   return out.str();
+}
+
+void HashBuild::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 Filter::Filter(RelationOpPtr input, ExprVector exprs)
@@ -686,6 +729,12 @@ std::string Filter::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+void Filter::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 Project::Project(
     const RelationOpPtr& input,
     ExprVector exprs,
@@ -732,6 +781,12 @@ std::string Project::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+void Project::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 OrderBy::OrderBy(
     RelationOpPtr input,
     ExprVector orderKeys,
@@ -759,6 +814,12 @@ std::string OrderBy::toString(bool recursive, bool detail) const {
     out << "order by " << distribution_.orderKeys.size() << " columns ";
   }
   return out.str();
+}
+
+void OrderBy::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 Limit::Limit(RelationOpPtr input, int64_t limit, int64_t offset)
@@ -791,6 +852,12 @@ std::string Limit::toString(bool recursive, bool detail) const {
     out << "offset " << offset << " limit " << limit << " ";
   }
   return out.str();
+}
+
+void Limit::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 UnionAll::UnionAll(RelationOpPtrVector inputsVector)
@@ -844,6 +911,12 @@ std::string UnionAll::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+void UnionAll::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // TODO Figure out a cleaner solution to setting 'distribution' and 'columns'.
 TableWrite::TableWrite(
     RelationOpPtr input,
@@ -886,6 +959,12 @@ std::string TableWrite::toString(bool recursive, bool detail) const {
   }
 
   return out.str();
+}
+
+void TableWrite::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 } // namespace facebook::axiom::optimizer

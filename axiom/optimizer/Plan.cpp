@@ -430,10 +430,24 @@ void JoinCandidate::addEdge(PlanState& state, JoinEdgeP edge) {
   for (auto i = 0; i < newPlacedSide.keys.size(); ++i) {
     auto* key = newPlacedSide.keys[i];
     if (!hasEqual(key, tableSide.keys)) {
+      // Make sure to create hyper edge.
       if (!compositeEdge) {
-        compositeEdge = make<JoinEdge>(*join);
+        compositeEdge = JoinEdge::makeInner(nullptr, joined);
+        if (joined == join->rightTable()) {
+          for (auto i = 0; i < join->numKeys(); ++i) {
+            compositeEdge->addEquality(
+                join->leftKeys()[i], join->rightKeys()[i]);
+          }
+        } else {
+          for (auto i = 0; i < join->numKeys(); ++i) {
+            compositeEdge->addEquality(
+                join->rightKeys()[i], join->leftKeys()[i]);
+          }
+        }
+
         join = compositeEdge;
       }
+
       auto [other, preFanout] = join->otherTable(placedSide.table);
       // do not recompute a fanout after adding more equalities. This makes the
       // join edge non-binary and it cannot be sampled.
@@ -488,12 +502,13 @@ std::string JoinCandidate::toString() const {
 }
 
 bool NextJoin::isWorse(const NextJoin& other) const {
-  float shuffle =
-      plan->distribution().isSamePartition(other.plan->distribution())
-      ? 0
-      : plan->cost().fanout * shuffleCost(plan->columns());
-  return cost.unitCost + cost.setupCost + shuffle >
-      other.cost.unitCost + other.cost.setupCost;
+  return false;
+  // float shuffle =
+  //     plan->distribution().isSamePartition(other.plan->distribution())
+  //     ? 0
+  //     : plan->cost().fanout * shuffleCost(plan->columns());
+  // return cost.unitCost + cost.setupCost + shuffle >
+  //     other.cost.unitCost + other.cost.setupCost;
 }
 
 size_t MemoKey::hash() const {

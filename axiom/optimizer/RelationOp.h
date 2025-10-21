@@ -24,6 +24,9 @@
 
 namespace facebook::axiom::optimizer {
 
+class RelationOpVisitorContext;
+class RelationOpVisitor;
+
 // Represents the cost and cardinality of a RelationOp or Plan. A Cost has a
 // per-row cost, a per-row fanout and a one-time setup cost. For example, a hash
 // join probe has a fanout of 0.3 if 3 of 10 input rows are expected to hit, a
@@ -183,6 +186,10 @@ class RelationOp {
     return static_cast<T*>(this);
   }
 
+  virtual void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const = 0;
+
   const Cost& cost() const {
     return cost_;
   }
@@ -294,6 +301,10 @@ struct TableScan : public RelationOp {
 
   std::string toString(bool recursive, bool detail) const override;
 
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+
   // The base table reference. May occur in multiple scans if the base
   // table decomposes into access via secondary index joined to pk or
   // if doing another pass for late materialization.
@@ -326,6 +337,10 @@ struct Values : RelationOp {
 
   std::string toString(bool recursive, bool detail) const override;
 
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+
   const ValuesTable& valuesTable;
 };
 
@@ -339,6 +354,10 @@ class Repartition : public RelationOp {
       ColumnVector columns);
 
   std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
 };
 
 using RepartitionCP = const Repartition*;
@@ -356,6 +375,10 @@ class Filter : public RelationOp {
   const QGString& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
 
  private:
   const ExprVector exprs_;
@@ -383,6 +406,10 @@ class Project : public RelationOp {
   }
 
   std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
 
  private:
   const ExprVector exprs_;
@@ -420,6 +447,10 @@ struct Join : public RelationOp {
   const QGString& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
 };
 
 using JoinCP = const Join*;
@@ -439,6 +470,10 @@ struct HashBuild : public RelationOp {
   PlanP plan;
 
   std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
 };
 
 using HashBuildCP = const HashBuild*;
@@ -458,6 +493,10 @@ struct Unnest : public RelationOp {
   ColumnVector unnestedColumns;
 
   std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
 };
 
 /// Represents aggregation with or without grouping.
@@ -476,6 +515,10 @@ struct Aggregation : public RelationOp {
   const QGString& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
 };
 
 /// Represents an order by. The order is given by the distribution.
@@ -491,6 +534,10 @@ struct OrderBy : public RelationOp {
   const int64_t offset;
 
   std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
 };
 
 using OrderByCP = const OrderBy*;
@@ -502,6 +549,10 @@ struct UnionAll : public RelationOp {
   const QGString& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
 
   const RelationOpPtrVector inputs;
 };
@@ -520,6 +571,10 @@ struct Limit : public RelationOp {
   }
 
   std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
 };
 
 using LimitCP = const Limit*;
@@ -533,6 +588,10 @@ struct TableWrite : public RelationOp {
       const WritePlan* write);
 
   std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
 
   ExprVector inputColumns;
   const WritePlan* write;

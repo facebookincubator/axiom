@@ -94,6 +94,7 @@ add_executable(
   HiveQueriesTest.cpp
   PrecomputeProjectionTest.cpp
   PlanTest.cpp
+  RelationOpPrinterTest.cpp
   UnnestTest.cpp
   ParquetTpchTest.cpp
   SyntacticJoinOrderTest.cpp

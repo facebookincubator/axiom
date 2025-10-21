@@ -120,4 +120,15 @@ std::string orderByToString(
   return out.str();
 }
 
+std::string columnsToString(const ColumnVector& columns) {
+  std::stringstream out;
+  for (auto i = 0; i < columns.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << columns[i]->toString();
+  }
+  return out.str();
+}
+
 } // namespace facebook::axiom::optimizer
