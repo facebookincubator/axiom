@@ -513,10 +513,10 @@ TEST_F(PlanTest, filterToJoinEdge) {
   {
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
+                       .tableScan("nation")
                        .project()
                        .hashJoin(core::PlanMatcherBuilder()
-                                     .tableScan("nation")
+                                     .tableScan("region")
                                      .project()
                                      .build())
                        .build();
@@ -899,26 +899,27 @@ TEST_F(PlanTest, intersect) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    auto matcher = core::PlanMatcherBuilder()
-                       // TODO Fix this plan to push down (n_regionkey + 1) % 3
-                       // = 1 to all branches of 'intersect'.
-                       .hiveScan("nation", gte("n_nationkey", 13))
-                       .hashJoin(
-                           core::PlanMatcherBuilder()
-                               .hiveScan("nation", gte("n_nationkey", 12))
-                               .hashJoin(
-                                   core::PlanMatcherBuilder()
-                                       .hiveScan(
-                                           "nation",
-                                           lte("n_nationkey", 20),
-                                           "(n_regionkey + 1) % 3 = 1")
-                                       .build(),
-                                   core::JoinType::kRightSemiFilter)
-                               .build(),
-                           core::JoinType::kRightSemiFilter)
-                       .singleAggregation()
-                       .project()
-                       .build();
+    auto matcher =
+        core::PlanMatcherBuilder()
+            // TODO Fix this plan to push down (n_regionkey + 1) % 3
+            // = 1 to all branches of 'intersect'.
+            .hiveScan("nation", gte("n_nationkey", 13))
+            .hashJoin(
+                core::PlanMatcherBuilder()
+                    .hiveScan(
+                        "nation",
+                        lte("n_nationkey", 20),
+                        "(n_regionkey + 1) % 3 = 1")
+                    .hashJoin(
+                        core::PlanMatcherBuilder()
+                            .hiveScan("nation", gte("n_nationkey", 12))
+                            .build(),
+                        core::JoinType::kLeftSemiFilter)
+                    .build(),
+                core::JoinType::kRightSemiFilter)
+            .singleAggregation()
+            .project()
+            .build();
 
     ASSERT_TRUE(matcher->match(plan));
   }

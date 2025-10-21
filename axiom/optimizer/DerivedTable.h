@@ -128,7 +128,8 @@ struct DerivedTable : public PlanObject {
 
   /// True if this dt is already a reducing join imported to a build side. Do
   /// not try to further restrict this with probe side.
-  bool noImportOfExists{false};
+  /// TODO: Should be false when we fix this code.
+  bool noImportOfExists{true};
 
   /// A list of PlanObject IDs for 'tables' in the order of appearance in the
   /// query. Used to produce syntactic join order if requested. Table with id

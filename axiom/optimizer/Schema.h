@@ -79,43 +79,14 @@ AXIOM_DECLARE_ENUM_NAME(OrderType);
 
 using OrderTypeVector = QGVector<OrderType>;
 
-/// Distribution of data. Describes a possible partition function that assigns a
-/// row of data to a partition based on some combination of partition keys. For
-/// a join to be copartitioned, both sides must have compatible partition
-/// functions and the join keys must include the partition keys.
-class DistributionType {
- public:
-  DistributionType(bool isGather = false)
-      : isGather_{isGather}, partitionType_{nullptr} {}
-
-  DistributionType(const connector::PartitionType* partitionType)
-      : isGather_{false}, partitionType_{partitionType} {}
-
-  bool operator==(const DistributionType& other) const = default;
-
-  static DistributionType gather() {
-    static const DistributionType kGather(true);
-    return kGather;
-  }
-
-  bool isGather() const {
-    return isGather_;
-  }
-
-  const connector::PartitionType* partitionType() const {
-    return partitionType_;
-  }
-
- private:
-  bool isGather_;
-
-  /// Partition function. nullptr is not partitioned.
-  const connector::PartitionType* partitionType_;
+/// Type of data distribution.
+struct DistributionType {
+  bool isBroadcast{false};
+  bool isGather{false};
+  const connector::PartitionType* partitionType{nullptr};
 };
 
-/// Describes output of relational operator. If this is partitioned on
-/// some keys, distributionType gives the partition function and
-/// 'partition' gives the input for the partition function.
+/// Describes output of relational operator.
 struct Distribution {
   explicit Distribution() = default;
 
@@ -135,11 +106,19 @@ struct Distribution {
     VELOX_CHECK_EQ(this->orderKeys.size(), this->orderTypes.size());
   }
 
+  Distribution(
+      const connector::PartitionType* partitionType,
+      ExprVector partition)
+      : Distribution{
+            DistributionType{.partitionType = partitionType},
+            std::move(partition)} {}
+
   /// Returns a Distribution for use in a broadcast shuffle.
   static Distribution broadcast() {
-    Distribution distribution;
-    distribution.isBroadcast = true;
-    return distribution;
+    static constexpr DistributionType kBroadcast{
+        .isBroadcast = true,
+    };
+    return {kBroadcast, {}};
   }
 
   /// Returns a distribution for an end of query gather from last stage
@@ -148,7 +127,9 @@ struct Distribution {
   static Distribution gather(
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {}) {
-    static const DistributionType kGather(/*isGather=*/true);
+    static constexpr DistributionType kGather{
+        .isGather = true,
+    };
     return {
         kGather,
         {},
@@ -157,16 +138,29 @@ struct Distribution {
     };
   }
 
-  /// True if 'this' and 'other' have the same number/type of keys and same
-  /// distribution type. Data is copartitioned if both sides have a 1:1
-  /// equality on all partitioning key columns.
-  bool isSamePartition(const Distribution& other) const;
+  /// Returns true if 'this' needs to be repartitioned to match 'desired'.
+  /// Returns false if 'this' can be copartioned with 'desired'.
+  /// Returns nullopt if not enough information to decide.
+  std::optional<bool> maybeNeedsShuffle(const Distribution& desired) const;
 
-  /// True if 'other' has the same ordering columns and order type.
-  bool isSameOrder(const Distribution& other) const;
+  /// Returns true if 'this' needs to be repartitioned to match 'desired'.
+  /// Returns false if 'this' can be copartioned with 'desired'.
+  bool needsShuffle(const Distribution& desired) const;
+
+  /// Returns true if 'this' needs to be sorted to match 'desired'.
+  /// Returns false if 'this' is sorted enough to match 'desired'.
+  bool needsSort(const Distribution& desired) const;
 
   bool isGather() const {
-    return distributionType.isGather();
+    return distributionType.isGather;
+  }
+
+  bool isBroadcast() const {
+    return distributionType.isBroadcast;
+  }
+
+  const connector::PartitionType* partitionType() const {
+    return distributionType.partitionType;
   }
 
   Distribution rename(const ExprVector& exprs, const ColumnVector& names) const;
@@ -201,9 +195,16 @@ struct Distribution {
   /// 4000 rows between hits because lineitem has an average of 4 repeats of
   /// orderkey.
   float spacing{-1};
-
-  bool isBroadcast{false};
 };
+
+inline bool hasCopartition(
+    const connector::PartitionType* current,
+    const connector::PartitionType* desired) {
+  if (current != nullptr && desired != nullptr) {
+    return current == current->copartition(*desired);
+  }
+  return current == desired;
+}
 
 struct SchemaTable;
 using SchemaTableCP = const SchemaTable*;

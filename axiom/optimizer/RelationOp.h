@@ -54,6 +54,23 @@ struct Cost {
   // or index access.
   float setupCost{0};
 
+  /// Total cost of the a RelationOp or Plan.
+  float cost() const {
+    return setupCost + unitCost * inputCardinality;
+  }
+
+  /// Returns the estimated number of result rows.
+  float resultCardinality() const {
+    return fanout * inputCardinality;
+  }
+
+  /// Total cost a RelationOp or Plan plus cost of shuffling the result rows.
+  /// TODO: I'm not sure our shuffle cost model is right.
+  /// Because broadcast vs gather vs partitioned cost are same now.
+  float cost(float shuffleCostPerRow) const {
+    return cost() + shuffleCostPerRow * resultCardinality();
+  }
+
   // Estimate of total data volume  for a hash join build or group/order
   // by/distinct / repartition. The memory footprint may not be this if the
   // operation is streaming or spills.
@@ -189,7 +206,7 @@ class RelationOp {
 
   /// Returns the number of output rows.
   float resultCardinality() const {
-    return cost_.inputCardinality * cost_.fanout;
+    return cost_.resultCardinality();
   }
 
   float inputCardinality() const {

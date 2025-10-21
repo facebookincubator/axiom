@@ -102,12 +102,6 @@ Plan::Plan(RelationOpPtr op, const PlanState& state)
       columns(exprColumns(state.targetExprs)),
       fullyImported(state.dt->fullyImported) {}
 
-bool Plan::isStateBetter(const PlanState& state, float perRowMargin) const {
-  return cost.unitCost * cost.inputCardinality + cost.setupCost >
-      state.cost.unitCost * state.cost.inputCardinality + state.cost.setupCost +
-      perRowMargin * state.cost.fanout;
-}
-
 std::string Plan::printCost() const {
   return cost.toString(true, false);
 }
@@ -121,9 +115,9 @@ std::string Plan::toString(bool detail) const {
 
 void PlanState::addCost(RelationOp& op) {
   VELOX_DCHECK_EQ(cost.inputCardinality, 1);
-  cost.unitCost += cost.fanout * op.cost().unitCost;
   cost.setupCost += op.cost().setupCost;
-  cost.fanout *= op.cost().fanout;
+  cost.unitCost += op.cost().unitCost * op.cost().inputCardinality;
+  cost.fanout = op.cost().resultCardinality();
   cost.totalBytes += op.cost().totalBytes;
   cost.transferBytes += op.cost().transferBytes;
 }
@@ -277,72 +271,76 @@ std::string PlanState::printPlan(RelationOpPtr op, bool detail) const {
 }
 
 PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
-  int32_t replaceIndex = -1;
-  const float shuffleCostPerRow =
-      shuffleCost(plan->columns()) * state.cost.fanout;
+  const float shuffleCostPerRow = shuffleCost(plan->columns());
 
-  if (!plans.empty()) {
-    // Compare with existing. If there is one with same distribution and new is
-    // better, replace. If there is one with a different distribution and the
-    // new one can produce the same distribution by repartition, for cheaper,
-    // add the new one and delete the old one.
-    for (auto i = 0; i < plans.size(); ++i) {
-      auto old = plans[i].get();
-      if (state.input != old->input) {
-        continue;
-      }
-
-      const bool newIsBetter = old->isStateBetter(state);
-      const bool newIsBetterWithShuffle =
-          old->isStateBetter(state, shuffleCostPerRow);
-      const bool sameDist =
-          old->op->distribution().isSamePartition(plan->distribution());
-      const bool sameOrder =
-          old->op->distribution().isSameOrder(plan->distribution());
-      if (sameDist && sameOrder) {
-        if (newIsBetter) {
-          replaceIndex = i;
-          continue;
-        }
-        // There's a better one with same dist and partition.
-        return nullptr;
-      }
-
-      if (newIsBetterWithShuffle && old->op->distribution().orderKeys.empty()) {
-        // Old plan has no order and is worse than new plus shuffle. Can't win.
-        // Erase.
-        queryCtx()->optimization()->trace(
-            OptimizerOptions::kExceededBest,
-            state.dt->id(),
-            old->cost,
-            *old->op);
-        plans.erase(plans.begin() + i);
-        --i;
-        continue;
-      }
-
-      if (plan->distribution().orderKeys.empty() &&
-          !old->isStateBetter(state, -shuffleCostPerRow)) {
-        // New has no order and old would beat it even after adding shuffle.
-        return nullptr;
-      }
+  // Determine is old plan worse the new one in all aspects.
+  auto isWorse = [&](const Plan& old) {
+    if (plan->distribution().needsSort(old.op->distribution())) {
+      // New plan needs a sort to match the old one, so cannot compare.
+      return false;
     }
+    const bool needsShuffle =
+        plan->distribution().needsShuffle(old.op->distribution());
+    return old.cost.cost() >
+        state.cost.cost(needsShuffle ? shuffleCostPerRow : 0);
+  };
+
+  // Determine is old plan better than the new one in all aspects.
+  auto isBetter = [&](const Plan& old) {
+    if (old.op->distribution().needsSort(plan->distribution())) {
+      // Old plan needs a sort to match the new one, so cannot compare.
+      return false;
+    }
+    const bool needsShuffle =
+        old.op->distribution().needsShuffle(plan->distribution());
+    return state.cost.cost() >
+        old.cost.cost(needsShuffle ? shuffleCost(old.op->columns()) : 0);
+  };
+
+  // Compare with existing plans.
+  const auto plansSize = plans.size();
+  enum {
+    kFoundWorse = -1,
+    kNone = 0,
+    kFoundBetter = 1,
+  };
+  auto found = kNone;
+  for (size_t i = 0; i < plans.size(); ++i) {
+    const auto& old = *plans[i];
+    if (old.input != state.input) {
+      // Different plans, cannot compare.
+      continue;
+    }
+    if (isWorse(old)) {
+      // Remove old plan, it is worse than the new one in all aspects.
+      queryCtx()->optimization()->trace(
+          OptimizerOptions::kExceededBest, state.dt->id(), old.cost, *old.op);
+      std::swap(plans[i], plans.back());
+      plans.pop_back();
+      --i;
+      found = kFoundWorse;
+    } else if (found == kNone && isBetter(old)) {
+      // Old plan is better than the new one in all aspects.
+      found = kFoundBetter;
+    }
+  }
+  if (found == kFoundBetter) {
+    // No existing plan was worse than the new one in all aspects,
+    // and at least one existing plan is better than the new one in all aspects.
+    // So don't add the new plan.
+    return nullptr;
   }
 
   auto newPlan = std::make_unique<Plan>(std::move(plan), state);
   auto* result = newPlan.get();
-  auto newPlanCost =
-      result->cost.unitCost + result->cost.setupCost + shuffleCostPerRow;
+  const auto newPlanCost = result->cost.cost(shuffleCostPerRow);
   bestCostWithShuffle = std::min(bestCostWithShuffle, newPlanCost);
-  if (replaceIndex >= 0) {
-    plans[replaceIndex] = std::move(newPlan);
-  } else {
-    plans.push_back(std::move(newPlan));
-  }
+  plans.push_back(std::move(newPlan));
   return result;
 }
 
-PlanP PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
+PlanP PlanSet::best(const Distribution& desired, bool& needsShuffle) {
+  // TODO: Consider desired order here too.
   PlanP best = nullptr;
   PlanP match = nullptr;
   float bestCost = -1;
@@ -351,8 +349,7 @@ PlanP PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
   const bool single = isSingleWorker();
 
   for (const auto& plan : plans) {
-    const float cost =
-        plan->cost.fanout * plan->cost.unitCost + plan->cost.setupCost;
+    const float cost = plan->cost.cost();
 
     auto update = [&](PlanP& current, float& currentCost) {
       if (!current || cost < currentCost) {
@@ -362,7 +359,7 @@ PlanP PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
     };
 
     update(best, bestCost);
-    if (!single && plan->op->distribution().isSamePartition(distribution)) {
+    if (!single && !plan->op->distribution().needsShuffle(desired)) {
       update(match, matchCost);
     }
   }
@@ -374,8 +371,9 @@ PlanP PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
   }
 
   if (match) {
-    const float shuffle = shuffleCost(best->op->columns()) * best->cost.fanout;
-    if (matchCost <= bestCost + shuffle) {
+    const float bestCostWithShuffle =
+        best->cost.cost(shuffleCost(best->op->columns()));
+    if (matchCost <= bestCostWithShuffle) {
       return match;
     }
   }
@@ -488,12 +486,14 @@ std::string JoinCandidate::toString() const {
 }
 
 bool NextJoin::isWorse(const NextJoin& other) const {
-  float shuffle =
-      plan->distribution().isSamePartition(other.plan->distribution())
-      ? 0
-      : plan->cost().fanout * shuffleCost(plan->columns());
-  return cost.unitCost + cost.setupCost + shuffle >
-      other.cost.unitCost + other.cost.setupCost;
+  if (other.plan->distribution().needsSort(plan->distribution())) {
+    // 'other' needs a sort to match 'plan', so cannot compare.
+    return false;
+  }
+  const auto needsShuffle =
+      other.plan->distribution().needsShuffle(plan->distribution());
+  return cost.cost() >
+      other.cost.cost(needsShuffle ? shuffleCost(other.plan->columns()) : 0);
 }
 
 size_t MemoKey::hash() const {

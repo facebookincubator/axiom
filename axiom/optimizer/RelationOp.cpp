@@ -209,8 +209,7 @@ void RelationOp::printCost(bool detail, std::stringstream& out) const {
   auto ctx = queryCtx();
   if (ctx && ctx->contextPlan()) {
     auto plan = ctx->contextPlan();
-    auto totalCost = plan->cost.unitCost + plan->cost.setupCost;
-    auto pct = 100 * cost_.inputCardinality * cost_.unitCost / totalCost;
+    auto pct = 100 * cost_.cost() / plan->cost.cost();
     out << " " << std::fixed << std::setprecision(2) << pct << "% ";
   }
   if (detail) {
@@ -465,7 +464,7 @@ std::string Repartition::toString(bool recursive, bool detail) const {
     out << input()->toString(true, detail) << " ";
   }
 
-  if (distribution().isBroadcast) {
+  if (distribution().isBroadcast()) {
     out << "broadcast ";
   } else if (distribution().isGather()) {
     out << "gather ";
@@ -530,7 +529,7 @@ Aggregation::Aggregation(
   // being unique after n values is 1 - (1/d)^n.
   auto nOut = cardinality -
       cardinality *
-          std::pow(1.0F - (1.0F / cardinality), input_->resultCardinality());
+          std::pow(1.0F - (1.0F / cardinality), cost_.inputCardinality);
 
   cost_.fanout = nOut / cost_.inputCardinality;
   const auto numGrouppingKeys = static_cast<float>(groupingKeys.size());
@@ -797,8 +796,7 @@ UnionAll::UnionAll(RelationOpPtrVector inputsVector)
     : RelationOp{RelType::kUnionAll, nullptr, Distribution{}, inputsVector[0]->columns()},
       inputs{std::move(inputsVector)} {
   for (auto& input : inputs) {
-    cost_.inputCardinality +=
-        input->cost().inputCardinality * input->cost().fanout;
+    cost_.inputCardinality += input->resultCardinality();
   }
 
   cost_.fanout = 1;
