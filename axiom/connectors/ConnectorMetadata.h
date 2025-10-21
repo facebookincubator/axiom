@@ -32,6 +32,8 @@ class ITypedExpr;
 using TypedExprPtr = std::shared_ptr<const ITypedExpr>;
 
 class PartitionFunctionSpec;
+using PartitionFunctionSpecPtr =
+    std::shared_ptr<const core::PartitionFunctionSpec>;
 } // namespace facebook::velox::core
 
 /// Base classes for schema elements used in execution. A ConnectorMetadata
@@ -182,6 +184,41 @@ struct SortOrder {
   bool isNullsFirst{false};
 };
 
+/// Represents a partitioning function. Partitions can be copartitioned if the
+/// types are compatible.
+class PartitionType {
+ public:
+  virtual ~PartitionType() = default;
+
+  /// Returns 'this' or '&other' if the partitions are compatible. Partitions
+  /// are compatible if data in one partitioned dataset can only match data in
+  /// the same partition of another dataset if joined on equality of partition
+  /// keys. Compatibility is not strict equality in the case of e.g. Hive where
+  /// a dataset partitioned 8 ways is compatible with one partitioned 16 ways if
+  /// the function is the same. In such a case the partition to use is the 8 way
+  /// one. On the 16 side data from partitions 0 and 1 match 0 on the 8 side and
+  /// 2, 3 match 1 and so on.
+  virtual const PartitionType* copartition(
+      const PartitionType& other) const = 0;
+
+  /// Returns a factory that makes partition functions. The function takes a
+  /// RowVector and calculates a partition number from the columns identified by
+  /// 'channels'. If channels[i] == kConstantChannel then the corresponding
+  /// element of 'constants' is used. 'isLocal' differentiates between remote
+  /// and local exchange.
+  virtual velox::core::PartitionFunctionSpecPtr makeSpec(
+      const std::vector<velox::column_index_t>& channels,
+      const std::vector<velox::VectorPtr>& constants,
+      bool isLocal) const = 0;
+
+  virtual std::string toString() const = 0;
+
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+};
+
 /// Represents a physical manifestation of a table. There is at least
 /// one layout but for tables that have multiple sort orders, partitionings,
 /// indices, column groups, etc. there is a separate layout for each. The layout
@@ -231,6 +268,14 @@ class TableLayout {
     return partitionColumns_;
   }
 
+  /// Describes how the value in partitionColumns() determines a partition. The
+  /// returned value is owned by 'this'. nullptr if 'partitionColumns_' is
+  /// empty.
+  virtual const PartitionType* partitionType() const {
+    VELOX_CHECK(partitionColumns_.empty());
+    return nullptr;
+  }
+
   /// Columns on which content is ordered within the range of rows covered by a
   /// Split.
   const std::vector<const Column*>& orderColumns() const {
@@ -261,6 +306,11 @@ class TableLayout {
   /// The columns and their names as a RowType.
   const velox::RowTypePtr& rowType() const {
     return rowType_;
+  }
+
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
   }
 
   /// Samples 'pct' percent of rows. Applies filters in 'handle' before
@@ -310,7 +360,7 @@ class Table : public std::enable_shared_from_this<Table> {
       std::string name,
       velox::RowTypePtr type,
       TableKind kind = TableKind::kTable,
-      folly::F14FastMap<std::string, std::string> options = {})
+      folly::F14FastMap<std::string, velox::Variant> options = {})
       : name_(std::move(name)),
         type_(std::move(type)),
         kind_(kind),
@@ -350,8 +400,14 @@ class Table : public std::enable_shared_from_this<Table> {
   /// Returns an estimate of the number of rows in 'this'.
   virtual uint64_t numRows() const = 0;
 
-  virtual const folly::F14FastMap<std::string, std::string>& options() const {
+  virtual const folly::F14FastMap<std::string, velox::Variant>& options()
+      const {
     return options_;
+  }
+
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
   }
 
  protected:
@@ -360,10 +416,8 @@ class Table : public std::enable_shared_from_this<Table> {
   // Discovered from data. In the event of different types, we take the
   // latest (i.e. widest) table type.
   const velox::RowTypePtr type_;
-
   const TableKind kind_;
-
-  const folly::F14FastMap<std::string, std::string> options_;
+  const folly::F14FastMap<std::string, velox::Variant> options_;
 };
 
 using TablePtr = std::shared_ptr<const Table>;
@@ -457,6 +511,11 @@ class ConnectorWriteHandle {
 
   const velox::RowTypePtr& resultType() const {
     return resultType_;
+  }
+
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
   }
 
  private:
@@ -587,7 +646,7 @@ class ConnectorMetadata {
       const ConnectorSessionPtr& session,
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options) {
+      const folly::F14FastMap<std::string, velox::Variant>& options) {
     VELOX_UNSUPPORTED();
   }
 
@@ -636,6 +695,16 @@ class ConnectorMetadata {
     return {};
   }
 
+  /// Drop table with the specified name. If table doesn't exist and 'ifExists'
+  /// is false, raises an error. Otherwise, returns true if table was dropped
+  /// and false if table didn't exist.
+  virtual bool dropTable(
+      const ConnectorSessionPtr& session,
+      std::string_view tableName,
+      bool ifExists) {
+    VELOX_UNSUPPORTED();
+  }
+
   /// Returns column handles whose value uniquely identifies a row for creating
   /// an update or delete record. These may be for example some connector
   /// specific opaque row id or primary key columns.
@@ -643,6 +712,11 @@ class ConnectorMetadata {
       const Table& table,
       WriteKind kind) {
     VELOX_UNSUPPORTED();
+  }
+
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
   }
 };
 

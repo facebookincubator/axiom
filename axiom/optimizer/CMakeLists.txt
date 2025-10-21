@@ -19,6 +19,7 @@ endif()
 add_library(
   axiom_optimizer
   BitSet.cpp
+  ConstantExprEvaluator.cpp
   Cost.cpp
   DerivedTable.cpp
   DerivedTablePrinter.cpp

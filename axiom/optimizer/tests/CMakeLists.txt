@@ -44,16 +44,7 @@ target_link_libraries(
   gtest_main
 )
 
-add_library(axiom_optimizer_tests_presto_parser PrestoParser.cpp)
-
-target_link_libraries(
-  axiom_optimizer_tests_presto_parser
-  axiom_logical_plan_builder
-  axiom_sql_presto_ast
-  antlr4_shared
-)
-
-add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp LogicalPlanMatcher.cpp)
+add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp)
 
 target_link_libraries(
   axiom_optimizer_tests_plan_matcher
@@ -72,7 +63,7 @@ target_link_libraries(
   axiom_optimizer_tests_parquet_tpch
   axiom_optimizer_tests_plan_matcher
   axiom_optimizer_tests_query_test_base
-  axiom_optimizer_tests_presto_parser
+  axiom_sql_presto_parser
   axiom_runner_multifragment_plan
   axiom_runner_tests_utils
 )
@@ -110,7 +101,6 @@ add_executable(
   SubfieldTest.cpp
   FeatureGen.cpp
   Genies.cpp
-  PrestoParserTest.cpp
   TestConnectorQueryTest.cpp
   WriteTest.cpp
 )
@@ -143,7 +133,8 @@ target_link_libraries(
   axiom_optimizer
   axiom_hive_connector_metadata
   axiom_tpch_connector_metadata
-  axiom_optimizer_tests_presto_parser
+  axiom_sql_presto_parser
+  ${READLINE_LIBRARIES}
   velox_query_benchmark
   velox_exec_test_lib
   velox_dwio_common

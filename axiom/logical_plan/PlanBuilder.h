@@ -389,6 +389,13 @@ class PlanBuilder {
   /// Returns the number of output columns.
   size_t numOutput() const;
 
+  /// Returns the names of the output columns. Returns std::nullopt for
+  /// anonymous columns.
+  std::vector<std::optional<std::string>> outputNames() const;
+
+  /// Returns the types of the output columns. 1:1 with outputNames().
+  std::vector<velox::TypePtr> outputTypes() const;
+
   /// Returns the names of the output columns. If some colums are anonymous,
   /// assigns them unique names before returning.
   std::vector<std::string> findOrAssignOutputNames() const;

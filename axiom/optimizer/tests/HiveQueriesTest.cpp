@@ -74,7 +74,8 @@ TEST_F(HiveQueriesTest, crossJoin) {
       prestoParser().parse("SELECT * FROM nation JOIN region ON true");
 
   ASSERT_TRUE(statement->isSelect());
-  auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
+  auto logicalPlan =
+      statement->as<::axiom::sql::presto::SelectStatement>()->plan();
   ASSERT_TRUE(logicalPlan != nullptr);
 }
 

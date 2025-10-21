@@ -219,5 +219,272 @@ TEST_F(HiveAggregationQueriesTest, distinctWithOrderBy) {
       "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
 }
 
+TEST_F(HiveAggregationQueriesTest, ignoreDuplicates) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .aggregate(
+              {},
+              {"bool_and(DISTINCT n_nationkey % 2 = 0)",
+               "bool_or(DISTINCT n_regionkey % 2 = 0)",
+               "bool_and(n_nationkey % 2 = 0)",
+               "bool_or(DISTINCT n_nationkey % 2 = 0)",
+               "bool_and(DISTINCT n_nationkey % 2 = 0) FILTER (WHERE n_nationkey > 10)",
+               "bool_or(DISTINCT n_nationkey % 2 = 0) FILTER (WHERE n_nationkey < 20)"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .project(
+                {"n_nationkey % 2 = 0 as m1",
+                 "n_regionkey % 2 = 0 as m2",
+                 "n_nationkey > 10 as m3",
+                 "n_nationkey < 20 as m4"})
+            .singleAggregation(
+                {},
+                {"bool_and(m1) as agg1",
+                 "bool_or(m2) as agg2",
+                 "bool_or(m1) as agg3",
+                 "bool_and(m1) FILTER (WHERE m3) as agg4",
+                 "bool_or(m1) FILTER (WHERE m4) as agg5"})
+            .project({"agg1", "agg2", "agg1", "agg3", "agg4", "agg5"})
+            .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  {
+    auto plan = planVelox(logicalPlan).plan;
+    const auto& fragments = plan->fragments();
+    ASSERT_EQ(2, fragments.size());
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .project(
+                           {"n_nationkey % 2 = 0 as m1",
+                            "n_regionkey % 2 = 0 as m2",
+                            "n_nationkey > 10 as m3",
+                            "n_nationkey < 20 as m4"})
+                       .partialAggregation(
+                           {},
+                           {"bool_and(m1)",
+                            "bool_or(m2)",
+                            "bool_or(m1)",
+                            "bool_and(m1) FILTER (WHERE m3)",
+                            "bool_or(m1) FILTER (WHERE m4)"})
+                       .partitionedOutput()
+                       .build();
+
+    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
+
+    matcher = core::PlanMatcherBuilder()
+                  .exchange()
+                  .localPartition()
+                  .finalAggregation()
+                  .project()
+                  .build();
+
+    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .project(
+              {"n_nationkey % 2 = 0 as m1",
+               "n_regionkey % 2 = 0 as m2",
+               "n_nationkey > 10 as m3",
+               "n_nationkey < 20 as m4"})
+          .singleAggregation(
+              {},
+              {"bool_and(m1) as agg1",
+               "bool_or(m2) as agg2",
+               "bool_or(m1) as agg3",
+               "bool_and(m1) FILTER (WHERE m3) as agg4",
+               "bool_or(m1) FILTER (WHERE m4) as agg5"})
+          .project({"agg1", "agg2", "agg1", "agg3", "agg4", "agg5"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveAggregationQueriesTest, orderNonSensitive) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .aggregate(
+              {},
+              {"sum(n_nationkey ORDER BY n_regionkey)",
+               "sum(n_nationkey ORDER BY n_nationkey DESC, n_regionkey)",
+               "count(n_regionkey ORDER BY n_nationkey)",
+               "sum(n_nationkey ORDER BY n_regionkey) FILTER (WHERE n_nationkey > 10)",
+               "count(n_regionkey ORDER BY n_nationkey) FILTER (WHERE n_nationkey < 20)"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .project(
+                           {"n_nationkey",
+                            "n_regionkey",
+                            "n_nationkey > 10 as m1",
+                            "n_nationkey < 20 as m2"})
+                       .singleAggregation(
+                           {},
+                           {"sum(n_nationkey) as agg1",
+                            "count(n_regionkey) as agg2",
+                            "sum(n_nationkey) FILTER (WHERE m1) as agg3",
+                            "count(n_regionkey) FILTER (WHERE m2) as agg4"})
+                       .project({"agg1", "agg1", "agg2", "agg3", "agg4"})
+                       .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  {
+    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan;
+    const auto& fragments = plan->fragments();
+    ASSERT_EQ(2, fragments.size());
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .project(
+                           {"n_nationkey",
+                            "n_regionkey",
+                            "n_nationkey > 10 as m1",
+                            "n_nationkey < 20 as m2"})
+                       .partialAggregation(
+                           {},
+                           {"sum(n_nationkey)",
+                            "count(n_regionkey)",
+                            "sum(n_nationkey) FILTER (WHERE m1)",
+                            "count(n_regionkey) FILTER (WHERE m2)"})
+                       .partitionedOutput()
+                       .build();
+
+    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
+
+    matcher = core::PlanMatcherBuilder()
+                  .exchange()
+                  .localPartition()
+                  .finalAggregation()
+                  .project()
+                  .build();
+
+    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+  }
+
+  auto referencePlan = exec::test::PlanBuilder()
+                           .tableScan("nation", getSchema("nation"))
+                           .project(
+                               {"n_nationkey",
+                                "n_regionkey",
+                                "n_nationkey > 10 as m1",
+                                "n_nationkey < 20 as m2"})
+                           .singleAggregation(
+                               {},
+                               {"sum(n_nationkey) as agg1",
+                                "count(n_regionkey) as agg2",
+                                "sum(n_nationkey) FILTER (WHERE m1) as agg3",
+                                "count(n_regionkey) FILTER (WHERE m2) as agg4"})
+                           .project({"agg1", "agg1", "agg2", "agg3", "agg4"})
+                           .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveAggregationQueriesTest, ignoreDuplicatesXOrderNonSensitive) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .aggregate(
+              {},
+              {
+                  "bool_and(DISTINCT n_nationkey % 2 = 0 ORDER BY n_regionkey)",
+                  "bool_or(DISTINCT n_nationkey % 2 = 0 ORDER BY n_regionkey DESC, n_nationkey)",
+                  "bool_and(n_nationkey % 2 = 0 ORDER BY n_regionkey)",
+                  "bool_and(DISTINCT n_nationkey % 2 = 0 ORDER BY n_regionkey) FILTER (WHERE n_nationkey > 10)",
+              })
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .project({"n_nationkey % 2 = 0 as m1", "n_nationkey > 10 as m2"})
+            .singleAggregation(
+                {},
+                {"bool_and(m1) as agg1",
+                 "bool_or(m1) as agg2",
+                 "bool_and(m1) FILTER (WHERE m2) as agg3"})
+            .project({"agg1", "agg2", "agg1", "agg3"})
+            .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  {
+    auto plan = planVelox(logicalPlan).plan;
+    const auto& fragments = plan->fragments();
+    ASSERT_EQ(2, fragments.size());
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .project({"n_nationkey % 2 = 0 as m1", "n_nationkey > 10 as m2"})
+            .partialAggregation(
+                {},
+                {
+                    "bool_and(m1)",
+                    "bool_or(m1)",
+                    "bool_and(m1) FILTER (WHERE m2)",
+                })
+            .partitionedOutput()
+            .build();
+
+    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
+
+    matcher = core::PlanMatcherBuilder()
+                  .exchange()
+                  .localPartition()
+                  .finalAggregation()
+                  .project()
+                  .build();
+
+    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+  }
+
+  auto referencePlan = exec::test::PlanBuilder()
+                           .tableScan("nation", getSchema("nation"))
+                           .project(
+                               {"n_nationkey % 2 = 0 as m1",
+                                "n_nationkey",
+                                "n_regionkey",
+                                "n_nationkey > 10 as m2",
+                                "n_nationkey < 20 as m3"})
+                           .singleAggregation(
+                               {},
+                               {
+                                   "bool_and(m1) as agg1",
+                                   "bool_or(m1) as agg2",
+                                   "bool_and(m1) FILTER (WHERE m2) as agg3",
+                               })
+                           .project({"agg1", "agg2", "agg1", "agg3"})
+                           .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

@@ -20,8 +20,8 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
-#include "axiom/optimizer/tests/PrestoParser.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "axiom/sql/presto/PrestoParser.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::axiom::optimizer {
@@ -54,11 +54,12 @@ class SyntacticJoinOrderTest : public test::QueryTestBase {
   }
 
   lp::LogicalPlanNodePtr parseSql(const std::string& sql) const {
-    test::PrestoParser parser{exec::test::kHiveConnectorId, &optimizerPool()};
+    ::axiom::sql::presto::PrestoParser parser{
+        exec::test::kHiveConnectorId, &optimizerPool()};
     auto statement = parser.parse(sql);
     VELOX_CHECK(statement->isSelect());
 
-    return statement->asUnchecked<test::SelectStatement>()->plan();
+    return statement->as<::axiom::sql::presto::SelectStatement>()->plan();
   }
 
   inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>

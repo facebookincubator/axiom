@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include <gflags/gflags.h>
 
 DECLARE_string(data_path);
 DECLARE_bool(create_dataset);

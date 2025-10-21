@@ -79,76 +79,46 @@ AXIOM_DECLARE_ENUM_NAME(OrderType);
 
 using OrderTypeVector = QGVector<OrderType>;
 
-/// Represents a system that contains or produces data. For cases of federation
-/// where data is only accessible via a specific instance of a specific type of
-/// system, the locus represents the instance and the subclass of Locus
-/// represents the type of system for a schema object. For a RelationOp, the
-/// locus of its distribution means that the op is performed by the
-/// corresponding system. Distributions can be copartitioned only if their locus
-/// is equal (==) to the other locus. A Locus is referenced by raw pointer and
-/// may be allocated from outside the optimization arena. It is immutable and
-/// lives past the optimizer arena.
-class Locus {
+/// Distribution of data. Describes a possible partition function that assigns a
+/// row of data to a partition based on some combination of partition keys. For
+/// a join to be copartitioned, both sides must have compatible partition
+/// functions and the join keys must include the partition keys.
+class DistributionType {
  public:
-  explicit Locus(Name name, velox::connector::Connector* connector)
-      : name_(name), connector_(connector) {}
+  DistributionType(bool isGather = false)
+      : isGather_{isGather}, partitionType_{nullptr} {}
 
-  virtual ~Locus() = default;
+  DistributionType(const connector::PartitionType* partitionType)
+      : isGather_{false}, partitionType_{partitionType} {}
 
-  Name name() const {
-    // Make sure the name is in the current optimization
-    // arena. 'this' may live across several arenas.
-    return toName(name_);
+  bool operator==(const DistributionType& other) const = default;
+
+  static DistributionType gather() {
+    static const DistributionType kGather(true);
+    return kGather;
   }
 
-  const velox::connector::Connector* connector() const {
-    // // 'connector_' can be nullptr if no executable plans are made.
-    VELOX_CHECK_NOT_NULL(connector_);
-    return connector_;
+  bool isGather() const {
+    return isGather_;
   }
 
-  std::string toString() const {
-    return name_;
+  const connector::PartitionType* partitionType() const {
+    return partitionType_;
   }
 
  private:
-  const Name name_;
-  const velox::connector::Connector* connector_;
+  bool isGather_;
+
+  /// Partition function. nullptr is not partitioned.
+  const connector::PartitionType* partitionType_;
 };
 
-using LocusCP = const Locus*;
-
-/// Method for determining a partition given an ordered list of partitioning
-/// keys. Hive hash is an example, range partitioning is another. Add values
-/// here for more types.
-enum class ShuffleMode : uint8_t {
-  kNone,
-  kHive,
-};
-
-/// Distribution of data. 'numPartitions' is 1 if the data is not partitioned.
-/// There is copartitioning if the DistributionType is the same on both sides
-/// and both sides have an equal number of 1:1 type matched partitioning keys.
-struct DistributionType {
-  bool operator==(const DistributionType& other) const = default;
-
-  LocusCP locus{nullptr};
-  int32_t numPartitions{1};
-  bool isGather{false};
-  ShuffleMode mode{ShuffleMode::kNone};
-
-  static DistributionType gather() {
-    static constexpr DistributionType kGather = {
-        .isGather = true,
-    };
-    return kGather;
-  }
-};
-
-// Describes output of relational operator. If base table, cardinality is
-// after filtering.
+/// Describes output of relational operator. If this is partitioned on
+/// some keys, distributionType gives the partition function and
+/// 'partition' gives the input for the partition function.
 struct Distribution {
   explicit Distribution() = default;
+
   Distribution(
       DistributionType distributionType,
       ExprVector partition,
@@ -166,8 +136,8 @@ struct Distribution {
   }
 
   /// Returns a Distribution for use in a broadcast shuffle.
-  static Distribution broadcast(DistributionType distributionType) {
-    Distribution distribution{distributionType, {}};
+  static Distribution broadcast() {
+    Distribution distribution;
     distribution.isBroadcast = true;
     return distribution;
   }
@@ -178,8 +148,9 @@ struct Distribution {
   static Distribution gather(
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {}) {
+    static const DistributionType kGather(/*isGather=*/true);
     return {
-        DistributionType::gather(),
+        kGather,
         {},
         std::move(orderKeys),
         std::move(orderTypes),
@@ -194,40 +165,43 @@ struct Distribution {
   /// True if 'other' has the same ordering columns and order type.
   bool isSameOrder(const Distribution& other) const;
 
+  bool isGather() const {
+    return distributionType.isGather();
+  }
+
   Distribution rename(const ExprVector& exprs, const ColumnVector& names) const;
 
   std::string toString() const;
 
   DistributionType distributionType;
 
-  // Partitioning columns. The values of these columns determine which of
-  // 'numPartitions' contains any given row. This does not specify the
-  // partition function (e.g. Hive bucket or range partition).
+  /// Partitioning columns. The values of these columns determine which of
+  /// partition contains any given row. Should be used together with
+  /// DistributionType::partitionType.
   ExprVector partition;
 
-  // Ordering columns. Each partition is ordered by these. Specifies that
-  // streaming group by or merge join are possible.
+  /// Ordering columns. Each partition is ordered by these. Specifies that
+  /// streaming group by or merge join are possible.
   ExprVector orderKeys;
 
-  // Corresponds 1:1 to 'order'. The size of this gives the number of leading
-  // columns of 'order' on which the data is sorted.
+  /// Corresponds 1:1 to 'order'. The size of this gives the number of leading
+  /// columns of 'order' on which the data is sorted.
   OrderTypeVector orderTypes;
 
-  // Number of leading elements of 'order' such that these uniquely
-  // identify a row. 0 if there is no uniqueness. This can be non-0 also if
-  // data is not sorted. This indicates a uniqueness for joining.
+  /// Number of leading elements of 'order' such that these uniquely identify a
+  /// row. 0 if there is no uniqueness. This can be non-0 also if data is not
+  /// sorted. This indicates a uniqueness for joining.
   int32_t numKeysUnique{0};
 
-  // Specifies the selectivity between the source of the ordered data
-  // and 'this'. For example, if orders join lineitem and both are
-  // ordered on orderkey and there is a 1/1000 selection on orders,
-  // the distribution after the filter would have a spacing of 1000,
-  // meaning that lineitem is hit every 1000 orders, meaning that an
-  // index join with lineitem would skip 4000 rows between hits
-  // because lineitem has an average of 4 repeats of orderkey.
+  /// Specifies the selectivity between the source of the ordered data and
+  /// 'this'. For example, if orders join lineitem and both are ordered on
+  /// orderkey and there is a 1/1000 selection on orders, the distribution after
+  /// the filter would have a spacing of 1000, meaning that lineitem is hit
+  /// every 1000 orders, meaning that an index join with lineitem would skip
+  /// 4000 rows between hits because lineitem has an average of 4 repeats of
+  /// orderkey.
   float spacing{-1};
 
-  // True if the data is replicated to 'numPartitions'.
   bool isBroadcast{false};
 };
 
@@ -238,22 +212,19 @@ using SchemaTableCP = const SchemaTable*;
 /// of a table. A ColumnGroup may have a uniqueness constraint over a
 /// set of columns, a partitioning and an ordering plus a set of
 /// payload columns. An index is a ColumnGroup that may not have all
-/// columns but is organized to facilitate retrievel. We use the name
+/// columns but is organized to facilitate retrieval. We use the name
 /// index for ColumnGroup when using it for lookup.
 struct ColumnGroup {
   ColumnGroup(
-      Name name,
-      SchemaTableCP table,
+      const SchemaTable& table,
+      const connector::TableLayout& layout,
       Distribution distribution,
-      ColumnVector columns,
-      const connector::TableLayout* layout = nullptr)
-      : name{name},
-        table{table},
-        layout{layout},
+      ColumnVector columns)
+      : table{&table},
+        layout{&layout},
         distribution{std::move(distribution)},
         columns{std::move(columns)} {}
 
-  Name name;
   SchemaTableCP table;
   const connector::TableLayout* layout;
   const Distribution distribution;
@@ -312,29 +283,16 @@ float baseSelectivity(PlanObjectCP object);
 /// partitioned physical representations (ColumnGroups). Not all ColumnGroups
 /// (aka indices) need to contain all columns.
 struct SchemaTable {
-  SchemaTable(Name name, const velox::RowTypePtr& type, float cardinality)
-      : name{name}, type{&toType(type)->asRow()}, cardinality{cardinality} {}
+  explicit SchemaTable(const connector::Table& connectorTable)
+      : connectorTable{&connectorTable},
+        cardinality{static_cast<float>(connectorTable.numRows())} {}
 
-  /// Adds an index. The arguments set the corresponding members of a
-  /// Distribution.
   ColumnGroupCP addIndex(
-      Name name,
-      int32_t numKeysUnique,
-      int32_t numOrdering,
-      const ColumnVector& keys,
-      DistributionType distributionType,
-      const ColumnVector& partition,
-      ColumnVector columns,
-      const connector::TableLayout* layout);
+      const connector::TableLayout& layout,
+      Distribution distribution,
+      ColumnVector columns);
 
-  /// Finds or adds a column with 'name' and 'value'.
-  ColumnCP column(std::string_view name, const Value& value);
-
-  ColumnCP findColumn(std::string_view name) const;
-
-  int64_t numRows() const {
-    return static_cast<int64_t>(columnGroups[0]->layout->table().numRows());
-  }
+  ColumnCP findColumn(Name name) const;
 
   /// True if 'columns' match no more than one row.
   bool isUnique(CPSpan<Column> columns) const;
@@ -347,10 +305,14 @@ struct SchemaTable {
   /// equality constraint.
   IndexInfo indexByColumns(CPSpan<Column> columns) const;
 
-  std::vector<ColumnCP> toColumns(const std::vector<std::string>& names) const;
+  const std::string& name() const {
+    return connectorTable->name();
+  }
 
-  const Name name;
-  const velox::RowType* type;
+  // Table description from external schema.
+  // This is the source-dependent representation from which 'this' was created.
+  const connector::Table* const connectorTable;
+
   const float cardinality;
 
   // Lookup from name to column.
@@ -358,10 +320,6 @@ struct SchemaTable {
 
   // All indices. Must contain at least one.
   QGVector<ColumnGroupCP> columnGroups;
-
-  // Table description from external schema. This is the
-  // source-dependent representation from which 'this' was created.
-  const connector::Table* connectorTable{nullptr};
 };
 
 /// Represents a collection of tables. Normally filled in ad hoc given
@@ -371,11 +329,11 @@ struct SchemaTable {
 /// optimization arena.  Objects of different catalogs/schemas get
 /// added to 'this' on first use. The Schema feeds from a
 /// SchemaResolver which interfaces to a local/remote metadata
-/// repository. The objects have a default Locus for convenience.
+/// repository.
 class Schema {
  public:
   /// Constructs a Schema for producing executable plans, backed by 'source'.
-  Schema(Name name, connector::SchemaResolver* source, LocusCP locus);
+  explicit Schema(const connector::SchemaResolver& source) : source_{&source} {}
 
   /// Returns the table with 'name' or nullptr if not found, using
   /// the connector specified by connectorId to perform table lookups.
@@ -383,25 +341,20 @@ class Schema {
   SchemaTableCP findTable(std::string_view connectorId, std::string_view name)
       const;
 
-  Name name() const {
-    return name_;
-  }
-
  private:
   struct Table {
-    SchemaTableCP schemaTable{nullptr};
     connector::TablePtr connectorTable;
+    SchemaTableCP schemaTable{nullptr};
   };
 
-  Name name_;
   // This map from connector ID to map of tables in that connector.
   // In the tables map, the key is the full table name and the value is
   // schema table (optimizer object) and connector table (connector object).
-  mutable NameMap<NameMap<Table>> connectorTables_;
-  connector::SchemaResolver* source_{nullptr};
-  LocusCP defaultLocus_;
-};
+  template <typename T>
+  using Map = folly::F14FastMap<std::string_view, T>;
 
-using SchemaP = Schema*;
+  const connector::SchemaResolver* source_;
+  mutable Map<Map<Table>> connectorTables_;
+};
 
 } // namespace facebook::axiom::optimizer

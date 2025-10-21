@@ -15,11 +15,8 @@
  */
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
-#include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
-#include <readline/history.h>
-#include <readline/readline.h>
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <iostream>
@@ -34,31 +31,61 @@
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/sql/presto/PrestoParser.h"
+#include "velox/benchmarks/QueryBenchmarkBase.h"
+#include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/VectorSaver.h"
 
 DEFINE_string(
     data_path,
     "",
     "Root path of data. Data layout must follow Hive-style partitioning. ");
-DEFINE_string(data_format, "parquet", "Data format: parquet or dwrf.");
+
+// Defined in velox/benchmarks/QueryBenchmarkBase.cpp
+DECLARE_string(ssd_path);
+DECLARE_int32(ssd_cache_gb);
+DECLARE_int32(ssd_checkpoint_interval_gb);
+DECLARE_int32(cache_gb);
+
+DEFINE_bool(use_mmap, false, "Use mmap for buffers and cache");
 
 DEFINE_uint32(optimizer_trace, 0, "Optimizer trace level");
+
+DEFINE_bool(print_logical_plan, false, "Print logical plan (optimizer input)");
+
+DEFINE_bool(print_plan, false, "Print optimizer results");
+
+DEFINE_bool(print_short_plan, false, "Print one line plan from optimizer.");
+
+DEFINE_bool(print_velox_plan, false, "Print executable Velox plan");
+
+DEFINE_bool(
+    print_stats,
+    false,
+    "Print executable Velox plan annotated with runtime statistics");
+
+// Defined in velox/benchmarks/QueryBenchmarkBase.cpp
+DECLARE_bool(include_custom_stats);
 
 DEFINE_int32(max_rows, 100, "Max number of printed result rows");
 
 DEFINE_int32(num_workers, 4, "Number of in-process workers");
-DEFINE_int32(num_drivers, 4, "Number of drivers per worker");
+
+// Defined in velox/benchmarks/QueryBenchmarkBase.cpp
+DECLARE_int32(num_drivers);
 
 DEFINE_int64(split_target_bytes, 16 << 20, "Approx bytes covered by one split");
 
@@ -67,12 +94,29 @@ DEFINE_string(
     "",
     "Text of query. If empty, reads ';' separated queries from standard input");
 
+DEFINE_string(
+    record,
+    "",
+    "Name of SQL file with a single query. Writes the "
+    "output to <name>.ref for use with --check");
+
+DEFINE_string(
+    check,
+    "",
+    "Name of SQL file with a single query. Runs and "
+    "compares with <name>.ref, previously recorded with --record");
+
+DEFINE_bool(
+    check_test_flag_combinations,
+    true,
+    "Check that all runs in test_flags_file sweep produce the same result");
+
 using namespace facebook::velox;
 
 namespace facebook::axiom {
 
 const char* helpText =
-    "Axiom Interactive SQL\n"
+    "Velox Interactive SQL\n"
     "\n"
     "Type SQL and end with ';'.\n"
     "To set a flag, type 'flag <gflag_name> = <value>;' Leave a space on either side of '='.\n"
@@ -82,17 +126,29 @@ const char* helpText =
     "num_workers - Make a distributed plan for this many workers. Runs it in-process with remote exchanges with serialization and passing data in memory. If num_workers is 1, makes single node plans without remote exchanges.\n"
     "\n"
     "num_drivers - Specifies the parallelism for workers. This many threads per pipeline per worker.\n"
-    "\n";
+    "\n"
+    "print_logical_plan - Prints logical plan (input to the optimizer)r.\n"
+    "\n"
+    "print_short_plan - Prints a one line summary of join order.\n"
+    "\n"
+    "print_plan - Prints optimizer best plan with per operator cardinalities and costs.\n"
+    "\n"
+    "print_velox_plan - Prints executable Velox plan.\n"
+    "\n"
+    "print_stats - Prints the Velox stats of after execution. Annotates operators with predicted and acttual output cardinality.\n"
+    "\n"
+    "include_custom_stats - Prints per operator runtime stats.\n";
 
 static const std::string kHiveConnectorId = "hive";
 
-class VeloxRunner {
+class VeloxRunner : public velox::QueryBenchmarkBase {
  public:
-  void initialize() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-
+  void initialize() override {
+    initializeMemoryManager();
     rootPool_ = memory::memoryManager()->addRootPool("axiom_sql");
+
     optimizerPool_ = rootPool_->addLeafChild("optimizer");
+    checkPool_ = rootPool_->addLeafChild("check");
 
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
@@ -135,6 +191,42 @@ class VeloxRunner {
             std::thread::hardware_concurrency() * 2,
             FLAGS_num_workers * FLAGS_num_drivers * 2 + 2));
     spillExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(4);
+  }
+
+  void initializeMemoryManager() {
+    if (FLAGS_cache_gb) {
+      memory::MemoryManager::Options options;
+      int64_t memoryBytes = FLAGS_cache_gb * (1LL << 30);
+      options.useMmapAllocator = FLAGS_use_mmap;
+      options.allocatorCapacity = memoryBytes;
+      options.useMmapArena = true;
+      options.mmapArenaCapacityRatio = 1;
+      memory::MemoryManager::testingSetInstance(options);
+
+      cache_ = cache::AsyncDataCache::create(
+          memory::memoryManager()->allocator(), setupSsdCache());
+      cache::AsyncDataCache::setInstance(cache_.get());
+    } else {
+      memory::MemoryManager::Options options;
+      memory::MemoryManager::testingSetInstance(options);
+    }
+  }
+
+  std::unique_ptr<cache::SsdCache> setupSsdCache() {
+    if (FLAGS_ssd_cache_gb) {
+      constexpr int32_t kNumSsdShards = 16;
+      cacheExecutor_ =
+          std::make_unique<folly::IOThreadPoolExecutor>(kNumSsdShards);
+      const cache::SsdCache::Config config(
+          FLAGS_ssd_path,
+          static_cast<uint64_t>(FLAGS_ssd_cache_gb) << 30,
+          kNumSsdShards,
+          cacheExecutor_.get(),
+          static_cast<uint64_t>(FLAGS_ssd_checkpoint_interval_gb) << 30);
+      return std::make_unique<cache::SsdCache>(config);
+    }
+
+    return nullptr;
   }
 
   std::shared_ptr<velox::connector::Connector> registerTpchConnector() {
@@ -181,29 +273,15 @@ class VeloxRunner {
     return connector;
   }
 
-  struct Timing {
-    uint64_t micros{0};
-    uint64_t userNanos{0};
-    uint64_t systemNanos{0};
-
-    std::string toString() const {
-      std::stringstream out;
-      out << succinctNanos(micros * 1000) << " / " << succinctNanos(userNanos)
-          << " user / " << succinctNanos(systemNanos) << " system ("
-          << (100 * (userNanos + systemNanos) / (micros * 1000)) << "%)";
-      return out.str();
-    }
-  };
-
   std::vector<RowVectorPtr> runInner(
       runner::LocalRunner& runner,
-      Timing& timing) {
+      RunStats& stats) {
     std::vector<RowVectorPtr> results;
-
+    uint64_t micros = 0;
     {
       struct rusage start;
       getrusage(RUSAGE_SELF, &start);
-      MicrosecondTimer timer(&timing.micros);
+      MicrosecondTimer timer(&micros);
 
       while (auto rows = runner.next()) {
         results.push_back(rows);
@@ -214,11 +292,22 @@ class VeloxRunner {
       auto tvNanos = [](struct timeval tv) {
         return tv.tv_sec * 1000000000 + tv.tv_usec * 1000;
       };
-      timing.userNanos = tvNanos(final.ru_utime) - tvNanos(start.ru_utime);
-      timing.systemNanos = tvNanos(final.ru_stime) - tvNanos(start.ru_stime);
+      stats.userNanos = tvNanos(final.ru_utime) - tvNanos(start.ru_utime);
+      stats.systemNanos = tvNanos(final.ru_stime) - tvNanos(start.ru_stime);
     }
+    stats.micros = micros;
 
     return results;
+  }
+
+  // Stores results and plans to 'ref', to be used with --check.
+  void setRecordStream(std::ofstream* ref) {
+    record_ = ref;
+  }
+
+  // Compares results to data in 'ref'. 'ref' is produced with --record.
+  void setCheckStream(std::ifstream* ref) {
+    check_ = ref;
   }
 
   connector::TablePtr createTable(
@@ -309,12 +398,7 @@ class VeloxRunner {
       const auto* drop =
           sqlStatement->as<::axiom::sql::presto::DropTableStatement>();
 
-      try {
-        dropTable(*drop);
-      } catch (std::exception& e) {
-        std::cerr << "DROP TABLE failed: " << e.what() << std::endl;
-        return;
-      }
+      dropTable(*drop);
       return;
     }
 
@@ -323,7 +407,82 @@ class VeloxRunner {
     const auto logicalPlan =
         sqlStatement->as<::axiom::sql::presto::SelectStatement>()->plan();
 
-    runSql(logicalPlan);
+    if (record_ || check_) {
+      std::string error;
+      std::string plan;
+      std::vector<RowVectorPtr> result;
+      runSql(logicalPlan, nullptr, nullptr, &error);
+      if (error.empty()) {
+        runSql(logicalPlan, &result, &plan, &error);
+      }
+
+      if (record_) {
+        if (!error.empty()) {
+          writeString(error, *record_);
+        } else {
+          writeString("", *record_);
+          writeString(plan, *record_);
+          writeVectors(result, *record_);
+        }
+      } else if (check_) {
+        auto refError = readString(*check_);
+        if (refError != error) {
+          ++numFailed_;
+          std::cerr << "Expected error "
+                    << (refError.empty() ? std::string("no error") : refError)
+                    << " got "
+                    << (error.empty() ? std::string("no error") : error)
+                    << std::endl;
+          if (!refError.empty()) {
+            readString(*check_);
+            readVectors(*check_);
+          }
+          return;
+        }
+        if (!error.empty()) {
+          // errors matched.
+          return;
+        }
+        auto refPlan = readString(*check_);
+        auto refResult = readVectors(*check_);
+        bool planMiss = false;
+        bool resultMiss = false;
+        if (plan != refPlan) {
+          std::cerr << "Plan mismatch: Expected " << refPlan << std::endl
+                    << " got " << plan << std::endl;
+          ++numPlanMismatch_;
+          planMiss = true;
+        }
+        if (!exec::test::assertEqualResults(refResult, result)) {
+          ++numResultMismatch_;
+          resultMiss = true;
+        }
+        if (!resultMiss && !planMiss) {
+          ++numPassed_;
+        } else {
+          ++numFailed_;
+        }
+      }
+    } else {
+      if (!FLAGS_test_flags_file.empty()) {
+        logicalPlan_ = logicalPlan;
+        try {
+          parameters_.clear();
+          runStats_.clear();
+          gflags::FlagSaver save;
+          runAllCombinations();
+          for (auto& dim : parameters_) {
+            modifiedFlags_.insert(dim.flag);
+          }
+        } catch (const std::exception&) {
+        }
+        hasReferenceResult_ = false;
+        referenceResult_.clear();
+        referenceRunner_.reset();
+      } else {
+        runSql(logicalPlan);
+      }
+    }
   }
 
   std::shared_ptr<core::QueryCtx> newQuery() {
@@ -372,13 +531,13 @@ class VeloxRunner {
       waitForCompletion(runner);
     };
 
-    Timing timing;
-    auto results = runInner(*runner, timing);
+    RunStats unused;
+    auto results = runInner(*runner, unused);
 
     printPlanWithStats(*runner, planAndStats.prediction);
 
     std::cout << "(" << countResults(results) << " rows in " << results.size()
-              << " batches) " << timing.toString() << std::endl
+              << " batches)" << std::endl
               << std::endl;
   }
 
@@ -386,11 +545,21 @@ class VeloxRunner {
   // @param checkDerivedTable Optional lambda to call after to-graph stage of
   // optimization. If returns 'false', the optimization stops and returns an
   // empty result.
+  // @param checkBestPlan Optional lambda to call after selecting best physical
+  // plan. If returns 'false', the optimization stops and returns an empty
+  // result.
   optimizer::PlanAndStats optimize(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       const std::shared_ptr<core::QueryCtx>& queryCtx,
       const std::function<bool(const optimizer::DerivedTable&)>&
-          checkDerivedTable = nullptr) {
+          checkDerivedTable = nullptr,
+      const std::function<bool(const optimizer::Plan&)>& checkBestPlan =
+          nullptr) {
+    if (FLAGS_print_logical_plan) {
+      std::cout << "Logical plan: " << std::endl
+                << logical_plan::PlanPrinter::toText(*logicalPlan) << std::endl;
+    }
+
     runner::MultiFragmentPlan::Options opts;
     opts.numWorkers = FLAGS_num_workers;
     opts.numDrivers = FLAGS_num_drivers;
@@ -423,6 +592,21 @@ class VeloxRunner {
     }
 
     auto best = optimization.bestPlan();
+
+    if (checkBestPlan && !checkBestPlan(*best)) {
+      return {};
+    }
+
+    if (FLAGS_print_short_plan) {
+      std::cout << "Physical plan (oneline): " << best->toString(false)
+                << std::endl;
+    }
+
+    if (FLAGS_print_plan) {
+      std::cout << "Physical plan: " << std::endl
+                << best->toString(true) << std::endl;
+    }
+
     return optimization.toVeloxPlan(best->op);
   }
 
@@ -462,14 +646,36 @@ class VeloxRunner {
   /// the plan text in *planString and the error message in *errorString.
   /// *errorString is not set if no error. Any of these may be nullptr.
   std::shared_ptr<runner::LocalRunner> runSql(
-      const logical_plan::LogicalPlanNodePtr& logicalPlan) {
+      const logical_plan::LogicalPlanNodePtr& logicalPlan,
+      std::vector<RowVectorPtr>* resultVector = nullptr,
+      std::string* planString = nullptr,
+      std::string* errorString = nullptr,
+      std::vector<exec::TaskStats>* statsReturn = nullptr,
+      RunStats* runStatsReturn = nullptr) {
     auto queryCtx = newQuery();
     optimizer::PlanAndStats planAndStats;
     try {
-      planAndStats = optimize(logicalPlan, queryCtx);
+      planAndStats = optimize(
+          logicalPlan,
+          queryCtx,
+          /*checkDerivedTable=*/nullptr,
+          [&](const auto& best) {
+            if (planString) {
+              *planString = best.op->toString(true, false);
+            }
+            return true; // Continue the optimization.
+          });
     } catch (const std::exception& e) {
       std::cerr << "Failed to optimize: " << e.what() << std::endl;
+      if (errorString) {
+        *errorString = fmt::format("Failed to optimize: {}", e.what());
+      }
       return nullptr;
+    }
+
+    if (FLAGS_print_velox_plan) {
+      std::cout << "Velox executable plan: " << std::endl
+                << planAndStats.plan->toString() << std::endl;
     }
 
     try {
@@ -478,20 +684,74 @@ class VeloxRunner {
         waitForCompletion(runner);
       };
 
-      Timing timing;
-      auto results = runInner(*runner, timing);
+      RunStats runStats;
+      auto results = runInner(*runner, runStats);
+
+      if (resultVector) {
+        *resultVector = results;
+      }
 
       const auto stats = runner->stats();
+      if (statsReturn) {
+        *statsReturn = stats;
+      }
+
+      const auto& fragments = planAndStats.plan->fragments();
+      for (auto i = 0; i < fragments.size(); ++i) {
+        auto nodeStats = exec::toPlanStats(stats[i]);
+        velox::core::PlanNode::findFirstNode(
+            fragments[i].fragment.planNode.get(), [&](const auto* node) {
+              if (const auto* scan =
+                      dynamic_cast<const core::TableScanNode*>(node)) {
+                auto statsIt = nodeStats.find(scan->id());
+                if (statsIt != nodeStats.end()) {
+                  runStats.rawInputBytes += statsIt->second.rawInputBytes;
+                }
+              }
+
+              return false;
+            });
+      }
+
+      if (runStatsReturn) {
+        *runStatsReturn = runStats;
+      }
 
       const int numRows = printResults(results);
 
+      if (FLAGS_print_stats) {
+        printPlanWithStats(*runner, planAndStats.prediction);
+      }
+
       history_->recordVeloxExecution(planAndStats, stats);
-      std::cout << numRows << " rows, " << timing.toString() << std::endl;
+      std::cout << numRows << " rows " << runStats.toString(false) << std::endl;
 
       return runner;
     } catch (const std::exception& e) {
       std::cerr << "Query terminated with: " << e.what() << std::endl;
+      if (errorString) {
+        *errorString = fmt::format("Runtime error: {}", e.what());
+      }
       return nullptr;
+    }
+  }
+
+  void runMain(std::ostream& out, RunStats& runStats) override {
+    std::vector<RowVectorPtr> result;
+    auto runner =
+        runSql(logicalPlan_, &result, nullptr, nullptr, nullptr, &runStats);
+    if (FLAGS_check_test_flag_combinations) {
+      if (hasReferenceResult_) {
+        exec::test::assertEqualResults(referenceResult_, result);
+        result.clear();
+      } else {
+        hasReferenceResult_ = true;
+        referenceResult_ = std::move(result);
+        referenceRunner_ = std::move(runner);
+      }
+    } else {
+      // Must clear before 'runner' goes out of scope.
+      result.clear();
     }
   }
 
@@ -502,6 +762,18 @@ class VeloxRunner {
       } catch (const std::exception&) {
       }
     }
+  }
+
+  /// Returns exit status for run. 0 is passed, 1 is plan differences only, 2
+  /// is result differences.
+  int32_t checkStatus() {
+    std::cerr << numPassed_ << " passed " << numFailed_ << " failed "
+              << numPlanMismatch_ << " plan mismatch " << numResultMismatch_
+              << " result mismatch" << std::endl;
+    if (!numFailed_) {
+      return 0;
+    }
+    return numResultMismatch_ ? 2 : 1;
   }
 
   std::unordered_map<std::string, std::string>& sessionConfig() {
@@ -521,6 +793,48 @@ class VeloxRunner {
   }
 
  private:
+  template <typename T>
+  static void write(const T& value, std::ostream& out) {
+    out.write((char*)&value, sizeof(T));
+  }
+
+  template <typename T>
+  static T read(std::istream& in) {
+    T value;
+    in.read((char*)&value, sizeof(T));
+    return value;
+  }
+
+  static std::string readString(std::istream& in) {
+    auto len = read<int32_t>(in);
+    std::string result;
+    result.resize(len);
+    in.read(result.data(), result.size());
+    return result;
+  }
+
+  static void writeString(std::string_view string, std::ostream& out) {
+    write<int32_t>(string.size(), out);
+    out.write(string.data(), string.size());
+  }
+
+  std::vector<RowVectorPtr> readVectors(std::istream& in) {
+    auto size = read<int32_t>(in);
+    std::vector<RowVectorPtr> result(size);
+    for (auto i = 0; i < size; ++i) {
+      result[i] = std::dynamic_pointer_cast<RowVector>(
+          restoreVector(in, checkPool_.get()));
+    }
+    return result;
+  }
+
+  void writeVectors(std::vector<RowVectorPtr>& vectors, std::ostream& out) {
+    write<int32_t>(vectors.size(), out);
+    for (auto& vector : vectors) {
+      saveVector(*vector, out);
+    }
+  }
+
   static int64_t countResults(const std::vector<RowVectorPtr>& results) {
     int64_t numRows = 0;
     for (const auto& result : results) {
@@ -592,7 +906,7 @@ class VeloxRunner {
       printRow(type->names());
       printSeparator();
 
-      for (const auto& row : data) {
+      for (auto row : data) {
         printRow(row);
       }
 
@@ -632,16 +946,28 @@ class VeloxRunner {
   std::shared_ptr<cache::AsyncDataCache> cache_;
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> optimizerPool_;
+  std::shared_ptr<memory::MemoryPool> checkPool_;
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
+  std::unique_ptr<folly::IOThreadPoolExecutor> cacheExecutor_;
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<folly::IOThreadPoolExecutor> spillExecutor_;
   std::shared_ptr<velox::connector::Connector> connector_;
   std::shared_ptr<connector::SchemaResolver> schema_;
-  std::unordered_map<std::string, std::string> config_;
   std::unique_ptr<optimizer::VeloxHistory> history_;
   std::unique_ptr<::axiom::sql::presto::PrestoParser> prestoParser_;
-
+  std::ofstream* record_{nullptr};
+  std::ifstream* check_{nullptr};
+  int32_t numPassed_{0};
+  int32_t numFailed_{0};
+  int32_t numPlanMismatch_{0};
+  int32_t numResultMismatch_{0};
   int32_t queryCounter_{0};
+  logical_plan::LogicalPlanNodePtr logicalPlan_;
+  bool hasReferenceResult_{false};
+  // Keeps live 'referenceResult_'.
+  std::shared_ptr<runner::LocalRunner> referenceRunner_;
+  // Result from first run of flag value sweep.
+  std::vector<RowVectorPtr> referenceResult_;
   std::set<std::string> modifiedFlags_;
 };
 
@@ -649,21 +975,14 @@ class VeloxRunner {
 // more whitespaces.
 // @return Command text with leading and trailing whitespaces as well as
 // trailing ';' removed.
-std::string readCommand(bool& atEnd) {
+std::string readCommand(std::istream& in, bool& end) {
   std::stringstream command;
-  atEnd = false;
+  end = false;
 
   bool stripLeadingSpaces = true;
 
-  while (char* rawLine = readline("")) {
-    SCOPE_EXIT {
-      if (rawLine != nullptr) {
-        free(rawLine);
-      }
-    };
-
-    std::string line(rawLine);
-
+  std::string line;
+  while (std::getline(in, line)) {
     int64_t startPos = 0;
     if (stripLeadingSpaces) {
       for (; startPos < line.size(); ++startPos) {
@@ -686,7 +1005,6 @@ std::string readCommand(bool& atEnd) {
 
       if (line[i] == ';') {
         command << line.substr(startPos, i - startPos);
-        add_history(fmt::format("{};", command.str()).c_str());
         return command.str();
       }
 
@@ -696,16 +1014,19 @@ std::string readCommand(bool& atEnd) {
     stripLeadingSpaces = false;
     command << line.substr(startPos) << std::endl;
   }
-  atEnd = true;
+  end = true;
   return "";
 }
 
-void readCommands(VeloxRunner& runner, std::string_view prompt) {
+void readCommands(
+    VeloxRunner& runner,
+    std::string_view prompt,
+    std::istream& in) {
   for (;;) {
     std::cout << prompt;
-    bool atEnd;
-    std::string command = readCommand(atEnd);
-    if (atEnd) {
+    bool end;
+    std::string command = readCommand(in, end);
+    if (end) {
       break;
     }
 
@@ -787,6 +1108,29 @@ void readCommands(VeloxRunner& runner, std::string_view prompt) {
   }
 }
 
+void initCommands(VeloxRunner& runner) {
+  auto* home = getenv("HOME");
+  std::string homeDir = home ? std::string(home) : std::string(".");
+  std::ifstream in(homeDir + "/.vsql");
+  readCommands(runner, "", in);
+}
+
+void recordQueries(VeloxRunner& runner) {
+  std::ifstream in(FLAGS_record);
+  std::ofstream ref;
+  ref.open(FLAGS_record + ".ref", std::ios_base::out | std::ios_base::trunc);
+  runner.setRecordStream(&ref);
+  readCommands(runner, "", in);
+}
+
+void checkQueries(VeloxRunner& runner) {
+  std::ifstream in(FLAGS_check);
+  std::ifstream ref(FLAGS_check + ".ref");
+  runner.setCheckStream(&ref);
+  readCommands(runner, "", in);
+  exit(runner.checkStatus());
+}
+
 } // namespace facebook::axiom
 
 int main(int argc, char** argv) {
@@ -794,23 +1138,26 @@ int main(int argc, char** argv) {
       "Axiom local SQL command line. "
       "Run 'axiom_sql --help' for available options.\n");
 
-  // Disable logging to stderr.
-  FLAGS_logtostderr = false;
-
   folly::Init init(&argc, &argv, false);
 
   try {
     facebook::axiom::VeloxRunner runner;
     runner.initialize();
 
+    facebook::axiom::initCommands(runner);
+
     if (!FLAGS_query.empty()) {
       runner.run(FLAGS_query);
+    } else if (!FLAGS_record.empty()) {
+      facebook::axiom::recordQueries(runner);
+    } else if (!FLAGS_check.empty()) {
+      facebook::axiom::checkQueries(runner);
     } else {
       std::cout << "Axiom SQL. Type statement and end with ;.\n"
                    "flag name = value; sets a gflag.\n"
                    "help; prints help text."
                 << std::endl;
-      readCommands(runner, "SQL> ");
+      readCommands(runner, "SQL> ", std::cin);
     }
   } catch (std::exception& e) {
     std::cerr << "Error: " << e.what() << std::endl;

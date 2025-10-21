@@ -63,7 +63,7 @@ struct OptimizerOptions {
   /// TODO Make this work for non-inner joins.
   bool syntacticJoinOrder = false;
 
-  bool isMapAsStruct(const char* table, const char* column) const {
+  bool isMapAsStruct(std::string_view table, std::string_view column) const {
     if (allMapsAsStruct) {
       return true;
     }

@@ -30,19 +30,28 @@ class SchemaResolver {
 
   virtual ~SchemaResolver() = default;
 
-  // Converts a table name to a resolved Table, or nullptr if the table doesn't
-  // exist. If a connector for the specified catalog doesn't exist, an error
-  // will be returned. Input table name can be any of the following formats:
-  //   - "tablename"
-  //   - "schema.tablename"
-  //   - "catalog.schema.tablename"
-  // If schema is omitted, defaultSchema will be prepended prior to lookup.
-  // If the table name specifies a different catalog than the one specified
-  // as a parameter, an error will be thrown.
-  virtual TablePtr findTable(std::string_view catalog, std::string_view name);
+  /// Adds a table that hasn't been committed yet to the schema. Used to
+  /// register target table for CREATE TABLE AS SELECT queries. Can be called
+  /// only once.
+  void setTargetTable(std::string_view catalog, TablePtr table);
+
+  /// Converts a table name to a resolved Table, or nullptr if the table doesn't
+  /// exist. If a connector for the specified catalog doesn't exist, an error
+  /// will be returned. Input table name can be any of the following formats:
+  ///   - "tablename"
+  ///   - "schema.tablename"
+  ///   - "catalog.schema.tablename"
+  /// If schema is omitted, defaultSchema will be prepended prior to lookup.
+  /// If the table name specifies a different catalog than the one specified
+  /// as a parameter, an error will be thrown.
+  virtual TablePtr findTable(std::string_view catalog, std::string_view name)
+      const;
 
  private:
   const std::string defaultSchema_;
+
+  std::string targetCatalog_;
+  TablePtr targetTable_;
 };
 
 } // namespace facebook::axiom::connector

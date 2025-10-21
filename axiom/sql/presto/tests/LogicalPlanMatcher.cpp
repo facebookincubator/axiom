@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "axiom/optimizer/tests/LogicalPlanMatcher.h"
+#include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
 #include <gtest/gtest.h>
 
-namespace facebook::axiom::logical_plan {
+namespace facebook::axiom::logical_plan::test {
 namespace {
 
 template <typename T = LogicalPlanNode>
@@ -65,6 +65,12 @@ class LogicalPlanMatcherImpl : public LogicalPlanMatcher {
   const std::vector<std::shared_ptr<LogicalPlanMatcher>> inputMatchers_;
 };
 } // namespace
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::tableWrite() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<LogicalPlanMatcherImpl<TableWriteNode>>(matcher_);
+  return *this;
+}
 
 LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::tableScan() {
   VELOX_USER_CHECK_NULL(matcher_);
@@ -120,4 +126,4 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::sort() {
   return *this;
 }
 
-} // namespace facebook::axiom::logical_plan
+} // namespace facebook::axiom::logical_plan::test

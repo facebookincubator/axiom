@@ -207,7 +207,7 @@ velox::RowVectorPtr LocalRunner::nextWrite() {
   const int64_t rows = runWrite();
 
   auto child = velox::BaseVector::create<velox::FlatVector<int64_t>>(
-      velox::BIGINT(), /*length=*/1, params_.outputPool.get());
+      velox::BIGINT(), /*size=*/1, params_.outputPool.get());
   child->set(0, rows);
 
   return std::make_shared<velox::RowVector>(
@@ -223,6 +223,8 @@ void LocalRunner::start() {
 
   params_.maxDrivers = plan_->options().numDrivers;
   params_.planNode = fragments_.back().fragment.planNode;
+
+  VELOX_CHECK_LE(fragments_.back().width, 1);
 
   auto cursor = velox::exec::TaskCursor::create(params_);
   makeStages(cursor->task());
@@ -485,7 +487,9 @@ std::string LocalRunner::printPlanWithStats(
 
   return plan_->toString(
       true, [&](const auto& planNodeId, const auto& indentation, auto& out) {
-        addContext(planNodeId, indentation, out);
+        if (addContext != nullptr) {
+          addContext(planNodeId, indentation, out);
+        }
 
         auto statsIt = planNodeStats.find(planNodeId);
         if (statsIt != planNodeStats.end()) {

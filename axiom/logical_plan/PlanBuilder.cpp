@@ -1268,11 +1268,42 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::vector<ExprApi>& columnExprs,
     folly::F14FastMap<std::string, std::string> options) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Table write node cannot be a leaf node");
+  VELOX_USER_CHECK_GT(columnNames.size(), 0);
+  VELOX_USER_CHECK_EQ(columnNames.size(), columnExprs.size());
 
   std::vector<ExprPtr> columnExpressions;
   columnExpressions.reserve(columnExprs.size());
   for (const auto& expr : columnExprs) {
     columnExpressions.push_back(resolveScalarTypes(expr.expr()));
+  }
+
+  if (kind == WriteKind::kInsert) {
+    // Check input types.
+    // TODO Add coercions if necessary.
+    auto* metadata = connector::ConnectorMetadata::metadata(connectorId);
+    auto table = metadata->findTable(tableName);
+    VELOX_USER_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
+    const auto& schema = table->type();
+
+    for (auto i = 0; i < columnNames.size(); i++) {
+      const auto& name = columnNames[i];
+      const auto index = schema->getChildIdxIfExists(name);
+      VELOX_USER_CHECK(
+          index.has_value(),
+          "Column not found: {} in table {}",
+          name,
+          tableName);
+
+      const auto& inputType = columnExpressions[i]->type();
+      const auto& schemaType = schema->childAt(index.value());
+      VELOX_USER_CHECK(
+          schemaType->equivalent(*inputType),
+          "Wrong column type: {} vs. {}, column {} in table {}",
+          inputType->toString(),
+          schemaType->toString(),
+          name,
+          tableName);
+    }
   }
 
   node_ = std::make_shared<TableWriteNode>(
@@ -1362,6 +1393,43 @@ size_t PlanBuilder::numOutput() const {
   return node_->outputType()->size();
 }
 
+namespace {
+std::optional<std::string> pickName(
+    const std::vector<NameMappings::QualifiedName>& names) {
+  if (names.empty()) {
+    return std::nullopt;
+  }
+
+  // Prefer non-aliased name.
+  for (const auto& name : names) {
+    if (!name.alias.has_value()) {
+      return name.name;
+    }
+  }
+
+  return names.front().name;
+}
+} // namespace
+
+std::vector<std::optional<std::string>> PlanBuilder::outputNames() const {
+  auto size = numOutput();
+
+  std::vector<std::optional<std::string>> names;
+  names.reserve(size);
+
+  for (auto i = 0; i < size; i++) {
+    const auto id = node_->outputType()->nameOf(i);
+    names.push_back(pickName(outputMapping_->reverseLookup(id)));
+  }
+
+  return names;
+}
+
+std::vector<velox::TypePtr> PlanBuilder::outputTypes() const {
+  VELOX_CHECK_NOT_NULL(node_);
+  return node_->outputType()->children();
+}
+
 std::vector<std::string> PlanBuilder::findOrAssignOutputNames() const {
   auto size = numOutput();
 
@@ -1379,23 +1447,15 @@ std::string PlanBuilder::findOrAssignOutputNameAt(size_t index) const {
   const auto size = numOutput();
   VELOX_CHECK_LT(index, size, "{}", node_->outputType()->toString());
 
-  auto id = node_->outputType()->nameOf(index);
+  const auto id = node_->outputType()->nameOf(index);
 
-  auto names = outputMapping_->reverseLookup(id);
-  if (names.empty()) {
-    // Assign a name to the output column.
-    outputMapping_->add(id, id);
-    return id;
+  if (auto name = pickName(outputMapping_->reverseLookup(id))) {
+    return name.value();
   }
 
-  // Prefer non-aliased name.
-  for (const auto& name : names) {
-    if (!name.alias.has_value()) {
-      return name.name;
-    }
-  }
-
-  return names.front().name;
+  // Assign a name to the output column.
+  outputMapping_->add(id, id);
+  return id;
 }
 
 LogicalPlanNodePtr PlanBuilder::build() {

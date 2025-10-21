@@ -204,7 +204,7 @@ BitSet BaseTable::columnSubfields(
 std::string BaseTable::toString() const {
   std::stringstream out;
   out << "{" << PlanObject::toString();
-  out << schemaTable->name << " " << cname << "}";
+  out << schemaTable->name() << " " << cname << "}";
   return out.str();
 }
 
@@ -285,9 +285,9 @@ std::pair<std::string, bool> JoinEdge::sampleKey() const {
     return leftString[l] < leftString[r];
   });
   auto left =
-      fmt::format("{} ", leftTable_->as<BaseTable>()->schemaTable->name);
+      fmt::format("{} ", leftTable_->as<BaseTable>()->schemaTable->name());
   auto right =
-      fmt::format("{} ", rightTable_->as<BaseTable>()->schemaTable->name);
+      fmt::format("{} ", rightTable_->as<BaseTable>()->schemaTable->name());
   for (auto i : indices) {
     left += leftKeys_[i]->toString() + " ";
     right += rightKeys_[i]->toString() + " ";

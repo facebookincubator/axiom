@@ -22,6 +22,7 @@
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
@@ -77,7 +78,7 @@ velox::ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
 } // namespace
 
 ToGraph::ToGraph(
-    const Schema& schema,
+    const connector::SchemaResolver& schema,
     velox::core::ExpressionEvaluator& evaluator,
     const OptimizerOptions& options)
     : schema_{schema},
@@ -262,7 +263,15 @@ void ToGraph::getExprForField(
     const lp::LogicalPlanNode*& context) {
   while (context) {
     const auto& name = field->asUnchecked<lp::InputReferenceExpr>()->name();
-    auto ordinal = context->outputType()->getChildIdx(name);
+
+    if (auto it = lambdaSignature_.find(name); it != lambdaSignature_.end()) {
+      resultColumn = it->second;
+      resultExpr = nullptr;
+      context = nullptr;
+      return;
+    }
+
+    const auto ordinal = context->outputType()->getChildIdx(name);
     if (context->is(lp::NodeKind::kProject)) {
       const auto* project = context->asUnchecked<lp::ProjectNode>();
       auto& def = project->expressions()[ordinal];
@@ -740,19 +749,21 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
 }
 
 ExprCP ToGraph::translateLambda(const lp::LambdaExpr* lambda) {
-  auto savedRenames = renames_;
-  const auto& row = lambda->signature();
-  toType(row);
-  toType(lambda->type());
+  const auto& signature = *lambda->signature();
+  auto lambdaSignature = lambdaSignature_;
+  SCOPE_EXIT {
+    lambdaSignature_ = std::move(lambdaSignature);
+  };
   ColumnVector args;
-  for (auto i = 0; i < row->size(); ++i) {
-    auto col = make<Column>(
-        toName(row->nameOf(i)), nullptr, Value(toType(row->childAt(i)), 1));
-    args.push_back(col);
-    renames_[row->nameOf(i)] = col;
+  args.reserve(signature.size());
+  for (uint32_t i = 0; i < signature.size(); ++i) {
+    const auto& name = signature.nameOf(i);
+    const auto* column = make<Column>(
+        toName(name), nullptr, Value{toType(signature.childAt(i)), 1});
+    args.push_back(column);
+    lambdaSignature_[name] = column;
   }
-  auto body = translateExpr(lambda->body());
-  renames_ = std::move(savedRenames);
+  const auto* body = translateExpr(lambda->body());
   return make<Lambda>(std::move(args), toType(lambda->type()), body);
 }
 
@@ -859,8 +870,10 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
 }
 
 ExprCP ToGraph::translateColumn(std::string_view name) {
-  auto it = renames_.find(name);
-  if (it != renames_.end()) {
+  if (auto it = lambdaSignature_.find(name); it != lambdaSignature_.end()) {
+    return it->second;
+  }
+  if (auto it = renames_.find(name); it != renames_.end()) {
     return it->second;
   }
   VELOX_FAIL("Cannot resolve column name: {}", name);
@@ -1031,14 +1044,24 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       condition = translateExpr(aggregate->filter());
     }
 
-    auto [orderKeys, orderTypes] = dedupOrdering(aggregate->ordering());
+    const auto& metadata =
+        velox::exec::getAggregateFunctionMetadata(aggregate->name());
 
-    if (aggregate->isDistinct() && !orderKeys.empty()) {
+    const bool isDistinct =
+        !metadata.ignoreDuplicates && aggregate->isDistinct();
+
+    ExprVector orderKeys;
+    OrderTypeVector orderTypes;
+    if (metadata.orderSensitive) {
+      std::tie(orderKeys, orderTypes) = dedupOrdering(aggregate->ordering());
+    }
+
+    if (isDistinct && !orderKeys.empty()) {
       VELOX_FAIL(
           "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
     }
 
-    if (aggregate->isDistinct()) {
+    if (isDistinct) {
       const auto& options = queryCtx()->optimization()->runnerOptions();
       VELOX_CHECK(
           options.numWorkers == 1 && options.numDrivers == 1,
@@ -1056,12 +1079,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     auto name = toName(agg.outputNames()[channel]);
 
     AggregateDedupKey key{
-        aggName,
-        aggregate->isDistinct(),
-        condition,
-        args,
-        orderKeys,
-        orderTypes};
+        aggName, isDistinct, condition, args, orderKeys, orderTypes};
 
     auto it = uniqueAggregates.try_emplace(key).first;
     if (it->second) {
@@ -1077,7 +1095,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
           finalValue,
           std::move(args),
           funcs,
-          aggregate->isDistinct(),
+          isDistinct,
           condition,
           accumulatorType,
           std::move(orderKeys),
@@ -1287,10 +1305,11 @@ PlanObjectP ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
     VELOX_DCHECK_LT(i, type->size());
 
     const auto& name = names[i];
-    auto schemaColumn = schemaTable->findColumn(name);
+    const auto* columnName = toName(name);
+    auto schemaColumn = schemaTable->findColumn(columnName);
     auto value = schemaColumn->value();
     auto* column = make<Column>(
-        toName(name),
+        columnName,
         baseTable,
         value,
         toName(type->nameOf(i)),
@@ -1318,7 +1337,7 @@ PlanObjectP ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
         if (!allPaths.empty()) {
           trace(OptimizerOptions::kPreprocess, [&]() {
             std::cout << "Subfields: " << baseTable->cname << "."
-                      << baseTable->schemaTable->name << " " << column->name()
+                      << baseTable->schemaTable->name() << " " << column->name()
                       << ":" << allPaths.size() << std::endl;
           });
           makeSubfieldColumns(baseTable, column, allPaths);
@@ -1492,7 +1511,8 @@ PlanObjectP ToGraph::addLimit(const lp::LimitNode& limitNode) {
 PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
   const auto writeKind =
       static_cast<connector::WriteKind>(tableWrite.writeKind());
-  if (writeKind != connector::WriteKind::kInsert) {
+  if (writeKind != connector::WriteKind::kInsert &&
+      writeKind != connector::WriteKind::kCreate) {
     VELOX_NYI("Only INSERT supported for TableWrite");
   }
   VELOX_CHECK_NULL(
@@ -1524,7 +1544,12 @@ PlanObjectP ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
       columnExprs.push_back(make<Literal>(
           Value{toType(tableColumn->type()), 1}, &tableColumn->defaultValue()));
     }
-    VELOX_DCHECK(*tableSchema.childAt(i) == *columnExprs.back()->value().type);
+    VELOX_DCHECK(
+        *tableSchema.childAt(i) == *columnExprs.back()->value().type,
+        "Wrong column type: {}, {} vs. {}",
+        columnName,
+        tableSchema.childAt(i)->toString(),
+        columnExprs.back()->value().type->toString());
   }
 
   renames_.clear();

@@ -95,12 +95,14 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
   lp::LogicalPlanNodePtr parseTpchSql(int32_t query) {
     auto sql = readTpchSql(query);
 
-    test::PrestoParser prestoParser(exec::test::kHiveConnectorId, pool());
+    ::axiom::sql::presto::PrestoParser prestoParser(
+        exec::test::kHiveConnectorId, pool());
     auto statement = prestoParser.parse(sql);
 
     VELOX_CHECK(statement->isSelect());
 
-    auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
+    auto logicalPlan =
+        statement->as<::axiom::sql::presto::SelectStatement>()->plan();
     VELOX_CHECK_NOT_NULL(logicalPlan);
 
     return logicalPlan;

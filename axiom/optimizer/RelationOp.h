@@ -66,8 +66,6 @@ struct Cost {
   // amount of spill is 'totalBytes' - 'peakResidentBytes'.
   float peakResidentBytes{0};
 
-  void add(const Cost& other);
-
   /// If 'isUnit' shows the cost/cardinality for one row, else for
   /// 'inputCardinality' rows.
   std::string toString(bool detail, bool isUnit = false) const;
@@ -483,7 +481,7 @@ struct Aggregation : public RelationOp {
 /// Represents an order by. The order is given by the distribution.
 struct OrderBy : public RelationOp {
   OrderBy(
-      const RelationOpPtr& input,
+      RelationOpPtr input,
       ExprVector orderKeys,
       OrderTypeVector orderTypes,
       int64_t limit = -1,

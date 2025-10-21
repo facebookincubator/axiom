@@ -84,25 +84,25 @@ class LocalHiveTableLayout : public HiveTableLayout {
       const Table* table,
       velox::connector::Connector* connector,
       std::vector<const Column*> columns,
+      std::optional<int32_t> numBuckets,
       std::vector<const Column*> partitioning,
       std::vector<const Column*> orderColumns,
       std::vector<SortOrder> sortOrder,
       std::vector<const Column*> lookupKeys,
       std::vector<const Column*> hivePartitionColumns,
-      velox::dwio::common::FileFormat fileFormat,
-      std::optional<int32_t> numBuckets = std::nullopt)
+      velox::dwio::common::FileFormat fileFormat)
       : HiveTableLayout(
             name,
             table,
             connector,
             columns,
+            numBuckets,
             partitioning,
             orderColumns,
             sortOrder,
             lookupKeys,
             hivePartitionColumns,
-            fileFormat,
-            numBuckets) {}
+            fileFormat) {}
 
   std::pair<int64_t, int64_t> sample(
       const velox::connector::ConnectorTableHandlePtr& handle,
@@ -140,16 +140,24 @@ class LocalTable : public Table {
   LocalTable(
       std::string name,
       velox::RowTypePtr type,
-      folly::F14FastMap<std::string, std::string> options = {})
+      folly::F14FastMap<std::string, velox::Variant> options = {})
       : Table(
             std::move(name),
             std::move(type),
             TableKind::kTable,
-            std::move(options)) {}
+            std::move(options)) {
+    for (auto i = 0; i < Table::type()->size(); ++i) {
+      const auto& name = Table::type()->nameOf(i);
+      auto column = std::make_unique<Column>(name, Table::type()->childAt(i));
+      exportedColumns_[name] = column.get();
+      columns_.emplace(name, std::move(column));
+    }
+  }
 
   folly::F14FastMap<std::string, std::unique_ptr<Column>>& columns() {
     return columns_;
   }
+
   const std::vector<const TableLayout*>& layouts() const override {
     return exportedLayouts_;
   }
@@ -157,12 +165,21 @@ class LocalTable : public Table {
   const folly::F14FastMap<std::string, const Column*>& columnMap()
       const override;
 
+  void addLayout(std::unique_ptr<LocalHiveTableLayout> layout) {
+    exportedLayouts_.push_back(layout.get());
+    layouts_.push_back(std::move(layout));
+  }
+
   void makeDefaultLayout(
       std::vector<std::unique_ptr<const FileInfo>> files,
       LocalHiveConnectorMetadata& metadata);
 
   uint64_t numRows() const override {
     return numRows_;
+  }
+
+  void incrementNumRows(uint64_t n) {
+    numRows_ += n;
   }
 
   /// Samples  'samplePct' % rows of the table and sets the num distincts
@@ -189,8 +206,6 @@ class LocalTable : public Table {
 
   int64_t numRows_{0};
   int64_t numSampledRows_{0};
-
-  friend class LocalHiveConnectorMetadata;
 };
 
 class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
@@ -241,7 +256,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       const ConnectorSessionPtr& session,
       const std::string& tableName,
       const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, std::string>& options) override;
+      const folly::F14FastMap<std::string, velox::Variant>& options) override;
 
   RowsFuture finishWrite(
       const ConnectorSessionPtr& session,
@@ -252,20 +267,27 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       const ConnectorSessionPtr& session,
       const ConnectorWriteHandlePtr& handle) noexcept override;
 
-  std::string tablePath(std::string_view table) const override {
-    return fmt::format("{}/{}", hiveConfig_->hiveLocalDataPath(), table);
+  std::string tablePath(std::string_view tableName) const override {
+    return fmt::format("{}/{}", hiveConfig_->hiveLocalDataPath(), tableName);
   }
 
   std::optional<std::string> makeStagingDirectory(
-      std::string_view table) const override;
+      std::string_view tableName) const override;
+
+  bool dropTable(
+      const ConnectorSessionPtr& session,
+      std::string_view tableName,
+      bool ifExists) override;
+
+  /// Shortcut for dropTable(session, tableName, true).
+  bool dropTableIfExists(std::string_view tableName) {
+    return dropTable(nullptr, tableName, true);
+  }
 
  private:
   void ensureInitialized() const override;
   void makeQueryCtx();
   void makeConnectorQueryCtx();
-  std::shared_ptr<LocalTable> createTableFromSchema(
-      std::string_view name,
-      std::string_view path);
   void readTables(std::string_view path);
 
   void loadTable(std::string_view tableName, const fs::path& tablePath);

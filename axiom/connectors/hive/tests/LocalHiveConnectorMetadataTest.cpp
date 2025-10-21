@@ -266,11 +266,11 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
        {"data", BIGINT()},
        {"ds", VARCHAR()}});
 
-  folly::F14FastMap<std::string, std::string> options = {
-      {HiveWriteOptions::kBucketedBy, "key1"},
-      {HiveWriteOptions::kBucketCount, "4"},
-      {HiveWriteOptions::kSortedBy, "key1, key2"},
-      {HiveWriteOptions::kPartitionedBy, "ds"},
+  folly::F14FastMap<std::string, velox::Variant> options = {
+      {HiveWriteOptions::kBucketedBy, velox::Variant::array({"key1"})},
+      {HiveWriteOptions::kBucketCount, 4L},
+      {HiveWriteOptions::kSortedBy, velox::Variant::array({"key1", "key2"})},
+      {HiveWriteOptions::kPartitionedBy, velox::Variant::array({"ds"})},
       {HiveWriteOptions::kFileFormat, "parquet"},
       {HiveWriteOptions::kCompressionKind, "zstd"}};
 

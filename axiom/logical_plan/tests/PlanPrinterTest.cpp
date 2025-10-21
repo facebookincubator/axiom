@@ -39,9 +39,8 @@ class PlanPrinterTest : public testing::Test {
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
 
-    auto connector =
-        std::make_shared<connector::TestConnector>(kTestConnectorId);
-    connector->addTable(
+    connector_ = std::make_shared<connector::TestConnector>(kTestConnectorId);
+    connector_->addTable(
         "test",
         ROW({"a", "b", "c", "d", "e"},
             {BIGINT(),
@@ -49,11 +48,12 @@ class PlanPrinterTest : public testing::Test {
              VARCHAR(),
              ARRAY(BIGINT()),
              MAP(INTEGER(), REAL())}));
-    velox::connector::registerConnector(connector);
+    velox::connector::registerConnector(connector_);
   }
 
   void TearDown() override {
     velox::connector::unregisterConnector(kTestConnectorId);
+    connector_.reset();
   }
 
   static std::vector<std::string> toLines(const LogicalPlanNodePtr& plan) {
@@ -82,6 +82,8 @@ class PlanPrinterTest : public testing::Test {
 
     return lines;
   }
+
+  std::shared_ptr<connector::TestConnector> connector_;
 };
 
 TEST_F(PlanPrinterTest, values) {
@@ -1220,6 +1222,15 @@ TEST_F(PlanPrinterTest, tableWrite) {
        }) {
     SCOPED_TRACE(
         fmt::format("TableWrite kind: {}, {}", expectedKind, actualKind));
+
+    if (actualKind != WriteKind::kCreate) {
+      connector_->addTable(
+          "output_table", ROW({"col_a", "col_b"}, {BIGINT(), VARCHAR()}));
+    }
+
+    SCOPE_EXIT {
+      connector_->dropTableIfExists("output_table");
+    };
 
     auto plan = PlanBuilder()
                     .tableScan(kTestConnectorId, "test", {"a", "b"})

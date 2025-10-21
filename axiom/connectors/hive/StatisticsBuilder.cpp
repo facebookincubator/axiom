@@ -101,6 +101,11 @@ template <typename Builder, typename T>
 void StatisticsBuilderImpl::addStats(
     velox::dwrf::StatisticsBuilder* builder,
     const velox::BaseVector& vector) {
+  VELOX_CHECK(
+      vector.type()->equivalent(*type_),
+      "Type mismatch: {} vs. {}",
+      vector.type()->toString(),
+      type_->toString());
   auto* typedVector = vector.asUnchecked<velox::SimpleVector<T>>();
   T previous{};
   bool hasPrevious = false;
@@ -119,7 +124,12 @@ void StatisticsBuilderImpl::addStats(
         previous = value;
       }
 
-      reinterpret_cast<Builder*>(builder)->addValues(value);
+      // TODO: Remove explicit std::string_view cast.
+      if constexpr (std::is_same_v<T, velox::StringView>) {
+        reinterpret_cast<Builder*>(builder)->addValues(std::string_view(value));
+      } else {
+        reinterpret_cast<Builder*>(builder)->addValues(value);
+      }
       previous = value;
       hasPrevious = true;
     }

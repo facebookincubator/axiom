@@ -12,17 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(grammar)
-add_subdirectory(ast)
-add_subdirectory(example)
+add_executable(axiom_sql_presto_test LogicalPlanMatcher.cpp PrestoParserTest.cpp)
 
-add_library(axiom_sql_presto_parser PrestoParser.cpp)
+add_test(axiom_sql_presto_test axiom_sql_presto_test)
 
 target_link_libraries(
-  axiom_sql_presto_parser
+  axiom_sql_presto_test
   axiom_logical_plan_builder
-  axiom_sql_presto_ast
-  antlr4_shared
+  axiom_sql_presto_parser
+  axiom_test_connector
+  axiom_tpch_connector_metadata
+  velox_tpch_connector
+  GTest::gmock
+  glog::glog
+  GTest::gtest
+  GTest::gtest_main
 )
-
-add_subdirectory(tests)

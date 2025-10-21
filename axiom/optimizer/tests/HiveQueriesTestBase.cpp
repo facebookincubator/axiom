@@ -43,8 +43,8 @@ void HiveQueriesTestBase::TearDownTestCase() {
 void HiveQueriesTestBase::SetUp() {
   test::QueryTestBase::SetUp();
 
-  prestoParser_ =
-      std::make_unique<PrestoParser>(exec::test::kHiveConnectorId, pool());
+  prestoParser_ = std::make_unique<::axiom::sql::presto::PrestoParser>(
+      exec::test::kHiveConnectorId, pool());
 }
 
 void HiveQueriesTestBase::TearDown() {
@@ -66,7 +66,8 @@ void HiveQueriesTestBase::checkResults(
   auto statement = prestoParser_->parse(sql);
 
   ASSERT_TRUE(statement->isSelect());
-  auto logicalPlan = statement->asUnchecked<test::SelectStatement>()->plan();
+  auto logicalPlan =
+      statement->as<::axiom::sql::presto::SelectStatement>()->plan();
 
   checkResults(logicalPlan, referencePlan);
 }

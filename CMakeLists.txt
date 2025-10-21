@@ -153,6 +153,35 @@ velox_resolve_dependency(antlr4-runtime)
 
 message(STATUS "Using ANTLR4 runtime from ${ANTLR4_INCLUDE_DIR}")
 
+# Add Readline dependency
+find_path(
+  READLINE_INCLUDE_DIR
+  readline/readline.h
+  HINTS ${READLINE_ROOT_DIR}
+  PATH_SUFFIXES include
+  REQUIRED
+)
+find_library(READLINE_LIBRARY readline HINTS ${READLINE_ROOT_DIR} PATH_SUFFIXES lib REQUIRED)
+find_library(NCURSES_LIBRARY ncurses REQUIRED) # readline depends on libncurses
+
+mark_as_advanced(READLINE_INCLUDE_DIR READLINE_LIBRARY NCURSES_LIBRARY)
+
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(
+  Readline
+  DEFAULT_MSG
+  READLINE_LIBRARY
+  NCURSES_LIBRARY
+  READLINE_INCLUDE_DIR
+)
+
+set(READLINE_INCLUDE_DIRS ${READLINE_INCLUDE_DIR})
+set(READLINE_LIBRARIES ${READLINE_LIBRARY} ${NCURSES_LIBRARY})
+
+message(STATUS "Found Readline: ${READLINE_LIBRARIES}")
+
+include_directories(${READLINE_INCLUDE_DIR})
+
 # Use xxhash and xsimd from Velox for now.
 include_directories(.)
 include_directories(${CMAKE_BINARY_DIR})

@@ -15,20 +15,20 @@
  */
 #pragma once
 
-#include "axiom/optimizer/tests/SqlStatement.h"
+#include "axiom/sql/presto/SqlStatement.h"
 
-namespace facebook::axiom::optimizer::test {
+namespace axiom::sql::presto {
 
 class PrestoParser {
  public:
   PrestoParser(
       const std::string& defaultConnectorId,
-      velox::memory::MemoryPool* pool)
+      facebook::velox::memory::MemoryPool* pool)
       : defaultConnectorId_{defaultConnectorId}, pool_{pool} {}
 
   SqlStatementPtr parse(std::string_view sql, bool enableTracing = false);
 
-  logical_plan::ExprPtr parseExpression(
+  facebook::axiom::logical_plan::ExprPtr parseExpression(
       std::string_view sql,
       bool enableTracing = false);
 
@@ -36,8 +36,7 @@ class PrestoParser {
   SqlStatementPtr doParse(std::string_view sql, bool enableTracing);
 
   const std::string defaultConnectorId_;
-
-  velox::memory::MemoryPool* pool_;
+  facebook::velox::memory::MemoryPool* pool_;
 };
 
-} // namespace facebook::axiom::optimizer::test
+} // namespace axiom::sql::presto

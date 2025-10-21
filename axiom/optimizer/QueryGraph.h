@@ -936,7 +936,8 @@ class WritePlan : public PlanObject {
  public:
   /// @param table The table to write to.
   /// @param kind Indicates the type of write (create/insert/delete/update)
-  /// @param columnExprs Expressions producing the values to write.
+  /// @param columnExprs Expressions producing the values to write. 1:1 with the
+  /// table schema.
   WritePlan(
       const connector::Table& table,
       connector::WriteKind kind,

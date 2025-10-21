@@ -24,13 +24,6 @@
 #include "velox/expression/ScopedVarSetter.h"
 
 namespace facebook::axiom::optimizer {
-
-void Cost::add(const Cost& other) {
-  inputCardinality += other.inputCardinality;
-  fanout += other.fanout;
-  setupCost += other.setupCost;
-}
-
 namespace {
 
 const auto& relTypeNames() {
@@ -265,7 +258,7 @@ const QGString& TableScan::historyKey() const {
     return key_;
   }
   std::stringstream out;
-  out << "scan " << baseTable->schemaTable->name << "(";
+  out << "scan " << baseTable->schemaTable->name() << "(";
   auto* opt = queryCtx()->optimization();
   velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
   for (auto& key : keys) {
@@ -293,7 +286,7 @@ std::string TableScan::toString(bool /*recursive*/, bool detail) const {
     out << input()->toString(true, detail);
     out << " *I " << joinTypeLabel(joinType);
   }
-  out << baseTable->schemaTable->name << " " << baseTable->cname;
+  out << baseTable->schemaTable->name() << " " << baseTable->cname;
   if (detail) {
     printCost(detail, out);
     if (!input()) {
@@ -352,7 +345,8 @@ Join::Join(
       filter{std::move(filterExprs)} {
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = fanout;
-  const auto numRightColumns = static_cast<float>(right->columns().size());
+  const auto numRightColumns =
+      static_cast<float>(right->input()->columns().size());
   if (method == JoinMethod::kCross) {
     const float rightCardinality = right->resultCardinality();
     const float rightByteSize = byteSize(right->columns());
@@ -364,7 +358,7 @@ Join::Join(
     return;
   }
 
-  const float buildSize = right->cost().inputCardinality;
+  const float buildSize = right->resultCardinality();
   auto rowCost = numRightColumns * Costs::kHashExtractColumnCost;
   const auto numLeftKeys = static_cast<float>(leftKeys.size());
   cost_.unitCost = Costs::hashProbeCost(buildSize) + cost_.fanout * rowCost +
@@ -493,11 +487,18 @@ std::string Repartition::toString(bool recursive, bool detail) const {
   if (recursive) {
     out << input()->toString(true, detail) << " ";
   }
-  out << (distribution().isBroadcast ? "broadcast" : "shuffle") << " ";
-  if (detail && !distribution().isBroadcast) {
-    out << distribution().toString();
-    printCost(detail, out);
-  } else if (detail) {
+
+  if (distribution().isBroadcast) {
+    out << "broadcast ";
+  } else if (distribution().isGather()) {
+    out << "gather ";
+  } else {
+    out << "repartition ";
+    if (detail) {
+      out << distribution().toString() << " ";
+    }
+  }
+  if (detail) {
     printCost(detail, out);
   }
   return out.str();
@@ -520,10 +521,12 @@ Unnest::Unnest(
     ExprVector replicateColumns,
     ExprVector unnestExprs,
     ColumnVector unnestedColumns)
-    : RelationOp{RelType::kUnnest, input, input->distribution(), concatColumns(replicateColumns, unnestedColumns)},
+    : RelationOp{RelType::kUnnest, std::move(input), concatColumns(replicateColumns, unnestedColumns)},
       replicateColumns{std::move(replicateColumns)},
       unnestExprs{std::move(unnestExprs)},
-      unnestedColumns{std::move(unnestedColumns)} {}
+      unnestedColumns{std::move(unnestedColumns)} {
+  cost_.inputCardinality = inputCardinality();
+}
 
 Aggregation::Aggregation(
     RelationOpPtr input,
@@ -752,31 +755,13 @@ std::string Project::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
-namespace {
-Distribution makeOrderByDistribution(
-    const RelationOpPtr& input,
-    ExprVector orderKeys,
-    OrderTypeVector orderTypes) {
-  Distribution distribution = input->distribution();
-
-  distribution.distributionType = DistributionType::gather();
-  distribution.partition.clear();
-  distribution.orderKeys = std::move(orderKeys);
-  distribution.orderTypes = std::move(orderTypes);
-  VELOX_DCHECK_EQ(
-      distribution.orderKeys.size(), distribution.orderTypes.size());
-
-  return distribution;
-}
-} // namespace
-
 OrderBy::OrderBy(
-    const RelationOpPtr& input,
+    RelationOpPtr input,
     ExprVector orderKeys,
     OrderTypeVector orderTypes,
     int64_t limit,
     int64_t offset)
-    : RelationOp{RelType::kOrderBy, input, makeOrderByDistribution(input, std::move(orderKeys), std::move(orderTypes))},
+    : RelationOp{RelType::kOrderBy, std::move(input), Distribution::gather(std::move(orderKeys), std::move(orderTypes))},
       limit{limit},
       offset{offset} {
   cost_.inputCardinality = inputCardinality();
@@ -882,11 +867,12 @@ std::string UnionAll::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+// TODO Figure out a cleaner solution to setting 'distribution' and 'columns'.
 TableWrite::TableWrite(
     RelationOpPtr input,
     ExprVector inputColumns,
     const WritePlan* write)
-    : RelationOp{RelType::kTableWrite, std::move(input), Distribution::gather(), {}},
+    : RelationOp{RelType::kTableWrite, input, input->distribution().isGather() ? Distribution::gather() : Distribution(), {}},
       inputColumns{std::move(inputColumns)},
       write{write} {
   cost_.inputCardinality = inputCardinality();

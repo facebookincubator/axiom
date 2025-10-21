@@ -17,7 +17,6 @@
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include <dirent.h>
 #include <folly/Conv.h>
-#include <folly/FileUtil.h>
 #include <folly/json.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -350,112 +349,16 @@ void LocalTable::makeDefaultLayout(
       this,
       metadata.hiveConnector(),
       std::move(columns),
+      std::nullopt,
       empty,
       empty,
       std::vector<SortOrder>{},
       empty,
       empty,
-      metadata.fileFormat(),
-      std::nullopt);
+      metadata.fileFormat());
   layout->setFiles(std::move(files));
   exportedLayouts_.push_back(layout.get());
   layouts_.push_back(std::move(layout));
-}
-
-std::shared_ptr<LocalTable> LocalHiveConnectorMetadata::createTableFromSchema(
-    std::string_view name,
-    std::string_view path) {
-  auto jsons =
-      readConcatenatedDynamicsFromFile(fmt::format("{}/.schema", path));
-  if (jsons.empty()) {
-    return nullptr;
-  }
-  VELOX_CHECK_EQ(jsons.size(), 1);
-  auto json = jsons[0];
-
-  velox::type::fbhive::HiveTypeParser parser;
-
-  std::vector<std::string> names;
-  std::vector<velox::TypePtr> types;
-  std::vector<std::unique_ptr<Column>> columns;
-  for (auto column : json["dataColumns"]) {
-    names.push_back(column["name"].asString());
-    types.push_back(parser.parse(column["type"].asString()));
-    columns.push_back(std::make_unique<Column>(names.back(), types.back()));
-  }
-
-  std::vector<const Column*> partition;
-  for (auto column : json["partitionColumns"]) {
-    names.push_back(column["name"].asString());
-    types.push_back(parser.parse(column["type"].asString()));
-    columns.push_back(std::make_unique<Column>(names.back(), types.back()));
-    partition.push_back(columns.back().get());
-  }
-
-  folly::F14FastMap<std::string, std::string> options;
-  if (json.count("compressionKind")) {
-    options["compression_kind"] = json["compressionKind"].asString();
-  }
-
-  auto table = std::make_shared<LocalTable>(
-      std::string{name},
-      ROW(std::move(names), std::move(types)),
-      std::move(options));
-  tables_[name] = table;
-
-  std::vector<const Column*> columnOrder;
-  for (auto& column : columns) {
-    columnOrder.push_back(column.get());
-    auto& name = column->name();
-    table->exportedColumns_[name] = column.get();
-    table->columns_[name] = std::move(column);
-  }
-
-  std::vector<const Column*> bucket;
-  std::vector<const Column*> order;
-  std::vector<SortOrder> sortOrder;
-  std::optional<int32_t> numBuckets = std::nullopt;
-  if (json.count("bucketProperty")) {
-    auto buckets = json["bucketProperty"];
-    if (buckets.count("bucketedBy")) {
-      for (const auto& name : buckets["bucketedBy"]) {
-        auto column = table->findColumn(name.asString());
-        VELOX_CHECK_NOT_NULL(
-            column, "Bucketed-by column not found: {}", name.asString());
-        bucket.push_back(column);
-      }
-      for (const auto& name : buckets["sortedBy"]) {
-        auto column = table->findColumn(name.asString());
-        VELOX_CHECK_NOT_NULL(
-            column, "Sorted-by column not found: {}", name.asString());
-        order.emplace_back(column);
-        sortOrder.emplace_back(SortOrder{true, true}); // ASC NULLS FIRST.
-      }
-      numBuckets = atoi(buckets["bucketCount"].asString().c_str());
-    }
-  }
-
-  auto format = format_;
-  if (json.count("fileFormat")) {
-    format = velox::dwio::common::toFileFormat(json["fileFormat"].asString());
-  }
-
-  std::vector<const Column*> empty;
-  auto layout = std::make_unique<LocalHiveTableLayout>(
-      table->name(),
-      table.get(),
-      hiveConnector(),
-      columnOrder,
-      bucket,
-      order,
-      sortOrder,
-      empty,
-      partition,
-      format,
-      numBuckets);
-  table->exportedLayouts_.push_back(layout.get());
-  table->layouts_.push_back(std::move(layout));
-  return table;
 }
 
 namespace {
@@ -519,6 +422,280 @@ void listFiles(
     result.push_back(std::move(file));
   }
 }
+
+struct CreateTableOptions {
+  std::optional<velox::common::CompressionKind> compressionKind;
+  std::optional<velox::dwio::common::FileFormat> fileFormat;
+
+  std::vector<std::string> partitionedByColumns;
+
+  std::optional<int32_t> numBuckets;
+  std::vector<std::string> bucketedByColumns;
+  std::vector<std::string> sortedByColumns;
+};
+
+CreateTableOptions parseCreateTableOptions(
+    const folly::F14FastMap<std::string, velox::Variant>& options,
+    velox::dwio::common::FileFormat defaultFileFormat) {
+  CreateTableOptions result;
+
+  auto it = options.find(HiveWriteOptions::kCompressionKind);
+  if (it != options.end()) {
+    result.compressionKind =
+        velox::common::stringToCompressionKind(it->second.value<std::string>());
+  }
+
+  it = options.find(HiveWriteOptions::kFileFormat);
+  if (it != options.end()) {
+    result.fileFormat =
+        velox::dwio::common::toFileFormat(it->second.value<std::string>());
+    VELOX_USER_CHECK(
+        result.fileFormat != velox::dwio::common::FileFormat::UNKNOWN,
+        "Bad file format: {}",
+        it->second.value<std::string>());
+  } else {
+    result.fileFormat = defaultFileFormat;
+  }
+
+  it = options.find(HiveWriteOptions::kPartitionedBy);
+  if (it != options.end()) {
+    result.partitionedByColumns = it->second.array<std::string>();
+  }
+
+  it = options.find(HiveWriteOptions::kBucketedBy);
+  if (it != options.end()) {
+    result.bucketedByColumns = it->second.array<std::string>();
+
+    it = options.find(HiveWriteOptions::kBucketCount);
+    VELOX_USER_CHECK(
+        it != options.end(),
+        "{} is required if {} is specified",
+        HiveWriteOptions::kBucketCount,
+        HiveWriteOptions::kBucketedBy);
+
+    const auto numBuckets = it->second.value<int64_t>();
+    VELOX_USER_CHECK_GT(numBuckets, 0, "bucket_count must be > 0");
+    VELOX_USER_CHECK_EQ(
+        numBuckets & (numBuckets - 1), 0, "bucket_count must be power of 2");
+
+    result.numBuckets = numBuckets;
+
+    it = options.find("sorted_by");
+    if (it != options.end()) {
+      result.sortedByColumns = it->second.array<std::string>();
+    }
+  }
+
+  return result;
+}
+
+velox::RowTypePtr parseSchema(const folly::dynamic& obj) {
+  velox::type::fbhive::HiveTypeParser parser;
+
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> types;
+  for (const auto& column : obj["dataColumns"]) {
+    names.push_back(column["name"].asString());
+    types.push_back(parser.parse(column["type"].asString()));
+  }
+
+  for (const auto& column : obj["partitionColumns"]) {
+    names.push_back(column["name"].asString());
+    types.push_back(parser.parse(column["type"].asString()));
+  }
+
+  return velox::ROW(std::move(names), std::move(types));
+}
+
+CreateTableOptions parseCreateTableOptions(
+    const folly::dynamic& obj,
+    velox::dwio::common::FileFormat defaultFileFormat) {
+  CreateTableOptions options;
+
+  if (obj.count("compressionKind")) {
+    options.compressionKind = velox::common::stringToCompressionKind(
+        obj["compressionKind"].asString());
+  }
+
+  if (obj.count("fileFormat")) {
+    options.fileFormat =
+        velox::dwio::common::toFileFormat(obj["fileFormat"].asString());
+  } else {
+    options.fileFormat = defaultFileFormat;
+  }
+
+  for (auto column : obj["partitionColumns"]) {
+    options.partitionedByColumns.push_back(column["name"].asString());
+  }
+
+  if (obj.count("bucketProperty")) {
+    const auto& bucketObj = obj["bucketProperty"];
+    options.numBuckets = atoi(bucketObj["bucketCount"].asString().c_str());
+
+    for (const auto& column : bucketObj["bucketedBy"]) {
+      options.bucketedByColumns.push_back(column.asString());
+    }
+
+    for (const auto& column : bucketObj["sortedBy"]) {
+      options.sortedByColumns.push_back(column.asString());
+    }
+  }
+
+  return options;
+}
+
+folly::dynamic toJsonArray(const std::vector<std::string>& values) {
+  auto json = folly::dynamic::array();
+  for (const auto& value : values) {
+    json.push_back(value);
+  }
+  return json;
+}
+
+folly::dynamic toSchemaJson(
+    const velox::RowTypePtr& rowType,
+    const CreateTableOptions& options) {
+  folly::dynamic schema = folly::dynamic::object;
+
+  if (options.compressionKind.has_value()) {
+    schema["compressionKind"] =
+        velox::common::compressionKindToString(options.compressionKind.value());
+  }
+
+  if (options.fileFormat.has_value()) {
+    schema["fileFormat"] =
+        velox::dwio::common::toString(options.fileFormat.value());
+  }
+
+  if (options.numBuckets.has_value()) {
+    folly::dynamic buckets = folly::dynamic::object;
+    buckets["bucketCount"] = fmt::format("{}", options.numBuckets.value());
+
+    buckets["bucketedBy"] = toJsonArray(options.bucketedByColumns);
+    buckets["sortedBy"] = toJsonArray(options.sortedByColumns);
+    schema["bucketProperty"] = buckets;
+  }
+
+  const std::unordered_set<std::string> partitionedByColumns(
+      options.partitionedByColumns.begin(), options.partitionedByColumns.end());
+
+  auto dataColumns = folly::dynamic::array();
+  auto partitionColumns = folly::dynamic::array();
+
+  bool isPartition = false;
+  for (auto i = 0; i < rowType->size(); ++i) {
+    const auto& name = rowType->nameOf(i);
+
+    folly::dynamic column = folly::dynamic::object();
+    column["name"] = name;
+    column["type"] =
+        velox::type::fbhive::HiveTypeSerializer::serialize(rowType->childAt(i));
+
+    if (partitionedByColumns.contains(name)) {
+      partitionColumns.push_back(column);
+      isPartition = true;
+    } else {
+      VELOX_USER_CHECK(!isPartition, "Partitioning columns must be last");
+      dataColumns.push_back(column);
+    }
+  }
+
+  schema["dataColumns"] = dataColumns;
+  schema["partitionColumns"] = partitionColumns;
+
+  return schema;
+}
+
+std::shared_ptr<LocalTable> createLocalTable(
+    std::string_view name,
+    const velox::RowTypePtr& schema,
+    const CreateTableOptions& createTableOptions,
+    velox::connector::Connector* connector) {
+  folly::F14FastMap<std::string, velox::Variant> options;
+  if (createTableOptions.compressionKind.has_value()) {
+    options[HiveWriteOptions::kCompressionKind] =
+        velox::common::compressionKindToString(
+            createTableOptions.compressionKind.value());
+  }
+
+  if (createTableOptions.fileFormat.has_value()) {
+    options[HiveWriteOptions::kFileFormat] = std::string(
+        velox::dwio::common::toString(createTableOptions.fileFormat.value()));
+  }
+
+  auto table = std::make_shared<LocalTable>(
+      std::string{name}, schema, std::move(options));
+
+  std::vector<const Column*> partitionedBy;
+  for (const auto& name : createTableOptions.partitionedByColumns) {
+    auto column = table->findColumn(name);
+    VELOX_CHECK_NOT_NULL(column, "Partitioned-by column not found: {}", name);
+    partitionedBy.push_back(column);
+  }
+
+  std::optional<int32_t> numBuckets = createTableOptions.numBuckets;
+  std::vector<const Column*> bucketedBy;
+  std::vector<const Column*> sortedBy;
+  std::vector<SortOrder> sortOrders;
+  if (numBuckets.has_value()) {
+    for (const auto& name : createTableOptions.bucketedByColumns) {
+      auto column = table->findColumn(name);
+      VELOX_CHECK_NOT_NULL(column, "Bucketed-by column not found: {}", name);
+      bucketedBy.push_back(column);
+    }
+
+    for (const auto& name : createTableOptions.sortedByColumns) {
+      auto column = table->findColumn(name);
+      VELOX_CHECK_NOT_NULL(column, "Sorted-by column not found: {}", name);
+      sortedBy.push_back(column);
+      sortOrders.push_back(SortOrder{true, true}); // ASC NULLS FIRST.
+    }
+  }
+
+  std::vector<const Column*> columns;
+  columns.reserve(table->columns().size());
+  for (const auto& name : table->type()->names()) {
+    columns.emplace_back(table->findColumn(name));
+  }
+
+  auto layout = std::make_unique<LocalHiveTableLayout>(
+      table->name(),
+      table.get(),
+      connector,
+      columns,
+      numBuckets,
+      bucketedBy,
+      sortedBy,
+      sortOrders,
+      /*lookupKeys=*/std::vector<const Column*>{},
+      partitionedBy,
+      createTableOptions.fileFormat.value());
+  table->addLayout(std::move(layout));
+  return table;
+}
+
+std::string schemaPath(std::string_view path) {
+  return fmt::format("{}/.schema", path);
+}
+
+std::shared_ptr<LocalTable> createTableFromSchema(
+    std::string_view name,
+    std::string_view path,
+    velox::dwio::common::FileFormat defaultFileFormat,
+    velox::connector::Connector* connector) {
+  auto jsons = readConcatenatedDynamicsFromFile(schemaPath(path));
+  if (jsons.empty()) {
+    return nullptr;
+  }
+
+  VELOX_CHECK_EQ(jsons.size(), 1);
+  auto json = jsons[0];
+
+  const auto options = parseCreateTableOptions(json, defaultFileFormat);
+  const auto schema = parseSchema(json);
+
+  return createLocalTable(name, schema, options, connector);
+}
 } // namespace
 
 void LocalHiveConnectorMetadata::loadTable(
@@ -526,10 +703,12 @@ void LocalHiveConnectorMetadata::loadTable(
     const fs::path& tablePath) {
   // open each file in the directory and check their type and add up the row
   // counts.
-  auto table = createTableFromSchema(tableName, tablePath.native());
+  auto table = createTableFromSchema(
+      tableName, tablePath.native(), format_, hiveConnector());
 
   velox::RowTypePtr tableType;
   if (table) {
+    tables_[tableName] = table;
     tableType = table->type();
   }
 
@@ -578,7 +757,7 @@ void LocalHiveConnectorMetadata::loadTable(
 
     const auto rows = reader->numberOfRows();
     if (rows.has_value()) {
-      table->numRows_ += rows.value();
+      table->incrementNumRows(rows.value());
     }
 
     for (auto i = 0; i < fileType->size(); ++i) {
@@ -850,21 +1029,13 @@ void createDir(const std::string& path) {
   }
 }
 
-// Split a set of string tokens with ',' delimiter.
-void parseTokens(const std::string& option, folly::dynamic& array) {
-  std::vector<std::string> tokens;
-  folly::split(",", option, tokens);
-  for (auto& token : tokens) {
-    array.push_back(folly::trimWhitespace(token));
-  }
-}
 } // namespace
 
 TablePtr LocalHiveConnectorMetadata::createTable(
     const ConnectorSessionPtr& session,
     const std::string& tableName,
     const velox::RowTypePtr& rowType,
-    const folly::F14FastMap<std::string, std::string>& options) {
+    const folly::F14FastMap<std::string, velox::Variant>& options) {
   validateOptions(options);
   ensureInitialized();
   auto path = tablePath(tableName);
@@ -874,96 +1045,25 @@ TablePtr LocalHiveConnectorMetadata::createTable(
     createDir(path);
   }
 
-  folly::dynamic schema = folly::dynamic::object;
+  auto createTableOptions = parseCreateTableOptions(options, format_);
 
-  auto it = options.find(HiveWriteOptions::kCompressionKind);
-  if (it != options.end()) {
-    //  Check the kind is recognized.
-    velox::common::stringToCompressionKind(it->second);
-    schema["compressionKind"] = it->second;
-  }
-  it = options.find(HiveWriteOptions::kFileFormat);
-  std::string fileFormat;
-  if (it != options.end()) {
-    VELOX_USER_CHECK(
-        velox::dwio::common::toFileFormat(it->second) !=
-            velox::dwio::common::FileFormat::UNKNOWN,
-        "Bad file format {}",
-        it->second);
-    fileFormat = it->second;
-  } else {
-    fileFormat = toString(format_);
-  }
-  schema["fileFormat"] = fileFormat;
-  folly::dynamic buckets = folly::dynamic::object;
-  it = options.find(HiveWriteOptions::kBucketedBy);
-  if (it != options.end()) {
-    folly::dynamic columns = folly::dynamic::array;
-    parseTokens(it->second, columns);
-    it = options.find(HiveWriteOptions::kBucketCount);
-    VELOX_USER_CHECK(
-        it != options.end(),
-        "{} is required if {} is specified",
-        HiveWriteOptions::kBucketCount,
-        HiveWriteOptions::kBucketedBy);
-    auto count = atoi(it->second.c_str());
-    VELOX_USER_CHECK(
-        (count > 0) && ((count & (count - 1)) == 0),
-        "bucket_count({}) must be >0 and a power of 2",
-        it->second);
-    buckets["bucketCount"] = fmt::format("{}", count);
-    buckets["bucketedBy"] = columns;
-    folly::dynamic sorted = folly::dynamic::array;
-    it = options.find("sorted_by");
-    if (it != options.end()) {
-      parseTokens(it->second, sorted);
-    }
-    buckets["sortedBy"] = sorted;
-  }
-  schema["bucketProperty"] = buckets;
-
-  folly::dynamic dataColumns = folly::dynamic::array;
-  folly::dynamic hivePartitionColumns = folly::dynamic::array;
-  std::vector<std::string> tokens;
-  it = options.find(HiveWriteOptions::kPartitionedBy);
-  if (it != options.end()) {
-    folly::split(",", it->second, tokens);
-    for (auto& token : tokens) {
-      token = folly::trimWhitespace(token);
-    }
-  }
-
-  bool isPartition = false;
-  for (auto i = 0; i < rowType->size(); ++i) {
-    auto& name = rowType->nameOf(i);
-    folly::dynamic c = folly::dynamic::object();
-    c["name"] = name;
-    c["type"] =
-        velox::type::fbhive::HiveTypeSerializer::serialize(rowType->childAt(i));
-
-    if (std::find(tokens.begin(), tokens.end(), name) == tokens.end()) {
-      if (isPartition) {
-        VELOX_USER_FAIL("Partitioning columns must be last");
-      }
-      dataColumns.push_back(c);
-    } else {
-      hivePartitionColumns.push_back(c);
-      isPartition = true;
-    }
-  }
-  schema["dataColumns"] = dataColumns;
-  schema["partitionColumns"] = hivePartitionColumns;
-  std::string jsonStr = folly::toPrettyJson(schema);
-  std::string filePath = path + "/.schema";
+  const std::string jsonStr =
+      folly::toPrettyJson(toSchemaJson(rowType, createTableOptions));
+  const std::string filePath = schemaPath(path);
 
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_USER_CHECK_NULL(
       findTableLocked(tableName), "table {} already exists", tableName);
-  folly::writeFileAtomic(filePath, jsonStr.data(), jsonStr.size());
-  loadTable(tableName, path);
-  auto table = findTableLocked(tableName);
-  tables_.erase(tableName);
-  return table;
+  {
+    std::ofstream outputFile(filePath);
+    VELOX_CHECK(outputFile.is_open());
+
+    outputFile << jsonStr;
+    outputFile.close();
+  }
+
+  return createLocalTable(
+      tableName, rowType, createTableOptions, hiveConnector());
 }
 
 RowsFuture LocalHiveConnectorMetadata::finishWrite(
@@ -991,6 +1091,7 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
   VELOX_CHECK_NOT_NULL(veloxHandle, "expecting a Hive insert handle");
   const auto& targetPath = veloxHandle->locationHandle()->targetPath();
   const auto& writePath = veloxHandle->locationHandle()->writePath();
+
   move(writePath, targetPath);
   deleteDirectoryRecursive(writePath);
   loadTable(hiveHandle->table()->name(), targetPath);
@@ -1010,9 +1111,12 @@ velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
   VELOX_CHECK_NOT_NULL(veloxHandle, "expecting a Hive insert handle");
   const auto& writePath = veloxHandle->locationHandle()->writePath();
   deleteDirectoryRecursive(writePath);
+
   if (hiveHandle->kind() == WriteKind::kCreate) {
     const auto& targetPath = veloxHandle->locationHandle()->targetPath();
     deleteDirectoryRecursive(targetPath);
+
+    tables_.erase(hiveHandle->table()->name());
   }
   return {};
 } catch (const std::exception& e) {
@@ -1021,8 +1125,24 @@ velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
 }
 
 std::optional<std::string> LocalHiveConnectorMetadata::makeStagingDirectory(
-    std::string_view table) const {
-  return createTemporaryDirectory(hiveConfig_->hiveLocalDataPath(), table);
+    std::string_view tableName) const {
+  return createTemporaryDirectory(hiveConfig_->hiveLocalDataPath(), tableName);
+}
+
+bool LocalHiveConnectorMetadata::dropTable(
+    const ConnectorSessionPtr& /* session */,
+    std::string_view tableName,
+    bool ifExists) {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (!tables_.contains(tableName)) {
+    if (ifExists) {
+      return false;
+    }
+    VELOX_USER_FAIL("Table does not exist: {}", tableName);
+  }
+
+  deleteDirectoryRecursive(tablePath(tableName));
+  return tables_.erase(tableName) == 1;
 }
 
 } // namespace facebook::axiom::connector::hive

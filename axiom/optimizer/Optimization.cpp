@@ -29,7 +29,7 @@ namespace facebook::axiom::optimizer {
 Optimization::Optimization(
     SessionPtr session,
     const logical_plan::LogicalPlanNode& logicalPlan,
-    const Schema& schema,
+    const connector::SchemaResolver& schema,
     History& history,
     std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
     velox::core::ExpressionEvaluator& evaluator,
@@ -76,14 +76,12 @@ PlanAndStats Optimization::toVeloxPlan(
 
   VeloxHistory history;
 
-  Schema schema("default", schemaResolver.get(), /* locus */ nullptr);
-
   auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
 
   Optimization opt{
       session,
       logicalPlan,
-      schema,
+      *schemaResolver,
       history,
       veloxQueryCtx,
       evaluator,
@@ -421,16 +419,15 @@ bool isSingleWorker() {
 
 RelationOpPtr repartitionForAgg(const RelationOpPtr& plan, PlanState& state) {
   // No shuffle if all grouping keys are in partitioning.
-  if (isSingleWorker() || plan->distribution().distributionType.isGather) {
+  if (isSingleWorker() || plan->distribution().isGather()) {
     return plan;
   }
 
   const auto* agg = state.dt->aggregation;
 
-  // If no grouping and not yet gathered on a single node, add a gather before
-  // final agg.
-  if (agg->groupingKeys().empty() &&
-      !plan->distribution().distributionType.isGather) {
+  // If no grouping and not yet gathered on a single node,
+  // add a gather before final agg.
+  if (agg->groupingKeys().empty()) {
     auto* gather =
         make<Repartition>(plan, Distribution::gather(), plan->columns());
     state.addCost(*gather);
@@ -479,9 +476,7 @@ bool isIndexColocated(
     const ExprVector& lookupValues,
     const RelationOpPtr& input) {
   const auto& distribution = info.index->distribution;
-  if (distribution.isBroadcast &&
-      input->distribution().distributionType.locus ==
-          distribution.distributionType.locus) {
+  if (distribution.isBroadcast) {
     return true;
   }
 
@@ -701,6 +696,78 @@ const RelationOpPtr& maybeDropProject(const RelationOpPtr& plan) {
   return plan;
 }
 
+const connector::PartitionType* copartitionType(
+    const connector::PartitionType* first,
+    const connector::PartitionType* second) {
+  if (first != nullptr && second != nullptr) {
+    return first->copartition(*second);
+  }
+
+  return nullptr;
+}
+
+RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
+  if (isSingleWorker() || plan->distribution().isGather()) {
+    return plan;
+  }
+
+  const auto* write = state.dt->write;
+
+  // TODO Introduce layout-for-write or primary layout to remove the assumption
+  // that first layout is the right one.
+  VELOX_CHECK_EQ(
+      1,
+      write->table().layouts().size(),
+      "Writes to tables with multiple-layouts are not supported yet");
+
+  const auto* layout = write->table().layouts().at(0);
+  const auto& partitionColumns = layout->partitionColumns();
+  if (partitionColumns.empty()) {
+    // Unpartitioned write.
+    return plan;
+  }
+
+  const auto& tableSchema = write->table().type();
+
+  // Find values for all partition columns.
+  ExprVector keyValues;
+  keyValues.reserve(partitionColumns.size());
+  for (const auto* column : partitionColumns) {
+    const auto index = tableSchema->getChildIdx(column->name());
+    keyValues.emplace_back(write->columnExprs().at(index));
+  }
+
+  const auto* planPartitionType =
+      plan->distribution().distributionType.partitionType();
+
+  auto copartition =
+      copartitionType(planPartitionType, layout->partitionType());
+
+  // Copartitioning is possible if PartitionTypes are compatible and the table
+  // has no fewer partitions than the plan.
+  bool shuffle = !copartition || copartition != planPartitionType;
+  if (!shuffle) {
+    // Check that the partition keys of the plan are assigned pairwise to the
+    // partition columns of the layout.
+    for (auto i = 0; i < keyValues.size(); ++i) {
+      if (!plan->distribution().partition[i]->sameOrEqual(*keyValues[i])) {
+        shuffle = true;
+        break;
+      }
+    }
+
+    if (!shuffle) {
+      return plan;
+    }
+  }
+
+  Distribution distribution(layout->partitionType(), std::move(keyValues));
+  auto* repartition =
+      make<Repartition>(plan, std::move(distribution), plan->columns());
+  state.addCost(*repartition);
+  return repartition;
+}
+
 } // namespace
 
 void Optimization::addPostprocess(
@@ -715,10 +782,13 @@ void Optimization::addPostprocess(
     auto writeColumns = precompute.toColumns(dt->write->columnExprs());
     plan = std::move(precompute).maybeProject();
     state.addCost(*plan);
-    // Because table write will be in every plan and it will be root node,
-    // it would not affect the choice of plan.
-    // So we're not adding the cost of the write itself to the plan cost.
+
+    plan = repartitionForWrite(plan, state);
     plan = make<TableWrite>(plan, std::move(writeColumns), dt->write);
+
+    // Table write is present in every candidate plan and it is the root node.
+    // Hence, it doesn't affect the choice of candidate plan. Hence, no need to
+    // track the cost.
     return;
   }
 
@@ -982,7 +1052,7 @@ void Optimization::joinByHash(
       candidate.tables[0], buildColumns, buildTables, candidate.existences};
 
   Distribution forBuild;
-  if (plan->distribution().distributionType.isGather) {
+  if (plan->distribution().isGather()) {
     forBuild = Distribution::gather();
   } else {
     forBuild = {plan->distribution().distributionType, copartition};
@@ -1026,9 +1096,7 @@ void Optimization::joinByHash(
         candidate.join->isBroadcastableType() &&
         isBroadcastableSize(buildPlan, state)) {
       auto* broadcast = make<Repartition>(
-          buildInput,
-          Distribution::broadcast(plan->distribution().distributionType),
-          buildInput->columns());
+          buildInput, Distribution::broadcast(), buildInput->columns());
       buildState.addCost(*broadcast);
       buildInput = broadcast;
     } else {
@@ -1391,7 +1459,7 @@ RelationOpPtr Optimization::placeSingleRowDt(
   memoKey.tables.add(subquery);
   memoKey.columns.unionObjects(subquery->columns);
 
-  const auto broadcast = Distribution::broadcast({});
+  const auto broadcast = Distribution::broadcast();
 
   PlanObjectSet empty;
   bool needsShuffle = false;
@@ -1588,12 +1656,7 @@ Distribution somePartition(const RelationOpPtrVector& inputs) {
     }
   }
 
-  DistributionType distributionType;
-  distributionType.numPartitions =
-      queryCtx()->optimization()->runnerOptions().numWorkers;
-  distributionType.locus = firstInput->distribution().distributionType.locus;
-
-  return {distributionType, std::move(columns)};
+  return {DistributionType{}, std::move(columns)};
 }
 
 // Adds the costs in the input states to the first state and if 'distinct' is
@@ -1609,9 +1672,12 @@ PlanP unionPlan(
   for (auto i = 1; i < states.size(); ++i) {
     const auto& otherCost = states[i].cost;
     fullyImported.intersect(inputPlans[i]->fullyImported);
-    firstState.cost.add(otherCost);
-    // The input cardinality is not additive, the fanout and other metrics are.
-    firstState.cost.inputCardinality -= otherCost.inputCardinality;
+    // We don't sum up inputCardinality because it is not additive.
+    firstState.cost.setupCost += otherCost.setupCost;
+    firstState.cost.unitCost += otherCost.unitCost;
+    firstState.cost.fanout += otherCost.fanout;
+    firstState.cost.totalBytes += otherCost.totalBytes;
+    firstState.cost.transferBytes += otherCost.transferBytes;
   }
   if (distinct) {
     firstState.addCost(*distinct);

@@ -17,8 +17,8 @@
 #pragma once
 
 #include "axiom/optimizer/tests/PlanMatcher.h"
-#include "axiom/optimizer/tests/PrestoParser.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "axiom/sql/presto/PrestoParser.h"
 
 namespace facebook::axiom::optimizer::test {
 
@@ -50,7 +50,7 @@ class HiveQueriesTestBase : public test::QueryTestBase {
       const PlanAndStats& plan,
       const std::shared_ptr<velox::core::PlanMatcher>& matcher);
 
-  PrestoParser& prestoParser() {
+  ::axiom::sql::presto::PrestoParser& prestoParser() {
     return *prestoParser_;
   }
 
@@ -58,7 +58,7 @@ class HiveQueriesTestBase : public test::QueryTestBase {
   inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
       gTempDirectory;
 
-  std::unique_ptr<PrestoParser> prestoParser_;
+  std::unique_ptr<::axiom::sql::presto::PrestoParser> prestoParser_;
 };
 
 } // namespace facebook::axiom::optimizer::test

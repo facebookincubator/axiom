@@ -16,13 +16,19 @@
 
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/SchemaUtils.h"
-#include "velox/connectors/Connector.h"
 
 namespace facebook::axiom::connector {
 
+void SchemaResolver::setTargetTable(std::string_view catalog, TablePtr table) {
+  VELOX_CHECK_NULL(targetTable_);
+
+  targetCatalog_ = catalog;
+  targetTable_ = std::move(table);
+}
+
 TablePtr SchemaResolver::findTable(
     std::string_view catalog,
-    std::string_view name) {
+    std::string_view name) const {
   TableNameParser parser(name);
   VELOX_USER_CHECK(parser.valid(), "Invalid table name: '{}'", name);
 
@@ -41,6 +47,11 @@ TablePtr SchemaResolver::findTable(
   } else {
     lookupName = parser.table();
   }
+
+  if (targetCatalog_ == catalog && targetTable_->name() == lookupName) {
+    return targetTable_;
+  }
+
   return ConnectorMetadata::metadata(catalog)->findTable(lookupName);
 }
 

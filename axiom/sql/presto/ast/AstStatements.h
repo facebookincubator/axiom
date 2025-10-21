@@ -96,13 +96,15 @@ class CreateTableAsSelect : public Statement {
       bool notExists,
       const std::vector<std::shared_ptr<Property>>& properties,
       bool withData,
-      std::optional<std::string> comment = std::nullopt)
+      std::vector<std::shared_ptr<Identifier>> columns,
+      std::optional<std::string> comment)
       : Statement(NodeType::kCreateTableAsSelect, location),
         name_(name),
         query_(query),
         notExists_(notExists),
         properties_(properties),
         withData_(withData),
+        columns_(std::move(columns)),
         comment_(std::move(comment)) {}
 
   const std::shared_ptr<QualifiedName>& name() const {
@@ -125,6 +127,10 @@ class CreateTableAsSelect : public Statement {
     return withData_;
   }
 
+  const std::vector<std::shared_ptr<Identifier>>& columns() const {
+    return columns_;
+  }
+
   const std::optional<std::string>& comment() const {
     return comment_;
   }
@@ -137,6 +143,7 @@ class CreateTableAsSelect : public Statement {
   bool notExists_;
   std::vector<std::shared_ptr<Property>> properties_;
   bool withData_;
+  std::vector<std::shared_ptr<Identifier>> columns_;
   std::optional<std::string> comment_;
 };
 
