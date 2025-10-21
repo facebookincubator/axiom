@@ -1292,7 +1292,53 @@ void Optimization::crossJoin(
     const JoinCandidate& candidate,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
-  VELOX_NYI("No cross joins");
+  PlanStateSaver save(state);
+
+  PlanObjectSet broadcastTables;
+  PlanObjectSet broadcastColumns;
+  for (const auto* buildTable : candidate.tables) {
+    broadcastColumns.unionSet(availableColumns(buildTable));
+    broadcastTables.add(buildTable);
+  }
+
+  state.columns.unionSet(broadcastColumns);
+
+  auto memoKey = MemoKey{
+      candidate.tables[0],
+      broadcastColumns,
+      broadcastTables,
+      candidate.existences};
+
+  Distribution broadcast = Distribution::broadcast();
+  bool needsShuffle = false;
+  auto* rightPlan = makePlan(
+      memoKey, broadcast, {}, candidate.existsFanout, state, needsShuffle);
+
+  RelationOpPtr rightOp = rightPlan->op;
+  PlanState rightPlanState(state.optimization, state.dt, rightPlan);
+  if (needsShuffle) {
+    rightOp = make<Repartition>(rightPlan->op, broadcast, rightOp->columns());
+    rightPlanState.addCost(*rightOp);
+  }
+
+  auto resultColumns = plan->columns();
+  resultColumns.insert(
+      resultColumns.end(),
+      rightOp->columns().begin(),
+      rightOp->columns().end());
+
+  auto* join = Join::makeCrossJoin(
+      std::move(plan), std::move(rightOp), std::move(resultColumns));
+
+  state.addCost(*join);
+
+  state.cost.setupCost +=
+      rightPlanState.cost.unitCost + rightPlanState.cost.setupCost;
+  state.cost.totalBytes += rightPlanState.cost.totalBytes;
+  state.cost.transferBytes += rightPlanState.cost.transferBytes;
+
+  state.placed.unionSet(broadcastTables);
+  state.addNextJoin(&candidate, join, {}, toTry);
 }
 
 void Optimization::crossJoinUnnest(

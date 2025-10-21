@@ -118,27 +118,54 @@ TEST_F(SyntacticJoinOrderTest, innerJoins) {
   auto reference = runVelox(referencePlan);
   auto referenceResults = reference.results;
 
+  // Matcher factories for different join type combinations
+  auto createHashHash =
+      [&](const std::string& t0, const std::string& t1, const std::string& t2) {
+        return startMatcher(t0)
+            .hashJoin(startMatcher(t1).build())
+            .hashJoin(startMatcher(t2).build())
+            .aggregation()
+            .build();
+      };
+
+  auto createNestedHash =
+      [&](const std::string& t0, const std::string& t1, const std::string& t2) {
+        return startMatcher(t0)
+            .nestedLoopJoin(startMatcher(t1).build())
+            .hashJoin(startMatcher(t2).build())
+            .aggregation()
+            .build();
+      };
+
+  struct Test {
+    std::vector<std::string> order;
+    std::function<std::shared_ptr<core::PlanMatcher>(
+        const std::string&,
+        const std::string&,
+        const std::string&)>
+        createMatcher;
+  };
+
   // Syntactic join order: (a x b) x c.
   {
     // Test all possible join orders that do not involve cross joins (i.e. do
     // not start with lineitem x customer).
-    std::vector<std::vector<std::string>> testOrders = {
-        {"customer", "orders", "lineitem"},
-        // {"customer", "lineitem", "orders"},
-        {"orders", "customer", "lineitem"},
-        {"orders", "lineitem", "customer"},
-        // {"lineitem", "customer", "orders"},
-        {"lineitem", "orders", "customer"},
-    };
+    std::vector<Test> tests = {
+        {{"customer", "orders", "lineitem"}, createHashHash},
+        {{"customer", "lineitem", "orders"}, createNestedHash},
+        {{"orders", "customer", "lineitem"}, createHashHash},
+        {{"orders", "lineitem", "customer"}, createHashHash},
+        {{"lineitem", "customer", "orders"}, createNestedHash},
+        {{"lineitem", "orders", "customer"}, createHashHash}};
 
-    for (const auto& order : testOrders) {
-      SCOPED_TRACE(folly::join(", ", order));
+    for (const auto& test : tests) {
+      SCOPED_TRACE(folly::join(", ", test.order));
 
       auto logicalPlan =
           lp::PlanBuilder(context)
-              .tableScan(order[0])
-              .crossJoin(lp::PlanBuilder(context).tableScan(order[1]))
-              .crossJoin(lp::PlanBuilder(context).tableScan(order[2]))
+              .tableScan(test.order[0])
+              .crossJoin(lp::PlanBuilder(context).tableScan(test.order[1]))
+              .crossJoin(lp::PlanBuilder(context).tableScan(test.order[2]))
               .filter("c_mktsegment = 'BUILDING'")
               .filter("c_custkey = o_custkey")
               .filter("l_orderkey = o_orderkey")
@@ -157,11 +184,8 @@ TEST_F(SyntacticJoinOrderTest, innerJoins) {
         optimizerOptions_.syntacticJoinOrder = true;
         auto plan = toSingleNodePlan(logicalPlan);
 
-        auto matcher = startMatcher(order[0])
-                           .hashJoin(startMatcher(order[1]).build())
-                           .hashJoin(startMatcher(order[2]).build())
-                           .aggregation()
-                           .build();
+        auto matcher =
+            test.createMatcher(test.order[0], test.order[1], test.order[2]);
         AXIOM_ASSERT_PLAN(plan, matcher);
 
         checkSame(logicalPlan, referenceResults);
