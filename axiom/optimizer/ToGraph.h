@@ -454,6 +454,10 @@ class ToGraph {
   // Source PlanNode when inside addProjection() or 'addFilter().
   const logical_plan::LogicalPlanNode* exprSource_{nullptr};
 
+  // Map from lambda argument names to their corresponding columns when
+  // translating inside a lambda body.
+  folly::F14FastMap<std::string_view, ColumnCP> lambdaSignature_;
+
   // Maps names in project nodes of input logical plan to deduplicated Exprs.
   folly::F14FastMap<std::string, ExprCP> renames_;
 

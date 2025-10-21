@@ -1395,6 +1395,22 @@ TEST_F(PlanTest, orderByDuplicateKeys) {
   ASSERT_TRUE(matcher->match(plan));
 }
 
+TEST_F(PlanTest, lambdaArgs) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b"}, {ARRAY(ARRAY(REAL())), BIGINT()}));
+
+  auto logicalPlan = lp::PlanBuilder{}
+                         .tableScan(kTestConnectorId, "t")
+                         .with({"b * 2 as x"})
+                         .with({"transform(a, x -> cardinality(x) + b) as y"})
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder{}.tableScan("t").project().build();
+  ASSERT_TRUE(matcher->match(plan));
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
 

@@ -263,7 +263,15 @@ void ToGraph::getExprForField(
     const lp::LogicalPlanNode*& context) {
   while (context) {
     const auto& name = field->asUnchecked<lp::InputReferenceExpr>()->name();
-    auto ordinal = context->outputType()->getChildIdx(name);
+
+    if (auto it = lambdaSignature_.find(name); it != lambdaSignature_.end()) {
+      resultColumn = it->second;
+      resultExpr = nullptr;
+      context = nullptr;
+      return;
+    }
+
+    const auto ordinal = context->outputType()->getChildIdx(name);
     if (context->is(lp::NodeKind::kProject)) {
       const auto* project = context->asUnchecked<lp::ProjectNode>();
       auto& def = project->expressions()[ordinal];
@@ -741,19 +749,21 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
 }
 
 ExprCP ToGraph::translateLambda(const lp::LambdaExpr* lambda) {
-  auto savedRenames = renames_;
-  const auto& row = lambda->signature();
-  toType(row);
-  toType(lambda->type());
+  const auto& signature = *lambda->signature();
+  auto lambdaSignature = lambdaSignature_;
+  SCOPE_EXIT {
+    lambdaSignature_ = std::move(lambdaSignature);
+  };
   ColumnVector args;
-  for (auto i = 0; i < row->size(); ++i) {
-    auto col = make<Column>(
-        toName(row->nameOf(i)), nullptr, Value(toType(row->childAt(i)), 1));
-    args.push_back(col);
-    renames_[row->nameOf(i)] = col;
+  args.reserve(signature.size());
+  for (uint32_t i = 0; i < signature.size(); ++i) {
+    const auto& name = signature.nameOf(i);
+    const auto* column = make<Column>(
+        toName(name), nullptr, Value{toType(signature.childAt(i)), 1});
+    args.push_back(column);
+    lambdaSignature_[name] = column;
   }
-  auto body = translateExpr(lambda->body());
-  renames_ = std::move(savedRenames);
+  const auto* body = translateExpr(lambda->body());
   return make<Lambda>(std::move(args), toType(lambda->type()), body);
 }
 
@@ -860,8 +870,10 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
 }
 
 ExprCP ToGraph::translateColumn(std::string_view name) {
-  auto it = renames_.find(name);
-  if (it != renames_.end()) {
+  if (auto it = lambdaSignature_.find(name); it != lambdaSignature_.end()) {
+    return it->second;
+  }
+  if (auto it = renames_.find(name); it != renames_.end()) {
     return it->second;
   }
   VELOX_FAIL("Cannot resolve column name: {}", name);
