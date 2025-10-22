@@ -350,12 +350,13 @@ class SubfieldTest : public QueryTestBase,
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan("features", {}, "float_features[10010] + 1 < 10000")
-            .localPartition(
+            .localPartition({
                 core::PlanMatcherBuilder()
                     .hiveScan(
                         "features", {}, "float_features[10010] + 1 < 10000")
                     .project()
-                    .build())
+                    .build(),
+            })
             .project()
             .build();
 
