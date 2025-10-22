@@ -148,6 +148,8 @@ class PlanMatcherBuilder {
 
   PlanMatcherBuilder& tableWrite();
 
+  PlanMatcherBuilder& window();
+
   std::shared_ptr<PlanMatcher> build() {
     VELOX_USER_CHECK_NOT_NULL(matcher_, "Cannot build an empty PlanMatcher.");
     return matcher_;

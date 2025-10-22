@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/QueryGraph.h"
+#include <algorithm>
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -270,7 +271,7 @@ void JoinEdge::addEquality(ExprCP left, ExprCP right, bool update) {
 
 std::pair<std::string, bool> JoinEdge::sampleKey() const {
   if (!leftTable_ || leftTable_->isNot(PlanType::kTableNode) ||
-      rightTable_->isNot(PlanType::kTableNode)) {
+      rightTable_->isNot(PlanType::kTableNode) || isWindowDependent()) {
     return std::make_pair("", false);
   }
   auto* opt = queryCtx()->optimization();
@@ -394,6 +395,7 @@ PlanObjectCP Expr::singleTable() const {
   columns_.forEach<Column>([&](auto column) {
     if (!table) {
       table = column->relation();
+    } else if (!column->relation()) {
     } else if (table != column->relation()) {
       multiple = true;
     }
@@ -404,7 +406,11 @@ PlanObjectCP Expr::singleTable() const {
 
 PlanObjectSet Expr::allTables() const {
   PlanObjectSet set;
-  columns_.forEach<Column>([&](auto column) { set.add(column->relation()); });
+  columns_.forEach<Column>([&](auto column) {
+    if (column->relation()) {
+      set.add(column->relation());
+    }
+  });
   return set;
 }
 
@@ -493,6 +499,43 @@ void JoinEdge::guessFanout() {
     lrFanout_ = tableCardinality(rightTable_) / tableCardinality(leftTable_) *
         baseSelectivity(rightTable_);
   }
+}
+
+bool WindowSpec::operator==(const WindowSpec& other) const {
+  if (partitionKeys.size() != other.partitionKeys.size() ||
+      orderKeys.size() != other.orderKeys.size() ||
+      orderTypes.size() != other.orderTypes.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < partitionKeys.size(); ++i) {
+    if (!partitionKeys[i]->sameOrEqual(*other.partitionKeys[i])) {
+      return false;
+    }
+  }
+
+  for (size_t i = 0; i < orderKeys.size(); ++i) {
+    if (!orderKeys[i]->sameOrEqual(*other.orderKeys[i])) {
+      return false;
+    }
+  }
+
+  return orderTypes == other.orderTypes;
+}
+
+size_t WindowSpec::Hasher::operator()(const WindowSpec& spec) const {
+  size_t hash = 0;
+  for (const auto& key : spec.partitionKeys) {
+    hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(key));
+  }
+  for (const auto& key : spec.orderKeys) {
+    hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(key));
+  }
+  for (const auto& type : spec.orderTypes) {
+    hash = velox::bits::hashMix(
+        hash, folly::hasher<int>()(static_cast<int>(type)));
+  }
+  return hash;
 }
 
 } // namespace facebook::axiom::optimizer
