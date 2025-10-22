@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <optimizer/QueryGraphContext.h>
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Schema.h"
@@ -64,6 +65,11 @@ class Expr : public PlanObject {
 
   bool containsNonDeterministic() const {
     return containsFunction(FunctionSet::kNonDeterministic);
+  }
+
+  // whether function contains window exprs or not
+  bool containsWindow() const {
+    return containsFunction(FunctionSet::kWindow);
   }
 
   /// True if 'this' contains any function from 'set'. See FunctionSet.
@@ -641,6 +647,14 @@ class JoinEdge {
   /// before left.
   std::pair<std::string, bool> sampleKey() const;
 
+  bool isWindowDependent() const {
+    auto isWindowDependent = [](const ExprCP& expr) {
+      return expr->containsWindow();
+    };
+    return std::ranges::any_of(leftKeys_, isWindowDependent) ||
+        std::ranges::any_of(rightKeys_, isWindowDependent);
+  }
+
  private:
   // Leading left side join keys.
   ExprVector leftKeys_;
@@ -889,6 +903,99 @@ class Aggregate : public Call {
 
 using AggregateCP = const Aggregate*;
 using AggregateVector = QGVector<AggregateCP>;
+
+/// Window frame specification for window functions
+struct WindowFrame {
+  logical_plan::WindowExpr::WindowType type;
+  logical_plan::WindowExpr::BoundType startType;
+  ExprCP startValue{nullptr};
+  logical_plan::WindowExpr::BoundType endType;
+  ExprCP endValue{nullptr};
+};
+
+struct WindowSpec {
+  WindowSpec(
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes)
+      : partitionKeys(std::move(partitionKeys)),
+        orderKeys(std::move(orderKeys)),
+        orderTypes(std::move(orderTypes)) {
+    VELOX_CHECK_EQ(orderKeys.size(), orderTypes.size());
+  }
+
+  ExprVector partitionKeys;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+
+  bool operator==(const WindowSpec& other) const;
+
+  struct Hasher {
+    size_t operator()(const WindowSpec& spec) const;
+  };
+};
+
+class Window : public Call {
+ public:
+  Window(
+      Name name,
+      const Value& value,
+      ExprVector args,
+      FunctionSet functions,
+      WindowSpec spec,
+      WindowFrame frame,
+      PlanObjectCP dt,
+      bool ignoreNulls)
+      : Call(
+            PlanType::kWindowExpr,
+            name,
+            value,
+            std::move(args),
+            functions | FunctionSet::kWindow),
+        spec_(std::move(spec)),
+        frame_(frame),
+        column_([&]() {
+          auto windowName = toName(fmt::format("{}_{}", name, id()));
+          return make<Column>(windowName, dt, value, windowName);
+        }()),
+        ignoreNulls_(ignoreNulls) {
+    columns_.unionColumns(spec_.partitionKeys);
+    columns_.unionColumns(spec_.orderKeys);
+
+    if (frame_.startValue) {
+      columns_.unionColumns(frame_.startValue);
+    }
+
+    if (frame_.endValue) {
+      columns_.unionColumns(frame_.endValue);
+    }
+  }
+
+  const WindowSpec& spec() const {
+    return spec_;
+  }
+
+  const WindowFrame& frame() const {
+    return frame_;
+  }
+
+  bool ignoreNulls() const {
+    return ignoreNulls_;
+  }
+
+  const ColumnCP& column() const {
+    return column_;
+  }
+
+ private:
+  WindowSpec spec_;
+  WindowFrame frame_;
+  const ColumnCP column_;
+  bool ignoreNulls_;
+};
+
+using WindowCP = const Window*;
+using WindowVector = QGVector<WindowCP>;
 
 class AggregationPlan : public PlanObject {
  public:

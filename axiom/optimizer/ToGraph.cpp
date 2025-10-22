@@ -14,15 +14,25 @@
  * limitations under the License.
  */
 
+#include <fmt/core.h>
+#include <logical_plan/Expr.h>
+#include <logical_plan/LogicalPlanNode.h>
+#include <optimizer/PlanObject.h>
+#include <optimizer/QueryGraphContext.h>
+#include <optimizer/Schema.h>
+#include <optimizer/ToGraph.h>
 #include <velox/common/base/Exceptions.h>
+#include <algorithm>
 #include <iostream>
+#include <utility>
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
+#include "axiom/logical_plan/Utils.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
-#include "velox/exec/Aggregate.h"
+#include "axiom/optimizer/QueryGraph.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
@@ -75,6 +85,7 @@ velox::ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
   e.arg = ctx;
   return e;
 }
+
 } // namespace
 
 ToGraph::ToGraph(
@@ -122,7 +133,7 @@ void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
     outer = make<Column>(columnName, dt, inner->value(), columnName);
   }
   dt->columns.push_back(outer);
-  renames_[name] = outer;
+  renames_[std::string{name}] = outer;
 }
 
 void ToGraph::setDtOutput(DerivedTableP dt, const lp::LogicalPlanNode& node) {
@@ -691,6 +702,10 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     return translateLambda(expr->asUnchecked<lp::LambdaExpr>());
   }
 
+  if (expr->isWindow()) {
+    return translateWindow(expr->asUnchecked<lp::WindowExpr>());
+  }
+
   ToGraphContext ctx(expr.get());
   velox::ExceptionContextSetter exceptionContext(makeExceptionContext(&ctx));
 
@@ -725,7 +740,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       args.emplace_back(arg);
       allConstant &= arg->is(PlanType::kLiteralExpr);
       cardinality = std::max(cardinality, arg->value().cardinality);
-      if (arg->is(PlanType::kCallExpr)) {
+      if (arg->is(PlanType::kCallExpr) || arg->is(PlanType::kWindowExpr)) {
         funcs = funcs | arg->as<Call>()->functions();
       }
     }
@@ -781,6 +796,19 @@ bool contains(uint64_t mask, lp::NodeKind op) {
 // that does not belong to the mask.
 uint64_t makeDtIf(uint64_t mask, lp::NodeKind op) {
   return mask & ~(uint64_t{1} << static_cast<uint64_t>(op));
+}
+
+template <typename Exprs>
+bool hasWindowFuncs(const Exprs& exprs) {
+  bool hasWindowFuncs = false;
+  lp::RecursiveExprVisitorContext ctx;
+  ctx.preExprVisitor = [&](const lp::Expr& expr) {
+    if (expr.isWindow()) {
+      hasWindowFuncs = true;
+    }
+  };
+  lp::visitExprsRecursively(exprs, ctx);
+  return hasWindowFuncs;
 }
 
 } // namespace
@@ -1142,6 +1170,62 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       std::move(deduppedAggregates),
       std::move(columns),
       std::move(intermediateColumns));
+}
+
+WindowCP ToGraph::translateWindow(const lp::WindowExpr* windowExpr) {
+  FunctionSet functions;
+  ExprVector args;
+  args.reserve(windowExpr->inputs().size());
+  for (const auto& input : windowExpr->inputs()) {
+    args.emplace_back(translateExpr(input));
+    functions = functions | args.back()->functions();
+  }
+
+  ExprVector partitionKeys;
+  partitionKeys.reserve(windowExpr->partitionKeys().size());
+  for (const auto& key : windowExpr->partitionKeys()) {
+    partitionKeys.emplace_back(translateExpr(key));
+    functions = functions | partitionKeys.back()->functions();
+  }
+
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  orderKeys.reserve(windowExpr->ordering().size());
+  orderTypes.reserve(windowExpr->ordering().size());
+  for (const auto& sorting : windowExpr->ordering()) {
+    orderTypes.emplace_back(toOrderType(sorting.order));
+    orderKeys.emplace_back(translateExpr(sorting.expression));
+    functions = functions | orderKeys.back()->functions();
+  }
+
+  const auto& lpFrame = windowExpr->frame();
+  WindowFrame frame;
+  frame.type = lpFrame.type;
+  frame.startType = lpFrame.startType;
+  if (lpFrame.startValue) {
+    frame.startValue = translateExpr(lpFrame.startValue);
+    functions = functions | frame.startValue->functions();
+  }
+  frame.endType = lpFrame.endType;
+  if (lpFrame.endValue) {
+    frame.endValue = translateExpr(lpFrame.endValue);
+    functions = functions | frame.endValue->functions();
+  }
+
+  const auto* name = toName(windowExpr->name());
+  auto value = Value(toType(windowExpr->type()), 1);
+  WindowSpec spec{
+      std::move(partitionKeys), std::move(orderKeys), std::move(orderTypes)};
+
+  return make<Window>(
+      name,
+      value,
+      std::move(args),
+      functions,
+      std::move(spec),
+      frame,
+      currentDt_,
+      windowExpr->ignoreNulls());
 }
 
 void ToGraph::addOrderBy(const lp::SortNode& order) {

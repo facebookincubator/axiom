@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/Schema.h"
 
 /// Plan candidates.
@@ -89,6 +90,7 @@ enum class RelType {
   kJoin,
   kHashBuild,
   kAggregation,
+  kWindow,
   kOrderBy,
   kUnionAll,
   kLimit,
@@ -521,6 +523,31 @@ struct Aggregation : public RelationOp {
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
+};
+
+/// Represents window functions with the same window specification.
+struct WindowOp : public RelationOp {
+  WindowOp(
+      RelationOpPtr input,
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes,
+      WindowVector windows,
+      ColumnVector columns);
+
+  const ExprVector partitionKeys;
+  const ExprVector orderKeys;
+  const OrderTypeVector orderTypes;
+  const WindowVector windows;
+
+  ColumnCP windowExprColumn(size_t windowIndex) const {
+    VELOX_CHECK(input_->columns().size() + windowIndex < columns_.size());
+    return columns_.at(input_->columns().size() + windowIndex);
+  }
+
+  const QGString& historyKey() const override;
+
+  std::string toString(bool recursive, bool detail) const override;
 };
 
 /// Represents an order by. The order is given by the distribution.

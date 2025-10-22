@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
+#include <optimizer/QueryGraphContext.h>
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/optimizer/PlanObject.h"
 
@@ -35,6 +37,10 @@ using OrderTypeVector = QGVector<OrderType>;
 
 class WritePlan;
 using WritePlanCP = const WritePlan*;
+
+class Window;
+using WindowCP = const Window*;
+using WindowVector = QGVector<WindowCP>;
 
 /// Represents a derived table, i.e. a SELECT in a FROM clause. This is the
 /// basic unit of planning. Derived tables can be merged and split apart from
@@ -141,6 +147,8 @@ struct DerivedTable : public PlanObject {
 
   ExprVector having;
 
+  folly::F14FastMap<ColumnCP, WindowCP> columnToWindow;
+
   /// Order by.
   ExprVector orderKeys;
   OrderTypeVector orderTypes;
@@ -216,6 +224,8 @@ struct DerivedTable : public PlanObject {
   bool hasLimit() const {
     return limit >= 0;
   }
+
+  bool hasWindows() const;
 
   /// Fills in 'startTables_' to 'tables_' that are not to the right of
   /// non-commutative joins.

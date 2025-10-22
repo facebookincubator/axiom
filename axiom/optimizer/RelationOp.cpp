@@ -36,12 +36,13 @@ const auto& relTypeNames() {
       {RelType::kJoin, "Join"},
       {RelType::kHashBuild, "HashBuild"},
       {RelType::kAggregation, "Aggregation"},
+      {RelType::kWindow, "Window"},
       {RelType::kOrderBy, "OrderBy"},
       {RelType::kUnionAll, "UnionAll"},
       {RelType::kLimit, "Limit"},
       {RelType::kValues, "Values"},
       {RelType::kUnnest, "Unnest"},
-      {RelType::kTableWrite, "TableWrite"},
+      {RelType::kTableWrite, "TableWrite"}
   };
 
   return kNames;
@@ -926,6 +927,79 @@ std::string UnionAll::toString(bool recursive, bool detail) const {
     }
   }
   out << ")";
+  return out.str();
+}
+
+WindowOp::WindowOp(
+    RelationOpPtr input,
+    ExprVector partitionKeysVector,
+    ExprVector orderKeysVector,
+    OrderTypeVector orderTypesVector,
+    WindowVector windowsVector,
+    ColumnVector columns)
+    : RelationOp{RelType::kWindow, std::move(input), std::move(columns)},
+      partitionKeys{std::move(partitionKeysVector)},
+      orderKeys{std::move(orderKeysVector)},
+      orderTypes{std::move(orderTypesVector)},
+      windows{std::move(windowsVector)} {
+  cost_.inputCardinality = inputCardinality();
+  cost_.fanout = 1;
+}
+
+const QGString& WindowOp::historyKey() const {
+  if (!key_.empty()) {
+    return key_;
+  }
+  std::stringstream out;
+  auto* opt = queryCtx()->optimization();
+  velox::ScopedVarSetter cname(&opt->cnamesInExpr(), false);
+  out << input_->historyKey() << " window (";
+  for (auto& key : partitionKeys) {
+    out << key->toString() << ", ";
+  }
+  out << ") order by (";
+  for (auto& key : orderKeys) {
+    out << key->toString() << ", ";
+  }
+  out << ") functions (";
+  for (auto& window : windows) {
+    out << window->toString() << ", ";
+  }
+  out << ")";
+  key_ = sanitizeHistoryKey(out.str());
+  return key_;
+}
+
+std::string WindowOp::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (detail) {
+    out << "Window (";
+    out << "partition by: ";
+    for (auto i = 0; i < partitionKeys.size(); ++i) {
+      out << partitionKeys[i]->toString();
+      if (i < partitionKeys.size() - 1) {
+        out << ", ";
+      }
+    }
+    out << " order by: ";
+    for (auto i = 0; i < orderKeys.size(); ++i) {
+      out << orderKeys[i]->toString();
+      if (i < orderKeys.size() - 1) {
+        out << ", ";
+      }
+    }
+    out << " functions: ";
+    for (auto i = 0; i < windows.size(); ++i) {
+      out << windows[i]->toString();
+      if (i < windows.size() - 1) {
+        out << ", ";
+      }
+    }
+    out << ")\n";
+  } else {
+    out << "window " << windows.size() << " functions ";
+  }
+
   return out.str();
 }
 

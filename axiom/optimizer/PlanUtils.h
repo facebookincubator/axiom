@@ -17,8 +17,10 @@
 #pragma once
 
 #include <folly/Range.h>
+#include <optimizer/Plan.h>
 #include "axiom/logical_plan/Expr.h"
-#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/RelationOp.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -113,5 +115,9 @@ std::string orderByToString(
     const OrderTypeVector& orderTypes);
 
 std::string columnsToString(const ColumnVector& columns);
+
+RelationOpPtr addWindowOps(
+    RelationOpPtr input,
+    std::span<ExprCP> maybeWindowDependentExprs);
 
 } // namespace facebook::axiom::optimizer
