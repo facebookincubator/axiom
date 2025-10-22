@@ -157,5 +157,117 @@ TEST_F(HiveQueriesTest, orderOfOperations) {
           .filter("n_nationkey > 70 AND n_regionkey < 7"));
 }
 
+TEST_F(HiveQueriesTest, joinWithTopNBothSides) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan = lp::PlanBuilder(context)
+                         .tableScan("nation")
+                         .orderBy({"n_nationkey"})
+                         .limit(0, 10)
+                         .as("n1")
+                         .join(
+                             lp::PlanBuilder(context)
+                                 .tableScan("region")
+                                 .orderBy({"r_regionkey"})
+                                 .limit(0, 5)
+                                 .as("r1"),
+                             "n1.n_regionkey = r1.r_regionkey",
+                             lp::JoinType::kInner)
+                         .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .topN()
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("region").topN().build())
+            .build();
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto referencePlan = exec::test::PlanBuilder(planNodeIdGenerator)
+                           .tableScan("nation", getSchema("nation"))
+                           .orderBy({"n_nationkey"}, false)
+                           .limit(0, 10, false)
+                           .hashJoin(
+                               {"n_regionkey"},
+                               {"r_regionkey"},
+                               exec::test::PlanBuilder(planNodeIdGenerator)
+                                   .tableScan("region", getSchema("region"))
+                                   .orderBy({"r_regionkey"}, false)
+                                   .limit(0, 5, false)
+                                   .planNode(),
+                               "",
+                               {
+                                   "n_nationkey",
+                                   "n_name",
+                                   "n_regionkey",
+                                   "n_comment",
+                                   "r_regionkey",
+                                   "r_name",
+                                   "r_comment",
+                               })
+                           .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveQueriesTest, joinWithLimitBothSides) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan = lp::PlanBuilder(context)
+                         .tableScan("nation")
+                         .limit(0, 10)
+                         .orderBy({"n_nationkey"})
+                         .as("n1")
+                         .join(
+                             lp::PlanBuilder(context)
+                                 .tableScan("region")
+                                 .limit(0, 5)
+                                 .orderBy({"r_regionkey"})
+                                 .as("r1"),
+                             "n1.n_regionkey = r1.r_regionkey",
+                             lp::JoinType::kInner)
+                         .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .limit()
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("region").limit().build())
+            .build();
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto referencePlan = exec::test::PlanBuilder(planNodeIdGenerator)
+                           .tableScan("nation", getSchema("nation"))
+                           .limit(0, 10, false)
+                           .hashJoin(
+                               {"n_regionkey"},
+                               {"r_regionkey"},
+                               exec::test::PlanBuilder(planNodeIdGenerator)
+                                   .tableScan("region", getSchema("region"))
+                                   .limit(0, 5, false)
+                                   .planNode(),
+                               "",
+                               {
+                                   "n_nationkey",
+                                   "n_name",
+                                   "n_regionkey",
+                                   "n_comment",
+                                   "r_regionkey",
+                                   "r_name",
+                                   "r_comment",
+                               })
+                           .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

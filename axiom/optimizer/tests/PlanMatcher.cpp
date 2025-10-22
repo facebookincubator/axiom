@@ -837,10 +837,12 @@ PlanMatcherBuilder& PlanMatcherBuilder::localPartition() {
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::localPartition(
-    const std::shared_ptr<PlanMatcher>& matcher) {
+    std::initializer_list<std::shared_ptr<PlanMatcher>> matcher) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
+  std::vector<std::shared_ptr<PlanMatcher>> matchers{matcher_};
+  matchers.insert(matchers.end(), matcher);
   matcher_ = std::make_shared<PlanMatcherImpl<LocalPartitionNode>>(
-      std::vector<std::shared_ptr<PlanMatcher>>{matcher_, matcher});
+      std::move(matchers));
   return *this;
 }
 

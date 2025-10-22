@@ -122,7 +122,7 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& localPartition();
 
   PlanMatcherBuilder& localPartition(
-      const std::shared_ptr<PlanMatcher>& matcher);
+      std::initializer_list<std::shared_ptr<PlanMatcher>> matcher);
 
   PlanMatcherBuilder& localMerge();
 
