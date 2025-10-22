@@ -548,6 +548,10 @@ struct WindowOp : public RelationOp {
   const QGString& historyKey() const override;
 
   std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
 };
 
 /// Represents an order by. The order is given by the distribution.

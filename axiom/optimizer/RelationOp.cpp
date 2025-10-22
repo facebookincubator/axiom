@@ -42,8 +42,7 @@ const auto& relTypeNames() {
       {RelType::kLimit, "Limit"},
       {RelType::kValues, "Values"},
       {RelType::kUnnest, "Unnest"},
-      {RelType::kTableWrite, "TableWrite"}
-  };
+      {RelType::kTableWrite, "TableWrite"}};
 
   return kNames;
 }
@@ -1001,6 +1000,12 @@ std::string WindowOp::toString(bool recursive, bool detail) const {
   }
 
   return out.str();
+}
+
+void WindowOp::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 void UnionAll::accept(

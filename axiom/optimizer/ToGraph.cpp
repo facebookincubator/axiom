@@ -17,12 +17,14 @@
 #include <fmt/core.h>
 #include <logical_plan/Expr.h>
 #include <logical_plan/LogicalPlanNode.h>
+#include <optimizer/DerivedTable.h>
 #include <optimizer/PlanObject.h>
 #include <optimizer/QueryGraphContext.h>
 #include <optimizer/Schema.h>
 #include <optimizer/ToGraph.h>
 #include <velox/common/base/Exceptions.h>
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <utility>
 #include "axiom/logical_plan/ExprPrinter.h"
@@ -33,6 +35,7 @@
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/QueryGraph.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
@@ -785,30 +788,39 @@ ExprCP ToGraph::translateLambda(const lp::LambdaExpr* lambda) {
 namespace {
 
 constexpr uint64_t kAllAllowedInDt = ~0UL;
+constexpr uint64_t kHasWindow = 1UL << 63;
 
 // True if 'op' is in 'mask.
+bool contains(uint64_t mask, uint64_t op) {
+  return 0 != (mask & (uint64_t{1} << op));
+}
+
 bool contains(uint64_t mask, lp::NodeKind op) {
-  return 0 != (mask & (uint64_t{1} << static_cast<uint64_t>(op)));
+  return contains(mask, static_cast<uint64_t>(op));
 }
 
 // Removes 'op' from the set of operators allowed in the current derived
 // table. makeQueryGraph() starts a new derived table if it finds an operator
 // that does not belong to the mask.
+uint64_t makeDtIf(uint64_t mask, uint64_t op) {
+  return mask & ~(uint64_t{1} << op);
+}
+
 uint64_t makeDtIf(uint64_t mask, lp::NodeKind op) {
-  return mask & ~(uint64_t{1} << static_cast<uint64_t>(op));
+  return makeDtIf(mask, static_cast<uint64_t>(op));
 }
 
 template <typename Exprs>
-bool hasWindowFuncs(const Exprs& exprs) {
-  bool hasWindowFuncs = false;
+bool hasWindow(const Exprs& exprs) {
+  bool hasWindow = false;
   lp::RecursiveExprVisitorContext ctx;
   ctx.preExprVisitor = [&](const lp::Expr& expr) {
     if (expr.isWindow()) {
-      hasWindowFuncs = true;
+      hasWindow = true;
     }
   };
   lp::visitExprsRecursively(exprs, ctx);
-  return hasWindowFuncs;
+  return hasWindow;
 }
 
 } // namespace
@@ -1853,6 +1865,7 @@ DerivedTableP ToGraph::makeQueryGraph(
     case lp::NodeKind::kFilter: {
       const auto& input = *node.onlyInput();
       const auto& filter = *node.asUnchecked<lp::FilterNode>();
+      allowedInDt = makeDtIf(allowedInDt, kHasWindow);
       if (hasNondeterministic(filter.predicate())) {
         auto* outerDt = makeStream(input, 0);
         addFilter(filter);
@@ -1864,8 +1877,23 @@ DerivedTableP ToGraph::makeQueryGraph(
       return outerDt;
     }
     case lp::NodeKind::kProject: {
-      auto* outerDt = makeQueryGraph(*node.onlyInput(), allowedInDt);
-      addProjection(*node.asUnchecked<lp::ProjectNode>());
+      const auto& project = *node.asUnchecked<lp::ProjectNode>();
+      DerivedTableP outerDt = nullptr;
+
+      if (hasWindow(project.expressions())) {
+        auto* outerDt = currentDt_;
+        currentDt_ = newDt();
+        auto* queryDt = makeQueryGraph(*node.onlyInput(), kAllAllowedInDt);
+        VELOX_DCHECK_NULL(queryDt);
+
+        addProjection(project);
+
+        finalizeDt(node, outerDt);
+        return nullptr;
+      }
+
+      outerDt = makeQueryGraph(*node.onlyInput(), allowedInDt);
+      addProjection(project);
       return outerDt;
     }
     case lp::NodeKind::kAggregate: {
@@ -1899,8 +1927,23 @@ DerivedTableP ToGraph::makeQueryGraph(
       return nullptr;
     }
     case lp::NodeKind::kSort: {
+      const auto& sortNode = *node.asUnchecked<lp::SortNode>();
+
+      if (!contains(allowedInDt, kHasWindow) &&
+          hasWindow(sortNode.ordering())) {
+        auto* outerDt = currentDt_;
+        currentDt_ = newDt();
+        auto* queryDt = makeStream(*node.onlyInput(), kAllAllowedInDt);
+        VELOX_DCHECK_NULL(queryDt);
+
+        addOrderBy(sortNode);
+
+        finalizeDt(node, outerDt);
+        return nullptr;
+      }
+
       auto* outerDt = makeStream(*node.onlyInput(), allowedInDt);
-      addOrderBy(*node.asUnchecked<lp::SortNode>());
+      addOrderBy(sortNode);
       return outerDt;
     }
     case lp::NodeKind::kLimit: {

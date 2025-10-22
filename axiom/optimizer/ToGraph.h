@@ -17,6 +17,7 @@
 
 #include <folly/container/F14Map.h>
 #include <logical_plan/Expr.h>
+#include <logical_plan/LogicalPlanNode.h>
 #include <optimizer/QueryGraphContext.h>
 #include <string_view>
 #include <unordered_map>
@@ -217,6 +218,8 @@ class ToGraph {
   DerivedTableP makeQueryGraph(
       const logical_plan::LogicalPlanNode& node,
       uint64_t allowedInDt);
+
+  DerivedTableP wrapInDt(const logical_plan::LogicalPlanNode& node);
 
   PlanObjectCP findLeaf(const logical_plan::LogicalPlanNode* node) {
     auto* leaf = planLeaves_[node];
