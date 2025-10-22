@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "axiom/optimizer/DerivedTable.h"
+#include <algorithm>
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -289,6 +290,14 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
   return std::make_pair(existsDt, joinWithDt);
 }
 } // namespace
+
+bool DerivedTable::hasWindows() const {
+  bool windowInOrderBy = std::ranges::any_of(
+      orderKeys, [](ExprCP expr) { return expr->containsWindow(); });
+  bool windowInProjection = std::ranges::any_of(
+      exprs, [](ExprCP expr) { return expr->containsWindow(); });
+  return windowInOrderBy || windowInProjection;
+}
 
 void DerivedTable::import(
     const DerivedTable& super,
@@ -711,6 +720,10 @@ void DerivedTable::distributeConjuncts() {
     std::vector<PlanObjectP> tables;
     tableSet.forEachMutable([&](auto table) { tables.push_back(table); });
     if (tables.size() == 1) {
+      if (conjuncts[i]->containsWindow()) {
+        continue;
+      }
+
       if (tables[0] == this) {
         continue; // the conjunct depends on containing dt, like grouping or
                   // existence flags. Leave in place.
@@ -728,7 +741,7 @@ void DerivedTable::distributeConjuncts() {
         // Translate the column names and add the condition to the conjuncts in
         // the dt. If the inner is a set operation, add the filter to children.
         auto innerDt = tables[0]->as<DerivedTable>();
-        if (dtHasLimit(*innerDt)) {
+        if (dtHasLimit(*innerDt) || innerDt->hasWindows()) {
           continue;
         }
 

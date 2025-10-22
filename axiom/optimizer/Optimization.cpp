@@ -17,10 +17,14 @@
 #include "axiom/optimizer/Optimization.h"
 #include <algorithm>
 #include <iostream>
+#include <span>
 #include <utility>
 #include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
 
@@ -824,6 +828,7 @@ void Optimization::addPostprocess(
       }
     }
 
+    plan = addWindowOps(std::move(plan), usedExprs);
     plan = make<Project>(
         maybeDropProject(plan),
         usedExprs,
@@ -1546,6 +1551,8 @@ bool Optimization::placeConjuncts(
     for (auto& filter : filters) {
       state.placed.add(filter);
     }
+
+    plan = addWindowOps(std::move(plan), filters);
     auto* filter = make<Filter>(plan, std::move(filters));
     state.addCost(*filter);
     makeJoins(filter, state);

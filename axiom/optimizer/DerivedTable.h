@@ -36,6 +36,10 @@ using OrderTypeVector = QGVector<OrderType>;
 class WritePlan;
 using WritePlanCP = const WritePlan*;
 
+class Window;
+using WindowCP = const Window*;
+using WindowVector = QGVector<WindowCP>;
+
 /// Represents a derived table, i.e. a SELECT in a FROM clause. This is the
 /// basic unit of planning. Derived tables can be merged and split apart from
 /// other ones. Join types and orders are decided within each derived table. A
@@ -216,6 +220,8 @@ struct DerivedTable : public PlanObject {
   bool hasLimit() const {
     return limit >= 0;
   }
+
+  bool hasWindows() const;
 
   /// Fills in 'startTables_' to 'tables_' that are not to the right of
   /// non-commutative joins.

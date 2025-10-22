@@ -16,6 +16,7 @@
 #pragma once
 
 #include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/RelationOp.h"
 
 namespace facebook::axiom::optimizer {
@@ -97,8 +98,12 @@ class PrecomputeProjection {
   /// @returns the original 'input' with an optional ProjectOp on top.
   RelationOpPtr maybeProject() && {
     if (needsProject_) {
+      auto input = addWindowOps(input_, projectExprs_);
       return make<Project>(
-          input_, projectExprs_, projectColumns_, /*redundant=*/false);
+          input,
+          std::move(projectExprs_),
+          std::move(projectColumns_),
+          /*redundant=*/false);
     }
 
     return input_;

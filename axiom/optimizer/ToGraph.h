@@ -212,6 +212,8 @@ class ToGraph {
       const logical_plan::LogicalPlanNode& node,
       uint64_t allowedInDt);
 
+  DerivedTableP wrapInDt(const logical_plan::LogicalPlanNode& node);
+
   PlanObjectCP findLeaf(const logical_plan::LogicalPlanNode* node) {
     auto* leaf = planLeaves_[node];
     VELOX_CHECK_NOT_NULL(leaf);
@@ -257,6 +259,8 @@ class ToGraph {
   ExprCP translateExpr(const logical_plan::ExprPtr& expr);
 
   ExprCP translateLambda(const logical_plan::LambdaExpr* lambda);
+
+  WindowCP translateWindow(const logical_plan::WindowExpr* windowExpr);
 
   // If 'expr' is not a subfield path, returns std::nullopt. If 'expr'
   // is a subfield path that is subsumed by a projected subfield,
