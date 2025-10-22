@@ -419,7 +419,10 @@ class SummarizeExprVisitor : public ExprVisitor {
   }
 
   void visit(const WindowExpr& expr, ExprVisitorContext& ctx) const override {
-    VELOX_NYI();
+    auto& myCtx = static_cast<Context&>(ctx);
+    myCtx.expressionCounts()["window"]++;
+    myCtx.functionCounts()[expr.name()]++;
+    visitInputs(expr, ctx);
   }
 
   void visit(const ConstantExpr& expr, ExprVisitorContext& ctx) const override {

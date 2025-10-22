@@ -15,12 +15,17 @@
  */
 
 #include "axiom/optimizer/Optimization.h"
+#include <velox/common/base/Exceptions.h>
 #include <algorithm>
 #include <iostream>
+#include <span>
 #include <utility>
 #include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
 
@@ -815,6 +820,9 @@ void Optimization::addPostprocess(
       }
     }
 
+    if (dt->exprs.hasWindows()) {
+      plan = addWindowOps(std::move(plan), usedExprs);
+    }
     plan = make<Project>(
         maybeDropProject(plan),
         usedExprs,
@@ -913,8 +921,16 @@ void Optimization::addOrderBy(
     RelationOpPtr& plan,
     PlanState& state) const {
   PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
-  auto orderKeys = precompute.toColumns(dt->orderKeys);
+  ExprVector orderKeys;
+  if (dt->orderKeys.hasWindows()) {
+    orderKeys = dt->orderKeys;
+    plan = addWindowOps(std::move(plan), orderKeys);
+    orderKeys = precompute.toColumns(orderKeys);
+  } else {
+    orderKeys = precompute.toColumns(dt->orderKeys);
+  }
 
+  VELOX_CHECK_EQ(orderKeys.size(), dt->orderKeys.size());
   for (auto i = 0; i < orderKeys.size(); ++i) {
     state.exprToColumn[dt->orderKeys[i]] = orderKeys[i];
   }

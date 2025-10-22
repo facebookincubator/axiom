@@ -586,7 +586,9 @@ class WindowExpr : public Expr {
         partitionKeys_{std::move(partitionKeys)},
         ordering_{std::move(ordering)},
         frame_{std::move(frame)},
-        ignoreNulls_{ignoreNulls} {}
+        ignoreNulls_{ignoreNulls} {
+    VELOX_USER_CHECK(!name_.empty());
+  }
 
   const std::string& name() const {
     return name_;
