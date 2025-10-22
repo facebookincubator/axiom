@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/QueryGraph.h"
+#include <algorithm>
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -270,7 +271,7 @@ void JoinEdge::addEquality(ExprCP left, ExprCP right, bool update) {
 
 std::pair<std::string, bool> JoinEdge::sampleKey() const {
   if (!leftTable_ || leftTable_->isNot(PlanType::kTableNode) ||
-      rightTable_->isNot(PlanType::kTableNode)) {
+      rightTable_->isNot(PlanType::kTableNode) || isWindowDependent()) {
     return std::make_pair("", false);
   }
   auto* opt = queryCtx()->optimization();
@@ -373,10 +374,58 @@ bool Expr::sameOrEqual(const Expr& other) const {
         return false;
       }
       for (auto i = 0; i < numArgs; ++i) {
-        if (as<Call>()->argAt(i)->sameOrEqual(*other.as<Call>()->argAt(i))) {
+        if (!as<Call>()->argAt(i)->sameOrEqual(*other.as<Call>()->argAt(i))) {
           return false;
         }
       }
+      return true;
+    }
+    case PlanType::kWindowExpr: {
+      auto w1 = reinterpret_cast<const Window*>(this);
+      auto w2 = reinterpret_cast<const Window*>(&other);
+
+      if (w1->name() != w2->name()) {
+        return false;
+      }
+      auto numArgs = w1->args().size();
+      if (numArgs != w2->args().size()) {
+        return false;
+      }
+      for (auto i = 0; i < numArgs; ++i) {
+        if (!w1->argAt(i)->sameOrEqual(*w2->argAt(i))) {
+          return false;
+        }
+      }
+
+      if (w1->ignoreNulls() != w2->ignoreNulls()) {
+        return false;
+      }
+
+      if (!(w1->spec() == w2->spec())) {
+        return false;
+      }
+
+      const auto& f1 = w1->frame();
+      const auto& f2 = w2->frame();
+      if (f1.type != f2.type || f1.startType != f2.startType ||
+          f1.endType != f2.endType) {
+        return false;
+      }
+
+      if ((f1.startValue == nullptr) != (f2.startValue == nullptr)) {
+        return false;
+      }
+      if (f1.startValue && !f1.startValue->sameOrEqual(*f2.startValue)) {
+        return false;
+      }
+
+      if ((f1.endValue == nullptr) != (f2.endValue == nullptr)) {
+        return false;
+      }
+      if (f1.endValue && !f1.endValue->sameOrEqual(*f2.endValue)) {
+        return false;
+      }
+
       return true;
     }
     default:
@@ -493,6 +542,43 @@ void JoinEdge::guessFanout() {
     lrFanout_ = tableCardinality(rightTable_) / tableCardinality(leftTable_) *
         baseSelectivity(rightTable_);
   }
+}
+
+bool WindowSpec::operator==(const WindowSpec& other) const {
+  if (partitionKeys.size() != other.partitionKeys.size() ||
+      orderKeys.size() != other.orderKeys.size() ||
+      orderTypes.size() != other.orderTypes.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < partitionKeys.size(); ++i) {
+    if (!partitionKeys[i]->sameOrEqual(*other.partitionKeys[i])) {
+      return false;
+    }
+  }
+
+  for (size_t i = 0; i < orderKeys.size(); ++i) {
+    if (!orderKeys[i]->sameOrEqual(*other.orderKeys[i])) {
+      return false;
+    }
+  }
+
+  return orderTypes == other.orderTypes;
+}
+
+size_t WindowSpec::Hasher::operator()(const WindowSpec& spec) const {
+  size_t hash = 0;
+  for (const auto& key : spec.partitionKeys) {
+    hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(key));
+  }
+  for (const auto& key : spec.orderKeys) {
+    hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(key));
+  }
+  for (const auto& type : spec.orderTypes) {
+    hash = velox::bits::hashMix(
+        hash, folly::hasher<int>()(static_cast<int>(type)));
+  }
+  return hash;
 }
 
 } // namespace facebook::axiom::optimizer

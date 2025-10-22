@@ -16,6 +16,7 @@
 #pragma once
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/ExprsWrapper.h"
 #include "axiom/optimizer/PlanObject.h"
 
 namespace facebook::axiom::optimizer {
@@ -35,6 +36,10 @@ using OrderTypeVector = QGVector<OrderType>;
 
 class WritePlan;
 using WritePlanCP = const WritePlan*;
+
+class Window;
+using WindowCP = const Window*;
+using WindowVector = QGVector<WindowCP>;
 
 /// Represents a derived table, i.e. a SELECT in a FROM clause. This is the
 /// basic unit of planning. Derived tables can be merged and split apart from
@@ -68,7 +73,7 @@ struct DerivedTable : public PlanObject {
   ColumnVector columns;
 
   /// Exprs projected out. 1:1 to 'columns'.
-  ExprVector exprs;
+  ExprsWrapper exprs;
 
   /// References all joins where 'this' is an end point.
   JoinEdgeVector joinedBy;
@@ -118,7 +123,8 @@ struct DerivedTable : public PlanObject {
 
   /// True if this dt is already a reducing join imported to a build side. Do
   /// not try to further restrict this with probe side.
-  bool noImportOfExists{false};
+  /// TODO: Should be false when we fix this code.
+  bool noImportOfExists{true};
 
   /// A list of PlanObject IDs for 'tables' in the order of appearance in the
   /// query. Used to produce syntactic join order if requested. Table with id
@@ -132,7 +138,7 @@ struct DerivedTable : public PlanObject {
   ExprVector having;
 
   /// Order by.
-  ExprVector orderKeys;
+  ExprsWrapper orderKeys;
   OrderTypeVector orderTypes;
 
   /// Limit and offset.
@@ -201,6 +207,8 @@ struct DerivedTable : public PlanObject {
   bool hasLimit() const {
     return limit >= 0;
   }
+
+  bool hasWindows() const;
 
   void addJoinedBy(JoinEdgeP join);
 

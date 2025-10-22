@@ -15,13 +15,18 @@
  */
 
 #include <velox/common/base/Exceptions.h>
+#include <algorithm>
+#include <cstdint>
 #include <iostream>
+#include <utility>
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
+#include "axiom/logical_plan/Utils.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
+#include "axiom/optimizer/QueryGraph.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/ConstantExpr.h"
@@ -75,6 +80,7 @@ velox::ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
   e.arg = ctx;
   return e;
 }
+
 } // namespace
 
 ToGraph::ToGraph(
@@ -691,6 +697,10 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     return translateLambda(expr->asUnchecked<lp::LambdaExpr>());
   }
 
+  if (expr->isWindow()) {
+    return translateWindow(expr->asUnchecked<lp::WindowExpr>());
+  }
+
   ToGraphContext ctx(expr.get());
   velox::ExceptionContextSetter exceptionContext(makeExceptionContext(&ctx));
 
@@ -725,7 +735,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       args.emplace_back(arg);
       allConstant &= arg->is(PlanType::kLiteralExpr);
       cardinality = std::max(cardinality, arg->value().cardinality);
-      if (arg->is(PlanType::kCallExpr)) {
+      if (arg->is(PlanType::kCallExpr) || arg->is(PlanType::kWindowExpr)) {
         funcs = funcs | arg->as<Call>()->functions();
       }
     }
@@ -769,8 +779,6 @@ ExprCP ToGraph::translateLambda(const lp::LambdaExpr* lambda) {
 
 namespace {
 
-constexpr uint64_t kAllAllowedInDt = ~0UL;
-
 // True if 'op' is in 'mask.
 bool contains(uint64_t mask, lp::NodeKind op) {
   return 0 != (mask & (uint64_t{1} << static_cast<uint64_t>(op)));
@@ -779,8 +787,34 @@ bool contains(uint64_t mask, lp::NodeKind op) {
 // Removes 'op' from the set of operators allowed in the current derived
 // table. makeQueryGraph() starts a new derived table if it finds an operator
 // that does not belong to the mask.
-uint64_t makeDtIf(uint64_t mask, lp::NodeKind op) {
+constexpr uint64_t makeDtIf(uint64_t mask, lp::NodeKind op) {
   return mask & ~(uint64_t{1} << static_cast<uint64_t>(op));
+}
+
+uint64_t allowOnly(lp::NodeKind op) {
+  return uint64_t{1} << static_cast<uint32_t>(op);
+}
+
+// Imply presense of window functions, now windows are used only
+// in orderby / projections. We start new derived table when we see window
+// functon
+constexpr lp::NodeKind kWindowExprs = static_cast<lp::NodeKind>(63UL);
+constexpr uint64_t kAllAllowedInDt = makeDtIf(~0UL, kWindowExprs);
+
+template <typename Exprs>
+bool hasWindow(const Exprs& exprs) {
+  bool hasWindow = false;
+  lp::RecursiveExprVisitorContext ctx;
+  ctx.preExprVisitor = [&](const lp::Expr& expr) -> bool {
+    if (expr.isWindow()) {
+      hasWindow = true;
+    }
+
+    return !hasWindow;
+  };
+
+  lp::visitExprsRecursively(exprs, ctx);
+  return hasWindow;
 }
 
 } // namespace
@@ -1004,6 +1038,80 @@ struct AggregateDedupHasher {
     return hash;
   }
 };
+
+struct WindowDedupKey {
+  Name func;
+  bool ignoreNulls;
+  std::span<const ExprCP> args;
+  const WindowSpec* spec;
+  logical_plan::WindowExpr::WindowType frameType;
+  logical_plan::WindowExpr::BoundType frameStartType;
+  ExprCP frameStartValue;
+  logical_plan::WindowExpr::BoundType frameEndType;
+  ExprCP frameEndValue;
+
+  bool operator==(const WindowDedupKey& other) const {
+    return func == other.func && ignoreNulls == other.ignoreNulls &&
+        std::ranges::equal(args, other.args) && *spec == *other.spec &&
+        frameType == other.frameType &&
+        frameStartType == other.frameStartType &&
+        frameStartValue == other.frameStartValue &&
+        frameEndType == other.frameEndType &&
+        frameEndValue == other.frameEndValue;
+  }
+
+  static WindowDedupKey fromWindow(const WindowCP window) {
+    const auto& spec = window->spec();
+    const auto& frame = window->frame();
+
+    return WindowDedupKey{
+        .func = window->name(),
+        .ignoreNulls = window->ignoreNulls(),
+        .args = window->args(),
+        .spec = &spec,
+        .frameType = frame.type,
+        .frameStartType = frame.startType,
+        .frameStartValue = frame.startValue,
+        .frameEndType = frame.endType,
+        .frameEndValue = frame.endValue};
+  }
+};
+
+struct WindowDedupHasher {
+  size_t operator()(const WindowDedupKey& key) const {
+    size_t hash =
+        folly::hasher<uintptr_t>()(reinterpret_cast<uintptr_t>(key.func));
+
+    hash = velox::bits::hashMix(hash, folly::hasher<bool>()(key.ignoreNulls));
+
+    for (auto& a : key.args) {
+      hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(a));
+    }
+
+    hash = velox::bits::hashMix(hash, WindowSpec::Hasher()(*key.spec));
+
+    hash = velox::bits::hashMix(
+        hash, folly::hasher<int>()(static_cast<int>(key.frameType)));
+    hash = velox::bits::hashMix(
+        hash, folly::hasher<int>()(static_cast<int>(key.frameStartType)));
+
+    if (key.frameStartValue != nullptr) {
+      hash = velox::bits::hashMix(
+          hash, folly::hasher<ExprCP>()(key.frameStartValue));
+    }
+
+    hash = velox::bits::hashMix(
+        hash, folly::hasher<int>()(static_cast<int>(key.frameEndType)));
+
+    if (key.frameEndValue != nullptr) {
+      hash = velox::bits::hashMix(
+          hash, folly::hasher<ExprCP>()(key.frameEndValue));
+    }
+
+    return hash;
+  }
+};
+
 } // namespace
 
 AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
@@ -1142,6 +1250,56 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       std::move(deduppedAggregates),
       std::move(columns),
       std::move(intermediateColumns));
+}
+
+WindowCP ToGraph::translateWindow(const lp::WindowExpr* windowExpr) {
+  ExprVector args;
+  args.reserve(windowExpr->inputs().size());
+  for (const auto& input : windowExpr->inputs()) {
+    args.emplace_back(translateExpr(input));
+  }
+
+  ExprVector partitionKeys;
+  partitionKeys.reserve(windowExpr->partitionKeys().size());
+  folly::F14FastSet<ExprCP> uniquePartitionKeys;
+  for (const auto& partitionKey : windowExpr->partitionKeys()) {
+    const auto* key = translateExpr(partitionKey);
+    if (!uniquePartitionKeys.emplace(key).second) {
+      continue;
+    }
+    partitionKeys.emplace_back(key);
+  }
+
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  std::tie(orderKeys, orderTypes) =
+      dedupOrdering(windowExpr->ordering(), uniquePartitionKeys);
+
+  const auto& lpFrame = windowExpr->frame();
+  WindowFrame frame;
+  frame.type = lpFrame.type;
+  frame.startType = lpFrame.startType;
+  if (lpFrame.startValue) {
+    frame.startValue = translateExpr(lpFrame.startValue);
+  }
+  frame.endType = lpFrame.endType;
+  if (lpFrame.endValue) {
+    frame.endValue = translateExpr(lpFrame.endValue);
+  }
+
+  const auto* name = toName(windowExpr->name());
+  Value value{toType(windowExpr->type()), 1};
+  WindowSpec spec{
+      std::move(partitionKeys), std::move(orderKeys), std::move(orderTypes)};
+
+  return make<Window>(
+      name,
+      value,
+      std::move(args),
+      std::move(spec),
+      frame,
+      currentDt_,
+      windowExpr->ignoreNulls());
 }
 
 void ToGraph::addOrderBy(const lp::SortNode& order) {
@@ -1422,6 +1580,17 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
       }
     }
   });
+  // there can be windows in order by expressions which can
+  // be also used in projections. Deduplicate them here.
+  const auto& orderKeys = currentDt_->orderKeys;
+  folly::F14FastMap<WindowDedupKey, ColumnCP, WindowDedupHasher> uniqueWindows;
+  for (const auto& key : orderKeys) {
+    if (key->containsWindow()) {
+      const auto* window = key->as<Window>();
+      uniqueWindows.try_emplace(
+          WindowDedupKey::fromWindow(window), window->column());
+    }
+  }
 
   for (auto i : channels) {
     if (exprs[i]->isInputReference()) {
@@ -1435,6 +1604,14 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
     }
 
     auto expr = translateExpr(exprs.at(i));
+    if (expr->is(PlanType::kWindowExpr)) {
+      const auto* window = expr->as<Window>();
+      auto it = uniqueWindows.find(WindowDedupKey::fromWindow(window));
+      if (it != uniqueWindows.end()) {
+        renames_[names[i]] = it->second;
+        continue;
+      }
+    }
     renames_[names[i]] = expr;
   }
 }
@@ -1548,9 +1725,7 @@ bool hasNondeterministic(const lp::ExprPtr& expr) {
 void ToGraph::translateSetJoin(const lp::SetNode& set) {
   auto* setDt = currentDt_;
   for (auto& input : set.inputs()) {
-    currentDt_ = newDt();
-    auto* queryDt = makeUnordered(*input, kAllAllowedInDt);
-    VELOX_DCHECK_NULL(queryDt);
+    wrapInDt(*input, InputType::kUnordered);
     finalizeDt(*input, setDt);
   }
 
@@ -1652,9 +1827,7 @@ void ToGraph::translateUnionInput(
       translateUnionInput(renames, *child, isLeftLeaf);
     }
   } else {
-    currentDt_ = newDt();
-    auto* queryDt = makeUnordered(input, kAllAllowedInDt);
-    VELOX_DCHECK_NULL(queryDt);
+    wrapInDt(input, InputType::kUnordered);
     auto* newDt = currentDt_;
     currentDt_ = setDt;
 
@@ -1708,7 +1881,7 @@ void ToGraph::translateUnion(const lp::SetNode& set) {
 
 DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
   markAllSubfields(logicalPlan);
-  wrapInDt(logicalPlan);
+  wrapInDt(logicalPlan, InputType::kNone);
   return currentDt_;
 }
 
@@ -1734,10 +1907,23 @@ DerivedTableP ToGraph::makeStream(
   return outerDt;
 }
 
-void ToGraph::wrapInDt(const lp::LogicalPlanNode& node) {
+DerivedTableP ToGraph::wrapInDt(
+    const lp::LogicalPlanNode& node,
+    InputType inputType) {
+  auto* outerDt = currentDt_;
   currentDt_ = newDt();
-  auto* queryDt = makeQueryGraph(node, kAllAllowedInDt);
+  auto* queryDt = [&] {
+    switch (inputType) {
+      case InputType::kUnordered:
+        return makeUnordered(node, kAllAllowedInDt);
+      case InputType::kStream:
+        return makeStream(node, kAllAllowedInDt);
+      default:
+        return makeQueryGraph(node, kAllAllowedInDt);
+    }
+  }();
   VELOX_DCHECK_NULL(queryDt);
+  return outerDt;
 }
 
 DerivedTableP ToGraph::makeQueryGraph(
@@ -1745,7 +1931,7 @@ DerivedTableP ToGraph::makeQueryGraph(
     uint64_t allowedInDt) {
   if (!contains(allowedInDt, node.kind())) {
     auto* outerDt = currentDt_;
-    wrapInDt(node);
+    wrapInDt(node, InputType::kNone);
     return outerDt;
   }
 
@@ -1774,14 +1960,33 @@ DerivedTableP ToGraph::makeQueryGraph(
       return outerDt;
     }
     case lp::NodeKind::kProject: {
-      auto* outerDt = makeQueryGraph(*node.onlyInput(), allowedInDt);
-      addProjection(*node.asUnchecked<lp::ProjectNode>());
+      const auto& input = *node.onlyInput();
+      const auto& project = *node.asUnchecked<lp::ProjectNode>();
+
+      if (!contains(allowedInDt, kWindowExprs) &&
+          hasWindow(project.expressions())) {
+        // We want to put orderby and projection with window functions
+        // into one dt to dedup windows. If we won't do it plan will be
+        // incorrect: orderby(window1()) and project(window1()) top of it
+        // will produce two same windows instead of one and the projected one
+        // will be over sorted input, but it's supposed to be computed only once
+        // (HiveWindowQueriesTest.orderByProjectDedup test as reference).
+        uint64_t allowed =
+            allowOnly(lp::NodeKind::kSort) | allowOnly(kWindowExprs);
+        auto* outerDt = makeQueryGraph(input, allowed);
+        addProjection(project);
+        finalizeDt(node, outerDt);
+        return nullptr;
+      }
+      auto* outerDt = makeQueryGraph(input, allowedInDt);
+      addProjection(project);
       return outerDt;
     }
     case lp::NodeKind::kAggregate: {
-      auto* outerDt = makeUnordered(*node.onlyInput(), allowedInDt);
+      const auto& input = *node.onlyInput();
+      auto* outerDt = makeUnordered(input, allowedInDt);
       if (currentDt_->hasAggregation() || currentDt_->hasLimit()) {
-        finalizeDt(*node.onlyInput(), outerDt);
+        finalizeDt(input, outerDt);
         outerDt = nullptr;
       }
       currentDt_->aggregation =
@@ -1811,8 +2016,16 @@ DerivedTableP ToGraph::makeQueryGraph(
       return nullptr;
     }
     case lp::NodeKind::kSort: {
-      auto* outerDt = makeStream(*node.onlyInput(), allowedInDt);
-      addOrderBy(*node.asUnchecked<lp::SortNode>());
+      const auto& input = *node.onlyInput();
+      const auto& order = *node.asUnchecked<lp::SortNode>();
+      if (!contains(allowedInDt, kWindowExprs) && hasWindow(order.ordering())) {
+        auto* outerDt = wrapInDt(input, InputType::kStream);
+        addOrderBy(order);
+        finalizeDt(node, outerDt);
+        return nullptr;
+      }
+      auto* outerDt = makeStream(input, makeDtIf(allowedInDt, kWindowExprs));
+      addOrderBy(order);
       return outerDt;
     }
     case lp::NodeKind::kLimit: {
@@ -1840,9 +2053,10 @@ DerivedTableP ToGraph::makeQueryGraph(
     }
     case lp::NodeKind::kTableWrite: {
       VELOX_DCHECK_EQ(allowedInDt, kAllAllowedInDt);
-      auto* outerDt = makeUnordered(*node.onlyInput(), 0);
+      const auto& input = *node.onlyInput();
+      auto* outerDt = wrapInDt(input, InputType::kUnordered);
       VELOX_DCHECK_NOT_NULL(outerDt);
-      finalizeDt(*node.onlyInput(), outerDt);
+      finalizeDt(input, outerDt);
       addWrite(*node.asUnchecked<lp::TableWriteNode>());
       return nullptr;
     }
@@ -1853,13 +2067,14 @@ DerivedTableP ToGraph::makeQueryGraph(
 }
 
 std::pair<ExprVector, OrderTypeVector> ToGraph::dedupOrdering(
-    const std::vector<lp::SortingField>& ordering) {
+    const std::vector<lp::SortingField>& ordering,
+    folly::F14FastSet<ExprCP> keysToIgnore) {
   ExprVector deduppedOrderKeys;
   OrderTypeVector deduppedOrderTypes;
   deduppedOrderKeys.reserve(ordering.size());
   deduppedOrderTypes.reserve(ordering.size());
 
-  folly::F14FastSet<ExprCP> uniqueOrderKeys;
+  folly::F14FastSet<ExprCP> uniqueOrderKeys = std::move(keysToIgnore);
   for (const auto& field : ordering) {
     const auto* key = translateExpr(field.expression);
     if (!uniqueOrderKeys.emplace(key).second) {
