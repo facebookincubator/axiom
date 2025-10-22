@@ -16,11 +16,13 @@
 
 #pragma once
 
+#include <velox/type/Type.h>
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/NameAllocator.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
@@ -57,12 +59,25 @@ class ExprResolver {
       const velox::core::ExprPtr& expr,
       const InputNameResolver& inputNameResolver) const;
 
-  AggregateExprPtr resolveAggregateTypes(
+  struct AggregateResolveResult {
+    velox::TypePtr type;
+    std::string functionName;
+    std::vector<ExprPtr> functionInputs;
+  };
+
+  AggregateResolveResult resolveAggregateTypes(
       const velox::core::ExprPtr& expr,
-      const InputNameResolver& inputNameResolver,
-      const ExprPtr& filter,
-      const std::vector<SortingField>& ordering,
-      bool distinct) const;
+      const InputNameResolver& inputNameResolver) const;
+
+  struct WindowResolveResult {
+    velox::TypePtr type;
+    std::string functionName;
+    std::vector<ExprPtr> functionInputs;
+  };
+
+  WindowResolveResult resolveWindowTypes(
+      const velox::core::ExprPtr& expr,
+      const InputNameResolver& inputNameResolver) const;
 
  private:
   ExprPtr resolveLambdaExpr(
@@ -258,6 +273,33 @@ class PlanBuilder {
       const std::vector<ExprApi>& aggregates,
       const std::vector<AggregateOptions>& options);
 
+  struct WindowOptions {
+    WindowOptions(
+        std::vector<ExprPtr> partitionBy,
+        std::vector<SortingField> orderBy,
+        WindowExpr::Frame frame,
+        bool ignoreNulls)
+        : partitionBy(std::move(partitionBy)),
+          orderBy(std::move(orderBy)),
+          frame(std::move(frame)),
+          ignoreNulls(ignoreNulls) {}
+
+    WindowOptions() = default;
+
+    std::vector<ExprPtr> partitionBy;
+    std::vector<SortingField> orderBy;
+    WindowExpr::Frame frame;
+    bool ignoreNulls{false};
+  };
+
+  /// Starts or continues the plan with a Window node.
+  /// @param windowExprs A list of window expressions.
+  PlanBuilder& window(const std::vector<std::string>& windowExprs);
+
+  PlanBuilder& window(
+      const std::vector<ExprApi>& windowExprs,
+      const std::vector<WindowOptions>& options);
+
   /// Starts or continues the plan with an Unnest node. Uses auto-generated
   /// names for unnested columns. Use the version of 'unnest' API that takes
   /// ExprApi together with ExprApi::unnestAs to provide aliases for unnested
@@ -327,6 +369,11 @@ class PlanBuilder {
   PlanBuilder& orderBy(const std::vector<std::string>& sortingKeys) {
     return sort(sortingKeys);
   }
+
+  // a temporary hack method to make sort node with windows only, order types is
+  // set ascending. It exists because parser now can't parse window function
+  // and it's non trivial to make him do that.
+  PlanBuilder& orderByWindows(const std::vector<std::string>& sortingKeys);
 
   PlanBuilder& limit(int32_t count) {
     return limit(0, count);
@@ -419,11 +466,15 @@ class PlanBuilder {
 
   ExprPtr resolveScalarTypes(const velox::core::ExprPtr& expr) const;
 
-  AggregateExprPtr resolveAggregateTypes(
-      const velox::core::ExprPtr& expr,
-      const ExprPtr& filter,
-      const std::vector<SortingField>& ordering,
-      bool distinct) const;
+  using AggregateResolveResult = ExprResolver::AggregateResolveResult;
+
+  AggregateResolveResult resolveAggregateTypes(
+      const velox::core::ExprPtr& expr) const;
+
+  using WindowResolveResult = ExprResolver::WindowResolveResult;
+
+  WindowResolveResult resolveWindowTypes(
+      const velox::core::ExprPtr& expr) const;
 
   std::vector<ExprApi> parse(const std::vector<std::string>& exprs);
 
@@ -432,6 +483,8 @@ class PlanBuilder {
       std::vector<std::string>& outputNames,
       std::vector<ExprPtr>& exprs,
       NameMappings& mappings);
+
+  WindowOptions parseWindowOptions(const std::string& sql);
 
   const std::optional<std::string> defaultConnectorId_;
   const std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator_;

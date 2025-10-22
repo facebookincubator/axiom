@@ -216,9 +216,18 @@ class ToGraph {
       const logical_plan::LogicalPlanNode& node,
       uint64_t allowedInDt);
 
+  enum class InputType : uint8_t {
+    kNone,
+    kStream,
+    kUnordered,
+  };
+
   // Helper function to create new DerivedTable
-  // and call makeQueryGraph to fill it.
-  void wrapInDt(const logical_plan::LogicalPlanNode& node);
+  // and call makeQueryGraph / makeUnordered / makeStream to fill it.
+  // Returns DerivedTable that was before the call.
+  DerivedTableP wrapInDt(
+      const logical_plan::LogicalPlanNode& node,
+      InputType inputType);
 
   // Fill currentDt_ from 'node'.
   // If 'allowedInDt' does not allow 'node', wraps in a new DerivedTable.
@@ -276,6 +285,8 @@ class ToGraph {
   ExprCP translateExpr(const logical_plan::ExprPtr& expr);
 
   ExprCP translateLambda(const logical_plan::LambdaExpr* lambda);
+
+  WindowCP translateWindow(const logical_plan::WindowExpr* windowExpr);
 
   // If 'expr' is not a subfield path, returns std::nullopt. If 'expr'
   // is a subfield path that is subsumed by a projected subfield,
@@ -445,7 +456,8 @@ class ToGraph {
   // occurrences of the same expression are redundant since the column is
   // already sorted by the first occurrence.
   std::pair<ExprVector, OrderTypeVector> dedupOrdering(
-      const std::vector<logical_plan::SortingField>& ordering);
+      const std::vector<logical_plan::SortingField>& ordering,
+      folly::F14FastSet<ExprCP> keysToIgnore = {});
 
   // Cache of resolved table schemas.
   Schema schema_;
