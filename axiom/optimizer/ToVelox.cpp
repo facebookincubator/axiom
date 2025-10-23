@@ -24,6 +24,7 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/vector/VariantToVector.h"
+#include "axiom/optimizer/DerivedTablePrinter.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -1524,6 +1525,10 @@ extern std::string veloxToString(const velox::core::PlanNode* plan) {
 
 extern std::string planString(const runner::MultiFragmentPlan* plan) {
   return plan->toString(true);
+}
+
+extern std::string dtString(const DerivedTable* dt) {
+  return DerivedTablePrinter::toText(*dt);
 }
 
 } // namespace facebook::axiom::optimizer

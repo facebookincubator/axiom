@@ -1013,6 +1013,7 @@ void Optimization::joinByIndex(
   }
 }
 
+  
 void Optimization::joinByHash(
     const RelationOpPtr& plan,
     const JoinCandidate& candidate,
@@ -1164,7 +1165,6 @@ void Optimization::joinByHash(
       candidate.join->filter(),
       fanout,
       std::move(columns));
-
   state.addCost(*join);
   state.cost.setupCost += buildState.cost.unitCost + buildState.cost.setupCost;
   state.cost.totalBytes += buildState.cost.totalBytes;
