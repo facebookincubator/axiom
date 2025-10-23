@@ -552,6 +552,14 @@ class JoinEdge {
     return rightOptional_;
   }
 
+  bool rightExists() const {
+    return rightExists_;
+  }
+
+  bool rightNotExists() const {
+    return rightNotExists_;
+  }
+
   bool directed() const {
     return directed_;
   }
@@ -580,7 +588,7 @@ class JoinEdge {
       return false;
     }
 
-    return !leftTable_ || rightOptional_ || leftOptional_ || rightExists_ ||
+    return rightOptional_ || leftOptional_ || rightExists_ ||
         rightNotExists_ || markColumn_ || directed_;
   }
 

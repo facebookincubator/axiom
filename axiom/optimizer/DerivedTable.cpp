@@ -176,11 +176,31 @@ void DerivedTable::setStartTables() {
 
 namespace {
 // Returns a right exists (semijoin) with 'table' on the left and one of
-// 'tables' on the right.
-JoinEdgeP makeExists(PlanObjectCP table, const PlanObjectSet& tables) {
-  for (auto join : joinedBy(table)) {
+// 'tables' on the right. Picks a table on the right that is not a right side of
+// exists inside 'super'.
+JoinEdgeP makeExists(
+    PlanObjectCP table,
+    const PlanObjectSet& tables,
+    const DerivedTable& super) {
+  // True if 'table' is not to the right of some non-commutative join in
+  // 'super'.
+  auto isJoinable = [&](PlanObjectCP table) -> bool {
+    for (auto& join : super.joins) {
+      if ((join->rightExists() || join->rightNotExists()) &&
+          join->rightTable() == table) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  for (auto join : optimizer::joinedBy(table)) {
+    if (!join->isInner()) {
+      continue;
+    }
     if (join->leftTable() == table) {
-      if (!tables.contains(join->rightTable())) {
+      if (!tables.contains(join->rightTable()) ||
+          !isJoinable(join->rightTable())) {
         continue;
       }
       auto* exists = JoinEdge::makeExists(table, join->rightTable());
@@ -191,7 +211,8 @@ JoinEdgeP makeExists(PlanObjectCP table, const PlanObjectSet& tables) {
     }
 
     if (join->rightTable() == table) {
-      if (!join->leftTable() || !tables.contains(join->leftTable())) {
+      if (!join->leftTable() || !tables.contains(join->leftTable()) ||
+          !isJoinable(join->leftTable())) {
         continue;
       }
 
@@ -323,7 +344,7 @@ void DerivedTable::import(
         // with exists to the main table(s) in the 'this'.
         importedExistences.unionSet(exists);
         auto existsTables = exists.toObjects();
-        auto existsJoin = makeExists(firstTable, exists);
+        auto existsJoin = makeExists(firstTable, exists, super);
         if (existsTables.size() > 1) {
           // There is a join on the right of exists. Needs its own dt.
           auto [existsDt, joinWithDt] = makeExistsDtAndJoin(

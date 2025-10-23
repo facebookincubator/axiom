@@ -202,6 +202,28 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
 
   // Joins.
   for (auto join : dt->joins) {
+    if (join->rightExists() || join->rightNotExists()) {
+      if (placed.contains(join->rightTable())) {
+	continue;
+      }
+      // For an unplaced exists/not exists downstream, we need the left side columns but not the right side since nothing is projected out from the right side.
+      addExprs(join->leftKeys());
+      
+      if (!join->filter().empty()) {
+	// If there is a filter, then the filter columns that do not come from the right side are needed.
+	PlanObjectSet filterColumns;
+	for (auto& conjunct : join->filter()) {
+	  filterColumns.unionColumns(conjunct);
+	}
+	PlanObjectSet rightColumns;
+	for (auto& column : tableColumns(join->rightTable())) {
+	  rightColumns.add(column);
+	}
+	filterColumns.except(rightColumns);
+	result.unionSet(filterColumns);
+      }
+      continue;
+    }
     bool addFilter = false;
     if (!placed.contains(join->rightTable())) {
       addFilter = true;
@@ -401,6 +423,22 @@ const JoinEdgeVector& joinedBy(PlanObjectCP table) {
   return table->as<DerivedTable>()->joinedBy;
 }
 
+const ColumnVector& tableColumns(PlanObjectCP table) {
+  if (table->is(PlanType::kTableNode)) {
+    return table->as<BaseTable>()->columns;
+  }
+
+  if (table->is(PlanType::kDerivedTableNode)) {
+    return table->as<DerivedTable>()->columns;
+  }
+
+  if (table->is(PlanType::kValuesTableNode)) {
+    return table->as<ValuesTable>()->columns;
+  }
+
+  VELOX_FAIL("tableColumns expects BaseTable, DerivedTable, or ValuesTable");
+}
+
 std::pair<JoinSide, JoinSide> JoinCandidate::joinSides() const {
   return {join->sideOf(tables[0], false), join->sideOf(tables[0], true)};
 }
@@ -430,10 +468,24 @@ void JoinCandidate::addEdge(PlanState& state, JoinEdgeP edge) {
   for (auto i = 0; i < newPlacedSide.keys.size(); ++i) {
     auto* key = newPlacedSide.keys[i];
     if (!hasEqual(key, tableSide.keys)) {
+      // Make sure to create hyper edge.
       if (!compositeEdge) {
-        compositeEdge = make<JoinEdge>(*join);
+        compositeEdge = JoinEdge::makeInner(nullptr, joined);
+        if (joined == join->rightTable()) {
+          for (auto i = 0; i < join->numKeys(); ++i) {
+            compositeEdge->addEquality(
+                join->leftKeys()[i], join->rightKeys()[i]);
+          }
+        } else {
+          for (auto i = 0; i < join->numKeys(); ++i) {
+            compositeEdge->addEquality(
+                join->rightKeys()[i], join->leftKeys()[i]);
+          }
+        }
+
         join = compositeEdge;
       }
+
       auto [other, preFanout] = join->otherTable(placedSide.table);
       // do not recompute a fanout after adding more equalities. This makes the
       // join edge non-binary and it cannot be sampled.
@@ -488,12 +540,13 @@ std::string JoinCandidate::toString() const {
 }
 
 bool NextJoin::isWorse(const NextJoin& other) const {
-  float shuffle =
-      plan->distribution().isSamePartition(other.plan->distribution())
-      ? 0
-      : plan->cost().fanout * shuffleCost(plan->columns());
-  return cost.unitCost + cost.setupCost + shuffle >
-      other.cost.unitCost + other.cost.setupCost;
+  return false;
+  // float shuffle =
+  //     plan->distribution().isSamePartition(other.plan->distribution())
+  //     ? 0
+  //     : plan->cost().fanout * shuffleCost(plan->columns());
+  // return cost.unitCost + cost.setupCost + shuffle >
+  //     other.cost.unitCost + other.cost.setupCost;
 }
 
 size_t MemoKey::hash() const {

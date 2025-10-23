@@ -360,6 +360,9 @@ namespace facebook::axiom::optimizer {
 
 const JoinEdgeVector& joinedBy(PlanObjectCP table);
 
+/// Returns the columns of a BaseTable, DerivedTable, or ValuesTable.
+const ColumnVector& tableColumns(PlanObjectCP table);
+
 /// Returns  the inverse join type, e.g. right outer from left outer.
 /// TODO Move this function to Velox.
 velox::core::JoinType reverseJoinType(velox::core::JoinType joinType);
