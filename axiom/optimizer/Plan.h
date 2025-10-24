@@ -36,10 +36,6 @@ using HashBuildVector = std::vector<HashBuildCP>;
 struct Plan {
   Plan(RelationOpPtr op, const PlanState& state);
 
-  /// True if 'state' has a lower cost than 'this'. If 'margin' is given,
-  /// then 'other' must win by margin.
-  bool isStateBetter(const PlanState& state, float margin = 0) const;
-
   /// Root of the plan tree.
   const RelationOpPtr op;
 
@@ -85,9 +81,9 @@ struct PlanSet {
   /// nothing more expensive than this should be tried.
   float bestCostWithShuffle{std::numeric_limits<float>::infinity()};
 
-  /// Returns the best plan that produces 'distribution'. If the best plan has
-  /// some other distribution, sets 'needsShuffle ' to true.
-  PlanP best(const Distribution& distribution, bool& needsShuffle);
+  /// Returns the best plan that produces 'desired' distribution.
+  /// If the best plan has some other distribution, sets 'needsShuffle' to true.
+  PlanP best(const Distribution& desired, bool& needsShuffle);
 
   /// Returns the best plan when we're ok with any distribution.
   PlanP best() {
@@ -275,6 +271,10 @@ struct PlanState {
   /// True if the costs accumulated so far are so high that this should not be
   /// explored further.
   bool isOverBest() const {
+    // This isn't conservative. Because it's possible that we explore some
+    // completely new plan with non-compatible input/distribution to any old
+    // plan. This plan if not this condition will be added to plans and later
+    // can become part of the best plan.
     return hasCutoff && cost.cost > plans.bestCostWithShuffle;
   }
 
