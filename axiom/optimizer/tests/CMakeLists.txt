@@ -134,7 +134,6 @@ target_link_libraries(
   axiom_hive_connector_metadata
   axiom_tpch_connector_metadata
   axiom_sql_presto_parser
-  velox_query_benchmark
   velox_exec_test_lib
   velox_dwio_common
   velox_dwio_parquet_reader
