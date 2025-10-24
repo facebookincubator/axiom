@@ -26,6 +26,7 @@
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/dwrf/common/FileMetadata.h"
 #include "velox/expression/Expr.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/type/fbhive/HiveTypeSerializer.h"
