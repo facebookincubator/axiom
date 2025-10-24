@@ -805,7 +805,7 @@ template <typename ExprType>
 velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const velox::RowTypePtr& inputType,
     const std::vector<ExprType>& keys,
-    const Distribution& distribution) {
+    const DistributionType& distribution) {
   if (distribution.isBroadcast || keys.empty()) {
     return std::make_shared<velox::core::GatherPartitionFunctionSpec>();
   }
@@ -822,8 +822,7 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
             ->name()));
   }
 
-  if (const auto* partitionType =
-          distribution.distributionType.partitionType()) {
+  if (const auto* partitionType = distribution.partitionType) {
     return partitionType->makeSpec(
         keyIndices, /*constants=*/{}, /*isLocal=*/false);
   }
@@ -1230,7 +1229,7 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       fragment.width = 1;
     } else {
       auto partition = createPartitionFunctionSpec(
-          input->outputType(), keys, Distribution{});
+          input->outputType(), keys, DistributionType{});
       input = std::make_shared<velox::core::LocalPartitionNode>(
           nextId(),
           velox::core::LocalPartitionNode::Type::kRepartition,
@@ -1267,7 +1266,7 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   const auto keys = toTypedExprs(repartition.distribution().partition);
 
   const auto& distribution = repartition.distribution();
-  if (distribution.isBroadcast) {
+  if (distribution.isBroadcast()) {
     VELOX_CHECK_EQ(0, keys.size());
     source.fragment.planNode = velox::core::PartitionedOutputNode::broadcast(
         nextId(), 1, outputType, exchangeSerdeKind_, sourcePlan);
@@ -1279,7 +1278,7 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   } else {
     VELOX_CHECK_NE(0, keys.size());
     auto partitionFunctionFactory = createPartitionFunctionSpec(
-        sourcePlan->outputType(), keys, distribution);
+        sourcePlan->outputType(), keys, distribution.distributionType);
 
     source.fragment.planNode =
         std::make_shared<velox::core::PartitionedOutputNode>(
