@@ -445,6 +445,31 @@ void ToGraph::markSubfields(
     return;
   }
 
+  if (expr->isWindow()) {
+    const auto* windowExpr = expr->asUnchecked<lp::WindowExpr>();
+    std::vector<Step> windowSteps;
+
+    // Mark all window function inputs
+    for (const auto& input : windowExpr->inputs()) {
+      markSubfields(input, windowSteps, isControl, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+
+    // Mark partition keys
+    for (const auto& partitionKey : windowExpr->partitionKeys()) {
+      markSubfields(partitionKey, windowSteps, isControl, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+
+    // Mark ordering expressions
+    for (const auto& sortingField : windowExpr->ordering()) {
+      markSubfields(sortingField.expression, windowSteps, isControl, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+
+    return;
+  }
+
   VELOX_UNREACHABLE("Unhandled expr: {}", lp::ExprPrinter::toText(*expr));
 }
 

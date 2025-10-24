@@ -15,12 +15,17 @@
  */
 
 #include "axiom/optimizer/Optimization.h"
+#include <velox/common/base/Exceptions.h>
 #include <algorithm>
 #include <iostream>
+#include <span>
 #include <utility>
 #include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
 
@@ -477,33 +482,33 @@ bool isIndexColocated(
     const IndexInfo& info,
     const ExprVector& lookupValues,
     const RelationOpPtr& input) {
-  const auto& distribution = info.index->distribution;
-  if (distribution.isBroadcast) {
-    return true;
+  const auto& current = input->distribution();
+  const auto& desired = info.index->distribution;
+  if (const auto needsShuffle = current.maybeNeedsShuffle(desired)) {
+    return !*needsShuffle;
   }
 
+  // TODO: Code in this function actually doesn't feel right.
+
+  if (!hasCopartition(current.partitionType(), desired.partitionType())) {
+    return false;
+  }
+
+  if (current.partition.empty()) {
+    return false;
+  }
+
+  if (current.partition.size() != desired.partition.size()) {
+    return false;
+  }
+
+  // We should check it when we will add indexes.
   // True if 'input' is partitioned so that each partitioning key is joined to
   // the corresponding partition key in 'info'.
-  if (input->distribution().distributionType != distribution.distributionType) {
-    return false;
-  }
-
-  if (input->distribution().partition.empty()) {
-    return false;
-  }
-
-  if (input->distribution().partition.size() != distribution.partition.size()) {
-    return false;
-  }
-
-  for (auto i = 0; i < input->distribution().partition.size(); ++i) {
-    auto nthKey = position(lookupValues, *input->distribution().partition[i]);
-    if (nthKey != kNotFound) {
-      if (info.schemaColumn(info.lookupKeys.at(nthKey)) !=
-          distribution.partition.at(i)) {
-        return false;
-      }
-    } else {
+  for (size_t i = 0; i < current.partition.size(); ++i) {
+    auto nthKey = position(lookupValues, *current.partition[i]);
+    if (nthKey == kNotFound ||
+        info.schemaColumn(info.lookupKeys[nthKey]) != desired.partition[i]) {
       return false;
     }
   }
@@ -698,16 +703,6 @@ const RelationOpPtr& maybeDropProject(const RelationOpPtr& plan) {
   return plan;
 }
 
-const connector::PartitionType* copartitionType(
-    const connector::PartitionType* first,
-    const connector::PartitionType* second) {
-  if (first != nullptr && second != nullptr) {
-    return first->copartition(*second);
-  }
-
-  return nullptr;
-}
-
 RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
   if (isSingleWorker() || plan->distribution().isGather()) {
     return plan;
@@ -739,15 +734,11 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
     keyValues.emplace_back(write->columnExprs().at(index));
   }
 
-  const auto* planPartitionType =
-      plan->distribution().distributionType.partitionType();
-
-  auto copartition =
-      copartitionType(planPartitionType, layout->partitionType());
+  const auto* planPartitionType = plan->distribution().partitionType();
 
   // Copartitioning is possible if PartitionTypes are compatible and the table
   // has no fewer partitions than the plan.
-  bool shuffle = !copartition || copartition != planPartitionType;
+  bool shuffle = !hasCopartition(planPartitionType, layout->partitionType());
   if (!shuffle) {
     // Check that the partition keys of the plan are assigned pairwise to the
     // partition columns of the layout.
@@ -826,6 +817,9 @@ void Optimization::addPostprocess(
       }
     }
 
+    if (dt->exprs.hasWindows()) {
+      plan = addWindowOps(std::move(plan), usedExprs);
+    }
     plan = make<Project>(
         maybeDropProject(plan),
         usedExprs,
@@ -923,8 +917,16 @@ void Optimization::addOrderBy(
     RelationOpPtr& plan,
     PlanState& state) const {
   PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
-  auto orderKeys = precompute.toColumns(dt->orderKeys);
+  ExprVector orderKeys;
+  if (dt->orderKeys.hasWindows()) {
+    orderKeys = dt->orderKeys.exprs();
+    plan = addWindowOps(std::move(plan), orderKeys);
+    orderKeys = precompute.toColumns(orderKeys);
+  } else {
+    orderKeys = precompute.toColumns(dt->orderKeys);
+  }
 
+  VELOX_CHECK_EQ(orderKeys.size(), dt->orderKeys.size());
   for (auto i = 0; i < orderKeys.size(); ++i) {
     state.exprToColumn[dt->orderKeys[i]] = orderKeys[i];
   }
@@ -1303,7 +1305,50 @@ void Optimization::crossJoin(
     const JoinCandidate& candidate,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
-  VELOX_NYI("No cross joins");
+  PlanStateSaver save(state);
+
+  PlanObjectSet broadcastTables;
+  PlanObjectSet broadcastColumns;
+  for (const auto* buildTable : candidate.tables) {
+    broadcastColumns.unionSet(availableColumns(buildTable));
+    broadcastTables.add(buildTable);
+  }
+
+  state.columns.unionSet(broadcastColumns);
+
+  MemoKey memoKey{
+      candidate.tables[0],
+      broadcastColumns,
+      broadcastTables,
+      candidate.existences};
+
+  Distribution broadcast = Distribution::broadcast();
+  bool needsShuffle = false;
+  auto* rightPlan = makePlan(
+      memoKey, broadcast, {}, candidate.existsFanout, state, needsShuffle);
+
+  RelationOpPtr rightOp = rightPlan->op;
+  PlanState rightPlanState(state.optimization, state.dt, rightPlan);
+  if (needsShuffle) {
+    rightOp = make<Repartition>(rightPlan->op, broadcast, rightOp->columns());
+    rightPlanState.addCost(*rightOp);
+  }
+
+  auto resultColumns = plan->columns();
+  resultColumns.insert(
+      resultColumns.end(),
+      rightOp->columns().begin(),
+      rightOp->columns().end());
+
+  auto* join =
+      Join::makeCrossJoin(plan, std::move(rightOp), std::move(resultColumns));
+
+  state.addCost(*join);
+
+  state.cost.cost += rightPlanState.cost.cost;
+
+  state.placed.unionSet(broadcastTables);
+  state.addNextJoin(&candidate, join, {}, toTry);
 }
 
 void Optimization::crossJoinUnnest(
@@ -1383,10 +1428,12 @@ void Optimization::addJoin(
 
   // If one is much better do not try the other.
   if (toTry.size() == 2 && candidate.tables.size() == 1) {
+    VELOX_DCHECK(!options_.syntacticJoinOrder);
     if (toTry[0].isWorse(toTry[1])) {
-      toTry.erase(toTry.begin());
+      toTry[0] = std::move(toTry[1]);
+      toTry.pop_back();
     } else if (toTry[1].isWorse(toTry[0])) {
-      toTry.erase(toTry.begin() + 1);
+      toTry.pop_back();
     }
   }
   result.insert(result.end(), toTry.begin(), toTry.end());

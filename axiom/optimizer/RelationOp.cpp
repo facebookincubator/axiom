@@ -37,6 +37,7 @@ const auto& relTypeNames() {
       {RelType::kJoin, "Join"},
       {RelType::kHashBuild, "HashBuild"},
       {RelType::kAggregation, "Aggregation"},
+      {RelType::kWindow, "Window"},
       {RelType::kOrderBy, "OrderBy"},
       {RelType::kUnionAll, "UnionAll"},
       {RelType::kLimit, "Limit"},
@@ -390,10 +391,16 @@ Join::Join(
       filter{std::move(filterExprs)} {
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = fanout;
+  const auto numRightColumns = static_cast<float>(right->columns().size());
+  if (method == JoinMethod::kCross) {
+    const float rightCardinality = right->resultCardinality();
+    const float rightByteSize = byteSize(right->columns());
+    cost_.unitCost = fanout *
+        (Costs::kColumnRowCost + numRightColumns * Costs::kColumnByteCost);
+    return;
+  }
 
   const float buildSize = right->resultCardinality();
-  const auto numRightColumns =
-      static_cast<float>(right->input()->columns().size());
   auto rowCost = numRightColumns * Costs::kHashExtractColumnCost;
   const auto numLeftKeys = static_cast<float>(leftKeys.size());
   cost_.unitCost = Costs::hashProbeCost(buildSize) + cost_.fanout * rowCost +
@@ -466,8 +473,21 @@ std::string Join::toString(bool recursive, bool detail) const {
   if (recursive) {
     out << input()->toString(true, detail);
   }
-  out << "*" << (method == JoinMethod::kHash ? "H" : "M") << " "
-      << joinTypeLabel(joinType);
+  out << "*";
+
+  switch (method) {
+    case JoinMethod::kHash:
+      out << "H";
+      break;
+    case JoinMethod::kMerge:
+      out << "M";
+      break;
+    case JoinMethod::kCross:
+      out << "C";
+      break;
+  }
+
+  out << " " << joinTypeLabel(joinType);
   printCost(detail, out);
   if (detail) {
     out << "columns: " << itemsToString(columns().data(), columns().size())
@@ -513,7 +533,7 @@ std::string Repartition::toString(bool recursive, bool detail) const {
     out << input()->toString(true, detail) << " ";
   }
 
-  if (distribution().isBroadcast) {
+  if (distribution().isBroadcast()) {
     out << "broadcast ";
   } else if (distribution().isGather()) {
     out << "gather ";
@@ -584,7 +604,7 @@ Aggregation::Aggregation(
   // being unique after n values is 1 - (1/d)^n.
   auto nOut = cardinality -
       cardinality *
-          std::pow(1.0F - (1.0F / cardinality), input_->resultCardinality());
+          std::pow(1.0F - (1.0F / cardinality), cost_.inputCardinality);
 
   cost_.fanout = nOut / cost_.inputCardinality;
   const auto numGrouppingKeys = static_cast<float>(groupingKeys.size());
@@ -888,8 +908,7 @@ UnionAll::UnionAll(RelationOpPtrVector inputsVector)
     : RelationOp{RelType::kUnionAll, nullptr, Distribution{}, inputsVector[0]->columns()},
       inputs{std::move(inputsVector)} {
   for (auto& input : inputs) {
-    cost_.inputCardinality +=
-        input->cost().inputCardinality * input->cost().fanout;
+    cost_.inputCardinality += input->resultCardinality();
   }
 
   cost_.fanout = 1;
@@ -933,6 +952,85 @@ std::string UnionAll::toString(bool recursive, bool detail) const {
   }
   out << ")";
   return out.str();
+}
+
+WindowOp::WindowOp(
+    RelationOpPtr input,
+    ExprVector partitionKeysVector,
+    ExprVector orderKeysVector,
+    OrderTypeVector orderTypesVector,
+    WindowVector windowsVector,
+    ColumnVector columns)
+    : RelationOp{RelType::kWindow, std::move(input), std::move(columns)},
+      partitionKeys{std::move(partitionKeysVector)},
+      orderKeys{std::move(orderKeysVector)},
+      orderTypes{std::move(orderTypesVector)},
+      windows{std::move(windowsVector)} {
+  cost_.inputCardinality = inputCardinality();
+  cost_.fanout = 1;
+}
+
+const QGString& WindowOp::historyKey() const {
+  if (!key_.empty()) {
+    return key_;
+  }
+  std::stringstream out;
+  auto* opt = queryCtx()->optimization();
+  velox::ScopedVarSetter cname(&opt->cnamesInExpr(), false);
+  out << input_->historyKey() << " window (";
+  for (auto& key : partitionKeys) {
+    out << key->toString() << ", ";
+  }
+  out << ") order by (";
+  for (auto& key : orderKeys) {
+    out << key->toString() << ", ";
+  }
+  out << ") functions (";
+  for (auto& window : windows) {
+    out << window->toString() << ", ";
+  }
+  out << ")";
+  key_ = sanitizeHistoryKey(out.str());
+  return key_;
+}
+
+std::string WindowOp::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (detail) {
+    out << "Window (";
+    out << "partition by: ";
+    for (auto i = 0; i < partitionKeys.size(); ++i) {
+      out << partitionKeys[i]->toString();
+      if (i < partitionKeys.size() - 1) {
+        out << ", ";
+      }
+    }
+    out << " order by: ";
+    for (auto i = 0; i < orderKeys.size(); ++i) {
+      out << orderKeys[i]->toString();
+      if (i < orderKeys.size() - 1) {
+        out << ", ";
+      }
+    }
+    out << " functions: ";
+    for (auto i = 0; i < windows.size(); ++i) {
+      out << windows[i]->toString();
+      if (i < windows.size() - 1) {
+        out << ", ";
+      }
+    }
+    out << ")\n";
+  } else {
+    out << "window " << windows.size() << " functions ";
+  }
+
+  return out.str();
+}
+
+void WindowOp::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 void UnionAll::accept(

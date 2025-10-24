@@ -150,6 +150,11 @@ class ToTextVisitor : public RelationOpVisitor {
     visitDefault(op, context);
   }
 
+  void visit(const WindowOp& op, RelationOpVisitorContext& context)
+      const override {
+    visitDefault(op, context);
+  }
+
   void visit(const UnionAll& op, RelationOpVisitorContext& context)
       const override {
     auto& myCtx = static_cast<Context&>(context);
@@ -284,6 +289,11 @@ class OnelineVisitor : public RelationOpVisitor {
   }
 
   void visit(const OrderBy& op, RelationOpVisitorContext& context)
+      const override {
+    visitDefault(op, context);
+  }
+
+  void visit(const WindowOp& op, RelationOpVisitorContext& context)
       const override {
     visitDefault(op, context);
   }
