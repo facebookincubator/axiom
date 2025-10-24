@@ -179,16 +179,16 @@ ExprCP ToGraph::tryFoldConstant(
         PlanType::kCallExpr, toName(callName), value, literals, FunctionSet());
     auto typedExpr = queryCtx()->optimization()->toTypedExpr(veraxExpr);
     auto exprSet = evaluator_.compile(typedExpr);
-    auto first = exprSet->exprs().front().get();
-    if (auto constantExpr =
-            dynamic_cast<const velox::exec::ConstantExpr*>(first)) {
-      auto typed = std::make_shared<lp::ConstantExpr>(
-          constantExpr->type(),
-          std::make_shared<velox::Variant>(
-              constantExpr->value()->variantAt(0)));
-
-      return makeConstant(*typed);
+    const auto& first = *exprSet->exprs().front();
+    if (first.specialFormKind() != velox::exec::SpecialFormKind::kConstant) {
+      return nullptr;
     }
+    const auto& constantExpr =
+        static_cast<const velox::exec::ConstantExpr&>(first);
+    auto typed = std::make_shared<lp::ConstantExpr>(
+        constantExpr.type(),
+        std::make_shared<velox::Variant>(constantExpr.value()->variantAt(0)));
+    return makeConstant(*typed);
   } catch (const std::exception&) {
     // Swallow exception.
   }

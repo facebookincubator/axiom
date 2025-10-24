@@ -86,7 +86,8 @@ class LogicalPlanNode {
   template <typename T>
   const T* as() const {
     static_assert(std::is_base_of_v<LogicalPlanNode, T>);
-    return dynamic_cast<const T*>(this);
+    VELOX_DCHECK_NOT_NULL(dynamic_cast<const T*>(this));
+    return static_cast<const T*>(this);
   }
 
   const std::string& id() const {

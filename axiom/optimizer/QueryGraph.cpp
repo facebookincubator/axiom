@@ -354,8 +354,8 @@ bool Expr::sameOrEqual(const Expr& other) const {
       return as<Column>()->equivalence() &&
           as<Column>()->equivalence() == other.as<Column>()->equivalence();
     case PlanType::kAggregateExpr: {
-      auto a = reinterpret_cast<const Aggregate*>(this);
-      auto b = reinterpret_cast<const Aggregate*>(&other);
+      auto a = as<Aggregate>();
+      auto b = other.as<Aggregate>();
       if (a->isDistinct() != b->isDistinct() ||
           (a->condition() != b->condition() &&
            (!a->condition() || !b->condition() ||

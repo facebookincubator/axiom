@@ -193,12 +193,14 @@ class RelationOp {
 
   template <typename T>
   const T* as() const {
+    static_assert(std::is_base_of_v<RelationOp, T>);
     VELOX_DCHECK_NOT_NULL(dynamic_cast<const T*>(this));
     return static_cast<const T*>(this);
   }
 
   template <typename T>
   T* as() {
+    static_assert(std::is_base_of_v<RelationOp, T>);
     VELOX_DCHECK_NOT_NULL(dynamic_cast<T*>(this));
     return static_cast<T*>(this);
   }

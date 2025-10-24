@@ -118,7 +118,8 @@ class Expr {
   template <typename T>
   const T* as() const {
     static_assert(std::is_base_of_v<Expr, T>);
-    return dynamic_cast<const T*>(this);
+    VELOX_DCHECK_NOT_NULL(dynamic_cast<const T*>(this));
+    return static_cast<const T*>(this);
   }
 
   virtual void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
