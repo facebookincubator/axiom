@@ -203,7 +203,7 @@ class ToGraph {
   // Converts 'plan' to PlanObjects and records join edges into
   // 'currentDt_'. If 'node' does not match  allowedInDt, wraps 'node' in
   // a new DerivedTable.
-  PlanObjectP makeQueryGraph(
+  void makeQueryGraph(
       const logical_plan::LogicalPlanNode& node,
       uint64_t allowedInDt);
 
@@ -277,9 +277,7 @@ class ToGraph {
   // Adds a JoinEdge corresponding to 'join' to the enclosing DerivedTable.
   void translateJoin(const logical_plan::JoinNode& join);
 
-  DerivedTableP translateSetJoin(
-      const logical_plan::SetNode& set,
-      DerivedTableP setDt);
+  void translateSetJoin(const logical_plan::SetNode& set, DerivedTableP setDt);
 
   // Updates the distribution and column stats of 'setDt', which must
   // be a union. 'innerDt' should be null on top level call. Adds up
@@ -301,21 +299,15 @@ class ToGraph {
   AggregationPlanCP translateAggregation(
       const logical_plan::AggregateNode& aggregation);
 
-  PlanObjectP addProjection(const logical_plan::ProjectNode* project);
+  void addProjection(const logical_plan::ProjectNode& project);
 
-  // Interprets a Filter node and adds its information into the DerivedTable
-  // being assembled.
-  PlanObjectP addFilter(const logical_plan::FilterNode* filter);
+  void addFilter(const logical_plan::FilterNode& filter);
 
-  // Interprets an AggregationNode and adds its information to the
-  // DerivedTable being assembled.
-  PlanObjectP addAggregation(const logical_plan::AggregateNode& aggNode);
+  void addLimit(const logical_plan::LimitNode& limit);
 
-  PlanObjectP addLimit(const logical_plan::LimitNode& limitNode);
+  void addOrderBy(const logical_plan::SortNode& order);
 
-  PlanObjectP addOrderBy(const logical_plan::SortNode& order);
-
-  PlanObjectP addWrite(const logical_plan::TableWriteNode& tableWrite);
+  void addWrite(const logical_plan::TableWriteNode& tableWrite);
 
   bool isSubfield(
       const logical_plan::ExprPtr& expr,
@@ -393,9 +385,9 @@ class ToGraph {
   // Calls translateSubfieldFunction() if not already called.
   void ensureFunctionSubfields(const logical_plan::ExprPtr& expr);
 
-  PlanObjectP makeBaseTable(const logical_plan::TableScanNode& tableScan);
+  void makeBaseTable(const logical_plan::TableScanNode& tableScan);
 
-  PlanObjectP makeValuesTable(const logical_plan::ValuesNode& values);
+  void makeValuesTable(const logical_plan::ValuesNode& values);
 
   // Decomposes complex type columns into parts projected out as top
   // level if subfield pushdown is on.
@@ -408,10 +400,10 @@ class ToGraph {
   // DerivedTable. Done for joins to the right of non-inner joins,
   // group bys as non-top operators, whenever descendents of 'node'
   // are not freely reorderable with its parents' descendents.
-  PlanObjectP wrapInDt(const logical_plan::LogicalPlanNode& node);
+  void wrapInDt(const logical_plan::LogicalPlanNode& node);
 
-  // Start new DT and add 'currentDt_' as a child. Set 'currentDt_' to the new
-  // DT.
+  // Start new DT and add 'currentDt_' as a child.
+  // Set 'currentDt_' to the new DT.
   void finalizeDt(
       const logical_plan::LogicalPlanNode& node,
       DerivedTableP outerDt = nullptr);
@@ -435,8 +427,6 @@ class ToGraph {
   // already sorted by the first occurrence.
   std::pair<ExprVector, OrderTypeVector> dedupOrdering(
       const std::vector<logical_plan::SortingField>& ordering);
-
-  static constexpr uint64_t kAllAllowedInDt = ~0UL;
 
   // Cache of resolved table schemas.
   Schema schema_;
