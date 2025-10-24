@@ -94,6 +94,7 @@ class PlanObject {
     return type_ != type;
   }
 
+  /// Caller must ensure this type is correct.
   template <typename T>
   const T* as() const {
     static_assert(std::is_base_of_v<PlanObject, T>);
@@ -101,6 +102,7 @@ class PlanObject {
     return static_cast<const T*>(this);
   }
 
+  /// Caller must ensure this type is correct.
   template <typename T>
   T* as() {
     static_assert(std::is_base_of_v<PlanObject, T>);

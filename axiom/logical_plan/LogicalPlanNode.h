@@ -83,6 +83,7 @@ class LogicalPlanNode {
     return kind_ == kind;
   }
 
+  /// Caller must ensure this kind is correct.
   template <typename T>
   const T* as() const {
     static_assert(std::is_base_of_v<LogicalPlanNode, T>);

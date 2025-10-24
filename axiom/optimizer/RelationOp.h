@@ -191,6 +191,7 @@ class RelationOp {
     return relType_ == relType;
   }
 
+  /// Caller must ensure this relType is correct.
   template <typename T>
   const T* as() const {
     static_assert(std::is_base_of_v<RelationOp, T>);
@@ -198,6 +199,7 @@ class RelationOp {
     return static_cast<const T*>(this);
   }
 
+  /// Caller must ensure this relType is correct.
   template <typename T>
   T* as() {
     static_assert(std::is_base_of_v<RelationOp, T>);
