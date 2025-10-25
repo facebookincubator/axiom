@@ -373,7 +373,7 @@ bool Expr::sameOrEqual(const Expr& other) const {
         return false;
       }
       for (auto i = 0; i < numArgs; ++i) {
-        if (as<Call>()->argAt(i)->sameOrEqual(*other.as<Call>()->argAt(i))) {
+        if (!as<Call>()->argAt(i)->sameOrEqual(*other.as<Call>()->argAt(i))) {
           return false;
         }
       }
