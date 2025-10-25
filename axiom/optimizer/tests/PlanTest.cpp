@@ -1417,6 +1417,26 @@ TEST_F(PlanTest, lambdaArgs) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_F(PlanTest, xxx) {
+  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
+  auto logicalPlan = lp::PlanBuilder(context)
+                         .tableScan("nation")
+                         .limit(0, 10)
+                         .orderBy({"n_nationkey"})
+                         .as("n1")
+                         .join(
+                             lp::PlanBuilder(context)
+                                 .tableScan("region")
+                                 .limit(0, 5)
+                                 .orderBy({"r_regionkey"})
+                                 .as("r1"),
+                             "n1.n_regionkey = r1.r_regionkey",
+                             lp::JoinType::kInner)
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+}
+
 #undef AXIOM_ASSERT_PLAN
 
 } // namespace
