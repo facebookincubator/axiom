@@ -1825,6 +1825,11 @@ void ToGraph::makeQueryGraph(
       return;
     }
     case lp::NodeKind::kSort: {
+      if (!contains(allowedInDt, lp::NodeKind::kSort)) {
+        wrapInDt(node);
+        return;
+      }
+
       // Multiple orderBys are allowed before a limit. Last one wins. Previous
       // are dropped. If arrives after limit, then starts a new DT.
 
@@ -1838,6 +1843,11 @@ void ToGraph::makeQueryGraph(
       return;
     }
     case lp::NodeKind::kLimit: {
+      if (!contains(allowedInDt, lp::NodeKind::kLimit)) {
+        wrapInDt(node);
+        return;
+      }
+
       // Multiple limits are allowed. If already present, then it is combined
       // with the new limit.
       makeQueryGraph(*node.onlyInput(), allowedInDt);
