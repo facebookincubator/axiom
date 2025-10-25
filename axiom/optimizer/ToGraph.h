@@ -200,10 +200,50 @@ class ToGraph {
   // to the left.
   void canonicalizeCall(Name& name, ExprVector& args);
 
-  // Converts 'plan' to PlanObjects and records join edges into
-  // 'currentDt_'. If 'node' does not match  allowedInDt, wraps 'node' in
-  // a new DerivedTable.
-  void makeQueryGraph(
+  // Helper function to call makeQueryGraph
+  // but removes order by from currentDt_.
+  // This is useful for cases where we want to ignore the order
+  // Example: set operations, join, write, aggregation inputs.
+  // Returns nullptr if 'node' is fully processed in currentDt_.
+  // Otherwise returns the "outer" DerivedTable, which needs to be
+  // finalized by the caller.
+  DerivedTableP makeUnordered(
+      const logical_plan::LogicalPlanNode& node,
+      uint64_t allowedInDt);
+
+  // Helper function to call makeQueryGraph but finishes currentDt_
+  // if it will have limit.
+  // This is useful for cases where we want to apply limit before our node.
+  // Example: filter and sort input.
+  // Returns nullptr if 'node' is fully processed in currentDt_.
+  // Otherwise returns the "outer" DerivedTable, which needs to be
+  // finalized by the caller.
+  DerivedTableP makeStream(
+      const logical_plan::LogicalPlanNode& node,
+      uint64_t allowedInDt);
+
+  enum class MakeType : uint8_t {
+    kNone,
+    kStream,
+    kUnordered,
+  };
+
+  // Helper function to create new DerivedTable
+  // and call makeQueryGraph / makeUnordered / makeStream to fill it.
+  // Returns DerivedTable that was before the call.
+  DerivedTableP wrapInDt(
+      const logical_plan::LogicalPlanNode& node,
+      MakeType makeType);
+
+  // Fill currentDt_ from 'node'.
+  // If 'allowedInDt' does not allow 'node', wraps in a new DerivedTable.
+  // Returns nullptr if 'node' is fully processed in currentDt_.
+  // Otherwise returns the "outer" DerivedTable, which needs to be
+  // finalized by the caller.
+  // This is useful for cases where we want to control from caller
+  // do we need or not to drop order by or have separate DerivedTable
+  // for aggregation or limit.
+  DerivedTableP makeQueryGraph(
       const logical_plan::LogicalPlanNode& node,
       uint64_t allowedInDt);
 
@@ -277,7 +317,7 @@ class ToGraph {
   // Adds a JoinEdge corresponding to 'join' to the enclosing DerivedTable.
   void translateJoin(const logical_plan::JoinNode& join);
 
-  void translateSetJoin(const logical_plan::SetNode& set, DerivedTableP setDt);
+  void translateSetJoin(const logical_plan::SetNode& set);
 
   // Updates the distribution and column stats of 'setDt', which must
   // be a union. 'innerDt' should be null on top level call. Adds up
@@ -286,15 +326,16 @@ class ToGraph {
       DerivedTableP setDt,
       DerivedTableP innerDt = nullptr);
 
-  DerivedTableP translateUnion(
-      const logical_plan::SetNode& set,
-      DerivedTableP setDt,
-      bool isTopLevel,
+  void translateUnionInput(
+      const folly::F14FastMap<std::string, ExprCP>& renames,
+      const logical_plan::LogicalPlanNode& input,
       bool& isLeftLeaf);
 
-  void translateUnnest(
-      const logical_plan::UnnestNode& logicalUnnest,
-      bool isNewDt);
+  void translateUnion(const logical_plan::SetNode& set);
+
+  DerivedTableP translateUnnest(
+      const logical_plan::UnnestNode& unnest,
+      DerivedTableP outerDt);
 
   AggregationPlanCP translateAggregation(
       const logical_plan::AggregateNode& aggregation);
@@ -396,17 +437,11 @@ class ToGraph {
       ColumnCP column,
       const BitSet& paths);
 
-  // Adds 'node' and descendants to query graph wrapped inside a
-  // DerivedTable. Done for joins to the right of non-inner joins,
-  // group bys as non-top operators, whenever descendents of 'node'
-  // are not freely reorderable with its parents' descendents.
-  void wrapInDt(const logical_plan::LogicalPlanNode& node);
-
   // Start new DT and add 'currentDt_' as a child.
   // Set 'currentDt_' to the new DT.
   void finalizeDt(
       const logical_plan::LogicalPlanNode& node,
-      DerivedTableP outerDt = nullptr);
+      DerivedTableP outerDt);
 
   // Adds a column 'name' from current DerivedTable to the 'dt'.
   void addDtColumn(DerivedTableP dt, std::string_view name);
@@ -437,9 +472,6 @@ class ToGraph {
 
   // Innermost DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP currentDt_{nullptr};
-
-  // True if wrapping a nondeterministic filter inside a DT in ToGraph.
-  bool isNondeterministicWrap_{false};
 
   // Source PlanNode when inside addProjection() or 'addFilter().
   const logical_plan::LogicalPlanNode* exprSource_{nullptr};
