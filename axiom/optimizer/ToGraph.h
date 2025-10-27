@@ -164,8 +164,7 @@ class ToGraph {
 
   /// Creates or returns pre-existing function call with name+args. If
   /// deterministic, a new ExprCP is remembered for reuse.
-  ExprCP
-  deduppedCall(Name name, Value value, ExprVector args, FunctionSet flags);
+  ExprCP deduppedCall(Name name, Value value, ExprVector args);
 
   /// True if 'expr' is of the form a = b where a depends on one of 'tables' and
   /// b on the other. If true, returns the side depending on tables[0] in 'left'

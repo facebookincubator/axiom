@@ -175,8 +175,8 @@ ExprCP ToGraph::tryFoldConstant(
     const ExprVector& literals) {
   try {
     Value value(toType(returnType), 1);
-    auto* veraxExpr = make<Call>(
-        PlanType::kCallExpr, toName(callName), value, literals, FunctionSet());
+    auto* veraxExpr =
+        make<Call>(PlanType::kCallExpr, toName(callName), value, literals);
     auto typedExpr = queryCtx()->optimization()->toTypedExpr(veraxExpr);
     auto exprSet = evaluator_.compile(typedExpr);
     const auto& first = *exprSet->exprs().front();
@@ -486,8 +486,7 @@ ExprCP ToGraph::makeGettersOverSkyline(
                   subscriptLiteral(subscriptType->kind(), step)),
           };
 
-          expr = make<Call>(
-              subscript_, Value(valueType, 1), std::move(args), FunctionSet());
+          expr = make<Call>(subscript_, Value(valueType, 1), std::move(args));
           break;
         }
 
@@ -495,8 +494,7 @@ ExprCP ToGraph::makeGettersOverSkyline(
           expr = make<Call>(
               cardinality_,
               Value(toType(velox::BIGINT()), 1),
-              ExprVector{expr},
-              FunctionSet());
+              ExprVector{expr});
           break;
         }
         default:
@@ -599,11 +597,7 @@ void ToGraph::canonicalizeCall(Name& name, ExprVector& args) {
   }
 }
 
-ExprCP ToGraph::deduppedCall(
-    Name name,
-    Value value,
-    ExprVector args,
-    FunctionSet flags) {
+ExprCP ToGraph::deduppedCall(Name name, Value value, ExprVector args) {
   canonicalizeCall(name, args);
   ExprDedupKey key = {name, args};
 
@@ -611,7 +605,7 @@ ExprCP ToGraph::deduppedCall(
   if (it->second) {
     return it->second;
   }
-  auto* call = make<Call>(name, value, std::move(args), flags);
+  auto* call = make<Call>(name, value, std::move(args));
   if (emplaced && !call->containsNonDeterministic()) {
     it->second = call;
   }
@@ -711,7 +705,6 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       expr->isSpecialForm() ? expr->as<lp::SpecialFormExpr>() : nullptr;
 
   if (call || specialForm) {
-    FunctionSet funcs;
     const auto& inputs = expr->inputs();
     ExprVector args;
     args.reserve(inputs.size());
@@ -723,9 +716,6 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       args.emplace_back(arg);
       allConstant &= arg->is(PlanType::kLiteralExpr);
       cardinality = std::max(cardinality, arg->value().cardinality);
-      if (arg->is(PlanType::kCallExpr)) {
-        funcs = funcs | arg->as<Call>()->functions();
-      }
     }
 
     auto name = call ? toName(callName)
@@ -736,9 +726,8 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       }
     }
 
-    funcs = funcs | functionBits(name);
     auto* callExpr = deduppedCall(
-        name, Value(toType(expr->type()), cardinality), std::move(args), funcs);
+        name, Value(toType(expr->type()), cardinality), std::move(args));
     return callExpr;
   }
 
@@ -829,15 +818,11 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
   const auto& inputs = call->inputs();
   ExprVector args(inputs.size());
   float cardinality = 1;
-  FunctionSet funcs;
   for (auto i = 0; i < inputs.size(); ++i) {
     const auto& input = inputs[i];
     if (allUsed || usedArgs.contains(i)) {
       args[i] = translateExpr(input);
       cardinality = std::max(cardinality, args[i]->value().cardinality);
-      if (args[i]->is(PlanType::kCallExpr)) {
-        funcs = funcs | args[i]->as<Call>()->functions();
-      }
     } else {
       // Make a null of the type for the unused arg to keep the tree valid.
       const auto& inputType = input->type();
@@ -848,7 +833,6 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
   }
 
   auto* name = toName(velox::exec::sanitizeName(call->name()));
-  funcs = funcs | functionBits(name);
 
   if (metadata->explode) {
     auto map = metadata->explode(call, paths);
@@ -874,7 +858,7 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
     }
   }
   auto* callExpr =
-      make<Call>(name, Value(toType(call->type()), cardinality), args, funcs);
+      make<Call>(name, Value(toType(call->type()), cardinality), args);
   return callExpr;
 }
 
@@ -1042,10 +1026,8 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     const auto& aggregate = agg.aggregates()[i];
     ExprVector args = translateExprs(aggregate->inputs());
 
-    FunctionSet funcs;
     std::vector<velox::TypePtr> argTypes;
     for (auto& arg : args) {
-      funcs = funcs | arg->functions();
       argTypes.push_back(toTypePtr(arg->value().type));
     }
     ExprCP condition = nullptr;
@@ -1103,7 +1085,6 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
           aggName,
           finalValue,
           std::move(args),
-          funcs,
           isDistinct,
           condition,
           accumulatorType,

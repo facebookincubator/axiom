@@ -245,15 +245,10 @@ using FunctionMetadataCP = const FunctionMetadata*;
 /// subexpressions.
 class Call : public Expr {
  public:
-  Call(
-      PlanType type,
-      Name name,
-      const Value& value,
-      ExprVector args,
-      FunctionSet functions);
+  Call(PlanType type, Name name, const Value& value, ExprVector args);
 
-  Call(Name name, Value value, ExprVector args, FunctionSet functions)
-      : Call(PlanType::kCallExpr, name, value, std::move(args), functions) {}
+  Call(Name name, Value value, ExprVector args)
+      : Call(PlanType::kCallExpr, name, value, std::move(args)) {}
 
   Name name() const {
     return name_;
@@ -289,15 +284,16 @@ class Call : public Expr {
     return metadata_;
   }
 
+ protected:
+  // Set of functions used in 'this' and 'args'.
+  FunctionSet functions_;
+
  private:
   // name of function.
   Name const name_;
 
   // Arguments.
   const ExprVector args_;
-
-  // Set of functions used in 'this' and 'args'.
-  const FunctionSet functions_;
 
   FunctionMetadataCP metadata_;
 };
@@ -830,35 +826,11 @@ class Aggregate : public Call {
       Name name,
       const Value& value,
       ExprVector args,
-      FunctionSet functions,
       bool isDistinct,
       ExprCP condition,
       const velox::Type* intermediateType,
       ExprVector orderKeys,
-      OrderTypeVector orderTypes)
-      : Call(
-            PlanType::kAggregateExpr,
-            name,
-            value,
-            std::move(args),
-            functions | FunctionSet::kAggregate),
-        isDistinct_(isDistinct),
-        condition_(condition),
-        intermediateType_(intermediateType),
-        orderKeys_(std::move(orderKeys)),
-        orderTypes_(std::move(orderTypes)) {
-    VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
-
-    for (auto& arg : this->args()) {
-      rawInputType_.push_back(arg->value().type);
-    }
-    if (condition_) {
-      columns_.unionSet(condition_->columns());
-    }
-    for (auto& key : orderKeys_) {
-      columns_.unionSet(key->columns());
-    }
-  }
+      OrderTypeVector orderTypes);
 
   ExprCP condition() const {
     return condition_;
