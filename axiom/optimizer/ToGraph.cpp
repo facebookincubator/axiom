@@ -1095,8 +1095,7 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       newRenames[name] = it->second;
     } else {
       auto accumulatorType = toType(
-          velox::exec::resolveAggregateFunction(aggregate->name(), argTypes)
-              .second);
+          velox::exec::resolveIntermediateType(aggregate->name(), argTypes));
       Value finalValue(toType(aggregate->type()), 1);
 
       AggregateCP aggregateExpr = make<Aggregate>(

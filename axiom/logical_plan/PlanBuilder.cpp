@@ -1090,8 +1090,7 @@ AggregateExprPtr ExprResolver::resolveAggregateTypes(
     inputTypes.push_back(input->type());
   }
 
-  if (auto type =
-          velox::exec::resolveAggregateFunction(name, inputTypes).first) {
+  if (auto type = velox::exec::resolveResultType(name, inputTypes)) {
     return std::make_shared<AggregateExpr>(
         type, name, inputs, filter, ordering, distinct);
   }
