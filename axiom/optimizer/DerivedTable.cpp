@@ -296,7 +296,9 @@ void DerivedTable::import(
     PlanObjectCP firstTable,
     const PlanObjectSet& superTables,
     const std::vector<PlanObjectSet>& existences,
-    float existsFanout) {
+    float existsFanout,
+    PlanObjectSet extraConjuncts,
+    PlanObjectSet projected) {
   tableSet = superTables;
   tables = superTables.toObjects();
 
@@ -342,10 +344,23 @@ void DerivedTable::import(
     noImportOfExists = true;
   }
 
+  conjuncts = extraConjuncts.toObjects<Expr>();
+
   if (firstTable->is(PlanType::kDerivedTableNode)) {
     importJoinsIntoFirstDt(firstTable->as<DerivedTable>());
   } else {
     fullyImported = superTables;
+  }
+
+  // If there are many tables or we have a wrapped dt, columns should be
+  // explicitly projected out.
+  if (tables.size() > 1 || tables[0]->is(PlanType::kDerivedTableNode)) {
+    projected.forEach<Column>([&](auto column) {
+      if (std::find(columns.begin(), columns.end(), column) == columns.end()) {
+	exprs.push_back(column);
+	columns.push_back(column);
+      }
+    });
   }
   linkTablesToJoins();
 }
@@ -485,8 +500,14 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
 
 } // namespace
 
+bool DerivedTable::isWrapOnly() const {
+  return tables.size() == 1 && tables[0]->is(PlanType::kDerivedTableNode) &&
+      !hasLimit() && !hasOrderBy() && conjuncts.empty() && !hasAggregation() &&
+      exprs.empty();
+}
+
 void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
-  if (tables.size() == 1 && tables[0]->is(PlanType::kDerivedTableNode)) {
+  if (isWrapOnly()) {
     flattenDt(tables[0]->as<DerivedTable>());
     return;
   }
@@ -594,6 +615,8 @@ void DerivedTable::flattenDt(const DerivedTable* dt) {
   importedExistences.unionSet(dt->importedExistences);
   aggregation = dt->aggregation;
   having = dt->having;
+  limit = dt->limit;
+  offset = dt->offset;
 }
 
 void DerivedTable::makeProjection(const ExprVector& exprs) {
