@@ -27,8 +27,21 @@ namespace {
 bool isSingleWorker() {
   return queryCtx()->optimization()->runnerOptions().numWorkers == 1;
 }
-
 } // namespace
+
+std::string MemoKey::toString() const {
+  std::stringstream out;
+  out << "{MemoKey Columns: ";
+  out << columns.toString(1) << " Tables " << tables.toString(1)
+      << " extraConjuncts=" << extraConjuncts.toString(1) << " ";
+  if (!existences.empty()) {
+    out << std::endl << " existences=";
+    for (auto& existence : existences) {
+      out << " exists= " << existence.toString(1) << std::endl;
+    }
+  }
+  return out.str();
+}
 
 PlanState::PlanState(Optimization& optimization, DerivedTableCP dt)
     : optimization(optimization),
@@ -518,6 +531,9 @@ bool NextJoin::isWorse(const NextJoin& other) const {
 
 size_t MemoKey::hash() const {
   size_t hash = tables.hash();
+  if (!extraConjuncts.empty()) {
+    hash = velox::bits::commutativeHashMix(hash, extraConjuncts.hash());
+  }
   for (auto& exists : existences) {
     hash = velox::bits::commutativeHashMix(hash, exists.hash());
   }
@@ -526,7 +542,7 @@ size_t MemoKey::hash() const {
 
 bool MemoKey::operator==(const MemoKey& other) const {
   if (firstTable == other.firstTable && columns == other.columns &&
-      tables == other.tables) {
+      tables == other.tables && extraConjuncts == other.extraConjuncts) {
     if (existences.size() != other.existences.size()) {
       return false;
     }

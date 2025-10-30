@@ -332,7 +332,7 @@ struct PlanStateSaver {
 /// result. For example, if a reducing join is moved below a group by,
 /// unless it is known never to have duplicates, it must become a
 /// semijoin and the original join must still stay in place in case
-/// there were duplicates.
+/// there were duplicates. 'extraConjuncts' is conjuncts from the dt containing 'tables' which only depend on 'tables'. The typical use is that the key represents a hash join build nd the conjuncts are non-join edge and non-single table deterministic conjuncts that can be evaluated before the build.
 struct MemoKey {
   bool operator==(const MemoKey& other) const;
 
@@ -342,6 +342,9 @@ struct MemoKey {
   PlanObjectSet columns;
   PlanObjectSet tables;
   std::vector<PlanObjectSet> existences;
+  PlanObjectSet extraConjuncts;
+
+  std::string toString() const;
 };
 
 } // namespace facebook::axiom::optimizer
