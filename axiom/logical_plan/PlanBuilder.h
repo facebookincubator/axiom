@@ -404,7 +404,9 @@ class PlanBuilder {
   /// anonymous, assigns unique name before returning.
   std::string findOrAssignOutputNameAt(size_t index) const;
 
-  LogicalPlanNodePtr build();
+  /// @param useIds Boolean indicating whether to use user-specified names or
+  /// use auto-generated IDs for the output column names.
+  LogicalPlanNodePtr build(bool useIds = false);
 
  private:
   std::string nextId() {

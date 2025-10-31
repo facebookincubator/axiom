@@ -69,10 +69,9 @@ std::any AstBuilder::visitQuery(PrestoSqlParser::QueryContext* ctx) {
 
   auto queryNoWith = visitTyped<Query>(ctx->queryNoWith());
 
-  // TODO: Handle with
   return std::static_pointer_cast<Statement>(std::make_shared<Query>(
       getLocation(ctx),
-      queryNoWith->with(),
+      visitTyped<With>(ctx->with()),
       queryNoWith->queryBody(),
       queryNoWith->orderBy(),
       queryNoWith->offset(),
@@ -661,7 +660,10 @@ std::any AstBuilder::visitUpdate(PrestoSqlParser::UpdateContext* ctx) {
 
 std::any AstBuilder::visitWith(PrestoSqlParser::WithContext* ctx) {
   trace("visitWith");
-  return visitChildren(ctx);
+  return std::make_shared<With>(
+      getLocation(ctx),
+      ctx->RECURSIVE() != nullptr,
+      visitTyped<WithQuery>(ctx->namedQuery()));
 }
 
 std::any AstBuilder::visitTableElement(
@@ -900,7 +902,17 @@ std::any AstBuilder::visitGroupingSet(
 
 std::any AstBuilder::visitNamedQuery(PrestoSqlParser::NamedQueryContext* ctx) {
   trace("visitNamedQuery");
-  return visitChildren(ctx);
+
+  std::optional<std::vector<std::shared_ptr<Identifier>>> columns;
+  if (ctx->columnAliases()) {
+    columns = visitTyped<Identifier>(ctx->columnAliases()->identifier());
+  }
+
+  return std::make_shared<WithQuery>(
+      getLocation(ctx),
+      visitIdentifier(ctx->name),
+      visitTyped<Statement>(ctx->query()),
+      columns);
 }
 
 std::any AstBuilder::visitSetQuantifier(
@@ -1037,7 +1049,8 @@ std::any AstBuilder::visitExpression(PrestoSqlParser::ExpressionContext* ctx) {
 
 std::any AstBuilder::visitLogicalNot(PrestoSqlParser::LogicalNotContext* ctx) {
   trace("visitLogicalNot");
-  return visitChildren(ctx);
+  return std::static_pointer_cast<Expression>(std::make_shared<NotExpression>(
+      getLocation(ctx), visitExpression(ctx->booleanExpression())));
 }
 
 std::any AstBuilder::visitPredicated(PrestoSqlParser::PredicatedContext* ctx) {
@@ -1431,7 +1444,14 @@ std::any AstBuilder::visitSpecialDateTimeFunction(
 
 std::any AstBuilder::visitSubstring(PrestoSqlParser::SubstringContext* ctx) {
   trace("visitSubstring");
-  return visitChildren(ctx);
+
+  return std::static_pointer_cast<Expression>(std::make_shared<FunctionCall>(
+      getLocation(ctx),
+      std::make_shared<QualifiedName>(
+          getLocation(ctx), std::vector<std::string>{"substr"}),
+      /*window=*/nullptr,
+      /*=distinct*/ false,
+      visitTyped<Expression>(ctx->valueExpression())));
 }
 
 std::any AstBuilder::visitCast(PrestoSqlParser::CastContext* ctx) {
@@ -1651,7 +1671,11 @@ std::any AstBuilder::visitFunctionCall(
 
 std::any AstBuilder::visitExists(PrestoSqlParser::ExistsContext* ctx) {
   trace("visitExists");
-  return visitChildren(ctx);
+
+  return std::static_pointer_cast<Expression>(std::make_shared<ExistsPredicate>(
+      getLocation(ctx),
+      std::make_shared<SubqueryExpression>(
+          getLocation(ctx), visitTyped<Statement>(ctx->query()))));
 }
 
 std::any AstBuilder::visitPosition(PrestoSqlParser::PositionContext* ctx) {

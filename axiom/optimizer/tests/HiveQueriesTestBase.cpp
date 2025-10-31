@@ -69,41 +69,7 @@ void HiveQueriesTestBase::checkResults(
   auto logicalPlan =
       statement->as<::axiom::sql::presto::SelectStatement>()->plan();
 
-  checkResults(logicalPlan, referencePlan);
-}
-
-void HiveQueriesTestBase::checkResults(
-    const lp::LogicalPlanNodePtr& logicalPlan,
-    const core::PlanNodePtr& referencePlan) {
-  VELOX_CHECK_NOT_NULL(logicalPlan);
-  VELOX_CHECK_NOT_NULL(referencePlan);
-
-  auto referenceResult = runVelox(referencePlan);
-  SCOPED_TRACE("reference plan:\n" + referencePlan->toString(true, true));
-  {
-    SCOPED_TRACE("single node and single thread");
-    auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 1});
-    SCOPED_TRACE("plan:\n" + plan.plan->toString());
-    checkResults(plan, referenceResult);
-  }
-  {
-    SCOPED_TRACE("single node and multi thread");
-    auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 4});
-    SCOPED_TRACE("plan:\n" + plan.plan->toString());
-    checkResults(plan, referenceResult);
-  }
-  {
-    SCOPED_TRACE("multi node and single thread");
-    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 1});
-    SCOPED_TRACE("plan:\n" + plan.plan->toString());
-    checkResults(plan, referenceResult);
-  }
-  {
-    SCOPED_TRACE("multi node and multi thread");
-    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
-    SCOPED_TRACE("plan:\n" + plan.plan->toString());
-    checkResults(plan, referenceResult);
-  }
+  checkSame(logicalPlan, referencePlan);
 }
 
 void HiveQueriesTestBase::checkResults(

@@ -251,8 +251,11 @@ void makeExprs(
   }
   if (!floatExprs.empty()) {
     names.push_back("floats");
-    exprs.push_back(std::make_shared<core::CallTypedExpr>(
-        ROW(std::move(floatTypes)), std::move(floatExprs), "row_constructor"));
+    exprs.push_back(
+        std::make_shared<core::CallTypedExpr>(
+            ROW(std::move(floatTypes)),
+            std::move(floatExprs),
+            "row_constructor"));
   }
 }
 
@@ -362,8 +365,11 @@ void makeLogicalExprs(
   }
   if (!floatExprs.empty()) {
     names.push_back("floats");
-    exprs.push_back(std::make_shared<lp::CallExpr>(
-        ROW(std::move(floatTypes)), "row_constructor", std::move(floatExprs)));
+    exprs.push_back(
+        std::make_shared<lp::CallExpr>(
+            ROW(std::move(floatTypes)),
+            "row_constructor",
+            std::move(floatExprs)));
   }
 }
 

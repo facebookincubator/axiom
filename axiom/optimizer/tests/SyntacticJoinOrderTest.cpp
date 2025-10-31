@@ -197,10 +197,11 @@ TEST_F(SyntacticJoinOrderTest, innerJoins) {
       auto logicalPlan =
           lp::PlanBuilder(context)
               .tableScan(order[0])
-              .crossJoin(lp::PlanBuilder(context).tableScan(order[1]).join(
-                  lp::PlanBuilder(context).tableScan(order[2]),
-                  filter,
-                  lp::JoinType::kInner))
+              .crossJoin(
+                  lp::PlanBuilder(context).tableScan(order[1]).join(
+                      lp::PlanBuilder(context).tableScan(order[2]),
+                      filter,
+                      lp::JoinType::kInner))
               .filter("c_mktsegment = 'BUILDING'")
               .filter("c_custkey = o_custkey")
               .filter("l_orderkey = o_orderkey")

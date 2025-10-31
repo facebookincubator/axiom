@@ -1072,12 +1072,13 @@ TEST_F(UnnestTest, join) {
             .project()
             .unnest()
             .project()
-            .hashJoin(core::PlanMatcherBuilder{}
-                          .values()
-                          .project()
-                          .unnest()
-                          .project()
-                          .build())
+            .hashJoin(
+                core::PlanMatcherBuilder{}
+                    .values()
+                    .project()
+                    .unnest()
+                    .project()
+                    .build())
             .project() // TODO Fix the Optimizer to remove this project.
             .build();
     ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
@@ -1148,12 +1149,13 @@ TEST_F(UnnestTest, join) {
                        .project()
                        .unnest()
                        .project()
-                       .hashJoin(core::PlanMatcherBuilder{}
-                                     .values()
-                                     .project()
-                                     .unnest()
-                                     .project()
-                                     .build())
+                       .hashJoin(
+                           core::PlanMatcherBuilder{}
+                               .values()
+                               .project()
+                               .unnest()
+                               .project()
+                               .build())
                        .build();
     ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
     ASSERT_EQ(plan->outputType()->names(), expectedNames);

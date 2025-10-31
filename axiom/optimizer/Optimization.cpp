@@ -301,7 +301,8 @@ void forJoinedTables(const PlanState& state, Func func) {
             break;
           }
         }
-        if (usable && state.mayConsiderNext(join->rightTable())) {
+        if (usable &&
+            (state.mayConsiderNext(join->rightTable()) || join->markColumn())) {
           func(join, join->rightTable(), join->lrFanout());
         }
       } else {
@@ -861,16 +862,17 @@ void Optimization::addAggregation(
     auto args = precompute.toColumns(
         agg->args(), /*aliases=*/nullptr, /*preserveLiterals=*/true);
     auto orderKeys = precompute.toColumns(agg->orderKeys());
-    aggregates.emplace_back(make<Aggregate>(
-        agg->name(),
-        agg->value(),
-        std::move(args),
-        agg->functions(),
-        agg->isDistinct(),
-        condition,
-        agg->intermediateType(),
-        std::move(orderKeys),
-        agg->orderTypes()));
+    aggregates.emplace_back(
+        make<Aggregate>(
+            agg->name(),
+            agg->value(),
+            std::move(args),
+            agg->functions(),
+            agg->isDistinct(),
+            condition,
+            agg->intermediateType(),
+            std::move(orderKeys),
+            agg->orderTypes()));
   }
 
   plan = std::move(precompute).maybeProject();
@@ -1255,6 +1257,7 @@ void Optimization::joinByHashRight(
   state.downstreamColumns().forEach<Column>([&](auto column) {
     if (column == probe.markColumn) {
       mark = column;
+      columnSet.add(column);
       return;
     }
 
@@ -1534,6 +1537,10 @@ bool Optimization::placeConjuncts(
             placeable[i],
             (i == placeable.size() - 1 ? conjunct : nullptr),
             state);
+
+        plan = make<Filter>(plan, ExprVector{conjunct});
+        state.addCost(*plan);
+
         makeJoins(plan, state);
         return true;
       }
@@ -1881,12 +1888,15 @@ PlanP Optimization::makeDtPlan(
   auto it = memo_.find(key);
   PlanSet* plans{};
   if (it == memo_.end()) {
-    DerivedTable dt;
-    dt.cname = newCName("tmp_dt");
-    dt.import(
+    // Allocate temp DT in the arena. The DT may get flattened and then
+    // PrecomputeProjection may create columns that reference that DT. Hence,
+    // the DT's lifetime must extend to the lifetime of the optimization.
+    auto dt = make<DerivedTable>();
+    dt->cname = newCName("tmp_dt");
+    dt->import(
         *state.dt, key.firstTable, key.tables, key.existences, existsFanout);
 
-    PlanState inner(*this, &dt);
+    PlanState inner(*this, dt);
     if (key.firstTable->is(PlanType::kDerivedTableNode)) {
       inner.setTargetExprsForDt(key.columns);
     } else {

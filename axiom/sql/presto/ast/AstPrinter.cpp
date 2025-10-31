@@ -22,6 +22,12 @@ namespace axiom::sql::presto {
 void AstPrinter::visitQuery(Query* node) {
   printHeader("Query", node);
 
+  if (node->with() != nullptr) {
+    indent_++;
+    node->with()->accept(this);
+    indent_--;
+  }
+
   indent_++;
   node->queryBody()->accept(this);
   indent_--;

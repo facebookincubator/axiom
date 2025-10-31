@@ -40,10 +40,6 @@ class HiveQueriesTestBase : public test::QueryTestBase {
       std::string_view sql,
       const velox::core::PlanNodePtr& referencePlan);
 
-  void checkResults(
-      const logical_plan::LogicalPlanNodePtr& logicalPlan,
-      const velox::core::PlanNodePtr& referencePlan);
-
   void checkResults(PlanAndStats& plan, const test::TestResult& expected);
 
   void checkSingleNodePlan(

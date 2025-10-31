@@ -43,12 +43,16 @@ class ToTextVisitor : public RelationOpVisitor {
 
     appendLine(fmt::format("table: {}", table.schemaTable->name()));
     if (!table.columnFilters.empty()) {
-      appendLine(fmt::format(
-          "single-column filters: {}", conjunctsToString(table.columnFilters)));
+      appendLine(
+          fmt::format(
+              "single-column filters: {}",
+              conjunctsToString(table.columnFilters)));
     }
     if (!table.filter.empty()) {
-      appendLine(fmt::format(
-          "multi-column filters: {}", conjunctsToString(table.columnFilters)));
+      appendLine(
+          fmt::format(
+              "multi-column filters: {}",
+              conjunctsToString(table.columnFilters)));
     }
   }
 
@@ -100,8 +104,11 @@ class ToTextVisitor : public RelationOpVisitor {
     };
 
     for (auto i = 0; i < op.leftKeys.size(); ++i) {
-      appendLine(fmt::format(
-          "{} = {}", op.leftKeys[i]->toString(), op.rightKeys[i]->toString()));
+      appendLine(
+          fmt::format(
+              "{} = {}",
+              op.leftKeys[i]->toString(),
+              op.rightKeys[i]->toString()));
     }
 
     if (!op.filter.empty()) {

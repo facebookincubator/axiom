@@ -235,9 +235,10 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
   std::vector<velox::connector::hive::HiveColumnHandlePtr> inputColumns;
   inputColumns.reserve(hiveLayout->rowType()->size());
   for (const auto& name : hiveLayout->rowType()->names()) {
-    inputColumns.push_back(std::static_pointer_cast<
-                           const velox::connector::hive::HiveColumnHandle>(
-        createColumnHandle(session, *hiveLayout, name)));
+    inputColumns.push_back(
+        std::static_pointer_cast<
+            const velox::connector::hive::HiveColumnHandle>(
+            createColumnHandle(session, *hiveLayout, name)));
   }
 
   std::shared_ptr<const velox::connector::hive::HiveBucketProperty>

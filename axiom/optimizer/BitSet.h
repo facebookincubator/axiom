@@ -49,6 +49,9 @@ class BitSet {
   /// Returns true if 'this' is a subset of 'super'.
   bool isSubset(const BitSet& super) const;
 
+  /// Returns true if 'this' and 'other' share at least one id.
+  bool hasIntersection(const BitSet& other) const;
+
   /// Erases all ids not in 'other'.
   void intersect(const BitSet& other);
 

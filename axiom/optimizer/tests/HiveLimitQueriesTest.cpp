@@ -173,7 +173,7 @@ TEST_F(HiveLimitQueriesTest, offsetOnly) {
                        .limit(5, noLimit, false)
                        .planNode();
 
-  checkResults(plan, reference);
+  checkSame(plan, reference);
 }
 
 // OFFSET <very large>
@@ -195,7 +195,7 @@ TEST_F(HiveLimitQueriesTest, veryLargeOffset) {
                        .limit(noLimit - 5, 100, false)
                        .planNode();
 
-  checkResults(plan, reference);
+  checkSame(plan, reference);
 }
 
 // ORDER BY name DESC
@@ -287,7 +287,7 @@ TEST_F(HiveLimitQueriesTest, orderByOffsetLimit) {
                        .limit(5, 10, false)
                        .planNode();
 
-  checkResults(plan, reference);
+  checkSame(plan, reference);
 }
 
 } // namespace

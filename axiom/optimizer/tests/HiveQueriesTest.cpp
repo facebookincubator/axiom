@@ -155,6 +155,28 @@ TEST_F(HiveQueriesTest, orderOfOperations) {
           .filter("n_nationkey < 100 AND n_regionkey > 10")
           .finalLimit(0, 5)
           .filter("n_nationkey > 70 AND n_regionkey < 7"));
+
+  // Limit on both sides of the join.
+  {
+    lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
+    auto logicalPlan =
+        lp::PlanBuilder(context).tableScan("nation").limit(0, 10).join(
+            lp::PlanBuilder(context).tableScan("region").limit(0, 5),
+            "n_regionkey = r_regionkey",
+            lp::JoinType::kInner);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .finalLimit(0, 10)
+                       .hashJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("region")
+                               .finalLimit(0, 5)
+                               .build(),
+                           core::JoinType::kInner);
+
+    test(logicalPlan, matcher);
+  }
 }
 
 } // namespace

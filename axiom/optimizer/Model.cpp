@@ -261,8 +261,10 @@ std::vector<int32_t> Model::findDims(const std::vector<float>& point) const {
   result.reserve(rank_);
   for (auto i = 0; i < rank_; ++i) {
     auto it = std::ranges::lower_bound(axis_[i], point[i]);
-    result.push_back(static_cast<int32_t>(
-        it == axis_[i].end() ? axis_[i].size() - 1 : it - axis_[i].begin()));
+    result.push_back(
+        static_cast<int32_t>(
+            it == axis_[i].end() ? axis_[i].size() - 1
+                                 : it - axis_[i].begin()));
   }
   return result;
 }

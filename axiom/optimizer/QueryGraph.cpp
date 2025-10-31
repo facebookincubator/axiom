@@ -252,7 +252,7 @@ JoinSide JoinEdge::sideOf(PlanObjectCP side, bool other) const {
       rightOptional_,
       false,
       false,
-      nullptr,
+      markColumn_,
       leftUnique_};
 }
 
@@ -447,6 +447,24 @@ void BaseTable::addFilter(ExprCP expr) {
   }
 
   queryCtx()->optimization()->filterUpdated(this);
+}
+
+PlanObjectSet JoinEdge::allTables() const {
+  PlanObjectSet set;
+
+  for (const auto* key : leftKeys_) {
+    set.unionSet(key->allTables());
+  }
+
+  for (const auto* key : rightKeys_) {
+    set.unionSet(key->allTables());
+  }
+
+  for (const auto* conjunct : filter_) {
+    set.unionSet(conjunct->allTables());
+  }
+
+  return set;
 }
 
 namespace {

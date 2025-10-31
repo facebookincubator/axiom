@@ -21,30 +21,59 @@
 
 #include <ranges>
 
+namespace lp = facebook::axiom::logical_plan;
+
 namespace facebook::axiom::optimizer {
 namespace {
-
-namespace lp = facebook::axiom::logical_plan;
 
 PathCP stepsToPath(std::span<const Step> steps) {
   return toPath(steps, true);
 }
-
-struct MarkFieldsAccessedContextArray {
-  std::array<const velox::RowType* const, 1> rowTypes;
-  std::array<const LogicalContextSource, 1> sources;
-
-  MarkFieldsAccessedContext toCtx() const {
-    return {rowTypes, sources};
-  }
-};
 
 struct MarkFieldsAccessedContextVector {
   std::vector<const velox::RowType*> rowTypes;
   std::vector<LogicalContextSource> sources;
 
   MarkFieldsAccessedContext toCtx() const {
-    return {rowTypes, sources};
+    return MarkFieldsAccessedContext{rowTypes, sources};
+  }
+
+  MarkFieldsAccessedContextVector& append(
+      const MarkFieldsAccessedContext& other) {
+    for (const auto& type : other.rowTypes) {
+      rowTypes.push_back(type);
+    }
+
+    for (const auto& source : other.sources) {
+      sources.push_back(source);
+    }
+
+    return *this;
+  }
+};
+
+struct MarkFieldsAccessedContextArray {
+  std::array<const velox::RowType* const, 1> rowTypes;
+  std::array<const LogicalContextSource, 1> sources;
+
+  MarkFieldsAccessedContext toCtx() const {
+    return MarkFieldsAccessedContext{rowTypes, sources};
+  }
+
+  MarkFieldsAccessedContextVector append(
+      const MarkFieldsAccessedContext& other) {
+    std::vector<const velox::RowType*> combinedRowTypes = {rowTypes.front()};
+    std::vector<LogicalContextSource> combinedSources = {sources.front()};
+
+    for (const auto& type : other.rowTypes) {
+      combinedRowTypes.push_back(type);
+    }
+
+    for (const auto& source : other.sources) {
+      combinedSources.push_back(source);
+    }
+
+    return {combinedRowTypes, combinedSources};
   }
 };
 
@@ -217,6 +246,7 @@ void ToGraph::markFieldAccessed(
   VELOX_FAIL("Should have found source for expr {}", fieldName);
 }
 
+// static
 std::optional<int32_t> ToGraph::stepToArg(
     const Step& step,
     const FunctionMetadata* metadata) {
@@ -445,14 +475,21 @@ void ToGraph::markSubfields(
     return;
   }
 
+  if (expr->isSubquery()) {
+    // TODO We may not necessarily need all outputs of the subquery.
+    markAllSubfields(*expr->as<lp::SubqueryExpr>()->subquery(), context);
+    return;
+  }
+
   VELOX_UNREACHABLE("Unhandled expr: {}", lp::ExprPrinter::toText(*expr));
 }
 
 void ToGraph::markColumnSubfields(
     const lp::LogicalPlanNodePtr& source,
     std::span<const lp::ExprPtr> columns,
-    bool isControl) {
-  const auto ctx = fromNode(source);
+    bool isControl,
+    const MarkFieldsAccessedContext& context) {
+  const auto ctx = fromNode(source).append(context);
   std::vector<Step> steps;
   for (const auto& column : columns) {
     markSubfields(column, steps, isControl, ctx.toCtx());
@@ -460,38 +497,57 @@ void ToGraph::markColumnSubfields(
   }
 }
 
-void ToGraph::markControl(const lp::LogicalPlanNode& node) {
+void ToGraph::markControl(
+    const lp::LogicalPlanNode& node,
+    const MarkFieldsAccessedContext& context) {
   const auto kind = node.kind();
   if (kind == lp::NodeKind::kJoin) {
     const auto* join = node.as<lp::JoinNode>();
     if (const auto& condition = join->condition()) {
       std::vector<Step> steps;
-      markSubfields(condition, steps, true, fromNodes(join->inputs()).toCtx());
+      markSubfields(
+          condition,
+          steps,
+          true,
+          fromNodes(join->inputs()).append(context).toCtx());
     }
 
   } else if (kind == lp::NodeKind::kUnnest) {
     const auto& unnest = node.as<lp::UnnestNode>();
-    markColumnSubfields(node.onlyInput(), unnest->unnestExpressions());
+    markColumnSubfields(
+        node.onlyInput(),
+        unnest->unnestExpressions(),
+        /*isControl=*/true,
+        context);
 
   } else if (kind == lp::NodeKind::kFilter) {
     const auto& filter = node.as<lp::FilterNode>();
-    markColumnSubfields(node.onlyInput(), std::array{filter->predicate()});
+    markColumnSubfields(
+        node.onlyInput(),
+        std::array{filter->predicate()},
+        /*isControl=*/true,
+        context);
 
   } else if (kind == lp::NodeKind::kTableWrite) {
     const auto& write = *node.as<lp::TableWriteNode>();
     // All columns are needed for write, but they are all not control columns.
-    markColumnSubfields(node.onlyInput(), write.columnExpressions(), false);
+    markColumnSubfields(
+        node.onlyInput(),
+        write.columnExpressions(),
+        /*isControl=*/false,
+        context);
 
   } else if (kind == lp::NodeKind::kAggregate) {
     const auto& agg = *node.as<lp::AggregateNode>();
-    markColumnSubfields(node.onlyInput(), agg.groupingKeys());
+    markColumnSubfields(
+        node.onlyInput(), agg.groupingKeys(), /*isControl=*/true, context);
 
   } else if (kind == lp::NodeKind::kSort) {
     const auto& order = *node.as<lp::SortNode>();
-    const auto ctx = fromNode(node.onlyInput());
+    const auto ctx = fromNode(node.onlyInput()).append(context);
     std::vector<Step> steps;
     for (const auto& key : order.ordering()) {
-      markSubfields(key.expression, steps, true, ctx.toCtx());
+      markSubfields(key.expression, steps, /*isControl=*/true, ctx.toCtx());
       VELOX_DCHECK(steps.empty());
     }
 
@@ -503,7 +559,8 @@ void ToGraph::markControl(const lp::LogicalPlanNode& node) {
       for (auto i = 0; i < set.outputType()->size(); ++i) {
         for (const auto& input : set.inputs()) {
           const auto ctx = fromNode(input);
-          markFieldAccessed(ctx.sources[0], i, steps, true, ctx.toCtx());
+          markFieldAccessed(
+              ctx.sources[0], i, steps, /*isControl=*/true, ctx.toCtx());
           VELOX_CHECK(steps.empty());
         }
       }
@@ -511,17 +568,19 @@ void ToGraph::markControl(const lp::LogicalPlanNode& node) {
   }
 
   for (const auto& source : node.inputs()) {
-    markControl(*source);
+    markControl(*source, context);
   }
 }
 
-void ToGraph::markAllSubfields(const lp::LogicalPlanNode& node) {
-  markControl(node);
+void ToGraph::markAllSubfields(
+    const lp::LogicalPlanNode& node,
+    const MarkFieldsAccessedContext& context) {
+  markControl(node, context);
 
   LogicalContextSource source = {.planNode = &node};
   std::vector<Step> steps;
   for (auto i = 0; i < node.outputType()->size(); ++i) {
-    markFieldAccessed(source, i, steps, false, {});
+    markFieldAccessed(source, i, steps, /*isControl=*/false, context);
     VELOX_CHECK(steps.empty());
   }
 }

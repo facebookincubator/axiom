@@ -308,7 +308,7 @@ class RelationPlanner : public AstVisitor {
           auto subqueryBuider = builder_;
 
           builder_ = std::move(builder);
-          return lp::Subquery(subqueryBuider->build());
+          return lp::Subquery(subqueryBuider->build(/*useIds=*/true));
         }
 
         VELOX_NYI(
@@ -400,6 +400,11 @@ class RelationPlanner : public AstVisitor {
         VELOX_USER_FAIL(
             "Unexpected IN predicate: {}",
             NodeTypeName::toName(valueList->type()));
+      }
+
+      case NodeType::kExistsPredicate: {
+        auto* exists = node->as<ExistsPredicate>();
+        return lp::Exists(toExpr(exists->subquery()));
       }
 
       case NodeType::kCast: {
@@ -829,6 +834,14 @@ class RelationPlanner : public AstVisitor {
 
     if (relation->is(NodeType::kTable)) {
       auto* table = relation->as<Table>();
+
+      auto withIt = withQueries_.find(table->name()->suffix());
+      if (withIt != withQueries_.end()) {
+        // TODO Change WithQuery to store Query and not Statement.
+        processQuery(dynamic_cast<Query*>(withIt->second->query().get()));
+        return;
+      }
+
       builder_->tableScan(table->name()->suffix());
       builder_->as(table->name()->suffix());
       return;
@@ -847,8 +860,9 @@ class RelationPlanner : public AstVisitor {
         std::vector<lp::ExprApi> renames;
         renames.reserve(numColumns);
         for (auto i = 0; i < numColumns; ++i) {
-          renames.push_back(lp::Col(builder_->findOrAssignOutputNameAt(i))
-                                .as(columnAliases.at(i)->value()));
+          renames.push_back(
+              lp::Col(builder_->findOrAssignOutputNameAt(i))
+                  .as(columnAliases.at(i)->value()));
         }
 
         builder_->project(renames);
@@ -981,13 +995,14 @@ class RelationPlanner : public AstVisitor {
       return false;
     }
 
-    addGroupBy(selectItems, {});
+    addGroupBy(selectItems, {}, nullptr);
     return true;
   }
 
   void addGroupBy(
       const std::vector<SelectItemPtr>& selectItems,
-      const std::vector<GroupingElementPtr>& groupingElements) {
+      const std::vector<GroupingElementPtr>& groupingElements,
+      const ExpressionPtr& having) {
     // Go over grouping keys and collect expressions. Ordinals refer to output
     // columns (selectItems). Non-ordinals refer to input columns.
 
@@ -1041,7 +1056,18 @@ class RelationPlanner : public AstVisitor {
         }
       }
 
+      if (singleColumn->alias() != nullptr) {
+        expr = expr.as(singleColumn->alias()->value());
+      }
+
       projections.emplace_back(expr);
+    }
+
+    std::optional<lp::ExprApi> filter;
+    if (having != nullptr) {
+      lp::ExprApi expr = toExpr(having);
+      findAggregates(expr.expr(), aggregates);
+      filter = expr;
     }
 
     std::vector<lp::PlanBuilder::AggregateOptions> options(aggregates.size());
@@ -1065,6 +1091,11 @@ class RelationPlanner : public AstVisitor {
       ++index;
     }
 
+    if (filter.has_value()) {
+      filter = replaceInputs(filter.value().expr(), inputs);
+      builder_->filter(filter.value());
+    }
+
     // Go over SELECT expressions and replace sub-expressions matching 'inputs'
     // with column references.
 
@@ -1083,6 +1114,12 @@ class RelationPlanner : public AstVisitor {
       for (auto i = 0; i < projections.size(); ++i) {
         if (i < flatInputs.size()) {
           if (projections.at(i).expr() != flatInputs.at(i)) {
+            identityProjection = false;
+            break;
+          }
+
+          const auto& alias = projections.at(i).alias();
+          if (alias.has_value() && alias.value() != outputNames.at(i)) {
             identityProjection = false;
             break;
           }
@@ -1132,6 +1169,12 @@ class RelationPlanner : public AstVisitor {
   }
 
   void processQuery(Query* query) {
+    if (const auto& with = query->with()) {
+      for (const auto& query : with->queries()) {
+        withQueries_.emplace(query->name()->value(), query);
+      }
+    }
+
     query->queryBody()->accept(this);
 
     addOrderBy(query->orderBy());
@@ -1156,8 +1199,7 @@ class RelationPlanner : public AstVisitor {
       VELOX_USER_CHECK(
           !groupBy->isDistinct(),
           "GROUP BY with DISTINCT is not supported yet");
-      addGroupBy(selectItems, groupBy->groupingElements());
-      addFilter(node->having());
+      addGroupBy(selectItems, groupBy->groupingElements(), node->having());
     } else {
       if (isSelectAll(selectItems)) {
         // SELECT *. No project needed.
@@ -1202,6 +1244,7 @@ class RelationPlanner : public AstVisitor {
 
   lp::PlanBuilder::Context context_;
   std::shared_ptr<lp::PlanBuilder> builder_;
+  std::unordered_map<std::string, std::shared_ptr<WithQuery>> withQueries_;
 };
 
 } // namespace

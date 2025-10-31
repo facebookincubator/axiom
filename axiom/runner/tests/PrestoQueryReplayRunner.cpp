@@ -35,8 +35,9 @@ std::vector<velox::RowVectorPtr> readCursor(
   // vectors to 'pool' that has longer lifetime.
   std::vector<velox::RowVectorPtr> result;
   while (auto rows = runner->next()) {
-    result.push_back(std::dynamic_pointer_cast<velox::RowVector>(
-        velox::BaseVector::copy(*rows, pool)));
+    result.push_back(
+        std::dynamic_pointer_cast<velox::RowVector>(
+            velox::BaseVector::copy(*rows, pool)));
   }
   return result;
 }

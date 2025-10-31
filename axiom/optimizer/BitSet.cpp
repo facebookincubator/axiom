@@ -52,15 +52,21 @@ bool BitSet::operator==(const BitSet& other) const {
 bool BitSet::isSubset(const BitSet& super) const {
   auto l1 = bits_.size();
   auto l2 = super.bits_.size();
-  for (unsigned i = 0; i < l1 && i < l2; ++i) {
-    if (bits_[i] & ~super.bits_[i]) {
-      return false;
-    }
+  if (!velox::bits::isSubset(
+          bits_.data(), super.bits_.data(), 0, std::min(l1, l2) * 64)) {
+    return false;
   }
   if (l2 < l1) {
     return isZero(bits_, l2, l1);
   }
   return true;
+}
+
+bool BitSet::hasIntersection(const BitSet& other) const {
+  auto l1 = bits_.size();
+  auto l2 = other.bits_.size();
+  return velox::bits::hasIntersection(
+      bits_.data(), other.bits_.data(), 0, std::min(l1, l2) * 64);
 }
 
 size_t BitSet::hash() const {

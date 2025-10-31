@@ -52,8 +52,9 @@ ColumnGroupCP SchemaTable::addIndex(
     const connector::TableLayout& layout,
     Distribution distribution,
     ColumnVector columns) {
-  return columnGroups.emplace_back(make<ColumnGroup>(
-      *this, layout, std::move(distribution), std::move(columns)));
+  return columnGroups.emplace_back(
+      make<ColumnGroup>(
+          *this, layout, std::move(distribution), std::move(columns)));
 }
 
 ColumnCP SchemaTable::findColumn(Name name) const {

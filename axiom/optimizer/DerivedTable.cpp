@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -438,19 +439,23 @@ JoinEdgeP importedJoin(
   return newJoin;
 }
 
-// Returns a copy of 'expr', replacing instances of columns in 'outer' with
-// the corresponding expression from 'inner'
-ExprCP
-importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
+// Returns a copy of 'expr', replacing instances of columns in 'source' with
+// the corresponding expression from 'target'
+// @tparam T ColumnVector or ExprVector
+// @tparam U ColumnVector or ExprVector
+// @param source Columns to replace. 1:1 with 'target.
+// @param target Replacements.
+template <typename T, typename U>
+ExprCP replaceInputs(ExprCP expr, const T& source, const U& target) {
   if (!expr) {
     return nullptr;
   }
 
   switch (expr->type()) {
     case PlanType::kColumnExpr:
-      for (auto i = 0; i < inner.size(); ++i) {
-        if (outer[i] == expr) {
-          return inner[i];
+      for (auto i = 0; i < source.size(); ++i) {
+        if (source[i] == expr) {
+          return target[i];
         }
       }
       return expr;
@@ -462,7 +467,7 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
       FunctionSet functions;
       bool anyChange = false;
       for (auto i = 0; i < children.size(); ++i) {
-        newChildren[i] = importExpr(children[i]->as<Expr>(), outer, inner);
+        newChildren[i] = replaceInputs(children[i]->as<Expr>(), source, target);
         anyChange |= newChildren[i] != children[i];
         if (newChildren[i]->isFunction()) {
           functions = functions | newChildren[i]->as<Call>()->functions();
@@ -483,6 +488,14 @@ importExpr(ExprCP expr, const ColumnVector& outer, const ExprVector& inner) {
 }
 
 } // namespace
+
+ExprCP DerivedTable::exportExpr(ExprCP expr) {
+  return replaceInputs(expr, exprs, columns);
+}
+
+ExprCP DerivedTable::importExpr(ExprCP expr) {
+  return replaceInputs(expr, columns, exprs);
+}
 
 void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
   if (tables.size() == 1 && tables[0]->is(PlanType::kDerivedTableNode)) {
@@ -519,7 +532,7 @@ void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
     if (side.keys.size() > 1 || !join->filter().empty()) {
       continue;
     }
-    auto innerKey = importExpr(side.keys[0], outer, inner);
+    auto innerKey = replaceInputs(side.keys[0], outer, inner);
     VELOX_DCHECK(innerKey);
     if (innerKey->containsFunction(FunctionSet::kAggregate)) {
       // If the join key is an aggregate, the join can't be moved below the agg.
@@ -868,7 +881,7 @@ void DerivedTable::distributeConjuncts() {
       // names. Pre/post agg names may differ for dts in set
       // operations. If already in pre-agg names, no-op.
       if (having[i]->columns().isSubset(grouping)) {
-        conjuncts.push_back(importExpr(
+        conjuncts.push_back(replaceInputs(
             having[i], aggregation->columns(), aggregation->groupingKeys()));
         having.erase(having.begin() + i);
         --i;
@@ -925,8 +938,7 @@ void DerivedTable::distributeConjuncts() {
         for (auto childIdx = 0; childIdx < numChildren; ++childIdx) {
           auto childDt =
               numChildren == 1 ? innerDt : innerDt->children[childIdx];
-          auto imported =
-              importExpr(conjuncts[i], childDt->columns, childDt->exprs);
+          auto imported = childDt->importExpr(conjuncts[i]);
           if (childDt->aggregation) {
             childDt->having.push_back(imported);
           } else {
@@ -954,7 +966,7 @@ void DerivedTable::distributeConjuncts() {
       // cases, leave the conjunct in place, to be evaluated when its
       // dependences are known.
       if (queryCtx()->optimization()->isJoinEquality(
-              conjuncts[i], tables, left, right)) {
+              conjuncts[i], tables[0], tables[1], left, right)) {
         auto join = findJoin(this, tables, true);
         if (join->isInner()) {
           if (left->is(PlanType::kColumnExpr) &&
@@ -1025,45 +1037,7 @@ PlanP DerivedTable::bestInitialPlan() const {
 }
 
 std::string DerivedTable::toString() const {
-  std::stringstream out;
-  out << "{dt " << cname << " from ";
-  for (auto& table : tables) {
-    out << table->toString() << " ";
-  }
-
-  if (!joins.empty()) {
-    out << " joins ";
-    for (auto& join : joins) {
-      out << join->toString();
-    }
-  }
-
-  if (!conjuncts.empty()) {
-    out << " where " << conjunctsToString(conjuncts);
-  }
-
-  if (hasAggregation()) {
-    out << " group by " << aggregation->groupingKeys().size() << " keys, "
-        << aggregation->aggregates().size() << " aggregates ";
-
-    if (!having.empty()) {
-      out << " having " << conjunctsToString(having);
-    }
-  }
-
-  if (hasOrderBy()) {
-    out << " order by ";
-  }
-
-  if (hasLimit()) {
-    if (offset > 0) {
-      out << " offset " << offset << " ";
-    }
-    out << " limit " << limit;
-  }
-
-  out << "}";
-  return out.str();
+  return DerivedTablePrinter::toText(*this);
 }
 
 void DerivedTable::addJoinedBy(JoinEdgeP join) {

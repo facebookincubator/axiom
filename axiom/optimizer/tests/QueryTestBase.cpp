@@ -230,8 +230,9 @@ void QueryTestBase::checkSame(
   }
 
   for (const auto& test : testOptions) {
-    SCOPED_TRACE(fmt::format(
-        "workers: {}, drivers: {}", test.numWorkers, test.numDrivers));
+    SCOPED_TRACE(
+        fmt::format(
+            "workers: {}, drivers: {}", test.numWorkers, test.numDrivers));
 
     auto plan = planVelox(planNode, test);
 

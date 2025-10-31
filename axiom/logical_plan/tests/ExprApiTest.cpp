@@ -70,12 +70,13 @@ TEST_F(ExprApiTest, lambda) {
 }
 
 TEST_F(ExprApiTest, subquery) {
-  auto subquery = Subquery(PlanBuilder()
-                               .values(
-                                   ROW({"a"}, {BIGINT()}),
-                                   std::vector<Variant>{Variant::row({123LL})})
-                               .aggregate({}, {"sum(a) as x"})
-                               .build());
+  auto subquery = Subquery(
+      PlanBuilder()
+          .values(
+              ROW({"a"}, {BIGINT()}),
+              std::vector<Variant>{Variant::row({123LL})})
+          .aggregate({}, {"sum(a) as x"})
+          .build());
 
   EXPECT_EQ(toString(Col("a") < subquery), "lt(\"a\",<subquery>)");
   EXPECT_EQ(subquery.name(), "x");
@@ -93,20 +94,22 @@ TEST_F(ExprApiTest, alias) {
 }
 
 TEST_F(ExprApiTest, inSubquery) {
-  auto subquery = Subquery(PlanBuilder()
-                               .values(
-                                   ROW({"a"}, {BIGINT()}),
-                                   std::vector<Variant>{Variant::row({123LL})})
-                               .build());
+  auto subquery = Subquery(
+      PlanBuilder()
+          .values(
+              ROW({"a"}, {BIGINT()}),
+              std::vector<Variant>{Variant::row({123LL})})
+          .build());
   EXPECT_EQ(toString(In(Col("a"), subquery)), "in(\"a\",<subquery>)");
 }
 
 TEST_F(ExprApiTest, existsSubquery) {
-  auto subquery = Subquery(PlanBuilder()
-                               .values(
-                                   ROW({"a"}, {BIGINT()}),
-                                   std::vector<Variant>{Variant::row({123LL})})
-                               .build());
+  auto subquery = Subquery(
+      PlanBuilder()
+          .values(
+              ROW({"a"}, {BIGINT()}),
+              std::vector<Variant>{Variant::row({123LL})})
+          .build());
   EXPECT_EQ(toString(Exists(subquery)), "exists(<subquery>)");
 }
 

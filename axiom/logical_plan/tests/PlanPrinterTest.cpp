@@ -1258,8 +1258,10 @@ TEST_F(PlanPrinterTest, tableWrite) {
     EXPECT_THAT(
         lines,
         testing::ElementsAre(
-            testing::Eq(fmt::format(
-                "- TABLE_WRITE {} [1]: 1 fields: rows BIGINT", expectedKind)),
+            testing::Eq(
+                fmt::format(
+                    "- TABLE_WRITE {} [1]: 1 fields: rows BIGINT",
+                    expectedKind)),
             testing::Eq("      table: output_table"),
             testing::Eq("      connector: test"),
             testing::Eq("      columns: 2"),

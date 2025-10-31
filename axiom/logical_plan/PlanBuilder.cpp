@@ -1090,8 +1090,7 @@ AggregateExprPtr ExprResolver::resolveAggregateTypes(
     inputTypes.push_back(input->type());
   }
 
-  if (auto type =
-          velox::exec::resolveAggregateFunction(name, inputTypes).first) {
+  if (auto type = velox::exec::resolveResultType(name, inputTypes)) {
     return std::make_shared<AggregateExpr>(
         type, name, inputs, filter, ordering, distinct);
   }
@@ -1456,7 +1455,7 @@ std::string PlanBuilder::findOrAssignOutputNameAt(size_t index) const {
   return id;
 }
 
-LogicalPlanNodePtr PlanBuilder::build() {
+LogicalPlanNodePtr PlanBuilder::build(bool useIds) {
   VELOX_USER_CHECK_NOT_NULL(node_);
   VELOX_USER_CHECK_NOT_NULL(outputMapping_);
 
@@ -1476,20 +1475,24 @@ LogicalPlanNodePtr PlanBuilder::build() {
 
   for (auto i = 0; i < rowType->size(); i++) {
     const auto& id = rowType->nameOf(i);
+    const auto& type = rowType->childAt(i);
 
-    auto it = names.find(id);
-    if (it != names.end()) {
-      outputNames.push_back(it->second);
+    if (useIds) {
+      exprs.push_back(std::make_shared<InputReferenceExpr>(type, id));
     } else {
-      outputNames.push_back(id);
-    }
+      auto it = names.find(id);
+      if (it != names.end()) {
+        outputNames.push_back(it->second);
+      } else {
+        outputNames.push_back(id);
+      }
 
-    if (id != outputNames.back()) {
-      needRename = true;
-    }
+      if (id != outputNames.back()) {
+        needRename = true;
+      }
 
-    exprs.push_back(
-        std::make_shared<InputReferenceExpr>(rowType->childAt(i), id));
+      exprs.push_back(std::make_shared<InputReferenceExpr>(type, id));
+    }
   }
 
   if (needRename) {

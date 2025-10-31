@@ -14270,8 +14270,9 @@ PrestoSqlParser::BooleanExpressionContext* PrestoSqlParser::booleanExpression(
             _input, 174, _ctx)) {
           case 1: {
             setState(1373);
-            predicate(antlrcpp::downCast<PredicatedContext*>(_localctx)
-                          ->valueExpressionContext);
+            predicate(
+                antlrcpp::downCast<PredicatedContext*>(_localctx)
+                    ->valueExpressionContext);
             break;
           }
 

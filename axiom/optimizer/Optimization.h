@@ -131,10 +131,11 @@ class Optimization {
 
   bool isJoinEquality(
       ExprCP expr,
-      std::vector<PlanObjectP>& tables,
+      PlanObjectCP leftTable,
+      PlanObjectCP rightTable,
       ExprCP& left,
       ExprCP& right) const {
-    return toGraph_.isJoinEquality(expr, tables, left, right);
+    return toGraph_.isJoinEquality(expr, leftTable, rightTable, left, right);
   }
 
   const SessionPtr& session() const {

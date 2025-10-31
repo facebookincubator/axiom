@@ -60,7 +60,7 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
 
   void checkTpch(int32_t query, const lp::LogicalPlanNodePtr& logicalPlan) {
     auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
-    checkResults(logicalPlan, referencePlan);
+    checkSame(logicalPlan, referencePlan);
   }
 
   static std::string readSqlFromFile(const std::string& filePath) {
@@ -109,9 +109,9 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
   }
 
   void checkTpchSql(int32_t query) {
-    auto logicalPlan = parseTpchSql(query);
+    auto sql = readTpchSql(query);
     auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
-    checkResults(logicalPlan, referencePlan);
+    checkResults(sql, referencePlan);
   }
 
   std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
@@ -165,8 +165,7 @@ TEST_F(TpchPlanTest, q01) {
 }
 
 TEST_F(TpchPlanTest, q02) {
-  // TODO Add support for subqueries.
-  parseTpchSql(2);
+  checkTpchSql(2);
 }
 
 TEST_F(TpchPlanTest, q03) {
@@ -193,9 +192,8 @@ TEST_F(TpchPlanTest, q03) {
   checkTpchSql(3);
 }
 
-TEST_F(TpchPlanTest, DISABLED_q04) {
-  // Incorrect with distributed plan at larger scales.
-  // TODO Implement.
+TEST_F(TpchPlanTest, q04) {
+  checkTpchSql(4);
 }
 
 TEST_F(TpchPlanTest, q05) {
@@ -331,13 +329,6 @@ TEST_F(TpchPlanTest, q08) {
 }
 
 TEST_F(TpchPlanTest, q09) {
-  // TODO Remove this after fixing
-  // https://github.com/facebookincubator/axiom/issues/530
-  optimizerOptions_.enableReducingExistences = false;
-  SCOPE_EXIT {
-    optimizerOptions_.enableReducingExistences = true;
-  };
-
   lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
   auto logicalPlan =
       lp::PlanBuilder(context)
@@ -429,32 +420,9 @@ TEST_F(TpchPlanTest, q11) {
           .orderBy({"value desc"})
           .build();
 
-  // TODO Make above plan with a non-correlated subquery work.
-  logicalPlan =
-      lp::PlanBuilder(context)
-          .from({"partsupp", "supplier", "nation"})
-          .filter(
-              "ps_suppkey = s_suppkey and s_nationkey = n_nationkey and n_name = 'GERMANY'")
-          .aggregate(
-              {"ps_partkey"},
-              {"sum(ps_supplycost * ps_availqty::double) as value"})
-          .crossJoin(
-              lp::PlanBuilder(context)
-                  .from({"partsupp", "supplier", "nation"})
-                  .filter(
-                      "ps_suppkey = s_suppkey and s_nationkey = n_nationkey and n_name = 'GERMANY'")
-                  .aggregate(
-                      {}, {"sum(ps_supplycost * ps_availqty::double) as total"})
-                  .project({"total * 0.0001 as threshold"}))
-          .filter("value > threshold")
-          .orderBy({"value desc"})
-          .project({"ps_partkey", "value"})
-          .build();
-
   checkTpch(11, logicalPlan);
 
-  // TODO Add subquery support to the optimizer.
-  // checkTpchSql(11);
+  checkTpchSql(11);
 }
 
 TEST_F(TpchPlanTest, q12) {
@@ -524,21 +492,20 @@ TEST_F(TpchPlanTest, q14) {
   checkTpchSql(14);
 }
 
-TEST_F(TpchPlanTest, DISABLED_q15) {
-  // TODO Implement.
+TEST_F(TpchPlanTest, q15) {
+  checkTpchSql(15);
 }
 
-TEST_F(TpchPlanTest, DISABLED_q16) {
-  // TODO Implement.
+TEST_F(TpchPlanTest, q16) {
+  checkTpchSql(16);
 }
 
 TEST_F(TpchPlanTest, q17) {
-  // TODO Implement.
-  parseTpchSql(17);
+  checkTpchSql(17);
 }
 
-TEST_F(TpchPlanTest, DISABLED_q18) {
-  // TODO Implement.
+TEST_F(TpchPlanTest, q18) {
+  checkTpchSql(18);
 }
 
 TEST_F(TpchPlanTest, q19) {
@@ -577,16 +544,24 @@ TEST_F(TpchPlanTest, q19) {
   checkTpchSql(19);
 }
 
-TEST_F(TpchPlanTest, DISABLED_q20) {
-  // TODO Implement.
+TEST_F(TpchPlanTest, q20) {
+  // TODO Fix the plan when 'enableReducingExistences' is true.
+  const bool originalEnableReducingExistences =
+      optimizerOptions_.enableReducingExistences;
+  optimizerOptions_.enableReducingExistences = false;
+  SCOPE_EXIT {
+    optimizerOptions_.enableReducingExistences =
+        originalEnableReducingExistences;
+  };
+  checkTpchSql(20);
 }
 
-TEST_F(TpchPlanTest, DISABLED_q21) {
-  // TODO Implement.
+TEST_F(TpchPlanTest, q21) {
+  checkTpchSql(21);
 }
 
-TEST_F(TpchPlanTest, DISABLED_q22) {
-  // TODO Implement.
+TEST_F(TpchPlanTest, q22) {
+  checkTpchSql(22);
 }
 
 } // namespace

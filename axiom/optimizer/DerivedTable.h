@@ -167,6 +167,16 @@ struct DerivedTable : public PlanObject {
       const std::vector<PlanObjectSet>& existences,
       float existsFanout = 1);
 
+  /// Return a copy of 'expr', replacing references to this DT's 'columns' with
+  /// corresponding 'exprs'.
+  ExprCP importExpr(ExprCP expr);
+
+  /// Return a copy of 'expr', replacing references to this DT's 'exprs' with
+  /// corresponding 'columns'.
+  /// TODO Handle cases when 'expr' contains columns that are not exported by
+  /// the DT.
+  ExprCP exportExpr(ExprCP expr);
+
   bool isTable() const override {
     return true;
   }

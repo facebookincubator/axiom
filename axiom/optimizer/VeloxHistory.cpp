@@ -182,22 +182,24 @@ void predictionWarnings(
     historyKey = it->second;
   }
   if (actualRows == 0 || predictedRows == 0) {
-    logPrediction(fmt::format(
-        "Node {} actual={} predicted={} key={}",
-        id,
-        actualRows,
-        predictedRows,
-        historyKey));
+    logPrediction(
+        fmt::format(
+            "Node {} actual={} predicted={} key={}",
+            id,
+            actualRows,
+            predictedRows,
+            historyKey));
   } else {
     auto ratio = static_cast<float>(actualRows) / predictedRows;
     auto threshold = FLAGS_cardinality_warning_threshold;
     if (ratio < 1 / threshold || ratio > threshold) {
-      logPrediction(fmt::format(
-          "Node {} actual={} predicted={} key={}",
-          id,
-          actualRows,
-          predictedRows,
-          historyKey));
+      logPrediction(
+          fmt::format(
+              "Node {} actual={} predicted={} key={}",
+              id,
+              actualRows,
+              predictedRows,
+              historyKey));
     }
   }
 }

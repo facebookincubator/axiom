@@ -180,14 +180,16 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
 
   PlanObjectSet result;
 
-  auto addExpr = [&](ExprCP expr) {
+  auto translateExpr = [&](ExprCP expr) {
     auto it = exprToColumn.find(expr);
     if (it != exprToColumn.end()) {
-      result.unionColumns(it->second);
+      return it->second;
     } else {
-      result.unionColumns(expr);
+      return expr;
     }
   };
+
+  auto addExpr = [&](ExprCP expr) { result.unionColumns(translateExpr(expr)); };
 
   auto addExprs = [&](ExprVector exprs) {
     for (auto expr : exprs) {
@@ -197,6 +199,31 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
 
   // Joins.
   for (auto join : dt->joins) {
+    if (join->rightExists() || join->rightNotExists()) {
+      if (placed.contains(join->rightTable())) {
+        continue;
+      }
+
+      // For an unplaced exists/not exists downstream, we need the left side
+      // columns but not the right side since nothing is projected out from the
+      // right side.
+      addExprs(join->leftKeys());
+
+      if (!join->filter().empty()) {
+        // If there is a filter, then the filter columns that do not come from
+        // the right side are needed.
+        for (auto& conjunct : join->filter()) {
+          translateExpr(conjunct)->columns().forEach<Column>(
+              [&](ColumnCP column) {
+                if (column->relation() != join->rightTable()) {
+                  result.add(column);
+                }
+              });
+        }
+      }
+      continue;
+    }
+
     bool addFilter = false;
     if (!placed.contains(join->rightTable())) {
       addFilter = true;

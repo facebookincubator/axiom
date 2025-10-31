@@ -180,8 +180,9 @@ class HiveConnectorMetadata : public ConnectorMetadata {
   explicit HiveConnectorMetadata(
       velox::connector::hive::HiveConnector* hiveConnector)
       : hiveConnector_(hiveConnector),
-        hiveConfig_(std::make_shared<velox::connector::hive::HiveConfig>(
-            hiveConnector->connectorConfig())) {}
+        hiveConfig_(
+            std::make_shared<velox::connector::hive::HiveConfig>(
+                hiveConnector->connectorConfig())) {}
 
   velox::connector::ColumnHandlePtr createColumnHandle(
       const ConnectorSessionPtr& session,
