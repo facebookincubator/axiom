@@ -594,17 +594,35 @@ void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
 }
 
 void DerivedTable::flattenDt(const DerivedTable* dt) {
-  tables = dt->tables;
+  // TODO: std::move(...)?
+  VELOX_DCHECK_NOT_NULL(dt);
+  VELOX_DCHECK_EQ(tables.size(), 1);
+  VELOX_DCHECK(tables[0] == dt);
+  VELOX_DCHECK_EQ(cardinality, dt->cardinality);
   cname = dt->cname;
-  tableSet = dt->tableSet;
-  joins = dt->joins;
-  joinOrder = dt->joinOrder;
   columns = dt->columns;
   exprs = dt->exprs;
-  fullyImported = dt->fullyImported;
+  VELOX_DCHECK(joinedBy == dt->joinedBy);
+  tables = dt->tables;
+  tableSet = dt->tableSet;
+  VELOX_DCHECK(setOp == dt->setOp);
+  VELOX_DCHECK(children == dt->children);
+  VELOX_DCHECK(singleRowDts == dt->singleRowDts);
+  VELOX_DCHECK(startTables == dt->startTables);
+  joins = dt->joins;
+  VELOX_DCHECK(conjuncts == dt->conjuncts);
+  // TODO: Why unionSet here?
   importedExistences.unionSet(dt->importedExistences);
+  fullyImported = dt->fullyImported;
+  VELOX_DCHECK_EQ(noImportOfExists, dt->noImportOfExists);
+  joinOrder = dt->joinOrder;
   aggregation = dt->aggregation;
   having = dt->having;
+  VELOX_DCHECK(orderKeys == dt->orderKeys);
+  VELOX_DCHECK(orderTypes == dt->orderTypes);
+  VELOX_DCHECK(limit == dt->limit);
+  VELOX_DCHECK(offset == dt->offset);
+  VELOX_DCHECK(write == dt->write);
 }
 
 void DerivedTable::makeProjection(const ExprVector& exprs) {
