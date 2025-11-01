@@ -278,7 +278,7 @@ class ToGraph {
   // Adds a JoinEdge corresponding to 'join' to the enclosing DerivedTable.
   void translateJoin(const logical_plan::JoinNode& join);
 
-  void translateSetJoin(const logical_plan::SetNode& set, DerivedTableP setDt);
+  void translateSetJoin(const logical_plan::SetNode& set);
 
   // Updates the distribution and column stats of 'setDt', which must
   // be a union. 'innerDt' should be null on top level call. Adds up
@@ -287,15 +287,14 @@ class ToGraph {
       DerivedTableP setDt,
       DerivedTableP innerDt = nullptr);
 
-  DerivedTableP translateUnion(
-      const logical_plan::SetNode& set,
-      DerivedTableP setDt,
-      bool isTopLevel,
+  void translateUnionInput(
+      const folly::F14FastMap<std::string, ExprCP>& renames,
+      const logical_plan::LogicalPlanNode& input,
       bool& isLeftLeaf);
 
-  void translateUnnest(
-      const logical_plan::UnnestNode& logicalUnnest,
-      bool isNewDt);
+  void translateUnion(const logical_plan::SetNode& set);
+
+  void addUnnest(const logical_plan::UnnestNode& unnest);
 
   AggregationPlanCP translateAggregation(
       const logical_plan::AggregateNode& aggregation);
@@ -406,19 +405,19 @@ class ToGraph {
   // DerivedTable. Done for joins to the right of non-inner joins,
   // group bys as non-top operators, whenever descendents of 'node'
   // are not freely reorderable with its parents' descendents.
-  // @return Newly created DT.
-  DerivedTableP wrapInDt(const logical_plan::LogicalPlanNode& node);
+  void wrapInDt(const logical_plan::LogicalPlanNode& node, bool unordered);
 
   // Start new DT and add 'currentDt_' as a child.
   // Set 'currentDt_' to the new DT.
-  // @return The finalized DT (which is now a child of 'currentDt_').
-  DerivedTableP finalizeDt(
+  void finalizeDt(
       const logical_plan::LogicalPlanNode& node,
       DerivedTableP outerDt = nullptr);
 
-  // Finalizes 'currentDt_' if it contains aggregation, limit or anything else
-  // that must be wrapped in a DT before being used as a left side of a join.
-  void finalizeLeftDtForJoin(const logical_plan::LogicalPlanNode& node);
+  // Same as finalizeDt but requires 'outerDt' to be non-null.
+  // And don't check that correlated conjuncts are empty.
+  void finalizeSubqueryDt(
+      const logical_plan::LogicalPlanNode& node,
+      DerivedTableP outerDt);
 
   // Adds a column 'name' from current DerivedTable to the 'dt'.
   void addDtColumn(DerivedTableP dt, std::string_view name);
@@ -461,9 +460,6 @@ class ToGraph {
 
   // Innermost DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP currentDt_{nullptr};
-
-  // True if wrapping a nondeterministic filter inside a DT in ToGraph.
-  bool isNondeterministicWrap_{false};
 
   // Source PlanNode when inside addProjection() or 'addFilter().
   const logical_plan::LogicalPlanNode* exprSource_{nullptr};
