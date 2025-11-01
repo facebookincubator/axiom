@@ -822,17 +822,16 @@ TEST_F(PlanTest, unionJoin) {
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan("partsupp", lte("ps_availqty", 999))
-            .localPartition(
+            .localPartition({
                 core::PlanMatcherBuilder()
                     .hiveScan("partsupp", gte("ps_availqty", 2001))
                     .project()
-                    .localPartition(
-                        core::PlanMatcherBuilder()
-                            .hiveScan(
-                                "partsupp", between("ps_availqty", 1200, 1400))
-                            .project()
-                            .build())
-                    .build())
+                    .build(),
+                core::PlanMatcherBuilder()
+                    .hiveScan("partsupp", between("ps_availqty", 1200, 1400))
+                    .project()
+                    .build(),
+            })
             .hashJoin(
                 core::PlanMatcherBuilder()
                     .hiveScan("part", lt("p_retailprice", 1100.0))
@@ -1426,6 +1425,114 @@ TEST_F(PlanTest, lambdaArgs) {
 
   auto matcher = core::PlanMatcherBuilder{}.tableScan("t").project().build();
   AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(PlanTest, joinWithFilterOverLimit) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
+
+  lp::PlanBuilder::Context ctx(kTestConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(ctx)
+          .tableScan("t")
+          .limit(100)
+          .filter("b > 50")
+          .join(
+              lp::PlanBuilder(ctx).tableScan("u").limit(50).filter("y < 100"),
+              "a = x",
+              lp::JoinType::kInner)
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("t")
+                       .limit()
+                       .filter("b > 50")
+                       .hashJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("u")
+                               .limit()
+                               .filter("y < 100")
+                               .build())
+                       .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(PlanTest, outerJoinWithInnerJoin) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->addTable("v", ROW({"vx", "vy", "vz"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
+
+  lp::PlanBuilder::Context ctx(kTestConnectorId);
+  auto logicalPlan = lp::PlanBuilder(ctx)
+                         .tableScan("t")
+                         .filter("b > 50")
+                         .join(
+                             lp::PlanBuilder(ctx).tableScan("u").join(
+                                 lp::PlanBuilder(ctx).tableScan("v"),
+                                 "x = vx",
+                                 lp::JoinType::kInner),
+                             "a = x",
+                             lp::JoinType::kLeft)
+                         .build();
+
+  {
+    SCOPED_TRACE("left join with inner join on right");
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .filter("b > 50")
+            .hashJoin(
+                core::PlanMatcherBuilder()
+                    .tableScan("u")
+                    .hashJoin(core::PlanMatcherBuilder().tableScan("v").build())
+
+                    .build())
+            .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  logicalPlan = lp::PlanBuilder(ctx)
+                    .tableScan("t")
+                    .filter("b > 50")
+                    .aggregate({"a", "b"}, {"sum(c)"})
+                    .join(
+                        lp::PlanBuilder(ctx)
+                            .tableScan("u")
+                            .join(
+                                lp::PlanBuilder(ctx).tableScan("v"),
+                                "x = vx",
+                                lp::JoinType::kInner)
+                            .filter("not(x = vy)"),
+                        "a = x",
+                        lp::JoinType::kLeft)
+                    .build();
+
+  {
+    SCOPED_TRACE("Aggregation left join filter over inner join");
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .filter()
+            .aggregation()
+            .hashJoin(
+                core::PlanMatcherBuilder()
+                    .tableScan("u")
+                    .hashJoin(core::PlanMatcherBuilder().tableScan("v").build())
+                    .filter()
+                    .build())
+            .project()
+            .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 #undef AXIOM_ASSERT_PLAN

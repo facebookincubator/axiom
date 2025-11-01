@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/Schema.h"
 
 /// Plan candidates.
@@ -34,6 +35,11 @@ struct PlanCost {
 
   /// Number of output rows.
   float cardinality{1};
+
+  /// Total cost of the plan with cost of reshuffling included.
+  float totalCost(float shuffleCostPerRow) const {
+    return cost + shuffleCostPerRow * cardinality;
+  }
 
   std::string toString() const {
     return fmt::format("cost: {}, cardinality: {}", cost, cardinality);
@@ -100,6 +106,7 @@ enum class RelType {
   kJoin,
   kHashBuild,
   kAggregation,
+  kWindow,
   kOrderBy,
   kUnionAll,
   kLimit,
@@ -534,6 +541,36 @@ struct Aggregation : public RelationOp {
   const ExprVector groupingKeys;
   const AggregateVector aggregates;
   const velox::core::AggregationNode::Step step;
+
+  const QGString& historyKey() const override;
+
+  std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+};
+
+/// Represents window functions with the same window specification.
+struct WindowOp : public RelationOp {
+  WindowOp(
+      RelationOpPtr input,
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes,
+      WindowVector windows,
+      ColumnVector columns);
+
+  const ExprVector partitionKeys;
+  const ExprVector orderKeys;
+  const OrderTypeVector orderTypes;
+  const WindowVector windows;
+
+  ColumnCP windowExprColumn(size_t windowIndex) const {
+    const auto index = input_->columns().size() + windowIndex;
+    VELOX_CHECK_LT(index, columns_.size());
+    return columns_[index];
+  }
 
   const QGString& historyKey() const override;
 

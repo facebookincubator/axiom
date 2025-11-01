@@ -18,6 +18,7 @@
 #include <iostream>
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
+#include "axiom/logical_plan/Utils.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
@@ -179,7 +180,7 @@ ExprCP ToGraph::tryFoldConstant(
     auto typedExpr = queryCtx()->optimization()->toTypedExpr(call);
     auto exprSet = evaluator_.compile(typedExpr);
     const auto& first = *exprSet->exprs().front();
-    if (first.specialFormKind() != velox::exec::SpecialFormKind::kConstant) {
+    if (!first.isConstant()) {
       return nullptr;
     }
     const auto& constantExpr =
@@ -692,6 +693,10 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     return translateLambda(expr->as<lp::LambdaExpr>());
   }
 
+  if (expr->isWindow()) {
+    return translateWindow(expr->as<lp::WindowExpr>());
+  }
+
   auto it = subqueries_.find(expr);
   if (it != subqueries_.end()) {
     return it->second;
@@ -729,7 +734,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       args.emplace_back(arg);
       allConstant &= arg->is(PlanType::kLiteralExpr);
       cardinality = std::max(cardinality, arg->value().cardinality);
-      if (arg->is(PlanType::kCallExpr)) {
+      if (arg->is(PlanType::kCallExpr) || arg->is(PlanType::kWindowExpr)) {
         funcs = funcs | arg->as<Call>()->functions();
       }
     }
@@ -776,20 +781,42 @@ namespace {
 constexpr uint64_t kAllAllowedInDt = ~uint64_t{0};
 
 // Returns a mask that allows 'op' in the same derived table.
-uint64_t allow(lp::NodeKind op) {
+constexpr uint64_t allow(lp::NodeKind op) {
   return uint64_t{1} << static_cast<uint64_t>(op);
 }
 
 // True if 'op' is in 'mask.
-bool contains(uint64_t mask, lp::NodeKind op) {
+constexpr bool contains(uint64_t mask, lp::NodeKind op) {
   return mask & allow(op);
 }
 
 // Removes 'op' from the set of operators allowed in the current derived
 // table. makeQueryGraph() starts a new derived table if it finds an operator
 // that does not belong to the mask.
-uint64_t makeDtIf(uint64_t mask, lp::NodeKind op) {
+constexpr uint64_t makeDtIf(uint64_t mask, lp::NodeKind op) {
   return mask & ~allow(op);
+}
+
+constexpr uint64_t kUnorderedAllowedInDt =
+    makeDtIf(kAllAllowedInDt, lp::NodeKind::kSort);
+
+constexpr lp::NodeKind kProjectWindowExprs{62};
+constexpr lp::NodeKind kSortWindowExprs{63};
+
+template <typename Exprs>
+bool hasWindow(const Exprs& exprs) {
+  bool hasWindow = false;
+  lp::RecursiveExprVisitorContext ctx;
+  ctx.preExprVisitor = [&](const lp::Expr& expr) {
+    if (!expr.isWindow()) {
+      return true;
+    }
+    hasWindow = true;
+    return false;
+  };
+
+  lp::visitExprsRecursively(exprs, ctx);
+  return hasWindow;
 }
 
 } // namespace
@@ -909,7 +936,14 @@ ExprVector ToGraph::translateExprs(const std::vector<lp::ExprPtr>& source) {
   return result;
 }
 
-void ToGraph::translateUnnest(const lp::UnnestNode& unnest, bool isNewDt) {
+void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
+  DerivedTableP unnestDt = currentDt_;
+  const bool needsSeparateUnnest = unnestDt->hasAggregation() ||
+      unnestDt->hasOrderBy() || unnestDt->hasLimit();
+  if (needsSeparateUnnest) {
+    finalizeDt(*unnest.onlyInput());
+  }
+
   if (unnest.ordinalityName().has_value()) {
     VELOX_NYI(
         "Unnest ordinality column is not supported in the optimizer. Unnest node: {}",
@@ -931,8 +965,8 @@ void ToGraph::translateUnnest(const lp::UnnestNode& unnest, bool isNewDt) {
   }
 
   if (!leftTable) {
-    leftTable = currentDt_;
-    if (!isNewDt) {
+    leftTable = unnestDt;
+    if (!needsSeparateUnnest) {
       finalizeDt(*unnest.onlyInput());
     }
   }
@@ -1147,7 +1181,60 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       std::move(intermediateColumns));
 }
 
+WindowCP ToGraph::translateWindow(const lp::WindowExpr* windowExpr) {
+  ExprVector args;
+  args.reserve(windowExpr->inputs().size());
+  for (const auto& input : windowExpr->inputs()) {
+    args.emplace_back(translateExpr(input));
+  }
+
+  ExprVector partitionKeys;
+  partitionKeys.reserve(windowExpr->partitionKeys().size());
+  folly::F14FastSet<ExprCP> uniquePartitionKeys;
+  for (const auto& partitionKey : windowExpr->partitionKeys()) {
+    const auto* key = translateExpr(partitionKey);
+    if (!uniquePartitionKeys.emplace(key).second) {
+      continue;
+    }
+    partitionKeys.emplace_back(key);
+  }
+
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  std::tie(orderKeys, orderTypes) =
+      dedupOrdering(windowExpr->ordering(), uniquePartitionKeys);
+
+  const auto& lpFrame = windowExpr->frame();
+  WindowFrame frame;
+  frame.type = lpFrame.type;
+  frame.startType = lpFrame.startType;
+  if (lpFrame.startValue) {
+    frame.startValue = translateExpr(lpFrame.startValue);
+  }
+  frame.endType = lpFrame.endType;
+  if (lpFrame.endValue) {
+    frame.endValue = translateExpr(lpFrame.endValue);
+  }
+
+  const auto* name = toName(windowExpr->name());
+  Value value{toType(windowExpr->type()), 1};
+  WindowSpec spec{
+      std::move(partitionKeys), std::move(orderKeys), std::move(orderTypes)};
+
+  return make<Window>(
+      name,
+      value,
+      std::move(args),
+      std::move(spec),
+      frame,
+      currentDt_,
+      windowExpr->ignoreNulls());
+}
+
 void ToGraph::addOrderBy(const lp::SortNode& order) {
+  VELOX_DCHECK(currentDt_->orderKeys.empty());
+  VELOX_DCHECK(currentDt_->orderTypes.empty());
+
   auto [deduppedOrderKeys, deduppedOrderTypes] =
       dedupOrdering(order.ordering());
 
@@ -1205,36 +1292,8 @@ void extractNonInnerJoinEqualities(
 } // namespace
 
 void ToGraph::translateJoin(const lp::JoinNode& join) {
-  const auto& joinLeft = join.left();
-  const auto& joinRight = join.right();
-
   const auto joinType = join.joinType();
   const bool isInner = joinType == lp::JoinType::kInner;
-
-  // TODO Allow mixing Unnest with Join in a single DT.
-  // https://github.com/facebookexperimental/verax/issues/286
-  const auto allowedInDt = allow(lp::NodeKind::kJoin);
-  makeQueryGraph(*joinLeft, allowedInDt);
-
-  // For an inner join a join tree on the right can be flattened, for all other
-  // kinds it must be kept together in its own dt.
-
-  DerivedTableP previousDt = nullptr;
-  if (isNondeterministicWrap_) {
-    previousDt = currentDt_;
-    currentDt_ = newDt();
-
-    isNondeterministicWrap_ = false;
-  }
-  makeQueryGraph(
-      *joinRight,
-      (isInner && !queryCtx()->optimization()->options().syntacticJoinOrder)
-          ? allowedInDt
-          : 0);
-
-  if (previousDt) {
-    finalizeDt(*joinRight, previousDt);
-  }
 
   ExprVector conjuncts;
   translateConjuncts(join.condition(), conjuncts);
@@ -1280,29 +1339,31 @@ DerivedTableP ToGraph::newDt() {
   return dt;
 }
 
-DerivedTableP ToGraph::wrapInDt(const lp::LogicalPlanNode& node) {
-  DerivedTableP previousDt = currentDt_;
-
-  currentDt_ = newDt();
-  makeQueryGraph(node, kAllAllowedInDt);
-
-  return finalizeDt(node, previousDt);
+void ToGraph::wrapInDt(const lp::LogicalPlanNode& node, bool unordered) {
+  auto* outerDt = std::exchange(currentDt_, newDt());
+  makeQueryGraph(node, unordered ? kUnorderedAllowedInDt : kAllAllowedInDt);
+  finalizeDt(node, outerDt);
 }
 
-DerivedTableP ToGraph::finalizeDt(
+void ToGraph::finalizeDt(
     const lp::LogicalPlanNode& node,
     DerivedTableP outerDt) {
   VELOX_CHECK_EQ(0, correlatedConjuncts_.size());
+  finalizeSubqueryDt(node, outerDt ? outerDt : newDt());
+}
 
+void ToGraph::finalizeSubqueryDt(
+    const lp::LogicalPlanNode& node,
+    DerivedTableP outerDt) {
+  VELOX_DCHECK_NOT_NULL(outerDt);
+  VELOX_DCHECK_NOT_NULL(currentDt_);
   DerivedTableP dt = currentDt_;
   setDtUsedOutput(dt, node);
 
-  currentDt_ = outerDt != nullptr ? outerDt : newDt();
+  currentDt_ = outerDt;
   currentDt_->addTable(dt);
 
   dt->makeInitialPlan();
-
-  return dt;
 }
 
 void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
@@ -1533,29 +1594,18 @@ DerivedTableP ToGraph::translateSubquery(
 
   VELOX_CHECK(correlatedConjuncts_.empty());
 
-  DerivedTableP dt;
-  {
-    DerivedTableP previousDt = currentDt_;
-
-    currentDt_ = newDt();
-    makeQueryGraph(node, kAllAllowedInDt);
-
-    dt = currentDt_;
-    setDtUsedOutput(dt, node);
-
-    currentDt_ = previousDt;
-    currentDt_->addTable(dt);
-
-    dt->makeInitialPlan();
-  }
+  auto* outerDt = std::exchange(currentDt_, newDt());
+  makeQueryGraph(node, kUnorderedAllowedInDt);
+  auto* subqueryDt = currentDt_;
+  finalizeSubqueryDt(node, outerDt);
 
   renames_ = std::move(originalRenames);
 
-  for (const auto* column : dt->columns) {
+  for (const auto* column : subqueryDt->columns) {
     renames_[column->name()] = column;
   }
 
-  return dt;
+  return subqueryDt;
 }
 
 ColumnCP ToGraph::addMarkColumn() {
@@ -1566,18 +1616,13 @@ ColumnCP ToGraph::addMarkColumn() {
   return markColumn;
 }
 
-void ToGraph::finalizeLeftDtForJoin(const logical_plan::LogicalPlanNode& node) {
-  if (currentDt_->hasAggregation() || currentDt_->hasLimit()) {
-    finalizeDt(node);
-  }
-}
-
 void ToGraph::processSubqueries(const logical_plan::FilterNode& filter) {
   Subqueries subqueries;
   extractSubqueries(filter.predicate(), subqueries);
 
-  if (!subqueries.empty()) {
-    finalizeLeftDtForJoin(*filter.onlyInput());
+  if (currentDt_->hasLimit() ||
+      (currentDt_->hasAggregation() && !subqueries.empty())) {
+    finalizeDt(*filter.onlyInput());
   }
 
   for (const auto& subquery : subqueries.scalars) {
@@ -1719,28 +1764,25 @@ void ToGraph::addFilter(const lp::FilterNode& filter) {
     };
 
     translateConjuncts(filter.predicate(), flat);
-
+  }
+  {
     PlanObjectSet tables = currentDt_->tableSet;
     tables.add(currentDt_);
-    for (auto it = flat.begin(); it != flat.end();) {
-      const auto* conjunct = *it;
+    std::erase_if(flat, [&](const auto* conjunct) {
       if (conjunct->allTables().isSubset(tables)) {
-        ++it;
-      } else {
-        correlatedConjuncts_.push_back(conjunct);
-        it = flat.erase(it);
+        return false;
       }
-    }
+      correlatedConjuncts_.push_back(conjunct);
+      return true;
+    });
   }
 
-  if (!flat.empty()) {
-    if (currentDt_->hasAggregation()) {
-      currentDt_->having.insert(
-          currentDt_->having.end(), flat.begin(), flat.end());
-    } else {
-      currentDt_->conjuncts.insert(
-          currentDt_->conjuncts.end(), flat.begin(), flat.end());
-    }
+  if (currentDt_->hasAggregation()) {
+    currentDt_->having.insert(
+        currentDt_->having.end(), flat.begin(), flat.end());
+  } else {
+    currentDt_->conjuncts.insert(
+        currentDt_->conjuncts.end(), flat.begin(), flat.end());
   }
 }
 
@@ -1837,11 +1879,10 @@ bool hasNondeterministic(const lp::ExprPtr& expr) {
 
 } // namespace
 
-void ToGraph::translateSetJoin(const lp::SetNode& set, DerivedTableP setDt) {
-  auto previousDt = currentDt_;
-  currentDt_ = setDt;
+void ToGraph::translateSetJoin(const lp::SetNode& set) {
+  auto* setDt = currentDt_;
   for (auto& input : set.inputs()) {
-    wrapInDt(*input);
+    wrapInDt(*input, /*unordered=*/true);
   }
 
   const bool exists = set.operation() == lp::SetOperation::kIntersect;
@@ -1881,7 +1922,6 @@ void ToGraph::translateSetJoin(const lp::SetNode& set, DerivedTableP setDt) {
   }
   setDt->columns = columns;
   setDt->makeInitialPlan();
-  currentDt_ = previousDt;
 }
 
 void ToGraph::makeUnionDistributionAndStats(
@@ -1913,95 +1953,92 @@ void ToGraph::makeUnionDistributionAndStats(
   }
 }
 
-DerivedTableP ToGraph::translateUnion(
-    const lp::SetNode& set,
-    DerivedTableP setDt,
-    bool isTopLevel,
+void ToGraph::translateUnionInput(
+    const folly::F14FastMap<std::string, ExprCP>& renames,
+    const lp::LogicalPlanNode& input,
     bool& isLeftLeaf) {
-  auto initialRenames = std::move(renames_);
-  QGVector<DerivedTableP> children;
-  DerivedTableP previousDt = currentDt_;
-  for (auto& input : set.inputs()) {
-    renames_ = initialRenames;
+  renames_ = renames;
 
-    currentDt_ = newDt();
+  auto* setDt = currentDt_;
 
-    auto& newDt = currentDt_;
-
-    auto isUnionLike =
-        [](const lp::LogicalPlanNode& node) -> const lp::SetNode* {
-      if (node.kind() == lp::NodeKind::kSet) {
-        const auto* set = node.as<lp::SetNode>();
-        if (set->operation() == lp::SetOperation::kUnion ||
-            set->operation() == lp::SetOperation::kUnionAll) {
-          return set;
-        }
-      }
-
+  auto maybeFlatten =
+      [&](const lp::LogicalPlanNode& node) -> const lp::SetNode* {
+    if (node.kind() != lp::NodeKind::kSet) {
       return nullptr;
-    };
-
-    if (auto* setNode = isUnionLike(*input)) {
-      auto inner = translateUnion(*setNode, setDt, false, isLeftLeaf);
-      children.push_back(inner);
-    } else {
-      makeQueryGraph(*input, kAllAllowedInDt);
-
-      const auto& type = input->outputType();
-
-      if (isLeftLeaf) {
-        // This is the left leaf of a union tree.
-        for (auto i : usedChannels(*input)) {
-          const auto& name = type->nameOf(i);
-
-          ExprCP inner = translateColumn(name);
-          newDt->exprs.push_back(inner);
-
-          // The top dt has the same columns as all the unioned dts.
-          const auto* columnName = toName(name);
-          auto* outer =
-              make<Column>(columnName, setDt, inner->value(), columnName);
-          setDt->columns.push_back(outer);
-          newDt->columns.push_back(outer);
-        }
-        isLeftLeaf = false;
-      } else {
-        for (auto i : usedChannels(*input)) {
-          ExprCP inner = translateColumn(type->nameOf(i));
-          newDt->exprs.push_back(inner);
-        }
-
-        // Same outward facing columns as the top dt of union.
-        newDt->columns = setDt->columns;
-      }
-
-      newDt->makeInitialPlan();
-      children.push_back(newDt);
     }
-  }
-
-  currentDt_ = previousDt;
-  if (isTopLevel) {
-    setDt->children = std::move(children);
-    setDt->setOp = set.operation();
-
-    makeUnionDistributionAndStats(setDt);
-
-    renames_ = std::move(initialRenames);
-    for (const auto* column : setDt->columns) {
-      renames_[column->name()] = column;
+    const auto* set = node.as<lp::SetNode>();
+    const auto setOp = set->operation();
+    if (setOp == setDt->setOp) {
+      // Same set operation can be flattened.
+      return set;
+    }
+    if (setOp == lp::SetOperation::kUnionAll &&
+        setDt->setOp == lp::SetOperation::kUnion) {
+      // UNION ALL can be flattened into UNION.
+      return set;
+    }
+    return nullptr;
+  };
+  if (const auto* setNode = maybeFlatten(input)) {
+    for (const auto& child : setNode->inputs()) {
+      translateUnionInput(renames, *child, isLeftLeaf);
     }
   } else {
-    setDt = newDt();
-    setDt->children = std::move(children);
-    setDt->setOp = set.operation();
+    currentDt_ = newDt();
+    makeQueryGraph(input, kUnorderedAllowedInDt);
+    auto* newDt = currentDt_;
+    currentDt_ = setDt;
+
+    const auto& type = input.outputType();
+
+    if (isLeftLeaf) {
+      // This is the left leaf of a union tree.
+      for (auto i : usedChannels(input)) {
+        const auto& name = type->nameOf(i);
+
+        ExprCP inner = translateColumn(name);
+        newDt->exprs.push_back(inner);
+
+        // The top dt has the same columns as all the unioned dts.
+        const auto* columnName = toName(name);
+        auto* outer =
+            make<Column>(columnName, setDt, inner->value(), columnName);
+        setDt->columns.push_back(outer);
+        newDt->columns.push_back(outer);
+      }
+      isLeftLeaf = false;
+    } else {
+      for (auto i : usedChannels(input)) {
+        ExprCP inner = translateColumn(type->nameOf(i));
+        newDt->exprs.push_back(inner);
+      }
+
+      // Same outward facing columns as the top dt of union.
+      newDt->columns = setDt->columns;
+    }
+
+    newDt->makeInitialPlan();
+    setDt->children.push_back(newDt);
   }
-  return setDt;
+}
+
+void ToGraph::translateUnion(const lp::SetNode& set) {
+  auto renames = std::move(renames_);
+
+  auto* setDt = currentDt_;
+  setDt->setOp = set.operation();
+  bool isLeftLeaf = true;
+  translateUnionInput(renames, set, isLeftLeaf);
+  makeUnionDistributionAndStats(setDt);
+
+  renames_ = std::move(renames);
+  for (const auto* column : setDt->columns) {
+    renames_[column->name()] = column;
+  }
 }
 
 DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
   markAllSubfields(logicalPlan, {});
-
   currentDt_ = newDt();
   makeQueryGraph(logicalPlan, kAllAllowedInDt);
   return currentDt_;
@@ -2010,70 +2047,73 @@ DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
 void ToGraph::makeQueryGraph(
     const lp::LogicalPlanNode& node,
     uint64_t allowedInDt) {
+  if (!contains(allowedInDt, node.kind())) {
+    if (node.kind() == lp::NodeKind::kSort) {
+      // Sort not allowed doesn't mean we need to wrap it in DT,
+      // instead we should skip it.
+      makeQueryGraph(*node.onlyInput(), allowedInDt);
+    } else {
+      wrapInDt(node, /*unordered=*/false);
+    }
+    return;
+  }
+
   ToGraphContext ctx{&node};
   velox::ExceptionContextSetter exceptionContext{makeExceptionContext(&ctx)};
   switch (node.kind()) {
     case lp::NodeKind::kValues: {
       makeValuesTable(*node.as<lp::ValuesNode>());
-      return;
-    }
+    } break;
     case lp::NodeKind::kTableScan: {
       makeBaseTable(*node.as<lp::TableScanNode>());
-      return;
-    }
+    } break;
     case lp::NodeKind::kFilter: {
-      // Multiple filters are allowed before a limit. If DT has a groupBy, then
-      // filter is added to 'having', otherwise, to 'conjuncts'.
+      const auto& input = *node.onlyInput();
       const auto& filter = *node.as<lp::FilterNode>();
-
-      if (!isNondeterministicWrap_ && hasNondeterministic(filter.predicate())) {
-        // Force wrap the filter and its input inside a dt so the filter
-        // does not get mixed with parent nodes.
-        makeQueryGraph(*node.onlyInput(), allowedInDt);
-
-        if (currentDt_->hasLimit()) {
-          finalizeDt(*node.onlyInput());
-        }
-
+      if (hasNondeterministic(filter.predicate())) {
+        auto* outerDt = std::exchange(currentDt_, newDt());
+        allowedInDt = contains(allowedInDt, lp::NodeKind::kSort)
+            ? kAllAllowedInDt
+            : kUnorderedAllowedInDt;
+        allowedInDt = makeDtIf(allowedInDt, kProjectWindowExprs);
+        allowedInDt = makeDtIf(allowedInDt, kSortWindowExprs);
+        makeQueryGraph(input, allowedInDt);
         addFilter(filter);
-        finalizeDt(node);
-
-        isNondeterministicWrap_ = true;
-        return;
+        finalizeDt(filter, outerDt);
+        break;
       }
-
-      isNondeterministicWrap_ = false;
-      makeQueryGraph(*node.onlyInput(), allowedInDt);
-
-      if (currentDt_->hasLimit()) {
-        finalizeDt(*node.onlyInput());
-      }
+      allowedInDt = makeDtIf(allowedInDt, kProjectWindowExprs);
+      allowedInDt = makeDtIf(allowedInDt, kSortWindowExprs);
+      makeQueryGraph(input, allowedInDt);
       addFilter(filter);
-      return;
-    }
+    } break;
     case lp::NodeKind::kProject: {
-      // A project is always allowed in a DT. Multiple projects are combined.
-      makeQueryGraph(*node.onlyInput(), allowedInDt);
-      addProjection(*node.as<lp::ProjectNode>());
-      return;
-    }
+      const auto& input = *node.onlyInput();
+      const auto& project = *node.as<lp::ProjectNode>();
+      if (!contains(allowedInDt, kProjectWindowExprs) &&
+          hasWindow(project.expressions())) {
+        auto* outerDt = std::exchange(currentDt_, newDt());
+        allowedInDt = contains(allowedInDt, lp::NodeKind::kSort)
+            ? kAllAllowedInDt
+            : kUnorderedAllowedInDt;
+        makeQueryGraph(input, allowedInDt);
+        addProjection(project);
+        finalizeDt(project, outerDt);
+        break;
+      }
+      makeQueryGraph(input, allowedInDt);
+      addProjection(project);
+    } break;
     case lp::NodeKind::kAggregate: {
-      if (!contains(allowedInDt, lp::NodeKind::kAggregate)) {
-        wrapInDt(node);
-        return;
-      }
-
-      // A single groupBy is allowed before a limit. If arrives after orderBy,
-      // then orderBy is dropped. If arrives after limit, then starts a new DT.
-
-      makeQueryGraph(*node.onlyInput(), allowedInDt);
-
+      const auto& input = *node.onlyInput();
+      allowedInDt = makeDtIf(allowedInDt, lp::NodeKind::kSort);
+      allowedInDt = makeDtIf(allowedInDt, kProjectWindowExprs);
+      makeQueryGraph(input, allowedInDt);
       if (currentDt_->hasAggregation() || currentDt_->hasLimit()) {
-        finalizeDt(*node.onlyInput());
-      } else if (currentDt_->hasOrderBy()) {
-        currentDt_->orderKeys.clear();
-        currentDt_->orderTypes.clear();
+        finalizeDt(input);
       }
+      VELOX_DCHECK(currentDt_->orderKeys.empty());
+      VELOX_DCHECK(currentDt_->orderTypes.empty());
 
       auto* agg = translateAggregation(*node.as<lp::AggregateNode>());
 
@@ -2147,85 +2187,77 @@ void ToGraph::makeQueryGraph(
         currentDt_->aggregation = agg;
       }
 
-      return;
-    }
+    } break;
     case lp::NodeKind::kJoin: {
-      if (!contains(allowedInDt, lp::NodeKind::kJoin)) {
-        wrapInDt(node);
-        return;
+      const auto& join = *node.as<lp::JoinNode>();
+      const auto& left = *join.left();
+      const auto& right = *join.right();
+      // TODO Allow mixing Unnest with Join in a single DT.
+      // https://github.com/facebookincubator/axiom/issues/286
+      allowedInDt = makeDtIf(allowedInDt, lp::NodeKind::kUnnest);
+      allowedInDt = makeDtIf(allowedInDt, lp::NodeKind::kAggregate);
+      allowedInDt = makeDtIf(allowedInDt, lp::NodeKind::kLimit);
+      allowedInDt = makeDtIf(allowedInDt, lp::NodeKind::kFilter);
+      allowedInDt = makeDtIf(allowedInDt, lp::NodeKind::kSort);
+      allowedInDt = makeDtIf(allowedInDt, kProjectWindowExprs);
+      makeQueryGraph(left, allowedInDt);
+      if (join.joinType() != lp::JoinType::kInner ||
+          queryCtx()->optimization()->options().syntacticJoinOrder) {
+        allowedInDt = makeDtIf(allowedInDt, lp::NodeKind::kJoin);
       }
-
-      translateJoin(*node.as<lp::JoinNode>());
-      return;
-    }
+      makeQueryGraph(right, allowedInDt);
+      translateJoin(join);
+    } break;
     case lp::NodeKind::kSort: {
-      if (!contains(allowedInDt, lp::NodeKind::kSort)) {
-        wrapInDt(node);
-        return;
-      }
-
-      // Multiple orderBys are allowed before a limit. Last one wins. Previous
-      // are dropped. If arrives after limit, then starts a new DT.
-
-      makeQueryGraph(*node.onlyInput(), allowedInDt);
-
-      if (currentDt_->hasLimit()) {
-        finalizeDt(*node.onlyInput());
-      }
-
-      addOrderBy(*node.as<lp::SortNode>());
-      return;
-    }
-    case lp::NodeKind::kLimit: {
-      if (!contains(allowedInDt, lp::NodeKind::kLimit)) {
-        wrapInDt(node);
-        return;
-      }
-
-      // Multiple limits are allowed. If already present, then it is combined
-      // with the new limit.
-      makeQueryGraph(*node.onlyInput(), allowedInDt);
-      addLimit(*node.as<lp::LimitNode>());
-      return;
-    }
-    case lp::NodeKind::kSet: {
-      auto* setDt = newDt();
-
-      auto* set = node.as<lp::SetNode>();
-      if (set->operation() == lp::SetOperation::kUnion ||
-          set->operation() == lp::SetOperation::kUnionAll) {
-        bool isLeftLeaf = true;
-        translateUnion(*set, setDt, true, isLeftLeaf);
-      } else {
-        translateSetJoin(*set, setDt);
-      }
-      currentDt_->addTable(setDt);
-      return;
-    }
-    case lp::NodeKind::kUnnest: {
-      if (!contains(allowedInDt, lp::NodeKind::kUnnest)) {
-        wrapInDt(node);
-        return;
-      }
-
-      // Multiple unnest is allowed in a DT.
-      // If arrives after groupBy, orderBy, limit then starts a new DT.
       const auto& input = *node.onlyInput();
+      const auto& order = *node.as<lp::SortNode>();
+      if (!contains(allowedInDt, kSortWindowExprs) && hasWindow(order.ordering())) {
+        auto* outerDt = std::exchange(currentDt_, newDt());
+        allowedInDt = makeDtIf(kUnorderedAllowedInDt, kProjectWindowExprs);
+        makeQueryGraph(input, allowedInDt);
+        if (currentDt_->hasLimit()) {
+          finalizeDt(input);
+        }
+        addOrderBy(order);
+        finalizeDt(order, outerDt);
+        break;
+      }
+      allowedInDt = makeDtIf(allowedInDt, lp::NodeKind::kSort);
+      allowedInDt = makeDtIf(allowedInDt, kProjectWindowExprs);
       makeQueryGraph(input, allowedInDt);
-
-      const bool isNewDt = currentDt_->hasAggregation() ||
-          currentDt_->hasOrderBy() || currentDt_->hasLimit();
-      if (isNewDt) {
+      if (currentDt_->hasLimit()) {
         finalizeDt(input);
       }
-      translateUnnest(*node.as<lp::UnnestNode>(), isNewDt);
-      return;
-    }
+      addOrderBy(order);
+    } break;
+    case lp::NodeKind::kLimit: {
+      allowedInDt |= allow(lp::NodeKind::kSort);
+      allowedInDt = makeDtIf(allowedInDt, kProjectWindowExprs);
+      makeQueryGraph(*node.onlyInput(), allowedInDt);
+      addLimit(*node.as<lp::LimitNode>());
+    } break;
+    case lp::NodeKind::kSet: {
+      auto* outerDt = std::exchange(currentDt_, newDt());
+      const auto& set = *node.as<lp::SetNode>();
+      if (set.operation() == lp::SetOperation::kUnion ||
+          set.operation() == lp::SetOperation::kUnionAll) {
+        translateUnion(set);
+      } else {
+        translateSetJoin(set);
+      }
+      outerDt->addTable(currentDt_);
+      currentDt_ = outerDt;
+    } break;
+    case lp::NodeKind::kUnnest: {
+      allowedInDt = makeDtIf(allowedInDt, kProjectWindowExprs);
+      makeQueryGraph(*node.onlyInput(), allowedInDt);
+      addUnnest(*node.as<lp::UnnestNode>());
+    } break;
     case lp::NodeKind::kTableWrite: {
-      wrapInDt(*node.onlyInput());
+      VELOX_DCHECK_EQ(allowedInDt, kAllAllowedInDt);
+      wrapInDt(*node.onlyInput(), /*unordered=*/true);
       addWrite(*node.as<lp::TableWriteNode>());
-      return;
-    }
+    } break;
     default:
       VELOX_NYI(
           "Unsupported PlanNode {}", lp::NodeKindName::toName(node.kind()));
@@ -2233,13 +2265,14 @@ void ToGraph::makeQueryGraph(
 }
 
 std::pair<ExprVector, OrderTypeVector> ToGraph::dedupOrdering(
-    const std::vector<lp::SortingField>& ordering) {
+    const std::vector<lp::SortingField>& ordering,
+    folly::F14FastSet<ExprCP> keysToIgnore) {
   ExprVector deduppedOrderKeys;
   OrderTypeVector deduppedOrderTypes;
   deduppedOrderKeys.reserve(ordering.size());
   deduppedOrderTypes.reserve(ordering.size());
 
-  folly::F14FastSet<ExprCP> uniqueOrderKeys;
+  folly::F14FastSet<ExprCP> uniqueOrderKeys = std::move(keysToIgnore);
   for (const auto& field : ordering) {
     const auto* key = translateExpr(field.expression);
     if (!uniqueOrderKeys.emplace(key).second) {

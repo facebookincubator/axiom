@@ -291,6 +291,10 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
 }
 } // namespace
 
+bool DerivedTable::hasWindows() const {
+  return exprs.hasWindows() || orderKeys.hasWindows();
+}
+
 void DerivedTable::import(
     const DerivedTable& super,
     PlanObjectCP firstTable,
@@ -518,7 +522,6 @@ void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
   }
 
   auto* newFirst = make<DerivedTable>(*firstDt->as<DerivedTable>());
-  newFirst->cname = firstDt->as<DerivedTable>()->cname;
   for (auto& join : joins) {
     auto other = join->otherSide(firstDt);
     if (!other) {
@@ -929,7 +932,7 @@ void DerivedTable::distributeConjuncts() {
         // Translate the column names and add the condition to the conjuncts in
         // the dt. If the inner is a set operation, add the filter to children.
         auto innerDt = tables[0]->as<DerivedTable>();
-        if (dtHasLimit(*innerDt)) {
+        if (innerDt->hasWindows() || dtHasLimit(*innerDt)) {
           continue;
         }
 

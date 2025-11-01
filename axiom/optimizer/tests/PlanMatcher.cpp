@@ -658,6 +658,37 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
   const std::optional<JoinType> joinType_;
 };
 
+class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
+ public:
+  explicit NestedLoopJoinMatcher(
+      const std::shared_ptr<PlanMatcher>& left,
+      const std::shared_ptr<PlanMatcher>& right)
+      : PlanMatcherImpl<NestedLoopJoinNode>({left, right}) {}
+
+  NestedLoopJoinMatcher(
+      const std::shared_ptr<PlanMatcher>& left,
+      const std::shared_ptr<PlanMatcher>& right,
+      JoinType joinType)
+      : PlanMatcherImpl<NestedLoopJoinNode>({left, right}),
+        joinType_{joinType} {}
+
+  MatchResult matchDetails(
+      const NestedLoopJoinNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    if (joinType_.has_value()) {
+      EXPECT_EQ(plan.joinType(), joinType_.value());
+    }
+
+    AXIOM_TEST_RETURN
+  }
+
+ private:
+  const std::optional<JoinType> joinType_;
+};
+
 #undef AXIOM_TEST_RETURN
 #undef AXIOM_TEST_RETURN_IF_FAILURE
 
@@ -837,10 +868,12 @@ PlanMatcherBuilder& PlanMatcherBuilder::localPartition() {
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::localPartition(
-    const std::shared_ptr<PlanMatcher>& matcher) {
+    std::initializer_list<std::shared_ptr<PlanMatcher>> matcher) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
+  std::vector<std::shared_ptr<PlanMatcher>> matchers{matcher_};
+  matchers.insert(matchers.end(), matcher);
   matcher_ = std::make_shared<PlanMatcherImpl<LocalPartitionNode>>(
-      std::vector<std::shared_ptr<PlanMatcher>>{matcher_, matcher});
+      std::move(matchers));
   return *this;
 }
 
@@ -917,9 +950,32 @@ PlanMatcherBuilder& PlanMatcherBuilder::orderBy(
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(
+    const std::shared_ptr<PlanMatcher>& rightMatcher) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<NestedLoopJoinMatcher>(matcher_, rightMatcher);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(
+    const std::shared_ptr<PlanMatcher>& rightMatcher,
+    JoinType joinType) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<NestedLoopJoinMatcher>(matcher_, rightMatcher, joinType);
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::tableWrite() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<PlanMatcherImpl<TableWriteNode>>(
+      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::window() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<PlanMatcherImpl<WindowNode>>(
       std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
   return *this;
 }
