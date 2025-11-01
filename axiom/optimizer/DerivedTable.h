@@ -240,11 +240,6 @@ struct DerivedTable : public PlanObject {
 
   // Sets 'columns' and 'exprs'.
   void makeProjection(const ExprVector& exprs);
-
-  /// Number of fully processed leading elements of 'conjuncts'. Set by
-  /// distributeConjuncts(). Used to avoid reprocessing conjuncts in repeated
-  /// calls to distributeConjuncts().
-  int32_t numCanonicalConjuncts{0};
 };
 
 using DerivedTableP = DerivedTable*;

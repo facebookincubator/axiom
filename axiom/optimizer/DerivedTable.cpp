@@ -986,8 +986,6 @@ void DerivedTable::distributeConjuncts() {
     }
   }
 
-  numCanonicalConjuncts = conjuncts.size();
-
   // Remake initial plan for changedDTs. Calls distributeConjuncts
   // recursively for further pushdown of pushed down items. Replans
   // on returning edge of recursion, so everybody's initial plan is
