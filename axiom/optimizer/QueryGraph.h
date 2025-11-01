@@ -956,7 +956,7 @@ class WritePlan : public PlanObject {
   /// table schema.
   WritePlan(
       const connector::Table& table,
-      connector::WriteKind kind,
+      WriteKind kind,
       ExprVector columnExprs)
       : PlanObject{PlanType::kWriteNode},
         table_{table},
@@ -969,7 +969,7 @@ class WritePlan : public PlanObject {
     return table_;
   }
 
-  connector::WriteKind kind() const {
+  WriteKind kind() const {
     return kind_;
   }
 
@@ -979,7 +979,7 @@ class WritePlan : public PlanObject {
 
  private:
   const connector::Table& table_;
-  const connector::WriteKind kind_;
+  const WriteKind kind_;
   const ExprVector columnExprs_;
 };
 

@@ -1391,7 +1391,7 @@ SqlStatementPtr parseInsert(
   planner.builder().tableWrite(
       connectorId,
       tableName,
-      lp::WriteKind::kInsert,
+      facebook::axiom::WriteKind::kInsert,
       columnNames,
       inputColumns);
 
@@ -1433,7 +1433,7 @@ SqlStatementPtr parseCreateTableAsSelect(
     planBuilder.tableWrite(
         connectorId,
         tableName,
-        lp::WriteKind::kCreate,
+        facebook::axiom::WriteKind::kCreate,
         columnNames,
         columnNames);
   } else {
@@ -1447,7 +1447,7 @@ SqlStatementPtr parseCreateTableAsSelect(
     planBuilder.tableWrite(
         connectorId,
         tableName,
-        lp::WriteKind::kCreate,
+        facebook::axiom::WriteKind::kCreate,
         columnNames,
         planBuilder.findOrAssignOutputNames());
   }

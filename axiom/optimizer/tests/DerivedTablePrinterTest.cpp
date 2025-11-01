@@ -189,15 +189,12 @@ TEST_F(DerivedTablePrinterTest, write) {
   connector_->addTable("c", ROW({"a", "b"}, INTEGER()));
   connector_->addTable("z", ROW({"x", "y"}, INTEGER()));
 
-  auto plan = lp::PlanBuilder()
-                  .tableScan(kTestConnectorId, "c")
-                  .tableWrite(
-                      kTestConnectorId,
-                      "z",
-                      lp::WriteKind::kInsert,
-                      {"y", "x"},
-                      {"a", "b"})
-                  .build();
+  auto plan =
+      lp::PlanBuilder()
+          .tableScan(kTestConnectorId, "c")
+          .tableWrite(
+              kTestConnectorId, "z", WriteKind::kInsert, {"y", "x"}, {"a", "b"})
+          .build();
 
   auto lines = toLines(*plan);
 
