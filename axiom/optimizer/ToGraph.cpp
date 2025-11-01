@@ -179,7 +179,7 @@ ExprCP ToGraph::tryFoldConstant(
     auto typedExpr = queryCtx()->optimization()->toTypedExpr(call);
     auto exprSet = evaluator_.compile(typedExpr);
     const auto& first = *exprSet->exprs().front();
-    if (first.specialFormKind() != velox::exec::SpecialFormKind::kConstant) {
+    if (!first.isConstant()) {
       return nullptr;
     }
     const auto& constantExpr =
