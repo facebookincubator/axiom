@@ -518,7 +518,6 @@ void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
   }
 
   auto* newFirst = make<DerivedTable>(*firstDt->as<DerivedTable>());
-  newFirst->cname = firstDt->as<DerivedTable>()->cname;
   for (auto& join : joins) {
     auto other = join->otherSide(firstDt);
     if (!other) {
