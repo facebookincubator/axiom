@@ -844,26 +844,17 @@ class Aggregate : public Call {
       const velox::Type* intermediateType,
       ExprVector orderKeys,
       OrderTypeVector orderTypes)
-      : Call(
-            PlanType::kAggregateExpr,
-            name,
-            value,
-            std::move(args),
-            functions | FunctionSet::kAggregate),
-        isDistinct_(isDistinct),
-        condition_(condition),
-        intermediateType_(intermediateType),
-        orderKeys_(std::move(orderKeys)),
-        orderTypes_(std::move(orderTypes)) {
+      : Call{PlanType::kAggregateExpr, name, value, std::move(args), functions | FunctionSet::kAggregate},
+        isDistinct_{isDistinct},
+        condition_{condition},
+        intermediateType_{intermediateType},
+        orderKeys_{std::move(orderKeys)},
+        orderTypes_{std::move(orderTypes)} {
     VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
-
-    for (auto& arg : this->args()) {
-      rawInputType_.push_back(arg->value().type);
-    }
     if (condition_) {
       columns_.unionSet(condition_->columns());
     }
-    for (auto& key : orderKeys_) {
+    for (const auto* key : orderKeys_) {
       columns_.unionSet(key->columns());
     }
   }
@@ -880,10 +871,6 @@ class Aggregate : public Call {
     return intermediateType_;
   }
 
-  const TypeVector& rawInputType() const {
-    return rawInputType_;
-  }
-
   const ExprVector& orderKeys() const {
     return orderKeys_;
   }
@@ -895,12 +882,11 @@ class Aggregate : public Call {
   std::string toString() const override;
 
  private:
-  bool isDistinct_;
-  ExprCP condition_;
-  const velox::Type* intermediateType_;
-  TypeVector rawInputType_;
-  ExprVector orderKeys_;
-  OrderTypeVector orderTypes_;
+  const bool isDistinct_;
+  const ExprCP condition_;
+  const velox::Type* const intermediateType_;
+  const ExprVector orderKeys_;
+  const OrderTypeVector orderTypes_;
 };
 
 using AggregateCP = const Aggregate*;
