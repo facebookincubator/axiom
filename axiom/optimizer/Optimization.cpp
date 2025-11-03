@@ -394,7 +394,7 @@ constexpr uint32_t kNotFound = ~0U;
 template <typename V>
 uint32_t position(const V& exprs, const Expr& expr) {
   for (auto i = 0; i < exprs.size(); ++i) {
-    if (exprs[i]->sameOrEqual(expr)) {
+    if (sameOrEqual(exprs[i], &expr)) {
       return i;
     }
   }
@@ -408,7 +408,7 @@ uint32_t position(const V& exprs, const Expr& expr) {
 template <typename V, typename Getter>
 uint32_t position(const V& exprs, Getter getter, const Expr& expr) {
   for (auto i = 0; i < exprs.size(); ++i) {
-    if (getter(exprs[i])->sameOrEqual(expr)) {
+    if (sameOrEqual(getter(exprs[i]), &expr)) {
       return i;
     }
   }
@@ -753,7 +753,7 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
     // Check that the partition keys of the plan are assigned pairwise to the
     // partition columns of the layout.
     for (auto i = 0; i < keyValues.size(); ++i) {
-      if (!plan->distribution().partition[i]->sameOrEqual(*keyValues[i])) {
+      if (!sameOrEqual(plan->distribution().partition[i], keyValues[i])) {
         shuffle = true;
         break;
       }
@@ -1025,12 +1025,31 @@ void Optimization::joinByHash(
   VELOX_DCHECK(!candidate.tables.empty());
   auto [build, probe] = candidate.joinSides();
 
-  const auto partKeys = joinKeyPartition(plan, probe.keys);
+  ExprVector buildKeys;
+  ExprVector probeKeys;
+  VELOX_DCHECK_EQ(build.keys.size(), probe.keys.size());
+  for (size_t i = 0; i < build.keys.size(); ++i) {
+    const auto buildSize = buildKeys.size();
+    const auto probeSize = probeKeys.size();
+    if (sameOrEqual(build.keys[i], probe.keys[i], [&](ColumnCP l, ColumnCP r) {
+          buildKeys.push_back(l);
+          probeKeys.push_back(r);
+          return true;
+        })) {
+      continue;
+    }
+    buildKeys.resize(buildSize);
+    probeKeys.resize(probeSize);
+    buildKeys.push_back(build.keys[i]);
+    probeKeys.push_back(probe.keys[i]);
+  }
+
+  const auto partKeys = joinKeyPartition(plan, probeKeys);
   ExprVector copartition;
   if (partKeys.empty()) {
     // Prefer to make a build partitioned on join keys and shuffle probe to
     // align with build.
-    copartition = build.keys;
+    copartition = buildKeys;
   }
 
   PlanStateSaver save(state, candidate);
@@ -1047,7 +1066,7 @@ void Optimization::joinByHash(
   }
 
   buildColumns.intersect(state.downstreamColumns());
-  buildColumns.unionColumns(build.keys);
+  buildColumns.unionColumns(buildKeys);
   buildColumns.unionSet(buildFilterColumns);
   state.columns.unionSet(buildColumns);
 
@@ -1085,7 +1104,7 @@ void Optimization::joinByHash(
       if (needsShuffle) {
         if (copartition.empty()) {
           for (auto i : partKeys) {
-            copartition.push_back(build.keys[i]);
+            copartition.push_back(buildKeys[i]);
           }
         }
         Distribution distribution{
@@ -1106,15 +1125,15 @@ void Optimization::joinByHash(
       // The probe gets shuffled to align with build. If build is not
       // partitioned on its keys, shuffle the build too.
       alignJoinSides(
-          buildInput, build.keys, buildState, probeInput, probe.keys, state);
+          buildInput, buildKeys, buildState, probeInput, probeKeys, state);
     }
   }
 
   PrecomputeProjection precomputeBuild(buildInput, state.dt);
-  auto buildKeys = precomputeBuild.toColumns(build.keys);
+  buildKeys = precomputeBuild.toColumns(buildKeys);
   buildInput = std::move(precomputeBuild).maybeProject();
 
-  auto* buildOp = make<HashBuild>(buildInput, build.keys, buildPlan);
+  auto* buildOp = make<HashBuild>(buildInput, buildKeys.size());
   buildState.addCost(*buildOp);
 
   const auto joinType = build.leftJoinType();
@@ -1155,7 +1174,7 @@ void Optimization::joinByHash(
   const auto fanout = fanoutJoinTypeLimit(joinType, candidate.fanout);
 
   PrecomputeProjection precomputeProbe(probeInput, state.dt);
-  auto probeKeys = precomputeProbe.toColumns(probe.keys);
+  probeKeys = precomputeProbe.toColumns(probeKeys);
   probeInput = std::move(precomputeProbe).maybeProject();
 
   auto* join = make<Join>(
@@ -1183,6 +1202,25 @@ void Optimization::joinByHashRight(
   VELOX_DCHECK(!candidate.tables.empty());
   auto [probe, build] = candidate.joinSides();
 
+  ExprVector buildKeys;
+  ExprVector probeKeys;
+  VELOX_DCHECK_EQ(build.keys.size(), probe.keys.size());
+  for (size_t i = 0; i < build.keys.size(); ++i) {
+    const auto buildSize = buildKeys.size();
+    const auto probeSize = probeKeys.size();
+    if (sameOrEqual(build.keys[i], probe.keys[i], [&](ColumnCP l, ColumnCP r) {
+          buildKeys.push_back(l);
+          probeKeys.push_back(r);
+          return true;
+        })) {
+      continue;
+    }
+    buildKeys.resize(buildSize);
+    probeKeys.resize(probeSize);
+    buildKeys.push_back(build.keys[i]);
+    probeKeys.push_back(probe.keys[i]);
+  }
+
   PlanStateSaver save(state, candidate);
 
   PlanObjectSet probeFilterColumns;
@@ -1198,7 +1236,7 @@ void Optimization::joinByHashRight(
   }
 
   probeColumns.intersect(state.downstreamColumns());
-  probeColumns.unionColumns(probe.keys);
+  probeColumns.unionColumns(probeKeys);
   probeColumns.unionSet(probeFilterColumns);
   state.columns.unionSet(probeColumns);
 
@@ -1224,14 +1262,14 @@ void Optimization::joinByHashRight(
     // The build gets shuffled to align with probe. If probe is not partitioned
     // on its keys, shuffle the probe too.
     alignJoinSides(
-        probeInput, probe.keys, probeState, buildInput, build.keys, state);
+        probeInput, probeKeys, probeState, buildInput, buildKeys, state);
   }
 
   PrecomputeProjection precomputeBuild(buildInput, state.dt);
-  auto buildKeys = precomputeBuild.toColumns(build.keys);
+  buildKeys = precomputeBuild.toColumns(buildKeys);
   buildInput = std::move(precomputeBuild).maybeProject();
 
-  auto* buildOp = make<HashBuild>(buildInput, build.keys, nullptr);
+  auto* buildOp = make<HashBuild>(buildInput, buildKeys.size());
   state.addCost(*buildOp);
 
   PlanObjectSet buildColumns;
@@ -1283,7 +1321,7 @@ void Optimization::joinByHashRight(
   state.cost.cost += buildCost.cost;
 
   PrecomputeProjection precomputeProbe(probeInput, state.dt);
-  auto probeKeys = precomputeProbe.toColumns(probe.keys);
+  probeKeys = precomputeProbe.toColumns(probeKeys);
   probeInput = std::move(precomputeProbe).maybeProject();
 
   auto* join = make<Join>(

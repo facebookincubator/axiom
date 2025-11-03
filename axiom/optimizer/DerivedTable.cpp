@@ -65,13 +65,13 @@ bool addEdge(EdgeSet& edges, PlanObjectCP left, PlanObjectCP right) {
 }
 
 void fillJoins(
-    PlanObjectCP column,
+    ColumnCP column,
     const Equivalence& equivalence,
     EdgeSet& edges,
     DerivedTableP dt) {
-  for (auto& other : equivalence.columns) {
+  for (const auto* other : equivalence.columns) {
     if (addEdge(edges, column, other)) {
-      addJoinEquality(column->as<Column>(), other->as<Column>(), dt->joins);
+      addJoinEquality(column, other, dt->joins);
     }
   }
 }
@@ -79,7 +79,7 @@ void fillJoins(
 
 void DerivedTable::addImpliedJoins() {
   EdgeSet edges;
-  for (auto& join : joins) {
+  for (const auto* join : joins) {
     if (join->isInner()) {
       for (size_t i = 0; i < join->numKeys(); ++i) {
         const auto* leftKey = join->leftKeys()[i];
@@ -93,22 +93,24 @@ void DerivedTable::addImpliedJoins() {
 
   // The loop appends to 'joins', so loop over a copy.
   JoinEdgeVector joinsCopy = joins;
-  for (auto& join : joinsCopy) {
+  for (const auto* join : joinsCopy) {
     if (join->isInner()) {
       for (size_t i = 0; i < join->numKeys(); ++i) {
         const auto* leftKey = join->leftKeys()[i];
         const auto* rightKey = join->rightKeys()[i];
         if (leftKey->isColumn() && rightKey->isColumn()) {
-          auto leftEq = leftKey->as<Column>()->equivalence();
-          auto rightEq = rightKey->as<Column>()->equivalence();
+          const auto* leftColumn = leftKey->as<Column>();
+          const auto* rightColumn = rightKey->as<Column>();
+          const auto* leftEq = leftColumn->equivalence();
+          const auto* rightEq = rightColumn->equivalence();
           if (rightEq && leftEq) {
-            for (auto& left : leftEq->columns) {
+            for (const auto* left : leftEq->columns) {
               fillJoins(left, *rightEq, edges, this);
             }
           } else if (leftEq) {
-            fillJoins(rightKey, *leftEq, edges, this);
+            fillJoins(rightColumn, *leftEq, edges, this);
           } else if (rightEq) {
-            fillJoins(leftKey, *rightEq, edges, this);
+            fillJoins(leftColumn, *rightEq, edges, this);
           }
         }
       }

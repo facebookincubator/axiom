@@ -1188,8 +1188,9 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
     const auto* aggregate = op.aggregates[i];
 
     std::vector<velox::TypePtr> rawInputTypes;
-    for (const auto& type : aggregate->rawInputType()) {
-      rawInputTypes.push_back(toTypePtr(type));
+    rawInputTypes.reserve(aggregate->args().size());
+    for (const auto& arg : aggregate->args()) {
+      rawInputTypes.push_back(toTypePtr(arg->value().type));
     }
 
     if (isRawInput) {
@@ -1203,7 +1204,7 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
 
       aggregates.push_back({
           .call = call,
-          .rawInputTypes = rawInputTypes,
+          .rawInputTypes = std::move(rawInputTypes),
           .mask = mask,
           .sortingKeys = toFieldRefs(aggregate->orderKeys()),
           .sortingOrders = toSortOrders(aggregate->orderTypes()),
@@ -1215,7 +1216,10 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
           aggregate->name(),
           std::make_shared<velox::core::FieldAccessTypedExpr>(
               toTypePtr(aggregate->intermediateType()), aggregateNames.back()));
-      aggregates.push_back({.call = call, .rawInputTypes = rawInputTypes});
+      aggregates.push_back({
+          .call = call,
+          .rawInputTypes = std::move(rawInputTypes),
+      });
     }
   }
 
