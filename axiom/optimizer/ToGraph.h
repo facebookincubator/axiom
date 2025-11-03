@@ -278,7 +278,7 @@ class ToGraph {
   // Adds a JoinEdge corresponding to 'join' to the enclosing DerivedTable.
   void translateJoin(const logical_plan::JoinNode& join);
 
-  void translateSetJoin(const logical_plan::SetNode& set, DerivedTableP setDt);
+  void translateSetJoin(const logical_plan::SetNode& set);
 
   // Updates the distribution and column stats of 'setDt', which must
   // be a union. 'innerDt' should be null on top level call. Adds up
@@ -287,11 +287,12 @@ class ToGraph {
       DerivedTableP setDt,
       DerivedTableP innerDt = nullptr);
 
-  DerivedTableP translateUnion(
-      const logical_plan::SetNode& set,
-      DerivedTableP setDt,
-      bool isTopLevel,
+  void translateUnionInput(
+      const folly::F14FastMap<std::string, ExprCP>& renames,
+      const logical_plan::LogicalPlanNode& input,
       bool& isLeftLeaf);
+
+  void translateUnion(const logical_plan::SetNode& set);
 
   void translateUnnest(
       const logical_plan::UnnestNode& logicalUnnest,

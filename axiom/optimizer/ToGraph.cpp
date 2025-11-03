@@ -1834,9 +1834,8 @@ bool hasNondeterministic(const lp::ExprPtr& expr) {
 
 } // namespace
 
-void ToGraph::translateSetJoin(const lp::SetNode& set, DerivedTableP setDt) {
-  auto previousDt = currentDt_;
-  currentDt_ = setDt;
+void ToGraph::translateSetJoin(const lp::SetNode& set) {
+  auto* setDt = currentDt_;
   for (auto& input : set.inputs()) {
     wrapInDt(*input);
   }
@@ -1878,7 +1877,6 @@ void ToGraph::translateSetJoin(const lp::SetNode& set, DerivedTableP setDt) {
   }
   setDt->columns = columns;
   setDt->makeInitialPlan();
-  currentDt_ = previousDt;
 }
 
 void ToGraph::makeUnionDistributionAndStats(
@@ -1910,90 +1908,88 @@ void ToGraph::makeUnionDistributionAndStats(
   }
 }
 
-DerivedTableP ToGraph::translateUnion(
-    const lp::SetNode& set,
-    DerivedTableP setDt,
-    bool isTopLevel,
+void ToGraph::translateUnionInput(
+    const folly::F14FastMap<std::string, ExprCP>& renames,
+    const lp::LogicalPlanNode& input,
     bool& isLeftLeaf) {
-  auto initialRenames = std::move(renames_);
-  QGVector<DerivedTableP> children;
-  DerivedTableP previousDt = currentDt_;
-  for (auto& input : set.inputs()) {
-    renames_ = initialRenames;
+  renames_ = renames;
 
-    currentDt_ = newDt();
+  auto* setDt = currentDt_;
 
-    auto& newDt = currentDt_;
-
-    auto isUnionLike =
-        [](const lp::LogicalPlanNode& node) -> const lp::SetNode* {
-      if (node.kind() == lp::NodeKind::kSet) {
-        const auto* set = node.as<lp::SetNode>();
-        if (set->operation() == lp::SetOperation::kUnion ||
-            set->operation() == lp::SetOperation::kUnionAll) {
-          return set;
-        }
-      }
-
+  auto maybeFlatten =
+      [&](const lp::LogicalPlanNode& node) -> const lp::SetNode* {
+    if (node.kind() != lp::NodeKind::kSet) {
       return nullptr;
-    };
-
-    if (auto* setNode = isUnionLike(*input)) {
-      auto inner = translateUnion(*setNode, setDt, false, isLeftLeaf);
-      children.push_back(inner);
-    } else {
-      makeQueryGraph(*input, kAllAllowedInDt);
-
-      const auto& type = input->outputType();
-
-      if (isLeftLeaf) {
-        // This is the left leaf of a union tree.
-        for (auto i : usedChannels(*input)) {
-          const auto& name = type->nameOf(i);
-
-          ExprCP inner = translateColumn(name);
-          newDt->exprs.push_back(inner);
-
-          // The top dt has the same columns as all the unioned dts.
-          const auto* columnName = toName(name);
-          auto* outer =
-              make<Column>(columnName, setDt, inner->value(), columnName);
-          setDt->columns.push_back(outer);
-          newDt->columns.push_back(outer);
-        }
-        isLeftLeaf = false;
-      } else {
-        for (auto i : usedChannels(*input)) {
-          ExprCP inner = translateColumn(type->nameOf(i));
-          newDt->exprs.push_back(inner);
-        }
-
-        // Same outward facing columns as the top dt of union.
-        newDt->columns = setDt->columns;
-      }
-
-      newDt->makeInitialPlan();
-      children.push_back(newDt);
     }
-  }
-
-  currentDt_ = previousDt;
-  if (isTopLevel) {
-    setDt->children = std::move(children);
-    setDt->setOp = set.operation();
-
-    makeUnionDistributionAndStats(setDt);
-
-    renames_ = std::move(initialRenames);
-    for (const auto* column : setDt->columns) {
-      renames_[column->name()] = column;
+    const auto* set = node.as<lp::SetNode>();
+    const auto setOp = set->operation();
+    if (setOp == setDt->setOp) {
+      // Same set operation can be flattened.
+      return set;
+    }
+    if (setOp == lp::SetOperation::kUnionAll &&
+        setDt->setOp == lp::SetOperation::kUnion) {
+      // UNION ALL can be flattened into UNION.
+      return set;
+    }
+    return nullptr;
+  };
+  if (const auto* setNode = maybeFlatten(input)) {
+    for (const auto& child : setNode->inputs()) {
+      translateUnionInput(renames, *child, isLeftLeaf);
     }
   } else {
-    setDt = newDt();
-    setDt->children = std::move(children);
-    setDt->setOp = set.operation();
+    currentDt_ = newDt();
+    makeQueryGraph(input, kAllAllowedInDt);
+    auto* newDt = currentDt_;
+    currentDt_ = setDt;
+
+    const auto& type = input.outputType();
+
+    if (isLeftLeaf) {
+      // This is the left leaf of a union tree.
+      for (auto i : usedChannels(input)) {
+        const auto& name = type->nameOf(i);
+
+        ExprCP inner = translateColumn(name);
+        newDt->exprs.push_back(inner);
+
+        // The top dt has the same columns as all the unioned dts.
+        const auto* columnName = toName(name);
+        auto* outer =
+            make<Column>(columnName, setDt, inner->value(), columnName);
+        setDt->columns.push_back(outer);
+        newDt->columns.push_back(outer);
+      }
+      isLeftLeaf = false;
+    } else {
+      for (auto i : usedChannels(input)) {
+        ExprCP inner = translateColumn(type->nameOf(i));
+        newDt->exprs.push_back(inner);
+      }
+
+      // Same outward facing columns as the top dt of union.
+      newDt->columns = setDt->columns;
+    }
+
+    newDt->makeInitialPlan();
+    setDt->children.push_back(newDt);
   }
-  return setDt;
+}
+
+void ToGraph::translateUnion(const lp::SetNode& set) {
+  auto renames = std::move(renames_);
+
+  auto* setDt = currentDt_;
+  setDt->setOp = set.operation();
+  bool isLeftLeaf = true;
+  translateUnionInput(renames, set, isLeftLeaf);
+  makeUnionDistributionAndStats(setDt);
+
+  renames_ = std::move(renames);
+  for (const auto* column : setDt->columns) {
+    renames_[column->name()] = column;
+  }
 }
 
 DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
@@ -2186,19 +2182,17 @@ void ToGraph::makeQueryGraph(
       return;
     }
     case lp::NodeKind::kSet: {
-      auto* setDt = newDt();
-
-      auto* set = node.as<lp::SetNode>();
-      if (set->operation() == lp::SetOperation::kUnion ||
-          set->operation() == lp::SetOperation::kUnionAll) {
-        bool isLeftLeaf = true;
-        translateUnion(*set, setDt, true, isLeftLeaf);
+      auto* outerDt = std::exchange(currentDt_, newDt());
+      const auto& set = *node.as<lp::SetNode>();
+      if (set.operation() == lp::SetOperation::kUnion ||
+          set.operation() == lp::SetOperation::kUnionAll) {
+        translateUnion(set);
       } else {
-        translateSetJoin(*set, setDt);
+        translateSetJoin(set);
       }
-      currentDt_->addTable(setDt);
-      return;
-    }
+      outerDt->addTable(currentDt_);
+      currentDt_ = outerDt;
+    } break;
     case lp::NodeKind::kUnnest: {
       if (!contains(allowedInDt, lp::NodeKind::kUnnest)) {
         wrapInDt(node);
