@@ -16,6 +16,7 @@
 #pragma once
 
 #include "axiom/common/Enums.h"
+#include "axiom/common/WriteKind.h"
 #include "axiom/connectors/ConnectorSession.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
 #include "velox/common/memory/HashStringAllocator.h"
@@ -525,33 +526,6 @@ class ConnectorWriteHandle {
 
 using ConnectorWriteHandlePtr = std::shared_ptr<ConnectorWriteHandle>;
 
-/// Specifies what type of write is intended when initiating or concluding a
-/// write operation.
-enum class WriteKind {
-  /// A write operation to a new table which does not yet exist in the
-  /// connector. Covers both creation of an empty table and create as select
-  /// operations.
-  kCreate = 1,
-
-  /// Rows are added and all columns must be specified for the TableWriter.
-  /// Covers insert, Hive partition replacement or any other operation which
-  /// adds whole rows.
-  kInsert = 2,
-
-  /// Individual rows are deleted. Only row ids as per
-  /// ConnectorMetadata::rowIdHandles() are passed to the TableWriter.
-  kDelete = 3,
-
-  /// Column values in individual rows are changed. The TableWriter
-  /// gets first the row ids as per ConnectorMetadata::rowIdHandles()
-  /// and then new values for the columns being changed. The new values
-  /// may overlap with row ids if the row id is a set of primary key
-  /// columns.
-  kUpdate = 4,
-};
-
-AXIOM_DECLARE_ENUM_NAME(WriteKind);
-
 using RowsFuture = folly::SemiFuture<int64_t>;
 
 class ConnectorMetadata {
@@ -723,5 +697,3 @@ class ConnectorMetadata {
 } // namespace facebook::axiom::connector
 
 AXIOM_ENUM_FORMATTER(facebook::axiom::connector::TableKind);
-
-AXIOM_ENUM_FORMATTER(facebook::axiom::connector::WriteKind);
