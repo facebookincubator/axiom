@@ -359,7 +359,7 @@ bool Distribution::isSamePartition(const Distribution& other) const {
     return false;
   }
   for (auto i = 0; i < partition.size(); ++i) {
-    if (!partition[i]->sameOrEqual(*other.partition[i])) {
+    if (!sameOrEqual(partition[i], other.partition[i])) {
       return false;
     }
   }
@@ -371,7 +371,7 @@ bool Distribution::isSameOrder(const Distribution& other) const {
     return false;
   }
   for (size_t i = 0; i < orderKeys.size(); ++i) {
-    if (!orderKeys[i]->sameOrEqual(*other.orderKeys[i]) ||
+    if (!sameOrEqual(orderKeys[i], other.orderKeys[i]) ||
         orderTypes[i] != other.orderTypes[i]) {
       return false;
     }

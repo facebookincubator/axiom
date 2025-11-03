@@ -91,7 +91,7 @@ float orderPrefixDistance(
   for (int32_t i = 0; i < input->distribution().orderKeys.size() &&
        i < orderKeys.size() && i < keys.size();
        ++i) {
-    if (input->distribution().orderKeys[i]->sameOrEqual(*keys[i])) {
+    if (sameOrEqual(input->distribution().orderKeys[i], keys[i])) {
       selection *= orderKeys[i]->value().cardinality;
     }
   }
@@ -669,16 +669,13 @@ void Aggregation::accept(
   visitor.visit(*this, context);
 }
 
-HashBuild::HashBuild(RelationOpPtr input, ExprVector keysVector, PlanP plan)
-    : RelationOp{RelType::kHashBuild, std::move(input)},
-      keys{std::move(keysVector)},
-      plan{plan} {
+HashBuild::HashBuild(RelationOpPtr input, size_t numKeys)
+    : RelationOp{RelType::kHashBuild, std::move(input)} {
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = 1;
 
-  const auto numKeys = static_cast<float>(keys.size());
   const auto numColumns = static_cast<float>(columns().size());
-  cost_.unitCost = numKeys * Costs::kHashColumnCost +
+  cost_.unitCost = static_cast<float>(numKeys) * Costs::kHashColumnCost +
       Costs::hashProbeCost(cost_.inputCardinality) +
       numColumns * Costs::kHashExtractColumnCost * 2;
   cost_.totalBytes = cost_.inputCardinality * byteSize(columns());

@@ -485,12 +485,7 @@ using JoinCP = const Join*;
 /// cardinality of this is counted as setup cost in the first
 /// referencing join and not counted in subsequent ones.
 struct HashBuild : public RelationOp {
-  HashBuild(RelationOpPtr input, ExprVector keys, PlanP plan);
-
-  const ExprVector keys;
-
-  // The plan producing the build data. Used for deduplicating joins.
-  PlanP plan;
+  HashBuild(RelationOpPtr input, size_t numKeys);
 
   std::string toString(bool recursive, bool detail) const override;
 

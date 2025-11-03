@@ -30,6 +30,8 @@
 /// constant.
 namespace facebook::axiom::optimizer {
 
+bool sameOrEqual(ExprCP l, ExprCP r);
+
 /// Superclass for all expressions.
 class Expr : public PlanObject {
  public:
@@ -45,10 +47,6 @@ class Expr : public PlanObject {
 
   /// Returns all tables 'this' depends on.
   PlanObjectSet allTables() const;
-
-  /// True if '&other == this' or is recursively equal with column
-  /// leaves either same or in same equivalence.
-  bool sameOrEqual(const Expr& other) const;
 
   const PlanObjectSet& columns() const {
     return columns_;
@@ -404,7 +402,7 @@ class Lambda : public Expr {
   ExprCP body_;
 };
 
-/// Represens a set of transitively equal columns.
+/// Represents a set of transitively equal columns.
 struct Equivalence {
   /// Each element has a direct or implied equality edge to every other.
   ColumnVector columns;
@@ -970,5 +968,65 @@ class WritePlan : public PlanObject {
 };
 
 using WritePlanCP = const WritePlan*;
+
+template <typename ColumnEqual>
+bool sameOrEqual(ExprCP l, ExprCP r, const ColumnEqual& columnEqual) {
+  if (l == r) {
+    return true;
+  }
+  if (!l || !r) {
+    return false;
+  }
+  if (l->type() != r->type()) {
+    return false;
+  }
+  auto forExprs = [&](const auto& l, const auto& r) {
+    return std::ranges::equal(l, r, [&](ExprCP l, ExprCP r) {
+      return sameOrEqual(l, r, columnEqual);
+    });
+  };
+  switch (l->type()) {
+    case PlanType::kColumnExpr:
+      return columnEqual(l->as<Column>(), r->as<Column>());
+    case PlanType::kLiteralExpr:
+      return l->as<Literal>()->literal() == r->as<Literal>()->literal();
+    case PlanType::kFieldExpr: {
+      const auto* a = l->as<Field>();
+      const auto* b = r->as<Field>();
+      if (a->field() != b->field() || a->index() != b->index()) {
+        return false;
+      }
+      return sameOrEqual(a->base(), b->base(), columnEqual);
+    }
+    case PlanType::kAggregateExpr: {
+      const auto* a = l->as<Aggregate>();
+      const auto* b = r->as<Aggregate>();
+      if (a->isDistinct() != b->isDistinct()) {
+        return false;
+      }
+      if (sameOrEqual(a->condition(), b->condition())) {
+        return false;
+      }
+      if (a->orderTypes() != b->orderTypes()) {
+        return false;
+      }
+      if (!forExprs(a->orderKeys(), b->orderKeys())) {
+        return false;
+      }
+    }
+      [[fallthrough]];
+    case PlanType::kCallExpr: {
+      const auto* a = l->as<Call>();
+      const auto* b = r->as<Call>();
+      if (a->name() != b->name()) {
+        return false;
+      }
+      return forExprs(a->args(), b->args());
+    }
+    // TODO: handle other expression types: Field, Lambda.
+    default:
+      return false;
+  }
+}
 
 } // namespace facebook::axiom::optimizer

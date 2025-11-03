@@ -103,6 +103,7 @@ add_executable(
   Genies.cpp
   TestConnectorQueryTest.cpp
   WriteTest.cpp
+  #QueryGraphTest.cpp
 )
 
 add_test(axiom_optimizer_tests axiom_optimizer_tests)

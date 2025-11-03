@@ -43,11 +43,11 @@ const char* SpecialFormCallNames::kIn = "__in";
 
 void Column::equals(ColumnCP other) const {
   if (!equivalence_ && !other->equivalence_) {
-    auto* equiv = make<Equivalence>();
-    equiv->columns.push_back(this);
-    equiv->columns.push_back(other);
-    equivalence_ = equiv;
-    other->equivalence_ = equiv;
+    auto* equivalence = make<Equivalence>();
+    equivalence->columns.push_back(this);
+    equivalence->columns.push_back(other);
+    equivalence_ = equivalence;
+    other->equivalence_ = equivalence;
     return;
   }
   if (!other->equivalence_) {
@@ -59,7 +59,7 @@ void Column::equals(ColumnCP other) const {
     other->equals(this);
     return;
   }
-  for (auto& column : other->equivalence_->columns) {
+  for (const auto* column : other->equivalence_->columns) {
     equivalence_->columns.push_back(column);
     column->equivalence_ = equivalence_;
   }
@@ -347,46 +347,10 @@ const FunctionSet& Expr::functions() const {
   return empty;
 }
 
-bool Expr::sameOrEqual(const Expr& other) const {
-  if (this == &other) {
-    return true;
-  }
-  if (type() != other.type()) {
-    return false;
-  }
-  switch (type()) {
-    case PlanType::kColumnExpr:
-      return as<Column>()->equivalence() &&
-          as<Column>()->equivalence() == other.as<Column>()->equivalence();
-    case PlanType::kAggregateExpr: {
-      auto a = as<Aggregate>();
-      auto b = other.as<Aggregate>();
-      if (a->isDistinct() != b->isDistinct() ||
-          (a->condition() != b->condition() &&
-           (!a->condition() || !b->condition() ||
-            !a->condition()->sameOrEqual(*b->condition())))) {
-        return false;
-      }
-    }
-      [[fallthrough]];
-    case PlanType::kCallExpr: {
-      if (as<Call>()->name() != other.as<Call>()->name()) {
-        return false;
-      }
-      auto numArgs = as<Call>()->args().size();
-      if (numArgs != other.as<Call>()->args().size()) {
-        return false;
-      }
-      for (auto i = 0; i < numArgs; ++i) {
-        if (as<Call>()->argAt(i)->sameOrEqual(*other.as<Call>()->argAt(i))) {
-          return false;
-        }
-      }
-      return true;
-    }
-    default:
-      return false;
-  }
+bool sameOrEqual(ExprCP l, ExprCP r) {
+  return sameOrEqual(l, r, [](ColumnCP l, ColumnCP r) {
+    return l->equivalence() && l->equivalence() == r->equivalence();
+  });
 }
 
 PlanObjectCP Expr::singleTable() const {

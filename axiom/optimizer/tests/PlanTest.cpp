@@ -1428,6 +1428,58 @@ TEST_F(PlanTest, lambdaArgs) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_F(PlanTest, joinExpr) {
+  testConnector_->addTable("t1", ROW("c1", BIGINT()));
+  testConnector_->addTable("t2", ROW("c2", BIGINT()));
+
+  {
+    lp::PlanBuilder::Context ctx;
+    auto logicalPlan =
+        lp::PlanBuilder{ctx}
+            .tableScan(kTestConnectorId, "t1")
+            .crossJoin(lp::PlanBuilder{ctx}.tableScan(kTestConnectorId, "t2"))
+            .filter("2 * c1 = c2 * 2")
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder{}
+            .tableScan("t1")
+            .hashJoin(core::PlanMatcherBuilder{}.tableScan("t2").build())
+            .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    lp::PlanBuilder::Context ctx;
+    auto logicalPlan = lp::PlanBuilder{ctx}
+                           .tableScan(kTestConnectorId, "t1")
+                           .with({"c1 * 2 as x"})
+                           .crossJoin(
+                               lp::PlanBuilder{ctx}
+                                   .tableScan(kTestConnectorId, "t2")
+                                   .with({"c2 * 2 as y"}))
+                           .filter("x = y")
+                           .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher =
+        // TODO: In future we want to optimize such plans to avoid redundancy,
+        // e.g. (hashJoin can produce columns only from left side)
+        // .project({"c1", "c1 * 2 as x"})
+        // .project({"c1", "x", "c1 as c2", "x as y"})
+        core::PlanMatcherBuilder{}
+            .tableScan("t1")
+            .hashJoin(core::PlanMatcherBuilder{}.tableScan("t2").build())
+            .project({"c1", "c1 * 2 as x", "c2", "c2 * 2 as y"})
+            .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 #undef AXIOM_ASSERT_PLAN
 
 } // namespace

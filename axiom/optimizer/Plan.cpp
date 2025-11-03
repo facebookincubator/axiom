@@ -427,12 +427,8 @@ std::pair<JoinSide, JoinSide> JoinCandidate::joinSides() const {
 
 namespace {
 bool hasEqual(ExprCP key, const ExprVector& keys) {
-  if (key->isNot(PlanType::kColumnExpr) || !key->as<Column>()->equivalence()) {
-    return false;
-  }
-
   return std::ranges::any_of(
-      keys, [&](ExprCP e) { return key->sameOrEqual(*e); });
+      keys, [&](ExprCP e) { return sameOrEqual(key, e); });
 }
 } // namespace
 
