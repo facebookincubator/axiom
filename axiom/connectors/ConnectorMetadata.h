@@ -171,11 +171,6 @@ class Column {
   std::mutex mutex_;
 };
 
-/// Describes the kind of table, e.g. durable vs. temporary.
-enum class TableKind { kTable, kTempTable };
-
-AXIOM_DECLARE_ENUM_NAME(TableKind);
-
 class Table;
 
 /// Represents sorting order. Duplicate of core::SortOrder.
@@ -359,11 +354,9 @@ class Table : public std::enable_shared_from_this<Table> {
   Table(
       std::string name,
       velox::RowTypePtr type,
-      TableKind kind = TableKind::kTable,
       folly::F14FastMap<std::string, velox::Variant> options = {})
       : name_(std::move(name)),
         type_(std::move(type)),
-        kind_(kind),
         options_(std::move(options)) {
     VELOX_CHECK(!name_.empty());
     VELOX_CHECK_NOT_NULL(type_);
@@ -376,10 +369,6 @@ class Table : public std::enable_shared_from_this<Table> {
   /// Returns all columns as RowType.
   const velox::RowTypePtr& type() const {
     return type_;
-  }
-
-  TableKind kind() const {
-    return kind_;
   }
 
   /// Returns the mapping of columns keyed on column names as abstract,
@@ -416,7 +405,6 @@ class Table : public std::enable_shared_from_this<Table> {
   // Discovered from data. In the event of different types, we take the
   // latest (i.e. widest) table type.
   const velox::RowTypePtr type_;
-  const TableKind kind_;
   const folly::F14FastMap<std::string, velox::Variant> options_;
 };
 
@@ -721,7 +709,5 @@ class ConnectorMetadata {
 };
 
 } // namespace facebook::axiom::connector
-
-AXIOM_ENUM_FORMATTER(facebook::axiom::connector::TableKind);
 
 AXIOM_ENUM_FORMATTER(facebook::axiom::connector::WriteKind);

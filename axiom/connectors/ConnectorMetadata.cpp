@@ -17,15 +17,7 @@
 #include "axiom/connectors/ConnectorMetadata.h"
 
 namespace facebook::axiom::connector {
-
 namespace {
-const auto& tableKindNames() {
-  static const folly::F14FastMap<TableKind, std::string_view> kNames = {
-      {TableKind::kTable, "TABLE"},
-      {TableKind::kTempTable, "TEMP_TABLE"},
-  };
-  return kNames;
-}
 
 const auto& writeKindNames() {
   static const folly::F14FastMap<WriteKind, std::string_view> kNames = {
@@ -38,8 +30,6 @@ const auto& writeKindNames() {
 }
 
 } // namespace
-
-AXIOM_DEFINE_ENUM_NAME(TableKind, tableKindNames);
 
 AXIOM_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 

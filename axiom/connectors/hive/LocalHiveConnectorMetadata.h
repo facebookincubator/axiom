@@ -141,11 +141,7 @@ class LocalTable : public Table {
       std::string name,
       velox::RowTypePtr type,
       folly::F14FastMap<std::string, velox::Variant> options = {})
-      : Table(
-            std::move(name),
-            std::move(type),
-            TableKind::kTable,
-            std::move(options)) {
+      : Table(std::move(name), std::move(type), std::move(options)) {
     for (auto i = 0; i < Table::type()->size(); ++i) {
       const auto& name = Table::type()->nameOf(i);
       auto column = std::make_unique<Column>(name, Table::type()->childAt(i));
