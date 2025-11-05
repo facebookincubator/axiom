@@ -765,4 +765,5 @@ using TableWriteNodePtr = std::shared_ptr<const TableWriteNode>;
 
 } // namespace facebook::axiom::logical_plan
 
+AXIOM_ENUM_FORMATTER(facebook::axiom::logical_plan::SetOperation);
 AXIOM_ENUM_FORMATTER(facebook::axiom::logical_plan::WriteKind);

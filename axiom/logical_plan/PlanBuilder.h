@@ -315,6 +315,8 @@ class PlanBuilder {
 
   PlanBuilder& except(const PlanBuilder& other);
 
+  PlanBuilder& setOperation(SetOperation op, const PlanBuilder& other);
+
   PlanBuilder& setOperation(
       SetOperation op,
       const std::vector<PlanBuilder>& inputs);

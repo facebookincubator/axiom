@@ -773,6 +773,137 @@ TEST_F(PlanTest, unionAll) {
   checkSame(logicalPlan, referencePlan);
 }
 
+// Checks
+// - UNION ALL of two UNION ALL (should be flatten)
+// - UNION ALL of two UNION (shouldn't be flatten)
+// - UNION of two UNION ALL (should be flatten)
+// - UNION of two UNION (should be flatten)
+TEST_F(PlanTest, unionFlatten) {
+  auto nationType =
+      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
+          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
+
+  const auto connectorId = exec::test::kHiveConnectorId;
+  const auto connector = velox::connector::getConnector(connectorId);
+
+  const std::vector<std::string>& names = nationType->names();
+
+  for (auto [rootType, leftType, rightType] : {
+           std::tuple{
+               lp::SetOperation::kUnion,
+               lp::SetOperation::kUnion,
+               lp::SetOperation::kUnion,
+           },
+           {
+               lp::SetOperation::kUnion,
+               lp::SetOperation::kUnionAll,
+               lp::SetOperation::kUnionAll,
+           },
+           {
+               lp::SetOperation::kUnionAll,
+               lp::SetOperation::kUnion,
+               lp::SetOperation::kUnion,
+           },
+           {
+               lp::SetOperation::kUnionAll,
+               lp::SetOperation::kUnionAll,
+               lp::SetOperation::kUnionAll,
+           },
+
+       }) {
+    lp::PlanBuilder::Context ctx;
+    auto makeT1 = [&] {
+      return lp::PlanBuilder(ctx)
+          .tableScan(connectorId, "nation", names)
+          .filter("n_nationkey < 11");
+    };
+    auto makeT2 = [&] {
+      return lp::PlanBuilder(ctx)
+          .tableScan(connectorId, "nation", names)
+          .filter("n_nationkey > 13");
+    };
+
+    SCOPED_TRACE(
+        fmt::format(
+            "rootType={}, leftType={}, rightType={}",
+            rootType,
+            leftType,
+            rightType));
+
+    auto logicalPlan =
+        makeT1()
+            .setOperation(leftType, makeT1())
+            .setOperation(rootType, makeT2().setOperation(rightType, makeT2()))
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    if (rootType == lp::SetOperation::kUnion) {
+      auto matcher =
+          core::PlanMatcherBuilder()
+              .tableScan()
+              .localPartition({
+                  core::PlanMatcherBuilder().tableScan().project().build(),
+                  core::PlanMatcherBuilder().tableScan().project().build(),
+                  core::PlanMatcherBuilder().tableScan().project().build(),
+              })
+              .aggregation()
+              .build();
+
+      AXIOM_ASSERT_PLAN(plan, matcher);
+    } else if (
+        leftType == lp::SetOperation::kUnionAll &&
+        rightType == lp::SetOperation::kUnionAll) {
+      auto matcher =
+          core::PlanMatcherBuilder()
+              .tableScan()
+              .localPartition({
+                  core::PlanMatcherBuilder().tableScan().project().build(),
+                  core::PlanMatcherBuilder().tableScan().project().build(),
+                  core::PlanMatcherBuilder().tableScan().project().build(),
+              })
+              .build();
+
+      AXIOM_ASSERT_PLAN(plan, matcher);
+      continue;
+    } else {
+      // We cannot flatten UNION inside UNION ALL.
+      auto matcher =
+          core::PlanMatcherBuilder()
+              .tableScan()
+              .localPartition(
+                  core::PlanMatcherBuilder().tableScan().project().build())
+              .aggregation()
+              .localPartition(
+                  core::PlanMatcherBuilder()
+                      .tableScan()
+                      .localPartition(
+                          core::PlanMatcherBuilder()
+                              .tableScan()
+                              .project()
+                              .build())
+                      .aggregation()
+                      .project()
+                      .build())
+              .build();
+
+      AXIOM_ASSERT_PLAN(plan, matcher);
+    }
+
+    auto referencePlan =
+        exec::test::PlanBuilder(pool_.get())
+            .tableScan("nation", nationType)
+            .filter("n_nationkey < 11 or n_nationkey > 13")
+            .singleAggregation(
+                {"n_nationkey", "n_regionkey", "n_name", "n_comment"}, {})
+            .planNode();
+
+    // Skip distributed run. Problem with local exchange source with
+    // multiple inputs.
+    checkSame(logicalPlan, referencePlan, {.numWorkers = 1, .numDrivers = 4});
+  }
+}
+
 TEST_F(PlanTest, unionJoin) {
   auto partType = ROW({"p_partkey", "p_retailprice"}, {BIGINT(), DOUBLE()});
   auto partSuppType = ROW({"ps_partkey", "ps_availqty"}, {BIGINT(), INTEGER()});
