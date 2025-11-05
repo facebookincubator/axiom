@@ -1188,15 +1188,7 @@ PlanBuilder& PlanBuilder::except(const PlanBuilder& other) {
 PlanBuilder& PlanBuilder::setOperation(
     SetOperation op,
     const PlanBuilder& other) {
-  VELOX_USER_CHECK_NOT_NULL(node_, "{} node cannot be a leaf node", op);
-  VELOX_USER_CHECK_NOT_NULL(other.node_);
-
-  node_ = std::make_shared<SetNode>(
-      nextId(),
-      std::vector<LogicalPlanNodePtr>{std::move(node_), other.node_},
-      op);
-
-  return *this;
+  return setOperation(op, {std::move(*this), other});
 }
 
 PlanBuilder& PlanBuilder::setOperation(

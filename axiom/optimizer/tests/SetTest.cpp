@@ -15,7 +15,7 @@
  */
 
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/optimizer/tests/ParquetTpchTest.h"
+#include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -26,54 +26,19 @@ namespace {
 using namespace velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class SetTest : public test::QueryTestBase {
- public:
-  static void SetUpTestCase() {
-    test::QueryTestBase::SetUpTestCase();
-
-    std::string path;
-    if (FLAGS_data_path.empty()) {
-      gTempDirectory = velox::exec::test::TempDirectoryPath::create();
-      path = gTempDirectory->getPath();
-      test::ParquetTpchTest::createTables(path);
-    } else {
-      path = FLAGS_data_path;
-      if (FLAGS_create_dataset) {
-        test::ParquetTpchTest::createTables(path);
-      }
-    }
-
-    LocalRunnerTestBase::localDataPath_ = path;
-    LocalRunnerTestBase::localFileFormat_ =
-        velox::dwio::common::FileFormat::PARQUET;
-  }
-
-  static void TearDownTestCase() {
-    gTempDirectory.reset();
-    test::QueryTestBase::TearDownTestCase();
-  }
-
- private:
-  inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
-      gTempDirectory;
-};
+class SetTest : public HiveQueriesTestBase {};
 
 TEST_F(SetTest, unionAll) {
-  auto nationType =
-      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
-          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
-
-  const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
+  auto nationType = getSchema("nation");
 
   const std::vector<std::string>& names = nationType->names();
 
-  lp::PlanBuilder::Context ctx;
+  lp::PlanBuilder::Context ctx{exec::test::kHiveConnectorId};
   auto t1 = lp::PlanBuilder(ctx)
-                .tableScan(connectorId, "nation", names)
+                .tableScan("nation", names)
                 .filter("n_nationkey < 11");
   auto t2 = lp::PlanBuilder(ctx)
-                .tableScan(connectorId, "nation", names)
+                .tableScan("nation", names)
                 .filter("n_nationkey > 13");
 
   auto logicalPlan = t1.unionAll(t2)
@@ -116,7 +81,6 @@ TEST_F(SetTest, unionJoin) {
   auto partSuppType = ROW({"ps_partkey", "ps_availqty"}, {BIGINT(), INTEGER()});
 
   const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
 
   lp::PlanBuilder::Context ctx;
   auto ps1 =
@@ -218,12 +182,7 @@ TEST_F(SetTest, unionJoin) {
 // - UNION of two UNION ALL (should be flatten)
 // - UNION of two UNION (should be flatten)
 TEST_F(SetTest, unionFlatten) {
-  auto nationType =
-      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
-          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
-
-  const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
+  auto nationType = getSchema("nation");
 
   const std::vector<std::string>& names = nationType->names();
 
@@ -250,15 +209,15 @@ TEST_F(SetTest, unionFlatten) {
            },
 
        }) {
-    lp::PlanBuilder::Context ctx;
+    lp::PlanBuilder::Context ctx{exec::test::kHiveConnectorId};
     auto makeT1 = [&] {
       return lp::PlanBuilder(ctx)
-          .tableScan(connectorId, "nation", names)
+          .tableScan("nation", names)
           .filter("n_nationkey < 11");
     };
     auto makeT2 = [&] {
       return lp::PlanBuilder(ctx)
-          .tableScan(connectorId, "nation", names)
+          .tableScan("nation", names)
           .filter("n_nationkey > 13");
     };
 
@@ -277,65 +236,57 @@ TEST_F(SetTest, unionFlatten) {
 
     auto plan = toSingleNodePlan(logicalPlan);
 
+    auto nonFirstChildMatcher =
+        core::PlanMatcherBuilder().tableScan().project().build();
     if (rootType == lp::SetOperation::kUnion) {
-      auto matcher =
-          core::PlanMatcherBuilder()
-              .tableScan()
-              .localPartition({
-                  core::PlanMatcherBuilder().tableScan().project().build(),
-                  core::PlanMatcherBuilder().tableScan().project().build(),
-                  core::PlanMatcherBuilder().tableScan().project().build(),
-              })
-              .aggregation()
-              .build();
+      auto matcher = core::PlanMatcherBuilder()
+                         .tableScan()
+                         .localPartition({
+                             nonFirstChildMatcher,
+                             nonFirstChildMatcher,
+                             nonFirstChildMatcher,
+                         })
+                         .aggregation()
+                         .build();
 
       AXIOM_ASSERT_PLAN(plan, matcher);
     } else if (
         leftType == lp::SetOperation::kUnionAll &&
         rightType == lp::SetOperation::kUnionAll) {
-      auto matcher =
-          core::PlanMatcherBuilder()
-              .tableScan()
-              .localPartition({
-                  core::PlanMatcherBuilder().tableScan().project().build(),
-                  core::PlanMatcherBuilder().tableScan().project().build(),
-                  core::PlanMatcherBuilder().tableScan().project().build(),
-              })
-              .build();
+      auto matcher = core::PlanMatcherBuilder()
+                         .tableScan()
+                         .localPartition({
+                             nonFirstChildMatcher,
+                             nonFirstChildMatcher,
+                             nonFirstChildMatcher,
+                         })
+                         .build();
 
       AXIOM_ASSERT_PLAN(plan, matcher);
       continue;
     } else {
       // We cannot flatten UNION inside UNION ALL.
-      auto matcher =
-          core::PlanMatcherBuilder()
-              .tableScan()
-              .localPartition(
-                  core::PlanMatcherBuilder().tableScan().project().build())
-              .aggregation()
-              .localPartition(
-                  core::PlanMatcherBuilder()
-                      .tableScan()
-                      .localPartition(
-                          core::PlanMatcherBuilder()
-                              .tableScan()
-                              .project()
-                              .build())
-                      .aggregation()
-                      .project()
-                      .build())
-              .build();
+      auto matcher = core::PlanMatcherBuilder()
+                         .tableScan()
+                         .localPartition(nonFirstChildMatcher)
+                         .aggregation()
+                         .localPartition(
+                             core::PlanMatcherBuilder()
+                                 .tableScan()
+                                 .localPartition(nonFirstChildMatcher)
+                                 .aggregation()
+                                 .project()
+                                 .build())
+                         .build();
 
       AXIOM_ASSERT_PLAN(plan, matcher);
     }
 
-    auto referencePlan =
-        exec::test::PlanBuilder(pool_.get())
-            .tableScan("nation", nationType)
-            .filter("n_nationkey < 11 or n_nationkey > 13")
-            .singleAggregation(
-                {"n_nationkey", "n_regionkey", "n_name", "n_comment"}, {})
-            .planNode();
+    auto referencePlan = exec::test::PlanBuilder(pool_.get())
+                             .tableScan("nation", nationType)
+                             .filter("n_nationkey < 11 or n_nationkey > 13")
+                             .singleAggregation(names, {})
+                             .planNode();
 
     // Skip distributed run. Problem with local exchange source with
     // multiple inputs.
@@ -344,26 +295,21 @@ TEST_F(SetTest, unionFlatten) {
 }
 
 TEST_F(SetTest, intersect) {
-  auto nationType =
-      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
-          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
-
-  const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
+  auto nationType = getSchema("nation");
 
   const std::vector<std::string>& names = nationType->names();
 
-  lp::PlanBuilder::Context ctx;
+  lp::PlanBuilder::Context ctx{exec::test::kHiveConnectorId};
   auto t1 = lp::PlanBuilder(ctx)
-                .tableScan(connectorId, "nation", names)
+                .tableScan("nation", names)
                 .filter("n_nationkey < 21")
                 .project({"n_nationkey", "n_regionkey"});
   auto t2 = lp::PlanBuilder(ctx)
-                .tableScan(connectorId, "nation", names)
+                .tableScan("nation", names)
                 .filter("n_nationkey > 11")
                 .project({"n_nationkey", "n_regionkey"});
   auto t3 = lp::PlanBuilder(ctx)
-                .tableScan(connectorId, "nation", names)
+                .tableScan("nation", names)
                 .filter("n_nationkey > 12")
                 .project({"n_nationkey", "n_regionkey"});
 
@@ -410,26 +356,21 @@ TEST_F(SetTest, intersect) {
 }
 
 TEST_F(SetTest, except) {
-  auto nationType =
-      ROW({"n_nationkey", "n_regionkey", "n_name", "n_comment"},
-          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
-
-  const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
+  auto nationType = getSchema("nation");
 
   const std::vector<std::string>& names = nationType->names();
 
-  lp::PlanBuilder::Context ctx;
+  lp::PlanBuilder::Context ctx{exec::test::kHiveConnectorId};
   auto t1 = lp::PlanBuilder(ctx)
-                .tableScan(connectorId, "nation", names)
+                .tableScan("nation", names)
                 .filter("n_nationkey < 21")
                 .project({"n_nationkey", "n_regionkey"});
   auto t2 = lp::PlanBuilder(ctx)
-                .tableScan(connectorId, "nation", names)
+                .tableScan("nation", names)
                 .filter("n_nationkey > 16")
                 .project({"n_nationkey", "n_regionkey"});
   auto t3 = lp::PlanBuilder(ctx)
-                .tableScan(connectorId, "nation", names)
+                .tableScan("nation", names)
                 .filter("n_nationkey <= 5")
                 .project({"n_nationkey", "n_regionkey"});
 

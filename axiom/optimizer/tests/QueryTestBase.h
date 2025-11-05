@@ -27,8 +27,7 @@
 
 DECLARE_string(history_save_path);
 
-namespace facebook::axiom::optimizer {
-namespace test {
+namespace facebook::axiom::optimizer::test {
 
 struct TestResult {
   /// Runner that produced the results. Owns results.
@@ -166,8 +165,6 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   inline static std::unique_ptr<VeloxHistory> gSuiteHistory;
 };
 
-} // namespace test
-
 inline auto gte(const std::string& name, int64_t n) {
   return velox::common::test::singleSubfieldFilter(
       name, velox::exec::greaterThanOrEqual(n));
@@ -193,7 +190,7 @@ inline auto lt(const std::string& name, double d) {
       name, velox::exec::lessThanDouble(d));
 }
 
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::optimizer::test
 
 #define AXIOM_ASSERT_PLAN(plan, matcher) \
   ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);

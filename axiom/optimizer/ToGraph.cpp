@@ -1905,12 +1905,11 @@ void makeUnionDistributionAndStats(DerivedTableP setDt) {
 
 void translateSetOperationInput(
     const lp::LogicalPlanNode& input,
-    const std::function<const lp::LogicalPlanNode*(const lp::LogicalPlanNode&)>&
-        maybeFlatten,
+    const std::function<bool(const lp::LogicalPlanNode&)>& shouldFlatten,
     const std::function<void(const lp::LogicalPlanNode&)>& translateInput) {
-  if (const auto* setNode = maybeFlatten(input)) {
-    for (const auto& child : setNode->inputs()) {
-      translateSetOperationInput(*child, maybeFlatten, translateInput);
+  if (shouldFlatten(input)) {
+    for (const auto& child : input.inputs()) {
+      translateSetOperationInput(*child, shouldFlatten, translateInput);
     }
   } else {
     translateInput(input);
@@ -1923,23 +1922,22 @@ void ToGraph::translateUnion(const lp::SetNode& set) {
   auto* setDt = currentDt_;
   setDt->setOp = set.operation();
 
-  auto maybeFlatten =
-      [&](const lp::LogicalPlanNode& input) -> const lp::LogicalPlanNode* {
+  auto shouldFlatten = [&](const lp::LogicalPlanNode& input) {
     if (input.kind() != lp::NodeKind::kSet) {
-      return nullptr;
+      return false;
     }
-    const auto* inputSet = input.as<lp::SetNode>();
-    const auto inputSetOp = inputSet->operation();
-    if (inputSetOp == setDt->setOp) {
+    const auto inputSetOp = input.as<lp::SetNode>()->operation();
+    const auto parentSetOp = setDt->setOp;
+    if (inputSetOp == parentSetOp) {
       // Same set operation can be flattened.
-      return inputSet;
+      return true;
     }
     if (inputSetOp == lp::SetOperation::kUnionAll &&
-        setDt->setOp == lp::SetOperation::kUnion) {
+        parentSetOp == lp::SetOperation::kUnion) {
       // UNION ALL can be flattened into UNION.
-      return inputSet;
+      return true;
     }
-    return nullptr;
+    return false;
   };
 
   auto renames = std::move(renames_);
@@ -1984,7 +1982,7 @@ void ToGraph::translateUnion(const lp::SetNode& set) {
     setDt->children.push_back(newDt);
   };
 
-  translateSetOperationInput(set, maybeFlatten, translateUnionInput);
+  translateSetOperationInput(set, shouldFlatten, translateUnionInput);
   makeUnionDistributionAndStats(setDt);
 
   renames_ = std::move(renames);

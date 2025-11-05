@@ -479,7 +479,6 @@ TEST_F(PlanTest, filterToJoinEdge) {
   auto regionType = ROW({"r_regionkey"}, {BIGINT()});
 
   const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
 
   lp::PlanBuilder::Context context;
   auto logicalPlan = lp::PlanBuilder(context)
@@ -634,7 +633,6 @@ TEST_F(PlanTest, filterBreakup) {
        {"p_size", INTEGER()}});
 
   const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
 
   lp::PlanBuilder::Context context;
   auto logicalPlan =
@@ -708,7 +706,6 @@ TEST_F(PlanTest, valuesComplex) {
   });
 
   const auto connectorId = exec::test::kHiveConnectorId;
-  const auto connector = velox::connector::getConnector(connectorId);
 
   lp::PlanBuilder::Context ctx{connectorId};
   auto logicalPlan = lp::PlanBuilder(ctx).values({rowVector}).build();
