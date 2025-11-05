@@ -278,6 +278,9 @@ class ToGraph {
   // Adds a JoinEdge corresponding to 'join' to the enclosing DerivedTable.
   void translateJoin(const logical_plan::JoinNode& join);
 
+  // Creates derived tables for set operation inputs, put them to current
+  // DerivedTable tables and adds join edges between them to implement INTERSECT
+  // or EXCEPT.
   void translateSetJoin(const logical_plan::SetNode& set);
 
   // Updates the distribution and column stats of 'setDt', which must
@@ -287,12 +290,18 @@ class ToGraph {
       DerivedTableP setDt,
       DerivedTableP innerDt = nullptr);
 
+  // Creates derived tables for set operation inputs, put them in current
+  // DerivedTable as a children and set setOp to implement UNION or UNION ALL.
+  // This method recursively flattens
+  // - UNION ALL inside UNION and UNION ALL
+  // - UNION inside UNION.
+  void translateUnion(const logical_plan::SetNode& set);
+
+  // Helper method needed only to implement recursion for translateUnion.
   void translateUnionInput(
       const folly::F14FastMap<std::string, ExprCP>& renames,
       const logical_plan::LogicalPlanNode& input,
       bool& isFirstInput);
-
-  void translateUnion(const logical_plan::SetNode& set);
 
   void translateUnnest(
       const logical_plan::UnnestNode& logicalUnnest,
