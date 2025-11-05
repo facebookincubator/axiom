@@ -1911,7 +1911,7 @@ void ToGraph::makeUnionDistributionAndStats(
 void ToGraph::translateUnionInput(
     const folly::F14FastMap<std::string, ExprCP>& renames,
     const lp::LogicalPlanNode& input,
-    bool& isLeftLeaf) {
+    bool& isFirstInput) {
   renames_ = renames;
 
   auto* setDt = currentDt_;
@@ -1936,7 +1936,7 @@ void ToGraph::translateUnionInput(
   };
   if (const auto* setNode = maybeFlatten(input)) {
     for (const auto& child : setNode->inputs()) {
-      translateUnionInput(renames, *child, isLeftLeaf);
+      translateUnionInput(renames, *child, isFirstInput);
     }
   } else {
     currentDt_ = newDt();
@@ -1946,8 +1946,8 @@ void ToGraph::translateUnionInput(
 
     const auto& type = input.outputType();
 
-    if (isLeftLeaf) {
-      // This is the left leaf of a union tree.
+    if (isFirstInput) {
+      // This is the first input of a union tree.
       for (auto i : usedChannels(input)) {
         const auto& name = type->nameOf(i);
 
@@ -1961,7 +1961,7 @@ void ToGraph::translateUnionInput(
         setDt->columns.push_back(outer);
         newDt->columns.push_back(outer);
       }
-      isLeftLeaf = false;
+      isFirstInput = false;
     } else {
       for (auto i : usedChannels(input)) {
         ExprCP inner = translateColumn(type->nameOf(i));
@@ -1982,8 +1982,8 @@ void ToGraph::translateUnion(const lp::SetNode& set) {
 
   auto* setDt = currentDt_;
   setDt->setOp = set.operation();
-  bool isLeftLeaf = true;
-  translateUnionInput(renames, set, isLeftLeaf);
+  bool isFirstInput = true;
+  translateUnionInput(renames, set, isFirstInput);
   makeUnionDistributionAndStats(setDt);
 
   renames_ = std::move(renames);

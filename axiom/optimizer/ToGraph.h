@@ -290,7 +290,7 @@ class ToGraph {
   void translateUnionInput(
       const folly::F14FastMap<std::string, ExprCP>& renames,
       const logical_plan::LogicalPlanNode& input,
-      bool& isLeftLeaf);
+      bool& isFirstInput);
 
   void translateUnion(const logical_plan::SetNode& set);
 
