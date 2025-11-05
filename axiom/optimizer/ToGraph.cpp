@@ -1879,70 +1879,77 @@ void ToGraph::translateSetJoin(const lp::SetNode& set) {
   setDt->makeInitialPlan();
 }
 
-void ToGraph::makeUnionDistributionAndStats(
-    DerivedTableP setDt,
-    DerivedTableP innerDt) {
-  if (innerDt == nullptr) {
-    innerDt = setDt;
-  }
-  if (innerDt->children.empty()) {
-    VELOX_CHECK_EQ(
-        innerDt->columns.size(),
-        setDt->columns.size(),
-        "Union inputs must have same arity also after pruning");
+namespace {
 
-    auto plan = innerDt->bestInitialPlan()->op;
-    setDt->cardinality += plan->resultCardinality();
+void makeUnionDistributionAndStats(DerivedTableP setDt) {
+  for (const auto* childDt : setDt->children) {
+    VELOX_DCHECK_EQ(childDt->columns.size(), setDt->columns.size());
 
-    for (auto i = 0; i < setDt->columns.size(); ++i) {
+    const auto& plan = *childDt->bestInitialPlan()->op;
+    setDt->cardinality += plan.resultCardinality();
+
+    // This doesn't look correct because childValue and setValue
+    // can have same address. Even if we fix code to sum up correctly.
+    // Child columns still will share cardinality with set columns.
+    // But this is how it was implemented initially.
+    // Let's revisit this later.
+    for (size_t i = 0; i < setDt->columns.size(); ++i) {
+      const auto& setValue = setDt->columns[i]->value().cardinality;
+      const auto& childValue = plan.columns()[i]->value().cardinality;
       // The Column is created in setDt before all branches are planned so the
       // value is mutated here.
-      auto mutableValue =
-          const_cast<float*>(&setDt->columns[i]->value().cardinality);
-      *mutableValue += plan->columns()[i]->value().cardinality;
-    }
-  } else {
-    for (auto& child : innerDt->children) {
-      makeUnionDistributionAndStats(setDt, child);
+      const_cast<float&>(setValue) += childValue;
     }
   }
 }
 
-void ToGraph::translateUnionInput(
-    const folly::F14FastMap<std::string, ExprCP>& renames,
+void translateSetOperationInput(
     const lp::LogicalPlanNode& input,
-    bool& isFirstInput) {
-  renames_ = renames;
+    const std::function<const lp::LogicalPlanNode*(const lp::LogicalPlanNode&)>&
+        maybeFlatten,
+    const std::function<void(const lp::LogicalPlanNode&)>& translateInput) {
+  if (const auto* setNode = maybeFlatten(input)) {
+    for (const auto& child : setNode->inputs()) {
+      translateSetOperationInput(*child, maybeFlatten, translateInput);
+    }
+  } else {
+    translateInput(input);
+  }
+}
 
+} // namespace
+
+void ToGraph::translateUnion(const lp::SetNode& set) {
   auto* setDt = currentDt_;
+  setDt->setOp = set.operation();
 
   auto maybeFlatten =
-      [&](const lp::LogicalPlanNode& node) -> const lp::SetNode* {
-    if (node.kind() != lp::NodeKind::kSet) {
+      [&](const lp::LogicalPlanNode& input) -> const lp::LogicalPlanNode* {
+    if (input.kind() != lp::NodeKind::kSet) {
       return nullptr;
     }
-    const auto* set = node.as<lp::SetNode>();
-    const auto setOp = set->operation();
-    if (setOp == setDt->setOp) {
+    const auto* inputSet = input.as<lp::SetNode>();
+    const auto inputSetOp = inputSet->operation();
+    if (inputSetOp == setDt->setOp) {
       // Same set operation can be flattened.
-      return set;
+      return inputSet;
     }
-    if (setOp == lp::SetOperation::kUnionAll &&
+    if (inputSetOp == lp::SetOperation::kUnionAll &&
         setDt->setOp == lp::SetOperation::kUnion) {
       // UNION ALL can be flattened into UNION.
-      return set;
+      return inputSet;
     }
     return nullptr;
   };
-  if (const auto* setNode = maybeFlatten(input)) {
-    for (const auto& child : setNode->inputs()) {
-      translateUnionInput(renames, *child, isFirstInput);
-    }
-  } else {
+
+  auto renames = std::move(renames_);
+  bool isFirstInput = true;
+
+  auto translateUnionInput = [&](const lp::LogicalPlanNode& input) {
+    renames_ = renames;
     currentDt_ = newDt();
     makeQueryGraph(input, kAllAllowedInDt);
-    auto* newDt = currentDt_;
-    currentDt_ = setDt;
+    auto* newDt = std::exchange(currentDt_, setDt);
 
     const auto& type = input.outputType();
 
@@ -1961,6 +1968,7 @@ void ToGraph::translateUnionInput(
         setDt->columns.push_back(outer);
         newDt->columns.push_back(outer);
       }
+
       isFirstInput = false;
     } else {
       for (auto i : usedChannels(input)) {
@@ -1974,16 +1982,9 @@ void ToGraph::translateUnionInput(
 
     newDt->makeInitialPlan();
     setDt->children.push_back(newDt);
-  }
-}
+  };
 
-void ToGraph::translateUnion(const lp::SetNode& set) {
-  auto renames = std::move(renames_);
-
-  auto* setDt = currentDt_;
-  setDt->setOp = set.operation();
-  bool isFirstInput = true;
-  translateUnionInput(renames, set, isFirstInput);
+  translateSetOperationInput(set, maybeFlatten, translateUnionInput);
   makeUnionDistributionAndStats(setDt);
 
   renames_ = std::move(renames);

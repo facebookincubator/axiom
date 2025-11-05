@@ -283,25 +283,12 @@ class ToGraph {
   // or EXCEPT.
   void translateSetJoin(const logical_plan::SetNode& set);
 
-  // Updates the distribution and column stats of 'setDt', which must
-  // be a union. 'innerDt' should be null on top level call. Adds up
-  // the cardinality of union branches and their columns.
-  void makeUnionDistributionAndStats(
-      DerivedTableP setDt,
-      DerivedTableP innerDt = nullptr);
-
   // Creates derived tables for set operation inputs, put them in current
   // DerivedTable as a children and set setOp to implement UNION or UNION ALL.
   // This method recursively flattens
   // - UNION ALL inside UNION and UNION ALL
   // - UNION inside UNION.
   void translateUnion(const logical_plan::SetNode& set);
-
-  // Helper method needed only to implement recursion for translateUnion.
-  void translateUnionInput(
-      const folly::F14FastMap<std::string, ExprCP>& renames,
-      const logical_plan::LogicalPlanNode& input,
-      bool& isFirstInput);
 
   void translateUnnest(
       const logical_plan::UnnestNode& logicalUnnest,
