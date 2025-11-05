@@ -28,9 +28,6 @@ namespace {
 using namespace velox;
 namespace lp = facebook::axiom::logical_plan;
 
-#define AXIOM_ASSERT_PLAN(plan, matcher) \
-  ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
-
 class WriteTest : public test::HiveQueriesTestBase {
  protected:
   void SetUp() override {
@@ -611,8 +608,6 @@ TEST_F(WriteTest, createTableAsSelectBucketedSql) {
     verifyPartitionedLayout(getLayout("test"), "n_nationkey", 16, "n_name");
   }
 }
-
-#undef AXIOM_ASSERT_PLAN
 
 } // namespace
 } // namespace facebook::axiom::optimizer

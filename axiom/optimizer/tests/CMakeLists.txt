@@ -95,6 +95,7 @@ add_executable(
   PrecomputeProjectionTest.cpp
   PlanTest.cpp
   RelationOpPrinterTest.cpp
+  SetTest.cpp
   UnnestTest.cpp
   ParquetTpchTest.cpp
   SyntacticJoinOrderTest.cpp

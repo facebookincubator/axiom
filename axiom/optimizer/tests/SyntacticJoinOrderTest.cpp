@@ -30,9 +30,6 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-#define AXIOM_ASSERT_PLAN(plan, matcher) \
-  ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
-
 class SyntacticJoinOrderTest : public test::QueryTestBase {
  protected:
   static void SetUpTestCase() {
@@ -325,8 +322,6 @@ TEST_F(SyntacticJoinOrderTest, outerJoins) {
     }
   }
 }
-
-#undef AXIOM_ASSERT_PLAN
 
 } // namespace
 } // namespace facebook::axiom::optimizer
