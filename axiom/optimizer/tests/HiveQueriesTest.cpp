@@ -179,5 +179,115 @@ TEST_F(HiveQueriesTest, orderOfOperations) {
   }
 }
 
+TEST_F(HiveQueriesTest, joinWithTopNBothSides) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan = lp::PlanBuilder(context)
+                         .tableScan("nation")
+                         .orderBy({"n_nationkey"})
+                         .limit(0, 10)
+                         .join(
+                             lp::PlanBuilder(context)
+                                 .tableScan("region")
+                                 .orderBy({"r_regionkey"})
+                                 .limit(0, 5),
+                             "n_regionkey = r_regionkey",
+                             lp::JoinType::kInner)
+                         .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .topN()
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("region").topN().build())
+            .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto referencePlan = exec::test::PlanBuilder(planNodeIdGenerator)
+                           .tableScan("nation", getSchema("nation"))
+                           .topN({"n_nationkey"}, 10, {})
+                           .hashJoin(
+                               {"n_regionkey"},
+                               {"r_regionkey"},
+                               exec::test::PlanBuilder(planNodeIdGenerator)
+                                   .tableScan("region", getSchema("region"))
+                                   .topN({"r_regionkey"}, 5, {})
+                                   .planNode(),
+                               "",
+                               {
+                                   "n_nationkey",
+                                   "n_name",
+                                   "n_regionkey",
+                                   "n_comment",
+                                   "r_regionkey",
+                                   "r_name",
+                                   "r_comment",
+                               })
+                           .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveQueriesTest, joinWithLimitBothSides) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .limit(0, 10)
+          .orderBy({"n_nationkey"})
+          .join(
+              lp::PlanBuilder(context).tableScan("region").limit(0, 5).orderBy(
+                  {"r_regionkey"}),
+              "n_regionkey = r_regionkey",
+              lp::JoinType::kInner)
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    // TODO: We don't need orderBy before the join.
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .limit()
+                       .orderBy()
+                       .hashJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("region")
+                               .limit()
+                               .orderBy()
+                               .build())
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto referencePlan = exec::test::PlanBuilder(planNodeIdGenerator)
+                           .tableScan("nation", getSchema("nation"))
+                           .limit(0, 10, {})
+                           .hashJoin(
+                               {"n_regionkey"},
+                               {"r_regionkey"},
+                               exec::test::PlanBuilder(planNodeIdGenerator)
+                                   .tableScan("region", getSchema("region"))
+                                   .limit(0, 5, {})
+                                   .planNode(),
+                               "",
+                               {
+                                   "n_nationkey",
+                                   "n_name",
+                                   "n_regionkey",
+                                   "n_comment",
+                                   "r_regionkey",
+                                   "r_name",
+                                   "r_comment",
+                               })
+                           .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

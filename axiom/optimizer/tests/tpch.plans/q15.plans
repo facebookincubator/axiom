@@ -14,7 +14,7 @@ dt1: s_suppkey, s_name, s_address, s_phone, total_revenue
   joins:
     t2 INNER dt3 ON t2.s_suppkey = dt3.l_suppkey
     dt3 INNER dt7 ON dt3.total_revenue = dt7.max
-  syntactic join order: 8, 13, 77
+  syntactic join order: 8, 13, 76
   orderBy: t2.s_suppkey ASC NULLS LAST
 
 t2: s_suppkey, s_name, s_address, s_phone
