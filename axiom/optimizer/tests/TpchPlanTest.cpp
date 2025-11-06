@@ -63,8 +63,12 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
     checkSame(logicalPlan, referencePlan);
   }
 
+  static std::filesystem::path makePath(const std::string& filePath) {
+    return std::filesystem::path{__FILE__}.parent_path() / filePath;
+  }
+
   static std::string readSqlFromFile(const std::string& filePath) {
-    auto path = velox::test::getDataFilePath("axiom/optimizer/tests", filePath);
+    const auto path = makePath(filePath);
     std::ifstream inputFile(path, std::ifstream::binary);
 
     VELOX_CHECK(inputFile, "Failed to open SQL file: {}", path);
@@ -566,9 +570,8 @@ TEST_F(TpchPlanTest, q22) {
 }
 
 // Use to re-generate the plans stored in tpch.plans directory.
-TEST_F(TpchPlanTest, DISABLED_makePlans) {
-  const auto path =
-      velox::test::getDataFilePath("axiom/optimizer/tests", "tpch.plans");
+TEST_F(TpchPlanTest, makePlans) {
+  const auto path = makePath("tpch.plans");
 
   const runner::MultiFragmentPlan::Options options{
       .numWorkers = 1, .numDrivers = 1};
