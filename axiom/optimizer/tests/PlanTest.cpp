@@ -1079,6 +1079,38 @@ TEST_F(PlanTest, lastProjection) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_F(PlanTest, nonInnerJoins) {
+  testConnector_->addTable(
+      "orders_cte",
+      ROW({"order_id", "amount", "order_date", "customer_id"},
+          {BIGINT(), BIGINT(), VARCHAR(), BIGINT()}));
+  testConnector_->addTable(
+      "customers_cte",
+      ROW({"customer_id", "customer_name"}, {BIGINT(), VARCHAR()}));
+  lp::PlanBuilder::Context ctx{kTestConnectorId};
+  auto logicalPlan =
+      lp::PlanBuilder{ctx}
+          .from({"orders_cte"})
+          .as("o")
+          .join(
+              lp::PlanBuilder{ctx}.from({"customers_cte"}).as("c"),
+              "o.customer_id = c.customer_id",
+              lp::JoinType::kLeft)
+          .filter("c.customer_name IS NULL")
+          .build();
+
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan("orders_cte")
+          .hashJoin(
+              core::PlanMatcherBuilder().tableScan("customers_cte").build(),
+              core::JoinType::kLeft)
+          .filter()
+          .build();
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 TEST_F(PlanTest, orderByDuplicateKeys) {
   testConnector_->addTable("t", ROW({"a"}, {BIGINT()}));
 
