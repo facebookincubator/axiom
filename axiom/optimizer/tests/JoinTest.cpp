@@ -156,5 +156,87 @@ TEST_F(JoinTest, outerJoinWithInnerJoin) {
   }
 }
 
+TEST_F(JoinTest, pushdownFilterThroughJoin) {
+  testConnector_->addTable("t1", ROW({"id1", "data1"}, {BIGINT(), BIGINT()}));
+  testConnector_->addTable("t2", ROW({"id2", "data2"}, {BIGINT(), BIGINT()}));
+
+  auto makePlan = [&](lp::JoinType joinType) {
+    lp::PlanBuilder::Context ctx{kTestConnectorId};
+    return lp::PlanBuilder{ctx}
+        .from({"t1"})
+        .join(lp::PlanBuilder{ctx}.from({"t2"}), "id1 = id2", joinType)
+        .filter("data1 IS NULL")
+        .filter("data2 IS NULL")
+        .build();
+  };
+
+  {
+    SCOPED_TRACE("Inner Join");
+    auto logicalPlan = makePlan(lp::JoinType::kInner);
+    auto matcher = core::PlanMatcherBuilder{}
+                       .tableScan("t1")
+                       .filter("data1 IS NULL")
+                       .hashJoin(
+                           core::PlanMatcherBuilder{}
+                               .tableScan("t2")
+                               .filter("data2 IS NULL")
+                               .build(),
+                           core::JoinType::kInner)
+                       .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    SCOPED_TRACE("Left Join");
+    auto logicalPlan = makePlan(lp::JoinType::kLeft);
+    auto matcher = core::PlanMatcherBuilder{}
+                       .tableScan("t1")
+                       .filter("data1 IS NULL")
+                       .hashJoin(
+                           core::PlanMatcherBuilder{}.tableScan("t2").build(),
+                           core::JoinType::kLeft)
+                       .filter("data2 IS NULL")
+                       .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    SCOPED_TRACE("Right Join");
+    // This is needed because without this we cannot test right join
+    // properly as it gets converted to left join by swapping inputs.
+    auto wasSyntacticJoinOrder = optimizerOptions_.syntacticJoinOrder;
+    optimizerOptions_.syntacticJoinOrder = true;
+    SCOPE_EXIT {
+      optimizerOptions_.syntacticJoinOrder = wasSyntacticJoinOrder;
+    };
+    auto logicalPlan = makePlan(lp::JoinType::kRight);
+    auto matcher = core::PlanMatcherBuilder{}
+                       .tableScan("t1")
+                       .hashJoin(
+                           core::PlanMatcherBuilder{}
+                               .tableScan("t2")
+                               .filter("data2 IS NULL")
+                               .build(),
+                           core::JoinType::kRight)
+                       .filter("data1 IS NULL")
+                       .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    SCOPED_TRACE("Full Join");
+    auto logicalPlan = makePlan(lp::JoinType::kFull);
+    auto matcher = core::PlanMatcherBuilder{}
+                       .tableScan("t1")
+                       .hashJoin(
+                           core::PlanMatcherBuilder{}.tableScan("t2").build(),
+                           core::JoinType::kFull)
+                       .filter("data1 IS NULL AND data2 IS NULL")
+                       .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer::test

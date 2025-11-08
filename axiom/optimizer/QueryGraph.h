@@ -524,18 +524,17 @@ class JoinEdge {
         rightNotExists_(spec.rightNotExists),
         directed_(spec.directed),
         markColumn_(spec.markColumn) {
-    VELOX_CHECK_NOT_NULL(rightTable);
-
-    if (isInner()) {
-      VELOX_CHECK_NOT_NULL(
-          leftTable, "Hyper edge is not supported for an inner join");
-      VELOX_CHECK(filter_.empty(), "Filter is not allowed for an inner join");
+    if (leftOptional_ || !rightOptional_) {
+      // Only left join can have null left table.
+      VELOX_DCHECK_NOT_NULL(leftTable_);
     }
-
-    VELOX_CHECK(!rightExists_ || !rightNotExists_);
+    VELOX_DCHECK_NOT_NULL(rightTable_);
+    // filter_ is only for non-inner joins.
+    VELOX_DCHECK(filter_.empty() || !isInner());
+    VELOX_DCHECK(!rightExists_ || !rightNotExists_);
 
     if (markColumn_) {
-      VELOX_CHECK(rightExists_);
+      VELOX_DCHECK(rightExists_);
     }
   }
 
@@ -568,7 +567,6 @@ class JoinEdge {
       PlanObjectCP leftTable,
       PlanObjectCP rightTable,
       ExprVector unnestExprs) {
-    VELOX_DCHECK_NOT_NULL(leftTable);
     auto* edge = make<JoinEdge>(leftTable, rightTable, Spec{.directed = true});
     edge->leftKeys_ = std::move(unnestExprs);
     // TODO Not sure to what values fanout need to be set,
@@ -637,7 +635,7 @@ class JoinEdge {
   /// True if inner join.
   bool isInner() const {
     return !leftOptional_ && !rightOptional_ && !rightExists_ &&
-        !rightNotExists_;
+        !rightNotExists_ && !directed_;
   }
 
   bool isSemi() const {
@@ -652,18 +650,13 @@ class JoinEdge {
   /// placing this.
   bool isNonCommutative() const {
     // Inner and full outer joins are commutative.
-    if (rightOptional_ && leftOptional_) {
-      return false;
-    }
-
-    return !leftTable_ || rightOptional_ || leftOptional_ || rightExists_ ||
-        rightNotExists_ || directed_;
+    return !(isInner() || (leftOptional_ && rightOptional_));
   }
 
   /// True if has a hash based variant that builds on the left and probes on the
   /// right.
   bool hasRightHashVariant() const {
-    return isNonCommutative() && !rightNotExists_;
+    return isNonCommutative() && !isAnti() && !directed();
   }
 
   /// Returns the join side info for 'table'. If 'other' is set, returns the

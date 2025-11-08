@@ -140,7 +140,7 @@ void reducingJoinsRecursive(
         resultFunc = {}) {
   bool isLeaf = true;
   for (auto join : joinedBy(candidate)) {
-    if (join->leftOptional() || join->rightOptional()) {
+    if (!join->isInner()) {
       continue;
     }
     JoinSide other = join->sideOf(candidate, true);
@@ -1377,7 +1377,6 @@ void Optimization::addJoin(
   joinByHash(plan, candidate, state, toTry);
 
   if (!options_.syntacticJoinOrder && toTry.size() > sizeAfterIndex &&
-      candidate.join->isNonCommutative() &&
       candidate.join->hasRightHashVariant()) {
     // There is a hash based candidate with a non-commutative join. Try a right
     // join variant.
@@ -1498,6 +1497,19 @@ bool Optimization::placeConjuncts(
   state.dt->singleRowDts.forEach<DerivedTable>(
       [&](auto dt) { columnsAndSingles.unionObjects(dt->columns); });
 
+  PlanObjectSet noPushdownTables;
+  if (!allowNondeterministic) {
+    for (const auto* join : state.dt->joins) {
+      if (join->leftOptional()) {
+        // No pushdown to the left side of a RIGHT or FULL join.
+        noPushdownTables.add(join->leftTable());
+      }
+      if (join->rightOptional()) {
+        // No pushdown to the right side of a LEFT or FULL join.
+        noPushdownTables.add(join->rightTable());
+      }
+    }
+  }
   ExprVector filters;
   for (auto& conjunct : state.dt->conjuncts) {
     if (!allowNondeterministic && conjunct->containsNonDeterministic()) {
@@ -1505,6 +1517,13 @@ bool Optimization::placeConjuncts(
     }
     if (state.placed.contains(conjunct)) {
       continue;
+    }
+    if (!allowNondeterministic) {
+      const auto allTables = conjunct->allTables();
+      if (allTables.size() == 1 &&
+          noPushdownTables.contains(allTables.toObjects()[0])) {
+        continue;
+      }
     }
     if (conjunct->columns().isSubset(state.columns)) {
       state.columns.add(conjunct);
