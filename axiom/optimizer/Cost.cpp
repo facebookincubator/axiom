@@ -36,11 +36,11 @@ void History::updateFromFile(const std::string& path) {
 }
 
 float shuffleCost(const ColumnVector& columns) {
-  return byteSize(columns);
+  return byteSize(columns) * Costs::kByteShuffleCost;
 }
 
 float shuffleCost(const ExprVector& exprs) {
-  return byteSize(exprs);
+  return byteSize(exprs) * Costs::kByteShuffleCost;
 }
 
 float selfCost(ExprCP expr) {

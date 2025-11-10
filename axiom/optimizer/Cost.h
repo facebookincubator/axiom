@@ -26,6 +26,8 @@ struct NodePrediction {
   float cardinality;
   ///  Peak total memory for the top node.
   float peakMemory{0};
+  /// CPU estimate in optimizer internal units.
+  float cpu{0};
 };
 
 /// Interface to historical query cost and cardinality
@@ -103,23 +105,42 @@ struct Costs {
                                : kLargeHashCost;
   }
 
+  static float hashBuildCost(float cardinality) {
+    // To build, a row is written once and read at least once. A write is ~2
+    // redreads.
+    return 3 * hashProbeCost(cardinality);
+  }
+
   static constexpr float kKeyCompareCost =
       6; // ~30 instructions to find, decode and an compare
   static constexpr float kArrayProbeCost = 2; // ~10 instructions.
-  static constexpr float kSmallHashCost = 10; // 50 instructions
-  static constexpr float kLargeHashCost = 40; // 2 LLC misses
+  static constexpr float kSmallHashCost = 4; // 50 instructions
+  static constexpr float kLargeHashCost = 12; // 2 LLC misses
   static constexpr float kColumnRowCost = 5;
   static constexpr float kColumnByteCost = 0.1;
 
   /// Cost of hash function on one column.
-  static constexpr float kHashColumnCost = 0.5;
+  static constexpr float kHashColumnCost = 0.3;
 
   /// Cost of getting a column from a hash table
-  static constexpr float kHashExtractColumnCost = 0.5;
+  static constexpr float kHashExtractColumnCost = 0.3;
+
+  /// Cost of sum/min/max. A little more than getting a value from the a hash
+  /// table.
+  static constexpr float kSimpleAggregateCost = kHashExtractColumnCost * 1.5;
+
+  /// Bytes of overhead for a hash table row: ~12 bytes for the table and ~12
+  /// bytes for the row.
+  static constexpr float kHashRowBytes = 24;
 
   /// Minimal cost of calling a filter function, e.g. comparing two numeric
   /// exprss.
   static constexpr float kMinimumFilterCost = 2;
+
+  // Multiplier to apply to shuffle byte volume to get CPU cost. A
+  // complete cost model will need to consider the count of
+  // destinations, number of partition keys etc.
+  static constexpr float kByteShuffleCost = 0.3;
 };
 
 /// Returns shuffle cost for a single row. Depends on the number of types of

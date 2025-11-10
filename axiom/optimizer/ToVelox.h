@@ -293,4 +293,8 @@ class ToVelox {
   runner::FinishWrite finishWrite_;
 };
 
+/// Replaces dots with underscores so that field names can be read back as names
+/// and not as getters.
+std::string sanitizeFieldName(std::string_view name);
+
 } // namespace facebook::axiom::optimizer

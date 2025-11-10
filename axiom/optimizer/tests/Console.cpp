@@ -31,6 +31,16 @@ DEFINE_uint64(
 
 DEFINE_uint32(optimizer_trace, 0, "Optimizer trace level");
 
+DEFINE_bool(
+    syntactic_join_order,
+    false,
+    "Disable cost-based join order selection and use syntactic order from query");
+
+DEFINE_bool(
+    include_runtime_stats,
+    false,
+    "Include operator-specific runtime statistics in EXPLAIN ANALYZE output");
+
 DEFINE_int32(max_rows, 100, "Max number of printed result rows");
 
 DEFINE_int32(num_workers, 4, "Number of in-process workers");
@@ -225,6 +235,8 @@ void Console::runNoThrow(std::string_view sql) {
                   .numDrivers = FLAGS_num_drivers,
                   .splitTargetBytes = FLAGS_split_target_bytes,
                   .optimizerTraceFlags = FLAGS_optimizer_trace,
+                  .includeRuntimeStats = FLAGS_include_runtime_stats,
+                  .syntacticJoinOrder = FLAGS_syntactic_join_order,
               });
         },
         timing);

@@ -126,6 +126,25 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       int32_t numDrivers = 1);
 
+  /// Checks that a plan contains (or doesn't contain) expected patterns.
+  /// @param plan The plan node to check.
+  /// @param expected Vector of regex patterns (RE2) to search for.
+  /// @param negative If false (default), expects all patterns to be found in
+  /// order. If true, expects that NOT all patterns are found in order (i.e.,
+  /// at least one pattern is missing or out of order).
+  void checkPlanText(
+      const velox::core::PlanNodePtr& plan,
+      const std::vector<std::string>& expected,
+      bool negative = false);
+
+  void explain(
+      const logical_plan::LogicalPlanNodePtr& query,
+      std::string* shortRel,
+      std::string* longRel,
+      std::string* graph,
+      const runner::MultiFragmentPlan::Options& runnerOptions = {},
+      const OptimizerOptions& optimizerOptions = {});
+
   void checkSameSingleNode(
       const logical_plan::LogicalPlanNodePtr& planNode,
       const velox::core::PlanNodePtr& referencePlan,

@@ -39,6 +39,8 @@ using NameMap = std::unordered_map<
 
 /// Represents constraints on a column value or intermediate result.
 struct Value {
+  static constexpr float kUnknown = -1;
+
   Value(const velox::Type* type, float cardinality)
       : type{type}, cardinality{cardinality} {}
 
@@ -56,8 +58,8 @@ struct Value {
 
   // Estimate of true fraction for booleans. 0 means always
   // false. This is an estimate and 1 or 0 do not allow pruning
-  // dependent code paths.
-  float trueFraction{1};
+  // dependent code paths. kUnknown
+  float trueFraction{kUnknown};
 
   // 0 means no nulls, 0.5 means half are null.
   float nullFraction{0};
@@ -285,7 +287,7 @@ float baseSelectivity(PlanObjectCP object);
 struct SchemaTable {
   explicit SchemaTable(const connector::Table& connectorTable)
       : connectorTable{&connectorTable},
-        cardinality{static_cast<float>(connectorTable.numRows())} {}
+        cardinality{std::max<float>(connectorTable.numRows(), 1.0f)} {}
 
   ColumnGroupCP addIndex(
       const connector::TableLayout& layout,
