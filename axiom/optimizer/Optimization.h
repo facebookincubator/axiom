@@ -173,6 +173,8 @@ class Optimization {
   void trace(uint32_t event, int32_t id, const PlanCost& cost, RelationOp& plan)
       const;
 
+  std::string memoString() const;
+
  private:
   // Retrieves or makes a plan from 'key'. 'key' specifies a set of top level
   // joined tables or a hash join build side table or join.

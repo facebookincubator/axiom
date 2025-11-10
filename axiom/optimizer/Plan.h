@@ -96,9 +96,14 @@ struct PlanSet {
   }
 
   /// Compares 'plan' to already seen plans and retains it if it is
-  /// interesting, e.g. better than the best so far or has an interesting
-  /// order. Returns the plan if retained, nullptr if not.
-  PlanP addPlan(RelationOpPtr plan, PlanState& state);
+  /// interesting, e.g. better than the best so far or has an
+  /// interesting order or distribution. Returns the plan if retained,
+  /// nullptr if not. If 'isSingleWorker' is true, does not consider
+  /// the cost of shuffling the result when comparing plan costs,
+  /// i.e. if a plan + shuffle is cheaper than than an existing plan
+  /// with a different distribution, then the new cheaper plan always
+  /// wins.
+  PlanP addPlan(RelationOpPtr plan, PlanState& state, bool isSingleWorker);
 };
 
 /// Represents the next table/derived table to join. May consist of several
@@ -111,10 +116,10 @@ struct JoinCandidate {
   /// Second is the other side.
   std::pair<JoinSide, JoinSide> joinSides() const;
 
-  /// Adds 'edge' to the set of joins between the new table and already placed
+  /// Adds 'edge' to the set of joins between 'joined' and already placed
   /// tables. a.k = b.k and c.k = b.k2 and c.k3 = a.k2. When placing c after a
   /// and b the edges to both a and b must be combined.
-  void addEdge(PlanState& state, JoinEdgeP edge);
+  void addEdge(PlanState& state, JoinEdgeP edge, PlanObjectCP joined);
 
   /// True if 'edge' has all the equalities to placed columns that 'join' of
   /// 'this' has and has more equalities.
@@ -332,7 +337,11 @@ struct PlanStateSaver {
 /// result. For example, if a reducing join is moved below a group by,
 /// unless it is known never to have duplicates, it must become a
 /// semijoin and the original join must still stay in place in case
-/// there were duplicates.
+/// there were duplicates. 'extraConjuncts' is conjuncts from the dt containing
+/// 'tables' which only depend on 'tables'. The typical use is that the key
+/// represents a hash join build nd the conjuncts are non-join edge and
+/// non-single table deterministic conjuncts that can be evaluated before the
+/// build.
 struct MemoKey {
   bool operator==(const MemoKey& other) const;
 
@@ -342,6 +351,9 @@ struct MemoKey {
   PlanObjectSet columns;
   PlanObjectSet tables;
   std::vector<PlanObjectSet> existences;
+  PlanObjectSet extraConjuncts;
+
+  std::string toString() const;
 };
 
 } // namespace facebook::axiom::optimizer

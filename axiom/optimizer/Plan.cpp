@@ -27,8 +27,21 @@ namespace {
 bool isSingleWorker() {
   return queryCtx()->optimization()->runnerOptions().numWorkers == 1;
 }
-
 } // namespace
+
+std::string MemoKey::toString() const {
+  std::stringstream out;
+  out << "{MemoKey Columns: ";
+  out << columns.toString(1) << " Tables " << tables.toString(1)
+      << " extraConjuncts=" << extraConjuncts.toString(1) << " ";
+  if (!existences.empty()) {
+    out << std::endl << " existences=";
+    for (auto& existence : existences) {
+      out << " exists= " << existence.toString(1) << std::endl;
+    }
+  }
+  return out.str();
+}
 
 PlanState::PlanState(Optimization& optimization, DerivedTableCP dt)
     : optimization(optimization),
@@ -121,6 +134,9 @@ std::string Plan::toString(bool detail) const {
 void PlanState::addCost(RelationOp& op) {
   cost.cost += op.cost().totalCost();
   cost.cardinality = op.cost().resultCardinality();
+  if (std::isnan(cost.cost) || std::isnan(cost.cardinality)) {
+    printf("bing\n");
+  }
 }
 
 bool PlanState::mayConsiderNext(PlanObjectCP table) const {
@@ -298,9 +314,14 @@ std::string PlanState::printPlan(RelationOpPtr op, bool detail) const {
   return plan->toString(detail);
 }
 
-PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
+PlanP PlanSet::addPlan(
+    RelationOpPtr plan,
+    PlanState& state,
+    bool isSingleWorker) {
   int32_t replaceIndex = -1;
-  const float shuffle = shuffleCost(plan->columns()) * state.cost.cardinality;
+  const float shuffle = isSingleWorker
+      ? 0
+      : shuffleCost(plan->columns()) * state.cost.cardinality;
 
   if (!plans.empty()) {
     // Compare with existing. If there is one with same distribution and new is
@@ -436,8 +457,10 @@ bool hasEqual(ExprCP key, const ExprVector& keys) {
 }
 } // namespace
 
-void JoinCandidate::addEdge(PlanState& state, JoinEdgeP edge) {
-  auto* joined = tables[0];
+void JoinCandidate::addEdge(
+    PlanState& state,
+    JoinEdgeP edge,
+    PlanObjectCP joined) {
   auto newTableSide = edge->sideOf(joined);
   auto newPlacedSide = edge->sideOf(joined, true);
   VELOX_CHECK_NOT_NULL(newPlacedSide.table);
@@ -518,6 +541,9 @@ bool NextJoin::isWorse(const NextJoin& other) const {
 
 size_t MemoKey::hash() const {
   size_t hash = tables.hash();
+  if (!extraConjuncts.empty()) {
+    hash = velox::bits::commutativeHashMix(hash, extraConjuncts.hash());
+  }
   for (auto& exists : existences) {
     hash = velox::bits::commutativeHashMix(hash, exists.hash());
   }
@@ -526,7 +552,7 @@ size_t MemoKey::hash() const {
 
 bool MemoKey::operator==(const MemoKey& other) const {
   if (firstTable == other.firstTable && columns == other.columns &&
-      tables == other.tables) {
+      tables == other.tables && extraConjuncts == other.extraConjuncts) {
     if (existences.size() != other.existences.size()) {
       return false;
     }

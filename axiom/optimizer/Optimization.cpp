@@ -56,7 +56,6 @@ Optimization::Optimization(
   toGraph_.setDtOutput(root_, *logicalPlan_);
 }
 
-// static
 PlanAndStats Optimization::toVeloxPlan(
     const logical_plan::LogicalPlanNode& logicalPlan,
     velox::memory::MemoryPool& pool,
@@ -89,7 +88,19 @@ PlanAndStats Optimization::toVeloxPlan(
       std::move(runnerOptions)};
 
   auto best = opt.bestPlan();
+  opt.trace(OptimizerOptions::kRetained, 0, best->cost, *best->op);
   return opt.toVeloxPlan(best->op);
+}
+
+std::string Optimization::memoString() const {
+  std::stringstream out;
+  for (auto& [key, planSet] : memo_) {
+    out << key.toString() << " plans= " << std::endl;
+    for (auto& plan : planSet.plans) {
+      out << plan->toString(true) << std::endl;
+    }
+  }
+  return out.str();
 }
 
 void Optimization::trace(
@@ -192,6 +203,16 @@ void reducingJoinsRecursive(
   }
 }
 
+bool allowReducingInnerJoins(const JoinCandidate& candidate) {
+  if (!candidate.join->isInner()) {
+    return false;
+  }
+  if (candidate.tables[0]->is(PlanType::kDerivedTableNode)) {
+    return false;
+  }
+  return true;
+}
+
 // For an inner join, see if can bundle reducing joins on the build.
 std::optional<JoinCandidate> reducingJoins(
     const PlanState& state,
@@ -202,7 +223,7 @@ std::optional<JoinCandidate> reducingJoins(
   float fanout = candidate.fanout;
 
   PlanObjectSet reducingSet;
-  if (candidate.join->isInner()) {
+  if (allowReducingInnerJoins(candidate)) {
     PlanObjectSet visited = state.placed;
     VELOX_DCHECK(!candidate.tables.empty());
     visited.add(candidate.tables[0]);
@@ -317,23 +338,24 @@ void forJoinedTables(const PlanState& state, Func func) {
 }
 
 bool addExtraEdges(PlanState& state, JoinCandidate& candidate) {
-  // See if there are more join edges from the first of 'candidate' to already
-  // placed tables. Fill in the non-redundant equalities into the join edge.
-  // Make a new edge if the edge would be altered.
+  // See if there are more join edges from any of 'candidate' inner joined
+  // tables to already placed tables. Fill in the non-redundant equalities into
+  // the join edge. Make a new edge if the edge would be altered.
   auto* originalJoin = candidate.join;
-  auto* table = candidate.tables[0];
-  for (auto* otherJoin : joinedBy(table)) {
-    if (otherJoin == originalJoin || !otherJoin->isInner()) {
-      continue;
+  for (auto* table : candidate.tables) {
+    for (auto* otherJoin : joinedBy(table)) {
+      if (otherJoin == originalJoin || !otherJoin->isInner()) {
+        continue;
+      }
+      auto [otherTable, fanout] = otherJoin->otherTable(table);
+      if (!state.dt->hasTable(otherTable)) {
+        continue;
+      }
+      if (candidate.isDominantEdge(state, otherJoin)) {
+        break;
+      }
+      candidate.addEdge(state, otherJoin, table);
     }
-    auto [otherTable, fanout] = otherJoin->otherTable(table);
-    if (!state.dt->hasTable(otherTable)) {
-      continue;
-    }
-    if (candidate.isDominantEdge(state, otherJoin)) {
-      return false;
-    }
-    candidate.addEdge(state, otherJoin);
   }
   return true;
 }
@@ -913,7 +935,8 @@ void Optimization::addAggregation(
         std::move(finalGroupingKeys),
         std::move(aggregates),
         velox::core::AggregationNode::Step::kFinal,
-        aggPlan->columns());
+        aggPlan->columns(),
+        partialAgg);
 
     state.addCost(*finalAgg);
     plan = finalAgg;
@@ -1017,6 +1040,21 @@ void Optimization::joinByIndex(
   }
 }
 
+namespace {
+// Given a MemoKey for a build side, picks the deterministic conjuncts from
+// 'state.dt' that are fully defined in terms of 'key.tables'.
+void gatherConjunctsForKey(PlanState& state, MemoKey& key) {
+  for (auto& conjunct : state.dt->conjuncts) {
+    if (conjunct->containsFunction(FunctionSet::kNonDeterministic)) {
+      continue;
+    }
+    if (conjunct->allTables().isSubset(key.tables)) {
+      key.extraConjuncts.add(conjunct);
+    }
+  }
+}
+} // namespace
+
 void Optimization::joinByHash(
     const RelationOpPtr& plan,
     const JoinCandidate& candidate,
@@ -1046,7 +1084,13 @@ void Optimization::joinByHash(
     buildTables.add(buildTable);
   }
 
+  // The build side dt does not need to produce columns that it uses
+  // internally, only the columns that are downstream if we consider
+  // the build to be placed. So, provisionally mark build side tables
+  // as placed for the downstreamColumns().
+  state.placed.unionSet(buildTables);
   buildColumns.intersect(state.downstreamColumns());
+  state.placed.except(buildTables);
   buildColumns.unionColumns(build.keys);
   buildColumns.unionSet(buildFilterColumns);
   state.columns.unionSet(buildColumns);
@@ -1054,6 +1098,9 @@ void Optimization::joinByHash(
   MemoKey memoKey{
       candidate.tables[0], buildColumns, buildTables, candidate.existences};
 
+  if (candidate.join->isInner()) {
+    gatherConjunctsForKey(state, memoKey);
+  }
   Distribution forBuild;
   if (plan->distribution().isGather()) {
     forBuild = Distribution::gather();
@@ -1075,7 +1122,7 @@ void Optimization::joinByHash(
   } else {
     state.placed.unionSet(buildTables);
   }
-
+  state.placed.unionSet(memoKey.extraConjuncts);
   PlanState buildState(state.optimization, state.dt, buildPlan);
   RelationOpPtr buildInput = buildPlan->op;
   RelationOpPtr probeInput = plan;
@@ -1238,7 +1285,6 @@ void Optimization::joinByHashRight(
   buildColumns.unionObjects(buildInput->columns());
 
   const auto leftJoinType = probe.leftJoinType();
-  const auto fanout = fanoutJoinTypeLimit(leftJoinType, candidate.fanout);
 
   // Change the join type to the right join variant.
   const auto rightJoinType = reverseJoinType(leftJoinType);
@@ -1246,9 +1292,38 @@ void Optimization::joinByHashRight(
       leftJoinType != rightJoinType,
       "Join type does not have right hash join variant");
 
+  float markTrueFraction = Value::kUnknown;
   const bool buildOnly =
       rightJoinType == velox::core::JoinType::kRightSemiFilter ||
       rightJoinType == velox::core::JoinType::kRightSemiProject;
+
+  // Initialize fanout to invalid value, check that it is assigned after the
+  // below switch.
+  float fanout = -1;
+  switch (rightJoinType) {
+    case velox::core::JoinType::kRightSemiFilter:
+      fanout = 1.0 / candidate.fanout;
+      break;
+    case velox::core::JoinType::kRightSemiProject:
+      markTrueFraction = 1 / fanout;
+      fanout = state.cost.cardinality < 1
+          ? 1
+          : state.cost.cardinality / probePlan->cost.cardinality;
+      break;
+    case velox::core::JoinType::kRight:
+      // A right oj produces every probe side row plus unhit build side rows.
+      // rlFanout is the approximation but never < 1.
+      fanout = std::max<float>(candidate.join->rlFanout(), 1);
+      break;
+    case velox::core::JoinType::kLeft:
+      // A right oj reversed produces every right side row and never limits the
+      // lrFanout.
+      fanout = std::max<float>(candidate.join->lrFanout(), 1);
+      break;
+    default:
+      VELOX_UNREACHABLE("Bad right join type {}", rightJoinType);
+  }
+  VELOX_CHECK_GE(fanout, 0);
 
   ColumnVector columns;
   PlanObjectSet columnSet;
@@ -1272,7 +1347,7 @@ void Optimization::joinByHashRight(
 
   if (mark) {
     const_cast<Value*>(&mark->value())->trueFraction =
-        std::min<float>(1, candidate.fanout);
+        std::min<float>(1, markTrueFraction);
     columns.push_back(mark);
   }
 
@@ -1451,7 +1526,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   state.columns.unionSet(dtColumns);
 
   MemoKey key;
-  key.columns = std::move(dtColumns);
+  key.columns = dtColumns;
   key.firstTable = from;
   key.tables.add(from);
 
@@ -1479,7 +1554,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
 
   if (reduction < 0.9) {
     key.tables = reducingSet;
-    key.columns = state.downstreamColumns();
+    key.columns = dtColumns;
     plan = makePlan(key, Distribution{}, PlanObjectSet{}, 1, state, ignore);
     // Not all reducing joins are necessarily retained in the plan. Only mark
     // the ones fully imported as placed.
@@ -1768,7 +1843,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     }
 
     addPostprocess(dt, plan, state);
-    auto kept = state.plans.addPlan(plan, state);
+    auto kept = state.plans.addPlan(plan, state, isSingleWorker_);
     trace(
         kept ? OptimizerOptions::kRetained : OptimizerOptions::kExceededBest,
         dt->id(),
@@ -1780,6 +1855,13 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
   std::vector<NextJoin> nextJoins;
   nextJoins.reserve(candidates.size());
   for (auto& candidate : candidates) {
+    if (candidate.tables.size() > 1) {
+      // When there are multiple tables on the build side, we need to consider
+      // all edges that go from already placed tables to the bushy build side.
+      // So far, we have only filled in the edges for the first in
+      // 'candidate.tables'.
+      addExtraEdges(state, candidate);
+    }
     addJoin(candidate, plan, state, nextJoins);
   }
 
@@ -1894,7 +1976,13 @@ PlanP Optimization::makeDtPlan(
     auto dt = make<DerivedTable>();
     dt->cname = newCName("tmp_dt");
     dt->import(
-        *state.dt, key.firstTable, key.tables, key.existences, existsFanout);
+        *state.dt,
+        key.firstTable,
+        key.tables,
+        key.existences,
+        existsFanout,
+        key.extraConjuncts,
+        key.columns);
 
     PlanState inner(*this, dt);
     if (key.firstTable->is(PlanType::kDerivedTableNode)) {

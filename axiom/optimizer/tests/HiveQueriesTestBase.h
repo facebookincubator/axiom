@@ -36,7 +36,7 @@ class HiveQueriesTestBase : public test::QueryTestBase {
   /// Returns a schema of a TPC-H table.
   velox::RowTypePtr getSchema(std::string_view tableName);
 
-  void checkResults(
+  axiom::optimizer::PlanAndStats checkResults(
       std::string_view sql,
       const velox::core::PlanNodePtr& referencePlan);
 
@@ -49,6 +49,14 @@ class HiveQueriesTestBase : public test::QueryTestBase {
   ::axiom::sql::presto::PrestoParser& prestoParser() {
     return *prestoParser_;
   }
+
+  void explain(
+      std::string_view sql,
+      std::string* shortRel,
+      std::string* longRel,
+      std::string* graph,
+      const runner::MultiFragmentPlan::Options& runnerOptions = {},
+      const OptimizerOptions& optimizerOptions = {});
 
  private:
   inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>

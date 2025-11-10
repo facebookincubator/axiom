@@ -172,13 +172,13 @@ velox::core::PlanNodePtr ToVelox::makeParallelProject(
     group->emplace_back(toTypedExpr(expr));
 
     if (expr->is(PlanType::kColumnExpr)) {
-      names.push_back(expr->as<Column>()->outputName());
+      names.push_back(sanitizeFieldName(expr->as<Column>()->outputName()));
     } else {
       names.push_back(fmt::format("__temp{}", expr->id()));
     }
 
     auto fieldAccess = std::make_shared<velox::core::FieldAccessTypedExpr>(
-        group->back()->type(), names.back());
+        group->back()->type(), sanitizeFieldName(names.back()));
     projectedExprs_[expr] = fieldAccess;
   }
 
@@ -365,7 +365,7 @@ velox::core::PlanNodePtr ToVelox::maybeParallelProject(
   finalExprs.reserve(exprs.size());
 
   for (auto i = 0; i < exprs.size(); ++i) {
-    names.emplace_back(columns[i]->outputName());
+    names.emplace_back(sanitizeFieldName(columns[i]->outputName()));
     finalExprs.emplace_back(toTypedExpr(exprs[i]));
   }
 
