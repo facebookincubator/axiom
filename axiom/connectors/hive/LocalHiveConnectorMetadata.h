@@ -209,7 +209,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   explicit LocalHiveConnectorMetadata(
       velox::connector::hive::HiveConnector* hiveConnector);
 
-  void initialize() override;
+  void initialize();
 
   TablePtr findTable(std::string_view name) override;
 

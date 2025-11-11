@@ -556,11 +556,6 @@ class ConnectorMetadata {
 
   virtual ~ConnectorMetadata() = default;
 
-  /// Post-construction initialization. This is called after adding
-  /// the ConnectorMetadata to the connector so that Connector methods
-  /// that refer to metadata are available.
-  virtual void initialize() = 0;
-
   /// Creates a ColumnHandle for 'columnName'. If the type is a complex type,
   /// 'subfields' specifies which subfields need to be retrievd. Empty
   /// 'subfields' means all are returned. If 'castToType' is present, this can

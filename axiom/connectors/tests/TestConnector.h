@@ -241,8 +241,6 @@ class TestConnectorMetadata : public ConnectorMetadata {
       : connector_(connector),
         splitManager_(std::make_unique<TestSplitManager>()) {}
 
-  void initialize() override {}
-
   TablePtr findTable(std::string_view name) override;
 
   /// Non-interface method which supplies a non-const Table reference

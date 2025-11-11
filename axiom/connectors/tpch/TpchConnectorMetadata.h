@@ -176,8 +176,6 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   explicit TpchConnectorMetadata(
       velox::connector::tpch::TpchConnector* tpchConnector);
 
-  void initialize() override {}
-
   TablePtr findTable(std::string_view name) override;
 
   ConnectorSplitManager* splitManager() override {

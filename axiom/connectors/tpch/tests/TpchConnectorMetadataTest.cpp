@@ -130,7 +130,6 @@ TEST_F(TpchConnectorMetadataTest, createColumnHandle) {
 }
 
 TEST_F(TpchConnectorMetadataTest, createTableHandle) {
-  metadata_->initialize();
   auto table = metadata_->findTable("lineitem");
   ASSERT_NE(table, nullptr);
   const auto& layouts = table->layouts();
