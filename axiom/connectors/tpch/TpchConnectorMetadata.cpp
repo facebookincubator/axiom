@@ -147,27 +147,23 @@ TpchConnectorMetadata::TpchConnectorMetadata(
   VELOX_CHECK_NOT_NULL(tpchConnector);
 }
 
-velox::connector::ColumnHandlePtr TpchConnectorMetadata::createColumnHandle(
+velox::connector::ColumnHandlePtr TpchTableLayout::createColumnHandle(
     const ConnectorSessionPtr& session,
-    const TableLayout& layoutData,
     const std::string& columnName,
     std::vector<velox::common::Subfield> subfields,
     std::optional<velox::TypePtr> castToType,
-    SubfieldMapping subfieldMapping) {
+    SubfieldMapping subfieldMapping) const {
   return std::make_shared<velox::connector::tpch::TpchColumnHandle>(columnName);
 }
 
-velox::connector::ConnectorTableHandlePtr
-TpchConnectorMetadata::createTableHandle(
+velox::connector::ConnectorTableHandlePtr TpchTableLayout::createTableHandle(
     const ConnectorSessionPtr& session,
-    const TableLayout& layout,
     std::vector<velox::connector::ColumnHandlePtr> /*columnHandles*/,
     velox::core::ExpressionEvaluator& /*evaluator*/,
     std::vector<velox::core::TypedExprPtr> filters,
     std::vector<velox::core::TypedExprPtr>& /*rejectedFilters*/,
     velox::RowTypePtr /*dataColumns*/,
-    std::optional<LookupKeys> /*lookupKeys*/) {
-  auto* tpchLayout = dynamic_cast<const TpchTableLayout*>(&layout);
+    std::optional<LookupKeys> /*lookupKeys*/) const {
   velox::core::TypedExprPtr filterExpression;
   for (auto& filter : filters) {
     if (!filterExpression) {
@@ -182,9 +178,9 @@ TpchConnectorMetadata::createTableHandle(
   }
 
   return std::make_shared<velox::connector::tpch::TpchTableHandle>(
-      tpchConnector_->connectorId(),
-      tpchLayout->getTpchTable(),
-      tpchLayout->getScaleFactor(),
+      connector()->connectorId(),
+      getTpchTable(),
+      getScaleFactor(),
       std::move(filterExpression));
 }
 

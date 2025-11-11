@@ -86,32 +86,29 @@ TablePtr TestConnectorMetadata::findTable(std::string_view name) {
   return findTableInternal(name);
 }
 
-velox::connector::ColumnHandlePtr TestConnectorMetadata::createColumnHandle(
+velox::connector::ColumnHandlePtr TestTableLayout::createColumnHandle(
     const ConnectorSessionPtr& session,
-    const TableLayout& layout,
     const std::string& columnName,
-    std::vector<velox::common::Subfield>,
+    std::vector<velox::common::Subfield> subfields,
     std::optional<velox::TypePtr> castToType,
-    SubfieldMapping) {
-  auto column = layout.findColumn(columnName);
+    SubfieldMapping subfieldMapping) const {
+  auto column = findColumn(columnName);
   VELOX_CHECK_NOT_NULL(
-      column, "Column {} not found in table {}", columnName, layout.name());
+      column, "Column {} not found in table {}", columnName, name());
   return std::make_shared<TestColumnHandle>(
       columnName, castToType.value_or(column->type()));
 }
 
-velox::connector::ConnectorTableHandlePtr
-TestConnectorMetadata::createTableHandle(
+velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
     const ConnectorSessionPtr& session,
-    const TableLayout& layout,
     std::vector<velox::connector::ColumnHandlePtr> columnHandles,
     velox::core::ExpressionEvaluator& /* evaluator */,
     std::vector<velox::core::TypedExprPtr> filters,
     std::vector<velox::core::TypedExprPtr>& rejectedFilters,
     velox::RowTypePtr /* dataColumns */,
-    std::optional<LookupKeys>) {
+    std::optional<LookupKeys> lookupKeys) const {
   rejectedFilters = std::move(filters);
-  return std::make_shared<TestTableHandle>(layout, std::move(columnHandles));
+  return std::make_shared<TestTableHandle>(*this, std::move(columnHandles));
 }
 
 std::shared_ptr<TestTable> TestConnectorMetadata::addTable(

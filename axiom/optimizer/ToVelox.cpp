@@ -167,7 +167,6 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
   auto connector = layout->connector();
   auto connectorSession =
       session_->toConnectorSession(connector->connectorId());
-  auto* metadata = connector::ConnectorMetadata::metadata(connector);
 
   std::vector<velox::connector::ColumnHandlePtr> columns;
   for (int32_t i = 0; i < dataColumns->size(); ++i) {
@@ -177,17 +176,13 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
     }
     auto subfields = columnSubfields(table, id.value());
 
-    columns.push_back(metadata->createColumnHandle(
-        connectorSession,
-        *layout,
-        dataColumns->nameOf(i),
-        std::move(subfields)));
+    columns.push_back(layout->createColumnHandle(
+        connectorSession, dataColumns->nameOf(i), std::move(subfields)));
   }
 
   std::vector<velox::core::TypedExprPtr> rejectedFilters;
-  auto handle = metadata->createTableHandle(
+  auto handle = layout->createTableHandle(
       connectorSession,
-      *layout,
       columns,
       *evaluator,
       std::move(filterConjuncts),
@@ -1014,7 +1009,6 @@ velox::core::PlanNodePtr ToVelox::makeScan(
   auto* connector = scan.index->layout->connector();
   auto connectorSession =
       session_->toConnectorSession(connector->connectorId());
-  auto* connectorMetadata = connector::ConnectorMetadata::metadata(connector);
 
   velox::connector::ColumnHandleMap assignments;
   for (auto column : scanColumns) {
@@ -1024,11 +1018,8 @@ velox::core::PlanNodePtr ToVelox::makeScan(
     // follows.
     auto scanColumnName =
         isSubfieldPushdown ? column->name() : column->outputName();
-    assignments[scanColumnName] = connectorMetadata->createColumnHandle(
-        connectorSession,
-        *scan.index->layout,
-        column->name(),
-        std::move(subfields));
+    assignments[scanColumnName] = scan.index->layout->createColumnHandle(
+        connectorSession, column->name(), std::move(subfields));
   }
 
   velox::core::PlanNodePtr result =

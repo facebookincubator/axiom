@@ -54,6 +54,22 @@ class TestTableLayout : public TableLayout {
       std::vector<ColumnStatistics>*) const override {
     return std::make_pair(1'000, 1'000);
   }
+
+  velox::connector::ColumnHandlePtr createColumnHandle(
+      const ConnectorSessionPtr& session,
+      const std::string& columnName,
+      std::vector<velox::common::Subfield> subfields,
+      std::optional<velox::TypePtr> castToType,
+      SubfieldMapping subfieldMapping) const override;
+
+  velox::connector::ConnectorTableHandlePtr createTableHandle(
+      const ConnectorSessionPtr& session,
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
+      velox::core::ExpressionEvaluator& evaluator,
+      std::vector<velox::core::TypedExprPtr> filters,
+      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
+      velox::RowTypePtr dataColumns,
+      std::optional<LookupKeys> lookupKeys) const override;
 };
 
 /// RowVectors are appended using the addData() interface and the vector
@@ -252,24 +268,6 @@ class TestConnectorMetadata : public ConnectorMetadata {
   ConnectorSplitManager* splitManager() override {
     return splitManager_.get();
   }
-
-  velox::connector::ColumnHandlePtr createColumnHandle(
-      const ConnectorSessionPtr& session,
-      const TableLayout& layout,
-      const std::string& columnName,
-      std::vector<velox::common::Subfield> subfields = {},
-      std::optional<velox::TypePtr> castToType = std::nullopt,
-      SubfieldMapping subfieldMapping = {}) override;
-
-  velox::connector::ConnectorTableHandlePtr createTableHandle(
-      const ConnectorSessionPtr& session,
-      const TableLayout& layout,
-      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
-      velox::core::ExpressionEvaluator& evaluator,
-      std::vector<velox::core::TypedExprPtr> filters,
-      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
-      velox::RowTypePtr dataColumns,
-      std::optional<LookupKeys>) override;
 
   /// Create and return a TestTable with the specified name and schema in the
   /// in-memory map maintained in the connector metadata. If the table already
