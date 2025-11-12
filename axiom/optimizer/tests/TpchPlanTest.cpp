@@ -570,7 +570,7 @@ TEST_F(TpchPlanTest, q22) {
 }
 
 // Use to re-generate the plans stored in tpch.plans directory.
-TEST_F(TpchPlanTest, makePlans) {
+TEST_F(TpchPlanTest, DISABLED_makePlans) {
   const auto path = makePath("tpch.plans");
 
   const runner::MultiFragmentPlan::Options options{
