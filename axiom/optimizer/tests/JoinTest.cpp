@@ -201,7 +201,25 @@ TEST_F(JoinTest, pushdownFilterThroughJoin) {
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
   {
-    SCOPED_TRACE("Right Join");
+    SCOPED_TRACE("Right Join (converted to Left Join)");
+    auto logicalPlan = makePlan(lp::JoinType::kRight);
+    auto matcher =
+        core::PlanMatcherBuilder{}
+            .tableScan("t2")
+            .filter("data2 IS NULL")
+            .hashJoin(
+                core::PlanMatcherBuilder{}.tableScan("t1").build(),
+                core::JoinType::kLeft)
+            .filter("data1 IS NULL")
+            // TODO: This projection can be avoided, because projections that
+            // just reorder/rename columns can be pushed own into join node.
+            .project({"id1", "data1", "id2", "data2"})
+            .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    SCOPED_TRACE("Right Join (syntactic order)");
     // This is needed because without this we cannot test right join
     // properly as it gets converted to left join by swapping inputs.
     auto wasSyntacticJoinOrder = optimizerOptions_.syntacticJoinOrder;
@@ -236,6 +254,34 @@ TEST_F(JoinTest, pushdownFilterThroughJoin) {
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+}
+
+TEST_F(JoinTest, hyperEdge) {
+  testConnector_->addTable("t", ROW({"t_id", "t_key", "t_data"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"u_id", "u_key", "u_data"}, BIGINT()));
+  testConnector_->addTable("v", ROW({"v_key", "v_data"}, BIGINT()));
+
+  lp::PlanBuilder::Context ctx{kTestConnectorId};
+  auto logicalPlan = lp::PlanBuilder{ctx}
+                         .from({"t", "u"})
+                         .filter("t_id = u_id")
+                         .join(
+                             lp::PlanBuilder{ctx}.tableScan("v"),
+                             "t_key = v_key AND u_key = v_key",
+                             lp::JoinType::kLeft)
+                         .build();
+
+  auto matcher = core::PlanMatcherBuilder{}
+                     .tableScan("t")
+                     .hashJoin(
+                         core::PlanMatcherBuilder{}.tableScan("u").build(),
+                         core::JoinType::kInner)
+                     .hashJoin(
+                         core::PlanMatcherBuilder{}.tableScan("v").build(),
+                         core::JoinType::kLeft)
+                     .build();
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 } // namespace
