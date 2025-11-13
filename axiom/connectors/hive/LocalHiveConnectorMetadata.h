@@ -209,6 +209,9 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   explicit LocalHiveConnectorMetadata(
       velox::connector::hive::HiveConnector* hiveConnector);
 
+  /// Post-construction initialization. This is called after adding the
+  /// LocalHiveConnectorMetadata to the HiveConnector so that HiveConnector
+  /// methods that refer to LocalHiveConnectorMetadata are available.
   void initialize();
 
   TablePtr findTable(std::string_view name) override;
