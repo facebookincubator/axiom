@@ -245,7 +245,7 @@ class Optimization {
   bool placeConjuncts(
       RelationOpPtr plan,
       PlanState& state,
-      bool allowNondeterministic);
+      bool joinsPlaced);
 
   // Helper function that calls makeJoins recursively for each of
   // 'nextJoins'. The point of making 'nextJoins' first and only then

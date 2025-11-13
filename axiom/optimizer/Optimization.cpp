@@ -1490,7 +1490,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
 bool Optimization::placeConjuncts(
     RelationOpPtr plan,
     PlanState& state,
-    bool allowNondeterministic) {
+    bool joinsPlaced) {
   PlanStateSaver save(state);
 
   PlanObjectSet columnsAndSingles = state.columns;
@@ -1498,7 +1498,7 @@ bool Optimization::placeConjuncts(
       [&](auto dt) { columnsAndSingles.unionObjects(dt->columns); });
 
   PlanObjectSet noPushdownTables;
-  if (!allowNondeterministic) {
+  if (!joinsPlaced) {
     for (const auto* join : state.dt->joins) {
       if (join->leftOptional()) {
         // No pushdown to the left side of a RIGHT or FULL join.
@@ -1512,16 +1512,15 @@ bool Optimization::placeConjuncts(
   }
   ExprVector filters;
   for (auto& conjunct : state.dt->conjuncts) {
-    if (!allowNondeterministic && conjunct->containsNonDeterministic()) {
+    if (!joinsPlaced && conjunct->containsNonDeterministic()) {
       continue;
     }
     if (state.placed.contains(conjunct)) {
       continue;
     }
-    if (!allowNondeterministic) {
-      const auto allTables = conjunct->allTables();
-      if (allTables.size() == 1 &&
-          noPushdownTables.contains(allTables.toObjects()[0])) {
+    if (!joinsPlaced) {
+      const auto* singleTable = conjunct->singleTable();
+      if (singleTable && noPushdownTables.contains(singleTable)) {
         continue;
       }
     }

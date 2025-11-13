@@ -531,11 +531,10 @@ class JoinEdge {
     VELOX_DCHECK_NOT_NULL(rightTable_);
     // filter_ is only for non-inner joins.
     VELOX_DCHECK(filter_.empty() || !isInner());
+    // Cannot be both semi and anti join.
     VELOX_DCHECK(!rightExists_ || !rightNotExists_);
-
-    if (markColumn_) {
-      VELOX_DCHECK(rightExists_);
-    }
+    // Mark column only for semi joins.
+    VELOX_DCHECK(!markColumn_ || rightExists_);
   }
 
   static JoinEdge* makeInner(PlanObjectCP leftTable, PlanObjectCP rightTable) {
