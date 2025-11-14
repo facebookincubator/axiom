@@ -104,7 +104,6 @@ add_executable(
   FeatureGen.cpp
   Genies.cpp
   TestConnectorQueryTest.cpp
-  JoinTest.cpp
   TpchConnectorQueryTest.cpp
   WriteTest.cpp
 )

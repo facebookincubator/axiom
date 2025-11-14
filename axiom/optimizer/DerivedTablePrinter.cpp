@@ -108,7 +108,7 @@ std::string visitJoinEdge(const JoinEdge& edge) {
     out << " RIGHT ";
   } else if (edge.rightOptional()) {
     out << " LEFT ";
-  } else if (edge.directed()) {
+  } else if (edge.unnest()) {
     out << " UNNEST ";
   } else {
     out << " INNER ";
