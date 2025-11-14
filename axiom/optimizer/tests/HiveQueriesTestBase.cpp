@@ -57,7 +57,7 @@ RowTypePtr HiveQueriesTestBase::getSchema(std::string_view tableName) {
       ->type();
 }
 
-void HiveQueriesTestBase::checkResults(
+axiom::optimizer::PlanAndStats HiveQueriesTestBase::checkResults(
     std::string_view sql,
     const core::PlanNodePtr& referencePlan) {
   SCOPED_TRACE(sql);
@@ -65,11 +65,13 @@ void HiveQueriesTestBase::checkResults(
 
   auto statement = prestoParser_->parse(sql);
 
-  ASSERT_TRUE(statement->isSelect());
+  VELOX_CHECK(statement->isSelect());
   auto logicalPlan =
       statement->as<::axiom::sql::presto::SelectStatement>()->plan();
 
-  checkSame(logicalPlan, referencePlan);
+  auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 1});
+  checkSame(plan, referencePlan);
+  return plan;
 }
 
 void HiveQueriesTestBase::checkResults(
@@ -88,6 +90,42 @@ void HiveQueriesTestBase::checkSingleNodePlan(
   ASSERT_EQ(1, fragments.size());
 
   ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
+}
+
+void HiveQueriesTestBase::explain(
+    std::string_view sql,
+    std::string* shortRel,
+    std::string* longRel,
+    std::string* graph,
+    const runner::MultiFragmentPlan::Options& runnerOptions,
+    const OptimizerOptions& optimizerOptions) {
+  auto statement = prestoParser_->parse(sql);
+
+  VELOX_CHECK(statement->isSelect());
+  auto logicalPlan =
+      statement->as<::axiom::sql::presto::SelectStatement>()->plan();
+
+  QueryTestBase::explain(
+      logicalPlan, shortRel, longRel, graph, runnerOptions, optimizerOptions);
+}
+
+void HiveQueriesTestBase::setChecker(
+    int32_t queryNo,
+    int32_t numWorkers,
+    int32_t numDrivers,
+    PlanChecker checker) {
+  checkers_[CheckerKey{queryNo, numWorkers, numDrivers}] = std::move(checker);
+}
+
+HiveQueriesTestBase::PlanChecker* HiveQueriesTestBase::getChecker(
+    int32_t queryNo,
+    int32_t numWorkers,
+    int32_t numDrivers) {
+  auto it = checkers_.find(CheckerKey{queryNo, numWorkers, numDrivers});
+  if (it != checkers_.end()) {
+    return &it->second;
+  }
+  return nullptr;
 }
 
 } // namespace facebook::axiom::optimizer::test

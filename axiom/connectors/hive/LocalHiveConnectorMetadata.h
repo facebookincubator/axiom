@@ -178,6 +178,10 @@ class LocalTable : public Table {
     numRows_ += n;
   }
 
+  void setNumRows(int64_t numRows) {
+    numRows_ = numRows;
+  }
+
   /// Samples  'samplePct' % rows of the table and sets the num distincts
   /// estimate for the columns. uses 'pool' for temporary data.
   void sampleNumDistincts(float samplePct, velox::memory::MemoryPool* pool);
@@ -279,6 +283,21 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   bool dropTableIfExists(std::string_view tableName) {
     return dropTable(nullptr, tableName, true);
   }
+
+  /// Serializes column statistics (cardinality, numRows, min/max values, etc.)
+  /// to JSON format. For each table, saves the total row count (numRows) and
+  /// layout information. Each column is recorded with its statistics. The
+  /// serialization is written to 'path' in the file system. If layouts have
+  /// row count or cardinality information, it will also be saved.
+  void saveColumnStats(const std::string& path);
+
+  /// Reads the serialization made by saveColumnStats() and stores the values
+  /// into the same members of the right columns of the right tables. Restores
+  /// table-level row counts (total cardinality) and any layout-specific
+  /// cardinality if present. Note that the file can have more tables and
+  /// columns than exist in the connector at the time of loading. The extra
+  /// will be ignored.
+  void loadColumnStats(const std::string& path);
 
  private:
   void ensureInitialized() const override;

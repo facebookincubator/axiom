@@ -165,7 +165,9 @@ struct DerivedTable : public PlanObject {
       PlanObjectCP firstTable,
       const PlanObjectSet& superTables,
       const std::vector<PlanObjectSet>& existences,
-      float existsFanout = 1);
+      float existsFanout = 1,
+      PlanObjectSet extraConjuncts = PlanObjectSet(),
+      PlanObjectSet columns = PlanObjectSet());
 
   /// Return a copy of 'expr', replacing references to this DT's 'columns' with
   /// corresponding 'exprs'.
@@ -211,6 +213,10 @@ struct DerivedTable : public PlanObject {
   bool hasLimit() const {
     return limit >= 0;
   }
+
+  // True if contains one derived table in 'tables'  and adds no change to its
+  // result set.
+  bool isWrapOnly() const;
 
   void addJoinedBy(JoinEdgeP join);
 

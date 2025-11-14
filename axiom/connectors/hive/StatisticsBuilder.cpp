@@ -74,6 +74,7 @@ std::unique_ptr<StatisticsBuilder> StatisticsBuilder::create(
       options.countDistincts,
       options.allocator);
   switch (type->kind()) {
+    case velox::TypeKind::TINYINT:
     case velox::TypeKind::BIGINT:
     case velox::TypeKind::INTEGER:
     case velox::TypeKind::SMALLINT:
@@ -143,6 +144,10 @@ void StatisticsBuilderImpl::add(const velox::VectorPtr& data) {
   };
 
   switch (type_->kind()) {
+    case velox::TypeKind::TINYINT:
+      addStats<velox::dwrf::IntegerStatisticsBuilder, int8_t>(
+          builder_.get(), *loadData(data));
+      break;
     case velox::TypeKind::SMALLINT:
       addStats<velox::dwrf::IntegerStatisticsBuilder, short>(
           builder_.get(), *loadData(data));
@@ -194,6 +199,46 @@ void StatisticsBuilderImpl::merge(const StatisticsBuilder& in) {
   numRows_ += other->numRows_;
 }
 
+namespace {
+/// Creates a Variant with the exact type matching the given TypeKind.
+/// This is needed because statistics builders return generic types (int64_t for
+/// integers, double for floating point) but we need variants matching the
+/// column's actual type.
+velox::Variant makeVariantForType(
+    velox::TypeKind typeKind,
+    int64_t intValue,
+    double doubleValue,
+    bool isInteger) {
+  if (isInteger) {
+    switch (typeKind) {
+      case velox::TypeKind::TINYINT:
+        return velox::Variant(static_cast<int8_t>(intValue));
+      case velox::TypeKind::SMALLINT:
+        return velox::Variant(static_cast<int16_t>(intValue));
+      case velox::TypeKind::INTEGER:
+        return velox::Variant(static_cast<int32_t>(intValue));
+      case velox::TypeKind::BIGINT:
+        return velox::Variant(intValue);
+      default:
+        VELOX_UNREACHABLE(
+            "Unsupported integer type kind: {}",
+            velox::TypeKindName::toName(typeKind));
+    }
+  } else {
+    switch (typeKind) {
+      case velox::TypeKind::REAL:
+        return velox::Variant(static_cast<float>(doubleValue));
+      case velox::TypeKind::DOUBLE:
+        return velox::Variant(doubleValue);
+      default:
+        VELOX_UNREACHABLE(
+            "Unsupported floating point type kind: {}",
+            velox::TypeKindName::toName(typeKind));
+    }
+  }
+}
+} // namespace
+
 void StatisticsBuilderImpl::build(
     ColumnStatistics& result,
     float sampleFraction) {
@@ -205,8 +250,10 @@ void StatisticsBuilderImpl::build(
     auto min = ints->getMinimum();
     auto max = ints->getMaximum();
     if (min.has_value() && max.has_value()) {
-      result.min = velox::Variant(min.value());
-      result.max = velox::Variant(max.value());
+      result.min = makeVariantForType(
+          type_->kind(), min.value(), 0.0, /*isInteger=*/true);
+      result.max = makeVariantForType(
+          type_->kind(), max.value(), 0.0, /*isInteger=*/true);
     }
   } else if (
       auto* dbl = dynamic_cast<velox::dwio::common::DoubleColumnStatistics*>(
@@ -214,8 +261,10 @@ void StatisticsBuilderImpl::build(
     auto min = dbl->getMinimum();
     auto max = dbl->getMaximum();
     if (min.has_value() && max.has_value()) {
-      result.min = velox::Variant(min.value());
-      result.max = velox::Variant(max.value());
+      result.min = makeVariantForType(
+          type_->kind(), 0, min.value(), /*isInteger=*/false);
+      result.max = makeVariantForType(
+          type_->kind(), 0, max.value(), /*isInteger=*/false);
     }
   } else if (
       auto* str = dynamic_cast<velox::dwio::common::StringColumnStatistics*>(

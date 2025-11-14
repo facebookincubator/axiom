@@ -440,6 +440,168 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
   EXPECT_NE(created, nullptr);
 }
 
+TEST_F(LocalHiveConnectorMetadataTest, saveAndRestoreStats) {
+  // Create a table with columns of various numeric types
+  auto tableType = ROW(
+      {{"c_tinyint", TINYINT()},
+       {"c_smallint", SMALLINT()},
+       {"c_integer", INTEGER()},
+       {"c_bigint", BIGINT()},
+       {"c_real", REAL()},
+       {"c_double", DOUBLE()}});
+
+  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto table = metadata_->createTable(
+      session, "test_save_restore_stats", tableType, /*options=*/{});
+
+  // Create initial data with values 1 to 100
+  constexpr int32_t kInitialSize = 100;
+  auto initialData = makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<int8_t>(
+              kInitialSize, [](auto row) { return row + 1; }),
+          makeFlatVector<int16_t>(
+              kInitialSize, [](auto row) { return row + 1; }),
+          makeFlatVector<int32_t>(
+              kInitialSize, [](auto row) { return row + 1; }),
+          makeFlatVector<int64_t>(
+              kInitialSize, [](auto row) { return row + 1; }),
+          makeFlatVector<float>(kInitialSize, [](auto row) { return row + 1; }),
+          makeFlatVector<double>(
+              kInitialSize, [](auto row) { return row + 1; }),
+      });
+
+  // Write initial data
+  writeToTable(
+      table,
+      initialData,
+      WriteKind::kCreate,
+      dwio::common::FileFormat::PARQUET);
+
+  // Reload table to get updated stats
+  metadata_->reinitialize();
+  table = metadata_->findTable("test_save_restore_stats");
+  ASSERT_NE(table, nullptr);
+
+  // Check that stats were computed correctly for initial data
+  auto checkStats = [&](const std::string& columnName, double expectedMax) {
+    auto column = table->findColumn(columnName);
+    ASSERT_NE(column, nullptr);
+    const auto* stats = column->stats();
+    ASSERT_NE(stats, nullptr) << "Stats are null for column: " << columnName;
+
+    if (!stats->max.has_value()) {
+      LOG(ERROR) << "Column " << columnName << " has no max value. "
+                 << "nullPct=" << stats->nullPct
+                 << ", numValues=" << stats->numValues;
+    }
+
+    ASSERT_TRUE(stats->max.has_value())
+        << "Column " << columnName << " max value is not set";
+
+    // Extract max value as double for comparison
+    double actualMax = 0.0;
+    switch (stats->max->kind()) {
+      case velox::TypeKind::TINYINT:
+        actualMax =
+            static_cast<double>(stats->max->value<velox::TypeKind::TINYINT>());
+        break;
+      case velox::TypeKind::SMALLINT:
+        actualMax =
+            static_cast<double>(stats->max->value<velox::TypeKind::SMALLINT>());
+        break;
+      case velox::TypeKind::INTEGER:
+        actualMax =
+            static_cast<double>(stats->max->value<velox::TypeKind::INTEGER>());
+        break;
+      case velox::TypeKind::BIGINT:
+        actualMax =
+            static_cast<double>(stats->max->value<velox::TypeKind::BIGINT>());
+        break;
+      case velox::TypeKind::REAL:
+        actualMax =
+            static_cast<double>(stats->max->value<velox::TypeKind::REAL>());
+        break;
+      case velox::TypeKind::DOUBLE:
+        actualMax = stats->max->value<velox::TypeKind::DOUBLE>();
+        break;
+      default:
+        FAIL() << "Unexpected type kind: " << stats->max->kind();
+    }
+    EXPECT_DOUBLE_EQ(actualMax, expectedMax)
+        << "Column: " << columnName << " has incorrect max value";
+  };
+
+  // Verify initial max values are 100
+  checkStats("c_tinyint", 100.0);
+  checkStats("c_smallint", 100.0);
+  checkStats("c_integer", 100.0);
+  checkStats("c_bigint", 100.0);
+  checkStats("c_real", 100.0);
+  checkStats("c_double", 100.0);
+
+  // Save the stats to a temporary file
+  std::string statsPath =
+      fmt::format("{}/test_stats_{}.json", metadata_->tablePath(""), getpid());
+  metadata_->saveColumnStats(statsPath);
+
+  // Insert additional data with values 101 to 120
+  constexpr int32_t kAdditionalSize = 20;
+  auto additionalData = makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<int8_t>(
+              kAdditionalSize, [](auto row) { return row + 101; }),
+          makeFlatVector<int16_t>(
+              kAdditionalSize, [](auto row) { return row + 101; }),
+          makeFlatVector<int32_t>(
+              kAdditionalSize, [](auto row) { return row + 101; }),
+          makeFlatVector<int64_t>(
+              kAdditionalSize, [](auto row) { return row + 101; }),
+          makeFlatVector<float>(
+              kAdditionalSize, [](auto row) { return row + 101; }),
+          makeFlatVector<double>(
+              kAdditionalSize, [](auto row) { return row + 101; }),
+      });
+
+  // Write additional data
+  writeToTable(
+      table,
+      additionalData,
+      WriteKind::kInsert,
+      dwio::common::FileFormat::PARQUET);
+
+  // Reload table to get updated stats
+  metadata_->reinitialize();
+  table = metadata_->findTable("test_save_restore_stats");
+  ASSERT_NE(table, nullptr);
+
+  // Verify max values are now 120
+  checkStats("c_tinyint", 120.0);
+  checkStats("c_smallint", 120.0);
+  checkStats("c_integer", 120.0);
+  checkStats("c_bigint", 120.0);
+  checkStats("c_real", 120.0);
+  checkStats("c_double", 120.0);
+
+  // Load the saved stats (which had max=100) back
+  metadata_->loadColumnStats(statsPath);
+  table = metadata_->findTable("test_save_restore_stats");
+  ASSERT_NE(table, nullptr);
+
+  // Verify max values are restored to 100
+  checkStats("c_tinyint", 100.0);
+  checkStats("c_smallint", 100.0);
+  checkStats("c_integer", 100.0);
+  checkStats("c_bigint", 100.0);
+  checkStats("c_real", 100.0);
+  checkStats("c_double", 100.0);
+
+  // Clean up the stats file
+  std::filesystem::remove(statsPath);
+}
+
 } // namespace
 } // namespace facebook::axiom::connector::hive
 

@@ -26,6 +26,9 @@
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
+#define AXIOM_ASSERT_PLAN(plan, matcher) \
+  ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+
 namespace facebook::axiom::optimizer {
 namespace {
 
@@ -1114,6 +1117,123 @@ TEST_F(PlanTest, lambdaArgs) {
   auto matcher = core::PlanMatcherBuilder{}.tableScan("t").project().build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
+
+TEST_F(PlanTest, joinWithFilterOverLimit) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
+
+  lp::PlanBuilder::Context ctx(kTestConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(ctx)
+          .tableScan("t")
+          .limit(100)
+          .filter("b > 50")
+          .join(
+              lp::PlanBuilder(ctx).tableScan("u").limit(50).filter("y < 100"),
+              "a = x",
+              lp::JoinType::kInner)
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("t")
+                       .limit()
+                       .filter("b > 50")
+                       .hashJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("u")
+                               .limit()
+                               .filter("y < 100")
+                               .build())
+                       .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(PlanTest, outerJoinWithInnerJoin) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->addTable("v", ROW({"vx", "vy", "vz"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
+
+  lp::PlanBuilder::Context ctx(kTestConnectorId);
+  auto logicalPlan = lp::PlanBuilder(ctx)
+                         .tableScan("t")
+                         .filter("b > 50")
+                         .join(
+                             lp::PlanBuilder(ctx).tableScan("u").join(
+                                 lp::PlanBuilder(ctx).tableScan("v"),
+                                 "x = vx",
+                                 lp::JoinType::kInner),
+                             "a = x",
+                             lp::JoinType::kLeft)
+                         .build();
+
+  {
+    SCOPED_TRACE("left join with inner join on right");
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    // The expected plan is a right oj with T, which has the filter on the build
+    // side and the wider row with no filter on the probe side.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("u")
+            .hashJoin(core::PlanMatcherBuilder().tableScan("v").build())
+            .hashJoin(
+                core::PlanMatcherBuilder()
+                    .tableScan("t")
+                    .filter("b > 50")
+
+                    .build())
+
+            .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  logicalPlan = lp::PlanBuilder(ctx)
+                    .tableScan("t")
+                    .filter("b > 50")
+                    .aggregate({"a", "b"}, {"sum(c)"})
+                    .join(
+                        lp::PlanBuilder(ctx)
+                            .tableScan("u")
+                            .join(
+                                lp::PlanBuilder(ctx).tableScan("v"),
+                                "x = vx",
+                                lp::JoinType::kInner)
+                            .filter("not(x = vy)"),
+                        "a = x",
+                        lp::JoinType::kLeft)
+                    .build();
+
+  {
+    SCOPED_TRACE("Aggregation left join filter over inner join");
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    // Expect a right oj with the aggregation and filter on the build side and
+    // the join to the right on probe. The aggregation is expected to be the
+    // narrower row.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("u")
+            .hashJoin(core::PlanMatcherBuilder().tableScan("v").build())
+            .filter()
+            .hashJoin(
+                core::PlanMatcherBuilder()
+                    .tableScan("t")
+                    .filter()
+                    .aggregation()
+                    .build())
+            .project()
+            .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+#undef AXIOM_ASSERT_PLAN
 
 } // namespace
 } // namespace facebook::axiom::optimizer

@@ -26,6 +26,8 @@ struct NodePrediction {
   float cardinality;
   ///  Peak total memory for the top node.
   float peakMemory{0};
+  /// CPU estimate in optimizer internal units.
+  float cpu{0};
 };
 
 /// Interface to historical query cost and cardinality
@@ -93,33 +95,63 @@ class History {
 /// core. This is ~6GB/s, so ~10ns. Other times are expressed as
 /// multiples of that.
 struct Costs {
+  /// Average clock of 2GHz
+  static constexpr float kClocksPerUnit = 20;
+
   static float byteShuffleCost() {
     return 12; // ~500MB/s
   }
 
-  static float hashProbeCost(float cardinality) {
-    return cardinality < 10000 ? kArrayProbeCost
-        : cardinality < 500000 ? kSmallHashCost
-                               : kLargeHashCost;
+  /// Returns the latency in clocks based on working set size and access
+  /// size, accounting for L1/L2/L3 cache hierarchy and memory latency.
+  static float cacheMissClocks(float workingSet, float accessBytes);
+
+  /// Approximation of cost of the hash table access in hash
+  /// probe/build/aggregation. Relative to expected cache misses.
+  static float hashTableCost(float cardinality) {
+    return cacheMissClocks(8 * cardinality, 1) / kClocksPerUnit;
+  }
+
+  /// Approximation of the cost of accessing a hash table row in join or
+  /// aggregation. Relative to expected cache misses.
+  static float hashRowCost(float cardinality, int32_t rowBytes) {
+    return cacheMissClocks(cardinality * rowBytes, rowBytes) / kClocksPerUnit;
+  }
+
+  static float hashBuildCost(float cardinality, int32_t rowBytes) {
+    // One probe per row, one write per row, 1 read for partitioning build, 1
+    // read for insert, estimated 1 row for colision in insert.
+    return hashTableCost(cardinality) + 5 * hashRowCost(cardinality, rowBytes);
   }
 
   static constexpr float kKeyCompareCost =
-      6; // ~30 instructions to find, decode and an compare
-  static constexpr float kArrayProbeCost = 2; // ~10 instructions.
-  static constexpr float kSmallHashCost = 10; // 50 instructions
-  static constexpr float kLargeHashCost = 40; // 2 LLC misses
+      0.5; // ~10 instructions to find, decode and an compare
+
   static constexpr float kColumnRowCost = 5;
   static constexpr float kColumnByteCost = 0.1;
 
   /// Cost of hash function on one column.
-  static constexpr float kHashColumnCost = 0.5;
+  static constexpr float kHashColumnCost = 0.3;
 
   /// Cost of getting a column from a hash table
-  static constexpr float kHashExtractColumnCost = 0.5;
+  static constexpr float kHashExtractColumnCost = 0.3;
+
+  /// Cost of sum/min/max. A little more than getting a value from the a hash
+  /// table.
+  static constexpr float kSimpleAggregateCost = kHashExtractColumnCost * 1.5;
+
+  /// Bytes of overhead for a hash table row: ~12 bytes for the table and ~12
+  /// bytes for the row.
+  static constexpr float kHashRowBytes = 24;
 
   /// Minimal cost of calling a filter function, e.g. comparing two numeric
   /// exprss.
   static constexpr float kMinimumFilterCost = 2;
+
+  // Multiplier to apply to shuffle byte volume to get CPU cost. A
+  // complete cost model will need to consider the count of
+  // destinations, number of partition keys etc.
+  static constexpr float kByteShuffleCost = 0.3;
 };
 
 /// Returns shuffle cost for a single row. Depends on the number of types of

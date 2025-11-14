@@ -20,6 +20,7 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <iostream>
+#include <map>
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
@@ -63,6 +64,11 @@ DECLARE_int32(cache_gb);
 DEFINE_bool(use_mmap, false, "Use mmap for buffers and cache");
 
 DEFINE_uint32(optimizer_trace, 0, "Optimizer trace level");
+
+DEFINE_bool(
+    enable_reducing_existences,
+    true,
+    "Enable adding reducing semijoins into hash builds,a aggregations etc.");
 
 DEFINE_bool(print_logical_plan, false, "Print logical plan (optimizer input)");
 
@@ -580,6 +586,11 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
 
     auto session = std::make_shared<Session>(queryCtx->queryId());
 
+    axiom::optimizer::OptimizerOptions optimizerOptions;
+    optimizerOptions.traceFlags = FLAGS_optimizer_trace;
+    optimizerOptions.enableReducingExistences =
+        FLAGS_enable_reducing_existences;
+
     optimizer::Optimization optimization(
         session,
         *logicalPlan,
@@ -587,7 +598,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
         *history_,
         queryCtx,
         evaluator,
-        {.traceFlags = FLAGS_optimizer_trace},
+        optimizerOptions,
         opts);
 
     if (checkDerivedTable && !checkDerivedTable(*optimization.rootDt())) {
@@ -616,6 +627,32 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   static void printPlanWithStats(
       runner::LocalRunner& runner,
       const optimizer::NodePredictionMap& estimates) {
+    // Calculate predicted CPU total
+    float predictedCpu = 0;
+    for (auto& pair : estimates) {
+      predictedCpu += pair.second.cpu;
+    }
+
+    // Get actual CPU timings from TaskStats
+    folly::F14FastMap<std::string, int64_t> nodeCpuNanos;
+    int64_t cpuNanos = 0;
+
+    // Get TaskStats from runner and convert to PlanNodeStats
+    auto taskStats = runner.stats();
+    for (const auto& taskStat : taskStats) {
+      auto planStats = velox::exec::toPlanStats(taskStat);
+
+      // For each plan node, sum up CPU from addInput, getOutput, and finish
+      for (const auto& [nodeId, stats] : planStats) {
+        int64_t nodeCpu = stats.addInputTiming.cpuNanos +
+            stats.getOutputTiming.cpuNanos + stats.finishTiming.cpuNanos;
+
+        // Accumulate (PlanNodeIds may not be unique across tasks)
+        nodeCpuNanos[nodeId] += nodeCpu;
+        cpuNanos += nodeCpu;
+      }
+    }
+
     std::cout << runner.printPlanWithStats([&](const core::PlanNodeId& nodeId,
                                                std::string_view indentation,
                                                std::ostream& out) {
@@ -623,9 +660,64 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
       if (it != estimates.end()) {
         out << indentation << "Estimate: " << it->second.cardinality
             << " rows, " << succinctBytes(it->second.peakMemory)
-            << " peak memory" << std::endl;
+            << " peak memory, predicted cpu=" << std::fixed
+            << std::setprecision(2) << (it->second.cpu * 100.0f / predictedCpu)
+            << "%";
+
+        // Add actual CPU percentage
+        auto cpuIt = nodeCpuNanos.find(nodeId);
+        if (cpuIt != nodeCpuNanos.end() && cpuNanos > 0) {
+          out << ", actual cpu=" << std::fixed << std::setprecision(2)
+              << (static_cast<float>(cpuIt->second) * 100.0f / cpuNanos) << "%";
+        }
+
+        out << std::endl;
       }
     });
+
+    // Print runtime stats grouped by operator if requested
+    if (FLAGS_include_custom_stats) {
+      std::cout << "\n" << std::string(80, '=') << "\n";
+      std::cout << "Runtime Stats by Operator:\n";
+      std::cout << std::string(80, '=') << "\n";
+
+      // Collect all runtime stats grouped by node ID
+      std::map<core::PlanNodeId, std::unordered_map<std::string, RuntimeMetric>>
+          allNodeStats;
+
+      for (const auto& taskStat : taskStats) {
+        auto planStats = velox::exec::toPlanStats(taskStat);
+
+        for (auto& [nodeId, stats] : planStats) {
+          if (!stats.customStats.empty()) {
+            // Merge custom stats for this node
+            for (const auto& [statName, statValue] : stats.customStats) {
+              auto& nodeStatMap = allNodeStats[nodeId];
+              auto it = nodeStatMap.find(statName);
+              if (it == nodeStatMap.end()) {
+                nodeStatMap[statName] = statValue;
+              } else {
+                it->second.merge(statValue);
+              }
+            }
+          }
+        }
+      }
+
+      // Print collected stats
+      for (const auto& [nodeId, customStats] : allNodeStats) {
+        std::cout << "\nNode " << nodeId << ":\n";
+        for (const auto& [statName, statValue] : customStats) {
+          std::cout << "  " << statName << ": " << statValue.toString() << "\n";
+        }
+      }
+
+      if (allNodeStats.empty()) {
+        std::cout << "\nNo custom runtime stats available.\n";
+      }
+
+      std::cout << std::string(80, '=') << "\n";
+    }
   }
 
   std::shared_ptr<runner::LocalRunner> makeRunner(

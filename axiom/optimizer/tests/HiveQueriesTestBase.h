@@ -16,14 +16,39 @@
 
 #pragma once
 
+#include <functional>
+#include <unordered_map>
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "axiom/sql/presto/PrestoParser.h"
 
 namespace facebook::axiom::optimizer::test {
 
+struct CheckerKey {
+  int32_t queryNo;
+  int32_t numWorkers;
+  int32_t numDrivers;
+
+  bool operator==(const CheckerKey& other) const {
+    return queryNo == other.queryNo && numWorkers == other.numWorkers &&
+        numDrivers == other.numDrivers;
+  }
+};
+
+struct CheckerKeyHash {
+  std::size_t operator()(const CheckerKey& key) const {
+    // Combine hash values using a simple hash combination technique
+    std::size_t h1 = std::hash<int32_t>{}(key.queryNo);
+    std::size_t h2 = std::hash<int32_t>{}(key.numWorkers);
+    std::size_t h3 = std::hash<int32_t>{}(key.numDrivers);
+    return h1 ^ (h2 << 1) ^ (h3 << 2);
+  }
+};
+
 class HiveQueriesTestBase : public test::QueryTestBase {
  protected:
+  using PlanChecker = std::function<void(const PlanAndStats&)>;
+
   static void SetUpTestCase();
 
   /// Creates TPC-H tables in a temp directory using PARQUET file format.
@@ -36,7 +61,7 @@ class HiveQueriesTestBase : public test::QueryTestBase {
   /// Returns a schema of a TPC-H table.
   velox::RowTypePtr getSchema(std::string_view tableName);
 
-  void checkResults(
+  axiom::optimizer::PlanAndStats checkResults(
       std::string_view sql,
       const velox::core::PlanNodePtr& referencePlan);
 
@@ -50,11 +75,29 @@ class HiveQueriesTestBase : public test::QueryTestBase {
     return *prestoParser_;
   }
 
+  void explain(
+      std::string_view sql,
+      std::string* shortRel,
+      std::string* longRel,
+      std::string* graph,
+      const runner::MultiFragmentPlan::Options& runnerOptions = {},
+      const OptimizerOptions& optimizerOptions = {});
+
+  void setChecker(
+      int32_t queryNo,
+      int32_t numWorkers,
+      int32_t numDrivers,
+      PlanChecker checker);
+
+  PlanChecker*
+  getChecker(int32_t queryNo, int32_t numWorkers, int32_t numDrivers);
+
  private:
   inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
       gTempDirectory;
 
   std::unique_ptr<::axiom::sql::presto::PrestoParser> prestoParser_;
+  std::unordered_map<CheckerKey, PlanChecker, CheckerKeyHash> checkers_;
 };
 
 } // namespace facebook::axiom::optimizer::test

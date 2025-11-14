@@ -216,7 +216,9 @@ class ToVelox {
   // after the plan is executed.
   void makePredictionAndHistory(
       const velox::core::PlanNodeId& id,
-      const RelationOp* op);
+      const RelationOp* op,
+      float extraCost = 0,
+      float extraMemory = 0);
 
   // Returns a stack of parallel project nodes if parallelization makes sense.
   // nullptr means use regular ProjectNode in output.
@@ -292,5 +294,9 @@ class ToVelox {
 
   runner::FinishWrite finishWrite_;
 };
+
+/// Replaces dots with underscores so that field names can be read back as names
+/// and not as getters.
+std::string sanitizeFieldName(std::string_view name);
 
 } // namespace facebook::axiom::optimizer

@@ -84,8 +84,10 @@ SchemaTableCP Schema::findTable(
   auto& tableColumns = connectorTable->columnMap();
   schemaColumns.reserve(tableColumns.size());
   for (const auto& [columnName, tableColumn] : tableColumns) {
-    const auto cardinality = static_cast<float>(tableColumn->approxNumDistinct(
-        static_cast<int64_t>(connectorTable->numRows())));
+    const auto cardinality = std::max<float>(
+        tableColumn->approxNumDistinct(
+            static_cast<int64_t>(connectorTable->numRows())),
+        1.0f);
     Value value(toType(tableColumn->type()), cardinality);
     auto* column = make<Column>(toName(columnName), nullptr, value);
     schemaColumns[column->name()] = column;
