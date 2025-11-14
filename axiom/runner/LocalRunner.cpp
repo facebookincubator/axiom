@@ -253,12 +253,17 @@ std::shared_ptr<connector::SplitSource> LocalRunner::splitSourceForScan(
 void LocalRunner::abort() {
   // If called without previous error, we set the error to be cancellation.
   if (!error_) {
-    try {
-      state_ = State::kCancelled;
-      VELOX_FAIL("Query cancelled");
-    } catch (const std::exception&) {
-      error_ = std::current_exception();
-    }
+    state_ = State::kCancelled;
+    error_ = std::make_exception_ptr(
+        velox::VeloxRuntimeError{
+            __FILE__,
+            __LINE__,
+            __FUNCTION__,
+            "",
+            "Query cancelled",
+            velox::error_source::kErrorSourceRuntime.c_str(),
+            velox::error_code::kInvalidState.c_str(),
+            false});
   }
   VELOX_CHECK(state_ != State::kInitialized);
   // Setting errors is thread safe. The stages do not change after
