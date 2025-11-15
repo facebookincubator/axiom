@@ -301,7 +301,7 @@ std::string JoinEdge::toString() const {
   out << "<join "
       << (leftTable_ ? leftTable_->toString() : " multiple tables ");
   if (leftOptional_ && rightOptional_) {
-    out << " full outr ";
+    out << " full outer ";
   } else if (markColumn_) {
     out << " exists project ";
   } else if (rightOptional_) {
@@ -312,7 +312,7 @@ std::string JoinEdge::toString() const {
     out << " not exists ";
   } else if (leftOptional_) {
     out << " right ";
-  } else if (directed_) {
+  } else if (unnest_) {
     out << " unnest ";
   } else {
     out << " inner ";
@@ -469,11 +469,11 @@ PlanObjectSet JoinEdge::allTables() const {
 }
 
 namespace {
-template <typename U>
+
 inline CPSpan<Column> toRangeCast(const ExprVector& exprs) {
-  return CPSpan<Column>(
-      reinterpret_cast<const Column* const*>(exprs.data()), exprs.size());
+  return {reinterpret_cast<const Column* const*>(exprs.data()), exprs.size()};
 }
+
 } // namespace
 
 void JoinEdge::guessFanout() {
@@ -481,6 +481,7 @@ void JoinEdge::guessFanout() {
     return;
   }
 
+  // TODO: Why fanouts are set to 1.1 and 1 when left table is null?
   if (leftTable_ == nullptr) {
     lrFanout_ = 1.1;
     rlFanout_ = 1;
@@ -489,8 +490,8 @@ void JoinEdge::guessFanout() {
 
   auto* opt = queryCtx()->optimization();
   auto samplePair = opt->history().sampleJoin(this);
-  auto left = joinCardinality(leftTable_, toRangeCast<Column>(leftKeys_));
-  auto right = joinCardinality(rightTable_, toRangeCast<Column>(rightKeys_));
+  auto left = joinCardinality(leftTable_, toRangeCast(leftKeys_));
+  auto right = joinCardinality(rightTable_, toRangeCast(rightKeys_));
   leftUnique_ = left.unique;
   rightUnique_ = right.unique;
   if (samplePair.first == 0 && samplePair.second == 0) {

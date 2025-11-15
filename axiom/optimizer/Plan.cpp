@@ -204,6 +204,8 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
         continue;
       }
 
+      // TODO: Shouldn't we handle markColumn here as well?
+
       // For an unplaced exists/not exists downstream, we need the left side
       // columns but not the right side since nothing is projected out from the
       // right side.
@@ -235,11 +237,6 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
     }
     if (addFilter && !join->filter().empty()) {
       addExprs(join->filter());
-    }
-
-    if (addFilter) {
-      addExprs(join->leftExprs());
-      addExprs(join->rightExprs());
     }
   }
 
