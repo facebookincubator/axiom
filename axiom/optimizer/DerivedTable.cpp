@@ -594,17 +594,79 @@ void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
 }
 
 void DerivedTable::flattenDt(const DerivedTable* dt) {
-  tables = dt->tables;
+  VELOX_DCHECK_NOT_NULL(dt);
+  VELOX_DCHECK_EQ(tables.size(), 1);
+  VELOX_DCHECK(tables[0] == dt);
+  VELOX_DCHECK_NULL(dt->write);
+  if (hasAggregation() && dt->hasAggregation()) {
+    // Can't have two aggregations in single dt.
+    return;
+  }
+  if (hasLimit() || dt->hasLimit()) {
+    // TODO: Can we combine limits?
+    // But we need to account cardinality, aggregation, order in such case.
+    return;
+  }
+  if (write) {
+    // We shouldn't flatten into a dt that writes.
+    // TODO: We can avoid this with putting write in the end of addPostprocess.
+    return;
+  }
+  // TODO: Use std::move(...)?
+
+  cardinality = dt->cardinality;
   cname = dt->cname;
-  tableSet = dt->tableSet;
-  joins = dt->joins;
-  joinOrder = dt->joinOrder;
   columns = dt->columns;
   exprs = dt->exprs;
-  fullyImported = dt->fullyImported;
+  joinedBy = dt->joinedBy;
+  tables = dt->tables;
+  tableSet = dt->tableSet;
+
+  // TODO: Is setop possible here at all?
+  VELOX_DCHECK(setOp == dt->setOp);
+  VELOX_DCHECK(children == dt->children);
+
+  // TODO: Is it true?
+  VELOX_DCHECK(singleRowDts == dt->singleRowDts);
+
+  startTables = dt->startTables;
+  joins = dt->joins;
+
+  // TODO: Is it true?
+  VELOX_DCHECK(conjuncts == dt->conjuncts);
+
+  // TODO: Why unionSet here?
   importedExistences.unionSet(dt->importedExistences);
-  aggregation = dt->aggregation;
-  having = dt->having;
+
+  fullyImported = dt->fullyImported;
+
+  // TODO: Is this correct?
+  // I made it like this for consistency with unionSet above.
+  noImportOfExists = noImportOfExists && dt->noImportOfExists;
+
+  joinOrder = dt->joinOrder;
+
+  if (!aggregation) {
+    aggregation = dt->aggregation;
+    VELOX_DCHECK(having.empty());
+    having = dt->having;
+  } else {
+    VELOX_DCHECK_NULL(dt->aggregation);
+    VELOX_DCHECK(dt->having.empty());
+  }
+
+  if (orderKeys.empty()) {
+    orderKeys = dt->orderKeys;
+    VELOX_DCHECK(orderTypes.empty());
+    orderTypes = dt->orderTypes;
+  } else {
+    VELOX_DCHECK(dt->orderKeys.empty());
+    VELOX_DCHECK(dt->orderTypes.empty());
+  }
+
+  VELOX_DCHECK(limit == dt->limit);
+  VELOX_DCHECK(offset == dt->offset);
+  VELOX_DCHECK(write == dt->write);
 }
 
 void DerivedTable::makeProjection(const ExprVector& exprs) {
