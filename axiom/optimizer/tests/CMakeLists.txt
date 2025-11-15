@@ -68,7 +68,7 @@ target_link_libraries(
   axiom_runner_tests_utils
 )
 
-add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp)
+add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp TpchPlanStability.cpp)
 
 add_test(
   NAME axiom_optimizer_tpch_plan_test
