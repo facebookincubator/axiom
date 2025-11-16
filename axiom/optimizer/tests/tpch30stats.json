@@ -1,0 +1,705 @@
+{
+  "customer": {
+    "columns": {
+      "c_acctbal": {
+        "max": "9999.960000000001",
+        "maxType": "DOUBLE",
+        "min": "-999.94",
+        "minType": "DOUBLE",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 4314159,
+        "numValues": 0
+      },
+      "c_address": {
+        "avgLength": 24,
+        "max": "\"zzwG011pNxeRs7TYcBDH36n8poMQDy,vX0jI3Rf\"",
+        "maxType": "VARCHAR",
+        "min": "\"  2C6OVhkRxmEI7W3o6 k8Mo6Bc0eiyPG\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 4499952,
+        "numValues": 0
+      },
+      "c_comment": {
+        "avgLength": 72,
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 4499617,
+        "numValues": 0
+      },
+      "c_custkey": {
+        "max": "451000",
+        "maxType": "BIGINT",
+        "min": "1",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 4500000,
+        "numValues": 0
+      },
+      "c_mktsegment": {
+        "avgLength": 8,
+        "max": "\"MACHINERY\"",
+        "maxType": "VARCHAR",
+        "min": "\"AUTOMOBILE\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 5,
+        "numValues": 0
+      },
+      "c_name": {
+        "avgLength": 18,
+        "max": "\"Customer#000451000\"",
+        "maxType": "VARCHAR",
+        "min": "\"Customer#000000001\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 4500000,
+        "numValues": 0
+      },
+      "c_nationkey": {
+        "max": "24",
+        "maxType": "BIGINT",
+        "min": "0",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 25,
+        "numValues": 0
+      },
+      "c_phone": {
+        "avgLength": 15,
+        "max": "\"34-999-756-5736\"",
+        "maxType": "VARCHAR",
+        "min": "\"10-100-135-8525\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 4499761,
+        "numValues": 0
+      }
+    },
+    "layouts": [
+      {
+        "name": "customer"
+      }
+    ],
+    "numRows": 4500000
+  },
+  "lineitem": {
+    "columns": {
+      "l_comment": {
+        "avgLength": 26,
+        "max": "\"ys special deposits nag about \"",
+        "maxType": "VARCHAR",
+        "min": "\" about the \"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 179728368,
+        "numValues": 0
+      },
+      "l_commitdate": {
+        "max": "\"1998-10-30\"",
+        "maxType": "INTEGER",
+        "min": "\"1992-02-07\"",
+        "minType": "INTEGER",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 2457,
+        "numValues": 0
+      },
+      "l_discount": {
+        "max": "0.1",
+        "maxType": "DOUBLE",
+        "min": "0",
+        "minType": "DOUBLE",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 11,
+        "numValues": 0
+      },
+      "l_extendedprice": {
+        "max": "101248.5",
+        "maxType": "DOUBLE",
+        "min": "944.9200000000001",
+        "minType": "DOUBLE",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 179728368,
+        "numValues": 0
+      },
+      "l_linenumber": {
+        "max": "7",
+        "maxType": "INTEGER",
+        "min": "1",
+        "minType": "INTEGER",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 7,
+        "numValues": 0
+      },
+      "l_linestatus": {
+        "avgLength": 1,
+        "max": "\"O\"",
+        "maxType": "VARCHAR",
+        "min": "\"F\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 2,
+        "numValues": 0
+      },
+      "l_orderkey": {
+        "max": "18000962",
+        "maxType": "BIGINT",
+        "min": "1",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 45359592,
+        "numValues": 0
+      },
+      "l_partkey": {
+        "max": "5998715",
+        "maxType": "BIGINT",
+        "min": "53",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 5998662,
+        "numValues": 0
+      },
+      "l_quantity": {
+        "max": "50",
+        "maxType": "DOUBLE",
+        "min": "1",
+        "minType": "DOUBLE",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 50,
+        "numValues": 0
+      },
+      "l_receiptdate": {
+        "max": "\"1998-12-16\"",
+        "maxType": "INTEGER",
+        "min": "\"1992-01-24\"",
+        "minType": "INTEGER",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 2518,
+        "numValues": 0
+      },
+      "l_returnflag": {
+        "avgLength": 1,
+        "max": "\"R\"",
+        "maxType": "VARCHAR",
+        "min": "\"A\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 3,
+        "numValues": 0
+      },
+      "l_shipdate": {
+        "max": "\"1998-12-01\"",
+        "maxType": "INTEGER",
+        "min": "\"1992-01-07\"",
+        "minType": "INTEGER",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 2520,
+        "numValues": 0
+      },
+      "l_shipinstruct": {
+        "avgLength": 11,
+        "max": "\"TAKE BACK RETURN\"",
+        "maxType": "VARCHAR",
+        "min": "\"COLLECT COD\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 4,
+        "numValues": 0
+      },
+      "l_shipmode": {
+        "avgLength": 4,
+        "max": "\"TRUCK\"",
+        "maxType": "VARCHAR",
+        "min": "\"AIR\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 7,
+        "numValues": 0
+      },
+      "l_suppkey": {
+        "max": "300000",
+        "maxType": "BIGINT",
+        "min": "54",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 299946,
+        "numValues": 0
+      },
+      "l_tax": {
+        "max": "0.08",
+        "maxType": "DOUBLE",
+        "min": "0",
+        "minType": "DOUBLE",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 9,
+        "numValues": 0
+      }
+    },
+    "layouts": [
+      {
+        "name": "lineitem"
+      }
+    ],
+    "numRows": 179998372
+  },
+  "nation": {
+    "columns": {
+      "n_comment": {
+        "avgLength": 74,
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 25,
+        "numValues": 0
+      },
+      "n_name": {
+        "avgLength": 7,
+        "max": "\"VIETNAM\"",
+        "maxType": "VARCHAR",
+        "min": "\"ALGERIA\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 25,
+        "numValues": 0
+      },
+      "n_nationkey": {
+        "max": "24",
+        "maxType": "BIGINT",
+        "min": "0",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 25,
+        "numValues": 0
+      },
+      "n_regionkey": {
+        "max": "4",
+        "maxType": "BIGINT",
+        "min": "0",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 5,
+        "numValues": 0
+      }
+    },
+    "layouts": [
+      {
+        "name": "nation"
+      }
+    ],
+    "numRows": 25
+  },
+  "orders": {
+    "columns": {
+      "o_clerk": {
+        "avgLength": 15,
+        "max": "\"Clerk#000030000\"",
+        "maxType": "VARCHAR",
+        "min": "\"Clerk#000000013\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 42311252,
+        "numValues": 0
+      },
+      "o_comment": {
+        "avgLength": 48,
+        "max": "\"zzle. carefully enticing deposits nag furio\"",
+        "maxType": "VARCHAR",
+        "min": "\" about the final platelets. dependen\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 44988748,
+        "numValues": 0
+      },
+      "o_custkey": {
+        "max": "4498843",
+        "maxType": "BIGINT",
+        "min": "712",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 4498131,
+        "numValues": 0
+      },
+      "o_orderdate": {
+        "max": "\"1998-08-02\"",
+        "maxType": "INTEGER",
+        "min": "\"1992-01-01\"",
+        "minType": "INTEGER",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 2405,
+        "numValues": 0
+      },
+      "o_orderkey": {
+        "max": "18004000",
+        "maxType": "BIGINT",
+        "min": "1",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 45000000,
+        "numValues": 0
+      },
+      "o_orderpriority": {
+        "avgLength": 8,
+        "max": "\"5-LOW\"",
+        "maxType": "VARCHAR",
+        "min": "\"1-URGENT\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 5,
+        "numValues": 0
+      },
+      "o_orderstatus": {
+        "avgLength": 1,
+        "max": "\"P\"",
+        "maxType": "VARCHAR",
+        "min": "\"F\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 3,
+        "numValues": 0
+      },
+      "o_shippriority": {
+        "max": "0",
+        "maxType": "INTEGER",
+        "min": "0",
+        "minType": "INTEGER",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 1,
+        "numValues": 0
+      },
+      "o_totalprice": {
+        "max": "468697.03",
+        "maxType": "DOUBLE",
+        "min": "1179.92",
+        "minType": "DOUBLE",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 45000000,
+        "numValues": 0
+      }
+    },
+    "layouts": [
+      {
+        "name": "orders"
+      }
+    ],
+    "numRows": 45000000
+  },
+  "part": {
+    "columns": {
+      "p_brand": {
+        "avgLength": 8,
+        "max": "\"Brand#55\"",
+        "maxType": "VARCHAR",
+        "min": "\"Brand#11\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 25,
+        "numValues": 0
+      },
+      "p_comment": {
+        "avgLength": 13,
+        "max": "\"zzle. final, final\"",
+        "maxType": "VARCHAR",
+        "min": "\" Tires\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 4675031,
+        "numValues": 0
+      },
+      "p_container": {
+        "avgLength": 7,
+        "max": "\"WRAP PKG\"",
+        "maxType": "VARCHAR",
+        "min": "\"JUMBO BAG\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 40,
+        "numValues": 0
+      },
+      "p_mfgr": {
+        "avgLength": 14,
+        "max": "\"Manufacturer#5\"",
+        "maxType": "VARCHAR",
+        "min": "\"Manufacturer#1\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 5,
+        "numValues": 0
+      },
+      "p_name": {
+        "avgLength": 32,
+        "max": "\"yellow white slate turquoise brown\"",
+        "maxType": "VARCHAR",
+        "min": "\"almond antique cyan blue pale\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 5999719,
+        "numValues": 0
+      },
+      "p_partkey": {
+        "max": "661000",
+        "maxType": "BIGINT",
+        "min": "1",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 5999625,
+        "numValues": 0
+      },
+      "p_retailprice": {
+        "max": "1959.96",
+        "maxType": "DOUBLE",
+        "min": "900.97",
+        "minType": "DOUBLE",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 939937,
+        "numValues": 0
+      },
+      "p_size": {
+        "max": "50",
+        "maxType": "INTEGER",
+        "min": "1",
+        "minType": "INTEGER",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 50,
+        "numValues": 0
+      },
+      "p_type": {
+        "avgLength": 20,
+        "max": "\"STANDARD POLISHED TIN\"",
+        "maxType": "VARCHAR",
+        "min": "\"ECONOMY ANODIZED BRASS\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 150,
+        "numValues": 0
+      }
+    },
+    "layouts": [
+      {
+        "name": "part"
+      }
+    ],
+    "numRows": 6000000
+  },
+  "partsupp": {
+    "columns": {
+      "ps_availqty": {
+        "max": "9998",
+        "maxType": "INTEGER",
+        "min": "2",
+        "minType": "INTEGER",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 9996,
+        "numValues": 0
+      },
+      "ps_comment": {
+        "avgLength": 123,
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 24000000,
+        "numValues": 0
+      },
+      "ps_partkey": {
+        "max": "600250",
+        "maxType": "BIGINT",
+        "min": "1",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 6000000,
+        "numValues": 0
+      },
+      "ps_suppkey": {
+        "max": "275251",
+        "maxType": "BIGINT",
+        "min": "2",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 275249,
+        "numValues": 0
+      },
+      "ps_supplycost": {
+        "max": "999.94",
+        "maxType": "DOUBLE",
+        "min": "1.43",
+        "minType": "DOUBLE",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 23580002,
+        "numValues": 0
+      }
+    },
+    "layouts": [
+      {
+        "name": "partsupp"
+      }
+    ],
+    "numRows": 24000000
+  },
+  "region": {
+    "columns": {
+      "r_comment": {
+        "avgLength": 66,
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 5,
+        "numValues": 0
+      },
+      "r_name": {
+        "avgLength": 6,
+        "max": "\"MIDDLE EAST\"",
+        "maxType": "VARCHAR",
+        "min": "\"AFRICA\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 5,
+        "numValues": 0
+      },
+      "r_regionkey": {
+        "max": "4",
+        "maxType": "BIGINT",
+        "min": "0",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 5,
+        "numValues": 0
+      }
+    },
+    "layouts": [
+      {
+        "name": "region"
+      }
+    ],
+    "numRows": 5
+  },
+  "supplier": {
+    "columns": {
+      "s_acctbal": {
+        "max": "9999.66",
+        "maxType": "DOUBLE",
+        "min": "-999.9200000000001",
+        "minType": "DOUBLE",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 295376,
+        "numValues": 0
+      },
+      "s_address": {
+        "avgLength": 25,
+        "max": "\"zztK9Cj VeF8skRl0EDMWOoDC \"",
+        "maxType": "VARCHAR",
+        "min": "\"  3baOZRmtC2D0uld6jRcQn3hB8jC\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 300000,
+        "numValues": 0
+      },
+      "s_comment": {
+        "avgLength": 62,
+        "max": "\"zzle furiously accounts. slyly silent dependencies are express \"",
+        "maxType": "VARCHAR",
+        "min": "\" Customer  blithely regular pinto beans. slyly express ideas uRecommendsy\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 299991,
+        "numValues": 0
+      },
+      "s_name": {
+        "avgLength": 18,
+        "max": "\"Supplier#000121000\"",
+        "maxType": "VARCHAR",
+        "min": "\"Supplier#000000001\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 300000,
+        "numValues": 0
+      },
+      "s_nationkey": {
+        "max": "24",
+        "maxType": "BIGINT",
+        "min": "0",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 25,
+        "numValues": 0
+      },
+      "s_phone": {
+        "avgLength": 15,
+        "max": "\"34-998-900-4911\"",
+        "maxType": "VARCHAR",
+        "min": "\"10-100-211-9178\"",
+        "minType": "VARCHAR",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 300000,
+        "numValues": 0
+      },
+      "s_suppkey": {
+        "max": "121000",
+        "maxType": "BIGINT",
+        "min": "1",
+        "minType": "BIGINT",
+        "nonNull": false,
+        "nullPct": 0,
+        "numDistinct": 300000,
+        "numValues": 0
+      }
+    },
+    "layouts": [
+      {
+        "name": "supplier"
+      }
+    ],
+    "numRows": 300000
+  }
+}

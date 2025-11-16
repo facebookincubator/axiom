@@ -1,0 +1,932 @@
+{
+  "joins": [
+    {
+      "key": "lineitem l_partkey  partsupp ps_partkey ",
+      "lr": 30.013731002807617,
+      "rl": 4.006462097167969
+    },
+    {
+      "key": "lineitem l_partkey l_suppkey  partsupp ps_partkey ps_suppkey ",
+      "lr": 7.5776543617248535,
+      "rl": 1.0013846158981323
+    },
+    {
+      "key": "customer c_nationkey  supplier s_nationkey ",
+      "lr": 0,
+      "rl": 0
+    },
+    {
+      "key": "nation n_regionkey  region r_regionkey ",
+      "lr": 5,
+      "rl": 1
+    },
+    {
+      "key": "lineitem l_suppkey  supplier s_suppkey ",
+      "lr": 599.5775146484375,
+      "rl": 1
+    },
+    {
+      "key": "part p_partkey  partsupp ps_partkey ",
+      "lr": 1.0014495849609375,
+      "rl": 4.00579833984375
+    },
+    {
+      "key": "lineitem l_partkey  part p_partkey ",
+      "lr": 30.05912208557129,
+      "rl": 1.0014495849609375
+    },
+    {
+      "key": "nation n_nationkey  supplier s_nationkey ",
+      "lr": 0,
+      "rl": 0
+    },
+    {
+      "key": "partsupp ps_suppkey  supplier s_suppkey ",
+      "lr": 80,
+      "rl": 1
+    },
+    {
+      "key": "customer c_nationkey  nation n_nationkey ",
+      "lr": 0,
+      "rl": 0
+    },
+    {
+      "key": "lineitem l_orderkey  orders o_orderkey ",
+      "lr": 4.0969648361206055,
+      "rl": 1.0112698078155518
+    },
+    {
+      "key": "customer c_custkey  orders o_custkey ",
+      "lr": 1.002375602722168,
+      "rl": 10.112638473510742
+    }
+  ],
+  "leaves": [
+    {
+      "key": "table: part, remaining filter: (like(\"p_name\",%green%)), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.054499998688697815
+    },
+    {
+      "key": "table: part, range filters: [(p_type, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.007000000216066837
+    },
+    {
+      "key": "table: orders, range filters: [(o_orderdate, BigintRange: [9131, 9861] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.3051535487174988
+    },
+    {
+      "key": "table: nation, remaining filter: (or(eq(\"n_name\",GERMANY),eq(\"n_name\",FRANCE))), data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.07999999821186066
+    },
+    {
+      "key": "table: nation, remaining filter: (or(eq(\"n_name\",FRANCE),eq(\"n_name\",GERMANY))), data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.07999999821186066
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipdate, BigintRange: [9131, 9861] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.3028944432735443
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_discount, DoubleRange: [0.050000, 0.070000] no nulls), (l_quantity, DoubleRange: (-inf, 24.000000) no nulls), (l_shipdate, BigintRange: [8766, 9223372036854775807] no nulls)], remaining filter: (lt(cast(\"l_shipdate\" as DATE),1995-01-01)), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_quantity, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]], HiveColumnHandle [name: l_discount, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.01900603622198105
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_discount, DoubleRange: [0.050000, 0.070000] no nulls), (l_shipdate, BigintRange: [8766, 9223372036854775807] no nulls)], remaining filter: (lt(cast(\"l_shipdate\" as DATE),1995-01-01)), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_discount, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.041726112365722656
+    },
+    {
+      "key": "table: orders, range filters: [(o_orderdate, BigintRange: [8766, 9223372036854775807] no nulls)], remaining filter: (lt(cast(\"o_orderdate\" as DATE),1995-01-01)), data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.1521788090467453
+    },
+    {
+      "key": "table: orders, range filters: [(o_orderdate, BigintRange: [8766, 9223372036854775807] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.6980015635490417
+    },
+    {
+      "key": "table: orders, range filters: [(o_orderdate, BigintRange: [8582, 9223372036854775807] no nulls)], remaining filter: (lt(cast(\"o_orderdate\" as DATE),1993-10-01)), data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.037673741579055786
+    },
+    {
+      "key": "table: orders, range filters: [(o_orderdate, BigintRange: [8582, 9223372036854775807] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.7737547159194946
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipdate, BigintRange: [9205, 9223372036854775807] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.5377705693244934
+    },
+    {
+      "key": "table: orders, range filters: [(o_orderdate, BigintRange: [-9223372036854775808, 9203] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.48468753695487976
+    },
+    {
+      "key": "table: customer, range filters: [(c_mktsegment, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: c_mktsegment, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.2022244930267334
+    },
+    {
+      "key": "table: part, remaining filter: (and(eq(cast(\"p_size\" as BIGINT),15),like(\"p_type\",%BRASS))), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]]]",
+      "value": 0.004093749914318323
+    },
+    {
+      "key": "table: part, remaining filter: (eq(cast(\"p_size\" as BIGINT),15)), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]]]",
+      "value": 0.020625000819563866
+    },
+    {
+      "key": "table: region, range filters: [(r_name, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<r_regionkey:BIGINT,r_name:VARCHAR,r_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: r_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.20000000298023224
+    },
+    {
+      "key": "table: region, data columns: ROW<r_regionkey:BIGINT,r_name:VARCHAR,r_comment:VARCHAR>",
+      "value": 1
+    },
+    {
+      "key": "table: customer, remaining filter: (in(substr(\"c_phone\",1,2),{13, 31, 23, 29, 30, ...2 more})), data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: c_phone, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.27628570795059204
+    },
+    {
+      "key": "table: customer, range filters: [(c_acctbal, DoubleRange: (0.000000, nan] no nulls)], remaining filter: (in(substr(\"c_phone\",1,2),{13, 31, 23, 29, 30, ...2 more})), data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: c_phone, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: c_acctbal, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]]]",
+      "value": 0.2511836588382721
+    },
+    {
+      "key": "table: customer, range filters: [(c_acctbal, DoubleRange: (0.000000, nan] no nulls)], data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: c_acctbal, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]]]",
+      "value": 0.9097346663475037
+    },
+    {
+      "key": "table: orders, range filters: [(o_orderstatus, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderstatus, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.486129492521286
+    },
+    {
+      "key": "table: lineitem, remaining filter: (lt(\"l_commitdate\",\"l_receiptdate\")), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.6319712400436401
+    },
+    {
+      "key": "table: part, remaining filter: (like(\"p_name\",forest%)), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.01040625013411045
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipdate, BigintRange: [8766, 9223372036854775807] no nulls)], remaining filter: (lt(cast(\"l_shipdate\" as DATE),1995-01-01)), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.1532454639673233
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipdate, BigintRange: [8766, 9223372036854775807] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.7217952013015747
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipdate, BigintRange: [-9223372036854775808, 10471] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.9858746528625488
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipinstruct, Filter(BytesValues, deterministic, null not allowed)), (l_shipmode, Filter(BytesValues, deterministic, null not allowed))], remaining filter: (or(and(gte(\"l_quantity\",20),lte(\"l_quantity\",30)),or(and(gte(\"l_quantity\",1),lte(\"l_quantity\",11)),and(gte(\"l_quantity\",10),lte(\"l_quantity\",20))))), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_quantity, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipinstruct, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipmode, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.021642129868268967
+    },
+    {
+      "key": "table: part, remaining filter: (or(and(between(cast(\"p_size\" as BIGINT),1,15),and(eq(\"p_brand\",Brand#34),in(\"p_container\",{LG CASE, LG BOX, LG PACK, LG PKG}))),or(and(between(cast(\"p_size\" as BIGINT),1,5),and(eq(\"p_brand\",Brand#12),in(\"p_container\",{SM CASE, SM BOX, SM PACK, SM PKG}))),and(between(cast(\"p_size\" as BIGINT),1,10),and(eq(\"p_brand\",Brand#23),in(\"p_container\",{MED BAG, MED BOX, MED PKG, MED PACK})))))), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_container, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]]]",
+      "value": 0.002218750072643161
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipinstruct, Filter(BytesValues, deterministic, null not allowed)), (l_shipmode, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipinstruct, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipmode, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.03596208617091179
+    },
+    {
+      "key": "table: part, range filters: [(p_brand, Filter(BytesValues, deterministic, null not allowed)), (p_container, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_container, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.0009218750055879354
+    },
+    {
+      "key": "table: part, range filters: [(p_brand, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.03946875035762787
+    },
+    {
+      "key": "table: part, range filters: [(p_brand, Filter(MultiRange, deterministic, null not allowed))], remaining filter: (and(not(like(\"p_type\",MEDIUM POLISHED%)),in(cast(\"p_size\" as BIGINT),{49, 14, 23, 45, 19, ...3 more}))), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]], HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.14926563203334808
+    },
+    {
+      "key": "table: part, range filters: [(p_brand, Filter(MultiRange, deterministic, null not allowed))], remaining filter: (not(like(\"p_type\",MEDIUM POLISHED%))), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.9288125038146973
+    },
+    {
+      "key": "table: part, range filters: [(p_brand, Filter(MultiRange, deterministic, null not allowed))], data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.9606719017028809
+    },
+    {
+      "key": "table: supplier, remaining filter: (like(\"s_comment\",%Customer%Complaints%)), data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: s_comment, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.00042857142398133874
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipdate, BigintRange: [9496, 9223372036854775807] no nulls)], remaining filter: (lt(cast(\"l_shipdate\" as DATE),1996-04-01)), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.03756958246231079
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipdate, BigintRange: [9496, 9223372036854775807] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.4170476496219635
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipdate, BigintRange: [9374, 9223372036854775807] no nulls)], remaining filter: (lt(cast(\"l_shipdate\" as DATE),1995-10-01)), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.012524488382041454
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipdate, BigintRange: [9374, 9223372036854775807] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.4676174819469452
+    },
+    {
+      "key": "table: part, data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>",
+      "value": 1
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_receiptdate, BigintRange: [8766, 9223372036854775807] no nulls), (l_shipmode, Filter(BytesValues, deterministic, null not allowed))], remaining filter: (and(lt(cast(\"l_receiptdate\" as DATE),1995-01-01),lt(\"l_commitdate\",\"l_receiptdate\"),lt(\"l_shipdate\",\"l_commitdate\"))), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipmode, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.0052649760618805885
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_receiptdate, BigintRange: [8766, 9223372036854775807] no nulls), (l_shipmode, Filter(BytesValues, deterministic, null not allowed))], remaining filter: (and(lt(\"l_commitdate\",\"l_receiptdate\"),lt(\"l_shipdate\",\"l_commitdate\"))), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipmode, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.024771172553300858
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipmode, Filter(BytesValues, deterministic, null not allowed))], remaining filter: (and(lt(\"l_commitdate\",\"l_receiptdate\"),lt(\"l_shipdate\",\"l_commitdate\"))), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipmode, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.034308016300201416
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipmode, Filter(BytesValues, deterministic, null not allowed))], remaining filter: (lt(\"l_commitdate\",\"l_receiptdate\")), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipmode, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.18021632730960846
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_shipmode, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipmode, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.2851082980632782
+    },
+    {
+      "key": "table: nation, range filters: [(n_name, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.03999999910593033
+    },
+    {
+      "key": "table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>",
+      "value": 1
+    },
+    {
+      "key": "table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>",
+      "value": 1
+    },
+    {
+      "key": "table: lineitem, range filters: [(l_returnflag, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_returnflag, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]",
+      "value": 0.24816307425498962
+    },
+    {
+      "key": "table: orders, range filters: [(o_orderdate, BigintRange: [8674, 9223372036854775807] no nulls)], remaining filter: (lt(cast(\"o_orderdate\" as DATE),1994-01-01)), data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.03807942569255829
+    },
+    {
+      "key": "table: orders, range filters: [(o_orderdate, BigintRange: [8674, 9223372036854775807] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]",
+      "value": 0.7360810041427612
+    },
+    {
+      "key": "table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>",
+      "value": 1
+    },
+    {
+      "key": "table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>",
+      "value": 1
+    },
+    {
+      "key": "table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>",
+      "value": 1
+    },
+    {
+      "key": "table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>",
+      "value": 1
+    }
+  ],
+  "plans": [
+    {
+      "card": 175,
+      "key": "join (join (join (join (join (scan part(f: like(p_name, ?%green%?), ) keys p_partkey,  = ps_partkey, scan partsupp()) keys ps_partkey, ps_suppkey,  = l_partkey, l_suppkey, scan lineitem()) keys l_orderkey,  = o_orderkey, scan orders()) keys l_suppkey,  = s_suppkey, scan supplier()) keys s_nationkey,  = n_nationkey, scan nation()) group by n_name, o_year, "
+    },
+    {
+      "card": 2450,
+      "key": "join (join (join (join (join (scan part(f: like(p_name, ?%green%?), ) keys p_partkey,  = ps_partkey, scan partsupp()) keys ps_partkey, ps_suppkey,  = l_partkey, l_suppkey, scan lineitem()) keys l_orderkey,  = o_orderkey, scan orders()) keys l_suppkey,  = s_suppkey, scan supplier()) keys s_nationkey,  = n_nationkey, scan nation())"
+    },
+    {
+      "card": 9788571,
+      "key": "join (join (join (join (scan part(f: like(p_name, ?%green%?), ) keys p_partkey,  = ps_partkey, scan partsupp()) keys ps_partkey, ps_suppkey,  = l_partkey, l_suppkey, scan lineitem()) keys l_orderkey,  = o_orderkey, scan orders()) keys l_suppkey,  = s_suppkey, scan supplier())"
+    },
+    {
+      "card": 9788571,
+      "key": "join (join (join (scan part(f: like(p_name, ?%green%?), ) keys p_partkey,  = ps_partkey, scan partsupp()) keys ps_partkey, ps_suppkey,  = l_partkey, l_suppkey, scan lineitem()) keys l_orderkey,  = o_orderkey, scan orders())"
+    },
+    {
+      "card": 1305248,
+      "key": "join (scan part(f: like(p_name, ?%green%?), ) keys p_partkey,  = ps_partkey, scan partsupp())"
+    },
+    {
+      "card": 9788571,
+      "key": "join (join (scan part(f: like(p_name, ?%green%?), ) keys p_partkey,  = ps_partkey, scan partsupp()) keys ps_partkey, ps_suppkey,  = l_partkey, l_suppkey, scan lineitem())"
+    },
+    {
+      "card": 326312,
+      "key": "scan part(f: like(p_name, ?%green%?), )"
+    },
+    {
+      "card": 2,
+      "key": "join (join (join (join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?AMERICA?), )) keys n_nationkey,  = c_nationkey, scan customer()) keys c_custkey,  = o_custkey, scan orders(f: between(o_orderdate, ?1995-01-01?, ?1996-12-31?), )) keys o_orderkey,  = l_orderkey, join (scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_type, ?ECONOMY ANODIZED STEEL?), ))) keys l_suppkey,  = s_suppkey, scan supplier()) keys s_nationkey,  = n_nationkey, scan nation()) group by o_year, "
+    },
+    {
+      "card": 28,
+      "key": "join (join (join (join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?AMERICA?), )) keys n_nationkey,  = c_nationkey, scan customer()) keys c_custkey,  = o_custkey, scan orders(f: between(o_orderdate, ?1995-01-01?, ?1996-12-31?), )) keys o_orderkey,  = l_orderkey, join (scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_type, ?ECONOMY ANODIZED STEEL?), ))) keys l_suppkey,  = s_suppkey, scan supplier()) keys s_nationkey,  = n_nationkey, scan nation())"
+    },
+    {
+      "card": 73741,
+      "key": "join (join (join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?AMERICA?), )) keys n_nationkey,  = c_nationkey, scan customer()) keys c_custkey,  = o_custkey, scan orders(f: between(o_orderdate, ?1995-01-01?, ?1996-12-31?), )) keys o_orderkey,  = l_orderkey, join (scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_type, ?ECONOMY ANODIZED STEEL?), ))) keys l_suppkey,  = s_suppkey, scan supplier())"
+    },
+    {
+      "card": 73741,
+      "key": "join (join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?AMERICA?), )) keys n_nationkey,  = c_nationkey, scan customer()) keys c_custkey,  = o_custkey, scan orders(f: between(o_orderdate, ?1995-01-01?, ?1996-12-31?), )) keys o_orderkey,  = l_orderkey, join (scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_type, ?ECONOMY ANODIZED STEEL?), )))"
+    },
+    {
+      "card": 2733152,
+      "key": "join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?AMERICA?), )) keys n_nationkey,  = c_nationkey, scan customer()) keys c_custkey,  = o_custkey, scan orders(f: between(o_orderdate, ?1995-01-01?, ?1996-12-31?), ))"
+    },
+    {
+      "card": 899950,
+      "key": "join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?AMERICA?), )) keys n_nationkey,  = c_nationkey, scan customer())"
+    },
+    {
+      "card": 5,
+      "key": "join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?AMERICA?), ))"
+    },
+    {
+      "card": 1,
+      "key": "scan region(f: eq(r_name, ?AMERICA?), )"
+    },
+    {
+      "card": 13674777,
+      "key": "scan orders(f: between(o_orderdate, ?1995-01-01?, ?1996-12-31?), )"
+    },
+    {
+      "card": 1212306,
+      "key": "join (scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_type, ?ECONOMY ANODIZED STEEL?), ))"
+    },
+    {
+      "card": 40345,
+      "key": "scan part(f: eq(p_type, ?ECONOMY ANODIZED STEEL?), )"
+    },
+    {
+      "card": 4,
+      "key": "join (join (join (scan customer() keys c_nationkey,  = n_nationkey, scan nation(f: __or(eq(n_name, ?GERMANY?), eq(n_name, ?FRANCE?)), )) keys c_custkey,  = o_custkey, scan orders()) keys o_orderkey,  = l_orderkey, join (join (scan nation(f: __or(eq(n_name, ?FRANCE?), eq(n_name, ?GERMANY?)), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem(f: between(l_shipdate, ?1995-01-01?, ?1996-12-31?), ))) filter (__or(__and(eq(n_name, ?FRANCE?), eq(n_name, ?GERMANY?)), __and(eq(n_name, ?GERMANY?), eq(n_name, ?FRANCE?))), ) group by l_year, n_name, n_name, "
+    },
+    {
+      "card": 56,
+      "key": "join (join (join (scan customer() keys c_nationkey,  = n_nationkey, scan nation(f: __or(eq(n_name, ?GERMANY?), eq(n_name, ?FRANCE?)), )) keys c_custkey,  = o_custkey, scan orders()) keys o_orderkey,  = l_orderkey, join (join (scan nation(f: __or(eq(n_name, ?FRANCE?), eq(n_name, ?GERMANY?)), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem(f: between(l_shipdate, ?1995-01-01?, ?1996-12-31?), ))) filter (__or(__and(eq(n_name, ?FRANCE?), eq(n_name, ?GERMANY?)), __and(eq(n_name, ?GERMANY?), eq(n_name, ?FRANCE?))), )"
+    },
+    {
+      "card": 350846,
+      "key": "join (join (join (scan customer() keys c_nationkey,  = n_nationkey, scan nation(f: __or(eq(n_name, ?GERMANY?), eq(n_name, ?FRANCE?)), )) keys c_custkey,  = o_custkey, scan orders()) keys o_orderkey,  = l_orderkey, join (join (scan nation(f: __or(eq(n_name, ?FRANCE?), eq(n_name, ?GERMANY?)), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem(f: between(l_shipdate, ?1995-01-01?, ?1996-12-31?), )))"
+    },
+    {
+      "card": 3611797,
+      "key": "join (join (scan customer() keys c_nationkey,  = n_nationkey, scan nation(f: __or(eq(n_name, ?GERMANY?), eq(n_name, ?FRANCE?)), )) keys c_custkey,  = o_custkey, scan orders())"
+    },
+    {
+      "card": 360480,
+      "key": "join (scan customer() keys c_nationkey,  = n_nationkey, scan nation(f: __or(eq(n_name, ?GERMANY?), eq(n_name, ?FRANCE?)), ))"
+    },
+    {
+      "card": 2,
+      "key": "scan nation(f: __or(eq(n_name, ?GERMANY?), eq(n_name, ?FRANCE?)), )"
+    },
+    {
+      "card": 4385512,
+      "key": "join (join (scan nation(f: __or(eq(n_name, ?FRANCE?), eq(n_name, ?GERMANY?)), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem(f: between(l_shipdate, ?1995-01-01?, ?1996-12-31?), ))"
+    },
+    {
+      "card": 4385512,
+      "key": "scan lineitem(f: between(l_shipdate, ?1995-01-01?, ?1996-12-31?), )"
+    },
+    {
+      "card": 24059,
+      "key": "join (scan nation(f: __or(eq(n_name, ?FRANCE?), eq(n_name, ?GERMANY?)), ) keys n_nationkey,  = s_nationkey, scan supplier())"
+    },
+    {
+      "card": 2,
+      "key": "scan nation(f: __or(eq(n_name, ?FRANCE?), eq(n_name, ?GERMANY?)), )"
+    },
+    {
+      "card": 1,
+      "key": "scan lineitem(f: between(l_discount, 0.049999999999999996, 0.07), f: gte(l_shipdate, ?1994-01-01?), f: lt(__cast(l_shipdate), ?1995-01-01?), f: lt(l_quantity, 24), ) group by "
+    },
+    {
+      "card": 14,
+      "key": "scan lineitem(f: between(l_discount, 0.049999999999999996, 0.07), f: gte(l_shipdate, ?1994-01-01?), f: lt(__cast(l_shipdate), ?1995-01-01?), f: lt(l_quantity, 24), )"
+    },
+    {
+      "card": 5,
+      "key": "join (join (join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?ASIA?), )) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem()) keys l_orderkey,  = o_orderkey, scan orders(f: gte(o_orderdate, ?1994-01-01?), f: lt(__cast(o_orderdate), ?1995-01-01?), )) keys n_nationkey, o_custkey,  = c_nationkey, c_custkey, scan customer()) group by n_name, "
+    },
+    {
+      "card": 175,
+      "key": "join (join (join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?ASIA?), )) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem()) keys l_orderkey,  = o_orderkey, scan orders(f: gte(o_orderdate, ?1994-01-01?), f: lt(__cast(o_orderdate), ?1995-01-01?), )) keys n_nationkey, o_custkey,  = c_nationkey, c_custkey, scan customer())"
+    },
+    {
+      "card": 5476462,
+      "key": "join (join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?ASIA?), )) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem()) keys l_orderkey,  = o_orderkey, scan orders(f: gte(o_orderdate, ?1994-01-01?), f: lt(__cast(o_orderdate), ?1995-01-01?), ))"
+    },
+    {
+      "card": 6825548,
+      "key": "scan orders(f: gte(o_orderdate, ?1994-01-01?), f: lt(__cast(o_orderdate), ?1995-01-01?), )"
+    },
+    {
+      "card": 36106880,
+      "key": "join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?ASIA?), )) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem())"
+    },
+    {
+      "card": 60186,
+      "key": "join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?ASIA?), )) keys n_nationkey,  = s_nationkey, scan supplier())"
+    },
+    {
+      "card": 5,
+      "key": "join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?ASIA?), ))"
+    },
+    {
+      "card": 1,
+      "key": "scan region(f: eq(r_name, ?ASIA?), )"
+    },
+    {
+      "card": 5,
+      "key": "join right exists-flag(scan lineitem(f: lt(l_commitdate, l_receiptdate), ) keys l_orderkey,  = o_orderkey, scan orders(f: gte(o_orderdate, ?1993-07-01?), f: lt(__cast(o_orderdate), ?1993-10-01?), )) filter (__mark0, ) group by o_orderpriority, "
+    },
+    {
+      "card": 5,
+      "key": "join right exists-flag(scan lineitem(f: lt(l_commitdate, l_receiptdate), ) keys l_orderkey,  = o_orderkey, scan orders(f: gte(o_orderdate, ?1993-07-01?), f: lt(__cast(o_orderdate), ?1993-10-01?), )) filter (__mark0, )"
+    },
+    {
+      "card": 1720611,
+      "key": "join right exists-flag(scan lineitem(f: lt(l_commitdate, l_receiptdate), ) keys l_orderkey,  = o_orderkey, scan orders(f: gte(o_orderdate, ?1993-07-01?), f: lt(__cast(o_orderdate), ?1993-10-01?), ))"
+    },
+    {
+      "card": 1720611,
+      "key": "scan orders(f: gte(o_orderdate, ?1993-07-01?), f: lt(__cast(o_orderdate), ?1993-10-01?), )"
+    },
+    {
+      "card": 339695,
+      "key": "join (join (scan customer(f: eq(c_mktsegment, ?BUILDING?), ) keys c_custkey,  = o_custkey, scan orders(f: lt(o_orderdate, ?1995-03-15?), )) keys o_orderkey,  = l_orderkey, scan lineitem(f: gt(l_shipdate, ?1995-03-15?), )) group by l_orderkey, o_orderdate, o_shippriority, "
+    },
+    {
+      "card": 339695,
+      "key": "join (join (scan customer(f: eq(c_mktsegment, ?BUILDING?), ) keys c_custkey,  = o_custkey, scan orders(f: lt(o_orderdate, ?1995-03-15?), )) keys o_orderkey,  = l_orderkey, scan lineitem(f: gt(l_shipdate, ?1995-03-15?), ))"
+    },
+    {
+      "card": 4379440,
+      "key": "join (scan customer(f: eq(c_mktsegment, ?BUILDING?), ) keys c_custkey,  = o_custkey, scan orders(f: lt(o_orderdate, ?1995-03-15?), ))"
+    },
+    {
+      "card": 900509,
+      "key": "scan customer(f: eq(c_mktsegment, ?BUILDING?), )"
+    },
+    {
+      "card": 21863668,
+      "key": "scan orders(f: lt(o_orderdate, ?1995-03-15?), )"
+    },
+    {
+      "card": 97039648,
+      "key": "scan lineitem(f: gt(l_shipdate, ?1995-03-15?), )"
+    },
+    {
+      "card": 19076,
+      "key": "join left(join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?EUROPE?), )) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = ps_suppkey, join (scan part(f: eq(__cast(p_size), 15), f: like(p_type, ?%BRASS?), ) keys p_partkey,  = ps_partkey, scan partsupp())) keys p_partkey,  = __gk12, join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?EUROPE?), )) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = ps_suppkey, join exists(scan partsupp() keys ps_partkey,  = p_partkey, scan part(f: eq(__cast(p_size), 15), f: like(p_type, ?%BRASS?), ))) group by ps_partkey, )"
+    },
+    {
+      "card": 19076,
+      "key": "join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?EUROPE?), )) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = ps_suppkey, join (scan part(f: eq(__cast(p_size), 15), f: like(p_type, ?%BRASS?), ) keys p_partkey,  = ps_partkey, scan partsupp()))"
+    },
+    {
+      "card": 19076,
+      "key": "join (scan part(f: eq(__cast(p_size), 15), f: like(p_type, ?%BRASS?), ) keys p_partkey,  = ps_partkey, scan partsupp())"
+    },
+    {
+      "card": 14155,
+      "key": "join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?EUROPE?), )) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = ps_suppkey, join exists(scan partsupp() keys ps_partkey,  = p_partkey, scan part(f: eq(__cast(p_size), 15), f: like(p_type, ?%BRASS?), ))) group by ps_partkey, "
+    },
+    {
+      "card": 14155,
+      "key": "join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?EUROPE?), )) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = ps_suppkey, join exists(scan partsupp() keys ps_partkey,  = p_partkey, scan part(f: eq(__cast(p_size), 15), f: like(p_type, ?%BRASS?), )))"
+    },
+    {
+      "card": 19076,
+      "key": "join exists(scan partsupp() keys ps_partkey,  = p_partkey, scan part(f: eq(__cast(p_size), 15), f: like(p_type, ?%BRASS?), ))"
+    },
+    {
+      "card": 60128,
+      "key": "join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?EUROPE?), )) keys n_nationkey,  = s_nationkey, scan supplier())"
+    },
+    {
+      "card": 5,
+      "key": "join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?EUROPE?), ))"
+    },
+    {
+      "card": 1,
+      "key": "scan region(f: eq(r_name, ?EUROPE?), )"
+    },
+    {
+      "card": 23840,
+      "key": "scan part(f: eq(__cast(p_size), 15), f: like(p_type, ?%BRASS?), )"
+    },
+    {
+      "card": 7,
+      "key": "join right exists-flag(scan orders() keys o_custkey,  = c_custkey, join (scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), ) keys  = scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), f: gt(c_acctbal, 0), ) group by ) filter (gt(c_acctbal, avg), )) filter (not(__mark0), ) group by cntrycode, "
+    },
+    {
+      "card": 7,
+      "key": "join right exists-flag(scan orders() keys o_custkey,  = c_custkey, join (scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), ) keys  = scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), f: gt(c_acctbal, 0), ) group by ) filter (gt(c_acctbal, avg), )) filter (not(__mark0), )"
+    },
+    {
+      "card": 573038,
+      "key": "join right exists-flag(scan orders() keys o_custkey,  = c_custkey, join (scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), ) keys  = scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), f: gt(c_acctbal, 0), ) group by ) filter (gt(c_acctbal, avg), ))"
+    },
+    {
+      "card": 573038,
+      "key": "join (scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), ) keys  = scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), f: gt(c_acctbal, 0), ) group by ) filter (gt(c_acctbal, avg), )"
+    },
+    {
+      "card": 0,
+      "key": "join (scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), ) keys  = scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), f: gt(c_acctbal, 0), ) group by )"
+    },
+    {
+      "card": 1259808,
+      "key": "scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), )"
+    },
+    {
+      "card": 1,
+      "key": "scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), f: gt(c_acctbal, 0), ) group by "
+    },
+    {
+      "card": 14,
+      "key": "scan customer(f: __in(substr(c_phone, 1, 2), ?13?, ?31?, ?23?, ?29?, ?30?, ?18?, ?17?), f: gt(c_acctbal, 0), )"
+    },
+    {
+      "card": 11957,
+      "key": "join right exists-flag(scan lineitem() keys l_orderkey_0,  = l_orderkey, join right exists-flag(scan lineitem(f: lt(l_commitdate, l_receiptdate), ) keys l_orderkey_16,  = l_orderkey, join (join (join (scan nation(f: eq(n_name, ?SAUDI ARABIA?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem(f: lt(l_commitdate, l_receiptdate), )) keys l_orderkey,  = o_orderkey, scan orders(f: eq(o_orderstatus, ?F?), ))) filter (not(__mark1), )) filter (__mark0, ) group by s_name, "
+    },
+    {
+      "card": 11957,
+      "key": "join right exists-flag(scan lineitem() keys l_orderkey_0,  = l_orderkey, join right exists-flag(scan lineitem(f: lt(l_commitdate, l_receiptdate), ) keys l_orderkey_16,  = l_orderkey, join (join (join (scan nation(f: eq(n_name, ?SAUDI ARABIA?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem(f: lt(l_commitdate, l_receiptdate), )) keys l_orderkey,  = o_orderkey, scan orders(f: eq(o_orderstatus, ?F?), ))) filter (not(__mark1), )) filter (__mark0, )"
+    },
+    {
+      "card": 198791,
+      "key": "join right exists-flag(scan lineitem() keys l_orderkey_0,  = l_orderkey, join right exists-flag(scan lineitem(f: lt(l_commitdate, l_receiptdate), ) keys l_orderkey_16,  = l_orderkey, join (join (join (scan nation(f: eq(n_name, ?SAUDI ARABIA?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem(f: lt(l_commitdate, l_receiptdate), )) keys l_orderkey,  = o_orderkey, scan orders(f: eq(o_orderstatus, ?F?), ))) filter (not(__mark1), ))"
+    },
+    {
+      "card": 198791,
+      "key": "join right exists-flag(scan lineitem(f: lt(l_commitdate, l_receiptdate), ) keys l_orderkey_16,  = l_orderkey, join (join (join (scan nation(f: eq(n_name, ?SAUDI ARABIA?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem(f: lt(l_commitdate, l_receiptdate), )) keys l_orderkey,  = o_orderkey, scan orders(f: eq(o_orderstatus, ?F?), ))) filter (not(__mark1), )"
+    },
+    {
+      "card": 2192508,
+      "key": "join right exists-flag(scan lineitem(f: lt(l_commitdate, l_receiptdate), ) keys l_orderkey_16,  = l_orderkey, join (join (join (scan nation(f: eq(n_name, ?SAUDI ARABIA?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem(f: lt(l_commitdate, l_receiptdate), )) keys l_orderkey,  = o_orderkey, scan orders(f: eq(o_orderstatus, ?F?), )))"
+    },
+    {
+      "card": 2192508,
+      "key": "join (join (join (scan nation(f: eq(n_name, ?SAUDI ARABIA?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem(f: lt(l_commitdate, l_receiptdate), )) keys l_orderkey,  = o_orderkey, scan orders(f: eq(o_orderstatus, ?F?), ))"
+    },
+    {
+      "card": 21923040,
+      "key": "scan orders(f: eq(o_orderstatus, ?F?), )"
+    },
+    {
+      "card": 4538215,
+      "key": "join (join (scan nation(f: eq(n_name, ?SAUDI ARABIA?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = l_suppkey, scan lineitem(f: lt(l_commitdate, l_receiptdate), ))"
+    },
+    {
+      "card": 11957,
+      "key": "join (scan nation(f: eq(n_name, ?SAUDI ARABIA?), ) keys n_nationkey,  = s_nationkey, scan supplier())"
+    },
+    {
+      "card": 1,
+      "key": "scan nation(f: eq(n_name, ?SAUDI ARABIA?), )"
+    },
+    {
+      "card": 113797648,
+      "key": "scan lineitem(f: lt(l_commitdate, l_receiptdate), )"
+    },
+    {
+      "card": 5404,
+      "key": "join right exists-flag(join right(scan lineitem(f: gte(l_shipdate, ?1994-01-01?), f: lt(__cast(l_shipdate), ?1995-01-01?), ) group by l_partkey, l_suppkey,  keys __gk8, __gk9,  = ps_partkey, ps_suppkey, join exists(join exists-flag(scan partsupp() keys ps_partkey,  = p_partkey, scan part(f: like(p_name, ?forest%?), )) filter (__mark0, ) keys ps_suppkey,  = edt14.t2.s_suppkey, join (scan nation(f: eq(n_name, ?CANADA?), ) keys n_nationkey,  = s_nationkey, scan supplier()))) filter (lt(expr, __cast(ps_availqty)), ) keys ps_suppkey,  = s_suppkey, join (scan nation(f: eq(n_name, ?CANADA?), ) keys n_nationkey,  = s_nationkey, scan supplier())) filter (__mark1, )"
+    },
+    {
+      "card": 12012,
+      "key": "join right exists-flag(join right(scan lineitem(f: gte(l_shipdate, ?1994-01-01?), f: lt(__cast(l_shipdate), ?1995-01-01?), ) group by l_partkey, l_suppkey,  keys __gk8, __gk9,  = ps_partkey, ps_suppkey, join exists(join exists-flag(scan partsupp() keys ps_partkey,  = p_partkey, scan part(f: like(p_name, ?forest%?), )) filter (__mark0, ) keys ps_suppkey,  = edt14.t2.s_suppkey, join (scan nation(f: eq(n_name, ?CANADA?), ) keys n_nationkey,  = s_nationkey, scan supplier()))) filter (lt(expr, __cast(ps_availqty)), ) keys ps_suppkey,  = s_suppkey, join (scan nation(f: eq(n_name, ?CANADA?), ) keys n_nationkey,  = s_nationkey, scan supplier()))"
+    },
+    {
+      "card": 7080,
+      "key": "join right(scan lineitem(f: gte(l_shipdate, ?1994-01-01?), f: lt(__cast(l_shipdate), ?1995-01-01?), ) group by l_partkey, l_suppkey,  keys __gk8, __gk9,  = ps_partkey, ps_suppkey, join exists(join exists-flag(scan partsupp() keys ps_partkey,  = p_partkey, scan part(f: like(p_name, ?forest%?), )) filter (__mark0, ) keys ps_suppkey,  = edt14.t2.s_suppkey, join (scan nation(f: eq(n_name, ?CANADA?), ) keys n_nationkey,  = s_nationkey, scan supplier()))) filter (lt(expr, __cast(ps_availqty)), )"
+    },
+    {
+      "card": 10416,
+      "key": "join right(scan lineitem(f: gte(l_shipdate, ?1994-01-01?), f: lt(__cast(l_shipdate), ?1995-01-01?), ) group by l_partkey, l_suppkey,  keys __gk8, __gk9,  = ps_partkey, ps_suppkey, join exists(join exists-flag(scan partsupp() keys ps_partkey,  = p_partkey, scan part(f: like(p_name, ?forest%?), )) filter (__mark0, ) keys ps_suppkey,  = edt14.t2.s_suppkey, join (scan nation(f: eq(n_name, ?CANADA?), ) keys n_nationkey,  = s_nationkey, scan supplier())))"
+    },
+    {
+      "card": 16355889,
+      "key": "scan lineitem(f: gte(l_shipdate, ?1994-01-01?), f: lt(__cast(l_shipdate), ?1995-01-01?), ) group by l_partkey, l_suppkey, "
+    },
+    {
+      "card": 10416,
+      "key": "join exists(join exists-flag(scan partsupp() keys ps_partkey,  = p_partkey, scan part(f: like(p_name, ?forest%?), )) filter (__mark0, ) keys ps_suppkey,  = edt14.t2.s_suppkey, join (scan nation(f: eq(n_name, ?CANADA?), ) keys n_nationkey,  = s_nationkey, scan supplier()))"
+    },
+    {
+      "card": 10416,
+      "key": "join exists-flag(scan partsupp() keys ps_partkey,  = p_partkey, scan part(f: like(p_name, ?forest%?), )) filter (__mark0, )"
+    },
+    {
+      "card": 960960,
+      "key": "join exists-flag(scan partsupp() keys ps_partkey,  = p_partkey, scan part(f: like(p_name, ?forest%?), ))"
+    },
+    {
+      "card": 12012,
+      "key": "join (scan nation(f: eq(n_name, ?CANADA?), ) keys n_nationkey,  = s_nationkey, scan supplier())"
+    },
+    {
+      "card": 1,
+      "key": "scan nation(f: eq(n_name, ?CANADA?), )"
+    },
+    {
+      "card": 65430,
+      "key": "scan part(f: like(p_name, ?forest%?), )"
+    },
+    {
+      "card": 27299146,
+      "key": "scan lineitem(f: gte(l_shipdate, ?1994-01-01?), f: lt(__cast(l_shipdate), ?1995-01-01?), )"
+    },
+    {
+      "card": 4,
+      "key": "scan lineitem(f: lt(l_shipdate, ?1998-09-03?), ) group by l_linestatus, l_returnflag, "
+    },
+    {
+      "card": 56,
+      "key": "scan lineitem(f: lt(l_shipdate, ?1998-09-03?), )"
+    },
+    {
+      "card": 1,
+      "key": "join (scan lineitem(f: __in(l_shipmode, ?AIR?, ?AIR REG?), f: __or(__and(gte(l_quantity, 20), lte(l_quantity, 30)), __or(__and(gte(l_quantity, 1), lte(l_quantity, 11)), __and(gte(l_quantity, 10), lte(l_quantity, 20)))), f: eq(l_shipinstruct, ?DELIVER IN PERSON?), ) keys l_partkey,  = p_partkey, scan part(f: __or(__and(between(__cast(p_size), 1, 15), __and(eq(p_brand, ?Brand#34?), __in(p_container, ?LG CASE?, ?LG BOX?, ?LG PACK?, ?LG PKG?))), __or(__and(between(__cast(p_size), 1, 5), __and(eq(p_brand, ?Brand#12?), __in(p_container, ?SM CASE?, ?SM BOX?, ?SM PACK?, ?SM PKG?))), __and(between(__cast(p_size), 1, 10), __and(eq(p_brand, ?Brand#23?), __in(p_container, ?MED BAG?, ?MED BOX?, ?MED PKG?, ?MED PACK?))))), )) filter (__or(__and(between(__cast(p_size), 1, 15), __and(lte(l_quantity, 30), __and(gte(l_quantity, 20), __and(eq(p_brand, ?Brand#34?), __in(p_container, ?LG CASE?, ?LG BOX?, ?LG PACK?, ?LG PKG?))))), __or(__and(between(__cast(p_size), 1, 5), __and(lte(l_quantity, 11), __and(gte(l_quantity, 1), __and(eq(p_brand, ?Brand#12?), __in(p_container, ?SM CASE?, ?SM BOX?, ?SM PACK?, ?SM PKG?))))), __and(between(__cast(p_size), 1, 10), __and(lte(l_quantity, 20), __and(gte(l_quantity, 10), __and(eq(p_brand, ?Brand#23?), __in(p_container, ?MED BAG?, ?MED BOX?, ?MED PKG?, ?MED PACK?))))))), ) group by "
+    },
+    {
+      "card": 14,
+      "key": "join (scan lineitem(f: __in(l_shipmode, ?AIR?, ?AIR REG?), f: __or(__and(gte(l_quantity, 20), lte(l_quantity, 30)), __or(__and(gte(l_quantity, 1), lte(l_quantity, 11)), __and(gte(l_quantity, 10), lte(l_quantity, 20)))), f: eq(l_shipinstruct, ?DELIVER IN PERSON?), ) keys l_partkey,  = p_partkey, scan part(f: __or(__and(between(__cast(p_size), 1, 15), __and(eq(p_brand, ?Brand#34?), __in(p_container, ?LG CASE?, ?LG BOX?, ?LG PACK?, ?LG PKG?))), __or(__and(between(__cast(p_size), 1, 5), __and(eq(p_brand, ?Brand#12?), __in(p_container, ?SM CASE?, ?SM BOX?, ?SM PACK?, ?SM PKG?))), __and(between(__cast(p_size), 1, 10), __and(eq(p_brand, ?Brand#23?), __in(p_container, ?MED BAG?, ?MED BOX?, ?MED PKG?, ?MED PACK?))))), )) filter (__or(__and(between(__cast(p_size), 1, 15), __and(lte(l_quantity, 30), __and(gte(l_quantity, 20), __and(eq(p_brand, ?Brand#34?), __in(p_container, ?LG CASE?, ?LG BOX?, ?LG PACK?, ?LG PKG?))))), __or(__and(between(__cast(p_size), 1, 5), __and(lte(l_quantity, 11), __and(gte(l_quantity, 1), __and(eq(p_brand, ?Brand#12?), __in(p_container, ?SM CASE?, ?SM BOX?, ?SM PACK?, ?SM PKG?))))), __and(between(__cast(p_size), 1, 10), __and(lte(l_quantity, 20), __and(gte(l_quantity, 10), __and(eq(p_brand, ?Brand#23?), __in(p_container, ?MED BAG?, ?MED BOX?, ?MED PKG?, ?MED PACK?))))))), )"
+    },
+    {
+      "card": 9470,
+      "key": "join (scan lineitem(f: __in(l_shipmode, ?AIR?, ?AIR REG?), f: __or(__and(gte(l_quantity, 20), lte(l_quantity, 30)), __or(__and(gte(l_quantity, 1), lte(l_quantity, 11)), __and(gte(l_quantity, 10), lte(l_quantity, 20)))), f: eq(l_shipinstruct, ?DELIVER IN PERSON?), ) keys l_partkey,  = p_partkey, scan part(f: __or(__and(between(__cast(p_size), 1, 15), __and(eq(p_brand, ?Brand#34?), __in(p_container, ?LG CASE?, ?LG BOX?, ?LG PACK?, ?LG PKG?))), __or(__and(between(__cast(p_size), 1, 5), __and(eq(p_brand, ?Brand#12?), __in(p_container, ?SM CASE?, ?SM BOX?, ?SM PACK?, ?SM PKG?))), __and(between(__cast(p_size), 1, 10), __and(eq(p_brand, ?Brand#23?), __in(p_container, ?MED BAG?, ?MED BOX?, ?MED PKG?, ?MED PACK?))))), ))"
+    },
+    {
+      "card": 9470,
+      "key": "scan lineitem(f: __in(l_shipmode, ?AIR?, ?AIR REG?), f: __or(__and(gte(l_quantity, 20), lte(l_quantity, 30)), __or(__and(gte(l_quantity, 1), lte(l_quantity, 11)), __and(gte(l_quantity, 10), lte(l_quantity, 20)))), f: eq(l_shipinstruct, ?DELIVER IN PERSON?), )"
+    },
+    {
+      "card": 14558,
+      "key": "scan part(f: __or(__and(between(__cast(p_size), 1, 15), __and(eq(p_brand, ?Brand#34?), __in(p_container, ?LG CASE?, ?LG BOX?, ?LG PACK?, ?LG PKG?))), __or(__and(between(__cast(p_size), 1, 5), __and(eq(p_brand, ?Brand#12?), __in(p_container, ?SM CASE?, ?SM BOX?, ?SM PACK?, ?SM PKG?))), __and(between(__cast(p_size), 1, 10), __and(eq(p_brand, ?Brand#23?), __in(p_container, ?MED BAG?, ?MED BOX?, ?MED PKG?, ?MED PACK?))))), )"
+    },
+    {
+      "card": 1917,
+      "key": "join (join exists-flag(join (scan customer() keys c_custkey,  = o_custkey, scan orders()) keys o_orderkey,  = l_orderkey_17, scan lineitem() group by l_orderkey,  filter (gt(sum, 300), )) filter (__mark0, ) keys o_orderkey,  = l_orderkey, scan lineitem()) group by c_custkey, c_name, o_orderdate, o_orderkey, o_totalprice, "
+    },
+    {
+      "card": 45000000,
+      "key": "scan lineitem() group by l_orderkey, "
+    },
+    {
+      "card": 1917,
+      "key": "join (join exists-flag(join (scan customer() keys c_custkey,  = o_custkey, scan orders()) keys o_orderkey,  = l_orderkey_17, scan lineitem() group by l_orderkey,  filter (gt(sum, 300), )) filter (__mark0, ) keys o_orderkey,  = l_orderkey, scan lineitem())"
+    },
+    {
+      "card": 1917,
+      "key": "join exists-flag(join (scan customer() keys c_custkey,  = o_custkey, scan orders()) keys o_orderkey,  = l_orderkey_17, scan lineitem() group by l_orderkey,  filter (gt(sum, 300), )) filter (__mark0, )"
+    },
+    {
+      "card": 45000000,
+      "key": "join exists-flag(join (scan customer() keys c_custkey,  = o_custkey, scan orders()) keys o_orderkey,  = l_orderkey_17, scan lineitem() group by l_orderkey,  filter (gt(sum, 300), ))"
+    },
+    {
+      "card": 45000000,
+      "key": "join (scan customer() keys c_custkey,  = o_custkey, scan orders())"
+    },
+    {
+      "card": 1,
+      "key": "join left(join (scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_brand, ?Brand#23?), f: eq(p_container, ?MED BOX?), )) keys p_partkey,  = __gk6, join exists(scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_brand, ?Brand#23?), f: eq(p_container, ?MED BOX?), )) group by l_partkey, ) filter (lt(l_quantity, expr), ) group by "
+    },
+    {
+      "card": 6095,
+      "key": "join exists(scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_brand, ?Brand#23?), f: eq(p_container, ?MED BOX?), )) group by l_partkey, "
+    },
+    {
+      "card": 14,
+      "key": "join left(join (scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_brand, ?Brand#23?), f: eq(p_container, ?MED BOX?), )) keys p_partkey,  = __gk6, join exists(scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_brand, ?Brand#23?), f: eq(p_container, ?MED BOX?), )) group by l_partkey, ) filter (lt(l_quantity, expr), )"
+    },
+    {
+      "card": 182694,
+      "key": "join left(join (scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_brand, ?Brand#23?), f: eq(p_container, ?MED BOX?), )) keys p_partkey,  = __gk6, join exists(scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_brand, ?Brand#23?), f: eq(p_container, ?MED BOX?), )) group by l_partkey, )"
+    },
+    {
+      "card": 74728,
+      "key": "join exists(scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_brand, ?Brand#23?), f: eq(p_container, ?MED BOX?), ))"
+    },
+    {
+      "card": 182694,
+      "key": "join (scan lineitem() keys l_partkey,  = p_partkey, scan part(f: eq(p_brand, ?Brand#23?), f: eq(p_container, ?MED BOX?), ))"
+    },
+    {
+      "card": 9788571,
+      "key": "scan lineitem()"
+    },
+    {
+      "card": 6095,
+      "key": "scan part(f: eq(p_brand, ?Brand#23?), f: eq(p_container, ?MED BOX?), )"
+    },
+    {
+      "card": 27840,
+      "key": "join exists-flag(join (scan part(f: __in(__cast(p_size), 49, 14, 23, 45, 19, 3, 36, 9), f: neq(p_brand, ?Brand#45?), f: not(like(p_type, ?MEDIUM POLISHED%?)), ) keys p_partkey,  = ps_partkey, scan partsupp()) keys ps_suppkey,  = s_suppkey, scan supplier(f: like(s_comment, ?%Customer%Complaints%?), )) filter (not(__mark0), ) group by p_brand, p_size, p_type, "
+    },
+    {
+      "card": 345798,
+      "key": "join exists-flag(join (scan part(f: __in(__cast(p_size), 49, 14, 23, 45, 19, 3, 36, 9), f: neq(p_brand, ?Brand#45?), f: not(like(p_type, ?MEDIUM POLISHED%?)), ) keys p_partkey,  = ps_partkey, scan partsupp()) keys ps_suppkey,  = s_suppkey, scan supplier(f: like(s_comment, ?%Customer%Complaints%?), )) filter (not(__mark0), )"
+    },
+    {
+      "card": 3562228,
+      "key": "join exists-flag(join (scan part(f: __in(__cast(p_size), 49, 14, 23, 45, 19, 3, 36, 9), f: neq(p_brand, ?Brand#45?), f: not(like(p_type, ?MEDIUM POLISHED%?)), ) keys p_partkey,  = ps_partkey, scan partsupp()) keys ps_suppkey,  = s_suppkey, scan supplier(f: like(s_comment, ?%Customer%Complaints%?), ))"
+    },
+    {
+      "card": 3562228,
+      "key": "join (scan part(f: __in(__cast(p_size), 49, 14, 23, 45, 19, 3, 36, 9), f: neq(p_brand, ?Brand#45?), f: not(like(p_type, ?MEDIUM POLISHED%?)), ) keys p_partkey,  = ps_partkey, scan partsupp())"
+    },
+    {
+      "card": 155,
+      "key": "scan supplier(f: like(s_comment, ?%Customer%Complaints%?), )"
+    },
+    {
+      "card": 890557,
+      "key": "scan part(f: __in(__cast(p_size), 49, 14, 23, 45, 19, 3, 36, 9), f: neq(p_brand, ?Brand#45?), f: not(like(p_type, ?MEDIUM POLISHED%?)), )"
+    },
+    {
+      "card": 0,
+      "key": "join (join (scan lineitem(f: gte(l_shipdate, ?1996-01-01?), f: lt(__cast(l_shipdate), ?1996-04-01?), ) group by l_suppkey,  keys l_suppkey,  = s_suppkey, scan supplier()) keys total_revenue,  = max, scan lineitem(f: gte(l_shipdate, ?1996-01-01?), f: lt(__cast(l_shipdate), ?1996-04-01?), ) group by l_suppkey,  group by )"
+    },
+    {
+      "card": 300000,
+      "key": "join (scan lineitem(f: gte(l_shipdate, ?1996-01-01?), f: lt(__cast(l_shipdate), ?1996-04-01?), ) group by l_suppkey,  keys l_suppkey,  = s_suppkey, scan supplier())"
+    },
+    {
+      "card": 1,
+      "key": "scan lineitem(f: gte(l_shipdate, ?1996-01-01?), f: lt(__cast(l_shipdate), ?1996-04-01?), ) group by l_suppkey,  group by "
+    },
+    {
+      "card": 14,
+      "key": "scan lineitem(f: gte(l_shipdate, ?1996-01-01?), f: lt(__cast(l_shipdate), ?1996-04-01?), ) group by l_suppkey, "
+    },
+    {
+      "card": 6589514,
+      "key": "scan lineitem(f: gte(l_shipdate, ?1996-01-01?), f: lt(__cast(l_shipdate), ?1996-04-01?), )"
+    },
+    {
+      "card": 1,
+      "key": "join (scan lineitem(f: gte(l_shipdate, ?1995-09-01?), f: lt(__cast(l_shipdate), ?1995-10-01?), ) keys l_partkey,  = p_partkey, scan part()) group by "
+    },
+    {
+      "card": 14,
+      "key": "join (scan lineitem(f: gte(l_shipdate, ?1995-09-01?), f: lt(__cast(l_shipdate), ?1995-10-01?), ) keys l_partkey,  = p_partkey, scan part())"
+    },
+    {
+      "card": 2245483,
+      "key": "scan lineitem(f: gte(l_shipdate, ?1995-09-01?), f: lt(__cast(l_shipdate), ?1995-10-01?), )"
+    },
+    {
+      "card": 6000000,
+      "key": "scan part()"
+    },
+    {
+      "card": 45,
+      "key": "join right(scan orders() keys o_custkey,  = c_custkey, scan customer()) group by c_custkey,  group by c_count, "
+    },
+    {
+      "card": 588,
+      "key": "join right(scan orders() keys o_custkey,  = c_custkey, scan customer()) group by c_custkey, "
+    },
+    {
+      "card": 45988204,
+      "key": "join right(scan orders() keys o_custkey,  = c_custkey, scan customer())"
+    },
+    {
+      "card": 2,
+      "key": "join (scan lineitem(f: __in(l_shipmode, ?MAIL?, ?SHIP?), f: gte(l_receiptdate, ?1994-01-01?), f: lt(__cast(l_receiptdate), ?1995-01-01?), f: lt(l_commitdate, l_receiptdate), f: lt(l_shipdate, l_commitdate), ) keys l_orderkey,  = o_orderkey, scan orders()) group by l_shipmode, "
+    },
+    {
+      "card": 28,
+      "key": "join (scan lineitem(f: __in(l_shipmode, ?MAIL?, ?SHIP?), f: gte(l_receiptdate, ?1994-01-01?), f: lt(__cast(l_receiptdate), ?1995-01-01?), f: lt(l_commitdate, l_receiptdate), f: lt(l_shipdate, l_commitdate), ) keys l_orderkey,  = o_orderkey, scan orders())"
+    },
+    {
+      "card": 933168,
+      "key": "scan lineitem(f: __in(l_shipmode, ?MAIL?, ?SHIP?), f: gte(l_receiptdate, ?1994-01-01?), f: lt(__cast(l_receiptdate), ?1995-01-01?), f: lt(l_commitdate, l_receiptdate), f: lt(l_shipdate, l_commitdate), )"
+    },
+    {
+      "card": 45000000,
+      "key": "scan orders()"
+    },
+    {
+      "card": 0,
+      "key": "join (join (join (scan nation(f: eq(n_name, ?GERMANY?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = ps_suppkey, scan partsupp()) group by  keys  = join (join (scan nation(f: eq(n_name, ?GERMANY?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = ps_suppkey, scan partsupp()) group by ps_partkey, ) filter (gt(value, expr), )"
+    },
+    {
+      "card": 0,
+      "key": "join (join (join (scan nation(f: eq(n_name, ?GERMANY?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = ps_suppkey, scan partsupp()) group by  keys  = join (join (scan nation(f: eq(n_name, ?GERMANY?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = ps_suppkey, scan partsupp()) group by ps_partkey, )"
+    },
+    {
+      "card": 910366,
+      "key": "join (join (scan nation(f: eq(n_name, ?GERMANY?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = ps_suppkey, scan partsupp()) group by ps_partkey, "
+    },
+    {
+      "card": 1,
+      "key": "join (join (scan nation(f: eq(n_name, ?GERMANY?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = ps_suppkey, scan partsupp()) group by "
+    },
+    {
+      "card": 14,
+      "key": "join (join (scan nation(f: eq(n_name, ?GERMANY?), ) keys n_nationkey,  = s_nationkey, scan supplier()) keys s_suppkey,  = ps_suppkey, scan partsupp())"
+    },
+    {
+      "card": 1305248,
+      "key": "scan partsupp()"
+    },
+    {
+      "card": 12090,
+      "key": "join (scan nation(f: eq(n_name, ?GERMANY?), ) keys n_nationkey,  = s_nationkey, scan supplier())"
+    },
+    {
+      "card": 300000,
+      "key": "scan supplier()"
+    },
+    {
+      "card": 1,
+      "key": "scan nation(f: eq(n_name, ?GERMANY?), )"
+    },
+    {
+      "card": 1148325,
+      "key": "join (join (join (scan lineitem(f: eq(l_returnflag, ?R?), ) keys l_orderkey,  = o_orderkey, scan orders(f: gte(o_orderdate, ?1993-10-01?), f: lt(__cast(o_orderdate), ?1994-01-01?), )) keys o_custkey,  = c_custkey, scan customer()) keys c_nationkey,  = n_nationkey, scan nation()) group by c_acctbal, c_address, c_comment, c_custkey, c_name, c_phone, n_name, "
+    },
+    {
+      "card": 1460264,
+      "key": "join (join (join (scan lineitem(f: eq(l_returnflag, ?R?), ) keys l_orderkey,  = o_orderkey, scan orders(f: gte(o_orderdate, ?1993-10-01?), f: lt(__cast(o_orderdate), ?1994-01-01?), )) keys o_custkey,  = c_custkey, scan customer()) keys c_nationkey,  = n_nationkey, scan nation())"
+    },
+    {
+      "card": 3434459,
+      "key": "join (join (scan lineitem(f: eq(l_returnflag, ?R?), ) keys l_orderkey,  = o_orderkey, scan orders(f: gte(o_orderdate, ?1993-10-01?), f: lt(__cast(o_orderdate), ?1994-01-01?), )) keys o_custkey,  = c_custkey, scan customer())"
+    },
+    {
+      "card": 25,
+      "key": "scan nation()"
+    },
+    {
+      "card": 899950,
+      "key": "scan customer()"
+    },
+    {
+      "card": 3434459,
+      "key": "join (scan lineitem(f: eq(l_returnflag, ?R?), ) keys l_orderkey,  = o_orderkey, scan orders(f: gte(o_orderdate, ?1993-10-01?), f: lt(__cast(o_orderdate), ?1994-01-01?), ))"
+    },
+    {
+      "card": 1718066,
+      "key": "scan orders(f: gte(o_orderdate, ?1993-10-01?), f: lt(__cast(o_orderdate), ?1994-01-01?), )"
+    },
+    {
+      "card": 44418612,
+      "key": "scan lineitem(f: eq(l_returnflag, ?R?), )"
+    },
+    {
+      "card": 1917,
+      "key": "join (join exists-flag(join (scan lineitem() keys l_orderkey,  = o_orderkey, scan orders()) keys o_orderkey,  = l_orderkey_17, scan lineitem() group by l_orderkey,  filter (gt(sum, 300), )) filter (__mark0, ) keys o_custkey,  = c_custkey, scan customer()) group by c_custkey, c_name, o_orderdate, o_orderkey, o_totalprice, "
+    },
+    {
+      "card": 179998368,
+      "key": "join (scan lineitem() keys l_orderkey,  = o_orderkey, scan orders())"
+    },
+    {
+      "card": 179998368,
+      "key": "join exists-flag(join (scan lineitem() keys l_orderkey,  = o_orderkey, scan orders()) keys o_orderkey,  = l_orderkey_17, scan lineitem() group by l_orderkey,  filter (gt(sum, 300), ))"
+    },
+    {
+      "card": 13419,
+      "key": "join exists-flag(join (scan lineitem() keys l_orderkey,  = o_orderkey, scan orders()) keys o_orderkey,  = l_orderkey_17, scan lineitem() group by l_orderkey,  filter (gt(sum, 300), )) filter (__mark0, )"
+    },
+    {
+      "card": 1917,
+      "key": "join (join exists-flag(join (scan lineitem() keys l_orderkey,  = o_orderkey, scan orders()) keys o_orderkey,  = l_orderkey_17, scan lineitem() group by l_orderkey,  filter (gt(sum, 300), )) filter (__mark0, ) keys o_custkey,  = c_custkey, scan customer())"
+    },
+    {
+      "card": 5,
+      "key": "join (join (join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?ASIA?), )) keys n_nationkey,  = c_nationkey, scan customer()) keys c_custkey,  = o_custkey, scan orders(f: gte(o_orderdate, ?1994-01-01?), f: lt(__cast(o_orderdate), ?1995-01-01?), )) keys o_orderkey,  = l_orderkey, scan lineitem()) keys l_suppkey, n_nationkey,  = s_suppkey, s_nationkey, scan supplier()) group by n_name, "
+    },
+    {
+      "card": 5450573,
+      "key": "join (join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?ASIA?), )) keys n_nationkey,  = c_nationkey, scan customer()) keys c_custkey,  = o_custkey, scan orders(f: gte(o_orderdate, ?1994-01-01?), f: lt(__cast(o_orderdate), ?1995-01-01?), )) keys o_orderkey,  = l_orderkey, scan lineitem())"
+    },
+    {
+      "card": 70,
+      "key": "join (join (join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?ASIA?), )) keys n_nationkey,  = c_nationkey, scan customer()) keys c_custkey,  = o_custkey, scan orders(f: gte(o_orderdate, ?1994-01-01?), f: lt(__cast(o_orderdate), ?1995-01-01?), )) keys o_orderkey,  = l_orderkey, scan lineitem()) keys l_suppkey, n_nationkey,  = s_suppkey, s_nationkey, scan supplier())"
+    },
+    {
+      "card": 1362236,
+      "key": "join (join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?ASIA?), )) keys n_nationkey,  = c_nationkey, scan customer()) keys c_custkey,  = o_custkey, scan orders(f: gte(o_orderdate, ?1994-01-01?), f: lt(__cast(o_orderdate), ?1995-01-01?), ))"
+    },
+    {
+      "card": 899362,
+      "key": "join (join (scan nation() keys n_regionkey,  = r_regionkey, scan region(f: eq(r_name, ?ASIA?), )) keys n_nationkey,  = c_nationkey, scan customer())"
+    }
+  ]
+}

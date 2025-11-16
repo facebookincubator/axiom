@@ -47,6 +47,9 @@ class SqlQueryRunner {
     int32_t numDrivers{4};
     uint64_t splitTargetBytes{16 << 20};
     uint32_t optimizerTraceFlags{0};
+    bool enableReducingExistences{true};
+    bool includeRuntimeStats{false};
+    bool syntacticJoinOrder{false};
   };
 
   SqlResult run(std::string_view sql, const RunOptions& options);
@@ -62,6 +65,10 @@ class SqlQueryRunner {
   void clearHistory() {
     history_ = std::make_unique<facebook::axiom::optimizer::VeloxHistory>();
   }
+
+  void saveColumnStats(const std::string& path);
+
+  void loadColumnStats(const std::string& path);
 
  private:
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(

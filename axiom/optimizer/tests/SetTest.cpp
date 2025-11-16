@@ -322,24 +322,20 @@ TEST_F(SetTest, intersect) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
+    auto rightMatcher = core::PlanMatcherBuilder().tableScan("nation").build();
+
+    auto rightMatcher1 =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .hashJoin(rightMatcher, velox::core::JoinType::kLeftSemiFilter)
+            .build();
+
     auto matcher =
         core::PlanMatcherBuilder()
-            // TODO Fix this plan to push down (n_regionkey + 1) % 3
-            // = 1 to all branches of 'intersect'.
-            .hiveScan(
-                "nation", lte("n_nationkey", 20), "(n_regionkey + 1) % 3 = 1")
-            .hashJoin(
-                core::PlanMatcherBuilder()
-                    .hiveScan("nation", gte("n_nationkey", 12))
-                    .build(),
-                core::JoinType::kLeftSemiFilter)
-            .hashJoin(
-                core::PlanMatcherBuilder()
-                    .hiveScan("nation", gte("n_nationkey", 13))
-                    .build(),
-                core::JoinType::kLeftSemiFilter)
-            .singleAggregation()
-            .project()
+            .tableScan("nation")
+            .hashJoin(rightMatcher1, velox::core::JoinType::kRightSemiFilter)
+            .singleAggregation({"\"n_nationkey\"", "\"n_regionkey\""}, {})
+            .project({"plus(\"n_regionkey\",1) AS rk"})
             .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);

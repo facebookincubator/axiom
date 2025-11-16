@@ -44,7 +44,7 @@ target_link_libraries(
   gtest_main
 )
 
-add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp)
+add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp PlanMatcherGenerator.cpp)
 
 target_link_libraries(
   axiom_optimizer_tests_plan_matcher
@@ -68,7 +68,7 @@ target_link_libraries(
   axiom_runner_tests_utils
 )
 
-add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp)
+add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp TpchPlanStability.cpp)
 
 add_test(
   NAME axiom_optimizer_tpch_plan_test
@@ -94,6 +94,7 @@ add_executable(
   HiveQueriesTest.cpp
   PrecomputeProjectionTest.cpp
   PlanTest.cpp
+  PlanMatcherGeneratorTest.cpp
   RelationOpPrinterTest.cpp
   SetTest.cpp
   UnnestTest.cpp
@@ -136,6 +137,43 @@ target_link_libraries(
   axiom_hive_connector_metadata
   axiom_tpch_connector_metadata
   axiom_sql_presto_parser
+  velox_exec_test_lib
+  velox_dwio_common
+  velox_dwio_parquet_reader
+  velox_dwio_native_parquet_reader
+  velox_parse_parser
+  velox_parse_expression
+  velox_parse_utils
+)
+
+target_link_libraries(
+  axiom_sql
+  axiom_runner_local_runner
+  axiom_runner_multifragment_plan
+  axiom_optimizer
+  axiom_hive_connector_metadata
+  axiom_tpch_connector_metadata
+  axiom_sql_presto_parser
+  velox_exec_test_lib
+  velox_dwio_common
+  velox_dwio_parquet_reader
+  velox_dwio_native_parquet_reader
+  velox_parse_parser
+  velox_parse_expression
+  velox_parse_utils
+)
+
+add_executable(axiom_sql_benchmark AxiomSqlBenchmark.cpp linenoise/linenoise.c)
+
+target_link_libraries(
+  axiom_sql_benchmark
+  axiom_runner_local_runner
+  axiom_runner_multifragment_plan
+  axiom_optimizer
+  axiom_hive_connector_metadata
+  axiom_tpch_connector_metadata
+  axiom_sql_presto_parser
+  velox_query_benchmark
   velox_exec_test_lib
   velox_dwio_common
   velox_dwio_parquet_reader

@@ -16,13 +16,21 @@
 
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
+#include <fstream>
+#include <functional>
+#include <sstream>
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
+#include "axiom/optimizer/tests/PlanMatcherGenerator.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 
 DEFINE_int32(num_repeats, 1, "Number of repeats for optimization timing");
+DEFINE_string(
+    record_plans,
+    "",
+    "Prefix for recorded plan checker files (e.g. 'xx' creates 'xx_check_1.inc' with 'xxDefineCheckers1()'). Empty means no recording.");
 
 DECLARE_uint32(optimizer_trace);
 DECLARE_string(history_save_path);
@@ -58,9 +66,117 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
     HiveQueriesTestBase::TearDown();
   }
 
+  void recordPlanCheckerStart(int32_t queryNo) {
+    if (FLAGS_record_plans.empty()) {
+      return;
+    }
+
+    auto filename = fmt::format("{}_check_{}.inc", FLAGS_record_plans, queryNo);
+    std::ofstream file(filename);
+
+    if (!file.is_open()) {
+      LOG(ERROR) << "Failed to open file: " << filename;
+      return;
+    }
+
+    file << "void " << FLAGS_record_plans << "DefineCheckers" << queryNo
+         << "() {\n";
+    file.close();
+  }
+
+  void recordPlanCheckerEnd(int32_t queryNo) {
+    if (FLAGS_record_plans.empty()) {
+      return;
+    }
+
+    auto filename = fmt::format("{}_check_{}.inc", FLAGS_record_plans, queryNo);
+    std::ofstream file(filename, std::ios::app);
+
+    if (!file.is_open()) {
+      LOG(ERROR) << "Failed to open file: " << filename;
+      return;
+    }
+
+    file << "}\n";
+    file.close();
+  }
+
+  void recordPlanChecker(
+      int32_t queryNo,
+      const lp::LogicalPlanNodePtr& logicalPlan,
+      const PlanAndStats& planAndStats,
+      int32_t numWorkers,
+      int32_t numDrivers) {
+    if (FLAGS_record_plans.empty()) {
+      return;
+    }
+
+    auto filename = fmt::format("{}_check_{}.inc", FLAGS_record_plans, queryNo);
+    std::ofstream file(filename, std::ios::app);
+
+    if (!file.is_open()) {
+      LOG(ERROR) << "Failed to open file: " << filename;
+      return;
+    }
+
+    // Get the short RelationOp representation
+    std::string shortRel;
+    QueryTestBase::explain(
+        logicalPlan,
+        &shortRel,
+        nullptr,
+        nullptr,
+        runner::MultiFragmentPlan::Options{
+            .numWorkers = numWorkers, .numDrivers = numDrivers});
+
+    file << "// Configuration: numWorkers=" << numWorkers
+         << ", numDrivers=" << numDrivers << "\n";
+    file << "setChecker(" << queryNo << ", " << numWorkers << ", " << numDrivers
+         << ", [](const PlanAndStats& planAndStats) {\n";
+
+    // Add the plan as a comment for readability
+    file << "  // Plan:\n";
+    std::istringstream planStream(shortRel);
+    std::string line;
+    while (std::getline(planStream, line)) {
+      file << "  // " << line << "\n";
+    }
+    file << "\n";
+
+    const auto& fragments = planAndStats.plan->fragments();
+    for (size_t i = 0; i < fragments.size(); ++i) {
+      const auto& fragment = fragments[i];
+      const auto& topNode = fragment.fragment.planNode;
+
+      file << "  // Fragment " << i << "\n";
+      file << "  {\n";
+      file << "    " << velox::core::generatePlanMatcherCode(topNode, "matcher")
+           << ";\n";
+      file << "    EXPECT_TRUE(matcher->match(planAndStats.plan->fragments()["
+           << i << "].fragment.planNode));\n";
+      file << "  }\n";
+    }
+
+    file << "});\n\n";
+    file.close();
+  }
+
   void checkTpch(int32_t query, const lp::LogicalPlanNodePtr& logicalPlan) {
     auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
-    checkSame(logicalPlan, referencePlan);
+
+    // Define configurations to test
+    std::vector<std::pair<int32_t, int32_t>> configs = {
+        {1, 1}, {1, 4}, {4, 1}, {4, 4}};
+
+    // Loop over configs and test the plan against reference builder for each
+    for (const auto& [numWorkers, numDrivers] : configs) {
+      // Generate plan with this config and test against reference builder
+      planVelox(
+          logicalPlan,
+          runner::MultiFragmentPlan::Options{
+              .numWorkers = numWorkers, .numDrivers = numDrivers});
+      checkSame(logicalPlan, referencePlan);
+    }
   }
 
   static std::string readSqlFromFile(const std::string& filePath) {
@@ -111,10 +227,64 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
   void checkTpchSql(int32_t query) {
     auto sql = readTpchSql(query);
     auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
-    checkResults(sql, referencePlan);
+
+    // Define configurations to test
+    std::vector<std::pair<int32_t, int32_t>> configs = {
+        {1, 1}, {1, 4}, {4, 1}, {4, 4}};
+
+    // Loop over configs
+    for (size_t i = 0; i < configs.size(); ++i) {
+      const auto& [numWorkers, numDrivers] = configs[i];
+      bool isFirstConfig = (i == 0);
+      bool isLastConfig = (i == configs.size() - 1);
+
+      // First run the SQL query and compare with reference builder
+      auto logicalPlan = parseTpchSql(query);
+      auto planAndStats = planVelox(
+          logicalPlan,
+          runner::MultiFragmentPlan::Options{
+              .numWorkers = numWorkers, .numDrivers = numDrivers});
+
+      // Check the optimized query against the reference builder
+      checkSame(logicalPlan, referencePlan);
+
+      // If FLAGS_record_plans is set, initialize the recording at first config
+      if (!FLAGS_record_plans.empty() && isFirstConfig) {
+        recordPlanCheckerStart(query);
+      }
+
+      // If FLAGS_record_plans is set, record the checker
+      if (!FLAGS_record_plans.empty()) {
+        recordPlanChecker(
+            query, logicalPlan, planAndStats, numWorkers, numDrivers);
+      }
+
+      // If FLAGS_record_plans is set, after recording with the last config,
+      // finalize the recording
+      if (!FLAGS_record_plans.empty() && isLastConfig) {
+        recordPlanCheckerEnd(query);
+      }
+
+      // If FLAGS_record_plans is not set and there is a checker for the query
+      // and config, run the checker
+      if (FLAGS_record_plans.empty()) {
+        auto* checker = getChecker(query, numWorkers, numDrivers);
+        if (checker) {
+          (*checker)(planAndStats);
+        }
+      }
+
+      // Continue loop with the next config
+    }
   }
 
   std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
+
+#include "h01_check_1.inc"
+#include "h01_check_13.inc"
+#include "h01_check_17.inc"
+#include "h01_check_3.inc"
+#include "h01_check_4.inc"
 };
 
 TEST_F(TpchPlanTest, stats) {
@@ -127,10 +297,12 @@ TEST_F(TpchPlanTest, stats) {
 
     auto planAndStats = planVelox(logicalPlan);
     auto stats = planAndStats.prediction;
-    ASSERT_EQ(stats.size(), 1);
 
-    ASSERT_EQ(stats.begin()->first, logicalPlan->id());
-    ASSERT_EQ(stats.begin()->second.cardinality, cardinality);
+    // We expect a prediction for the table scan and
+    ASSERT_EQ(stats.size(), 2);
+
+    // Node ids start at 0, the scan is always first.
+    ASSERT_EQ(stats.at("0").cardinality, cardinality);
   };
 
   verifyStats("region", 5);
@@ -140,6 +312,7 @@ TEST_F(TpchPlanTest, stats) {
 }
 
 TEST_F(TpchPlanTest, q01) {
+  h01DefineCheckers1();
   auto logicalPlan =
       lp::PlanBuilder()
           .tableScan(exec::test::kHiveConnectorId, "lineitem")
@@ -169,6 +342,7 @@ TEST_F(TpchPlanTest, q02) {
 }
 
 TEST_F(TpchPlanTest, q03) {
+  h01DefineCheckers3();
   lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
   auto logicalPlan =
       lp::PlanBuilder(context)
@@ -193,6 +367,7 @@ TEST_F(TpchPlanTest, q03) {
 }
 
 TEST_F(TpchPlanTest, q04) {
+  h01DefineCheckers4();
   checkTpchSql(4);
 }
 
@@ -453,6 +628,7 @@ TEST_F(TpchPlanTest, q12) {
 }
 
 TEST_F(TpchPlanTest, q13) {
+  h01DefineCheckers13();
   lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
   auto logicalPlan =
       lp::PlanBuilder(context)
@@ -502,6 +678,7 @@ TEST_F(TpchPlanTest, q16) {
 }
 
 TEST_F(TpchPlanTest, q17) {
+  h01DefineCheckers17();
   checkTpchSql(17);
 }
 
@@ -546,14 +723,6 @@ TEST_F(TpchPlanTest, q19) {
 }
 
 TEST_F(TpchPlanTest, q20) {
-  // TODO Fix the plan when 'enableReducingExistences' is true.
-  const bool originalEnableReducingExistences =
-      optimizerOptions_.enableReducingExistences;
-  optimizerOptions_.enableReducingExistences = false;
-  SCOPE_EXIT {
-    optimizerOptions_.enableReducingExistences =
-        originalEnableReducingExistences;
-  };
   checkTpchSql(20);
 }
 
@@ -585,6 +754,113 @@ TEST_F(TpchPlanTest, DISABLED_makePlans) {
 
     auto logicalPlan = parseTpchSql(q);
     planVelox(logicalPlan, options, fmt::format("{}/q{}", path, q));
+  }
+}
+
+TEST_F(TpchPlanTest, supplierAggregationJoin) {
+  using namespace facebook::velox;
+
+  auto lineitemType = ROW({{"l_suppkey", BIGINT()}, {"l_quantity", DOUBLE()}});
+
+  auto supplierType = ROW(
+      {{"s_suppkey", BIGINT()},
+       {"s_name", VARCHAR()},
+       {"s_acctbal", DOUBLE()},
+       {"s_nationkey", BIGINT()}});
+
+  auto nationType = ROW({{"n_nationkey", BIGINT()}, {"n_name", VARCHAR()}});
+
+  // Create shared plan node ID generator
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Test 1: Simple supplier join
+  {
+    auto sql =
+        "select s_name, s_acctbal, volume "
+        "from (select l_suppkey, sum(l_quantity) as volume from lineitem group by l_suppkey), supplier "
+        "where s_suppkey = l_suppkey and s_acctbal < 100";
+    SCOPED_TRACE(sql);
+
+    // Build reference plan: lineitem scan -> aggregation -> hash join with
+    // filtered supplier -> project
+    auto referencePlan =
+        exec::test::PlanBuilder(planNodeIdGenerator, pool())
+            .localPartition(
+                {},
+                {exec::test::PlanBuilder(planNodeIdGenerator, pool())
+                     .tableScan("lineitem", lineitemType)
+                     .singleAggregation({"l_suppkey"}, {"sum(l_quantity)"})
+                     .planNode()})
+            .hashJoin(
+                {"l_suppkey"},
+                {"s_suppkey"},
+                exec::test::PlanBuilder(planNodeIdGenerator, pool())
+                    .tableScan("supplier", supplierType)
+                    .filter("s_acctbal < 100.0")
+                    .planNode(),
+                "",
+                {"s_name", "s_acctbal", "a0"})
+            .project({"s_name", "s_acctbal", "a0 as volume"})
+            .planNode();
+
+    auto sqlPlan = checkResults(sql, referencePlan);
+
+    // Verify the optimized plan contains aggregation above filter semijoin
+    ASSERT_EQ(1, sqlPlan.plan->fragments().size());
+    auto sqlPlanNode = sqlPlan.plan->fragments().at(0).fragment.planNode;
+
+    checkPlanText(sqlPlanNode, {"Aggregation", "LEFT SEMI \\(FILTER\\)"});
+  }
+
+  // Test 2: Supplier join with nation filter
+  {
+    auto sql =
+        "select s_name, s_acctbal, volume "
+        "from (select l_suppkey, sum(l_quantity) as volume from lineitem group by l_suppkey), supplier, nation "
+        "where s_suppkey = l_suppkey and s_acctbal - 100 < 0 and s_nationkey = n_nationkey and n_name = 'FRANCE'";
+    SCOPED_TRACE(sql);
+
+    // Build reference plan: lineitem scan -> aggregation -> hash join with
+    // supplier joined to nation and filtered -> project
+    auto referencePlan =
+        exec::test::PlanBuilder(planNodeIdGenerator, pool())
+            .localPartition(
+                {},
+                {exec::test::PlanBuilder(planNodeIdGenerator, pool())
+                     .tableScan("lineitem", lineitemType)
+                     .singleAggregation({"l_suppkey"}, {"sum(l_quantity)"})
+                     .planNode()})
+            .hashJoin(
+                {"l_suppkey"},
+                {"s_suppkey"},
+                exec::test::PlanBuilder(planNodeIdGenerator, pool())
+                    .tableScan("supplier", supplierType)
+                    .hashJoin(
+                        {"s_nationkey"},
+                        {"n_nationkey"},
+                        exec::test::PlanBuilder(planNodeIdGenerator, pool())
+                            .tableScan("nation", nationType)
+                            .filter("n_name = 'FRANCE'")
+                            .planNode(),
+                        "",
+                        {"s_suppkey", "s_name", "s_acctbal"})
+                    .filter("s_acctbal - 100.0 < 0.0")
+                    .planNode(),
+                "",
+                {"s_name", "s_acctbal", "a0"})
+            .project({"s_name", "s_acctbal", "a0 as volume"})
+            .planNode();
+
+    auto sqlPlan = checkResults(sql, referencePlan);
+
+    // Verify the optimized plan contains aggregation above filter semijoin
+    // with nation joined to supplier
+    ASSERT_EQ(1, sqlPlan.plan->fragments().size());
+    auto sqlPlanNode = sqlPlan.plan->fragments().at(0).fragment.planNode;
+
+    checkPlanText(
+        sqlPlanNode,
+        {"Aggregation", "LEFT SEMI \\(FILTER\\)", "supplier", "nation"});
   }
 }
 

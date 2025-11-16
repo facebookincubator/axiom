@@ -20,6 +20,7 @@
 #include <folly/json.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <fstream>
 #include "axiom/optimizer/JsonUtil.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -155,6 +156,17 @@ void LocalHiveConnectorMetadata::initialize() {
   format_ = formatName == "dwrf" ? velox::dwio::common::FileFormat::DWRF
       : formatName == "parquet"  ? velox::dwio::common::FileFormat::PARQUET
                                  : velox::dwio::common::FileFormat::UNKNOWN;
+
+  // Reset existing connector query context and schema pool to avoid duplicate
+  // memory pool names when reinitialize() is called. This ensures the old
+  // "schemaReader" memory pool is destroyed before creating a new one.
+  if (connectorQueryCtx_) {
+    connectorQueryCtx_.reset();
+  }
+  if (schemaPool_) {
+    schemaPool_.reset();
+  }
+
   makeQueryCtx();
   makeConnectorQueryCtx();
   readTables(path);
@@ -1143,6 +1155,257 @@ bool LocalHiveConnectorMetadata::dropTable(
 
   deleteDirectoryRecursive(tablePath(tableName));
   return tables_.erase(tableName) == 1;
+}
+
+void LocalHiveConnectorMetadata::saveColumnStats(const std::string& path) {
+  ensureInitialized();
+  std::lock_guard<std::mutex> l(mutex_);
+
+  folly::dynamic root = folly::dynamic::object;
+
+  for (const auto& [tableName, table] : tables_) {
+    folly::dynamic tableData = folly::dynamic::object;
+
+    // Save table-level row count (total cardinality)
+    tableData["numRows"] = table->numRows();
+
+    // Save layout information if available
+    const auto& layouts = table->layouts();
+    if (!layouts.empty()) {
+      folly::dynamic layoutsData = folly::dynamic::array;
+      for (const auto* layout : layouts) {
+        folly::dynamic layoutData = folly::dynamic::object;
+        layoutData["name"] = layout->name();
+        // Note: Currently TableLayout does not have its own cardinality field.
+        // It uses the Table's numRows(). If layout-specific cardinality
+        // is added in the future, save it here.
+        layoutsData.push_back(layoutData);
+      }
+      tableData["layouts"] = layoutsData;
+    }
+
+    folly::dynamic columns = folly::dynamic::object;
+    for (const auto& [columnName, column] : table->columns()) {
+      const auto* stats = column->stats();
+      if (!stats) {
+        continue; // Skip columns without statistics
+      }
+
+      folly::dynamic columnStats = folly::dynamic::object;
+      columnStats["nonNull"] = stats->nonNull;
+      columnStats["nullPct"] = stats->nullPct;
+      columnStats["numValues"] = stats->numValues;
+
+      // Handle optional min value
+      if (stats->min.has_value()) {
+        columnStats["min"] = stats->min->toJson(column->type());
+        columnStats["minType"] =
+            std::string(velox::TypeKindName::toName(column->type()->kind()));
+      }
+
+      // Handle optional max value
+      if (stats->max.has_value()) {
+        columnStats["max"] = stats->max->toJson(column->type());
+        columnStats["maxType"] =
+            std::string(velox::TypeKindName::toName(column->type()->kind()));
+      }
+
+      // Handle optional fields
+      if (stats->maxLength.has_value()) {
+        columnStats["maxLength"] = stats->maxLength.value();
+      }
+      if (stats->avgLength.has_value()) {
+        columnStats["avgLength"] = stats->avgLength.value();
+      }
+      if (stats->ascendingPct.has_value()) {
+        columnStats["ascendingPct"] = stats->ascendingPct.value();
+      }
+      if (stats->descendingPct.has_value()) {
+        columnStats["descendingPct"] = stats->descendingPct.value();
+      }
+      if (stats->numDistinct.has_value()) {
+        columnStats["numDistinct"] = stats->numDistinct.value();
+      }
+
+      columns[columnName] = columnStats;
+    }
+
+    tableData["columns"] = columns;
+    root[tableName] = tableData;
+  }
+
+  // Write to file
+  std::ofstream outFile(path);
+  if (!outFile.is_open()) {
+    VELOX_USER_FAIL("Failed to open file for writing: {}", path);
+  }
+  outFile << folly::toPrettyJson(root);
+  outFile.close();
+}
+
+void LocalHiveConnectorMetadata::loadColumnStats(const std::string& path) {
+  ensureInitialized();
+  std::lock_guard<std::mutex> l(mutex_);
+
+  // Read and parse JSON file
+  std::ifstream inFile(path);
+  if (!inFile.is_open()) {
+    VELOX_USER_FAIL("Failed to open file for reading: {}", path);
+  }
+
+  std::string content(
+      (std::istreambuf_iterator<char>(inFile)),
+      std::istreambuf_iterator<char>());
+  inFile.close();
+
+  folly::dynamic root;
+  try {
+    root = folly::parseJson(content);
+  } catch (const std::exception& e) {
+    VELOX_USER_FAIL("Failed to parse JSON: {}", e.what());
+  }
+
+  // Helper function to parse a variant from JSON based on TypeKind
+  auto parseVariant = [](const folly::dynamic& jsonValue,
+                         velox::TypeKind typeKind) -> velox::Variant {
+    switch (typeKind) {
+      case velox::TypeKind::TINYINT:
+        return velox::Variant(static_cast<int8_t>(jsonValue.asInt()));
+      case velox::TypeKind::SMALLINT:
+        return velox::Variant(static_cast<int16_t>(jsonValue.asInt()));
+      case velox::TypeKind::INTEGER:
+        return velox::Variant(static_cast<int32_t>(jsonValue.asInt()));
+      case velox::TypeKind::BIGINT:
+        return velox::Variant(jsonValue.asInt());
+      case velox::TypeKind::REAL:
+        return velox::Variant(static_cast<float>(jsonValue.asDouble()));
+      case velox::TypeKind::DOUBLE:
+        return velox::Variant(jsonValue.asDouble());
+      case velox::TypeKind::VARCHAR:
+      case velox::TypeKind::VARBINARY:
+        return velox::Variant(jsonValue.asString());
+      case velox::TypeKind::BOOLEAN:
+        return velox::Variant(jsonValue.asBool());
+      default:
+        VELOX_UNSUPPORTED(
+            "Unsupported type kind for variant parsing: {}",
+            velox::TypeKindName::toName(typeKind));
+    }
+  };
+
+  // Iterate through tables in the JSON
+  for (const auto& [tableNameDynamic, tableDataDynamic] : root.items()) {
+    const std::string tableName = tableNameDynamic.asString();
+
+    // Find the table in the current metadata (skip if not found)
+    auto tableIt = tables_.find(tableName);
+    if (tableIt == tables_.end()) {
+      continue; // Table doesn't exist in current metadata, skip it
+    }
+
+    auto& table = tableIt->second;
+    const auto& tableData = tableDataDynamic;
+
+    // Load table-level row count (total cardinality) if present
+    if (tableData.count("numRows")) {
+      table->setNumRows(tableData["numRows"].asInt());
+    }
+
+    // Load layout information if present
+    // Note: Currently TableLayout does not have mutable cardinality fields.
+    // If layout-specific cardinality is added in the future and needs to be
+    // restored, process it here from tableData["layouts"].
+    if (tableData.count("layouts")) {
+      // Layouts array exists in the saved data.
+      // Currently we don't need to restore anything layout-specific,
+      // but this structure is here for future extensibility.
+      // Future: if layouts have their own row counts, restore them here:
+      // const auto& layoutsData = tableData["layouts"];
+      // for each layout in layoutsData, restore layout-specific cardinality
+    }
+
+    // Load column statistics
+    if (tableData.count("columns")) {
+      const auto& columnsData = tableData["columns"];
+      for (const auto& [columnNameDynamic, columnStatsDynamic] :
+           columnsData.items()) {
+        const std::string columnName = columnNameDynamic.asString();
+
+        // Find the column in the table (skip if not found)
+        auto columnIt = table->columns().find(columnName);
+        if (columnIt == table->columns().end()) {
+          continue; // Column doesn't exist in current table, skip it
+        }
+
+        auto& column = columnIt->second;
+        const auto& columnStatsData = columnStatsDynamic;
+
+        // Create new ColumnStatistics object
+        auto stats = std::make_unique<ColumnStatistics>();
+
+        // Load basic fields
+        if (columnStatsData.count("nonNull")) {
+          stats->nonNull = columnStatsData["nonNull"].asBool();
+        }
+        if (columnStatsData.count("nullPct")) {
+          stats->nullPct = columnStatsData["nullPct"].asDouble();
+        }
+        if (columnStatsData.count("numValues")) {
+          stats->numValues = columnStatsData["numValues"].asInt();
+        }
+
+        // Load min value if present
+        if (columnStatsData.count("min") && columnStatsData.count("minType")) {
+          const auto minJson = columnStatsData["min"];
+          const auto minTypeStr = columnStatsData["minType"].asString();
+          const auto minTypeKind = velox::TypeKindName::toTypeKind(minTypeStr);
+          // Parse the min value based on type
+          try {
+            stats->min = parseVariant(minJson, minTypeKind);
+          } catch (const std::exception& e) {
+            // If parsing fails, skip this field
+            LOG(WARNING) << "Failed to parse min value for column "
+                         << columnName << ": " << e.what();
+          }
+        }
+
+        // Load max value if present
+        if (columnStatsData.count("max") && columnStatsData.count("maxType")) {
+          const auto maxJson = columnStatsData["max"];
+          const auto maxTypeStr = columnStatsData["maxType"].asString();
+          const auto maxTypeKind = velox::TypeKindName::toTypeKind(maxTypeStr);
+          // Parse the max value based on type
+          try {
+            stats->max = parseVariant(maxJson, maxTypeKind);
+          } catch (const std::exception& e) {
+            // If parsing fails, skip this field
+            LOG(WARNING) << "Failed to parse max value for column "
+                         << columnName << ": " << e.what();
+          }
+        }
+
+        // Load optional fields
+        if (columnStatsData.count("maxLength")) {
+          stats->maxLength = columnStatsData["maxLength"].asInt();
+        }
+        if (columnStatsData.count("avgLength")) {
+          stats->avgLength = columnStatsData["avgLength"].asInt();
+        }
+        if (columnStatsData.count("ascendingPct")) {
+          stats->ascendingPct = columnStatsData["ascendingPct"].asDouble();
+        }
+        if (columnStatsData.count("descendingPct")) {
+          stats->descendingPct = columnStatsData["descendingPct"].asDouble();
+        }
+        if (columnStatsData.count("numDistinct")) {
+          stats->numDistinct = columnStatsData["numDistinct"].asInt();
+        }
+
+        // Set the statistics on the column
+        column->setStats(std::move(stats));
+      }
+    }
+  }
 }
 
 } // namespace facebook::axiom::connector::hive

@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/tests/SqlQueryRunner.h"
+#include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include "axiom/optimizer/DerivedTablePrinter.h"
@@ -22,6 +23,12 @@
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/RelationOpPrinter.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -217,22 +224,110 @@ std::string SqlQueryRunner::runExplain(
     case presto::ExplainStatement::Type::kExecutable:
       return optimize(statement.plan(), newQuery(options), options).toString();
   }
+  VELOX_UNREACHABLE();
 }
 
 namespace {
 std::string printPlanWithStats(
     runner::LocalRunner& runner,
-    const optimizer::NodePredictionMap& estimates) {
-  return runner.printPlanWithStats([&](const velox::core::PlanNodeId& nodeId,
-                                       std::string_view indentation,
-                                       std::ostream& out) {
+    const optimizer::NodePredictionMap& estimates,
+    bool includeRuntimeStats = false) {
+  // Calculate predicted CPU total
+  float predictedCpu = 0;
+  for (auto& pair : estimates) {
+    predictedCpu += pair.second.cpu;
+  }
+
+  // Get actual CPU timings from TaskStats
+  folly::F14FastMap<std::string, int64_t> nodeCpuNanos;
+  int64_t cpuNanos = 0;
+
+  // Get TaskStats from runner and convert to PlanNodeStats
+  auto taskStats = runner.stats();
+  for (const auto& taskStat : taskStats) {
+    auto planStats = velox::exec::toPlanStats(taskStat);
+
+    // For each plan node, sum up CPU from addInput, getOutput, and finish
+    for (const auto& [nodeId, stats] : planStats) {
+      int64_t nodeCpu = stats.addInputTiming.cpuNanos +
+          stats.getOutputTiming.cpuNanos + stats.finishTiming.cpuNanos;
+
+      // Accumulate (PlanNodeIds may not be unique across tasks)
+      nodeCpuNanos[nodeId] += nodeCpu;
+      cpuNanos += nodeCpu;
+    }
+  }
+
+  std::stringstream result;
+  result << runner.printPlanWithStats([&](const velox::core::PlanNodeId& nodeId,
+                                          std::string_view indentation,
+                                          std::ostream& out) {
     auto it = estimates.find(nodeId);
     if (it != estimates.end()) {
       out << indentation << "Estimate: " << it->second.cardinality << " rows, "
-          << velox::succinctBytes(it->second.peakMemory) << " peak memory"
-          << std::endl;
+          << velox::succinctBytes(it->second.peakMemory)
+          << " peak memory, predicted cpu=" << std::fixed
+          << std::setprecision(2) << (it->second.cpu * 100.0f / predictedCpu)
+          << "%";
+
+      // Add actual CPU percentage
+      auto cpuIt = nodeCpuNanos.find(nodeId);
+      if (cpuIt != nodeCpuNanos.end() && cpuNanos > 0) {
+        out << ", actual cpu=" << std::fixed << std::setprecision(2)
+            << (static_cast<float>(cpuIt->second) * 100.0f / cpuNanos) << "%";
+      }
+
+      out << std::endl;
     }
   });
+
+  // Print runtime stats grouped by operator if requested
+  if (includeRuntimeStats) {
+    result << "\n" << std::string(80, '=') << "\n";
+    result << "Runtime Stats by Operator:\n";
+    result << std::string(80, '=') << "\n";
+
+    // Collect all runtime stats grouped by node ID
+    std::map<
+        velox::core::PlanNodeId,
+        std::unordered_map<std::string, velox::RuntimeMetric>>
+        allNodeStats;
+
+    for (const auto& taskStat : taskStats) {
+      auto planStats = velox::exec::toPlanStats(taskStat);
+
+      for (auto& [nodeId, stats] : planStats) {
+        if (!stats.customStats.empty()) {
+          // Merge custom stats for this node
+          for (const auto& [statName, statValue] : stats.customStats) {
+            auto& nodeStatMap = allNodeStats[nodeId];
+            auto it = nodeStatMap.find(statName);
+            if (it == nodeStatMap.end()) {
+              nodeStatMap[statName] = statValue;
+            } else {
+              it->second.merge(statValue);
+            }
+          }
+        }
+      }
+    }
+
+    // Print collected stats
+    for (const auto& [nodeId, customStats] : allNodeStats) {
+      result << "\nNode " << nodeId << ":\n";
+      for (const auto& [statName, statValue] : customStats) {
+        result << "  " << statName << ": " << statValue.toString() << "\n";
+      }
+    }
+
+    if (allNodeStats.empty()) {
+      result << "\nNo custom runtime stats available.\n";
+    }
+
+    result << std::string(80, '=') << "\n";
+  }
+
+  return result.str();
 }
 } // namespace
 
@@ -250,7 +345,8 @@ std::string SqlQueryRunner::runExplainAnalyze(
   auto results = fetchResults(*runner);
 
   std::stringstream out;
-  out << printPlanWithStats(*runner, planAndStats.prediction);
+  out << printPlanWithStats(
+      *runner, planAndStats.prediction, options.includeRuntimeStats);
 
   return out.str();
 }
@@ -279,6 +375,11 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
 
   auto session = std::make_shared<Session>(queryCtx->queryId());
 
+  optimizer::OptimizerOptions optimizerOptions;
+  optimizerOptions.traceFlags = options.optimizerTraceFlags;
+  optimizerOptions.enableReducingExistences = options.enableReducingExistences;
+  optimizerOptions.syntacticJoinOrder = options.syntacticJoinOrder;
+
   optimizer::Optimization optimization(
       session,
       *logicalPlan,
@@ -286,7 +387,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
       *history_,
       queryCtx,
       evaluator,
-      {.traceFlags = options.optimizerTraceFlags},
+      optimizerOptions,
       opts);
 
   if (checkDerivedTable && !checkDerivedTable(*optimization.rootDt())) {
@@ -336,6 +437,28 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runSql(
   history_->recordVeloxExecution(planAndStats, stats);
 
   return results;
+}
+
+void SqlQueryRunner::saveColumnStats(const std::string& path) {
+  auto metadata = connector::ConnectorMetadata::metadata(defaultConnectorId_);
+  auto* localHiveMetadata =
+      dynamic_cast<connector::hive::LocalHiveConnectorMetadata*>(metadata);
+  if (!localHiveMetadata) {
+    throw std::runtime_error(
+        "saveColumnStats is only supported for LocalHiveConnectorMetadata");
+  }
+  localHiveMetadata->saveColumnStats(path);
+}
+
+void SqlQueryRunner::loadColumnStats(const std::string& path) {
+  auto metadata = connector::ConnectorMetadata::metadata(defaultConnectorId_);
+  auto* localHiveMetadata =
+      dynamic_cast<connector::hive::LocalHiveConnectorMetadata*>(metadata);
+  if (!localHiveMetadata) {
+    throw std::runtime_error(
+        "loadColumnStats is only supported for LocalHiveConnectorMetadata");
+  }
+  localHiveMetadata->loadColumnStats(path);
 }
 
 } // namespace axiom::sql

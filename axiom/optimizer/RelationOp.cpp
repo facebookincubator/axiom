@@ -392,12 +392,15 @@ Join::Join(
   cost_.fanout = fanout;
 
   const float buildSize = right->resultCardinality();
-  const auto numRightColumns =
-      static_cast<float>(right->input()->columns().size());
-  auto rowCost = numRightColumns * Costs::kHashExtractColumnCost;
-  const auto numLeftKeys = static_cast<float>(leftKeys.size());
-  cost_.unitCost = Costs::hashProbeCost(buildSize) + cost_.fanout * rowCost +
-      numLeftKeys * Costs::kHashColumnCost;
+  auto rowBytes = byteSize(right->input()->columns());
+  auto numKeys = leftKeys.size();
+  auto probeCost = Costs::hashTableCost(buildSize) +
+      // Multiply by min(fanout, 1) because most misses will not compare and if
+      // fanout > 1, there is still only one compare.
+      (Costs::kKeyCompareCost * numKeys * std::min<float>(fanout, 1.0f)) +
+      numKeys * Costs::kHashColumnCost;
+  auto rowCost = Costs::hashRowCost(buildSize, rowBytes);
+  cost_.unitCost = probeCost + cost_.fanout * rowCost;
 }
 
 namespace {
@@ -470,6 +473,9 @@ std::string Join::toString(bool recursive, bool detail) const {
       << joinTypeLabel(joinType);
   printCost(detail, out);
   if (detail) {
+    out << "left: " << itemsToString(leftKeys.data(), leftKeys.size())
+        << " = right: " << itemsToString(rightKeys.data(), rightKeys.size())
+        << std::endl;
     out << "columns: " << itemsToString(columns().data(), columns().size())
         << std::endl;
   }
@@ -559,21 +565,123 @@ Unnest::Unnest(
   cost_.inputCardinality = inputCardinality();
 }
 
+namespace {
+double partialFlushInterval(
+    double totalInput,
+    double numDistinct,
+    double maxDistinct) {
+  // Handle edge cases
+  if (maxDistinct >= numDistinct) {
+    return totalInput;
+  }
+  VELOX_CHECK_GT(maxDistinct, 0);
+
+  // The expected number of samples to see k out of n distinct values
+  // follows from the coupon collector problem:
+  // E[k] = n * (1/n + 1/(n-1) + ... + 1/(n-k+1))
+
+  double n = numDistinct;
+  double k = maxDistinct;
+
+  // Approximate the partial harmonic sum using logarithms (constant time):
+  // H(n,k) = Σ(i=0 to k-1) 1/(n-i) ≈ ln(n) - ln(n-k) = ln(n/(n-k))
+  // This uses the integral approximation: ∫_{n-k}^n 1/x dx
+  double harmonicSum = std::log(n / (n - k));
+
+  // Expected number of samples in a uniform distribution
+  double expectedSamples = n * harmonicSum;
+
+  // Scale by the ratio of total input to distinct values
+  // to account for non-uniform distribution
+  double scalingFactor = totalInput / numDistinct;
+
+  return expectedSamples * scalingFactor;
+}
+
+// Predicts the number of distinct values expected after sampling numRows items
+// from a population with numDistinct distinct values.
+// numRows: the count of samples that are initially seen
+// numDistinct: the count of distinct values in the full population
+// numSamples: the total count of samples in the population (unused in basic
+// formula) Returns: predicted number of distinct values seen after numRows
+// inputs
+double expectedNumDistincts(double numRows, double numDistinct) {
+  if (numDistinct <= 0 || numRows <= 0) {
+    return 0.0f;
+  }
+
+  // Using the coupon collector formula:
+  // Expected distinct values = d * (1 - (1 - 1/d)^n)
+  // where d is total distinct values and n is number of samples
+  return numDistinct * (1.0 - std::pow(1.0 - (1.0 / numDistinct), numRows));
+}
+} // namespace
+
 Aggregation::Aggregation(
     RelationOpPtr input,
     ExprVector groupingKeysVector,
     AggregateVector aggregatesVector,
     velox::core::AggregationNode::Step step,
-    ColumnVector columns)
+    ColumnVector columns,
+    const Aggregation* partial)
     : RelationOp{RelType::kAggregation, std::move(input), std::move(columns)},
       groupingKeys{std::move(groupingKeysVector)},
       aggregates{std::move(aggregatesVector)},
       step{step} {
   cost_.inputCardinality = inputCardinality();
 
-  float cardinality = 1;
+  // inputBeforePartial is the input cardinality before the partial aggregation
+  int64_t inputBeforePartial = partial != nullptr
+      ? partial->cost_.inputCardinality
+      : cost_.inputCardinality;
+
+  auto numKeys = groupingKeys.size();
+
+  auto* optimization = queryCtx()->optimization();
+  auto& veloxQueryCtx = optimization->veloxQueryCtx();
+  const float maxPartialAggregationMemory =
+      veloxQueryCtx->queryConfig().maxPartialAggregationMemoryUsage();
+  const float abandonPartialAggregationMinRows =
+      veloxQueryCtx->queryConfig().abandonPartialAggregationMinRows();
+  const float abandonPartialAggregationMinPct =
+      veloxQueryCtx->queryConfig().abandonPartialAggregationMinPct();
+
+  const auto& runnerOptions = optimization->runnerOptions();
+  int32_t width = runnerOptions.numWorkers * runnerOptions.numDrivers;
+
+  if (numKeys > 0) {
+    setCostWithGroups(
+        inputBeforePartial,
+        width,
+        maxPartialAggregationMemory,
+        abandonPartialAggregationMinRows,
+        abandonPartialAggregationMinPct);
+  } else {
+    // Global aggregation (no grouping keys)
+    // Avoid division by zero
+    float safeInputCardinality =
+        std::max(1.0f, static_cast<float>(cost_.inputCardinality));
+
+    cost_.unitCost = aggregates.size() * Costs::kSimpleAggregateCost;
+    cost_.fanout = 1.0f / safeInputCardinality;
+  }
+}
+
+void Aggregation::setCostWithGroups(
+    int64_t inputBeforePartial,
+    int32_t width,
+    float maxPartialAggregationMemory,
+    float abandonPartialAggregationMinRows,
+    float abandonPartialAggregationMinPct) {
+  // Avoid division by zero
+  float safeInputBeforePartial =
+      std::max(1.0f, static_cast<float>(inputBeforePartial));
+
+  auto numKeys = groupingKeys.size();
+
+  double maxCardinality = 1;
   for (auto key : groupingKeys) {
-    cardinality *= key->value().cardinality;
+    maxCardinality *= key->value().cardinality;
   }
 
   // The estimated output is input minus the times an input is a
@@ -582,16 +690,51 @@ Aggregation::Aggregation(
   // potentially distinct keys and n is the number of elements in the
   // input. This approaches d as n goes to infinity. The chance of one in d
   // being unique after n values is 1 - (1/d)^n.
-  auto nOut = cardinality -
-      cardinality *
-          std::pow(1.0F - (1.0F / cardinality), input_->resultCardinality());
+  auto nOut = expectedNumDistincts(maxCardinality, safeInputBeforePartial);
 
-  cost_.fanout = nOut / cost_.inputCardinality;
-  const auto numGrouppingKeys = static_cast<float>(groupingKeys.size());
-  cost_.unitCost = numGrouppingKeys * Costs::hashProbeCost(nOut);
+  float rowBytes =
+      byteSize(groupingKeys) + byteSize(aggregates) + Costs::kHashRowBytes;
+  float partialCapacity = maxPartialAggregationMemory / rowBytes;
+  if (partialCapacity > nOut) {
+    partialCapacity = nOut;
+  }
+  auto maxInTable = step == velox::core::AggregationNode::Step::kPartial
+      ? partialCapacity
+      : nOut;
+  auto aggCost = aggregates.size() * Costs::kSimpleAggregateCost +
+      Costs::hashTableCost(maxInTable) +
+      2 * Costs::hashRowCost(maxInTable, rowBytes);
 
-  float rowBytes = byteSize(groupingKeys) + byteSize(aggregates);
-  cost_.totalBytes = nOut * rowBytes;
+  auto initialDistincts =
+      expectedNumDistincts(abandonPartialAggregationMinRows, nOut);
+  auto partialInput =
+      partialFlushInterval(safeInputBeforePartial, nOut, partialCapacity);
+  auto partialFanout = partialCapacity / partialInput;
+
+  if ((safeInputBeforePartial > abandonPartialAggregationMinRows * width &&
+       initialDistincts > abandonPartialAggregationMinRows *
+               (abandonPartialAggregationMinPct / 100)) ||
+      (safeInputBeforePartial > nOut * 5 &&
+       partialFanout > (abandonPartialAggregationMinPct / 100))) {
+    // Partial agg does not reduce.
+    partialFanout = 1;
+  }
+  if (step == velox::core::AggregationNode::Step::kPartial) {
+    cost_.fanout = partialFanout;
+    if (partialFanout == 1) {
+      cost_.unitCost = 0.1 * rowBytes;
+    } else {
+      cost_.unitCost = Costs::kHashColumnCost * numKeys +
+          Costs::hashTableCost(partialCapacity) + aggCost;
+      cost_.totalBytes = partialCapacity * rowBytes;
+    }
+  } else {
+    cost_.totalBytes = nOut * rowBytes;
+    // auto in = cost_.inputCardinality / partialFanout;
+    cost_.unitCost =
+        Costs::kHashColumnCost * numKeys + Costs::hashTableCost(nOut) + aggCost;
+    cost_.fanout = nOut / (safeInputBeforePartial * partialFanout);
+  }
 }
 
 std::string Unnest::toString(bool recursive, bool detail) const {
@@ -677,11 +820,16 @@ HashBuild::HashBuild(RelationOpPtr input, ExprVector keysVector, PlanP plan)
   cost_.fanout = 1;
 
   const auto numKeys = static_cast<float>(keys.size());
+  const auto rowBytes = byteSize(columns());
   const auto numColumns = static_cast<float>(columns().size());
-  cost_.unitCost = numKeys * Costs::kHashColumnCost +
-      Costs::hashProbeCost(cost_.inputCardinality) +
+  // Per row cost calculates the column hashes twice, once to partition and a
+  // second time to insert.
+  cost_.unitCost = (numKeys * 2 * Costs::kHashColumnCost) +
+      Costs::hashBuildCost(cost_.inputCardinality, rowBytes) +
+      numKeys * Costs::kKeyCompareCost +
       numColumns * Costs::kHashExtractColumnCost * 2;
-  cost_.totalBytes = cost_.inputCardinality * byteSize(columns());
+
+  cost_.totalBytes = cost_.inputCardinality * rowBytes;
 }
 
 std::string HashBuild::toString(bool recursive, bool detail) const {
@@ -700,16 +848,31 @@ void HashBuild::accept(
   visitor.visit(*this, context);
 }
 
+std::optional<float> filterCardinality(ExprCP expr) {
+  // Covers the special case of a mark semijoin cardinality passed in
+  // trueFraction of mark column.
+  if (expr->value().trueFraction != Value::kUnknown) {
+    return expr->value().trueFraction;
+  }
+  return std::nullopt;
+}
+
 Filter::Filter(RelationOpPtr input, ExprVector exprs)
     : RelationOp{RelType::kFilter, std::move(input)}, exprs_{std::move(exprs)} {
   cost_.inputCardinality = inputCardinality();
   const auto numExprs = static_cast<float>(exprs_.size());
   cost_.unitCost = Costs::kMinimumFilterCost * numExprs;
 
-  // We assume each filter selects 4/5. Small effect makes it so
-  // join and scan selectivities that are better known have more
-  // influence on plan cardinality. To be filled in from history.
-  cost_.fanout = std::pow(0.8F, numExprs);
+  cost_.fanout = 1;
+  for (auto& conjunct : exprs_) {
+    auto maybeCardinality = filterCardinality(conjunct);
+    // We assume each unknown filter selects 4/5. Small effect makes it so
+    // join and scan selectivities that are better known have more
+    // influence on plan cardinality. To be filled in from history.
+
+    cost_.fanout *=
+        maybeCardinality.has_value() ? maybeCardinality.value() : 0.8;
+  }
 }
 
 const QGString& Filter::historyKey() const {
@@ -821,7 +984,20 @@ OrderBy::OrderBy(
       limit{limit},
       offset{offset} {
   cost_.inputCardinality = inputCardinality();
-  cost_.fanout = 1;
+  if (limit == -1) {
+    cost_.fanout = 1;
+  } else {
+    const auto cardinality = static_cast<float>(limit);
+    if (cost_.inputCardinality <= cardinality) {
+      // Input cardinality does not exceed the limit. The limit is no-op.
+      // Doesn't change cardinality.
+      cost_.fanout = 1;
+    } else {
+      // Input cardinality exceeds the limit. Calculate fanout to ensure that
+      // fanout * limit = input-cardinality.
+      cost_.fanout = cardinality / cost_.inputCardinality;
+    }
+  }
 
   // TODO Fill in cost_.unitCost and others.
 }
