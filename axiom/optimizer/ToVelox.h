@@ -87,6 +87,26 @@ class ToVelox {
   void filterUpdated(BaseTableCP baseTable, bool updateSelectivity = true);
 
  private:
+  velox::core::PlanNodePtr addPartialLimit(
+      int64_t offset,
+      int64_t limit,
+      velox::core::PlanNodePtr input);
+
+  velox::core::PlanNodePtr
+  addFinalLimit(int64_t offset, int64_t limit, velox::core::PlanNodePtr input);
+
+  velox::core::PlanNodePtr addPartialTopN(
+      const std::vector<velox::core::FieldAccessTypedExprPtr>& keys,
+      const std::vector<velox::core::SortOrder>& sortOrder,
+      int64_t count,
+      velox::core::PlanNodePtr input);
+
+  velox::core::PlanNodePtr addFinalTopN(
+      const std::vector<velox::core::FieldAccessTypedExprPtr>& keys,
+      const std::vector<velox::core::SortOrder>& sortOrder,
+      int64_t count,
+      velox::core::PlanNodePtr input);
+
   velox::core::FieldAccessTypedExprPtr toFieldRef(ExprCP expr);
 
   std::vector<velox::core::FieldAccessTypedExprPtr> toFieldRefs(

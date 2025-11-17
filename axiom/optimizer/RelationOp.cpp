@@ -870,6 +870,7 @@ Limit::Limit(RelationOpPtr input, int64_t limit, int64_t offset)
     : RelationOp{RelType::kLimit, std::move(input), Distribution::gather()},
       limit{limit},
       offset{offset} {
+  VELOX_DCHECK_GE(limit, 0);
   cost_.inputCardinality = inputCardinality();
   cost_.unitCost = 0.01;
   const auto cardinality = static_cast<float>(limit);

@@ -590,6 +590,10 @@ struct OrderBy : public RelationOp {
       int64_t limit = -1,
       int64_t offset = 0);
 
+  bool hasLimit() const {
+    return limit >= 0;
+  }
+
   const int64_t limit;
   const int64_t offset;
 
@@ -626,8 +630,8 @@ struct Limit : public RelationOp {
   const int64_t offset;
 
   bool isNoLimit() const {
-    static const auto kMax = std::numeric_limits<int64_t>::max();
-    return limit >= (kMax - offset);
+    static constexpr auto kMax = std::numeric_limits<int64_t>::max();
+    return limit >= kMax - offset;
   }
 
   std::string toString(bool recursive, bool detail) const override;
