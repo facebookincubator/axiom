@@ -320,6 +320,8 @@ void HiveConnectorMetadata::validateOptions(
       HiveWriteOptions::kSortedBy,
       HiveWriteOptions::kFileFormat,
       HiveWriteOptions::kCompressionKind,
+      HiveWriteOptions::kFieldDelim,
+      HiveWriteOptions::kSerializationNullFormat,
   };
 
   for (auto& pair : options) {

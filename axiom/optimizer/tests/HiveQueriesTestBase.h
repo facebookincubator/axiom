@@ -59,6 +59,15 @@ class HiveQueriesTestBase : public test::QueryTestBase {
     return *metadata_;
   }
 
+  void createEmptyTable(
+      const std::string& name,
+      const velox::RowTypePtr& tableType,
+      const folly::F14FastMap<std::string, velox::Variant>& options = {});
+
+  void checkTableData(
+      const std::string& tableName,
+      const std::vector<velox::RowVectorPtr>& expectedData);
+
  private:
   inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
       gTempDirectory;

@@ -189,6 +189,12 @@ class HiveWriteOptions {
   /// The table compression kind. See velox::common::CompressionKind.
   /// The default is ZSTD compression.
   static constexpr auto kCompressionKind = "compression_kind";
+
+  /// Field delimiter for TEXT format files.
+  static constexpr auto kFieldDelim = "field.delim";
+
+  /// Null string format for TEXT format files.
+  static constexpr auto kSerializationNullFormat = "serialization.null.format";
 };
 
 class HiveConnectorMetadata : public ConnectorMetadata {

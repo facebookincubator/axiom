@@ -23,7 +23,7 @@ DEFINE_string(
     data_path,
     "",
     "Root path of data. Data layout must follow Hive-style partitioning. ");
-DEFINE_string(data_format, "parquet", "Data format: parquet or dwrf.");
+DEFINE_string(data_format, "parquet", "Data format: parquet, dwrf, or text.");
 DEFINE_uint64(
     split_target_bytes,
     16 << 20,

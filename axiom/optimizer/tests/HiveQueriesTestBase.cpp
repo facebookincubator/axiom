@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
+#include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
 
 namespace facebook::axiom::optimizer::test {
@@ -93,6 +94,28 @@ void HiveQueriesTestBase::checkSingleNodePlan(
   ASSERT_EQ(1, fragments.size());
 
   ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
+}
+
+void HiveQueriesTestBase::createEmptyTable(
+    const std::string& name,
+    const RowTypePtr& tableType,
+    const folly::F14FastMap<std::string, velox::Variant>& options) {
+  metadata_->dropTableIfExists(name);
+
+  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto table = metadata_->createTable(session, name, tableType, options);
+  auto handle =
+      metadata_->beginWrite(session, table, connector::WriteKind::kCreate);
+  metadata_->finishWrite(session, handle, {}).get();
+}
+
+void HiveQueriesTestBase::checkTableData(
+    const std::string& tableName,
+    const std::vector<RowVectorPtr>& expectedData) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan = lp::PlanBuilder(context).tableScan(tableName).build();
+
+  checkSameSingleNode(logicalPlan, expectedData);
 }
 
 } // namespace facebook::axiom::optimizer::test
