@@ -447,6 +447,35 @@ class TableLayout {
   const velox::RowTypePtr rowType_;
 };
 
+/// Specifies what type of write is intended when initiating or concluding a
+/// write operation.
+enum class WriteKind {
+  /// A write operation to a new table which does not yet exist in the
+  /// connector. Covers both creation of an empty table and create as select
+  /// operations.
+  kCreate = 1,
+
+  /// Rows are added and all columns must be specified for the TableWriter.
+  /// Covers insert, Hive partition replacement or any other operation which
+  /// adds whole rows.
+  kInsert = 2,
+
+  /// Individual rows are deleted. Only row ids as per
+  /// ConnectorMetadata::rowIdHandles() are passed to the TableWriter.
+  kDelete = 3,
+
+  /// Column values in individual rows are changed. The TableWriter
+  /// gets first the row ids as per ConnectorMetadata::rowIdHandles()
+  /// and then new values for the columns being changed. The new values
+  /// may overlap with row ids if the row id is a set of primary key
+  /// columns.
+  kUpdate = 4,
+};
+
+AXIOM_DECLARE_ENUM_NAME(WriteKind);
+
+using RowsFuture = folly::SemiFuture<int64_t>;
+
 /// Base class for table. This is used for name resolution. A TableLayout is
 /// used for accessing physical organization like partitioning and sort order.
 /// The Table object maintains ownership over the objects it contains, including
@@ -496,6 +525,14 @@ class Table : public std::enable_shared_from_this<Table> {
   virtual const folly::F14FastMap<std::string, velox::Variant>& options()
       const {
     return options_;
+  }
+
+  /// Returns column handles whose value uniquely identifies a row for creating
+  /// an update or delete record. These may be for example some connector
+  /// specific opaque row id or primary key columns.
+  virtual std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
+      WriteKind kind) {
+    VELOX_UNSUPPORTED();
   }
 
   template <typename T>
@@ -553,35 +590,6 @@ class ConnectorWriteHandle {
 };
 
 using ConnectorWriteHandlePtr = std::shared_ptr<ConnectorWriteHandle>;
-
-/// Specifies what type of write is intended when initiating or concluding a
-/// write operation.
-enum class WriteKind {
-  /// A write operation to a new table which does not yet exist in the
-  /// connector. Covers both creation of an empty table and create as select
-  /// operations.
-  kCreate = 1,
-
-  /// Rows are added and all columns must be specified for the TableWriter.
-  /// Covers insert, Hive partition replacement or any other operation which
-  /// adds whole rows.
-  kInsert = 2,
-
-  /// Individual rows are deleted. Only row ids as per
-  /// ConnectorMetadata::rowIdHandles() are passed to the TableWriter.
-  kDelete = 3,
-
-  /// Column values in individual rows are changed. The TableWriter
-  /// gets first the row ids as per ConnectorMetadata::rowIdHandles()
-  /// and then new values for the columns being changed. The new values
-  /// may overlap with row ids if the row id is a set of primary key
-  /// columns.
-  kUpdate = 4,
-};
-
-AXIOM_DECLARE_ENUM_NAME(WriteKind);
-
-using RowsFuture = folly::SemiFuture<int64_t>;
 
 class ConnectorMetadata {
  public:
@@ -687,15 +695,6 @@ class ConnectorMetadata {
       const ConnectorSessionPtr& session,
       std::string_view tableName,
       bool ifExists) {
-    VELOX_UNSUPPORTED();
-  }
-
-  /// Returns column handles whose value uniquely identifies a row for creating
-  /// an update or delete record. These may be for example some connector
-  /// specific opaque row id or primary key columns.
-  virtual std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
-      const Table& table,
-      WriteKind kind) {
     VELOX_UNSUPPORTED();
   }
 
