@@ -90,7 +90,9 @@ add_executable(
   AggregationPlanTest.cpp
   DerivedTablePrinterTest.cpp
   HiveAggregationQueriesTest.cpp
+  HiveCrossJoinQueriesTest.cpp
   HiveLimitQueriesTest.cpp
+  HiveWindowQueriesTest.cpp
   HiveQueriesTest.cpp
   JoinTest.cpp
   PrecomputeProjectionTest.cpp
@@ -121,6 +123,7 @@ target_link_libraries(
   axiom_optimizer_tests_query_test_base
   axiom_runner_tests_utils
   axiom_test_connector
+  velox_window
   GTest::gmock
   glog::glog
   GTest::gtest

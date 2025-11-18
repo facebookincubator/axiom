@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/QueryGraph.h"
+#include <algorithm>
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -301,7 +302,7 @@ std::string JoinEdge::toString() const {
   out << "<join "
       << (leftTable_ ? leftTable_->toString() : " multiple tables ");
   if (leftOptional_ && rightOptional_) {
-    out << " full outr ";
+    out << " full outer ";
   } else if (markColumn_) {
     out << " exists project ";
   } else if (rightOptional_) {
@@ -312,7 +313,7 @@ std::string JoinEdge::toString() const {
     out << " not exists ";
   } else if (leftOptional_) {
     out << " right ";
-  } else if (directed_) {
+  } else if (unnest_) {
     out << " unnest ";
   } else {
     out << " inner ";
@@ -340,46 +341,101 @@ const FunctionSet& Expr::functions() const {
   return empty;
 }
 
-bool Expr::sameOrEqual(const Expr& other) const {
-  if (this == &other) {
+namespace {
+
+bool sameOrEqualExpr(ExprCP l, ExprCP r) {
+  if (l == r) {
     return true;
   }
-  if (type() != other.type()) {
+  if (!l || !r) {
     return false;
   }
-  switch (type()) {
+  if (l->type() != r->type()) {
+    return false;
+  }
+  auto sameOrEqualExprs = [&](const auto& l, const auto& r) {
+    return std::ranges::equal(l, r, sameOrEqualExpr);
+  };
+  switch (l->type()) {
     case PlanType::kColumnExpr:
-      return as<Column>()->equivalence() &&
-          as<Column>()->equivalence() == other.as<Column>()->equivalence();
+      return l->as<Column>()->equivalence() &&
+          l->as<Column>()->equivalence() == r->as<Column>()->equivalence();
+    case PlanType::kLiteralExpr:
+      return l->as<Literal>()->literal() == r->as<Literal>()->literal();
+    case PlanType::kFieldExpr: {
+      const auto* a = l->as<Field>();
+      const auto* b = r->as<Field>();
+      if (a->field() != b->field() || a->index() != b->index()) {
+        return false;
+      }
+      return sameOrEqualExpr(a->base(), b->base());
+    }
     case PlanType::kAggregateExpr: {
-      auto a = as<Aggregate>();
-      auto b = other.as<Aggregate>();
-      if (a->isDistinct() != b->isDistinct() ||
-          (a->condition() != b->condition() &&
-           (!a->condition() || !b->condition() ||
-            !a->condition()->sameOrEqual(*b->condition())))) {
+      const auto* a = l->as<Aggregate>();
+      const auto* b = r->as<Aggregate>();
+      if (a->isDistinct() != b->isDistinct()) {
+        return false;
+      }
+      if (sameOrEqualExpr(a->condition(), b->condition())) {
+        return false;
+      }
+      if (a->orderTypes() != b->orderTypes()) {
+        return false;
+      }
+      if (!sameOrEqualExprs(a->orderKeys(), b->orderKeys())) {
         return false;
       }
     }
       [[fallthrough]];
     case PlanType::kCallExpr: {
-      if (as<Call>()->name() != other.as<Call>()->name()) {
+      const auto* a = l->as<Call>();
+      const auto* b = r->as<Call>();
+      if (a->name() != b->name()) {
         return false;
       }
-      auto numArgs = as<Call>()->args().size();
-      if (numArgs != other.as<Call>()->args().size()) {
-        return false;
-      }
-      for (auto i = 0; i < numArgs; ++i) {
-        if (as<Call>()->argAt(i)->sameOrEqual(*other.as<Call>()->argAt(i))) {
-          return false;
-        }
-      }
-      return true;
+      return sameOrEqualExprs(a->args(), b->args());
     }
+    case PlanType::kWindowExpr: {
+      const auto* a = l->as<Window>();
+      const auto* b = r->as<Window>();
+      if (a->name() != b->name()) {
+        return false;
+      }
+      if (a->ignoreNulls() != b->ignoreNulls()) {
+        return false;
+      }
+      if (a->spec() != b->spec()) {
+        return false;
+      }
+      const auto& f1 = a->frame();
+      const auto& f2 = b->frame();
+      if (f1.type != f2.type) {
+        return false;
+      }
+      if (f1.startType != f2.startType) {
+        return false;
+      }
+      if (f1.endType != f2.endType) {
+        return false;
+      }
+      if (!sameOrEqualExpr(f1.startValue, f2.startValue)) {
+        return false;
+      }
+      if (!sameOrEqualExpr(f1.endValue, f2.endValue)) {
+        return false;
+      }
+      return sameOrEqualExprs(a->args(), b->args());
+    }
+    // TODO: handle other expression types: Lambda.
     default:
       return false;
   }
+}
+
+} // namespace
+
+bool Expr::sameOrEqual(const Expr& other) const {
+  return sameOrEqualExpr(this, &other);
 }
 
 PlanObjectCP Expr::singleTable() const {
@@ -469,11 +525,11 @@ PlanObjectSet JoinEdge::allTables() const {
 }
 
 namespace {
-template <typename U>
+
 inline CPSpan<Column> toRangeCast(const ExprVector& exprs) {
-  return CPSpan<Column>(
-      reinterpret_cast<const Column* const*>(exprs.data()), exprs.size());
+  return {reinterpret_cast<const Column* const*>(exprs.data()), exprs.size()};
 }
+
 } // namespace
 
 void JoinEdge::guessFanout() {
@@ -481,6 +537,7 @@ void JoinEdge::guessFanout() {
     return;
   }
 
+  // TODO: Why fanouts are set to 1.1 and 1 when left table is null?
   if (leftTable_ == nullptr) {
     lrFanout_ = 1.1;
     rlFanout_ = 1;
@@ -489,8 +546,8 @@ void JoinEdge::guessFanout() {
 
   auto* opt = queryCtx()->optimization();
   auto samplePair = opt->history().sampleJoin(this);
-  auto left = joinCardinality(leftTable_, toRangeCast<Column>(leftKeys_));
-  auto right = joinCardinality(rightTable_, toRangeCast<Column>(rightKeys_));
+  auto left = joinCardinality(leftTable_, toRangeCast(leftKeys_));
+  auto right = joinCardinality(rightTable_, toRangeCast(rightKeys_));
   leftUnique_ = left.unique;
   rightUnique_ = right.unique;
   if (samplePair.first == 0 && samplePair.second == 0) {
@@ -512,6 +569,42 @@ void JoinEdge::guessFanout() {
     lrFanout_ = tableCardinality(rightTable_) / tableCardinality(leftTable_) *
         baseSelectivity(rightTable_);
   }
+}
+
+bool WindowSpec::operator==(const WindowSpec& other) const {
+  if (partitionKeys.size() != other.partitionKeys.size() ||
+      orderKeys.size() != other.orderKeys.size() ||
+      orderTypes.size() != other.orderTypes.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < partitionKeys.size(); ++i) {
+    if (!partitionKeys[i]->sameOrEqual(*other.partitionKeys[i])) {
+      return false;
+    }
+  }
+
+  for (size_t i = 0; i < orderKeys.size(); ++i) {
+    if (!orderKeys[i]->sameOrEqual(*other.orderKeys[i])) {
+      return false;
+    }
+  }
+
+  return orderTypes == other.orderTypes;
+}
+
+size_t WindowSpec::Hasher::operator()(const WindowSpec& spec) const {
+  size_t hash = 0;
+  for (const auto& key : spec.partitionKeys) {
+    hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(key));
+  }
+  for (const auto& key : spec.orderKeys) {
+    hash = velox::bits::hashMix(hash, folly::hasher<ExprCP>()(key));
+  }
+  for (const auto& type : spec.orderTypes) {
+    hash = velox::bits::hashMix(hash, folly::hasher<OrderType>()(type));
+  }
+  return hash;
 }
 
 } // namespace facebook::axiom::optimizer

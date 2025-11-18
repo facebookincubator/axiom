@@ -67,6 +67,11 @@ class Expr : public PlanObject {
     return containsFunction(FunctionSet::kNonDeterministic);
   }
 
+  // whether function contains window exprs or not
+  bool containsWindow() const {
+    return containsFunction(FunctionSet::kWindow);
+  }
+
   /// True if 'this' contains any function from 'set'. See FunctionSet.
   virtual bool containsFunction(uint64_t /*set*/) const {
     return false;
@@ -506,21 +511,7 @@ class JoinEdge {
     /// 'rightExists' must be true.
     ColumnCP markColumn{nullptr};
 
-    /// Columns produced by the 'left' side of a RIGHT or FULL OUTER join.
-    /// Requires 'leftOptional' to be true.
-    ColumnVector leftColumns;
-
-    /// Input expressions corresponding 1:1 to 'leftColumns'.
-    ExprVector leftExprs;
-
-    /// Columns produced by the 'right' side of a LEFT or FULL OUTER join.
-    /// Requires 'rightOptional' to be true.
-    ColumnVector rightColumns;
-
-    /// Input expressions corresponding 1:1 to 'rightColumns'.
-    ExprVector rightExprs;
-
-    bool directed{false};
+    bool unnest{false};
   };
 
   /// @param leftTable The left table of the join. May be nullptr if 'leftKeys'
@@ -535,35 +526,19 @@ class JoinEdge {
         rightOptional_(spec.rightOptional),
         rightExists_(spec.rightExists),
         rightNotExists_(spec.rightNotExists),
-        directed_(spec.directed),
-        markColumn_(spec.markColumn),
-        leftColumns_{spec.leftColumns},
-        leftExprs_{spec.leftExprs},
-        rightColumns_{spec.rightColumns},
-        rightExprs_{spec.rightExprs} {
-    VELOX_CHECK_NOT_NULL(rightTable);
-
-    if (isInner()) {
-      VELOX_CHECK_NOT_NULL(
-          leftTable, "Hyper edge is not supported for an inner join");
-      VELOX_CHECK(filter_.empty(), "Filter is not allowed for an inner join");
+        unnest_(spec.unnest),
+        markColumn_(spec.markColumn) {
+    if (leftOptional_ || !rightOptional_) {
+      // Only left join can have null left table.
+      VELOX_DCHECK_NOT_NULL(leftTable_);
     }
-
-    VELOX_CHECK(!rightExists_ || !rightNotExists_);
-
-    if (markColumn_) {
-      VELOX_CHECK(rightExists_);
-    }
-
-    if (!leftColumns_.empty()) {
-      VELOX_CHECK(leftOptional_);
-      VELOX_CHECK_EQ(leftColumns_.size(), leftExprs_.size());
-    }
-
-    if (!rightColumns_.empty()) {
-      VELOX_CHECK(rightOptional_);
-      VELOX_CHECK_EQ(rightColumns_.size(), rightExprs_.size());
-    }
+    VELOX_DCHECK_NOT_NULL(rightTable_);
+    // filter_ is only for non-inner joins.
+    VELOX_DCHECK(filter_.empty() || !isInner());
+    // Cannot be both semi and anti join.
+    VELOX_DCHECK(!rightExists_ || !rightNotExists_);
+    // Mark column only for semi joins.
+    VELOX_DCHECK(!markColumn_ || rightExists_);
   }
 
   static JoinEdge* makeInner(PlanObjectCP leftTable, PlanObjectCP rightTable) {
@@ -595,12 +570,11 @@ class JoinEdge {
       PlanObjectCP leftTable,
       PlanObjectCP rightTable,
       ExprVector unnestExprs) {
-    VELOX_DCHECK_NOT_NULL(leftTable);
-    auto* edge = make<JoinEdge>(leftTable, rightTable, Spec{.directed = true});
+    auto* edge = make<JoinEdge>(leftTable, rightTable, Spec{.unnest = true});
     edge->leftKeys_ = std::move(unnestExprs);
     // TODO Not sure to what values fanout need to be set,
     // (1, 1) looks ok, but tests don't produce expected plans.
-    edge->setFanouts(2, 2);
+    edge->setFanouts(2, 1);
     return edge;
   }
 
@@ -647,32 +621,16 @@ class JoinEdge {
     return markColumn_;
   }
 
-  const ColumnVector& leftColumns() const {
-    return leftColumns_;
-  }
-
-  const ExprVector& leftExprs() const {
-    return leftExprs_;
-  }
-
-  const ColumnVector& rightColumns() const {
-    return rightColumns_;
-  }
-
-  const ExprVector& rightExprs() const {
-    return rightExprs_;
-  }
-
-  bool directed() const {
-    return directed_;
+  bool unnest() const {
+    return unnest_;
   }
 
   void addEquality(ExprCP left, ExprCP right, bool update = false);
 
   /// True if inner join.
   bool isInner() const {
-    return !leftOptional_ && !rightOptional_ && !rightExists_ &&
-        !rightNotExists_;
+    return !leftOptional_ && !rightOptional_ && !isSemi() && !isAnti() &&
+        !unnest_;
   }
 
   bool isSemi() const {
@@ -687,18 +645,13 @@ class JoinEdge {
   /// placing this.
   bool isNonCommutative() const {
     // Inner and full outer joins are commutative.
-    if (rightOptional_ && leftOptional_) {
-      return false;
-    }
-
-    return !leftTable_ || rightOptional_ || leftOptional_ || rightExists_ ||
-        rightNotExists_ || directed_;
+    return !(isInner() || (leftOptional_ && rightOptional_));
   }
 
   /// True if has a hash based variant that builds on the left and probes on the
   /// right.
   bool hasRightHashVariant() const {
-    return isNonCommutative() && !rightNotExists_;
+    return isNonCommutative() && !isAnti() && !unnest_;
   }
 
   /// Returns the join side info for 'table'. If 'other' is set, returns the
@@ -799,17 +752,11 @@ class JoinEdge {
   // True if produces a result for left if no match on the right.
   const bool rightNotExists_;
 
-  // If directed non-outer edge. For example unnest or inner dependent on
-  // optional of outer.
-  const bool directed_;
+  // True if unnest.
+  const bool unnest_;
 
   // Flag to set if right side has a match.
   ColumnCP const markColumn_;
-
-  const ColumnVector leftColumns_;
-  const ExprVector leftExprs_;
-  const ColumnVector rightColumns_;
-  const ExprVector rightExprs_;
 };
 
 using JoinEdgeP = JoinEdge*;
@@ -1006,6 +953,110 @@ class Aggregate : public Call {
 
 using AggregateCP = const Aggregate*;
 using AggregateVector = QGVector<AggregateCP>;
+
+/// Window frame specification for window functions
+struct WindowFrame {
+  logical_plan::WindowExpr::WindowType type;
+  logical_plan::WindowExpr::BoundType startType;
+  ExprCP startValue{nullptr};
+  logical_plan::WindowExpr::BoundType endType;
+  ExprCP endValue{nullptr};
+};
+
+struct WindowSpec {
+  WindowSpec(
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes)
+      : partitionKeys(std::move(partitionKeys)),
+        orderKeys(std::move(orderKeys)),
+        orderTypes(std::move(orderTypes)) {
+    VELOX_CHECK_EQ(orderKeys.size(), orderTypes.size());
+  }
+
+  ExprVector partitionKeys;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+
+  bool operator==(const WindowSpec& other) const;
+
+  struct Hasher {
+    size_t operator()(const WindowSpec& spec) const;
+  };
+};
+
+class Window : public Call {
+ public:
+  Window(
+      Name name,
+      const Value& value,
+      ExprVector args,
+      WindowSpec spec,
+      WindowFrame frame,
+      PlanObjectCP dt,
+      bool ignoreNulls)
+      : Call(
+            PlanType::kWindowExpr,
+            name,
+            value,
+            std::move(args),
+            [&args, &spec]() {
+              FunctionSet funcs(FunctionSet::kWindow);
+              for (const auto& arg : args) {
+                funcs = funcs | arg->functions();
+              }
+              for (const auto& key : spec.partitionKeys) {
+                funcs = funcs | key->functions();
+              }
+              for (const auto& key : spec.orderKeys) {
+                funcs = funcs | key->functions();
+              }
+              return funcs;
+            }()),
+        spec_(std::move(spec)),
+        frame_(frame),
+        column_([&]() {
+          auto windowName = toName(fmt::format("{}_{}", name, id()));
+          return make<Column>(windowName, dt, value, windowName);
+        }()),
+        ignoreNulls_(ignoreNulls) {
+    columns_.unionColumns(spec_.partitionKeys);
+    columns_.unionColumns(spec_.orderKeys);
+
+    if (frame_.startValue) {
+      columns_.unionColumns(frame_.startValue);
+    }
+
+    if (frame_.endValue) {
+      columns_.unionColumns(frame_.endValue);
+    }
+  }
+
+  const WindowSpec& spec() const {
+    return spec_;
+  }
+
+  const WindowFrame& frame() const {
+    return frame_;
+  }
+
+  bool ignoreNulls() const {
+    return ignoreNulls_;
+  }
+
+  const ColumnCP& column() const {
+    return column_;
+  }
+
+ private:
+  WindowSpec spec_;
+  WindowFrame frame_;
+  const ColumnCP column_;
+  bool ignoreNulls_;
+};
+
+using WindowCP = const Window*;
+using WindowVector = QGVector<WindowCP>;
 
 class AggregationPlan : public PlanObject {
  public:

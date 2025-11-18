@@ -527,32 +527,85 @@ runner::ExecutableFragment ToVelox::newFragment() {
   return fragment;
 }
 
-namespace {
-velox::core::PlanNodePtr addPartialLimit(
-    const velox::core::PlanNodeId& id,
+velox::core::PlanNodePtr ToVelox::addPartialLimit(
     int64_t offset,
     int64_t limit,
-    const velox::core::PlanNodePtr& input) {
+    velox::core::PlanNodePtr input) {
+  if (limit == 0) {
+    input = std::make_shared<velox::core::LimitNode>(
+        nextId(),
+        offset,
+        1,
+        /* isPartial */ false,
+        std::move(input));
+    offset = 1;
+    limit = 1;
+  }
   return std::make_shared<velox::core::LimitNode>(
-      id,
+      nextId(),
       offset,
       limit,
       /* isPartial */ true,
-      input);
+      std::move(input));
 }
 
-velox::core::PlanNodePtr addFinalLimit(
-    const velox::core::PlanNodeId& id,
+velox::core::PlanNodePtr ToVelox::addFinalLimit(
     int64_t offset,
     int64_t limit,
-    const velox::core::PlanNodePtr& input) {
+    velox::core::PlanNodePtr input) {
+  if (limit == 0) {
+    input = std::make_shared<velox::core::LimitNode>(
+        nextId(),
+        offset,
+        1,
+        /* isPartial */ false,
+        std::move(input));
+    offset = 1;
+    limit = 1;
+  }
   return std::make_shared<velox::core::LimitNode>(
-      id,
+      nextId(),
       offset,
       limit,
       /* isPartial */ false,
       input);
 }
+
+velox::core::PlanNodePtr ToVelox::addPartialTopN(
+    const std::vector<velox::core::FieldAccessTypedExprPtr>& keys,
+    const std::vector<velox::core::SortOrder>& sortOrder,
+    int64_t count,
+    velox::core::PlanNodePtr input) {
+  if (count == 0) {
+    return addPartialLimit(0, 0, std::move(input));
+  }
+  return std::make_shared<velox::core::TopNNode>(
+      nextId(),
+      keys,
+      sortOrder,
+      count,
+      /* isPartial */ true,
+      std::move(input));
+}
+
+velox::core::PlanNodePtr ToVelox::addFinalTopN(
+    const std::vector<velox::core::FieldAccessTypedExprPtr>& keys,
+    const std::vector<velox::core::SortOrder>& sortOrder,
+    int64_t count,
+    velox::core::PlanNodePtr input) {
+  if (count == 0) {
+    return addFinalLimit(0, 0, std::move(input));
+  }
+  return std::make_shared<velox::core::TopNNode>(
+      nextId(),
+      keys,
+      sortOrder,
+      count,
+      /* isPartial */ false,
+      std::move(input));
+}
+
+namespace {
 
 velox::core::PlanNodePtr addLocalGather(
     const velox::core::PlanNodeId& id,
@@ -570,36 +623,6 @@ velox::core::PlanNodePtr addLocalMerge(
       id, keys, sortOrder, std::vector<velox::core::PlanNodePtr>{input});
 }
 
-velox::core::PlanNodePtr addPartialTopN(
-    const velox::core::PlanNodeId& id,
-    const std::vector<velox::core::FieldAccessTypedExprPtr>& keys,
-    const std::vector<velox::core::SortOrder>& sortOrder,
-    int64_t count,
-    const velox::core::PlanNodePtr& input) {
-  return std::make_shared<velox::core::TopNNode>(
-      id,
-      keys,
-      sortOrder,
-      count,
-      /* isPartial */ true,
-      input);
-}
-
-velox::core::PlanNodePtr addFinalTopN(
-    const velox::core::PlanNodeId& id,
-    const std::vector<velox::core::FieldAccessTypedExprPtr>& keys,
-    const std::vector<velox::core::SortOrder>& sortOrder,
-    int64_t count,
-    const velox::core::PlanNodePtr& input) {
-  return std::make_shared<velox::core::TopNNode>(
-      id,
-      keys,
-      sortOrder,
-      count,
-      /* isPartial */ false,
-      input);
-}
-
 velox::core::SortOrder toSortOrder(const OrderType& order) {
   return order == OrderType::kAscNullsFirst ? velox::core::kAscNullsFirst
       : order == OrderType ::kAscNullsLast  ? velox::core::kAscNullsLast
@@ -615,6 +638,74 @@ std::vector<velox::core::SortOrder> toSortOrders(
     sortOrders.emplace_back(toSortOrder(order));
   }
   return sortOrders;
+}
+
+velox::core::WindowNode::Frame toVeloxFrame(
+    const WindowFrame& frame,
+    ToVelox& converter) {
+  auto veloxWindowType = velox::core::WindowNode::WindowType::kRange;
+  switch (frame.type) {
+    case logical_plan::WindowExpr::WindowType::kRange:
+      veloxWindowType = velox::core::WindowNode::WindowType::kRange;
+      break;
+    case logical_plan::WindowExpr::WindowType::kRows:
+      veloxWindowType = velox::core::WindowNode::WindowType::kRows;
+      break;
+    case logical_plan::WindowExpr::WindowType::kGroups:
+      VELOX_FAIL("GROUPS window frame not supported in velox");
+      break;
+  }
+
+  auto veloxStartType = velox::core::WindowNode::BoundType::kUnboundedPreceding;
+  switch (frame.startType) {
+    case logical_plan::WindowExpr::BoundType::kUnboundedPreceding:
+      veloxStartType = velox::core::WindowNode::BoundType::kUnboundedPreceding;
+      break;
+    case logical_plan::WindowExpr::BoundType::kPreceding:
+      veloxStartType = velox::core::WindowNode::BoundType::kPreceding;
+      break;
+    case logical_plan::WindowExpr::BoundType::kCurrentRow:
+      veloxStartType = velox::core::WindowNode::BoundType::kCurrentRow;
+      break;
+    case logical_plan::WindowExpr::BoundType::kFollowing:
+      veloxStartType = velox::core::WindowNode::BoundType::kFollowing;
+      break;
+    case logical_plan::WindowExpr::BoundType::kUnboundedFollowing:
+      veloxStartType = velox::core::WindowNode::BoundType::kUnboundedFollowing;
+      break;
+  }
+
+  auto veloxEndType = velox::core::WindowNode::BoundType::kUnboundedFollowing;
+  switch (frame.endType) {
+    case logical_plan::WindowExpr::BoundType::kUnboundedPreceding:
+      veloxEndType = velox::core::WindowNode::BoundType::kUnboundedPreceding;
+      break;
+    case logical_plan::WindowExpr::BoundType::kPreceding:
+      veloxEndType = velox::core::WindowNode::BoundType::kPreceding;
+      break;
+    case logical_plan::WindowExpr::BoundType::kCurrentRow:
+      veloxEndType = velox::core::WindowNode::BoundType::kCurrentRow;
+      break;
+    case logical_plan::WindowExpr::BoundType::kFollowing:
+      veloxEndType = velox::core::WindowNode::BoundType::kFollowing;
+      break;
+    case logical_plan::WindowExpr::BoundType::kUnboundedFollowing:
+      veloxEndType = velox::core::WindowNode::BoundType::kUnboundedFollowing;
+      break;
+  }
+
+  velox::core::TypedExprPtr startExpr = nullptr;
+  if (frame.startValue) {
+    startExpr = converter.toTypedExpr(frame.startValue);
+  }
+
+  velox::core::TypedExprPtr endExpr = nullptr;
+  if (frame.endValue) {
+    endExpr = converter.toTypedExpr(frame.endValue);
+  }
+
+  return velox::core::WindowNode::Frame{
+      veloxWindowType, veloxStartType, startExpr, veloxEndType, endExpr};
 }
 } // namespace
 
@@ -652,34 +743,32 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
     auto input = makeFragment(op.input(), fragment, stages);
 
     if (options_.numDrivers == 1) {
-      if (op.limit <= 0) {
+      if (!op.hasLimit()) {
         return std::make_shared<velox::core::OrderByNode>(
             nextId(), keys, sortOrder, false, input);
       }
 
-      auto node =
-          addFinalTopN(nextId(), keys, sortOrder, op.limit + op.offset, input);
+      auto node = addFinalTopN(keys, sortOrder, op.offset + op.limit, input);
 
       if (op.offset > 0) {
-        return addFinalLimit(nextId(), op.offset, op.limit, node);
+        return addFinalLimit(op.offset, op.limit, node);
       }
 
       return node;
     }
 
     velox::core::PlanNodePtr node;
-    if (op.limit <= 0) {
+    if (op.hasLimit()) {
+      node = addPartialTopN(keys, sortOrder, op.offset + op.limit, input);
+    } else {
       node = std::make_shared<velox::core::OrderByNode>(
           nextId(), keys, sortOrder, true, input);
-    } else {
-      node = addPartialTopN(
-          nextId(), keys, sortOrder, op.limit + op.offset, input);
     }
 
     node = addLocalMerge(nextId(), keys, sortOrder, node);
 
-    if (op.limit > 0) {
-      return addFinalLimit(nextId(), op.offset, op.limit, node);
+    if (op.hasLimit()) {
+      return addFinalLimit(op.offset, op.limit, node);
     }
 
     return node;
@@ -689,12 +778,11 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   auto input = makeFragment(op.input(), source, stages);
 
   velox::core::PlanNodePtr node;
-  if (op.limit <= 0) {
+  if (op.hasLimit()) {
+    node = addPartialTopN(keys, sortOrder, op.offset + op.limit, input);
+  } else {
     node = std::make_shared<velox::core::OrderByNode>(
         nextId(), keys, sortOrder, true, input);
-  } else {
-    node =
-        addPartialTopN(nextId(), keys, sortOrder, op.limit + op.offset, input);
   }
 
   node = addLocalMerge(nextId(), keys, sortOrder, node);
@@ -709,8 +797,8 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   fragment.inputStages.emplace_back(merge->id(), source.taskPrefix);
   stages.push_back(std::move(source));
 
-  if (op.limit > 0) {
-    return addFinalLimit(nextId(), op.offset, op.limit, merge);
+  if (op.hasLimit()) {
+    return addFinalLimit(op.offset, op.limit, merge);
   }
   return merge;
 }
@@ -721,7 +809,7 @@ velox::core::PlanNodePtr ToVelox::makeOffset(
     std::vector<runner::ExecutableFragment>& stages) {
   if (isSingle_) {
     auto input = makeFragment(op.input(), fragment, stages);
-    return addFinalLimit(nextId(), op.offset, op.limit, input);
+    return addFinalLimit(op.offset, op.limit, input);
   }
 
   auto source = newFragment();
@@ -733,7 +821,7 @@ velox::core::PlanNodePtr ToVelox::makeOffset(
   auto exchange = std::make_shared<velox::core::ExchangeNode>(
       nextId(), input->outputType(), exchangeSerdeKind_);
 
-  auto limitNode = addFinalLimit(nextId(), op.offset, op.limit, exchange);
+  auto limitNode = addFinalLimit(op.offset, op.limit, exchange);
 
   fragment.width = 1;
   fragment.inputStages.emplace_back(exchange->id(), source.taskPrefix);
@@ -753,12 +841,12 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
   if (isSingle_) {
     auto input = makeFragment(op.input(), fragment, stages);
     if (options_.numDrivers == 1) {
-      return addFinalLimit(nextId(), op.offset, op.limit, input);
+      return addFinalLimit(op.offset, op.limit, input);
     }
 
-    auto node = addPartialLimit(nextId(), 0, op.offset + op.limit, input);
+    auto node = addPartialLimit(0, op.offset + op.limit, input);
     node = addLocalGather(nextId(), node);
-    node = addFinalLimit(nextId(), op.offset, op.limit, node);
+    node = addFinalLimit(op.offset, op.limit, node);
 
     return node;
   }
@@ -766,11 +854,11 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
   auto source = newFragment();
   auto input = makeFragment(op.input(), source, stages);
 
-  auto node = addPartialLimit(nextId(), 0, op.offset + op.limit, input);
+  auto node = addPartialLimit(0, op.offset + op.limit, input);
 
   if (options_.numDrivers > 1) {
     node = addLocalGather(nextId(), node);
-    node = addFinalLimit(nextId(), 0, op.offset + op.limit, node);
+    node = addFinalLimit(0, op.offset + op.limit, node);
   }
 
   source.fragment.planNode = velox::core::PartitionedOutputNode::single(
@@ -779,7 +867,7 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
   auto exchange = std::make_shared<velox::core::ExchangeNode>(
       nextId(), node->outputType(), exchangeSerdeKind_);
 
-  auto finalLimitNode = addFinalLimit(nextId(), op.offset, op.limit, exchange);
+  auto finalLimitNode = addFinalLimit(op.offset, op.limit, exchange);
 
   fragment.width = 1;
   fragment.inputStages.emplace_back(exchange->id(), source.taskPrefix);
@@ -794,7 +882,7 @@ template <typename ExprType>
 velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const velox::RowTypePtr& inputType,
     const std::vector<ExprType>& keys,
-    const Distribution& distribution) {
+    const DistributionType& distribution) {
   if (distribution.isBroadcast || keys.empty()) {
     return std::make_shared<velox::core::GatherPartitionFunctionSpec>();
   }
@@ -811,8 +899,7 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
             ->name()));
   }
 
-  if (const auto* partitionType =
-          distribution.distributionType.partitionType()) {
+  if (const auto* partitionType = distribution.partitionType) {
     return partitionType->makeSpec(
         keyIndices, /*constants=*/{}, /*isLocal=*/false);
   }
@@ -1214,7 +1301,7 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       fragment.width = 1;
     } else {
       auto partition = createPartitionFunctionSpec(
-          input->outputType(), keys, Distribution{});
+          input->outputType(), keys, DistributionType{});
       input = std::make_shared<velox::core::LocalPartitionNode>(
           nextId(),
           velox::core::LocalPartitionNode::Type::kRepartition,
@@ -1235,6 +1322,54 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       input);
 }
 
+velox::core::PlanNodePtr ToVelox::makeWindow(
+    const WindowOp& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+
+  auto partitionKeys = toFieldRefs(op.partitionKeys);
+
+  auto sortingKeys = toFieldRefs(op.orderKeys);
+  auto sortingOrders = toSortOrders(op.orderTypes);
+
+  std::vector<std::string> windowColumnNames;
+  std::vector<velox::core::WindowNode::Function> windowFunctions;
+  windowColumnNames.reserve(op.windows.size());
+  windowFunctions.reserve(op.windows.size());
+  for (size_t i = 0; i < op.windows.size(); ++i) {
+    const auto* column = op.windowExprColumn(i);
+    const auto* window = op.windows[i];
+
+    windowColumnNames.emplace_back(column->outputName());
+
+    std::vector<velox::core::TypedExprPtr> functionArgs;
+    functionArgs.reserve(window->args().size());
+    for (const auto& arg : window->args()) {
+      functionArgs.emplace_back(toTypedExpr(arg));
+    }
+
+    auto functionCall = std::make_shared<velox::core::CallTypedExpr>(
+        toTypePtr(window->value().type),
+        std::move(functionArgs),
+        std::string(window->name()));
+
+    auto frame = toVeloxFrame(window->frame(), *this);
+    windowFunctions.emplace_back(
+        std::move(functionCall), std::move(frame), window->ignoreNulls());
+  }
+
+  return std::make_shared<velox::core::WindowNode>(
+      nextId(),
+      std::move(partitionKeys),
+      std::move(sortingKeys),
+      std::move(sortingOrders),
+      std::move(windowColumnNames),
+      std::move(windowFunctions),
+      false, // inputsSorted
+      std::move(input));
+}
+
 velox::core::PlanNodePtr ToVelox::makeRepartition(
     const Repartition& repartition,
     runner::ExecutableFragment& fragment,
@@ -1251,7 +1386,7 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   const auto keys = toTypedExprs(repartition.distribution().partition);
 
   const auto& distribution = repartition.distribution();
-  if (distribution.isBroadcast) {
+  if (distribution.isBroadcast()) {
     VELOX_CHECK_EQ(0, keys.size());
     source.fragment.planNode = velox::core::PartitionedOutputNode::broadcast(
         nextId(), 1, outputType, exchangeSerdeKind_, sourcePlan);
@@ -1263,7 +1398,7 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   } else {
     VELOX_CHECK_NE(0, keys.size());
     auto partitionFunctionFactory = createPartitionFunctionSpec(
-        sourcePlan->outputType(), keys, distribution);
+        sourcePlan->outputType(), keys, distribution.distributionType);
 
     source.fragment.planNode =
         std::make_shared<velox::core::PartitionedOutputNode>(
@@ -1472,6 +1607,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeFilter(*op->as<Filter>(), fragment, stages);
     case RelType::kAggregation:
       return makeAggregation(*op->as<Aggregation>(), fragment, stages);
+    case RelType::kWindow:
+      return makeWindow(*op->as<WindowOp>(), fragment, stages);
     case RelType::kOrderBy:
       return makeOrderBy(*op->as<OrderBy>(), fragment, stages);
     case RelType::kLimit:
