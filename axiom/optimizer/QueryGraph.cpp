@@ -340,46 +340,70 @@ const FunctionSet& Expr::functions() const {
   return empty;
 }
 
-bool Expr::sameOrEqual(const Expr& other) const {
-  if (this == &other) {
+namespace {
+
+bool sameOrEqualExpr(ExprCP l, ExprCP r) {
+  if (l == r) {
     return true;
   }
-  if (type() != other.type()) {
+  if (!l || !r) {
     return false;
   }
-  switch (type()) {
+  if (l->type() != r->type()) {
+    return false;
+  }
+  auto sameOrEqualExprs = [&](const auto& l, const auto& r) {
+    return std::ranges::equal(l, r, sameOrEqualExpr);
+  };
+  switch (l->type()) {
     case PlanType::kColumnExpr:
-      return as<Column>()->equivalence() &&
-          as<Column>()->equivalence() == other.as<Column>()->equivalence();
+      return l->as<Column>()->equivalence() &&
+          l->as<Column>()->equivalence() == r->as<Column>()->equivalence();
+    case PlanType::kLiteralExpr:
+      return l->as<Literal>()->literal() == r->as<Literal>()->literal();
+    case PlanType::kFieldExpr: {
+      const auto* a = l->as<Field>();
+      const auto* b = r->as<Field>();
+      if (a->field() != b->field() || a->index() != b->index()) {
+        return false;
+      }
+      return sameOrEqualExpr(a->base(), b->base());
+    }
     case PlanType::kAggregateExpr: {
-      auto a = as<Aggregate>();
-      auto b = other.as<Aggregate>();
-      if (a->isDistinct() != b->isDistinct() ||
-          (a->condition() != b->condition() &&
-           (!a->condition() || !b->condition() ||
-            !a->condition()->sameOrEqual(*b->condition())))) {
+      const auto* a = l->as<Aggregate>();
+      const auto* b = r->as<Aggregate>();
+      if (a->isDistinct() != b->isDistinct()) {
+        return false;
+      }
+      if (sameOrEqualExpr(a->condition(), b->condition())) {
+        return false;
+      }
+      if (a->orderTypes() != b->orderTypes()) {
+        return false;
+      }
+      if (!sameOrEqualExprs(a->orderKeys(), b->orderKeys())) {
         return false;
       }
     }
       [[fallthrough]];
     case PlanType::kCallExpr: {
-      if (as<Call>()->name() != other.as<Call>()->name()) {
+      const auto* a = l->as<Call>();
+      const auto* b = r->as<Call>();
+      if (a->name() != b->name()) {
         return false;
       }
-      auto numArgs = as<Call>()->args().size();
-      if (numArgs != other.as<Call>()->args().size()) {
-        return false;
-      }
-      for (auto i = 0; i < numArgs; ++i) {
-        if (as<Call>()->argAt(i)->sameOrEqual(*other.as<Call>()->argAt(i))) {
-          return false;
-        }
-      }
-      return true;
+      return sameOrEqualExprs(a->args(), b->args());
     }
+    // TODO: handle other expression types: Lambda.
     default:
       return false;
   }
+}
+
+} // namespace
+
+bool Expr::sameOrEqual(const Expr& other) const {
+  return sameOrEqualExpr(this, &other);
 }
 
 PlanObjectCP Expr::singleTable() const {
