@@ -118,8 +118,8 @@ TEST_F(TpchConnectorMetadataTest, createColumnHandle) {
   const auto& layouts = table->layouts();
   ASSERT_FALSE(layouts.empty());
 
-  auto columnHandle = metadata_->createColumnHandle(
-      /*session=*/nullptr, *layouts[0], "orderkey");
+  auto columnHandle = layouts[0]->createColumnHandle(
+      /*session=*/nullptr, "orderkey");
   ASSERT_NE(columnHandle, nullptr);
 
   auto* tpchColumnHandle =
@@ -130,7 +130,6 @@ TEST_F(TpchConnectorMetadataTest, createColumnHandle) {
 }
 
 TEST_F(TpchConnectorMetadataTest, createTableHandle) {
-  metadata_->initialize();
   auto table = metadata_->findTable("lineitem");
   ASSERT_NE(table, nullptr);
   const auto& layouts = table->layouts();
@@ -142,13 +141,8 @@ TEST_F(TpchConnectorMetadataTest, createTableHandle) {
   std::vector<velox::core::TypedExprPtr> empty;
   auto evaluator = std::make_unique<velox::exec::SimpleExpressionEvaluator>(
       nullptr, nullptr);
-  auto tableHandle = metadata_->createTableHandle(
-      /*session=*/nullptr,
-      *layouts[0],
-      columnHandles,
-      *evaluator,
-      empty,
-      empty);
+  auto tableHandle = layouts[0]->createTableHandle(
+      /*session=*/nullptr, columnHandles, *evaluator, empty, empty);
   ASSERT_NE(tableHandle, nullptr);
 
   auto* tpchTableHandle =
@@ -175,13 +169,8 @@ TEST_F(TpchConnectorMetadataTest, splitGeneration) {
   std::vector<velox::core::TypedExprPtr> empty;
   auto evaluator = std::make_unique<velox::exec::SimpleExpressionEvaluator>(
       nullptr, nullptr);
-  auto tableHandle = metadata_->createTableHandle(
-      /*session=*/nullptr,
-      *layouts[0],
-      columnHandles,
-      *evaluator,
-      empty,
-      empty);
+  auto tableHandle = layouts[0]->createTableHandle(
+      /*session=*/nullptr, columnHandles, *evaluator, empty, empty);
   ASSERT_NE(tableHandle, nullptr);
 
   auto partitions =

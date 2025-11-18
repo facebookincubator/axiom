@@ -14,7 +14,7 @@ dt1: s_suppkey, s_name, s_address, s_phone, total_revenue
   joins:
     t2 INNER dt3 ON t2.s_suppkey = dt3.l_suppkey
     dt3 INNER dt7 ON dt3.total_revenue = dt7.max
-  syntactic join order: 8, 13, 77
+  syntactic join order: 8, 13, 74
   orderBy: t2.s_suppkey ASC NULLS LAST
 
 t2: s_suppkey, s_name, s_address, s_phone
@@ -30,7 +30,7 @@ dt3: l_suppkey, total_revenue
 
 t4: l_suppkey, l_extendedprice, l_discount, l_shipdate
   table: lineitem
-  single-column filters: gte(t4.l_shipdate, "1996-01-01") and lt(__cast(t4.l_shipdate), "1996-04-01")
+  single-column filters: gte(t4.l_shipdate, "1996-01-01") and lt(t4.l_shipdate, "1996-04-01")
 
 dt7: max
   output:
@@ -47,7 +47,7 @@ dt5: total_revenue_19
 
 t6: l_suppkey, l_extendedprice, l_discount, l_shipdate
   table: lineitem
-  single-column filters: gte(t6.l_shipdate, "1996-01-01") and lt(__cast(t6.l_shipdate), "1996-04-01")
+  single-column filters: gte(t6.l_shipdate, "1996-01-01") and lt(t6.l_shipdate, "1996-04-01")
 
 
 Optimized plan (oneline):
@@ -71,13 +71,13 @@ Project (redundant) -> dt1.s_suppkey, dt1.s_name, dt1.s_address, dt1.s_phone, dt
             dt3.l_suppkey := t4.l_suppkey
             dt3.total_revenue := dt3.total_revenue
           Aggregation (t4.l_suppkey) -> t4.l_suppkey, dt3.total_revenue
-              dt3.total_revenue := sum(dt3.__p49)
-            Project -> t4.l_suppkey, dt3.__p49
+              dt3.total_revenue := sum(dt3.__p48)
+            Project -> t4.l_suppkey, dt3.__p48
                 t4.l_suppkey := t4.l_suppkey
-                dt3.__p49 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
+                dt3.__p48 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
               TableScan -> t4.l_suppkey, t4.l_extendedprice, t4.l_discount
                 table: lineitem
-                single-column filters: gte(t4.l_shipdate, "1996-01-01") and lt(__cast(t4.l_shipdate), "1996-04-01")
+                single-column filters: gte(t4.l_shipdate, "1996-01-01") and lt(t4.l_shipdate, "1996-04-01")
         HashBuild -> dt7.max
           Project (redundant) -> dt7.max
               dt7.max := dt7.max
@@ -86,13 +86,13 @@ Project (redundant) -> dt1.s_suppkey, dt1.s_name, dt1.s_address, dt1.s_phone, dt
               Project -> dt5.total_revenue_19
                   dt5.total_revenue_19 := dt5.total_revenue_17
                 Aggregation (t6.l_suppkey) -> t6.l_suppkey, dt5.total_revenue_17
-                    dt5.total_revenue_17 := sum(dt5.__p71)
-                  Project -> t6.l_suppkey, dt5.__p71
+                    dt5.total_revenue_17 := sum(dt5.__p69)
+                  Project -> t6.l_suppkey, dt5.__p69
                       t6.l_suppkey := t6.l_suppkey
-                      dt5.__p71 := multiply(t6.l_extendedprice, minus(1, t6.l_discount))
+                      dt5.__p69 := multiply(t6.l_extendedprice, minus(1, t6.l_discount))
                     TableScan -> t6.l_suppkey, t6.l_extendedprice, t6.l_discount
                       table: lineitem
-                      single-column filters: gte(t6.l_shipdate, "1996-01-01") and lt(__cast(t6.l_shipdate), "1996-04-01")
+                      single-column filters: gte(t6.l_shipdate, "1996-01-01") and lt(t6.l_shipdate, "1996-04-01")
       HashBuild -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_phone
         TableScan -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_phone
           table: supplier
@@ -104,14 +104,14 @@ Fragment 0:  numWorkers=0:
 -- OrderBy[11][s_suppkey ASC NULLS LAST] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, total_revenue:DOUBLE
   -- HashJoin[10][INNER l_suppkey=s_suppkey] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, total_revenue:DOUBLE
     -- HashJoin[8][INNER total_revenue=max] -> total_revenue:DOUBLE, l_suppkey:BIGINT
-      -- Aggregation[2][SINGLE [l_suppkey] total_revenue := sum("dt3.__p49")] -> l_suppkey:BIGINT, total_revenue:DOUBLE
-        -- Project[1][expressions: (l_suppkey:BIGINT, "l_suppkey"), (dt3.__p49:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> l_suppkey:BIGINT, "dt3.__p49":DOUBLE
-          -- TableScan[0][table: lineitem, range filters: [(l_shipdate, BigintRange: [9496, 9223372036854775807] no nulls)], remaining filter: (lt(cast("l_shipdate" as DATE),1996-04-01)), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
+      -- Aggregation[2][SINGLE [l_suppkey] total_revenue := sum("dt3.__p48")] -> l_suppkey:BIGINT, total_revenue:DOUBLE
+        -- Project[1][expressions: (l_suppkey:BIGINT, "l_suppkey"), (dt3.__p48:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> l_suppkey:BIGINT, "dt3.__p48":DOUBLE
+          -- TableScan[0][table: lineitem, range filters: [(l_shipdate, BigintRange: [9496, 9586] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
       -- Aggregation[7][SINGLE max := max("total_revenue_19")] -> max:DOUBLE
         -- Project[6][expressions: (total_revenue_19:DOUBLE, "total_revenue_17")] -> total_revenue_19:DOUBLE
-          -- Aggregation[5][SINGLE [l_suppkey_2] total_revenue_17 := sum("dt5.__p71")] -> l_suppkey_2:BIGINT, total_revenue_17:DOUBLE
-            -- Project[4][expressions: (l_suppkey_2:BIGINT, "l_suppkey_2"), (dt5.__p71:DOUBLE, multiply("l_extendedprice_5",minus(1,"l_discount_6")))] -> l_suppkey_2:BIGINT, "dt5.__p71":DOUBLE
-              -- TableScan[3][table: lineitem, range filters: [(l_shipdate, BigintRange: [9496, 9223372036854775807] no nulls)], remaining filter: (lt(cast("l_shipdate" as DATE),1996-04-01)), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_suppkey_2:BIGINT, l_extendedprice_5:DOUBLE, l_discount_6:DOUBLE
+          -- Aggregation[5][SINGLE [l_suppkey_2] total_revenue_17 := sum("dt5.__p69")] -> l_suppkey_2:BIGINT, total_revenue_17:DOUBLE
+            -- Project[4][expressions: (l_suppkey_2:BIGINT, "l_suppkey_2"), (dt5.__p69:DOUBLE, multiply("l_extendedprice_5",minus(1,"l_discount_6")))] -> l_suppkey_2:BIGINT, "dt5.__p69":DOUBLE
+              -- TableScan[3][table: lineitem, range filters: [(l_shipdate, BigintRange: [9496, 9586] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_suppkey_2:BIGINT, l_extendedprice_5:DOUBLE, l_discount_6:DOUBLE
     -- TableScan[9][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR
 
 ___END___

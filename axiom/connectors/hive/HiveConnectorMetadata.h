@@ -111,6 +111,22 @@ class HiveTableLayout : public TableLayout {
     return partitionType_.has_value() ? &partitionType_.value() : nullptr;
   }
 
+  velox::connector::ColumnHandlePtr createColumnHandle(
+      const ConnectorSessionPtr& session,
+      const std::string& columnName,
+      std::vector<velox::common::Subfield> subfields = {},
+      std::optional<velox::TypePtr> castToType = std::nullopt,
+      SubfieldMapping subfieldMapping = {}) const override;
+
+  velox::connector::ConnectorTableHandlePtr createTableHandle(
+      const ConnectorSessionPtr& session,
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
+      velox::core::ExpressionEvaluator& evaluator,
+      std::vector<velox::core::TypedExprPtr> filters,
+      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
+      velox::RowTypePtr dataColumns,
+      std::optional<LookupKeys> lookupKeys) const override;
+
  protected:
   const velox::dwio::common::FileFormat fileFormat_;
   const std::vector<const Column*> hivePartitionColumns_;
@@ -183,24 +199,6 @@ class HiveConnectorMetadata : public ConnectorMetadata {
         hiveConfig_(
             std::make_shared<velox::connector::hive::HiveConfig>(
                 hiveConnector->connectorConfig())) {}
-
-  velox::connector::ColumnHandlePtr createColumnHandle(
-      const ConnectorSessionPtr& session,
-      const TableLayout& layout,
-      const std::string& columnName,
-      std::vector<velox::common::Subfield> subfields = {},
-      std::optional<velox::TypePtr> castToType = std::nullopt,
-      SubfieldMapping subfieldMapping = {}) override;
-
-  velox::connector::ConnectorTableHandlePtr createTableHandle(
-      const ConnectorSessionPtr& session,
-      const TableLayout& layout,
-      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
-      velox::core::ExpressionEvaluator& evaluator,
-      std::vector<velox::core::TypedExprPtr> filters,
-      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
-      velox::RowTypePtr dataColumns,
-      std::optional<LookupKeys> lookupKeys) override;
 
   ConnectorWriteHandlePtr beginWrite(
       const ConnectorSessionPtr& session,

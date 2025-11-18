@@ -14,7 +14,7 @@ dt1: promo_revenue
 
 t2: l_partkey, l_extendedprice, l_discount, l_shipdate
   table: lineitem
-  single-column filters: gte(t2.l_shipdate, "1995-09-01") and lt(__cast(t2.l_shipdate), "1995-10-01")
+  single-column filters: gte(t2.l_shipdate, "1995-09-01") and lt(t2.l_shipdate, "1995-10-01")
 
 t3: p_partkey, p_type
   table: part
@@ -29,11 +29,11 @@ Optimized plan:
 Project -> dt1.promo_revenue
     dt1.promo_revenue := divide(multiply(dt1.sum, 100), dt1.sum_0)
   Aggregation -> dt1.sum, dt1.sum_0
-      dt1.sum := sum(dt1.__p53)
-      dt1.sum_0 := sum(dt1.__p51)
-    Project -> dt1.__p53, dt1.__p51
-        dt1.__p53 := __switch(like(t3.p_type, "PROMO%"), multiply(t2.l_extendedprice, minus(1, t2.l_discount)), 0)
-        dt1.__p51 := multiply(t2.l_extendedprice, minus(1, t2.l_discount))
+      dt1.sum := sum(dt1.__p52)
+      dt1.sum_0 := sum(dt1.__p50)
+    Project -> dt1.__p52, dt1.__p50
+        dt1.__p52 := __switch(like(t3.p_type, "PROMO%"), multiply(t2.l_extendedprice, minus(1, t2.l_discount)), 0)
+        dt1.__p50 := multiply(t2.l_extendedprice, minus(1, t2.l_discount))
       Join INNER Hash -> t2.l_extendedprice, t2.l_discount, t3.p_type
           t3.p_partkey = t2.l_partkey
         TableScan -> t3.p_partkey, t3.p_type
@@ -41,17 +41,17 @@ Project -> dt1.promo_revenue
         HashBuild -> t2.l_partkey, t2.l_extendedprice, t2.l_discount
           TableScan -> t2.l_partkey, t2.l_extendedprice, t2.l_discount
             table: lineitem
-            single-column filters: gte(t2.l_shipdate, "1995-09-01") and lt(__cast(t2.l_shipdate), "1995-10-01")
+            single-column filters: gte(t2.l_shipdate, "1995-09-01") and lt(t2.l_shipdate, "1995-10-01")
 
 
 Executable Velox plan:
 
 Fragment 0:  numWorkers=0:
 -- Project[5][expressions: (promo_revenue:DOUBLE, divide(multiply("sum",100),"sum_0"))] -> promo_revenue:DOUBLE
-  -- Aggregation[4][SINGLE sum := sum("dt1.__p53"), sum_0 := sum("dt1.__p51")] -> sum:DOUBLE, sum_0:DOUBLE
-    -- Project[3][expressions: (dt1.__p53:DOUBLE, switch(like("p_type",PROMO%),multiply("l_extendedprice",minus(1,"l_discount")),0)), (dt1.__p51:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> "dt1.__p53":DOUBLE, "dt1.__p51":DOUBLE
+  -- Aggregation[4][SINGLE sum := sum("dt1.__p52"), sum_0 := sum("dt1.__p50")] -> sum:DOUBLE, sum_0:DOUBLE
+    -- Project[3][expressions: (dt1.__p52:DOUBLE, switch(like("p_type",PROMO%),multiply("l_extendedprice",minus(1,"l_discount")),0)), (dt1.__p50:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> "dt1.__p52":DOUBLE, "dt1.__p50":DOUBLE
       -- HashJoin[2][INNER p_partkey=l_partkey] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, p_type:VARCHAR
         -- TableScan[0][table: part, data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>] -> p_partkey:BIGINT, p_type:VARCHAR
-        -- TableScan[1][table: lineitem, range filters: [(l_shipdate, BigintRange: [9374, 9223372036854775807] no nulls)], remaining filter: (lt(cast("l_shipdate" as DATE),1995-10-01)), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_partkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
+        -- TableScan[1][table: lineitem, range filters: [(l_shipdate, BigintRange: [9374, 9403] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_partkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
 
 ___END___

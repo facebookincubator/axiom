@@ -126,10 +126,13 @@ t2:
 The query graph consists of a BaseTable t2 that represents ‘nation’ and a DerivedTable dt1 that represents an aggregation over t2.
 
 ```mermaid
-flowchart LR
-  subgraph dt1
+flowchart TD
+  subgraph dt1["dt1: count"]
+    agg["agg: count() AS count"]:::transparent
     t2["t2 := nation"]
   end
+
+  classDef transparent fill:transparent, stroke-width:0
 ```
 
 A bit more involved query would count the number of African nations by joining nation and region tables.
@@ -156,16 +159,25 @@ t3: r_regionkey, r_name
 The query graph consists of two BaseTables t2 and t3 that represent ‘nation’ and 'region' tables, and a DerivedTable dt1 that represents an aggregation over join of t2 and t3. BaseTable t3 represents table 'region' with a filter: r_name = 'AFRICA'.
 
 ```mermaid
-flowchart LR
-  subgraph dt1
-    direction LR
-    t2["t2 := nation"]
-    t3["t3 := region | eq(t3.r_name, 'AFRICA')"]
-    t2 <-->|t2.n_regionkey = t3.r_regionkey| t3
+flowchart TD
+  subgraph dt1["dt1: count"]
+    direction TB
+    agg["agg: count() AS count"]:::transparent
+    subgraph y[" "]
+      direction LR
+      t2["t2 := nation"]
+      t3["t3 := region | eq(t3.r_name, 'AFRICA')"]
+      t2 <-->|t2.n_regionkey = t3.r_regionkey| t3
+    end
   end
+
+  agg e1@--- y
+
+  classDef transparent fill:transparent, stroke-width:0
+  class e1 transparent
 ```
 
-Each object in a query graph has a unique ID and type. These are stores in PlanObject base class. IDs are unique across all objects. IDs are sequential numbers assigned at object's creation time using a single counter stored in QueryGraphContext. An ID can be used to lookup an object from the context.
+Each object in a query graph has a unique ID and type. These are stored in PlanObject base class. IDs are unique across all objects. IDs are sequential numbers assigned at object's creation time using a single counter stored in QueryGraphContext. An ID can be used to lookup an object from the context.
 
 ```c++
 struct BaseTable : public PlanObject {
@@ -194,7 +206,7 @@ class QueryGraphContext {
   }
 ```
 
-Graph graph object types are described by PlanType enum. There are 2 classes of objects: expressions and plan nodes.
+Query graph object types are described by PlanType enum. There are 2 categories of objects: expressions and plan nodes.
 
 ```c++
 enum class PlanType : uint32_t {
@@ -211,16 +223,21 @@ enum class PlanType : uint32_t {
   kUnnestTableNode,
   kDerivedTableNode,
   kAggregationNode,
-  kProjectNode,
-  kFilterNode,
-  kJoinNode,
-  kOrderByNode,
-  kLimitNode,
   kWriteNode,
 };
 ```
 
-ToGraph::makeQueryGraph API is used to convert a Logical Plan to a Query Graph.
+ToGraph::makeQueryGraph API converts a Logical Plan to a Query Graph. The conversion is done in 2 steps: (1) mark subfields; (2) convert plan nodes to derived tables connected with join edges.
+
+Each logical plan node produces one or more output columns. Some of these columns are used downstream, but some are not. Mark subfields is a pre-processing step that identifies used output columns. The results are stored in a map keyed by logical plan node pointer. The value is a set of indices of used output columns. For complex types columns (maps, arrays and structs), mark subfields step identifies subfields being used, i.e. keys of a map, indices of an array, fields of a struct. In addition, mark subfields step identifies columns and subfields that are needed to decide the final set of rows. These are referred to as control columns. Columns that do not influence the set of output rows, but only contribute to the content of the rows are referred to as payload. A single column or a subfield can be control and payload at the same time.
+
+Control columns include columns used in filter expressions, join conditions, group by keys. Columns used in order by or project are payload.
+
+For example, in the following query, 'c' is control column, while 'a' and 'b' are payload columns.
+
+> SELECT a, b FROM t WHERE c > 0
+
+Tracking control and payload columns separately is useful for enabling late materialization. When payload columns are large and need to be shuffled before being dropped by a selective join, it might be more efficient to perform the shuffle and join using only control columns and a row ID column, then load payload columns for the passing rows using row IDs.
 
 ## Set Operations
 

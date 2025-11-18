@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "axiom/sql/presto/PrestoParser.h"
@@ -50,11 +51,21 @@ class HiveQueriesTestBase : public test::QueryTestBase {
     return *prestoParser_;
   }
 
+  velox::connector::Connector& hiveConnector() const {
+    return *connector_;
+  }
+
+  connector::hive::LocalHiveConnectorMetadata& hiveMetadata() const {
+    return *metadata_;
+  }
+
  private:
   inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
       gTempDirectory;
 
   std::unique_ptr<::axiom::sql::presto::PrestoParser> prestoParser_;
+  std::shared_ptr<velox::connector::Connector> connector_;
+  connector::hive::LocalHiveConnectorMetadata* metadata_;
 };
 
 } // namespace facebook::axiom::optimizer::test

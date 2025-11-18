@@ -21,7 +21,7 @@ t2: o_orderkey, o_orderpriority
 
 t3: l_orderkey, l_shipdate, l_commitdate, l_receiptdate, l_shipmode
   table: lineitem
-  single-column filters: __in(t3.l_shipmode, "MAIL", "SHIP") and gte(t3.l_receiptdate, "1994-01-01") and lt(__cast(t3.l_receiptdate), "1995-01-01")
+  single-column filters: __in(t3.l_shipmode, "MAIL", "SHIP") and gte(t3.l_receiptdate, "1994-01-01") and lt(t3.l_receiptdate, "1995-01-01")
   multi-column filters: lt(t3.l_commitdate, t3.l_receiptdate) and lt(t3.l_shipdate, t3.l_commitdate)
 
 
@@ -37,12 +37,12 @@ Project (redundant) -> dt1.l_shipmode, dt1.high_line_count, dt1.low_line_count
     dt1.low_line_count := dt1.low_line_count
   OrderBy -> t3.l_shipmode, dt1.high_line_count, dt1.low_line_count
     Aggregation (t3.l_shipmode) -> t3.l_shipmode, dt1.high_line_count, dt1.low_line_count
-        dt1.high_line_count := sum(dt1.__p58)
-        dt1.low_line_count := sum(dt1.__p65)
-      Project -> t3.l_shipmode, dt1.__p58, dt1.__p65
+        dt1.high_line_count := sum(dt1.__p57)
+        dt1.low_line_count := sum(dt1.__p64)
+      Project -> t3.l_shipmode, dt1.__p57, dt1.__p64
           t3.l_shipmode := t3.l_shipmode
-          dt1.__p58 := __switch(__or(eq(t2.o_orderpriority, "1-URGENT"), eq(t2.o_orderpriority, "2-HIGH")), 1, 0)
-          dt1.__p65 := __switch(__and(neq(t2.o_orderpriority, "1-URGENT"), neq(t2.o_orderpriority, "2-HIGH")), 1, 0)
+          dt1.__p57 := __switch(__or(eq(t2.o_orderpriority, "1-URGENT"), eq(t2.o_orderpriority, "2-HIGH")), 1, 0)
+          dt1.__p64 := __switch(__and(neq(t2.o_orderpriority, "1-URGENT"), neq(t2.o_orderpriority, "2-HIGH")), 1, 0)
         Join INNER Hash -> t2.o_orderpriority, t3.l_shipmode
             t2.o_orderkey = t3.l_orderkey
           TableScan -> t2.o_orderkey, t2.o_orderpriority
@@ -50,7 +50,7 @@ Project (redundant) -> dt1.l_shipmode, dt1.high_line_count, dt1.low_line_count
           HashBuild -> t3.l_orderkey, t3.l_shipmode
             TableScan -> t3.l_orderkey, t3.l_shipmode
               table: lineitem
-              single-column filters: __in(t3.l_shipmode, "MAIL", "SHIP") and gte(t3.l_receiptdate, "1994-01-01") and lt(__cast(t3.l_receiptdate), "1995-01-01")
+              single-column filters: __in(t3.l_shipmode, "MAIL", "SHIP") and gte(t3.l_receiptdate, "1994-01-01") and lt(t3.l_receiptdate, "1995-01-01")
               multi-column filters: lt(t3.l_commitdate, t3.l_receiptdate) and lt(t3.l_shipdate, t3.l_commitdate)
 
 
@@ -58,10 +58,10 @@ Executable Velox plan:
 
 Fragment 0:  numWorkers=0:
 -- OrderBy[5][l_shipmode ASC NULLS LAST] -> l_shipmode:VARCHAR, high_line_count:BIGINT, low_line_count:BIGINT
-  -- Aggregation[4][SINGLE [l_shipmode] high_line_count := sum("dt1.__p58"), low_line_count := sum("dt1.__p65")] -> l_shipmode:VARCHAR, high_line_count:BIGINT, low_line_count:BIGINT
-    -- Project[3][expressions: (l_shipmode:VARCHAR, "l_shipmode"), (dt1.__p58:BIGINT, switch(or(eq("o_orderpriority",1-URGENT),eq("o_orderpriority",2-HIGH)),1,0)), (dt1.__p65:BIGINT, switch(and(neq("o_orderpriority",1-URGENT),neq("o_orderpriority",2-HIGH)),1,0))] -> l_shipmode:VARCHAR, "dt1.__p58":BIGINT, "dt1.__p65":BIGINT
+  -- Aggregation[4][SINGLE [l_shipmode] high_line_count := sum("dt1.__p57"), low_line_count := sum("dt1.__p64")] -> l_shipmode:VARCHAR, high_line_count:BIGINT, low_line_count:BIGINT
+    -- Project[3][expressions: (l_shipmode:VARCHAR, "l_shipmode"), (dt1.__p57:BIGINT, switch(or(eq("o_orderpriority",1-URGENT),eq("o_orderpriority",2-HIGH)),1,0)), (dt1.__p64:BIGINT, switch(and(neq("o_orderpriority",1-URGENT),neq("o_orderpriority",2-HIGH)),1,0))] -> l_shipmode:VARCHAR, "dt1.__p57":BIGINT, "dt1.__p64":BIGINT
       -- HashJoin[2][INNER o_orderkey=l_orderkey] -> o_orderpriority:VARCHAR, l_shipmode:VARCHAR
         -- TableScan[0][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_orderpriority:VARCHAR
-        -- TableScan[1][table: lineitem, range filters: [(l_receiptdate, BigintRange: [8766, 9223372036854775807] no nulls), (l_shipmode, Filter(BytesValues, deterministic, null not allowed))], remaining filter: (and(lt(cast("l_receiptdate" as DATE),1995-01-01),lt("l_commitdate","l_receiptdate"),lt("l_shipdate","l_commitdate"))), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey:BIGINT, l_shipmode:VARCHAR
+        -- TableScan[1][table: lineitem, range filters: [(l_receiptdate, BigintRange: [8766, 9130] no nulls), (l_shipmode, Filter(BytesValues, deterministic, null not allowed))], remaining filter: (and(lt("l_commitdate","l_receiptdate"),lt("l_shipdate","l_commitdate"))), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipmode, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT, l_shipmode:VARCHAR
 
 ___END___

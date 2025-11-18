@@ -19,7 +19,7 @@ dt1: c_count
   joins:
     t2 LEFT t3 ON t2.c_custkey = t3.o_custkey FILTER not(like(t3.o_comment, "%special%requests%"))
   syntactic join order: 9, 20
-  aggregates: count(t3.o_orderkey) AS count
+  aggregates: count(dt1.o_orderkey) AS count
   grouping keys: t2.c_custkey
 
 t2: c_custkey
@@ -31,7 +31,7 @@ t3: o_orderkey, o_custkey, o_comment
 
 Optimized plan (oneline):
 
-(customer LEFT orders)
+(orders RIGHT customer)
 
 Optimized plan:
 
@@ -44,15 +44,18 @@ Project (redundant) -> dt4.c_count, dt4.custdist
       Project -> dt1.c_count
           dt1.c_count := dt1.count
         Aggregation (t2.c_custkey) -> t2.c_custkey, dt1.count
-            dt1.count := count(t3.o_orderkey)
-          Join LEFT Hash -> t2.c_custkey, t3.o_orderkey
-              t2.c_custkey = t3.o_custkey
-              not(like(t3.o_comment, "%special%requests%"))
-            TableScan -> t2.c_custkey
-              table: customer
-            HashBuild -> t3.o_orderkey, t3.o_custkey, t3.o_comment
+            dt1.count := count(dt1.o_orderkey)
+          Project (redundant) -> t2.c_custkey, dt1.o_orderkey
+              t2.c_custkey := t2.c_custkey
+              dt1.o_orderkey := t3.o_orderkey
+            Join RIGHT Hash -> t2.c_custkey, t3.o_orderkey
+                t3.o_custkey = t2.c_custkey
+                not(like(t3.o_comment, "%special%requests%"))
               TableScan -> t3.o_orderkey, t3.o_custkey, t3.o_comment
                 table: orders
+              HashBuild -> t2.c_custkey
+                TableScan -> t2.c_custkey
+                  table: customer
 
 
 Executable Velox plan:
@@ -62,8 +65,8 @@ Fragment 0:  numWorkers=0:
   -- Aggregation[5][SINGLE [c_count] custdist := count()] -> c_count:BIGINT, custdist:BIGINT
     -- Project[4][expressions: (c_count:BIGINT, "count")] -> c_count:BIGINT
       -- Aggregation[3][SINGLE [c_custkey] count := count("o_orderkey")] -> c_custkey:BIGINT, count:BIGINT
-        -- HashJoin[2][LEFT c_custkey=o_custkey, filter: not(like("o_comment",%special%requests%))] -> c_custkey:BIGINT, o_orderkey:BIGINT
-          -- TableScan[0][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT
-          -- TableScan[1][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_comment:VARCHAR
+        -- HashJoin[2][RIGHT o_custkey=c_custkey, filter: not(like("o_comment",%special%requests%))] -> c_custkey:BIGINT, o_orderkey:BIGINT
+          -- TableScan[0][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_comment:VARCHAR
+          -- TableScan[1][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT
 
 ___END___

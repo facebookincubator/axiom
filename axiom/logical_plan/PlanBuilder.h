@@ -343,6 +343,16 @@ class PlanBuilder {
       std::string tableName,
       WriteKind kind,
       std::vector<std::string> columnNames,
+      const std::vector<ExprApi>& columnExprs,
+      folly::F14FastMap<std::string, std::string> options = {});
+
+  // A convenience method taking std::initializer_list<std::string> for
+  // 'columnExprs'.
+  PlanBuilder& tableWrite(
+      std::string connectorId,
+      std::string tableName,
+      WriteKind kind,
+      std::vector<std::string> columnNames,
       std::initializer_list<std::string> columnExprs,
       folly::F14FastMap<std::string, std::string> options = {}) {
     return tableWrite(
@@ -354,6 +364,7 @@ class PlanBuilder {
         std::move(options));
   }
 
+  // A convenience method taking std::vector<std::string> for 'columnExprs'.
   PlanBuilder& tableWrite(
       std::string connectorId,
       std::string tableName,
@@ -370,12 +381,30 @@ class PlanBuilder {
         std::move(options));
   }
 
+  // A shortcut for calling tableWrite with the default connector ID.
   PlanBuilder& tableWrite(
-      std::string connectorId,
       std::string tableName,
       WriteKind kind,
       std::vector<std::string> columnNames,
-      const std::vector<ExprApi>& columnExprs,
+      const std::initializer_list<std::string>& columnExprs,
+      folly::F14FastMap<std::string, std::string> options = {}) {
+    VELOX_USER_CHECK(defaultConnectorId_.has_value());
+    return tableWrite(
+        defaultConnectorId_.value(),
+        std::move(tableName),
+        kind,
+        std::move(columnNames),
+        std::vector<std::string>{columnExprs},
+        std::move(options));
+  }
+
+  /// A shortcut for calling tableWrite with the default connector ID and
+  /// 'columnExprs' that are simple references to the input columns. The number
+  /// of 'columnNames' must match the number of input columns.
+  PlanBuilder& tableWrite(
+      std::string tableName,
+      WriteKind kind,
+      std::vector<std::string> columnNames,
       folly::F14FastMap<std::string, std::string> options = {});
 
   PlanBuilder& as(const std::string& alias);
@@ -402,8 +431,8 @@ class PlanBuilder {
   /// assigns them unique names before returning.
   std::vector<std::string> findOrAssignOutputNames() const;
 
-  /// Returns the name of the output column at the given index. If the column is
-  /// anonymous, assigns unique name before returning.
+  /// Returns the name of the output column at the given index. If the column
+  /// is anonymous, assigns unique name before returning.
   std::string findOrAssignOutputNameAt(size_t index) const;
 
   /// @param useIds Boolean indicating whether to use user-specified names or

@@ -214,6 +214,69 @@ class PartitionType {
   }
 };
 
+// TODO Move to velox/type/Subfield.h
+using SubfieldPtr = std::shared_ptr<const velox::common::Subfield>;
+
+struct SubfieldPtrHasher {
+  size_t operator()(const SubfieldPtr& subfield) const {
+    return subfield->hash();
+  }
+};
+
+struct SubfieldPtrComparer {
+  bool operator()(const SubfieldPtr& lhs, const SubfieldPtr& rhs) const {
+    return *lhs == *rhs;
+  }
+};
+
+/// Subfield and default value for use in pushing down a complex type cast into
+/// a ColumnHandle.
+struct TargetSubfield {
+  SubfieldPtr target;
+  velox::Variant defaultValue;
+};
+
+using SubfieldMapping = folly::F14FastMap<
+    SubfieldPtr,
+    TargetSubfield,
+    SubfieldPtrHasher,
+    SubfieldPtrComparer>;
+
+/// A set of lookup keys. Lookup keys can be specified for supporting
+/// connector types when creating a ConnectorTableHandle. The corresponding
+/// DataSource will then be used with a lookup API. The keys should match a
+/// prefix of lookupKeys() of the TableLayout when making a
+/// ConnectorTableHandle. The leading keys are compared with equality. A
+/// trailing key part may be compared with range constraints. The flags have the
+/// same meaning as in common::BigintRange and related.
+struct LookupKeys {
+  /// Columns with equality constraints. Must be a prefix of the lookupKeys() in
+  /// TableLayout.
+  std::vector<std::string> equalityColumns;
+
+  /// Column on which a range condition is applied in lookup. Must be the
+  /// immediately following key in lookupKeys() order after the last column in
+  /// 'equalities'. If 'equalities' is empty, 'rangeColumn' must be the first in
+  /// lookupKeys() order.
+  std::optional<std::string> rangeColumn;
+
+  // True if the lookup has no lower bound for 'rangeColumn'.
+  bool lowerUnbounded{true};
+
+  /// true if the lookup specifies no upper bound for 'rangeColumn'.
+  bool upperUnbounded{true};
+
+  /// True if rangeColumn > range lookup lower bound.
+  bool lowerExclusive{false};
+
+  /// True if rangeColum < upper range lookup value.
+  bool upperExclusive{false};
+
+  /// True if matches for a range lookup should be returned in ascending order
+  /// of the range column. Some lookup sources may support descending order.
+  bool isAscending{true};
+};
+
 /// Represents a physical manifestation of a table. There is at least
 /// one layout but for tables that have multiple sort orders, partitionings,
 /// indices, column groups, etc. there is a separate layout for each. The layout
@@ -244,6 +307,10 @@ class TableLayout {
   /// operations against this layout.
   velox::connector::Connector* connector() const {
     return connector_;
+  }
+
+  const std::string& connectorId() const {
+    return connector_->connectorId();
   }
 
   /// The containing Table.
@@ -330,6 +397,43 @@ class TableLayout {
   /// Return a column with the matching name. Returns nullptr if not found.
   const Column* findColumn(std::string_view name) const;
 
+  /// Creates a ColumnHandle for 'columnName'. If the type is a complex type,
+  /// 'subfields' specifies which subfields need to be retrievd. Empty
+  /// 'subfields' means all are returned. If 'castToType' is present, this can
+  /// be a type that the column can be cast to. The set of supported casts
+  /// depends on the connector. In specific, a map may be cast to a struct. For
+  /// casts between complex types, 'subfieldMapping' maps from the subfield in
+  /// the data to the subfield in 'castToType'. The defaultValue is produced if
+  /// the key Subfield does not occur in the data. Subfields of 'castToType'
+  /// that are not covered by 'subfieldMapping' are set to null if 'castToType'
+  /// is a struct and are absent if 'castToType' is a map. See implementing
+  /// Connector for exact set of cast and subfield semantics.
+  virtual velox::connector::ColumnHandlePtr createColumnHandle(
+      const ConnectorSessionPtr& session,
+      const std::string& columnName,
+      std::vector<velox::common::Subfield> subfields = {},
+      std::optional<velox::TypePtr> castToType = std::nullopt,
+      SubfieldMapping subfieldMapping = {}) const = 0;
+
+  /// Returns a ConnectorTableHandle for use in createDataSource. 'filters' are
+  /// pushed down into the DataSource. 'filters' are expressions involving
+  /// literals and columns of 'layout'. The filters not supported by the target
+  /// system are returned in 'rejectedFilters'. 'rejectedFilters' will
+  /// have to be applied to the data returned by the DataSource.
+  /// 'rejectedFilters' may or may not be a subset of 'filters' or
+  /// subexpressions thereof. If 'lookupKeys' is present, these must match the
+  /// lookupKeys() in 'layout'. If 'dataColumns' is given, it must have all the
+  /// existing columns and may additionally specify casting from maps to structs
+  /// by giving a struct in the place of a map.
+  virtual velox::connector::ConnectorTableHandlePtr createTableHandle(
+      const ConnectorSessionPtr& session,
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
+      velox::core::ExpressionEvaluator& evaluator,
+      std::vector<velox::core::TypedExprPtr> filters,
+      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
+      velox::RowTypePtr dataColumns = nullptr,
+      std::optional<LookupKeys> lookupKeys = std::nullopt) const = 0;
+
  private:
   const std::string name_;
   const Table* table_;
@@ -409,69 +513,6 @@ class Table : public std::enable_shared_from_this<Table> {
 };
 
 using TablePtr = std::shared_ptr<const Table>;
-
-// TODO Move to velox/type/Subfield.h
-using SubfieldPtr = std::shared_ptr<const velox::common::Subfield>;
-
-struct SubfieldPtrHasher {
-  size_t operator()(const SubfieldPtr& subfield) const {
-    return subfield->hash();
-  }
-};
-
-struct SubfieldPtrComparer {
-  bool operator()(const SubfieldPtr& lhs, const SubfieldPtr& rhs) const {
-    return *lhs == *rhs;
-  }
-};
-
-/// Subfield and default value for use in pushing down a complex type cast into
-/// a ColumnHandle.
-struct TargetSubfield {
-  SubfieldPtr target;
-  velox::Variant defaultValue;
-};
-
-using SubfieldMapping = folly::F14FastMap<
-    SubfieldPtr,
-    TargetSubfield,
-    SubfieldPtrHasher,
-    SubfieldPtrComparer>;
-
-/// A set of lookup keys. Lookup keys can be specified for supporting
-/// connector types when creating a ConnectorTableHandle. The corresponding
-/// DataSource will then be used with a lookup API. The keys should match a
-/// prefix of lookupKeys() of the TableLayout when making a
-/// ConnectorTableHandle. The leading keys are compared with equality. A
-/// trailing key part may be compared with range constraints. The flags have the
-/// same meaning as in common::BigintRange and related.
-struct LookupKeys {
-  /// Columns with equality constraints. Must be a prefix of the lookupKeys() in
-  /// TableLayout.
-  std::vector<std::string> equalityColumns;
-
-  /// Column on which a range condition is applied in lookup. Must be the
-  /// immediately following key in lookupKeys() order after the last column in
-  /// 'equalities'. If 'equalities' is empty, 'rangeColumn' must be the first in
-  /// lookupKeys() order.
-  std::optional<std::string> rangeColumn;
-
-  // True if the lookup has no lower bound for 'rangeColumn'.
-  bool lowerUnbounded{true};
-
-  /// true if the lookup specifies no upper bound for 'rangeColumn'.
-  bool upperUnbounded{true};
-
-  /// True if rangeColumn > range lookup lower bound.
-  bool lowerExclusive{false};
-
-  /// True if rangeColum < upper range lookup value.
-  bool upperExclusive{false};
-
-  /// True if matches for a range lookup should be returned in ascending order
-  /// of the range column. Some lookup sources may support descending order.
-  bool isAscending{true};
-};
 
 /// Contains the information for an in-progress write operation. This may
 /// include insert, update, or delete of an existing table, or insertion into a
@@ -555,50 +596,6 @@ class ConnectorMetadata {
   static void unregisterMetadata(std::string_view connectorId);
 
   virtual ~ConnectorMetadata() = default;
-
-  /// Post-construction initialization. This is called after adding
-  /// the ConnectorMetadata to the connector so that Connector methods
-  /// that refer to metadata are available.
-  virtual void initialize() = 0;
-
-  /// Creates a ColumnHandle for 'columnName'. If the type is a complex type,
-  /// 'subfields' specifies which subfields need to be retrievd. Empty
-  /// 'subfields' means all are returned. If 'castToType' is present, this can
-  /// be a type that the column can be cast to. The set of supported casts
-  /// depends on the connector. In specific, a map may be cast to a struct. For
-  /// casts between complex types, 'subfieldMapping' maps from the subfield in
-  /// the data to the subfield in 'castToType'. The defaultValue is produced if
-  /// the key Subfield does not occur in the data. Subfields of 'castToType'
-  /// that are not covered by 'subfieldMapping' are set to null if 'castToType'
-  /// is a struct and are absent if 'castToType' is a map. See implementing
-  /// Connector for exact set of cast and subfield semantics.
-  virtual velox::connector::ColumnHandlePtr createColumnHandle(
-      const ConnectorSessionPtr& session,
-      const TableLayout& layoutData,
-      const std::string& columnName,
-      std::vector<velox::common::Subfield> subfields = {},
-      std::optional<velox::TypePtr> castToType = std::nullopt,
-      SubfieldMapping subfieldMapping = {}) = 0;
-
-  /// Returns a ConnectorTableHandle for use in createDataSource. 'filters' are
-  /// pushed down into the DataSource. 'filters' are expressions involving
-  /// literals and columns of 'layout'. The filters not supported by the target
-  /// system are returned in 'rejectedFilters'. 'rejectedFilters' will
-  /// have to be applied to the data returned by the DataSource.
-  /// 'rejectedFilters' may or may not be a subset of 'filters' or
-  /// subexpressions thereof. If 'lookupKeys' is present, these must match the
-  /// lookupKeys() in 'layout'. If 'dataColumns' is given, it must have all the
-  /// existing columns and may additionally specify casting from maps to structs
-  /// by giving a struct in the place of a map.
-  virtual velox::connector::ConnectorTableHandlePtr createTableHandle(
-      const ConnectorSessionPtr& session,
-      const TableLayout& layout,
-      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
-      velox::core::ExpressionEvaluator& evaluator,
-      std::vector<velox::core::TypedExprPtr> filters,
-      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
-      velox::RowTypePtr dataColumns = nullptr,
-      std::optional<LookupKeys> = std::nullopt) = 0;
 
   /// Return a ConnectorTablePtr given the table name. Table name is provided
   /// without the connector ID prefix for the connector. The returned Table

@@ -18,7 +18,7 @@ dt1: o_orderpriority, order_count
 
 t2: o_orderkey, o_orderdate, o_orderpriority
   table: orders
-  single-column filters: gte(t2.o_orderdate, "1993-07-01") and lt(__cast(t2.o_orderdate), "1993-10-01")
+  single-column filters: gte(t2.o_orderdate, "1993-07-01") and lt(t2.o_orderdate, "1993-10-01")
 
 dt3: l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment
   output:
@@ -69,7 +69,7 @@ Project (redundant) -> dt1.o_orderpriority, dt1.order_count
           HashBuild -> t2.o_orderkey, t2.o_orderpriority
             TableScan -> t2.o_orderkey, t2.o_orderpriority
               table: orders
-              single-column filters: gte(t2.o_orderdate, "1993-07-01") and lt(__cast(t2.o_orderdate), "1993-10-01")
+              single-column filters: gte(t2.o_orderdate, "1993-07-01") and lt(t2.o_orderdate, "1993-10-01")
 
 
 Executable Velox plan:
@@ -79,7 +79,7 @@ Fragment 0:  numWorkers=0:
   -- Aggregation[4][SINGLE [o_orderpriority] order_count := count()] -> o_orderpriority:VARCHAR, order_count:BIGINT
     -- Filter[0][expression: "dt1.__mark0"] -> o_orderpriority:VARCHAR, "dt1.__mark0":BOOLEAN
       -- HashJoin[3][RIGHT SEMI (PROJECT) l_orderkey=o_orderkey] -> o_orderpriority:VARCHAR, "dt1.__mark0":BOOLEAN
-        -- TableScan[1][table: lineitem, remaining filter: (lt("l_commitdate","l_receiptdate")), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey:BIGINT
-        -- TableScan[2][table: orders, range filters: [(o_orderdate, BigintRange: [8582, 9223372036854775807] no nulls)], remaining filter: (lt(cast("o_orderdate" as DATE),1993-10-01)), data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_orderpriority:VARCHAR
+        -- TableScan[1][table: lineitem, remaining filter: (lt("l_commitdate","l_receiptdate")), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT
+        -- TableScan[2][table: orders, range filters: [(o_orderdate, BigintRange: [8582, 8673] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> o_orderkey:BIGINT, o_orderpriority:VARCHAR
 
 ___END___

@@ -16,11 +16,11 @@
 
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
-#include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
+#include "velox/type/tests/SubfieldFiltersBuilder.h"
 
 DEFINE_int32(num_repeats, 1, "Number of repeats for optimization timing");
 
@@ -118,6 +118,10 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
     checkResults(sql, referencePlan);
   }
 
+  velox::core::PlanNodePtr planTpch(int32_t query) {
+    return toSingleNodePlan(parseTpchSql(query));
+  }
+
   std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
 };
 
@@ -144,409 +148,278 @@ TEST_F(TpchPlanTest, stats) {
 }
 
 TEST_F(TpchPlanTest, q01) {
-  auto logicalPlan =
-      lp::PlanBuilder()
-          .tableScan(exec::test::kHiveConnectorId, "lineitem")
-          .filter("l_shipdate < '1998-09-03'::date")
-          .aggregate(
-              {"l_returnflag", "l_linestatus"},
-              {
-                  "sum(l_quantity) as sum_qty",
-                  "sum(l_extendedprice) as sum_base_price",
-                  "sum(l_extendedprice * (1.0 - l_discount)) as sum_disc_price",
-                  "sum(l_extendedprice * (1.0 - l_discount) * (1.0 + l_tax)) as sum_charge",
-                  "avg(l_quantity) as avg_qty",
-                  "avg(l_extendedprice) as avg_price",
-                  "avg(l_discount) as avg_disc",
-                  "count(*) as count_order",
-              })
-          .orderBy({"l_returnflag", "l_linestatus"})
+  checkTpchSql(1);
+
+  // The query is a simple scan of lineitem with a very low cardinality group
+  // by. All the work is in the table scan (65%) and partial aggregation (30%).
+
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .hiveScan(
+              "lineitem", test::lte("l_shipdate", DATE()->toDays("1998-09-02")))
+          .project()
+          .aggregation()
+          .orderBy()
           .build();
 
-  checkTpch(1, logicalPlan);
-
-  checkTpchSql(1);
+  AXIOM_ASSERT_PLAN(planTpch(1), matcher);
 }
 
 TEST_F(TpchPlanTest, q02) {
   checkTpchSql(2);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q03) {
-  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .from({"customer", "orders", "lineitem"})
-          .filter(
-              "c_mktsegment = 'BUILDING' "
-              "and c_custkey = o_custkey "
-              "and l_orderkey = o_orderkey "
-              "and o_orderdate < '1995-03-15'::date "
-              "and l_shipdate > '1995-03-15'::date")
-          .aggregate(
-              {"l_orderkey", "o_orderdate", "o_shippriority"},
-              {"sum(l_extendedprice * (1.0 - l_discount)) as revenue"})
-          .project({"l_orderkey", "revenue", "o_orderdate", "o_shippriority"})
-          .orderBy({"revenue desc", "o_orderdate"})
-          .limit(10)
+  checkTpchSql(3);
+
+  // The query is straightforward to do by hash. We select 1/5 of customer and
+  // 1/2 of orders. We first join orders x customer, build on that and then
+  // probe on lineitem. There is anti-correlation between the date filters on
+  // lineitem and orders but that does not affect the best plan choice.
+
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
+
+  auto matcher =
+      startMatcher("lineitem")
+          .hashJoin(
+              startMatcher("orders")
+                  .hashJoin(
+                      startMatcher("customer").build(), core::JoinType::kInner)
+                  .build(),
+              core::JoinType::kInner)
+          .project()
+          .aggregation()
+          .topN()
+          .project()
           .build();
 
-  checkTpch(3, logicalPlan);
-
-  checkTpchSql(3);
+  AXIOM_ASSERT_PLAN(planTpch(3), matcher);
 }
 
 TEST_F(TpchPlanTest, q04) {
   checkTpchSql(4);
+
+  // The trick in q4 is using a right hand semijoin to do the exists. If we
+  // probed with orders and built on lineitem, we would get a much larger build
+  // side. But using the right hand semijoin, we get to build on the smaller
+  // side. If we had shared key order between lineitem and orders we could look
+  // at other plans but in the hash based plan space we have the best outcome.
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .hiveScan("lineitem", {}, "l_commitdate < l_receiptdate")
+                     .hashJoin(
+                         core::PlanMatcherBuilder()
+                             .hiveScan(
+                                 "orders",
+                                 test::between(
+                                     "o_orderdate",
+                                     DATE()->toDays("1993-07-01"),
+                                     DATE()->toDays("1993-09-30")))
+                             .build(),
+                         core::JoinType::kRightSemiProject)
+                     .filter()
+                     .aggregation()
+                     .orderBy()
+                     .build();
+
+  AXIOM_ASSERT_PLAN(planTpch(4), matcher);
 }
 
 TEST_F(TpchPlanTest, q05) {
-  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .from({
-              "customer",
-              "orders",
-              "lineitem",
-              "supplier",
-              "nation",
-              "region",
-          })
-          .filter(
-              "c_custkey = o_custkey "
-              "and l_orderkey = o_orderkey "
-              "and l_suppkey = s_suppkey "
-              "and c_nationkey = s_nationkey "
-              "and s_nationkey = n_nationkey "
-              "and n_regionkey = r_regionkey "
-              "and r_name = 'ASIA' "
-              "and o_orderdate >= '1994-01-01'::date "
-              "and o_orderdate < '1994-12-31'::date")
-          .aggregate(
-              {"n_name"},
-              {"sum(l_extendedprice * (1.0 - l_discount)) as revenue"})
-          .orderBy({"revenue desc"})
-          .build();
-
-  checkTpch(5, logicalPlan);
-
   checkTpchSql(5);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q06) {
-  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .tableScan("lineitem")
-          .filter(
-              "l_shipdate >= '1994-01-01'::date and l_shipdate <= '1994-12-31'::date "
-              "and l_discount between 0.05 and 0.07 and l_quantity < 24.0")
-          .aggregate({}, {"sum(l_extendedprice * l_discount) as revenue"})
+  checkTpchSql(6);
+
+  // We have a single scan, so there are no query optimization choices here.
+
+  auto subfieldFilters =
+      velox::common::test::SubfieldFiltersBuilder()
+          .add(
+              "l_shipdate",
+              velox::exec::between(
+                  DATE()->toDays("1994-01-01"), DATE()->toDays("1994-12-31")))
+          .add("l_discount", velox::exec::betweenDouble(0.05, 0.07))
+          .add("l_quantity", velox::exec::lessThanDouble(24))
           .build();
 
-  checkTpch(6, logicalPlan);
+  auto matcher = core::PlanMatcherBuilder()
+                     .hiveScan("lineitem", std::move(subfieldFilters))
+                     .project()
+                     .aggregation()
+                     .build();
 
-  checkTpchSql(6);
+  AXIOM_ASSERT_PLAN(planTpch(6), matcher);
 }
 
 TEST_F(TpchPlanTest, q07) {
-  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .from({"supplier", "lineitem", "orders", "customer", "nation"})
-          // TODO Allow to use table aliases in 'from'.
-          .crossJoin(
-              lp::PlanBuilder(context)
-                  .from({"nation"})
-                  .project(
-                      {"n_nationkey as n2_nationkey", "n_name as n2_name"}))
-          .filter(
-              "s_suppkey = l_suppkey "
-              "and o_orderkey = l_orderkey"
-              " and c_custkey = o_custkey "
-              "and s_nationkey = n_nationkey "
-              "and c_nationkey = n2_nationkey "
-              "and ((n_name = 'FRANCE' and n2_name = 'GERMANY') or (n_name = 'GERMANY' and n2_name = 'FRANCE')) "
-              "and l_shipdate between '1995-01-01'::date and '1996-12-31'::date")
-          .project({
-              "n_name as supp_nation",
-              "n2_name as cust_nation",
-              "year(l_shipdate) as l_year",
-              "l_extendedprice * (1.0 - l_discount) as volume",
-          })
-          .aggregate(
-              {"supp_nation", "cust_nation", "l_year"},
-              {"sum(volume) as revenue"})
-          .orderBy({"supp_nation", "cust_nation", "l_year"})
-          .build();
-
-  checkTpch(7, logicalPlan);
-
   checkTpchSql(7);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q08) {
-  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .from(
-              {"part",
-               "supplier",
-               "lineitem",
-               "orders",
-               "customer",
-               "nation",
-               "region"})
-          // TODO Allow to use table aliases in 'from'.
-          .crossJoin(
-              lp::PlanBuilder(context)
-                  .from({"nation"})
-                  .project(
-                      {"n_nationkey as n2_nationkey", "n_name as n2_name"}))
-          .filter(
-              "p_partkey = l_partkey "
-              "and s_suppkey = l_suppkey "
-              "and l_orderkey = o_orderkey "
-              "and o_custkey = c_custkey "
-              "and c_nationkey = n_nationkey "
-              "and n_regionkey = r_regionkey "
-              "and r_name = 'AMERICA' "
-              "and s_nationkey = n2_nationkey "
-              "and o_orderdate between '1995-01-01'::date and '1996-12-31'::date "
-              "and p_type = 'ECONOMY ANODIZED STEEL'")
-          .project({
-              "year(o_orderdate) as o_year",
-              "l_extendedprice * (1.0 - l_discount) as volume",
-              "n2_name as nation",
-          })
-          .aggregate(
-              {"o_year"},
-              {"sum(if(nation = 'BRAZIL', volume, 0.0)) as brazil",
-               "sum(volume) as total"})
-          .project({"o_year", "brazil / total as mkt_share"})
-          .orderBy({"o_year"})
-          .build();
-
-  checkTpch(8, logicalPlan);
-
   checkTpchSql(8);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q09) {
-  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .from(
-              {"part", "supplier", "lineitem", "partsupp", "orders", "nation"})
-          .filter(
-              "s_suppkey = l_suppkey "
-              "and ps_suppkey = l_suppkey "
-              "and ps_partkey = l_partkey "
-              "and p_partkey = l_partkey "
-              "and o_orderkey = l_orderkey "
-              "and s_nationkey = n_nationkey "
-              "and p_name like '%green%'")
-          .project({
-              "n_name as nation",
-              "year(o_orderdate) as o_year",
-              "l_extendedprice * (1.0 - l_discount) - ps_supplycost * l_quantity as amount",
-          })
-          .aggregate({"nation", "o_year"}, {"sum(amount) as sum_profit"})
-          .orderBy({"nation", "o_year desc"})
-          .build();
-
-  // Plan does not minimize build size. To adjust build cost and check that
-  // import of existences to build side does not affect join cardinality.
-  checkTpch(9, logicalPlan);
-
   checkTpchSql(9);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q10) {
-  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .from({"customer", "orders", "lineitem", "nation"})
-          .filter(
-              "c_custkey = o_custkey "
-              "and l_orderkey = o_orderkey "
-              "and o_orderdate between '1993-10-01'::date and '1993-12-31'::date "
-              "and l_returnflag = 'R' "
-              "and c_nationkey = n_nationkey")
-          .aggregate(
-              {"c_custkey",
-               "c_name",
-               "c_acctbal",
-               "c_phone",
-               "n_name",
-               "c_address",
-               "c_comment"},
-              {"sum(l_extendedprice * (1.0 - l_discount)) as revenue"})
-          .orderBy({"revenue desc"})
-          .limit(20)
-          .project(
-              {"c_custkey",
-               "c_name",
-               "revenue",
-               "c_acctbal",
-               "n_name",
-               "c_address",
-               "c_phone",
-               "c_comment"})
-          .build();
-
-  checkTpch(10, logicalPlan);
-
   checkTpchSql(10);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q11) {
-  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .from({"partsupp", "supplier", "nation"})
-          .filter(
-              "ps_suppkey = s_suppkey and s_nationkey = n_nationkey and n_name = 'GERMANY'")
-          .aggregate(
-              {"ps_partkey"},
-              {"sum(ps_supplycost * ps_availqty::double) as value"})
-          .filter(
-              lp::Col("value") >
-              lp::Subquery(
-                  lp::PlanBuilder(context)
-                      .from({"partsupp", "supplier", "nation"})
-                      .filter(
-                          "ps_suppkey = s_suppkey and s_nationkey = n_nationkey and n_name = 'GERMANY'")
-                      .aggregate(
-                          {},
-                          {"sum(ps_supplycost * ps_availqty::double) as total"})
-                      .project({"total * 0.0001"})
-                      .build()))
-          .orderBy({"value desc"})
-          .build();
-
-  checkTpch(11, logicalPlan);
-
   checkTpchSql(11);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q12) {
-  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .from({"orders", "lineitem"})
-          .filter(
-              "l_orderkey = o_orderkey "
-              "and l_shipmode in ('MAIL', 'SHIP') "
-              "and l_commitdate < l_receiptdate "
-              "and l_shipdate < l_commitdate "
-              "and l_receiptdate >= '1994-01-01'::date "
-              "and l_receiptdate <= date '1994-12-31'::date")
-          .aggregate(
-              {"l_shipmode"},
-              {
-                  "sum(if(o_orderpriority = '1-URGENT' or o_orderpriority = '2-HIGH', 1, 0)) as high_line_count",
-                  "sum(if(o_orderpriority <> '1-URGENT' and o_orderpriority <> '2-HIGH', 1, 0)) as low_line_count",
-              })
-          .orderBy({"l_shipmode"})
+  checkTpchSql(12);
+
+  // In this query, we end up building on lineitem since the filters on it make
+  // it the smaller of the two tables. Everything else is unsurprising.
+
+  auto subfieldFilters =
+      velox::common::test::SubfieldFiltersBuilder()
+          .add(
+              "l_shipmode",
+              velox::exec::in(std::vector<std::string>{"MAIL", "SHIP"}))
+          .add(
+              "l_receiptdate",
+              velox::exec::between(
+                  DATE()->toDays("1994-01-01"), DATE()->toDays("1994-12-31")))
           .build();
 
-  checkTpch(12, logicalPlan);
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan("orders")
+          .hashJoin(
+              core::PlanMatcherBuilder()
+                  .hiveScan(
+                      "lineitem",
+                      std::move(subfieldFilters),
+                      "l_commitdate < l_receiptdate AND l_shipdate < l_commitdate")
+                  .build(),
+              core::JoinType::kInner)
+          .project()
+          .aggregation()
+          .orderBy()
+          .build();
 
-  checkTpchSql(12);
+  AXIOM_ASSERT_PLAN(planTpch(12), matcher);
 }
 
 TEST_F(TpchPlanTest, q13) {
-  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .tableScan("customer")
-          .join(
-              lp::PlanBuilder(context).tableScan("orders"),
-              "c_custkey = o_custkey and o_comment not like '%special%requests%'",
-              lp::JoinType::kLeft)
-          .aggregate({"c_custkey"}, {"count(o_orderkey) as c_count"})
-          .aggregate({"c_count"}, {"count(*) as custdist"})
-          .orderBy({"custdist desc", "c_count desc"})
+  checkTpchSql(13);
+
+  // This query has only two possible plans, left and right hand outer join. We
+  // correctly produce the right outer join, building on the left, i.e.
+  // customer, as it is much smaller than orders.
+
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
+
+  auto matcher =
+      startMatcher("orders")
+          .hashJoin(startMatcher("customer").build(), core::JoinType::kRight)
+          .aggregation()
+          .project()
+          .aggregation()
+          .orderBy()
           .build();
 
-  checkTpch(13, logicalPlan);
-
-  checkTpchSql(13);
+  AXIOM_ASSERT_PLAN(planTpch(13), matcher);
 }
 
 TEST_F(TpchPlanTest, q14) {
-  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .from({"lineitem", "part"})
-          .filter(
-              "l_partkey = p_partkey "
-              "and l_shipdate between '1995-09-01'::date and '1995-09-30'::date")
-          .aggregate(
-              std::vector<std::string>{},
-              {
-                  "sum(if(p_type like 'PROMO%', l_extendedprice * (1.0 - l_discount), 0.0)) as promo",
-                  "sum(l_extendedprice * (1.0 - l_discount)) as total",
-              })
-          .project({"100.00 * promo / total as promo_revenue"})
-          .build();
-
-  checkTpch(14, logicalPlan);
-
   checkTpchSql(14);
+
+  // The only noteworthy aspect is that we build on lineitem since its filters
+  // (1 month out of 7 years) make it smaller than part.
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("part")
+                     .hashJoin(
+                         core::PlanMatcherBuilder()
+                             .hiveScan(
+                                 "lineitem",
+                                 test::between(
+                                     "l_shipdate",
+                                     DATE()->toDays("1995-09-01"),
+                                     DATE()->toDays("1995-09-30")))
+                             .build(),
+                         core::JoinType::kInner)
+                     .project()
+                     .aggregation()
+                     .project()
+                     .build();
+
+  AXIOM_ASSERT_PLAN(planTpch(14), matcher);
 }
 
 TEST_F(TpchPlanTest, q15) {
   checkTpchSql(15);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q16) {
   checkTpchSql(16);
+
+  // The join is biggest table first, with  part joined first because it is
+  // quite selective, more so than the exists with supplier.
+
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
+
+  auto matcher =
+      startMatcher("partsupp")
+          .hashJoin(startMatcher("part").build(), core::JoinType::kInner)
+          .hashJoin(
+              startMatcher("supplier").build(),
+              core::JoinType::kLeftSemiProject)
+          .filter()
+          .aggregation()
+          .orderBy()
+          .build();
+
+  AXIOM_ASSERT_PLAN(planTpch(16), matcher);
 }
 
 TEST_F(TpchPlanTest, q17) {
   checkTpchSql(17);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q18) {
   checkTpchSql(18);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q19) {
-  lp::PlanBuilder::Context context{exec::test::kHiveConnectorId};
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .from({"lineitem", "part"})
-          .filter(
-              "(p_partkey = l_partkey "
-              "  and p_brand = 'Brand#12' "
-              "  and p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG') "
-              "  and l_quantity >= 1.0 and l_quantity <= 1.0 + 10.0 "
-              "  and p_size between 1::int and 5::int "
-              "  and l_shipmode in ('AIR', 'AIR REG') "
-              "  and l_shipinstruct = 'DELIVER IN PERSON') "
-              "or (p_partkey = l_partkey "
-              "       and p_brand = 'Brand#23' "
-              "       and p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')"
-              "       and l_quantity >= 10.0 and l_quantity <= 10.0 + 10.0"
-              "       and p_size between 1::int and 10::int"
-              "       and l_shipmode in ('AIR', 'AIR REG')"
-              "       and l_shipinstruct = 'DELIVER IN PERSON') "
-              "or (p_partkey = l_partkey "
-              "       and p_brand = 'Brand#34' "
-              "       and p_container in ('LG BAG', 'LG BOX', 'LG PKG', 'LG PACK')"
-              "       and l_quantity >= 20.0 and l_quantity <= 20.0 + 10.0"
-              "       and p_size between 1::int and 15::int"
-              "       and l_shipmode in ('AIR', 'AIR REG')"
-              "       and l_shipinstruct = 'DELIVER IN PERSON')")
-          .aggregate(
-              {}, {"sum(l_extendedprice * (1.0 - l_discount)) as revenue"})
-          .build();
-
-  checkTpch(19, logicalPlan);
-
   checkTpchSql(19);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q20) {
@@ -559,14 +432,20 @@ TEST_F(TpchPlanTest, q20) {
         originalEnableReducingExistences;
   };
   checkTpchSql(20);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q21) {
   checkTpchSql(21);
+
+  // TODO Verify the plan.
 }
 
 TEST_F(TpchPlanTest, q22) {
   checkTpchSql(22);
+
+  // TODO Verify the plan.
 }
 
 // Use to re-generate the plans stored in tpch.plans directory.

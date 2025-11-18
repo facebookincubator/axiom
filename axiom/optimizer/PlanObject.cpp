@@ -32,11 +32,6 @@ const auto& planTypeNames() {
       {PlanType::kUnnestTableNode, "UnnestTableNode"},
       {PlanType::kDerivedTableNode, "DerivedTableNode"},
       {PlanType::kAggregationNode, "AggregationNode"},
-      {PlanType::kProjectNode, "ProjectNode"},
-      {PlanType::kFilterNode, "FilterNode"},
-      {PlanType::kJoinNode, "JoinNode"},
-      {PlanType::kOrderByNode, "OrderByNode"},
-      {PlanType::kLimitNode, "LimitNode"},
   };
   return kNames;
 }

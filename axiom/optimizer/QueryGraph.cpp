@@ -412,24 +412,27 @@ Column::Column(
     const Value& value,
     Name alias,
     Name nameInTable,
-    ColumnCP top,
+    ColumnCP topColumn,
     PathCP path)
     : Expr(PlanType::kColumnExpr, value),
       name_(name),
       relation_(relation),
       alias_(alias),
-      topColumn_(top),
+      topColumn_(topColumn),
       path_(path) {
   columns_.add(this);
   subexpressions_.add(this);
   if (relation_ && relation_->is(PlanType::kTableNode)) {
     if (topColumn_) {
+      VELOX_CHECK(topColumn_->relation() == relation_);
+      VELOX_CHECK_NULL(topColumn_->topColumn());
+      VELOX_CHECK_NULL(topColumn_->path());
       schemaColumn_ = topColumn_->schemaColumn_;
     } else {
       schemaColumn_ = relation->as<BaseTable>()->schemaTable->findColumn(
           nameInTable ? nameInTable : name_);
-      VELOX_CHECK(schemaColumn_);
     }
+    VELOX_CHECK(schemaColumn_);
   }
 }
 

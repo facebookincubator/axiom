@@ -209,8 +209,6 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   explicit LocalHiveConnectorMetadata(
       velox::connector::hive::HiveConnector* hiveConnector);
 
-  void initialize() override;
-
   TablePtr findTable(std::string_view name) override;
 
   ConnectorSplitManager* splitManager() override {
@@ -281,6 +279,9 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   }
 
  private:
+  // Used to lazy initialize this in ensureInitialized() and to implement
+  // reinitialize().
+  void initialize();
   void ensureInitialized() const override;
   void makeQueryCtx();
   void makeConnectorQueryCtx();

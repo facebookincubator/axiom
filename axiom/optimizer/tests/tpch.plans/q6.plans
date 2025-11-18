@@ -11,7 +11,7 @@ dt1: revenue
 
 t2: l_quantity, l_extendedprice, l_discount, l_shipdate
   table: lineitem
-  single-column filters: gte(t2.l_shipdate, "1994-01-01") and lt(__cast(t2.l_shipdate), "1995-01-01") and between(t2.l_discount, 0.049999999999999996, 0.07) and lt(t2.l_quantity, 24)
+  single-column filters: gte(t2.l_shipdate, "1994-01-01") and lt(t2.l_shipdate, "1995-01-01") and between(t2.l_discount, 0.049999999999999996, 0.07) and lt(t2.l_quantity, 24)
 
 
 Optimized plan (oneline):
@@ -23,19 +23,19 @@ Optimized plan:
 Project (redundant) -> dt1.revenue
     dt1.revenue := dt1.revenue
   Aggregation -> dt1.revenue
-      dt1.revenue := sum(dt1.__p48)
-    Project -> dt1.__p48
-        dt1.__p48 := multiply(t2.l_extendedprice, t2.l_discount)
+      dt1.revenue := sum(dt1.__p47)
+    Project -> dt1.__p47
+        dt1.__p47 := multiply(t2.l_extendedprice, t2.l_discount)
       TableScan -> t2.l_extendedprice, t2.l_discount
         table: lineitem
-        single-column filters: gte(t2.l_shipdate, "1994-01-01") and lt(__cast(t2.l_shipdate), "1995-01-01") and between(t2.l_discount, 0.049999999999999996, 0.07) and lt(t2.l_quantity, 24)
+        single-column filters: gte(t2.l_shipdate, "1994-01-01") and lt(t2.l_shipdate, "1995-01-01") and between(t2.l_discount, 0.049999999999999996, 0.07) and lt(t2.l_quantity, 24)
 
 
 Executable Velox plan:
 
 Fragment 0:  numWorkers=0:
--- Aggregation[2][SINGLE revenue := sum("dt1.__p48")] -> revenue:DOUBLE
-  -- Project[1][expressions: (dt1.__p48:DOUBLE, multiply("l_extendedprice","l_discount"))] -> "dt1.__p48":DOUBLE
-    -- TableScan[0][table: lineitem, range filters: [(l_discount, DoubleRange: [0.050000, 0.070000] no nulls), (l_quantity, DoubleRange: (-inf, 24.000000) no nulls), (l_shipdate, BigintRange: [8766, 9223372036854775807] no nulls)], remaining filter: (lt(cast("l_shipdate" as DATE),1995-01-01)), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_extendedprice:DOUBLE, l_discount:DOUBLE
+-- Aggregation[2][SINGLE revenue := sum("dt1.__p47")] -> revenue:DOUBLE
+  -- Project[1][expressions: (dt1.__p47:DOUBLE, multiply("l_extendedprice","l_discount"))] -> "dt1.__p47":DOUBLE
+    -- TableScan[0][table: lineitem, range filters: [(l_discount, DoubleRange: [0.050000, 0.070000] no nulls), (l_quantity, DoubleRange: (-inf, 24.000000) no nulls), (l_shipdate, BigintRange: [8766, 9130] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_quantity, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]], HiveColumnHandle [name: l_discount, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_extendedprice:DOUBLE, l_discount:DOUBLE
 
 ___END___

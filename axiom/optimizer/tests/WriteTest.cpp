@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
@@ -32,16 +31,11 @@ class WriteTest : public test::HiveQueriesTestBase {
  protected:
   void SetUp() override {
     HiveQueriesTestBase::SetUp();
-    connector_ = velox::connector::getConnector(exec::test::kHiveConnectorId);
-    metadata_ = dynamic_cast<connector::hive::LocalHiveConnectorMetadata*>(
-        connector::ConnectorMetadata::metadata(exec::test::kHiveConnectorId));
     parquet::registerParquetWriterFactory();
   }
 
   void TearDown() override {
     parquet::unregisterParquetWriterFactory();
-    metadata_ = nullptr;
-    connector_.reset();
     HiveQueriesTestBase::TearDown();
   }
 
@@ -49,18 +43,20 @@ class WriteTest : public test::HiveQueriesTestBase {
       const std::string& name,
       const RowTypePtr& tableType,
       const folly::F14FastMap<std::string, velox::Variant>& options) {
-    metadata_->dropTableIfExists(name);
+    auto& metadata = hiveMetadata();
+    metadata.dropTableIfExists(name);
 
     auto session = std::make_shared<connector::ConnectorSession>("test");
-    auto table = metadata_->createTable(session, name, tableType, options);
+    auto table = metadata.createTable(session, name, tableType, options);
     auto handle =
-        metadata_->beginWrite(session, table, connector::WriteKind::kCreate);
-    metadata_->finishWrite(session, handle, {}).get();
+        metadata.beginWrite(session, table, connector::WriteKind::kCreate);
+    metadata.finishWrite(session, handle, {}).get();
   }
 
   connector::TablePtr createTable(
       const ::axiom::sql::presto::CreateTableAsSelectStatement& statement) {
-    metadata_->dropTableIfExists(statement.tableName());
+    auto& metadata = hiveMetadata();
+    metadata.dropTableIfExists(statement.tableName());
 
     folly::F14FastMap<std::string, velox::Variant> options;
     for (const auto& [key, value] : statement.properties()) {
@@ -68,7 +64,7 @@ class WriteTest : public test::HiveQueriesTestBase {
     }
 
     auto session = std::make_shared<connector::ConnectorSession>("test");
-    return metadata_->createTable(
+    return metadata.createTable(
         session, statement.tableName(), statement.tableSchema(), options);
   }
 
@@ -112,7 +108,7 @@ class WriteTest : public test::HiveQueriesTestBase {
 
   const connector::hive::LocalHiveTableLayout& getLayout(
       std::string_view tableName) {
-    auto table = metadata_->findTable(tableName);
+    auto table = hiveMetadata().findTable(tableName);
     VELOX_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
 
     VELOX_CHECK_EQ(1, table->layouts().size());
@@ -173,17 +169,14 @@ class WriteTest : public test::HiveQueriesTestBase {
     return data;
   }
 
-  std::shared_ptr<velox::connector::Connector> connector_;
-  connector::hive::LocalHiveConnectorMetadata* metadata_;
-
  private:
   velox::Variant evaluateConstantExpr(const lp::Expr& expr);
 };
 
 TEST_F(WriteTest, basic) {
   SCOPE_EXIT {
-    metadata_->dropTableIfExists("test");
-    metadata_->dropTableIfExists("test2");
+    hiveMetadata().dropTableIfExists("test");
+    hiveMetadata().dropTableIfExists("test2");
   };
 
   auto tableType = ROW({
@@ -205,15 +198,12 @@ TEST_F(WriteTest, basic) {
   auto data = makeTestData(10, kTestBatchSize);
 
   lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
-  auto writePlan = lp::PlanBuilder(context)
-                       .values({data})
-                       .tableWrite(
-                           exec::test::kHiveConnectorId,
-                           "test",
-                           lp::WriteKind::kInsert,
-                           {"key1", "key2", "data", "ds"},
-                           {"key1", "key2", "data", "ds"})
-                       .build();
+  auto writePlan =
+      lp::PlanBuilder(context)
+          .values({data})
+          .tableWrite(
+              "test", lp::WriteKind::kInsert, {"key1", "key2", "data", "ds"})
+          .build();
   checkWrittenRows(runVelox(writePlan), kTestBatchSize * 10);
 
   auto countTestTable = [&] {
@@ -231,7 +221,6 @@ TEST_F(WriteTest, basic) {
   auto errorPlan = lp::PlanBuilder(context)
                        .values(makeTestData(100, kTestBatchSize))
                        .tableWrite(
-                           exec::test::kHiveConnectorId,
                            "test",
                            lp::WriteKind::kInsert,
                            {"key1", "key2", "data", "ds"},
@@ -264,10 +253,8 @@ TEST_F(WriteTest, basic) {
   auto copyPlan = lp::PlanBuilder(context)
                       .tableScan("test")
                       .tableWrite(
-                          exec::test::kHiveConnectorId,
                           "test2",
                           lp::WriteKind::kInsert,
-                          {"key1", "key2", "data", "data2", "ds"},
                           {"key1", "key2", "data", "data2", "ds"})
                       .build();
   checkWrittenRows(runVelox(copyPlan), kTestBatchSize * 10);
@@ -280,7 +267,7 @@ TEST_F(WriteTest, basic) {
 
 TEST_F(WriteTest, insertSql) {
   SCOPE_EXIT {
-    metadata_->dropTableIfExists("test");
+    hiveMetadata().dropTableIfExists("test");
   };
 
   createTable(
@@ -327,12 +314,12 @@ TEST_F(WriteTest, insertSql) {
 TEST_F(WriteTest, createTableAsSelectSql) {
   {
     SCOPE_EXIT {
-      metadata_->dropTableIfExists("test");
+      hiveMetadata().dropTableIfExists("test");
     };
 
     runCtas("CREATE TABLE test(a, b, c) AS SELECT 1, 0.123, 'foo'", 1);
 
-    ASSERT_TRUE(metadata_->findTable("test") != nullptr);
+    ASSERT_TRUE(hiveMetadata().findTable("test") != nullptr);
     checkTableData(
         "test",
         makeRowVector({
@@ -344,7 +331,7 @@ TEST_F(WriteTest, createTableAsSelectSql) {
 
   {
     SCOPE_EXIT {
-      metadata_->dropTableIfExists("test");
+      hiveMetadata().dropTableIfExists("test");
     };
 
     runCtas(
@@ -352,7 +339,7 @@ TEST_F(WriteTest, createTableAsSelectSql) {
         "SELECT x, x * 0.1 as y FROM unnest(array[1, 2, 3]) as t(x)",
         3);
 
-    ASSERT_TRUE(metadata_->findTable("test") != nullptr);
+    ASSERT_TRUE(hiveMetadata().findTable("test") != nullptr);
     checkTableData(
         "test",
         makeRowVector({
@@ -364,20 +351,20 @@ TEST_F(WriteTest, createTableAsSelectSql) {
   // Verify that newly created table is deleted if write fails.
   {
     SCOPE_EXIT {
-      metadata_->dropTableIfExists("test");
+      hiveMetadata().dropTableIfExists("test");
     };
 
     VELOX_ASSERT_THROW(
         runCtas("CREATE TABLE test(a, b, c) AS SELECT 1, 0.123, 123 % 0", 0),
         "Cannot divide by 0");
 
-    ASSERT_TRUE(metadata_->findTable("test") == nullptr);
+    ASSERT_TRUE(hiveMetadata().findTable("test") == nullptr);
   }
 }
 
 TEST_F(WriteTest, createTableAsSelectPartitionedSql) {
   SCOPE_EXIT {
-    metadata_->dropTableIfExists("test");
+    hiveMetadata().dropTableIfExists("test");
   };
 
   runCtas(
@@ -385,7 +372,7 @@ TEST_F(WriteTest, createTableAsSelectPartitionedSql) {
       "SELECT n_nationkey, n_name, n_nationkey % 3 as pk FROM nation",
       25);
 
-  auto table = metadata_->findTable("test");
+  auto table = hiveMetadata().findTable("test");
   ASSERT_TRUE(table != nullptr);
 
   ASSERT_EQ(1, table->layouts().size());
@@ -486,7 +473,7 @@ TEST_F(WriteTest, createTableAsSelectBucketedSql) {
   {
     SCOPE_EXIT {
       for (const auto& name : {"test", "test2", "test3", "test4"}) {
-        metadata_->dropTableIfExists(name);
+        hiveMetadata().dropTableIfExists(name);
       }
     };
 
@@ -543,7 +530,7 @@ TEST_F(WriteTest, createTableAsSelectBucketedSql) {
   // Single-node execution.
   {
     SCOPE_EXIT {
-      metadata_->dropTableIfExists("test");
+      hiveMetadata().dropTableIfExists("test");
     };
 
     runCtas(
@@ -570,7 +557,7 @@ TEST_F(WriteTest, createTableAsSelectBucketedSql) {
   // Single-threaded execution.
   {
     SCOPE_EXIT {
-      metadata_->dropTableIfExists("test");
+      hiveMetadata().dropTableIfExists("test");
     };
 
     runCtas(
@@ -596,7 +583,7 @@ TEST_F(WriteTest, createTableAsSelectBucketedSql) {
   // Bucketed and sorted.
   {
     SCOPE_EXIT {
-      metadata_->dropTableIfExists("test");
+      hiveMetadata().dropTableIfExists("test");
     };
 
     runCtas(

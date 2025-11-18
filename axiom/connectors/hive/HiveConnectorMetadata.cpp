@@ -140,40 +140,35 @@ void extractInputFields(
 
 } // namespace
 
-velox::connector::ColumnHandlePtr HiveConnectorMetadata::createColumnHandle(
+velox::connector::ColumnHandlePtr HiveTableLayout::createColumnHandle(
     const ConnectorSessionPtr& session,
-    const TableLayout& layout,
     const std::string& columnName,
     std::vector<velox::common::Subfield> subfields,
     std::optional<velox::TypePtr> castToType,
-    SubfieldMapping subfieldMapping) {
+    SubfieldMapping subfieldMapping) const {
   // castToType and subfieldMapping are not yet supported.
   VELOX_CHECK(!castToType.has_value());
   VELOX_CHECK(subfieldMapping.empty());
-  auto* hiveLayout = reinterpret_cast<const HiveTableLayout*>(&layout);
-  auto* column = hiveLayout->findColumn(columnName);
+  auto* column = findColumn(columnName);
   VELOX_CHECK_NOT_NULL(
-      column, "Column not found: {} in table {}", columnName, layout.name());
+      column, "Column not found: {} in table {}", columnName, name());
   return std::make_shared<velox::connector::hive::HiveColumnHandle>(
       columnName,
-      columnType(*hiveLayout, columnName),
+      columnType(*this, columnName),
       column->type(),
       column->type(),
       std::move(subfields));
 }
 
-velox::connector::ConnectorTableHandlePtr
-HiveConnectorMetadata::createTableHandle(
+velox::connector::ConnectorTableHandlePtr HiveTableLayout::createTableHandle(
     const ConnectorSessionPtr& session,
-    const TableLayout& layout,
     std::vector<velox::connector::ColumnHandlePtr> columnHandles,
     velox::core::ExpressionEvaluator& evaluator,
     std::vector<velox::core::TypedExprPtr> filters,
     std::vector<velox::core::TypedExprPtr>& /*rejectedFilters*/,
     velox::RowTypePtr dataColumns,
-    std::optional<LookupKeys> lookupKeys) {
+    std::optional<LookupKeys> lookupKeys) const {
   VELOX_CHECK(!lookupKeys.has_value(), "Hive does not support lookup keys");
-  auto* hiveLayout = dynamic_cast<const HiveTableLayout*>(&layout);
 
   std::unordered_set<std::string> filterColumnNames;
   for (const auto& filter : filters) {
@@ -206,16 +201,16 @@ HiveConnectorMetadata::createTableHandle(
     filterColumnHandles.emplace_back(
         std::static_pointer_cast<
             const velox::connector::hive::HiveColumnHandle>(
-            createColumnHandle(session, *hiveLayout, name)));
+            createColumnHandle(session, name)));
   }
 
   return std::make_shared<velox::connector::hive::HiveTableHandle>(
-      hiveConnector_->connectorId(),
-      hiveLayout->table().name(),
+      connector()->connectorId(),
+      table().name(),
       true,
       std::move(subfieldFilters),
       remainingFilter,
-      dataColumns ? dataColumns : layout.rowType(),
+      dataColumns ? dataColumns : rowType(),
       /*tableParameters=*/std::unordered_map<std::string, std::string>{},
       filterColumnHandles,
       sampleRate);
@@ -265,7 +260,7 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
     inputColumns.push_back(
         std::static_pointer_cast<
             const velox::connector::hive::HiveColumnHandle>(
-            createColumnHandle(session, *hiveLayout, name)));
+            hiveLayout->createColumnHandle(session, name)));
   }
 
   std::shared_ptr<const velox::connector::hive::HiveBucketProperty>

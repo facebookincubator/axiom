@@ -1017,6 +1017,53 @@ void Optimization::joinByIndex(
   }
 }
 
+struct ProjectionBuilder {
+  ColumnVector columns;
+  ExprVector exprs;
+
+  // Project 'expr' as 'column'.
+  void add(ColumnCP column, ExprCP expr) {
+    columns.emplace_back(column);
+    exprs.emplace_back(expr);
+  }
+
+  RelationOp* build(RelationOp* input) {
+    return make<Project>(
+        input, exprs, columns, isRedundantProject(input, exprs, columns));
+  }
+
+  ColumnVector inputColumns() const {
+    ColumnVector columns;
+    columns.reserve(exprs.size());
+    for (const auto* expr : exprs) {
+      VELOX_DCHECK(expr->isColumn());
+      columns.emplace_back(expr->as<Column>());
+    }
+
+    return columns;
+  }
+
+  PlanObjectSet outputColumns() const {
+    PlanObjectSet columnSet;
+    columnSet.unionObjects(columns);
+    return columnSet;
+  }
+};
+
+folly::F14FastMap<PlanObjectCP, ExprCP> makeJoinColumnMapping(
+    JoinEdgeP joinEdge) {
+  folly::F14FastMap<PlanObjectCP, ExprCP> mapping;
+  for (auto i = 0; i < joinEdge->leftColumns().size(); ++i) {
+    mapping.emplace(joinEdge->leftColumns()[i], joinEdge->leftExprs()[i]);
+  }
+
+  for (auto i = 0; i < joinEdge->rightColumns().size(); ++i) {
+    mapping.emplace(joinEdge->rightColumns()[i], joinEdge->rightExprs()[i]);
+  }
+
+  return mapping;
+}
+
 void Optimization::joinByHash(
     const RelationOpPtr& plan,
     const JoinCandidate& candidate,
@@ -1125,14 +1172,29 @@ void Optimization::joinByHash(
   PlanObjectSet probeColumns;
   probeColumns.unionObjects(plan->columns());
 
-  ColumnVector columns;
-  PlanObjectSet columnSet;
   ColumnCP mark = nullptr;
+
+  auto* joinEdge = candidate.join;
+
+  PlanObjectSet joinColumns;
+  joinColumns.unionObjects(joinEdge->leftColumns());
+  joinColumns.unionObjects(joinEdge->rightColumns());
+
+  // Mapping from join output column to probe or build side input.
+  auto joinColumnMapping = makeJoinColumnMapping(joinEdge);
+
+  ProjectionBuilder projectionBuilder;
+  bool needsProjection = false;
 
   state.downstreamColumns().forEach<Column>([&](auto column) {
     if (column == build.markColumn) {
       mark = column;
-      columnSet.add(column);
+      return;
+    }
+
+    if (joinColumns.contains(column)) {
+      projectionBuilder.add(column, joinColumnMapping.at(column));
+      needsProjection = true;
       return;
     }
 
@@ -1141,24 +1203,24 @@ void Optimization::joinByHash(
       return;
     }
 
-    columnSet.add(column);
-    columns.push_back(column);
+    projectionBuilder.add(column, column);
   });
 
   // If there is an existence flag, it is the rightmost result column.
   if (mark) {
     const_cast<Value*>(&mark->value())->trueFraction =
         std::min<float>(1, candidate.fanout);
-    columns.push_back(mark);
+    projectionBuilder.add(mark, mark);
   }
-  state.columns = columnSet;
+
+  state.columns = projectionBuilder.outputColumns();
   const auto fanout = fanoutJoinTypeLimit(joinType, candidate.fanout);
 
   PrecomputeProjection precomputeProbe(probeInput, state.dt);
   auto probeKeys = precomputeProbe.toColumns(probe.keys);
   probeInput = std::move(precomputeProbe).maybeProject();
 
-  auto* join = make<Join>(
+  RelationOp* join = make<Join>(
       JoinMethod::kHash,
       joinType,
       probeInput,
@@ -1167,10 +1229,14 @@ void Optimization::joinByHash(
       std::move(buildKeys),
       candidate.join->filter(),
       fanout,
-      std::move(columns));
+      projectionBuilder.inputColumns());
 
   state.addCost(*join);
   state.cost.cost += buildState.cost.cost;
+
+  if (needsProjection) {
+    join = projectionBuilder.build(join);
+  }
 
   state.addNextJoin(&candidate, join, {buildOp}, toTry);
 }
@@ -1189,6 +1255,8 @@ void Optimization::joinByHashRight(
   probeFilterColumns.unionColumns(candidate.join->filter());
   probeFilterColumns.intersect(availableColumns(candidate.tables[0]));
 
+  const auto& dc = state.downstreamColumns();
+
   PlanObjectSet probeTables;
   PlanObjectSet probeColumns;
   for (auto probeTable : candidate.tables) {
@@ -1197,7 +1265,7 @@ void Optimization::joinByHashRight(
     probeTables.add(probeTable);
   }
 
-  probeColumns.intersect(state.downstreamColumns());
+  probeColumns.intersect(dc);
   probeColumns.unionColumns(probe.keys);
   probeColumns.unionSet(probeFilterColumns);
   state.columns.unionSet(probeColumns);
@@ -1238,10 +1306,12 @@ void Optimization::joinByHashRight(
   buildColumns.unionObjects(buildInput->columns());
 
   const auto leftJoinType = probe.leftJoinType();
-  const auto fanout = fanoutJoinTypeLimit(leftJoinType, candidate.fanout);
-
   // Change the join type to the right join variant.
   const auto rightJoinType = reverseJoinType(leftJoinType);
+
+  const auto fanout =
+      fanoutJoinTypeLimit(rightJoinType, candidate.join->rlFanout());
+
   VELOX_CHECK(
       leftJoinType != rightJoinType,
       "Join type does not have right hash join variant");
@@ -1250,14 +1320,29 @@ void Optimization::joinByHashRight(
       rightJoinType == velox::core::JoinType::kRightSemiFilter ||
       rightJoinType == velox::core::JoinType::kRightSemiProject;
 
-  ColumnVector columns;
-  PlanObjectSet columnSet;
   ColumnCP mark = nullptr;
+
+  auto* joinEdge = candidate.join;
+
+  PlanObjectSet joinColumns;
+  joinColumns.unionObjects(joinEdge->leftColumns());
+  joinColumns.unionObjects(joinEdge->rightColumns());
+
+  // Mapping from join output column to probe or build side input.
+  auto joinColumnMapping = makeJoinColumnMapping(joinEdge);
+
+  ProjectionBuilder projectionBuilder;
+  bool needsProjection = false;
 
   state.downstreamColumns().forEach<Column>([&](auto column) {
     if (column == probe.markColumn) {
       mark = column;
-      columnSet.add(column);
+      return;
+    }
+
+    if (joinColumns.contains(column)) {
+      projectionBuilder.add(column, joinColumnMapping.at(column));
+      needsProjection = true;
       return;
     }
 
@@ -1266,19 +1351,18 @@ void Optimization::joinByHashRight(
       return;
     }
 
-    columnSet.add(column);
-    columns.push_back(column);
+    projectionBuilder.add(column, column);
   });
 
   if (mark) {
     const_cast<Value*>(&mark->value())->trueFraction =
         std::min<float>(1, candidate.fanout);
-    columns.push_back(mark);
+    projectionBuilder.add(mark, mark);
   }
 
   const auto buildCost = state.cost;
 
-  state.columns = columnSet;
+  state.columns = projectionBuilder.outputColumns();
   state.cost = probeState.cost;
   state.cost.cost += buildCost.cost;
 
@@ -1286,7 +1370,7 @@ void Optimization::joinByHashRight(
   auto probeKeys = precomputeProbe.toColumns(probe.keys);
   probeInput = std::move(precomputeProbe).maybeProject();
 
-  auto* join = make<Join>(
+  RelationOp* join = make<Join>(
       JoinMethod::kHash,
       rightJoinType,
       probeInput,
@@ -1295,8 +1379,12 @@ void Optimization::joinByHashRight(
       std::move(buildKeys),
       candidate.join->filter(),
       fanout,
-      std::move(columns));
+      projectionBuilder.inputColumns());
   state.addCost(*join);
+
+  if (needsProjection) {
+    join = projectionBuilder.build(join);
+  }
 
   state.addNextJoin(&candidate, join, {buildOp}, toTry);
 }

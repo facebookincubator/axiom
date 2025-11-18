@@ -45,16 +45,21 @@ void HiveQueriesTestBase::SetUp() {
 
   prestoParser_ = std::make_unique<::axiom::sql::presto::PrestoParser>(
       exec::test::kHiveConnectorId, std::nullopt, pool());
+
+  connector_ = velox::connector::getConnector(exec::test::kHiveConnectorId);
+  metadata_ = dynamic_cast<connector::hive::LocalHiveConnectorMetadata*>(
+      connector::ConnectorMetadata::metadata(exec::test::kHiveConnectorId));
 }
 
 void HiveQueriesTestBase::TearDown() {
+  metadata_ = nullptr;
+  connector_.reset();
+
   test::QueryTestBase::TearDown();
 }
 
 RowTypePtr HiveQueriesTestBase::getSchema(std::string_view tableName) {
-  return connector::ConnectorMetadata::metadata(exec::test::kHiveConnectorId)
-      ->findTable(tableName)
-      ->type();
+  return metadata_->findTable(tableName)->type();
 }
 
 void HiveQueriesTestBase::checkResults(

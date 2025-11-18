@@ -165,8 +165,8 @@ class LocalHiveConnectorMetadataTest
     velox::connector::ColumnHandleMap assignments;
     const auto* layout = getLayout(table);
     for (auto i = 0; i < tableType->size(); ++i) {
-      assignments[tableType->nameOf(i)] = metadata_->createColumnHandle(
-          /*session=*/nullptr, *layout, tableType->nameOf(i));
+      assignments[tableType->nameOf(i)] = layout->createColumnHandle(
+          /*session=*/nullptr, tableType->nameOf(i));
     }
     auto plan = exec::test::PlanBuilder()
                     .tableScan(
@@ -231,16 +231,14 @@ TEST_F(LocalHiveConnectorMetadataTest, basic) {
   ASSERT_TRUE(column != nullptr);
   EXPECT_EQ(250'000, table->numRows());
   auto* layout = table->layouts()[0];
-  auto columnHandle =
-      metadata_->createColumnHandle(/*session=*/nullptr, *layout, "c0");
+  auto columnHandle = layout->createColumnHandle(/*session=*/nullptr, "c0");
   std::vector<velox::connector::ColumnHandlePtr> columns = {columnHandle};
   std::vector<core::TypedExprPtr> filters;
   std::vector<core::TypedExprPtr> rejectedFilters;
   auto ctx = metadata_->connectorQueryCtx();
 
-  auto tableHandle = metadata_->createTableHandle(
+  auto tableHandle = layout->createTableHandle(
       /*session=*/nullptr,
-      *layout,
       columns,
       *ctx->expressionEvaluator(),
       filters,

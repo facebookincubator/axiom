@@ -110,6 +110,22 @@ class TpchTableLayout : public TableLayout {
       velox::HashStringAllocator* allocator = nullptr,
       std::vector<ColumnStatistics>* statistics = nullptr) const override;
 
+  velox::connector::ColumnHandlePtr createColumnHandle(
+      const ConnectorSessionPtr& session,
+      const std::string& columnName,
+      std::vector<velox::common::Subfield> subfields,
+      std::optional<velox::TypePtr> castToType,
+      SubfieldMapping subfieldMapping) const override;
+
+  velox::connector::ConnectorTableHandlePtr createTableHandle(
+      const ConnectorSessionPtr& session,
+      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
+      velox::core::ExpressionEvaluator& evaluator,
+      std::vector<velox::core::TypedExprPtr> filters,
+      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
+      velox::RowTypePtr dataColumns,
+      std::optional<LookupKeys> lookupKeys) const override;
+
  private:
   const velox::tpch::Table tpchTable_;
   const double scaleFactor_;
@@ -176,31 +192,11 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   explicit TpchConnectorMetadata(
       velox::connector::tpch::TpchConnector* tpchConnector);
 
-  void initialize() override {}
-
   TablePtr findTable(std::string_view name) override;
 
   ConnectorSplitManager* splitManager() override {
     return &splitManager_;
   }
-
-  velox::connector::ColumnHandlePtr createColumnHandle(
-      const ConnectorSessionPtr& session,
-      const TableLayout& layoutData,
-      const std::string& columnName,
-      std::vector<velox::common::Subfield> subfields = {},
-      std::optional<velox::TypePtr> castToType = std::nullopt,
-      SubfieldMapping subfieldMapping = {}) override;
-
-  velox::connector::ConnectorTableHandlePtr createTableHandle(
-      const ConnectorSessionPtr& session,
-      const TableLayout& layout,
-      std::vector<velox::connector::ColumnHandlePtr> columnHandles,
-      velox::core::ExpressionEvaluator& evaluator,
-      std::vector<velox::core::TypedExprPtr> filters,
-      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
-      velox::RowTypePtr dataColumns = nullptr,
-      std::optional<LookupKeys> = std::nullopt) override;
 
   velox::connector::tpch::TpchConnector* tpchConnector() const {
     return tpchConnector_;

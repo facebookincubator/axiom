@@ -19,7 +19,6 @@
 #include <vector>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/NameMappings.h"
-#include "velox/connectors/Connector.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
@@ -1320,6 +1319,23 @@ PlanBuilder& PlanBuilder::tableWrite(
       std::move(options));
 
   return *this;
+}
+
+PlanBuilder& PlanBuilder::tableWrite(
+    std::string tableName,
+    WriteKind kind,
+    std::vector<std::string> columnNames,
+    folly::F14FastMap<std::string, std::string> options) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Table write node cannot be a leaf node");
+  VELOX_USER_CHECK(defaultConnectorId_.has_value());
+
+  return tableWrite(
+      defaultConnectorId_.value(),
+      std::move(tableName),
+      kind,
+      std::move(columnNames),
+      findOrAssignOutputNames(),
+      std::move(options));
 }
 
 ExprPtr PlanBuilder::resolveInputName(

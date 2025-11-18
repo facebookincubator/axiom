@@ -29,7 +29,7 @@ t2: c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_comment
 
 t3: o_orderkey, o_custkey, o_orderdate
   table: orders
-  single-column filters: gte(t3.o_orderdate, "1993-10-01") and lt(__cast(t3.o_orderdate), "1994-01-01")
+  single-column filters: gte(t3.o_orderdate, "1993-10-01") and lt(t3.o_orderdate, "1994-01-01")
 
 t4: l_orderkey, l_extendedprice, l_discount, l_returnflag
   table: lineitem
@@ -56,8 +56,8 @@ Project -> dt1.c_custkey, dt1.c_name, dt1.revenue, dt1.c_acctbal, dt1.n_name, dt
     dt1.c_comment := t2.c_comment
   OrderBy -> t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment, dt1.revenue
     Aggregation (t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment) -> t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment, dt1.revenue
-        dt1.revenue := sum(dt1.__p77)
-      Project -> t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment, dt1.__p77
+        dt1.revenue := sum(dt1.__p76)
+      Project -> t2.c_custkey, t2.c_name, t2.c_acctbal, t2.c_phone, t5.n_name, t2.c_address, t2.c_comment, dt1.__p76
           t2.c_custkey := t2.c_custkey
           t2.c_name := t2.c_name
           t2.c_acctbal := t2.c_acctbal
@@ -65,7 +65,7 @@ Project -> dt1.c_custkey, dt1.c_name, dt1.revenue, dt1.c_acctbal, dt1.n_name, dt
           t5.n_name := t5.n_name
           t2.c_address := t2.c_address
           t2.c_comment := t2.c_comment
-          dt1.__p77 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
+          dt1.__p76 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
         Join INNER Hash -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_phone, t2.c_acctbal, t2.c_comment, t4.l_extendedprice, t4.l_discount, t5.n_name
             t4.l_orderkey = t3.o_orderkey
           TableScan -> t4.l_orderkey, t4.l_extendedprice, t4.l_discount
@@ -81,7 +81,7 @@ Project -> dt1.c_custkey, dt1.c_name, dt1.revenue, dt1.c_acctbal, dt1.n_name, dt
                 HashBuild -> t3.o_orderkey, t3.o_custkey
                   TableScan -> t3.o_orderkey, t3.o_custkey
                     table: orders
-                    single-column filters: gte(t3.o_orderdate, "1993-10-01") and lt(__cast(t3.o_orderdate), "1994-01-01")
+                    single-column filters: gte(t3.o_orderdate, "1993-10-01") and lt(t3.o_orderdate, "1994-01-01")
               HashBuild -> t5.n_nationkey, t5.n_name
                 TableScan -> t5.n_nationkey, t5.n_name
                   table: nation
@@ -92,14 +92,14 @@ Executable Velox plan:
 Fragment 0:  numWorkers=0:
 -- Project[10][expressions: (c_custkey:BIGINT, "c_custkey"), (c_name:VARCHAR, "c_name"), (revenue:DOUBLE, "revenue"), (c_acctbal:DOUBLE, "c_acctbal"), (n_name:VARCHAR, "n_name"), (c_address:VARCHAR, "c_address"), (c_phone:VARCHAR, "c_phone"), (c_comment:VARCHAR, "c_comment")] -> c_custkey:BIGINT, c_name:VARCHAR, revenue:DOUBLE, c_acctbal:DOUBLE, n_name:VARCHAR, c_address:VARCHAR, c_phone:VARCHAR, c_comment:VARCHAR
   -- TopN[9][20 revenue DESC NULLS LAST] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, revenue:DOUBLE
-    -- Aggregation[8][SINGLE [c_custkey, c_name, c_acctbal, c_phone, n_name, c_address, c_comment] revenue := sum("dt1.__p77")] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, revenue:DOUBLE
-      -- Project[7][expressions: (c_custkey:BIGINT, "c_custkey"), (c_name:VARCHAR, "c_name"), (c_acctbal:DOUBLE, "c_acctbal"), (c_phone:VARCHAR, "c_phone"), (n_name:VARCHAR, "n_name"), (c_address:VARCHAR, "c_address"), (c_comment:VARCHAR, "c_comment"), (dt1.__p77:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, "dt1.__p77":DOUBLE
+    -- Aggregation[8][SINGLE [c_custkey, c_name, c_acctbal, c_phone, n_name, c_address, c_comment] revenue := sum("dt1.__p76")] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, revenue:DOUBLE
+      -- Project[7][expressions: (c_custkey:BIGINT, "c_custkey"), (c_name:VARCHAR, "c_name"), (c_acctbal:DOUBLE, "c_acctbal"), (c_phone:VARCHAR, "c_phone"), (n_name:VARCHAR, "n_name"), (c_address:VARCHAR, "c_address"), (c_comment:VARCHAR, "c_comment"), (dt1.__p76:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> c_custkey:BIGINT, c_name:VARCHAR, c_acctbal:DOUBLE, c_phone:VARCHAR, n_name:VARCHAR, c_address:VARCHAR, c_comment:VARCHAR, "dt1.__p76":DOUBLE
         -- HashJoin[6][INNER l_orderkey=o_orderkey] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR, l_extendedprice:DOUBLE, l_discount:DOUBLE, n_name:VARCHAR
-          -- TableScan[0][table: lineitem, range filters: [(l_returnflag, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
+          -- TableScan[0][table: lineitem, range filters: [(l_returnflag, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_returnflag, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
           -- HashJoin[5][INNER c_nationkey=n_nationkey] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_nationkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR, o_orderkey:BIGINT, o_custkey:BIGINT, n_nationkey:BIGINT, n_name:VARCHAR
             -- HashJoin[3][INNER c_custkey=o_custkey] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_nationkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR, o_orderkey:BIGINT, o_custkey:BIGINT
               -- TableScan[1][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT, c_name:VARCHAR, c_address:VARCHAR, c_nationkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, c_comment:VARCHAR
-              -- TableScan[2][table: orders, range filters: [(o_orderdate, BigintRange: [8674, 9223372036854775807] no nulls)], remaining filter: (lt(cast("o_orderdate" as DATE),1994-01-01)), data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_custkey:BIGINT
+              -- TableScan[2][table: orders, range filters: [(o_orderdate, BigintRange: [8674, 8765] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> o_orderkey:BIGINT, o_custkey:BIGINT
             -- TableScan[4][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey:BIGINT, n_name:VARCHAR
 
 ___END___

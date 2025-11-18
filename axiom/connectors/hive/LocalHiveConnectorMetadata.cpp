@@ -853,8 +853,8 @@ void LocalTable::sampleNumDistincts(
   std::vector<velox::connector::ColumnHandlePtr> columns;
   columns.reserve(type_->size());
   for (auto i = 0; i < type_->size(); ++i) {
-    columns.push_back(metadata->createColumnHandle(
-        /*session=*/nullptr, *layout, type_->nameOf(i)));
+    columns.push_back(layout->createColumnHandle(
+        /*session=*/nullptr, type_->nameOf(i)));
   }
 
   auto* localHiveMetadata =
@@ -863,8 +863,8 @@ void LocalTable::sampleNumDistincts(
       *localHiveMetadata->connectorQueryCtx()->expressionEvaluator();
 
   std::vector<velox::core::TypedExprPtr> ignore;
-  auto handle = metadata->createTableHandle(
-      /*session=*/nullptr, *layout, columns, evaluator, {}, ignore);
+  auto handle = layout->createTableHandle(
+      /*session=*/nullptr, columns, evaluator, {}, ignore);
 
   auto* localLayout = dynamic_cast<LocalHiveTableLayout*>(layout);
   VELOX_CHECK_NOT_NULL(localLayout, "Expecting a local hive layout");

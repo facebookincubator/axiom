@@ -38,11 +38,6 @@ enum class PlanType : uint32_t {
   kUnnestTableNode,
   kDerivedTableNode,
   kAggregationNode,
-  kProjectNode,
-  kFilterNode,
-  kJoinNode,
-  kOrderByNode,
-  kLimitNode,
   kWriteNode,
 };
 
@@ -186,6 +181,16 @@ class PlanObjectSet : public BitSet {
     forEach(
         [&](auto object) { objects.emplace_back(object->template as<T>()); });
     return objects;
+  }
+
+  /// Returns the only object stored in this set. The caller must ensure the set
+  /// contains exactly one object.
+  template <typename T = PlanObject>
+  const T* onlyObject() const {
+    VELOX_DCHECK_EQ(size(), 1);
+
+    auto id = velox::bits::findFirstBit(bits_.data(), 0, bits_.size() * 64);
+    return queryCtx()->objectAt(id)->template as<T>();
   }
 
   /// Applies 'func' to each object in 'this'.

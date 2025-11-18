@@ -162,6 +162,10 @@ class Path {
     return id_;
   }
 
+  bool empty() const {
+    return steps_.empty();
+  }
+
   void setId(int32_t id) const {
     VELOX_CHECK(mutable_);
     id_ = id;

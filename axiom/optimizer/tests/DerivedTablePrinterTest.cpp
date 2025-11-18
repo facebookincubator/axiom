@@ -174,7 +174,7 @@ TEST_F(DerivedTablePrinterTest, basic) {
             testing::Eq("  joins:"),
             testing::Eq("    t2 LEFT t3 ON t2.a = t3.x"),
             testing::Eq("  syntactic join order: 3, 8"),
-            testing::Eq("  aggregates: sum(multiply(t2.b, t3.y)) AS sum"),
+            testing::Eq("  aggregates: sum(multiply(t2.b, dt1.y)) AS sum"),
             testing::Eq("  grouping keys: t2.a"),
             testing::Eq(""),
             testing::Eq("t2: a, b"),

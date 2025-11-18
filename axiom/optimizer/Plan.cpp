@@ -199,7 +199,7 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
 
   // Joins.
   for (auto join : dt->joins) {
-    if (join->rightExists() || join->rightNotExists()) {
+    if (join->isSemi() || join->isAnti()) {
       if (placed.contains(join->rightTable())) {
         continue;
       }
@@ -235,6 +235,11 @@ const PlanObjectSet& PlanState::downstreamColumns() const {
     }
     if (addFilter && !join->filter().empty()) {
       addExprs(join->filter());
+    }
+
+    if (addFilter) {
+      addExprs(join->leftExprs());
+      addExprs(join->rightExprs());
     }
   }
 

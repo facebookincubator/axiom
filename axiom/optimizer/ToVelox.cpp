@@ -167,7 +167,6 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
   auto connector = layout->connector();
   auto connectorSession =
       session_->toConnectorSession(connector->connectorId());
-  auto* metadata = connector::ConnectorMetadata::metadata(connector);
 
   std::vector<velox::connector::ColumnHandlePtr> columns;
   for (int32_t i = 0; i < dataColumns->size(); ++i) {
@@ -177,17 +176,13 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
     }
     auto subfields = columnSubfields(table, id.value());
 
-    columns.push_back(metadata->createColumnHandle(
-        connectorSession,
-        *layout,
-        dataColumns->nameOf(i),
-        std::move(subfields)));
+    columns.push_back(layout->createColumnHandle(
+        connectorSession, dataColumns->nameOf(i), std::move(subfields)));
   }
 
   std::vector<velox::core::TypedExprPtr> rejectedFilters;
-  auto handle = metadata->createTableHandle(
+  auto handle = layout->createTableHandle(
       connectorSession,
-      *layout,
       columns,
       *evaluator,
       std::move(filterConjuncts),
@@ -303,6 +298,36 @@ velox::core::TypedExprPtr createArrayForInList(
   return std::make_shared<velox::core::ConstantTypedExpr>(arrayVector);
 }
 
+velox::core::TypedExprPtr stepToMapSubscript(
+    Step step,
+    velox::core::TypedExprPtr arg,
+    const std::string& subscript) {
+  auto& type = arg->type();
+  velox::core::TypedExprPtr key;
+  switch (type->as<velox::TypeKind::MAP>().childAt(0)->kind()) {
+    case velox::TypeKind::VARCHAR:
+      key = makeKey(velox::VARCHAR(), step.field);
+      break;
+    case velox::TypeKind::BIGINT:
+      key = makeKey(velox::BIGINT(), step.id);
+      break;
+    case velox::TypeKind::INTEGER:
+      key = makeKey(velox::INTEGER(), static_cast<int32_t>(step.id));
+      break;
+    case velox::TypeKind::SMALLINT:
+      key = makeKey(velox::SMALLINT(), static_cast<int16_t>(step.id));
+      break;
+    case velox::TypeKind::TINYINT:
+      key = makeKey(velox::TINYINT(), static_cast<int8_t>(step.id));
+      break;
+    default:
+      VELOX_FAIL("Unsupported key type");
+  }
+
+  return std::make_shared<velox::core::CallTypedExpr>(
+      type->childAt(1), subscript, arg, key);
+}
+
 velox::core::TypedExprPtr stepToGetter(
     Step step,
     velox::core::TypedExprPtr arg,
@@ -310,10 +335,18 @@ velox::core::TypedExprPtr stepToGetter(
   switch (step.kind) {
     case StepKind::kField: {
       if (step.field) {
-        auto& type = arg->type()->childAt(
-            arg->type()->as<velox::TypeKind::ROW>().getChildIdx(step.field));
-        return std::make_shared<velox::core::FieldAccessTypedExpr>(
-            type, arg, step.field);
+        if (arg->type()->isRow()) {
+          auto& type = arg->type()->childAt(
+              arg->type()->as<velox::TypeKind::ROW>().getChildIdx(step.field));
+          return std::make_shared<velox::core::FieldAccessTypedExpr>(
+              type, arg, step.field);
+        }
+
+        if (arg->type()->isMap()) {
+          return stepToMapSubscript(step, arg, subscript);
+        }
+
+        VELOX_UNREACHABLE();
       }
       auto& type = arg->type()->childAt(step.id);
       return std::make_shared<velox::core::DereferenceTypedExpr>(
@@ -321,31 +354,10 @@ velox::core::TypedExprPtr stepToGetter(
     }
     case StepKind::kSubscript: {
       auto& type = arg->type();
-      if (type->kind() == velox::TypeKind::MAP) {
-        velox::core::TypedExprPtr key;
-        switch (type->as<velox::TypeKind::MAP>().childAt(0)->kind()) {
-          case velox::TypeKind::VARCHAR:
-            key = makeKey(velox::VARCHAR(), step.field);
-            break;
-          case velox::TypeKind::BIGINT:
-            key = makeKey(velox::BIGINT(), step.id);
-            break;
-          case velox::TypeKind::INTEGER:
-            key = makeKey(velox::INTEGER(), static_cast<int32_t>(step.id));
-            break;
-          case velox::TypeKind::SMALLINT:
-            key = makeKey(velox::SMALLINT(), static_cast<int16_t>(step.id));
-            break;
-          case velox::TypeKind::TINYINT:
-            key = makeKey(velox::TINYINT(), static_cast<int8_t>(step.id));
-            break;
-          default:
-            VELOX_FAIL("Unsupported key type");
-        }
-
-        return std::make_shared<velox::core::CallTypedExpr>(
-            type->childAt(1), subscript, arg, key);
+      if (type->isMap()) {
+        return stepToMapSubscript(step, arg, subscript);
       }
+
       return std::make_shared<velox::core::CallTypedExpr>(
           type->childAt(0),
           subscript,
@@ -871,6 +883,7 @@ velox::RowTypePtr ToVelox::subfieldPushdownScanType(
       if (top.contains(column)) {
         continue;
       }
+      top.add(column);
       topColumns.push_back(column);
       names.push_back(column->name());
       types.push_back(toTypePtr(column->value().type));
@@ -996,7 +1009,6 @@ velox::core::PlanNodePtr ToVelox::makeScan(
   auto* connector = scan.index->layout->connector();
   auto connectorSession =
       session_->toConnectorSession(connector->connectorId());
-  auto* connectorMetadata = connector::ConnectorMetadata::metadata(connector);
 
   velox::connector::ColumnHandleMap assignments;
   for (auto column : scanColumns) {
@@ -1006,11 +1018,8 @@ velox::core::PlanNodePtr ToVelox::makeScan(
     // follows.
     auto scanColumnName =
         isSubfieldPushdown ? column->name() : column->outputName();
-    assignments[scanColumnName] = connectorMetadata->createColumnHandle(
-        connectorSession,
-        *scan.index->layout,
-        column->name(),
-        std::move(subfields));
+    assignments[scanColumnName] = scan.index->layout->createColumnHandle(
+        connectorSession, column->name(), std::move(subfields));
   }
 
   velox::core::PlanNodePtr result =

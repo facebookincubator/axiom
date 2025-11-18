@@ -122,7 +122,7 @@ Fragment 0:  numWorkers=0:
               -- TableScan[1][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_availqty:INTEGER, ps_supplycost:DOUBLE
               -- HashJoin[4][INNER s_nationkey=n_nationkey] -> s_suppkey:BIGINT, s_nationkey:BIGINT, n_nationkey:BIGINT
                 -- TableScan[2][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_nationkey:BIGINT
-                -- TableScan[3][table: nation, range filters: [(n_name, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey:BIGINT
+                -- TableScan[3][table: nation, range filters: [(n_name, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> n_nationkey:BIGINT
         -- Project[15][expressions: (expr:DOUBLE, multiply("sum",0.0001))] -> expr:DOUBLE
           -- Aggregation[14][SINGLE sum := sum("dt13.__p65")] -> sum:DOUBLE
             -- Project[13][expressions: (dt13.__p65:DOUBLE, multiply("ps_supplycost_3",cast("ps_availqty_2" as DOUBLE)))] -> "dt13.__p65":DOUBLE
@@ -130,6 +130,6 @@ Fragment 0:  numWorkers=0:
                 -- TableScan[8][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_suppkey_1:BIGINT, ps_availqty_2:INTEGER, ps_supplycost_3:DOUBLE
                 -- HashJoin[11][INNER s_nationkey_8=n_nationkey_12] -> s_suppkey_5:BIGINT, s_nationkey_8:BIGINT, n_nationkey_12:BIGINT
                   -- TableScan[9][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey_5:BIGINT, s_nationkey_8:BIGINT
-                  -- TableScan[10][table: nation, range filters: [(n_name, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey_12:BIGINT
+                  -- TableScan[10][table: nation, range filters: [(n_name, Filter(BytesValues, deterministic, null not allowed))], data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> n_nationkey_12:BIGINT
 
 ___END___
