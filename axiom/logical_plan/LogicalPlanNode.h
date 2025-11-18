@@ -680,11 +680,11 @@ enum class WriteKind {
   kInsert = 2,
 
   // Individual rows are deleted. Only row ids as per
-  // ConnectorMetadata::rowIdHandles() are passed to the TableWriter.
+  // Table::rowIdHandles() are passed to the TableWriter.
   kDelete = 3,
 
   // Column values in individual rows are changed. The TableWriter
-  // gets first the row ids as per ConnectorMetadata::rowIdHandles()
+  // gets first the row ids as per Table::rowIdHandles()
   // and then new values for the columns being changed. The new values
   // may overlap with row ids if the row id is a set of primary key
   // columns.
