@@ -506,21 +506,7 @@ class JoinEdge {
     /// 'rightExists' must be true.
     ColumnCP markColumn{nullptr};
 
-    /// Columns produced by the 'left' side of a RIGHT or FULL OUTER join.
-    /// Requires 'leftOptional' to be true.
-    ColumnVector leftColumns;
-
-    /// Input expressions corresponding 1:1 to 'leftColumns'.
-    ExprVector leftExprs;
-
-    /// Columns produced by the 'right' side of a LEFT or FULL OUTER join.
-    /// Requires 'rightOptional' to be true.
-    ColumnVector rightColumns;
-
-    /// Input expressions corresponding 1:1 to 'rightColumns'.
-    ExprVector rightExprs;
-
-    bool directed{false};
+    bool unnest{false};
   };
 
   /// @param leftTable The left table of the join. May be nullptr if 'leftKeys'
@@ -535,35 +521,19 @@ class JoinEdge {
         rightOptional_(spec.rightOptional),
         rightExists_(spec.rightExists),
         rightNotExists_(spec.rightNotExists),
-        directed_(spec.directed),
-        markColumn_(spec.markColumn),
-        leftColumns_{spec.leftColumns},
-        leftExprs_{spec.leftExprs},
-        rightColumns_{spec.rightColumns},
-        rightExprs_{spec.rightExprs} {
-    VELOX_CHECK_NOT_NULL(rightTable);
-
-    if (isInner()) {
-      VELOX_CHECK_NOT_NULL(
-          leftTable, "Hyper edge is not supported for an inner join");
-      VELOX_CHECK(filter_.empty(), "Filter is not allowed for an inner join");
+        unnest_(spec.unnest),
+        markColumn_(spec.markColumn) {
+    if (leftOptional_ || !rightOptional_) {
+      // Only left join can have null left table.
+      VELOX_DCHECK_NOT_NULL(leftTable_);
     }
-
-    VELOX_CHECK(!rightExists_ || !rightNotExists_);
-
-    if (markColumn_) {
-      VELOX_CHECK(rightExists_);
-    }
-
-    if (!leftColumns_.empty()) {
-      VELOX_CHECK(leftOptional_);
-      VELOX_CHECK_EQ(leftColumns_.size(), leftExprs_.size());
-    }
-
-    if (!rightColumns_.empty()) {
-      VELOX_CHECK(rightOptional_);
-      VELOX_CHECK_EQ(rightColumns_.size(), rightExprs_.size());
-    }
+    VELOX_DCHECK_NOT_NULL(rightTable_);
+    // filter_ is only for non-inner joins.
+    VELOX_DCHECK(filter_.empty() || !isInner());
+    // Cannot be both semi and anti join.
+    VELOX_DCHECK(!rightExists_ || !rightNotExists_);
+    // Mark column only for semi joins.
+    VELOX_DCHECK(!markColumn_ || rightExists_);
   }
 
   static JoinEdge* makeInner(PlanObjectCP leftTable, PlanObjectCP rightTable) {
@@ -595,12 +565,11 @@ class JoinEdge {
       PlanObjectCP leftTable,
       PlanObjectCP rightTable,
       ExprVector unnestExprs) {
-    VELOX_DCHECK_NOT_NULL(leftTable);
-    auto* edge = make<JoinEdge>(leftTable, rightTable, Spec{.directed = true});
+    auto* edge = make<JoinEdge>(leftTable, rightTable, Spec{.unnest = true});
     edge->leftKeys_ = std::move(unnestExprs);
     // TODO Not sure to what values fanout need to be set,
     // (1, 1) looks ok, but tests don't produce expected plans.
-    edge->setFanouts(2, 2);
+    edge->setFanouts(2, 1);
     return edge;
   }
 
@@ -647,32 +616,16 @@ class JoinEdge {
     return markColumn_;
   }
 
-  const ColumnVector& leftColumns() const {
-    return leftColumns_;
-  }
-
-  const ExprVector& leftExprs() const {
-    return leftExprs_;
-  }
-
-  const ColumnVector& rightColumns() const {
-    return rightColumns_;
-  }
-
-  const ExprVector& rightExprs() const {
-    return rightExprs_;
-  }
-
-  bool directed() const {
-    return directed_;
+  bool unnest() const {
+    return unnest_;
   }
 
   void addEquality(ExprCP left, ExprCP right, bool update = false);
 
   /// True if inner join.
   bool isInner() const {
-    return !leftOptional_ && !rightOptional_ && !rightExists_ &&
-        !rightNotExists_;
+    return !leftOptional_ && !rightOptional_ && !isSemi() && !isAnti() &&
+        !unnest_;
   }
 
   bool isSemi() const {
@@ -687,18 +640,13 @@ class JoinEdge {
   /// placing this.
   bool isNonCommutative() const {
     // Inner and full outer joins are commutative.
-    if (rightOptional_ && leftOptional_) {
-      return false;
-    }
-
-    return !leftTable_ || rightOptional_ || leftOptional_ || rightExists_ ||
-        rightNotExists_ || directed_;
+    return !(isInner() || (leftOptional_ && rightOptional_));
   }
 
   /// True if has a hash based variant that builds on the left and probes on the
   /// right.
   bool hasRightHashVariant() const {
-    return isNonCommutative() && !rightNotExists_;
+    return isNonCommutative() && !isAnti() && !unnest_;
   }
 
   /// Returns the join side info for 'table'. If 'other' is set, returns the
@@ -799,17 +747,11 @@ class JoinEdge {
   // True if produces a result for left if no match on the right.
   const bool rightNotExists_;
 
-  // If directed non-outer edge. For example unnest or inner dependent on
-  // optional of outer.
-  const bool directed_;
+  // True if unnest.
+  const bool unnest_;
 
   // Flag to set if right side has a match.
   ColumnCP const markColumn_;
-
-  const ColumnVector leftColumns_;
-  const ExprVector leftExprs_;
-  const ColumnVector rightColumns_;
-  const ExprVector rightExprs_;
 };
 
 using JoinEdgeP = JoinEdge*;

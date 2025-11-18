@@ -132,13 +132,12 @@ SchemaTableCP Schema::findTable(
 
 float tableCardinality(PlanObjectCP table) {
   if (table->is(PlanType::kTableNode)) {
-    return table->as<BaseTable>()
-        ->schemaTable->columnGroups[0]
-        ->table->cardinality;
+    return table->as<BaseTable>()->schemaTable->cardinality;
   }
   if (table->is(PlanType::kValuesTableNode)) {
     return table->as<ValuesTable>()->cardinality();
-  } else if (table->is(PlanType::kUnnestTableNode)) {
+  }
+  if (table->is(PlanType::kUnnestTableNode)) {
     return table->as<UnnestTable>()->cardinality();
   }
   VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
