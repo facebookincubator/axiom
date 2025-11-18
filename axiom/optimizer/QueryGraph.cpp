@@ -301,7 +301,7 @@ std::string JoinEdge::toString() const {
   out << "<join "
       << (leftTable_ ? leftTable_->toString() : " multiple tables ");
   if (leftOptional_ && rightOptional_) {
-    out << " full outr ";
+    out << " full outer ";
   } else if (markColumn_) {
     out << " exists project ";
   } else if (rightOptional_) {
@@ -312,7 +312,7 @@ std::string JoinEdge::toString() const {
     out << " not exists ";
   } else if (leftOptional_) {
     out << " right ";
-  } else if (directed_) {
+  } else if (unnest_) {
     out << " unnest ";
   } else {
     out << " inner ";
