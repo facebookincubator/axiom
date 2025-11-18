@@ -58,11 +58,6 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
     HiveQueriesTestBase::TearDown();
   }
 
-  void checkTpch(int32_t query, const lp::LogicalPlanNodePtr& logicalPlan) {
-    auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
-    checkSame(logicalPlan, referencePlan);
-  }
-
   static std::filesystem::path makePath(const std::string& filePath) {
     return std::filesystem::path{__FILE__}.parent_path() / filePath;
   }
