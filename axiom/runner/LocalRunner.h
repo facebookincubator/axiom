@@ -125,6 +125,9 @@ class LocalRunner : public Runner,
   void abort() override;
 
   /// @pre state() != State::kInitialized
+  velox::ContinueFuture wait();
+
+  /// @pre state() != State::kInitialized
   void waitForCompletion(int32_t maxWaitMicros) override;
 
   State state() const override {
