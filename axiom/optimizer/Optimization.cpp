@@ -1465,7 +1465,6 @@ void Optimization::addJoin(
   joinByHash(plan, candidate, state, toTry);
 
   if (!options_.syntacticJoinOrder && toTry.size() > sizeAfterIndex &&
-      candidate.join->isNonCommutative() &&
       candidate.join->hasRightHashVariant()) {
     // There is a hash based candidate with a non-commutative join. Try a right
     // join variant.
@@ -1736,29 +1735,11 @@ PlanP unionPlan(
   return plan;
 }
 
-float startingScore(PlanObjectCP table) {
-  if (table->is(PlanType::kTableNode)) {
-    return table->as<BaseTable>()->schemaTable->cardinality;
-  }
-
-  if (table->is(PlanType::kValuesTableNode)) {
-    return table->as<ValuesTable>()->cardinality();
-  }
-
-  if (table->is(PlanType::kUnnestTableNode)) {
-    VELOX_FAIL("UnnestTable cannot be a starting table");
-    // Because it's rigth side of directed inner (cross) join edge.
-    // Directed edges are non-commutative, so right side cannot be starting.
-  }
-
-  return 10;
-}
-
 std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
   std::vector<float> scores;
   scores.reserve(tables.size());
   for (auto table : tables) {
-    scores.emplace_back(startingScore(table));
+    scores.emplace_back(tableCardinality(table));
   }
 
   std::vector<int32_t> indices(tables.size());
@@ -1826,8 +1807,8 @@ void Optimization::makeJoins(PlanState& state) {
       makeJoins(scan, state);
     } else if (from->is(PlanType::kUnnestTableNode)) {
       VELOX_FAIL("UnnestTable cannot be a starting table");
-      // Because it's rigth side of directed inner (cross) join edge.
-      // Directed edges are non-commutative, so right side cannot be starting.
+      // Because it's right side of unnest join edge
+      // and they are non-commutative.
     } else {
       // Start with a derived table.
       placeDerivedTable(from->as<const DerivedTable>(), state);

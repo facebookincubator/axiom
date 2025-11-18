@@ -921,7 +921,11 @@ void DerivedTable::distributeConjuncts() {
       }
 
       if (tables[0]->is(PlanType::kUnnestTableNode)) {
-        continue; // UnnestTable does not have filter push-down.
+        // UnnestTable does not implement filter pushdown yet.
+        // TODO: We can push down predicate to left side of unnest if
+        // 1. it only depends on the replicated columns
+        // 2. we can make subfield access for unnested columns
+        continue;
       }
 
       if (tables[0]->is(PlanType::kDerivedTableNode)) {
