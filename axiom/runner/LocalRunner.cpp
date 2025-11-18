@@ -278,6 +278,21 @@ void LocalRunner::abort() {
   }
 }
 
+velox::ContinueFuture LocalRunner::wait() {
+  VELOX_CHECK_NE(state_, State::kInitialized);
+  std::vector<velox::ContinueFuture> futures;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    for (auto& stage : stages_) {
+      for (auto& task : stage) {
+        futures.push_back(task->taskDeletionFuture());
+      }
+      stage.clear();
+    }
+  }
+  return folly::collectAll(std::move(futures)).defer([](auto&&) {});
+}
+
 void LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
   VELOX_CHECK_NE(state_, State::kInitialized);
   std::vector<velox::ContinueFuture> futures;
