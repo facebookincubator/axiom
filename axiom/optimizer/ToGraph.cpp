@@ -1624,36 +1624,6 @@ void ToGraph::makeValuesTable(const lp::ValuesNode& values) {
   currentDt_->addTable(valuesTable);
 }
 
-void ToGraph::addProjection(const lp::ProjectNode& project) {
-  exprSource_ = project.onlyInput().get();
-  const auto& names = project.names();
-  const auto& exprs = project.expressions();
-  auto channels = usedChannels(project);
-  trace(OptimizerOptions::kPreprocess, [&]() {
-    for (auto i = 0; i < exprs.size(); ++i) {
-      if (std::ranges::find(channels, i) == channels.end()) {
-        std::cout << "P=" << project.id()
-                  << " dropped projection name=" << names[i] << " = "
-                  << lp::ExprPrinter::toText(*exprs[i]) << std::endl;
-      }
-    }
-  });
-
-  for (auto i : channels) {
-    if (exprs[i]->isInputReference()) {
-      const auto& name = exprs[i]->as<lp::InputReferenceExpr>()->name();
-      // A variable projected to itself adds no renames. Inputs contain this
-      // all the time.
-      if (name == names[i]) {
-        continue;
-      }
-    }
-
-    auto expr = translateExpr(exprs.at(i));
-    renames_[names[i]] = expr;
-  }
-}
-
 namespace {
 
 struct Subqueries {
@@ -1692,6 +1662,54 @@ void extractSubqueries(const lp::ExprPtr& expr, Subqueries& subqueries) {
   }
 }
 } // namespace
+
+void ToGraph::addProjection(const lp::ProjectNode& project) {
+  auto oldSubqueries = subqueries_;
+  SCOPE_EXIT {
+    subqueries_ = std::move(oldSubqueries);
+  };
+
+  exprSource_ = project.onlyInput().get();
+  const auto& names = project.names();
+  const auto& exprs = project.expressions();
+  auto channels = usedChannels(project);
+  trace(OptimizerOptions::kPreprocess, [&]() {
+    for (auto i = 0; i < exprs.size(); ++i) {
+      if (std::ranges::find(channels, i) == channels.end()) {
+        std::cout << "P=" << project.id()
+                  << " dropped projection name=" << names[i] << " = "
+                  << lp::ExprPrinter::toText(*exprs[i]) << std::endl;
+      }
+    }
+  });
+
+  Subqueries subqueries;
+  for (auto i : channels) {
+    extractSubqueries(exprs[i], subqueries);
+  }
+  VELOX_CHECK(subqueries.inPredicates.empty());
+  VELOX_CHECK(subqueries.exists.empty());
+  if (!subqueries.scalars.empty()) {
+    for (const auto& subquery : subqueries.scalars) {
+      auto* subqueryDt = translateSubquery(*subquery->subquery());
+      subqueries_.emplace(subquery, subqueryDt->columns.front());
+    }
+  }
+
+  for (auto i : channels) {
+    if (exprs[i]->isInputReference()) {
+      const auto& name = exprs[i]->as<lp::InputReferenceExpr>()->name();
+      // A variable projected to itself adds no renames. Inputs contain this
+      // all the time.
+      if (name == names[i]) {
+        continue;
+      }
+    }
+
+    auto expr = translateExpr(exprs.at(i));
+    renames_[names[i]] = expr;
+  }
+}
 
 DerivedTableP ToGraph::translateSubquery(
     const logical_plan::LogicalPlanNode& node) {
@@ -1860,6 +1878,11 @@ void ToGraph::processSubqueries(const logical_plan::FilterNode& filter) {
 }
 
 void ToGraph::addFilter(const lp::FilterNode& filter) {
+  auto oldSubqueries = subqueries_;
+  SCOPE_EXIT {
+    subqueries_ = std::move(oldSubqueries);
+  };
+
   exprSource_ = filter.onlyInput().get();
 
   processSubqueries(filter);
