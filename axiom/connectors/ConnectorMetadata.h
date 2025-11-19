@@ -531,7 +531,7 @@ class Table : public std::enable_shared_from_this<Table> {
   /// an update or delete record. These may be for example some connector
   /// specific opaque row id or primary key columns.
   virtual std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
-      WriteKind kind) {
+      WriteKind kind) const {
     VELOX_UNSUPPORTED();
   }
 
