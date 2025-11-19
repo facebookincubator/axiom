@@ -1433,10 +1433,23 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
     }
   }
 
-  auto columnNames = table.type()->names();
-
   auto* connector = layout->connector();
   auto* metadata = connector::ConnectorMetadata::metadata(connector);
+
+  auto columnNames = [&]() -> std::vector<std::string> {
+    switch (write.kind()) {
+      case connector::WriteKind::kInsert:
+      case connector::WriteKind::kCreate: {
+        return table.type()->names();
+      }
+      case connector::WriteKind::kDelete:
+      case connector::WriteKind::kUpdate: {
+        const auto columnNames = tableWrite.write->columnNames();
+        return {columnNames.begin(), columnNames.end()};
+      }
+    }
+  }();
+
   auto session = session_->toConnectorSession(connector->connectorId());
   auto handle =
       metadata->beginWrite(session, table.shared_from_this(), write.kind());

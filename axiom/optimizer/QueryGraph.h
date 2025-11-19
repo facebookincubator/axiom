@@ -1104,16 +1104,17 @@ class WritePlan : public PlanObject {
   /// @param kind Indicates the type of write (create/insert/delete/update)
   /// @param columnExprs Expressions producing the values to write. 1:1 with the
   /// table schema.
+  /// @param columnNames Names of the columns to write.
   WritePlan(
       const connector::Table& table,
       connector::WriteKind kind,
-      ExprVector columnExprs)
+      ExprVector columnExprs,
+      std::span<const std::string> columnNames)
       : PlanObject{PlanType::kWriteNode},
         table_{table},
         kind_{kind},
-        columnExprs_{std::move(columnExprs)} {
-    VELOX_DCHECK_EQ(columnExprs_.size(), table_.type()->size());
-  }
+        columnExprs_{std::move(columnExprs)},
+        columnNames_{columnNames} {}
 
   const connector::Table& table() const {
     return table_;
@@ -1127,10 +1128,15 @@ class WritePlan : public PlanObject {
     return columnExprs_;
   }
 
+  std::span<const std::string> columnNames() const {
+    return columnNames_;
+  }
+
  private:
   const connector::Table& table_;
   const connector::WriteKind kind_;
   const ExprVector columnExprs_;
+  const std::span<const std::string> columnNames_;
 };
 
 using WritePlanCP = const WritePlan*;
