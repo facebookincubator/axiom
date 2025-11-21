@@ -904,6 +904,7 @@ void Optimization::addAggregation(
   }
 
   plan = std::move(precompute).maybeProject();
+  state.placed.add(aggPlan);
 
   if (isSingleWorker_ && runnerOptions_.numDrivers == 1) {
     auto* singleAgg = make<Aggregation>(
@@ -913,40 +914,72 @@ void Optimization::addAggregation(
         velox::core::AggregationNode::Step::kSingle,
         aggPlan->columns());
 
-    state.placed.add(aggPlan);
     state.addCost(*singleAgg);
     plan = singleAgg;
-  } else {
-    auto* partialAgg = make<Aggregation>(
-        plan,
-        std::move(groupingKeys),
-        aggregates,
-        velox::core::AggregationNode::Step::kPartial,
-        aggPlan->intermediateColumns());
-
-    state.placed.add(aggPlan);
-    state.addCost(*partialAgg);
-    plan = repartitionForAgg(partialAgg, state);
-
-    const auto numKeys = aggPlan->groupingKeys().size();
-
-    ExprVector finalGroupingKeys;
-    finalGroupingKeys.reserve(numKeys);
-    for (auto i = 0; i < numKeys; ++i) {
-      finalGroupingKeys.push_back(aggPlan->intermediateColumns()[i]);
-    }
-
-    auto* finalAgg = make<Aggregation>(
-        plan,
-        std::move(finalGroupingKeys),
-        std::move(aggregates),
-        velox::core::AggregationNode::Step::kFinal,
-        aggPlan->columns(),
-        partialAgg);
-
-    state.addCost(*finalAgg);
-    plan = finalAgg;
+    return;
   }
+  // We make a plan with partial agg and one without and pick the
+  // better according to cost model. We use the cost functions of the
+  // RelationOps to get details of idth of intermediate results,
+  // shuffles and so forth. A simpler but less precise way would be to
+  // simply not make a partial agg if expected to tal cardinality is
+  // more than so much. But the capacity of [partial agg also depends
+  // on the width of the data and configs so instead of unbundling
+  // the cost functions we make different kinds of plans and use the
+  // plans' functions.
+  auto costBeforeAgg = state.cost;
+  auto planBeforeAgg = plan;
+  auto* partialAgg = make<Aggregation>(
+      plan,
+      groupingKeys,
+      aggregates,
+      velox::core::AggregationNode::Step::kPartial,
+      aggPlan->intermediateColumns());
+
+  state.addCost(*partialAgg);
+  plan = repartitionForAgg(partialAgg, state);
+
+  const auto numKeys = aggPlan->groupingKeys().size();
+
+  ExprVector finalGroupingKeys;
+  finalGroupingKeys.reserve(numKeys);
+  for (auto i = 0; i < numKeys; ++i) {
+    finalGroupingKeys.push_back(aggPlan->intermediateColumns()[i]);
+  }
+
+  auto* planWithPartial = make<Aggregation>(
+      plan,
+      std::move(finalGroupingKeys),
+      aggregates,
+      velox::core::AggregationNode::Step::kFinal,
+      aggPlan->columns(),
+      partialAgg);
+  state.addCost(*planWithPartial);
+
+  if (numKeys == 0) {
+    // If there is no grouping, we always make partial + final.
+    plan = planWithPartial;
+    return;
+  }
+  auto costWithPartial = state.cost;
+
+  // Now we make a plan without partial aggregation.
+  state.cost = costBeforeAgg;
+  plan = repartitionForAgg(planBeforeAgg, state);
+  auto* singleAgg = make<Aggregation>(
+      plan,
+      groupingKeys,
+      aggregates,
+      velox::core::AggregationNode::Step::kSingle,
+      aggPlan->columns());
+  state.addCost(*singleAgg);
+
+  if (state.cost.cost < costWithPartial.cost) {
+    plan = singleAgg;
+    return;
+  }
+  state.cost = costWithPartial;
+  plan = planWithPartial;
 }
 
 void Optimization::addOrderBy(

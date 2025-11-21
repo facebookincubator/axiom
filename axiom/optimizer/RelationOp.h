@@ -18,6 +18,7 @@
 
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
+#include "axiom/runner/MultiFragmentPlan.h"
 
 /// Plan candidates.
 /// A candidate plan is constructed based on the join graph/derived table tree.
@@ -547,7 +548,7 @@ struct Aggregation : public RelationOp {
  private:
   void setCostWithGroups(
       int64_t inputBeforePartial,
-      int32_t width,
+      const runner::MultiFragmentPlan::Options& runnerOptions,
       float maxPartialAggregationMemory,
       float abandonPartialAggregationMinRows,
       float abandonPartialAggregationMinPct);

@@ -651,10 +651,9 @@ Aggregation::Aggregation(
   const auto& runnerOptions = optimization->runnerOptions();
 
   if (numKeys > 0) {
-    const int32_t width = runnerOptions.numWorkers * runnerOptions.numDrivers;
     setCostWithGroups(
         inputBeforePartial,
-        width,
+        runnerOptions,
         maxPartialAggregationMemory,
         abandonPartialAggregationMinRows,
         abandonPartialAggregationMinPct);
@@ -671,7 +670,7 @@ Aggregation::Aggregation(
 
 void Aggregation::setCostWithGroups(
     int64_t inputBeforePartial,
-    int32_t width,
+    const runner::MultiFragmentPlan::Options& runnerOptions,
     float maxPartialAggregationMemory,
     float abandonPartialAggregationMinRows,
     float abandonPartialAggregationMinPct) {
@@ -697,11 +696,19 @@ void Aggregation::setCostWithGroups(
 
   float rowBytes =
       byteSize(groupingKeys) + byteSize(aggregates) + Costs::kHashRowBytes;
-
+  const bool isPartial = (step == velox::core::AggregationNode::Step::kPartial);
+  float localExchangeCost = 0;
+  if (runnerOptions.numDrivers > 1 && !isPartial) {
+    // If more than one driver per fragment, a non-partial group by
+    // needs a local exchange. Estimated to be 1/3 of a remote
+    // shuffle.
+    localExchangeCost = shuffleCost(input_->columns()) / 3;
+  }
   if (step == velox::core::AggregationNode::Step::kSingle) {
     // Aggregation in one step, no estimate of reduction from partial.
     cost_.unitCost = aggregates.size() * Costs::kSimpleAggregateCost +
-        Costs::hashTableCost(nOut) + 2 * Costs::hashRowCost(nOut, rowBytes);
+        Costs::hashTableCost(nOut) + 2 * Costs::hashRowCost(nOut, rowBytes) +
+        localExchangeCost;
     cost_.fanout = nOut / safeInputBeforePartial;
     cost_.totalBytes = nOut * rowBytes;
     VELOX_CHECK_LE(cost_.fanout, 1.0f);
@@ -713,8 +720,8 @@ void Aggregation::setCostWithGroups(
     partialCapacity = nOut;
   }
 
-  const bool isPartial = (step == velox::core::AggregationNode::Step::kPartial);
   const auto maxInTable = isPartial ? partialCapacity : nOut;
+
   auto aggCost = aggregates.size() * Costs::kSimpleAggregateCost +
       Costs::hashTableCost(maxInTable) +
       2 * Costs::hashRowCost(maxInTable, rowBytes);
@@ -722,13 +729,18 @@ void Aggregation::setCostWithGroups(
   // The number of distinct  keys we expect to see in the initial sample before
   // we consider abandoning partial aggregation.
   auto initialDistincts =
-      expectedNumDistincts(abandonPartialAggregationMinRows, nOut);
+      expectedNumDistincts(abandonPartialAggregationMinRows, maxCardinality);
   // The number of input rows expected for each flush of partial aggregation.
-  auto partialInput = std::min<double>(
-      safeInputBeforePartial,
-      partialFlushInterval(safeInputBeforePartial, nOut, partialCapacity));
-  auto partialFanout = partialCapacity / partialInput;
-
+  auto partialInputBetweenFlushes = partialFlushInterval(
+      safeInputBeforePartial, partialCapacity, maxCardinality);
+  // Partial cannot reduce more than the expected total
+  // reduction. Partial reduction can be overestimated whenn input is
+  // a fraction of possible values and partial capacity is set to be
+  // no greater than input.
+  auto partialFanout = std::max<double>(
+      nOut / safeInputBeforePartial,
+      partialCapacity / partialInputBetweenFlushes);
+  int32_t width = runnerOptions.numWorkers * runnerOptions.numDrivers;
   if ((safeInputBeforePartial > abandonPartialAggregationMinRows * width &&
        initialDistincts > abandonPartialAggregationMinRows *
                (abandonPartialAggregationMinPct / 100)) ||
@@ -737,6 +749,7 @@ void Aggregation::setCostWithGroups(
     // Partial agg does not reduce.
     partialFanout = 1;
   }
+
   if (isPartial) {
     cost_.fanout = partialFanout;
     if (partialFanout == 1) {
@@ -748,11 +761,12 @@ void Aggregation::setCostWithGroups(
     }
   } else {
     cost_.totalBytes = nOut * rowBytes;
-    cost_.unitCost =
-        Costs::kHashColumnCost * numKeys + Costs::hashTableCost(nOut) + aggCost;
+    cost_.unitCost = Costs::kHashColumnCost * numKeys +
+        Costs::hashTableCost(nOut) + aggCost + localExchangeCost;
     auto finalInput = safeInputBeforePartial * partialFanout;
     cost_.fanout = nOut / finalInput;
   }
+  VELOX_CHECK_LE(cost_.fanout, 1.0f);
 }
 
 std::string Unnest::toString(bool recursive, bool detail) const {
