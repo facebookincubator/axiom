@@ -390,10 +390,20 @@ Join::Join(
       filter{std::move(filterExprs)} {
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = fanout;
-
-  const float buildSize = right->resultCardinality();
   const auto numRightColumns =
       static_cast<float>(right->input()->columns().size());
+  if (method == JoinMethod::kCross) {
+    const float rightCardinality = right->resultCardinality();
+    const float rightByteSize = byteSize(right->columns());
+    cost_.setupCost =
+        rightCardinality * rightByteSize; // broadcast of the right side
+    cost_.unitCost = fanout *
+        (Costs::kColumnRowCost + numRightColumns * Costs::kColumnByteCost);
+    cost_.totalBytes = cost_.setupCost;
+    return;
+  }
+
+  const float buildSize = right->resultCardinality();
   auto rowCost = numRightColumns * Costs::kHashExtractColumnCost;
   const auto numLeftKeys = static_cast<float>(leftKeys.size());
   cost_.unitCost = Costs::hashProbeCost(buildSize) + cost_.fanout * rowCost +
@@ -466,8 +476,21 @@ std::string Join::toString(bool recursive, bool detail) const {
   if (recursive) {
     out << input()->toString(true, detail);
   }
-  out << "*" << (method == JoinMethod::kHash ? "H" : "M") << " "
-      << joinTypeLabel(joinType);
+  out << "*";
+
+  switch (method) {
+    case JoinMethod::kHash:
+      out << "H";
+      break;
+    case JoinMethod::kMerge:
+      out << "M";
+      break;
+    case JoinMethod::kCross:
+      out << "C";
+      break;
+  }
+
+  out << " " << joinTypeLabel(joinType);
   printCost(detail, out);
   if (detail) {
     out << "columns: " << itemsToString(columns().data(), columns().size())

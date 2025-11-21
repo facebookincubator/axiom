@@ -151,6 +151,13 @@ class PlanMatcherBuilder {
 
   PlanMatcherBuilder& orderBy(const std::vector<std::string>& ordering);
 
+  PlanMatcherBuilder& nestedLoopJoin(
+      const std::shared_ptr<PlanMatcher>& rightMatcher);
+
+  PlanMatcherBuilder& nestedLoopJoin(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      JoinType joinType);
+
   PlanMatcherBuilder& tableWrite();
 
   std::shared_ptr<PlanMatcher> build() {
