@@ -127,8 +127,11 @@ bool VeloxHistory::setLeafSelectivity(
     return true;
   }
 
+  // When finding no hits, do not make a selectivity of 0 because this makes /0
+  // or *0 and *0 is 0, which makes any subsequent operations 0 regardless of
+  // cost. So as not to underflow, count non-existent as 0.9 rows.
   table.filterSelectivity =
-      static_cast<float>(sample.second) / static_cast<float>(sample.first);
+      std::max<float>(0.9f, sample.second) / static_cast<float>(sample.first);
   recordLeafSelectivity(string, table.filterSelectivity, false);
 
   bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
