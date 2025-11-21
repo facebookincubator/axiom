@@ -189,9 +189,8 @@ TEST_F(PlanTest, agg) {
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
                        .project({"a", "a + b"})
-                       .partialAggregation()
                        .localPartition()
-                       .finalAggregation()
+                       .singleAggregation()
                        .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
