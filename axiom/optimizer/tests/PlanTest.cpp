@@ -554,6 +554,36 @@ TEST_F(PlanTest, filterToJoinEdge) {
   checkSame(logicalPlan, referencePlan);
 }
 
+TEST_F(PlanTest, filterImport) {
+  auto ordersType = ROW({"o_custkey", "o_totalprice"}, {BIGINT(), DOUBLE()});
+
+  auto logicalPlan = lp::PlanBuilder()
+                         .tableScan(exec::test::kHiveConnectorId, "orders")
+                         .aggregate({"o_custkey"}, {"sum(o_totalprice) as a0"})
+                         .filter("o_custkey < 100 and a0 > 200.0")
+                         .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("orders")
+                       .singleAggregation()
+                       .filter("a0 > 200.0")
+                       .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("orders", ordersType)
+          .singleAggregation({"o_custkey"}, {"sum(o_totalprice)"})
+          .filter("o_custkey < 100 and a0 > 200.0")
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
 TEST_F(PlanTest, filterBreakup) {
   const char* filterText =
       "        (\n"
@@ -586,29 +616,11 @@ TEST_F(PlanTest, filterBreakup) {
       "                and l_shipinstruct = 'DELIVER IN PERSON'\n"
       "        )\n";
 
-  auto lineitemType = ROW(
-      {{"l_partkey", BIGINT()},
-       {"l_shipmode", VARCHAR()},
-       {"l_shipinstruct", VARCHAR()},
-       {"l_extendedprice", DOUBLE()},
-       {"l_discount", DOUBLE()},
-       {"l_quantity", DOUBLE()}});
-
-  auto partType = ROW(
-      {{"p_partkey", BIGINT()},
-       {"p_brand", VARCHAR()},
-       {"p_container", VARCHAR()},
-       {"p_size", INTEGER()}});
-
-  const auto connectorId = exec::test::kHiveConnectorId;
-
-  lp::PlanBuilder::Context context;
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
   auto logicalPlan =
       lp::PlanBuilder(context)
-          .tableScan(connectorId, "lineitem", lineitemType->names())
-          .crossJoin(
-              lp::PlanBuilder(context).tableScan(
-                  connectorId, "part", partType->names()))
+          .tableScan("lineitem")
+          .crossJoin(lp::PlanBuilder(context).tableScan("part"))
           .filter(filterText)
           .project({"l_extendedprice * (1.0 - l_discount) as part_revenue"})
           .aggregate({}, {"sum(part_revenue)"})
@@ -616,26 +628,19 @@ TEST_F(PlanTest, filterBreakup) {
 
   {
     // Expect the per table filters to be extracted from the OR.
-    // TODO Verify remaining filters.
     auto lineitemFilters =
         common::test::SubfieldFiltersBuilder()
             .add("l_shipinstruct", exec::equal("DELIVER IN PERSON"))
             .add(
                 "l_shipmode",
                 exec::in(std::vector<std::string>{"AIR", "AIR REG"}))
+            .add("l_quantity", exec::betweenDouble(1.0, 30.0))
             .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher =
         core::PlanMatcherBuilder()
-            .hiveScan(
-                "lineitem",
-                std::move(lineitemFilters),
-                // TODO Fix this plan. Compact the filter to between(1, 30) and
-                // push down as subfield filter.
-                "\"or\"(l_quantity >= 20.0 AND l_quantity <= 30.0, "
-                "   \"or\"(l_quantity >= 1.0 AND l_quantity <= 11.0, "
-                "          l_quantity >= 10.0 AND l_quantity <= 20.0))")
+            .hiveScan("lineitem", std::move(lineitemFilters))
             .hashJoin(
                 core::PlanMatcherBuilder()
                     .hiveScan(
