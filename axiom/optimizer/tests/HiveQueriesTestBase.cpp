@@ -15,7 +15,9 @@
  */
 
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
+#include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
 
 namespace facebook::axiom::optimizer::test {
 
@@ -107,6 +109,54 @@ lp::LogicalPlanNodePtr HiveQueriesTestBase::parseSelect(std::string_view sql) {
 
   VELOX_CHECK(statement->isSelect());
   return statement->as<::axiom::sql::presto::SelectStatement>()->plan();
+}
+
+void HiveQueriesTestBase::createEmptyTable(
+    const std::string& name,
+    const RowTypePtr& tableType,
+    const folly::F14FastMap<std::string, velox::Variant>& options) {
+  metadata_->dropTableIfExists(name);
+
+  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto table = metadata_->createTable(session, name, tableType, options);
+  auto handle =
+      metadata_->beginWrite(session, table, connector::WriteKind::kCreate);
+  metadata_->finishWrite(session, handle, {}).get();
+}
+
+void HiveQueriesTestBase::checkTableData(
+    const std::string& tableName,
+    const std::vector<RowVectorPtr>& expectedData) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan = lp::PlanBuilder(context).tableScan(tableName).build();
+
+  checkSameSingleNode(logicalPlan, expectedData);
+}
+
+std::string HiveQueriesTestBase::getTestDataPath(const std::string& filename) {
+  return velox::test::getDataFilePath(
+      "axiom/optimizer/tests", fmt::format("test_data/{}", filename));
+}
+
+void HiveQueriesTestBase::createTableFromFile(
+    const std::string& tableName,
+    const RowTypePtr& tableType,
+    const std::string& filePath,
+    const folly::F14FastMap<std::string, velox::Variant>& options) {
+  ASSERT_TRUE(std::filesystem::exists(filePath))
+      << "File does not exist: " << filePath;
+
+  auto session = std::make_shared<connector::ConnectorSession>("test");
+  metadata_->createTable(session, tableName, tableType, options);
+
+  auto tablePath = metadata_->tablePath(tableName);
+  std::string targetFilePath = fmt::format("{}/data.csv", tablePath);
+  std::filesystem::copy_file(
+      filePath,
+      targetFilePath,
+      std::filesystem::copy_options::overwrite_existing);
+
+  metadata_->reloadTableFromPath(tableName);
 }
 
 } // namespace facebook::axiom::optimizer::test

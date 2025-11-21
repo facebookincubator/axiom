@@ -25,6 +25,8 @@
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/dwio/text/RegisterTextReader.h"
+#include "velox/dwio/text/RegisterTextWriter.h"
 
 namespace facebook::axiom {
 namespace {
@@ -40,6 +42,8 @@ class Connectors {
     velox::parquet::registerParquetWriterFactory();
     velox::dwrf::registerDwrfReaderFactory();
     velox::dwrf::registerDwrfWriterFactory();
+    velox::text::registerTextReaderFactory();
+    velox::text::registerTextWriterFactory();
 
     std::shared_ptr<velox::connector::Connector> connector;
 

@@ -67,13 +67,36 @@ class HiveQueriesTestBase : public QueryTestBase {
     return *metadata_;
   }
 
+  /// Creates an empty table with the given schema and options.
+  /// If a table with the same name already exists, it is dropped first.
+  void createEmptyTable(
+      const std::string& name,
+      const velox::RowTypePtr& tableType,
+      const folly::F14FastMap<std::string, velox::Variant>& options = {});
+
+  /// Checks that the data in the specified table matches the expected data.
+  void checkTableData(
+      const std::string& tableName,
+      const std::vector<velox::RowVectorPtr>& expectedData);
+
+  /// Returns the full path to a test data file.
+  static std::string getTestDataPath(const std::string& filename);
+
+  /// Creates a table from an external file by copying it into the table
+  /// directory.
+  void createTableFromFile(
+      const std::string& tableName,
+      const velox::RowTypePtr& tableType,
+      const std::string& filePath,
+      const folly::F14FastMap<std::string, velox::Variant>& options = {});
+
  private:
   inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
       gTempDirectory;
 
   std::unique_ptr<::axiom::sql::presto::PrestoParser> prestoParser_;
   std::shared_ptr<velox::connector::Connector> connector_;
-  connector::hive::LocalHiveConnectorMetadata* metadata_;
+  connector::hive::LocalHiveConnectorMetadata* metadata_{};
 };
 
 } // namespace facebook::axiom::optimizer::test

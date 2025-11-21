@@ -1,0 +1,22 @@
+{
+  "fileFormat": "text",
+  "dataColumns": [
+    {
+      "name": "id",
+      "type": "int"
+    },
+    {
+      "name": "name",
+      "type": "string"
+    },
+    {
+      "name": "score",
+      "type": "double"
+    }
+  ],
+  "partitionColumns": [],
+  "serdeOptions": {
+    "fieldDelim": ",",
+    "nullString": ""
+  }
+}
