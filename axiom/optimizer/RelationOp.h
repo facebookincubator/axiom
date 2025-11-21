@@ -529,7 +529,8 @@ struct Aggregation : public RelationOp {
       ExprVector groupingKeys,
       AggregateVector aggregates,
       velox::core::AggregationNode::Step step,
-      ColumnVector columns);
+      ColumnVector columns,
+      const Aggregation* partial = nullptr);
 
   const ExprVector groupingKeys;
   const AggregateVector aggregates;
@@ -542,6 +543,14 @@ struct Aggregation : public RelationOp {
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
+
+ private:
+  void setCostWithGroups(
+      int64_t inputBeforePartial,
+      int32_t width,
+      float maxPartialAggregationMemory,
+      float abandonPartialAggregationMinRows,
+      float abandonPartialAggregationMinPct);
 };
 
 /// Represents an order by. The order is given by the distribution.

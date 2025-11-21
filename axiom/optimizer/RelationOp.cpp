@@ -392,12 +392,15 @@ Join::Join(
   cost_.fanout = fanout;
 
   const float buildSize = right->resultCardinality();
-  const auto numRightColumns =
-      static_cast<float>(right->input()->columns().size());
-  auto rowCost = numRightColumns * Costs::kHashExtractColumnCost;
-  const auto numLeftKeys = static_cast<float>(leftKeys.size());
-  cost_.unitCost = Costs::hashProbeCost(buildSize) + cost_.fanout * rowCost +
-      numLeftKeys * Costs::kHashColumnCost;
+  auto rowBytes = byteSize(right->input()->columns());
+  auto numKeys = leftKeys.size();
+  auto probeCost = Costs::hashTableCost(buildSize) +
+      // Multiply by min(fanout, 1) because most misses will not compare and if
+      // fanout > 1, there is still only one compare.
+      (Costs::kKeyCompareCost * numKeys * std::min<float>(fanout, 1.0f)) +
+      numKeys * Costs::kHashColumnCost;
+  auto rowCost = Costs::hashRowCost(buildSize, rowBytes);
+  cost_.unitCost = probeCost + cost_.fanout * rowCost;
 }
 
 namespace {
@@ -559,21 +562,128 @@ Unnest::Unnest(
   cost_.inputCardinality = inputCardinality();
 }
 
+namespace {
+double partialFlushInterval(
+    double totalInput,
+    double numDistinct,
+    double maxDistinct) {
+  // Handle edge cases.
+  if (maxDistinct >= numDistinct) {
+    return totalInput;
+  }
+  VELOX_CHECK_GT(maxDistinct, 0);
+
+  // The expected number of samples to see k out of n distinct values
+  // follows from the coupon collector problem:
+  // E[k] = n * (1/n + 1/(n-1) + ... + 1/(n-k+1))
+
+  double n = numDistinct;
+  double k = maxDistinct;
+
+  // Approximate the partial harmonic sum using logarithms (constant time):
+  // H(n,k) = Σ(i=0 to k-1) 1/(n-i) ≈ ln(n) - ln(n-k) = ln(n/(n-k))
+  // This uses the integral approximation: ∫_{n-k}^n 1/x dx
+  double harmonicSum = std::log(n / (n - k));
+
+  // Expected number of samples in a uniform distribution
+  double expectedSamples = n * harmonicSum;
+
+  // Scale by the ratio of total input to distinct values
+  // to account for non-uniform distribution
+  double scalingFactor = totalInput / numDistinct;
+
+  return expectedSamples * scalingFactor;
+}
+
+// Predicts the number of distinct values expected after sampling numRows items
+// from a population with numDistinct distinct values.
+// @param numRows The count of samples that are initially seen.
+// @param numDistinct The count of distinct values in the full population.
+// @return predicted number of distinct values seen after numRows inputs
+double expectedNumDistincts(double numRows, double numDistinct) {
+  if (numDistinct <= 0 || numRows <= 0) {
+    return 0.0f;
+  }
+
+  // Using the coupon collector formula:
+  // Expected distinct values = d * (1 - (1 - 1/d)^n)
+  // where d is total distinct values and n is number of samples
+  return numDistinct * (1.0 - std::pow(1.0 - (1.0 / numDistinct), numRows));
+}
+} // namespace
+
 Aggregation::Aggregation(
     RelationOpPtr input,
     ExprVector groupingKeysVector,
     AggregateVector aggregatesVector,
     velox::core::AggregationNode::Step step,
-    ColumnVector columns)
+    ColumnVector columns,
+    const Aggregation* partial)
     : RelationOp{RelType::kAggregation, std::move(input), std::move(columns)},
       groupingKeys{std::move(groupingKeysVector)},
       aggregates{std::move(aggregatesVector)},
       step{step} {
   cost_.inputCardinality = inputCardinality();
 
-  float cardinality = 1;
+  VELOX_CHECK(!std::isnan(cost_.inputCardinality));
+  VELOX_CHECK(std::isfinite(cost_.inputCardinality));
+  if (partial) {
+    VELOX_CHECK(!std::isnan(partial->cost_.inputCardinality));
+    VELOX_CHECK(std::isfinite(partial->cost_.inputCardinality));
+  }
+
+  // inputBeforePartial is the input cardinality before the partial aggregation
+  const int64_t inputBeforePartial = partial != nullptr
+      ? partial->cost_.inputCardinality
+      : cost_.inputCardinality;
+
+  const auto numKeys = groupingKeys.size();
+
+  auto* optimization = queryCtx()->optimization();
+  const auto& veloxQueryConfig = optimization->veloxQueryCtx()->queryConfig();
+  const float maxPartialAggregationMemory =
+      veloxQueryConfig.maxPartialAggregationMemoryUsage();
+  const float abandonPartialAggregationMinRows =
+      veloxQueryConfig.abandonPartialAggregationMinRows();
+  const float abandonPartialAggregationMinPct =
+      veloxQueryConfig.abandonPartialAggregationMinPct();
+
+  const auto& runnerOptions = optimization->runnerOptions();
+
+  if (numKeys > 0) {
+    const int32_t width = runnerOptions.numWorkers * runnerOptions.numDrivers;
+    setCostWithGroups(
+        inputBeforePartial,
+        width,
+        maxPartialAggregationMemory,
+        abandonPartialAggregationMinRows,
+        abandonPartialAggregationMinPct);
+  } else {
+    // Global aggregation (no grouping keys). Avoid division by zero.
+    float safeInputCardinality = std::max(1.0f, cost_.inputCardinality);
+
+    cost_.unitCost = aggregates.size() * Costs::kSimpleAggregateCost;
+    cost_.fanout = 1.0f / safeInputCardinality;
+  }
+
+  VELOX_CHECK_LE(resultCardinality(), inputCardinality());
+}
+
+void Aggregation::setCostWithGroups(
+    int64_t inputBeforePartial,
+    int32_t width,
+    float maxPartialAggregationMemory,
+    float abandonPartialAggregationMinRows,
+    float abandonPartialAggregationMinPct) {
+  // Avoid division by zero.
+  const float safeInputBeforePartial =
+      std::max(1.0f, static_cast<float>(inputBeforePartial));
+
+  const auto numKeys = groupingKeys.size();
+
+  double maxCardinality = 1;
   for (auto key : groupingKeys) {
-    cardinality *= key->value().cardinality;
+    maxCardinality *= key->value().cardinality;
   }
 
   // The estimated output is input minus the times an input is a
@@ -582,16 +692,67 @@ Aggregation::Aggregation(
   // potentially distinct keys and n is the number of elements in the
   // input. This approaches d as n goes to infinity. The chance of one in d
   // being unique after n values is 1 - (1/d)^n.
-  auto nOut = cardinality -
-      cardinality *
-          std::pow(1.0F - (1.0F / cardinality), input_->resultCardinality());
+  const auto nOut =
+      expectedNumDistincts(maxCardinality, safeInputBeforePartial);
 
-  cost_.fanout = nOut / cost_.inputCardinality;
-  const auto numGrouppingKeys = static_cast<float>(groupingKeys.size());
-  cost_.unitCost = numGrouppingKeys * Costs::hashProbeCost(nOut);
+  float rowBytes =
+      byteSize(groupingKeys) + byteSize(aggregates) + Costs::kHashRowBytes;
 
-  float rowBytes = byteSize(groupingKeys) + byteSize(aggregates);
-  cost_.totalBytes = nOut * rowBytes;
+  if (step == velox::core::AggregationNode::Step::kSingle) {
+    // Aggregation in one step, no estimate of reduction from partial.
+    cost_.unitCost = aggregates.size() * Costs::kSimpleAggregateCost +
+        Costs::hashTableCost(nOut) + 2 * Costs::hashRowCost(nOut, rowBytes);
+    cost_.fanout = nOut / safeInputBeforePartial;
+    cost_.totalBytes = nOut * rowBytes;
+    VELOX_CHECK_LE(cost_.fanout, 1.0f);
+    return;
+  }
+
+  float partialCapacity = maxPartialAggregationMemory / rowBytes;
+  if (partialCapacity > nOut) {
+    partialCapacity = nOut;
+  }
+
+  const bool isPartial = (step == velox::core::AggregationNode::Step::kPartial);
+  const auto maxInTable = isPartial ? partialCapacity : nOut;
+  auto aggCost = aggregates.size() * Costs::kSimpleAggregateCost +
+      Costs::hashTableCost(maxInTable) +
+      2 * Costs::hashRowCost(maxInTable, rowBytes);
+
+  // The number of distinct  keys we expect to see in the initial sample before
+  // we consider abandoning partial aggregation.
+  auto initialDistincts =
+      expectedNumDistincts(abandonPartialAggregationMinRows, nOut);
+  // The number of input rows expected for each flush of partial aggregation.
+  auto partialInput = std::min<double>(
+      safeInputBeforePartial,
+      partialFlushInterval(safeInputBeforePartial, nOut, partialCapacity));
+  auto partialFanout = partialCapacity / partialInput;
+
+  if ((safeInputBeforePartial > abandonPartialAggregationMinRows * width &&
+       initialDistincts > abandonPartialAggregationMinRows *
+               (abandonPartialAggregationMinPct / 100)) ||
+      (safeInputBeforePartial > nOut * 5 &&
+       partialFanout > (abandonPartialAggregationMinPct / 100))) {
+    // Partial agg does not reduce.
+    partialFanout = 1;
+  }
+  if (isPartial) {
+    cost_.fanout = partialFanout;
+    if (partialFanout == 1) {
+      cost_.unitCost = 0.1 * rowBytes;
+    } else {
+      cost_.unitCost = Costs::kHashColumnCost * numKeys +
+          Costs::hashTableCost(partialCapacity) + aggCost;
+      cost_.totalBytes = partialCapacity * rowBytes;
+    }
+  } else {
+    cost_.totalBytes = nOut * rowBytes;
+    cost_.unitCost =
+        Costs::kHashColumnCost * numKeys + Costs::hashTableCost(nOut) + aggCost;
+    auto finalInput = safeInputBeforePartial * partialFanout;
+    cost_.fanout = nOut / finalInput;
+  }
 }
 
 std::string Unnest::toString(bool recursive, bool detail) const {
@@ -677,11 +838,16 @@ HashBuild::HashBuild(RelationOpPtr input, ExprVector keysVector, PlanP plan)
   cost_.fanout = 1;
 
   const auto numKeys = static_cast<float>(keys.size());
+  const auto rowBytes = byteSize(columns());
   const auto numColumns = static_cast<float>(columns().size());
-  cost_.unitCost = numKeys * Costs::kHashColumnCost +
-      Costs::hashProbeCost(cost_.inputCardinality) +
+  // Per row cost calculates the column hashes twice, once to partition and a
+  // second time to insert.
+  cost_.unitCost = (numKeys * 2 * Costs::kHashColumnCost) +
+      Costs::hashBuildCost(cost_.inputCardinality, rowBytes) +
+      numKeys * Costs::kKeyCompareCost +
       numColumns * Costs::kHashExtractColumnCost * 2;
-  cost_.totalBytes = cost_.inputCardinality * byteSize(columns());
+
+  cost_.totalBytes = cost_.inputCardinality * rowBytes;
 }
 
 std::string HashBuild::toString(bool recursive, bool detail) const {
@@ -821,7 +987,20 @@ OrderBy::OrderBy(
       limit{limit},
       offset{offset} {
   cost_.inputCardinality = inputCardinality();
-  cost_.fanout = 1;
+  if (limit == -1) {
+    cost_.fanout = 1;
+  } else {
+    const auto cardinality = static_cast<float>(limit);
+    if (cost_.inputCardinality <= cardinality) {
+      // Input cardinality does not exceed the limit. The limit is no-op.
+      // Doesn't change cardinality.
+      cost_.fanout = 1;
+    } else {
+      // Input cardinality exceeds the limit. Calculate fanout to ensure that
+      // fanout * limit = input-cardinality.
+      cost_.fanout = cardinality / cost_.inputCardinality;
+    }
+  }
 
   // TODO Fill in cost_.unitCost and others.
 }

@@ -380,7 +380,23 @@ TEST_F(TpchPlanTest, q15) {
 TEST_F(TpchPlanTest, q16) {
   checkTpchSql(16);
 
-  // TODO Fix join order to be: (partsupp x part) LEFT SEMI FILTER supplier.
+  // The join is biggest table first, with  part joined first because it is
+  // quite selective, more so than the exists with supplier.
+
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
+
+  auto matcher =
+      startMatcher("partsupp")
+          .hashJoin(startMatcher("part").build(), core::JoinType::kInner)
+          .hashJoin(startMatcher("supplier").build(), core::JoinType::kAnti)
+          .aggregation()
+          .orderBy()
+          .build();
+
+  auto plan = planTpch(16);
+  AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 TEST_F(TpchPlanTest, q17) {

@@ -941,7 +941,8 @@ void Optimization::addAggregation(
         std::move(finalGroupingKeys),
         std::move(aggregates),
         velox::core::AggregationNode::Step::kFinal,
-        aggPlan->columns());
+        aggPlan->columns(),
+        partialAgg);
 
     state.addCost(*finalAgg);
     plan = finalAgg;

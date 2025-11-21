@@ -192,67 +192,65 @@ TEST_F(JoinTest, outerJoinWithInnerJoin) {
   testConnector_->addTable("v", ROW({"vx", "vy", "vz"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
 
-  lp::PlanBuilder::Context ctx(kTestConnectorId);
-  auto logicalPlan = lp::PlanBuilder(ctx)
-                         .tableScan("t")
-                         .filter("b > 50")
-                         .join(
-                             lp::PlanBuilder(ctx).tableScan("u").join(
-                                 lp::PlanBuilder(ctx).tableScan("v"),
-                                 "x = vx",
-                                 lp::JoinType::kInner),
-                             "a = x",
-                             lp::JoinType::kLeft)
-                         .build();
+  auto startMatcher = [&](const auto& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
   {
     SCOPED_TRACE("left join with inner join on right");
 
+    lp::PlanBuilder::Context ctx(kTestConnectorId);
+    auto logicalPlan = lp::PlanBuilder(ctx)
+                           .tableScan("t")
+                           .filter("b > 50")
+                           .join(
+                               lp::PlanBuilder(ctx).tableScan("u").join(
+                                   lp::PlanBuilder(ctx).tableScan("v"),
+                                   "x = vx",
+                                   lp::JoinType::kInner),
+                               "a = x",
+                               lp::JoinType::kLeft)
+                           .build();
+
     auto plan = toSingleNodePlan(logicalPlan);
+
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("t")
-            .filter("b > 50")
+        startMatcher("u")
+            .hashJoin(startMatcher("v").build(), core::JoinType::kInner)
             .hashJoin(
-                core::PlanMatcherBuilder()
-                    .tableScan("u")
-                    .hashJoin(core::PlanMatcherBuilder().tableScan("v").build())
-                    .build())
+                startMatcher("t").filter("b > 50").build(),
+                core::JoinType::kRight)
             .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
-  logicalPlan = lp::PlanBuilder(ctx)
-                    .tableScan("t")
-                    .filter("b > 50")
-                    .aggregate({"a", "b"}, {"sum(c)"})
-                    .join(
-                        lp::PlanBuilder(ctx)
-                            .tableScan("u")
-                            .join(
-                                lp::PlanBuilder(ctx).tableScan("v"),
-                                "x = vx",
-                                lp::JoinType::kInner)
-                            .filter("not(x = vy)"),
-                        "a = x",
-                        lp::JoinType::kLeft)
-                    .build();
-
   {
     SCOPED_TRACE("aggregation left join filter over inner join");
+
+    lp::PlanBuilder::Context ctx(kTestConnectorId);
+    auto logicalPlan = lp::PlanBuilder(ctx)
+                           .tableScan("t")
+                           .filter("b > 50")
+                           .aggregate({"a", "b"}, {"sum(c)"})
+                           .join(
+                               lp::PlanBuilder(ctx)
+                                   .tableScan("u")
+                                   .join(
+                                       lp::PlanBuilder(ctx).tableScan("v"),
+                                       "x = vx",
+                                       lp::JoinType::kInner)
+                                   .filter("not(x = vy)"),
+                               "a = x",
+                               lp::JoinType::kLeft)
+                           .build();
+
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("t")
+        startMatcher("u")
+            .hashJoin(startMatcher("v").build())
             .filter()
-            .aggregation()
-            .hashJoin(
-                core::PlanMatcherBuilder()
-                    .tableScan("u")
-                    .hashJoin(core::PlanMatcherBuilder().tableScan("v").build())
-                    .filter()
-                    .build())
+            .hashJoin(startMatcher("t").filter().aggregation().build())
             .project()
             .build();
 

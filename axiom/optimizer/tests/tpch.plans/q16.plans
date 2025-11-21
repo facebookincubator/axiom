@@ -38,7 +38,7 @@ t5: s_suppkey, s_comment
 
 Optimized plan (oneline):
 
-(supplier RIGHT SEMI (PROJECT) (partsupp INNER part))
+((partsupp INNER part) ANTI supplier)
 
 Optimized plan:
 
@@ -50,36 +50,33 @@ Project (redundant) -> dt1.p_brand, dt1.p_type, dt1.p_size, dt1.supplier_cnt
   OrderBy -> t3.p_brand, t3.p_type, t3.p_size, dt1.supplier_cnt
     Aggregation (t3.p_brand, t3.p_type, t3.p_size) -> t3.p_brand, t3.p_type, t3.p_size, dt1.supplier_cnt
         dt1.supplier_cnt := count(t2.ps_suppkey)
-      Filter -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size, dt1.__mark0
-          not(dt1.__mark0)
-        Join RIGHT SEMI (PROJECT) Hash -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size, dt1.__mark0
-            dt4.s_suppkey = t2.ps_suppkey
+      Join ANTI Hash -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size
+          t2.ps_suppkey = dt4.s_suppkey
+        Join INNER Hash -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size
+            t2.ps_partkey = t3.p_partkey
+          TableScan -> t2.ps_partkey, t2.ps_suppkey
+            table: partsupp
+          HashBuild -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
+            TableScan -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
+              table: part
+              single-column filters: neq(t3.p_brand, "Brand#45") and not(like(t3.p_type, "MEDIUM POLISHED%")) and __in(__cast(t3.p_size), 49, 14, 23, 45, 19, 3, 36, 9)
+        HashBuild -> dt4.s_suppkey
           Project (redundant) -> dt4.s_suppkey
               dt4.s_suppkey := t5.s_suppkey
             TableScan -> t5.s_suppkey
               table: supplier
               single-column filters: like(t5.s_comment, "%Customer%Complaints%")
-          HashBuild -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size
-            Join INNER Hash -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size
-                t2.ps_partkey = t3.p_partkey
-              TableScan -> t2.ps_partkey, t2.ps_suppkey
-                table: partsupp
-              HashBuild -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
-                TableScan -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
-                  table: part
-                  single-column filters: neq(t3.p_brand, "Brand#45") and not(like(t3.p_type, "MEDIUM POLISHED%")) and __in(__cast(t3.p_size), 49, 14, 23, 45, 19, 3, 36, 9)
 
 
 Executable Velox plan:
 
 Fragment 0:  numWorkers=0:
--- OrderBy[7][supplier_cnt DESC NULLS LAST, p_brand ASC NULLS LAST, p_type ASC NULLS LAST, p_size ASC NULLS LAST] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
-  -- Aggregation[6][SINGLE [p_brand, p_type, p_size] supplier_cnt := count("ps_suppkey")] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
-    -- Filter[0][expression: not("dt1.__mark0")] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, "dt1.__mark0":BOOLEAN
-      -- HashJoin[5][RIGHT SEMI (PROJECT) s_suppkey=ps_suppkey] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, "dt1.__mark0":BOOLEAN
-        -- TableScan[1][table: supplier, remaining filter: (like("s_comment",%Customer%Complaints%)), data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: s_comment, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> s_suppkey:BIGINT
-        -- HashJoin[4][INNER ps_partkey=p_partkey] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
-          -- TableScan[2][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey:BIGINT, ps_suppkey:BIGINT
-          -- TableScan[3][table: part, range filters: [(p_brand, Filter(MultiRange, deterministic, no nulls))], remaining filter: (and(not(like("p_type",MEDIUM POLISHED%)),in(cast("p_size" as BIGINT),{49, 14, 23, 45, 19, ...3 more}))), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]], HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> p_partkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+-- OrderBy[6][supplier_cnt DESC NULLS LAST, p_brand ASC NULLS LAST, p_type ASC NULLS LAST, p_size ASC NULLS LAST] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
+  -- Aggregation[5][SINGLE [p_brand, p_type, p_size] supplier_cnt := count("ps_suppkey")] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
+    -- HashJoin[4][ANTI ps_suppkey=s_suppkey] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+      -- HashJoin[2][INNER ps_partkey=p_partkey] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+        -- TableScan[0][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey:BIGINT, ps_suppkey:BIGINT
+        -- TableScan[1][table: part, range filters: [(p_brand, Filter(MultiRange, deterministic, no nulls))], remaining filter: (and(not(like("p_type",MEDIUM POLISHED%)),in(cast("p_size" as BIGINT),{49, 14, 23, 45, 19, ...3 more}))), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]], HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> p_partkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+      -- TableScan[3][table: supplier, remaining filter: (like("s_comment",%Customer%Complaints%)), data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: s_comment, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> s_suppkey:BIGINT
 
 ___END___
