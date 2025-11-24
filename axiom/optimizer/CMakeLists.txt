@@ -37,6 +37,7 @@ add_library(
   RelationOp.cpp
   RelationOpPrinter.cpp
   Schema.cpp
+  StatsUtils.cpp
   SubfieldTracker.cpp
   ToGraph.cpp
   ToVelox.cpp

@@ -22,6 +22,7 @@
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/RelationOpPrinter.h"
 #include "axiom/optimizer/RelationOpVisitor.h"
+#include "axiom/optimizer/StatsUtils.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/expression/ScopedVarSetter.h"
 
@@ -610,6 +611,146 @@ double expectedNumDistincts(double numRows, double numDistinct) {
   // where d is total distinct values and n is number of samples
   return numDistinct * (1.0 - std::pow(1.0 - (1.0 / numDistinct), numRows));
 }
+
+/// Helper function to get the cardinality of a table.
+double getTableCardinality(PlanObjectCP table) {
+  if (table->is(PlanType::kTableNode)) {
+    auto baseTable = table->as<BaseTable>();
+    return baseTable->schemaTable->cardinality;
+  } else if (table->is(PlanType::kDerivedTableNode)) {
+    auto derivedTable = table->as<DerivedTable>();
+    return derivedTable->cardinality;
+  } else if (table->is(PlanType::kValuesTableNode)) {
+    auto valuesTable = table->as<ValuesTable>();
+    return valuesTable->cardinality();
+  } else if (table->is(PlanType::kUnnestTableNode)) {
+    auto unnestTable = table->as<UnnestTable>();
+    return unnestTable->cardinality();
+  } else {
+    return 1.0;
+  }
+}
+
+/// Computes the maximum cardinality estimate for aggregation grouping keys
+/// using saturating product to avoid overflow while accounting for
+/// correlations.
+double maxGroups(const ExprVector& groupingKeys) {
+  if (groupingKeys.empty()) {
+    return 1.0;
+  }
+
+  // Map from table to the keys that originate from that table
+  folly::F14FastMap<PlanObjectCP, std::vector<ExprCP>> tableToKeys;
+
+  // Track the largest table for unnest columns separately
+  PlanObjectCP unnestTable = nullptr;
+  double unnestTableCardinality = 0.0;
+  std::vector<ExprCP> unnestKeys;
+
+  // For each grouping key, find its largest table of origin
+  for (auto key : groupingKeys) {
+    auto allTables = key->allTables();
+    auto tables = allTables.toObjects();
+
+    if (tables.empty()) {
+      // Key doesn't depend on any table (e.g., constant), skip
+      continue;
+    }
+
+    // Find the largest table
+    PlanObjectCP largestTable = nullptr;
+    double largestCardinality = 0.0;
+    bool isUnnestKey = false;
+
+    for (auto table : tables) {
+      if (table->is(PlanType::kUnnestTableNode)) {
+        // This key depends on unnest - use key->value().cardinality
+        isUnnestKey = true;
+        double unnestCard = key->value().cardinality;
+        if (unnestCard > unnestTableCardinality) {
+          unnestTableCardinality = unnestCard;
+        }
+        break;
+      }
+
+      double cardinality = getTableCardinality(table);
+      if (cardinality > largestCardinality) {
+        largestCardinality = cardinality;
+        largestTable = table;
+      }
+    }
+
+    if (isUnnestKey) {
+      unnestKeys.push_back(key);
+    } else if (largestTable != nullptr) {
+      tableToKeys[largestTable].push_back(key);
+    }
+  }
+
+  // If we have unnest keys, treat them as one "table"
+  if (!unnestKeys.empty()) {
+    // Create a synthetic table pointer for unnest (use the first unnest key's
+    // table)
+    for (auto key : unnestKeys) {
+      auto tables = key->allTables().toObjects();
+      for (auto table : tables) {
+        if (table->is(PlanType::kUnnestTableNode)) {
+          unnestTable = table;
+          break;
+        }
+      }
+      if (unnestTable != nullptr) {
+        break;
+      }
+    }
+    if (unnestTable != nullptr) {
+      tableToKeys[unnestTable] = unnestKeys;
+    }
+  }
+
+  // Calculate cardinality estimate for each table group
+  std::vector<double> tableCardinalities;
+  double largestTableCardinality = 0.0;
+
+  for (auto& [table, keys] : tableToKeys) {
+    double tableCard;
+
+    if (table == unnestTable) {
+      // For unnest, use the largest key->value().cardinality as max
+      tableCard = unnestTableCardinality;
+    } else {
+      tableCard = getTableCardinality(table);
+    }
+
+    largestTableCardinality = std::max(largestTableCardinality, tableCard);
+
+    double groupCard;
+    if (keys.size() == 1) {
+      // Single key per table: use min of key cardinality and table cardinality
+      groupCard = std::min<double>(keys[0]->value().cardinality, tableCard);
+    } else {
+      // Multiple keys: collect cardinalities and use saturatingProduct
+      std::vector<double> keyCardinalities;
+      for (auto key : keys) {
+        keyCardinalities.push_back(key->value().cardinality);
+      }
+      groupCard = saturatingProduct(
+          tableCard, keyCardinalities.data(), keyCardinalities.size());
+    }
+    tableCardinalities.push_back(groupCard);
+  }
+
+  // If there's only one table, return its cardinality
+  if (tableCardinalities.size() == 1) {
+    return tableCardinalities[0];
+  }
+
+  // Combine cardinalities from multiple tables using saturatingProduct
+  double combinedMax = std::max<double>(3.0 * largestTableCardinality, 1e10);
+  return saturatingProduct(
+      combinedMax, tableCardinalities.data(), tableCardinalities.size());
+}
+
 } // namespace
 
 Aggregation::Aggregation(
@@ -680,10 +821,7 @@ void Aggregation::setCostWithGroups(
 
   const auto numKeys = groupingKeys.size();
 
-  double maxCardinality = 1;
-  for (auto key : groupingKeys) {
-    maxCardinality *= key->value().cardinality;
-  }
+  double maxCardinality = maxGroups(groupingKeys);
 
   // The estimated output is input minus the times an input is a
   // duplicate of a key already in the input. The cardinality of the
@@ -692,7 +830,7 @@ void Aggregation::setCostWithGroups(
   // input. This approaches d as n goes to infinity. The chance of one in d
   // being unique after n values is 1 - (1/d)^n.
   const auto nOut =
-      expectedNumDistincts(maxCardinality, safeInputBeforePartial);
+      expectedNumDistincts(safeInputBeforePartial, maxCardinality);
 
   float rowBytes =
       byteSize(groupingKeys) + byteSize(aggregates) + Costs::kHashRowBytes;

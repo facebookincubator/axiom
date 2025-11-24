@@ -107,6 +107,7 @@ add_executable(
   Genies.cpp
   TestConnectorQueryTest.cpp
   TpchConnectorQueryTest.cpp
+  StatsUtilsTest.cpp
   WriteTest.cpp
 )
 
