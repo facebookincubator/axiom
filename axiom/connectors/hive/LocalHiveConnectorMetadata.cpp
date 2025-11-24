@@ -63,7 +63,8 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
       std::move(selectedFiles),
       layout->fileFormat(),
       layout->connector()->connectorId(),
-      options);
+      options,
+      layout->serdeParameters());
 }
 
 namespace {
@@ -124,6 +125,9 @@ std::vector<SplitSource::SplitAndGroup> LocalHiveSplitSource::getSplits(
         for (auto& pair : info->partitionKeys) {
           builder.partitionKey(pair.first, pair.second);
         }
+        if (!serdeParameters_.empty()) {
+          builder.serdeParameters(serdeParameters_);
+        }
         fileSplits_.push_back(builder.build());
       }
     }
@@ -154,6 +158,7 @@ void LocalHiveConnectorMetadata::initialize() {
   auto path = hiveConfig_->hiveLocalDataPath();
   format_ = formatName == "dwrf" ? velox::dwio::common::FileFormat::DWRF
       : formatName == "parquet"  ? velox::dwio::common::FileFormat::PARQUET
+      : formatName == "text"     ? velox::dwio::common::FileFormat::TEXT
                                  : velox::dwio::common::FileFormat::UNKNOWN;
   makeQueryCtx();
   makeConnectorQueryCtx();
@@ -432,6 +437,10 @@ struct CreateTableOptions {
   std::optional<int32_t> numBuckets;
   std::vector<std::string> bucketedByColumns;
   std::vector<std::string> sortedByColumns;
+
+  // SerDe options. Primarily used for TEXT format files, but may evolve
+  // to support other formats in the future.
+  std::optional<velox::dwio::common::SerDeOptions> serdeOptions;
 };
 
 CreateTableOptions parseCreateTableOptions(
@@ -474,9 +483,13 @@ CreateTableOptions parseCreateTableOptions(
         HiveWriteOptions::kBucketedBy);
 
     const auto numBuckets = it->second.value<int64_t>();
-    VELOX_USER_CHECK_GT(numBuckets, 0, "bucket_count must be > 0");
+    VELOX_USER_CHECK_GT(
+        numBuckets, 0, "{} must be > 0", HiveWriteOptions::kBucketCount);
     VELOX_USER_CHECK_EQ(
-        numBuckets & (numBuckets - 1), 0, "bucket_count must be power of 2");
+        numBuckets & (numBuckets - 1),
+        0,
+        "{} must be power of 2",
+        HiveWriteOptions::kBucketCount);
 
     result.numBuckets = numBuckets;
 
@@ -484,6 +497,28 @@ CreateTableOptions parseCreateTableOptions(
     if (it != options.end()) {
       result.sortedByColumns = it->second.array<std::string>();
     }
+  }
+
+  // Parse SerDe options
+  it = options.find(HiveWriteOptions::kFieldDelim);
+  if (it != options.end()) {
+    velox::dwio::common::SerDeOptions serdeOpts;
+    std::string delimiter = it->second.value<std::string>();
+    VELOX_USER_CHECK_EQ(
+        delimiter.size(),
+        1,
+        "{} must be a single character",
+        HiveWriteOptions::kFieldDelim);
+    serdeOpts.separators[0] = delimiter[0];
+    result.serdeOptions = serdeOpts;
+  }
+
+  it = options.find(HiveWriteOptions::kSerializationNullFormat);
+  if (it != options.end()) {
+    if (!result.serdeOptions.has_value()) {
+      result.serdeOptions = velox::dwio::common::SerDeOptions();
+    }
+    result.serdeOptions->nullString = it->second.value<std::string>();
   }
 
   return result;
@@ -522,6 +557,22 @@ CreateTableOptions parseCreateTableOptions(
         velox::dwio::common::toFileFormat(obj["fileFormat"].asString());
   } else {
     options.fileFormat = defaultFileFormat;
+  }
+
+  // Parse SerDe options
+  if (obj.count("serdeOptions")) {
+    const auto& serdeObj = obj["serdeOptions"];
+    velox::dwio::common::SerDeOptions serdeOpts;
+    if (serdeObj.count("fieldDelim")) {
+      std::string delimiter = serdeObj["fieldDelim"].asString();
+      VELOX_USER_CHECK_EQ(
+          delimiter.size(), 1, "fieldDelim must be a single character");
+      serdeOpts.separators[0] = delimiter[0];
+    }
+    if (serdeObj.count("nullString")) {
+      serdeOpts.nullString = serdeObj["nullString"].asString();
+    }
+    options.serdeOptions = serdeOpts;
   }
 
   for (auto column : obj["partitionColumns"]) {
@@ -565,6 +616,15 @@ folly::dynamic toSchemaJson(
   if (options.fileFormat.has_value()) {
     schema["fileFormat"] =
         velox::dwio::common::toString(options.fileFormat.value());
+  }
+  // Save SerDe options
+  if (options.serdeOptions.has_value()) {
+    folly::dynamic serdeOpts = folly::dynamic::object;
+    const auto& opts = options.serdeOptions.value();
+    serdeOpts["fieldDelim"] =
+        std::string(1, static_cast<char>(opts.separators[0]));
+    serdeOpts["nullString"] = opts.nullString;
+    schema["serdeOptions"] = serdeOpts;
   }
 
   if (options.numBuckets.has_value()) {
@@ -623,6 +683,13 @@ std::shared_ptr<LocalTable> createLocalTable(
         velox::dwio::common::toString(createTableOptions.fileFormat.value()));
   }
 
+  if (createTableOptions.serdeOptions.has_value()) {
+    const auto& serdeOpts = createTableOptions.serdeOptions.value();
+    options[HiveWriteOptions::kFieldDelim] =
+        std::string(1, static_cast<char>(serdeOpts.separators[0]));
+    options[HiveWriteOptions::kSerializationNullFormat] = serdeOpts.nullString;
+  }
+
   auto table = std::make_shared<LocalTable>(
       std::string{name}, schema, std::move(options));
 
@@ -658,6 +725,17 @@ std::shared_ptr<LocalTable> createLocalTable(
     columns.emplace_back(table->findColumn(name));
   }
 
+  // Convert SerDeOptions to serdeParameters map
+  std::unordered_map<std::string, std::string> serdeParameters;
+  if (createTableOptions.serdeOptions.has_value()) {
+    const auto& serdeOpts = createTableOptions.serdeOptions.value();
+    serdeParameters[velox::dwio::common::SerDeOptions::kFieldDelim] =
+        std::string(1, static_cast<char>(serdeOpts.separators[0]));
+    serdeParameters
+        [velox::dwio::common::TableParameter::kSerializationNullFormat] =
+            serdeOpts.nullString;
+  }
+
   auto layout = std::make_unique<LocalHiveTableLayout>(
       table->name(),
       table.get(),
@@ -669,7 +747,8 @@ std::shared_ptr<LocalTable> createLocalTable(
       sortOrders,
       /*lookupKeys=*/std::vector<const Column*>{},
       partitionedBy,
-      createTableOptions.fileFormat.value());
+      createTableOptions.fileFormat.value(),
+      std::move(serdeParameters));
   table->addLayout(std::move(layout));
   return table;
 }
@@ -725,11 +804,17 @@ void LocalHiveConnectorMetadata::loadTable(
     // If the table has a schema it has a layout that gives the file format.
     // Otherwise we default it from 'this'.
     velox::dwio::common::ReaderOptions readerOptions{schemaPool_.get()};
-    readerOptions.setFileFormat(
-        table == nullptr || table->layouts().empty()
-            ? format_
-            : reinterpret_cast<const HiveTableLayout*>(table->layouts()[0])
-                  ->fileFormat());
+    auto fileFormat = table == nullptr || table->layouts().empty()
+        ? format_
+        : reinterpret_cast<const HiveTableLayout*>(table->layouts()[0])
+              ->fileFormat();
+    readerOptions.setFileFormat(fileFormat);
+
+    // TEXT format requires the schema to be set in reader options.
+    if (fileFormat == velox::dwio::common::FileFormat::TEXT && tableType) {
+      readerOptions.setFileSchema(tableType);
+    }
+
     auto input = std::make_unique<velox::dwio::common::BufferedInput>(
         std::make_shared<velox::LocalReadFile>(info->path),
         readerOptions.memoryPool());
@@ -1061,7 +1146,6 @@ TablePtr LocalHiveConnectorMetadata::createTable(
     outputFile << jsonStr;
     outputFile.close();
   }
-
   return createLocalTable(
       tableName, rowType, createTableOptions, hiveConnector());
 }
@@ -1096,6 +1180,12 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
   deleteDirectoryRecursive(writePath);
   loadTable(hiveHandle->table()->name(), targetPath);
   return rows;
+}
+
+void LocalHiveConnectorMetadata::reloadTableFromPath(
+    std::string_view tableName) {
+  std::lock_guard<std::mutex> l(mutex_);
+  loadTable(tableName, tablePath(tableName));
 }
 
 velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(

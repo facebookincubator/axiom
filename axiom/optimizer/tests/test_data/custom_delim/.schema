@@ -1,0 +1,30 @@
+{
+  "fileFormat": "text",
+  "dataColumns": [
+    {
+      "name": "id",
+      "type": "int"
+    },
+    {
+      "name": "count",
+      "type": "bigint"
+    },
+    {
+      "name": "price",
+      "type": "double"
+    },
+    {
+      "name": "name",
+      "type": "string"
+    },
+    {
+      "name": "active",
+      "type": "boolean"
+    }
+  ],
+  "partitionColumns": [],
+  "serdeOptions": {
+    "fieldDelim": "|",
+    "nullString": ""
+  }
+}

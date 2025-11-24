@@ -39,11 +39,13 @@ class LocalHiveSplitSource : public SplitSource {
       std::vector<const FileInfo*> files,
       velox::dwio::common::FileFormat format,
       const std::string& connectorId,
-      SplitOptions options)
+      SplitOptions options,
+      std::unordered_map<std::string, std::string> serdeParameters = {})
       : options_(options),
         format_(format),
         connectorId_(connectorId),
-        files_(files) {}
+        files_(files),
+        serdeParameters_(std::move(serdeParameters)) {}
 
   std::vector<SplitSource::SplitAndGroup> getSplits(
       uint64_t targetBytes) override;
@@ -53,6 +55,7 @@ class LocalHiveSplitSource : public SplitSource {
   const velox::dwio::common::FileFormat format_;
   const std::string connectorId_;
   std::vector<const FileInfo*> files_;
+  const std::unordered_map<std::string, std::string> serdeParameters_;
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> fileSplits_;
   int32_t currentFile_{-1};
   int32_t currentSplit_{0};
@@ -90,7 +93,8 @@ class LocalHiveTableLayout : public HiveTableLayout {
       std::vector<SortOrder> sortOrder,
       std::vector<const Column*> lookupKeys,
       std::vector<const Column*> hivePartitionColumns,
-      velox::dwio::common::FileFormat fileFormat)
+      velox::dwio::common::FileFormat fileFormat,
+      std::unordered_map<std::string, std::string> serdeParameters = {})
       : HiveTableLayout(
             name,
             table,
@@ -102,7 +106,8 @@ class LocalHiveTableLayout : public HiveTableLayout {
             sortOrder,
             lookupKeys,
             hivePartitionColumns,
-            fileFormat) {}
+            fileFormat),
+        serdeParameters_(std::move(serdeParameters)) {}
 
   std::pair<int64_t, int64_t> sample(
       const velox::connector::ConnectorTableHandlePtr& handle,
@@ -121,6 +126,11 @@ class LocalHiveTableLayout : public HiveTableLayout {
     files_ = std::move(files);
   }
 
+  const std::unordered_map<std::string, std::string>& serdeParameters()
+      const override {
+    return serdeParameters_;
+  }
+
   /// Like sample() above, but fills 'builders' with the data.
   std::pair<int64_t, int64_t> sample(
       const velox::connector::ConnectorTableHandlePtr& handle,
@@ -133,6 +143,7 @@ class LocalHiveTableLayout : public HiveTableLayout {
  private:
   std::vector<std::unique_ptr<const FileInfo>> files_;
   std::vector<std::unique_ptr<const FileInfo>> ownedFiles_;
+  std::unordered_map<std::string, std::string> serdeParameters_;
 };
 
 class LocalTable : public Table {
@@ -277,6 +288,10 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   bool dropTableIfExists(std::string_view tableName) {
     return dropTable(nullptr, tableName, true);
   }
+
+  /// Loads or reloads a table from disk, discovering any new files.
+  /// This is useful when files are manually added to a table directory.
+  void reloadTableFromPath(std::string_view tableName);
 
  private:
   // Used to lazy initialize this in ensureInitialized() and to implement

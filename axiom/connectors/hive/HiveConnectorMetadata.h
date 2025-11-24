@@ -111,6 +111,14 @@ class HiveTableLayout : public TableLayout {
     return partitionType_.has_value() ? &partitionType_.value() : nullptr;
   }
 
+  /// Returns SerDe parameters for this layout. Default implementation returns
+  /// empty map. Derived classes can override to provide actual parameters.
+  virtual const std::unordered_map<std::string, std::string>& serdeParameters()
+      const {
+    static const std::unordered_map<std::string, std::string> kEmpty;
+    return kEmpty;
+  }
+
   velox::connector::ColumnHandlePtr createColumnHandle(
       const ConnectorSessionPtr& session,
       const std::string& columnName,
@@ -189,6 +197,12 @@ class HiveWriteOptions {
   /// The table compression kind. See velox::common::CompressionKind.
   /// The default is ZSTD compression.
   static constexpr auto kCompressionKind = "compression_kind";
+
+  /// Field delimiter for TEXT format files.
+  static constexpr auto kFieldDelim = "field.delim";
+
+  /// Null string format for TEXT format files.
+  static constexpr auto kSerializationNullFormat = "serialization.null.format";
 };
 
 class HiveConnectorMetadata : public ConnectorMetadata {

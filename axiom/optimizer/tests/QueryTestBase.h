@@ -152,6 +152,9 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
     return *gSuiteHistory;
   }
 
+  /// Returns the full path to a test data file.
+  static std::string getTestDataPath(const std::string& filename);
+
   OptimizerOptions optimizerOptions_;
 
  private:

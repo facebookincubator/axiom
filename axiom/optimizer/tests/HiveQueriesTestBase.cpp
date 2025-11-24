@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
+#include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
 
 namespace facebook::axiom::optimizer::test {
@@ -107,6 +108,61 @@ lp::LogicalPlanNodePtr HiveQueriesTestBase::parseSelect(std::string_view sql) {
 
   VELOX_CHECK(statement->isSelect());
   return statement->as<::axiom::sql::presto::SelectStatement>()->plan();
+}
+
+lp::LogicalPlanNodePtr HiveQueriesTestBase::parseInsert(std::string_view sql) {
+  auto statement = prestoParser_->parse(sql);
+
+  VELOX_CHECK(statement->isInsert());
+  return statement->as<::axiom::sql::presto::InsertStatement>()->plan();
+}
+
+void HiveQueriesTestBase::createEmptyTable(
+    const std::string& name,
+    const RowTypePtr& tableType,
+    const folly::F14FastMap<std::string, velox::Variant>& options) {
+  metadata_->dropTableIfExists(name);
+
+  auto session = std::make_shared<connector::ConnectorSession>("test");
+  auto table = metadata_->createTable(session, name, tableType, options);
+  auto handle =
+      metadata_->beginWrite(session, table, connector::WriteKind::kCreate);
+  metadata_->finishWrite(session, handle, {}).get();
+}
+
+void HiveQueriesTestBase::checkTableData(
+    const std::string& tableName,
+    const std::vector<RowVectorPtr>& expectedData) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan = lp::PlanBuilder(context).tableScan(tableName).build();
+
+  checkSameSingleNode(logicalPlan, expectedData);
+}
+
+void HiveQueriesTestBase::createTableFromFiles(
+    const std::string& tableName,
+    const RowTypePtr& tableType,
+    const std::vector<std::string>& filePaths,
+    const folly::F14FastMap<std::string, velox::Variant>& options) {
+  for (const auto& filePath : filePaths) {
+    ASSERT_TRUE(std::filesystem::exists(filePath))
+        << "File does not exist: " << filePath;
+  }
+
+  auto session = std::make_shared<connector::ConnectorSession>("test");
+  metadata_->createTable(session, tableName, tableType, options);
+
+  auto tablePath = metadata_->tablePath(tableName);
+  for (const auto& filePath : filePaths) {
+    auto fileName = std::filesystem::path(filePath).filename().string();
+    std::string targetFilePath = fmt::format("{}/{}", tablePath, fileName);
+    std::filesystem::copy_file(
+        filePath,
+        targetFilePath,
+        std::filesystem::copy_options::overwrite_existing);
+  }
+
+  metadata_->reloadTableFromPath(tableName);
 }
 
 } // namespace facebook::axiom::optimizer::test

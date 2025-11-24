@@ -39,6 +39,8 @@ class HiveQueriesTestBase : public QueryTestBase {
 
   logical_plan::LogicalPlanNodePtr parseSelect(std::string_view sql);
 
+  logical_plan::LogicalPlanNodePtr parseInsert(std::string_view sql);
+
   using QueryTestBase::toSingleNodePlan;
 
   velox::core::PlanNodePtr toSingleNodePlan(
@@ -67,13 +69,33 @@ class HiveQueriesTestBase : public QueryTestBase {
     return *metadata_;
   }
 
+  /// Creates an empty table with the given schema and options.
+  /// If a table with the same name already exists, it is dropped first.
+  void createEmptyTable(
+      const std::string& name,
+      const velox::RowTypePtr& tableType,
+      const folly::F14FastMap<std::string, velox::Variant>& options = {});
+
+  /// Checks that the data in the specified table matches the expected data.
+  void checkTableData(
+      const std::string& tableName,
+      const std::vector<velox::RowVectorPtr>& expectedData);
+
+  /// Creates a table from external files by copying them into the table
+  /// directory.
+  void createTableFromFiles(
+      const std::string& tableName,
+      const velox::RowTypePtr& tableType,
+      const std::vector<std::string>& filePaths,
+      const folly::F14FastMap<std::string, velox::Variant>& options = {});
+
  private:
   inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
       gTempDirectory;
 
   std::unique_ptr<::axiom::sql::presto::PrestoParser> prestoParser_;
   std::shared_ptr<velox::connector::Connector> connector_;
-  connector::hive::LocalHiveConnectorMetadata* metadata_;
+  connector::hive::LocalHiveConnectorMetadata* metadata_{};
 };
 
 } // namespace facebook::axiom::optimizer::test

@@ -1,0 +1,4 @@
+1|100|99.5|Product A|true
+2|200|149.99||false
+3|300||Product C|true
+4|400|29.99|Product D|false

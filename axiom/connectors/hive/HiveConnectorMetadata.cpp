@@ -211,7 +211,7 @@ velox::connector::ConnectorTableHandlePtr HiveTableLayout::createTableHandle(
       std::move(subfieldFilters),
       remainingFilter,
       dataColumns ? dataColumns : rowType(),
-      /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+      serdeParameters(),
       filterColumnHandles,
       sampleRate);
 }
@@ -241,7 +241,8 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
   VELOX_CHECK_NOT_NULL(hiveLayout);
   auto storageFormat = hiveLayout->fileFormat();
 
-  std::unordered_map<std::string, std::string> serdeParameters;
+  const auto& serdeParameters = hiveLayout->serdeParameters();
+
   const std::shared_ptr<velox::dwio::common::WriterOptions> writerOptions;
 
   velox::common::CompressionKind compressionKind;
@@ -320,6 +321,8 @@ void HiveConnectorMetadata::validateOptions(
       HiveWriteOptions::kSortedBy,
       HiveWriteOptions::kFileFormat,
       HiveWriteOptions::kCompressionKind,
+      HiveWriteOptions::kFieldDelim,
+      HiveWriteOptions::kSerializationNullFormat,
   };
 
   for (auto& pair : options) {

@@ -20,6 +20,7 @@
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/expression/Expr.h"
 
@@ -278,6 +279,11 @@ velox::core::PlanNodePtr QueryTestBase::toSingleNodePlan(
 
   EXPECT_EQ(1, plan->fragments().size());
   return plan->fragments().at(0).fragment.planNode;
+}
+
+std::string QueryTestBase::getTestDataPath(const std::string& filename) {
+  return velox::test::getDataFilePath(
+      "axiom/optimizer/tests", fmt::format("test_data/{}", filename));
 }
 
 } // namespace facebook::axiom::optimizer::test
