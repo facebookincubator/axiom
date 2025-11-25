@@ -378,66 +378,71 @@ void LocalRunner::makeStages(
 
   stages_.push_back({lastStageTask});
 
-  for (auto fragmentIndex = 0; fragmentIndex < fragments_.size();
-       ++fragmentIndex) {
-    const auto& fragment = fragments_[fragmentIndex];
-    const auto& stage = stages_[fragmentIndex];
+  try {
+    for (auto fragmentIndex = 0; fragmentIndex < fragments_.size();
+         ++fragmentIndex) {
+      const auto& fragment = fragments_[fragmentIndex];
+      const auto& stage = stages_[fragmentIndex];
 
-    std::vector<velox::core::TableScanNodePtr> scans;
-    gatherScans(fragment.fragment.planNode, scans);
+      std::vector<velox::core::TableScanNodePtr> scans;
+      gatherScans(fragment.fragment.planNode, scans);
 
-    for (const auto& scan : scans) {
-      auto source = splitSourceForScan(/*session=*/nullptr, *scan);
+      for (const auto& scan : scans) {
+        auto source = splitSourceForScan(/*session=*/nullptr, *scan);
 
-      std::vector<connector::SplitSource::SplitAndGroup> splits;
-      int32_t splitIdx = 0;
-      auto getNextSplit = [&]() {
-        if (splitIdx < splits.size()) {
-          return velox::exec::Split(std::move(splits[splitIdx++].split));
-        }
-        splits = source->getSplits(std::numeric_limits<int64_t>::max());
-        splitIdx = 1;
-        return velox::exec::Split(std::move(splits[0].split));
-      };
-
-      // Distribute splits across tasks using round-robin.
-      bool allDone = false;
-      do {
-        for (auto& task : stage) {
-          auto split = getNextSplit();
-          if (!split.hasConnectorSplit()) {
-            allDone = true;
-            break;
+        std::vector<connector::SplitSource::SplitAndGroup> splits;
+        int32_t splitIdx = 0;
+        auto getNextSplit = [&]() {
+          if (splitIdx < splits.size()) {
+            return velox::exec::Split(std::move(splits[splitIdx++].split));
           }
-          task->addSplit(scan->id(), std::move(split));
-        }
-      } while (!allDone);
+          splits = source->getSplits(std::numeric_limits<int64_t>::max());
+          splitIdx = 1;
+          return velox::exec::Split(std::move(splits[0].split));
+        };
 
-      for (auto& task : stage) {
-        task->noMoreSplits(scan->id());
+        // Distribute splits across tasks using round-robin.
+        bool allDone = false;
+        do {
+          for (auto& task : stage) {
+            auto split = getNextSplit();
+            if (!split.hasConnectorSplit()) {
+              allDone = true;
+              break;
+            }
+            task->addSplit(scan->id(), std::move(split));
+          }
+        } while (!allDone);
+
+        for (auto& task : stage) {
+          task->noMoreSplits(scan->id());
+        }
+      }
+
+      for (const auto& input : fragment.inputStages) {
+        const auto [sourceStage, broadcast] =
+            stageMap[input.producerTaskPrefix];
+
+        std::vector<std::shared_ptr<velox::exec::RemoteConnectorSplit>>
+            sourceSplits;
+        for (const auto& task : stages_[sourceStage]) {
+          sourceSplits.push_back(remoteSplit(task->taskId()));
+
+          if (broadcast) {
+            task->updateOutputBuffers(fragment.width, true);
+          }
+        }
+
+        for (auto& task : stage) {
+          for (const auto& remote : sourceSplits) {
+            task->addSplit(input.consumerNodeId, velox::exec::Split(remote));
+          }
+          task->noMoreSplits(input.consumerNodeId);
+        }
       }
     }
-
-    for (const auto& input : fragment.inputStages) {
-      const auto [sourceStage, broadcast] = stageMap[input.producerTaskPrefix];
-
-      std::vector<std::shared_ptr<velox::exec::RemoteConnectorSplit>>
-          sourceSplits;
-      for (const auto& task : stages_[sourceStage]) {
-        sourceSplits.push_back(remoteSplit(task->taskId()));
-
-        if (broadcast) {
-          task->updateOutputBuffers(fragment.width, true);
-        }
-      }
-
-      for (auto& task : stage) {
-        for (const auto& remote : sourceSplits) {
-          task->addSplit(input.consumerNodeId, velox::exec::Split(remote));
-        }
-        task->noMoreSplits(input.consumerNodeId);
-      }
-    }
+  } catch (const std::exception& e) {
+    onError(std::current_exception());
   }
 }
 
