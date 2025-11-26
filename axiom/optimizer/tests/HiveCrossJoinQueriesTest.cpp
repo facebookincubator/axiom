@@ -62,7 +62,6 @@ TEST_F(HiveCrossJoinQueriesTest, basic) {
 
     auto matcher = matchScan("lineitem")
                        .nestedLoopJoin(matchScan("customer").build())
-                       .project()
                        .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -79,7 +78,6 @@ TEST_F(HiveCrossJoinQueriesTest, basic) {
 
     matcher = matchScan("lineitem")
                   .nestedLoopJoin(core::PlanMatcherBuilder().exchange().build())
-                  .project()
                   .partitionedOutput()
                   .build();
     ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode))
@@ -117,7 +115,6 @@ TEST_F(HiveCrossJoinQueriesTest, manyTables) {
                        .nestedLoopJoin(matchScan("region").build())
                        .nestedLoopJoin(matchScan("nation").build())
                        .nestedLoopJoin(matchScan("customer").build())
-                       .project()
                        .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -144,7 +141,6 @@ TEST_F(HiveCrossJoinQueriesTest, manyTables) {
                   .nestedLoopJoin(core::PlanMatcherBuilder().exchange().build())
                   .nestedLoopJoin(core::PlanMatcherBuilder().exchange().build())
                   .nestedLoopJoin(core::PlanMatcherBuilder().exchange().build())
-                  .project()
                   .partitionedOutput()
                   .build();
     ASSERT_TRUE(matcher->match(fragments.at(3).fragment.planNode))

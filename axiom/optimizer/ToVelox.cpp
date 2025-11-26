@@ -1115,16 +1115,12 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
     auto joinNode = std::make_shared<velox::core::NestedLoopJoinNode>(
         nextId(),
         join.joinType,
-        nullptr,
+        toAnd(join.filter),
         std::move(left),
         std::move(right),
         makeOutputType(join.columns()));
-    if (join.filter.empty()) {
-      makePredictionAndHistory(joinNode->id(), &join);
-      return joinNode;
-    }
-    return std::make_shared<velox::core::FilterNode>(
-        nextId(), toAnd(join.filter), joinNode);
+    makePredictionAndHistory(joinNode->id(), &join);
+    return joinNode;
   }
 
   auto leftKeys = toFieldRefs(join.leftKeys);

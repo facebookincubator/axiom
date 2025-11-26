@@ -216,10 +216,8 @@ TEST_F(SyntacticJoinOrderTest, innerJoins) {
                                 const std::string& t1,
                                 const std::string& t2) {
       return startMatcher(t0)
-          .hashJoin(startMatcher(t1)
-                        .nestedLoopJoin(startMatcher(t2).build())
-                        .project()
-                        .build())
+          .hashJoin(
+              startMatcher(t1).nestedLoopJoin(startMatcher(t2).build()).build())
           .aggregation()
           .build();
     };

@@ -497,6 +497,13 @@ struct Join : public RelationOp {
   static Join*
   makeCrossJoin(RelationOpPtr input, RelationOpPtr right, ColumnVector columns);
 
+  static Join* makeNestedLoopJoin(
+      RelationOpPtr input,
+      RelationOpPtr right,
+      velox::core::JoinType joinType,
+      ExprVector filterExprs,
+      ColumnVector columns);
+
   const JoinMethod method;
   const velox::core::JoinType joinType;
   const RelationOpPtr right;

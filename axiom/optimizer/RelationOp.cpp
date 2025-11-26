@@ -473,15 +473,29 @@ Join* Join::makeCrossJoin(
     RelationOpPtr input,
     RelationOpPtr right,
     ColumnVector columns) {
+  return makeNestedLoopJoin(
+      std::move(input),
+      std::move(right),
+      velox::core::JoinType::kInner,
+      ExprVector{},
+      std::move(columns));
+}
+
+Join* Join::makeNestedLoopJoin(
+    RelationOpPtr input,
+    RelationOpPtr right,
+    velox::core::JoinType joinType,
+    ExprVector filterExprs,
+    ColumnVector columns) {
   float fanout = right->resultCardinality();
   return make<Join>(
       JoinMethod::kCross,
-      velox::core::JoinType::kInner,
+      joinType,
       std::move(input),
       std::move(right),
       ExprVector{},
       ExprVector{},
-      ExprVector{},
+      std::move(filterExprs),
       fanout,
       std::move(columns));
 }
