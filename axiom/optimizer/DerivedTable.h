@@ -169,13 +169,13 @@ struct DerivedTable : public PlanObject {
 
   /// Return a copy of 'expr', replacing references to this DT's 'columns' with
   /// corresponding 'exprs'.
-  ExprCP importExpr(ExprCP expr);
+  ExprCP importExpr(ExprCP expr) const;
 
   /// Return a copy of 'expr', replacing references to this DT's 'exprs' with
   /// corresponding 'columns'.
   /// TODO Handle cases when 'expr' contains columns that are not exported by
   /// the DT.
-  ExprCP exportExpr(ExprCP expr);
+  ExprCP exportExpr(ExprCP expr) const;
 
   bool isTable() const override {
     return true;

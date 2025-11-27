@@ -35,7 +35,7 @@ class FunctionSet {
   explicit FunctionSet(uint64_t set) : set_(set) {}
 
   /// True if 'item' is in 'this'.
-  bool contains(int64_t item) const {
+  bool contains(uint64_t item) const {
     return 0 != (set_ & item);
   }
 

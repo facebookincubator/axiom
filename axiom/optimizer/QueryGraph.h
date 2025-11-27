@@ -491,27 +491,25 @@ struct JoinSide {
 /// decomposable and reorderable conjuncts.
 class JoinEdge {
  public:
-  /// Default is INNER JOIN.
+  enum class JoinType : uint8_t {
+    kInner,
+    kLeft,
+    kRight,
+    kFull,
+    kSemi,
+    kAnti,
+    kUnnest,
+  };
+
   struct Spec {
     /// Filter conjuncts to be applied after the join. Only for non-inner joins.
     ExprVector filter;
 
-    /// True for RIGHT and FULL OUTER JOIN. The output may have no match on the
-    /// left side.
-    bool leftOptional{false};
+    /// Join type.
+    JoinType joinType{JoinType::kInner};
 
-    /// True for LEFT and FULL OUTER JOIN. The output may have no match on the
-    /// right side.
-    bool rightOptional{false};
-
-    /// True for EXISTS subquery. Mutually exclusive with 'rightNotExists'.
-    bool rightExists{false};
-
-    /// True for NOT EXISTS subquery. Mutually exclusive with 'rightExists'.
-    bool rightNotExists{false};
-
-    /// Marker column produced by 'exists' or 'not exists' join. If set, the
-    /// 'rightExists' must be true.
+    /// Marker column produced by 'exists' or 'not exists' join.
+    ///  If set, the 'joinType' must be kSemi.
     ColumnCP markColumn{nullptr};
 
     /// Columns produced by the 'left' side of a RIGHT or FULL OUTER join.
@@ -527,8 +525,6 @@ class JoinEdge {
 
     /// Input expressions corresponding 1:1 to 'rightColumns'.
     ExprVector rightExprs;
-
-    bool directed{false};
   };
 
   /// @param leftTable The left table of the join. May be nullptr if 'leftKeys'
@@ -539,38 +535,28 @@ class JoinEdge {
       : leftTable_(leftTable),
         rightTable_(rightTable),
         filter_(std::move(spec.filter)),
-        leftOptional_(spec.leftOptional),
-        rightOptional_(spec.rightOptional),
-        rightExists_(spec.rightExists),
-        rightNotExists_(spec.rightNotExists),
-        directed_(spec.directed),
+        joinType_(spec.joinType),
         markColumn_(spec.markColumn),
         leftColumns_{spec.leftColumns},
         leftExprs_{spec.leftExprs},
         rightColumns_{spec.rightColumns},
         rightExprs_{spec.rightExprs} {
-    VELOX_CHECK_NOT_NULL(rightTable);
-
-    if (isInner()) {
-      VELOX_CHECK_NOT_NULL(
-          leftTable, "Hyper edge is not supported for an inner join");
-      VELOX_CHECK(filter_.empty(), "Filter is not allowed for an inner join");
-    }
-
-    VELOX_CHECK(!rightExists_ || !rightNotExists_);
-
-    if (markColumn_) {
-      VELOX_CHECK(rightExists_);
-    }
+    // Only left join can have null left table.
+    VELOX_DCHECK(leftTable_ || isLeftOuter());
+    VELOX_DCHECK_NOT_NULL(rightTable_);
+    // filter_ is only for non-inner joins.
+    VELOX_DCHECK(filter_.empty() || !isInner());
+    // Mark column only for semi joins.
+    VELOX_DCHECK(!markColumn_ || isSemi());
 
     if (!leftColumns_.empty()) {
-      VELOX_CHECK(leftOptional_);
-      VELOX_CHECK_EQ(leftColumns_.size(), leftExprs_.size());
+      VELOX_DCHECK(leftOptional());
+      VELOX_DCHECK_EQ(leftColumns_.size(), leftExprs_.size());
     }
 
     if (!rightColumns_.empty()) {
-      VELOX_CHECK(rightOptional_);
-      VELOX_CHECK_EQ(rightColumns_.size(), rightExprs_.size());
+      VELOX_DCHECK(rightOptional());
+      VELOX_DCHECK_EQ(rightColumns_.size(), rightExprs_.size());
     }
   }
 
@@ -588,7 +574,7 @@ class JoinEdge {
         rightTable,
         Spec{
             .filter = std::move(filter),
-            .rightExists = true,
+            .joinType = JoinType::kSemi,
             .markColumn = markColumn,
         });
   }
@@ -596,19 +582,20 @@ class JoinEdge {
   static JoinEdge* makeNotExists(
       PlanObjectCP leftTable,
       PlanObjectCP rightTable) {
-    return make<JoinEdge>(leftTable, rightTable, Spec{.rightNotExists = true});
+    return make<JoinEdge>(
+        leftTable, rightTable, Spec{.joinType = JoinType::kAnti});
   }
 
   static JoinEdge* makeUnnest(
       PlanObjectCP leftTable,
       PlanObjectCP rightTable,
       ExprVector unnestExprs) {
-    VELOX_DCHECK_NOT_NULL(leftTable);
-    auto* edge = make<JoinEdge>(leftTable, rightTable, Spec{.directed = true});
+    auto* edge = make<JoinEdge>(
+        leftTable, rightTable, Spec{.joinType = JoinType::kUnnest});
     edge->leftKeys_ = std::move(unnestExprs);
     // TODO Not sure to what values fanout need to be set,
     // (1, 1) looks ok, but tests don't produce expected plans.
-    edge->setFanouts(2, 2);
+    edge->setFanouts(2, 1);
     return edge;
   }
 
@@ -644,11 +631,11 @@ class JoinEdge {
   }
 
   bool leftOptional() const {
-    return leftOptional_;
+    return isRightOuter() || isFullOuter();
   }
 
   bool rightOptional() const {
-    return rightOptional_;
+    return isLeftOuter() || isFullOuter();
   }
 
   ColumnCP markColumn() const {
@@ -671,49 +658,54 @@ class JoinEdge {
     return rightExprs_;
   }
 
-  bool directed() const {
-    return directed_;
-  }
-
   void addEquality(ExprCP left, ExprCP right, bool update = false);
 
   /// True if inner join.
   bool isInner() const {
-    return !leftOptional_ && !rightOptional_ && !rightExists_ &&
-        !rightNotExists_;
+    return joinType_ == JoinType::kInner;
   }
 
   /// True if this is an EXISTS join.
   bool isSemi() const {
-    return rightExists_;
+    return joinType_ == JoinType::kSemi;
   }
 
   /// True if this is a NOT EXISTS join.
   bool isAnti() const {
-    return rightNotExists_;
+    return joinType_ == JoinType::kAnti;
   }
 
   /// True if this is a LEFT join.
   bool isLeftOuter() const {
-    return rightOptional_ && !leftOptional_ && !isSemi() && !isAnti();
+    return joinType_ == JoinType::kLeft;
+  }
+
+  /// True if this is a RIGHT join.
+  bool isRightOuter() const {
+    return joinType_ == JoinType::kRight;
+  }
+
+  /// True if this is a FULL OUTER join.
+  bool isFullOuter() const {
+    return joinType_ == JoinType::kFull;
+  }
+
+  /// True if this is an UNNEST join.
+  bool isUnnest() const {
+    return joinType_ == JoinType::kUnnest;
   }
 
   /// True if all tables referenced from 'leftKeys' must be placed before
   /// placing this.
   bool isNonCommutative() const {
     // Inner and full outer joins are commutative.
-    if (rightOptional_ && leftOptional_) {
-      return false;
-    }
-
-    return !leftTable_ || rightOptional_ || leftOptional_ || rightExists_ ||
-        rightNotExists_ || directed_;
+    return !isInner() && !isFullOuter();
   }
 
   /// True if has a hash based variant that builds on the left and probes on the
   /// right.
   bool hasRightHashVariant() const {
-    return isNonCommutative() && !rightNotExists_;
+    return isNonCommutative() && !isAnti() && !isUnnest();
   }
 
   /// Returns the join side info for 'table'. If 'other' is set, returns the
@@ -761,7 +753,9 @@ class JoinEdge {
 
   /// True if a hash join build can be broadcasted. Used when building on the
   /// right. None of the right hash join variants are broadcastable.
-  bool isBroadcastableType() const;
+  bool isBroadcastableType() const {
+    return !leftOptional();
+  }
 
   /// Returns a key string for recording a join cardinality sample. The string
   /// is empty if not applicable. The bool is true if the key has right table
@@ -797,26 +791,8 @@ class JoinEdge {
   // 'leftKeys' select max 1 'rightTable' row.
   bool rightUnique_{false};
 
-  // True if an unprobed right side row produces a result with right side
-  // columns set and left side columns as null (right outer join). Possible only
-  // for hash or merge.
-  const bool leftOptional_;
-
-  // True if a right side miss produces a row with left side columns
-  // and a null for right side columns (left outer join). A full outer
-  // join has both left and right optional.
-  const bool rightOptional_;
-
-  // True if the right side is only checked for existence of a match. If
-  // rightOptional is set, this can project out a null for misses.
-  const bool rightExists_;
-
-  // True if produces a result for left if no match on the right.
-  const bool rightNotExists_;
-
-  // If directed non-outer edge. For example unnest or inner dependent on
-  // optional of outer.
-  const bool directed_;
+  // Join type.
+  const JoinType joinType_;
 
   // Flag to set if right side has a match.
   ColumnCP const markColumn_;
