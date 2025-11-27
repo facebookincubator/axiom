@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include <gtest/gtest.h>
+#include "axiom/optimizer/tests/ExprPrinters.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/parse/Expressions.h"
@@ -209,10 +210,12 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
     } else if (remainingFilter_.empty()) {
       EXPECT_TRUE(remainingFilter == nullptr)
           << "Expected no remaining filter, but got "
-          << remainingFilter->toString();
+          << ITypedExprPrinter::toText(*remainingFilter);
     } else {
       auto expected = parse::parseExpr(remainingFilter_, {});
-      EXPECT_EQ(remainingFilter->toString(), expected->toString());
+      EXPECT_EQ(
+          ITypedExprPrinter::toText(*remainingFilter),
+          IExprPrinter::toText(*expected));
     }
 
     AXIOM_TEST_RETURN
@@ -267,7 +270,9 @@ class FilterMatcher : public PlanMatcherImpl<FilterNode> {
 
     if (predicate_.has_value()) {
       auto expected = parse::parseExpr(predicate_.value(), {});
-      EXPECT_EQ(plan.filter()->toString(), expected->toString());
+      EXPECT_EQ(
+          ITypedExprPrinter::toText(*plan.filter()),
+          IExprPrinter::toText(*expected));
     }
 
     AXIOM_TEST_RETURN
@@ -310,8 +315,8 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
         }
 
         EXPECT_EQ(
-            plan.projections()[i]->toString(),
-            expected->dropAlias()->toString());
+            ITypedExprPrinter::toText(*plan.projections()[i]),
+            IExprPrinter::toText(*expected->dropAlias()));
       }
       AXIOM_TEST_RETURN_IF_FAILURE
     }
@@ -346,7 +351,9 @@ class ParallelProjectMatcher : public PlanMatcherImpl<ParallelProjectNode> {
 
       for (auto i = 0; i < expressions_.size(); ++i) {
         auto expected = parse::parseExpr(expressions_[i], {});
-        EXPECT_EQ(plan.projections()[i]->toString(), expected->toString());
+        EXPECT_EQ(
+            ITypedExprPrinter::toText(*plan.projections()[i]),
+            IExprPrinter::toText(*expected));
       }
       AXIOM_TEST_RETURN_IF_FAILURE
     }
@@ -382,7 +389,8 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
       for (auto i = 0; i < replicateExprs_.size(); ++i) {
         auto expected = parse::parseExpr(replicateExprs_[i], {});
         EXPECT_EQ(
-            plan.replicateVariables()[i]->toString(), expected->toString());
+            ITypedExprPrinter::toText(*plan.replicateVariables()[i]),
+            IExprPrinter::toText(*expected));
       }
       AXIOM_TEST_RETURN_IF_FAILURE
     }
@@ -397,7 +405,9 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
           expected = rewriteInputNames(expected, symbols);
         }
 
-        EXPECT_EQ(plan.unnestVariables()[i]->toString(), expected->toString());
+        EXPECT_EQ(
+            ITypedExprPrinter::toText(*plan.unnestVariables()[i]),
+            IExprPrinter::toText(*expected));
       }
       AXIOM_TEST_RETURN_IF_FAILURE
     }
@@ -498,7 +508,9 @@ class OrderByMatcher : public PlanMatcherImpl<OrderByNode> {
           expectedExpr = rewriteInputNames(expectedExpr, symbols);
         }
 
-        EXPECT_EQ(plan.sortingKeys()[i]->toString(), expectedExpr->toString());
+        EXPECT_EQ(
+            ITypedExprPrinter::toText(*plan.sortingKeys()[i]),
+            IExprPrinter::toText(*expectedExpr));
         EXPECT_EQ(plan.sortingOrders()[i].isAscending(), expected.ascending);
         EXPECT_EQ(plan.sortingOrders()[i].isNullsFirst(), expected.nullsFirst);
         AXIOM_TEST_RETURN_IF_FAILURE
@@ -553,7 +565,9 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
 
       for (auto i = 0; i < groupingKeys_.size(); ++i) {
         auto expected = parse::parseExpr(groupingKeys_[i], {});
-        EXPECT_EQ(plan.groupingKeys()[i]->toString(), expected->toString());
+        EXPECT_EQ(
+            ITypedExprPrinter::toText(*plan.groupingKeys()[i]),
+            IExprPrinter::toText(*expected));
       }
       AXIOM_TEST_RETURN_IF_FAILURE
 
@@ -569,8 +583,8 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
         }
 
         EXPECT_EQ(
-            plan.aggregates()[i].call->toString(),
-            expected->dropAlias()->toString());
+            ITypedExprPrinter::toText(*plan.aggregates()[i].call),
+            IExprPrinter::toText(*expected->dropAlias()));
 
         AXIOM_TEST_RETURN_IF_FAILURE
 
@@ -583,7 +597,9 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
           if (!symbols.empty()) {
             expectedMask = rewriteInputNames(expectedMask, symbols);
           }
-          EXPECT_EQ(mask->toString(), expectedMask->toString())
+          EXPECT_EQ(
+              ITypedExprPrinter::toText(*mask),
+              IExprPrinter::toText(*expectedMask))
               << "Mask mismatch for aggregate " << i;
         }
 
@@ -602,7 +618,9 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
             expectedKey = rewriteInputNames(expectedKey, symbols);
           }
 
-          EXPECT_EQ(sortingKeys[j]->toString(), expectedKey->toString())
+          EXPECT_EQ(
+              ITypedExprPrinter::toText(*sortingKeys[j]),
+              IExprPrinter::toText(*expectedKey))
               << "ORDER BY key mismatch for aggregate " << i << ", key " << j;
           EXPECT_EQ(
               sortingOrders[j].isAscending(), expectedOrderBy[j].ascending)
@@ -641,6 +659,39 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
 
   MatchResult matchDetails(
       const HashJoinNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    if (joinType_.has_value()) {
+      EXPECT_EQ(
+          JoinTypeName::toName(plan.joinType()),
+          JoinTypeName::toName(joinType_.value()));
+    }
+
+    AXIOM_TEST_RETURN
+  }
+
+ private:
+  const std::optional<JoinType> joinType_;
+};
+
+class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
+ public:
+  explicit NestedLoopJoinMatcher(
+      const std::shared_ptr<PlanMatcher>& left,
+      const std::shared_ptr<PlanMatcher>& right)
+      : PlanMatcherImpl<NestedLoopJoinNode>({left, right}) {}
+
+  NestedLoopJoinMatcher(
+      const std::shared_ptr<PlanMatcher>& left,
+      const std::shared_ptr<PlanMatcher>& right,
+      JoinType joinType)
+      : PlanMatcherImpl<NestedLoopJoinNode>({left, right}),
+        joinType_{joinType} {}
+
+  MatchResult matchDetails(
+      const NestedLoopJoinNode& plan,
       const std::unordered_map<std::string, std::string>& symbols)
       const override {
     SCOPED_TRACE(plan.toString(true, false));
@@ -832,8 +883,16 @@ PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
 PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(
     const std::shared_ptr<PlanMatcher>& rightMatcher) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<PlanMatcherImpl<NestedLoopJoinNode>>(
-      std::vector<std::shared_ptr<PlanMatcher>>{matcher_, rightMatcher});
+  matcher_ = std::make_shared<NestedLoopJoinMatcher>(matcher_, rightMatcher);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(
+    const std::shared_ptr<PlanMatcher>& rightMatcher,
+    JoinType joinType) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<NestedLoopJoinMatcher>(matcher_, rightMatcher, joinType);
   return *this;
 }
 
