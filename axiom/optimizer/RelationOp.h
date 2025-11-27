@@ -44,6 +44,11 @@ struct PlanCost {
     cardinality = other.cardinality;
   }
 
+  /// Total cost of the plan with cost of reshuffling included.
+  float totalCost(float shuffleCostPerRow) const {
+    return cost + shuffleCostPerRow * cardinality;
+  }
+
   std::string toString() const {
     return fmt::format(
         std::locale("en_US.UTF-8"),

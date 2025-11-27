@@ -532,7 +532,7 @@ std::string Repartition::toString(bool recursive, bool detail) const {
     out << input()->toString(true, detail) << " ";
   }
 
-  if (distribution().isBroadcast) {
+  if (distribution().isBroadcast()) {
     out << "broadcast ";
   } else if (distribution().isGather()) {
     out << "gather ";
@@ -745,15 +745,12 @@ Aggregation::Aggregation(
     if (step == velox::core::AggregationNode::Step::kFinal &&
         input_->is(RelType::kRepartition) &&
         input_->input()->is(RelType::kAggregation)) {
-      auto partial = input_->input().get();
-
-      VELOX_CHECK(!std::isnan(partial->cost().inputCardinality));
-      VELOX_CHECK(std::isfinite(partial->cost().inputCardinality));
-
-      inputBeforePartial = partial->inputCardinality();
+      const auto& partial = *input_->input();
+      inputBeforePartial = partial.inputCardinality();
     } else {
       inputBeforePartial = cost_.inputCardinality;
     }
+    VELOX_DCHECK(std::isfinite(inputBeforePartial));
 
     setCostWithGroups(inputBeforePartial);
   } else {
@@ -1208,8 +1205,7 @@ UnionAll::UnionAll(RelationOpPtrVector inputsVector)
     : RelationOp{RelType::kUnionAll, nullptr, Distribution{}, inputsVector[0]->columns()},
       inputs{std::move(inputsVector)} {
   for (auto& input : inputs) {
-    cost_.inputCardinality +=
-        input->cost().inputCardinality * input->cost().fanout;
+    cost_.inputCardinality += input->resultCardinality();
   }
 
   cost_.fanout = 1;
