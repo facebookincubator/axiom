@@ -496,7 +496,7 @@ void JoinCandidate::addEdge(
         // We update the lr fanout. The rl fanout will not be used for an inner
         // join, so we set this to 1.
         join->setFanouts(
-            std::min(newFanout * preFanout, std::min(preFanout, newFanout)), 1);
+            std::min({newFanout * preFanout, preFanout, newFanout}), 1);
         fanout = join->lrFanout();
       }
       join->addEquality(key, newTableSide.keys[i]);
