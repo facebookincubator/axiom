@@ -1219,7 +1219,7 @@ void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
     }
   }
 
-  auto* unnestTable = make<UnnestTable>();
+  auto* unnestTable = make<UnnestTable>(tableCardinality(leftTable));
   unnestTable->cname = newCName("ut");
   unnestTable->columns.reserve(
       unnest.outputType()->size() - unnest.onlyInput()->outputType()->size());
@@ -1460,14 +1460,14 @@ void ToGraph::addOrderBy(const lp::SortNode& order) {
 
 namespace {
 
-PlanObjectCP extractNonInnerJoinEqualities(
+void extractNonInnerJoinEqualities(
     Name eq,
     ExprVector& conjuncts,
     PlanObjectCP left,
     PlanObjectCP right,
     ExprVector& leftKeys,
     ExprVector& rightKeys) {
-  PlanObjectSet allLeft;
+  VELOX_DCHECK_NOT_NULL(left);
   VELOX_DCHECK_NOT_NULL(right);
 
   std::erase_if(conjuncts, [&](ExprCP conjunct) {
@@ -1477,49 +1477,24 @@ PlanObjectCP extractNonInnerJoinEqualities(
     const auto* eq = conjunct->as<Call>();
     const auto* leftArg = eq->argAt(0);
     const auto* rightArg = eq->argAt(1);
-    const auto leftTables = leftArg->allTables();
-    const auto rightTables = rightArg->allTables();
+    const auto* leftTable = leftArg->singleTable();
+    const auto* rightTable = rightArg->singleTable();
 
-    if (leftTables.empty() || rightTables.empty()) {
+    if (!leftTable || !rightTable) {
       return false;
     }
-    if (left && right) {
-      if (leftTables.size() != 1 || rightTables.size() != 1) {
-        return false;
-      }
-      if (leftTables.contains(left) && rightTables.contains(right)) {
-        leftKeys.push_back(leftArg);
-        rightKeys.push_back(rightArg);
-        return true;
-      }
-      if (leftTables.contains(right) && rightTables.contains(left)) {
-        leftKeys.push_back(rightArg);
-        rightKeys.push_back(leftArg);
-        return true;
-      }
-      return false;
-    }
-    if (rightTables.size() == 1 && rightTables.contains(right) &&
-        !leftTables.contains(right)) {
-      allLeft.unionSet(leftTables);
+    if (leftTable == left && rightTable == right) {
       leftKeys.push_back(leftArg);
       rightKeys.push_back(rightArg);
       return true;
     }
-    if (leftTables.size() == 1 && leftTables.contains(right) &&
-        !rightTables.contains(right)) {
-      allLeft.unionSet(rightTables);
+    if (leftTable == right && rightTable == left) {
       leftKeys.push_back(rightArg);
       rightKeys.push_back(leftArg);
       return true;
     }
     return false;
   });
-
-  if (!left && allLeft.size() == 1) {
-    return allLeft.onlyObject();
-  }
-  return left;
 }
 
 JoinEdge::JoinType toJoinType(lp::JoinType joinType) {
@@ -1555,30 +1530,15 @@ void ToGraph::addJoin(const lp::JoinNode& join, uint64_t allowedInDt) {
       lp::NodeKind::kFilter,
       lp::NodeKind::kSort);
 
-  // Left join can be handled more optimally,
-  // because left table can be multiple tables but right is not.
-  if (!queryCtx()->optimization()->options().syntacticJoinOrder &&
-      joinType == lp::JoinType::kRight) {
-    std::swap(left, right);
-    joinType = lp::JoinType::kLeft;
-  }
-
-  const bool leftOptional =
-      joinType == lp::JoinType::kFull || joinType == lp::JoinType::kRight;
   makeQueryGraph(
-      *left,
-      leftOptional ? deny(allowedInDt, lp::NodeKind::kJoin) : allowedInDt);
+      *left, !isInner ? deny(allowedInDt, lp::NodeKind::kJoin) : allowedInDt);
   VELOX_DCHECK(!currentDt_->tables.empty());
-  auto* leftTable = leftOptional ? currentDt_->tables.back() : nullptr;
+  auto* leftTable = !isInner ? currentDt_->tables.back() : nullptr;
 
   if (queryCtx()->optimization()->options().syntacticJoinOrder) {
     allowedInDt = deny(allowedInDt, lp::NodeKind::kJoin);
   }
 
-  const bool rightOptional =
-      joinType == lp::JoinType::kFull || joinType == lp::JoinType::kLeft;
-  // Right table cannot be multiple tables,
-  // at least because we need to remove it from starting tables.
   makeQueryGraph(
       *right, !isInner ? deny(allowedInDt, lp::NodeKind::kJoin) : allowedInDt);
   VELOX_DCHECK(!currentDt_->tables.empty());
@@ -1595,7 +1555,7 @@ void ToGraph::addJoin(const lp::JoinNode& join, uint64_t allowedInDt) {
 
   ExprVector leftKeys;
   ExprVector rightKeys;
-  leftTable = extractNonInnerJoinEqualities(
+  extractNonInnerJoinEqualities(
       equality_, conjuncts, leftTable, rightTable, leftKeys, rightKeys);
 
   VELOX_DCHECK_EQ(leftKeys.size(), rightKeys.size());

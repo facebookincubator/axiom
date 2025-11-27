@@ -92,11 +92,8 @@ std::string visitUnnestTable(const UnnestTable& unnest) {
 
 std::string visitJoinEdge(const JoinEdge& edge) {
   std::stringstream out;
-  if (edge.leftTable() != nullptr) {
-    out << tableName(edge.leftTable());
-  } else {
-    out << "<multiple tables>";
-  }
+
+  out << tableName(edge.leftTable());
 
   if (edge.isSemi()) {
     out << " SEMI ";

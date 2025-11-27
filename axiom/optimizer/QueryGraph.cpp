@@ -483,24 +483,6 @@ void BaseTable::addFilter(ExprCP expr) {
   queryCtx()->optimization()->filterUpdated(this);
 }
 
-PlanObjectSet JoinEdge::allTables() const {
-  PlanObjectSet set;
-
-  for (const auto* key : leftKeys_) {
-    set.unionSet(key->allTables());
-  }
-
-  for (const auto* key : rightKeys_) {
-    set.unionSet(key->allTables());
-  }
-
-  for (const auto* conjunct : filter_) {
-    set.unionSet(conjunct->allTables());
-  }
-
-  return set;
-}
-
 namespace {
 
 inline CPSpan<Column> toRangeCast(const ExprVector& exprs) {
@@ -511,13 +493,6 @@ inline CPSpan<Column> toRangeCast(const ExprVector& exprs) {
 
 void JoinEdge::guessFanout() {
   if (fanoutsFixed_) {
-    return;
-  }
-
-  // TODO: Why fanouts are set to 1.1 and 1 when left table is null?
-  if (leftTable_ == nullptr) {
-    lrFanout_ = 1.1;
-    rlFanout_ = 1;
     return;
   }
 

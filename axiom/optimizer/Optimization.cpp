@@ -311,7 +311,6 @@ std::optional<JoinCandidate> reducingJoins(
 // Calls 'func' with join, joined table and fanout for the joinable tables.
 template <typename Func>
 void forJoinedTables(const PlanState& state, Func func) {
-  folly::F14FastSet<JoinEdgeP> visited;
   state.placed.forEach([&](PlanObjectCP placedTable) {
     if (!placedTable->isTable()) {
       return;
@@ -319,19 +318,10 @@ void forJoinedTables(const PlanState& state, Func func) {
 
     for (auto join : joinedBy(placedTable)) {
       if (join->isNonCommutative()) {
-        if (!visited.insert(join).second) {
+        if (placedTable != join->leftTable()) {
           continue;
         }
-        bool usable = true;
-        for (auto key : join->leftKeys()) {
-          if (!key->allTables().isSubset(state.placed)) {
-            // All items that the left key depends on must be placed.
-            usable = false;
-            break;
-          }
-        }
-        if (usable &&
-            (state.mayConsiderNext(join->rightTable()) || join->markColumn())) {
+        if (state.mayConsiderNext(join->rightTable()) || join->markColumn()) {
           func(join, join->rightTable(), join->lrFanout());
         }
       } else {

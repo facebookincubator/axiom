@@ -244,7 +244,7 @@ PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
       addFilter = true;
       addExprs(join->leftKeys());
     }
-    if (join->leftTable() && !placed.contains(join->leftTable())) {
+    if (!placed.contains(join->leftTable())) {
       addFilter = true;
       addExprs(join->rightKeys());
     }

@@ -138,13 +138,8 @@ PlanObjectSet findSingleRowDts(
   auto tablesCopy = tables;
   int32_t numSingle = 0;
   for (auto& join : joins) {
+    tablesCopy.erase(join->leftTable());
     tablesCopy.erase(join->rightTable());
-    for (auto& key : join->leftKeys()) {
-      tablesCopy.except(key->allTables());
-    }
-    for (auto& filter : join->filter()) {
-      tablesCopy.except(filter->allTables());
-    }
   }
 
   tablesCopy.forEach([&](PlanObjectCP object) {
@@ -192,7 +187,7 @@ JoinEdgeP makeExists(PlanObjectCP table, const PlanObjectSet& tables) {
     }
 
     if (join->rightTable() == table) {
-      if (!join->leftTable() || !tables.contains(join->leftTable())) {
+      if (!tables.contains(join->leftTable())) {
         continue;
       }
 
@@ -211,23 +206,10 @@ JoinEdgeP makeExists(PlanObjectCP table, const PlanObjectSet& tables) {
 void DerivedTable::linkTablesToJoins() {
   setStartTables();
 
-  // All tables directly mentioned by a join link to the join. A non-inner
-  // that depends on multiple left tables has no leftTable but is still linked
-  // from all the tables it depends on.
+  // All tables directly mentioned by a join link to the join.
   for (auto join : joins) {
-    PlanObjectSet tables;
-    if (join->leftTable()) {
-      tables.add(join->leftTable());
-    } else {
-      for (auto key : join->leftKeys()) {
-        tables.unionSet(key->allTables());
-      }
-      for (auto conjunct : join->filter()) {
-        tables.unionSet(conjunct->allTables());
-      }
-    }
-    tables.add(join->rightTable());
-    tables.forEachMutable([&](PlanObjectP table) {
+    auto addJoinedBy = [&](PlanObjectP table) {
+      VELOX_DCHECK(table);
       if (table->is(PlanType::kTableNode)) {
         table->as<BaseTable>()->addJoinedBy(join);
       } else if (table->is(PlanType::kValuesTableNode)) {
@@ -235,10 +217,12 @@ void DerivedTable::linkTablesToJoins() {
       } else if (table->is(PlanType::kUnnestTableNode)) {
         table->as<UnnestTable>()->addJoinedBy(join);
       } else {
-        VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
+        VELOX_DCHECK(table->is(PlanType::kDerivedTableNode));
         table->as<DerivedTable>()->addJoinedBy(join);
       }
-    });
+    };
+    addJoinedBy(const_cast<PlanObjectP>(join->leftTable()));
+    addJoinedBy(const_cast<PlanObjectP>(join->rightTable()));
   }
 }
 
@@ -305,7 +289,7 @@ void DerivedTable::import(
   }
 
   for (auto join : super.joins) {
-    if (superTables.contains(join->rightTable()) && join->leftTable() &&
+    if (superTables.contains(join->rightTable()) &&
         superTables.contains(join->leftTable())) {
       joins.push_back(join);
     }

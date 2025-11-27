@@ -304,6 +304,7 @@ IndexInfo SchemaTable::indexByColumns(CPSpan<Column> columns) const {
 }
 
 IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys) {
+  VELOX_DCHECK(table);
   if (table->is(PlanType::kTableNode)) {
     auto schemaTable = table->as<BaseTable>()->schemaTable;
     return schemaTable->indexByColumns(keys);

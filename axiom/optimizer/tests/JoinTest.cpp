@@ -93,32 +93,7 @@ TEST_F(JoinTest, pushdownFilterThroughJoin) {
   }
 
   {
-    SCOPED_TRACE("Right Join (converted to Left Join)");
-    auto logicalPlan = makePlan(lp::JoinType::kRight);
-    auto matcher =
-        core::PlanMatcherBuilder{}
-            .tableScan("u")
-            .filter("u_data IS NULL")
-            .hashJoin(
-                core::PlanMatcherBuilder{}.tableScan("t").build(),
-                core::JoinType::kLeft)
-            .filter("t_data IS NULL")
-            // TODO: This projection can be avoided, because projections that
-            // just reorder/rename columns can be pushed own into join node.
-            .project({"t_id", "t_data", "u_id", "u_data"})
-            .build();
-    auto plan = toSingleNodePlan(logicalPlan);
-    AXIOM_ASSERT_PLAN(plan, matcher);
-  }
-  {
-    SCOPED_TRACE("Right Join (syntactic order)");
-    // This is needed because without this we cannot test right join
-    // properly as it gets converted to left join by swapping inputs.
-    auto wasSyntacticJoinOrder = optimizerOptions_.syntacticJoinOrder;
-    optimizerOptions_.syntacticJoinOrder = true;
-    SCOPE_EXIT {
-      optimizerOptions_.syntacticJoinOrder = wasSyntacticJoinOrder;
-    };
+    SCOPED_TRACE("Right Join");
     auto logicalPlan = makePlan(lp::JoinType::kRight);
     auto matcher = core::PlanMatcherBuilder{}
                        .tableScan("t")

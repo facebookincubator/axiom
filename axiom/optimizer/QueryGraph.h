@@ -512,9 +512,7 @@ class JoinEdge {
     ColumnCP markColumn{nullptr};
   };
 
-  /// @param leftTable The left table of the join. May be nullptr if 'leftKeys'
-  /// come from different tables. If so, 'this' must be not inner and not full
-  /// outer.
+  /// @param leftTable The left table of the join. Can be nullptr.
   /// @param rightTable The right table of the join. Cannot be nullptr.
   JoinEdge(PlanObjectCP leftTable, PlanObjectCP rightTable, Spec spec)
       : leftTable_(leftTable),
@@ -522,8 +520,7 @@ class JoinEdge {
         filter_(std::move(spec.filter)),
         joinType_(spec.joinType),
         markColumn_(spec.markColumn) {
-    // Only left join can have null left table.
-    VELOX_DCHECK(leftTable_ || isLeftOuter());
+    VELOX_DCHECK_NOT_NULL(leftTable_);
     VELOX_DCHECK_NOT_NULL(rightTable_);
     // filter_ is only for non-inner joins.
     VELOX_DCHECK(filter_.empty() || !isInner());
@@ -577,8 +574,6 @@ class JoinEdge {
   PlanObjectCP rightTable() const {
     return rightTable_;
   }
-
-  PlanObjectSet allTables() const;
 
   size_t numKeys() const {
     VELOX_DCHECK_LE(rightKeys_.size(), leftKeys_.size());
@@ -680,7 +675,7 @@ class JoinEdge {
     VELOX_DCHECK_NOT_NULL(table);
     return leftTable_ == table
         ? std::pair<PlanObjectCP, float>{rightTable_, lrFanout_}
-        : rightTable_ == table && leftTable_ != nullptr
+        : rightTable_ == table
         ? std::pair<PlanObjectCP, float>{leftTable_, rlFanout_}
         : std::pair<PlanObjectCP, float>{nullptr, 0};
   }
@@ -877,7 +872,8 @@ struct ValuesTable : public PlanObject {
 };
 
 struct UnnestTable : public PlanObject {
-  explicit UnnestTable() : PlanObject{PlanType::kUnnestTableNode} {}
+  explicit UnnestTable(float cardinality)
+      : PlanObject{PlanType::kUnnestTableNode}, cardinality_{cardinality} {}
 
   // Correlation name, distinguishes between uses of the same unnest node.
   Name cname{nullptr};
@@ -891,7 +887,7 @@ struct UnnestTable : public PlanObject {
 
   float cardinality() const {
     // TODO Should be changed later to actual cardinality.
-    return 1;
+    return cardinality_;
   }
 
   bool isTable() const override {
@@ -901,6 +897,9 @@ struct UnnestTable : public PlanObject {
   void addJoinedBy(JoinEdgeP join);
 
   std::string toString() const override;
+
+ private:
+  float cardinality_;
 };
 
 using TypeVector = QGVector<const velox::Type*>;
