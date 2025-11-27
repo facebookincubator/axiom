@@ -148,7 +148,6 @@ void reducingJoinsRecursive(
       // probe. This happens specially when value subqueries are represented as
       // optional sides of left join. These are often aggregations and there is
       // no point creating values for groups that can't be probed.
-      ;
     } else if (join->leftOptional() || join->rightOptional()) {
       continue;
     }
@@ -349,7 +348,7 @@ bool addExtraEdges(PlanState& state, JoinCandidate& candidate) {
 }
 } // namespace
 
-std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
+std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) const {
   std::vector<JoinCandidate> candidates;
   candidates.reserve(state.dt->tables.size());
   forJoinedTables(
@@ -357,12 +356,9 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
         if (!state.placed.contains(joined) && state.dt->hasJoin(join) &&
             state.dt->hasTable(joined)) {
           candidates.emplace_back(join, joined, fanout);
-          if (join->isInner()) {
-            if (!addExtraEdges(state, candidates.back())) {
-              // Drop the candidate if the edge was subsumed in some other
-              // edge.
-              candidates.pop_back();
-            }
+          if (join->isInner() && !addExtraEdges(state, candidates.back())) {
+            // Drop the candidate if the edge was subsumed in some other edge.
+            candidates.pop_back();
           }
         }
       });
@@ -604,7 +600,7 @@ void setMarkTrueFraction(
     velox::core::JoinType joinType,
     float fanout,
     float rlFanout) {
-  const_cast<Value*>(&mark->value())->trueFraction = std::min<float>(
+  const_cast<Value&>(mark->value()).trueFraction = std::min<float>(
       1,
       joinType == velox::core::JoinType::kLeftSemiProject ? fanout : rlFanout);
 }
@@ -1135,6 +1131,8 @@ struct ProjectionBuilder {
   }
 };
 
+namespace {
+
 folly::F14FastMap<PlanObjectCP, ExprCP> makeJoinColumnMapping(
     JoinEdgeP joinEdge) {
   folly::F14FastMap<PlanObjectCP, ExprCP> mapping;
@@ -1148,8 +1146,6 @@ folly::F14FastMap<PlanObjectCP, ExprCP> makeJoinColumnMapping(
 
   return mapping;
 }
-
-namespace {
 
 // Check if 'mark' column produced by a SemiProject join is used only to filter
 // the results using 'mark' or 'not(mark)' condition. If so, replace the join
@@ -1594,8 +1590,7 @@ void Optimization::addJoin(
   }
 
   // If this candidate has multiple Unnest they all will be handled at once.
-  if (candidate.tables.size() >= 1 &&
-      candidate.tables[0]->is(PlanType::kUnnestTableNode)) {
+  if (candidate.join->isUnnest()) {
     crossJoinUnnest(plan, candidate, state, result);
     return;
   }
@@ -1607,7 +1602,6 @@ void Optimization::addJoin(
   joinByHash(plan, candidate, state, toTry);
 
   if (!options_.syntacticJoinOrder && toTry.size() > sizeAfterIndex &&
-      candidate.join->isNonCommutative() &&
       candidate.join->hasRightHashVariant()) {
     // There is a hash based candidate with a non-commutative join. Try a right
     // join variant.
@@ -1720,7 +1714,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
 bool Optimization::placeConjuncts(
     RelationOpPtr plan,
     PlanState& state,
-    bool allowNondeterministic) {
+    bool joinsPlaced) {
   PlanStateSaver save(state);
 
   PlanObjectSet columnsAndSingles = state.columns;
@@ -1729,7 +1723,7 @@ bool Optimization::placeConjuncts(
 
   ExprVector filters;
   for (auto& conjunct : state.dt->conjuncts) {
-    if (!allowNondeterministic && conjunct->containsNonDeterministic()) {
+    if (!joinsPlaced && conjunct->containsNonDeterministic()) {
       continue;
     }
     if (state.placed.contains(conjunct)) {
@@ -1877,29 +1871,11 @@ PlanP unionPlan(
   return plan;
 }
 
-float startingScore(PlanObjectCP table) {
-  if (table->is(PlanType::kTableNode)) {
-    return table->as<BaseTable>()->schemaTable->cardinality;
-  }
-
-  if (table->is(PlanType::kValuesTableNode)) {
-    return table->as<ValuesTable>()->cardinality();
-  }
-
-  if (table->is(PlanType::kUnnestTableNode)) {
-    VELOX_FAIL("UnnestTable cannot be a starting table");
-    // Because it's rigth side of directed inner (cross) join edge.
-    // Directed edges are non-commutative, so right side cannot be starting.
-  }
-
-  return 10;
-}
-
 std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
   std::vector<float> scores;
   scores.reserve(tables.size());
   for (auto table : tables) {
-    scores.emplace_back(startingScore(table));
+    scores.emplace_back(tableCardinality(table));
   }
 
   std::vector<int32_t> indices(tables.size());
@@ -1967,8 +1943,8 @@ void Optimization::makeJoins(PlanState& state) {
       makeJoins(scan, state);
     } else if (from->is(PlanType::kUnnestTableNode)) {
       VELOX_FAIL("UnnestTable cannot be a starting table");
-      // Because it's rigth side of directed inner (cross) join edge.
-      // Directed edges are non-commutative, so right side cannot be starting.
+      // Because it's right side of unnest join edge
+      // and they are non-commutative.
     } else {
       // Start with a derived table.
       placeDerivedTable(from->as<const DerivedTable>(), state);
