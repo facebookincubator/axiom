@@ -1218,20 +1218,14 @@ void ToGraph::addOrderBy(const lp::SortNode& order) {
 
 namespace {
 
-// Fills 'leftKeys' and 'rightKeys's from 'conjuncts' so that
-// equalities with one side only depending on 'right' go to
-// 'rightKeys' and the other side not depending on 'right' goes to
-// 'leftKeys'. The left side may depend on more than one table. The
-// tables 'leftKeys' depend on are returned in 'allLeft'. The
-// conjuncts that are not equalities or have both sides depending
-// on right and something else are left in 'conjuncts'.
-void extractNonInnerJoinEqualities(
+PlanObjectCP extractNonInnerJoinEqualities(
     Name eq,
     ExprVector& conjuncts,
+    PlanObjectCP left,
     PlanObjectCP right,
     ExprVector& leftKeys,
-    ExprVector& rightKeys,
-    PlanObjectSet& allLeft) {
+    ExprVector& rightKeys) {
+  PlanObjectSet allLeft;
   VELOX_DCHECK_NOT_NULL(right);
 
   std::erase_if(conjuncts, [&](ExprCP conjunct) {
@@ -1245,6 +1239,22 @@ void extractNonInnerJoinEqualities(
     const auto rightTables = rightArg->allTables();
 
     if (leftTables.empty() || rightTables.empty()) {
+      return false;
+    }
+    if (left && right) {
+      if (leftTables.size() != 1 || rightTables.size() != 1) {
+        return false;
+      }
+      if (leftTables.contains(left) && rightTables.contains(right)) {
+        leftKeys.push_back(leftArg);
+        rightKeys.push_back(rightArg);
+        return true;
+      }
+      if (leftTables.contains(right) && rightTables.contains(left)) {
+        leftKeys.push_back(rightArg);
+        rightKeys.push_back(leftArg);
+        return true;
+      }
       return false;
     }
     if (rightTables.size() == 1 && rightTables.contains(right) &&
@@ -1263,6 +1273,11 @@ void extractNonInnerJoinEqualities(
     }
     return false;
   });
+
+  if (!left && allLeft.size() == 1) {
+    return allLeft.onlyObject();
+  }
+  return left;
 }
 
 JoinEdge::JoinType toJoinType(lp::JoinType joinType) {
@@ -1282,31 +1297,50 @@ JoinEdge::JoinType toJoinType(lp::JoinType joinType) {
 
 } // namespace
 
-void ToGraph::addJoinColumns(
-    const logical_plan::LogicalPlanNode& joinSide,
-    ColumnVector& columns,
-    ExprVector& exprs) {
-  const auto& names = joinSide.outputType()->names();
-  for (auto channel : usedChannels(joinSide)) {
-    const auto& name = names[channel];
-    auto* expr = translateColumn(name);
-
-    Name alias = nullptr;
-    if (expr->isColumn()) {
-      alias = expr->as<Column>()->alias();
-    }
-
-    auto* column = make<Column>(toName(name), currentDt_, expr->value(), alias);
-    renames_[name] = column;
-
-    columns.push_back(column);
-    exprs.push_back(expr);
-  }
-}
-
-void ToGraph::translateJoin(const lp::JoinNode& join) {
-  const auto joinType = join.joinType();
+void ToGraph::addJoin(const lp::JoinNode& join, uint64_t allowedInDt) {
+  const auto* left = join.left().get();
+  const auto* right = join.right().get();
+  auto joinType = join.joinType();
   const bool isInner = joinType == lp::JoinType::kInner;
+
+  // TODO Allow mixing Unnest with Join in a single DT.
+  // https://github.com/facebookincubator/axiom/issues/286
+  allowedInDt = deny(
+      allowedInDt,
+      lp::NodeKind::kUnnest,
+      lp::NodeKind::kAggregate,
+      lp::NodeKind::kLimit,
+      lp::NodeKind::kFilter,
+      lp::NodeKind::kSort);
+
+  // Left join can be handled more optimally,
+  // because left table can be multiple tables but right is not.
+  if (!queryCtx()->optimization()->options().syntacticJoinOrder &&
+      joinType == lp::JoinType::kRight) {
+    std::swap(left, right);
+    joinType = lp::JoinType::kLeft;
+  }
+
+  const bool leftOptional =
+      joinType == lp::JoinType::kFull || joinType == lp::JoinType::kRight;
+  makeQueryGraph(
+      *left,
+      leftOptional ? deny(allowedInDt, lp::NodeKind::kJoin) : allowedInDt);
+  VELOX_DCHECK(!currentDt_->tables.empty());
+  auto* leftTable = leftOptional ? currentDt_->tables.back() : nullptr;
+
+  if (queryCtx()->optimization()->options().syntacticJoinOrder) {
+    allowedInDt = deny(allowedInDt, lp::NodeKind::kJoin);
+  }
+
+  const bool rightOptional =
+      joinType == lp::JoinType::kFull || joinType == lp::JoinType::kLeft;
+  // Right table cannot be multiple tables,
+  // at least because we need to remove it from starting tables.
+  makeQueryGraph(
+      *right, !isInner ? deny(allowedInDt, lp::NodeKind::kJoin) : allowedInDt);
+  VELOX_DCHECK(!currentDt_->tables.empty());
+  auto* rightTable = !isInner ? currentDt_->tables.back() : nullptr;
 
   ExprVector conjuncts;
   translateConjuncts(join.condition(), conjuncts);
@@ -1316,39 +1350,18 @@ void ToGraph::translateJoin(const lp::JoinNode& join) {
         currentDt_->conjuncts.end(), conjuncts.begin(), conjuncts.end());
     return;
   }
-  const bool leftOptional =
-      joinType == lp::JoinType::kRight || joinType == lp::JoinType::kFull;
-  const bool rightOptional =
-      joinType == lp::JoinType::kLeft || joinType == lp::JoinType::kFull;
-
-  // If non-inner, and many tables on the right they are one dt. If a single
-  // table then this too is the last in 'tables'.
-  auto rightTable = currentDt_->tables.back();
 
   ExprVector leftKeys;
   ExprVector rightKeys;
-  PlanObjectSet leftTables;
-  extractNonInnerJoinEqualities(
-      equality_, conjuncts, rightTable, leftKeys, rightKeys, leftTables);
+  leftTable = extractNonInnerJoinEqualities(
+      equality_, conjuncts, leftTable, rightTable, leftKeys, rightKeys);
 
   VELOX_DCHECK_EQ(leftKeys.size(), rightKeys.size());
   JoinEdge::Spec joinSpec{
       .filter = std::move(conjuncts),
       .joinType = toJoinType(joinType),
   };
-
-  if (leftOptional) {
-    addJoinColumns(*join.left(), joinSpec.leftColumns, joinSpec.leftExprs);
-  }
-
-  if (rightOptional) {
-    addJoinColumns(*join.right(), joinSpec.rightColumns, joinSpec.rightExprs);
-  }
-
-  auto* edge = make<JoinEdge>(
-      leftTables.size() == 1 ? leftTables.onlyObject() : nullptr,
-      rightTable,
-      std::move(joinSpec));
+  auto* edge = make<JoinEdge>(leftTable, rightTable, std::move(joinSpec));
   currentDt_->joins.push_back(edge);
   for (size_t i = 0; i < leftKeys.size(); ++i) {
     edge->addEquality(leftKeys[i], rightKeys[i]);
@@ -2192,25 +2205,7 @@ void ToGraph::makeQueryGraph(
 
     } break;
     case lp::NodeKind::kJoin: {
-      const auto& join = *node.as<lp::JoinNode>();
-      const auto& left = *join.left();
-      const auto& right = *join.right();
-      // TODO Allow mixing Unnest with Join in a single DT.
-      // https://github.com/facebookincubator/axiom/issues/286
-      allowedInDt = deny(
-          allowedInDt,
-          lp::NodeKind::kUnnest,
-          lp::NodeKind::kAggregate,
-          lp::NodeKind::kLimit,
-          lp::NodeKind::kFilter,
-          lp::NodeKind::kSort);
-      makeQueryGraph(left, allowedInDt);
-      if (join.joinType() != lp::JoinType::kInner ||
-          queryCtx()->optimization()->options().syntacticJoinOrder) {
-        allowedInDt = deny(allowedInDt, lp::NodeKind::kJoin);
-      }
-      makeQueryGraph(right, allowedInDt);
-      translateJoin(join);
+      addJoin(*node.as<lp::JoinNode>(), allowedInDt);
     } break;
     case lp::NodeKind::kSort: {
       const auto& input = *node.onlyInput();

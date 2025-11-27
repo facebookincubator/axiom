@@ -19,7 +19,7 @@ dt1: c_count
   joins:
     t2 LEFT t3 ON t2.c_custkey = t3.o_custkey FILTER not(like(t3.o_comment, "%special%requests%"))
   syntactic join order: 9, 20
-  aggregates: count(dt1.o_orderkey) AS count
+  aggregates: count(t3.o_orderkey) AS count
   grouping keys: t2.c_custkey
 
 t2: c_custkey
@@ -44,18 +44,15 @@ Project (redundant) -> dt4.c_count, dt4.custdist
       Project -> dt1.c_count
           dt1.c_count := dt1.count
         Aggregation (t2.c_custkey) -> t2.c_custkey, dt1.count
-            dt1.count := count(dt1.o_orderkey)
-          Project (redundant) -> t2.c_custkey, dt1.o_orderkey
-              t2.c_custkey := t2.c_custkey
-              dt1.o_orderkey := t3.o_orderkey
-            Join RIGHT Hash -> t2.c_custkey, t3.o_orderkey
-                t3.o_custkey = t2.c_custkey
-                not(like(t3.o_comment, "%special%requests%"))
-              TableScan -> t3.o_orderkey, t3.o_custkey, t3.o_comment
-                table: orders
-              HashBuild -> t2.c_custkey
-                TableScan -> t2.c_custkey
-                  table: customer
+            dt1.count := count(t3.o_orderkey)
+          Join RIGHT Hash -> t2.c_custkey, t3.o_orderkey
+              t3.o_custkey = t2.c_custkey
+              not(like(t3.o_comment, "%special%requests%"))
+            TableScan -> t3.o_orderkey, t3.o_custkey, t3.o_comment
+              table: orders
+            HashBuild -> t2.c_custkey
+              TableScan -> t2.c_custkey
+                table: customer
 
 
 Executable Velox plan:

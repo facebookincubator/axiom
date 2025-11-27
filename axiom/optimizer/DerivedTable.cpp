@@ -918,6 +918,19 @@ void DerivedTable::distributeConjuncts() {
         tables[0]->as<DerivedTable>()->setOp.value() ==
             logical_plan::SetOperation::kUnionAll));
 
+  PlanObjectSet noPushdownTables;
+  for (const auto* join : joins) {
+    if (join->leftOptional()) {
+      // No pushdown to the left side of a RIGHT or FULL join.
+      noPushdownTables.add(join->leftTable());
+    }
+    if (join->rightOptional()) {
+      // No pushdown to the right side of a LEFT or FULL join.
+      noPushdownTables.add(join->rightTable());
+    }
+  }
+  VELOX_DCHECK(tables.size() > 1 || noPushdownTables.empty());
+
   for (auto i = 0; i < conjuncts.size(); ++i) {
     // No pushdown of non-deterministic except if only pushdown target is a
     // union all.
@@ -936,6 +949,10 @@ void DerivedTable::distributeConjuncts() {
 
       if (tables[0]->is(PlanType::kValuesTableNode)) {
         continue; // ValuesTable does not have filter pushdown.
+      }
+
+      if (noPushdownTables.contains(tables[0])) {
+        continue; // No pushdown if depends on an optional side of a join.
       }
 
       if (tables[0]->is(PlanType::kUnnestTableNode)) {
