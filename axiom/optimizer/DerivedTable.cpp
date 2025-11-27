@@ -216,19 +216,17 @@ void DerivedTable::linkTablesToJoins() {
   // from all the tables it depends on.
   for (auto join : joins) {
     PlanObjectSet tables;
-    if (join->isInner() && join->directed()) {
+    if (join->leftTable()) {
       tables.add(join->leftTable());
     } else {
       for (auto key : join->leftKeys()) {
-        tables.unionSet(key->allTables());
-      }
-      for (auto key : join->rightKeys()) {
         tables.unionSet(key->allTables());
       }
       for (auto conjunct : join->filter()) {
         tables.unionSet(conjunct->allTables());
       }
     }
+    tables.add(join->rightTable());
     tables.forEachMutable([&](PlanObjectP table) {
       if (table->is(PlanType::kTableNode)) {
         table->as<BaseTable>()->addJoinedBy(join);
@@ -937,11 +935,15 @@ void DerivedTable::distributeConjuncts() {
       }
 
       if (tables[0]->is(PlanType::kValuesTableNode)) {
-        continue; // ValuesTable does not have filter push-down.
+        continue; // ValuesTable does not have filter pushdown.
       }
 
       if (tables[0]->is(PlanType::kUnnestTableNode)) {
-        continue; // UnnestTable does not have filter push-down.
+        // UnnestTable does not implement filter pushdown yet.
+        // TODO: We can push down predicate to left side of unnest if
+        // 1. it only depends on the replicated columns
+        // 2. we can make subfield access for unnested columns
+        continue;
       }
 
       if (tables[0]->is(PlanType::kDerivedTableNode)) {
