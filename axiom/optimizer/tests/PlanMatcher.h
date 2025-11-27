@@ -122,6 +122,10 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& nestedLoopJoin(
       const std::shared_ptr<PlanMatcher>& rightMatcher);
 
+  PlanMatcherBuilder& nestedLoopJoin(
+      const std::shared_ptr<PlanMatcher>& rightMatcher,
+      JoinType joinType);
+
   PlanMatcherBuilder& localPartition();
 
   PlanMatcherBuilder& localPartition(
