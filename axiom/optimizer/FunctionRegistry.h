@@ -30,12 +30,15 @@ class FunctionSet {
   /// Indicates a non-determinstic function in the set.
   static constexpr uint64_t kNonDeterministic = 1UL << 1;
 
+  /// Indicates a window function in the set.
+  static constexpr uint64_t kWindow = 1UL << 2;
+
   FunctionSet() : set_(0) {}
 
   explicit FunctionSet(uint64_t set) : set_(set) {}
 
   /// True if 'item' is in 'this'.
-  bool contains(int64_t item) const {
+  bool contains(uint64_t item) const {
     return 0 != (set_ & item);
   }
 

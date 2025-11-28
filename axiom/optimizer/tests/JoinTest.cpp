@@ -104,7 +104,6 @@ TEST_F(JoinTest, pushdownFilterThroughJoin) {
                                .build(),
                            core::JoinType::kRight)
                        .filter("t_data IS NULL")
-                       .project()
                        .build();
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);

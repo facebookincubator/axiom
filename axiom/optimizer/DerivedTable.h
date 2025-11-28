@@ -16,6 +16,7 @@
 #pragma once
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/ExprsWrapper.h"
 #include "axiom/optimizer/PlanObject.h"
 
 namespace facebook::axiom::optimizer {
@@ -35,6 +36,10 @@ using OrderTypeVector = QGVector<OrderType>;
 
 class WritePlan;
 using WritePlanCP = const WritePlan*;
+
+class Window;
+using WindowCP = const Window*;
+using WindowVector = QGVector<WindowCP>;
 
 /// Represents a derived table, i.e. a SELECT in a FROM clause. This is the
 /// basic unit of planning. Derived tables can be merged and split apart from
@@ -68,7 +73,7 @@ struct DerivedTable : public PlanObject {
   ColumnVector columns;
 
   /// Exprs projected out. 1:1 to 'columns'.
-  ExprVector exprs;
+  ExprsWrapper exprs;
 
   /// References all joins where 'this' is an end point.
   JoinEdgeVector joinedBy;
@@ -132,7 +137,7 @@ struct DerivedTable : public PlanObject {
   ExprVector having;
 
   /// Order by.
-  ExprVector orderKeys;
+  ExprsWrapper orderKeys;
   OrderTypeVector orderTypes;
 
   /// Limit and offset.
@@ -169,13 +174,13 @@ struct DerivedTable : public PlanObject {
 
   /// Return a copy of 'expr', replacing references to this DT's 'columns' with
   /// corresponding 'exprs'.
-  ExprCP importExpr(ExprCP expr);
+  ExprCP importExpr(ExprCP expr) const;
 
   /// Return a copy of 'expr', replacing references to this DT's 'exprs' with
   /// corresponding 'columns'.
   /// TODO Handle cases when 'expr' contains columns that are not exported by
   /// the DT.
-  ExprCP exportExpr(ExprCP expr);
+  ExprCP exportExpr(ExprCP expr) const;
 
   bool isTable() const override {
     return true;
@@ -211,6 +216,8 @@ struct DerivedTable : public PlanObject {
   bool hasLimit() const {
     return limit >= 0;
   }
+
+  bool hasWindows() const;
 
   // True if contains one derived table in 'tables' and adds no change to its
   // result set.

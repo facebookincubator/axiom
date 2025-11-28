@@ -70,6 +70,16 @@ struct OptimizerOptions {
   /// partial + final or not.
   bool alwaysPlanPartialAggregation = false;
 
+  /// Disable cost-based decision re: whether to plan an aggregation as a
+  /// single-stage aggregation or not.
+  bool alwaysPlanSingleAggregation = false;
+
+  bool alwaysPushdownLimit = false;
+
+  bool alwaysPullupLimit = false;
+
+  bool planBestThroughput = false;
+
   bool isMapAsStruct(std::string_view table, std::string_view column) const {
     if (allMapsAsStruct) {
       return true;

@@ -207,6 +207,8 @@ class ToGraph {
 
   ExprCP translateLambda(const logical_plan::LambdaExpr* lambda);
 
+  WindowCP translateWindow(const logical_plan::WindowExpr* windowExpr);
+
   // If 'expr' is not a subfield path, returns std::nullopt. If 'expr'
   // is a subfield path that is subsumed by a projected subfield,
   // returns nullptr. Else returns an optional subfield path on top of
@@ -229,7 +231,7 @@ class ToGraph {
   void translateConjuncts(const logical_plan::ExprPtr& input, ExprVector& flat);
 
   // Adds a JoinEdge corresponding to 'join' to the enclosing DerivedTable.
-  void translateJoin(const logical_plan::JoinNode& join);
+  void addJoin(const logical_plan::JoinNode& join, uint64_t allowedInDt);
 
   // Given an INTERSECT or an EXCEPT set operation, create derived tables for
   // inputs, add them to 'currentDt_' and connect them with join edges.
@@ -292,7 +294,7 @@ class ToGraph {
   // DerivedTable. Done for joins to the right of non-inner joins,
   // group bys as non-top operators, whenever descendents of 'node'
   // are not freely reorderable with its parents' descendents.
-  void wrapInDt(const logical_plan::LogicalPlanNode& node);
+  void wrapInDt(const logical_plan::LogicalPlanNode& node, bool unordered);
 
   // Start new DT and add 'currentDt_' as a child.
   // Set 'currentDt_' to the new DT.
@@ -324,7 +326,8 @@ class ToGraph {
   // occurrences of the same expression are redundant since the column is
   // already sorted by the first occurrence.
   std::pair<ExprVector, OrderTypeVector> dedupOrdering(
-      const std::vector<logical_plan::SortingField>& ordering);
+      const std::vector<logical_plan::SortingField>& ordering,
+      folly::F14FastSet<ExprCP> keysToIgnore = {});
 
   // Process non-correlated subqueries used in filter's predicate and populate
   // subqueries_ map. For each IN <subquery> expression, create a separate DT
@@ -337,11 +340,6 @@ class ToGraph {
   DerivedTableP translateSubquery(const logical_plan::LogicalPlanNode& node);
 
   ColumnCP addMarkColumn();
-
-  void addJoinColumns(
-      const logical_plan::LogicalPlanNode& joinSide,
-      ColumnVector& columns,
-      ExprVector& exprs);
 
   // Cache of resolved table schemas.
   Schema schema_;
@@ -364,7 +362,7 @@ class ToGraph {
   folly::F14FastMap<std::string, ExprCP> renames_;
 
   // Symbols from the 'outer' query. Used when processing correlated subqueries.
-  const folly::F14FastMap<std::string, ExprCP>* correlations_;
+  const folly::F14FastMap<std::string, ExprCP>* correlations_{nullptr};
 
   // True if expression is allowed to reference symbols from the 'outer' query.
   bool allowCorrelations_{false};

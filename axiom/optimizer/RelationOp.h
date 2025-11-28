@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/optimizer/Schema.h"
 #include "axiom/runner/MultiFragmentPlan.h"
 
@@ -42,6 +43,11 @@ struct PlanCost {
   void add(const PlanCost& other) {
     cost += other.cost;
     cardinality = other.cardinality;
+  }
+
+  /// Total cost of the plan with cost of reshuffling included.
+  float totalCost(float shuffleCostPerRow) const {
+    return cost + shuffleCostPerRow * cardinality;
   }
 
   std::string toString() const {
@@ -113,6 +119,7 @@ enum class RelType {
   kJoin,
   kHashBuild,
   kAggregation,
+  kWindow,
   kOrderBy,
   kUnionAll,
   kLimit,
@@ -484,6 +491,13 @@ struct Join : public RelationOp {
   static Join*
   makeCrossJoin(RelationOpPtr input, RelationOpPtr right, ColumnVector columns);
 
+  static Join* makeNestedLoopJoin(
+      RelationOpPtr input,
+      RelationOpPtr right,
+      velox::core::JoinType joinType,
+      ExprVector filterExprs,
+      ColumnVector columns);
+
   const JoinMethod method;
   const velox::core::JoinType joinType;
   const RelationOpPtr right;
@@ -570,6 +584,36 @@ struct Aggregation : public RelationOp {
   void setCostWithGroups(int64_t inputBeforePartial);
 };
 
+/// Represents window functions with the same window specification.
+struct WindowOp : public RelationOp {
+  WindowOp(
+      RelationOpPtr input,
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes,
+      WindowVector windows,
+      ColumnVector columns);
+
+  const ExprVector partitionKeys;
+  const ExprVector orderKeys;
+  const OrderTypeVector orderTypes;
+  const WindowVector windows;
+
+  ColumnCP windowExprColumn(size_t windowIndex) const {
+    const auto index = input_->columns().size() + windowIndex;
+    VELOX_CHECK_LT(index, columns_.size());
+    return columns_[index];
+  }
+
+  const QGString& historyKey() const override;
+
+  std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+};
+
 /// Represents an order by. The order is given by the distribution.
 struct OrderBy : public RelationOp {
   OrderBy(
@@ -578,6 +622,10 @@ struct OrderBy : public RelationOp {
       OrderTypeVector orderTypes,
       int64_t limit = -1,
       int64_t offset = 0);
+
+  bool hasLimit() const {
+    return limit >= 0;
+  }
 
   const int64_t limit;
   const int64_t offset;
@@ -615,8 +663,8 @@ struct Limit : public RelationOp {
   const int64_t offset;
 
   bool isNoLimit() const {
-    static const auto kMax = std::numeric_limits<int64_t>::max();
-    return limit >= (kMax - offset);
+    static constexpr auto kMax = std::numeric_limits<int64_t>::max();
+    return limit >= kMax - offset;
   }
 
   std::string toString(bool recursive, bool detail) const override;
