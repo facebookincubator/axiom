@@ -843,15 +843,39 @@ void Optimization::addPostprocess(
     plan = filter;
   }
 
-  // We probably want to make this decision based on cost.
-  static constexpr int64_t kMaxLimitBeforeProject = 8'192;
-  if (dt->hasOrderBy()) {
-    addOrderBy(dt, plan, state);
-  } else if (dt->hasLimit() && dt->limit <= kMaxLimitBeforeProject) {
+  const bool needsLimit = [&] {
+    if (dt->limit == 0) {
+      return true;
+    }
+    if (dt->hasOrderBy()) {
+      addOrderBy(dt, plan, state);
+      return false;
+    }
+    if (!dt->hasLimit()) {
+      return false;
+    }
+    auto pushdownLimit = [&] {
+      if ((isSingleWorker_ && isSingleDriver_) ||
+          options_.alwaysPushdownLimit) {
+        // Limit doesn't affect parallelism,
+        // so we can apply it as early as possible.
+        return true;
+      }
+      const auto parallelism =
+          runnerOptions_.numWorkers * runnerOptions_.numDrivers;
+      // Instead of 1024, we want to use preferred_output_batch_rows?
+      const auto willCompute =
+          options_.planBestThroughput ? 1024 / parallelism : 1024 * parallelism;
+      return dt->limit <= std::max<int64_t>(1, willCompute);
+    };
+    if (options_.alwaysPullupLimit || !pushdownLimit()) {
+      return true;
+    }
     auto limit = make<Limit>(plan, dt->limit, dt->offset);
     state.addCost(*limit);
     plan = limit;
-  }
+    return false;
+  }();
 
   if (!dt->columns.empty()) {
     ColumnVector usedColumns;
@@ -871,7 +895,7 @@ void Optimization::addPostprocess(
         Project::isRedundant(plan, usedExprs, usedColumns));
   }
 
-  if (!dt->hasOrderBy() && dt->limit > kMaxLimitBeforeProject) {
+  if (needsLimit) {
     auto limit = make<Limit>(plan, dt->limit, dt->offset);
     state.addCost(*limit);
     plan = limit;
@@ -945,7 +969,8 @@ void Optimization::addAggregation(
   plan = std::move(precompute).maybeProject();
   state.placed.add(aggPlan);
 
-  if (isSingleWorker_ && isSingleDriver_) {
+  if ((isSingleWorker_ && isSingleDriver_) ||
+      options_.alwaysPlanSingleAggregation) {
     auto* singleAgg = make<Aggregation>(
         plan,
         std::move(groupingKeys),

@@ -140,6 +140,10 @@ class ToVelox {
       runner::ExecutableFragment& fragment,
       std::vector<runner::ExecutableFragment>& stages);
 
+  velox::core::PlanNodePtr makeZeroLimit(
+      const RelationOp& op,
+      runner::ExecutableFragment& fragment);
+
   // Makes partial + final order by fragments for order by with and without
   // limit.
   velox::core::PlanNodePtr makeOrderBy(
