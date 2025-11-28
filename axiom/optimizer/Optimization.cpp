@@ -116,7 +116,12 @@ PlanP Optimization::bestPlan() {
 
   makeJoins(topState_);
 
-  return topState_.plans.best();
+  auto best = topState_.plans.best();
+  if ((options_.traceFlags & OptimizerOptions::kRetained) != 0) {
+    std::cout << "top level: ";
+    trace(OptimizerOptions::kRetained, 0, best->cost, *best->op);
+  }
+  return best;
 }
 
 namespace {
@@ -400,6 +405,11 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   return candidates;
 }
 
+// True if single worker, i.e. do not plan remote exchanges
+bool isSingleWorker() {
+  return queryCtx()->optimization()->runnerOptions().numWorkers == 1;
+}
+
 namespace {
 constexpr uint32_t kNotFound = ~0U;
 
@@ -428,11 +438,6 @@ uint32_t position(const V& exprs, Getter getter, const Expr& expr) {
     }
   }
   return kNotFound;
-}
-
-// True if single worker, i.e. do not plan remote exchanges
-bool isSingleWorker() {
-  return queryCtx()->optimization()->runnerOptions().numWorkers == 1;
 }
 
 RelationOpPtr repartitionForAgg(
@@ -1713,6 +1718,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
     // Not all reducing joins are necessarily retained in the plan. Only mark
     // the ones fully imported as placed.
     state.placed.unionSet(plan->fullyImported);
+    state.cost = plan->cost;
     makeJoins(plan->op, state);
   }
 }

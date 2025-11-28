@@ -607,15 +607,38 @@ TEST_F(TpchPlanTest, supplierAggregationJoin) {
             .project({"s_name", "s_acctbal", "a0 as volume"})
             .planNode();
 
-    auto sqlPlan = checkResults(sql, referencePlan);
+    checkResults(sql, referencePlan);
 
-    // Verify the optimized plan contains aggregation above filter semijoin
-    ASSERT_EQ(1, sqlPlan.plan->fragments().size());
-    auto sqlPlanNode = sqlPlan.plan->fragments().at(0).fragment.planNode;
+    auto sqlPlan = toSingleNodePlan(sql);
+    LOG(INFO) << "ff";
+    auto rightMatcher = core::PlanMatcherBuilder()
+                            .hiveScan(
+                                "supplier",
+                                common::test::SubfieldFiltersBuilder()
+                                    .add("s_acctbal", exec::lessThanDouble(100))
+                                    .build())
+                            .build();
 
-    checkPlanText(sqlPlanNode, {"Aggregation", "LEFT SEMI \\(FILTER\\)"});
+    auto rightMatcher1 =
+        core::PlanMatcherBuilder()
+            .hiveScan(
+                "supplier",
+                common::test::SubfieldFiltersBuilder()
+                    .add("s_acctbal", exec::lessThanDouble(100))
+                    .build())
+            .build();
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .hiveScan("lineitem", {})
+            .hashJoin(rightMatcher, velox::core::JoinType::kLeftSemiFilter)
+            .singleAggregation({"l_suppkey"}, {"sum(l_quantity) AS volume"})
+            .hashJoin(rightMatcher1, velox::core::JoinType::kInner)
+            .project({"s_name", "s_acctbal", "volume"})
+            .build();
+
+    AXIOM_ASSERT_PLAN(sqlPlan, matcher);
   }
-
   // Test 2: Supplier join with nation filter
   {
     auto sql =
@@ -655,16 +678,55 @@ TEST_F(TpchPlanTest, supplierAggregationJoin) {
             .project({"s_name", "s_acctbal", "a0 as volume"})
             .planNode();
 
-    auto sqlPlan = checkResults(sql, referencePlan);
+    checkResults(sql, referencePlan);
+    auto sqlPlan = toSingleNodePlan(sql);
+    LOG(INFO) << "ff";
+    auto rightMatcher =
+        core::PlanMatcherBuilder()
+            .hiveScan(
+                "nation",
+                common::test::SubfieldFiltersBuilder()
+                    .add(
+                        "n_name",
+                        exec::in(
+                            std::vector<std::string>{std::string("FRANCE")}))
+                    .build())
+            .build();
 
-    // Verify the optimized plan contains aggregation above filter semijoin
-    // with nation joined to supplier
-    ASSERT_EQ(1, sqlPlan.plan->fragments().size());
-    auto sqlPlanNode = sqlPlan.plan->fragments().at(0).fragment.planNode;
+    auto rightMatcher1 =
+        core::PlanMatcherBuilder()
+            .hiveScan("supplier", {}, "lt(minus(s_acctbal,100),0)")
+            .hashJoin(rightMatcher, velox::core::JoinType::kInner)
+            .project({"s_suppkey AS \"rdt13.ec14\""})
+            .build();
 
-    checkPlanText(
-        sqlPlanNode,
-        {"Aggregation", "LEFT SEMI \\(FILTER\\)", "supplier", "nation"});
+    auto rightMatcher2 =
+        core::PlanMatcherBuilder()
+            .hiveScan(
+                "nation",
+                common::test::SubfieldFiltersBuilder()
+                    .add(
+                        "n_name",
+                        exec::in(
+                            std::vector<std::string>{std::string("FRANCE")}))
+                    .build())
+            .build();
+
+    auto rightMatcher3 =
+        core::PlanMatcherBuilder()
+            .hiveScan("supplier", {}, "lt(minus(s_acctbal,100),0)")
+            .hashJoin(rightMatcher2, velox::core::JoinType::kInner)
+            .build();
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .hiveScan("lineitem", {})
+            .hashJoin(rightMatcher1, velox::core::JoinType::kLeftSemiFilter)
+            .singleAggregation({"l_suppkey"}, {"sum(l_quantity) AS volume"})
+            .hashJoin(rightMatcher3, velox::core::JoinType::kInner)
+            .project({"s_name", "s_acctbal", "volume"})
+            .build();
+    AXIOM_ASSERT_PLAN(sqlPlan, matcher);
   }
 }
 

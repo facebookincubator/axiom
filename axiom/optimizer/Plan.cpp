@@ -327,7 +327,12 @@ std::string PlanState::printPlan(RelationOpPtr op, bool detail) const {
 
 PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
   int32_t replaceIndex = -1;
-  const float shuffle = shuffleCost(plan->columns()) * state.cost.cardinality;
+  auto& opt = *queryCtx()->optimization();
+  bool isSingle = isSingleWorker();
+  bool isRoot = state.dt->id() == 0;
+  const float shuffle = isSingleWorker
+      ? 0
+      : shuffleCost(plan->columns()) * state.cost.cardinality;
 
   if (!plans.empty()) {
     // Compare with existing. If there is one with same distribution and new is
@@ -339,7 +344,9 @@ PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
 
       const bool newIsBetter = old->isStateBetter(state);
       const bool newIsBetterWithShuffle = old->isStateBetter(state, shuffle);
-      const bool sameDist =
+      // We do not differentiate plans by their result distribution for root
+      // plans or single worker plans.
+      const bool sameDist = isRoot || isSingleWorker ||
           old->op->distribution().isSamePartition(plan->distribution());
       const bool sameOrder =
           old->op->distribution().isSameOrder(plan->distribution());

@@ -651,7 +651,11 @@ std::string generateProjectCode(const ProjectNode& node) {
     std::string exprStr = ITypedExprPrinter::toText(*projections[i]);
     // Add alias if the name differs from the expression
     if (names[i] != exprStr) {
-      exprStr += " AS " + names[i];
+      if (needsIdentifierQuoting(names[i])) {
+        exprStr += " AS \"" + names[i] + "\"";
+      } else {
+        exprStr += " AS " + names[i];
+      }
     }
     expressions.push_back(exprStr);
   }
@@ -670,7 +674,11 @@ std::string generateParallelProjectCode(const ParallelProjectNode& node) {
   for (size_t i = 0; i < projections.size(); ++i) {
     std::string exprStr = ITypedExprPrinter::toText(*projections[i]);
     if (names[i] != exprStr) {
-      exprStr += " AS " + names[i];
+      if (needsIdentifierQuoting(names[i])) {
+        exprStr += " AS \"" + names[i] + "\"";
+      } else {
+        exprStr += " AS " + names[i];
+      }
     }
     expressions.push_back(exprStr);
   }
@@ -696,7 +704,11 @@ std::string generateAggregationCode(const AggregationNode& node) {
   for (size_t i = 0; i < aggregates.size(); ++i) {
     std::string aggStr = ITypedExprPrinter::toText(*aggregates[i].call);
     if (aggregateNames[i] != aggStr) {
-      aggStr += " AS " + aggregateNames[i];
+      if (needsIdentifierQuoting(aggregateNames[i])) {
+        aggStr += " AS \"" + aggregateNames[i] + "\"";
+      } else {
+        aggStr += " AS " + aggregateNames[i];
+      }
     }
     aggregateStrs.push_back(aggStr);
   }

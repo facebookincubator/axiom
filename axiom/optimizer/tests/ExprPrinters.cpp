@@ -1,4 +1,19 @@
 /*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+/*
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,44 +41,9 @@
 
 namespace facebook::velox::core {
 
-namespace {
-
 /// Escapes a name for use in identifier strings.
 std::string escapeName(const std::string& name) {
   return folly::cEscape<std::string>(name);
-}
-
-/// Escapes a string for SQL representation.
-/// Single quotes are doubled, and other SQL special characters are handled.
-std::string escapeSqlString(const std::string& str) {
-  std::string result;
-  result.reserve(str.size() * 2); // Reserve space for potential escaping
-
-  for (char c : str) {
-    if (c == '\'') {
-      // Single quote becomes two single quotes
-      result += "''";
-    } else if (c == '\\') {
-      // Backslash becomes double backslash
-      result += "\\\\";
-    } else if (c == '\n') {
-      // Newline
-      result += "\\n";
-    } else if (c == '\r') {
-      // Carriage return
-      result += "\\r";
-    } else if (c == '\t') {
-      // Tab
-      result += "\\t";
-    } else if (c == '\0') {
-      // Null character
-      result += "\\0";
-    } else {
-      result += c;
-    }
-  }
-
-  return result;
 }
 
 /// Checks if a function name is a SQL reserved word that needs escaping.
@@ -140,12 +120,74 @@ bool isSqlReservedWord(const std::string& name) {
   return reservedWords.find(lowerName) != reservedWords.end();
 }
 
+/// Checks if an identifier (field name or alias) needs quoting.
+/// Returns true if the name is a SQL reserved word or contains special
+/// characters like dots.
+bool needsIdentifierQuoting(const std::string& name) {
+  // Quote if it's a SQL reserved word
+  if (isSqlReservedWord(name)) {
+    return true;
+  }
+
+  // Quote if it contains a dot or other special characters
+  for (char c : name) {
+    if (c == '.' || c == ' ' || c == '-' || c == '*' || c == '/' || c == '+' ||
+        c == '=' || c == '<' || c == '>' || c == '!' || c == '(' || c == ')' ||
+        c == '[' || c == ']' || c == '{' || c == '}' || c == ',' || c == ';' ||
+        c == ':') {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+namespace {
+
+/// Escapes a string for SQL representation.
+/// Single quotes are doubled, and other SQL special characters are handled.
+std::string escapeSqlString(const std::string& str) {
+  std::string result;
+  result.reserve(str.size() * 2); // Reserve space for potential escaping
+
+  for (char c : str) {
+    if (c == '\'') {
+      // Single quote becomes two single quotes
+      result += "''";
+    } else if (c == '\\') {
+      // Backslash becomes double backslash
+      result += "\\\\";
+    } else if (c == '\n') {
+      // Newline
+      result += "\\n";
+    } else if (c == '\r') {
+      // Carriage return
+      result += "\\r";
+    } else if (c == '\t') {
+      // Tab
+      result += "\\t";
+    } else if (c == '\0') {
+      // Null character
+      result += "\\0";
+    } else {
+      result += c;
+    }
+  }
+
+  return result;
+}
+
 std::string appendAliasIfExists(const std::string& name, const IExpr& expr) {
   if (!expr.alias().has_value()) {
     return name;
   }
 
-  return fmt::format("{} AS {}", name, expr.alias().value());
+  const std::string& alias = expr.alias().value();
+  if (needsIdentifierQuoting(alias)) {
+    return fmt::format("{} AS \"{}\"", name, alias);
+  } else {
+    return fmt::format("{} AS {}", name, alias);
+  }
 }
 
 } // namespace
@@ -297,13 +339,18 @@ std::string ITypedExprPrinter::toTextImpl(const CallTypedExpr& expr) {
 }
 
 std::string ITypedExprPrinter::toTextImpl(const FieldAccessTypedExpr& expr) {
-  std::stringstream ss;
-  ss << std::quoted(expr.name(), '"', '"');
-  if (expr.inputs().empty()) {
-    return fmt::format("{}", ss.str());
+  std::string fieldName;
+  if (needsIdentifierQuoting(expr.name())) {
+    fieldName = fmt::format("\"{}\"", escapeName(expr.name()));
+  } else {
+    fieldName = expr.name();
   }
 
-  return fmt::format("{}[{}]", toText(*expr.inputs()[0]), ss.str());
+  if (expr.inputs().empty()) {
+    return fieldName;
+  }
+
+  return fmt::format("{}[{}]", toText(*expr.inputs()[0]), fieldName);
 }
 
 std::string ITypedExprPrinter::toTextImpl(const DereferenceTypedExpr& expr) {
@@ -367,15 +414,19 @@ std::string IExprPrinter::toTextImpl(const InputExpr& expr) {
 }
 
 std::string IExprPrinter::toTextImpl(const FieldAccessExpr& expr) {
+  std::string fieldName;
+  if (needsIdentifierQuoting(expr.name())) {
+    fieldName = fmt::format("\"{}\"", escapeName(expr.name()));
+  } else {
+    fieldName = expr.name();
+  }
+
   if (expr.isRootColumn()) {
-    return appendAliasIfExists(
-        fmt::format("\"{}\"", escapeName(expr.name())), expr);
+    return appendAliasIfExists(fieldName, expr);
   }
 
   return appendAliasIfExists(
-      fmt::format(
-          "dot({},\"{}\")", toText(*expr.input()), escapeName(expr.name())),
-      expr);
+      fmt::format("dot({},{})", toText(*expr.input()), fieldName), expr);
 }
 
 std::string IExprPrinter::toTextImpl(const CallExpr& expr) {

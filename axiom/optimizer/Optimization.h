@@ -351,5 +351,4 @@ class Optimization {
 
   ToVelox toVelox_;
 };
-
 } // namespace facebook::axiom::optimizer

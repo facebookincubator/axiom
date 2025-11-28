@@ -618,14 +618,17 @@ double partialFlushInterval(
 // @param numRows The count of samples that are initially seen.
 // @param numDistinct The count of distinct values in the full population.
 // @return predicted number of distinct values seen after numRows inputs
-float expectedNumDistincts(float numRows, float numDistinct) {
+double expectedNumDistincts(double numRows, double numDistinct) {
   if (numDistinct <= 0 || numRows <= 0) {
-    return 0.0f;
+    // avoid /0 downstream. Less than one distinct value does not make
+    // sense for aggregation.
+    return 1.0f;
   }
 
-  // Using the coupon collector formula:
-  // Expected distinct values = d * (1 - (1 - 1/d)^n)
-  // where d is total distinct values and n is number of samples
+  // Using the coupon collector formula: Expected distinct values = d
+  // * (1 - (1 - 1/d)^n) where d is total distinct values and n is
+  // number of samples. The distinct rows will not be more than the
+  // input.
   return numDistinct * (1.0 - std::pow(1.0 - (1.0 / numDistinct), numRows));
 }
 
@@ -813,7 +816,12 @@ void Aggregation::setCostWithGroups(int64_t inputBeforePartial) {
     cost_.unitCost =
         aggregationCost(numKeys, aggregates.size(), rowBytes, numGroups) +
         localExchangeCost;
-    cost_.fanout = numGroups / std::max<float>(1, inputCardinality());
+    auto safeInputCardinality = std::max<double>(1, inputCardinality());
+    // numGroups can be > inputCardinality since this is calculated against the
+    // input before partial and inputCardinality is scaled down by partial
+    // reduction.
+    cost_.fanout =
+        std::min(safeInputCardinality, numGroups) / safeInputCardinality;
     cost_.totalBytes = numGroups * rowBytes;
     return;
   }
@@ -826,7 +834,8 @@ void Aggregation::setCostWithGroups(int64_t inputBeforePartial) {
   const float abandonPartialMinFraction =
       veloxQueryConfig.abandonPartialAggregationMinPct() / 100.0;
 
-  const auto partialCapacity = std::min(numGroups, maxPartialMemory / rowBytes);
+  const auto partialCapacity =
+      std::min<double>(numGroups, maxPartialMemory / rowBytes);
 
   // The number of distinct keys we expect to see in the initial sample before
   // we consider abandoning partial aggregation.
