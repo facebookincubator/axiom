@@ -214,43 +214,34 @@ PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
 
   // Joins.
   for (auto join : dt->joins) {
-    if (join->isSemi() || join->isAnti()) {
-      if (placed.contains(join->rightTable())) {
-        continue;
+    const bool rightPlaced = placed.contains(join->rightTable());
+    const bool leftPlaced = placed.contains(join->leftTable());
+    auto addFilter = [&](PlanObjectCP placedTable) {
+      for (auto& conjunct : join->filter()) {
+        translateExpr(conjunct)->columns().forEach<Column>(
+            [&](ColumnCP column) {
+              if (column->relation() == placedTable) {
+                result.add(column);
+              }
+            });
       }
-
-      // For an unplaced exists/not exists downstream, we need the left side
-      // columns but not the right side since nothing is projected out from the
-      // right side.
-      addExprs(join->leftKeys());
-
-      if (!join->filter().empty()) {
-        // If there is a filter, then the filter columns that do not come from
-        // the right side are needed.
-        for (auto& conjunct : join->filter()) {
-          translateExpr(conjunct)->columns().forEach<Column>(
-              [&](ColumnCP column) {
-                if (column->relation() != join->rightTable()) {
-                  result.add(column);
-                }
-              });
-        }
-      }
+    };
+    if (rightPlaced && leftPlaced) {
       continue;
     }
-
-    bool addFilter = false;
-    if (!placed.contains(join->rightTable())) {
-      addFilter = true;
-      addExprs(join->leftKeys());
-    }
-    if (!placed.contains(join->leftTable())) {
-      addFilter = true;
+    if (rightPlaced) {
       addExprs(join->rightKeys());
+      addFilter(join->rightTable());
+      continue;
     }
-    if (addFilter && !join->filter().empty()) {
-      addExprs(join->filter());
+    if (leftPlaced) {
+      addExprs(join->leftKeys());
+      addFilter(join->leftTable());
+      continue;
     }
+    addExprs(join->leftKeys());
+    addExprs(join->rightKeys());
+    addExprs(join->filter());
   }
 
   // Filters.
