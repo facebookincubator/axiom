@@ -124,7 +124,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
   if (sqlStatement->isExplain()) {
     auto* explain = sqlStatement->as<presto::ExplainStatement>();
 
-    CHECK(explain->statement()->isSelect());
+    VELOX_CHECK(explain->statement()->isSelect());
     auto* select = explain->statement()->as<presto::SelectStatement>();
     if (explain->isAnalyze()) {
       return {.message = runExplainAnalyze(*select, options)};
