@@ -338,6 +338,8 @@ class ToGraph {
 
   ColumnCP addMarkColumn();
 
+  logical_plan::ValuesNodePtr tryFoldConstantDt(DerivedTableP dt) const;
+
   // Cache of resolved table schemas.
   Schema schema_;
 

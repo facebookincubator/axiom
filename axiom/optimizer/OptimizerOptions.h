@@ -80,6 +80,8 @@ struct OptimizerOptions {
 
   bool planBestThroughput = false;
 
+  bool enableSubqueryConstantFolding = true;
+
   bool isMapAsStruct(std::string_view table, std::string_view column) const {
     if (allMapsAsStruct) {
       return true;

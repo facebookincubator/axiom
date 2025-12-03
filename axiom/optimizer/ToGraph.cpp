@@ -225,14 +225,20 @@ std::vector<velox::Variant> toValues(
   return valueRows;
 }
 
+} // namespace
+
 // Constant folds a derived table that represents global aggregation over a base
 // table and uses only discrete-predicate columns. In addition, aggregate
 // functions must ignore duplicate inputs or aggregation must be over distinct
 // inputs (e.g. max(x) or agg(distinct x)).
-lp::ValuesNodePtr tryFoldConstantDt(
-    DerivedTableP dt,
-    velox::memory::MemoryPool* pool) {
-  if (dt->tables.size() > 1 || !dt->tables[0]->is(PlanType::kTableNode)) {
+lp::ValuesNodePtr ToGraph::tryFoldConstantDt(DerivedTableP dt) const {
+  if (!options_.enableSubqueryConstantFolding) {
+    return nullptr;
+  }
+  auto* pool = evaluator_.pool();
+
+  if (!pool || dt->tables.size() > 1 ||
+      !dt->tables[0]->is(PlanType::kTableNode)) {
     return nullptr;
   }
 
@@ -329,8 +335,6 @@ lp::ValuesNodePtr tryFoldConstantDt(
 
   return std::make_shared<lp::ValuesNode>(dt->cname, std::move(results));
 }
-
-} // namespace
 
 void ToGraph::setDtOutput(DerivedTableP dt, const lp::LogicalPlanNode& node) {
   const auto& type = *node.outputType();
@@ -1909,7 +1913,7 @@ void ToGraph::processSubqueries(const logical_plan::FilterNode& filter) {
     if (correlatedConjuncts_.empty()) {
       VELOX_CHECK_EQ(1, subqueryDt->columns.size());
 
-      if (auto valuesNode = tryFoldConstantDt(subqueryDt, evaluator_.pool())) {
+      if (auto valuesNode = tryFoldConstantDt(subqueryDt)) {
         VELOX_CHECK_EQ(1, valuesNode->outputType()->size());
         if (valuesNode->cardinality() == 1) {
           // Replace subquery with a constant value.
