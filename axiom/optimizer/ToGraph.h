@@ -292,7 +292,7 @@ class ToGraph {
   // DerivedTable. Done for joins to the right of non-inner joins,
   // group bys as non-top operators, whenever descendents of 'node'
   // are not freely reorderable with its parents' descendents.
-  void wrapInDt(const logical_plan::LogicalPlanNode& node);
+  void wrapInDt(const logical_plan::LogicalPlanNode& node, bool unordered);
 
   // Start new DT and add 'currentDt_' as a child.
   // Set 'currentDt_' to the new DT.
