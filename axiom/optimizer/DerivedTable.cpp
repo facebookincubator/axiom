@@ -116,53 +116,8 @@ void DerivedTable::addImpliedJoins() {
   }
 }
 
-namespace {
-
-bool isSingleRowDt(PlanObjectCP object) {
-  if (object->is(PlanType::kDerivedTableNode)) {
-    auto dt = object->as<DerivedTable>();
-    return dt->limit == 1 ||
-        (dt->aggregation && dt->aggregation->groupingKeys().empty());
-  }
-  return false;
-}
-
-// @return a subset of 'tables' that contain single row tables from
-// non-correlated scalar subqueries.
-PlanObjectSet findSingleRowDts(
-    const PlanObjectSet& tables,
-    const JoinEdgeVector& joins) {
-  PlanObjectSet singleRowDts;
-
-  // Remove tables that are joined to other tables.
-  auto tablesCopy = tables;
-  int32_t numSingle = 0;
-  for (auto& join : joins) {
-    tablesCopy.erase(join->leftTable());
-    tablesCopy.erase(join->rightTable());
-  }
-
-  tablesCopy.forEach([&](PlanObjectCP object) {
-    if (isSingleRowDt(object)) {
-      ++numSingle;
-      singleRowDts.add(object);
-    }
-  });
-
-  // If everything is a single row dt, then process these as cross products and
-  // not as placed with filters.
-  if (numSingle == tables.size()) {
-    return PlanObjectSet();
-  }
-
-  return singleRowDts;
-}
-} // namespace
-
 void DerivedTable::setStartTables() {
-  singleRowDts = findSingleRowDts(tableSet, joins);
   startTables = tableSet;
-  startTables.except(singleRowDts);
   for (auto join : joins) {
     if (join->isNonCommutative()) {
       startTables.erase(join->rightTable());

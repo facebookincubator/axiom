@@ -257,13 +257,6 @@ class Optimization {
   // their different permutations.
   void tryNextJoins(PlanState& state, const std::vector<NextJoin>& nextJoins);
 
-  // Adds a cross join to access a single row from a non-correlated subquery.
-  RelationOpPtr placeSingleRowDt(
-      RelationOpPtr plan,
-      DerivedTableCP subquery,
-      ExprCP filter,
-      PlanState& state);
-
   // Adds the join represented by 'candidate' on top of 'plan'. Tries index and
   // hash based methods and adds the index and hash based plans to 'result'. If
   // one of these is clearly superior, only adds the better one.

@@ -90,9 +90,6 @@ struct DerivedTable : public PlanObject {
   /// Operands if 'this' is a set operation, e.g. union.
   QGVector<DerivedTable*> children;
 
-  /// Single row tables from non-correlated scalar subqueries.
-  PlanObjectSet singleRowDts;
-
   /// Tables that are not to the right sides of non-commutative joins.
   PlanObjectSet startTables;
 

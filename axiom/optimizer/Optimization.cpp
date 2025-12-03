@@ -1671,41 +1671,6 @@ void Optimization::tryNextJoins(
   }
 }
 
-RelationOpPtr Optimization::placeSingleRowDt(
-    RelationOpPtr plan,
-    DerivedTableCP subquery,
-    ExprCP filter,
-    PlanState& state) {
-  MemoKey memoKey;
-  memoKey.firstTable = subquery;
-  memoKey.tables.add(subquery);
-  memoKey.columns.unionObjects(subquery->columns);
-
-  const auto broadcast = plan->distribution().isGather()
-      ? Distribution::gather()
-      : Distribution::broadcast();
-
-  PlanObjectSet empty;
-  bool needsShuffle = false;
-  auto rightPlan =
-      makePlan(*state.dt, memoKey, broadcast, empty, 1, needsShuffle);
-
-  auto rightOp = rightPlan->op;
-  if (needsShuffle) {
-    rightOp = make<Repartition>(rightOp, broadcast, rightOp->columns());
-  }
-
-  auto resultColumns = plan->columns();
-  resultColumns.insert(
-      resultColumns.end(),
-      rightOp->columns().begin(),
-      rightOp->columns().end());
-  auto* join = Join::makeCrossJoin(
-      std::move(plan), std::move(rightOp), std::move(resultColumns));
-  state.addCost(*join);
-  return join;
-}
-
 void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   PlanStateSaver save(state);
 
@@ -1758,10 +1723,6 @@ bool Optimization::placeConjuncts(
     bool joinsPlaced) {
   PlanStateSaver save(state);
 
-  PlanObjectSet columnsAndSingles = state.columns;
-  state.dt->singleRowDts.forEach<DerivedTable>(
-      [&](auto dt) { columnsAndSingles.unionObjects(dt->columns); });
-
   PlanObjectSet noPushdownTables;
   if (!joinsPlaced) {
     for (const auto* join : state.dt->joins) {
@@ -1793,40 +1754,6 @@ bool Optimization::placeConjuncts(
       state.columns.add(conjunct);
       filters.push_back(conjunct);
       continue;
-    }
-    if (conjunct->columns().isSubset(columnsAndSingles)) {
-      // The filter depends on placed tables and non-correlated single row
-      // subqueries.
-      std::vector<DerivedTableCP> placeable;
-      auto subqColumns = conjunct->columns();
-      subqColumns.except(state.columns);
-      subqColumns.forEach([&](auto /*unused*/) {
-        state.dt->singleRowDts.forEach<DerivedTable>([&](auto subquery) {
-          // If the subquery provides columns for the filter, place it.
-          const auto& conjunctColumns = conjunct->columns();
-          for (auto subqColumn : subquery->columns) {
-            if (conjunctColumns.contains(subqColumn)) {
-              placeable.push_back(subquery);
-              break;
-            }
-          }
-        });
-      });
-
-      for (auto i = 0; i < placeable.size(); ++i) {
-        state.placed.add(conjunct);
-        plan = placeSingleRowDt(
-            plan,
-            placeable[i],
-            (i == placeable.size() - 1 ? conjunct : nullptr),
-            state);
-
-        plan = make<Filter>(plan, ExprVector{conjunct});
-        state.addCost(*plan);
-
-        makeJoins(plan, state);
-        return true;
-      }
     }
   }
 
