@@ -17,6 +17,9 @@
 #include "axiom/cli/Console.h"
 #include <sys/resource.h>
 #include <iostream>
+#include "axiom/cli/AlignedTablePrinter.h"
+#include "axiom/cli/JsonPrinter.h"
+#include "axiom/cli/OutputFormat.h"
 #include "axiom/cli/linenoise/linenoise.h"
 
 DEFINE_string(
@@ -40,6 +43,11 @@ DEFINE_string(
     query,
     "",
     "Text of query. If empty, reads ';' separated queries from standard input");
+
+DEFINE_string(
+    output_format,
+    "ALIGNED",
+    "Output format: ALIGNED (table) or JSON (JSON Lines)");
 
 DEFINE_bool(debug, false, "Enable debug mode");
 
@@ -69,24 +77,6 @@ void Console::run() {
 }
 
 namespace {
-struct Timing {
-  uint64_t micros{0};
-  uint64_t userNanos{0};
-  uint64_t systemNanos{0};
-
-  std::string toString() const {
-    double pct = 0;
-    if (micros > 0) {
-      pct = 100 * (userNanos + systemNanos) / (micros * 1000);
-    }
-
-    std::stringstream out;
-    out << succinctNanos(micros * 1000) << " / " << succinctNanos(userNanos)
-        << " user / " << succinctNanos(systemNanos) << " system (" << pct
-        << "%)";
-    return out.str();
-  }
-};
 
 template <typename T>
 T time(const std::function<T()>& func, Timing& timing) {
@@ -106,145 +96,15 @@ T time(const std::function<T()>& func, Timing& timing) {
   return func();
 }
 
-int64_t countResults(const std::vector<RowVectorPtr>& results) {
-  int64_t numRows = 0;
-  for (const auto& result : results) {
-    numRows += result->size();
+std::unique_ptr<OutputPrinter> createOutputPrinter(OutputFormat format) {
+  switch (format) {
+    case OutputFormat::kAligned:
+      return std::make_unique<AlignedTablePrinter>();
+    case OutputFormat::kJson:
+      return std::make_unique<JsonPrinter>();
   }
-  return numRows;
+  return std::make_unique<AlignedTablePrinter>();
 }
-
-int32_t printResults(const std::vector<RowVectorPtr>& results) {
-  const auto numRows = countResults(results);
-
-  auto printFooter = [&]() {
-    std::cout << "(" << numRows << " rows in " << results.size() << " batches)"
-              << std::endl
-              << std::endl;
-  };
-
-  if (numRows == 0) {
-    printFooter();
-    return 0;
-  }
-
-  const auto type = results.front()->rowType();
-  std::cout << type->toString() << std::endl;
-
-  const auto numColumns = type->size();
-
-  std::vector<std::vector<std::string>> data;
-  std::vector<size_t> widths(numColumns, 0);
-  std::vector<bool> alignLeft(numColumns);
-
-  for (auto i = 0; i < numColumns; ++i) {
-    widths[i] = type->nameOf(i).size();
-    alignLeft[i] = type->childAt(i)->isVarchar();
-  }
-
-  auto printSeparator = [&]() {
-    std::cout << std::setfill('-');
-    for (auto i = 0; i < numColumns; ++i) {
-      if (i > 0) {
-        std::cout << "-+-";
-      }
-      std::cout << std::setw(widths[i]) << "";
-    }
-    std::cout << std::endl;
-    std::cout << std::setfill(' ');
-  };
-
-  auto printRow = [&](const auto& row) {
-    for (auto i = 0; i < numColumns; ++i) {
-      if (i > 0) {
-        std::cout << " | ";
-      }
-      std::cout << std::setw(widths[i]);
-      if (alignLeft[i]) {
-        std::cout << std::left;
-      } else {
-        std::cout << std::right;
-      }
-      std::cout << row[i];
-    }
-    std::cout << std::endl;
-  };
-
-  int32_t numPrinted = 0;
-
-  auto doPrint = [&]() {
-    printSeparator();
-    printRow(type->names());
-    printSeparator();
-
-    for (const auto& row : data) {
-      printRow(row);
-    }
-
-    if (numPrinted < numRows) {
-      std::cout << std::endl;
-      std::cout << "..." << (numRows - numPrinted) << " more rows."
-                << std::endl;
-    }
-
-    printFooter();
-  };
-
-  for (const auto& result : results) {
-    for (auto row = 0; row < result->size(); ++row) {
-      data.emplace_back();
-
-      auto& rowData = data.back();
-      rowData.resize(numColumns);
-      for (auto column = 0; column < numColumns; ++column) {
-        rowData[column] = result->childAt(column)->toString(row);
-        widths[column] = std::max(widths[column], rowData[column].size());
-      }
-
-      ++numPrinted;
-      if (numPrinted >= FLAGS_max_rows) {
-        doPrint();
-        return numRows;
-      }
-    }
-  }
-
-  doPrint();
-
-  return numRows;
-}
-} // namespace
-
-void Console::runNoThrow(std::string_view sql) {
-  try {
-    Timing timing;
-    const auto result = time<SqlQueryRunner::SqlResult>(
-        [&]() {
-          return runner_.run(
-              sql,
-              {
-                  .numWorkers = FLAGS_num_workers,
-                  .numDrivers = FLAGS_num_drivers,
-                  .splitTargetBytes = FLAGS_split_target_bytes,
-                  .optimizerTraceFlags = FLAGS_optimizer_trace,
-                  .debugMode = FLAGS_debug,
-              });
-        },
-        timing);
-
-    if (result.message.has_value()) {
-      std::cout << result.message.value() << std::endl;
-    } else {
-      printResults(result.results);
-    }
-    std::cout << timing.toString() << std::endl;
-
-  } catch (std::exception& e) {
-    std::cerr << "Query failed: " << e.what() << std::endl;
-  }
-}
-
-namespace {
 
 // Reads multi-line command from 'in' until encounters ';' followed by
 // zero or
@@ -301,7 +161,51 @@ std::string readCommand(const std::string& prompt, bool& atEnd) {
   atEnd = true;
   return "";
 }
+
 } // namespace
+
+void Console::runNoThrow(std::string_view sql) {
+  try {
+    Timing timing;
+    const auto result = time<SqlQueryRunner::SqlResult>(
+        [&]() {
+          return runner_.run(
+              sql,
+              {
+                  .numWorkers = FLAGS_num_workers,
+                  .numDrivers = FLAGS_num_drivers,
+                  .splitTargetBytes = FLAGS_split_target_bytes,
+                  .optimizerTraceFlags = FLAGS_optimizer_trace,
+                  .debugMode = FLAGS_debug,
+              });
+        },
+        timing);
+
+    if (result.message.has_value()) {
+      std::cout << result.message.value() << std::endl;
+    } else {
+      auto format = OutputFormatName::tryToOutputFormat(FLAGS_output_format);
+      if (!format.has_value()) {
+        std::cerr << "Invalid output format: " << FLAGS_output_format
+                  << ". Valid values are: ALIGNED, JSON" << std::endl;
+        return;
+      }
+
+      auto printer = createOutputPrinter(format.value());
+      printer->printResults(result.results, FLAGS_max_rows);
+
+      // Print timing information for interactive cases only.
+      // Suppress timing output in non-interactive/scripting mode (when --query
+      // is provided).
+      if (FLAGS_query.empty()) {
+        std::cout << timing.toString() << std::endl;
+      }
+    }
+
+  } catch (std::exception& e) {
+    std::cerr << "Query failed: " << e.what() << std::endl;
+  }
+}
 
 void Console::readCommands(const std::string& prompt) {
   linenoiseSetMultiLine(1);
@@ -405,4 +309,5 @@ void Console::readCommands(const std::string& prompt) {
     runNoThrow(command);
   }
 }
+
 } // namespace axiom::sql
