@@ -52,6 +52,9 @@ class RelationOpVisitor {
   virtual void visit(const OrderBy& op, RelationOpVisitorContext& context)
       const = 0;
 
+  virtual void visit(const WindowOp& op, RelationOpVisitorContext& context)
+      const = 0;
+
   virtual void visit(const UnionAll& op, RelationOpVisitorContext& context)
       const = 0;
 

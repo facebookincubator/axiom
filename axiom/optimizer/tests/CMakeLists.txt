@@ -94,6 +94,7 @@ add_executable(
   HiveAggregationQueriesTest.cpp
   HiveCrossJoinQueriesTest.cpp
   HiveLimitQueriesTest.cpp
+  HiveWindowQueriesTest.cpp
   HiveQueriesTest.cpp
   JoinTest.cpp
   ParquetTpchTest.cpp
@@ -132,6 +133,7 @@ target_link_libraries(
   axiom_test_connector
   velox_dwio_text_reader_register
   velox_dwio_text_writer_register
+  velox_window
   GTest::gmock
   glog::glog
   GTest::gtest
