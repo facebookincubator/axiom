@@ -1468,34 +1468,51 @@ void extractNonInnerJoinEqualities(
     ExprVector& leftKeys,
     ExprVector& rightKeys,
     PlanObjectSet& allLeft) {
-  for (auto i = 0; i < conjuncts.size(); ++i) {
-    const auto* conjunct = conjuncts[i];
-    if (isCallExpr(conjunct, eq)) {
-      const auto* eq = conjunct->as<Call>();
-      const auto leftTables = eq->argAt(0)->allTables();
-      const auto rightTables = eq->argAt(1)->allTables();
+  VELOX_DCHECK_NOT_NULL(right);
 
-      if (leftTables.empty() || rightTables.empty()) {
-        continue;
-      }
-
-      if (rightTables.size() == 1 && rightTables.contains(right) &&
-          !leftTables.contains(right)) {
-        allLeft.unionSet(leftTables);
-        leftKeys.push_back(eq->argAt(0));
-        rightKeys.push_back(eq->argAt(1));
-        conjuncts.erase(conjuncts.begin() + i);
-        --i;
-      } else if (
-          leftTables.size() == 1 && leftTables.contains(right) &&
-          !rightTables.contains(right)) {
-        allLeft.unionSet(rightTables);
-        leftKeys.push_back(eq->argAt(1));
-        rightKeys.push_back(eq->argAt(0));
-        conjuncts.erase(conjuncts.begin() + i);
-        --i;
-      }
+  std::erase_if(conjuncts, [&](ExprCP conjunct) {
+    if (!isCallExpr(conjunct, eq)) {
+      return false;
     }
+    const auto* eq = conjunct->as<Call>();
+    const auto* leftArg = eq->argAt(0);
+    const auto* rightArg = eq->argAt(1);
+    const auto leftTables = leftArg->allTables();
+    const auto rightTables = rightArg->allTables();
+
+    if (leftTables.empty() || rightTables.empty()) {
+      return false;
+    }
+    if (rightTables.size() == 1 && rightTables.contains(right) &&
+        !leftTables.contains(right)) {
+      allLeft.unionSet(leftTables);
+      leftKeys.push_back(leftArg);
+      rightKeys.push_back(rightArg);
+      return true;
+    }
+    if (leftTables.size() == 1 && leftTables.contains(right) &&
+        !rightTables.contains(right)) {
+      allLeft.unionSet(rightTables);
+      leftKeys.push_back(rightArg);
+      rightKeys.push_back(leftArg);
+      return true;
+    }
+    return false;
+  });
+}
+
+JoinEdge::JoinType toJoinType(lp::JoinType joinType) {
+  switch (joinType) {
+    case lp::JoinType::kInner:
+      return JoinEdge::JoinType::kInner;
+    case lp::JoinType::kLeft:
+      return JoinEdge::JoinType::kLeft;
+    case lp::JoinType::kRight:
+      return JoinEdge::JoinType::kRight;
+    case lp::JoinType::kFull:
+      return JoinEdge::JoinType::kFull;
+    default:
+      VELOX_UNREACHABLE();
   }
 }
 
@@ -1533,44 +1550,44 @@ void ToGraph::translateJoin(const lp::JoinNode& join) {
   if (isInner) {
     currentDt_->conjuncts.insert(
         currentDt_->conjuncts.end(), conjuncts.begin(), conjuncts.end());
-  } else {
-    const bool leftOptional =
-        joinType == lp::JoinType::kRight || joinType == lp::JoinType::kFull;
-    const bool rightOptional =
-        joinType == lp::JoinType::kLeft || joinType == lp::JoinType::kFull;
+    return;
+  }
+  const bool leftOptional =
+      joinType == lp::JoinType::kRight || joinType == lp::JoinType::kFull;
+  const bool rightOptional =
+      joinType == lp::JoinType::kLeft || joinType == lp::JoinType::kFull;
 
-    // If non-inner, and many tables on the right they are one dt. If a single
-    // table then this too is the last in 'tables'.
-    auto rightTable = currentDt_->tables.back();
+  // If non-inner, and many tables on the right they are one dt. If a single
+  // table then this too is the last in 'tables'.
+  auto rightTable = currentDt_->tables.back();
 
-    ExprVector leftKeys;
-    ExprVector rightKeys;
-    PlanObjectSet leftTables;
-    extractNonInnerJoinEqualities(
-        equality_, conjuncts, rightTable, leftKeys, rightKeys, leftTables);
+  ExprVector leftKeys;
+  ExprVector rightKeys;
+  PlanObjectSet leftTables;
+  extractNonInnerJoinEqualities(
+      equality_, conjuncts, rightTable, leftKeys, rightKeys, leftTables);
 
-    JoinEdge::Spec joinSpec{
-        .filter = std::move(conjuncts),
-        .leftOptional = leftOptional,
-        .rightOptional = rightOptional,
-    };
+  VELOX_DCHECK_EQ(leftKeys.size(), rightKeys.size());
+  JoinEdge::Spec joinSpec{
+      .filter = std::move(conjuncts),
+      .joinType = toJoinType(joinType),
+  };
 
-    if (leftOptional) {
-      addJoinColumns(*join.left(), joinSpec.leftColumns, joinSpec.leftExprs);
-    }
+  if (leftOptional) {
+    addJoinColumns(*join.left(), joinSpec.leftColumns, joinSpec.leftExprs);
+  }
 
-    if (rightOptional) {
-      addJoinColumns(*join.right(), joinSpec.rightColumns, joinSpec.rightExprs);
-    }
+  if (rightOptional) {
+    addJoinColumns(*join.right(), joinSpec.rightColumns, joinSpec.rightExprs);
+  }
 
-    auto* edge = make<JoinEdge>(
-        leftTables.size() == 1 ? leftTables.onlyObject() : nullptr,
-        rightTable,
-        std::move(joinSpec));
-    currentDt_->joins.push_back(edge);
-    for (auto i = 0; i < leftKeys.size(); ++i) {
-      edge->addEquality(leftKeys[i], rightKeys[i]);
-    }
+  auto* edge = make<JoinEdge>(
+      leftTables.size() == 1 ? leftTables.onlyObject() : nullptr,
+      rightTable,
+      std::move(joinSpec));
+  currentDt_->joins.push_back(edge);
+  for (size_t i = 0; i < leftKeys.size(); ++i) {
+    edge->addEquality(leftKeys[i], rightKeys[i]);
   }
 }
 
@@ -1971,7 +1988,9 @@ void ToGraph::processSubqueries(const logical_plan::FilterNode& filter) {
       correlatedConjuncts_.clear();
 
       auto* join = make<JoinEdge>(
-          leftTable, subqueryDt, JoinEdge::Spec{.rightOptional = true});
+          leftTable,
+          subqueryDt,
+          JoinEdge::Spec{.joinType = JoinEdge::JoinType::kLeft});
       for (auto i = 0; i < leftKeys.size(); ++i) {
         join->addEquality(leftKeys[i], rightKeys[i]);
       }
