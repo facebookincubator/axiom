@@ -88,6 +88,7 @@ target_link_libraries(
 add_executable(
   axiom_optimizer_tests
   AggregationPlanTest.cpp
+  CsvReadWriteTest.cpp
   DerivedTablePrinterTest.cpp
   FilterPushdownTest.cpp
   HiveAggregationQueriesTest.cpp
@@ -111,7 +112,11 @@ add_executable(
   WriteTest.cpp
 )
 
-add_test(axiom_optimizer_tests axiom_optimizer_tests)
+add_test(
+  NAME axiom_optimizer_tests
+  COMMAND axiom_optimizer_tests
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 target_link_libraries(
   axiom_optimizer_tests
@@ -124,6 +129,8 @@ target_link_libraries(
   axiom_optimizer_tests_query_test_base
   axiom_runner_tests_utils
   axiom_test_connector
+  velox_dwio_text_reader_register
+  velox_dwio_text_writer_register
   GTest::gmock
   glog::glog
   GTest::gtest
