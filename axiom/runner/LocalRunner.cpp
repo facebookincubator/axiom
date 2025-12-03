@@ -185,14 +185,11 @@ int64_t LocalRunner::runWrite() {
       result.push_back(cursor_->current());
     }
   } catch (const std::exception&) {
-    try {
-      waitForCompletion(1'000'000);
-    } catch (const std::exception& e) {
-      LOG(ERROR) << e.what()
-                 << " while waiting for completion after error in write query";
-      throw;
+    if (!error_) {
+      error_ = std::current_exception();
     }
-    std::move(finishWrite).abort().get();
+    abort();
+    std::move(finishWrite).abort().wait();
     throw;
   }
 
@@ -265,7 +262,7 @@ void LocalRunner::abort() {
             velox::error_code::kInvalidState.c_str(),
             false});
   }
-  VELOX_CHECK(state_ != State::kInitialized);
+  VELOX_CHECK_NE(state_, State::kInitialized);
   // Setting errors is thread safe. The stages do not change after
   // initialization.
   for (auto& stage : stages_) {
