@@ -13,33 +13,20 @@
 # limitations under the License.
 
 add_executable(
-  axiom_sql
-  AxiomSql.cpp
-  Console.cpp
-  SqlQueryRunner.cpp
-  AlignedTablePrinter.cpp
-  JsonPrinter.cpp
-  OutputFormat.cpp
-  linenoise/linenoise.c
+  axiom_cli_output_printer_test
+  OutputPrinterTest.cpp
+  ../AlignedTablePrinter.cpp
+  ../JsonPrinter.cpp
+  ../OutputFormat.cpp
 )
+
+add_test(axiom_cli_output_printer_test axiom_cli_output_printer_test)
 
 target_link_libraries(
-  axiom_sql
-  axiom_runner_local_runner
-  axiom_runner_multifragment_plan
-  axiom_optimizer
-  axiom_hive_connector_metadata
-  axiom_tpch_connector_metadata
-  axiom_sql_presto_parser
-  velox_exec_test_lib
-  velox_dwio_common
-  velox_dwio_parquet_reader
-  velox_dwio_native_parquet_reader
-  velox_parse_parser
-  velox_parse_expression
-  velox_parse_utils
+  axiom_cli_output_printer_test
+  velox_vector
+  velox_vector_test_lib
+  folly
+  GTest::gtest
+  GTest::gtest_main
 )
-
-if(AXIOM_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
