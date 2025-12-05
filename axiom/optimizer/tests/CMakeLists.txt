@@ -70,11 +70,7 @@ target_link_libraries(
 
 add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp)
 
-add_test(
-  NAME axiom_optimizer_tpch_plan_test
-  COMMAND axiom_optimizer_tpch_plan_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
+add_test(axiom_optimizer_tpch_plan_test axiom_optimizer_tpch_plan_test)
 
 target_link_libraries(
   axiom_optimizer_tpch_plan_test
@@ -92,7 +88,9 @@ add_executable(
   DerivedTablePrinterTest.cpp
   FilterPushdownTest.cpp
   HiveAggregationQueriesTest.cpp
+  HiveCrossJoinQueriesTest.cpp
   HiveLimitQueriesTest.cpp
+  HiveWindowQueriesTest.cpp
   HiveQueriesTest.cpp
   JoinTest.cpp
   ParquetTpchTest.cpp
@@ -131,6 +129,7 @@ target_link_libraries(
   axiom_test_connector
   velox_dwio_text_reader_register
   velox_dwio_text_writer_register
+  velox_window
   GTest::gmock
   glog::glog
   GTest::gtest

@@ -225,7 +225,7 @@ class Optimization {
   // side is made, we further check if reducing joins applying to the probe can
   // be used to further reduce the build. These last joins are added as
   // 'existences' in the candidate.
-  std::vector<JoinCandidate> nextJoins(PlanState& state);
+  std::vector<JoinCandidate> nextJoins(PlanState& state) const;
 
   // Adds group by, order by, top k, limit to 'plan'. Updates 'plan' if
   // relation ops added. Sets cost in 'state'.
@@ -247,10 +247,7 @@ class Optimization {
   // placed, adds them to 'state.placed' and calls makeJoins()
   // recursively to make the rest of the plan. Returns false if no
   // unplaced conjuncts were found and plan construction should proceed.
-  bool placeConjuncts(
-      RelationOpPtr plan,
-      PlanState& state,
-      bool allowNondeterministic);
+  bool placeConjuncts(RelationOpPtr plan, PlanState& state, bool joinsPlaced);
 
   // Helper function that calls makeJoins recursively for each of
   // 'nextJoins'. The point of making 'nextJoins' first and only then
@@ -259,13 +256,6 @@ class Optimization {
   // based on partitioning and size and we do not need to evaluate
   // their different permutations.
   void tryNextJoins(PlanState& state, const std::vector<NextJoin>& nextJoins);
-
-  // Adds a cross join to access a single row from a non-correlated subquery.
-  RelationOpPtr placeSingleRowDt(
-      RelationOpPtr plan,
-      DerivedTableCP subquery,
-      ExprCP filter,
-      PlanState& state);
 
   // Adds the join represented by 'candidate' on top of 'plan'. Tries index and
   // hash based methods and adds the index and hash based plans to 'result'. If

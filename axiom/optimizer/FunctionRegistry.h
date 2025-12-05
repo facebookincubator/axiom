@@ -37,12 +37,15 @@ class FunctionSet {
   /// Indicates an aggregate function that ignores duplicate inputs.
   static constexpr uint64_t kIgnoreDuplicatesAggregate = 1UL << 3;
 
+  /// Indicates a window function in the set.
+  static constexpr uint64_t kWindow = 1UL << 4;
+
   FunctionSet() : set_(0) {}
 
   explicit FunctionSet(uint64_t set) : set_(set) {}
 
   /// True if 'item' is in 'this'.
-  bool contains(int64_t item) const {
+  bool contains(uint64_t item) const {
     return 0 != (set_ & item);
   }
 

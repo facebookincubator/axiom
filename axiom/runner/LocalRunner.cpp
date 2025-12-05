@@ -185,14 +185,11 @@ int64_t LocalRunner::runWrite() {
       result.push_back(cursor_->current());
     }
   } catch (const std::exception&) {
-    try {
-      waitForCompletion(1'000'000);
-    } catch (const std::exception& e) {
-      LOG(ERROR) << e.what()
-                 << " while waiting for completion after error in write query";
-      throw;
+    if (!error_) {
+      error_ = std::current_exception();
     }
-    std::move(finishWrite).abort().get();
+    abort();
+    std::move(finishWrite).abort().wait();
     throw;
   }
 
@@ -253,14 +250,19 @@ std::shared_ptr<connector::SplitSource> LocalRunner::splitSourceForScan(
 void LocalRunner::abort() {
   // If called without previous error, we set the error to be cancellation.
   if (!error_) {
-    try {
-      state_ = State::kCancelled;
-      VELOX_FAIL("Query cancelled");
-    } catch (const std::exception&) {
-      error_ = std::current_exception();
-    }
+    state_ = State::kCancelled;
+    error_ = std::make_exception_ptr(
+        velox::VeloxRuntimeError{
+            __FILE__,
+            __LINE__,
+            __FUNCTION__,
+            "",
+            "Query cancelled",
+            velox::error_source::kErrorSourceRuntime.c_str(),
+            velox::error_code::kInvalidState.c_str(),
+            false});
   }
-  VELOX_CHECK(state_ != State::kInitialized);
+  VELOX_CHECK_NE(state_, State::kInitialized);
   // Setting errors is thread safe. The stages do not change after
   // initialization.
   for (auto& stage : stages_) {
@@ -271,6 +273,21 @@ void LocalRunner::abort() {
   if (cursor_) {
     cursor_->setError(error_);
   }
+}
+
+velox::ContinueFuture LocalRunner::wait() {
+  VELOX_CHECK_NE(state_, State::kInitialized);
+  std::vector<velox::ContinueFuture> futures;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    for (auto& stage : stages_) {
+      for (auto& task : stage) {
+        futures.push_back(task->taskDeletionFuture());
+      }
+      stage.clear();
+    }
+  }
+  return folly::collectAll(std::move(futures)).defer([](auto&&) {});
 }
 
 void LocalRunner::waitForCompletion(int32_t maxWaitMicros) {

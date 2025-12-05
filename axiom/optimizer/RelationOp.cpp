@@ -43,6 +43,7 @@ const auto& relTypeNames() {
       {RelType::kJoin, "Join"},
       {RelType::kHashBuild, "HashBuild"},
       {RelType::kAggregation, "Aggregation"},
+      {RelType::kWindow, "Window"},
       {RelType::kOrderBy, "OrderBy"},
       {RelType::kUnionAll, "UnionAll"},
       {RelType::kLimit, "Limit"},
@@ -404,6 +405,12 @@ Join::Join(
       filter{std::move(filterExprs)} {
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = fanout;
+  if (method == JoinMethod::kCross) {
+    const auto buildRowBytes = byteSize(right->columns());
+    const auto buildCost = buildRowBytes * Costs::kColumnByteCost;
+    cost_.unitCost = fanout * buildCost;
+    return;
+  }
 
   const float buildSize = right->resultCardinality();
   const auto numKeys = leftKeys.size();
@@ -467,15 +474,29 @@ Join* Join::makeCrossJoin(
     RelationOpPtr input,
     RelationOpPtr right,
     ColumnVector columns) {
+  return makeNestedLoopJoin(
+      std::move(input),
+      std::move(right),
+      velox::core::JoinType::kInner,
+      ExprVector{},
+      std::move(columns));
+}
+
+Join* Join::makeNestedLoopJoin(
+    RelationOpPtr input,
+    RelationOpPtr right,
+    velox::core::JoinType joinType,
+    ExprVector filterExprs,
+    ColumnVector columns) {
   float fanout = right->resultCardinality();
   return make<Join>(
       JoinMethod::kCross,
-      velox::core::JoinType::kInner,
+      joinType,
       std::move(input),
       std::move(right),
       ExprVector{},
       ExprVector{},
-      ExprVector{},
+      std::move(filterExprs),
       fanout,
       std::move(columns));
 }
@@ -485,8 +506,21 @@ std::string Join::toString(bool recursive, bool detail) const {
   if (recursive) {
     out << input()->toString(true, detail);
   }
-  out << "*" << (method == JoinMethod::kHash ? "H" : "M") << " "
-      << joinTypeLabel(joinType);
+  out << "*";
+
+  switch (method) {
+    case JoinMethod::kHash:
+      out << "H";
+      break;
+    case JoinMethod::kMerge:
+      out << "M";
+      break;
+    case JoinMethod::kCross:
+      out << "C";
+      break;
+  }
+
+  out << " " << joinTypeLabel(joinType);
   printCost(detail, out);
   if (detail) {
     out << "columns: " << itemsToString(columns().data(), columns().size())
@@ -532,7 +566,7 @@ std::string Repartition::toString(bool recursive, bool detail) const {
     out << input()->toString(true, detail) << " ";
   }
 
-  if (distribution().isBroadcast) {
+  if (distribution().isBroadcast()) {
     out << "broadcast ";
   } else if (distribution().isGather()) {
     out << "gather ";
@@ -745,15 +779,12 @@ Aggregation::Aggregation(
     if (step == velox::core::AggregationNode::Step::kFinal &&
         input_->is(RelType::kRepartition) &&
         input_->input()->is(RelType::kAggregation)) {
-      auto partial = input_->input().get();
-
-      VELOX_CHECK(!std::isnan(partial->cost().inputCardinality));
-      VELOX_CHECK(std::isfinite(partial->cost().inputCardinality));
-
-      inputBeforePartial = partial->inputCardinality();
+      const auto& partial = *input_->input();
+      inputBeforePartial = partial.inputCardinality();
     } else {
       inputBeforePartial = cost_.inputCardinality;
     }
+    VELOX_DCHECK(std::isfinite(inputBeforePartial));
 
     setCostWithGroups(inputBeforePartial);
   } else {
@@ -1125,9 +1156,11 @@ OrderBy::OrderBy(
       limit{limit},
       offset{offset} {
   cost_.inputCardinality = inputCardinality();
-  if (limit == -1) {
+  if (limit < 0) {
+    VELOX_DCHECK_EQ(limit, -1);
     cost_.fanout = 1;
   } else {
+    VELOX_DCHECK_NE(limit, 0);
     const auto cardinality = static_cast<float>(limit);
     if (cost_.inputCardinality <= cardinality) {
       // Input cardinality does not exceed the limit. The limit is no-op.
@@ -1167,9 +1200,10 @@ Limit::Limit(RelationOpPtr input, int64_t limit, int64_t offset)
     : RelationOp{RelType::kLimit, std::move(input), Distribution::gather()},
       limit{limit},
       offset{offset} {
+  VELOX_DCHECK_GE(limit, 0);
   cost_.inputCardinality = inputCardinality();
   cost_.unitCost = 0.01;
-  const auto cardinality = static_cast<float>(limit);
+  const auto cardinality = std::max<float>(limit, 1);
   if (cost_.inputCardinality <= cardinality) {
     // Input cardinality does not exceed the limit. The limit is no-op. Doesn't
     // change cardinality.
@@ -1205,8 +1239,7 @@ UnionAll::UnionAll(RelationOpPtrVector inputsVector)
     : RelationOp{RelType::kUnionAll, nullptr, Distribution{}, inputsVector[0]->columns()},
       inputs{std::move(inputsVector)} {
   for (auto& input : inputs) {
-    cost_.inputCardinality +=
-        input->cost().inputCardinality * input->cost().fanout;
+    cost_.inputCardinality += input->resultCardinality();
   }
 
   cost_.fanout = 1;
@@ -1250,6 +1283,85 @@ std::string UnionAll::toString(bool recursive, bool detail) const {
   }
   out << ")";
   return out.str();
+}
+
+WindowOp::WindowOp(
+    RelationOpPtr input,
+    ExprVector partitionKeysVector,
+    ExprVector orderKeysVector,
+    OrderTypeVector orderTypesVector,
+    WindowVector windowsVector,
+    ColumnVector columns)
+    : RelationOp{RelType::kWindow, std::move(input), std::move(columns)},
+      partitionKeys{std::move(partitionKeysVector)},
+      orderKeys{std::move(orderKeysVector)},
+      orderTypes{std::move(orderTypesVector)},
+      windows{std::move(windowsVector)} {
+  cost_.inputCardinality = inputCardinality();
+  cost_.fanout = 1;
+}
+
+const QGString& WindowOp::historyKey() const {
+  if (!key_.empty()) {
+    return key_;
+  }
+  std::stringstream out;
+  auto* opt = queryCtx()->optimization();
+  velox::ScopedVarSetter cname(&opt->cnamesInExpr(), false);
+  out << input_->historyKey() << " window (";
+  for (auto& key : partitionKeys) {
+    out << key->toString() << ", ";
+  }
+  out << ") order by (";
+  for (auto& key : orderKeys) {
+    out << key->toString() << ", ";
+  }
+  out << ") functions (";
+  for (auto& window : windows) {
+    out << window->toString() << ", ";
+  }
+  out << ")";
+  key_ = sanitizeHistoryKey(out.str());
+  return key_;
+}
+
+std::string WindowOp::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (detail) {
+    out << "Window (";
+    out << "partition by: ";
+    for (auto i = 0; i < partitionKeys.size(); ++i) {
+      out << partitionKeys[i]->toString();
+      if (i < partitionKeys.size() - 1) {
+        out << ", ";
+      }
+    }
+    out << " order by: ";
+    for (auto i = 0; i < orderKeys.size(); ++i) {
+      out << orderKeys[i]->toString();
+      if (i < orderKeys.size() - 1) {
+        out << ", ";
+      }
+    }
+    out << " functions: ";
+    for (auto i = 0; i < windows.size(); ++i) {
+      out << windows[i]->toString();
+      if (i < windows.size() - 1) {
+        out << ", ";
+      }
+    }
+    out << ")\n";
+  } else {
+    out << "window " << windows.size() << " functions ";
+  }
+
+  return out.str();
+}
+
+void WindowOp::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 void UnionAll::accept(

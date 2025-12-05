@@ -295,8 +295,8 @@ velox::core::PlanNodePtr QueryTestBase::toSingleNodePlan(
 }
 
 std::string QueryTestBase::getTestDataPath(const std::string& filename) {
-  return velox::test::getDataFilePath(
-      "axiom/optimizer/tests", fmt::format("test_data/{}", filename));
+  auto path = std::filesystem::path{__FILE__}.parent_path();
+  return path / "test_data" / filename;
 }
 
 } // namespace facebook::axiom::optimizer::test

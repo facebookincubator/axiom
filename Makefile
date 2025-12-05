@@ -17,23 +17,27 @@ BUILD_BASE_DIR=_build
 BUILD_DIR=release
 BUILD_TYPE=Release
 
-CMAKE_FLAGS := -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) -DAXIOM_BUILD_TESTING=ON -DVELOX_MONO_LIBRARY=ON
+EXTRA_CMAKE_FLAGS := \
+	-DCMAKE_COLOR_DIAGNOSTICS=ON \
+  -DVELOX_DEPENDENCY_SOURCE=BUNDLED -Dfmt_SOURCE=SYSTEM -DICU_SOURCE=SYSTEM \
+  -DVELOX_MONO_LIBRARY=OFF -DVELOX_BUILD_SHARED=ON -DVELOX_BUILD_STATIC=OFF \
+	-DCMAKE_CXX_FLAGS="-fPIC" -DCMAKE_STATIC_LINKER_FLAGS="" -DCMAKE_SHARED_LINKER_FLAGS="" -DCMAKE_EXE_LINKER_FLAGS=""
+# -DCMAKE_CXX_FLAGS="" -DCMAKE_STATIC_LINKER_FLAGS="" -DCMAKE_SHARED_LINKER_FLAGS="" -DCMAKE_EXE_LINKER_FLAGS=""
+# -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined" -DCMAKE_STATIC_LINKER_FLAGS="-fsanitize=address,undefined" -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+# -DCMAKE_CXX_FLAGS="-fsanitize=thread" -DCMAKE_STATIC_LINKER_FLAGS="-fsanitize=thread" -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+CMAKE_FLAGS := -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) -DAXIOM_BUILD_TESTING=ON -DVELOX_MONO_LIBRARY=OFF
 
 # Use Ninja if available. If Ninja is used, pass through parallelism control flags.
 USE_NINJA ?= 1
 ifeq ($(USE_NINJA), 1)
 ifneq ($(shell which ninja), )
 GENERATOR := -GNinja
-
-# Ninja makes compilers disable colored output by default.
-GENERATOR += -DVELOX_FORCE_COLORED_OUTPUT=ON
 endif
 endif
 
 ifndef USE_CCACHE
 ifneq ($(shell which ccache), )
 USE_CCACHE=-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-$(info ✓ ccache detected and enabled: USE_CCACHE=$(USE_CCACHE))
 endif
 endif
 
@@ -46,8 +50,6 @@ clean:            #: Delete all build artifacts
 	rm -rf $(BUILD_BASE_DIR)
 
 submodules:
-	git submodule sync --recursive
-	git submodule update --init --recursive
 
 cmake: submodules	#: Use CMake to create a Makefile build system
 	mkdir -p $(BUILD_BASE_DIR)/$(BUILD_DIR) && \
