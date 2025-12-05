@@ -1439,17 +1439,20 @@ void Optimization::joinByHashRight(
   probeFilterColumns.unionColumns(candidate.join->filter());
   probeFilterColumns.intersect(availableColumns(candidate.tables[0]));
 
-  const auto& dc = state.downstreamColumns();
-
   PlanObjectSet probeTables;
   PlanObjectSet probeColumns;
   for (auto probeTable : candidate.tables) {
     probeColumns.unionSet(availableColumns(probeTable));
-    state.placed.add(probeTable);
     probeTables.add(probeTable);
   }
 
-  probeColumns.intersect(dc);
+  // The probe side dt does not need to produce columns that it uses
+  // internally, only the columns that are downstream if we consider
+  // the probe to be placed. So, provisionally mark probe side tables
+  // as placed for the downstreamColumns().
+  state.placed.unionSet(probeTables);
+  probeColumns.intersect(state.downstreamColumns());
+
   probeColumns.unionColumns(probe.keys);
   probeColumns.unionSet(probeFilterColumns);
   state.columns.unionSet(probeColumns);
@@ -1457,17 +1460,18 @@ void Optimization::joinByHashRight(
   MemoKey memoKey{
       candidate.tables[0], probeColumns, probeTables, candidate.existences};
 
+  Distribution forProbe;
+  if (plan->distribution().isGather()) {
+    forProbe = Distribution::gather();
+  } else {
+    forProbe = {plan->distribution().distributionType, {}};
+  }
+
   bool needsShuffle = false;
   auto probePlan = makePlan(
-      *state.dt,
-      memoKey,
-      Distribution{plan->distribution().distributionType, {}},
-      PlanObjectSet{},
-      candidate.existsFanout,
-      needsShuffle);
+      *state.dt, memoKey, forProbe, {}, candidate.existsFanout, needsShuffle);
 
   PlanState probeState(state.optimization, state.dt, probePlan);
-
   RelationOpPtr probeInput = probePlan->op;
   RelationOpPtr buildInput = plan;
 
@@ -1541,6 +1545,7 @@ void Optimization::joinByHashRight(
 
   tryOptimizeSemiProject(rightJoinType, mark, state, negation_);
 
+  // If there is an existence flag, it is the rightmost result column.
   if (mark) {
     projectionBuilder.add(mark, mark);
   }
