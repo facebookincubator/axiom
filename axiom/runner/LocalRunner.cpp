@@ -441,7 +441,7 @@ void LocalRunner::makeStages(
         }
       }
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception&) {
     onError(std::current_exception());
   }
 }
