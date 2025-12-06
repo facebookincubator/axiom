@@ -762,4 +762,8 @@ void ShowColumns::accept(AstVisitor* visitor) {
   visitor->visitShowColumns(this);
 }
 
+void ShowFunctions::accept(AstVisitor* visitor) {
+  visitor->visitShowFunctions(this);
+}
+
 } // namespace axiom::sql::presto
