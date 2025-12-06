@@ -1025,5 +1025,10 @@ TEST_F(PrestoParserTest, view) {
       {"tiny.view"});
 }
 
+TEST_F(PrestoParserTest, showFunctions) {
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().values();
+  testSql("show functions", matcher);
+}
+
 } // namespace
 } // namespace axiom::sql::presto

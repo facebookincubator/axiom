@@ -25,6 +25,8 @@
 #include "axiom/sql/presto/grammar/PrestoSqlLexer.h"
 #include "axiom/sql/presto/grammar/PrestoSqlParser.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/WindowFunction.h"
+#include "velox/functions/FunctionRegistry.h"
 
 namespace axiom::sql::presto {
 namespace {
@@ -1681,6 +1683,119 @@ SqlStatementPtr parseShowColumns(
           .build());
 }
 
+SqlStatementPtr parseShowFunctions(
+    const ShowFunctions& showFunctions,
+    const std::string& defaultConnectorId,
+    const std::optional<std::string>& defaultSchema) {
+  lp::PlanBuilder::Context ctx(defaultConnectorId);
+
+  std::vector<Variant> rows;
+
+  // all simple & vector functions
+  auto simpleAndVectorFunctions = facebook::velox::getFunctionSignatures();
+
+  for (const auto& [functionName, signatures] : simpleAndVectorFunctions) {
+    for (const auto& signature : signatures) {
+      std::optional<bool> isDeterministic =
+          facebook::velox::isDeterministic(functionName);
+      std::string returnType = signature->returnType().baseName();
+      bool variableArity = signature->variableArity();
+      auto argTypes = signature->argumentTypes();
+      std::vector<std::string> argTypeVec;
+      argTypeVec.reserve(argTypes.size());
+      for (const auto& argType : argTypes) {
+        argTypeVec.emplace_back(argType.baseName());
+      }
+      std::string argTypesString = folly::join(", ", argTypeVec);
+      rows.emplace_back(
+          Variant::row(
+              {functionName,
+               returnType,
+               argTypesString,
+               std::string("Scalar"),
+               isDeterministic.has_value() ? isDeterministic.value() : false,
+               variableArity}));
+    }
+  }
+
+  // get all aggregate functions
+  auto allAggregateFunctions =
+      facebook::velox::exec::getAggregateFunctionSignatures();
+
+  for (const auto& [functionName, signatures] : allAggregateFunctions) {
+    for (const auto& signature : signatures) {
+      std::optional<bool> isDeterministic =
+          facebook::velox::isDeterministic(functionName);
+      std::string returnType = signature->returnType().baseName();
+      bool variableArity = signature->variableArity();
+      auto argTypes = signature->argumentTypes();
+      std::vector<std::string> argTypeVec;
+      argTypeVec.reserve(argTypes.size());
+      for (const auto& argType : argTypes) {
+        argTypeVec.emplace_back(argType.baseName());
+      }
+      std::string argTypesString = folly::join(", ", argTypeVec);
+      rows.emplace_back(
+          Variant::row(
+              {functionName,
+               returnType,
+               argTypesString,
+               std::string("Aggregate"),
+               isDeterministic.has_value() ? isDeterministic.value() : false,
+               variableArity}));
+    }
+  }
+
+  // get all window functions
+  auto allWindowFunctions = facebook::velox::exec::windowFunctions();
+
+  for (const auto& [functionName, windowEntry] : allWindowFunctions) {
+    std::optional<bool> isDeterministic =
+        facebook::velox::isDeterministic(functionName);
+    auto signatures = windowEntry.signatures;
+    for (const auto& signature : signatures) {
+      std::string returnType = signature->returnType().baseName();
+      bool variableArity = signature->variableArity();
+      auto argTypes = signature->argumentTypes();
+      std::vector<std::string> argTypeVec;
+      argTypeVec.reserve(argTypes.size());
+      for (const auto& argType : argTypes) {
+        argTypeVec.emplace_back(argType.baseName());
+      }
+      std::string argTypesString = folly::join(", ", argTypeVec);
+      rows.emplace_back(
+          Variant::row(
+              {functionName,
+               returnType,
+               argTypesString,
+               std::string("Window"),
+               isDeterministic.has_value() ? isDeterministic.value() : false,
+               variableArity}));
+    }
+  }
+
+  return std::make_shared<SelectStatement>(
+      lp::PlanBuilder(ctx)
+          .values(
+              ROW(
+                  {
+                      "Function",
+                      "Return Type",
+                      "Argument Types",
+                      "Function Type",
+                      "Deterministic",
+                      "Variable Arity",
+                  },
+                  {VARCHAR(),
+                   VARCHAR(),
+                   VARCHAR(),
+                   VARCHAR(),
+                   BOOLEAN(),
+                   BOOLEAN()}), // format for the output
+              rows)
+          .build());
+};
+
 SqlStatementPtr parseInsert(
     const Insert& insert,
     const std::string& defaultConnectorId,
@@ -1835,6 +1950,11 @@ SqlStatementPtr PrestoParser::doParse(
   if (query->is(NodeType::kDropTable)) {
     return parseDropTable(
         *query->as<DropTable>(), defaultConnectorId_, defaultSchema_);
+  }
+
+  if (query->is(NodeType::kShowFunctions)) {
+    return parseShowFunctions(
+        *query->as<ShowFunctions>(), defaultConnectorId_, defaultSchema_);
   }
 
   RelationPlanner planner(defaultConnectorId_, defaultSchema_);
