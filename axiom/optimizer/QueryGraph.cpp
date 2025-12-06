@@ -222,27 +222,31 @@ std::string UnnestTable::toString() const {
 }
 
 JoinSide JoinEdge::sideOf(PlanObjectCP side, bool other) const {
+  const auto joinType = [&] {
+    switch (joinType_) {
+      case JoinType::kLeft:
+        return velox::core::JoinType::kLeft;
+      case JoinType::kRight:
+        return velox::core::JoinType::kRight;
+      case JoinType::kFull:
+        return velox::core::JoinType::kFull;
+      case JoinType::kSemi:
+        if (markColumn_) {
+          return velox::core::JoinType::kLeftSemiProject;
+        } else {
+          return velox::core::JoinType::kLeftSemiFilter;
+        }
+      case JoinType::kAnti:
+        return velox::core::JoinType::kAnti;
+      default:
+        return velox::core::JoinType::kInner;
+    }
+  }();
   if ((side == rightTable_ && !other) || (side == leftTable_ && other)) {
-    return {
-        rightTable_,
-        rightKeys_,
-        lrFanout_,
-        rightOptional(),
-        leftOptional(),
-        isSemi(),
-        isAnti(),
-        markColumn_};
+    return {rightTable_, rightKeys_, lrFanout_, joinType, markColumn_};
   }
-
   return {
-      leftTable_,
-      leftKeys_,
-      rlFanout_,
-      leftOptional(),
-      rightOptional(),
-      isSemi(),
-      isAnti(),
-      markColumn_};
+      leftTable_, leftKeys_, rlFanout_, reverseJoinType(joinType), markColumn_};
 }
 
 void JoinEdge::addEquality(ExprCP left, ExprCP right, bool update) {

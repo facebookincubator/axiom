@@ -448,38 +448,8 @@ struct JoinSide {
   const PlanObjectCP table;
   const ExprVector& keys;
   const float fanout;
-  const bool isOptional;
-  const bool isOtherOptional;
-  const bool isExists;
-  const bool isNotExists;
+  const velox::core::JoinType leftJoinType;
   const ColumnCP markColumn;
-
-  /// Returns the join type to use if 'this' is the right side.
-  velox::core::JoinType leftJoinType() const {
-    if (isNotExists) {
-      return velox::core::JoinType::kAnti;
-    }
-
-    if (isExists) {
-      if (markColumn) {
-        return velox::core::JoinType::kLeftSemiProject;
-      }
-      return velox::core::JoinType::kLeftSemiFilter;
-    }
-
-    if (isOptional && isOtherOptional) {
-      return velox::core::JoinType::kFull;
-    }
-
-    if (isOptional) {
-      return velox::core::JoinType::kLeft;
-    }
-
-    if (isOtherOptional) {
-      return velox::core::JoinType::kRight;
-    }
-    return velox::core::JoinType::kInner;
-  }
 };
 
 /// Represents a possibly directional equality join edge.
@@ -706,12 +676,6 @@ class JoinEdge {
 
   /// Fills in 'lrFanout' and 'rlFanout', 'leftUnique', 'rightUnique'.
   void guessFanout();
-
-  /// True if a hash join build can be broadcasted. Used when building on the
-  /// right. None of the right hash join variants are broadcastable.
-  bool isBroadcastableType() const {
-    return !leftOptional();
-  }
 
   /// Returns a key string for recording a join cardinality sample. The string
   /// is empty if not applicable. The bool is true if the key has right table

@@ -1067,7 +1067,7 @@ void Optimization::joinByIndex(
 
   auto [right, left] = candidate.joinSides();
 
-  const auto joinType = right.leftJoinType();
+  const auto joinType = right.leftJoinType;
   if (joinType == velox::core::JoinType::kFull ||
       joinType == velox::core::JoinType::kRight) {
     // Not available by index.
@@ -1176,7 +1176,7 @@ void Optimization::joinByHash(
 
   auto [build, probe] = candidate.joinSides();
 
-  auto joinType = build.leftJoinType();
+  auto joinType = build.leftJoinType;
 
   const auto partKeys = joinKeyPartition(plan, probe.keys);
   ExprVector copartition;
@@ -1244,7 +1244,8 @@ void Optimization::joinByHash(
         buildInput = repartition;
       }
     } else if (
-        candidate.join->isBroadcastableType() &&
+        joinType != velox::core::JoinType::kRight &&
+        joinType != velox::core::JoinType::kFull &&
         isBroadcastableSize(buildPlan)) {
       auto* broadcast = make<Repartition>(
           buildInput, Distribution::broadcast(), buildInput->columns());
@@ -1342,11 +1343,10 @@ void Optimization::joinByHashRight(
 
   auto [probe, build] = candidate.joinSides();
 
-  const auto leftJoinType = probe.leftJoinType();
   // Change the join type to the right join variant.
-  auto joinType = reverseJoinType(leftJoinType);
+  auto joinType = reverseJoinType(probe.leftJoinType);
   VELOX_CHECK_NE(
-      leftJoinType,
+      probe.leftJoinType,
       joinType,
       "Join type does not have right hash join variant");
 
@@ -1531,7 +1531,7 @@ void Optimization::crossJoin(
       return Join::makeCrossJoin(plan, std::move(rightOp), std::move(columns));
     }
     const auto right = candidate.join->sideOf(candidate.tables[0], false);
-    const auto joinType = right.leftJoinType();
+    const auto joinType = right.leftJoinType;
     const bool inputOnly = joinType == velox::core::JoinType::kLeftSemiProject;
     ColumnCP mark = nullptr;
     state.downstreamColumns().forEach<Column>([&](auto column) {
@@ -1560,7 +1560,7 @@ void Optimization::crossJoin(
     return Join::makeNestedLoopJoin(
         plan,
         std::move(rightOp),
-        right.leftJoinType(),
+        right.leftJoinType,
         candidate.join->filter(),
         std::move(columns));
   }();
