@@ -944,10 +944,9 @@ void Aggregation::accept(
   visitor.visit(*this, context);
 }
 
-HashBuild::HashBuild(RelationOpPtr input, ExprVector keysVector, PlanP plan)
+HashBuild::HashBuild(RelationOpPtr input, ExprVector keysVector)
     : RelationOp{RelType::kHashBuild, std::move(input)},
-      keys{std::move(keysVector)},
-      plan{plan} {
+      keys{std::move(keysVector)} {
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = 1;
 
