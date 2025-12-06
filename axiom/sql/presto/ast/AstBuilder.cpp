@@ -1040,7 +1040,7 @@ std::any AstBuilder::visitLateral(PrestoSqlParser::LateralContext* ctx) {
 std::any AstBuilder::visitParenthesizedRelation(
     PrestoSqlParser::ParenthesizedRelationContext* ctx) {
   trace("visitParenthesizedRelation");
-  return visitChildren(ctx);
+  return visitTyped<Relation>(ctx->relation());
 }
 
 std::any AstBuilder::visitExpression(PrestoSqlParser::ExpressionContext* ctx) {

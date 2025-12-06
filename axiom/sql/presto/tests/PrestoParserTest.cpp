@@ -210,6 +210,14 @@ TEST_F(PrestoParserTest, unnest) {
         "WITH a AS (SELECT array[1,2,3] as x) SELECT t.x + 1 FROM a, unnest(A.x) as T(X)",
         matcher);
   }
+
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().unnest();
+
+    testSql(
+        "SELECT * FROM (nation cross join unnest(array[1,2,3]) as t(x))",
+        matcher);
+  }
 }
 
 TEST_F(PrestoParserTest, syntaxErrors) {
