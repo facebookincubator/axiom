@@ -29,7 +29,7 @@ namespace facebook::axiom::optimizer {
 
 void PlanCost::add(RelationOp& op) {
   cost += op.cost().totalCost();
-  cardinality = op.cost().resultCardinality();
+  cardinality = op.resultCardinality();
 }
 
 namespace {
@@ -402,6 +402,7 @@ Join::Join(
       leftKeys{std::move(lhsKeys)},
       rightKeys{std::move(rhsKeys)},
       filter{std::move(filterExprs)} {
+  VELOX_DCHECK_EQ(leftKeys.size(), rightKeys.size());
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = fanout;
   const auto buildRowBytes = byteSize(right->columns());

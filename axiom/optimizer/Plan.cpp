@@ -39,7 +39,9 @@ PlanState::PlanState(Optimization& optimization, DerivedTableCP dt, PlanP plan)
     : optimization(optimization),
       dt(dt),
       cost(plan->cost),
-      syntacticJoinOrder_{optimization.options().syntacticJoinOrder} {}
+      syntacticJoinOrder_{optimization.options().syntacticJoinOrder} {
+  VELOX_DCHECK_EQ(cost.cardinality, plan->op->resultCardinality());
+}
 
 #ifndef NDEBUG
 // NOLINTBEGIN
