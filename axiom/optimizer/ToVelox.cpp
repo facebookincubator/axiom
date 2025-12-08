@@ -1491,8 +1491,6 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeScan(*op->as<TableScan>(), fragment, stages);
     case RelType::kJoin:
       return makeJoin(*op->as<Join>(), fragment, stages);
-    case RelType::kHashBuild:
-      return makeFragment(op->input(), fragment, stages);
     case RelType::kUnionAll:
       return makeUnionAll(*op->as<UnionAll>(), fragment, stages);
     case RelType::kValues:

@@ -41,7 +41,6 @@ const auto& relTypeNames() {
       {RelType::kFilter, "Filter"},
       {RelType::kProject, "Project"},
       {RelType::kJoin, "Join"},
-      {RelType::kHashBuild, "HashBuild"},
       {RelType::kAggregation, "Aggregation"},
       {RelType::kOrderBy, "OrderBy"},
       {RelType::kUnionAll, "UnionAll"},
@@ -405,6 +404,7 @@ Join::Join(
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = fanout;
 
+  const auto buildRowBytes = byteSize(right->columns());
   const float buildSize = right->resultCardinality();
   const auto numKeys = leftKeys.size();
   const auto probeCost = Costs::hashTableCost(buildSize) +
@@ -413,10 +413,19 @@ Join::Join(
       (Costs::kKeyCompareCost * numKeys * std::min<float>(1, fanout)) +
       numKeys * Costs::kHashColumnCost;
 
-  const auto rowBytes = byteSize(right->input()->columns());
-  const auto rowCost = Costs::hashRowCost(buildSize, rowBytes);
+  const auto rowCost = Costs::hashRowCost(buildSize, buildRowBytes);
 
-  cost_.unitCost = probeCost + cost_.fanout * rowCost;
+  // Per row cost calculates the column hashes twice, once to partition and a
+  // second time to insert.
+  const auto numColumns = static_cast<float>(right->columns().size());
+  const auto buildRowCost = (numKeys * 2 * Costs::kHashColumnCost) +
+      Costs::hashBuildCost(buildSize, buildRowBytes) +
+      numKeys * Costs::kKeyCompareCost +
+      numColumns * Costs::kHashExtractColumnCost * 2;
+
+  cost_.unitCost = probeCost + fanout * rowCost +
+      buildSize * buildRowCost / cost_.inputCardinality;
+  cost_.totalBytes = buildSize * buildRowBytes;
 }
 
 namespace {
@@ -939,41 +948,6 @@ std::string Aggregation::toString(bool recursive, bool detail) const {
 }
 
 void Aggregation::accept(
-    const RelationOpVisitor& visitor,
-    RelationOpVisitorContext& context) const {
-  visitor.visit(*this, context);
-}
-
-HashBuild::HashBuild(RelationOpPtr input, ExprVector keysVector)
-    : RelationOp{RelType::kHashBuild, std::move(input)},
-      keys{std::move(keysVector)} {
-  cost_.inputCardinality = inputCardinality();
-  cost_.fanout = 1;
-
-  const auto numKeys = static_cast<float>(keys.size());
-  const auto rowBytes = byteSize(columns());
-  const auto numColumns = static_cast<float>(columns().size());
-  // Per row cost calculates the column hashes twice, once to partition and a
-  // second time to insert.
-  cost_.unitCost = (numKeys * 2 * Costs::kHashColumnCost) +
-      Costs::hashBuildCost(cost_.inputCardinality, rowBytes) +
-      numKeys * Costs::kKeyCompareCost +
-      numColumns * Costs::kHashExtractColumnCost * 2;
-
-  cost_.totalBytes = cost_.inputCardinality * rowBytes;
-}
-
-std::string HashBuild::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-  out << " Build ";
-  printCost(detail, out);
-  return out.str();
-}
-
-void HashBuild::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
   visitor.visit(*this, context);
