@@ -79,15 +79,13 @@ Project -> dt5.ps_partkey, dt5.value
                   t2.ps_suppkey = t3.s_suppkey
                 TableScan -> t2.ps_partkey, t2.ps_suppkey, t2.ps_availqty, t2.ps_supplycost
                   table: partsupp
-                HashBuild -> t3.s_suppkey
-                  Join INNER Hash -> t3.s_suppkey
-                      t3.s_nationkey = t4.n_nationkey
-                    TableScan -> t3.s_suppkey, t3.s_nationkey
-                      table: supplier
-                    HashBuild -> t4.n_nationkey
-                      TableScan -> t4.n_nationkey
-                        table: nation
-                        single-column filters: eq(t4.n_name, "GERMANY")
+                Join INNER Hash -> t3.s_suppkey
+                    t3.s_nationkey = t4.n_nationkey
+                  TableScan -> t3.s_suppkey, t3.s_nationkey
+                    table: supplier
+                  TableScan -> t4.n_nationkey
+                    table: nation
+                    single-column filters: eq(t4.n_name, "GERMANY")
         Project -> dt13.expr
             dt13.expr := multiply(dt13.sum, 0.0001)
           Aggregation -> dt13.sum
@@ -98,15 +96,13 @@ Project -> dt5.ps_partkey, dt5.value
                   t14.ps_suppkey = t15.s_suppkey
                 TableScan -> t14.ps_suppkey, t14.ps_availqty, t14.ps_supplycost
                   table: partsupp
-                HashBuild -> t15.s_suppkey
-                  Join INNER Hash -> t15.s_suppkey
-                      t15.s_nationkey = t16.n_nationkey
-                    TableScan -> t15.s_suppkey, t15.s_nationkey
-                      table: supplier
-                    HashBuild -> t16.n_nationkey
-                      TableScan -> t16.n_nationkey
-                        table: nation
-                        single-column filters: eq(t16.n_name, "GERMANY")
+                Join INNER Hash -> t15.s_suppkey
+                    t15.s_nationkey = t16.n_nationkey
+                  TableScan -> t15.s_suppkey, t15.s_nationkey
+                    table: supplier
+                  TableScan -> t16.n_nationkey
+                    table: nation
+                    single-column filters: eq(t16.n_name, "GERMANY")
 
 
 Executable Velox plan:
