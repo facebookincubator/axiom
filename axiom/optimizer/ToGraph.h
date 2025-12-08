@@ -101,6 +101,8 @@ struct SubfieldProjections {
   folly::F14FastMap<PathCP, ExprCP> pathToExpr;
 };
 
+struct Subqueries;
+
 class ToGraph {
  public:
   ToGraph(
@@ -328,6 +330,33 @@ class ToGraph {
   std::pair<ExprVector, OrderTypeVector> dedupOrdering(
       const std::vector<logical_plan::SortingField>& ordering,
       folly::F14FastSet<ExprCP> keysToIgnore = {});
+
+  struct AddJoinArgs {
+    PlanObjectCP leftTable;
+    const ExprVector& leftKeys;
+    const ExprVector& rightKeys;
+    ExprVector filter;
+  };
+
+  ExprCP processSubquery(
+      PlanObjectCP leftTable,
+      DerivedTableCP subqueryDt,
+      const std::function<ExprCP(AddJoinArgs)>& addJoin);
+
+  ExprCP processScalarSubquery(
+      const logical_plan::SubqueryExpr& subquery,
+      PlanObjectCP leftTable);
+
+  ExprCP processInExpr(const logical_plan::Expr& expr, PlanObjectCP leftTable);
+
+  ExprCP processExistsExpr(
+      const logical_plan::Expr& expr,
+      PlanObjectCP leftTable);
+
+  void processSubqueries(
+      Subqueries& subqueries,
+      Subqueries& remaining,
+      PlanObjectCP leftTable);
 
   // Process non-correlated subqueries used in filter's predicate and populate
   // subqueries_ map. For each IN <subquery> expression, create a separate DT

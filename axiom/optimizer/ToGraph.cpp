@@ -1664,7 +1664,7 @@ void ToGraph::wrapInDt(const lp::LogicalPlanNode& node, bool unordered) {
 void ToGraph::finalizeDt(
     const lp::LogicalPlanNode& node,
     DerivedTableP outerDt) {
-  VELOX_CHECK_EQ(0, correlatedConjuncts_.size());
+  VELOX_CHECK(correlatedConjuncts_.empty());
   finalizeSubqueryDt(node, outerDt ? outerDt : newDt());
 }
 
@@ -1869,8 +1869,6 @@ void ToGraph::makeValuesTable(const lp::ValuesNode& values) {
   currentDt_->addTable(valuesTable);
 }
 
-namespace {
-
 struct Subqueries {
   std::vector<lp::SubqueryExprPtr> scalars;
   std::vector<lp::ExprPtr> inPredicates;
@@ -1881,6 +1879,7 @@ struct Subqueries {
   }
 };
 
+namespace {
 void extractSubqueries(const lp::ExprPtr& expr, Subqueries& subqueries) {
   if (expr->isSubquery()) {
     subqueries.scalars.push_back(
@@ -1935,11 +1934,11 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
   }
   VELOX_CHECK(subqueries.inPredicates.empty());
   VELOX_CHECK(subqueries.exists.empty());
-  if (!subqueries.scalars.empty()) {
-    for (const auto& subquery : subqueries.scalars) {
-      auto* subqueryDt = translateSubquery(*subquery->subquery());
-      subqueries_.emplace(subquery, subqueryDt->columns.front());
-    }
+  for (const auto& subquery : subqueries.scalars) {
+    auto* subqueryDt = translateSubquery(*subquery->subquery());
+    VELOX_CHECK(correlatedConjuncts_.empty());
+    VELOX_CHECK_EQ(1, subqueryDt->columns.size());
+    subqueries_.emplace(subquery, subqueryDt->columns.back());
   }
 
   for (auto i : channels) {
@@ -1965,6 +1964,7 @@ DerivedTableP ToGraph::translateSubquery(
   correlations_ = &originalRenames;
   SCOPE_EXIT {
     correlations_ = nullptr;
+    renames_ = std::move(originalRenames);
   };
 
   VELOX_CHECK(correlatedConjuncts_.empty());
@@ -1974,12 +1974,6 @@ DerivedTableP ToGraph::translateSubquery(
   auto* subqueryDt = currentDt_;
   finalizeSubqueryDt(node, outerDt);
 
-  renames_ = std::move(originalRenames);
-
-  for (const auto* column : subqueryDt->columns) {
-    renames_[column->name()] = column;
-  }
-
   return subqueryDt;
 }
 
@@ -1987,164 +1981,212 @@ ColumnCP ToGraph::addMarkColumn() {
   auto* mark = toName(fmt::format("__mark{}", markCounter_++));
   auto* markColumn =
       make<Column>(mark, currentDt_, Value{toType(velox::BOOLEAN()), 2});
-  renames_[mark] = markColumn;
   return markColumn;
+}
+
+ExprCP ToGraph::processSubquery(
+    PlanObjectCP leftTable,
+    DerivedTableCP subqueryDt,
+    const std::function<ExprCP(AddJoinArgs)>& addJoin) {
+  VELOX_DCHECK_NOT_NULL(subqueryDt);
+  SCOPE_EXIT {
+    correlatedConjuncts_.clear();
+    if (subqueryDt) {
+      currentDt_->removeLastTable(subqueryDt);
+    }
+  };
+  ExprVector leftKeys;
+  ExprVector rightKeys;
+  ExprVector filter;
+  for (const auto* conjunct : correlatedConjuncts_) {
+    conjunct = subqueryDt->exportExpr(conjunct);
+    auto tables = conjunct->allTables();
+    VELOX_DCHECK(!tables.empty());
+    tables.erase(subqueryDt);
+    VELOX_DCHECK(!tables.empty());
+    if (tables.size() != 1) {
+      return nullptr;
+    }
+    if (leftTable == nullptr) {
+      leftTable = tables.onlyObject();
+    } else if (leftTable != tables.onlyObject()) {
+      return nullptr;
+    }
+    ExprCP left = nullptr;
+    ExprCP right = nullptr;
+    if (isJoinEquality(conjunct, leftTable, subqueryDt, left, right)) {
+      leftKeys.push_back(left);
+      rightKeys.push_back(right);
+    } else {
+      filter.push_back(conjunct);
+    }
+  }
+  if (!leftTable) {
+    return nullptr;
+  }
+  auto* expr = addJoin({leftTable, leftKeys, rightKeys, std::move(filter)});
+  subqueryDt = nullptr;
+  return expr;
+}
+
+ExprCP ToGraph::processScalarSubquery(
+    const lp::SubqueryExpr& subquery,
+    PlanObjectCP leftTable) {
+  auto* subqueryDt = translateSubquery(*subquery.subquery());
+
+  if (correlatedConjuncts_.empty()) {
+    VELOX_DCHECK_NOT_NULL(subqueryDt);
+    VELOX_CHECK_EQ(1, subqueryDt->columns.size());
+    auto valuesNode = tryFoldConstantDt(subqueryDt);
+    if (!valuesNode) {
+      return subqueryDt->columns.back();
+    }
+    VELOX_CHECK_EQ(1, valuesNode->outputType()->size());
+    if (valuesNode->cardinality() != 1) {
+      // TODO Handle the case when subquery returns no rows. Fail if subquery
+      // is used in a comparison (x = <subquery>), constant fold if used as an
+      // IN LIST (x IN <subquery>).
+      return subqueryDt->columns.back();
+    }
+    // Replace subquery with a constant value.
+    const auto value =
+        std::get<std::vector<velox::RowVectorPtr>>(valuesNode->data())
+            .front()
+            ->childAt(0)
+            ->variantAt(0);
+    const auto* literal = make<Literal>(
+        Value{toType(valuesNode->outputType()->childAt(0)), 1},
+        registerVariant(value));
+    currentDt_->removeLastTable(subqueryDt);
+    return literal;
+  }
+
+  auto addJoin = [&](AddJoinArgs args) {
+    auto* edge = make<JoinEdge>(
+        args.leftTable,
+        subqueryDt,
+        JoinEdge::Spec{
+            .filter = std::move(args.filter),
+            .joinType = JoinEdge::JoinType::kLeft,
+        });
+    for (size_t i = 0; i < args.leftKeys.size(); ++i) {
+      edge->addEquality(args.leftKeys[i], args.rightKeys[i]);
+    }
+    currentDt_->joins.push_back(edge);
+    VELOX_CHECK_LE(1, subqueryDt->columns.size());
+    return subqueryDt->columns.back();
+  };
+
+  return processSubquery(leftTable, subqueryDt, addJoin);
+}
+
+ExprCP ToGraph::processInExpr(const lp::Expr& expr, PlanObjectCP leftTable) {
+  const auto* inKey = translateExpr(expr.inputAt(0));
+  if (leftTable == nullptr) {
+    leftTable = inKey->singleTable();
+  } else if (leftTable != inKey->singleTable()) {
+    return nullptr;
+  }
+  if (leftTable == nullptr) {
+    return nullptr;
+  }
+
+  const auto* subqueryDt =
+      translateSubquery(*expr.inputAt(1)->as<lp::SubqueryExpr>()->subquery());
+
+  auto addJoin = [&](AddJoinArgs args) {
+    const auto* markColumn = addMarkColumn();
+    auto* edge = JoinEdge::makeExists(
+        args.leftTable, subqueryDt, markColumn, std::move(args.filter));
+    for (size_t i = 0; i < args.leftKeys.size(); ++i) {
+      edge->addEquality(args.leftKeys[i], args.rightKeys[i]);
+    }
+    VELOX_CHECK_LE(1, subqueryDt->columns.size());
+    edge->addEquality(inKey, subqueryDt->columns.back());
+    currentDt_->joins.push_back(edge);
+    return markColumn;
+  };
+
+  return processSubquery(leftTable, subqueryDt, addJoin);
+}
+
+ExprCP ToGraph::processExistsExpr(
+    const lp::Expr& expr,
+    PlanObjectCP leftTable) {
+  const auto* subqueryDt =
+      translateSubquery(*expr.inputAt(0)->as<lp::SubqueryExpr>()->subquery());
+
+  auto addJoin = [&](AddJoinArgs args) {
+    const auto* markColumn = addMarkColumn();
+    auto* edge = JoinEdge::makeExists(
+        args.leftTable, subqueryDt, markColumn, std::move(args.filter));
+    for (size_t i = 0; i < args.leftKeys.size(); ++i) {
+      edge->addEquality(args.leftKeys[i], args.rightKeys[i]);
+    }
+    currentDt_->joins.push_back(edge);
+    return markColumn;
+  };
+
+  return processSubquery(leftTable, subqueryDt, addJoin);
+}
+
+void ToGraph::processSubqueries(
+    Subqueries& subqueries,
+    Subqueries& remaining,
+    PlanObjectCP leftTable) {
+  for (auto& subquery : subqueries.scalars) {
+    if (const auto* expr = processScalarSubquery(*subquery, leftTable)) {
+      subqueries_.emplace(std::move(subquery), expr);
+    } else if (!leftTable) {
+      remaining.scalars.push_back(std::move(subquery));
+    } else {
+      VELOX_FAIL("Cannot process scalar subquery: {}", subquery->toString());
+    }
+  }
+  for (auto& expr : subqueries.inPredicates) {
+    if (const auto* mark = processInExpr(*expr, leftTable)) {
+      subqueries_.emplace(std::move(expr), mark);
+    } else if (!leftTable) {
+      remaining.inPredicates.push_back(std::move(expr));
+    } else {
+      VELOX_FAIL("Cannot process IN expr: {}", expr->toString());
+    }
+  }
+  for (auto& expr : subqueries.exists) {
+    if (const auto* mark = processExistsExpr(*expr, leftTable)) {
+      subqueries_.emplace(std::move(expr), mark);
+    } else if (!leftTable) {
+      remaining.exists.push_back(std::move(expr));
+    } else {
+      VELOX_FAIL("Cannot process EXISTS expr: {}", expr->toString());
+    }
+  }
 }
 
 void ToGraph::processSubqueries(const logical_plan::FilterNode& filter) {
   Subqueries subqueries;
   extractSubqueries(filter.predicate(), subqueries);
-
-  if (currentDt_->hasLimit() ||
-      (currentDt_->hasAggregation() && !subqueries.empty())) {
+  PlanObjectCP leftTable = nullptr;
+  if (currentDt_->hasLimit()) {
+    leftTable = currentDt_;
     finalizeDt(*filter.onlyInput());
   }
-
-  for (const auto& subquery : subqueries.scalars) {
-    auto subqueryDt = translateSubquery(*subquery->subquery());
-
-    if (correlatedConjuncts_.empty()) {
-      VELOX_CHECK_EQ(1, subqueryDt->columns.size());
-
-      if (auto valuesNode = tryFoldConstantDt(subqueryDt)) {
-        VELOX_CHECK_EQ(1, valuesNode->outputType()->size());
-        if (valuesNode->cardinality() == 1) {
-          // Replace subquery with a constant value.
-          const auto value =
-              std::get<std::vector<velox::RowVectorPtr>>(valuesNode->data())
-                  .front()
-                  ->childAt(0)
-                  ->variantAt(0);
-          const auto* literal = make<Literal>(
-              Value{toType(valuesNode->outputType()->childAt(0)), 1},
-              registerVariant(value));
-          subqueries_.emplace(subquery, literal);
-
-          currentDt_->removeLastTable(subqueryDt);
-          continue;
-        }
-
-        // TODO Handle the case when subquery returns no rows. Fail if subquery
-        // is used in a comparison (x = <subquery>), constant fold if used as an
-        // IN LIST (x IN <subquery>).
-      }
-
-      subqueries_.emplace(subquery, subqueryDt->columns.front());
-    } else {
-      VELOX_CHECK_EQ(
-          correlatedConjuncts_.size() + 1, subqueryDt->columns.size());
-
-      // Add LEFT join.
-      PlanObjectCP leftTable = nullptr;
-      ExprVector leftKeys;
-      ExprVector rightKeys;
-      for (const auto* conjunct : correlatedConjuncts_) {
-        const auto tables = conjunct->allTables().toObjects();
-        VELOX_CHECK_EQ(2, tables.size());
-
-        ExprCP left = nullptr;
-        ExprCP right = nullptr;
-        if (isJoinEquality(conjunct, tables[0], tables[1], left, right)) {
-          if (tables[1] == subqueryDt) {
-            leftKeys.push_back(left);
-            rightKeys.push_back(right);
-            leftTable = tables[0];
-          } else {
-            leftKeys.push_back(right);
-            rightKeys.push_back(left);
-            leftTable = tables[1];
-          }
-        } else {
-          VELOX_FAIL(
-              "Expected correlated conjunct of the form a = b: {}",
-              conjunct->toString());
-        }
-      }
-
-      correlatedConjuncts_.clear();
-
-      auto* join = make<JoinEdge>(
-          leftTable,
-          subqueryDt,
-          JoinEdge::Spec{.joinType = JoinEdge::JoinType::kLeft});
-      for (auto i = 0; i < leftKeys.size(); ++i) {
-        join->addEquality(leftKeys[i], rightKeys[i]);
-      }
-
-      currentDt_->joins.push_back(join);
-      subqueries_.emplace(subquery, subqueryDt->columns.back());
-    }
+  if (subqueries.empty()) {
+    return;
   }
-
-  for (const auto& expr : subqueries.inPredicates) {
-    auto subqueryDt = translateSubquery(
-        *expr->inputAt(1)->as<lp::SubqueryExpr>()->subquery());
-    VELOX_CHECK_EQ(1, subqueryDt->columns.size());
-    VELOX_CHECK(correlatedConjuncts_.empty());
-
-    // Add a join edge and replace 'expr' with 'mark' column in the join output.
-    const auto* markColumn = addMarkColumn();
-
-    auto leftKey = translateExpr(expr->inputAt(0));
-    auto leftTable = leftKey->singleTable();
-    VELOX_CHECK_NOT_NULL(
-        leftTable,
-        "<expr> IN <subquery> with multi-table <expr> is not supported yet");
-
-    auto* edge = JoinEdge::makeExists(leftTable, subqueryDt, markColumn);
-
-    currentDt_->joins.push_back(edge);
-    edge->addEquality(leftKey, subqueryDt->columns.front());
-
-    subqueries_.emplace(expr, markColumn);
+  if (currentDt_->hasAggregation()) {
+    leftTable = currentDt_;
+    finalizeDt(*filter.onlyInput());
   }
-
-  for (const auto& expr : subqueries.exists) {
-    auto subqueryDt = translateSubquery(
-        *expr->inputAt(0)->as<lp::SubqueryExpr>()->subquery());
-    VELOX_CHECK(!correlatedConjuncts_.empty());
-
-    PlanObjectCP leftTable = nullptr;
-    ExprVector leftKeys;
-    ExprVector rightKeys;
-    ExprVector filter;
-    for (auto i = 0; i < correlatedConjuncts_.size(); ++i) {
-      const auto* conjunct = subqueryDt->exportExpr(correlatedConjuncts_[i]);
-
-      auto tables = conjunct->allTables();
-      tables.erase(subqueryDt);
-
-      VELOX_CHECK_EQ(1, tables.size());
-      if (leftTable == nullptr) {
-        leftTable = tables.onlyObject();
-      } else {
-        VELOX_CHECK(leftTable == tables.onlyObject());
-      }
-
-      ExprCP left = nullptr;
-      ExprCP right = nullptr;
-      if (isJoinEquality(conjunct, leftTable, subqueryDt, left, right)) {
-        leftKeys.push_back(left);
-        rightKeys.push_back(right);
-      } else {
-        filter.push_back(conjunct);
-      }
-    }
-
-    correlatedConjuncts_.clear();
-
-    const auto* markColumn = addMarkColumn();
-
-    auto* existsEdge = JoinEdge::makeExists(
-        leftTable, subqueryDt, markColumn, std::move(filter));
-    currentDt_->joins.push_back(existsEdge);
-
-    for (auto i = 0; i < leftKeys.size(); ++i) {
-      existsEdge->addEquality(leftKeys[i], rightKeys[i]);
-    }
-
-    subqueries_.emplace(expr, markColumn);
+  Subqueries remaining;
+  processSubqueries(subqueries, remaining, leftTable);
+  if (remaining.empty()) {
+    return;
   }
+  VELOX_DCHECK_NULL(leftTable);
+  leftTable = currentDt_;
+  finalizeDt(*filter.onlyInput());
+  processSubqueries(remaining, remaining, leftTable);
 }
 
 void ToGraph::addFilter(const lp::FilterNode& filter) {
