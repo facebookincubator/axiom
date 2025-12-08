@@ -872,6 +872,11 @@ TEST_F(PrestoParserTest, describe) {
   testSql("SHOW COLUMNS FROM lineitem", matcher);
 }
 
+TEST_F(PrestoParserTest, showFunctions) {
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().values();
+  testSql("SHOW FUNCTIONS", matcher);
+}
+
 TEST_F(PrestoParserTest, insertIntoTable) {
   {
     auto matcher =

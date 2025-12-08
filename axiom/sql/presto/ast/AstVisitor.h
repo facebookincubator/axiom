@@ -555,6 +555,10 @@ class AstVisitor {
     defaultVisit(node);
   }
 
+  virtual void visitShowFunctions(ShowFunctions* node) {
+    defaultVisit(node);
+  }
+
   // Generic visit method
   virtual void visit(Node* node) {
     defaultVisit(node);

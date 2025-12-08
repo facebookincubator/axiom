@@ -25,6 +25,8 @@
 #include "axiom/sql/presto/grammar/PrestoSqlLexer.h"
 #include "axiom/sql/presto/grammar/PrestoSqlParser.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/WindowFunction.h"
+#include "velox/functions/FunctionRegistry.h"
 
 namespace axiom::sql::presto {
 namespace {
@@ -1681,6 +1683,72 @@ SqlStatementPtr parseShowColumns(
           .build());
 }
 
+SqlStatementPtr parseShowFunctions(
+    const ShowFunctions& showFunctions,
+    const std::string& defaultConnectorId) {
+  VELOX_USER_CHECK(
+      !showFunctions.getLikePattern().has_value(), "LIKE not supported");
+  VELOX_USER_CHECK(
+      !showFunctions.getEscape().has_value(), "ESCAPE not supported");
+  std::vector<Variant> rows;
+
+  auto const& allScalarFunctions = facebook::velox::getFunctionSignatures();
+
+  for (const auto& [name, signatures] : allScalarFunctions) {
+    for (const auto& signature : signatures) {
+      rows.emplace_back(
+          Variant::row({
+              name,
+              "scalar",
+              signature->toString(),
+          }));
+    }
+  }
+
+  auto const& allAggregateFunctions =
+      facebook::velox::exec::getAggregateFunctionSignatures();
+
+  for (const auto& [name, signatures] : allAggregateFunctions) {
+    for (const auto& signature : signatures) {
+      rows.emplace_back(
+          Variant::row({
+              name,
+              "aggregate",
+              signature->toString(),
+          }));
+    }
+  }
+
+  auto const& allWindowFunctions = facebook::velox::exec::windowFunctions();
+
+  for (const auto& [name, windowEntry] : allWindowFunctions) {
+    // Skip aggregate functions as they have already been processed.
+    if (!allAggregateFunctions.contains(name)) {
+      for (const auto& signature : windowEntry.signatures) {
+        rows.emplace_back(
+            Variant::row({
+                name,
+                "window",
+                signature->toString(),
+            }));
+      }
+    }
+  }
+
+  lp::PlanBuilder::Context ctx(defaultConnectorId);
+  return std::make_shared<SelectStatement>(lp::PlanBuilder(ctx)
+                                               .values(
+                                                   ROW(
+                                                       {
+                                                           "Function",
+                                                           "Function Type",
+                                                           "Signature",
+                                                       },
+                                                       VARCHAR()),
+                                                   rows)
+                                               .build());
+};
+
 SqlStatementPtr parseInsert(
     const Insert& insert,
     const std::string& defaultConnectorId,
@@ -1835,6 +1903,10 @@ SqlStatementPtr PrestoParser::doParse(
   if (query->is(NodeType::kDropTable)) {
     return parseDropTable(
         *query->as<DropTable>(), defaultConnectorId_, defaultSchema_);
+  }
+
+  if (query->is(NodeType::kShowFunctions)) {
+    return parseShowFunctions(*query->as<ShowFunctions>(), defaultConnectorId_);
   }
 
   RelationPlanner planner(defaultConnectorId_, defaultSchema_);

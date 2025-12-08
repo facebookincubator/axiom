@@ -590,7 +590,18 @@ std::any AstBuilder::visitShowRoleGrants(
 std::any AstBuilder::visitShowFunctions(
     PrestoSqlParser::ShowFunctionsContext* ctx) {
   trace("visitShowFunctions");
-  return visitChildren(ctx);
+
+  std::optional<std::string> likePattern;
+  std::optional<std::string> escape;
+  if (ctx->LIKE() != nullptr) {
+    likePattern = visitExpression(ctx->pattern)->as<StringLiteral>()->value();
+  }
+
+  if (ctx->ESCAPE() != nullptr) {
+    escape = visitExpression(ctx->escape)->as<StringLiteral>()->value();
+  }
+  return std::static_pointer_cast<Statement>((std::make_shared<ShowFunctions>(
+      getLocation(ctx), std::move(likePattern), std::move(escape))));
 }
 
 std::any AstBuilder::visitShowSession(

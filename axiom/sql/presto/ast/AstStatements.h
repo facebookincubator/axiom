@@ -742,4 +742,29 @@ class ShowColumns : public Statement {
   std::shared_ptr<QualifiedName> table_;
 };
 
+class ShowFunctions : public Statement {
+ public:
+  ShowFunctions(
+      NodeLocation location,
+      std::optional<std::string> likePattern,
+      std::optional<std::string> escape)
+      : Statement(NodeType::kShowFunctions, location),
+        likePattern_(std::move(likePattern)),
+        escape_(std::move(escape)) {}
+
+  const std::optional<std::string>& getLikePattern() const {
+    return likePattern_;
+  }
+
+  const std::optional<std::string>& getEscape() const {
+    return escape_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+ private:
+  std::optional<std::string> likePattern_;
+  std::optional<std::string> escape_;
+};
+
 } // namespace axiom::sql::presto

@@ -1179,4 +1179,8 @@ void AstPrinter::visitShowColumns(ShowColumns* node) {
   printHeader("ShowColumns", node);
 }
 
+void AstPrinter::visitShowFunctions(ShowFunctions* node) {
+  printHeader("ShowFunctions", node);
+}
+
 } // namespace axiom::sql::presto
