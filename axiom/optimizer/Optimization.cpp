@@ -1279,9 +1279,6 @@ void Optimization::joinByHash(
   auto buildKeys = precomputeBuild.toColumns(build.keys);
   buildInput = std::move(precomputeBuild).maybeProject();
 
-  buildInput = make<HashBuild>(buildInput, build.keys);
-  buildState.addCost(*buildInput);
-
   const bool probeOnly = joinType == velox::core::JoinType::kLeftSemiFilter ||
       joinType == velox::core::JoinType::kLeftSemiProject ||
       joinType == velox::core::JoinType::kAnti;
@@ -1418,9 +1415,6 @@ void Optimization::joinByHashRight(
   PrecomputeProjection precomputeBuild(buildInput, state.dt);
   auto buildKeys = precomputeBuild.toColumns(build.keys);
   buildInput = std::move(precomputeBuild).maybeProject();
-
-  buildInput = make<HashBuild>(buildInput, build.keys);
-  state.addCost(*buildInput);
 
   const bool buildOnly = joinType == velox::core::JoinType::kRightSemiFilter ||
       joinType == velox::core::JoinType::kRightSemiProject;

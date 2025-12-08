@@ -117,7 +117,6 @@ enum class RelType {
   kFilter,
   kProject,
   kJoin,
-  kHashBuild,
   kAggregation,
   kWindow,
   kOrderBy,
@@ -523,25 +522,6 @@ struct Join : public RelationOp {
 };
 
 using JoinCP = const Join*;
-
-/// Occurs as right input of JoinOp with type kHash. Contains the
-/// cost and memory specific to building the table. Can be
-/// referenced from multiple JoinOps. The unit cost * input
-/// cardinality of this is counted as setup cost in the first
-/// referencing join and not counted in subsequent ones.
-struct HashBuild : public RelationOp {
-  HashBuild(RelationOpPtr input, ExprVector keys);
-
-  const ExprVector keys;
-
-  std::string toString(bool recursive, bool detail) const override;
-
-  void accept(
-      const RelationOpVisitor& visitor,
-      RelationOpVisitorContext& context) const override;
-};
-
-using HashBuildCP = const HashBuild*;
 
 struct Unnest : public RelationOp {
   Unnest(

@@ -43,9 +43,6 @@ class RelationOpVisitor {
   virtual void visit(const Join& op, RelationOpVisitorContext& context)
       const = 0;
 
-  virtual void visit(const HashBuild& op, RelationOpVisitorContext& context)
-      const = 0;
-
   virtual void visit(const Aggregation& op, RelationOpVisitorContext& context)
       const = 0;
 
