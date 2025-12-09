@@ -793,7 +793,7 @@ struct ValuesTable : public PlanObject {
       : PlanObject{PlanType::kValuesTableNode},
         dataType{_dataType},
         data{std::move(_data)},
-        cardinality_{cardinality(data)} {
+        cardinality_{std::max<float>(1, cardinality(data))} {
     VELOX_CHECK_NOT_NULL(dataType);
   }
 
@@ -811,7 +811,7 @@ struct ValuesTable : public PlanObject {
   JoinEdgeVector joinedBy;
 
   float cardinality() const {
-    return std::max<float>(cardinality_, 1);
+    return cardinality_;
   }
 
   bool isTable() const override {

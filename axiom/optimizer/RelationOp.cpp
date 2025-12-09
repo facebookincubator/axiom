@@ -152,12 +152,11 @@ TableScan::TableScan(
     if (orderSelectivity == 1) {
       // The data does not come in key order.
       float batchCost = index->lookupCost(lookupRange) +
-          index->lookupCost(lookupRange / batchSize) *
-              std::max<float>(1, batchSize);
+          index->lookupCost(lookupRange / batchSize) * batchSize;
       cost_.unitCost = batchCost / batchSize;
     } else {
       float batchCost = index->lookupCost(lookupRange) +
-          index->lookupCost(distance) * std::max<float>(1, batchSize);
+          index->lookupCost(distance) * batchSize;
       cost_.unitCost = batchCost / batchSize;
     }
     return;
@@ -219,16 +218,6 @@ std::string Cost::toString(bool /*detail*/, bool isUnit) const {
         << velox::succinctBytes(static_cast<uint64_t>(transferBytes));
   }
   return out.str();
-}
-
-void RelationOp::checkInputCardinality() const {
-  if (input_ != nullptr) {
-    const auto inputCardinality = input_->resultCardinality();
-    VELOX_CHECK(std::isfinite(inputCardinality));
-
-    // TODO Assert that inputCardinality > 0.
-    VELOX_CHECK_GE(inputCardinality, 0);
-  }
 }
 
 std::string RelationOp::toString() const {
@@ -497,7 +486,7 @@ Join* Join::makeNestedLoopJoin(
     velox::core::JoinType joinType,
     ExprVector filterExprs,
     ColumnVector columns) {
-  float fanout = right->resultCardinality();
+  const auto fanout = right->resultCardinality();
   return make<Join>(
       JoinMethod::kCross,
       joinType,
@@ -1172,7 +1161,7 @@ Limit::Limit(RelationOpPtr input, int64_t limit, int64_t offset)
   VELOX_DCHECK_GE(limit, 0);
   cost_.inputCardinality = inputCardinality();
   cost_.unitCost = 0.01;
-  const auto cardinality = std::max<float>(limit, 1);
+  const float cardinality = limit;
   if (cost_.inputCardinality <= cardinality) {
     // Input cardinality does not exceed the limit. The limit is no-op. Doesn't
     // change cardinality.
@@ -1207,9 +1196,11 @@ void Limit::accept(
 UnionAll::UnionAll(RelationOpPtrVector inputsVector)
     : RelationOp{RelType::kUnionAll, nullptr, Distribution{}, inputsVector[0]->columns()},
       inputs{std::move(inputsVector)} {
+  cost_.inputCardinality = 0;
   for (auto& input : inputs) {
     cost_.inputCardinality += input->resultCardinality();
   }
+  cost_.inputCardinality = std::max<float>(1, cost_.inputCardinality);
 
   cost_.fanout = 1;
 

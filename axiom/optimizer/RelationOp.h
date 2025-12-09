@@ -95,10 +95,6 @@ struct Cost {
     return unitCost * inputCardinality;
   }
 
-  float resultCardinality() const {
-    return fanout * inputCardinality;
-  }
-
   /// If 'isUnit' shows the cost/cardinality for one row, else for
   /// 'inputCardinality' rows.
   std::string toString(bool detail, bool isUnit = false) const;
@@ -152,9 +148,7 @@ class RelationOp {
       : relType_(type),
         distribution_(std::move(distribution)),
         columns_(std::move(columns)),
-        input_(std::move(input)) {
-    checkInputCardinality();
-  }
+        input_(std::move(input)) {}
 
   /// Convenience constructor for operators that project all input columns as
   /// is. E.g. Repartition or OrderBy.
@@ -165,9 +159,7 @@ class RelationOp {
       : relType_{type},
         distribution_{std::move(distribution)},
         columns_{input->columns()},
-        input_{std::move(input)} {
-    checkInputCardinality();
-  }
+        input_{std::move(input)} {}
 
   /// Convenience constructor for operators that preserve input's distribution.
   /// E.g. Join or Project.
@@ -178,9 +170,7 @@ class RelationOp {
       : relType_{type},
         distribution_{input->distribution()},
         columns_{std::move(columns)},
-        input_{std::move(input)} {
-    checkInputCardinality();
-  }
+        input_{std::move(input)} {}
 
   /// Convenience constructor for operators that preserve input's distribution
   /// and project all input columns as is. E.g. Filter.
@@ -188,9 +178,7 @@ class RelationOp {
       : relType_{type},
         distribution_{input->distribution()},
         columns_{input->columns()},
-        input_{std::move(input)} {
-    checkInputCardinality();
-  }
+        input_{std::move(input)} {}
 
   virtual ~RelationOp() = default;
 
@@ -244,7 +232,14 @@ class RelationOp {
 
   /// Returns the number of output rows.
   float resultCardinality() const {
-    return std::max<float>(1, cost_.resultCardinality());
+    VELOX_DCHECK(std::isfinite(cost_.fanout));
+    VELOX_DCHECK_GE(cost_.fanout, 0);
+    VELOX_DCHECK(std::isfinite(cost_.inputCardinality));
+    VELOX_DCHECK_GE(cost_.inputCardinality, 0);
+    const auto resultCardinality = cost_.fanout * cost_.inputCardinality;
+    VELOX_DCHECK(std::isfinite(resultCardinality));
+    VELOX_DCHECK_GE(resultCardinality, 0);
+    return resultCardinality;
   }
 
   /// @return 1 for a leaf node, otherwise returns 'resultCardinality()' of the
@@ -256,7 +251,7 @@ class RelationOp {
       return 1;
     }
 
-    return input()->resultCardinality();
+    return std::max<float>(1, input()->resultCardinality());
   }
 
   /// Returns a key for retrieving/storing a historical record of execution for
@@ -303,8 +298,6 @@ class RelationOp {
   mutable QGString key_;
 
  private:
-  void checkInputCardinality() const;
-
   // thread local reference count. PlanObjects are freed when the
   // QueryGraphContext arena is freed, candidate plans are freed when no longer
   // referenced.

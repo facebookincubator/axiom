@@ -40,7 +40,9 @@ PlanState::PlanState(Optimization& optimization, DerivedTableCP dt, PlanP plan)
       dt(dt),
       cost(plan->cost),
       syntacticJoinOrder_{optimization.options().syntacticJoinOrder} {
-  VELOX_DCHECK_EQ(cost.cardinality, plan->op->resultCardinality());
+  // TODO Remove std::max after fixing that we miss PrecomputeProjection costs.
+  VELOX_DCHECK_EQ(
+      std::max<float>(1, cost.cardinality), plan->op->resultCardinality());
 }
 
 #ifndef NDEBUG

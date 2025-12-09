@@ -959,7 +959,7 @@ void DerivedTable::makeInitialPlan() {
   optimization->makeJoins(state);
 
   auto plan = state.plans.best()->op;
-  this->cardinality = plan->resultCardinality();
+  this->cardinality = std::max<float>(1, plan->resultCardinality());
 
   optimization->memo()[key] = std::move(state.plans);
 }
