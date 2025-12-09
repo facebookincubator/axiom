@@ -274,6 +274,18 @@ class Optimization {
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
+  void joinByKeys(
+      const JoinCandidate& candidate,
+      PlanState& state,
+      const PlanCost& buildCost,
+      const JoinSide& probe,
+      RelationOpPtr probeInput,
+      const JoinSide& build,
+      RelationOpPtr buildInput,
+      float lrFanout,
+      float rlFanout,
+      std::vector<NextJoin>& toTry);
+
   // Adds 'candidate' on top of 'plan' as a hash join. Adds possibly needed
   // repartitioning to both probe and build and makes a broadcast build if
   // indicated. If 'candidate' calls for a join on the build side, plans a

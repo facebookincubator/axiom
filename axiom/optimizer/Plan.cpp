@@ -578,6 +578,10 @@ velox::core::JoinType reverseJoinType(velox::core::JoinType joinType) {
       return velox::core::JoinType::kRightSemiFilter;
     case velox::core::JoinType::kLeftSemiProject:
       return velox::core::JoinType::kRightSemiProject;
+    case velox::core::JoinType::kRightSemiFilter:
+      return velox::core::JoinType::kLeftSemiFilter;
+    case velox::core::JoinType::kRightSemiProject:
+      return velox::core::JoinType::kLeftSemiProject;
     default:
       return joinType;
   }
