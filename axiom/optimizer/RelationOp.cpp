@@ -516,15 +516,11 @@ void Join::accept(
   visitor.visit(*this, context);
 }
 
-Repartition::Repartition(
-    RelationOpPtr input,
-    Distribution distribution,
-    ColumnVector columns)
-    : RelationOp(
+Repartition::Repartition(RelationOpPtr input, Distribution distribution)
+    : RelationOp{
           RelType::kRepartition,
           std::move(input),
-          std::move(distribution),
-          std::move(columns)) {
+          std::move(distribution)} {
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = 1;
 

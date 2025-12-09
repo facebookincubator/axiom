@@ -395,10 +395,7 @@ struct Values : RelationOp {
 /// the output is '_distribution'.
 class Repartition : public RelationOp {
  public:
-  Repartition(
-      RelationOpPtr input,
-      Distribution distribution,
-      ColumnVector columns);
+  Repartition(RelationOpPtr input, Distribution distribution);
 
   std::string toString(bool recursive, bool detail) const override;
 

@@ -125,11 +125,11 @@ RelationOpPtr addGather(const RelationOpPtr& op) {
   if (op->relType() == RelType::kOrderBy) {
     auto order = op->distribution();
     auto final = Distribution::gather(order.orderKeys, order.orderTypes);
-    auto* gather = make<Repartition>(op, final, op->columns());
+    auto* gather = make<Repartition>(op, final);
     auto* orderBy = make<OrderBy>(gather, order.orderKeys, order.orderTypes);
     return orderBy;
   }
-  auto* gather = make<Repartition>(op, Distribution::gather(), op->columns());
+  auto* gather = make<Repartition>(op, Distribution::gather());
   return gather;
 }
 
