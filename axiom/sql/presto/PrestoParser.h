@@ -36,12 +36,26 @@ class PrestoParser {
 
   SqlStatementPtr parse(std::string_view sql, bool enableTracing = false);
 
+  /// Parses multiple semicolon-separated SQL statements.
+  /// @param sql SQL text containing one or more statements separated by
+  /// semicolons.
+  /// @param enableTracing If true, enables tracing for debugging purposes.
+  /// @return Vector of parsed statements.
+  std::vector<SqlStatementPtr> parseMultiple(
+      std::string_view sql,
+      bool enableTracing = false);
+
   facebook::axiom::logical_plan::ExprPtr parseExpression(
       std::string_view sql,
       bool enableTracing = false);
 
  private:
   SqlStatementPtr doParse(std::string_view sql, bool enableTracing);
+
+  /// Splits SQL text into individual statements by semicolon delimiters.
+  /// @param sql SQL text containing one or more statements.
+  /// @return Vector of individual SQL statements with semicolons removed.
+  static std::vector<std::string> splitStatements(std::string_view sql);
 
   const std::string defaultConnectorId_;
   const std::optional<std::string> defaultSchema_;
