@@ -23,6 +23,14 @@ namespace facebook::axiom::connector {
 
 class TestConnector;
 
+/// Partition handle for Test connector (which is not partitioned).
+struct TestPartitionHandle : public PartitionHandle {
+  const std::string& partition() const override {
+    static const std::string empty;
+    return empty;
+  }
+};
+
 /// The Table and Connector objects to which this layout correspond
 /// are specified explicitly at init time. The sample API is
 /// overridden to provide placeholder counts.
