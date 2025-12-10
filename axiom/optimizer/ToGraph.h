@@ -26,7 +26,7 @@ namespace facebook::axiom::optimizer {
 
 struct ExprDedupKey {
   Name func;
-  std::span<const ExprCP> args;
+  CPSpan<Expr> args;
 
   bool operator==(const ExprDedupKey& other) const {
     return func == other.func && std::ranges::equal(args, other.args);

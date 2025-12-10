@@ -51,8 +51,8 @@ void PlanObjectSet::unionColumns(ExprCP expr) {
   unionSet(expr->columns());
 }
 
-void PlanObjectSet::unionColumns(const ExprVector& exprs) {
-  for (auto& expr : exprs) {
+void PlanObjectSet::unionColumns(CPSpan<Expr> exprs) {
+  for (const auto* expr : exprs) {
     unionColumns(expr);
   }
 }

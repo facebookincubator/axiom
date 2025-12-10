@@ -441,7 +441,7 @@ std::pair<JoinSide, JoinSide> JoinCandidate::joinSides() const {
 }
 
 namespace {
-bool hasEqual(ExprCP key, const ExprVector& keys) {
+bool hasEqual(ExprCP key, CPSpan<Expr> keys) {
   if (key->isNot(PlanType::kColumnExpr) || !key->as<Column>()->equivalence()) {
     return false;
   }
@@ -538,8 +538,9 @@ bool NextJoin::isWorse(const NextJoin& other) const {
   }
   const auto needsShuffle =
       other.plan->distribution().needsShuffle(plan->distribution());
-  return cost.cost > other.cost.totalCost(
-                         needsShuffle ? shuffleCost(other.plan->columns()) : 0);
+  return cost.cost >=
+      other.cost.totalCost(
+          needsShuffle ? shuffleCost(other.plan->columns()) : 0);
 }
 
 size_t MemoKey::hash() const {

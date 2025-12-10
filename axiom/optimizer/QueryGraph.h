@@ -450,11 +450,11 @@ struct Equivalence {
 /// Represents one side of a join. See Join below for the meaning of the
 /// members.
 struct JoinSide {
-  const PlanObjectCP table;
-  const ExprVector& keys;
-  const float fanout;
-  const velox::core::JoinType leftJoinType;
-  const ColumnCP markColumn;
+  const PlanObjectCP table = nullptr;
+  const CPSpan<Expr> keys;
+  const float fanout = 0;
+  const velox::core::JoinType leftJoinType = velox::core::JoinType::kInner;
+  const ColumnCP markColumn = nullptr;
 };
 
 /// Represents a possibly directional equality join edge.

@@ -114,7 +114,7 @@ class WindowsCollector {
  public:
   using SpecToWindows =
       folly::F14FastMap<WindowSpec, WindowVector, WindowSpec::Hasher>;
-  SpecToWindows collect(std::span<const ExprCP> exprs) {
+  SpecToWindows collect(CPSpan<Expr> exprs) {
     for (const auto& expr : exprs) {
       collect(*expr);
     }

@@ -91,7 +91,7 @@ class PrecomputeProjection {
   /// for the expression. If specified, must correspond 1:1 to 'exprs'. May have
   /// more entries than 'exprs'.
   ExprVector toColumns(
-      const ExprVector& exprs,
+      CPSpan<Expr> exprs,
       const ColumnVector* aliases = nullptr,
       bool preserveLiterals = false);
 

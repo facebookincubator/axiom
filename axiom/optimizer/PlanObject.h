@@ -170,7 +170,7 @@ class PlanObjectSet : public BitSet {
 
   /// Adds ids of all columns 'expr' depends on.
   void unionColumns(ExprCP expr);
-  void unionColumns(const ExprVector& exprs);
+  void unionColumns(CPSpan<Expr> exprs);
 
   /// Adds ids of all objects in 'objects'.
   template <typename V>

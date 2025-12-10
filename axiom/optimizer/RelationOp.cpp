@@ -393,15 +393,23 @@ Join::Join(
   VELOX_DCHECK_EQ(leftKeys.size(), rightKeys.size());
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = fanout;
-  const auto buildRowBytes = byteSize(right->columns());
-  if (method == JoinMethod::kCross) {
-    const auto buildCost = buildRowBytes * Costs::kColumnByteCost;
-    cost_.unitCost = fanout * buildCost;
+
+  if (method == JoinMethod::kMerge) {
     return;
   }
 
   const float buildSize = right->resultCardinality();
-  const auto numKeys = leftKeys.size();
+  const auto buildRowBytes = byteSize(right->columns());
+  const auto buildBytes = buildSize * buildRowBytes;
+
+  if (method == JoinMethod::kCross) {
+    const auto buildCost = buildRowBytes * Costs::kColumnByteCost;
+    cost_.unitCost = fanout * buildCost;
+    cost_.totalBytes = buildBytes;
+    return;
+  }
+
+  const auto numKeys = static_cast<float>(leftKeys.size());
   const auto probeCost = Costs::hashTableCost(buildSize) +
       // Multiply by min(fanout, 1) because most misses will not compare and if
       // fanout > 1, there is still only one compare.
@@ -420,7 +428,7 @@ Join::Join(
 
   cost_.unitCost = probeCost + fanout * rowCost +
       buildSize * buildRowCost / cost_.inputCardinality;
-  cost_.totalBytes = buildSize * buildRowBytes;
+  cost_.totalBytes = buildBytes;
 }
 
 namespace {
@@ -467,30 +475,18 @@ const QGString& Join::historyKey() const {
   return key_;
 }
 
-Join* Join::makeCrossJoin(
-    RelationOpPtr input,
-    RelationOpPtr right,
-    ColumnVector columns) {
-  return makeNestedLoopJoin(
-      std::move(input),
-      std::move(right),
-      velox::core::JoinType::kInner,
-      ExprVector{},
-      std::move(columns));
-}
-
 Join* Join::makeNestedLoopJoin(
-    RelationOpPtr input,
-    RelationOpPtr right,
+    RelationOpPtr lhs,
+    RelationOpPtr rhs,
     velox::core::JoinType joinType,
     ExprVector filterExprs,
     ColumnVector columns) {
-  const auto fanout = right->resultCardinality();
+  const auto fanout = rhs->resultCardinality();
   return make<Join>(
       JoinMethod::kCross,
       joinType,
-      std::move(input),
-      std::move(right),
+      std::move(lhs),
+      std::move(rhs),
       ExprVector{},
       ExprVector{},
       std::move(filterExprs),

@@ -252,7 +252,7 @@ struct DerivedTable : public PlanObject {
   void flattenDt(const DerivedTable* dt);
 
   // Sets 'columns' and 'exprs'.
-  void makeProjection(const ExprVector& exprs);
+  void makeProjection(CPSpan<Expr> projection);
 };
 
 using DerivedTableP = DerivedTable*;

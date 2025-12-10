@@ -530,13 +530,13 @@ void DerivedTable::flattenDt(const DerivedTable* dt) {
   offset = dt->offset;
 }
 
-void DerivedTable::makeProjection(const ExprVector& exprs) {
+void DerivedTable::makeProjection(CPSpan<Expr> projection) {
   auto optimization = queryCtx()->optimization();
-  for (auto& expr : exprs) {
+  for (auto& expr : projection) {
     auto* column =
         make<Column>(optimization->newCName("ec"), this, expr->value());
     columns.push_back(column);
-    this->exprs.push_back(expr);
+    exprs.push_back(expr);
   }
 }
 

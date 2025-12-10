@@ -274,6 +274,18 @@ class Optimization {
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
+  void tryMergeJoin(
+      const JoinCandidate& candidate,
+      PlanState& state,
+      velox::core::JoinType joinType,
+      const RelationOpPtr& probeInput,
+      const ExprVector& probeKeys,
+      const RelationOpPtr& buildInput,
+      const ExprVector& buildKeys,
+      float fanout,
+      const ColumnVector& columns,
+      std::vector<NextJoin>& toTry) const;
+
   void joinByKeys(
       const JoinCandidate& candidate,
       PlanState& state,
@@ -286,19 +298,13 @@ class Optimization {
       float rlFanout,
       std::vector<NextJoin>& toTry);
 
-  // Adds 'candidate' on top of 'plan' as a hash join. Adds possibly needed
-  // repartitioning to both probe and build and makes a broadcast build if
-  // indicated. If 'candidate' calls for a join on the build side, plans a
-  // derived table with the build side tables and optionl 'existences' from
-  // 'candidate'.
-  void joinByHash(
+  void probeJoin(
       const RelationOpPtr& plan,
       const JoinCandidate& candidate,
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
-  // Tries a right hash join variant of left outer or left semijoin.
-  void joinByHashRight(
+  void buildJoin(
       const RelationOpPtr& plan,
       const JoinCandidate& candidate,
       PlanState& state,
