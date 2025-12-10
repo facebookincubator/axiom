@@ -17,6 +17,7 @@
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/hive/StatisticsBuilder.h"
+#include "velox/type/Type.h"
 
 namespace facebook::axiom::connector {
 
@@ -205,8 +206,37 @@ void StatisticsBuilderImpl::build(
     auto min = ints->getMinimum();
     auto max = ints->getMaximum();
     if (min.has_value() && max.has_value()) {
-      result.min = velox::Variant(min.value());
-      result.max = velox::Variant(max.value());
+      // IntegerStatisticsBuilder uses int64_t accumulator, but we need to
+      // create a Variant with the correct TypeKind for the actual column type
+      auto minValue = min.value();
+      auto maxValue = max.value();
+      switch (type_->kind()) {
+        case velox::TypeKind::TINYINT:
+          result.min = velox::Variant(static_cast<int8_t>(minValue));
+          result.max = velox::Variant(static_cast<int8_t>(maxValue));
+          break;
+        case velox::TypeKind::SMALLINT:
+          result.min = velox::Variant(static_cast<int16_t>(minValue));
+          result.max = velox::Variant(static_cast<int16_t>(maxValue));
+          break;
+        case velox::TypeKind::INTEGER:
+          result.min = velox::Variant(static_cast<int32_t>(minValue));
+          result.max = velox::Variant(static_cast<int32_t>(maxValue));
+          break;
+        case velox::TypeKind::BIGINT:
+          result.min = velox::Variant(minValue);
+          result.max = velox::Variant(maxValue);
+          break;
+        case velox::TypeKind::HUGEINT:
+          result.min = velox::Variant(static_cast<velox::int128_t>(minValue));
+          result.max = velox::Variant(static_cast<velox::int128_t>(maxValue));
+          break;
+        default:
+          // For other types, use int64_t as fallback
+          result.min = velox::Variant(minValue);
+          result.max = velox::Variant(maxValue);
+          break;
+      }
     }
   } else if (
       auto* dbl = dynamic_cast<velox::dwio::common::DoubleColumnStatistics*>(
@@ -214,8 +244,17 @@ void StatisticsBuilderImpl::build(
     auto min = dbl->getMinimum();
     auto max = dbl->getMaximum();
     if (min.has_value() && max.has_value()) {
-      result.min = velox::Variant(min.value());
-      result.max = velox::Variant(max.value());
+      // DoubleStatisticsBuilder uses double accumulator, but REAL columns
+      // need float Variants
+      auto minValue = min.value();
+      auto maxValue = max.value();
+      if (type_->kind() == velox::TypeKind::REAL) {
+        result.min = velox::Variant(static_cast<float>(minValue));
+        result.max = velox::Variant(static_cast<float>(maxValue));
+      } else {
+        result.min = velox::Variant(minValue);
+        result.max = velox::Variant(maxValue);
+      }
     }
   } else if (
       auto* str = dynamic_cast<velox::dwio::common::StringColumnStatistics*>(
