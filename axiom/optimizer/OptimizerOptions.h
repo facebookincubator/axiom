@@ -82,6 +82,8 @@ struct OptimizerOptions {
 
   bool enableSubqueryConstantFolding = true;
 
+  bool enableIndexLookupJoin = true;
+
   bool isMapAsStruct(std::string_view table, std::string_view column) const {
     if (allMapsAsStruct) {
       return true;
