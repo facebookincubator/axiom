@@ -515,8 +515,6 @@ void BaseTable::addFilter(ExprCP expr) {
   } else {
     filter.push_back(expr);
   }
-
-  queryCtx()->optimization()->filterUpdated(this);
 }
 
 namespace {

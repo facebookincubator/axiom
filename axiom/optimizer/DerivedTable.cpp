@@ -772,7 +772,6 @@ void expandConjuncts(ExprVector& conjuncts) {
 } // namespace
 
 void DerivedTable::distributeConjuncts() {
-  std::vector<DerivedTableP> changedDts;
   if (!having.empty()) {
     VELOX_CHECK_NOT_NULL(aggregation);
 
@@ -836,6 +835,7 @@ void DerivedTable::distributeConjuncts() {
   }
   VELOX_DCHECK(tables.size() > 1 || noPushdownTables.empty());
 
+  PlanObjectSet changedTables;
   for (auto i = 0; i < conjuncts.size(); ++i) {
     // No pushdown of non-deterministic except if only pushdown target is a
     // union all.
@@ -887,14 +887,12 @@ void DerivedTable::distributeConjuncts() {
           } else {
             childDt->conjuncts.push_back(imported);
           }
-          if (std::find(changedDts.begin(), changedDts.end(), childDt) ==
-              changedDts.end()) {
-            changedDts.push_back(childDt);
-          }
+          changedTables.add(childDt);
         }
       } else {
         VELOX_CHECK(tables[0]->is(PlanType::kTableNode));
         tables[0]->as<BaseTable>()->addFilter(conjuncts[i]);
+        changedTables.add(tables[0]);
       }
       conjuncts.erase(conjuncts.begin() + i);
       --i;
@@ -929,13 +927,17 @@ void DerivedTable::distributeConjuncts() {
     }
   }
 
-  // Remake initial plan for changedDTs. Calls distributeConjuncts
+  // Remake initial plan for changed tables. Calls distributeConjuncts
   // recursively for further pushdown of pushed down items. Replans
   // on returning edge of recursion, so everybody's initial plan is
   // up to date after all pushdowns.
-  for (auto* changed : changedDts) {
-    changed->makeInitialPlan();
-  }
+  changedTables.forEachMutable([&](PlanObjectP table) {
+    if (table->is(PlanType::kDerivedTableNode)) {
+      table->as<DerivedTable>()->makeInitialPlan();
+    } else {
+      queryCtx()->optimization()->filterUpdated(table->as<BaseTable>());
+    }
+  });
 }
 
 void DerivedTable::makeInitialPlan() {
