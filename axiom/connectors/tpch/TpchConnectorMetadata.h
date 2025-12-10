@@ -77,7 +77,6 @@ class TpchTableLayout : public TableLayout {
       std::vector<const Column*> partitioning,
       std::vector<const Column*> orderColumns,
       std::vector<SortOrder> sortOrder,
-      std::vector<const Column*> lookupKeys,
       velox::tpch::Table tpchTable,
       double scaleFactor)
       : TableLayout(
@@ -87,9 +86,7 @@ class TpchTableLayout : public TableLayout {
             std::move(columns),
             std::move(partitioning),
             std::move(orderColumns),
-            std::move(sortOrder),
-            std::move(lookupKeys),
-            true),
+            std::move(sortOrder)),
         tpchTable_(tpchTable),
         scaleFactor_(scaleFactor) {}
 
@@ -113,18 +110,14 @@ class TpchTableLayout : public TableLayout {
   velox::connector::ColumnHandlePtr createColumnHandle(
       const ConnectorSessionPtr& session,
       const std::string& columnName,
-      std::vector<velox::common::Subfield> subfields,
-      std::optional<velox::TypePtr> castToType,
-      SubfieldMapping subfieldMapping) const override;
+      std::vector<velox::common::Subfield> subfields) const override;
 
   velox::connector::ConnectorTableHandlePtr createTableHandle(
       const ConnectorSessionPtr& session,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       velox::core::ExpressionEvaluator& evaluator,
       std::vector<velox::core::TypedExprPtr> filters,
-      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
-      velox::RowTypePtr dataColumns,
-      std::optional<LookupKeys> lookupKeys) const override;
+      std::vector<velox::core::TypedExprPtr>& rejectedFilters) const override;
 
  private:
   const velox::tpch::Table tpchTable_;

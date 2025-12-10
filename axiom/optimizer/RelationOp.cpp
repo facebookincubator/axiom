@@ -199,7 +199,6 @@ Distribution TableScan::outputDistribution(
       std::move(orderKeys),
       std::move(orderTypes),
       distribution.numKeysUnique <= numPrefix ? distribution.numKeysUnique : 0,
-      1.0f / baseTable->filterSelectivity,
   };
 }
 

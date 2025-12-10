@@ -124,14 +124,12 @@ struct Distribution {
       ExprVector partition,
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {},
-      int32_t numKeysUnique = 0,
-      float spacing = 0)
+      int32_t numKeysUnique = 0)
       : distributionType{distributionType},
         partition{std::move(partition)},
         orderKeys{std::move(orderKeys)},
         orderTypes{std::move(orderTypes)},
-        numKeysUnique{numKeysUnique},
-        spacing{spacing} {
+        numKeysUnique{numKeysUnique} {
     VELOX_CHECK_EQ(this->orderKeys.size(), this->orderTypes.size());
   }
 
@@ -192,15 +190,6 @@ struct Distribution {
   /// row. 0 if there is no uniqueness. This can be non-0 also if data is not
   /// sorted. This indicates a uniqueness for joining.
   int32_t numKeysUnique{0};
-
-  /// Specifies the selectivity between the source of the ordered data and
-  /// 'this'. For example, if orders join lineitem and both are ordered on
-  /// orderkey and there is a 1/1000 selection on orders, the distribution after
-  /// the filter would have a spacing of 1000, meaning that lineitem is hit
-  /// every 1000 orders, meaning that an index join with lineitem would skip
-  /// 4000 rows between hits because lineitem has an average of 4 repeats of
-  /// orderkey.
-  float spacing{-1};
 
   bool isBroadcast{false};
 };

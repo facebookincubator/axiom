@@ -214,69 +214,6 @@ class PartitionType {
   }
 };
 
-// TODO Move to velox/type/Subfield.h
-using SubfieldPtr = std::shared_ptr<const velox::common::Subfield>;
-
-struct SubfieldPtrHasher {
-  size_t operator()(const SubfieldPtr& subfield) const {
-    return subfield->hash();
-  }
-};
-
-struct SubfieldPtrComparer {
-  bool operator()(const SubfieldPtr& lhs, const SubfieldPtr& rhs) const {
-    return *lhs == *rhs;
-  }
-};
-
-/// Subfield and default value for use in pushing down a complex type cast into
-/// a ColumnHandle.
-struct TargetSubfield {
-  SubfieldPtr target;
-  velox::Variant defaultValue;
-};
-
-using SubfieldMapping = folly::F14FastMap<
-    SubfieldPtr,
-    TargetSubfield,
-    SubfieldPtrHasher,
-    SubfieldPtrComparer>;
-
-/// A set of lookup keys. Lookup keys can be specified for supporting
-/// connector types when creating a ConnectorTableHandle. The corresponding
-/// DataSource will then be used with a lookup API. The keys should match a
-/// prefix of lookupKeys() of the TableLayout when making a
-/// ConnectorTableHandle. The leading keys are compared with equality. A
-/// trailing key part may be compared with range constraints. The flags have the
-/// same meaning as in common::BigintRange and related.
-struct LookupKeys {
-  /// Columns with equality constraints. Must be a prefix of the lookupKeys() in
-  /// TableLayout.
-  std::vector<std::string> equalityColumns;
-
-  /// Column on which a range condition is applied in lookup. Must be the
-  /// immediately following key in lookupKeys() order after the last column in
-  /// 'equalities'. If 'equalities' is empty, 'rangeColumn' must be the first in
-  /// lookupKeys() order.
-  std::optional<std::string> rangeColumn;
-
-  // True if the lookup has no lower bound for 'rangeColumn'.
-  bool lowerUnbounded{true};
-
-  /// true if the lookup specifies no upper bound for 'rangeColumn'.
-  bool upperUnbounded{true};
-
-  /// True if rangeColumn > range lookup lower bound.
-  bool lowerExclusive{false};
-
-  /// True if rangeColum < upper range lookup value.
-  bool upperExclusive{false};
-
-  /// True if matches for a range lookup should be returned in ascending order
-  /// of the range column. Some lookup sources may support descending order.
-  bool isAscending{true};
-};
-
 class DiscretePredicates {
  public:
   explicit DiscretePredicates(std::vector<const Column*> columns)
@@ -315,9 +252,7 @@ class TableLayout {
       std::vector<const Column*> columns,
       std::vector<const Column*> partitionColumns,
       std::vector<const Column*> orderColumns,
-      std::vector<SortOrder> sortOrder,
-      std::vector<const Column*> lookupKeys,
-      bool supportsScan);
+      std::vector<SortOrder> sortOrder);
 
   virtual ~TableLayout() = default;
 
@@ -391,22 +326,6 @@ class TableLayout {
     return nullptr;
   }
 
-  /// Returns the key columns usable for index lookup. This is modeled
-  /// separately from sortedness since some sorted files may not support lookup.
-  /// An index lookup has 0 or more equalities followed by up to one range. The
-  /// equalities need to be on contiguous, leading parts of the column list and
-  /// the range must be on the next. This coresponds to a multipart key.
-  const std::vector<const Column*>& lookupKeys() const {
-    return lookupKeys_;
-  }
-
-  /// True if a full table scan is supported. Some lookup sources prohibit this.
-  /// At the same time the dataset may be available in a scannable form in
-  /// another layout.
-  bool supportsScan() const {
-    return supportsScan_;
-  }
-
   /// The columns and their names as a RowType.
   const velox::RowTypePtr& rowType() const {
     return rowType_;
@@ -441,21 +360,11 @@ class TableLayout {
 
   /// Creates a ColumnHandle for 'columnName'. If the type is a complex type,
   /// 'subfields' specifies which subfields need to be retrievd. Empty
-  /// 'subfields' means all are returned. If 'castToType' is present, this can
-  /// be a type that the column can be cast to. The set of supported casts
-  /// depends on the connector. In specific, a map may be cast to a struct. For
-  /// casts between complex types, 'subfieldMapping' maps from the subfield in
-  /// the data to the subfield in 'castToType'. The defaultValue is produced if
-  /// the key Subfield does not occur in the data. Subfields of 'castToType'
-  /// that are not covered by 'subfieldMapping' are set to null if 'castToType'
-  /// is a struct and are absent if 'castToType' is a map. See implementing
-  /// Connector for exact set of cast and subfield semantics.
+  /// 'subfields' means all are returned.
   virtual velox::connector::ColumnHandlePtr createColumnHandle(
       const ConnectorSessionPtr& session,
       const std::string& columnName,
-      std::vector<velox::common::Subfield> subfields = {},
-      std::optional<velox::TypePtr> castToType = std::nullopt,
-      SubfieldMapping subfieldMapping = {}) const = 0;
+      std::vector<velox::common::Subfield> subfields = {}) const = 0;
 
   /// Returns a ConnectorTableHandle for use in createDataSource. 'filters' are
   /// pushed down into the DataSource. 'filters' are expressions involving
@@ -463,18 +372,13 @@ class TableLayout {
   /// system are returned in 'rejectedFilters'. 'rejectedFilters' will
   /// have to be applied to the data returned by the DataSource.
   /// 'rejectedFilters' may or may not be a subset of 'filters' or
-  /// subexpressions thereof. If 'lookupKeys' is present, these must match the
-  /// lookupKeys() in 'layout'. If 'dataColumns' is given, it must have all the
-  /// existing columns and may additionally specify casting from maps to structs
-  /// by giving a struct in the place of a map.
+  /// subexpressions thereof.
   virtual velox::connector::ConnectorTableHandlePtr createTableHandle(
       const ConnectorSessionPtr& session,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       velox::core::ExpressionEvaluator& evaluator,
       std::vector<velox::core::TypedExprPtr> filters,
-      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
-      velox::RowTypePtr dataColumns = nullptr,
-      std::optional<LookupKeys> lookupKeys = std::nullopt) const = 0;
+      std::vector<velox::core::TypedExprPtr>& rejectedFilters) const = 0;
 
  private:
   const std::string name_;
@@ -484,8 +388,6 @@ class TableLayout {
   const std::vector<const Column*> partitionColumns_;
   const std::vector<const Column*> orderColumns_;
   const std::vector<SortOrder> sortOrder_;
-  const std::vector<const Column*> lookupKeys_;
-  const bool supportsScan_;
   const velox::RowTypePtr rowType_;
 };
 

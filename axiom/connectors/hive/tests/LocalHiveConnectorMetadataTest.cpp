@@ -242,9 +242,7 @@ TEST_F(LocalHiveConnectorMetadataTest, basic) {
       columns,
       *ctx->expressionEvaluator(),
       filters,
-      rejectedFilters,
-      /*dataColumns=*/nullptr,
-      /*lookupKeys=*/{});
+      rejectedFilters);
   EXPECT_TRUE(rejectedFilters.empty());
   std::vector<ColumnStatistics> stats;
   std::vector<common::Subfield> fields;
