@@ -63,31 +63,23 @@ ColumnCP SchemaTable::findColumn(Name name) const {
   return it->second;
 }
 
-SchemaTableCP Schema::findTable(
-    std::string_view connectorId,
-    std::string_view name) const {
-  auto& tables = connectorTables_.try_emplace(connectorId).first->second;
-  auto& table = tables.try_emplace(name, Table{}).first->second;
-  if (table.schemaTable) {
-    return table.schemaTable;
+const SchemaTable& Schema::getTable(
+    const connector::Table& connectorTable) const {
+  auto*& table = tables_.try_emplace(&connectorTable).first->second;
+  if (table) {
+    return *table;
   }
 
-  VELOX_CHECK_NOT_NULL(source_);
-  auto connectorTable = source_->findTable(connectorId, name);
-  if (!connectorTable) {
-    return nullptr;
-  }
-
-  auto* schemaTable = make<SchemaTable>(*connectorTable);
+  auto* schemaTable = make<SchemaTable>(connectorTable);
   auto& schemaColumns = schemaTable->columns;
 
-  auto& tableColumns = connectorTable->columnMap();
+  auto& tableColumns = connectorTable.columnMap();
   schemaColumns.reserve(tableColumns.size());
   for (const auto& [columnName, tableColumn] : tableColumns) {
     const auto cardinality = std::max<float>(
         1,
         tableColumn->approxNumDistinct(
-            static_cast<int64_t>(connectorTable->numRows())));
+            static_cast<int64_t>(connectorTable.numRows())));
     Value value(toType(tableColumn->type()), cardinality);
     auto* column = make<Column>(toName(columnName), nullptr, value);
     schemaColumns[column->name()] = column;
@@ -105,7 +97,7 @@ SchemaTableCP Schema::findTable(
     }
   };
 
-  for (const auto* layout : connectorTable->layouts()) {
+  for (const auto* layout : connectorTable.layouts()) {
     VELOX_CHECK_NOT_NULL(layout);
     Distribution distribution;
     distribution.distributionType = DistributionType(layout->partitionType());
@@ -128,8 +120,8 @@ SchemaTableCP Schema::findTable(
     appendColumns(layout->columns(), columns);
     schemaTable->addIndex(*layout, std::move(distribution), std::move(columns));
   }
-  table = {std::move(connectorTable), schemaTable};
-  return schemaTable;
+  table = schemaTable;
+  return *table;
 }
 
 float tableCardinality(PlanObjectCP table) {

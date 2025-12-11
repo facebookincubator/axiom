@@ -40,11 +40,7 @@ class ToTextVisitor : public PlanNodeVisitor {
 
   void visit(const TableScanNode& node, PlanNodeVisitorContext& context)
       const override {
-    appendNode(
-        "TableScan",
-        node,
-        fmt::format("{}.{}", node.connectorId(), node.tableName()),
-        context);
+    appendNode("TableScan", node, node.table()->name(), context);
   }
 
   void visit(const FilterNode& node, PlanNodeVisitorContext& context)
@@ -504,8 +500,7 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
 
     const auto indent = makeIndent(myContext.indent + 3);
 
-    myContext.out << indent << "table: " << node.tableName() << std::endl;
-    myContext.out << indent << "connector: " << node.connectorId() << std::endl;
+    myContext.out << indent << "table: " << node.table()->name() << std::endl;
   }
 
   void visit(const FilterNode& node, PlanNodeVisitorContext& context)
@@ -646,15 +641,13 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
         fmt::format(
             "{} {}",
             NodeKindName::toName(node.kind()),
-            WriteKindName::toName(node.writeKind())),
+            connector::WriteKindName::toName(node.writeKind())),
         node,
         myContext);
 
     if (!myContext.skeletonOnly) {
       const auto indent = makeIndent(myContext.indent + 3);
-      myContext.out << indent << "table: " << node.tableName() << std::endl;
-      myContext.out << indent << "connector: " << node.connectorId()
-                    << std::endl;
+      myContext.out << indent << "table: " << node.table()->name() << std::endl;
       myContext.out << indent << "columns: " << node.columnNames().size()
                     << std::endl;
       appendExpressions(node.columnExpressions(), myContext);

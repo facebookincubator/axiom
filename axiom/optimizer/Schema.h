@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/connectors/SchemaResolver.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/PlanObject.h"
 
 /// Schema representation for use in query planning. All objects are
@@ -322,39 +322,12 @@ struct SchemaTable {
   QGVector<ColumnGroupCP> columnGroups;
 };
 
-/// Represents a collection of tables. Normally filled in ad hoc given
-/// the set of tables referenced by a query. The lifetime is a single
-/// optimization run. The owned objects are from the optimizer
-/// arena. Schema is owned by the application and is not from the
-/// optimization arena.  Objects of different catalogs/schemas get
-/// added to 'this' on first use. The Schema feeds from a
-/// SchemaResolver which interfaces to a local/remote metadata
-/// repository.
 class Schema {
  public:
-  /// Constructs a Schema for producing executable plans, backed by 'source'.
-  explicit Schema(const connector::SchemaResolver& source) : source_{&source} {}
-
-  /// Returns the table with 'name' or nullptr if not found, using
-  /// the connector specified by connectorId to perform table lookups.
-  /// An error is thrown if no connector with the specified ID exists.
-  SchemaTableCP findTable(std::string_view connectorId, std::string_view name)
-      const;
+  const SchemaTable& getTable(const connector::Table& connectorTable) const;
 
  private:
-  struct Table {
-    connector::TablePtr connectorTable;
-    SchemaTableCP schemaTable{nullptr};
-  };
-
-  // This map from connector ID to map of tables in that connector.
-  // In the tables map, the key is the full table name and the value is
-  // schema table (optimizer object) and connector table (connector object).
-  template <typename T>
-  using Map = folly::F14FastMap<std::string_view, T>;
-
-  const connector::SchemaResolver* source_;
-  mutable Map<Map<Table>> connectorTables_;
+  mutable folly::F14FastMap<const connector::Table*, SchemaTableCP> tables_;
 };
 
 } // namespace facebook::axiom::optimizer

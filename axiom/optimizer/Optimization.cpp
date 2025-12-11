@@ -29,7 +29,6 @@ namespace facebook::axiom::optimizer {
 Optimization::Optimization(
     SessionPtr session,
     const logical_plan::LogicalPlanNode& logicalPlan,
-    const connector::SchemaResolver& schema,
     History& history,
     std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
     velox::core::ExpressionEvaluator& evaluator,
@@ -45,7 +44,7 @@ Optimization::Optimization(
       veloxQueryCtx_(std::move(veloxQueryCtx)),
       topState_{*this, nullptr},
       negation_{toName(FunctionRegistry::instance()->negation())},
-      toGraph_{schema, evaluator, options_},
+      toGraph_{evaluator, options_},
       toVelox_{session_, runnerOptions_, options_} {
   queryCtx()->optimization() = this;
   root_ = toGraph_.makeQueryGraph(*logicalPlan_);
@@ -74,8 +73,6 @@ PlanAndStats Optimization::toVeloxPlan(
   auto veloxQueryCtx = velox::core::QueryCtx::create();
   velox::exec::SimpleExpressionEvaluator evaluator(veloxQueryCtx.get(), &pool);
 
-  auto schemaResolver = std::make_shared<connector::SchemaResolver>();
-
   VeloxHistory history;
 
   auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
@@ -83,7 +80,6 @@ PlanAndStats Optimization::toVeloxPlan(
   Optimization opt{
       session,
       logicalPlan,
-      *schemaResolver,
       history,
       veloxQueryCtx,
       evaluator,

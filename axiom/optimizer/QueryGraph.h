@@ -1100,27 +1100,26 @@ using AggregationPlanCP = const AggregationPlan*;
 
 class WritePlan : public PlanObject {
  public:
-  /// @param table The table to write to.
-  /// @param kind Indicates the type of write (create/insert/delete/update)
+  /// @param tableWrite The logical plan node describing the write.
   /// @param columnExprs Expressions producing the values to write. 1:1 with the
   /// table schema.
   WritePlan(
-      const connector::Table& table,
-      connector::WriteKind kind,
+      const logical_plan::TableWriteNode& tableWrite,
       ExprVector columnExprs)
       : PlanObject{PlanType::kWriteNode},
-        table_{table},
-        kind_{kind},
-        columnExprs_{std::move(columnExprs)} {
-    VELOX_DCHECK_EQ(columnExprs_.size(), table_.type()->size());
+        tableWrite_{tableWrite},
+        columnExprs_{std::move(columnExprs)} {}
+
+  const logical_plan::TableWriteNode& tableWrite() const {
+    return tableWrite_;
   }
 
   const connector::Table& table() const {
-    return table_;
+    return *tableWrite_.table();
   }
 
   connector::WriteKind kind() const {
-    return kind_;
+    return tableWrite_.writeKind();
   }
 
   const ExprVector& columnExprs() const {
@@ -1128,8 +1127,7 @@ class WritePlan : public PlanObject {
   }
 
  private:
-  const connector::Table& table_;
-  const connector::WriteKind kind_;
+  const logical_plan::TableWriteNode& tableWrite_;
   const ExprVector columnExprs_;
 };
 

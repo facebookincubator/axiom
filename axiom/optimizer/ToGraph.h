@@ -104,7 +104,6 @@ struct SubfieldProjections {
 class ToGraph {
  public:
   ToGraph(
-      const connector::SchemaResolver& schemaResolver,
       velox::core::ExpressionEvaluator& evaluator,
       const OptimizerOptions& options);
 

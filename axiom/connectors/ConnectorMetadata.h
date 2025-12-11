@@ -522,7 +522,7 @@ using RowsFuture = folly::SemiFuture<int64_t>;
 /// used for accessing physical organization like partitioning and sort order.
 /// The Table object maintains ownership over the objects it contains, including
 /// the TableLayout and Columns contained in the Table.
-class Table : public std::enable_shared_from_this<Table> {
+class Table {
  public:
   Table(
       std::string name,
