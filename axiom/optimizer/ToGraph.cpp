@@ -82,11 +82,9 @@ velox::ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
 } // namespace
 
 ToGraph::ToGraph(
-    const connector::SchemaResolver& schema,
     velox::core::ExpressionEvaluator& evaluator,
     const OptimizerOptions& options)
-    : schema_{schema},
-      evaluator_{evaluator},
+    : evaluator_{evaluator},
       options_{options},
       equality_{toName(FunctionRegistry::instance()->equality())} {
   auto* registry = FunctionRegistry::instance();
@@ -1736,17 +1734,10 @@ SubfieldProjections makeSubfieldColumns(
 } // namespace
 
 void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
-  const auto* schemaTable =
-      schema_.findTable(tableScan.connectorId(), tableScan.tableName());
-  VELOX_CHECK_NOT_NULL(
-      schemaTable,
-      "Table not found: {} via connector {}",
-      tableScan.tableName(),
-      tableScan.connectorId());
-
+  const auto& schemaTable = schema_.getTable(*tableScan.table());
   auto* baseTable = make<BaseTable>();
   baseTable->cname = newCName("t");
-  baseTable->schemaTable = schemaTable;
+  baseTable->schemaTable = &schemaTable;
   planLeaves_[&tableScan] = baseTable;
 
   auto channels = usedChannels(tableScan);
@@ -1757,7 +1748,7 @@ void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
 
     const auto& name = names[i];
     const auto* columnName = toName(name);
-    auto schemaColumn = schemaTable->findColumn(columnName);
+    auto schemaColumn = schemaTable.findColumn(columnName);
     auto value = schemaColumn->value();
     auto* column = make<Column>(
         columnName,
@@ -2246,18 +2237,11 @@ void ToGraph::addLimit(const lp::LimitNode& limit) {
 }
 
 void ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
-  const auto writeKind =
-      static_cast<connector::WriteKind>(tableWrite.writeKind());
+  const auto writeKind = tableWrite.writeKind();
   VELOX_CHECK_NULL(
       currentDt_->write, "Only one TableWrite per DerivedTable is allowed");
-  const auto* schemaTable =
-      schema_.findTable(tableWrite.connectorId(), tableWrite.tableName());
-  VELOX_CHECK_NOT_NULL(
-      schemaTable,
-      "Table not found: {} via connector {}",
-      tableWrite.tableName(),
-      tableWrite.connectorId());
-  const auto* connectorTable = schemaTable->connectorTable;
+  const auto& schemaTable = schema_.getTable(*tableWrite.table());
+  const auto* connectorTable = schemaTable.connectorTable;
   VELOX_DCHECK_NOT_NULL(connectorTable);
 
   ExprVector columnExprs;
@@ -2308,11 +2292,7 @@ void ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
         outputColumn);
   }
 
-  currentDt_->write = make<WritePlan>(
-      *connectorTable,
-      writeKind,
-      std::move(columnExprs),
-      tableWrite.columnNames());
+  currentDt_->write = make<WritePlan>(tableWrite, std::move(columnExprs));
 }
 
 namespace {

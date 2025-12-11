@@ -398,7 +398,7 @@ class PlanBuilder {
   PlanBuilder& tableWrite(
       std::string connectorId,
       std::string tableName,
-      WriteKind kind,
+      connector::WriteKind kind,
       std::vector<std::string> columnNames,
       const std::vector<ExprApi>& columnExprs,
       folly::F14FastMap<std::string, std::string> options = {});
@@ -408,7 +408,7 @@ class PlanBuilder {
   PlanBuilder& tableWrite(
       std::string connectorId,
       std::string tableName,
-      WriteKind kind,
+      connector::WriteKind kind,
       std::vector<std::string> columnNames,
       std::initializer_list<std::string> columnExprs,
       folly::F14FastMap<std::string, std::string> options = {}) {
@@ -425,7 +425,7 @@ class PlanBuilder {
   PlanBuilder& tableWrite(
       std::string connectorId,
       std::string tableName,
-      WriteKind kind,
+      connector::WriteKind kind,
       std::vector<std::string> columnNames,
       const std::vector<std::string>& columnExprs,
       folly::F14FastMap<std::string, std::string> options = {}) {
@@ -441,7 +441,7 @@ class PlanBuilder {
   // A shortcut for calling tableWrite with the default connector ID.
   PlanBuilder& tableWrite(
       std::string tableName,
-      WriteKind kind,
+      connector::WriteKind kind,
       std::vector<std::string> columnNames,
       const std::initializer_list<std::string>& columnExprs,
       folly::F14FastMap<std::string, std::string> options = {}) {
@@ -460,7 +460,7 @@ class PlanBuilder {
   /// of 'columnNames' must match the number of input columns.
   PlanBuilder& tableWrite(
       std::string tableName,
-      WriteKind kind,
+      connector::WriteKind kind,
       std::vector<std::string> columnNames,
       folly::F14FastMap<std::string, std::string> options = {});
 

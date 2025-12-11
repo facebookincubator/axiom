@@ -1585,15 +1585,14 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
       }
       case connector::WriteKind::kDelete:
       case connector::WriteKind::kUpdate: {
-        const auto columnNames = tableWrite.write->columnNames();
-        return {columnNames.begin(), columnNames.end()};
+        return tableWrite.write->tableWrite().columnNames();
       }
     }
   }();
 
   auto session = session_->toConnectorSession(connector->connectorId());
-  auto handle =
-      metadata->beginWrite(session, table.shared_from_this(), write.kind());
+  auto handle = metadata->beginWrite(
+      session, tableWrite.write->tableWrite().table(), write.kind());
 
   auto outputType = handle->resultType();
 

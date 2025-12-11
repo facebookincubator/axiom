@@ -67,8 +67,6 @@ void SqlQueryRunner::initialize(
   const auto [defaultConnectorId, defaultSchema] =
       initializeConnectors(*history_);
 
-  schema_ = std::make_shared<connector::SchemaResolver>();
-
   prestoParser_ = std::make_unique<presto::PrestoParser>(
       defaultConnectorId, defaultSchema, optimizerPool_.get());
 
@@ -141,14 +139,6 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     const auto* ctas = sqlStatement->as<presto::CreateTableAsSelectStatement>();
 
     auto table = createTable(*ctas);
-
-    auto originalSchemaResolver = schema_;
-    SCOPE_EXIT {
-      schema_ = originalSchemaResolver;
-    };
-
-    schema_ = std::make_shared<connector::SchemaResolver>();
-    schema_->setTargetTable(ctas->connectorId(), table);
 
     return {.results = runSql(ctas->plan(), options)};
   }
@@ -294,7 +284,6 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   optimizer::Optimization optimization(
       session,
       *logicalPlan,
-      *schema_,
       *history_,
       queryCtx,
       evaluator,

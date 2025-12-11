@@ -240,8 +240,7 @@ PlanBuilder& PlanBuilder::tableScan(
   node_ = std::make_shared<TableScanNode>(
       nextId(),
       ROW(outputNames, columnTypes),
-      connectorId,
-      tableName,
+      std::move(table),
       schema->names());
 
   return *this;
@@ -283,11 +282,7 @@ PlanBuilder& PlanBuilder::tableScan(
   }
 
   node_ = std::make_shared<TableScanNode>(
-      nextId(),
-      ROW(outputNames, columnTypes),
-      connectorId,
-      tableName,
-      columnNames);
+      nextId(), ROW(outputNames, columnTypes), std::move(table), columnNames);
 
   return *this;
 }
@@ -1681,7 +1676,7 @@ PlanBuilder& PlanBuilder::offset(int64_t offset) {
 PlanBuilder& PlanBuilder::tableWrite(
     std::string connectorId,
     std::string tableName,
-    WriteKind kind,
+    connector::WriteKind kind,
     std::vector<std::string> columnNames,
     const std::vector<ExprApi>& columnExprs,
     folly::F14FastMap<std::string, std::string> options) {
@@ -1695,10 +1690,11 @@ PlanBuilder& PlanBuilder::tableWrite(
     columnExpressions.push_back(resolveScalarTypes(expr.expr()));
   }
 
-  if (kind == WriteKind::kInsert) {
+  connector::TablePtr table;
+  if (kind != connector::WriteKind::kCreate) {
     // Check input types.
     auto* metadata = connector::ConnectorMetadata::metadata(connectorId);
-    auto table = metadata->findTable(tableName);
+    table = metadata->findTable(tableName);
     VELOX_USER_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
     const auto& schema = table->type();
 
@@ -1734,8 +1730,7 @@ PlanBuilder& PlanBuilder::tableWrite(
   node_ = std::make_shared<TableWriteNode>(
       nextId(),
       std::move(node_),
-      std::move(connectorId),
-      std::move(tableName),
+      std::move(table),
       kind,
       std::move(columnNames),
       std::move(columnExpressions),
@@ -1746,7 +1741,7 @@ PlanBuilder& PlanBuilder::tableWrite(
 
 PlanBuilder& PlanBuilder::tableWrite(
     std::string tableName,
-    WriteKind kind,
+    connector::WriteKind kind,
     std::vector<std::string> columnNames,
     folly::F14FastMap<std::string, std::string> options) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Table write node cannot be a leaf node");
