@@ -233,7 +233,7 @@ void VeloxHistory::recordVeloxExecution(
           planHistory_[keyIt->second] =
               NodePrediction{.cardinality = static_cast<float>(actualRows)};
         }
-        if (op.operatorType == "TableScanOperator") {
+        if (op.operatorType == "TableScan") {
           if (const auto* scan = findScan(op.planNodeId, plan.plan)) {
             std::string handle = scan->tableHandle()->toString();
             recordLeafSelectivity(
