@@ -110,6 +110,11 @@ ToGraph::ToGraph(
   if (auto cardinality = registry->cardinality()) {
     cardinality_ = toName(cardinality.value());
   }
+
+  // Initialize between, and, gte, lte for rewriting between to and(gte, lte)
+  between_ = toName("between");
+  gte_ = toName("gte");
+  lte_ = toName("lte");
 }
 
 void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
@@ -290,23 +295,19 @@ lp::ValuesNodePtr tryFoldConstantDt(
 
   RelationOpPtr plan = make<Values>(*valuesTable, valuesTable->columns);
 
-  if (!baseTable->columnFilters.empty() || !baseTable->filter.empty()) {
-    auto combinedFilters = baseTable->columnFilters;
-    if (!baseTable->filter.empty()) {
-      combinedFilters.reserve(
-          baseTable->columnFilters.size() + baseTable->filter.size());
-      combinedFilters.insert(
-          combinedFilters.end(),
-          baseTable->filter.begin(),
-          baseTable->filter.end());
-    }
-    plan = make<Filter>(plan, combinedFilters);
+  auto combinedFilters = baseTable->allFilters();
+  if (!combinedFilters.empty()) {
+    // Create temporary PlanState for Filter constructor
+    PlanState tempState(*queryCtx()->optimization(), nullptr);
+    plan = make<Filter>(tempState, plan, combinedFilters);
   }
 
   plan = Optimization::planSingleAggregation(dt, plan);
 
   if (!dt->having.empty()) {
-    plan = make<Filter>(plan, dt->having);
+    // Create temporary PlanState for Filter constructor
+    PlanState tempState(*queryCtx()->optimization(), nullptr);
+    plan = make<Filter>(tempState, plan, dt->having);
   }
 
   if (!Project::isRedundant(plan, dt->exprs, dt->columns)) {
@@ -384,7 +385,13 @@ void ToGraph::translateConjuncts(const lp::ExprPtr& input, ExprVector& flat) {
   } else {
     auto translatedExpr = translateExpr(input);
     if (!isConstantTrue(translatedExpr)) {
-      flat.push_back(translatedExpr);
+      // If the translated expression is an 'and' call, flatten it
+      if (translatedExpr->is(PlanType::kCallExpr) &&
+          translatedExpr->as<Call>()->name() == SpecialFormCallNames::kAnd) {
+        flattenAll(translatedExpr, SpecialFormCallNames::kAnd, flat);
+      } else {
+        flat.push_back(translatedExpr);
+      }
     }
   }
 }
@@ -844,20 +851,36 @@ bool shouldInvert(ExprCP left, ExprCP right) {
 
 } // namespace
 
-void ToGraph::canonicalizeCall(Name& name, ExprVector& args) {
+std::optional<ExprCP> ToGraph::canonicalizeCall(Name& name, ExprVector& args) {
+  // Rewrite between(x, a, b) to and(gte(x, a), lte(x, b))
+  if (args.size() == 3 && name == between_) {
+    auto* boolType = toType(velox::BOOLEAN());
+    // Build gte(args[0], args[1])
+    auto* gteExpr =
+        deduppedCall(gte_, Value(boolType, 2), {args[0], args[1]}, {});
+    // Build lte(args[0], args[2])
+    auto* lteExpr =
+        deduppedCall(lte_, Value(boolType, 2), {args[0], args[2]}, {});
+    // Build and(gteExpr, lteExpr)
+    auto* andExpr = deduppedCall(
+        SpecialFormCallNames::kAnd, Value(boolType, 2), {gteExpr, lteExpr}, {});
+    return andExpr;
+  }
+
   if (args.size() != 2) {
-    return;
+    return std::nullopt;
   }
 
   auto it = reversibleFunctions_.find(name);
   if (it == reversibleFunctions_.end()) {
-    return;
+    return std::nullopt;
   }
 
   if (shouldInvert(args[0], args[1])) {
     std::swap(args[0], args[1]);
     name = it->second;
   }
+  return std::nullopt;
 }
 
 ExprCP ToGraph::deduppedCall(
@@ -865,7 +888,11 @@ ExprCP ToGraph::deduppedCall(
     Value value,
     ExprVector args,
     FunctionSet flags) {
-  canonicalizeCall(name, args);
+  // Check if canonicalizeCall returns a rewritten expression
+  if (auto rewritten = canonicalizeCall(name, args)) {
+    return rewritten.value();
+  }
+
   ExprDedupKey key = {name, args};
 
   auto [it, emplaced] = functionDedup_.try_emplace(key);
@@ -1636,6 +1663,7 @@ SubfieldProjections makeSubfieldColumns(
     BaseTable& baseTable,
     ColumnCP column,
     const PathSet& paths) {
+  // cardinality is refreshed in refreashAfterStats().
   const float cardinality =
       baseTable.schemaTable->cardinality * baseTable.filterSelectivity;
 
@@ -1659,6 +1687,27 @@ SubfieldProjections makeSubfieldColumns(
   return projections;
 }
 } // namespace
+
+void ToGraph::refreshAfterStats() {
+  for (const auto& [column, projections] : allColumnSubfields_) {
+    // Get the BaseTable from the column's relation
+    if (!column->relation()->is(PlanType::kTableNode)) {
+      continue;
+    }
+    auto* baseTable = column->relation()->as<BaseTable>();
+
+    // Calculate the updated cardinality
+    const float cardinality =
+        baseTable->firstLayoutScanCardinality * baseTable->filterSelectivity;
+
+    // Update the cardinality in the Value of each expr in the
+    // SubfieldProjections
+    for (const auto& [path, expr] : projections.pathToExpr) {
+      auto& value = const_cast<Value&>(expr->value());
+      const_cast<float&>(value.cardinality) = cardinality;
+    }
+  }
+}
 
 void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
   const auto* schemaTable =
@@ -1734,6 +1783,7 @@ void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
   auto scanType = optimization->subfieldPushdownScanType(
       baseTable, baseTable->columns, top, map);
 
+  baseTable->scanType = toType(scanType);
   optimization->setLeafSelectivity(*baseTable, scanType);
   currentDt_->addTable(baseTable);
 }
