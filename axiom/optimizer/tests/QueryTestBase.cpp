@@ -15,7 +15,6 @@
  */
 
 #include "axiom/optimizer/tests/QueryTestBase.h"
-#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/VeloxHistory.h"
@@ -144,15 +143,6 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
     const runner::MultiFragmentPlan::Options& options,
     const std::optional<std::string>& planFilePathPrefix) {
-  connector::SchemaResolver schemaResolver;
-  return planVelox(plan, schemaResolver, options, planFilePathPrefix);
-}
-
-optimizer::PlanAndStats QueryTestBase::planVelox(
-    const logical_plan::LogicalPlanNodePtr& plan,
-    const connector::SchemaResolver& schemaResolver,
-    const runner::MultiFragmentPlan::Options& options,
-    const std::optional<std::string>& planFilePathPrefix) {
   auto& queryCtx = getQueryCtx();
 
   auto allocator = std::make_unique<HashStringAllocator>(optimizerPool_.get());
@@ -184,7 +174,6 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
   optimizer::Optimization opt(
       session,
       *plan,
-      schemaResolver,
       *history_,
       queryCtx,
       evaluator,
@@ -214,14 +203,6 @@ TestResult QueryTestBase::runVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
     const runner::MultiFragmentPlan::Options& options) {
   auto veloxPlan = planVelox(plan, options);
-  return runFragmentedPlan(veloxPlan);
-}
-
-TestResult QueryTestBase::runVelox(
-    const logical_plan::LogicalPlanNodePtr& plan,
-    const connector::SchemaResolver& schemaResolver,
-    const runner::MultiFragmentPlan::Options& options) {
-  auto veloxPlan = planVelox(plan, schemaResolver, options);
   return runFragmentedPlan(veloxPlan);
 }
 

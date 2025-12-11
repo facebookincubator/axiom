@@ -35,7 +35,6 @@ class Optimization {
   Optimization(
       SessionPtr session,
       const logical_plan::LogicalPlanNode& logicalPlan,
-      const connector::SchemaResolver& schemaResolver,
       History& history,
       std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
       velox::core::ExpressionEvaluator& evaluator,

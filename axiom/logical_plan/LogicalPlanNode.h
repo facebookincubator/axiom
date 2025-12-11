@@ -16,6 +16,7 @@
 #pragma once
 
 #include "axiom/common/Enums.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/Expr.h"
 #include "velox/type/Variant.h"
 #include "velox/vector/ComplexVector.h"
@@ -178,19 +179,16 @@ class TableScanNode : public LogicalPlanNode {
  public:
   /// @param id Unique ID of the plan node.
   /// @param outputType Output schema. A list of column names and types.
-  /// @param connectorId ID of the connector to use to access the table.
-  /// @param tableName Table name.
+  /// @param table The table to scan.
   /// @param columnNames A list of column names. Must align with 'outputType',
   /// which may expose columns under different names.
   TableScanNode(
       std::string id,
       velox::RowTypePtr outputType,
-      std::string connectorId,
-      std::string tableName,
+      connector::TablePtr table,
       std::vector<std::string> columnNames)
       : LogicalPlanNode{NodeKind::kTableScan, std::move(id), {}, std::move(outputType)},
-        connectorId_{std::move(connectorId)},
-        tableName_{std::move(tableName)},
+        table_{std::move(table)},
         columnNames_{std::move(columnNames)} {
     VELOX_USER_CHECK_EQ(outputType_->size(), columnNames_.size());
 
@@ -201,12 +199,8 @@ class TableScanNode : public LogicalPlanNode {
     }
   }
 
-  const std::string& connectorId() const {
-    return connectorId_;
-  }
-
-  const std::string& tableName() const {
-    return tableName_;
+  const connector::TablePtr& table() const {
+    return table_;
   }
 
   const std::vector<std::string>& columnNames() const {
@@ -217,8 +211,7 @@ class TableScanNode : public LogicalPlanNode {
       const override;
 
  private:
-  const std::string connectorId_;
-  const std::string tableName_;
+  const connector::TablePtr table_;
   const std::vector<std::string> columnNames_;
 };
 
@@ -673,32 +666,6 @@ class UnnestNode : public LogicalPlanNode {
 
 using UnnestNodePtr = std::shared_ptr<const UnnestNode>;
 
-/// Specifies what type of write is intended when initiating or concluding a
-/// write operation.
-enum class WriteKind {
-  // A write operation to a new table which does not yet exist in the connector.
-  // Covers both creation of an empty table and create as select operations.
-  kCreate = 1,
-
-  // Rows are added and all columns must be specified for the TableWriter.
-  // Covers insert, Hive partition replacement or any other operation which adds
-  // whole rows.
-  kInsert = 2,
-
-  // Individual rows are deleted. Only row ids as per
-  // Table::rowIdHandles() are passed to the TableWriter.
-  kDelete = 3,
-
-  // Column values in individual rows are changed. The TableWriter
-  // gets first the row ids as per Table::rowIdHandles()
-  // and then new values for the columns being changed. The new values
-  // may overlap with row ids if the row id is a set of primary key
-  // columns.
-  kUpdate = 4,
-};
-
-AXIOM_DECLARE_ENUM_NAME(WriteKind);
-
 /// Implements create/insert/delete/update as per 'writeKind'.
 ///
 /// The output schema contains a single BIGINT column named 'rows'. The value of
@@ -707,8 +674,7 @@ class TableWriteNode : public LogicalPlanNode {
  public:
   /// @param id Unique ID of the plan node.
   /// @param input Input node.
-  /// @param connectorId ID of the connector to use to access the table.
-  /// @param tableName Table name.
+  /// @param table The table to write to.
   /// @param writeKind The type of write (create/insert/delete/update).
   /// @param columnNames A subset of columns in the table being written.
   /// Correspond 1:1 to 'columnExpressions'. 'columnNames' must refer to columns
@@ -724,22 +690,24 @@ class TableWriteNode : public LogicalPlanNode {
   TableWriteNode(
       std::string id,
       LogicalPlanNodePtr input,
-      std::string connectorId,
-      std::string tableName,
-      WriteKind writeKind,
+      connector::TablePtr table,
+      connector::WriteKind writeKind,
       std::vector<std::string> columnNames,
       std::vector<ExprPtr> columnExpressions,
       folly::F14FastMap<std::string, std::string> options = {});
 
-  const std::string& connectorId() const {
-    return connectorId_;
+  void setTable(connector::TablePtr table) const {
+    VELOX_CHECK_NULL(table_);
+    VELOX_CHECK_EQ(writeKind_, connector::WriteKind::kCreate);
+    table_ = std::move(table);
   }
 
-  const std::string& tableName() const {
-    return tableName_;
+  const connector::TablePtr& table() const {
+    VELOX_CHECK_NOT_NULL(table_);
+    return table_;
   }
 
-  WriteKind writeKind() const {
+  connector::WriteKind writeKind() const {
     return writeKind_;
   }
 
@@ -759,9 +727,8 @@ class TableWriteNode : public LogicalPlanNode {
       const override;
 
  private:
-  const std::string connectorId_;
-  const std::string tableName_;
-  const WriteKind writeKind_;
+  mutable connector::TablePtr table_;
+  const connector::WriteKind writeKind_;
   const std::vector<std::string> columnNames_;
   const std::vector<ExprPtr> columnExpressions_;
   const folly::F14FastMap<std::string, std::string> options_;
@@ -772,4 +739,3 @@ using TableWriteNodePtr = std::shared_ptr<const TableWriteNode>;
 } // namespace facebook::axiom::logical_plan
 
 AXIOM_ENUM_FORMATTER(facebook::axiom::logical_plan::SetOperation);
-AXIOM_ENUM_FORMATTER(facebook::axiom::logical_plan::WriteKind);
