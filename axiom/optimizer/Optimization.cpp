@@ -1386,7 +1386,7 @@ void Optimization::joinByHash(
       JoinMethod::kHash,
       joinType,
       probeInput,
-      buildOp,
+      buildInput,
       std::move(probeKeys),
       std::move(buildKeys),
       candidate.join->filter(),
@@ -1460,9 +1460,6 @@ void Optimization::joinByHashRight(
   PrecomputeProjection precomputeBuild(buildInput, state.dt);
   auto buildKeys = precomputeBuild.toColumns(build.keys);
   buildInput = std::move(precomputeBuild).maybeProject();
-
-  const bool buildOnly = joinType == velox::core::JoinType::kRightSemiFilter ||
-      joinType == velox::core::JoinType::kRightSemiProject;
 
   PlanObjectSet buildColumns;
   buildColumns.unionObjects(buildInput->columns());
@@ -1544,7 +1541,7 @@ void Optimization::joinByHashRight(
       JoinMethod::kHash,
       rightJoinType,
       probeInput,
-      buildOp,
+      buildInput,
       std::move(probeKeys),
       std::move(buildKeys),
       candidate.join->filter(),
@@ -1684,7 +1681,7 @@ RelationOpPtr Optimization::placeSingleRowDt(
 
   auto rightOp = rightPlan->op;
   if (needsShuffle) {
-    rightOp = make<Repartition>(rightOp, broadcast, rightOp->columns());
+    rightOp = make<Repartition>(rightOp, broadcast);
   }
 
   auto resultColumns = plan->columns();
