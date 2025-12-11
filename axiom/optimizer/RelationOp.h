@@ -111,7 +111,6 @@ enum class RelType {
   kFilter,
   kProject,
   kJoin,
-  kHashBuild,
   kAggregation,
   kOrderBy,
   kUnionAll,
@@ -396,10 +395,7 @@ struct Values : RelationOp {
 /// the output is '_distribution'.
 class Repartition : public RelationOp {
  public:
-  Repartition(
-      RelationOpPtr input,
-      Distribution distribution,
-      ColumnVector columns);
+  Repartition(RelationOpPtr input, Distribution distribution);
 
   std::string toString(bool recursive, bool detail) const override;
 
@@ -509,28 +505,6 @@ struct Join : public RelationOp {
 };
 
 using JoinCP = const Join*;
-
-/// Occurs as right input of JoinOp with type kHash. Contains the
-/// cost and memory specific to building the table. Can be
-/// referenced from multiple JoinOps. The unit cost * input
-/// cardinality of this is counted as setup cost in the first
-/// referencing join and not counted in subsequent ones.
-struct HashBuild : public RelationOp {
-  HashBuild(RelationOpPtr input, ExprVector keys, PlanP plan);
-
-  const ExprVector keys;
-
-  // The plan producing the build data. Used for deduplicating joins.
-  PlanP plan;
-
-  std::string toString(bool recursive, bool detail) const override;
-
-  void accept(
-      const RelationOpVisitor& visitor,
-      RelationOpVisitorContext& context) const override;
-};
-
-using HashBuildCP = const HashBuild*;
 
 struct Unnest : public RelationOp {
   Unnest(

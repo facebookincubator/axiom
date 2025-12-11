@@ -123,11 +123,6 @@ class ToTextVisitor : public RelationOpVisitor {
     printInput(*op.right, myCtx);
   }
 
-  void visit(const HashBuild& op, RelationOpVisitorContext& context)
-      const override {
-    visitDefault(op, context);
-  }
-
   void visit(const Aggregation& op, RelationOpVisitorContext& context)
       const override {
     const auto numGrouppingKeys = op.groupingKeys.size();
@@ -295,11 +290,6 @@ class OnelineVisitor : public RelationOpVisitor {
 
     op.right->accept(*this, context);
     myCtx.out << ")";
-  }
-
-  void visit(const HashBuild& op, RelationOpVisitorContext& context)
-      const override {
-    visitDefault(op, context);
   }
 
   void visit(const Aggregation& op, RelationOpVisitorContext& context)

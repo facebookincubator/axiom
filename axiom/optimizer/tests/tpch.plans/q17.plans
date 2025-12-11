@@ -51,24 +51,21 @@ Project -> dt1.avg_yearly
             t2.l_partkey = t3.p_partkey
           TableScan -> t2.l_partkey, t2.l_quantity, t2.l_extendedprice
             table: lineitem
-          HashBuild -> t3.p_partkey
-            TableScan -> t3.p_partkey
-              table: part
-              single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
-        HashBuild -> dt4.__gk6, dt4.expr
-          Project -> dt4.__gk6, dt4.expr
-              dt4.__gk6 := t5.l_partkey
-              dt4.expr := multiply(dt4.avg, 0.2)
-            Aggregation (t5.l_partkey) -> t5.l_partkey, dt4.avg
-                dt4.avg := avg(t5.l_quantity)
-              Join LEFT SEMI (FILTER) Hash -> t5.l_partkey, t5.l_quantity
-                  t5.l_partkey = t3.p_partkey
-                TableScan -> t5.l_partkey, t5.l_quantity
-                  table: lineitem
-                HashBuild -> t3.p_partkey
-                  TableScan -> t3.p_partkey
-                    table: part
-                    single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
+          TableScan -> t3.p_partkey
+            table: part
+            single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
+        Project -> dt4.__gk6, dt4.expr
+            dt4.__gk6 := t5.l_partkey
+            dt4.expr := multiply(dt4.avg, 0.2)
+          Aggregation (t5.l_partkey) -> t5.l_partkey, dt4.avg
+              dt4.avg := avg(t5.l_quantity)
+            Join LEFT SEMI (FILTER) Hash -> t5.l_partkey, t5.l_quantity
+                t5.l_partkey = t3.p_partkey
+              TableScan -> t5.l_partkey, t5.l_quantity
+                table: lineitem
+              TableScan -> t3.p_partkey
+                table: part
+                single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
 
 
 Executable Velox plan:

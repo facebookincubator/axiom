@@ -40,9 +40,7 @@ class TestTableLayout : public TableLayout {
             std::move(columns),
             /*partitionColumns=*/{},
             /*orderColumns=*/{},
-            /*sortOrder=*/{},
-            /*lookupKeys=*/{},
-            /*supportsScan=*/true) {}
+            /*sortOrder=*/{}) {}
 
   /// Records discrete values to use in 'discretePredicateColumns' and
   /// 'discretePredicates' APIs. If called repeatedly, overwrites previous
@@ -70,18 +68,14 @@ class TestTableLayout : public TableLayout {
   velox::connector::ColumnHandlePtr createColumnHandle(
       const ConnectorSessionPtr& session,
       const std::string& columnName,
-      std::vector<velox::common::Subfield> subfields,
-      std::optional<velox::TypePtr> castToType,
-      SubfieldMapping subfieldMapping) const override;
+      std::vector<velox::common::Subfield> subfields = {}) const override;
 
   velox::connector::ConnectorTableHandlePtr createTableHandle(
       const ConnectorSessionPtr& session,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       velox::core::ExpressionEvaluator& evaluator,
       std::vector<velox::core::TypedExprPtr> filters,
-      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
-      velox::RowTypePtr dataColumns,
-      std::optional<LookupKeys> lookupKeys) const override;
+      std::vector<velox::core::TypedExprPtr>& rejectedFilters) const override;
 
  private:
   std::vector<const Column*> discreteValueColumns_;

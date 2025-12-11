@@ -125,11 +125,11 @@ RelationOpPtr addGather(const RelationOpPtr& op) {
   if (op->relType() == RelType::kOrderBy) {
     auto order = op->distribution();
     auto final = Distribution::gather(order.orderKeys, order.orderTypes);
-    auto* gather = make<Repartition>(op, final, op->columns());
+    auto* gather = make<Repartition>(op, final);
     auto* orderBy = make<OrderBy>(gather, order.orderKeys, order.orderTypes);
     return orderBy;
   }
-  auto* gather = make<Repartition>(op, Distribution::gather(), op->columns());
+  auto* gather = make<Repartition>(op, Distribution::gather());
   return gather;
 }
 
@@ -1491,8 +1491,6 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeScan(*op->as<TableScan>(), fragment, stages);
     case RelType::kJoin:
       return makeJoin(*op->as<Join>(), fragment, stages);
-    case RelType::kHashBuild:
-      return makeFragment(op->input(), fragment, stages);
     case RelType::kUnionAll:
       return makeUnionAll(*op->as<UnionAll>(), fragment, stages);
     case RelType::kValues:

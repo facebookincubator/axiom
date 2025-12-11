@@ -73,20 +73,19 @@ Project (redundant) -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
                 dt5.o_custkey := t6.o_custkey
               TableScan -> t6.o_custkey
                 table: orders
-            HashBuild -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
-              Filter -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
-                  gt(t2.c_acctbal, dt3.avg)
-                Join INNER Cross -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
-                  TableScan -> t2.c_custkey, t2.c_phone, t2.c_acctbal
-                    table: customer
-                    single-column filters: __in(substr(t2.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
-                  Project (redundant) -> dt3.avg
-                      dt3.avg := dt3.avg
-                    Aggregation -> dt3.avg
-                        dt3.avg := avg(t4.c_acctbal)
-                      TableScan -> t4.c_acctbal
-                        table: customer
-                        single-column filters: gt(t4.c_acctbal, 0) and __in(substr(t4.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
+            Filter -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
+                gt(t2.c_acctbal, dt3.avg)
+              Join INNER Cross -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
+                TableScan -> t2.c_custkey, t2.c_phone, t2.c_acctbal
+                  table: customer
+                  single-column filters: __in(substr(t2.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
+                Project (redundant) -> dt3.avg
+                    dt3.avg := dt3.avg
+                  Aggregation -> dt3.avg
+                      dt3.avg := avg(t4.c_acctbal)
+                    TableScan -> t4.c_acctbal
+                      table: customer
+                      single-column filters: gt(t4.c_acctbal, 0) and __in(substr(t4.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
 
 
 Executable Velox plan:
