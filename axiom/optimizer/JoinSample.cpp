@@ -148,7 +148,11 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
   // (hash % mod) < lim
   ExprCP filterExpr = makeCall(
       kSample, velox::BOOLEAN(), hashColumn, bigintLit(mod), bigintLit(lim));
-  RelationOpPtr filter = make<Filter>(project, ExprVector{filterExpr});
+
+  // Create temporary PlanState for Filter constructor
+  PlanState tempState(*queryCtx()->optimization(), nullptr);
+  RelationOpPtr filter =
+      make<Filter>(tempState, project, ExprVector{filterExpr});
 
   auto plan = queryCtx()->optimization()->toVeloxPlan(filter);
   return std::make_shared<runner::LocalRunner>(
