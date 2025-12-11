@@ -295,16 +295,8 @@ lp::ValuesNodePtr tryFoldConstantDt(
 
   RelationOpPtr plan = make<Values>(*valuesTable, valuesTable->columns);
 
-  if (!baseTable->columnFilters.empty() || !baseTable->filter.empty()) {
-    auto combinedFilters = baseTable->columnFilters;
-    if (!baseTable->filter.empty()) {
-      combinedFilters.reserve(
-          baseTable->columnFilters.size() + baseTable->filter.size());
-      combinedFilters.insert(
-          combinedFilters.end(),
-          baseTable->filter.begin(),
-          baseTable->filter.end());
-    }
+  auto combinedFilters = baseTable->allFilters();
+  if (!combinedFilters.empty()) {
     // Create temporary PlanState for Filter constructor
     PlanState tempState(*queryCtx()->optimization(), nullptr);
     plan = make<Filter>(tempState, plan, combinedFilters);
@@ -1671,6 +1663,7 @@ SubfieldProjections makeSubfieldColumns(
     BaseTable& baseTable,
     ColumnCP column,
     const PathSet& paths) {
+  // cardinality is refreshed in refreashAfterStats().
   const float cardinality =
       baseTable.schemaTable->cardinality * baseTable.filterSelectivity;
 
@@ -1694,6 +1687,27 @@ SubfieldProjections makeSubfieldColumns(
   return projections;
 }
 } // namespace
+
+void ToGraph::refreshAfterStats() {
+  for (const auto& [column, projections] : allColumnSubfields_) {
+    // Get the BaseTable from the column's relation
+    if (!column->relation()->is(PlanType::kTableNode)) {
+      continue;
+    }
+    auto* baseTable = column->relation()->as<BaseTable>();
+
+    // Calculate the updated cardinality
+    const float cardinality =
+        baseTable->firstLayoutScanCardinality * baseTable->filterSelectivity;
+
+    // Update the cardinality in the Value of each expr in the
+    // SubfieldProjections
+    for (const auto& [path, expr] : projections.pathToExpr) {
+      auto& value = const_cast<Value&>(expr->value());
+      const_cast<float&>(value.cardinality) = cardinality;
+    }
+  }
+}
 
 void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
   const auto* schemaTable =
@@ -1769,6 +1783,7 @@ void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
   auto scanType = optimization->subfieldPushdownScanType(
       baseTable, baseTable->columns, top, map);
 
+  baseTable->scanType = toType(scanType);
   optimization->setLeafSelectivity(*baseTable, scanType);
   currentDt_->addTable(baseTable);
 }

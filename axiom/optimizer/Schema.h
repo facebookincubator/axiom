@@ -42,6 +42,12 @@ struct Value {
   Value(const velox::Type* type, float cardinality)
       : type{type}, cardinality{cardinality} {}
 
+  // Default copy constructor
+  Value(const Value&) = default;
+
+  /// Assignment operator that checks type equality and assigns other members.
+  Value& operator=(const Value& other);
+
   /// Returns the average byte size of a value when it occurs as an intermediate
   /// result without dictionary or other encoding.
   float byteSize() const;
@@ -52,7 +58,7 @@ struct Value {
 
   // Count of distinct values. Is not exact and is used for estimating
   // cardinalities of group bys or joins.
-  const float cardinality{1};
+  float cardinality{1};
 
   // Sentinel value for unknown trueFraction.
   static constexpr float kUnknown = -1.0f;
@@ -359,5 +365,11 @@ class Schema {
   const connector::SchemaResolver* source_;
   mutable Map<Map<Table>> connectorTables_;
 };
+
+/// Helper to register an optional Variant with the QueryGraphContext.
+/// Returns nullptr if the optional has no value, otherwise returns a pointer
+/// to a registered copy that lives for the duration of QueryGraphContext.
+const velox::Variant* registerOptionalVariant(
+    const std::optional<velox::Variant>& opt);
 
 } // namespace facebook::axiom::optimizer

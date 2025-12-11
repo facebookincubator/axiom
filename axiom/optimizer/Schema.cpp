@@ -33,6 +33,9 @@ const auto& orderTypeNames() {
   };
   return kNames;
 }
+} // namespace
+
+AXIOM_DEFINE_ENUM_NAME(OrderType, orderTypeNames);
 
 /// Helper to register an optional Variant with the QueryGraphContext.
 /// Returns nullptr if the optional has no value, otherwise returns a pointer
@@ -44,9 +47,21 @@ const velox::Variant* registerOptionalVariant(
   }
   return registerVariant(opt.value());
 }
-} // namespace
 
-AXIOM_DEFINE_ENUM_NAME(OrderType, orderTypeNames);
+Value& Value::operator=(const Value& other) {
+  VELOX_CHECK(
+      type == other.type,
+      "Cannot assign Value with different type: {} vs {}",
+      (type ? type->toString() : "null"),
+      (other.type ? other.type->toString() : "null"));
+  min = other.min;
+  max = other.max;
+  const_cast<float&>(cardinality) = other.cardinality;
+  trueFraction = other.trueFraction;
+  nullFraction = other.nullFraction;
+  nullable = other.nullable;
+  return *this;
+}
 
 float Value::byteSize() const {
   if (type->isFixedWidth()) {

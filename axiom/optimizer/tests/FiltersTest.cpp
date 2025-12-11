@@ -145,14 +145,7 @@ class FiltersTest : public HiveQueriesTestBase {
     const BaseTable* table = findBaseTable(rootDt, tableName);
     EXPECT_NE(table, nullptr) << "Table '" << tableName << "' not found";
 
-    ExprVector allFilters;
-    allFilters.insert(
-        allFilters.end(),
-        table->columnFilters.begin(),
-        table->columnFilters.end());
-    allFilters.insert(
-        allFilters.end(), table->filter.begin(), table->filter.end());
-    return allFilters;
+    return table->allFilters();
   }
 };
 

@@ -22,6 +22,7 @@
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
 #include "axiom/optimizer/VeloxHistory.h"
+#include "velox/common/base/AsyncSource.h"
 #include "velox/expression/Expr.h"
 
 namespace facebook::axiom::optimizer {
@@ -52,9 +53,8 @@ Optimization::Optimization(
   root_->distributeConjuncts();
   root_->addImpliedJoins();
   root_->linkTablesToJoins();
-  for (auto* join : root_->joins) {
-    join->guessFanout();
-  }
+  statsFetched_ = true;
+  getInitialStats();
   toGraph_.setDtOutput(root_, *logicalPlan_);
 }
 
@@ -2187,6 +2187,150 @@ ExprCP Optimization::combineLeftDeep(Name func, const ExprVector& exprs) {
         result->functions() | copy[i]->functions());
   }
   return result;
+}
+
+namespace {
+// Helper to recursively traverse the DerivedTable tree and collect BaseTables
+// and DerivedTables in dependency order (children before parents).
+void collectTablesRecursive(
+    DerivedTableCP dt,
+    std::vector<BaseTable*>& baseTables,
+    std::vector<DerivedTableP>& derivedTables,
+    folly::F14FastSet<DerivedTableCP>& visited) {
+  if (!visited.insert(dt).second) {
+    return; // Already visited
+  }
+
+  // Recursively process child DerivedTables in tables
+  for (auto* table : dt->tables) {
+    if (table->is(PlanType::kDerivedTableNode)) {
+      collectTablesRecursive(
+          table->as<DerivedTable>(), baseTables, derivedTables, visited);
+    } else if (table->is(PlanType::kTableNode)) {
+      baseTables.push_back(const_cast<BaseTable*>(table->as<BaseTable>()));
+    }
+  }
+
+  // Also follow union terms in DerivedTable::children
+  for (auto* childDt : dt->children) {
+    collectTablesRecursive(childDt, baseTables, derivedTables, visited);
+  }
+
+  // Add this DerivedTable after its children
+  derivedTables.push_back(const_cast<DerivedTable*>(dt));
+}
+
+void makeUnionDistributionAndStats(DerivedTableP setDt) {
+  for (const auto* childDt : setDt->children) {
+    VELOX_DCHECK_EQ(childDt->columns.size(), setDt->columns.size());
+
+    const auto& plan = *childDt->bestInitialPlan()->op;
+    setDt->cardinality += plan.resultCardinality();
+
+    // This doesn't look correct because childValue and setValue
+    // can have same address. Even if we fix code to sum up correctly.
+    // Child columns still will share cardinality with set columns.
+    // But this is how it was implemented initially.
+    // Let's revisit this later.
+    for (size_t i = 0; i < setDt->columns.size(); ++i) {
+      const auto& setValue = setDt->columns[i]->value().cardinality;
+      const auto& childValue = plan.columns()[i]->value().cardinality;
+      // The Column is created in setDt before all branches are planned so the
+      // value is mutated here.
+      const_cast<float&>(setValue) += childValue;
+    }
+  }
+}
+} // namespace
+
+void Optimization::getInitialStats() {
+  std::vector<BaseTable*> baseTables;
+  std::vector<DerivedTableP> derivedTables;
+  folly::F14FastSet<DerivedTableCP> visited;
+
+  // Collect all BaseTables and DerivedTables in dependency order
+  collectTablesRecursive(root_, baseTables, derivedTables, visited);
+
+  // Create AsyncSource for each BaseTable to fetch leaf selectivity
+  using ErrorPtr = std::exception_ptr;
+  std::vector<std::shared_ptr<velox::AsyncSource<ErrorPtr>>> asyncSources;
+  asyncSources.reserve(baseTables.size());
+
+  for (auto* baseTable : baseTables) {
+    // Capture the current queryCtx to use in the async operation
+    auto* capturedCtx = queryCtx();
+    auto asyncSource = std::make_shared<velox::AsyncSource<ErrorPtr>>(
+        [this, baseTable, capturedCtx]() -> std::unique_ptr<ErrorPtr> {
+          try {
+            // Save the current thread's queryCtx
+            auto* savedCtx = queryCtx();
+            // Set to the captured context for the duration of this operation
+            queryCtx() = capturedCtx;
+            // Restore the original queryCtx on exit
+            SCOPE_EXIT {
+              queryCtx() = savedCtx;
+            };
+
+            auto scanTypePtr = toTypePtr(baseTable->scanType);
+            auto rowTypePtr =
+                std::dynamic_pointer_cast<const velox::RowType>(scanTypePtr);
+            history_.setLeafSelectivity(*baseTable, rowTypePtr);
+            return nullptr;
+          } catch (...) {
+            return std::make_unique<ErrorPtr>(std::current_exception());
+          }
+        });
+    asyncSources.push_back(asyncSource);
+  }
+
+  // Enqueue prepare() calls on the executor
+  if (auto executor = veloxQueryCtx_->executor()) {
+    for (auto& asyncSource : asyncSources) {
+      executor->add([asyncSource]() { asyncSource->prepare(); });
+    }
+  }
+
+  // Call move() on all AsyncSources and collect errors
+  std::unique_ptr<ErrorPtr> firstError = nullptr;
+  for (auto& asyncSource : asyncSources) {
+    auto error = asyncSource->move();
+    if (error && !firstError) {
+      firstError = std::move(error);
+    }
+  }
+
+  // Rethrow the first error if any
+  if (firstError) {
+    std::rethrow_exception(*firstError);
+  }
+
+  // Refresh the cardinality in SubfieldProjections after stats are fetched
+  toGraph_.refreshAfterStats();
+
+  // Collect all join edges from all derived tables (including root_)
+  std::vector<JoinEdge*> allJoinEdges;
+  for (auto* dt : derivedTables) {
+    allJoinEdges.insert(allJoinEdges.end(), dt->joins.begin(), dt->joins.end());
+  }
+
+  // Use guessFanouts to estimate all fanouts in parallel
+  history_.guessFanouts(allJoinEdges);
+
+  // Call makeInitialPlan for all DerivedTables in order, excluding root_
+  for (auto* dt : derivedTables) {
+    // Do not call makeInitialPlan on root_ itself
+    if (dt == root_) {
+      continue;
+    }
+
+    // If a derived table has union children, call makeUnionDistributionAndStats
+    // before calling makeInitialPlan (only if stats are fetched)
+    if (!dt->children.empty() && statsFetched_) {
+      makeUnionDistributionAndStats(dt);
+    }
+
+    dt->makeInitialPlan();
+  }
 }
 
 } // namespace facebook::axiom::optimizer

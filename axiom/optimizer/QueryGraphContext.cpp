@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include "axiom/optimizer/BitSet.h"
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/QueryGraph.h"
 
 namespace facebook::axiom::optimizer {
@@ -42,6 +43,10 @@ QueryGraphContext::QueryGraphContext(velox::HashStringAllocator& allocator)
 QueryGraphContext*& queryCtx() {
   static thread_local QueryGraphContext* context;
   return context;
+}
+
+bool statsFetched() {
+  return queryCtx()->optimization()->statsFetched();
 }
 
 const char* QueryGraphContext::toName(std::string_view str) {
