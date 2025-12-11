@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/connectors/SchemaResolver.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/PlanObject.h"
 
 /// Schema representation for use in query planning. All objects are
@@ -79,43 +79,14 @@ AXIOM_DECLARE_ENUM_NAME(OrderType);
 
 using OrderTypeVector = QGVector<OrderType>;
 
-/// Distribution of data. Describes a possible partition function that assigns a
-/// row of data to a partition based on some combination of partition keys. For
-/// a join to be copartitioned, both sides must have compatible partition
-/// functions and the join keys must include the partition keys.
-class DistributionType {
- public:
-  DistributionType(bool isGather = false)
-      : isGather_{isGather}, partitionType_{nullptr} {}
-
-  DistributionType(const connector::PartitionType* partitionType)
-      : isGather_{false}, partitionType_{partitionType} {}
-
-  bool operator==(const DistributionType& other) const = default;
-
-  static DistributionType gather() {
-    static const DistributionType kGather(true);
-    return kGather;
-  }
-
-  bool isGather() const {
-    return isGather_;
-  }
-
-  const connector::PartitionType* partitionType() const {
-    return partitionType_;
-  }
-
- private:
-  bool isGather_;
-
-  /// Partition function. nullptr is not partitioned.
-  const connector::PartitionType* partitionType_;
+/// Type of data distribution.
+struct DistributionType {
+  bool isBroadcast{false};
+  bool isGather{false};
+  const connector::PartitionType* partitionType{nullptr};
 };
 
-/// Describes output of relational operator. If this is partitioned on
-/// some keys, distributionType gives the partition function and
-/// 'partition' gives the input for the partition function.
+/// Describes output of relational operator.
 struct Distribution {
   explicit Distribution() = default;
 
@@ -124,22 +95,28 @@ struct Distribution {
       ExprVector partition,
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {},
-      int32_t numKeysUnique = 0,
-      float spacing = 0)
+      int32_t numKeysUnique = 0)
       : distributionType{distributionType},
         partition{std::move(partition)},
         orderKeys{std::move(orderKeys)},
         orderTypes{std::move(orderTypes)},
-        numKeysUnique{numKeysUnique},
-        spacing{spacing} {
+        numKeysUnique{numKeysUnique} {
     VELOX_CHECK_EQ(this->orderKeys.size(), this->orderTypes.size());
   }
 
+  Distribution(
+      const connector::PartitionType* partitionType,
+      ExprVector partition)
+      : Distribution{
+            DistributionType{.partitionType = partitionType},
+            std::move(partition)} {}
+
   /// Returns a Distribution for use in a broadcast shuffle.
   static Distribution broadcast() {
-    Distribution distribution;
-    distribution.isBroadcast = true;
-    return distribution;
+    static constexpr DistributionType kBroadcast{
+        .isBroadcast = true,
+    };
+    return {kBroadcast, {}};
   }
 
   /// Returns a distribution for an end of query gather from last stage
@@ -148,7 +125,9 @@ struct Distribution {
   static Distribution gather(
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {}) {
-    static const DistributionType kGather(/*isGather=*/true);
+    static constexpr DistributionType kGather{
+        .isGather = true,
+    };
     return {
         kGather,
         {},
@@ -157,16 +136,35 @@ struct Distribution {
     };
   }
 
-  /// True if 'this' and 'other' have the same number/type of keys and same
-  /// distribution type. Data is copartitioned if both sides have a 1:1
-  /// equality on all partitioning key columns.
-  bool isSamePartition(const Distribution& other) const;
+  enum class NeedsShuffle : uint8_t {
+    kMaybe = 0,
+    kYes,
+    kNo,
+  };
 
-  /// True if 'other' has the same ordering columns and order type.
-  bool isSameOrder(const Distribution& other) const;
+  /// Returns kYes if 'this' needs to be reshuffled to match 'desired'.
+  /// Returns kNo if 'this' can be copartioned with 'desired'.
+  /// Returns kMaybe if not enough information to decide.
+  NeedsShuffle maybeNeedsShuffle(const Distribution& desired) const;
+
+  /// Returns true if 'this' needs to be repartitioned to match 'desired'.
+  /// Returns false if 'this' can be copartioned with 'desired'.
+  bool needsShuffle(const Distribution& desired) const;
+
+  /// Returns true if 'this' needs to be sorted to match 'desired'.
+  /// Returns false if 'this' is sorted enough to match 'desired'.
+  bool needsSort(const Distribution& desired) const;
 
   bool isGather() const {
-    return distributionType.isGather();
+    return distributionType.isGather;
+  }
+
+  bool isBroadcast() const {
+    return distributionType.isBroadcast;
+  }
+
+  const connector::PartitionType* partitionType() const {
+    return distributionType.partitionType;
   }
 
   Distribution rename(const ExprVector& exprs, const ColumnVector& names) const;
@@ -192,18 +190,16 @@ struct Distribution {
   /// row. 0 if there is no uniqueness. This can be non-0 also if data is not
   /// sorted. This indicates a uniqueness for joining.
   int32_t numKeysUnique{0};
-
-  /// Specifies the selectivity between the source of the ordered data and
-  /// 'this'. For example, if orders join lineitem and both are ordered on
-  /// orderkey and there is a 1/1000 selection on orders, the distribution after
-  /// the filter would have a spacing of 1000, meaning that lineitem is hit
-  /// every 1000 orders, meaning that an index join with lineitem would skip
-  /// 4000 rows between hits because lineitem has an average of 4 repeats of
-  /// orderkey.
-  float spacing{-1};
-
-  bool isBroadcast{false};
 };
+
+inline bool hasCopartition(
+    const connector::PartitionType* current,
+    const connector::PartitionType* desired) {
+  if (current != nullptr && desired != nullptr) {
+    return current == current->copartition(*desired);
+  }
+  return current == desired;
+}
 
 struct SchemaTable;
 using SchemaTableCP = const SchemaTable*;
@@ -322,39 +318,12 @@ struct SchemaTable {
   QGVector<ColumnGroupCP> columnGroups;
 };
 
-/// Represents a collection of tables. Normally filled in ad hoc given
-/// the set of tables referenced by a query. The lifetime is a single
-/// optimization run. The owned objects are from the optimizer
-/// arena. Schema is owned by the application and is not from the
-/// optimization arena.  Objects of different catalogs/schemas get
-/// added to 'this' on first use. The Schema feeds from a
-/// SchemaResolver which interfaces to a local/remote metadata
-/// repository.
 class Schema {
  public:
-  /// Constructs a Schema for producing executable plans, backed by 'source'.
-  explicit Schema(const connector::SchemaResolver& source) : source_{&source} {}
-
-  /// Returns the table with 'name' or nullptr if not found, using
-  /// the connector specified by connectorId to perform table lookups.
-  /// An error is thrown if no connector with the specified ID exists.
-  SchemaTableCP findTable(std::string_view connectorId, std::string_view name)
-      const;
+  const SchemaTable& getTable(const connector::Table& connectorTable) const;
 
  private:
-  struct Table {
-    connector::TablePtr connectorTable;
-    SchemaTableCP schemaTable{nullptr};
-  };
-
-  // This map from connector ID to map of tables in that connector.
-  // In the tables map, the key is the full table name and the value is
-  // schema table (optimizer object) and connector table (connector object).
-  template <typename T>
-  using Map = folly::F14FastMap<std::string_view, T>;
-
-  const connector::SchemaResolver* source_;
-  mutable Map<Map<Table>> connectorTables_;
+  mutable folly::F14FastMap<const connector::Table*, SchemaTableCP> tables_;
 };
 
 } // namespace facebook::axiom::optimizer

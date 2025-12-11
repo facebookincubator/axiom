@@ -116,58 +116,8 @@ void DerivedTable::addImpliedJoins() {
   }
 }
 
-namespace {
-
-bool isSingleRowDt(PlanObjectCP object) {
-  if (object->is(PlanType::kDerivedTableNode)) {
-    auto dt = object->as<DerivedTable>();
-    return dt->limit == 1 ||
-        (dt->aggregation && dt->aggregation->groupingKeys().empty());
-  }
-  return false;
-}
-
-// @return a subset of 'tables' that contain single row tables from
-// non-correlated scalar subqueries.
-PlanObjectSet findSingleRowDts(
-    const PlanObjectSet& tables,
-    const JoinEdgeVector& joins) {
-  PlanObjectSet singleRowDts;
-
-  // Remove tables that are joined to other tables.
-  auto tablesCopy = tables;
-  int32_t numSingle = 0;
-  for (auto& join : joins) {
-    tablesCopy.erase(join->rightTable());
-    for (auto& key : join->leftKeys()) {
-      tablesCopy.except(key->allTables());
-    }
-    for (auto& filter : join->filter()) {
-      tablesCopy.except(filter->allTables());
-    }
-  }
-
-  tablesCopy.forEach([&](PlanObjectCP object) {
-    if (isSingleRowDt(object)) {
-      ++numSingle;
-      singleRowDts.add(object);
-    }
-  });
-
-  // If everything is a single row dt, then process these as cross products and
-  // not as placed with filters.
-  if (numSingle == tables.size()) {
-    return PlanObjectSet();
-  }
-
-  return singleRowDts;
-}
-} // namespace
-
 void DerivedTable::setStartTables() {
-  singleRowDts = findSingleRowDts(tableSet, joins);
   startTables = tableSet;
-  startTables.except(singleRowDts);
   for (auto join : joins) {
     if (join->isNonCommutative()) {
       startTables.erase(join->rightTable());
@@ -192,7 +142,7 @@ JoinEdgeP makeExists(PlanObjectCP table, const PlanObjectSet& tables) {
     }
 
     if (join->rightTable() == table) {
-      if (!join->leftTable() || !tables.contains(join->leftTable())) {
+      if (!tables.contains(join->leftTable())) {
         continue;
       }
 
@@ -211,25 +161,10 @@ JoinEdgeP makeExists(PlanObjectCP table, const PlanObjectSet& tables) {
 void DerivedTable::linkTablesToJoins() {
   setStartTables();
 
-  // All tables directly mentioned by a join link to the join. A non-inner
-  // that depends on multiple left tables has no leftTable but is still linked
-  // from all the tables it depends on.
+  // All tables directly mentioned by a join link to the join.
   for (auto join : joins) {
-    PlanObjectSet tables;
-    if (join->isInner() && join->directed()) {
-      tables.add(join->leftTable());
-    } else {
-      for (auto key : join->leftKeys()) {
-        tables.unionSet(key->allTables());
-      }
-      for (auto key : join->rightKeys()) {
-        tables.unionSet(key->allTables());
-      }
-      for (auto conjunct : join->filter()) {
-        tables.unionSet(conjunct->allTables());
-      }
-    }
-    tables.forEachMutable([&](PlanObjectP table) {
+    auto addJoinedBy = [&](PlanObjectP table) {
+      VELOX_DCHECK(table);
       if (table->is(PlanType::kTableNode)) {
         table->as<BaseTable>()->addJoinedBy(join);
       } else if (table->is(PlanType::kValuesTableNode)) {
@@ -237,10 +172,12 @@ void DerivedTable::linkTablesToJoins() {
       } else if (table->is(PlanType::kUnnestTableNode)) {
         table->as<UnnestTable>()->addJoinedBy(join);
       } else {
-        VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
+        VELOX_DCHECK(table->is(PlanType::kDerivedTableNode));
         table->as<DerivedTable>()->addJoinedBy(join);
       }
-    });
+    };
+    addJoinedBy(const_cast<PlanObjectP>(join->leftTable()));
+    addJoinedBy(const_cast<PlanObjectP>(join->rightTable()));
   }
 }
 
@@ -291,6 +228,10 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
 }
 } // namespace
 
+bool DerivedTable::hasWindows() const {
+  return exprs.hasWindows() || orderKeys.hasWindows();
+}
+
 void DerivedTable::import(
     const DerivedTable& super,
     PlanObjectCP firstTable,
@@ -307,7 +248,7 @@ void DerivedTable::import(
   }
 
   for (auto join : super.joins) {
-    if (superTables.contains(join->rightTable()) && join->leftTable() &&
+    if (superTables.contains(join->rightTable()) &&
         superTables.contains(join->leftTable())) {
       joins.push_back(join);
     }
@@ -476,11 +417,11 @@ bool DerivedTable::isWrapOnly() const {
       exprs.empty();
 }
 
-ExprCP DerivedTable::exportExpr(ExprCP expr) {
+ExprCP DerivedTable::exportExpr(ExprCP expr) const {
   return replaceInputs(expr, exprs, columns);
 }
 
-ExprCP DerivedTable::importExpr(ExprCP expr) {
+ExprCP DerivedTable::importExpr(ExprCP expr) const {
   return replaceInputs(expr, columns, exprs);
 }
 
@@ -504,7 +445,7 @@ void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
 
   auto* newFirst = make<DerivedTable>(*firstDt->as<DerivedTable>());
 
-  const int32_t previousNumJoins = newFirst->joins.size();
+  const size_t previousNumJoins = newFirst->joins.size();
   for (auto& join : joins) {
     auto other = join->otherSide(firstDt);
     if (!other) {
@@ -589,13 +530,13 @@ void DerivedTable::flattenDt(const DerivedTable* dt) {
   offset = dt->offset;
 }
 
-void DerivedTable::makeProjection(const ExprVector& exprs) {
+void DerivedTable::makeProjection(CPSpan<Expr> projection) {
   auto optimization = queryCtx()->optimization();
-  for (auto& expr : exprs) {
+  for (auto& expr : projection) {
     auto* column =
         make<Column>(optimization->newCName("ec"), this, expr->value());
     columns.push_back(column);
-    this->exprs.push_back(expr);
+    exprs.push_back(expr);
   }
 }
 
@@ -801,12 +742,12 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
 // conjuncts from outer DTs.
 void expandConjuncts(ExprVector& conjuncts) {
   bool any = false;
-  auto firstUnprocessed = 0;
+  size_t firstUnprocessed = 0;
   do {
     any = false;
 
     const auto end = conjuncts.size();
-    for (auto i = firstUnprocessed; i < end; ++i) {
+    for (size_t i = firstUnprocessed; i < end; ++i) {
       const auto& conjunct = conjuncts[i];
       if (isCallExpr(conjunct, SpecialFormCallNames::kOr) &&
           !conjunct->containsNonDeterministic()) {
@@ -831,7 +772,6 @@ void expandConjuncts(ExprVector& conjuncts) {
 } // namespace
 
 void DerivedTable::distributeConjuncts() {
-  std::vector<DerivedTableP> changedDts;
   if (!having.empty()) {
     VELOX_CHECK_NOT_NULL(aggregation);
 
@@ -882,6 +822,20 @@ void DerivedTable::distributeConjuncts() {
         tables[0]->as<DerivedTable>()->setOp.value() ==
             logical_plan::SetOperation::kUnionAll));
 
+  PlanObjectSet noPushdownTables;
+  for (const auto* join : joins) {
+    if (join->leftOptional()) {
+      // No pushdown to the left side of a RIGHT or FULL join.
+      noPushdownTables.add(join->leftTable());
+    }
+    if (join->rightOptional()) {
+      // No pushdown to the right side of a LEFT or FULL join.
+      noPushdownTables.add(join->rightTable());
+    }
+  }
+  VELOX_DCHECK(tables.size() > 1 || noPushdownTables.empty());
+
+  PlanObjectSet changedTables;
   for (auto i = 0; i < conjuncts.size(); ++i) {
     // No pushdown of non-deterministic except if only pushdown target is a
     // union all.
@@ -899,18 +853,26 @@ void DerivedTable::distributeConjuncts() {
       }
 
       if (tables[0]->is(PlanType::kValuesTableNode)) {
-        continue; // ValuesTable does not have filter push-down.
+        continue; // ValuesTable does not have filter pushdown.
+      }
+
+      if (noPushdownTables.contains(tables[0])) {
+        continue; // No pushdown if depends on an optional side of a join.
       }
 
       if (tables[0]->is(PlanType::kUnnestTableNode)) {
-        continue; // UnnestTable does not have filter push-down.
+        // UnnestTable does not implement filter pushdown yet.
+        // TODO: We can push down predicate to left side of unnest if
+        // 1. it only depends on the replicated columns
+        // 2. we can make subfield access for unnested columns
+        continue;
       }
 
       if (tables[0]->is(PlanType::kDerivedTableNode)) {
         // Translate the column names and add the condition to the conjuncts in
         // the dt. If the inner is a set operation, add the filter to children.
         auto innerDt = tables[0]->as<DerivedTable>();
-        if (dtHasLimit(*innerDt)) {
+        if (innerDt->hasWindows() || dtHasLimit(*innerDt)) {
           continue;
         }
 
@@ -925,14 +887,12 @@ void DerivedTable::distributeConjuncts() {
           } else {
             childDt->conjuncts.push_back(imported);
           }
-          if (std::find(changedDts.begin(), changedDts.end(), childDt) ==
-              changedDts.end()) {
-            changedDts.push_back(childDt);
-          }
+          changedTables.add(childDt);
         }
       } else {
         VELOX_CHECK(tables[0]->is(PlanType::kTableNode));
         tables[0]->as<BaseTable>()->addFilter(conjuncts[i]);
+        changedTables.add(tables[0]);
       }
       conjuncts.erase(conjuncts.begin() + i);
       --i;
@@ -967,13 +927,17 @@ void DerivedTable::distributeConjuncts() {
     }
   }
 
-  // Remake initial plan for changedDTs. Calls distributeConjuncts
+  // Remake initial plan for changed tables. Calls distributeConjuncts
   // recursively for further pushdown of pushed down items. Replans
   // on returning edge of recursion, so everybody's initial plan is
   // up to date after all pushdowns.
-  for (auto* changed : changedDts) {
-    changed->makeInitialPlan();
-  }
+  changedTables.forEachMutable([&](PlanObjectP table) {
+    if (table->is(PlanType::kDerivedTableNode)) {
+      table->as<DerivedTable>()->makeInitialPlan();
+    } else {
+      queryCtx()->optimization()->filterUpdated(table->as<BaseTable>());
+    }
+  });
 }
 
 void DerivedTable::makeInitialPlan() {
@@ -997,7 +961,7 @@ void DerivedTable::makeInitialPlan() {
   optimization->makeJoins(state);
 
   auto plan = state.plans.best()->op;
-  this->cardinality = plan->resultCardinality();
+  this->cardinality = std::max<float>(1, plan->resultCardinality());
 
   optimization->memo()[key] = std::move(state.plans);
 }

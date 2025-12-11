@@ -246,18 +246,13 @@ TEST_F(HiveQueriesTest, joinWithLimitBothSides) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-    // TODO: We don't need orderBy before the join.
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
-                       .limit()
-                       .orderBy()
-                       .hashJoin(
-                           core::PlanMatcherBuilder()
-                               .tableScan("region")
-                               .limit()
-                               .orderBy()
-                               .build())
-                       .build();
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .limit()
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("region").limit().build())
+            .build();
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 

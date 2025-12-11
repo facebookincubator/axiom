@@ -64,6 +64,16 @@ class ExprResolver {
       const std::vector<SortingField>& ordering,
       bool distinct) const;
 
+  struct WindowResolveResult {
+    velox::TypePtr type;
+    std::string functionName;
+    std::vector<ExprPtr> functionInputs;
+  };
+
+  WindowResolveResult resolveWindowTypes(
+      const velox::core::ExprPtr& expr,
+      const InputNameResolver& inputNameResolver) const;
+
  private:
   ExprPtr resolveLambdaExpr(
       const velox::core::LambdaExpr* lambdaExpr,
@@ -275,6 +285,31 @@ class PlanBuilder {
       const std::vector<ExprApi>& aggregates,
       const std::vector<AggregateOptions>& options);
 
+  struct WindowOptions {
+    WindowOptions(
+        std::vector<ExprPtr> partitionBy,
+        std::vector<SortingField> orderBy,
+        WindowExpr::Frame frame,
+        bool ignoreNulls)
+        : partitionBy{std::move(partitionBy)},
+          orderBy{std::move(orderBy)},
+          frame{std::move(frame)},
+          ignoreNulls{ignoreNulls} {}
+
+    std::vector<ExprPtr> partitionBy;
+    std::vector<SortingField> orderBy;
+    WindowExpr::Frame frame;
+    bool ignoreNulls{false};
+  };
+
+  /// Starts or continues the plan with a Window node.
+  /// @param windowExprs A list of window expressions.
+  PlanBuilder& window(const std::vector<std::string>& windowExprs);
+
+  PlanBuilder& window(
+      const std::vector<ExprApi>& windowExprs,
+      const std::vector<WindowOptions>& options);
+
   /// Starts or continues the plan with an Unnest node. Uses auto-generated
   /// names for unnested columns. Use the version of 'unnest' API that takes
   /// ExprApi together with ExprApi::unnestAs to provide aliases for unnested
@@ -347,6 +382,11 @@ class PlanBuilder {
     return sort(sortingKeys);
   }
 
+  /// A temporary hack method to make sort node with windows only, order types
+  /// is set ascending. It exists because parser now can't parse window function
+  /// and it's non trivial to make him do that.
+  PlanBuilder& orderByWindows(const std::vector<std::string>& sortingKeys);
+
   PlanBuilder& limit(int32_t count) {
     return limit(0, count);
   }
@@ -358,7 +398,7 @@ class PlanBuilder {
   PlanBuilder& tableWrite(
       std::string connectorId,
       std::string tableName,
-      WriteKind kind,
+      connector::WriteKind kind,
       std::vector<std::string> columnNames,
       const std::vector<ExprApi>& columnExprs,
       folly::F14FastMap<std::string, std::string> options = {});
@@ -368,7 +408,7 @@ class PlanBuilder {
   PlanBuilder& tableWrite(
       std::string connectorId,
       std::string tableName,
-      WriteKind kind,
+      connector::WriteKind kind,
       std::vector<std::string> columnNames,
       std::initializer_list<std::string> columnExprs,
       folly::F14FastMap<std::string, std::string> options = {}) {
@@ -385,7 +425,7 @@ class PlanBuilder {
   PlanBuilder& tableWrite(
       std::string connectorId,
       std::string tableName,
-      WriteKind kind,
+      connector::WriteKind kind,
       std::vector<std::string> columnNames,
       const std::vector<std::string>& columnExprs,
       folly::F14FastMap<std::string, std::string> options = {}) {
@@ -401,7 +441,7 @@ class PlanBuilder {
   // A shortcut for calling tableWrite with the default connector ID.
   PlanBuilder& tableWrite(
       std::string tableName,
-      WriteKind kind,
+      connector::WriteKind kind,
       std::vector<std::string> columnNames,
       const std::initializer_list<std::string>& columnExprs,
       folly::F14FastMap<std::string, std::string> options = {}) {
@@ -420,7 +460,7 @@ class PlanBuilder {
   /// of 'columnNames' must match the number of input columns.
   PlanBuilder& tableWrite(
       std::string tableName,
-      WriteKind kind,
+      connector::WriteKind kind,
       std::vector<std::string> columnNames,
       folly::F14FastMap<std::string, std::string> options = {});
 
@@ -475,6 +515,11 @@ class PlanBuilder {
       const std::vector<SortingField>& ordering,
       bool distinct) const;
 
+  using WindowResolveResult = ExprResolver::WindowResolveResult;
+
+  WindowResolveResult resolveWindowTypes(
+      const velox::core::ExprPtr& expr) const;
+
   std::vector<ExprApi> parse(const std::vector<std::string>& exprs);
 
   void resolveProjections(
@@ -482,6 +527,8 @@ class PlanBuilder {
       std::vector<std::string>& outputNames,
       std::vector<ExprPtr>& exprs,
       NameMappings& mappings);
+
+  WindowOptions parseWindowOptions(const std::string& sql);
 
   const std::optional<std::string> defaultConnectorId_;
   const std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator_;

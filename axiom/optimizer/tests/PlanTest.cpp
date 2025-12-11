@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
@@ -892,10 +893,15 @@ TEST_F(PlanTest, limitBeforeProject) {
                            .project({"a + b as c"})
                            .build();
 
-    auto plan = toSingleNodePlan(logicalPlan);
+    auto plan = toSingleNodePlan(logicalPlan, 2);
 
-    auto matcher =
-        core::PlanMatcherBuilder{}.tableScan().project().limit().build();
+    auto matcher = core::PlanMatcherBuilder{}
+                       .tableScan()
+                       .project()
+                       .limit()
+                       .localPartition()
+                       .limit()
+                       .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -1027,6 +1033,79 @@ TEST_F(PlanTest, lambdaArgs) {
   auto plan = toSingleNodePlan(logicalPlan);
 
   auto matcher = core::PlanMatcherBuilder{}.tableScan("t").project().build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(PlanTest, zeroLimit) {
+  testConnector_->addTable("t", ROW({"a"}, {BIGINT()}));
+  {
+    auto logicalPlan =
+        lp::PlanBuilder{}.tableScan(kTestConnectorId, "t").limit(0).build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder{}.values().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    auto logicalPlan = lp::PlanBuilder{}
+                           .tableScan(kTestConnectorId, "t")
+                           .orderBy({"a"})
+                           .limit(0)
+                           .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder{}.values().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    auto logicalPlan = lp::PlanBuilder{}
+                           .tableScan(kTestConnectorId, "t")
+                           .offset(1)
+                           .limit(0)
+                           .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder{}.values().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    auto logicalPlan = lp::PlanBuilder{}
+                           .tableScan(kTestConnectorId, "t")
+                           .orderBy({"a"})
+                           .offset(1)
+                           .limit(0)
+                           .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder{}.values().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(PlanTest, subqueryInProjection) {
+  testConnector_->addTable("t1", ROW({"a"}, {BIGINT()}));
+  testConnector_->addTable("t2", ROW({"b"}, {BIGINT()}));
+
+  lp::PlanBuilder::Context context;
+  auto logicalPlan = lp::PlanBuilder{context}
+                         .tableScan(kTestConnectorId, "t1")
+                         .project({
+                             lp::Sql("2 * a"),
+                             lp::Subquery(
+                                 lp::PlanBuilder{context}
+                                     .tableScan(kTestConnectorId, "t2")
+                                     .project({"2 * b"})
+                                     .build()),
+                         })
+                         .build();
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("t1")
+                     .nestedLoopJoin(
+                         core::PlanMatcherBuilder()
+                             .tableScan("t2")
+                             .project({"b * 2"})
+                             .build())
+                     .project({"a * 2", "expr"})
+                     .build();
+
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
