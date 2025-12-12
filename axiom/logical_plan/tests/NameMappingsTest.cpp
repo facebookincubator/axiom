@@ -150,4 +150,23 @@ TEST(NameMappingsTest, basic) {
   }
 }
 
+TEST(NameMappingsTest, enableUnqualifiedAccess) {
+  NameMappings mappings;
+  mappings.add(
+      NameMappings::QualifiedName{.alias = "n1", .name = "n_nationkey"},
+      "nationkey1");
+  mappings.add(
+      NameMappings::QualifiedName{.alias = "n1", .name = "n_name"}, "name1");
+
+  ASSERT_FALSE(mappings.lookup("n_nationkey").has_value());
+  ASSERT_FALSE(mappings.lookup("n_name").has_value());
+
+  mappings.enableUnqualifiedAccess();
+  ASSERT_TRUE(mappings.lookup("n_name").has_value());
+  ASSERT_EQ("name1", mappings.lookup("n_name").value());
+
+  ASSERT_TRUE(mappings.lookup("n_nationkey").has_value());
+  ASSERT_EQ("nationkey1", mappings.lookup("n_nationkey").value());
+}
+
 } // namespace facebook::axiom::logical_plan

@@ -385,6 +385,7 @@ PlanBuilder& PlanBuilder::project(const std::vector<ExprApi>& projections) {
   node_ = std::make_shared<ProjectNode>(
       nextId(), std::move(node_), std::move(outputNames), std::move(exprs));
 
+  newOutputMapping->enableUnqualifiedAccess();
   outputMapping_ = std::move(newOutputMapping);
 
   return *this;
@@ -424,6 +425,7 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
   node_ = std::make_shared<ProjectNode>(
       nextId(), std::move(node_), std::move(outputNames), std::move(exprs));
 
+  newOutputMapping->enableUnqualifiedAccess();
   outputMapping_ = std::move(newOutputMapping);
 
   return *this;
@@ -514,6 +516,7 @@ PlanBuilder& PlanBuilder::aggregate(
       std::move(exprs),
       std::move(outputNames));
 
+  newOutputMapping->enableUnqualifiedAccess();
   outputMapping_ = std::move(newOutputMapping);
 
   return *this;

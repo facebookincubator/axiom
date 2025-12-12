@@ -45,7 +45,7 @@ class NameMappings {
   /// Returns ID for the specified 'name' if exists.
   std::optional<std::string> lookup(const std::string& name) const;
 
-  /// Returns ID for the specified 'name' if exists.
+  /// Returns ID for the specified 'alias.name' if exists.
   std::optional<std::string> lookup(
       const std::string& alias,
       const std::string& name) const;
@@ -68,6 +68,9 @@ class NameMappings {
   ///
   /// Used in PlanBuilder::join() API.
   void merge(const NameMappings& other);
+
+  /// Enables unqualified access to unique names.
+  void enableUnqualifiedAccess();
 
   /// Returns a mapping from IDs to unaliased names for a subset of columns with
   /// unique names.

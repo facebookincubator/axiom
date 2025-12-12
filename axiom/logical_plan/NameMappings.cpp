@@ -104,6 +104,27 @@ void NameMappings::merge(const NameMappings& other) {
   }
 }
 
+void NameMappings::enableUnqualifiedAccess() {
+  folly::F14FastMap<std::string, size_t> counts;
+  for (const auto& [name, id] : mappings_) {
+    counts[name.name]++;
+  }
+
+  std::vector<std::pair<std::string, std::string>> toAdd;
+
+  for (auto& [name, id] : mappings_) {
+    if (counts.at(name.name) == 1) {
+      if (name.alias.has_value()) {
+        toAdd.emplace_back(name.name, id);
+      }
+    }
+  }
+
+  for (const auto& [name, id] : toAdd) {
+    add(name, id);
+  }
+}
+
 folly::F14FastMap<std::string, std::string> NameMappings::uniqueNames() const {
   folly::F14FastMap<std::string, std::string> names;
   for (const auto& [name, id] : mappings_) {

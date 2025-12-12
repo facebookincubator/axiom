@@ -1038,5 +1038,18 @@ TEST_F(PrestoParserTest, view) {
       {"tiny.view"});
 }
 
+TEST_F(PrestoParserTest, unqualifiedAccessAfterJoin) {
+  auto sql =
+      "SELECT n_name FROM (SELECT n1.n_name as n_name FROM nation n1, nation n2)";
+
+  auto matcher =
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .join(lp::test::LogicalPlanMatcherBuilder().tableScan().build())
+          .project()
+          .project();
+  testSql(sql, matcher);
+}
+
 } // namespace
 } // namespace axiom::sql::presto
