@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
 
 namespace facebook::axiom::optimizer::test {
