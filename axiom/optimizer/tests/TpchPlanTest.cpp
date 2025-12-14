@@ -529,7 +529,6 @@ TEST_F(TpchPlanTest, q17) {
 
 TEST_F(TpchPlanTest, q18) {
   checkTpchSql(18);
-
   // TODO Verify the plan.
 }
 
@@ -558,10 +557,10 @@ TEST_F(TpchPlanTest, q19) {
               core::PlanMatcherBuilder()
                   .hiveScan(
                       "part",
-                      {},
-                      "\"or\"(\"and\"(p_size between 1 and 15, (p_brand = 'Brand#34' AND p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG'))), "
-                      "   \"or\"(\"and\"(p_size between 1 and 5, (p_brand = 'Brand#12' AND p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG'))), "
-                      "          \"and\"(p_size between 1 and 10, (p_brand = 'Brand#23' AND p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')))))")
+                      common::test::SubfieldFiltersBuilder()
+                          .add("p_size", exec::greaterThanOrEqual(1LL))
+                          .build(),
+                      "\"or\"(\"and\"(lte(p_size,15),\"and\"(eq(p_brand,'Brand#34'),\"in\"(p_container,array['LG CASE', 'LG BOX', 'LG PACK', 'LG PKG']))),\"or\"(\"and\"(lte(p_size,5),\"and\"(eq(p_brand,'Brand#12'),\"in\"(p_container,array['SM CASE', 'SM BOX', 'SM PACK', 'SM PKG']))),\"and\"(lte(p_size,10),\"and\"(eq(p_brand,'Brand#23'),\"in\"(p_container,array['MED BAG', 'MED BOX', 'MED PKG', 'MED PACK'])))))")
                   .build(),
               core::JoinType::kInner)
           .filter()

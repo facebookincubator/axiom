@@ -837,7 +837,7 @@ void Optimization::addPostprocess(
   }
 
   if (!dt->having.empty()) {
-    auto filter = make<Filter>(plan, dt->having);
+    auto filter = make<Filter>(state, plan, dt->having);
     state.placed.unionObjects(dt->having);
     state.addCost(*filter);
     plan = filter;
@@ -1810,7 +1810,7 @@ bool Optimization::placeConjuncts(
             (i == placeable.size() - 1 ? conjunct : nullptr),
             state);
 
-        plan = make<Filter>(plan, ExprVector{conjunct});
+        plan = make<Filter>(state, plan, ExprVector{conjunct});
         state.addCost(*plan);
 
         makeJoins(plan, state);
@@ -1823,7 +1823,7 @@ bool Optimization::placeConjuncts(
     for (auto& filter : filters) {
       state.placed.add(filter);
     }
-    auto* filter = make<Filter>(plan, std::move(filters));
+    auto* filter = make<Filter>(state, plan, std::move(filters));
     state.addCost(*filter);
     makeJoins(filter, state);
     return true;
