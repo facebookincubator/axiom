@@ -175,8 +175,8 @@ class LocalHiveTableLayout : public HiveTableLayout {
     files_ = std::move(files);
   }
 
-  const std::vector<std::shared_ptr<const LocalHivePartitionHandle>>& partitions()
-      const {
+  const std::vector<std::shared_ptr<const LocalHivePartitionHandle>>&
+  partitions() const {
     return partitions_;
   }
 
@@ -320,6 +320,11 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   velox::connector::hive::HiveConnector* hiveConnector() const {
     return hiveConnector_;
+  }
+
+  const std::shared_ptr<velox::connector::hive::HiveConfig>& hiveConfig()
+      const {
+    return hiveConfig_;
   }
 
   /// Rereads the contents of the data path and re-creates the tables

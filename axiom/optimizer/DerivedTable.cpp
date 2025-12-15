@@ -991,6 +991,12 @@ void DerivedTable::makeInitialPlan() {
   setStartTables();
 
   auto optimization = queryCtx()->optimization();
+
+  // If statistics haven't been fetched yet, don't make plans or memo entries
+  if (!optimization->statsFetched()) {
+    return;
+  }
+
   PlanState state(*optimization, this);
   state.targetExprs.unionObjects(exprs);
 

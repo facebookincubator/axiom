@@ -302,6 +302,7 @@ class QueryGraphContext {
   /// Takes ownership of a Variant for the duration. Variants are allocated
   /// with new so not in the arena.
   velox::Variant* registerVariant(std::unique_ptr<velox::Variant> value) {
+    std::lock_guard<std::mutex> lock(variantsMutex_);
     allVariants_.push_back(std::move(value));
     return allVariants_.back().get();
   }
@@ -350,10 +351,16 @@ class QueryGraphContext {
 
   // Mutex for thread-safe access to ownedObjects_.
   std::mutex mutex_;
+
+  // Mutex to protect registerVariant operations
+  mutable std::mutex variantsMutex_;
 };
 
 /// Returns a mutable reference to the calling thread's QueryGraphContext.
 QueryGraphContext*& queryCtx();
+
+/// Returns true if initial statistics have been fetched for all base tables.
+bool statsFetched();
 
 template <class T>
 T* QGAllocator<T>::allocate(std::size_t n) {

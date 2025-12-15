@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
+#include <folly/executors/CPUThreadPoolExecutor.h>
+#include "axiom/logical_plan/ExprApi.h"
+#include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/QueryGraphContext.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/functions/Macros.h"
@@ -82,22 +86,123 @@ ExprCP bigintLit(int64_t n) {
   return make<Literal>(bigintValue(), registerVariant(n));
 }
 
-std::shared_ptr<velox::core::QueryCtx> sampleQueryCtx(
-    const velox::core::QueryCtx& original) {
-  std::atomic<int64_t> kQueryCounter;
+struct SampleContext {
+  std::shared_ptr<folly::CPUThreadPoolExecutor> executor;
+  std::shared_ptr<velox::memory::MemoryPool> samplePool;
+  std::shared_ptr<velox::core::QueryCtx> queryCtx;
+
+  // Constructor
+  SampleContext(
+      std::shared_ptr<folly::CPUThreadPoolExecutor> executor_,
+      std::shared_ptr<velox::memory::MemoryPool> samplePool_,
+      std::shared_ptr<velox::core::QueryCtx> queryCtx_)
+      : executor(std::move(executor_)),
+        samplePool(std::move(samplePool_)),
+        queryCtx(std::move(queryCtx_)) {}
+
+  // Move constructor
+  SampleContext(SampleContext&& other) noexcept
+      : executor(std::move(other.executor)),
+        samplePool(std::move(other.samplePool)),
+        queryCtx(std::move(other.queryCtx)) {
+    other.executor = nullptr;
+    other.samplePool = nullptr;
+    other.queryCtx = nullptr;
+  }
+
+  // Move assignment operator
+  SampleContext& operator=(SampleContext&& other) noexcept {
+    if (this != &other) {
+      // Clean up current resources first
+      if (executor) {
+        executor->join();
+      }
+      queryCtx.reset();
+      samplePool.reset();
+      executor.reset();
+
+      // Move from other
+      executor = std::move(other.executor);
+      samplePool = std::move(other.samplePool);
+      queryCtx = std::move(other.queryCtx);
+
+      // Nullify source pointers
+      other.executor = nullptr;
+      other.samplePool = nullptr;
+      other.queryCtx = nullptr;
+    }
+    return *this;
+  }
+
+  ~SampleContext() {
+    // Ensure executor has nothing running before freeing
+    if (executor) {
+      executor->join();
+    }
+    // Free in reverse order: queryCtx, samplePool, then executor
+    queryCtx.reset();
+    samplePool.reset();
+    executor.reset();
+  }
+};
+
+SampleContext createSampleContext(
+    const velox::core::QueryCtx& original,
+    int32_t numThreads) {
+  static std::atomic<int64_t> kQueryCounter{0};
+
+  auto queryId = fmt::format("sample:{}", ++kQueryCounter);
+  auto pool = velox::memory::memoryManager()->addRootPool(queryId);
+
+  // Create CPU thread pool executor with specified number of threads
+  auto executor =
+      std::make_shared<folly::CPUThreadPoolExecutor>(std::max(1, numThreads));
 
   std::unordered_map<std::string, std::string> empty;
-  return velox::core::QueryCtx::create(
-      original.executor(),
+  auto queryCtx = velox::core::QueryCtx::create(
+      executor.get(),
       velox::core::QueryConfig(std::move(empty)),
       original.connectorSessionProperties(),
       original.cache(),
-      original.pool()->shared_from_this(),
+      pool,
       nullptr,
-      fmt::format("sample:{}", ++kQueryCounter));
+      queryId);
+
+  return SampleContext(
+      std::move(executor), std::move(pool), std::move(queryCtx));
 }
 
-std::shared_ptr<runner::Runner> prepareSampleRunner(
+/// Recursively traverses an Expr tree and collects all Column names.
+void collectColumnNames(ExprCP expr, folly::F14FastSet<std::string>& names) {
+  if (expr->is(PlanType::kColumnExpr)) {
+    auto* column = expr->as<Column>();
+    names.insert(std::string(column->name()));
+    return;
+  }
+
+  if (expr->is(PlanType::kCallExpr)) {
+    auto* call = expr->as<Call>();
+    for (auto arg : call->args()) {
+      collectColumnNames(arg, names);
+    }
+    return;
+  }
+
+  if (expr->is(PlanType::kFieldExpr)) {
+    auto* field = expr->as<Field>();
+    collectColumnNames(field->base(), names);
+    return;
+  }
+
+  // For literals and other types, no columns to collect
+}
+
+struct SampleRunner {
+  SampleContext context;
+  std::shared_ptr<runner::Runner> runner;
+};
+
+SampleRunner prepareSampleRunner(
     SchemaTableCP table,
     const ExprVector& keys,
     int64_t mod,
@@ -120,50 +225,73 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
         velox::Constant<int64_t>>({kSample});
   });
 
-  auto base = make<BaseTable>();
-  base->schemaTable = table;
+  using namespace logical_plan;
 
-  PlanObjectSet sampleColumns;
+  // Collect column names from keys by recursing through the expression tree
+  folly::F14FastSet<std::string> columnNames;
   for (auto key : keys) {
-    sampleColumns.unionSet(key->columns());
+    collectColumnNames(key, columnNames);
+  }
+  std::vector<std::string> columnVec(columnNames.begin(), columnNames.end());
+
+  // Build the logical plan
+  PlanBuilder builder;
+
+  // Get connector ID from the first column group's layout
+  const auto& connectorId = table->columnGroups[0]->layout->connectorId();
+
+  // Table scan that extracts the key columns
+  builder.tableScan(connectorId, table->name(), columnVec);
+
+  // Project that calculates the hash of each key
+  // Since we can't easily convert optimizer Expr to logical_plan ExprApi,
+  // we hash the individual columns and let the hash mix handle the combination
+  std::vector<ExprApi> hashExprs;
+  hashExprs.reserve(columnNames.size());
+  for (const auto& colName : columnNames) {
+    hashExprs.push_back(logical_plan::Call(kHash, {Col(colName)}));
   }
 
-  auto columns = sampleColumns.toObjects<Column>();
-  auto index = base->chooseLeafIndex()[0];
-  auto* scan = make<TableScan>(base, index, columns);
+  // Mix all the hashes together
+  ExprApi mixedHash = hashExprs.size() == 1
+      ? hashExprs[0]
+      : ExprApi(logical_plan::Call(kHashMix, hashExprs));
 
-  ExprVector hashes;
-  hashes.reserve(keys.size());
-  for (const auto& key : keys) {
-    hashes.emplace_back(makeCall(kHash, velox::BIGINT(), key));
-  }
+  // Project the mixed hash as "hash"
+  builder.project({mixedHash.as("hash")});
 
-  ExprCP hash =
-      make<Call>(toName(kHashMix), bigintValue(), hashes, FunctionSet{});
+  // Filter that calls sample with the hash and mod
+  builder.filter(
+      logical_plan::Call(kSample, {Col("hash"), Lit(mod), Lit(lim)}));
 
-  ColumnCP hashColumn = make<Column>(toName("hash"), nullptr, hash->value());
+  // Project to return only the hash column
+  builder.project({"hash"});
 
-  // Create temporary PlanState for Project and Filter constructors
-  PlanState tempState(*queryCtx()->optimization(), nullptr);
+  // Build the logical plan
+  auto logicalPlan = builder.build();
 
-  RelationOpPtr project = make<Project>(
-      scan,
-      ExprVector{hash},
-      ColumnVector{hashColumn},
-      /*redundant=*/false,
-      tempState);
+  // Get the memory pool
+  auto* pool = queryCtx()->optimization()->evaluator()->pool();
+  auto options = queryCtx()->optimization()->options();
+  options.traceFlags = 0;
+  // Translate to runnable plan using Optimization::toVeloxPlan
+  auto planAndStats = Optimization::toVeloxPlan(
+      *logicalPlan,
+      *pool,
+      options,
+      queryCtx()->optimization()->runnerOptions(),
+      &queryCtx()->optimization()->history());
 
-  // (hash % mod) < lim
-  ExprCP filterExpr = makeCall(
-      kSample, velox::BOOLEAN(), hashColumn, bigintLit(mod), bigintLit(lim));
-  RelationOpPtr filter =
-      make<Filter>(tempState, project, ExprVector{filterExpr});
+  auto context = createSampleContext(
+      *queryCtx()->optimization()->veloxQueryCtx(),
+      queryCtx()->optimization()->runnerOptions().numDrivers);
 
-  auto plan = queryCtx()->optimization()->toVeloxPlan(filter);
-  return std::make_shared<runner::LocalRunner>(
-      std::move(plan.plan),
-      std::move(plan.finishWrite),
-      sampleQueryCtx(*queryCtx()->optimization()->veloxQueryCtx()));
+  auto runner = std::make_shared<runner::LocalRunner>(
+      std::move(planAndStats.plan),
+      std::move(planAndStats.finishWrite),
+      context.queryCtx);
+
+  return SampleRunner{std::move(context), std::move(runner)};
 }
 
 // Maps hash value to number of times it appears in a table.
@@ -215,9 +343,10 @@ float keyCardinality(const ExprVector& keys) {
   }
   return cardinality;
 }
+
 } // namespace
 
-std::pair<float, float> sampleJoin(
+std::pair<float, float> sampleJoinByPartitions(
     SchemaTableCP left,
     const ExprVector& leftKeys,
     SchemaTableCP right,
@@ -243,15 +372,15 @@ std::pair<float, float> sampleJoin(
     return std::make_pair(0, 0);
   }
 
-  auto leftRunner =
+  auto leftSampleRunner =
       prepareSampleRunner(left, leftKeys, kMaxCardinality, fraction);
-  auto rightRunner =
+  auto rightSampleRunner =
       prepareSampleRunner(right, rightKeys, kMaxCardinality, fraction);
 
   auto leftRun = std::make_shared<velox::AsyncSource<KeyFreq>>(
-      [leftRunner]() { return runJoinSample(*leftRunner); });
+      [runner = leftSampleRunner.runner]() { return runJoinSample(*runner); });
   auto rightRun = std::make_shared<velox::AsyncSource<KeyFreq>>(
-      [rightRunner]() { return runJoinSample(*rightRunner); });
+      [runner = rightSampleRunner.runner]() { return runJoinSample(*runner); });
 
   if (auto executor = queryCtx()->optimization()->veloxQueryCtx()->executor()) {
     executor->add([leftRun]() { leftRun->prepare(); });
@@ -262,6 +391,14 @@ std::pair<float, float> sampleJoin(
   auto rightFreq = rightRun->move();
   return std::make_pair(
       freqs(*rightFreq, *leftFreq), freqs(*leftFreq, *rightFreq));
+}
+
+std::pair<float, float> sampleJoin(
+    SchemaTableCP left,
+    const ExprVector& leftKeys,
+    SchemaTableCP right,
+    const ExprVector& rightKeys) {
+  return sampleJoinByPartitions(left, leftKeys, right, rightKeys);
 }
 
 } // namespace facebook::axiom::optimizer

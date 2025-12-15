@@ -100,15 +100,7 @@ class FiltersTest : public HiveQueriesTestBase {
             schemaColumn->value();
       }
     }
-
-    ExprVector allFilters;
-    allFilters.insert(
-        allFilters.end(),
-        table->columnFilters.begin(),
-        table->columnFilters.end());
-    allFilters.insert(
-        allFilters.end(), table->filter.begin(), table->filter.end());
-    return allFilters;
+    return table->allFilters();
   }
 };
 
