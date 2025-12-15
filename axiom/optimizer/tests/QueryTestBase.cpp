@@ -349,4 +349,25 @@ void QueryTestBase::optimize(
       options);
 }
 
+RelationOp* QueryTestBase::findInPlan(const RelationOp* tree, RelType type) {
+  if (!tree) {
+    return nullptr;
+  }
+
+  // Check current node
+  if (tree->relType() == type) {
+    return const_cast<RelationOp*>(tree);
+  }
+
+  // Search in input (depth-first, left to right)
+  if (tree->input()) {
+    auto* result = findInPlan(tree->input().get(), type);
+    if (result) {
+      return result;
+    }
+  }
+
+  return nullptr;
+}
+
 } // namespace facebook::axiom::optimizer::test

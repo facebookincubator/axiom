@@ -80,15 +80,26 @@ class FiltersTest : public HiveQueriesTestBase {
     return nullptr;
   }
 
-  /// Helper to get all filters from a table by name.
-  /// Gets the root derived table, finds the base table, and combines all
+  /// Helper to get all filters from a table by name and reset column values
+  /// to schema values. Gets the root derived table, finds the base table,
+  /// resets all column values to their schema values, and combines all
   /// filters. Fails the test if the table is not found.
-  ExprVector getAllFilters(std::string_view tableName) {
+  ExprVector getAllFiltersAndResetToSchema(std::string_view tableName) {
     auto* rootDt = optimization_->rootDt();
     EXPECT_NE(rootDt, nullptr) << "Root derived table is null";
 
     const BaseTable* table = findBaseTable(rootDt, tableName);
     EXPECT_NE(table, nullptr) << "Table '" << tableName << "' not found";
+
+    // Reset all column values to their schema table values
+    for (auto* column : table->columns) {
+      auto* schemaColumn = column->schemaColumn();
+      if (schemaColumn) {
+        // Assign the schema column's value to this column's value
+        const_cast<Value&>(const_cast<Column*>(column)->value()) =
+            schemaColumn->value();
+      }
+    }
 
     ExprVector allFilters;
     allFilters.insert(
@@ -111,7 +122,7 @@ TEST_F(FiltersTest, basic) {
       velox::exec::test::kHiveConnectorId);
 
   // Get all filters from the table
-  ExprVector allFilters = getAllFilters("lineitem");
+  ExprVector allFilters = getAllFiltersAndResetToSchema("lineitem");
   ASSERT_EQ(4, allFilters.size());
 
   // Create a temporary PlanState
@@ -139,7 +150,7 @@ TEST_F(FiltersTest, combineRanges) {
       velox::exec::test::kHiveConnectorId);
 
   // Get all filters from the table
-  ExprVector allFilters = getAllFilters("nation");
+  ExprVector allFilters = getAllFiltersAndResetToSchema("nation");
   ASSERT_FALSE(allFilters.empty()) << "Expected at least one filter expression";
 
   // Create a temporary PlanState
@@ -192,7 +203,7 @@ TEST_F(FiltersTest, combineStringRanges) {
       velox::exec::test::kHiveConnectorId);
 
   // Get all filters from the table
-  ExprVector stringFilters = getAllFilters("nation");
+  ExprVector stringFilters = getAllFiltersAndResetToSchema("nation");
   ASSERT_FALSE(stringFilters.empty())
       << "Expected at least one filter expression for string case";
 
@@ -254,7 +265,7 @@ TEST_F(FiltersTest, empty) {
     optimize(sql, velox::exec::test::kHiveConnectorId);
 
     // Get all filters from the table
-    ExprVector allFilters = getAllFilters("nation");
+    ExprVector allFilters = getAllFiltersAndResetToSchema("nation");
     ASSERT_FALSE(allFilters.empty())
         << "Expected at least one filter expression for condition: "
         << condition;
@@ -306,7 +317,7 @@ TEST_F(FiltersTest, combinations) {
     optimize(sql, velox::exec::test::kHiveConnectorId);
 
     // Get all filters from the table
-    ExprVector allFilters = getAllFilters("nation");
+    ExprVector allFilters = getAllFiltersAndResetToSchema("nation");
     ASSERT_FALSE(allFilters.empty())
         << "Expected at least one filter expression for condition: "
         << condition;
@@ -854,7 +865,7 @@ TEST_F(FiltersTest, equalityConstraintPropagation) {
       velox::exec::test::kHiveConnectorId);
 
   // Get all filters from the nation table
-  ExprVector allFilters = getAllFilters("nation");
+  ExprVector allFilters = getAllFiltersAndResetToSchema("nation");
   ASSERT_EQ(1, allFilters.size()) << "Expected exactly one filter expression";
 
   // Create a temporary PlanState
@@ -870,7 +881,8 @@ TEST_F(FiltersTest, equalityConstraintPropagation) {
   EXPECT_GE(selectivity.trueFraction, 0.0);
   EXPECT_LE(selectivity.trueFraction, 1.0);
 
-  // Check that 2 constraints were added (one for n_regionkey, one for n_nationkey)
+  // Check that 2 constraints were added (one for n_regionkey, one for
+  // n_nationkey)
   ASSERT_EQ(2, constraints.size())
       << "Expected exactly 2 constraints (one for n_regionkey, one for n_nationkey)";
 
@@ -881,9 +893,11 @@ TEST_F(FiltersTest, equalityConstraintPropagation) {
   for (const auto& [id, constraintValue] : constraints) {
     // Check cardinality - should be around 5 (actual value may vary slightly)
     EXPECT_GE(constraintValue.cardinality, 4.0f)
-        << "Expected cardinality to be at least 4, got " << constraintValue.cardinality;
+        << "Expected cardinality to be at least 4, got "
+        << constraintValue.cardinality;
     EXPECT_LE(constraintValue.cardinality, 5.5f)
-        << "Expected cardinality to be at most 5.5, got " << constraintValue.cardinality;
+        << "Expected cardinality to be at most 5.5, got "
+        << constraintValue.cardinality;
 
     // Check min = 0
     ASSERT_NE(constraintValue.min, nullptr) << "Expected min to be set";
