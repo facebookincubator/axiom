@@ -48,6 +48,21 @@ const velox::Variant* registerOptionalVariant(
 
 AXIOM_DEFINE_ENUM_NAME(OrderType, orderTypeNames);
 
+Value& Value::operator=(const Value& other) {
+  VELOX_CHECK(
+      type == other.type,
+      "Cannot assign Value with different type: {} vs {}",
+      (type ? type->toString() : "null"),
+      (other.type ? other.type->toString() : "null"));
+  min = other.min;
+  max = other.max;
+  const_cast<float&>(cardinality) = other.cardinality;
+  trueFraction = other.trueFraction;
+  nullFraction = other.nullFraction;
+  nullable = other.nullable;
+  return *this;
+}
+
 float Value::byteSize() const {
   if (type->isFixedWidth()) {
     return static_cast<float>(type->cppSizeInBytes());
@@ -57,6 +72,30 @@ float Value::byteSize() const {
     default:
       return 16;
   }
+}
+
+std::string Value::toString() const {
+  std::stringstream out;
+  out << "<Value type=" << type->toString() << ", cardinality=" << cardinality;
+
+  if (min != nullptr) {
+    out << " min=" << *min;
+  }
+
+  if (max != nullptr) {
+    out << " max=" << *max;
+  }
+
+  if (trueFraction != kUnknown) {
+    out << " trueFraction=" << trueFraction;
+  }
+
+  if (nullFraction != 0) {
+    out << " nullFraction=" << nullFraction;
+  }
+
+  out << ">";
+  return out.str();
 }
 
 ColumnGroupCP SchemaTable::addIndex(
