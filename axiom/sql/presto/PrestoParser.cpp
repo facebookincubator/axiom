@@ -1564,6 +1564,100 @@ SqlStatementPtr PrestoParser::parse(std::string_view sql, bool enableTracing) {
   return doParse(sql, enableTracing);
 }
 
+std::vector<SqlStatementPtr> PrestoParser::parseMultiple(
+    std::string_view sql,
+    bool enableTracing) {
+  auto statements = splitStatements(sql);
+  std::vector<SqlStatementPtr> results;
+  results.reserve(statements.size());
+
+  for (const auto& statement : statements) {
+    if (!statement.empty()) {
+      results.push_back(doParse(statement, enableTracing));
+    }
+  }
+
+  return results;
+}
+
+std::vector<std::string> PrestoParser::splitStatements(std::string_view sql) {
+  std::vector<std::string> statements;
+
+  // Use ANTLR lexer to tokenize and find statement boundaries
+  std::string sqlStr(sql);
+  UpperCaseInputStream inputStream(sqlStr);
+  PrestoSqlLexer lexer(&inputStream);
+  antlr4::CommonTokenStream tokenStream(&lexer);
+  tokenStream.fill();
+
+  // Get all tokens (default channel only - excludes hidden tokens like
+  // whitespace/comments)
+  size_t numTokens = tokenStream.size();
+
+  size_t statementStart = 0;
+  for (size_t i = 0; i < numTokens; ++i) {
+    const auto* token = tokenStream.get(i);
+
+    if (token->getText() == ";") {
+      // Find the last token before the semicolon (on default channel)
+      if (i > statementStart) {
+        size_t startIndex = tokenStream.get(statementStart)->getStartIndex();
+        size_t endIndex = tokenStream.get(i - 1)->getStopIndex();
+
+        std::string statementText =
+            sqlStr.substr(startIndex, endIndex - startIndex + 1);
+
+        size_t start = 0;
+        size_t end = statementText.size();
+        while (start < end && std::isspace(statementText[start])) {
+          ++start;
+        }
+        while (end > start && std::isspace(statementText[end - 1])) {
+          --end;
+        }
+
+        if (start < end) {
+          statements.push_back(statementText.substr(start, end - start));
+        }
+      }
+
+      statementStart = i + 1;
+    }
+  }
+
+  // Handle the last statement (if no trailing semicolon)
+  if (statementStart < numTokens) {
+    // Skip EOF token (last token in stream)
+    size_t lastTokenIdx = numTokens - 1;
+    if (lastTokenIdx > 0 && lastTokenIdx >= statementStart) {
+      --lastTokenIdx;
+    }
+
+    if (lastTokenIdx >= statementStart) {
+      size_t startIndex = tokenStream.get(statementStart)->getStartIndex();
+      size_t endIndex = tokenStream.get(lastTokenIdx)->getStopIndex();
+
+      std::string statementText =
+          sqlStr.substr(startIndex, endIndex - startIndex + 1);
+
+      size_t start = 0;
+      size_t end = statementText.size();
+      while (start < end && std::isspace(statementText[start])) {
+        ++start;
+      }
+      while (end > start && std::isspace(statementText[end - 1])) {
+        --end;
+      }
+
+      if (start < end) {
+        statements.push_back(statementText.substr(start, end - start));
+      }
+    }
+  }
+
+  return statements;
+}
+
 lp::ExprPtr PrestoParser::parseExpression(
     std::string_view sql,
     bool enableTracing) {

@@ -160,6 +160,127 @@ class PrestoParserTest : public testing::Test {
   std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
 };
 
+TEST_F(PrestoParserTest, parseMultiple) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto statements = parser.parseMultiple("select 1; select 2");
+  ASSERT_EQ(2, statements.size());
+
+  ASSERT_TRUE(statements[0]->isSelect());
+  ASSERT_TRUE(statements[1]->isSelect());
+}
+
+TEST_F(PrestoParserTest, parseMultipleWithTrailingSemicolon) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto statements = parser.parseMultiple("select 1; select 2;");
+  ASSERT_EQ(2, statements.size());
+
+  ASSERT_TRUE(statements[0]->isSelect());
+  ASSERT_TRUE(statements[1]->isSelect());
+}
+
+TEST_F(PrestoParserTest, parseMultipleWithWhitespace) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto statements =
+      parser.parseMultiple("  select 1  ;  \n  select 2  ;  \n  select 3  ");
+  ASSERT_EQ(3, statements.size());
+
+  ASSERT_TRUE(statements[0]->isSelect());
+  ASSERT_TRUE(statements[1]->isSelect());
+  ASSERT_TRUE(statements[2]->isSelect());
+}
+
+TEST_F(PrestoParserTest, parseMultipleWithComments) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto statements = parser.parseMultiple(
+      "-- First query\nselect 1;\n-- Second query\nselect 2");
+  ASSERT_EQ(2, statements.size());
+
+  ASSERT_TRUE(statements[0]->isSelect());
+  ASSERT_TRUE(statements[1]->isSelect());
+}
+
+TEST_F(PrestoParserTest, parseMultipleWithBlockComments) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto statements =
+      parser.parseMultiple("/* First */ select 1; /* Second */ select 2");
+  ASSERT_EQ(2, statements.size());
+
+  ASSERT_TRUE(statements[0]->isSelect());
+  ASSERT_TRUE(statements[1]->isSelect());
+}
+
+TEST_F(PrestoParserTest, parseMultipleWithSingleQuotes) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto statements =
+      parser.parseMultiple("select 'hello; world'; select 'foo''bar; baz'");
+  ASSERT_EQ(2, statements.size());
+
+  ASSERT_TRUE(statements[0]->isSelect());
+  ASSERT_TRUE(statements[1]->isSelect());
+}
+
+TEST_F(PrestoParserTest, parseMultipleWithDoubleQuotes) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto statements = parser.parseMultiple(
+      "select 1 as \"col;name\"; select 2 as \"foo\"\"bar; baz\"");
+  ASSERT_EQ(2, statements.size());
+
+  ASSERT_TRUE(statements[0]->isSelect());
+  ASSERT_TRUE(statements[1]->isSelect());
+}
+
+TEST_F(PrestoParserTest, parseMultipleMixedStatements) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto statements = parser.parseMultiple(
+      "select * from nation; "
+      "select n_name from nation where n_nationkey = 1; "
+      "select 42");
+  ASSERT_EQ(3, statements.size());
+
+  ASSERT_TRUE(statements[0]->isSelect());
+  ASSERT_TRUE(statements[1]->isSelect());
+  ASSERT_TRUE(statements[2]->isSelect());
+}
+
+TEST_F(PrestoParserTest, parseMultipleSingleStatement) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto statements = parser.parseMultiple("select 1");
+  ASSERT_EQ(1, statements.size());
+
+  ASSERT_TRUE(statements[0]->isSelect());
+}
+
+TEST_F(PrestoParserTest, parseMultipleEmptyStatements) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto statements = parser.parseMultiple(";;;");
+  ASSERT_EQ(0, statements.size());
+}
+
+TEST_F(PrestoParserTest, parseMultipleComplexQuery) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto statements = parser.parseMultiple(
+      "select n_nationkey, n_name "
+      "from nation "
+      "where n_regionkey = 1 "
+      "order by n_name; "
+      "select count(*) from nation");
+  ASSERT_EQ(2, statements.size());
+
+  ASSERT_TRUE(statements[0]->isSelect());
+  ASSERT_TRUE(statements[1]->isSelect());
+}
+
 TEST_F(PrestoParserTest, unnest) {
   {
     auto matcher = lp::test::LogicalPlanMatcherBuilder().values().unnest();
@@ -1049,6 +1170,30 @@ TEST_F(PrestoParserTest, unqualifiedAccessAfterJoin) {
           .project()
           .project();
   testSql(sql, matcher);
+}
+
+TEST_F(PrestoParserTest, createTableAndInsert) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  // Parse CREATE TABLE and INSERT statements.
+  const auto statements = parser.parseMultiple(
+      "CREATE TABLE test_table AS SELECT n_nationkey, n_name FROM nation; "
+      "INSERT INTO nation SELECT * FROM nation");
+
+  // Verify both statements parsed correctly with expected write types.
+  ASSERT_EQ(2, statements.size());
+  ASSERT_TRUE(statements[0]->isCreateTableAsSelect());
+  ASSERT_TRUE(statements[1]->isInsert());
+
+  const auto* ctasWrite = statements[0]
+                              ->as<CreateTableAsSelectStatement>()
+                              ->plan()
+                              ->as<lp::TableWriteNode>();
+  ASSERT_EQ(lp::WriteKind::kCreate, ctasWrite->writeKind());
+
+  const auto* insertWrite =
+      statements[1]->as<InsertStatement>()->plan()->as<lp::TableWriteNode>();
+  ASSERT_EQ(lp::WriteKind::kInsert, insertWrite->writeKind());
 }
 
 } // namespace
