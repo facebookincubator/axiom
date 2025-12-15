@@ -28,6 +28,29 @@ DEFINE_double(
 
 namespace facebook::axiom::optimizer {
 
+void VeloxHistory::setBaseTableValues(
+    const ConstraintMap& constraints,
+    BaseTable& table) {
+  // Update the Values in columns of BaseTable to correspond to the constraints
+  // returned by conjunctsSelectivity
+  for (const auto& [columnId, constrainedValue] : constraints) {
+    // Find the column by ID and update its value
+    for (auto* column : table.columns) {
+      if (column->id() == columnId) {
+        auto& value = const_cast<Value&>(column->value());
+        // Update individual const fields using const_cast
+        const_cast<float&>(value.cardinality) = constrainedValue.cardinality;
+        const_cast<const velox::Variant*&>(value.min) = constrainedValue.min;
+        const_cast<const velox::Variant*&>(value.max) = constrainedValue.max;
+        const_cast<float&>(value.trueFraction) = constrainedValue.trueFraction;
+        const_cast<float&>(value.nullFraction) = constrainedValue.nullFraction;
+        const_cast<bool&>(value.nullable) = constrainedValue.nullable;
+        break;
+      }
+    }
+  }
+}
+
 void VeloxHistory::recordJoinSample(std::string_view key, float lr, float rl) {}
 
 std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
@@ -91,73 +114,82 @@ bool VeloxHistory::setLeafSelectivity(
       queryCtx()->optimization()->leafHandle(table.id());
   const auto string = tableHandle->toString();
 
-  // Check whether leaf selectivity is already cached for this handle.
-  {
-    auto it = leafSelectivities_.find(string);
-    if (it != leafSelectivities_.end()) {
-      std::lock_guard<std::mutex> l(mutex_);
-      table.filterSelectivity = it->second;
-      return true;
-    }
-  }
-
   auto* runnerTable = table.schemaTable->connectorTable;
 
-  // If there is no physical table to go to or filter sampling
-  // has been explicitly disabled, compute selectivity using filter analysis.
-  if (!runnerTable || !options.sampleFilters) {
-    if (table.columnFilters.empty() && table.filter.empty()) {
+  // Step 1: Always call conjunctsSelectivity with updateConstraints set to true
+  float conjunctsSelectivityValue = 1.0f;
+  ConstraintMap constraints;
+
+  if (!table.columnFilters.empty() || !table.filter.empty()) {
+    // Combine columnFilters and filter into a single vector
+    ExprVector allFilters;
+    allFilters.reserve(table.columnFilters.size() + table.filter.size());
+    allFilters.insert(
+        allFilters.end(),
+        table.columnFilters.begin(),
+        table.columnFilters.end());
+    allFilters.insert(
+        allFilters.end(), table.filter.begin(), table.filter.end());
+
+    // Create a temporary PlanState for evaluating selectivity
+    PlanState state(*queryCtx()->optimization(), nullptr);
+
+    auto selectivity =
+        conjunctsSelectivity(state, allFilters, true, constraints);
+    conjunctsSelectivityValue = selectivity.trueFraction;
+  }
+
+  // Step 2: Always update column Values from the constraints
+  setBaseTableValues(constraints, table);
+
+  // Step 3: Determine if we should sample
+  bool shouldSample = runnerTable && options.sampleFilters;
+
+  if (shouldSample) {
+    // Check whether leaf selectivity is already cached for this handle.
+    {
+      auto it = leafSelectivities_.find(string);
+      if (it != leafSelectivities_.end()) {
+        std::lock_guard<std::mutex> l(mutex_);
+        table.filterSelectivity = it->second;
+        return true;
+      }
+    }
+
+    // Determine and cache leaf selectivity for the table handle
+    // by sampling the layout for the physical table.
+    const uint64_t start = velox::getCurrentTimeMicro();
+    auto sample =
+        runnerTable->layouts()[0]->sample(tableHandle, 1, filters, scanType);
+    VELOX_CHECK_GE(sample.first, 0);
+    VELOX_CHECK_GE(sample.first, sample.second);
+
+    if (sample.first == 0) {
       table.filterSelectivity = 1;
     } else {
-      // Combine columnFilters and filter into a single vector
-      ExprVector allFilters;
-      allFilters.reserve(table.columnFilters.size() + table.filter.size());
-      allFilters.insert(
-          allFilters.end(),
-          table.columnFilters.begin(),
-          table.columnFilters.end());
-      allFilters.insert(
-          allFilters.end(), table.filter.begin(), table.filter.end());
-
-      // Create a temporary PlanState for evaluating selectivity
-      PlanState state(*queryCtx()->optimization(), nullptr);
-      ConstraintMap constraints;
-
-      auto selectivity =
-          conjunctsSelectivity(state, allFilters, false, constraints);
-      table.filterSelectivity = selectivity.trueFraction;
+      // When finding no hits, do not make a selectivity of 0 because this makes
+      // /0 or *0 and *0 is 0, which makes any subsequent operations 0
+      // regardless of cost. So as not to underflow, count non-existent as 0.9
+      // rows.
+      table.filterSelectivity = std::max<float>(0.9f, sample.second) /
+          static_cast<float>(sample.first);
     }
+    recordLeafSelectivity(string, table.filterSelectivity, false);
+
+    bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
+    if (trace) {
+      std::cout << "Sampled scan " << string << "= " << table.filterSelectivity
+                << " time= "
+                << velox::succinctMicros(velox::getCurrentTimeMicro() - start)
+                << std::endl;
+    }
+    return true;
+  } else {
+    // Step 4: If sampling is disabled, use selectivity from
+    // conjunctsSelectivity
+    table.filterSelectivity = conjunctsSelectivityValue;
     return false;
   }
-
-  // Determine and cache leaf selectivity for the table handle
-  // by sampling the layout for the physical table.
-  const uint64_t start = velox::getCurrentTimeMicro();
-  auto sample =
-      runnerTable->layouts()[0]->sample(tableHandle, 1, filters, scanType);
-  VELOX_CHECK_GE(sample.first, 0);
-  VELOX_CHECK_GE(sample.first, sample.second);
-
-  if (sample.first == 0) {
-    table.filterSelectivity = 1;
-    return true;
-  }
-
-  // When finding no hits, do not make a selectivity of 0 because this makes /0
-  // or *0 and *0 is 0, which makes any subsequent operations 0 regardless of
-  // cost. So as not to underflow, count non-existent as 0.9 rows.
-  table.filterSelectivity =
-      std::max<float>(0.9f, sample.second) / static_cast<float>(sample.first);
-  recordLeafSelectivity(string, table.filterSelectivity, false);
-
-  bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
-  if (trace) {
-    std::cout << "Sampled scan " << string << "= " << table.filterSelectivity
-              << " time= "
-              << velox::succinctMicros(velox::getCurrentTimeMicro() - start)
-              << std::endl;
-  }
-  return true;
 }
 
 namespace {

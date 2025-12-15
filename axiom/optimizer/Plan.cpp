@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/Cost.h"
+#include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/RelationOpPrinter.h"
 
@@ -100,7 +101,24 @@ Plan::Plan(RelationOpPtr op, const PlanState& state)
     : op(std::move(op)),
       cost(state.cost),
       tables(state.placed),
-      columns(exprColumns(state.targetExprs)) {}
+      columns(exprColumns(state.targetExprs)) {
+  // Initialize constraints using registerAny to manage lifetime
+  auto constraintsPtr = std::make_unique<ConstraintMap>();
+
+  // Populate constraints for the columns from the state
+  for (auto* column : this->op->columns()) {
+    if (column->is(PlanType::kColumnExpr)) {
+      const auto& val = value(state, column);
+      // Only add to constraints if the value differs from the column's default
+      // value, indicating there's an actual constraint
+      if (&val != &column->value()) {
+        addConstraint(column->id(), val, *constraintsPtr);
+      }
+    }
+  }
+
+  constraints = queryCtx()->registerAny(constraintsPtr);
+}
 
 bool Plan::isStateBetter(const PlanState& state, float margin) const {
   return cost.cost > state.cost.cost + margin;
@@ -142,7 +160,9 @@ void PlanState::addNextJoin(
     RelationOpPtr plan,
     std::vector<NextJoin>& toTry) const {
   if (!isOverBest()) {
-    toTry.emplace_back(candidate, std::move(plan), cost, placed, columns);
+    auto& nextJoin =
+        toTry.emplace_back(candidate, std::move(plan), cost, placed, columns);
+    nextJoin.constraints = constraints;
   } else {
     optimization.trace(OptimizerOptions::kExceededBest, dt->id(), cost, *plan);
   }
@@ -587,6 +607,78 @@ velox::core::JoinType reverseJoinType(velox::core::JoinType joinType) {
     default:
       return joinType;
   }
+}
+
+Value exprConstraint(ExprCP expr, PlanState& state, bool update) {
+  // For leaf expressions (Literal and Column), check if already computed
+  // For non-leaf expressions, if update=true, skip the cache lookup and
+  // recompute
+  bool isLeaf =
+      expr->is(PlanType::kLiteralExpr) || expr->is(PlanType::kColumnExpr);
+
+  if (!update || isLeaf) {
+    auto it = state.constraints.find(expr->id());
+    if (it != state.constraints.end()) {
+      return it->second;
+    }
+  }
+
+  Value result = expr->value();
+
+  if (expr->is(PlanType::kLiteralExpr)) {
+    // For literals, return the expr's value which already has min/max set
+    result = expr->value();
+  } else if (expr->is(PlanType::kColumnExpr)) {
+    // For columns, use the expr's value (constraint already checked above)
+    result = expr->value();
+  } else if (expr->is(PlanType::kFieldExpr)) {
+    // For Field, get value from first arg with cardinality from value(first
+    // arg, state)
+    auto* field = expr->as<Field>();
+    Value baseValue = exprConstraint(field->base(), state, update);
+    result = expr->value();
+    result.cardinality = baseValue.cardinality;
+  } else if (expr->is(PlanType::kCallExpr)) {
+    auto* call = expr->as<Call>();
+
+    if (call->containsFunction(FunctionSet::kAggregate)) {
+      // For aggregates, return value with cardinality from state's cost
+      result = expr->value();
+      result.cardinality = state.cost.cardinality;
+    } else {
+      // For non-aggregate calls, check for functionConstraint
+      auto* metadata = call->metadata();
+      if (metadata && metadata->functionConstraint) {
+        auto constraintResult = metadata->functionConstraint(expr, state);
+        if (constraintResult.has_value()) {
+          result = constraintResult.value();
+        } else {
+          // Fallback: get max cardinality from args
+          float maxCardinality = 1.0f;
+          for (auto* arg : call->args()) {
+            Value argValue = exprConstraint(arg, state, update);
+            maxCardinality = std::max(maxCardinality, argValue.cardinality);
+          }
+          result = expr->value();
+          result.cardinality = maxCardinality;
+        }
+      } else {
+        // No functionConstraint: get max cardinality from args
+        float maxCardinality = 1.0f;
+        for (auto* arg : call->args()) {
+          Value argValue = exprConstraint(arg, state, update);
+          maxCardinality = std::max(maxCardinality, argValue.cardinality);
+        }
+        result = expr->value();
+        result.cardinality = maxCardinality;
+      }
+    }
+  }
+
+  // Record the result in state.constraints
+  addConstraint(expr->id(), result, state.constraints);
+
+  return result;
 }
 
 } // namespace facebook::axiom::optimizer
