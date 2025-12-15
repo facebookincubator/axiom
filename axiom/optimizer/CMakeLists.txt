@@ -23,6 +23,7 @@ add_library(
   Cost.cpp
   DerivedTable.cpp
   DerivedTablePrinter.cpp
+  Filters.cpp
   FunctionRegistry.cpp
   JoinSample.cpp
   Model.cpp
