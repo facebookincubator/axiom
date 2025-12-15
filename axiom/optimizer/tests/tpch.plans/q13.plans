@@ -53,9 +53,8 @@ Project (redundant) -> dt4.c_count, dt4.custdist
                 not(like(t3.o_comment, "%special%requests%"))
               TableScan -> t3.o_orderkey, t3.o_custkey, t3.o_comment
                 table: orders
-              HashBuild -> t2.c_custkey
-                TableScan -> t2.c_custkey
-                  table: customer
+              TableScan -> t2.c_custkey
+                table: customer
 
 
 Executable Velox plan:

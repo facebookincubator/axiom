@@ -104,39 +104,34 @@ Project (redundant) -> dt1.s_name, dt1.numwait
             dt6.l_suppkey_2 := t7.l_suppkey
           TableScan -> t7.l_orderkey, t7.l_suppkey
             table: lineitem
-        HashBuild -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
-          Filter -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
-              not(dt1.__mark1)
-            Join RIGHT SEMI (PROJECT) Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
-                dt8.l_orderkey_16 = t3.l_orderkey
-                neq(dt8.l_suppkey_18, t3.l_suppkey)
-              Project (redundant) -> dt8.l_orderkey_16, dt8.l_suppkey_18
-                  dt8.l_orderkey_16 := t9.l_orderkey
-                  dt8.l_suppkey_18 := t9.l_suppkey
-                TableScan -> t9.l_orderkey, t9.l_suppkey
+        Filter -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
+            not(dt1.__mark1)
+          Join RIGHT SEMI (PROJECT) Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
+              dt8.l_orderkey_16 = t3.l_orderkey
+              neq(dt8.l_suppkey_18, t3.l_suppkey)
+            Project (redundant) -> dt8.l_orderkey_16, dt8.l_suppkey_18
+                dt8.l_orderkey_16 := t9.l_orderkey
+                dt8.l_suppkey_18 := t9.l_suppkey
+              TableScan -> t9.l_orderkey, t9.l_suppkey
+                table: lineitem
+                multi-column filters: lt(t9.l_commitdate, t9.l_receiptdate)
+            Join INNER Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey
+                t3.l_orderkey = t4.o_orderkey
+              Join INNER Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey
+                  t3.l_suppkey = t2.s_suppkey
+                TableScan -> t3.l_orderkey, t3.l_suppkey
                   table: lineitem
-                  multi-column filters: lt(t9.l_commitdate, t9.l_receiptdate)
-              HashBuild -> t2.s_name, t3.l_orderkey, t3.l_suppkey
-                Join INNER Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey
-                    t3.l_orderkey = t4.o_orderkey
-                  Join INNER Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey
-                      t3.l_suppkey = t2.s_suppkey
-                    TableScan -> t3.l_orderkey, t3.l_suppkey
-                      table: lineitem
-                      multi-column filters: lt(t3.l_commitdate, t3.l_receiptdate)
-                    HashBuild -> t2.s_suppkey, t2.s_name
-                      Join INNER Hash -> t2.s_suppkey, t2.s_name
-                          t2.s_nationkey = t5.n_nationkey
-                        TableScan -> t2.s_suppkey, t2.s_name, t2.s_nationkey
-                          table: supplier
-                        HashBuild -> t5.n_nationkey
-                          TableScan -> t5.n_nationkey
-                            table: nation
-                            single-column filters: eq(t5.n_name, "SAUDI ARABIA")
-                  HashBuild -> t4.o_orderkey
-                    TableScan -> t4.o_orderkey
-                      table: orders
-                      single-column filters: eq(t4.o_orderstatus, "F")
+                  multi-column filters: lt(t3.l_commitdate, t3.l_receiptdate)
+                Join INNER Hash -> t2.s_suppkey, t2.s_name
+                    t2.s_nationkey = t5.n_nationkey
+                  TableScan -> t2.s_suppkey, t2.s_name, t2.s_nationkey
+                    table: supplier
+                  TableScan -> t5.n_nationkey
+                    table: nation
+                    single-column filters: eq(t5.n_name, "SAUDI ARABIA")
+              TableScan -> t4.o_orderkey
+                table: orders
+                single-column filters: eq(t4.o_orderstatus, "F")
 
 
 Executable Velox plan:

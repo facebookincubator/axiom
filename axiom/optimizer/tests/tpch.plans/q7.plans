@@ -72,29 +72,24 @@ Project -> dt1.supp_nation, dt1.cust_nation, dt1.l_year, dt1.revenue
               TableScan -> t3.l_orderkey, t3.l_suppkey, t3.l_extendedprice, t3.l_discount, t3.l_shipdate
                 table: lineitem
                 single-column filters: between(t3.l_shipdate, "1995-01-01", "1996-12-31")
-              HashBuild -> t4.o_orderkey, t7.n_name
-                Join INNER Hash -> t4.o_orderkey, t7.n_name
-                    t4.o_custkey = t5.c_custkey
-                  TableScan -> t4.o_orderkey, t4.o_custkey
-                    table: orders
-                  HashBuild -> t5.c_custkey, t7.n_name
-                    Join INNER Hash -> t5.c_custkey, t7.n_name
-                        t5.c_nationkey = t7.n_nationkey
-                      TableScan -> t5.c_custkey, t5.c_nationkey
-                        table: customer
-                      HashBuild -> t7.n_nationkey, t7.n_name
-                        TableScan -> t7.n_nationkey, t7.n_name
-                          table: nation
-                          single-column filters: __or(eq(t7.n_name, "GERMANY"), eq(t7.n_name, "FRANCE"))
-            HashBuild -> t2.s_suppkey, t6.n_name
-              Join INNER Hash -> t2.s_suppkey, t6.n_name
-                  t2.s_nationkey = t6.n_nationkey
-                TableScan -> t2.s_suppkey, t2.s_nationkey
-                  table: supplier
-                HashBuild -> t6.n_nationkey, t6.n_name
-                  TableScan -> t6.n_nationkey, t6.n_name
+              Join INNER Hash -> t4.o_orderkey, t7.n_name
+                  t4.o_custkey = t5.c_custkey
+                TableScan -> t4.o_orderkey, t4.o_custkey
+                  table: orders
+                Join INNER Hash -> t5.c_custkey, t7.n_name
+                    t5.c_nationkey = t7.n_nationkey
+                  TableScan -> t5.c_custkey, t5.c_nationkey
+                    table: customer
+                  TableScan -> t7.n_nationkey, t7.n_name
                     table: nation
-                    single-column filters: __or(eq(t6.n_name, "FRANCE"), eq(t6.n_name, "GERMANY"))
+                    single-column filters: __or(eq(t7.n_name, "GERMANY"), eq(t7.n_name, "FRANCE"))
+            Join INNER Hash -> t2.s_suppkey, t6.n_name
+                t2.s_nationkey = t6.n_nationkey
+              TableScan -> t2.s_suppkey, t2.s_nationkey
+                table: supplier
+              TableScan -> t6.n_nationkey, t6.n_name
+                table: nation
+                single-column filters: __or(eq(t6.n_name, "FRANCE"), eq(t6.n_name, "GERMANY"))
 
 
 Executable Velox plan:

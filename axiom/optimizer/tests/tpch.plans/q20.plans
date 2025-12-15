@@ -86,26 +86,22 @@ Project (redundant) -> dt1.s_name, dt1.s_address
                 TableScan -> t7.l_partkey, t7.l_suppkey, t7.l_quantity
                   table: lineitem
                   single-column filters: gte(t7.l_shipdate, "1994-01-01") and lt(t7.l_shipdate, "1995-01-01")
-            HashBuild -> t5.ps_partkey, t5.ps_suppkey, t5.ps_availqty
-              Join LEFT SEMI (FILTER) Hash -> t5.ps_partkey, t5.ps_suppkey, t5.ps_availqty
-                  t5.ps_partkey = dt10.p_partkey
-                TableScan -> t5.ps_partkey, t5.ps_suppkey, t5.ps_availqty
-                  table: partsupp
-                HashBuild -> dt10.p_partkey
-                  Project (redundant) -> dt10.p_partkey
-                      dt10.p_partkey := t11.p_partkey
-                    TableScan -> t11.p_partkey
-                      table: part
-                      single-column filters: like(t11.p_name, "forest%")
-      HashBuild -> t2.s_suppkey, t2.s_name, t2.s_address
-        Join INNER Hash -> t2.s_suppkey, t2.s_name, t2.s_address
-            t2.s_nationkey = t3.n_nationkey
-          TableScan -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_nationkey
-            table: supplier
-          HashBuild -> t3.n_nationkey
-            TableScan -> t3.n_nationkey
-              table: nation
-              single-column filters: eq(t3.n_name, "CANADA")
+            Join LEFT SEMI (FILTER) Hash -> t5.ps_partkey, t5.ps_suppkey, t5.ps_availqty
+                t5.ps_partkey = dt10.p_partkey
+              TableScan -> t5.ps_partkey, t5.ps_suppkey, t5.ps_availqty
+                table: partsupp
+              Project (redundant) -> dt10.p_partkey
+                  dt10.p_partkey := t11.p_partkey
+                TableScan -> t11.p_partkey
+                  table: part
+                  single-column filters: like(t11.p_name, "forest%")
+      Join INNER Hash -> t2.s_suppkey, t2.s_name, t2.s_address
+          t2.s_nationkey = t3.n_nationkey
+        TableScan -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_nationkey
+          table: supplier
+        TableScan -> t3.n_nationkey
+          table: nation
+          single-column filters: eq(t3.n_name, "CANADA")
 
 
 Executable Velox plan:

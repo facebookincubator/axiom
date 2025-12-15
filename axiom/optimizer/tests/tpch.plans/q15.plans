@@ -78,24 +78,22 @@ Project (redundant) -> dt1.s_suppkey, dt1.s_name, dt1.s_address, dt1.s_phone, dt
               TableScan -> t4.l_suppkey, t4.l_extendedprice, t4.l_discount
                 table: lineitem
                 single-column filters: gte(t4.l_shipdate, "1996-01-01") and lt(t4.l_shipdate, "1996-04-01")
-        HashBuild -> dt7.max
-          Project (redundant) -> dt7.max
-              dt7.max := dt7.max
-            Aggregation -> dt7.max
-                dt7.max := max(dt5.total_revenue_19)
-              Project -> dt5.total_revenue_19
-                  dt5.total_revenue_19 := dt5.total_revenue_17
-                Aggregation (t6.l_suppkey) -> t6.l_suppkey, dt5.total_revenue_17
-                    dt5.total_revenue_17 := sum(dt5.__p69)
-                  Project -> t6.l_suppkey, dt5.__p69
-                      t6.l_suppkey := t6.l_suppkey
-                      dt5.__p69 := multiply(t6.l_extendedprice, minus(1, t6.l_discount))
-                    TableScan -> t6.l_suppkey, t6.l_extendedprice, t6.l_discount
-                      table: lineitem
-                      single-column filters: gte(t6.l_shipdate, "1996-01-01") and lt(t6.l_shipdate, "1996-04-01")
-      HashBuild -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_phone
-        TableScan -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_phone
-          table: supplier
+        Project (redundant) -> dt7.max
+            dt7.max := dt7.max
+          Aggregation -> dt7.max
+              dt7.max := max(dt5.total_revenue_19)
+            Project -> dt5.total_revenue_19
+                dt5.total_revenue_19 := dt5.total_revenue_17
+              Aggregation (t6.l_suppkey) -> t6.l_suppkey, dt5.total_revenue_17
+                  dt5.total_revenue_17 := sum(dt5.__p69)
+                Project -> t6.l_suppkey, dt5.__p69
+                    t6.l_suppkey := t6.l_suppkey
+                    dt5.__p69 := multiply(t6.l_extendedprice, minus(1, t6.l_discount))
+                  TableScan -> t6.l_suppkey, t6.l_extendedprice, t6.l_discount
+                    table: lineitem
+                    single-column filters: gte(t6.l_shipdate, "1996-01-01") and lt(t6.l_shipdate, "1996-04-01")
+      TableScan -> t2.s_suppkey, t2.s_name, t2.s_address, t2.s_phone
+        table: supplier
 
 
 Executable Velox plan:

@@ -27,10 +27,6 @@ struct PlanState;
 
 using PlanP = Plan*;
 
-/// A set of build sides. A candidate plan tracks all builds so that they can be
-/// reused.
-using HashBuildVector = std::vector<HashBuildCP>;
-
 /// Item produced by optimization and kept in memo. Corresponds to
 /// pre-costed physical plan with costs and data properties.
 struct Plan {
@@ -60,9 +56,6 @@ struct Plan {
   /// table, e.g. a left (t1 left t2) dt on dt.t1pk = a.fk. In a memo of dt
   /// inputs is dt.pkt1.
   PlanObjectSet input;
-
-  /// Hash join builds placed in the plan. Allows reusing a build.
-  HashBuildVector builds;
 
   std::string printCost() const;
 
