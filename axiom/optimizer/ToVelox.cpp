@@ -491,7 +491,6 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
           toTypePtr(expr->value().type),
           toTypedExpr(expr->as<Field>()->base()),
           expr->as<Field>()->index());
-      break;
     }
     case PlanType::kLiteralExpr: {
       const auto* literal = expr->as<Literal>();
