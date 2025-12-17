@@ -129,7 +129,8 @@ std::shared_ptr<runner::LocalRunner> prepareSampleRunner(
   }
 
   auto columns = sampleColumns.toObjects<Column>();
-  auto index = base->chooseLeafIndex()[0];
+  VELOX_DCHECK(!base->schemaTable->columnGroups.empty());
+  auto index = base->schemaTable->columnGroups[0];
   auto* scan = make<TableScan>(base, index, columns);
 
   ExprVector hashes;

@@ -773,12 +773,6 @@ struct BaseTable : public PlanObject {
 
   PathSet columnSubfields(int32_t id) const;
 
-  /// Returns possible indices for driving table scan of 'table'.
-  std::vector<ColumnGroupCP> chooseLeafIndex() const {
-    VELOX_DCHECK(!schemaTable->columnGroups.empty());
-    return {schemaTable->columnGroups[0]};
-  }
-
   std::string toString() const override;
 };
 

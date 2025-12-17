@@ -1922,9 +1922,9 @@ void Optimization::makeJoins(PlanState& state) {
   for (auto [maybeJoins, score, from] : firstTables) {
     if (from->is(PlanType::kTableNode)) {
       auto table = from->as<BaseTable>();
-      auto indices = table->chooseLeafIndex();
       // Make plan starting with each relevant index of the table.
-      for (auto index : indices) {
+      VELOX_DCHECK(!table->schemaTable->columnGroups.empty());
+      for (auto index : table->schemaTable->columnGroups) {
         auto columns = indexColumns(state.downstreamColumns(), table, index);
 
         PlanStateSaver save(state);
