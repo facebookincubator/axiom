@@ -33,6 +33,17 @@ const auto& orderTypeNames() {
   };
   return kNames;
 }
+
+/// Helper to register an optional Variant with the QueryGraphContext.
+/// Returns nullptr if the optional has no value, otherwise returns a pointer
+/// to a registered copy that lives for the duration of QueryGraphContext.
+const velox::Variant* registerOptionalVariant(
+    const std::optional<velox::Variant>& opt) {
+  if (!opt.has_value()) {
+    return nullptr;
+  }
+  return registerVariant(opt.value());
+}
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(OrderType, orderTypeNames);
@@ -88,7 +99,18 @@ SchemaTableCP Schema::findTable(
         1,
         tableColumn->approxNumDistinct(
             static_cast<int64_t>(connectorTable->numRows())));
+
+    // Get min/max from column statistics if available
+    const velox::Variant* minPtr = nullptr;
+    const velox::Variant* maxPtr = nullptr;
+    if (auto* stats = tableColumn->stats()) {
+      minPtr = registerOptionalVariant(stats->min);
+      maxPtr = registerOptionalVariant(stats->max);
+    }
+
     Value value(toType(tableColumn->type()), cardinality);
+    value.min = minPtr;
+    value.max = maxPtr;
     auto* column = make<Column>(toName(columnName), nullptr, value);
     schemaColumns[column->name()] = column;
   }
