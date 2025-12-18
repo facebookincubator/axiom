@@ -16,6 +16,7 @@
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/init/Init.h>
+#include <folly/system/HardwareConcurrency.h>
 #include <gflags/gflags.h>
 #include <sys/resource.h>
 #include <sys/time.h>
@@ -188,7 +189,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
 
     executor_ =
         std::make_shared<folly::CPUThreadPoolExecutor>(std::max<int32_t>(
-            std::thread::hardware_concurrency() * 2,
+            folly::hardware_concurrency() * 2,
             FLAGS_num_workers * FLAGS_num_drivers * 2 + 2));
     spillExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(4);
   }

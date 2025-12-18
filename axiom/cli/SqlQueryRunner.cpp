@@ -15,6 +15,7 @@
  */
 
 #include "axiom/cli/SqlQueryRunner.h"
+#include <folly/system/HardwareConcurrency.h>
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include "axiom/optimizer/DerivedTablePrinter.h"
@@ -176,7 +177,7 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
   ++queryCounter_;
 
   executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(std::max<int32_t>(
-      std::thread::hardware_concurrency() * 2,
+      folly::hardware_concurrency() * 2,
       options.numWorkers * options.numDrivers * 2 + 2));
 
   return velox::core::QueryCtx::create(

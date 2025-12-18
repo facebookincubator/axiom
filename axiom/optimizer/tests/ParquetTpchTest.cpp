@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
+#include <folly/system/HardwareConcurrency.h>
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -72,12 +73,12 @@ void doCreateTables(std::string_view path) {
     }
 
     const int32_t numDrivers =
-        std::min<int32_t>(numSplits, std::thread::hardware_concurrency());
+        std::min<int32_t>(numSplits, folly::hardware_concurrency());
 
     LOG(INFO) << "Creating TPC-H table " << tableName
               << " scaleFactor=" << FLAGS_tpch_scale
               << " numSplits=" << numSplits << " numDrivers=" << numDrivers
-              << " hw concurrency=" << std::thread::hardware_concurrency();
+              << " hw concurrency=" << folly::hardware_concurrency();
     auto rows = AssertQueryBuilder(plan)
                     .splits(std::move(splits))
                     .maxDrivers(numDrivers)
