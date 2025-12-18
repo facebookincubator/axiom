@@ -21,6 +21,10 @@
 #include "velox/exec/TableWriter.h"
 #include "velox/expression/ExprConstants.h"
 
+#include <fmt/format.h>
+#include <folly/String.h>
+#include <algorithm>
+
 namespace facebook::axiom::connector::hive {
 
 std::string HivePartitionHandle::makePartitionString(
@@ -347,6 +351,20 @@ void HiveConnectorMetadata::validateOptions(
       VELOX_USER_FAIL("Option {} is not supported", pair.first);
     }
   }
+}
+
+std::string HivePartitionHandle::toString() const {
+  std::string result = partition();
+
+  // Append bucket number if present
+  if (tableBucketNumber.has_value()) {
+    if (!result.empty()) {
+      result += ", ";
+    }
+    result += fmt::format("buckets={}", tableBucketNumber.value());
+  }
+
+  return fmt::format("<hive partition: {}>", result);
 }
 
 } // namespace facebook::axiom::connector::hive

@@ -38,6 +38,8 @@ struct HivePartitionHandle : public PartitionHandle {
         tableBucketNumber(tableBucketNumber),
         partition_(makePartitionString(this->partitionKeys)) {}
 
+  std::string toString() const override;
+
   const folly::F14FastMap<std::string, std::optional<std::string>>
       partitionKeys;
   const std::optional<int32_t> tableBucketNumber;
