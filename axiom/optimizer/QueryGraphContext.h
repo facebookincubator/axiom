@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <mutex>
+#include <set>
+#include <thread>
 #include "axiom/optimizer/ArenaCache.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/type/Variant.h"
@@ -218,39 +221,25 @@ class QueryGraphContext {
  public:
   explicit QueryGraphContext(velox::HashStringAllocator& allocator);
 
+  /// Enables or disables thread-safe mode. When enabled, allocate(), free(),
+  /// toName(), toType(), newId(), and toPath() will use mutex protection.
+  void setThreadSafe(bool threadSafe) {
+    threadSafe_ = threadSafe;
+  }
+
   /// Returns a new unique id to use for 'object' and associates 'object' to
   /// this id. Tagging objects with integers ids is useful for efficiently
   /// representing sets of objects as bitmaps.
-  int32_t newId(PlanObject* object) {
-    objects_.push_back(object);
-    return static_cast<int32_t>(objects_.size() - 1);
-  }
+  int32_t newId(PlanObject* object);
 
   /// Allocates 'size' bytes from the arena of 'this'. The allocation lives
   /// until free() is called on it or the arena is destroyed.
-  void* allocate(int32_t size) {
-#ifdef QG_TEST_USE_MALLOC
-    // Benchmark-only. Dropping the arena will not free un-free'd allocs.
-    return ::malloc(size);
-#elif defined(QG_CACHE_ARENA)
-    return cache_.allocate(size);
-#else
-    return allocator_.allocate(size)->begin();
-#endif
-  }
+  void* allocate(int32_t size);
 
   /// Frees ptr, which must have been allocated with allocate() above. Calling
   /// this is not mandatory since objects from the arena get freed at latest
   /// when the arena is destroyed.
-  void free(void* ptr) {
-#ifdef QG_TEST_USE_MALLOC
-    ::free(ptr);
-#elif defined(QG_CACHE_ARENA)
-    cache_.free(ptr);
-#else
-    allocator_.free(velox::HashStringAllocator::headerOf(ptr));
-#endif
-  }
+  void free(void* ptr);
 
   /// Returns the object associated to 'id'. See newId()
   PlanObjectCP objectAt(int32_t id) {
@@ -300,12 +289,33 @@ class QueryGraphContext {
   /// Takes ownership of a Variant for the duration. Variants are allocated
   /// with new so not in the arena.
   velox::Variant* registerVariant(std::unique_ptr<velox::Variant> value) {
+    std::lock_guard<std::mutex> lock(variantsMutex_);
     allVariants_.push_back(std::move(value));
     return allVariants_.back().get();
   }
 
+  /// Takes ownership of any object for the duration. The object is stored as
+  /// a shared_ptr<void> and scoped to the lifetime of this QueryGraphContext.
+  /// Thread-safe.
+  template <typename T>
+  T* registerAny(std::unique_ptr<T>& ptr) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    T* rawPtr = ptr.release();
+    std::shared_ptr<T> sharedPtr(rawPtr);
+    ownedObjects_.insert(std::static_pointer_cast<void>(sharedPtr));
+    return rawPtr;
+  }
+
  private:
   velox::TypePtr dedupType(const velox::TypePtr& type);
+
+  // Private locked implementations called when threadSafe_ is true
+  int32_t newIdLocked(PlanObject* object);
+  void* allocateLocked(int32_t size);
+  void freeLocked(void* ptr);
+  const char* toNameLocked(std::string_view str);
+  const velox::Type* toTypeLocked(const velox::TypePtr& type);
+  PathCP toPathLocked(PathCP path);
 
   velox::HashStringAllocator& allocator_;
   ArenaCache cache_;
@@ -330,10 +340,35 @@ class QueryGraphContext {
   Optimization* optimization_{nullptr};
 
   std::vector<std::unique_ptr<velox::Variant>> allVariants_;
+
+  // Set of shared_ptr<void> to hold arbitrary objects scoped to this context.
+  std::set<std::shared_ptr<void>> ownedObjects_;
+
+  // Mutex for thread-safe access to ownedObjects_.
+  std::mutex mutex_;
+
+  // Mutex to protect registerVariant operations
+  mutable std::mutex variantsMutex_;
+
+  // Flag to enable thread-safe mode for allocate(), free(), toName(), toType(),
+  // newId(), and toPath() methods.
+  bool threadSafe_{false};
+
+  // Recursive mutex to protect thread-safe methods when threadSafe_ is true.
+  mutable std::recursive_mutex allocateMutex_;
+
+#ifndef NDEBUG
+  // Thread ID on which this context was created. Used to check that
+  // allocate() and free() are called on the same thread.
+  std::thread::id creationThreadId_;
+#endif
 };
 
 /// Returns a mutable reference to the calling thread's QueryGraphContext.
 QueryGraphContext*& queryCtx();
+
+/// Returns true if initial statistics have been fetched for all base tables.
+bool statsFetched();
 
 template <class T>
 T* QGAllocator<T>::allocate(std::size_t n) {
