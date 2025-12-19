@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/common/Enums.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 
 namespace axiom::sql::presto {
@@ -28,6 +29,8 @@ enum class SqlStatementKind {
   kExplain,
 };
 
+AXIOM_DECLARE_ENUM_NAME(SqlStatementKind);
+
 class SqlStatement {
  public:
   explicit SqlStatement(
@@ -37,6 +40,8 @@ class SqlStatement {
       : kind_{kind}, views_{std::move(views)} {}
 
   virtual ~SqlStatement() = default;
+
+  std::string_view kindName() const;
 
   SqlStatementKind kind() const {
     return kind_;
