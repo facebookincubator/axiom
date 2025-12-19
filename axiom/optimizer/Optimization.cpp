@@ -1248,6 +1248,26 @@ void tryOptimizeSemiProject(
     }
   }
 }
+
+ExprVector joinCopartition(
+    const std::vector<uint32_t>& indices,
+    const JoinSide& joined) {
+  ExprVector result;
+
+  for (auto index : indices) {
+    // Get the key from joined.keys at the given index
+    auto joinedKey = joined.keys[index];
+
+    // If the key is not a column, return empty
+    if (!joinedKey->isColumn()) {
+      return ExprVector();
+    }
+
+    result.push_back(joinedKey);
+  }
+
+  return result;
+}
 } // namespace
 
 void Optimization::joinByHash(
@@ -1265,6 +1285,8 @@ void Optimization::joinByHash(
     // Prefer to make a build partitioned on join keys and shuffle probe to
     // align with build.
     copartition = build.keys;
+  } else {
+    copartition = joinCopartition(partKeys, build);
   }
 
   PlanStateSaver save(state, candidate);

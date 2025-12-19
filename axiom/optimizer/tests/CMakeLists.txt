@@ -106,6 +106,7 @@ add_executable(
   axiom_optimizer_tests
   AggregationPlanTest.cpp
   ConstraintsTest.cpp
+  CopartitionTest.cpp
   CsvReadWriteTest.cpp
   DerivedTablePrinterTest.cpp
   FilterPushdownTest.cpp
