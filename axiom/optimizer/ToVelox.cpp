@@ -1437,8 +1437,8 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
   auto* connector = layout->connector();
   auto* metadata = connector::ConnectorMetadata::metadata(connector);
   auto session = session_->toConnectorSession(connector->connectorId());
-  auto handle =
-      metadata->beginWrite(session, table.shared_from_this(), write.kind());
+  auto handle = metadata->beginWrite(
+      session, tableWrite.write->tableWrite().table(), write.kind());
 
   auto outputType = handle->resultType();
 

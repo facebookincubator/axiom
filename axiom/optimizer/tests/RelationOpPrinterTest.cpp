@@ -112,14 +112,11 @@ class RelationOpPrinterTest : public ::testing::Test {
 
     VeloxHistory history;
 
-    auto schemaResolver = std::make_shared<connector::SchemaResolver>();
-
     auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
 
     Optimization opt{
         session,
         logicalPlan,
-        *schemaResolver,
         history,
         veloxQueryCtx,
         evaluator,

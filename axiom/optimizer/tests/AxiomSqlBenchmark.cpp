@@ -21,7 +21,6 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <iostream>
-#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/PlanPrinter.h"
@@ -175,8 +174,6 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     } else {
       connector_ = registerTpchConnector();
     }
-
-    schema_ = std::make_shared<connector::SchemaResolver>();
 
     prestoParser_ = std::make_unique<::axiom::sql::presto::PrestoParser>(
         connector_->connectorId(), std::nullopt, optimizerPool_.get());
@@ -376,13 +373,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
 
       auto table = createTable(*ctas);
 
-      auto originalSchemaResolver = schema_;
-      SCOPE_EXIT {
-        schema_ = originalSchemaResolver;
-      };
-
-      schema_ = std::make_shared<connector::SchemaResolver>();
-      schema_->setTargetTable(connector_->connectorId(), table);
+      ctas->plan()->as<logical_plan::TableWriteNode>()->setTable(
+          std::move(table));
 
       runSql(ctas->plan());
       return;
@@ -584,7 +576,6 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     optimizer::Optimization optimization(
         session,
         *logicalPlan,
-        *schema_,
         *history_,
         queryCtx,
         evaluator,
@@ -958,7 +949,6 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<folly::IOThreadPoolExecutor> spillExecutor_;
   std::shared_ptr<velox::connector::Connector> connector_;
-  std::shared_ptr<connector::SchemaResolver> schema_;
   std::unique_ptr<optimizer::VeloxHistory> history_;
   std::unique_ptr<::axiom::sql::presto::PrestoParser> prestoParser_;
   std::ofstream* record_{nullptr};
