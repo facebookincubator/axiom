@@ -52,7 +52,18 @@ class SqlQueryRunner {
     bool debugMode{false};
   };
 
+  /// Runs a single SQL statement and returns the result.
   SqlResult run(std::string_view sql, const RunOptions& options);
+
+  /// Runs a single parsed SQL statement and returns the result.
+  SqlResult run(
+      const presto::SqlStatement& statement,
+      const RunOptions& options);
+
+  /// Parses SQL text containing one or more semicolon-separated statements.
+  /// @param sql SQL text to parse.
+  /// @return Vector of parsed statements.
+  std::vector<presto::SqlStatementPtr> parseMultiple(std::string_view sql);
 
   std::unordered_map<std::string, std::string>& sessionConfig() {
     return config_;
