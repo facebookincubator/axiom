@@ -309,12 +309,6 @@ class ToGraph {
       const logical_plan::LogicalPlanNode& node,
       DerivedTableP outerDt = nullptr);
 
-  // Same as finalizeDt but requires 'outerDt' to be non-null.
-  // And don't check that correlated conjuncts are empty.
-  void finalizeSubqueryDt(
-      const logical_plan::LogicalPlanNode& node,
-      DerivedTableP outerDt);
-
   // Adds a column 'name' from current DerivedTable to the 'dt'.
   void addDtColumn(DerivedTableP dt, std::string_view name);
 

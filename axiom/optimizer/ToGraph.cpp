@@ -1665,20 +1665,12 @@ void ToGraph::wrapInDt(const lp::LogicalPlanNode& node, bool unordered) {
 void ToGraph::finalizeDt(
     const lp::LogicalPlanNode& node,
     DerivedTableP outerDt) {
-  VELOX_CHECK(correlatedConjuncts_.empty());
-  finalizeSubqueryDt(node, outerDt ? outerDt : newDt());
-}
-
-void ToGraph::finalizeSubqueryDt(
-    const lp::LogicalPlanNode& node,
-    DerivedTableP outerDt) {
-  VELOX_DCHECK_NOT_NULL(outerDt);
   VELOX_DCHECK_NOT_NULL(currentDt_);
 
   DerivedTableP dt = currentDt_;
   setDtUsedOutput(dt, node);
 
-  currentDt_ = outerDt;
+  currentDt_ = outerDt ? outerDt : newDt();
   currentDt_->addTable(dt);
 }
 
@@ -1926,11 +1918,51 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
   }
   VELOX_CHECK(subqueries.inPredicates.empty());
   VELOX_CHECK(subqueries.exists.empty());
-  for (const auto& subquery : subqueries.scalars) {
-    auto* subqueryDt = translateSubquery(*subquery->subquery());
+  auto projectSubquery = [&](PlanObjectCP leftTable,
+                             const lp::SubqueryExprPtr& subquery) {
     VELOX_CHECK(correlatedConjuncts_.empty());
-    VELOX_CHECK_EQ(1, subqueryDt->columns.size());
-    subqueries_.emplace(subquery, subqueryDt->columns.back());
+    auto* subqueryDt = translateSubquery(*subquery->subquery());
+    if (correlatedConjuncts_.empty()) {
+      VELOX_CHECK_EQ(1, subqueryDt->columns.size());
+      subqueries_.emplace(subquery, subqueryDt->columns.back());
+      return true;
+    }
+    VELOX_CHECK_LE(1, subqueryDt->columns.size());
+    auto* expr = processSubquery(leftTable, subqueryDt, [&](AddJoinArgs args) {
+      auto* edge = make<JoinEdge>(
+          args.leftTable,
+          subqueryDt,
+          JoinEdge::Spec{
+              .filter = std::move(args.filter),
+              .joinType = JoinEdge::JoinType::kLeft,
+          });
+      for (size_t i = 0; i < args.leftKeys.size(); ++i) {
+        edge->addEquality(args.leftKeys[i], args.rightKeys[i]);
+      }
+      currentDt_->joins.push_back(edge);
+      return subqueryDt->columns.back();
+    });
+    if (!expr) {
+      return false;
+    }
+    subqueries_.emplace(subquery, expr);
+    return true;
+  };
+
+  std::erase_if(subqueries.scalars, [&](const lp::SubqueryExprPtr& subquery) {
+    return projectSubquery(nullptr, subquery);
+  });
+  if (!subqueries.scalars.empty()) {
+    finalizeDt(*project.onlyInput());
+  }
+  auto* leftTable = subqueries.scalars.empty()
+      ? nullptr
+      : currentDt_->tables.back()->as<DerivedTable>();
+  for (const auto& subquery : subqueries.scalars) {
+    VELOX_CHECK(
+        projectSubquery(leftTable, subquery),
+        "Cannot process correlated scalar subquery: {}",
+        subquery->toString());
   }
 
   for (auto i : channels) {
@@ -1964,7 +1996,14 @@ DerivedTableP ToGraph::translateSubquery(
   auto* outerDt = std::exchange(currentDt_, newDt());
   makeQueryGraph(node, kUnorderedAllowedInDt);
   auto* subqueryDt = currentDt_;
-  finalizeSubqueryDt(node, outerDt);
+  finalizeDt(node, outerDt);
+
+  if (!correlatedConjuncts_.empty()) {
+    VELOX_CHECK_EQ(
+        subqueryDt->offset, 0, "Correlated subqueries do not support OFFSET");
+    // limit is only works for exists and in subqueries (semi join).
+    subqueryDt->limit = -1;
+  }
 
   return subqueryDt;
 }
@@ -2591,12 +2630,11 @@ void ToGraph::makeQueryGraph(
         ExprVector leftKeys;
         for (const auto* conjunct : correlatedConjuncts_) {
           const auto tables = conjunct->allTables().toObjects();
-          VELOX_CHECK_EQ(2, tables.size());
-
           ExprCP left = nullptr;
           ExprCP right = nullptr;
           ExprCP key = nullptr;
-          if (isJoinEquality(conjunct, tables[0], tables[1], left, right)) {
+          if (tables.size() == 2 &&
+              isJoinEquality(conjunct, tables[0], tables[1], left, right)) {
             if (currentDt_->tableSet.contains(tables[0])) {
               key = left;
               leftKeys.push_back(right);
