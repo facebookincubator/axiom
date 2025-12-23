@@ -505,6 +505,28 @@ TEST_F(PrestoParserTest, intervalYearMonth) {
   test("INTERVAL '-3' MONTH", -3);
 }
 
+TEST_F(PrestoParserTest, doubleLiteral) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto test = [&](std::string_view sql, double expected) {
+    SCOPED_TRACE(sql);
+    auto expr = parser.parseExpression(sql);
+
+    ASSERT_TRUE(expr->isConstant());
+    ASSERT_EQ(expr->type()->toString(), DOUBLE()->toString());
+
+    auto value = expr->as<lp::ConstantExpr>()->value();
+    ASSERT_FALSE(value->isNull());
+    ASSERT_DOUBLE_EQ(value->value<double>(), expected);
+  };
+
+  test("1E10", 1e10);
+  test("1.5E10", 1.5e10);
+  test("1.23E-5", 1.23e-5);
+  test(".5E2", 0.5e2);
+  test("1E+5", 1e5);
+}
+
 TEST_F(PrestoParserTest, null) {
   auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
   testSql("SELECT 1 is null", matcher);

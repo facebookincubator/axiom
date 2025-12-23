@@ -2198,7 +2198,8 @@ std::any AstBuilder::visitDecimalLiteral(
 std::any AstBuilder::visitDoubleLiteral(
     PrestoSqlParser::DoubleLiteralContext* ctx) {
   trace("visitDoubleLiteral");
-  return visitChildren(ctx);
+  return std::static_pointer_cast<Expression>(std::make_shared<DoubleLiteral>(
+      getLocation(ctx), std::stod(ctx->getText())));
 }
 
 std::any AstBuilder::visitIntegerLiteral(
