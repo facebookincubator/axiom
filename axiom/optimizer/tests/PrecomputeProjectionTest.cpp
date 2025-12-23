@@ -99,8 +99,9 @@ TEST_F(PrecomputeProjectionTest, basic) {
 
     // No expressions.
     {
+      PlanState tempState(*queryCtx()->optimization(), nullptr);
       PrecomputeProjection precompute(input, dt);
-      auto project = std::move(precompute).maybeProject();
+      auto project = std::move(precompute).maybeProject(tempState);
       ASSERT_EQ(project.get(), input.get());
     }
 
@@ -108,6 +109,7 @@ TEST_F(PrecomputeProjectionTest, basic) {
 
     // A few expressions. Some duplicates.
     {
+      PlanState tempState(*queryCtx()->optimization(), nullptr);
       PrecomputeProjection precompute(input, dt);
 
       // Column "a".
@@ -123,7 +125,7 @@ TEST_F(PrecomputeProjectionTest, basic) {
       auto* duplicate = precompute.toColumn(agg->groupingKeys()[1]);
       ASSERT_EQ(column, duplicate);
 
-      auto project = std::move(precompute).maybeProject();
+      auto project = std::move(precompute).maybeProject(tempState);
       ASSERT_NE(project.get(), input.get());
       ASSERT_TRUE(project->is(RelType::kProject));
 
@@ -137,6 +139,7 @@ TEST_F(PrecomputeProjectionTest, basic) {
 
     // Same, but with projectAllInputs = false.
     {
+      PlanState tempState(*queryCtx()->optimization(), nullptr);
       PrecomputeProjection precompute(input, dt, /*projectAllInputs=*/false);
 
       // Column "a".
@@ -152,7 +155,7 @@ TEST_F(PrecomputeProjectionTest, basic) {
       auto* duplicate = precompute.toColumn(agg->groupingKeys()[1]);
       ASSERT_EQ(column, duplicate);
 
-      auto project = std::move(precompute).maybeProject();
+      auto project = std::move(precompute).maybeProject(tempState);
       ASSERT_NE(project.get(), input.get());
       ASSERT_TRUE(project->is(RelType::kProject));
 
@@ -167,31 +170,34 @@ TEST_F(PrecomputeProjectionTest, basic) {
     Variant v{123};
     auto* literal = make<Literal>(Value(toType(INTEGER()), 1), &v);
     {
+      PlanState tempState(*queryCtx()->optimization(), nullptr);
       PrecomputeProjection precompute(input, dt);
 
       auto* column = precompute.toColumn(literal);
       ASSERT_NE(column, literal);
       ASSERT_TRUE(column->is(PlanType::kColumnExpr));
 
-      auto project = std::move(precompute).maybeProject();
+      auto project = std::move(precompute).maybeProject(tempState);
       ASSERT_NE(project.get(), input.get());
       ASSERT_EQ(project->columns().size(), input->columns().size() + 1);
       ASSERT_EQ(project->as<Project>()->exprs().back()->toString(), "123");
     }
 
     {
+      PlanState tempState(*queryCtx()->optimization(), nullptr);
       PrecomputeProjection precompute(input, dt);
 
       auto* column = precompute.toColumn(
           literal, /*alias=*/nullptr, /*preserveLiterals=*/true);
       ASSERT_EQ(column, literal);
 
-      auto project = std::move(precompute).maybeProject();
+      auto project = std::move(precompute).maybeProject(tempState);
       ASSERT_EQ(project.get(), input.get());
     }
 
     // Aliases.
     {
+      PlanState tempState(*queryCtx()->optimization(), nullptr);
       PrecomputeProjection precompute(input, dt, /*projectAllInputs=*/false);
 
       const auto* aliasName = toName("aaa");
@@ -201,7 +207,7 @@ TEST_F(PrecomputeProjectionTest, basic) {
       auto* column = precompute.toColumn(agg->groupingKeys()[0], outputColumn);
       ASSERT_NE(column, agg->groupingKeys()[0]);
 
-      auto project = std::move(precompute).maybeProject();
+      auto project = std::move(precompute).maybeProject(tempState);
       ASSERT_NE(project.get(), input.get());
       ASSERT_EQ(project->columns().size(), 1);
       ASSERT_EQ(project->as<Project>()->columns().back()->alias(), aliasName);
@@ -209,6 +215,7 @@ TEST_F(PrecomputeProjectionTest, basic) {
 
     // Output name as alias column.
     {
+      PlanState tempState(*queryCtx()->optimization(), nullptr);
       PrecomputeProjection precompute(input, dt, /*projectAllInputs=*/false);
 
       auto* outputColumn =
@@ -217,7 +224,7 @@ TEST_F(PrecomputeProjectionTest, basic) {
       auto* column = precompute.toColumn(agg->groupingKeys()[0], outputColumn);
       ASSERT_NE(column, agg->groupingKeys()[0]);
 
-      auto project = std::move(precompute).maybeProject();
+      auto project = std::move(precompute).maybeProject(tempState);
       ASSERT_NE(project.get(), input.get());
       ASSERT_EQ(project->columns().size(), 1);
       ASSERT_EQ(

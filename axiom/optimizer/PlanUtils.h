@@ -114,4 +114,9 @@ std::string orderByToString(
 
 std::string columnsToString(const ColumnVector& columns);
 
+/// Recursively flattens all calls to function 'func' in 'expr' into 'flat'.
+/// If 'expr' is a call to 'func', recursively flattens its arguments.
+/// Otherwise, adds 'expr' to 'flat'.
+void flattenAll(ExprCP expr, Name func, ExprVector& flat);
+
 } // namespace facebook::axiom::optimizer

@@ -55,6 +55,11 @@ struct OptimizerOptions {
   /// disabled, a default selectivity will be used.
   bool sampleFilters{true};
 
+  /// Enable filter selectivity sampling when there are no statistics available.
+  /// If this flag is set and sampleFilters is disabled, filters will still be
+  /// evaluated against a sample when no historical statistics are available.
+  bool sampleFiltersIfNoStats{true};
+
   /// Enable reducing semi joins.
   bool enableReducingExistences{true};
 

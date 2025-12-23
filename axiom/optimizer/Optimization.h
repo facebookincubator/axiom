@@ -47,7 +47,8 @@ class Optimization {
       const logical_plan::LogicalPlanNode& logicalPlan,
       velox::memory::MemoryPool& pool,
       OptimizerOptions options = {},
-      runner::MultiFragmentPlan::Options runnerOptions = {});
+      runner::MultiFragmentPlan::Options runnerOptions = {},
+      History* history = nullptr);
 
   Optimization(const Optimization& other) = delete;
   Optimization& operator=(const Optimization& other) = delete;
@@ -83,12 +84,12 @@ class Optimization {
         baseTable, leafColumns, topColumns, typeMap);
   }
 
-  /// Sets 'filterSelectivity' of 'baseTable' from history. Returns true if set.
+  /// Sets 'filterSelectivity' of 'baseTable' from history.
   /// 'scanType' is the set of sampled columns with possible map to struct cast.
-  bool setLeafSelectivity(
+  void setLeafSelectivity(
       BaseTable& baseTable,
       const velox::RowTypePtr& scanType) {
-    return history_.setLeafSelectivity(baseTable, scanType);
+    history_.setLeafSelectivity(baseTable, scanType);
   }
 
   void filterUpdated(BaseTableCP baseTable, bool updateSelectivity = true) {
@@ -117,11 +118,16 @@ class Optimization {
 
   void makeJoins(PlanState& state);
 
+  /// Fetches initial statistics for all base tables and makes initial plans
+  /// for all derived tables in the query graph tree.
+  void getInitialStats();
+
   /// Adds single aggregation on top of 'input'.
   /// @param dt Derived table with an aggregation.
   static RelationOpPtr planSingleAggregation(
       DerivedTableCP dt,
-      RelationOpPtr& input);
+      RelationOpPtr& input,
+      PlanState& state);
 
   const std::shared_ptr<velox::core::QueryCtx>& veloxQueryCtx() const {
     return veloxQueryCtx_;
@@ -158,6 +164,12 @@ class Optimization {
 
   History& history() const {
     return history_;
+  }
+
+  /// Returns true if initial statistics have been fetched for all base tables
+  /// and initial plans have been made for all derived tables.
+  bool statsFetched() const {
+    return statsFetched_;
   }
 
   /// If false, correlation names are not included in Column::toString(). Used
@@ -349,6 +361,10 @@ class Optimization {
   int32_t traceFlags_{0};
 
   bool cnamesInExpr_{true};
+
+  /// True after getInitialStats() has been called and initial statistics
+  /// and plans are available.
+  bool statsFetched_{false};
 
   Name const negation_;
 
