@@ -24,14 +24,19 @@
 namespace axiom::sql::presto {
 namespace {
 
-void parseQuery(std::string_view sql) {
+void parseQuery(std::string_view sql, bool isValid = true) {
   UpperCaseInputStream input(sql);
   PrestoSqlLexer lexer(&input);
   antlr4::CommonTokenStream tokens(&lexer);
   PrestoSqlParser parser(&tokens);
-  parser.query();
+  parser.singleStatement();
 
-  EXPECT_EQ(0, parser.getNumberOfSyntaxErrors()) << "Failed to parse:" << sql;
+  if (isValid) {
+    EXPECT_EQ(0, parser.getNumberOfSyntaxErrors()) << "Failed to parse:" << sql;
+  } else {
+    EXPECT_GT(parser.getNumberOfSyntaxErrors(), 0)
+        << "Should have failed to parse SQL: " << sql;
+  }
 }
 
 TEST(GrammarTest, selectQueries) {
@@ -90,5 +95,10 @@ TEST(GrammarTest, selectQueries) {
     parseQuery(q);
   }
 }
+
+TEST(GrammarTest, invalidQuery) {
+  parseQuery("SELECT a INVALID b", /* isValid= */ false);
+}
+
 } // namespace
 } // namespace axiom::sql::presto
