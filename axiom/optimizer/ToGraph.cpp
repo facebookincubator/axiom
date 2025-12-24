@@ -258,14 +258,6 @@ lp::ValuesNodePtr ToGraph::tryFoldConstantDt(DerivedTableP dt) const {
   // DT has a single BaseTable with a global aggregation.
   const auto* aggPlan = dt->aggregation;
 
-  // Check if aggregation ignores duplicate inputs.
-  for (const auto* agg : aggPlan->aggregates()) {
-    if (!agg->functions().contains(FunctionSet::kIgnoreDuplicatesAggregate) &&
-        !agg->isDistinct()) {
-      return nullptr;
-    }
-  }
-
   // Check if aggregation uses only 'discretePredicate' columns.
   auto* baseTable = dt->tables[0]->as<BaseTable>();
 
@@ -1426,25 +1418,20 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     const auto& metadata =
         velox::exec::getAggregateFunctionMetadata(aggregate->name());
 
-    if (metadata.ignoreDuplicates) {
-      funcs = funcs | FunctionSet::kIgnoreDuplicatesAggregate;
-    } else {
+    const bool isDistinct = [&] {
+      if (metadata.ignoreDuplicates) {
+        return false;
+      }
       if ((aggName == toName("min") || aggName == toName("max")) &&
           args.size() == 1) {
         // Presto's min/max are not marked 'ignoreDuplicates' because while
         // min(x) and max(x) do ignore duplicates, min(x, n) and max(x, n) do
         // not.
         // TODO Figure out a better way.
-        funcs = funcs | FunctionSet::kIgnoreDuplicatesAggregate;
+        return false;
       }
-    }
-
-    if (metadata.orderSensitive) {
-      funcs = funcs | FunctionSet::kOrderSensitiveAggregate;
-    }
-
-    const bool isDistinct =
-        !metadata.ignoreDuplicates && aggregate->isDistinct();
+      return aggregate->isDistinct();
+    }();
 
     ExprVector orderKeys;
     OrderTypeVector orderTypes;
