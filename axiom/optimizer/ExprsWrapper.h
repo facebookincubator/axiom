@@ -26,6 +26,12 @@ namespace facebook::axiom::optimizer {
 // to the expression vector.
 class ExprsWrapper {
  public:
+  ExprsWrapper() = default;
+  ExprsWrapper(ExprsWrapper&&) = default;
+  ExprsWrapper(const ExprsWrapper&) = default;
+  ExprsWrapper& operator=(ExprsWrapper&&) = default;
+  ExprsWrapper& operator=(const ExprsWrapper&) = default;
+
   ExprsWrapper& operator=(ExprVector exprs);
 
   void push_back(ExprCP expr);

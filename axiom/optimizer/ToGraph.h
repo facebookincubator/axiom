@@ -133,7 +133,6 @@ class ToGraph {
   bool isJoinEquality(
       ExprCP expr,
       PlanObjectCP leftTable,
-      PlanObjectCP rightTable,
       ExprCP& left,
       ExprCP& right) const;
 

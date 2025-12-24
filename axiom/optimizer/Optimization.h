@@ -142,10 +142,9 @@ class Optimization {
   bool isJoinEquality(
       ExprCP expr,
       PlanObjectCP leftTable,
-      PlanObjectCP rightTable,
       ExprCP& left,
       ExprCP& right) const {
-    return toGraph_.isJoinEquality(expr, leftTable, rightTable, left, right);
+    return toGraph_.isJoinEquality(expr, leftTable, left, right);
   }
 
   const SessionPtr& session() const {

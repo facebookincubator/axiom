@@ -15,7 +15,7 @@ dt1: s_acctbal, s_name, n_name, p_partkey, p_mfgr, s_address, s_phone, s_comment
     s_comment := t3.s_comment
   tables: t2, t3, t4, t5, t6, dt7
   joins:
-    t2 LEFT dt7 ON t2.p_partkey = dt7.__gk12
+    t2 LEFT dt7 ON t2.p_partkey = dt7.ps_partkey_0
     t2 INNER t4 ON t2.p_partkey = t4.ps_partkey
     t3 INNER t4 ON t3.s_suppkey = t4.ps_suppkey
     t3 INNER t5 ON t3.s_nationkey = t5.n_nationkey
@@ -42,9 +42,9 @@ t6: r_regionkey, r_name
   table: region
   single-column filters: eq(t6.r_name, "EUROPE")
 
-dt7: __gk12, min
+dt7: ps_partkey_0, min
   output:
-    __gk12 := t8.ps_partkey
+    ps_partkey_0 := t8.ps_partkey
     min := dt7.min
   tables: t8, t9, t10, t11
   joins:
