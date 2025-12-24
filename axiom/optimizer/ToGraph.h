@@ -352,10 +352,16 @@ class ToGraph {
       const logical_plan::Expr& expr,
       PlanObjectCP leftTable);
 
+  void processSubqueries(Subqueries& subqueries, PlanObjectCP leftTable);
+
   void processSubqueries(
+      const logical_plan::LogicalPlanNode& input,
       Subqueries& subqueries,
-      Subqueries& remaining,
       PlanObjectCP leftTable);
+
+  void extractSubqueries(
+      const logical_plan::ExprPtr& expr,
+      Subqueries& subqueries) const;
 
   // Process non-correlated subqueries used in filter's predicate and populate
   // subqueries_ map. For each IN <subquery> expression, create a separate DT
@@ -405,7 +411,7 @@ class ToGraph {
 
   // Maps an expression that contains a subquery to a column or constant that
   // should be used instead. Populated in 'processSubqueries()'.
-  folly::F14FastMap<logical_plan::ExprPtr, ExprCP> subqueries_;
+  folly::F14FastMap<const logical_plan::Expr*, ExprCP> subqueries_;
 
   folly::
       F14FastMap<TypedVariant, ExprCP, TypedVariantHasher, TypedVariantComparer>

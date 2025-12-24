@@ -81,6 +81,16 @@ velox::ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
 }
 } // namespace
 
+struct Subqueries {
+  std::vector<const lp::SubqueryExpr*> scalars;
+  std::vector<const lp::Expr*> inPredicates;
+  std::vector<const lp::Expr*> exists;
+
+  bool empty() const {
+    return scalars.empty() && inPredicates.empty() && exists.empty();
+  }
+};
+
 ToGraph::ToGraph(
     velox::core::ExpressionEvaluator& evaluator,
     const OptimizerOptions& options)
@@ -964,7 +974,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     return translateWindow(expr->as<lp::WindowExpr>());
   }
 
-  auto it = subqueries_.find(expr);
+  auto it = subqueries_.find(expr.get());
   if (it != subqueries_.end()) {
     return it->second;
   }
@@ -1530,6 +1540,12 @@ void ToGraph::addOrderBy(const lp::SortNode& order) {
   VELOX_DCHECK(currentDt_->orderKeys.empty());
   VELOX_DCHECK(currentDt_->orderTypes.empty());
 
+  Subqueries subqueries;
+  for (const auto& field : order.ordering()) {
+    extractSubqueries(field.expression, subqueries);
+  }
+  processSubqueries(order, subqueries, nullptr);
+
   auto [deduppedOrderKeys, deduppedOrderTypes] =
       dedupOrdering(order.ordering());
 
@@ -1853,50 +1869,7 @@ void ToGraph::makeValuesTable(const lp::ValuesNode& values) {
   currentDt_->addTable(valuesTable);
 }
 
-struct Subqueries {
-  std::vector<lp::SubqueryExprPtr> scalars;
-  std::vector<lp::ExprPtr> inPredicates;
-  std::vector<lp::ExprPtr> exists;
-
-  bool empty() const {
-    return scalars.empty() && inPredicates.empty() && exists.empty();
-  }
-};
-
-namespace {
-void extractSubqueries(const lp::ExprPtr& expr, Subqueries& subqueries) {
-  if (expr->isSubquery()) {
-    subqueries.scalars.push_back(
-        std::static_pointer_cast<const lp::SubqueryExpr>(expr));
-    return;
-  }
-
-  if (expr->isSpecialForm()) {
-    const auto* specialForm = expr->as<lp::SpecialFormExpr>();
-    if (specialForm->form() == lp::SpecialForm::kIn &&
-        specialForm->inputAt(1)->isSubquery()) {
-      subqueries.inPredicates.push_back(expr);
-      return;
-    }
-
-    if (specialForm->form() == lp::SpecialForm::kExists) {
-      subqueries.exists.push_back(expr);
-      return;
-    }
-  }
-
-  for (const auto& input : expr->inputs()) {
-    extractSubqueries(input, subqueries);
-  }
-}
-} // namespace
-
 void ToGraph::addProjection(const lp::ProjectNode& project) {
-  auto oldSubqueries = subqueries_;
-  SCOPE_EXIT {
-    subqueries_ = std::move(oldSubqueries);
-  };
-
   exprSource_ = project.onlyInput().get();
 
   const auto& names = project.names();
@@ -1916,54 +1889,7 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
   for (auto i : channels) {
     extractSubqueries(exprs[i], subqueries);
   }
-  VELOX_CHECK(subqueries.inPredicates.empty());
-  VELOX_CHECK(subqueries.exists.empty());
-  auto projectSubquery = [&](PlanObjectCP leftTable,
-                             const lp::SubqueryExprPtr& subquery) {
-    VELOX_CHECK(correlatedConjuncts_.empty());
-    auto* subqueryDt = translateSubquery(*subquery->subquery());
-    if (correlatedConjuncts_.empty()) {
-      VELOX_CHECK_EQ(1, subqueryDt->columns.size());
-      subqueries_.emplace(subquery, subqueryDt->columns.back());
-      return true;
-    }
-    VELOX_CHECK_LE(1, subqueryDt->columns.size());
-    auto* expr = processSubquery(leftTable, subqueryDt, [&](AddJoinArgs args) {
-      auto* edge = make<JoinEdge>(
-          args.leftTable,
-          subqueryDt,
-          JoinEdge::Spec{
-              .filter = std::move(args.filter),
-              .joinType = JoinEdge::JoinType::kLeft,
-          });
-      for (size_t i = 0; i < args.leftKeys.size(); ++i) {
-        edge->addEquality(args.leftKeys[i], args.rightKeys[i]);
-      }
-      currentDt_->joins.push_back(edge);
-      return subqueryDt->columns.back();
-    });
-    if (!expr) {
-      return false;
-    }
-    subqueries_.emplace(subquery, expr);
-    return true;
-  };
-
-  std::erase_if(subqueries.scalars, [&](const lp::SubqueryExprPtr& subquery) {
-    return projectSubquery(nullptr, subquery);
-  });
-  if (!subqueries.scalars.empty()) {
-    finalizeDt(*project.onlyInput());
-  }
-  auto* leftTable = subqueries.scalars.empty()
-      ? nullptr
-      : currentDt_->tables.back()->as<DerivedTable>();
-  for (const auto& subquery : subqueries.scalars) {
-    VELOX_CHECK(
-        projectSubquery(leftTable, subquery),
-        "Cannot process correlated scalar subquery: {}",
-        subquery->toString());
-  }
+  processSubqueries(project, subqueries, nullptr);
 
   for (auto i : channels) {
     if (exprs[i]->isInputReference()) {
@@ -2163,34 +2089,90 @@ ExprCP ToGraph::processExistsExpr(
 
 void ToGraph::processSubqueries(
     Subqueries& subqueries,
-    Subqueries& remaining,
     PlanObjectCP leftTable) {
-  for (auto& subquery : subqueries.scalars) {
+  std::erase_if(subqueries.scalars, [&](const lp::SubqueryExpr* subquery) {
     if (const auto* expr = processScalarSubquery(*subquery, leftTable)) {
-      subqueries_.emplace(std::move(subquery), expr);
-    } else if (!leftTable) {
-      remaining.scalars.push_back(std::move(subquery));
-    } else {
-      VELOX_FAIL("Cannot process scalar subquery: {}", subquery->toString());
+      subqueries_.emplace(subquery, expr);
+      return true;
     }
-  }
-  for (auto& expr : subqueries.inPredicates) {
+    if (!leftTable) {
+      return false;
+    }
+    VELOX_FAIL("Cannot process scalar subquery: {}", subquery->toString());
+  });
+  std::erase_if(subqueries.inPredicates, [&](const lp::Expr* expr) {
     if (const auto* mark = processInExpr(*expr, leftTable)) {
-      subqueries_.emplace(std::move(expr), mark);
-    } else if (!leftTable) {
-      remaining.inPredicates.push_back(std::move(expr));
-    } else {
-      VELOX_FAIL("Cannot process IN expr: {}", expr->toString());
+      subqueries_.emplace(expr, mark);
+      return true;
+    }
+    if (!leftTable) {
+      return false;
+    }
+    VELOX_FAIL("Cannot process IN expr: {}", expr->toString());
+  });
+  std::erase_if(subqueries.exists, [&](const lp::Expr* expr) {
+    if (const auto* mark = processExistsExpr(*expr, leftTable)) {
+      subqueries_.emplace(expr, mark);
+      return true;
+    }
+    if (!leftTable) {
+      return false;
+    }
+    VELOX_FAIL("Cannot process EXISTS expr: {}", expr->toString());
+  });
+}
+
+void ToGraph::processSubqueries(
+    const lp::LogicalPlanNode& input,
+    Subqueries& subqueries,
+    PlanObjectCP leftTable) {
+  if (subqueries.empty()) {
+    return;
+  }
+  if (currentDt_->hasAggregation()) {
+    VELOX_DCHECK_NULL(leftTable);
+    leftTable = currentDt_;
+    finalizeDt(input);
+  }
+  processSubqueries(subqueries, leftTable);
+  if (subqueries.empty()) {
+    return;
+  }
+  VELOX_DCHECK_NULL(leftTable);
+  leftTable = currentDt_;
+  finalizeDt(input);
+  processSubqueries(subqueries, leftTable);
+}
+
+void ToGraph::extractSubqueries(const lp::ExprPtr& expr, Subqueries& subqueries)
+    const {
+  VELOX_DCHECK_NOT_NULL(expr);
+  if (subqueries_.contains(expr.get())) {
+    return;
+  }
+
+  if (expr->isSubquery()) {
+    subqueries.scalars.push_back(
+        static_cast<const lp::SubqueryExpr*>(expr.get()));
+    return;
+  }
+
+  if (expr->isSpecialForm()) {
+    const auto* specialForm = expr->as<lp::SpecialFormExpr>();
+    if (specialForm->form() == lp::SpecialForm::kIn &&
+        specialForm->inputAt(1)->isSubquery()) {
+      subqueries.inPredicates.push_back(expr.get());
+      return;
+    }
+
+    if (specialForm->form() == lp::SpecialForm::kExists) {
+      subqueries.exists.push_back(expr.get());
+      return;
     }
   }
-  for (auto& expr : subqueries.exists) {
-    if (const auto* mark = processExistsExpr(*expr, leftTable)) {
-      subqueries_.emplace(std::move(expr), mark);
-    } else if (!leftTable) {
-      remaining.exists.push_back(std::move(expr));
-    } else {
-      VELOX_FAIL("Cannot process EXISTS expr: {}", expr->toString());
-    }
+
+  for (const auto& input : expr->inputs()) {
+    extractSubqueries(input, subqueries);
   }
 }
 
@@ -2204,22 +2186,7 @@ void ToGraph::processSubqueries(
     leftTable = currentDt_;
     finalizeDt(input);
   }
-  if (subqueries.empty()) {
-    return;
-  }
-  if (currentDt_->hasAggregation()) {
-    leftTable = currentDt_;
-    finalizeDt(input);
-  }
-  Subqueries remaining;
-  processSubqueries(subqueries, remaining, leftTable);
-  if (remaining.empty()) {
-    return;
-  }
-  VELOX_DCHECK_NULL(leftTable);
-  leftTable = currentDt_;
-  finalizeDt(input);
-  processSubqueries(remaining, remaining, leftTable);
+  processSubqueries(input, subqueries, leftTable);
 }
 
 void ToGraph::applySampling(
@@ -2279,11 +2246,6 @@ void ToGraph::applySampling(
 void ToGraph::addFilter(
     const lp::LogicalPlanNode& input,
     const lp::ExprPtr& predicate) {
-  auto oldSubqueries = subqueries_;
-  SCOPE_EXIT {
-    subqueries_ = std::move(oldSubqueries);
-  };
-
   exprSource_ = &input;
 
   processSubqueries(input, predicate);
