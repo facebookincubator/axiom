@@ -273,11 +273,13 @@ struct PlanStateSaver {
       : state_(state),
         placed_(state.placed),
         columns_(state.columns),
+        exprToColumn_(state.exprToColumn),
         cost_(state.cost) {}
 
   ~PlanStateSaver() {
     state_.placed = std::move(placed_);
     state_.columns = std::move(columns_);
+    state_.exprToColumn = std::move(exprToColumn_);
     state_.cost = cost_;
   }
 
@@ -285,6 +287,7 @@ struct PlanStateSaver {
   PlanState& state_;
   PlanObjectSet placed_;
   PlanObjectSet columns_;
+  folly::F14FastMap<ExprCP, ExprCP> exprToColumn_;
   const PlanCost cost_;
 };
 
