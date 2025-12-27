@@ -34,7 +34,7 @@ TestTable::TestTable(
     VELOX_CHECK(
         !columnName.empty(), "column {} in table {} has empty name", i, name_);
     exportedColumns_.emplace_back(
-        std::make_unique<Column>(columnName, columnType, /*hidden=*/false));
+        std::make_unique<Column>(columnName, columnType));
     columnVector.emplace_back(exportedColumns_.back().get());
     auto [_, ok] = columns_.emplace(columnName, exportedColumns_.back().get());
     VELOX_CHECK(
@@ -138,7 +138,7 @@ std::span<const Column* const> TestTableLayout::discretePredicateColumns()
 }
 
 std::unique_ptr<DiscretePredicates> TestTableLayout::discretePredicates(
-    [[maybe_unused]] const std::vector<const Column*>& columns) const {
+    [[maybe_unused]] const std::span<const Column* const> columns) const {
   if (discreteValueColumns_.empty()) {
     return nullptr;
   }
@@ -152,14 +152,11 @@ std::unique_ptr<DiscretePredicates> TestTableLayout::discretePredicates(
 velox::connector::ColumnHandlePtr TestTableLayout::createColumnHandle(
     const ConnectorSessionPtr& session,
     const std::string& columnName,
-    std::vector<velox::common::Subfield> subfields,
-    std::optional<velox::TypePtr> castToType,
-    SubfieldMapping subfieldMapping) const {
+    std::vector<velox::common::Subfield> subfields) const {
   auto column = findColumn(columnName);
   VELOX_CHECK_NOT_NULL(
       column, "Column {} not found in table {}", columnName, name());
-  return std::make_shared<TestColumnHandle>(
-      columnName, castToType.value_or(column->type()));
+  return std::make_shared<TestColumnHandle>(columnName, column->type());
 }
 
 velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
@@ -167,9 +164,7 @@ velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
     std::vector<velox::connector::ColumnHandlePtr> columnHandles,
     velox::core::ExpressionEvaluator& /* evaluator */,
     std::vector<velox::core::TypedExprPtr> filters,
-    std::vector<velox::core::TypedExprPtr>& rejectedFilters,
-    velox::RowTypePtr /* dataColumns */,
-    std::optional<LookupKeys> lookupKeys) const {
+    std::vector<velox::core::TypedExprPtr>& rejectedFilters) const {
   rejectedFilters = std::move(filters);
   return std::make_shared<TestTableHandle>(*this, std::move(columnHandles));
 }

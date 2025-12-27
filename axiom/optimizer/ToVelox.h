@@ -140,6 +140,16 @@ class ToVelox {
       runner::ExecutableFragment& fragment,
       std::vector<runner::ExecutableFragment>& stages);
 
+  velox::core::PlanNodePtr makeZeroLimit(
+      const RelationOp& op,
+      runner::ExecutableFragment& fragment);
+
+  // Makes a Velox WindowNode for a WindowOp.
+  velox::core::PlanNodePtr makeWindow(
+      const WindowOp& op,
+      runner::ExecutableFragment& fragment,
+      std::vector<runner::ExecutableFragment>& stages);
+
   // Makes partial + final order by fragments for order by with and without
   // limit.
   velox::core::PlanNodePtr makeOrderBy(
@@ -153,7 +163,7 @@ class ToVelox {
       runner::ExecutableFragment& fragment,
       std::vector<runner::ExecutableFragment>& stages);
 
-  // @pre op.sNoLimit() is true.
+  // @pre op.isNoLimit() is true.
   velox::core::PlanNodePtr makeOffset(
       const Limit& op,
       runner::ExecutableFragment& fragment,

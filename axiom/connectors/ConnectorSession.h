@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <velox/common/config/IConfig.h>
 #include <memory>
 #include <string>
 #include <utility>
@@ -24,15 +25,22 @@ namespace facebook::axiom::connector {
 /// Read-only query-specific information.
 class ConnectorSession final {
  public:
-  explicit ConnectorSession(std::string queryId)
-      : queryId_{std::move(queryId)} {}
+  explicit ConnectorSession(
+      std::string queryId,
+      std::shared_ptr<const velox::config::IConfig> config = {})
+      : queryId_{std::move(queryId)}, config_{std::move(config)} {}
 
   const std::string& queryId() const {
     return queryId_;
   }
 
+  const auto& config() const {
+    return config_;
+  }
+
  private:
   const std::string queryId_;
+  const std::shared_ptr<const velox::config::IConfig> config_;
 };
 
 using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;

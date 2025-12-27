@@ -15,7 +15,6 @@
  */
 
 #include "axiom/optimizer/tests/QueryTestBase.h"
-#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/VeloxHistory.h"
@@ -79,12 +78,9 @@ logical_plan::LogicalPlanNodePtr QueryTestBase::parseSelect(
 }
 
 namespace {
-void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner) {
+void waitForCompletion(std::shared_ptr<runner::LocalRunner>&& runner) {
   if (runner) {
-    try {
-      runner->waitForCompletion(50000);
-    } catch (const std::exception& /*ignore*/) {
-    }
+    runner::LocalRunner::waitForCompletion(std::move(runner), 50000);
   }
 }
 } // namespace
@@ -112,7 +108,7 @@ TestResult QueryTestBase::runFragmentedPlan(
   TestResult result;
 
   SCOPE_EXIT {
-    waitForCompletion(result.runner);
+    waitForCompletion(std::move(result.runner));
     queryCtx_.reset();
   };
 
@@ -142,15 +138,6 @@ std::shared_ptr<core::QueryCtx>& QueryTestBase::getQueryCtx() {
 
 optimizer::PlanAndStats QueryTestBase::planVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
-    const runner::MultiFragmentPlan::Options& options,
-    const std::optional<std::string>& planFilePathPrefix) {
-  connector::SchemaResolver schemaResolver;
-  return planVelox(plan, schemaResolver, options, planFilePathPrefix);
-}
-
-optimizer::PlanAndStats QueryTestBase::planVelox(
-    const logical_plan::LogicalPlanNodePtr& plan,
-    const connector::SchemaResolver& schemaResolver,
     const runner::MultiFragmentPlan::Options& options,
     const std::optional<std::string>& planFilePathPrefix) {
   auto& queryCtx = getQueryCtx();
@@ -184,7 +171,6 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
   optimizer::Optimization opt(
       session,
       *plan,
-      schemaResolver,
       *history_,
       queryCtx,
       evaluator,
@@ -214,14 +200,6 @@ TestResult QueryTestBase::runVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
     const runner::MultiFragmentPlan::Options& options) {
   auto veloxPlan = planVelox(plan, options);
-  return runFragmentedPlan(veloxPlan);
-}
-
-TestResult QueryTestBase::runVelox(
-    const logical_plan::LogicalPlanNodePtr& plan,
-    const connector::SchemaResolver& schemaResolver,
-    const runner::MultiFragmentPlan::Options& options) {
-  auto veloxPlan = planVelox(plan, schemaResolver, options);
   return runFragmentedPlan(veloxPlan);
 }
 

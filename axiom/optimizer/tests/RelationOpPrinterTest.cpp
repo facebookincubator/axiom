@@ -112,14 +112,11 @@ class RelationOpPrinterTest : public ::testing::Test {
 
     VeloxHistory history;
 
-    auto schemaResolver = std::make_shared<connector::SchemaResolver>();
-
     auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
 
     Optimization opt{
         session,
         logicalPlan,
-        *schemaResolver,
         history,
         veloxQueryCtx,
         evaluator,
@@ -181,9 +178,8 @@ TEST_F(RelationOpPrinterTest, basic) {
             testing::HasSubstr("gt"), // a > b
             testing::StartsWith("      TableScan"),
             testing::StartsWith("        table: t"),
-            testing::StartsWith("      HashBuild"),
-            testing::StartsWith("        TableScan"),
-            testing::StartsWith("          table: u"),
+            testing::StartsWith("      TableScan"),
+            testing::StartsWith("        table: u"),
             testing::Eq("")));
 
     EXPECT_EQ("agg((t LEFT u))", toOneline(sql));
@@ -305,11 +301,9 @@ TEST_F(RelationOpPrinterTest, cost) {
           testing::StartsWith("      TableScan"),
           testing::StartsWith("        Estimates: cardinality"),
           testing::StartsWith("        table: t"),
-          testing::StartsWith("      HashBuild"),
+          testing::StartsWith("      TableScan"),
           testing::StartsWith("        Estimates: cardinality"),
-          testing::StartsWith("        TableScan"),
-          testing::StartsWith("          Estimates: cardinality"),
-          testing::StartsWith("          table: u"),
+          testing::StartsWith("        table: u"),
           testing::Eq("")));
 }
 
@@ -359,7 +353,8 @@ TEST_F(RelationOpPrinterTest, maxDepth) {
             testing::HasSubstr("gt"), // a > b
             testing::StartsWith("      TableScan"),
             testing::StartsWith("        table: t"),
-            testing::StartsWith("      HashBuild"),
+            testing::StartsWith("      TableScan"),
+            testing::StartsWith("        table: u"),
             testing::Eq("")));
   }
 
@@ -378,9 +373,8 @@ TEST_F(RelationOpPrinterTest, maxDepth) {
             testing::HasSubstr("gt"), // a > b
             testing::StartsWith("      TableScan"),
             testing::StartsWith("        table: t"),
-            testing::StartsWith("      HashBuild"),
-            testing::StartsWith("        TableScan"),
-            testing::StartsWith("          table: u"),
+            testing::StartsWith("      TableScan"),
+            testing::StartsWith("        table: u"),
             testing::Eq("")));
   }
 }

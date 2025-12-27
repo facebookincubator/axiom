@@ -103,7 +103,59 @@ class ToTextVisitor : public ExprVisitor {
     out << expr.name();
     appendInputs(expr, out, context);
 
-    // TODO Add partitionKeys, ordering, frame, ignoreNulls.
+    if (expr.ignoreNulls()) {
+      out << " IGNORE NULLS";
+    }
+
+    out << " OVER (";
+
+    if (!expr.partitionKeys().empty()) {
+      out << "PARTITION BY ";
+      for (auto i = 0; i < expr.partitionKeys().size(); ++i) {
+        if (i > 0) {
+          out << ", ";
+        }
+        expr.partitionKeys()[i]->accept(*this, context);
+      }
+    }
+
+    if (!expr.ordering().empty()) {
+      if (!expr.partitionKeys().empty()) {
+        out << " ";
+      }
+      out << "ORDER BY ";
+      for (auto i = 0; i < expr.ordering().size(); ++i) {
+        if (i > 0) {
+          out << ", ";
+        }
+        expr.ordering()[i].expression->accept(*this, context);
+        out << " " << expr.ordering()[i].order.toString();
+      }
+    }
+
+    const auto& frame = expr.frame();
+    if (!expr.partitionKeys().empty() || !expr.ordering().empty()) {
+      out << " ";
+    }
+    out << WindowExpr::toName(frame.type) << " BETWEEN ";
+
+    // Start bound
+    if (frame.startValue != nullptr) {
+      frame.startValue->accept(*this, context);
+      out << " ";
+    }
+    out << WindowExpr::toName(frame.startType);
+
+    out << " AND ";
+
+    // End bound
+    if (frame.endValue != nullptr) {
+      frame.endValue->accept(*this, context);
+      out << " ";
+    }
+    out << WindowExpr::toName(frame.endType);
+
+    out << ")";
   }
 
   void visit(const ConstantExpr& expr, ExprVisitorContext& context)

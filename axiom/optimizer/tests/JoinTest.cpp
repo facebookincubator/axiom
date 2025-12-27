@@ -46,6 +46,254 @@ class JoinTest : public test::QueryTestBase {
   std::shared_ptr<connector::TestConnector> testConnector_;
 };
 
+struct JoinOptions {
+  size_t num_joins = 0;
+  bool syntacticJoinOrder = false;
+  bool sample = false;
+  bool reducingExistences = false;
+};
+
+constexpr size_t kNumTables = 201;
+#ifdef NDEBUG
+constexpr bool kIsDebug = false;
+#else
+constexpr bool kIsDebug = true;
+#endif
+
+// TODO Move this test into its own file.
+TEST_F(JoinTest, perfJoinChain) {
+  for (int i = 0; i < kNumTables; ++i) {
+    std::vector<std::string> columns;
+    columns.reserve(kNumTables);
+    for (int j = 0; j < kNumTables; ++j) {
+      columns.push_back(fmt::format("t{}c{}", i, j));
+    }
+    // std::cout << "Table t" << i << " schema: ";
+    // for (const auto& col : columns) {
+    //   std::cout << col << " ";
+    // }
+    // std::cout << "\n";
+    testConnector_->addTable(
+        fmt::format("t{}", i), ROW(std::move(columns), BIGINT()));
+  }
+
+  static constexpr std::array kJoinOptions = {
+      // fast one, without join enumeration, sampling, reducing existences
+      JoinOptions{
+          .num_joins = 200,
+          .syntacticJoinOrder = true,
+      },
+      // join enumeration
+      JoinOptions{
+          .num_joins = 18 - 4 * kIsDebug,
+      },
+      // join enumeration with sampling
+      JoinOptions{
+          .num_joins = 18 - 4 * kIsDebug,
+          .sample = true,
+      },
+      // slow one, with join enumeration, sampling, reducing existences
+      JoinOptions{
+          .num_joins = 18 - 4 * kIsDebug,
+          .sample = true,
+          .reducingExistences = true,
+      },
+  };
+
+  auto optimizerOptionsOld = optimizerOptions_;
+  SCOPE_EXIT {
+    optimizerOptions_ = optimizerOptionsOld;
+  };
+  for (const auto& joinOptions : kJoinOptions) {
+    lp::PlanBuilder::Context context(kTestConnectorId);
+    std::vector<lp::PlanBuilder> planBuilders;
+    planBuilders.emplace_back(lp::PlanBuilder(context).tableScan("t0"));
+    for (int i = 1; i <= joinOptions.num_joins; ++i) {
+      planBuilders.emplace_back(planBuilders.back().join(
+          lp::PlanBuilder(context).tableScan(fmt::format("t{}", i)),
+          fmt::format("t{}c{} = t{}c{}", i - 1, i - 1, i, i - 1),
+          lp::JoinType::kInner));
+    }
+    planBuilders.back().project({"t0c0"});
+    const auto logicalPlan = planBuilders.back().build();
+    // std::cout << "Logical:\n" << logicalPlan->toString()  << std::endl;
+
+    optimizerOptions_.sampleFilters = joinOptions.sample;
+    optimizerOptions_.sampleJoins = joinOptions.sample;
+    optimizerOptions_.syntacticJoinOrder = joinOptions.syntacticJoinOrder;
+    optimizerOptions_.enableReducingExistences = joinOptions.reducingExistences;
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto plan = toSingleNodePlan(logicalPlan);
+    const auto end = std::chrono::steady_clock::now();
+    const auto duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+            .count();
+    std::cout << "Linear join chain optimized in " << duration << " ms"
+              << " (options: "
+              << "num_joins=" << joinOptions.num_joins << ", "
+              << "syntacticJoinOrder=" << joinOptions.syntacticJoinOrder << ", "
+              << "reducingExistences=" << joinOptions.reducingExistences << ", "
+              << "sample=" << joinOptions.sample << ")" << std::endl;
+    // std::cout << "\nExecution:\n" << plan->toString(true, true) << std::endl;
+  }
+}
+
+// TODO Move this test into its own file.
+TEST_F(JoinTest, perfJoinStar) {
+  for (int i = 0; i < kNumTables; ++i) {
+    std::vector<std::string> columns;
+    columns.reserve(kNumTables);
+    for (int j = 0; j < kNumTables; ++j) {
+      columns.push_back(fmt::format("t{}c{}", i, j));
+    }
+    // std::cout << "Table t" << i << " schema: ";
+    // for (const auto& col : columns) {
+    //   std::cout << col << " ";
+    // }
+    // std::cout << "\n";
+    testConnector_->addTable(
+        fmt::format("t{}", i), ROW(std::move(columns), BIGINT()));
+  }
+
+  static constexpr std::array kJoinOptions = {
+      // fast one, without join enumeration, sampling, reducing existences
+      JoinOptions{
+          .num_joins = 200,
+          .syntacticJoinOrder = true,
+      },
+      // join enumeration
+      JoinOptions{
+          .num_joins = 9 - kIsDebug,
+      },
+      // join enumeration with sampling
+      JoinOptions{
+          .num_joins = 9 - kIsDebug,
+          .sample = true,
+      },
+      // slow one, with join enumeration, sampling, reducing existences
+      JoinOptions{
+          .num_joins = 9 - kIsDebug,
+          .sample = true,
+          .reducingExistences = true,
+      },
+  };
+
+  auto optimizerOptionsOld = optimizerOptions_;
+  SCOPE_EXIT {
+    optimizerOptions_ = optimizerOptionsOld;
+  };
+  for (const auto& joinOptions : kJoinOptions) {
+    lp::PlanBuilder::Context context(kTestConnectorId);
+    std::vector<lp::PlanBuilder> planBuilders;
+    planBuilders.emplace_back(lp::PlanBuilder(context).tableScan("t0"));
+    for (int i = 1; i <= joinOptions.num_joins; ++i) {
+      planBuilders.emplace_back(planBuilders.back().join(
+          lp::PlanBuilder(context).tableScan(fmt::format("t{}", i)),
+          fmt::format("t{}c{} = t{}c{}", 0, i, i, i),
+          lp::JoinType::kInner));
+    }
+    planBuilders.back().project({"t0c0"});
+    const auto logicalPlan = planBuilders.back().build();
+    // std::cout << "Logical:\n" << logicalPlan->toString()  << std::endl;
+
+    optimizerOptions_.sampleFilters = joinOptions.sample;
+    optimizerOptions_.sampleJoins = joinOptions.sample;
+    optimizerOptions_.syntacticJoinOrder = joinOptions.syntacticJoinOrder;
+    optimizerOptions_.enableReducingExistences = joinOptions.reducingExistences;
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto plan = toSingleNodePlan(logicalPlan);
+    const auto end = std::chrono::steady_clock::now();
+    const auto duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+            .count();
+    std::cout << "Star join optimized in " << duration << " ms"
+              << " (options: "
+              << "num_joins=" << joinOptions.num_joins << ", "
+              << "syntacticJoinOrder=" << joinOptions.syntacticJoinOrder << ", "
+              << "reducingExistences=" << joinOptions.reducingExistences << ", "
+              << "sample=" << joinOptions.sample << ")" << std::endl;
+    // std::cout << "\nExecution:\n" << plan->toString(true, true) << std::endl;
+  }
+}
+
+// TODO Move this test into its own file.
+TEST_F(JoinTest, perfJoinClique) {
+  for (size_t i = 0; i < kNumTables; ++i) {
+    std::vector<std::string> columns;
+    columns.push_back(fmt::format("c{}", i));
+    // std::cout << "Table t" << i << " schema: ";
+    // for (const auto& col : columns) {
+    //   std::cout << col << " ";
+    // }
+    // std::cout << "\n";
+    testConnector_->addTable(
+        fmt::format("t{}", i), ROW(std::move(columns), BIGINT()));
+  }
+
+  static constexpr std::array kJoinOptions = {
+      // fast one, without join enumeration, sampling, reducing existences
+      JoinOptions{
+          .num_joins = 200,
+          .syntacticJoinOrder = true,
+      },
+      // join enumeration
+      JoinOptions{
+          .num_joins = 6 - kIsDebug,
+      },
+      // join enumeration with sampling
+      JoinOptions{
+          .num_joins = 6 - kIsDebug,
+          .sample = true,
+      },
+      // slow one, with join enumeration, sampling, reducing existences
+      JoinOptions{
+          .num_joins = 6 - kIsDebug,
+          .sample = true,
+          .reducingExistences = true,
+      },
+  };
+
+  auto optimizerOptionsOld = optimizerOptions_;
+  SCOPE_EXIT {
+    optimizerOptions_ = optimizerOptionsOld;
+  };
+  for (const auto& joinOptions : kJoinOptions) {
+    lp::PlanBuilder::Context context(kTestConnectorId);
+    std::vector<lp::PlanBuilder> planBuilders;
+    planBuilders.emplace_back(lp::PlanBuilder(context).tableScan("t0"));
+    for (int i = 1; i <= joinOptions.num_joins; ++i) {
+      planBuilders.emplace_back(planBuilders.back().join(
+          lp::PlanBuilder(context).tableScan(fmt::format("t{}", i)),
+          fmt::format("c{} = c{}", i - 1, i),
+          lp::JoinType::kInner));
+    }
+    planBuilders.back().project({"c0"});
+    const auto logicalPlan = planBuilders.back().build();
+    // std::cout << "Logical:\n" << logicalPlan->toString()  << std::endl;
+
+    optimizerOptions_.sampleFilters = joinOptions.sample;
+    optimizerOptions_.sampleJoins = joinOptions.sample;
+    optimizerOptions_.syntacticJoinOrder = joinOptions.syntacticJoinOrder;
+    optimizerOptions_.enableReducingExistences = joinOptions.reducingExistences;
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto plan = toSingleNodePlan(logicalPlan);
+    const auto end = std::chrono::steady_clock::now();
+    const auto duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+            .count();
+    std::cout << "Linear join clique optimized in " << duration << " ms"
+              << " (options: "
+              << "num_joins=" << joinOptions.num_joins << ", "
+              << "syntacticJoinOrder=" << joinOptions.syntacticJoinOrder << ", "
+              << "reducingExistences=" << joinOptions.reducingExistences << ", "
+              << "sample=" << joinOptions.sample << ")" << std::endl;
+    // std::cout << "\nExecution:\n" << plan->toString(true, true) << std::endl;
+  }
+}
+
 TEST_F(JoinTest, pushdownFilterThroughJoin) {
   testConnector_->addTable("t", ROW({"t_id", "t_data"}, BIGINT()));
   testConnector_->addTable("u", ROW({"u_id", "u_data"}, BIGINT()));
@@ -104,7 +352,6 @@ TEST_F(JoinTest, pushdownFilterThroughJoin) {
                                .build(),
                            core::JoinType::kRight)
                        .filter("t_data IS NULL")
-                       .project()
                        .build();
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
