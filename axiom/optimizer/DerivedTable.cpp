@@ -610,7 +610,7 @@ void flattenAll(ExprCP expr, Name func, ExprVector& flat) {
 // This pattern appears in TPC-H q9.
 ExprVector extractPerTable(
     const ExprVector& disjuncts,
-    std::vector<ExprVector>& orOfAnds) {
+    const std::vector<ExprVector>& orOfAnds) {
   PlanObjectSet tables = disjuncts[0]->allTables();
   if (tables.size() <= 1) {
     // All must depend on the same set of more than 1 table.
@@ -626,7 +626,7 @@ ExprVector extractPerTable(
       return {};
     }
     folly::F14FastMap<int32_t, ExprVector> perTableAnd;
-    ExprVector& inner = orOfAnds[i];
+    const auto& inner = orOfAnds[i];
     // Do the inner conjuncts each depend on a single table?
     for (const auto& conjunct : inner) {
       auto single = conjunct->singleTable();
@@ -642,8 +642,10 @@ ExprVector extractPerTable(
 
   auto optimization = queryCtx()->optimization();
   ExprVector conjuncts;
+  conjuncts.reserve(perTable.size());
   for (auto& pair : perTable) {
     ExprVector tableAnds;
+    tableAnds.reserve(pair.second.size());
     for (auto& tableAnd : pair.second) {
       tableAnds.push_back(
           optimization->combineLeftDeep(SpecialFormCallNames::kAnd, tableAnd));
@@ -667,16 +669,15 @@ ExprVector extractPerTable(
 //
 // This pattern appears in TPC-H q9.
 ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
+  VELOX_DCHECK(!disjuncts.empty());
+
   // Remove duplicates.
-  folly::F14FastSet<ExprCP> uniqueDisjuncts;
-  bool changeOriginal = false;
-  std::erase_if(disjuncts, [&](ExprCP disjunct) {
-    if (uniqueDisjuncts.emplace(disjunct).second) {
-      return false;
-    }
-    changeOriginal = true;
-    return true;
-  });
+  std::ranges::sort(disjuncts);
+  auto duplicates = std::ranges::unique(disjuncts);
+  bool changeOriginal = !duplicates.empty();
+  if (changeOriginal) {
+    disjuncts.erase(duplicates.begin(), duplicates.end());
+  }
 
   if (disjuncts.size() == 1) {
     *replacement = disjuncts[0];
@@ -684,33 +685,43 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   }
 
   // The conjuncts in each of the disjuncts.
-  std::vector<ExprVector> flat;
-  for (auto* disjunct : disjuncts) {
-    flattenAll(disjunct, SpecialFormCallNames::kAnd, flat.emplace_back());
+  std::vector<ExprVector> flat(disjuncts.size());
+  for (size_t i = 0; i < disjuncts.size(); ++i) {
+    flattenAll(disjuncts[i], SpecialFormCallNames::kAnd, flat[i]);
   }
+  std::ranges::sort(
+      flat, [](const auto& l, const auto& r) { return l.size() < r.size(); });
 
   // Check if the flat conjuncts lists have any element that occurs in all.
   // Remove all the elememts that are in all.
   ExprVector result;
-  for (auto j = 0; j < flat[0].size(); ++j) {
-    auto item = flat[0][j];
-    bool inAll = true;
-    for (auto i = 1; i < flat.size(); ++i) {
-      if (std::ranges::find(flat[i], item) == flat[i].end()) {
-        inAll = false;
-        break;
-      }
-    }
-    if (inAll) {
-      changeOriginal = true;
-      result.push_back(item);
-      flat[0].erase(flat[0].begin() + j);
-      --j;
-      for (auto i = 1; i < flat.size(); ++i) {
-        flat[i].erase(std::ranges::find(flat[i], item));
-      }
-    }
+  result.reserve(flat[0].size());
+  std::ranges::sort(flat[0]);
+  std::ranges::sort(flat[1]);
+  std::ranges::set_intersection(flat[0], flat[1], std::back_inserter(result));
+
+  ExprVector temp;
+  if (!result.empty() && flat.size() > 2) {
+    temp.reserve(result.size());
   }
+  for (size_t i = 2; !result.empty() && i < flat.size(); ++i) {
+    std::ranges::sort(flat[i]);
+    std::ranges::set_intersection(result, flat[i], std::back_inserter(temp));
+    std::swap(result, temp);
+    temp.clear();
+  }
+
+  if (!result.empty()) {
+    changeOriginal = true;
+    temp.reserve(flat[0].size() - result.size());
+    std::erase_if(flat, [&](auto& inner) {
+      std::ranges::set_difference(inner, result, std::back_inserter(temp));
+      std::swap(inner, temp);
+      temp.clear();
+      return inner.empty();
+    });
+  }
+  VELOX_DCHECK(!flat.empty());
 
   auto perTable = extractPerTable(disjuncts, flat);
   if (!perTable.empty()) {
@@ -722,6 +733,7 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   if (changeOriginal) {
     auto optimization = queryCtx()->optimization();
     ExprVector ands;
+    ands.reserve(flat.size());
     for (const auto& inner : flat) {
       ands.push_back(
           optimization->combineLeftDeep(SpecialFormCallNames::kAnd, inner));

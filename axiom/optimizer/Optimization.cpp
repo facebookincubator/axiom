@@ -2123,6 +2123,7 @@ ExprCP Optimization::combineLeftDeep(Name func, const ExprVector& exprs) {
   std::ranges::sort(copy, [&](ExprCP left, ExprCP right) {
     return left->id() < right->id();
   });
+  VELOX_DCHECK(!copy.empty());
   ExprCP result = copy[0];
   for (auto i = 1; i < copy.size(); ++i) {
     result = toGraph_.deduppedCall(
