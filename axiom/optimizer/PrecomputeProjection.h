@@ -95,10 +95,10 @@ class PrecomputeProjection {
       bool preserveLiterals = false);
 
   /// @returns the original 'input' with an optional ProjectOp on top.
-  RelationOpPtr maybeProject() && {
+  RelationOpPtr maybeProject(PlanState& state) && {
     if (needsProject_) {
       return make<Project>(
-          input_, projectExprs_, projectColumns_, /*redundant=*/false);
+          input_, projectExprs_, projectColumns_, /*redundant=*/false, state);
     }
 
     return input_;

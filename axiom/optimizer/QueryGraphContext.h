@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <mutex>
+#include <set>
 #include "axiom/optimizer/ArenaCache.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/type/Variant.h"
@@ -300,8 +302,21 @@ class QueryGraphContext {
   /// Takes ownership of a Variant for the duration. Variants are allocated
   /// with new so not in the arena.
   velox::Variant* registerVariant(std::unique_ptr<velox::Variant> value) {
+    std::lock_guard<std::mutex> lock(variantsMutex_);
     allVariants_.push_back(std::move(value));
     return allVariants_.back().get();
+  }
+
+  /// Takes ownership of any object for the duration. The object is stored as
+  /// a shared_ptr<void> and scoped to the lifetime of this QueryGraphContext.
+  /// Thread-safe.
+  template <typename T>
+  T* registerAny(std::unique_ptr<T>& ptr) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    T* rawPtr = ptr.release();
+    std::shared_ptr<T> sharedPtr(rawPtr);
+    ownedObjects_.insert(std::static_pointer_cast<void>(sharedPtr));
+    return rawPtr;
   }
 
  private:
@@ -330,10 +345,22 @@ class QueryGraphContext {
   Optimization* optimization_{nullptr};
 
   std::vector<std::unique_ptr<velox::Variant>> allVariants_;
+
+  // Set of shared_ptr<void> to hold arbitrary objects scoped to this context.
+  std::set<std::shared_ptr<void>> ownedObjects_;
+
+  // Mutex for thread-safe access to ownedObjects_.
+  std::mutex mutex_;
+
+  // Mutex to protect registerVariant operations
+  mutable std::mutex variantsMutex_;
 };
 
 /// Returns a mutable reference to the calling thread's QueryGraphContext.
 QueryGraphContext*& queryCtx();
+
+/// Returns true if initial statistics have been fetched for all base tables.
+bool statsFetched();
 
 template <class T>
 T* QGAllocator<T>::allocate(std::size_t n) {
