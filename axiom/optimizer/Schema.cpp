@@ -408,12 +408,26 @@ ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {
   return nullptr;
 }
 
+bool DistributionType::isCopartitionCompatible(
+    const DistributionType& other) const {
+  if (partitionType_ == nullptr && other.partitionType_ == nullptr) {
+    return true;
+  }
+  return partitionType_ != nullptr && other.partitionType_ != nullptr &&
+      partitionType_->copartition(*other.partitionType_);
+}
+
 bool Distribution::isSamePartition(const Distribution& other) const {
-  if (distributionType != other.distributionType) {
+  if (!distributionType.isCopartitionCompatible(other.distributionType)) {
     return false;
   }
-  if (isBroadcast || other.isBroadcast) {
+  if (isBroadcast && other.isBroadcast) {
+    // Both sides broadcasted is colocated.
     return true;
+  }
+  if (isBroadcast || other.isBroadcast) {
+    // One is broadcast and the other not cannot be colocated.
+    return false;
   }
   if (partition.size() != other.partition.size()) {
     return false;
