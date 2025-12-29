@@ -120,6 +120,7 @@ add_executable(
   HiveLimitQueriesTest.cpp
   HiveQueriesTest.cpp
   JoinTest.cpp
+  OrderedOpsTest.cpp
   ParquetTpchTest.cpp
   PrecomputeProjectionTest.cpp
   PlanTest.cpp

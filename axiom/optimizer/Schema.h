@@ -231,16 +231,19 @@ struct ColumnGroup {
       const SchemaTable& table,
       const connector::TableLayout& layout,
       Distribution distribution,
-      ColumnVector columns)
+      ColumnVector columns,
+      ColumnVector lookupColumns)
       : table{&table},
         layout{&layout},
         distribution{std::move(distribution)},
-        columns{std::move(columns)} {}
+        columns{std::move(columns)},
+        lookupColumns{std::move(lookupColumns)} {}
 
   SchemaTableCP table;
   const connector::TableLayout* layout;
   const Distribution distribution;
   const ColumnVector columns;
+  const ColumnVector lookupColumns;
 
   /// Returns cost of next lookup when the hit is within 'range' rows
   /// of the previous hit. If lookups are not batched or not ordered,
@@ -302,7 +305,8 @@ struct SchemaTable {
   ColumnGroupCP addIndex(
       const connector::TableLayout& layout,
       Distribution distribution,
-      ColumnVector columns);
+      ColumnVector columns,
+      ColumnVector lookupColumns);
 
   ColumnCP findColumn(Name name) const;
 

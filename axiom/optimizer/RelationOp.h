@@ -513,6 +513,9 @@ struct Join : public RelationOp {
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
+
+ private:
+  void setMergeJoinCost();
 };
 
 using JoinCP = const Join*;

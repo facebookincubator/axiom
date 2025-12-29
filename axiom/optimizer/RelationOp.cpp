@@ -471,18 +471,24 @@ Join::Join(
     }
   }
 
-  const float buildSize = right->resultCardinality();
-  const auto numKeys = leftKeys.size();
-  const auto probeCost = Costs::hashTableCost(buildSize) +
-      // Multiply by min(fanout, 1) because most misses will not compare and if
-      // fanout > 1, there is still only one compare.
-      (Costs::kKeyCompareCost * numKeys * std::min<float>(1, cost_.fanout)) +
-      numKeys * Costs::kHashColumnCost;
+  // Compute join cost based on method
+  if (method == JoinMethod::kMerge) {
+    setMergeJoinCost();
+  } else {
+    // Hash join costing
+    const float buildSize = right->resultCardinality();
+    const auto numKeys = leftKeys.size();
+    const auto probeCost = Costs::hashTableCost(buildSize) +
+        // Multiply by min(fanout, 1) because most misses will not compare and if
+        // fanout > 1, there is still only one compare.
+        (Costs::kKeyCompareCost * numKeys * std::min<float>(1, cost_.fanout)) +
+        numKeys * Costs::kHashColumnCost;
 
-  const auto rowBytes = byteSize(right->input()->columns());
-  const auto rowCost = Costs::hashRowCost(buildSize, rowBytes);
+    const auto rowBytes = byteSize(right->input()->columns());
+    const auto rowCost = Costs::hashRowCost(buildSize, rowBytes);
 
-  cost_.unitCost = probeCost + cost_.fanout * rowCost;
+    cost_.unitCost = probeCost + cost_.fanout * rowCost;
+  }
 
   // Add constraints for non-key columns from the optional side of an outer join
   if (leftOptional || rightOptional) {
@@ -530,6 +536,24 @@ Join::Join(
       }
     }
   }
+}
+
+void Join::setMergeJoinCost() {
+  const auto numKeys = leftKeys.size();
+
+  // Get right side columns for byte size calculation
+  const auto rightSideColumns = right->columns();
+  const auto rightSideBytes = byteSize(rightSideColumns);
+  const auto numRightSideColumns = rightSideColumns.size();
+
+  // Merge join cost formula:
+  // 3 * key compare cost * number of keys * min(1, fanout) +
+  // byteSize(rightSideColumns) +
+  // kHashExtractColumnCost * numRightSideColumns
+  cost_.unitCost =
+      3 * Costs::kKeyCompareCost * numKeys * std::min<float>(1, cost_.fanout) +
+      rightSideBytes +
+      Costs::kHashExtractColumnCost * numRightSideColumns;
 }
 
 namespace {
