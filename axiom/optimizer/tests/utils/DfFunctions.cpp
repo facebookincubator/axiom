@@ -71,6 +71,33 @@ std::pair<std::vector<Step>, int32_t> makeRowFromMapSubfield(
   return std::make_pair(newFields, 0);
 }
 
+lp::ExprPtr addPaddingCoalesce(const lp::ExprPtr& expr) {
+  const auto& type = expr->type();
+  lp::ConstantExprPtr deflt;
+  switch (type->kind()) {
+    case TypeKind::REAL:
+      deflt = std::make_shared<lp::ConstantExpr>(
+          REAL(), std::make_shared<Variant>(Variant(static_cast<float>(0))));
+      break;
+    case TypeKind::ARRAY: {
+      auto emptyArray = Variant::array({});
+      deflt = std::make_shared<lp::ConstantExpr>(
+          type, std::make_shared<Variant>(Variant(emptyArray)));
+      break;
+    }
+    case TypeKind::MAP: {
+      auto emptyMap = Variant::map({});
+      deflt = std::make_shared<lp::ConstantExpr>(
+          type, std::make_shared<Variant>(Variant(emptyMap)));
+      break;
+    }
+    default:
+      VELOX_NYI("padded_make_row_from_map type {}", type->toString());
+  }
+  return std::make_shared<lp::SpecialFormExpr>(
+      type, lp::SpecialForm::kCoalesce, std::vector<lp::ExprPtr>{expr, deflt});
+}
+
 folly::F14FastMap<PathCP, lp::ExprPtr> makeRowFromMapExplodeGeneric(
     const lp::CallExpr* call,
     std::vector<PathCP>& paths,
@@ -103,32 +130,7 @@ folly::F14FastMap<PathCP, lp::ExprPtr> makeRowFromMapExplodeGeneric(
             std::make_shared<lp::ConstantExpr>(
                 subscriptType, std::make_shared<Variant>(keys[nth]))});
     if (addCoalesce) {
-      lp::ConstantExprPtr deflt;
-      switch (type->kind()) {
-        case TypeKind::REAL:
-          deflt = std::make_shared<lp::ConstantExpr>(
-              REAL(),
-              std::make_shared<Variant>(Variant(static_cast<float>(0))));
-          break;
-        case TypeKind::ARRAY: {
-          auto emptyArray = Variant::array({});
-          deflt = std::make_shared<lp::ConstantExpr>(
-              type, std::make_shared<Variant>(Variant(emptyArray)));
-          break;
-        }
-        case TypeKind::MAP: {
-          auto emptyMap = Variant::map({});
-          deflt = std::make_shared<lp::ConstantExpr>(
-              type, std::make_shared<Variant>(Variant(emptyMap)));
-          break;
-        }
-        default:
-          VELOX_NYI("padded_make_row_from_map type {}", type->toString());
-      }
-      getter = std::make_shared<lp::SpecialFormExpr>(
-          type,
-          lp::SpecialForm::kCoalesce,
-          std::vector<lp::ExprPtr>{getter, deflt});
+      getter = addPaddingCoalesce(getter);
     }
     it->second = getter;
   }
@@ -145,6 +147,33 @@ folly::F14FastMap<PathCP, lp::ExprPtr> paddedMakeRowFromMapExplode(
     const lp::CallExpr* call,
     std::vector<PathCP>& paths) {
   return makeRowFromMapExplodeGeneric(call, paths, true);
+}
+
+lp::ExprPtr makeRowFromMapToConstructor(
+    const lp::CallExpr* call,
+    bool isPadded) {
+  std::vector<lp::ExprPtr> inputs;
+  auto keys = call->inputAt(1);
+  VELOX_CHECK(keys->isConstant());
+  std::vector<Variant> keyIds =
+      keys->as<lp::ConstantExpr>()->value()->value<TypeKind::ARRAY>();
+  for (auto& id : keyIds) {
+    inputs.push_back(
+        std::make_shared<lp::CallExpr>(
+            call->type()->childAt(0),
+            "subscript",
+            std::vector<lp::ExprPtr>{
+                call->inputAt(0),
+                std::make_shared<lp::ConstantExpr>(
+                    keys->type()->childAt(0), std::make_shared<Variant>(id))}));
+  }
+  if (isPadded) {
+    for (auto& input : inputs) {
+      input = addPaddingCoalesce(input);
+    }
+  }
+  return std::make_shared<lp::CallExpr>(
+      call->type(), "row_constructor", std::move(inputs));
 }
 
 lp::ExprPtr makeRowFromMapHook(
@@ -229,6 +258,10 @@ void registerDfFunctions() {
 
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->explode = makeRowFromMapExplode;
+    metadata->expandFunction = [](const lp::CallExpr* call) {
+      return makeRowFromMapToConstructor(call, false);
+    };
+
     metadata->valuePathToArgPath = makeRowFromMapSubfield;
     registry->registerFunction(kMakeRowFromMap, std::move(metadata));
   }
@@ -239,6 +272,9 @@ void registerDfFunctions() {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->explode = paddedMakeRowFromMapExplode;
     metadata->valuePathToArgPath = makeRowFromMapSubfield;
+    metadata->expandFunction = [](const lp::CallExpr* call) {
+      return makeRowFromMapToConstructor(call, true);
+    };
     registry->registerFunction(kPaddedMakeRowFromMap, std::move(metadata));
   }
 
