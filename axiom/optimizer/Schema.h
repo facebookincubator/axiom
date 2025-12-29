@@ -369,4 +369,10 @@ class Schema {
   mutable Map<Map<Table>> connectorTables_;
 };
 
+/// Helper to register an optional Variant with the QueryGraphContext.
+/// Returns nullptr if the optional has no value, otherwise returns a pointer
+/// to a registered copy that lives for the duration of QueryGraphContext.
+const velox::Variant* registerOptionalVariant(
+    const std::optional<velox::Variant>& opt);
+
 } // namespace facebook::axiom::optimizer

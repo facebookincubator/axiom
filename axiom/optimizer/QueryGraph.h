@@ -63,6 +63,10 @@ class Expr : public PlanObject {
     return value_;
   }
 
+  void setValue(const Value& value) {
+    value_ = value;
+  }
+
   bool containsNonDeterministic() const {
     return containsFunction(FunctionSet::kNonDeterministic);
   }
@@ -862,9 +866,20 @@ struct BaseTable : public PlanObject {
   /// Multicolumn filters dependent on 'this' alone.
   ExprVector filter;
 
-  /// The fraction of base table rows selected by all filters involving this
-  /// table only.
+  /// The fraction of base table scanned rows selected by all filters involving
+  /// this table only.
   float filterSelectivity{1};
+
+  /// Number of rows a full scan would hit. This is not the same as
+  /// the row count of the schema table bacause the schema table
+  /// because physical organization, like hive partition or range in
+  /// ordering columns may limit this.  TODO: Make this a function of layout.
+  /// For now use the getter that takes the layout.
+  float firstLayoutScanCardinality{1};
+
+  /// The scan type computed in ToGraph::makeBaseTable, used for leaf
+  /// selectivity estimation.
+  const velox::Type* scanType{nullptr};
 
   SubfieldSet controlSubfields;
 
@@ -879,14 +894,25 @@ struct BaseTable : public PlanObject {
   /// Adds 'expr' to 'filters' or 'columnFilters'.
   void addFilter(ExprCP expr);
 
+  /// Returns all filters (columnFilters + filter) combined.
+  ExprVector allFilters() const;
+
   std::optional<int32_t> columnId(Name column) const;
 
   PathSet columnSubfields(int32_t id) const;
+
+  /// Returns a vector of column names for control columns (columns with
+  /// controlSubfields).
+  std::vector<Name> controlColumnNames() const;
 
   /// Returns possible indices for driving table scan of 'table'.
   std::vector<ColumnGroupCP> chooseLeafIndex() const {
     VELOX_DCHECK(!schemaTable->columnGroups.empty());
     return {schemaTable->columnGroups[0]};
+  }
+
+  float scanCardinality(ColumnGroupCP /*index*/) const {
+    return firstLayoutScanCardinality;
   }
 
   std::string toString() const override;
