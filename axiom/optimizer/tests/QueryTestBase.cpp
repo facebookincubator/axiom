@@ -299,4 +299,54 @@ std::string QueryTestBase::getTestDataPath(const std::string& filename) {
       "axiom/optimizer/tests", fmt::format("test_data/{}", filename));
 }
 
+void QueryTestBase::optimize(
+    std::string_view sql,
+    const std::string& defaultConnectorId) {
+  // Clean up any previous optimization state
+  optimization_.reset();
+  session_.reset();
+  allocator_.reset();
+  context_.reset();
+  if (optimizerQueryCtx_) {
+    optimizer::queryCtx() = nullptr;
+    optimizerQueryCtx_ = nullptr;
+  }
+
+  // Parse the SQL query
+  auto logicalPlan = parseSelect(sql, defaultConnectorId);
+  VELOX_CHECK_NOT_NULL(logicalPlan);
+
+  // Create the optimizer context and dependencies
+  auto& veloxQueryCtx = getQueryCtx();
+
+  allocator_ = std::make_unique<HashStringAllocator>(optimizerPool_.get());
+  context_ = std::make_unique<optimizer::QueryGraphContext>(*allocator_);
+  optimizerQueryCtx_ = context_.get();
+
+  // Set the thread-local queryCtx
+  optimizer::queryCtx() = optimizerQueryCtx_;
+
+  exec::SimpleExpressionEvaluator evaluator(
+      veloxQueryCtx.get(), optimizerPool_.get());
+
+  session_ = std::make_shared<Session>(veloxQueryCtx->queryId());
+
+  connector::SchemaResolver schemaResolver;
+
+  runner::MultiFragmentPlan::Options options;
+  options.numWorkers = 1;
+  options.numDrivers = 1;
+
+  // Create the Optimization and keep it alive
+  optimization_ = std::make_unique<optimizer::Optimization>(
+      session_,
+      *logicalPlan,
+      schemaResolver,
+      *history_,
+      veloxQueryCtx,
+      evaluator,
+      optimizerOptions_,
+      options);
+}
+
 } // namespace facebook::axiom::optimizer::test
