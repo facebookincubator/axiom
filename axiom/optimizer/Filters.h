@@ -43,6 +43,10 @@ float combineSelectivities(
 
 const Value& value(const PlanState& state, ExprCP expr);
 
+/// Adds a constraint to the constraint map with cardinality limited by type.
+/// For BOOLEAN: max 2, TINYINT: max 256, SMALLINT: max 65536.
+void addConstraint(int32_t exprId, Value value, ConstraintMap& constraints);
+
 Selectivity columnComparisonSelectivity(
     ExprCP left,
     ExprCP right,
@@ -53,13 +57,13 @@ Selectivity columnComparisonSelectivity(
     ConstraintMap& constraints);
 
 Selectivity exprSelectivity(
-    const PlanState& state,
+    PlanState& state,
     ExprCP expr,
     bool updateConstraints,
     ConstraintMap& newConstraints);
 
 Selectivity conjunctsSelectivity(
-    const PlanState& state,
+    PlanState& state,
     std::span<const ExprCP> conjuncts,
     bool updateConstraints,
     ConstraintMap& newConstraints);
