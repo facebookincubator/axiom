@@ -479,8 +479,8 @@ Join::Join(
     const float buildSize = right->resultCardinality();
     const auto numKeys = leftKeys.size();
     const auto probeCost = Costs::hashTableCost(buildSize) +
-        // Multiply by min(fanout, 1) because most misses will not compare and if
-        // fanout > 1, there is still only one compare.
+        // Multiply by min(fanout, 1) because most misses will not compare and
+        // if fanout > 1, there is still only one compare.
         (Costs::kKeyCompareCost * numKeys * std::min<float>(1, cost_.fanout)) +
         numKeys * Costs::kHashColumnCost;
 
@@ -552,8 +552,7 @@ void Join::setMergeJoinCost() {
   // kHashExtractColumnCost * numRightSideColumns
   cost_.unitCost =
       3 * Costs::kKeyCompareCost * numKeys * std::min<float>(1, cost_.fanout) +
-      rightSideBytes +
-      Costs::kHashExtractColumnCost * numRightSideColumns;
+      rightSideBytes + Costs::kHashExtractColumnCost * numRightSideColumns;
 }
 
 namespace {

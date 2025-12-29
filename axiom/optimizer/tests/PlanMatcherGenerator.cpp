@@ -620,7 +620,8 @@ std::string generateTableScanCode(const TableScanNode& node, int32_t flags) {
 
     oss << ")";
   } else {
-    // Use the standard tableScan for non-Hive table handles or when kScanFilters is not set
+    // Use the standard tableScan for non-Hive table handles or when
+    // kScanFilters is not set
     oss << ".tableScan(\"" << escapeString(tableName) << "\")";
   }
 
@@ -676,7 +677,9 @@ std::string generateProjectCode(const ProjectNode& node, int32_t flags) {
 }
 
 /// Generates code for a ParallelProjectNode.
-std::string generateParallelProjectCode(const ParallelProjectNode& node, int32_t flags) {
+std::string generateParallelProjectCode(
+    const ParallelProjectNode& node,
+    int32_t flags) {
   if (flags & kProjects) {
     const auto& projections = node.projections();
     const auto& names = node.names();
@@ -896,7 +899,8 @@ void generateJoinMatchers(
     const auto& rightSource = joinNode->sources()[1];
 
     // First, collect any nested joins on the right side
-    generateJoinMatchers(rightSource, matchers, matcherCounter, rightMatchers, flags);
+    generateJoinMatchers(
+        rightSource, matchers, matcherCounter, rightMatchers, flags);
 
     // Then generate the matcher for this right side
     std::string rightMatcherCode =
@@ -925,7 +929,8 @@ void generateJoinMatchers(
     const auto& rightSource = joinNode->sources()[1];
 
     // First, collect any nested joins on the right side
-    generateJoinMatchers(rightSource, matchers, matcherCounter, rightMatchers, flags);
+    generateJoinMatchers(
+        rightSource, matchers, matcherCounter, rightMatchers, flags);
 
     // Then generate the matcher for this right side
     std::string rightMatcherCode =
@@ -957,7 +962,8 @@ void generateJoinMatchers(
     const auto& rightSource = joinNode->sources()[1];
 
     // First, collect any nested joins on the right side
-    generateJoinMatchers(rightSource, matchers, matcherCounter, rightMatchers, flags);
+    generateJoinMatchers(
+        rightSource, matchers, matcherCounter, rightMatchers, flags);
 
     // Then generate the matcher for this right side
     std::string rightMatcherCode =
@@ -976,7 +982,8 @@ void generateJoinMatchers(
   } else {
     // Recursively process sources
     for (const auto& source : planNode->sources()) {
-      generateJoinMatchers(source, matchers, matcherCounter, rightMatchers, flags);
+      generateJoinMatchers(
+          source, matchers, matcherCounter, rightMatchers, flags);
     }
   }
 }
@@ -1033,7 +1040,8 @@ std::string generateHashJoinCode(
   return oss.str();
 }
 
-/// Generates code for a MergeJoinNode (inline call only, not the right matcher).
+/// Generates code for a MergeJoinNode (inline call only, not the right
+/// matcher).
 std::string generateMergeJoinCode(
     const MergeJoinNode& node,
     const std::unordered_map<const PlanNode*, std::string>& rightMatchers) {
@@ -1252,7 +1260,8 @@ std::string generatePlanMatcherCode(
   // First, collect all join right-side matchers
   std::vector<std::string> joinMatchers;
   int matcherCounter = 0;
-  generateJoinMatchers(planNode, joinMatchers, matcherCounter, rightMatchers, flags);
+  generateJoinMatchers(
+      planNode, joinMatchers, matcherCounter, rightMatchers, flags);
 
   // Generate the join matchers first
   for (const auto& matcher : joinMatchers) {

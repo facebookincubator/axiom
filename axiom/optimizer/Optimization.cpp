@@ -1687,26 +1687,26 @@ void Optimization::joinByMerge(
   // Check if all join keys are columns (not expressions)
   for (auto* key : left.keys) {
     if (!key->isColumn()) {
-      return;  // Cannot do merge join with non-column keys
+      return; // Cannot do merge join with non-column keys
     }
   }
   for (auto* key : right.keys) {
     if (!key->isColumn()) {
-      return;  // Cannot do merge join with non-column keys
+      return; // Cannot do merge join with non-column keys
     }
   }
 
   // Check if left side (plan) has partitioning and ordering
   const auto& distribution = plan->distribution();
   if (distribution.partition.empty() || distribution.orderKeys.empty()) {
-    return;  // Need both partitioning and ordering for merge join
+    return; // Need both partitioning and ordering for merge join
   }
 
   // Check that all ordering has ascending order
   for (const auto& orderType : distribution.orderTypes) {
     if (orderType != OrderType::kAscNullsFirst &&
         orderType != OrderType::kAscNullsLast) {
-      return;  // Merge join requires ascending order
+      return; // Merge join requires ascending order
     }
   }
 
@@ -1723,7 +1723,7 @@ void Optimization::joinByMerge(
   partitionSet.unionObjects(distribution.partition);
 
   if (!partitionSet.isSubset(leftKeySet)) {
-    return;  // Not all partition columns are in join keys
+    return; // Not all partition columns are in join keys
   }
 
   // Find the left keys that correspond to ordering columns
@@ -1739,14 +1739,14 @@ void Optimization::joinByMerge(
     }
 
     if (!matchingKey) {
-      break;  // Stop looking if we don't find a match
+      break; // Stop looking if we don't find a match
     }
 
     leftMergeColumns.push_back(matchingKey);
   }
 
   if (leftMergeColumns.empty()) {
-    return;  // No ordering columns match join keys
+    return; // No ordering columns match join keys
   }
 
   // At this point, left input (plan) is a candidate for merge join
@@ -2051,7 +2051,8 @@ void Optimization::addJoin(
     // For testing: if testingUseMergeJoin is true and joinByMerge produced a
     // result, return immediately without trying other join methods.
     if (options_.testingUseMergeJoin.has_value() &&
-        options_.testingUseMergeJoin.value() && toTry.size() > sizeBeforeMerge) {
+        options_.testingUseMergeJoin.value() &&
+        toTry.size() > sizeBeforeMerge) {
       result.insert(result.end(), toTry.begin(), toTry.end());
       return;
     }

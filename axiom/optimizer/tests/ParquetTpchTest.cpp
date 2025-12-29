@@ -15,10 +15,10 @@
  */
 
 #include "axiom/optimizer/tests/ParquetTpchTest.h"
+#include <folly/system/HardwareConcurrency.h>
 #include "axiom/common/Session.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
-#include <folly/system/HardwareConcurrency.h>
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"

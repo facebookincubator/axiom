@@ -103,12 +103,13 @@ ColumnGroupCP SchemaTable::addIndex(
     Distribution distribution,
     ColumnVector columns,
     ColumnVector lookupColumns) {
-  return columnGroups.emplace_back(make<ColumnGroup>(
-      *this,
-      layout,
-      std::move(distribution),
-      std::move(columns),
-      std::move(lookupColumns)));
+  return columnGroups.emplace_back(
+      make<ColumnGroup>(
+          *this,
+          layout,
+          std::move(distribution),
+          std::move(columns),
+          std::move(lookupColumns)));
 }
 
 ColumnCP SchemaTable::findColumn(Name name) const {
@@ -196,7 +197,10 @@ SchemaTableCP Schema::findTable(
     appendColumns(layout->lookupKeys(), lookupColumns);
 
     schemaTable->addIndex(
-        *layout, std::move(distribution), std::move(columns), std::move(lookupColumns));
+        *layout,
+        std::move(distribution),
+        std::move(columns),
+        std::move(lookupColumns));
   }
   table = {std::move(connectorTable), schemaTable};
   return schemaTable;
@@ -295,8 +299,8 @@ IndexInfo SchemaTable::indexInfo(
 
   PlanObjectSet covered;
   for (auto i = 0; i < numLookupKeys || i < numUnique; ++i) {
-    ExprCP lookupKey = i < numLookupKeys ? index->lookupColumns[i]
-                                         : distribution.orderKeys[i];
+    ExprCP lookupKey =
+        i < numLookupKeys ? index->lookupColumns[i] : distribution.orderKeys[i];
     auto part = findColumnByName(columnsSpan, lookupKey->as<Column>()->name());
     if (!part) {
       break;
