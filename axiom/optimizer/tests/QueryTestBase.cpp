@@ -56,6 +56,17 @@ void QueryTestBase::SetUp() {
 }
 
 void QueryTestBase::TearDown() {
+  // Clean up any previous optimization state
+  optimization_.reset();
+  session_.reset();
+  allocator_.reset();
+  context_.reset();
+
+  if (optimizerQueryCtx_) {
+    optimizer::queryCtx() = nullptr;
+    optimizerQueryCtx_ = nullptr;
+  }
+
   // If we mean to save the history of running the suite, move the local history
   // to its static location.
   if (!FLAGS_history_save_path.empty()) {

@@ -64,8 +64,9 @@ class PartitionHandle {
     return "PartitionHandle";
   }
 
-  /// Returns the partition path string in Hive format (e.g., "ds=2023-01-01/product=p1").
-  /// Returns an empty string for unpartitioned tables.
+  /// Returns the partition path string in Hive format (e.g.,
+  /// "ds=2023-01-01/product=p1"). Returns an empty string for unpartitioned
+  /// tables.
   virtual const std::string& partition() const {
     static std::string empty;
     return empty;

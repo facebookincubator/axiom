@@ -29,7 +29,6 @@
 DECLARE_string(history_save_path);
 
 namespace facebook::axiom::optimizer {
-class Optimization;
 class QueryGraphContext;
 class RelationOp;
 enum class RelType;
