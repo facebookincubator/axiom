@@ -28,6 +28,15 @@
 
 namespace facebook::axiom::optimizer {
 
+// Forward declarations
+void addJoinConstraints(
+    const ExprVector& left,
+    const ExprVector& right,
+    bool leftOptional,
+    bool rightOptional,
+    float innerFanout,
+    PlanState& state);
+
 void PlanCost::add(RelationOp& op) {
   cost += op.cost().totalCost();
   cardinality = op.cost().resultCardinality();
@@ -395,7 +404,9 @@ Join::Join(
     ExprVector rhsKeys,
     ExprVector filterExprs,
     float fanout,
-    ColumnVector columns)
+    float innerFanout,
+    ColumnVector columns,
+    PlanState& state)
     : RelationOp{RelType::kJoin, std::move(lhs), std::move(columns)},
       method{method},
       joinType{joinType},
@@ -404,20 +415,124 @@ Join::Join(
       rightKeys{std::move(rhsKeys)},
       filter{std::move(filterExprs)} {
   cost_.inputCardinality = inputCardinality();
-  cost_.fanout = fanout;
+
+  // Determine optionality for each side
+  bool leftOptional =
+      (joinType == velox::core::JoinType::kRight ||
+       joinType == velox::core::JoinType::kFull);
+  bool rightOptional =
+      (joinType == velox::core::JoinType::kLeft ||
+       joinType == velox::core::JoinType::kFull);
+
+  // Add join constraints
+  addJoinConstraints(
+      leftKeys, rightKeys, leftOptional, rightOptional, innerFanout, state);
+
+  // Handle filter
+  float filterSelectivity = 1.0f;
+  if (!filter.empty()) {
+    ConstraintMap newConstraints;
+    auto selectivity =
+        conjunctsSelectivity(state, filter, true, newConstraints);
+    filterSelectivity = selectivity.trueFraction;
+
+    // Apply the constraints from conjunctsSelectivity to state
+    for (const auto& [id, constraint] : newConstraints) {
+      addConstraint(id, constraint, state.constraints);
+    }
+  }
+
+  // Adjust fanout based on join type and filter
+  if (joinType == velox::core::JoinType::kLeftSemiFilter ||
+      joinType == velox::core::JoinType::kRightSemiFilter ||
+      joinType == velox::core::JoinType::kAnti) {
+    // For semi/anti joins, multiply fanout by filter selectivity
+    cost_.fanout = fanout * filterSelectivity;
+  } else {
+    cost_.fanout = fanout;
+  }
+
+  // If this is a semi project (mark join), adjust mark column constraint
+  // A mark join is a left semi join that projects a boolean mark column
+  if (joinType == velox::core::JoinType::kLeftSemiProject) {
+    // Find the mark column (last column in columns list for semi-project)
+    if (!columns_.empty()) {
+      auto* markColumn = columns_.back();
+      if (markColumn->value().type->isBoolean()) {
+        // Get the value from constraints or the column's default value
+        Value markValue = value(state, markColumn);
+
+        // Update trueFraction: old * filter selectivity trueFraction
+        float oldTrueFraction = markValue.trueFraction != Value::kUnknown
+            ? markValue.trueFraction
+            : 0.5f;
+        markValue.trueFraction = oldTrueFraction * filterSelectivity;
+
+        // Store the updated constraint
+        addConstraint(markColumn->id(), markValue, state.constraints);
+      }
+    }
+  }
 
   const float buildSize = right->resultCardinality();
   const auto numKeys = leftKeys.size();
   const auto probeCost = Costs::hashTableCost(buildSize) +
       // Multiply by min(fanout, 1) because most misses will not compare and if
       // fanout > 1, there is still only one compare.
-      (Costs::kKeyCompareCost * numKeys * std::min<float>(1, fanout)) +
+      (Costs::kKeyCompareCost * numKeys * std::min<float>(1, cost_.fanout)) +
       numKeys * Costs::kHashColumnCost;
 
   const auto rowBytes = byteSize(right->input()->columns());
   const auto rowCost = Costs::hashRowCost(buildSize, rowBytes);
 
   cost_.unitCost = probeCost + cost_.fanout * rowCost;
+
+  // Add constraints for non-key columns from the optional side of an outer join
+  if (leftOptional || rightOptional) {
+    // Create a set of key column IDs for quick lookup
+    folly::F14FastSet<int32_t> leftKeyIds;
+    for (auto* key : leftKeys) {
+      if (key->is(PlanType::kColumnExpr)) {
+        leftKeyIds.insert(key->id());
+      }
+    }
+
+    folly::F14FastSet<int32_t> rightKeyIds;
+    for (auto* key : rightKeys) {
+      if (key->is(PlanType::kColumnExpr)) {
+        rightKeyIds.insert(key->id());
+      }
+    }
+
+    const float nonKeyNullFraction = std::max(0.0f, 1.0f - innerFanout);
+
+    // If left side is optional, add constraints for left (input_) non-key
+    // columns
+    if (leftOptional) {
+      for (auto* column : input_->columns()) {
+        if (column->is(PlanType::kColumnExpr) &&
+            leftKeyIds.count(column->id()) == 0) {
+          Value constraint = value(state, column);
+          constraint.nullable = true;
+          constraint.nullFraction = nonKeyNullFraction;
+          addConstraint(column->id(), constraint, state.constraints);
+        }
+      }
+    }
+
+    // If right side is optional, add constraints for right non-key columns
+    if (rightOptional) {
+      for (auto* column : right->columns()) {
+        if (column->is(PlanType::kColumnExpr) &&
+            rightKeyIds.count(column->id()) == 0) {
+          Value constraint = value(state, column);
+          constraint.nullable = true;
+          constraint.nullFraction = nonKeyNullFraction;
+          addConstraint(column->id(), constraint, state.constraints);
+        }
+      }
+    }
+  }
 }
 
 namespace {
@@ -467,8 +582,11 @@ const QGString& Join::historyKey() const {
 Join* Join::makeCrossJoin(
     RelationOpPtr input,
     RelationOpPtr right,
-    ColumnVector columns) {
+    ColumnVector columns,
+    PlanState& state) {
   float fanout = right->resultCardinality();
+  // For cross join (inner join with no keys), innerFanout equals fanout
+  float innerFanout = fanout;
   return make<Join>(
       JoinMethod::kCross,
       velox::core::JoinType::kInner,
@@ -478,7 +596,9 @@ Join* Join::makeCrossJoin(
       ExprVector{},
       ExprVector{},
       fanout,
-      std::move(columns));
+      innerFanout,
+      std::move(columns),
+      state);
 }
 
 std::string Join::toString(bool recursive, bool detail) const {
@@ -667,7 +787,7 @@ PlanObjectCP largestTable(const PlanObjectSet& tables) {
 // Computes the maximum cardinality estimate for aggregation grouping keys
 // using saturating product to avoid overflow. When multiple keys come from the
 // same table, cap the maximum cardinality estimate at table's cardinality.
-double maxGroups(const ExprVector& groupingKeys) {
+double maxGroups(const ExprVector& groupingKeys, const PlanState& state) {
   if (groupingKeys.empty()) {
     return 1.0;
   }
@@ -702,14 +822,16 @@ double maxGroups(const ExprVector& groupingKeys) {
     double groupCardinality;
     if (keys.size() == 1) {
       // Single key per table: use min of key cardinality and table cardinality.
+      // Use value(state, key) to consider constraints.
       groupCardinality =
-          std::min<double>(keys[0]->value().cardinality, maxCardinality);
+          std::min<double>(value(state, keys[0]).cardinality, maxCardinality);
     } else {
       // Multiple keys: collect cardinalities and use saturatingProduct.
       std::vector<double> keyCardinalities;
       keyCardinalities.reserve(keys.size());
       for (auto key : keys) {
-        keyCardinalities.push_back(key->value().cardinality);
+        // Use value(state, key) to consider constraints.
+        keyCardinalities.push_back(value(state, key).cardinality);
       }
       groupCardinality = saturatingProduct(maxCardinality, keyCardinalities);
     }
@@ -732,7 +854,8 @@ Aggregation::Aggregation(
     ExprVector groupingKeysVector,
     AggregateVector aggregatesVector,
     velox::core::AggregationNode::Step step,
-    ColumnVector columns)
+    ColumnVector columns,
+    PlanState& state)
     : RelationOp{RelType::kAggregation, std::move(input), std::move(columns)},
       groupingKeys{std::move(groupingKeysVector)},
       aggregates{std::move(aggregatesVector)},
@@ -756,7 +879,7 @@ Aggregation::Aggregation(
       inputBeforePartial = cost_.inputCardinality;
     }
 
-    setCostWithGroups(inputBeforePartial);
+    setCostWithGroups(inputBeforePartial, state);
   } else {
     // Global aggregation (no grouping keys).
     cost_.unitCost = aggregates.size() * Costs::kSimpleAggregateCost;
@@ -766,6 +889,33 @@ Aggregation::Aggregation(
   }
 
   VELOX_CHECK_LE(cost_.fanout, 1.0f);
+
+  // Add constraints on output columns with cardinality set to the number of
+  // rows expected from the aggregation
+  float outputCardinality = resultCardinality();
+
+  // Create a set of grouping key IDs for quick lookup
+  folly::F14FastSet<int32_t> groupingKeyIds;
+  for (auto* key : groupingKeys) {
+    groupingKeyIds.insert(key->id());
+  }
+
+  // Add constraints for all output columns
+  for (auto* column : columns_) {
+    Value constraint = column->value();
+
+    // For grouping keys, keep the smaller of the existing cardinality and
+    // output cardinality (they don't gain new distinct values)
+    if (groupingKeyIds.count(column->id()) > 0) {
+      constraint.cardinality =
+          std::min(constraint.cardinality, outputCardinality);
+    } else {
+      // For aggregate result columns, use the output cardinality
+      constraint.cardinality = outputCardinality;
+    }
+
+    addConstraint(column->id(), constraint, state.constraints);
+  }
 }
 
 namespace {
@@ -788,11 +938,14 @@ float aggregationCost(
 }
 } // namespace
 
-void Aggregation::setCostWithGroups(int64_t inputBeforePartial) {
+void Aggregation::setCostWithGroups(
+    int64_t inputBeforePartial,
+    const PlanState& state) {
   auto* optimization = queryCtx()->optimization();
   const auto& runnerOptions = optimization->runnerOptions();
 
-  const auto maxCardinality = std::max<double>(1, maxGroups(groupingKeys));
+  const auto maxCardinality =
+      std::max<double>(1, maxGroups(groupingKeys, state));
 
   const auto numGroups =
       expectedNumDistincts(inputBeforePartial, maxCardinality);
@@ -991,6 +1144,11 @@ Filter::Filter(PlanState& state, RelationOpPtr input, ExprVector exprs)
   ConstraintMap constraints;
   auto selectivity = conjunctsSelectivity(state, exprs_, false, constraints);
   cost_.fanout = selectivity.trueFraction;
+
+  // Add constraints from conjunctsSelectivity to state, replacing existing ones
+  for (const auto& [exprId, value] : constraints) {
+    addConstraint(exprId, value, state.constraints);
+  }
 }
 
 const QGString& Filter::historyKey() const {
@@ -1044,7 +1202,8 @@ Project::Project(
     const RelationOpPtr& input,
     ExprVector exprs,
     const ColumnVector& columns,
-    bool redundant)
+    bool redundant,
+    PlanState& state)
     : RelationOp{RelType::kProject, input, input->distribution().rename(exprs, columns), columns},
       exprs_{std::move(exprs)},
       redundant_{redundant} {
@@ -1058,6 +1217,12 @@ Project::Project(
           "Redundant Project must not contain expressions: {}",
           expr->toString());
     }
+  }
+
+  // Derive and propagate constraints from input expressions to output columns
+  for (size_t i = 0; i < exprs_.size(); ++i) {
+    Value exprValue = exprConstraint(exprs_[i], state);
+    addConstraint(columns_[i]->id(), exprValue, state.constraints);
   }
 
   cost_.inputCardinality = inputCardinality();
@@ -1307,6 +1472,106 @@ void TableWrite::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+void addJoinConstraint(
+    ExprCP left,
+    ExprCP right,
+    bool leftOptional,
+    bool rightOptional,
+    float innerFanout,
+    PlanState& state) {
+  // Get the values for left and right expressions
+  Value leftValue = value(state, left);
+  Value rightValue = value(state, right);
+
+  // If neither side is optional, apply constraints to both sides
+  if (!leftOptional && !rightOptional) {
+    // Both sides are non-optional (inner join)
+    // Set nullable to false and nullFraction to 0
+    leftValue.nullable = false;
+    leftValue.nullFraction = 0.0f;
+    rightValue.nullable = false;
+    rightValue.nullFraction = 0.0f;
+
+    // Call columnComparisonSelectivity with updateConstraints=true
+    // This will update both left and right constraints with range and
+    // cardinality limits
+    columnComparisonSelectivity(
+        left,
+        right,
+        leftValue,
+        rightValue,
+        toName("eq"),
+        true,
+        state.constraints);
+  } else if (leftOptional || rightOptional) {
+    // One or both sides are optional (outer or semi joins)
+
+    // For the optional side: set nullable to true
+    if (leftOptional) {
+      leftValue.nullable = true;
+      // If innerFanout < 1, set nullFraction to 1 - innerFanout
+      if (innerFanout < 1.0f) {
+        leftValue.nullFraction = 1.0f - innerFanout;
+      }
+    }
+
+    if (rightOptional) {
+      rightValue.nullable = true;
+      // If innerFanout < 1, set nullFraction to 1 - innerFanout
+      if (innerFanout < 1.0f) {
+        rightValue.nullFraction = 1.0f - innerFanout;
+      }
+    }
+
+    // Apply the range and cardinality limit from comparisonSelectivity to the
+    // optional side only First, call columnComparisonSelectivity to get the
+    // constraints
+    ConstraintMap tempConstraints;
+    columnComparisonSelectivity(
+        left,
+        right,
+        leftValue,
+        rightValue,
+        toName("eq"),
+        true,
+        tempConstraints);
+
+    // Apply constraints from comparisonSelectivity to the optional side(s) only
+    // Preserve the nullable and nullFraction we set above
+    if (leftOptional && tempConstraints.count(left->id())) {
+      Value constraint = tempConstraints.at(left->id());
+      constraint.nullable = leftValue.nullable;
+      constraint.nullFraction = leftValue.nullFraction;
+      addConstraint(left->id(), constraint, state.constraints);
+    }
+    if (rightOptional && tempConstraints.count(right->id())) {
+      Value constraint = tempConstraints.at(right->id());
+      constraint.nullable = rightValue.nullable;
+      constraint.nullFraction = rightValue.nullFraction;
+      addConstraint(right->id(), constraint, state.constraints);
+    }
+
+    // For the non-optional side, do not add any constraint
+    // (do not set nullable to false or nullFraction to 0)
+  }
+}
+
+void addJoinConstraints(
+    const ExprVector& left,
+    const ExprVector& right,
+    bool leftOptional,
+    bool rightOptional,
+    float innerFanout,
+    PlanState& state) {
+  VELOX_CHECK_EQ(
+      left.size(), right.size(), "Join key vectors must have same size");
+
+  for (size_t i = 0; i < left.size(); ++i) {
+    addJoinConstraint(
+        left[i], right[i], leftOptional, rightOptional, innerFanout, state);
+  }
 }
 
 } // namespace facebook::axiom::optimizer
