@@ -17,6 +17,7 @@
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
+#include "axiom/optimizer/ToGraph.h"
 #include "velox/core/PlanConsistencyChecker.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/HashPartitionFunction.h"
@@ -446,6 +447,25 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
       std::vector<velox::core::TypedExprPtr> inputs;
       auto call = expr->as<Call>();
 
+      /// Subscript over a struct requires a FieldAccessTypedExpr or
+      /// DereferenceTypedExpr depending on the type of the constant.
+      if (call->name() == subscriptName() &&
+          call->args()[0]->value().type->kind() == velox::TypeKind::ROW) {
+        VELOX_CHECK(call->args()[1]->is(PlanType::kLiteralExpr));
+        const auto& field = call->args()[1]->as<Literal>()->literal();
+
+        if (field.kind() == velox::TypeKind::VARCHAR) {
+          return std::make_shared<velox::core::FieldAccessTypedExpr>(
+              toTypePtr(expr->value().type),
+              toTypedExpr(call->args()[0]),
+              field.template value<velox::TypeKind::VARCHAR>());
+        }
+        return std::make_shared<velox::core::DereferenceTypedExpr>(
+            toTypePtr(expr->value().type),
+            toTypedExpr(call->args()[0]),
+            field.template value<velox::TypeKind::INTEGER>());
+      }
+
       if (call->name() == SpecialFormCallNames::kIn) {
         VELOX_USER_CHECK_GE(call->args().size(), 2);
         inputs.push_back(toTypedExpr(call->args()[0]));
@@ -475,19 +495,6 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
 
       return std::make_shared<velox::core::CallTypedExpr>(
           toTypePtr(expr->value().type), std::move(inputs), call->name());
-    }
-    case PlanType::kFieldExpr: {
-      auto* field = expr->as<Field>()->field();
-      if (field) {
-        return std::make_shared<velox::core::FieldAccessTypedExpr>(
-            toTypePtr(expr->value().type),
-            toTypedExpr(expr->as<Field>()->base()),
-            field);
-      }
-      return std::make_shared<velox::core::DereferenceTypedExpr>(
-          toTypePtr(expr->value().type),
-          toTypedExpr(expr->as<Field>()->base()),
-          expr->as<Field>()->index());
     }
     case PlanType::kLiteralExpr: {
       const auto* literal = expr->as<Literal>();

@@ -398,4 +398,12 @@ PathCP toPath(std::span<const Step> steps, bool reverse) {
   return queryCtx()->toPath(path);
 }
 
+const velox::Variant* QueryGraphContext::registerVariant(
+    std::shared_ptr<const velox::Variant> value) {
+  auto pair = variants_.insert(value);
+  auto* rawPtr = pair.first->get();
+  reverseConstantDedup_[rawPtr] = value;
+  return rawPtr;
+}
+
 } // namespace facebook::axiom::optimizer
