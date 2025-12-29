@@ -50,6 +50,12 @@ class SqlQueryRunner {
 
     /// If true, EXPLAIN ANALYZE output includes custom operator stats.
     bool debugMode{false};
+
+    /// If true, enable join sampling.
+    bool sampleJoins{false};
+
+    /// If true, enable filter sampling.
+    bool sampleFilters{false};
   };
 
   SqlResult run(std::string_view sql, const RunOptions& options);

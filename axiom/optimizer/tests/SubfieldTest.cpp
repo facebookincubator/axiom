@@ -674,6 +674,10 @@ TEST_P(SubfieldTest, overAggregation) {
 }
 
 TEST_P(SubfieldTest, blackbox) {
+  registerGenieUdfs();
+  if (GetParam() == 3) {
+    optimizerOptions_.allMapsAsStruct = true;
+  }
   auto data = makeRowVector(
       {"id", "m"},
       {
@@ -686,7 +690,8 @@ TEST_P(SubfieldTest, blackbox) {
 
   lp::PlanBuilder::Context ctx(kHiveConnectorId);
   ctx.hook = [](const auto& name, const auto& args) -> lp::ExprPtr {
-    if (name == "map_row_from_map") {
+    if (name == "map_row_from_map" || name == "make_row_from_map" ||
+        name == "padded_make_row_from_map") {
       VELOX_CHECK(args.at(2)->isConstant());
       auto names = args.at(2)
                        ->template as<lp::ConstantExpr>()
@@ -723,6 +728,82 @@ TEST_P(SubfieldTest, blackbox) {
           .build();
 
   ASSERT_NO_THROW(toSingleNodePlan(logicalPlan));
+
+  logicalPlan =
+      lp::PlanBuilder(ctx)
+          .tableScan("t")
+          .project(
+              {"make_row_from_map(m, array[1, 2, 3], array['f1', 'f2', 'f3']) as m"})
+          .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  verifyRequiredSubfields(
+      plan, {{"m", {subfield("1"), subfield("2"), subfield("3")}}});
+
+  if (GetParam() == 1) {
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .project(
+                {"row_constructor(subscript(m_4,1),subscript(m_4,2),subscript(m_4,3))"})
+            .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  } else {
+    auto matcher =
+        core::PlanMatcherBuilder().tableScan().project().project().build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  logicalPlan =
+      lp::PlanBuilder(ctx, true)
+          .tableScan("t")
+          .project(
+              {"identity(make_row_from_map(m, array[1, 2, 3], array['f1', 'f2', 'f3'])) as m"})
+          .project(
+              {"if (m.f1 < 0, ceil(m.f1), floor(m.f1)) as f1b",
+               "if (m.f2 < 0, 1 + floor(m.f2), ceil(m.f2) + 1) as f2b"})
+          .project({"f1b + 1 as f1b1", "f1b * 2 as f1b2b", "f2b * 3 as f2b3"})
+          .build();
+
+  // Enable parallel project for the remainder of this test. This is reset in
+  // SetUp().
+  optimizerOptions_.parallelProjectWidth = 2;
+  plan = toSingleNodePlan(logicalPlan);
+
+  verifyRequiredSubfields(
+      plan, {{"m", {subfield("1"), subfield("2"), subfield("3")}}});
+
+  if (GetParam() == 1) {
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .parallelProject()
+            .parallelProject(
+                {"identity(row_constructor(subscript(m_7,1),subscript(m_7,2),subscript(m_7,3)))"})
+            .parallelProject()
+            .parallelProject()
+            .project()
+            .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  logicalPlan =
+      lp::PlanBuilder(ctx, true)
+          .tableScan("t")
+          .project(
+              {"make_row_from_map(m, array[1, 2, 3], array['f1', 'f2', 'f3']) as m"})
+          .project(
+              {"if (coalesce(m.f1, 1::REAL) < 0, ceil(coalesce(m.f1, 1::REAL)), floor(coalesce(m.f1, 1::REAL))) as f1b",
+               "if (coalesce(m.f2, 1::REAL) < 0, 1 + floor(coalesce(m.f2, 2::real)), ceil(coalesce(m.f2, 3::REAL)) + 1) as f2b"})
+          .project({"f1b + 1 as f1b1", "f1b * 2 as f1b2b", "f2b * 3 as f2b3"})
+          .build();
+
+  plan = toSingleNodePlan(logicalPlan);
+  std::cout << plan->toString(true, true);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

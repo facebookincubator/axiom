@@ -43,6 +43,10 @@ class ParquetTpchTest {
   static void registerTpchConnector(const std::string& id);
 
   static void unregisterTpchConnector(const std::string& id);
+
+  static void makeBucketedTables(std::string_view path);
+
+  static void makeBucketedSortedTables(std::string_view path);
 };
 
 } // namespace facebook::axiom::optimizer::test

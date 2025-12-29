@@ -21,6 +21,42 @@
 
 namespace facebook::axiom::optimizer {
 
+/// Cache for expandFunction results. Maps from lp::Expr* to expanded ExprPtr.
+/// Uses pointer-based hashing and comparison.
+struct ExpandFunctionCache {
+  /// Checks if the expression is in the cache and returns the cached result.
+  /// If not in cache, calls expandFunction, caches the result, and returns it.
+  /// @param expr The expression to expand (must be a CallExpr)
+  /// @param expandFunction The expansion function to call if not cached
+  /// @return The expanded expression, or nullptr if expansion returns nullptr
+  logical_plan::ExprPtr getOrExpand(
+      const logical_plan::Expr* expr,
+      const std::function<logical_plan::ExprPtr(const logical_plan::CallExpr*)>&
+          expandFunction);
+
+ private:
+  struct PointerHash {
+    size_t operator()(const logical_plan::Expr* ptr) const {
+      return std::hash<const logical_plan::Expr*>()(ptr);
+    }
+  };
+
+  struct PointerEqual {
+    bool operator()(
+        const logical_plan::Expr* lhs,
+        const logical_plan::Expr* rhs) const {
+      return lhs == rhs;
+    }
+  };
+
+  folly::F14FastMap<
+      const logical_plan::Expr*,
+      logical_plan::ExprPtr,
+      PointerHash,
+      PointerEqual>
+      cache_;
+};
+
 /// Set of accessed subfields given ordinal of output column or function
 /// argument.
 struct ResultAccess {
@@ -74,10 +110,14 @@ class SubfieldTracker {
 
   /// Goes over the local plan and collects all accessed columns and subfields.
   /// Reports 'control' and 'payload' columns and subfields separately.
-  std::pair<PlanSubfields, PlanSubfields> markAll(
+  /// Returns the subfields and the expandFunction cache that can be reused.
+  std::tuple<PlanSubfields, PlanSubfields, ExpandFunctionCache> markAll(
       const logical_plan::LogicalPlanNode& node) && {
     markAllSubfields(node, {});
-    return {controlSubfields_, payloadSubfields_};
+    return {
+        std::move(controlSubfields_),
+        std::move(payloadSubfields_),
+        std::move(expandFunctionCache_)};
   }
 
   // if 'step' applied to result of the function of 'metadata'
@@ -147,6 +187,8 @@ class SubfieldTracker {
 
   PlanSubfields controlSubfields_;
   PlanSubfields payloadSubfields_;
+
+  ExpandFunctionCache expandFunctionCache_;
 };
 
 } // namespace facebook::axiom::optimizer

@@ -17,6 +17,7 @@
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
+#include "axiom/optimizer/ToGraph.h"
 #include "velox/core/PlanConsistencyChecker.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/HashPartitionFunction.h"
@@ -154,11 +155,8 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
   std::vector<velox::core::TypedExprPtr> filterConjuncts;
   velox::ScopedVarSetter noAlias(&makeVeloxExprWithNoAlias_, true);
   velox::ScopedVarSetter getters(&getterForPushdownSubfield_, true);
-  for (auto filter : table->columnFilters) {
+  for (auto filter : table->allFilters()) {
     filterConjuncts.push_back(toTypedExpr(filter));
-  }
-  for (auto expr : table->filter) {
-    filterConjuncts.push_back(toTypedExpr(expr));
   }
 
   columnAlteredTypes_.clear();
@@ -449,6 +447,25 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
       std::vector<velox::core::TypedExprPtr> inputs;
       auto call = expr->as<Call>();
 
+      /// Subscript over a struct requires a FieldAccessTypedExpr or
+      /// DereferenceTypedExpr depending on the type of the constant.
+      if (call->name() == subscriptName() &&
+          call->args()[0]->value().type->kind() == velox::TypeKind::ROW) {
+        VELOX_CHECK(call->args()[1]->is(PlanType::kLiteralExpr));
+        const auto& field = call->args()[1]->as<Literal>()->literal();
+
+        if (field.kind() == velox::TypeKind::VARCHAR) {
+          return std::make_shared<velox::core::FieldAccessTypedExpr>(
+              toTypePtr(expr->value().type),
+              toTypedExpr(call->args()[0]),
+              field.template value<velox::TypeKind::VARCHAR>());
+        }
+        return std::make_shared<velox::core::DereferenceTypedExpr>(
+            toTypePtr(expr->value().type),
+            toTypedExpr(call->args()[0]),
+            field.template value<velox::TypeKind::INTEGER>());
+      }
+
       if (call->name() == SpecialFormCallNames::kIn) {
         VELOX_USER_CHECK_GE(call->args().size(), 2);
         inputs.push_back(toTypedExpr(call->args()[0]));
@@ -478,19 +495,6 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
 
       return std::make_shared<velox::core::CallTypedExpr>(
           toTypePtr(expr->value().type), std::move(inputs), call->name());
-    }
-    case PlanType::kFieldExpr: {
-      auto* field = expr->as<Field>()->field();
-      if (field) {
-        return std::make_shared<velox::core::FieldAccessTypedExpr>(
-            toTypePtr(expr->value().type),
-            toTypedExpr(expr->as<Field>()->base()),
-            field);
-      }
-      return std::make_shared<velox::core::DereferenceTypedExpr>(
-          toTypePtr(expr->value().type),
-          toTypedExpr(expr->as<Field>()->base()),
-          expr->as<Field>()->index());
     }
     case PlanType::kLiteralExpr: {
       const auto* literal = expr->as<Literal>();
@@ -1108,6 +1112,10 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
         nextId(), toAnd(join.filter), joinNode);
   }
 
+  if (join.method == JoinMethod::kMerge) {
+    return makeMergeJoin(join, fragment, stages, left, right);
+  }
+
   auto leftKeys = toFieldRefs(join.leftKeys);
   auto rightKeys = toFieldRefs(join.rightKeys);
 
@@ -1115,6 +1123,29 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
       nextId(),
       join.joinType,
       false,
+      leftKeys,
+      rightKeys,
+      toAnd(join.filter),
+      left,
+      right,
+      makeOutputType(join.columns()));
+
+  makePredictionAndHistory(joinNode->id(), &join);
+  return joinNode;
+}
+
+velox::core::PlanNodePtr ToVelox::makeMergeJoin(
+    const Join& join,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages,
+    velox::core::PlanNodePtr left,
+    velox::core::PlanNodePtr right) {
+  auto leftKeys = toFieldRefs(join.leftKeys);
+  auto rightKeys = toFieldRefs(join.rightKeys);
+
+  auto joinNode = std::make_shared<velox::core::MergeJoinNode>(
+      nextId(),
+      join.joinType,
       leftKeys,
       rightKeys,
       toAnd(join.filter),
