@@ -76,6 +76,10 @@ class HivePartitionType : public connector::PartitionType {
 
   std::string toString() const override;
 
+  int32_t numPartitions() const {
+    return numPartitions_;
+  }
+
  private:
   const int32_t numPartitions_;
   const std::vector<velox::TypePtr> partitionKeyTypes_;
