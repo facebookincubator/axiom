@@ -30,7 +30,7 @@ namespace facebook::axiom::runner {
 /// the caller holds an owning reference to the runner.
 class Runner {
  public:
-  enum class State { kInitialized, kRunning, kFinished, kError, kCancelled };
+  enum class State { kInitialized, kRunning, kFinished, kError };
 
   AXIOM_DECLARE_EMBEDDED_ENUM_NAME(State);
 
@@ -55,11 +55,6 @@ class Runner {
   /// all execution resources to be freed. May be called from any thread without
   /// serialization.
   virtual void abort() = 0;
-
-  /// Waits up to 'maxWaitMicros' for all activity of the execution to cease.
-  /// This is used in tests to ensure that all pools are empty and unreferenced
-  /// before teardown.
-  virtual void waitForCompletion(int32_t maxWaitMicros) = 0;
 };
 
 } // namespace facebook::axiom::runner

@@ -63,31 +63,23 @@ ColumnCP SchemaTable::findColumn(Name name) const {
   return it->second;
 }
 
-SchemaTableCP Schema::findTable(
-    std::string_view connectorId,
-    std::string_view name) const {
-  auto& tables = connectorTables_.try_emplace(connectorId).first->second;
-  auto& table = tables.try_emplace(name, Table{}).first->second;
-  if (table.schemaTable) {
-    return table.schemaTable;
+const SchemaTable& Schema::getTable(
+    const connector::Table& connectorTable) const {
+  auto*& table = tables_.try_emplace(&connectorTable).first->second;
+  if (table) {
+    return *table;
   }
 
-  VELOX_CHECK_NOT_NULL(source_);
-  auto connectorTable = source_->findTable(connectorId, name);
-  if (!connectorTable) {
-    return nullptr;
-  }
-
-  auto* schemaTable = make<SchemaTable>(*connectorTable);
+  auto* schemaTable = make<SchemaTable>(connectorTable);
   auto& schemaColumns = schemaTable->columns;
 
-  auto& tableColumns = connectorTable->columnMap();
+  auto& tableColumns = connectorTable.columnMap();
   schemaColumns.reserve(tableColumns.size());
   for (const auto& [columnName, tableColumn] : tableColumns) {
     const auto cardinality = std::max<float>(
         1,
         tableColumn->approxNumDistinct(
-            static_cast<int64_t>(connectorTable->numRows())));
+            static_cast<int64_t>(connectorTable.numRows())));
     Value value(toType(tableColumn->type()), cardinality);
     auto* column = make<Column>(toName(columnName), nullptr, value);
     schemaColumns[column->name()] = column;
@@ -105,10 +97,9 @@ SchemaTableCP Schema::findTable(
     }
   };
 
-  for (const auto* layout : connectorTable->layouts()) {
+  for (const auto* layout : connectorTable.layouts()) {
     VELOX_CHECK_NOT_NULL(layout);
-    Distribution distribution;
-    distribution.distributionType = DistributionType(layout->partitionType());
+    Distribution distribution{layout->partitionType(), {}};
     appendColumns(layout->partitionColumns(), distribution.partition);
     appendColumns(layout->orderColumns(), distribution.orderKeys);
 
@@ -128,8 +119,8 @@ SchemaTableCP Schema::findTable(
     appendColumns(layout->columns(), columns);
     schemaTable->addIndex(*layout, std::move(distribution), std::move(columns));
   }
-  table = {std::move(connectorTable), schemaTable};
-  return schemaTable;
+  table = schemaTable;
+  return *table;
 }
 
 float tableCardinality(PlanObjectCP table) {
@@ -305,6 +296,7 @@ IndexInfo SchemaTable::indexByColumns(CPSpan<Column> columns) const {
 }
 
 IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys) {
+  VELOX_DCHECK(table);
   if (table->is(PlanType::kTableNode)) {
     auto schemaTable = table->as<BaseTable>()->schemaTable;
     return schemaTable->indexByColumns(keys);
@@ -346,40 +338,66 @@ ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {
   return nullptr;
 }
 
-bool Distribution::isSamePartition(const Distribution& other) const {
-  if (distributionType != other.distributionType) {
-    return false;
+Distribution::NeedsShuffle Distribution::maybeNeedsShuffle(
+    const Distribution& desired) const {
+  if (isBroadcast()) {
+    // If 'this' is broadcast, no repartitioning is needed.
+    return NeedsShuffle::kNo;
   }
-  if (isBroadcast || other.isBroadcast) {
-    return true;
+  if (desired.isBroadcast()) {
+    // If 'desired' is broadcast, repartitioning is needed.
+    return NeedsShuffle::kYes;
   }
-  if (partition.size() != other.partition.size()) {
-    return false;
+  if (isGather() && desired.isGather()) {
+    // Both are gather, no repartitioning needed.
+    return NeedsShuffle::kNo;
   }
-  if (partition.size() == 0) {
-    // If the partitioning columns are not in the columns or if there
-    // are no partitioning columns, there can be  no copartitioning.
-    return false;
+  if (isGather() || desired.isGather()) {
+    // One is gather, the other is not, repartitioning needed.
+    return NeedsShuffle::kYes;
   }
-  for (auto i = 0; i < partition.size(); ++i) {
-    if (!partition[i]->sameOrEqual(*other.partition[i])) {
-      return false;
-    }
-  }
-  return true;
+  return NeedsShuffle::kMaybe;
 }
 
-bool Distribution::isSameOrder(const Distribution& other) const {
-  if (orderKeys.size() != other.orderKeys.size()) {
-    return false;
+bool Distribution::needsShuffle(const Distribution& desired) const {
+  const auto needsShuffle = maybeNeedsShuffle(desired);
+  if (needsShuffle != NeedsShuffle::kMaybe) {
+    return needsShuffle == NeedsShuffle::kYes;
   }
-  for (size_t i = 0; i < orderKeys.size(); ++i) {
-    if (!orderKeys[i]->sameOrEqual(*other.orderKeys[i]) ||
-        orderTypes[i] != other.orderTypes[i]) {
-      return false;
+  if (!hasCopartition(partitionType(), desired.partitionType())) {
+    // Different partition types, repartitioning needed.
+    return true;
+  }
+  // TODO: Probably we want copartition type decide this.
+  // For an example range partitioning may not need shuffle if
+  // the ranges are compatible, e.g. "a, b, c" and "a, b".
+
+  if (partition.size() != desired.partition.size()) {
+    // Different number of partition keys, repartitioning needed.
+    return true;
+  }
+  for (size_t i = 0; i < partition.size(); ++i) {
+    if (!partition[i]->sameOrEqual(*desired.partition[i])) {
+      // Different partition key, repartitioning needed.
+      return true;
     }
   }
-  return true;
+  return false;
+}
+
+bool Distribution::needsSort(const Distribution& desired) const {
+  if (orderKeys.size() < desired.orderKeys.size()) {
+    // Not enough ordering keys, needs sort.
+    return true;
+  }
+  for (size_t i = 0; i < desired.orderKeys.size(); ++i) {
+    if (!orderKeys[i]->sameOrEqual(*desired.orderKeys[i]) ||
+        orderTypes[i] != desired.orderTypes[i]) {
+      // Different ordering key or order type, needs sort.
+      return true;
+    }
+  }
+  return false;
 }
 
 Distribution Distribution::rename(
@@ -415,11 +433,11 @@ void exprsToString(const ExprVector& exprs, std::stringstream& out) {
 } // namespace
 
 std::string Distribution::toString() const {
-  if (isBroadcast) {
+  if (isBroadcast()) {
     return "broadcast";
   }
 
-  if (distributionType.isGather()) {
+  if (isGather()) {
     return "gather";
   }
 
@@ -427,8 +445,8 @@ std::string Distribution::toString() const {
   if (!partition.empty()) {
     out << "P ";
     exprsToString(partition, out);
-    if (distributionType.partitionType() != nullptr) {
-      out << " " << distributionType.partitionType()->toString();
+    if (partitionType() != nullptr) {
+      out << " " << partitionType()->toString();
     } else {
       out << " Velox hash";
     }

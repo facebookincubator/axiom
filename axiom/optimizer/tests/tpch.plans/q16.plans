@@ -56,16 +56,14 @@ Project (redundant) -> dt1.p_brand, dt1.p_type, dt1.p_size, dt1.supplier_cnt
             t2.ps_partkey = t3.p_partkey
           TableScan -> t2.ps_partkey, t2.ps_suppkey
             table: partsupp
-          HashBuild -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
-            TableScan -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
-              table: part
-              single-column filters: neq(t3.p_brand, "Brand#45") and not(like(t3.p_type, "MEDIUM POLISHED%")) and __in(t3.p_size, 49, 14, 23, 45, 19, 3, 36, 9)
-        HashBuild -> dt4.s_suppkey
-          Project (redundant) -> dt4.s_suppkey
-              dt4.s_suppkey := t5.s_suppkey
-            TableScan -> t5.s_suppkey
-              table: supplier
-              single-column filters: like(t5.s_comment, "%Customer%Complaints%")
+          TableScan -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
+            table: part
+            single-column filters: neq(t3.p_brand, "Brand#45") and not(like(t3.p_type, "MEDIUM POLISHED%")) and __in(t3.p_size, 49, 14, 23, 45, 19, 3, 36, 9)
+        Project (redundant) -> dt4.s_suppkey
+            dt4.s_suppkey := t5.s_suppkey
+          TableScan -> t5.s_suppkey
+            table: supplier
+            single-column filters: like(t5.s_comment, "%Customer%Complaints%")
 
 
 Executable Velox plan:

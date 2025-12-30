@@ -56,16 +56,14 @@ Project -> dt1.l_orderkey, dt1.revenue, dt1.o_orderdate, dt1.o_shippriority
           TableScan -> t4.l_orderkey, t4.l_extendedprice, t4.l_discount
             table: lineitem
             single-column filters: gt(t4.l_shipdate, "1995-03-15")
-          HashBuild -> t3.o_orderkey, t3.o_orderdate, t3.o_shippriority
-            Join INNER Hash -> t3.o_orderkey, t3.o_orderdate, t3.o_shippriority
-                t3.o_custkey = t2.c_custkey
-              TableScan -> t3.o_orderkey, t3.o_custkey, t3.o_orderdate, t3.o_shippriority
-                table: orders
-                single-column filters: lt(t3.o_orderdate, "1995-03-15")
-              HashBuild -> t2.c_custkey
-                TableScan -> t2.c_custkey
-                  table: customer
-                  single-column filters: eq(t2.c_mktsegment, "BUILDING")
+          Join INNER Hash -> t3.o_orderkey, t3.o_orderdate, t3.o_shippriority
+              t3.o_custkey = t2.c_custkey
+            TableScan -> t3.o_orderkey, t3.o_custkey, t3.o_orderdate, t3.o_shippriority
+              table: orders
+              single-column filters: lt(t3.o_orderdate, "1995-03-15")
+            TableScan -> t2.c_custkey
+              table: customer
+              single-column filters: eq(t2.c_mktsegment, "BUILDING")
 
 
 Executable Velox plan:

@@ -91,7 +91,6 @@ class LocalHiveTableLayout : public HiveTableLayout {
       std::vector<const Column*> partitioning,
       std::vector<const Column*> orderColumns,
       std::vector<SortOrder> sortOrder,
-      std::vector<const Column*> lookupKeys,
       std::vector<const Column*> hivePartitionColumns,
       velox::dwio::common::FileFormat fileFormat,
       std::unordered_map<std::string, std::string> serdeParameters = {})
@@ -104,7 +103,6 @@ class LocalHiveTableLayout : public HiveTableLayout {
             partitioning,
             orderColumns,
             sortOrder,
-            lookupKeys,
             hivePartitionColumns,
             fileFormat),
         serdeParameters_(std::move(serdeParameters)) {}
@@ -155,8 +153,7 @@ class LocalTable : public Table {
       : Table(std::move(name), std::move(type), std::move(options)) {
     for (auto i = 0; i < Table::type()->size(); ++i) {
       const auto& name = Table::type()->nameOf(i);
-      auto column = std::make_unique<Column>(
-          name, Table::type()->childAt(i), /*hidden=*/false);
+      auto column = std::make_unique<Column>(name, Table::type()->childAt(i));
       exportedColumns_[name] = column.get();
       columns_.emplace(name, std::move(column));
     }

@@ -27,18 +27,10 @@ struct PlanState;
 
 using PlanP = Plan*;
 
-/// A set of build sides. A candidate plan tracks all builds so that they can be
-/// reused.
-using HashBuildVector = std::vector<HashBuildCP>;
-
 /// Item produced by optimization and kept in memo. Corresponds to
 /// pre-costed physical plan with costs and data properties.
 struct Plan {
   Plan(RelationOpPtr op, const PlanState& state);
-
-  /// True if 'state' has a lower cost than 'this'. If 'margin' is given,
-  /// then 'other' must win by margin.
-  bool isStateBetter(const PlanState& state, float margin = 0) const;
 
   /// Root of the plan tree.
   const RelationOpPtr op;
@@ -61,9 +53,6 @@ struct Plan {
   /// inputs is dt.pkt1.
   PlanObjectSet input;
 
-  /// Hash join builds placed in the plan. Allows reusing a build.
-  HashBuildVector builds;
-
   std::string printCost() const;
 
   std::string toString(bool detail) const;
@@ -79,9 +68,9 @@ struct PlanSet {
   /// nothing more expensive than this should be tried.
   float bestCostWithShuffle{std::numeric_limits<float>::infinity()};
 
-  /// Returns the best plan that produces 'distribution'. If the best plan has
-  /// some other distribution, sets 'needsShuffle ' to true.
-  PlanP best(const Distribution& distribution, bool& needsShuffle);
+  /// Returns the best plan that produces 'desired' distribution.
+  /// If the best plan has some other distribution, sets 'needsShuffle' to true.
+  PlanP best(const Distribution& desired, bool& needsShuffle);
 
   /// Returns the best plan when we're ok with any distribution.
   PlanP best() {
@@ -210,10 +199,6 @@ struct PlanState {
   /// example, best by cost and maybe plans with interesting orders.
   PlanSet plans;
 
-  /// Ordered set of tables placed so far. Used for setting a
-  /// breakpoint before a specific join order gets costed.
-  std::vector<int32_t> debugPlacedTables;
-
   /// Updates 'cost' to reflect 'op' being placed on top of the partial plan.
   void addCost(RelationOp& op) {
     cost.add(op);
@@ -257,6 +242,10 @@ struct PlanState {
   /// True if the costs accumulated so far are so high that this should not be
   /// explored further.
   bool isOverBest() const {
+    // This isn't conservative. Because it's possible that we explore some
+    // completely new plan with non-compatible input/distribution to any old
+    // plan. This plan if not this condition will be added to plans and later
+    // can become part of the best plan.
     return hasCutoff_ && cost.cost > plans.bestCostWithShuffle;
   }
 
@@ -284,24 +273,22 @@ struct PlanStateSaver {
       : state_(state),
         placed_(state.placed),
         columns_(state.columns),
-        cost_(state.cost),
-        numPlaced_(state.debugPlacedTables.size()) {}
-
-  PlanStateSaver(PlanState& state, const JoinCandidate& candidate);
+        exprToColumn_(state.exprToColumn),
+        cost_(state.cost) {}
 
   ~PlanStateSaver() {
     state_.placed = std::move(placed_);
     state_.columns = std::move(columns_);
+    state_.exprToColumn = std::move(exprToColumn_);
     state_.cost = cost_;
-    state_.debugPlacedTables.resize(numPlaced_);
   }
 
  private:
   PlanState& state_;
   PlanObjectSet placed_;
   PlanObjectSet columns_;
+  folly::F14FastMap<ExprCP, ExprCP> exprToColumn_;
   const PlanCost cost_;
-  const uint32_t numPlaced_;
 };
 
 /// Key for collection of memoized partial plans. Any table or derived

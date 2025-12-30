@@ -359,7 +359,6 @@ void LocalTable::makeDefaultLayout(
       empty,
       std::vector<SortOrder>{},
       empty,
-      empty,
       metadata.fileFormat());
   layout->setFiles(std::move(files));
   exportedLayouts_.push_back(layout.get());
@@ -775,7 +774,6 @@ std::shared_ptr<LocalTable> createLocalTable(
       bucketedBy,
       sortedBy,
       sortOrders,
-      /*lookupKeys=*/std::vector<const Column*>{},
       partitionedBy,
       createTableOptions.fileFormat.value(),
       std::move(serdeParameters));
@@ -883,8 +881,7 @@ void LocalHiveConnectorMetadata::loadTable(
       if (columnIt != table->columns().end()) {
         column = columnIt->second.get();
       } else {
-        auto newColumn = std::make_unique<Column>(
-            name, fileType->childAt(i), /*hidden=*/false);
+        auto newColumn = std::make_unique<Column>(name, fileType->childAt(i));
         column = newColumn.get();
         table->columns()[name] = std::move(newColumn);
       }
