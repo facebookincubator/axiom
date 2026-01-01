@@ -148,17 +148,6 @@ std::string Aggregate::toString() const {
   return out.str();
 }
 
-std::string Field::toString() const {
-  std::stringstream out;
-  out << base_->toString() << ".";
-  if (field_) {
-    out << field_;
-  } else {
-    out << fmt::format("{}", index_);
-  }
-  return out.str();
-}
-
 std::optional<PathSet> SubfieldSet::findSubfields(int32_t id) const {
   for (auto i = 0; i < ids.size(); ++i) {
     if (ids[i] == id) {
@@ -192,6 +181,23 @@ PathSet BaseTable::columnSubfields(int32_t id) const {
 
   Path::subfieldSkyline(subfields);
   return subfields;
+}
+
+std::vector<Name> BaseTable::controlColumnNames() const {
+  std::vector<Name> names;
+  names.reserve(controlSubfields.ids.size());
+
+  for (auto id : controlSubfields.ids) {
+    // Find the column with this ID
+    for (auto* column : columns) {
+      if (column->id() == id) {
+        names.push_back(column->name());
+        break;
+      }
+    }
+  }
+
+  return names;
 }
 
 std::string BaseTable::toString() const {
@@ -461,7 +467,15 @@ void BaseTable::addFilter(ExprCP expr) {
     filter.push_back(expr);
   }
 
-  queryCtx()->optimization()->filterUpdated(this);
+  queryCtx()->optimization()->filterUpdated(this, statsFetched());
+}
+
+ExprVector BaseTable::allFilters() const {
+  ExprVector result;
+  result.reserve(columnFilters.size() + filter.size());
+  result.insert(result.end(), columnFilters.begin(), columnFilters.end());
+  result.insert(result.end(), filter.begin(), filter.end());
+  return result;
 }
 
 PlanObjectSet JoinEdge::allTables() const {
@@ -492,6 +506,13 @@ inline CPSpan<Column> toRangeCast(const ExprVector& exprs) {
 
 void JoinEdge::guessFanout() {
   if (fanoutsFixed_) {
+    return;
+  }
+
+  // If statistics haven't been fetched yet, use default fanout of 1
+  if (!statsFetched()) {
+    lrFanout_ = 1;
+    rlFanout_ = 1;
     return;
   }
 
