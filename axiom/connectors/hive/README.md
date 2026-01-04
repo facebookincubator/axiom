@@ -5,7 +5,7 @@ Hive connectors. LocalHiveConnectorMetadata is a testing-only
 implementation of the interface that stores files and schema
 information in the local file system.
 
-Production implementtations are expected to connectt to a metadata server and to support some level of transactions.
+Production implementations are expected to connectt to a metadata server and to support some level of transactions.
 
 We define HiveConnectorLayout which adds Hive specific properties to
 the generic TableLayout. A TableLayout corresponds to a

@@ -11,7 +11,7 @@ with Velox. These components are:
 - SQL Parser compatible with PrestoSQL dialect.
   - top-level “sql” directory
 - Logical Plan - a representation of SQL relations and expressions.
-  - top-level “loglcal_plan” directory
+  - top-level “logical_plan” directory
 - Cost-based [Optimizer](axiom/optimizer/README.md) compatible with Velox
   execution.
   - top-level “optimizer” directory

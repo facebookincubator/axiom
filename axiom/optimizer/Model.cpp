@@ -54,7 +54,7 @@ std::vector<float> midPoint(
 } // namespace
 
 void Model::insert(std::vector<float> dimensions, float measure) {
-  VELOX_CHECK_EQ(dimensions.size(), rank_, "Bad umber of dimensions");
+  VELOX_CHECK_EQ(dimensions.size(), rank_, "Bad number of dimensions");
   entries_.emplace_back(std::move(dimensions), measure);
 }
 
