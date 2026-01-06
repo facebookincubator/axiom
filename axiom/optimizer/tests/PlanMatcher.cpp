@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include <gtest/gtest.h>
+#include "axiom/optimizer/tests/ExprPrinters.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/parse/Expressions.h"
