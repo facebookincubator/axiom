@@ -138,7 +138,9 @@ class LocalHiveTableLayout : public HiveTableLayout {
       velox::RowTypePtr scanType,
       const std::vector<velox::common::Subfield>& fields,
       velox::HashStringAllocator* allocator,
-      std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders) const;
+      std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders,
+      const std::shared_ptr<velox::connector::ConnectorQueryCtx>&
+          connectorQueryCtx) const;
 
  private:
   std::vector<std::unique_ptr<const FileInfo>> files_;
@@ -165,7 +167,7 @@ class LocalTable : public HiveTable {
 
   void makeDefaultLayout(
       std::vector<std::unique_ptr<const FileInfo>> files,
-      LocalHiveConnectorMetadata& metadata);
+      const LocalHiveConnectorMetadata& metadata);
 
   uint64_t numRows() const override {
     return numRows_;
@@ -177,7 +179,10 @@ class LocalTable : public HiveTable {
 
   /// Samples  'samplePct' % rows of the table and sets the num distincts
   /// estimate for the columns. uses 'pool' for temporary data.
-  void sampleNumDistincts(float samplePct, velox::memory::MemoryPool* pool);
+  void sampleNumDistincts(
+      float samplePct,
+      velox::memory::MemoryPool* pool,
+      const LocalHiveConnectorMetadata& metadata);
 
  private:
   // Serializes initialization, e.g. exportedColumns_.
@@ -202,7 +207,6 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   TablePtr findTable(std::string_view name) override;
 
   ConnectorSplitManager* splitManager() override {
-    ensureInitialized();
     return &splitManager_;
   }
 
@@ -229,12 +233,11 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   /// tables for name resolution.
   const folly::F14FastMap<std::string, std::shared_ptr<LocalTable>>& tables()
       const {
-    ensureInitialized();
     return tables_;
   }
 
   std::shared_ptr<velox::core::QueryCtx> makeQueryCtx(
-      const std::string& queryId);
+      const std::string& queryId) const;
 
   TablePtr createTable(
       const ConnectorSessionPtr& session,
@@ -273,10 +276,8 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   void reloadTableFromPath(std::string_view tableName);
 
  private:
-  // Used to lazy initialize this in ensureInitialized() and to implement
-  // reinitialize().
+  // Used to initialize this in constructor and to implement reinitialize().
   void initialize();
-  void ensureInitialized() const override;
   void makeQueryCtx();
   void makeConnectorQueryCtx();
   void readTables(std::string_view path);
@@ -285,7 +286,6 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   std::shared_ptr<LocalTable> findTableLocked(std::string_view name) const;
 
   mutable std::mutex mutex_;
-  mutable bool initialized_{false};
   std::shared_ptr<velox::memory::MemoryPool> rootPool_{
       velox::memory::memoryManager()->addRootPool()};
   std::shared_ptr<velox::memory::MemoryPool> schemaPool_;
