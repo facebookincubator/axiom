@@ -174,10 +174,7 @@ std::string canonicalizeName(const std::string& name) {
 }
 
 std::string canonicalizeIdentifier(const Identifier& identifier) {
-  if (identifier.isDelimited()) {
-    return identifier.value();
-  }
-
+  // TODO Figure out whether 'delimited' identifiers should be kept as is.
   return canonicalizeName(identifier.value());
 }
 
