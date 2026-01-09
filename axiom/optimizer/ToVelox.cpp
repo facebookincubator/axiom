@@ -1343,22 +1343,29 @@ velox::core::PlanNodePtr ToVelox::makeValues(
   std::vector<velox::RowVectorPtr> newValues;
   if (auto* rows = std::get_if<ValuesTable::Variants>(&data)) {
     auto* pool = queryCtx()->optimization()->evaluator()->pool();
+    const velox::vector_size_t numRows = (*rows)->size();
+    const size_t numColumns = originalIndices.size();
 
-    newValues.reserve((*rows)->size());
-    for (const auto& row : *(*rows)) {
-      const auto& rowValues = row.row();
-      std::vector<velox::Variant> newRowValues;
-      newRowValues.reserve(originalIndices.size());
-      for (auto index : originalIndices) {
-        newRowValues.emplace_back(rowValues[index]);
-      }
-      newValues.emplace_back(
-          std::dynamic_pointer_cast<velox::RowVector>(
-              velox::BaseVector::wrappedVectorShared(
-                  velox::BaseVector::createConstant(
-                      newType, velox::Variant::row(newRowValues), 1, pool))));
+    std::vector<std::vector<velox::Variant>> columnVariants(numColumns);
+    for (auto colIdx = 0; colIdx < numColumns; ++colIdx) {
+      columnVariants[colIdx].reserve(numRows);
     }
 
+    for (const auto& row : *(*rows)) {
+      const auto& rowValues = row.row();
+      for (auto colIdx = 0; colIdx < numColumns; ++colIdx) {
+        columnVariants[colIdx].emplace_back(rowValues[originalIndices[colIdx]]);
+      }
+    }
+
+    std::vector<velox::VectorPtr> children;
+    children.reserve(numColumns);
+    for (auto colIdx = 0; colIdx < numColumns; ++colIdx) {
+      children.emplace_back(velox::BaseVector::createFromConstants(
+          newType->childAt(colIdx), columnVariants[colIdx], pool));
+    }
+    newValues.emplace_back(std::make_shared<velox::RowVector>(
+        pool, newType, nullptr, numRows, std::move(children)));
   } else {
     const auto& oldValues = *std::get<ValuesTable::Vectors>(data);
     VELOX_DCHECK(!oldValues.empty());
