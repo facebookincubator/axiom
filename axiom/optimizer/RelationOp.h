@@ -260,7 +260,7 @@ class RelationOp {
     return input_->historyKey();
   }
 
-  /// Returns human redable string for 'this' and inputs if 'recursive' is true.
+  /// Returns human readable string for 'this' and inputs if 'recursive' is true.
   /// If 'detail' is true, includes cost and other details.
   ///
   /// Example,

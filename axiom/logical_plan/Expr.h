@@ -249,11 +249,11 @@ enum class SpecialForm {
   /// Logical OR. Requires two or more boolean inputs. Commutative. The result
   /// doesn’t depend on the order of inputs.
   ///
-  /// AND(true, <anything>) => true
-  /// AND(false, true) => false
-  /// AND(false, NULL) => NULL
-  /// AND(false, throws) => throws
-  /// AND(NULL, throws) => throws
+  /// OR(true, <anything>) => true
+  /// OR(false, true) => true
+  /// OR(false, NULL) => NULL
+  /// OR(false, throws) => throws
+  /// OR(NULL, throws) => throws
   ///
   /// Returns false only if all inputs evaluate to false.
   ///

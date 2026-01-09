@@ -287,7 +287,7 @@ struct LookupKeys {
   // True if the lookup has no lower bound for 'rangeColumn'.
   bool lowerUnbounded{true};
 
-  /// true if the lookup specifies no upper bound for 'rangeColumn'.
+  /// True if the lookup specifies no upper bound for 'rangeColumn'.
   bool upperUnbounded{true};
 
   /// True if rangeColumn > range lookup lower bound.
@@ -720,7 +720,7 @@ class ConnectorMetadata {
   /// the ConnectorMetadata is required to drop its reference to the existing
   /// Table and return a reference to a newly created Table object for
   /// subsequent calls to findTable. The ConnectorMetadata may drop its
-  /// reference ot the Table object at any time, and callers are required to
+  /// reference to the Table object at any time, and callers are required to
   /// retain a reference to the Table to prevent it from being reclaimed in the
   /// case of Table removal by the ConnectorMetadata.
   ///

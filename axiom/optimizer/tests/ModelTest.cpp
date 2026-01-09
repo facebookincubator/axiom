@@ -103,7 +103,7 @@ class ModelTest : public testing::Test {
   std::vector<Record> records_;
 };
 
-// Print a value in 'm' at coordinates in 'chars'. 'chars' is apce delimited
+// Print a value in 'm' at coordinates in 'chars'. 'chars' is space delimited
 // floats.
 FOLLY_NOINLINE float qs(Model* m, const char* chars) {
   std::vector<float> point;
