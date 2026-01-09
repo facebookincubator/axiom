@@ -1620,7 +1620,7 @@ class RelationPlanner : public AstVisitor {
           selectItems, groupBy->groupingElements(), node->having(), orderBy);
 
       if (distinct) {
-        builder_->aggregate(builder_->findOrAssignOutputNames(), {});
+        builder_->distinct();
       }
     } else {
       if (tryAddGlobalAgg(selectItems)) {
@@ -1631,7 +1631,7 @@ class RelationPlanner : public AstVisitor {
       }
 
       if (distinct) {
-        builder_->aggregate(builder_->findOrAssignOutputNames(), {});
+        builder_->distinct();
       }
 
       addOrderBy(orderBy);
@@ -1717,7 +1717,7 @@ class RelationPlanner : public AstVisitor {
     builder_->setOperation(op, *rightBuilder);
 
     if (distinct) {
-      builder_->aggregate(builder_->findOrAssignOutputNames(), {});
+      builder_->distinct();
     }
   }
 
@@ -2068,6 +2068,15 @@ SqlStatementPtr parseShowFunctions(
   return std::make_shared<SelectStatement>(builder.build());
 };
 
+std::vector<lp::ExprApi> toColumnExprs(const std::vector<std::string>& names) {
+  std::vector<lp::ExprApi> exprs;
+  exprs.reserve(names.size());
+  for (const auto& name : names) {
+    exprs.emplace_back(lp::Col(name));
+  }
+  return exprs;
+}
+
 SqlStatementPtr parseInsert(
     const Insert& insert,
     const std::string& defaultConnectorId,
@@ -2100,7 +2109,7 @@ SqlStatementPtr parseInsert(
       table->name(),
       lp::WriteKind::kInsert,
       columnNames,
-      inputColumns);
+      toColumnExprs(inputColumns));
 
   return std::make_shared<InsertStatement>(planner.plan(), planner.views());
 }
@@ -2146,7 +2155,7 @@ SqlStatementPtr parseCreateTableAsSelect(
         connectorTable.second,
         lp::WriteKind::kCreate,
         columnNames,
-        columnNames);
+        toColumnExprs(columnNames));
   } else {
     VELOX_USER_CHECK_EQ(ctas.columns().size(), numInputColumns);
 
@@ -2160,7 +2169,7 @@ SqlStatementPtr parseCreateTableAsSelect(
         connectorTable.second,
         lp::WriteKind::kCreate,
         columnNames,
-        planBuilder.findOrAssignOutputNames());
+        toColumnExprs(planBuilder.findOrAssignOutputNames()));
   }
 
   return std::make_shared<CreateTableAsSelectStatement>(

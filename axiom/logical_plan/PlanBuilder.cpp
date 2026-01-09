@@ -607,6 +607,31 @@ PlanBuilder& PlanBuilder::aggregate(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::distinct() {
+  VELOX_USER_CHECK_NOT_NULL(
+      node_, "Distinct aggregation node cannot be a leaf node");
+
+  const auto& inputType = node_->outputType();
+
+  std::vector<ExprPtr> keyExprs;
+  keyExprs.reserve(inputType->size());
+  for (auto i = 0; i < inputType->size(); i++) {
+    keyExprs.push_back(
+        std::make_shared<InputReferenceExpr>(
+            inputType->childAt(i), inputType->nameOf(i)));
+  }
+
+  node_ = std::make_shared<AggregateNode>(
+      nextId(),
+      std::move(node_),
+      std::move(keyExprs),
+      std::vector<AggregateNode::GroupingSet>{},
+      std::vector<AggregateExprPtr>{},
+      inputType->names());
+
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::unnest(
     const std::vector<ExprApi>& unnestExprs,
     bool withOrdinality,

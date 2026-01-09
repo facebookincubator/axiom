@@ -305,6 +305,8 @@ class PlanBuilder {
       const std::vector<ExprApi>& aggregates,
       const std::vector<AggregateOptions>& options);
 
+  PlanBuilder& distinct();
+
   /// Starts or continues the plan with an Unnest node. Uses auto-generated
   /// names for unnested columns. Use the version of 'unnest' API that takes
   /// ExprApi together with ExprApi::unnestAs to provide aliases for unnested

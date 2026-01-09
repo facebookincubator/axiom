@@ -166,6 +166,18 @@ class WriteTest : public test::HiveQueriesTestBase {
 
     ASSERT_EQ(0, layout.hivePartitionColumns().size());
 
+    {
+      auto testResult = runSelect(
+          fmt::format("SELECT distinct \"$path\" FROM {}", tableName));
+      ASSERT_EQ(numBuckets, testResult.countRows());
+    }
+
+    {
+      auto testResult = runSelect(
+          fmt::format("SELECT distinct \"$bucket\" FROM {}", tableName));
+      ASSERT_EQ(numBuckets, testResult.countRows());
+    }
+
     const auto sortedFiles = sortFilesByBucket(layout.files());
 
     int64_t totalRows = 0;
