@@ -172,6 +172,6 @@ ExprApi Exists(const ExprApi& input) {
 }
 
 ExprApi Sql(const std::string& sql) {
-  return ExprApi{velox::parse::parseExpr(sql, {})};
+  return ExprApi{velox::parse::DuckSqlExpressionsParser().parseExpr(sql)};
 }
 } // namespace facebook::axiom::logical_plan

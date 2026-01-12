@@ -211,7 +211,8 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
           << "Expected no remaining filter, but got "
           << remainingFilter->toString();
     } else {
-      auto expected = parse::parseExpr(remainingFilter_, {});
+      auto expected =
+          parse::DuckSqlExpressionsParser().parseExpr(remainingFilter_);
       EXPECT_EQ(remainingFilter->toString(), expected->toString());
     }
 
@@ -266,7 +267,8 @@ class FilterMatcher : public PlanMatcherImpl<FilterNode> {
     SCOPED_TRACE(plan.toString(true, false));
 
     if (predicate_.has_value()) {
-      auto expected = parse::parseExpr(predicate_.value(), {});
+      auto expected =
+          parse::DuckSqlExpressionsParser().parseExpr(predicate_.value());
       EXPECT_EQ(plan.filter()->toString(), expected->toString());
     }
 
@@ -300,7 +302,8 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < expressions_.size(); ++i) {
-        auto expected = parse::parseExpr(expressions_[i], {});
+        auto expected =
+            parse::DuckSqlExpressionsParser().parseExpr(expressions_[i]);
         if (expected->alias()) {
           newSymbols[expected->alias().value()] = plan.names()[i];
         }
@@ -345,7 +348,8 @@ class ParallelProjectMatcher : public PlanMatcherImpl<ParallelProjectNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < expressions_.size(); ++i) {
-        auto expected = parse::parseExpr(expressions_[i], {});
+        auto expected =
+            parse::DuckSqlExpressionsParser().parseExpr(expressions_[i]);
         EXPECT_EQ(plan.projections()[i]->toString(), expected->toString());
       }
       AXIOM_TEST_RETURN_IF_FAILURE
@@ -380,7 +384,8 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < replicateExprs_.size(); ++i) {
-        auto expected = parse::parseExpr(replicateExprs_[i], {});
+        auto expected =
+            parse::DuckSqlExpressionsParser().parseExpr(replicateExprs_[i]);
         EXPECT_EQ(
             plan.replicateVariables()[i]->toString(), expected->toString());
       }
@@ -392,7 +397,8 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < unnestExprs_.size(); ++i) {
-        auto expected = parse::parseExpr(unnestExprs_[i], {});
+        auto expected =
+            parse::DuckSqlExpressionsParser().parseExpr(unnestExprs_[i]);
         if (!symbols.empty()) {
           expected = rewriteInputNames(expected, symbols);
         }
@@ -492,7 +498,8 @@ class OrderByMatcher : public PlanMatcherImpl<OrderByNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < ordering_.size(); ++i) {
-        auto expected = parse::parseOrderByExpr(ordering_[i]);
+        auto expected =
+            parse::DuckSqlExpressionsParser().parseOrderByExpr(ordering_[i]);
         auto expectedExpr = expected.expr;
         if (!symbols.empty()) {
           expectedExpr = rewriteInputNames(expectedExpr, symbols);
@@ -552,7 +559,8 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
 
       for (auto i = 0; i < groupingKeys_.size(); ++i) {
-        auto expected = parse::parseExpr(groupingKeys_[i], {});
+        auto expected =
+            parse::DuckSqlExpressionsParser().parseExpr(groupingKeys_[i]);
         EXPECT_EQ(plan.groupingKeys()[i]->toString(), expected->toString());
       }
       AXIOM_TEST_RETURN_IF_FAILURE
