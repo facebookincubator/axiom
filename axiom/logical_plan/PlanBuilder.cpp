@@ -253,11 +253,14 @@ PlanBuilder& PlanBuilder::tableScan(
     addColumn(schema->nameOf(i), schema->childAt(i));
   }
 
+  std::vector<std::string> hiddenColumns;
+
   if (includeHiddenColumns) {
     for (const auto* column : allColumns) {
       if (column->hidden()) {
         addColumn(column->name(), column->type());
         outputMapping_->markHidden(outputNames.back());
+        hiddenColumns.push_back(column->name());
       }
     }
   }
@@ -267,7 +270,8 @@ PlanBuilder& PlanBuilder::tableScan(
       ROW(std::move(outputNames), std::move(columnTypes)),
       connectorId,
       tableName,
-      std::move(originalNames));
+      std::move(originalNames),
+      std::move(hiddenColumns));
 
   return *this;
 }

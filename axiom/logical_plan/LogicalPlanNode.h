@@ -188,11 +188,13 @@ class TableScanNode : public LogicalPlanNode {
       velox::RowTypePtr outputType,
       std::string connectorId,
       std::string tableName,
-      std::vector<std::string> columnNames)
+      std::vector<std::string> columnNames,
+      std::vector<std::string> hiddenNames = {})
       : LogicalPlanNode{NodeKind::kTableScan, std::move(id), {}, std::move(outputType)},
         connectorId_{std::move(connectorId)},
         tableName_{std::move(tableName)},
-        columnNames_{std::move(columnNames)} {
+        columnNames_{std::move(columnNames)},
+        hiddenNames_{std::move(hiddenNames)} {
     VELOX_USER_CHECK_EQ(outputType_->size(), columnNames_.size());
 
     const auto numColumns = outputType_->size();
@@ -214,6 +216,10 @@ class TableScanNode : public LogicalPlanNode {
     return columnNames_;
   }
 
+  const std::vector<std::string>& hiddenColumns() const {
+    return hiddenNames_;
+  }
+
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
@@ -221,6 +227,7 @@ class TableScanNode : public LogicalPlanNode {
   const std::string connectorId_;
   const std::string tableName_;
   const std::vector<std::string> columnNames_;
+  const std::vector<std::string> hiddenNames_;
 };
 
 using TableScanNodePtr = std::shared_ptr<const TableScanNode>;
