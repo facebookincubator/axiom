@@ -139,7 +139,8 @@ class PlanBuilder {
         planNodeIdGenerator_{context.planNodeIdGenerator},
         nameAllocator_{context.nameAllocator},
         outerScope_{std::move(outerScope)},
-        parseOptions_{.parseInListAsArray = false},
+        sqlParser_{std::make_shared<velox::parse::DuckSqlExpressionsParser>(
+            velox::parse::ParseOptions{.parseInListAsArray = false})},
         enableCoercions_{enableCoercions},
         resolver_{
             context.queryCtx,
@@ -525,7 +526,7 @@ class PlanBuilder {
   const std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator_;
   const std::shared_ptr<NameAllocator> nameAllocator_;
   const Scope outerScope_;
-  const velox::parse::ParseOptions parseOptions_;
+  const std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser_;
   const bool enableCoercions_;
 
   LogicalPlanNodePtr node_;

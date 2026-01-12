@@ -371,8 +371,7 @@ PlanBuilder& PlanBuilder::dropHiddenColumns() {
 PlanBuilder& PlanBuilder::filter(const std::string& predicate) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Filter node cannot be a leaf node");
 
-  auto untypedExpr = velox::parse::parseExpr(predicate, parseOptions_);
-
+  auto untypedExpr = sqlParser_->parseExpr(predicate);
   return filter(untypedExpr);
 }
 
@@ -401,7 +400,7 @@ std::vector<ExprApi> PlanBuilder::parse(const std::vector<std::string>& exprs) {
   std::vector<ExprApi> untypedExprs;
   untypedExprs.reserve(exprs.size());
   for (const auto& sql : exprs) {
-    untypedExprs.emplace_back(velox::parse::parseExpr(sql, parseOptions_));
+    untypedExprs.emplace_back(sqlParser_->parseExpr(sql));
   }
 
   return untypedExprs;
@@ -1387,7 +1386,7 @@ PlanBuilder& PlanBuilder::join(
     JoinType joinType) {
   std::optional<ExprApi> conditionExpr;
   if (!condition.empty()) {
-    conditionExpr = velox::parse::parseExpr(condition, parseOptions_);
+    conditionExpr = sqlParser_->parseExpr(condition);
   }
 
   return join(right, conditionExpr, joinType);
@@ -1486,7 +1485,7 @@ PlanBuilder& PlanBuilder::sort(const std::vector<std::string>& sortingKeys) {
   sortingFields.reserve(sortingKeys.size());
 
   for (const auto& key : sortingKeys) {
-    auto orderBy = velox::parse::parseOrderByExpr(key);
+    auto orderBy = sqlParser_->parseOrderByExpr(key);
     auto expr = resolveScalarTypes(orderBy.expr);
 
     sortingFields.push_back(
