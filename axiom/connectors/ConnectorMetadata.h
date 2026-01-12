@@ -135,7 +135,7 @@ class Column {
     return latestStats_;
   }
 
-  ColumnStatistics* mutableStats() {
+  ColumnStatistics* mutableStats() const {
     std::lock_guard<std::mutex> l(mutex_);
     if (!latestStats_) {
       allStats_.push_back(std::make_unique<ColumnStatistics>());
@@ -145,7 +145,7 @@ class Column {
   }
 
   /// Sets statistics. May be called multiple times if table contents change.
-  void setStats(std::unique_ptr<ColumnStatistics> stats) {
+  void setStats(std::unique_ptr<ColumnStatistics> stats) const {
     std::lock_guard<std::mutex> l(mutex_);
     allStats_.push_back(std::move(stats));
     latestStats_ = allStats_.back().get();
@@ -183,16 +183,20 @@ class Column {
   const bool hidden_;
   const velox::Variant defaultValue_;
 
-  // The latest element added to 'allStats_'.
-  velox::tsan_atomic<ColumnStatistics*> latestStats_{nullptr};
+  // The latest element added to 'allStats_'. Mutable because statistics are
+  // logically separate from the column's identity (name, type) and may be
+  // updated even on a const Column.
+  mutable velox::tsan_atomic<ColumnStatistics*> latestStats_{nullptr};
 
   // All statistics recorded for this column. Old values can be purged when the
-  // containing Schema is not in use.
-  std::vector<std::unique_ptr<ColumnStatistics>> allStats_;
+  // containing Schema is not in use. Mutable for the same reason as
+  // latestStats_.
+  mutable std::vector<std::unique_ptr<ColumnStatistics>> allStats_;
 
  private:
-  // Serializes changes to statistics.
-  std::mutex mutex_;
+  // Serializes changes to statistics. Mutable for the same reason as
+  // latestStats_.
+  mutable std::mutex mutex_;
 };
 
 class Table;

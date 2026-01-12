@@ -177,13 +177,14 @@ std::vector<SplitSource::SplitAndGroup> LocalHiveSplitSource::getSplits(
 
 LocalHiveConnectorMetadata::LocalHiveConnectorMetadata(
     velox::connector::hive::HiveConnector* hiveConnector)
-    : HiveConnectorMetadata(hiveConnector), splitManager_(this) {}
+    : HiveConnectorMetadata(hiveConnector), splitManager_(this) {
+  initialize();
+}
 
 void LocalHiveConnectorMetadata::reinitialize() {
   std::lock_guard<std::mutex> l(mutex_);
   tables_.clear();
   initialize();
-  initialized_ = true;
 }
 
 void LocalHiveConnectorMetadata::initialize() {
@@ -198,22 +199,14 @@ void LocalHiveConnectorMetadata::initialize() {
   readTables(path);
 }
 
-void LocalHiveConnectorMetadata::ensureInitialized() const {
-  std::lock_guard<std::mutex> l(mutex_);
-  if (initialized_) {
-    return;
-  }
-  const_cast<LocalHiveConnectorMetadata*>(this)->initialize();
-  initialized_ = true;
-}
-
 std::shared_ptr<velox::core::QueryCtx> LocalHiveConnectorMetadata::makeQueryCtx(
-    const std::string& queryId) {
+    const std::string& queryId) const {
   std::unordered_map<std::string, std::string> config;
   std::unordered_map<std::string, std::shared_ptr<velox::config::ConfigBase>>
       connectorConfigs;
   connectorConfigs[hiveConnector_->connectorId()] =
-      std::const_pointer_cast<velox::config::ConfigBase>(hiveConfig_->config());
+      std::make_shared<velox::config::ConfigBase>(
+          hiveConfig_->config()->rawConfigsCopy());
 
   return velox::core::QueryCtx::create(
       hiveConnector_->executor(),
@@ -269,8 +262,13 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
     std::vector<ColumnStatistics>* statistics) const {
   VELOX_CHECK(extraFilters.empty());
 
+  auto connectorQueryCtx = reinterpret_cast<LocalHiveConnectorMetadata*>(
+                               ConnectorMetadata::metadata(connector()))
+                               ->connectorQueryCtx();
+
   std::vector<std::unique_ptr<StatisticsBuilder>> builders;
-  auto result = sample(handle, pct, scanType, fields, allocator, &builders);
+  auto result = sample(
+      handle, pct, scanType, fields, allocator, &builders, connectorQueryCtx);
   if (!statistics) {
     return result;
   }
@@ -292,7 +290,9 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
     velox::RowTypePtr scanType,
     const std::vector<velox::common::Subfield>& fields,
     velox::HashStringAllocator* allocator,
-    std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders) const {
+    std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders,
+    const std::shared_ptr<velox::connector::ConnectorQueryCtx>&
+        connectorQueryCtx) const {
   StatisticsBuilderOptions options = {
       .maxStringLength = 100, .countDistincts = true, .allocator = allocator};
 
@@ -317,10 +317,6 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
   }
 
   const auto outputType = ROW(std::move(names), std::move(types));
-
-  auto connectorQueryCtx = reinterpret_cast<LocalHiveConnectorMetadata*>(
-                               ConnectorMetadata::metadata(connector()))
-                               ->connectorQueryCtx();
 
   const auto maxRowsToScan = table().numRows() * (pct / 100);
 
@@ -364,7 +360,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
 
 void LocalTable::makeDefaultLayout(
     std::vector<std::unique_ptr<const FileInfo>> files,
-    LocalHiveConnectorMetadata& metadata) {
+    const LocalHiveConnectorMetadata& metadata) {
   if (!layouts_.empty()) {
     // The table already has a layout made from a schema file.
     reinterpret_cast<LocalHiveTableLayout*>(layouts_[0].get())
@@ -904,7 +900,7 @@ void LocalHiveConnectorMetadata::loadTable(
       VELOX_CHECK_NOT_NULL(column, "Column not found: {}", name);
 
       if (auto readerStats = reader->columnStatistics(i)) {
-        auto* stats = const_cast<Column*>(column)->mutableStats();
+        auto* stats = column->mutableStats();
         stats->numValues += readerStats->getNumberOfValues().value_or(0);
 
         const auto numValues = readerStats->getNumberOfValues();
@@ -923,7 +919,7 @@ void LocalHiveConnectorMetadata::loadTable(
     // Set pct to sample ~100K rows.
     pct = 100 * 100'000 / table->numRows();
   }
-  table->sampleNumDistincts(pct, schemaPool_.get());
+  table->sampleNumDistincts(pct, schemaPool_.get(), *this);
 }
 
 namespace {
@@ -980,7 +976,8 @@ LocalTable::LocalTable(
 
 void LocalTable::sampleNumDistincts(
     float samplePct,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    const LocalHiveConnectorMetadata& metadata) {
   std::vector<velox::common::Subfield> fields;
   fields.reserve(type()->size());
   for (auto i = 0; i < type()->size(); ++i) {
@@ -991,8 +988,6 @@ void LocalTable::sampleNumDistincts(
   auto allocator = std::make_unique<velox::HashStringAllocator>(pool);
   auto* layout = layouts_[0].get();
 
-  auto* metadata = ConnectorMetadata::metadata(layout->connector());
-
   std::vector<velox::connector::ColumnHandlePtr> columns;
   columns.reserve(type()->size());
   for (auto i = 0; i < type()->size(); ++i) {
@@ -1000,10 +995,7 @@ void LocalTable::sampleNumDistincts(
         /*session=*/nullptr, type()->nameOf(i)));
   }
 
-  auto* localHiveMetadata =
-      dynamic_cast<const LocalHiveConnectorMetadata*>(metadata);
-  auto& evaluator =
-      *localHiveMetadata->connectorQueryCtx()->expressionEvaluator();
+  auto& evaluator = *metadata.connectorQueryCtx()->expressionEvaluator();
 
   std::vector<velox::core::TypedExprPtr> ignore;
   auto handle = layout->createTableHandle(
@@ -1014,13 +1006,19 @@ void LocalTable::sampleNumDistincts(
 
   std::vector<std::unique_ptr<StatisticsBuilder>> statsBuilders;
   auto [sampled, passed] = localLayout->sample(
-      handle, samplePct, type(), fields, allocator.get(), &statsBuilders);
+      handle,
+      samplePct,
+      type(),
+      fields,
+      allocator.get(),
+      &statsBuilders,
+      metadata.connectorQueryCtx());
 
   numSampledRows_ = sampled;
   for (auto i = 0; i < statsBuilders.size(); ++i) {
     if (statsBuilders[i]) {
-      auto* column = findColumn(type()->nameOf(i));
-      ColumnStatistics& stats = *const_cast<Column*>(column)->mutableStats();
+      const auto* column = findColumn(type()->nameOf(i));
+      ColumnStatistics& stats = *column->mutableStats();
       statsBuilders[i]->build(stats);
       auto estimate = stats.numDistinct;
       int64_t approxNumDistinct =
@@ -1053,16 +1051,13 @@ void LocalTable::sampleNumDistincts(
           }
         }
 
-        const_cast<Column*>(findColumn(type()->nameOf(i)))
-            ->mutableStats()
-            ->numDistinct = approxNumDistinct;
+        column->mutableStats()->numDistinct = approxNumDistinct;
       }
     }
   }
 }
 
 TablePtr LocalHiveConnectorMetadata::findTable(std::string_view name) {
-  ensureInitialized();
   std::lock_guard<std::mutex> l(mutex_);
   return findTableLocked(name);
 }
@@ -1168,7 +1163,6 @@ TablePtr LocalHiveConnectorMetadata::createTable(
     const velox::RowTypePtr& rowType,
     const folly::F14FastMap<std::string, velox::Variant>& options) {
   validateOptions(options);
-  ensureInitialized();
   auto path = tablePath(tableName);
   if (dirExists(path)) {
     VELOX_USER_FAIL("Table {} already exists", tableName);
@@ -1269,8 +1263,6 @@ bool LocalHiveConnectorMetadata::dropTable(
     const ConnectorSessionPtr& /* session */,
     std::string_view tableName,
     bool ifExists) {
-  ensureInitialized();
-
   std::lock_guard<std::mutex> l(mutex_);
   if (!tables_.contains(tableName)) {
     if (ifExists) {
