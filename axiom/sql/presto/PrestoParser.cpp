@@ -1876,16 +1876,10 @@ lp::ExprPtr parseSqlExpression(const ExpressionPtr& expr) {
 
 SqlStatementPtr parseExplain(
     const Explain& explain,
-    const std::string& defaultConnectorId,
-    const std::optional<std::string>& defaultSchema,
-    const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
-        std::string_view /*sql*/)>& parseSql) {
-  RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
-  explain.statement()->accept(&planner);
-
+    const SqlStatementPtr& sqlStatement) {
   if (explain.isAnalyze()) {
     return std::make_shared<ExplainStatement>(
-        std::make_shared<SelectStatement>(planner.plan(), planner.views()),
+        sqlStatement,
         /*analyze=*/true);
   }
 
@@ -1916,7 +1910,7 @@ SqlStatementPtr parseExplain(
   }
 
   return std::make_shared<ExplainStatement>(
-      std::make_shared<SelectStatement>(planner.plan(), planner.views()),
+      sqlStatement,
       /*analyze=*/false,
       type);
 }
@@ -2193,6 +2187,47 @@ SqlStatementPtr parseDropTable(
       connectorTable.first, connectorTable.second, dropTable.isExists());
 }
 
+SqlStatementPtr doPlan(
+    const std::shared_ptr<Statement>& query,
+    const std::string& defaultConnectorId,
+    const std::optional<std::string>& defaultSchema,
+    const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
+        std::string_view /*sql*/)>& parseSql) {
+  if (query->is(NodeType::kInsert)) {
+    return parseInsert(
+        *query->as<Insert>(), defaultConnectorId, defaultSchema, parseSql);
+  }
+
+  if (query->is(NodeType::kCreateTableAsSelect)) {
+    return parseCreateTableAsSelect(
+        *query->as<CreateTableAsSelect>(),
+        defaultConnectorId,
+        defaultSchema,
+        parseSql);
+  }
+
+  if (query->is(NodeType::kShowCatalogs)) {
+    return parseShowCatalogs(*query->as<ShowCatalogs>(), defaultConnectorId);
+  }
+
+  if (query->is(NodeType::kShowColumns)) {
+    return parseShowColumns(
+        *query->as<ShowColumns>(), defaultConnectorId, defaultSchema);
+  }
+
+  if (query->is(NodeType::kShowFunctions)) {
+    return parseShowFunctions(*query->as<ShowFunctions>(), defaultConnectorId);
+  }
+
+  if (query->is(NodeType::kQuery)) {
+    RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
+    query->accept(&planner);
+    return std::make_shared<SelectStatement>(planner.plan(), planner.views());
+  }
+
+  VELOX_NYI(
+      "Unsupported statement type: {}", NodeTypeName::toName(query->type()));
+}
 } // namespace
 
 SqlStatementPtr PrestoParser::doParse(
@@ -2220,21 +2255,10 @@ SqlStatementPtr PrestoParser::doParse(
   auto query = parseSql(sql);
 
   if (query->is(NodeType::kExplain)) {
-    return parseExplain(
-        *query->as<Explain>(), defaultConnectorId_, defaultSchema_, parseSql);
-  }
-
-  if (query->is(NodeType::kInsert)) {
-    return parseInsert(
-        *query->as<Insert>(), defaultConnectorId_, defaultSchema_, parseSql);
-  }
-
-  if (query->is(NodeType::kCreateTableAsSelect)) {
-    return parseCreateTableAsSelect(
-        *query->as<CreateTableAsSelect>(),
-        defaultConnectorId_,
-        defaultSchema_,
-        parseSql);
+    auto* explain = query->as<Explain>();
+    auto sqlStatement = doPlan(
+        explain->statement(), defaultConnectorId_, defaultSchema_, parseSql);
+    return parseExplain(*explain, sqlStatement);
   }
 
   if (query->is(NodeType::kDropTable)) {
@@ -2242,22 +2266,7 @@ SqlStatementPtr PrestoParser::doParse(
         *query->as<DropTable>(), defaultConnectorId_, defaultSchema_);
   }
 
-  if (query->is(NodeType::kShowCatalogs)) {
-    return parseShowCatalogs(*query->as<ShowCatalogs>(), defaultConnectorId_);
-  }
-
-  if (query->is(NodeType::kShowColumns)) {
-    return parseShowColumns(
-        *query->as<ShowColumns>(), defaultConnectorId_, defaultSchema_);
-  }
-
-  if (query->is(NodeType::kShowFunctions)) {
-    return parseShowFunctions(*query->as<ShowFunctions>(), defaultConnectorId_);
-  }
-
-  RelationPlanner planner(defaultConnectorId_, defaultSchema_, parseSql);
-  query->accept(&planner);
-  return std::make_shared<SelectStatement>(planner.plan(), planner.views());
+  return doPlan(query, defaultConnectorId_, defaultSchema_, parseSql);
 }
 
 } // namespace axiom::sql::presto

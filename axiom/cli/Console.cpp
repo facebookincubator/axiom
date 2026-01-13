@@ -224,10 +224,10 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
       .debugMode = FLAGS_debug,
   };
 
-  decltype(runner_.parseMultiple(sql)) statements;
+  decltype(runner_.parseMultiple(sql, options)) statements;
   try {
     // Parse all statements upfront.
-    statements = runner_.parseMultiple(sql);
+    statements = runner_.parseMultiple(sql, options);
   } catch (std::exception& e) {
     std::cerr << "Parse failed: " << e.what() << std::endl;
     return;
