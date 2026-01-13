@@ -124,10 +124,25 @@ std::string SqlQueryRunner::dropTable(
 SqlQueryRunner::SqlResult SqlQueryRunner::run(
     std::string_view sql,
     const RunOptions& options) {
-  auto sqlStatement = prestoParser_->parse(sql);
+  auto statements = parseMultiple(sql);
+  VELOX_CHECK_EQ(
+      statements.size(),
+      1,
+      "run() expects a single statement. "
+      "Use parseMultiple() + run(statement) for multiple statements.");
+  return run(*statements[0], options);
+}
 
-  if (sqlStatement->isExplain()) {
-    auto* explain = sqlStatement->as<presto::ExplainStatement>();
+std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
+    std::string_view sql) {
+  return prestoParser_->parseMultiple(sql);
+}
+
+SqlQueryRunner::SqlResult SqlQueryRunner::run(
+    const presto::SqlStatement& sqlStatement,
+    const RunOptions& options) {
+  if (sqlStatement.isExplain()) {
+    const auto* explain = sqlStatement.as<presto::ExplainStatement>();
 
     VELOX_CHECK(explain->statement()->isSelect());
     auto* select = explain->statement()->as<presto::SelectStatement>();
@@ -138,8 +153,8 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     }
   }
 
-  if (sqlStatement->isCreateTableAsSelect()) {
-    const auto* ctas = sqlStatement->as<presto::CreateTableAsSelectStatement>();
+  if (sqlStatement.isCreateTableAsSelect()) {
+    const auto* ctas = sqlStatement.as<presto::CreateTableAsSelectStatement>();
 
     auto table = createTable(*ctas);
 
@@ -154,20 +169,20 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     return {.results = runSql(ctas->plan(), options)};
   }
 
-  if (sqlStatement->isInsert()) {
-    const auto* insert = sqlStatement->as<presto::InsertStatement>();
+  if (sqlStatement.isInsert()) {
+    const auto* insert = sqlStatement.as<presto::InsertStatement>();
     return {.results = runSql(insert->plan(), options)};
   }
 
-  if (sqlStatement->isDropTable()) {
-    const auto* drop = sqlStatement->as<presto::DropTableStatement>();
+  if (sqlStatement.isDropTable()) {
+    const auto* drop = sqlStatement.as<presto::DropTableStatement>();
 
     return {.message = dropTable(*drop)};
   }
 
-  VELOX_CHECK(sqlStatement->isSelect());
+  VELOX_CHECK(sqlStatement.isSelect());
 
-  const auto logicalPlan = sqlStatement->as<presto::SelectStatement>()->plan();
+  const auto logicalPlan = sqlStatement.as<presto::SelectStatement>()->plan();
 
   return {.results = runSql(logicalPlan, options)};
 }

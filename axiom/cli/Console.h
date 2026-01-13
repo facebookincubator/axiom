@@ -28,11 +28,19 @@ class Console {
 
   void initialize();
 
+  /// Runs the CLI, either executing a single query if passed in
+  /// or entering interactive mode to read commands from stdin.
   void run();
 
  private:
-  void runNoThrow(std::string_view sql);
+  // Executes SQL and prints results, catching any exceptions.
+  // @param sql The SQL text to execute, which may contain multiple
+  // semicolon-separated statements.
+  // @param isInteractive If true, shows timing after each statement for
+  // multi-statement queries.
+  void runNoThrow(std::string_view sql, bool isInteractive = true);
 
+  // Reads and executes commands from standard input in interactive mode.
   void readCommands(const std::string& prompt);
 
   SqlQueryRunner& runner_;

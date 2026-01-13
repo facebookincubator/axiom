@@ -60,20 +60,50 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
   std::vector<std::string> connectorIds_;
 };
 
-TEST_F(SqlQueryRunnerTest, basic) {
+TEST_F(SqlQueryRunnerTest, runSingleStatement) {
   auto runner = makeRunner();
 
-  SqlQueryRunner::RunOptions options;
-  auto result = runner->run("SELECT 1", options);
+  auto result = runner->run("SELECT 1", {});
 
   ASSERT_FALSE(result.message.has_value());
   ASSERT_EQ(1, result.results.size());
-
   test::assertEqualVectors(
       result.results[0], makeRowVector({makeFlatVector<int32_t>({1})}));
 }
 
-TEST_F(SqlQueryRunnerTest, multipleInstances) {
+TEST_F(SqlQueryRunnerTest, runRejectsMultipleStatements) {
+  auto runner = makeRunner();
+
+  EXPECT_THROW(
+      runner->run("SELECT 1; SELECT 2", {}), facebook::velox::VeloxException);
+}
+
+TEST_F(SqlQueryRunnerTest, parseAndRunMixedStatementTypes) {
+  auto runner = makeRunner();
+
+  auto statements = runner->parseMultiple(
+      "SELECT 42; EXPLAIN (TYPE LOGICAL) SELECT 1; select 7");
+  ASSERT_EQ(3, statements.size());
+
+  // SELECT returns results.
+  auto selectResult = runner->run(*statements[0], {});
+  ASSERT_FALSE(selectResult.message.has_value());
+  test::assertEqualVectors(
+      selectResult.results[0], makeRowVector({makeFlatVector<int32_t>({42})}));
+
+  // EXPLAIN returns a message.
+  auto explainResult = runner->run(*statements[1], {});
+  ASSERT_TRUE(explainResult.message.has_value());
+  ASSERT_FALSE(explainResult.message.value().empty());
+
+  // Last SELECT returns 7.
+  auto lastResult = runner->run(*statements[2], {});
+  ASSERT_FALSE(lastResult.message.has_value());
+  test::assertEqualVectors(
+      lastResult.results[0], makeRowVector({makeFlatVector<int32_t>({7})}));
+}
+
+TEST_F(SqlQueryRunnerTest, multipleRunnerInstances) {
   auto a = makeRunner();
   auto b = makeRunner();
 
@@ -95,6 +125,21 @@ TEST_F(SqlQueryRunnerTest, multipleInstances) {
           makeFlatVector<int32_t>({3}),
           makeFlatVector<std::string>({"foo"}),
       }));
+}
+
+TEST_F(SqlQueryRunnerTest, invalidStatementThrows) {
+  auto runner = makeRunner();
+
+  // An invalid query should throw an exception.
+  EXPECT_THROW(runner->run("INVALID SYNTAX HERE", {}), std::exception);
+}
+
+TEST_F(SqlQueryRunnerTest, parseMultipleWithInvalidStatement) {
+  auto runner = makeRunner();
+
+  // Parsing invalid SQL should throw.
+  EXPECT_THROW(
+      runner->parseMultiple("SELECT 1; INVALID; SELECT 2"), std::exception);
 }
 
 } // namespace
