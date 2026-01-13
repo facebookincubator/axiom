@@ -28,11 +28,29 @@ namespace facebook::axiom::logical_plan {
 
 class NameMappings;
 
+class ThrowingSqlExpressionsParser : public velox::parse::SqlExpressionsParser {
+ public:
+  velox::core::ExprPtr parseExpr(const std::string& expr) override {
+    VELOX_USER_FAIL("SQL parsing is not supported");
+  }
+
+  std::vector<velox::core::ExprPtr> parseExprs(
+      const std::string& expr) override {
+    VELOX_USER_FAIL("SQL parsing is not supported");
+  }
+
+  velox::parse::OrderByClause parseOrderByExpr(
+      const std::string& expr) override {
+    VELOX_USER_FAIL("SQL parsing is not supported");
+  }
+};
+
 // Make sure to specify Context.queryCtx to enable constand folding.
 class PlanBuilder {
  public:
   struct Context {
     std::optional<std::string> defaultConnectorId;
+    std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser;
     std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator;
     std::shared_ptr<NameAllocator> nameAllocator;
     std::shared_ptr<velox::core::QueryCtx> queryCtx;
@@ -42,8 +60,12 @@ class PlanBuilder {
     explicit Context(
         const std::optional<std::string>& defaultConnectorId = std::nullopt,
         std::shared_ptr<velox::core::QueryCtx> queryCtxPtr = nullptr,
-        ExprResolver::FunctionRewriteHook hook = nullptr)
+        ExprResolver::FunctionRewriteHook hook = nullptr,
+        std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser =
+            std::make_shared<velox::parse::DuckSqlExpressionsParser>(
+                velox::parse::ParseOptions{.parseInListAsArray = false}))
         : defaultConnectorId{defaultConnectorId},
+          sqlParser{std::move(sqlParser)},
           planNodeIdGenerator{
               std::make_shared<velox::core::PlanNodeIdGenerator>()},
           nameAllocator{std::make_shared<NameAllocator>()},
@@ -70,8 +92,7 @@ class PlanBuilder {
         planNodeIdGenerator_{context.planNodeIdGenerator},
         nameAllocator_{context.nameAllocator},
         outerScope_{std::move(outerScope)},
-        sqlParser_{std::make_shared<velox::parse::DuckSqlExpressionsParser>(
-            velox::parse::ParseOptions{.parseInListAsArray = false})},
+        sqlParser_{context.sqlParser},
         enableCoercions_{enableCoercions},
         resolver_{
             context.queryCtx,

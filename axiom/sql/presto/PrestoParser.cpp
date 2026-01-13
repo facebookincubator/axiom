@@ -126,7 +126,7 @@ core::ExprPtr replaceInputs(
 // Walks the expression tree looking for aggregate function calls and appending
 // these to 'aggregates'.
 void findAggregates(
-    const core::ExprPtr expr,
+    const core::ExprPtr& expr,
     std::vector<lp::ExprApi>& aggregates,
     ExprSet& aggregateSet) {
   switch (expr->kind()) {
@@ -373,12 +373,13 @@ std::pair<std::string, std::string> toConnectorTable(
 
 class RelationPlanner : public AstVisitor {
  public:
-  explicit RelationPlanner(
+  RelationPlanner(
       const std::string& defaultConnectorId,
       const std::optional<std::string>& defaultSchema,
       const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
           std::string_view /*sql*/)>& parseSql)
-      : context_{defaultConnectorId},
+      : context_{defaultConnectorId, /*queryCtxPtr=*/nullptr,
+        /*hook=*/nullptr, std::make_shared<lp::ThrowingSqlExpressionsParser>()},
         defaultSchema_{defaultSchema},
         parseSql_{parseSql},
         builder_(newBuilder()) {}
