@@ -82,7 +82,7 @@ TEST_F(SqlQueryRunnerTest, parseAndRunMixedStatementTypes) {
   auto runner = makeRunner();
 
   auto statements = runner->parseMultiple(
-      "SELECT 42; EXPLAIN (TYPE LOGICAL) SELECT 1; select 7");
+      "SELECT 42; EXPLAIN (TYPE LOGICAL) SELECT 1; select 7", {});
   ASSERT_EQ(3, statements.size());
 
   // SELECT returns results.
@@ -139,7 +139,7 @@ TEST_F(SqlQueryRunnerTest, parseMultipleWithInvalidStatement) {
 
   // Parsing invalid SQL should throw.
   EXPECT_THROW(
-      runner->parseMultiple("SELECT 1; INVALID; SELECT 2"), std::exception);
+      runner->parseMultiple("SELECT 1; INVALID; SELECT 2", {}), std::exception);
 }
 
 } // namespace

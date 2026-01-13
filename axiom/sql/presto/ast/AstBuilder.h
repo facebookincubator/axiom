@@ -631,6 +631,10 @@ class AstBuilder : public PrestoSqlVisitor {
       return nullptr;
     }
 
+    ++tracingIndent_;
+    SCOPE_EXIT {
+      --tracingIndent_;
+    };
     return std::any_cast<std::shared_ptr<T>>(visit(ctx));
   }
 
@@ -653,10 +657,28 @@ class AstBuilder : public PrestoSqlVisitor {
   }
 
   std::any visitChildren(antlr4::tree::ParseTree* node) override {
+    throw std::runtime_error("Unexpected call to visitChildren");
+  }
+
+  std::any visitChildren(std::string_view name, antlr4::tree::ParseTree* node) {
+    const auto numChildren = node->children.size();
     if (enableTracing_) {
-      std::cout << "Visiting children: " << node->children.size() << std::endl;
+      std::cout << std::string(tracingIndent_ * 2, ' ')
+                << "Visiting children: " << numChildren << std::endl;
     }
 
+    if (numChildren > 1) {
+      throw std::runtime_error(
+          fmt::format(
+              "visitChildren called with more than one child: {} ({})",
+              numChildren,
+              name));
+    }
+
+    ++tracingIndent_;
+    SCOPE_EXIT {
+      --tracingIndent_;
+    };
     return PrestoSqlVisitor::visitChildren(node);
   }
 
@@ -665,6 +687,7 @@ class AstBuilder : public PrestoSqlVisitor {
   void trace(std::string_view name) const;
 
   const bool enableTracing_;
+  int tracingIndent_ = 0;
 };
 
 } // namespace axiom::sql::presto

@@ -70,6 +70,40 @@ class PrestoParserTest : public testing::Test {
     return pool_.get();
   }
 
+  void testExplain(
+      std::string_view sql,
+      lp::test::LogicalPlanMatcherBuilder& matcher) {
+    SCOPED_TRACE(sql);
+    PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+    auto statement = parser.parse(sql);
+    ASSERT_TRUE(statement->isExplain());
+
+    auto* explainStatement = statement->as<ExplainStatement>();
+    ASSERT_FALSE(explainStatement->isAnalyze());
+    ASSERT_TRUE(
+        explainStatement->type() == ExplainStatement::Type::kExecutable);
+
+    if (explainStatement->statement()->isSelect()) {
+      auto* selectStatement =
+          explainStatement->statement()->as<SelectStatement>();
+
+      auto logicalPlan = selectStatement->plan();
+      ASSERT_TRUE(matcher.build()->match(logicalPlan))
+          << lp::PlanPrinter::toText(*logicalPlan);
+    } else if (explainStatement->statement()->isInsert()) {
+      auto* insertStatement =
+          explainStatement->statement()->as<InsertStatement>();
+
+      auto logicalPlan = insertStatement->plan();
+      ASSERT_TRUE(matcher.build()->match(logicalPlan))
+          << lp::PlanPrinter::toText(*logicalPlan);
+    } else {
+      FAIL() << "Unexpected statement: "
+             << explainStatement->statement()->kindName();
+    }
+  }
+
   void testSql(
       std::string_view sql,
       lp::test::LogicalPlanMatcherBuilder& matcher,
@@ -1095,27 +1129,13 @@ TEST_F(PrestoParserTest, everything) {
       matcher);
 }
 
-TEST_F(PrestoParserTest, explain) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
-
+TEST_F(PrestoParserTest, explainSelect) {
   {
-    auto statement = parser.parse("EXPLAIN SELECT * FROM nation");
-    ASSERT_TRUE(statement->isExplain());
-
-    auto explainStatement = statement->as<ExplainStatement>();
-    ASSERT_FALSE(explainStatement->isAnalyze());
-    ASSERT_TRUE(
-        explainStatement->type() == ExplainStatement::Type::kExecutable);
-
-    auto selectStatement = explainStatement->statement();
-    ASSERT_TRUE(selectStatement->isSelect());
-
     auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan();
-
-    auto logicalPlan = selectStatement->as<SelectStatement>()->plan();
-    ASSERT_TRUE(matcher.build()->match(logicalPlan));
+    testExplain("EXPLAIN SELECT * FROM nation", matcher);
   }
 
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
   {
     auto statement = parser.parse("EXPLAIN ANALYZE SELECT * FROM nation");
     ASSERT_TRUE(statement->isExplain());
@@ -1174,6 +1194,28 @@ TEST_F(PrestoParserTest, explain) {
     ASSERT_FALSE(explainStatement->isAnalyze());
     ASSERT_TRUE(
         explainStatement->type() == ExplainStatement::Type::kExecutable);
+  }
+}
+
+TEST_F(PrestoParserTest, explainShow) {
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().values();
+  testExplain("EXPLAIN SHOW CATALOGS", matcher);
+
+  testExplain("EXPLAIN SHOW COLUMNS FROM nation", matcher);
+
+  testExplain("EXPLAIN SHOW FUNCTIONS", matcher);
+}
+
+TEST_F(PrestoParserTest, explainInsert) {
+  {
+    auto matcher =
+        lp::test::LogicalPlanMatcherBuilder().tableScan().tableWrite();
+    testExplain("EXPLAIN INSERT INTO region SELECT * FROM region", matcher);
+  }
+
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder().values().tableWrite();
+    testExplain("EXPLAIN INSERT INTO region VALUES (1, 'foo', 'bar')", matcher);
   }
 }
 
