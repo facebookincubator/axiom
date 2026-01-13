@@ -162,9 +162,50 @@ TEST_F(TpchPlanTest, q01) {
 TEST_F(TpchPlanTest, q02) {
   checkTpchSql(2);
 
-  // TODO Verify the plan.
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
-  ASSERT_NO_THROW(planTpch(2));
+  // nation INNER region (filtered on r_name='EUROPE').
+  auto nationRegion = startMatcher("nation").hashJoin(
+      startMatcher("region").build(), core::JoinType::kInner);
+
+  // Subquery: min(ps_supplycost) per p_partkey
+  // supplier INNER (partsupp LEFT SEMI part)
+  // then INNER (nation INNER region)
+  // then aggregation.
+  auto subqueryMatcher =
+      startMatcher("supplier")
+          .hashJoin(
+              startMatcher("partsupp")
+                  .hashJoin(
+                      startMatcher("part").build(),
+                      core::JoinType::kLeftSemiFilter)
+                  .build(),
+              core::JoinType::kInner)
+          .hashJoin(nationRegion.build(), core::JoinType::kInner)
+          .singleAggregation()
+          .project();
+
+  // Main query:
+  // (partsupp INNER part) INNER subquery
+  // INNER (supplier INNER (nation INNER region)).
+  auto matcher =
+      startMatcher("partsupp")
+          .hashJoin(startMatcher("part").build(), core::JoinType::kInner)
+          .hashJoin(subqueryMatcher.build(), core::JoinType::kInner)
+          .hashJoin(
+              startMatcher("supplier")
+                  .hashJoin(nationRegion.build(), core::JoinType::kInner)
+                  .build(),
+              core::JoinType::kInner)
+          .topN()
+          .project()
+          .build();
+
+  auto plan = planTpch(2);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
   ASSERT_NO_THROW(planVelox(parseTpchSql(2)));
 }
 
@@ -316,36 +357,163 @@ TEST_F(TpchPlanTest, q06) {
 TEST_F(TpchPlanTest, q07) {
   checkTpchSql(7);
 
-  // TODO Verify the plan.
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
-  ASSERT_NO_THROW(planTpch(7));
+  // customer INNER nation (filtered).
+  auto customerNation =
+      startMatcher("customer")
+          .hashJoin(startMatcher("nation").build(), core::JoinType::kInner);
+
+  // orders INNER (customer INNER nation).
+  auto ordersCustomerNation = startMatcher("orders").hashJoin(
+      customerNation.build(), core::JoinType::kInner);
+
+  // supplier INNER nation (filtered).
+  auto supplierNation =
+      startMatcher("supplier")
+          .hashJoin(startMatcher("nation").build(), core::JoinType::kInner);
+
+  // Full plan:
+  // lineitem INNER (orders INNER (customer INNER nation))
+  // INNER (supplier INNER nation)
+  // -> filter -> project -> aggregation -> orderBy -> project.
+  auto matcher =
+      startMatcher("lineitem")
+          .hashJoin(ordersCustomerNation.build(), core::JoinType::kInner)
+          .hashJoin(supplierNation.build(), core::JoinType::kInner)
+          .filter()
+          .project()
+          .singleAggregation()
+          .orderBy()
+          .project()
+          .build();
+
+  AXIOM_ASSERT_PLAN(planTpch(7), matcher);
   ASSERT_NO_THROW(planVelox(parseTpchSql(7)));
 }
 
 TEST_F(TpchPlanTest, q08) {
   checkTpchSql(8);
 
-  // TODO Verify the plan.
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
-  ASSERT_NO_THROW(planTpch(8));
+  // nation INNER region (filtered on r_name).
+  auto nationRegion = startMatcher("nation").hashJoin(
+      startMatcher("region").build(), core::JoinType::kInner);
+
+  // orders INNER customer.
+  auto ordersCustomer = startMatcher("orders").hashJoin(
+      startMatcher("customer").build(), core::JoinType::kInner);
+
+  // (orders INNER customer) INNER (nation INNER region).
+  auto ordersCustomerNationRegion =
+      ordersCustomer.hashJoin(nationRegion.build(), core::JoinType::kInner);
+
+  // lineitem INNER part (filtered on p_type).
+  auto lineitemPart =
+      startMatcher("lineitem")
+          .hashJoin(startMatcher("part").build(), core::JoinType::kInner);
+
+  // (lineitem INNER part) INNER (orders INNER customer INNER nation INNER
+  // region).
+  auto lineitemPartOrders = lineitemPart.hashJoin(
+      ordersCustomerNationRegion.build(), core::JoinType::kInner);
+
+  // supplier INNER (lineitem INNER part INNER orders INNER customer INNER
+  // nation INNER region).
+  auto supplierLineitem =
+      startMatcher("supplier")
+          .hashJoin(lineitemPartOrders.build(), core::JoinType::kInner);
+
+  auto matcher =
+      supplierLineitem
+          .hashJoin(startMatcher("nation").build(), core::JoinType::kInner)
+          .project()
+          .singleAggregation()
+          .orderBy()
+          .project()
+          .build();
+
+  AXIOM_ASSERT_PLAN(planTpch(8), matcher);
+
   ASSERT_NO_THROW(planVelox(parseTpchSql(8)));
 }
 
 TEST_F(TpchPlanTest, q09) {
   checkTpchSql(9);
 
-  // TODO Verify the plan.
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
-  ASSERT_NO_THROW(planTpch(9));
+  // partsupp INNER part (filtered on p_name LIKE '%green%').
+  auto partsuppPart =
+      startMatcher("partsupp")
+          .hashJoin(startMatcher("part").build(), core::JoinType::kInner);
+
+  // lineitem INNER (partsupp INNER part).
+  auto lineitemPartsuppPart =
+      startMatcher("lineitem")
+          .hashJoin(partsuppPart.build(), core::JoinType::kInner);
+
+  // orders INNER (lineitem INNER partsupp INNER part).
+  auto ordersLineitem = startMatcher("orders").hashJoin(
+      lineitemPartsuppPart.build(), core::JoinType::kInner);
+
+  // (orders INNER ...) INNER supplier.
+  auto withSupplier = ordersLineitem.hashJoin(
+      startMatcher("supplier").build(), core::JoinType::kInner);
+
+  // Full plan: ... INNER nation -> project -> aggregation -> orderBy ->
+  // project.
+  auto matcher =
+      withSupplier
+          .hashJoin(startMatcher("nation").build(), core::JoinType::kInner)
+          .project()
+          .singleAggregation()
+          .orderBy()
+          .project()
+          .build();
+
+  AXIOM_ASSERT_PLAN(planTpch(9), matcher);
+
   ASSERT_NO_THROW(planVelox(parseTpchSql(9)));
 }
 
 TEST_F(TpchPlanTest, q10) {
   checkTpchSql(10);
 
-  // TODO Verify the plan.
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
-  ASSERT_NO_THROW(planTpch(10));
+  // customer INNER orders (filtered on o_orderdate).
+  auto customerOrders =
+      startMatcher("customer")
+          .hashJoin(startMatcher("orders").build(), core::JoinType::kInner);
+
+  // (customer INNER orders) INNER nation.
+  auto customerOrdersNation = customerOrders.hashJoin(
+      startMatcher("nation").build(), core::JoinType::kInner);
+
+  // lineitem (filtered on l_returnflag) INNER (customer INNER orders INNER
+  // nation)
+  // -> project -> aggregation -> topN -> project.
+  auto matcher =
+      startMatcher("lineitem")
+          .hashJoin(customerOrdersNation.build(), core::JoinType::kInner)
+          .project()
+          .singleAggregation()
+          .topN()
+          .project()
+          .build();
+
+  AXIOM_ASSERT_PLAN(planTpch(10), matcher);
+
   ASSERT_NO_THROW(planVelox(parseTpchSql(10)));
 }
 
@@ -499,9 +667,37 @@ TEST_F(TpchPlanTest, q14) {
 TEST_F(TpchPlanTest, q15) {
   checkTpchSql(15);
 
-  // TODO Verify the plan.
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
-  ASSERT_NO_THROW(planTpch(15));
+  // Q15 has a CTE (revenue view) that gets scanned twice:
+  // 1. First scan: lineitem -> project -> aggregation (total_revenue per
+  // supplier).
+  // 2. Second scan: lineitem -> project -> aggregation -> project ->
+  // aggregation. (max) Then: (first agg) INNER (max agg) INNER supplier ->
+  // orderBy.
+
+  auto lineitemAgg = startMatcher("lineitem").project().singleAggregation();
+
+  // Second lineitem aggregation chain for max(total_revenue).
+  auto lineitemMaxAgg = startMatcher("lineitem")
+                            .project()
+                            .singleAggregation()
+                            .project()
+                            .singleAggregation();
+
+  auto aggJoinMax =
+      lineitemAgg.hashJoin(lineitemMaxAgg.build(), core::JoinType::kInner);
+
+  auto matcher =
+      aggJoinMax
+          .hashJoin(startMatcher("supplier").build(), core::JoinType::kInner)
+          .orderBy()
+          .build();
+
+  AXIOM_ASSERT_PLAN(planTpch(15), matcher);
+
   ASSERT_NO_THROW(planVelox(parseTpchSql(15)));
 }
 
@@ -570,9 +766,31 @@ TEST_F(TpchPlanTest, q17) {
 TEST_F(TpchPlanTest, q18) {
   checkTpchSql(18);
 
-  // TODO Verify the plan.
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
-  ASSERT_NO_THROW(planTpch(18));
+  auto ordersCustomer = startMatcher("orders").hashJoin(
+      startMatcher("customer").build(), core::JoinType::kInner);
+
+  auto lineitemOrdersCustomer =
+      startMatcher("lineitem")
+          .hashJoin(ordersCustomer.build(), core::JoinType::kInner);
+
+  auto subquery =
+      startMatcher("lineitem").singleAggregation().filter().project();
+
+  // Main plan: (lineitem INNER orders INNER customer) LEFT SEMI (subquery)
+  // -> aggregation -> topN.
+  auto matcher =
+      lineitemOrdersCustomer
+          .hashJoin(subquery.build(), core::JoinType::kLeftSemiFilter)
+          .singleAggregation()
+          .topN()
+          .build();
+
+  AXIOM_ASSERT_PLAN(planTpch(18), matcher);
+
   ASSERT_NO_THROW(planVelox(parseTpchSql(18)));
 }
 
@@ -629,18 +847,71 @@ TEST_F(TpchPlanTest, q20) {
   };
   checkTpchSql(20);
 
-  // TODO Verify the plan.
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
-  ASSERT_NO_THROW(planTpch(20));
+  auto lineitemAgg = startMatcher("lineitem").singleAggregation().project();
+
+  auto partsuppPart =
+      startMatcher("partsupp")
+          .hashJoin(
+              startMatcher("part").build(), core::JoinType::kLeftSemiFilter);
+
+  auto lineitemPartsuppPart =
+      lineitemAgg.hashJoin(partsuppPart.build(), core::JoinType::kRight);
+
+  auto existsSubquery = lineitemPartsuppPart.filter().project();
+
+  auto supplierNation =
+      startMatcher("supplier")
+          .hashJoin(startMatcher("nation").build(), core::JoinType::kInner);
+
+  auto matcher =
+      existsSubquery
+          .hashJoin(supplierNation.build(), core::JoinType::kRightSemiFilter)
+          .orderBy()
+          .build();
+
+  auto plan = planTpch(20);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
   ASSERT_NO_THROW(planVelox(parseTpchSql(20)));
 }
 
 TEST_F(TpchPlanTest, q21) {
   checkTpchSql(21);
 
-  // TODO Verify the plan.
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
-  ASSERT_NO_THROW(planTpch(21));
+  auto supplierNation =
+      startMatcher("supplier")
+          .hashJoin(startMatcher("nation").build(), core::JoinType::kInner);
+
+  auto lineitemSupplierNation =
+      startMatcher("lineitem")
+          .hashJoin(supplierNation.build(), core::JoinType::kInner);
+
+  auto withOrders = lineitemSupplierNation.hashJoin(
+      startMatcher("orders").build(), core::JoinType::kInner);
+
+  auto withExists =
+      startMatcher("lineitem")
+          .hashJoin(withOrders.build(), core::JoinType::kRightSemiProject);
+
+  auto matcher =
+      startMatcher("lineitem")
+          .hashJoin(
+              withExists.filter().build(), core::JoinType::kRightSemiFilter)
+          .singleAggregation()
+          .topN()
+          .build();
+
+  auto plan = planTpch(21);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
   ASSERT_NO_THROW(planVelox(parseTpchSql(21)));
 }
 
