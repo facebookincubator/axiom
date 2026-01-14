@@ -419,6 +419,9 @@ class ToGraph {
   // Column and subfield info for items that only affect column values.
   PlanSubfields payloadSubfields_;
 
+  // Cache for expandFunction results, populated during SubfieldTracker::markAll
+  ExpandFunctionCache expandFunctionCache_;
+
   /// Expressions corresponding to skyline paths over a subfield decomposable
   /// function.
   folly::F14FastMap<const logical_plan::CallExpr*, SubfieldProjections>
