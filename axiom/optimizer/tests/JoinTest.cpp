@@ -363,5 +363,60 @@ TEST_F(JoinTest, joinWithComputedKeys) {
   }
 }
 
+TEST_F(JoinTest, crossJoin) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+
+  {
+    lp::PlanBuilder::Context ctx{kTestConnectorId};
+    auto logicalPlan =
+        lp::PlanBuilder{ctx}.from({"t", "u"}).project({"a + x"}).build();
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .nestedLoopJoin(core::PlanMatcherBuilder().tableScan("u").build())
+            .project({"a + x"})
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    lp::PlanBuilder::Context ctx{kTestConnectorId};
+    auto logicalPlan =
+        lp::PlanBuilder{ctx}.from({"t", "u"}).filter("a > x").build();
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .nestedLoopJoin(core::PlanMatcherBuilder().tableScan("u").build())
+            .filter("a > x")
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    lp::PlanBuilder::Context ctx{kTestConnectorId};
+    auto logicalPlan = lp::PlanBuilder{ctx}
+                           .from({"t", "u"})
+                           .aggregate({}, {"count(1)"})
+                           .build();
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .nestedLoopJoin(core::PlanMatcherBuilder().tableScan("u").build())
+            .aggregation()
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

@@ -814,6 +814,14 @@ void Optimization::addPostprocess(
     DerivedTableCP dt,
     RelationOpPtr& plan,
     PlanState& state) const {
+  // Sanity check that all conjuncts have been placed.
+  for (const auto* conjunct : state.dt->conjuncts) {
+    VELOX_CHECK(
+        state.placed.contains(conjunct),
+        "Failed to place a conjunct: {}",
+        conjunct->toString());
+  }
+
   if (dt->write) {
     VELOX_DCHECK(!dt->hasAggregation());
     VELOX_DCHECK(!dt->hasOrderBy());
@@ -1580,7 +1588,55 @@ void Optimization::crossJoin(
     const JoinCandidate& candidate,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
-  VELOX_NYI("No cross joins");
+  VELOX_CHECK_EQ(candidate.tables.size(), 1);
+  VELOX_CHECK_EQ(candidate.existences.size(), 0);
+
+  const auto* table = candidate.tables[0];
+
+  PlanObjectSet buildTables;
+  buildTables.add(table);
+
+  const auto downstreamColumns = state.downstreamColumns();
+
+  auto buildColumns = availableColumns(table);
+  buildColumns.intersect(downstreamColumns);
+
+  const auto broadcast = Distribution::broadcast();
+
+  MemoKey memoKey{table, buildColumns, buildTables, candidate.existences};
+  PlanObjectSet empty;
+  bool needsShuffle = false;
+  auto buildPlan = makePlan(
+      *state.dt,
+      memoKey,
+      broadcast,
+      empty,
+      candidate.existsFanout,
+      needsShuffle);
+
+  PlanState buildState(state.optimization, state.dt, buildPlan);
+
+  auto buildOp = buildPlan->op;
+  if (needsShuffle) {
+    buildOp = make<Repartition>(buildOp, broadcast, buildOp->columns());
+    buildState.addCost(*buildOp);
+  }
+
+  state.cost.cost += buildState.cost.cost;
+
+  PlanObjectSet resultColumns;
+  resultColumns.unionObjects(plan->columns());
+  resultColumns.unionObjects(buildOp->columns());
+  resultColumns.intersect(downstreamColumns);
+
+  RelationOp* join =
+      Join::makeCrossJoin(plan, buildOp, resultColumns.toObjects<Column>());
+
+  state.placed.add(table);
+  state.columns.unionSet(buildColumns);
+  state.addCost(*join);
+
+  state.addNextJoin(&candidate, std::move(join), toTry);
 }
 
 void Optimization::crossJoinUnnest(
@@ -1684,7 +1740,6 @@ void Optimization::tryNextJoins(
 RelationOpPtr Optimization::placeSingleRowDt(
     RelationOpPtr plan,
     DerivedTableCP subquery,
-    ExprCP filter,
     PlanState& state) {
   MemoKey memoKey;
   memoKey.firstTable = subquery;
@@ -1804,11 +1859,7 @@ bool Optimization::placeConjuncts(
 
       for (auto i = 0; i < placeable.size(); ++i) {
         state.placed.add(conjunct);
-        plan = placeSingleRowDt(
-            plan,
-            placeable[i],
-            (i == placeable.size() - 1 ? conjunct : nullptr),
-            state);
+        plan = placeSingleRowDt(plan, placeable[i], state);
 
         plan = make<Filter>(plan, ExprVector{conjunct});
         state.addCost(*plan);
