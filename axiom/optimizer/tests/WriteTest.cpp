@@ -21,6 +21,8 @@
 #include "velox/core/QueryConfig.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 
+#include <folly/String.h>
+
 namespace facebook::axiom::optimizer {
 namespace {
 
@@ -287,6 +289,63 @@ class WriteTest : public test::HiveQueriesTestBase {
           }));
     }
     return data;
+  }
+
+  void runBucketedJoinQuery(
+      const std::string& tableName,
+      const std::vector<std::string>& joinColumns,
+      int64_t expectedCount) {
+    SCOPED_TRACE(
+        fmt::format(
+            "Bucketed join on table {} with columns [{}]",
+            tableName,
+            folly::join(", ", joinColumns)));
+
+    // Build the join condition: t1.col1 = t2.col1 AND t1.col2 = t2.col2 ...
+    std::vector<std::string> joinConditions;
+    for (const auto& col : joinColumns) {
+      joinConditions.push_back(fmt::format("t1.{} = t2.{}", col, col));
+    }
+    std::string joinCondition = folly::join(" AND ", joinConditions);
+
+    // Build the SQL query
+    std::string sql = fmt::format(
+        "SELECT count(*) FROM {} t1, {} t2 WHERE {}",
+        tableName,
+        tableName,
+        joinCondition);
+
+    ::axiom::sql::presto::PrestoParser parser(
+        exec::test::kHiveConnectorId, std::nullopt, pool());
+
+    auto statement = parser.parse(sql);
+    auto logicalPlan =
+        statement->as<::axiom::sql::presto::SelectStatement>()->plan();
+
+    connector::SchemaResolver schemaResolver;
+
+    runner::MultiFragmentPlan::Options options{
+        .numWorkers = 4,
+        .numDrivers = 4,
+    };
+
+    auto plan = planVelox(logicalPlan, schemaResolver, options);
+    auto result = runFragmentedPlan(plan);
+
+    ASSERT_EQ(1, result.results.size());
+    ASSERT_EQ(1, result.results[0]->size());
+
+    const auto& child = result.results[0]->childAt(0);
+    ASSERT_TRUE(child);
+    ASSERT_EQ(1, child->size());
+
+    const auto value = child->variantAt(0);
+    ASSERT_TRUE(!value.isNull());
+
+    ASSERT_EQ(expectedCount, value.value<int64_t>())
+        << "Expected count " << expectedCount << " for bucketed join on table "
+        << tableName << " with join columns [" << folly::join(", ", joinColumns)
+        << "], but got " << value.value<int64_t>();
   }
 
  private:
@@ -584,6 +643,9 @@ TEST_F(WriteTest, createTableAsSelectBucketedSql) {
 
     verifyPartitionedLayout(getLayout("test"), "key", 8);
 
+    // Test bucketed self-join on single bucket column
+    runBucketedJoinQuery("test", {"key"}, 600'572);
+
     // Copy bucketed table with a larger bucket_count. Expect no shuffle.
     runCtas(
         "CREATE TABLE test3 WITH (bucket_count = 16, bucketed_by = ARRAY['key']) AS "
@@ -593,6 +655,9 @@ TEST_F(WriteTest, createTableAsSelectBucketedSql) {
 
     verifyPartitionedLayout(getLayout("test3"), "key", 16);
 
+    // Test bucketed self-join on table with larger bucket count
+    runBucketedJoinQuery("test3", {"key"}, 600'572);
+
     // Copy bucketed table with same bucket_count. Expect no shuffle.
     runCtas(
         "CREATE TABLE test2 WITH (bucket_count = 8, bucketed_by = ARRAY['key']) AS "
@@ -601,6 +666,9 @@ TEST_F(WriteTest, createTableAsSelectBucketedSql) {
         verifyCollocatedWrite);
 
     verifyPartitionedLayout(getLayout("test2"), "key", 8);
+
+    // Test bucketed self-join on copied table
+    runBucketedJoinQuery("test2", {"key"}, 600'572);
 
     // Copy bucketed table with a larger bucket_count. Expect no shuffle.
     runCtas(
@@ -619,6 +687,9 @@ TEST_F(WriteTest, createTableAsSelectBucketedSql) {
         verifyPartitionedWrite);
 
     verifyPartitionedLayout(getLayout("test4"), "key", 2);
+
+    // Test bucketed self-join on table with smaller bucket count
+    runBucketedJoinQuery("test4", {"key"}, 600'572);
   }
 
   // Single-node execution.
@@ -687,6 +758,9 @@ TEST_F(WriteTest, createTableAsSelectBucketedSql) {
         verifyPartitionedWrite);
 
     verifyPartitionedLayout(getLayout("test"), "n_nationkey", 16, "n_name");
+
+    // Test bucketed self-join on single bucket column
+    runBucketedJoinQuery("test", {"n_nationkey"}, 25);
   }
 }
 
