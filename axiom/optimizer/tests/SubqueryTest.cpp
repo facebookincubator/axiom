@@ -181,5 +181,37 @@ TEST_F(SubqueryTest, foldable) {
   }
 }
 
+TEST_F(SubqueryTest, correlatedExists) {
+  {
+    auto query =
+        "SELECT * FROM nation WHERE "
+        "EXISTS (SELECT * FROM region WHERE r_regionkey = n_regionkey)";
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .hashJoin(
+                core::PlanMatcherBuilder().hiveScan("region", {}).build(),
+                velox::core::JoinType::kLeftSemiFilter)
+            .build();
+
+    {
+      SCOPED_TRACE(query);
+      auto plan = toSingleNodePlan(query);
+      AXIOM_ASSERT_PLAN(plan, matcher);
+    }
+
+    query =
+        "SELECT * FROM nation WHERE "
+        "EXISTS (SELECT 1 FROM region WHERE r_regionkey = n_regionkey)";
+
+    {
+      SCOPED_TRACE(query);
+      auto plan = toSingleNodePlan(query);
+      AXIOM_ASSERT_PLAN(plan, matcher);
+    }
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
