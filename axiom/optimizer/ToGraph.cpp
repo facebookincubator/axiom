@@ -1024,14 +1024,23 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
 
   const auto* call = expr->isCall() ? expr->as<lp::CallExpr>() : nullptr;
   std::string callName;
+  const FunctionMetadata* metadata = nullptr;
   if (call) {
     callName = velox::exec::sanitizeName(call->name());
-    auto* metadata = functionMetadata(callName);
+    metadata = functionMetadata(callName);
     if (metadata && metadata->processSubfields()) {
       auto translated = translateSubfieldFunction(call, metadata);
       if (translated.has_value()) {
         return translated.value();
       }
+    }
+  }
+
+  if (metadata && metadata->expandFunction) {
+    auto newExpr =
+        expandFunctionCache_.getOrExpand(call, metadata->expandFunction);
+    if (newExpr) {
+      return translateExpr(newExpr);
     }
   }
 
@@ -2492,7 +2501,7 @@ void ToGraph::translateUnion(const lp::SetNode& set) {
 }
 
 DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
-  std::tie(controlSubfields_, payloadSubfields_) =
+  std::tie(controlSubfields_, payloadSubfields_, expandFunctionCache_) =
       SubfieldTracker([&](const auto& expr) {
         return tryFoldConstant(expr);
       }).markAll(logicalPlan);
