@@ -251,6 +251,7 @@ std::string SqlQueryRunner::runExplain(
     case presto::ExplainStatement::Type::kExecutable:
       return optimize(logicalPlan, newQuery(options), options).toString();
   }
+  VELOX_UNREACHABLE();
 }
 
 namespace {
@@ -317,6 +318,12 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
 
   auto session = std::make_shared<Session>(queryCtx->queryId());
 
+  optimizer::OptimizerOptions optimizerOptions{
+      .sampleJoins = options.sampleJoins,
+      .sampleFilters = options.sampleFilters,
+      .traceFlags = options.optimizerTraceFlags,
+  };
+
   optimizer::Optimization optimization(
       session,
       *logicalPlan,
@@ -324,7 +331,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
       *history_,
       queryCtx,
       evaluator,
-      {.traceFlags = options.optimizerTraceFlags},
+      optimizerOptions,
       opts);
 
   if (checkDerivedTable && !checkDerivedTable(*optimization.rootDt())) {
