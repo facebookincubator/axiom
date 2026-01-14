@@ -15,6 +15,7 @@
  */
 
 #include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 
@@ -103,13 +104,28 @@ bool VeloxHistory::setLeafSelectivity(
   auto* runnerTable = table.schemaTable->connectorTable;
 
   // If there is no physical table to go to or filter sampling
-  // has been explicitly disabled, assume 1/10 if any filters
-  // are present for the table.
+  // has been explicitly disabled, compute selectivity using filter analysis.
   if (!runnerTable || !options.sampleFilters) {
     if (table.columnFilters.empty() && table.filter.empty()) {
       table.filterSelectivity = 1;
     } else {
-      table.filterSelectivity = 0.1;
+      // Combine columnFilters and filter into a single vector
+      ExprVector allFilters;
+      allFilters.reserve(table.columnFilters.size() + table.filter.size());
+      allFilters.insert(
+          allFilters.end(),
+          table.columnFilters.begin(),
+          table.columnFilters.end());
+      allFilters.insert(
+          allFilters.end(), table.filter.begin(), table.filter.end());
+
+      // Create a temporary PlanState for evaluating selectivity
+      PlanState state(*queryCtx()->optimization(), nullptr);
+      ConstraintMap constraints;
+
+      auto selectivity =
+          conjunctsSelectivity(state, allFilters, false, constraints);
+      table.filterSelectivity = selectivity.trueFraction;
     }
     return false;
   }
