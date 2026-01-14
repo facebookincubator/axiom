@@ -70,11 +70,7 @@ target_link_libraries(
 
 add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp)
 
-add_test(
-  NAME axiom_optimizer_tpch_plan_test
-  COMMAND axiom_optimizer_tpch_plan_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
+add_test(axiom_optimizer_tpch_plan_test axiom_optimizer_tpch_plan_test)
 
 target_link_libraries(
   axiom_optimizer_tpch_plan_test
