@@ -20,6 +20,9 @@
 
 namespace facebook::axiom::optimizer {
 
+struct PlanState;
+struct Value;
+
 /// A bit set that qualifies an Expr. Represents which functions/kinds
 /// of functions are found inside the children of an Expr.
 class FunctionSet {
@@ -182,6 +185,10 @@ struct FunctionMetadata {
       const logical_plan::CallExpr* call,
       std::vector<PathCP>& paths)>
       explode;
+
+  /// Function to compute derived constraints for function calls.
+  std::function<std::optional<Value>(ExprCP, PlanState& state)>
+      functionConstraint;
 };
 
 using FunctionMetadataCP = const FunctionMetadata*;

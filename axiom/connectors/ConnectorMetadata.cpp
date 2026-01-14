@@ -16,6 +16,10 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 
+#include <fmt/format.h>
+#include <folly/String.h>
+#include <sstream>
+
 namespace facebook::axiom::connector {
 namespace {
 
@@ -224,6 +228,64 @@ void ConnectorMetadata::registerMetadata(
 // static
 void ConnectorMetadata::unregisterMetadata(std::string_view connectorId) {
   metadataRegistry().erase(connectorId);
+}
+
+std::string ColumnStatistics::toString() const {
+  std::vector<std::string> parts;
+
+  if (!name.empty()) {
+    parts.push_back(fmt::format("name={}", name));
+  }
+
+  if (nonNull) {
+    parts.push_back("nonNull=true");
+  }
+
+  if (nullPct != 0) {
+    parts.push_back(fmt::format("nullPct={}", nullPct));
+  }
+
+  if (min.has_value()) {
+    std::ostringstream oss;
+    oss << min.value();
+    parts.push_back("min=" + oss.str());
+  }
+
+  if (max.has_value()) {
+    std::ostringstream oss;
+    oss << max.value();
+    parts.push_back("max=" + oss.str());
+  }
+
+  if (maxLength.has_value()) {
+    parts.push_back(fmt::format("maxLength={}", maxLength.value()));
+  }
+
+  if (ascendingPct.has_value()) {
+    parts.push_back(fmt::format("ascendingPct={}", ascendingPct.value()));
+  }
+
+  if (descendingPct.has_value()) {
+    parts.push_back(fmt::format("descendingPct={}", descendingPct.value()));
+  }
+
+  if (avgLength.has_value()) {
+    parts.push_back(fmt::format("avgLength={}", avgLength.value()));
+  }
+
+  if (numDistinct.has_value()) {
+    parts.push_back(fmt::format("numDistinct={}", numDistinct.value()));
+  }
+
+  if (numValues != 0) {
+    parts.push_back(fmt::format("numValues={}", numValues));
+  }
+
+  if (!children.empty()) {
+    parts.push_back(fmt::format("children={}", children.size()));
+  }
+
+  return fmt::format("<{}>", folly::join(", ", parts));
 }
 
 } // namespace facebook::axiom::connector
