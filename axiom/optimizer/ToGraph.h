@@ -456,4 +456,8 @@ class ToGraph {
   folly::F14FastMap<Name, Name> reversibleFunctions_;
 };
 
+/// Returns the interned name for the subscript function from the function
+/// registry.
+Name subscriptName();
+
 } // namespace facebook::axiom::optimizer

@@ -210,6 +210,20 @@ struct PathComparer {
   }
 };
 
+struct VariantPtrHasher {
+  size_t operator()(const std::shared_ptr<const velox::Variant>& value) const {
+    return value->hash();
+  }
+};
+
+struct VariantPtrComparer {
+  bool operator()(
+      const std::shared_ptr<const velox::Variant>& left,
+      const std::shared_ptr<const velox::Variant>& right) const {
+    return *left == *right;
+  }
+};
+
 /// Context for making a query plan. Owns all memory associated to
 /// planning, except for the input PlanNode tree. The result of
 /// planning is also owned by 'this', so the planning result must be
@@ -288,11 +302,8 @@ class QueryGraphContext {
 
   /// Takes ownership of a Variant for the duration. Variants are allocated
   /// with new so not in the arena.
-  velox::Variant* registerVariant(std::unique_ptr<velox::Variant> value) {
-    std::lock_guard<std::mutex> lock(variantsMutex_);
-    allVariants_.push_back(std::move(value));
-    return allVariants_.back().get();
-  }
+  const velox::Variant* registerVariant(
+      std::shared_ptr<const velox::Variant> value);
 
   /// Takes ownership of any object for the duration. The object is stored as
   /// a shared_ptr<void> and scoped to the lifetime of this QueryGraphContext.
@@ -338,6 +349,21 @@ class QueryGraphContext {
 
   PlanP contextPlan_{nullptr};
   Optimization* optimization_{nullptr};
+
+  // all unique Variants used from the arena. Variants from here may
+  // or may not be in the output plan but will stay live at least for
+  // the duration of optimization.
+  std::unordered_set<
+      std::shared_ptr<const velox::Variant>,
+      VariantPtrHasher,
+      VariantPtrComparer>
+      variants_;
+
+  // Reverse map from dedupped Variant to the shared_ptr. We put the
+  // shared ptr back into the result plan so the variant never gets
+  // copied.
+  std::map<const velox::Variant*, std::shared_ptr<const velox::Variant>>
+      reverseConstantDedup_;
 
   std::vector<std::unique_ptr<velox::Variant>> allVariants_;
 
@@ -401,9 +427,9 @@ inline void Path::operator delete(void* ptr) {
 
 /// Shorthand for registerVariant() in queryCtx().
 template <typename... Args>
-velox::Variant* registerVariant(Args&&... args) {
+const velox::Variant* registerVariant(Args&&... args) {
   return queryCtx()->registerVariant(
-      std::make_unique<velox::Variant>(std::forward<Args>(args)...));
+      std::make_shared<const velox::Variant>(std::forward<Args>(args)...));
 }
 
 // Forward declarations of common types and collections.

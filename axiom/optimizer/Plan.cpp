@@ -19,6 +19,7 @@
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/RelationOpPrinter.h"
+#include "axiom/optimizer/ToGraph.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -631,17 +632,16 @@ Value exprConstraint(ExprCP expr, PlanState& state, bool update) {
   } else if (expr->is(PlanType::kColumnExpr)) {
     // For columns, use the expr's value (constraint already checked above)
     result = expr->value();
-  } else if (expr->is(PlanType::kFieldExpr)) {
-    // For Field, get value from first arg with cardinality from value(first
-    // arg, state)
-    auto* field = expr->as<Field>();
-    Value baseValue = exprConstraint(field->base(), state, update);
-    result = expr->value();
-    result.cardinality = baseValue.cardinality;
   } else if (expr->is(PlanType::kCallExpr)) {
     auto* call = expr->as<Call>();
 
-    if (call->containsFunction(FunctionSet::kAggregate)) {
+    // For subscript over structs, get value from the base expression
+    if (call->name() == subscriptName() &&
+        call->args()[0]->value().type->kind() == velox::TypeKind::ROW) {
+      Value baseValue = exprConstraint(call->args()[0], state, update);
+      result = expr->value();
+      result.cardinality = baseValue.cardinality;
+    } else if (call->containsFunction(FunctionSet::kAggregate)) {
       // For aggregates, return value with cardinality from state's cost
       result = expr->value();
       result.cardinality = state.cost.cardinality;
