@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
+#include "axiom/optimizer/tests/ParquetTpchTest.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -27,23 +28,25 @@ DEFINE_int32(num_repeats, 1, "Number of repeats for optimization timing");
 DECLARE_uint32(optimizer_trace);
 DECLARE_string(history_save_path);
 
-namespace facebook::axiom::optimizer {
+namespace facebook::axiom::optimizer::test {
 namespace {
 
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class TpchPlanTest : public virtual test::HiveQueriesTestBase {
+class TpchPlanTest : public virtual HiveQueriesTestBase {
  protected:
   static void SetUpTestCase() {
-    test::HiveQueriesTestBase::SetUpTestCase();
+    HiveQueriesTestBase::SetUpTestCase();
+    ParquetTpchTest::makeBucketedTables(
+        runner::test::LocalRunnerTestBase::localDataPath_);
   }
 
   static void TearDownTestCase() {
     if (!FLAGS_history_save_path.empty()) {
       suiteHistory().saveToFile(FLAGS_history_save_path);
     }
-    test::HiveQueriesTestBase::TearDownTestCase();
+    HiveQueriesTestBase::TearDownTestCase();
   }
 
   void SetUp() override {
@@ -55,7 +58,9 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
   }
 
   void TearDown() override {
+    bucketedPlan_ = {};
     HiveQueriesTestBase::TearDown();
+    bucketedPlan_ = {};
   }
 
   static std::string readSqlFromFile(const std::string& filePath) {
@@ -103,10 +108,82 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
     return logicalPlan;
   }
 
+  // Helper function to convert a query to use bucketed tables
+  std::string toBucketedSql(const std::string& sql) {
+    std::string bucketedSql = sql;
+
+    // Replace table names with their bucketed versions
+    const std::vector<std::pair<std::string, std::string>> replacements = {
+        {"lineitem", "lineitem_b"},
+        {"orders", "orders_b"},
+        {"partsupp", "partsupp_b"},
+        {"part", "part_b"}};
+
+    for (const auto& [original, bucketed] : replacements) {
+      // Need to be careful to match whole words
+      size_t pos = 0;
+      while ((pos = bucketedSql.find(original, pos)) != std::string::npos) {
+        // Check if it's a whole word (not part of another identifier)
+        bool isWholeWord = true;
+        if (pos > 0) {
+          char prevChar = bucketedSql[pos - 1];
+          if (std::isalnum(prevChar) || prevChar == '_') {
+            isWholeWord = false;
+          }
+        }
+        if (pos + original.length() < bucketedSql.length()) {
+          char nextChar = bucketedSql[pos + original.length()];
+          if (std::isalnum(nextChar) || nextChar == '_') {
+            isWholeWord = false;
+          }
+        }
+
+        if (isWholeWord) {
+          bucketedSql.replace(pos, original.length(), bucketed);
+          pos += bucketed.length();
+        } else {
+          pos += original.length();
+        }
+      }
+    }
+
+    return bucketedSql;
+  }
+
+  // Run the bucketed version of a query and return the PlanAndStats
+  optimizer::PlanAndStats runBucketedVersion(
+      const std::string& sql,
+      const std::vector<velox::RowVectorPtr>& referenceResult) {
+    auto bucketedSql = toBucketedSql(sql);
+    auto logicalPlan = parseSelect(bucketedSql);
+
+    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+
+    // Verify results match
+    auto result = runFragmentedPlan(plan);
+    velox::exec::test::assertEqualResults(referenceResult, result.results);
+
+    return plan;
+  }
+
   void checkTpchSql(int32_t query) {
     auto sql = readTpchSql(query);
     auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
-    checkResults(sql, referencePlan);
+
+    SCOPED_TRACE(sql);
+    VELOX_CHECK_NOT_NULL(referencePlan);
+
+    auto logicalPlan = parseSelect(sql);
+
+    // Get reference results
+    SCOPED_TRACE("reference plan:\n" + referencePlan->toString(true, true));
+    auto referenceResult = runVelox(referencePlan);
+
+    // Run with regular tables
+    checkSame(logicalPlan, referenceResult.results);
+
+    // Run with bucketed tables (4 workers, 4 drivers)
+    bucketedPlan_ = runBucketedVersion(sql, referenceResult.results);
   }
 
   velox::core::PlanNodePtr planTpch(int32_t query) {
@@ -114,6 +191,7 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
   }
 
   std::unique_ptr<exec::test::TpchQueryBuilder> referenceBuilder_;
+  optimizer::PlanAndStats bucketedPlan_;
 };
 
 TEST_F(TpchPlanTest, stats) {
@@ -569,7 +647,6 @@ TEST_F(TpchPlanTest, q17) {
 
 TEST_F(TpchPlanTest, q18) {
   checkTpchSql(18);
-
   // TODO Verify the plan.
 
   ASSERT_NO_THROW(planTpch(18));
@@ -601,10 +678,10 @@ TEST_F(TpchPlanTest, q19) {
               core::PlanMatcherBuilder()
                   .hiveScan(
                       "part",
-                      {},
-                      "\"or\"(\"and\"(p_size between 1 and 15, (p_brand = 'Brand#34' AND p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG'))), "
-                      "   \"or\"(\"and\"(p_size between 1 and 5, (p_brand = 'Brand#12' AND p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG'))), "
-                      "          \"and\"(p_size between 1 and 10, (p_brand = 'Brand#23' AND p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')))))")
+                      common::test::SubfieldFiltersBuilder()
+                          .add("p_size", exec::greaterThanOrEqual(1LL))
+                          .build(),
+                      "\"or\"(\"and\"(lte(p_size,15),\"and\"(eq(p_brand,'Brand#34'),\"in\"(p_container,array['LG CASE', 'LG BOX', 'LG PACK', 'LG PKG']))),\"or\"(\"and\"(lte(p_size,5),\"and\"(eq(p_brand,'Brand#12'),\"in\"(p_container,array['SM CASE', 'SM BOX', 'SM PACK', 'SM PKG']))),\"and\"(lte(p_size,10),\"and\"(eq(p_brand,'Brand#23'),\"in\"(p_container,array['MED BAG', 'MED BOX', 'MED PKG', 'MED PACK'])))))")
                   .build(),
               core::JoinType::kInner)
           .filter()
@@ -699,7 +776,7 @@ TEST_F(TpchPlanTest, DISABLED_makePlans) {
 }
 
 } // namespace
-} // namespace facebook::axiom::optimizer
+} // namespace facebook::axiom::optimizer::test
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

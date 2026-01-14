@@ -145,6 +145,8 @@ class LocalRunner : public Runner,
 
   void makeStages(const std::shared_ptr<velox::exec::Task>& lastStageTask);
 
+  void setupBuckets();
+
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan);
@@ -164,6 +166,10 @@ class LocalRunner : public Runner,
   std::vector<std::vector<std::shared_ptr<velox::exec::Task>>> stages_;
   std::exception_ptr error_;
   std::shared_ptr<SplitSourceFactory> splitSourceFactory_;
+
+  // Outer vector corresponds 1:1 to stages_. Inner vector is indexed by bucket
+  // number and contains the worker number for that bucket.
+  std::vector<std::vector<int32_t>> stageBucketMap_;
 };
 
 } // namespace facebook::axiom::runner
