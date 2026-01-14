@@ -25,6 +25,14 @@ namespace facebook::axiom::connector::tpch {
 
 static const SplitSource::SplitAndGroup kNoMoreSplits{nullptr, 0};
 
+/// Partition handle for TPCH tables (which are not partitioned).
+struct TpchPartitionHandle : public PartitionHandle {
+  const std::string& partition() const override {
+    static const std::string empty;
+    return empty;
+  }
+};
+
 class TpchConnectorMetadata;
 
 class TpchSplitSource : public SplitSource {

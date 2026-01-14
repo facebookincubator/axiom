@@ -71,7 +71,7 @@ double getScaleFactor(const std::string& schema) {
 std::vector<PartitionHandlePtr> TpchSplitManager::listPartitions(
     const connector::ConnectorSessionPtr& session,
     const velox::connector::ConnectorTableHandlePtr& /*tableHandle*/) {
-  return {std::make_shared<connector::PartitionHandle>()};
+  return {std::make_shared<TpchPartitionHandle>()};
 }
 
 std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
