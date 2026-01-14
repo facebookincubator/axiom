@@ -448,5 +448,30 @@ TEST_F(JoinTest, crossThenLeft) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_F(JoinTest, joinWithComputedAndProjectedKeys) {
+  testConnector_->addTable("t", ROW({"t0", "t1"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"u0", "u1"}, BIGINT()));
+
+  auto query =
+      "WITH v AS (SELECT coalesce(t0, 0) as v0 FROM t) "
+      "SELECT * FROM u LEFT JOIN v ON u0 = v0";
+
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("u")
+                     .hashJoin(
+                         core::PlanMatcherBuilder()
+                             .tableScan("t")
+                             // TODO Remove redundant projection of 't0'.
+                             .project({"t0", "coalesce(t0, 0)"})
+                             .build())
+                     .project()
+                     .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

@@ -1137,12 +1137,16 @@ void Optimization::joinByIndex(
   }
 }
 
+namespace {
+
 struct ProjectionBuilder {
   ColumnVector columns;
   ExprVector exprs;
 
   // Project 'expr' as 'column'.
   void add(ColumnCP column, ExprCP expr) {
+    VELOX_DCHECK(
+        expr->isColumn(), "Expr is not a column: {}", expr->toString());
     columns.emplace_back(column);
     exprs.emplace_back(expr);
   }
@@ -1156,7 +1160,8 @@ struct ProjectionBuilder {
     ColumnVector columns;
     columns.reserve(exprs.size());
     for (const auto* expr : exprs) {
-      VELOX_DCHECK(expr->isColumn());
+      VELOX_DCHECK(
+          expr->isColumn(), "Expr is not a column: {}", expr->toString());
       columns.emplace_back(expr->as<Column>());
     }
 
@@ -1184,7 +1189,21 @@ folly::F14FastMap<PlanObjectCP, ExprCP> makeJoinColumnMapping(
   return mapping;
 }
 
-namespace {
+folly::F14FastMap<PlanObjectCP, ExprCP> makeJoinColumnMapping(
+    JoinEdgeP joinEdge,
+    const ExprVector& leftColumns,
+    const ExprVector& rightColumns) {
+  folly::F14FastMap<PlanObjectCP, ExprCP> mapping;
+
+  for (auto i = 0; i < joinEdge->leftColumns().size(); ++i) {
+    mapping.emplace(joinEdge->leftColumns()[i], leftColumns[i]);
+  }
+
+  for (auto i = 0; i < joinEdge->rightColumns().size(); ++i) {
+    mapping.emplace(joinEdge->rightColumns()[i], rightColumns[i]);
+  }
+  return mapping;
+}
 
 // Translates columns from outside the join to columns below the join if there
 // is a rename, as in the case of optional sides of outer joins.
@@ -1203,9 +1222,9 @@ PlanObjectSet translateToJoinInput(
   return result;
 }
 
-// Check if 'mark' column produced by a SemiProject join is used only to filter
-// the results using 'mark' or 'not(mark)' condition. If so, replace the join
-// with a SemiFilter and remove the filter.
+// Check if 'mark' column produced by a SemiProject join is used only to
+// filter the results using 'mark' or 'not(mark)' condition. If so, replace
+// the join with a SemiFilter and remove the filter.
 void tryOptimizeSemiProject(
     velox::core::JoinType& joinType,
     ColumnCP& mark,
@@ -1325,6 +1344,25 @@ void Optimization::joinByHash(
   joinColumns.unionObjects(joinEdge->leftColumns());
   joinColumns.unionObjects(joinEdge->rightColumns());
 
+  // Non-trivial projections over input needed by the join must be computed
+  // first. These projections include expressions used in join keys and
+  // joinEdge.{right, left}Columns.
+
+  PrecomputeProjection precomputeProbe(probeInput, state.dt);
+  auto leftColumns = precomputeProbe.toColumns(
+      joinEdge->leftExprs(), &joinEdge->leftColumns());
+  auto probeKeys = precomputeProbe.toColumns(probe.keys);
+  probeInput = std::move(precomputeProbe).maybeProject();
+
+  PrecomputeProjection precomputeBuild(buildInput, state.dt);
+  auto rightColumns = precomputeBuild.toColumns(
+      joinEdge->rightExprs(), &joinEdge->rightColumns());
+  auto buildKeys = precomputeBuild.toColumns(build.keys);
+  buildInput = std::move(precomputeBuild).maybeProject();
+
+  joinColumnMapping =
+      makeJoinColumnMapping(candidate.join, leftColumns, rightColumns);
+
   ProjectionBuilder projectionBuilder;
   bool needsProjection = false;
 
@@ -1367,14 +1405,6 @@ void Optimization::joinByHash(
       candidate.fanout,
       candidate.join->rlFanout(),
       buildState.cost.cardinality / state.cost.cardinality);
-
-  PrecomputeProjection precomputeProbe(probeInput, state.dt);
-  auto probeKeys = precomputeProbe.toColumns(probe.keys);
-  probeInput = std::move(precomputeProbe).maybeProject();
-
-  PrecomputeProjection precomputeBuild(buildInput, state.dt);
-  auto buildKeys = precomputeBuild.toColumns(build.keys);
-  buildInput = std::move(precomputeBuild).maybeProject();
 
   if (!isSingleWorker_) {
     if (!partKeys.empty()) {
@@ -1463,6 +1493,8 @@ void Optimization::joinByHashRight(
   MemoKey memoKey{
       candidate.tables[0], probeColumns, probeTables, candidate.existences};
 
+  auto* joinEdge = candidate.join;
+
   bool needsShuffle = false;
   auto probePlan = makePlan(
       *state.dt,
@@ -1475,9 +1507,18 @@ void Optimization::joinByHashRight(
   PlanState probeState(state.optimization, state.dt, probePlan);
 
   RelationOpPtr probeInput = probePlan->op;
+
+  PrecomputeProjection precomputeProbe(probeInput, state.dt);
+  auto rightColumns = precomputeProbe.toColumns(
+      joinEdge->rightExprs(), &joinEdge->rightColumns());
+  auto probeKeys = precomputeProbe.toColumns(probe.keys);
+  probeInput = std::move(precomputeProbe).maybeProject();
+
   RelationOpPtr buildInput = plan;
 
   PrecomputeProjection precomputeBuild(buildInput, state.dt);
+  auto leftColumns = precomputeBuild.toColumns(
+      joinEdge->leftExprs(), &joinEdge->leftColumns());
   auto buildKeys = precomputeBuild.toColumns(build.keys);
   buildInput = std::move(precomputeBuild).maybeProject();
 
@@ -1498,14 +1539,13 @@ void Optimization::joinByHashRight(
 
   ColumnCP mark = nullptr;
 
-  auto* joinEdge = candidate.join;
-
   PlanObjectSet joinColumns;
   joinColumns.unionObjects(joinEdge->leftColumns());
   joinColumns.unionObjects(joinEdge->rightColumns());
 
   // Mapping from join output column to probe or build side input.
-  auto joinColumnMapping = makeJoinColumnMapping(joinEdge);
+  auto joinColumnMapping =
+      makeJoinColumnMapping(joinEdge, leftColumns, rightColumns);
 
   ProjectionBuilder projectionBuilder;
   bool needsProjection = false;
@@ -1553,13 +1593,9 @@ void Optimization::joinByHashRight(
   state.cost = probeState.cost;
   state.cost.cost += buildCost.cost;
 
-  PrecomputeProjection precomputeProbe(probeInput, state.dt);
-  auto probeKeys = precomputeProbe.toColumns(probe.keys);
-  probeInput = std::move(precomputeProbe).maybeProject();
-
   if (!isSingleWorker_) {
-    // The build gets shuffled to align with probe. If probe is not partitioned
-    // on its keys, shuffle the probe too.
+    // The build gets shuffled to align with probe. If probe is not
+    // partitioned on its keys, shuffle the probe too.
     alignJoinSides(
         probeInput, probeKeys, probeState, buildInput, buildKeys, state);
   }
@@ -1712,8 +1748,8 @@ void Optimization::addJoin(
   if (!options_.syntacticJoinOrder && toTry.size() > sizeAfterIndex &&
       candidate.join->isNonCommutative() &&
       candidate.join->hasRightHashVariant()) {
-    // There is a hash based candidate with a non-commutative join. Try a right
-    // join variant.
+    // There is a hash based candidate with a non-commutative join. Try a
+    // right join variant.
     joinByHashRight(plan, candidate, state, toTry);
   }
 
