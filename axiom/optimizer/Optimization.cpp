@@ -469,7 +469,6 @@ RelationOpPtr repartitionForAgg(
     AggregationPlanCP const agg,
     const RelationOpPtr& plan,
     PlanCost& cost) {
-  // No shuffle if all grouping keys are in partitioning.
   if (isSingleWorker() || plan->distribution().isGather()) {
     return plan;
   }
@@ -490,16 +489,20 @@ RelationOpPtr repartitionForAgg(
     keyValues.push_back(agg->intermediateColumns()[i]);
   }
 
-  bool shuffle = false;
-  for (auto& key : keyValues) {
-    auto nthKey = position(plan->distribution().partition, *key);
-    if (nthKey == kNotFound) {
-      shuffle = true;
-      break;
+  // No shuffle if input has at least one partition column and all partition
+  // columns of the input are same or equal to some grouping key.
+  if (!plan->distribution().partition.empty()) {
+    bool allPartitionColumnsInGroupingKeys = true;
+    for (auto& partitionExpr : plan->distribution().partition) {
+      auto nthPartition = position(keyValues, *partitionExpr);
+      if (nthPartition == kNotFound) {
+        allPartitionColumnsInGroupingKeys = false;
+        break;
+      }
     }
-  }
-  if (!shuffle) {
-    return plan;
+    if (allPartitionColumnsInGroupingKeys) {
+      return plan;
+    }
   }
 
   Distribution distribution{
@@ -531,7 +534,8 @@ bool isIndexColocated(
 
   // True if 'input' is partitioned so that each partitioning key is joined to
   // the corresponding partition key in 'info'.
-  if (input->distribution().distributionType != distribution.distributionType) {
+  if (!input->distribution().distributionType.isCopartitionCompatible(
+          distribution.distributionType)) {
     return false;
   }
 
@@ -799,6 +803,13 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
   // Copartitioning is possible if PartitionTypes are compatible and the table
   // has no fewer partitions than the plan.
   bool shuffle = !copartition || copartition != planPartitionType;
+  if (!shuffle) {
+    // If the number of partition columns in the layout and the input differ,
+    // shuffle is required.
+    if (plan->distribution().partition.size() != keyValues.size()) {
+      shuffle = true;
+    }
+  }
   if (!shuffle) {
     // Check that the partition keys of the plan are assigned pairwise to the
     // partition columns of the layout.
@@ -1259,6 +1270,26 @@ void tryOptimizeSemiProject(
     }
   }
 }
+
+ExprVector joinCopartition(
+    const std::vector<uint32_t>& indices,
+    const JoinSide& joined) {
+  ExprVector result;
+
+  for (auto index : indices) {
+    // Get the key from joined.keys at the given index
+    auto joinedKey = joined.keys[index];
+
+    // If the key is not a column, return empty
+    if (!joinedKey->isColumn()) {
+      return ExprVector();
+    }
+
+    result.push_back(joinedKey);
+  }
+
+  return result;
+}
 } // namespace
 
 void Optimization::joinByHash(
@@ -1276,6 +1307,8 @@ void Optimization::joinByHash(
     // Prefer to make a build partitioned on join keys and shuffle probe to
     // align with build.
     copartition = build.keys;
+  } else {
+    copartition = joinCopartition(partKeys, build);
   }
 
   PlanStateSaver save(state, candidate);
@@ -1466,6 +1499,16 @@ void Optimization::joinByHashRight(
 
   auto [probe, build] = candidate.joinSides();
 
+  const auto partKeys = joinKeyPartition(plan, build.keys);
+  ExprVector copartition;
+  if (partKeys.empty()) {
+    // Prefer to make a probe partitioned on join keys and shuffle build to
+    // align with probe.
+    copartition = probe.keys;
+  } else {
+    copartition = joinCopartition(partKeys, probe);
+  }
+
   PlanStateSaver save(state, candidate);
 
   PlanObjectSet probeFilterColumns;
@@ -1490,11 +1533,18 @@ void Optimization::joinByHashRight(
   MemoKey memoKey{
       candidate.tables[0], probeColumns, probeTables, candidate.existences};
 
+  Distribution forProbe;
+  if (plan->distribution().isGather()) {
+    forProbe = Distribution::gather();
+  } else {
+    forProbe = {plan->distribution().distributionType, copartition};
+  }
+
   bool needsShuffle = false;
   auto probePlan = makePlan(
       *state.dt,
       memoKey,
-      Distribution{plan->distribution().distributionType, {}},
+      forProbe,
       PlanObjectSet{},
       candidate.existsFanout,
       needsShuffle);
@@ -1504,9 +1554,37 @@ void Optimization::joinByHashRight(
   RelationOpPtr probeInput = probePlan->op;
   RelationOpPtr buildInput = plan;
 
+  // Precompute keys before shuffling so computed keys are projected.
+  PrecomputeProjection precomputeProbe(probeInput, state.dt);
+  auto probeKeys = precomputeProbe.toColumns(probe.keys);
+  probeInput = std::move(precomputeProbe).maybeProject(probeState);
+
   PrecomputeProjection precomputeBuild(buildInput, state.dt);
   auto buildKeys = precomputeBuild.toColumns(build.keys);
   buildInput = std::move(precomputeBuild).maybeProject(state);
+
+  if (!isSingleWorker_) {
+    if (!partKeys.empty()) {
+      if (needsShuffle) {
+        if (copartition.empty()) {
+          for (auto i : partKeys) {
+            copartition.push_back(probeKeys[i]);
+          }
+        }
+        Distribution distribution{
+            plan->distribution().distributionType, copartition};
+        auto* repartition = make<Repartition>(
+            probeInput, std::move(distribution), probeInput->columns());
+        probeState.addCost(*repartition);
+        probeInput = repartition;
+      }
+    } else {
+      // The build gets shuffled to align with probe. If probe is not
+      // partitioned on its keys, shuffle the probe too.
+      alignJoinSides(
+          probeInput, probeKeys, probeState, buildInput, buildKeys, state);
+    }
+  }
 
   PlanObjectSet buildColumns;
   buildColumns.unionObjects(buildInput->columns());
@@ -1580,21 +1658,10 @@ void Optimization::joinByHashRight(
   state.cost = probeState.cost;
   state.cost.cost += buildCost.cost;
 
-  PrecomputeProjection precomputeProbe(probeInput, state.dt);
-  auto probeKeys = precomputeProbe.toColumns(probe.keys);
-  probeInput = std::move(precomputeProbe).maybeProject(state);
-
   // innerFanout is the fanout if this were an inner join
   // For right join, we use rlFanout as the inner fanout since probe is on the
   // right
   const auto innerFanout = candidate.join->rlFanout();
-
-  if (!isSingleWorker_) {
-    // The build gets shuffled to align with probe. If probe is not partitioned
-    // on its keys, shuffle the probe too.
-    alignJoinSides(
-        probeInput, probeKeys, probeState, buildInput, buildKeys, state);
-  }
 
   auto* buildOp = make<HashBuild>(buildInput, buildKeys, nullptr);
   state.addCost(*buildOp);
