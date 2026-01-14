@@ -101,6 +101,23 @@ HiveTable::HiveTable(
           hive::makeColumns(type, bucketed),
           std::move(options)) {}
 
+// static
+velox::RowTypePtr HiveTable::dropHiddenColumns(const velox::RowType& type) {
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> types;
+
+  for (auto i = 0; i < type.size(); ++i) {
+    const auto& name = type.nameOf(i);
+    if (name != HiveTable::kPath && name != HiveTable::kFileSize &&
+        name != HiveTable::kBucket) {
+      names.emplace_back(name);
+      types.emplace_back(type.childAt(i));
+    }
+  }
+
+  return velox::ROW(std::move(names), std::move(types));
+}
+
 namespace {
 std::vector<velox::TypePtr> extractPartitionKeyTypes(
     const std::vector<const Column*>& partitionedByColumns) {
