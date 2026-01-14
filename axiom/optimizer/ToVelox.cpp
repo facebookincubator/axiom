@@ -154,11 +154,8 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
   std::vector<velox::core::TypedExprPtr> filterConjuncts;
   velox::ScopedVarSetter noAlias(&makeVeloxExprWithNoAlias_, true);
   velox::ScopedVarSetter getters(&getterForPushdownSubfield_, true);
-  for (auto filter : table->columnFilters) {
+  for (auto filter : table->allFilters()) {
     filterConjuncts.push_back(toTypedExpr(filter));
-  }
-  for (auto expr : table->filter) {
-    filterConjuncts.push_back(toTypedExpr(expr));
   }
 
   columnAlteredTypes_.clear();
