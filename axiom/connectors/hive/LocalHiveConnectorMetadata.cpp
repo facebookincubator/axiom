@@ -29,6 +29,7 @@
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/Expr.h"
+#include "velox/functions/prestosql/types/parser/TypeParser.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/type/fbhive/HiveTypeSerializer.h"
 
@@ -39,8 +40,11 @@ LocalTable::LocalTable(
     velox::RowTypePtr type,
     bool bucketed,
     folly::F14FastMap<std::string, velox::Variant> options)
-    : HiveTable(std::move(name), std::move(type), bucketed, std::move(options)) {
-}
+    : HiveTable(
+          std::move(name),
+          std::move(type),
+          bucketed,
+          std::move(options)) {}
 
 namespace {
 
@@ -1242,18 +1246,39 @@ CreateTableOptions parseCreateTableOptions(
 }
 
 velox::RowTypePtr parseSchema(const folly::dynamic& obj) {
-  velox::type::fbhive::HiveTypeParser parser;
-
   std::vector<std::string> names;
   std::vector<velox::TypePtr> types;
+
+  auto parseColumnType = [](const std::string& typeStr) -> velox::TypePtr {
+    // Try Presto parser first (uses Type::toString() format)
+    try {
+      return velox::functions::prestosql::parseType(typeStr);
+    } catch (const std::exception& prestoEx) {
+      // Fallback to Hive parser for backward compatibility
+      try {
+        velox::type::fbhive::HiveTypeParser hiveParser;
+        return hiveParser.parse(typeStr);
+      } catch (const std::exception& hiveEx) {
+        // Both parsers failed, throw detailed error
+        VELOX_USER_FAIL(
+            "Failed to parse type '{}'. "
+            "Presto parser error: {}. "
+            "Hive parser error: {}",
+            typeStr,
+            prestoEx.what(),
+            hiveEx.what());
+      }
+    }
+  };
+
   for (const auto& column : obj["dataColumns"]) {
     names.push_back(column["name"].asString());
-    types.push_back(parser.parse(column["type"].asString()));
+    types.push_back(parseColumnType(column["type"].asString()));
   }
 
   for (const auto& column : obj["partitionColumns"]) {
     names.push_back(column["name"].asString());
-    types.push_back(parser.parse(column["type"].asString()));
+    types.push_back(parseColumnType(column["type"].asString()));
   }
 
   return velox::ROW(std::move(names), std::move(types));
@@ -1365,8 +1390,8 @@ folly::dynamic toSchemaJson(
 
     folly::dynamic column = folly::dynamic::object();
     column["name"] = name;
-    column["type"] =
-        velox::type::fbhive::HiveTypeSerializer::serialize(rowType->childAt(i));
+    // Use Type::toString() for Presto-style serialization
+    column["type"] = rowType->childAt(i)->toString();
 
     if (partitionedByColumns.contains(name)) {
       partitionColumns.push_back(column);
@@ -1969,7 +1994,12 @@ void LocalTable::sampleNumDistincts(
   if (!localLayout->hivePartitionColumns().empty()) {
     std::vector<std::unique_ptr<StatisticsBuilder>> statsBuilders;
     localLayout->samplePartitions(
-        tableHandle, samplePct, type(), fields, allocator.get(), &statsBuilders);
+        tableHandle,
+        samplePct,
+        type(),
+        fields,
+        allocator.get(),
+        &statsBuilders);
 
     // Update numDistincts for all columns from the builders
     numSampledRows_ = numRows_ * (samplePct / 100); // Approximate
