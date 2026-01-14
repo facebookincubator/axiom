@@ -142,7 +142,8 @@ void reducingJoinsRecursive(
         resultFunc = {}) {
   bool isLeaf = true;
   for (auto join : joinedBy(candidate)) {
-    if (join->isLeftOuter() && candidate == join->rightTable() &&
+    if (join->isLeftOuter() && join->leftTable() != nullptr &&
+        candidate == join->rightTable() &&
         candidate->is(PlanType::kDerivedTableNode)) {
       // One can restrict the build of the optional side by a restriction on the
       // probe. This happens specially when value subqueries are represented as
@@ -152,7 +153,9 @@ void reducingJoinsRecursive(
     } else if (join->leftOptional() || join->rightOptional()) {
       continue;
     }
+
     JoinSide other = join->sideOf(candidate, true);
+    VELOX_DCHECK_NOT_NULL(other.table);
     if (!state.dt->hasTable(other.table) || !state.dt->hasJoin(join)) {
       continue;
     }
