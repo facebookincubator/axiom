@@ -30,6 +30,8 @@ DECLARE_string(history_save_path);
 
 namespace facebook::axiom::optimizer {
 class QueryGraphContext;
+class RelationOp;
+enum class RelType;
 } // namespace facebook::axiom::optimizer
 
 namespace facebook::axiom {
@@ -196,6 +198,10 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   void optimize(
       std::string_view sql,
       const std::string& defaultConnectorId = "");
+
+  /// Finds the first node with the specified relType in the plan tree.
+  /// Returns nullptr if not found. Searches depth-first, left to right.
+  static RelationOp* findInPlan(const RelationOp* tree, RelType type);
 
   OptimizerOptions optimizerOptions_;
 
