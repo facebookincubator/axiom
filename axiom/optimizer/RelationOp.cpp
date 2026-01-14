@@ -413,7 +413,7 @@ Join::Join(
       (Costs::kKeyCompareCost * numKeys * std::min<float>(1, fanout)) +
       numKeys * Costs::kHashColumnCost;
 
-  const auto rowBytes = byteSize(right->input()->columns());
+  const auto rowBytes = byteSize(right->columns());
   const auto rowCost = Costs::hashRowCost(buildSize, rowBytes);
 
   cost_.unitCost = probeCost + cost_.fanout * rowCost;

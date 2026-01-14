@@ -19,6 +19,7 @@
 
 DECLARE_string(data_path);
 DECLARE_string(data_format);
+DECLARE_bool(debug);
 
 namespace axiom::sql {
 

@@ -52,8 +52,8 @@ void Console::initialize() {
       "Axiom local SQL command line. "
       "Run 'axiom_sql --help' for available options.\n");
 
-  // Disable logging to stderr.
-  FLAGS_logtostderr = false;
+  // Disable logging to stderr if not in debug mode.
+  FLAGS_logtostderr = FLAGS_debug;
 }
 
 void Console::run() {
