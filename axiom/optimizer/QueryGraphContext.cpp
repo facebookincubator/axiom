@@ -18,12 +18,19 @@
 
 #include <algorithm>
 #include "axiom/optimizer/BitSet.h"
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/QueryGraph.h"
 
 namespace facebook::axiom::optimizer {
 
 QueryGraphContext::QueryGraphContext(velox::HashStringAllocator& allocator)
-    : allocator_(allocator), cache_(allocator_) {
+    : allocator_(allocator),
+      cache_(allocator_)
+#ifndef NDEBUG
+      ,
+      creationThreadId_(std::this_thread::get_id())
+#endif
+{
   auto addName = [&](const char* name) {
     names_.emplace(std::string_view(name, strlen(name)));
   };
@@ -39,12 +46,91 @@ QueryGraphContext::QueryGraphContext(velox::HashStringAllocator& allocator)
   addName(SpecialFormCallNames::kIn);
 }
 
+int32_t QueryGraphContext::newId(PlanObject* object) {
+  if (threadSafe_) {
+    std::lock_guard<std::recursive_mutex> lock(allocateMutex_);
+    return newIdLocked(object);
+  }
+  return newIdLocked(object);
+}
+
+int32_t QueryGraphContext::newIdLocked(PlanObject* object) {
+  objects_.push_back(object);
+  return static_cast<int32_t>(objects_.size() - 1);
+}
+
+void* QueryGraphContext::allocate(int32_t size) {
+  if (threadSafe_) {
+    std::lock_guard<std::recursive_mutex> lock(allocateMutex_);
+    return allocateLocked(size);
+  }
+  return allocateLocked(size);
+}
+
+void* QueryGraphContext::allocateLocked(int32_t size) {
+#ifndef NDEBUG
+  if (!threadSafe_) {
+    VELOX_CHECK_EQ(
+        std::this_thread::get_id(),
+        creationThreadId_,
+        "allocate() called on different thread than QueryGraphContext was created on");
+  }
+#endif
+#ifdef QG_TEST_USE_MALLOC
+  // Benchmark-only. Dropping the arena will not free un-free'd allocs.
+  return ::malloc(size);
+#elif defined(QG_CACHE_ARENA)
+  return cache_.allocate(size);
+#else
+  return allocator_.allocate(size)->begin();
+#endif
+}
+
+void QueryGraphContext::free(void* ptr) {
+  if (threadSafe_) {
+    std::lock_guard<std::recursive_mutex> lock(allocateMutex_);
+    freeLocked(ptr);
+    return;
+  }
+  freeLocked(ptr);
+}
+
+void QueryGraphContext::freeLocked(void* ptr) {
+#ifndef NDEBUG
+  if (!threadSafe_) {
+    VELOX_CHECK_EQ(
+        std::this_thread::get_id(),
+        creationThreadId_,
+        "free() called on different thread than QueryGraphContext was created on");
+  }
+#endif
+#ifdef QG_TEST_USE_MALLOC
+  ::free(ptr);
+#elif defined(QG_CACHE_ARENA)
+  cache_.free(ptr);
+#else
+  allocator_.free(velox::HashStringAllocator::headerOf(ptr));
+#endif
+}
+
 QueryGraphContext*& queryCtx() {
   static thread_local QueryGraphContext* context;
   return context;
 }
 
+bool statsFetched() {
+  return queryCtx()->optimization()->statsFetched();
+}
+
 const char* QueryGraphContext::toName(std::string_view str) {
+  if (threadSafe_) {
+    std::lock_guard<std::recursive_mutex> lock(allocateMutex_);
+    return toNameLocked(str);
+  }
+  return toNameLocked(str);
+}
+
+const char* QueryGraphContext::toNameLocked(std::string_view str) {
   auto it = names_.find(str);
   if (it != names_.end()) {
     return it->data();
@@ -62,6 +148,14 @@ Name toName(std::string_view string) {
 }
 
 const velox::Type* QueryGraphContext::toType(const velox::TypePtr& type) {
+  if (threadSafe_) {
+    std::lock_guard<std::recursive_mutex> lock(allocateMutex_);
+    return toTypeLocked(type);
+  }
+  return toTypeLocked(type);
+}
+
+const velox::Type* QueryGraphContext::toTypeLocked(const velox::TypePtr& type) {
   return dedupType(type).get();
 }
 
@@ -218,6 +312,14 @@ std::string Path::toString() const {
 }
 
 PathCP QueryGraphContext::toPath(PathCP path) {
+  if (threadSafe_) {
+    std::lock_guard<std::recursive_mutex> lock(allocateMutex_);
+    return toPathLocked(path);
+  }
+  return toPathLocked(path);
+}
+
+PathCP QueryGraphContext::toPathLocked(PathCP path) {
   path->setId(static_cast<int32_t>(pathById_.size()));
   path->makeImmutable();
   auto pair = deduppedPaths_.insert(path);
@@ -294,6 +396,14 @@ PathCP toPath(std::span<const Step> steps, bool reverse) {
   PathCP path = reverse ? make<Path>(steps, std::true_type{})
                         : make<Path>(steps, std::false_type{});
   return queryCtx()->toPath(path);
+}
+
+const velox::Variant* QueryGraphContext::registerVariant(
+    std::shared_ptr<const velox::Variant> value) {
+  auto pair = variants_.insert(value);
+  auto* rawPtr = pair.first->get();
+  reverseConstantDedup_[rawPtr] = value;
+  return rawPtr;
 }
 
 } // namespace facebook::axiom::optimizer

@@ -641,16 +641,6 @@ bool dtHasLimit(const DerivedTable& dt) {
   return dt.hasLimit();
 }
 
-void flattenAll(ExprCP expr, Name func, ExprVector& flat) {
-  if (expr->isNot(PlanType::kCallExpr) || expr->as<Call>()->name() != func) {
-    flat.push_back(expr);
-    return;
-  }
-  for (auto arg : expr->as<Call>()->args()) {
-    flattenAll(arg, func, flat);
-  }
-}
-
 // 'disjuncts' is an OR of ANDs. If each disjunct depends on the same tables
 // and if each conjunct inside the ANDs in the OR depends on a single table,
 // then return for each distinct table an OR of ANDs. The disjuncts are the
@@ -830,6 +820,16 @@ void expandConjuncts(ExprVector& conjuncts) {
 
 } // namespace
 
+void flattenAll(ExprCP expr, Name func, ExprVector& flat) {
+  if (expr->isNot(PlanType::kCallExpr) || expr->as<Call>()->name() != func) {
+    flat.push_back(expr);
+    return;
+  }
+  for (auto arg : expr->as<Call>()->args()) {
+    flattenAll(arg, func, flat);
+  }
+}
+
 void DerivedTable::distributeConjuncts() {
   std::vector<DerivedTableP> changedDts;
   if (!having.empty()) {
@@ -991,13 +991,30 @@ void DerivedTable::makeInitialPlan() {
   setStartTables();
 
   auto optimization = queryCtx()->optimization();
+
+  // If statistics haven't been fetched yet, don't make plans or memo entries
+  if (!optimization->statsFetched()) {
+    return;
+  }
+
   PlanState state(*optimization, this);
   state.targetExprs.unionObjects(exprs);
 
   optimization->makeJoins(state);
 
-  auto plan = state.plans.best()->op;
+  auto bestPlan = state.plans.best();
+  auto plan = bestPlan->op;
   this->cardinality = plan->resultCardinality();
+
+  // Copy constraints from the Plan to the output columns of this DerivedTable
+  for (size_t i = 0; i < columns.size(); i++) {
+    auto* column = columns[i];
+    auto it = bestPlan->constraints->find(column->id());
+    if (it != bestPlan->constraints->end()) {
+      // Cast away const to update the value using setValue
+      const_cast<Column*>(column)->setValue(it->second);
+    }
+  }
 
   optimization->memo()[key] = std::move(state.plans);
 }

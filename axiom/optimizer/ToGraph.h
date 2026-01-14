@@ -147,6 +147,12 @@ class ToGraph {
     }
   }
 
+  /// Updates the cardinality in the Value of all expressions in
+  /// SubfieldProjections to reflect the updated stats after table stats are
+  /// fetched. Uses firstLayoutScanCardinality * filterSelectivity of the
+  /// BaseTable.
+  void refreshAfterStats();
+
  private:
   static bool isSpecialForm(
       const logical_plan::ExprPtr& expr,
@@ -158,7 +164,12 @@ class ToGraph {
   // For comparisons, swaps the args to have a canonical form for
   // deduplication. E.g column op constant, and smaller plan object id
   // to the left.
-  void canonicalizeCall(Name& name, ExprVector& args);
+  /// Canonicalizes function call by potentially reordering arguments.
+  /// For 'between' calls, rewrites to and(gte, lte) and returns the result.
+  /// For other reversible functions, modifies name and args in place.
+  /// @return Expression to use instead of creating a Call, or std::nullopt to
+  /// proceed with normal Call creation.
+  std::optional<ExprCP> canonicalizeCall(Name& name, ExprVector& args);
 
   // Converts 'plan' to PlanObjects and records join edges into
   // 'currentDt_'. Wraps 'node' in a new Derived table f 'node' does not match
@@ -408,6 +419,9 @@ class ToGraph {
   // Column and subfield info for items that only affect column values.
   PlanSubfields payloadSubfields_;
 
+  // Cache for expandFunction results, populated during SubfieldTracker::markAll
+  ExpandFunctionCache expandFunctionCache_;
+
   /// Expressions corresponding to skyline paths over a subfield decomposable
   /// function.
   folly::F14FastMap<const logical_plan::CallExpr*, SubfieldProjections>
@@ -438,8 +452,15 @@ class ToGraph {
   Name elementAt_{nullptr};
   Name subscript_{nullptr};
   Name cardinality_{nullptr};
+  Name between_{nullptr};
+  Name gte_{nullptr};
+  Name lte_{nullptr};
 
   folly::F14FastMap<Name, Name> reversibleFunctions_;
 };
+
+/// Returns the interned name for the subscript function from the function
+/// registry.
+Name subscriptName();
 
 } // namespace facebook::axiom::optimizer

@@ -25,6 +25,8 @@ namespace facebook::axiom::optimizer {
 struct Plan;
 struct PlanState;
 
+using ConstraintMap = folly::F14FastMap<int32_t, Value>;
+
 using PlanP = Plan*;
 
 /// A set of build sides. A candidate plan tracks all builds so that they can be
@@ -60,6 +62,9 @@ struct Plan {
   /// table, e.g. a left (t1 left t2) dt on dt.t1pk = a.fk. In a memo of dt
   /// inputs is dt.pkt1.
   PlanObjectSet input;
+
+  /// Derived constraints on output columns. Lifetime managed by queryCtx().
+  ConstraintMap* constraints;
 
   /// Hash join builds placed in the plan. Allows reusing a build.
   HashBuildVector builds;
@@ -168,6 +173,7 @@ struct NextJoin {
   PlanCost cost;
   PlanObjectSet placed;
   PlanObjectSet columns;
+  ConstraintMap constraints;
 
   /// If true, only 'other' should be tried. Use to compare equivalent joins
   /// with different join method or partitioning.
@@ -202,6 +208,9 @@ struct PlanState {
   /// A mapping of expressions to pre-computed columns. See
   /// PrecomputeProjection.
   folly::F14FastMap<ExprCP, ExprCP> exprToColumn;
+
+  /// Constraints on column values derived from filters and joins.
+  ConstraintMap constraints;
 
   /// The total cost for the PlanObjects placed thus far.
   PlanCost cost;
@@ -284,6 +293,8 @@ struct PlanStateSaver {
       : state_(state),
         placed_(state.placed),
         columns_(state.columns),
+        exprToColumn_(state.exprToColumn),
+        constraints_(state.constraints),
         cost_(state.cost),
         numPlaced_(state.debugPlacedTables.size()) {}
 
@@ -292,6 +303,8 @@ struct PlanStateSaver {
   ~PlanStateSaver() {
     state_.placed = std::move(placed_);
     state_.columns = std::move(columns_);
+    state_.exprToColumn = std::move(exprToColumn_);
+    state_.constraints = std::move(constraints_);
     state_.cost = cost_;
     state_.debugPlacedTables.resize(numPlaced_);
   }
@@ -300,6 +313,8 @@ struct PlanStateSaver {
   PlanState& state_;
   PlanObjectSet placed_;
   PlanObjectSet columns_;
+  folly::F14FastMap<ExprCP, ExprCP> exprToColumn_;
+  ConstraintMap constraints_;
   const PlanCost cost_;
   const uint32_t numPlaced_;
 };
@@ -347,5 +362,11 @@ const JoinEdgeVector& joinedBy(PlanObjectCP table);
 /// Returns  the inverse join type, e.g. right outer from left outer.
 /// TODO Move this function to Velox.
 velox::core::JoinType reverseJoinType(velox::core::JoinType joinType);
+
+/// Derives constraints for an expression based on its type and arguments.
+/// Records the result in state.constraints keyed on expr->id().
+/// If update is true, recomputes constraints for non-leaf expressions even if
+/// already cached, and stores the updated constraint in state.
+Value exprConstraint(ExprCP expr, PlanState& state, bool update = false);
 
 } // namespace facebook::axiom::optimizer

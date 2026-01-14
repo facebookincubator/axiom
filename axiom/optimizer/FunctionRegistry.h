@@ -20,6 +20,9 @@
 
 namespace facebook::axiom::optimizer {
 
+struct PlanState;
+struct Value;
+
 /// A bit set that qualifies an Expr. Represents which functions/kinds
 /// of functions are found inside the children of an Expr.
 class FunctionSet {
@@ -118,7 +121,8 @@ class Call;
 struct FunctionMetadata {
   bool processSubfields() const {
     return subfieldArg.has_value() || !fieldIndexForArg.empty() ||
-        isArrayConstructor || isMapConstructor || valuePathToArgPath;
+        isArrayConstructor || isMapConstructor || valuePathToArgPath ||
+        explode || expandFunction || !lambdas.empty();
   }
 
   const LambdaInfo* lambdaInfo(int32_t index) const {
@@ -182,6 +186,20 @@ struct FunctionMetadata {
       const logical_plan::CallExpr* call,
       std::vector<PathCP>& paths)>
       explode;
+
+  /// Hook for rewriting a call to a function. In the case of a
+  /// complex type function with subfield related metadata,
+  /// 'logicalExplode' is used if there are only getters over the
+  /// function. For functions with subfield related metadata options,
+  /// 'expandFunction is used only if the function is accessed as a
+  /// whole. If returns non-nullptr, the returned expression is used
+  /// in the place of the function.
+  std::function<logical_plan::ExprPtr(const logical_plan::CallExpr*)>
+      expandFunction;
+
+  /// Function to compute derived constraints for function calls.
+  std::function<std::optional<Value>(ExprCP, PlanState& state)>
+      functionConstraint;
 };
 
 using FunctionMetadataCP = const FunctionMetadata*;
