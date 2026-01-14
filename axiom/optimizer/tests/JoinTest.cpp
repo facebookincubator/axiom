@@ -418,5 +418,35 @@ TEST_F(JoinTest, crossJoin) {
   }
 }
 
+TEST_F(JoinTest, crossThenLeft) {
+  testConnector_->addTable("t", ROW({"t0", "t1"}, INTEGER()));
+  testConnector_->addTable("u", ROW({"u0", "u1"}, BIGINT()));
+
+  // Cross join t with u, then left join with an aggregation over values.
+  auto query =
+      "WITH v AS (SELECT v0, count(1) as v1 FROM (VALUES 1, 2, 3) as v(v0) GROUP BY 1) "
+      "SELECT count(1) FROM (SELECT * FROM t, u) LEFT JOIN v ON t0 = v0 AND u0 = v1";
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .values()
+          .aggregation()
+          // TODO Remove redundant projection.
+          .project()
+          .hashJoin(
+              core::PlanMatcherBuilder()
+                  .tableScan("t")
+                  .nestedLoopJoin(
+                      core::PlanMatcherBuilder().tableScan("u").build())
+                  .build(),
+              velox::core::JoinType::kRight)
+          .aggregation()
+          .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
