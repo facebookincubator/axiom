@@ -24,6 +24,25 @@ namespace lp = facebook::axiom::logical_plan;
 
 namespace facebook::axiom::optimizer {
 
+lp::ExprPtr ExpandFunctionCache::getOrExpand(
+    const lp::Expr* expr,
+    const std::function<lp::ExprPtr(const lp::CallExpr*)>& expandFunction) {
+  auto it = cache_.find(expr);
+  if (it != cache_.end()) {
+    return it->second;
+  }
+
+  auto* call = dynamic_cast<const lp::CallExpr*>(expr);
+  VELOX_CHECK_NOT_NULL(call, "Expression must be a CallExpr");
+
+  auto result = expandFunction(call);
+  // Only cache non-null results to avoid caching failures
+  if (result) {
+    cache_[expr] = result;
+  }
+  return result;
+}
+
 SubfieldTracker::SubfieldTracker(
     std::function<logical_plan::ConstantExprPtr(const logical_plan::ExprPtr&)>
         tryFoldConstant)
@@ -428,7 +447,17 @@ void SubfieldTracker::markSubfields(
     // If the function is some kind of constructor, like
     // make_row_from_map or make_named_row, then a path over it
     // selects one argument. If there is no path, all arguments are
-    // implicitly accessed.
+    // implicitly accessed. If the whole value of make_row_from_map is accessed,
+    // this does not yet access the whole map but just the keys listed in
+    // make_row_from_map.
+    if (metadata->expandFunction && steps.empty()) {
+      auto newExpr =
+          expandFunctionCache_.getOrExpand(call, metadata->expandFunction);
+      if (newExpr) {
+        markSubfields(newExpr, steps, isControl, context);
+        return;
+      }
+    }
     if (metadata->valuePathToArgPath && !steps.empty()) {
       auto pair = metadata->valuePathToArgPath(steps, *call);
       markSubfields(expr->inputAt(pair.second), pair.first, isControl, context);
