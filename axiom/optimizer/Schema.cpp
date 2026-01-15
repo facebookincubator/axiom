@@ -37,6 +37,32 @@ const auto& orderTypeNames() {
 
 AXIOM_DEFINE_ENUM_NAME(OrderType, orderTypeNames);
 
+/// Helper to register an optional Variant with the QueryGraphContext.
+/// Returns nullptr if the optional has no value, otherwise returns a pointer
+/// to a registered copy that lives for the duration of QueryGraphContext.
+const velox::Variant* registerOptionalVariant(
+    const std::optional<velox::Variant>& opt) {
+  if (!opt.has_value()) {
+    return nullptr;
+  }
+  return registerVariant(opt.value());
+}
+
+Value& Value::operator=(const Value& other) {
+  VELOX_CHECK(
+      type == other.type,
+      "Cannot assign Value with different type: {} vs {}",
+      (type ? type->toString() : "null"),
+      (other.type ? other.type->toString() : "null"));
+  min = other.min;
+  max = other.max;
+  const_cast<float&>(cardinality) = other.cardinality;
+  trueFraction = other.trueFraction;
+  nullFraction = other.nullFraction;
+  nullable = other.nullable;
+  return *this;
+}
+
 float Value::byteSize() const {
   if (type->isFixedWidth()) {
     return static_cast<float>(type->cppSizeInBytes());
@@ -48,13 +74,42 @@ float Value::byteSize() const {
   }
 }
 
+std::string Value::toString() const {
+  std::stringstream out;
+  out << "<Value type=" << type->toString() << ", cardinality=" << cardinality;
+
+  if (min != nullptr) {
+    out << " min=" << *min;
+  }
+
+  if (max != nullptr) {
+    out << " max=" << *max;
+  }
+
+  if (trueFraction != kUnknown) {
+    out << " trueFraction=" << trueFraction;
+  }
+
+  if (nullFraction != 0) {
+    out << " nullFraction=" << nullFraction;
+  }
+
+  out << ">";
+  return out.str();
+}
+
 ColumnGroupCP SchemaTable::addIndex(
     const connector::TableLayout& layout,
     Distribution distribution,
-    ColumnVector columns) {
+    ColumnVector columns,
+    ColumnVector lookupColumns) {
   return columnGroups.emplace_back(
       make<ColumnGroup>(
-          *this, layout, std::move(distribution), std::move(columns)));
+          *this,
+          layout,
+          std::move(distribution),
+          std::move(columns),
+          std::move(lookupColumns)));
 }
 
 ColumnCP SchemaTable::findColumn(Name name) const {
@@ -88,7 +143,18 @@ SchemaTableCP Schema::findTable(
         1,
         tableColumn->approxNumDistinct(
             static_cast<int64_t>(connectorTable->numRows())));
+
+    // Get min/max from column statistics if available
+    const velox::Variant* minPtr = nullptr;
+    const velox::Variant* maxPtr = nullptr;
+    if (auto* stats = tableColumn->stats()) {
+      minPtr = registerOptionalVariant(stats->min);
+      maxPtr = registerOptionalVariant(stats->max);
+    }
+
     Value value(toType(tableColumn->type()), cardinality);
+    value.min = minPtr;
+    value.max = maxPtr;
     auto* column = make<Column>(toName(columnName), nullptr, value);
     schemaColumns[column->name()] = column;
   }
@@ -126,7 +192,15 @@ SchemaTableCP Schema::findTable(
 
     ColumnVector columns;
     appendColumns(layout->columns(), columns);
-    schemaTable->addIndex(*layout, std::move(distribution), std::move(columns));
+
+    ColumnVector lookupColumns;
+    appendColumns(layout->lookupKeys(), lookupColumns);
+
+    schemaTable->addIndex(
+        *layout,
+        std::move(distribution),
+        std::move(columns),
+        std::move(lookupColumns));
   }
   table = {std::move(connectorTable), schemaTable};
   return schemaTable;
@@ -134,7 +208,8 @@ SchemaTableCP Schema::findTable(
 
 float tableCardinality(PlanObjectCP table) {
   if (table->is(PlanType::kTableNode)) {
-    return table->as<BaseTable>()->schemaTable->cardinality;
+    return std::max<float>(
+        1.0f, table->as<BaseTable>()->firstLayoutScanCardinality);
   }
   if (table->is(PlanType::kValuesTableNode)) {
     return table->as<ValuesTable>()->cardinality();
@@ -219,26 +294,27 @@ IndexInfo SchemaTable::indexInfo(
 
   const auto& distribution = index->distribution;
 
-  const auto numSorting = distribution.orderTypes.size();
+  const auto numLookupKeys = index->lookupColumns.size();
   const auto numUnique = distribution.numKeysUnique;
 
   PlanObjectSet covered;
-  for (auto i = 0; i < numSorting || i < numUnique; ++i) {
-    auto orderKey = distribution.orderKeys[i];
-    auto part = findColumnByName(columnsSpan, orderKey->as<Column>()->name());
+  for (auto i = 0; i < numLookupKeys || i < numUnique; ++i) {
+    ExprCP lookupKey =
+        i < numLookupKeys ? index->lookupColumns[i] : distribution.orderKeys[i];
+    auto part = findColumnByName(columnsSpan, lookupKey->as<Column>()->name());
     if (!part) {
       break;
     }
 
     covered.add(part);
-    if (i < numSorting) {
+    if (i < numLookupKeys) {
       info.scanCardinality =
-          combine(info.scanCardinality, i, orderKey->value().cardinality);
+          combine(info.scanCardinality, i, lookupKey->value().cardinality);
       info.lookupKeys.push_back(part);
       info.joinCardinality = info.scanCardinality;
     } else {
       info.joinCardinality =
-          combine(info.joinCardinality, i, orderKey->value().cardinality);
+          combine(info.joinCardinality, i, lookupKey->value().cardinality);
     }
     if (i == numUnique - 1) {
       info.unique = true;
@@ -346,12 +422,26 @@ ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {
   return nullptr;
 }
 
+bool DistributionType::isCopartitionCompatible(
+    const DistributionType& other) const {
+  if (partitionType_ == nullptr && other.partitionType_ == nullptr) {
+    return true;
+  }
+  return partitionType_ != nullptr && other.partitionType_ != nullptr &&
+      partitionType_->copartition(*other.partitionType_);
+}
+
 bool Distribution::isSamePartition(const Distribution& other) const {
-  if (distributionType != other.distributionType) {
+  if (!distributionType.isCopartitionCompatible(other.distributionType)) {
     return false;
   }
-  if (isBroadcast || other.isBroadcast) {
+  if (isBroadcast && other.isBroadcast) {
+    // Both sides broadcasted is colocated.
     return true;
+  }
+  if (isBroadcast || other.isBroadcast) {
+    // One is broadcast and the other not cannot be colocated.
+    return false;
   }
   if (partition.size() != other.partition.size()) {
     return false;

@@ -42,9 +42,18 @@ struct Value {
   Value(const velox::Type* type, float cardinality)
       : type{type}, cardinality{cardinality} {}
 
+  // Default copy constructor
+  Value(const Value&) = default;
+
+  /// Assignment operator that checks type equality and assigns other members.
+  Value& operator=(const Value& other);
+
   /// Returns the average byte size of a value when it occurs as an intermediate
   /// result without dictionary or other encoding.
   float byteSize() const;
+
+  /// Returns a string representation of this Value.
+  std::string toString() const;
 
   const velox::Type* type;
   const velox::Variant* min{nullptr};
@@ -52,12 +61,15 @@ struct Value {
 
   // Count of distinct values. Is not exact and is used for estimating
   // cardinalities of group bys or joins.
-  const float cardinality{1};
+  float cardinality{1};
+
+  // Sentinel value for unknown trueFraction.
+  static constexpr float kUnknown = -1.0f;
 
   // Estimate of true fraction for booleans. 0 means always
   // false. This is an estimate and 1 or 0 do not allow pruning
   // dependent code paths.
-  float trueFraction{1};
+  float trueFraction{kUnknown};
 
   // 0 means no nulls, 0.5 means half are null.
   float nullFraction{0};
@@ -91,7 +103,7 @@ class DistributionType {
   DistributionType(const connector::PartitionType* partitionType)
       : isGather_{false}, partitionType_{partitionType} {}
 
-  bool operator==(const DistributionType& other) const = default;
+  bool isCopartitionCompatible(const DistributionType& other) const;
 
   static DistributionType gather() {
     static const DistributionType kGather(true);
@@ -219,16 +231,19 @@ struct ColumnGroup {
       const SchemaTable& table,
       const connector::TableLayout& layout,
       Distribution distribution,
-      ColumnVector columns)
+      ColumnVector columns,
+      ColumnVector lookupColumns)
       : table{&table},
         layout{&layout},
         distribution{std::move(distribution)},
-        columns{std::move(columns)} {}
+        columns{std::move(columns)},
+        lookupColumns{std::move(lookupColumns)} {}
 
   SchemaTableCP table;
   const connector::TableLayout* layout;
   const Distribution distribution;
   const ColumnVector columns;
+  const ColumnVector lookupColumns;
 
   /// Returns cost of next lookup when the hit is within 'range' rows
   /// of the previous hit. If lookups are not batched or not ordered,
@@ -290,7 +305,8 @@ struct SchemaTable {
   ColumnGroupCP addIndex(
       const connector::TableLayout& layout,
       Distribution distribution,
-      ColumnVector columns);
+      ColumnVector columns,
+      ColumnVector lookupColumns);
 
   ColumnCP findColumn(Name name) const;
 
@@ -356,5 +372,11 @@ class Schema {
   const connector::SchemaResolver* source_;
   mutable Map<Map<Table>> connectorTables_;
 };
+
+/// Helper to register an optional Variant with the QueryGraphContext.
+/// Returns nullptr if the optional has no value, otherwise returns a pointer
+/// to a registered copy that lives for the duration of QueryGraphContext.
+const velox::Variant* registerOptionalVariant(
+    const std::optional<velox::Variant>& opt);
 
 } // namespace facebook::axiom::optimizer

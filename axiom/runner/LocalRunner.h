@@ -72,6 +72,18 @@ class ConnectorSplitSourceFactory : public SplitSourceFactory {
   const connector::SplitOptions options_;
 };
 
+/// Describes how to make split groups for a TableScanNode for merge join. If
+/// there is a single hive partition and no join on hive partition columns the
+/// there is one group per bucket. If we cover many hive partitions there will
+/// be a group per hive partition and bucket.
+struct MergeSplitSpec {
+  velox::core::PlanNodeId scanId;
+};
+
+struct MergeJoinGroup {
+  std::vector<MergeSplitSpec> scans;
+};
+
 /// Runner for in-process execution of a distributed plan.
 class LocalRunner : public Runner,
                     public std::enable_shared_from_this<LocalRunner> {
@@ -145,6 +157,17 @@ class LocalRunner : public Runner,
 
   void makeStages(const std::shared_ptr<velox::exec::Task>& lastStageTask);
 
+  void setupBuckets();
+
+  void detectMergeJoinGroups();
+
+  /// Distributes splits for merge join scans. Each distinct bucket becomes
+  /// a split group where all scans have splits with that bucket added together.
+  void distributeMergeJoinSplits(
+      size_t fragmentIndex,
+      const MergeJoinGroup& group,
+      const std::vector<std::shared_ptr<velox::exec::Task>>& tasks);
+
   std::shared_ptr<connector::SplitSource> splitSourceForScan(
       const connector::ConnectorSessionPtr& session,
       const velox::core::TableScanNode& scan);
@@ -164,6 +187,14 @@ class LocalRunner : public Runner,
   std::vector<std::vector<std::shared_ptr<velox::exec::Task>>> stages_;
   std::exception_ptr error_;
   std::shared_ptr<SplitSourceFactory> splitSourceFactory_;
+
+  // Outer vector corresponds 1:1 to stages_. Inner vector is indexed by bucket
+  // number and contains the worker number for that bucket.
+  std::vector<std::vector<int32_t>> stageBucketMap_;
+
+  // If merge joins are present, specifies split generation for the
+  // pair-wise corresponding stage.
+  std::vector<MergeJoinGroup> mergeJoinGroups_;
 };
 
 } // namespace facebook::axiom::runner

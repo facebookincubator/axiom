@@ -55,6 +55,11 @@ struct OptimizerOptions {
   /// disabled, a default selectivity will be used.
   bool sampleFilters{true};
 
+  /// Enable filter selectivity sampling when there are no statistics available.
+  /// If this flag is set and sampleFilters is disabled, filters will still be
+  /// evaluated against a sample when no historical statistics are available.
+  bool sampleFiltersIfNoStats{true};
+
   /// Enable reducing semi joins.
   bool enableReducingExistences{true};
 
@@ -69,6 +74,13 @@ struct OptimizerOptions {
   /// Disable cost-based decision re: whether to split an aggregation into
   /// partial + final or not.
   bool alwaysPlanPartialAggregation = false;
+
+  /// For testing: control merge join behavior.
+  /// - std::nullopt (default): normal cost-based selection among all join types
+  /// - true: prefer merge joins - return immediately if joinByMerge produces a
+  ///   candidate
+  /// - false: disable merge joins - skip calling joinByMerge
+  std::optional<bool> testingUseMergeJoin{std::nullopt};
 
   bool isMapAsStruct(std::string_view table, std::string_view column) const {
     if (allMapsAsStruct) {
