@@ -44,6 +44,18 @@ target_link_libraries(
   gtest_main
 )
 
+add_library(axiom_optimizer_tests_feature_gen FeatureGen.cpp)
+
+target_link_libraries(
+  axiom_optimizer_tests_feature_gen
+  axiom_logical_plan_builder
+  axiom_optimizer_test_utils
+  velox_exec_test_lib
+  velox_type
+  velox_vector
+  velox_vector_test_lib
+)
+
 add_library(
   axiom_optimizer_tests_plan_matcher
   OBJECT
@@ -129,7 +141,6 @@ add_executable(
   SubfieldTest.cpp
   SubqueryTest.cpp
   SyntacticJoinOrderTest.cpp
-  FeatureGen.cpp
   Genies.cpp
   TestConnectorQueryTest.cpp
   TpchConnectorQueryTest.cpp
@@ -147,8 +158,10 @@ add_test(
 target_link_libraries(
   axiom_optimizer_tests
   axiom_optimizer_test_utils
+  axiom_velox_udfs
   axiom_optimizer
   axiom_logical_plan_builder
+  axiom_optimizer_tests_feature_gen
   axiom_optimizer_tests_hive_queries_test_base
   axiom_optimizer_tests_parquet_tpch
   axiom_optimizer_tests_plan_matcher
@@ -204,4 +217,19 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   pthread
+)
+
+add_executable(axiom_feature_benchmark FeatureBenchmark.cpp)
+
+target_link_libraries(
+  axiom_feature_benchmark
+  axiom_optimizer_tests_feature_gen
+  axiom_optimizer_tests_query_test_base
+  axiom_optimizer_test_utils
+  axiom_velox_udfs
+  axiom_runner_tests_utils
+  velox_file
+  velox_dwio_dwrf_writer
+  velox_exec_test_lib
+  glog::glog
 )

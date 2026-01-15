@@ -126,6 +126,11 @@ PlanP Optimization::bestPlan() {
     trace(OptimizerOptions::kRetained, root_->id(), plan->cost, *plan->op);
   }
 
+  // Store constraints if sampleComplexTypes is set and parallelProjectWidth > 1
+  if (options_.sampleComplexTypes && options_.parallelProjectWidth > 1) {
+    constraints_ = plan->constraints;
+  }
+
   return plan;
 }
 

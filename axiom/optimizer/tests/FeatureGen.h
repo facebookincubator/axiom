@@ -33,6 +33,10 @@ struct FeatureOptions {
   int32_t idListMaxDistinct{1000};
   int32_t numIdScoreList{5};
 
+  /// If true, idListSizes uses an exponential distribution with alternating
+  /// small and large cardinalities (0, max-1, 2, max-3, ...).
+  bool expCardinalities{false};
+
   /// Structs for use in reading the features. One field for each
   /// key. Filled in by makeFeatures().
   velox::RowTypePtr floatStruct;
@@ -57,6 +61,9 @@ struct FeatureOptions {
   /// percentage of extra  + 1's.
   int32_t plusOnePct{20};
 
+  /// Percentage of exprs wrapped in bucketize.
+  int32_t bucketizePct{30};
+
   mutable folly::Random::DefaultGenerator rng;
 
   bool coinToss(int32_t pct) const {
@@ -79,5 +86,33 @@ void makeLogicalExprs(
     const FeatureOptions& opts,
     std::vector<std::string>& names,
     std::vector<logical_plan::ExprPtr>& exprs);
+
+/// Generates a multi-stage projection pipeline for processing id_score_list
+/// features. The pipeline splits features into two paths:
+/// - First half: coalesce -> row_constructor -> convert_format -> fillna
+/// - Second half: coalesce -> map_keys -> first_x -> sigrid_hash_into_i32
+///
+/// @param opts Feature generation options
+/// @param source Input plan node
+/// @param featureKeys List of feature keys to process (e.g., {200000, 200200,
+/// 200400})
+/// @param passthroughColumns List of column names to project through in each
+/// projection node
+/// @return Plan node with 4 projection layers applied
+logical_plan::LogicalPlanNodePtr makeIdScoreListPipeline(
+    const FeatureOptions& opts,
+    logical_plan::LogicalPlanNodePtr source,
+    const std::vector<int32_t>& featureKeys,
+    const std::vector<std::string>& passthroughColumns = {});
+
+/// Generates a complete feature processing pipeline
+/// @param opts Feature generation options (must have floatStruct, idListStruct,
+/// idScoreListStruct initialized)
+/// @param connectorId Connector ID to use for the table scan (defaults to
+/// "test-hive")
+/// @return Logical plan with table scan and multi-stage feature processing
+logical_plan::LogicalPlanNodePtr makeFeaturePipeline(
+    const FeatureOptions& opts,
+    std::string_view connectorId = "test-hive");
 
 } // namespace facebook::axiom::optimizer::test

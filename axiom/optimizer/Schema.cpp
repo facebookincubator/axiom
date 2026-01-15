@@ -48,27 +48,126 @@ const velox::Variant* registerOptionalVariant(
   return registerVariant(opt.value());
 }
 
+Value::Value(Value&& other) noexcept
+    : type{other.type},
+      min{other.min},
+      max{other.max},
+      cardinality{other.cardinality},
+      trueFraction{other.trueFraction},
+      nullFraction{other.nullFraction},
+      nullable{other.nullable},
+      size{other.size},
+      children{other.children} {
+  // Clear the source object's pointers to avoid double ownership issues
+  other.min = nullptr;
+  other.max = nullptr;
+  other.children = nullptr;
+}
+
 Value& Value::operator=(const Value& other) {
   VELOX_CHECK(
       type == other.type,
       "Cannot assign Value with different type: {} vs {}",
       (type ? type->toString() : "null"),
       (other.type ? other.type->toString() : "null"));
+  setChildrenUnchecked(other);
+  return *this;
+}
+
+Value& Value::operator=(Value&& other) noexcept {
+  if (this != &other) {
+    VELOX_CHECK(
+        type == other.type,
+        "Cannot assign Value with different type: {} vs {}",
+        (type ? type->toString() : "null"),
+        (other.type ? other.type->toString() : "null"));
+
+    min = other.min;
+    max = other.max;
+    const_cast<float&>(cardinality) = other.cardinality;
+    trueFraction = other.trueFraction;
+    nullFraction = other.nullFraction;
+    nullable = other.nullable;
+    const_cast<float&>(size) = other.size;
+    const_cast<const ChildValues*&>(children) = other.children;
+
+    // Clear the source object's pointers
+    other.min = nullptr;
+    other.max = nullptr;
+    other.children = nullptr;
+  }
+  return *this;
+}
+
+void Value::setChildrenUnchecked(const Value& other) {
   min = other.min;
   max = other.max;
   const_cast<float&>(cardinality) = other.cardinality;
   trueFraction = other.trueFraction;
   nullFraction = other.nullFraction;
   nullable = other.nullable;
-  return *this;
+  const_cast<float&>(size) = other.size;
+  const_cast<const ChildValues*&>(children) = other.children;
 }
 
 float Value::byteSize() const {
   if (type->isFixedWidth()) {
     return static_cast<float>(type->cppSizeInBytes());
   }
+
   switch (type->kind()) {
-      // Add complex types here.
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY: {
+      if (size != kUnknown) {
+        return std::max(16.0f, size);
+      }
+      return 16;
+    }
+
+    case velox::TypeKind::ARRAY: {
+      if (children && !children->values.empty()) {
+        float elementSize = children->values[0].byteSize();
+        if (size != kUnknown) {
+          return size * elementSize;
+        }
+        return 5 * elementSize;
+      }
+      return 16;
+    }
+
+    case velox::TypeKind::MAP: {
+      if (children && !children->values.empty()) {
+        // Unnamed children (key/value pairs)
+        if (children->names.empty()) {
+          float keySize = children->values[0].byteSize();
+          float valueSize =
+              children->values.size() > 1 ? children->values[1].byteSize() : 0;
+          float mapSize = size != kUnknown ? size : 3;
+          return mapSize * (keySize + valueSize);
+        }
+        // Named children - sum of all child sizes
+        float total = 0;
+        for (const auto& childValue : children->values) {
+          total += childValue.byteSize();
+        }
+        return total;
+      }
+      return 100;
+    }
+
+    case velox::TypeKind::ROW: {
+      if (children && !children->values.empty()) {
+        float total = 0;
+        for (const auto& childValue : children->values) {
+          total += childValue.byteSize();
+        }
+        return total;
+      }
+      // No children set - use type information
+      auto& rowType = type->as<velox::TypeKind::ROW>();
+      return 8.0f * static_cast<float>(rowType.size());
+    }
+
     default:
       return 16;
   }
@@ -92,6 +191,28 @@ std::string Value::toString() const {
 
   if (nullFraction != 0) {
     out << " nullFraction=" << nullFraction;
+  }
+
+  if (size != kUnknown) {
+    out << " size=" << size;
+  }
+
+  if (children != nullptr) {
+    out << " children={";
+    for (size_t i = 0; i < children->values.size(); ++i) {
+      if (i > 0) {
+        out << ", ";
+      }
+
+      // If names are non-empty, print name=value
+      if (!children->names.empty() && i < children->names.size()) {
+        out << children->names[i] << "=" << children->values[i].toString();
+      } else {
+        // Otherwise just print the value
+        out << children->values[i].toString();
+      }
+    }
+    out << "}";
   }
 
   out << ">";

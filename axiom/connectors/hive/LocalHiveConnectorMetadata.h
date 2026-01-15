@@ -18,6 +18,7 @@
 
 #include <fmt/format.h>
 #include <folly/String.h>
+#include <gflags/gflags.h>
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
 #include "axiom/connectors/hive/StatisticsBuilder.h"
 #include "velox/common/base/Fs.h"
@@ -25,6 +26,8 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/Options.h"
+
+DECLARE_int64(hive_max_sample_size);
 
 namespace facebook::axiom::connector::hive {
 
@@ -131,6 +134,20 @@ class LocalHiveSplitManager : public ConnectorSplitManager {
 /// local files and stores the file list inside 'this'.
 class LocalHiveTableLayout : public HiveTableLayout {
  public:
+  /// Result of sampling operations
+  struct SampleResult {
+    int64_t numSampled; // Number of rows sampled
+    int64_t numPassed; // Number of rows that passed filters
+    int64_t numTotal; // Total number of rows in selected partitions
+  };
+
+  /// Result of split enumeration for sampling
+  struct SplitsToSample {
+    std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
+    int64_t maxRowsPerSplit; // Max rows to read from each split
+    int64_t totalRows; // Total rows across all selected partitions
+  };
+
   LocalHiveTableLayout(
       const std::string& name,
       const Table* table,
@@ -191,13 +208,17 @@ class LocalHiveTableLayout : public HiveTableLayout {
   }
 
   /// Like sample() above, but fills 'builders' with the data.
-  std::pair<int64_t, int64_t> sample(
+  /// Returns SampleResult with numSampled, numPassed, and numTotal.
+  /// If builderNames is provided, it will be filled with the top-level column
+  /// name corresponding to each builder in statsBuilders.
+  SampleResult sample(
       const velox::connector::ConnectorTableHandlePtr& handle,
       float pct,
       velox::RowTypePtr scanType,
       const std::vector<velox::common::Subfield>& fields,
       velox::HashStringAllocator* allocator,
-      std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders) const;
+      std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders,
+      std::vector<std::string>* builderNames = nullptr) const;
 
   /// Samples partitions individually, updating both table-level and
   /// partition-level statistics.
@@ -222,6 +243,14 @@ class LocalHiveTableLayout : public HiveTableLayout {
       int64_t& currentScannedRows) const;
 
  private:
+  /// Enumerates splits to sample and calculates total row count.
+  /// Returns splits to sample, max rows per split, and total row count.
+  /// Also returns the list of partitions as an output parameter.
+  SplitsToSample enumerateSplitsToSample(
+      const velox::connector::ConnectorTableHandlePtr& tableHandle,
+      float pct,
+      std::vector<PartitionHandlePtr>& partitions) const;
+
   std::vector<std::unique_ptr<const FileInfo>> files_;
   std::vector<std::unique_ptr<const FileInfo>> ownedFiles_;
   std::vector<std::shared_ptr<const LocalHivePartitionHandle>> partitions_;

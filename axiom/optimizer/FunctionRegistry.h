@@ -23,6 +23,8 @@ namespace facebook::axiom::optimizer {
 struct PlanState;
 struct Value;
 
+using ConstraintMap = folly::F14FastMap<int32_t, Value>;
+
 /// A bit set that qualifies an Expr. Represents which functions/kinds
 /// of functions are found inside the children of an Expr.
 class FunctionSet {
@@ -171,11 +173,11 @@ struct FunctionMetadata {
 
   /// Static fixed cost for processing one row. use 'costFunc' for non-constant
   /// cost.
-  float cost{1};
+  std::optional<float> cost;
 
   /// Function for evaluating the per-row cost when the cost depends on
   /// arguments and their stats.
-  std::function<float(const Call*)> costFunc;
+  std::function<float(const Call*, const ConstraintMap*)> costFunc;
 
   /// Translates a set of paths into path, expression pairs if the complex type
   /// returning function is decomposable into per-path subexpressions. Suppose

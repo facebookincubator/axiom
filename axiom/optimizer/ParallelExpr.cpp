@@ -16,6 +16,7 @@
 
 #include <ranges>
 
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
@@ -41,6 +42,9 @@ void pushdownExpr(
     ExprCP expr,
     int32_t level,
     std::vector<LevelData>& levelData) {
+  if (expr->is(PlanType::kLiteralExpr)) {
+    return;
+  }
   const auto defined = levelOf(levelData, expr);
   if (defined >= level) {
     return;
@@ -137,10 +141,11 @@ velox::core::PlanNodePtr ToVelox::makeParallelProject(
   std::vector<float> costs;
   std::vector<ExprCP> exprs;
   float totalCost = 0;
+  auto* constraints = queryCtx()->optimization()->constraints();
   topExprs.forEach<Expr>([&](auto expr) {
     exprs.push_back(expr);
     indices.push_back(indices.size());
-    costs.push_back(costWithChildren(expr, placed));
+    costs.push_back(costWithChildren(expr, placed, constraints));
     totalCost += costs.back();
   });
   std::ranges::sort(
@@ -189,6 +194,58 @@ velox::core::PlanNodePtr ToVelox::makeParallelProject(
     extra.push_back(
         veloxExpr->asUnchecked<velox::core::FieldAccessTypedExpr>()->name());
   });
+
+  // Validate that groups have disjoint dependencies. For each group, collect
+  // the union of subexpressions (excluding already placed) and verify no
+  // subexpression ID appears in multiple groups.
+  std::vector<PlanObjectSet> groupDeps;
+  groupDeps.resize(groups.size());
+  {
+    size_t groupIdx = 0;
+    float groupCost = 0;
+    for (auto i : indices) {
+      if (groupCost > targetCost && groupIdx + 1 < groups.size()) {
+        ++groupIdx;
+        groupCost = 0;
+      }
+      auto expr = exprs[i];
+      groupCost += costs[i];
+
+      // Union subexpressions for this expr into the group's dependency set.
+      groupDeps[groupIdx].unionSet(expr->subexpressions());
+    }
+
+    // Subtract already placed from each group.
+    for (auto& deps : groupDeps) {
+      deps.except(placed);
+    }
+
+    // Check for overlapping IDs between any two groups.
+    for (size_t i = 0; i < groupDeps.size(); ++i) {
+      for (size_t j = i + 1; j < groupDeps.size(); ++j) {
+        if (groupDeps[i].hasIntersection(groupDeps[j])) {
+          // Find the overlapping IDs, excluding literals.
+          PlanObjectSet overlap = groupDeps[i];
+          overlap.intersect(groupDeps[j]);
+          std::vector<int32_t> overlappingIds;
+          static_cast<const BitSet&>(overlap).forEach([&](int32_t id) {
+            auto* obj = queryCtx()->objectAt(id);
+            if (obj && !obj->is(PlanType::kLiteralExpr)) {
+              overlappingIds.push_back(id);
+            }
+          });
+
+          if (!overlappingIds.empty()) {
+            VELOX_FAIL(
+                "ParallelProject groups {} and {} have overlapping subexpression IDs: {}",
+                i,
+                j,
+                folly::join(", ", overlappingIds));
+          }
+        }
+      }
+    }
+  }
 
   return std::make_shared<velox::core::ParallelProjectNode>(
       nextId(), std::move(names), std::move(groups), std::move(extra), input);
@@ -249,12 +306,14 @@ float parallelBorder(
     return 0;
   }
 
+  auto* constraints = queryCtx()->optimization()->constraints();
+
   switch (expr->type()) {
     case PlanType::kColumnExpr:
-      return selfCost(expr);
+      return selfCost(expr, constraints);
 
     case PlanType::kCallExpr: {
-      const float cost = selfCost(expr);
+      const float cost = selfCost(expr, constraints);
       auto call = expr->as<Call>();
       BitSet splitArgs;
       auto args = call->args();

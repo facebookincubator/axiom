@@ -21,6 +21,8 @@
 #include "axiom/optimizer/RelationOpPrinter.h"
 #include "axiom/optimizer/ToGraph.h"
 
+#include <iostream>
+
 namespace facebook::axiom::optimizer {
 
 namespace {
@@ -106,14 +108,23 @@ Plan::Plan(RelationOpPtr op, const PlanState& state)
   // Initialize constraints using registerAny to manage lifetime
   auto constraintsPtr = std::make_unique<ConstraintMap>();
 
-  // Populate constraints for the columns from the state
-  for (auto* column : this->op->columns()) {
-    if (column->is(PlanType::kColumnExpr)) {
-      const auto& val = value(state, column);
-      // Only add to constraints if the value differs from the column's default
-      // value, indicating there's an actual constraint
-      if (&val != &column->value()) {
-        addConstraint(column->id(), val, *constraintsPtr);
+  const auto& opts = state.optimization.options();
+  const bool storeAllConstraints =
+      opts.sampleComplexTypes && opts.parallelProjectWidth > 1;
+
+  if (storeAllConstraints) {
+    // Store all constraints from PlanState
+    *constraintsPtr = state.constraints;
+  } else {
+    // Populate constraints for the columns from the state
+    for (auto* column : this->op->columns()) {
+      if (column->is(PlanType::kColumnExpr)) {
+        const auto& val = value(state, column);
+        // Only add to constraints if the value differs from the column's
+        // default value, indicating there's an actual constraint
+        if (&val != &column->value()) {
+          addConstraint(column->id(), val, *constraintsPtr);
+        }
       }
     }
   }
@@ -634,18 +645,17 @@ Value exprConstraint(ExprCP expr, PlanState& state, bool update) {
     result = expr->value();
   } else if (expr->is(PlanType::kCallExpr)) {
     auto* call = expr->as<Call>();
-
-    // For subscript over structs, get value from the base expression
-    if (call->name() == subscriptName() &&
-        call->args()[0]->value().type->kind() == velox::TypeKind::ROW) {
-      Value baseValue = exprConstraint(call->args()[0], state, update);
-      result = expr->value();
-      result.cardinality = baseValue.cardinality;
-    } else if (call->containsFunction(FunctionSet::kAggregate)) {
+    if (call->containsFunction(FunctionSet::kAggregate)) {
       // For aggregates, return value with cardinality from state's cost
       result = expr->value();
       result.cardinality = state.cost.cardinality;
     } else {
+      std::vector<Value> argValues;
+      argValues.reserve(call->args().size());
+      for (auto* arg : call->args()) {
+        argValues.push_back(exprConstraint(arg, state, update));
+      }
+
       // For non-aggregate calls, check for functionConstraint
       auto* metadata = call->metadata();
       if (metadata && metadata->functionConstraint) {
@@ -655,8 +665,7 @@ Value exprConstraint(ExprCP expr, PlanState& state, bool update) {
         } else {
           // Fallback: get max cardinality from args
           float maxCardinality = 1.0f;
-          for (auto* arg : call->args()) {
-            Value argValue = exprConstraint(arg, state, update);
+          for (const auto& argValue : argValues) {
             maxCardinality = std::max(maxCardinality, argValue.cardinality);
           }
           result = expr->value();
@@ -679,6 +688,12 @@ Value exprConstraint(ExprCP expr, PlanState& state, bool update) {
   addConstraint(expr->id(), result, state.constraints);
 
   return result;
+}
+
+void printConstraints(const ConstraintMap& map) {
+  for (const auto& [id, value] : map) {
+    std::cout << id << ": " << value.toString() << std::endl;
+  }
 }
 
 } // namespace facebook::axiom::optimizer

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/RelationOp.h"
 
 #include <span>
@@ -179,11 +180,16 @@ float shuffleCost(const ColumnVector& columns);
 float shuffleCost(const ExprVector& exprs);
 
 /// Returns cost of 'expr' for one row, excluding cost of subexpressions.
-float selfCost(ExprCP expr);
+/// If constraints is provided, values are looked up from the constraint map.
+float selfCost(ExprCP expr, const ConstraintMap* constraints = nullptr);
 
 /// Returns the per row cost of 'expr' and its subexpressions, excluding
 /// 'notCounting', which represents already computed subtrees of 'expr'.
-float costWithChildren(ExprCP expr, const PlanObjectSet& notCounting);
+/// If constraints is provided, values are looked up from the constraint map.
+float costWithChildren(
+    ExprCP expr,
+    const PlanObjectSet& notCounting,
+    const ConstraintMap* constraints = nullptr);
 
 /// Samples the join of 'left' and 'right' on 'leftKeys' and
 /// 'rightKeys'. Returns the number of hits on the right for one row

@@ -69,6 +69,18 @@ class VeloxHistory : public History {
   /// constraints map returned from conjunctsSelectivity.
   void setBaseTableValues(const ConstraintMap& constraints, BaseTable& table);
 
+  /// Handles sampling and caching of complex type column statistics.
+  /// Checks complexTypeStats_ cache for existing stats, samples missing ones,
+  /// and updates Value objects with the statistics. Only called when
+  /// sampleComplexTypes is true.
+  void handleComplexTypeStats(
+      BaseTable& table,
+      const velox::RowTypePtr& scanType);
+
+  /// Sets values for subfield columns by navigating the Value children of their
+  /// top-level columns using the subfield path.
+  void setSubfieldColumnValues(BaseTable& table);
+
   /// Stores observed costs and cardinalities from a query execution. If 'op' is
   /// non-null, non-leaf costs from non-leaf levels are recorded. Otherwise only
   /// leaf scan selectivities  are recorded.
@@ -83,6 +95,17 @@ class VeloxHistory : public History {
  private:
   folly::F14FastMap<std::string, std::pair<float, float>> joinSamples_;
   folly::F14FastMap<std::string, NodePrediction> planHistory_;
+
+  // Cache for complex type column statistics.
+  // Key is either:
+  // - std::pair<std::string, std::string> for regular columns: {tableName,
+  // columnName}
+  // - size_t for map-as-struct columns: commutative hash of {tableName,
+  // columnName, fieldNames} Protected by mutex_.
+  folly::F14FastMap<
+      std::variant<std::pair<std::string, std::string>, size_t>,
+      std::shared_ptr<const connector::ColumnStatistics>>
+      complexTypeStats_;
 };
 
 } // namespace facebook::axiom::optimizer

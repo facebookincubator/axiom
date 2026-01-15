@@ -369,4 +369,7 @@ velox::core::JoinType reverseJoinType(velox::core::JoinType joinType);
 /// already cached, and stores the updated constraint in state.
 Value exprConstraint(ExprCP expr, PlanState& state, bool update = false);
 
+/// Prints the constraints map, showing each id and its corresponding Value.
+void printConstraints(const ConstraintMap& map);
+
 } // namespace facebook::axiom::optimizer

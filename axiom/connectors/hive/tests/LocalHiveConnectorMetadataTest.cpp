@@ -438,6 +438,256 @@ TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
   EXPECT_NE(created, nullptr);
 }
 
+TEST_F(LocalHiveConnectorMetadataTest, complexTypeStats) {
+  // Create a struct type with array fields
+  auto structType = ROW(
+      {{"bigints", ARRAY(BIGINT())},
+       {"bigints_array", ARRAY(ARRAY(BIGINT()))}});
+
+  // Create table type with complex columns
+  auto tableType = ROW(
+      {{"array_struct", ARRAY(structType)},
+       {"map_data", MAP(INTEGER(), ARRAY(BIGINT()))}});
+
+  auto session = std::make_shared<ConnectorSession>("q-test");
+  auto table = metadata_->createTable(
+      session, "complex_data", tableType, /*options=*/{});
+
+  constexpr int32_t kTestSize = 100;
+
+  // Create test data using simpler nested structure
+  // Build array<struct<bigints:array<bigint>,
+  // bigints_array:array<array<bigint>>>>
+
+  // First, create the struct elements
+  std::vector<std::vector<int64_t>> bigintsData;
+  std::vector<std::vector<std::vector<int64_t>>> bigintsArrayData;
+
+  // Calculate total struct instances needed
+  // Array sizes vary 1-4 cyclically: avg = (1+2+3+4)/4 = 2.5
+  // For kTestSize rows: ~250 struct instances
+  int runningTotal = 0;
+  for (int i = 0; i < kTestSize; ++i) {
+    runningTotal += ((i % 4) + 1);
+  }
+  int totalStructs = runningTotal;
+
+  for (int i = 0; i < totalStructs; ++i) {
+    // bigints: array of size 1-5
+    int bigintsSize = (i % 5) + 1;
+    std::vector<int64_t> bigints;
+    for (int j = 0; j < bigintsSize; ++j) {
+      bigints.push_back(i * 100 + j);
+    }
+    bigintsData.push_back(bigints);
+
+    // bigints_array: array of arrays, outer size 1-3
+    int outerSize = (i % 3) + 1;
+    std::vector<std::vector<int64_t>> outerArray;
+    for (int k = 0; k < outerSize; ++k) {
+      int innerSize = ((i + k) % 4) + 1;
+      std::vector<int64_t> innerArray;
+      for (int m = 0; m < innerSize; ++m) {
+        innerArray.push_back(i * 1000 + k * 10 + m);
+      }
+      outerArray.push_back(innerArray);
+    }
+    bigintsArrayData.push_back(outerArray);
+  }
+
+  // Create the arrays for struct members
+  auto bigintsArray = makeArrayVector<int64_t>(bigintsData);
+
+  // Flatten the nested arrays for makeArrayVector
+  std::vector<std::vector<int64_t>> flattenedInnerArrays;
+  for (const auto& outer : bigintsArrayData) {
+    for (const auto& inner : outer) {
+      flattenedInnerArrays.push_back(inner);
+    }
+  }
+  auto innerArrays = makeArrayVector<int64_t>(flattenedInnerArrays);
+
+  // Build offsets for outer array
+  std::vector<vector_size_t> outerOffsets = {0};
+  for (const auto& outer : bigintsArrayData) {
+    outerOffsets.push_back(outerOffsets.back() + outer.size());
+  }
+  auto bigintsArrayArray = makeArrayVector(outerOffsets, innerArrays);
+
+  auto structVector = makeRowVector(
+      {"bigints", "bigints_array"}, {bigintsArray, bigintsArrayArray});
+
+  // Create array of structs with varying sizes 1-4
+  std::vector<vector_size_t> structOffsets;
+  vector_size_t offset = 0;
+  for (int i = 0; i < kTestSize; ++i) {
+    structOffsets.push_back(offset);
+    offset += ((i % 4) + 1);
+  }
+  auto arrayStructVector = makeArrayVector(structOffsets, structVector);
+
+  // Create map: integer -> array of bigints
+  std::vector<std::vector<std::pair<int32_t, std::vector<int64_t>>>> mapData;
+  for (int i = 0; i < kTestSize; ++i) {
+    // Map size varies 1-3
+    int mapSize = (i % 3) + 1;
+    std::vector<std::pair<int32_t, std::vector<int64_t>>> mapRow;
+    for (int j = 0; j < mapSize; ++j) {
+      int32_t key = (i * 10 + j) % 50;
+
+      // Array value size varies 1-6
+      int arraySize = ((i + j) % 6) + 1;
+      std::vector<int64_t> arrayValue;
+      for (int k = 0; k < arraySize; ++k) {
+        arrayValue.push_back(i * 100 + j * 10 + k);
+      }
+      mapRow.push_back({key, arrayValue});
+    }
+    mapData.push_back(mapRow);
+  }
+
+  // Convert to proper map vector structure
+  std::vector<vector_size_t> mapOffsets;
+  std::vector<int32_t> allKeys;
+  std::vector<std::vector<int64_t>> allValueArrays;
+
+  for (const auto& mapRow : mapData) {
+    mapOffsets.push_back(allKeys.size());
+    for (const auto& [key, value] : mapRow) {
+      allKeys.push_back(key);
+      allValueArrays.push_back(value);
+    }
+  }
+
+  auto mapKeysVector = makeFlatVector<int32_t>(allKeys);
+  auto mapValuesVector = makeArrayVector<int64_t>(allValueArrays);
+  auto mapVector = makeMapVector(mapOffsets, mapKeysVector, mapValuesVector);
+
+  // Verify sizes match
+  EXPECT_EQ(arrayStructVector->size(), kTestSize);
+  EXPECT_EQ(mapVector->size(), kTestSize);
+
+  auto data = makeRowVector(tableType->names(), {arrayStructVector, mapVector});
+  EXPECT_EQ(data->size(), kTestSize);
+
+  writeToTable(table, data, WriteKind::kCreate, dwio::common::FileFormat::DWRF);
+
+  // Prepare to call sample() with subfields
+  auto* layout = getLayout(table);
+  auto ctx = metadata_->connectorQueryCtx();
+
+  // Create column handles for all columns
+  std::vector<velox::connector::ColumnHandlePtr> columns;
+  for (auto i = 0; i < tableType->size(); ++i) {
+    columns.push_back(
+        layout->createColumnHandle(/*session=*/nullptr, tableType->nameOf(i)));
+  }
+
+  std::vector<core::TypedExprPtr> filters;
+  std::vector<core::TypedExprPtr> rejectedFilters;
+
+  auto tableHandle = layout->createTableHandle(
+      /*session=*/nullptr,
+      columns,
+      *ctx->expressionEvaluator(),
+      filters,
+      rejectedFilters,
+      /*dataColumns=*/nullptr,
+      /*lookupKeys=*/{});
+  EXPECT_TRUE(rejectedFilters.empty());
+
+  // Create subfields for array_struct and map_data
+  std::vector<common::Subfield> fields;
+  auto arrayStructField = common::Subfield::create("array_struct");
+  auto mapDataField = common::Subfield::create("map_data");
+  fields.push_back(std::move(*arrayStructField));
+  fields.push_back(std::move(*mapDataField));
+
+  // Call sample() with ColumnStatistics array
+  std::vector<ColumnStatistics> stats;
+  HashStringAllocator allocator(pool_.get());
+  auto pair = layout->sample(
+      tableHandle, 100, {}, layout->rowType(), fields, &allocator, &stats);
+
+  EXPECT_EQ(kTestSize, pair.first);
+  EXPECT_EQ(kTestSize, pair.second);
+
+  // Verify statistics were collected
+  ASSERT_EQ(2, stats.size());
+
+  // Find statistics by column name (order is undefined)
+  ColumnStatistics* arrayStructStats = nullptr;
+  ColumnStatistics* mapStats = nullptr;
+
+  for (auto& stat : stats) {
+    if (stat.name == "array_struct") {
+      arrayStructStats = &stat;
+    } else if (stat.name == "map_data") {
+      mapStats = &stat;
+    }
+  }
+
+  ASSERT_NE(arrayStructStats, nullptr) << "array_struct statistics not found";
+  ASSERT_NE(mapStats, nullptr) << "map_data statistics not found";
+
+  // Check array_struct statistics
+  EXPECT_GT(arrayStructStats->avgLength.value_or(0), 0);
+  ASSERT_EQ(
+      1, arrayStructStats->children.size()); // array has 1 child (elements)
+
+  // The child is a struct with 2 members
+  auto& structStats = arrayStructStats->children[0];
+  ASSERT_EQ(2, structStats.children.size());
+
+  // First struct member: bigints (array of bigint)
+  auto& bigintsStats = structStats.children[0];
+  EXPECT_EQ("bigints", bigintsStats.name);
+  EXPECT_GT(bigintsStats.avgLength.value_or(0), 0);
+  ASSERT_EQ(1, bigintsStats.children.size()); // array has 1 child (elements)
+
+  // Second struct member: bigints_array (array of array of bigint)
+  auto& bigintsArrayStats = structStats.children[1];
+  EXPECT_EQ("bigints_array", bigintsArrayStats.name);
+  EXPECT_GT(bigintsArrayStats.avgLength.value_or(0), 0);
+  ASSERT_EQ(1, bigintsArrayStats.children.size()); // outer array has 1 child
+
+  // The inner array
+  auto& innerArrayStats = bigintsArrayStats.children[0];
+  EXPECT_GT(innerArrayStats.avgLength.value_or(0), 0);
+  ASSERT_EQ(
+      1, innerArrayStats.children.size()); // inner array has 1 child (elements)
+
+  // Check map_data statistics
+  EXPECT_GT(mapStats->avgLength.value_or(0), 0);
+  ASSERT_EQ(2, mapStats->children.size()); // map has 2 children (keys, values)
+
+  // First child: keys (integers) - check that stats were collected
+  // Keys are scalars, may not have numValues populated for scalar types
+  EXPECT_EQ(2, mapStats->children.size());
+
+  // Second child: values (array of bigints)
+  auto& valuesStats = mapStats->children[1];
+  EXPECT_GT(valuesStats.avgLength.value_or(0), 0);
+  ASSERT_EQ(1, valuesStats.children.size()); // array has 1 child (elements)
+
+  // Verify avgLength matches expected values from data generation
+  // array_struct: size varies 1-4, avg should be around 2.5
+  EXPECT_GE(arrayStructStats->avgLength.value(), 1);
+  EXPECT_LE(arrayStructStats->avgLength.value(), 4);
+
+  // map_data: size varies 1-3, avg should be around 2
+  EXPECT_GE(mapStats->avgLength.value(), 1);
+  EXPECT_LE(mapStats->avgLength.value(), 3);
+
+  // bigints array: size varies 1-5, avg should be around 3
+  EXPECT_GE(bigintsStats.avgLength.value(), 1);
+  EXPECT_LE(bigintsStats.avgLength.value(), 5);
+
+  // map values array: size varies 1-6, avg should be around 3.5
+  EXPECT_GE(valuesStats.avgLength.value(), 1);
+  EXPECT_LE(valuesStats.avgLength.value(), 6);
+}
+
 } // namespace
 } // namespace facebook::axiom::connector::hive
 

@@ -25,6 +25,10 @@
 /// instantiate the relevant schema objects based on the query. The
 /// arena for these can be different from that for the PlanObjects,
 /// though, so that a schema cache can have its own lifetime.
+namespace facebook::axiom::connector {
+struct ColumnStatistics;
+}
+
 namespace facebook::axiom::optimizer {
 
 // TODO: It seems like QGAllocator doesn't work for folly F14 containers.
@@ -37,6 +41,8 @@ using NameMap = std::unordered_map<
     std::equal_to<Name>,
     QGAllocator<std::pair<const Name, T>>>;
 
+struct ChildValues;
+
 /// Represents constraints on a column value or intermediate result.
 struct Value {
   Value(const velox::Type* type, float cardinality)
@@ -45,8 +51,20 @@ struct Value {
   // Default copy constructor
   Value(const Value&) = default;
 
+  // Move constructor
+  Value(Value&& other) noexcept;
+
   /// Assignment operator that checks type equality and assigns other members.
   Value& operator=(const Value& other);
+
+  /// Move assignment operator that checks type equality and moves other
+  /// members.
+  Value& operator=(Value&& other) noexcept;
+
+  /// Sets all fields from other except type, without checking type equality.
+  /// Used when assigning statistics to a Value with a different type (e.g.,
+  /// map-as-struct where stats type is MAP but Value type is ROW).
+  void setChildrenUnchecked(const Value& other);
 
   /// Returns the average byte size of a value when it occurs as an intermediate
   /// result without dictionary or other encoding.
@@ -77,6 +95,22 @@ struct Value {
   // True if nulls may occur. 'false' means that plans that allow no nulls may
   // be generated.
   bool nullable{true};
+
+  /// If variable length type (string, array, map), avrage expected number of
+  /// elements.
+  float size{kUnknown};
+
+  /// If complex type contains statistics of children. This is optional and not
+  /// always set for complex types.
+  const ChildValues* children{nullptr};
+};
+
+/// describes the children of a complex type Value. One child for elements of an
+/// array, two children for keys and values of a map, named children for
+/// elements of a struct. Not all fields are necessarily filled in.
+struct ChildValues {
+  std::vector<Name, QGAllocator<Name>> names;
+  std::vector<Value, QGAllocator<Value>> values;
 };
 
 /// Describes order in an order by or index.

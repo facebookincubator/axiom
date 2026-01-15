@@ -15,6 +15,9 @@
  */
 
 #include "axiom/optimizer/ToVelox.h"
+
+#include <gflags/gflags.h>
+
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/ToGraph.h"
@@ -55,8 +58,6 @@ ToVelox::ToVelox(
       optimizerOptions_{optimizerOptions},
       isSingle_{options.numWorkers == 1},
       subscript_{FunctionRegistry::instance()->subscript()} {}
-
-namespace {
 
 std::vector<velox::common::Subfield> columnSubfields(
     BaseTableCP table,
@@ -118,6 +119,8 @@ std::vector<velox::common::Subfield> columnSubfields(
 
   return subfields;
 }
+
+namespace {
 
 RelationOpPtr addGather(const RelationOpPtr& op) {
   if (op->distribution().isGather()) {
@@ -908,6 +911,10 @@ velox::core::PlanNodePtr ToVelox::makeSubfieldProjections(
   for (auto* column : scan.columns()) {
     names.push_back(column->outputName());
     exprs.push_back(toTypedExpr(column));
+  }
+  if (optimizerOptions_.lazySubfieldProject) {
+    return std::make_shared<velox::core::LazyDereferenceNode>(
+        nextId(), std::move(names), std::move(exprs), scanNode);
   }
   return std::make_shared<velox::core::ProjectNode>(
       nextId(), std::move(names), std::move(exprs), scanNode);

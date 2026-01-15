@@ -158,6 +158,10 @@ class Optimization {
     return options_;
   }
 
+  ConstraintMap* constraints() const {
+    return constraints_;
+  }
+
   const runner::MultiFragmentPlan::Options& runnerOptions() const {
     return runnerOptions_;
   }
@@ -380,6 +384,10 @@ class Optimization {
   ToGraph toGraph_;
 
   ToVelox toVelox_;
+
+  /// Constraints from the best plan, set in bestPlan() when sampleComplexTypes
+  /// is true and parallelProjectWidth > 1.
+  ConstraintMap* constraints_{nullptr};
 };
 
 } // namespace facebook::axiom::optimizer

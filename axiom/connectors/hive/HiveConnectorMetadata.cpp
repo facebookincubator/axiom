@@ -23,7 +23,13 @@
 
 #include <fmt/format.h>
 #include <folly/String.h>
+#include <gflags/gflags.h>
 #include <algorithm>
+
+DEFINE_int64(
+    hive_max_sample_size,
+    64 << 20,
+    "Maximum bytes to read from any one file during sampling");
 
 namespace facebook::axiom::connector::hive {
 
