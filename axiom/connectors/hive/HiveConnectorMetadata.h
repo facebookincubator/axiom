@@ -76,6 +76,7 @@ class HiveTable : public Table {
       std::string name,
       velox::RowTypePtr type,
       bool bucketed,
+      bool includeHiddenColumns,
       folly::F14FastMap<std::string, velox::Variant> options);
 };
 
@@ -220,12 +221,18 @@ class HiveWriteOptions {
 
 class HiveConnectorMetadata : public ConnectorMetadata {
  public:
+  /// @param includeHiddenColumns is an indicator to include hidden columns in
+  /// HiveTable creation, i.e. including cols: HiveTable::kPath,
+  /// HiveTable::kBucket, HiveTable::kFileSize apart from the original physical
+  /// schema.
   explicit HiveConnectorMetadata(
-      velox::connector::hive::HiveConnector* hiveConnector)
+      velox::connector::hive::HiveConnector* hiveConnector,
+      bool includeHiddenColumns = true)
       : hiveConnector_(hiveConnector),
         hiveConfig_(
             std::make_shared<velox::connector::hive::HiveConfig>(
-                hiveConnector->connectorConfig())) {}
+                hiveConnector->connectorConfig())),
+        includeHiddenColumns_{includeHiddenColumns} {}
 
   ConnectorWriteHandlePtr beginWrite(
       const ConnectorSessionPtr& session,
@@ -250,6 +257,8 @@ class HiveConnectorMetadata : public ConnectorMetadata {
 
   velox::connector::hive::HiveConnector* const hiveConnector_;
   const std::shared_ptr<velox::connector::hive::HiveConfig> hiveConfig_;
+
+  bool includeHiddenColumns_{true};
 };
 
 } // namespace facebook::axiom::connector::hive
