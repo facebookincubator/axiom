@@ -17,6 +17,8 @@
 #pragma once
 
 #include "axiom/optimizer/Cost.h"
+#include "axiom/optimizer/Filters.h"
+#include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "velox/exec/TaskStats.h"
 
@@ -30,16 +32,54 @@ class VeloxHistory : public History {
 
   std::pair<float, float> sampleJoin(JoinEdge* edge) override;
 
+  void guessFanouts(std::span<JoinEdge*> edges) override;
+
+  int64_t combineStatistics(
+      const velox::connector::ConnectorTableHandlePtr& handle,
+      float pct,
+      const std::vector<velox::common::Subfield>& fields = {},
+      std::vector<connector::ColumnStatistics>* statistics =
+          nullptr) const override;
+
   std::optional<Cost> findCost(RelationOp& op) override {
     return std::nullopt;
   }
 
   void recordCost(const RelationOp& op, Cost cost) override {}
 
-  /// Sets the filter selectivity of a table scan. Returns true if there is data
-  /// to back the estimate and false if this is a pure guess.
-  bool setLeafSelectivity(BaseTable& table, const velox::RowTypePtr& scanType)
+  /// Sets the filter selectivity of a table scan.
+  void setLeafSelectivity(BaseTable& table, const velox::RowTypePtr& scanType)
       override;
+
+  /// Sets the filter selectivity for a table with discrete predicate columns.
+  /// Returns true if the table has discrete predicate columns and selectivity
+  /// was set.
+  bool setLeafSelectivityDiscrete(
+      BaseTable& table,
+      const velox::RowTypePtr& scanType);
+
+  /// Sets the filter selectivity for a table without discrete predicate
+  /// columns. This resets column values to schema defaults, optionally samples
+  /// the table, and applies constraints from filter analysis.
+  void setLeafSelectivityNoDiscrete(
+      BaseTable& table,
+      const velox::RowTypePtr& scanType);
+
+  /// Sets the Value of columns in the BaseTable to the values in the
+  /// constraints map returned from conjunctsSelectivity.
+  void setBaseTableValues(const ConstraintMap& constraints, BaseTable& table);
+
+  /// Handles sampling and caching of complex type column statistics.
+  /// Checks complexTypeStats_ cache for existing stats, samples missing ones,
+  /// and updates Value objects with the statistics. Only called when
+  /// sampleComplexTypes is true.
+  void handleComplexTypeStats(
+      BaseTable& table,
+      const velox::RowTypePtr& scanType);
+
+  /// Sets values for subfield columns by navigating the Value children of their
+  /// top-level columns using the subfield path.
+  void setSubfieldColumnValues(BaseTable& table);
 
   /// Stores observed costs and cardinalities from a query execution. If 'op' is
   /// non-null, non-leaf costs from non-leaf levels are recorded. Otherwise only
@@ -55,6 +95,17 @@ class VeloxHistory : public History {
  private:
   folly::F14FastMap<std::string, std::pair<float, float>> joinSamples_;
   folly::F14FastMap<std::string, NodePrediction> planHistory_;
+
+  // Cache for complex type column statistics.
+  // Key is either:
+  // - std::pair<std::string, std::string> for regular columns: {tableName,
+  // columnName}
+  // - size_t for map-as-struct columns: commutative hash of {tableName,
+  // columnName, fieldNames} Protected by mutex_.
+  folly::F14FastMap<
+      std::variant<std::pair<std::string, std::string>, size_t>,
+      std::shared_ptr<const connector::ColumnStatistics>>
+      complexTypeStats_;
 };
 
 } // namespace facebook::axiom::optimizer

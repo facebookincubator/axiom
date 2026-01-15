@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <fmt/format.h>
+#include <folly/String.h>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSink.h"
@@ -33,11 +35,24 @@ struct HivePartitionHandle : public PartitionHandle {
       folly::F14FastMap<std::string, std::optional<std::string>> partitionKeys,
       std::optional<int32_t> tableBucketNumber)
       : partitionKeys(std::move(partitionKeys)),
-        tableBucketNumber(tableBucketNumber) {}
+        tableBucketNumber(tableBucketNumber),
+        partition_(makePartitionString(this->partitionKeys)) {}
+
+  std::string toString() const override;
 
   const folly::F14FastMap<std::string, std::optional<std::string>>
       partitionKeys;
   const std::optional<int32_t> tableBucketNumber;
+
+  const std::string& partition() const override {
+    return partition_;
+  }
+
+ private:
+  static std::string makePartitionString(
+      const folly::F14FastMap<std::string, std::optional<std::string>>& keys);
+
+  const std::string partition_;
 };
 
 /// For Hive, 'partition' means 'bucket'.
@@ -60,6 +75,10 @@ class HivePartitionType : public connector::PartitionType {
       bool isLocal) const override;
 
   std::string toString() const override;
+
+  int32_t numPartitions() const {
+    return numPartitions_;
+  }
 
  private:
   const int32_t numPartitions_;
@@ -123,6 +142,10 @@ class HiveTableLayout : public TableLayout {
 
   const PartitionType* partitionType() const override {
     return partitionType_.has_value() ? &partitionType_.value() : nullptr;
+  }
+
+  std::span<const Column* const> discretePredicateColumns() const override {
+    return hivePartitionColumns_;
   }
 
   /// Returns SerDe parameters for this layout. Default implementation returns

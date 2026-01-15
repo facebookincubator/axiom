@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <fmt/format.h>
+#include <folly/String.h>
+#include <gflags/gflags.h>
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
 #include "axiom/connectors/hive/StatisticsBuilder.h"
 #include "velox/common/base/Fs.h"
@@ -24,6 +27,8 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/Options.h"
 
+DECLARE_int64(hive_max_sample_size);
+
 namespace facebook::axiom::connector::hive {
 
 /// Describes a file in a table. Input to split enumeration.
@@ -31,6 +36,49 @@ struct FileInfo {
   std::string path;
   folly::F14FastMap<std::string, std::optional<std::string>> partitionKeys;
   std::optional<int32_t> bucketNumber;
+};
+
+/// Describes a partition (leaf directory) in a partitioned table.
+struct LocalHivePartitionHandle : public HivePartitionHandle {
+  LocalHivePartitionHandle()
+      : HivePartitionHandle(
+            folly::F14FastMap<std::string, std::optional<std::string>>{},
+            std::nullopt) {}
+
+  LocalHivePartitionHandle(
+      std::string partitionPath,
+      folly::F14FastMap<std::string, std::optional<std::string>> keys,
+      std::vector<FileInfo*> partitionFiles = {})
+      : HivePartitionHandle(std::move(keys), std::nullopt),
+        path(std::move(partitionPath)),
+        files(std::move(partitionFiles)) {}
+
+  PartitionStatistics* mutableStats() {
+    return &stats;
+  }
+
+  const PartitionStatistics& getStats() const {
+    return stats;
+  }
+
+  std::string toString() const override {
+    std::vector<std::string> parts;
+    for (const auto& [key, value] : partitionKeys) {
+      if (value.has_value()) {
+        parts.push_back(fmt::format("{}={}", key, value.value()));
+      } else {
+        parts.push_back(fmt::format("{}=__HIVE_DEFAULT_PARTITION__", key));
+      }
+    }
+    return fmt::format(
+        "<LocalHivePartitionHandle {} {} files>",
+        folly::join(", ", parts),
+        files.size());
+  }
+
+  std::string path;
+  mutable PartitionStatistics stats;
+  std::vector<FileInfo*> files;
 };
 
 class LocalHiveSplitSource : public SplitSource {
@@ -71,6 +119,10 @@ class LocalHiveSplitManager : public ConnectorSplitManager {
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
 
+  std::vector<PartitionStatisticsPtr> getPartitionStatistics(
+      std::span<const PartitionHandlePtr> partitions,
+      const std::vector<std::string>& columns) override;
+
   std::shared_ptr<SplitSource> getSplitSource(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
@@ -82,6 +134,20 @@ class LocalHiveSplitManager : public ConnectorSplitManager {
 /// local files and stores the file list inside 'this'.
 class LocalHiveTableLayout : public HiveTableLayout {
  public:
+  /// Result of sampling operations
+  struct SampleResult {
+    int64_t numSampled; // Number of rows sampled
+    int64_t numPassed; // Number of rows that passed filters
+    int64_t numTotal; // Total number of rows in selected partitions
+  };
+
+  /// Result of split enumeration for sampling
+  struct SplitsToSample {
+    std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
+    int64_t maxRowsPerSplit; // Max rows to read from each split
+    int64_t totalRows; // Total rows across all selected partitions
+  };
+
   LocalHiveTableLayout(
       const std::string& name,
       const Table* table,
@@ -126,23 +192,68 @@ class LocalHiveTableLayout : public HiveTableLayout {
     files_ = std::move(files);
   }
 
+  const std::vector<std::shared_ptr<const LocalHivePartitionHandle>>&
+  partitions() const {
+    return partitions_;
+  }
+
+  void setPartitions(
+      std::vector<std::shared_ptr<const LocalHivePartitionHandle>> partitions) {
+    partitions_ = std::move(partitions);
+  }
+
   const std::unordered_map<std::string, std::string>& serdeParameters()
       const override {
     return serdeParameters_;
   }
 
   /// Like sample() above, but fills 'builders' with the data.
-  std::pair<int64_t, int64_t> sample(
+  /// Returns SampleResult with numSampled, numPassed, and numTotal.
+  /// If builderNames is provided, it will be filled with the top-level column
+  /// name corresponding to each builder in statsBuilders.
+  SampleResult sample(
       const velox::connector::ConnectorTableHandlePtr& handle,
       float pct,
       velox::RowTypePtr scanType,
       const std::vector<velox::common::Subfield>& fields,
       velox::HashStringAllocator* allocator,
-      std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders) const;
+      std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders,
+      std::vector<std::string>* builderNames = nullptr) const;
+
+  /// Samples partitions individually, updating both table-level and
+  /// partition-level statistics.
+  std::pair<int64_t, int64_t> samplePartitions(
+      const velox::connector::ConnectorTableHandlePtr& handle,
+      float pct,
+      velox::RowTypePtr scanType,
+      const std::vector<velox::common::Subfield>& fields,
+      velox::HashStringAllocator* allocator,
+      std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders);
+
+  /// Reads a single split and updates statistics builders.
+  /// Returns (scannedRows, passingRows) for the split.
+  std::pair<int64_t, int64_t> sampleFile(
+      const std::shared_ptr<velox::connector::ConnectorSplit>& split,
+      const velox::RowTypePtr& outputType,
+      const velox::connector::ConnectorTableHandlePtr& tableHandle,
+      const velox::connector::ColumnHandleMap& columnHandles,
+      velox::connector::ConnectorQueryCtx* connectorQueryCtx,
+      std::vector<std::unique_ptr<StatisticsBuilder>>& builders,
+      int64_t maxRowsToScan,
+      int64_t& currentScannedRows) const;
 
  private:
+  /// Enumerates splits to sample and calculates total row count.
+  /// Returns splits to sample, max rows per split, and total row count.
+  /// Also returns the list of partitions as an output parameter.
+  SplitsToSample enumerateSplitsToSample(
+      const velox::connector::ConnectorTableHandlePtr& tableHandle,
+      float pct,
+      std::vector<PartitionHandlePtr>& partitions) const;
+
   std::vector<std::unique_ptr<const FileInfo>> files_;
   std::vector<std::unique_ptr<const FileInfo>> ownedFiles_;
+  std::vector<std::shared_ptr<const LocalHivePartitionHandle>> partitions_;
   std::unordered_map<std::string, std::string> serdeParameters_;
 };
 
@@ -219,6 +330,11 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
     return hiveConnector_;
   }
 
+  const std::shared_ptr<velox::connector::hive::HiveConfig>& hiveConfig()
+      const {
+    return hiveConfig_;
+  }
+
   /// Rereads the contents of the data path and re-creates the tables
   /// and stats. This is used in tests after adding tables.
   void reinitialize();
@@ -284,7 +400,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   std::shared_ptr<LocalTable> findTableLocked(std::string_view name) const;
 
-  mutable std::mutex mutex_;
+  mutable std::recursive_mutex mutex_;
   mutable bool initialized_{false};
   std::shared_ptr<velox::memory::MemoryPool> rootPool_{
       velox::memory::memoryManager()->addRootPool()};

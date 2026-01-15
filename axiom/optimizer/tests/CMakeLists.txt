@@ -44,7 +44,25 @@ target_link_libraries(
   gtest_main
 )
 
-add_library(axiom_optimizer_tests_plan_matcher PlanMatcher.cpp)
+add_library(axiom_optimizer_tests_feature_gen FeatureGen.cpp)
+
+target_link_libraries(
+  axiom_optimizer_tests_feature_gen
+  axiom_logical_plan_builder
+  axiom_optimizer_test_utils
+  velox_exec_test_lib
+  velox_type
+  velox_vector
+  velox_vector_test_lib
+)
+
+add_library(
+  axiom_optimizer_tests_plan_matcher
+  OBJECT
+  PlanMatcher.cpp
+  PlanMatcherGenerator.cpp
+  ExprPrinters.cpp
+)
 
 target_link_libraries(
   axiom_optimizer_tests_plan_matcher
@@ -85,9 +103,28 @@ target_link_libraries(
   axiom_runner_tests_utils
 )
 
+add_executable(axiom_optimizer_filters_test FiltersTest.cpp)
+
+add_test(
+  NAME axiom_optimizer_filters_test
+  COMMAND axiom_optimizer_filters_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(
+  axiom_optimizer_filters_test
+  velox_dwio_common_test_utils
+  axiom_optimizer_tests_parquet_tpch
+  axiom_optimizer_tests_query_test_base
+  axiom_optimizer_tests_hive_queries_test_base
+  axiom_runner_tests_utils
+)
+
 add_executable(
   axiom_optimizer_tests
   AggregationPlanTest.cpp
+  ConstraintsTest.cpp
+  CopartitionTest.cpp
   CsvReadWriteTest.cpp
   DerivedTablePrinterTest.cpp
   FilterPushdownTest.cpp
@@ -95,6 +132,7 @@ add_executable(
   HiveLimitQueriesTest.cpp
   HiveQueriesTest.cpp
   JoinTest.cpp
+  OrderedOpsTest.cpp
   ParquetTpchTest.cpp
   PrecomputeProjectionTest.cpp
   PlanTest.cpp
@@ -103,7 +141,6 @@ add_executable(
   SubfieldTest.cpp
   SubqueryTest.cpp
   SyntacticJoinOrderTest.cpp
-  FeatureGen.cpp
   Genies.cpp
   TestConnectorQueryTest.cpp
   TpchConnectorQueryTest.cpp
@@ -120,6 +157,35 @@ add_test(
 
 target_link_libraries(
   axiom_optimizer_tests
+  axiom_optimizer_test_utils
+  axiom_velox_udfs
+  axiom_optimizer
+  axiom_logical_plan_builder
+  axiom_optimizer_tests_feature_gen
+  axiom_optimizer_tests_hive_queries_test_base
+  axiom_optimizer_tests_parquet_tpch
+  axiom_optimizer_tests_plan_matcher
+  axiom_optimizer_tests_query_test_base
+  axiom_runner_tests_utils
+  axiom_test_connector
+  velox_dwio_text_reader_register
+  velox_dwio_text_writer_register
+  GTest::gmock
+  glog::glog
+  GTest::gtest
+  GTest::gtest_main
+)
+
+add_executable(axiom_stats_and_history_test StatsAndHistory.cpp)
+
+add_test(
+  NAME axiom_stats_and_history_test
+  COMMAND axiom_stats_and_history_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(
+  axiom_stats_and_history_test
   axiom_optimizer_test_utils
   axiom_optimizer
   axiom_logical_plan_builder
@@ -151,4 +217,19 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   pthread
+)
+
+add_executable(axiom_feature_benchmark FeatureBenchmark.cpp)
+
+target_link_libraries(
+  axiom_feature_benchmark
+  axiom_optimizer_tests_feature_gen
+  axiom_optimizer_tests_query_test_base
+  axiom_optimizer_test_utils
+  axiom_velox_udfs
+  axiom_runner_tests_utils
+  velox_file
+  velox_dwio_dwrf_writer
+  velox_exec_test_lib
+  glog::glog
 )

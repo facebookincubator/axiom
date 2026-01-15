@@ -16,7 +16,10 @@
 
 #pragma once
 
+#include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/RelationOp.h"
+
+#include <span>
 
 namespace facebook::axiom::optimizer {
 
@@ -54,7 +57,7 @@ class History {
   /// columns extracted. This is used first for coming up with join orders. The
   /// plan candidates are then made and findCost() is used to access historical
   /// cost and plan cardinality.
-  virtual bool setLeafSelectivity(
+  virtual void setLeafSelectivity(
       BaseTable& baseTable,
       const velox::RowTypePtr& scanType) = 0;
 
@@ -62,11 +65,25 @@ class History {
 
   virtual std::pair<float, float> sampleJoin(JoinEdge* edge) = 0;
 
+  /// Guesses fanouts for multiple join edges, potentially in parallel.
+  /// Checks the cache first for covered edges, then processes remaining
+  /// edges with both sides being BaseTables in parallel for unique pairs.
+  virtual void guessFanouts(std::span<JoinEdge*> edges) = 0;
+
+  /// Combines statistics from a sample of partitions to estimate table-level
+  /// statistics. Samples the first and last partitions plus a fraction of
+  /// remaining partitions based on pct. Returns estimated total rows.
+  virtual int64_t combineStatistics(
+      const velox::connector::ConnectorTableHandlePtr& handle,
+      float pct,
+      const std::vector<velox::common::Subfield>& fields = {},
+      std::vector<connector::ColumnStatistics>* statistics = nullptr) const = 0;
+
   virtual void recordLeafSelectivity(
       std::string_view handle,
       float selectivity,
       bool overwrite = true) {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::recursive_mutex> l(mutex_);
     if (!overwrite && leafSelectivities_.contains(handle)) {
       return;
     }
@@ -83,7 +100,7 @@ class History {
 
  protected:
   // serializes access to all data members.
-  std::mutex mutex_;
+  std::recursive_mutex mutex_;
 
   /// Memo for selectivity keyed on ConnectorTableHandle::toString().
   /// Values between 0 and 1.
@@ -163,11 +180,16 @@ float shuffleCost(const ColumnVector& columns);
 float shuffleCost(const ExprVector& exprs);
 
 /// Returns cost of 'expr' for one row, excluding cost of subexpressions.
-float selfCost(ExprCP expr);
+/// If constraints is provided, values are looked up from the constraint map.
+float selfCost(ExprCP expr, const ConstraintMap* constraints = nullptr);
 
 /// Returns the per row cost of 'expr' and its subexpressions, excluding
 /// 'notCounting', which represents already computed subtrees of 'expr'.
-float costWithChildren(ExprCP expr, const PlanObjectSet& notCounting);
+/// If constraints is provided, values are looked up from the constraint map.
+float costWithChildren(
+    ExprCP expr,
+    const PlanObjectSet& notCounting,
+    const ConstraintMap* constraints = nullptr);
 
 /// Samples the join of 'left' and 'right' on 'leftKeys' and
 /// 'rightKeys'. Returns the number of hits on the right for one row

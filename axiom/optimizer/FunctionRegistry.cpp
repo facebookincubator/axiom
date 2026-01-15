@@ -15,6 +15,9 @@
  */
 
 #include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/Filters.h"
+#include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/Schema.h"
 #include "velox/expression/ExprConstants.h"
 
 namespace facebook::axiom::optimizer {
@@ -140,6 +143,105 @@ folly::F14FastMap<PathCP, lp::ExprPtr> rowConstructorExplode(
   }
   return result;
 }
+
+std::optional<Value> subscriptConstraint(ExprCP expr, PlanState& state) {
+  // Check if expr is a call before casting
+  if (expr->type() != PlanType::kCallExpr) {
+    return std::nullopt;
+  }
+  auto* call = expr->as<Call>();
+  if (call->args().size() != 2) {
+    return std::nullopt;
+  }
+
+  const auto& firstArg = call->args()[0];
+  const auto& secondArg = call->args()[1];
+  const auto& firstValue = value(state, firstArg);
+
+  // Check if first argument has children set
+  if (!firstValue.children) {
+    return std::nullopt;
+  }
+
+  auto typeKind = firstValue.type->kind();
+
+  // Case 1: Array type - return the single child value
+  if (typeKind == velox::TypeKind::ARRAY) {
+    if (!firstValue.children->values.empty()) {
+      return firstValue.children->values[0];
+    }
+    return std::nullopt;
+  }
+
+  // Case 2 & 3: Map or Row type with second argument as literal
+  if (typeKind == velox::TypeKind::MAP || typeKind == velox::TypeKind::ROW) {
+    // Check if second argument is a literal before casting
+    if (secondArg->type() != PlanType::kLiteralExpr) {
+      return std::nullopt;
+    }
+    auto* literal = secondArg->as<Literal>();
+
+    // Case 2: Map or Row with named children
+    if (!firstValue.children->names.empty()) {
+      // Find the index where the name matches the literal value
+      const auto& literalValue = literal->literal();
+
+      for (size_t i = 0; i < firstValue.children->names.size(); ++i) {
+        Name childName = firstValue.children->names[i];
+
+        // Match the name with the literal
+        if (literalValue.kind() == velox::TypeKind::VARCHAR ||
+            literalValue.kind() == velox::TypeKind::VARBINARY) {
+          if (std::string_view(childName) ==
+              literalValue.value<velox::StringView>()) {
+            if (i < firstValue.children->values.size()) {
+              return firstValue.children->values[i];
+            }
+          }
+        } else if (
+            literalValue.kind() == velox::TypeKind::INTEGER ||
+            literalValue.kind() == velox::TypeKind::BIGINT) {
+          // For numeric literals on ROW types, match by field index
+          if (typeKind == velox::TypeKind::ROW) {
+            int64_t index = literalValue.kind() == velox::TypeKind::INTEGER
+                ? literalValue.value<int32_t>()
+                : literalValue.value<int64_t>();
+            if (index >= 0 && static_cast<size_t>(index) == i &&
+                i < firstValue.children->values.size()) {
+              return firstValue.children->values[i];
+            }
+          }
+        }
+      }
+      return std::nullopt;
+    }
+
+    // Case 3: Map with unnamed children (empty names) - return second child
+    // (values)
+    if (typeKind == velox::TypeKind::MAP &&
+        firstValue.children->names.empty()) {
+      if (firstValue.children->values.size() >= 2) {
+        return firstValue.children->values[1];
+      }
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<Value> coalesceConstraint(ExprCP expr, PlanState& state) {
+  // Check if expr is a call before casting
+  if (expr->type() != PlanType::kCallExpr) {
+    return std::nullopt;
+  }
+  auto* call = expr->as<Call>();
+  if (call->args().empty()) {
+    return std::nullopt;
+  }
+
+  // Return the Value of the first argument
+  return value(state, call->args()[0]);
+}
 } // namespace
 
 // static
@@ -199,9 +301,114 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->valuePathToArgPath = rowConstructorSubfield;
     metadata->explode = rowConstructorExplode;
+
+    // Add constraint function to propagate statistics through row construction
+    metadata->functionConstraint =
+        [](ExprCP expr, PlanState& state) -> std::optional<Value> {
+      // Check if expr is a call before casting
+      if (expr->type() != PlanType::kCallExpr) {
+        return std::nullopt;
+      }
+      auto* call = expr->as<Call>();
+
+      const auto& resultValue = value(state, expr);
+
+      // Result must be a ROW type
+      if (resultValue.type->kind() != velox::TypeKind::ROW) {
+        return std::nullopt;
+      }
+
+      auto& rowType = resultValue.type->as<velox::TypeKind::ROW>();
+      const auto& args = call->args();
+
+      // Create a Value for the row with children
+      Value result = resultValue;
+
+      auto* childValues = make<ChildValues>();
+      childValues->names.reserve(rowType.size());
+      childValues->values.reserve(args.size());
+
+      // Set the names from the row type and values from the arguments
+      for (size_t i = 0; i < rowType.size() && i < args.size(); ++i) {
+        childValues->names.push_back(toName(rowType.nameOf(i)));
+        childValues->values.push_back(value(state, args[i]));
+      }
+
+      const_cast<const ChildValues*&>(result.children) = childValues;
+
+      return result;
+    };
+
     // Presto row_constructor created without prefix, so we register it without
     // prefix too.
     registerFunction("row_constructor", std::move(metadata));
+  }
+
+  {
+    // Register subscript function with constraint function
+    auto metadata = std::make_unique<FunctionMetadata>();
+    metadata->functionConstraint = subscriptConstraint;
+    metadata->cost = 0.2;
+
+    // Presto subscript created without prefix, so we register it without prefix
+    // too.
+    registerFunction("subscript", std::move(metadata));
+  }
+
+  {
+    // Register coalesce special form with constraint function
+    auto metadata = std::make_unique<FunctionMetadata>();
+    metadata->functionConstraint = coalesceConstraint;
+
+    registerFunction(SpecialFormCallNames::kCoalesce, std::move(metadata));
+  }
+
+  {
+    // Register map_keys with constraint function
+    auto metadata = std::make_unique<FunctionMetadata>();
+    metadata->functionConstraint =
+        [](ExprCP expr, PlanState& state) -> std::optional<Value> {
+      // Check if expr is a call before casting
+      if (expr->type() != PlanType::kCallExpr) {
+        return std::nullopt;
+      }
+      auto* call = expr->as<Call>();
+      if (call->args().empty()) {
+        return std::nullopt;
+      }
+
+      // Get the Value from the first argument (the map)
+      const auto& firstArgValue = value(state, call->args()[0]);
+
+      // The first argument must be a map
+      if (firstArgValue.type->kind() != velox::TypeKind::MAP) {
+        return std::nullopt;
+      }
+
+      auto& mapType = firstArgValue.type->as<velox::TypeKind::MAP>();
+
+      // Create a Value for the result array
+      Value result = value(state, expr);
+
+      // Set the size to the map's size
+      const_cast<float&>(result.size) = firstArgValue.size;
+
+      // Create children with one value representing the array element (the key
+      // type)
+      auto* childValues = make<ChildValues>();
+      childValues->values.reserve(1);
+
+      // Create a value for the array element (the map's key type)
+      Value elementValue(mapType.keyType().get(), firstArgValue.size);
+      childValues->values.push_back(elementValue);
+
+      const_cast<const ChildValues*&>(result.children) = childValues;
+
+      return result;
+    };
+    metadata->cost = 0.1;
+
+    registerFunction(fullName("map_keys"), std::move(metadata));
   }
 
   auto* registry = FunctionRegistry::instance();

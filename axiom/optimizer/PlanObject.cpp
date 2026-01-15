@@ -25,7 +25,6 @@ const auto& planTypeNames() {
       {PlanType::kLiteralExpr, "LiteralExpr"},
       {PlanType::kCallExpr, "CallExpr"},
       {PlanType::kAggregateExpr, "AggregateExpr"},
-      {PlanType::kFieldExpr, "FieldExpr"},
       {PlanType::kLambdaExpr, "LambdaExpr"},
       {PlanType::kTableNode, "TableNode"},
       {PlanType::kValuesTableNode, "ValuesTableNode"},

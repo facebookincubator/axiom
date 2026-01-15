@@ -22,8 +22,17 @@
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/RelationOp.h"
 #include "axiom/runner/MultiFragmentPlan.h"
+#include "velox/type/Subfield.h"
 
 namespace facebook::axiom::optimizer {
+
+/// Converts a PathSet for a column into a vector of Velox Subfields.
+/// Used for column handle creation in table scans with subfield pushdown.
+/// Handles map-as-struct columns by converting the first subscript to a
+/// NestedField.
+std::vector<velox::common::Subfield> columnSubfields(
+    BaseTableCP table,
+    int32_t columnId);
 
 /// A map from PlanNodeId of an executable plan to a key for
 /// recording the execution for use in cost model. The key is a
@@ -178,6 +187,13 @@ class ToVelox {
       const Join& join,
       runner::ExecutableFragment& fragment,
       std::vector<runner::ExecutableFragment>& stages);
+
+  velox::core::PlanNodePtr makeMergeJoin(
+      const Join& join,
+      runner::ExecutableFragment& fragment,
+      std::vector<runner::ExecutableFragment>& stages,
+      velox::core::PlanNodePtr left,
+      velox::core::PlanNodePtr right);
 
   velox::core::PlanNodePtr makeRepartition(
       const Repartition& repartition,

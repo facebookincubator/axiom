@@ -43,41 +43,134 @@ float shuffleCost(const ExprVector& exprs) {
   return byteSize(exprs) * Costs::kByteShuffleCost;
 }
 
-float selfCost(ExprCP expr) {
+namespace {
+
+// Computes the overhead cost for accessing repeated nested data in complex
+// types. For arrays and maps, the overhead is proportional to the number of
+// repetitions (product of sizes in parent values) times the cost of accessing
+// each length. For structs, the overhead is the sum of overhead for all
+// children.
+float columnRepeatOverhead(const Value& value, float parentRepeat = 1.0f) {
+  if (!value.children) {
+    return 0;
+  }
+
+  auto typeKind = value.type->kind();
+
+  if (typeKind == velox::TypeKind::ROW) {
+    // For structs, sum the overhead of all children
+    float total = 0;
+    for (const auto& childValue : value.children->values) {
+      total += columnRepeatOverhead(childValue, parentRepeat);
+    }
+    return total;
+  } else if (typeKind == velox::TypeKind::MAP) {
+    // For maps with named children, use same logic as ROW (sum of children)
+    if (!value.children->names.empty()) {
+      float total = 0;
+      for (const auto& childValue : value.children->values) {
+        total += columnRepeatOverhead(childValue, parentRepeat);
+      }
+      return total;
+    }
+    // For maps with unnamed children, compute repeat overhead
+    if (value.children->names.empty()) {
+      // Calculate the repeat factor for this level
+      float currentSize = value.size != Value::kUnknown ? value.size : 3.0f;
+      float repeat = parentRepeat * currentSize;
+
+      // Overhead is 4 * kColumnByteCost per length access.
+      float overhead = 4.0f * Costs::kColumnByteCost * parentRepeat;
+
+      // Recursively add overhead for children
+      for (const auto& childValue : value.children->values) {
+        overhead += columnRepeatOverhead(childValue, repeat);
+      }
+      return overhead;
+    }
+  } else if (typeKind == velox::TypeKind::ARRAY) {
+    // For arrays with unnamed children, compute repeat overhead
+    if (value.children->names.empty()) {
+      // Calculate the repeat factor for this level
+      float currentSize = value.size != Value::kUnknown ? value.size : 3.0f;
+      float repeat = parentRepeat * currentSize;
+
+      // Overhead is 4 * kColumnByteCost per length access.
+      float overhead = 4.0f * Costs::kColumnByteCost * parentRepeat;
+
+      // Recursively add overhead for children
+      for (const auto& childValue : value.children->values) {
+        overhead += columnRepeatOverhead(childValue, repeat);
+      }
+      return overhead;
+    }
+  }
+
+  return 0;
+}
+
+/// Helper function to look up value for an expression.
+/// If constraints is non-null and expr has an entry in the map, returns that
+/// value. Otherwise returns expr->value().
+const Value& value(ExprCP expr, const ConstraintMap* constraints) {
+  if (constraints != nullptr) {
+    auto it = constraints->find(expr->id());
+    if (it != constraints->end()) {
+      return it->second;
+    }
+  }
+  return expr->value();
+}
+
+} // namespace
+
+float selfCost(ExprCP expr, const ConstraintMap* constraints) {
   switch (expr->type()) {
     case PlanType::kColumnExpr: {
-      auto kind = expr->value().type->kind();
-      if (kind == velox::TypeKind::ARRAY || kind == velox::TypeKind::MAP) {
-        return 200;
-      }
-      return 10;
+      const auto& val = value(expr, constraints);
+      // Cost is byteSize * kColumnByteCost + repeat overhead for complex types
+      return val.byteSize() * Costs::kColumnByteCost +
+          columnRepeatOverhead(val);
     }
     case PlanType::kCallExpr: {
       auto metadata = expr->as<Call>()->metadata();
       if (metadata) {
         if (metadata->costFunc) {
-          return metadata->costFunc(expr->as<Call>());
+          return metadata->costFunc(expr->as<Call>(), constraints);
         }
-        return metadata->cost;
+        if (metadata->cost.has_value()) {
+          return metadata->cost.value();
+        }
       }
-      return 5;
+      // Default cost is the cost of memcpy for the args * 4.
+      // Cost of memcpy would be byteSize() / cache line size.
+      // Cache line size is 16 for this purpose (64 bytes / 4).
+      auto call = expr->as<Call>();
+      float argsByteSize = 0;
+      for (auto arg : call->args()) {
+        argsByteSize += value(arg, constraints).byteSize();
+      }
+      return argsByteSize / 16.0f;
     }
     default:
       return 5;
   }
 }
 
-float costWithChildren(ExprCP expr, const PlanObjectSet& notCounting) {
+float costWithChildren(
+    ExprCP expr,
+    const PlanObjectSet& notCounting,
+    const ConstraintMap* constraints) {
   if (notCounting.contains(expr)) {
     return 0;
   }
   switch (expr->type()) {
     case PlanType::kColumnExpr:
-      return selfCost(expr);
+      return selfCost(expr, constraints);
     case PlanType::kCallExpr: {
-      float cost = selfCost(expr);
+      float cost = selfCost(expr, constraints);
       for (auto arg : expr->as<Call>()->args()) {
-        cost += costWithChildren(arg, notCounting);
+        cost += costWithChildren(arg, notCounting, constraints);
       }
       return cost;
     }

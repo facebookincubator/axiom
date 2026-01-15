@@ -21,6 +21,7 @@
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "axiom/optimizer/tests/utils/DfFunctions.h"
+#include "axiom/optimizer/tests/utils/Register.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -119,6 +120,10 @@ class SubfieldTest : public QueryTestBase,
 
   void SetUp() override {
     QueryTestBase::SetUp();
+
+    // Register mock UDFs for testing
+    velox_udf::registerDfMockUdfs();
+
     switch (GetParam()) {
       case 1:
         optimizerOptions_ = OptimizerOptions();
@@ -136,6 +141,7 @@ class SubfieldTest : public QueryTestBase,
         break;
     }
     optimizerOptions_.traceFlags = FLAGS_optimizer_trace;
+    optimizerOptions_.sampleComplexTypes = true;
   }
 
   void TearDown() override {
@@ -319,6 +325,149 @@ class SubfieldTest : public QueryTestBase,
                            : fmt::format("[{}]{}", first, rest);
   };
 
+  void testFeaturePipeline() {
+    FeatureOptions opts;
+    opts.rng.seed(1);
+    auto vectors = makeFeatures(1, 100, opts, pool_.get());
+
+    // Set parallel projection width to 4
+    auto savedParallelProjectWidth = optimizerOptions_.parallelProjectWidth;
+    optimizerOptions_.parallelProjectWidth = 4;
+    SCOPE_EXIT {
+      optimizerOptions_.parallelProjectWidth = savedParallelProjectWidth;
+    };
+
+    // Create the logical plan using makeFeaturePipeline
+    auto logicalPlan = makeFeaturePipeline(opts);
+
+    LOG(INFO) << "=== Logical Plan ===";
+    LOG(INFO) << logicalPlan->toString();
+
+    // Convert to executable plan
+    auto fragmentedPlan = planVelox(logicalPlan);
+    auto executablePlan = extractPlanNode(fragmentedPlan);
+
+    LOG(INFO) << "=== Executable Plan ===";
+    LOG(INFO) << executablePlan->toString(true, true);
+
+    // Execute the plan and verify it completes without errors
+    auto result = runVelox(logicalPlan);
+
+    // Verify we got results
+    ASSERT_FALSE(result.results.empty())
+        << "Feature pipeline should produce results";
+
+    // Verify the result has the expected columns
+    auto resultType = result.results[0]->type();
+    ASSERT_EQ(resultType->kind(), TypeKind::ROW)
+        << "Result should be a ROW type";
+
+    auto rowType = std::dynamic_pointer_cast<const RowType>(resultType);
+    ASSERT_NE(rowType, nullptr) << "Should be able to cast to RowType";
+
+    EXPECT_TRUE(rowType->containsChild("ts"))
+        << "Result should contain 'ts' column";
+    EXPECT_TRUE(rowType->containsChild("uid"))
+        << "Result should contain 'uid' column";
+    EXPECT_TRUE(rowType->containsChild("float_exprs"))
+        << "Result should contain 'float_exprs' column";
+    EXPECT_TRUE(rowType->containsChild("id_list_exprs"))
+        << "Result should contain 'id_list_exprs' column";
+
+    LOG(INFO) << "=== Feature Pipeline Test Complete ===";
+    LOG(INFO) << "Processed " << result.results.size()
+              << " result vectors with " << result.results[0]->size()
+              << " rows";
+  }
+
+  void testFeatureStats() {
+    // Enable complex type sampling
+    optimizerOptions_.sampleComplexTypes = true;
+    SCOPE_EXIT {
+      optimization_.reset();
+    };
+
+    // Create SQL query accessing various map keys that exist in the features
+    // table Based on FeatureGen.cpp:
+    // - float_features keys: 10000, 10100, 10200, 10300, 10400, 10500, 10600,
+    // 10700, 10800, 10900
+    // - id_list_features keys: 200000, 200200, 200400, 200600, 200800, 201000,
+    // 201200, 201400, 201600, 201800
+    // - id_score_list_features keys: 200000, 200200, 200400, 200600, 200800
+    const std::string sql = R"(
+      SELECT
+        float_features[10100] as f1,
+        float_features[10200] as f2,
+        id_list_features[200000] as idl1,
+        id_list_features[200600] as idl2,
+        id_score_list_features[200400] as idsl1,
+        id_score_list_features[200800] as idsl2
+      FROM features
+    )";
+
+    // Run optimization
+    optimize(sql, kHiveConnectorId);
+
+    // Get the best plan
+    ASSERT_NE(optimization_, nullptr) << "Optimization should be created";
+    auto* plan = optimization_->bestPlan();
+    ASSERT_NE(plan, nullptr) << "Best plan should not be null";
+
+    // Find the TableScan in the plan
+    auto* tableScanOp = findInPlan(plan->op.get(), RelType::kTableScan);
+    ASSERT_NE(tableScanOp, nullptr) << "Should find a TableScan in the plan";
+
+    auto* tableScan = tableScanOp->as<TableScan>();
+    ASSERT_NE(tableScan, nullptr) << "Should be able to cast to TableScan";
+
+    auto* baseTable = tableScan->baseTable;
+    ASSERT_NE(baseTable, nullptr) << "Should have a BaseTable in the TableScan";
+
+    // Check all columns in the base table
+    for (auto* column : baseTable->columns) {
+      const auto* valueType = column->value().type;
+      if (!valueType) {
+        continue;
+      }
+
+      auto columnName = std::string(column->name());
+      auto typeKind = valueType->kind();
+      const auto& value = column->value();
+
+      // Determine if this is a complex type or scalar type
+      bool isComplexType =
+          (typeKind == velox::TypeKind::ARRAY ||
+           typeKind == velox::TypeKind::MAP ||
+           typeKind == velox::TypeKind::ROW);
+
+      if (isComplexType) {
+        // For complex types, verify children are set
+        EXPECT_NE(value.children, nullptr)
+            << "Column '" << columnName << "' is complex type "
+            << "and should have children set";
+
+        if (value.children) {
+          std::cout << "Column '" << columnName << "' (complex type)"
+                    << " has " << value.children->values.size()
+                    << " child values" << std::endl;
+        }
+      } else {
+        // For scalar types, verify min and max are set
+        EXPECT_NE(value.min, nullptr)
+            << "Column '" << columnName << "' is scalar type "
+            << "and should have min set";
+        EXPECT_NE(value.max, nullptr)
+            << "Column '" << columnName << "' is scalar type "
+            << "and should have max set";
+
+        if (value.min && value.max) {
+          std::cout << "Column '" << columnName << "' (scalar type)"
+                    << " has min and max set" << std::endl;
+        }
+      }
+    }
+  }
+
   void testMakeRowFromMap() {
     lp::PlanBuilder::Context ctx(
         exec::test::kHiveConnectorId, getQueryCtx(), resolveDfFunction);
@@ -329,7 +478,7 @@ class SubfieldTest : public QueryTestBase,
             .project({"float_features as float_features_1"})
             .project({"float_features_1 as float_features_2"})
             .project(
-                {"make_row_from_map(float_features_2, array[10010, 10020, 10030], array['f1', 'f2', 'f3']) as r"})
+                {"make_row_from_map(float_features_2, array[10100, 10200, 10030], array['f1', 'f2', 'f3']) as r"})
             .project({"r as r1"})
             .project({"r1 as r2"})
             .project(
@@ -345,15 +494,15 @@ class SubfieldTest : public QueryTestBase,
     const auto plan = toSingleNodePlan(logicalPlan);
 
     verifyRequiredSubfields(
-        plan, {{"float_features", {subfield("10010"), subfield("10020")}}});
+        plan, {{"float_features", {subfield("10100"), subfield("10200")}}});
 
     auto matcher =
         core::PlanMatcherBuilder()
-            .hiveScan("features", {}, "float_features[10010] + 1 < 10000")
+            .hiveScan("features", {}, "float_features[10100] + 1 < 10000")
             .localPartition(
                 core::PlanMatcherBuilder()
                     .hiveScan(
-                        "features", {}, "float_features[10010] + 1 < 10000")
+                        "features", {}, "float_features[10100] + 1 < 10000")
                     .project()
                     .build())
             .project()
@@ -464,6 +613,12 @@ TEST_P(SubfieldTest, maps) {
       dwrf::Config::MAP_FLAT_COLS, {2, 3, 4});
 
   createTable("features", vectors, config);
+
+  // Test the feature pipeline
+  testFeaturePipeline();
+
+  // Test complex type statistics
+  testFeatureStats();
 
   testMakeRowFromMap();
 
@@ -674,6 +829,10 @@ TEST_P(SubfieldTest, overAggregation) {
 }
 
 TEST_P(SubfieldTest, blackbox) {
+  registerGenieUdfs();
+  if (GetParam() == 3) {
+    optimizerOptions_.allMapsAsStruct = true;
+  }
   auto data = makeRowVector(
       {"id", "m"},
       {
@@ -682,11 +841,12 @@ TEST_P(SubfieldTest, blackbox) {
               {"{1: 0.1, 2: 0.2}", "{3: 0.3, 4: 0.4}"}),
       });
 
-  createTable("t", {data});
+  createTable("t_blackbox", {data});
 
   lp::PlanBuilder::Context ctx(kHiveConnectorId);
   ctx.hook = [](const auto& name, const auto& args) -> lp::ExprPtr {
-    if (name == "map_row_from_map") {
+    if (name == "map_row_from_map" || name == "make_row_from_map" ||
+        name == "padded_make_row_from_map") {
       VELOX_CHECK(args.at(2)->isConstant());
       auto names = args.at(2)
                        ->template as<lp::ConstantExpr>()
@@ -715,7 +875,7 @@ TEST_P(SubfieldTest, blackbox) {
 
   auto logicalPlan =
       lp::PlanBuilder(ctx)
-          .tableScan("t")
+          .tableScan("t_blackbox")
           .project(
               {"map_row_from_map(m, array[1, 2, 3], array['f1', 'f2', 'f3']) as m"})
           .project({"make_named_row('x', m.f1, 'y', m.f2) as m"})
@@ -723,6 +883,82 @@ TEST_P(SubfieldTest, blackbox) {
           .build();
 
   ASSERT_NO_THROW(toSingleNodePlan(logicalPlan));
+
+  logicalPlan =
+      lp::PlanBuilder(ctx)
+          .tableScan("t_blackbox")
+          .project(
+              {"make_row_from_map(m, array[1, 2, 3], array['f1', 'f2', 'f3']) as m"})
+          .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  verifyRequiredSubfields(
+      plan, {{"m", {subfield("1"), subfield("2"), subfield("3")}}});
+
+  if (GetParam() == 1) {
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .project(
+                {"row_constructor(subscript(m_4,1),subscript(m_4,2),subscript(m_4,3))"})
+            .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  } else {
+    auto matcher =
+        core::PlanMatcherBuilder().tableScan().project().project().build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  logicalPlan =
+      lp::PlanBuilder(ctx, true)
+          .tableScan("t_blackbox")
+          .project(
+              {"identity(make_row_from_map(m, array[1, 2, 3], array['f1', 'f2', 'f3'])) as m"})
+          .project(
+              {"if (m.f1 < 0, ceil(m.f1), floor(m.f1)) as f1b",
+               "if (m.f2 < 0, 1 + floor(m.f2), ceil(m.f2) + 1) as f2b"})
+          .project({"f1b + 1 as f1b1", "f1b * 2 as f1b2b", "f2b * 3 as f2b3"})
+          .build();
+
+  // Enable parallel project for the remainder of this test. This is reset in
+  // SetUp().
+  optimizerOptions_.parallelProjectWidth = 2;
+  plan = toSingleNodePlan(logicalPlan);
+
+  verifyRequiredSubfields(
+      plan, {{"m", {subfield("1"), subfield("2"), subfield("3")}}});
+
+  if (GetParam() == 1) {
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .parallelProject()
+            .parallelProject(
+                {"identity(row_constructor(subscript(m_7,1),subscript(m_7,2),subscript(m_7,3)))"})
+            .parallelProject()
+            .parallelProject()
+            .project()
+            .build();
+
+    ASSERT_TRUE(matcher->match(plan));
+  }
+
+  logicalPlan =
+      lp::PlanBuilder(ctx, true)
+          .tableScan("t_blackbox")
+          .project(
+              {"make_row_from_map(m, array[1, 2, 3], array['f1', 'f2', 'f3']) as m"})
+          .project(
+              {"if (coalesce(m.f1, 1::REAL) < 0, ceil(coalesce(m.f1, 1::REAL)), floor(coalesce(m.f1, 1::REAL))) as f1b",
+               "if (coalesce(m.f2, 1::REAL) < 0, 1 + floor(coalesce(m.f2, 2::real)), ceil(coalesce(m.f2, 3::REAL)) + 1) as f2b"})
+          .project({"f1b + 1 as f1b1", "f1b * 2 as f1b2b", "f2b * 3 as f2b3"})
+          .build();
+
+  plan = toSingleNodePlan(logicalPlan);
+  std::cout << plan->toString(true, true);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
