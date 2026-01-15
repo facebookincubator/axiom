@@ -19,8 +19,11 @@
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/core/PlanNode.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
+
+#include <set>
 
 namespace facebook::axiom::runner {
 namespace {
@@ -331,6 +334,31 @@ void gatherScans(
     gatherScans(source, scans);
   }
 }
+
+/// Gathers all TableScanNodes that are direct children of MergeJoinNodes.
+void gatherMergeJoinScans(
+    const velox::core::PlanNodePtr& plan,
+    std::vector<velox::core::TableScanNodePtr>& scans) {
+  if (auto mergeJoin =
+          std::dynamic_pointer_cast<const velox::core::MergeJoinNode>(plan)) {
+    // Check if left child is a TableScanNode
+    if (auto leftScan =
+            std::dynamic_pointer_cast<const velox::core::TableScanNode>(
+                mergeJoin->sources()[0])) {
+      scans.push_back(leftScan);
+    }
+    // Check if right child is a TableScanNode
+    if (auto rightScan =
+            std::dynamic_pointer_cast<const velox::core::TableScanNode>(
+                mergeJoin->sources()[1])) {
+      scans.push_back(rightScan);
+    }
+  }
+  // Continue searching in children
+  for (const auto& source : plan->sources()) {
+    gatherMergeJoinScans(source, scans);
+  }
+}
 } // namespace
 
 void LocalRunner::makeStages(
@@ -388,71 +416,80 @@ void LocalRunner::makeStages(
       const auto& fragment = fragments_[fragmentIndex];
       const auto& stage = stages_[fragmentIndex];
 
-      std::vector<velox::core::TableScanNodePtr> scans;
-      gatherScans(fragment.fragment.planNode, scans);
+      // Check if this stage has a merge join group
+      if (fragmentIndex < mergeJoinGroups_.size() &&
+          !mergeJoinGroups_[fragmentIndex].scans.empty()) {
+        distributeMergeJoinSplits(
+            fragmentIndex, mergeJoinGroups_[fragmentIndex], stage);
+      } else {
+        std::vector<velox::core::TableScanNodePtr> scans;
+        gatherScans(fragment.fragment.planNode, scans);
 
-      for (const auto& scan : scans) {
-        auto source = splitSourceForScan(/*session=*/nullptr, *scan);
+        for (const auto& scan : scans) {
+          auto source = splitSourceForScan(/*session=*/nullptr, *scan);
 
-        std::vector<connector::SplitSource::SplitAndGroup> splits;
-        int32_t splitIdx = 0;
-        auto getNextSplit = [&]() {
-          if (splitIdx < splits.size()) {
-            return velox::exec::Split(std::move(splits[splitIdx++].split));
-          }
-          splits = source->getSplits(std::numeric_limits<int64_t>::max());
-          splitIdx = 1;
-          return velox::exec::Split(std::move(splits[0].split));
-        };
-
-        // Check if we have a bucket map for this stage
-        const bool hasBucketMap = !stageBucketMap_.empty() &&
-            fragmentIndex < stageBucketMap_.size() &&
-            !stageBucketMap_[fragmentIndex].empty();
-
-        // Distribute splits across tasks.
-        // For bucketed tables with a bucket map, route splits to specific
-        // workers. Otherwise, use round-robin distribution.
-        bool allDone = false;
-        do {
-          auto split = getNextSplit();
-          if (!split.hasConnectorSplit()) {
-            allDone = true;
-            break;
-          }
-
-          // Determine which task should receive this split
-          int32_t targetTaskIndex = -1;
-
-          if (hasBucketMap) {
-            // Try to extract bucket number from the split
-            auto* connectorSplit = split.connectorSplit.get();
-            auto* hiveSplit =
-                dynamic_cast<velox::connector::hive::HiveConnectorSplit*>(
-                    connectorSplit);
-
-            if (hiveSplit && hiveSplit->tableBucketNumber.has_value()) {
-              // Split has a bucket number - use the bucket map
-              const int32_t bucketNumber = hiveSplit->tableBucketNumber.value();
-              const int32_t numBuckets = stageBucketMap_[fragmentIndex].size();
-              const int32_t mappedBucket = bucketNumber % numBuckets;
-              targetTaskIndex = stageBucketMap_[fragmentIndex][mappedBucket];
+          std::vector<connector::SplitSource::SplitAndGroup> splits;
+          int32_t splitIdx = 0;
+          auto getNextSplit = [&]() {
+            if (splitIdx < splits.size()) {
+              return velox::exec::Split(std::move(splits[splitIdx++].split));
             }
+            splits = source->getSplits(std::numeric_limits<int64_t>::max());
+            splitIdx = 1;
+            return velox::exec::Split(std::move(splits[0].split));
+          };
+
+          // Check if we have a bucket map for this stage
+          const bool hasBucketMap = !stageBucketMap_.empty() &&
+              fragmentIndex < stageBucketMap_.size() &&
+              !stageBucketMap_[fragmentIndex].empty();
+
+          // Distribute splits across tasks.
+          // For bucketed tables with a bucket map, route splits to specific
+          // workers. Otherwise, use round-robin distribution.
+          bool allDone = false;
+          do {
+            auto split = getNextSplit();
+            if (!split.hasConnectorSplit()) {
+              allDone = true;
+              break;
+            }
+
+            // Determine which task should receive this split
+            int32_t targetTaskIndex = -1;
+
+            if (hasBucketMap) {
+              // Try to extract bucket number from the split
+              auto* connectorSplit = split.connectorSplit.get();
+              auto* hiveSplit =
+                  dynamic_cast<velox::connector::hive::HiveConnectorSplit*>(
+                      connectorSplit);
+
+              if (hiveSplit && hiveSplit->tableBucketNumber.has_value()) {
+                // Split has a bucket number - use the bucket map
+                const int32_t bucketNumber =
+                    hiveSplit->tableBucketNumber.value();
+                const int32_t numBuckets =
+                    stageBucketMap_[fragmentIndex].size();
+                const int32_t mappedBucket = bucketNumber % numBuckets;
+                targetTaskIndex = stageBucketMap_[fragmentIndex][mappedBucket];
+              }
+            }
+
+            if (targetTaskIndex < 0 || targetTaskIndex >= stage.size()) {
+              // No bucket number or bucket map - use round-robin
+              // Find next task in round-robin fashion
+              static thread_local int32_t roundRobinIndex = 0;
+              targetTaskIndex = roundRobinIndex % stage.size();
+              roundRobinIndex++;
+            }
+
+            stage[targetTaskIndex]->addSplit(scan->id(), std::move(split));
+          } while (!allDone);
+
+          for (auto& task : stage) {
+            task->noMoreSplits(scan->id());
           }
-
-          if (targetTaskIndex < 0 || targetTaskIndex >= stage.size()) {
-            // No bucket number or bucket map - use round-robin
-            // Find next task in round-robin fashion
-            static thread_local int32_t roundRobinIndex = 0;
-            targetTaskIndex = roundRobinIndex % stage.size();
-            roundRobinIndex++;
-          }
-
-          stage[targetTaskIndex]->addSplit(scan->id(), std::move(split));
-        } while (!allDone);
-
-        for (auto& task : stage) {
-          task->noMoreSplits(scan->id());
         }
       }
 
@@ -701,6 +738,164 @@ void LocalRunner::setupBuckets() {
     stageBucketMap_[fragmentIndex].resize(numBuckets);
     for (int32_t bucket = 0; bucket < numBuckets; ++bucket) {
       stageBucketMap_[fragmentIndex][bucket] = bucket % numWorkers;
+    }
+  }
+
+  detectMergeJoinGroups();
+}
+
+void LocalRunner::detectMergeJoinGroups() {
+  mergeJoinGroups_.resize(fragments_.size());
+
+  for (size_t fragmentIndex = 0; fragmentIndex < fragments_.size();
+       ++fragmentIndex) {
+    const auto& fragment = fragments_[fragmentIndex];
+
+    // Gather all TableScanNodes that are children of MergeJoinNodes
+    std::vector<velox::core::TableScanNodePtr> mergeJoinScans;
+    gatherMergeJoinScans(fragment.fragment.planNode, mergeJoinScans);
+
+    // If we found any, add them to the MergeJoinGroup for this stage
+    if (!mergeJoinScans.empty()) {
+      MergeJoinGroup group;
+      for (const auto& scan : mergeJoinScans) {
+        group.scans.push_back(MergeSplitSpec{scan->id()});
+      }
+      mergeJoinGroups_[fragmentIndex] = std::move(group);
+    }
+  }
+}
+
+void LocalRunner::distributeMergeJoinSplits(
+    size_t fragmentIndex,
+    const MergeJoinGroup& group,
+    const std::vector<std::shared_ptr<velox::exec::Task>>& tasks) {
+  const size_t numWorkers = tasks.size();
+  const size_t numScans = group.scans.size();
+
+  // List all splits for each scan.
+  // allSplits[scanIndex] = vector of splits for that scan
+  std::vector<std::vector<std::shared_ptr<velox::connector::ConnectorSplit>>>
+      allSplits(numScans);
+
+  for (size_t scanIndex = 0; scanIndex < numScans; ++scanIndex) {
+    const auto& scanId = group.scans[scanIndex].scanId;
+
+    // Find the TableScanNode with this ID
+    std::vector<velox::core::TableScanNodePtr> scans;
+    gatherScans(fragments_[fragmentIndex].fragment.planNode, scans);
+
+    for (const auto& scan : scans) {
+      if (scan->id() == scanId) {
+        // Get splits with whole file option
+        auto source = splitSourceForScan(/*session=*/nullptr, *scan);
+
+        for (;;) {
+          auto splits = source->getSplits(std::numeric_limits<int64_t>::max());
+          if (splits.empty() || splits[0].split == nullptr) {
+            break;
+          }
+          for (auto& splitAndGroup : splits) {
+            if (splitAndGroup.split) {
+              allSplits[scanIndex].push_back(std::move(splitAndGroup.split));
+            }
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  // Organize splits by worker.
+  // mergeGroups[worker][scanIndex] = vector of splits for this worker and scan
+  std::vector<std::vector<
+      std::vector<std::shared_ptr<velox::connector::ConnectorSplit>>>>
+      mergeGroups(numWorkers);
+  for (size_t worker = 0; worker < numWorkers; ++worker) {
+    mergeGroups[worker].resize(numScans);
+  }
+
+  // Check if we have a bucket map for this stage
+  const bool hasBucketMap = !stageBucketMap_.empty() &&
+      fragmentIndex < stageBucketMap_.size() &&
+      !stageBucketMap_[fragmentIndex].empty();
+
+  // Distribute splits to workers based on bucket number
+  for (size_t scanIndex = 0; scanIndex < numScans; ++scanIndex) {
+    for (auto& split : allSplits[scanIndex]) {
+      int32_t targetWorker = 0;
+
+      if (hasBucketMap) {
+        auto* hiveSplit =
+            dynamic_cast<velox::connector::hive::HiveConnectorSplit*>(
+                split.get());
+        if (hiveSplit && hiveSplit->tableBucketNumber.has_value()) {
+          const int32_t bucketNumber = hiveSplit->tableBucketNumber.value();
+          const int32_t numBuckets = stageBucketMap_[fragmentIndex].size();
+          const int32_t mappedBucket = bucketNumber % numBuckets;
+          targetWorker = stageBucketMap_[fragmentIndex][mappedBucket];
+        }
+      }
+
+      if (targetWorker < 0 || targetWorker >= numWorkers) {
+        targetWorker = 0;
+      }
+
+      mergeGroups[targetWorker][scanIndex].push_back(std::move(split));
+    }
+  }
+
+  // For each worker, collect distinct bucket numbers and create split groups
+  for (size_t worker = 0; worker < numWorkers; ++worker) {
+    auto& task = tasks[worker];
+
+    // Collect all distinct bucket numbers from all scans for this worker
+    std::set<int32_t> distinctBuckets;
+    for (size_t scanIndex = 0; scanIndex < numScans; ++scanIndex) {
+      for (const auto& split : mergeGroups[worker][scanIndex]) {
+        auto* hiveSplit =
+            dynamic_cast<velox::connector::hive::HiveConnectorSplit*>(
+                split.get());
+        if (hiveSplit && hiveSplit->tableBucketNumber.has_value()) {
+          distinctBuckets.insert(hiveSplit->tableBucketNumber.value());
+        }
+      }
+    }
+
+    // For each distinct bucket, create a split group
+    int32_t groupId = 1;
+    for (int32_t bucket : distinctBuckets) {
+      // For each scan, find the split with this bucket and add it
+      for (size_t scanIndex = 0; scanIndex < numScans; ++scanIndex) {
+        const auto& scanId = group.scans[scanIndex].scanId;
+
+        for (auto& split : mergeGroups[worker][scanIndex]) {
+          auto* hiveSplit =
+              dynamic_cast<velox::connector::hive::HiveConnectorSplit*>(
+                  split.get());
+          if (hiveSplit && hiveSplit->tableBucketNumber.has_value() &&
+              hiveSplit->tableBucketNumber.value() == bucket) {
+            // Copy the shared_ptr, then move it into Split constructor
+            auto splitCopy = split;
+            task->addSplit(
+                scanId, velox::exec::Split(std::move(splitCopy), groupId));
+          }
+        }
+      }
+
+      // Signal no more splits for this group for all scans
+      for (size_t scanIndex = 0; scanIndex < numScans; ++scanIndex) {
+        const auto& scanId = group.scans[scanIndex].scanId;
+        task->noMoreSplitsForGroup(scanId, groupId);
+      }
+
+      ++groupId;
+    }
+
+    // Signal no more splits for all scans
+    for (size_t scanIndex = 0; scanIndex < numScans; ++scanIndex) {
+      const auto& scanId = group.scans[scanIndex].scanId;
+      task->noMoreSplits(scanId);
     }
   }
 }

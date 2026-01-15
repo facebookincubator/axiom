@@ -313,6 +313,16 @@ class Optimization {
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
+  // Adds 'candidate' on top of 'plan' as a merge join. Checks if the left
+  // input (plan) is partitioned and ordered, and if join keys match the
+  // ordering. Prepares the right side with appropriate partitioning and
+  // ordering, adding shuffle and sort operators as needed.
+  void joinByMerge(
+      const RelationOpPtr& plan,
+      const JoinCandidate& candidate,
+      PlanState& state,
+      std::vector<NextJoin>& toTry);
+
   void crossJoin(
       const RelationOpPtr& plan,
       const JoinCandidate& candidate,

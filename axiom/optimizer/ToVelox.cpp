@@ -1112,6 +1112,10 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
         nextId(), toAnd(join.filter), joinNode);
   }
 
+  if (join.method == JoinMethod::kMerge) {
+    return makeMergeJoin(join, fragment, stages, left, right);
+  }
+
   auto leftKeys = toFieldRefs(join.leftKeys);
   auto rightKeys = toFieldRefs(join.rightKeys);
 
@@ -1119,6 +1123,29 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
       nextId(),
       join.joinType,
       false,
+      leftKeys,
+      rightKeys,
+      toAnd(join.filter),
+      left,
+      right,
+      makeOutputType(join.columns()));
+
+  makePredictionAndHistory(joinNode->id(), &join);
+  return joinNode;
+}
+
+velox::core::PlanNodePtr ToVelox::makeMergeJoin(
+    const Join& join,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages,
+    velox::core::PlanNodePtr left,
+    velox::core::PlanNodePtr right) {
+  auto leftKeys = toFieldRefs(join.leftKeys);
+  auto rightKeys = toFieldRefs(join.rightKeys);
+
+  auto joinNode = std::make_shared<velox::core::MergeJoinNode>(
+      nextId(),
+      join.joinType,
       leftKeys,
       rightKeys,
       toAnd(join.filter),

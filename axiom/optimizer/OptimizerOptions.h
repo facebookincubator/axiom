@@ -75,6 +75,13 @@ struct OptimizerOptions {
   /// partial + final or not.
   bool alwaysPlanPartialAggregation = false;
 
+  /// For testing: control merge join behavior.
+  /// - std::nullopt (default): normal cost-based selection among all join types
+  /// - true: prefer merge joins - return immediately if joinByMerge produces a
+  ///   candidate
+  /// - false: disable merge joins - skip calling joinByMerge
+  std::optional<bool> testingUseMergeJoin{std::nullopt};
+
   bool isMapAsStruct(std::string_view table, std::string_view column) const {
     if (allMapsAsStruct) {
       return true;

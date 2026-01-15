@@ -491,7 +491,8 @@ struct Join : public RelationOp {
       float fanout,
       float innerFanout, // The fanout if this were an inner join
       ColumnVector columns,
-      PlanState& state);
+      PlanState& state,
+      ExprVector discreteJoinFilter = {});
 
   static Join* makeCrossJoin(
       RelationOpPtr input,
@@ -505,6 +506,7 @@ struct Join : public RelationOp {
   const ExprVector leftKeys;
   const ExprVector rightKeys;
   const ExprVector filter;
+  const ExprVector discreteJoinFilter;
 
   const QGString& historyKey() const override;
 
@@ -513,6 +515,9 @@ struct Join : public RelationOp {
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
+
+ private:
+  void setMergeJoinCost();
 };
 
 using JoinCP = const Join*;

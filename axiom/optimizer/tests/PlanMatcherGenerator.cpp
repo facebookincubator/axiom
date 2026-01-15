@@ -620,7 +620,8 @@ std::string generateTableScanCode(const TableScanNode& node, int32_t flags) {
 
     oss << ")";
   } else {
-    // Use the standard tableScan for non-Hive table handles or when kScanFilters is not set
+    // Use the standard tableScan for non-Hive table handles or when
+    // kScanFilters is not set
     oss << ".tableScan(\"" << escapeString(tableName) << "\")";
   }
 
@@ -676,7 +677,9 @@ std::string generateProjectCode(const ProjectNode& node, int32_t flags) {
 }
 
 /// Generates code for a ParallelProjectNode.
-std::string generateParallelProjectCode(const ParallelProjectNode& node, int32_t flags) {
+std::string generateParallelProjectCode(
+    const ParallelProjectNode& node,
+    int32_t flags) {
   if (flags & kProjects) {
     const auto& projections = node.projections();
     const auto& names = node.names();
@@ -896,7 +899,38 @@ void generateJoinMatchers(
     const auto& rightSource = joinNode->sources()[1];
 
     // First, collect any nested joins on the right side
-    generateJoinMatchers(rightSource, matchers, matcherCounter, rightMatchers, flags);
+    generateJoinMatchers(
+        rightSource, matchers, matcherCounter, rightMatchers, flags);
+
+    // Then generate the matcher for this right side
+    std::string rightMatcherCode =
+        generatePlanMatcherCodeImpl(rightSource, rightMatchers, flags);
+    std::string matcherVar = getJoinMatcherVarName(matcherCounter++);
+
+    // Record the mapping from right child PlanNode to matcher variable name
+    rightMatchers[rightSource.get()] = matcherVar;
+
+    std::ostringstream oss;
+    oss << "auto " << matcherVar << " = core::PlanMatcherBuilder()";
+    oss << rightMatcherCode;
+    oss << ".build();";
+
+    matchers.push_back(oss.str());
+  } else if (
+      auto* joinNode = dynamic_cast<const MergeJoinNode*>(planNode.get())) {
+    VELOX_CHECK_EQ(
+        joinNode->sources().size(), 2, "MergeJoinNode must have 2 sources");
+
+    // Recursively process left side for nested joins
+    generateJoinMatchers(
+        joinNode->sources()[0], matchers, matcherCounter, rightMatchers, flags);
+
+    // Generate matcher for the right side
+    const auto& rightSource = joinNode->sources()[1];
+
+    // First, collect any nested joins on the right side
+    generateJoinMatchers(
+        rightSource, matchers, matcherCounter, rightMatchers, flags);
 
     // Then generate the matcher for this right side
     std::string rightMatcherCode =
@@ -928,7 +962,8 @@ void generateJoinMatchers(
     const auto& rightSource = joinNode->sources()[1];
 
     // First, collect any nested joins on the right side
-    generateJoinMatchers(rightSource, matchers, matcherCounter, rightMatchers, flags);
+    generateJoinMatchers(
+        rightSource, matchers, matcherCounter, rightMatchers, flags);
 
     // Then generate the matcher for this right side
     std::string rightMatcherCode =
@@ -947,7 +982,8 @@ void generateJoinMatchers(
   } else {
     // Recursively process sources
     for (const auto& source : planNode->sources()) {
-      generateJoinMatchers(source, matchers, matcherCounter, rightMatchers, flags);
+      generateJoinMatchers(
+          source, matchers, matcherCounter, rightMatchers, flags);
     }
   }
 }
@@ -965,6 +1001,59 @@ std::string generateHashJoinCode(
   const auto joinType = node.joinType();
   std::ostringstream oss;
   oss << ".hashJoin(" << matcherVar << ", velox::core::JoinType::";
+
+  // Map JoinType to its enum name
+  switch (joinType) {
+    case JoinType::kInner:
+      oss << "kInner";
+      break;
+    case JoinType::kLeft:
+      oss << "kLeft";
+      break;
+    case JoinType::kRight:
+      oss << "kRight";
+      break;
+    case JoinType::kFull:
+      oss << "kFull";
+      break;
+    case JoinType::kLeftSemiProject:
+      oss << "kLeftSemiProject";
+      break;
+    case JoinType::kRightSemiProject:
+      oss << "kRightSemiProject";
+      break;
+    case JoinType::kLeftSemiFilter:
+      oss << "kLeftSemiFilter";
+      break;
+    case JoinType::kRightSemiFilter:
+      oss << "kRightSemiFilter";
+      break;
+    case JoinType::kAnti:
+      oss << "kAnti";
+      break;
+    default:
+      oss << "kInner"; // Default fallback
+  }
+
+  oss << ")";
+
+  return oss.str();
+}
+
+/// Generates code for a MergeJoinNode (inline call only, not the right
+/// matcher).
+std::string generateMergeJoinCode(
+    const MergeJoinNode& node,
+    const std::unordered_map<const PlanNode*, std::string>& rightMatchers) {
+  // Look up the matcher variable name for this join's right child
+  const auto& rightSource = node.sources()[1];
+  auto it = rightMatchers.find(rightSource.get());
+  VELOX_CHECK(it != rightMatchers.end(), "Right matcher not found for join");
+  std::string matcherVar = it->second;
+
+  const auto joinType = node.joinType();
+  std::ostringstream oss;
+  oss << ".mergeJoin(" << matcherVar << ", velox::core::JoinType::";
 
   // Map JoinType to its enum name
   switch (joinType) {
@@ -1076,6 +1165,14 @@ std::string generatePlanMatcherCodeImpl(
     }
     result << generateHashJoinCode(*joinNode, rightMatchers);
   } else if (
+      auto* joinNode = dynamic_cast<const MergeJoinNode*>(planNode.get())) {
+    // For joins, we generate the left source inline
+    // The right source matcher is generated separately
+    if (!sources.empty()) {
+      result << generatePlanMatcherCodeImpl(sources[0], rightMatchers, flags);
+    }
+    result << generateMergeJoinCode(*joinNode, rightMatchers);
+  } else if (
       auto* joinNode =
           dynamic_cast<const NestedLoopJoinNode*>(planNode.get())) {
     // For joins, we generate the left source inline
@@ -1163,7 +1260,8 @@ std::string generatePlanMatcherCode(
   // First, collect all join right-side matchers
   std::vector<std::string> joinMatchers;
   int matcherCounter = 0;
-  generateJoinMatchers(planNode, joinMatchers, matcherCounter, rightMatchers, flags);
+  generateJoinMatchers(
+      planNode, joinMatchers, matcherCounter, rightMatchers, flags);
 
   // Generate the join matchers first
   for (const auto& matcher : joinMatchers) {

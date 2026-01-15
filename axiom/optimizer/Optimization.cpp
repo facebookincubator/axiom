@@ -1722,6 +1722,485 @@ void Optimization::joinByHashRight(
   state.addNextJoin(&candidate, join, toTry);
 }
 
+namespace {
+
+// Returns a pair where:
+// - first: list of discrete columns that do not have an equality filter with a
+// literal
+// - second: if false, precludes the use of merge join
+std::pair<ColumnVector, bool> unboundDiscreteColumns(
+    const RelationOpPtr& plan) {
+  switch (plan->relType()) {
+    case RelType::kRepartition: {
+      auto result = unboundDiscreteColumns(plan->input());
+      if (!result.first.empty()) {
+        return {{}, false};
+      }
+      return {{}, true};
+    }
+    case RelType::kTableScan: {
+      const auto* scan = plan->as<TableScan>();
+      const auto* baseTable = scan->baseTable;
+      const auto* layout = scan->index->layout;
+      const auto& discreteColumns = layout->discretePredicateColumns();
+      if (discreteColumns.empty()) {
+        return {{}, true};
+      }
+
+      // Build a set of column names that have equality filter with a literal.
+      folly::F14FastSet<std::string_view> boundColumns;
+      auto equality = FunctionRegistry::instance()->equality();
+      for (auto* filter : baseTable->columnFilters) {
+        if (!isCallExpr(filter, toName(equality))) {
+          continue;
+        }
+        const auto* call = filter->as<Call>();
+        // Check if one side is a literal.
+        bool hasLiteral = call->argAt(0)->is(PlanType::kLiteralExpr) ||
+            call->argAt(1)->is(PlanType::kLiteralExpr);
+        if (!hasLiteral) {
+          continue;
+        }
+        // Get the column from the non-literal side.
+        const auto* columnExpr = call->argAt(0)->is(PlanType::kLiteralExpr)
+            ? call->argAt(1)
+            : call->argAt(0);
+        if (columnExpr->is(PlanType::kColumnExpr)) {
+          boundColumns.insert(columnExpr->as<Column>()->name());
+        }
+      }
+
+      // Find discrete columns that are not bound.
+      ColumnVector unbound;
+      for (const auto* discreteCol : discreteColumns) {
+        if (!boundColumns.contains(discreteCol->name())) {
+          // Find the corresponding column in baseTable->columns.
+          for (auto* col : baseTable->columns) {
+            if (col->name() == discreteCol->name()) {
+              unbound.push_back(col);
+              break;
+            }
+          }
+        }
+      }
+      return {unbound, true};
+    }
+    default: {
+      if (plan->input()) {
+        return unboundDiscreteColumns(plan->input());
+      }
+      return {{}, true};
+    }
+  }
+}
+
+// Analyzes whether unbound discrete columns on left and right sides can be
+// matched through the join edge. Returns a pair where:
+// - first: ExprVector of eq(left_col, right_col) expressions for matched
+// discrete columns
+// - second: true if all discrete columns are properly matched (or there are
+// none)
+std::pair<ExprVector, bool> analyzeDiscreteMergeJoinColumns(
+    const ColumnVector& leftDiscrete,
+    const ColumnVector& rightDiscrete,
+    const JoinEdge* joinEdge) {
+  if (leftDiscrete.empty() && rightDiscrete.empty()) {
+    return {{}, true};
+  }
+
+  if (leftDiscrete.size() != rightDiscrete.size()) {
+    return {{}, false};
+  }
+
+  // Build a mapping from left to right based on join keys
+  folly::F14FastMap<ColumnCP, ColumnCP> leftToRight;
+  for (size_t i = 0; i < joinEdge->leftKeys().size(); ++i) {
+    auto* leftKey = joinEdge->leftKeys()[i];
+    auto* rightKey = joinEdge->rightKeys()[i];
+    if (leftKey->is(PlanType::kColumnExpr) &&
+        rightKey->is(PlanType::kColumnExpr)) {
+      leftToRight[leftKey->as<Column>()] = rightKey->as<Column>();
+    }
+  }
+
+  ExprVector discreteFilter;
+  folly::F14FastSet<ColumnCP> usedRight;
+
+  for (auto* leftCol : leftDiscrete) {
+    auto it = leftToRight.find(leftCol);
+    if (it == leftToRight.end()) {
+      return {{}, false};
+    }
+    auto* rightCol = it->second;
+
+    // Check that rightCol is in rightDiscrete and not already used
+    bool foundInRight = false;
+    for (auto* rd : rightDiscrete) {
+      if (rd == rightCol) {
+        foundInRight = true;
+        break;
+      }
+    }
+    if (!foundInRight || usedRight.contains(rightCol)) {
+      return {{}, false};
+    }
+    usedRight.insert(rightCol);
+
+    // Create eq(leftCol, rightCol) expression
+    auto eqName = toName(FunctionRegistry::instance()->equality());
+    ExprVector args;
+    args.push_back(leftCol);
+    args.push_back(rightCol);
+    auto* eqExpr = make<Call>(
+        eqName,
+        Value(toType(velox::BOOLEAN()), 1),
+        std::move(args),
+        FunctionSet{});
+    discreteFilter.push_back(eqExpr);
+  }
+
+  // Check that all right discrete columns were matched
+  if (usedRight.size() != rightDiscrete.size()) {
+    return {{}, false};
+  }
+
+  return {discreteFilter, true};
+}
+
+} // namespace
+
+void Optimization::joinByMerge(
+    const RelationOpPtr& plan,
+    const JoinCandidate& candidate,
+    PlanState& state,
+    std::vector<NextJoin>& toTry) {
+  checkTables(candidate);
+
+  // Check unbound discrete columns on the left (plan) side
+  auto [leftDiscreteColumns, leftDiscreteOk] = unboundDiscreteColumns(plan);
+  if (!leftDiscreteOk) {
+    return;
+  }
+
+  // Merge join requires: [right, left] assignment
+  auto [right, left] = candidate.joinSides();
+
+  // Check if all join keys are columns (not expressions)
+  for (auto* key : left.keys) {
+    if (!key->isColumn()) {
+      return; // Cannot do merge join with non-column keys
+    }
+  }
+  for (auto* key : right.keys) {
+    if (!key->isColumn()) {
+      return; // Cannot do merge join with non-column keys
+    }
+  }
+
+  // Check if left side (plan) has partitioning and ordering
+  const auto& distribution = plan->distribution();
+  if (distribution.partition.empty() || distribution.orderKeys.empty()) {
+    return; // Need both partitioning and ordering for merge join
+  }
+
+  // Check that all ordering has ascending order
+  for (const auto& orderType : distribution.orderTypes) {
+    if (orderType != OrderType::kAscNullsFirst &&
+        orderType != OrderType::kAscNullsLast) {
+      return; // Merge join requires ascending order
+    }
+  }
+
+  // Check if all left partition columns are in left.keys
+  ExprVector leftKeyExprs;
+  for (auto* col : left.keys) {
+    leftKeyExprs.push_back(col);
+  }
+
+  PlanObjectSet leftKeySet;
+  leftKeySet.unionObjects(leftKeyExprs);
+
+  PlanObjectSet partitionSet;
+  partitionSet.unionObjects(distribution.partition);
+
+  if (!partitionSet.isSubset(leftKeySet)) {
+    return; // Not all partition columns are in join keys
+  }
+
+  // Find the left keys that correspond to ordering columns
+  ColumnVector leftMergeColumns;
+  for (const auto& orderKey : distribution.orderKeys) {
+    // Find matching column in left.keys
+    ColumnCP matchingKey = nullptr;
+    for (size_t i = 0; i < left.keys.size(); ++i) {
+      if (left.keys[i] == orderKey) {
+        matchingKey = dynamic_cast<ColumnCP>(left.keys[i]);
+        break;
+      }
+    }
+
+    if (!matchingKey) {
+      break; // Stop looking if we don't find a match
+    }
+
+    leftMergeColumns.push_back(matchingKey);
+  }
+
+  if (leftMergeColumns.empty()) {
+    return; // No ordering columns match join keys
+  }
+
+  // At this point, left input (plan) is a candidate for merge join
+  PlanStateSaver save(state, candidate);
+
+  // Make the right side plan similar to hash join build side
+  PlanObjectSet rightFilterColumns;
+  rightFilterColumns.unionColumns(candidate.join->filter());
+  rightFilterColumns.intersect(availableColumns(candidate.tables[0]));
+
+  PlanObjectSet rightTables;
+  PlanObjectSet rightColumns;
+  for (auto rightTable : candidate.tables) {
+    rightColumns.unionSet(availableColumns(rightTable));
+    rightTables.add(rightTable);
+  }
+
+  auto joinColumnMapping = makeJoinColumnMapping(candidate.join);
+
+  state.placed.unionSet(rightTables);
+  rightColumns.intersect(
+      translateToJoinInput(state.downstreamColumns(), joinColumnMapping));
+
+  rightColumns.unionColumns(right.keys);
+  rightColumns.unionSet(rightFilterColumns);
+  state.columns.unionSet(rightColumns);
+
+  MemoKey memoKey{
+      candidate.tables[0], rightColumns, rightTables, candidate.existences};
+
+  // Distribution for right side matching left partition and ordering
+  ExprVector rightPartition;
+  for (const auto& leftPartCol : distribution.partition) {
+    // Find corresponding right key
+    for (size_t i = 0; i < left.keys.size(); ++i) {
+      if (left.keys[i] == leftPartCol) {
+        rightPartition.push_back(right.keys[i]);
+        break;
+      }
+    }
+  }
+
+  ExprVector rightOrderKeys;
+  OrderTypeVector rightOrderTypes;
+  for (const auto* leftMergeCol : leftMergeColumns) {
+    // Find corresponding right key
+    for (size_t i = 0; i < left.keys.size(); ++i) {
+      if (left.keys[i] == leftMergeCol) {
+        rightOrderKeys.push_back(right.keys[i]);
+        // Use ascending order to match left side (default to kAscNullsLast)
+        rightOrderTypes.push_back(OrderType::kAscNullsLast);
+        break;
+      }
+    }
+  }
+
+  Distribution forRight{
+      distribution.distributionType,
+      rightPartition,
+      rightOrderKeys,
+      rightOrderTypes};
+
+  PlanObjectSet empty;
+  bool needsShuffle = false;
+  auto rightPlan = makePlan(
+      *state.dt,
+      memoKey,
+      forRight,
+      empty,
+      candidate.existsFanout,
+      needsShuffle);
+
+  PlanState rightState(state.optimization, state.dt, rightPlan);
+  RelationOpPtr rightInput = rightPlan->op;
+  RelationOpPtr probeInput = plan;
+
+  // Check unbound discrete columns on the right side
+  auto [rightDiscreteColumns, rightDiscreteOk] =
+      unboundDiscreteColumns(rightInput);
+  if (!rightDiscreteOk) {
+    return;
+  }
+
+  // Check that the number of unbound discrete columns match
+  if (leftDiscreteColumns.size() != rightDiscreteColumns.size()) {
+    return;
+  }
+
+  // Analyze discrete column matching through join edge
+  auto [discreteJoinFilter, discreteMatchOk] = analyzeDiscreteMergeJoinColumns(
+      leftDiscreteColumns, rightDiscreteColumns, candidate.join);
+  if (!discreteMatchOk) {
+    return;
+  }
+
+  bool hasUnboundDiscrete = !leftDiscreteColumns.empty();
+
+  // Handle shuffle and sort for right side
+  if (!isSingleWorker_) {
+    if (needsShuffle) {
+      // If there are unbound discrete columns, cannot shuffle
+      if (hasUnboundDiscrete) {
+        return;
+      }
+      // Add shuffle
+      Distribution distribution{
+          plan->distribution().distributionType, rightPartition};
+      auto* repartition = make<Repartition>(
+          rightInput, std::move(distribution), rightInput->columns());
+      rightState.addCost(*repartition);
+      rightInput = repartition;
+
+      // Add sort after shuffle
+      PrecomputeProjection precomputeSort(rightInput, state.dt);
+      auto orderKeys = precomputeSort.toColumns(rightOrderKeys);
+      rightInput = std::move(precomputeSort).maybeProject(rightState);
+
+      auto* orderBy = make<OrderBy>(
+          rightInput,
+          std::move(orderKeys),
+          rightOrderTypes,
+          /*limit=*/-1,
+          /*offset=*/0);
+      rightState.addCost(*orderBy);
+      rightInput = orderBy;
+    } else {
+      // Check if ordering columns match expected
+      const auto& rightDist = rightInput->distribution();
+      bool needsSort = rightDist.orderKeys.size() != rightOrderKeys.size();
+      if (!needsSort) {
+        for (size_t i = 0; i < rightOrderKeys.size(); ++i) {
+          if (rightDist.orderKeys[i] != rightOrderKeys[i]) {
+            needsSort = true;
+            break;
+          }
+        }
+      }
+
+      if (needsSort) {
+        // If there are unbound discrete columns, cannot sort
+        if (hasUnboundDiscrete) {
+          return;
+        }
+        // Add sort without shuffle
+        PrecomputeProjection precomputeSort(rightInput, state.dt);
+        auto orderKeys = precomputeSort.toColumns(rightOrderKeys);
+        rightInput = std::move(precomputeSort).maybeProject(rightState);
+
+        auto* orderBy = make<OrderBy>(
+            rightInput,
+            std::move(orderKeys),
+            rightOrderTypes,
+            /*limit=*/-1,
+            /*offset=*/0);
+        rightState.addCost(*orderBy);
+        rightInput = orderBy;
+      }
+    }
+  }
+
+  PrecomputeProjection precomputeRight(rightInput, state.dt);
+  auto rightKeys = precomputeRight.toColumns(right.keys);
+  rightInput = std::move(precomputeRight).maybeProject(rightState);
+
+  auto joinType = right.leftJoinType();
+  const bool probeOnly = joinType == velox::core::JoinType::kLeftSemiFilter ||
+      joinType == velox::core::JoinType::kLeftSemiProject ||
+      joinType == velox::core::JoinType::kAnti;
+
+  PlanObjectSet probeColumns;
+  probeColumns.unionObjects(plan->columns());
+
+  ColumnCP mark = nullptr;
+
+  auto* joinEdge = candidate.join;
+
+  PlanObjectSet joinColumns;
+  joinColumns.unionObjects(joinEdge->leftColumns());
+  joinColumns.unionObjects(joinEdge->rightColumns());
+
+  ProjectionBuilder projectionBuilder;
+  bool needsProjection = false;
+
+  state.downstreamColumns().forEach<Column>([&](auto column) {
+    if (column == right.markColumn) {
+      mark = column;
+      return;
+    }
+
+    if (joinColumns.contains(column)) {
+      projectionBuilder.add(column, joinColumnMapping.at(column));
+      needsProjection = true;
+      return;
+    }
+
+    if ((probeOnly || !rightColumns.contains(column)) &&
+        !probeColumns.contains(column)) {
+      return;
+    }
+
+    projectionBuilder.add(column, column);
+  });
+
+  if (mark) {
+    setMarkTrueFraction(
+        mark, joinType, candidate.fanout, candidate.join->rlFanout());
+  }
+
+  tryOptimizeSemiProject(joinType, mark, state, negation_);
+
+  if (mark) {
+    projectionBuilder.add(mark, mark);
+  }
+
+  state.columns = projectionBuilder.outputColumns();
+
+  const auto fanout = fanoutJoinTypeLimit(
+      joinType,
+      candidate.fanout,
+      candidate.join->rlFanout(),
+      rightState.cost.cardinality / state.cost.cardinality);
+
+  PrecomputeProjection precomputeProbe(probeInput, state.dt);
+  auto probeKeys = precomputeProbe.toColumns(left.keys);
+  probeInput = std::move(precomputeProbe).maybeProject(state);
+
+  const auto innerFanout = candidate.fanout;
+
+  // Create merge join
+  RelationOp* join = make<Join>(
+      JoinMethod::kMerge,
+      joinType,
+      probeInput,
+      rightInput,
+      std::move(probeKeys),
+      std::move(rightKeys),
+      candidate.join->filter(),
+      fanout,
+      innerFanout,
+      projectionBuilder.inputColumns(),
+      state,
+      std::move(discreteJoinFilter));
+
+  state.addCost(*join);
+  state.cost.cost += rightState.cost.cost;
+
+  if (needsProjection) {
+    join = projectionBuilder.build(join, state);
+  }
+
+  state.addNextJoin(&candidate, join, toTry);
+}
+
 void Optimization::crossJoin(
     const RelationOpPtr& plan,
     const JoinCandidate& candidate,
@@ -1841,6 +2320,22 @@ void Optimization::addJoin(
 
   std::vector<NextJoin> toTry;
   joinByIndex(plan, candidate, state, toTry);
+
+  // For testing: if testingUseMergeJoin is false, skip merge join entirely.
+  if (!options_.testingUseMergeJoin.has_value() ||
+      options_.testingUseMergeJoin.value()) {
+    const auto sizeBeforeMerge = toTry.size();
+    joinByMerge(plan, candidate, state, toTry);
+
+    // For testing: if testingUseMergeJoin is true and joinByMerge produced a
+    // result, return immediately without trying other join methods.
+    if (options_.testingUseMergeJoin.has_value() &&
+        options_.testingUseMergeJoin.value() &&
+        toTry.size() > sizeBeforeMerge) {
+      result.insert(result.end(), toTry.begin(), toTry.end());
+      return;
+    }
+  }
 
   const auto sizeAfterIndex = toTry.size();
   joinByHash(plan, candidate, state, toTry);

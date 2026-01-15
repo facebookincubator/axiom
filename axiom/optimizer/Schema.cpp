@@ -101,10 +101,15 @@ std::string Value::toString() const {
 ColumnGroupCP SchemaTable::addIndex(
     const connector::TableLayout& layout,
     Distribution distribution,
-    ColumnVector columns) {
+    ColumnVector columns,
+    ColumnVector lookupColumns) {
   return columnGroups.emplace_back(
       make<ColumnGroup>(
-          *this, layout, std::move(distribution), std::move(columns)));
+          *this,
+          layout,
+          std::move(distribution),
+          std::move(columns),
+          std::move(lookupColumns)));
 }
 
 ColumnCP SchemaTable::findColumn(Name name) const {
@@ -187,7 +192,15 @@ SchemaTableCP Schema::findTable(
 
     ColumnVector columns;
     appendColumns(layout->columns(), columns);
-    schemaTable->addIndex(*layout, std::move(distribution), std::move(columns));
+
+    ColumnVector lookupColumns;
+    appendColumns(layout->lookupKeys(), lookupColumns);
+
+    schemaTable->addIndex(
+        *layout,
+        std::move(distribution),
+        std::move(columns),
+        std::move(lookupColumns));
   }
   table = {std::move(connectorTable), schemaTable};
   return schemaTable;
@@ -281,26 +294,27 @@ IndexInfo SchemaTable::indexInfo(
 
   const auto& distribution = index->distribution;
 
-  const auto numSorting = distribution.orderTypes.size();
+  const auto numLookupKeys = index->lookupColumns.size();
   const auto numUnique = distribution.numKeysUnique;
 
   PlanObjectSet covered;
-  for (auto i = 0; i < numSorting || i < numUnique; ++i) {
-    auto orderKey = distribution.orderKeys[i];
-    auto part = findColumnByName(columnsSpan, orderKey->as<Column>()->name());
+  for (auto i = 0; i < numLookupKeys || i < numUnique; ++i) {
+    ExprCP lookupKey =
+        i < numLookupKeys ? index->lookupColumns[i] : distribution.orderKeys[i];
+    auto part = findColumnByName(columnsSpan, lookupKey->as<Column>()->name());
     if (!part) {
       break;
     }
 
     covered.add(part);
-    if (i < numSorting) {
+    if (i < numLookupKeys) {
       info.scanCardinality =
-          combine(info.scanCardinality, i, orderKey->value().cardinality);
+          combine(info.scanCardinality, i, lookupKey->value().cardinality);
       info.lookupKeys.push_back(part);
       info.joinCardinality = info.scanCardinality;
     } else {
       info.joinCardinality =
-          combine(info.joinCardinality, i, orderKey->value().cardinality);
+          combine(info.joinCardinality, i, lookupKey->value().cardinality);
     }
     if (i == numUnique - 1) {
       info.unique = true;
