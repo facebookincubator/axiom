@@ -179,6 +179,13 @@ class ToVelox {
       runner::ExecutableFragment& fragment,
       std::vector<runner::ExecutableFragment>& stages);
 
+  velox::core::PlanNodePtr makeMergeJoin(
+      const Join& join,
+      runner::ExecutableFragment& fragment,
+      std::vector<runner::ExecutableFragment>& stages,
+      velox::core::PlanNodePtr left,
+      velox::core::PlanNodePtr right);
+
   velox::core::PlanNodePtr makeRepartition(
       const Repartition& repartition,
       runner::ExecutableFragment& fragment,
