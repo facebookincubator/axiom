@@ -84,7 +84,7 @@ TEST_F(ValuesTest, complexTypes) {
 }
 
 TEST_F(ValuesTest, expressions) {
-  auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
+  auto logicalPlan = lp::PlanBuilder(/*enableCoercions=*/true)
                          .values(
                              {"a", "b", "c"},
                              {
