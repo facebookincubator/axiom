@@ -2032,7 +2032,11 @@ void ToGraph::processSubqueries(
       auto tables = conjunct->allTables();
       tables.erase(subqueryDt);
 
-      VELOX_CHECK_EQ(1, tables.size());
+      VELOX_CHECK_EQ(
+          1,
+          tables.size(),
+          "Correlated conjuncts referencing multiple outer tables are not supported: {}",
+          conjunct->toString());
       if (leftTable == nullptr) {
         leftTable = tables.onlyObject();
       } else {

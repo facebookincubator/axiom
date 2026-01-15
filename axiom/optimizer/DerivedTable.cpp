@@ -477,6 +477,17 @@ bool DerivedTable::isWrapOnly() const {
 }
 
 ExprCP DerivedTable::exportExpr(ExprCP expr) {
+  expr->columns().forEach<Column>([&](auto* column) {
+    if (tableSet.contains(column->relation())) {
+      if (pushBackUnique(exprs, column)) {
+        const auto* columnName = toName(column->name());
+        auto outer =
+            make<Column>(columnName, this, column->value(), columnName);
+        columns.push_back(outer);
+      }
+    }
+  });
+
   return replaceInputs(expr, exprs, columns);
 }
 
