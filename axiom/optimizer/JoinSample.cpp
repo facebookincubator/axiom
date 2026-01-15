@@ -20,6 +20,7 @@
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/QueryGraphContext.h"
+#include "axiom/optimizer/ToGraph.h"
 #include "axiom/runner/LocalRunner.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/functions/Macros.h"
@@ -182,15 +183,15 @@ void collectColumnNames(ExprCP expr, folly::F14FastSet<std::string>& names) {
 
   if (expr->is(PlanType::kCallExpr)) {
     auto* call = expr->as<Call>();
+    // For subscript over structs, recursively collect from the base
+    if (call->name() == subscriptName() &&
+        call->args()[0]->value().type->kind() == velox::TypeKind::ROW) {
+      collectColumnNames(call->args()[0], names);
+      return;
+    }
     for (auto arg : call->args()) {
       collectColumnNames(arg, names);
     }
-    return;
-  }
-
-  if (expr->is(PlanType::kFieldExpr)) {
-    auto* field = expr->as<Field>();
-    collectColumnNames(field->base(), names);
     return;
   }
 

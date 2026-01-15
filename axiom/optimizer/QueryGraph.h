@@ -204,46 +204,6 @@ class Column : public Expr {
   PathCP path_;
 };
 
-class Field : public Expr {
- public:
-  Field(const velox::Type* type, ExprCP base, Name field)
-      : Expr(PlanType::kFieldExpr, Value(type, 1)),
-        field_(field),
-        index_(0),
-        base_(base) {
-    columns_ = base->columns();
-    subexpressions_ = base->subexpressions();
-  }
-
-  Field(const velox::Type* type, ExprCP base, int32_t index)
-      : Expr(PlanType::kFieldExpr, Value(type, 1)),
-        field_(nullptr),
-        index_(index),
-        base_(base) {
-    columns_ = base->columns();
-    subexpressions_ = base->subexpressions();
-  }
-
-  Name field() const {
-    return field_;
-  }
-
-  int32_t index() const {
-    return index_;
-  }
-
-  std::string toString() const override;
-
-  ExprCP base() const {
-    return base_;
-  }
-
- private:
-  Name field_;
-  int32_t index_;
-  ExprCP base_;
-};
-
 struct SubfieldSet {
   /// Id of an accessed column of complex type.
   QGVector<int32_t> ids;

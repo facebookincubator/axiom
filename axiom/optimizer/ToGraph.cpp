@@ -659,7 +659,7 @@ PathCP innerPath(std::span<const Step> steps, int32_t last) {
   return toPath(steps.subspan(last), true);
 }
 
-velox::Variant* subscriptLiteral(velox::TypeKind kind, const Step& step) {
+const velox::Variant* subscriptLiteral(velox::TypeKind kind, const Step& step) {
   switch (kind) {
     case velox::TypeKind::VARCHAR:
       return registerVariant(std::string{step.field});
@@ -734,10 +734,30 @@ ExprCP ToGraph::makeGettersOverSkyline(
         case StepKind::kField: {
           if (step.field) {
             auto childType = toType(inputType->asRow().findChild(step.field));
-            expr = make<Field>(childType, expr, step.field);
+            ExprVector args = {
+                expr,
+                make<Literal>(
+                    Value(toType(velox::VARCHAR()), 1),
+                    queryCtx()->registerVariant(
+                        std::make_shared<const velox::Variant>(step.field)))};
+            expr = deduppedCall(
+                subscriptName(),
+                Value(childType, 1),
+                std::move(args),
+                FunctionSet());
           } else {
             auto childType = toType(inputType->childAt(step.id));
-            expr = make<Field>(childType, expr, step.id);
+            ExprVector args = {
+                expr,
+                make<Literal>(
+                    Value(toType(velox::INTEGER()), 1),
+                    queryCtx()->registerVariant(
+                        std::make_shared<const velox::Variant>(step.id)))};
+            expr = deduppedCall(
+                subscriptName(),
+                Value(childType, 1),
+                std::move(args),
+                FunctionSet());
           }
           break;
         }
@@ -2700,6 +2720,14 @@ extern std::string leString(const lp::Expr* e) {
 
 extern std::string lpString(const lp::LogicalPlanNode* p) {
   return lp::PlanPrinter::toText(*p);
+}
+
+Name subscriptName() {
+  auto* registry = FunctionRegistry::instance();
+  if (auto subscript = registry->subscript()) {
+    return toName(subscript.value());
+  }
+  return nullptr;
 }
 
 } // namespace facebook::axiom::optimizer
