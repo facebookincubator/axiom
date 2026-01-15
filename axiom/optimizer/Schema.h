@@ -103,7 +103,7 @@ class DistributionType {
   DistributionType(const connector::PartitionType* partitionType)
       : isGather_{false}, partitionType_{partitionType} {}
 
-  bool operator==(const DistributionType& other) const = default;
+  bool isCopartitionCompatible(const DistributionType& other) const;
 
   static DistributionType gather() {
     static const DistributionType kGather(true);
