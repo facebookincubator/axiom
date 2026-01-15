@@ -48,6 +48,13 @@ LocalTable::LocalTable(
 
 namespace {
 
+/// Context for sampling operations that keeps memory pool alive
+struct SampleContext {
+  std::shared_ptr<velox::memory::MemoryPool> samplePool;
+  std::shared_ptr<velox::core::QueryCtx> queryCtx;
+  std::shared_ptr<velox::connector::ConnectorQueryCtx> connectorQueryCtx;
+};
+
 // Helper function to create a ConstantVector from a partition value string.
 velox::VectorPtr makePartitionVector(
     const std::string& value,
@@ -236,8 +243,9 @@ void fillHivePartitionColumnStats(
 
   // Extract partition values from each partition and feed to builders
   for (const auto& partitionHandle : partitions) {
-    auto* partition = dynamic_cast<const connector::hive::LocalHivePartitionHandle*>(
-        partitionHandle.get());
+    auto* partition =
+        dynamic_cast<const connector::hive::LocalHivePartitionHandle*>(
+            partitionHandle.get());
     if (!partition) {
       continue;
     }
@@ -259,8 +267,8 @@ void fillHivePartitionColumnStats(
           builders[i]->add(partitionVector);
         } else {
           // Handle null partition value - create a null vector
-          auto nullVector = velox::BaseVector::createNullConstant(
-              type, 1, allocator->pool());
+          auto nullVector =
+              velox::BaseVector::createNullConstant(type, 1, allocator->pool());
           builders[i]->add(nullVector);
         }
       }
@@ -715,6 +723,58 @@ void LocalHiveConnectorMetadata::makeConnectorQueryCtx() {
       queryCtx_->queryConfig().sessionTimezone());
 }
 
+SampleContext createSampleContext(const LocalHiveConnectorMetadata* metadata) {
+  static std::atomic<int64_t> sampleCounter{0};
+
+  // Create a new root pool for this sample operation
+  auto queryId = fmt::format("sample:{}", ++sampleCounter);
+  auto pool = velox::memory::memoryManager()->addRootPool(queryId);
+
+  // Create QueryCtx
+  std::unordered_map<std::string, std::string> config;
+  std::unordered_map<std::string, std::shared_ptr<velox::config::ConfigBase>>
+      connectorConfigs;
+  connectorConfigs[metadata->hiveConnector()->connectorId()] =
+      std::const_pointer_cast<velox::config::ConfigBase>(
+          metadata->hiveConfig()->config());
+
+  auto queryCtx = velox::core::QueryCtx::create(
+      metadata->hiveConnector()->executor(),
+      velox::core::QueryConfig(config),
+      std::move(connectorConfigs),
+      velox::cache::AsyncDataCache::getInstance(),
+      pool,
+      nullptr,
+      queryId);
+
+  // Create ConnectorQueryCtx
+  velox::common::SpillConfig spillConfig;
+  velox::common::PrefixSortConfig prefixSortConfig;
+  auto samplePool = queryCtx->pool()->addLeafChild("sampleReader");
+
+  auto connectorQueryCtx =
+      std::make_shared<velox::connector::ConnectorQueryCtx>(
+          samplePool.get(),
+          queryCtx->pool(),
+          queryCtx->connectorSessionProperties(
+              metadata->hiveConnector()->connectorId()),
+          &spillConfig,
+          prefixSortConfig,
+          std::make_unique<velox::exec::SimpleExpressionEvaluator>(
+              queryCtx.get(), samplePool.get()),
+          queryCtx->cache(),
+          queryId,
+          "sample_task",
+          "sample_node",
+          0,
+          queryCtx->queryConfig().sessionTimezone());
+
+  return SampleContext{
+      .samplePool = std::move(samplePool),
+      .queryCtx = std::move(queryCtx),
+      .connectorQueryCtx = std::move(connectorQueryCtx)};
+}
+
 void LocalHiveConnectorMetadata::readTables(std::string_view path) {
   for (auto const& dirEntry : fs::directory_iterator{path}) {
     if (!dirEntry.is_directory() ||
@@ -797,9 +857,10 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
     columnHandles[name] = createColumnHandle(nullptr, name);
   }
 
-  auto connectorQueryCtx = reinterpret_cast<LocalHiveConnectorMetadata*>(
-                               ConnectorMetadata::metadata(connector()))
-                               ->connectorQueryCtx();
+  // Create new contexts for this sample operation (thread-safe)
+  auto* localMetadata = reinterpret_cast<LocalHiveConnectorMetadata*>(
+      ConnectorMetadata::metadata(connector()));
+  auto sampleContext = createSampleContext(localMetadata);
 
   const auto maxRowsToScan = table().numRows() * (pct / 100);
 
@@ -838,7 +899,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
           outputType,
           dataColumnTableHandle,
           columnHandles,
-          connectorQueryCtx.get(),
+          sampleContext.connectorQueryCtx.get(),
           builders,
           maxRowsToScan,
           scannedRows);
@@ -988,7 +1049,8 @@ void listFiles(
     std::function<int32_t(std::string_view)> parseBucketNumber,
     int32_t prefixSize,
     std::vector<std::unique_ptr<const FileInfo>>& result,
-    std::vector<std::shared_ptr<LocalHivePartitionHandle>>* partitions = nullptr) {
+    std::vector<std::shared_ptr<LocalHivePartitionHandle>>* partitions =
+        nullptr) {
   // Track files in current directory (raw pointers to files added to result)
   std::vector<FileInfo*> currentDirFiles;
   bool hasSubdirs = false;
@@ -1593,7 +1655,8 @@ void LocalHiveConnectorMetadata::loadTable(
   // Set partitions on the layout (they were created by listFiles with stats)
   if (hasHivePartitionColumns && !partitions.empty()) {
     // Convert to const shared_ptrs for the layout
-    std::vector<std::shared_ptr<const LocalHivePartitionHandle>> constPartitions;
+    std::vector<std::shared_ptr<const LocalHivePartitionHandle>>
+        constPartitions;
     constPartitions.reserve(partitions.size());
     for (auto& partition : partitions) {
       constPartitions.push_back(std::move(partition));
@@ -1742,9 +1805,10 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::samplePartitions(
             type);
   }
 
-  auto connectorQueryCtx = reinterpret_cast<LocalHiveConnectorMetadata*>(
-                               ConnectorMetadata::metadata(connector()))
-                               ->connectorQueryCtx();
+  // Create new contexts for this sample operation (thread-safe)
+  auto* localMetadata = reinterpret_cast<LocalHiveConnectorMetadata*>(
+      ConnectorMetadata::metadata(connector()));
+  auto sampleContext = createSampleContext(localMetadata);
 
   // Assert that there are no filters in the table handle
   auto* hiveHandle =
@@ -1801,7 +1865,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::samplePartitions(
           outputType,
           tableHandle,
           columnHandles,
-          connectorQueryCtx.get(),
+          sampleContext.connectorQueryCtx.get(),
           partitionBuilders,
           maxRowsToSample,
           partitionScannedRows);
@@ -1998,6 +2062,7 @@ void LocalTable::sampleNumDistincts(
     }
   }
 
+  (void)passingRows; // Intentionally unused, part of return signature
   numSampledRows_ = scannedRows;
   for (auto i = 0; i < statsBuilders.size(); ++i) {
     if (statsBuilders[i]) {

@@ -295,16 +295,8 @@ lp::ValuesNodePtr tryFoldConstantDt(
 
   RelationOpPtr plan = make<Values>(*valuesTable, valuesTable->columns);
 
-  if (!baseTable->columnFilters.empty() || !baseTable->filter.empty()) {
-    auto combinedFilters = baseTable->columnFilters;
-    if (!baseTable->filter.empty()) {
-      combinedFilters.reserve(
-          baseTable->columnFilters.size() + baseTable->filter.size());
-      combinedFilters.insert(
-          combinedFilters.end(),
-          baseTable->filter.begin(),
-          baseTable->filter.end());
-    }
+  auto combinedFilters = baseTable->allFilters();
+  if (!combinedFilters.empty()) {
     // Create temporary PlanState for Filter constructor
     PlanState tempState(*queryCtx()->optimization(), nullptr);
     plan = make<Filter>(tempState, plan, combinedFilters);
@@ -1695,6 +1687,7 @@ SubfieldProjections makeSubfieldColumns(
     BaseTable& baseTable,
     ColumnCP column,
     const PathSet& paths) {
+  // cardinality is refreshed in refreashAfterStats().
   const float cardinality =
       baseTable.schemaTable->cardinality * baseTable.filterSelectivity;
 
@@ -1718,6 +1711,27 @@ SubfieldProjections makeSubfieldColumns(
   return projections;
 }
 } // namespace
+
+void ToGraph::refreshAfterStats() {
+  for (const auto& [column, projections] : allColumnSubfields_) {
+    // Get the BaseTable from the column's relation
+    if (!column->relation()->is(PlanType::kTableNode)) {
+      continue;
+    }
+    auto* baseTable = column->relation()->as<BaseTable>();
+
+    // Calculate the updated cardinality
+    const float cardinality =
+        baseTable->firstLayoutScanCardinality * baseTable->filterSelectivity;
+
+    // Update the cardinality in the Value of each expr in the
+    // SubfieldProjections
+    for (const auto& [path, expr] : projections.pathToExpr) {
+      auto& value = const_cast<Value&>(expr->value());
+      const_cast<float&>(value.cardinality) = cardinality;
+    }
+  }
+}
 
 void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
   const auto* schemaTable =
@@ -1751,33 +1765,29 @@ void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
         schemaColumn->name());
     baseTable->columns.push_back(column);
 
-    const auto kind = column->value().type->kind();
-    if (kind == velox::TypeKind::ARRAY || kind == velox::TypeKind::ROW ||
-        kind == velox::TypeKind::MAP) {
-      PathSet allPaths;
-      if (controlSubfields_.hasColumn(&tableScan, i)) {
-        baseTable->controlSubfields.ids.push_back(column->id());
-        allPaths = controlSubfields_.nodeFields[&tableScan].resultPaths[i];
-        baseTable->controlSubfields.subfields.push_back(allPaths);
-      }
-      if (payloadSubfields_.hasColumn(&tableScan, i)) {
-        baseTable->payloadSubfields.ids.push_back(column->id());
-        auto payloadPaths =
-            payloadSubfields_.nodeFields[&tableScan].resultPaths[i];
-        baseTable->payloadSubfields.subfields.push_back(payloadPaths);
-        allPaths.unionSet(payloadPaths);
-      }
-      if (options_.pushdownSubfields) {
-        Path::subfieldSkyline(allPaths);
-        if (!allPaths.empty()) {
-          trace(OptimizerOptions::kPreprocess, [&]() {
-            std::cout << "Subfields: " << baseTable->cname << "."
-                      << baseTable->schemaTable->name() << " " << column->name()
-                      << ":" << allPaths.size() << std::endl;
-          });
-          allColumnSubfields_[column] =
-              makeSubfieldColumns(*baseTable, column, allPaths);
-        }
+    PathSet allPaths;
+    if (controlSubfields_.hasColumn(&tableScan, i)) {
+      baseTable->controlSubfields.ids.push_back(column->id());
+      allPaths = controlSubfields_.nodeFields[&tableScan].resultPaths[i];
+      baseTable->controlSubfields.subfields.push_back(allPaths);
+    }
+    if (payloadSubfields_.hasColumn(&tableScan, i)) {
+      baseTable->payloadSubfields.ids.push_back(column->id());
+      auto payloadPaths =
+          payloadSubfields_.nodeFields[&tableScan].resultPaths[i];
+      baseTable->payloadSubfields.subfields.push_back(payloadPaths);
+      allPaths.unionSet(payloadPaths);
+    }
+    if (options_.pushdownSubfields) {
+      Path::subfieldSkyline(allPaths);
+      if (!allPaths.empty()) {
+        trace(OptimizerOptions::kPreprocess, [&]() {
+          std::cout << "Subfields: " << baseTable->cname << "."
+                    << baseTable->schemaTable->name() << " " << column->name()
+                    << ":" << allPaths.size() << std::endl;
+        });
+        allColumnSubfields_[column] =
+            makeSubfieldColumns(*baseTable, column, allPaths);
       }
     }
 
@@ -1793,7 +1803,10 @@ void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
   auto scanType = optimization->subfieldPushdownScanType(
       baseTable, baseTable->columns, top, map);
 
-  optimization->setLeafSelectivity(*baseTable, scanType);
+  baseTable->scanType = toType(scanType);
+  if (statsFetched()) {
+    optimization->setLeafSelectivity(*baseTable, scanType);
+  }
   currentDt_->addTable(baseTable);
 }
 
@@ -2452,7 +2465,9 @@ void ToGraph::translateUnion(const lp::SetNode& set) {
   };
 
   translateSetOperationInput(set, shouldFlatten, translateUnionInput);
-  makeUnionDistributionAndStats(setDt);
+  if (statsFetched()) {
+    makeUnionDistributionAndStats(setDt);
+  }
 
   renames_ = std::move(renames);
   for (const auto* column : setDt->columns) {

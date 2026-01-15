@@ -125,7 +125,7 @@ TableScan::TableScan(
           TableScan::outputDistribution(table, index, columns),
           table,
           index,
-          /*fanout=*/index->table->cardinality * table->filterSelectivity,
+          /*fanout=*/table->scanCardinality(index) * table->filterSelectivity,
           columns,
           /*lookupKeys=*/{},
           velox::core::JoinType::kInner,
@@ -173,7 +173,7 @@ TableScan::TableScan(
     return;
   }
   const auto cardinality =
-      index->table->cardinality * baseTable->filterSelectivity;
+      table->scanCardinality(index) * baseTable->filterSelectivity;
   updateLeafCost(cardinality, columns_, cost_);
 }
 
@@ -308,10 +308,7 @@ const QGString& TableScan::historyKey() const {
     out << "lookup " << key->toString() << ", ";
   }
   std::vector<std::string> filters;
-  for (auto& f : baseTable->columnFilters) {
-    filters.push_back(f->toString());
-  }
-  for (auto& f : baseTable->filter) {
+  for (auto& f : baseTable->allFilters()) {
     filters.push_back(f->toString());
   }
   std::ranges::sort(filters);
