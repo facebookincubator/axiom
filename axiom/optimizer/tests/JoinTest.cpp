@@ -473,5 +473,20 @@ TEST_F(JoinTest, joinWithComputedAndProjectedKeys) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_F(JoinTest, filterPushdownThroughCrossJoinUnnest) {
+  testConnector_->addTable(
+      "t", ROW({"t0", "t1"}, {ROW({"a", "b"}, BIGINT()), ARRAY(BIGINT())}));
+
+  auto query = "SELECT * FROM t, UNNEST(t1) WHERE t0.a > 0";
+
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+  auto matcher =
+      core::PlanMatcherBuilder().tableScan("t").filter().unnest().build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
