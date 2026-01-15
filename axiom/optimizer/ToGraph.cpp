@@ -310,7 +310,9 @@ lp::ValuesNodePtr tryFoldConstantDt(
     plan = make<Filter>(tempState, plan, combinedFilters);
   }
 
-  plan = Optimization::planSingleAggregation(dt, plan);
+  // Create temporary PlanState for planSingleAggregation
+  PlanState aggState(*queryCtx()->optimization(), nullptr);
+  plan = Optimization::planSingleAggregation(dt, plan, aggState);
 
   if (!dt->having.empty()) {
     // Create temporary PlanState for Filter constructor
@@ -318,12 +320,15 @@ lp::ValuesNodePtr tryFoldConstantDt(
     plan = make<Filter>(tempState, plan, dt->having);
   }
 
+  // Create temporary PlanState for Project constructor
+  PlanState tempState(*queryCtx()->optimization(), nullptr);
   if (!Project::isRedundant(plan, dt->exprs, dt->columns)) {
     plan = make<Project>(
         plan,
         dt->exprs,
         dt->columns,
-        /*redundantProject=*/false);
+        /*redundantProject=*/false,
+        tempState);
   }
 
   auto veloxPlan = queryCtx()->optimization()->toVeloxPlan(plan);
@@ -949,7 +954,15 @@ ExprCP ToGraph::makeConstant(const lp::ConstantExpr& constant) {
     return it->second;
   }
 
-  auto* literal = make<Literal>(Value(temp.type, 1), temp.value.get());
+  Value value(temp.type, 1);
+  // For scalar types, set min and max to the literal value
+  if (temp.type->isPrimitiveType()) {
+    // Scalar/primitive type - set min and max to the variant
+    value.min = temp.value.get();
+    value.max = temp.value.get();
+  }
+
+  auto* literal = make<Literal>(value, temp.value.get());
 
   constantDedup_[std::move(temp)] = literal;
   return literal;
