@@ -975,6 +975,7 @@ LocalTable::LocalTable(
           std::move(name),
           std::move(type),
           bucketed,
+          /*includeHiddenColumns=*/true,
           std::move(options)) {}
 
 void LocalTable::sampleNumDistincts(

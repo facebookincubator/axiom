@@ -64,7 +64,8 @@ namespace {
 
 std::vector<std::unique_ptr<const connector::Column>> makeColumns(
     const velox::RowTypePtr& type,
-    bool bucketed) {
+    bool bucketed,
+    bool includeHiddenColumns) {
   std::vector<std::unique_ptr<const connector::Column>> columns;
   columns.reserve(type->size() + 2 + (bucketed ? 1 : 0));
 
@@ -74,17 +75,19 @@ std::vector<std::unique_ptr<const connector::Column>> makeColumns(
             type->nameOf(i), type->childAt(i), /*hidden=*/false));
   }
 
-  // Add hidden columns.
-  columns.emplace_back(
-      std::make_unique<connector::Column>(
-          HiveTable::kPath, velox::VARCHAR(), /*hidden=*/true));
-  columns.emplace_back(
-      std::make_unique<connector::Column>(
-          HiveTable::kFileSize, velox::BIGINT(), /*hidden=*/true));
-  if (bucketed) {
+  if (includeHiddenColumns) {
+    // Add hidden columns.
     columns.emplace_back(
         std::make_unique<connector::Column>(
-            HiveTable::kBucket, velox::INTEGER(), /*hidden=*/true));
+            HiveTable::kPath, velox::VARCHAR(), /*hidden=*/true));
+    columns.emplace_back(
+        std::make_unique<connector::Column>(
+            HiveTable::kFileSize, velox::BIGINT(), /*hidden=*/true));
+    if (bucketed) {
+      columns.emplace_back(
+          std::make_unique<connector::Column>(
+              HiveTable::kBucket, velox::INTEGER(), /*hidden=*/true));
+    }
   }
 
   return columns;
@@ -95,10 +98,11 @@ HiveTable::HiveTable(
     std::string name,
     velox::RowTypePtr type,
     bool bucketed,
+    bool includeHiddenColumns,
     folly::F14FastMap<std::string, velox::Variant> options)
     : Table(
           std::move(name),
-          hive::makeColumns(type, bucketed),
+          hive::makeColumns(type, bucketed, includeHiddenColumns),
           std::move(options)) {}
 
 namespace {
