@@ -55,7 +55,7 @@ std::string unquote(std::string_view value) {
 
 void AstBuilder::trace(std::string_view name) const {
   if (enableTracing_) {
-    std::cout << name << std::endl;
+    std::cout << std::string(tracingIndent_ * 2, ' ') << name << std::endl;
   }
 }
 
@@ -225,7 +225,10 @@ std::any AstBuilder::visitTableName(PrestoSqlParser::TableNameContext* ctx) {
 std::any AstBuilder::visitSelectAll(PrestoSqlParser::SelectAllContext* ctx) {
   trace("visitSelectAll");
 
-  auto name = visitTyped<QualifiedName>(ctx->qualifiedName());
+  std::shared_ptr<QualifiedName> name;
+  if (ctx->qualifiedName() != nullptr) {
+    name = getQualifiedName(ctx->qualifiedName());
+  }
 
   return std::static_pointer_cast<SelectItem>(
       std::make_shared<AllColumns>(getLocation(ctx), name));
@@ -252,41 +255,41 @@ QualifiedNamePtr AstBuilder::getQualifiedName(
 std::any AstBuilder::visitStandaloneExpression(
     PrestoSqlParser::StandaloneExpressionContext* ctx) {
   trace("visitStandaloneExpression");
-  return visitChildren(ctx);
+  return visitChildren("visitStandaloneExpression", ctx);
 }
 
 std::any AstBuilder::visitStandaloneRoutineBody(
     PrestoSqlParser::StandaloneRoutineBodyContext* ctx) {
   trace("visitStandaloneRoutineBody");
-  return visitChildren(ctx);
+  return visitChildren("visitStandaloneRoutineBody", ctx);
 }
 
 std::any AstBuilder::visitStatementDefault(
     PrestoSqlParser::StatementDefaultContext* ctx) {
   trace("visitStatementDefault");
-  return visitChildren(ctx);
+  return visitChildren("visitStatementDefault", ctx);
 }
 
 std::any AstBuilder::visitUse(PrestoSqlParser::UseContext* ctx) {
   trace("visitUse");
-  return visitChildren(ctx);
+  return visitChildren("visitUse", ctx);
 }
 
 std::any AstBuilder::visitCreateSchema(
     PrestoSqlParser::CreateSchemaContext* ctx) {
   trace("visitCreateSchema");
-  return visitChildren(ctx);
+  return visitChildren("visitCreateSchema", ctx);
 }
 
 std::any AstBuilder::visitDropSchema(PrestoSqlParser::DropSchemaContext* ctx) {
   trace("visitDropSchema");
-  return visitChildren(ctx);
+  return visitChildren("visitDropSchema", ctx);
 }
 
 std::any AstBuilder::visitRenameSchema(
     PrestoSqlParser::RenameSchemaContext* ctx) {
   trace("visitRenameSchema");
-  return visitChildren(ctx);
+  return visitChildren("visitRenameSchema", ctx);
 }
 
 std::any AstBuilder::visitCreateTableAsSelect(
@@ -323,7 +326,7 @@ std::any AstBuilder::visitCreateTableAsSelect(
 std::any AstBuilder::visitCreateTable(
     PrestoSqlParser::CreateTableContext* ctx) {
   trace("visitCreateTable");
-  return visitChildren(ctx);
+  return visitChildren("visitCreateTable", ctx);
 }
 
 std::any AstBuilder::visitDropTable(PrestoSqlParser::DropTableContext* ctx) {
@@ -352,172 +355,172 @@ std::any AstBuilder::visitInsertInto(PrestoSqlParser::InsertIntoContext* ctx) {
 
 std::any AstBuilder::visitDelete(PrestoSqlParser::DeleteContext* ctx) {
   trace("visitDelete");
-  return visitChildren(ctx);
+  return visitChildren("visitDelete", ctx);
 }
 
 std::any AstBuilder::visitTruncateTable(
     PrestoSqlParser::TruncateTableContext* ctx) {
   trace("visitTruncateTable");
-  return visitChildren(ctx);
+  return visitChildren("visitTruncateTable", ctx);
 }
 
 std::any AstBuilder::visitRenameTable(
     PrestoSqlParser::RenameTableContext* ctx) {
   trace("visitRenameTable");
-  return visitChildren(ctx);
+  return visitChildren("visitRenameTable", ctx);
 }
 
 std::any AstBuilder::visitRenameColumn(
     PrestoSqlParser::RenameColumnContext* ctx) {
   trace("visitRenameColumn");
-  return visitChildren(ctx);
+  return visitChildren("visitRenameColumn", ctx);
 }
 
 std::any AstBuilder::visitDropColumn(PrestoSqlParser::DropColumnContext* ctx) {
   trace("visitDropColumn");
-  return visitChildren(ctx);
+  return visitChildren("visitDropColumn", ctx);
 }
 
 std::any AstBuilder::visitAddColumn(PrestoSqlParser::AddColumnContext* ctx) {
   trace("visitAddColumn");
-  return visitChildren(ctx);
+  return visitChildren("visitAddColumn", ctx);
 }
 
 std::any AstBuilder::visitAddConstraint(
     PrestoSqlParser::AddConstraintContext* ctx) {
   trace("visitAddConstraint");
-  return visitChildren(ctx);
+  return visitChildren("visitAddConstraint", ctx);
 }
 
 std::any AstBuilder::visitDropConstraint(
     PrestoSqlParser::DropConstraintContext* ctx) {
   trace("visitDropConstraint");
-  return visitChildren(ctx);
+  return visitChildren("visitDropConstraint", ctx);
 }
 
 std::any AstBuilder::visitAlterColumnSetNotNull(
     PrestoSqlParser::AlterColumnSetNotNullContext* ctx) {
   trace("visitAlterColumnSetNotNull");
-  return visitChildren(ctx);
+  return visitChildren("visitAlterColumnSetNotNull", ctx);
 }
 
 std::any AstBuilder::visitAlterColumnDropNotNull(
     PrestoSqlParser::AlterColumnDropNotNullContext* ctx) {
   trace("visitAlterColumnDropNotNull");
-  return visitChildren(ctx);
+  return visitChildren("visitAlterColumnDropNotNull", ctx);
 }
 
 std::any AstBuilder::visitSetTableProperties(
     PrestoSqlParser::SetTablePropertiesContext* ctx) {
   trace("visitSetTableProperties");
-  return visitChildren(ctx);
+  return visitChildren("visitSetTableProperties", ctx);
 }
 
 std::any AstBuilder::visitAnalyze(PrestoSqlParser::AnalyzeContext* ctx) {
   trace("visitAnalyze");
-  return visitChildren(ctx);
+  return visitChildren("visitAnalyze", ctx);
 }
 
 std::any AstBuilder::visitCreateType(PrestoSqlParser::CreateTypeContext* ctx) {
   trace("visitCreateType");
-  return visitChildren(ctx);
+  return visitChildren("visitCreateType", ctx);
 }
 
 std::any AstBuilder::visitCreateView(PrestoSqlParser::CreateViewContext* ctx) {
   trace("visitCreateView");
-  return visitChildren(ctx);
+  return visitChildren("visitCreateView", ctx);
 }
 
 std::any AstBuilder::visitRenameView(PrestoSqlParser::RenameViewContext* ctx) {
   trace("visitRenameView");
-  return visitChildren(ctx);
+  return visitChildren("visitRenameView", ctx);
 }
 
 std::any AstBuilder::visitDropView(PrestoSqlParser::DropViewContext* ctx) {
   trace("visitDropView");
-  return visitChildren(ctx);
+  return visitChildren("visitDropView", ctx);
 }
 
 std::any AstBuilder::visitCreateMaterializedView(
     PrestoSqlParser::CreateMaterializedViewContext* ctx) {
   trace("visitCreateMaterializedView");
-  return visitChildren(ctx);
+  return visitChildren("visitCreateMaterializedView", ctx);
 }
 
 std::any AstBuilder::visitDropMaterializedView(
     PrestoSqlParser::DropMaterializedViewContext* ctx) {
   trace("visitDropMaterializedView");
-  return visitChildren(ctx);
+  return visitChildren("visitDropMaterializedView", ctx);
 }
 
 std::any AstBuilder::visitRefreshMaterializedView(
     PrestoSqlParser::RefreshMaterializedViewContext* ctx) {
   trace("visitRefreshMaterializedView");
-  return visitChildren(ctx);
+  return visitChildren("visitRefreshMaterializedView", ctx);
 }
 
 std::any AstBuilder::visitCreateFunction(
     PrestoSqlParser::CreateFunctionContext* ctx) {
   trace("visitCreateFunction");
-  return visitChildren(ctx);
+  return visitChildren("visitCreateFunction", ctx);
 }
 
 std::any AstBuilder::visitAlterFunction(
     PrestoSqlParser::AlterFunctionContext* ctx) {
   trace("visitAlterFunction");
-  return visitChildren(ctx);
+  return visitChildren("visitAlterFunction", ctx);
 }
 
 std::any AstBuilder::visitDropFunction(
     PrestoSqlParser::DropFunctionContext* ctx) {
   trace("visitDropFunction");
-  return visitChildren(ctx);
+  return visitChildren("visitDropFunction", ctx);
 }
 
 std::any AstBuilder::visitCall(PrestoSqlParser::CallContext* ctx) {
   trace("visitCall");
-  return visitChildren(ctx);
+  return visitChildren("visitCall", ctx);
 }
 
 std::any AstBuilder::visitCreateRole(PrestoSqlParser::CreateRoleContext* ctx) {
   trace("visitCreateRole");
-  return visitChildren(ctx);
+  return visitChildren("visitCreateRole", ctx);
 }
 
 std::any AstBuilder::visitDropRole(PrestoSqlParser::DropRoleContext* ctx) {
   trace("visitDropRole");
-  return visitChildren(ctx);
+  return visitChildren("visitDropRole", ctx);
 }
 
 std::any AstBuilder::visitGrantRoles(PrestoSqlParser::GrantRolesContext* ctx) {
   trace("visitGrantRoles");
-  return visitChildren(ctx);
+  return visitChildren("visitGrantRoles", ctx);
 }
 
 std::any AstBuilder::visitRevokeRoles(
     PrestoSqlParser::RevokeRolesContext* ctx) {
   trace("visitRevokeRoles");
-  return visitChildren(ctx);
+  return visitChildren("visitRevokeRoles", ctx);
 }
 
 std::any AstBuilder::visitSetRole(PrestoSqlParser::SetRoleContext* ctx) {
   trace("visitSetRole");
-  return visitChildren(ctx);
+  return visitChildren("visitSetRole", ctx);
 }
 
 std::any AstBuilder::visitGrant(PrestoSqlParser::GrantContext* ctx) {
   trace("visitGrant");
-  return visitChildren(ctx);
+  return visitChildren("visitGrant", ctx);
 }
 
 std::any AstBuilder::visitRevoke(PrestoSqlParser::RevokeContext* ctx) {
   trace("visitRevoke");
-  return visitChildren(ctx);
+  return visitChildren("visitRevoke", ctx);
 }
 
 std::any AstBuilder::visitShowGrants(PrestoSqlParser::ShowGrantsContext* ctx) {
   trace("visitShowGrants");
-  return visitChildren(ctx);
+  return visitChildren("visitShowGrants", ctx);
 }
 
 std::any AstBuilder::visitExplain(PrestoSqlParser::ExplainContext* ctx) {
@@ -534,36 +537,36 @@ std::any AstBuilder::visitExplain(PrestoSqlParser::ExplainContext* ctx) {
 std::any AstBuilder::visitShowCreateTable(
     PrestoSqlParser::ShowCreateTableContext* ctx) {
   trace("visitShowCreateTable");
-  return visitChildren(ctx);
+  return visitChildren("visitShowCreateTable", ctx);
 }
 
 std::any AstBuilder::visitShowCreateView(
     PrestoSqlParser::ShowCreateViewContext* ctx) {
   trace("visitShowCreateView");
-  return visitChildren(ctx);
+  return visitChildren("visitShowCreateView", ctx);
 }
 
 std::any AstBuilder::visitShowCreateMaterializedView(
     PrestoSqlParser::ShowCreateMaterializedViewContext* ctx) {
   trace("visitShowCreateMaterializedView");
-  return visitChildren(ctx);
+  return visitChildren("visitShowCreateMaterializedView", ctx);
 }
 
 std::any AstBuilder::visitShowCreateFunction(
     PrestoSqlParser::ShowCreateFunctionContext* ctx) {
   trace("visitShowCreateFunction");
-  return visitChildren(ctx);
+  return visitChildren("visitShowCreateFunction", ctx);
 }
 
 std::any AstBuilder::visitShowTables(PrestoSqlParser::ShowTablesContext* ctx) {
   trace("visitShowTables");
-  return visitChildren(ctx);
+  return visitChildren("visitShowTables", ctx);
 }
 
 std::any AstBuilder::visitShowSchemas(
     PrestoSqlParser::ShowSchemasContext* ctx) {
   trace("visitShowSchemas");
-  return visitChildren(ctx);
+  return visitChildren("visitShowSchemas", ctx);
 }
 
 std::any AstBuilder::visitShowCatalogs(
@@ -593,24 +596,24 @@ std::any AstBuilder::visitShowColumns(
 
 std::any AstBuilder::visitShowStats(PrestoSqlParser::ShowStatsContext* ctx) {
   trace("visitShowStats");
-  return visitChildren(ctx);
+  return visitChildren("visitShowStats", ctx);
 }
 
 std::any AstBuilder::visitShowStatsForQuery(
     PrestoSqlParser::ShowStatsForQueryContext* ctx) {
   trace("visitShowStatsForQuery");
-  return visitChildren(ctx);
+  return visitChildren("visitShowStatsForQuery", ctx);
 }
 
 std::any AstBuilder::visitShowRoles(PrestoSqlParser::ShowRolesContext* ctx) {
   trace("visitShowRoles");
-  return visitChildren(ctx);
+  return visitChildren("visitShowRoles", ctx);
 }
 
 std::any AstBuilder::visitShowRoleGrants(
     PrestoSqlParser::ShowRoleGrantsContext* ctx) {
   trace("visitShowRoleGrants");
-  return visitChildren(ctx);
+  return visitChildren("visitShowRoleGrants", ctx);
 }
 
 std::any AstBuilder::visitShowFunctions(
@@ -633,66 +636,66 @@ std::any AstBuilder::visitShowFunctions(
 std::any AstBuilder::visitShowSession(
     PrestoSqlParser::ShowSessionContext* ctx) {
   trace("visitShowSession");
-  return visitChildren(ctx);
+  return visitChildren("visitShowSession", ctx);
 }
 
 std::any AstBuilder::visitSetSession(PrestoSqlParser::SetSessionContext* ctx) {
   trace("visitSetSession");
-  return visitChildren(ctx);
+  return visitChildren("visitSetSession", ctx);
 }
 
 std::any AstBuilder::visitResetSession(
     PrestoSqlParser::ResetSessionContext* ctx) {
   trace("visitResetSession");
-  return visitChildren(ctx);
+  return visitChildren("visitResetSession", ctx);
 }
 
 std::any AstBuilder::visitStartTransaction(
     PrestoSqlParser::StartTransactionContext* ctx) {
   trace("visitStartTransaction");
-  return visitChildren(ctx);
+  return visitChildren("visitStartTransaction", ctx);
 }
 
 std::any AstBuilder::visitCommit(PrestoSqlParser::CommitContext* ctx) {
   trace("visitCommit");
-  return visitChildren(ctx);
+  return visitChildren("visitCommit", ctx);
 }
 
 std::any AstBuilder::visitRollback(PrestoSqlParser::RollbackContext* ctx) {
   trace("visitRollback");
-  return visitChildren(ctx);
+  return visitChildren("visitRollback", ctx);
 }
 
 std::any AstBuilder::visitPrepare(PrestoSqlParser::PrepareContext* ctx) {
   trace("visitPrepare");
-  return visitChildren(ctx);
+  return visitChildren("visitPrepare", ctx);
 }
 
 std::any AstBuilder::visitDeallocate(PrestoSqlParser::DeallocateContext* ctx) {
   trace("visitDeallocate");
-  return visitChildren(ctx);
+  return visitChildren("visitDeallocate", ctx);
 }
 
 std::any AstBuilder::visitExecute(PrestoSqlParser::ExecuteContext* ctx) {
   trace("visitExecute");
-  return visitChildren(ctx);
+  return visitChildren("visitExecute", ctx);
 }
 
 std::any AstBuilder::visitDescribeInput(
     PrestoSqlParser::DescribeInputContext* ctx) {
   trace("visitDescribeInput");
-  return visitChildren(ctx);
+  return visitChildren("visitDescribeInput", ctx);
 }
 
 std::any AstBuilder::visitDescribeOutput(
     PrestoSqlParser::DescribeOutputContext* ctx) {
   trace("visitDescribeOutput");
-  return visitChildren(ctx);
+  return visitChildren("visitDescribeOutput", ctx);
 }
 
 std::any AstBuilder::visitUpdate(PrestoSqlParser::UpdateContext* ctx) {
   trace("visitUpdate");
-  return visitChildren(ctx);
+  return visitChildren("visitUpdate", ctx);
 }
 
 std::any AstBuilder::visitWith(PrestoSqlParser::WithContext* ctx) {
@@ -706,23 +709,23 @@ std::any AstBuilder::visitWith(PrestoSqlParser::WithContext* ctx) {
 std::any AstBuilder::visitTableElement(
     PrestoSqlParser::TableElementContext* ctx) {
   trace("visitTableElement");
-  return visitChildren(ctx);
+  return visitChildren("visitTableElement", ctx);
 }
 
 std::any AstBuilder::visitColumnDefinition(
     PrestoSqlParser::ColumnDefinitionContext* ctx) {
   trace("visitColumnDefinition");
-  return visitChildren(ctx);
+  return visitChildren("visitColumnDefinition", ctx);
 }
 
 std::any AstBuilder::visitLikeClause(PrestoSqlParser::LikeClauseContext* ctx) {
   trace("visitLikeClause");
-  return visitChildren(ctx);
+  return visitChildren("visitLikeClause", ctx);
 }
 
 std::any AstBuilder::visitProperties(PrestoSqlParser::PropertiesContext* ctx) {
   trace("visitProperties");
-  return visitChildren(ctx);
+  return visitChildren("visitProperties", ctx);
 }
 
 std::any AstBuilder::visitProperty(PrestoSqlParser::PropertyContext* ctx) {
@@ -737,78 +740,78 @@ std::any AstBuilder::visitProperty(PrestoSqlParser::PropertyContext* ctx) {
 std::any AstBuilder::visitSqlParameterDeclaration(
     PrestoSqlParser::SqlParameterDeclarationContext* ctx) {
   trace("visitSqlParameterDeclaration");
-  return visitChildren(ctx);
+  return visitChildren("visitSqlParameterDeclaration", ctx);
 }
 
 std::any AstBuilder::visitRoutineCharacteristics(
     PrestoSqlParser::RoutineCharacteristicsContext* ctx) {
   trace("visitRoutineCharacteristics");
-  return visitChildren(ctx);
+  return visitChildren("visitRoutineCharacteristics", ctx);
 }
 
 std::any AstBuilder::visitRoutineCharacteristic(
     PrestoSqlParser::RoutineCharacteristicContext* ctx) {
   trace("visitRoutineCharacteristic");
-  return visitChildren(ctx);
+  return visitChildren("visitRoutineCharacteristic", ctx);
 }
 
 std::any AstBuilder::visitAlterRoutineCharacteristics(
     PrestoSqlParser::AlterRoutineCharacteristicsContext* ctx) {
   trace("visitAlterRoutineCharacteristics");
-  return visitChildren(ctx);
+  return visitChildren("visitAlterRoutineCharacteristics", ctx);
 }
 
 std::any AstBuilder::visitAlterRoutineCharacteristic(
     PrestoSqlParser::AlterRoutineCharacteristicContext* ctx) {
   trace("visitAlterRoutineCharacteristic");
-  return visitChildren(ctx);
+  return visitChildren("visitAlterRoutineCharacteristic", ctx);
 }
 
 std::any AstBuilder::visitRoutineBody(
     PrestoSqlParser::RoutineBodyContext* ctx) {
   trace("visitRoutineBody");
-  return visitChildren(ctx);
+  return visitChildren("visitRoutineBody", ctx);
 }
 
 std::any AstBuilder::visitReturnStatement(
     PrestoSqlParser::ReturnStatementContext* ctx) {
   trace("visitReturnStatement");
-  return visitChildren(ctx);
+  return visitChildren("visitReturnStatement", ctx);
 }
 
 std::any AstBuilder::visitExternalBodyReference(
     PrestoSqlParser::ExternalBodyReferenceContext* ctx) {
   trace("visitExternalBodyReference");
-  return visitChildren(ctx);
+  return visitChildren("visitExternalBodyReference", ctx);
 }
 
 std::any AstBuilder::visitLanguage(PrestoSqlParser::LanguageContext* ctx) {
   trace("visitLanguage");
-  return visitChildren(ctx);
+  return visitChildren("visitLanguage", ctx);
 }
 
 std::any AstBuilder::visitDeterminism(
     PrestoSqlParser::DeterminismContext* ctx) {
   trace("visitDeterminism");
-  return visitChildren(ctx);
+  return visitChildren("visitDeterminism", ctx);
 }
 
 std::any AstBuilder::visitNullCallClause(
     PrestoSqlParser::NullCallClauseContext* ctx) {
   trace("visitNullCallClause");
-  return visitChildren(ctx);
+  return visitChildren("visitNullCallClause", ctx);
 }
 
 std::any AstBuilder::visitExternalRoutineName(
     PrestoSqlParser::ExternalRoutineNameContext* ctx) {
   trace("visitExternalRoutineName");
-  return visitChildren(ctx);
+  return visitChildren("visitExternalRoutineName", ctx);
 }
 
 std::any AstBuilder::visitQueryTermDefault(
     PrestoSqlParser::QueryTermDefaultContext* ctx) {
   trace("visitQueryTermDefault");
-  return visitChildren(ctx);
+  return visitChildren("visitQueryTermDefault", ctx);
 }
 
 std::any AstBuilder::visitSetOperation(
@@ -849,12 +852,12 @@ std::any AstBuilder::visitSetOperation(
 std::any AstBuilder::visitQueryPrimaryDefault(
     PrestoSqlParser::QueryPrimaryDefaultContext* ctx) {
   trace("visitQueryPrimaryDefault");
-  return visitChildren(ctx);
+  return visitChildren("visitQueryPrimaryDefault", ctx);
 }
 
 std::any AstBuilder::visitTable(PrestoSqlParser::TableContext* ctx) {
   trace("visitTable");
-  return visitChildren(ctx);
+  return visitChildren("visitTable", ctx);
 }
 
 std::any AstBuilder::visitInlineTable(
@@ -866,7 +869,11 @@ std::any AstBuilder::visitInlineTable(
 
 std::any AstBuilder::visitSubquery(PrestoSqlParser::SubqueryContext* ctx) {
   trace("visitSubquery");
-  return visitChildren(ctx);
+
+  auto queryNoWith = visitTyped<Query>(ctx->queryNoWith());
+
+  return std::static_pointer_cast<QueryBody>(
+      std::make_shared<TableSubquery>(getLocation(ctx), queryNoWith));
 }
 
 std::any AstBuilder::visitSortItem(PrestoSqlParser::SortItemContext* ctx) {
@@ -918,24 +925,24 @@ std::any AstBuilder::visitSingleGroupingSet(
 
 std::any AstBuilder::visitRollup(PrestoSqlParser::RollupContext* ctx) {
   trace("visitRollup");
-  return visitChildren(ctx);
+  return visitChildren("visitRollup", ctx);
 }
 
 std::any AstBuilder::visitCube(PrestoSqlParser::CubeContext* ctx) {
   trace("visitCube");
-  return visitChildren(ctx);
+  return visitChildren("visitCube", ctx);
 }
 
 std::any AstBuilder::visitMultipleGroupingSets(
     PrestoSqlParser::MultipleGroupingSetsContext* ctx) {
   trace("visitMultipleGroupingSets");
-  return visitChildren(ctx);
+  return visitChildren("visitMultipleGroupingSets", ctx);
 }
 
 std::any AstBuilder::visitGroupingSet(
     PrestoSqlParser::GroupingSetContext* ctx) {
   trace("visitGroupingSet");
-  return visitChildren(ctx);
+  return visitChildren("visitGroupingSet", ctx);
 }
 
 std::any AstBuilder::visitNamedQuery(PrestoSqlParser::NamedQueryContext* ctx) {
@@ -956,13 +963,13 @@ std::any AstBuilder::visitNamedQuery(PrestoSqlParser::NamedQueryContext* ctx) {
 std::any AstBuilder::visitSetQuantifier(
     PrestoSqlParser::SetQuantifierContext* ctx) {
   trace("visitSetQuantifier");
-  return visitChildren(ctx);
+  return visitChildren("visitSetQuantifier", ctx);
 }
 
 std::any AstBuilder::visitRelationDefault(
     PrestoSqlParser::RelationDefaultContext* ctx) {
   trace("visitRelationDefault");
-  return visitChildren(ctx);
+  return visitChildren("visitRelationDefault", ctx);
 }
 
 namespace {
@@ -1033,24 +1040,24 @@ std::any AstBuilder::visitJoinRelation(
 
 std::any AstBuilder::visitJoinType(PrestoSqlParser::JoinTypeContext* ctx) {
   trace("visitJoinType");
-  return visitChildren(ctx);
+  return visitChildren("visitJoinType", ctx);
 }
 
 std::any AstBuilder::visitJoinCriteria(
     PrestoSqlParser::JoinCriteriaContext* ctx) {
   trace("visitJoinCriteria");
-  return visitChildren(ctx);
+  return visitChildren("visitJoinCriteria", ctx);
 }
 
 std::any AstBuilder::visitSampleType(PrestoSqlParser::SampleTypeContext* ctx) {
   trace("visitSampleType");
-  return visitChildren(ctx);
+  return visitChildren("visitSampleType", ctx);
 }
 
 std::any AstBuilder::visitColumnAliases(
     PrestoSqlParser::ColumnAliasesContext* ctx) {
   trace("visitColumnAliases");
-  return visitChildren(ctx);
+  return visitChildren("visitColumnAliases", ctx);
 }
 
 std::any AstBuilder::visitSubqueryRelation(
@@ -1071,7 +1078,7 @@ std::any AstBuilder::visitUnnest(PrestoSqlParser::UnnestContext* ctx) {
 
 std::any AstBuilder::visitLateral(PrestoSqlParser::LateralContext* ctx) {
   trace("visitLateral");
-  return visitChildren(ctx);
+  return visitChildren("visitLateral", ctx);
 }
 
 std::any AstBuilder::visitParenthesizedRelation(
@@ -1082,7 +1089,7 @@ std::any AstBuilder::visitParenthesizedRelation(
 
 std::any AstBuilder::visitExpression(PrestoSqlParser::ExpressionContext* ctx) {
   trace("visitExpression");
-  return visitChildren(ctx);
+  return visitChildren("visitExpression", ctx);
 }
 
 std::any AstBuilder::visitLogicalNot(PrestoSqlParser::LogicalNotContext* ctx) {
@@ -1159,7 +1166,7 @@ std::any AstBuilder::visitComparison(PrestoSqlParser::ComparisonContext* ctx) {
 std::any AstBuilder::visitQuantifiedComparison(
     PrestoSqlParser::QuantifiedComparisonContext* ctx) {
   trace("visitQuantifiedComparison");
-  return visitChildren(ctx);
+  return visitChildren("visitQuantifiedComparison", ctx);
 }
 
 namespace {
@@ -1258,7 +1265,7 @@ std::any AstBuilder::visitDistinctFrom(
 std::any AstBuilder::visitValueExpressionDefault(
     PrestoSqlParser::ValueExpressionDefaultContext* ctx) {
   trace("visitValueExpressionDefault");
-  return visitChildren(ctx);
+  return visitChildren("visitValueExpressionDefault", ctx);
 }
 
 std::any AstBuilder::visitConcatenation(
@@ -1336,7 +1343,7 @@ std::any AstBuilder::visitArithmeticUnary(
 
 std::any AstBuilder::visitAtTimeZone(PrestoSqlParser::AtTimeZoneContext* ctx) {
   trace("visitAtTimeZone");
-  return visitChildren(ctx);
+  return visitChildren("visitAtTimeZone", ctx);
 }
 
 std::any AstBuilder::visitDereference(
@@ -1520,7 +1527,7 @@ std::any AstBuilder::visitTypeConstructor(
 std::any AstBuilder::visitSpecialDateTimeFunction(
     PrestoSqlParser::SpecialDateTimeFunctionContext* ctx) {
   trace("visitSpecialDateTimeFunction");
-  return visitChildren(ctx);
+  return visitChildren("visitSpecialDateTimeFunction", ctx);
 }
 
 std::any AstBuilder::visitSubstring(PrestoSqlParser::SubstringContext* ctx) {
@@ -1543,7 +1550,6 @@ std::any AstBuilder::visitCast(PrestoSqlParser::CastContext* ctx) {
       visitTyped<Expression>(ctx->expression()),
       toTypeSignature(ctx->type()),
       isTryCast));
-  return visitChildren(ctx);
 }
 
 std::any AstBuilder::visitLambda(PrestoSqlParser::LambdaContext* ctx) {
@@ -1571,35 +1577,35 @@ std::any AstBuilder::visitParenthesizedExpression(
 
 std::any AstBuilder::visitParameter(PrestoSqlParser::ParameterContext* ctx) {
   trace("visitParameter");
-  return visitChildren(ctx);
+  return visitChildren("visitParameter", ctx);
 }
 
 std::any AstBuilder::visitNormalize(PrestoSqlParser::NormalizeContext* ctx) {
   trace("visitNormalize");
-  return visitChildren(ctx);
+  return visitChildren("visitNormalize", ctx);
 }
 
 std::any AstBuilder::visitIntervalLiteral(
     PrestoSqlParser::IntervalLiteralContext* ctx) {
   trace("visitIntervalLiteral");
-  return visitChildren(ctx);
+  return visitChildren("visitIntervalLiteral", ctx);
 }
 
 std::any AstBuilder::visitNumericLiteral(
     PrestoSqlParser::NumericLiteralContext* ctx) {
   trace("visitNumericLiteral");
-  return visitChildren(ctx);
+  return visitChildren("visitNumericLiteral", ctx);
 }
 
 std::any AstBuilder::visitBooleanLiteral(
     PrestoSqlParser::BooleanLiteralContext* ctx) {
   trace("visitBooleanLiteral");
-  return visitChildren(ctx);
+  return visitChildren("visitBooleanLiteral", ctx);
 }
 
 std::any AstBuilder::visitSimpleCase(PrestoSqlParser::SimpleCaseContext* ctx) {
   trace("visitSimpleCase");
-  return visitChildren(ctx);
+  return visitChildren("visitSimpleCase", ctx);
 }
 
 std::any AstBuilder::visitColumnReference(
@@ -1645,13 +1651,13 @@ std::any AstBuilder::visitSubqueryExpression(
 std::any AstBuilder::visitBinaryLiteral(
     PrestoSqlParser::BinaryLiteralContext* ctx) {
   trace("visitBinaryLiteral");
-  return visitChildren(ctx);
+  return visitChildren("visitBinaryLiteral", ctx);
 }
 
 std::any AstBuilder::visitCurrentUser(
     PrestoSqlParser::CurrentUserContext* ctx) {
   trace("visitCurrentUser");
-  return visitChildren(ctx);
+  return visitChildren("visitCurrentUser", ctx);
 }
 
 namespace {
@@ -1742,7 +1748,7 @@ std::any AstBuilder::visitExtract(PrestoSqlParser::ExtractContext* ctx) {
 std::any AstBuilder::visitStringLiteral(
     PrestoSqlParser::StringLiteralContext* ctx) {
   trace("visitStringLiteral");
-  return visitChildren(ctx);
+  return visitChildren("visitStringLiteral", ctx);
 }
 
 std::any AstBuilder::visitArrayConstructor(
@@ -1796,7 +1802,7 @@ std::any AstBuilder::visitExists(PrestoSqlParser::ExistsContext* ctx) {
 
 std::any AstBuilder::visitPosition(PrestoSqlParser::PositionContext* ctx) {
   trace("visitPosition");
-  return visitChildren(ctx);
+  return visitChildren("visitPosition", ctx);
 }
 
 std::any AstBuilder::visitSearchedCase(
@@ -1813,7 +1819,7 @@ std::any AstBuilder::visitSearchedCase(
 std::any AstBuilder::visitGroupingOperation(
     PrestoSqlParser::GroupingOperationContext* ctx) {
   trace("visitGroupingOperation");
-  return visitChildren(ctx);
+  return visitChildren("visitGroupingOperation", ctx);
 }
 
 std::any AstBuilder::visitBasicStringLiteral(
@@ -1826,37 +1832,37 @@ std::any AstBuilder::visitBasicStringLiteral(
 std::any AstBuilder::visitUnicodeStringLiteral(
     PrestoSqlParser::UnicodeStringLiteralContext* ctx) {
   trace("visitUnicodeStringLiteral");
-  return visitChildren(ctx);
+  return visitChildren("visitUnicodeStringLiteral", ctx);
 }
 
 std::any AstBuilder::visitNullTreatment(
     PrestoSqlParser::NullTreatmentContext* ctx) {
   trace("visitNullTreatment");
-  return visitChildren(ctx);
+  return visitChildren("visitNullTreatment", ctx);
 }
 
 std::any AstBuilder::visitTimeZoneInterval(
     PrestoSqlParser::TimeZoneIntervalContext* ctx) {
   trace("visitTimeZoneInterval");
-  return visitChildren(ctx);
+  return visitChildren("visitTimeZoneInterval", ctx);
 }
 
 std::any AstBuilder::visitTimeZoneString(
     PrestoSqlParser::TimeZoneStringContext* ctx) {
   trace("visitTimeZoneString");
-  return visitChildren(ctx);
+  return visitChildren("visitTimeZoneString", ctx);
 }
 
 std::any AstBuilder::visitComparisonOperator(
     PrestoSqlParser::ComparisonOperatorContext* ctx) {
   trace("visitComparisonOperator");
-  return visitChildren(ctx);
+  return visitChildren("visitComparisonOperator", ctx);
 }
 
 std::any AstBuilder::visitComparisonQuantifier(
     PrestoSqlParser::ComparisonQuantifierContext* ctx) {
   trace("visitComparisonQuantifier");
-  return visitChildren(ctx);
+  return visitChildren("visitComparisonQuantifier", ctx);
 }
 
 std::any AstBuilder::visitBooleanValue(
@@ -1922,33 +1928,33 @@ std::any AstBuilder::visitInterval(PrestoSqlParser::IntervalContext* ctx) {
 std::any AstBuilder::visitIntervalField(
     PrestoSqlParser::IntervalFieldContext* ctx) {
   trace("visitIntervalField");
-  return visitChildren(ctx);
+  return visitChildren("visitIntervalField", ctx);
 }
 
 std::any AstBuilder::visitNormalForm(PrestoSqlParser::NormalFormContext* ctx) {
   trace("visitNormalForm");
-  return visitChildren(ctx);
+  return visitChildren("visitNormalForm", ctx);
 }
 
 std::any AstBuilder::visitTypes(PrestoSqlParser::TypesContext* ctx) {
   trace("visitTypes");
-  return visitChildren(ctx);
+  return visitChildren("visitTypes", ctx);
 }
 
 std::any AstBuilder::visitType(PrestoSqlParser::TypeContext* ctx) {
   trace("visitType");
-  return visitChildren(ctx);
+  return visitChildren("visitType", ctx);
 }
 
 std::any AstBuilder::visitTypeParameter(
     PrestoSqlParser::TypeParameterContext* ctx) {
   trace("visitTypeParameter");
-  return visitChildren(ctx);
+  return visitChildren("visitTypeParameter", ctx);
 }
 
 std::any AstBuilder::visitBaseType(PrestoSqlParser::BaseTypeContext* ctx) {
   trace("visitBaseType");
-  return visitChildren(ctx);
+  return visitChildren("visitBaseType", ctx);
 }
 
 std::any AstBuilder::visitWhenClause(PrestoSqlParser::WhenClauseContext* ctx) {
@@ -1967,43 +1973,43 @@ std::any AstBuilder::visitFilter(PrestoSqlParser::FilterContext* ctx) {
 
 std::any AstBuilder::visitOver(PrestoSqlParser::OverContext* ctx) {
   trace("visitOver");
-  return visitChildren(ctx);
+  return visitChildren("visitOver", ctx);
 }
 
 std::any AstBuilder::visitWindowFrame(
     PrestoSqlParser::WindowFrameContext* ctx) {
   trace("visitWindowFrame");
-  return visitChildren(ctx);
+  return visitChildren("visitWindowFrame", ctx);
 }
 
 std::any AstBuilder::visitUnboundedFrame(
     PrestoSqlParser::UnboundedFrameContext* ctx) {
   trace("visitUnboundedFrame");
-  return visitChildren(ctx);
+  return visitChildren("visitUnboundedFrame", ctx);
 }
 
 std::any AstBuilder::visitCurrentRowBound(
     PrestoSqlParser::CurrentRowBoundContext* ctx) {
   trace("visitCurrentRowBound");
-  return visitChildren(ctx);
+  return visitChildren("visitCurrentRowBound", ctx);
 }
 
 std::any AstBuilder::visitBoundedFrame(
     PrestoSqlParser::BoundedFrameContext* ctx) {
   trace("visitBoundedFrame");
-  return visitChildren(ctx);
+  return visitChildren("visitBoundedFrame", ctx);
 }
 
 std::any AstBuilder::visitUpdateAssignment(
     PrestoSqlParser::UpdateAssignmentContext* ctx) {
   trace("visitUpdateAssignment");
-  return visitChildren(ctx);
+  return visitChildren("visitUpdateAssignment", ctx);
 }
 
 std::any AstBuilder::visitExplainFormat(
     PrestoSqlParser::ExplainFormatContext* ctx) {
   trace("visitExplainFormat");
-  return visitChildren(ctx);
+  return visitChildren("visitExplainFormat", ctx);
 }
 
 ExplainType::Type toExplainType(PrestoSqlParser::ExplainTypeContext* ctx) {
@@ -2037,119 +2043,119 @@ std::any AstBuilder::visitExplainType(
 std::any AstBuilder::visitIsolationLevel(
     PrestoSqlParser::IsolationLevelContext* ctx) {
   trace("visitIsolationLevel");
-  return visitChildren(ctx);
+  return visitChildren("visitIsolationLevel", ctx);
 }
 
 std::any AstBuilder::visitTransactionAccessMode(
     PrestoSqlParser::TransactionAccessModeContext* ctx) {
   trace("visitTransactionAccessMode");
-  return visitChildren(ctx);
+  return visitChildren("visitTransactionAccessMode", ctx);
 }
 
 std::any AstBuilder::visitReadUncommitted(
     PrestoSqlParser::ReadUncommittedContext* ctx) {
   trace("visitReadUncommitted");
-  return visitChildren(ctx);
+  return visitChildren("visitReadUncommitted", ctx);
 }
 
 std::any AstBuilder::visitReadCommitted(
     PrestoSqlParser::ReadCommittedContext* ctx) {
   trace("visitReadCommitted");
-  return visitChildren(ctx);
+  return visitChildren("visitReadCommitted", ctx);
 }
 
 std::any AstBuilder::visitRepeatableRead(
     PrestoSqlParser::RepeatableReadContext* ctx) {
   trace("visitRepeatableRead");
-  return visitChildren(ctx);
+  return visitChildren("visitRepeatableRead", ctx);
 }
 
 std::any AstBuilder::visitSerializable(
     PrestoSqlParser::SerializableContext* ctx) {
   trace("visitSerializable");
-  return visitChildren(ctx);
+  return visitChildren("visitSerializable", ctx);
 }
 
 std::any AstBuilder::visitPositionalArgument(
     PrestoSqlParser::PositionalArgumentContext* ctx) {
   trace("visitPositionalArgument");
-  return visitChildren(ctx);
+  return visitChildren("visitPositionalArgument", ctx);
 }
 
 std::any AstBuilder::visitNamedArgument(
     PrestoSqlParser::NamedArgumentContext* ctx) {
   trace("visitNamedArgument");
-  return visitChildren(ctx);
+  return visitChildren("visitNamedArgument", ctx);
 }
 
 std::any AstBuilder::visitPrivilege(PrestoSqlParser::PrivilegeContext* ctx) {
   trace("visitPrivilege");
-  return visitChildren(ctx);
+  return visitChildren("visitPrivilege", ctx);
 }
 
 std::any AstBuilder::visitQualifiedName(
     PrestoSqlParser::QualifiedNameContext* ctx) {
   trace("visitQualifiedName");
-  return visitChildren(ctx);
+  return visitChildren("visitQualifiedName", ctx);
 }
 
 std::any AstBuilder::visitTableVersion(
     PrestoSqlParser::TableVersionContext* ctx) {
   trace("visitTableVersion");
-  return visitChildren(ctx);
+  return visitChildren("visitTableVersion", ctx);
 }
 
 std::any AstBuilder::visitTableversionasof(
     PrestoSqlParser::TableversionasofContext* ctx) {
   trace("visitTableversionasof");
-  return visitChildren(ctx);
+  return visitChildren("visitTableversionasof", ctx);
 }
 
 std::any AstBuilder::visitTableversionbefore(
     PrestoSqlParser::TableversionbeforeContext* ctx) {
   trace("visitTableversionbefore");
-  return visitChildren(ctx);
+  return visitChildren("visitTableversionbefore", ctx);
 }
 
 std::any AstBuilder::visitCurrentUserGrantor(
     PrestoSqlParser::CurrentUserGrantorContext* ctx) {
   trace("visitCurrentUserGrantor");
-  return visitChildren(ctx);
+  return visitChildren("visitCurrentUserGrantor", ctx);
 }
 
 std::any AstBuilder::visitCurrentRoleGrantor(
     PrestoSqlParser::CurrentRoleGrantorContext* ctx) {
   trace("visitCurrentRoleGrantor");
-  return visitChildren(ctx);
+  return visitChildren("visitCurrentRoleGrantor", ctx);
 }
 
 std::any AstBuilder::visitSpecifiedPrincipal(
     PrestoSqlParser::SpecifiedPrincipalContext* ctx) {
   trace("visitSpecifiedPrincipal");
-  return visitChildren(ctx);
+  return visitChildren("visitSpecifiedPrincipal", ctx);
 }
 
 std::any AstBuilder::visitUserPrincipal(
     PrestoSqlParser::UserPrincipalContext* ctx) {
   trace("visitUserPrincipal");
-  return visitChildren(ctx);
+  return visitChildren("visitUserPrincipal", ctx);
 }
 
 std::any AstBuilder::visitRolePrincipal(
     PrestoSqlParser::RolePrincipalContext* ctx) {
   trace("visitRolePrincipal");
-  return visitChildren(ctx);
+  return visitChildren("visitRolePrincipal", ctx);
 }
 
 std::any AstBuilder::visitUnspecifiedPrincipal(
     PrestoSqlParser::UnspecifiedPrincipalContext* ctx) {
   trace("visitUnspecifiedPrincipal");
-  return visitChildren(ctx);
+  return visitChildren("visitUnspecifiedPrincipal", ctx);
 }
 
 std::any AstBuilder::visitRoles(PrestoSqlParser::RolesContext* ctx) {
   trace("visitRoles");
-  return visitChildren(ctx);
+  return visitChildren("visitRoles", ctx);
 }
 
 static void
@@ -2175,13 +2181,13 @@ std::any AstBuilder::visitQuotedIdentifier(
 std::any AstBuilder::visitBackQuotedIdentifier(
     PrestoSqlParser::BackQuotedIdentifierContext* ctx) {
   trace("visitBackQuotedIdentifier");
-  return visitChildren(ctx);
+  return visitChildren("visitBackQuotedIdentifier", ctx);
 }
 
 std::any AstBuilder::visitDigitIdentifier(
     PrestoSqlParser::DigitIdentifierContext* ctx) {
   trace("visitDigitIdentifier");
-  return visitChildren(ctx);
+  return visitChildren("visitDigitIdentifier", ctx);
 }
 
 std::any AstBuilder::visitDecimalLiteral(
@@ -2215,61 +2221,61 @@ std::any AstBuilder::visitIntegerLiteral(
 std::any AstBuilder::visitConstraintSpecification(
     PrestoSqlParser::ConstraintSpecificationContext* ctx) {
   trace("visitConstraintSpecification");
-  return visitChildren(ctx);
+  return visitChildren("visitConstraintSpecification", ctx);
 }
 
 std::any AstBuilder::visitNamedConstraintSpecification(
     PrestoSqlParser::NamedConstraintSpecificationContext* ctx) {
   trace("visitNamedConstraintSpecification");
-  return visitChildren(ctx);
+  return visitChildren("visitNamedConstraintSpecification", ctx);
 }
 
 std::any AstBuilder::visitUnnamedConstraintSpecification(
     PrestoSqlParser::UnnamedConstraintSpecificationContext* ctx) {
   trace("visitUnnamedConstraintSpecification");
-  return visitChildren(ctx);
+  return visitChildren("visitUnnamedConstraintSpecification", ctx);
 }
 
 std::any AstBuilder::visitConstraintType(
     PrestoSqlParser::ConstraintTypeContext* ctx) {
   trace("visitConstraintType");
-  return visitChildren(ctx);
+  return visitChildren("visitConstraintType", ctx);
 }
 
 std::any AstBuilder::visitConstraintQualifiers(
     PrestoSqlParser::ConstraintQualifiersContext* ctx) {
   trace("visitConstraintQualifiers");
-  return visitChildren(ctx);
+  return visitChildren("visitConstraintQualifiers", ctx);
 }
 
 std::any AstBuilder::visitConstraintQualifier(
     PrestoSqlParser::ConstraintQualifierContext* ctx) {
   trace("visitConstraintQualifier");
-  return visitChildren(ctx);
+  return visitChildren("visitConstraintQualifier", ctx);
 }
 
 std::any AstBuilder::visitConstraintRely(
     PrestoSqlParser::ConstraintRelyContext* ctx) {
   trace("visitConstraintRely");
-  return visitChildren(ctx);
+  return visitChildren("visitConstraintRely", ctx);
 }
 
 std::any AstBuilder::visitConstraintEnabled(
     PrestoSqlParser::ConstraintEnabledContext* ctx) {
   trace("visitConstraintEnabled");
-  return visitChildren(ctx);
+  return visitChildren("visitConstraintEnabled", ctx);
 }
 
 std::any AstBuilder::visitConstraintEnforced(
     PrestoSqlParser::ConstraintEnforcedContext* ctx) {
   trace("visitConstraintEnforced");
-  return visitChildren(ctx);
+  return visitChildren("visitConstraintEnforced", ctx);
 }
 
 std::any AstBuilder::visitNonReserved(
     PrestoSqlParser::NonReservedContext* ctx) {
   trace("visitNonReserved");
-  return visitChildren(ctx);
+  return visitChildren("visitNonReserved", ctx);
 }
 
 } // namespace axiom::sql::presto

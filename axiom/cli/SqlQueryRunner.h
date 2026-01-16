@@ -52,7 +52,20 @@ class SqlQueryRunner {
     bool debugMode{false};
   };
 
+  /// Runs a single SQL statement and returns the result.
   SqlResult run(std::string_view sql, const RunOptions& options);
+
+  /// Runs a single parsed SQL statement and returns the result.
+  SqlResult run(
+      const presto::SqlStatement& statement,
+      const RunOptions& options);
+
+  /// Parses SQL text containing one or more semicolon-separated statements.
+  /// @param sql SQL text to parse.
+  /// @return Vector of parsed statements.
+  std::vector<presto::SqlStatementPtr> parseMultiple(
+      std::string_view sql,
+      const RunOptions& options);
 
   std::unordered_map<std::string, std::string>& sessionConfig() {
     return config_;
@@ -76,12 +89,12 @@ class SqlQueryRunner {
   std::string dropTable(const presto::DropTableStatement& statement);
 
   std::string runExplain(
-      const presto::SelectStatement& statement,
+      const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
       presto::ExplainStatement::Type type,
       const RunOptions& options);
 
   std::string runExplainAnalyze(
-      const presto::SelectStatement& statement,
+      const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
       const RunOptions& options);
 
   // Optimizes provided logical plan.

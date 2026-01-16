@@ -133,7 +133,10 @@ class ExprApi {
         alias_{std::move(alias)},
         unnestedAliases_{std::move(unnestedAliases)} {
     if (alias_.has_value()) {
-      VELOX_CHECK(!alias_.value().empty());
+      VELOX_CHECK(
+          !alias_.value().empty(),
+          "Alias, if specified, cannot be empty: {}",
+          expr_->toString());
     }
 
     for (const auto& alias : unnestedAliases_) {
@@ -338,9 +341,9 @@ struct SortKey {
   SortKey(ExprApi input, bool ascending, bool nullsFirst)
       : expr{std::move(input)}, ascending{ascending}, nullsFirst(nullsFirst) {}
 
-  const ExprApi expr;
-  const bool ascending;
-  const bool nullsFirst;
+  ExprApi expr;
+  bool ascending;
+  bool nullsFirst;
 };
 
 } // namespace facebook::axiom::logical_plan

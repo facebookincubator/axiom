@@ -131,4 +131,15 @@ std::string columnsToString(const ColumnVector& columns) {
   return out.str();
 }
 
+std::string exprsToString(const ExprVector& exprs) {
+  std::stringstream out;
+  for (auto i = 0; i < exprs.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << exprs[i]->toString();
+  }
+  return out.str();
+}
+
 } // namespace facebook::axiom::optimizer

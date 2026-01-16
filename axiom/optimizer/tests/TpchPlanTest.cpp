@@ -155,12 +155,17 @@ TEST_F(TpchPlanTest, q01) {
 
   auto plan = planTpch(1);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(1)));
 }
 
 TEST_F(TpchPlanTest, q02) {
   checkTpchSql(2);
 
   // TODO Verify the plan.
+
+  ASSERT_NO_THROW(planTpch(2));
+  ASSERT_NO_THROW(planVelox(parseTpchSql(2)));
 }
 
 TEST_F(TpchPlanTest, q03) {
@@ -191,6 +196,8 @@ TEST_F(TpchPlanTest, q03) {
 
   auto plan = planTpch(3);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(3)));
 }
 
 TEST_F(TpchPlanTest, q04) {
@@ -220,6 +227,8 @@ TEST_F(TpchPlanTest, q04) {
 
   auto plan = planTpch(4);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(4)));
 }
 
 TEST_F(TpchPlanTest, q05) {
@@ -273,6 +282,8 @@ TEST_F(TpchPlanTest, q05) {
 
   auto plan = planTpch(5);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(5)));
 }
 
 TEST_F(TpchPlanTest, q06) {
@@ -298,30 +309,44 @@ TEST_F(TpchPlanTest, q06) {
 
   auto plan = planTpch(6);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(6)));
 }
 
 TEST_F(TpchPlanTest, q07) {
   checkTpchSql(7);
 
   // TODO Verify the plan.
+
+  ASSERT_NO_THROW(planTpch(7));
+  ASSERT_NO_THROW(planVelox(parseTpchSql(7)));
 }
 
 TEST_F(TpchPlanTest, q08) {
   checkTpchSql(8);
 
   // TODO Verify the plan.
+
+  ASSERT_NO_THROW(planTpch(8));
+  ASSERT_NO_THROW(planVelox(parseTpchSql(8)));
 }
 
 TEST_F(TpchPlanTest, q09) {
   checkTpchSql(9);
 
   // TODO Verify the plan.
+
+  ASSERT_NO_THROW(planTpch(9));
+  ASSERT_NO_THROW(planVelox(parseTpchSql(9)));
 }
 
 TEST_F(TpchPlanTest, q10) {
   checkTpchSql(10);
 
   // TODO Verify the plan.
+
+  ASSERT_NO_THROW(planTpch(10));
+  ASSERT_NO_THROW(planVelox(parseTpchSql(10)));
 }
 
 TEST_F(TpchPlanTest, q11) {
@@ -373,6 +398,8 @@ TEST_F(TpchPlanTest, q11) {
 
   auto plan = planTpch(11);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(11)));
 }
 
 TEST_F(TpchPlanTest, q12) {
@@ -410,6 +437,8 @@ TEST_F(TpchPlanTest, q12) {
 
   auto plan = planTpch(12);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(12)));
 }
 
 TEST_F(TpchPlanTest, q13) {
@@ -434,6 +463,8 @@ TEST_F(TpchPlanTest, q13) {
 
   auto plan = planTpch(13);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(13)));
 }
 
 TEST_F(TpchPlanTest, q14) {
@@ -461,12 +492,17 @@ TEST_F(TpchPlanTest, q14) {
 
   auto plan = planTpch(14);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(14)));
 }
 
 TEST_F(TpchPlanTest, q15) {
   checkTpchSql(15);
 
   // TODO Verify the plan.
+
+  ASSERT_NO_THROW(planTpch(15));
+  ASSERT_NO_THROW(planVelox(parseTpchSql(15)));
 }
 
 TEST_F(TpchPlanTest, q16) {
@@ -492,6 +528,8 @@ TEST_F(TpchPlanTest, q16) {
 
   auto plan = planTpch(16);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(16)));
 }
 
 TEST_F(TpchPlanTest, q17) {
@@ -525,12 +563,17 @@ TEST_F(TpchPlanTest, q17) {
 
   auto plan = planTpch(17);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(17)));
 }
 
 TEST_F(TpchPlanTest, q18) {
   checkTpchSql(18);
 
   // TODO Verify the plan.
+
+  ASSERT_NO_THROW(planTpch(18));
+  ASSERT_NO_THROW(planVelox(parseTpchSql(18)));
 }
 
 TEST_F(TpchPlanTest, q19) {
@@ -571,6 +614,8 @@ TEST_F(TpchPlanTest, q19) {
 
   auto plan = planTpch(19);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(19)));
 }
 
 TEST_F(TpchPlanTest, q20) {
@@ -585,12 +630,18 @@ TEST_F(TpchPlanTest, q20) {
   checkTpchSql(20);
 
   // TODO Verify the plan.
+
+  ASSERT_NO_THROW(planTpch(20));
+  ASSERT_NO_THROW(planVelox(parseTpchSql(20)));
 }
 
 TEST_F(TpchPlanTest, q21) {
   checkTpchSql(21);
 
   // TODO Verify the plan.
+
+  ASSERT_NO_THROW(planTpch(21));
+  ASSERT_NO_THROW(planVelox(parseTpchSql(21)));
 }
 
 TEST_F(TpchPlanTest, q22) {
@@ -620,6 +671,8 @@ TEST_F(TpchPlanTest, q22) {
 
   auto plan = planTpch(22);
   AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(parseTpchSql(22)));
 }
 
 // Use to re-generate the plans stored in tpch.plans directory.

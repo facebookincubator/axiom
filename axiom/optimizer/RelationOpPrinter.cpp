@@ -62,7 +62,16 @@ class ToTextVisitor : public RelationOpVisitor {
 
   void visit(const Repartition& op, RelationOpVisitorContext& context)
       const override {
-    visitDefault(op, context);
+    auto& myCtx = static_cast<Context&>(context);
+    printHeader(
+        op,
+        myCtx,
+        op.distribution().isBroadcast ? "(broadcast)"
+            : op.distribution().isGather()
+            ? "(gather)"
+            : fmt::format("({})", exprsToString(op.distribution().partition)));
+
+    printInput(*op.input(), myCtx);
   }
 
   void visit(const Filter& op, RelationOpVisitorContext& context)

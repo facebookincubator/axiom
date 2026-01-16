@@ -38,6 +38,14 @@ void NameMappings::add(const std::string& name, const std::string& id) {
   VELOX_CHECK(ok, "Duplicate name: {}", name);
 }
 
+void NameMappings::markHidden(const std::string& id) {
+  hiddenIds_.emplace(id);
+}
+
+bool NameMappings::isHidden(const std::string& id) const {
+  return hiddenIds_.contains(id);
+}
+
 std::optional<std::string> NameMappings::lookup(const std::string& name) const {
   auto it = mappings_.find(QualifiedName{.alias = {}, .name = name});
   if (it != mappings_.end()) {

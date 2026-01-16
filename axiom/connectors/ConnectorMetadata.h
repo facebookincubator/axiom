@@ -548,16 +548,18 @@ using RowsFuture = folly::SemiFuture<int64_t>;
 /// the TableLayout and Columns contained in the Table.
 class Table : public std::enable_shared_from_this<Table> {
  public:
+  /// @param columns List of all columns, including hidden. Column names must be
+  /// non-empty and unique.
   Table(
       std::string name,
-      velox::RowTypePtr type,
-      folly::F14FastMap<std::string, velox::Variant> options = {})
-      : name_(std::move(name)),
-        type_(std::move(type)),
-        options_(std::move(options)) {
-    VELOX_CHECK(!name_.empty());
-    VELOX_CHECK_NOT_NULL(type_);
-  }
+      std::vector<std::unique_ptr<const Column>> columns,
+      folly::F14FastMap<std::string, velox::Variant> options = {});
+
+  /// Given table schema (a list of column names and types), creates a list
+  /// 'Column' objects. Useful for connectors that do not use custom 'Column'
+  /// objects and do not support hidden columns.
+  static std::vector<std::unique_ptr<const Column>> makeColumns(
+      const velox::RowTypePtr& rowType);
 
   virtual ~Table() = default;
 
@@ -565,17 +567,23 @@ class Table : public std::enable_shared_from_this<Table> {
     return name_;
   }
 
-  /// Returns all columns as RowType.
+  /// Returns all but hidden columns as RowType.
   const velox::RowTypePtr& type() const {
     return type_;
+  }
+
+  /// Returns all columns inluding hidden ones.
+  const std::vector<const Column*>& allColumns() const {
+    return columnPtrs_;
   }
 
   /// Returns the mapping of columns keyed on column names as abstract,
   /// non-owned columns. Implementations may have different Column
   /// implementations with different options, so we do not return the
   /// implementation's columns but an abstract form.
-  virtual const folly::F14FastMap<std::string, const Column*>& columnMap()
-      const = 0;
+  const folly::F14FastMap<std::string, const Column*>& columnMap() const {
+    return columnMap_;
+  }
 
   const Column* findColumn(std::string_view name) const {
     const auto& map = columnMap();
@@ -606,12 +614,12 @@ class Table : public std::enable_shared_from_this<Table> {
     return dynamic_cast<const T*>(this);
   }
 
- protected:
+ private:
   const std::string name_;
-
-  // Discovered from data. In the event of different types, we take the
-  // latest (i.e. widest) table type.
   const velox::RowTypePtr type_;
+  const std::vector<std::unique_ptr<const Column>> columns_;
+  const std::vector<const Column*> columnPtrs_;
+  const folly::F14FastMap<std::string, const Column*> columnMap_;
   const folly::F14FastMap<std::string, velox::Variant> options_;
 };
 

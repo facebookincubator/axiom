@@ -264,7 +264,6 @@ class Optimization {
   RelationOpPtr placeSingleRowDt(
       RelationOpPtr plan,
       DerivedTableCP subquery,
-      ExprCP filter,
       PlanState& state);
 
   // Adds the join represented by 'candidate' on top of 'plan'. Tries index and

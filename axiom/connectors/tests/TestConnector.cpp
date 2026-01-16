@@ -22,29 +22,11 @@ TestTable::TestTable(
     const std::string& name,
     const velox::RowTypePtr& schema,
     TestConnector* connector)
-    : Table(name, schema), connector_(connector) {
-  exportedColumns_.reserve(schema->size());
-
-  std::vector<const Column*> columnVector;
-  columnVector.reserve(schema->size());
-
-  for (auto i = 0; i < schema->size(); ++i) {
-    const auto& columnName = schema->nameOf(i);
-    const auto& columnType = schema->childAt(i);
-    VELOX_CHECK(
-        !columnName.empty(), "column {} in table {} has empty name", i, name_);
-    exportedColumns_.emplace_back(
-        std::make_unique<Column>(columnName, columnType, /*hidden=*/false));
-    columnVector.emplace_back(exportedColumns_.back().get());
-    auto [_, ok] = columns_.emplace(columnName, exportedColumns_.back().get());
-    VELOX_CHECK(
-        ok, "duplicate column name '{}' in table {}", columnName, name_);
-  }
-
+    : Table(name, makeColumns(schema)), connector_(connector) {
   exportedLayout_ =
-      std::make_unique<TestTableLayout>(name_, this, connector_, columnVector);
+      std::make_unique<TestTableLayout>(name, this, connector_, allColumns());
   layouts_.push_back(exportedLayout_.get());
-  pool_ = velox::memory::memoryManager()->addLeafPool(name_ + "_table");
+  pool_ = velox::memory::memoryManager()->addLeafPool(name + "_table");
 }
 
 std::vector<SplitSource::SplitAndGroup> TestSplitSource::getSplits(uint64_t) {

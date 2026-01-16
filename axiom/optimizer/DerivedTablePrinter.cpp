@@ -35,19 +35,6 @@ std::string columnNames(const ColumnVector& columns) {
   return out.str();
 }
 
-std::string exprsToString(const ExprVector& exprs) {
-  std::stringstream out;
-  int32_t i = 0;
-  for (auto expr : exprs) {
-    if (i > 0) {
-      out << ", ";
-    }
-    i++;
-    out << expr->toString();
-  }
-  return out.str();
-}
-
 std::string tableName(PlanObjectCP table) {
   switch (table->type()) {
     case PlanType::kTableNode:

@@ -25,6 +25,7 @@
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace axiom::sql::presto {
 namespace {
@@ -69,6 +70,40 @@ class PrestoParserTest : public testing::Test {
     return pool_.get();
   }
 
+  void testExplain(
+      std::string_view sql,
+      lp::test::LogicalPlanMatcherBuilder& matcher) {
+    SCOPED_TRACE(sql);
+    PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+    auto statement = parser.parse(sql);
+    ASSERT_TRUE(statement->isExplain());
+
+    auto* explainStatement = statement->as<ExplainStatement>();
+    ASSERT_FALSE(explainStatement->isAnalyze());
+    ASSERT_TRUE(
+        explainStatement->type() == ExplainStatement::Type::kExecutable);
+
+    if (explainStatement->statement()->isSelect()) {
+      auto* selectStatement =
+          explainStatement->statement()->as<SelectStatement>();
+
+      auto logicalPlan = selectStatement->plan();
+      ASSERT_TRUE(matcher.build()->match(logicalPlan))
+          << lp::PlanPrinter::toText(*logicalPlan);
+    } else if (explainStatement->statement()->isInsert()) {
+      auto* insertStatement =
+          explainStatement->statement()->as<InsertStatement>();
+
+      auto logicalPlan = insertStatement->plan();
+      ASSERT_TRUE(matcher.build()->match(logicalPlan))
+          << lp::PlanPrinter::toText(*logicalPlan);
+    } else {
+      FAIL() << "Unexpected statement: "
+             << explainStatement->statement()->kindName();
+    }
+  }
+
   void testSql(
       std::string_view sql,
       lp::test::LogicalPlanMatcherBuilder& matcher,
@@ -91,6 +126,13 @@ class PrestoParserTest : public testing::Test {
       ASSERT_TRUE(selectStatement->views().contains({kTpchConnectorId, view}))
           << "Missing view: " << view;
     }
+  }
+
+  SqlStatementPtr parseSql(std::string_view sql) {
+    SCOPED_TRACE(sql);
+    PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+    return parser.parse(sql, true);
   }
 
   void testInsertSql(
@@ -527,6 +569,28 @@ TEST_F(PrestoParserTest, doubleLiteral) {
   test("1E+5", 1e5);
 }
 
+TEST_F(PrestoParserTest, timestampLiteral) {
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+
+  auto test = [&](std::string_view sql, const TypePtr& expectedType) {
+    SCOPED_TRACE(sql);
+    auto expr = parser.parseExpression(sql);
+
+    VELOX_ASSERT_EQ_TYPES(expr->type(), expectedType);
+  };
+
+  test("TIMESTAMP '2020-01-01'", TIMESTAMP());
+  test("TIMESTAMP '2020-01-01 00:00:00'", TIMESTAMP());
+  test("TIMESTAMP '2020-01-01 00:00:00.000'", TIMESTAMP());
+  test(
+      "TIMESTAMP '2020-01-01 00:00 America/Los_Angeles'",
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  VELOX_ASSERT_THROW(
+      parser.parseExpression("TIMESTAMP 'foo'"),
+      "Not a valid timestamp literal");
+}
+
 TEST_F(PrestoParserTest, null) {
   auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
   testSql("SELECT 1 is null", matcher);
@@ -618,11 +682,28 @@ TEST_F(PrestoParserTest, row) {
 TEST_F(PrestoParserTest, selectStar) {
   auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan();
   testSql("SELECT * FROM nation", matcher);
+  testSql("(SELECT * FROM nation)", matcher);
+
+  // TODO Add support for these query shapes.
+  EXPECT_THROW(parseSql("SELECT *, * FROM nation"), VeloxRuntimeError);
+  EXPECT_THROW(
+      parseSql("SELECT *, n_nationkey FROM nation"), VeloxRuntimeError);
+  EXPECT_THROW(parseSql("SELECT nation.* FROM nation"), VeloxRuntimeError);
+  EXPECT_THROW(
+      parseSql("SELECT nation.*, n_nationkey + 1 FROM nation"),
+      VeloxRuntimeError);
+  EXPECT_THROW(
+      parseSql(
+          "SELECT nation.*, r_regionkey + 1 FROM nation, region WHERE n_regionkey=r_regionkey"),
+      VeloxRuntimeError);
 }
 
 TEST_F(PrestoParserTest, mixedCaseColumnNames) {
   auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
   testSql("SELECT N_NAME, n_ReGiOnKeY FROM nation", matcher);
+  testSql("SELECT nation.n_name FROM nation", matcher);
+  testSql("SELECT NATION.n_name FROM nation", matcher);
+  testSql("SELECT \"NATION\".n_name FROM nation", matcher);
 }
 
 TEST_F(PrestoParserTest, with) {
@@ -798,6 +879,64 @@ TEST_F(PrestoParserTest, aggregateOptions) {
   ASSERT_FALSE(agg->aggregateAt(0)->isDistinct());
   ASSERT_FALSE(agg->aggregateAt(0)->filter() == nullptr);
   ASSERT_EQ(1, agg->aggregateAt(0)->ordering().size());
+}
+
+TEST_F(PrestoParserTest, orderBy) {
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .tableScan()
+                       .aggregate()
+                       .sort()
+                       .project();
+
+    testSql(
+        "select n_regionkey from nation group by 1 order by count(1)", matcher);
+  }
+
+  {
+    auto matcher =
+        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate().sort();
+
+    testSql(
+        "select n_regionkey, count(1) from nation group by 1 order by count(1)",
+        matcher);
+
+    testSql(
+        "select n_regionkey, count(1) from nation group by 1 order by 2",
+        matcher);
+
+    testSql(
+        "select n_regionkey, count(1) as c from nation group by 1 order by c",
+        matcher);
+  }
+
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .tableScan()
+                       .aggregate()
+                       .project()
+                       .sort();
+
+    testSql(
+        "select n_regionkey, count(1) * 2 from nation group by 1 order by 2",
+        matcher);
+
+    testSql(
+        "select n_regionkey, count(1) * 2 from nation group by 1 order by count(1) * 2",
+        matcher);
+  }
+
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .tableScan()
+                       .aggregate()
+                       .project()
+                       .sort()
+                       .project();
+    testSql(
+        "select n_regionkey, count(1) * 2 from nation group by 1 order by count(1) * 3",
+        matcher);
+  }
 }
 
 TEST_F(PrestoParserTest, join) {
@@ -990,27 +1129,13 @@ TEST_F(PrestoParserTest, everything) {
       matcher);
 }
 
-TEST_F(PrestoParserTest, explain) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
-
+TEST_F(PrestoParserTest, explainSelect) {
   {
-    auto statement = parser.parse("EXPLAIN SELECT * FROM nation");
-    ASSERT_TRUE(statement->isExplain());
-
-    auto explainStatement = statement->as<ExplainStatement>();
-    ASSERT_FALSE(explainStatement->isAnalyze());
-    ASSERT_TRUE(
-        explainStatement->type() == ExplainStatement::Type::kExecutable);
-
-    auto selectStatement = explainStatement->statement();
-    ASSERT_TRUE(selectStatement->isSelect());
-
     auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan();
-
-    auto logicalPlan = selectStatement->as<SelectStatement>()->plan();
-    ASSERT_TRUE(matcher.build()->match(logicalPlan));
+    testExplain("EXPLAIN SELECT * FROM nation", matcher);
   }
 
+  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
   {
     auto statement = parser.parse("EXPLAIN ANALYZE SELECT * FROM nation");
     ASSERT_TRUE(statement->isExplain());
@@ -1069,6 +1194,28 @@ TEST_F(PrestoParserTest, explain) {
     ASSERT_FALSE(explainStatement->isAnalyze());
     ASSERT_TRUE(
         explainStatement->type() == ExplainStatement::Type::kExecutable);
+  }
+}
+
+TEST_F(PrestoParserTest, explainShow) {
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().values();
+  testExplain("EXPLAIN SHOW CATALOGS", matcher);
+
+  testExplain("EXPLAIN SHOW COLUMNS FROM nation", matcher);
+
+  testExplain("EXPLAIN SHOW FUNCTIONS", matcher);
+}
+
+TEST_F(PrestoParserTest, explainInsert) {
+  {
+    auto matcher =
+        lp::test::LogicalPlanMatcherBuilder().tableScan().tableWrite();
+    testExplain("EXPLAIN INSERT INTO region SELECT * FROM region", matcher);
+  }
+
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder().values().tableWrite();
+    testExplain("EXPLAIN INSERT INTO region VALUES (1, 'foo', 'bar')", matcher);
   }
 }
 

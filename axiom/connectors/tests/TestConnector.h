@@ -100,11 +100,6 @@ class TestTable : public Table {
       const velox::RowTypePtr& schema,
       TestConnector* connector);
 
-  const folly::F14FastMap<std::string, const Column*>& columnMap()
-      const override {
-    return columns_;
-  }
-
   const std::vector<const TableLayout*>& layouts() const override {
     return layouts_;
   }
@@ -145,8 +140,6 @@ class TestTable : public Table {
 
  private:
   velox::connector::Connector* connector_;
-  folly::F14FastMap<std::string, const Column*> columns_;
-  std::vector<std::unique_ptr<Column>> exportedColumns_;
   std::vector<const TableLayout*> layouts_;
   std::unique_ptr<TestTableLayout> exportedLayout_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;

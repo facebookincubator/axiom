@@ -139,23 +139,16 @@ class TpchTable : public Table {
       velox::tpch::Table tpchTable,
       double scaleFactor,
       int64_t numRows)
-      : Table(std::move(name), std::move(type)),
+      : Table(std::move(name), makeColumns(type)),
         tpchTable_(tpchTable),
         scaleFactor_(scaleFactor),
         numRows_{numRows} {}
-
-  folly::F14FastMap<std::string, std::unique_ptr<Column>>& columns() {
-    return columns_;
-  }
 
   const std::vector<const TableLayout*>& layouts() const override {
     return exportedLayouts_;
   }
 
-  const folly::F14FastMap<std::string, const Column*>& columnMap()
-      const override;
-
-  void makeDefaultLayout(TpchConnectorMetadata& metadata, double scaleFactor);
+  void makeDefaultLayout(TpchConnectorMetadata& metadata);
 
   uint64_t numRows() const override {
     return numRows_;
@@ -171,10 +164,6 @@ class TpchTable : public Table {
 
  private:
   mutable std::mutex mutex_;
-
-  folly::F14FastMap<std::string, std::unique_ptr<Column>> columns_;
-
-  mutable folly::F14FastMap<std::string, const Column*> exportedColumns_;
 
   std::vector<std::unique_ptr<TableLayout>> layouts_;
 

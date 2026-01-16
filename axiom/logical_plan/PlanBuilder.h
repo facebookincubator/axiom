@@ -17,11 +17,10 @@
 #pragma once
 
 #include "axiom/logical_plan/ExprApi.h"
+#include "axiom/logical_plan/ExprResolver.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/NameAllocator.h"
-#include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
@@ -29,72 +28,21 @@ namespace facebook::axiom::logical_plan {
 
 class NameMappings;
 
-/// Class encapsulating functions for type inference and constant folding. Use
-/// with SQL and PlanBuilder.
-class ExprResolver {
+class ThrowingSqlExpressionsParser : public velox::parse::SqlExpressionsParser {
  public:
-  using InputNameResolver = std::function<ExprPtr(
-      const std::optional<std::string>& alias,
-      const std::string& fieldName)>;
+  velox::core::ExprPtr parseExpr(const std::string& expr) override {
+    VELOX_USER_FAIL("SQL parsing is not supported");
+  }
 
-  /// Maps from an untyped call and  resolved arguments to a resolved function
-  /// call. Use only for anamolous functions where the type depends on constant
-  /// arguments, e.g. Koski make_row_from_map().
-  using FunctionRewriteHook = std::function<
-      ExprPtr(const std::string& name, const std::vector<ExprPtr>& args)>;
+  std::vector<velox::core::ExprPtr> parseExprs(
+      const std::string& expr) override {
+    VELOX_USER_FAIL("SQL parsing is not supported");
+  }
 
-  ExprResolver(
-      std::shared_ptr<velox::core::QueryCtx> queryCtx,
-      bool enableCoercions,
-      FunctionRewriteHook hook = nullptr,
-      std::shared_ptr<velox::memory::MemoryPool> pool = nullptr)
-      : queryCtx_(std::move(queryCtx)),
-        enableCoercions_{enableCoercions},
-        hook_(std::move(hook)),
-        pool_(std::move(pool)) {}
-
-  ExprPtr resolveScalarTypes(
-      const velox::core::ExprPtr& expr,
-      const InputNameResolver& inputNameResolver) const;
-
-  AggregateExprPtr resolveAggregateTypes(
-      const velox::core::ExprPtr& expr,
-      const InputNameResolver& inputNameResolver,
-      const ExprPtr& filter,
-      const std::vector<SortingField>& ordering,
-      bool distinct) const;
-
- private:
-  ExprPtr resolveLambdaExpr(
-      const velox::core::LambdaExpr* lambdaExpr,
-      const std::vector<velox::TypePtr>& lambdaInputTypes,
-      const InputNameResolver& inputNameResolver) const;
-
-  ExprPtr tryResolveCallWithLambdas(
-      const std::shared_ptr<const velox::core::CallExpr>& callExpr,
-      const InputNameResolver& inputNameResolver) const;
-
-  ExprPtr tryFoldCall(
-      const velox::TypePtr& type,
-      const std::string& name,
-      const std::vector<ExprPtr>& inputs) const;
-
-  ExprPtr tryFoldCast(const velox::TypePtr& type, const ExprPtr& input) const;
-
-  velox::core::TypedExprPtr makeConstantTypedExpr(const ExprPtr& expr) const;
-
-  ExprPtr makeConstant(const velox::VectorPtr& vector) const;
-
-  ExprPtr tryFoldCall(const velox::TypePtr& type, ExprPtr input) const;
-
-  ExprPtr tryFoldSpecialForm(
-      const std::string& name,
-      const std::vector<ExprPtr>& inputs) const;
-
-  std::shared_ptr<velox::core::QueryCtx> queryCtx_;
-  const bool enableCoercions_;
-  FunctionRewriteHook hook_;
-  std::shared_ptr<velox::memory::MemoryPool> pool_;
+  velox::parse::OrderByClause parseOrderByExpr(
+      const std::string& expr) override {
+    VELOX_USER_FAIL("SQL parsing is not supported");
+  }
 };
 
 // Make sure to specify Context.queryCtx to enable constand folding.
@@ -102,6 +50,7 @@ class PlanBuilder {
  public:
   struct Context {
     std::optional<std::string> defaultConnectorId;
+    std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser;
     std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator;
     std::shared_ptr<NameAllocator> nameAllocator;
     std::shared_ptr<velox::core::QueryCtx> queryCtx;
@@ -111,8 +60,12 @@ class PlanBuilder {
     explicit Context(
         const std::optional<std::string>& defaultConnectorId = std::nullopt,
         std::shared_ptr<velox::core::QueryCtx> queryCtxPtr = nullptr,
-        ExprResolver::FunctionRewriteHook hook = nullptr)
+        ExprResolver::FunctionRewriteHook hook = nullptr,
+        std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser =
+            std::make_shared<velox::parse::DuckSqlExpressionsParser>(
+                velox::parse::ParseOptions{.parseInListAsArray = false}))
         : defaultConnectorId{defaultConnectorId},
+          sqlParser{std::move(sqlParser)},
           planNodeIdGenerator{
               std::make_shared<velox::core::PlanNodeIdGenerator>()},
           nameAllocator{std::make_shared<NameAllocator>()},
@@ -139,7 +92,7 @@ class PlanBuilder {
         planNodeIdGenerator_{context.planNodeIdGenerator},
         nameAllocator_{context.nameAllocator},
         outerScope_{std::move(outerScope)},
-        parseOptions_{.parseInListAsArray = false},
+        sqlParser_{context.sqlParser},
         enableCoercions_{enableCoercions},
         resolver_{
             context.queryCtx,
@@ -178,15 +131,45 @@ class PlanBuilder {
       const std::vector<std::string>& columnNames);
 
   PlanBuilder& tableScan(
+      const std::string& connectorId,
+      const char* tableName,
+      std::initializer_list<const char*> columnNames) {
+    return tableScan(
+        connectorId,
+        tableName,
+        std::vector<std::string>{columnNames.begin(), columnNames.end()});
+  }
+
+  PlanBuilder& tableScan(
       const std::string& tableName,
       const std::vector<std::string>& columnNames);
+
+  PlanBuilder& tableScan(
+      const char* tableName,
+      std::initializer_list<const char*> columnNames) {
+    return tableScan(
+        tableName,
+        std::vector<std::string>{columnNames.begin(), columnNames.end()});
+  }
 
   /// Equivalent to SELECT * FROM <tableName>.
   PlanBuilder& tableScan(
       const std::string& connectorId,
-      const std::string& tableName);
+      const std::string& tableName,
+      bool includeHiddenColumns = false);
 
-  PlanBuilder& tableScan(const std::string& tableName);
+  PlanBuilder& tableScan(
+      const std::string& connectorId,
+      const char* tableName,
+      bool includeHiddenColumns = false) {
+    return tableScan(connectorId, std::string{tableName}, includeHiddenColumns);
+  }
+
+  PlanBuilder& tableScan(
+      const std::string& tableName,
+      bool includeHiddenColumns = false);
+
+  PlanBuilder& dropHiddenColumns();
 
   /// Equivalent to SELECT * FROM t1, t2, t3...
   ///
@@ -274,6 +257,8 @@ class PlanBuilder {
       const std::vector<ExprApi>& groupingKeys,
       const std::vector<ExprApi>& aggregates,
       const std::vector<AggregateOptions>& options);
+
+  PlanBuilder& distinct();
 
   /// Starts or continues the plan with an Unnest node. Uses auto-generated
   /// names for unnested columns. Use the version of 'unnest' API that takes
@@ -493,7 +478,7 @@ class PlanBuilder {
   const std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator_;
   const std::shared_ptr<NameAllocator> nameAllocator_;
   const Scope outerScope_;
-  const velox::parse::ParseOptions parseOptions_;
+  const std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser_;
   const bool enableCoercions_;
 
   LogicalPlanNodePtr node_;

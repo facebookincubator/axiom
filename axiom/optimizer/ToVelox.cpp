@@ -123,7 +123,7 @@ RelationOpPtr addGather(const RelationOpPtr& op) {
     return op;
   }
   if (op->relType() == RelType::kOrderBy) {
-    auto order = op->distribution();
+    const auto& order = op->distribution();
     auto final = Distribution::gather(order.orderKeys, order.orderTypes);
     auto* gather = make<Repartition>(op, final, op->columns());
     auto* orderBy = make<OrderBy>(gather, order.orderKeys, order.orderTypes);
@@ -163,7 +163,7 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
 
   columnAlteredTypes_.clear();
 
-  auto& dataColumns = table->schemaTable->connectorTable->type();
+  const auto& allColumns = table->schemaTable->connectorTable->allColumns();
   auto* layout = table->schemaTable->columnGroups[0]->layout;
 
   auto connector = layout->connector();
@@ -171,26 +171,26 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
       session_->toConnectorSession(connector->connectorId());
 
   std::vector<velox::connector::ColumnHandlePtr> columns;
-  for (int32_t i = 0; i < dataColumns->size(); ++i) {
-    auto id = table->columnId(toName(dataColumns->nameOf(i)));
+  for (const auto* column : allColumns) {
+    auto id = table->columnId(toName(column->name()));
     if (!id.has_value()) {
       continue;
     }
     auto subfields = columnSubfields(table, id.value());
 
     columns.push_back(layout->createColumnHandle(
-        connectorSession, dataColumns->nameOf(i), std::move(subfields)));
+        connectorSession, column->name(), std::move(subfields)));
   }
 
   std::vector<velox::core::TypedExprPtr> rejectedFilters;
   auto handle = layout->createTableHandle(
       connectorSession,
-      columns,
+      std::move(columns),
       *evaluator,
       std::move(filterConjuncts),
       rejectedFilters);
 
-  setLeafHandle(table->id(), handle, std::move(rejectedFilters));
+  setLeafHandle(table->id(), std::move(handle), std::move(rejectedFilters));
   if (updateSelectivity) {
     optimization->setLeafSelectivity(*const_cast<BaseTable*>(table), scanType);
   }
@@ -1232,7 +1232,8 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       std::vector<velox::core::FieldAccessTypedExprPtr>{},
       aggregateNames,
       aggregates,
-      false,
+      /*ignoreNullKeys=*/false,
+      /*noGroupsSpanBatches=*/false,
       input);
 }
 

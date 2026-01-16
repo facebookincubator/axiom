@@ -27,6 +27,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/functions/FunctionRegistry.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace axiom::sql::presto {
 namespace {
@@ -88,14 +89,18 @@ class ParserHelper {
   ErrorListener errorListener_;
 };
 
-using ExprMap = folly::
-    F14FastMap<core::ExprPtr, core::ExprPtr, core::IExprHash, core::IExprEqual>;
+using ExprSet =
+    folly::F14FastSet<core::ExprPtr, core::IExprHash, core::IExprEqual>;
+
+template <typename V>
+using ExprMap =
+    folly::F14FastMap<core::ExprPtr, V, core::IExprHash, core::IExprEqual>;
 
 // Given an expression, and pairs of search-and-replace sub-expressions,
 // produces a new expression with sub-expressions replaced.
 core::ExprPtr replaceInputs(
     const core::ExprPtr& expr,
-    const ExprMap& replacements) {
+    const ExprMap<core::ExprPtr>& replacements) {
   auto it = replacements.find(expr);
   if (it != replacements.end()) {
     return it->second;
@@ -121,8 +126,9 @@ core::ExprPtr replaceInputs(
 // Walks the expression tree looking for aggregate function calls and appending
 // these to 'aggregates'.
 void findAggregates(
-    const core::ExprPtr expr,
-    std::vector<lp::ExprApi>& aggregates) {
+    const core::ExprPtr& expr,
+    std::vector<lp::ExprApi>& aggregates,
+    ExprSet& aggregateSet) {
   switch (expr->kind()) {
     case core::IExpr::Kind::kInput:
       return;
@@ -131,16 +137,19 @@ void findAggregates(
     case core::IExpr::Kind::kCall: {
       if (facebook::velox::exec::getAggregateFunctionEntry(
               expr->as<core::CallExpr>()->name())) {
-        aggregates.emplace_back(lp::ExprApi(expr));
+        if (aggregateSet.emplace(expr).second) {
+          aggregates.emplace_back(lp::ExprApi(expr));
+        }
       } else {
         for (const auto& input : expr->inputs()) {
-          findAggregates(input, aggregates);
+          findAggregates(input, aggregates, aggregateSet);
         }
       }
       return;
     }
     case core::IExpr::Kind::kCast:
-      findAggregates(expr->as<core::CastExpr>()->input(), aggregates);
+      findAggregates(
+          expr->as<core::CastExpr>()->input(), aggregates, aggregateSet);
       return;
     case core::IExpr::Kind::kConstant:
       return;
@@ -165,10 +174,7 @@ std::string canonicalizeName(const std::string& name) {
 }
 
 std::string canonicalizeIdentifier(const Identifier& identifier) {
-  if (identifier.isDelimited()) {
-    return identifier.value();
-  }
-
+  // TODO Figure out whether 'delimited' identifiers should be kept as is.
   return canonicalizeName(identifier.value());
 }
 
@@ -367,11 +373,15 @@ std::pair<std::string, std::string> toConnectorTable(
 
 class RelationPlanner : public AstVisitor {
  public:
-  explicit RelationPlanner(
+  RelationPlanner(
       const std::string& defaultConnectorId,
-      const std::optional<std::string>& defaultSchema)
-      : context_{defaultConnectorId},
+      const std::optional<std::string>& defaultSchema,
+      const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
+          std::string_view /*sql*/)>& parseSql)
+      : context_{defaultConnectorId, /*queryCtxPtr=*/nullptr,
+        /*hook=*/nullptr, std::make_shared<lp::ThrowingSqlExpressionsParser>()},
         defaultSchema_{defaultSchema},
+        parseSql_{parseSql},
         builder_(newBuilder()) {}
 
   lp::LogicalPlanNodePtr plan() {
@@ -650,6 +660,30 @@ class RelationPlanner : public AstVisitor {
         auto literal = node->as<GenericLiteral>();
         return lp::Cast(
             parseType(literal->valueType()), lp::Lit(literal->value()));
+      }
+
+      case NodeType::kTimestampLiteral: {
+        auto literal = node->as<TimestampLiteral>();
+
+        auto timestamp = facebook::velox::util::fromTimestampWithTimezoneString(
+            literal->value().c_str(),
+            literal->value().size(),
+            facebook::velox::util::TimestampParseMode::kPrestoCast);
+
+        VELOX_USER_CHECK(
+            !timestamp.hasError(),
+            "Not a valid timestamp literal: {} - {}",
+            literal->value(),
+            timestamp.error());
+
+        if (timestamp.value().timeZone != nullptr) {
+          return lp::Cast(
+              facebook::velox::TIMESTAMP_WITH_TIME_ZONE(),
+              lp::Lit(literal->value()));
+        } else {
+          return lp::Cast(
+              facebook::velox::TIMESTAMP(), lp::Lit(literal->value()));
+        }
       }
 
       case NodeType::kArrayConstructor: {
@@ -1073,16 +1107,13 @@ class RelationPlanner : public AstVisitor {
                 connectorId);
 
         if (metadata->findTable(tableName) != nullptr) {
-          builder_->tableScan(connectorId, tableName);
+          builder_->tableScan(
+              connectorId, tableName, /*includeHiddenColumns=*/true);
         } else if (auto view = metadata->findView(tableName)) {
           views_.emplace(std::make_pair(connectorId, tableName), view->text());
 
-          ParserHelper helper(view->text());
-          auto* viewContext = helper.parse();
-
-          AstBuilder astBuilder;
-          auto query = std::any_cast<std::shared_ptr<Statement>>(
-              astBuilder.visit(viewContext));
+          VELOX_CHECK_NOT_NULL(parseSql_);
+          auto query = parseSql_(view->text());
           processQuery(dynamic_cast<Query*>(query.get()));
         } else {
           VELOX_USER_FAIL(
@@ -1207,28 +1238,38 @@ class RelationPlanner : public AstVisitor {
         NodeTypeName::toName(relation->type()));
   }
 
-  // Returns true if 'selectItems' contains a single SELECT *.
-  static bool isSelectAll(const std::vector<SelectItemPtr>& selectItems) {
-    if (selectItems.size() == 1 &&
-        selectItems.at(0)->is(NodeType::kAllColumns)) {
-      return true;
+  void addProject(const std::vector<SelectItemPtr>& selectItems) {
+    // SELECT * FROM ...
+    const bool isSingleSelectStar = selectItems.size() == 1 &&
+        selectItems.at(0)->is(NodeType::kAllColumns) &&
+        selectItems.at(0)->as<AllColumns>()->prefix() == nullptr;
+    if (isSingleSelectStar) {
+      builder_->dropHiddenColumns();
+      return;
     }
 
-    return false;
-  }
-
-  void addProject(const std::vector<SelectItemPtr>& selectItems) {
     std::vector<lp::ExprApi> exprs;
     for (const auto& item : selectItems) {
-      VELOX_CHECK(item->is(NodeType::kSingleColumn));
-      auto* singleColumn = item->as<SingleColumn>();
+      if (item->is(NodeType::kAllColumns)) {
+        auto* allColumns = item->as<AllColumns>();
+        if (allColumns->prefix() != nullptr) {
+          // SELECT t.*
+          VELOX_NYI();
+        } else {
+          // SELECT *
+          VELOX_NYI();
+        }
+      } else {
+        VELOX_CHECK(item->is(NodeType::kSingleColumn));
+        auto* singleColumn = item->as<SingleColumn>();
 
-      lp::ExprApi expr = toExpr(singleColumn->expression());
+        lp::ExprApi expr = toExpr(singleColumn->expression());
 
-      if (singleColumn->alias() != nullptr) {
-        expr = expr.as(canonicalizeIdentifier(*singleColumn->alias()));
+        if (singleColumn->alias() != nullptr) {
+          expr = expr.as(canonicalizeIdentifier(*singleColumn->alias()));
+        }
+        exprs.push_back(expr);
       }
-      exprs.push_back(expr);
     }
 
     builder_->project(exprs);
@@ -1246,6 +1287,12 @@ class RelationPlanner : public AstVisitor {
   }
 
   bool tryAddGlobalAgg(const std::vector<SelectItemPtr>& selectItems) {
+    for (const auto& item : selectItems) {
+      if (item->is(NodeType::kAllColumns)) {
+        return false;
+      }
+    }
+
     bool hasAggregate = false;
     for (const auto& item : selectItems) {
       VELOX_CHECK(item->is(NodeType::kSingleColumn));
@@ -1264,14 +1311,15 @@ class RelationPlanner : public AstVisitor {
       return false;
     }
 
-    addGroupBy(selectItems, {}, nullptr);
+    addGroupBy(selectItems, {}, /*having=*/nullptr, /*orderBy=*/nullptr);
     return true;
   }
 
   void addGroupBy(
       const std::vector<SelectItemPtr>& selectItems,
       const std::vector<GroupingElementPtr>& groupingElements,
-      const ExpressionPtr& having) {
+      const ExpressionPtr& having,
+      const OrderByPtr& orderBy) {
     // Go over grouping keys and collect expressions. Ordinals refer to output
     // columns (selectItems). Non-ordinals refer to input columns.
 
@@ -1301,14 +1349,15 @@ class RelationPlanner : public AstVisitor {
     }
 
     // Go over SELECT expressions and figure out for each: whether a grouping
-    // key, a function of one or more grouping keys, a constant, an aggregate or
-    // a function over one or more aggregates and possibly grouping keys.
+    // key, a function of one or more grouping keys, a constant, an aggregate
+    // or a function over one or more aggregates and possibly grouping keys.
     //
-    // Collect all individual aggregates. A single select item 'sum(x) / sum(y)'
-    // will produce 2 aggregates: sum(x), sum(y).
+    // Collect all individual aggregates. A single select item 'sum(x) /
+    // sum(y)' will produce 2 aggregates: sum(x), sum(y).
 
     std::vector<lp::ExprApi> projections;
     std::vector<lp::ExprApi> aggregates;
+    ExprSet aggregateSet;
     std::unordered_map<
         const facebook::velox::core::IExpr*,
         lp::PlanBuilder::AggregateOptions>
@@ -1319,7 +1368,7 @@ class RelationPlanner : public AstVisitor {
 
       lp::ExprApi expr =
           toExpr(singleColumn->expression(), &aggregateOptionsMap);
-      findAggregates(expr.expr(), aggregates);
+      findAggregates(expr.expr(), aggregates, aggregateSet);
 
       if (!aggregates.empty() &&
           aggregates.back().expr().get() == expr.expr().get()) {
@@ -1340,8 +1389,25 @@ class RelationPlanner : public AstVisitor {
     std::optional<lp::ExprApi> filter;
     if (having != nullptr) {
       lp::ExprApi expr = toExpr(having, &aggregateOptionsMap);
-      findAggregates(expr.expr(), aggregates);
+      findAggregates(expr.expr(), aggregates, aggregateSet);
       filter = expr;
+    }
+
+    std::vector<lp::SortKey> sortingKeys;
+    std::vector<lp::ExprApi> sortingAggregates;
+
+    if (orderBy != nullptr) {
+      const auto& sortItems = orderBy->sortItems();
+      for (const auto& item : sortItems) {
+        auto expr = toExpr(item->sortKey(), &aggregateOptionsMap);
+        findAggregates(expr.expr(), sortingAggregates, aggregateSet);
+        sortingKeys.emplace_back(
+            expr, item->isAscending(), item->isNullsFirst());
+      }
+
+      for (const auto& aggregate : sortingAggregates) {
+        aggregates.emplace_back(aggregate);
+      }
     }
 
     std::vector<lp::PlanBuilder::AggregateOptions> aggregateOptions;
@@ -1357,7 +1423,7 @@ class RelationPlanner : public AstVisitor {
 
     const auto outputNames = builder_->findOrAssignOutputNames();
 
-    ExprMap inputs;
+    ExprMap<core::ExprPtr> inputs;
     std::vector<core::ExprPtr> flatInputs;
 
     size_t index = 0;
@@ -1378,17 +1444,47 @@ class RelationPlanner : public AstVisitor {
       builder_->filter(filter.value());
     }
 
-    // Go over SELECT expressions and replace sub-expressions matching 'inputs'
-    // with column references.
+    // Go over SELECT expressions and replace sub-expressions matching
+    // 'inputs' with column references.
 
-    // TODO Verify that SELECT expressions doesn't depend on anything other than
-    // grouping keys and aggregates.
+    // TODO Verify that SELECT expressions doesn't depend on anything other
+    // than grouping keys and aggregates.
 
     for (auto i = 0; i < projections.size(); ++i) {
       auto& item = projections.at(i);
       auto newExpr = replaceInputs(item.expr(), inputs);
 
       item = lp::ExprApi(newExpr, item.name());
+    }
+
+    // Go over sorting keys and add projections.
+    std::vector<size_t> sortingKeyOrdinals;
+    {
+      // TODO: Add support for sorting keys that apply expressions over SELECT
+      // projections, i.e. SELECT key, f(count(1)) as c FROM t GROUP BY 1 ORDER
+      // BY g(c).
+      ExprMap<size_t> projectionMap;
+      for (auto i = 0; i < projections.size(); ++i) {
+        projectionMap.emplace(projections.at(i).expr(), i + 1);
+      }
+
+      for (auto i = 0; i < sortingKeys.size(); ++i) {
+        const auto& sortKey = orderBy->sortItems().at(i)->sortKey();
+        if (sortKey->is(NodeType::kLongLiteral)) {
+          const auto n = sortKey->as<LongLiteral>()->value();
+          sortingKeyOrdinals.emplace_back(n);
+        } else {
+          auto key = replaceInputs(sortingKeys.at(i).expr.expr(), inputs);
+          auto [it, inserted] =
+              projectionMap.emplace(key, projections.size() + 1);
+          if (inserted) {
+            sortingKeyOrdinals.emplace_back(projections.size() + 1);
+            projections.emplace_back(key);
+          } else {
+            sortingKeyOrdinals.emplace_back(it->second);
+          }
+        }
+      }
     }
 
     bool identityProjection = (flatInputs.size() == projections.size());
@@ -1411,6 +1507,29 @@ class RelationPlanner : public AstVisitor {
 
     if (!identityProjection) {
       builder_->project(projections);
+    }
+
+    if (!sortingKeys.empty()) {
+      for (auto i = 0; i < sortingKeys.size(); ++i) {
+        const auto name =
+            builder_->findOrAssignOutputNameAt(sortingKeyOrdinals.at(i) - 1);
+
+        auto& key = sortingKeys.at(i);
+        key = lp::SortKey(lp::Col(name), key.ascending, key.nullsFirst);
+      }
+
+      builder_->sort(sortingKeys);
+
+      // Drop projections used only for sorting.
+      if (selectItems.size() < projections.size()) {
+        std::vector<lp::ExprApi> finalProjections;
+        finalProjections.reserve(selectItems.size());
+        for (auto i = 0; i < selectItems.size(); ++i) {
+          finalProjections.emplace_back(
+              lp::Col(builder_->findOrAssignOutputNameAt(i)));
+        }
+        builder_->project(finalProjections);
+      }
     }
   }
 
@@ -1457,9 +1576,15 @@ class RelationPlanner : public AstVisitor {
       }
     }
 
-    query->queryBody()->accept(this);
+    const auto& queryBody = query->queryBody();
+    if (queryBody->is(NodeType::kQuerySpecification)) {
+      visitQuerySpecification(
+          queryBody->as<QuerySpecification>(), query->orderBy());
+    } else {
+      queryBody->accept(this);
+      addOrderBy(query->orderBy());
+    }
 
-    addOrderBy(query->orderBy());
     addOffset(query->offset());
     addLimit(query->limit());
   }
@@ -1468,7 +1593,17 @@ class RelationPlanner : public AstVisitor {
     processQuery(query);
   }
 
+  void visitTableSubquery(TableSubquery* node) override {
+    node->query()->accept(this);
+  }
+
   void visitQuerySpecification(QuerySpecification* node) override {
+    visitQuerySpecification(node, /*orderBy=*/nullptr);
+  }
+
+  void visitQuerySpecification(
+      QuerySpecification* node,
+      const OrderByPtr& orderBy) {
     // FROM t -> builder.tableScan(t)
     processFrom(node->from());
 
@@ -1476,25 +1611,31 @@ class RelationPlanner : public AstVisitor {
     addFilter(node->where());
 
     const auto& selectItems = node->select()->selectItems();
+    const bool distinct = node->select()->isDistinct();
 
     if (auto groupBy = node->groupBy()) {
       VELOX_USER_CHECK(
           !groupBy->isDistinct(),
           "GROUP BY with DISTINCT is not supported yet");
-      addGroupBy(selectItems, groupBy->groupingElements(), node->having());
+      addGroupBy(
+          selectItems, groupBy->groupingElements(), node->having(), orderBy);
+
+      if (distinct) {
+        builder_->distinct();
+      }
     } else {
-      if (isSelectAll(selectItems)) {
-        // SELECT *. No project needed.
-      } else if (tryAddGlobalAgg(selectItems)) {
+      if (tryAddGlobalAgg(selectItems)) {
         // Nothing else to do.
       } else {
         // SELECT a, b -> builder.project({a, b})
         addProject(selectItems);
       }
-    }
 
-    if (node->select()->isDistinct()) {
-      builder_->aggregate(builder_->findOrAssignOutputNames(), {});
+      if (distinct) {
+        builder_->distinct();
+      }
+
+      addOrderBy(orderBy);
     }
   }
 
@@ -1577,7 +1718,7 @@ class RelationPlanner : public AstVisitor {
     builder_->setOperation(op, *rightBuilder);
 
     if (distinct) {
-      builder_->aggregate(builder_->findOrAssignOutputNames(), {});
+      builder_->distinct();
     }
   }
 
@@ -1589,6 +1730,9 @@ class RelationPlanner : public AstVisitor {
 
   lp::PlanBuilder::Context context_;
   const std::optional<std::string> defaultSchema_;
+  const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
+      std::string_view /*sql*/)>
+      parseSql_;
   std::shared_ptr<lp::PlanBuilder> builder_;
   std::unordered_map<std::string, std::shared_ptr<WithQuery>> withQueries_;
   std::unordered_map<std::pair<std::string, std::string>, std::string> views_;
@@ -1713,7 +1857,7 @@ lp::ExprPtr PrestoParser::parseExpression(
 
 namespace {
 lp::ExprPtr parseSqlExpression(const ExpressionPtr& expr) {
-  RelationPlanner planner("__unused__", "__unused__");
+  RelationPlanner planner("__unused__", "__unused__", /*parseSql=*/nullptr);
 
   auto plan =
       lp::PlanBuilder()
@@ -1732,14 +1876,10 @@ lp::ExprPtr parseSqlExpression(const ExpressionPtr& expr) {
 
 SqlStatementPtr parseExplain(
     const Explain& explain,
-    const std::string& defaultConnectorId,
-    const std::optional<std::string>& defaultSchema) {
-  RelationPlanner planner(defaultConnectorId, defaultSchema);
-  explain.statement()->accept(&planner);
-
+    const SqlStatementPtr& sqlStatement) {
   if (explain.isAnalyze()) {
     return std::make_shared<ExplainStatement>(
-        std::make_shared<SelectStatement>(planner.plan(), planner.views()),
+        sqlStatement,
         /*analyze=*/true);
   }
 
@@ -1770,7 +1910,7 @@ SqlStatementPtr parseExplain(
   }
 
   return std::make_shared<ExplainStatement>(
-      std::make_shared<SelectStatement>(planner.plan(), planner.views()),
+      sqlStatement,
       /*analyze=*/false,
       type);
 }
@@ -1923,10 +2063,21 @@ SqlStatementPtr parseShowFunctions(
   return std::make_shared<SelectStatement>(builder.build());
 };
 
+std::vector<lp::ExprApi> toColumnExprs(const std::vector<std::string>& names) {
+  std::vector<lp::ExprApi> exprs;
+  exprs.reserve(names.size());
+  for (const auto& name : names) {
+    exprs.emplace_back(lp::Col(name));
+  }
+  return exprs;
+}
+
 SqlStatementPtr parseInsert(
     const Insert& insert,
     const std::string& defaultConnectorId,
-    const std::optional<std::string>& defaultSchema) {
+    const std::optional<std::string>& defaultSchema,
+    const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
+        std::string_view /*sql*/)>& parseSql) {
   const auto table =
       findTable(*insert.target(), defaultConnectorId, defaultSchema);
 
@@ -1942,7 +2093,7 @@ SqlStatementPtr parseInsert(
     }
   }
 
-  RelationPlanner planner(defaultConnectorId, defaultSchema);
+  RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
   insert.query()->accept(&planner);
 
   auto inputColumns = planner.builder().findOrAssignOutputNames();
@@ -1953,7 +2104,7 @@ SqlStatementPtr parseInsert(
       table->name(),
       lp::WriteKind::kInsert,
       columnNames,
-      inputColumns);
+      toColumnExprs(inputColumns));
 
   return std::make_shared<InsertStatement>(planner.plan(), planner.views());
 }
@@ -1961,11 +2112,13 @@ SqlStatementPtr parseInsert(
 SqlStatementPtr parseCreateTableAsSelect(
     const CreateTableAsSelect& ctas,
     const std::string& defaultConnectorId,
-    const std::optional<std::string>& defaultSchema) {
+    const std::optional<std::string>& defaultSchema,
+    const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
+        std::string_view /*sql*/)>& parseSql) {
   auto connectorTable =
       toConnectorTable(*ctas.name(), defaultConnectorId, defaultSchema);
 
-  RelationPlanner planner(defaultConnectorId, defaultSchema);
+  RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
   ctas.query()->accept(&planner);
 
   std::unordered_map<std::string, lp::ExprPtr> properties;
@@ -1997,7 +2150,7 @@ SqlStatementPtr parseCreateTableAsSelect(
         connectorTable.second,
         lp::WriteKind::kCreate,
         columnNames,
-        columnNames);
+        toColumnExprs(columnNames));
   } else {
     VELOX_USER_CHECK_EQ(ctas.columns().size(), numInputColumns);
 
@@ -2011,7 +2164,7 @@ SqlStatementPtr parseCreateTableAsSelect(
         connectorTable.second,
         lp::WriteKind::kCreate,
         columnNames,
-        planBuilder.findOrAssignOutputNames());
+        toColumnExprs(planBuilder.findOrAssignOutputNames()));
   }
 
   return std::make_shared<CreateTableAsSelectStatement>(
@@ -2034,39 +2187,78 @@ SqlStatementPtr parseDropTable(
       connectorTable.first, connectorTable.second, dropTable.isExists());
 }
 
+SqlStatementPtr doPlan(
+    const std::shared_ptr<Statement>& query,
+    const std::string& defaultConnectorId,
+    const std::optional<std::string>& defaultSchema,
+    const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
+        std::string_view /*sql*/)>& parseSql) {
+  if (query->is(NodeType::kInsert)) {
+    return parseInsert(
+        *query->as<Insert>(), defaultConnectorId, defaultSchema, parseSql);
+  }
+
+  if (query->is(NodeType::kCreateTableAsSelect)) {
+    return parseCreateTableAsSelect(
+        *query->as<CreateTableAsSelect>(),
+        defaultConnectorId,
+        defaultSchema,
+        parseSql);
+  }
+
+  if (query->is(NodeType::kShowCatalogs)) {
+    return parseShowCatalogs(*query->as<ShowCatalogs>(), defaultConnectorId);
+  }
+
+  if (query->is(NodeType::kShowColumns)) {
+    return parseShowColumns(
+        *query->as<ShowColumns>(), defaultConnectorId, defaultSchema);
+  }
+
+  if (query->is(NodeType::kShowFunctions)) {
+    return parseShowFunctions(*query->as<ShowFunctions>(), defaultConnectorId);
+  }
+
+  if (query->is(NodeType::kQuery)) {
+    RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
+    query->accept(&planner);
+    return std::make_shared<SelectStatement>(planner.plan(), planner.views());
+  }
+
+  VELOX_NYI(
+      "Unsupported statement type: {}", NodeTypeName::toName(query->type()));
+}
 } // namespace
 
 SqlStatementPtr PrestoParser::doParse(
     std::string_view sql,
     bool enableTracing) {
-  ParserHelper helper(sql);
-  auto* context = helper.parse();
+  auto parseSql = [enableTracing](std::string_view sql) {
+    ParserHelper helper(sql);
+    auto* context = helper.parse();
 
-  AstBuilder astBuilder(enableTracing);
-  auto query =
-      std::any_cast<std::shared_ptr<Statement>>(astBuilder.visit(context));
+    AstBuilder astBuilder(enableTracing);
+    auto query =
+        std::any_cast<std::shared_ptr<Statement>>(astBuilder.visit(context));
 
-  if (enableTracing) {
-    std::stringstream astString;
-    AstPrinter printer(astString);
-    query->accept(&printer);
+    if (enableTracing) {
+      std::stringstream astString;
+      AstPrinter printer(astString);
+      query->accept(&printer);
 
-    std::cout << "AST: " << astString.str() << std::endl;
-  }
+      std::cout << "AST: " << astString.str() << std::endl;
+    }
+
+    return query;
+  };
+
+  auto query = parseSql(sql);
 
   if (query->is(NodeType::kExplain)) {
-    return parseExplain(
-        *query->as<Explain>(), defaultConnectorId_, defaultSchema_);
-  }
-
-  if (query->is(NodeType::kInsert)) {
-    return parseInsert(
-        *query->as<Insert>(), defaultConnectorId_, defaultSchema_);
-  }
-
-  if (query->is(NodeType::kCreateTableAsSelect)) {
-    return parseCreateTableAsSelect(
-        *query->as<CreateTableAsSelect>(), defaultConnectorId_, defaultSchema_);
+    auto* explain = query->as<Explain>();
+    auto sqlStatement = doPlan(
+        explain->statement(), defaultConnectorId_, defaultSchema_, parseSql);
+    return parseExplain(*explain, sqlStatement);
   }
 
   if (query->is(NodeType::kDropTable)) {
@@ -2074,22 +2266,7 @@ SqlStatementPtr PrestoParser::doParse(
         *query->as<DropTable>(), defaultConnectorId_, defaultSchema_);
   }
 
-  if (query->is(NodeType::kShowCatalogs)) {
-    return parseShowCatalogs(*query->as<ShowCatalogs>(), defaultConnectorId_);
-  }
-
-  if (query->is(NodeType::kShowColumns)) {
-    return parseShowColumns(
-        *query->as<ShowColumns>(), defaultConnectorId_, defaultSchema_);
-  }
-
-  if (query->is(NodeType::kShowFunctions)) {
-    return parseShowFunctions(*query->as<ShowFunctions>(), defaultConnectorId_);
-  }
-
-  RelationPlanner planner(defaultConnectorId_, defaultSchema_);
-  query->accept(&planner);
-  return std::make_shared<SelectStatement>(planner.plan(), planner.views());
+  return doPlan(query, defaultConnectorId_, defaultSchema_, parseSql);
 }
 
 } // namespace axiom::sql::presto

@@ -161,11 +161,12 @@ class ToGraph {
   void canonicalizeCall(Name& name, ExprVector& args);
 
   // Converts 'plan' to PlanObjects and records join edges into
-  // 'currentDt_'. If 'node' does not match  allowedInDt, wraps 'node' in
-  // a new DerivedTable.
+  // 'currentDt_'. Wraps 'node' in a new Derived table f 'node' does not match
+  // allowedInDt or 'node' is an outer join and 'excludeOuterJoins' is true.
   void makeQueryGraph(
       const logical_plan::LogicalPlanNode& node,
-      uint64_t allowedInDt);
+      uint64_t allowedInDt,
+      bool excludeOuterJoins = false);
 
   PlanObjectCP findLeaf(const logical_plan::LogicalPlanNode* node) {
     auto* leaf = planLeaves_[node];
@@ -269,7 +270,7 @@ class ToGraph {
       logical_plan::ExprPtr& input);
 
   void getExprForField(
-      const logical_plan::Expr* field,
+      const logical_plan::InputReferenceExpr* field,
       logical_plan::ExprPtr& resultExpr,
       ColumnCP& resultColumn,
       const logical_plan::LogicalPlanNode*& context);
@@ -361,8 +362,11 @@ class ToGraph {
   // Innermost DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP currentDt_{nullptr};
 
-  // Source PlanNode when inside addProjection() or 'addFilter().
-  const logical_plan::LogicalPlanNode* exprSource_{nullptr};
+  // Source LogicalPlanNode's for the node currently being processed. Used to
+  // translate expressions that involve subfields. Contains just one node if
+  // current node if Project or Filter. Contains two nodes if current node is a
+  // Join.
+  std::vector<const logical_plan::LogicalPlanNode*> exprSources_;
 
   // Map from lambda argument names to their corresponding columns when
   // translating inside a lambda body.

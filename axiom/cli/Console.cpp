@@ -52,13 +52,13 @@ void Console::initialize() {
       "Axiom local SQL command line. "
       "Run 'axiom_sql --help' for available options.\n");
 
-  // Disable logging to stderr.
-  FLAGS_logtostderr = false;
+  // Disable logging to stderr if not in debug mode.
+  FLAGS_logtostderr = FLAGS_debug;
 }
 
 void Console::run() {
   if (!FLAGS_query.empty()) {
-    runNoThrow(FLAGS_query);
+    runNoThrow(FLAGS_query, false);
   } else {
     std::cout << "Axiom SQL. Type statement and end with ;.\n"
                  "flag name = value; sets a gflag.\n"
@@ -215,32 +215,46 @@ int32_t printResults(const std::vector<RowVectorPtr>& results) {
 }
 } // namespace
 
-void Console::runNoThrow(std::string_view sql) {
+void Console::runNoThrow(std::string_view sql, bool isInteractive) {
+  const SqlQueryRunner::RunOptions options{
+      .numWorkers = FLAGS_num_workers,
+      .numDrivers = FLAGS_num_drivers,
+      .splitTargetBytes = FLAGS_split_target_bytes,
+      .optimizerTraceFlags = FLAGS_optimizer_trace,
+      .debugMode = FLAGS_debug,
+  };
+
+  decltype(runner_.parseMultiple(sql, options)) statements;
   try {
-    Timing timing;
-    const auto result = time<SqlQueryRunner::SqlResult>(
-        [&]() {
-          return runner_.run(
-              sql,
-              {
-                  .numWorkers = FLAGS_num_workers,
-                  .numDrivers = FLAGS_num_drivers,
-                  .splitTargetBytes = FLAGS_split_target_bytes,
-                  .optimizerTraceFlags = FLAGS_optimizer_trace,
-                  .debugMode = FLAGS_debug,
-              });
-        },
-        timing);
-
-    if (result.message.has_value()) {
-      std::cout << result.message.value() << std::endl;
-    } else {
-      printResults(result.results);
-    }
-    std::cout << timing.toString() << std::endl;
-
+    // Parse all statements upfront.
+    statements = runner_.parseMultiple(sql, options);
   } catch (std::exception& e) {
-    std::cerr << "Query failed: " << e.what() << std::endl;
+    std::cerr << "Parse failed: " << e.what() << std::endl;
+    return;
+  }
+
+  // Execute each statement with timing.
+  for (const auto& statement : statements) {
+    try {
+      Timing statementTiming;
+      auto result = time<SqlQueryRunner::SqlResult>(
+          [&]() { return runner_.run(*statement, options); }, statementTiming);
+
+      if (result.message.has_value()) {
+        std::cout << result.message.value() << std::endl;
+      } else {
+        printResults(result.results);
+      }
+
+      if (isInteractive) {
+        // In interactive mode, show per-statement timing.
+        std::cout << statementTiming.toString() << std::endl;
+      }
+    } catch (std::exception& e) {
+      std::cerr << "Query failed: " << e.what() << std::endl;
+      // Stop executing remaining statements in this block.
+      return;
+    }
   }
 }
 

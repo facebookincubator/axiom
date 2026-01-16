@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 #include <optional>
 #include <string>
 #include <vector>
@@ -42,6 +43,10 @@ class NameMappings {
   /// Adds a mapping from 'name' to 'id'. Throws if 'name' already exists.
   void add(const std::string& name, const std::string& id);
 
+  /// Marks the specified 'id' as hidden. The 'id' must have been added earlier
+  /// via 'add' API.
+  void markHidden(const std::string& id);
+
   /// Returns ID for the specified 'name' if exists.
   std::optional<std::string> lookup(const std::string& name) const;
 
@@ -49,6 +54,10 @@ class NameMappings {
   std::optional<std::string> lookup(
       const std::string& alias,
       const std::string& name) const;
+
+  /// Returns true if the specified 'id' was marked as hidden via 'markHidden'
+  /// API.
+  bool isHidden(const std::string& id) const;
 
   /// Returns all names for the specified ID. There can be up to 2 names: w/ and
   /// w/o alias.
@@ -92,6 +101,9 @@ class NameMappings {
   // Mapping from names to IDs. Unique names may appear twice: w/ and w/o an
   // alias.
   folly::F14FastMap<QualifiedName, std::string, QualifiedNameHasher> mappings_;
+
+  // IDs of hidden columns.
+  folly::F14FastSet<std::string> hiddenIds_;
 };
 
 } // namespace facebook::axiom::logical_plan

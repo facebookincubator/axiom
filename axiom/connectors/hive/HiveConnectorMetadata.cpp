@@ -61,6 +61,51 @@ std::string HivePartitionType::toString() const {
 }
 
 namespace {
+
+std::vector<std::unique_ptr<const connector::Column>> makeColumns(
+    const velox::RowTypePtr& type,
+    bool bucketed,
+    bool includeHiddenColumns) {
+  std::vector<std::unique_ptr<const connector::Column>> columns;
+  columns.reserve(type->size() + 2 + (bucketed ? 1 : 0));
+
+  for (auto i = 0; i < type->size(); i++) {
+    columns.emplace_back(
+        std::make_unique<connector::Column>(
+            type->nameOf(i), type->childAt(i), /*hidden=*/false));
+  }
+
+  if (includeHiddenColumns) {
+    // Add hidden columns.
+    columns.emplace_back(
+        std::make_unique<connector::Column>(
+            HiveTable::kPath, velox::VARCHAR(), /*hidden=*/true));
+    columns.emplace_back(
+        std::make_unique<connector::Column>(
+            HiveTable::kFileSize, velox::BIGINT(), /*hidden=*/true));
+    if (bucketed) {
+      columns.emplace_back(
+          std::make_unique<connector::Column>(
+              HiveTable::kBucket, velox::INTEGER(), /*hidden=*/true));
+    }
+  }
+
+  return columns;
+}
+} // namespace
+
+HiveTable::HiveTable(
+    std::string name,
+    velox::RowTypePtr type,
+    bool bucketed,
+    bool includeHiddenColumns,
+    folly::F14FastMap<std::string, velox::Variant> options)
+    : Table(
+          std::move(name),
+          hive::makeColumns(type, bucketed, includeHiddenColumns),
+          std::move(options)) {}
+
+namespace {
 std::vector<velox::TypePtr> extractPartitionKeyTypes(
     const std::vector<const Column*>& partitionedByColumns) {
   std::vector<velox::TypePtr> types;
@@ -109,15 +154,18 @@ HiveTableLayout::HiveTableLayout(
 namespace {
 velox::connector::hive::HiveColumnHandle::ColumnType columnType(
     const HiveTableLayout& layout,
-    std::string_view columnName) {
-  auto& columns = layout.hivePartitionColumns();
-  for (auto& column : columns) {
-    if (column->name() == columnName) {
+    const facebook::axiom::connector::Column* column) {
+  if (column->hidden()) {
+    return velox::connector::hive::HiveColumnHandle::ColumnType::kSynthesized;
+  }
+
+  for (const auto& partitionColumn : layout.hivePartitionColumns()) {
+    if (column->name() == partitionColumn->name()) {
       return velox::connector::hive::HiveColumnHandle::ColumnType::
           kPartitionKey;
     }
   }
-  // TODO recognize special names like $path, $bucket etc.
+
   return velox::connector::hive::HiveColumnHandle::ColumnType::kRegular;
 }
 
@@ -154,7 +202,7 @@ velox::connector::ColumnHandlePtr HiveTableLayout::createColumnHandle(
       column, "Column not found: {} in table {}", columnName, name());
   return std::make_shared<velox::connector::hive::HiveColumnHandle>(
       columnName,
-      columnType(*this, columnName),
+      columnType(*this, column),
       column->type(),
       column->type(),
       std::move(subfields));

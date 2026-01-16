@@ -44,7 +44,7 @@ class LocalHiveSplitSource : public SplitSource {
       : options_(options),
         format_(format),
         connectorId_(connectorId),
-        files_(files),
+        files_(std::move(files)),
         serdeParameters_(std::move(serdeParameters)) {}
 
   std::vector<SplitSource::SplitAndGroup> getSplits(
@@ -146,32 +146,17 @@ class LocalHiveTableLayout : public HiveTableLayout {
   std::unordered_map<std::string, std::string> serdeParameters_;
 };
 
-class LocalTable : public Table {
+class LocalTable : public HiveTable {
  public:
   LocalTable(
       std::string name,
       velox::RowTypePtr type,
-      folly::F14FastMap<std::string, velox::Variant> options = {})
-      : Table(std::move(name), std::move(type), std::move(options)) {
-    for (auto i = 0; i < Table::type()->size(); ++i) {
-      const auto& name = Table::type()->nameOf(i);
-      auto column = std::make_unique<Column>(
-          name, Table::type()->childAt(i), /*hidden=*/false);
-      exportedColumns_[name] = column.get();
-      columns_.emplace(name, std::move(column));
-    }
-  }
-
-  folly::F14FastMap<std::string, std::unique_ptr<Column>>& columns() {
-    return columns_;
-  }
+      bool bucketed,
+      folly::F14FastMap<std::string, velox::Variant> options);
 
   const std::vector<const TableLayout*>& layouts() const override {
     return exportedLayouts_;
   }
-
-  const folly::F14FastMap<std::string, const Column*>& columnMap()
-      const override;
 
   void addLayout(std::unique_ptr<LocalHiveTableLayout> layout) {
     exportedLayouts_.push_back(layout.get());
@@ -198,18 +183,11 @@ class LocalTable : public Table {
   // Serializes initialization, e.g. exportedColumns_.
   mutable std::mutex mutex_;
 
-  // All columns. Filled by loadTable().
-  folly::F14FastMap<std::string, std::unique_ptr<Column>> columns_;
-
-  // Non-owning columns map used for exporting the column set as abstract
-  // columns.
-  mutable folly::F14FastMap<std::string, const Column*> exportedColumns_;
-
-  ///  Table layouts. For a Hive table this is normally one layout with all
-  ///  columns included.
+  // Table layouts. For a Hive table this is normally one layout with all
+  // columns included.
   std::vector<std::unique_ptr<TableLayout>> layouts_;
 
-  // Copy of 'llayouts_' for use in layouts().
+  // Copy of 'layouts_' for use in layouts().
   std::vector<const TableLayout*> exportedLayouts_;
 
   int64_t numRows_{0};
@@ -302,7 +280,6 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   void makeQueryCtx();
   void makeConnectorQueryCtx();
   void readTables(std::string_view path);
-
   void loadTable(std::string_view tableName, const fs::path& tablePath);
 
   std::shared_ptr<LocalTable> findTableLocked(std::string_view name) const;

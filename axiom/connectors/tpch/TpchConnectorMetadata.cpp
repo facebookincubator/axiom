@@ -197,41 +197,22 @@ std::pair<int64_t, int64_t> TpchTableLayout::sample(
   return std::pair(totalRows, totalRows);
 }
 
-void TpchTable::makeDefaultLayout(
-    TpchConnectorMetadata& metadata,
-    double scaleFactor) {
-  std::vector<const Column*> columns;
-  for (auto i = 0; i < type_->size(); ++i) {
-    auto name = type_->nameOf(i);
-    columns.push_back(columns_[name].get());
-  }
-  auto* connector = metadata.tpchConnector();
-  std::vector<const Column*> empty;
+void TpchTable::makeDefaultLayout(TpchConnectorMetadata& metadata) {
+  VELOX_CHECK_EQ(0, exportedLayouts_.size());
+
   auto layout = std::make_unique<TpchTableLayout>(
-      name_,
+      name(),
       this,
-      connector,
-      std::move(columns),
-      empty,
-      empty,
+      metadata.tpchConnector(),
+      allColumns(),
+      std::vector<const Column*>{},
+      std::vector<const Column*>{},
       std::vector<SortOrder>{},
-      empty,
+      std::vector<const Column*>{},
       tpchTable_,
-      scaleFactor);
+      scaleFactor_);
   exportedLayouts_.push_back(layout.get());
   layouts_.push_back(std::move(layout));
-}
-
-const folly::F14FastMap<std::string, const Column*>& TpchTable::columnMap()
-    const {
-  std::lock_guard<std::mutex> l(mutex_);
-  if (columns_.empty()) {
-    return exportedColumns_;
-  }
-  for (auto& pair : columns_) {
-    exportedColumns_[pair.first] = pair.second.get();
-  }
-  return exportedColumns_;
 }
 
 TablePtr TpchConnectorMetadata::findTable(std::string_view name) {
@@ -253,14 +234,7 @@ TablePtr TpchConnectorMetadata::findTable(std::string_view name) {
   auto table = std::make_shared<TpchTable>(
       tableName, tableType, tpchTable, scaleFactor, numRows);
 
-  for (auto i = 0; i < tableType->size(); ++i) {
-    const auto columnName = tableType->nameOf(i);
-    const auto columnType = tableType->childAt(i);
-    table->columns()[columnName] =
-        std::make_unique<Column>(columnName, columnType, /*hidden=*/false);
-  }
-
-  table->makeDefaultLayout(*this, scaleFactor);
+  table->makeDefaultLayout(*this);
 
   return table;
 }

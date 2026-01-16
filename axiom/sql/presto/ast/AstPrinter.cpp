@@ -256,8 +256,13 @@ void AstPrinter::visitTableSubquery(TableSubquery* node) {
 }
 
 void AstPrinter::visitIdentifier(Identifier* node) {
-  printHeader(
-      "Identifier", node, [&](std::ostream& out) { out << node->value(); });
+  printHeader("Identifier", node, [&](std::ostream& out) {
+    if (node->isDelimited()) {
+      out << fmt::format("\"{}\"", node->value());
+    } else {
+      out << node->value();
+    }
+  });
 }
 
 void AstPrinter::visitLongLiteral(LongLiteral* node) {
@@ -345,7 +350,13 @@ void AstPrinter::visitDereferenceExpression(DereferenceExpression* node) {
 }
 
 void AstPrinter::visitAllColumns(AllColumns* node) {
-  printHeader("AllColumns", node, [&](std::ostream& out) { out << "*"; });
+  printHeader("AllColumns", node, [&](std::ostream& out) {
+    if (node->prefix() != nullptr) {
+      out << node->prefix()->fullyQualifiedName() << ".*";
+    } else {
+      out << "*";
+    }
+  });
 }
 
 void AstPrinter::visitJoin(Join* node) {

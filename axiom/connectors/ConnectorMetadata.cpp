@@ -34,6 +34,74 @@ const auto& writeKindNames() {
 AXIOM_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 
 namespace {
+
+// @return RowType that represents a subset of 'columns' which are not hidden.
+velox::RowTypePtr toSchema(
+    const std::vector<std::unique_ptr<const Column>>& columns) {
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> types;
+  names.reserve(columns.size());
+  types.reserve(columns.size());
+  for (const auto& column : columns) {
+    if (column->hidden()) {
+      continue;
+    }
+    names.push_back(column->name());
+    types.push_back(column->type());
+  }
+  return velox::ROW(std::move(names), std::move(types));
+}
+
+std::vector<const Column*> toPtrs(
+    const std::vector<std::unique_ptr<const Column>>& columns) {
+  std::vector<const Column*> ptrs;
+  ptrs.reserve(columns.size());
+  for (auto& column : columns) {
+    ptrs.push_back(column.get());
+  }
+  return ptrs;
+}
+
+folly::F14FastMap<std::string, const Column*> toMap(
+    const std::vector<std::unique_ptr<const Column>>& columns) {
+  folly::F14FastMap<std::string, const Column*> map;
+  for (auto& column : columns) {
+    VELOX_CHECK(!column->name().empty(), "Column name cannot be empty");
+    auto inserted = map.emplace(column->name(), column.get()).second;
+    VELOX_CHECK(inserted, "Duplicate column: {}", column->name());
+  }
+  return map;
+}
+} // namespace
+
+Table::Table(
+    std::string name,
+    std::vector<std::unique_ptr<const Column>> columns,
+    folly::F14FastMap<std::string, velox::Variant> options)
+    : name_(std::move(name)),
+      type_(toSchema(columns)),
+      columns_(std::move(columns)),
+      columnPtrs_(toPtrs(columns_)),
+      columnMap_(toMap(columns_)),
+      options_(std::move(options)) {
+  VELOX_CHECK(!name_.empty());
+  VELOX_CHECK_NOT_NULL(type_);
+}
+
+// static
+std::vector<std::unique_ptr<const Column>> Table::makeColumns(
+    const velox::RowTypePtr& rowType) {
+  std::vector<std::unique_ptr<const Column>> columns;
+  columns.reserve(rowType->size());
+  for (auto i = 0; i < rowType->size(); ++i) {
+    columns.push_back(
+        std::make_unique<const Column>(
+            rowType->nameOf(i), rowType->childAt(i), /*hidden=*/false));
+  }
+  return columns;
+}
+
+namespace {
 velox::RowTypePtr makeRowType(const std::vector<const Column*>& columns) {
   folly::F14FastSet<std::string> uniqueNames;
 
@@ -45,6 +113,9 @@ velox::RowTypePtr makeRowType(const std::vector<const Column*>& columns) {
 
   for (auto* column : columns) {
     VELOX_CHECK_NOT_NULL(column);
+    if (column->hidden()) {
+      continue;
+    }
 
     const auto& name = column->name();
 

@@ -116,6 +116,126 @@ class WriteTest : public test::HiveQueriesTestBase {
     return *table->layouts().at(0)->as<connector::hive::LocalHiveTableLayout>();
   }
 
+  static std::vector<const connector::hive::FileInfo*> sortFilesByBucket(
+      const std::vector<std::unique_ptr<const connector::hive::FileInfo>>&
+          files) {
+    std::vector<const connector::hive::FileInfo*> sortedFiles;
+    sortedFiles.reserve(files.size());
+    for (const auto& file : files) {
+      sortedFiles.emplace_back(file.get());
+    }
+
+    std::sort(
+        sortedFiles.begin(),
+        sortedFiles.end(),
+        [](const auto& a, const auto& b) {
+          return a->bucketNumber < b->bucketNumber;
+        });
+
+    return sortedFiles;
+  }
+
+  test::TestResult runSelect(const std::string& sql) {
+    auto logicalPlan = parseSelect(sql, exec::test::kHiveConnectorId);
+    return runVelox(logicalPlan);
+  }
+
+  void verifyPartitionedLayout(
+      const connector::hive::LocalHiveTableLayout& layout,
+      const std::string& partitionedByColumn,
+      int numBuckets,
+      const std::optional<std::string>& sortedByColumn = std::nullopt) {
+    const auto& tableName = layout.table().name();
+    SCOPED_TRACE(tableName);
+
+    ASSERT_EQ(1, layout.partitionColumns().size());
+    ASSERT_EQ(partitionedByColumn, layout.partitionColumns().at(0)->name());
+
+    ASSERT_EQ(numBuckets, layout.numBuckets());
+    ASSERT_EQ(numBuckets, layout.files().size());
+
+    if (sortedByColumn.has_value()) {
+      ASSERT_EQ(1, layout.orderColumns().size());
+      ASSERT_EQ(1, layout.sortOrder().size());
+
+      ASSERT_EQ(sortedByColumn.value(), layout.orderColumns().at(0)->name());
+    } else {
+      ASSERT_EQ(0, layout.orderColumns().size());
+      ASSERT_EQ(0, layout.sortOrder().size());
+    }
+
+    ASSERT_EQ(0, layout.hivePartitionColumns().size());
+
+    {
+      auto testResult = runSelect(
+          fmt::format("SELECT distinct \"$path\" FROM {}", tableName));
+      ASSERT_EQ(numBuckets, testResult.countRows());
+    }
+
+    {
+      auto testResult = runSelect(
+          fmt::format("SELECT distinct \"$bucket\" FROM {}", tableName));
+      ASSERT_EQ(numBuckets, testResult.countRows());
+    }
+
+    const auto sortedFiles = sortFilesByBucket(layout.files());
+
+    int64_t totalRows = 0;
+    std::vector<int64_t> fileRowCounts;
+    {
+      auto testResult = runSelect(
+          fmt::format(
+              "SELECT \"$bucket\", \"$path\", count(*) FROM {} GROUP BY 1, 2 ORDER BY 1",
+              tableName));
+      ASSERT_EQ(numBuckets, testResult.countRows());
+
+      int32_t expectedBucket = 0;
+      for (const auto& result : testResult.results) {
+        auto* buckets = result->childAt(0)->as<SimpleVector<int32_t>>();
+        auto* paths = result->childAt(1)->as<SimpleVector<StringView>>();
+        auto* rows = result->childAt(2)->as<SimpleVector<int64_t>>();
+        for (auto i = 0; i < buckets->size(); ++i) {
+          ASSERT_TRUE(!buckets->isNullAt(i));
+          ASSERT_EQ(expectedBucket, buckets->valueAt(i));
+
+          const auto& expectedFile = sortedFiles.at(expectedBucket);
+
+          ASSERT_TRUE(!paths->isNullAt(i));
+          ASSERT_EQ(expectedFile->path, paths->valueAt(i));
+          ASSERT_EQ(expectedBucket, expectedFile->bucketNumber);
+
+          ASSERT_TRUE(!rows->isNullAt(i));
+          fileRowCounts.emplace_back(rows->valueAt(i));
+          totalRows += fileRowCounts.back();
+
+          ++expectedBucket;
+        }
+      }
+    }
+
+    auto runCount = [&](const std::string& filter) {
+      auto testResult = runSelect(
+          fmt::format("SELECT count(*) FROM {} {}", tableName, filter));
+      auto count = testResult.getOnlyResult();
+      VELOX_CHECK(!count.isNull());
+      return count.value<int64_t>();
+    };
+
+    for (auto i = 0; i < numBuckets; ++i) {
+      const auto fileRowCount = fileRowCounts.at(i);
+
+      ASSERT_EQ(
+          fileRowCount, runCount(fmt::format("WHERE \"$bucket\" = {}", i)));
+
+      ASSERT_EQ(
+          fileRowCount,
+          runCount(
+              fmt::format("WHERE \"$path\" = '{}'", sortedFiles.at(i)->path)));
+    }
+
+    ASSERT_EQ(totalRows, runCount(""));
+  }
+
   static void checkWrittenRows(
       const test::TestResult& result,
       int64_t writtenRows) {
@@ -441,32 +561,6 @@ void verifyCollocatedWrite(const runner::MultiFragmentPlan& plan) {
     auto matcher = core::PlanMatcherBuilder().exchange().build();
     AXIOM_ASSERT_PLAN(nodeAt(plan, 1), matcher);
   }
-}
-
-void verifyPartitionedLayout(
-    const connector::hive::LocalHiveTableLayout& layout,
-    const std::string& partitionedByColumn,
-    int numBuckets,
-    const std::optional<std::string>& sortedByColumn = std::nullopt) {
-  SCOPED_TRACE(layout.table().name());
-
-  ASSERT_EQ(1, layout.partitionColumns().size());
-  ASSERT_EQ(partitionedByColumn, layout.partitionColumns().at(0)->name());
-
-  ASSERT_EQ(numBuckets, layout.numBuckets());
-  ASSERT_EQ(numBuckets, layout.files().size());
-
-  if (sortedByColumn.has_value()) {
-    ASSERT_EQ(1, layout.orderColumns().size());
-    ASSERT_EQ(1, layout.sortOrder().size());
-
-    ASSERT_EQ(sortedByColumn.value(), layout.orderColumns().at(0)->name());
-  } else {
-    ASSERT_EQ(0, layout.orderColumns().size());
-    ASSERT_EQ(0, layout.sortOrder().size());
-  }
-
-  ASSERT_EQ(0, layout.hivePartitionColumns().size());
 }
 
 TEST_F(WriteTest, createTableAsSelectBucketedSql) {

@@ -124,22 +124,48 @@ std::string SqlQueryRunner::dropTable(
 SqlQueryRunner::SqlResult SqlQueryRunner::run(
     std::string_view sql,
     const RunOptions& options) {
-  auto sqlStatement = prestoParser_->parse(sql);
+  auto statements = parseMultiple(sql, options);
+  VELOX_CHECK_EQ(
+      statements.size(),
+      1,
+      "run() expects a single statement. "
+      "Use parseMultiple() + run(statement) for multiple statements.");
+  return run(*statements[0], options);
+}
 
-  if (sqlStatement->isExplain()) {
-    auto* explain = sqlStatement->as<presto::ExplainStatement>();
+std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
+    std::string_view sql,
+    const RunOptions& options) {
+  return prestoParser_->parseMultiple(sql, /*enableTracing=*/options.debugMode);
+}
 
-    VELOX_CHECK(explain->statement()->isSelect());
-    auto* select = explain->statement()->as<presto::SelectStatement>();
-    if (explain->isAnalyze()) {
-      return {.message = runExplainAnalyze(*select, options)};
+SqlQueryRunner::SqlResult SqlQueryRunner::run(
+    const presto::SqlStatement& sqlStatement,
+    const RunOptions& options) {
+  if (sqlStatement.isExplain()) {
+    const auto* explain = sqlStatement.as<presto::ExplainStatement>();
+
+    const auto& statement = explain->statement();
+
+    logical_plan::LogicalPlanNodePtr logicalPlan;
+    if (statement->isSelect()) {
+      logicalPlan = statement->as<presto::SelectStatement>()->plan();
+    } else if (statement->isInsert()) {
+      logicalPlan = statement->as<presto::InsertStatement>()->plan();
     } else {
-      return {.message = runExplain(*select, explain->type(), options)};
+      // TODO Add support for EXPLAIN CREATE TABLE AS SELECT ...
+      VELOX_NYI("Unsupported EXPLAIN query: {}", statement->kindName());
+    }
+
+    if (explain->isAnalyze()) {
+      return {.message = runExplainAnalyze(logicalPlan, options)};
+    } else {
+      return {.message = runExplain(logicalPlan, explain->type(), options)};
     }
   }
 
-  if (sqlStatement->isCreateTableAsSelect()) {
-    const auto* ctas = sqlStatement->as<presto::CreateTableAsSelectStatement>();
+  if (sqlStatement.isCreateTableAsSelect()) {
+    const auto* ctas = sqlStatement.as<presto::CreateTableAsSelectStatement>();
 
     auto table = createTable(*ctas);
 
@@ -154,20 +180,20 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     return {.results = runSql(ctas->plan(), options)};
   }
 
-  if (sqlStatement->isInsert()) {
-    const auto* insert = sqlStatement->as<presto::InsertStatement>();
+  if (sqlStatement.isInsert()) {
+    const auto* insert = sqlStatement.as<presto::InsertStatement>();
     return {.results = runSql(insert->plan(), options)};
   }
 
-  if (sqlStatement->isDropTable()) {
-    const auto* drop = sqlStatement->as<presto::DropTableStatement>();
+  if (sqlStatement.isDropTable()) {
+    const auto* drop = sqlStatement.as<presto::DropTableStatement>();
 
     return {.message = dropTable(*drop)};
   }
 
-  VELOX_CHECK(sqlStatement->isSelect());
+  VELOX_CHECK(sqlStatement.isSelect());
 
-  const auto logicalPlan = sqlStatement->as<presto::SelectStatement>()->plan();
+  const auto logicalPlan = sqlStatement.as<presto::SelectStatement>()->plan();
 
   return {.results = runSql(logicalPlan, options)};
 }
@@ -191,27 +217,26 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
 }
 
 std::string SqlQueryRunner::runExplain(
-    const presto::SelectStatement& statement,
+    const logical_plan::LogicalPlanNodePtr& logicalPlan,
     presto::ExplainStatement::Type type,
     const RunOptions& options) {
   switch (type) {
     case presto::ExplainStatement::Type::kLogical:
-      return logical_plan::PlanPrinter::toText(*statement.plan());
+      return logical_plan::PlanPrinter::toText(*logicalPlan);
 
     case presto::ExplainStatement::Type::kGraph: {
       std::string text;
-      optimize(
-          statement.plan(), newQuery(options), options, [&](const auto& dt) {
-            text = optimizer::DerivedTablePrinter::toText(dt);
-            return false; // Stop optimization.
-          });
+      optimize(logicalPlan, newQuery(options), options, [&](const auto& dt) {
+        text = optimizer::DerivedTablePrinter::toText(dt);
+        return false; // Stop optimization.
+      });
       return text;
     }
 
     case presto::ExplainStatement::Type::kOptimized: {
       std::string text;
       optimize(
-          statement.plan(),
+          logicalPlan,
           newQuery(options),
           options,
           nullptr,
@@ -224,7 +249,7 @@ std::string SqlQueryRunner::runExplain(
     }
 
     case presto::ExplainStatement::Type::kExecutable:
-      return optimize(statement.plan(), newQuery(options), options).toString();
+      return optimize(logicalPlan, newQuery(options), options).toString();
   }
 }
 
@@ -249,10 +274,10 @@ std::string printPlanWithStats(
 } // namespace
 
 std::string SqlQueryRunner::runExplainAnalyze(
-    const presto::SelectStatement& statement,
+    const logical_plan::LogicalPlanNodePtr& logicalPlan,
     const RunOptions& options) {
   auto queryCtx = newQuery(options);
-  auto planAndStats = optimize(statement.plan(), queryCtx, options);
+  auto planAndStats = optimize(logicalPlan, queryCtx, options);
 
   auto runner = makeLocalRunner(planAndStats, queryCtx, options);
   SCOPE_EXIT {

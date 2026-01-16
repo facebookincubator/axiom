@@ -16,6 +16,7 @@ add_library(
   axiom_logical_plan
   Expr.cpp
   ExprPrinter.cpp
+  ExprResolver.cpp
   LogicalPlanNode.cpp
   PlanPrinter.cpp
   ExprApi.cpp

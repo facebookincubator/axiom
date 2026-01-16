@@ -90,12 +90,16 @@ Target transform(const V& set, Func func) {
   return result;
 }
 
-/// Adds 'element' to 'vector' if it is not in it.
+/// Adds 'element' to 'vector' if it is not in it. Return 'true' if element was
+/// appended, 'false' if it already existed.
 template <typename V, typename E>
-inline void pushBackUnique(V& vector, E& element) {
-  if (std::find(vector.begin(), vector.end(), element) == vector.end()) {
-    vector.push_back(element);
+inline bool pushBackUnique(V& vector, E& element) {
+  if (std::find(vector.begin(), vector.end(), element) != vector.end()) {
+    return false;
   }
+
+  vector.push_back(element);
+  return true;
 }
 
 /// Returns the integer value of 'variant'. Throws if this is not an integer.
@@ -113,5 +117,7 @@ std::string orderByToString(
     const OrderTypeVector& orderTypes);
 
 std::string columnsToString(const ColumnVector& columns);
+
+std::string exprsToString(const ExprVector& exprs);
 
 } // namespace facebook::axiom::optimizer

@@ -258,5 +258,294 @@ TEST_F(JoinTest, outerJoinWithInnerJoin) {
   }
 }
 
+TEST_F(JoinTest, nestedOuterJoins) {
+  testConnector_->addTable(
+      "nation",
+      ROW({"n_nationkey", "n_name", "n_regionkey"},
+          {BIGINT(), VARCHAR(), BIGINT()}));
+  testConnector_->addTable(
+      "region", ROW({"r_regionkey", "r_name"}, {BIGINT(), VARCHAR()}));
+
+  auto sql =
+      "SELECT r2.r_name "
+      "FROM nation n "
+      "   FULL OUTER JOIN region r1 ON n.n_regionkey = r1.r_regionkey "
+      "   RIGHT OUTER JOIN region r2 ON n.n_regionkey = r2.r_regionkey "
+      "GROUP BY 1";
+
+  auto logicalPlan = parseSelect(sql, kTestConnectorId);
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan("region")
+          .hashJoin(
+              core::PlanMatcherBuilder()
+                  .tableScan("nation")
+                  .hashJoin(
+                      core::PlanMatcherBuilder().tableScan("region").build(),
+                      core::JoinType::kFull)
+                  .build(),
+              core::JoinType::kLeft)
+          .aggregation()
+          .project()
+          .build();
+
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(JoinTest, joinWithComputedKeys) {
+  testConnector_->addTable(
+      "nation",
+      ROW({"n_nationkey", "n_name", "n_regionkey"},
+          {BIGINT(), VARCHAR(), BIGINT()}));
+  testConnector_->addTable(
+      "region", ROW({"r_regionkey", "r_name"}, {BIGINT(), VARCHAR()}));
+
+  auto sql =
+      "SELECT count(1) FROM nation n RIGHT JOIN region ON coalesce(n_regionkey, 1) = r_regionkey";
+
+  auto logicalPlan = parseSelect(sql, kTestConnectorId);
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            // TODO Remove redundant projection of 'n_regionkey'.
+            .project({"n_regionkey", "coalesce(n_regionkey, 1)"})
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("region").build(),
+                core::JoinType::kRight)
+            .aggregation()
+            .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto distributedPlan = planVelox(logicalPlan);
+    const auto& fragments = distributedPlan.plan->fragments();
+    ASSERT_EQ(4, fragments.size());
+
+    LOG(ERROR) << distributedPlan.plan->toString();
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("region")
+                       .partitionedOutput()
+                       .build();
+    AXIOM_ASSERT_PLAN(fragments.at(0).fragment.planNode, matcher);
+
+    matcher = core::PlanMatcherBuilder()
+                  .tableScan("nation")
+                  // TODO Remove redundant projection of 'n_regionkey'.
+                  .project({"n_regionkey", "coalesce(n_regionkey, 1)"})
+                  .partitionedOutput()
+                  .build();
+    AXIOM_ASSERT_PLAN(fragments.at(1).fragment.planNode, matcher);
+
+    matcher = core::PlanMatcherBuilder()
+                  .exchange()
+                  .hashJoin(
+                      core::PlanMatcherBuilder().exchange().build(),
+                      core::JoinType::kLeft)
+                  .partialAggregation()
+                  .partitionedOutput()
+                  .build();
+    AXIOM_ASSERT_PLAN(fragments.at(2).fragment.planNode, matcher);
+
+    matcher = core::PlanMatcherBuilder()
+                  .exchange()
+                  .localPartition()
+                  .finalAggregation()
+                  .build();
+    AXIOM_ASSERT_PLAN(fragments.at(3).fragment.planNode, matcher);
+  }
+}
+
+TEST_F(JoinTest, crossJoin) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+
+  {
+    lp::PlanBuilder::Context ctx{kTestConnectorId};
+    auto logicalPlan =
+        lp::PlanBuilder{ctx}.from({"t", "u"}).project({"a + x"}).build();
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .nestedLoopJoin(core::PlanMatcherBuilder().tableScan("u").build())
+            .project({"a + x"})
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    lp::PlanBuilder::Context ctx{kTestConnectorId};
+    auto logicalPlan =
+        lp::PlanBuilder{ctx}.from({"t", "u"}).filter("a > x").build();
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .nestedLoopJoin(core::PlanMatcherBuilder().tableScan("u").build())
+            .filter("a > x")
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    lp::PlanBuilder::Context ctx{kTestConnectorId};
+    auto logicalPlan = lp::PlanBuilder{ctx}
+                           .from({"t", "u"})
+                           .aggregate({}, {"count(1)"})
+                           .build();
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .nestedLoopJoin(core::PlanMatcherBuilder().tableScan("u").build())
+            .aggregation()
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(JoinTest, crossThenLeft) {
+  testConnector_->addTable("t", ROW({"t0", "t1"}, INTEGER()));
+  testConnector_->addTable("u", ROW({"u0", "u1"}, BIGINT()));
+
+  // Cross join t with u, then left join with an aggregation over values.
+  auto query =
+      "WITH v AS (SELECT v0, count(1) as v1 FROM (VALUES 1, 2, 3) as v(v0) GROUP BY 1) "
+      "SELECT count(1) FROM (SELECT * FROM t, u) LEFT JOIN v ON t0 = v0 AND u0 = v1";
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .values()
+          .aggregation()
+          // TODO Remove redundant projection.
+          .project()
+          .hashJoin(
+              core::PlanMatcherBuilder()
+                  .tableScan("t")
+                  .nestedLoopJoin(
+                      core::PlanMatcherBuilder().tableScan("u").build())
+                  .build(),
+              velox::core::JoinType::kRight)
+          .aggregation()
+          .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(JoinTest, joinWithComputedAndProjectedKeys) {
+  testConnector_->addTable("t", ROW({"t0", "t1"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"u0", "u1"}, BIGINT()));
+
+  auto query =
+      "WITH v AS (SELECT coalesce(t0, 0) as v0 FROM t) "
+      "SELECT * FROM u LEFT JOIN v ON u0 = v0";
+
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("u")
+                     .hashJoin(
+                         core::PlanMatcherBuilder()
+                             .tableScan("t")
+                             // TODO Remove redundant projection of 't0'.
+                             .project({"t0", "coalesce(t0, 0)"})
+                             .build())
+                     .project()
+                     .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(JoinTest, filterPushdownThroughCrossJoinUnnest) {
+  {
+    testConnector_->addTable(
+        "t", ROW({"t0", "t1"}, {ROW({"a", "b"}, BIGINT()), ARRAY(BIGINT())}));
+
+    auto query = "SELECT * FROM t, UNNEST(t1) WHERE t0.a > 0";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher =
+        core::PlanMatcherBuilder().tableScan("t").filter().unnest().build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto query =
+        "SELECT * FROM (VALUES row(row(1, 2))) as t(x), UNNEST(array[1,2,3]) WHERE x.c1 > 0";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .filter()
+                       // TODO Combine 2 projects into one.
+                       .project()
+                       .project()
+                       .unnest()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(JoinTest, joinOnClause) {
+  testConnector_->addTable("t", ROW({"t0"}, ROW({"a", "b"}, BIGINT())));
+  testConnector_->addTable("u", ROW({"u0"}, ROW({"a", "b"}, BIGINT())));
+
+  {
+    auto query = "SELECT * FROM t JOIN u ON t0.a = u0.a";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .project()
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("u").project().build())
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto query = "SELECT * FROM (SELECT t0, 1 FROM t) JOIN u ON t0.a = u0.a";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .project()
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("u").project().build())
+            .project()
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

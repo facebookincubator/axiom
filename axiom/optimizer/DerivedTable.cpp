@@ -452,6 +452,15 @@ ExprCP replaceInputs(ExprCP expr, const T& source, const U& target) {
       return make<Call>(
           call->name(), call->value(), std::move(newChildren), functions);
     }
+    case PlanType::kFieldExpr: {
+      auto* field = expr->as<Field>();
+      auto* newBase = replaceInputs(field->base(), source, target);
+      if (newBase != field->base()) {
+        return make<Field>(field->value().type, newBase, field->field());
+      }
+
+      return expr;
+    }
     case PlanType::kLambdaExpr: {
       auto* lambda = expr->as<Lambda>();
       auto* body = lambda->body();
@@ -477,6 +486,17 @@ bool DerivedTable::isWrapOnly() const {
 }
 
 ExprCP DerivedTable::exportExpr(ExprCP expr) {
+  expr->columns().forEach<Column>([&](auto* column) {
+    if (tableSet.contains(column->relation())) {
+      if (pushBackUnique(exprs, column)) {
+        const auto* columnName = toName(column->name());
+        auto outer =
+            make<Column>(columnName, this, column->value(), columnName);
+        columns.push_back(outer);
+      }
+    }
+  });
+
   return replaceInputs(expr, exprs, columns);
 }
 

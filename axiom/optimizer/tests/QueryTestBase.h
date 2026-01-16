@@ -40,6 +40,26 @@ struct TestResult {
   /// Runtime stats retrieved from Velox tasks. One entry per fragment. See
   /// LocalRunner::stats() for details.
   std::vector<velox::exec::TaskStats> stats;
+
+  /// Return total number of rows in 'results'.
+  size_t countRows() const {
+    size_t numRows = 0;
+    for (const auto& result : results) {
+      numRows += result->size();
+    }
+    return numRows;
+  }
+
+  /// Return the only result. Throws if there are no results or more than one
+  /// row or column.
+  velox::Variant getOnlyResult() const {
+    VELOX_CHECK_EQ(results.size(), 1);
+
+    const auto& result = results[0];
+    VELOX_CHECK_EQ(result->size(), 1);
+    VELOX_CHECK_EQ(result->childrenSize(), 1);
+    return result->childAt(0)->variantAt(0);
+  }
 };
 
 class QueryTestBase : public runner::test::LocalRunnerTestBase {
