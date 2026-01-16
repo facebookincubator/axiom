@@ -178,23 +178,6 @@ std::string canonicalizeIdentifier(const Identifier& identifier) {
   return canonicalizeName(identifier.value());
 }
 
-bool asQualifiedName(
-    const ExpressionPtr& expr,
-    std::vector<std::string>& names) {
-  if (expr->is(NodeType::kIdentifier)) {
-    names.push_back(canonicalizeIdentifier(*expr->as<Identifier>()));
-    return true;
-  }
-
-  if (expr->is(NodeType::kDereferenceExpression)) {
-    auto* dereference = expr->as<DereferenceExpression>();
-    names.push_back(canonicalizeIdentifier(*dereference->field()));
-    return asQualifiedName(dereference->base(), names);
-  }
-
-  return false;
-}
-
 // Analizes the expression to find out whether there are any aggregate function
 // calls and to verify that aggregate calls are not nested, e.g. sum(count(x))
 // is not allowed.
@@ -407,12 +390,6 @@ class RelationPlanner : public AstVisitor {
         return lp::Col(canonicalizeIdentifier(*node->as<Identifier>()));
 
       case NodeType::kDereferenceExpression: {
-        std::vector<std::string> names;
-        if (asQualifiedName(node, names)) {
-          VELOX_USER_CHECK_EQ(2, names.size());
-          return lp::Col(names.at(0), lp::Col(names.at(1)));
-        }
-
         auto* dereference = node->as<DereferenceExpression>();
         return lp::Col(
             dereference->field()->value(),
