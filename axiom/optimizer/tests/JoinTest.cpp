@@ -474,18 +474,77 @@ TEST_F(JoinTest, joinWithComputedAndProjectedKeys) {
 }
 
 TEST_F(JoinTest, filterPushdownThroughCrossJoinUnnest) {
-  testConnector_->addTable(
-      "t", ROW({"t0", "t1"}, {ROW({"a", "b"}, BIGINT()), ARRAY(BIGINT())}));
+  {
+    testConnector_->addTable(
+        "t", ROW({"t0", "t1"}, {ROW({"a", "b"}, BIGINT()), ARRAY(BIGINT())}));
 
-  auto query = "SELECT * FROM t, UNNEST(t1) WHERE t0.a > 0";
+    auto query = "SELECT * FROM t, UNNEST(t1) WHERE t0.a > 0";
 
-  auto logicalPlan = parseSelect(query, kTestConnectorId);
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
 
-  auto matcher =
-      core::PlanMatcherBuilder().tableScan("t").filter().unnest().build();
+    auto matcher =
+        core::PlanMatcherBuilder().tableScan("t").filter().unnest().build();
 
-  auto plan = toSingleNodePlan(logicalPlan);
-  AXIOM_ASSERT_PLAN(plan, matcher);
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto query =
+        "SELECT * FROM (VALUES row(row(1, 2))) as t(x), UNNEST(array[1,2,3]) WHERE x.c1 > 0";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .filter()
+                       // TODO Combine 2 projects into one.
+                       .project()
+                       .project()
+                       .unnest()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(JoinTest, joinOnClause) {
+  testConnector_->addTable("t", ROW({"t0"}, ROW({"a", "b"}, BIGINT())));
+  testConnector_->addTable("u", ROW({"u0"}, ROW({"a", "b"}, BIGINT())));
+
+  {
+    auto query = "SELECT * FROM t JOIN u ON t0.a = u0.a";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .project()
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("u").project().build())
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto query = "SELECT * FROM (SELECT t0, 1 FROM t) JOIN u ON t0.a = u0.a";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .project()
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("u").project().build())
+            .project()
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 } // namespace
