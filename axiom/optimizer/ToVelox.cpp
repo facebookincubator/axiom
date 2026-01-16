@@ -1232,7 +1232,8 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       std::vector<velox::core::FieldAccessTypedExprPtr>{},
       aggregateNames,
       aggregates,
-      false,
+      /*ignoreNullKeys=*/false,
+      /*noGroupsSpanBatches=*/false,
       input);
 }
 
