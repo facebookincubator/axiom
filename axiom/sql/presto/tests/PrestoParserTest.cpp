@@ -674,6 +674,36 @@ TEST_F(PrestoParserTest, subscript) {
   testSql("SELECT array[1, 2, 3][1] FROM nation", matcher);
 }
 
+TEST_F(PrestoParserTest, dereference) {
+  auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                     .values()
+                     .unnest()
+                     .project()
+                     .project();
+
+  testSql("SELECT t.x FROM UNNEST(array[1, 2, 3]) as t(x)", matcher);
+
+  testSql("SELECT x FROM UNNEST(array[1, 2, 3]) as t(x)", matcher);
+
+  testSql(
+      "SELECT t.x.a FROM UNNEST(array[cast(row(1, 2) as row(a int, b int))]) as t(x)",
+      matcher);
+
+  testSql(
+      "SELECT x.a FROM UNNEST(array[cast(row(1, 2) as row(a int, b int))]) as t(x)",
+      matcher);
+
+  // TODO Make the following queries work when legacy_row_field_ordinal_access
+  // is enabled.
+  EXPECT_THROW(
+      parseSql("SELECT t.x.field0 FROM UNNEST(array[row(1, 2)]) as t(x)"),
+      VeloxUserError);
+
+  EXPECT_THROW(
+      parseSql("SELECT x.field0 FROM UNNEST(array[row(1, 2)]) as t(x)"),
+      VeloxUserError);
+}
+
 TEST_F(PrestoParserTest, row) {
   auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
   testSql("SELECT row(n_regionkey, n_name) FROM nation", matcher);
