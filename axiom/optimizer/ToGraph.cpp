@@ -506,12 +506,14 @@ bool ToGraph::isSubfield(
 }
 
 void ToGraph::getExprForField(
-    const lp::Expr* field,
+    const lp::InputReferenceExpr* field,
     lp::ExprPtr& resultExpr,
     ColumnCP& resultColumn,
     const lp::LogicalPlanNode*& context) {
+  VELOX_CHECK_NOT_NULL(context);
+
   while (context) {
-    const auto& name = field->as<lp::InputReferenceExpr>()->name();
+    const auto& name = field->name();
 
     if (auto it = lambdaSignature_.find(name); it != lambdaSignature_.end()) {
       resultColumn = it->second;
@@ -526,7 +528,7 @@ void ToGraph::getExprForField(
       auto& def = project->expressions()[ordinal];
       context = context->inputAt(0).get();
       if (def->isInputReference()) {
-        field = def.get();
+        field = def->as<lp::InputReferenceExpr>();
         continue;
       }
       resultExpr = def;
@@ -540,6 +542,23 @@ void ToGraph::getExprForField(
       resultColumn = it->second->as<Column>();
       resultExpr = nullptr;
       return;
+    }
+
+    // This is a band-aid. Revisit the logic in this method.
+    //
+    // The problem with current logic is that translated expression may belong
+    // to a derived table that's not directly referenced from the currentDt_.
+    // When this happens, the downstream processing breaks because the core
+    // invariant is broken: all expressions in a dericed table must reference
+    // relations from DerivedTable::tables.
+    {
+      auto it = renames_.find(name);
+      if (it != renames_.end() && it->second != nullptr &&
+          it->second->is(PlanType::kColumnExpr)) {
+        resultColumn = it->second->as<Column>();
+        resultExpr = nullptr;
+        return;
+      }
     }
 
     const auto& sources = context->inputs();
@@ -587,7 +606,7 @@ void ToGraph::getExprForField(
 
 std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
   std::vector<Step> steps;
-  auto* source = exprSource_;
+  const lp::LogicalPlanNode* source = nullptr;
   auto expr = inputExpr;
 
   for (;;) {
@@ -603,7 +622,18 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
       // If this is a field we follow to the expr assigning the field if any.
       ColumnCP column = nullptr;
       if (expr->isInputReference()) {
-        getExprForField(expr.get(), expr, column, source);
+        const auto* field = expr->as<lp::InputReferenceExpr>();
+        if (source == nullptr) {
+          const auto& name = field->name();
+          for (const auto* exprSource : exprSources_) {
+            if (exprSource->outputType()->getChildIdxIfExists(name)) {
+              source = exprSource;
+              break;
+            }
+          }
+        }
+        VELOX_CHECK_NOT_NULL(source);
+        getExprForField(field, expr, column, source);
         if (expr) {
           continue;
         }
@@ -630,11 +660,11 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
       // replaced by the Expr from skyline and the tail of 'steps' are tagged
       // on the Expr. If skyline is empty, then 'steps' simply becomes a
       // nested sequence of getters.
-      auto originalExprSource = exprSource_;
+      auto originalExprSources = exprSources_;
       SCOPE_EXIT {
-        exprSource_ = originalExprSource;
+        exprSources_ = originalExprSources;
       };
-      exprSource_ = source;
+      exprSources_ = {source};
       return makeGettersOverSkyline(steps, skyline, expr, column);
     }
     steps.push_back(step);
@@ -698,11 +728,6 @@ ExprCP ToGraph::makeGettersOverSkyline(
         std::cout << "Complex function with no skyline: steps="
                   << toPath(steps)->toString() << std::endl;
         std::cout << "base=" << lp::ExprPrinter::toText(*base) << std::endl;
-        std::cout << "Columns=";
-        for (auto& name : exprSource_->outputType()->names()) {
-          std::cout << name << " ";
-        }
-        std::cout << std::endl;
       });
       expr = translateExpr(base);
     }
@@ -1527,6 +1552,11 @@ void ToGraph::translateJoin(const lp::JoinNode& join) {
   const auto joinType = join.joinType();
   const bool isInner = joinType == lp::JoinType::kInner;
 
+  exprSources_ = {join.left().get(), join.right().get()};
+  SCOPE_EXIT {
+    exprSources_.clear();
+  };
+
   ExprVector conjuncts;
   translateConjuncts(join.condition(), conjuncts);
 
@@ -1806,7 +1836,10 @@ void ToGraph::makeValuesTable(const lp::ValuesNode& values) {
 }
 
 void ToGraph::addProjection(const lp::ProjectNode& project) {
-  exprSource_ = project.onlyInput().get();
+  exprSources_ = {project.onlyInput().get()};
+  SCOPE_EXIT {
+    exprSources_.clear();
+  };
 
   const auto& names = project.names();
   const auto& exprs = project.expressions();
@@ -2128,7 +2161,10 @@ void ToGraph::applySampling(
 void ToGraph::addFilter(
     const lp::LogicalPlanNode& input,
     const lp::ExprPtr& predicate) {
-  exprSource_ = &input;
+  exprSources_ = {&input};
+  SCOPE_EXIT {
+    exprSources_.clear();
+  };
 
   processSubqueries(input, predicate);
 
