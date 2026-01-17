@@ -126,7 +126,6 @@ HiveTableLayout::HiveTableLayout(
     std::vector<const Column*> partitionedByColumns,
     std::vector<const Column*> sortedByColumns,
     std::vector<SortOrder> sortOrder,
-    std::vector<const Column*> lookupKeys,
     std::vector<const Column*> hivePartitionedByColumns,
     velox::dwio::common::FileFormat fileFormat)
     : TableLayout(
@@ -136,9 +135,7 @@ HiveTableLayout::HiveTableLayout(
           columns,
           partitionedByColumns,
           sortedByColumns,
-          sortOrder,
-          lookupKeys,
-          /*supportsScan=*/true),
+          sortOrder),
       fileFormat_(fileFormat),
       hivePartitionColumns_(hivePartitionedByColumns),
       numBuckets_(numPartitions),
@@ -191,12 +188,7 @@ void extractInputFields(
 velox::connector::ColumnHandlePtr HiveTableLayout::createColumnHandle(
     const ConnectorSessionPtr& session,
     const std::string& columnName,
-    std::vector<velox::common::Subfield> subfields,
-    std::optional<velox::TypePtr> castToType,
-    SubfieldMapping subfieldMapping) const {
-  // castToType and subfieldMapping are not yet supported.
-  VELOX_CHECK(!castToType.has_value());
-  VELOX_CHECK(subfieldMapping.empty());
+    std::vector<velox::common::Subfield> subfields) const {
   auto* column = findColumn(columnName);
   VELOX_CHECK_NOT_NULL(
       column, "Column not found: {} in table {}", columnName, name());
@@ -213,11 +205,7 @@ velox::connector::ConnectorTableHandlePtr HiveTableLayout::createTableHandle(
     std::vector<velox::connector::ColumnHandlePtr> columnHandles,
     velox::core::ExpressionEvaluator& evaluator,
     std::vector<velox::core::TypedExprPtr> filters,
-    std::vector<velox::core::TypedExprPtr>& /*rejectedFilters*/,
-    velox::RowTypePtr dataColumns,
-    std::optional<LookupKeys> lookupKeys) const {
-  VELOX_CHECK(!lookupKeys.has_value(), "Hive does not support lookup keys");
-
+    std::vector<velox::core::TypedExprPtr>& /*rejectedFilters*/) const {
   std::unordered_set<std::string> filterColumnNames;
   for (const auto& filter : filters) {
     extractInputFields(filter, filterColumnNames);
@@ -258,7 +246,7 @@ velox::connector::ConnectorTableHandlePtr HiveTableLayout::createTableHandle(
       true,
       std::move(subfieldFilters),
       remainingFilter,
-      dataColumns ? dataColumns : rowType(),
+      rowType(),
       serdeParameters(),
       filterColumnHandles,
       sampleRate);

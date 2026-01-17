@@ -13,7 +13,7 @@ dt1: p_brand, p_type, p_size, supplier_cnt
   joins:
     t2 SEMI dt4 ON t2.ps_suppkey = dt4.s_suppkey
     t2 INNER t3 ON t2.ps_partkey = t3.p_partkey
-  syntactic join order: 6, 18, 23
+  syntactic join order: 8, 22, 27
   aggregates: count(t2.ps_suppkey) AS supplier_cnt
   grouping keys: t3.p_brand, t3.p_type, t3.p_size
   filter: not(dt1.__mark0)
@@ -56,16 +56,14 @@ Project (redundant) -> dt1.p_brand, dt1.p_type, dt1.p_size, dt1.supplier_cnt
             t2.ps_partkey = t3.p_partkey
           TableScan -> t2.ps_partkey, t2.ps_suppkey
             table: partsupp
-          HashBuild -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
-            TableScan -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
-              table: part
-              single-column filters: neq(t3.p_brand, "Brand#45") and not(like(t3.p_type, "MEDIUM POLISHED%")) and __in(t3.p_size, 49, 14, 23, 45, 19, 3, 36, 9)
-        HashBuild -> dt4.s_suppkey
-          Project (redundant) -> dt4.s_suppkey
-              dt4.s_suppkey := t5.s_suppkey
-            TableScan -> t5.s_suppkey
-              table: supplier
-              single-column filters: like(t5.s_comment, "%Customer%Complaints%")
+          TableScan -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
+            table: part
+            single-column filters: neq(t3.p_brand, "Brand#45") and not(like(t3.p_type, "MEDIUM POLISHED%")) and __in(t3.p_size, 49, 14, 23, 45, 19, 3, 36, 9)
+        Project (redundant) -> dt4.s_suppkey
+            dt4.s_suppkey := t5.s_suppkey
+          TableScan -> t5.s_suppkey
+            table: supplier
+            single-column filters: like(t5.s_comment, "%Customer%Complaints%")
 
 
 Executable Velox plan:

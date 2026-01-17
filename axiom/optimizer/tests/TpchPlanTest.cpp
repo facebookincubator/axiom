@@ -655,19 +655,18 @@ TEST_F(TpchPlanTest, q22) {
   // semijoin and the non-correlated subquery becoming a cross join to the one
   // row result set of the non-grouped aggregation.
 
-  auto matcher = startMatcher("orders")
-                     .hashJoin(
-                         startMatcher("customer")
-                             .nestedLoopJoin(
-                                 startMatcher("customer").aggregation().build())
-                             .filter()
-                             .build(),
-                         velox::core::JoinType::kRightSemiProject)
-                     .filter()
-                     .project()
-                     .aggregation()
-                     .orderBy()
-                     .build();
+  auto matcher =
+      startMatcher("orders")
+          .hashJoin(
+              startMatcher("customer").build(),
+              velox::core::JoinType::kRightSemiProject)
+          .filter()
+          .nestedLoopJoin(startMatcher("customer").aggregation().build())
+          .filter()
+          .project()
+          .aggregation()
+          .orderBy()
+          .build();
 
   auto plan = planTpch(22);
   AXIOM_ASSERT_PLAN(plan, matcher);

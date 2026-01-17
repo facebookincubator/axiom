@@ -194,7 +194,7 @@ void predictionWarnings(
             historyKey));
   } else {
     auto ratio = static_cast<float>(actualRows) / predictedRows;
-    auto threshold = FLAGS_cardinality_warning_threshold;
+    float threshold = FLAGS_cardinality_warning_threshold;
     if (ratio < 1 / threshold || ratio > threshold) {
       logPrediction(
           fmt::format(

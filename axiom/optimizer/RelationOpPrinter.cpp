@@ -66,7 +66,7 @@ class ToTextVisitor : public RelationOpVisitor {
     printHeader(
         op,
         myCtx,
-        op.distribution().isBroadcast ? "(broadcast)"
+        op.distribution().isBroadcast() ? "(broadcast)"
             : op.distribution().isGather()
             ? "(gather)"
             : fmt::format("({})", exprsToString(op.distribution().partition)));
@@ -132,11 +132,6 @@ class ToTextVisitor : public RelationOpVisitor {
     printInput(*op.right, myCtx);
   }
 
-  void visit(const HashBuild& op, RelationOpVisitorContext& context)
-      const override {
-    visitDefault(op, context);
-  }
-
   void visit(const Aggregation& op, RelationOpVisitorContext& context)
       const override {
     const auto numGrouppingKeys = op.groupingKeys.size();
@@ -166,6 +161,11 @@ class ToTextVisitor : public RelationOpVisitor {
   }
 
   void visit(const OrderBy& op, RelationOpVisitorContext& context)
+      const override {
+    visitDefault(op, context);
+  }
+
+  void visit(const WindowOp& op, RelationOpVisitorContext& context)
       const override {
     visitDefault(op, context);
   }
@@ -306,11 +306,6 @@ class OnelineVisitor : public RelationOpVisitor {
     myCtx.out << ")";
   }
 
-  void visit(const HashBuild& op, RelationOpVisitorContext& context)
-      const override {
-    visitDefault(op, context);
-  }
-
   void visit(const Aggregation& op, RelationOpVisitorContext& context)
       const override {
     auto& myCtx = static_cast<Context&>(context);
@@ -320,6 +315,11 @@ class OnelineVisitor : public RelationOpVisitor {
   }
 
   void visit(const OrderBy& op, RelationOpVisitorContext& context)
+      const override {
+    visitDefault(op, context);
+  }
+
+  void visit(const WindowOp& op, RelationOpVisitorContext& context)
       const override {
     visitDefault(op, context);
   }

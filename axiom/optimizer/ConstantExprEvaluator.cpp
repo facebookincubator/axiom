@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include "axiom/logical_plan/ExprVisitor.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
@@ -44,12 +45,7 @@ class ExprTranslator : public lp::ExprVisitor {
   void visit(const lp::CallExpr& expr, lp::ExprVisitorContext& context) const {
     auto& myCtx = static_cast<ExprTranslatorContext&>(context);
 
-    std::vector<velox::core::TypedExprPtr> inputs;
-    inputs.reserve(expr.inputs().size());
-    for (const auto& input : expr.inputs()) {
-      input->accept(*this, context);
-      inputs.push_back(myCtx.veloxExpr);
-    }
+    auto inputs = makeTypedInputs(expr.inputs(), context);
 
     myCtx.veloxExpr = std::make_shared<velox::core::CallTypedExpr>(
         expr.type(), inputs, expr.name());
@@ -57,7 +53,24 @@ class ExprTranslator : public lp::ExprVisitor {
 
   void visit(const lp::SpecialFormExpr& expr, lp::ExprVisitorContext& context)
       const {
-    VELOX_NYI();
+    auto& myCtx = static_cast<ExprTranslatorContext&>(context);
+
+    auto inputs = makeTypedInputs(expr.inputs(), context);
+
+    switch (expr.form()) {
+      case lp::SpecialForm::kCast:
+      case lp::SpecialForm::kTryCast: {
+        const bool isTryCast = expr.form() == lp::SpecialForm::kTryCast;
+        myCtx.veloxExpr = std::make_shared<velox::core::CastTypedExpr>(
+            expr.type(), std::move(inputs), isTryCast);
+      } break;
+      case lp::SpecialForm::kExists:
+      case lp::SpecialForm::kStar:
+        VELOX_NYI();
+      default:
+        myCtx.veloxExpr = std::make_shared<velox::core::CallTypedExpr>(
+            expr.type(), std::move(inputs), specialForm(expr.form()));
+    }
   }
 
   void visit(const lp::AggregateExpr& expr, lp::ExprVisitorContext& context)
@@ -86,6 +99,20 @@ class ExprTranslator : public lp::ExprVisitor {
   void visit(const lp::SubqueryExpr& expr, lp::ExprVisitorContext& context)
       const {
     VELOX_NYI();
+  }
+
+ private:
+  std::vector<velox::core::TypedExprPtr> makeTypedInputs(
+      const std::vector<lp::ExprPtr>& inputs,
+      lp::ExprVisitorContext& context) const {
+    std::vector<velox::core::TypedExprPtr> veloxInputs;
+    veloxInputs.reserve(inputs.size());
+    for (const auto& input : inputs) {
+      input->accept(*this, context);
+      auto& myCtx = static_cast<ExprTranslatorContext&>(context);
+      veloxInputs.push_back(myCtx.veloxExpr);
+    }
+    return veloxInputs;
   }
 };
 

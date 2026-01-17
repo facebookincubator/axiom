@@ -124,14 +124,20 @@ class LocalRunner : public Runner,
   /// Best-effort attempt to cancel the execution.
   void abort() override;
 
-  /// @pre state() != State::kInitialized
-  void waitForCompletion(int32_t maxWaitMicros) override;
+  velox::ContinueFuture wait();
+
+  static void waitForCompletion(
+      std::shared_ptr<LocalRunner>&& runner,
+      int32_t maxWaitMicros);
 
   State state() const override {
     return state_;
   }
 
  private:
+  bool setError(std::exception_ptr error);
+  void abortStages();
+
   // Reads all results and calls commit(...) on the results if successful.
   // Catches exceptions, calls abort() and rethrows if there is an error.
   // Returns the number of rows written.
@@ -158,8 +164,7 @@ class LocalRunner : public Runner,
 
   velox::exec::CursorParameters params_;
 
-  velox::tsan_atomic<State> state_{State::kInitialized};
-
+  State state_{State::kInitialized};
   std::unique_ptr<velox::exec::TaskCursor> cursor_;
   std::vector<std::vector<std::shared_ptr<velox::exec::Task>>> stages_;
   std::exception_ptr error_;

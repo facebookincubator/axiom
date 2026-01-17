@@ -388,27 +388,26 @@ void UnnestNode::accept(
 TableWriteNode::TableWriteNode(
     std::string id,
     LogicalPlanNodePtr input,
-    std::string connectorId,
-    std::string tableName,
-    WriteKind writeKind,
+    connector::TablePtr table,
+    connector::WriteKind writeKind,
     std::vector<std::string> columnNames,
     std::vector<ExprPtr> columnExpressions,
     folly::F14FastMap<std::string, std::string> options)
     : LogicalPlanNode{NodeKind::kTableWrite, std::move(id), {std::move(input)}, velox::ROW("rows", velox::BIGINT())},
-      connectorId_{std::move(connectorId)},
-      tableName_{std::move(tableName)},
+      table_{std::move(table)},
       writeKind_{writeKind},
       columnNames_{std::move(columnNames)},
       columnExpressions_{std::move(columnExpressions)},
       options_{std::move(options)} {
-  VELOX_USER_CHECK(!connectorId_.empty());
-  VELOX_USER_CHECK(!tableName_.empty());
+  if (writeKind_ != connector::WriteKind::kCreate) {
+    VELOX_USER_CHECK_NOT_NULL(table_);
+  }
   VELOX_USER_CHECK_EQ(columnNames_.size(), columnExpressions_.size());
 
   UniqueNameChecker::check(columnNames_);
   VELOX_USER_CHECK(
-      writeKind_ == WriteKind::kCreate || writeKind == WriteKind::kInsert ||
-          options_.empty(),
+      writeKind_ == connector::WriteKind::kCreate ||
+          writeKind_ == connector::WriteKind::kInsert || options_.empty(),
       "Options are supported only for create or insert");
 }
 
@@ -417,23 +416,6 @@ void TableWriteNode::accept(
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
 }
-
-namespace {
-
-const auto& writeKindNames() {
-  static const folly::F14FastMap<WriteKind, std::string_view> kNames = {
-      {WriteKind::kCreate, "CREATE"},
-      {WriteKind::kInsert, "INSERT"},
-      {WriteKind::kUpdate, "UPDATE"},
-      {WriteKind::kDelete, "DELETE"},
-  };
-
-  return kNames;
-}
-
-} // namespace
-
-AXIOM_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
 
 namespace {
 

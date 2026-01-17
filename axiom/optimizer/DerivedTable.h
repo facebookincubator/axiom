@@ -16,6 +16,7 @@
 #pragma once
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/optimizer/ExprsWrapper.h"
 #include "axiom/optimizer/PlanObject.h"
 
 namespace facebook::axiom::optimizer {
@@ -35,6 +36,10 @@ using OrderTypeVector = QGVector<OrderType>;
 
 class WritePlan;
 using WritePlanCP = const WritePlan*;
+
+class Window;
+using WindowCP = const Window*;
+using WindowVector = QGVector<WindowCP>;
 
 /// Represents a derived table, i.e. a SELECT in a FROM clause. This is the
 /// basic unit of planning. Derived tables can be merged and split apart from
@@ -59,6 +64,8 @@ using WritePlanCP = const WritePlan*;
 struct DerivedTable : public PlanObject {
   DerivedTable() : PlanObject(PlanType::kDerivedTableNode) {}
 
+  // Used only for Union/UnionAll derived tables.
+  float planCardinality{};
   float cardinality{};
 
   /// Correlation name.
@@ -68,7 +75,7 @@ struct DerivedTable : public PlanObject {
   ColumnVector columns;
 
   /// Exprs projected out. 1:1 to 'columns'.
-  ExprVector exprs;
+  ExprsWrapper exprs;
 
   /// References all joins where 'this' is an end point.
   JoinEdgeVector joinedBy;
@@ -89,9 +96,6 @@ struct DerivedTable : public PlanObject {
 
   /// Operands if 'this' is a set operation, e.g. union.
   QGVector<DerivedTable*> children;
-
-  /// Single row tables from non-correlated scalar subqueries.
-  PlanObjectSet singleRowDts;
 
   /// Tables that are not to the right sides of non-commutative joins.
   PlanObjectSet startTables;
@@ -115,7 +119,7 @@ struct DerivedTable : public PlanObject {
   /// A list of PlanObject IDs for 'tables' in the order of appearance in the
   /// query. Used to produce syntactic join order if requested. Table with id
   /// joinOrder[i] can only be placed after tables before it are placed.
-  std::vector<int32_t, QGAllocator<int32_t>> joinOrder;
+  QGVector<int32_t> joinOrder;
 
   /// Postprocessing clauses: group by, having, order by, limit, offset.
 
@@ -124,7 +128,7 @@ struct DerivedTable : public PlanObject {
   ExprVector having;
 
   /// Order by.
-  ExprVector orderKeys;
+  ExprsWrapper orderKeys;
   OrderTypeVector orderTypes;
 
   /// Limit and offset.
@@ -161,12 +165,12 @@ struct DerivedTable : public PlanObject {
 
   /// Return a copy of 'expr', replacing references to this DT's 'columns' with
   /// corresponding 'exprs'.
-  ExprCP importExpr(ExprCP expr);
+  ExprCP importExpr(ExprCP expr) const;
 
   /// Returns a copy of 'expr', replacing references to this DT's 'exprs' with
   /// the corresponding 'columns'. If 'expr' references columns not present in
   /// DT's output, those columns are added.
-  ExprCP exportExpr(ExprCP expr);
+  ExprCP exportExpr(ExprCP expr) const;
 
   bool isTable() const override {
     return true;
@@ -216,6 +220,8 @@ struct DerivedTable : public PlanObject {
     return limit >= 0;
   }
 
+  bool hasWindows() const;
+
   // True if contains one derived table in 'tables' and adds no change to its
   // result set.
   bool isWrapOnly() const;
@@ -225,8 +231,6 @@ struct DerivedTable : public PlanObject {
   /// Memoizes plans for 'this' and fills in 'cardinality'. Needed before adding
   /// 'this' as a join side because join sides must have a cardinality guess.
   void makeInitialPlan();
-
-  PlanP bestInitialPlan() const;
 
   std::string toString() const override;
 
@@ -247,7 +251,7 @@ struct DerivedTable : public PlanObject {
   void flattenDt(const DerivedTable* dt);
 
   // Sets 'columns' and 'exprs'.
-  void makeProjection(const ExprVector& exprs);
+  void makeProjection(CPSpan<Expr> projection);
 };
 
 using DerivedTableP = DerivedTable*;

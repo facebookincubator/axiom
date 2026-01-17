@@ -150,9 +150,7 @@ TpchConnectorMetadata::TpchConnectorMetadata(
 velox::connector::ColumnHandlePtr TpchTableLayout::createColumnHandle(
     const ConnectorSessionPtr& session,
     const std::string& columnName,
-    std::vector<velox::common::Subfield> subfields,
-    std::optional<velox::TypePtr> castToType,
-    SubfieldMapping subfieldMapping) const {
+    std::vector<velox::common::Subfield> subfields) const {
   return std::make_shared<velox::connector::tpch::TpchColumnHandle>(columnName);
 }
 
@@ -161,9 +159,7 @@ velox::connector::ConnectorTableHandlePtr TpchTableLayout::createTableHandle(
     std::vector<velox::connector::ColumnHandlePtr> /*columnHandles*/,
     velox::core::ExpressionEvaluator& /*evaluator*/,
     std::vector<velox::core::TypedExprPtr> filters,
-    std::vector<velox::core::TypedExprPtr>& /*rejectedFilters*/,
-    velox::RowTypePtr /*dataColumns*/,
-    std::optional<LookupKeys> /*lookupKeys*/) const {
+    std::vector<velox::core::TypedExprPtr>& /*rejectedFilters*/) const {
   velox::core::TypedExprPtr filterExpression;
   for (auto& filter : filters) {
     if (!filterExpression) {
@@ -208,7 +204,6 @@ void TpchTable::makeDefaultLayout(TpchConnectorMetadata& metadata) {
       std::vector<const Column*>{},
       std::vector<const Column*>{},
       std::vector<SortOrder>{},
-      std::vector<const Column*>{},
       tpchTable_,
       scaleFactor_);
   exportedLayouts_.push_back(layout.get());

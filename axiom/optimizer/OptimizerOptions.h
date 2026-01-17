@@ -21,6 +21,19 @@
 
 namespace facebook::axiom::optimizer {
 
+enum class JoinOrder : uint8_t {
+  /// Use cost-based join order selection.
+  kCost,
+
+  /// Disable cost-based join order selection. Perform the joins in the exact
+  /// sequence specified in the query.
+  /// TODO Make this work for non-inner joins.
+  kSyntactic,
+
+  /// Use a greedy join order selection.
+  kGreedy,
+};
+
 struct OptimizerOptions {
   /// Bit masks for use in 'traceFlags'.
   static constexpr uint32_t kRetained = 1;
@@ -61,14 +74,39 @@ struct OptimizerOptions {
   /// Produce trace of plan candidates.
   uint32_t traceFlags{0};
 
-  /// Disable cost-based join order selection. Perform the joins in the exact
-  /// sequence specified in the query.
-  /// TODO Make this work for non-inner joins.
-  bool syntacticJoinOrder = false;
+  JoinOrder joinOrder = JoinOrder::kCost;
+
+  bool costJoinOrder() const noexcept {
+    return joinOrder == JoinOrder::kCost;
+  }
+
+  bool syntacticJoinOrder() const noexcept {
+    return joinOrder == JoinOrder::kSyntactic;
+  }
+
+  bool greedyJoinOrder() const noexcept {
+    return joinOrder == JoinOrder::kGreedy;
+  }
 
   /// Disable cost-based decision re: whether to split an aggregation into
   /// partial + final or not.
   bool alwaysPlanPartialAggregation = false;
+
+  /// Disable cost-based decision re: whether to plan an aggregation as a
+  /// single-stage aggregation or not.
+  bool alwaysPlanSingleAggregation = false;
+
+  bool alwaysPushdownLimit = false;
+
+  bool alwaysPullupLimit = false;
+
+  bool planBestThroughput = false;
+
+  bool enableSubqueryConstantFolding = true;
+
+  bool enableIndexLookupJoin = true;
+
+  bool lazyOptimizeGraph = false;
 
   bool isMapAsStruct(std::string_view table, std::string_view column) const {
     if (allMapsAsStruct) {
@@ -78,9 +116,10 @@ struct OptimizerOptions {
     if (it == mapAsStruct.end()) {
       return false;
     }
-    return std::find(it->second.begin(), it->second.end(), column) !=
-        it->second.end();
+    return std::ranges::find(it->second, column) != it->second.end();
   }
 };
+
+std::string_view toString(JoinOrder joinOrder);
 
 } // namespace facebook::axiom::optimizer

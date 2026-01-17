@@ -391,7 +391,7 @@ PrestoQueryReplayRunner::run(
   std::vector<velox::RowVectorPtr> result;
   try {
     result = readCursor(localRunner, pool_);
-    localRunner->waitForCompletion(kWaitTimeoutUs);
+    LocalRunner::waitForCompletion(std::move(localRunner), kWaitTimeoutUs);
   } catch (const std::exception& e) {
     LOG(ERROR) << "Failed to run query " << queryId << ": " << e.what();
     return std::make_pair(std::nullopt, Status::kError);

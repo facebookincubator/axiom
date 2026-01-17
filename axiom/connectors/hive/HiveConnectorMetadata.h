@@ -105,7 +105,6 @@ class HiveTableLayout : public TableLayout {
       std::vector<const Column*> partitionedByColumns,
       std::vector<const Column*> sortedByColumns,
       std::vector<SortOrder> sortOrder,
-      std::vector<const Column*> lookupKeys,
       std::vector<const Column*> hivePartitionedByColumns,
       velox::dwio::common::FileFormat fileFormat);
 
@@ -136,18 +135,14 @@ class HiveTableLayout : public TableLayout {
   velox::connector::ColumnHandlePtr createColumnHandle(
       const ConnectorSessionPtr& session,
       const std::string& columnName,
-      std::vector<velox::common::Subfield> subfields = {},
-      std::optional<velox::TypePtr> castToType = std::nullopt,
-      SubfieldMapping subfieldMapping = {}) const override;
+      std::vector<velox::common::Subfield> subfields = {}) const override;
 
   velox::connector::ConnectorTableHandlePtr createTableHandle(
       const ConnectorSessionPtr& session,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       velox::core::ExpressionEvaluator& evaluator,
       std::vector<velox::core::TypedExprPtr> filters,
-      std::vector<velox::core::TypedExprPtr>& rejectedFilters,
-      velox::RowTypePtr dataColumns,
-      std::optional<LookupKeys> lookupKeys) const override;
+      std::vector<velox::core::TypedExprPtr>& rejectedFilters) const override;
 
  protected:
   const velox::dwio::common::FileFormat fileFormat_;

@@ -38,7 +38,7 @@ target_link_libraries(
   gtest_main
 )
 
-add_executable(axiom_connectors_tests SchemaUtilsTest.cpp SchemaResolverTest.cpp)
+add_executable(axiom_connectors_tests SchemaUtilsTest.cpp)
 
 add_test(axiom_connectors_tests axiom_connectors_tests)
 
