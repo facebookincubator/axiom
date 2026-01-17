@@ -23,7 +23,7 @@ namespace facebook::axiom::optimizer {
 ///  A linear model for predicting cost of operations from samples
 ///  over n dimensions. The dataset has measures in n dimensional
 ///  space. The model predicts the value at an arbitrary point in
-///  the space based on the measures of the beighboring points and
+///  the space based on the measures of the neighboring points and
 ///  the slope along each dimension between the closest points on
 ///  either side of the point. If the point is outside of the range
 ///  of the dimension, the measure is estimated according to the
@@ -153,10 +153,10 @@ class Model {
   // size of 'measures' is 60.
   std::vector<int32_t> stride_;
 
-  // The size aalong each dimension. For 3x4x5 this is 3, 4, 5.
+  // The size along each dimension. For 3x4x5 this is 3, 4, 5.
   std::vector<int32_t> sizes_;
 
-  // Measures. The size is the product of the sizes of  the vectors in axix_;
+  // Measures. The size is the product of the sizes of the vectors in axis_;
   std::vector<float> measures_;
 
   // Original dataset points normalized so dims are 0..1.
