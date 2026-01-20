@@ -693,6 +693,10 @@ TEST_F(PrestoParserTest, dereference) {
       "SELECT x.a FROM UNNEST(array[cast(row(1, 2) as row(a int, b int))]) as t(x)",
       matcher);
 
+  testSql("SELECT t.X FROM UNNEST(array[1, 2, 3]) as t(x)", matcher);
+  testSql("SELECT T.X FROM UNNEST(array[1, 2, 3]) as t(x)", matcher);
+  testSql("SELECT t.x FROM UNNEST(array[1, 2, 3]) as t(X)", matcher);
+
   // TODO Make the following queries work when legacy_row_field_ordinal_access
   // is enabled.
   EXPECT_THROW(

@@ -392,7 +392,7 @@ class RelationPlanner : public AstVisitor {
       case NodeType::kDereferenceExpression: {
         auto* dereference = node->as<DereferenceExpression>();
         return lp::Col(
-            dereference->field()->value(),
+            canonicalizeIdentifier(*dereference->field()),
             toExpr(dereference->base(), aggregateOptions));
       }
 
