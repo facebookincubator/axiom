@@ -482,7 +482,7 @@ RelationOpPtr repartitionForAgg(
 
   bool shuffle = false;
   for (auto& key : keyValues) {
-    auto nthKey = position(plan->distribution().partition, *key);
+    auto nthKey = position(plan->distribution().partition(), *key);
     if (nthKey == kNotFound) {
       shuffle = true;
       break;
@@ -493,7 +493,7 @@ RelationOpPtr repartitionForAgg(
   }
 
   Distribution distribution{
-      plan->distribution().distributionType, std::move(keyValues)};
+      plan->distribution().distributionType(), std::move(keyValues)};
   auto* repartition =
       make<Repartition>(plan, std::move(distribution), plan->columns());
   cost.add(*repartition);
@@ -515,29 +515,33 @@ bool isIndexColocated(
     const ExprVector& lookupValues,
     const RelationOpPtr& input) {
   const auto& distribution = info.index->distribution;
-  if (distribution.isBroadcast) {
+  if (distribution.isBroadcast()) {
     return true;
   }
 
   // True if 'input' is partitioned so that each partitioning key is joined to
   // the corresponding partition key in 'info'.
-  if (input->distribution().distributionType != distribution.distributionType) {
+  if (input->distribution().distributionType() !=
+      distribution.distributionType()) {
     return false;
   }
 
-  if (input->distribution().partition.empty()) {
+  const auto& inputPartitionKeys = input->distribution().partition();
+
+  if (inputPartitionKeys.empty()) {
     return false;
   }
 
-  if (input->distribution().partition.size() != distribution.partition.size()) {
+  const auto& indexPartitionKeys = distribution.partition();
+  if (inputPartitionKeys.size() != indexPartitionKeys.size()) {
     return false;
   }
 
-  for (auto i = 0; i < input->distribution().partition.size(); ++i) {
-    auto nthKey = position(lookupValues, *input->distribution().partition[i]);
+  for (auto i = 0; i < inputPartitionKeys.size(); ++i) {
+    auto nthKey = position(lookupValues, *inputPartitionKeys[i]);
     if (nthKey != kNotFound) {
       if (info.schemaColumn(info.lookupKeys.at(nthKey)) !=
-          distribution.partition.at(i)) {
+          indexPartitionKeys.at(i)) {
         return false;
       }
     } else {
@@ -559,8 +563,8 @@ RelationOpPtr repartitionForIndex(
   const auto& distribution = info.index->distribution;
 
   ExprVector keyExprs;
-  auto& partition = distribution.partition;
-  for (auto key : partition) {
+  const auto& partitionKeys = distribution.partition();
+  for (auto key : partitionKeys) {
     // partition is in schema columns, lookupKeys is in BaseTable columns. Use
     // the schema column of lookup key for matching.
     auto nthKey = position(
@@ -580,7 +584,7 @@ RelationOpPtr repartitionForIndex(
 
   auto* repartition = make<Repartition>(
       plan,
-      Distribution{distribution.distributionType, std::move(keyExprs)},
+      Distribution{distribution.distributionType(), std::move(keyExprs)},
       plan->columns());
   state.addCost(*repartition);
   return repartition;
@@ -634,9 +638,10 @@ void setMarkTrueFraction(
 std::vector<uint32_t> joinKeyPartition(
     const RelationOpPtr& op,
     const ExprVector& keys) {
+  const auto& partitionKeys = op->distribution().partition();
   std::vector<uint32_t> positions;
-  for (unsigned i = 0; i < op->distribution().partition.size(); ++i) {
-    auto nthKey = position(keys, *op->distribution().partition[i]);
+  for (unsigned i = 0; i < partitionKeys.size(); ++i) {
+    auto nthKey = position(keys, *partitionKeys[i]);
     if (nthKey == kNotFound) {
       return {};
     }
@@ -691,7 +696,7 @@ void alignJoinSides(
   auto part = joinKeyPartition(input, keys);
   if (part.empty()) {
     Distribution distribution{
-        otherInput->distribution().distributionType, keys};
+        otherInput->distribution().distributionType(), keys};
     auto* repartition =
         make<Repartition>(input, std::move(distribution), input->columns());
     state.addCost(*repartition);
@@ -700,7 +705,7 @@ void alignJoinSides(
 
   ExprVector distColumns;
   for (size_t i = 0; i < keys.size(); ++i) {
-    auto nthKey = position(input->distribution().partition, *keys[i]);
+    auto nthKey = position(input->distribution().partition(), *keys[i]);
     if (nthKey != kNotFound) {
       if (distColumns.size() <= nthKey) {
         distColumns.resize(nthKey + 1);
@@ -710,7 +715,7 @@ void alignJoinSides(
   }
 
   Distribution distribution{
-      input->distribution().distributionType, std::move(distColumns)};
+      input->distribution().distributionType(), std::move(distColumns)};
   auto* repartition = make<Repartition>(
       otherInput, std::move(distribution), otherInput->columns());
   otherState.addCost(*repartition);
@@ -781,7 +786,7 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
   }
 
   const auto* planPartitionType =
-      plan->distribution().distributionType.partitionType();
+      plan->distribution().distributionType().partitionType();
 
   auto copartition =
       copartitionType(planPartitionType, layout->partitionType());
@@ -793,7 +798,7 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
     // Check that the partition keys of the plan are assigned pairwise to the
     // partition columns of the layout.
     for (auto i = 0; i < keyValues.size(); ++i) {
-      if (!plan->distribution().partition[i]->sameOrEqual(*keyValues[i])) {
+      if (!plan->distribution().partition()[i]->sameOrEqual(*keyValues[i])) {
         shuffle = true;
         break;
       }
@@ -1311,7 +1316,7 @@ void Optimization::joinByHash(
   if (plan->distribution().isGather()) {
     forBuild = Distribution::gather();
   } else {
-    forBuild = {plan->distribution().distributionType, copartition};
+    forBuild = {plan->distribution().distributionType(), copartition};
   }
 
   PlanObjectSet empty;
@@ -1415,7 +1420,7 @@ void Optimization::joinByHash(
           }
         }
         Distribution distribution{
-            plan->distribution().distributionType, copartition};
+            plan->distribution().distributionType(), copartition};
         auto* repartition = make<Repartition>(
             buildInput, std::move(distribution), buildInput->columns());
         buildState.addCost(*repartition);
@@ -1499,7 +1504,7 @@ void Optimization::joinByHashRight(
   auto probePlan = makePlan(
       *state.dt,
       memoKey,
-      Distribution{plan->distribution().distributionType, {}},
+      Distribution{plan->distribution().distributionType(), {}},
       PlanObjectSet{},
       candidate.existsFanout,
       needsShuffle);
@@ -2200,7 +2205,7 @@ PlanP Optimization::makeUnionPlan(
     return unionPlan(inputStates, result, distinct);
   }
 
-  if (distribution.partition.empty()) {
+  if (distribution.partition().empty()) {
     if (isDistinct) {
       // Pick some partitioning key and shuffle on that and make distinct.
       Distribution someDistribution = somePartition(inputs);

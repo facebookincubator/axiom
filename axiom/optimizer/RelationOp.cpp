@@ -92,12 +92,12 @@ float orderPrefixDistance(
     const RelationOpPtr& input,
     ColumnGroupCP index,
     const ExprVector& keys) {
-  const auto& orderKeys = index->distribution.orderKeys;
+  const auto& orderKeys = index->distribution.orderKeys();
   float selection = 1;
-  for (int32_t i = 0; i < input->distribution().orderKeys.size() &&
+  for (int32_t i = 0; i < input->distribution().orderKeys().size() &&
        i < orderKeys.size() && i < keys.size();
        ++i) {
-    if (input->distribution().orderKeys[i]->sameOrEqual(*keys[i])) {
+    if (input->distribution().orderKeys()[i]->sameOrEqual(*keys[i])) {
       selection *= orderKeys[i]->value().cardinality;
     }
   }
@@ -181,27 +181,26 @@ Distribution TableScan::outputDistribution(
   ExprVector orderKeys;
   OrderTypeVector orderTypes;
   // if all partitioning columns are projected, the output is partitioned.
-  if (isSubset(distribution.partition, schemaColumns)) {
-    partition = distribution.partition;
+  if (isSubset(distribution.partition(), schemaColumns)) {
+    partition = distribution.partition();
     replace(partition, schemaColumns, columns.data());
   }
 
-  auto numPrefix = prefixSize(distribution.orderKeys, schemaColumns);
+  auto numPrefix = prefixSize(distribution.orderKeys(), schemaColumns);
   if (numPrefix > 0) {
-    orderKeys = distribution.orderKeys;
+    orderKeys = distribution.orderKeys();
     orderKeys.resize(numPrefix);
-    orderTypes = distribution.orderTypes;
+    orderTypes = distribution.orderTypes();
     orderTypes.resize(numPrefix);
     replace(orderKeys, schemaColumns, columns.data());
   }
-  return {
-      distribution.distributionType,
+  return Distribution(
+      distribution.distributionType(),
       std::move(partition),
       std::move(orderKeys),
       std::move(orderTypes),
-      distribution.numKeysUnique <= numPrefix ? distribution.numKeysUnique : 0,
-      1.0f / baseTable->filterSelectivity,
-  };
+      distribution.numKeysUnique() <= numPrefix ? distribution.numKeysUnique()
+                                                : 0);
 }
 
 std::string Cost::toString(bool /*detail*/, bool isUnit) const {
@@ -532,7 +531,7 @@ std::string Repartition::toString(bool recursive, bool detail) const {
     out << input()->toString(true, detail) << " ";
   }
 
-  if (distribution().isBroadcast) {
+  if (distribution().isBroadcast()) {
     out << "broadcast ";
   } else if (distribution().isGather()) {
     out << "gather ";
@@ -1152,7 +1151,7 @@ std::string OrderBy::toString(bool recursive, bool detail) const {
   if (detail) {
     out << "OrderBy (" << distribution_.toString() << ")\n";
   } else {
-    out << "order by " << distribution_.orderKeys.size() << " columns ";
+    out << "order by " << distribution_.orderKeys().size() << " columns ";
   }
   return out.str();
 }
