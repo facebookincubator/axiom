@@ -491,7 +491,7 @@ TEST_F(JoinTest, filterPushdownThroughCrossJoinUnnest) {
 
   {
     auto query =
-        "SELECT * FROM (VALUES row(row(1, 2))) as t(x), UNNEST(array[1,2,3]) WHERE x.c1 > 0";
+        "SELECT * FROM (VALUES row(cast(row(1, 2) as row(c1 int, c2 int)))) as t(x), UNNEST(array[1,2,3]) WHERE x.c1 > 0";
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
 
