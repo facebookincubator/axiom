@@ -571,13 +571,30 @@ ExprPtr ExprResolver::resolveScalarTypes(
         "Expected a struct, but got {}",
         input->type()->toString());
 
+    const auto& inputRowType = input->type()->asRow();
+
+    std::optional<int32_t> index;
+    for (auto i = 0; i < inputRowType.size(); ++i) {
+      if (boost::iequals(inputRowType.nameOf(i), name)) {
+        index = i;
+        break;
+      }
+    }
+
+    VELOX_USER_CHECK(
+        index.has_value(),
+        "Field not found in struct: '{}' not in {}",
+        name,
+        inputRowType.toString());
+
     return std::make_shared<SpecialFormExpr>(
-        input->type()->asRow().findChild(name),
+        inputRowType.childAt(index.value()),
         SpecialForm::kDereference,
         std::vector<ExprPtr>{
             input,
             std::make_shared<ConstantExpr>(
-                velox::VARCHAR(), std::make_shared<velox::Variant>(name))});
+                velox::INTEGER(),
+                std::make_shared<velox::Variant>(index.value()))});
   }
 
   if (const auto& constant =
