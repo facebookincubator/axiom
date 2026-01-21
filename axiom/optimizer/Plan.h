@@ -86,7 +86,7 @@ struct PlanSet {
   /// Returns the best plan when we're ok with any distribution.
   PlanP best() {
     bool ignore = false;
-    return best(Distribution{}, ignore);
+    return best(Distribution(/*broadcast=*/false), ignore);
   }
 
   /// Compares 'plan' to already seen plans and retains it if it is

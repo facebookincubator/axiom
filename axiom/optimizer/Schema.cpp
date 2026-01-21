@@ -107,22 +107,29 @@ SchemaTableCP Schema::findTable(
 
   for (const auto* layout : connectorTable->layouts()) {
     VELOX_CHECK_NOT_NULL(layout);
-    Distribution distribution;
-    distribution.distributionType = DistributionType(layout->partitionType());
-    appendColumns(layout->partitionColumns(), distribution.partition);
-    appendColumns(layout->orderColumns(), distribution.orderKeys);
+    ExprVector partition;
+    appendColumns(layout->partitionColumns(), partition);
 
-    distribution.orderTypes.reserve(distribution.orderKeys.size());
+    ExprVector orderKeys;
+    appendColumns(layout->orderColumns(), orderKeys);
+
+    OrderTypeVector orderTypes;
+    orderTypes.reserve(orderKeys.size());
     for (auto orderType : layout->sortOrder()) {
-      distribution.orderTypes.push_back(
+      orderTypes.push_back(
           orderType.isAscending
               ? (orderType.isNullsFirst ? OrderType::kAscNullsFirst
                                         : OrderType::kAscNullsLast)
               : (orderType.isNullsFirst ? OrderType::kDescNullsFirst
                                         : OrderType::kDescNullsLast));
     }
-    VELOX_CHECK_EQ(
-        distribution.orderKeys.size(), distribution.orderTypes.size());
+    VELOX_CHECK_EQ(orderKeys.size(), orderTypes.size());
+
+    Distribution distribution(
+        DistributionType(layout->partitionType()),
+        std::move(partition),
+        std::move(orderKeys),
+        std::move(orderTypes));
 
     ColumnVector columns;
     appendColumns(layout->columns(), columns);
@@ -177,7 +184,7 @@ bool SchemaTable::isUnique(CPSpan<Column> columns) const {
     }
   }
   for (auto index : columnGroups) {
-    auto nUnique = index->distribution.numKeysUnique;
+    auto nUnique = index->distribution.numKeysUnique();
     if (!nUnique) {
       continue;
     }
@@ -219,12 +226,12 @@ IndexInfo SchemaTable::indexInfo(
 
   const auto& distribution = index->distribution;
 
-  const auto numSorting = distribution.orderTypes.size();
-  const auto numUnique = distribution.numKeysUnique;
+  const auto numSorting = distribution.orderTypes().size();
+  const auto numUnique = distribution.numKeysUnique();
 
   PlanObjectSet covered;
   for (auto i = 0; i < numSorting || i < numUnique; ++i) {
-    auto orderKey = distribution.orderKeys[i];
+    auto orderKey = distribution.orderKeys()[i];
     auto part = findColumnByName(columnsSpan, orderKey->as<Column>()->name());
     if (!part) {
       break;
@@ -347,22 +354,22 @@ ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {
 }
 
 bool Distribution::isSamePartition(const Distribution& other) const {
-  if (distributionType != other.distributionType) {
+  if (distributionType() != other.distributionType()) {
     return false;
   }
-  if (isBroadcast || other.isBroadcast) {
+  if (isBroadcast() || other.isBroadcast()) {
     return true;
   }
-  if (partition.size() != other.partition.size()) {
+  if (partition().size() != other.partition().size()) {
     return false;
   }
-  if (partition.size() == 0) {
+  if (partition().empty()) {
     // If the partitioning columns are not in the columns or if there
     // are no partitioning columns, there can be  no copartitioning.
     return false;
   }
-  for (auto i = 0; i < partition.size(); ++i) {
-    if (!partition[i]->sameOrEqual(*other.partition[i])) {
+  for (auto i = 0; i < partition().size(); ++i) {
+    if (!partition()[i]->sameOrEqual(*other.partition()[i])) {
       return false;
     }
   }
@@ -370,12 +377,12 @@ bool Distribution::isSamePartition(const Distribution& other) const {
 }
 
 bool Distribution::isSameOrder(const Distribution& other) const {
-  if (orderKeys.size() != other.orderKeys.size()) {
+  if (orderKeys().size() != other.orderKeys().size()) {
     return false;
   }
-  for (size_t i = 0; i < orderKeys.size(); ++i) {
-    if (!orderKeys[i]->sameOrEqual(*other.orderKeys[i]) ||
-        orderTypes[i] != other.orderTypes[i]) {
+  for (size_t i = 0; i < orderKeys().size(); ++i) {
+    if (!orderKeys()[i]->sameOrEqual(*other.orderKeys()[i]) ||
+        orderTypes()[i] != other.orderTypes()[i]) {
       return false;
     }
   }
@@ -385,20 +392,31 @@ bool Distribution::isSameOrder(const Distribution& other) const {
 Distribution Distribution::rename(
     const ExprVector& exprs,
     const ColumnVector& names) const {
-  Distribution result = *this;
+  VELOX_CHECK(!isBroadcast());
+
   // Partitioning survives projection if all partitioning columns are projected
   // out.
-  if (!replace(result.partition, exprs, names)) {
-    result.partition.clear();
+  ExprVector partition = partition_;
+  if (!replace(partition, exprs, names)) {
+    partition.clear();
   }
+
   // Ordering survives if a prefix of the previous order continues to be
   // projected out.
-  const auto newOrderSize = prefixSize(result.orderKeys, exprs);
-  result.orderKeys.resize(newOrderSize);
-  result.orderTypes.resize(newOrderSize);
-  replace(result.orderKeys, exprs, names);
-  VELOX_DCHECK_EQ(result.orderKeys.size(), result.orderTypes.size());
-  return result;
+  ExprVector orderKeys = orderKeys_;
+  OrderTypeVector orderTypes = orderTypes_;
+
+  const auto newOrderSize = prefixSize(orderKeys_, exprs);
+  orderKeys.resize(newOrderSize);
+  orderTypes.resize(newOrderSize);
+  replace(orderKeys, exprs, names);
+  VELOX_DCHECK_EQ(orderKeys.size(), orderTypes.size());
+  return Distribution(
+      distributionType_,
+      std::move(partition),
+      std::move(orderKeys),
+      std::move(orderTypes),
+      numKeysUnique_);
 }
 
 namespace {
@@ -415,30 +433,30 @@ void exprsToString(const ExprVector& exprs, std::stringstream& out) {
 } // namespace
 
 std::string Distribution::toString() const {
-  if (isBroadcast) {
+  if (isBroadcast()) {
     return "broadcast";
   }
 
-  if (distributionType.isGather()) {
+  if (isGather()) {
     return "gather";
   }
 
   std::stringstream out;
-  if (!partition.empty()) {
+  if (!partition().empty()) {
     out << "P ";
-    exprsToString(partition, out);
-    if (distributionType.partitionType() != nullptr) {
-      out << " " << distributionType.partitionType()->toString();
+    exprsToString(partition(), out);
+    if (distributionType().partitionType() != nullptr) {
+      out << " " << distributionType().partitionType()->toString();
     } else {
       out << " Velox hash";
     }
   }
-  if (!orderKeys.empty()) {
+  if (!orderKeys().empty()) {
     out << " O ";
-    exprsToString(orderKeys, out);
+    exprsToString(orderKeys(), out);
   }
-  if (numKeysUnique && numKeysUnique >= orderKeys.size()) {
-    out << " first " << numKeysUnique << " unique";
+  if (numKeysUnique() && numKeysUnique() >= orderKeys().size()) {
+    out << " first " << numKeysUnique() << " unique";
   }
   return out.str();
 }

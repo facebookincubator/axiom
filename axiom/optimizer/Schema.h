@@ -117,29 +117,32 @@ class DistributionType {
 /// some keys, distributionType gives the partition function and
 /// 'partition' gives the input for the partition function.
 struct Distribution {
-  explicit Distribution() = default;
+  // TODO Distribution(/*broadcast=*/false) is used to specify *any*
+  // distribution. Provide a better way.
+  explicit Distribution(bool broadcast = false)
+      : numKeysUnique_{0}, isBroadcast_{broadcast} {}
 
   Distribution(
       DistributionType distributionType,
       ExprVector partition,
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {},
-      int32_t numKeysUnique = 0,
-      float spacing = 0)
-      : distributionType{distributionType},
-        partition{std::move(partition)},
-        orderKeys{std::move(orderKeys)},
-        orderTypes{std::move(orderTypes)},
-        numKeysUnique{numKeysUnique},
-        spacing{spacing} {
-    VELOX_CHECK_EQ(this->orderKeys.size(), this->orderTypes.size());
+      int32_t numKeysUnique = 0)
+      : distributionType_{distributionType},
+        partition_{std::move(partition)},
+        orderKeys_{std::move(orderKeys)},
+        orderTypes_{std::move(orderTypes)},
+        numKeysUnique_{numKeysUnique},
+        isBroadcast_{false} {
+    VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
+    if (isGather()) {
+      VELOX_CHECK_EQ(partition_.size(), 0);
+    }
   }
 
   /// Returns a Distribution for use in a broadcast shuffle.
   static Distribution broadcast() {
-    Distribution distribution;
-    distribution.isBroadcast = true;
-    return distribution;
+    return Distribution{/*broadcast=*/true};
   }
 
   /// Returns a distribution for an end of query gather from last stage
@@ -166,43 +169,59 @@ struct Distribution {
   bool isSameOrder(const Distribution& other) const;
 
   bool isGather() const {
-    return distributionType.isGather();
+    return distributionType_.isGather();
+  }
+
+  bool isBroadcast() const {
+    return isBroadcast_;
+  }
+
+  const DistributionType& distributionType() const {
+    return distributionType_;
+  }
+
+  const ExprVector& partition() const {
+    return partition_;
+  }
+
+  const ExprVector& orderKeys() const {
+    return orderKeys_;
+  }
+
+  const OrderTypeVector& orderTypes() const {
+    return orderTypes_;
+  }
+
+  int32_t numKeysUnique() const {
+    return numKeysUnique_;
   }
 
   Distribution rename(const ExprVector& exprs, const ColumnVector& names) const;
 
   std::string toString() const;
 
-  DistributionType distributionType;
+ private:
+  DistributionType distributionType_;
 
   /// Partitioning columns. The values of these columns determine which of
   /// partition contains any given row. Should be used together with
   /// DistributionType::partitionType.
-  ExprVector partition;
+  ExprVector partition_;
 
   /// Ordering columns. Each partition is ordered by these. Specifies that
   /// streaming group by or merge join are possible.
-  ExprVector orderKeys;
+  ExprVector orderKeys_;
 
   /// Corresponds 1:1 to 'order'. The size of this gives the number of leading
   /// columns of 'order' on which the data is sorted.
-  OrderTypeVector orderTypes;
+  OrderTypeVector orderTypes_;
 
   /// Number of leading elements of 'order' such that these uniquely identify a
   /// row. 0 if there is no uniqueness. This can be non-0 also if data is not
   /// sorted. This indicates a uniqueness for joining.
-  int32_t numKeysUnique{0};
+  int32_t numKeysUnique_;
 
-  /// Specifies the selectivity between the source of the ordered data and
-  /// 'this'. For example, if orders join lineitem and both are ordered on
-  /// orderkey and there is a 1/1000 selection on orders, the distribution after
-  /// the filter would have a spacing of 1000, meaning that lineitem is hit
-  /// every 1000 orders, meaning that an index join with lineitem would skip
-  /// 4000 rows between hits because lineitem has an average of 4 repeats of
-  /// orderkey.
-  float spacing{-1};
-
-  bool isBroadcast{false};
+  bool isBroadcast_;
 };
 
 struct SchemaTable;

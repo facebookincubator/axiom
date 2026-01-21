@@ -124,9 +124,10 @@ RelationOpPtr addGather(const RelationOpPtr& op) {
   }
   if (op->relType() == RelType::kOrderBy) {
     const auto& order = op->distribution();
-    auto final = Distribution::gather(order.orderKeys, order.orderTypes);
+    auto final = Distribution::gather(order.orderKeys(), order.orderTypes());
     auto* gather = make<Repartition>(op, final, op->columns());
-    auto* orderBy = make<OrderBy>(gather, order.orderKeys, order.orderTypes);
+    auto* orderBy =
+        make<OrderBy>(gather, order.orderKeys(), order.orderTypes());
     return orderBy;
   }
   auto* gather = make<Repartition>(op, Distribution::gather(), op->columns());
@@ -646,8 +647,8 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
     const OrderBy& op,
     runner::ExecutableFragment& fragment,
     std::vector<runner::ExecutableFragment>& stages) {
-  auto sortOrder = toSortOrders(op.distribution().orderTypes);
-  auto keys = toFieldRefs(op.distribution().orderKeys);
+  auto sortOrder = toSortOrders(op.distribution().orderTypes());
+  auto keys = toFieldRefs(op.distribution().orderKeys());
 
   if (isSingle_) {
     auto input = makeFragment(op.input(), fragment, stages);
@@ -796,7 +797,7 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const velox::RowTypePtr& inputType,
     const std::vector<ExprType>& keys,
     const Distribution& distribution) {
-  if (distribution.isBroadcast || keys.empty()) {
+  if (distribution.isBroadcast() || keys.empty()) {
     return std::make_shared<velox::core::GatherPartitionFunctionSpec>();
   }
 
@@ -813,7 +814,7 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
   }
 
   if (const auto* partitionType =
-          distribution.distributionType.partitionType()) {
+          distribution.distributionType().partitionType()) {
     return partitionType->makeSpec(
         keyIndices, /*constants=*/{}, /*isLocal=*/false);
   }
@@ -1250,10 +1251,11 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
       ? sourcePlan->outputType()
       : makeOutputType(repartition.columns());
 
-  const auto keys = toTypedExprs(repartition.distribution().partition);
-
   const auto& distribution = repartition.distribution();
-  if (distribution.isBroadcast) {
+
+  const auto keys = toTypedExprs(distribution.partition());
+
+  if (distribution.isBroadcast()) {
     VELOX_CHECK_EQ(0, keys.size());
     source.fragment.planNode = velox::core::PartitionedOutputNode::broadcast(
         nextId(), 1, outputType, exchangeSerdeKind_, sourcePlan);
