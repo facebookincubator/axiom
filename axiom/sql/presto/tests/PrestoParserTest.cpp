@@ -646,6 +646,25 @@ TEST_F(PrestoParserTest, ifClause) {
   }
 }
 
+TEST_F(PrestoParserTest, switch) {
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+
+  testSql(
+      "SELECT case when n_nationkey > 2 then 100 when n_name like 'A%' then 200 end FROM nation",
+      matcher);
+  testSql(
+      "SELECT case when n_nationkey > 2 then 100 when n_name like 'A%' then 200 else 300 end FROM nation",
+      matcher);
+
+  testSql(
+      "SELECT case n_nationkey when 1 then 100 when 2 then 200 end FROM nation",
+      matcher);
+
+  testSql(
+      "SELECT case n_nationkey when 1 then 100 when 2 then 200 else 300 end FROM nation",
+      matcher);
+}
+
 TEST_F(PrestoParserTest, in) {
   {
     auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();

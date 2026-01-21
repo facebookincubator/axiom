@@ -1605,7 +1605,13 @@ std::any AstBuilder::visitBooleanLiteral(
 
 std::any AstBuilder::visitSimpleCase(PrestoSqlParser::SimpleCaseContext* ctx) {
   trace("visitSimpleCase");
-  return visitChildren("visitSimpleCase", ctx);
+
+  return std::static_pointer_cast<Expression>(
+      std::make_shared<SimpleCaseExpression>(
+          getLocation(ctx),
+          visitTyped<Expression>(ctx->valueExpression()),
+          visitTyped<WhenClause>(ctx->whenClause()),
+          visitTyped<Expression>(ctx->elseExpression)));
 }
 
 std::any AstBuilder::visitColumnReference(

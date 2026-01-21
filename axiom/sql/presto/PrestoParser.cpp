@@ -302,6 +302,19 @@ class ExprAnalyzer : public AstVisitor {
     }
   }
 
+  void visitSimpleCaseExpression(SimpleCaseExpression* node) override {
+    node->operand()->accept(this);
+
+    for (const auto& clause : node->whenClauses()) {
+      clause->operand()->accept(this);
+      clause->result()->accept(this);
+    }
+
+    if (node->defaultValue()) {
+      node->defaultValue()->accept(this);
+    }
+  }
+
   void visitSearchedCaseExpression(SearchedCaseExpression* node) override {
     for (const auto& clause : node->whenClauses()) {
       clause->operand()->accept(this);
@@ -543,6 +556,29 @@ class RelationPlanner : public AstVisitor {
         } else {
           return lp::Cast(type, toExpr(cast->expression(), aggregateOptions));
         }
+      }
+
+      case NodeType::kSimpleCaseExpression: {
+        auto* simpleCase = node->as<SimpleCaseExpression>();
+
+        const auto operand = toExpr(simpleCase->operand(), aggregateOptions);
+
+        std::vector<lp::ExprApi> inputs;
+        inputs.reserve(1 + simpleCase->whenClauses().size());
+
+        for (const auto& clause : simpleCase->whenClauses()) {
+          inputs.emplace_back(
+              lp::Call(
+                  "eq", operand, toExpr(clause->operand(), aggregateOptions)));
+          inputs.emplace_back(toExpr(clause->result(), aggregateOptions));
+        }
+
+        if (simpleCase->defaultValue()) {
+          inputs.emplace_back(
+              toExpr(simpleCase->defaultValue(), aggregateOptions));
+        }
+
+        return lp::Call("switch", inputs);
       }
 
       case NodeType::kSearchedCaseExpression: {
