@@ -1214,11 +1214,6 @@ void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
     finalizeDt(*unnest.onlyInput());
   }
 
-  if (unnest.ordinalityName().has_value()) {
-    VELOX_NYI(
-        "Unnest ordinality column is not supported in the optimizer. Unnest node: {}",
-        unnest.id());
-  }
   PlanObjectCP leftTable = nullptr;
   ExprVector unnestExprs;
   unnestExprs.reserve(unnest.unnestExpressions().size());
@@ -1258,6 +1253,22 @@ void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
       auto* column = make<Column>(columnName, unnestTable, value, columnName);
       unnestTable->columns.push_back(column);
       renames_[columnName] = column;
+    }
+  }
+  if (unnest.ordinalityName().has_value()) {
+    auto ordinalityName = unnest.ordinalityName().value();
+    // Prune the ordinality column; if it is not needed for further operations.
+    for (auto channel : usedChannels(unnest)) {
+      if (ordinalityName == unnest.outputType()->names()[channel]) {
+        const auto* columnName = toName(ordinalityName);
+        auto* column = make<Column>(
+            columnName,
+            unnestTable,
+            Value{toType(velox::BIGINT()), maxCardinality},
+            columnName);
+        renames_[columnName] = unnestTable->ordinalityColumn = column;
+        break;
+      }
     }
   }
 

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
@@ -26,9 +27,16 @@ using namespace velox;
 namespace lp = facebook::axiom::logical_plan;
 
 class UnnestTest : public test::QueryTestBase {
+ protected:
+  static constexpr auto kTestConnectorId = "test";
+
  public:
   void SetUp() override {
     test::QueryTestBase::SetUp();
+
+    testConnector_ =
+        std::make_shared<connector::TestConnector>(kTestConnectorId);
+    velox::connector::registerConnector(testConnector_);
 
     rowVector_ = makeRowVector(
         {"x", "a_a_y", "a_a_z"},
@@ -59,9 +67,11 @@ class UnnestTest : public test::QueryTestBase {
 
   void TearDown() override {
     rowVector_.reset();
+    velox::connector::unregisterConnector(kTestConnectorId);
+
     test::QueryTestBase::TearDown();
   }
-
+  std::shared_ptr<connector::TestConnector> testConnector_;
   RowVectorPtr rowVector_;
 };
 
@@ -110,6 +120,42 @@ TEST_F(UnnestTest, unnest) {
             })
             .unnest({"x", "a_a_y", "a_a_z"}, {"a_a_y_d", "a_a_z_d"})
             .planNode();
+
+    checkSame(logicalPlan, referencePlan);
+  }
+  {
+    SCOPED_TRACE("unnest with ordinality");
+    auto logicalPlan = lp::PlanBuilder{}
+                           .values({rowVector_})
+                           .unnest(
+                               {
+                                   lp::Sql("array_distinct(a_a_y)"),
+                                   lp::Sql("array_distinct(a_a_z)"),
+                               },
+                               true,
+                               "t",
+                               {"a", "b", "c"})
+                           .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder{}
+                       .values()
+                       .project()
+                       .unnest({}, {}, "ordinality")
+                       .build();
+    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+
+    auto referencePlan = exec::test::PlanBuilder{}
+                             .values({rowVector_})
+                             .project({
+                                 "x",
+                                 "a_a_y",
+                                 "a_a_z",
+                                 "array_distinct(a_a_y) AS a",
+                                 "array_distinct(a_a_z) AS b",
+                             })
+                             .unnest({"x", "a_a_y", "a_a_z"}, {"a", "b"}, "c")
+                             .planNode();
 
     checkSame(logicalPlan, referencePlan);
   }
@@ -287,6 +333,162 @@ TEST_F(UnnestTest, unnest) {
   }
 }
 
+TEST_F(UnnestTest, unnestQuery) {
+  {
+    SCOPED_TRACE("unnest query");
+    auto query =
+        "SELECT * FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY as t(a, b, c)";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .unnest({}, {}, "ordinality")
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    SCOPED_TRACE("unnest query with prune");
+    auto query =
+        "SELECT a, b FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY as t(a, b, c)";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .unnest()
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(UnnestTest, unnestOrderByQueries) {
+  {
+    SCOPED_TRACE("unnest with order by");
+    auto query =
+        "SELECT * FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY AS t(a, b, c) ORDER BY b DESC";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .unnest({}, {}, "ordinality")
+                       .orderBy()
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    SCOPED_TRACE("unnest with order by with prune");
+    auto query =
+        "SELECT a, b FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY AS t(a, b, c) ORDER BY b DESC";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .unnest()
+                       .orderBy()
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(UnnestTest, unnestGroupByQueries) {
+  {
+    SCOPED_TRACE("unnest with group by");
+    auto query =
+        "SELECT  a, COUNT(c)  FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY AS t(a, b, c) GROUP BY a";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .unnest({}, {}, "ordinality")
+                       .aggregation()
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    SCOPED_TRACE("unnest with group by with prune");
+    auto query =
+        "SELECT  a, COUNT(b)  FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY AS t(a, b, c) GROUP BY a";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .unnest()
+                       .aggregation()
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(UnnestTest, unnestLimit) {
+  {
+    SCOPED_TRACE("unnest with limit");
+    auto query =
+        "SELECT * FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY as t(a, b, c) LIMIT 1";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .unnest({}, {}, "ordinality")
+                       .limit()
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    SCOPED_TRACE("unnest with limit with prune");
+    auto query =
+        "SELECT a, b FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY as t(a, b, c) LIMIT 1";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .unnest()
+                       .limit()
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 TEST_F(UnnestTest, project) {
   auto startLogicalPlan = [&]() {
     return lp::PlanBuilder{}.values({rowVector_});
@@ -444,7 +646,44 @@ TEST_F(UnnestTest, filter) {
                              .unnest({"x"}, {"a_a_y_d", "a_a_z_d"})
                              .project({"x", "a_a_y_d_e"})
                              .planNode();
+    checkSame(logicalPlan, referencePlan);
+  }
+  {
+    SCOPED_TRACE("filter before unnest and with ordinality");
 
+    auto logicalPlan =
+        startLogicalPlan()
+            .filter("x % 2 = 0")
+            .unnest(
+                {
+                    lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
+                    lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
+                },
+                true)
+            .project({"x", "a_y"})
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder{}
+                       .values()
+                       .filter()
+                       .project()
+                       .unnest()
+                       .project()
+                       .build();
+    ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+
+    auto referencePlan =
+        startReferencePlan()
+            .filter("x % 2 = 0")
+            .project({
+                "x",
+                "array_distinct(a_a_y) AS a_a_y_d",
+                "array_distinct(a_a_z) AS a_a_z_d",
+            })
+            .unnest({"x"}, {"a_a_y_d", "a_a_z_d"}, "ordinality")
+            .project({"x", "a_a_y_d_e"})
+            .planNode();
     checkSame(logicalPlan, referencePlan);
   }
   {

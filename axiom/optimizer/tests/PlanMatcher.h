@@ -92,6 +92,11 @@ class PlanMatcherBuilder {
       const std::vector<std::string>& replicateExprs,
       const std::vector<std::string>& unnestExprs);
 
+  PlanMatcherBuilder& unnest(
+      const std::vector<std::string>& replicateExprs,
+      const std::vector<std::string>& unnestExprs,
+      const std::optional<std::string>& ordinalityName);
+
   PlanMatcherBuilder& aggregation();
 
   PlanMatcherBuilder& singleAggregation();
