@@ -16,16 +16,76 @@
 #pragma once
 
 #include <folly/executors/IOThreadPoolExecutor.h>
+#include <sys/resource.h>
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/sql/presto/PrestoParser.h"
+#include "velox/common/time/Timer.h"
 
 namespace axiom::sql {
 
+/// Timing information for a statement execution.
+struct Timing {
+  uint64_t micros{0};
+  uint64_t userNanos{0};
+  uint64_t systemNanos{0};
+
+  std::string toString() const;
+};
+
+template <typename T>
+T time(const std::function<T()>& func, Timing& timing) {
+  struct rusage start{};
+  getrusage(RUSAGE_SELF, &start);
+  SCOPE_EXIT {
+    struct rusage end{};
+    getrusage(RUSAGE_SELF, &end);
+    auto tvNanos = [](struct timeval tv) {
+      return tv.tv_sec * 1'000'000'000 + tv.tv_usec * 1'000;
+    };
+    timing.userNanos = tvNanos(end.ru_utime) - tvNanos(start.ru_utime);
+    timing.systemNanos = tvNanos(end.ru_stime) - tvNanos(start.ru_stime);
+  };
+
+  facebook::velox::MicrosecondTimer timer(&timing.micros);
+  return func();
+}
+
+/// Result of a single SQL statement execution.
+struct StatementOutcome {
+  /// Optional message to display to the user.
+  std::optional<std::string> message;
+
+  /// Optional SQL query data to display.
+  std::vector<facebook::velox::RowVectorPtr> data;
+
+  /// Timing information if measured.
+  std::optional<Timing> timing;
+};
+
+/// Result of executing a console command.
+struct CommandResult {
+  /// Whether the command was handled.
+  bool handled{false};
+
+  /// Results from executing one or more statements.
+  std::vector<StatementOutcome> outcomes;
+
+  /// Whether the command loop should exit.
+  bool shouldExit{false};
+};
+
+/// Function type for console command handlers.
+/// @param command The full command string entered by the user.
+/// @return CommandResult indicating how the command was processed.
+using CommandHandler = std::function<CommandResult(const std::string& command)>;
+
 class SqlQueryRunner {
  public:
+  virtual ~SqlQueryRunner() = default;
+
   /// @param initializeConnectors Lambda to call to initialize connectors and
   /// return a pair of default {connector ID, schema}. Takes a reference to the
   /// history to allow for loading from persistent storage.
@@ -50,6 +110,12 @@ class SqlQueryRunner {
 
     /// If true, EXPLAIN ANALYZE output includes custom operator stats.
     bool debugMode{false};
+
+    /// If true, return time elapsed for the queries.
+    bool measureTiming{false};
+
+    /// Path to save/load command history.
+    std::string historyPath;
   };
 
   /// Runs a single SQL statement and returns the result.
@@ -67,10 +133,33 @@ class SqlQueryRunner {
       std::string_view sql,
       const RunOptions& options);
 
-  std::unordered_map<std::string, std::string>& sessionConfig() {
-    return config_;
+  /// Registers the console commands (e.g. exit, quit, help,
+  /// savehistory, clearhistory).
+  virtual void registerCommands(const RunOptions& options);
+
+  /// Attempts to handle a command using registered handlers.
+  /// Commands are matched by prefix in order of longest match first.
+  /// If no handler matches, the execute handler is called.
+  /// @param command The full command string entered by the user.
+  /// @return CommandResult from the matched handler or the execute handler.
+  CommandResult handleCommand(const std::string& command) const;
+
+ protected:
+  /// Sets the execute handler called when no registered command matches.
+  /// This handler is required and executes SQL commands.
+  /// @param handler The handler to call for SQL execution.
+  void setExecuteHandler(CommandHandler handler) {
+    executeHandler_ = std::move(handler);
   }
 
+  /// Registers a command handler for a given command prefix.
+  /// @param prefix The command prefix to match (e.g., "help", "flag").
+  /// @param handler The handler function to call when the command matches.
+  void registerCommand(const std::string& prefix, CommandHandler handler) {
+    commands_[prefix] = std::move(handler);
+  }
+
+ private:
   void saveHistory(const std::string& path) {
     history_->saveToFile(path);
   }
@@ -79,7 +168,6 @@ class SqlQueryRunner {
     history_ = std::make_unique<facebook::axiom::optimizer::VeloxHistory>();
   }
 
- private:
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
       const RunOptions& options);
 
@@ -146,6 +234,8 @@ class SqlQueryRunner {
   std::unique_ptr<facebook::axiom::optimizer::VeloxHistory> history_;
   std::unique_ptr<presto::PrestoParser> prestoParser_;
   int32_t queryCounter_{0};
+  std::unordered_map<std::string, CommandHandler> commands_;
+  CommandHandler executeHandler_;
 };
 
 } // namespace axiom::sql
