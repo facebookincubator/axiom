@@ -633,9 +633,17 @@ TEST_F(PrestoParserTest, distinctFrom) {
 }
 
 TEST_F(PrestoParserTest, ifClause) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
+    testSql("SELECT if (1 > 2, 100)", matcher);
+  }
 
-  testSql("SELECT if (1 > 2, 100)", matcher);
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+    testSql(
+        "SELECT if (n_nationkey between 10 and 13, 'foo') FROM nation",
+        matcher);
+  }
 }
 
 TEST_F(PrestoParserTest, in) {
@@ -646,6 +654,21 @@ TEST_F(PrestoParserTest, in) {
 
     testSql("SELECT 1 not in (2,3,4)", matcher);
     testSql("SELECT 1 NOT IN (2,3,4)", matcher);
+  }
+
+  // Subquery.
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().filter();
+    testSql(
+        "SELECT * FROM nation WHERE n_regionkey IN (SELECT r_regionkey FROM region WHERE r_name like 'A%')",
+        matcher);
+  }
+
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+    testSql(
+        "SELECT n_regionkey IN (SELECT r_regionkey FROM region WHERE r_name like 'A%') FROM nation",
+        matcher);
   }
 
   // Coercions.
@@ -1081,15 +1104,25 @@ TEST_F(PrestoParserTest, intersect) {
 }
 
 TEST_F(PrestoParserTest, exists) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().filter();
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().filter();
 
-  testSql(
-      "SELECT * FROM region WHERE exists (SELECT * from nation WHERE n_name like 'A%' and r_regionkey = n_regionkey)",
-      matcher);
+    testSql(
+        "SELECT * FROM region WHERE exists (SELECT * from nation WHERE n_name like 'A%' and r_regionkey = n_regionkey)",
+        matcher);
 
-  testSql(
-      "SELECT * FROM region WHERE not exists (SELECT * from nation WHERE n_name like 'A%' and r_regionkey = n_regionkey)",
-      matcher);
+    testSql(
+        "SELECT * FROM region WHERE not exists (SELECT * from nation WHERE n_name like 'A%' and r_regionkey = n_regionkey)",
+        matcher);
+  }
+
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+
+    testSql(
+        "SELECT EXISTS (SELECT * from nation WHERE n_regionkey = r_regionkey) FROM region",
+        matcher);
+  }
 }
 
 TEST_F(PrestoParserTest, lambda) {
