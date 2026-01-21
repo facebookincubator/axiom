@@ -31,9 +31,24 @@
 #include "velox/serializers/PrestoSerializer.h"
 
 namespace velox = facebook::velox;
+
+using namespace facebook;
 using namespace facebook::axiom;
 
 namespace axiom::sql {
+
+std::string Timing::toString() const {
+  double pct = 0;
+  if (micros > 0) {
+    pct = 100 * (userNanos + systemNanos) / (micros * 1000);
+  }
+
+  std::stringstream out;
+  out << velox::succinctNanos(micros * 1000) << " / "
+      << velox::succinctNanos(userNanos) << " user / "
+      << velox::succinctNanos(systemNanos) << " system (" << pct << "%)";
+  return out.str();
+}
 
 void SqlQueryRunner::initialize(
     const std::function<std::pair<std::string, std::optional<std::string>>(
@@ -83,6 +98,52 @@ std::vector<velox::RowVectorPtr> fetchResults(runner::LocalRunner& runner) {
     results.push_back(rows);
   }
   return results;
+}
+
+CommandResult exitHandler(const std::string&) {
+  return CommandResult{.handled = true, .outcomes = {}, .shouldExit = true};
+}
+
+CommandResult helpHandler(const std::string&) {
+  static const char* helpText =
+      "Axiom Interactive SQL\n\n"
+      "Type SQL and end with ';'.\n"
+      "To set a flag, type 'flag <gflag_name> = <value>;' Leave a space on either side of '='.\n\n"
+      "Useful flags:\n\n"
+      "num_workers - Make a distributed plan for this many workers. Runs it in-process with remote exchanges with serialization and passing data in memory. If num_workers is 1, makes single node plans without remote exchanges.\n\n"
+      "num_drivers - Specifies the parallelism for workers. This many threads per pipeline per worker.\n\n";
+  return CommandResult{
+      .handled = true, .outcomes = {{.message = helpText, .data = {}}}};
+}
+
+CommandResult sessionHandler(
+    const std::string& command,
+    std::unordered_map<std::string, std::string>& config) {
+  char* name = nullptr;
+  char* value = nullptr;
+  SCOPE_EXIT {
+    if (name != nullptr) {
+      free(name);
+    }
+    if (value != nullptr) {
+      free(value);
+    }
+  };
+
+  if (sscanf(command.c_str(), "session %ms = %ms", &name, &value) == 2) {
+    config[std::string(name)] = std::string(value);
+    return CommandResult{
+        .handled = true,
+        .outcomes = {
+            {.message = fmt::format(
+                 "Session '{}' set to '{}'",
+                 std::string(name),
+                 std::string(value)),
+             .data = {}}}};
+  }
+  return CommandResult{
+      .handled = true,
+      .outcomes = {{.message = "Usage: session <name> = <value>", .data = {}}}};
 }
 
 } // namespace
@@ -137,6 +198,78 @@ std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
     std::string_view sql,
     const RunOptions& options) {
   return prestoParser_->parseMultiple(sql, /*enableTracing=*/options.debugMode);
+}
+
+void SqlQueryRunner::registerCommands(const RunOptions& options) {
+  registerCommand("exit", exitHandler);
+  registerCommand("quit", exitHandler);
+  registerCommand("help", helpHandler);
+
+  registerCommand(
+      "savehistory",
+      [this, historyPath = options.historyPath](const std::string&) {
+        saveHistory(historyPath);
+        return CommandResult{
+            .handled = true,
+            .outcomes = {{.message = "History saved.", .data = {}}}};
+      });
+
+  registerCommand("clearhistory", [this](const std::string&) {
+    clearHistory();
+    return CommandResult{
+        .handled = true,
+        .outcomes = {{.message = "History cleared.", .data = {}}}};
+  });
+
+  registerCommand("session", [this](const std::string& command) {
+    return sessionHandler(command, config_);
+  });
+
+  setExecuteHandler([this, options](const std::string& command) {
+    std::vector<StatementOutcome> outcomes;
+    try {
+      auto statements = parseMultiple(command, options);
+      outcomes.reserve(statements.size());
+      for (const auto& statement : statements) {
+        Timing statementTiming;
+        auto sqlResult = time<SqlResult>(
+            [&]() { return run(*statement, options); }, statementTiming);
+
+        StatementOutcome outcome{
+            .message = std::move(sqlResult.message),
+            .data = std::move(sqlResult.results)};
+
+        if (options.measureTiming) {
+          outcome.timing = std::move(statementTiming);
+        }
+        outcomes.push_back(std::move(outcome));
+      }
+      return CommandResult{.handled = true, .outcomes = std::move(outcomes)};
+    } catch (const std::exception& e) {
+      outcomes.push_back({.message = e.what(), .data = {}});
+      return CommandResult{.handled = true, .outcomes = std::move(outcomes)};
+    }
+  });
+}
+
+CommandResult SqlQueryRunner::handleCommand(const std::string& command) const {
+  std::string bestMatch;
+  const CommandHandler* bestHandler = nullptr;
+
+  for (const auto& [prefix, handler] : commands_) {
+    if (command.starts_with(prefix)) {
+      if (prefix.size() > bestMatch.size()) {
+        bestMatch = prefix;
+        bestHandler = &handler;
+      }
+    }
+  }
+
+  if (bestHandler) {
+    return (*bestHandler)(command);
+  }
+
+  return executeHandler_(command);
 }
 
 SqlQueryRunner::SqlResult SqlQueryRunner::run(
