@@ -1256,15 +1256,20 @@ void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
     }
   }
   if (unnest.ordinalityName().has_value()) {
-    Value value{toType(velox::BIGINT()), maxCardinality};
-    const auto* columnName = toName(unnest.ordinalityName().value());
-    auto* column = make<Column>(
-        columnName,
-        unnestTable,
-        value,
-        toName(unnest.ordinalityName().value()));
-    renames_[columnName] = column;
-    unnestTable->ordinalityColumn = column;
+    auto ordinalityName = unnest.ordinalityName().value();
+    // Prune the ordinality column; if it is not needed for further operations.
+    for (auto channel : usedChannels(unnest)) {
+      if (ordinalityName == unnest.outputType()->names()[channel]) {
+        const auto* columnName = toName(ordinalityName);
+        auto* column = make<Column>(
+            columnName,
+            unnestTable,
+            Value{toType(velox::BIGINT()), maxCardinality},
+            columnName);
+        renames_[columnName] = unnestTable->ordinalityColumn = column;
+        break;
+      }
+    }
   }
 
   auto* edge =

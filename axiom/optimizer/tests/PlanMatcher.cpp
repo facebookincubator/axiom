@@ -410,8 +410,9 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
     }
 
+    EXPECT_EQ(ordinalityName_.has_value(), plan.ordinalityName().has_value());
+
     if (ordinalityName_.has_value()) {
-      EXPECT_TRUE(plan.ordinalityName().has_value());
       EXPECT_EQ(plan.ordinalityName().value(), ordinalityName_.value());
     }
 
@@ -772,6 +773,16 @@ PlanMatcherBuilder& PlanMatcherBuilder::unnest(
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<UnnestMatcher>(
       matcher_, replicateExprs, unnestExprs, std::nullopt);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::unnest(
+    const std::vector<std::string>& replicateExprs,
+    const std::vector<std::string>& unnestExprs,
+    const std::optional<std::string>& ordinalityName) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<UnnestMatcher>(
+      matcher_, replicateExprs, unnestExprs, ordinalityName);
   return *this;
 }
 
