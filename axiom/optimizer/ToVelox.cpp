@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
@@ -1144,7 +1143,9 @@ velox::core::PlanNodePtr ToVelox::makeUnnest(
       toFieldRefs(op.replicateColumns),
       toFieldRefs(op.unnestExprs),
       std::move(unnestNames),
-      std::nullopt,
+      op.ordinalityColumn
+          ? std::optional<std::string>(op.ordinalityColumn->name())
+          : std::nullopt,
       std::nullopt,
       std::move(input));
 }

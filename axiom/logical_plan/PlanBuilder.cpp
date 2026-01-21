@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include "axiom/logical_plan/PlanBuilder.h"
 #include <velox/common/base/Exceptions.h>
 #include <vector>
@@ -684,7 +683,7 @@ PlanBuilder& PlanBuilder::unnest(
 
   std::optional<std::string> ordinalityName;
   if (withOrdinality) {
-    ordinalityName = newName("orginality");
+    ordinalityName = newName("ordinality");
   }
 
   bool flattenArrayOfRows = false;

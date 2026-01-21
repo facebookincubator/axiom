@@ -1703,11 +1703,12 @@ void Optimization::crossJoinUnnest(
       }
     });
 
+    const auto* unnestTable = table->as<UnnestTable>();
     // We don't use downstreamColumns() for unnestExprs/unnestedColumns.
     // Because 'unnest-column' should be unnested even when it isn't used.
     // Because it can change cardinality of the all output.
     const auto& unnestExprs = candidate.join->leftKeys();
-    const auto& unnestedColumns = table->as<UnnestTable>()->columns;
+    const auto& unnestedColumns = unnestTable->columns;
 
     // Plan is updated here,
     // because we can have multiple unnest joins in single JoinCandidate.
@@ -1719,7 +1720,8 @@ void Optimization::crossJoinUnnest(
         std::move(plan),
         std::move(replicateColumns),
         std::move(unnestColumns),
-        unnestedColumns);
+        unnestedColumns,
+        unnestTable->ordinalityColumn);
 
     state.columns.unionObjects(unnestedColumns);
     state.addCost(*plan);
