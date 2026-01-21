@@ -209,12 +209,22 @@ class ExprAnalyzer : public AstVisitor {
     }
   }
 
+  void visitBetweenPredicate(BetweenPredicate* node) override {
+    node->value()->accept(this);
+    node->min()->accept(this);
+    node->max()->accept(this);
+  }
+
   void visitCast(Cast* node) override {
     node->expression()->accept(this);
   }
 
   void visitDereferenceExpression(DereferenceExpression* node) override {
     node->base()->accept(this);
+  }
+
+  void visitExistsPredicate(ExistsPredicate* node) override {
+    // Aggregate function calls within a subquery do not count.
   }
 
   void visitExtract(Extract* node) override {
@@ -301,6 +311,10 @@ class ExprAnalyzer : public AstVisitor {
     if (node->defaultValue()) {
       node->defaultValue()->accept(this);
     }
+  }
+
+  void visitSubqueryExpression(SubqueryExpression* node) override {
+    // Aggregate function calls within a subquery do not count.
   }
 
   void visitSubscriptExpression(SubscriptExpression* node) override {
