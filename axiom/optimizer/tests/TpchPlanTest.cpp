@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <boost/algorithm/string.hpp>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 #include "axiom/logical_plan/PlanBuilder.h"
@@ -83,8 +84,15 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
     return sql;
   }
 
-  std::string readTpchSql(int32_t query) {
-    return readSqlFromFile(fmt::format("tpch.queries/q{}.sql", query));
+  static std::string readTpchSql(int32_t query) {
+    auto sql = readSqlFromFile(fmt::format("tpch.queries/q{}.sql", query));
+
+    // Drop trailing semicolon.
+    boost::trim_right(sql);
+    if (!sql.empty() && sql.back() == ';') {
+      sql.pop_back();
+    }
+    return sql;
   }
 
   lp::LogicalPlanNodePtr parseTpchSql(int32_t query) {
