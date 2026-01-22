@@ -156,6 +156,27 @@ ExprPtr applyCoercion(
   return std::make_shared<SpecialFormExpr>(type, SpecialForm::kCast, input);
 }
 
+namespace {
+
+int64_t toIntegerValue(const ConstantExpr& expr) {
+  switch (expr.type()->kind()) {
+    case velox::TypeKind::BIGINT:
+      return expr.value()->value<int64_t>();
+    case velox::TypeKind::INTEGER:
+      return expr.value()->value<int32_t>();
+    case velox::TypeKind::SMALLINT:
+      return expr.value()->value<int16_t>();
+    case velox::TypeKind::TINYINT:
+      return expr.value()->value<int8_t>();
+    default:
+      VELOX_USER_FAIL(
+          "Expected an integer value: {} - {}",
+          expr.type()->toString(),
+          expr.toString());
+  }
+}
+} // namespace
+
 ExprPtr tryResolveSpecialForm(
     const std::string& name,
     std::vector<ExprPtr>& resolvedInputs,
@@ -221,12 +242,10 @@ ExprPtr tryResolveSpecialForm(
 
     const auto& fieldExpr = resolvedInputs.at(1);
     VELOX_USER_CHECK(fieldExpr->isConstant());
-    VELOX_USER_CHECK_EQ(velox::TypeKind::BIGINT, fieldExpr->type()->kind());
 
-    const auto index = fieldExpr->as<ConstantExpr>()->value()->value<int64_t>();
-
-    VELOX_USER_CHECK_GE(index, 1);
-    VELOX_USER_CHECK_LE(index, rowType.size());
+    const auto index = toIntegerValue(*fieldExpr->as<ConstantExpr>());
+    VELOX_USER_CHECK_GE(index, 1, "Subscript index must be 1-based");
+    VELOX_USER_CHECK_LE(index, rowType.size(), "Subscript index out of range");
 
     const auto zeroBasedIndex = static_cast<int32_t>(index - 1);
 
@@ -571,6 +590,40 @@ std::optional<std::string> tryGetRootName(const velox::core::ExprPtr& expr) {
 
   return std::nullopt;
 }
+
+int32_t parseLegacyRowFieldOrdinal(
+    const std::string& name,
+    const velox::RowType& rowType) {
+  VELOX_USER_CHECK(
+      boost::istarts_with(name, "field"),
+      "Invalid field name: {}. Available names are: {}",
+      name,
+      folly::join(", ", rowType.names()));
+
+  const auto* start = name.c_str() + 5;
+  const auto* end = name.c_str() + name.size();
+
+  int32_t ordinal;
+  auto parseResult = std::from_chars(start, end, ordinal);
+
+  VELOX_USER_CHECK(
+      parseResult.ec == std::errc{}, "Invalid legacy field name: {}", name);
+  VELOX_USER_CHECK(
+      parseResult.ptr == end, "Invalid legacy field name: {}", name);
+
+  VELOX_USER_CHECK_GE(ordinal, 0, "Invalid legacy field name: {}", name);
+  VELOX_USER_CHECK_LT(
+      ordinal, rowType.size(), "Invalid legacy field name: {}", name);
+
+  VELOX_USER_CHECK(
+      rowType.nameOf(ordinal).empty(),
+      "Cannot access named field using legacy field name: {} vs. {}",
+      name,
+      rowType.nameOf(ordinal));
+
+  return ordinal;
+}
+
 } // namespace
 
 ExprPtr ExprResolver::resolveScalarTypes(
@@ -608,20 +661,26 @@ ExprPtr ExprResolver::resolveScalarTypes(
       }
     }
 
-    VELOX_USER_CHECK(
-        index.has_value(),
-        "Field not found in struct: '{}' not in {}",
-        name,
-        inputRowType.toString());
+    if (index.has_value()) {
+      return std::make_shared<SpecialFormExpr>(
+          inputRowType.childAt(index.value()),
+          SpecialForm::kDereference,
+          std::vector<ExprPtr>{
+              input,
+              std::make_shared<ConstantExpr>(
+                  velox::VARCHAR(),
+                  std::make_shared<velox::Variant>(
+                      inputRowType.nameOf(index.value())))});
+    }
 
+    const auto ordinal = parseLegacyRowFieldOrdinal(name, inputRowType);
     return std::make_shared<SpecialFormExpr>(
-        inputRowType.childAt(index.value()),
+        inputRowType.childAt(ordinal),
         SpecialForm::kDereference,
         std::vector<ExprPtr>{
             input,
             std::make_shared<ConstantExpr>(
-                velox::INTEGER(),
-                std::make_shared<velox::Variant>(index.value()))});
+                velox::INTEGER(), std::make_shared<velox::Variant>(ordinal))});
   }
 
   if (const auto& constant =

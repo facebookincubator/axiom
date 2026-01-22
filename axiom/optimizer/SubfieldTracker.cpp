@@ -337,12 +337,10 @@ void SubfieldTracker::markSubfields(
     const auto* field = expr->inputAt(1)->as<lp::ConstantExpr>();
     const auto& input = expr->inputAt(0);
 
-    // Always fill both index and name for a struct getter.
+    // Always fill the index for a struct getter.
     auto fieldIndex = maybeIntegerLiteral(field);
     Name name = nullptr;
-    if (fieldIndex.has_value()) {
-      name = toName(input->type()->asRow().nameOf(fieldIndex.value()));
-    } else {
+    if (!fieldIndex.has_value()) {
       const auto& fieldName = field->value()->value<velox::TypeKind::VARCHAR>();
       fieldIndex = input->type()->asRow().getChildIdx(fieldName);
       name = toName(fieldName);
@@ -606,6 +604,31 @@ void SubfieldTracker::markAllSubfields(
     markFieldAccessed(source, i, steps, /*isControl=*/false, context);
     VELOX_CHECK(steps.empty());
   }
+}
+
+bool PlanSubfields::hasColumn(
+    const logical_plan::LogicalPlanNode* node,
+    int32_t ordinal) const {
+  auto it = nodeFields.find(node);
+  if (it == nodeFields.end()) {
+    return false;
+  }
+  return it->second.resultPaths.contains(ordinal);
+}
+
+std::optional<PathSet> PlanSubfields::findSubfields(
+    const logical_plan::Expr* expr) const {
+  auto it = argFields.find(expr);
+  if (it == argFields.end()) {
+    return std::nullopt;
+  }
+
+  const auto& paths = it->second.resultPaths;
+  auto pathIt = paths.find(ResultAccess::kSelf);
+  if (pathIt == paths.end()) {
+    return std::nullopt;
+  }
+  return pathIt->second;
 }
 
 namespace {

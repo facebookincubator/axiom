@@ -458,7 +458,6 @@ bool ToGraph::isSubfield(
     auto& rowType = expr->inputAt(0)->type()->as<velox::TypeKind::ROW>();
     if (maybeIndex.has_value()) {
       id = maybeIndex.value();
-      name = toName(rowType.nameOf(maybeIndex.value()));
     } else {
       auto& field = expr->inputAt(1)->as<lp::ConstantExpr>()->value();
       name = toName(field->value<velox::TypeKind::VARCHAR>());
@@ -673,9 +672,6 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
 }
 
 namespace {
-PathCP innerPath(std::span<const Step> steps, int32_t last) {
-  return toPath(steps.subspan(last), true);
-}
 
 velox::Variant* subscriptLiteral(velox::TypeKind kind, const Step& step) {
   switch (kind) {
@@ -694,129 +690,119 @@ velox::Variant* subscriptLiteral(velox::TypeKind kind, const Step& step) {
   }
 }
 
+ExprCP FOLLY_NULLABLE intersectWithSkyline(
+    std::span<const Step> steps,
+    const SubfieldProjections& skyline,
+    int32_t& last) {
+  // We see how many trailing (inner) steps fall below skyline, i.e. address
+  // enclosing containers that are not materialized.
+
+  last = static_cast<int32_t>(steps.size() - 1);
+  for (; last >= 0; --last) {
+    auto inner = toPath(steps.subspan(last), /*reverse=*/true);
+    auto it = skyline.pathToExpr.find(inner);
+    if (it != skyline.pathToExpr.end()) {
+      return it->second;
+    }
+  }
+
+  // The path is not materialized. Need a longer path to intersect skyline.
+  return nullptr;
+}
+
 } // namespace
 
 ExprCP ToGraph::makeGettersOverSkyline(
-    const std::vector<Step>& steps,
+    std::span<const Step> steps,
     const SubfieldProjections* skyline,
     const lp::ExprPtr& base,
     ColumnCP column) {
-  auto last = static_cast<int32_t>(steps.size() - 1);
-  ExprCP expr = nullptr;
   if (skyline) {
-    // We see how many trailing (inner) steps fall below skyline, i.e. address
-    // enclosing containers that are not materialized.
-    bool found = false;
-    for (; last >= 0; --last) {
-      auto inner = innerPath(steps, last);
-      auto it = skyline->pathToExpr.find(inner);
-      if (it != skyline->pathToExpr.end()) {
-        expr = it->second;
-        found = true;
-        break;
-      }
+    int32_t last;
+    if (auto expr = intersectWithSkyline(steps, *skyline, last)) {
+      return makeGetters(std::span(steps).subspan(0, last), expr);
     }
-    if (!found) {
-      // The path is not materialized. Need a longer path to intersect skyline.
-      return nullptr;
-    }
-  } else {
-    if (column) {
-      expr = column;
-    } else {
-      trace(OptimizerOptions::kPreprocess, [&]() {
-        std::cout << "Complex function with no skyline: steps="
-                  << toPath(steps)->toString() << std::endl;
-        std::cout << "base=" << lp::ExprPrinter::toText(*base) << std::endl;
-      });
-      expr = translateExpr(base);
-    }
-    last = static_cast<int32_t>(steps.size());
+
+    // The path is not materialized. Need a longer path to intersect skyline.
+    return nullptr;
   }
 
-  for (int32_t i = last - 1; i >= 0; --i) {
+  ExprCP expr;
+  if (column) {
+    expr = column;
+  } else {
+    trace(OptimizerOptions::kPreprocess, [&]() {
+      std::cout << "Complex function with no skyline: steps="
+                << toPath(steps)->toString() << std::endl;
+      std::cout << "base=" << lp::ExprPrinter::toText(*base) << std::endl;
+    });
+    expr = translateExpr(base);
+  }
+
+  return makeGetters(steps, expr);
+}
+
+ExprCP ToGraph::makeGetters(std::span<const Step> steps, ExprCP base) {
+  ExprCP expr = base;
+  for (int32_t i = steps.size() - 1; i >= 0; --i) {
+    const auto& step = steps[i];
+
     // We make a getter over expr made so far with 'steps[i]' as first.
-    PathExpr pathExpr{steps[i], nullptr, expr};
+    PathExpr pathExpr{step, expr};
     auto it = deduppedGetters_.find(pathExpr);
     if (it != deduppedGetters_.end()) {
       expr = it->second;
     } else {
-      const auto& step = steps[i];
-      auto inputType = expr->value().type;
-      switch (step.kind) {
-        case StepKind::kField: {
-          if (step.field) {
-            auto childType = toType(inputType->asRow().findChild(step.field));
-            expr = make<Field>(childType, expr, step.field);
-          } else {
-            auto childType = toType(inputType->childAt(step.id));
-            expr = make<Field>(childType, expr, step.id);
-          }
-          break;
-        }
-
-        case StepKind::kSubscript: {
-          // Type of array element or map value.
-          auto valueType =
-              toType(inputType->childAt(inputType->isArray() ? 0 : 1));
-
-          // Type of array index or map key.
-          auto subscriptType = toType(
-              inputType->isArray() ? velox::INTEGER() : inputType->childAt(0));
-
-          ExprVector args{
-              expr,
-              make<Literal>(
-                  Value(subscriptType, 1),
-                  subscriptLiteral(subscriptType->kind(), step)),
-          };
-
-          expr = make<Call>(
-              subscript_, Value(valueType, 1), std::move(args), FunctionSet());
-          break;
-        }
-
-        case StepKind::kCardinality: {
-          expr = make<Call>(
-              cardinality_,
-              Value(toType(velox::BIGINT()), 1),
-              ExprVector{expr},
-              FunctionSet());
-          break;
-        }
-        default:
-          VELOX_NYI();
-      }
-
+      expr = makeGetter(step, expr);
       deduppedGetters_[pathExpr] = expr;
     }
   }
+
   return expr;
 }
 
-bool PlanSubfields::hasColumn(
-    const logical_plan::LogicalPlanNode* node,
-    int32_t ordinal) const {
-  auto it = nodeFields.find(node);
-  if (it == nodeFields.end()) {
-    return false;
-  }
-  return it->second.resultPaths.contains(ordinal);
-}
+ExprCP ToGraph::makeGetter(const Step& step, ExprCP base) {
+  const auto& inputType = base->value().type;
+  switch (step.kind) {
+    case StepKind::kField: {
+      if (step.field) {
+        auto childType = toType(inputType->asRow().findChild(step.field));
+        return make<Field>(childType, base, step.field);
+      } else {
+        auto childType = toType(inputType->childAt(step.id));
+        return make<Field>(childType, base, step.id);
+      }
+    }
 
-std::optional<PathSet> PlanSubfields::findSubfields(
-    const logical_plan::Expr* expr) const {
-  auto it = argFields.find(expr);
-  if (it == argFields.end()) {
-    return std::nullopt;
-  }
+    case StepKind::kSubscript: {
+      // Type of array element or map value.
+      auto valueType = toType(inputType->childAt(inputType->isArray() ? 0 : 1));
 
-  const auto& paths = it->second.resultPaths;
-  auto pathIt = paths.find(ResultAccess::kSelf);
-  if (pathIt == paths.end()) {
-    return std::nullopt;
+      // Type of array index or map key.
+      auto subscriptType = inputType->isArray() ? toType(velox::INTEGER())
+                                                : toType(inputType->childAt(0));
+
+      ExprVector args{
+          base,
+          make<Literal>(
+              Value(subscriptType, 1),
+              subscriptLiteral(subscriptType->kind(), step)),
+      };
+
+      return make<Call>(
+          subscript_, Value(valueType, 1), std::move(args), FunctionSet());
+    }
+
+    case StepKind::kCardinality: {
+      return make<Call>(
+          cardinality_,
+          Value(toType(velox::BIGINT()), 1),
+          ExprVector{base},
+          FunctionSet());
+    }
+    default:
+      VELOX_NYI();
   }
-  return pathIt->second;
 }
 
 PathSet ToGraph::functionSubfields(const lp::CallExpr* call) {

@@ -68,11 +68,9 @@ struct TypedVariantComparer {
 };
 
 /// Represents a path over an Expr of complex type. Used as a key
-/// for a map from unique step+optional subscript expr pairs to the
-/// dedupped Expr that is the getter.
+/// for a map from unique step to the dedupped Expr that is the getter.
 struct PathExpr {
   Step step;
-  ExprCP subscriptExpr{nullptr};
   ExprCP base;
 
   bool operator==(const PathExpr& other) const = default;
@@ -80,10 +78,7 @@ struct PathExpr {
 
 struct PathExprHasher {
   size_t operator()(const PathExpr& expr) const {
-    size_t hash = velox::bits::hashMix(expr.step.hash(), expr.base->id());
-    return expr.subscriptExpr
-        ? velox::bits::hashMix(hash, expr.subscriptExpr->id())
-        : hash;
+    return velox::bits::hashMix(expr.step.hash(), expr.base->id());
   }
 };
 
@@ -275,13 +270,23 @@ class ToGraph {
       ColumnCP& resultColumn,
       const logical_plan::LogicalPlanNode*& context);
 
-  // Makes dedupped getters for 'steps'. if steps is below skyline,
-  // nullptr. If 'steps' intersects 'skyline' returns skyline wrapped
-  // in getters that are not in skyline. If no skyline, puts dedupped
-  // getters defined by 'steps' on 'base' or 'column' if 'base' is
-  // nullptr.
+  // Constructs an expression that applies 'steps' to 'base' in reversed order.
+  ExprCP makeGetter(const Step& step, ExprCP base);
+
+  // Constructs an expression that applies 'steps' to 'base'.
+  ExprCP makeGetters(std::span<const Step> steps, ExprCP base);
+
+  // Makes dedupped getters for 'steps'. Returns nullptr if 'steps' are below
+  // skyline. If 'steps' intersects 'skyline' returns skyline wrapped in getters
+  // that are not in skyline. If no skyline, puts dedupped getters defined by
+  // 'steps' on 'base' or 'column' if 'base' is nullptr.
+  //
+  // @param steps Steps in reverse order. E.g. [a, b, c] means c.b.a.
+  // @param skyline Skyline to lookup the base of the path.
+  // @param base Base of the path. Used if 'skyline' and 'column' are null.
+  // @param column Base of the path as a column. Used if 'skyline' is null.
   ExprCP makeGettersOverSkyline(
-      const std::vector<Step>& steps,
+      std::span<const Step> steps,
       const SubfieldProjections* skyline,
       const logical_plan::ExprPtr& base,
       ColumnCP column);

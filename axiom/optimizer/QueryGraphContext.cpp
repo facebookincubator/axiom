@@ -134,9 +134,13 @@ bool Step::operator<(const Step& other) const {
   if (kind != other.kind) {
     return kind < other.kind;
   }
-  if (field != other.field) {
-    return field < other.field;
+
+  if (kind != StepKind::kField) {
+    if (field != other.field) {
+      return field < other.field;
+    }
   }
+
   return id < other.id;
 }
 
@@ -239,6 +243,9 @@ void Path::subfieldSkyline(BitSet& subfields) {
 
   auto ctx = queryCtx();
   bool allFields = false;
+  // Groups paths by their size (number of steps - 1). This allows efficient
+  // prefix-based filtering: paths at index i can only be prefixes of paths at
+  // indices > i.
   std::vector<std::vector<PathCP>> bySize;
   subfields.forEach([&](auto id) {
     auto path = ctx->pathById(id);
