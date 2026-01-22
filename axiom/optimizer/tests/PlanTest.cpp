@@ -1049,7 +1049,10 @@ TEST_F(PlanTest, lambdaArgs) {
   auto logicalPlan = lp::PlanBuilder{}
                          .tableScan(kTestConnectorId, "t")
                          .with({"b * 2 as x"})
-                         .with({"transform(a, x -> cardinality(x) + b) as y"})
+                         .with({
+                             "transform(a, x -> cardinality(x) + b)[1] as y",
+                             "transform(a, xx -> cardinality(xx) + b)[1] as z",
+                         })
                          .build();
 
   auto plan = toSingleNodePlan(logicalPlan);

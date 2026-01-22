@@ -514,13 +514,6 @@ void ToGraph::getExprForField(
   while (context) {
     const auto& name = field->name();
 
-    if (auto it = lambdaSignature_.find(name); it != lambdaSignature_.end()) {
-      resultColumn = it->second;
-      resultExpr = nullptr;
-      context = nullptr;
-      return;
-    }
-
     const auto ordinal = context->outputType()->getChildIdx(name);
     if (context->is(lp::NodeKind::kProject)) {
       const auto* project = context->as<lp::ProjectNode>();
@@ -622,19 +615,27 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
       ColumnCP column = nullptr;
       if (expr->isInputReference()) {
         const auto* field = expr->as<lp::InputReferenceExpr>();
-        if (source == nullptr) {
-          const auto& name = field->name();
-          for (const auto* exprSource : exprSources_) {
-            if (exprSource->outputType()->getChildIdxIfExists(name)) {
-              source = exprSource;
-              break;
+
+        if (auto it = lambdaSignature_.find(field->name());
+            it != lambdaSignature_.end()) {
+          column = it->second;
+          expr = nullptr;
+        } else {
+          if (source == nullptr) {
+            const auto& name = field->name();
+
+            for (const auto* exprSource : exprSources_) {
+              if (exprSource->outputType()->getChildIdxIfExists(name)) {
+                source = exprSource;
+                break;
+              }
             }
           }
-        }
-        VELOX_CHECK_NOT_NULL(source);
-        getExprForField(field, expr, column, source);
-        if (expr) {
-          continue;
+          VELOX_CHECK_NOT_NULL(source);
+          getExprForField(field, expr, column, source);
+          if (expr) {
+            continue;
+          }
         }
       }
 
@@ -663,7 +664,12 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
       SCOPE_EXIT {
         exprSources_ = originalExprSources;
       };
-      exprSources_ = {source};
+
+      // 'source' can be null if 'inputExpr' is a subfield over a function call.
+      if (source != nullptr) {
+        exprSources_ = {source};
+      }
+
       return makeGettersOverSkyline(steps, skyline, expr, column);
     }
     steps.push_back(step);
@@ -1301,6 +1307,11 @@ struct AggregateDedupHasher {
 } // namespace
 
 AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
+  exprSources_ = {agg.onlyInput().get()};
+  SCOPE_EXIT {
+    exprSources_.clear();
+  };
+
   ColumnVector columns;
 
   ExprVector deduppedGroupingKeys;
