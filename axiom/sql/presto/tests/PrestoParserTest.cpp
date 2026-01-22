@@ -398,6 +398,11 @@ TEST_F(PrestoParserTest, syntaxErrors) {
       },
       ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
           "Syntax error at 2:5: mismatched input '<EOF>'")));
+
+  EXPECT_THAT(
+      [&]() { parser.parse("SELECT * FROM (VALUES 1, 2, 3)) blah..."); },
+      ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+          "Syntax error at 1:30: mismatched input ')' expecting <EOF>")));
 }
 
 TEST_F(PrestoParserTest, types) {
