@@ -57,10 +57,7 @@ lp::ExprPtr stepToLogicalPlanGetter(Step step, const lp::ExprPtr& arg) {
       }
 
       return std::make_shared<lp::SpecialFormExpr>(
-          *type,
-          lp::SpecialForm::kDereference,
-          arg,
-          makeKey(VARCHAR(), step.field));
+          *type, lp::SpecialForm::kDereference, arg, key);
     }
 
     case StepKind::kSubscript: {
@@ -263,56 +260,6 @@ class SubfieldTest : public QueryTestBase,
     return result;
   }
 
-  void testParallelExpr(FeatureOptions& opts, const RowTypePtr& rowType) {
-    core::PlanNodePtr referencePlan;
-    // No randoms in test expr, different runs must come out the same.
-    opts.randomPct = 0;
-
-    {
-      std::vector<std::string> names;
-      std::vector<core::TypedExprPtr> exprs;
-
-      opts.rng.seed(1);
-      makeExprs(opts, names, exprs);
-
-      referencePlan = PlanBuilder()
-                          .tableScan("features", rowType)
-                          .addNode([&](std::string id, auto node) {
-                            return std::make_shared<core::ProjectNode>(
-                                id, std::move(names), std::move(exprs), node);
-                          })
-                          .planNode();
-    }
-
-    std::vector<std::string> names;
-    std::vector<lp::ExprPtr> exprs;
-
-    opts.rng.seed(1);
-    makeLogicalExprs(opts, names, exprs);
-
-    lp::PlanBuilder::Context ctx;
-    auto logicalPlan = std::make_shared<lp::ProjectNode>(
-        ctx.planNodeIdGenerator->next(),
-        lp::PlanBuilder(ctx)
-            .tableScan(kHiveConnectorId, "features", rowType->names())
-            .build(),
-        std::move(names),
-        std::move(exprs));
-
-    optimizerOptions_.parallelProjectWidth = 8;
-    auto fragmentedPlan = planVelox(logicalPlan);
-
-    auto* parallelProject = core::PlanNode::findFirstNode(
-        extractPlanNode(fragmentedPlan).get(), [](const core::PlanNode* node) {
-          return dynamic_cast<const core::ParallelProjectNode*>(node) !=
-              nullptr;
-        });
-
-    ASSERT_TRUE(parallelProject != nullptr);
-
-    checkSame(fragmentedPlan, referencePlan);
-  }
-
   std::string subfield(std::string_view first, std::string_view rest = "")
       const {
     return GetParam() == 3 ? fmt::format(".{}{}", first, rest)
@@ -421,6 +368,27 @@ class SubfieldTest : public QueryTestBase,
   static core::PlanNodePtr extractPlanNode(const PlanAndStats& plan) {
     return plan.plan->fragments().at(0).fragment.planNode;
   }
+
+  std::vector<velox::RowVectorPtr> createFeaturesTable(FeatureOptions& opts) {
+    opts.rng.seed(1);
+    auto vectors = makeFeatures(1, 100, opts, pool_.get());
+
+    const auto rowType = vectors[0]->rowType();
+
+    auto config = std::make_shared<dwrf::Config>();
+    config->set(dwrf::Config::FLATTEN_MAP, true);
+    config->set<const std::vector<uint32_t>>(
+        dwrf::Config::MAP_FLAT_COLS, {2, 3, 4});
+
+    createTable("features", vectors, config);
+
+    return vectors;
+  }
+
+  std::vector<velox::RowVectorPtr> createFeaturesTable() {
+    FeatureOptions opts;
+    return createFeaturesTable(opts);
+  }
 };
 
 TEST_P(SubfieldTest, structs) {
@@ -451,19 +419,93 @@ TEST_P(SubfieldTest, structs) {
   checkSame(fragmentedPlan, referencePlan);
 }
 
+TEST_P(SubfieldTest, genie) {
+  createFeaturesTable();
+
+  declareGenies();
+
+  // Selected fields of genie are accessed. The uid and idslf args are not
+  // accessed and should not be in the table scan.
+  {
+    auto logicalPlan =
+        lp::PlanBuilder()
+            .tableScan(kHiveConnectorId, "features")
+            .project(
+                {"genie(uid, float_features, id_list_features, id_score_list_features) as g"})
+            // Access some fields of the genie by name, others by index.
+            .project(
+                {"g.ff[10200::int] as f2",
+                 "g[2][10100::int] as f11",
+                 "g[2][10200::int] + 22::REAL  as f2b",
+                 "g.idlf[201600::int] as idl100"})
+            .build();
+
+    auto plan = extractPlanNode(planVelox(logicalPlan));
+    verifyRequiredSubfields(
+        plan,
+        {
+            {"uid", {}},
+            {"float_features", {subfield("10200"), subfield("10100")}},
+            {"id_list_features", {subfield("201600")}},
+        });
+  }
+
+  // All of genie is returned.
+  {
+    auto logicalPlan =
+        lp::PlanBuilder()
+            .tableScan(kHiveConnectorId, "features")
+            .project(
+                {"genie(uid, float_features, id_list_features, id_score_list_features) as gtemp"})
+            .project({"gtemp as g"})
+            .project(
+                {"g",
+                 "g[2][10100::int] as f10",
+                 "g[2][10200::int] as f2",
+                 "g[3][200600::int] as idl100",
+                 "cardinality(g[3][200600::int]) as idl100card"})
+            .build();
+
+    auto plan = extractPlanNode(planVelox(logicalPlan));
+    verifyRequiredSubfields(
+        plan,
+        {
+            {"uid", {}},
+            {"float_features", {}},
+            {"id_list_features", {}},
+            {"id_score_list_features", {}},
+        });
+  }
+
+  // We expect the genie to explode and the filters to be first.
+  {
+    auto logicalPlan =
+        lp::PlanBuilder()
+            .tableScan(kHiveConnectorId, "features")
+            .project(
+                {"exploding_genie(uid, float_features, id_list_features, id_score_list_features) as g"})
+            .project({"g[2] as ff", "g as gg"})
+            .project(
+                {"ff[10100::int] as f10",
+                 "ff[10100::int] as f11",
+                 "ff[10200::int] as f2",
+                 "gg[2][10200::int] + 22::REAL as f2b",
+                 "gg[3][200600::int] as idl100"})
+            .filter("f10 < 10::REAL and f11 < 10::REAL")
+            .build();
+
+    auto plan = extractPlanNode(planVelox(logicalPlan));
+    verifyRequiredSubfields(
+        plan,
+        {
+            {"float_features", {subfield("10100"), subfield("10200")}},
+            {"id_list_features", {subfield("200600")}},
+        });
+  }
+}
+
 TEST_P(SubfieldTest, maps) {
-  FeatureOptions opts;
-  opts.rng.seed(1);
-  auto vectors = makeFeatures(1, 100, opts, pool_.get());
-
-  const auto rowType = vectors[0]->rowType();
-
-  auto config = std::make_shared<dwrf::Config>();
-  config->set(dwrf::Config::FLATTEN_MAP, true);
-  config->set<const std::vector<uint32_t>>(
-      dwrf::Config::MAP_FLAT_COLS, {2, 3, 4});
-
-  createTable("features", vectors, config);
+  auto vectors = createFeaturesTable();
 
   testMakeRowFromMap();
 
@@ -552,87 +594,6 @@ TEST_P(SubfieldTest, maps) {
         });
   }
 
-  declareGenies();
-
-  // Selected fields of genie are accessed. The uid and idslf args are not
-  // accessed and should not be in the table scan.
-  {
-    auto logicalPlan =
-        lp::PlanBuilder()
-            .tableScan(kHiveConnectorId, "features")
-            .project(
-                {"genie(uid, float_features, id_list_features, id_score_list_features) as g"})
-            // Access some fields of the genie by name, others by index.
-            .project(
-                {"g.ff[10200::int] as f2",
-                 "g[2][10100::int] as f11",
-                 "g[2][10200::int] + 22::REAL  as f2b",
-                 "g.idlf[201600::int] as idl100"})
-            .build();
-
-    auto plan = extractPlanNode(planVelox(logicalPlan));
-    verifyRequiredSubfields(
-        plan,
-        {
-            {"uid", {}},
-            {"float_features", {subfield("10200"), subfield("10100")}},
-            {"id_list_features", {subfield("201600")}},
-        });
-  }
-
-  // All of genie is returned.
-  {
-    auto logicalPlan =
-        lp::PlanBuilder()
-            .tableScan(kHiveConnectorId, "features")
-            .project(
-                {"genie(uid, float_features, id_list_features, id_score_list_features) as gtemp"})
-            .project({"gtemp as g"})
-            .project(
-                {"g",
-                 "g[2][10100::int] as f10",
-                 "g[2][10200::int] as f2",
-                 "g[3][200600::int] as idl100",
-                 "cardinality(g[3][200600::int]) as idl100card"})
-            .build();
-
-    auto plan = extractPlanNode(planVelox(logicalPlan));
-    verifyRequiredSubfields(
-        plan,
-        {
-            {"uid", {}},
-            {"float_features", {}},
-            {"id_list_features", {}},
-            {"id_score_list_features", {}},
-        });
-  }
-
-  // We expect the genie to explode and the filters to be first.
-  {
-    auto logicalPlan =
-        lp::PlanBuilder()
-            .tableScan(kHiveConnectorId, "features")
-            .project(
-                {"exploding_genie(uid, float_features, id_list_features, id_score_list_features) as g"})
-            .project({"g[2] as ff", "g as gg"})
-            .project(
-                {"ff[10100::int] as f10",
-                 "ff[10100::int] as f11",
-                 "ff[10200::int] as f2",
-                 "gg[2][10200::int] + 22::REAL as f2b",
-                 "gg[3][200600::int] as idl100"})
-            .filter("f10 < 10::REAL and f11 < 10::REAL")
-            .build();
-
-    auto plan = extractPlanNode(planVelox(logicalPlan));
-    verifyRequiredSubfields(
-        plan,
-        {
-            {"float_features", {subfield("10100"), subfield("10200")}},
-            {"id_list_features", {subfield("200600")}},
-        });
-  }
-
   {
     auto builder =
         lp::PlanBuilder()
@@ -644,8 +605,59 @@ TEST_P(SubfieldTest, maps) {
     auto expected = extractAndIncrementIdList(vectors, 201800);
     assertEqualResults(expected, result.results);
   }
+}
 
-  testParallelExpr(opts, rowType);
+TEST_P(SubfieldTest, parallelExpr) {
+  FeatureOptions opts;
+  const auto vectors = createFeaturesTable(opts);
+  const auto rowType = vectors[0]->rowType();
+
+  // No randoms in test expr, different runs must come out the same.
+  opts.randomPct = 0;
+
+  core::PlanNodePtr referencePlan;
+  {
+    std::vector<std::string> names;
+    std::vector<core::TypedExprPtr> exprs;
+
+    opts.rng.seed(1);
+    makeExprs(opts, names, exprs);
+
+    referencePlan = PlanBuilder()
+                        .tableScan("features", rowType)
+                        .addNode([&](std::string id, auto node) {
+                          return std::make_shared<core::ProjectNode>(
+                              id, std::move(names), std::move(exprs), node);
+                        })
+                        .planNode();
+  }
+
+  std::vector<std::string> names;
+  std::vector<lp::ExprPtr> exprs;
+
+  opts.rng.seed(1);
+  makeLogicalExprs(opts, names, exprs);
+
+  lp::PlanBuilder::Context ctx;
+  auto logicalPlan = std::make_shared<lp::ProjectNode>(
+      ctx.planNodeIdGenerator->next(),
+      lp::PlanBuilder(ctx)
+          .tableScan(kHiveConnectorId, "features", rowType->names())
+          .build(),
+      std::move(names),
+      std::move(exprs));
+
+  optimizerOptions_.parallelProjectWidth = 8;
+  auto fragmentedPlan = planVelox(logicalPlan);
+
+  auto* parallelProject = core::PlanNode::findFirstNode(
+      extractPlanNode(fragmentedPlan).get(), [](const core::PlanNode* node) {
+        return dynamic_cast<const core::ParallelProjectNode*>(node) != nullptr;
+      });
+
+  ASSERT_TRUE(parallelProject != nullptr);
+
+  checkSame(fragmentedPlan, referencePlan);
 }
 
 TEST_P(SubfieldTest, overAggregation) {

@@ -714,6 +714,7 @@ TEST_F(PrestoParserTest, concat) {
 TEST_F(PrestoParserTest, subscript) {
   auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
   testSql("SELECT array[1, 2, 3][1] FROM nation", matcher);
+  testSql("SELECT row(1,2)[2] FROM nation", matcher);
 }
 
 TEST_F(PrestoParserTest, dereference) {
@@ -739,15 +740,20 @@ TEST_F(PrestoParserTest, dereference) {
   testSql("SELECT T.X FROM UNNEST(array[1, 2, 3]) as t(x)", matcher);
   testSql("SELECT t.x FROM UNNEST(array[1, 2, 3]) as t(X)", matcher);
 
-  // TODO Make the following queries work when legacy_row_field_ordinal_access
-  // is enabled.
-  EXPECT_THROW(
-      parseSql("SELECT t.x.field0 FROM UNNEST(array[row(1, 2)]) as t(x)"),
-      VeloxUserError);
+  testSql("SELECT t.x.field0 FROM UNNEST(array[row(1, 2)]) as t(x)", matcher);
+  testSql("SELECT x.field0 FROM UNNEST(array[row(1, 2)]) as t(x)", matcher);
+  testSql("SELECT x.field000 FROM UNNEST(array[row(1, 2)]) as t(x)", matcher);
 
-  EXPECT_THROW(
-      parseSql("SELECT x.field0 FROM UNNEST(array[row(1, 2)]) as t(x)"),
-      VeloxUserError);
+  testSql("SELECT x.field1 FROM UNNEST(array[row(1, 2)]) as t(x)", matcher);
+  testSql("SELECT x.field01 FROM UNNEST(array[row(1, 2)]) as t(x)", matcher);
+
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT x.field2 FROM UNNEST(array[row(1, 2)]) as t(x)"),
+      "Invalid legacy field name: field2");
+
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT cast(row(1, 2) as row(a int, b int)).field0"),
+      "Cannot access named field using legacy field name: field0 vs. a");
 }
 
 TEST_F(PrestoParserTest, row) {
