@@ -596,6 +596,16 @@ TEST_F(PrestoParserTest, timestampLiteral) {
       "Not a valid timestamp literal");
 }
 
+TEST_F(PrestoParserTest, atTimeZone) {
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
+  testSql(
+      "SELECT from_unixtime(1700000000, 'UTC') AT TIME ZONE 'America/New_York'",
+      matcher);
+  testSql(
+      "SELECT date_format(date_trunc('hour', from_unixtime(1700000000, 'UTC') AT TIME ZONE 'GMT'), '%Y-%m-%d+%H:00')",
+      matcher);
+}
+
 TEST_F(PrestoParserTest, null) {
   auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
   testSql("SELECT 1 is null", matcher);

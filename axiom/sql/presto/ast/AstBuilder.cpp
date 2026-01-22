@@ -1343,7 +1343,12 @@ std::any AstBuilder::visitArithmeticUnary(
 
 std::any AstBuilder::visitAtTimeZone(PrestoSqlParser::AtTimeZoneContext* ctx) {
   trace("visitAtTimeZone");
-  return visitChildren("visitAtTimeZone", ctx);
+
+  auto value = visitExpression(ctx->valueExpression());
+  auto timeZone = visitExpression(ctx->timeZoneSpecifier());
+
+  return std::static_pointer_cast<Expression>(
+      std::make_shared<AtTimeZone>(getLocation(ctx), value, timeZone));
 }
 
 std::any AstBuilder::visitDereference(
@@ -1856,7 +1861,7 @@ std::any AstBuilder::visitTimeZoneInterval(
 std::any AstBuilder::visitTimeZoneString(
     PrestoSqlParser::TimeZoneStringContext* ctx) {
   trace("visitTimeZoneString");
-  return visitChildren("visitTimeZoneString", ctx);
+  return visitExpression(ctx->string());
 }
 
 std::any AstBuilder::visitComparisonOperator(
