@@ -19,6 +19,7 @@
 #include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/parse/Expressions.h"
+#include "velox/parse/PlanNodeIdGenerator.h"
 
 namespace facebook::axiom::logical_plan {
 
@@ -40,11 +41,14 @@ class ExprResolver {
       std::shared_ptr<velox::core::QueryCtx> queryCtx,
       bool enableCoercions,
       FunctionRewriteHook hook = nullptr,
-      std::shared_ptr<velox::memory::MemoryPool> pool = nullptr)
+      std::shared_ptr<velox::memory::MemoryPool> pool = nullptr,
+      std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator =
+          nullptr)
       : queryCtx_(std::move(queryCtx)),
         enableCoercions_{enableCoercions},
         hook_(std::move(hook)),
-        pool_(std::move(pool)) {}
+        pool_(std::move(pool)),
+        planNodeIdGenerator_{std::move(planNodeIdGenerator)} {}
 
   ExprPtr resolveScalarTypes(
       const velox::core::ExprPtr& expr,
@@ -88,5 +92,6 @@ class ExprResolver {
   const bool enableCoercions_;
   FunctionRewriteHook hook_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
+  std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator_;
 };
 } // namespace facebook::axiom::logical_plan

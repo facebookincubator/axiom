@@ -87,6 +87,29 @@ TEST_F(SubqueryTest, scalar) {
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
+  // IN <subquery> with coercion. The subquery returns a tinyint, which needs to
+  // be coerced to bigint to match the left side of the IN predicate.
+  {
+    auto query =
+        "select * from nation where n_regionkey "
+        "IN (select cast(r_regionkey as tinyint) from region where r_name > 'ASIA')";
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .hashJoin(
+                core::PlanMatcherBuilder()
+                    .hiveScan("region", test::gt("r_name", "ASIA"))
+                    .project({"cast(cast(r_regionkey as tinyint) as bigint)"})
+                    .build(),
+                velox::core::JoinType::kLeftSemiFilter)
+            .build();
+
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
   // NOT IN <subquery>
   {
     auto query =
