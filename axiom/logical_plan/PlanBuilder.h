@@ -98,7 +98,8 @@ class PlanBuilder {
             context.queryCtx,
             enableCoercions,
             context.hook,
-            context.pool} {
+            context.pool,
+            context.planNodeIdGenerator} {
     VELOX_CHECK_NOT_NULL(planNodeIdGenerator_);
     VELOX_CHECK_NOT_NULL(nameAllocator_);
   }

@@ -15,6 +15,7 @@
  */
 #include "axiom/logical_plan/ExprResolver.h"
 #include "axiom/logical_plan/ExprApi.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/Expr.h"
@@ -123,11 +124,33 @@ ExprPtr resolveSpecialFormWithCoercions(
   return std::make_shared<SpecialFormExpr>(returnType, form, inputs);
 }
 
-ExprPtr applyCoercion(const ExprPtr& input, const velox::TypePtr& type) {
+ExprPtr applyCoercion(
+    const ExprPtr& input,
+    const velox::TypePtr& type,
+    const std::shared_ptr<velox::core::PlanNodeIdGenerator>&
+        planNodeIdGenerator) {
   if (input->isSpecialForm() &&
       input->as<SpecialFormExpr>()->form() == SpecialForm::kCast) {
     return std::make_shared<SpecialFormExpr>(
         type, SpecialForm::kCast, input->inputAt(0));
+  }
+
+  if (input->isSubquery()) {
+    const auto* subqueryExpr = input->as<SubqueryExpr>();
+    const auto& subquery = subqueryExpr->subquery();
+
+    VELOX_CHECK_EQ(subquery->outputType()->size(), 1);
+
+    return std::make_shared<SubqueryExpr>(std::make_shared<ProjectNode>(
+        planNodeIdGenerator->next(),
+        subquery,
+        std::vector<std::string>{subquery->outputType()->nameOf(0)},
+        std::vector<ExprPtr>{applyCoercion(
+            std::make_shared<InputReferenceExpr>(
+                subquery->outputType()->childAt(0),
+                subquery->outputType()->nameOf(0)),
+            type,
+            planNodeIdGenerator)}));
   }
 
   return std::make_shared<SpecialFormExpr>(type, SpecialForm::kCast, input);
@@ -136,7 +159,9 @@ ExprPtr applyCoercion(const ExprPtr& input, const velox::TypePtr& type) {
 ExprPtr tryResolveSpecialForm(
     const std::string& name,
     std::vector<ExprPtr>& resolvedInputs,
-    bool allowCoercions) {
+    bool allowCoercions,
+    const std::shared_ptr<velox::core::PlanNodeIdGenerator>&
+        planNodeIdGenerator) {
   if (name == "and") {
     return std::make_shared<SpecialFormExpr>(
         velox::BOOLEAN(), SpecialForm::kAnd, resolvedInputs);
@@ -228,7 +253,8 @@ ExprPtr tryResolveSpecialForm(
         }
 
         if (velox::TypeCoercer::coercible(newType, type)) {
-          resolvedInputs[i] = applyCoercion(resolvedInputs[i], type);
+          resolvedInputs[i] =
+              applyCoercion(resolvedInputs[i], type, planNodeIdGenerator);
           continue;
         }
 
@@ -236,7 +262,8 @@ ExprPtr tryResolveSpecialForm(
           type = newType;
 
           for (auto j = 0; j < i; ++j) {
-            resolvedInputs[j] = applyCoercion(resolvedInputs[j], type);
+            resolvedInputs[j] =
+                applyCoercion(resolvedInputs[j], type, planNodeIdGenerator);
           }
         }
       }
@@ -626,8 +653,8 @@ ExprPtr ExprResolver::resolveScalarTypes(
       }
     }
 
-    if (auto specialForm =
-            tryResolveSpecialForm(name, inputs, enableCoercions_)) {
+    if (auto specialForm = tryResolveSpecialForm(
+            name, inputs, enableCoercions_, planNodeIdGenerator_)) {
       if (auto folded = tryFoldSpecialForm(name, inputs)) {
         return folded;
       }
