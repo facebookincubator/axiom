@@ -1199,6 +1199,11 @@ ExprVector ToGraph::translateExprs(const std::vector<lp::ExprPtr>& source) {
 }
 
 void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
+  exprSources_ = {unnest.onlyInput().get()};
+  SCOPE_EXIT {
+    exprSources_.clear();
+  };
+
   auto* unnestDt = currentDt_;
   const bool needsSeparateUnnest = unnestDt->hasAggregation() ||
       unnestDt->hasOrderBy() || unnestDt->hasLimit();
@@ -1467,6 +1472,11 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 }
 
 void ToGraph::addOrderBy(const lp::SortNode& order) {
+  exprSources_ = {order.onlyInput().get()};
+  SCOPE_EXIT {
+    exprSources_.clear();
+  };
+
   auto [deduppedOrderKeys, deduppedOrderTypes] =
       dedupOrdering(order.ordering());
 

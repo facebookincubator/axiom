@@ -660,6 +660,58 @@ TEST_P(SubfieldTest, parallelExpr) {
   checkSame(fragmentedPlan, referencePlan);
 }
 
+TEST_P(SubfieldTest, unnest) {
+  createTable(
+      "t_unnest",
+      {makeRowVector(
+          {"a"},
+          {makeNestedArrayVectorFromJson<int64_t>(
+              {"[[1, 2], [3, 4]]", "[]"})})});
+
+  auto logicalPlan = lp::PlanBuilder()
+                         .tableScan(kHiveConnectorId, "t_unnest")
+                         .unnest({"a[1]"})
+                         .map({"a[3]"})
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .project()
+                     .unnest()
+                     .project()
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  verifyRequiredSubfields(plan, {{"a", {"[1]", "[3]"}}});
+}
+
+TEST_P(SubfieldTest, orderBy) {
+  createTable(
+      "t_orderby",
+      {makeRowVector(
+          {"a"}, {makeArrayVectorFromJson<int64_t>({"[1, 2]", "[1, 2, 3]"})})});
+
+  auto logicalPlan = lp::PlanBuilder()
+                         .tableScan(kHiveConnectorId, "t_orderby")
+                         .orderBy({"a[1]"})
+                         .map({"a[3]"})
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .project()
+                     .orderBy()
+                     .project()
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  verifyRequiredSubfields(plan, {{"a", {"[1]", "[3]"}}});
+}
+
 TEST_P(SubfieldTest, overAggregation) {
   createTable(
       "t",
