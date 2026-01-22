@@ -693,6 +693,12 @@ void alignJoinSides(
     RelationOpPtr& otherInput,
     const ExprVector& otherKeys,
     PlanState& otherState) {
+  if (input->distribution().isGather() &&
+      otherInput->distribution().isGather()) {
+    // No alignment needed.
+    return;
+  }
+
   auto part = joinKeyPartition(input, keys);
   if (part.empty()) {
     Distribution distribution{
@@ -1411,7 +1417,9 @@ void Optimization::joinByHash(
       candidate.join->rlFanout(),
       buildState.cost.cardinality / state.cost.cardinality);
 
-  if (!isSingleWorker_) {
+  if (!isSingleWorker_ &&
+      !(probeInput->distribution().isGather() &&
+        buildInput->distribution().isGather())) {
     if (!partKeys.empty()) {
       if (needsShuffle) {
         if (copartition.empty()) {

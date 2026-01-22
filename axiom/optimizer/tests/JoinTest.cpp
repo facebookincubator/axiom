@@ -547,5 +547,31 @@ TEST_F(JoinTest, joinOnClause) {
   }
 }
 
+TEST_F(JoinTest, leftJoinOverValues) {
+  auto query =
+      "SELECT * FROM (VALUES 1, 2, 3) as t(x) LEFT JOIN (VALUES 1, 2, 3) as u(y) ON x = y";
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .values()
+                     .hashJoin(
+                         core::PlanMatcherBuilder().values().build(),
+                         core::JoinType::kLeft)
+                     .project()
+                     .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto distributedPlan = planVelox(logicalPlan).plan;
+    EXPECT_EQ(1, distributedPlan->fragments().size());
+    auto plan = distributedPlan->fragments().at(0).fragment.planNode;
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
