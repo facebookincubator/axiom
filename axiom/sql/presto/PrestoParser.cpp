@@ -72,13 +72,13 @@ class ParserHelper {
   }
 
   PrestoSqlParser::StatementContext* parse() const {
-    auto ctx = parser_->statement();
+    auto ctx = parser_->singleStatement();
 
     if (parser_->getNumberOfSyntaxErrors() > 0) {
       throw std::runtime_error(errorListener_.firstError);
     }
 
-    return ctx;
+    return ctx->statement();
   }
 
  private:
