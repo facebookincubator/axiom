@@ -1340,28 +1340,61 @@ void Optimization::joinByHash(
 
   auto* joinEdge = candidate.join;
 
-  PlanObjectSet joinColumns;
-  joinColumns.unionObjects(joinEdge->leftColumns());
-  joinColumns.unionObjects(joinEdge->rightColumns());
+  PlanObjectSet probeFilterColumns;
+  probeFilterColumns.unionColumns(candidate.join->filter());
+  probeFilterColumns.intersect(probeColumns);
 
   // Non-trivial projections over input needed by the join must be computed
   // first. These projections include expressions used in join keys and
-  // joinEdge.{right, left}Columns.
+  // joinEdge.{right, left}Columns that are needed downstream.
 
-  PrecomputeProjection precomputeProbe(probeInput, state.dt);
-  auto leftColumns = precomputeProbe.toColumns(
-      joinEdge->leftExprs(), &joinEdge->leftColumns());
+  PrecomputeProjection precomputeProbe(
+      probeInput, state.dt, /*projectAllInputs=*/false);
+
+  // Only add leftExprs for leftColumns needed downstream.
+  for (size_t i = 0; i < joinEdge->leftColumns().size(); ++i) {
+    if (state.downstreamColumns().contains(joinEdge->leftColumns()[i])) {
+      // Override any existing mapping for this output column to ensure we
+      // always map to a precomputed column expression. The initial mapping
+      // from makeJoinColumnMapping() may point to a non-column expression
+      // (e.g. a call like coalesce(t0, 0)), which ProjectionBuilder cannot
+      // project.
+      joinColumnMapping[joinEdge->leftColumns()[i]] = precomputeProbe.toColumn(
+          joinEdge->leftExprs()[i], joinEdge->leftColumns()[i]);
+    }
+  }
   auto probeKeys = precomputeProbe.toColumns(probe.keys);
+  probeFilterColumns.forEach<Column>(
+      [&](auto column) { precomputeProbe.toColumn(column); });
+  state.downstreamColumns().forEach<Column>([&](auto column) {
+    if (probeColumns.contains(column) &&
+        (probeOnly || !buildColumns.contains(column))) {
+      precomputeProbe.toColumn(column);
+    }
+  });
   probeInput = std::move(precomputeProbe).maybeProject();
 
-  PrecomputeProjection precomputeBuild(buildInput, state.dt);
-  auto rightColumns = precomputeBuild.toColumns(
-      joinEdge->rightExprs(), &joinEdge->rightColumns());
-  auto buildKeys = precomputeBuild.toColumns(build.keys);
-  buildInput = std::move(precomputeBuild).maybeProject();
+  PrecomputeProjection precomputeBuild(
+      buildInput, state.dt, /*projectAllInputs=*/false);
 
-  joinColumnMapping =
-      makeJoinColumnMapping(candidate.join, leftColumns, rightColumns);
+  // Only add rightExprs for rightColumns needed downstream.
+  for (size_t i = 0; i < joinEdge->rightColumns().size(); ++i) {
+    if (state.downstreamColumns().contains(joinEdge->rightColumns()[i])) {
+      auto precomputed = precomputeBuild.toColumn(
+          joinEdge->rightExprs()[i], joinEdge->rightColumns()[i]);
+      joinColumnMapping[joinEdge->rightColumns()[i]] = precomputed;
+    }
+  }
+  auto buildKeys = precomputeBuild.toColumns(build.keys);
+  buildFilterColumns.forEach<Column>(
+      [&](auto column) { precomputeBuild.toColumn(column); });
+  state.downstreamColumns().forEach<Column>([&](auto column) {
+    if (buildColumns.contains(column) &&
+        (probeOnly || !probeColumns.contains(column))) {
+      precomputeBuild.toColumn(column);
+    }
+  });
+  buildInput = std::move(precomputeBuild).maybeProject();
 
   ProjectionBuilder projectionBuilder;
   bool needsProjection = false;
@@ -1372,8 +1405,9 @@ void Optimization::joinByHash(
       return;
     }
 
-    if (joinColumns.contains(column)) {
-      projectionBuilder.add(column, joinColumnMapping.at(column));
+    auto it = joinColumnMapping.find(column);
+    if (it != joinColumnMapping.end()) {
+      projectionBuilder.add(column, it->second);
       needsProjection = true;
       return;
     }
