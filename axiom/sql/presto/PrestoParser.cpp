@@ -345,6 +345,11 @@ class ExprAnalyzer : public AstVisitor {
     }
   }
 
+  void visitAtTimeZone(AtTimeZone* node) override {
+    node->value()->accept(this);
+    node->timeZone()->accept(this);
+  }
+
   size_t numAggregates_{0};
   std::optional<std::string> aggregateName_;
 };
@@ -556,6 +561,14 @@ class RelationPlanner : public AstVisitor {
         } else {
           return lp::Cast(type, toExpr(cast->expression(), aggregateOptions));
         }
+      }
+
+      case NodeType::kAtTimeZone: {
+        auto* atTimeZone = node->as<AtTimeZone>();
+        return lp::Call(
+            "at_timezone",
+            toExpr(atTimeZone->value(), aggregateOptions),
+            toExpr(atTimeZone->timeZone(), aggregateOptions));
       }
 
       case NodeType::kSimpleCaseExpression: {
