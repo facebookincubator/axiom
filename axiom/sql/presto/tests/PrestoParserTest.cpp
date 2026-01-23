@@ -777,22 +777,33 @@ TEST_F(PrestoParserTest, row) {
 }
 
 TEST_F(PrestoParserTest, selectStar) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan();
-  testSql("SELECT * FROM nation", matcher);
-  testSql("(SELECT * FROM nation)", matcher);
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan();
+    testSql("SELECT * FROM nation", matcher);
+    testSql("(SELECT * FROM nation)", matcher);
+  }
 
-  // TODO Add support for these query shapes.
-  EXPECT_THROW(parseSql("SELECT *, * FROM nation"), VeloxRuntimeError);
-  EXPECT_THROW(
-      parseSql("SELECT *, n_nationkey FROM nation"), VeloxRuntimeError);
-  EXPECT_THROW(parseSql("SELECT nation.* FROM nation"), VeloxRuntimeError);
-  EXPECT_THROW(
-      parseSql("SELECT nation.*, n_nationkey + 1 FROM nation"),
-      VeloxRuntimeError);
-  EXPECT_THROW(
-      parseSql(
-          "SELECT nation.*, r_regionkey + 1 FROM nation, region WHERE n_regionkey=r_regionkey"),
-      VeloxRuntimeError);
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+    testSql("SELECT *, * FROM nation", matcher);
+    testSql("SELECT *, n_nationkey FROM nation", matcher);
+    testSql("SELECT nation.* FROM nation", matcher);
+    testSql("SELECT nation.*, n_nationkey + 1 FROM nation", matcher);
+  }
+
+  {
+    auto matcher =
+        lp::test::LogicalPlanMatcherBuilder()
+            .tableScan()
+            .join(lp::test::LogicalPlanMatcherBuilder().tableScan().build())
+            .filter()
+            .project();
+    testSql(
+        "SELECT nation.*, r_regionkey + 1 FROM nation, region WHERE n_regionkey = r_regionkey",
+        matcher);
+  }
+
+  VELOX_ASSERT_THROW(parseSql("SELECT r.* FROM region"), "Alias not found: r");
 }
 
 TEST_F(PrestoParserTest, mixedCaseColumnNames) {

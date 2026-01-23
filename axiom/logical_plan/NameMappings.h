@@ -87,6 +87,10 @@ class NameMappings {
   /// Used to produce final output.
   folly::F14FastMap<std::string, std::string> uniqueNames() const;
 
+  /// Returns a set of IDs for all columns that are accessible using specified
+  /// 'alias'.
+  folly::F14FastSet<std::string> idsWithAlias(const std::string& alias) const;
+
   std::string toString() const;
 
   void reset() {

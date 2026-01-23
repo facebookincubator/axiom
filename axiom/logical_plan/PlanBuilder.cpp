@@ -410,9 +410,6 @@ void PlanBuilder::resolveProjections(
           }
         } else {
           outputNames.push_back(newName(id));
-          if (alias.has_value()) {
-            mappings.add(alias.value(), outputNames.back());
-          }
         }
       } else {
         outputNames.push_back(newName(alias.value()));
@@ -1124,13 +1121,32 @@ std::vector<velox::TypePtr> PlanBuilder::outputTypes() const {
   return node_->outputType()->children();
 }
 
-std::vector<std::string> PlanBuilder::findOrAssignOutputNames() const {
-  auto size = numOutput();
+std::vector<std::string> PlanBuilder::findOrAssignOutputNames(
+    bool includeHiddenColumns,
+    const std::optional<std::string>& alias) const {
+  const auto size = numOutput();
+  const auto& inputType = node_->outputType();
 
   std::vector<std::string> names;
   names.reserve(size);
 
+  folly::F14FastSet<std::string> allowedIds;
+  if (alias.has_value()) {
+    allowedIds = outputMapping_->idsWithAlias(alias.value());
+    VELOX_USER_CHECK(!allowedIds.empty(), "Alias not found: {}", alias.value());
+  }
+
   for (auto i = 0; i < size; i++) {
+    const auto& id = inputType->nameOf(i);
+
+    if (!includeHiddenColumns && outputMapping_->isHidden(id)) {
+      continue;
+    }
+
+    if (alias.has_value() && !allowedIds.contains(id)) {
+      continue;
+    }
+
     names.push_back(findOrAssignOutputNameAt(i));
   }
 
