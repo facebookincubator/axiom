@@ -65,32 +65,28 @@ void Column::equals(ColumnCP other) const {
   }
 }
 
+Name cname(PlanObjectCP relation) {
+  switch (relation->type()) {
+    case PlanType::kTableNode:
+      return relation->as<BaseTable>()->cname;
+    case PlanType::kValuesTableNode:
+      return relation->as<ValuesTable>()->cname;
+    case PlanType::kUnnestTableNode:
+      return relation->as<UnnestTable>()->cname;
+    case PlanType::kDerivedTableNode:
+      return relation->as<DerivedTable>()->cname;
+    default:
+      VELOX_UNREACHABLE("Unexpected relation: {}", relation->typeName());
+  }
+}
+
 std::string Column::toString() const {
   const auto* opt = queryCtx()->optimization();
   if (!opt->cnamesInExpr() || relation_ == nullptr) {
     return name_;
   }
 
-  Name cname;
-  switch (relation_->type()) {
-    case PlanType::kTableNode:
-      cname = relation_->as<BaseTable>()->cname;
-      break;
-    case PlanType::kValuesTableNode:
-      cname = relation_->as<ValuesTable>()->cname;
-      break;
-    case PlanType::kUnnestTableNode:
-      cname = relation_->as<UnnestTable>()->cname;
-      break;
-    case PlanType::kDerivedTableNode:
-      cname = relation_->as<DerivedTable>()->cname;
-      break;
-    default:
-      VELOX_UNREACHABLE(
-          "Unexpected relation: {}", PlanTypeName::toName(relation_->type()));
-  }
-
-  return fmt::format("{}.{}", cname, name_);
+  return fmt::format("{}.{}", cname(relation_), name_);
 }
 
 Call::Call(
@@ -312,10 +308,9 @@ std::pair<std::string, bool> JoinEdge::sampleKey() const {
 
 std::string JoinEdge::toString() const {
   std::stringstream out;
-  out << "<join "
-      << (leftTable_ ? leftTable_->toString() : " multiple tables ");
+  out << "<join " << (leftTable_ ? cname(leftTable_) : " multiple tables ");
   if (leftOptional_ && rightOptional_) {
-    out << " full outr ";
+    out << " full outer ";
   } else if (markColumn_) {
     out << " exists project ";
   } else if (rightOptional_) {
@@ -331,7 +326,7 @@ std::string JoinEdge::toString() const {
   } else {
     out << " inner ";
   }
-  out << rightTable_->toString();
+  out << cname(rightTable_);
   out << " on ";
   for (size_t i = 0; i < leftKeys_.size(); ++i) {
     if (i > 0) {
