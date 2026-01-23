@@ -18,6 +18,7 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -415,6 +416,30 @@ TEST_F(JoinTest, crossJoin) {
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(JoinTest, leftCrossJoin) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+
+  // TODO Make these queries work.
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT * FROM t LEFT JOIN (SELECT count(*) FROM u) ON 1 = 1",
+        kTestConnectorId);
+    VELOX_ASSERT_THROW(
+        toSingleNodePlan(logicalPlan),
+        "Outer cross joins are not supported yet");
+  }
+
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT * FROM (SELECT count(*) FROM t) LEFT JOIN (SELECT count(*) FROM u) ON 1 = 1",
+        kTestConnectorId);
+    VELOX_ASSERT_THROW(
+        toSingleNodePlan(logicalPlan),
+        "Outer cross joins are not supported yet");
   }
 }
 

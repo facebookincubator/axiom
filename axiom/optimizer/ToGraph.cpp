@@ -1597,6 +1597,8 @@ void ToGraph::translateJoin(const lp::JoinNode& join) {
     extractNonInnerJoinEqualities(
         equality_, conjuncts, rightTable, leftKeys, rightKeys, leftTables);
 
+    VELOX_CHECK(!leftTables.empty(), "Outer cross joins are not supported yet");
+
     JoinEdge::Spec joinSpec{
         .filter = std::move(conjuncts),
         .leftOptional = leftOptional,
