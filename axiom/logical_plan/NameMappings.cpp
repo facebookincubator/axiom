@@ -110,6 +110,10 @@ void NameMappings::merge(const NameMappings& other) {
       mappings_.emplace(name, id);
     }
   }
+
+  for (const auto& id : other.hiddenIds_) {
+    markHidden(id);
+  }
 }
 
 void NameMappings::enableUnqualifiedAccess() {
@@ -143,6 +147,17 @@ folly::F14FastMap<std::string, std::string> NameMappings::uniqueNames() const {
   return names;
 }
 
+folly::F14FastSet<std::string> NameMappings::idsWithAlias(
+    const std::string& alias) const {
+  folly::F14FastSet<std::string> ids;
+  for (const auto& [name, id] : mappings_) {
+    if (name.alias.has_value() && name.alias.value() == alias) {
+      ids.emplace(id);
+    }
+  }
+  return ids;
+}
+
 std::string NameMappings::toString() const {
   bool first = true;
   std::stringstream out;
@@ -153,6 +168,9 @@ std::string NameMappings::toString() const {
       first = false;
     }
     out << name.toString() << " -> " << id;
+    if (hiddenIds_.contains(id)) {
+      out << " (hidden)";
+    }
   }
   return out.str();
 }
