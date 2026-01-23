@@ -2062,7 +2062,7 @@ void ToGraph::processSubqueries(
         *expr->inputAt(0)->as<lp::SubqueryExpr>()->subquery());
     VELOX_CHECK(!correlatedConjuncts_.empty());
 
-    PlanObjectCP leftTable = nullptr;
+    PlanObjectSet leftTables;
     ExprVector leftKeys;
     ExprVector rightKeys;
     ExprVector filter;
@@ -2077,11 +2077,9 @@ void ToGraph::processSubqueries(
           tables.size(),
           "Correlated conjuncts referencing multiple outer tables are not supported: {}",
           conjunct->toString());
-      if (leftTable == nullptr) {
-        leftTable = tables.onlyObject();
-      } else {
-        VELOX_CHECK(leftTable == tables.onlyObject());
-      }
+      auto leftTable = tables.onlyObject();
+
+      leftTables.add(leftTable);
 
       ExprCP left = nullptr;
       ExprCP right = nullptr;
@@ -2098,6 +2096,11 @@ void ToGraph::processSubqueries(
     correlatedConjuncts_.clear();
 
     const auto* markColumn = addMarkColumn();
+
+    PlanObjectCP leftTable = nullptr;
+    if (leftTables.size() == 1) {
+      leftTable = leftTables.onlyObject();
+    }
 
     auto* existsEdge = JoinEdge::makeExists(
         leftTable, subqueryDt, markColumn, std::move(filter));

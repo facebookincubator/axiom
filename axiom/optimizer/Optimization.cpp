@@ -155,21 +155,28 @@ void reducingJoinsRecursive(
     }
 
     JoinSide other = join->sideOf(candidate, true);
-    VELOX_DCHECK_NOT_NULL(other.table);
+    if (other.table == nullptr) {
+      continue;
+    }
+
     if (!state.dt->hasTable(other.table) || !state.dt->hasJoin(join)) {
       continue;
     }
+
     if (other.table->isNot(PlanType::kTableNode) &&
         other.table->isNot(PlanType::kValuesTableNode) &&
         other.table->isNot(PlanType::kUnnestTableNode)) {
       continue;
     }
+
     if (visited.contains(other.table)) {
       continue;
     }
+
     if (other.fanout > maxFanout) {
       continue;
     }
+
     visited.add(other.table);
     auto fanout = fanoutFromRoot * other.fanout;
     if (fanout < 0.9) {
@@ -179,6 +186,7 @@ void reducingJoinsRecursive(
         maxFanout = 1;
       }
     }
+
     path.push_back(other.table);
     isLeaf = false;
     reducingJoinsRecursive(

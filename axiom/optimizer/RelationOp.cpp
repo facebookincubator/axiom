@@ -29,7 +29,7 @@ namespace facebook::axiom::optimizer {
 
 void PlanCost::add(RelationOp& op) {
   cost += op.cost().totalCost();
-  cardinality = op.cost().resultCardinality();
+  cardinality = op.resultCardinality();
 }
 
 namespace {
