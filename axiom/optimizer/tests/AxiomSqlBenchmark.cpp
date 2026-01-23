@@ -22,6 +22,7 @@
 #include <sys/time.h>
 #include <iostream>
 #include "axiom/connectors/SchemaResolver.h"
+#include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/PlanPrinter.h"
@@ -252,8 +253,8 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(8);
 
     std::unordered_map<std::string, std::string> connectorConfig = {
-        {velox::connector::hive::HiveConfig::kLocalDataPath, dataPath},
-        {velox::connector::hive::HiveConfig::kLocalFileFormat,
+        {connector::hive::HiveMetadataConfig::kLocalDataPath, dataPath},
+        {connector::hive::HiveMetadataConfig::kLocalFileFormat,
          FLAGS_data_format},
     };
 

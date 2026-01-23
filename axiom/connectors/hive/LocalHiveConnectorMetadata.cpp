@@ -20,6 +20,7 @@
 #include <folly/json.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/optimizer/JsonUtil.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -177,7 +178,11 @@ std::vector<SplitSource::SplitAndGroup> LocalHiveSplitSource::getSplits(
 
 LocalHiveConnectorMetadata::LocalHiveConnectorMetadata(
     velox::connector::hive::HiveConnector* hiveConnector)
-    : HiveConnectorMetadata(hiveConnector), splitManager_(this) {}
+    : HiveConnectorMetadata(hiveConnector),
+      splitManager_(this),
+      hiveMetadataConfig_(
+          std::make_shared<HiveMetadataConfig>(
+              hiveConnector->connectorConfig())) {}
 
 void LocalHiveConnectorMetadata::reinitialize() {
   std::lock_guard<std::mutex> l(mutex_);
@@ -187,8 +192,8 @@ void LocalHiveConnectorMetadata::reinitialize() {
 }
 
 void LocalHiveConnectorMetadata::initialize() {
-  auto formatName = hiveConfig_->hiveLocalFileFormat();
-  auto path = hiveConfig_->hiveLocalDataPath();
+  auto formatName = hiveMetadataConfig_->localFileFormat();
+  auto path = hiveMetadataConfig_->localDataPath();
   format_ = formatName == "dwrf" ? velox::dwio::common::FileFormat::DWRF
       : formatName == "parquet"  ? velox::dwio::common::FileFormat::PARQUET
       : formatName == "text"     ? velox::dwio::common::FileFormat::TEXT
@@ -213,7 +218,8 @@ std::shared_ptr<velox::core::QueryCtx> LocalHiveConnectorMetadata::makeQueryCtx(
   std::unordered_map<std::string, std::shared_ptr<velox::config::ConfigBase>>
       connectorConfigs;
   connectorConfigs[hiveConnector_->connectorId()] =
-      std::const_pointer_cast<velox::config::ConfigBase>(hiveConfig_->config());
+      std::const_pointer_cast<velox::config::ConfigBase>(
+          hiveConnector_->connectorConfig());
 
   return velox::core::QueryCtx::create(
       hiveConnector_->executor(),
@@ -1262,7 +1268,8 @@ velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
 
 std::optional<std::string> LocalHiveConnectorMetadata::makeStagingDirectory(
     std::string_view tableName) const {
-  return createTemporaryDirectory(hiveConfig_->hiveLocalDataPath(), tableName);
+  return createTemporaryDirectory(
+      hiveMetadataConfig_->localDataPath(), tableName);
 }
 
 bool LocalHiveConnectorMetadata::dropTable(

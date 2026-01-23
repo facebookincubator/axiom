@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include "axiom/cli/Console.h"
+#include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "velox/connectors/Connector.h"
@@ -89,8 +90,8 @@ class Connectors {
       folly::IOThreadPoolExecutor* ioExecutor,
       optimizer::VeloxHistory& history) {
     std::unordered_map<std::string, std::string> connectorConfig = {
-        {velox::connector::hive::HiveConfig::kLocalDataPath, dataPath},
-        {velox::connector::hive::HiveConfig::kLocalFileFormat, dataFormat},
+        {connector::hive::HiveMetadataConfig::kLocalDataPath, dataPath},
+        {connector::hive::HiveMetadataConfig::kLocalFileFormat, dataFormat},
     };
 
     auto config =

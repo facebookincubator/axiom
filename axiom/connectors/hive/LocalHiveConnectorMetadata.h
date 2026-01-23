@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
+#include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/StatisticsBuilder.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/memory/HashStringAllocator.h"
@@ -252,7 +253,8 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       const ConnectorWriteHandlePtr& handle) noexcept override;
 
   std::string tablePath(std::string_view tableName) const override {
-    return fmt::format("{}/{}", hiveConfig_->hiveLocalDataPath(), tableName);
+    return fmt::format(
+        "{}/{}", hiveMetadataConfig_->localDataPath(), tableName);
   }
 
   std::optional<std::string> makeStagingDirectory(
@@ -294,6 +296,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   velox::dwio::common::FileFormat format_;
   folly::F14FastMap<std::string, std::shared_ptr<LocalTable>> tables_;
   LocalHiveSplitManager splitManager_;
+  std::shared_ptr<HiveMetadataConfig> hiveMetadataConfig_;
 };
 
 } // namespace facebook::axiom::connector::hive
