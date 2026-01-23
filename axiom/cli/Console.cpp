@@ -15,8 +15,10 @@
  */
 
 #include "axiom/cli/Console.h"
-#include <sys/resource.h>
 #include <iostream>
+#include "axiom/cli/ResultPrinter.h"
+#include "axiom/cli/StdinReader.h"
+#include "axiom/cli/Timing.h"
 #include "axiom/cli/linenoise/linenoise.h"
 
 DEFINE_string(
@@ -68,153 +70,6 @@ void Console::run() {
   }
 }
 
-namespace {
-struct Timing {
-  uint64_t micros{0};
-  uint64_t userNanos{0};
-  uint64_t systemNanos{0};
-
-  std::string toString() const {
-    double pct = 0;
-    if (micros > 0) {
-      pct = 100 * (userNanos + systemNanos) / (micros * 1000);
-    }
-
-    std::stringstream out;
-    out << succinctNanos(micros * 1000) << " / " << succinctNanos(userNanos)
-        << " user / " << succinctNanos(systemNanos) << " system (" << pct
-        << "%)";
-    return out.str();
-  }
-};
-
-template <typename T>
-T time(const std::function<T()>& func, Timing& timing) {
-  struct rusage start{};
-  getrusage(RUSAGE_SELF, &start);
-  SCOPE_EXIT {
-    struct rusage end{};
-    getrusage(RUSAGE_SELF, &end);
-    auto tvNanos = [](struct timeval tv) {
-      return tv.tv_sec * 1'000'000'000 + tv.tv_usec * 1'000;
-    };
-    timing.userNanos = tvNanos(end.ru_utime) - tvNanos(start.ru_utime);
-    timing.systemNanos = tvNanos(end.ru_stime) - tvNanos(start.ru_stime);
-  };
-
-  MicrosecondTimer timer(&timing.micros);
-  return func();
-}
-
-int64_t countResults(const std::vector<RowVectorPtr>& results) {
-  int64_t numRows = 0;
-  for (const auto& result : results) {
-    numRows += result->size();
-  }
-  return numRows;
-}
-
-int32_t printResults(const std::vector<RowVectorPtr>& results) {
-  const auto numRows = countResults(results);
-
-  auto printFooter = [&]() {
-    std::cout << "(" << numRows << " rows in " << results.size() << " batches)"
-              << std::endl
-              << std::endl;
-  };
-
-  if (numRows == 0) {
-    printFooter();
-    return 0;
-  }
-
-  const auto type = results.front()->rowType();
-  std::cout << type->toString() << std::endl;
-
-  const auto numColumns = type->size();
-
-  std::vector<std::vector<std::string>> data;
-  std::vector<size_t> widths(numColumns, 0);
-  std::vector<bool> alignLeft(numColumns);
-
-  for (auto i = 0; i < numColumns; ++i) {
-    widths[i] = type->nameOf(i).size();
-    alignLeft[i] = type->childAt(i)->isVarchar();
-  }
-
-  auto printSeparator = [&]() {
-    std::cout << std::setfill('-');
-    for (auto i = 0; i < numColumns; ++i) {
-      if (i > 0) {
-        std::cout << "-+-";
-      }
-      std::cout << std::setw(widths[i]) << "";
-    }
-    std::cout << std::endl;
-    std::cout << std::setfill(' ');
-  };
-
-  auto printRow = [&](const auto& row) {
-    for (auto i = 0; i < numColumns; ++i) {
-      if (i > 0) {
-        std::cout << " | ";
-      }
-      std::cout << std::setw(widths[i]);
-      if (alignLeft[i]) {
-        std::cout << std::left;
-      } else {
-        std::cout << std::right;
-      }
-      std::cout << row[i];
-    }
-    std::cout << std::endl;
-  };
-
-  int32_t numPrinted = 0;
-
-  auto doPrint = [&]() {
-    printSeparator();
-    printRow(type->names());
-    printSeparator();
-
-    for (const auto& row : data) {
-      printRow(row);
-    }
-
-    if (numPrinted < numRows) {
-      std::cout << std::endl;
-      std::cout << "..." << (numRows - numPrinted) << " more rows."
-                << std::endl;
-    }
-
-    printFooter();
-  };
-
-  for (const auto& result : results) {
-    for (auto row = 0; row < result->size(); ++row) {
-      data.emplace_back();
-
-      auto& rowData = data.back();
-      rowData.resize(numColumns);
-      for (auto column = 0; column < numColumns; ++column) {
-        rowData[column] = result->childAt(column)->toString(row);
-        widths[column] = std::max(widths[column], rowData[column].size());
-      }
-
-      ++numPrinted;
-      if (numPrinted >= FLAGS_max_rows) {
-        doPrint();
-        return numRows;
-      }
-    }
-  }
-
-  doPrint();
-
-  return numRows;
-}
-} // namespace
-
 void Console::runNoThrow(std::string_view sql, bool isInteractive) {
   const SqlQueryRunner::RunOptions options{
       .numWorkers = FLAGS_num_workers,
@@ -236,14 +91,14 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
   // Execute each statement with timing.
   for (const auto& statement : statements) {
     try {
-      Timing statementTiming;
-      auto result = time<SqlQueryRunner::SqlResult>(
+      cli::Timing statementTiming;
+      auto result = cli::time<SqlQueryRunner::SqlResult>(
           [&]() { return runner_.run(*statement, options); }, statementTiming);
 
       if (result.message.has_value()) {
         std::cout << result.message.value() << std::endl;
       } else {
-        printResults(result.results);
+        cli::printResults(result.results, FLAGS_max_rows);
       }
 
       if (isInteractive) {
@@ -258,65 +113,6 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
   }
 }
 
-namespace {
-
-// Reads multi-line command from 'in' until encounters ';' followed by
-// zero or
-// more whitespaces.
-// @return Command text with leading and trailing whitespaces as well as
-// trailing ';' removed.
-std::string readCommand(const std::string& prompt, bool& atEnd) {
-  std::stringstream command;
-  atEnd = false;
-
-  bool stripLeadingSpaces = true;
-
-  while (char* rawLine = linenoise(prompt.c_str())) {
-    SCOPE_EXIT {
-      if (rawLine != nullptr) {
-        free(rawLine);
-      }
-    };
-
-    std::string line(rawLine);
-
-    int64_t startPos = 0;
-    if (stripLeadingSpaces) {
-      for (; startPos < line.size(); ++startPos) {
-        if (std::isspace(line[startPos])) {
-          continue;
-        }
-        break;
-      }
-    }
-
-    if (startPos == line.size()) {
-      continue;
-    }
-
-    // Allow spaces after ';'.
-    for (int64_t i = line.size() - 1; i >= startPos; --i) {
-      if (std::isspace(line[i])) {
-        continue;
-      }
-
-      if (line[i] == ';') {
-        command << line.substr(startPos, i - startPos);
-        linenoiseHistoryAdd(fmt::format("{};", command.str()).c_str());
-        return command.str();
-      }
-
-      break;
-    }
-
-    stripLeadingSpaces = false;
-    command << line.substr(startPos) << std::endl;
-  }
-  atEnd = true;
-  return "";
-}
-} // namespace
-
 void Console::readCommands(const std::string& prompt) {
   linenoiseSetMultiLine(1);
   linenoiseHistorySetMaxLen(1024);
@@ -325,7 +121,7 @@ void Console::readCommands(const std::string& prompt) {
 
   for (;;) {
     bool atEnd;
-    std::string command = readCommand(prompt, atEnd);
+    std::string command = cli::readCommand(prompt, atEnd);
     if (atEnd) {
       break;
     }

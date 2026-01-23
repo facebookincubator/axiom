@@ -12,7 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(axiom_sql AxiomSql.cpp Console.cpp SqlQueryRunner.cpp linenoise/linenoise.c)
+add_executable(
+  axiom_sql
+  AxiomSql.cpp
+  Console.cpp
+  SqlQueryRunner.cpp
+  ResultPrinter.cpp
+  StdinReader.cpp
+  Timing.cpp
+  linenoise/linenoise.c
+)
 
 target_link_libraries(
   axiom_sql
