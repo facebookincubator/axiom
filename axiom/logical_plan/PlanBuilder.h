@@ -438,7 +438,13 @@ class PlanBuilder {
 
   /// Returns the names of the output columns. If some colums are anonymous,
   /// assigns them unique names before returning.
-  std::vector<std::string> findOrAssignOutputNames() const;
+  /// @param includeHiddenColumns Boolean indicating whether to include hidden
+  /// columns.
+  /// @param alias Optional alias to filter output columns. If specified,
+  /// returns a subset of columns accessible with the specified alias.
+  std::vector<std::string> findOrAssignOutputNames(
+      bool includeHiddenColumns = false,
+      const std::optional<std::string>& alias = std::nullopt) const;
 
   /// Returns the name of the output column at the given index. If the column
   /// is anonymous, assigns unique name before returning.

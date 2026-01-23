@@ -1292,12 +1292,21 @@ class RelationPlanner : public AstVisitor {
     for (const auto& item : selectItems) {
       if (item->is(NodeType::kAllColumns)) {
         auto* allColumns = item->as<AllColumns>();
+
+        std::vector<std::string> columnNames;
         if (allColumns->prefix() != nullptr) {
           // SELECT t.*
-          VELOX_NYI();
+          columnNames = builder_->findOrAssignOutputNames(
+              /*includeHiddenColumns=*/false, allColumns->prefix()->suffix());
+
         } else {
           // SELECT *
-          VELOX_NYI();
+          columnNames =
+              builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
+        }
+
+        for (const auto& name : columnNames) {
+          exprs.push_back(lp::Col(name));
         }
       } else {
         VELOX_CHECK(item->is(NodeType::kSingleColumn));
