@@ -753,7 +753,23 @@ class RelationPlanner : public AstVisitor {
         for (const auto& arg : call->arguments()) {
           args.push_back(toExpr(arg, aggregateOptions));
         }
-        auto callExpr = lp::Call(call->name()->suffix(), args);
+
+        const auto& funcName = call->name()->suffix();
+        const auto lowerFuncName = canonicalizeName(funcName);
+
+        // TODO: Verify that NULLIF is semantically equivalent with IF(a = b,
+        // null, a). https://github.com/prestodb/presto/issues/27024
+        if (lowerFuncName == "nullif") {
+          VELOX_USER_CHECK_EQ(
+              args.size(), 2, "NULLIF requires exactly 2 arguments");
+          return lp::Call(
+              "if",
+              lp::Call("eq", args[0], args[1]),
+              lp::Lit(Variant::null(TypeKind::UNKNOWN)),
+              args[0]);
+        }
+
+        auto callExpr = lp::Call(funcName, args);
 
         if (call->isDistinct() || call->filter() != nullptr ||
             call->orderBy() != nullptr) {
