@@ -18,11 +18,28 @@
 
 namespace facebook::axiom::connector {
 
+namespace {
+std::vector<std::unique_ptr<const Column>> appendHiddenColumns(
+    std::vector<std::unique_ptr<const Column>> columns,
+    const velox::RowTypePtr& hiddenColumns) {
+  for (auto i = 0; i < hiddenColumns->size(); ++i) {
+    columns.emplace_back(
+        std::make_unique<const Column>(
+            hiddenColumns->nameOf(i),
+            hiddenColumns->childAt(i),
+            /*hidden=*/true));
+  }
+  return columns;
+}
+} // namespace
+
 TestTable::TestTable(
     const std::string& name,
     const velox::RowTypePtr& schema,
+    const velox::RowTypePtr& hiddenColumns,
     TestConnector* connector)
-    : Table(name, makeColumns(schema)), connector_(connector) {
+    : Table(name, appendHiddenColumns(makeColumns(schema), hiddenColumns)),
+      connector_(connector) {
   exportedLayout_ =
       std::make_unique<TestTableLayout>(name, this, connector_, allColumns());
   layouts_.push_back(exportedLayout_.get());
@@ -158,8 +175,10 @@ velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
 
 std::shared_ptr<TestTable> TestConnectorMetadata::addTable(
     const std::string& name,
-    const velox::RowTypePtr& schema) {
-  auto table = std::make_shared<TestTable>(name, schema, connector_);
+    const velox::RowTypePtr& schema,
+    const velox::RowTypePtr& hiddenColumns) {
+  auto table =
+      std::make_shared<TestTable>(name, schema, hiddenColumns, connector_);
   auto [it, ok] = tables_.emplace(name, std::move(table));
   VELOX_CHECK(ok, "Table already exists: {}", name);
   return it->second;
@@ -288,8 +307,9 @@ std::unique_ptr<velox::connector::DataSink> TestConnector::createDataSink(
 
 std::shared_ptr<TestTable> TestConnector::addTable(
     const std::string& name,
-    const velox::RowTypePtr& schema) {
-  return metadata_->addTable(name, schema);
+    const velox::RowTypePtr& schema,
+    const velox::RowTypePtr& hiddenColumns) {
+  return metadata_->addTable(name, schema, hiddenColumns);
 }
 
 bool TestConnector::dropTableIfExists(const std::string& name) {

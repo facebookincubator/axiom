@@ -98,6 +98,7 @@ class TestTable : public Table {
   TestTable(
       const std::string& name,
       const velox::RowTypePtr& schema,
+      const velox::RowTypePtr& hiddenColumns,
       TestConnector* connector);
 
   const std::vector<const TableLayout*>& layouts() const override {
@@ -285,7 +286,8 @@ class TestConnectorMetadata : public ConnectorMetadata {
   /// exists, an error is thrown.
   std::shared_ptr<TestTable> addTable(
       const std::string& name,
-      const velox::RowTypePtr& schema);
+      const velox::RowTypePtr& schema,
+      const velox::RowTypePtr& hiddenColumns);
 
   /// Add data rows to the specified table. This data is returned via the
   /// DataSource corresponding to this table. The data is copied
@@ -402,10 +404,19 @@ class TestConnector : public velox::connector::Connector {
       velox::connector::CommitStrategy commitStrategy) override;
 
   /// Add a TestTable with the specified name and schema to the
-  /// TestConnectorMetadata corresponding to this connector.
+  /// TestConnectorMetadata corresponding to this connector. Throws if a table
+  /// with the same name already exists.
+  ///
+  /// @param name The name of the table to add.
+  /// @param schema The list of names and types of the columns in the table.
+  /// These are returned from SELECT * queries.
+  /// @param hiddenColumns The list of names and types of the hidden columns.
+  /// These are not included in the output of SELECT * and must be queried
+  /// explicitly.
   std::shared_ptr<TestTable> addTable(
       const std::string& name,
-      const velox::RowTypePtr& schema = velox::ROW({}, {}));
+      const velox::RowTypePtr& schema = velox::ROW({}),
+      const velox::RowTypePtr& hiddenColumns = velox::ROW({}));
 
   /// Add data rows to the specified table. This data is returned via the
   /// DataSource corresponding to this table. Appended data is copied
