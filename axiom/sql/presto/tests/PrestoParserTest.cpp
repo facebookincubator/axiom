@@ -17,6 +17,7 @@
 #include "axiom/sql/presto/PrestoParser.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
@@ -37,24 +38,29 @@ class PrestoParserTest : public testing::Test {
  public:
   static constexpr const char* kTpchConnectorId = "tpch";
   static constexpr const char* kTinySchema = "tiny";
+  static constexpr const char* kTestConnectorId = "test";
 
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
-    auto emptyConfig = std::make_shared<config::ConfigBase>(
-        std::unordered_map<std::string, std::string>{});
+    // Register TPC-H connector.
+    {
+      auto emptyConfig = std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{});
 
-    facebook::velox::connector::tpch::TpchConnectorFactory tpchConnectorFactory;
-    auto tpchConnector =
-        tpchConnectorFactory.newConnector(kTpchConnectorId, emptyConfig);
-    facebook::velox::connector::registerConnector(tpchConnector);
+      facebook::velox::connector::tpch::TpchConnectorFactory
+          tpchConnectorFactory;
+      auto tpchConnector =
+          tpchConnectorFactory.newConnector(kTpchConnectorId, emptyConfig);
+      facebook::velox::connector::registerConnector(tpchConnector);
 
-    facebook::axiom::connector::ConnectorMetadata::registerMetadata(
-        kTpchConnectorId,
-        std::make_shared<
-            facebook::axiom::connector::tpch::TpchConnectorMetadata>(
-            dynamic_cast<facebook::velox::connector::tpch::TpchConnector*>(
-                tpchConnector.get())));
+      facebook::axiom::connector::ConnectorMetadata::registerMetadata(
+          kTpchConnectorId,
+          std::make_shared<
+              facebook::axiom::connector::tpch::TpchConnectorMetadata>(
+              dynamic_cast<facebook::velox::connector::tpch::TpchConnector*>(
+                  tpchConnector.get())));
+    }
 
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
@@ -66,6 +72,19 @@ class PrestoParserTest : public testing::Test {
     facebook::velox::connector::unregisterConnector(kTpchConnectorId);
   }
 
+  void SetUp() override {
+    // Register Test connector.
+    testConnector_ =
+        std::make_shared<facebook::axiom::connector::TestConnector>(
+            kTestConnectorId);
+    facebook::velox::connector::registerConnector(testConnector_);
+  }
+
+  void TearDown() override {
+    facebook::velox::connector::unregisterConnector(kTestConnectorId);
+    testConnector_.reset();
+  }
+
   memory::MemoryPool* pool() {
     return pool_.get();
   }
@@ -74,7 +93,7 @@ class PrestoParserTest : public testing::Test {
       std::string_view sql,
       lp::test::LogicalPlanMatcherBuilder& matcher) {
     SCOPED_TRACE(sql);
-    PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+    auto parser = makeParser();
 
     auto statement = parser.parse(sql);
     ASSERT_TRUE(statement->isExplain());
@@ -109,7 +128,7 @@ class PrestoParserTest : public testing::Test {
       lp::test::LogicalPlanMatcherBuilder& matcher,
       const std::unordered_set<std::string>& views = {}) {
     SCOPED_TRACE(sql);
-    PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+    auto parser = makeParser();
 
     auto statement = parser.parse(sql, true);
     ASSERT_TRUE(statement->isSelect());
@@ -130,7 +149,7 @@ class PrestoParserTest : public testing::Test {
 
   SqlStatementPtr parseSql(std::string_view sql) {
     SCOPED_TRACE(sql);
-    PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+    auto parser = makeParser();
 
     return parser.parse(sql, true);
   }
@@ -139,7 +158,7 @@ class PrestoParserTest : public testing::Test {
       std::string_view sql,
       lp::test::LogicalPlanMatcherBuilder& matcher) {
     SCOPED_TRACE(sql);
-    PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+    auto parser = makeParser();
 
     auto statement = parser.parse(sql);
     ASSERT_TRUE(statement->isInsert());
@@ -158,7 +177,7 @@ class PrestoParserTest : public testing::Test {
       lp::test::LogicalPlanMatcherBuilder& matcher,
       const std::unordered_map<std::string, std::string>& properties = {}) {
     SCOPED_TRACE(sql);
-    PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+    auto parser = makeParser();
 
     auto statement = parser.parse(sql);
     ASSERT_TRUE(statement->isCreateTableAsSelect());
@@ -185,7 +204,7 @@ class PrestoParserTest : public testing::Test {
   void testDecimal(std::string_view sql, T value, const TypePtr& type) {
     SCOPED_TRACE(sql);
 
-    PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+    auto parser = makeParser();
     auto expr = parser.parseExpression(sql);
 
     ASSERT_TRUE(expr->isConstant());
@@ -196,6 +215,15 @@ class PrestoParserTest : public testing::Test {
     ASSERT_EQ(v->value<T>(), value);
   }
 
+  PrestoParser makeParser() {
+    return PrestoParser(defaultConnectorId_, defaultSchema_, pool());
+  }
+
+  std::string defaultConnectorId_ = kTpchConnectorId;
+  std::optional<std::string> defaultSchema_ = kTinySchema;
+
+  std::shared_ptr<facebook::axiom::connector::TestConnector> testConnector_;
+
  private:
   std::shared_ptr<memory::MemoryPool> rootPool_{
       memory::memoryManager()->addRootPool()};
@@ -203,7 +231,7 @@ class PrestoParserTest : public testing::Test {
 };
 
 TEST_F(PrestoParserTest, parseMultiple) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto statements = parser.parseMultiple("select 1; select 2");
   ASSERT_EQ(2, statements.size());
@@ -213,7 +241,7 @@ TEST_F(PrestoParserTest, parseMultiple) {
 }
 
 TEST_F(PrestoParserTest, parseMultipleWithTrailingSemicolon) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto statements = parser.parseMultiple("select 1; select 2;");
   ASSERT_EQ(2, statements.size());
@@ -223,7 +251,7 @@ TEST_F(PrestoParserTest, parseMultipleWithTrailingSemicolon) {
 }
 
 TEST_F(PrestoParserTest, parseMultipleWithWhitespace) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto statements =
       parser.parseMultiple("  select 1  ;  \n  select 2  ;  \n  select 3  ");
@@ -235,7 +263,7 @@ TEST_F(PrestoParserTest, parseMultipleWithWhitespace) {
 }
 
 TEST_F(PrestoParserTest, parseMultipleWithComments) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto statements = parser.parseMultiple(
       "-- First query\nselect 1;\n-- Second query\nselect 2");
@@ -246,7 +274,7 @@ TEST_F(PrestoParserTest, parseMultipleWithComments) {
 }
 
 TEST_F(PrestoParserTest, parseMultipleWithBlockComments) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto statements =
       parser.parseMultiple("/* First */ select 1; /* Second */ select 2");
@@ -257,7 +285,7 @@ TEST_F(PrestoParserTest, parseMultipleWithBlockComments) {
 }
 
 TEST_F(PrestoParserTest, parseMultipleWithSingleQuotes) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto statements =
       parser.parseMultiple("select 'hello; world'; select 'foo''bar; baz'");
@@ -268,7 +296,7 @@ TEST_F(PrestoParserTest, parseMultipleWithSingleQuotes) {
 }
 
 TEST_F(PrestoParserTest, parseMultipleWithDoubleQuotes) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto statements = parser.parseMultiple(
       "select 1 as \"col;name\"; select 2 as \"foo\"\"bar; baz\"");
@@ -279,7 +307,7 @@ TEST_F(PrestoParserTest, parseMultipleWithDoubleQuotes) {
 }
 
 TEST_F(PrestoParserTest, parseMultipleMixedStatements) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto statements = parser.parseMultiple(
       "select * from nation; "
@@ -293,7 +321,7 @@ TEST_F(PrestoParserTest, parseMultipleMixedStatements) {
 }
 
 TEST_F(PrestoParserTest, parseMultipleSingleStatement) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto statements = parser.parseMultiple("select 1");
   ASSERT_EQ(1, statements.size());
@@ -302,14 +330,14 @@ TEST_F(PrestoParserTest, parseMultipleSingleStatement) {
 }
 
 TEST_F(PrestoParserTest, parseMultipleEmptyStatements) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto statements = parser.parseMultiple(";;;");
   ASSERT_EQ(0, statements.size());
 }
 
 TEST_F(PrestoParserTest, parseMultipleComplexQuery) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto statements = parser.parseMultiple(
       "select n_nationkey, n_name "
@@ -384,7 +412,7 @@ TEST_F(PrestoParserTest, unnest) {
 }
 
 TEST_F(PrestoParserTest, syntaxErrors) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
   EXPECT_THAT(
       [&]() { parser.parse("SELECT * FROM"); },
       ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
@@ -406,7 +434,7 @@ TEST_F(PrestoParserTest, syntaxErrors) {
 }
 
 TEST_F(PrestoParserTest, types) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto test = [&](std::string_view sql, const TypePtr& expectedType) {
     SCOPED_TRACE(sql);
@@ -440,7 +468,7 @@ TEST_F(PrestoParserTest, types) {
 }
 
 TEST_F(PrestoParserTest, intervalDayTime) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto test = [&](std::string_view sql, int64_t expected) {
     SCOPED_TRACE(sql);
@@ -469,7 +497,7 @@ TEST_F(PrestoParserTest, intervalDayTime) {
 }
 
 TEST_F(PrestoParserTest, decimal) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto testShort =
       [&](std::string_view sql, int64_t value, const TypePtr& type) {
@@ -529,7 +557,7 @@ TEST_F(PrestoParserTest, decimal) {
 }
 
 TEST_F(PrestoParserTest, intervalYearMonth) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto test = [&](std::string_view sql, int64_t expected) {
     auto expr = parser.parseExpression(sql);
@@ -553,7 +581,7 @@ TEST_F(PrestoParserTest, intervalYearMonth) {
 }
 
 TEST_F(PrestoParserTest, doubleLiteral) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto test = [&](std::string_view sql, double expected) {
     SCOPED_TRACE(sql);
@@ -575,7 +603,7 @@ TEST_F(PrestoParserTest, doubleLiteral) {
 }
 
 TEST_F(PrestoParserTest, timestampLiteral) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   auto test = [&](std::string_view sql, const TypePtr& expectedType) {
     SCOPED_TRACE(sql);
@@ -804,6 +832,33 @@ TEST_F(PrestoParserTest, selectStar) {
   }
 
   VELOX_ASSERT_THROW(parseSql("SELECT r.* FROM region"), "Alias not found: r");
+}
+
+TEST_F(PrestoParserTest, hiddenColumns) {
+  defaultConnectorId_ = kTestConnectorId;
+  defaultSchema_ = std::nullopt;
+
+  testConnector_->addTable(
+      "t", ROW({"a", "b"}, INTEGER()), ROW({"$c", "$d"}, VARCHAR()));
+
+  auto verifyOutput = [&](const std::string& sql,
+                          std::initializer_list<std::string> expectedNames) {
+    lp::LogicalPlanNodePtr outputNode;
+    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project(
+        [&](const auto& node) { outputNode = node; });
+
+    testSql(sql, matcher);
+    ASSERT_THAT(
+        outputNode->outputType()->names(),
+        ::testing::Pointwise(::testing::Eq(), expectedNames));
+  };
+
+  verifyOutput("SELECT * FROM t", {"a", "b"});
+  verifyOutput("SELECT \"$c\", * FROM t", {"$c", "a", "b"});
+  verifyOutput("SELECT a, \"$c\" FROM t", {"a", "$c"});
+
+  verifyOutput("SELECT *, a FROM t", {"a", "b", "a_0"});
+  verifyOutput("SELECT *, * FROM t", {"a", "b", "a_0", "b_1"});
 }
 
 TEST_F(PrestoParserTest, mixedCaseColumnNames) {
@@ -1253,7 +1308,7 @@ TEST_F(PrestoParserTest, explainSelect) {
     testExplain("EXPLAIN SELECT * FROM nation", matcher);
   }
 
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
   {
     auto statement = parser.parse("EXPLAIN ANALYZE SELECT * FROM nation");
     ASSERT_TRUE(statement->isExplain());
@@ -1404,7 +1459,7 @@ TEST_F(PrestoParserTest, insertIntoTable) {
 
   // Wrong types.
   {
-    PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+    auto parser = makeParser();
 
     VELOX_ASSERT_THROW(
         parser.parse("INSERT INTO nation SELECT 100, 'n-100', 2, 3"),
@@ -1439,7 +1494,7 @@ TEST_F(PrestoParserTest, createTableAsSelect) {
 
   // Missing column names.
   {
-    PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+    auto parser = makeParser();
 
     VELOX_ASSERT_THROW(
         parser.parse(
@@ -1478,7 +1533,7 @@ TEST_F(PrestoParserTest, createTableAsSelect) {
 }
 
 TEST_F(PrestoParserTest, dropTable) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   {
     auto statement = parser.parse("DROP TABLE t");
@@ -1545,7 +1600,7 @@ TEST_F(PrestoParserTest, unqualifiedAccessAfterJoin) {
 }
 
 TEST_F(PrestoParserTest, createTableAndInsert) {
-  PrestoParser parser(kTpchConnectorId, kTinySchema, pool());
+  auto parser = makeParser();
 
   // Parse CREATE TABLE and INSERT statements.
   const auto statements = parser.parseMultiple(
