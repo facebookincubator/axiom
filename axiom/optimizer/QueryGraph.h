@@ -1135,4 +1135,7 @@ class WritePlan : public PlanObject {
 
 using WritePlanCP = const WritePlan*;
 
+/// @return cname if 'relation' is a table, otherwise throw.
+Name cname(PlanObjectCP relation);
+
 } // namespace facebook::axiom::optimizer

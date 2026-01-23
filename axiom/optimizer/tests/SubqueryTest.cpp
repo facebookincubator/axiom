@@ -234,6 +234,31 @@ TEST_F(SubqueryTest, correlatedExists) {
       AXIOM_ASSERT_PLAN(plan, matcher);
     }
   }
+
+  // Correlated conjuncts referencing multiple tables.
+  {
+    auto query =
+        "WITH t as (SELECT n_nationkey AS nkey, r_regionkey AS rkey FROM nation, region WHERE n_regionkey = r_regionkey) "
+        "SELECT * FROM t WHERE EXISTS (SELECT * FROM nation WHERE n_nationkey = nkey AND n_regionkey = rkey)";
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("region").build(),
+                velox::core::JoinType::kInner)
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("nation").build(),
+                velox::core::JoinType::kLeftSemiFilter)
+            .project()
+            .build();
+
+    {
+      SCOPED_TRACE(query);
+      auto plan = toSingleNodePlan(query);
+      AXIOM_ASSERT_PLAN(plan, matcher);
+    }
+  }
 }
 
 } // namespace
