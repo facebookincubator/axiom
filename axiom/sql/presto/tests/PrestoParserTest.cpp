@@ -606,6 +606,14 @@ TEST_F(PrestoParserTest, atTimeZone) {
       matcher);
 }
 
+TEST_F(PrestoParserTest, nullif) {
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
+
+  testSql("SELECT NULLIF(1, 2)", matcher);
+  testSql("SELECT nullif(1, 1)", matcher);
+  testSql("SELECT NULLIF('foo', 'bar')", matcher);
+}
+
 TEST_F(PrestoParserTest, null) {
   auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
   testSql("SELECT 1 is null", matcher);
