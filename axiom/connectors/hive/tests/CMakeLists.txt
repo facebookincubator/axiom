@@ -11,12 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(axiom_local_hive_connector_metadata_test LocalHiveConnectorMetadataTest.cpp)
+add_executable(
+  axiom_hive_connector_metadata_test
+  LocalHiveConnectorMetadataTest.cpp
+  HiveMetadataConfigTest.cpp
+)
 
-add_test(axiom_local_hive_connector_metadata_test axiom_local_hive_connector_metadata_test)
+add_test(axiom_hive_connector_metadata_test axiom_hive_connector_metadata_test)
 
 target_link_libraries(
-  axiom_local_hive_connector_metadata_test
+  axiom_hive_connector_metadata_test
   axiom_hive_connector_metadata
   velox_hive_connector
   axiom_runner_tests_utils

@@ -15,8 +15,8 @@
  */
 
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
+#include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
-#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
@@ -67,8 +67,8 @@ std::shared_ptr<velox::core::QueryCtx> LocalRunnerTestBase::makeQueryCtx(
 
 void LocalRunnerTestBase::setupConnector() {
   std::unordered_map<std::string, std::string> configs;
-  configs[velox::connector::hive::HiveConfig::kLocalDataPath] = localDataPath_;
-  configs[velox::connector::hive::HiveConfig::kLocalFileFormat] =
+  configs[connector::hive::HiveMetadataConfig::kLocalDataPath] = localDataPath_;
+  configs[connector::hive::HiveMetadataConfig::kLocalFileFormat] =
       velox::dwio::common::toString(localFileFormat_);
 
   resetHiveConnector(

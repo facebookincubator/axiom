@@ -229,9 +229,6 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       velox::connector::hive::HiveConnector* hiveConnector,
       bool includeHiddenColumns = true)
       : hiveConnector_(hiveConnector),
-        hiveConfig_(
-            std::make_shared<velox::connector::hive::HiveConfig>(
-                hiveConnector->connectorConfig())),
         includeHiddenColumns_{includeHiddenColumns} {}
 
   ConnectorWriteHandlePtr beginWrite(
@@ -256,7 +253,6 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       std::string_view table) const = 0;
 
   velox::connector::hive::HiveConnector* const hiveConnector_;
-  const std::shared_ptr<velox::connector::hive::HiveConfig> hiveConfig_;
 
   bool includeHiddenColumns_{true};
 };
