@@ -554,13 +554,19 @@ void Repartition::accept(
 }
 
 namespace {
-ColumnVector concatColumns(const ExprVector& lhs, const ColumnVector& rhs) {
+ColumnVector concatColumns(
+    const ExprVector& lhs,
+    const ColumnVector& rhs,
+    ColumnCP ordinalityColumn) {
   ColumnVector result;
-  result.reserve(lhs.size() + rhs.size());
+  result.reserve(lhs.size() + rhs.size() + (ordinalityColumn ? 1 : 0));
   for (const auto& expr : lhs) {
     result.push_back(expr->as<Column>());
   }
   result.insert(result.end(), rhs.begin(), rhs.end());
+  if (ordinalityColumn) {
+    result.push_back(ordinalityColumn);
+  }
   return result;
 }
 } // namespace
@@ -569,11 +575,13 @@ Unnest::Unnest(
     RelationOpPtr input,
     ExprVector replicateColumns,
     ExprVector unnestExprs,
-    ColumnVector unnestedColumns)
-    : RelationOp{RelType::kUnnest, std::move(input), concatColumns(replicateColumns, unnestedColumns)},
+    ColumnVector unnestedColumns,
+    ColumnCP ordinalityColumn)
+    : RelationOp{RelType::kUnnest, std::move(input), concatColumns(replicateColumns, unnestedColumns, ordinalityColumn)},
       replicateColumns{std::move(replicateColumns)},
       unnestExprs{std::move(unnestExprs)},
-      unnestedColumns{std::move(unnestedColumns)} {
+      unnestedColumns{std::move(unnestedColumns)},
+      ordinalityColumn{ordinalityColumn} {
   cost_.inputCardinality = inputCardinality();
 }
 
@@ -881,8 +889,11 @@ std::string Unnest::toString(bool recursive, bool detail) const {
     out << ", unnest exprs: "
         << itemsToString(unnestExprs.data(), unnestExprs.size());
     out << ", unnested columns: "
-        << itemsToString(unnestedColumns.data(), unnestedColumns.size())
-        << std::endl;
+        << itemsToString(unnestedColumns.data(), unnestedColumns.size());
+    if (ordinalityColumn) {
+      out << ", ordinality column: " << ordinalityColumn->name();
+    }
+    out << std::endl;
   }
   return out.str();
 }

@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
@@ -26,9 +26,16 @@ using namespace velox;
 namespace lp = facebook::axiom::logical_plan;
 
 class UnnestTest : public test::QueryTestBase {
+ protected:
+  static constexpr auto kTestConnectorId = "test";
+
  public:
   void SetUp() override {
     test::QueryTestBase::SetUp();
+
+    testConnector_ =
+        std::make_shared<connector::TestConnector>(kTestConnectorId);
+    velox::connector::registerConnector(testConnector_);
 
     rowVector_ = makeRowVector(
         {"x", "a_a_y", "a_a_z"},
@@ -59,9 +66,11 @@ class UnnestTest : public test::QueryTestBase {
 
   void TearDown() override {
     rowVector_.reset();
+    velox::connector::unregisterConnector(kTestConnectorId);
     test::QueryTestBase::TearDown();
   }
 
+  std::shared_ptr<connector::TestConnector> testConnector_;
   RowVectorPtr rowVector_;
 };
 
@@ -1193,6 +1202,60 @@ TEST_F(UnnestTest, join) {
             .planNode();
 
     checkSame(logicalPlan, referencePlan);
+  }
+}
+
+TEST_F(UnnestTest, ordinality) {
+  {
+    auto query =
+        "SELECT a, b, c FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY AS t(a, b, c)";
+    SCOPED_TRACE(query);
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .unnest({}, {}, "ordinality")
+                       .project({"e", "e_0", "ordinality"})
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    auto query =
+        "SELECT a, b FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY AS t(a, b, c)";
+    SCOPED_TRACE(query);
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .unnest({}, {}, std::nullopt)
+                       .project({"e", "e_0"})
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    auto query =
+        "SELECT 1 FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY AS t(a, b, c)";
+    SCOPED_TRACE(query);
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .unnest({}, {}, std::nullopt)
+                       .project({"1"})
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
 

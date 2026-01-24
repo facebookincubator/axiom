@@ -963,6 +963,9 @@ struct UnnestTable : public PlanObject {
   // All joins where 'this' is an end point.
   JoinEdgeVector joinedBy;
 
+  // Ordinality column if ordinality clause is present.
+  ColumnCP ordinalityColumn{nullptr};
+
   float cardinality() const {
     // TODO Should be changed later to actual cardinality.
     return 1;

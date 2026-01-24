@@ -537,7 +537,8 @@ struct Unnest : public RelationOp {
       RelationOpPtr input,
       ExprVector replicateColumns,
       ExprVector unnestExprs,
-      ColumnVector unnestedColumns);
+      ColumnVector unnestedColumns,
+      ColumnCP ordinalityColumn);
 
   const ExprVector replicateColumns;
   const ExprVector unnestExprs;
@@ -545,6 +546,7 @@ struct Unnest : public RelationOp {
   // Columns correspond to expressions but not 1:1,
   // it can be 2:1 (for MAP) and 1:1 (for ARRAY).
   const ColumnVector unnestedColumns;
+  const ColumnCP ordinalityColumn;
 
   std::string toString(bool recursive, bool detail) const override;
 

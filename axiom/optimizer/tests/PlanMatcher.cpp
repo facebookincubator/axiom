@@ -370,10 +370,12 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
   UnnestMatcher(
       const std::shared_ptr<PlanMatcher>& matcher,
       const std::vector<std::string>& replicateExprs,
-      const std::vector<std::string>& unnestExprs)
+      const std::vector<std::string>& unnestExprs,
+      const std::optional<std::string>& ordinalityName = std::nullopt)
       : PlanMatcherImpl<UnnestNode>({matcher}),
         replicateExprs_{replicateExprs},
-        unnestExprs_{unnestExprs} {}
+        unnestExprs_{unnestExprs},
+        ordinalityName_{ordinalityName} {}
 
   MatchResult matchDetails(
       const UnnestNode& plan,
@@ -408,12 +410,17 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
     }
 
+    EXPECT_EQ(plan.ordinalityName(), ordinalityName_);
+
+    AXIOM_TEST_RETURN_IF_FAILURE
+
     return MatchResult::success();
   }
 
  private:
   const std::vector<std::string> replicateExprs_;
   const std::vector<std::string> unnestExprs_;
+  const std::optional<std::string> ordinalityName_;
 };
 
 class LimitMatcher : public PlanMatcherImpl<LimitNode> {
@@ -754,16 +761,18 @@ PlanMatcherBuilder& PlanMatcherBuilder::parallelProject(
 
 PlanMatcherBuilder& PlanMatcherBuilder::unnest() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<UnnestMatcher>(matcher_);
+  matcher_ = std::make_shared<PlanMatcherImpl<UnnestNode>>(
+      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
   return *this;
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::unnest(
     const std::vector<std::string>& replicateExprs,
-    const std::vector<std::string>& unnestExprs) {
+    const std::vector<std::string>& unnestExprs,
+    const std::optional<std::string>& ordinalityName) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ =
-      std::make_shared<UnnestMatcher>(matcher_, replicateExprs, unnestExprs);
+  matcher_ = std::make_shared<UnnestMatcher>(
+      matcher_, replicateExprs, unnestExprs, ordinalityName);
   return *this;
 }
 
