@@ -1720,17 +1720,29 @@ void Optimization::crossJoinUnnest(
     PrecomputeProjection precompute(plan, state.dt, /*projectAllInputs=*/false);
 
     ExprVector replicateColumns;
-    state.downstreamColumns().forEach<Column>([&](auto column) {
+    auto downstreamColumns = state.downstreamColumns();
+    downstreamColumns.forEach<Column>([&](auto column) {
       if (state.columns.contains(column)) {
         replicateColumns.push_back(precompute.toColumn(column));
       }
     });
 
+    const auto* unnestTable = table->as<UnnestTable>();
+    auto ordinalityColumn = unnestTable->ordinalityColumn;
+
+    // TODO: Revisit here if there is pruning of ordinality
+    // column in optimizer.
+    if (ordinalityColumn) {
+      VELOX_CHECK(
+          downstreamColumns.contains(ordinalityColumn),
+          "Ordinality column must be present");
+    }
+
     // We don't use downstreamColumns() for unnestExprs/unnestedColumns.
     // Because 'unnest-column' should be unnested even when it isn't used.
     // Because it can change cardinality of the all output.
     const auto& unnestExprs = candidate.join->leftKeys();
-    const auto& unnestedColumns = table->as<UnnestTable>()->columns;
+    const auto& unnestedColumns = unnestTable->columns;
 
     // Plan is updated here,
     // because we can have multiple unnest joins in single JoinCandidate.
@@ -1742,7 +1754,8 @@ void Optimization::crossJoinUnnest(
         std::move(plan),
         std::move(replicateColumns),
         std::move(unnestColumns),
-        unnestedColumns);
+        unnestedColumns,
+        unnestTable->ordinalityColumn);
 
     state.columns.unionObjects(unnestedColumns);
     state.addCost(*plan);
