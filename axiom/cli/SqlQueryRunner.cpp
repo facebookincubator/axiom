@@ -70,8 +70,8 @@ void SqlQueryRunner::initialize(
 
   schema_ = std::make_shared<connector::SchemaResolver>();
 
-  prestoParser_ = std::make_unique<presto::PrestoParser>(
-      defaultConnectorId, defaultSchema, optimizerPool_.get());
+  prestoParser_ =
+      std::make_unique<presto::PrestoParser>(defaultConnectorId, defaultSchema);
 
   spillExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(4);
 }

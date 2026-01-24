@@ -45,7 +45,7 @@ void HiveQueriesTestBase::SetUp() {
   test::QueryTestBase::SetUp();
 
   prestoParser_ = std::make_unique<::axiom::sql::presto::PrestoParser>(
-      exec::test::kHiveConnectorId, std::nullopt, pool());
+      exec::test::kHiveConnectorId, std::nullopt);
 
   connector_ = velox::connector::getConnector(exec::test::kHiveConnectorId);
   metadata_ = dynamic_cast<connector::hive::LocalHiveConnectorMetadata*>(

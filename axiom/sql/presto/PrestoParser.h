@@ -28,11 +28,9 @@ class PrestoParser {
   /// specify schema, i.e. SELECT * FROM name.
   PrestoParser(
       const std::string& defaultConnectorId,
-      const std::optional<std::string>& defaultSchema,
-      facebook::velox::memory::MemoryPool* pool)
+      const std::optional<std::string>& defaultSchema)
       : defaultConnectorId_{defaultConnectorId},
-        defaultSchema_{defaultSchema},
-        pool_{pool} {}
+        defaultSchema_{defaultSchema} {}
 
   SqlStatementPtr parse(std::string_view sql, bool enableTracing = false);
 
@@ -59,7 +57,6 @@ class PrestoParser {
 
   const std::string defaultConnectorId_;
   const std::optional<std::string> defaultSchema_;
-  facebook::velox::memory::MemoryPool* pool_;
 };
 
 } // namespace axiom::sql::presto

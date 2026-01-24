@@ -80,7 +80,7 @@ class WriteTest : public test::HiveQueriesTestBase {
     SCOPED_TRACE(sql);
 
     ::axiom::sql::presto::PrestoParser parser(
-        exec::test::kHiveConnectorId, std::nullopt, pool());
+        exec::test::kHiveConnectorId, std::nullopt);
 
     auto statement = parser.parse(sql);
     VELOX_CHECK(statement->isCreateTableAsSelect());
@@ -395,7 +395,7 @@ TEST_F(WriteTest, insertSql) {
 
   auto parseSql = [&](std::string_view sql) {
     ::axiom::sql::presto::PrestoParser parser(
-        exec::test::kHiveConnectorId, std::nullopt, pool());
+        exec::test::kHiveConnectorId, std::nullopt);
 
     auto statement = parser.parse(sql);
     VELOX_CHECK(statement->isInsert());

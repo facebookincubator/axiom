@@ -85,10 +85,6 @@ class PrestoParserTest : public testing::Test {
     testConnector_.reset();
   }
 
-  memory::MemoryPool* pool() {
-    return pool_.get();
-  }
-
   void testExplain(
       std::string_view sql,
       lp::test::LogicalPlanMatcherBuilder& matcher) {
@@ -216,18 +212,13 @@ class PrestoParserTest : public testing::Test {
   }
 
   PrestoParser makeParser() {
-    return PrestoParser(defaultConnectorId_, defaultSchema_, pool());
+    return PrestoParser(defaultConnectorId_, defaultSchema_);
   }
 
   std::string defaultConnectorId_ = kTpchConnectorId;
   std::optional<std::string> defaultSchema_ = kTinySchema;
 
   std::shared_ptr<facebook::axiom::connector::TestConnector> testConnector_;
-
- private:
-  std::shared_ptr<memory::MemoryPool> rootPool_{
-      memory::memoryManager()->addRootPool()};
-  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
 };
 
 TEST_F(PrestoParserTest, parseMultiple) {
