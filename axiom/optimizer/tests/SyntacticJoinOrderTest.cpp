@@ -52,7 +52,7 @@ class SyntacticJoinOrderTest : public test::QueryTestBase {
 
   lp::LogicalPlanNodePtr parseSql(const std::string& sql) const {
     ::axiom::sql::presto::PrestoParser parser{
-        exec::test::kHiveConnectorId, std::nullopt, &optimizerPool()};
+        exec::test::kHiveConnectorId, std::nullopt};
     auto statement = parser.parse(sql);
     VELOX_CHECK(statement->isSelect());
 

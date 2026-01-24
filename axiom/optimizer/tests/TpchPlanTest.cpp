@@ -99,7 +99,7 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
     auto sql = readTpchSql(query);
 
     ::axiom::sql::presto::PrestoParser prestoParser(
-        exec::test::kHiveConnectorId, std::nullopt, pool());
+        exec::test::kHiveConnectorId, std::nullopt);
     auto statement = prestoParser.parse(sql);
 
     VELOX_CHECK(statement->isSelect());
