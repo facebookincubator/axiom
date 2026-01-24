@@ -387,6 +387,8 @@ PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
 }
 
 PlanP PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
+  VELOX_CHECK_GT(plans.size(), 0, "No plans to pick best from");
+
   PlanP best = nullptr;
   PlanP match = nullptr;
   float bestCost = -1;

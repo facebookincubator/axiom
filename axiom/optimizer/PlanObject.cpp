@@ -62,12 +62,8 @@ std::string PlanObjectSet::toString(bool names) const {
   forEach([&](auto object) {
     out << object->id();
     if (names) {
-      if (object->isTable()) {
-        out << ": " << cname(object);
-      } else {
-        out << ": " << object->toString() << " ";
-      }
-
+      out << ": " << (object->isTable() ? cname(object) : object->toString())
+          << " ";
     } else {
       out << " ";
     }

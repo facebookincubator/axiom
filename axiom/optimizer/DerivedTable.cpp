@@ -132,8 +132,6 @@ bool isSingleRowDt(PlanObjectCP object) {
 PlanObjectSet findSingleRowDts(
     const PlanObjectSet& tables,
     const JoinEdgeVector& joins) {
-  PlanObjectSet singleRowDts;
-
   // Remove tables that are joined to other tables.
   auto tablesCopy = tables;
   int32_t numSingle = 0;
@@ -147,6 +145,7 @@ PlanObjectSet findSingleRowDts(
     }
   }
 
+  PlanObjectSet singleRowDts;
   tablesCopy.forEach([&](PlanObjectCP object) {
     if (isSingleRowDt(object)) {
       ++numSingle;

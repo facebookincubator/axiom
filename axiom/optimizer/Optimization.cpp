@@ -836,7 +836,14 @@ void Optimization::addPostprocess(
     DerivedTableCP dt,
     RelationOpPtr& plan,
     PlanState& state) const {
-  // Sanity check that all conjuncts have been placed.
+  // Sanity check that all tables and conjuncts have been placed.
+  for (const auto& table : state.dt->tables) {
+    VELOX_CHECK(
+        state.placed.contains(table),
+        "Failed to place a table: {}",
+        table->toString());
+  }
+
   for (const auto* conjunct : state.dt->conjuncts) {
     VELOX_CHECK(
         state.placed.contains(conjunct),
@@ -1825,6 +1832,8 @@ RelationOpPtr Optimization::placeSingleRowDt(
       rightOp->columns().end());
   auto* join = Join::makeCrossJoin(
       std::move(plan), std::move(rightOp), std::move(resultColumns));
+
+  state.placed.add(subquery);
   state.addCost(*join);
   return join;
 }
