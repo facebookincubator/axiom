@@ -147,6 +147,21 @@ using PlanObjectVector = QGVector<PlanObjectCP>;
 /// Set of PlanObjects. Uses the objects id() as an index into a bitmap.
 class PlanObjectSet : public BitSet {
  public:
+  /// Creates a PlanObjectSet containing a single object.
+  static PlanObjectSet single(PlanObjectCP object) {
+    PlanObjectSet set;
+    set.add(object);
+    return set;
+  }
+
+  /// Creates a PlanObjectSet from a collection of objects.
+  template <typename V>
+  static PlanObjectSet fromObjects(const V& objects) {
+    PlanObjectSet set;
+    set.unionObjects(objects);
+    return set;
+  }
+
   /// True if id of 'object' is in 'this'.
   bool contains(PlanObjectCP object) const {
     return object->id() < bits_.size() * 64 &&
