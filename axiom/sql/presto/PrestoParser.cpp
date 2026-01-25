@@ -19,6 +19,7 @@
 #include <cctype>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/sql/presto/PrestoParseError.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
 #include "axiom/sql/presto/ast/UpperCaseInputStream.h"
@@ -75,7 +76,7 @@ class ParserHelper {
     auto ctx = parser_->singleStatement();
 
     if (parser_->getNumberOfSyntaxErrors() > 0) {
-      throw std::runtime_error(errorListener_.firstError);
+      throw PrestoParseError(errorListener_.firstError);
     }
 
     return ctx->statement();
