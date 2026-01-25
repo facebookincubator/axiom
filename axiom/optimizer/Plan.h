@@ -318,15 +318,43 @@ struct PlanStateSaver {
 /// unless it is known never to have duplicates, it must become a
 /// semijoin and the original join must still stay in place in case
 /// there were duplicates.
+///
+/// MemoKey is immutable after construction. Use the static create() method
+/// to construct instances.
 struct MemoKey {
+  static MemoKey create(
+      PlanObjectCP firstTable,
+      PlanObjectSet columns,
+      PlanObjectSet tables,
+      std::vector<PlanObjectSet> existences = {}) {
+    VELOX_CHECK_NOT_NULL(firstTable);
+    VELOX_CHECK(tables.contains(firstTable));
+    return MemoKey{
+        firstTable,
+        std::move(columns),
+        std::move(tables),
+        std::move(existences)};
+  }
+
   bool operator==(const MemoKey& other) const;
 
   size_t hash() const;
 
-  PlanObjectCP firstTable;
-  PlanObjectSet columns;
-  PlanObjectSet tables;
-  std::vector<PlanObjectSet> existences;
+  const PlanObjectCP firstTable;
+  const PlanObjectSet columns;
+  const PlanObjectSet tables;
+  const std::vector<PlanObjectSet> existences;
+
+ private:
+  MemoKey(
+      PlanObjectCP firstTable,
+      PlanObjectSet columns,
+      PlanObjectSet tables,
+      std::vector<PlanObjectSet> existences)
+      : firstTable(firstTable),
+        columns(std::move(columns)),
+        tables(std::move(tables)),
+        existences(std::move(existences)) {}
 };
 
 } // namespace facebook::axiom::optimizer

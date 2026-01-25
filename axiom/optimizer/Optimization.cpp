@@ -1330,8 +1330,8 @@ void Optimization::joinByHash(
   buildColumns.unionSet(buildFilterColumns);
   state.columns.unionSet(buildColumns);
 
-  MemoKey memoKey{
-      candidate.tables[0], buildColumns, buildTables, candidate.existences};
+  MemoKey memoKey = MemoKey::create(
+      candidate.tables[0], buildColumns, buildTables, candidate.existences);
 
   Distribution forBuild;
   if (plan->distribution().isGather()) {
@@ -1518,8 +1518,8 @@ void Optimization::joinByHashRight(
   probeColumns.unionSet(probeFilterColumns);
   state.columns.unionSet(probeColumns);
 
-  MemoKey memoKey{
-      candidate.tables[0], probeColumns, probeTables, candidate.existences};
+  MemoKey memoKey = MemoKey::create(
+      candidate.tables[0], probeColumns, probeTables, candidate.existences);
 
   auto* joinEdge = candidate.join;
 
@@ -1660,8 +1660,7 @@ void Optimization::crossJoin(
 
   const auto* table = candidate.tables[0];
 
-  PlanObjectSet buildTables;
-  buildTables.add(table);
+  PlanObjectSet buildTables = PlanObjectSet::single(table);
 
   const auto downstreamColumns = state.downstreamColumns();
 
@@ -1670,7 +1669,9 @@ void Optimization::crossJoin(
 
   const auto broadcast = Distribution::broadcast();
 
-  MemoKey memoKey{table, buildColumns, buildTables, candidate.existences};
+  MemoKey memoKey =
+      MemoKey::create(table, buildColumns, buildTables, candidate.existences);
+
   PlanObjectSet empty;
   bool needsShuffle = false;
   auto buildPlan = makePlan(
@@ -1821,10 +1822,10 @@ RelationOpPtr Optimization::placeSingleRowDt(
     RelationOpPtr plan,
     DerivedTableCP subquery,
     PlanState& state) {
-  MemoKey memoKey;
-  memoKey.firstTable = subquery;
-  memoKey.tables.add(subquery);
-  memoKey.columns.unionObjects(subquery->columns);
+  MemoKey memoKey = MemoKey::create(
+      subquery,
+      PlanObjectSet::fromObjects(subquery->columns),
+      PlanObjectSet::single(subquery));
 
   const auto broadcast = Distribution::broadcast();
 
@@ -1861,10 +1862,8 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   dtColumns.intersect(state.downstreamColumns());
   state.columns.unionSet(dtColumns);
 
-  MemoKey key;
-  key.columns = std::move(dtColumns);
-  key.firstTable = from;
-  key.tables.add(from);
+  MemoKey key =
+      MemoKey::create(from, std::move(dtColumns), PlanObjectSet::single(from));
 
   bool ignore = false;
   auto plan =
@@ -1879,8 +1878,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   visited.add(from);
   visited.unionSet(state.dt->importedExistences);
 
-  PlanObjectSet reducingSet;
-  reducingSet.add(from);
+  PlanObjectSet reducingSet = PlanObjectSet::single(from);
 
   std::vector<PlanObjectCP> path{from};
 
@@ -1889,9 +1887,10 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
       state, from, 1, 1.2, path, visited, reducingSet, reduction);
 
   if (reduction < 0.9) {
-    key.tables = reducingSet;
-    key.columns = state.downstreamColumns();
-    plan = makePlan(*state.dt, key, Distribution{}, PlanObjectSet{}, 1, ignore);
+    MemoKey reducingKey = MemoKey::create(
+        from, state.downstreamColumns(), std::move(reducingSet));
+    plan = makePlan(
+        *state.dt, reducingKey, Distribution{}, PlanObjectSet{}, 1, ignore);
     state.cost = plan->cost;
     makeJoins(plan->op, state);
   }
@@ -2217,10 +2216,16 @@ PlanP Optimization::makeUnionPlan(
   std::vector<bool> inputNeedsShuffle;
 
   for (auto* inputDt : setDt->children) {
-    MemoKey inputKey = key;
-    inputKey.firstTable = inputDt;
-    inputKey.tables.erase(key.firstTable);
-    inputKey.tables.add(inputDt);
+    MemoKey inputKey = [&]() {
+      PlanObjectSet inputTables = key.tables;
+      inputTables.erase(key.firstTable);
+      inputTables.add(inputDt);
+      return MemoKey::create(
+          inputDt,
+          PlanObjectSet{key.columns},
+          std::move(inputTables),
+          std::vector<PlanObjectSet>{key.existences});
+    }();
 
     bool inputShuffle = false;
     auto inputPlan = makePlan(

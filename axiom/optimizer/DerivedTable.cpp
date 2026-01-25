@@ -253,12 +253,16 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
   auto firstExistsTable = existsJoin->rightKeys()[0]->singleTable();
   VELOX_CHECK(firstExistsTable);
 
-  MemoKey existsDtKey;
-  existsDtKey.firstTable = firstExistsTable;
-  existsDtKey.tables.unionObjects(existsTables);
-  for (auto& column : existsJoin->rightKeys()) {
-    existsDtKey.columns.unionColumns(column);
-  }
+  MemoKey existsDtKey = [&]() {
+    PlanObjectSet existsDtColumns;
+    for (auto& column : existsJoin->rightKeys()) {
+      existsDtColumns.unionColumns(column);
+    }
+    return MemoKey::create(
+        firstExistsTable,
+        std::move(existsDtColumns),
+        PlanObjectSet::fromObjects(existsTables));
+  }();
 
   auto optimization = queryCtx()->optimization();
   auto it = optimization->existenceDts().find(existsDtKey);
@@ -996,10 +1000,8 @@ void DerivedTable::distributeConjuncts() {
 }
 
 void DerivedTable::makeInitialPlan() {
-  MemoKey key;
-  key.firstTable = this;
-  key.tables.add(this);
-  key.columns.unionObjects(columns);
+  MemoKey key = MemoKey::create(
+      this, PlanObjectSet::fromObjects(columns), PlanObjectSet::single(this));
 
   distributeConjuncts();
   addImpliedJoins();
@@ -1022,10 +1024,8 @@ void DerivedTable::makeInitialPlan() {
 }
 
 PlanP DerivedTable::bestInitialPlan() const {
-  MemoKey key;
-  key.firstTable = this;
-  key.tables.add(this);
-  key.columns.unionObjects(columns);
+  MemoKey key = MemoKey::create(
+      this, PlanObjectSet::fromObjects(columns), PlanObjectSet::single(this));
 
   auto& memo = queryCtx()->optimization()->memo();
   auto it = memo.find(key);
