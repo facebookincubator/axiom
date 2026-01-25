@@ -2207,7 +2207,7 @@ PlanP Optimization::makeUnionPlan(
     const Distribution& distribution,
     const PlanObjectSet& boundColumns,
     float existsFanout,
-    bool& needsShuffle) {
+    bool& /*needsShuffle*/) {
   const auto* setDt = key.firstTable->as<DerivedTable>();
 
   RelationOpPtrVector inputs;

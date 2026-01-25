@@ -250,12 +250,14 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
     float existsFanout,
     PlanObjectVector& existsTables,
     JoinEdgeP existsJoin) {
-  auto firstExistsTable = existsJoin->rightKeys()[0]->singleTable();
-  VELOX_CHECK(firstExistsTable);
+  const auto& rightKeys = existsJoin->rightKeys();
 
   MemoKey existsDtKey = [&]() {
+    auto firstExistsTable = rightKeys[0]->singleTable();
+    VELOX_CHECK(firstExistsTable);
+
     PlanObjectSet existsDtColumns;
-    for (auto& column : existsJoin->rightKeys()) {
+    for (auto& column : rightKeys) {
       existsDtColumns.unionColumns(column);
     }
     return MemoKey::create(
@@ -270,14 +272,14 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
   if (it == optimization->existenceDts().end()) {
     existsDt = make<DerivedTable>();
     existsDt->cname = optimization->newCName("edt");
-    existsDt->import(super, firstExistsTable, existsDtKey.tables, {});
-    for (auto& k : existsJoin->rightKeys()) {
+    existsDt->import(super, existsDtKey.firstTable, existsDtKey.tables, {});
+    for (auto& key : rightKeys) {
       auto* existsColumn = make<Column>(
-          toName(fmt::format("{}.{}", existsDt->cname, k->toString())),
+          toName(fmt::format("{}.{}", existsDt->cname, key->toString())),
           existsDt,
-          k->value());
+          key->value());
       existsDt->columns.push_back(existsColumn);
-      existsDt->exprs.push_back(k);
+      existsDt->exprs.push_back(key);
     }
     existsDt->noImportOfExists = true;
     existsDt->makeInitialPlan();
@@ -285,6 +287,7 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
   } else {
     existsDt = it->second;
   }
+
   auto* joinWithDt = JoinEdge::makeExists(firstTable, existsDt);
   joinWithDt->setFanouts(existsFanout, 1);
   for (size_t i = 0; i < existsJoin->numKeys(); ++i) {
