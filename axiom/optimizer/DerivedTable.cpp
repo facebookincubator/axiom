@@ -507,6 +507,13 @@ ExprCP DerivedTable::importExpr(ExprCP expr) {
   return replaceInputs(expr, columns, exprs);
 }
 
+namespace {
+MemoKey memoKey(const DerivedTable& dt) {
+  return MemoKey::create(
+      &dt, PlanObjectSet::fromObjects(dt.columns), PlanObjectSet::single(&dt));
+}
+} // namespace
+
 void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
   if (isWrapOnly()) {
     flattenDt(tables[0]->as<DerivedTable>());
@@ -560,6 +567,8 @@ void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
     joinChain(other, joins, visited, path);
     if (path.empty()) {
       if (other->is(PlanType::kDerivedTableNode)) {
+        queryCtx()->optimization()->memo().erase(
+            memoKey(*other->as<DerivedTable>()));
         const_cast<PlanObject*>(other)->as<DerivedTable>()->makeInitialPlan();
       }
 
@@ -995,13 +1004,13 @@ void DerivedTable::distributeConjuncts() {
   // on returning edge of recursion, so everybody's initial plan is
   // up to date after all pushdowns.
   for (auto* changed : changedDts) {
+    queryCtx()->optimization()->memo().erase(memoKey(*changed));
     changed->makeInitialPlan();
   }
 }
 
 void DerivedTable::makeInitialPlan() {
-  MemoKey key = MemoKey::create(
-      this, PlanObjectSet::fromObjects(columns), PlanObjectSet::single(this));
+  MemoKey key = memoKey(*this);
 
   distributeConjuncts();
   addImpliedJoins();
@@ -1020,18 +1029,16 @@ void DerivedTable::makeInitialPlan() {
   auto plan = state.plans.best()->op;
   this->cardinality = plan->resultCardinality();
 
-  optimization->memo()[key] = std::move(state.plans);
+  optimization->memo().insert(key, std::move(state.plans));
 }
 
 PlanP DerivedTable::bestInitialPlan() const {
-  MemoKey key = MemoKey::create(
-      this, PlanObjectSet::fromObjects(columns), PlanObjectSet::single(this));
+  MemoKey key = memoKey(*this);
 
-  auto& memo = queryCtx()->optimization()->memo();
-  auto it = memo.find(key);
-  VELOX_CHECK(it != memo.end(), "Expecting to find a plan for union branch");
+  auto* plans = queryCtx()->optimization()->memo().find(key);
+  VELOX_CHECK(plans != nullptr, "Expecting to find a plan for union branch");
 
-  return it->second.best();
+  return plans->best();
 }
 
 std::string DerivedTable::toString() const {

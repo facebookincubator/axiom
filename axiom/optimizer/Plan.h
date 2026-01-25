@@ -340,6 +340,8 @@ struct MemoKey {
 
   size_t hash() const;
 
+  std::string toString() const;
+
   const PlanObjectCP firstTable;
   const PlanObjectSet columns;
   const PlanObjectSet tables;
@@ -369,6 +371,52 @@ struct hash<::facebook::axiom::optimizer::MemoKey> {
 } // namespace std
 
 namespace facebook::axiom::optimizer {
+
+/// Memoization cache for partial plans. Wraps the underlying map
+/// to provide controlled access for adding entries and looking them up.
+class Memo {
+ public:
+  /// Inserts a plan set for the given key. Throws if the key already exists.
+  void insert(const MemoKey& key, PlanSet plans) {
+    VELOX_CHECK(!plans.plans.empty());
+
+    bool inserted = entries_.emplace(key, std::move(plans)).second;
+    VELOX_CHECK(inserted, "Duplicate memo key: {}", key.toString());
+  }
+
+  bool erase(const MemoKey& key) {
+    return entries_.erase(key) == 1;
+  }
+
+  /// Finds plans for the given key. Returns nullptr if not found.
+  PlanSet* find(const MemoKey& key) {
+    auto it = entries_.find(key);
+    return it != entries_.end() ? &it->second : nullptr;
+  }
+
+  const PlanSet* find(const MemoKey& key) const {
+    auto it = entries_.find(key);
+    return it != entries_.end() ? &it->second : nullptr;
+  }
+
+  /// Returns true if the key exists in the memo.
+  bool contains(const MemoKey& key) const {
+    return entries_.contains(key);
+  }
+
+  /// Returns the number of entries in the memo.
+  size_t size() const {
+    return entries_.size();
+  }
+
+  /// Clears all entries.
+  void clear() {
+    entries_.clear();
+  }
+
+ private:
+  folly::F14FastMap<MemoKey, PlanSet> entries_;
+};
 
 const JoinEdgeVector& joinedBy(PlanObjectCP table);
 
