@@ -577,6 +577,14 @@ bool MemoKey::operator==(const MemoKey& other) const {
   return false;
 }
 
+std::string MemoKey::toString() const {
+  return fmt::format(
+      "MemoKey({}, columns: {}, tables: {})",
+      cname(firstTable),
+      columns.toString(true),
+      tables.toString(true));
+}
+
 velox::core::JoinType reverseJoinType(velox::core::JoinType joinType) {
   switch (joinType) {
     case velox::core::JoinType::kLeft:

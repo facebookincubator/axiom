@@ -2285,9 +2285,8 @@ PlanP Optimization::makeDtPlan(
     const Distribution& distribution,
     float existsFanout,
     bool& needsShuffle) {
-  auto it = memo_.find(key);
-  PlanSet* plans{};
-  if (it == memo_.end()) {
+  PlanSet* plans = memo_.find(key);
+  if (plans == nullptr) {
     // Allocate temp DT in the arena. The DT may get flattened and then
     // PrecomputeProjection may create columns that reference that DT. Hence,
     // the DT's lifetime must extend to the lifetime of the optimization.
@@ -2303,10 +2302,8 @@ PlanP Optimization::makeDtPlan(
     }
 
     makeJoins(inner);
-    memo_[key] = std::move(inner.plans);
-    plans = &memo_[key];
-  } else {
-    plans = &it->second;
+    memo_.insert(key, std::move(inner.plans));
+    plans = memo_.find(key);
   }
   return plans->best(distribution, needsShuffle);
 }
