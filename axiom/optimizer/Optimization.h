@@ -334,7 +334,7 @@ class Optimization {
   // Top DerivedTable when making a QueryGraph from PlanNode.
   DerivedTableP root_;
 
-  folly::F14FastMap<MemoKey, PlanSet> memo_;
+  Memo memo_;
 
   // Set of previously planned dts for importing probe side reducing joins to a
   // build side
