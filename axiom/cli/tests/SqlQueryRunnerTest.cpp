@@ -40,7 +40,7 @@ class SqlQueryRunnerTest : public ::testing::Test, public test::VectorTestBase {
   std::unique_ptr<SqlQueryRunner> makeRunner() {
     auto runner = std::make_unique<SqlQueryRunner>();
 
-    runner->initialize([&](auto&) {
+    runner->initialize([&]() {
       static int32_t kCounter = 0;
 
       auto testConnector =

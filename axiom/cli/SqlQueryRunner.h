@@ -16,22 +16,19 @@
 #pragma once
 
 #include <folly/executors/IOThreadPoolExecutor.h>
-#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/DerivedTable.h"
-#include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/optimizer/ToVelox.h"
 #include "axiom/runner/LocalRunner.h"
-#include "axiom/sql/presto/PrestoParser.h"
+#include "axiom/sql/presto/SqlStatement.h"
 
 namespace axiom::sql {
 
 class SqlQueryRunner {
  public:
   /// @param initializeConnectors Lambda to call to initialize connectors and
-  /// return a pair of default {connector ID, schema}. Takes a reference to the
-  /// history to allow for loading from persistent storage.
+  /// return a pair of default {connector ID, schema}.
   void initialize(
-      const std::function<std::pair<std::string, std::optional<std::string>>(
-          facebook::axiom::optimizer::VeloxHistory& history)>&
+      const std::function<std::pair<std::string, std::optional<std::string>>()>&
           initializeConnectors);
 
   /// Results of running a query. SELECT queries return a vector of results.
@@ -47,6 +44,12 @@ class SqlQueryRunner {
     int32_t numDrivers{4};
     uint64_t splitTargetBytes{16 << 20};
     uint32_t optimizerTraceFlags{0};
+
+    // Microseconds to wait for query to complete. 0 means no timeout.
+    int32_t timeoutMicros{500'000};
+
+    std::optional<std::string> defaultConnectorId;
+    std::optional<std::string> defaultSchema;
 
     /// If true, EXPLAIN ANALYZE output includes custom operator stats.
     bool debugMode{false};
@@ -71,13 +74,9 @@ class SqlQueryRunner {
     return config_;
   }
 
-  void saveHistory(const std::string& path) {
-    history_->saveToFile(path);
-  }
-
-  void clearHistory() {
-    history_ = std::make_unique<facebook::axiom::optimizer::VeloxHistory>();
-  }
+  std::shared_ptr<facebook::axiom::runner::LocalRunner> executeSelect(
+      std::string_view sql,
+      const RunOptions& options);
 
  private:
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
@@ -127,10 +126,11 @@ class SqlQueryRunner {
       const RunOptions& options);
 
   static void waitForCompletion(
-      const std::shared_ptr<facebook::axiom::runner::LocalRunner>& runner) {
+      const std::shared_ptr<facebook::axiom::runner::LocalRunner>& runner,
+      int32_t timeout) {
     if (runner) {
       try {
-        runner->waitForCompletion(500000);
+        runner->waitForCompletion(timeout);
       } catch (const std::exception&) {
       }
     }
@@ -141,11 +141,10 @@ class SqlQueryRunner {
   std::shared_ptr<facebook::velox::memory::MemoryPool> optimizerPool_;
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<folly::IOThreadPoolExecutor> spillExecutor_;
-  std::shared_ptr<facebook::axiom::connector::SchemaResolver> schema_;
   std::unordered_map<std::string, std::string> config_;
-  std::unique_ptr<facebook::axiom::optimizer::VeloxHistory> history_;
-  std::unique_ptr<presto::PrestoParser> prestoParser_;
-  int32_t queryCounter_{0};
+  std::string defaultConnectorId_;
+  std::optional<std::string> defaultSchema_;
+  std::atomic<int32_t> queryCounter_{0};
 };
 
 } // namespace axiom::sql
