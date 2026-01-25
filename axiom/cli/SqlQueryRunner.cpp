@@ -16,12 +16,15 @@
 
 #include "axiom/cli/SqlQueryRunner.h"
 #include <folly/system/HardwareConcurrency.h>
+#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/RelationOpPrinter.h"
+#include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/sql/presto/PrestoParser.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/expression/Expr.h"
@@ -36,8 +39,8 @@ using namespace facebook::axiom;
 namespace axiom::sql {
 
 void SqlQueryRunner::initialize(
-    const std::function<std::pair<std::string, std::optional<std::string>>(
-        optimizer::VeloxHistory& history)>& initializeConnectors) {
+    const std::function<std::pair<std::string, std::optional<std::string>>()>&
+        initializeConnectors) {
   static folly::once_flag kInitialized;
 
   folly::call_once(kInitialized, []() {
@@ -63,16 +66,9 @@ void SqlQueryRunner::initialize(
       fmt::format("axiom_sql{}", kCounter++));
   optimizerPool_ = rootPool_->addLeafChild("optimizer");
 
-  history_ = std::make_unique<optimizer::VeloxHistory>();
-
-  const auto [defaultConnectorId, defaultSchema] =
-      initializeConnectors(*history_);
-
-  schema_ = std::make_shared<connector::SchemaResolver>();
-
-  prestoParser_ =
-      std::make_unique<presto::PrestoParser>(defaultConnectorId, defaultSchema);
-
+  auto [defaultConnectorId, defaultSchema] = initializeConnectors();
+  defaultConnectorId_ = std::move(defaultConnectorId);
+  defaultSchema_ = std::move(defaultSchema);
   spillExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(4);
 }
 
@@ -125,7 +121,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     std::string_view sql,
     const RunOptions& options) {
   auto statements = parseMultiple(sql, options);
-  VELOX_CHECK_EQ(
+  VELOX_USER_CHECK_EQ(
       statements.size(),
       1,
       "run() expects a single statement. "
@@ -136,7 +132,14 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
 std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
     std::string_view sql,
     const RunOptions& options) {
-  return prestoParser_->parseMultiple(sql, /*enableTracing=*/options.debugMode);
+  const std::string& defaultConnectorId =
+      options.defaultConnectorId.value_or(defaultConnectorId_);
+  const std::optional<std::string>& defaultSchema =
+      options.defaultSchema ? options.defaultSchema : defaultSchema_;
+
+  auto prestoParser =
+      std::make_unique<presto::PrestoParser>(defaultConnectorId, defaultSchema);
+  return prestoParser->parseMultiple(sql, /*enableTracing=*/options.debugMode);
 }
 
 SqlQueryRunner::SqlResult SqlQueryRunner::run(
@@ -166,16 +169,10 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
 
   if (sqlStatement.isCreateTableAsSelect()) {
     const auto* ctas = sqlStatement.as<presto::CreateTableAsSelectStatement>();
-
     auto table = createTable(*ctas);
 
-    auto originalSchemaResolver = schema_;
-    SCOPE_EXIT {
-      schema_ = originalSchemaResolver;
-    };
-
-    schema_ = std::make_shared<connector::SchemaResolver>();
-    schema_->setTargetTable(ctas->connectorId(), table);
+    auto schema = std::make_shared<connector::SchemaResolver>();
+    schema->setTargetTable(ctas->connectorId(), table);
 
     return {.results = runSql(ctas->plan(), options)};
   }
@@ -196,6 +193,31 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
   const auto logicalPlan = sqlStatement.as<presto::SelectStatement>()->plan();
 
   return {.results = runSql(logicalPlan, options)};
+}
+
+std::shared_ptr<facebook::axiom::runner::LocalRunner>
+SqlQueryRunner::executeSelect(std::string_view sql, const RunOptions& options) {
+  auto statements = parseMultiple(sql, options);
+  VELOX_USER_CHECK_EQ(
+      statements.size(), 1, "executeSelect() expects a single statement.");
+
+  logical_plan::LogicalPlanNodePtr logicalPlan;
+  const auto& statement = *statements[0];
+  if (statement.isSelect()) {
+    logicalPlan = statement.as<presto::SelectStatement>()->plan();
+  } else if (statement.isInsert()) {
+    logicalPlan = statement.as<presto::InsertStatement>()->plan();
+  } else {
+    VELOX_USER_FAIL(
+        "Only SELECT and INSERT statements are supported, found: {}",
+        statement.kindName());
+  }
+
+  auto queryCtx = newQuery(options);
+  auto planAndStats = optimize(logicalPlan, queryCtx, options);
+  auto runner = makeLocalRunner(planAndStats, queryCtx, options);
+
+  return runner;
 }
 
 std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
@@ -281,7 +303,7 @@ std::string SqlQueryRunner::runExplainAnalyze(
 
   auto runner = makeLocalRunner(planAndStats, queryCtx, options);
   SCOPE_EXIT {
-    waitForCompletion(runner);
+    waitForCompletion(runner, options.timeoutMicros);
   };
 
   auto results = fetchResults(*runner);
@@ -316,12 +338,14 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
       queryCtx.get(), optimizerPool_.get());
 
   auto session = std::make_shared<Session>(queryCtx->queryId());
+  auto schema = std::make_shared<connector::SchemaResolver>();
+  auto history = std::make_unique<optimizer::VeloxHistory>();
 
   optimizer::Optimization optimization(
       session,
       *logicalPlan,
-      *schema_,
-      *history_,
+      *schema,
+      *history,
       queryCtx,
       evaluator,
       {.traceFlags = options.optimizerTraceFlags},
@@ -365,14 +389,10 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runSql(
 
   auto runner = makeLocalRunner(planAndStats, queryCtx, options);
   SCOPE_EXIT {
-    waitForCompletion(runner);
+    waitForCompletion(runner, options.timeoutMicros);
   };
 
   auto results = fetchResults(*runner);
-
-  const auto stats = runner->stats();
-  history_->recordVeloxExecution(planAndStats, stats);
-
   return results;
 }
 

@@ -202,16 +202,6 @@ void Console::readCommands(const std::string& prompt) {
       continue;
     }
 
-    if (command.starts_with("savehistory")) {
-      runner_.saveHistory(FLAGS_data_path + "/.history");
-      continue;
-    }
-
-    if (command.starts_with("clearhistory")) {
-      runner_.clearHistory();
-      continue;
-    }
-
     runNoThrow(command);
   }
 }
