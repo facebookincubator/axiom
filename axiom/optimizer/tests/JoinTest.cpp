@@ -313,8 +313,7 @@ TEST_F(JoinTest, joinWithComputedKeys) {
     auto matcher =
         core::PlanMatcherBuilder()
             .tableScan("nation")
-            // TODO Remove redundant projection of 'n_regionkey'.
-            .project({"n_regionkey", "coalesce(n_regionkey, 1)"})
+            .project({"coalesce(n_regionkey, 1)"})
             .hashJoin(
                 core::PlanMatcherBuilder().tableScan("region").build(),
                 core::JoinType::kRight)
@@ -332,15 +331,14 @@ TEST_F(JoinTest, joinWithComputedKeys) {
     LOG(ERROR) << distributedPlan.plan->toString();
 
     auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
+                       .tableScan("nation")
+                       .project({"coalesce(n_regionkey, 1)"})
                        .partitionedOutput()
                        .build();
     AXIOM_ASSERT_PLAN(fragments.at(0).fragment.planNode, matcher);
 
     matcher = core::PlanMatcherBuilder()
-                  .tableScan("nation")
-                  // TODO Remove redundant projection of 'n_regionkey'.
-                  .project({"n_regionkey", "coalesce(n_regionkey, 1)"})
+                  .tableScan("region")
                   .partitionedOutput()
                   .build();
     AXIOM_ASSERT_PLAN(fragments.at(1).fragment.planNode, matcher);
@@ -349,7 +347,7 @@ TEST_F(JoinTest, joinWithComputedKeys) {
                   .exchange()
                   .hashJoin(
                       core::PlanMatcherBuilder().exchange().build(),
-                      core::JoinType::kLeft)
+                      core::JoinType::kRight)
                   .partialAggregation()
                   .partitionedOutput()
                   .build();
@@ -488,8 +486,7 @@ TEST_F(JoinTest, joinWithComputedAndProjectedKeys) {
                      .hashJoin(
                          core::PlanMatcherBuilder()
                              .tableScan("t")
-                             // TODO Remove redundant projection of 't0'.
-                             .project({"t0", "coalesce(t0, 0)"})
+                             .project({"coalesce(t0, 0)"})
                              .build())
                      .project()
                      .build();
