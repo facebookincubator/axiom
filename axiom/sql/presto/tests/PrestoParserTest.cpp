@@ -21,6 +21,7 @@
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
+#include "axiom/sql/presto/PrestoParseError.h"
 #include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/tpch/TpchConnector.h"
@@ -406,7 +407,7 @@ TEST_F(PrestoParserTest, syntaxErrors) {
   auto parser = makeParser();
   EXPECT_THAT(
       [&]() { parser.parse("SELECT * FROM"); },
-      ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+      ThrowsMessage<axiom::sql::presto::PrestoParseError>(::testing::HasSubstr(
           "Syntax error at 1:13: mismatched input '<EOF>'")));
 
   EXPECT_THAT(
@@ -415,12 +416,12 @@ TEST_F(PrestoParserTest, syntaxErrors) {
             "SELECT * FROM nation\n"
             "WHERE");
       },
-      ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+      ThrowsMessage<axiom::sql::presto::PrestoParseError>(::testing::HasSubstr(
           "Syntax error at 2:5: mismatched input '<EOF>'")));
 
   EXPECT_THAT(
       [&]() { parser.parse("SELECT * FROM (VALUES 1, 2, 3)) blah..."); },
-      ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+      ThrowsMessage<axiom::sql::presto::PrestoParseError>(::testing::HasSubstr(
           "Syntax error at 1:30: mismatched input ')' expecting <EOF>")));
 }
 
