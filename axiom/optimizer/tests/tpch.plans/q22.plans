@@ -11,7 +11,7 @@ dt1: cntrycode, numcust, totacctbal
   tables: t2, dt3, dt5
   joins:
     t2 SEMI dt5 ON t2.c_custkey = dt5.o_custkey
-  syntactic join order: 9, 13, 35
+  syntactic join order: 11, 15, 37
   aggregates: count() AS numcust, sum(t2.c_acctbal) AS totacctbal
   grouping keys: substr(t2.c_phone, 1, 2)
   filter: gt(t2.c_acctbal, dt3.avg) and not(dt1.__mark0)
@@ -31,20 +31,12 @@ t4: c_phone, c_acctbal
   table: customer
   single-column filters: gt(t4.c_acctbal, 0) and __in(substr(t4.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
 
-dt5: o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment
+dt5: o_custkey
   output:
-    o_orderkey := t6.o_orderkey
     o_custkey := t6.o_custkey
-    o_orderstatus := t6.o_orderstatus
-    o_totalprice := t6.o_totalprice
-    o_orderdate := t6.o_orderdate
-    o_orderpriority := t6.o_orderpriority
-    o_clerk := t6.o_clerk
-    o_shippriority := t6.o_shippriority
-    o_comment := t6.o_comment
   tables: t6
 
-t6: o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment
+t6: o_custkey
   table: orders
 
 
@@ -59,11 +51,11 @@ Project (redundant) -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
     dt1.numcust := dt1.numcust
     dt1.totacctbal := dt1.totacctbal
   OrderBy -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
-    Aggregation (dt1.__p67) -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
+    Aggregation (dt1.__p55) -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
         dt1.numcust := count()
         dt1.totacctbal := sum(t2.c_acctbal)
-      Project -> dt1.__p67, t2.c_acctbal
-          dt1.__p67 := substr(t2.c_phone, 1, 2)
+      Project -> dt1.__p55, t2.c_acctbal
+          dt1.__p55 := substr(t2.c_phone, 1, 2)
           t2.c_acctbal := t2.c_acctbal
         Filter -> t2.c_phone, t2.c_acctbal, dt1.__mark0
             not(dt1.__mark0)

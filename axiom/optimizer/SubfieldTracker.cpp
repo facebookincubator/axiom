@@ -488,6 +488,14 @@ void SubfieldTracker::markSubfields(
   }
 
   if (expr->isSpecialForm()) {
+    const auto& specialForm = expr->as<lp::SpecialFormExpr>();
+    if (specialForm->form() == lp::SpecialForm::kExists) {
+      const auto& subquery =
+          specialForm->inputAt(0)->as<lp::SubqueryExpr>()->subquery();
+      markControl(*subquery, context);
+      return;
+    }
+
     std::vector<Step> specialFormSteps;
     for (const auto& input : expr->inputs()) {
       markSubfields(input, specialFormSteps, isControl, context);
@@ -497,7 +505,6 @@ void SubfieldTracker::markSubfields(
   }
 
   if (expr->isSubquery()) {
-    // TODO We may not necessarily need all outputs of the subquery.
     markAllSubfields(*expr->as<lp::SubqueryExpr>()->subquery(), context);
     return;
   }

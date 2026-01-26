@@ -13,7 +13,7 @@ dt1: p_brand, p_type, p_size, supplier_cnt
   joins:
     t2 SEMI dt4 ON t2.ps_suppkey = dt4.s_suppkey
     t2 INNER t3 ON t2.ps_partkey = t3.p_partkey
-  syntactic join order: 6, 18, 23
+  syntactic join order: 8, 22, 27
   aggregates: count(t2.ps_suppkey) AS supplier_cnt
   grouping keys: t3.p_brand, t3.p_type, t3.p_size
   filter: not(dt1.__mark0)
