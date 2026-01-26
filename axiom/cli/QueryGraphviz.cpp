@@ -36,9 +36,8 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include "axiom/cli/Connectors.h"
 #include "axiom/cli/SqlQueryRunner.h"
-#include "axiom/connectors/tpch/TpchConnectorMetadata.h"
-#include "velox/connectors/Connector.h"
 
 DEFINE_string(
     query,
@@ -51,23 +50,6 @@ DEFINE_string(
 
 namespace facebook::axiom {
 namespace {
-
-std::string initializeTpchConnector() {
-  auto emptyConfig = std::make_shared<velox::config::ConfigBase>(
-      std::unordered_map<std::string, std::string>{});
-
-  velox::connector::tpch::TpchConnectorFactory factory;
-  auto connector = factory.newConnector("tpch", emptyConfig);
-  velox::connector::registerConnector(connector);
-
-  connector::ConnectorMetadata::registerMetadata(
-      connector->connectorId(),
-      std::make_shared<connector::tpch::TpchConnectorMetadata>(
-          dynamic_cast<velox::connector::tpch::TpchConnector*>(
-              connector.get())));
-
-  return connector->connectorId();
-}
 
 /// Returns the path to the 'dot' executable.
 std::string findDotExecutable() {
@@ -153,10 +135,12 @@ int main(int argc, char** argv) {
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
 
+  facebook::axiom::Connectors connectors;
+  auto connector = connectors.registerTpchConnector();
+
   axiom::sql::SqlQueryRunner runner;
-  runner.initialize([](auto& /*history*/) {
-    return std::make_pair(
-        facebook::axiom::initializeTpchConnector(), std::nullopt);
+  runner.initialize([&](auto& /*history*/) {
+    return std::make_pair(connector->connectorId(), std::nullopt);
   });
 
   const auto dot = runner.toDot(query);
