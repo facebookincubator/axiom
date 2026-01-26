@@ -495,9 +495,8 @@ ExprCP DerivedTable::exportExpr(ExprCP expr) {
   expr->columns().forEach<Column>([&](auto* column) {
     if (tableSet.contains(column->relation())) {
       if (pushBackUnique(exprs, column)) {
-        const auto* columnName = toName(column->name());
-        auto outer =
-            make<Column>(columnName, this, column->value(), columnName);
+        auto outer = make<Column>(
+            column->name(), this, column->value(), column->alias());
         columns.push_back(outer);
       }
     }

@@ -17,7 +17,7 @@ dt1: nation, o_year, sum_profit
     t3 INNER t7 ON t3.s_nationkey = t7.n_nationkey
     t3 INNER t5 ON t3.s_suppkey = t5.ps_suppkey
     t5 INNER t2 ON t5.ps_partkey = t2.p_partkey
-  syntactic join order: 10, 20, 39, 51, 64, 71
+  syntactic join order: 12, 24, 45, 59, 74, 83
   aggregates: sum(minus(multiply(t4.l_extendedprice, minus(1, t4.l_discount)), multiply(t4.l_quantity, t5.ps_supplycost))) AS sum_profit
   grouping keys: t7.n_name, year(t6.o_orderdate)
   orderBy: t7.n_name ASC NULLS LAST, dt1.o_year DESC NULLS LAST
@@ -53,12 +53,12 @@ Project -> dt1.nation, dt1.o_year, dt1.sum_profit
     dt1.o_year := dt1.o_year
     dt1.sum_profit := dt1.sum_profit
   OrderBy -> t7.n_name, dt1.o_year, dt1.sum_profit
-    Aggregation (t7.n_name, dt1.__p82) -> t7.n_name, dt1.o_year, dt1.sum_profit
-        dt1.sum_profit := sum(dt1.__p89)
-      Project -> t7.n_name, dt1.__p82, dt1.__p89
+    Aggregation (t7.n_name, dt1.__p94) -> t7.n_name, dt1.o_year, dt1.sum_profit
+        dt1.sum_profit := sum(dt1.__p101)
+      Project -> t7.n_name, dt1.__p94, dt1.__p101
           t7.n_name := t7.n_name
-          dt1.__p82 := year(t6.o_orderdate)
-          dt1.__p89 := minus(multiply(t4.l_extendedprice, minus(1, t4.l_discount)), multiply(t4.l_quantity, t5.ps_supplycost))
+          dt1.__p94 := year(t6.o_orderdate)
+          dt1.__p101 := minus(multiply(t4.l_extendedprice, minus(1, t4.l_discount)), multiply(t4.l_quantity, t5.ps_supplycost))
         Join INNER Hash -> t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_supplycost, t6.o_orderdate, t7.n_name
             t3.s_nationkey = t7.n_nationkey
           Join INNER Hash -> t3.s_nationkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_supplycost, t6.o_orderdate
@@ -95,8 +95,8 @@ Executable Velox plan:
 Fragment 0:  numWorkers=0:
 -- Project[26][expressions: (nation:VARCHAR, "n_name"), (o_year:BIGINT, "o_year"), (sum_profit:DOUBLE, "sum_profit")] -> nation:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
   -- OrderBy[25][n_name ASC NULLS LAST, o_year DESC NULLS LAST] -> n_name:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
-    -- Aggregation[24][SINGLE [n_name, o_year] sum_profit := sum("dt1.__p89")] -> n_name:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
-      -- Project[23][expressions: (n_name:VARCHAR, "n_name"), (o_year:BIGINT, year("o_orderdate")), (dt1.__p89:DOUBLE, minus(multiply("l_extendedprice",minus(1,"l_discount")),multiply("l_quantity","ps_supplycost")))] -> n_name:VARCHAR, o_year:BIGINT, "dt1.__p89":DOUBLE
+    -- Aggregation[24][SINGLE [n_name, o_year] sum_profit := sum("dt1.__p101")] -> n_name:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
+      -- Project[23][expressions: (n_name:VARCHAR, "n_name"), (o_year:BIGINT, year("o_orderdate")), (dt1.__p101:DOUBLE, minus(multiply("l_extendedprice",minus(1,"l_discount")),multiply("l_quantity","ps_supplycost")))] -> n_name:VARCHAR, o_year:BIGINT, "dt1.__p101":DOUBLE
         -- HashJoin[22][INNER s_nationkey=n_nationkey] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_supplycost:DOUBLE, o_orderdate:DATE, n_name:VARCHAR
           -- HashJoin[20][INNER l_suppkey=s_suppkey] -> s_nationkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_supplycost:DOUBLE, o_orderdate:DATE
             -- HashJoin[18][INNER o_orderkey=l_orderkey] -> l_suppkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_suppkey:BIGINT, ps_supplycost:DOUBLE, o_orderdate:DATE

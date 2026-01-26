@@ -11,7 +11,7 @@ dt1: s_name, s_address
   joins:
     t2 SEMI dt4 ON t2.s_suppkey = dt4.ps_suppkey
     t2 INNER t3 ON t2.s_nationkey = t3.n_nationkey
-  syntactic join order: 8, 17, 20
+  syntactic join order: 10, 21, 24
   filter: dt1.__mark1
   orderBy: t2.s_name ASC NULLS LAST
 
@@ -29,7 +29,7 @@ dt4: ps_suppkey
   joins:
     t5 LEFT dt6 ON t5.ps_partkey = dt6.__gk8 AND t5.ps_suppkey = dt6.__gk9
     t5 SEMI dt10 ON t5.ps_partkey = dt10.p_partkey
-  syntactic join order: 26, 30, 76
+  syntactic join order: 32, 36, 84
   filter: dt4.__mark0 and lt(dt6.expr, __cast(t5.ps_availqty))
 
 t5: ps_partkey, ps_suppkey, ps_availqty

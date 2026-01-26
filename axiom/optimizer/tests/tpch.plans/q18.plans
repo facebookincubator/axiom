@@ -3,21 +3,21 @@ numDrivers: 1
 
 Query Graph:
 
-dt1: c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice, sum_18
+dt1: c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice, sum_24
   output:
     c_name := t2.c_name
     c_custkey := t2.c_custkey
     o_orderkey := t3.o_orderkey
     o_orderdate := t3.o_orderdate
     o_totalprice := t3.o_totalprice
-    sum_18 := dt1.sum_18
+    sum_24 := dt1.sum_24
   tables: t2, t3, t4, dt5
   joins:
-    t3 SEMI dt5 ON t3.o_orderkey = dt5.l_orderkey_17
+    t3 SEMI dt5 ON t3.o_orderkey = dt5.l_orderkey_23
     t2 INNER t3 ON t2.c_custkey = t3.o_custkey
     t3 INNER t4 ON t3.o_orderkey = t4.l_orderkey
-  syntactic join order: 9, 21, 42, 45
-  aggregates: sum(t4.l_quantity) AS sum_18
+  syntactic join order: 11, 25, 48, 51
+  aggregates: sum(t4.l_quantity) AS sum_24
   grouping keys: t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice
   filter: dt1.__mark0
   orderBy: t3.o_totalprice DESC NULLS LAST, t3.o_orderdate ASC NULLS LAST
@@ -32,9 +32,9 @@ t3: o_orderkey, o_custkey, o_totalprice, o_orderdate
 t4: l_orderkey, l_quantity
   table: lineitem
 
-dt5: l_orderkey_17
+dt5: l_orderkey_23
   output:
-    l_orderkey_17 := t6.l_orderkey
+    l_orderkey_23 := t6.l_orderkey
   tables: t6
   aggregates: sum(t6.l_quantity) AS sum
   grouping keys: t6.l_orderkey
@@ -50,18 +50,18 @@ agg(((lineitem INNER (orders INNER customer)) LEFT SEMI (FILTER) agg(lineitem)))
 
 Optimized plan:
 
-Project (redundant) -> dt1.c_name, dt1.c_custkey, dt1.o_orderkey, dt1.o_orderdate, dt1.o_totalprice, dt1.sum_18
+Project (redundant) -> dt1.c_name, dt1.c_custkey, dt1.o_orderkey, dt1.o_orderdate, dt1.o_totalprice, dt1.sum_24
     dt1.c_name := t2.c_name
     dt1.c_custkey := t2.c_custkey
     dt1.o_orderkey := t3.o_orderkey
     dt1.o_orderdate := t3.o_orderdate
     dt1.o_totalprice := t3.o_totalprice
-    dt1.sum_18 := dt1.sum_18
-  OrderBy -> t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice, dt1.sum_18
-    Aggregation (t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice) -> t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice, dt1.sum_18
-        dt1.sum_18 := sum(t4.l_quantity)
+    dt1.sum_24 := dt1.sum_24
+  OrderBy -> t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice, dt1.sum_24
+    Aggregation (t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice) -> t2.c_name, t2.c_custkey, t3.o_orderkey, t3.o_orderdate, t3.o_totalprice, dt1.sum_24
+        dt1.sum_24 := sum(t4.l_quantity)
       Join LEFT SEMI (FILTER) Hash -> t2.c_custkey, t2.c_name, t3.o_orderkey, t3.o_totalprice, t3.o_orderdate, t4.l_quantity
-          t3.o_orderkey = dt5.l_orderkey_17
+          t3.o_orderkey = dt5.l_orderkey_23
         Join INNER Hash -> t2.c_custkey, t2.c_name, t3.o_orderkey, t3.o_totalprice, t3.o_orderdate, t4.l_quantity
             t4.l_orderkey = t3.o_orderkey
           TableScan -> t4.l_orderkey, t4.l_quantity
@@ -74,9 +74,9 @@ Project (redundant) -> dt1.c_name, dt1.c_custkey, dt1.o_orderkey, dt1.o_orderdat
               HashBuild -> t2.c_custkey, t2.c_name
                 TableScan -> t2.c_custkey, t2.c_name
                   table: customer
-        HashBuild -> dt5.l_orderkey_17
-          Project -> dt5.l_orderkey_17
-              dt5.l_orderkey_17 := t6.l_orderkey
+        HashBuild -> dt5.l_orderkey_23
+          Project -> dt5.l_orderkey_23
+              dt5.l_orderkey_23 := t6.l_orderkey
             Filter -> t6.l_orderkey, dt5.sum
                 gt(dt5.sum, 300)
               Aggregation (t6.l_orderkey) -> t6.l_orderkey, dt5.sum
@@ -88,17 +88,17 @@ Project (redundant) -> dt1.c_name, dt1.c_custkey, dt1.o_orderkey, dt1.o_orderdat
 Executable Velox plan:
 
 Fragment 0:  numWorkers=0:
--- TopN[11][100 o_totalprice DESC NULLS LAST, o_orderdate ASC NULLS LAST] -> c_name:VARCHAR, c_custkey:BIGINT, o_orderkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, sum_18:DOUBLE
-  -- Aggregation[10][SINGLE [c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice] sum_18 := sum("l_quantity")] -> c_name:VARCHAR, c_custkey:BIGINT, o_orderkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, sum_18:DOUBLE
-    -- HashJoin[9][LEFT SEMI (FILTER) o_orderkey=l_orderkey_17] -> c_custkey:BIGINT, c_name:VARCHAR, o_orderkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE, l_quantity:DOUBLE
+-- TopN[11][100 o_totalprice DESC NULLS LAST, o_orderdate ASC NULLS LAST] -> c_name:VARCHAR, c_custkey:BIGINT, o_orderkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, sum_24:DOUBLE
+  -- Aggregation[10][SINGLE [c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice] sum_24 := sum("l_quantity")] -> c_name:VARCHAR, c_custkey:BIGINT, o_orderkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, sum_24:DOUBLE
+    -- HashJoin[9][LEFT SEMI (FILTER) o_orderkey=l_orderkey_23] -> c_custkey:BIGINT, c_name:VARCHAR, o_orderkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE, l_quantity:DOUBLE
       -- HashJoin[4][INNER l_orderkey=o_orderkey] -> c_custkey:BIGINT, c_name:VARCHAR, o_orderkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE, l_quantity:DOUBLE
         -- TableScan[0][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey:BIGINT, l_quantity:DOUBLE
         -- HashJoin[3][INNER o_custkey=c_custkey] -> c_custkey:BIGINT, c_name:VARCHAR, o_orderkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE
           -- TableScan[1][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_totalprice:DOUBLE, o_orderdate:DATE
           -- TableScan[2][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT, c_name:VARCHAR
-      -- Project[8][expressions: (l_orderkey_17:BIGINT, "l_orderkey_0")] -> l_orderkey_17:BIGINT
-        -- Filter[5][expression: gt("sum",300)] -> l_orderkey_0:BIGINT, sum:DOUBLE
-          -- Aggregation[7][SINGLE [l_orderkey_0] sum := sum("l_quantity_4")] -> l_orderkey_0:BIGINT, sum:DOUBLE
-            -- TableScan[6][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey_0:BIGINT, l_quantity_4:DOUBLE
+      -- Project[8][expressions: (l_orderkey_23:BIGINT, "l_orderkey_4")] -> l_orderkey_23:BIGINT
+        -- Filter[5][expression: gt("sum",300)] -> l_orderkey_4:BIGINT, sum:DOUBLE
+          -- Aggregation[7][SINGLE [l_orderkey_4] sum := sum("l_quantity_8")] -> l_orderkey_4:BIGINT, sum:DOUBLE
+            -- TableScan[6][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey_4:BIGINT, l_quantity_8:DOUBLE
 
 ___END___

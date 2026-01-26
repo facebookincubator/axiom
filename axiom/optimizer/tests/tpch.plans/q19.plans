@@ -9,7 +9,7 @@ dt1: revenue
   tables: t2, t3
   joins:
     t2 INNER t3 ON t2.l_partkey = t3.p_partkey
-  syntactic join order: 17, 33
+  syntactic join order: 19, 37
   aggregates: sum(multiply(t2.l_extendedprice, minus(1, t2.l_discount))) AS revenue
   filter: __or(__and(between(t3.p_size, 1, 15), __and(lte(t2.l_quantity, 30), __and(gte(t2.l_quantity, 20), __and(eq(t3.p_brand, "Brand#34"), __in(t3.p_container, "LG CASE", "LG BOX", "LG PACK", "LG PKG"))))), __or(__and(between(t3.p_size, 1, 5), __and(lte(t2.l_quantity, 11), __and(gte(t2.l_quantity, 1), __and(eq(t3.p_brand, "Brand#12"), __in(t3.p_container, "SM CASE", "SM BOX", "SM PACK", "SM PKG"))))), __and(between(t3.p_size, 1, 10), __and(lte(t2.l_quantity, 20), __and(gte(t2.l_quantity, 10), __and(eq(t3.p_brand, "Brand#23"), __in(t3.p_container, "MED BAG", "MED BOX", "MED PKG", "MED PACK")))))))
 
@@ -31,9 +31,9 @@ Optimized plan:
 Project (redundant) -> dt1.revenue
     dt1.revenue := dt1.revenue
   Aggregation -> dt1.revenue
-      dt1.revenue := sum(dt1.__p120)
-    Project -> dt1.__p120
-        dt1.__p120 := multiply(t2.l_extendedprice, minus(1, t2.l_discount))
+      dt1.revenue := sum(dt1.__p124)
+    Project -> dt1.__p124
+        dt1.__p124 := multiply(t2.l_extendedprice, minus(1, t2.l_discount))
       Filter -> t2.l_quantity, t2.l_extendedprice, t2.l_discount, t3.p_brand, t3.p_size, t3.p_container
           __or(__and(between(t3.p_size, 1, 15), __and(lte(t2.l_quantity, 30), __and(gte(t2.l_quantity, 20), __and(eq(t3.p_brand, "Brand#34"), __in(t3.p_container, "LG CASE", "LG BOX", "LG PACK", "LG PKG"))))), __or(__and(between(t3.p_size, 1, 5), __and(lte(t2.l_quantity, 11), __and(gte(t2.l_quantity, 1), __and(eq(t3.p_brand, "Brand#12"), __in(t3.p_container, "SM CASE", "SM BOX", "SM PACK", "SM PKG"))))), __and(between(t3.p_size, 1, 10), __and(lte(t2.l_quantity, 20), __and(gte(t2.l_quantity, 10), __and(eq(t3.p_brand, "Brand#23"), __in(t3.p_container, "MED BAG", "MED BOX", "MED PKG", "MED PACK")))))))
         Join INNER Hash -> t2.l_quantity, t2.l_extendedprice, t2.l_discount, t3.p_brand, t3.p_size, t3.p_container
@@ -50,8 +50,8 @@ Project (redundant) -> dt1.revenue
 Executable Velox plan:
 
 Fragment 0:  numWorkers=0:
--- Aggregation[5][SINGLE revenue := sum("dt1.__p120")] -> revenue:DOUBLE
-  -- Project[4][expressions: (dt1.__p120:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> "dt1.__p120":DOUBLE
+-- Aggregation[5][SINGLE revenue := sum("dt1.__p124")] -> revenue:DOUBLE
+  -- Project[4][expressions: (dt1.__p124:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> "dt1.__p124":DOUBLE
     -- Filter[0][expression: or(and(between("p_size",1,15),and(lte("l_quantity",30),and(gte("l_quantity",20),and(eq("p_brand",Brand#34),in("p_container",{LG CASE, LG BOX, LG PACK, LG PKG}))))),or(and(between("p_size",1,5),and(lte("l_quantity",11),and(gte("l_quantity",1),and(eq("p_brand",Brand#12),in("p_container",{SM CASE, SM BOX, SM PACK, SM PKG}))))),and(between("p_size",1,10),and(lte("l_quantity",20),and(gte("l_quantity",10),and(eq("p_brand",Brand#23),in("p_container",{MED BAG, MED BOX, MED PKG, MED PACK})))))))] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, p_brand:VARCHAR, p_size:INTEGER, p_container:VARCHAR
       -- HashJoin[3][INNER l_partkey=p_partkey] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, p_brand:VARCHAR, p_size:INTEGER, p_container:VARCHAR
         -- TableScan[1][table: lineitem, range filters: [(l_quantity, DoubleRange: [1.000000, 30.000000] no nulls), (l_shipinstruct, Filter(BytesValues, deterministic, no nulls)), (l_shipmode, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_quantity, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipinstruct, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipmode, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> l_partkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE

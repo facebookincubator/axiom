@@ -6,7 +6,7 @@ Query Graph:
 dt1: o_year, mkt_share
   output:
     o_year := dt1.o_year
-    mkt_share := divide(dt1.sum, dt1.sum_4)
+    mkt_share := divide(dt1.sum, dt1.sum_18)
   tables: t2, t3, t4, t5, t6, t7, t8, t9
   joins:
     t2 INNER t4 ON t2.p_partkey = t4.l_partkey
@@ -16,8 +16,8 @@ dt1: o_year, mkt_share
     t6 INNER t7 ON t6.c_nationkey = t7.n_nationkey
     t7 INNER t9 ON t7.n_regionkey = t9.r_regionkey
     t3 INNER t8 ON t3.s_nationkey = t8.n_nationkey
-  syntactic join order: 10, 20, 39, 54, 66, 73, 76, 82
-  aggregates: sum(__switch(eq(t8.n_name, "BRAZIL"), multiply(t4.l_extendedprice, minus(1, t4.l_discount)), 0)) AS sum, sum(multiply(t4.l_extendedprice, minus(1, t4.l_discount))) AS sum_4
+  syntactic join order: 12, 24, 45, 62, 76, 85, 88, 96
+  aggregates: sum(__switch(eq(t8.n_name, "BRAZIL"), multiply(t4.l_extendedprice, minus(1, t4.l_discount)), 0)) AS sum, sum(multiply(t4.l_extendedprice, minus(1, t4.l_discount))) AS sum_18
   grouping keys: year(t5.o_orderdate)
   orderBy: dt1.o_year ASC NULLS LAST
 
@@ -57,15 +57,15 @@ Optimized plan:
 
 Project -> dt1.o_year, dt1.mkt_share
     dt1.o_year := dt1.o_year
-    dt1.mkt_share := divide(dt1.sum, dt1.sum_4)
-  OrderBy -> dt1.o_year, dt1.sum, dt1.sum_4
-    Aggregation (dt1.__p103) -> dt1.o_year, dt1.sum, dt1.sum_4
-        dt1.sum := sum(dt1.__p113)
-        dt1.sum_4 := sum(dt1.__p108)
-      Project -> dt1.__p103, dt1.__p113, dt1.__p108
-          dt1.__p103 := year(t5.o_orderdate)
-          dt1.__p113 := __switch(eq(t8.n_name, "BRAZIL"), multiply(t4.l_extendedprice, minus(1, t4.l_discount)), 0)
-          dt1.__p108 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
+    dt1.mkt_share := divide(dt1.sum, dt1.sum_18)
+  OrderBy -> dt1.o_year, dt1.sum, dt1.sum_18
+    Aggregation (dt1.__p117) -> dt1.o_year, dt1.sum, dt1.sum_18
+        dt1.sum := sum(dt1.__p127)
+        dt1.sum_18 := sum(dt1.__p122)
+      Project -> dt1.__p117, dt1.__p127, dt1.__p122
+          dt1.__p117 := year(t5.o_orderdate)
+          dt1.__p127 := __switch(eq(t8.n_name, "BRAZIL"), multiply(t4.l_extendedprice, minus(1, t4.l_discount)), 0)
+          dt1.__p122 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
         Join INNER Hash -> t4.l_extendedprice, t4.l_discount, t5.o_orderdate, t8.n_name
             t3.s_nationkey = t8.n_nationkey
           Join INNER Hash -> t3.s_nationkey, t4.l_extendedprice, t4.l_discount, t5.o_orderdate
@@ -111,11 +111,11 @@ Project -> dt1.o_year, dt1.mkt_share
 Executable Velox plan:
 
 Fragment 0:  numWorkers=0:
--- Project[24][expressions: (o_year:BIGINT, "o_year"), (mkt_share:DOUBLE, divide("sum","sum_4"))] -> o_year:BIGINT, mkt_share:DOUBLE
-  -- OrderBy[23][o_year ASC NULLS LAST] -> o_year:BIGINT, sum:DOUBLE, sum_4:DOUBLE
-    -- Aggregation[22][SINGLE [o_year] sum := sum("dt1.__p113"), sum_4 := sum("dt1.__p108")] -> o_year:BIGINT, sum:DOUBLE, sum_4:DOUBLE
-      -- Project[21][expressions: (o_year:BIGINT, year("o_orderdate")), (dt1.__p113:DOUBLE, switch(eq("n_name_1",BRAZIL),multiply("l_extendedprice",minus(1,"l_discount")),0)), (dt1.__p108:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> o_year:BIGINT, "dt1.__p113":DOUBLE, "dt1.__p108":DOUBLE
-        -- HashJoin[20][INNER s_nationkey=n_nationkey_0] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, o_orderdate:DATE, n_name_1:VARCHAR
+-- Project[24][expressions: (o_year:BIGINT, "o_year"), (mkt_share:DOUBLE, divide("sum","sum_18"))] -> o_year:BIGINT, mkt_share:DOUBLE
+  -- OrderBy[23][o_year ASC NULLS LAST] -> o_year:BIGINT, sum:DOUBLE, sum_18:DOUBLE
+    -- Aggregation[22][SINGLE [o_year] sum := sum("dt1.__p127"), sum_18 := sum("dt1.__p122")] -> o_year:BIGINT, sum:DOUBLE, sum_18:DOUBLE
+      -- Project[21][expressions: (o_year:BIGINT, year("o_orderdate")), (dt1.__p127:DOUBLE, switch(eq("n_name_11",BRAZIL),multiply("l_extendedprice",minus(1,"l_discount")),0)), (dt1.__p122:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> o_year:BIGINT, "dt1.__p127":DOUBLE, "dt1.__p122":DOUBLE
+        -- HashJoin[20][INNER s_nationkey=n_nationkey_10] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, o_orderdate:DATE, n_name_11:VARCHAR
           -- HashJoin[18][INNER s_suppkey=l_suppkey] -> s_nationkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, o_orderdate:DATE
             -- TableScan[6][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_nationkey:BIGINT
             -- HashJoin[17][INNER l_orderkey=o_orderkey] -> l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, o_orderdate:DATE
@@ -129,6 +129,6 @@ Fragment 0:  numWorkers=0:
                 -- HashJoin[15][INNER n_regionkey=r_regionkey] -> n_nationkey:BIGINT
                   -- TableScan[13][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey:BIGINT, n_regionkey:BIGINT
                   -- TableScan[14][table: region, range filters: [(r_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<r_regionkey:BIGINT,r_name:VARCHAR,r_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: r_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> r_regionkey:BIGINT
-          -- TableScan[19][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey_0:BIGINT, n_name_1:VARCHAR
+          -- TableScan[19][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey_10:BIGINT, n_name_11:VARCHAR
 
 ___END___
