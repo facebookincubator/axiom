@@ -22,6 +22,7 @@ add_library(
   ConstantExprEvaluator.cpp
   Cost.cpp
   DerivedTable.cpp
+  DerivedTableDotPrinter.cpp
   DerivedTablePrinter.cpp
   FunctionRegistry.cpp
   JoinSample.cpp

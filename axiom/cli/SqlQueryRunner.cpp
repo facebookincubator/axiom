@@ -18,6 +18,7 @@
 #include <folly/system/HardwareConcurrency.h>
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
+#include "axiom/optimizer/DerivedTableDotPrinter.h"
 #include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
@@ -131,6 +132,34 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
       "run() expects a single statement. "
       "Use parseMultiple() + run(statement) for multiple statements.");
   return run(*statements[0], options);
+}
+
+std::string SqlQueryRunner::toDot(std::string_view sql) {
+  RunOptions options;
+  auto statements = parseMultiple(sql, options);
+  VELOX_CHECK_EQ(
+      statements.size(), 1, "toDot() expects a single SELECT statement.");
+
+  auto statement = statements[0];
+  if (statement->isExplain()) {
+    statement = statement->as<presto::ExplainStatement>()->statement();
+  }
+
+  VELOX_CHECK(
+      statement->isSelect(),
+      "toDot() expects SELECT or EXPLAIN SELECT statement, got: {}",
+      statement->kindName());
+
+  const auto logicalPlan = statement->as<presto::SelectStatement>()->plan();
+
+  std::string dotOutput;
+  optimize(logicalPlan, newQuery(options), options, [&](const auto& dt) {
+    std::ostringstream out;
+    optimizer::DerivedTableDotPrinter::print(dt, out);
+    dotOutput = out.str();
+    return false; // Stop optimization.
+  });
+  return dotOutput;
 }
 
 std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
