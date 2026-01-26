@@ -15,6 +15,7 @@
 add_executable(
   axiom_sql
   AxiomSql.cpp
+  Connectors.cpp
   Console.cpp
   SqlQueryRunner.cpp
   ResultPrinter.cpp
