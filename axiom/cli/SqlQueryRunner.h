@@ -67,6 +67,12 @@ class SqlQueryRunner {
       std::string_view sql,
       const RunOptions& options);
 
+  /// Generates DOT representation of the query graph for a single SELECT
+  /// statement. The output can be rendered using Graphviz:
+  ///   dot -Tsvg output.dot -o output.svg
+  /// @param sql A single SELECT or EXPLAIN SELECT statement.
+  std::string toDot(std::string_view sql);
+
   std::unordered_map<std::string, std::string>& sessionConfig() {
     return config_;
   }
