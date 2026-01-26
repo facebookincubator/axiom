@@ -13,7 +13,7 @@ dt1: l_orderkey, revenue, o_orderdate, o_shippriority
   joins:
     t2 INNER t3 ON t2.c_custkey = t3.o_custkey
     t3 INNER t4 ON t3.o_orderkey = t4.l_orderkey
-  syntactic join order: 9, 21, 42
+  syntactic join order: 11, 25, 48
   aggregates: sum(multiply(t4.l_extendedprice, minus(1, t4.l_discount))) AS revenue
   grouping keys: t4.l_orderkey, t3.o_orderdate, t3.o_shippriority
   orderBy: dt1.revenue DESC NULLS LAST, t3.o_orderdate ASC NULLS LAST
@@ -45,12 +45,12 @@ Project -> dt1.l_orderkey, dt1.revenue, dt1.o_orderdate, dt1.o_shippriority
     dt1.o_shippriority := t3.o_shippriority
   OrderBy -> t4.l_orderkey, t3.o_orderdate, t3.o_shippriority, dt1.revenue
     Aggregation (t4.l_orderkey, t3.o_orderdate, t3.o_shippriority) -> t4.l_orderkey, t3.o_orderdate, t3.o_shippriority, dt1.revenue
-        dt1.revenue := sum(dt1.__p61)
-      Project -> t4.l_orderkey, t3.o_orderdate, t3.o_shippriority, dt1.__p61
+        dt1.revenue := sum(dt1.__p67)
+      Project -> t4.l_orderkey, t3.o_orderdate, t3.o_shippriority, dt1.__p67
           t4.l_orderkey := t4.l_orderkey
           t3.o_orderdate := t3.o_orderdate
           t3.o_shippriority := t3.o_shippriority
-          dt1.__p61 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
+          dt1.__p67 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
         Join INNER Hash -> t3.o_orderdate, t3.o_shippriority, t4.l_orderkey, t4.l_extendedprice, t4.l_discount
             t4.l_orderkey = t3.o_orderkey
           TableScan -> t4.l_orderkey, t4.l_extendedprice, t4.l_discount
@@ -73,8 +73,8 @@ Executable Velox plan:
 Fragment 0:  numWorkers=0:
 -- Project[20][expressions: (l_orderkey:BIGINT, "l_orderkey"), (revenue:DOUBLE, "revenue"), (o_orderdate:DATE, "o_orderdate"), (o_shippriority:INTEGER, "o_shippriority")] -> l_orderkey:BIGINT, revenue:DOUBLE, o_orderdate:DATE, o_shippriority:INTEGER
   -- TopN[19][10 revenue DESC NULLS LAST, o_orderdate ASC NULLS LAST] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, revenue:DOUBLE
-    -- Aggregation[18][SINGLE [l_orderkey, o_orderdate, o_shippriority] revenue := sum("dt1.__p61")] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, revenue:DOUBLE
-      -- Project[17][expressions: (l_orderkey:BIGINT, "l_orderkey"), (o_orderdate:DATE, "o_orderdate"), (o_shippriority:INTEGER, "o_shippriority"), (dt1.__p61:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, "dt1.__p61":DOUBLE
+    -- Aggregation[18][SINGLE [l_orderkey, o_orderdate, o_shippriority] revenue := sum("dt1.__p67")] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, revenue:DOUBLE
+      -- Project[17][expressions: (l_orderkey:BIGINT, "l_orderkey"), (o_orderdate:DATE, "o_orderdate"), (o_shippriority:INTEGER, "o_shippriority"), (dt1.__p67:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> l_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER, "dt1.__p67":DOUBLE
         -- HashJoin[16][INNER l_orderkey=o_orderkey] -> o_orderdate:DATE, o_shippriority:INTEGER, l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
           -- TableScan[12][table: lineitem, range filters: [(l_shipdate, BigintRange: [9205, 9223372036854775807] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
           -- HashJoin[15][INNER o_custkey=c_custkey] -> o_orderkey:BIGINT, o_orderdate:DATE, o_shippriority:INTEGER

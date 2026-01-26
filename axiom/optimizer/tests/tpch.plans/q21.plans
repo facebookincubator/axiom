@@ -9,12 +9,12 @@ dt1: s_name, numwait
     numwait := dt1.numwait
   tables: t2, t3, t4, t5, dt6, dt8
   joins:
-    t3 SEMI dt6 ON t3.l_orderkey = dt6.l_orderkey_0 FILTER neq(dt6.l_suppkey_2, t3.l_suppkey)
-    t3 SEMI dt8 ON t3.l_orderkey = dt8.l_orderkey_16 FILTER neq(dt8.l_suppkey_18, t3.l_suppkey)
+    t3 SEMI dt6 ON t3.l_orderkey = dt6.l_orderkey FILTER neq(dt6.l_suppkey, t3.l_suppkey)
+    t3 SEMI dt8 ON t3.l_orderkey = dt8.l_orderkey FILTER neq(dt8.l_suppkey, t3.l_suppkey)
     t2 INNER t3 ON t2.s_suppkey = t3.l_suppkey
     t3 INNER t4 ON t3.l_orderkey = t4.o_orderkey
     t2 INNER t5 ON t2.s_nationkey = t5.n_nationkey
-  syntactic join order: 8, 28, 42, 49, 52, 91
+  syntactic join order: 10, 32, 48, 57, 60, 71
   aggregates: count() AS numwait
   grouping keys: t2.s_name
   filter: dt1.__mark0 and not(dt1.__mark1)
@@ -36,50 +36,22 @@ t5: n_nationkey, n_name
   table: nation
   single-column filters: eq(t5.n_name, "SAUDI ARABIA")
 
-dt6: l_orderkey_0, l_partkey_1, l_suppkey_2, l_linenumber_3, l_quantity_4, l_extendedprice_5, l_discount_6, l_tax_7, l_returnflag_8, l_linestatus_9, l_shipdate_10, l_commitdate_11, l_receiptdate_12, l_shipinstruct_13, l_shipmode_14, l_comment_15
+dt6: l_orderkey, l_suppkey
   output:
-    l_orderkey_0 := t7.l_orderkey
-    l_partkey_1 := t7.l_partkey
-    l_suppkey_2 := t7.l_suppkey
-    l_linenumber_3 := t7.l_linenumber
-    l_quantity_4 := t7.l_quantity
-    l_extendedprice_5 := t7.l_extendedprice
-    l_discount_6 := t7.l_discount
-    l_tax_7 := t7.l_tax
-    l_returnflag_8 := t7.l_returnflag
-    l_linestatus_9 := t7.l_linestatus
-    l_shipdate_10 := t7.l_shipdate
-    l_commitdate_11 := t7.l_commitdate
-    l_receiptdate_12 := t7.l_receiptdate
-    l_shipinstruct_13 := t7.l_shipinstruct
-    l_shipmode_14 := t7.l_shipmode
-    l_comment_15 := t7.l_comment
+    l_orderkey := t7.l_orderkey
+    l_suppkey := t7.l_suppkey
   tables: t7
 
-t7: l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment
+t7: l_orderkey, l_suppkey
   table: lineitem
 
-dt8: l_orderkey_16, l_partkey_17, l_suppkey_18, l_linenumber_19, l_quantity_20, l_extendedprice_21, l_discount_22, l_tax_23, l_returnflag_24, l_linestatus_25, l_shipdate_26, l_commitdate_27, l_receiptdate_28, l_shipinstruct_29, l_shipmode_30, l_comment_31
+dt8: l_orderkey, l_suppkey
   output:
-    l_orderkey_16 := t9.l_orderkey
-    l_partkey_17 := t9.l_partkey
-    l_suppkey_18 := t9.l_suppkey
-    l_linenumber_19 := t9.l_linenumber
-    l_quantity_20 := t9.l_quantity
-    l_extendedprice_21 := t9.l_extendedprice
-    l_discount_22 := t9.l_discount
-    l_tax_23 := t9.l_tax
-    l_returnflag_24 := t9.l_returnflag
-    l_linestatus_25 := t9.l_linestatus
-    l_shipdate_26 := t9.l_shipdate
-    l_commitdate_27 := t9.l_commitdate
-    l_receiptdate_28 := t9.l_receiptdate
-    l_shipinstruct_29 := t9.l_shipinstruct
-    l_shipmode_30 := t9.l_shipmode
-    l_comment_31 := t9.l_comment
+    l_orderkey := t9.l_orderkey
+    l_suppkey := t9.l_suppkey
   tables: t9
 
-t9: l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment
+t9: l_orderkey, l_suppkey, l_commitdate, l_receiptdate
   table: lineitem
   multi-column filters: lt(t9.l_commitdate, t9.l_receiptdate)
 
@@ -97,22 +69,22 @@ Project (redundant) -> dt1.s_name, dt1.numwait
     Aggregation (t2.s_name) -> t2.s_name, dt1.numwait
         dt1.numwait := count()
       Join RIGHT SEMI (FILTER) Hash -> t2.s_name
-          dt6.l_orderkey_0 = t3.l_orderkey
-          neq(dt6.l_suppkey_2, t3.l_suppkey)
-        Project (redundant) -> dt6.l_orderkey_0, dt6.l_suppkey_2
-            dt6.l_orderkey_0 := t7.l_orderkey
-            dt6.l_suppkey_2 := t7.l_suppkey
+          dt6.l_orderkey = t3.l_orderkey
+          neq(dt6.l_suppkey, t3.l_suppkey)
+        Project (redundant) -> dt6.l_orderkey, dt6.l_suppkey
+            dt6.l_orderkey := t7.l_orderkey
+            dt6.l_suppkey := t7.l_suppkey
           TableScan -> t7.l_orderkey, t7.l_suppkey
             table: lineitem
         HashBuild -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
           Filter -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
               not(dt1.__mark1)
             Join RIGHT SEMI (PROJECT) Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
-                dt8.l_orderkey_16 = t3.l_orderkey
-                neq(dt8.l_suppkey_18, t3.l_suppkey)
-              Project (redundant) -> dt8.l_orderkey_16, dt8.l_suppkey_18
-                  dt8.l_orderkey_16 := t9.l_orderkey
-                  dt8.l_suppkey_18 := t9.l_suppkey
+                dt8.l_orderkey = t3.l_orderkey
+                neq(dt8.l_suppkey, t3.l_suppkey)
+              Project (redundant) -> dt8.l_orderkey, dt8.l_suppkey
+                  dt8.l_orderkey := t9.l_orderkey
+                  dt8.l_suppkey := t9.l_suppkey
                 TableScan -> t9.l_orderkey, t9.l_suppkey
                   table: lineitem
                   multi-column filters: lt(t9.l_commitdate, t9.l_receiptdate)
@@ -144,11 +116,11 @@ Executable Velox plan:
 Fragment 0:  numWorkers=0:
 -- TopN[13][100 numwait DESC NULLS LAST, s_name ASC NULLS LAST] -> s_name:VARCHAR, numwait:BIGINT
   -- Aggregation[12][SINGLE [s_name] numwait := count()] -> s_name:VARCHAR, numwait:BIGINT
-    -- HashJoin[11][RIGHT SEMI (FILTER) l_orderkey_0=l_orderkey, filter: neq("l_suppkey_2","l_suppkey")] -> s_name:VARCHAR
-      -- TableScan[0][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey_0:BIGINT, l_suppkey_2:BIGINT
+    -- HashJoin[11][RIGHT SEMI (FILTER) l_orderkey_6=l_orderkey, filter: neq("l_suppkey_8","l_suppkey")] -> s_name:VARCHAR
+      -- TableScan[0][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey_6:BIGINT, l_suppkey_8:BIGINT
       -- Filter[1][expression: not("dt1.__mark1")] -> s_name:VARCHAR, l_orderkey:BIGINT, l_suppkey:BIGINT, "dt1.__mark1":BOOLEAN
-        -- HashJoin[10][RIGHT SEMI (PROJECT) l_orderkey_16=l_orderkey, filter: neq("l_suppkey_18","l_suppkey")] -> s_name:VARCHAR, l_orderkey:BIGINT, l_suppkey:BIGINT, "dt1.__mark1":BOOLEAN
-          -- TableScan[2][table: lineitem, remaining filter: (lt("l_commitdate","l_receiptdate")), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_orderkey_16:BIGINT, l_suppkey_18:BIGINT
+        -- HashJoin[10][RIGHT SEMI (PROJECT) l_orderkey_24=l_orderkey, filter: neq("l_suppkey_26","l_suppkey")] -> s_name:VARCHAR, l_orderkey:BIGINT, l_suppkey:BIGINT, "dt1.__mark1":BOOLEAN
+          -- TableScan[2][table: lineitem, remaining filter: (lt("l_commitdate","l_receiptdate")), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_orderkey_24:BIGINT, l_suppkey_26:BIGINT
           -- HashJoin[9][INNER l_orderkey=o_orderkey] -> s_name:VARCHAR, l_orderkey:BIGINT, l_suppkey:BIGINT
             -- HashJoin[7][INNER l_suppkey=s_suppkey] -> s_name:VARCHAR, l_orderkey:BIGINT, l_suppkey:BIGINT
               -- TableScan[3][table: lineitem, remaining filter: (lt("l_commitdate","l_receiptdate")), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT, l_suppkey:BIGINT

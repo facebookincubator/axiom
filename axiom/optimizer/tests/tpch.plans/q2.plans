@@ -21,7 +21,7 @@ dt1: s_acctbal, s_name, n_name, p_partkey, p_mfgr, s_address, s_phone, s_comment
     t3 INNER t5 ON t3.s_nationkey = t5.n_nationkey
     t5 INNER t6 ON t5.n_regionkey = t6.r_regionkey
     t4 INNER dt7 ON t4.ps_supplycost = dt7.min
-  syntactic join order: 10, 22, 35, 43, 50, 53
+  syntactic join order: 12, 26, 41, 51, 60, 63
   orderBy: t3.s_acctbal DESC NULLS LAST, t5.n_name ASC NULLS LAST, t3.s_name ASC NULLS LAST, t2.p_partkey ASC NULLS LAST
   limit: 100
 
@@ -51,7 +51,7 @@ dt7: __gk12, min
     t8 INNER t9 ON t8.ps_suppkey = t9.s_suppkey
     t9 INNER t10 ON t9.s_nationkey = t10.n_nationkey
     t10 INNER t11 ON t10.n_regionkey = t11.r_regionkey
-  syntactic join order: 54, 58, 61, 64
+  syntactic join order: 64, 68, 71, 74
   aggregates: min(t8.ps_supplycost) AS min
   grouping keys: t8.ps_partkey
 
@@ -153,16 +153,16 @@ Fragment 0:  numWorkers=0:
           -- TableScan[18][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
           -- TableScan[19][table: part, range filters: [(p_size, BigintRange: [15, 15] no nulls)], remaining filter: (like("p_type",%BRASS)), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]]]] -> p_partkey:BIGINT, p_mfgr:VARCHAR
         -- Project[31][expressions: (min:DOUBLE, "min")] -> min:DOUBLE
-          -- Aggregation[30][SINGLE [ps_partkey_0] min := min("ps_supplycost_3")] -> ps_partkey_0:BIGINT, min:DOUBLE
-            -- HashJoin[29][INNER s_nationkey_8=n_nationkey_12] -> ps_partkey_0:BIGINT, ps_supplycost_3:DOUBLE
-              -- HashJoin[25][INNER s_suppkey_5=ps_suppkey_1] -> ps_partkey_0:BIGINT, ps_supplycost_3:DOUBLE, s_nationkey_8:BIGINT
-                -- TableScan[21][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey_5:BIGINT, s_nationkey_8:BIGINT
-                -- HashJoin[24][LEFT SEMI (FILTER) ps_partkey_0=p_partkey] -> ps_partkey_0:BIGINT, ps_suppkey_1:BIGINT, ps_supplycost_3:DOUBLE
-                  -- TableScan[22][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey_0:BIGINT, ps_suppkey_1:BIGINT, ps_supplycost_3:DOUBLE
+          -- Aggregation[30][SINGLE [ps_partkey_8] min := min("ps_supplycost_11")] -> ps_partkey_8:BIGINT, min:DOUBLE
+            -- HashJoin[29][INNER s_nationkey_18=n_nationkey_24] -> ps_partkey_8:BIGINT, ps_supplycost_11:DOUBLE
+              -- HashJoin[25][INNER s_suppkey_15=ps_suppkey_9] -> ps_partkey_8:BIGINT, ps_supplycost_11:DOUBLE, s_nationkey_18:BIGINT
+                -- TableScan[21][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey_15:BIGINT, s_nationkey_18:BIGINT
+                -- HashJoin[24][LEFT SEMI (FILTER) ps_partkey_8=p_partkey] -> ps_partkey_8:BIGINT, ps_suppkey_9:BIGINT, ps_supplycost_11:DOUBLE
+                  -- TableScan[22][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey_8:BIGINT, ps_suppkey_9:BIGINT, ps_supplycost_11:DOUBLE
                   -- TableScan[23][table: part, range filters: [(p_size, BigintRange: [15, 15] no nulls)], remaining filter: (like("p_type",%BRASS)), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]]]] -> p_partkey:BIGINT
-              -- HashJoin[28][INNER n_regionkey_14=r_regionkey_16] -> n_nationkey_12:BIGINT
-                -- TableScan[26][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey_12:BIGINT, n_regionkey_14:BIGINT
-                -- TableScan[27][table: region, range filters: [(r_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<r_regionkey:BIGINT,r_name:VARCHAR,r_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: r_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> r_regionkey_16:BIGINT
+              -- HashJoin[28][INNER n_regionkey_26=r_regionkey_30] -> n_nationkey_24:BIGINT
+                -- TableScan[26][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey_24:BIGINT, n_regionkey_26:BIGINT
+                -- TableScan[27][table: region, range filters: [(r_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<r_regionkey:BIGINT,r_name:VARCHAR,r_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: r_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> r_regionkey_30:BIGINT
       -- HashJoin[37][INNER s_nationkey=n_nationkey] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, s_acctbal:DOUBLE, s_comment:VARCHAR, n_name:VARCHAR
         -- TableScan[33][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_nationkey:BIGINT, s_phone:VARCHAR, s_acctbal:DOUBLE, s_comment:VARCHAR
         -- HashJoin[36][INNER n_regionkey=r_regionkey] -> n_nationkey:BIGINT, n_name:VARCHAR

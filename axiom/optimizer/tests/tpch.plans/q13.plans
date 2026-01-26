@@ -18,7 +18,7 @@ dt1: c_count
   tables: t2, t3
   joins:
     t2 LEFT t3 ON t2.c_custkey = t3.o_custkey FILTER not(like(t3.o_comment, "%special%requests%"))
-  syntactic join order: 9, 20
+  syntactic join order: 11, 24
   aggregates: count(dt1.o_orderkey) AS count
   grouping keys: t2.c_custkey
 

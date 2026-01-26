@@ -10,7 +10,7 @@ dt1: o_orderpriority, order_count
   tables: t2, dt3
   joins:
     t2 SEMI dt3 ON t2.o_orderkey = dt3.l_orderkey
-  syntactic join order: 10, 14
+  syntactic join order: 12, 16
   aggregates: count() AS order_count
   grouping keys: t2.o_orderpriority
   filter: dt1.__mark0
@@ -20,27 +20,12 @@ t2: o_orderkey, o_orderdate, o_orderpriority
   table: orders
   single-column filters: gte(t2.o_orderdate, "1993-07-01") and lt(t2.o_orderdate, "1993-10-01")
 
-dt3: l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment
+dt3: l_orderkey
   output:
     l_orderkey := t4.l_orderkey
-    l_partkey := t4.l_partkey
-    l_suppkey := t4.l_suppkey
-    l_linenumber := t4.l_linenumber
-    l_quantity := t4.l_quantity
-    l_extendedprice := t4.l_extendedprice
-    l_discount := t4.l_discount
-    l_tax := t4.l_tax
-    l_returnflag := t4.l_returnflag
-    l_linestatus := t4.l_linestatus
-    l_shipdate := t4.l_shipdate
-    l_commitdate := t4.l_commitdate
-    l_receiptdate := t4.l_receiptdate
-    l_shipinstruct := t4.l_shipinstruct
-    l_shipmode := t4.l_shipmode
-    l_comment := t4.l_comment
   tables: t4
 
-t4: l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment
+t4: l_orderkey, l_commitdate, l_receiptdate
   table: lineitem
   multi-column filters: lt(t4.l_commitdate, t4.l_receiptdate)
 

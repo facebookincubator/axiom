@@ -11,7 +11,7 @@ dt1: l_shipmode, high_line_count, low_line_count
   tables: t2, t3
   joins:
     t2 INNER t3 ON t2.o_orderkey = t3.l_orderkey
-  syntactic join order: 10, 29
+  syntactic join order: 12, 33
   aggregates: sum(__switch(__or(eq(t2.o_orderpriority, "1-URGENT"), eq(t2.o_orderpriority, "2-HIGH")), 1, 0)) AS high_line_count, sum(__switch(__and(neq(t2.o_orderpriority, "1-URGENT"), neq(t2.o_orderpriority, "2-HIGH")), 1, 0)) AS low_line_count
   grouping keys: t3.l_shipmode
   orderBy: t3.l_shipmode ASC NULLS LAST
@@ -37,12 +37,12 @@ Project (redundant) -> dt1.l_shipmode, dt1.high_line_count, dt1.low_line_count
     dt1.low_line_count := dt1.low_line_count
   OrderBy -> t3.l_shipmode, dt1.high_line_count, dt1.low_line_count
     Aggregation (t3.l_shipmode) -> t3.l_shipmode, dt1.high_line_count, dt1.low_line_count
-        dt1.high_line_count := sum(dt1.__p57)
-        dt1.low_line_count := sum(dt1.__p64)
-      Project -> t3.l_shipmode, dt1.__p57, dt1.__p64
+        dt1.high_line_count := sum(dt1.__p61)
+        dt1.low_line_count := sum(dt1.__p68)
+      Project -> t3.l_shipmode, dt1.__p61, dt1.__p68
           t3.l_shipmode := t3.l_shipmode
-          dt1.__p57 := __switch(__or(eq(t2.o_orderpriority, "1-URGENT"), eq(t2.o_orderpriority, "2-HIGH")), 1, 0)
-          dt1.__p64 := __switch(__and(neq(t2.o_orderpriority, "1-URGENT"), neq(t2.o_orderpriority, "2-HIGH")), 1, 0)
+          dt1.__p61 := __switch(__or(eq(t2.o_orderpriority, "1-URGENT"), eq(t2.o_orderpriority, "2-HIGH")), 1, 0)
+          dt1.__p68 := __switch(__and(neq(t2.o_orderpriority, "1-URGENT"), neq(t2.o_orderpriority, "2-HIGH")), 1, 0)
         Join INNER Hash -> t2.o_orderpriority, t3.l_shipmode
             t2.o_orderkey = t3.l_orderkey
           TableScan -> t2.o_orderkey, t2.o_orderpriority
@@ -58,8 +58,8 @@ Executable Velox plan:
 
 Fragment 0:  numWorkers=0:
 -- OrderBy[5][l_shipmode ASC NULLS LAST] -> l_shipmode:VARCHAR, high_line_count:BIGINT, low_line_count:BIGINT
-  -- Aggregation[4][SINGLE [l_shipmode] high_line_count := sum("dt1.__p57"), low_line_count := sum("dt1.__p64")] -> l_shipmode:VARCHAR, high_line_count:BIGINT, low_line_count:BIGINT
-    -- Project[3][expressions: (l_shipmode:VARCHAR, "l_shipmode"), (dt1.__p57:INTEGER, switch(or(eq("o_orderpriority",1-URGENT),eq("o_orderpriority",2-HIGH)),1,0)), (dt1.__p64:INTEGER, switch(and(neq("o_orderpriority",1-URGENT),neq("o_orderpriority",2-HIGH)),1,0))] -> l_shipmode:VARCHAR, "dt1.__p57":INTEGER, "dt1.__p64":INTEGER
+  -- Aggregation[4][SINGLE [l_shipmode] high_line_count := sum("dt1.__p61"), low_line_count := sum("dt1.__p68")] -> l_shipmode:VARCHAR, high_line_count:BIGINT, low_line_count:BIGINT
+    -- Project[3][expressions: (l_shipmode:VARCHAR, "l_shipmode"), (dt1.__p61:INTEGER, switch(or(eq("o_orderpriority",1-URGENT),eq("o_orderpriority",2-HIGH)),1,0)), (dt1.__p68:INTEGER, switch(and(neq("o_orderpriority",1-URGENT),neq("o_orderpriority",2-HIGH)),1,0))] -> l_shipmode:VARCHAR, "dt1.__p61":INTEGER, "dt1.__p68":INTEGER
       -- HashJoin[2][INNER o_orderkey=l_orderkey] -> o_orderpriority:VARCHAR, l_shipmode:VARCHAR
         -- TableScan[0][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_orderpriority:VARCHAR
         -- TableScan[1][table: lineitem, range filters: [(l_receiptdate, BigintRange: [8766, 9130] no nulls), (l_shipmode, Filter(BytesValues, deterministic, no nulls))], remaining filter: (and(lt("l_commitdate","l_receiptdate"),lt("l_shipdate","l_commitdate"))), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipmode, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT, l_shipmode:VARCHAR

@@ -16,7 +16,7 @@ dt1: n_name, revenue
     t5 INNER t6 ON t5.s_nationkey = t6.n_nationkey
     t6 INNER t7 ON t6.n_regionkey = t7.r_regionkey
     t2 INNER t6 ON t2.c_nationkey = t6.n_nationkey
-  syntactic join order: 9, 21, 41, 53, 60, 67
+  syntactic join order: 11, 25, 47, 61, 70, 79
   aggregates: sum(multiply(t4.l_extendedprice, minus(1, t4.l_discount))) AS revenue
   grouping keys: t6.n_name
   orderBy: dt1.revenue DESC NULLS LAST
@@ -53,10 +53,10 @@ Project (redundant) -> dt1.n_name, dt1.revenue
     dt1.revenue := dt1.revenue
   OrderBy -> t6.n_name, dt1.revenue
     Aggregation (t6.n_name) -> t6.n_name, dt1.revenue
-        dt1.revenue := sum(dt1.__p91)
-      Project -> t6.n_name, dt1.__p91
+        dt1.revenue := sum(dt1.__p103)
+      Project -> t6.n_name, dt1.__p103
           t6.n_name := t6.n_name
-          dt1.__p91 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
+          dt1.__p103 := multiply(t4.l_extendedprice, minus(1, t4.l_discount))
         Join INNER Hash -> t4.l_extendedprice, t4.l_discount, t6.n_name
             t2.c_nationkey = t5.s_nationkey
             t4.l_suppkey = t5.s_suppkey
@@ -105,24 +105,24 @@ Project (redundant) -> dt1.n_name, dt1.revenue
 Executable Velox plan:
 
 Fragment 0:  numWorkers=0:
--- OrderBy[42][revenue DESC NULLS LAST] -> n_name:VARCHAR, revenue:DOUBLE
-  -- Aggregation[41][SINGLE [n_name] revenue := sum("dt1.__p91")] -> n_name:VARCHAR, revenue:DOUBLE
-    -- Project[40][expressions: (n_name:VARCHAR, "n_name"), (dt1.__p91:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> n_name:VARCHAR, "dt1.__p91":DOUBLE
-      -- HashJoin[39][INNER c_nationkey=s_nationkey AND l_suppkey=s_suppkey] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, n_name:VARCHAR
-        -- HashJoin[32][INNER l_orderkey=o_orderkey] -> c_nationkey:BIGINT, l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, n_nationkey:BIGINT, n_name:VARCHAR
-          -- TableScan[24][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey:BIGINT, l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
-          -- HashJoin[31][INNER c_nationkey=n_nationkey] -> c_nationkey:BIGINT, o_orderkey:BIGINT, n_nationkey:BIGINT, n_name:VARCHAR
-            -- HashJoin[27][INNER o_custkey=c_custkey] -> c_nationkey:BIGINT, o_orderkey:BIGINT
-              -- TableScan[25][table: orders, range filters: [(o_orderdate, BigintRange: [8766, 9130] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> o_orderkey:BIGINT, o_custkey:BIGINT
-              -- TableScan[26][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT, c_nationkey:BIGINT
-            -- HashJoin[30][INNER n_regionkey=r_regionkey] -> n_nationkey:BIGINT, n_name:VARCHAR
-              -- TableScan[28][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey:BIGINT, n_name:VARCHAR, n_regionkey:BIGINT
-              -- TableScan[29][table: region, range filters: [(r_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<r_regionkey:BIGINT,r_name:VARCHAR,r_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: r_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> r_regionkey:BIGINT
-        -- HashJoin[38][LEFT SEMI (FILTER) s_nationkey=edt23.edt23.t6.n_nationkey] -> s_suppkey:BIGINT, s_nationkey:BIGINT
-          -- TableScan[33][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_nationkey:BIGINT
-          -- Project[37][expressions: (edt23.edt23.t6.n_nationkey:BIGINT, "n_nationkey")] -> "edt23.edt23.t6.n_nationkey":BIGINT
-            -- HashJoin[36][INNER n_regionkey=r_regionkey] -> n_nationkey:BIGINT
-              -- TableScan[34][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey:BIGINT, n_regionkey:BIGINT
-              -- TableScan[35][table: region, range filters: [(r_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<r_regionkey:BIGINT,r_name:VARCHAR,r_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: r_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> r_regionkey:BIGINT
+-- OrderBy[18][revenue DESC NULLS LAST] -> n_name:VARCHAR, revenue:DOUBLE
+  -- Aggregation[17][SINGLE [n_name] revenue := sum("dt1.__p103")] -> n_name:VARCHAR, revenue:DOUBLE
+    -- Project[16][expressions: (n_name:VARCHAR, "n_name"), (dt1.__p103:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> n_name:VARCHAR, "dt1.__p103":DOUBLE
+      -- HashJoin[15][INNER c_nationkey=s_nationkey AND l_suppkey=s_suppkey] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, n_name:VARCHAR
+        -- HashJoin[8][INNER l_orderkey=o_orderkey] -> c_nationkey:BIGINT, l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, n_nationkey:BIGINT, n_name:VARCHAR
+          -- TableScan[0][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey:BIGINT, l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE
+          -- HashJoin[7][INNER c_nationkey=n_nationkey] -> c_nationkey:BIGINT, o_orderkey:BIGINT, n_nationkey:BIGINT, n_name:VARCHAR
+            -- HashJoin[3][INNER o_custkey=c_custkey] -> c_nationkey:BIGINT, o_orderkey:BIGINT
+              -- TableScan[1][table: orders, range filters: [(o_orderdate, BigintRange: [8766, 9130] no nulls)], data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_orderdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> o_orderkey:BIGINT, o_custkey:BIGINT
+              -- TableScan[2][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT, c_nationkey:BIGINT
+            -- HashJoin[6][INNER n_regionkey=r_regionkey] -> n_nationkey:BIGINT, n_name:VARCHAR
+              -- TableScan[4][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey:BIGINT, n_name:VARCHAR, n_regionkey:BIGINT
+              -- TableScan[5][table: region, range filters: [(r_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<r_regionkey:BIGINT,r_name:VARCHAR,r_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: r_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> r_regionkey:BIGINT
+        -- HashJoin[14][LEFT SEMI (FILTER) s_nationkey=edt23.edt23.t6.n_nationkey] -> s_suppkey:BIGINT, s_nationkey:BIGINT
+          -- TableScan[9][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_nationkey:BIGINT
+          -- Project[13][expressions: (edt23.edt23.t6.n_nationkey:BIGINT, "n_nationkey")] -> "edt23.edt23.t6.n_nationkey":BIGINT
+            -- HashJoin[12][INNER n_regionkey=r_regionkey] -> n_nationkey:BIGINT
+              -- TableScan[10][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey:BIGINT, n_regionkey:BIGINT
+              -- TableScan[11][table: region, range filters: [(r_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<r_regionkey:BIGINT,r_name:VARCHAR,r_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: r_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> r_regionkey:BIGINT
 
 ___END___
