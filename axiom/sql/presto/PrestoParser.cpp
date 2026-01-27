@@ -22,6 +22,7 @@
 #include "axiom/sql/presto/PrestoParseError.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
+#include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
 #include "axiom/sql/presto/ast/UpperCaseInputStream.h"
 #include "axiom/sql/presto/grammar/PrestoSqlLexer.h"
 #include "axiom/sql/presto/grammar/PrestoSqlParser.h"
@@ -179,57 +180,18 @@ std::string canonicalizeIdentifier(const Identifier& identifier) {
   return canonicalizeName(identifier.value());
 }
 
-// Analizes the expression to find out whether there are any aggregate function
+// Analyzes the expression to find out whether there are any aggregate function
 // calls and to verify that aggregate calls are not nested, e.g. sum(count(x))
 // is not allowed.
-class ExprAnalyzer : public AstVisitor {
+class ExprAnalyzer : public DefaultTraversalVisitor {
  public:
   bool hasAggregate() const {
     return numAggregates_ > 0;
   }
 
- private:
-  void defaultVisit(Node* node) override {
-    if (dynamic_cast<Literal*>(node) != nullptr) {
-      // Literals have no function calls.
-      return;
-    }
-
-    VELOX_NYI(
-        "Not yet supported node type: {}", NodeTypeName::toName(node->type()));
-  }
-
-  void visitArithmeticUnaryExpression(
-      ArithmeticUnaryExpression* node) override {
-    node->value()->accept(this);
-  }
-
-  void visitArrayConstructor(ArrayConstructor* node) override {
-    for (const auto& value : node->values()) {
-      value->accept(this);
-    }
-  }
-
-  void visitBetweenPredicate(BetweenPredicate* node) override {
-    node->value()->accept(this);
-    node->min()->accept(this);
-    node->max()->accept(this);
-  }
-
-  void visitCast(Cast* node) override {
-    node->expression()->accept(this);
-  }
-
-  void visitDereferenceExpression(DereferenceExpression* node) override {
-    node->base()->accept(this);
-  }
-
+ protected:
   void visitExistsPredicate(ExistsPredicate* node) override {
     // Aggregate function calls within a subquery do not count.
-  }
-
-  void visitExtract(Extract* node) override {
-    node->expression()->accept(this);
   }
 
   void visitFunctionCall(FunctionCall* node) override {
@@ -245,112 +207,16 @@ class ExprAnalyzer : public AstVisitor {
       ++numAggregates_;
     }
 
-    for (const auto& arg : node->arguments()) {
-      arg->accept(this);
-    }
+    DefaultTraversalVisitor::visitFunctionCall(node);
 
     aggregateName_.reset();
-  }
-
-  void visitInListExpression(InListExpression* node) override {
-    for (const auto& value : node->values()) {
-      value->accept(this);
-    }
-  }
-
-  void visitInPredicate(InPredicate* node) override {
-    node->value()->accept(this);
-    node->valueList()->accept(this);
-  }
-
-  void visitIsNullPredicate(IsNullPredicate* node) override {
-    node->value()->accept(this);
-  }
-
-  void visitIsNotNullPredicate(IsNotNullPredicate* node) override {
-    node->value()->accept(this);
-  }
-
-  void visitLambdaExpression(LambdaExpression* node) override {
-    node->body()->accept(this);
-  }
-
-  void visitNotExpression(NotExpression* node) override {
-    node->value()->accept(this);
-  }
-
-  void visitArithmeticBinaryExpression(
-      ArithmeticBinaryExpression* node) override {
-    node->left()->accept(this);
-    node->right()->accept(this);
-  }
-
-  void visitLogicalBinaryExpression(LogicalBinaryExpression* node) override {
-    node->left()->accept(this);
-    node->right()->accept(this);
-  }
-
-  void visitComparisonExpression(ComparisonExpression* node) override {
-    node->left()->accept(this);
-    node->right()->accept(this);
-  }
-
-  void visitLikePredicate(LikePredicate* node) override {
-    node->value()->accept(this);
-    node->pattern()->accept(this);
-    if (node->escape() != nullptr) {
-      node->escape()->accept(this);
-    }
-  }
-
-  void visitSimpleCaseExpression(SimpleCaseExpression* node) override {
-    node->operand()->accept(this);
-
-    for (const auto& clause : node->whenClauses()) {
-      clause->operand()->accept(this);
-      clause->result()->accept(this);
-    }
-
-    if (node->defaultValue()) {
-      node->defaultValue()->accept(this);
-    }
-  }
-
-  void visitSearchedCaseExpression(SearchedCaseExpression* node) override {
-    for (const auto& clause : node->whenClauses()) {
-      clause->operand()->accept(this);
-      clause->result()->accept(this);
-    }
-
-    if (node->defaultValue()) {
-      node->defaultValue()->accept(this);
-    }
   }
 
   void visitSubqueryExpression(SubqueryExpression* node) override {
     // Aggregate function calls within a subquery do not count.
   }
 
-  void visitSubscriptExpression(SubscriptExpression* node) override {
-    node->base()->accept(this);
-    node->index()->accept(this);
-  }
-
-  void visitIdentifier(Identifier* node) override {
-    // No function calls.
-  }
-
-  void visitRow(Row* node) override {
-    for (const auto& item : node->items()) {
-      item->accept(this);
-    }
-  }
-
-  void visitAtTimeZone(AtTimeZone* node) override {
-    node->value()->accept(this);
-    node->timeZone()->accept(this);
-  }
-
+ private:
   size_t numAggregates_{0};
   std::optional<std::string> aggregateName_;
 };
