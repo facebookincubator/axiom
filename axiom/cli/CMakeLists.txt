@@ -41,7 +41,7 @@ target_link_libraries(
   velox_parse_utils
 )
 
-add_executable(axiom_graphviz QueryGraphviz.cpp SqlQueryRunner.cpp)
+add_executable(axiom_graphviz Connectors.cpp QueryGraphviz.cpp SqlQueryRunner.cpp)
 
 target_link_libraries(
   axiom_graphviz
@@ -49,6 +49,7 @@ target_link_libraries(
   axiom_runner_multifragment_plan
   axiom_optimizer
   axiom_tpch_connector_metadata
+  axiom_hive_connector_metadata
   axiom_sql_presto_parser
   velox_exec_test_lib
   velox_parse_parser
