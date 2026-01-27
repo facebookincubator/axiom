@@ -20,6 +20,7 @@
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/sql/presto/PrestoParseError.h"
+#include "axiom/sql/presto/TableVisitor.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
@@ -2199,6 +2200,21 @@ SqlStatementPtr PrestoParser::doParse(
   }
 
   return doPlan(query, defaultConnectorId_, defaultSchema_, parseSql);
+}
+
+ReferencedTables PrestoParser::getReferencedTables(std::string_view sql) {
+  ParserHelper helper(sql);
+  auto* context = helper.parse();
+
+  AstBuilder astBuilder(false);
+  auto statement =
+      std::any_cast<std::shared_ptr<Statement>>(astBuilder.visit(context));
+
+  TableVisitor visitor(defaultConnectorId_, defaultSchema_);
+  visitor.process(statement.get());
+  return ReferencedTables{
+      .inputTables = visitor.inputTables(),
+      .outputTable = visitor.outputTable()};
 }
 
 } // namespace axiom::sql::presto

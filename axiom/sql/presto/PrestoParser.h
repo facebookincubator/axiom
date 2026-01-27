@@ -19,6 +19,18 @@
 
 namespace axiom::sql::presto {
 
+/// The set of tables that a SQL statement references. Table names
+/// are returned in fully-qualified format ('catalog.schema.table').
+struct ReferencedTables {
+  /// The set of tables accessed for reading by the query,
+  /// or the empty set if the query does not read any tables.
+  std::unordered_set<std::string> inputTables;
+
+  /// Any table which would be modified by the query, or
+  /// nullopt if the query does not modify any tables.
+  std::optional<std::string> outputTable;
+};
+
 /// SQL Parser compatible with PrestoSQL dialect.
 class PrestoParser {
  public:
@@ -46,6 +58,13 @@ class PrestoParser {
   facebook::axiom::logical_plan::ExprPtr parseExpression(
       std::string_view sql,
       bool enableTracing = false);
+
+  /// Extracts tables referenced in a SQL statement, if any exist. This includes
+  /// table references which could later be optimized out, if their results
+  /// do not affect the query output (e.g., an unreferenced CTE).
+  /// @param sql SQL query statement
+  /// @return input and output tables which the query references.
+  ReferencedTables getReferencedTables(std::string_view sql);
 
  private:
   SqlStatementPtr doParse(std::string_view sql, bool enableTracing);
