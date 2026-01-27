@@ -15,7 +15,6 @@
  */
 
 #include <algorithm>
-
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -1116,7 +1115,35 @@ bool Project::isRedundant(
     if (inputColumns[i] != exprs[i]) {
       return false;
     }
+  }
 
+  // Handle case for projection after unnest operator
+  if (input && input->relType() == RelType::kUnnest) {
+    auto unnest = input->as<Unnest>();
+    auto unnestColumns = unnest->unnestedColumns;
+
+    // if the column size does not match, fall through the rest of redundancy
+    // check
+    if (unnestColumns.size() + bool(unnest->ordinalityColumn) ==
+        columns.size()) {
+      // If the input operator is an Unnest, a Project that only renames columns
+      // is redundant; push the projected output names down as aliases on the
+      // Unnest’s output columns so downstream operators see the desired names
+      // without requiring an actual Project node.
+      for (auto i = 0; i < unnestColumns.size(); ++i) {
+        unnestColumns[i]->setAlias(toName(columns[i]->outputName()));
+      }
+
+      if (auto ordinality = unnest->ordinalityColumn) {
+        ordinality->setAlias(
+            toName(columns[unnestColumns.size()]->outputName()));
+      }
+      // Mark the Project as redundant (it doesn’t compute any expressions).
+      return true;
+    }
+  }
+
+  for (auto i = 0; i < inputColumns.size(); ++i) {
     if (inputColumns[i]->outputName() != columns[i]->outputName()) {
       return false;
     }

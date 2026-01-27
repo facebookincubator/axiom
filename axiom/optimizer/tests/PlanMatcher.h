@@ -91,6 +91,7 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& unnest(
       const std::vector<std::string>& replicateExprs,
       const std::vector<std::string>& unnestExprs,
+      const std::vector<std::string>& aliases,
       const std::optional<std::string>& ordinalityName = std::nullopt);
 
   PlanMatcherBuilder& aggregation();
