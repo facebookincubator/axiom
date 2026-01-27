@@ -16,6 +16,8 @@
 
 #include "axiom/logical_plan/PlanBuilder.h"
 #include <gtest/gtest.h>
+#include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 using namespace facebook::velox;
@@ -31,6 +33,19 @@ class PlanBuilderTest : public testing::Test {
 
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
+  }
+
+ protected:
+  PlanBuilder makeEmptyValues(
+      PlanBuilder::Context& context,
+      const std::vector<TypePtr>& types) {
+    std::vector<std::string> names;
+    names.reserve(types.size());
+    for (size_t i = 0; i < types.size(); ++i) {
+      names.push_back(fmt::format("c{}", i));
+    }
+    return PlanBuilder(context).values(
+        ROW(std::move(names), types), ValuesNode::Variants{});
   }
 };
 
@@ -54,6 +69,83 @@ TEST_F(PlanBuilderTest, outputNames) {
   EXPECT_EQ("expr", outputNames[0]);
   EXPECT_EQ("b", outputNames[1]);
   EXPECT_EQ("expr_0", outputNames[2]);
+}
+
+TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
+  auto startMatcher = [] { return test::LogicalPlanMatcherBuilder().values(); };
+
+  // (INTEGER, REAL) + (BIGINT, DOUBLE) -> (BIGINT, DOUBLE)
+  {
+    PlanBuilder::Context context;
+    auto plan = PlanBuilder(context, /*enableCoercions=*/true)
+                    .setOperation(
+                        SetOperation::kUnionAll,
+                        {
+                            makeEmptyValues(context, {INTEGER(), REAL()}),
+                            makeEmptyValues(context, {BIGINT(), DOUBLE()}),
+                        })
+                    .build();
+
+    EXPECT_EQ(*plan->outputType(), *ROW({"c0", "c1"}, {BIGINT(), DOUBLE()}));
+
+    auto matcher =
+        startMatcher()
+            .project()
+            .setOperation(SetOperation::kUnionAll, startMatcher().build())
+            .build();
+    ASSERT_TRUE(matcher->match(plan)) << plan->toString();
+  }
+
+  // Same types stay the same. No project nodes needed.
+  {
+    PlanBuilder::Context context;
+    auto plan = PlanBuilder(context, /*enableCoercions=*/true)
+                    .setOperation(
+                        SetOperation::kUnionAll,
+                        {
+                            makeEmptyValues(context, {BIGINT()}),
+                            makeEmptyValues(context, {BIGINT()}),
+                        })
+                    .build();
+
+    EXPECT_EQ(*plan->outputType(), *ROW({"c0"}, {BIGINT()}));
+
+    auto matcher =
+        startMatcher()
+            .setOperation(SetOperation::kUnionAll, startMatcher().build())
+            .build();
+    ASSERT_TRUE(matcher->match(plan)) << plan->toString();
+  }
+
+  // Incompatible types fail.
+  {
+    PlanBuilder::Context context;
+    VELOX_ASSERT_THROW(
+        PlanBuilder(context, /*enableCoercions=*/true)
+            .setOperation(
+                SetOperation::kUnionAll,
+                {
+                    makeEmptyValues(context, {VARCHAR()}),
+                    makeEmptyValues(context, {INTEGER()}),
+                })
+            .build(),
+        "Output schemas of all inputs to a Set operation must match");
+  }
+
+  // Mismatched types fail when coercions are disabled.
+  {
+    PlanBuilder::Context context;
+    VELOX_ASSERT_THROW(
+        PlanBuilder(context, /*enableCoercions=*/false)
+            .setOperation(
+                SetOperation::kUnionAll,
+                {
+                    makeEmptyValues(context, {INTEGER()}),
+                    makeEmptyValues(context, {BIGINT()}),
+                })
+            .build(),
+        "Output schemas of all inputs to a Set operation must match");
+  }
 }
 
 } // namespace
