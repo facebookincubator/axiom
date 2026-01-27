@@ -417,6 +417,53 @@ TEST_F(JoinTest, crossJoin) {
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+
+  // Cross join with a single-row subquery whose output is not used. The
+  // subquery is ignored.
+  {
+    lp::PlanBuilder::Context ctx{kTestConnectorId};
+    auto logicalPlan = parseSelect(
+        "SELECT a FROM t, (SELECT count(*) FROM u)", kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder().tableScan("t").build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    lp::PlanBuilder::Context ctx{kTestConnectorId};
+    auto logicalPlan = parseSelect(
+        "SELECT * FROM t, (SELECT count(*) FROM u)", kTestConnectorId);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .nestedLoopJoin(
+                core::PlanMatcherBuilder().tableScan("u").aggregation().build())
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Cross join with a subquery that looks like single-row, but may not be. The
+  // subquery is not ignored.
+  {
+    lp::PlanBuilder::Context ctx{kTestConnectorId};
+    auto logicalPlan = parseSelect(
+        "SELECT a FROM t, (SELECT * FROM u LIMIT 1)", kTestConnectorId);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .nestedLoopJoin(
+                core::PlanMatcherBuilder().tableScan("u").limit().build())
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 TEST_F(JoinTest, leftCrossJoin) {

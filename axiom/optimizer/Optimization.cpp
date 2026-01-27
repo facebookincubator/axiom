@@ -2166,6 +2166,25 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
       return;
     }
 
+    // Go over single-row DTs that haven't been placed yet. If unused, just mark
+    // as "placed". Otherwise, place these. Look for any unused single-row DTs.
+    // Mark them as "placed".
+    const auto downstream = state.downstreamColumns();
+    std::vector<DerivedTableCP> singleRowDtsToPlace;
+    state.dt->singleRowDts.forEach<DerivedTable>([&](DerivedTableCP subquery) {
+      if (!state.placed.contains(subquery)) {
+        if (!downstream.containsAny(subquery->columns)) {
+          state.placed.add(subquery);
+        } else {
+          singleRowDtsToPlace.push_back(subquery);
+        }
+      }
+    });
+
+    for (const auto* singleRowDt : singleRowDtsToPlace) {
+      plan = placeSingleRowDt(plan, singleRowDt, state);
+    }
+
     addPostprocess(dt, plan, state);
     auto kept = state.plans.addPlan(plan, state);
     trace(

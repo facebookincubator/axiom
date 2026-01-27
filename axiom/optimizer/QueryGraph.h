@@ -1071,7 +1071,6 @@ class AggregationPlan : public PlanObject {
         aggregates_(std::move(aggregates)),
         columns_(std::move(columns)),
         intermediateColumns_(std::move(intermediateColumns)) {
-    VELOX_CHECK(!groupingKeys_.empty() || !aggregates_.empty());
     VELOX_CHECK_EQ(groupingKeys_.size() + aggregates_.size(), columns_.size());
     VELOX_CHECK_EQ(columns_.size(), intermediateColumns_.size());
   }

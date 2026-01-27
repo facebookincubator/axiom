@@ -168,6 +168,16 @@ class PlanObjectSet : public BitSet {
         velox::bits::isBitSet(bits_.data(), object->id());
   }
 
+  template <typename V>
+  bool containsAny(const V& objects) const {
+    for (const auto& object : objects) {
+      if (contains(object)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// Inserts id of 'object'.
   void add(PlanObjectCP object) {
     auto id = object->id();
