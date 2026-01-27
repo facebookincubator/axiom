@@ -97,13 +97,11 @@ TEST_F(JoinTest, pushdownFilterThroughJoin) {
     SCOPED_TRACE("Right Join");
     auto logicalPlan = makePlan(lp::JoinType::kRight);
     auto matcher = core::PlanMatcherBuilder{}
-                       .tableScan("t")
+                       .tableScan("u")
+                       .filter("u_data IS NULL")
                        .hashJoin(
-                           core::PlanMatcherBuilder{}
-                               .tableScan("u")
-                               .filter("u_data IS NULL")
-                               .build(),
-                           core::JoinType::kRight)
+                           core::PlanMatcherBuilder{}.tableScan("t").build(),
+                           core::JoinType::kLeft)
                        .filter("t_data IS NULL")
                        .project()
                        .build();
@@ -329,18 +327,16 @@ TEST_F(JoinTest, joinWithComputedKeys) {
     const auto& fragments = distributedPlan.plan->fragments();
     ASSERT_EQ(4, fragments.size());
 
-    LOG(ERROR) << distributedPlan.plan->toString();
-
     auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
+                       .tableScan("nation")
+                       // TODO Remove redundant projection of 'n_regionkey'.
+                       .project({"n_regionkey", "coalesce(n_regionkey, 1)"})
                        .partitionedOutput()
                        .build();
     AXIOM_ASSERT_PLAN(fragments.at(0).fragment.planNode, matcher);
 
     matcher = core::PlanMatcherBuilder()
-                  .tableScan("nation")
-                  // TODO Remove redundant projection of 'n_regionkey'.
-                  .project({"n_regionkey", "coalesce(n_regionkey, 1)"})
+                  .tableScan("region")
                   .partitionedOutput()
                   .build();
     AXIOM_ASSERT_PLAN(fragments.at(1).fragment.planNode, matcher);
@@ -349,7 +345,7 @@ TEST_F(JoinTest, joinWithComputedKeys) {
                   .exchange()
                   .hashJoin(
                       core::PlanMatcherBuilder().exchange().build(),
-                      core::JoinType::kLeft)
+                      core::JoinType::kRight)
                   .partialAggregation()
                   .partitionedOutput()
                   .build();
@@ -508,9 +504,9 @@ TEST_F(JoinTest, crossThenLeft) {
           .project()
           .hashJoin(
               core::PlanMatcherBuilder()
-                  .tableScan("t")
+                  .tableScan("u")
                   .nestedLoopJoin(
-                      core::PlanMatcherBuilder().tableScan("u").build())
+                      core::PlanMatcherBuilder().tableScan("t").build())
                   .build(),
               velox::core::JoinType::kRight)
           .aggregation()
