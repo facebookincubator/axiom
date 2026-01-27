@@ -27,6 +27,7 @@ target_link_libraries(
   axiom_logical_plan_tests
   axiom_logical_plan_builder
   axiom_logical_plan
+  axiom_logical_plan_matcher
   axiom_test_connector
   GTest::gtest
   GTest::gtest_main

@@ -12,12 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(axiom_sql_presto_test LogicalPlanMatcher.cpp PrestoParserTest.cpp)
+add_library(axiom_logical_plan_matcher LogicalPlanMatcher.cpp)
+
+target_link_libraries(axiom_logical_plan_matcher axiom_logical_plan GTest::gtest)
+
+add_executable(axiom_sql_presto_test PrestoParserTest.cpp)
 
 add_test(axiom_sql_presto_test axiom_sql_presto_test)
 
 target_link_libraries(
   axiom_sql_presto_test
+  axiom_logical_plan_matcher
   axiom_logical_plan_builder
   axiom_sql_presto_parser
   axiom_test_connector
