@@ -1564,17 +1564,21 @@ void ToGraph::addJoinColumns(
   }
 }
 
-void ToGraph::translateJoin(const lp::JoinNode& join) {
-  const auto joinType = join.joinType();
+void ToGraph::translateJoin(
+    const lp::LogicalPlanNodePtr& left,
+    const lp::LogicalPlanNodePtr& right,
+    lp::JoinType joinType,
+    const lp::ExprPtr& condition,
+    lp::JoinType originalJoinType) {
   const bool isInner = joinType == lp::JoinType::kInner;
 
-  exprSources_ = {join.left().get(), join.right().get()};
+  exprSources_ = {left.get(), right.get()};
   SCOPE_EXIT {
     exprSources_.clear();
   };
 
   ExprVector conjuncts;
-  translateConjuncts(join.condition(), conjuncts);
+  translateConjuncts(condition, conjuncts);
 
 #ifndef NDEBUG
   // Sanity check. The join condition should not depend on the output of the
@@ -1615,17 +1619,18 @@ void ToGraph::translateJoin(const lp::JoinNode& join) {
     };
 
     if (leftOptional) {
-      addJoinColumns(*join.left(), joinSpec.leftColumns, joinSpec.leftExprs);
+      addJoinColumns(*left, joinSpec.leftColumns, joinSpec.leftExprs);
     }
 
     if (rightOptional) {
-      addJoinColumns(*join.right(), joinSpec.rightColumns, joinSpec.rightExprs);
+      addJoinColumns(*right, joinSpec.rightColumns, joinSpec.rightExprs);
     }
 
     auto* edge = make<JoinEdge>(
         leftTables.size() == 1 ? leftTables.onlyObject() : nullptr,
         rightTable,
-        std::move(joinSpec));
+        std::move(joinSpec),
+        originalJoinType);
     currentDt_->joins.push_back(edge);
     for (auto i = 0; i < leftKeys.size(); ++i) {
       edge->addEquality(leftKeys[i], rightKeys[i]);
@@ -2608,8 +2613,7 @@ void ToGraph::makeQueryGraph(
     } break;
     case lp::NodeKind::kJoin: {
       const auto& join = *node.as<lp::JoinNode>();
-      const auto& left = *join.left();
-      const auto& right = *join.right();
+
       // TODO Allow mixing Unnest with Join in a single DT.
       // https://github.com/facebookincubator/axiom/issues/286
       allowedInDt = deny(
@@ -2619,13 +2623,27 @@ void ToGraph::makeQueryGraph(
           lp::NodeKind::kLimit,
           lp::NodeKind::kFilter,
           lp::NodeKind::kSort);
-      makeQueryGraph(left, allowedInDt, /*excludeOuterJoins=*/true);
-      if (join.joinType() != lp::JoinType::kInner ||
-          queryCtx()->optimization()->options().syntacticJoinOrder) {
+      if (join.joinType() != lp::JoinType::kInner) {
         allowedInDt = deny(allowedInDt, lp::NodeKind::kJoin);
       }
-      makeQueryGraph(right, allowedInDt, /*excludeOuterJoins=*/true);
-      translateJoin(join);
+
+      // Normalize the join. Replace RIGHT join with LEFT join.
+      auto left = join.left();
+      auto right = join.right();
+      auto joinType = join.joinType();
+      if (joinType == lp::JoinType::kRight) {
+        std::swap(left, right);
+        joinType = lp::JoinType::kLeft;
+      }
+
+      makeQueryGraph(*left, allowedInDt, /*excludeOuterJoins=*/true);
+
+      if (queryCtx()->optimization()->options().syntacticJoinOrder) {
+        allowedInDt = deny(allowedInDt, lp::NodeKind::kJoin);
+      }
+      makeQueryGraph(*right, allowedInDt, /*excludeOuterJoins=*/true);
+
+      translateJoin(left, right, joinType, join.condition(), join.joinType());
     } break;
     case lp::NodeKind::kSort: {
       const auto& input = *node.onlyInput();

@@ -224,8 +224,24 @@ class ToGraph {
   // 'flat'.
   void translateConjuncts(const logical_plan::ExprPtr& input, ExprVector& flat);
 
-  // Adds a JoinEdge corresponding to 'join' to the enclosing DerivedTable.
-  void translateJoin(const logical_plan::JoinNode& join);
+  // Adds a join to 'currentDt_'. If 'joinType' is an inner join, the conjuncts
+  // of the join condition are added to currentDt_->conjuncts. If left or full
+  // join, a JoinEdge is created and added to currentDt_->joins.
+  // @param left Left side of the join. Must have been added to the graph
+  // already.
+  // @param right Right side of the join. Must have been added to the graph
+  // already.
+  // @param joinType Inner, left or full. Right join must have been normalized
+  // into a left join.
+  // @param condition Join condition. Can be nullptr if a cross join.
+  // @param originalJoinType The original join type from the logical plan
+  // (before normalization).
+  void translateJoin(
+      const logical_plan::LogicalPlanNodePtr& left,
+      const logical_plan::LogicalPlanNodePtr& right,
+      logical_plan::JoinType joinType,
+      const logical_plan::ExprPtr& condition,
+      logical_plan::JoinType originalJoinType);
 
   // Given an INTERSECT or an EXCEPT set operation, create derived tables for
   // inputs, add them to 'currentDt_' and connect them with join edges.

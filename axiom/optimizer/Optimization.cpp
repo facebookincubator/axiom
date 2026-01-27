@@ -1782,17 +1782,25 @@ void Optimization::addJoin(
   }
 
   std::vector<NextJoin> toTry;
-  joinByIndex(plan, candidate, state, toTry);
 
-  const auto sizeAfterIndex = toTry.size();
-  joinByHash(plan, candidate, state, toTry);
-
-  if (!options_.syntacticJoinOrder && toTry.size() > sizeAfterIndex &&
-      candidate.join->isNonCommutative() &&
-      candidate.join->hasRightHashVariant()) {
-    // There is a hash based candidate with a non-commutative join. Try a
-    // right join variant.
+  if (options_.syntacticJoinOrder &&
+      candidate.join->originalJoinType().has_value() &&
+      candidate.join->originalJoinType().value() ==
+          logical_plan::JoinType::kRight) {
     joinByHashRight(plan, candidate, state, toTry);
+  } else {
+    joinByIndex(plan, candidate, state, toTry);
+
+    const auto sizeAfterIndex = toTry.size();
+    joinByHash(plan, candidate, state, toTry);
+
+    if (!options_.syntacticJoinOrder && toTry.size() > sizeAfterIndex &&
+        candidate.join->isNonCommutative() &&
+        candidate.join->hasRightHashVariant()) {
+      // There is a hash based candidate with a non-commutative join. Try a
+      // right join variant.
+      joinByHashRight(plan, candidate, state, toTry);
+    }
   }
 
   // If one is much better do not try the other.

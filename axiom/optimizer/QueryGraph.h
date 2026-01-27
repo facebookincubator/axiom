@@ -535,7 +535,11 @@ class JoinEdge {
   /// come from different tables. If so, 'this' must be not inner and not full
   /// outer.
   /// @param rightTable The right table of the join. Cannot be nullptr.
-  JoinEdge(PlanObjectCP leftTable, PlanObjectCP rightTable, Spec spec)
+  JoinEdge(
+      PlanObjectCP leftTable,
+      PlanObjectCP rightTable,
+      Spec spec,
+      std::optional<logical_plan::JoinType> originalJoinType = std::nullopt)
       : leftTable_(leftTable),
         rightTable_(rightTable),
         filter_(std::move(spec.filter)),
@@ -548,7 +552,8 @@ class JoinEdge {
         leftColumns_{spec.leftColumns},
         leftExprs_{spec.leftExprs},
         rightColumns_{spec.rightColumns},
-        rightExprs_{spec.rightExprs} {
+        rightExprs_{spec.rightExprs},
+        originalJoinType_{originalJoinType} {
     VELOX_CHECK_NOT_NULL(rightTable);
 
     if (isInner()) {
@@ -704,6 +709,13 @@ class JoinEdge {
     return rightOptional_ && !leftOptional_ && !isSemi() && !isAnti();
   }
 
+  /// Original join type if different from this edge. Used to mark LEFT joins
+  /// which were specified as RIGHT joins in the logical plan. Needed to
+  /// correctly plan RIGHT join when syntactic join order is requested.
+  std::optional<logical_plan::JoinType> originalJoinType() const {
+    return originalJoinType_;
+  }
+
   /// True if all tables referenced from 'leftKeys' must be placed before
   /// placing this.
   bool isNonCommutative() const {
@@ -831,6 +843,8 @@ class JoinEdge {
   const ExprVector leftExprs_;
   const ColumnVector rightColumns_;
   const ExprVector rightExprs_;
+
+  const std::optional<logical_plan::JoinType> originalJoinType_;
 };
 
 using JoinEdgeP = JoinEdge*;
