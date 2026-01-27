@@ -121,8 +121,9 @@ namespace {
 bool isSingleRowDt(PlanObjectCP object) {
   if (object->is(PlanType::kDerivedTableNode)) {
     auto dt = object->as<DerivedTable>();
-    return dt->limit == 1 ||
-        (dt->aggregation && dt->aggregation->groupingKeys().empty());
+    return (
+        dt->aggregation && dt->aggregation->groupingKeys().empty() &&
+        dt->limit != 0 && dt->offset == 0);
   }
   return false;
 }
