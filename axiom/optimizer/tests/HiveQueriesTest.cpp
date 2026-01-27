@@ -287,5 +287,57 @@ TEST_F(HiveQueriesTest, joinWithLimitBothSides) {
   checkSame(logicalPlan, referencePlan);
 }
 
+TEST_F(HiveQueriesTest, qualifiedCrossJoin) {
+  // Test that cross join conditions produce equivalent results.
+  // For each combination of join type, limits on both sides, we verify that
+  // the cross join condition "1=1" produces the same result as
+  // "if(a.n_nationkey < 0, n_nationkey, 1) = if(b.n_nationkey < 0, n_nationkey,
+  // 1)" (since n_nationkey is never < 0, both conditions effectively become
+  // 1=1).
+
+  const std::vector<std::string> joinTypes = {"inner", "right", "left"};
+  const std::vector<int> limitsA = {0, 10};
+  const std::vector<int> limitsB = {0, 10};
+  const std::string ccCrossJoin = "1=1";
+  const std::string ccQualified =
+      "if(a.n_nationkey < 0, a.n_nationkey, 1) = if(b.n_nationkey < 0, b.n_nationkey, 1)";
+
+  for (const auto& jt : joinTypes) {
+    for (int al : limitsA) {
+      for (int bl : limitsB) {
+        SCOPED_TRACE(fmt::format("jt={}, al={}, bl={}", jt, al, bl));
+
+        auto makeQuery = [&](const std::string& cc) {
+          return fmt::format(
+              "select a.n_nationkey as a_key, b.n_nationkey as b_key from "
+              "(select * from nation where n_nationkey < {}) a "
+              "{} join "
+              "(select * from nation where n_nationkey < {}) b "
+              "on {}",
+              al,
+              jt,
+              bl,
+              cc);
+        };
+
+        auto queryCross = makeQuery(ccCrossJoin);
+        auto queryQualified = makeQuery(ccQualified);
+
+        auto planCross = parseSelect(queryCross);
+        auto planQualified = parseSelect(queryQualified);
+
+        // Use single node plans and executions.
+        auto resultCross =
+            runVelox(planCross, {.numWorkers = 1, .numDrivers = 1});
+        auto resultQualified =
+            runVelox(planQualified, {.numWorkers = 1, .numDrivers = 1});
+
+        velox::exec::test::assertEqualResults(
+            resultCross.results, resultQualified.results);
+      }
+    }
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
