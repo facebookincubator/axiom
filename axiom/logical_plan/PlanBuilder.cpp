@@ -580,6 +580,81 @@ PlanBuilder& PlanBuilder::aggregate(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::aggregateWithGroupingSets(
+    const std::vector<ExprApi>& groupingKeys,
+    const std::vector<std::vector<int32_t>>& groupingSets,
+    const std::vector<ExprApi>& aggregates,
+    const std::vector<AggregateOptions>& options) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Aggregate node cannot be a leaf node");
+
+  std::vector<std::string> outputNames;
+  // Reserve space for: keys + aggregates + (optional) grouping set index column
+  outputNames.reserve(
+      groupingKeys.size() + aggregates.size() + (groupingSets.empty() ? 0 : 1));
+
+  std::vector<ExprPtr> keyExprs;
+  keyExprs.reserve(groupingKeys.size());
+
+  auto newOutputMapping = std::make_shared<NameMappings>();
+
+  resolveProjections(groupingKeys, outputNames, keyExprs, *newOutputMapping);
+
+  std::vector<AggregateExprPtr> exprs;
+  exprs.reserve(aggregates.size());
+
+  VELOX_USER_CHECK(options.size() == aggregates.size());
+  for (size_t i = 0; i < aggregates.size(); ++i) {
+    const auto& aggregate = aggregates[i];
+
+    ExprPtr filter;
+    if (options[i].filter != nullptr) {
+      filter = resolveScalarTypes(options[i].filter);
+    }
+
+    std::vector<SortingField> sortingFields;
+    sortingFields.reserve(options[i].orderBy.size());
+    for (const auto& key : options[i].orderBy) {
+      auto expr = resolveScalarTypes(key.expr.expr());
+
+      sortingFields.push_back(
+          SortingField{expr, SortOrder(key.ascending, key.nullsFirst)});
+    }
+
+    AggregateExprPtr expr;
+    expr = resolveAggregateTypes(
+        aggregate.expr(), filter, sortingFields, options[i].distinct);
+
+    if (aggregate.name().has_value()) {
+      const auto& alias = aggregate.name().value();
+      outputNames.push_back(newName(alias));
+      newOutputMapping->add(alias, outputNames.back());
+    } else {
+      outputNames.push_back(newName(expr->name()));
+    }
+
+    exprs.emplace_back(std::move(expr));
+  }
+
+  if (!groupingSets.empty()) {
+    static const std::string kGroupingSetIndexName = "$grouping_set_id";
+    outputNames.push_back(newName(kGroupingSetIndexName));
+    newOutputMapping->add(kGroupingSetIndexName, outputNames.back());
+  }
+
+  node_ = std::make_shared<AggregateNode>(
+      nextId(),
+      std::move(node_),
+      std::move(keyExprs),
+      groupingSets,
+      std::move(exprs),
+      std::move(outputNames));
+
+  newOutputMapping->enableUnqualifiedAccess();
+  outputMapping_ = std::move(newOutputMapping);
+
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::distinct() {
   VELOX_USER_CHECK_NOT_NULL(
       node_, "Distinct aggregation node cannot be a leaf node");

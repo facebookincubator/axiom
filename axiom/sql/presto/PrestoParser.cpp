@@ -1248,35 +1248,373 @@ class RelationPlanner : public AstVisitor {
     return true;
   }
 
+  // ROLLUP(a,b,c) -> {(a,b,c), (a,b), (a), ()}
+  static std::vector<std::vector<ExpressionPtr>> expandRollup(
+      const std::vector<ExpressionPtr>& expressions) {
+    std::vector<std::vector<ExpressionPtr>> sets;
+    sets.reserve(expressions.size() + 1);
+
+    for (size_t i = expressions.size(); i > 0; --i) {
+      std::vector<ExpressionPtr> set;
+      set.reserve(i);
+      for (size_t j = 0; j < i; ++j) {
+        set.push_back(expressions[j]);
+      }
+      sets.push_back(std::move(set));
+    }
+    sets.emplace_back();
+    return sets;
+  }
+
+  // CUBE(a,b) -> {(a,b), (a), (b), ()}
+  static std::vector<std::vector<ExpressionPtr>> expandCube(
+      const std::vector<ExpressionPtr>& expressions) {
+    const size_t n = expressions.size();
+    const size_t numSets = 1ULL << n;
+    std::vector<std::vector<ExpressionPtr>> sets;
+    sets.reserve(numSets);
+
+    for (size_t mask = numSets; mask > 0; --mask) {
+      size_t bits = mask - 1;
+      std::vector<ExpressionPtr> set;
+      for (size_t i = 0; i < n; ++i) {
+        if (bits & (1ULL << (n - 1 - i))) {
+          set.push_back(expressions[i]);
+        }
+      }
+      sets.push_back(std::move(set));
+    }
+    return sets;
+  }
+
+  static bool hasComplexGroupingSets(
+      const std::vector<GroupingElementPtr>& groupingElements) {
+    for (const auto& element : groupingElements) {
+      switch (element->type()) {
+        case NodeType::kRollup:
+        case NodeType::kCube:
+        case NodeType::kGroupingSets:
+          return true;
+        default:
+          break;
+      }
+    }
+    return false;
+  }
+
+  lp::ExprApi resolveGroupingExpression(
+      const ExpressionPtr& expr,
+      const std::vector<SelectItemPtr>& selectItems) {
+    if (expr->is(NodeType::kLongLiteral)) {
+      const auto n = expr->as<LongLiteral>()->value();
+      VELOX_CHECK_GE(n, 1);
+      VELOX_CHECK_LE(n, selectItems.size());
+
+      const auto& item = selectItems.at(n - 1);
+      VELOX_CHECK(item->is(NodeType::kSingleColumn));
+
+      const auto* singleColumn = item->as<SingleColumn>();
+      return toExpr(singleColumn->expression());
+    }
+    return toExpr(expr);
+  }
+
+  std::vector<std::vector<lp::ExprApi>> expandGroupingSets(
+      const std::vector<GroupingElementPtr>& groupingElements,
+      const std::vector<SelectItemPtr>& selectItems) {
+    std::vector<std::vector<lp::ExprApi>> allSets;
+
+    for (const auto& element : groupingElements) {
+      switch (element->type()) {
+        case NodeType::kSimpleGroupBy: {
+          const auto* simple = element->as<SimpleGroupBy>();
+          std::vector<lp::ExprApi> exprs;
+          for (const auto& expr : simple->expressions()) {
+            exprs.push_back(resolveGroupingExpression(expr, selectItems));
+          }
+          if (allSets.empty()) {
+            allSets.push_back(std::move(exprs));
+          } else {
+            // Append to all existing sets
+            for (auto& set : allSets) {
+              for (const auto& e : exprs) {
+                set.push_back(e);
+              }
+            }
+          }
+          break;
+        }
+
+        case NodeType::kRollup: {
+          const auto* rollup = element->as<Rollup>();
+          auto expanded = expandRollup(rollup->expressions());
+
+          std::vector<std::vector<lp::ExprApi>> rollupSets;
+          rollupSets.reserve(expanded.size());
+          for (const auto& set : expanded) {
+            std::vector<lp::ExprApi> exprSet;
+            exprSet.reserve(set.size());
+            for (const auto& expr : set) {
+              exprSet.push_back(resolveGroupingExpression(expr, selectItems));
+            }
+            rollupSets.push_back(std::move(exprSet));
+          }
+
+          if (allSets.empty()) {
+            allSets = std::move(rollupSets);
+          } else {
+            std::vector<std::vector<lp::ExprApi>> combined;
+            for (const auto& existingSet : allSets) {
+              for (const auto& rollupSet : rollupSets) {
+                std::vector<lp::ExprApi> newSet = existingSet;
+                newSet.insert(newSet.end(), rollupSet.begin(), rollupSet.end());
+                combined.push_back(std::move(newSet));
+              }
+            }
+            allSets = std::move(combined);
+          }
+          break;
+        }
+
+        case NodeType::kCube: {
+          const auto* cube = element->as<Cube>();
+          auto expanded = expandCube(cube->expressions());
+
+          std::vector<std::vector<lp::ExprApi>> cubeSets;
+          cubeSets.reserve(expanded.size());
+          for (const auto& set : expanded) {
+            std::vector<lp::ExprApi> exprSet;
+            exprSet.reserve(set.size());
+            for (const auto& expr : set) {
+              exprSet.push_back(resolveGroupingExpression(expr, selectItems));
+            }
+            cubeSets.push_back(std::move(exprSet));
+          }
+
+          if (allSets.empty()) {
+            allSets = std::move(cubeSets);
+          } else {
+            std::vector<std::vector<lp::ExprApi>> combined;
+            for (const auto& existingSet : allSets) {
+              for (const auto& cubeSet : cubeSets) {
+                std::vector<lp::ExprApi> newSet = existingSet;
+                newSet.insert(newSet.end(), cubeSet.begin(), cubeSet.end());
+                combined.push_back(std::move(newSet));
+              }
+            }
+            allSets = std::move(combined);
+          }
+          break;
+        }
+
+        case NodeType::kGroupingSets: {
+          const auto* groupingSets = element->as<GroupingSets>();
+
+          std::vector<std::vector<lp::ExprApi>> gsSets;
+          gsSets.reserve(groupingSets->sets().size());
+          for (const auto& set : groupingSets->sets()) {
+            std::vector<lp::ExprApi> exprSet;
+            exprSet.reserve(set.size());
+            for (const auto& expr : set) {
+              exprSet.push_back(resolveGroupingExpression(expr, selectItems));
+            }
+            gsSets.push_back(std::move(exprSet));
+          }
+
+          if (allSets.empty()) {
+            allSets = std::move(gsSets);
+          } else {
+            std::vector<std::vector<lp::ExprApi>> combined;
+            for (const auto& existingSet : allSets) {
+              for (const auto& gsSet : gsSets) {
+                std::vector<lp::ExprApi> newSet = existingSet;
+                newSet.insert(newSet.end(), gsSet.begin(), gsSet.end());
+                combined.push_back(std::move(newSet));
+              }
+            }
+            allSets = std::move(combined);
+          }
+          break;
+        }
+
+        default:
+          VELOX_NYI(
+              "Grouping element type not supported: {}",
+              NodeTypeName::toName(element->type()));
+      }
+    }
+
+    return allSets;
+  }
+
   void addGroupBy(
       const std::vector<SelectItemPtr>& selectItems,
       const std::vector<GroupingElementPtr>& groupingElements,
       const ExpressionPtr& having,
       const OrderByPtr& orderBy) {
-    // Go over grouping keys and collect expressions. Ordinals refer to output
-    // columns (selectItems). Non-ordinals refer to input columns.
-
+    // Ordinals refer to selectItems. For ROLLUP/CUBE/GROUPING SETS, expands
+    // into sets of indices into groupingKeys.
     std::vector<lp::ExprApi> groupingKeys;
+    std::vector<std::vector<int32_t>> groupingSetsIndices;
 
-    for (const auto& groupingElement : groupingElements) {
-      VELOX_CHECK_EQ(groupingElement->type(), NodeType::kSimpleGroupBy);
-      const auto* simple = groupingElement->as<SimpleGroupBy>();
+    std::unordered_map<std::string, int32_t> exprToIndex;
 
-      for (const auto& expr : simple->expressions()) {
-        if (expr->is(NodeType::kLongLiteral)) {
-          // 1-based index.
-          const auto n = expr->as<LongLiteral>()->value();
+    auto getOrAddGroupingKey = [&](const ExpressionPtr& expr) -> int32_t {
+      auto resolved = resolveGroupingExpression(expr, selectItems);
+      auto exprStr = resolved.expr()->toString();
+      auto it = exprToIndex.find(exprStr);
+      if (it != exprToIndex.end()) {
+        return it->second;
+      }
+      int32_t idx = static_cast<int32_t>(groupingKeys.size());
+      groupingKeys.push_back(resolved);
+      exprToIndex[exprStr] = idx;
+      return idx;
+    };
 
-          VELOX_CHECK_GE(n, 1);
-          VELOX_CHECK_LE(n, selectItems.size());
+    bool hasComplexGrouping = hasComplexGroupingSets(groupingElements);
 
-          const auto& item = selectItems.at(n - 1);
-          VELOX_CHECK(item->is(NodeType::kSingleColumn));
+    if (hasComplexGrouping) {
+      // Track "base" expressions from SimpleGroupBy that apply to all sets
+      std::vector<int32_t> baseIndices;
 
-          const auto* singleColumn = item->as<SingleColumn>();
-          groupingKeys.emplace_back(toExpr(singleColumn->expression()));
-        } else {
-          groupingKeys.emplace_back(toExpr(expr));
+      // Collect grouping sets from ROLLUP/CUBE/GROUPING SETS
+      std::vector<std::vector<int32_t>> expandedSets;
+
+      for (const auto& element : groupingElements) {
+        switch (element->type()) {
+          case NodeType::kSimpleGroupBy: {
+            const auto* simple = element->as<SimpleGroupBy>();
+            for (const auto& expr : simple->expressions()) {
+              baseIndices.push_back(getOrAddGroupingKey(expr));
+            }
+            break;
+          }
+
+          case NodeType::kRollup: {
+            const auto* rollup = element->as<Rollup>();
+            auto expanded = expandRollup(rollup->expressions());
+
+            std::vector<std::vector<int32_t>> rollupSets;
+            rollupSets.reserve(expanded.size());
+            for (const auto& set : expanded) {
+              std::vector<int32_t> indices;
+              indices.reserve(set.size());
+              for (const auto& expr : set) {
+                indices.push_back(getOrAddGroupingKey(expr));
+              }
+              rollupSets.push_back(std::move(indices));
+            }
+
+            if (expandedSets.empty()) {
+              expandedSets = std::move(rollupSets);
+            } else {
+              std::vector<std::vector<int32_t>> combined;
+              combined.reserve(expandedSets.size() * rollupSets.size());
+              for (const auto& existingSet : expandedSets) {
+                for (const auto& rollupSet : rollupSets) {
+                  std::vector<int32_t> newSet = existingSet;
+                  newSet.insert(
+                      newSet.end(), rollupSet.begin(), rollupSet.end());
+                  combined.push_back(std::move(newSet));
+                }
+              }
+              expandedSets = std::move(combined);
+            }
+            break;
+          }
+
+          case NodeType::kCube: {
+            const auto* cube = element->as<Cube>();
+            auto expanded = expandCube(cube->expressions());
+
+            std::vector<std::vector<int32_t>> cubeSets;
+            cubeSets.reserve(expanded.size());
+            for (const auto& set : expanded) {
+              std::vector<int32_t> indices;
+              indices.reserve(set.size());
+              for (const auto& expr : set) {
+                indices.push_back(getOrAddGroupingKey(expr));
+              }
+              cubeSets.push_back(std::move(indices));
+            }
+
+            if (expandedSets.empty()) {
+              expandedSets = std::move(cubeSets);
+            } else {
+              std::vector<std::vector<int32_t>> combined;
+              combined.reserve(expandedSets.size() * cubeSets.size());
+              for (const auto& existingSet : expandedSets) {
+                for (const auto& cubeSet : cubeSets) {
+                  std::vector<int32_t> newSet = existingSet;
+                  newSet.insert(newSet.end(), cubeSet.begin(), cubeSet.end());
+                  combined.push_back(std::move(newSet));
+                }
+              }
+              expandedSets = std::move(combined);
+            }
+            break;
+          }
+
+          case NodeType::kGroupingSets: {
+            const auto* gs = element->as<GroupingSets>();
+
+            std::vector<std::vector<int32_t>> gsSets;
+            gsSets.reserve(gs->sets().size());
+            for (const auto& set : gs->sets()) {
+              std::vector<int32_t> indices;
+              indices.reserve(set.size());
+              for (const auto& expr : set) {
+                indices.push_back(getOrAddGroupingKey(expr));
+              }
+              gsSets.push_back(std::move(indices));
+            }
+
+            if (expandedSets.empty()) {
+              expandedSets = std::move(gsSets);
+            } else {
+              std::vector<std::vector<int32_t>> combined;
+              combined.reserve(expandedSets.size() * gsSets.size());
+              for (const auto& existingSet : expandedSets) {
+                for (const auto& gsSet : gsSets) {
+                  std::vector<int32_t> newSet = existingSet;
+                  newSet.insert(newSet.end(), gsSet.begin(), gsSet.end());
+                  combined.push_back(std::move(newSet));
+                }
+              }
+              expandedSets = std::move(combined);
+            }
+            break;
+          }
+
+          default:
+            VELOX_NYI(
+                "Grouping element type not supported: {}",
+                NodeTypeName::toName(element->type()));
+        }
+      }
+
+      // Prepend base indices to all expanded sets
+      if (!baseIndices.empty()) {
+        for (auto& set : expandedSets) {
+          std::vector<int32_t> newSet = baseIndices;
+          newSet.insert(newSet.end(), set.begin(), set.end());
+          set = std::move(newSet);
+        }
+      }
+
+      if (expandedSets.empty()) {
+        expandedSets.push_back(baseIndices);
+      }
+
+      groupingSetsIndices = std::move(expandedSets);
+    } else {
+      for (const auto& groupingElement : groupingElements) {
+        VELOX_CHECK_EQ(groupingElement->type(), NodeType::kSimpleGroupBy);
+        const auto* simple = groupingElement->as<SimpleGroupBy>();
+
+        for (const auto& expr : simple->expressions()) {
+          getOrAddGroupingKey(expr);
         }
       }
     }
@@ -1352,7 +1690,13 @@ class RelationPlanner : public AstVisitor {
         aggregateOptions.emplace_back();
       }
     }
-    builder_->aggregate(groupingKeys, aggregates, aggregateOptions);
+
+    if (!groupingSetsIndices.empty()) {
+      builder_->aggregateWithGroupingSets(
+          groupingKeys, groupingSetsIndices, aggregates, aggregateOptions);
+    } else {
+      builder_->aggregate(groupingKeys, aggregates, aggregateOptions);
+    }
 
     const auto outputNames = builder_->findOrAssignOutputNames();
 
