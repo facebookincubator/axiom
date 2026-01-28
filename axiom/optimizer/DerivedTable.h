@@ -67,7 +67,8 @@ struct DerivedTable : public PlanObject {
   /// Columns projected out. Visible in the enclosing query.
   ColumnVector columns;
 
-  /// Exprs projected out. 1:1 to 'columns'.
+  /// Exprs projected out. 1:1 to 'columns' or empty if 'this' represents a set
+  /// operation (setOp is set).
   ExprVector exprs;
 
   /// References all joins where 'this' is an end point.

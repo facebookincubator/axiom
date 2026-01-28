@@ -248,6 +248,10 @@ void printJoinEdges(const DerivedTable& dt, std::ostream& out) {
   for (auto* table : dt.tables) {
     out << " dt" << dt.id() << "_" << cname(table) << ";";
   }
+
+  for (auto* table : dt.children) {
+    out << " dt" << dt.id() << "_" << cname(table) << ";";
+  }
   out << "}\n\n";
 
   // Table ID nodes.
@@ -265,12 +269,26 @@ void printJoinEdges(const DerivedTable& dt, std::ostream& out) {
         << "\"];\n";
   }
 
+  for (auto* table : dt.children) {
+    out << "    dt" << dt.id() << "_" << cname(table) << " [label=\""
+        << cname(table) << "\", ";
+    // Rounded square for derived tables.
+    out << "shape=rect, style=\"filled,rounded\", width=0.4, height=0.4, ";
+    out << "fillcolor=\"" << kPalette.circles << "\", color=\"" << kPalette.text
+        << "\"];\n";
+  }
+
   out << "\n";
 
   // Invisible edge from header to first table ID to maintain ordering.
   if (!dt.tables.empty()) {
     out << "    dt" << dt.id() << "_header -> dt" << dt.id() << "_"
         << cname(dt.tables[dt.tables.size() / 2]) << " [style=invis];\n\n";
+  }
+
+  if (!dt.children.empty()) {
+    out << "    dt" << dt.id() << "_header -> dt" << dt.id() << "_"
+        << cname(dt.children[dt.children.size() / 2]) << " [style=invis];\n\n";
   }
 
   int joinNum = 1;
@@ -320,18 +338,30 @@ void printDerivedTableCluster(
   out << "      <TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" "
          "CELLPADDING=\"4\">\n";
   out << "        <TR><TD BGCOLOR=\"" << kPalette.header << "\" WIDTH=\""
-      << headerWidth << "\"><B>" << escapeHtml(dt.cname) << "</B></TD></TR>\n";
+      << headerWidth << "\"><B>" << escapeHtml(dt.cname);
+  if (dt.setOp.has_value()) {
+    out << " " << logical_plan::SetOperationName::toName(dt.setOp.value());
+  }
+  out << "</B></TD></TR>\n";
 
   // Output columns.
-  for (size_t i = 0; i < dt.columns.size(); ++i) {
-    auto* col = dt.columns[i];
-    auto* expr = dt.exprs[i];
-    // Show "col := expr" if expression differs from just the column reference.
-    if (expr->toString() != col->name()) {
-      printRow(
-          out, escapeHtml(col->name()) + " := " + escapeHtml(expr->toString()));
-    } else {
+  if (dt.setOp.has_value()) {
+    for (auto* col : dt.columns) {
       printRow(out, escapeHtml(col->name()));
+    }
+  } else {
+    for (size_t i = 0; i < dt.columns.size(); ++i) {
+      auto* col = dt.columns[i];
+      auto* expr = dt.exprs[i];
+      // Show "col := expr" if expression differs from just the column
+      // reference.
+      if (expr->toString() != col->name()) {
+        printRow(
+            out,
+            escapeHtml(col->name()) + " := " + escapeHtml(expr->toString()));
+      } else {
+        printRow(out, escapeHtml(col->name()));
+      }
     }
   }
 
@@ -348,7 +378,7 @@ void printDerivedTableCluster(
     const auto numGroupingKeys = groupingKeys.size();
     printSection(out, "AGG", aggregates, [&](size_t i, auto* agg) {
       return escapeHtml(columns[numGroupingKeys + i]->name()) +
-          " := " + escapeHtml(agg->toString());
+          " := " + escapeHtml(truncate(agg->toString()));
     });
   }
 
@@ -426,8 +456,11 @@ std::string layoutId(PlanObjectCP table) {
 // 3. Cluster-to-table anchor: connects the middle table ID node from the
 //    parent cluster to the first child table with high weight to pull the
 //    children below the parent.
-void printTableLayout(const DerivedTable& dt, std::ostream& out) {
-  if (dt.tables.empty()) {
+void printTableLayout(
+    int32_t parentId,
+    const PlanObjectVector& tables,
+    std::ostream& out) {
+  if (tables.empty()) {
     return;
   }
 
@@ -435,23 +468,23 @@ void printTableLayout(const DerivedTable& dt, std::ostream& out) {
 
   // Invisible edges for vertical ordering - connect first table in each row
   // to first table in the next row.
-  for (size_t i = 0; i + 2 < dt.tables.size(); i += 2) {
-    out << "  " << layoutId(dt.tables[i]) << " -> "
-        << layoutId(dt.tables[i + 2]) << " [style=invis];\n";
+  for (size_t i = 0; i + 2 < tables.size(); i += 2) {
+    out << "  " << layoutId(tables[i]) << " -> " << layoutId(tables[i + 2])
+        << " [style=invis];\n";
   }
 
   // Invisible edges for horizontal ordering within rows.
   // Use constraint=false to prevent vertical shift; the edge direction
   // (left -> right) enforces horizontal order.
-  for (size_t i = 0; i + 1 < dt.tables.size(); i += 2) {
-    out << "  {rank=same; " << layoutId(dt.tables[i]) << " -> "
-        << layoutId(dt.tables[i + 1]) << " [style=invis, constraint=false];}\n";
+  for (size_t i = 0; i + 1 < tables.size(); i += 2) {
+    out << "  {rank=same; " << layoutId(tables[i]) << " -> "
+        << layoutId(tables[i + 1]) << " [style=invis, constraint=false];}\n";
   }
 
   // Connect DT cluster to first table with invisible edge for layout.
-  size_t mid = dt.tables.size() / 2;
-  out << "  dt" << dt.id() << "_" << cname(dt.tables[mid]) << " -> "
-      << layoutId(dt.tables[0]) << " [style=invis, weight=100];\n";
+  size_t mid = tables.size() / 2;
+  out << "  dt" << parentId << "_" << cname(tables[mid]) << " -> "
+      << layoutId(tables[0]) << " [style=invis, weight=100];\n";
 }
 
 void printDerivedTableWithChildren(
@@ -466,8 +499,17 @@ void printDerivedTableWithChildren(
     printAllTables(table, out);
   }
 
+  for (const auto* child : dt.children) {
+    printAllTables(child, out);
+  }
+
+  auto children = dt.tables;
+  for (const auto* child : dt.children) {
+    children.push_back(child);
+  }
+
   // Print layout constraints for this DerivedTable's base tables.
-  printTableLayout(dt, out);
+  printTableLayout(dt.id(), children, out);
 }
 
 void printAllTables(PlanObjectCP table, std::ostream& out) {
