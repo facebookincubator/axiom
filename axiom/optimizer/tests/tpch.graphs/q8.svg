@@ -25,7 +25,7 @@
 <polygon fill="#ede3d9" stroke="transparent" points="16,-859 16,-878 576,-878 576,-859 16,-859"/>
 <text text-anchor="start" x="20" y="-866" font-family="Helvetica" font-size="10.00" fill="#1c2915">AGG:</text>
 <polygon fill="#ede3d9" stroke="transparent" points="16,-840 16,-859 576,-859 576,-840 16,-840"/>
-<text text-anchor="start" x="20" y="-847" font-family="Helvetica" font-size="10.00" fill="#1c2915"> &#160;&#160;&#160;sum := sum(__switch(eq(t8.n_name, &quot;BRAZIL&quot;), multiply(t4.l_extendedprice, minus(1, t4.l_discount)), 0))</text>
+<text text-anchor="start" x="20" y="-847" font-family="Helvetica" font-size="10.00" fill="#1c2915"> &#160;&#160;&#160;sum := sum(__switch(eq(t8.n_name, &quot;BRAZIL&quot;), multiply(t4.l_extendedprice, minus(1, t...</text>
 <polygon fill="#ede3d9" stroke="transparent" points="16,-821 16,-840 576,-840 576,-821 16,-821"/>
 <text text-anchor="start" x="20" y="-828" font-family="Helvetica" font-size="10.00" fill="#1c2915"> &#160;&#160;&#160;sum_4 := sum(multiply(t4.l_extendedprice, minus(1, t4.l_discount)))</text>
 <polygon fill="#ede3d9" stroke="transparent" points="16,-802 16,-821 576,-821 576,-802 16,-802"/>
