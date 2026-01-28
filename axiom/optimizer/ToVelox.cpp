@@ -1258,7 +1258,7 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
 
   const auto& distribution = repartition.distribution();
 
-  const auto keys = toTypedExprs(distribution.partition());
+  const auto keys = toTypedExprs(distribution.partitionKeys());
 
   if (distribution.isBroadcast()) {
     VELOX_CHECK_EQ(0, keys.size());

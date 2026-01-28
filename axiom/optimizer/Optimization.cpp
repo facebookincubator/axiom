@@ -490,7 +490,7 @@ RelationOpPtr repartitionForAgg(
 
   bool shuffle = false;
   for (auto& key : keyValues) {
-    auto nthKey = position(plan->distribution().partition(), *key);
+    auto nthKey = position(plan->distribution().partitionKeys(), *key);
     if (nthKey == kNotFound) {
       shuffle = true;
       break;
@@ -534,13 +534,13 @@ bool isIndexColocated(
     return false;
   }
 
-  const auto& inputPartitionKeys = input->distribution().partition();
+  const auto& inputPartitionKeys = input->distribution().partitionKeys();
 
   if (inputPartitionKeys.empty()) {
     return false;
   }
 
-  const auto& indexPartitionKeys = distribution.partition();
+  const auto& indexPartitionKeys = distribution.partitionKeys();
   if (inputPartitionKeys.size() != indexPartitionKeys.size()) {
     return false;
   }
@@ -571,7 +571,7 @@ RelationOpPtr repartitionForIndex(
   const auto& distribution = info.index->distribution;
 
   ExprVector keyExprs;
-  const auto& partitionKeys = distribution.partition();
+  const auto& partitionKeys = distribution.partitionKeys();
   for (auto key : partitionKeys) {
     // partition is in schema columns, lookupKeys is in BaseTable columns. Use
     // the schema column of lookup key for matching.
@@ -646,7 +646,7 @@ void setMarkTrueFraction(
 std::vector<uint32_t> joinKeyPartition(
     const RelationOpPtr& op,
     const ExprVector& keys) {
-  const auto& partitionKeys = op->distribution().partition();
+  const auto& partitionKeys = op->distribution().partitionKeys();
   std::vector<uint32_t> positions;
   for (unsigned i = 0; i < partitionKeys.size(); ++i) {
     auto nthKey = position(keys, *partitionKeys[i]);
@@ -719,7 +719,7 @@ void alignJoinSides(
 
   ExprVector distColumns;
   for (size_t i = 0; i < keys.size(); ++i) {
-    auto nthKey = position(input->distribution().partition(), *keys[i]);
+    auto nthKey = position(input->distribution().partitionKeys(), *keys[i]);
     if (nthKey != kNotFound) {
       if (distColumns.size() <= nthKey) {
         distColumns.resize(nthKey + 1);
@@ -812,7 +812,8 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
     // Check that the partition keys of the plan are assigned pairwise to the
     // partition columns of the layout.
     for (auto i = 0; i < keyValues.size(); ++i) {
-      if (!plan->distribution().partition()[i]->sameOrEqual(*keyValues[i])) {
+      if (!plan->distribution().partitionKeys()[i]->sameOrEqual(
+              *keyValues[i])) {
         shuffle = true;
         break;
       }
@@ -1333,11 +1334,9 @@ void Optimization::joinByHash(
   MemoKey memoKey = MemoKey::create(
       candidate.tables[0], buildColumns, buildTables, candidate.existences);
 
-  Distribution forBuild;
-  if (plan->distribution().isGather()) {
-    forBuild = Distribution::gather();
-  } else {
-    forBuild = {plan->distribution().distributionType(), copartition};
+  std::optional<DesiredDistribution> forBuild;
+  if (!copartition.empty()) {
+    forBuild = {nullptr, copartition};
   }
 
   PlanObjectSet empty;
@@ -1527,7 +1526,7 @@ void Optimization::joinByHashRight(
   auto probePlan = makePlan(
       *state.dt,
       memoKey,
-      Distribution{plan->distribution().distributionType(), {}},
+      std::nullopt,
       PlanObjectSet{},
       candidate.existsFanout,
       needsShuffle);
@@ -1671,8 +1670,6 @@ void Optimization::crossJoin(
     buildColumns.unionColumns(candidate.join->filter());
   }
 
-  const auto broadcast = Distribution::broadcast();
-
   MemoKey memoKey =
       MemoKey::create(table, buildColumns, buildTables, candidate.existences);
 
@@ -1681,7 +1678,7 @@ void Optimization::crossJoin(
   auto buildPlan = makePlan(
       *state.dt,
       memoKey,
-      broadcast,
+      std::nullopt,
       empty,
       candidate.existsFanout,
       needsShuffle);
@@ -1689,10 +1686,13 @@ void Optimization::crossJoin(
   PlanState buildState(state.optimization, state.dt, buildPlan);
 
   auto buildOp = buildPlan->op;
-  if (needsShuffle) {
-    buildOp = make<Repartition>(buildOp, broadcast, buildOp->columns());
-    buildState.addCost(*buildOp);
+
+  if (!isSingleWorker_) {
+    buildOp = make<Repartition>(
+        buildOp, Distribution::broadcast(), buildOp->columns());
   }
+
+  buildState.addCost(*buildOp);
 
   state.cost.cost += buildState.cost.cost;
 
@@ -1875,16 +1875,16 @@ RelationOpPtr Optimization::placeSingleRowDt(
       PlanObjectSet::fromObjects(subquery->columns),
       PlanObjectSet::single(subquery));
 
-  const auto broadcast = Distribution::broadcast();
-
   PlanObjectSet empty;
   bool needsShuffle = false;
   auto rightPlan =
-      makePlan(*state.dt, memoKey, broadcast, empty, 1, needsShuffle);
+      makePlan(*state.dt, memoKey, std::nullopt, empty, 1, needsShuffle);
 
   auto rightOp = rightPlan->op;
-  if (needsShuffle) {
-    rightOp = make<Repartition>(rightOp, broadcast, rightOp->columns());
+
+  if (!isSingleWorker_) {
+    rightOp = make<Repartition>(
+        rightOp, Distribution::broadcast(), rightOp->columns());
   }
 
   auto resultColumns = plan->columns();
@@ -1919,7 +1919,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
 
   bool ignore = false;
   auto plan =
-      makePlan(*state.dt, key, Distribution{}, PlanObjectSet{}, 1, ignore);
+      makePlan(*state.dt, key, std::nullopt, PlanObjectSet{}, 1, ignore);
   state.cost = plan->cost;
 
   // Make plans based on the dt alone as first.
@@ -1942,7 +1942,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
     MemoKey reducingKey = MemoKey::create(
         from, state.downstreamColumns(), std::move(reducingSet));
     plan = makePlan(
-        *state.dt, reducingKey, Distribution{}, PlanObjectSet{}, 1, ignore);
+        *state.dt, reducingKey, std::nullopt, PlanObjectSet{}, 1, ignore);
     state.cost = plan->cost;
     makeJoins(plan->op, state);
   }
@@ -2259,7 +2259,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
 PlanP Optimization::makePlan(
     const DerivedTable& dt,
     const MemoKey& key,
-    const Distribution& distribution,
+    const std::optional<DesiredDistribution>& distribution,
     const PlanObjectSet& boundColumns,
     float existsFanout,
     bool& needsShuffle) {
@@ -2275,7 +2275,7 @@ PlanP Optimization::makePlan(
 PlanP Optimization::makeUnionPlan(
     const DerivedTable& dt,
     const MemoKey& key,
-    const Distribution& distribution,
+    const std::optional<DesiredDistribution>& distribution,
     const PlanObjectSet& boundColumns,
     float existsFanout,
     bool& /*needsShuffle*/) {
@@ -2319,7 +2319,7 @@ PlanP Optimization::makeUnionPlan(
     return unionPlan(inputStates, result, distinct);
   }
 
-  if (distribution.partition().empty()) {
+  if (!distribution.has_value()) {
     if (isDistinct) {
       // Pick some partitioning key and shuffle on that and make distinct.
       Distribution someDistribution = somePartition(inputs);
@@ -2334,8 +2334,12 @@ PlanP Optimization::makeUnionPlan(
     // return with no shuffle needed.
     for (auto i = 0; i < inputs.size(); ++i) {
       if (inputNeedsShuffle[i]) {
-        inputs[i] =
-            make<Repartition>(inputs[i], distribution, inputs[i]->columns());
+        inputs[i] = make<Repartition>(
+            inputs[i],
+            Distribution{
+                DistributionType(distribution->partitionType),
+                distribution->partitionKeys},
+            inputs[i]->columns());
         inputStates[i].addCost(*inputs[i]);
       }
     }
@@ -2353,7 +2357,7 @@ PlanP Optimization::makeUnionPlan(
 PlanP Optimization::makeDtPlan(
     const DerivedTable& dt,
     const MemoKey& key,
-    const Distribution& distribution,
+    const std::optional<DesiredDistribution>& distribution,
     float existsFanout,
     bool& needsShuffle) {
   PlanSet* plans = memo_.find(key);

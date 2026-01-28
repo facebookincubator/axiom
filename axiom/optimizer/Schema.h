@@ -79,6 +79,19 @@ AXIOM_DECLARE_ENUM_NAME(OrderType);
 
 using OrderTypeVector = QGVector<OrderType>;
 
+/// Describes desired distribution of data.
+///
+/// TODO Allow specifying partitioning on specific keys, but no particular
+/// partitioning function.
+struct DesiredDistribution {
+  /// Connector-specific partitioning function or nullptr for standard Velox
+  /// hash partitioning.
+  const connector::PartitionType* partitionType;
+
+  /// One or more partitioning keys.
+  ExprVector partitionKeys;
+};
+
 /// Distribution of data. Describes a possible partition function that assigns a
 /// row of data to a partition based on some combination of partition keys. For
 /// a join to be copartitioned, both sides must have compatible partition
@@ -124,19 +137,19 @@ struct Distribution {
 
   Distribution(
       DistributionType distributionType,
-      ExprVector partition,
+      ExprVector partitionKeys,
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {},
       int32_t numKeysUnique = 0)
       : distributionType_{distributionType},
-        partition_{std::move(partition)},
+        partitionKeys_{std::move(partitionKeys)},
         orderKeys_{std::move(orderKeys)},
         orderTypes_{std::move(orderTypes)},
         numKeysUnique_{numKeysUnique},
         isBroadcast_{false} {
     VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
     if (isGather()) {
-      VELOX_CHECK_EQ(partition_.size(), 0);
+      VELOX_CHECK_EQ(partitionKeys_.size(), 0);
     }
   }
 
@@ -165,6 +178,10 @@ struct Distribution {
   /// equality on all partitioning key columns.
   bool isSamePartition(const Distribution& other) const;
 
+  /// Return if 'this' and 'other' have the same number/type of partitioning
+  /// keys and use same partitioning function.
+  bool isSamePartition(const DesiredDistribution& other) const;
+
   /// True if 'other' has the same ordering columns and order type.
   bool isSameOrder(const Distribution& other) const;
 
@@ -180,8 +197,8 @@ struct Distribution {
     return distributionType_;
   }
 
-  const ExprVector& partition() const {
-    return partition_;
+  const ExprVector& partitionKeys() const {
+    return partitionKeys_;
   }
 
   const ExprVector& orderKeys() const {
@@ -206,7 +223,7 @@ struct Distribution {
   /// Partitioning columns. The values of these columns determine which of
   /// partition contains any given row. Should be used together with
   /// DistributionType::partitionType.
-  ExprVector partition_;
+  ExprVector partitionKeys_;
 
   /// Ordering columns. Each partition is ordered by these. Specifies that
   /// streaming group by or merge join are possible.
