@@ -259,6 +259,20 @@ class PlanBuilder {
       const std::vector<ExprApi>& aggregates,
       const std::vector<AggregateOptions>& options);
 
+  /// Aggregate with grouping sets support for ROLLUP, CUBE, and GROUPING SETS.
+  /// @param groupingKeys All grouping key expressions used across all sets.
+  /// @param groupingSets Vector of grouping sets, where each set is a vector
+  /// of indices into groupingKeys. For example, with groupingKeys [a, b, c]:
+  ///   - ROLLUP(a,b,c) would have sets: [[0,1,2], [0,1], [0], []]
+  ///   - CUBE(a,b) would have sets: [[0,1], [0], [1], []]
+  /// @param aggregates The aggregate expressions to compute.
+  /// @param options Per-aggregate options (filter, orderBy, distinct).
+  PlanBuilder& aggregateWithGroupingSets(
+      const std::vector<ExprApi>& groupingKeys,
+      const std::vector<std::vector<int32_t>>& groupingSets,
+      const std::vector<ExprApi>& aggregates,
+      const std::vector<AggregateOptions>& options);
+
   PlanBuilder& distinct();
 
   /// Starts or continues the plan with an Unnest node. Uses auto-generated

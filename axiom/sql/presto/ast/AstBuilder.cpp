@@ -925,24 +925,40 @@ std::any AstBuilder::visitSingleGroupingSet(
 
 std::any AstBuilder::visitRollup(PrestoSqlParser::RollupContext* ctx) {
   trace("visitRollup");
-  return visitChildren("visitRollup", ctx);
+
+  auto expressions = visitTyped<Expression>(ctx->expression());
+  return std::static_pointer_cast<GroupingElement>(
+      std::make_shared<Rollup>(getLocation(ctx), expressions));
 }
 
 std::any AstBuilder::visitCube(PrestoSqlParser::CubeContext* ctx) {
   trace("visitCube");
-  return visitChildren("visitCube", ctx);
+
+  auto expressions = visitTyped<Expression>(ctx->expression());
+  return std::static_pointer_cast<GroupingElement>(
+      std::make_shared<Cube>(getLocation(ctx), expressions));
 }
 
 std::any AstBuilder::visitMultipleGroupingSets(
     PrestoSqlParser::MultipleGroupingSetsContext* ctx) {
   trace("visitMultipleGroupingSets");
-  return visitChildren("visitMultipleGroupingSets", ctx);
+
+  std::vector<std::vector<ExpressionPtr>> sets;
+  sets.reserve(ctx->groupingSet().size());
+  for (auto* groupingSetCtx : ctx->groupingSet()) {
+    sets.emplace_back(visitTyped<Expression>(groupingSetCtx->expression()));
+  }
+  return std::static_pointer_cast<GroupingElement>(
+      std::make_shared<GroupingSets>(getLocation(ctx), sets));
 }
 
 std::any AstBuilder::visitGroupingSet(
     PrestoSqlParser::GroupingSetContext* ctx) {
   trace("visitGroupingSet");
-  return visitChildren("visitGroupingSet", ctx);
+
+  // This is called via visitSingleGroupingSet, which handles it directly.
+  // We return the expressions for consistency if called directly.
+  return visitTyped<Expression>(ctx->expression());
 }
 
 std::any AstBuilder::visitNamedQuery(PrestoSqlParser::NamedQueryContext* ctx) {

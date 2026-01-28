@@ -912,6 +912,104 @@ TEST_F(PrestoParserTest, simpleGroupBy) {
   }
 }
 
+TEST_F(PrestoParserTest, groupingSets) {
+  lp::AggregateNodePtr agg;
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
+      [&](const auto& node) {
+        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+      });
+
+  testSql(
+      "SELECT n_regionkey, count(1) FROM nation "
+      "GROUP BY GROUPING SETS (n_regionkey, ())",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  ASSERT_EQ(2, agg->groupingSets().size());
+  ASSERT_EQ(1, agg->groupingSets()[0].size());
+  ASSERT_EQ(0, agg->groupingSets()[0][0]);
+  ASSERT_EQ(0, agg->groupingSets()[1].size());
+
+  testSql(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY GROUPING SETS ((n_regionkey, n_name), (n_regionkey), ())",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  ASSERT_EQ(3, agg->groupingSets().size());
+  ASSERT_EQ(2, agg->groupingSets()[0].size());
+  ASSERT_EQ(1, agg->groupingSets()[1].size());
+  ASSERT_EQ(0, agg->groupingSets()[2].size());
+}
+
+TEST_F(PrestoParserTest, rollup) {
+  lp::AggregateNodePtr agg;
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
+      [&](const auto& node) {
+        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+      });
+
+  testSql(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY ROLLUP(n_regionkey, n_name)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  ASSERT_EQ(3, agg->groupingSets().size());
+  ASSERT_EQ(2, agg->groupingSets()[0].size());
+  ASSERT_EQ(1, agg->groupingSets()[1].size());
+  ASSERT_EQ(0, agg->groupingSets()[2].size());
+
+  testSql(
+      "SELECT n_regionkey, count(1) FROM nation "
+      "GROUP BY ROLLUP(n_regionkey)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  ASSERT_EQ(2, agg->groupingSets().size());
+  ASSERT_EQ(1, agg->groupingSets()[0].size());
+  ASSERT_EQ(0, agg->groupingSets()[1].size());
+}
+
+TEST_F(PrestoParserTest, cube) {
+  lp::AggregateNodePtr agg;
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
+      [&](const auto& node) {
+        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+      });
+
+  testSql(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY CUBE(n_regionkey, n_name)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  ASSERT_EQ(4, agg->groupingSets().size());
+  ASSERT_EQ(2, agg->groupingSets()[0].size());
+  ASSERT_EQ(1, agg->groupingSets()[1].size());
+  ASSERT_EQ(1, agg->groupingSets()[2].size());
+  ASSERT_EQ(0, agg->groupingSets()[3].size());
+
+  testSql(
+      "SELECT n_regionkey, count(1) FROM nation "
+      "GROUP BY CUBE(n_regionkey)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  ASSERT_EQ(2, agg->groupingSets().size());
+}
+
+TEST_F(PrestoParserTest, mixedGroupByWithRollup) {
+  lp::AggregateNodePtr agg;
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
+      [&](const auto& node) {
+        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+      });
+
+  testSql(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY n_regionkey, ROLLUP(n_name)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  ASSERT_EQ(2, agg->groupingSets().size());
+  ASSERT_EQ(2, agg->groupingSets()[0].size());
+  ASSERT_EQ(1, agg->groupingSets()[1].size());
+}
+
 TEST_F(PrestoParserTest, distinct) {
   {
     auto matcher =
