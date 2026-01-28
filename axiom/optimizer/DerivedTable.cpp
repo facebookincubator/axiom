@@ -141,6 +141,11 @@ PlanObjectSet findSingleRowDts(
     for (auto& key : join->leftKeys()) {
       tablesCopy.except(key->allTables());
     }
+    // An outer cross join can have a left table with no left keys and no
+    // filter.
+    if (join->leftTable()) {
+      tablesCopy.erase(join->leftTable());
+    }
     for (auto& filter : join->filter()) {
       tablesCopy.except(filter->allTables());
     }
@@ -227,6 +232,12 @@ void DerivedTable::linkTablesToJoins() {
       }
       for (auto conjunct : join->filter()) {
         tables.unionSet(conjunct->allTables());
+      }
+      // There can be an edge that has no columns for a qualified cross join.
+      // Add the end points unconditionally.
+      tables.add(join->rightTable());
+      if (join->leftTable()) {
+        tables.add(join->leftTable());
       }
     }
     tables.forEachMutable([&](PlanObjectP table) {

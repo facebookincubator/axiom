@@ -1630,8 +1630,6 @@ void ToGraph::translateJoin(
     extractNonInnerJoinEqualities(
         equality_, conjuncts, rightTable, leftKeys, rightKeys, leftTables);
 
-    VELOX_CHECK(!leftTables.empty(), "Outer cross joins are not supported yet");
-
     JoinEdge::Spec joinSpec{
         .filter = std::move(conjuncts),
         .leftOptional = leftOptional,
@@ -1644,6 +1642,14 @@ void ToGraph::translateJoin(
 
     if (rightOptional) {
       addJoinColumns(*right, joinSpec.rightColumns, joinSpec.rightExprs);
+    }
+
+    if (leftTables.empty()) {
+      VELOX_CHECK_EQ(
+          2,
+          currentDt_->tables.size(),
+          "The left of a non-inner join is expected to be one table");
+      leftTables.add(currentDt_->tables[0]);
     }
 
     auto* edge = make<JoinEdge>(
