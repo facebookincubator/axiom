@@ -489,8 +489,12 @@ struct Join : public RelationOp {
       float fanout,
       ColumnVector columns);
 
-  static Join*
-  makeCrossJoin(RelationOpPtr input, RelationOpPtr right, ColumnVector columns);
+  static Join* makeCrossJoin(
+      RelationOpPtr input,
+      RelationOpPtr right,
+      velox::core::JoinType joinType,
+      ExprVector filter,
+      ColumnVector columns);
 
   const JoinMethod method;
   const velox::core::JoinType joinType;

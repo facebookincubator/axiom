@@ -1697,8 +1697,23 @@ void Optimization::crossJoin(
   resultColumns.unionObjects(buildOp->columns());
   resultColumns.intersect(downstreamColumns);
 
-  RelationOp* join =
-      Join::makeCrossJoin(plan, buildOp, resultColumns.toObjects<Column>());
+  // Determine joinType and filter from candidate's join if present.
+  velox::core::JoinType joinType = velox::core::JoinType::kInner;
+  ExprVector filter;
+  if (candidate.join) {
+    if (candidate.join->leftOptional() || candidate.join->rightOptional()) {
+      auto [build, probe] = candidate.joinSides();
+      joinType = build.leftJoinType();
+    }
+    filter = candidate.join->filter();
+  }
+
+  RelationOp* join = Join::makeCrossJoin(
+      plan,
+      buildOp,
+      joinType,
+      std::move(filter),
+      resultColumns.toObjects<Column>());
 
   state.placed.add(table);
   state.columns.unionSet(buildColumns);
@@ -1769,7 +1784,10 @@ void Optimization::addJoin(
     const RelationOpPtr& plan,
     PlanState& state,
     std::vector<NextJoin>& result) {
-  if (!candidate.join) {
+  // If either no join or join without equalities, make cross
+  // join. Revisit for index joins when adding index capable
+  // connectors.
+  if (!candidate.join || candidate.join->leftKeys().empty()) {
     crossJoin(plan, candidate, state, result);
     return;
   }
@@ -1853,7 +1871,11 @@ RelationOpPtr Optimization::placeSingleRowDt(
       rightOp->columns().begin(),
       rightOp->columns().end());
   auto* join = Join::makeCrossJoin(
-      std::move(plan), std::move(rightOp), std::move(resultColumns));
+      std::move(plan),
+      std::move(rightOp),
+      velox::core::JoinType::kInner,
+      ExprVector{},
+      std::move(resultColumns));
 
   state.placed.add(subquery);
   state.addCost(*join);

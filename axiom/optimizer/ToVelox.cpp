@@ -1093,19 +1093,23 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
   auto left = makeFragment(join.input(), fragment, stages);
   auto right = makeFragment(join.right, fragment, stages);
   if (join.method == JoinMethod::kCross) {
+    // For non-inner joins, pass the filter to the nested loop join node.
+    // For inner joins with a filter, add a filter node on top.
+    const bool isInner = join.joinType == velox::core::JoinType::kInner;
     auto joinNode = std::make_shared<velox::core::NestedLoopJoinNode>(
         nextId(),
         join.joinType,
-        nullptr,
+        isInner ? nullptr : toAnd(join.filter),
         std::move(left),
         std::move(right),
         makeOutputType(join.columns()));
-    if (join.filter.empty()) {
+    if (isInner && !join.filter.empty()) {
       makePredictionAndHistory(joinNode->id(), &join);
-      return joinNode;
+      return std::make_shared<velox::core::FilterNode>(
+          nextId(), toAnd(join.filter), joinNode);
     }
-    return std::make_shared<velox::core::FilterNode>(
-        nextId(), toAnd(join.filter), joinNode);
+    makePredictionAndHistory(joinNode->id(), &join);
+    return joinNode;
   }
 
   auto leftKeys = toFieldRefs(join.leftKeys);
