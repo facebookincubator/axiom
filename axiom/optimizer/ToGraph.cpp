@@ -511,6 +511,21 @@ void ToGraph::getExprForField(
     const lp::LogicalPlanNode*& context) {
   VELOX_CHECK_NOT_NULL(context);
 
+  auto lookupName = [&](const std::string& name) -> ExprCP {
+    auto it = renames_.find(name);
+    if (it != renames_.end()) {
+      return it->second;
+    }
+
+    if (allowCorrelations_ && correlations_ != nullptr) {
+      if (auto it = correlations_->find(name); it != correlations_->end()) {
+        return it->second;
+      }
+    }
+
+    return nullptr;
+  };
+
   while (context) {
     const auto& name = field->name();
 
@@ -544,12 +559,12 @@ void ToGraph::getExprForField(
     // invariant is broken: all expressions in a dericed table must reference
     // relations from DerivedTable::tables.
     {
-      auto it = renames_.find(name);
-      if (it != renames_.end() && it->second != nullptr &&
-          it->second->is(PlanType::kColumnExpr)) {
-        resultColumn = it->second->as<Column>();
-        resultExpr = nullptr;
-        return;
+      if (auto expr = lookupName(name)) {
+        if (expr != nullptr && expr->is(PlanType::kColumnExpr)) {
+          resultColumn = expr->as<Column>();
+          resultExpr = nullptr;
+          return;
+        }
       }
     }
 
@@ -646,12 +661,7 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
           skyline = &it->second;
         }
       } else {
-        ensureFunctionSubfields(expr);
-        auto call = expr->as<lp::CallExpr>();
-        auto it = functionSubfields_.find(call);
-        if (it != functionSubfields_.end()) {
-          skyline = &it->second;
-        }
+        skyline = ensureFunctionSubfields(expr);
       }
 
       // 'steps is a path. 'skyline' is a map from path to Expr. If no prefix
@@ -825,7 +835,7 @@ PathSet ToGraph::functionSubfields(const lp::CallExpr* call) {
   return subfields;
 }
 
-void ToGraph::ensureFunctionSubfields(const lp::ExprPtr& expr) {
+SubfieldProjections* ToGraph::ensureFunctionSubfields(const lp::ExprPtr& expr) {
   if (expr->isCall()) {
     const auto* call = expr->as<lp::CallExpr>();
     if (functionMetadata(velox::exec::sanitizeName(call->name()))) {
@@ -833,7 +843,14 @@ void ToGraph::ensureFunctionSubfields(const lp::ExprPtr& expr) {
         translateExpr(expr);
       }
     }
+
+    auto it = functionSubfields_.find(call);
+    if (it != functionSubfields_.end()) {
+      return &it->second;
+    }
   }
+
+  return nullptr;
 }
 
 namespace {
@@ -1177,6 +1194,7 @@ ExprCP ToGraph::translateColumn(std::string_view name) const {
   if (auto it = lambdaSignature_.find(name); it != lambdaSignature_.end()) {
     return it->second;
   }
+
   if (auto it = renames_.find(name); it != renames_.end()) {
     return it->second;
   }
@@ -1199,9 +1217,9 @@ ExprVector ToGraph::translateExprs(const std::vector<lp::ExprPtr>& source) {
 }
 
 void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
-  exprSources_ = {unnest.onlyInput().get()};
+  exprSources_.push_back(unnest.onlyInput().get());
   SCOPE_EXIT {
-    exprSources_.clear();
+    exprSources_.pop_back();
   };
 
   auto* unnestDt = currentDt_;
@@ -1321,9 +1339,9 @@ struct AggregateDedupHasher {
 } // namespace
 
 AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
-  exprSources_ = {agg.onlyInput().get()};
+  exprSources_.push_back(agg.onlyInput().get());
   SCOPE_EXIT {
-    exprSources_.clear();
+    exprSources_.pop_back();
   };
 
   ColumnVector columns;
@@ -1481,9 +1499,9 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
 }
 
 void ToGraph::addOrderBy(const lp::SortNode& order) {
-  exprSources_ = {order.onlyInput().get()};
+  exprSources_.push_back(order.onlyInput().get());
   SCOPE_EXIT {
-    exprSources_.clear();
+    exprSources_.pop_back();
   };
 
   auto [deduppedOrderKeys, deduppedOrderTypes] =
@@ -1572,9 +1590,11 @@ void ToGraph::translateJoin(
     lp::JoinType originalJoinType) {
   const bool isInner = joinType == lp::JoinType::kInner;
 
-  exprSources_ = {left.get(), right.get()};
+  exprSources_.push_back(left.get());
+  exprSources_.push_back(right.get());
   SCOPE_EXIT {
-    exprSources_.clear();
+    exprSources_.pop_back();
+    exprSources_.pop_back();
   };
 
   ExprVector conjuncts;
@@ -1859,9 +1879,9 @@ void ToGraph::makeValuesTable(const lp::ValuesNode& values) {
 }
 
 void ToGraph::addProjection(const lp::ProjectNode& project) {
-  exprSources_ = {project.onlyInput().get()};
+  exprSources_.push_back(project.onlyInput().get());
   SCOPE_EXIT {
-    exprSources_.clear();
+    exprSources_.pop_back();
   };
 
   const auto& names = project.names();
@@ -2187,9 +2207,9 @@ void ToGraph::applySampling(
 void ToGraph::addFilter(
     const lp::LogicalPlanNode& input,
     const lp::ExprPtr& predicate) {
-  exprSources_ = {&input};
+  exprSources_.push_back(&input);
   SCOPE_EXIT {
-    exprSources_.clear();
+    exprSources_.pop_back();
   };
 
   processSubqueries(input, predicate);

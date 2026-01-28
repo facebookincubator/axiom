@@ -712,6 +712,62 @@ TEST_P(SubfieldTest, orderBy) {
   verifyRequiredSubfields(plan, {{"a", {"[1]", "[3]"}}});
 }
 
+TEST_P(SubfieldTest, subquery) {
+  createTable(
+      "t_subquery",
+      {
+          makeRowVector(
+              {"a"},
+              {makeRowVector(
+                  {"x", "y", "z"},
+                  {
+                      makeFlatVector<int32_t>({1, 2, 3}),
+                      makeFlatVector<int32_t>({10, 20, 30}),
+                      makeFlatVector<int32_t>({11, 22, 33}),
+                  })}),
+      });
+
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT a.y FROM t_subquery WHERE a.x = (SELECT 1)", kHiveConnectorId);
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t_subquery")
+            .project()
+            .hashJoin(core::PlanMatcherBuilder().values().project().build())
+            .project()
+            .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+    verifyRequiredSubfields(plan, {{"a", {".x", ".y"}}});
+  }
+
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT 1 FROM t_subquery WHERE a.x = (SELECT count(*) FROM (VALUES 1, 2, 3) as t(n) WHERE n = a.z)",
+        kHiveConnectorId);
+
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .project()
+                       .hashJoin(
+                           core::PlanMatcherBuilder()
+                               .values()
+                               .aggregation()
+                               .project()
+                               .build())
+                       .filter()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+    verifyRequiredSubfields(plan, {{"a", {".x", ".z"}}});
+  }
+}
+
 TEST_P(SubfieldTest, overAggregation) {
   createTable(
       "t",

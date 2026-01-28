@@ -310,7 +310,8 @@ class ToGraph {
   PathSet functionSubfields(const logical_plan::CallExpr* call);
 
   // Calls translateSubfieldFunction() if not already called.
-  void ensureFunctionSubfields(const logical_plan::ExprPtr& expr);
+  SubfieldProjections* FOLLY_NULLABLE
+  ensureFunctionSubfields(const logical_plan::ExprPtr& expr);
 
   void makeBaseTable(const logical_plan::TableScanNode& tableScan);
 
