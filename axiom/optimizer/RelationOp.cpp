@@ -465,16 +465,18 @@ const QGString& Join::historyKey() const {
 Join* Join::makeCrossJoin(
     RelationOpPtr input,
     RelationOpPtr right,
+    velox::core::JoinType joinType,
+    ExprVector filter,
     ColumnVector columns) {
   float fanout = right->resultCardinality();
   return make<Join>(
       JoinMethod::kCross,
-      velox::core::JoinType::kInner,
+      joinType,
       std::move(input),
       std::move(right),
       ExprVector{},
       ExprVector{},
-      ExprVector{},
+      std::move(filter),
       fanout,
       std::move(columns));
 }

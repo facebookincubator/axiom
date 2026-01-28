@@ -643,7 +643,7 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
 
 class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
  public:
-  explicit HashJoinMatcher(
+  HashJoinMatcher(
       const std::shared_ptr<PlanMatcher>& left,
       const std::shared_ptr<PlanMatcher>& right)
       : PlanMatcherImpl<HashJoinNode>({left, right}) {}
@@ -656,6 +656,34 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
 
   MatchResult matchDetails(
       const HashJoinNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    if (joinType_.has_value()) {
+      EXPECT_EQ(
+          JoinTypeName::toName(plan.joinType()),
+          JoinTypeName::toName(joinType_.value()));
+    }
+
+    AXIOM_TEST_RETURN
+  }
+
+ private:
+  const std::optional<JoinType> joinType_;
+};
+
+class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
+ public:
+  NestedLoopJoinMatcher(
+      const std::shared_ptr<PlanMatcher>& left,
+      const std::shared_ptr<PlanMatcher>& right,
+      JoinType joinType)
+      : PlanMatcherImpl<NestedLoopJoinNode>({left, right}),
+        joinType_{joinType} {}
+
+  MatchResult matchDetails(
+      const NestedLoopJoinNode& plan,
       const std::unordered_map<std::string, std::string>& symbols)
       const override {
     SCOPED_TRACE(plan.toString(true, false));
@@ -847,10 +875,11 @@ PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(
-    const std::shared_ptr<PlanMatcher>& rightMatcher) {
+    const std::shared_ptr<PlanMatcher>& rightMatcher,
+    JoinType joinType) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<PlanMatcherImpl<NestedLoopJoinNode>>(
-      std::vector<std::shared_ptr<PlanMatcher>>{matcher_, rightMatcher});
+  matcher_ =
+      std::make_shared<NestedLoopJoinMatcher>(matcher_, rightMatcher, joinType);
   return *this;
 }
 

@@ -228,6 +228,12 @@ void DerivedTable::linkTablesToJoins() {
       for (auto conjunct : join->filter()) {
         tables.unionSet(conjunct->allTables());
       }
+      // There can be an edge that has no columns for a qualified cross join.
+      // Add the end points unconditionally.
+      tables.add(join->rightTable());
+      if (join->leftTable()) {
+        tables.add(join->leftTable());
+      }
     }
     tables.forEachMutable([&](PlanObjectP table) {
       if (table->is(PlanType::kTableNode)) {

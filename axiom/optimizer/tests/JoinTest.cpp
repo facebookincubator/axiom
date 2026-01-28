@@ -466,23 +466,32 @@ TEST_F(JoinTest, leftCrossJoin) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
-  // TODO Make these queries work.
   {
     auto logicalPlan = parseSelect(
         "SELECT * FROM t LEFT JOIN (SELECT count(*) FROM u) ON 1 = 1",
         kTestConnectorId);
-    VELOX_ASSERT_THROW(
-        toSingleNodePlan(logicalPlan),
-        "Outer cross joins are not supported yet");
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .nestedLoopJoin(
+                core::PlanMatcherBuilder().tableScan("u").aggregation().build(),
+                core::JoinType::kLeft)
+            // TODO Remove redundant projection.
+            .project()
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
+  // TODO Make this query work.
   {
     auto logicalPlan = parseSelect(
         "SELECT * FROM (SELECT count(*) FROM t) LEFT JOIN (SELECT count(*) FROM u) ON 1 = 1",
         kTestConnectorId);
     VELOX_ASSERT_THROW(
-        toSingleNodePlan(logicalPlan),
-        "Outer cross joins are not supported yet");
+        toSingleNodePlan(logicalPlan), "No plans to pick best from");
   }
 }
 
