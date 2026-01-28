@@ -153,6 +153,11 @@ class ToVelox {
       runner::ExecutableFragment& fragment,
       std::vector<runner::ExecutableFragment>& stages);
 
+  // Makes an empty ValuesNode for limit 0 case.
+  velox::core::PlanNodePtr makeZeroLimit(
+      const RelationOp& op,
+      runner::ExecutableFragment& fragment);
+
   // @pre op.sNoLimit() is true.
   velox::core::PlanNodePtr makeOffset(
       const Limit& op,

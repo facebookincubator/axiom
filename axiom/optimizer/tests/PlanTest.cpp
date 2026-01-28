@@ -953,6 +953,48 @@ TEST_F(PlanTest, limitAfterOrderBy) {
   }
 }
 
+TEST_F(PlanTest, zeroLimit) {
+  testConnector_->addTable("t", ROW({"a"}, {BIGINT()}));
+  {
+    auto logicalPlan =
+        lp::PlanBuilder{}.tableScan(kTestConnectorId, "t").limit(0).build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder{}.values().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    auto logicalPlan = lp::PlanBuilder{}
+                           .tableScan(kTestConnectorId, "t")
+                           .orderBy({"a"})
+                           .limit(0)
+                           .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder{}.values().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    auto logicalPlan = lp::PlanBuilder{}
+                           .tableScan(kTestConnectorId, "t")
+                           .offset(1)
+                           .limit(0)
+                           .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder{}.values().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+  {
+    auto logicalPlan = lp::PlanBuilder{}
+                           .tableScan(kTestConnectorId, "t")
+                           .orderBy({"a"})
+                           .offset(1)
+                           .limit(0)
+                           .build();
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder{}.values().build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 TEST_F(PlanTest, parallelCse) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, INTEGER()));
 
