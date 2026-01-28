@@ -235,6 +235,26 @@ TEST_F(SubqueryTest, correlatedExists) {
     }
   }
 
+  {
+    auto query =
+        "SELECT * FROM nation WHERE "
+        "EXISTS (SELECT 1 FROM region WHERE r_regionkey > n_regionkey)";
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .nestedLoopJoin(
+                core::PlanMatcherBuilder().tableScan("region").build(),
+                velox::core::JoinType::kLeftSemiProject)
+            .filter()
+            .project()
+            .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
   // Correlated conjuncts referencing multiple tables.
   {
     auto query =

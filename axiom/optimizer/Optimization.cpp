@@ -1667,6 +1667,10 @@ void Optimization::crossJoin(
   auto buildColumns = availableColumns(table);
   buildColumns.intersect(downstreamColumns);
 
+  if (candidate.join != nullptr) {
+    buildColumns.unionColumns(candidate.join->filter());
+  }
+
   const auto broadcast = Distribution::broadcast();
 
   MemoKey memoKey =
@@ -1700,23 +1704,41 @@ void Optimization::crossJoin(
   // Determine joinType and filter from candidate's join if present.
   velox::core::JoinType joinType = velox::core::JoinType::kInner;
   ExprVector filter;
+  ColumnCP mark = nullptr;
   if (candidate.join) {
-    if (candidate.join->leftOptional() || candidate.join->rightOptional()) {
-      auto [build, probe] = candidate.joinSides();
-      joinType = build.leftJoinType();
-    }
+    auto [build, probe] = candidate.joinSides();
+    joinType = build.leftJoinType();
     filter = candidate.join->filter();
+
+    mark = build.markColumn;
+
+    if (mark != nullptr) {
+      VELOX_CHECK(downstreamColumns.contains(mark));
+    }
   }
 
-  RelationOp* join = Join::makeCrossJoin(
-      plan,
-      buildOp,
-      joinType,
-      std::move(filter),
-      resultColumns.toObjects<Column>());
+  VELOX_CHECK(
+      joinType == velox::core::JoinType::kInner ||
+          joinType == velox::core::JoinType::kLeft ||
+          joinType == velox::core::JoinType::kRight ||
+          joinType == velox::core::JoinType::kFull ||
+          joinType == velox::core::JoinType::kLeftSemiProject,
+      "Unsupported cross join type: {}",
+      velox::core::JoinTypeName::toName(joinType));
+
+  auto columns = resultColumns.toObjects<Column>();
+  if (mark != nullptr) {
+    columns.emplace_back(mark);
+  }
+
+  RelationOp* join =
+      Join::makeCrossJoin(plan, buildOp, joinType, std::move(filter), columns);
 
   state.placed.add(table);
   state.columns.unionSet(buildColumns);
+  if (mark != nullptr) {
+    state.columns.add(mark);
+  }
   state.addCost(*join);
 
   state.addNextJoin(&candidate, std::move(join), toTry);
