@@ -2133,7 +2133,9 @@ void ToGraph::processSubqueries(
       }
     }
 
-    VELOX_CHECK(!leftKeys.empty());
+    if (leftKeys.empty()) {
+      VELOX_CHECK_EQ(leftTables.size(), 1);
+    }
 
     correlatedConjuncts_.clear();
 
