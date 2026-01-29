@@ -16,6 +16,7 @@
 #pragma once
 
 #include "axiom/common/Enums.h"
+#include "velox/common/serialization/Serializable.h"
 #include "velox/type/Variant.h"
 
 namespace facebook::axiom::logical_plan {
@@ -42,7 +43,7 @@ class ExprVisitorContext;
 /// Base class for all expressions. Every expression has a return type and zero
 /// or more inputs. Leaf nodes like Constant and InputReference have no inputs.
 /// Call may have many inputs.
-class Expr {
+class Expr : public velox::ISerializable {
  public:
   Expr(ExprKind kind, velox::TypePtr type, std::vector<ExprPtr> inputs)
       : kind_{kind}, type_{std::move(type)}, inputs_{std::move(inputs)} {
@@ -51,8 +52,6 @@ class Expr {
       VELOX_USER_CHECK_NOT_NULL(input);
     }
   }
-
-  virtual ~Expr() = default;
 
   ExprKind kind() const {
     return kind_;
@@ -128,7 +127,13 @@ class Expr {
 
   std::string toString() const;
 
+  /// Registers deserializers for all Expr subclasses.
+  static void registerSerDe();
+
  protected:
+  /// Serializes common base fields (name, type, inputs).
+  folly::dynamic serializeBase(std::string_view name) const;
+
   const ExprKind kind_;
   const velox::TypePtr type_;
   const std::vector<ExprPtr> inputs_;
@@ -152,6 +157,10 @@ class InputReferenceExpr : public Expr {
 
   void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
       const override;
+
+  folly::dynamic serialize() const override;
+
+  static ExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
   const std::string name_;
@@ -184,6 +193,10 @@ class ConstantExpr : public Expr {
   void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
       const override;
 
+  folly::dynamic serialize() const override;
+
+  static ExprPtr create(const folly::dynamic& obj, void* context);
+
  private:
   const std::shared_ptr<const velox::Variant> value_;
 };
@@ -212,6 +225,10 @@ class CallExpr : public Expr {
 
   void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
       const override;
+
+  folly::dynamic serialize() const override;
+
+  static ExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
   const std::string name_;
@@ -417,6 +434,10 @@ class SpecialFormExpr : public Expr {
   void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
       const override;
 
+  folly::dynamic serialize() const override;
+
+  static ExprPtr create(const folly::dynamic& obj, void* context);
+
  private:
   const SpecialForm form_;
 };
@@ -450,6 +471,10 @@ class SortOrder {
         (nullsFirst_ ? "FIRST" : "LAST"));
   }
 
+  folly::dynamic serialize() const;
+
+  static SortOrder deserialize(const folly::dynamic& obj);
+
  private:
   bool ascending_;
   bool nullsFirst_;
@@ -458,6 +483,10 @@ class SortOrder {
 struct SortingField {
   ExprPtr expression;
   SortOrder order;
+
+  folly::dynamic serialize() const;
+
+  static SortingField deserialize(const folly::dynamic& obj, void* context);
 };
 
 /// Aggregate function call. To be used in AggregateNode.
@@ -524,6 +553,10 @@ class AggregateExpr : public Expr {
   void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
       const override;
 
+  folly::dynamic serialize() const override;
+
+  static ExprPtr create(const folly::dynamic& obj, void* context);
+
  private:
   const std::string name_;
   const ExprPtr filter_;
@@ -563,6 +596,10 @@ class WindowExpr : public Expr {
     ExprPtr startValue;
     BoundType endType;
     ExprPtr endValue;
+
+    folly::dynamic serialize() const;
+
+    static Frame deserialize(const folly::dynamic& obj, void* context);
   };
 
   /// @param name Name of a window or aggregate function.
@@ -611,6 +648,10 @@ class WindowExpr : public Expr {
   void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
       const override;
 
+  folly::dynamic serialize() const override;
+
+  static ExprPtr create(const folly::dynamic& obj, void* context);
+
  private:
   const std::string name_;
   const std::vector<ExprPtr> partitionKeys_;
@@ -657,6 +698,10 @@ class LambdaExpr : public Expr {
   void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
       const override;
 
+  folly::dynamic serialize() const override;
+
+  static ExprPtr create(const folly::dynamic& obj, void* context);
+
  private:
   const velox::RowTypePtr signature_;
   const ExprPtr body_;
@@ -679,6 +724,8 @@ class SubqueryExpr : public Expr {
 
   void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
       const override;
+
+  folly::dynamic serialize() const override;
 
  private:
   const LogicalPlanNodePtr subquery_;
