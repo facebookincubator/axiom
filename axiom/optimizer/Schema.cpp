@@ -353,6 +353,24 @@ ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {
   return nullptr;
 }
 
+bool Distribution::isSamePartition(const DesiredDistribution& other) const {
+  if (distributionType().partitionType() != other.partitionType) {
+    return false;
+  }
+
+  if (partitionKeys().size() != other.partitionKeys.size()) {
+    return false;
+  }
+
+  for (auto i = 0; i < partitionKeys().size(); ++i) {
+    if (!partitionKeys()[i]->sameOrEqual(*other.partitionKeys[i])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 bool Distribution::isSamePartition(const Distribution& other) const {
   if (distributionType() != other.distributionType()) {
     return false;
@@ -360,16 +378,16 @@ bool Distribution::isSamePartition(const Distribution& other) const {
   if (isBroadcast() || other.isBroadcast()) {
     return true;
   }
-  if (partition().size() != other.partition().size()) {
+  if (partitionKeys().size() != other.partitionKeys().size()) {
     return false;
   }
-  if (partition().empty()) {
+  if (partitionKeys().empty()) {
     // If the partitioning columns are not in the columns or if there
     // are no partitioning columns, there can be  no copartitioning.
     return false;
   }
-  for (auto i = 0; i < partition().size(); ++i) {
-    if (!partition()[i]->sameOrEqual(*other.partition()[i])) {
+  for (auto i = 0; i < partitionKeys().size(); ++i) {
+    if (!partitionKeys()[i]->sameOrEqual(*other.partitionKeys()[i])) {
       return false;
     }
   }
@@ -396,9 +414,9 @@ Distribution Distribution::rename(
 
   // Partitioning survives projection if all partitioning columns are projected
   // out.
-  ExprVector partition = partition_;
-  if (!replace(partition, exprs, names)) {
-    partition.clear();
+  ExprVector partitionKeys = partitionKeys_;
+  if (!replace(partitionKeys, exprs, names)) {
+    partitionKeys.clear();
   }
 
   // Ordering survives if a prefix of the previous order continues to be
@@ -413,7 +431,7 @@ Distribution Distribution::rename(
   VELOX_DCHECK_EQ(orderKeys.size(), orderTypes.size());
   return Distribution(
       distributionType_,
-      std::move(partition),
+      std::move(partitionKeys),
       std::move(orderKeys),
       std::move(orderTypes),
       numKeysUnique_);
@@ -442,9 +460,9 @@ std::string Distribution::toString() const {
   }
 
   std::stringstream out;
-  if (!partition().empty()) {
+  if (!partitionKeys().empty()) {
     out << "P ";
-    exprsToString(partition(), out);
+    exprsToString(partitionKeys(), out);
     if (distributionType().partitionType() != nullptr) {
       out << " " << distributionType().partitionType()->toString();
     } else {

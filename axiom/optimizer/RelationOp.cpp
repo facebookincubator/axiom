@@ -177,13 +177,13 @@ Distribution TableScan::outputDistribution(
 
   const auto& distribution = index->distribution;
 
-  ExprVector partition;
+  ExprVector partitionKeys;
   ExprVector orderKeys;
   OrderTypeVector orderTypes;
   // if all partitioning columns are projected, the output is partitioned.
-  if (isSubset(distribution.partition(), schemaColumns)) {
-    partition = distribution.partition();
-    replace(partition, schemaColumns, columns.data());
+  if (isSubset(distribution.partitionKeys(), schemaColumns)) {
+    partitionKeys = distribution.partitionKeys();
+    replace(partitionKeys, schemaColumns, columns.data());
   }
 
   auto numPrefix = prefixSize(distribution.orderKeys(), schemaColumns);
@@ -196,7 +196,7 @@ Distribution TableScan::outputDistribution(
   }
   return Distribution(
       distribution.distributionType(),
-      std::move(partition),
+      std::move(partitionKeys),
       std::move(orderKeys),
       std::move(orderTypes),
       distribution.numKeysUnique() <= numPrefix ? distribution.numKeysUnique()

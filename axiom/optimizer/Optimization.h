@@ -196,7 +196,7 @@ class Optimization {
   PlanP makePlan(
       const DerivedTable& dt,
       const MemoKey& key,
-      const Distribution& distribution,
+      const std::optional<DesiredDistribution>& distribution,
       const PlanObjectSet& boundColumns,
       float existsFanout,
       bool& needsShuffle);
@@ -204,7 +204,7 @@ class Optimization {
   PlanP makeUnionPlan(
       const DerivedTable& dt,
       const MemoKey& key,
-      const Distribution& distribution,
+      const std::optional<DesiredDistribution>& distribution,
       const PlanObjectSet& boundColumns,
       float existsFanout,
       bool& needsShuffle);
@@ -212,7 +212,7 @@ class Optimization {
   PlanP makeDtPlan(
       const DerivedTable& dt,
       const MemoKey& key,
-      const Distribution& distribution,
+      const std::optional<DesiredDistribution>& distribution,
       float existsFanout,
       bool& needsShuffle);
 

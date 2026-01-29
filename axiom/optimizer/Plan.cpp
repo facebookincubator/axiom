@@ -386,7 +386,9 @@ PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
   return result;
 }
 
-PlanP PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
+PlanP PlanSet::best(
+    const std::optional<DesiredDistribution>& distribution,
+    bool& needsShuffle) {
   VELOX_CHECK_GT(plans.size(), 0, "No plans to pick best from");
 
   PlanP best = nullptr;
@@ -394,7 +396,7 @@ PlanP PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
   float bestCost = -1;
   float matchCost = -1;
 
-  const bool single = isSingleWorker();
+  const bool checkDistribution = !isSingleWorker() && distribution.has_value();
 
   for (const auto& plan : plans) {
     const float cost = plan->cost.cost;
@@ -407,14 +409,15 @@ PlanP PlanSet::best(const Distribution& distribution, bool& needsShuffle) {
     };
 
     update(best, bestCost);
-    if (!single && plan->op->distribution().isSamePartition(distribution)) {
+    if (checkDistribution &&
+        plan->op->distribution().isSamePartition(distribution.value())) {
       update(match, matchCost);
     }
   }
 
   VELOX_DCHECK_NOT_NULL(best);
 
-  if (single || best == match) {
+  if (!checkDistribution || best == match) {
     return best;
   }
 

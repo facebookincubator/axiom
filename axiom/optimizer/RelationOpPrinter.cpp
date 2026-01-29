@@ -70,7 +70,7 @@ class ToTextVisitor : public RelationOpVisitor {
             : op.distribution().isGather()
             ? "(gather)"
             : fmt::format(
-                  "({})", exprsToString(op.distribution().partition())));
+                  "({})", exprsToString(op.distribution().partitionKeys())));
 
     printInput(*op.input(), myCtx);
   }

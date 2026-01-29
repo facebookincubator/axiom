@@ -81,12 +81,14 @@ struct PlanSet {
 
   /// Returns the best plan that produces 'distribution'. If the best plan has
   /// some other distribution, sets 'needsShuffle ' to true.
-  PlanP best(const Distribution& distribution, bool& needsShuffle);
+  PlanP best(
+      const std::optional<DesiredDistribution>& distribution,
+      bool& needsShuffle);
 
   /// Returns the best plan when we're ok with any distribution.
   PlanP best() {
     bool ignore = false;
-    return best(Distribution(/*broadcast=*/false), ignore);
+    return best(std::nullopt, ignore);
   }
 
   /// Compares 'plan' to already seen plans and retains it if it is
