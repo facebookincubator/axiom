@@ -168,7 +168,7 @@ std::unique_ptr<KeyFreq> runJoinSample(
   int32_t rowCount = 0;
   while (auto rows = runner.next()) {
     rowCount += rows->size();
-    auto hashes = rows->childAt(0)->as<velox::FlatVector<int64_t>>();
+    auto hashes = rows->childAt(0)->as<velox::SimpleVector<int64_t>>();
     for (auto i = 0; i < hashes->size(); ++i) {
       if (!hashes->isNullAt(i)) {
         ++(*result)[static_cast<uint32_t>(hashes->valueAt(i))];
