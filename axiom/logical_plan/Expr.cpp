@@ -582,12 +582,18 @@ SpecialFormExpr::SpecialFormExpr(
       break;
     case SpecialForm::kCast:
     case SpecialForm::kTryCast:
-    case SpecialForm::kTry:
       VELOX_USER_CHECK_EQ(
           inputs_.size(),
           1,
           "{} must have exactly one input",
           SpecialFormName::toName(form));
+      VELOX_CHECK(
+          !type_->isFunction(),
+          "Cannot apply CAST to function type: {}",
+          inputs_[0]->type()->toString());
+      break;
+    case SpecialForm::kTry:
+      VELOX_USER_CHECK_EQ(inputs_.size(), 1, "TRY must have exactly one input");
       break;
     case SpecialForm::kDereference:
       validateDereferenceInputs(type_, inputs_);

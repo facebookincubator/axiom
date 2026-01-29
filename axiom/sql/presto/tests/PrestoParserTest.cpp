@@ -151,6 +151,13 @@ class PrestoParserTest : public testing::Test {
     return parser.parse(sql, true);
   }
 
+  void testSqlExpression(std::string_view sql) {
+    SCOPED_TRACE(sql);
+    auto parser = makeParser();
+
+    ASSERT_NO_THROW(parser.parseExpression(sql, true));
+  }
+
   void testInsertSql(
       std::string_view sql,
       lp::test::LogicalPlanMatcherBuilder& matcher) {
@@ -1232,10 +1239,15 @@ TEST_F(PrestoParserTest, exists) {
 }
 
 TEST_F(PrestoParserTest, lambda) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
+  testSqlExpression("filter(array[1,2,3], x -> x > 1)");
+  testSqlExpression("FILTER(array[1,2,3], x -> x > 1)");
 
-  testSql("SELECT filter(array[1,2,3], x -> x > 1)", matcher);
-  testSql("SELECT FILTER(array[1,2,3], x -> x > 1)", matcher);
+  testSqlExpression("filter(array[], x -> true)");
+
+  testSqlExpression("reduce(array[], map(), (s, x) -> s, s -> 123)");
+
+  testSqlExpression(
+      "reduce(array[], map(), (s, x) -> map(array[1], array[2]), s -> 123)");
 }
 
 TEST_F(PrestoParserTest, values) {
