@@ -18,6 +18,7 @@
 #include "axiom/logical_plan/Expr.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/expression/FunctionSignature.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
@@ -63,12 +64,28 @@ class ExprResolver {
 
  private:
   ExprPtr resolveLambdaExpr(
-      const velox::core::LambdaExpr* lambdaExpr,
+      const velox::core::LambdaExpr& lambdaExpr,
       const std::vector<velox::TypePtr>& lambdaInputTypes,
       const InputNameResolver& inputNameResolver) const;
 
   ExprPtr tryResolveCallWithLambdas(
       const std::shared_ptr<const velox::core::CallExpr>& callExpr,
+      const InputNameResolver& inputNameResolver) const;
+
+  // Resolves lambda arguments using already resolved non-lambda arguments.
+  // Populates 'resolvedInputs' entries that correspond to lambda arguments.
+  //
+  // @param inputs Function arguments.
+  // @param signature Function signature.
+  // @param resolvedInputs Partially resolved function arguments. 1:1 with
+  // 'inputs'. Non-lambda arguments are resolved and therefore not null. Lambda
+  // arguments may be null.
+  // @return True if all arguments were resolved successfully and
+  // 'resolvedInputs' was updated. False otherwise.
+  bool resolveLambdaArguments(
+      const std::vector<velox::core::ExprPtr>& inputs,
+      const velox::exec::FunctionSignature& signature,
+      std::vector<ExprPtr>& resolvedInputs,
       const InputNameResolver& inputNameResolver) const;
 
   ExprPtr tryFoldCall(

@@ -71,6 +71,22 @@ void applyCoercions(
   }
 }
 
+[[noreturn]] void throwCannotResolveScalarFunction(
+    const std::string& name,
+    const std::vector<velox::TypePtr>& argTypes) {
+  auto allSignatures = velox::getFunctionSignatures();
+  auto it = allSignatures.find(name);
+  if (it == allSignatures.end()) {
+    VELOX_USER_FAIL("Scalar function doesn't exist: {}.", name);
+  } else {
+    const auto& functionSignatures = it->second;
+    VELOX_USER_FAIL(
+        "Scalar function signature is not supported: {}. Supported signatures: {}.",
+        toString(name, argTypes),
+        toString(functionSignatures));
+  }
+}
+
 velox::TypePtr resolveScalarFunction(
     const std::string& name,
     const std::vector<velox::TypePtr>& argTypes,
@@ -88,17 +104,7 @@ velox::TypePtr resolveScalarFunction(
     }
   }
 
-  auto allSignatures = velox::getFunctionSignatures();
-  auto it = allSignatures.find(name);
-  if (it == allSignatures.end()) {
-    VELOX_USER_FAIL("Scalar function doesn't exist: {}.", name);
-  } else {
-    const auto& functionSignatures = it->second;
-    VELOX_USER_FAIL(
-        "Scalar function signature is not supported: {}. Supported signatures: {}.",
-        toString(name, argTypes),
-        toString(functionSignatures));
-  }
+  throwCannotResolveScalarFunction(name, argTypes);
 }
 
 std::vector<velox::TypePtr> toTypes(const std::vector<ExprPtr>& exprs) {
@@ -109,6 +115,52 @@ std::vector<velox::TypePtr> toTypes(const std::vector<ExprPtr>& exprs) {
   }
 
   return types;
+}
+
+// Resolves a scalar function with the given name and arguments. Applies
+// coercions if 'allowCoercions' is true.
+//
+// If 'name' is a lambda function and 'allowCoercions' is true, the lambda may
+// need to be resolved again after applying coercions to non-lambda arguments.
+// If that's the case, this function applies coercion to non-lambda arguments
+// and returns nullptr. The caller is expected to resolve lambda arguments again
+// using modified non-lambda arguments.
+velox::TypePtr resolveScalarFunction(
+    const std::string& name,
+    std::vector<ExprPtr>& args,
+    bool allowCoercions) {
+  const auto argTypes = toTypes(args);
+
+  std::vector<velox::TypePtr> coercions;
+  auto returnType =
+      resolveScalarFunction(name, argTypes, allowCoercions, coercions);
+
+  bool hasFunctionCoercion = false;
+  bool hasNonFunctionCoercion = false;
+  if (!coercions.empty()) {
+    for (auto i = 0; i < args.size(); ++i) {
+      if (coercions[i] != nullptr) {
+        if (args[i]->type()->isFunction()) {
+          hasFunctionCoercion = true;
+          coercions[i] = nullptr;
+        } else {
+          hasNonFunctionCoercion = true;
+        }
+      }
+    }
+  }
+
+  if (hasFunctionCoercion && !hasNonFunctionCoercion) {
+    throwCannotResolveScalarFunction(name, argTypes);
+  }
+
+  applyCoercions(args, coercions);
+
+  if (hasFunctionCoercion) {
+    return nullptr;
+  }
+
+  return returnType;
 }
 
 ExprPtr resolveSpecialFormWithCoercions(
@@ -302,11 +354,11 @@ ExprPtr tryResolveSpecialForm(
 } // namespace
 
 ExprPtr ExprResolver::resolveLambdaExpr(
-    const velox::core::LambdaExpr* lambdaExpr,
+    const velox::core::LambdaExpr& lambdaExpr,
     const std::vector<velox::TypePtr>& lambdaInputTypes,
     const InputNameResolver& inputNameResolver) const {
-  const auto& names = lambdaExpr->arguments();
-  const auto& body = lambdaExpr->body();
+  const auto& names = lambdaExpr.arguments();
+  const auto& body = lambdaExpr.body();
 
   VELOX_CHECK_LE(names.size(), lambdaInputTypes.size());
   std::vector<velox::TypePtr> types;
@@ -433,6 +485,45 @@ const velox::exec::FunctionSignature* findLambdaSignature(
 }
 } // namespace
 
+bool ExprResolver::resolveLambdaArguments(
+    const std::vector<velox::core::ExprPtr>& inputs,
+    const velox::exec::FunctionSignature& signature,
+    std::vector<ExprPtr>& resolvedInputs,
+    const InputNameResolver& inputNameResolver) const {
+  const auto numArgs = resolvedInputs.size();
+  VELOX_CHECK_EQ(numArgs, inputs.size());
+
+  std::vector<velox::TypePtr> argTypes(numArgs);
+  for (auto i = 0; i < numArgs; ++i) {
+    if (resolvedInputs[i] != nullptr) {
+      argTypes[i] = resolvedInputs[i]->type();
+    }
+  }
+
+  velox::exec::SignatureBinder binder(signature, argTypes);
+  binder.tryBind();
+  for (auto i = 0; i < numArgs; ++i) {
+    auto argSignature = signature.argumentTypes()[i];
+    if (isLambdaArgument(argSignature)) {
+      std::vector<velox::TypePtr> lambdaTypes;
+      for (auto j = 0; j < argSignature.parameters().size() - 1; ++j) {
+        auto type = binder.tryResolveType(argSignature.parameters()[j]);
+        if (type == nullptr) {
+          return false;
+        }
+        lambdaTypes.push_back(type);
+      }
+
+      resolvedInputs[i] = resolveLambdaExpr(
+          dynamic_cast<const velox::core::LambdaExpr&>(*inputs[i]),
+          lambdaTypes,
+          inputNameResolver);
+    }
+  }
+
+  return true;
+}
+
 ExprPtr ExprResolver::tryResolveCallWithLambdas(
     const std::shared_ptr<const velox::core::CallExpr>& callExpr,
     const InputNameResolver& inputNameResolver) const {
@@ -452,45 +543,34 @@ ExprPtr ExprResolver::tryResolveCallWithLambdas(
       signature, "Cannot resolve lambda function: {}", callExpr->toString());
 
   // Resolve non-lambda arguments first.
-  auto numArgs = callExpr->inputs().size();
+  const auto numArgs = callExpr->inputs().size();
   std::vector<ExprPtr> children(numArgs);
-  std::vector<velox::TypePtr> childTypes(numArgs);
   for (auto i = 0; i < numArgs; ++i) {
     if (!isLambdaArgument(signature->argumentTypes()[i])) {
       children[i] = resolveScalarTypes(callExpr->inputAt(i), inputNameResolver);
-      childTypes[i] = children[i]->type();
     }
   }
 
   // Resolve lambda arguments.
-  velox::exec::SignatureBinder binder(*signature, childTypes);
-  binder.tryBind();
-  for (auto i = 0; i < numArgs; ++i) {
-    auto argSignature = signature->argumentTypes()[i];
-    if (isLambdaArgument(argSignature)) {
-      std::vector<velox::TypePtr> lambdaTypes;
-      for (auto j = 0; j < argSignature.parameters().size() - 1; ++j) {
-        auto type = binder.tryResolveType(argSignature.parameters()[j]);
-        if (type == nullptr) {
-          return nullptr;
-        }
-        lambdaTypes.push_back(type);
-      }
-
-      children[i] = resolveLambdaExpr(
-          dynamic_cast<const velox::core::LambdaExpr*>(
-              callExpr->inputs()[i].get()),
-          lambdaTypes,
-          inputNameResolver);
-    }
+  if (!resolveLambdaArguments(
+          callExpr->inputs(), *signature, children, inputNameResolver)) {
+    return nullptr;
   }
 
   const auto name = velox::exec::sanitizeName(callExpr->name());
 
-  std::vector<velox::TypePtr> coercions;
-  auto returnType = resolveScalarFunction(
-      name, toTypes(children), enableCoercions_, coercions);
-  applyCoercions(children, coercions);
+  auto returnType = resolveScalarFunction(name, children, enableCoercions_);
+  if (returnType == nullptr) {
+    VELOX_CHECK(enableCoercions_);
+    if (!resolveLambdaArguments(
+            callExpr->inputs(), *signature, children, inputNameResolver)) {
+      return nullptr;
+    }
+
+    returnType =
+        resolveScalarFunction(name, children, /*allowCoercions=*/false);
+    VELOX_CHECK_NOT_NULL(returnType);
+  }
 
   return std::make_shared<CallExpr>(returnType, name, children);
 }
@@ -720,11 +800,8 @@ ExprPtr ExprResolver::resolveScalarTypes(
       return specialForm;
     }
 
-    std::vector<velox::TypePtr> coercions;
-    auto type = resolveScalarFunction(
-        name, toTypes(inputs), enableCoercions_, coercions);
-
-    applyCoercions(inputs, coercions);
+    auto type = resolveScalarFunction(name, inputs, enableCoercions_);
+    VELOX_CHECK_NOT_NULL(type);
 
     auto folded = tryFoldCall(type, name, inputs);
     if (folded != nullptr) {
