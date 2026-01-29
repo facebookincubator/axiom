@@ -25,6 +25,7 @@ namespace {
 const auto& statementKindNames() {
   static const folly::F14FastMap<SqlStatementKind, std::string_view> kNames = {
       {SqlStatementKind::kSelect, "SELECT"},
+      {SqlStatementKind::kCreateTable, "CREATE TABLE"},
       {SqlStatementKind::kCreateTableAsSelect, "CREATE TABLE AS SELECT"},
       {SqlStatementKind::kInsert, "INSERT"},
       {SqlStatementKind::kDropTable, "DROP TABLE"},

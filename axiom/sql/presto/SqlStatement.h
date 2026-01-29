@@ -23,6 +23,7 @@ namespace axiom::sql::presto {
 
 enum class SqlStatementKind {
   kSelect,
+  kCreateTable,
   kCreateTableAsSelect,
   kInsert,
   kDropTable,
@@ -49,6 +50,10 @@ class SqlStatement {
 
   bool isSelect() const {
     return kind_ == SqlStatementKind::kSelect;
+  }
+
+  bool isCreateTable() const {
+    return kind_ == SqlStatementKind::kCreateTable;
   }
 
   bool isCreateTableAsSelect() const {
@@ -119,6 +124,73 @@ class InsertStatement : public SqlStatement {
 
  private:
   const facebook::axiom::logical_plan::LogicalPlanNodePtr plan_;
+};
+
+class CreateTableStatement : public SqlStatement {
+ public:
+  struct Constraint {
+    enum class Type {
+      /// e.g. CONSTRAINT constraint_name UNIQUE(col)
+      kUnique,
+
+      /// e.g. PRIMARY KEY (col)
+      kPrimaryKey
+    };
+
+    std::string name;
+    std::vector<std::string> columns;
+    Type type;
+  };
+
+  CreateTableStatement(
+      std::string connectorId,
+      std::string tableName,
+      facebook::velox::RowTypePtr tableSchema,
+      std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+          properties,
+      bool ifNotExists,
+      std::vector<Constraint> constraints = {})
+      : SqlStatement(SqlStatementKind::kCreateTable),
+        connectorId_{std::move(connectorId)},
+        tableName_{std::move(tableName)},
+        tableSchema_{std::move(tableSchema)},
+        properties_{std::move(properties)},
+        ifNotExists_{ifNotExists},
+        constraints_{std::move(constraints)} {}
+
+  const std::string& connectorId() const {
+    return connectorId_;
+  }
+
+  const std::string& tableName() const {
+    return tableName_;
+  }
+
+  const facebook::velox::RowTypePtr& tableSchema() const {
+    return tableSchema_;
+  }
+
+  const std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>&
+  properties() const {
+    return properties_;
+  }
+
+  bool ifNotExists() const {
+    return ifNotExists_;
+  }
+
+  const std::vector<Constraint>& constraints() const {
+    return constraints_;
+  }
+
+ private:
+  const std::string connectorId_;
+  const std::string tableName_;
+  const facebook::velox::RowTypePtr tableSchema_;
+  std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+      properties_;
+  const bool ifNotExists_;
+  const std::vector<Constraint> constraints_;
 };
 
 class CreateTableAsSelectStatement : public SqlStatement {

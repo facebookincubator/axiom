@@ -31,6 +31,7 @@
 #include "velox/exec/WindowFunction.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/parser/ParserUtil.h"
 
 namespace axiom::sql::presto {
 namespace {
@@ -2042,6 +2043,17 @@ SqlStatementPtr parseInsert(
   return std::make_shared<InsertStatement>(planner.plan(), planner.views());
 }
 
+std::unordered_map<std::string, lp::ExprPtr> parseTableProperties(
+    const std::vector<std::shared_ptr<Property>>& props) {
+  std::unordered_map<std::string, lp::ExprPtr> properties;
+  for (const auto& p : props) {
+    const auto& name = p->name()->value();
+    bool ok = properties.emplace(name, parseSqlExpression(p->value())).second;
+    VELOX_USER_CHECK(ok, "Duplicate property: {}", name);
+  }
+  return properties;
+}
+
 SqlStatementPtr parseCreateTableAsSelect(
     const CreateTableAsSelect& ctas,
     const std::string& defaultConnectorId,
@@ -2054,12 +2066,7 @@ SqlStatementPtr parseCreateTableAsSelect(
   RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
   ctas.query()->accept(&planner);
 
-  std::unordered_map<std::string, lp::ExprPtr> properties;
-  for (const auto& p : ctas.properties()) {
-    const auto& name = p->name()->value();
-    bool ok = properties.emplace(name, parseSqlExpression(p->value())).second;
-    VELOX_USER_CHECK(ok, "Duplicate property: {}", name);
-  }
+  auto properties = parseTableProperties(ctas.properties());
 
   auto& planBuilder = planner.builder();
 
@@ -2109,6 +2116,84 @@ SqlStatementPtr parseCreateTableAsSelect(
       planner.views());
 }
 
+SqlStatementPtr parseCreateTable(
+    const CreateTable& createTable,
+    const std::string& defaultConnectorId,
+    const std::optional<std::string>& defaultSchema) {
+  auto connectorTable =
+      toConnectorTable(*createTable.name(), defaultConnectorId, defaultSchema);
+
+  auto properties = parseTableProperties(createTable.properties());
+
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  std::vector<CreateTableStatement::Constraint> constraints;
+
+  for (const auto& element : createTable.elements()) {
+    switch (element->type()) {
+      case NodeType::kColumnDefinition: {
+        auto* columnDef = element->as<ColumnDefinition>();
+        names.push_back(columnDef->name()->value());
+
+        auto type = typeFromString(columnDef->columnType());
+        VELOX_USER_CHECK_NOT_NULL(
+            type, "Unknown type specifier: {}", columnDef->columnType());
+        types.push_back(type);
+        break;
+      }
+      case NodeType::kLikeClause: {
+        auto* likeClause = element->as<LikeClause>();
+        auto table = findTable(
+            *likeClause->tableName(), defaultConnectorId, defaultSchema);
+
+        auto schema = table->type();
+        for (auto i = 0; i < schema->size(); ++i) {
+          names.push_back(schema->nameOf(i));
+          types.push_back(schema->childAt(i));
+        }
+        break;
+      }
+      case NodeType::kConstraintSpecification: {
+        auto* constraintSpec = element->as<ConstraintSpecification>();
+
+        CreateTableStatement::Constraint constraint;
+        if (constraintSpec->name()) {
+          constraint.name = constraintSpec->name()->value();
+        }
+
+        for (const auto& col : constraintSpec->columns()) {
+          constraint.columns.push_back(col->value());
+        }
+
+        switch (constraintSpec->constraintType()) {
+          case ConstraintSpecification::ConstraintType::kPrimaryKey:
+            constraint.type =
+                CreateTableStatement::Constraint::Type::kPrimaryKey;
+            break;
+          case ConstraintSpecification::ConstraintType::kUnique:
+            constraint.type = CreateTableStatement::Constraint::Type::kUnique;
+            break;
+        }
+
+        constraints.push_back(std::move(constraint));
+        break;
+      }
+      default:
+        VELOX_UNREACHABLE(
+            "Unexpected table element type: {}",
+            static_cast<int>(element->type()));
+    }
+  }
+
+  return std::make_shared<CreateTableStatement>(
+      connectorTable.first,
+      connectorTable.second,
+      facebook::velox::ROW(std::move(names), std::move(types)),
+      std::move(properties),
+      createTable.isNotExists(),
+      std::move(constraints));
+}
+
 SqlStatementPtr parseDropTable(
     const DropTable& dropTable,
     const std::string& defaultConnectorId,
@@ -2137,6 +2222,11 @@ SqlStatementPtr doPlan(
         defaultConnectorId,
         defaultSchema,
         parseSql);
+  }
+
+  if (query->is(NodeType::kCreateTable)) {
+    return parseCreateTable(
+        *query->as<CreateTable>(), defaultConnectorId, defaultSchema);
   }
 
   if (query->is(NodeType::kShowCatalogs)) {
