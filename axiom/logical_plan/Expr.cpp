@@ -20,6 +20,7 @@
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/ExprVisitor.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "velox/common/serialization/Serializable.h"
 
 namespace facebook::axiom::logical_plan {
 
@@ -43,6 +44,277 @@ AXIOM_DEFINE_ENUM_NAME(ExprKind, exprKindNames);
 
 std::string Expr::toString() const {
   return ExprPrinter::toText(*this);
+}
+
+namespace {
+/// Helper to serialize a vector of expressions to a folly::dynamic array.
+template <typename T, typename Serializer>
+folly::dynamic serializeVector(const std::vector<T>& items, Serializer&& fn) {
+  folly::dynamic arr = folly::dynamic::array;
+  for (const auto& item : items) {
+    arr.push_back(fn(item));
+  }
+  return arr;
+}
+
+/// Helper to deserialize the "inputs" field from a folly::dynamic object.
+std::vector<ExprPtr> deserializeInputs(
+    const folly::dynamic& obj,
+    void* context) {
+  std::vector<ExprPtr> result;
+  if (obj.count("inputs")) {
+    for (const auto& input : obj["inputs"]) {
+      result.push_back(velox::ISerializable::deserialize<Expr>(input, context));
+    }
+  }
+  return result;
+}
+
+/// Helper to deserialize the "type" field from a folly::dynamic object.
+velox::TypePtr deserializeTypeField(const folly::dynamic& obj) {
+  return velox::ISerializable::deserialize<velox::Type>(obj["type"]);
+}
+} // namespace
+
+folly::dynamic Expr::serializeBase(std::string_view name) const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = name;
+  obj["type"] = type_->serialize();
+  if (!inputs_.empty()) {
+    obj["inputs"] = serializeVector(
+        inputs_, [](const ExprPtr& e) { return e->serialize(); });
+  }
+  return obj;
+}
+
+// static
+void Expr::registerSerDe() {
+  auto& registry = velox::DeserializationWithContextRegistryForSharedPtr();
+  registry.Register("ConstantExpr", ConstantExpr::create);
+  registry.Register("InputReferenceExpr", InputReferenceExpr::create);
+  registry.Register("CallExpr", CallExpr::create);
+  registry.Register("SpecialFormExpr", SpecialFormExpr::create);
+  registry.Register("AggregateExpr", AggregateExpr::create);
+  registry.Register("WindowExpr", WindowExpr::create);
+  registry.Register("LambdaExpr", LambdaExpr::create);
+}
+
+folly::dynamic ConstantExpr::serialize() const {
+  auto obj = serializeBase("ConstantExpr");
+  obj["value"] = value_->serialize();
+  return obj;
+}
+
+// static
+ExprPtr ConstantExpr::create(const folly::dynamic& obj, void* /*context*/) {
+  auto type = deserializeTypeField(obj);
+  auto value =
+      std::make_shared<velox::Variant>(velox::Variant::create(obj["value"]));
+  return std::make_shared<ConstantExpr>(std::move(type), std::move(value));
+}
+
+folly::dynamic InputReferenceExpr::serialize() const {
+  auto obj = serializeBase("InputReferenceExpr");
+  obj["inputName"] = name_;
+  return obj;
+}
+
+// static
+ExprPtr InputReferenceExpr::create(
+    const folly::dynamic& obj,
+    void* /*context*/) {
+  auto type = deserializeTypeField(obj);
+  return std::make_shared<InputReferenceExpr>(
+      std::move(type), obj["inputName"].asString());
+}
+
+folly::dynamic CallExpr::serialize() const {
+  auto obj = serializeBase("CallExpr");
+  obj["functionName"] = name_;
+  return obj;
+}
+
+// static
+ExprPtr CallExpr::create(const folly::dynamic& obj, void* context) {
+  auto type = deserializeTypeField(obj);
+  auto inputs = deserializeInputs(obj, context);
+  return std::make_shared<CallExpr>(
+      std::move(type), obj["functionName"].asString(), std::move(inputs));
+}
+
+folly::dynamic SpecialFormExpr::serialize() const {
+  auto obj = serializeBase("SpecialFormExpr");
+  obj["form"] = SpecialFormName::toName(form_);
+  return obj;
+}
+
+// static
+ExprPtr SpecialFormExpr::create(const folly::dynamic& obj, void* context) {
+  auto type = deserializeTypeField(obj);
+  auto form = SpecialFormName::toSpecialForm(obj["form"].asString());
+  auto inputs = deserializeInputs(obj, context);
+  return std::make_shared<SpecialFormExpr>(
+      std::move(type), form, std::move(inputs));
+}
+
+folly::dynamic SortOrder::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["ascending"] = ascending_;
+  obj["nullsFirst"] = nullsFirst_;
+  return obj;
+}
+
+// static
+SortOrder SortOrder::deserialize(const folly::dynamic& obj) {
+  return SortOrder{obj["ascending"].asBool(), obj["nullsFirst"].asBool()};
+}
+
+folly::dynamic SortingField::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["expression"] = expression->serialize();
+  obj["order"] = order.serialize();
+  return obj;
+}
+
+// static
+SortingField SortingField::deserialize(
+    const folly::dynamic& obj,
+    void* context) {
+  return SortingField{
+      velox::ISerializable::deserialize<Expr>(obj["expression"], context),
+      SortOrder::deserialize(obj["order"])};
+}
+
+folly::dynamic AggregateExpr::serialize() const {
+  auto obj = serializeBase("AggregateExpr");
+  obj["functionName"] = name_;
+  obj["distinct"] = distinct_;
+  if (filter_) {
+    obj["filter"] = filter_->serialize();
+  }
+  if (!ordering_.empty()) {
+    obj["ordering"] = serializeVector(
+        ordering_, [](const SortingField& f) { return f.serialize(); });
+  }
+  return obj;
+}
+
+// static
+ExprPtr AggregateExpr::create(const folly::dynamic& obj, void* context) {
+  auto type = deserializeTypeField(obj);
+  auto inputs = deserializeInputs(obj, context);
+  ExprPtr filter = nullptr;
+  if (obj.count("filter")) {
+    filter = velox::ISerializable::deserialize<Expr>(obj["filter"], context);
+  }
+  std::vector<SortingField> ordering;
+  if (obj.count("ordering")) {
+    for (const auto& field : obj["ordering"]) {
+      ordering.push_back(SortingField::deserialize(field, context));
+    }
+  }
+  return std::make_shared<AggregateExpr>(
+      std::move(type),
+      obj["functionName"].asString(),
+      std::move(inputs),
+      std::move(filter),
+      std::move(ordering),
+      obj["distinct"].asBool());
+}
+
+folly::dynamic WindowExpr::Frame::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = WindowExpr::toName(type);
+  obj["startType"] = WindowExpr::toName(startType);
+  if (startValue) {
+    obj["startValue"] = startValue->serialize();
+  }
+  obj["endType"] = WindowExpr::toName(endType);
+  if (endValue) {
+    obj["endValue"] = endValue->serialize();
+  }
+  return obj;
+}
+
+// static
+WindowExpr::Frame WindowExpr::Frame::deserialize(
+    const folly::dynamic& obj,
+    void* context) {
+  ExprPtr startValue = nullptr;
+  if (obj.count("startValue")) {
+    startValue =
+        velox::ISerializable::deserialize<Expr>(obj["startValue"], context);
+  }
+  ExprPtr endValue = nullptr;
+  if (obj.count("endValue")) {
+    endValue =
+        velox::ISerializable::deserialize<Expr>(obj["endValue"], context);
+  }
+  return Frame{
+      WindowExpr::toWindowType(obj["type"].asString()),
+      WindowExpr::toBoundType(obj["startType"].asString()),
+      std::move(startValue),
+      WindowExpr::toBoundType(obj["endType"].asString()),
+      std::move(endValue)};
+}
+
+folly::dynamic WindowExpr::serialize() const {
+  auto obj = serializeBase("WindowExpr");
+  obj["functionName"] = name_;
+  obj["ignoreNulls"] = ignoreNulls_;
+  obj["frame"] = frame_.serialize();
+  if (!partitionKeys_.empty()) {
+    obj["partitionKeys"] = serializeVector(
+        partitionKeys_, [](const ExprPtr& e) { return e->serialize(); });
+  }
+  if (!ordering_.empty()) {
+    obj["ordering"] = serializeVector(
+        ordering_, [](const SortingField& f) { return f.serialize(); });
+  }
+  return obj;
+}
+
+// static
+ExprPtr WindowExpr::create(const folly::dynamic& obj, void* context) {
+  auto type = deserializeTypeField(obj);
+  auto inputs = deserializeInputs(obj, context);
+  std::vector<ExprPtr> partitionKeys;
+  if (obj.count("partitionKeys")) {
+    for (const auto& key : obj["partitionKeys"]) {
+      partitionKeys.push_back(
+          velox::ISerializable::deserialize<Expr>(key, context));
+    }
+  }
+  std::vector<SortingField> ordering;
+  if (obj.count("ordering")) {
+    for (const auto& field : obj["ordering"]) {
+      ordering.push_back(SortingField::deserialize(field, context));
+    }
+  }
+  auto frame = Frame::deserialize(obj["frame"], context);
+  return std::make_shared<WindowExpr>(
+      std::move(type),
+      obj["functionName"].asString(),
+      std::move(inputs),
+      std::move(partitionKeys),
+      std::move(ordering),
+      std::move(frame),
+      obj["ignoreNulls"].asBool());
+}
+
+folly::dynamic LambdaExpr::serialize() const {
+  auto obj = serializeBase("LambdaExpr");
+  obj["signature"] = signature_->serialize();
+  obj["body"] = body_->serialize();
+  return obj;
+}
+
+// static
+ExprPtr LambdaExpr::create(const folly::dynamic& obj, void* context) {
+  auto signature = std::dynamic_pointer_cast<const velox::RowType>(
+      velox::ISerializable::deserialize<velox::Type>(obj["signature"]));
+  auto body = velox::ISerializable::deserialize<Expr>(obj["body"], context);
+  return std::make_shared<LambdaExpr>(std::move(signature), std::move(body));
 }
 
 void InputReferenceExpr::accept(
@@ -88,6 +360,12 @@ void SubqueryExpr::accept(
     const ExprVisitor& visitor,
     ExprVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+folly::dynamic SubqueryExpr::serialize() const {
+  VELOX_NYI(
+      "Serialization not implemented for SubqueryExpr. "
+      "Requires plan node serialization which is not yet implemented.");
 }
 
 // static
