@@ -16,6 +16,7 @@
 
 #include "axiom/cli/SqlQueryRunner.h"
 #include <folly/system/HardwareConcurrency.h>
+#include "axiom/logical_plan/LogicalPlanDotPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
 #include "axiom/optimizer/DerivedTableDotPrinter.h"
@@ -134,11 +135,33 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
   return run(*statements[0], options);
 }
 
-std::string SqlQueryRunner::toDot(std::string_view sql) {
+std::string SqlQueryRunner::toQueryGraphDot(std::string_view sql) {
+  const auto logicalPlan = toLogicalPlan(sql);
+
+  std::string dotOutput;
+  RunOptions options;
+  optimize(logicalPlan, newQuery(options), options, [&](const auto& dt) {
+    std::ostringstream out;
+    optimizer::DerivedTableDotPrinter::print(dt, out);
+    dotOutput = out.str();
+    return false; // Stop optimization.
+  });
+  return dotOutput;
+}
+
+std::string SqlQueryRunner::toLogicalPlanDot(std::string_view sql) {
+  const auto logicalPlan = toLogicalPlan(sql);
+
+  std::ostringstream out;
+  logical_plan::LogicalPlanDotPrinter::print(*logicalPlan, out);
+  return out.str();
+}
+
+logical_plan::LogicalPlanNodePtr SqlQueryRunner::toLogicalPlan(
+    std::string_view sql) {
   RunOptions options;
   auto statements = parseMultiple(sql, options);
-  VELOX_CHECK_EQ(
-      statements.size(), 1, "toDot() expects a single SELECT statement.");
+  VELOX_CHECK_EQ(statements.size(), 1, "Expected a single SELECT statement.");
 
   auto statement = statements[0];
   if (statement->isExplain()) {
@@ -147,19 +170,10 @@ std::string SqlQueryRunner::toDot(std::string_view sql) {
 
   VELOX_CHECK(
       statement->isSelect(),
-      "toDot() expects SELECT or EXPLAIN SELECT statement, got: {}",
+      "Expected SELECT or EXPLAIN SELECT statement, got: {}",
       statement->kindName());
 
-  const auto logicalPlan = statement->as<presto::SelectStatement>()->plan();
-
-  std::string dotOutput;
-  optimize(logicalPlan, newQuery(options), options, [&](const auto& dt) {
-    std::ostringstream out;
-    optimizer::DerivedTableDotPrinter::print(dt, out);
-    dotOutput = out.str();
-    return false; // Stop optimization.
-  });
-  return dotOutput;
+  return statement->as<presto::SelectStatement>()->plan();
 }
 
 std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
