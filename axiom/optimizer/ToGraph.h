@@ -317,6 +317,15 @@ class ToGraph {
 
   void makeValuesTable(const logical_plan::ValuesNode& values);
 
+  // Creates a ValuesTable with the output schema of 'node' using 'data'.
+  // The 'node' does not need to be a ValuesNode - used when replacing a
+  // subtree with a ValuesTable, e.g. for empty result optimizations.
+  ValuesTable* makeValuesTable(
+      const logical_plan::LogicalPlanNode& node,
+      ValuesTable::Data data);
+
+  void makeEmptyValuesTable(const logical_plan::LogicalPlanNode& node);
+
   // Adds 'node' and descendants to query graph wrapped inside a
   // DerivedTable. Done for joins to the right of non-inner joins,
   // group bys as non-top operators, whenever descendents of 'node'

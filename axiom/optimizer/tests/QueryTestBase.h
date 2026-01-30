@@ -247,5 +247,9 @@ inline auto gt(const std::string& name, const std::string& value) {
 
 } // namespace facebook::axiom::optimizer::test
 
-#define AXIOM_ASSERT_PLAN(plan, matcher) \
-  ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
+#define AXIOM_ASSERT_PLAN(plan, matcher)        \
+  {                                             \
+    auto _axiom_plan_ = (plan);                 \
+    ASSERT_TRUE((matcher)->match(_axiom_plan_)) \
+        << _axiom_plan_->toString(true, true);  \
+  }

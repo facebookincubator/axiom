@@ -1861,16 +1861,21 @@ void ToGraph::makeValuesTable(const lp::ValuesNode& values) {
         &registerVariant(velox::Variant::array(std::move(variants)))->array();
   }
 
-  auto* valuesTable =
-      make<ValuesTable>(toType(values.outputType()), std::move(data));
-  valuesTable->cname = newCName("vt");
+  auto* valuesTable = makeValuesTable(values, std::move(data));
   planLeaves_[&values] = valuesTable;
+  currentDt_->addTable(valuesTable);
+}
 
-  auto channels = usedChannels(values);
-  const auto& type = values.outputType();
-  const auto& names = values.outputType()->names();
+ValuesTable* ToGraph::makeValuesTable(
+    const lp::LogicalPlanNode& node,
+    ValuesTable::Data data) {
+  auto* valuesTable = make<ValuesTable>(toType(node.outputType()), data);
+  valuesTable->cname = newCName("vt");
+
+  const auto& type = node.outputType();
+  const auto& names = type->names();
   const auto cardinality = valuesTable->cardinality();
-  for (auto i : channels) {
+  for (auto i : usedChannels(node)) {
     VELOX_DCHECK_LT(i, type->size());
 
     const auto& name = names[i];
@@ -1882,7 +1887,7 @@ void ToGraph::makeValuesTable(const lp::ValuesNode& values) {
     renames_[name] = column;
   }
 
-  currentDt_->addTable(valuesTable);
+  return valuesTable;
 }
 
 void ToGraph::addProjection(const lp::ProjectNode& project) {
@@ -2267,6 +2272,12 @@ void ToGraph::addLimit(const lp::LimitNode& limit) {
     currentDt_->limit = limit.count();
     currentDt_->offset = limit.offset();
   }
+}
+
+void ToGraph::makeEmptyValuesTable(const lp::LogicalPlanNode& node) {
+  auto* emptyData = &registerVariant(velox::Variant::array({}))->array();
+  auto* valuesTable = makeValuesTable(node, emptyData);
+  currentDt_->addTable(valuesTable);
 }
 
 void ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
@@ -2703,8 +2714,19 @@ void ToGraph::makeQueryGraph(
       addOrderBy(*node.as<lp::SortNode>());
     } break;
     case lp::NodeKind::kLimit: {
+      const auto& limit = *node.as<lp::LimitNode>();
+      if (limit.count() == 0) {
+        makeEmptyValuesTable(limit);
+        break;
+      }
       makeQueryGraph(*node.onlyInput(), allowedInDt);
-      addLimit(*node.as<lp::LimitNode>());
+      addLimit(limit);
+      // After combining limits, if the result is 0 rows, replace with empty
+      // values. This handles cases like OFFSET >= inner LIMIT.
+      if (currentDt_->limit == 0) {
+        currentDt_ = newDt();
+        makeEmptyValuesTable(limit);
+      }
     } break;
     case lp::NodeKind::kSet: {
       auto* outerDt = std::exchange(currentDt_, newDt());
