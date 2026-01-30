@@ -14,14 +14,24 @@
  * limitations under the License.
  */
 
-/// A command line tool to generate query graph visualization from a SQL query.
-/// Only queries against TPC-H tables are supported.
+/// A command line tool to generate query graph or logical plan visualization
+/// from a SQL query. Supports TPC-H tables by default, or local tables in
+/// Parquet/DWRF/text format when --data_path is specified.
 ///
-/// Generate SVG directly:
+/// Generate query graph (default):
 ///   buck2 run //axiom/cli:graphviz -- --query "SELECT * FROM customer" \
 ///       --output query.svg
 ///
-/// Generate DOT file:
+/// Generate logical plan:
+///   buck2 run //axiom/cli:graphviz -- --logical_plan \
+///       --query "SELECT * FROM customer" --output plan.svg
+///
+/// Use local tables instead of TPC-H:
+///   buck2 run //axiom/cli:graphviz -- --data_path /path/to/data \
+///       --data_format parquet --query "SELECT * FROM mytable" --output
+///       plan.svg
+///
+/// Generate DOT file (no .svg extension):
 ///   buck2 run //axiom/cli:graphviz -- --query "SELECT * FROM customer" \
 ///       --output query
 ///
@@ -47,6 +57,18 @@ DEFINE_string(
     output,
     "",
     "Output file path. Use .svg extension to generate SVG.");
+DEFINE_bool(
+    logical_plan,
+    false,
+    "Generate logical plan visualization instead of query graph.");
+DEFINE_string(
+    data_path,
+    "",
+    "Path to directory with local tables. If empty, uses TPC-H tables.");
+DEFINE_string(
+    data_format,
+    "parquet",
+    "Format of local tables: parquet, dwrf, or text.");
 
 namespace facebook::axiom {
 namespace {
@@ -110,9 +132,18 @@ int main(int argc, char** argv) {
     std::cerr << "   or: echo \"SELECT ...\" | " << argv[0]
               << " --query \"\" --output <file.svg>" << std::endl;
     std::cerr << std::endl;
-    std::cerr << "Generates query graph visualization." << std::endl;
-    std::cerr << "Only queries against TPC-H tables are supported."
+    std::cerr << "Generates query graph or logical plan visualization."
               << std::endl;
+    std::cerr << std::endl;
+    std::cerr << "Options:" << std::endl;
+    std::cerr
+        << "  --logical_plan  Generate logical plan instead of query graph"
+        << std::endl;
+    std::cerr << "  --data_path     Path to local tables (default: TPC-H)"
+              << std::endl;
+    std::cerr
+        << "  --data_format   Format: parquet, dwrf, text (default: parquet)"
+        << std::endl;
     std::cerr << std::endl;
     std::cerr << "Use .svg extension to generate SVG (requires 'dot' command)."
               << std::endl;
@@ -136,14 +167,18 @@ int main(int argc, char** argv) {
       facebook::velox::memory::MemoryManager::Options{});
 
   facebook::axiom::Connectors connectors;
-  auto connector = connectors.registerTpchConnector();
-
   axiom::sql::SqlQueryRunner runner;
   runner.initialize([&](auto& /*history*/) {
-    return std::make_pair(connector->connectorId(), std::nullopt);
+    auto defaultConnector = connectors.registerTpchConnector();
+    if (!FLAGS_data_path.empty()) {
+      defaultConnector = connectors.registerLocalHiveConnector(
+          FLAGS_data_path, FLAGS_data_format);
+    }
+    return std::make_pair(defaultConnector->connectorId(), std::nullopt);
   });
 
-  const auto dot = runner.toDot(query);
+  const auto dot = FLAGS_logical_plan ? runner.toLogicalPlanDot(query)
+                                      : runner.toQueryGraphDot(query);
 
   if (FLAGS_output.ends_with(".svg")) {
     if (!facebook::axiom::dotToSvg(dot, FLAGS_output)) {

@@ -71,7 +71,13 @@ class SqlQueryRunner {
   /// statement. The output can be rendered using Graphviz:
   ///   dot -Tsvg output.dot -o output.svg
   /// @param sql A single SELECT or EXPLAIN SELECT statement.
-  std::string toDot(std::string_view sql);
+  std::string toQueryGraphDot(std::string_view sql);
+
+  /// Generates DOT representation of the logical plan for a single SELECT
+  /// statement. The output can be rendered using Graphviz:
+  ///   dot -Tsvg output.dot -o output.svg
+  /// @param sql A single SELECT or EXPLAIN SELECT statement.
+  std::string toLogicalPlanDot(std::string_view sql);
 
   std::unordered_map<std::string, std::string>& sessionConfig() {
     return config_;
@@ -102,6 +108,10 @@ class SqlQueryRunner {
   std::string runExplainAnalyze(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
       const RunOptions& options);
+
+  // Parses SQL and returns the logical plan.
+  facebook::axiom::logical_plan::LogicalPlanNodePtr toLogicalPlan(
+      std::string_view sql);
 
   // Optimizes provided logical plan.
   // @param checkDerivedTable Optional lambda to call after to-graph stage of

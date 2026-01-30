@@ -17,6 +17,7 @@ add_library(
   Expr.cpp
   ExprPrinter.cpp
   ExprResolver.cpp
+  LogicalPlanDotPrinter.cpp
   LogicalPlanNode.cpp
   PlanPrinter.cpp
   ExprApi.cpp
