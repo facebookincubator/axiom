@@ -255,6 +255,27 @@ TEST_F(SubqueryTest, correlatedExists) {
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
+  {
+    auto query =
+        "WITH a AS (SELECT * FROM nation FULL JOIN region ON n_regionkey = r_regionkey) "
+        "SELECT * FROM a WHERE EXISTS(SELECT * FROM(VALUES 1, 2, 3) as t(x) WHERE n_regionkey = x) ";
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("region").build(),
+                velox::core::JoinType::kFull)
+            .hashJoin(
+                core::PlanMatcherBuilder().values().project().build(),
+                velox::core::JoinType::kLeftSemiFilter)
+            .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
   // Correlated conjuncts referencing multiple tables.
   {
     auto query =

@@ -358,7 +358,8 @@ void printDerivedTableCluster(
       if (expr->toString() != col->name()) {
         printRow(
             out,
-            escapeHtml(col->name()) + " := " + escapeHtml(expr->toString()));
+            escapeHtml(col->name()) +
+                " := " + escapeHtml(truncate(expr->toString())));
       } else {
         printRow(out, escapeHtml(col->name()));
       }
@@ -369,7 +370,7 @@ void printDerivedTableCluster(
     // GROUP BY.
     const auto& groupingKeys = dt.aggregation->groupingKeys();
     printSection(out, "GROUP BY", groupingKeys, [](size_t, auto* key) {
-      return escapeHtml(key->toString());
+      return escapeHtml(truncate(key->toString()));
     });
 
     // Aggregates.

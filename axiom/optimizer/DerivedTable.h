@@ -169,6 +169,9 @@ struct DerivedTable : public PlanObject {
   /// DT's output, those columns are added.
   ExprCP exportExpr(ExprCP expr);
 
+  /// Applies 'exportExpr' to each expression in 'exprs' in place.
+  void exportExprs(ExprVector& exprs);
+
   bool isTable() const override {
     return true;
   }
