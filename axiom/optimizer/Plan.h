@@ -24,6 +24,7 @@ namespace facebook::axiom::optimizer {
 
 struct Plan;
 struct PlanState;
+struct PlanStateSaver;
 
 using PlanP = Plan*;
 
@@ -195,12 +196,6 @@ struct PlanState {
   /// selected expressions of the dt.
   PlanObjectSet targetExprs;
 
-  /// The tables that have been placed so far.
-  PlanObjectSet placed;
-
-  /// The columns that have a value from placed tables.
-  PlanObjectSet columns;
-
   /// A mapping of expressions to pre-computed columns. See
   /// PrecomputeProjection.
   folly::F14FastMap<ExprCP, ExprCP> exprToColumn;
@@ -215,6 +210,23 @@ struct PlanState {
   /// Ordered set of tables placed so far. Used for setting a
   /// breakpoint before a specific join order gets costed.
   std::vector<int32_t> debugPlacedTables;
+
+  /// The set of tables/objects that have been placed so far.
+  const PlanObjectSet& placed() const {
+    return placed_;
+  }
+
+  /// Returns true if 'object' has been placed. Use to check for tables,
+  /// conjuncts, aggregation, order keys, and derived tables. Do not use
+  /// to check for columns; columns are tracked separately via 'columns()').
+  bool isPlaced(PlanObjectCP object) const {
+    return placed_.contains(object);
+  }
+
+  /// The set of columns that have a value from placed tables.
+  const PlanObjectSet& columns() const {
+    return columns_;
+  }
 
   /// Updates 'cost' to reflect 'op' being placed on top of the partial plan.
   void addCost(RelationOp& op) {
@@ -264,11 +276,40 @@ struct PlanState {
 
   void debugSetFirstTable(int32_t id);
 
+  /// Saves the current state to 'saver' for later restoration.
+  void save(PlanStateSaver& saver) const;
+
+  /// Restores the state from 'saver'. Uses std::move for efficiency.
+  void restore(PlanStateSaver& saver);
+
+  /// Restores the state from 'nextJoin'.
+  void restore(const NextJoin& nextJoin);
+
+  /// Adds 'object' to placed. Use to place tables (BaseTable, ValuesTable,
+  /// UnnestTable, DerivedTable), conjuncts/filters, aggregation plans, and
+  /// order keys. Do not use to place columns; use placeColumn(s) instead.
+  void place(PlanObjectCP object);
+
+  /// Adds all objects in 'objects' to placed. See place(PlanObjectCP) for
+  /// details on what types of objects should be placed.
+  void place(const PlanObjectSet& objects);
+  void place(const ExprVector& objects);
+
+  /// Adds 'column' to columns.
+  void placeColumn(PlanObjectCP column);
+
+  /// Adds all columns in 'columns' to the set of placed columns.
+  void placeColumns(const PlanObjectSet& columns);
+  void placeColumns(const ColumnVector& columns);
+
+  /// Replaces columns with 'newColumns'. Used after join projection.
+  void replaceColumns(PlanObjectSet newColumns);
+
  private:
   PlanObjectSet computeDownstreamColumns(bool includeFilters) const;
 
   // Caches results of downstreamColumns(). This is a pure function of
-  // 'placed', 'targetExprs' and 'dt'.
+  // 'placed_', 'targetExprs' and 'dt'.
   mutable folly::F14FastMap<PlanObjectSet, PlanObjectSet>
       downstreamColumnsCache_;
 
@@ -277,33 +318,31 @@ struct PlanState {
   // True if we should backtrack when 'cost' exceeds the best cost with
   // shuffle from already generated plans.
   const bool hasCutoff_{true};
+
+  /// The set of tables/objects that have been placed so far.
+  PlanObjectSet placed_;
+
+  /// The set of columns that have a value from placed tables.
+  PlanObjectSet columns_;
 };
 
 /// A scoped guard that restores fields of PlanState on destruction.
+/// Has public members for saved state; PlanState controls save/restore logic.
 struct PlanStateSaver {
  public:
-  explicit PlanStateSaver(PlanState& state)
-      : state_(state),
-        placed_(state.placed),
-        columns_(state.columns),
-        cost_(state.cost),
-        numPlaced_(state.debugPlacedTables.size()) {}
+  explicit PlanStateSaver(PlanState& state);
 
   PlanStateSaver(PlanState& state, const JoinCandidate& candidate);
 
-  ~PlanStateSaver() {
-    state_.placed = std::move(placed_);
-    state_.columns = std::move(columns_);
-    state_.cost = cost_;
-    state_.debugPlacedTables.resize(numPlaced_);
-  }
+  ~PlanStateSaver();
+
+  PlanObjectSet placed;
+  PlanObjectSet columns;
+  PlanCost cost;
+  size_t numDebugPlacedTables{0};
 
  private:
   PlanState& state_;
-  PlanObjectSet placed_;
-  PlanObjectSet columns_;
-  const PlanCost cost_;
-  const uint32_t numPlaced_;
 };
 
 /// Key for collection of memoized partial plans. Any table or derived

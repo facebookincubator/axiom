@@ -245,7 +245,7 @@ std::optional<JoinCandidate> reducingJoins(
 
   PlanObjectSet reducingSet;
   if (allowReducingInnerJoins(candidate)) {
-    PlanObjectSet visited = state.placed;
+    PlanObjectSet visited = state.placed();
     visited.add(candidate.tables[0]);
     reducingSet.add(candidate.tables[0]);
     std::vector<PlanObjectCP> path{candidate.tables[0]};
@@ -325,7 +325,7 @@ std::optional<JoinCandidate> reducingJoins(
 template <typename Func>
 void forJoinedTables(const PlanState& state, Func func) {
   folly::F14FastSet<JoinEdgeP> visited;
-  state.placed.forEach([&](PlanObjectCP placedTable) {
+  state.placed().forEach([&](PlanObjectCP placedTable) {
     if (!placedTable->isTable()) {
       return;
     }
@@ -337,7 +337,7 @@ void forJoinedTables(const PlanState& state, Func func) {
         }
         bool usable = true;
         for (auto key : join->leftKeys()) {
-          if (!key->allTables().isSubset(state.placed)) {
+          if (!key->allTables().isSubset(state.placed())) {
             // All items that the left key depends on must be placed.
             usable = false;
             break;
@@ -386,7 +386,7 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   candidates.reserve(state.dt->tables.size());
   forJoinedTables(
       state, [&](JoinEdgeP join, PlanObjectCP joined, float fanout) {
-        if (!state.placed.contains(joined) && state.dt->hasJoin(join) &&
+        if (!state.isPlaced(joined) && state.dt->hasJoin(join) &&
             state.dt->hasTable(joined)) {
           candidates.emplace_back(join, joined, fanout);
           if (join->isInner()) {
@@ -398,7 +398,7 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   if (candidates.empty()) {
     // There are no join edges. There could still be cross joins.
     state.dt->startTables.forEach([&](PlanObjectCP object) {
-      if (!state.placed.contains(object) && state.mayConsiderNext(object)) {
+      if (!state.isPlaced(object) && state.mayConsiderNext(object)) {
         candidates.emplace_back(nullptr, object, tableCardinality(object));
       }
     });
@@ -840,14 +840,14 @@ void Optimization::addPostprocess(
   // Sanity check that all tables and conjuncts have been placed.
   for (const auto& table : state.dt->tables) {
     VELOX_CHECK(
-        state.placed.contains(table),
+        state.isPlaced(table),
         "Failed to place a table: {}",
         table->toString());
   }
 
   for (const auto* conjunct : state.dt->conjuncts) {
     VELOX_CHECK(
-        state.placed.contains(conjunct),
+        state.isPlaced(conjunct),
         "Failed to place a conjunct: {}",
         conjunct->toString());
   }
@@ -876,7 +876,7 @@ void Optimization::addPostprocess(
 
   if (!dt->having.empty()) {
     auto filter = make<Filter>(plan, dt->having);
-    state.placed.unionObjects(dt->having);
+    state.place(dt->having);
     state.addCost(*filter);
     plan = filter;
   }
@@ -981,7 +981,7 @@ void Optimization::addAggregation(
   auto aggregates = flattenAggregates(aggPlan->aggregates(), precompute);
 
   plan = std::move(precompute).maybeProject();
-  state.placed.add(aggPlan);
+  state.place(aggPlan);
 
   if (isSingleWorker_ && isSingleDriver_) {
     auto* singleAgg = make<Aggregation>(
@@ -1071,7 +1071,7 @@ void Optimization::addOrderBy(
     state.exprToColumn[dt->orderKeys[i]] = orderKeys[i];
   }
 
-  state.placed.unionObjects(dt->orderKeys);
+  state.place(dt->orderKeys);
 
   const auto& downstreamColumns = state.downstreamColumns();
   for (auto* column : plan->columns()) {
@@ -1121,7 +1121,7 @@ void Optimization::joinByIndex(
     if (!newPartition) {
       continue;
     }
-    state.placed.add(candidate.tables.at(0));
+    state.place(candidate.tables.at(0));
     auto joinType = right.leftJoinType();
     if (joinType == velox::core::JoinType::kFull ||
         joinType == velox::core::JoinType::kRight) {
@@ -1141,10 +1141,10 @@ void Optimization::joinByIndex(
     auto lookupKeys = left.keys;
     // The number of keys is the prefix that matches index order.
     lookupKeys.resize(info.lookupKeys.size());
-    state.columns.unionSet(availableColumns(rightTable, index));
+    state.placeColumns(availableColumns(rightTable, index));
 
     auto c = state.downstreamColumns();
-    c.intersect(state.columns);
+    c.intersect(state.columns());
     c.unionColumns(rightTable->filter);
 
     auto* scan = make<TableScan>(
@@ -1158,7 +1158,7 @@ void Optimization::joinByIndex(
         joinType,
         candidate.join->filter());
 
-    state.columns.unionSet(c);
+    state.placeColumns(c);
     state.addCost(*scan);
     state.addNextJoin(&candidate, scan, toTry);
   }
@@ -1270,7 +1270,7 @@ void tryOptimizeSemiProject(
           joinType = leftProject ? velox::core::JoinType::kLeftSemiFilter
                                  : velox::core::JoinType::kRightSemiFilter;
           mark = nullptr;
-          state.placed.add(markFilter);
+          state.place(markFilter);
           return;
         }
 
@@ -1278,7 +1278,7 @@ void tryOptimizeSemiProject(
             markFilter->as<Call>()->argAt(0) == mark) {
           joinType = velox::core::JoinType::kAnti;
           mark = nullptr;
-          state.placed.add(markFilter);
+          state.place(markFilter);
           return;
         }
       }
@@ -1325,8 +1325,8 @@ void Optimization::joinByHash(
   buildColumns.unionColumns(build.keys);
   buildColumns.unionSet(buildFilterColumns);
 
-  state.placed.unionSet(buildTables);
-  state.columns.unionSet(buildColumns);
+  state.place(buildTables);
+  state.placeColumns(buildColumns);
 
   MemoKey memoKey = MemoKey::create(
       candidate.tables[0], buildColumns, buildTables, candidate.existences);
@@ -1418,7 +1418,7 @@ void Optimization::joinByHash(
     projectionBuilder.add(mark, mark);
   }
 
-  state.columns = projectionBuilder.outputColumns();
+  state.replaceColumns(projectionBuilder.outputColumns());
 
   const auto fanout = fanoutJoinTypeLimit(
       joinType,
@@ -1503,14 +1503,14 @@ void Optimization::joinByHashRight(
   PlanObjectSet probeColumns;
   for (auto probeTable : candidate.tables) {
     probeColumns.unionSet(availableColumns(probeTable));
-    state.placed.add(probeTable);
+    state.place(probeTable);
     probeTables.add(probeTable);
   }
 
   probeColumns.intersect(dc);
   probeColumns.unionColumns(probe.keys);
   probeColumns.unionSet(probeFilterColumns);
-  state.columns.unionSet(probeColumns);
+  state.placeColumns(probeColumns);
 
   MemoKey memoKey = MemoKey::create(
       candidate.tables[0], probeColumns, probeTables, candidate.existences);
@@ -1609,7 +1609,7 @@ void Optimization::joinByHashRight(
 
   const auto buildCost = state.cost;
 
-  state.columns = projectionBuilder.outputColumns();
+  state.replaceColumns(projectionBuilder.outputColumns());
   state.cost = probeState.cost;
   state.cost.cost += buildCost.cost;
 
@@ -1721,19 +1721,19 @@ void Optimization::crossJoin(
       "Unsupported cross join type: {}",
       velox::core::JoinTypeName::toName(joinType));
 
-  auto columns = resultColumns.toObjects<Column>();
   if (mark != nullptr) {
-    columns.emplace_back(mark);
+    resultColumns.add(mark);
   }
 
-  RelationOp* join =
-      Join::makeCrossJoin(plan, buildOp, joinType, std::move(filter), columns);
+  RelationOp* join = Join::makeCrossJoin(
+      plan,
+      buildOp,
+      joinType,
+      std::move(filter),
+      resultColumns.toObjects<Column>());
 
-  state.placed.add(table);
-  state.columns.unionSet(buildColumns);
-  if (mark != nullptr) {
-    state.columns.add(mark);
-  }
+  state.place(table);
+  state.replaceColumns(std::move(resultColumns));
   state.addCost(*join);
 
   state.addNextJoin(&candidate, std::move(join), toTry);
@@ -1749,14 +1749,14 @@ void Optimization::crossJoinUnnest(
     VELOX_CHECK(table->is(PlanType::kUnnestTableNode));
     // We add unnest table before compute downstream columns because
     // we're not interested in the replicating columns needed only for unnest.
-    state.placed.add(table);
+    state.place(table);
 
     PrecomputeProjection precompute(plan, state.dt, /*projectAllInputs=*/false);
 
     ExprVector replicateColumns;
     auto downstreamColumns = state.downstreamColumns();
     downstreamColumns.forEach<Column>([&](auto column) {
-      if (state.columns.contains(column)) {
+      if (state.columns().contains(column)) {
         replicateColumns.push_back(precompute.toColumn(column));
       }
     });
@@ -1791,7 +1791,7 @@ void Optimization::crossJoinUnnest(
         unnestedColumns,
         unnestTable->ordinalityColumn);
 
-    state.columns.unionObjects(unnestedColumns);
+    state.replaceColumns(PlanObjectSet::fromObjects(plan->columns()));
     state.addCost(*plan);
   }
   state.addNextJoin(&candidate, std::move(plan), toTry);
@@ -1855,9 +1855,7 @@ void Optimization::tryNextJoins(
     const std::vector<NextJoin>& nextJoins) {
   for (auto& next : nextJoins) {
     PlanStateSaver save(state);
-    state.placed = next.placed;
-    state.columns = next.columns;
-    state.cost = next.cost;
+    state.restore(next);
     makeJoins(next.plan, state);
   }
 }
@@ -1895,7 +1893,7 @@ RelationOpPtr Optimization::placeSingleRowDt(
       ExprVector{},
       std::move(resultColumns));
 
-  state.placed.add(subquery);
+  state.place(subquery);
   state.addCost(*join);
   return join;
 }
@@ -1903,12 +1901,12 @@ RelationOpPtr Optimization::placeSingleRowDt(
 void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   PlanStateSaver save(state);
 
-  state.placed.add(from);
+  state.place(from);
 
   PlanObjectSet dtColumns;
   dtColumns.unionObjects(from->columns);
   dtColumns.intersect(state.downstreamColumns());
-  state.columns.unionSet(dtColumns);
+  state.placeColumns(dtColumns);
 
   MemoKey key =
       MemoKey::create(from, std::move(dtColumns), PlanObjectSet::single(from));
@@ -1922,7 +1920,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   makeJoins(plan->op, state);
 
   // We see if there are reducing joins to import inside the dt.
-  PlanObjectSet visited = state.placed;
+  PlanObjectSet visited = state.placed();
   visited.add(from);
   visited.unionSet(state.dt->importedExistences);
 
@@ -1950,7 +1948,7 @@ bool Optimization::placeConjuncts(
     bool allowNondeterministic) {
   PlanStateSaver save(state);
 
-  PlanObjectSet columnsAndSingles = state.columns;
+  PlanObjectSet columnsAndSingles = state.columns();
   state.dt->singleRowDts.forEach<DerivedTable>(
       [&](auto dt) { columnsAndSingles.unionObjects(dt->columns); });
 
@@ -1959,11 +1957,11 @@ bool Optimization::placeConjuncts(
     if (!allowNondeterministic && conjunct->containsNonDeterministic()) {
       continue;
     }
-    if (state.placed.contains(conjunct)) {
+    if (state.isPlaced(conjunct)) {
       continue;
     }
-    if (conjunct->columns().isSubset(state.columns)) {
-      state.columns.add(conjunct);
+    if (conjunct->columns().isSubset(state.columns())) {
+      state.placeColumn(conjunct);
       filters.push_back(conjunct);
       continue;
     }
@@ -1972,7 +1970,7 @@ bool Optimization::placeConjuncts(
       // subqueries.
       std::vector<DerivedTableCP> placeable;
       auto subqColumns = conjunct->columns();
-      subqColumns.except(state.columns);
+      subqColumns.except(state.columns());
       subqColumns.forEach([&](auto /*unused*/) {
         state.dt->singleRowDts.forEach<DerivedTable>([&](auto subquery) {
           // If the subquery provides columns for the filter, place it.
@@ -1987,7 +1985,7 @@ bool Optimization::placeConjuncts(
       });
 
       for (auto i = 0; i < placeable.size(); ++i) {
-        state.placed.add(conjunct);
+        state.place(conjunct);
         plan = placeSingleRowDt(plan, placeable[i], state);
 
         plan = make<Filter>(plan, ExprVector{conjunct});
@@ -2001,7 +1999,7 @@ bool Optimization::placeConjuncts(
 
   if (!filters.empty()) {
     for (auto& filter : filters) {
-      state.placed.add(filter);
+      state.place(filter);
     }
     auto* filter = make<Filter>(plan, std::move(filters));
     state.addCost(*filter);
@@ -2161,8 +2159,8 @@ void Optimization::makeJoins(PlanState& state) {
         auto columns = indexColumns(downstream, table, index);
 
         PlanStateSaver save(state);
-        state.placed.add(table);
-        state.columns.unionObjects(columns);
+        state.place(table);
+        state.placeColumns(columns);
 
         auto* scan = make<TableScan>(table, index, columns);
         state.addCost(*scan);
@@ -2178,8 +2176,8 @@ void Optimization::makeJoins(PlanState& state) {
       });
 
       PlanStateSaver save{state};
-      state.placed.add(valuesTable);
-      state.columns.unionObjects(columns);
+      state.place(valuesTable);
+      state.placeColumns(columns);
       auto* scan = make<Values>(*valuesTable, std::move(columns));
       state.addCost(*scan);
       makeJoins(scan, state);
@@ -2220,9 +2218,9 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     const auto downstream = state.downstreamColumns();
     std::vector<DerivedTableCP> singleRowDtsToPlace;
     state.dt->singleRowDts.forEach<DerivedTable>([&](DerivedTableCP subquery) {
-      if (!state.placed.contains(subquery)) {
+      if (!state.isPlaced(subquery)) {
         if (!downstream.containsAny(subquery->columns)) {
-          state.placed.add(subquery);
+          state.place(subquery);
         } else {
           singleRowDtsToPlace.push_back(subquery);
         }

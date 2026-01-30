@@ -68,6 +68,62 @@ void PlanState::debugSetFirstTable(int32_t id) {
 // NOLINTEND
 #endif
 
+void PlanState::save(PlanStateSaver& saver) const {
+  saver.placed = placed_;
+  saver.columns = columns_;
+  saver.cost = cost;
+  saver.numDebugPlacedTables = debugPlacedTables.size();
+}
+
+void PlanState::restore(PlanStateSaver& saver) {
+  placed_ = std::move(saver.placed);
+  columns_ = std::move(saver.columns);
+  cost = saver.cost;
+  debugPlacedTables.resize(saver.numDebugPlacedTables);
+}
+
+void PlanState::restore(const NextJoin& nextJoin) {
+  placed_ = nextJoin.placed;
+  columns_ = nextJoin.columns;
+  cost = nextJoin.cost;
+}
+
+void PlanState::place(PlanObjectCP object) {
+  placed_.add(object);
+}
+
+void PlanState::place(const PlanObjectSet& objects) {
+  placed_.unionSet(objects);
+}
+
+void PlanState::place(const ExprVector& objects) {
+  placed_.unionObjects(objects);
+}
+
+void PlanState::placeColumn(PlanObjectCP column) {
+  columns_.add(column);
+}
+
+void PlanState::placeColumns(const PlanObjectSet& columns) {
+  columns_.unionSet(columns);
+}
+
+void PlanState::placeColumns(const ColumnVector& columns) {
+  columns_.unionObjects(columns);
+}
+
+void PlanState::replaceColumns(PlanObjectSet newColumns) {
+  columns_ = std::move(newColumns);
+}
+
+PlanStateSaver::PlanStateSaver(PlanState& state) : state_(state) {
+  state.save(*this);
+}
+
+PlanStateSaver::~PlanStateSaver() {
+  state_.restore(*this);
+}
+
 PlanStateSaver::PlanStateSaver(PlanState& state, const JoinCandidate& candidate)
     : PlanStateSaver(state) {
 #ifndef NDEBUG
@@ -99,7 +155,7 @@ PlanObjectSet exprColumns(const PlanObjectSet& exprs) {
 Plan::Plan(RelationOpPtr op, const PlanState& state)
     : op(std::move(op)),
       cost(state.cost),
-      tables(state.placed),
+      tables(state.placed()),
       columns(exprColumns(state.targetExprs)) {}
 
 bool Plan::isStateBetter(const PlanState& state, float margin) const {
@@ -130,7 +186,7 @@ bool PlanState::mayConsiderNext(PlanObjectCP table) const {
 
   const auto end = it - dt->joinOrder.begin();
   for (auto i = 0; i < end; ++i) {
-    if (!placed.BitSet::contains(dt->joinOrder[i])) {
+    if (!placed_.BitSet::contains(dt->joinOrder[i])) {
       return false;
     }
   }
@@ -142,7 +198,7 @@ void PlanState::addNextJoin(
     RelationOpPtr plan,
     std::vector<NextJoin>& toTry) const {
   if (!isOverBest()) {
-    toTry.emplace_back(candidate, std::move(plan), cost, placed, columns);
+    toTry.emplace_back(candidate, std::move(plan), cost, placed_, columns_);
   } else {
     optimization.trace(OptimizerOptions::kExceededBest, dt->id(), cost, *plan);
   }
@@ -160,7 +216,7 @@ ExprCP PlanState::isDownstreamFilterOnly(ColumnCP column) const {
   ExprCP result = nullptr;
 
   for (const auto* conjunct : dt->conjuncts) {
-    if (!placed.contains(conjunct)) {
+    if (!placed_.contains(conjunct)) {
       const auto& columns = conjunct->columns();
       if (columns.size() == 1 && columns.onlyObject() == column) {
         if (result != nullptr) {
@@ -186,14 +242,14 @@ ExprCP PlanState::isDownstreamFilterOnly(ColumnCP column) const {
 }
 
 const PlanObjectSet& PlanState::downstreamColumns() const {
-  auto it = downstreamColumnsCache_.find(placed);
+  auto it = downstreamColumnsCache_.find(placed_);
   if (it != downstreamColumnsCache_.end()) {
     return it->second;
   }
 
   auto result = computeDownstreamColumns(/*includeFilters=*/true);
 
-  return downstreamColumnsCache_[placed] = std::move(result);
+  return downstreamColumnsCache_[placed_] = std::move(result);
 }
 
 PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
@@ -219,7 +275,7 @@ PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
   // Joins.
   for (auto join : dt->joins) {
     if (join->isSemi() || join->isAnti()) {
-      if (placed.contains(join->rightTable())) {
+      if (placed_.contains(join->rightTable())) {
         continue;
       }
 
@@ -244,11 +300,11 @@ PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
     }
 
     bool addFilter = false;
-    if (!placed.contains(join->rightTable())) {
+    if (!placed_.contains(join->rightTable())) {
       addFilter = true;
       addExprs(join->leftKeys());
     }
-    if (join->leftTable() && !placed.contains(join->leftTable())) {
+    if (join->leftTable() && !placed_.contains(join->leftTable())) {
       addFilter = true;
       addExprs(join->rightKeys());
     }
@@ -265,14 +321,14 @@ PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
   // Filters.
   if (includeFilters) {
     for (const auto* conjunct : dt->conjuncts) {
-      if (!placed.contains(conjunct)) {
+      if (!placed_.contains(conjunct)) {
         addExpr(conjunct);
       }
     }
   }
 
   // Aggregations.
-  if (dt->aggregation && !placed.contains(dt->aggregation)) {
+  if (dt->aggregation && !placed_.contains(dt->aggregation)) {
     auto aggToPlace = dt->aggregation;
     addExprs(aggToPlace->groupingKeys());
     for (auto& aggregate : aggToPlace->aggregates()) {
@@ -282,21 +338,21 @@ PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
 
   // Filters after aggregation.
   for (const auto* conjunct : dt->having) {
-    if (!placed.contains(conjunct)) {
+    if (!placed_.contains(conjunct)) {
       addExpr(conjunct);
     }
   }
 
   // Order by.
   for (const auto* key : dt->orderKeys) {
-    if (!placed.contains(key)) {
+    if (!placed_.contains(key)) {
       addExpr(key);
     }
   }
 
   // Write.
   if (dt->write) {
-    VELOX_DCHECK(!placed.contains(dt->write));
+    VELOX_DCHECK(!placed_.contains(dt->write));
     addExprs(dt->write->columnExprs());
   }
 
@@ -472,13 +528,13 @@ void JoinCandidate::addEdge(
   auto newTableSide = edge->sideOf(joined);
   auto newPlacedSide = edge->sideOf(joined, true);
   VELOX_CHECK_NOT_NULL(newPlacedSide.table);
-  if (!state.placed.contains(newPlacedSide.table)) {
+  if (!state.isPlaced(newPlacedSide.table)) {
     return;
   }
 
-  const auto* joinSideKeys = compositeEdge        ? &compositeEdge->rightKeys()
-      : state.placed.contains(join->rightTable()) ? &join->leftKeys()
-                                                  : &join->rightKeys();
+  const auto* joinSideKeys = compositeEdge ? &compositeEdge->rightKeys()
+      : state.isPlaced(join->rightTable()) ? &join->leftKeys()
+                                           : &join->rightKeys();
 
   bool newEdgeCounted = false;
   for (auto i = 0; i < newPlacedSide.keys.size(); ++i) {
@@ -488,7 +544,7 @@ void JoinCandidate::addEdge(
         // We make the coposite edge with the placed on the left and unplaced on
         // the right.
         compositeEdge = make<JoinEdge>(*join);
-        if (state.placed.contains(join->rightTable())) {
+        if (state.isPlaced(join->rightTable())) {
           compositeEdge = JoinEdge::reverse(*compositeEdge);
         }
         join = compositeEdge;
@@ -512,7 +568,7 @@ bool JoinCandidate::isDominantEdge(PlanState& state, JoinEdgeP edge) {
   auto* joined = tables[0];
   auto newPlacedSide = edge->sideOf(joined, true);
   VELOX_CHECK_NOT_NULL(newPlacedSide.table);
-  if (!state.placed.contains(newPlacedSide.table)) {
+  if (!state.isPlaced(newPlacedSide.table)) {
     return false;
   }
   auto tableSide = join->sideOf(joined);
