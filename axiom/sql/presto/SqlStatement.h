@@ -16,13 +16,16 @@
 
 #pragma once
 
+#include <unordered_set>
 #include "axiom/common/Enums.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
 
 enum class SqlStatementKind {
   kSelect,
+  kCreateTable,
   kCreateTableAsSelect,
   kInsert,
   kDropTable,
@@ -49,6 +52,10 @@ class SqlStatement {
 
   bool isSelect() const {
     return kind_ == SqlStatementKind::kSelect;
+  }
+
+  bool isCreateTable() const {
+    return kind_ == SqlStatementKind::kCreateTable;
   }
 
   bool isCreateTableAsSelect() const {
@@ -121,6 +128,84 @@ class InsertStatement : public SqlStatement {
   const facebook::axiom::logical_plan::LogicalPlanNodePtr plan_;
 };
 
+class CreateTableStatement : public SqlStatement {
+ public:
+  /// A unique or primary key constraint. 'name' is the optional constraint
+  /// name. 'columns' is a list of columns that the constraint applies to.
+  /// 'type' specifies the constraint type, Unique or Primary Key.
+  ///
+  /// A primary key constraint ensures that the specified column(s) contain
+  /// unique, non-null values. A unique constraint ensures that the specified
+  /// column(s) contain only unique values. A table can have only one primary
+  /// key but multiple unique constraints. The handling of column constraints
+  /// is connector-specific and not all implementations may support them.
+  struct Constraint {
+    enum class Type {
+      /// e.g., 'CONSTRAINT constraint_name UNIQUE(col)'
+      kUnique,
+
+      /// e.g., 'PRIMARY KEY (col)'
+      kPrimaryKey
+    };
+
+    std::string name;
+    std::vector<std::string> columns;
+    Type type;
+  };
+
+  CreateTableStatement(
+      std::string connectorId,
+      std::string tableName,
+      facebook::velox::RowTypePtr tableSchema,
+      std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+          properties,
+      bool ifNotExists,
+      std::vector<Constraint> constraints = {});
+
+  const std::string& connectorId() const {
+    return connectorId_;
+  }
+
+  const std::string& tableName() const {
+    return tableName_;
+  }
+
+  /// Returns the table layout. Columns are case-insensitively checked for
+  /// duplicates, e.g., a schema with columns 'ID' and 'id' is not permitted.
+  const facebook::velox::RowTypePtr& tableSchema() const {
+    return tableSchema_;
+  }
+
+  /// Returns the table properties as a map from property name to expression.
+  /// Properties are connector-specific settings (e.g., partitioned_by, format)
+  /// which set additional table attributes. An expression type is used because
+  /// because some properties (e.g., ARRAY['ds']) require runtime evaluation.
+  const std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>&
+  properties() const {
+    return properties_;
+  }
+
+  /// Create the table only if a table of the same name does not exist.
+  bool ifNotExists() const {
+    return ifNotExists_;
+  }
+
+  /// Returns the list of constraints (primary key, unique) on table columns.
+  /// See CreateTableStatement::Constraint documentation for contents.
+  const std::vector<Constraint>& constraints() const {
+    return constraints_;
+  }
+
+ private:
+  const std::string connectorId_;
+  const std::string tableName_;
+  const facebook::velox::RowTypePtr tableSchema_;
+  std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
+      properties_;
+  const bool ifNotExists_;
+  const std::vector<Constraint> constraints_;
+};
+
 class CreateTableAsSelectStatement : public SqlStatement {
  public:
   CreateTableAsSelectStatement(
@@ -131,13 +216,7 @@ class CreateTableAsSelectStatement : public SqlStatement {
           properties,
       facebook::axiom::logical_plan::LogicalPlanNodePtr plan,
       std::unordered_map<std::pair<std::string, std::string>, std::string>
-          views = {})
-      : SqlStatement(SqlStatementKind::kCreateTableAsSelect, std::move(views)),
-        connectorId_{std::move(connectorId)},
-        tableName_{std::move(tableName)},
-        tableSchema_{std::move(tableSchema)},
-        properties_{std::move(properties)},
-        plan_{std::move(plan)} {}
+          views = {});
 
   const std::string& connectorId() const {
     return connectorId_;
@@ -151,6 +230,7 @@ class CreateTableAsSelectStatement : public SqlStatement {
     return tableSchema_;
   }
 
+  /// See CreateTableStatement::properties() for usage.
   const std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>&
   properties() const {
     return properties_;

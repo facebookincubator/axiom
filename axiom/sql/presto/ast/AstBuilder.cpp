@@ -326,7 +326,24 @@ std::any AstBuilder::visitCreateTableAsSelect(
 std::any AstBuilder::visitCreateTable(
     PrestoSqlParser::CreateTableContext* ctx) {
   trace("visitCreateTable");
-  return visitChildren("visitCreateTable", ctx);
+
+  std::optional<std::string> comment;
+  if (ctx->COMMENT() != nullptr) {
+    comment = visitExpression(ctx->string())->as<StringLiteral>()->value();
+  }
+
+  std::vector<std::shared_ptr<Property>> properties;
+  if (ctx->properties() != nullptr) {
+    properties = visitTyped<Property>(ctx->properties()->property());
+  }
+
+  return std::static_pointer_cast<Statement>(std::make_shared<CreateTable>(
+      getLocation(ctx),
+      getQualifiedName(ctx->qualifiedName()),
+      visitTyped<TableElement>(ctx->tableElement()),
+      /*notExists=*/ctx->EXISTS() != nullptr,
+      std::move(properties),
+      std::move(comment)));
 }
 
 std::any AstBuilder::visitDropTable(PrestoSqlParser::DropTableContext* ctx) {
@@ -709,18 +726,58 @@ std::any AstBuilder::visitWith(PrestoSqlParser::WithContext* ctx) {
 std::any AstBuilder::visitTableElement(
     PrestoSqlParser::TableElementContext* ctx) {
   trace("visitTableElement");
+  if (ctx->columnDefinition() != nullptr) {
+    return visitColumnDefinition(ctx->columnDefinition());
+  }
+  if (ctx->likeClause() != nullptr) {
+    return visitLikeClause(ctx->likeClause());
+  }
+  if (ctx->constraintSpecification() != nullptr) {
+    return visitConstraintSpecification(ctx->constraintSpecification());
+  }
   return visitChildren("visitTableElement", ctx);
 }
 
 std::any AstBuilder::visitColumnDefinition(
     PrestoSqlParser::ColumnDefinitionContext* ctx) {
   trace("visitColumnDefinition");
-  return visitChildren("visitColumnDefinition", ctx);
+
+  std::optional<std::string> comment;
+  if (ctx->COMMENT() != nullptr) {
+    comment = visitExpression(ctx->string())->as<StringLiteral>()->value();
+  }
+
+  std::vector<std::shared_ptr<Property>> properties;
+  if (ctx->properties() != nullptr) {
+    properties = visitTyped<Property>(ctx->properties()->property());
+  }
+
+  return std::static_pointer_cast<TableElement>(
+      std::make_shared<ColumnDefinition>(
+          getLocation(ctx),
+          visitIdentifier(ctx->identifier()),
+          ctx->type()->getText(),
+          /*nullable=*/ctx->NOT() == nullptr,
+          std::move(properties),
+          std::move(comment)));
 }
 
 std::any AstBuilder::visitLikeClause(PrestoSqlParser::LikeClauseContext* ctx) {
   trace("visitLikeClause");
-  return visitChildren("visitLikeClause", ctx);
+
+  std::optional<LikeClause::PropertiesOption> propertiesOption;
+  if (ctx->optionType != nullptr) {
+    if (ctx->INCLUDING() != nullptr) {
+      propertiesOption = LikeClause::PropertiesOption::kIncluding;
+    } else {
+      propertiesOption = LikeClause::PropertiesOption::kExcluding;
+    }
+  }
+
+  return std::static_pointer_cast<TableElement>(std::make_shared<LikeClause>(
+      getLocation(ctx),
+      getQualifiedName(ctx->qualifiedName()),
+      std::move(propertiesOption)));
 }
 
 std::any AstBuilder::visitProperties(PrestoSqlParser::PropertiesContext* ctx) {
@@ -2232,19 +2289,55 @@ std::any AstBuilder::visitIntegerLiteral(
 std::any AstBuilder::visitConstraintSpecification(
     PrestoSqlParser::ConstraintSpecificationContext* ctx) {
   trace("visitConstraintSpecification");
+  if (ctx->namedConstraintSpecification() != nullptr) {
+    return visitNamedConstraintSpecification(
+        ctx->namedConstraintSpecification());
+  }
+  if (ctx->unnamedConstraintSpecification() != nullptr) {
+    return visitUnnamedConstraintSpecification(
+        ctx->unnamedConstraintSpecification());
+  }
   return visitChildren("visitConstraintSpecification", ctx);
 }
 
 std::any AstBuilder::visitNamedConstraintSpecification(
     PrestoSqlParser::NamedConstraintSpecificationContext* ctx) {
   trace("visitNamedConstraintSpecification");
-  return visitChildren("visitNamedConstraintSpecification", ctx);
+
+  auto unnamed = ctx->unnamedConstraintSpecification();
+  auto constraintType = unnamed->constraintType()->PRIMARY() != nullptr
+      ? ConstraintSpecification::ConstraintType::kPrimaryKey
+      : ConstraintSpecification::ConstraintType::kUnique;
+
+  std::vector<std::shared_ptr<Identifier>> columns;
+  for (auto* identCtx : unnamed->columnAliases()->identifier()) {
+    columns.push_back(visitIdentifier(identCtx));
+  }
+
+  return std::static_pointer_cast<TableElement>(
+      std::make_shared<ConstraintSpecification>(
+          getLocation(ctx),
+          visitIdentifier(ctx->name),
+          std::move(columns),
+          constraintType));
 }
 
 std::any AstBuilder::visitUnnamedConstraintSpecification(
     PrestoSqlParser::UnnamedConstraintSpecificationContext* ctx) {
   trace("visitUnnamedConstraintSpecification");
-  return visitChildren("visitUnnamedConstraintSpecification", ctx);
+
+  auto constraintType = ctx->constraintType()->PRIMARY() != nullptr
+      ? ConstraintSpecification::ConstraintType::kPrimaryKey
+      : ConstraintSpecification::ConstraintType::kUnique;
+
+  std::vector<std::shared_ptr<Identifier>> columns;
+  for (auto* identCtx : ctx->columnAliases()->identifier()) {
+    columns.push_back(visitIdentifier(identCtx));
+  }
+
+  return std::static_pointer_cast<TableElement>(
+      std::make_shared<ConstraintSpecification>(
+          getLocation(ctx), nullptr, std::move(columns), constraintType));
 }
 
 std::any AstBuilder::visitConstraintType(

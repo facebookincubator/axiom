@@ -204,6 +204,45 @@ class PrestoParserTest : public testing::Test {
     }
   }
 
+  void testCreateSql(
+      std::string_view sql,
+      const std::string& tableName,
+      const RowTypePtr& tableSchema,
+      const std::unordered_map<std::string, std::string>& properties = {},
+      const std::vector<CreateTableStatement::Constraint>& constraints = {}) {
+    SCOPED_TRACE(sql);
+    auto parser = makeParser();
+
+    auto statement = parser.parse(sql);
+    ASSERT_TRUE(statement->isCreateTable());
+
+    auto* createTable = statement->as<CreateTableStatement>();
+
+    ASSERT_EQ(createTable->tableName(), tableName);
+    ASSERT_TRUE(*createTable->tableSchema() == *tableSchema);
+
+    const auto& actualProperties = createTable->properties();
+    ASSERT_EQ(properties.size(), actualProperties.size());
+    for (const auto& [key, value] : properties) {
+      ASSERT_TRUE(actualProperties.contains(key));
+      ASSERT_EQ(lp::ExprPrinter::toText(*actualProperties.at(key)), value);
+    }
+
+    const auto& actualConstraints = createTable->constraints();
+    ASSERT_EQ(constraints.size(), actualConstraints.size());
+    for (size_t i = 0; i < constraints.size(); ++i) {
+      ASSERT_EQ(constraints[i].name, actualConstraints[i].name);
+      ASSERT_EQ(constraints[i].type, actualConstraints[i].type);
+      ASSERT_EQ(constraints[i].columns, actualConstraints[i].columns);
+    }
+  }
+
+  void testInvalidSql(std::string_view sql, const std::string& errorMessage) {
+    SCOPED_TRACE(sql);
+    auto parser = makeParser();
+    VELOX_ASSERT_THROW(parser.parse(sql), errorMessage);
+  }
+
   template <typename T>
   void testDecimal(std::string_view sql, T value, const TypePtr& type) {
     SCOPED_TRACE(sql);
@@ -1542,6 +1581,148 @@ TEST_F(PrestoParserTest, createTableAsSelect) {
           {"bucket_count", "4"},
           {"bucketed_by", "array_constructor(n_nationkey)"},
       });
+}
+
+TEST_F(PrestoParserTest, createTable) {
+  testCreateSql(
+      "CREATE TABLE t (id INTEGER)", "tiny.t", ROW({"id"}, {INTEGER()}));
+
+  // if not exists
+  {
+    auto parser = makeParser();
+    auto statement = parser.parse("CREATE TABLE IF NOT EXISTS t (id BIGINT)");
+    ASSERT_TRUE(statement->isCreateTable());
+
+    const auto* createTable = statement->as<CreateTableStatement>();
+    ASSERT_EQ("tiny.t", createTable->tableName());
+    ASSERT_TRUE(createTable->ifNotExists());
+  }
+
+  // properties
+  testCreateSql(
+      "CREATE TABLE t (id INTEGER, ds VARCHAR) "
+      "WITH (partitioned_by = ARRAY['ds'], format = 'ORC')",
+      "tiny.t",
+      ROW({"id", "ds"}, {INTEGER(), VARCHAR()}),
+      /*properties=*/
+      {{"partitioned_by", "array_constructor(ds)"}, {"format", "ORC"}});
+
+  // a variety of different types
+  testCreateSql(
+      "CREATE TABLE t ("
+      "  tiny_col TINYINT,"
+      "  small_col SMALLINT,"
+      "  int_col INT,"
+      "  big_col BIGINT,"
+      "  real_col REAL,"
+      "  double_col DOUBLE,"
+      "  varchar_col VARCHAR,"
+      "  bool_col BOOLEAN"
+      ")",
+      "tiny.t",
+      ROW({"tiny_col",
+           "small_col",
+           "int_col",
+           "big_col",
+           "real_col",
+           "double_col",
+           "varchar_col",
+           "bool_col"},
+          {TINYINT(),
+           SMALLINT(),
+           INTEGER(),
+           BIGINT(),
+           REAL(),
+           DOUBLE(),
+           VARCHAR(),
+           BOOLEAN()}));
+
+  // like clause
+  {
+    auto likeSchema = facebook::axiom::connector::ConnectorMetadata::metadata(
+                          kTpchConnectorId)
+                          ->findTable("nation")
+                          ->type();
+    testCreateSql("CREATE TABLE copy (LIKE nation)", "tiny.copy", likeSchema);
+  }
+
+  // like clause + some more columns
+  {
+    auto likeSchema = facebook::axiom::connector::ConnectorMetadata::metadata(
+                          kTpchConnectorId)
+                          ->findTable("nation")
+                          ->type();
+
+    // should respect the order of (before, LIKE, after)
+    std::vector<std::string> names = {"before"};
+    std::vector<TypePtr> types = {INTEGER()};
+    for (int i = 0; i < likeSchema->size(); ++i) {
+      names.push_back(likeSchema->nameOf(i));
+      types.push_back(likeSchema->childAt(i));
+    }
+    names.push_back("after");
+    types.push_back(DOUBLE());
+
+    testCreateSql(
+        "CREATE TABLE extended (before INTEGER, LIKE nation, after DOUBLE)",
+        "tiny.extended",
+        ROW(std::move(names), std::move(types)));
+  }
+
+  // primary key constraint
+  {
+    std::vector<CreateTableStatement::Constraint> constraints = {
+        {.columns = {"id"},
+         .type = CreateTableStatement::Constraint::Type::kPrimaryKey}};
+    testCreateSql(
+        "CREATE TABLE t (id INTEGER, PRIMARY KEY (id))",
+        "tiny.t",
+        ROW({"id"}, {INTEGER()}),
+        /*properties=*/{},
+        constraints);
+  }
+
+  // unique key constraint
+  {
+    std::vector<CreateTableStatement::Constraint> constraints = {
+        {.name = "unique_name",
+         .columns = {"name"},
+         .type = CreateTableStatement::Constraint::Type::kUnique}};
+    testCreateSql(
+        "CREATE TABLE t (id INTEGER, name VARCHAR, CONSTRAINT unique_name UNIQUE (name))",
+        "tiny.t",
+        ROW({"id", "name"}, {INTEGER(), VARCHAR()}),
+        /*properties=*/{},
+        constraints);
+  }
+
+  // duplicate column names
+  testInvalidSql(
+      "CREATE TABLE t (id INTEGER, id VARCHAR)", "Duplicate column name: id");
+  testInvalidSql(
+      "CREATE TABLE t (id INTEGER, ID VARCHAR)", "Duplicate column name: ID");
+
+  // unknown type
+  testInvalidSql(
+      "CREATE TABLE t (id UNKNOWNTYPE)", "Failed to parse type [UNKNOWNTYPE]");
+
+  // unknown constraint column
+  testInvalidSql(
+      "CREATE TABLE t (id INTEGER, PRIMARY KEY (unknown))",
+      "Constraint on unknown column: unknown");
+
+  // duplicate constraint column
+  testInvalidSql(
+      "CREATE TABLE t (id INTEGER, PRIMARY KEY (id, id))",
+      "Duplicate constraint column: id");
+  testInvalidSql(
+      "CREATE TABLE t (id INTEGER, PRIMARY KEY (id, ID))",
+      "Duplicate constraint column: ID");
+
+  // duplicate table property
+  testInvalidSql(
+      "CREATE TABLE t (id INTEGER) WITH (format = 'ORC', format = 'PARQUET')",
+      "Duplicate property: format");
 }
 
 TEST_F(PrestoParserTest, dropTable) {

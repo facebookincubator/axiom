@@ -389,26 +389,12 @@ void ToGraph::translateConjuncts(const lp::ExprPtr& input, ExprVector& flat) {
   }
 }
 
-namespace {
-
-bool looksConstant(const lp::ExprPtr& expr) {
-  if (expr->isConstant()) {
-    return true;
-  }
-  if (expr->isInputReference()) {
-    return false;
-  }
-  return std::ranges::all_of(expr->inputs(), looksConstant);
-}
-
-} // namespace
-
 lp::ConstantExprPtr ToGraph::tryFoldConstant(const lp::ExprPtr& expr) {
   if (expr->isConstant()) {
     return std::static_pointer_cast<const lp::ConstantExpr>(expr);
   }
 
-  if (looksConstant(expr)) {
+  if (expr->looksConstant()) {
     auto literal = translateExpr(expr);
     if (literal->is(PlanType::kLiteralExpr)) {
       return std::make_shared<lp::ConstantExpr>(

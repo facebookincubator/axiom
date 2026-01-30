@@ -31,6 +31,7 @@
 #include "velox/exec/WindowFunction.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/parser/ParserUtil.h"
 
 namespace axiom::sql::presto {
 namespace {
@@ -138,8 +139,7 @@ void findAggregates(
     case core::IExpr::Kind::kFieldAccess:
       return;
     case core::IExpr::Kind::kCall: {
-      if (facebook::velox::exec::getAggregateFunctionEntry(
-              expr->as<core::CallExpr>()->name())) {
+      if (exec::getAggregateFunctionEntry(expr->as<core::CallExpr>()->name())) {
         if (aggregateSet.emplace(expr).second) {
           aggregates.emplace_back(lp::ExprApi(expr));
         }
@@ -197,7 +197,7 @@ class ExprAnalyzer : public DefaultTraversalVisitor {
 
   void visitFunctionCall(FunctionCall* node) override {
     const auto& name = node->name()->suffix();
-    if (facebook::velox::exec::getAggregateFunctionEntry(name)) {
+    if (exec::getAggregateFunctionEntry(name)) {
       VELOX_USER_CHECK(
           !aggregateName_.has_value(),
           "Cannot nest aggregations inside aggregation: {}({})",
@@ -282,9 +282,8 @@ class RelationPlanner : public AstVisitor {
 
   lp::ExprApi toExpr(
       const ExpressionPtr& node,
-      std::unordered_map<
-          const facebook::velox::core::IExpr*,
-          lp::PlanBuilder::AggregateOptions>* aggregateOptions = nullptr) {
+      std::unordered_map<const core::IExpr*, lp::PlanBuilder::AggregateOptions>*
+          aggregateOptions = nullptr) {
     switch (node->type()) {
       case NodeType::kIdentifier:
         return lp::Col(canonicalizeIdentifier(*node->as<Identifier>()));
@@ -573,10 +572,10 @@ class RelationPlanner : public AstVisitor {
       case NodeType::kTimestampLiteral: {
         auto literal = node->as<TimestampLiteral>();
 
-        auto timestamp = facebook::velox::util::fromTimestampWithTimezoneString(
+        auto timestamp = util::fromTimestampWithTimezoneString(
             literal->value().c_str(),
             literal->value().size(),
-            facebook::velox::util::TimestampParseMode::kPrestoCast);
+            util::TimestampParseMode::kPrestoCast);
 
         VELOX_USER_CHECK(
             !timestamp.hasError(),
@@ -586,11 +585,9 @@ class RelationPlanner : public AstVisitor {
 
         if (timestamp.value().timeZone != nullptr) {
           return lp::Cast(
-              facebook::velox::TIMESTAMP_WITH_TIME_ZONE(),
-              lp::Lit(literal->value()));
+              TIMESTAMP_WITH_TIME_ZONE(), lp::Lit(literal->value()));
         } else {
-          return lp::Cast(
-              facebook::velox::TIMESTAMP(), lp::Lit(literal->value()));
+          return lp::Cast(TIMESTAMP(), lp::Lit(literal->value()));
         }
       }
 
@@ -643,7 +640,7 @@ class RelationPlanner : public AstVisitor {
             call->orderBy() != nullptr) {
           VELOX_CHECK_NOT_NULL(aggregateOptions);
 
-          facebook::velox::core::ExprPtr filterExpr;
+          core::ExprPtr filterExpr;
           if (call->filter() != nullptr) {
             filterExpr = toExpr(call->filter()).expr();
           }
@@ -858,12 +855,12 @@ class RelationPlanner : public AstVisitor {
           "{}{}", value.substr(0, periodPos), value.substr(periodPos + 1));
     }
 
-    if (precision <= facebook::velox::ShortDecimalType::kMaxPrecision) {
+    if (precision <= ShortDecimalType::kMaxPrecision) {
       int64_t v = atol(unscaledValue.c_str());
       return lp::Lit(v, DECIMAL(precision, scale));
     }
 
-    if (precision <= facebook::velox::LongDecimalType::kMaxPrecision) {
+    if (precision <= LongDecimalType::kMaxPrecision) {
       return lp::Lit(
           folly::to<int128_t>(unscaledValue), DECIMAL(precision, scale));
     }
@@ -872,7 +869,7 @@ class RelationPlanner : public AstVisitor {
         "Invalid decimal value: '{}'. Precision exceeds maximum: {} > {}.",
         value,
         precision,
-        facebook::velox::LongDecimalType::kMaxPrecision);
+        LongDecimalType::kMaxPrecision);
   }
 
   static int32_t parseInt(const TypeSignaturePtr& type) {
@@ -1291,9 +1288,7 @@ class RelationPlanner : public AstVisitor {
     std::vector<lp::ExprApi> projections;
     std::vector<lp::ExprApi> aggregates;
     ExprSet aggregateSet;
-    std::unordered_map<
-        const facebook::velox::core::IExpr*,
-        lp::PlanBuilder::AggregateOptions>
+    std::unordered_map<const core::IExpr*, lp::PlanBuilder::AggregateOptions>
         aggregateOptionsMap;
     for (const auto& item : selectItems) {
       VELOX_CHECK(item->is(NodeType::kSingleColumn));
@@ -1792,11 +1787,10 @@ namespace {
 lp::ExprPtr parseSqlExpression(const ExpressionPtr& expr) {
   RelationPlanner planner("__unused__", "__unused__", /*parseSql=*/nullptr);
 
-  auto plan =
-      lp::PlanBuilder()
-          .values(facebook::velox::ROW({}), {facebook::velox::Variant::row({})})
-          .project({planner.toExpr(expr)})
-          .build();
+  auto plan = lp::PlanBuilder()
+                  .values(ROW({}), {Variant::row({})})
+                  .project({planner.toExpr(expr)})
+                  .build();
   VELOX_USER_CHECK(plan->is(lp::NodeKind::kProject));
 
   auto project = plan->as<lp::ProjectNode>();
@@ -1881,7 +1875,7 @@ lp::ExprApi makeLikeExpr(
 SqlStatementPtr parseShowCatalogs(
     const ShowCatalogs& showCatalogs,
     const std::string& defaultConnectorId) {
-  const auto& connectors = facebook::velox::connector::getAllConnectors();
+  const auto& connectors = connector::getAllConnectors();
 
   std::vector<Variant> data;
   data.reserve(connectors.size());
@@ -1931,7 +1925,7 @@ SqlStatementPtr parseShowFunctions(
     const std::string& defaultConnectorId) {
   std::vector<Variant> rows;
 
-  auto const& allScalarFunctions = facebook::velox::getFunctionSignatures();
+  auto const& allScalarFunctions = getFunctionSignatures();
 
   for (const auto& [name, signatures] : allScalarFunctions) {
     for (const auto& signature : signatures) {
@@ -1944,8 +1938,7 @@ SqlStatementPtr parseShowFunctions(
     }
   }
 
-  auto const& allAggregateFunctions =
-      facebook::velox::exec::getAggregateFunctionSignatures();
+  auto const& allAggregateFunctions = exec::getAggregateFunctionSignatures();
 
   for (const auto& [name, signatures] : allAggregateFunctions) {
     for (const auto& signature : signatures) {
@@ -1958,7 +1951,7 @@ SqlStatementPtr parseShowFunctions(
     }
   }
 
-  auto const& allWindowFunctions = facebook::velox::exec::windowFunctions();
+  auto const& allWindowFunctions = exec::windowFunctions();
 
   for (const auto& [name, windowEntry] : allWindowFunctions) {
     // Skip aggregate functions as they have already been processed.
@@ -2042,6 +2035,23 @@ SqlStatementPtr parseInsert(
   return std::make_shared<InsertStatement>(planner.plan(), planner.views());
 }
 
+std::unordered_map<std::string, lp::ExprPtr> parseTableProperties(
+    const std::vector<std::shared_ptr<Property>>& props) {
+  std::unordered_map<std::string, lp::ExprPtr> properties;
+  for (const auto& p : props) {
+    const auto& name = p->name()->value();
+    auto expr = parseSqlExpression(p->value());
+    VELOX_USER_CHECK(
+        expr->looksConstant(),
+        "Property {} = {} is not constant",
+        name,
+        expr->toString());
+    bool ok = properties.emplace(name, std::move(expr)).second;
+    VELOX_USER_CHECK(ok, "Duplicate property: {}", name);
+  }
+  return properties;
+}
+
 SqlStatementPtr parseCreateTableAsSelect(
     const CreateTableAsSelect& ctas,
     const std::string& defaultConnectorId,
@@ -2054,12 +2064,7 @@ SqlStatementPtr parseCreateTableAsSelect(
   RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
   ctas.query()->accept(&planner);
 
-  std::unordered_map<std::string, lp::ExprPtr> properties;
-  for (const auto& p : ctas.properties()) {
-    const auto& name = p->name()->value();
-    bool ok = properties.emplace(name, parseSqlExpression(p->value())).second;
-    VELOX_USER_CHECK(ok, "Duplicate property: {}", name);
-  }
+  auto properties = parseTableProperties(ctas.properties());
 
   auto& planBuilder = planner.builder();
 
@@ -2103,10 +2108,88 @@ SqlStatementPtr parseCreateTableAsSelect(
   return std::make_shared<CreateTableAsSelectStatement>(
       connectorTable.first,
       connectorTable.second,
-      facebook::velox::ROW(std::move(columnNames), std::move(columnTypes)),
+      ROW(std::move(columnNames), std::move(columnTypes)),
       std::move(properties),
       planner.plan(),
       planner.views());
+}
+
+SqlStatementPtr parseCreateTable(
+    const CreateTable& createTable,
+    const std::string& defaultConnectorId,
+    const std::optional<std::string>& defaultSchema) {
+  auto connectorTable =
+      toConnectorTable(*createTable.name(), defaultConnectorId, defaultSchema);
+
+  auto properties = parseTableProperties(createTable.properties());
+
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  std::vector<CreateTableStatement::Constraint> constraints;
+
+  for (const auto& element : createTable.elements()) {
+    switch (element->type()) {
+      case NodeType::kColumnDefinition: {
+        auto* columnDef = element->as<ColumnDefinition>();
+        names.push_back(columnDef->name()->value());
+
+        auto type = typeFromString(columnDef->columnType());
+        VELOX_USER_CHECK_NOT_NULL(
+            type, "Unknown type specifier: {}", columnDef->columnType());
+        types.push_back(type);
+        break;
+      }
+      case NodeType::kLikeClause: {
+        auto* likeClause = element->as<LikeClause>();
+        auto table = findTable(
+            *likeClause->tableName(), defaultConnectorId, defaultSchema);
+
+        auto schema = table->type();
+        for (auto i = 0; i < schema->size(); ++i) {
+          names.push_back(schema->nameOf(i));
+          types.push_back(schema->childAt(i));
+        }
+        break;
+      }
+      case NodeType::kConstraintSpecification: {
+        auto* constraintSpec = element->as<ConstraintSpecification>();
+
+        CreateTableStatement::Constraint constraint;
+        if (constraintSpec->name()) {
+          constraint.name = constraintSpec->name()->value();
+        }
+
+        for (const auto& col : constraintSpec->columns()) {
+          constraint.columns.push_back(col->value());
+        }
+
+        switch (constraintSpec->constraintType()) {
+          case ConstraintSpecification::ConstraintType::kPrimaryKey:
+            constraint.type =
+                CreateTableStatement::Constraint::Type::kPrimaryKey;
+            break;
+          case ConstraintSpecification::ConstraintType::kUnique:
+            constraint.type = CreateTableStatement::Constraint::Type::kUnique;
+            break;
+        }
+
+        constraints.push_back(std::move(constraint));
+        break;
+      }
+      default:
+        VELOX_UNREACHABLE(
+            "Unexpected table element type: {}",
+            static_cast<int>(element->type()));
+    }
+  }
+
+  return std::make_shared<CreateTableStatement>(
+      connectorTable.first,
+      connectorTable.second,
+      ROW(std::move(names), std::move(types)),
+      std::move(properties),
+      createTable.isNotExists(),
+      std::move(constraints));
 }
 
 SqlStatementPtr parseDropTable(
@@ -2137,6 +2220,11 @@ SqlStatementPtr doPlan(
         defaultConnectorId,
         defaultSchema,
         parseSql);
+  }
+
+  if (query->is(NodeType::kCreateTable)) {
+    return parseCreateTable(
+        *query->as<CreateTable>(), defaultConnectorId, defaultSchema);
   }
 
   if (query->is(NodeType::kShowCatalogs)) {
