@@ -200,10 +200,10 @@ TEST_F(UnnestTest, unnest) {
                 {"x",
                  "array_distinct(a_a_y) as a_y",
                  "array_distinct(a_a_z) as a_z"})
-            .unnest({"x"}, {"a_y", "a_z"})
+            .unnest({"x"}, {"a_y", "a_z"}, {})
             .project(
                 {"x", "array_distinct(a_y) as y", "array_distinct(a_z) as z"})
-            .unnest({"x"}, {"y", "z"})
+            .unnest({"x"}, {"y", "z"}, {})
             .project(expectedNames)
             .build();
     ASSERT_TRUE(matcher->match(plan)) << plan->toString(true, true);
@@ -1216,8 +1216,7 @@ TEST_F(UnnestTest, ordinality) {
     auto matcher = core::PlanMatcherBuilder()
                        .values()
                        .project()
-                       .unnest({}, {}, "ordinality")
-                       .project({"e", "e_0", "ordinality"})
+                       .unnest({}, {}, {"a", "b"}, "c")
                        .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
@@ -1225,7 +1224,7 @@ TEST_F(UnnestTest, ordinality) {
   }
   {
     auto query =
-        "SELECT a, b FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY AS t(a, b, c)";
+        "SELECT a, b FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY AS t(a, b, c) ";
     SCOPED_TRACE(query);
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
@@ -1233,8 +1232,7 @@ TEST_F(UnnestTest, ordinality) {
     auto matcher = core::PlanMatcherBuilder()
                        .values()
                        .project()
-                       .unnest({}, {}, std::nullopt)
-                       .project({"e", "e_0"})
+                       .unnest({}, {}, {"a", "b"}, std::nullopt)
                        .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
@@ -1242,7 +1240,7 @@ TEST_F(UnnestTest, ordinality) {
   }
   {
     auto query =
-        "SELECT 1 FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY AS t(a, b, c)";
+        "SELECT 1 FROM unnest(array[1, 2, 3], array[4, 5]) WITH ORDINALITY AS t(a, b, c) ";
     SCOPED_TRACE(query);
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
@@ -1250,7 +1248,7 @@ TEST_F(UnnestTest, ordinality) {
     auto matcher = core::PlanMatcherBuilder()
                        .values()
                        .project()
-                       .unnest({}, {}, std::nullopt)
+                       .unnest({}, {}, {}, std::nullopt)
                        .project({"1"})
                        .build();
 

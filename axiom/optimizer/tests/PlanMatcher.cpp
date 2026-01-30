@@ -371,10 +371,12 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
       const std::shared_ptr<PlanMatcher>& matcher,
       const std::vector<std::string>& replicateExprs,
       const std::vector<std::string>& unnestExprs,
+      const std::vector<std::string>& aliases,
       const std::optional<std::string>& ordinalityName = std::nullopt)
       : PlanMatcherImpl<UnnestNode>({matcher}),
         replicateExprs_{replicateExprs},
         unnestExprs_{unnestExprs},
+        aliases_{aliases},
         ordinalityName_{ordinalityName} {}
 
   MatchResult matchDetails(
@@ -410,6 +412,16 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
       AXIOM_TEST_RETURN_IF_FAILURE
     }
 
+    if (!aliases_.empty()) {
+      EXPECT_EQ(plan.unnestVariables().size(), aliases_.size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      for (auto i = 0; i < aliases_.size(); ++i) {
+        EXPECT_EQ(plan.unnestNames()[i], aliases_[i]);
+      }
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
     EXPECT_EQ(plan.ordinalityName(), ordinalityName_);
 
     AXIOM_TEST_RETURN_IF_FAILURE
@@ -420,6 +432,7 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
  private:
   const std::vector<std::string> replicateExprs_;
   const std::vector<std::string> unnestExprs_;
+  const std::vector<std::string> aliases_;
   const std::optional<std::string> ordinalityName_;
 };
 
@@ -797,10 +810,11 @@ PlanMatcherBuilder& PlanMatcherBuilder::unnest() {
 PlanMatcherBuilder& PlanMatcherBuilder::unnest(
     const std::vector<std::string>& replicateExprs,
     const std::vector<std::string>& unnestExprs,
+    const std::vector<std::string>& aliases,
     const std::optional<std::string>& ordinalityName) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<UnnestMatcher>(
-      matcher_, replicateExprs, unnestExprs, ordinalityName);
+      matcher_, replicateExprs, unnestExprs, aliases, ordinalityName);
   return *this;
 }
 

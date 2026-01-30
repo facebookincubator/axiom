@@ -442,6 +442,12 @@ class ToGraph {
   // Column and subfield info for items that only affect column values.
   PlanSubfields payloadSubfields_;
 
+  /// Parent mappings while traversing the logical plan.
+  folly::F14FastMap<
+      const logical_plan::LogicalPlanNode*,
+      const logical_plan::LogicalPlanNode*>
+      parents_;
+
   /// Expressions corresponding to skyline paths over a subfield decomposable
   /// function.
   folly::F14FastMap<const logical_plan::CallExpr*, SubfieldProjections>
