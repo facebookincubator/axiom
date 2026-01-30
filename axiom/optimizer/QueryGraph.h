@@ -454,6 +454,8 @@ struct JoinSide {
   const bool isNotExists;
   ColumnCP markColumn;
   const bool isUnique;
+  const ColumnVector& columns;
+  const ExprVector& exprs;
 
   /// Returns the join type to use if 'this' is the right side.
   velox::core::JoinType leftJoinType() const {
