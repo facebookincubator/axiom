@@ -1286,6 +1286,90 @@ void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
     }
   }
 
+  // Prune Redundant Projects after Unnest:
+  //
+  // Climb up the parent chain to remove redunant projects.
+  // If the immediate parent of the Unnest node in the logical plan is a
+  // Project, we try to climb up through consecutive Project nodes and check if
+  // they are "redundant" projections over the UNNEST output. A redundant
+  // Project here means:
+  //   - It simply forwards/renames columns coming from the UNNEST without
+  //   transforming them.
+  //   - It optionally forwards the UNNEST ordinality column as-is.
+  //
+  // [Unnest] --> [Project] --> [Project] --> ... --> [Project] -> ... ->
+  // [NON-PROJECT] / <END>
+  //    |                     |                     |
+  //    |                     |                     |
+  //    +--> redundant if it only forwards/renames UNNEST columns (no
+  //    transforms)
+  //          and optionally forwards ordinality as-is.
+  //
+  // Goal: Walk horizontally across consecutive Project nodes above UNNEST,
+  //       removing those that are pure pass-through (forward/rename only).
+
+  // After collapsing redundant Projects, their output names (aliases) are
+  // applied directly to the UNNEST-produced columns (including ordinality if
+  // present).
+
+  auto parent = parents_[&unnest];
+  while (parent && parent->is(lp::NodeKind::kProject)) {
+    auto parent_project = parent->as<lp::ProjectNode>();
+    auto proj_expressions = parent_project->expressions();
+    auto proj_names = parent_project->names();
+
+    bool isRedundant =
+        proj_expressions.size() <= (unnestTable->columns.size() + 1);
+
+    // Redundancy check loop:
+    //    By checking the parent project expression can be represented by
+    //    unnest output names
+    for (auto i = 0; i < proj_expressions.size(); i++) {
+      // Case: Checking the slot that may correspond to ordinality.
+      if (i == unnestTable->columns.size()) {
+        if (!(unnest.ordinalityName().has_value() &&
+              unnest.ordinalityName().value() ==
+                  parent_project->expressions()[i]->toString())) {
+          isRedundant = false;
+        }
+        break;
+      }
+
+      // Case: Mapping UNNEST data columns. Each Project expression[i] must
+      // be a direct reference to the UNNEST column[i] by name (no
+      // computation or re-ordering).
+      if (unnestTable->columns[i]->name() != proj_expressions[i]->toString()) {
+        isRedundant = false;
+        break;
+      }
+    }
+
+    // If this Project is redundant, we propagate its output aliases (names)
+    // onto the UNNEST columns so downstream nodes see the intended names
+    // without keeping the redundant Project operator in the graph.
+    if (isRedundant) {
+      for (auto i = 0; i < unnestTable->columns.size(); i++) {
+        VELOX_CHECK(i < proj_names.size());
+        unnestTable->columns[i]->setAlias(toName(proj_names[i]));
+      }
+
+      // If the ordinality column exists and the Project has one more name
+      // than the number of UNNEST data columns for ordinality column ensure
+      // in redundancy check, we apply that alias to the ordinality column
+      // as well.
+      auto ordinalityColumn = unnestTable->ordinalityColumn;
+      if (ordinalityColumn &&
+          (proj_names.size() == unnestTable->columns.size() + 1)) {
+        ordinalityColumn->setAlias(toName(proj_names.back()));
+      }
+    }
+
+    // Move up to the next parent if it is also a Project. We keep climbing
+    // as long as the ancestry is a chain of consecutive Projects, stopping
+    // at the first non-Project parent or when there are no more parents.
+    parent = parents_[parent];
+  }
+
   auto* edge =
       JoinEdge::makeUnnest(leftTable, unnestTable, std::move(unnestExprs));
 
@@ -2032,9 +2116,9 @@ void ToGraph::processSubqueries(
           continue;
         }
 
-        // TODO Handle the case when subquery returns no rows. Fail if subquery
-        // is used in a comparison (x = <subquery>), constant fold if used as an
-        // IN LIST (x IN <subquery>).
+        // TODO Handle the case when subquery returns no rows. Fail if
+        // subquery is used in a comparison (x = <subquery>), constant fold if
+        // used as an IN LIST (x IN <subquery>).
       }
 
       subqueries_.emplace(subquery, subqueryDt->columns.front());
@@ -2088,7 +2172,8 @@ void ToGraph::processSubqueries(
     VELOX_CHECK_EQ(1, subqueryDt->columns.size());
     VELOX_CHECK(correlatedConjuncts_.empty());
 
-    // Add a join edge and replace 'expr' with 'mark' column in the join output.
+    // Add a join edge and replace 'expr' with 'mark' column in the join
+    // output.
     const auto* markColumn = addMarkColumn();
 
     auto leftKey = translateExpr(expr->inputAt(0));
@@ -2553,6 +2638,14 @@ void ToGraph::makeQueryGraph(
     return;
   }
 
+  // If the current node has a single input, remember the parent relationship.
+  // We track the parent of the input node so that later phases (e.g., pruning
+  // or collapsing redundant projects) can walk up the plan graph and reason
+  // about ancestors. This is a temporary mapping maintained during traversal.
+  if (node.hasOnlyInput()) {
+    parents_[node.onlyInput().get()] = &node;
+  }
+
   ToGraphContext ctx{&node};
   velox::ExceptionContextSetter exceptionContext{makeExceptionContext(&ctx)};
   switch (node.kind()) {
@@ -2753,6 +2846,14 @@ void ToGraph::makeQueryGraph(
     default:
       VELOX_NYI(
           "Unsupported PlanNode {}", lp::NodeKindName::toName(node.kind()));
+  }
+
+  // When we're done processing a node with a single input, clean up the
+  // temporary parent mapping we recorded earlier in makeQueryGraph(). This
+  // prevents stale parent pointers from lingering after we've finished
+  // traversing that branch.
+  if (node.hasOnlyInput()) {
+    parents_.erase(node.onlyInput().get());
   }
 }
 

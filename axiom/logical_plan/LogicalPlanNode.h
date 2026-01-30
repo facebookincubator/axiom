@@ -100,6 +100,11 @@ class LogicalPlanNode {
     return inputs_;
   }
 
+  // Returns true if this node has exactly one input; false otherwise.
+  bool hasOnlyInput() const {
+    return inputs_.size() == 1;
+  }
+
   /// Returns the only input. Throws if there are zero or more than one inputs.
   const LogicalPlanNodePtr& onlyInput() const {
     VELOX_USER_CHECK_EQ(1, inputs_.size());

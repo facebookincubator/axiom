@@ -151,6 +151,11 @@ class Column : public Expr {
     return alias_ != nullptr ? alias_ : toString();
   }
 
+  /// Sets an alias for this column. Pass nullptr to clear the alias.
+  void setAlias(Name alias) const {
+    alias_ = alias;
+  }
+
   /// Asserts that 'this' and 'other' are joined on equality. This has a
   /// transitive effect, so if a and b are previously asserted equal and c is
   /// asserted equal to b, a and c are also equal.
@@ -181,7 +186,7 @@ class Column : public Expr {
   PlanObjectCP relation_;
 
   // Optional alias copied from the the logical plan.
-  Name alias_;
+  mutable Name alias_;
 
   // Equivalence class. Lists all columns directly or indirectly asserted equal
   // to 'this'.
