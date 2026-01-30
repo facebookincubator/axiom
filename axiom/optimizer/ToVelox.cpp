@@ -1390,6 +1390,13 @@ velox::core::PlanNodePtr ToVelox::makeValues(
     }
   }
 
+  if (newValues.empty()) {
+    auto* pool = queryCtx()->optimization()->evaluator()->pool();
+    newValues.emplace_back(
+        std::dynamic_pointer_cast<velox::RowVector>(
+            velox::BaseVector::create(newType, 0, pool)));
+  }
+
   auto valuesNode =
       std::make_shared<velox::core::ValuesNode>(nextId(), std::move(newValues));
 

@@ -953,6 +953,72 @@ TEST_F(PlanTest, limitAfterOrderBy) {
   }
 }
 
+TEST_F(PlanTest, zeroLimit) {
+  testConnector_->addTable("t", ROW({"a"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x"}, BIGINT()));
+
+  const auto planSql = [&](const std::string& sql) {
+    return toSingleNodePlan(parseSelect(sql, kTestConnectorId));
+  };
+
+  {
+    const auto matcher = core::PlanMatcherBuilder{}.values().build();
+
+    {
+      const auto query = "SELECT * FROM t LIMIT 0";
+      SCOPED_TRACE(query);
+      AXIOM_ASSERT_PLAN(planSql(query), matcher);
+    }
+    {
+      const auto query = "SELECT * FROM t ORDER BY a LIMIT 0";
+      SCOPED_TRACE(query);
+      AXIOM_ASSERT_PLAN(planSql(query), matcher);
+    }
+    {
+      const auto query = "SELECT * FROM t OFFSET 1 LIMIT 0";
+      SCOPED_TRACE(query);
+      AXIOM_ASSERT_PLAN(planSql(query), matcher);
+    }
+    {
+      const auto query = "SELECT * FROM t ORDER BY a OFFSET 1 LIMIT 0";
+      SCOPED_TRACE(query);
+      AXIOM_ASSERT_PLAN(planSql(query), matcher);
+    }
+    {
+      const auto query = "SELECT * FROM (SELECT * FROM t LIMIT 1) OFFSET 1";
+      SCOPED_TRACE(query);
+      AXIOM_ASSERT_PLAN(planSql(query), matcher);
+    }
+    {
+      const auto query =
+          "SELECT * FROM (SELECT * FROM t ORDER BY a LIMIT 1) OFFSET 1";
+      SCOPED_TRACE(query);
+      AXIOM_ASSERT_PLAN(planSql(query), matcher);
+    }
+  }
+
+  {
+    const auto query = "SELECT count(*) FROM (SELECT * FROM t LIMIT 0)";
+    SCOPED_TRACE(query);
+    const auto matcher =
+        core::PlanMatcherBuilder{}.values().aggregation().build();
+    AXIOM_ASSERT_PLAN(planSql(query), matcher);
+  }
+
+  {
+    const auto query =
+        "SELECT * FROM t, (SELECT * FROM u LIMIT 0) s WHERE a = x";
+    SCOPED_TRACE(query);
+    const auto matcher = core::PlanMatcherBuilder{}
+                             .values()
+                             .hashJoin(
+                                 core::PlanMatcherBuilder{}.tableScan().build(),
+                                 core::JoinType::kInner)
+                             .build();
+    AXIOM_ASSERT_PLAN(planSql(query), matcher);
+  }
+}
+
 TEST_F(PlanTest, parallelCse) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, INTEGER()));
 
