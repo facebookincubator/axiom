@@ -358,21 +358,26 @@ TEST_F(JoinTest, joinWithComputedKeys) {
 TEST_F(JoinTest, crossJoin) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+  testConnector_->addTable("v", ROW({"n", "m"}, BIGINT()));
+
+  auto matchScan = [&](const auto& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
   {
     lp::PlanBuilder::Context ctx{kTestConnectorId};
     auto logicalPlan =
         lp::PlanBuilder{ctx}.from({"t", "u"}).project({"a + x"}).build();
 
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("t")
-            .nestedLoopJoin(core::PlanMatcherBuilder().tableScan("u").build())
-            .project({"a + x"})
-            .build();
+    auto matcher = matchScan("t")
+                       .nestedLoopJoin(matchScan("u").build())
+                       .project({"a + x"})
+                       .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
   }
 
   {
@@ -380,15 +385,15 @@ TEST_F(JoinTest, crossJoin) {
     auto logicalPlan =
         lp::PlanBuilder{ctx}.from({"t", "u"}).filter("a > x").build();
 
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("t")
-            .nestedLoopJoin(core::PlanMatcherBuilder().tableScan("u").build())
-            .filter("a > x")
-            .build();
+    auto matcher = matchScan("t")
+                       .nestedLoopJoin(matchScan("u").build())
+                       .filter("a > x")
+                       .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
   }
 
   {
@@ -398,15 +403,30 @@ TEST_F(JoinTest, crossJoin) {
                            .aggregate({}, {"count(1)"})
                            .build();
 
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("t")
-            .nestedLoopJoin(core::PlanMatcherBuilder().tableScan("u").build())
-            .aggregation()
-            .build();
+    auto matcher = matchScan("t")
+                       .nestedLoopJoin(matchScan("u").build())
+                       .aggregation()
+                       .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
+  }
+
+  {
+    auto logicalPlan =
+        parseSelect("SELECT * FROM t, u, v WHERE a = x", kTestConnectorId);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build())
+                       .nestedLoopJoin(matchScan("v").build())
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
   }
 
   // Cross join with a single-row subquery whose output is not used. The
@@ -416,10 +436,12 @@ TEST_F(JoinTest, crossJoin) {
     auto logicalPlan = parseSelect(
         "SELECT a FROM t, (SELECT count(*) FROM u)", kTestConnectorId);
 
-    auto matcher = core::PlanMatcherBuilder().tableScan("t").build();
+    auto matcher = matchScan("t").build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
   }
 
   {
@@ -427,15 +449,14 @@ TEST_F(JoinTest, crossJoin) {
     auto logicalPlan = parseSelect(
         "SELECT * FROM t, (SELECT count(*) FROM u)", kTestConnectorId);
 
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("t")
-            .nestedLoopJoin(
-                core::PlanMatcherBuilder().tableScan("u").aggregation().build())
-            .build();
+    auto matcher = matchScan("t")
+                       .nestedLoopJoin(matchScan("u").aggregation().build())
+                       .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
   }
 
   // Cross join with a subquery that looks like single-row, but may not be. The
@@ -446,14 +467,12 @@ TEST_F(JoinTest, crossJoin) {
         "SELECT a FROM t, (SELECT * FROM u LIMIT 1)", kTestConnectorId);
 
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("t")
-            .nestedLoopJoin(
-                core::PlanMatcherBuilder().tableScan("u").limit().build())
-            .build();
+        matchScan("t").nestedLoopJoin(matchScan("u").limit().build()).build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
   }
 }
 

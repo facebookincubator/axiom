@@ -20,6 +20,7 @@
 #include <utility>
 #include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
@@ -1216,17 +1217,18 @@ folly::F14FastMap<PlanObjectCP, ExprCP> makeJoinColumnMapping(
 }
 
 folly::F14FastMap<PlanObjectCP, ExprCP> makeJoinColumnMapping(
-    JoinEdgeP joinEdge,
-    const ExprVector& leftColumns,
-    const ExprVector& rightColumns) {
+    const ColumnVector& leftColumns,
+    const ExprVector& leftExprs,
+    const ColumnVector& rightColumns,
+    const ExprVector& rightExprs) {
   folly::F14FastMap<PlanObjectCP, ExprCP> mapping;
 
-  for (auto i = 0; i < joinEdge->leftColumns().size(); ++i) {
-    mapping.emplace(joinEdge->leftColumns()[i], leftColumns[i]);
+  for (auto i = 0; i < leftColumns.size(); ++i) {
+    mapping.emplace(leftColumns[i], leftExprs[i]);
   }
 
-  for (auto i = 0; i < joinEdge->rightColumns().size(); ++i) {
-    mapping.emplace(joinEdge->rightColumns()[i], rightColumns[i]);
+  for (auto i = 0; i < rightColumns.size(); ++i) {
+    mapping.emplace(rightColumns[i], rightExprs[i]);
   }
   return mapping;
 }
@@ -1358,30 +1360,28 @@ void Optimization::joinByHash(
 
   ColumnCP mark = nullptr;
 
-  auto* joinEdge = candidate.join;
-
   PlanObjectSet joinColumns;
-  joinColumns.unionObjects(joinEdge->leftColumns());
-  joinColumns.unionObjects(joinEdge->rightColumns());
+  joinColumns.unionObjects(probe.columns);
+  joinColumns.unionObjects(build.columns);
 
   // Non-trivial projections over input needed by the join must be computed
   // first. These projections include expressions used in join keys and
   // joinEdge.{right, left}Columns.
 
   PrecomputeProjection precomputeProbe(probeInput, state.dt);
-  auto leftColumns = precomputeProbe.toColumns(
-      joinEdge->leftExprs(), &joinEdge->leftColumns());
+  auto probeJoinColumns =
+      precomputeProbe.toColumns(probe.exprs, &probe.columns);
   auto probeKeys = precomputeProbe.toColumns(probe.keys);
   probeInput = std::move(precomputeProbe).maybeProject();
 
   PrecomputeProjection precomputeBuild(buildInput, state.dt);
-  auto rightColumns = precomputeBuild.toColumns(
-      joinEdge->rightExprs(), &joinEdge->rightColumns());
+  auto buildJoinColumns =
+      precomputeBuild.toColumns(build.exprs, &build.columns);
   auto buildKeys = precomputeBuild.toColumns(build.keys);
   buildInput = std::move(precomputeBuild).maybeProject();
 
-  joinColumnMapping =
-      makeJoinColumnMapping(candidate.join, leftColumns, rightColumns);
+  joinColumnMapping = makeJoinColumnMapping(
+      probe.columns, probeJoinColumns, build.columns, buildJoinColumns);
 
   ProjectionBuilder projectionBuilder;
   bool needsProjection = false;
@@ -1515,8 +1515,6 @@ void Optimization::joinByHashRight(
   MemoKey memoKey = MemoKey::create(
       candidate.tables[0], probeColumns, probeTables, candidate.existences);
 
-  auto* joinEdge = candidate.join;
-
   bool needsShuffle = false;
   auto probePlan = makePlan(
       *state.dt,
@@ -1531,16 +1529,16 @@ void Optimization::joinByHashRight(
   RelationOpPtr probeInput = probePlan->op;
 
   PrecomputeProjection precomputeProbe(probeInput, state.dt);
-  auto rightColumns = precomputeProbe.toColumns(
-      joinEdge->rightExprs(), &joinEdge->rightColumns());
+  auto probeJoinColumns =
+      precomputeProbe.toColumns(probe.exprs, &probe.columns);
   auto probeKeys = precomputeProbe.toColumns(probe.keys);
   probeInput = std::move(precomputeProbe).maybeProject();
 
   RelationOpPtr buildInput = plan;
 
   PrecomputeProjection precomputeBuild(buildInput, state.dt);
-  auto leftColumns = precomputeBuild.toColumns(
-      joinEdge->leftExprs(), &joinEdge->leftColumns());
+  auto buildJoinColumns =
+      precomputeBuild.toColumns(build.exprs, &build.columns);
   auto buildKeys = precomputeBuild.toColumns(build.keys);
   buildInput = std::move(precomputeBuild).maybeProject();
 
@@ -1562,12 +1560,12 @@ void Optimization::joinByHashRight(
   ColumnCP mark = nullptr;
 
   PlanObjectSet joinColumns;
-  joinColumns.unionObjects(joinEdge->leftColumns());
-  joinColumns.unionObjects(joinEdge->rightColumns());
+  joinColumns.unionObjects(probe.columns);
+  joinColumns.unionObjects(build.columns);
 
   // Mapping from join output column to probe or build side input.
-  auto joinColumnMapping =
-      makeJoinColumnMapping(joinEdge, leftColumns, rightColumns);
+  auto joinColumnMapping = makeJoinColumnMapping(
+      build.columns, buildJoinColumns, probe.columns, probeJoinColumns);
 
   ProjectionBuilder projectionBuilder;
   bool needsProjection = false;
@@ -1651,6 +1649,8 @@ void Optimization::crossJoin(
     std::vector<NextJoin>& toTry) {
   VELOX_CHECK_EQ(candidate.tables.size(), 1);
   VELOX_CHECK_EQ(candidate.existences.size(), 0);
+
+  PlanStateSaver save(state, candidate);
 
   const auto* table = candidate.tables[0];
 
@@ -1744,6 +1744,7 @@ void Optimization::crossJoinUnnest(
     const JoinCandidate& candidate,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
+  PlanStateSaver save(state, candidate);
   for (const auto* table : candidate.tables) {
     VELOX_CHECK(table->is(PlanType::kUnnestTableNode));
     // We add unnest table before compute downstream columns because

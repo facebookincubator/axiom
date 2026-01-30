@@ -228,7 +228,9 @@ JoinSide JoinEdge::sideOf(PlanObjectCP side, bool other) const {
         rightExists_,
         rightNotExists_,
         markColumn_,
-        rightUnique_};
+        rightUnique_,
+        rightColumns_,
+        rightExprs_};
   }
 
   return {
@@ -240,7 +242,9 @@ JoinSide JoinEdge::sideOf(PlanObjectCP side, bool other) const {
       false,
       false,
       markColumn_,
-      leftUnique_};
+      leftUnique_,
+      leftColumns_,
+      leftExprs_};
 }
 
 bool JoinEdge::isBroadcastableType() const {
