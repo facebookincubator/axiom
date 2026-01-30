@@ -709,8 +709,7 @@ void alignJoinSides(
 
   auto part = joinKeyPartition(input, keys);
   if (part.empty()) {
-    Distribution distribution{
-        otherInput->distribution().distributionType(), keys};
+    Distribution distribution{DistributionType{}, keys};
     auto* repartition =
         make<Repartition>(input, std::move(distribution), input->columns());
     state.addCost(*repartition);
@@ -1318,17 +1317,13 @@ void Optimization::joinByHash(
 
   // Mapping from join output column to probe or build side input.
   auto joinColumnMapping = makeJoinColumnMapping(candidate.join);
-
-  // The build side dt does not need to produce columns that it uses
-  // internally, only the columns that are downstream if we consider
-  // the build to be placed. So, provisionally mark build side tables
-  // as placed for the downstreamColumns().
-  state.placed.unionSet(buildTables);
   buildColumns.intersect(
       translateToJoinInput(state.downstreamColumns(), joinColumnMapping));
 
   buildColumns.unionColumns(build.keys);
   buildColumns.unionSet(buildFilterColumns);
+
+  state.placed.unionSet(buildTables);
   state.columns.unionSet(buildColumns);
 
   MemoKey memoKey = MemoKey::create(

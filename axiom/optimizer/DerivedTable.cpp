@@ -517,6 +517,12 @@ ExprCP DerivedTable::exportExpr(ExprCP expr) {
   return replaceInputs(expr, exprs, columns);
 }
 
+void DerivedTable::exportExprs(ExprVector& exprs) {
+  for (auto& expr : exprs) {
+    expr = exportExpr(expr);
+  }
+}
+
 ExprCP DerivedTable::importExpr(ExprCP expr) {
   return replaceInputs(expr, columns, exprs);
 }

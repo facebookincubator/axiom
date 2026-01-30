@@ -1248,6 +1248,7 @@ void ToGraph::addUnnest(const lp::UnnestNode& unnest) {
     leftTable = unnestDt;
     if (!needsSeparateUnnest) {
       finalizeDt(*unnest.onlyInput());
+      unnestDt->exportExprs(unnestExprs);
     }
   }
 
@@ -2343,6 +2344,20 @@ bool hasNondeterministic(const lp::ExprPtr& expr) {
   return std::ranges::any_of(expr->inputs(), hasNondeterministic);
 }
 
+bool hasSubquery(const lp::ExprPtr& expr) {
+  if (expr->isSubquery()) {
+    return true;
+  }
+
+  for (const auto& input : expr->inputs()) {
+    if (hasSubquery(input)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 } // namespace
 
 void ToGraph::translateSetJoin(const lp::SetNode& set) {
@@ -2542,23 +2557,29 @@ void ToGraph::makeQueryGraph(
     case lp::NodeKind::kFilter: {
       const auto& input = *node.onlyInput();
       const auto& filter = *node.as<lp::FilterNode>();
+
+      if (hasSubquery(filter.predicate())) {
+        excludeOuterJoins = true;
+      }
+
       if (hasNondeterministic(filter.predicate())) {
         auto* outerDt = std::exchange(currentDt_, newDt());
-        makeQueryGraph(input, kAllAllowedInDt);
+        makeQueryGraph(input, kAllAllowedInDt, excludeOuterJoins);
         addFilter(input, filter.predicate());
         finalizeDt(node, outerDt);
         break;
       }
-      makeQueryGraph(input, allowedInDt);
+
+      makeQueryGraph(input, allowedInDt, excludeOuterJoins);
       addFilter(input, filter.predicate());
     } break;
     case lp::NodeKind::kProject: {
-      makeQueryGraph(*node.onlyInput(), allowedInDt);
+      makeQueryGraph(*node.onlyInput(), allowedInDt, excludeOuterJoins);
       addProjection(*node.as<lp::ProjectNode>());
     } break;
     case lp::NodeKind::kAggregate: {
       const auto& input = *node.onlyInput();
-      makeQueryGraph(input, allowedInDt);
+      makeQueryGraph(input, allowedInDt, excludeOuterJoins);
       if (currentDt_->hasAggregation() || currentDt_->hasLimit()) {
         finalizeDt(input);
       } else if (currentDt_->hasOrderBy()) {
@@ -2698,7 +2719,8 @@ void ToGraph::makeQueryGraph(
       currentDt_ = outerDt;
     } break;
     case lp::NodeKind::kUnnest: {
-      makeQueryGraph(*node.onlyInput(), allowedInDt);
+      makeQueryGraph(
+          *node.onlyInput(), allowedInDt, /*excludeOuterJoins=*/true);
       addUnnest(*node.as<lp::UnnestNode>());
     } break;
     case lp::NodeKind::kTableWrite: {

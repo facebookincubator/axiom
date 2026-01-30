@@ -36,6 +36,15 @@ class JoinTest : public test::QueryTestBase {
     testConnector_ =
         std::make_shared<connector::TestConnector>(kTestConnectorId);
     velox::connector::registerConnector(testConnector_);
+
+    testConnector_->addTable(
+        "nation",
+        ROW({"n_nationkey", "n_name", "n_regionkey", "n_comment"},
+            {BIGINT(), VARCHAR(), BIGINT(), VARCHAR()}));
+    testConnector_->addTable(
+        "region",
+        ROW({"r_regionkey", "r_name", "r_comment"},
+            {BIGINT(), VARCHAR(), VARCHAR()}));
   }
 
   void TearDown() override {
@@ -258,13 +267,6 @@ TEST_F(JoinTest, outerJoinWithInnerJoin) {
 }
 
 TEST_F(JoinTest, nestedOuterJoins) {
-  testConnector_->addTable(
-      "nation",
-      ROW({"n_nationkey", "n_name", "n_regionkey"},
-          {BIGINT(), VARCHAR(), BIGINT()}));
-  testConnector_->addTable(
-      "region", ROW({"r_regionkey", "r_name"}, {BIGINT(), VARCHAR()}));
-
   auto sql =
       "SELECT r2.r_name "
       "FROM nation n "
@@ -294,13 +296,6 @@ TEST_F(JoinTest, nestedOuterJoins) {
 }
 
 TEST_F(JoinTest, joinWithComputedKeys) {
-  testConnector_->addTable(
-      "nation",
-      ROW({"n_nationkey", "n_name", "n_regionkey"},
-          {BIGINT(), VARCHAR(), BIGINT()}));
-  testConnector_->addTable(
-      "region", ROW({"r_regionkey", "r_name"}, {BIGINT(), VARCHAR()}));
-
   auto sql =
       "SELECT count(1) FROM nation n RIGHT JOIN region ON coalesce(n_regionkey, 1) = r_regionkey";
 
@@ -658,6 +653,28 @@ TEST_F(JoinTest, leftJoinOverValues) {
     auto plan = distributedPlan->fragments().at(0).fragment.planNode;
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+}
+
+TEST_F(JoinTest, leftThenFilter) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+
+  auto query =
+      "SELECT * FROM t LEFT JOIN (SELECT x, y + 1 as z FROM u) ON a = x WHERE z > 0";
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan("t")
+          .hashJoin(
+              core::PlanMatcherBuilder().tableScan("u").project().build(),
+              core::JoinType::kLeft)
+          .filter()
+          .project()
+          .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 } // namespace
