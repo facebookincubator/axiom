@@ -114,6 +114,25 @@ class Expr : public velox::ISerializable {
     return kind_ == ExprKind::kSubquery;
   }
 
+  /// Returns true if the expression appears constant such that it can be
+  /// evaluated without any runtime dependencies. Literals and some calls
+  /// with constant inputs are constant foldable while input references,
+  /// subqueries, and window functions are not.
+  bool looksConstant() const {
+    if (isConstant()) {
+      return true;
+    }
+    if (isInputReference()) {
+      return false;
+    }
+    for (const auto& input : inputs_) {
+      if (!input->looksConstant()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /// Caller must ensure this kind is correct.
   template <typename T>
   const T* as() const {
