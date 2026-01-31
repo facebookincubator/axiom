@@ -25,11 +25,12 @@ Subqueries are supported in both:
 
 | File | Purpose |
 |------|---------|
-| `ToGraph.cpp` | Core subquery processing (`processSubqueries`, `translateSubquery`) |
-| `ToGraph.h` | Interface definitions and correlation state fields |
+| `ToGraph.cpp` | Core subquery processing (`processSubqueries`, `translateSubquery`, `extractDecorrelatedJoin`) |
+| `ToGraph.h` | Interface definitions, correlation state fields, `DecorrelatedJoin` struct |
 | `QueryGraph.h` | `JoinEdge` representation including `makeExists` factory |
 | `DerivedTable.h` | Query graph nodes, `singleRowDts` for non-correlated scalars |
-| `tests/SubqueryTest.cpp` | Test suite demonstrating expected behavior |
+| `tests/SubqueryTest.cpp` | Test suite for scalar, EXISTS, and uncorrelated subqueries |
+| `tests/JoinTest.cpp` | Test suite including correlated IN subqueries |
 
 ## Data Structures
 
@@ -77,6 +78,24 @@ Semi-joins use boolean "mark" columns to track row membership:
 auto* mark = toName(fmt::format("__mark{}", markCounter_++));
 auto* markColumn = make<Column>(mark, currentDt_, Value{toType(velox::BOOLEAN()), 2});
 ```
+
+### DecorrelatedJoin Struct
+
+When processing correlated IN and EXISTS subqueries, correlation conjuncts are
+extracted into a common structure:
+
+```cpp
+struct DecorrelatedJoin {
+  PlanObjectSet leftTables;  // Outer tables referenced by correlation
+  ExprVector leftKeys;       // Keys from outer query (for equalities)
+  ExprVector rightKeys;      // Keys from subquery (for equalities)
+  ExprVector filter;         // Non-equality correlation conditions
+};
+```
+
+The `extractDecorrelatedJoin()` helper processes `correlatedConjuncts_` and
+separates equality conditions (which become join keys) from non-equality
+conditions (which become join filters).
 
 ## Processing Flow
 
@@ -149,7 +168,7 @@ subqueries_.emplace(subquery, subqueryDt->columns.back());
 
 ### IN Subqueries
 
-IN subqueries create **semi-joins** with a mark column and `nullAwareIn=true`:
+**Uncorrelated IN subqueries** create semi-joins with a mark column and `nullAwareIn=true`:
 
 ```cpp
 // x IN <subquery>
@@ -158,6 +177,28 @@ auto* edge = JoinEdge::makeExists(
 currentDt_->joins.push_back(edge);
 edge->addEquality(leftKey, subqueryDt->columns.front());
 subqueries_.emplace(expr, markColumn);
+```
+
+**Correlated IN subqueries** use `extractDecorrelatedJoin()` to process correlation
+conditions and create a semi-join with both correlation equalities and IN equality:
+
+```cpp
+auto decorrelated = extractDecorrelatedJoin(subqueryDt);
+decorrelated.leftTables.add(leftTable);
+correlatedConjuncts_.clear();
+
+auto* edge = JoinEdge::makeExists(
+    joinLeftTable, subqueryDt, markColumn,
+    std::move(decorrelated.filter), /*nullAwareIn=*/true);
+currentDt_->joins.push_back(edge);
+
+// Add correlation equalities.
+for (auto i = 0; i < decorrelated.leftKeys.size(); ++i) {
+  edge->addEquality(decorrelated.leftKeys[i], decorrelated.rightKeys[i]);
+}
+
+// Add IN equality.
+edge->addEquality(leftKey, subqueryDt->columns.front());
 ```
 
 The resulting join types are:
@@ -187,18 +228,27 @@ CROSS JOIN (
 WHERE exists_flag
 ```
 
-**Correlated EXISTS** creates a semi-join with mark column:
+**Correlated EXISTS** uses `extractDecorrelatedJoin()` to process correlation
+conditions and create a mark join:
 
 ```cpp
+auto decorrelated = extractDecorrelatedJoin(subqueryDt);
+if (decorrelated.leftKeys.empty()) {
+  VELOX_CHECK_EQ(decorrelated.leftTables.size(), 1);
+}
+correlatedConjuncts_.clear();
+
+const auto* markColumn = addMarkColumn();
+
 auto* existsEdge = JoinEdge::makeExists(
-    leftTable, subqueryDt, markColumn, std::move(filter));
+    leftTable, subqueryDt, markColumn, std::move(decorrelated.filter));
 currentDt_->joins.push_back(existsEdge);
 
-for (auto i = 0; i < leftKeys.size(); ++i) {
-  existsEdge->addEquality(leftKeys[i], rightKeys[i]);
+for (auto i = 0; i < decorrelated.leftKeys.size(); ++i) {
+  existsEdge->addEquality(decorrelated.leftKeys[i], decorrelated.rightKeys[i]);
 }
 
-subqueries_.emplace(expr, markColumn);
+subqueries_.emplace(exists, markColumn);
 ```
 
 ## JoinEdge Representation
@@ -210,7 +260,8 @@ static JoinEdge* makeExists(
     PlanObjectCP leftTable,
     PlanObjectCP rightTable,
     ColumnCP markColumn = nullptr,
-    ExprVector filter = {}) {
+    ExprVector filter = {},
+    bool nullAwareIn = false) {
   return make<JoinEdge>(
       leftTable,
       rightTable,
@@ -218,6 +269,7 @@ static JoinEdge* makeExists(
           .filter = std::move(filter),
           .rightExists = true,
           .markColumn = markColumn,
+          .nullAwareIn = nullAwareIn,
       });
 }
 ```
@@ -300,6 +352,31 @@ SELECT * FROM nation
 WHERE n_regionkey NOT IN (SELECT r_regionkey FROM region WHERE r_name > 'ASIA')
 
 -- Plan: nation → HashJoin(kAnti) → region
+```
+
+### Correlated IN Subquery
+
+```sql
+SELECT c.c_custkey, c.c_name FROM customer AS c
+WHERE c.c_custkey IN (
+  SELECT o.o_custkey FROM orders AS o
+  WHERE o.o_custkey = c.c_custkey)
+
+-- Plan: customer → HashJoin(kLeftSemiFilter) → orders
+```
+
+Note: In this case, the IN equality (`c.c_custkey = o.o_custkey`) and the
+correlation equality are the same, resulting in a single join key.
+
+### Correlated NOT IN Subquery
+
+```sql
+SELECT c.c_custkey, c.c_name FROM customer AS c
+WHERE c.c_custkey NOT IN (
+  SELECT o.o_custkey FROM orders AS o
+  WHERE o.o_custkey = c.c_custkey)
+
+-- Plan: customer → HashJoin(kAnti, nullAware=true) → orders
 ```
 
 ### Correlated EXISTS
@@ -394,18 +471,6 @@ FROM region
    folding (line 274)
 
 3. Support ORDER BY and LIMIT in constant foldable subqueries (lines 278-283)
-
-## Test Coverage
-
-The `SubqueryTest.cpp` file provides comprehensive test coverage:
-
-| Test Case | Description |
-|-----------|-------------|
-| `scalar` | Uncorrelated `=`, `IN`, `NOT IN` with type coercion |
-| `foldable` | Constant folding of `max`/`min` aggregates |
-| `correlatedExists` | Equality conditions, non-equality conditions, multiple outer tables |
-| `uncorrelatedExists` | `COUNT(*)` wrapper, `NOT EXISTS` |
-| `scalarInProjection` | Scalar subqueries in SELECT list (correlated and uncorrelated) |
 
 ## Architectural Notes
 

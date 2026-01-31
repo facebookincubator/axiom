@@ -2056,6 +2056,38 @@ ColumnCP ToGraph::addMarkColumn() {
   return markColumn;
 }
 
+ToGraph::DecorrelatedJoin ToGraph::extractDecorrelatedJoin(
+    DerivedTableP subqueryDt) {
+  DecorrelatedJoin result;
+
+  for (const auto* conjunct : correlatedConjuncts_) {
+    conjunct = subqueryDt->exportExpr(conjunct);
+
+    auto tables = conjunct->allTables();
+    tables.erase(subqueryDt);
+
+    VELOX_CHECK_EQ(
+        1,
+        tables.size(),
+        "Correlated conjuncts referencing multiple outer tables are not supported: {}",
+        conjunct->toString());
+    auto outerTable = tables.onlyObject();
+
+    result.leftTables.add(outerTable);
+
+    ExprCP left = nullptr;
+    ExprCP right = nullptr;
+    if (isJoinEquality(conjunct, outerTable, subqueryDt, left, right)) {
+      result.leftKeys.push_back(left);
+      result.rightKeys.push_back(right);
+    } else {
+      result.filter.push_back(conjunct);
+    }
+  }
+
+  return result;
+}
+
 void ToGraph::processSubqueries(
     const lp::LogicalPlanNode& input,
     const lp::ExprPtr& expr,
@@ -2148,7 +2180,6 @@ void ToGraph::processSubqueries(
     auto subqueryDt = translateSubquery(
         *predicate->inputAt(1)->as<lp::SubqueryExpr>()->subquery());
     VELOX_CHECK_EQ(1, subqueryDt->columns.size());
-    VELOX_CHECK(correlatedConjuncts_.empty());
 
     // Add a join edge and replace 'expr' with 'mark' column in the join output.
     const auto* markColumn = addMarkColumn();
@@ -2159,12 +2190,45 @@ void ToGraph::processSubqueries(
         leftTable,
         "<expr> IN <subquery> with multi-table <expr> is not supported yet");
 
-    // IN subqueries use nullAware join semantics.
-    auto* edge = JoinEdge::makeExists(
-        leftTable, subqueryDt, markColumn, /*filter=*/{}, /*nullAwareIn=*/true);
+    if (correlatedConjuncts_.empty()) {
+      // Uncorrelated IN subquery: create semi-join with IN equality only.
+      auto* edge = JoinEdge::makeExists(
+          leftTable,
+          subqueryDt,
+          markColumn,
+          /*filter=*/{},
+          /*nullAwareIn=*/true);
 
-    currentDt_->joins.push_back(edge);
-    edge->addEquality(leftKey, subqueryDt->columns.front());
+      currentDt_->joins.push_back(edge);
+      edge->addEquality(leftKey, subqueryDt->columns.front());
+    } else {
+      // Correlated IN subquery: process correlation conditions and create
+      // semi-join with both correlation equalities and IN equality.
+      auto decorrelated = extractDecorrelatedJoin(subqueryDt);
+      decorrelated.leftTables.add(leftTable);
+      correlatedConjuncts_.clear();
+
+      PlanObjectCP joinLeftTable = nullptr;
+      if (decorrelated.leftTables.size() == 1) {
+        joinLeftTable = decorrelated.leftTables.onlyObject();
+      }
+
+      auto* edge = JoinEdge::makeExists(
+          joinLeftTable,
+          subqueryDt,
+          markColumn,
+          std::move(decorrelated.filter),
+          /*nullAwareIn=*/true);
+      currentDt_->joins.push_back(edge);
+
+      // Add correlation equalities.
+      for (auto i = 0; i < decorrelated.leftKeys.size(); ++i) {
+        edge->addEquality(decorrelated.leftKeys[i], decorrelated.rightKeys[i]);
+      }
+
+      // Add IN equality.
+      edge->addEquality(leftKey, subqueryDt->columns.front());
+    }
 
     subqueries_.emplace(predicate, markColumn);
   }
@@ -2195,54 +2259,26 @@ void ToGraph::processSubqueries(
       currentDt_->addTable(subqueryDt);
       subqueryDt->makeInitialPlan();
 
-      PlanObjectSet leftTables;
-      ExprVector leftKeys;
-      ExprVector rightKeys;
-      ExprVector filter;
-      for (auto i = 0; i < correlatedConjuncts_.size(); ++i) {
-        const auto* conjunct = subqueryDt->exportExpr(correlatedConjuncts_[i]);
-
-        auto tables = conjunct->allTables();
-        tables.erase(subqueryDt);
-
-        VELOX_CHECK_EQ(
-            1,
-            tables.size(),
-            "Correlated conjuncts referencing multiple outer tables are not supported: {}",
-            conjunct->toString());
-        auto leftTable = tables.onlyObject();
-
-        leftTables.add(leftTable);
-
-        ExprCP left = nullptr;
-        ExprCP right = nullptr;
-        if (isJoinEquality(conjunct, leftTable, subqueryDt, left, right)) {
-          leftKeys.push_back(left);
-          rightKeys.push_back(right);
-        } else {
-          filter.push_back(conjunct);
-        }
+      auto decorrelated = extractDecorrelatedJoin(subqueryDt);
+      if (decorrelated.leftKeys.empty()) {
+        VELOX_CHECK_EQ(decorrelated.leftTables.size(), 1);
       }
-
-      if (leftKeys.empty()) {
-        VELOX_CHECK_EQ(leftTables.size(), 1);
-      }
-
       correlatedConjuncts_.clear();
 
       const auto* markColumn = addMarkColumn();
 
       PlanObjectCP leftTable = nullptr;
-      if (leftTables.size() == 1) {
-        leftTable = leftTables.onlyObject();
+      if (decorrelated.leftTables.size() == 1) {
+        leftTable = decorrelated.leftTables.onlyObject();
       }
 
       auto* existsEdge = JoinEdge::makeExists(
-          leftTable, subqueryDt, markColumn, std::move(filter));
+          leftTable, subqueryDt, markColumn, std::move(decorrelated.filter));
       currentDt_->joins.push_back(existsEdge);
 
-      for (auto i = 0; i < leftKeys.size(); ++i) {
-        existsEdge->addEquality(leftKeys[i], rightKeys[i]);
+      for (auto i = 0; i < decorrelated.leftKeys.size(); ++i) {
+        existsEdge->addEquality(
+            decorrelated.leftKeys[i], decorrelated.rightKeys[i]);
       }
 
       subqueries_.emplace(exists, markColumn);
