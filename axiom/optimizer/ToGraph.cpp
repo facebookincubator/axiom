@@ -2678,6 +2678,16 @@ void ToGraph::makeQueryGraph(
       auto* agg = translateAggregation(*node.as<lp::AggregateNode>());
 
       if (!correlatedConjuncts_.empty()) {
+        // For EXISTS subqueries with DISTINCT (aggregation with no aggregate
+        // functions), the DISTINCT can be dropped since EXISTS only checks row
+        // existence. Skip adding grouping keys from correlation and just keep
+        // the correlation conjuncts for later processing.
+        if (agg->aggregates().empty()) {
+          // This is a DISTINCT (aggregation with only grouping keys, no
+          // aggregates). For EXISTS, we can skip it entirely.
+          break;
+        }
+
         VELOX_CHECK(agg->groupingKeys().empty());
 
         // Expect all conjuncts to have the form of f(outer) = g(inner).
