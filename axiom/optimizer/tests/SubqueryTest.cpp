@@ -408,6 +408,60 @@ TEST_F(SubqueryTest, project) {
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
+  // Uncorrelated scalar subquery in projection with global aggregation in the
+  // outer query.
+  {
+    auto query =
+        "SELECT array_agg(r_name), "
+        "   (SELECT count(*) FROM nation) AS total_nations "
+        "FROM region";
+
+    // The scalar subquery must be cross-joined AFTER the aggregation.
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("region")
+                       .singleAggregation({}, {"array_agg(r_name)"})
+                       .nestedLoopJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("nation")
+                               .singleAggregation({}, {"count(*)"})
+                               .build(),
+                           velox::core::JoinType::kInner)
+                       .project()
+                       .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Uncorrelated scalar subquery in projection with GROUP BY aggregation in the
+  // outer query.
+  {
+    auto query =
+        "SELECT n_regionkey, array_agg(n_name), "
+        "   (SELECT count(*) FROM region) AS total_regions "
+        "FROM nation "
+        "GROUP BY n_regionkey";
+
+    // The scalar subquery must be cross-joined AFTER the aggregation.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .singleAggregation({"n_regionkey"}, {"array_agg(n_name)"})
+            .nestedLoopJoin(
+                core::PlanMatcherBuilder()
+                    .tableScan("region")
+                    .singleAggregation({}, {"count(*)"})
+                    .build(),
+                velox::core::JoinType::kInner)
+            .project()
+            .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
   // IN <subquery> in projection.
   {
     auto query =

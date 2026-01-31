@@ -2095,11 +2095,13 @@ void ToGraph::processSubqueries(
   Subqueries subqueries;
   extractSubqueries(expr, subqueries);
 
-  if (filter) {
-    if (currentDt_->hasLimit() ||
-        (currentDt_->hasAggregation() && !subqueries.empty())) {
-      finalizeDt(input);
-    }
+  if (filter && currentDt_->hasLimit()) {
+    // Filter cannot be added after LIMIT.
+    finalizeDt(input);
+  } else if (currentDt_->hasAggregation() && !subqueries.empty()) {
+    // Scalar subqueries are placed as joins. Joins cannot be added after
+    // aggregation.
+    finalizeDt(input);
   }
 
   for (const auto& subquery : subqueries.scalars) {
