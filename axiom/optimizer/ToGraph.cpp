@@ -87,7 +87,8 @@ ToGraph::ToGraph(
     : schema_{schema},
       evaluator_{evaluator},
       options_{options},
-      equality_{toName(FunctionRegistry::instance()->equality())} {
+      equality_{toName(FunctionRegistry::instance()->equality())},
+      negation_{toName(FunctionRegistry::instance()->negation())} {
   auto* registry = FunctionRegistry::instance();
 
   const auto& reversibleFunctions = registry->reversibleFunctions();
@@ -1685,6 +1686,67 @@ void ToGraph::finalizeSubqueryDt(
   dt->makeInitialPlan();
 }
 
+ColumnCP ToGraph::makeCountStarWrapper(DerivedTableP inputDt) {
+  auto* wrapperDt = newDt();
+  wrapperDt->addTable(inputDt);
+
+  auto countName = toName("count");
+  auto accumulatorType =
+      toType(velox::exec::resolveIntermediateType("count", {}));
+  Value countValue(toType(velox::BIGINT()), 1);
+
+  AggregateCP countAggregate = make<Aggregate>(
+      countName,
+      countValue,
+      ExprVector{},
+      FunctionSet(),
+      /*isDistinct=*/false,
+      /*condition=*/nullptr,
+      accumulatorType,
+      ExprVector{},
+      OrderTypeVector{});
+
+  auto* countColumnName = newCName("__count");
+  auto* countColumn =
+      make<Column>(countColumnName, wrapperDt, countAggregate->value());
+
+  auto* intermediateColumn =
+      make<Column>(countColumnName, wrapperDt, Value{accumulatorType, 1});
+
+  wrapperDt->aggregation = make<AggregationPlan>(
+      ExprVector{},
+      AggregateVector{countAggregate},
+      ColumnVector{countColumn},
+      ColumnVector{intermediateColumn});
+
+  wrapperDt->columns = {countColumn};
+  wrapperDt->exprs = {countColumn};
+
+  currentDt_->addTable(wrapperDt);
+
+  renames_[countColumnName] = countColumn;
+
+  return countColumn;
+}
+
+ExprCP ToGraph::makeNotEqualsZero(ExprCP expr) {
+  auto* zero = make<Literal>(
+      Value(toType(velox::BIGINT()), 1), registerVariant(int64_t{0}));
+  // <expr> = 0
+  auto* equalsZero = make<Call>(
+      equality_,
+      Value(toType(velox::BOOLEAN()), 1),
+      ExprVector{expr, zero},
+      FunctionSet());
+
+  // NOT(<expr> = 0)
+  return make<Call>(
+      negation_,
+      Value(toType(velox::BOOLEAN()), 1),
+      ExprVector{equalsZero},
+      FunctionSet());
+}
+
 namespace {
 const velox::Type* pathType(const velox::Type* type, PathCP path) {
   for (auto& step : path->steps()) {
@@ -1950,7 +2012,8 @@ void extractSubqueries(const lp::ExprPtr& expr, Subqueries& subqueries) {
 } // namespace
 
 DerivedTableP ToGraph::translateSubquery(
-    const logical_plan::LogicalPlanNode& node) {
+    const logical_plan::LogicalPlanNode& node,
+    bool finalize) {
   auto originalRenames = std::move(renames_);
   renames_.clear();
 
@@ -1964,7 +2027,13 @@ DerivedTableP ToGraph::translateSubquery(
   auto* outerDt = std::exchange(currentDt_, newDt());
   makeQueryGraph(node, kAllAllowedInDt);
   auto* subqueryDt = currentDt_;
-  finalizeSubqueryDt(node, outerDt);
+
+  setDtUsedOutput(subqueryDt, node);
+  currentDt_ = outerDt;
+  if (finalize) {
+    currentDt_->addTable(subqueryDt);
+    subqueryDt->makeInitialPlan();
+  }
 
   renames_ = std::move(originalRenames);
 
@@ -2093,60 +2162,82 @@ void ToGraph::processSubqueries(
 
   for (const auto& expr : subqueries.exists) {
     auto subqueryDt = translateSubquery(
-        *expr->inputAt(0)->as<lp::SubqueryExpr>()->subquery());
-    VELOX_CHECK(!correlatedConjuncts_.empty());
+        *expr->inputAt(0)->as<lp::SubqueryExpr>()->subquery(),
+        /*finalize=*/false);
 
-    PlanObjectSet leftTables;
-    ExprVector leftKeys;
-    ExprVector rightKeys;
-    ExprVector filter;
-    for (auto i = 0; i < correlatedConjuncts_.size(); ++i) {
-      const auto* conjunct = subqueryDt->exportExpr(correlatedConjuncts_[i]);
-
-      auto tables = conjunct->allTables();
-      tables.erase(subqueryDt);
-
-      VELOX_CHECK_EQ(
-          1,
-          tables.size(),
-          "Correlated conjuncts referencing multiple outer tables are not supported: {}",
-          conjunct->toString());
-      auto leftTable = tables.onlyObject();
-
-      leftTables.add(leftTable);
-
-      ExprCP left = nullptr;
-      ExprCP right = nullptr;
-      if (isJoinEquality(conjunct, leftTable, subqueryDt, left, right)) {
-        leftKeys.push_back(left);
-        rightKeys.push_back(right);
-      } else {
-        filter.push_back(conjunct);
+    if (correlatedConjuncts_.empty()) {
+      // Uncorrelated EXISTS: transform to cross join with NOT(COUNT(*) == 0).
+      //
+      // For efficiency, first apply LIMIT 1 to the subquery (we only need to
+      // know if at least one row exists), then wrap with COUNT(*) aggregation
+      // which produces 0 or 1. Cross join this with the outer query and replace
+      // the EXISTS expression with `NOT(count == 0)`.
+      if (subqueryDt->limit != 0) {
+        subqueryDt->limit = 1;
       }
+      subqueryDt->makeInitialPlan();
+
+      auto* countColumn = makeCountStarWrapper(subqueryDt);
+
+      subqueries_.emplace(expr, makeNotEqualsZero(countColumn));
+    } else {
+      // Correlated EXISTS: create mark join.
+      // Finalize the subqueryDt (add to currentDt_ and make initial plan).
+      currentDt_->addTable(subqueryDt);
+      subqueryDt->makeInitialPlan();
+
+      PlanObjectSet leftTables;
+      ExprVector leftKeys;
+      ExprVector rightKeys;
+      ExprVector filter;
+      for (auto i = 0; i < correlatedConjuncts_.size(); ++i) {
+        const auto* conjunct = subqueryDt->exportExpr(correlatedConjuncts_[i]);
+
+        auto tables = conjunct->allTables();
+        tables.erase(subqueryDt);
+
+        VELOX_CHECK_EQ(
+            1,
+            tables.size(),
+            "Correlated conjuncts referencing multiple outer tables are not supported: {}",
+            conjunct->toString());
+        auto leftTable = tables.onlyObject();
+
+        leftTables.add(leftTable);
+
+        ExprCP left = nullptr;
+        ExprCP right = nullptr;
+        if (isJoinEquality(conjunct, leftTable, subqueryDt, left, right)) {
+          leftKeys.push_back(left);
+          rightKeys.push_back(right);
+        } else {
+          filter.push_back(conjunct);
+        }
+      }
+
+      if (leftKeys.empty()) {
+        VELOX_CHECK_EQ(leftTables.size(), 1);
+      }
+
+      correlatedConjuncts_.clear();
+
+      const auto* markColumn = addMarkColumn();
+
+      PlanObjectCP leftTable = nullptr;
+      if (leftTables.size() == 1) {
+        leftTable = leftTables.onlyObject();
+      }
+
+      auto* existsEdge = JoinEdge::makeExists(
+          leftTable, subqueryDt, markColumn, std::move(filter));
+      currentDt_->joins.push_back(existsEdge);
+
+      for (auto i = 0; i < leftKeys.size(); ++i) {
+        existsEdge->addEquality(leftKeys[i], rightKeys[i]);
+      }
+
+      subqueries_.emplace(expr, markColumn);
     }
-
-    if (leftKeys.empty()) {
-      VELOX_CHECK_EQ(leftTables.size(), 1);
-    }
-
-    correlatedConjuncts_.clear();
-
-    const auto* markColumn = addMarkColumn();
-
-    PlanObjectCP leftTable = nullptr;
-    if (leftTables.size() == 1) {
-      leftTable = leftTables.onlyObject();
-    }
-
-    auto* existsEdge = JoinEdge::makeExists(
-        leftTable, subqueryDt, markColumn, std::move(filter));
-    currentDt_->joins.push_back(existsEdge);
-
-    for (auto i = 0; i < leftKeys.size(); ++i) {
-      existsEdge->addEquality(leftKeys[i], rightKeys[i]);
-    }
-
-    subqueries_.emplace(expr, markColumn);
   }
 }
 

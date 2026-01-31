@@ -344,6 +344,13 @@ class ToGraph {
       const logical_plan::LogicalPlanNode& node,
       DerivedTableP outerDt);
 
+  // Creates a wrapper DerivedTable with a COUNT(*) aggregation over 'inputDt'.
+  // Returns the count column. The wrapper DT is added to currentDt_.
+  ColumnCP makeCountStarWrapper(DerivedTableP inputDt);
+
+  // Creates a comparison expression: expr != 0, i.e. NOT(expr == 0).
+  ExprCP makeNotEqualsZero(ExprCP expr);
+
   // Adds a column 'name' from current DerivedTable to the 'dt'.
   void addDtColumn(DerivedTableP dt, std::string_view name);
 
@@ -374,7 +381,19 @@ class ToGraph {
       const logical_plan::LogicalPlanNode& input,
       const logical_plan::ExprPtr& predicate);
 
-  DerivedTableP translateSubquery(const logical_plan::LogicalPlanNode& node);
+  // Translates a subquery into a DerivedTable. Sets up correlations_ to allow
+  // the subquery to reference columns from the outer query. After translation,
+  // correlatedConjuncts_ contains any correlated predicates found.
+  //
+  // @param node The logical plan node representing the subquery.
+  // @param finalize If true (default), adds the subquery DT to currentDt_ and
+  // calls makeInitialPlan(). If false, the caller is responsible for adding
+  // the DT and calling makeInitialPlan(). Use finalize=false when you need to
+  // modify the DT before memoization (e.g., applying LIMIT 1 for EXISTS).
+  // @return The translated DerivedTable for the subquery.
+  DerivedTableP translateSubquery(
+      const logical_plan::LogicalPlanNode& node,
+      bool finalize = true);
 
   ColumnCP addMarkColumn();
 
@@ -469,6 +488,7 @@ class ToGraph {
       planLeaves_;
 
   Name equality_;
+  Name negation_;
   Name elementAt_{nullptr};
   Name subscript_{nullptr};
   Name cardinality_{nullptr};

@@ -227,8 +227,8 @@ class HiveScanMatcher : public PlanMatcherImpl<TableScanNode> {
 
 class ValuesMatcher : public PlanMatcherImpl<ValuesNode> {
  public:
-  explicit ValuesMatcher(const TypePtr& type = nullptr)
-      : PlanMatcherImpl<ValuesNode>(), type_(type) {}
+  explicit ValuesMatcher(const RowTypePtr& outputType = nullptr)
+      : PlanMatcherImpl<ValuesNode>(), outputType_(outputType) {}
 
   MatchResult matchDetails(
       const ValuesNode& plan,
@@ -236,18 +236,18 @@ class ValuesMatcher : public PlanMatcherImpl<ValuesNode> {
       const override {
     SCOPED_TRACE(plan.toString(true, false));
 
-    if (type_) {
-      EXPECT_TRUE(type_->equivalent(*plan.outputType()))
+    if (outputType_) {
+      EXPECT_TRUE(outputType_->equivalent(*plan.outputType()))
           << "Expected equal output types on ValuesNode, but got '"
-          << type_->toString() << "' and '" << plan.outputType()->toString()
-          << "'.";
+          << outputType_->toString() << "' and '"
+          << plan.outputType()->toString() << "'.";
     }
 
     AXIOM_TEST_RETURN
   }
 
  private:
-  const TypePtr type_;
+  const RowTypePtr outputType_;
 };
 
 class FilterMatcher : public PlanMatcherImpl<FilterNode> {
@@ -269,6 +269,9 @@ class FilterMatcher : public PlanMatcherImpl<FilterNode> {
     if (predicate_.has_value()) {
       auto expected =
           parse::DuckSqlExpressionsParser().parseExpr(predicate_.value());
+      if (!symbols.empty()) {
+        expected = rewriteInputNames(expected, symbols);
+      }
       EXPECT_EQ(plan.filter()->toString(), expected->toString());
     }
 
@@ -381,26 +384,30 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
       const UnnestNode& plan,
       const std::unordered_map<std::string, std::string>& symbols)
       const override {
-    if (!replicateExprs_.empty()) {
-      EXPECT_EQ(plan.replicateVariables().size(), replicateExprs_.size());
+    if (replicateExprs_.has_value()) {
+      EXPECT_EQ(plan.replicateVariables().size(), replicateExprs_->size());
       AXIOM_TEST_RETURN_IF_FAILURE
 
-      for (auto i = 0; i < replicateExprs_.size(); ++i) {
+      for (auto i = 0; i < replicateExprs_->size(); ++i) {
         auto expected =
-            parse::DuckSqlExpressionsParser().parseExpr(replicateExprs_[i]);
+            parse::DuckSqlExpressionsParser().parseExpr((*replicateExprs_)[i]);
+        if (!symbols.empty()) {
+          expected = rewriteInputNames(expected, symbols);
+        }
+
         EXPECT_EQ(
             plan.replicateVariables()[i]->toString(), expected->toString());
       }
       AXIOM_TEST_RETURN_IF_FAILURE
     }
 
-    if (!unnestExprs_.empty()) {
-      EXPECT_EQ(plan.unnestVariables().size(), unnestExprs_.size());
+    if (unnestExprs_.has_value()) {
+      EXPECT_EQ(plan.unnestVariables().size(), unnestExprs_->size());
       AXIOM_TEST_RETURN_IF_FAILURE
 
-      for (auto i = 0; i < unnestExprs_.size(); ++i) {
+      for (auto i = 0; i < unnestExprs_->size(); ++i) {
         auto expected =
-            parse::DuckSqlExpressionsParser().parseExpr(unnestExprs_[i]);
+            parse::DuckSqlExpressionsParser().parseExpr((*unnestExprs_)[i]);
         if (!symbols.empty()) {
           expected = rewriteInputNames(expected, symbols);
         }
@@ -418,8 +425,8 @@ class UnnestMatcher : public PlanMatcherImpl<UnnestNode> {
   }
 
  private:
-  const std::vector<std::string> replicateExprs_;
-  const std::vector<std::string> unnestExprs_;
+  const std::optional<std::vector<std::string>> replicateExprs_;
+  const std::optional<std::vector<std::string>> unnestExprs_;
   const std::optional<std::string> ordinalityName_;
 };
 
@@ -743,9 +750,9 @@ PlanMatcherBuilder& PlanMatcherBuilder::values() {
   return *this;
 }
 
-PlanMatcherBuilder& PlanMatcherBuilder::values(const TypePtr& type) {
+PlanMatcherBuilder& PlanMatcherBuilder::values(const RowTypePtr& outputType) {
   VELOX_USER_CHECK_NULL(matcher_);
-  matcher_ = std::make_shared<ValuesMatcher>(type);
+  matcher_ = std::make_shared<ValuesMatcher>(outputType);
   return *this;
 }
 
