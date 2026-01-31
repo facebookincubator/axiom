@@ -196,10 +196,6 @@ struct PlanState {
   /// selected expressions of the dt.
   PlanObjectSet targetExprs;
 
-  /// A mapping of expressions to pre-computed columns. See
-  /// PrecomputeProjection.
-  folly::F14FastMap<ExprCP, ExprCP> exprToColumn;
-
   /// The total cost for the PlanObjects placed thus far.
   PlanCost cost;
 
@@ -244,10 +240,6 @@ struct PlanState {
   /// Checks if 'column' is used downstream just for filtering and that usage is
   /// limited to a single conjunct. Returns that conjunct or nullptr.
   ExprCP isDownstreamFilterOnly(ColumnCP column) const;
-
-  /// Replace expression with pre-computed column using 'exprToColumn'
-  /// mapping.
-  ExprCP toColumn(ExprCP expr) const;
 
   /// If OptimizerOptions::syntacticJoinOrder is true, returns true if all
   /// tables that must be placed before 'table' have been placed. If
@@ -305,6 +297,13 @@ struct PlanState {
   /// Replaces columns with 'newColumns'. Used after join projection.
   void replaceColumns(PlanObjectSet newColumns);
 
+  /// Add a mapping from expression to pre-computed column.
+  void addExprToColumn(ExprCP expr, ExprCP column);
+
+  /// Replace expression with pre-computed column using 'exprToColumn_'
+  /// mapping. Returns the original 'expr' if no mapping exists.
+  ExprCP toColumn(ExprCP expr) const;
+
  private:
   PlanObjectSet computeDownstreamColumns(bool includeFilters) const;
 
@@ -324,6 +323,10 @@ struct PlanState {
 
   /// The set of columns that have a value from placed tables.
   PlanObjectSet columns_;
+
+  /// A mapping of expressions to pre-computed columns. See
+  /// PrecomputeProjection.
+  folly::F14FastMap<ExprCP, ExprCP> exprToColumn_;
 };
 
 /// A scoped guard that restores fields of PlanState on destruction.
@@ -339,6 +342,7 @@ struct PlanStateSaver {
   PlanObjectSet placed;
   PlanObjectSet columns;
   PlanCost cost;
+  folly::F14FastMap<ExprCP, ExprCP> exprToColumn;
   size_t numDebugPlacedTables{0};
 
  private:
