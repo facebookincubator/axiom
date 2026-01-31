@@ -233,6 +233,19 @@ TEST_F(SubqueryTest, correlatedExists) {
       auto plan = toSingleNodePlan(query);
       AXIOM_ASSERT_PLAN(plan, matcher);
     }
+
+    // EXISTS with DISTINCT. DISTINCT is semantically unnecessary for EXISTS
+    // since EXISTS only checks for row existence. The optimizer should drop the
+    // DISTINCT and produce the same plan as above.
+    query =
+        "SELECT * FROM nation WHERE "
+        "EXISTS (SELECT DISTINCT r_name FROM region WHERE r_regionkey = n_regionkey)";
+
+    {
+      SCOPED_TRACE(query);
+      auto plan = toSingleNodePlan(query);
+      AXIOM_ASSERT_PLAN(plan, matcher);
+    }
   }
 
   {
