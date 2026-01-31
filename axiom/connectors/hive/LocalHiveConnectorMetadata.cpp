@@ -53,6 +53,29 @@ velox::common::Filter* findFilter(
 
   return nullptr;
 }
+
+// Filters files based on $path and $bucket filters from the table handle.
+// Returns a list of file pointers that match the filters.
+std::vector<const FileInfo*> filterFilesByTableHandle(
+    const std::vector<std::unique_ptr<const FileInfo>>& files,
+    const velox::connector::hive::HiveTableHandle& tableHandle) {
+  auto* pathFilter = findFilter(tableHandle, HiveTable::kPath);
+  auto* bucketFilter = findFilter(tableHandle, HiveTable::kBucket);
+
+  std::vector<const FileInfo*> selectedFiles;
+  for (const auto& file : files) {
+    if (pathFilter &&
+        !pathFilter->testBytes(file->path.c_str(), file->path.size())) {
+      continue;
+    }
+    if (bucketFilter && file->bucketNumber.has_value() &&
+        !bucketFilter->testInt64(file->bucketNumber.value())) {
+      continue;
+    }
+    selectedFiles.push_back(file.get());
+  }
+  return selectedFiles;
+}
 } // namespace
 
 std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
@@ -75,23 +98,8 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
           tableHandle.get());
   VELOX_CHECK_NOT_NULL(hiveTableHandle);
 
-  auto* pathFilter = findFilter(*hiveTableHandle, HiveTable::kPath);
-  auto* bucketFilter = findFilter(*hiveTableHandle, HiveTable::kBucket);
-
-  const auto& files = layout->files();
-  std::vector<const FileInfo*> selectedFiles;
-  for (const auto& file : files) {
-    if (pathFilter &&
-        !pathFilter->testBytes(file->path.c_str(), file->path.size())) {
-      continue;
-    }
-
-    if (bucketFilter && !bucketFilter->testInt64(file->bucketNumber.value())) {
-      continue;
-    }
-
-    selectedFiles.push_back(file.get());
-  }
+  auto selectedFiles =
+      filterFilesByTableHandle(layout->files(), *hiveTableHandle);
 
   return std::make_shared<LocalHiveSplitSource>(
       std::move(selectedFiles),
@@ -330,9 +338,17 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
 
   const auto maxRowsToScan = table().numRows() * (pct / 100);
 
+  // Filter files based on $path and $bucket filters from tableHandle.
+  auto* hiveTableHandle =
+      dynamic_cast<const velox::connector::hive::HiveTableHandle*>(
+          tableHandle.get());
+  VELOX_CHECK_NOT_NULL(hiveTableHandle);
+  auto selectedFiles = filterFilesByTableHandle(files_, *hiveTableHandle);
+
   int64_t passingRows = 0;
   int64_t scannedRows = 0;
-  for (const auto& file : files_) {
+
+  for (const auto* file : selectedFiles) {
     auto dataSource = connector()->createDataSource(
         outputType, tableHandle, columnHandles, connectorQueryCtx.get());
 
