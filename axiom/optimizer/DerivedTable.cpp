@@ -121,9 +121,11 @@ namespace {
 bool isSingleRowDt(PlanObjectCP object) {
   if (object->is(PlanType::kDerivedTableNode)) {
     auto dt = object->as<DerivedTable>();
+    // A global aggregation (no grouping keys) always returns exactly one row,
+    // but only if there's no HAVING clause that could filter it out.
     return (
         dt->aggregation && dt->aggregation->groupingKeys().empty() &&
-        dt->limit != 0 && dt->offset == 0);
+        dt->having.empty() && dt->limit != 0 && dt->offset == 0);
   }
   return false;
 }
@@ -1024,8 +1026,7 @@ void DerivedTable::distributeConjuncts() {
   // on returning edge of recursion, so everybody's initial plan is
   // up to date after all pushdowns.
   for (auto* changed : changedDts) {
-    queryCtx()->optimization()->memo().erase(memoKey(*changed));
-    changed->makeInitialPlan();
+    changed->remakeInitialPlan();
   }
 }
 
@@ -1050,6 +1051,11 @@ void DerivedTable::makeInitialPlan() {
   this->cardinality = plan->resultCardinality();
 
   optimization->memo().insert(key, std::move(state.plans));
+}
+
+void DerivedTable::remakeInitialPlan() {
+  queryCtx()->optimization()->memo().erase(memoKey(*this));
+  makeInitialPlan();
 }
 
 PlanP DerivedTable::bestInitialPlan() const {

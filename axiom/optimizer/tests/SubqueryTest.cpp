@@ -302,5 +302,53 @@ TEST_F(SubqueryTest, correlatedExists) {
   }
 }
 
+TEST_F(SubqueryTest, uncorrelatedExists) {
+  // Uncorrelated EXISTS: returns all rows if subquery has rows.
+  {
+    auto query = "SELECT * FROM region WHERE EXISTS (SELECT 1 FROM nation)";
+
+    // EXISTS uses NOT(count = 0) to check if any rows exist.
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("region")
+                       .nestedLoopJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("nation")
+                               .finalLimit(0, 1)
+                               .singleAggregation({}, {"count(*) as c"})
+                               .filter("not(eq(c, 0))")
+                               .project()
+                               .build(),
+                           velox::core::JoinType::kInner)
+                       .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Uncorrelated NOT EXISTS: returns all rows if subquery has no rows.
+  {
+    auto query = "SELECT * FROM region WHERE NOT EXISTS (SELECT 1 FROM nation)";
+
+    // NOT EXISTS uses NOT(NOT(count = 0)) to check if no rows exist.
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("region")
+                       .nestedLoopJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("nation")
+                               .finalLimit(0, 1)
+                               .singleAggregation({}, {"count(*) as c"})
+                               .filter("not(not(eq(c, 0)))")
+                               .project()
+                               .build(),
+                           velox::core::JoinType::kInner)
+                       .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

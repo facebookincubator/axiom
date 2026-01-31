@@ -585,6 +585,25 @@ class JoinEdge {
     return make<JoinEdge>(leftTable, rightTable, Spec{});
   }
 
+  /// Creates a JoinEdge for EXISTS or IN subqueries.
+  ///
+  /// This factory method creates a semi-join edge used to implement:
+  /// - EXISTS subqueries: WHERE EXISTS (SELECT ... FROM rightTable WHERE ...)
+  /// - IN subqueries: WHERE leftKey IN (SELECT rightKey FROM rightTable)
+  ///
+  /// The join keeps rows from the left side that have at least one match on the
+  /// right side (semi-join semantics).
+  ///
+  /// @param leftTable The outer query table. Can be nullptr for hyper-edges
+  ///        when the correlation references multiple outer tables.
+  /// @param rightTable The subquery's DerivedTable. Must not be null.
+  /// @param markColumn Optional boolean column that indicates whether a match
+  ///        was found. Used when the EXISTS/IN result needs to be referenced
+  ///        in the output (e.g., for conditional expressions). When null, the
+  ///        join acts as a pure filter.
+  /// @param filter Optional non-equality filter conditions from the subquery's
+  ///        correlation predicates that cannot be expressed as equality keys.
+  /// @return A JoinEdge with rightExists=true representing the semi-join.
   static JoinEdge* makeExists(
       PlanObjectCP leftTable,
       PlanObjectCP rightTable,
@@ -600,6 +619,19 @@ class JoinEdge {
         });
   }
 
+  /// Creates a JoinEdge for NOT EXISTS or NOT IN subqueries.
+  ///
+  /// This factory method creates an anti-join edge used to implement:
+  /// - NOT EXISTS subqueries: WHERE NOT EXISTS (SELECT ... FROM rightTable ...)
+  /// - NOT IN subqueries: WHERE leftKey NOT IN (SELECT rightKey FROM
+  /// rightTable)
+  ///
+  /// The join keeps rows from the left side that have no matches on the right
+  /// side (anti-join semantics).
+  ///
+  /// @param leftTable The outer query table. Must not be null.
+  /// @param rightTable The subquery's DerivedTable. Must not be null.
+  /// @return A JoinEdge with rightNotExists=true representing the anti-join.
   static JoinEdge* makeNotExists(
       PlanObjectCP leftTable,
       PlanObjectCP rightTable) {
