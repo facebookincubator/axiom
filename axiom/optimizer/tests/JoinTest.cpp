@@ -38,13 +38,51 @@ class JoinTest : public test::QueryTestBase {
     velox::connector::registerConnector(testConnector_);
 
     testConnector_->addTable(
+        "region",
+        ROW({"r_regionkey", "r_name", "r_comment"},
+            {BIGINT(), VARCHAR(), VARCHAR()}));
+    testConnector_->addTable(
         "nation",
         ROW({"n_nationkey", "n_name", "n_regionkey", "n_comment"},
             {BIGINT(), VARCHAR(), BIGINT(), VARCHAR()}));
     testConnector_->addTable(
-        "region",
-        ROW({"r_regionkey", "r_name", "r_comment"},
-            {BIGINT(), VARCHAR(), VARCHAR()}));
+        "customer",
+        ROW({"c_custkey",
+             "c_name",
+             "c_address",
+             "c_nationkey",
+             "c_phone",
+             "c_acctbal",
+             "c_mktsegment",
+             "c_comment"},
+            {BIGINT(),
+             VARCHAR(),
+             VARCHAR(),
+             BIGINT(),
+             VARCHAR(),
+             DOUBLE(),
+             VARCHAR(),
+             VARCHAR()}));
+    testConnector_->addTable(
+        "orders",
+        ROW({"o_orderkey",
+             "o_custkey",
+             "o_orderstatus",
+             "o_totalprice",
+             "o_orderdate",
+             "o_orderpriority",
+             "o_clerk",
+             "o_shippriority",
+             "o_comment"},
+            {BIGINT(),
+             BIGINT(),
+             VARCHAR(),
+             DOUBLE(),
+             DATE(),
+             VARCHAR(),
+             VARCHAR(),
+             INTEGER(),
+             VARCHAR()}));
   }
 
   void TearDown() override {
@@ -714,6 +752,63 @@ TEST_F(JoinTest, leftThenFilter) {
 
   auto plan = toSingleNodePlan(logicalPlan);
   AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(JoinTest, correlatedInSubquery) {
+  // Find customers with at least one order.
+  {
+    auto query =
+        "SELECT c.c_custkey, c.c_name FROM customer AS c "
+        "WHERE c.c_custkey IN ("
+        "  SELECT o.o_custkey FROM orders AS o "
+        "  WHERE o.o_custkey = c.c_custkey)";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    // Correlated IN subquery creates a semi-join with null-aware semantics.
+    // The IN equality (c_custkey = o_custkey) and the correlation equality
+    // (o_custkey = c_custkey) are the same, so the optimizer uses a single
+    // join key.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("customer")
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("orders").build(),
+                core::JoinType::kLeftSemiFilter)
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
+  }
+
+  // Find customers with no orders.
+  {
+    auto query =
+        "SELECT c.c_custkey, c.c_name FROM customer AS c "
+        "WHERE c.c_custkey NOT IN ("
+        "  SELECT o.o_custkey FROM orders AS o "
+        "  WHERE o.o_custkey = c.c_custkey)";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    // Correlated NOT IN subquery creates an anti-join with null-aware
+    // semantics.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("customer")
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("orders").build(),
+                core::JoinType::kAnti,
+                /*nullAware=*/true)
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
+  }
 }
 
 } // namespace

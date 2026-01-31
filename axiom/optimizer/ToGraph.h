@@ -400,6 +400,19 @@ class ToGraph {
       const logical_plan::LogicalPlanNode& node,
       bool finalize = true);
 
+  // Holds the extracted join keys and filters from correlated conjuncts.
+  // Used when decorrelating IN and EXISTS subqueries.
+  struct DecorrelatedJoin {
+    PlanObjectSet leftTables;
+    ExprVector leftKeys;
+    ExprVector rightKeys;
+    ExprVector filter;
+  };
+
+  // Extracts join keys and filters from correlated conjuncts for decorrelating
+  // IN and EXISTS subqueries.
+  DecorrelatedJoin extractDecorrelatedJoin(DerivedTableP subqueryDt);
+
   ColumnCP addMarkColumn();
 
   void addJoinColumns(
