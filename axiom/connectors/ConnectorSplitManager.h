@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/experimental/coro/AsyncGenerator.h>
 #include <velox/connectors/Connector.h>
 #include "axiom/connectors/ConnectorSession.h"
 
@@ -37,8 +38,11 @@ class SplitSource {
 
   virtual ~SplitSource() = default;
 
-  /// Returns a set of splits that cover up to 'targetBytes' of data.
-  virtual std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) = 0;
+  /// Returns an async generator that yields splits one at a time.
+  /// The generator completes when there are no more splits to yield.
+  /// Callers may abandon the generator early (e.g., on interrupt or LIMIT);
+  /// this is safe because the coroutine cleanup will handle resource release.
+  virtual folly::coro::AsyncGenerator<SplitAndGroup> getSplitGenerator() = 0;
 };
 
 /// Options for split generation.
