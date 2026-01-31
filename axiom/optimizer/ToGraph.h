@@ -371,15 +371,20 @@ class ToGraph {
   std::pair<ExprVector, OrderTypeVector> dedupOrdering(
       const std::vector<logical_plan::SortingField>& ordering);
 
-  // Process non-correlated subqueries used in filter's predicate and populate
-  // subqueries_ map. For each IN <subquery> expression, create a separate DT
-  // for the subquery and add a semi-join edge. Replace the whole IN predicate
-  // with a 'mark' column produced by the join. For other <subquery>
+  // Process subqueries used in filter's predicate or projection expressions
+  // and populate subqueries_ map. For each IN <subquery> expression, create a
+  // separate DT for the subquery and add a semi-join edge. Replace the whole IN
+  // predicate with a 'mark' column produced by the join. For other <subquery>
   // expressions, create a separate DT and replace the expression with the only
   // column produced by the DT.
+  //
+  // @param input The logical plan node to use when finalizing the DT.
+  // @param expr The expression to scan for subqueries.
+  // @param filter If true, indicates this is processing a filter predicate.
   void processSubqueries(
       const logical_plan::LogicalPlanNode& input,
-      const logical_plan::ExprPtr& predicate);
+      const logical_plan::ExprPtr& expr,
+      bool filter);
 
   // Translates a subquery into a DerivedTable. Sets up correlations_ to allow
   // the subquery to reference columns from the outer query. After translation,

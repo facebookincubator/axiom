@@ -17,8 +17,9 @@ support for three main subquery types:
 
 Each type supports both **correlated** and **uncorrelated** variants.
 
-> **Note:** Currently, subqueries are supported only in filter predicates (WHERE
-> clause). Subqueries in projections (SELECT list) are not supported yet.
+Subqueries are supported in both:
+- **Filter predicates** (WHERE clause)
+- **Projections** (SELECT list)
 
 ## Key Source Files
 
@@ -148,19 +149,26 @@ subqueries_.emplace(subquery, subqueryDt->columns.back());
 
 ### IN Subqueries
 
-IN subqueries create **semi-joins** with a mark column:
+IN subqueries create **semi-joins** with a mark column and `nullAwareIn=true`:
 
 ```cpp
 // x IN <subquery>
-auto* edge = JoinEdge::makeExists(leftTable, subqueryDt, markColumn);
+auto* edge = JoinEdge::makeExists(
+    leftTable, subqueryDt, markColumn, /*filter=*/{}, /*nullAwareIn=*/true);
 currentDt_->joins.push_back(edge);
 edge->addEquality(leftKey, subqueryDt->columns.front());
 subqueries_.emplace(expr, markColumn);
 ```
 
 The resulting join types are:
-- `kLeftSemiFilter` for `IN`
+- `kLeftSemiFilter` for `IN` in WHERE clause
+- `kLeftSemiProject` for `IN` in SELECT list (projection)
 - `kAnti` for `NOT IN`
+
+**Note**: The `nullAwareIn` flag distinguishes IN from EXISTS semantics. When
+`nullAwareIn=true`, the Velox HashJoinNode uses null-aware join semantics (IN/NOT IN).
+When `false`, it uses EXISTS/NOT EXISTS semantics. This flag is only applicable to
+join types that support it: `kAnti`, `kLeftSemiProject`, and `kRightSemiProject`.
 
 ### EXISTS Subqueries
 
@@ -323,21 +331,45 @@ SELECT * FROM region WHERE EXISTS (SELECT 1 FROM nation)
 -- )
 ```
 
+### Scalar Subquery in Projection (Correlated)
+
+```sql
+SELECT r_name,
+       (SELECT count(*) FROM nation WHERE n_regionkey = r_regionkey) AS cnt
+FROM region
+
+-- Plan: region → HashJoin(kLeft) → (
+--   nation → Aggregate(count(*) GROUP BY n_regionkey) → Project
+-- ) → Project
+```
+
+The correlated scalar subquery is decorrelated by:
+1. Adding the correlation key (`n_regionkey`) as a grouping key to the aggregation
+2. Creating a LEFT JOIN between the outer table and the subquery result
+3. Projecting the final output columns
+
+### Scalar Subquery in Projection (Uncorrelated)
+
+```sql
+SELECT r_name, (SELECT count(*) FROM nation) AS total_nations
+FROM region
+
+-- Plan: region → NestedLoopJoin(kInner) → (
+--   nation → Aggregate(count(*))
+-- ) → Project
+```
+
 ## Limitations and TODOs
 
 ### Current Limitations
 
-1. **Subqueries only supported in filters**
-   - Subqueries can only appear in WHERE clause predicates
-   - Subqueries in SELECT list (projections) are not supported yet
-
-2. **Multi-table IN expressions not supported**
+1. **Multi-table IN expressions not supported**
    ```sql
    -- Not supported:
    WHERE (a, b) IN (SELECT x, y FROM t)
    ```
 
-3. **Correlated conjuncts referencing multiple outer tables**
+2. **Correlated conjuncts referencing multiple outer tables**
    ```sql
    -- Not supported:
    WHERE EXISTS (SELECT 1 FROM t WHERE t.a = outer1.x AND t.b = outer2.y)
@@ -345,7 +377,7 @@ SELECT * FROM region WHERE EXISTS (SELECT 1 FROM nation)
    Note: This limitation applies only when outer1 and outer2 are different
    base tables, not aliases of the same derived table.
 
-4. **Multi-table expression in IN predicate left-hand side**
+3. **Multi-table expression in IN predicate left-hand side**
    ```cpp
    VELOX_CHECK_NOT_NULL(
        leftTable,
@@ -373,6 +405,7 @@ The `SubqueryTest.cpp` file provides comprehensive test coverage:
 | `foldable` | Constant folding of `max`/`min` aggregates |
 | `correlatedExists` | Equality conditions, non-equality conditions, multiple outer tables |
 | `uncorrelatedExists` | `COUNT(*)` wrapper, `NOT EXISTS` |
+| `scalarInProjection` | Scalar subqueries in SELECT list (correlated and uncorrelated) |
 
 ## Architectural Notes
 

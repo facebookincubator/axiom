@@ -529,7 +529,10 @@ TEST_F(TpchPlanTest, q16) {
   auto matcher =
       startMatcher("partsupp")
           .hashJoin(startMatcher("part").build(), core::JoinType::kInner)
-          .hashJoin(startMatcher("supplier").build(), core::JoinType::kAnti)
+          .hashJoin(
+              startMatcher("supplier").build(),
+              core::JoinType::kAnti,
+              /*nullAware=*/true)
           .aggregation()
           .orderBy()
           .build();

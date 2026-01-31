@@ -658,8 +658,11 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
   HashJoinMatcher(
       const std::shared_ptr<PlanMatcher>& left,
       const std::shared_ptr<PlanMatcher>& right,
-      JoinType joinType)
-      : PlanMatcherImpl<HashJoinNode>({left, right}), joinType_{joinType} {}
+      JoinType joinType,
+      bool nullAware)
+      : PlanMatcherImpl<HashJoinNode>({left, right}),
+        joinType_{joinType},
+        nullAware_{nullAware} {}
 
   MatchResult matchDetails(
       const HashJoinNode& plan,
@@ -673,11 +676,16 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
           JoinTypeName::toName(joinType_.value()));
     }
 
+    if (nullAware_.has_value()) {
+      EXPECT_EQ(plan.isNullAware(), nullAware_.value());
+    }
+
     AXIOM_TEST_RETURN
   }
 
  private:
   const std::optional<JoinType> joinType_;
+  const std::optional<bool> nullAware_;
 };
 
 class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
@@ -874,10 +882,11 @@ PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
 
 PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
     const std::shared_ptr<PlanMatcher>& rightMatcher,
-    JoinType joinType) {
+    JoinType joinType,
+    bool nullAware) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ =
-      std::make_shared<HashJoinMatcher>(matcher_, rightMatcher, joinType);
+  matcher_ = std::make_shared<HashJoinMatcher>(
+      matcher_, rightMatcher, joinType, nullAware);
   return *this;
 }
 

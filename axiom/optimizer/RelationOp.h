@@ -481,6 +481,7 @@ struct Join : public RelationOp {
   Join(
       JoinMethod method,
       velox::core::JoinType joinType,
+      bool nullAware,
       RelationOpPtr lhs,
       RelationOpPtr rhs,
       ExprVector lhsKeys,
@@ -498,6 +499,9 @@ struct Join : public RelationOp {
 
   const JoinMethod method;
   const velox::core::JoinType joinType;
+  /// When true, the join semantic is IN / NOT IN. When false, the join semantic
+  /// is EXISTS / NOT EXISTS.
+  const bool nullAware;
   const RelationOpPtr right;
   const ExprVector leftKeys;
   const ExprVector rightKeys;
