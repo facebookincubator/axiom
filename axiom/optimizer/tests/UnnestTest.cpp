@@ -1213,10 +1213,11 @@ TEST_F(UnnestTest, ordinality) {
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
 
+    // Two arrays are unnested with ordinality column.
     auto matcher = core::PlanMatcherBuilder()
                        .values()
-                       .project()
-                       .unnest({}, {}, "ordinality")
+                       .project({"array[1, 2, 3] as foo", "array[4, 5] as bar"})
+                       .unnest({}, {"foo", "bar"}, "ordinality")
                        .project({"e", "e_0", "ordinality"})
                        .build();
 
@@ -1230,10 +1231,11 @@ TEST_F(UnnestTest, ordinality) {
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
 
+    // Ordinality column is pruned because it's not used.
     auto matcher = core::PlanMatcherBuilder()
                        .values()
-                       .project()
-                       .unnest({}, {}, std::nullopt)
+                       .project({"array[1, 2, 3] as foo", "array[4, 5] as bar"})
+                       .unnest({}, {"foo", "bar"}, std::nullopt)
                        .project({"e", "e_0"})
                        .build();
 
@@ -1247,10 +1249,11 @@ TEST_F(UnnestTest, ordinality) {
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
 
+    // Ordinality column is pruned because it's not used.
     auto matcher = core::PlanMatcherBuilder()
                        .values()
-                       .project()
-                       .unnest({}, {}, std::nullopt)
+                       .project({"array[1, 2, 3] as foo", "array[4, 5] as bar"})
+                       .unnest({}, {"foo", "bar"}, std::nullopt)
                        .project({"1"})
                        .build();
 

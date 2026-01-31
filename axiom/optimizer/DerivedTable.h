@@ -230,6 +230,10 @@ struct DerivedTable : public PlanObject {
   /// 'this' as a join side because join sides must have a cardinality guess.
   void makeInitialPlan();
 
+  /// Erases the existing Memo entry and re-runs makeInitialPlan. Use this after
+  /// modifying properties of an already-memoized DerivedTable.
+  void remakeInitialPlan();
+
   PlanP bestInitialPlan() const;
 
   std::string toString() const override;
