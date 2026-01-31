@@ -257,6 +257,54 @@ TEST_F(LocalHiveConnectorMetadataTest, basic) {
   EXPECT_EQ(250'000, pair.second);
 }
 
+// Verifies that sample() only samples files matching $path filter.
+TEST_F(LocalHiveConnectorMetadataTest, sampleWithPathFilter) {
+  auto table = metadata_->findTable("T");
+  ASSERT_TRUE(table != nullptr);
+  auto* layout = dynamic_cast<const LocalHiveTableLayout*>(table->layouts()[0]);
+  ASSERT_TRUE(layout != nullptr);
+  const auto& files = layout->files();
+  ASSERT_GT(files.size(), 1);
+
+  // Get the first file path for testing.
+  const auto& targetFilePath = files[0]->path;
+
+  auto columnHandle = layout->createColumnHandle(/*session=*/nullptr, "c0");
+  std::vector<velox::connector::ColumnHandlePtr> columns = {columnHandle};
+
+  auto filterRowType = ROW({{HiveTable::kPath, VARCHAR()}});
+  auto pathFilterExpr = parseExpr(
+      fmt::format("\"{}\" = '{}'", HiveTable::kPath, targetFilePath),
+      filterRowType);
+  std::vector<core::TypedExprPtr> filters = {pathFilterExpr};
+  std::vector<core::TypedExprPtr> rejectedFilters;
+  auto ctx = metadata_->connectorQueryCtx();
+
+  auto tableHandle = layout->createTableHandle(
+      /*session=*/nullptr,
+      columns,
+      *ctx->expressionEvaluator(),
+      filters,
+      rejectedFilters,
+      /*dataColumns=*/nullptr,
+      /*lookupKeys=*/{});
+  EXPECT_TRUE(rejectedFilters.empty());
+
+  std::vector<ColumnStatistics> stats;
+  std::vector<common::Subfield> fields;
+  auto c0 = common::Subfield::create("c0");
+  fields.push_back(std::move(*c0));
+  HashStringAllocator allocator(pool_.get());
+
+  // sample() should only sample the file matching $path filter.
+  // With 5 files and 50,000 rows per file, filtering to 1 file should
+  // result in approximately 50,000 rows sampled (not 250,000).
+  auto pair = layout->sample(
+      tableHandle, 100, {}, layout->rowType(), fields, &allocator, &stats);
+  EXPECT_EQ(kRowsPerVector * kNumVectors, pair.first);
+  EXPECT_EQ(kRowsPerVector * kNumVectors, pair.second);
+}
+
 TEST_F(LocalHiveConnectorMetadataTest, createTable) {
   auto tableType = ROW(
       {{"key1", BIGINT()},
