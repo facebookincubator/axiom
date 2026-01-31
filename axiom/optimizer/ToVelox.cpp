@@ -1115,10 +1115,14 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
   auto leftKeys = toFieldRefs(join.leftKeys);
   auto rightKeys = toFieldRefs(join.rightKeys);
 
+  // nullAware is only supported for semi project and anti joins.
+  const bool nullAware =
+      join.nullAware && velox::core::isNullAwareSupported(join.joinType);
+
   auto joinNode = std::make_shared<velox::core::HashJoinNode>(
       nextId(),
       join.joinType,
-      false,
+      nullAware,
       leftKeys,
       rightKeys,
       toAnd(join.filter),

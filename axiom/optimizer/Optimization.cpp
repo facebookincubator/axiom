@@ -1464,6 +1464,7 @@ void Optimization::joinByHash(
   RelationOp* join = make<Join>(
       JoinMethod::kHash,
       joinType,
+      candidate.join->isNullAwareIn(),
       probeInput,
       buildOp,
       std::move(probeKeys),
@@ -1626,6 +1627,7 @@ void Optimization::joinByHashRight(
   RelationOp* join = make<Join>(
       JoinMethod::kHash,
       rightJoinType,
+      candidate.join->isNullAwareIn(),
       probeInput,
       buildOp,
       std::move(probeKeys),

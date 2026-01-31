@@ -1939,7 +1939,9 @@ ValuesTable* ToGraph::makeValuesTable(
 }
 
 void ToGraph::addProjection(const lp::ProjectNode& project) {
-  exprSources_.push_back(project.onlyInput().get());
+  const auto& input = *project.onlyInput();
+
+  exprSources_.push_back(&input);
   SCOPE_EXIT {
     exprSources_.pop_back();
   };
@@ -1966,6 +1968,8 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
         continue;
       }
     }
+
+    processSubqueries(input, exprs[i], /*filter=*/false);
 
     auto expr = translateExpr(exprs.at(i));
     renames_[names[i]] = expr;
@@ -2054,13 +2058,16 @@ ColumnCP ToGraph::addMarkColumn() {
 
 void ToGraph::processSubqueries(
     const lp::LogicalPlanNode& input,
-    const lp::ExprPtr& predicate) {
+    const lp::ExprPtr& expr,
+    bool filter) {
   Subqueries subqueries;
-  extractSubqueries(predicate, subqueries);
+  extractSubqueries(expr, subqueries);
 
-  if (currentDt_->hasLimit() ||
-      (currentDt_->hasAggregation() && !subqueries.empty())) {
-    finalizeDt(input);
+  if (filter) {
+    if (currentDt_->hasLimit() ||
+        (currentDt_->hasAggregation() && !subqueries.empty())) {
+      finalizeDt(input);
+    }
   }
 
   for (const auto& subquery : subqueries.scalars) {
@@ -2137,32 +2144,34 @@ void ToGraph::processSubqueries(
     }
   }
 
-  for (const auto& expr : subqueries.inPredicates) {
+  for (const auto& predicate : subqueries.inPredicates) {
     auto subqueryDt = translateSubquery(
-        *expr->inputAt(1)->as<lp::SubqueryExpr>()->subquery());
+        *predicate->inputAt(1)->as<lp::SubqueryExpr>()->subquery());
     VELOX_CHECK_EQ(1, subqueryDt->columns.size());
     VELOX_CHECK(correlatedConjuncts_.empty());
 
     // Add a join edge and replace 'expr' with 'mark' column in the join output.
     const auto* markColumn = addMarkColumn();
 
-    auto leftKey = translateExpr(expr->inputAt(0));
+    auto leftKey = translateExpr(predicate->inputAt(0));
     auto leftTable = leftKey->singleTable();
     VELOX_CHECK_NOT_NULL(
         leftTable,
         "<expr> IN <subquery> with multi-table <expr> is not supported yet");
 
-    auto* edge = JoinEdge::makeExists(leftTable, subqueryDt, markColumn);
+    // IN subqueries use nullAware join semantics.
+    auto* edge = JoinEdge::makeExists(
+        leftTable, subqueryDt, markColumn, /*filter=*/{}, /*nullAwareIn=*/true);
 
     currentDt_->joins.push_back(edge);
     edge->addEquality(leftKey, subqueryDt->columns.front());
 
-    subqueries_.emplace(expr, markColumn);
+    subqueries_.emplace(predicate, markColumn);
   }
 
-  for (const auto& expr : subqueries.exists) {
+  for (const auto& exists : subqueries.exists) {
     auto subqueryDt = translateSubquery(
-        *expr->inputAt(0)->as<lp::SubqueryExpr>()->subquery(),
+        *exists->inputAt(0)->as<lp::SubqueryExpr>()->subquery(),
         /*finalize=*/false);
 
     if (correlatedConjuncts_.empty()) {
@@ -2179,7 +2188,7 @@ void ToGraph::processSubqueries(
 
       auto* countColumn = makeCountStarWrapper(subqueryDt);
 
-      subqueries_.emplace(expr, makeNotEqualsZero(countColumn));
+      subqueries_.emplace(exists, makeNotEqualsZero(countColumn));
     } else {
       // Correlated EXISTS: create mark join.
       // Finalize the subqueryDt (add to currentDt_ and make initial plan).
@@ -2236,7 +2245,7 @@ void ToGraph::processSubqueries(
         existsEdge->addEquality(leftKeys[i], rightKeys[i]);
       }
 
-      subqueries_.emplace(expr, markColumn);
+      subqueries_.emplace(exists, markColumn);
     }
   }
 }
@@ -2303,7 +2312,7 @@ void ToGraph::addFilter(
     exprSources_.pop_back();
   };
 
-  processSubqueries(input, predicate);
+  processSubqueries(input, predicate, /*filter=*/true);
 
   ExprVector flat;
   {

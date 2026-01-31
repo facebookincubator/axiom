@@ -387,6 +387,7 @@ AXIOM_DEFINE_ENUM_NAME(JoinMethod, joinMethodNames);
 Join::Join(
     JoinMethod method,
     velox::core::JoinType joinType,
+    bool nullAware,
     RelationOpPtr lhs,
     RelationOpPtr rhs,
     ExprVector lhsKeys,
@@ -397,6 +398,7 @@ Join::Join(
     : RelationOp{RelType::kJoin, std::move(lhs), std::move(columns)},
       method{method},
       joinType{joinType},
+      nullAware{nullAware},
       right{std::move(rhs)},
       leftKeys{std::move(lhsKeys)},
       rightKeys{std::move(rhsKeys)},
@@ -472,6 +474,7 @@ Join* Join::makeCrossJoin(
   return make<Join>(
       JoinMethod::kCross,
       joinType,
+      /*nullAware=*/false,
       std::move(input),
       std::move(right),
       ExprVector{},

@@ -512,6 +512,10 @@ class JoinEdge {
     /// True for NOT EXISTS subquery. Mutually exclusive with 'rightExists'.
     bool rightNotExists{false};
 
+    /// When true, the join semantic is IN / NOT IN. When false, the join
+    /// semantic is EXISTS / NOT EXISTS. Applies to semi and anti joins.
+    bool nullAwareIn{false};
+
     /// Marker column produced by 'exists' or 'not exists' join. If set, the
     /// 'rightExists' must be true.
     ColumnCP markColumn{nullptr};
@@ -549,6 +553,7 @@ class JoinEdge {
         rightOptional_(spec.rightOptional),
         rightExists_(spec.rightExists),
         rightNotExists_(spec.rightNotExists),
+        nullAwareIn_(spec.nullAwareIn),
         directed_(spec.directed),
         markColumn_(spec.markColumn),
         leftColumns_{spec.leftColumns},
@@ -603,18 +608,22 @@ class JoinEdge {
   ///        join acts as a pure filter.
   /// @param filter Optional non-equality filter conditions from the subquery's
   ///        correlation predicates that cannot be expressed as equality keys.
+  /// @param nullAwareIn When true, the join semantic is IN (nullAware). When
+  ///        false, the join semantic is EXISTS.
   /// @return A JoinEdge with rightExists=true representing the semi-join.
   static JoinEdge* makeExists(
       PlanObjectCP leftTable,
       PlanObjectCP rightTable,
       ColumnCP markColumn = nullptr,
-      ExprVector filter = {}) {
+      ExprVector filter = {},
+      bool nullAwareIn = false) {
     return make<JoinEdge>(
         leftTable,
         rightTable,
         Spec{
             .filter = std::move(filter),
             .rightExists = true,
+            .nullAwareIn = nullAwareIn,
             .markColumn = markColumn,
         });
   }
@@ -736,6 +745,11 @@ class JoinEdge {
   /// True if this is a NOT EXISTS join.
   bool isAnti() const {
     return rightNotExists_;
+  }
+
+  /// Returns true for IN semantics (nullAware), false for EXISTS semantics.
+  bool isNullAwareIn() const {
+    return nullAwareIn_;
   }
 
   /// True if this is a LEFT join.
@@ -865,6 +879,9 @@ class JoinEdge {
 
   // True if produces a result for left if no match on the right.
   const bool rightNotExists_;
+
+  // True for IN semantics (nullAware), false for EXISTS semantics.
+  const bool nullAwareIn_;
 
   // If directed non-outer edge. For example unnest or inner dependent on
   // optional of outer.

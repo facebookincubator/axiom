@@ -124,7 +124,8 @@ TEST_F(SubqueryTest, scalar) {
                            core::PlanMatcherBuilder()
                                .hiveScan("region", test::gt("r_name", "ASIA"))
                                .build(),
-                           velox::core::JoinType::kAnti)
+                           velox::core::JoinType::kAnti,
+                           /*nullAware=*/true)
                        .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -312,6 +313,148 @@ TEST_F(SubqueryTest, correlatedExists) {
       auto plan = toSingleNodePlan(query);
       AXIOM_ASSERT_PLAN(plan, matcher);
     }
+  }
+}
+TEST_F(SubqueryTest, project) {
+  auto matchAggNation = [&]() {
+    return core::PlanMatcherBuilder()
+        .tableScan("nation")
+        .singleAggregation()
+        .project()
+        .build();
+  };
+
+  // Correlated scalar subquery in projection with COUNT aggregation.
+  {
+    auto query =
+        "SELECT r_name, "
+        "   (SELECT count(*) FROM nation WHERE n_regionkey = r_regionkey) AS cnt "
+        "FROM region";
+
+    // The correlated scalar subquery is transformed into a LEFT JOIN with
+    // aggregation grouped by the correlation key.
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("region")
+                       .hashJoin(matchAggNation(), velox::core::JoinType::kLeft)
+                       .project()
+                       .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Correlated scalar subquery in projection with SUM aggregation.
+  {
+    auto query =
+        "SELECT r_name, "
+        "(SELECT sum(n_nationkey) FROM nation WHERE n_regionkey = r_regionkey) AS total "
+        "FROM region";
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("region")
+                       .hashJoin(matchAggNation(), velox::core::JoinType::kLeft)
+                       .project()
+                       .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Multiple scalar subqueries in projection.
+  {
+    auto query =
+        "SELECT r_name, "
+        "   (SELECT count(*) FROM nation WHERE n_regionkey = r_regionkey) AS cnt, "
+        "   (SELECT max(n_nationkey) FROM nation WHERE n_regionkey = r_regionkey) AS max_key "
+        "FROM region";
+
+    // Each subquery produces a separate LEFT JOIN.
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("region")
+                       // TODO Optimize to combine the two LEFT JOINs into one.
+                       .hashJoin(matchAggNation(), velox::core::JoinType::kLeft)
+                       .hashJoin(matchAggNation(), velox::core::JoinType::kLeft)
+                       .project()
+                       .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Uncorrelated scalar subquery in projection.
+  {
+    auto query =
+        "SELECT r_name, "
+        "   (SELECT count(*) FROM nation) AS total_nations "
+        "FROM region";
+
+    // Uncorrelated subquery is cross-joined.
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("region")
+                       .nestedLoopJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("nation")
+                               .singleAggregation({}, {"count(*)"})
+                               .build(),
+                           velox::core::JoinType::kInner)
+                       .project()
+                       .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // IN <subquery> in projection.
+  {
+    auto query =
+        "SELECT n_name, "
+        "   n_regionkey IN (SELECT r_regionkey FROM region WHERE r_name > 'ASIA') AS in_region "
+        "FROM nation";
+
+    // IN subquery in projection is transformed into a LEFT SEMI PROJECT join
+    // with a mark column. nullAware is true for IN semantics.
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .hashJoin(
+                           core::PlanMatcherBuilder()
+                               .hiveScan("region", test::gt("r_name", "ASIA"))
+                               .build(),
+                           velox::core::JoinType::kLeftSemiProject,
+                           true)
+                       .project()
+                       .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // EXISTS <subquery> in projection.
+  {
+    auto query =
+        "SELECT n_name, "
+        "   EXISTS (SELECT 1 FROM region WHERE r_regionkey = n_regionkey) AS has_region "
+        "FROM nation";
+
+    // EXISTS subquery in projection is transformed into a LEFT SEMI PROJECT
+    // join with a mark column. nullAware is false for EXISTS semantics.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .hashJoin(
+                core::PlanMatcherBuilder().hiveScan("region", {}).build(),
+                velox::core::JoinType::kLeftSemiProject,
+                false)
+            .project()
+            .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
 

@@ -199,13 +199,17 @@ class PlanMatcherBuilder {
   PlanMatcherBuilder& hashJoin(
       const std::shared_ptr<PlanMatcher>& rightMatcher);
 
-  /// Matches a HashJoin node with the specified right side matcher and join
-  /// type.
+  /// Matches a HashJoin node with the specified right side matcher, join type,
+  /// and nullAware flag.
   /// @param rightMatcher Matcher for the right (build) side of the join.
   /// @param joinType Type of join (e.g., kInner, kLeft, kRight).
+  /// @param nullAware When true, the join semantic is IN / NOT IN. When false,
+  /// the join semantic is EXISTS / NOT EXISTS. Applies only to semi project
+  /// and anti joins.
   PlanMatcherBuilder& hashJoin(
       const std::shared_ptr<PlanMatcher>& rightMatcher,
-      JoinType joinType);
+      JoinType joinType,
+      bool nullAware = false);
 
   /// Matches a NestedLoopJoin node with the specified right side matcher and
   /// join type.
