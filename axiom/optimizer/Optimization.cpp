@@ -1068,7 +1068,7 @@ void Optimization::addOrderBy(
   auto orderKeys = precompute.toColumns(dt->orderKeys);
 
   for (auto i = 0; i < orderKeys.size(); ++i) {
-    state.exprToColumn[dt->orderKeys[i]] = orderKeys[i];
+    state.addExprToColumn(dt->orderKeys[i], orderKeys[i]);
   }
 
   state.place(dt->orderKeys);

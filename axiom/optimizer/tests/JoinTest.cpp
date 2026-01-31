@@ -574,6 +574,26 @@ TEST_F(JoinTest, joinWithComputedAndProjectedKeys) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_F(JoinTest, crossThanOrderBy) {
+  auto query = "SELECT length(n_name) FROM nation, region ORDER BY 1";
+
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("nation")
+                     .nestedLoopJoin(
+                         core::PlanMatcherBuilder().tableScan("region").build())
+                     .project({"length(n_name) as l"})
+                     .orderBy({"l"})
+                     .project()
+                     .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  ASSERT_NO_THROW(planVelox(logicalPlan));
+}
+
 TEST_F(JoinTest, filterPushdownThroughCrossJoinUnnest) {
   {
     testConnector_->addTable(

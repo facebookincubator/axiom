@@ -72,6 +72,7 @@ void PlanState::save(PlanStateSaver& saver) const {
   saver.placed = placed_;
   saver.columns = columns_;
   saver.cost = cost;
+  saver.exprToColumn = exprToColumn_;
   saver.numDebugPlacedTables = debugPlacedTables.size();
 }
 
@@ -79,6 +80,7 @@ void PlanState::restore(PlanStateSaver& saver) {
   placed_ = std::move(saver.placed);
   columns_ = std::move(saver.columns);
   cost = saver.cost;
+  exprToColumn_ = std::move(saver.exprToColumn);
   debugPlacedTables.resize(saver.numDebugPlacedTables);
 }
 
@@ -86,6 +88,7 @@ void PlanState::restore(const NextJoin& nextJoin) {
   placed_ = nextJoin.placed;
   columns_ = nextJoin.columns;
   cost = nextJoin.cost;
+  exprToColumn_.clear();
 }
 
 void PlanState::place(PlanObjectCP object) {
@@ -197,6 +200,7 @@ void PlanState::addNextJoin(
     const JoinCandidate* candidate,
     RelationOpPtr plan,
     std::vector<NextJoin>& toTry) const {
+  VELOX_DCHECK(exprToColumn_.empty());
   if (!isOverBest()) {
     toTry.emplace_back(candidate, std::move(plan), cost, placed_, columns_);
   } else {
@@ -256,8 +260,8 @@ PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
   PlanObjectSet result;
 
   auto translateExpr = [&](ExprCP expr) {
-    auto it = exprToColumn.find(expr);
-    if (it != exprToColumn.end()) {
+    auto it = exprToColumn_.find(expr);
+    if (it != exprToColumn_.end()) {
       return it->second;
     } else {
       return expr;
@@ -363,12 +367,16 @@ PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
 }
 
 ExprCP PlanState::toColumn(ExprCP expr) const {
-  auto it = exprToColumn.find(expr);
-  if (it != exprToColumn.end()) {
+  auto it = exprToColumn_.find(expr);
+  if (it != exprToColumn_.end()) {
     return it->second;
   } else {
     return expr;
   }
+}
+
+void PlanState::addExprToColumn(ExprCP expr, ExprCP column) {
+  exprToColumn_[expr] = column;
 }
 
 std::string PlanState::printCost() const {
