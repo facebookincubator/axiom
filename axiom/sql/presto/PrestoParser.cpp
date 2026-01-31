@@ -1216,7 +1216,9 @@ class RelationPlanner : public AstVisitor {
     return toExpr(expr);
   }
 
-  bool tryAddGlobalAgg(const std::vector<SelectItemPtr>& selectItems) {
+  bool tryAddGlobalAgg(
+      const std::vector<SelectItemPtr>& selectItems,
+      const ExpressionPtr& having) {
     for (const auto& item : selectItems) {
       if (item->is(NodeType::kAllColumns)) {
         return false;
@@ -1241,7 +1243,7 @@ class RelationPlanner : public AstVisitor {
       return false;
     }
 
-    addGroupBy(selectItems, {}, /*having=*/nullptr, /*orderBy=*/nullptr);
+    addGroupBy(selectItems, {}, having, /*orderBy=*/nullptr);
     return true;
   }
 
@@ -1552,7 +1554,7 @@ class RelationPlanner : public AstVisitor {
         builder_->distinct();
       }
     } else {
-      if (tryAddGlobalAgg(selectItems)) {
+      if (tryAddGlobalAgg(selectItems, node->having())) {
         // Nothing else to do.
       } else {
         // SELECT a, b -> builder.project({a, b})

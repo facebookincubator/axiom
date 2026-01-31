@@ -926,13 +926,23 @@ TEST_F(PrestoParserTest, with) {
 }
 
 TEST_F(PrestoParserTest, countStar) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate();
+  {
+    auto matcher =
+        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate();
 
-  testSql("SELECT count(*) FROM nation", matcher);
-  testSql("SELECT count(1) FROM nation", matcher);
+    testSql("SELECT count(*) FROM nation", matcher);
+    testSql("SELECT count(1) FROM nation", matcher);
 
-  testSql("SELECT count(1) \"count\" FROM nation", matcher);
-  testSql("SELECT count(1) AS \"count\" FROM nation", matcher);
+    testSql("SELECT count(1) \"count\" FROM nation", matcher);
+    testSql("SELECT count(1) AS \"count\" FROM nation", matcher);
+  }
+
+  {
+    // Global aggregation with HAVING clause.
+    auto matcher =
+        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate().filter();
+    testSql("SELECT count(*) FROM nation HAVING count(*) > 100", matcher);
+  }
 }
 
 TEST_F(PrestoParserTest, aggregateCoercions) {
