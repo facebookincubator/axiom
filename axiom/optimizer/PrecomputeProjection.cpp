@@ -64,7 +64,7 @@ ExprCP PrecomputeProjection::toColumn(
 }
 
 ExprVector PrecomputeProjection::toColumns(
-    const ExprVector& exprs,
+    CPSpan<Expr> exprs,
     const ColumnVector* aliases,
     bool preserveLiterals) {
   ExprVector columns;

@@ -38,10 +38,9 @@ Project -> dt1.promo_revenue
           t3.p_partkey = t2.l_partkey
         TableScan -> t3.p_partkey, t3.p_type
           table: part
-        HashBuild -> t2.l_partkey, t2.l_extendedprice, t2.l_discount
-          TableScan -> t2.l_partkey, t2.l_extendedprice, t2.l_discount
-            table: lineitem
-            single-column filters: gte(t2.l_shipdate, "1995-09-01") and lt(t2.l_shipdate, "1995-10-01")
+        TableScan -> t2.l_partkey, t2.l_extendedprice, t2.l_discount
+          table: lineitem
+          single-column filters: gte(t2.l_shipdate, "1995-09-01") and lt(t2.l_shipdate, "1995-10-01")
 
 
 Executable Velox plan:

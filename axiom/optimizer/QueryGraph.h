@@ -67,6 +67,11 @@ class Expr : public PlanObject {
     return containsFunction(FunctionSet::kNonDeterministic);
   }
 
+  // whether function contains window exprs or not
+  bool containsWindow() const {
+    return containsFunction(FunctionSet::kWindow);
+  }
+
   /// True if 'this' contains any function from 'set'. See FunctionSet.
   virtual bool containsFunction(uint64_t /*set*/) const {
     return false;
@@ -428,7 +433,7 @@ class Lambda : public Expr {
 /// Represens a set of transitively equal columns.
 struct Equivalence {
   /// Each element has a direct or implied equality edge to every other.
-  ColumnVector columns;
+  PlanObjectSet columns;
 };
 
 /// The join structure is described as a tree of derived tables with
@@ -445,44 +450,11 @@ struct Equivalence {
 /// Represents one side of a join. See Join below for the meaning of the
 /// members.
 struct JoinSide {
-  PlanObjectCP table;
-  const ExprVector& keys;
-  const float fanout;
-  const bool isOptional;
-  const bool isOtherOptional;
-  const bool isExists;
-  const bool isNotExists;
-  ColumnCP markColumn;
-  const bool isUnique;
-  const ColumnVector& columns;
-  const ExprVector& exprs;
-
-  /// Returns the join type to use if 'this' is the right side.
-  velox::core::JoinType leftJoinType() const {
-    if (isNotExists) {
-      return velox::core::JoinType::kAnti;
-    }
-
-    if (isExists) {
-      if (markColumn) {
-        return velox::core::JoinType::kLeftSemiProject;
-      }
-      return velox::core::JoinType::kLeftSemiFilter;
-    }
-
-    if (isOptional && isOtherOptional) {
-      return velox::core::JoinType::kFull;
-    }
-
-    if (isOptional) {
-      return velox::core::JoinType::kLeft;
-    }
-
-    if (isOtherOptional) {
-      return velox::core::JoinType::kRight;
-    }
-    return velox::core::JoinType::kInner;
-  }
+  const PlanObjectCP table = nullptr;
+  const CPSpan<Expr> keys;
+  const float fanout = 0;
+  const velox::core::JoinType leftJoinType = velox::core::JoinType::kInner;
+  const ColumnCP markColumn = nullptr;
 };
 
 /// Represents a possibly directional equality join edge.
@@ -493,97 +465,49 @@ struct JoinSide {
 /// decomposable and reorderable conjuncts.
 class JoinEdge {
  public:
-  /// Default is INNER JOIN.
+  enum class JoinType : uint8_t {
+    kInner,
+    kLeft,
+    kRight,
+    kFull,
+    kSemi,
+    kAnti,
+    kUnnest,
+  };
+
   struct Spec {
     /// Filter conjuncts to be applied after the join. Only for non-inner joins.
     ExprVector filter;
 
-    /// True for RIGHT and FULL OUTER JOIN. The output may have no match on the
-    /// left side.
-    bool leftOptional{false};
-
-    /// True for LEFT and FULL OUTER JOIN. The output may have no match on the
-    /// right side.
-    bool rightOptional{false};
-
-    /// True for EXISTS subquery. Mutually exclusive with 'rightNotExists'.
-    bool rightExists{false};
-
-    /// True for NOT EXISTS subquery. Mutually exclusive with 'rightExists'.
-    bool rightNotExists{false};
+    /// Join type.
+    JoinType joinType{JoinType::kInner};
 
     /// When true, the join semantic is IN / NOT IN. When false, the join
     /// semantic is EXISTS / NOT EXISTS. Applies to semi and anti joins.
     bool nullAwareIn{false};
 
-    /// Marker column produced by 'exists' or 'not exists' join. If set, the
-    /// 'rightExists' must be true.
+    /// Marker column produced by 'exists' or 'not exists' join.
+    ///  If set, the 'joinType' must be kSemi.
     ColumnCP markColumn{nullptr};
-
-    /// Columns produced by the 'left' side of a RIGHT or FULL OUTER join.
-    /// Requires 'leftOptional' to be true.
-    ColumnVector leftColumns;
-
-    /// Input expressions corresponding 1:1 to 'leftColumns'.
-    ExprVector leftExprs;
-
-    /// Columns produced by the 'right' side of a LEFT or FULL OUTER join.
-    /// Requires 'rightOptional' to be true.
-    ColumnVector rightColumns;
-
-    /// Input expressions corresponding 1:1 to 'rightColumns'.
-    ExprVector rightExprs;
-
-    bool directed{false};
   };
 
-  /// @param leftTable The left table of the join. May be nullptr if 'leftKeys'
-  /// come from different tables. If so, 'this' must be not inner and not full
-  /// outer.
+  /// @param leftTable The left table of the join. Can be nullptr.
   /// @param rightTable The right table of the join. Cannot be nullptr.
-  JoinEdge(
-      PlanObjectCP leftTable,
-      PlanObjectCP rightTable,
-      Spec spec,
-      std::optional<logical_plan::JoinType> originalJoinType = std::nullopt)
+  JoinEdge(PlanObjectCP leftTable, PlanObjectCP rightTable, Spec spec)
       : leftTable_(leftTable),
         rightTable_(rightTable),
         filter_(std::move(spec.filter)),
-        leftOptional_(spec.leftOptional),
-        rightOptional_(spec.rightOptional),
-        rightExists_(spec.rightExists),
-        rightNotExists_(spec.rightNotExists),
+        joinType_(spec.joinType),
         nullAwareIn_(spec.nullAwareIn),
-        directed_(spec.directed),
-        markColumn_(spec.markColumn),
-        leftColumns_{spec.leftColumns},
-        leftExprs_{spec.leftExprs},
-        rightColumns_{spec.rightColumns},
-        rightExprs_{spec.rightExprs},
-        originalJoinType_{originalJoinType} {
-    VELOX_CHECK_NOT_NULL(rightTable);
-
-    if (isInner()) {
-      VELOX_CHECK_NOT_NULL(
-          leftTable, "Hyper edge is not supported for an inner join");
-      VELOX_CHECK(filter_.empty(), "Filter is not allowed for an inner join");
-    }
-
-    VELOX_CHECK(!rightExists_ || !rightNotExists_);
-
-    if (markColumn_) {
-      VELOX_CHECK(rightExists_);
-    }
-
-    if (!leftColumns_.empty()) {
-      VELOX_CHECK(leftOptional_);
-      VELOX_CHECK_EQ(leftColumns_.size(), leftExprs_.size());
-    }
-
-    if (!rightColumns_.empty()) {
-      VELOX_CHECK(rightOptional_);
-      VELOX_CHECK_EQ(rightColumns_.size(), rightExprs_.size());
-    }
+        markColumn_(spec.markColumn) {
+    VELOX_DCHECK_NOT_NULL(leftTable_);
+    VELOX_DCHECK_NOT_NULL(rightTable_);
+    // filter_ is only for non-inner joins.
+    VELOX_DCHECK(filter_.empty() || !isInner());
+    // Mark column only for semi joins.
+    VELOX_DCHECK(!markColumn_ || isSemi());
+    // Null aware in only for semi and anti joins
+    VELOX_DCHECK(!nullAwareIn_ || isSemi() || isAnti());
   }
 
   static JoinEdge* makeInner(PlanObjectCP leftTable, PlanObjectCP rightTable) {
@@ -622,7 +546,7 @@ class JoinEdge {
         rightTable,
         Spec{
             .filter = std::move(filter),
-            .rightExists = true,
+            .joinType = JoinType::kSemi,
             .nullAwareIn = nullAwareIn,
             .markColumn = markColumn,
         });
@@ -644,19 +568,20 @@ class JoinEdge {
   static JoinEdge* makeNotExists(
       PlanObjectCP leftTable,
       PlanObjectCP rightTable) {
-    return make<JoinEdge>(leftTable, rightTable, Spec{.rightNotExists = true});
+    return make<JoinEdge>(
+        leftTable, rightTable, Spec{.joinType = JoinType::kAnti});
   }
 
   static JoinEdge* makeUnnest(
       PlanObjectCP leftTable,
       PlanObjectCP rightTable,
       ExprVector unnestExprs) {
-    VELOX_DCHECK_NOT_NULL(leftTable);
-    auto* edge = make<JoinEdge>(leftTable, rightTable, Spec{.directed = true});
+    auto* edge = make<JoinEdge>(
+        leftTable, rightTable, Spec{.joinType = JoinType::kUnnest});
     edge->leftKeys_ = std::move(unnestExprs);
     // TODO Not sure to what values fanout need to be set,
     // (1, 1) looks ok, but tests don't produce expected plans.
-    edge->setFanouts(2, 2);
+    edge->setFanouts(2, 1);
     return edge;
   }
 
@@ -667,8 +592,6 @@ class JoinEdge {
   PlanObjectCP rightTable() const {
     return rightTable_;
   }
-
-  PlanObjectSet allTables() const;
 
   size_t numKeys() const {
     VELOX_DCHECK_LE(rightKeys_.size(), leftKeys_.size());
@@ -692,35 +615,15 @@ class JoinEdge {
   }
 
   bool leftOptional() const {
-    return leftOptional_;
+    return isRightOuter() || isFullOuter();
   }
 
   bool rightOptional() const {
-    return rightOptional_;
+    return isLeftOuter() || isFullOuter();
   }
 
   ColumnCP markColumn() const {
     return markColumn_;
-  }
-
-  const ColumnVector& leftColumns() const {
-    return leftColumns_;
-  }
-
-  const ExprVector& leftExprs() const {
-    return leftExprs_;
-  }
-
-  const ColumnVector& rightColumns() const {
-    return rightColumns_;
-  }
-
-  const ExprVector& rightExprs() const {
-    return rightExprs_;
-  }
-
-  bool directed() const {
-    return directed_;
   }
 
   void addEquality(ExprCP left, ExprCP right, bool update = false);
@@ -733,18 +636,17 @@ class JoinEdge {
 
   /// True if inner join.
   bool isInner() const {
-    return !leftOptional_ && !rightOptional_ && !rightExists_ &&
-        !rightNotExists_;
+    return joinType_ == JoinType::kInner;
   }
 
   /// True if this is an EXISTS join.
   bool isSemi() const {
-    return rightExists_;
+    return joinType_ == JoinType::kSemi;
   }
 
   /// True if this is a NOT EXISTS join.
   bool isAnti() const {
-    return rightNotExists_;
+    return joinType_ == JoinType::kAnti;
   }
 
   /// Returns true for IN semantics (nullAware), false for EXISTS semantics.
@@ -754,32 +656,35 @@ class JoinEdge {
 
   /// True if this is a LEFT join.
   bool isLeftOuter() const {
-    return rightOptional_ && !leftOptional_ && !isSemi() && !isAnti();
+    return joinType_ == JoinType::kLeft;
   }
 
-  /// Original join type if different from this edge. Used to mark LEFT joins
-  /// which were specified as RIGHT joins in the logical plan. Needed to
-  /// correctly plan RIGHT join when syntactic join order is requested.
-  std::optional<logical_plan::JoinType> originalJoinType() const {
-    return originalJoinType_;
+  /// True if this is a RIGHT join.
+  bool isRightOuter() const {
+    return joinType_ == JoinType::kRight;
+  }
+
+  /// True if this is a FULL OUTER join.
+  bool isFullOuter() const {
+    return joinType_ == JoinType::kFull;
+  }
+
+  /// True if this is an UNNEST join.
+  bool isUnnest() const {
+    return joinType_ == JoinType::kUnnest;
   }
 
   /// True if all tables referenced from 'leftKeys' must be placed before
   /// placing this.
   bool isNonCommutative() const {
     // Inner and full outer joins are commutative.
-    if (rightOptional_ && leftOptional_) {
-      return false;
-    }
-
-    return !leftTable_ || rightOptional_ || leftOptional_ || rightExists_ ||
-        rightNotExists_ || directed_;
+    return !isInner() && !isFullOuter();
   }
 
   /// True if has a hash based variant that builds on the left and probes on the
   /// right.
   bool hasRightHashVariant() const {
-    return isNonCommutative() && !rightNotExists_;
+    return isNonCommutative() && !isAnti() && !isUnnest();
   }
 
   /// Returns the join side info for 'table'. If 'other' is set, returns the
@@ -793,7 +698,7 @@ class JoinEdge {
     VELOX_DCHECK_NOT_NULL(table);
     return leftTable_ == table
         ? std::pair<PlanObjectCP, float>{rightTable_, lrFanout_}
-        : rightTable_ == table && leftTable_ != nullptr
+        : rightTable_ == table
         ? std::pair<PlanObjectCP, float>{leftTable_, rlFanout_}
         : std::pair<PlanObjectCP, float>{nullptr, 0};
   }
@@ -824,10 +729,6 @@ class JoinEdge {
 
   /// Fills in 'lrFanout' and 'rlFanout', 'leftUnique', 'rightUnique'.
   void guessFanout();
-
-  /// True if a hash join build can be broadcasted. Used when building on the
-  /// right. None of the right hash join variants are broadcastable.
-  bool isBroadcastableType() const;
 
   /// Returns a key string for recording a join cardinality sample. The string
   /// is empty if not applicable. The bool is true if the key has right table
@@ -863,39 +764,14 @@ class JoinEdge {
   // 'leftKeys' select max 1 'rightTable' row.
   bool rightUnique_{false};
 
-  // True if an unprobed right side row produces a result with right side
-  // columns set and left side columns as null (right outer join). Possible only
-  // for hash or merge.
-  const bool leftOptional_;
-
-  // True if a right side miss produces a row with left side columns
-  // and a null for right side columns (left outer join). A full outer
-  // join has both left and right optional.
-  const bool rightOptional_;
-
-  // True if the right side is only checked for existence of a match. If
-  // rightOptional is set, this can project out a null for misses.
-  const bool rightExists_;
-
-  // True if produces a result for left if no match on the right.
-  const bool rightNotExists_;
+  // Join type.
+  const JoinType joinType_;
 
   // True for IN semantics (nullAware), false for EXISTS semantics.
   const bool nullAwareIn_;
 
-  // If directed non-outer edge. For example unnest or inner dependent on
-  // optional of outer.
-  const bool directed_;
-
   // Flag to set if right side has a match.
   ColumnCP const markColumn_;
-
-  const ColumnVector leftColumns_;
-  const ExprVector leftExprs_;
-  const ColumnVector rightColumns_;
-  const ExprVector rightExprs_;
-
-  const std::optional<logical_plan::JoinType> originalJoinType_;
 };
 
 using JoinEdgeP = JoinEdge*;
@@ -948,12 +824,6 @@ struct BaseTable : public PlanObject {
 
   PathSet columnSubfields(int32_t id) const;
 
-  /// Returns possible indices for driving table scan of 'table'.
-  std::vector<ColumnGroupCP> chooseLeafIndex() const {
-    VELOX_DCHECK(!schemaTable->columnGroups.empty());
-    return {schemaTable->columnGroups[0]};
-  }
-
   std::string toString() const override;
 };
 
@@ -968,7 +838,7 @@ struct ValuesTable : public PlanObject {
       : PlanObject{PlanType::kValuesTableNode},
         dataType{_dataType},
         data{std::move(_data)},
-        cardinality_{cardinality(data)} {
+        cardinality_{std::max<float>(1, cardinality(data))} {
     VELOX_CHECK_NOT_NULL(dataType);
   }
 
@@ -1016,7 +886,8 @@ struct ValuesTable : public PlanObject {
 };
 
 struct UnnestTable : public PlanObject {
-  explicit UnnestTable() : PlanObject{PlanType::kUnnestTableNode} {}
+  explicit UnnestTable(float cardinality)
+      : PlanObject{PlanType::kUnnestTableNode}, cardinality_{cardinality} {}
 
   // Correlation name, distinguishes between uses of the same unnest node.
   Name cname{nullptr};
@@ -1033,7 +904,7 @@ struct UnnestTable : public PlanObject {
 
   float cardinality() const {
     // TODO Should be changed later to actual cardinality.
-    return 1;
+    return cardinality_;
   }
 
   bool isTable() const override {
@@ -1043,6 +914,9 @@ struct UnnestTable : public PlanObject {
   void addJoinedBy(JoinEdgeP join);
 
   std::string toString() const override;
+
+ private:
+  float cardinality_;
 };
 
 using TypeVector = QGVector<const velox::Type*>;
@@ -1124,6 +998,110 @@ class Aggregate : public Call {
 using AggregateCP = const Aggregate*;
 using AggregateVector = QGVector<AggregateCP>;
 
+/// Window frame specification for window functions
+struct WindowFrame {
+  logical_plan::WindowExpr::WindowType type;
+  logical_plan::WindowExpr::BoundType startType;
+  ExprCP startValue{nullptr};
+  logical_plan::WindowExpr::BoundType endType;
+  ExprCP endValue{nullptr};
+};
+
+struct WindowSpec {
+  WindowSpec(
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes)
+      : partitionKeys(std::move(partitionKeys)),
+        orderKeys(std::move(orderKeys)),
+        orderTypes(std::move(orderTypes)) {
+    VELOX_CHECK_EQ(orderKeys.size(), orderTypes.size());
+  }
+
+  ExprVector partitionKeys;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+
+  bool operator==(const WindowSpec& other) const;
+
+  struct Hasher {
+    size_t operator()(const WindowSpec& spec) const;
+  };
+};
+
+class Window : public Call {
+ public:
+  Window(
+      Name name,
+      const Value& value,
+      ExprVector args,
+      WindowSpec spec,
+      WindowFrame frame,
+      PlanObjectCP dt,
+      bool ignoreNulls)
+      : Call(
+            PlanType::kWindowExpr,
+            name,
+            value,
+            std::move(args),
+            [&args, &spec]() {
+              FunctionSet funcs(FunctionSet::kWindow);
+              for (const auto& arg : args) {
+                funcs = funcs | arg->functions();
+              }
+              for (const auto& key : spec.partitionKeys) {
+                funcs = funcs | key->functions();
+              }
+              for (const auto& key : spec.orderKeys) {
+                funcs = funcs | key->functions();
+              }
+              return funcs;
+            }()),
+        spec_(std::move(spec)),
+        frame_(frame),
+        column_([&]() {
+          auto windowName = toName(fmt::format("{}_{}", name, id()));
+          return make<Column>(windowName, dt, value, windowName);
+        }()),
+        ignoreNulls_(ignoreNulls) {
+    columns_.unionColumns(spec_.partitionKeys);
+    columns_.unionColumns(spec_.orderKeys);
+
+    if (frame_.startValue) {
+      columns_.unionColumns(frame_.startValue);
+    }
+
+    if (frame_.endValue) {
+      columns_.unionColumns(frame_.endValue);
+    }
+  }
+
+  const WindowSpec& spec() const {
+    return spec_;
+  }
+
+  const WindowFrame& frame() const {
+    return frame_;
+  }
+
+  bool ignoreNulls() const {
+    return ignoreNulls_;
+  }
+
+  const ColumnCP& column() const {
+    return column_;
+  }
+
+ private:
+  WindowSpec spec_;
+  WindowFrame frame_;
+  const ColumnCP column_;
+  bool ignoreNulls_;
+};
+
+using WindowCP = const Window*;
+using WindowVector = QGVector<WindowCP>;
+
 class AggregationPlan : public PlanObject {
  public:
   AggregationPlan(
@@ -1167,27 +1145,26 @@ using AggregationPlanCP = const AggregationPlan*;
 
 class WritePlan : public PlanObject {
  public:
-  /// @param table The table to write to.
-  /// @param kind Indicates the type of write (create/insert/delete/update)
+  /// @param tableWrite The logical plan node describing the write.
   /// @param columnExprs Expressions producing the values to write. 1:1 with the
   /// table schema.
   WritePlan(
-      const connector::Table& table,
-      connector::WriteKind kind,
+      const logical_plan::TableWriteNode& tableWrite,
       ExprVector columnExprs)
       : PlanObject{PlanType::kWriteNode},
-        table_{table},
-        kind_{kind},
-        columnExprs_{std::move(columnExprs)} {
-    VELOX_DCHECK_EQ(columnExprs_.size(), table_.type()->size());
+        tableWrite_{tableWrite},
+        columnExprs_{std::move(columnExprs)} {}
+
+  const logical_plan::TableWriteNode& tableWrite() const {
+    return tableWrite_;
   }
 
   const connector::Table& table() const {
-    return table_;
+    return *tableWrite_.table();
   }
 
   connector::WriteKind kind() const {
-    return kind_;
+    return tableWrite_.writeKind();
   }
 
   const ExprVector& columnExprs() const {
@@ -1195,8 +1172,7 @@ class WritePlan : public PlanObject {
   }
 
  private:
-  const connector::Table& table_;
-  const connector::WriteKind kind_;
+  const logical_plan::TableWriteNode& tableWrite_;
   const ExprVector columnExprs_;
 };
 

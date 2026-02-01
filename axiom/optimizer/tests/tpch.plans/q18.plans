@@ -66,23 +66,20 @@ Project (redundant) -> dt1.c_name, dt1.c_custkey, dt1.o_orderkey, dt1.o_orderdat
             t4.l_orderkey = t3.o_orderkey
           TableScan -> t4.l_orderkey, t4.l_quantity
             table: lineitem
-          HashBuild -> t2.c_custkey, t2.c_name, t3.o_orderkey, t3.o_totalprice, t3.o_orderdate
-            Join INNER Hash -> t2.c_custkey, t2.c_name, t3.o_orderkey, t3.o_totalprice, t3.o_orderdate
-                t3.o_custkey = t2.c_custkey
-              TableScan -> t3.o_orderkey, t3.o_custkey, t3.o_totalprice, t3.o_orderdate
-                table: orders
-              HashBuild -> t2.c_custkey, t2.c_name
-                TableScan -> t2.c_custkey, t2.c_name
-                  table: customer
-        HashBuild -> dt5.l_orderkey_23
-          Project -> dt5.l_orderkey_23
-              dt5.l_orderkey_23 := t6.l_orderkey
-            Filter -> t6.l_orderkey, dt5.sum
-                gt(dt5.sum, 300)
-              Aggregation (t6.l_orderkey) -> t6.l_orderkey, dt5.sum
-                  dt5.sum := sum(t6.l_quantity)
-                TableScan -> t6.l_orderkey, t6.l_quantity
-                  table: lineitem
+          Join INNER Hash -> t2.c_custkey, t2.c_name, t3.o_orderkey, t3.o_totalprice, t3.o_orderdate
+              t3.o_custkey = t2.c_custkey
+            TableScan -> t3.o_orderkey, t3.o_custkey, t3.o_totalprice, t3.o_orderdate
+              table: orders
+            TableScan -> t2.c_custkey, t2.c_name
+              table: customer
+        Project -> dt5.l_orderkey_23
+            dt5.l_orderkey_23 := t6.l_orderkey
+          Filter -> t6.l_orderkey, dt5.sum
+              gt(dt5.sum, 300)
+            Aggregation (t6.l_orderkey) -> t6.l_orderkey, dt5.sum
+                dt5.sum := sum(t6.l_quantity)
+              TableScan -> t6.l_orderkey, t6.l_quantity
+                table: lineitem
 
 
 Executable Velox plan:

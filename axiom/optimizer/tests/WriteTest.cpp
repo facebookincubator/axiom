@@ -90,10 +90,10 @@ class WriteTest : public test::HiveQueriesTestBase {
 
     auto table = createTable(*ctasStatement);
 
-    connector::SchemaResolver schemaResolver;
-    schemaResolver.setTargetTable(exec::test::kHiveConnectorId, table);
+    ctasStatement->plan()->as<logical_plan::TableWriteNode>()->setTable(
+        std::move(table));
 
-    auto plan = planVelox(ctasStatement->plan(), schemaResolver, options);
+    auto plan = planVelox(ctasStatement->plan(), options);
     if (verifyPlan != nullptr) {
       verifyPlan(*plan.plan);
       if (::testing::Test::HasNonfatalFailure()) {
@@ -318,12 +318,13 @@ TEST_F(WriteTest, basic) {
   auto data = makeTestData(10, kTestBatchSize);
 
   lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
-  auto writePlan =
-      lp::PlanBuilder(context)
-          .values({data})
-          .tableWrite(
-              "test", lp::WriteKind::kInsert, {"key1", "key2", "data", "ds"})
-          .build();
+  auto writePlan = lp::PlanBuilder(context)
+                       .values({data})
+                       .tableWrite(
+                           "test",
+                           connector::WriteKind::kInsert,
+                           {"key1", "key2", "data", "ds"})
+                       .build();
   checkWrittenRows(runVelox(writePlan), kTestBatchSize * 10);
 
   auto countTestTable = [&] {
@@ -342,7 +343,7 @@ TEST_F(WriteTest, basic) {
                        .values(makeTestData(100, kTestBatchSize))
                        .tableWrite(
                            "test",
-                           lp::WriteKind::kInsert,
+                           connector::WriteKind::kInsert,
                            {"key1", "key2", "data", "ds"},
                            {"key1", "key2", "key1 % (key1 - 200000)", "ds"})
                        .build();
@@ -374,7 +375,7 @@ TEST_F(WriteTest, basic) {
                       .tableScan("test")
                       .tableWrite(
                           "test2",
-                          lp::WriteKind::kInsert,
+                          connector::WriteKind::kInsert,
                           {"key1", "key2", "data", "data2", "ds"})
                       .build();
   checkWrittenRows(runVelox(copyPlan), kTestBatchSize * 10);

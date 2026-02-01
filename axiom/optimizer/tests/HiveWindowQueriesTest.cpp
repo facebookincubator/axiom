@@ -1,0 +1,962 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <folly/init/Init.h>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/optimizer/tests/HiveQueriesTestBase.h"
+#include "axiom/optimizer/tests/PlanMatcher.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+
+namespace facebook::axiom::optimizer {
+namespace {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
+
+class HiveWindowQueriesTest : public test::HiveQueriesTestBase {
+  void SetUp() override {
+    test::HiveQueriesTestBase::SetUp();
+    window::prestosql::registerAllWindowFunctions();
+  }
+};
+
+TEST_F(HiveWindowQueriesTest, emptySpecRowNumber) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan = lp::PlanBuilder(context)
+                         .tableScan("nation")
+                         .window({"row_number() over ()"})
+                         .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan = exec::test::PlanBuilder()
+                           .tableScan("nation", getSchema("nation"))
+                           .window({"row_number() over ()"})
+                           .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, fullSpecRowNumber) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey)"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, specDedup) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey, n_regionkey order by n_nationkey, n_nationkey desc, n_nationkey desc) as rn"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey)"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, specKeysIntersects) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey, n_comment order by n_nationkey, n_regionkey) as rn"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_comment order by n_nationkey)"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, stickyFilterAboveWindow) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .filter("n_regionkey < 10")
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .filter()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .filter("n_regionkey < 10")
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, manySameSpec) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey)",
+               "rank() over (partition by n_regionkey order by n_nationkey)",
+               "dense_rank() over (partition by n_regionkey order by n_nationkey)"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey)",
+               "rank() over (partition by n_regionkey order by n_nationkey)",
+               "dense_rank() over (partition by n_regionkey order by n_nationkey)"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, differentSpecs) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"dense_rank() over (partition by n_regionkey order by n_nationkey)",
+               "row_number() over (partition by n_regionkey order by n_nationkey)",
+               "row_number() over (partition by n_regionkey order by n_nationkey desc)",
+               "row_number() over (partition by n_name)",
+               "lag(n_name) over (order by n_nationkey)"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .window()
+                       .window()
+                       .window()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"dense_rank() over (partition by n_regionkey order by n_nationkey)"})
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey)"})
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey desc)"})
+          .window({"count(*) over (partition by n_name)"})
+          .window({"lag(n_name) over (order by n_nationkey)"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, rowsFrameTypes) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"sum(n_nationkey) over (partition by n_regionkey order by n_nationkey rows unbounded preceding)",
+               "avg(n_nationkey) over (partition by n_regionkey order by n_nationkey rows between 2 preceding and 1 following)",
+               "count(*) over (partition by n_regionkey order by n_nationkey rows between current row and unbounded following)",
+               "min(n_nationkey) over (partition by n_regionkey order by n_nationkey rows between 1 preceding and 1 following)",
+               "max(n_nationkey) over (partition by n_regionkey order by n_nationkey rows between current row and 3 following)"})
+          .build();
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"sum(n_nationkey) over (partition by n_regionkey order by n_nationkey rows unbounded preceding)",
+               "avg(n_nationkey) over (partition by n_regionkey order by n_nationkey rows between 2 preceding and 1 following)",
+               "count(*) over (partition by n_regionkey order by n_nationkey rows between current row and unbounded following)",
+               "min(n_nationkey) over (partition by n_regionkey order by n_nationkey rows between 1 preceding and 1 following)",
+               "max(n_nationkey) over (partition by n_regionkey order by n_nationkey rows between current row and 3 following)"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, rangeFrameTypes) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"sum(n_nationkey) over (partition by n_regionkey order by n_nationkey range unbounded preceding)",
+               "avg(n_nationkey) over (partition by n_regionkey order by n_nationkey range between unbounded preceding and current row)",
+               "count(*) over (partition by n_regionkey order by n_nationkey range between current row and unbounded following)"})
+          .build();
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"sum(n_nationkey) over (partition by n_regionkey order by n_nationkey range unbounded preceding)",
+               "avg(n_nationkey) over (partition by n_regionkey order by n_nationkey range between unbounded preceding and current row)",
+               "count(*) over (partition by n_regionkey order by n_nationkey range between current row and unbounded following)"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, mixedFrameTypesAndBounds) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"sum(n_nationkey) over (partition by n_regionkey order by n_nationkey rows between unbounded preceding and current row)",
+               "avg(n_nationkey) over (partition by n_regionkey order by n_nationkey range between unbounded preceding and current row)",
+               "count(*) over (partition by n_regionkey order by n_nationkey range between current row and unbounded following)",
+               "max(n_nationkey) over (partition by n_regionkey order by n_nationkey rows between current row and 2 following)"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"sum(n_nationkey) over (partition by n_regionkey order by n_nationkey rows between unbounded preceding and current row)",
+               "avg(n_nationkey) over (partition by n_regionkey order by n_nationkey range between unbounded preceding and current row)",
+               "count(*) over (partition by n_regionkey order by n_nationkey range between current row and unbounded following)",
+               "max(n_nationkey) over (partition by n_regionkey order by n_nationkey rows between current row and 2 following)"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, specsWithoutOrderBy) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"sum(n_nationkey) over (partition by n_regionkey rows between unbounded preceding and unbounded following)",
+               "count(*) over (partition by n_regionkey range between unbounded preceding and unbounded following)"})
+          .build();
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"sum(n_nationkey) over (partition by n_regionkey rows between unbounded preceding and unbounded following)"})
+          .window(
+              {"count(*) over (partition by n_regionkey range between unbounded preceding and unbounded following)"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, multipleOrderByInSpec) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey, n_name)",
+               "rank() over (order by n_regionkey, n_nationkey desc, n_name)",
+               "dense_rank() over (partition by n_regionkey order by n_name, n_nationkey)"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .window()
+                       .window()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey, n_name)"})
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name)"})
+          .window(
+              {"dense_rank() over (partition by n_regionkey order by n_name, n_nationkey)"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, orderByWindowAliases) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn",
+               "rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .orderBy({"rn desc"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .window()
+                       .project()
+                       .orderBy()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name)"})
+          .orderBy({"rn desc"}, false)
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, orderByLimitProject) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .orderByWindows(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name)"})
+          .limit(10)
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name)"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .topN()
+                       .window()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .orderBy({"rnk"}, false)
+          .project(getSchema("nation")->names())
+          .limit(0, 10, false)
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, orderByWindowAliasesExprs) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk",
+               "row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .orderBy({"rnk + rn"})
+          .project({"rnk + rn"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .window()
+                       .project()
+                       .project()
+                       .orderBy()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .project({"rnk + rn as s"})
+          .orderBy({"s"}, false)
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, orderByWithStickyFilter) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .orderByWindows(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name)"})
+          .filter("n_regionkey < 10")
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .orderBy()
+                       .project()
+                       .filter()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .orderBy({"rnk"}, false)
+          .project(getSchema("nation")->names())
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, aggregate) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk",
+               "row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .aggregate({"rnk"}, {"max(rn)"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .window()
+                       .project()
+                       .singleAggregation()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .singleAggregation({"rnk"}, {"max(rn)"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, filters) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn",
+               "rank() over (partition by n_regionkey order by n_nationkey) as rnk"})
+          .filter("(rn + rnk > 5) and (rn > 2 or n_regionkey < 3)")
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .filter()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn",
+               "rank() over (partition by n_regionkey order by n_nationkey) as rnk"})
+          .filter("(rn + rnk > 5) and (rn > 2 or n_regionkey < 3)")
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, joinOn) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .as("n1")
+          .join(
+              lp::PlanBuilder(context)
+                  .tableScan("nation")
+                  .window(
+                      {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+                  .as("n2"),
+              "n1.rn = n2.rn",
+              lp::JoinType::kInner)
+          .filter("n1.rn > 993")
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .filter()
+                       .hashJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("nation")
+                               .window()
+                               .project()
+                               .build())
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto referencePlan =
+      exec::test::PlanBuilder(planNodeIdGenerator)
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .project({"n_nationkey", "n_name", "n_regionkey", "n_comment", "rn"})
+          .hashJoin(
+              {"rn"},
+              {"rn2"},
+              exec::test::PlanBuilder(planNodeIdGenerator)
+                  .tableScan("nation", getSchema("nation"))
+                  .window(
+                      {"row_number() over (partition by n_regionkey order by n_nationkey) as rn2"})
+                  .project(
+                      {"n_nationkey as n_nationkey_0",
+                       "n_name as n_name_1",
+                       "n_regionkey as n_regionkey_2",
+                       "n_comment as n_comment_3",
+                       "rn2"})
+                  .planNode(),
+              "",
+              {"n_nationkey",
+               "n_name",
+               "n_regionkey",
+               "n_comment",
+               "rn",
+               "n_nationkey_0",
+               "n_name_1",
+               "n_regionkey_2",
+               "n_comment_3",
+               "rn2"})
+          .filter("rn > 993")
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, joinDependent) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .as("n1")
+          .join(
+              lp::PlanBuilder(context).tableScan("region").as("r1"),
+              "n1.n_regionkey = r1.r_regionkey",
+              lp::JoinType::kInner)
+          .window(
+              {"row_number() over (partition by r1.r_regionkey order by n1.n_nationkey) as rn1",
+               "rank() over (partition by n1.n_nationkey order by r1.r_name) as rn2"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("nation")
+            .hashJoin(core::PlanMatcherBuilder().tableScan("region").build())
+            .window()
+            .window()
+            .project()
+            .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto referencePlan =
+      exec::test::PlanBuilder(planNodeIdGenerator)
+          .tableScan("nation", getSchema("nation"))
+          .hashJoin(
+              {"n_regionkey"},
+              {"r_regionkey"},
+              exec::test::PlanBuilder(planNodeIdGenerator)
+                  .tableScan("region", getSchema("region"))
+                  .planNode(),
+              "",
+              {"n_nationkey",
+               "n_name",
+               "n_regionkey",
+               "n_comment",
+               "r_regionkey",
+               "r_name",
+               "r_comment"})
+          .window(
+              {"row_number() over (partition by r_regionkey order by n_nationkey) as rn1"})
+          .window(
+              {"rank() over (partition by n_nationkey order by r_name) as rn2"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, windowWithLimit) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .limit(0, 10)
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .limit()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .limit(0, 10, false)
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, limitWithWindow) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .limit(0, 10)
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .limit()
+                       .window()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .limit(0, 10, false)
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, limitWithOrderByWindows) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .limit(0, 10)
+          .orderByWindows(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .limit()
+                       .window()
+                       .orderBy()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .limit(0, 10, false)
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .orderBy({"rnk"}, false)
+          .project(getSchema("nation")->names())
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, orderByWindowsWithLimit) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .orderByWindows(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .limit(0, 10)
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .topN()
+                       .project()
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"rank() over (order by n_regionkey, n_nationkey desc, n_name) as rnk"})
+          .orderBy({"rnk"}, false)
+          .project(getSchema("nation")->names())
+          .limit(0, 10, false)
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveWindowQueriesTest, joinOnWindowWithLimitBothSides) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan =
+      lp::PlanBuilder(context)
+          .tableScan("nation")
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .limit(0, 10)
+          .as("n1")
+          .join(
+              lp::PlanBuilder(context)
+                  .tableScan("nation")
+                  .window(
+                      {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+                  .limit(0, 10)
+                  .as("n2"),
+              "n1.rn = n2.rn",
+              lp::JoinType::kInner)
+          .build();
+
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("nation")
+                       .window()
+                       .project()
+                       .limit()
+                       .hashJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("nation")
+                               .window()
+                               .project()
+                               .limit()
+                               .build())
+                       .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto referencePlan =
+      exec::test::PlanBuilder(planNodeIdGenerator)
+          .tableScan("nation", getSchema("nation"))
+          .window(
+              {"row_number() over (partition by n_regionkey order by n_nationkey) as rn"})
+          .project({"n_nationkey", "n_name", "n_regionkey", "n_comment", "rn"})
+          .limit(0, 10, false)
+          .hashJoin(
+              {"rn"},
+              {"rn2"},
+              exec::test::PlanBuilder(planNodeIdGenerator)
+                  .tableScan("nation", getSchema("nation"))
+                  .window(
+                      {"row_number() over (partition by n_regionkey order by n_nationkey) as rn2"})
+                  .project(
+                      {"n_nationkey as n_nationkey_0",
+                       "n_name as n_name_1",
+                       "n_regionkey as n_regionkey_2",
+                       "n_comment as n_comment_3",
+                       "rn2"})
+                  .limit(0, 10, false)
+                  .planNode(),
+              "",
+              {"n_nationkey",
+               "n_name",
+               "n_regionkey",
+               "n_comment",
+               "rn",
+               "n_nationkey_0",
+               "n_name_1",
+               "n_regionkey_2",
+               "n_comment_3",
+               "rn2"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+} // namespace
+} // namespace facebook::axiom::optimizer

@@ -15,7 +15,7 @@ dt1: s_acctbal, s_name, n_name, p_partkey, p_mfgr, s_address, s_phone, s_comment
     s_comment := t3.s_comment
   tables: t2, t3, t4, t5, t6, dt7
   joins:
-    t2 LEFT dt7 ON t2.p_partkey = dt7.__gk12
+    t2 LEFT dt7 ON t2.p_partkey = dt7.ps_partkey_8
     t2 INNER t4 ON t2.p_partkey = t4.ps_partkey
     t3 INNER t4 ON t3.s_suppkey = t4.ps_suppkey
     t3 INNER t5 ON t3.s_nationkey = t5.n_nationkey
@@ -42,9 +42,9 @@ t6: r_regionkey, r_name
   table: region
   single-column filters: eq(t6.r_name, "EUROPE")
 
-dt7: __gk12, min
+dt7: ps_partkey_8, min
   output:
-    __gk12 := t8.ps_partkey
+    ps_partkey_8 := t8.ps_partkey
     min := dt7.min
   tables: t8, t9, t10, t11
   joins:
@@ -93,53 +93,44 @@ Project -> dt1.s_acctbal, dt1.s_name, dt1.n_name, dt1.p_partkey, dt1.p_mfgr, dt1
             t4.ps_partkey = t2.p_partkey
           TableScan -> t4.ps_partkey, t4.ps_suppkey, t4.ps_supplycost
             table: partsupp
-          HashBuild -> t2.p_partkey, t2.p_mfgr
-            TableScan -> t2.p_partkey, t2.p_mfgr
-              table: part
-              single-column filters: eq(t2.p_size, 15) and like(t2.p_type, "%BRASS")
-        HashBuild -> dt7.min
-          Project -> dt7.min
-              dt7.min := dt7.min
-            Aggregation (t8.ps_partkey) -> t8.ps_partkey, dt7.min
-                dt7.min := min(t8.ps_supplycost)
-              Join INNER Hash -> t8.ps_partkey, t8.ps_supplycost
-                  t9.s_nationkey = t10.n_nationkey
-                Join INNER Hash -> t8.ps_partkey, t8.ps_supplycost, t9.s_nationkey
-                    t9.s_suppkey = t8.ps_suppkey
-                  TableScan -> t9.s_suppkey, t9.s_nationkey
-                    table: supplier
-                  HashBuild -> t8.ps_partkey, t8.ps_suppkey, t8.ps_supplycost
-                    Join LEFT SEMI (FILTER) Hash -> t8.ps_partkey, t8.ps_suppkey, t8.ps_supplycost
-                        t8.ps_partkey = t2.p_partkey
-                      TableScan -> t8.ps_partkey, t8.ps_suppkey, t8.ps_supplycost
-                        table: partsupp
-                      HashBuild -> t2.p_partkey
-                        TableScan -> t2.p_partkey
-                          table: part
-                          single-column filters: eq(t2.p_size, 15) and like(t2.p_type, "%BRASS")
-                HashBuild -> t10.n_nationkey
-                  Join INNER Hash -> t10.n_nationkey
-                      t10.n_regionkey = t11.r_regionkey
-                    TableScan -> t10.n_nationkey, t10.n_regionkey
-                      table: nation
-                    HashBuild -> t11.r_regionkey
-                      TableScan -> t11.r_regionkey
-                        table: region
-                        single-column filters: eq(t11.r_name, "EUROPE")
-      HashBuild -> t3.s_suppkey, t3.s_name, t3.s_address, t3.s_phone, t3.s_acctbal, t3.s_comment, t5.n_name
-        Join INNER Hash -> t3.s_suppkey, t3.s_name, t3.s_address, t3.s_phone, t3.s_acctbal, t3.s_comment, t5.n_name
-            t3.s_nationkey = t5.n_nationkey
-          TableScan -> t3.s_suppkey, t3.s_name, t3.s_address, t3.s_nationkey, t3.s_phone, t3.s_acctbal, t3.s_comment
-            table: supplier
-          HashBuild -> t5.n_nationkey, t5.n_name
-            Join INNER Hash -> t5.n_nationkey, t5.n_name
-                t5.n_regionkey = t6.r_regionkey
-              TableScan -> t5.n_nationkey, t5.n_name, t5.n_regionkey
-                table: nation
-              HashBuild -> t6.r_regionkey
-                TableScan -> t6.r_regionkey
+          TableScan -> t2.p_partkey, t2.p_mfgr
+            table: part
+            single-column filters: eq(t2.p_size, 15) and like(t2.p_type, "%BRASS")
+        Project -> dt7.min
+            dt7.min := dt7.min
+          Aggregation (t8.ps_partkey) -> t8.ps_partkey, dt7.min
+              dt7.min := min(t8.ps_supplycost)
+            Join INNER Hash -> t8.ps_partkey, t8.ps_supplycost
+                t9.s_nationkey = t10.n_nationkey
+              Join INNER Hash -> t8.ps_partkey, t8.ps_supplycost, t9.s_nationkey
+                  t9.s_suppkey = t8.ps_suppkey
+                TableScan -> t9.s_suppkey, t9.s_nationkey
+                  table: supplier
+                Join LEFT SEMI (FILTER) Hash -> t8.ps_partkey, t8.ps_suppkey, t8.ps_supplycost
+                    t8.ps_partkey = t2.p_partkey
+                  TableScan -> t8.ps_partkey, t8.ps_suppkey, t8.ps_supplycost
+                    table: partsupp
+                  TableScan -> t2.p_partkey
+                    table: part
+                    single-column filters: eq(t2.p_size, 15) and like(t2.p_type, "%BRASS")
+              Join INNER Hash -> t10.n_nationkey
+                  t10.n_regionkey = t11.r_regionkey
+                TableScan -> t10.n_nationkey, t10.n_regionkey
+                  table: nation
+                TableScan -> t11.r_regionkey
                   table: region
-                  single-column filters: eq(t6.r_name, "EUROPE")
+                  single-column filters: eq(t11.r_name, "EUROPE")
+      Join INNER Hash -> t3.s_suppkey, t3.s_name, t3.s_address, t3.s_phone, t3.s_acctbal, t3.s_comment, t5.n_name
+          t3.s_nationkey = t5.n_nationkey
+        TableScan -> t3.s_suppkey, t3.s_name, t3.s_address, t3.s_nationkey, t3.s_phone, t3.s_acctbal, t3.s_comment
+          table: supplier
+        Join INNER Hash -> t5.n_nationkey, t5.n_name
+            t5.n_regionkey = t6.r_regionkey
+          TableScan -> t5.n_nationkey, t5.n_name, t5.n_regionkey
+            table: nation
+          TableScan -> t6.r_regionkey
+            table: region
+            single-column filters: eq(t6.r_name, "EUROPE")
 
 
 Executable Velox plan:

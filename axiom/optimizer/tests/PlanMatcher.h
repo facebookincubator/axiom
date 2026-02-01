@@ -276,6 +276,8 @@ class PlanMatcherBuilder {
   /// Matches any TableWrite node.
   PlanMatcherBuilder& tableWrite();
 
+  PlanMatcherBuilder& window();
+
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.
   std::shared_ptr<PlanMatcher> build() {

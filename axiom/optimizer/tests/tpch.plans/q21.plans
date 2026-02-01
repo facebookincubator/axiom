@@ -9,8 +9,8 @@ dt1: s_name, numwait
     numwait := dt1.numwait
   tables: t2, t3, t4, t5, dt6, dt8
   joins:
-    t3 SEMI dt6 ON t3.l_orderkey = dt6.l_orderkey FILTER neq(dt6.l_suppkey, t3.l_suppkey)
-    t3 SEMI dt8 ON t3.l_orderkey = dt8.l_orderkey FILTER neq(dt8.l_suppkey, t3.l_suppkey)
+    t3 SEMI dt6 ON t3.l_orderkey = dt6.l_orderkey_6 FILTER neq(dt6.l_suppkey_8, t3.l_suppkey)
+    t3 SEMI dt8 ON t3.l_orderkey = dt8.l_orderkey_24 FILTER neq(dt8.l_suppkey_26, t3.l_suppkey)
     t2 INNER t3 ON t2.s_suppkey = t3.l_suppkey
     t3 INNER t4 ON t3.l_orderkey = t4.o_orderkey
     t2 INNER t5 ON t2.s_nationkey = t5.n_nationkey
@@ -36,19 +36,19 @@ t5: n_nationkey, n_name
   table: nation
   single-column filters: eq(t5.n_name, "SAUDI ARABIA")
 
-dt6: l_orderkey, l_suppkey
+dt6: l_orderkey_6, l_suppkey_8
   output:
-    l_orderkey := t7.l_orderkey
-    l_suppkey := t7.l_suppkey
+    l_orderkey_6 := t7.l_orderkey
+    l_suppkey_8 := t7.l_suppkey
   tables: t7
 
 t7: l_orderkey, l_suppkey
   table: lineitem
 
-dt8: l_orderkey, l_suppkey
+dt8: l_orderkey_24, l_suppkey_26
   output:
-    l_orderkey := t9.l_orderkey
-    l_suppkey := t9.l_suppkey
+    l_orderkey_24 := t9.l_orderkey
+    l_suppkey_26 := t9.l_suppkey
   tables: t9
 
 t9: l_orderkey, l_suppkey, l_commitdate, l_receiptdate
@@ -69,46 +69,41 @@ Project (redundant) -> dt1.s_name, dt1.numwait
     Aggregation (t2.s_name) -> t2.s_name, dt1.numwait
         dt1.numwait := count()
       Join RIGHT SEMI (FILTER) Hash -> t2.s_name
-          dt6.l_orderkey = t3.l_orderkey
-          neq(dt6.l_suppkey, t3.l_suppkey)
-        Project (redundant) -> dt6.l_orderkey, dt6.l_suppkey
-            dt6.l_orderkey := t7.l_orderkey
-            dt6.l_suppkey := t7.l_suppkey
+          dt6.l_orderkey_6 = t3.l_orderkey
+          neq(dt6.l_suppkey_8, t3.l_suppkey)
+        Project (redundant) -> dt6.l_orderkey_6, dt6.l_suppkey_8
+            dt6.l_orderkey_6 := t7.l_orderkey
+            dt6.l_suppkey_8 := t7.l_suppkey
           TableScan -> t7.l_orderkey, t7.l_suppkey
             table: lineitem
-        HashBuild -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
-          Filter -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
-              not(dt1.__mark1)
-            Join RIGHT SEMI (PROJECT) Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
-                dt8.l_orderkey = t3.l_orderkey
-                neq(dt8.l_suppkey, t3.l_suppkey)
-              Project (redundant) -> dt8.l_orderkey, dt8.l_suppkey
-                  dt8.l_orderkey := t9.l_orderkey
-                  dt8.l_suppkey := t9.l_suppkey
-                TableScan -> t9.l_orderkey, t9.l_suppkey
+        Filter -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
+            not(dt1.__mark1)
+          Join RIGHT SEMI (PROJECT) Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
+              dt8.l_orderkey_24 = t3.l_orderkey
+              neq(dt8.l_suppkey_26, t3.l_suppkey)
+            Project (redundant) -> dt8.l_orderkey_24, dt8.l_suppkey_26
+                dt8.l_orderkey_24 := t9.l_orderkey
+                dt8.l_suppkey_26 := t9.l_suppkey
+              TableScan -> t9.l_orderkey, t9.l_suppkey
+                table: lineitem
+                multi-column filters: lt(t9.l_commitdate, t9.l_receiptdate)
+            Join INNER Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey
+                t3.l_orderkey = t4.o_orderkey
+              Join INNER Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey
+                  t3.l_suppkey = t2.s_suppkey
+                TableScan -> t3.l_orderkey, t3.l_suppkey
                   table: lineitem
-                  multi-column filters: lt(t9.l_commitdate, t9.l_receiptdate)
-              HashBuild -> t2.s_name, t3.l_orderkey, t3.l_suppkey
-                Join INNER Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey
-                    t3.l_orderkey = t4.o_orderkey
-                  Join INNER Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey
-                      t3.l_suppkey = t2.s_suppkey
-                    TableScan -> t3.l_orderkey, t3.l_suppkey
-                      table: lineitem
-                      multi-column filters: lt(t3.l_commitdate, t3.l_receiptdate)
-                    HashBuild -> t2.s_suppkey, t2.s_name
-                      Join INNER Hash -> t2.s_suppkey, t2.s_name
-                          t2.s_nationkey = t5.n_nationkey
-                        TableScan -> t2.s_suppkey, t2.s_name, t2.s_nationkey
-                          table: supplier
-                        HashBuild -> t5.n_nationkey
-                          TableScan -> t5.n_nationkey
-                            table: nation
-                            single-column filters: eq(t5.n_name, "SAUDI ARABIA")
-                  HashBuild -> t4.o_orderkey
-                    TableScan -> t4.o_orderkey
-                      table: orders
-                      single-column filters: eq(t4.o_orderstatus, "F")
+                  multi-column filters: lt(t3.l_commitdate, t3.l_receiptdate)
+                Join INNER Hash -> t2.s_suppkey, t2.s_name
+                    t2.s_nationkey = t5.n_nationkey
+                  TableScan -> t2.s_suppkey, t2.s_name, t2.s_nationkey
+                    table: supplier
+                  TableScan -> t5.n_nationkey
+                    table: nation
+                    single-column filters: eq(t5.n_name, "SAUDI ARABIA")
+              TableScan -> t4.o_orderkey
+                table: orders
+                single-column filters: eq(t4.o_orderstatus, "F")
 
 
 Executable Velox plan:

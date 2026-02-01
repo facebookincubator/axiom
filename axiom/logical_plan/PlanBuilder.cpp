@@ -255,8 +255,7 @@ PlanBuilder& PlanBuilder::tableScan(
   node_ = std::make_shared<TableScanNode>(
       nextId(),
       ROW(std::move(outputNames), std::move(columnTypes)),
-      connectorId,
-      tableName,
+      std::move(table),
       std::move(originalNames));
 
   return *this;
@@ -298,11 +297,7 @@ PlanBuilder& PlanBuilder::tableScan(
   }
 
   node_ = std::make_shared<TableScanNode>(
-      nextId(),
-      ROW(outputNames, columnTypes),
-      connectorId,
-      tableName,
-      columnNames);
+      nextId(), ROW(outputNames, columnTypes), std::move(table), columnNames);
 
   return *this;
 }
@@ -519,6 +514,7 @@ PlanBuilder& PlanBuilder::aggregate(
     const std::vector<ExprApi>& aggregates,
     const std::vector<AggregateOptions>& options) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Aggregate node cannot be a leaf node");
+  VELOX_USER_CHECK_EQ(options.size(), aggregates.size());
 
   std::vector<std::string> outputNames;
   outputNames.reserve(groupingKeys.size() + aggregates.size());
@@ -601,6 +597,165 @@ PlanBuilder& PlanBuilder::distinct() {
       std::vector<AggregateNode::GroupingSet>{},
       std::vector<AggregateExprPtr>{},
       inputType->names());
+
+  return *this;
+}
+
+PlanBuilder::WindowOptions PlanBuilder::parseWindowOptions(
+    const std::string& sql) {
+  auto windowExpr = velox::duckdb::parseWindowExpr(sql, {});
+
+  WindowExpr::Frame frame;
+  // Convert window type
+  switch (windowExpr.frame.type) {
+    case velox::duckdb::WindowType::kRows:
+      frame.type = WindowExpr::WindowType::kRows;
+      break;
+    case velox::duckdb::WindowType::kRange:
+      frame.type = WindowExpr::WindowType::kRange;
+      break;
+  }
+
+  switch (windowExpr.frame.startType) {
+    case velox::duckdb::BoundType::kUnboundedPreceding:
+      frame.startType = WindowExpr::BoundType::kUnboundedPreceding;
+      break;
+    case velox::duckdb::BoundType::kPreceding:
+      frame.startType = WindowExpr::BoundType::kPreceding;
+      break;
+    case velox::duckdb::BoundType::kCurrentRow:
+      frame.startType = WindowExpr::BoundType::kCurrentRow;
+      break;
+    case velox::duckdb::BoundType::kFollowing:
+      frame.startType = WindowExpr::BoundType::kFollowing;
+      break;
+    case velox::duckdb::BoundType::kUnboundedFollowing:
+      frame.startType = WindowExpr::BoundType::kUnboundedFollowing;
+      break;
+  }
+
+  switch (windowExpr.frame.endType) {
+    case velox::duckdb::BoundType::kUnboundedPreceding:
+      frame.endType = WindowExpr::BoundType::kUnboundedPreceding;
+      break;
+    case velox::duckdb::BoundType::kPreceding:
+      frame.endType = WindowExpr::BoundType::kPreceding;
+      break;
+    case velox::duckdb::BoundType::kCurrentRow:
+      frame.endType = WindowExpr::BoundType::kCurrentRow;
+      break;
+    case velox::duckdb::BoundType::kFollowing:
+      frame.endType = WindowExpr::BoundType::kFollowing;
+      break;
+    case velox::duckdb::BoundType::kUnboundedFollowing:
+      frame.endType = WindowExpr::BoundType::kUnboundedFollowing;
+      break;
+  }
+
+  if (windowExpr.frame.startValue != nullptr) {
+    frame.startValue = resolveScalarTypes(windowExpr.frame.startValue);
+  }
+  if (windowExpr.frame.endValue != nullptr) {
+    frame.endValue = resolveScalarTypes(windowExpr.frame.endValue);
+  }
+
+  std::vector<ExprPtr> partitionBy;
+  partitionBy.reserve(windowExpr.partitionBy.size());
+  for (const auto& partitionExpr : windowExpr.partitionBy) {
+    partitionBy.emplace_back(resolveScalarTypes(partitionExpr));
+  }
+
+  std::vector<SortingField> orderBy;
+  orderBy.reserve(windowExpr.orderBy.size());
+  for (const auto& orderByClause : windowExpr.orderBy) {
+    auto sortKeyExpr = resolveScalarTypes(orderByClause.expr);
+    SortOrder order{orderByClause.ascending, orderByClause.nullsFirst};
+    orderBy.emplace_back(sortKeyExpr, order);
+  }
+
+  return {
+      std::move(partitionBy),
+      std::move(orderBy),
+      std::move(frame),
+      windowExpr.ignoreNulls};
+}
+
+PlanBuilder& PlanBuilder::window(const std::vector<std::string>& windowExprs) {
+  std::vector<ExprApi> parsedExprs;
+  std::vector<WindowOptions> options;
+  parsedExprs.reserve(windowExprs.size());
+  options.reserve(windowExprs.size());
+
+  for (const auto& sql : windowExprs) {
+    auto parsed = velox::duckdb::parseWindowExpr(sql, {});
+
+    parsedExprs.emplace_back(parsed.functionCall);
+    options.emplace_back(parseWindowOptions(sql));
+  }
+
+  return window(parsedExprs, options);
+}
+
+PlanBuilder& PlanBuilder::window(
+    const std::vector<ExprApi>& windowExprs,
+    const std::vector<WindowOptions>& options) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Window node cannot be a leaf node");
+  VELOX_USER_CHECK(options.size() == windowExprs.size());
+
+  std::vector<std::string> outputNames;
+  outputNames.reserve(windowExprs.size());
+  std::vector<WindowExprPtr> exprs;
+  exprs.reserve(windowExprs.size());
+  auto newOutputMapping = std::make_shared<NameMappings>(*outputMapping_);
+
+  for (size_t i = 0; i < windowExprs.size(); ++i) {
+    const auto& windowExpr = windowExprs[i];
+    const auto& windowOptions = options[i];
+
+    auto resolveResult = resolveWindowTypes(windowExpr.expr());
+
+    WindowExprPtr expr = std::make_shared<WindowExpr>(
+        resolveResult.type,
+        resolveResult.functionName,
+        resolveResult.functionInputs,
+        windowOptions.partitionBy,
+        windowOptions.orderBy,
+        windowOptions.frame,
+        windowOptions.ignoreNulls);
+
+    if (windowExpr.name().has_value()) {
+      const auto& alias = windowExpr.name().value();
+      outputNames.push_back(newName(alias));
+      newOutputMapping->add(alias, outputNames.back());
+    } else {
+      outputNames.push_back(newName(expr->name()));
+    }
+
+    exprs.emplace_back(std::move(expr));
+  }
+
+  const auto& inputType = node_->outputType();
+  std::vector<std::string> allNames;
+  allNames.reserve(inputType->size() + exprs.size());
+  std::vector<ExprPtr> allExprs;
+  allExprs.reserve(inputType->size() + exprs.size());
+
+  for (size_t i = 0; i < inputType->size(); ++i) {
+    allNames.push_back(inputType->nameOf(i));
+    allExprs.push_back(
+        std::make_shared<InputReferenceExpr>(
+            inputType->childAt(i), inputType->nameOf(i)));
+  }
+
+  for (size_t i = 0; i < exprs.size(); ++i) {
+    allNames.push_back(outputNames[i]);
+    allExprs.push_back(exprs[i]);
+  }
+
+  node_ = std::make_shared<ProjectNode>(
+      nextId(), std::move(node_), std::move(allNames), std::move(allExprs));
+
+  outputMapping_ = std::move(newOutputMapping);
 
   return *this;
 }
@@ -904,6 +1059,38 @@ PlanBuilder& PlanBuilder::setOperation(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::orderByWindows(
+    const std::vector<std::string>& sortingKeys) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Sort node cannot be a leaf node");
+
+  std::vector<SortingField> sortingFields;
+  sortingFields.reserve(sortingKeys.size());
+
+  for (const auto& key : sortingKeys) {
+    auto parsedWindowExpr = velox::duckdb::parseWindowExpr(key, {});
+    auto windowOptions = parseWindowOptions(key);
+    auto resolveResult = resolveWindowTypes(parsedWindowExpr.functionCall);
+
+    WindowExprPtr windowExpr = std::make_shared<WindowExpr>(
+        resolveResult.type,
+        resolveResult.functionName,
+        resolveResult.functionInputs,
+        windowOptions.partitionBy,
+        windowOptions.orderBy,
+        windowOptions.frame,
+        windowOptions.ignoreNulls);
+
+    sortingFields.push_back(
+        SortingField{
+            windowExpr, SortOrder(true, false)}); // ascending, nulls last
+  }
+
+  node_ = std::make_shared<SortNode>(
+      nextId(), std::move(node_), std::move(sortingFields));
+
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::sort(const std::vector<std::string>& sortingKeys) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Sort node cannot be a leaf node");
 
@@ -964,7 +1151,7 @@ PlanBuilder& PlanBuilder::offset(int64_t offset) {
 PlanBuilder& PlanBuilder::tableWrite(
     std::string connectorId,
     std::string tableName,
-    WriteKind kind,
+    connector::WriteKind kind,
     std::vector<std::string> columnNames,
     const std::vector<ExprApi>& columnExprs,
     folly::F14FastMap<std::string, std::string> options) {
@@ -978,10 +1165,11 @@ PlanBuilder& PlanBuilder::tableWrite(
     columnExpressions.push_back(resolveScalarTypes(expr.expr()));
   }
 
-  if (kind == WriteKind::kInsert) {
+  connector::TablePtr table;
+  if (kind != connector::WriteKind::kCreate) {
     // Check input types.
     auto* metadata = connector::ConnectorMetadata::metadata(connectorId);
-    auto table = metadata->findTable(tableName);
+    table = metadata->findTable(tableName);
     VELOX_USER_CHECK_NOT_NULL(table, "Table not found: {}", tableName);
     const auto& schema = table->type();
 
@@ -1017,8 +1205,7 @@ PlanBuilder& PlanBuilder::tableWrite(
   node_ = std::make_shared<TableWriteNode>(
       nextId(),
       std::move(node_),
-      std::move(connectorId),
-      std::move(tableName),
+      std::move(table),
       kind,
       std::move(columnNames),
       std::move(columnExpressions),
@@ -1029,7 +1216,7 @@ PlanBuilder& PlanBuilder::tableWrite(
 
 PlanBuilder& PlanBuilder::tableWrite(
     std::string tableName,
-    WriteKind kind,
+    connector::WriteKind kind,
     std::vector<std::string> columnNames,
     folly::F14FastMap<std::string, std::string> options) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Table write node cannot be a leaf node");
@@ -1147,6 +1334,14 @@ AggregateExprPtr PlanBuilder::resolveAggregateTypes(
       filter,
       ordering,
       distinct);
+}
+
+PlanBuilder::WindowResolveResult PlanBuilder::resolveWindowTypes(
+    const velox::core::ExprPtr& expr) const {
+  return resolver_.resolveWindowTypes(
+      expr, [&](const auto& alias, const auto& name) {
+        return resolveInputName(alias, name);
+      });
 }
 
 PlanBuilder& PlanBuilder::as(const std::string& alias) {

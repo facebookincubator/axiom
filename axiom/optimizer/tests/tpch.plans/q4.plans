@@ -49,10 +49,9 @@ Project (redundant) -> dt1.o_orderpriority, dt1.order_count
           TableScan -> t4.l_orderkey
             table: lineitem
             multi-column filters: lt(t4.l_commitdate, t4.l_receiptdate)
-        HashBuild -> t2.o_orderkey, t2.o_orderpriority
-          TableScan -> t2.o_orderkey, t2.o_orderpriority
-            table: orders
-            single-column filters: gte(t2.o_orderdate, "1993-07-01") and lt(t2.o_orderdate, "1993-10-01")
+        TableScan -> t2.o_orderkey, t2.o_orderpriority
+          table: orders
+          single-column filters: gte(t2.o_orderdate, "1993-07-01") and lt(t2.o_orderdate, "1993-10-01")
 
 
 Executable Velox plan:

@@ -41,10 +41,9 @@ Project (redundant) -> dt1.revenue
           TableScan -> t2.l_partkey, t2.l_quantity, t2.l_extendedprice, t2.l_discount
             table: lineitem
             single-column filters: __in(t2.l_shipmode, "AIR", "AIR REG") and eq(t2.l_shipinstruct, "DELIVER IN PERSON") and __or(__and(gte(t2.l_quantity, 20), lte(t2.l_quantity, 30)), __or(__and(gte(t2.l_quantity, 1), lte(t2.l_quantity, 11)), __and(gte(t2.l_quantity, 10), lte(t2.l_quantity, 20))))
-          HashBuild -> t3.p_partkey, t3.p_brand, t3.p_size, t3.p_container
-            TableScan -> t3.p_partkey, t3.p_brand, t3.p_size, t3.p_container
-              table: part
-              multi-column filters: __or(__and(between(t3.p_size, 1, 15), __and(eq(t3.p_brand, "Brand#34"), __in(t3.p_container, "LG CASE", "LG BOX", "LG PACK", "LG PKG"))), __or(__and(between(t3.p_size, 1, 5), __and(eq(t3.p_brand, "Brand#12"), __in(t3.p_container, "SM CASE", "SM BOX", "SM PACK", "SM PKG"))), __and(between(t3.p_size, 1, 10), __and(eq(t3.p_brand, "Brand#23"), __in(t3.p_container, "MED BAG", "MED BOX", "MED PKG", "MED PACK")))))
+          TableScan -> t3.p_partkey, t3.p_brand, t3.p_size, t3.p_container
+            table: part
+            multi-column filters: __or(__and(between(t3.p_size, 1, 15), __and(eq(t3.p_brand, "Brand#34"), __in(t3.p_container, "LG CASE", "LG BOX", "LG PACK", "LG PKG"))), __or(__and(between(t3.p_size, 1, 5), __and(eq(t3.p_brand, "Brand#12"), __in(t3.p_container, "SM CASE", "SM BOX", "SM PACK", "SM PKG"))), __and(between(t3.p_size, 1, 10), __and(eq(t3.p_brand, "Brand#23"), __in(t3.p_container, "MED BAG", "MED BOX", "MED PKG", "MED PACK")))))
 
 
 Executable Velox plan:

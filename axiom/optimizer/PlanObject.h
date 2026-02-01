@@ -30,6 +30,7 @@ enum class PlanType : uint32_t {
   kLiteralExpr,
   kCallExpr,
   kAggregateExpr,
+  kWindowExpr,
   kFieldExpr,
   kLambdaExpr,
   // Plan nodes.
@@ -164,6 +165,7 @@ class PlanObjectSet : public BitSet {
 
   /// True if id of 'object' is in 'this'.
   bool contains(PlanObjectCP object) const {
+    VELOX_DCHECK_NOT_NULL(object);
     return object->id() < bits_.size() * 64 &&
         velox::bits::isBitSet(bits_.data(), object->id());
   }
@@ -180,18 +182,20 @@ class PlanObjectSet : public BitSet {
 
   /// Inserts id of 'object'.
   void add(PlanObjectCP object) {
+    VELOX_DCHECK_NOT_NULL(object);
     auto id = object->id();
     BitSet::add(id);
   }
 
   /// Erases id of 'object'.
   void erase(PlanObjectCP object) {
+    VELOX_DCHECK_NOT_NULL(object);
     BitSet::erase(object->id());
   }
 
   /// Adds ids of all columns 'expr' depends on.
   void unionColumns(ExprCP expr);
-  void unionColumns(const ExprVector& exprs);
+  void unionColumns(CPSpan<Expr> exprs);
 
   /// Adds ids of all objects in 'objects'.
   template <typename V>

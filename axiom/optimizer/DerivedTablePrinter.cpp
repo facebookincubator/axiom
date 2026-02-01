@@ -79,23 +79,19 @@ std::string visitUnnestTable(const UnnestTable& unnest) {
 
 std::string visitJoinEdge(const JoinEdge& edge) {
   std::stringstream out;
-  if (edge.leftTable() != nullptr) {
-    out << tableName(edge.leftTable());
-  } else {
-    out << "<multiple tables>";
-  }
+  out << tableName(edge.leftTable());
 
   if (edge.isSemi()) {
     out << " SEMI ";
   } else if (edge.isAnti()) {
     out << " ANTI ";
-  } else if (edge.leftOptional() && edge.rightOptional()) {
+  } else if (edge.isFullOuter()) {
     out << " FULL OUTER ";
-  } else if (edge.leftOptional()) {
+  } else if (edge.isRightOuter()) {
     out << " RIGHT ";
-  } else if (edge.rightOptional()) {
+  } else if (edge.isLeftOuter()) {
     out << " LEFT ";
-  } else if (edge.directed()) {
+  } else if (edge.isUnnest()) {
     out << " UNNEST ";
   } else {
     out << " INNER ";

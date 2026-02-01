@@ -106,6 +106,125 @@ std::string conjunctsToString(const ExprVector& conjuncts) {
   return out.str();
 }
 
+class WindowsCollector {
+ public:
+  using SpecToWindows =
+      folly::F14FastMap<WindowSpec, WindowVector, WindowSpec::Hasher>;
+  SpecToWindows collect(CPSpan<Expr> exprs) {
+    for (const auto& expr : exprs) {
+      collect(*expr);
+    }
+    return specToWindows_;
+  }
+
+ private:
+  void collect(const Expr& expr) {
+    if (!expr.containsWindow()) {
+      return;
+    }
+
+    if (expr.is(PlanType::kColumnExpr)) {
+      return;
+    }
+
+    if (expr.is(PlanType::kWindowExpr)) {
+      const auto* window = expr.as<Window>();
+      specToWindows_[window->spec()].emplace_back(window);
+      return;
+    }
+
+    expr.subexpressions().forEach([&](const PlanObject* subexpr) {
+      if (subexpr->is(PlanType::kWindowExpr)) {
+        const auto* window = subexpr->as<Window>();
+        specToWindows_[window->spec()].emplace_back(window);
+      }
+    });
+  }
+
+  SpecToWindows specToWindows_;
+};
+
+// Recursively replaces Window expressions with their corresponding columns
+ExprCP replaceWindows(
+    ExprCP expr,
+    const folly::F14FastMap<const Window*, ColumnCP>& windowToColumn) {
+  switch (expr->type()) {
+    case PlanType::kColumnExpr:
+    case PlanType::kLiteralExpr:
+    case PlanType::kFieldExpr:
+      return expr;
+    case PlanType::kWindowExpr: {
+      auto it = windowToColumn.find(expr->as<Window>());
+      VELOX_CHECK(
+          it != windowToColumn.end(), "Window expression not found in mapping");
+      return it->second;
+    }
+    case PlanType::kCallExpr: {
+      auto children = expr->children();
+      ExprVector newChildren(children.size());
+      FunctionSet functions;
+      bool anyChange = false;
+      for (auto i = 0; i < children.size(); ++i) {
+        newChildren[i] =
+            replaceWindows(children[i]->as<Expr>(), windowToColumn);
+        anyChange |= newChildren[i] != children[i];
+        if (newChildren[i]->isFunction()) {
+          functions = functions | newChildren[i]->as<Call>()->functions();
+        }
+      }
+
+      if (!anyChange) {
+        return expr;
+      }
+
+      const auto* call = expr->as<Call>();
+      return make<Call>(
+          call->name(), call->value(), std::move(newChildren), functions);
+    }
+    case PlanType::kLambdaExpr:
+      VELOX_NYI("Window replacement not implemented for lambda");
+    case PlanType::kAggregateExpr:
+      // Aggregates cannot contain window expressions.
+    default:
+      VELOX_UNREACHABLE("{}", expr->toString());
+  }
+}
+
+RelationOpPtr addWindowOps(
+    RelationOpPtr input,
+    std::span<ExprCP> maybeWindowDependentExprs) {
+  auto specToWindows = WindowsCollector().collect(maybeWindowDependentExprs);
+  if (specToWindows.empty()) {
+    return input;
+  }
+  RelationOpPtr result = std::move(input);
+  folly::F14FastMap<const Window*, ColumnCP> windowToColumn;
+
+  ColumnVector allColumns = result->columns();
+  for (auto&& [spec, windows] : specToWindows) {
+    for (const auto* window : windows) {
+      allColumns.push_back(window->column());
+      windowToColumn[window] = window->column();
+    }
+
+    auto* windowOp = make<WindowOp>(
+        std::move(result),
+        spec.partitionKeys,
+        spec.orderKeys,
+        spec.orderTypes,
+        windows,
+        allColumns);
+
+    result = windowOp;
+  }
+
+  for (auto& expr : maybeWindowDependentExprs) {
+    expr = replaceWindows(expr, windowToColumn);
+  }
+
+  return result;
+}
+
 std::string orderByToString(
     const ExprVector& orderKeys,
     const OrderTypeVector& orderTypes) {

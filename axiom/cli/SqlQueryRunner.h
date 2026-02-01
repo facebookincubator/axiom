@@ -16,7 +16,6 @@
 #pragma once
 
 #include <folly/executors/IOThreadPoolExecutor.h>
-#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/runner/LocalRunner.h"
@@ -143,13 +142,9 @@ class SqlQueryRunner {
       const RunOptions& options);
 
   static void waitForCompletion(
-      const std::shared_ptr<facebook::axiom::runner::LocalRunner>& runner) {
-    if (runner) {
-      try {
-        runner->waitForCompletion(500000);
-      } catch (const std::exception&) {
-      }
-    }
+      std::shared_ptr<facebook::axiom::runner::LocalRunner>&& runner) {
+    facebook::axiom::runner::LocalRunner::waitForCompletion(
+        std::move(runner), 500000);
   }
 
   std::shared_ptr<facebook::velox::cache::AsyncDataCache> cache_;
@@ -157,7 +152,6 @@ class SqlQueryRunner {
   std::shared_ptr<facebook::velox::memory::MemoryPool> optimizerPool_;
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<folly::IOThreadPoolExecutor> spillExecutor_;
-  std::shared_ptr<facebook::axiom::connector::SchemaResolver> schema_;
   std::unordered_map<std::string, std::string> config_;
   std::unique_ptr<facebook::axiom::optimizer::VeloxHistory> history_;
   std::unique_ptr<presto::PrestoParser> prestoParser_;

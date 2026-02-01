@@ -27,33 +27,27 @@ class FunctionSet {
   /// Indicates an aggregate function in the set.
   static constexpr uint64_t kAggregate = 1;
 
+  /// Indicates a window function in the set.
+  static constexpr uint64_t kWindow = 1UL << 1;
+
   /// Indicates a non-determinstic function in the set.
-  static constexpr uint64_t kNonDeterministic = 1UL << 1;
+  static constexpr uint64_t kNonDeterministic = 1UL << 2;
 
-  /// Indicates an aggregate function that is sensitive to the order of inputs.
-  /// Same inputs provided in a different order may produce different results.
-  static constexpr uint64_t kOrderSensitiveAggregate = 1UL << 2;
-
-  /// Indicates an aggregate function that ignores duplicate inputs.
-  static constexpr uint64_t kIgnoreDuplicatesAggregate = 1UL << 3;
-
-  FunctionSet() : set_(0) {}
-
-  explicit FunctionSet(uint64_t set) : set_(set) {}
+  explicit FunctionSet(uint64_t set = 0) noexcept : set_{set} {}
 
   /// True if 'item' is in 'this'.
-  bool contains(int64_t item) const {
+  bool contains(uint64_t item) const noexcept {
     return 0 != (set_ & item);
   }
 
   /// Unions 'this' and 'other' and returns the result.
-  FunctionSet operator|(const FunctionSet& other) const {
-    return FunctionSet(set_ | other.set_);
+  FunctionSet operator|(const FunctionSet& other) const noexcept {
+    return FunctionSet{set_ | other.set_};
   }
 
   /// Unions 'this' and 'other' and returns the result.
-  FunctionSet operator|(uint64_t other) const {
-    return FunctionSet(set_ | other);
+  FunctionSet operator|(uint64_t other) const noexcept {
+    return FunctionSet{set_ | other};
   }
 
  private:
