@@ -148,14 +148,17 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
     auto scan = makeScanPlan(numWorkers);
     auto localRunner = makeRunner(scan);
 
-    auto results = readCursor(localRunner);
+    {
+      auto results = readCursor(localRunner);
 
-    int32_t count = 0;
-    for (auto& rows : results) {
-      count += rows->size();
+      int32_t count = 0;
+      for (auto& rows : results) {
+        count += rows->size();
+      }
+      EXPECT_EQ(250'000, count);
     }
-    localRunner->waitForCompletion(kWaitTimeoutUs);
-    EXPECT_EQ(250'000, count);
+
+    ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
   }
 
   std::shared_ptr<LocalRunner> makeRunner(MultiFragmentPlanPtr plan) {

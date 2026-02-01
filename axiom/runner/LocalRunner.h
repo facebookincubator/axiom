@@ -125,7 +125,8 @@ class LocalRunner : public Runner,
   void abort() override;
 
   /// @pre state() != State::kInitialized
-  void waitForCompletion(int32_t maxWaitMicros) override;
+  /// @return true if all tasks completed within the timeout, false otherwise.
+  bool waitForCompletion(int32_t maxWaitMicros) override;
 
   State state() const override {
     return state_;
