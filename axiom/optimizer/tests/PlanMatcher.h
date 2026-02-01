@@ -16,12 +16,19 @@
 
 #pragma once
 
+#include "axiom/runner/MultiFragmentPlan.h"
 #include "velox/core/PlanNode.h"
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::core {
 
 /// PlanMatcher is used to verify the structure and content of a Velox plan.
+/// It supports both single-node plans (via match(PlanNodePtr)) and distributed
+/// multi-fragment plans (via match(MultiFragmentPlan)).
+///
+/// For distributed plans, use shuffle() or shuffleMerge() to mark fragment
+/// boundaries. These boundaries are verified against the actual plan structure
+/// to ensure Exchange/MergeExchange nodes align with PartitionedOutput nodes.
 ///
 /// Expression Syntax:
 /// ------------------
@@ -52,6 +59,14 @@ class PlanMatcher {
  public:
   virtual ~PlanMatcher() = default;
 
+  // Context for distributed plan matching. Passed through the match() method
+  // to provide fragment information needed by ShuffleBoundaryMatcher.
+  struct DistributedMatchContext {
+    const std::vector<axiom::runner::ExecutableFragment>* fragments;
+    const axiom::runner::ExecutableFragment* currentFragment;
+    const std::unordered_map<std::string, int32_t>* taskPrefixToFragmentIndex;
+  };
+
   struct MatchResult {
     const bool match;
 
@@ -69,13 +84,43 @@ class PlanMatcher {
     }
   };
 
+  /// Matches the plan against this matcher.
+  /// On mismatch, sets gtest failures with detailed diagnostics. The caller
+  /// should not handle 'false' result in any way other than failing the test.
   bool match(const PlanNodePtr& plan) const {
-    return match(plan, {}).match;
+    return match(plan, {}, nullptr).match;
   }
 
+  /// Matches a distributed multi-fragment plan.
+  /// On mismatch, sets gtest failures with detailed diagnostics. The caller
+  /// should not handle 'false' result in any way other than failing the test.
+  /// The matcher must contain shuffle() boundaries that correspond to
+  /// fragment boundaries in the plan. Verifies:
+  ///   - Plan structure matches within each fragment
+  ///   - PartitionedOutput terminates producer fragments
+  ///   - Exchange consumes from correct producer fragments
+  ///   - Fragment topology matches shuffle boundary structure
+  bool match(const axiom::runner::MultiFragmentPlan& plan) const;
+
+  /// Matches the plan against this matcher with symbol rewriting support.
+  /// On mismatch, sets gtest failures with detailed diagnostics.
+  /// @param plan The plan node to match.
+  /// @param symbols Mapping from aliases to actual column names for expression
+  /// rewriting.
+  /// @param context Optional context for distributed plan matching. When
+  /// non-null, enables ShuffleBoundaryMatcher to verify Exchange nodes and
+  /// match producer fragments.
+  /// @return MatchResult with match status and updated symbol mappings.
   virtual MatchResult match(
       const PlanNodePtr& plan,
-      const std::unordered_map<std::string, std::string>& symbols) const = 0;
+      const std::unordered_map<std::string, std::string>& symbols,
+      const DistributedMatchContext* context) const = 0;
+
+  /// Returns the number of shuffle boundaries in this matcher and all nested
+  /// matchers. Override in subclasses that contain nested matchers.
+  virtual int32_t shuffleBoundaryCount() const {
+    return 0;
+  }
 };
 
 class PlanMatcherBuilder {
@@ -237,14 +282,23 @@ class PlanMatcherBuilder {
   /// Matches any LocalMerge node.
   PlanMatcherBuilder& localMerge();
 
-  /// Matches any PartitionedOutput node.
-  PlanMatcherBuilder& partitionedOutput();
-
   /// Matches any Exchange node.
+  [[deprecated("Use shuffle() with AXIOM_ASSERT_DISTRIBUTED_PLAN instead")]]
   PlanMatcherBuilder& exchange();
 
-  /// Matches any MergeExchange node.
-  PlanMatcherBuilder& mergeExchange();
+  /// Marks a shuffle boundary (data exchange between fragments).
+  /// In a distributed plan:
+  ///   - Producer side expects PartitionedOutput node
+  ///   - Consumer side expects Exchange node
+  /// Cannot be used with match(PlanNodePtr) - use match(MultiFragmentPlan).
+  PlanMatcherBuilder& shuffle();
+
+  /// Marks an ordered shuffle boundary (uses MergeExchange instead of
+  /// Exchange). In a distributed plan:
+  ///   - Producer side expects PartitionedOutput node
+  ///   - Consumer side expects MergeExchange node
+  /// Cannot be used with match(PlanNodePtr) - use match(MultiFragmentPlan).
+  PlanMatcherBuilder& shuffleMerge();
 
   /// Matches any Limit node regardless of offset, count, or partial/final step.
   PlanMatcherBuilder& limit();

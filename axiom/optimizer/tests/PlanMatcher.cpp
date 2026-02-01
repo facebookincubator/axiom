@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include <gtest/gtest.h>
+#include "axiom/runner/MultiFragmentPlan.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/parse/Expressions.h"
@@ -47,8 +48,8 @@ class PlanMatcherImpl : public PlanMatcher {
 
   MatchResult match(
       const PlanNodePtr& plan,
-      const std::unordered_map<std::string, std::string>& symbols)
-      const override {
+      const std::unordered_map<std::string, std::string>& symbols,
+      const DistributedMatchContext* context) const override {
     const auto* specificNode = dynamic_cast<const T*>(plan.get());
     EXPECT_TRUE(specificNode != nullptr)
         << "Expected " << folly::demangle(typeid(T).name()) << ", but got "
@@ -61,7 +62,8 @@ class PlanMatcherImpl : public PlanMatcher {
     std::unordered_map<std::string, std::string> newSymbols;
 
     for (auto i = 0; i < sourceMatchers_.size(); ++i) {
-      auto result = sourceMatchers_[i]->match(plan->sources()[i], symbols);
+      auto result =
+          sourceMatchers_[i]->match(plan->sources()[i], symbols, context);
       if (!result.match) {
         return MatchResult::failure();
       }
@@ -76,6 +78,14 @@ class PlanMatcherImpl : public PlanMatcher {
     }
 
     return matchDetails(*specificNode, newSymbols);
+  }
+
+  int32_t shuffleBoundaryCount() const override {
+    int32_t count = 0;
+    for (const auto& sourceMatcher : sourceMatchers_) {
+      count += sourceMatcher->shuffleBoundaryCount();
+    }
+    return count;
   }
 
  protected:
@@ -716,6 +726,100 @@ class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
   const std::optional<JoinType> joinType_;
 };
 
+// Marks a shuffle boundary between fragments in a distributed plan.
+// When matching a single PlanNodePtr (via match(PlanNodePtr)):
+//   - Fails the match (shuffle boundaries require distributed plan matching)
+// When matching a MultiFragmentPlan (via match(MultiFragmentPlan)):
+//   - Producer side expects PartitionedOutput
+//   - Consumer side expects Exchange (or MergeExchange if ordered)
+class ShuffleBoundaryMatcher : public PlanMatcher {
+ public:
+  explicit ShuffleBoundaryMatcher(
+      std::shared_ptr<PlanMatcher> producerMatcher,
+      bool ordered = false)
+      : producerMatcher_(std::move(producerMatcher)), ordered_(ordered) {}
+
+  MatchResult match(
+      const PlanNodePtr& plan,
+      const std::unordered_map<std::string, std::string>& symbols,
+      const DistributedMatchContext* context) const override;
+
+  int32_t shuffleBoundaryCount() const override {
+    // Count this shuffle boundary plus any in the producer matcher.
+    return 1 + producerMatcher_->shuffleBoundaryCount();
+  }
+
+ private:
+  const std::shared_ptr<PlanMatcher> producerMatcher_;
+  const bool ordered_;
+};
+
+// Returns the producer fragment for the given Exchange node, or nullptr if not
+// found.
+const axiom::runner::ExecutableFragment* findProducerFragment(
+    const PlanNodeId& exchangeNodeId,
+    const PlanMatcher::DistributedMatchContext& context) {
+  for (const auto& inputStage : context.currentFragment->inputStages) {
+    if (inputStage.consumerNodeId == exchangeNodeId) {
+      auto it = context.taskPrefixToFragmentIndex->find(
+          inputStage.producerTaskPrefix);
+      if (it != context.taskPrefixToFragmentIndex->end()) {
+        return &context.fragments->at(it->second);
+      }
+      break;
+    }
+  }
+  return nullptr;
+}
+
+// Implementation of ShuffleBoundaryMatcher::match.
+// When context is set, verifies Exchange and matches producer.
+// Otherwise, throws an error.
+PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
+    const PlanNodePtr& plan,
+    const std::unordered_map<std::string, std::string>& symbols,
+    const DistributedMatchContext* context) const {
+  VELOX_CHECK_NOT_NULL(
+      context,
+      "Cannot match PlanMatcher with shuffle boundaries against a single "
+      "PlanNodePtr. Use match(MultiFragmentPlan) for distributed plans.");
+
+  // Verify the plan is an Exchange or MergeExchange.
+  if (ordered_) {
+    EXPECT_TRUE(dynamic_cast<const MergeExchangeNode*>(plan.get()) != nullptr)
+        << "Expected MergeExchange at shuffle boundary, but got "
+        << plan->toString(false, false);
+  } else {
+    EXPECT_TRUE(dynamic_cast<const ExchangeNode*>(plan.get()) != nullptr)
+        << "Expected Exchange at shuffle boundary, but got "
+        << plan->toString(false, false);
+  }
+  AXIOM_TEST_RETURN_IF_FAILURE
+
+  // Find the producer fragment.
+  const auto* producerFragment = findProducerFragment(plan->id(), *context);
+  EXPECT_TRUE(producerFragment != nullptr)
+      << "Could not find producer fragment for Exchange " << plan->id();
+  AXIOM_TEST_RETURN_IF_FAILURE
+
+  // Match the producer fragment (expects PartitionedOutput at root).
+  const auto& fragmentPlan = producerFragment->fragment.planNode;
+
+  const auto* partitionedOutput =
+      dynamic_cast<const PartitionedOutputNode*>(fragmentPlan.get());
+  EXPECT_TRUE(partitionedOutput != nullptr)
+      << "Expected PartitionedOutput at fragment root, but got "
+      << fragmentPlan->toString(false, false);
+  AXIOM_TEST_RETURN_IF_FAILURE
+
+  // Update context for producer fragment matching.
+  DistributedMatchContext producerContext{
+      context->fragments, producerFragment, context->taskPrefixToFragmentIndex};
+
+  return producerMatcher_->match(
+      partitionedOutput->sources()[0], symbols, &producerContext);
+}
+
 #undef AXIOM_TEST_RETURN
 #undef AXIOM_TEST_RETURN_IF_FAILURE
 
@@ -923,22 +1027,23 @@ PlanMatcherBuilder& PlanMatcherBuilder::localMerge() {
   return *this;
 }
 
-PlanMatcherBuilder& PlanMatcherBuilder::partitionedOutput() {
-  VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<PlanMatcherImpl<PartitionedOutputNode>>(
-      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
-  return *this;
-}
-
 PlanMatcherBuilder& PlanMatcherBuilder::exchange() {
   VELOX_USER_CHECK_NULL(matcher_);
   matcher_ = std::make_shared<PlanMatcherImpl<ExchangeNode>>();
   return *this;
 }
 
-PlanMatcherBuilder& PlanMatcherBuilder::mergeExchange() {
-  VELOX_USER_CHECK_NULL(matcher_);
-  matcher_ = std::make_shared<PlanMatcherImpl<MergeExchangeNode>>();
+PlanMatcherBuilder& PlanMatcherBuilder::shuffle() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<ShuffleBoundaryMatcher>(matcher_, /*ordered=*/false);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::shuffleMerge() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<ShuffleBoundaryMatcher>(matcher_, /*ordered=*/true);
   return *this;
 }
 
@@ -994,6 +1099,42 @@ PlanMatcherBuilder& PlanMatcherBuilder::tableWrite() {
   matcher_ = std::make_shared<PlanMatcherImpl<TableWriteNode>>(
       std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
   return *this;
+}
+
+bool PlanMatcher::match(const axiom::runner::MultiFragmentPlan& plan) const {
+  const auto& fragments = plan.fragments();
+  EXPECT_FALSE(fragments.empty()) << "MultiFragmentPlan has no fragments";
+  if (testing::Test::HasNonfatalFailure()) {
+    return false;
+  }
+
+  // Count shuffle boundaries in the matcher using the virtual method.
+  const int32_t numShuffles = this->shuffleBoundaryCount();
+
+  // Expected: N shuffle boundaries = N+1 fragments.
+  const int32_t expectedFragments = numShuffles + 1;
+  EXPECT_EQ(static_cast<int32_t>(fragments.size()), expectedFragments)
+      << "Expected " << expectedFragments << " fragments for " << numShuffles
+      << " shuffle boundaries, but got " << fragments.size();
+  if (testing::Test::HasNonfatalFailure()) {
+    return false;
+  }
+
+  // Build mapping from task prefix to fragment index.
+  std::unordered_map<std::string, int32_t> taskPrefixToFragmentIndex;
+  for (int32_t i = 0; i < fragments.size(); ++i) {
+    taskPrefixToFragmentIndex[fragments[i].taskPrefix] = i;
+  }
+
+  // The root fragment is the last one by convention.
+  const auto& rootFragment = fragments.back();
+
+  // Set up the distributed match context.
+  DistributedMatchContext context{
+      &fragments, &rootFragment, &taskPrefixToFragmentIndex};
+
+  // Match the root fragment against the matcher.
+  return this->match(rootFragment.fragment.planNode, {}, &context).match;
 }
 
 } // namespace facebook::velox::core

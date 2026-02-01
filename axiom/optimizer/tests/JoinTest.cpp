@@ -357,39 +357,23 @@ TEST_F(JoinTest, joinWithComputedKeys) {
 
   {
     auto distributedPlan = planVelox(logicalPlan);
-    const auto& fragments = distributedPlan.plan->fragments();
-    ASSERT_EQ(4, fragments.size());
+
+    auto rightSideMatcher =
+        core::PlanMatcherBuilder().tableScan("region").shuffle().build();
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
                        // TODO Remove redundant projection of 'n_regionkey'.
                        .project({"n_regionkey", "coalesce(n_regionkey, 1)"})
-                       .partitionedOutput()
+                       .shuffle()
+                       .hashJoin(rightSideMatcher, core::JoinType::kRight)
+                       .partialAggregation()
+                       .shuffle()
+                       .localPartition()
+                       .finalAggregation()
                        .build();
-    AXIOM_ASSERT_PLAN(fragments.at(0).fragment.planNode, matcher);
 
-    matcher = core::PlanMatcherBuilder()
-                  .tableScan("region")
-                  .partitionedOutput()
-                  .build();
-    AXIOM_ASSERT_PLAN(fragments.at(1).fragment.planNode, matcher);
-
-    matcher = core::PlanMatcherBuilder()
-                  .exchange()
-                  .hashJoin(
-                      core::PlanMatcherBuilder().exchange().build(),
-                      core::JoinType::kRight)
-                  .partialAggregation()
-                  .partitionedOutput()
-                  .build();
-    AXIOM_ASSERT_PLAN(fragments.at(2).fragment.planNode, matcher);
-
-    matcher = core::PlanMatcherBuilder()
-                  .exchange()
-                  .localPartition()
-                  .finalAggregation()
-                  .build();
-    AXIOM_ASSERT_PLAN(fragments.at(3).fragment.planNode, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
   }
 }
 

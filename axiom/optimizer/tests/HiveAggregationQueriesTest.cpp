@@ -56,28 +56,20 @@ TEST_F(HiveAggregationQueriesTest, mask) {
 
   {
     auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan;
-    const auto& fragments = plan->fragments();
-    ASSERT_EQ(2, fragments.size());
 
+    // Verify mask is NOT present in final aggregation.
     auto matcher =
         core::PlanMatcherBuilder()
             .tableScan("nation")
             .project({"n_nationkey > 10 as mask", "n_nationkey", "n_regionkey"})
             .partialAggregation(
                 {}, {"sum(n_nationkey) FILTER (mask)", "avg(n_regionkey)"})
-            .partitionedOutput()
+            .shuffle()
+            .localPartition()
+            .finalAggregation({}, {"sum(sum)", "avg(avg)"})
             .build();
 
-    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
-
-    // Verify mask is NOT present in final aggregation.
-    matcher = core::PlanMatcherBuilder()
-                  .exchange()
-                  .localPartition()
-                  .finalAggregation({}, {"sum(sum)", "avg(avg)"})
-                  .build();
-
-    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
   }
 
   auto referencePlan =
@@ -260,8 +252,6 @@ TEST_F(HiveAggregationQueriesTest, ignoreDuplicates) {
 
   {
     auto plan = planVelox(logicalPlan).plan;
-    const auto& fragments = plan->fragments();
-    ASSERT_EQ(2, fragments.size());
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
@@ -277,19 +267,13 @@ TEST_F(HiveAggregationQueriesTest, ignoreDuplicates) {
                             "bool_or(m1)",
                             "bool_and(m1) FILTER (WHERE m3)",
                             "bool_or(m1) FILTER (WHERE m4)"})
-                       .partitionedOutput()
+                       .shuffle()
+                       .localPartition()
+                       .finalAggregation()
+                       .project()
                        .build();
 
-    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
-
-    matcher = core::PlanMatcherBuilder()
-                  .exchange()
-                  .localPartition()
-                  .finalAggregation()
-                  .project()
-                  .build();
-
-    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
   }
 
   auto referencePlan =
@@ -351,8 +335,6 @@ TEST_F(HiveAggregationQueriesTest, orderNonSensitive) {
 
   {
     auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan;
-    const auto& fragments = plan->fragments();
-    ASSERT_EQ(2, fragments.size());
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
@@ -367,19 +349,13 @@ TEST_F(HiveAggregationQueriesTest, orderNonSensitive) {
                             "count(n_regionkey)",
                             "sum(n_nationkey) FILTER (WHERE m1)",
                             "count(n_regionkey) FILTER (WHERE m2)"})
-                       .partitionedOutput()
+                       .shuffle()
+                       .localPartition()
+                       .finalAggregation()
+                       .project()
                        .build();
 
-    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
-
-    matcher = core::PlanMatcherBuilder()
-                  .exchange()
-                  .localPartition()
-                  .finalAggregation()
-                  .project()
-                  .build();
-
-    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
   }
 
   auto referencePlan = exec::test::PlanBuilder()
@@ -436,8 +412,6 @@ TEST_F(HiveAggregationQueriesTest, ignoreDuplicatesXOrderNonSensitive) {
 
   {
     auto plan = planVelox(logicalPlan).plan;
-    const auto& fragments = plan->fragments();
-    ASSERT_EQ(2, fragments.size());
 
     auto matcher =
         core::PlanMatcherBuilder()
@@ -450,19 +424,13 @@ TEST_F(HiveAggregationQueriesTest, ignoreDuplicatesXOrderNonSensitive) {
                     "bool_or(m1)",
                     "bool_and(m1) FILTER (WHERE m2)",
                 })
-            .partitionedOutput()
+            .shuffle()
+            .localPartition()
+            .finalAggregation()
+            .project()
             .build();
 
-    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
-
-    matcher = core::PlanMatcherBuilder()
-                  .exchange()
-                  .localPartition()
-                  .finalAggregation()
-                  .project()
-                  .build();
-
-    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
   }
 
   auto referencePlan = exec::test::PlanBuilder()

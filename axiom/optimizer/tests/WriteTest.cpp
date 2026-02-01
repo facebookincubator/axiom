@@ -513,54 +513,29 @@ const velox::core::PlanNodePtr nodeAt(
 
 // Verify that distributed plan has exchange before table write.
 void verifyPartitionedWrite(const runner::MultiFragmentPlan& plan) {
-  const auto& fragments = plan.fragments();
-  ASSERT_EQ(3, fragments.size());
-
-  {
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan()
-                       .project()
-                       .partitionedOutput()
-                       .build();
-    AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
-  }
-  {
-    auto matcher = core::PlanMatcherBuilder()
-                       .exchange()
-                       .localPartition()
-                       .tableWrite()
-                       .partitionedOutput()
-                       .build();
-    AXIOM_ASSERT_PLAN(nodeAt(plan, 1), matcher);
-  }
-  {
-    auto matcher = core::PlanMatcherBuilder().exchange().build();
-    AXIOM_ASSERT_PLAN(fragments[2].fragment.planNode, matcher);
-  }
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .project()
+                     .shuffle()
+                     .localPartition()
+                     .tableWrite()
+                     .shuffle()
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(&plan, matcher);
 }
 
 // Verify that table write is collocated with table scan (no exchange between
 // the two).
 void verifyCollocatedWrite(const runner::MultiFragmentPlan& plan) {
-  const auto& fragments = plan.fragments();
-  ASSERT_EQ(2, fragments.size());
-
-  {
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan()
-            .project()
-            // TODO Enhance the optimizer to eliminate local exchange.
-            .localPartition()
-            .tableWrite()
-            .partitionedOutput()
-            .build();
-    AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
-  }
-  {
-    auto matcher = core::PlanMatcherBuilder().exchange().build();
-    AXIOM_ASSERT_PLAN(nodeAt(plan, 1), matcher);
-  }
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .project()
+                     // TODO Enhance the optimizer to eliminate local exchange.
+                     .localPartition()
+                     .tableWrite()
+                     .shuffle()
+                     .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(&plan, matcher);
 }
 
 TEST_F(WriteTest, createTableAsSelectBucketedSql) {
