@@ -82,7 +82,13 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
   decltype(runner_.parseMultiple(sql, options)) statements;
   try {
     // Parse all statements upfront.
-    statements = runner_.parseMultiple(sql, options);
+    cli::Timing parseTiming;
+    statements = cli::time<decltype(statements)>(
+        [&]() { return runner_.parseMultiple(sql, options); }, parseTiming);
+
+    if (isInteractive) {
+      std::cout << "Parsing: " << parseTiming.toString() << std::endl;
+    }
   } catch (std::exception& e) {
     std::cerr << "Parse failed: " << e.what() << std::endl;
     return;
@@ -103,7 +109,8 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
 
       if (isInteractive) {
         // In interactive mode, show per-statement timing.
-        std::cout << statementTiming.toString() << std::endl;
+        std::cout << "Optimizing and Executing: " << statementTiming.toString()
+                  << std::endl;
       }
     } catch (std::exception& e) {
       std::cerr << "Query failed: " << e.what() << std::endl;

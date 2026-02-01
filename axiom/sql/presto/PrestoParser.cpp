@@ -69,15 +69,35 @@ class ParserHelper {
 
     parser_->removeErrorListeners();
     parser_->addErrorListener(&errorListener_);
+
+    // Use SLL prediction mode for faster parsing. SLL is much faster than LL
+    // mode and works for most SQL queries. If SLL fails, we fall back to LL.
+    parser_->getInterpreter<antlr4::atn::ParserATNSimulator>()
+        ->setPredictionMode(antlr4::atn::PredictionMode::SLL);
   }
 
   PrestoSqlParser& parser() const {
     return *parser_;
   }
 
-  PrestoSqlParser::StatementContext* parse() const {
-    auto ctx = parser_->singleStatement();
+  PrestoSqlParser::StatementContext* parse() {
+    // Try SLL mode first (fast path).
+    try {
+      auto ctx = parser_->singleStatement();
+      if (parser_->getNumberOfSyntaxErrors() == 0) {
+        return ctx->statement();
+      }
+    } catch (const std::exception&) {
+      // SLL mode failed, fall through to LL mode.
+    }
 
+    // Fall back to LL mode (slower but handles all valid SQL).
+    tokenStream_->seek(0);
+    parser_->reset();
+    parser_->getInterpreter<antlr4::atn::ParserATNSimulator>()
+        ->setPredictionMode(antlr4::atn::PredictionMode::LL);
+
+    auto ctx = parser_->singleStatement();
     if (parser_->getNumberOfSyntaxErrors() > 0) {
       throw PrestoParseError(errorListener_.firstError);
     }
