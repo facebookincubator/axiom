@@ -58,8 +58,9 @@ class Runner {
 
   /// Waits up to 'maxWaitMicros' for all activity of the execution to cease.
   /// This is used in tests to ensure that all pools are empty and unreferenced
-  /// before teardown.
-  virtual void waitForCompletion(int32_t maxWaitMicros) = 0;
+  /// before teardown. Returns true if all activity ceased within the timeout,
+  /// false otherwise.
+  virtual bool waitForCompletion(int32_t maxWaitMicros) = 0;
 };
 
 } // namespace facebook::axiom::runner
