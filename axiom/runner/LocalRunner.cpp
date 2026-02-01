@@ -273,11 +273,12 @@ void LocalRunner::abort() {
   }
 }
 
-void LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
+bool LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
   VELOX_CHECK_NE(state_, State::kInitialized);
   std::vector<velox::ContinueFuture> futures;
   {
     std::lock_guard<std::mutex> l(mutex_);
+    cursor_.reset();
     for (auto& stage : stages_) {
       for (auto& task : stage) {
         futures.push_back(task->taskDeletionFuture());
@@ -286,21 +287,13 @@ void LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
     }
   }
 
-  const auto startTime = velox::getCurrentTimeMicro();
-  for (auto& future : futures) {
-    const auto elapsedTime = velox::getCurrentTimeMicro() - startTime;
-    VELOX_CHECK_LT(
-        elapsedTime,
-        maxWaitMicros,
-        "LocalRunner did not finish within {} us",
-        maxWaitMicros);
+  auto& executor = folly::QueuedImmediateExecutor::instance();
+  auto result = folly::collectAll(std::move(futures))
+                    .via(&executor)
+                    .within(std::chrono::microseconds(maxWaitMicros))
+                    .wait();
 
-    auto& executor = folly::QueuedImmediateExecutor::instance();
-    std::move(future)
-        .within(std::chrono::microseconds(maxWaitMicros - elapsedTime))
-        .via(&executor)
-        .wait();
-  }
+  return !result.hasException();
 }
 
 namespace {
