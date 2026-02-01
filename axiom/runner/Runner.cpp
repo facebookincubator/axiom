@@ -23,7 +23,6 @@ const auto& stateNames() {
   static const folly::F14FastMap<Runner::State, std::string_view> kNames = {
       {Runner::State::kInitialized, "initialized"},
       {Runner::State::kRunning, "running"},
-      {Runner::State::kCancelled, "cancelled"},
       {Runner::State::kError, "error"},
       {Runner::State::kFinished, "finished"},
   };

@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/connectors/SchemaResolver.h"
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/PlanObject.h"
 
 /// Schema representation for use in query planning. All objects are
@@ -47,24 +47,10 @@ struct Value {
   float byteSize() const;
 
   const velox::Type* type;
-  const velox::Variant* min{nullptr};
-  const velox::Variant* max{nullptr};
 
   // Count of distinct values. Is not exact and is used for estimating
   // cardinalities of group bys or joins.
-  const float cardinality{1};
-
-  // Estimate of true fraction for booleans. 0 means always
-  // false. This is an estimate and 1 or 0 do not allow pruning
-  // dependent code paths.
-  float trueFraction{1};
-
-  // 0 means no nulls, 0.5 means half are null.
-  float nullFraction{0};
-
-  // True if nulls may occur. 'false' means that plans that allow no nulls may
-  // be generated.
-  bool nullable{true};
+  const float cardinality;
 };
 
 /// Describes order in an order by or index.
@@ -79,61 +65,16 @@ AXIOM_DECLARE_ENUM_NAME(OrderType);
 
 using OrderTypeVector = QGVector<OrderType>;
 
-/// Describes desired distribution of data.
-///
-/// TODO Allow specifying partitioning on specific keys, but no particular
-/// partitioning function.
-struct DesiredDistribution {
-  /// Connector-specific partitioning function or nullptr for standard Velox
-  /// hash partitioning.
-  const connector::PartitionType* partitionType;
-
-  /// One or more partitioning keys.
-  ExprVector partitionKeys;
+/// Type of data distribution.
+struct DistributionType {
+  bool isBroadcast{false};
+  bool isGather{false};
+  const connector::PartitionType* partitionType{nullptr};
 };
 
-/// Distribution of data. Describes a possible partition function that assigns a
-/// row of data to a partition based on some combination of partition keys. For
-/// a join to be copartitioned, both sides must have compatible partition
-/// functions and the join keys must include the partition keys.
-class DistributionType {
- public:
-  DistributionType(bool isGather = false)
-      : isGather_{isGather}, partitionType_{nullptr} {}
-
-  DistributionType(const connector::PartitionType* partitionType)
-      : isGather_{false}, partitionType_{partitionType} {}
-
-  bool operator==(const DistributionType& other) const = default;
-
-  static DistributionType gather() {
-    static const DistributionType kGather(true);
-    return kGather;
-  }
-
-  bool isGather() const {
-    return isGather_;
-  }
-
-  const connector::PartitionType* partitionType() const {
-    return partitionType_;
-  }
-
- private:
-  bool isGather_;
-
-  /// Partition function. nullptr is not partitioned.
-  const connector::PartitionType* partitionType_;
-};
-
-/// Describes output of relational operator. If this is partitioned on
-/// some keys, distributionType gives the partition function and
-/// 'partition' gives the input for the partition function.
+/// Describes output of relational operator.
 struct Distribution {
-  // TODO Distribution(/*broadcast=*/false) is used to specify *any*
-  // distribution. Provide a better way.
-  explicit Distribution(bool broadcast = false)
-      : numKeysUnique_{0}, isBroadcast_{broadcast} {}
+  explicit Distribution() = default;
 
   Distribution(
       DistributionType distributionType,
@@ -145,17 +86,28 @@ struct Distribution {
         partitionKeys_{std::move(partitionKeys)},
         orderKeys_{std::move(orderKeys)},
         orderTypes_{std::move(orderTypes)},
-        numKeysUnique_{numKeysUnique},
-        isBroadcast_{false} {
-    VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
-    if (isGather()) {
-      VELOX_CHECK_EQ(partitionKeys_.size(), 0);
+        numKeysUnique_{numKeysUnique} {
+#ifndef NDEBUG
+    VELOX_DCHECK_EQ(orderKeys_.size(), orderTypes_.size());
+    if (isBroadcast() || isGather()) {
+      VELOX_DCHECK_EQ(partitionKeys_.size(), 0);
     }
+#endif
   }
+
+  Distribution(
+      const connector::PartitionType* partitionType,
+      ExprVector partitionKeys)
+      : Distribution{
+            DistributionType{.partitionType = partitionType},
+            std::move(partitionKeys)} {}
 
   /// Returns a Distribution for use in a broadcast shuffle.
   static Distribution broadcast() {
-    return Distribution{/*broadcast=*/true};
+    static constexpr DistributionType kBroadcast{
+        .isBroadcast = true,
+    };
+    return {kBroadcast, {}};
   }
 
   /// Returns a distribution for an end of query gather from last stage
@@ -164,7 +116,9 @@ struct Distribution {
   static Distribution gather(
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {}) {
-    static const DistributionType kGather(/*isGather=*/true);
+    static constexpr DistributionType kGather{
+        .isGather = true,
+    };
     return {
         kGather,
         {},
@@ -173,24 +127,35 @@ struct Distribution {
     };
   }
 
-  /// True if 'this' and 'other' have the same number/type of keys and same
-  /// distribution type. Data is copartitioned if both sides have a 1:1
-  /// equality on all partitioning key columns.
-  bool isSamePartition(const Distribution& other) const;
+  enum class NeedsShuffle : uint8_t {
+    kMaybe = 0,
+    kYes,
+    kNo,
+  };
 
-  /// Return if 'this' and 'other' have the same number/type of partitioning
-  /// keys and use same partitioning function.
-  bool isSamePartition(const DesiredDistribution& other) const;
+  /// Returns kYes if 'this' needs to be reshuffled to match 'desired'.
+  /// Returns kNo if 'this' can be copartioned with 'desired'.
+  /// Returns kMaybe if not enough information to decide.
+  NeedsShuffle maybeNeedsShuffle(const Distribution& desired) const;
 
-  /// True if 'other' has the same ordering columns and order type.
-  bool isSameOrder(const Distribution& other) const;
+  /// Returns true if 'this' needs to be repartitioned to match 'desired'.
+  /// Returns false if 'this' can be copartioned with 'desired'.
+  bool needsShuffle(const Distribution& desired) const;
+
+  /// Returns true if 'this' needs to be sorted to match 'desired'.
+  /// Returns false if 'this' is sorted enough to match 'desired'.
+  bool needsSort(const Distribution& desired) const;
 
   bool isGather() const {
-    return distributionType_.isGather();
+    return distributionType_.isGather;
   }
 
   bool isBroadcast() const {
-    return isBroadcast_;
+    return distributionType_.isBroadcast;
+  }
+
+  const connector::PartitionType* partitionType() const {
+    return distributionType_.partitionType;
   }
 
   const DistributionType& distributionType() const {
@@ -236,10 +201,17 @@ struct Distribution {
   /// Number of leading elements of 'order' such that these uniquely identify a
   /// row. 0 if there is no uniqueness. This can be non-0 also if data is not
   /// sorted. This indicates a uniqueness for joining.
-  int32_t numKeysUnique_;
-
-  bool isBroadcast_;
+  int32_t numKeysUnique_ = 0;
 };
+
+inline bool hasCopartition(
+    const connector::PartitionType* current,
+    const connector::PartitionType* desired) {
+  if (current != nullptr && desired != nullptr) {
+    return current == current->copartition(*desired);
+  }
+  return current == desired;
+}
 
 struct SchemaTable;
 using SchemaTableCP = const SchemaTable*;
@@ -358,39 +330,12 @@ struct SchemaTable {
   QGVector<ColumnGroupCP> columnGroups;
 };
 
-/// Represents a collection of tables. Normally filled in ad hoc given
-/// the set of tables referenced by a query. The lifetime is a single
-/// optimization run. The owned objects are from the optimizer
-/// arena. Schema is owned by the application and is not from the
-/// optimization arena.  Objects of different catalogs/schemas get
-/// added to 'this' on first use. The Schema feeds from a
-/// SchemaResolver which interfaces to a local/remote metadata
-/// repository.
 class Schema {
  public:
-  /// Constructs a Schema for producing executable plans, backed by 'source'.
-  explicit Schema(const connector::SchemaResolver& source) : source_{&source} {}
-
-  /// Returns the table with 'name' or nullptr if not found, using
-  /// the connector specified by connectorId to perform table lookups.
-  /// An error is thrown if no connector with the specified ID exists.
-  SchemaTableCP findTable(std::string_view connectorId, std::string_view name)
-      const;
+  const SchemaTable& getTable(const connector::Table& connectorTable) const;
 
  private:
-  struct Table {
-    connector::TablePtr connectorTable;
-    SchemaTableCP schemaTable{nullptr};
-  };
-
-  // This map from connector ID to map of tables in that connector.
-  // In the tables map, the key is the full table name and the value is
-  // schema table (optimizer object) and connector table (connector object).
-  template <typename T>
-  using Map = folly::F14FastMap<std::string_view, T>;
-
-  const connector::SchemaResolver* source_;
-  mutable Map<Map<Table>> connectorTables_;
+  mutable folly::F14FastMap<const connector::Table*, SchemaTableCP> tables_;
 };
 
 } // namespace facebook::axiom::optimizer

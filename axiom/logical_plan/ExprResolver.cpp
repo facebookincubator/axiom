@@ -18,6 +18,7 @@
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
+#include "velox/exec/WindowFunction.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionSignature.h"
@@ -869,4 +870,71 @@ AggregateExprPtr ExprResolver::resolveAggregateTypes(
   return std::make_shared<AggregateExpr>(
       type, name, inputs, filter, ordering, distinct);
 }
+
+ExprResolver::WindowResolveResult ExprResolver::resolveWindowTypes(
+    const velox::core::ExprPtr& expr,
+    const InputNameResolver& inputNameResolver) const {
+  const auto* call = dynamic_cast<const velox::core::CallExpr*>(expr.get());
+  VELOX_USER_CHECK_NOT_NULL(
+      call, "Window function must be a call expression: {}", expr->toString());
+
+  const auto& name = call->name();
+
+  std::vector<ExprPtr> inputs;
+  inputs.reserve(expr->inputs().size());
+  for (const auto& input : expr->inputs()) {
+    inputs.push_back(resolveScalarTypes(input, inputNameResolver));
+  }
+
+  std::vector<velox::TypePtr> inputTypes;
+  inputTypes.reserve(inputs.size());
+  for (const auto& input : inputs) {
+    inputTypes.push_back(input->type());
+  }
+
+  // First try window function signatures
+  auto windowSignatures = velox::exec::getWindowFunctionSignatures(name);
+  if (windowSignatures.has_value()) {
+    for (const auto& signature : windowSignatures.value()) {
+      velox::exec::SignatureBinder binder(*signature, inputTypes);
+      if (binder.tryBind()) {
+        if (auto type = binder.tryResolveReturnType()) {
+          return {type, name, inputs};
+        }
+      }
+    }
+  }
+
+  auto aggregateSignatures = velox::exec::getAggregateFunctionSignatures(name);
+  if (aggregateSignatures.has_value()) {
+    for (const auto& signature : aggregateSignatures.value()) {
+      velox::exec::SignatureBinder binder(*signature, inputTypes);
+      if (binder.tryBind()) {
+        if (auto type = binder.tryResolveReturnType()) {
+          return {type, name, inputs};
+        }
+      }
+    }
+  }
+
+  if (!windowSignatures.has_value() && !aggregateSignatures.has_value()) {
+    VELOX_USER_FAIL("Window Function doesn't exist: {}.", name);
+  } else {
+    std::string errorMsg = "Window function signature is not supported: " +
+        toString(name, inputTypes) + ". ";
+    if (windowSignatures.has_value()) {
+      errorMsg +=
+          "Window function signatures: " + toString(windowSignatures.value()) +
+          ". ";
+    }
+    if (aggregateSignatures.has_value()) {
+      errorMsg += "Aggregate function signatures: " +
+          toString(aggregateSignatures.value()) + ".";
+    }
+    VELOX_USER_FAIL(errorMsg);
+  }
+
+  VELOX_UNREACHABLE();
+}
+
 } // namespace facebook::axiom::logical_plan

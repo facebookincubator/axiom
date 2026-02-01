@@ -72,40 +72,33 @@ Project -> dt1.o_year, dt1.mkt_share
               t3.s_suppkey = t4.l_suppkey
             TableScan -> t3.s_suppkey, t3.s_nationkey
               table: supplier
-            HashBuild -> t4.l_suppkey, t4.l_extendedprice, t4.l_discount, t5.o_orderdate
-              Join INNER Hash -> t4.l_suppkey, t4.l_extendedprice, t4.l_discount, t5.o_orderdate
-                  t4.l_orderkey = t5.o_orderkey
-                Join INNER Hash -> t4.l_orderkey, t4.l_suppkey, t4.l_extendedprice, t4.l_discount
-                    t4.l_partkey = t2.p_partkey
-                  TableScan -> t4.l_orderkey, t4.l_partkey, t4.l_suppkey, t4.l_extendedprice, t4.l_discount
-                    table: lineitem
-                  HashBuild -> t2.p_partkey
-                    TableScan -> t2.p_partkey
-                      table: part
-                      single-column filters: eq(t2.p_type, "ECONOMY ANODIZED STEEL")
-                HashBuild -> t5.o_orderkey, t5.o_orderdate
-                  Join INNER Hash -> t5.o_orderkey, t5.o_orderdate
-                      t6.c_nationkey = t7.n_nationkey
-                    Join INNER Hash -> t5.o_orderkey, t5.o_orderdate, t6.c_nationkey
-                        t5.o_custkey = t6.c_custkey
-                      TableScan -> t5.o_orderkey, t5.o_custkey, t5.o_orderdate
-                        table: orders
-                        single-column filters: between(t5.o_orderdate, "1995-01-01", "1996-12-31")
-                      HashBuild -> t6.c_custkey, t6.c_nationkey
-                        TableScan -> t6.c_custkey, t6.c_nationkey
-                          table: customer
-                    HashBuild -> t7.n_nationkey
-                      Join INNER Hash -> t7.n_nationkey
-                          t7.n_regionkey = t9.r_regionkey
-                        TableScan -> t7.n_nationkey, t7.n_regionkey
-                          table: nation
-                        HashBuild -> t9.r_regionkey
-                          TableScan -> t9.r_regionkey
-                            table: region
-                            single-column filters: eq(t9.r_name, "AMERICA")
-          HashBuild -> t8.n_nationkey, t8.n_name
-            TableScan -> t8.n_nationkey, t8.n_name
-              table: nation
+            Join INNER Hash -> t4.l_suppkey, t4.l_extendedprice, t4.l_discount, t5.o_orderdate
+                t4.l_orderkey = t5.o_orderkey
+              Join INNER Hash -> t4.l_orderkey, t4.l_suppkey, t4.l_extendedprice, t4.l_discount
+                  t4.l_partkey = t2.p_partkey
+                TableScan -> t4.l_orderkey, t4.l_partkey, t4.l_suppkey, t4.l_extendedprice, t4.l_discount
+                  table: lineitem
+                TableScan -> t2.p_partkey
+                  table: part
+                  single-column filters: eq(t2.p_type, "ECONOMY ANODIZED STEEL")
+              Join INNER Hash -> t5.o_orderkey, t5.o_orderdate
+                  t6.c_nationkey = t7.n_nationkey
+                Join INNER Hash -> t5.o_orderkey, t5.o_orderdate, t6.c_nationkey
+                    t5.o_custkey = t6.c_custkey
+                  TableScan -> t5.o_orderkey, t5.o_custkey, t5.o_orderdate
+                    table: orders
+                    single-column filters: between(t5.o_orderdate, "1995-01-01", "1996-12-31")
+                  TableScan -> t6.c_custkey, t6.c_nationkey
+                    table: customer
+                Join INNER Hash -> t7.n_nationkey
+                    t7.n_regionkey = t9.r_regionkey
+                  TableScan -> t7.n_nationkey, t7.n_regionkey
+                    table: nation
+                  TableScan -> t9.r_regionkey
+                    table: region
+                    single-column filters: eq(t9.r_name, "AMERICA")
+          TableScan -> t8.n_nationkey, t8.n_name
+            table: nation
 
 
 Executable Velox plan:

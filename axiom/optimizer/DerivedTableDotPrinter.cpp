@@ -151,13 +151,13 @@ std::string joinTypeLabel(const JoinEdge& edge) {
     return "SEMI";
   } else if (edge.isAnti()) {
     return "ANTI";
-  } else if (edge.leftOptional() && edge.rightOptional()) {
+  } else if (edge.isFullOuter()) {
     return "FULL";
-  } else if (edge.leftOptional()) {
+  } else if (edge.isRightOuter()) {
     return "RIGHT";
-  } else if (edge.rightOptional()) {
+  } else if (edge.isLeftOuter()) {
     return "LEFT";
-  } else if (edge.directed()) {
+  } else if (edge.isUnnest()) {
     return "UNNEST";
   } else {
     return "INNER";

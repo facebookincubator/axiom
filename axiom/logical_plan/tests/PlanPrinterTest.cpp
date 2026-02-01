@@ -196,7 +196,7 @@ TEST_F(PlanPrinterTest, tablesample) {
       lines,
       testing::ElementsAre(
           testing::StartsWith("- Sample: BERNOULLI: 10"),
-          testing::StartsWith("  - TableScan: test.test"),
+          testing::StartsWith("  - TableScan: test"),
           testing::Eq("")));
 
   lines = toSummaryLines(plan);
@@ -209,7 +209,6 @@ TEST_F(PlanPrinterTest, tablesample) {
           testing::Eq("      sample: BERNOULLI 10"),
           testing::Eq("  - TABLE_SCAN [0]: 2 fields: a BIGINT, b DOUBLE"),
           testing::Eq("        table: test"),
-          testing::Eq("        connector: test"),
           testing::Eq(""))
       // clang-format on
   );
@@ -222,7 +221,6 @@ TEST_F(PlanPrinterTest, tablesample) {
           testing::Eq("- SAMPLE [1]: 2 fields"),
           testing::Eq("  - TABLE_SCAN [0]: 2 fields"),
           testing::Eq("        table: test"),
-          testing::Eq("        connector: test"),
           testing::Eq("")));
 }
 
@@ -238,7 +236,7 @@ TEST_F(PlanPrinterTest, inList) {
       lines,
       testing::ElementsAre(
           testing::StartsWith("- Filter: IN(a, 1, 5)"),
-          testing::StartsWith("  - TableScan: test.test"),
+          testing::StartsWith("  - TableScan: test"),
           testing::Eq("")));
 
   lines = toSummaryLines(plan);
@@ -253,7 +251,6 @@ TEST_F(PlanPrinterTest, inList) {
           testing::Eq("      constants: BIGINT: 2"),
           testing::Eq("  - TABLE_SCAN [0]: 2 fields: a BIGINT, b DOUBLE"),
           testing::Eq("        table: test"),
-          testing::Eq("        connector: test"),
           testing::Eq(""))
       // clang-format on
   );
@@ -266,7 +263,6 @@ TEST_F(PlanPrinterTest, inList) {
           testing::Eq("- FILTER [1]: 2 fields"),
           testing::Eq("  - TABLE_SCAN [0]: 2 fields"),
           testing::Eq("        table: test"),
-          testing::Eq("        connector: test"),
           testing::Eq("")));
 }
 
@@ -299,7 +295,6 @@ TEST_F(PlanPrinterTest, tableScan) {
           testing::Eq("      projections: 1 out of 3"),
           testing::Eq("  - TABLE_SCAN [0]: 2 fields: a BIGINT, b DOUBLE"),
           testing::Eq("        table: test"),
-          testing::Eq("        connector: test"),
           testing::Eq("")));
 
   lines = toSkeletonLines(plan);
@@ -309,7 +304,6 @@ TEST_F(PlanPrinterTest, tableScan) {
       testing::ElementsAre(
           testing::Eq("- TABLE_SCAN [0]: 2 fields"),
           testing::Eq("      table: test"),
-          testing::Eq("      connector: test"),
           testing::Eq("")));
 }
 
@@ -533,7 +527,7 @@ TEST_F(PlanPrinterTest, unnest) {
   }
 
   {
-    auto plan = PlanBuilder(/* enableCorsions */ true)
+    auto plan = PlanBuilder(/* enableCoercions */ true)
                     .unnest({Sql("map(array[1, 2, 3], array[10, 20, 30])")
                                  .unnestAs("x", "y")})
                     .project({"x + y"})
@@ -572,7 +566,7 @@ TEST_F(PlanPrinterTest, unnest) {
             testing::StartsWith("  - Unnest:"),
             testing::StartsWith("      [x] := d"),
             testing::StartsWith("      [y, z] := e"),
-            testing::StartsWith("    - TableScan: test.test"),
+            testing::StartsWith("    - TableScan: test"),
             testing::Eq("")));
   }
 }
@@ -1257,18 +1251,16 @@ TEST_F(PlanPrinterTest, coercions) {
 
 TEST_F(PlanPrinterTest, tableWrite) {
   for (const auto& [expectedKind, actualKind] : {
-           std::pair{"CREATE", WriteKind::kCreate},
-           {"INSERT", WriteKind::kInsert},
-           {"DELETE", WriteKind::kDelete},
-           {"UPDATE", WriteKind::kUpdate},
+           std::pair{"CREATE", connector::WriteKind::kCreate},
+           {"INSERT", connector::WriteKind::kInsert},
+           {"DELETE", connector::WriteKind::kDelete},
+           {"UPDATE", connector::WriteKind::kUpdate},
        }) {
     SCOPED_TRACE(
         fmt::format("TableWrite kind: {}, {}", expectedKind, actualKind));
 
-    if (actualKind != WriteKind::kCreate) {
-      connector_->addTable(
-          "output_table", ROW({"col_a", "col_b"}, {BIGINT(), VARCHAR()}));
-    }
+    auto table = connector_->addTable(
+        "output_table", ROW({"col_a", "col_b"}, {BIGINT(), VARCHAR()}));
 
     SCOPE_EXIT {
       connector_->dropTableIfExists("output_table");
@@ -1283,6 +1275,10 @@ TEST_F(PlanPrinterTest, tableWrite) {
                         {"col_a", "col_b"},
                         {"a", "cast(b as varchar)"})
                     .build();
+
+    if (actualKind == connector::WriteKind::kCreate) {
+      plan->as<TableWriteNode>()->setTable(std::move(table));
+    }
 
     auto lines = toLines(plan);
 
@@ -1305,12 +1301,10 @@ TEST_F(PlanPrinterTest, tableWrite) {
                     "- TABLE_WRITE {} [1]: 1 fields: rows BIGINT",
                     expectedKind)),
             testing::Eq("      table: output_table"),
-            testing::Eq("      connector: test"),
             testing::Eq("      columns: 2"),
             testing::Eq("      expressions: CAST: 1, field: 2"),
             testing::Eq("  - TABLE_SCAN [0]: 2 fields: a BIGINT, b DOUBLE"),
             testing::Eq("        table: test"),
-            testing::Eq("        connector: test"),
             testing::Eq("")));
 
     lines = toSkeletonLines(plan);
@@ -1322,7 +1316,6 @@ TEST_F(PlanPrinterTest, tableWrite) {
                 fmt::format("- TABLE_WRITE {} [1]: 1 fields", expectedKind)),
             testing::Eq("  - TABLE_SCAN [0]: 2 fields"),
             testing::Eq("        table: test"),
-            testing::Eq("        connector: test"),
             testing::Eq("")));
   }
 }

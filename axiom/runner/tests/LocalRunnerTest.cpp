@@ -154,7 +154,10 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
     for (auto& rows : results) {
       count += rows->size();
     }
-    localRunner->waitForCompletion(kWaitTimeoutUs);
+    results = {};
+
+    runner::LocalRunner::waitForCompletion(
+        std::move(localRunner), kWaitTimeoutUs);
     EXPECT_EQ(250'000, count);
   }
 
@@ -191,7 +194,7 @@ TEST_F(LocalRunnerTest, count) {
   EXPECT_EQ(kNumRows, extractSingleInt64(results));
   results.clear();
   EXPECT_EQ(Runner::State::kFinished, localRunner->state());
-  localRunner->waitForCompletion(kWaitTimeoutUs);
+  LocalRunner::waitForCompletion(std::move(localRunner), kWaitTimeoutUs);
 }
 
 TEST_F(LocalRunnerTest, error) {
@@ -200,7 +203,7 @@ TEST_F(LocalRunnerTest, error) {
 
   EXPECT_THROW(readCursor(localRunner), velox::VeloxUserError);
   EXPECT_EQ(Runner::State::kError, localRunner->state());
-  localRunner->waitForCompletion(kWaitTimeoutUs);
+  LocalRunner::waitForCompletion(std::move(localRunner), kWaitTimeoutUs);
 }
 
 TEST_F(LocalRunnerTest, scan) {
@@ -219,7 +222,7 @@ TEST_F(LocalRunnerTest, broadcast) {
   EXPECT_EQ(kNumRows, extractSingleInt64(results));
   results.clear();
   EXPECT_EQ(Runner::State::kFinished, localRunner->state());
-  localRunner->waitForCompletion(kWaitTimeoutUs);
+  LocalRunner::waitForCompletion(std::move(localRunner), kWaitTimeoutUs);
 }
 
 TEST_F(LocalRunnerTest, lastStageWithMultipleInputs) {
@@ -253,7 +256,7 @@ TEST_F(LocalRunnerTest, lastStageWithMultipleInputs) {
 
   results.clear();
   EXPECT_EQ(Runner::State::kFinished, localRunner->state());
-  localRunner->waitForCompletion(kWaitTimeoutUs);
+  LocalRunner::waitForCompletion(std::move(localRunner), kWaitTimeoutUs);
 }
 
 } // namespace

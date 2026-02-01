@@ -21,6 +21,7 @@ add_library(
   LogicalPlanNode.cpp
   PlanPrinter.cpp
   ExprApi.cpp
+  Utils.cpp
 )
 
 target_link_libraries(axiom_logical_plan velox_type velox_serialization)

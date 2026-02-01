@@ -137,9 +137,7 @@ TableLayout::TableLayout(
     std::vector<const Column*> columns,
     std::vector<const Column*> partitionColumns,
     std::vector<const Column*> orderColumns,
-    std::vector<SortOrder> sortOrder,
-    std::vector<const Column*> lookupKeys,
-    bool supportsScan)
+    std::vector<SortOrder> sortOrder)
     : name_(std::move(name)),
       table_(table),
       connector_(connector),
@@ -147,8 +145,6 @@ TableLayout::TableLayout(
       partitionColumns_(std::move(partitionColumns)),
       orderColumns_(std::move(orderColumns)),
       sortOrder_(std::move(sortOrder)),
-      lookupKeys_(std::move(lookupKeys)),
-      supportsScan_(supportsScan),
       rowType_{makeRowType(columns_)} {
   VELOX_CHECK_NOT_NULL(table);
   VELOX_CHECK_NOT_NULL(connector);
@@ -162,10 +158,6 @@ TableLayout::TableLayout(
   }
 
   VELOX_CHECK_EQ(orderColumns_.size(), sortOrder_.size());
-
-  for (auto column : lookupKeys_) {
-    VELOX_CHECK_NOT_NULL(column);
-  }
 }
 
 const Column* TableLayout::findColumn(std::string_view name) const {

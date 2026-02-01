@@ -92,7 +92,6 @@ class LocalHiveTableLayout : public HiveTableLayout {
       std::vector<const Column*> partitioning,
       std::vector<const Column*> orderColumns,
       std::vector<SortOrder> sortOrder,
-      std::vector<const Column*> lookupKeys,
       std::vector<const Column*> hivePartitionColumns,
       velox::dwio::common::FileFormat fileFormat,
       std::unordered_map<std::string, std::string> serdeParameters = {})
@@ -105,7 +104,6 @@ class LocalHiveTableLayout : public HiveTableLayout {
             partitioning,
             orderColumns,
             sortOrder,
-            lookupKeys,
             hivePartitionColumns,
             fileFormat),
         serdeParameters_(std::move(serdeParameters)) {}

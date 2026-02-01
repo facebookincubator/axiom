@@ -64,42 +64,35 @@ Project (redundant) -> dt1.n_name, dt1.revenue
               t4.l_orderkey = t3.o_orderkey
             TableScan -> t4.l_orderkey, t4.l_suppkey, t4.l_extendedprice, t4.l_discount
               table: lineitem
-            HashBuild -> t2.c_nationkey, t3.o_orderkey, t6.n_nationkey, t6.n_name
-              Join INNER Hash -> t2.c_nationkey, t3.o_orderkey, t6.n_nationkey, t6.n_name
-                  t2.c_nationkey = t6.n_nationkey
-                Join INNER Hash -> t2.c_nationkey, t3.o_orderkey
-                    t3.o_custkey = t2.c_custkey
-                  TableScan -> t3.o_orderkey, t3.o_custkey
-                    table: orders
-                    single-column filters: gte(t3.o_orderdate, "1994-01-01") and lt(t3.o_orderdate, "1995-01-01")
-                  HashBuild -> t2.c_custkey, t2.c_nationkey
-                    TableScan -> t2.c_custkey, t2.c_nationkey
-                      table: customer
-                HashBuild -> t6.n_nationkey, t6.n_name
-                  Join INNER Hash -> t6.n_nationkey, t6.n_name
-                      t6.n_regionkey = t7.r_regionkey
-                    TableScan -> t6.n_nationkey, t6.n_name, t6.n_regionkey
-                      table: nation
-                    HashBuild -> t7.r_regionkey
-                      TableScan -> t7.r_regionkey
-                        table: region
-                        single-column filters: eq(t7.r_name, "ASIA")
-          HashBuild -> t5.s_suppkey, t5.s_nationkey
-            Join LEFT SEMI (FILTER) Hash -> t5.s_suppkey, t5.s_nationkey
-                t5.s_nationkey = edt23.edt23.t6.n_nationkey
-              TableScan -> t5.s_suppkey, t5.s_nationkey
-                table: supplier
-              HashBuild -> edt23.edt23.t6.n_nationkey
-                Project -> edt23.edt23.t6.n_nationkey
-                    edt23.edt23.t6.n_nationkey := t6.n_nationkey
-                  Join INNER Hash -> t6.n_nationkey
-                      t6.n_regionkey = t7.r_regionkey
-                    TableScan -> t6.n_nationkey, t6.n_regionkey
-                      table: nation
-                    HashBuild -> t7.r_regionkey
-                      TableScan -> t7.r_regionkey
-                        table: region
-                        single-column filters: eq(t7.r_name, "ASIA")
+            Join INNER Hash -> t2.c_nationkey, t3.o_orderkey, t6.n_nationkey, t6.n_name
+                t2.c_nationkey = t6.n_nationkey
+              Join INNER Hash -> t2.c_nationkey, t3.o_orderkey
+                  t3.o_custkey = t2.c_custkey
+                TableScan -> t3.o_orderkey, t3.o_custkey
+                  table: orders
+                  single-column filters: gte(t3.o_orderdate, "1994-01-01") and lt(t3.o_orderdate, "1995-01-01")
+                TableScan -> t2.c_custkey, t2.c_nationkey
+                  table: customer
+              Join INNER Hash -> t6.n_nationkey, t6.n_name
+                  t6.n_regionkey = t7.r_regionkey
+                TableScan -> t6.n_nationkey, t6.n_name, t6.n_regionkey
+                  table: nation
+                TableScan -> t7.r_regionkey
+                  table: region
+                  single-column filters: eq(t7.r_name, "ASIA")
+          Join LEFT SEMI (FILTER) Hash -> t5.s_suppkey, t5.s_nationkey
+              t5.s_nationkey = edt23.edt23.t6.n_nationkey
+            TableScan -> t5.s_suppkey, t5.s_nationkey
+              table: supplier
+            Project -> edt23.edt23.t6.n_nationkey
+                edt23.edt23.t6.n_nationkey := t6.n_nationkey
+              Join INNER Hash -> t6.n_nationkey
+                  t6.n_regionkey = t7.r_regionkey
+                TableScan -> t6.n_nationkey, t6.n_regionkey
+                  table: nation
+                TableScan -> t7.r_regionkey
+                  table: region
+                  single-column filters: eq(t7.r_name, "ASIA")
 
 
 Executable Velox plan:

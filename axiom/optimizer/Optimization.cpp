@@ -17,6 +17,7 @@
 #include "axiom/optimizer/Optimization.h"
 #include <algorithm>
 #include <iostream>
+#include <ranges>
 #include <utility>
 #include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Plan.h"
@@ -27,10 +28,21 @@
 
 namespace facebook::axiom::optimizer {
 
+std::string_view toString(JoinOrder joinOrder) {
+  switch (joinOrder) {
+    case JoinOrder::kCost:
+      return "cost";
+    case JoinOrder::kSyntactic:
+      return "syntactic";
+    case JoinOrder::kGreedy:
+      return "greedy";
+  }
+  return "unknown";
+}
+
 Optimization::Optimization(
     SessionPtr session,
     const logical_plan::LogicalPlanNode& logicalPlan,
-    const connector::SchemaResolver& schema,
     History& history,
     std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
     velox::core::ExpressionEvaluator& evaluator,
@@ -46,17 +58,15 @@ Optimization::Optimization(
       veloxQueryCtx_(std::move(veloxQueryCtx)),
       topState_{*this, nullptr},
       negation_{toName(FunctionRegistry::instance()->negation())},
-      toGraph_{schema, evaluator, options_},
+      toGraph_{evaluator, options_},
       toVelox_{session_, runnerOptions_, options_} {
   queryCtx()->optimization() = this;
   root_ = toGraph_.makeQueryGraph(*logicalPlan_);
-  root_->distributeConjuncts();
-  root_->addImpliedJoins();
-  root_->linkTablesToJoins();
-  for (auto* join : root_->joins) {
-    join->guessFanout();
-  }
   toGraph_.setDtOutput(root_, *logicalPlan_);
+
+  if (!options_.lazyOptimizeGraph) {
+    optimizeGraph();
+  }
 }
 
 // static
@@ -75,8 +85,6 @@ PlanAndStats Optimization::toVeloxPlan(
   auto veloxQueryCtx = velox::core::QueryCtx::create();
   velox::exec::SimpleExpressionEvaluator evaluator(veloxQueryCtx.get(), &pool);
 
-  auto schemaResolver = std::make_shared<connector::SchemaResolver>();
-
   VeloxHistory history;
 
   auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
@@ -84,7 +92,6 @@ PlanAndStats Optimization::toVeloxPlan(
   Optimization opt{
       session,
       logicalPlan,
-      *schemaResolver,
       history,
       veloxQueryCtx,
       evaluator,
@@ -105,6 +112,15 @@ void Optimization::trace(
                                                        : "Abandoned: ")
               << id << ": " << cost.toString() << ": " << " "
               << plan.toString(true, false) << std::endl;
+  }
+}
+
+void Optimization::optimizeGraph() {
+  root_->distributeConjuncts();
+  root_->addImpliedJoins();
+  root_->linkTablesToJoins();
+  for (auto* join : root_->joins) {
+    join->guessFanout();
   }
 }
 
@@ -143,30 +159,24 @@ void reducingJoinsRecursive(
         resultFunc = {}) {
   bool isLeaf = true;
   for (auto join : joinedBy(candidate)) {
-    if (join->isLeftOuter() && join->leftTable() != nullptr &&
-        candidate == join->rightTable() &&
+    if (join->isLeftOuter() && candidate == join->rightTable() &&
         candidate->is(PlanType::kDerivedTableNode)) {
       // One can restrict the build of the optional side by a restriction on the
       // probe. This happens specially when value subqueries are represented as
       // optional sides of left join. These are often aggregations and there is
       // no point creating values for groups that can't be probed.
-      ;
     } else if (join->leftOptional() || join->rightOptional()) {
       continue;
     }
 
     JoinSide other = join->sideOf(candidate, true);
-    if (other.table == nullptr) {
-      continue;
-    }
+    VELOX_DCHECK_NOT_NULL(other.table);
 
     if (!state.dt->hasTable(other.table) || !state.dt->hasJoin(join)) {
       continue;
     }
 
-    if (other.table->isNot(PlanType::kTableNode) &&
-        other.table->isNot(PlanType::kValuesTableNode) &&
-        other.table->isNot(PlanType::kUnnestTableNode)) {
+    if (other.table->is(PlanType::kDerivedTableNode)) {
       continue;
     }
 
@@ -321,43 +331,6 @@ std::optional<JoinCandidate> reducingJoins(
   return reducing;
 }
 
-// Calls 'func' with join, joined table and fanout for the joinable tables.
-template <typename Func>
-void forJoinedTables(const PlanState& state, Func func) {
-  folly::F14FastSet<JoinEdgeP> visited;
-  state.placed().forEach([&](PlanObjectCP placedTable) {
-    if (!placedTable->isTable()) {
-      return;
-    }
-
-    for (auto join : joinedBy(placedTable)) {
-      if (join->isNonCommutative()) {
-        if (!visited.insert(join).second) {
-          continue;
-        }
-        bool usable = true;
-        for (auto key : join->leftKeys()) {
-          if (!key->allTables().isSubset(state.placed())) {
-            // All items that the left key depends on must be placed.
-            usable = false;
-            break;
-          }
-        }
-        if (usable &&
-            (state.mayConsiderNext(join->rightTable()) || join->markColumn())) {
-          func(join, join->rightTable(), join->lrFanout());
-        }
-      } else {
-        auto [table, fanout] = join->otherTable(placedTable);
-        if (!state.dt->hasTable(table) || !state.mayConsiderNext(table)) {
-          continue;
-        }
-        func(join, table, fanout);
-      }
-    }
-  });
-}
-
 void addExtraEdges(PlanState& state, JoinCandidate& candidate) {
   // See if there are more join edges from the first of 'candidate' to already
   // placed tables. Fill in the non-redundant equalities into the join edge.
@@ -381,19 +354,42 @@ void addExtraEdges(PlanState& state, JoinCandidate& candidate) {
 }
 } // namespace
 
-std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
+std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) const {
   std::vector<JoinCandidate> candidates;
   candidates.reserve(state.dt->tables.size());
-  forJoinedTables(
-      state, [&](JoinEdgeP join, PlanObjectCP joined, float fanout) {
-        if (!state.isPlaced(joined) && state.dt->hasJoin(join) &&
-            state.dt->hasTable(joined)) {
-          candidates.emplace_back(join, joined, fanout);
-          if (join->isInner()) {
-            addExtraEdges(state, candidates.back());
-          }
-        }
-      });
+  state.placed().forEach([&](PlanObjectCP placedTable) {
+    if (!placedTable->isTable()) {
+      return;
+    }
+    for (auto* join : joinedBy(placedTable)) {
+      PlanObjectCP joined{};
+      float fanout{};
+      if (placedTable == join->leftTable()) {
+        joined = join->rightTable();
+        fanout = join->lrFanout();
+      } else if (join->isNonCommutative()) {
+        continue;
+      } else {
+        joined = join->leftTable();
+        fanout = join->rlFanout();
+      }
+      // TODO Think about what in what order to make these checks.
+      if (state.isPlaced(joined) || !state.dt->hasTable(joined) ||
+          !state.mayConsiderNext(joined) || !state.dt->hasJoin(join)) {
+        continue;
+      }
+      auto& candidate = candidates.emplace_back(join, joined, fanout);
+      if (join->isInner()) {
+        addExtraEdges(state, candidate);
+      }
+    }
+  });
+
+  SCOPE_EXIT {
+    if (!options_.costJoinOrder() && candidates.size() > 1) {
+      candidates.erase(candidates.begin() + 1, candidates.end());
+    }
+  };
 
   if (candidates.empty()) {
     // There are no join edges. There could still be cross joins.
@@ -409,12 +405,12 @@ std::vector<JoinCandidate> Optimization::nextJoins(PlanState& state) {
   // Take the first hand joined tables and bundle them with reducing joins that
   // can go on the build side.
 
-  if (!options_.syntacticJoinOrder && !candidates.empty()) {
+  if (!options_.syntacticJoinOrder()) {
     std::vector<JoinCandidate> bushes;
     for (auto& candidate : candidates) {
       if (auto bush = reducingJoins(
               state, candidate, options_.enableReducingExistences)) {
-        bushes.push_back(std::move(bush.value()));
+        bushes.push_back(std::move(*bush));
         addExtraEdges(state, bushes.back());
       }
     }
@@ -476,8 +472,7 @@ RelationOpPtr repartitionForAgg(
   // If no grouping and not yet gathered on a single node,
   // add a gather before final agg.
   if (agg->groupingKeys().empty()) {
-    auto* gather =
-        make<Repartition>(plan, Distribution::gather(), plan->columns());
+    auto* gather = make<Repartition>(plan, Distribution::gather());
     cost.add(*gather);
     return gather;
   }
@@ -503,13 +498,12 @@ RelationOpPtr repartitionForAgg(
 
   Distribution distribution{
       plan->distribution().distributionType(), std::move(keyValues)};
-  auto* repartition =
-      make<Repartition>(plan, std::move(distribution), plan->columns());
+  auto* repartition = make<Repartition>(plan, std::move(distribution));
   cost.add(*repartition);
   return repartition;
 }
 
-CPSpan<Column> leadingColumns(const ExprVector& exprs) {
+CPSpan<Column> leadingColumns(CPSpan<Expr> exprs) {
   size_t i = 0;
   for (; i < exprs.size(); ++i) {
     if (exprs[i]->isNot(PlanType::kColumnExpr)) {
@@ -521,39 +515,37 @@ CPSpan<Column> leadingColumns(const ExprVector& exprs) {
 
 bool isIndexColocated(
     const IndexInfo& info,
-    const ExprVector& lookupValues,
+    CPSpan<Expr> lookupValues,
     const RelationOpPtr& input) {
-  const auto& distribution = info.index->distribution;
-  if (distribution.isBroadcast()) {
-    return true;
+  const auto& current = input->distribution();
+  const auto& desired = info.index->distribution;
+  const auto needsShuffle = current.maybeNeedsShuffle(desired);
+  if (needsShuffle != Distribution::NeedsShuffle::kMaybe) {
+    return needsShuffle == Distribution::NeedsShuffle::kNo;
   }
 
+  // TODO: Code in this function actually doesn't feel right.
+
+  if (!hasCopartition(current.partitionType(), desired.partitionType())) {
+    return false;
+  }
+
+  if (current.partitionKeys().empty()) {
+    return false;
+  }
+
+  if (current.partitionKeys().size() != desired.partitionKeys().size()) {
+    return false;
+  }
+
+  // We should check it when we will add indexes.
   // True if 'input' is partitioned so that each partitioning key is joined to
   // the corresponding partition key in 'info'.
-  if (input->distribution().distributionType() !=
-      distribution.distributionType()) {
-    return false;
-  }
-
-  const auto& inputPartitionKeys = input->distribution().partitionKeys();
-
-  if (inputPartitionKeys.empty()) {
-    return false;
-  }
-
-  const auto& indexPartitionKeys = distribution.partitionKeys();
-  if (inputPartitionKeys.size() != indexPartitionKeys.size()) {
-    return false;
-  }
-
-  for (auto i = 0; i < inputPartitionKeys.size(); ++i) {
-    auto nthKey = position(lookupValues, *inputPartitionKeys[i]);
-    if (nthKey != kNotFound) {
-      if (info.schemaColumn(info.lookupKeys.at(nthKey)) !=
-          indexPartitionKeys.at(i)) {
-        return false;
-      }
-    } else {
+  for (size_t i = 0; i < current.partitionKeys().size(); ++i) {
+    auto nthKey = position(lookupValues, *current.partitionKeys()[i]);
+    if (nthKey == kNotFound ||
+        info.schemaColumn(info.lookupKeys[nthKey]) !=
+            desired.partitionKeys()[i]) {
       return false;
     }
   }
@@ -562,7 +554,7 @@ bool isIndexColocated(
 
 RelationOpPtr repartitionForIndex(
     const IndexInfo& info,
-    const ExprVector& lookupValues,
+    CPSpan<Expr> lookupValues,
     const RelationOpPtr& plan,
     PlanState& state) {
   if (isSingleWorker() || isIndexColocated(info, lookupValues, plan)) {
@@ -592,65 +584,52 @@ RelationOpPtr repartitionForIndex(
   }
 
   auto* repartition = make<Repartition>(
-      plan,
-      Distribution{distribution.distributionType(), std::move(keyExprs)},
-      plan->columns());
+      plan, Distribution{distribution.distributionType(), std::move(keyExprs)});
   state.addCost(*repartition);
   return repartition;
 }
 
 // Join edge: a -- b. Left is a. Right is b.
-// @param fanout For each row in 'a' there are so many matches in 'b'.
+// @param lrFanout For each row in 'a' there are so many matches in 'b'.
 // @param rlFanout For each row in 'b' there are so many matches in 'a'.
 // @param rightToLeftRatio |b| / |a|
 float fanoutJoinTypeLimit(
     velox::core::JoinType joinType,
-    float fanout,
+    float lrFanout,
     float rlFanout,
     float rightToLeftRatio) {
   switch (joinType) {
     case velox::core::JoinType::kInner:
-      return fanout;
+      return lrFanout;
     case velox::core::JoinType::kLeft:
-      return std::max<float>(1, fanout);
+      return std::max<float>(1, lrFanout);
     case velox::core::JoinType::kRight:
       return std::max<float>(1, rlFanout) * rightToLeftRatio;
     case velox::core::JoinType::kFull:
-      return std::max<float>(std::max<float>(1, fanout), rightToLeftRatio);
+      return std::max<float>({1, lrFanout, rightToLeftRatio});
     case velox::core::JoinType::kLeftSemiProject:
       return 1;
     case velox::core::JoinType::kLeftSemiFilter:
-      return std::min<float>(1, fanout);
+      return std::min<float>(1, lrFanout);
     case velox::core::JoinType::kRightSemiProject:
       return rightToLeftRatio;
     case velox::core::JoinType::kRightSemiFilter:
       return std::min<float>(1, rlFanout) * rightToLeftRatio;
     case velox::core::JoinType::kAnti:
-      return std::max<float>(0, 1 - fanout);
+      return std::max<float>(0, 1 - lrFanout);
     default:
       VELOX_UNREACHABLE();
   }
-}
-
-void setMarkTrueFraction(
-    ColumnCP mark,
-    velox::core::JoinType joinType,
-    float fanout,
-    float rlFanout) {
-  const_cast<Value*>(&mark->value())->trueFraction = std::min<float>(
-      1,
-      joinType == velox::core::JoinType::kLeftSemiProject ? fanout : rlFanout);
 }
 
 // Returns the positions in 'keys' for the expressions that determine the
 // partition. empty if the partition is not decided by 'keys'
 std::vector<uint32_t> joinKeyPartition(
     const RelationOpPtr& op,
-    const ExprVector& keys) {
-  const auto& partitionKeys = op->distribution().partitionKeys();
+    CPSpan<Expr> keys) {
   std::vector<uint32_t> positions;
-  for (unsigned i = 0; i < partitionKeys.size(); ++i) {
-    auto nthKey = position(keys, *partitionKeys[i]);
+  for (const auto* partitionKey : op->distribution().partitionKeys()) {
+    auto nthKey = position(keys, *partitionKey);
     if (nthKey == kNotFound) {
       return {};
     }
@@ -689,32 +668,29 @@ PlanObjectSet availableColumns(BaseTableCP baseTable, ColumnGroupCP index) {
   return result;
 }
 
-bool isBroadcastableSize(PlanP build) {
-  return build->cost.cardinality < 100'000;
+bool isSingleWorkerSize(const RelationOp& op) {
+  return op.resultCardinality() < 100'000;
 }
 
 // The 'other' side gets shuffled to align with 'input'. If 'input' is not
 // partitioned on its keys, shuffle the 'input' too.
 void alignJoinSides(
     RelationOpPtr& input,
-    const ExprVector& keys,
+    CPSpan<Expr> keys,
     PlanState& state,
     RelationOpPtr& otherInput,
-    const ExprVector& otherKeys,
+    CPSpan<Expr> otherKeys,
     PlanState& otherState) {
-  if (input->distribution().isGather() &&
-      otherInput->distribution().isGather()) {
-    // No alignment needed.
-    return;
-  }
+  VELOX_DCHECK(
+      !input->distribution().isGather() ||
+      !otherInput->distribution().isGather());
 
   auto part = joinKeyPartition(input, keys);
   if (part.empty()) {
-    Distribution distribution{DistributionType{}, keys};
-    auto* repartition =
-        make<Repartition>(input, std::move(distribution), input->columns());
-    state.addCost(*repartition);
-    input = repartition;
+    Distribution distribution{
+        DistributionType{}, ExprVector{keys.begin(), keys.end()}};
+    input = make<Repartition>(input, std::move(distribution));
+    state.addCost(*input);
   }
 
   ExprVector distColumns;
@@ -730,10 +706,8 @@ void alignJoinSides(
 
   Distribution distribution{
       input->distribution().distributionType(), std::move(distColumns)};
-  auto* repartition = make<Repartition>(
-      otherInput, std::move(distribution), otherInput->columns());
-  otherState.addCost(*repartition);
-  otherInput = repartition;
+  otherInput = make<Repartition>(otherInput, std::move(distribution));
+  otherState.addCost(*otherInput);
 }
 
 // Check if 'plan' is an identity projection. If so, return its input.
@@ -756,16 +730,6 @@ const RelationOpPtr& maybeDropProject(const RelationOpPtr& plan) {
   }
 
   return plan;
-}
-
-const connector::PartitionType* copartitionType(
-    const connector::PartitionType* first,
-    const connector::PartitionType* second) {
-  if (first != nullptr && second != nullptr) {
-    return first->copartition(*second);
-  }
-
-  return nullptr;
 }
 
 RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
@@ -799,15 +763,11 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
     keyValues.emplace_back(write->columnExprs().at(index));
   }
 
-  const auto* planPartitionType =
-      plan->distribution().distributionType().partitionType();
-
-  auto copartition =
-      copartitionType(planPartitionType, layout->partitionType());
+  const auto* planPartitionType = plan->distribution().partitionType();
 
   // Copartitioning is possible if PartitionTypes are compatible and the table
   // has no fewer partitions than the plan.
-  bool shuffle = !copartition || copartition != planPartitionType;
+  bool shuffle = !hasCopartition(planPartitionType, layout->partitionType());
   if (!shuffle) {
     // Check that the partition keys of the plan are assigned pairwise to the
     // partition columns of the layout.
@@ -825,8 +785,7 @@ RelationOpPtr repartitionForWrite(const RelationOpPtr& plan, PlanState& state) {
   }
 
   Distribution distribution(layout->partitionType(), std::move(keyValues));
-  auto* repartition =
-      make<Repartition>(plan, std::move(distribution), plan->columns());
+  auto* repartition = make<Repartition>(plan, std::move(distribution));
   state.addCost(*repartition);
   return repartition;
 }
@@ -837,20 +796,22 @@ void Optimization::addPostprocess(
     DerivedTableCP dt,
     RelationOpPtr& plan,
     PlanState& state) const {
+#ifndef NDEBUG
   // Sanity check that all tables and conjuncts have been placed.
   for (const auto& table : state.dt->tables) {
-    VELOX_CHECK(
+    VELOX_DCHECK(
         state.isPlaced(table),
         "Failed to place a table: {}",
         table->toString());
   }
 
   for (const auto* conjunct : state.dt->conjuncts) {
-    VELOX_CHECK(
+    VELOX_DCHECK(
         state.isPlaced(conjunct),
         "Failed to place a conjunct: {}",
         conjunct->toString());
   }
+#endif
 
   if (dt->write) {
     VELOX_DCHECK(!dt->hasAggregation());
@@ -881,15 +842,39 @@ void Optimization::addPostprocess(
     plan = filter;
   }
 
-  // We probably want to make this decision based on cost.
-  static constexpr int64_t kMaxLimitBeforeProject = 8'192;
-  if (dt->hasOrderBy()) {
-    addOrderBy(dt, plan, state);
-  } else if (dt->hasLimit() && dt->limit <= kMaxLimitBeforeProject) {
+  const bool needsLimit = [&] {
+    if (dt->limit == 0) {
+      return true;
+    }
+    if (dt->hasOrderBy()) {
+      addOrderBy(dt, plan, state);
+      return false;
+    }
+    if (!dt->hasLimit()) {
+      return false;
+    }
+    auto pushdownLimit = [&] {
+      if ((isSingleWorker_ && isSingleDriver_) ||
+          options_.alwaysPushdownLimit) {
+        // Limit doesn't affect parallelism,
+        // so we can apply it as early as possible.
+        return true;
+      }
+      const auto parallelism =
+          runnerOptions_.numWorkers * runnerOptions_.numDrivers;
+      // Instead of 1024, we want to use preferred_output_batch_rows?
+      const auto willCompute =
+          options_.planBestThroughput ? 1024 / parallelism : 1024 * parallelism;
+      return dt->limit <= std::max<int64_t>(1, willCompute);
+    };
+    if (options_.alwaysPullupLimit || !pushdownLimit()) {
+      return true;
+    }
     auto limit = make<Limit>(plan, dt->limit, dt->offset);
     state.addCost(*limit);
     plan = limit;
-  }
+    return false;
+  }();
 
   if (!dt->columns.empty()) {
     ColumnVector usedColumns;
@@ -902,6 +887,9 @@ void Optimization::addPostprocess(
       }
     }
 
+    if (dt->exprs.hasWindows()) {
+      plan = addWindowOps(std::move(plan), usedExprs);
+    }
     plan = make<Project>(
         maybeDropProject(plan),
         usedExprs,
@@ -909,7 +897,7 @@ void Optimization::addPostprocess(
         Project::isRedundant(plan, usedExprs, usedColumns));
   }
 
-  if (!dt->hasOrderBy() && dt->limit > kMaxLimitBeforeProject) {
+  if (needsLimit) {
     auto limit = make<Limit>(plan, dt->limit, dt->offset);
     state.addCost(*limit);
     plan = limit;
@@ -983,7 +971,8 @@ void Optimization::addAggregation(
   plan = std::move(precompute).maybeProject();
   state.place(aggPlan);
 
-  if (isSingleWorker_ && isSingleDriver_) {
+  if ((isSingleWorker_ && isSingleDriver_) ||
+      options_.alwaysPlanSingleAggregation) {
     auto* singleAgg = make<Aggregation>(
         plan,
         std::move(groupingKeys),
@@ -1065,9 +1054,17 @@ void Optimization::addOrderBy(
     RelationOpPtr& plan,
     PlanState& state) const {
   PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
-  auto orderKeys = precompute.toColumns(dt->orderKeys);
+  ExprVector orderKeys;
+  if (dt->orderKeys.hasWindows()) {
+    orderKeys = dt->orderKeys;
+    plan = addWindowOps(std::move(plan), orderKeys);
+    orderKeys = precompute.toColumns(orderKeys);
+  } else {
+    orderKeys = precompute.toColumns(dt->orderKeys);
+  }
+  VELOX_CHECK_EQ(orderKeys.size(), dt->orderKeys.size());
 
-  for (auto i = 0; i < orderKeys.size(); ++i) {
+  for (size_t i = 0; i < orderKeys.size(); ++i) {
     state.addExprToColumn(dt->orderKeys[i], orderKeys[i]);
   }
 
@@ -1095,6 +1092,9 @@ void Optimization::joinByIndex(
     const JoinCandidate& candidate,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
+  if (!options_.enableIndexLookupJoin) {
+    return;
+  }
   if (candidate.tables.size() != 1 ||
       candidate.tables[0]->isNot(PlanType::kTableNode) ||
       !candidate.existences.empty()) {
@@ -1103,6 +1103,11 @@ void Optimization::joinByIndex(
   }
 
   auto [right, left] = candidate.joinSides();
+
+  const auto joinType = right.leftJoinType;
+  if (!velox::core::IndexLookupJoinNode::isSupported(joinType)) {
+    return;
+  }
 
   auto& keys = right.keys;
   auto keyColumns = leadingColumns(keys);
@@ -1116,29 +1121,19 @@ void Optimization::joinByIndex(
     if (info.lookupKeys.empty()) {
       continue;
     }
-    PlanStateSaver save(state, candidate);
+    PlanStateSaver save{state};
     auto newPartition = repartitionForIndex(info, left.keys, plan, state);
     if (!newPartition) {
       continue;
     }
     state.place(candidate.tables.at(0));
-    auto joinType = right.leftJoinType();
-    if (joinType == velox::core::JoinType::kFull ||
-        joinType == velox::core::JoinType::kRight) {
-      // Not available by index.
-      return;
-    }
 
     auto fanout = info.scanCardinality * rightTable->filterSelectivity;
     if (joinType == velox::core::JoinType::kLeft) {
       fanout = std::max<float>(1, fanout);
-    } else if (joinType == velox::core::JoinType::kLeftSemiProject) {
-      fanout = 1;
-    } else if (joinType == velox::core::JoinType::kLeftSemiFilter) {
-      fanout = std::min<float>(1, fanout);
     }
 
-    auto lookupKeys = left.keys;
+    ExprVector lookupKeys{left.keys.begin(), left.keys.end()};
     // The number of keys is the prefix that matches index order.
     lookupKeys.resize(info.lookupKeys.size());
     state.placeColumns(availableColumns(rightTable, index));
@@ -1165,91 +1160,6 @@ void Optimization::joinByIndex(
 }
 
 namespace {
-
-struct ProjectionBuilder {
-  ColumnVector columns;
-  ExprVector exprs;
-
-  // Project 'expr' as 'column'.
-  void add(ColumnCP column, ExprCP expr) {
-    VELOX_DCHECK(
-        expr->isColumn(), "Expr is not a column: {}", expr->toString());
-    columns.emplace_back(column);
-    exprs.emplace_back(expr);
-  }
-
-  RelationOp* build(RelationOp* input) {
-    return make<Project>(
-        input, exprs, columns, Project::isRedundant(input, exprs, columns));
-  }
-
-  ColumnVector inputColumns() const {
-    ColumnVector columns;
-    columns.reserve(exprs.size());
-    for (const auto* expr : exprs) {
-      VELOX_DCHECK(
-          expr->isColumn(), "Expr is not a column: {}", expr->toString());
-      columns.emplace_back(expr->as<Column>());
-    }
-
-    return columns;
-  }
-
-  PlanObjectSet outputColumns() const {
-    PlanObjectSet columnSet;
-    columnSet.unionObjects(columns);
-    return columnSet;
-  }
-};
-
-folly::F14FastMap<PlanObjectCP, ExprCP> makeJoinColumnMapping(
-    JoinEdgeP joinEdge) {
-  folly::F14FastMap<PlanObjectCP, ExprCP> mapping;
-  for (auto i = 0; i < joinEdge->leftColumns().size(); ++i) {
-    mapping.emplace(joinEdge->leftColumns()[i], joinEdge->leftExprs()[i]);
-  }
-
-  for (auto i = 0; i < joinEdge->rightColumns().size(); ++i) {
-    mapping.emplace(joinEdge->rightColumns()[i], joinEdge->rightExprs()[i]);
-  }
-
-  return mapping;
-}
-
-folly::F14FastMap<PlanObjectCP, ExprCP> makeJoinColumnMapping(
-    const ColumnVector& leftColumns,
-    const ExprVector& leftExprs,
-    const ColumnVector& rightColumns,
-    const ExprVector& rightExprs) {
-  folly::F14FastMap<PlanObjectCP, ExprCP> mapping;
-
-  for (auto i = 0; i < leftColumns.size(); ++i) {
-    mapping.emplace(leftColumns[i], leftExprs[i]);
-  }
-
-  for (auto i = 0; i < rightColumns.size(); ++i) {
-    mapping.emplace(rightColumns[i], rightExprs[i]);
-  }
-  return mapping;
-}
-
-// Translates columns from outside the join to columns below the join if there
-// is a rename, as in the case of optional sides of outer joins.
-PlanObjectSet translateToJoinInput(
-    const PlanObjectSet& columns,
-    const folly::F14FastMap<PlanObjectCP, ExprCP>& mapping) {
-  PlanObjectSet result;
-  columns.forEach([&](PlanObjectCP object) {
-    auto it = mapping.find(object);
-    if (it != mapping.end()) {
-      result.add(it->second);
-    } else {
-      result.add(object);
-    }
-  });
-  return result;
-}
-
 // Check if 'mark' column produced by a SemiProject join is used only to
 // filter the results using 'mark' or 'not(mark)' condition. If so, replace
 // the join with a SemiFilter and remove the filter.
@@ -1258,36 +1168,227 @@ void tryOptimizeSemiProject(
     ColumnCP& mark,
     PlanState& state,
     Name negation) {
-  if (mark) {
-    const bool leftProject =
-        joinType == velox::core::JoinType::kLeftSemiProject;
-    const bool rightProject =
-        joinType == velox::core::JoinType::kRightSemiProject;
-
-    if (leftProject || rightProject) {
-      if (auto markFilter = state.isDownstreamFilterOnly(mark)) {
-        if (markFilter == mark) {
-          joinType = leftProject ? velox::core::JoinType::kLeftSemiFilter
-                                 : velox::core::JoinType::kRightSemiFilter;
-          mark = nullptr;
-          state.place(markFilter);
-          return;
-        }
-
-        if (leftProject && isCallExpr(markFilter, negation) &&
-            markFilter->as<Call>()->argAt(0) == mark) {
-          joinType = velox::core::JoinType::kAnti;
-          mark = nullptr;
-          state.place(markFilter);
-          return;
-        }
-      }
-    }
+  if (!mark) {
+    return;
+  }
+  const bool leftProject = joinType == velox::core::JoinType::kLeftSemiProject;
+  const bool rightProject =
+      joinType == velox::core::JoinType::kRightSemiProject;
+  if (!leftProject && !rightProject) {
+    return;
+  }
+  const auto* markFilter = state.isDownstreamFilterOnly(mark);
+  if (!markFilter) {
+    return;
+  }
+  if (markFilter == mark) {
+    joinType = leftProject ? velox::core::JoinType::kLeftSemiFilter
+                           : velox::core::JoinType::kRightSemiFilter;
+    mark = nullptr;
+    state.place(markFilter);
+  } else if (
+      leftProject && isCallExpr(markFilter, negation) &&
+      markFilter->as<Call>()->argAt(0) == mark) {
+    joinType = velox::core::JoinType::kAnti;
+    mark = nullptr;
+    state.place(markFilter);
   }
 }
 } // namespace
 
-void Optimization::joinByHash(
+void Optimization::tryMergeJoin(
+    const JoinCandidate& candidate,
+    PlanState& state,
+    velox::core::JoinType joinType,
+    const RelationOpPtr& probeInput,
+    const ExprVector& probeKeys,
+    const RelationOpPtr& buildInput,
+    const ExprVector& buildKeys,
+    float fanout,
+    const ColumnVector& columns,
+    std::vector<NextJoin>& toTry) const {
+  if (!velox::core::MergeJoinNode::isSupported(joinType)) {
+    return;
+  }
+  if (!isSingleWorker_ &&
+      (!probeInput->distribution().isGather() ||
+       !buildInput->distribution().isGather())) {
+    return;
+  }
+
+  const auto& probeOrderTypes = probeInput->distribution().orderTypes();
+  const auto& buildOrderTypes = buildInput->distribution().orderTypes();
+  const auto& probeOrderKeys = probeInput->distribution().orderKeys();
+  const auto& buildOrderKeys = buildInput->distribution().orderKeys();
+  const uint32_t minSize =
+      std::min(probeOrderTypes.size(), buildOrderTypes.size());
+  ExprVector newProbeKeys;
+  ExprVector newBuildKeys;
+  newProbeKeys.resize(minSize);
+  newBuildKeys.resize(minSize);
+  uint32_t maxIndex = 0;
+  for (uint32_t i = 0; i < probeKeys.size(); ++i) {
+    uint32_t index = kNotFound;
+    for (uint32_t j = 0; j < minSize; ++j) {
+      if (probeOrderTypes[j] != buildOrderTypes[j]) {
+        continue;
+      }
+      if (!probeOrderKeys[j]->sameOrEqual(*probeKeys[i])) {
+        continue;
+      }
+      if (!buildOrderKeys[j]->sameOrEqual(*buildKeys[i])) {
+        continue;
+      }
+      index = j;
+      break;
+    }
+    if (index == kNotFound) {
+      return;
+    }
+    newProbeKeys[index] = probeKeys[i];
+    newBuildKeys[index] = buildKeys[i];
+    maxIndex = std::max(maxIndex, index);
+  }
+  for (uint32_t i = 0; i <= maxIndex; ++i) {
+    if (newProbeKeys[i]) {
+      continue;
+    }
+    if (probeOrderTypes[i] != buildOrderTypes[i]) {
+      return;
+    }
+    if (!probeOrderKeys[i]->sameOrEqual(*buildOrderKeys[i])) {
+      return;
+    }
+  }
+  std::erase(newProbeKeys, nullptr);
+  std::erase(newBuildKeys, nullptr);
+
+  PlanStateSaver save{state};
+  RelationOp* join = make<Join>(
+      JoinMethod::kMerge,
+      joinType,
+      false,
+      probeInput,
+      buildInput,
+      std::move(newProbeKeys),
+      std::move(newBuildKeys),
+      candidate.join->filter(),
+      fanout,
+      columns);
+  state.addCost(*join);
+  state.addNextJoin(&candidate, join, toTry);
+}
+
+template <typename Reshuffle>
+void Optimization::joinByKeys(
+    const JoinCandidate& candidate,
+    const JoinSide& probe,
+    RelationOpPtr probeInput,
+    PlanState& state,
+    const JoinSide& build,
+    RelationOpPtr buildInput,
+    PlanState& memoState,
+    const Reshuffle& reshuffle,
+    float lrFanout,
+    float rlFanout,
+    std::vector<NextJoin>& toTry) {
+  VELOX_DCHECK(probe.markColumn == build.markColumn);
+
+  auto joinType = build.leftJoinType;
+
+  const bool probeOnly = joinType == velox::core::JoinType::kLeftSemiFilter ||
+      joinType == velox::core::JoinType::kLeftSemiProject ||
+      joinType == velox::core::JoinType::kAnti;
+
+  const bool buildOnly = joinType == velox::core::JoinType::kRightSemiFilter ||
+      joinType == velox::core::JoinType::kRightSemiProject;
+
+  PlanObjectSet probeColumns;
+  if (!buildOnly) {
+    probeColumns.unionObjects(probeInput->columns());
+  }
+
+  PlanObjectSet buildColumns;
+  if (!probeOnly) {
+    buildColumns.unionObjects(buildInput->columns());
+  }
+
+  ColumnVector columns;
+  PlanObjectSet columnSet;
+  ColumnCP mark = nullptr;
+
+  state.downstreamColumns().forEach<Column>([&](auto column) {
+    if (column == build.markColumn) {
+      mark = column;
+      return;
+    }
+
+    if ((probeOnly || !buildColumns.contains(column)) &&
+        (buildOnly || !probeColumns.contains(column))) {
+      return;
+    }
+
+    columnSet.add(column);
+    columns.push_back(column);
+  });
+
+  tryOptimizeSemiProject(joinType, mark, state, negation_);
+
+  // If there is an existence flag, it is the rightmost result column.
+  if (mark) {
+    columnSet.add(mark);
+    columns.push_back(mark);
+  }
+
+  PrecomputeProjection precomputeProbe(probeInput, state.dt);
+  auto probeKeys = precomputeProbe.toColumns(probe.keys);
+  probeInput = std::move(precomputeProbe).maybeProject();
+
+  PrecomputeProjection precomputeBuild(buildInput, state.dt);
+  auto buildKeys = precomputeBuild.toColumns(build.keys);
+  buildInput = std::move(precomputeBuild).maybeProject();
+
+  VELOX_DCHECK_EQ(probeKeys.size(), buildKeys.size());
+
+  reshuffle(probeInput, probeKeys, state, buildInput, buildKeys, memoState);
+
+  const auto fanout = fanoutJoinTypeLimit(
+      joinType,
+      lrFanout,
+      rlFanout,
+      memoState.cost.cardinality / state.cost.cardinality);
+
+  state.replaceColumns(std::move(columnSet));
+  state.cost.cost += memoState.cost.cost;
+
+  tryMergeJoin(
+      candidate,
+      state,
+      joinType,
+      probeInput,
+      probeKeys,
+      buildInput,
+      buildKeys,
+      fanout,
+      columns,
+      toTry);
+
+  RelationOp* join = make<Join>(
+      JoinMethod::kHash,
+      joinType,
+      candidate.join->isNullAwareIn(),
+      probeInput,
+      buildInput,
+      std::move(probeKeys),
+      std::move(buildKeys),
+      candidate.join->filter(),
+      fanout,
+      std::move(columns));
+  state.addCost(*join);
+  state.addNextJoin(&candidate, join, toTry);
+}
+
+void Optimization::probeJoin(
     const RelationOpPtr& plan,
     const JoinCandidate& candidate,
     PlanState& state,
@@ -1295,16 +1396,15 @@ void Optimization::joinByHash(
   checkTables(candidate);
 
   auto [build, probe] = candidate.joinSides();
+  const auto joinType = build.leftJoinType;
 
   const auto partKeys = joinKeyPartition(plan, probe.keys);
   ExprVector copartition;
   if (partKeys.empty()) {
     // Prefer to make a build partitioned on join keys and shuffle probe to
     // align with build.
-    copartition = build.keys;
+    copartition = {build.keys.begin(), build.keys.end()};
   }
-
-  PlanStateSaver save(state, candidate);
 
   PlanObjectSet buildFilterColumns;
   buildFilterColumns.unionColumns(candidate.join->filter());
@@ -1317,84 +1417,225 @@ void Optimization::joinByHash(
     buildTables.add(buildTable);
   }
 
-  // Mapping from join output column to probe or build side input.
-  auto joinColumnMapping = makeJoinColumnMapping(candidate.join);
-  buildColumns.intersect(
-      translateToJoinInput(state.downstreamColumns(), joinColumnMapping));
+  PlanStateSaver save{state};
+  state.place(buildTables);
+  state.placeColumns(buildColumns);
+
+  buildColumns.intersect(state.downstreamColumns());
 
   buildColumns.unionColumns(build.keys);
   buildColumns.unionSet(buildFilterColumns);
 
+  MemoKey memoKey = MemoKey::create(
+      candidate.tables[0], buildColumns, buildTables, candidate.existences);
+
+  Distribution distributionForBuild;
+  const Distribution* forBuild = nullptr;
+  if (!copartition.empty()) {
+    distributionForBuild = {nullptr, copartition};
+    forBuild = &distributionForBuild;
+  }
+
+  bool needsShuffle = false;
+  auto buildPlan = makePlan(
+      *state.dt, memoKey, forBuild, {}, candidate.existsFanout, needsShuffle);
+
+  PlanState memoState(state.optimization, state.dt, buildPlan);
+  RelationOpPtr buildInput = buildPlan->op;
+  RelationOpPtr probeInput = plan;
+
+  auto reshuffle = [&](auto& probeInput,
+                       const auto& probeKeys,
+                       auto& state,
+                       auto& buildInput,
+                       const auto& buildKeys,
+                       auto& memoState) {
+    if (!isSingleWorker_ &&
+        !(probeInput->distribution().isGather() &&
+          buildInput->distribution().isGather())) {
+      if (!partKeys.empty()) {
+        if (needsShuffle) {
+          if (copartition.empty()) {
+            for (auto i : partKeys) {
+              copartition.push_back(build.keys[i]);
+            }
+          }
+          Distribution distribution{
+              probeInput->distribution().distributionType(), copartition};
+          buildInput = make<Repartition>(buildInput, std::move(distribution));
+          memoState.addCost(*buildInput);
+        }
+      } else if (
+          joinType != velox::core::JoinType::kRight &&
+          joinType != velox::core::JoinType::kFull &&
+          isSingleWorkerSize(*buildInput)) {
+        buildInput = make<Repartition>(buildInput, Distribution::broadcast());
+        memoState.addCost(*buildInput);
+      } else {
+        // The probe gets shuffled to align with build. If build is not
+        // partitioned on its keys, shuffle the build too.
+        alignJoinSides(
+            buildInput, buildKeys, memoState, probeInput, probeKeys, state);
+      }
+    }
+  };
+
+  joinByKeys(
+      candidate,
+      probe,
+      probeInput,
+      state,
+      build,
+      buildInput,
+      memoState,
+      reshuffle,
+      candidate.fanout,
+      candidate.join->rlFanout(),
+      toTry);
+}
+
+void Optimization::buildJoin(
+    const RelationOpPtr& plan,
+    const JoinCandidate& candidate,
+    PlanState& state,
+    std::vector<NextJoin>& toTry) {
+  checkTables(candidate);
+
+  auto [probe, build] = candidate.joinSides();
+  const auto joinType = build.leftJoinType;
+
+  PlanObjectSet probeFilterColumns;
+  probeFilterColumns.unionColumns(candidate.join->filter());
+  probeFilterColumns.intersect(availableColumns(candidate.tables[0]));
+
+  PlanObjectSet probeTables;
+  PlanObjectSet probeColumns;
+  for (auto probeTable : candidate.tables) {
+    probeColumns.unionSet(availableColumns(probeTable));
+    probeTables.add(probeTable);
+  }
+
+  PlanStateSaver save{state};
+  state.place(probeTables);
+  state.placeColumns(probeColumns);
+
+  probeColumns.intersect(state.downstreamColumns());
+
+  probeColumns.unionColumns(probe.keys);
+  probeColumns.unionSet(probeFilterColumns);
+
+  MemoKey memoKey = MemoKey::create(
+      candidate.tables[0], probeColumns, probeTables, candidate.existences);
+
+  bool needsShuffle = false;
+  auto probePlan = makePlan(
+      *state.dt, memoKey, {}, {}, candidate.existsFanout, needsShuffle);
+
+  PlanState memoState(state.optimization, state.dt, probePlan);
+  RelationOpPtr probeInput = probePlan->op;
+  RelationOpPtr buildInput = plan;
+
+  auto reshuffle = [&](auto& probeInput,
+                       const auto& probeKeys,
+                       auto& state,
+                       auto& buildInput,
+                       const auto& buildKeys,
+                       auto& memoState) {
+    if (!isSingleWorker_ &&
+        !(probeInput->distribution().isGather() &&
+          buildInput->distribution().isGather())) {
+      // The build gets shuffled to align with probe. If probe is not
+      // partitioned on its keys, shuffle the probe too.
+      alignJoinSides(
+          probeInput, probeKeys, memoState, buildInput, buildKeys, state);
+    }
+    std::swap(state.cost, memoState.cost);
+  };
+
+  joinByKeys(
+      candidate,
+      probe,
+      probeInput,
+      state,
+      build,
+      buildInput,
+      memoState,
+      reshuffle,
+      candidate.join->rlFanout(),
+      candidate.fanout,
+      toTry);
+}
+
+void Optimization::crossJoin(
+    const RelationOpPtr& plan,
+    const JoinCandidate& candidate,
+    PlanState& state,
+    std::vector<NextJoin>& toTry) {
+  const auto build = candidate.join
+      ? candidate.join->sideOf(candidate.tables[0], false)
+      : JoinSide{};
+  const auto joinType = build.leftJoinType;
+  if (!velox::core::NestedLoopJoinNode::isSupported(joinType)) {
+    return;
+  }
+  auto filterExprs = candidate.join ? candidate.join->filter() : ExprVector{};
+
+  PlanObjectSet buildFilterColumns;
+  buildFilterColumns.unionColumns(filterExprs);
+  buildFilterColumns.intersect(availableColumns(candidate.tables[0]));
+
+  PlanObjectSet buildTables;
+  PlanObjectSet buildColumns;
+  for (auto buildTable : candidate.tables) {
+    buildColumns.unionSet(availableColumns(buildTable));
+    buildTables.add(buildTable);
+  }
+
+  PlanStateSaver save{state};
   state.place(buildTables);
   state.placeColumns(buildColumns);
+
+  buildColumns.intersect(state.downstreamColumns());
+
+  buildColumns.unionSet(buildFilterColumns);
 
   MemoKey memoKey = MemoKey::create(
       candidate.tables[0], buildColumns, buildTables, candidate.existences);
 
-  std::optional<DesiredDistribution> forBuild;
-  if (!copartition.empty()) {
-    forBuild = {nullptr, copartition};
-  }
+  const auto forBuild = plan->distribution().isGather() ||
+          joinType == velox::core::JoinType::kRight ||
+          joinType == velox::core::JoinType::kFull
+      ? Distribution::gather()
+      : Distribution::broadcast();
 
-  PlanObjectSet empty;
   bool needsShuffle = false;
   auto buildPlan = makePlan(
-      *state.dt,
-      memoKey,
-      forBuild,
-      empty,
-      candidate.existsFanout,
-      needsShuffle);
+      *state.dt, memoKey, &forBuild, {}, candidate.existsFanout, needsShuffle);
 
-  PlanState buildState(state.optimization, state.dt, buildPlan);
+  PlanState memoState(state.optimization, state.dt, buildPlan);
   RelationOpPtr buildInput = buildPlan->op;
-  RelationOpPtr probeInput = plan;
+  if (needsShuffle) {
+    buildInput = make<Repartition>(buildInput, forBuild);
+    memoState.addCost(*buildInput);
+  }
 
-  auto joinType = build.leftJoinType();
-  const bool probeOnly = joinType == velox::core::JoinType::kLeftSemiFilter ||
-      joinType == velox::core::JoinType::kLeftSemiProject ||
-      joinType == velox::core::JoinType::kAnti;
+  const bool probeOnly = joinType == velox::core::JoinType::kLeftSemiProject;
 
   PlanObjectSet probeColumns;
   probeColumns.unionObjects(plan->columns());
 
+  if (!probeOnly) {
+    buildColumns = {};
+    buildColumns.unionObjects(buildInput->columns());
+  }
+
+  ColumnVector columns;
+  PlanObjectSet columnSet;
   ColumnCP mark = nullptr;
-
-  PlanObjectSet joinColumns;
-  joinColumns.unionObjects(probe.columns);
-  joinColumns.unionObjects(build.columns);
-
-  // Non-trivial projections over input needed by the join must be computed
-  // first. These projections include expressions used in join keys and
-  // joinEdge.{right, left}Columns.
-
-  PrecomputeProjection precomputeProbe(probeInput, state.dt);
-  auto probeJoinColumns =
-      precomputeProbe.toColumns(probe.exprs, &probe.columns);
-  auto probeKeys = precomputeProbe.toColumns(probe.keys);
-  probeInput = std::move(precomputeProbe).maybeProject();
-
-  PrecomputeProjection precomputeBuild(buildInput, state.dt);
-  auto buildJoinColumns =
-      precomputeBuild.toColumns(build.exprs, &build.columns);
-  auto buildKeys = precomputeBuild.toColumns(build.keys);
-  buildInput = std::move(precomputeBuild).maybeProject();
-
-  joinColumnMapping = makeJoinColumnMapping(
-      probe.columns, probeJoinColumns, build.columns, buildJoinColumns);
-
-  ProjectionBuilder projectionBuilder;
-  bool needsProjection = false;
 
   state.downstreamColumns().forEach<Column>([&](auto column) {
     if (column == build.markColumn) {
       mark = column;
-      return;
-    }
-
-    if (joinColumns.contains(column)) {
-      projectionBuilder.add(column, joinColumnMapping.at(column));
-      needsProjection = true;
       return;
     }
 
@@ -1403,342 +1644,28 @@ void Optimization::joinByHash(
       return;
     }
 
-    projectionBuilder.add(column, column);
+    columnSet.add(column);
+    columns.push_back(column);
   });
-
-  if (mark) {
-    setMarkTrueFraction(
-        mark, joinType, candidate.fanout, candidate.join->rlFanout());
-  }
-
-  tryOptimizeSemiProject(joinType, mark, state, negation_);
 
   // If there is an existence flag, it is the rightmost result column.
   if (mark) {
-    projectionBuilder.add(mark, mark);
+    columnSet.add(mark);
+    columns.push_back(mark);
   }
 
-  state.replaceColumns(projectionBuilder.outputColumns());
-
-  const auto fanout = fanoutJoinTypeLimit(
-      joinType,
-      candidate.fanout,
-      candidate.join->rlFanout(),
-      buildState.cost.cardinality / state.cost.cardinality);
-
-  if (!isSingleWorker_ &&
-      !(probeInput->distribution().isGather() &&
-        buildInput->distribution().isGather())) {
-    if (!partKeys.empty()) {
-      if (needsShuffle) {
-        if (copartition.empty()) {
-          for (auto i : partKeys) {
-            copartition.push_back(build.keys[i]);
-          }
-        }
-        Distribution distribution{
-            plan->distribution().distributionType(), copartition};
-        auto* repartition = make<Repartition>(
-            buildInput, std::move(distribution), buildInput->columns());
-        buildState.addCost(*repartition);
-        buildInput = repartition;
-      }
-    } else if (
-        candidate.join->isBroadcastableType() &&
-        isBroadcastableSize(buildPlan)) {
-      auto* broadcast = make<Repartition>(
-          buildInput, Distribution::broadcast(), buildInput->columns());
-      buildState.addCost(*broadcast);
-      buildInput = broadcast;
-    } else {
-      // The probe gets shuffled to align with build. If build is not
-      // partitioned on its keys, shuffle the build too.
-      alignJoinSides(
-          buildInput, buildKeys, buildState, probeInput, probeKeys, state);
-    }
-  }
-
-  auto* buildOp = make<HashBuild>(buildInput, build.keys, buildPlan);
-  buildState.addCost(*buildOp);
-
-  RelationOp* join = make<Join>(
-      JoinMethod::kHash,
-      joinType,
-      candidate.join->isNullAwareIn(),
-      probeInput,
-      buildOp,
-      std::move(probeKeys),
-      std::move(buildKeys),
-      candidate.join->filter(),
-      fanout,
-      projectionBuilder.inputColumns());
-
-  state.addCost(*join);
-  state.cost.cost += buildState.cost.cost;
-
-  if (needsProjection) {
-    join = projectionBuilder.build(join);
-  }
-
-  state.addNextJoin(&candidate, join, toTry);
-}
-
-void Optimization::joinByHashRight(
-    const RelationOpPtr& plan,
-    const JoinCandidate& candidate,
-    PlanState& state,
-    std::vector<NextJoin>& toTry) {
-  checkTables(candidate);
-
-  auto [probe, build] = candidate.joinSides();
-
-  PlanStateSaver save(state, candidate);
-
-  PlanObjectSet probeFilterColumns;
-  probeFilterColumns.unionColumns(candidate.join->filter());
-  probeFilterColumns.intersect(availableColumns(candidate.tables[0]));
-
-  const auto& dc = state.downstreamColumns();
-
-  PlanObjectSet probeTables;
-  PlanObjectSet probeColumns;
-  for (auto probeTable : candidate.tables) {
-    probeColumns.unionSet(availableColumns(probeTable));
-    state.place(probeTable);
-    probeTables.add(probeTable);
-  }
-
-  probeColumns.intersect(dc);
-  probeColumns.unionColumns(probe.keys);
-  probeColumns.unionSet(probeFilterColumns);
-  state.placeColumns(probeColumns);
-
-  MemoKey memoKey = MemoKey::create(
-      candidate.tables[0], probeColumns, probeTables, candidate.existences);
-
-  bool needsShuffle = false;
-  auto probePlan = makePlan(
-      *state.dt,
-      memoKey,
-      std::nullopt,
-      PlanObjectSet{},
-      candidate.existsFanout,
-      needsShuffle);
-
-  PlanState probeState(state.optimization, state.dt, probePlan);
-
-  RelationOpPtr probeInput = probePlan->op;
-
-  PrecomputeProjection precomputeProbe(probeInput, state.dt);
-  auto probeJoinColumns =
-      precomputeProbe.toColumns(probe.exprs, &probe.columns);
-  auto probeKeys = precomputeProbe.toColumns(probe.keys);
-  probeInput = std::move(precomputeProbe).maybeProject();
-
-  RelationOpPtr buildInput = plan;
-
-  PrecomputeProjection precomputeBuild(buildInput, state.dt);
-  auto buildJoinColumns =
-      precomputeBuild.toColumns(build.exprs, &build.columns);
-  auto buildKeys = precomputeBuild.toColumns(build.keys);
-  buildInput = std::move(precomputeBuild).maybeProject();
-
-  PlanObjectSet buildColumns;
-  buildColumns.unionObjects(buildInput->columns());
-
-  const auto leftJoinType = probe.leftJoinType();
-  // Change the join type to the right join variant.
-  auto rightJoinType = reverseJoinType(leftJoinType);
-
-  VELOX_CHECK(
-      leftJoinType != rightJoinType,
-      "Join type does not have right hash join variant");
-
-  const bool buildOnly =
-      rightJoinType == velox::core::JoinType::kRightSemiFilter ||
-      rightJoinType == velox::core::JoinType::kRightSemiProject;
-
-  ColumnCP mark = nullptr;
-
-  PlanObjectSet joinColumns;
-  joinColumns.unionObjects(probe.columns);
-  joinColumns.unionObjects(build.columns);
-
-  // Mapping from join output column to probe or build side input.
-  auto joinColumnMapping = makeJoinColumnMapping(
-      build.columns, buildJoinColumns, probe.columns, probeJoinColumns);
-
-  ProjectionBuilder projectionBuilder;
-  bool needsProjection = false;
-
-  state.downstreamColumns().forEach<Column>([&](auto column) {
-    if (column == probe.markColumn) {
-      mark = column;
-      return;
-    }
-
-    if (joinColumns.contains(column)) {
-      projectionBuilder.add(column, joinColumnMapping.at(column));
-      needsProjection = true;
-      return;
-    }
-
-    if (!buildColumns.contains(column) &&
-        (buildOnly || !probeColumns.contains(column))) {
-      return;
-    }
-
-    projectionBuilder.add(column, column);
-  });
-
-  if (mark) {
-    setMarkTrueFraction(
-        mark, rightJoinType, candidate.join->rlFanout(), candidate.fanout);
-  }
-
-  tryOptimizeSemiProject(rightJoinType, mark, state, negation_);
-
-  if (mark) {
-    projectionBuilder.add(mark, mark);
-  }
-
-  const auto fanout = fanoutJoinTypeLimit(
-      rightJoinType,
-      candidate.join->rlFanout(),
-      candidate.fanout,
-      state.cost.cardinality / probeState.cost.cardinality);
-
-  const auto buildCost = state.cost;
-
-  state.replaceColumns(projectionBuilder.outputColumns());
-  state.cost = probeState.cost;
-  state.cost.cost += buildCost.cost;
-
-  if (!isSingleWorker_) {
-    // The build gets shuffled to align with probe. If probe is not
-    // partitioned on its keys, shuffle the probe too.
-    alignJoinSides(
-        probeInput, probeKeys, probeState, buildInput, buildKeys, state);
-  }
-
-  auto* buildOp = make<HashBuild>(buildInput, buildKeys, nullptr);
-  state.addCost(*buildOp);
-
-  RelationOp* join = make<Join>(
-      JoinMethod::kHash,
-      rightJoinType,
-      candidate.join->isNullAwareIn(),
-      probeInput,
-      buildOp,
-      std::move(probeKeys),
-      std::move(buildKeys),
-      candidate.join->filter(),
-      fanout,
-      projectionBuilder.inputColumns());
-  state.addCost(*join);
-
-  if (needsProjection) {
-    join = projectionBuilder.build(join);
-  }
-
-  state.addNextJoin(&candidate, join, toTry);
-}
-
-void Optimization::crossJoin(
-    const RelationOpPtr& plan,
-    const JoinCandidate& candidate,
-    PlanState& state,
-    std::vector<NextJoin>& toTry) {
-  VELOX_CHECK_EQ(candidate.tables.size(), 1);
-  VELOX_CHECK_EQ(candidate.existences.size(), 0);
-
-  PlanStateSaver save(state, candidate);
-
-  const auto* table = candidate.tables[0];
-
-  PlanObjectSet buildTables = PlanObjectSet::single(table);
-
-  const auto downstreamColumns = state.downstreamColumns();
-
-  auto buildColumns = availableColumns(table);
-  buildColumns.intersect(downstreamColumns);
-
-  if (candidate.join != nullptr) {
-    buildColumns.unionColumns(candidate.join->filter());
-  }
-
-  MemoKey memoKey =
-      MemoKey::create(table, buildColumns, buildTables, candidate.existences);
-
-  PlanObjectSet empty;
-  bool needsShuffle = false;
-  auto buildPlan = makePlan(
-      *state.dt,
-      memoKey,
-      std::nullopt,
-      empty,
-      candidate.existsFanout,
-      needsShuffle);
-
-  PlanState buildState(state.optimization, state.dt, buildPlan);
-
-  auto buildOp = buildPlan->op;
-
-  if (!isSingleWorker_) {
-    buildOp = make<Repartition>(
-        buildOp, Distribution::broadcast(), buildOp->columns());
-  }
-
-  buildState.addCost(*buildOp);
-
-  state.cost.cost += buildState.cost.cost;
-
-  PlanObjectSet resultColumns;
-  resultColumns.unionObjects(plan->columns());
-  resultColumns.unionObjects(buildOp->columns());
-  resultColumns.intersect(downstreamColumns);
-
-  // Determine joinType and filter from candidate's join if present.
-  velox::core::JoinType joinType = velox::core::JoinType::kInner;
-  ExprVector filter;
-  ColumnCP mark = nullptr;
-  if (candidate.join) {
-    auto [build, probe] = candidate.joinSides();
-    joinType = build.leftJoinType();
-    filter = candidate.join->filter();
-
-    mark = build.markColumn;
-
-    if (mark != nullptr) {
-      VELOX_CHECK(downstreamColumns.contains(mark));
-    }
-  }
-
-  VELOX_CHECK(
-      joinType == velox::core::JoinType::kInner ||
-          joinType == velox::core::JoinType::kLeft ||
-          joinType == velox::core::JoinType::kRight ||
-          joinType == velox::core::JoinType::kFull ||
-          joinType == velox::core::JoinType::kLeftSemiProject,
-      "Unsupported cross join type: {}",
-      velox::core::JoinTypeName::toName(joinType));
-
-  if (mark != nullptr) {
-    resultColumns.add(mark);
-  }
+  state.replaceColumns(std::move(columnSet));
+  state.cost.cost += memoState.cost.cost;
 
   RelationOp* join = Join::makeCrossJoin(
       plan,
-      buildOp,
+      std::move(buildInput),
       joinType,
-      std::move(filter),
-      resultColumns.toObjects<Column>());
-
-  state.place(table);
-  state.replaceColumns(std::move(resultColumns));
+      std::move(filterExprs),
+      std::move(columns));
   state.addCost(*join);
 
-  state.addNextJoin(&candidate, std::move(join), toTry);
+  state.addNextJoin(&candidate, join, toTry);
 }
 
 void Optimization::crossJoinUnnest(
@@ -1746,7 +1673,7 @@ void Optimization::crossJoinUnnest(
     const JoinCandidate& candidate,
     PlanState& state,
     std::vector<NextJoin>& toTry) {
-  PlanStateSaver save(state, candidate);
+  PlanStateSaver save{state};
   for (const auto* table : candidate.tables) {
     VELOX_CHECK(table->is(PlanType::kUnnestTableNode));
     // We add unnest table before compute downstream columns because
@@ -1756,7 +1683,7 @@ void Optimization::crossJoinUnnest(
     PrecomputeProjection precompute(plan, state.dt, /*projectAllInputs=*/false);
 
     ExprVector replicateColumns;
-    auto downstreamColumns = state.downstreamColumns();
+    const auto& downstreamColumns = state.downstreamColumns();
     downstreamColumns.forEach<Column>([&](auto column) {
       if (state.columns().contains(column)) {
         replicateColumns.push_back(precompute.toColumn(column));
@@ -1813,52 +1740,47 @@ void Optimization::addJoin(
   }
 
   // If this candidate has multiple Unnest they all will be handled at once.
-  if (candidate.tables.size() >= 1 &&
-      candidate.tables[0]->is(PlanType::kUnnestTableNode)) {
+  if (candidate.join->isUnnest()) {
     crossJoinUnnest(plan, candidate, state, result);
     return;
   }
 
   std::vector<NextJoin> toTry;
+  joinByIndex(plan, candidate, state, toTry);
 
-  if (options_.syntacticJoinOrder &&
-      candidate.join->originalJoinType().has_value() &&
-      candidate.join->originalJoinType().value() ==
-          logical_plan::JoinType::kRight) {
-    joinByHashRight(plan, candidate, state, toTry);
-  } else {
-    joinByIndex(plan, candidate, state, toTry);
+  probeJoin(plan, candidate, state, toTry);
 
-    const auto sizeAfterIndex = toTry.size();
-    joinByHash(plan, candidate, state, toTry);
-
-    if (!options_.syntacticJoinOrder && toTry.size() > sizeAfterIndex &&
-        candidate.join->isNonCommutative() &&
-        candidate.join->hasRightHashVariant()) {
-      // There is a hash based candidate with a non-commutative join. Try a
-      // right join variant.
-      joinByHashRight(plan, candidate, state, toTry);
-    }
+  if (!options_.syntacticJoinOrder() && candidate.join->hasRightHashVariant()) {
+    // There is a hash based candidate with a non-commutative join.
+    // Try a right join variant.
+    buildJoin(plan, candidate, state, toTry);
   }
 
   // If one is much better do not try the other.
-  if (toTry.size() == 2 && candidate.tables.size() == 1) {
-    if (toTry[0].isWorse(toTry[1])) {
-      toTry.erase(toTry.begin());
-    } else if (toTry[1].isWorse(toTry[0])) {
-      toTry.erase(toTry.begin() + 1);
+  for (auto& next : toTry | std::views::reverse) {
+    for (const auto& prev : toTry) {
+      if (&prev == &next || !next.candidate || !prev.candidate) {
+        continue;
+      }
+      if (next.isWorse(prev)) {
+        next.candidate = nullptr;
+      }
     }
   }
-  result.insert(result.end(), toTry.begin(), toTry.end());
+  for (auto& next : toTry) {
+    if (next.candidate) {
+      result.push_back(std::move(next));
+    }
+  }
 }
 
 void Optimization::tryNextJoins(
     PlanState& state,
-    const std::vector<NextJoin>& nextJoins) {
+    std::vector<NextJoin>& nextJoins) {
   for (auto& next : nextJoins) {
     PlanStateSaver save(state);
     state.restore(next);
-    makeJoins(next.plan, state);
+    makeJoins(std::move(next.plan), state);
   }
 }
 
@@ -1871,16 +1793,16 @@ RelationOpPtr Optimization::placeSingleRowDt(
       PlanObjectSet::fromObjects(subquery->columns),
       PlanObjectSet::single(subquery));
 
-  PlanObjectSet empty;
+  const auto forBuild = plan->distribution().isGather()
+      ? Distribution::gather()
+      : Distribution::broadcast();
   bool needsShuffle = false;
-  auto rightPlan =
-      makePlan(*state.dt, memoKey, std::nullopt, empty, 1, needsShuffle);
+  auto rightPlan = makePlan(*state.dt, memoKey, &forBuild, {}, 1, needsShuffle);
 
   auto rightOp = rightPlan->op;
 
-  if (!isSingleWorker_) {
-    rightOp = make<Repartition>(
-        rightOp, Distribution::broadcast(), rightOp->columns());
+  if (needsShuffle) {
+    rightOp = make<Repartition>(rightOp, forBuild);
   }
 
   auto resultColumns = plan->columns();
@@ -1914,8 +1836,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
       MemoKey::create(from, std::move(dtColumns), PlanObjectSet::single(from));
 
   bool ignore = false;
-  auto plan =
-      makePlan(*state.dt, key, std::nullopt, PlanObjectSet{}, 1, ignore);
+  auto plan = makePlan(*state.dt, key, {}, {}, 1, ignore);
   state.cost = plan->cost;
 
   // Make plans based on the dt alone as first.
@@ -1937,8 +1858,7 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   if (reduction < 0.9) {
     MemoKey reducingKey = MemoKey::create(
         from, state.downstreamColumns(), std::move(reducingSet));
-    plan = makePlan(
-        *state.dt, reducingKey, std::nullopt, PlanObjectSet{}, 1, ignore);
+    plan = makePlan(*state.dt, reducingKey, {}, {}, 1, ignore);
     state.cost = plan->cost;
     makeJoins(plan->op, state);
   }
@@ -1947,8 +1867,22 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
 bool Optimization::placeConjuncts(
     RelationOpPtr plan,
     PlanState& state,
-    bool allowNondeterministic) {
+    bool joinsPlaced) {
   PlanStateSaver save(state);
+
+  PlanObjectSet noPushdownTables;
+  if (!joinsPlaced) {
+    for (const auto* join : state.dt->joins) {
+      if (join->leftOptional()) {
+        // No pushdown to the left side of a RIGHT or FULL join.
+        noPushdownTables.add(join->leftTable());
+      }
+      if (join->rightOptional()) {
+        // No pushdown to the right side of a LEFT or FULL join.
+        noPushdownTables.add(join->rightTable());
+      }
+    }
+  }
 
   PlanObjectSet columnsAndSingles = state.columns();
   state.dt->singleRowDts.forEach<DerivedTable>(
@@ -1956,11 +1890,17 @@ bool Optimization::placeConjuncts(
 
   ExprVector filters;
   for (auto& conjunct : state.dt->conjuncts) {
-    if (!allowNondeterministic && conjunct->containsNonDeterministic()) {
+    if (!joinsPlaced && conjunct->containsNonDeterministic()) {
       continue;
     }
     if (state.isPlaced(conjunct)) {
       continue;
+    }
+    if (!joinsPlaced) {
+      const auto* singleTable = conjunct->singleTable();
+      if (singleTable && noPushdownTables.contains(singleTable)) {
+        continue;
+      }
     }
     if (conjunct->columns().isSubset(state.columns())) {
       state.placeColumn(conjunct);
@@ -2095,69 +2035,41 @@ PlanP unionPlan(
   return make<Plan>(result, states[0]);
 }
 
-float startingScore(PlanObjectCP table) {
-  if (table->is(PlanType::kTableNode)) {
-    return table->as<BaseTable>()->schemaTable->cardinality;
-  }
-
-  if (table->is(PlanType::kValuesTableNode)) {
-    return table->as<ValuesTable>()->cardinality();
-  }
-
-  if (table->is(PlanType::kUnnestTableNode)) {
-    VELOX_FAIL("UnnestTable cannot be a starting table");
-    // Because it's rigth side of directed inner (cross) join edge.
-    // Directed edges are non-commutative, so right side cannot be starting.
-  }
-
-  return 10;
-}
-
-std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
-  std::vector<float> scores;
-  scores.reserve(tables.size());
-  for (auto table : tables) {
-    scores.emplace_back(startingScore(table));
-  }
-
-  std::vector<int32_t> indices(tables.size());
-  std::iota(indices.begin(), indices.end(), 0);
-  std::ranges::sort(indices, [&](int32_t left, int32_t right) {
-    return scores[left] > scores[right];
-  });
-
-  return indices;
-}
 } // namespace
 
 void Optimization::makeJoins(PlanState& state) {
-  PlanObjectVector firstTables;
+  QGVector<std::tuple<bool, float, PlanObjectCP>> firstTables;
 
-  if (options_.syntacticJoinOrder) {
+  VELOX_DCHECK(!state.dt->startTables.empty());
+  if (options_.syntacticJoinOrder()) {
+    VELOX_DCHECK(!state.dt->joinOrder.empty());
     const auto firstTableId = state.dt->joinOrder[0];
     VELOX_CHECK(state.dt->startTables.BitSet::contains(firstTableId));
 
-    firstTables.push_back(queryCtx()->objectAt(firstTableId));
+    firstTables.emplace_back(false, 0, queryCtx()->objectAt(firstTableId));
   } else {
-    firstTables = state.dt->startTables.toObjects();
-
-#ifndef NDEBUG
-    for (auto table : firstTables) {
-      state.debugSetFirstTable(table->id());
+    firstTables.reserve(state.dt->startTables.size());
+    state.dt->startTables.forEach([&](PlanObjectCP table) {
+      const float cardinality = tableCardinality(table);
+      const bool maybeJoins = table->is(PlanType::kDerivedTableNode) &&
+          table->as<DerivedTable>()->tables.size() > 1;
+      firstTables.emplace_back(maybeJoins, -cardinality, table);
+    });
+    // First tables that don't have joins and with larger cardinality.
+    std::ranges::sort(firstTables);
+    if (!options_.costJoinOrder()) {
+      VELOX_DCHECK(!firstTables.empty());
+      firstTables.resize(1);
     }
-#endif
   }
 
-  auto sortedIndices = sortByStartingScore(firstTables);
-
-  for (auto index : sortedIndices) {
-    auto from = firstTables.at(index);
+  for (auto [maybeJoins, score, from] : firstTables) {
     if (from->is(PlanType::kTableNode)) {
       auto table = from->as<BaseTable>();
-      auto indices = table->chooseLeafIndex();
       // Make plan starting with each relevant index of the table.
-      const auto downstream = state.downstreamColumns();
-      for (auto index : indices) {
+      VELOX_DCHECK(!table->schemaTable->columnGroups.empty());
+      const auto& downstream = state.downstreamColumns();
+      for (const auto* index : table->schemaTable->columnGroups) {
         auto columns = indexColumns(downstream, table, index);
 
         PlanStateSaver save(state);
@@ -2185,8 +2097,8 @@ void Optimization::makeJoins(PlanState& state) {
       makeJoins(scan, state);
     } else if (from->is(PlanType::kUnnestTableNode)) {
       VELOX_FAIL("UnnestTable cannot be a starting table");
-      // Because it's rigth side of directed inner (cross) join edge.
-      // Directed edges are non-commutative, so right side cannot be starting.
+      // Because it's right side of unnest join edge
+      // and they are non-commutative.
     } else {
       // Start with a derived table.
       placeDerivedTable(from->as<const DerivedTable>(), state);
@@ -2217,7 +2129,7 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
     // Go over single-row DTs that haven't been placed yet. If unused, just mark
     // as "placed". Otherwise, place these. Look for any unused single-row DTs.
     // Mark them as "placed".
-    const auto downstream = state.downstreamColumns();
+    const auto& downstream = state.downstreamColumns();
     std::vector<DerivedTableCP> singleRowDtsToPlace;
     state.dt->singleRowDts.forEach<DerivedTable>([&](DerivedTableCP subquery) {
       if (!state.isPlaced(subquery)) {
@@ -2255,26 +2167,24 @@ void Optimization::makeJoins(RelationOpPtr plan, PlanState& state) {
 PlanP Optimization::makePlan(
     const DerivedTable& dt,
     const MemoKey& key,
-    const std::optional<DesiredDistribution>& distribution,
+    const Distribution* desired,
     const PlanObjectSet& boundColumns,
     float existsFanout,
     bool& needsShuffle) {
   needsShuffle = false;
   if (key.firstTable->is(PlanType::kDerivedTableNode) &&
       key.firstTable->as<DerivedTable>()->setOp.has_value()) {
-    return makeUnionPlan(
-        dt, key, distribution, boundColumns, existsFanout, needsShuffle);
+    return makeUnionPlan(dt, key, desired, boundColumns, existsFanout);
   }
-  return makeDtPlan(dt, key, distribution, existsFanout, needsShuffle);
+  return makeDtPlan(dt, key, desired, existsFanout, needsShuffle);
 }
 
 PlanP Optimization::makeUnionPlan(
     const DerivedTable& dt,
     const MemoKey& key,
-    const std::optional<DesiredDistribution>& distribution,
+    const Distribution* desired,
     const PlanObjectSet& boundColumns,
-    float existsFanout,
-    bool& /*needsShuffle*/) {
+    float existsFanout) {
   const auto* setDt = key.firstTable->as<DerivedTable>();
 
   RelationOpPtrVector inputs;
@@ -2296,7 +2206,7 @@ PlanP Optimization::makeUnionPlan(
 
     bool inputShuffle = false;
     auto inputPlan = makePlan(
-        dt, inputKey, distribution, boundColumns, existsFanout, inputShuffle);
+        dt, inputKey, desired, boundColumns, existsFanout, inputShuffle);
     inputPlans.push_back(inputPlan);
     inputStates.emplace_back(*this, setDt, inputPlans.back());
     inputs.push_back(inputPlan->op);
@@ -2315,13 +2225,12 @@ PlanP Optimization::makeUnionPlan(
     return unionPlan(inputStates, result, distinct);
   }
 
-  if (!distribution.has_value()) {
+  if (!desired) {
     if (isDistinct) {
       // Pick some partitioning key and shuffle on that and make distinct.
       Distribution someDistribution = somePartition(inputs);
       for (auto i = 0; i < inputs.size(); ++i) {
-        inputs[i] = make<Repartition>(
-            inputs[i], someDistribution, inputs[i]->columns());
+        inputs[i] = make<Repartition>(inputs[i], someDistribution);
         inputStates[i].addCost(*inputs[i]);
       }
     }
@@ -2330,12 +2239,7 @@ PlanP Optimization::makeUnionPlan(
     // return with no shuffle needed.
     for (auto i = 0; i < inputs.size(); ++i) {
       if (inputNeedsShuffle[i]) {
-        inputs[i] = make<Repartition>(
-            inputs[i],
-            Distribution{
-                DistributionType(distribution->partitionType),
-                distribution->partitionKeys},
-            inputs[i]->columns());
+        inputs[i] = make<Repartition>(inputs[i], *desired);
         inputStates[i].addCost(*inputs[i]);
       }
     }
@@ -2353,7 +2257,7 @@ PlanP Optimization::makeUnionPlan(
 PlanP Optimization::makeDtPlan(
     const DerivedTable& dt,
     const MemoKey& key,
-    const std::optional<DesiredDistribution>& distribution,
+    const Distribution* desired,
     float existsFanout,
     bool& needsShuffle) {
   PlanSet* plans = memo_.find(key);
@@ -2373,10 +2277,9 @@ PlanP Optimization::makeDtPlan(
     }
 
     makeJoins(inner);
-    memo_.insert(key, std::move(inner.plans));
-    plans = memo_.find(key);
+    plans = memo_.insert(key, std::move(inner.plans));
   }
-  return plans->best(distribution, needsShuffle);
+  return plans->best(desired, needsShuffle);
 }
 
 ExprCP Optimization::combineLeftDeep(Name func, const ExprVector& exprs) {
@@ -2384,6 +2287,7 @@ ExprCP Optimization::combineLeftDeep(Name func, const ExprVector& exprs) {
   std::ranges::sort(copy, [&](ExprCP left, ExprCP right) {
     return left->id() < right->id();
   });
+  VELOX_DCHECK(!copy.empty());
   ExprCP result = copy[0];
   for (auto i = 1; i < copy.size(); ++i) {
     result = toGraph_.deduppedCall(

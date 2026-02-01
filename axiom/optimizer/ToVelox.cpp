@@ -124,12 +124,12 @@ RelationOpPtr addGather(const RelationOpPtr& op) {
   if (op->relType() == RelType::kOrderBy) {
     const auto& order = op->distribution();
     auto final = Distribution::gather(order.orderKeys(), order.orderTypes());
-    auto* gather = make<Repartition>(op, final, op->columns());
+    auto* gather = make<Repartition>(op, final);
     auto* orderBy =
         make<OrderBy>(gather, order.orderKeys(), order.orderTypes());
     return orderBy;
   }
-  auto* gather = make<Repartition>(op, Distribution::gather(), op->columns());
+  auto* gather = make<Repartition>(op, Distribution::gather());
   return gather;
 }
 
@@ -278,28 +278,6 @@ velox::core::TypedExprPtr makeKey(const velox::TypePtr& type, T v) {
       type, velox::Variant(v));
 }
 
-velox::core::TypedExprPtr createArrayForInList(
-    const Call& call,
-    const velox::TypePtr& elementType) {
-  std::vector<velox::Variant> arrayElements;
-  arrayElements.reserve(call.args().size() - 1);
-  for (size_t i = 1; i < call.args().size(); ++i) {
-    auto arg = call.args().at(i);
-    VELOX_USER_CHECK(
-        elementType->equivalent(*arg->value().type),
-        "All elements of the IN list must have the same type got {} and {}",
-        elementType->toString(),
-        arg->value().type->toString());
-    VELOX_USER_CHECK(arg->is(PlanType::kLiteralExpr));
-    arrayElements.push_back(arg->as<Literal>()->literal());
-  }
-  auto arrayVector = variantToVector(
-      ARRAY(elementType),
-      velox::Variant::array(arrayElements),
-      queryCtx()->optimization()->evaluator()->pool());
-  return std::make_shared<velox::core::ConstantTypedExpr>(arrayVector);
-}
-
 velox::core::TypedExprPtr stepToMapSubscript(
     Step step,
     velox::core::TypedExprPtr arg,
@@ -421,6 +399,51 @@ std::vector<velox::core::TypedExprPtr> ToVelox::toTypedExprs(
   return typedExprs;
 }
 
+velox::core::TypedExprPtr ToVelox::tryOptimizeIn(const Call& call) {
+  if (call.name() != SpecialFormCallNames::kIn) {
+    return nullptr;
+  }
+  VELOX_USER_CHECK_GE(call.args().size(), 2);
+
+  if (call.args().size() == 2) {
+    return std::make_shared<velox::core::CallTypedExpr>(
+        velox::BOOLEAN(),
+        std::vector{toTypedExpr(call.args()[0]), toTypedExpr(call.args()[1])},
+        FunctionRegistry::instance()->equality());
+  }
+
+  std::vector<velox::Variant> arrayElements;
+  arrayElements.reserve(call.args().size() - 1);
+  const auto* elementType = call.args()[0]->value().type;
+  for (size_t i = 1; i < call.args().size(); ++i) {
+    const auto* arg = call.args()[i];
+    VELOX_USER_CHECK(
+        elementType->equivalent(*arg->value().type),
+        "All elements of the IN list must have the same type got {} and {}",
+        elementType->toString(),
+        arg->value().type->toString());
+    if (!arg->is(PlanType::kLiteralExpr)) {
+      return nullptr;
+    }
+    VELOX_USER_CHECK(arg->is(PlanType::kLiteralExpr));
+    arrayElements.push_back(arg->as<Literal>()->literal());
+  }
+
+  velox::core::TypedExprPtr arrayVector =
+      std::make_shared<velox::core::ConstantTypedExpr>(variantToVector(
+          velox::ARRAY(toTypePtr(elementType)),
+          velox::Variant::array(arrayElements),
+          queryCtx()->optimization()->evaluator()->pool()));
+
+  return std::make_shared<velox::core::CallTypedExpr>(
+      velox::BOOLEAN(),
+      std::vector{
+          toTypedExpr(call.args()[0]),
+          std::move(arrayVector),
+      },
+      specialForm(lp::SpecialForm::kIn));
+}
+
 velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
   auto it = projectedExprs_.find(expr);
   if (it != projectedExprs_.end()) {
@@ -446,17 +469,15 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
           toTypePtr(expr->value().type), name);
     }
     case PlanType::kCallExpr: {
-      std::vector<velox::core::TypedExprPtr> inputs;
-      auto call = expr->as<Call>();
+      const auto* call = expr->as<Call>();
+      if (auto optimized = tryOptimizeIn(*call)) {
+        return optimized;
+      }
 
-      if (call->name() == SpecialFormCallNames::kIn) {
-        VELOX_USER_CHECK_GE(call->args().size(), 2);
-        inputs.push_back(toTypedExpr(call->args()[0]));
-        inputs.push_back(createArrayForInList(*call, inputs.back()->type()));
-      } else {
-        for (auto arg : call->args()) {
-          inputs.push_back(toTypedExpr(arg));
-        }
+      std::vector<velox::core::TypedExprPtr> inputs;
+      inputs.reserve(call->args().size());
+      for (auto arg : call->args()) {
+        inputs.push_back(toTypedExpr(arg));
       }
 
       if (auto form = SpecialFormCallNames::tryFromCallName(call->name())) {
@@ -617,6 +638,74 @@ std::vector<velox::core::SortOrder> toSortOrders(
   }
   return sortOrders;
 }
+
+velox::core::WindowNode::Frame toVeloxFrame(
+    const WindowFrame& frame,
+    ToVelox& converter) {
+  auto veloxWindowType = velox::core::WindowNode::WindowType::kRange;
+  switch (frame.type) {
+    case logical_plan::WindowExpr::WindowType::kRange:
+      veloxWindowType = velox::core::WindowNode::WindowType::kRange;
+      break;
+    case logical_plan::WindowExpr::WindowType::kRows:
+      veloxWindowType = velox::core::WindowNode::WindowType::kRows;
+      break;
+    case logical_plan::WindowExpr::WindowType::kGroups:
+      VELOX_FAIL("GROUPS window frame not supported in velox");
+      break;
+  }
+
+  auto veloxStartType = velox::core::WindowNode::BoundType::kUnboundedPreceding;
+  switch (frame.startType) {
+    case logical_plan::WindowExpr::BoundType::kUnboundedPreceding:
+      veloxStartType = velox::core::WindowNode::BoundType::kUnboundedPreceding;
+      break;
+    case logical_plan::WindowExpr::BoundType::kPreceding:
+      veloxStartType = velox::core::WindowNode::BoundType::kPreceding;
+      break;
+    case logical_plan::WindowExpr::BoundType::kCurrentRow:
+      veloxStartType = velox::core::WindowNode::BoundType::kCurrentRow;
+      break;
+    case logical_plan::WindowExpr::BoundType::kFollowing:
+      veloxStartType = velox::core::WindowNode::BoundType::kFollowing;
+      break;
+    case logical_plan::WindowExpr::BoundType::kUnboundedFollowing:
+      veloxStartType = velox::core::WindowNode::BoundType::kUnboundedFollowing;
+      break;
+  }
+
+  auto veloxEndType = velox::core::WindowNode::BoundType::kUnboundedFollowing;
+  switch (frame.endType) {
+    case logical_plan::WindowExpr::BoundType::kUnboundedPreceding:
+      veloxEndType = velox::core::WindowNode::BoundType::kUnboundedPreceding;
+      break;
+    case logical_plan::WindowExpr::BoundType::kPreceding:
+      veloxEndType = velox::core::WindowNode::BoundType::kPreceding;
+      break;
+    case logical_plan::WindowExpr::BoundType::kCurrentRow:
+      veloxEndType = velox::core::WindowNode::BoundType::kCurrentRow;
+      break;
+    case logical_plan::WindowExpr::BoundType::kFollowing:
+      veloxEndType = velox::core::WindowNode::BoundType::kFollowing;
+      break;
+    case logical_plan::WindowExpr::BoundType::kUnboundedFollowing:
+      veloxEndType = velox::core::WindowNode::BoundType::kUnboundedFollowing;
+      break;
+  }
+
+  velox::core::TypedExprPtr startExpr = nullptr;
+  if (frame.startValue) {
+    startExpr = converter.toTypedExpr(frame.startValue);
+  }
+
+  velox::core::TypedExprPtr endExpr = nullptr;
+  if (frame.endValue) {
+    endExpr = converter.toTypedExpr(frame.endValue);
+  }
+
+  return velox::core::WindowNode::Frame{
+      veloxWindowType, veloxStartType, startExpr, veloxEndType, endExpr};
+}
 } // namespace
 
 velox::core::FieldAccessTypedExprPtr ToVelox::toFieldRef(ExprCP expr) {
@@ -642,6 +731,21 @@ std::vector<velox::core::FieldAccessTypedExprPtr> ToVelox::toFieldRefs(
   return fields;
 }
 
+velox::core::PlanNodePtr ToVelox::makeZeroLimit(
+    const RelationOp& op,
+    runner::ExecutableFragment& fragment) {
+  fragment.width = 1;
+  const auto& newColumns = op.columns();
+  auto newType = makeOutputType(newColumns);
+  VELOX_DCHECK_EQ(newColumns.size(), newType->size());
+  std::vector<velox::RowVectorPtr> newValues;
+  auto* pool = queryCtx()->optimization()->evaluator()->pool();
+  auto newValue = std::make_shared<velox::RowVector>(
+      pool, std::move(newType), nullptr, 0, std::vector<velox::VectorPtr>{});
+  return std::make_shared<velox::core::ValuesNode>(
+      nextId(), std::vector{std::move(newValue)});
+}
+
 velox::core::PlanNodePtr ToVelox::makeOrderBy(
     const OrderBy& op,
     runner::ExecutableFragment& fragment,
@@ -653,7 +757,7 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
     auto input = makeFragment(op.input(), fragment, stages);
 
     if (options_.numDrivers == 1) {
-      if (op.limit <= 0) {
+      if (!op.hasLimit()) {
         return std::make_shared<velox::core::OrderByNode>(
             nextId(), keys, sortOrder, false, input);
       }
@@ -669,7 +773,7 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
     }
 
     velox::core::PlanNodePtr node;
-    if (op.limit <= 0) {
+    if (!op.hasLimit()) {
       node = std::make_shared<velox::core::OrderByNode>(
           nextId(), keys, sortOrder, true, input);
     } else {
@@ -679,7 +783,7 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
 
     node = addLocalMerge(nextId(), keys, sortOrder, node);
 
-    if (op.limit > 0) {
+    if (op.hasLimit()) {
       return addFinalLimit(nextId(), op.offset, op.limit, node);
     }
 
@@ -690,7 +794,7 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   auto input = makeFragment(op.input(), source, stages);
 
   velox::core::PlanNodePtr node;
-  if (op.limit <= 0) {
+  if (!op.hasLimit()) {
     node = std::make_shared<velox::core::OrderByNode>(
         nextId(), keys, sortOrder, true, input);
   } else {
@@ -710,7 +814,7 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
   fragment.inputStages.emplace_back(merge->id(), source.taskPrefix);
   stages.push_back(std::move(source));
 
-  if (op.limit > 0) {
+  if (op.hasLimit()) {
     return addFinalLimit(nextId(), op.offset, op.limit, merge);
   }
   return merge;
@@ -747,6 +851,9 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
     const Limit& op,
     runner::ExecutableFragment& fragment,
     std::vector<runner::ExecutableFragment>& stages) {
+  if (op.limit == 0) {
+    return makeZeroLimit(op, fragment);
+  }
   if (op.isNoLimit()) {
     return makeOffset(op, fragment, stages);
   }
@@ -795,8 +902,8 @@ template <typename ExprType>
 velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const velox::RowTypePtr& inputType,
     const std::vector<ExprType>& keys,
-    const Distribution& distribution) {
-  if (distribution.isBroadcast() || keys.empty()) {
+    const DistributionType& distribution) {
+  if (distribution.isBroadcast || keys.empty()) {
     return std::make_shared<velox::core::GatherPartitionFunctionSpec>();
   }
 
@@ -812,8 +919,7 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
             ->name()));
   }
 
-  if (const auto* partitionType =
-          distribution.distributionType().partitionType()) {
+  if (const auto* partitionType = distribution.partitionType) {
     return partitionType->makeSpec(
         keyIndices, /*constants=*/{}, /*isLocal=*/false);
   }
@@ -1059,15 +1165,16 @@ velox::core::PlanNodePtr ToVelox::makeProject(
     runner::ExecutableFragment& fragment,
     std::vector<runner::ExecutableFragment>& stages) {
   auto input = makeFragment(project.input(), fragment, stages);
+
+  if (project.isRedundant()) {
+    return input;
+  }
+
   if (optimizerOptions_.parallelProjectWidth > 1) {
     auto result = maybeParallelProject(&project, input);
     if (result) {
       return result;
     }
-  }
-
-  if (project.isRedundant()) {
-    return input;
   }
 
   const auto numOutputs = project.exprs().size();
@@ -1099,21 +1206,31 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
     auto joinNode = std::make_shared<velox::core::NestedLoopJoinNode>(
         nextId(),
         join.joinType,
-        isInner ? nullptr : toAnd(join.filter),
+        toAnd(join.filter),
         std::move(left),
         std::move(right),
         makeOutputType(join.columns()));
-    if (isInner && !join.filter.empty()) {
-      makePredictionAndHistory(joinNode->id(), &join);
-      return std::make_shared<velox::core::FilterNode>(
-          nextId(), toAnd(join.filter), joinNode);
-    }
     makePredictionAndHistory(joinNode->id(), &join);
     return joinNode;
   }
 
   auto leftKeys = toFieldRefs(join.leftKeys);
   auto rightKeys = toFieldRefs(join.rightKeys);
+
+  if (join.method == JoinMethod::kMerge) {
+    auto joinNode = std::make_shared<velox::core::MergeJoinNode>(
+        nextId(),
+        join.joinType,
+        leftKeys,
+        rightKeys,
+        toAnd(join.filter),
+        left,
+        right,
+        makeOutputType(join.columns()));
+
+    makePredictionAndHistory(joinNode->id(), &join);
+    return joinNode;
+  }
 
   // nullAware is only supported for semi project and anti joins.
   const bool nullAware =
@@ -1225,7 +1342,7 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       fragment.width = 1;
     } else {
       auto partition = createPartitionFunctionSpec(
-          input->outputType(), keys, Distribution{});
+          input->outputType(), keys, DistributionType{});
       input = std::make_shared<velox::core::LocalPartitionNode>(
           nextId(),
           velox::core::LocalPartitionNode::Type::kRepartition,
@@ -1245,6 +1362,54 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       /*ignoreNullKeys=*/false,
       /*noGroupsSpanBatches=*/false,
       input);
+}
+
+velox::core::PlanNodePtr ToVelox::makeWindow(
+    const WindowOp& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+
+  auto partitionKeys = toFieldRefs(op.partitionKeys);
+
+  auto sortingKeys = toFieldRefs(op.orderKeys);
+  auto sortingOrders = toSortOrders(op.orderTypes);
+
+  std::vector<std::string> windowColumnNames;
+  std::vector<velox::core::WindowNode::Function> windowFunctions;
+  windowColumnNames.reserve(op.windows.size());
+  windowFunctions.reserve(op.windows.size());
+  for (size_t i = 0; i < op.windows.size(); ++i) {
+    const auto* column = op.windowExprColumn(i);
+    const auto* window = op.windows[i];
+
+    windowColumnNames.emplace_back(column->outputName());
+
+    std::vector<velox::core::TypedExprPtr> functionArgs;
+    functionArgs.reserve(window->args().size());
+    for (const auto& arg : window->args()) {
+      functionArgs.emplace_back(toTypedExpr(arg));
+    }
+
+    auto functionCall = std::make_shared<velox::core::CallTypedExpr>(
+        toTypePtr(window->value().type),
+        std::move(functionArgs),
+        std::string(window->name()));
+
+    auto frame = toVeloxFrame(window->frame(), *this);
+    windowFunctions.emplace_back(
+        std::move(functionCall), std::move(frame), window->ignoreNulls());
+  }
+
+  return std::make_shared<velox::core::WindowNode>(
+      nextId(),
+      std::move(partitionKeys),
+      std::move(sortingKeys),
+      std::move(sortingOrders),
+      std::move(windowColumnNames),
+      std::move(windowFunctions),
+      false, // inputsSorted
+      std::move(input));
 }
 
 velox::core::PlanNodePtr ToVelox::makeRepartition(
@@ -1276,7 +1441,7 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
   } else {
     VELOX_CHECK_NE(0, keys.size());
     auto partitionFunctionFactory = createPartitionFunctionSpec(
-        sourcePlan->outputType(), keys, distribution);
+        sourcePlan->outputType(), keys, distribution.distributionType());
 
     source.fragment.planNode =
         std::make_shared<velox::core::PartitionedOutputNode>(
@@ -1401,12 +1566,8 @@ velox::core::PlanNodePtr ToVelox::makeValues(
             velox::BaseVector::create(newType, 0, pool)));
   }
 
-  auto valuesNode =
-      std::make_shared<velox::core::ValuesNode>(nextId(), std::move(newValues));
-
-  makePredictionAndHistory(valuesNode->id(), &values);
-
-  return valuesNode;
+  return std::make_shared<velox::core::ValuesNode>(
+      nextId(), std::move(newValues));
 }
 
 velox::core::PlanNodePtr ToVelox::makeWrite(
@@ -1451,13 +1612,25 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
     }
   }
 
-  auto columnNames = table.type()->names();
-
   auto* connector = layout->connector();
   auto* metadata = connector::ConnectorMetadata::metadata(connector);
+
+  auto columnNames = [&]() -> std::vector<std::string> {
+    switch (write.kind()) {
+      case connector::WriteKind::kInsert:
+      case connector::WriteKind::kCreate: {
+        return table.type()->names();
+      }
+      case connector::WriteKind::kDelete:
+      case connector::WriteKind::kUpdate: {
+        return tableWrite.write->tableWrite().columnNames();
+      }
+    }
+  }();
+
   auto session = session_->toConnectorSession(connector->connectorId());
-  auto handle =
-      metadata->beginWrite(session, table.shared_from_this(), write.kind());
+  auto handle = metadata->beginWrite(
+      session, tableWrite.write->tableWrite().table(), write.kind());
 
   auto outputType = handle->resultType();
 
@@ -1497,6 +1670,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeFilter(*op->as<Filter>(), fragment, stages);
     case RelType::kAggregation:
       return makeAggregation(*op->as<Aggregation>(), fragment, stages);
+    case RelType::kWindow:
+      return makeWindow(*op->as<WindowOp>(), fragment, stages);
     case RelType::kOrderBy:
       return makeOrderBy(*op->as<OrderBy>(), fragment, stages);
     case RelType::kLimit:
@@ -1509,8 +1684,6 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeScan(*op->as<TableScan>(), fragment, stages);
     case RelType::kJoin:
       return makeJoin(*op->as<Join>(), fragment, stages);
-    case RelType::kHashBuild:
-      return makeFragment(op->input(), fragment, stages);
     case RelType::kUnionAll:
       return makeUnionAll(*op->as<UnionAll>(), fragment, stages);
     case RelType::kValues:

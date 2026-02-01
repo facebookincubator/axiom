@@ -7,8 +7,8 @@ dt5: ps_partkey, value
   output:
     ps_partkey := dt1.ps_partkey
     value := dt1.value
-  tables: dt1, dt13
-  filter: gt(dt1.value, dt13.expr)
+  tables: dt1, dt6
+  filter: gt(dt1.value, dt6.expr)
   orderBy: dt1.value DESC NULLS LAST
 
 dt1: ps_partkey, value
@@ -20,7 +20,7 @@ dt1: ps_partkey, value
     t2 INNER t3 ON t2.ps_suppkey = t3.s_suppkey
     t3 INNER t4 ON t3.s_nationkey = t4.n_nationkey
   syntactic join order: 8, 22, 31
-  aggregates: sum(multiply(t2.ps_supplycost, __cast(t2.ps_availqty))) AS value
+  aggregates: sum(multiply(t2.ps_supplycost, __cast(t2.ps_availqty AS DOUBLE))) AS value
   grouping keys: t2.ps_partkey
 
 t2: ps_partkey, ps_suppkey, ps_availqty, ps_supplycost
@@ -33,25 +33,25 @@ t4: n_nationkey, n_name
   table: nation
   single-column filters: eq(t4.n_name, "GERMANY")
 
-dt13: expr
+dt6: expr
   output:
-    expr := multiply(dt13.sum, 0.0001)
-  tables: t14, t15, t16
+    expr := multiply(dt6.sum, 0.0001)
+  tables: t7, t8, t9
   joins:
-    t14 INNER t15 ON t14.ps_suppkey = t15.s_suppkey
-    t15 INNER t16 ON t15.s_nationkey = t16.n_nationkey
-  syntactic join order: 57, 61, 64
-  aggregates: sum(multiply(t14.ps_supplycost, __cast(t14.ps_availqty))) AS sum
+    t7 INNER t8 ON t7.ps_suppkey = t8.s_suppkey
+    t8 INNER t9 ON t8.s_nationkey = t9.n_nationkey
+  syntactic join order: 47, 51, 54
+  aggregates: sum(multiply(t7.ps_supplycost, __cast(t7.ps_availqty AS DOUBLE))) AS sum
 
-t14: ps_suppkey, ps_availqty, ps_supplycost
+t7: ps_suppkey, ps_availqty, ps_supplycost
   table: partsupp
 
-t15: s_suppkey, s_nationkey
+t8: s_suppkey, s_nationkey
   table: supplier
 
-t16: n_nationkey, n_name
+t9: n_nationkey, n_name
   table: nation
-  single-column filters: eq(t16.n_name, "GERMANY")
+  single-column filters: eq(t9.n_name, "GERMANY")
 
 
 Optimized plan (oneline):
@@ -63,10 +63,10 @@ Optimized plan:
 Project -> dt5.ps_partkey, dt5.value
     dt5.ps_partkey := dt1.ps_partkey
     dt5.value := dt1.value
-  OrderBy -> dt1.ps_partkey, dt1.value, dt13.expr
-    Filter -> dt1.ps_partkey, dt1.value, dt13.expr
-        gt(dt1.value, dt13.expr)
-      Join INNER Cross -> dt1.ps_partkey, dt1.value, dt13.expr
+  OrderBy -> dt1.ps_partkey, dt1.value, dt6.expr
+    Filter -> dt1.ps_partkey, dt1.value, dt6.expr
+        gt(dt1.value, dt6.expr)
+      Join INNER Cross -> dt1.ps_partkey, dt1.value, dt6.expr
         Project (redundant) -> dt1.ps_partkey, dt1.value
             dt1.ps_partkey := t2.ps_partkey
             dt1.value := dt1.value
@@ -74,39 +74,35 @@ Project -> dt5.ps_partkey, dt5.value
               dt1.value := sum(dt1.__p39)
             Project -> t2.ps_partkey, dt1.__p39
                 t2.ps_partkey := t2.ps_partkey
-                dt1.__p39 := multiply(t2.ps_supplycost, __cast(t2.ps_availqty))
+                dt1.__p39 := multiply(t2.ps_supplycost, __cast(t2.ps_availqty AS DOUBLE))
               Join INNER Hash -> t2.ps_partkey, t2.ps_availqty, t2.ps_supplycost
                   t2.ps_suppkey = t3.s_suppkey
                 TableScan -> t2.ps_partkey, t2.ps_suppkey, t2.ps_availqty, t2.ps_supplycost
                   table: partsupp
-                HashBuild -> t3.s_suppkey
-                  Join INNER Hash -> t3.s_suppkey
-                      t3.s_nationkey = t4.n_nationkey
-                    TableScan -> t3.s_suppkey, t3.s_nationkey
-                      table: supplier
-                    HashBuild -> t4.n_nationkey
-                      TableScan -> t4.n_nationkey
-                        table: nation
-                        single-column filters: eq(t4.n_name, "GERMANY")
-        Project -> dt13.expr
-            dt13.expr := multiply(dt13.sum, 0.0001)
-          Aggregation -> dt13.sum
-              dt13.sum := sum(dt13.__p71)
-            Project -> dt13.__p71
-                dt13.__p71 := multiply(t14.ps_supplycost, __cast(t14.ps_availqty))
-              Join INNER Hash -> t14.ps_availqty, t14.ps_supplycost
-                  t14.ps_suppkey = t15.s_suppkey
-                TableScan -> t14.ps_suppkey, t14.ps_availqty, t14.ps_supplycost
+                Join INNER Hash -> t3.s_suppkey
+                    t3.s_nationkey = t4.n_nationkey
+                  TableScan -> t3.s_suppkey, t3.s_nationkey
+                    table: supplier
+                  TableScan -> t4.n_nationkey
+                    table: nation
+                    single-column filters: eq(t4.n_name, "GERMANY")
+        Project -> dt6.expr
+            dt6.expr := multiply(dt6.sum, 0.0001)
+          Aggregation -> dt6.sum
+              dt6.sum := sum(dt6.__p61)
+            Project -> dt6.__p61
+                dt6.__p61 := multiply(t7.ps_supplycost, __cast(t7.ps_availqty AS DOUBLE))
+              Join INNER Hash -> t7.ps_availqty, t7.ps_supplycost
+                  t7.ps_suppkey = t8.s_suppkey
+                TableScan -> t7.ps_suppkey, t7.ps_availqty, t7.ps_supplycost
                   table: partsupp
-                HashBuild -> t15.s_suppkey
-                  Join INNER Hash -> t15.s_suppkey
-                      t15.s_nationkey = t16.n_nationkey
-                    TableScan -> t15.s_suppkey, t15.s_nationkey
-                      table: supplier
-                    HashBuild -> t16.n_nationkey
-                      TableScan -> t16.n_nationkey
-                        table: nation
-                        single-column filters: eq(t16.n_name, "GERMANY")
+                Join INNER Hash -> t8.s_suppkey
+                    t8.s_nationkey = t9.n_nationkey
+                  TableScan -> t8.s_suppkey, t8.s_nationkey
+                    table: supplier
+                  TableScan -> t9.n_nationkey
+                    table: nation
+                    single-column filters: eq(t9.n_name, "GERMANY")
 
 
 Executable Velox plan:
@@ -124,8 +120,8 @@ Fragment 0:  numWorkers=0:
                 -- TableScan[2][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_nationkey:BIGINT
                 -- TableScan[3][table: nation, range filters: [(n_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> n_nationkey:BIGINT
         -- Project[15][expressions: (expr:DOUBLE, multiply("sum",0.0001))] -> expr:DOUBLE
-          -- Aggregation[14][SINGLE sum := sum("dt13.__p71")] -> sum:DOUBLE
-            -- Project[13][expressions: (dt13.__p71:DOUBLE, multiply("ps_supplycost_7",cast("ps_availqty_6" as DOUBLE)))] -> "dt13.__p71":DOUBLE
+          -- Aggregation[14][SINGLE sum := sum("dt6.__p61")] -> sum:DOUBLE
+            -- Project[13][expressions: (dt6.__p61:DOUBLE, multiply("ps_supplycost_7",cast("ps_availqty_6" as DOUBLE)))] -> "dt6.__p61":DOUBLE
               -- HashJoin[12][INNER ps_suppkey_5=s_suppkey_11] -> ps_availqty_6:INTEGER, ps_supplycost_7:DOUBLE
                 -- TableScan[8][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_suppkey_5:BIGINT, ps_availqty_6:INTEGER, ps_supplycost_7:DOUBLE
                 -- HashJoin[11][INNER s_nationkey_14=n_nationkey_20] -> s_suppkey_11:BIGINT

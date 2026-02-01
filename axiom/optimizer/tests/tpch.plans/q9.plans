@@ -16,7 +16,7 @@ dt1: nation, o_year, sum_profit
     t4 INNER t6 ON t4.l_orderkey = t6.o_orderkey
     t3 INNER t7 ON t3.s_nationkey = t7.n_nationkey
     t3 INNER t5 ON t3.s_suppkey = t5.ps_suppkey
-    t5 INNER t2 ON t5.ps_partkey = t2.p_partkey
+    t2 INNER t5 ON t2.p_partkey = t5.ps_partkey
   syntactic join order: 12, 24, 45, 59, 74, 83
   aggregates: sum(minus(multiply(t4.l_extendedprice, minus(1, t4.l_discount)), multiply(t4.l_quantity, t5.ps_supplycost))) AS sum_profit
   grouping keys: t7.n_name, year(t6.o_orderdate)
@@ -67,27 +67,22 @@ Project -> dt1.nation, dt1.o_year, dt1.sum_profit
                 t6.o_orderkey = t4.l_orderkey
               TableScan -> t6.o_orderkey, t6.o_orderdate
                 table: orders
-              HashBuild -> t4.l_orderkey, t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_suppkey, t5.ps_supplycost
-                Join INNER Hash -> t4.l_orderkey, t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_suppkey, t5.ps_supplycost
-                    t4.l_suppkey = t5.ps_suppkey
-                    t4.l_partkey = t5.ps_partkey
-                  TableScan -> t4.l_orderkey, t4.l_partkey, t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount
-                    table: lineitem
-                  HashBuild -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
-                    Join INNER Hash -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
-                        t5.ps_partkey = t2.p_partkey
-                      TableScan -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
-                        table: partsupp
-                      HashBuild -> t2.p_partkey
-                        TableScan -> t2.p_partkey
-                          table: part
-                          single-column filters: like(t2.p_name, "%green%")
-            HashBuild -> t3.s_suppkey, t3.s_nationkey
-              TableScan -> t3.s_suppkey, t3.s_nationkey
-                table: supplier
-          HashBuild -> t7.n_nationkey, t7.n_name
-            TableScan -> t7.n_nationkey, t7.n_name
-              table: nation
+              Join INNER Hash -> t4.l_orderkey, t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_suppkey, t5.ps_supplycost
+                  t4.l_suppkey = t5.ps_suppkey
+                  t4.l_partkey = t5.ps_partkey
+                TableScan -> t4.l_orderkey, t4.l_partkey, t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount
+                  table: lineitem
+                Join INNER Hash -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
+                    t5.ps_partkey = t2.p_partkey
+                  TableScan -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
+                    table: partsupp
+                  TableScan -> t2.p_partkey
+                    table: part
+                    single-column filters: like(t2.p_name, "%green%")
+            TableScan -> t3.s_suppkey, t3.s_nationkey
+              table: supplier
+          TableScan -> t7.n_nationkey, t7.n_name
+            table: nation
 
 
 Executable Velox plan:

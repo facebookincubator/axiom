@@ -84,7 +84,7 @@ std::vector<velox::exec::Split> listAllSplits(
       if (split.split == nullptr) {
         return result;
       }
-      result.push_back(velox::exec::Split(std::move(split.split)));
+      result.emplace_back(std::move(split.split));
     }
   }
   VELOX_UNREACHABLE();
@@ -165,6 +165,7 @@ velox::RowVectorPtr LocalRunner::next() {
   }
 
   if (!cursor_->moveNext()) {
+    std::lock_guard<std::mutex> l(mutex_);
     state_ = State::kFinished;
     return nullptr;
   }
@@ -177,26 +178,27 @@ int64_t LocalRunner::runWrite() {
   auto finishWrite = std::move(finishWrite_);
   auto state = State::kError;
   SCOPE_EXIT {
+    if (finishWrite) {
+      std::move(finishWrite).abort().wait();
+    }
+    std::lock_guard<std::mutex> l(mutex_);
     state_ = state;
   };
+
+  start();
   try {
-    start();
     while (cursor_->moveNext()) {
       result.push_back(cursor_->current());
     }
   } catch (const std::exception&) {
-    try {
-      waitForCompletion(1'000'000);
-    } catch (const std::exception& e) {
-      LOG(ERROR) << e.what()
-                 << " while waiting for completion after error in write query";
-      throw;
+    if (setError(std::current_exception())) {
+      abortStages();
     }
-    std::move(finishWrite).abort().get();
     throw;
   }
-
   auto rows = std::move(finishWrite).commit(result).get();
+
+  finishWrite = {};
   state = State::kFinished;
   return rows;
 }
@@ -221,6 +223,7 @@ velox::RowVectorPtr LocalRunner::nextWrite() {
 void LocalRunner::start() {
   VELOX_CHECK_EQ(state_, State::kInitialized);
 
+  params_.serialExecution = !params_.queryCtx->executor();
   params_.maxDrivers = plan_->options().numDrivers;
   params_.planNode = fragments_.back().fragment.planNode;
 
@@ -250,17 +253,35 @@ std::shared_ptr<connector::SplitSource> LocalRunner::splitSourceForScan(
   return splitSourceFactory_->splitSourceForScan(session, scan);
 }
 
-void LocalRunner::abort() {
-  // If called without previous error, we set the error to be cancellation.
-  if (!error_) {
-    try {
-      state_ = State::kCancelled;
-      VELOX_FAIL("Query cancelled");
-    } catch (const std::exception&) {
-      error_ = std::current_exception();
-    }
+bool LocalRunner::setError(std::exception_ptr error) {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (error_ || state_ == State::kFinished) {
+    return false;
   }
-  VELOX_CHECK(state_ != State::kInitialized);
+  if (error) {
+    error_ = std::move(error);
+  } else {
+    // If called without previous error,
+    // we set the error to be cancellation.
+    error_ = std::make_exception_ptr(
+        velox::VeloxRuntimeError{
+            __FILE__,
+            __LINE__,
+            __FUNCTION__,
+            "",
+            "Query cancelled",
+            velox::error_source::kErrorSourceRuntime.c_str(),
+            velox::error_code::kInvalidState.c_str(),
+            false});
+  }
+  if (state_ != State::kRunning) {
+    return false;
+  }
+  state_ = State::kError;
+  return true;
+}
+
+void LocalRunner::abortStages() {
   // Setting errors is thread safe. The stages do not change after
   // initialization.
   for (auto& stage : stages_) {
@@ -273,18 +294,45 @@ void LocalRunner::abort() {
   }
 }
 
-void LocalRunner::waitForCompletion(int32_t maxWaitMicros) {
-  VELOX_CHECK_NE(state_, State::kInitialized);
+void LocalRunner::abort() {
+  if (setError({})) {
+    abortStages();
+  }
+}
+
+velox::ContinueFuture LocalRunner::wait() {
   std::vector<velox::ContinueFuture> futures;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    for (auto& stage : stages_) {
+    if (state_ != State::kInitialized) {
+      for (auto& stage : stages_) {
+        for (auto& task : stage) {
+          futures.push_back(task->taskDeletionFuture());
+        }
+        stage.clear();
+      }
+    }
+  }
+  return folly::collectAll(std::move(futures)).defer([](auto&&) {});
+}
+
+void LocalRunner::waitForCompletion(
+    std::shared_ptr<LocalRunner>&& runner,
+    int32_t maxWaitMicros) {
+  std::vector<velox::ContinueFuture> futures;
+  {
+    std::lock_guard<std::mutex> l(runner->mutex_);
+    if (runner->state_ == State::kInitialized) {
+      return;
+    }
+    for (auto& stage : runner->stages_) {
       for (auto& task : stage) {
         futures.push_back(task->taskDeletionFuture());
       }
       stage.clear();
     }
   }
+  runner = nullptr;
 
   const auto startTime = velox::getCurrentTimeMicro();
   for (auto& future : futures) {
@@ -331,18 +379,9 @@ void gatherScans(
 
 void LocalRunner::makeStages(
     const std::shared_ptr<velox::exec::Task>& lastStageTask) {
-  auto sharedRunner = shared_from_this();
-  auto onError = [self = sharedRunner, this](std::exception_ptr error) {
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      if (error_) {
-        return;
-      }
-      state_ = State::kError;
-      error_ = std::move(error);
-    }
-    if (cursor_) {
-      abort();
+  auto onError = [self = shared_from_this()](std::exception_ptr error) {
+    if (self->setError(error)) {
+      self->abortStages();
     }
   };
 

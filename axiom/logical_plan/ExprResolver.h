@@ -62,6 +62,16 @@ class ExprResolver {
       const std::vector<SortingField>& ordering,
       bool distinct) const;
 
+  struct WindowResolveResult {
+    velox::TypePtr type;
+    std::string functionName;
+    std::vector<ExprPtr> functionInputs;
+  };
+
+  WindowResolveResult resolveWindowTypes(
+      const velox::core::ExprPtr& expr,
+      const InputNameResolver& inputNameResolver) const;
+
  private:
   ExprPtr resolveLambdaExpr(
       const velox::core::LambdaExpr& lambdaExpr,

@@ -44,6 +44,11 @@ struct PlanCost {
     cardinality = other.cardinality;
   }
 
+  /// Total cost of the plan with cost of reshuffling included.
+  float totalCost(float shuffleCostPerRow) const {
+    return cost + shuffleCostPerRow * cardinality;
+  }
+
   std::string toString() const {
     return fmt::format(
         std::locale("en_US.UTF-8"),
@@ -111,8 +116,8 @@ enum class RelType {
   kFilter,
   kProject,
   kJoin,
-  kHashBuild,
   kAggregation,
+  kWindow,
   kOrderBy,
   kUnionAll,
   kLimit,
@@ -146,9 +151,7 @@ class RelationOp {
       : relType_(type),
         distribution_(std::move(distribution)),
         columns_(std::move(columns)),
-        input_(std::move(input)) {
-    checkInputCardinality();
-  }
+        input_(std::move(input)) {}
 
   /// Convenience constructor for operators that project all input columns as
   /// is. E.g. Repartition or OrderBy.
@@ -159,9 +162,7 @@ class RelationOp {
       : relType_{type},
         distribution_{std::move(distribution)},
         columns_{input->columns()},
-        input_{std::move(input)} {
-    checkInputCardinality();
-  }
+        input_{std::move(input)} {}
 
   /// Convenience constructor for operators that preserve input's distribution.
   /// E.g. Join or Project.
@@ -172,9 +173,7 @@ class RelationOp {
       : relType_{type},
         distribution_{input->distribution()},
         columns_{std::move(columns)},
-        input_{std::move(input)} {
-    checkInputCardinality();
-  }
+        input_{std::move(input)} {}
 
   /// Convenience constructor for operators that preserve input's distribution
   /// and project all input columns as is. E.g. Filter.
@@ -182,9 +181,7 @@ class RelationOp {
       : relType_{type},
         distribution_{input->distribution()},
         columns_{input->columns()},
-        input_{std::move(input)} {
-    checkInputCardinality();
-  }
+        input_{std::move(input)} {}
 
   virtual ~RelationOp() = default;
 
@@ -238,7 +235,14 @@ class RelationOp {
 
   /// Returns the number of output rows.
   float resultCardinality() const {
-    return std::max<float>(1, cost_.resultCardinality());
+    VELOX_DCHECK(std::isfinite(cost_.fanout));
+    VELOX_DCHECK_GE(cost_.fanout, 0);
+    VELOX_DCHECK(std::isfinite(cost_.inputCardinality));
+    VELOX_DCHECK_GE(cost_.inputCardinality, 0);
+    const auto resultCardinality = cost_.fanout * cost_.inputCardinality;
+    VELOX_DCHECK(std::isfinite(resultCardinality));
+    VELOX_DCHECK_GE(resultCardinality, 0);
+    return resultCardinality;
   }
 
   /// @return 1 for a leaf node, otherwise returns 'resultCardinality()' of the
@@ -250,7 +254,7 @@ class RelationOp {
       return 1;
     }
 
-    return input()->resultCardinality();
+    return std::max<float>(1, input()->resultCardinality());
   }
 
   /// Returns a key for retrieving/storing a historical record of execution for
@@ -297,8 +301,6 @@ class RelationOp {
   mutable QGString key_;
 
  private:
-  void checkInputCardinality() const;
-
   // thread local reference count. PlanObjects are freed when the
   // QueryGraphContext arena is freed, candidate plans are freed when no longer
   // referenced.
@@ -396,10 +398,7 @@ struct Values : RelationOp {
 /// the output is '_distribution'.
 class Repartition : public RelationOp {
  public:
-  Repartition(
-      RelationOpPtr input,
-      Distribution distribution,
-      ColumnVector columns);
+  Repartition(RelationOpPtr input, Distribution distribution);
 
   std::string toString(bool recursive, bool detail) const override;
 
@@ -518,28 +517,6 @@ struct Join : public RelationOp {
 
 using JoinCP = const Join*;
 
-/// Occurs as right input of JoinOp with type kHash. Contains the
-/// cost and memory specific to building the table. Can be
-/// referenced from multiple JoinOps. The unit cost * input
-/// cardinality of this is counted as setup cost in the first
-/// referencing join and not counted in subsequent ones.
-struct HashBuild : public RelationOp {
-  HashBuild(RelationOpPtr input, ExprVector keys, PlanP plan);
-
-  const ExprVector keys;
-
-  // The plan producing the build data. Used for deduplicating joins.
-  PlanP plan;
-
-  std::string toString(bool recursive, bool detail) const override;
-
-  void accept(
-      const RelationOpVisitor& visitor,
-      RelationOpVisitorContext& context) const override;
-};
-
-using HashBuildCP = const HashBuild*;
-
 struct Unnest : public RelationOp {
   Unnest(
       RelationOpPtr input,
@@ -588,6 +565,36 @@ struct Aggregation : public RelationOp {
   void setCostWithGroups(int64_t inputBeforePartial);
 };
 
+/// Represents window functions with the same window specification.
+struct WindowOp : public RelationOp {
+  WindowOp(
+      RelationOpPtr input,
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes,
+      WindowVector windows,
+      ColumnVector columns);
+
+  const ExprVector partitionKeys;
+  const ExprVector orderKeys;
+  const OrderTypeVector orderTypes;
+  const WindowVector windows;
+
+  ColumnCP windowExprColumn(size_t windowIndex) const {
+    const auto index = input_->columns().size() + windowIndex;
+    VELOX_CHECK_LT(index, columns_.size());
+    return columns_[index];
+  }
+
+  const QGString& historyKey() const override;
+
+  std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+};
+
 /// Represents an order by. The order is given by the distribution.
 struct OrderBy : public RelationOp {
   OrderBy(
@@ -596,6 +603,10 @@ struct OrderBy : public RelationOp {
       OrderTypeVector orderTypes,
       int64_t limit = -1,
       int64_t offset = 0);
+
+  bool hasLimit() const {
+    return limit >= 0;
+  }
 
   const int64_t limit;
   const int64_t offset;
@@ -633,8 +644,8 @@ struct Limit : public RelationOp {
   const int64_t offset;
 
   bool isNoLimit() const {
-    static const auto kMax = std::numeric_limits<int64_t>::max();
-    return limit >= (kMax - offset);
+    static constexpr auto kMax = std::numeric_limits<int64_t>::max();
+    return limit >= kMax - offset;
   }
 
   std::string toString(bool recursive, bool detail) const override;

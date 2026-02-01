@@ -8,7 +8,7 @@ dt1: avg_yearly
     avg_yearly := divide(dt1.sum, 7)
   tables: t2, t3, dt4
   joins:
-    t3 LEFT dt4 ON t3.p_partkey = dt4.__gk6
+    t3 LEFT dt4 ON t3.p_partkey = dt4.l_partkey_3
     t2 INNER t3 ON t2.l_partkey = t3.p_partkey
   syntactic join order: 19, 34, 38
   aggregates: sum(t2.l_extendedprice) AS sum
@@ -21,9 +21,9 @@ t3: p_partkey, p_brand, p_container
   table: part
   single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
 
-dt4: __gk6, expr
+dt4: l_partkey_3, expr
   output:
-    __gk6 := t5.l_partkey
+    l_partkey_3 := t5.l_partkey
     expr := multiply(dt4.avg, 0.2)
   tables: t5
   aggregates: avg(t5.l_quantity) AS avg
@@ -46,29 +46,26 @@ Project -> dt1.avg_yearly
     Filter -> t2.l_quantity, t2.l_extendedprice, dt4.expr
         lt(t2.l_quantity, dt4.expr)
       Join LEFT Hash -> t2.l_quantity, t2.l_extendedprice, dt4.expr
-          t3.p_partkey = dt4.__gk6
+          t3.p_partkey = dt4.l_partkey_3
         Join INNER Hash -> t2.l_quantity, t2.l_extendedprice, t3.p_partkey
             t2.l_partkey = t3.p_partkey
           TableScan -> t2.l_partkey, t2.l_quantity, t2.l_extendedprice
             table: lineitem
-          HashBuild -> t3.p_partkey
-            TableScan -> t3.p_partkey
-              table: part
-              single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
-        HashBuild -> dt4.__gk6, dt4.expr
-          Project -> dt4.__gk6, dt4.expr
-              dt4.__gk6 := t5.l_partkey
-              dt4.expr := multiply(dt4.avg, 0.2)
-            Aggregation (t5.l_partkey) -> t5.l_partkey, dt4.avg
-                dt4.avg := avg(t5.l_quantity)
-              Join LEFT SEMI (FILTER) Hash -> t5.l_partkey, t5.l_quantity
-                  t5.l_partkey = t3.p_partkey
-                TableScan -> t5.l_partkey, t5.l_quantity
-                  table: lineitem
-                HashBuild -> t3.p_partkey
-                  TableScan -> t3.p_partkey
-                    table: part
-                    single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
+          TableScan -> t3.p_partkey
+            table: part
+            single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
+        Project -> dt4.l_partkey_3, dt4.expr
+            dt4.l_partkey_3 := t5.l_partkey
+            dt4.expr := multiply(dt4.avg, 0.2)
+          Aggregation (t5.l_partkey) -> t5.l_partkey, dt4.avg
+              dt4.avg := avg(t5.l_quantity)
+            Join LEFT SEMI (FILTER) Hash -> t5.l_partkey, t5.l_quantity
+                t5.l_partkey = t3.p_partkey
+              TableScan -> t5.l_partkey, t5.l_quantity
+                table: lineitem
+              TableScan -> t3.p_partkey
+                table: part
+                single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
 
 
 Executable Velox plan:
@@ -77,11 +74,11 @@ Fragment 0:  numWorkers=0:
 -- Project[11][expressions: (avg_yearly:DOUBLE, divide("sum",7))] -> avg_yearly:DOUBLE
   -- Aggregation[10][SINGLE sum := sum("l_extendedprice")] -> sum:DOUBLE
     -- Filter[0][expression: lt("l_quantity","expr")] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, expr:DOUBLE
-      -- HashJoin[9][LEFT p_partkey=dt4.__gk6] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, expr:DOUBLE
+      -- HashJoin[9][LEFT p_partkey=l_partkey_3] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, expr:DOUBLE
         -- HashJoin[3][INNER l_partkey=p_partkey] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, p_partkey:BIGINT
           -- TableScan[1][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_partkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE
           -- TableScan[2][table: part, range filters: [(p_brand, Filter(BytesValues, deterministic, no nulls)), (p_container, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_container, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> p_partkey:BIGINT
-        -- Project[8][expressions: (dt4.__gk6:BIGINT, "l_partkey_3"), (expr:DOUBLE, multiply("avg",0.2))] -> "dt4.__gk6":BIGINT, expr:DOUBLE
+        -- Project[8][expressions: (l_partkey_3:BIGINT, "l_partkey_3"), (expr:DOUBLE, multiply("avg",0.2))] -> l_partkey_3:BIGINT, expr:DOUBLE
           -- Aggregation[7][SINGLE [l_partkey_3] avg := avg("l_quantity_6")] -> l_partkey_3:BIGINT, avg:DOUBLE
             -- HashJoin[6][LEFT SEMI (FILTER) l_partkey_3=p_partkey] -> l_partkey_3:BIGINT, l_quantity_6:DOUBLE
               -- TableScan[4][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_partkey_3:BIGINT, l_quantity_6:DOUBLE

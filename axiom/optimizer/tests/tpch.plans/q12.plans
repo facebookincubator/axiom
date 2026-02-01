@@ -47,11 +47,10 @@ Project (redundant) -> dt1.l_shipmode, dt1.high_line_count, dt1.low_line_count
             t2.o_orderkey = t3.l_orderkey
           TableScan -> t2.o_orderkey, t2.o_orderpriority
             table: orders
-          HashBuild -> t3.l_orderkey, t3.l_shipmode
-            TableScan -> t3.l_orderkey, t3.l_shipmode
-              table: lineitem
-              single-column filters: __in(t3.l_shipmode, "MAIL", "SHIP") and gte(t3.l_receiptdate, "1994-01-01") and lt(t3.l_receiptdate, "1995-01-01")
-              multi-column filters: lt(t3.l_commitdate, t3.l_receiptdate) and lt(t3.l_shipdate, t3.l_commitdate)
+          TableScan -> t3.l_orderkey, t3.l_shipmode
+            table: lineitem
+            single-column filters: __in(t3.l_shipmode, "MAIL", "SHIP") and gte(t3.l_receiptdate, "1994-01-01") and lt(t3.l_receiptdate, "1995-01-01")
+            multi-column filters: lt(t3.l_commitdate, t3.l_receiptdate) and lt(t3.l_shipdate, t3.l_commitdate)
 
 
 Executable Velox plan:

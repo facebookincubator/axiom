@@ -33,47 +33,22 @@ bool isSingleWorker() {
 PlanState::PlanState(Optimization& optimization, DerivedTableCP dt)
     : optimization(optimization),
       dt(dt),
-      syntacticJoinOrder_{optimization.options().syntacticJoinOrder} {}
+      syntacticJoinOrder_{optimization.options().syntacticJoinOrder()} {}
 
 PlanState::PlanState(Optimization& optimization, DerivedTableCP dt, PlanP plan)
     : optimization(optimization),
       dt(dt),
       cost(plan->cost),
-      syntacticJoinOrder_{optimization.options().syntacticJoinOrder} {}
-
-#ifndef NDEBUG
-// NOLINTBEGIN
-// The dt for which we set a breakpoint for plan candidate.
-int32_t debugDt{-1};
-
-// Number of tables in 'debugPlacedTables'
-int32_t debugNumPlaced = 0;
-
-// Tables for setting a breakpoint. Join order selection calls planBreakpoint()
-// right before evaluating the cost for the tables in 'debugPlacedTables'.
-int32_t debugPlaced[10];
-
-void planBreakpoint() {
-  // Set breakpoint here for looking at cost of join order in
-  // 'debugPlacedTables'.
-  LOG(INFO) << "Join order breakpoint";
+      syntacticJoinOrder_{optimization.options().syntacticJoinOrder()} {
+  VELOX_DCHECK_EQ(
+      std::max<float>(1, cost.cardinality), plan->op->resultCardinality());
 }
-
-void PlanState::debugSetFirstTable(int32_t id) {
-  if (dt->id() == debugDt) {
-    debugPlacedTables.resize(1);
-    debugPlacedTables[0] = id;
-  }
-}
-// NOLINTEND
-#endif
 
 void PlanState::save(PlanStateSaver& saver) const {
   saver.placed = placed_;
   saver.columns = columns_;
   saver.cost = cost;
   saver.exprToColumn = exprToColumn_;
-  saver.numDebugPlacedTables = debugPlacedTables.size();
 }
 
 void PlanState::restore(PlanStateSaver& saver) {
@@ -81,12 +56,11 @@ void PlanState::restore(PlanStateSaver& saver) {
   columns_ = std::move(saver.columns);
   cost = saver.cost;
   exprToColumn_ = std::move(saver.exprToColumn);
-  debugPlacedTables.resize(saver.numDebugPlacedTables);
 }
 
-void PlanState::restore(const NextJoin& nextJoin) {
-  placed_ = nextJoin.placed;
-  columns_ = nextJoin.columns;
+void PlanState::restore(NextJoin& nextJoin) {
+  placed_ = std::move(nextJoin.placed);
+  columns_ = std::move(nextJoin.columns);
   cost = nextJoin.cost;
   exprToColumn_.clear();
 }
@@ -127,26 +101,6 @@ PlanStateSaver::~PlanStateSaver() {
   state_.restore(*this);
 }
 
-PlanStateSaver::PlanStateSaver(PlanState& state, const JoinCandidate& candidate)
-    : PlanStateSaver(state) {
-#ifndef NDEBUG
-  if (state.dt->id() != debugDt) {
-    return;
-  }
-  state.debugPlacedTables.push_back(candidate.tables[0]->id());
-  if (debugNumPlaced == 0) {
-    return;
-  }
-
-  for (auto i = 0; i < debugNumPlaced; ++i) {
-    if (debugPlaced[i] != state.debugPlacedTables[i]) {
-      return;
-    }
-  }
-  planBreakpoint();
-#endif
-}
-
 namespace {
 PlanObjectSet exprColumns(const PlanObjectSet& exprs) {
   PlanObjectSet columns;
@@ -160,10 +114,6 @@ Plan::Plan(RelationOpPtr op, const PlanState& state)
       cost(state.cost),
       tables(state.placed()),
       columns(exprColumns(state.targetExprs)) {}
-
-bool Plan::isStateBetter(const PlanState& state, float margin) const {
-  return cost.cost > state.cost.cost + margin;
-}
 
 std::string Plan::printCost() const {
   return cost.toString();
@@ -180,16 +130,12 @@ bool PlanState::mayConsiderNext(PlanObjectCP table) const {
   if (!syntacticJoinOrder_) {
     return true;
   }
-
-  const auto id = table->id();
-  auto it = std::find(dt->joinOrder.begin(), dt->joinOrder.end(), id);
-  if (it == dt->joinOrder.end()) {
-    return true;
-  }
-
-  const auto end = it - dt->joinOrder.begin();
-  for (auto i = 0; i < end; ++i) {
-    if (!placed_.BitSet::contains(dt->joinOrder[i])) {
+  const auto tableId = table->id();
+  for (const auto id : dt->joinOrder) {
+    if (id == tableId) {
+      return true;
+    }
+    if (!placed_.BitSet::contains(id)) {
       return false;
     }
   }
@@ -277,49 +223,36 @@ PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
   };
 
   // Joins.
+  // Joins.
   for (auto join : dt->joins) {
-    if (join->isSemi() || join->isAnti()) {
-      if (placed_.contains(join->rightTable())) {
-        continue;
+    const bool rightPlaced = placed_.contains(join->rightTable());
+    const bool leftPlaced = placed_.contains(join->leftTable());
+    auto addFilter = [&](PlanObjectCP placedTable) {
+      for (auto& conjunct : join->filter()) {
+        translateExpr(conjunct)->columns().forEach<Column>(
+            [&](ColumnCP column) {
+              if (column->relation() == placedTable) {
+                result.add(column);
+              }
+            });
       }
-
-      // For an unplaced exists/not exists downstream, we need the left side
-      // columns but not the right side since nothing is projected out from the
-      // right side.
-      addExprs(join->leftKeys());
-
-      if (!join->filter().empty()) {
-        // If there is a filter, then the filter columns that do not come from
-        // the right side are needed.
-        for (auto& conjunct : join->filter()) {
-          translateExpr(conjunct)->columns().forEach<Column>(
-              [&](ColumnCP column) {
-                if (column->relation() != join->rightTable()) {
-                  result.add(column);
-                }
-              });
-        }
-      }
+    };
+    if (rightPlaced && leftPlaced) {
       continue;
     }
-
-    bool addFilter = false;
-    if (!placed_.contains(join->rightTable())) {
-      addFilter = true;
-      addExprs(join->leftKeys());
-    }
-    if (join->leftTable() && !placed_.contains(join->leftTable())) {
-      addFilter = true;
+    if (rightPlaced) {
       addExprs(join->rightKeys());
+      addFilter(join->rightTable());
+      continue;
     }
-    if (addFilter && !join->filter().empty()) {
-      addExprs(join->filter());
+    if (leftPlaced) {
+      addExprs(join->leftKeys());
+      addFilter(join->leftTable());
+      continue;
     }
-
-    if (addFilter) {
-      addExprs(join->leftExprs());
-      addExprs(join->rightExprs());
-    }
+    addExprs(join->leftKeys());
+    addExprs(join->rightKeys());
+    addExprs(join->filter());
   }
 
   // Filters.
@@ -389,78 +322,80 @@ std::string PlanState::printPlan(RelationOpPtr op, bool detail) const {
 }
 
 PlanP PlanSet::addPlan(RelationOpPtr plan, PlanState& state) {
-  int32_t replaceIndex = -1;
-  const float shuffle = shuffleCost(plan->columns()) * state.cost.cardinality;
+  const float shuffleCostPerRow = shuffleCost(plan->columns());
 
-  if (!plans.empty()) {
-    // Compare with existing. If there is one with same distribution and new is
-    // better, replace. If there is one with a different distribution and the
-    // new one can produce the same distribution by repartition, for cheaper,
-    // add the new one and delete the old one.
-    for (auto i = 0; i < plans.size(); ++i) {
-      auto old = plans[i].get();
-
-      const bool newIsBetter = old->isStateBetter(state);
-      const bool newIsBetterWithShuffle = old->isStateBetter(state, shuffle);
-      const bool sameDist =
-          old->op->distribution().isSamePartition(plan->distribution());
-      const bool sameOrder =
-          old->op->distribution().isSameOrder(plan->distribution());
-      if (sameDist && sameOrder) {
-        if (newIsBetter) {
-          replaceIndex = i;
-          continue;
-        }
-        // There's a better one with same dist and partition.
-        return nullptr;
-      }
-
-      if (newIsBetterWithShuffle &&
-          old->op->distribution().orderKeys().empty()) {
-        // Old plan has no order and is worse than new plus shuffle. Can't win.
-        // Erase.
-        queryCtx()->optimization()->trace(
-            OptimizerOptions::kExceededBest,
-            state.dt->id(),
-            old->cost,
-            *old->op);
-        plans.erase(plans.begin() + i);
-        --i;
-        continue;
-      }
-
-      if (plan->distribution().orderKeys().empty() &&
-          !old->isStateBetter(state, -shuffle)) {
-        // New has no order and old would beat it even after adding shuffle.
-        return nullptr;
-      }
+  // Determine is old plan worse the new one in all aspects.
+  auto isWorse = [&](const Plan& old) {
+    if (plan->distribution().needsSort(old.op->distribution())) {
+      // New plan needs a sort to match the old one, so cannot compare.
+      return false;
     }
+    const bool needsShuffle =
+        plan->distribution().needsShuffle(old.op->distribution());
+    auto newCost = state.cost.totalCost(needsShuffle ? shuffleCostPerRow : 0);
+    return old.cost.cost > newCost;
+  };
+
+  // Determine is old plan better than the new one in all aspects.
+  auto isBetter = [&](const Plan& old) {
+    if (old.op->distribution().needsSort(plan->distribution())) {
+      // Old plan needs a sort to match the new one, so cannot compare.
+      return false;
+    }
+    const bool needsShuffle =
+        old.op->distribution().needsShuffle(plan->distribution());
+    const auto oldCost =
+        old.cost.totalCost(needsShuffle ? shuffleCost(old.op->columns()) : 0);
+    return state.cost.cost >= oldCost;
+  };
+
+  // Compare with existing plans.
+  const auto plansSize = plans.size();
+  enum {
+    kFoundWorse = -1,
+    kNone = 0,
+    kFoundBetter = 1,
+  };
+  auto found = kNone;
+  for (size_t i = 0; i < plans.size(); ++i) {
+    const auto& old = *plans[i];
+    if (isWorse(old)) {
+      // Remove old plan, it is worse than the new one in all aspects.
+      queryCtx()->optimization()->trace(
+          OptimizerOptions::kExceededBest, state.dt->id(), old.cost, *old.op);
+      std::swap(plans[i], plans.back());
+      plans.pop_back();
+      --i;
+      found = kFoundWorse;
+    } else if (found == kNone && isBetter(old)) {
+      // Old plan is better than the new one in all aspects.
+      found = kFoundBetter;
+    }
+  }
+  if (found == kFoundBetter) {
+    // No existing plan was worse than the new one in all aspects,
+    // and at least one existing plan is better than the new one in all aspects.
+    // So don't add the new plan.
+    return nullptr;
   }
 
   auto newPlan = std::make_unique<Plan>(std::move(plan), state);
   auto* result = newPlan.get();
 
-  const auto newPlanCost = result->cost.cost + shuffle;
+  const auto newPlanCost = result->cost.totalCost(shuffleCostPerRow);
   bestCostWithShuffle = std::min(bestCostWithShuffle, newPlanCost);
-  if (replaceIndex >= 0) {
-    plans[replaceIndex] = std::move(newPlan);
-  } else {
-    plans.push_back(std::move(newPlan));
-  }
+  plans.push_back(std::move(newPlan));
   return result;
 }
 
-PlanP PlanSet::best(
-    const std::optional<DesiredDistribution>& distribution,
-    bool& needsShuffle) {
-  VELOX_CHECK_GT(plans.size(), 0, "No plans to pick best from");
-
+PlanP PlanSet::best(const Distribution* desired, bool& needsShuffle) {
+  // TODO: Consider desired order here too.
   PlanP best = nullptr;
   PlanP match = nullptr;
   float bestCost = -1;
   float matchCost = -1;
 
-  const bool checkDistribution = !isSingleWorker() && distribution.has_value();
+  const bool checkDistribution = desired && !isSingleWorker();
 
   for (const auto& plan : plans) {
     const float cost = plan->cost.cost;
@@ -473,8 +408,7 @@ PlanP PlanSet::best(
     };
 
     update(best, bestCost);
-    if (checkDistribution &&
-        plan->op->distribution().isSamePartition(distribution.value())) {
+    if (checkDistribution && !plan->op->distribution().needsShuffle(*desired)) {
       update(match, matchCost);
     }
   }
@@ -486,9 +420,9 @@ PlanP PlanSet::best(
   }
 
   if (match) {
-    const float shuffle =
-        shuffleCost(best->op->columns()) * best->cost.cardinality;
-    if (matchCost <= bestCost + shuffle) {
+    const float bestCostWithShuffle =
+        best->cost.totalCost(shuffleCost(best->op->columns()));
+    if (matchCost <= bestCostWithShuffle) {
       return match;
     }
   }
@@ -519,7 +453,7 @@ std::pair<JoinSide, JoinSide> JoinCandidate::joinSides() const {
 }
 
 namespace {
-bool hasEqual(ExprCP key, const ExprVector& keys) {
+bool hasEqual(ExprCP key, CPSpan<Expr> keys) {
   if (key->isNot(PlanType::kColumnExpr) || !key->as<Column>()->equivalence()) {
     return false;
   }
@@ -564,7 +498,7 @@ void JoinCandidate::addEdge(
         // We update the lr fanout. The rl fanout will not be used for an inner
         // join, so we set this to 1.
         join->setFanouts(
-            std::min(newFanout * preFanout, std::min(preFanout, newFanout)), 1);
+            std::min({newFanout * preFanout, preFanout, newFanout}), 1);
         fanout = join->lrFanout();
       }
       join->addEquality(key, newTableSide.keys[i]);
@@ -610,12 +544,15 @@ std::string JoinCandidate::toString() const {
 }
 
 bool NextJoin::isWorse(const NextJoin& other) const {
-  float shuffle = 0;
-  if (!plan->distribution().isSamePartition(other.plan->distribution())) {
-    shuffle = other.cost.cardinality * shuffleCost(other.plan->columns());
+  if (other.plan->distribution().needsSort(plan->distribution())) {
+    // 'other' needs a sort to match 'plan', so cannot compare.
+    return false;
   }
-
-  return cost.cost > other.cost.cost + shuffle;
+  const auto needsShuffle =
+      other.plan->distribution().needsShuffle(plan->distribution());
+  return cost.cost >=
+      other.cost.totalCost(
+          needsShuffle ? shuffleCost(other.plan->columns()) : 0);
 }
 
 size_t MemoKey::hash() const {
@@ -662,6 +599,10 @@ velox::core::JoinType reverseJoinType(velox::core::JoinType joinType) {
       return velox::core::JoinType::kRightSemiFilter;
     case velox::core::JoinType::kLeftSemiProject:
       return velox::core::JoinType::kRightSemiProject;
+    case velox::core::JoinType::kRightSemiFilter:
+      return velox::core::JoinType::kLeftSemiFilter;
+    case velox::core::JoinType::kRightSemiProject:
+      return velox::core::JoinType::kLeftSemiProject;
     default:
       return joinType;
   }

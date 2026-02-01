@@ -71,20 +71,17 @@ Project -> dt1.c_custkey, dt1.c_name, dt1.revenue, dt1.c_acctbal, dt1.n_name, dt
           TableScan -> t4.l_orderkey, t4.l_extendedprice, t4.l_discount
             table: lineitem
             single-column filters: eq(t4.l_returnflag, "R")
-          HashBuild -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_phone, t2.c_acctbal, t2.c_comment, t3.o_orderkey, t5.n_name
-            Join INNER Hash -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_phone, t2.c_acctbal, t2.c_comment, t3.o_orderkey, t5.n_name
-                t2.c_nationkey = t5.n_nationkey
-              Join INNER Hash -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_nationkey, t2.c_phone, t2.c_acctbal, t2.c_comment, t3.o_orderkey
-                  t2.c_custkey = t3.o_custkey
-                TableScan -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_nationkey, t2.c_phone, t2.c_acctbal, t2.c_comment
-                  table: customer
-                HashBuild -> t3.o_orderkey, t3.o_custkey
-                  TableScan -> t3.o_orderkey, t3.o_custkey
-                    table: orders
-                    single-column filters: gte(t3.o_orderdate, "1993-10-01") and lt(t3.o_orderdate, "1994-01-01")
-              HashBuild -> t5.n_nationkey, t5.n_name
-                TableScan -> t5.n_nationkey, t5.n_name
-                  table: nation
+          Join INNER Hash -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_phone, t2.c_acctbal, t2.c_comment, t3.o_orderkey, t5.n_name
+              t2.c_nationkey = t5.n_nationkey
+            Join INNER Hash -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_nationkey, t2.c_phone, t2.c_acctbal, t2.c_comment, t3.o_orderkey
+                t2.c_custkey = t3.o_custkey
+              TableScan -> t2.c_custkey, t2.c_name, t2.c_address, t2.c_nationkey, t2.c_phone, t2.c_acctbal, t2.c_comment
+                table: customer
+              TableScan -> t3.o_orderkey, t3.o_custkey
+                table: orders
+                single-column filters: gte(t3.o_orderdate, "1993-10-01") and lt(t3.o_orderdate, "1994-01-01")
+            TableScan -> t5.n_nationkey, t5.n_name
+              table: nation
 
 
 Executable Velox plan:

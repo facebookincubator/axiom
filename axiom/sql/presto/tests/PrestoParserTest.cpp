@@ -1819,11 +1819,13 @@ TEST_F(PrestoParserTest, createTableAndInsert) {
                               ->as<CreateTableAsSelectStatement>()
                               ->plan()
                               ->as<lp::TableWriteNode>();
-  ASSERT_EQ(lp::WriteKind::kCreate, ctasWrite->writeKind());
+  ASSERT_EQ(
+      facebook::axiom::connector::WriteKind::kCreate, ctasWrite->writeKind());
 
   const auto* insertWrite =
       statements[1]->as<InsertStatement>()->plan()->as<lp::TableWriteNode>();
-  ASSERT_EQ(lp::WriteKind::kInsert, insertWrite->writeKind());
+  ASSERT_EQ(
+      facebook::axiom::connector::WriteKind::kInsert, insertWrite->writeKind());
 }
 
 } // namespace

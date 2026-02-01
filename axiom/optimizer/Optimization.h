@@ -35,7 +35,6 @@ class Optimization {
   Optimization(
       SessionPtr session,
       const logical_plan::LogicalPlanNode& logicalPlan,
-      const connector::SchemaResolver& schemaResolver,
       History& history,
       std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
       velox::core::ExpressionEvaluator& evaluator,
@@ -51,6 +50,11 @@ class Optimization {
 
   Optimization(const Optimization& other) = delete;
   Optimization& operator=(const Optimization& other) = delete;
+
+  DerivedTableCP graph() const {
+    return root_;
+  }
+  void optimizeGraph();
 
   /// Returns the optimized RelationOp plan for 'plan' given at construction.
   PlanP bestPlan();
@@ -138,10 +142,9 @@ class Optimization {
   bool isJoinEquality(
       ExprCP expr,
       PlanObjectCP leftTable,
-      PlanObjectCP rightTable,
       ExprCP& left,
       ExprCP& right) const {
-    return toGraph_.isJoinEquality(expr, leftTable, rightTable, left, right);
+    return toGraph_.isJoinEquality(expr, leftTable, left, right);
   }
 
   const SessionPtr& session() const {
@@ -196,7 +199,7 @@ class Optimization {
   PlanP makePlan(
       const DerivedTable& dt,
       const MemoKey& key,
-      const std::optional<DesiredDistribution>& distribution,
+      const Distribution* desired,
       const PlanObjectSet& boundColumns,
       float existsFanout,
       bool& needsShuffle);
@@ -204,15 +207,14 @@ class Optimization {
   PlanP makeUnionPlan(
       const DerivedTable& dt,
       const MemoKey& key,
-      const std::optional<DesiredDistribution>& distribution,
+      const Distribution* desired,
       const PlanObjectSet& boundColumns,
-      float existsFanout,
-      bool& needsShuffle);
+      float existsFanout);
 
   PlanP makeDtPlan(
       const DerivedTable& dt,
       const MemoKey& key,
-      const std::optional<DesiredDistribution>& distribution,
+      const Distribution* desired,
       float existsFanout,
       bool& needsShuffle);
 
@@ -225,7 +227,7 @@ class Optimization {
   // side is made, we further check if reducing joins applying to the probe can
   // be used to further reduce the build. These last joins are added as
   // 'existences' in the candidate.
-  std::vector<JoinCandidate> nextJoins(PlanState& state);
+  std::vector<JoinCandidate> nextJoins(PlanState& state) const;
 
   // Adds group by, order by, top k, limit to 'plan'. Updates 'plan' if
   // relation ops added. Sets cost in 'state'.
@@ -247,10 +249,7 @@ class Optimization {
   // placed, adds them to 'state.placed' and calls makeJoins()
   // recursively to make the rest of the plan. Returns false if no
   // unplaced conjuncts were found and plan construction should proceed.
-  bool placeConjuncts(
-      RelationOpPtr plan,
-      PlanState& state,
-      bool allowNondeterministic);
+  bool placeConjuncts(RelationOpPtr plan, PlanState& state, bool joinsPlaced);
 
   // Helper function that calls makeJoins recursively for each of
   // 'nextJoins'. The point of making 'nextJoins' first and only then
@@ -258,7 +257,7 @@ class Optimization {
   // table and independently joined dimensions. These can be ordered
   // based on partitioning and size and we do not need to evaluate
   // their different permutations.
-  void tryNextJoins(PlanState& state, const std::vector<NextJoin>& nextJoins);
+  void tryNextJoins(PlanState& state, std::vector<NextJoin>& nextJoins);
 
   // Adds a cross join to access a single row from a non-correlated subquery.
   RelationOpPtr placeSingleRowDt(
@@ -283,19 +282,39 @@ class Optimization {
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
-  // Adds 'candidate' on top of 'plan' as a hash join. Adds possibly needed
-  // repartitioning to both probe and build and makes a broadcast build if
-  // indicated. If 'candidate' calls for a join on the build side, plans a
-  // derived table with the build side tables and optionl 'existences' from
-  // 'candidate'.
-  void joinByHash(
+  void tryMergeJoin(
+      const JoinCandidate& candidate,
+      PlanState& state,
+      velox::core::JoinType joinType,
+      const RelationOpPtr& probeInput,
+      const ExprVector& probeKeys,
+      const RelationOpPtr& buildInput,
+      const ExprVector& buildKeys,
+      float fanout,
+      const ColumnVector& columns,
+      std::vector<NextJoin>& toTry) const;
+
+  template <typename Reshuffle>
+  void joinByKeys(
+      const JoinCandidate& candidate,
+      const JoinSide& probe,
+      RelationOpPtr probeInput,
+      PlanState& state,
+      const JoinSide& build,
+      RelationOpPtr buildInput,
+      PlanState& memoState,
+      const Reshuffle& reshuffle,
+      float lrFanout,
+      float rlFanout,
+      std::vector<NextJoin>& toTry);
+
+  void probeJoin(
       const RelationOpPtr& plan,
       const JoinCandidate& candidate,
       PlanState& state,
       std::vector<NextJoin>& toTry);
 
-  // Tries a right hash join variant of left outer or left semijoin.
-  void joinByHashRight(
+  void buildJoin(
       const RelationOpPtr& plan,
       const JoinCandidate& candidate,
       PlanState& state,

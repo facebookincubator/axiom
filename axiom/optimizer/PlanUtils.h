@@ -19,6 +19,7 @@
 #include <folly/Range.h>
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/optimizer/QueryGraph.h"
+#include "axiom/optimizer/RelationOp.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -119,5 +120,9 @@ std::string orderByToString(
 std::string columnsToString(const ColumnVector& columns);
 
 std::string exprsToString(const ExprVector& exprs);
+
+RelationOpPtr addWindowOps(
+    RelationOpPtr input,
+    std::span<ExprCP> maybeWindowDependentExprs);
 
 } // namespace facebook::axiom::optimizer

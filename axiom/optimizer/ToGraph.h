@@ -26,10 +26,12 @@ namespace facebook::axiom::optimizer {
 
 struct ExprDedupKey {
   Name func;
-  std::span<const ExprCP> args;
+  CPSpan<Expr> args;
+  const velox::Type* type; // makes sence for functions like cast
 
   bool operator==(const ExprDedupKey& other) const {
-    return func == other.func && std::ranges::equal(args, other.args);
+    return func == other.func && std::ranges::equal(args, other.args) &&
+        type == other.type;
   }
 };
 
@@ -40,6 +42,7 @@ struct ExprDedupHasher {
     for (auto& a : key.args) {
       h = velox::bits::hashMix(h, folly::hasher<ExprCP>()(a));
     }
+    h = velox::bits::hashMix(h, std::hash<const velox::Type*>()(key.type));
     return h;
   }
 };
@@ -96,10 +99,11 @@ struct SubfieldProjections {
   folly::F14FastMap<PathCP, ExprCP> pathToExpr;
 };
 
+struct Subqueries;
+
 class ToGraph {
  public:
   ToGraph(
-      const connector::SchemaResolver& schemaResolver,
       velox::core::ExpressionEvaluator& evaluator,
       const OptimizerOptions& options);
 
@@ -127,7 +131,6 @@ class ToGraph {
   bool isJoinEquality(
       ExprCP expr,
       PlanObjectCP leftTable,
-      PlanObjectCP rightTable,
       ExprCP& left,
       ExprCP& right) const;
 
@@ -155,13 +158,9 @@ class ToGraph {
   // to the left.
   void canonicalizeCall(Name& name, ExprVector& args);
 
-  // Converts 'plan' to PlanObjects and records join edges into
-  // 'currentDt_'. Wraps 'node' in a new Derived table f 'node' does not match
-  // allowedInDt or 'node' is an outer join and 'excludeOuterJoins' is true.
   void makeQueryGraph(
       const logical_plan::LogicalPlanNode& node,
-      uint64_t allowedInDt,
-      bool excludeOuterJoins = false);
+      uint64_t allowedInDt);
 
   PlanObjectCP findLeaf(const logical_plan::LogicalPlanNode* node) {
     auto* leaf = planLeaves_[node];
@@ -203,6 +202,8 @@ class ToGraph {
 
   ExprCP translateLambda(const logical_plan::LambdaExpr* lambda);
 
+  WindowCP translateWindow(const logical_plan::WindowExpr* windowExpr);
+
   // If 'expr' is not a subfield path, returns std::nullopt. If 'expr'
   // is a subfield path that is subsumed by a projected subfield,
   // returns nullptr. Else returns an optional subfield path on top of
@@ -224,24 +225,8 @@ class ToGraph {
   // 'flat'.
   void translateConjuncts(const logical_plan::ExprPtr& input, ExprVector& flat);
 
-  // Adds a join to 'currentDt_'. If 'joinType' is an inner join, the conjuncts
-  // of the join condition are added to currentDt_->conjuncts. If left or full
-  // join, a JoinEdge is created and added to currentDt_->joins.
-  // @param left Left side of the join. Must have been added to the graph
-  // already.
-  // @param right Right side of the join. Must have been added to the graph
-  // already.
-  // @param joinType Inner, left or full. Right join must have been normalized
-  // into a left join.
-  // @param condition Join condition. Can be nullptr if a cross join.
-  // @param originalJoinType The original join type from the logical plan
-  // (before normalization).
-  void translateJoin(
-      const logical_plan::LogicalPlanNodePtr& left,
-      const logical_plan::LogicalPlanNodePtr& right,
-      logical_plan::JoinType joinType,
-      const logical_plan::ExprPtr& condition,
-      logical_plan::JoinType originalJoinType);
+  // Adds a JoinEdge corresponding to 'join' to the enclosing DerivedTable.
+  void addJoin(const logical_plan::JoinNode& join, uint64_t allowedInDt);
 
   // Given an INTERSECT or an EXCEPT set operation, create derived tables for
   // inputs, add them to 'currentDt_' and connect them with join edges.
@@ -330,19 +315,13 @@ class ToGraph {
   // DerivedTable. Done for joins to the right of non-inner joins,
   // group bys as non-top operators, whenever descendents of 'node'
   // are not freely reorderable with its parents' descendents.
-  void wrapInDt(const logical_plan::LogicalPlanNode& node);
+  void wrapInDt(const logical_plan::LogicalPlanNode& node, bool unordered);
 
   // Start new DT and add 'currentDt_' as a child.
   // Set 'currentDt_' to the new DT.
   void finalizeDt(
       const logical_plan::LogicalPlanNode& node,
       DerivedTableP outerDt = nullptr);
-
-  // Same as finalizeDt but requires 'outerDt' to be non-null.
-  // And don't check that correlated conjuncts are empty.
-  void finalizeSubqueryDt(
-      const logical_plan::LogicalPlanNode& node,
-      DerivedTableP outerDt);
 
   // Creates a wrapper DerivedTable with a COUNT(*) aggregation over 'inputDt'.
   // Returns the count column. The wrapper DT is added to currentDt_.
@@ -369,7 +348,41 @@ class ToGraph {
   // occurrences of the same expression are redundant since the column is
   // already sorted by the first occurrence.
   std::pair<ExprVector, OrderTypeVector> dedupOrdering(
-      const std::vector<logical_plan::SortingField>& ordering);
+      const std::vector<logical_plan::SortingField>& ordering,
+      folly::F14FastSet<ExprCP> keysToIgnore = {});
+
+  struct AddJoinArgs {
+    PlanObjectCP leftTable;
+    const ExprVector& leftKeys;
+    const ExprVector& rightKeys;
+    ExprVector filter;
+  };
+
+  ExprCP processSubquery(
+      PlanObjectCP leftTable,
+      DerivedTableCP subqueryDt,
+      const std::function<ExprCP(AddJoinArgs)>& addJoin);
+
+  ExprCP processScalarSubquery(
+      const logical_plan::SubqueryExpr& subquery,
+      PlanObjectCP leftTable);
+
+  ExprCP processInExpr(const logical_plan::Expr& expr, PlanObjectCP leftTable);
+
+  ExprCP processExistsExpr(
+      const logical_plan::Expr& expr,
+      PlanObjectCP leftTable);
+
+  void processSubqueries(Subqueries& subqueries, PlanObjectCP leftTable);
+
+  void processSubqueries(
+      const logical_plan::LogicalPlanNode& input,
+      Subqueries& subqueries,
+      PlanObjectCP leftTable);
+
+  void extractSubqueries(
+      const logical_plan::ExprPtr& expr,
+      Subqueries& subqueries) const;
 
   // Process subqueries used in filter's predicate or projection expressions
   // and populate subqueries_ map. For each IN <subquery> expression, create a
@@ -383,42 +396,13 @@ class ToGraph {
   // @param filter If true, indicates this is processing a filter predicate.
   void processSubqueries(
       const logical_plan::LogicalPlanNode& input,
-      const logical_plan::ExprPtr& expr,
-      bool filter);
+      const logical_plan::ExprPtr& predicate);
 
-  // Translates a subquery into a DerivedTable. Sets up correlations_ to allow
-  // the subquery to reference columns from the outer query. After translation,
-  // correlatedConjuncts_ contains any correlated predicates found.
-  //
-  // @param node The logical plan node representing the subquery.
-  // @param finalize If true (default), adds the subquery DT to currentDt_ and
-  // calls makeInitialPlan(). If false, the caller is responsible for adding
-  // the DT and calling makeInitialPlan(). Use finalize=false when you need to
-  // modify the DT before memoization (e.g., applying LIMIT 1 for EXISTS).
-  // @return The translated DerivedTable for the subquery.
-  DerivedTableP translateSubquery(
-      const logical_plan::LogicalPlanNode& node,
-      bool finalize = true);
-
-  // Holds the extracted join keys and filters from correlated conjuncts.
-  // Used when decorrelating IN and EXISTS subqueries.
-  struct DecorrelatedJoin {
-    PlanObjectSet leftTables;
-    ExprVector leftKeys;
-    ExprVector rightKeys;
-    ExprVector filter;
-  };
-
-  // Extracts join keys and filters from correlated conjuncts for decorrelating
-  // IN and EXISTS subqueries.
-  DecorrelatedJoin extractDecorrelatedJoin(DerivedTableP subqueryDt);
+  DerivedTableP translateSubquery(const logical_plan::LogicalPlanNode& node);
 
   ColumnCP addMarkColumn();
 
-  void addJoinColumns(
-      const logical_plan::LogicalPlanNode& joinSide,
-      ColumnVector& columns,
-      ExprVector& exprs);
+  logical_plan::ValuesNodePtr tryFoldConstantDt(DerivedTableP dt) const;
 
   // Cache of resolved table schemas.
   Schema schema_;
@@ -444,7 +428,7 @@ class ToGraph {
   folly::F14FastMap<std::string, ExprCP> renames_;
 
   // Symbols from the 'outer' query. Used when processing correlated subqueries.
-  const folly::F14FastMap<std::string, ExprCP>* correlations_;
+  const folly::F14FastMap<std::string, ExprCP>* correlations_{nullptr};
 
   // True if expression is allowed to reference symbols from the 'outer' query.
   bool allowCorrelations_{false};
@@ -455,7 +439,7 @@ class ToGraph {
 
   // Maps an expression that contains a subquery to a column or constant that
   // should be used instead. Populated in 'processSubqueries()'.
-  folly::F14FastMap<logical_plan::ExprPtr, ExprCP> subqueries_;
+  folly::F14FastMap<const logical_plan::Expr*, ExprCP> subqueries_;
 
   folly::
       F14FastMap<TypedVariant, ExprCP, TypedVariantHasher, TypedVariantComparer>

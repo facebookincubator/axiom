@@ -41,8 +41,8 @@ const auto& relTypeNames() {
       {RelType::kFilter, "Filter"},
       {RelType::kProject, "Project"},
       {RelType::kJoin, "Join"},
-      {RelType::kHashBuild, "HashBuild"},
       {RelType::kAggregation, "Aggregation"},
+      {RelType::kWindow, "Window"},
       {RelType::kOrderBy, "OrderBy"},
       {RelType::kUnionAll, "UnionAll"},
       {RelType::kLimit, "Limit"},
@@ -152,12 +152,11 @@ TableScan::TableScan(
     if (orderSelectivity == 1) {
       // The data does not come in key order.
       float batchCost = index->lookupCost(lookupRange) +
-          index->lookupCost(lookupRange / batchSize) *
-              std::max<float>(1, batchSize);
+          index->lookupCost(lookupRange / batchSize) * batchSize;
       cost_.unitCost = batchCost / batchSize;
     } else {
       float batchCost = index->lookupCost(lookupRange) +
-          index->lookupCost(distance) * std::max<float>(1, batchSize);
+          index->lookupCost(distance) * batchSize;
       cost_.unitCost = batchCost / batchSize;
     }
     return;
@@ -194,13 +193,14 @@ Distribution TableScan::outputDistribution(
     orderTypes.resize(numPrefix);
     replace(orderKeys, schemaColumns, columns.data());
   }
-  return Distribution(
+  return {
       distribution.distributionType(),
       std::move(partitionKeys),
       std::move(orderKeys),
       std::move(orderTypes),
       distribution.numKeysUnique() <= numPrefix ? distribution.numKeysUnique()
-                                                : 0);
+                                                : 0,
+  };
 }
 
 std::string Cost::toString(bool /*detail*/, bool isUnit) const {
@@ -218,16 +218,6 @@ std::string Cost::toString(bool /*detail*/, bool isUnit) const {
         << velox::succinctBytes(static_cast<uint64_t>(transferBytes));
   }
   return out.str();
-}
-
-void RelationOp::checkInputCardinality() const {
-  if (input_ != nullptr) {
-    const auto inputCardinality = input_->resultCardinality();
-    VELOX_CHECK(std::isfinite(inputCardinality));
-
-    // TODO Assert that inputCardinality > 0.
-    VELOX_CHECK_GE(inputCardinality, 0);
-  }
 }
 
 std::string RelationOp::toString() const {
@@ -403,21 +393,45 @@ Join::Join(
       leftKeys{std::move(lhsKeys)},
       rightKeys{std::move(rhsKeys)},
       filter{std::move(filterExprs)} {
+  VELOX_DCHECK_EQ(leftKeys.size(), rightKeys.size());
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = fanout;
 
+  if (method == JoinMethod::kMerge) {
+    return;
+  }
+
   const float buildSize = right->resultCardinality();
-  const auto numKeys = leftKeys.size();
+  const auto buildRowBytes = byteSize(right->columns());
+  const auto buildBytes = buildSize * buildRowBytes;
+
+  if (method == JoinMethod::kCross) {
+    const auto buildCost = buildRowBytes * Costs::kColumnByteCost;
+    cost_.unitCost = fanout * buildCost;
+    cost_.totalBytes = buildBytes;
+    return;
+  }
+
+  const auto numKeys = static_cast<float>(leftKeys.size());
   const auto probeCost = Costs::hashTableCost(buildSize) +
       // Multiply by min(fanout, 1) because most misses will not compare and if
       // fanout > 1, there is still only one compare.
       (Costs::kKeyCompareCost * numKeys * std::min<float>(1, fanout)) +
       numKeys * Costs::kHashColumnCost;
 
-  const auto rowBytes = byteSize(right->columns());
-  const auto rowCost = Costs::hashRowCost(buildSize, rowBytes);
+  const auto rowCost = Costs::hashRowCost(buildSize, buildRowBytes);
 
-  cost_.unitCost = probeCost + cost_.fanout * rowCost;
+  // Per row cost calculates the column hashes twice, once to partition and a
+  // second time to insert.
+  const auto numColumns = static_cast<float>(right->columns().size());
+  const auto buildRowCost = (numKeys * 2 * Costs::kHashColumnCost) +
+      Costs::hashBuildCost(buildSize, buildRowBytes) +
+      numKeys * Costs::kKeyCompareCost +
+      numColumns * Costs::kHashExtractColumnCost * 2;
+
+  cost_.unitCost = probeCost + fanout * rowCost +
+      buildSize * buildRowCost / cost_.inputCardinality;
+  cost_.totalBytes = buildBytes;
 }
 
 namespace {
@@ -489,8 +503,21 @@ std::string Join::toString(bool recursive, bool detail) const {
   if (recursive) {
     out << input()->toString(true, detail);
   }
-  out << "*" << (method == JoinMethod::kHash ? "H" : "M") << " "
-      << joinTypeLabel(joinType);
+  out << "*";
+
+  switch (method) {
+    case JoinMethod::kHash:
+      out << "H";
+      break;
+    case JoinMethod::kMerge:
+      out << "M";
+      break;
+    case JoinMethod::kCross:
+      out << "C";
+      break;
+  }
+
+  out << " " << joinTypeLabel(joinType);
   printCost(detail, out);
   if (detail) {
     out << "columns: " << itemsToString(columns().data(), columns().size())
@@ -511,15 +538,11 @@ void Join::accept(
   visitor.visit(*this, context);
 }
 
-Repartition::Repartition(
-    RelationOpPtr input,
-    Distribution distribution,
-    ColumnVector columns)
-    : RelationOp(
+Repartition::Repartition(RelationOpPtr input, Distribution distribution)
+    : RelationOp{
           RelType::kRepartition,
           std::move(input),
-          std::move(distribution),
-          std::move(columns)) {
+          std::move(distribution)} {
   cost_.inputCardinality = inputCardinality();
   cost_.fanout = 1;
 
@@ -757,15 +780,12 @@ Aggregation::Aggregation(
     if (step == velox::core::AggregationNode::Step::kFinal &&
         input_->is(RelType::kRepartition) &&
         input_->input()->is(RelType::kAggregation)) {
-      auto partial = input_->input().get();
-
-      VELOX_CHECK(!std::isnan(partial->cost().inputCardinality));
-      VELOX_CHECK(std::isfinite(partial->cost().inputCardinality));
-
-      inputBeforePartial = partial->inputCardinality();
+      const auto& partial = *input_->input();
+      inputBeforePartial = partial.inputCardinality();
     } else {
       inputBeforePartial = cost_.inputCardinality;
     }
+    VELOX_DCHECK(std::isfinite(inputBeforePartial));
 
     setCostWithGroups(inputBeforePartial);
   } else {
@@ -959,42 +979,6 @@ void Aggregation::accept(
   visitor.visit(*this, context);
 }
 
-HashBuild::HashBuild(RelationOpPtr input, ExprVector keysVector, PlanP plan)
-    : RelationOp{RelType::kHashBuild, std::move(input)},
-      keys{std::move(keysVector)},
-      plan{plan} {
-  cost_.inputCardinality = inputCardinality();
-  cost_.fanout = 1;
-
-  const auto numKeys = static_cast<float>(keys.size());
-  const auto rowBytes = byteSize(columns());
-  const auto numColumns = static_cast<float>(columns().size());
-  // Per row cost calculates the column hashes twice, once to partition and a
-  // second time to insert.
-  cost_.unitCost = (numKeys * 2 * Costs::kHashColumnCost) +
-      Costs::hashBuildCost(cost_.inputCardinality, rowBytes) +
-      numKeys * Costs::kKeyCompareCost +
-      numColumns * Costs::kHashExtractColumnCost * 2;
-
-  cost_.totalBytes = cost_.inputCardinality * rowBytes;
-}
-
-std::string HashBuild::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-  out << " Build ";
-  printCost(detail, out);
-  return out.str();
-}
-
-void HashBuild::accept(
-    const RelationOpVisitor& visitor,
-    RelationOpVisitorContext& context) const {
-  visitor.visit(*this, context);
-}
-
 Filter::Filter(RelationOpPtr input, ExprVector exprs)
     : RelationOp{RelType::kFilter, std::move(input)}, exprs_{std::move(exprs)} {
   cost_.inputCardinality = inputCardinality();
@@ -1140,9 +1124,11 @@ OrderBy::OrderBy(
       limit{limit},
       offset{offset} {
   cost_.inputCardinality = inputCardinality();
-  if (limit == -1) {
+  if (limit < 0) {
+    VELOX_DCHECK_EQ(limit, -1);
     cost_.fanout = 1;
   } else {
+    VELOX_DCHECK_NE(limit, 0);
     const auto cardinality = static_cast<float>(limit);
     if (cost_.inputCardinality <= cardinality) {
       // Input cardinality does not exceed the limit. The limit is no-op.
@@ -1182,9 +1168,10 @@ Limit::Limit(RelationOpPtr input, int64_t limit, int64_t offset)
     : RelationOp{RelType::kLimit, std::move(input), Distribution::gather()},
       limit{limit},
       offset{offset} {
+  VELOX_DCHECK_GE(limit, 0);
   cost_.inputCardinality = inputCardinality();
   cost_.unitCost = 0.01;
-  const auto cardinality = static_cast<float>(limit);
+  const float cardinality = limit;
   if (cost_.inputCardinality <= cardinality) {
     // Input cardinality does not exceed the limit. The limit is no-op. Doesn't
     // change cardinality.
@@ -1219,10 +1206,11 @@ void Limit::accept(
 UnionAll::UnionAll(RelationOpPtrVector inputsVector)
     : RelationOp{RelType::kUnionAll, nullptr, Distribution{}, inputsVector[0]->columns()},
       inputs{std::move(inputsVector)} {
+  cost_.inputCardinality = 0;
   for (auto& input : inputs) {
-    cost_.inputCardinality +=
-        input->cost().inputCardinality * input->cost().fanout;
+    cost_.inputCardinality += input->resultCardinality();
   }
+  cost_.inputCardinality = std::max<float>(1, cost_.inputCardinality);
 
   cost_.fanout = 1;
 
@@ -1267,6 +1255,85 @@ std::string UnionAll::toString(bool recursive, bool detail) const {
   return out.str();
 }
 
+WindowOp::WindowOp(
+    RelationOpPtr input,
+    ExprVector partitionKeysVector,
+    ExprVector orderKeysVector,
+    OrderTypeVector orderTypesVector,
+    WindowVector windowsVector,
+    ColumnVector columns)
+    : RelationOp{RelType::kWindow, std::move(input), std::move(columns)},
+      partitionKeys{std::move(partitionKeysVector)},
+      orderKeys{std::move(orderKeysVector)},
+      orderTypes{std::move(orderTypesVector)},
+      windows{std::move(windowsVector)} {
+  cost_.inputCardinality = inputCardinality();
+  cost_.fanout = 1;
+}
+
+const QGString& WindowOp::historyKey() const {
+  if (!key_.empty()) {
+    return key_;
+  }
+  std::stringstream out;
+  auto* opt = queryCtx()->optimization();
+  velox::ScopedVarSetter cname(&opt->cnamesInExpr(), false);
+  out << input_->historyKey() << " window (";
+  for (auto& key : partitionKeys) {
+    out << key->toString() << ", ";
+  }
+  out << ") order by (";
+  for (auto& key : orderKeys) {
+    out << key->toString() << ", ";
+  }
+  out << ") functions (";
+  for (auto& window : windows) {
+    out << window->toString() << ", ";
+  }
+  out << ")";
+  key_ = sanitizeHistoryKey(out.str());
+  return key_;
+}
+
+std::string WindowOp::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (detail) {
+    out << "Window (";
+    out << "partition by: ";
+    for (auto i = 0; i < partitionKeys.size(); ++i) {
+      out << partitionKeys[i]->toString();
+      if (i < partitionKeys.size() - 1) {
+        out << ", ";
+      }
+    }
+    out << " order by: ";
+    for (auto i = 0; i < orderKeys.size(); ++i) {
+      out << orderKeys[i]->toString();
+      if (i < orderKeys.size() - 1) {
+        out << ", ";
+      }
+    }
+    out << " functions: ";
+    for (auto i = 0; i < windows.size(); ++i) {
+      out << windows[i]->toString();
+      if (i < windows.size() - 1) {
+        out << ", ";
+      }
+    }
+    out << ")\n";
+  } else {
+    out << "window " << windows.size() << " functions ";
+  }
+
+  return out.str();
+}
+
+void WindowOp::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 void UnionAll::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
@@ -1283,8 +1350,6 @@ TableWrite::TableWrite(
       write{write} {
   cost_.inputCardinality = inputCardinality();
   cost_.unitCost = 0.01;
-  VELOX_DCHECK_EQ(
-      this->inputColumns.size(), this->write->table().type()->size());
 }
 
 std::string TableWrite::toString(bool recursive, bool detail) const {

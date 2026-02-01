@@ -94,6 +94,260 @@ class JoinTest : public test::QueryTestBase {
   std::shared_ptr<connector::TestConnector> testConnector_;
 };
 
+struct JoinOptions {
+  size_t numJoins = 0;
+  JoinOrder joinOrder = JoinOrder::kCost;
+  bool sample = false;
+  bool reducingExistences = false;
+};
+
+constexpr size_t kNumTables = 301;
+#ifdef NDEBUG
+constexpr bool kIsDebug = false;
+#else
+constexpr bool kIsDebug = true;
+#endif
+
+// TODO Move this test into its own file.
+TEST_F(JoinTest, perfJoinChain) {
+  for (int i = 0; i < kNumTables; ++i) {
+    std::vector<std::string> columns;
+    columns.reserve(kNumTables);
+    for (int j = 0; j < kNumTables; ++j) {
+      columns.push_back(fmt::format("t{}c{}", i, j));
+    }
+    // std::cout << "Table t" << i << " schema: ";
+    // for (const auto& col : columns) {
+    //   std::cout << col << " ";
+    // }
+    // std::cout << "\n";
+    testConnector_->addTable(
+        fmt::format("t{}", i), ROW(std::move(columns), BIGINT()));
+  }
+
+  static constexpr std::array kJoinOptions = {
+      JoinOptions{
+          .numJoins = kIsDebug ? 150 : 200,
+          .joinOrder = JoinOrder::kSyntactic,
+      },
+      JoinOptions{
+          .numJoins = kIsDebug ? 150 : 200,
+          .joinOrder = JoinOrder::kGreedy,
+      },
+      JoinOptions{
+          .numJoins = kIsDebug ? 14 : 18,
+      },
+      JoinOptions{
+          .numJoins = kIsDebug ? 14 : 18,
+          .sample = true,
+      },
+      JoinOptions{
+          .numJoins = kIsDebug ? 14 : 18,
+          .sample = true,
+          .reducingExistences = true,
+      },
+  };
+
+  auto optimizerOptionsOld = optimizerOptions_;
+  SCOPE_EXIT {
+    optimizerOptions_ = optimizerOptionsOld;
+  };
+  for (const auto& joinOptions : kJoinOptions) {
+    ASSERT_GT(kNumTables, joinOptions.numJoins)
+        << "Not enough tables for the test";
+    lp::PlanBuilder::Context context(kTestConnectorId);
+    std::vector<lp::PlanBuilder> planBuilders;
+    planBuilders.emplace_back(lp::PlanBuilder(context).tableScan("t0"));
+    for (int i = 1; i <= joinOptions.numJoins; ++i) {
+      planBuilders.emplace_back(planBuilders.back().join(
+          lp::PlanBuilder(context).tableScan(fmt::format("t{}", i)),
+          fmt::format("t{}c{} = t{}c{}", i - 1, i - 1, i, i - 1),
+          lp::JoinType::kInner));
+    }
+    planBuilders.back().project({"t0c0"});
+    const auto logicalPlan = planBuilders.back().build();
+    // std::cout << "Logical:\n" << logicalPlan->toString()  << std::endl;
+
+    optimizerOptions_.sampleFilters = joinOptions.sample;
+    optimizerOptions_.sampleJoins = joinOptions.sample;
+    optimizerOptions_.joinOrder = joinOptions.joinOrder;
+    optimizerOptions_.enableReducingExistences = joinOptions.reducingExistences;
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto plan = toSingleNodePlan(logicalPlan);
+    const auto end = std::chrono::steady_clock::now();
+    const auto duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+            .count();
+    std::cout << "Linear join chain optimized in " << duration << " ms"
+              << " (options: "
+              << "numJoins=" << joinOptions.numJoins << ", "
+              << "joinOrder=" << toString(joinOptions.joinOrder) << ", "
+              << "reducingExistences=" << joinOptions.reducingExistences << ", "
+              << "sample=" << joinOptions.sample << ")" << std::endl;
+    // std::cout << "\nExecution:\n" << plan->toString(true, true) << std::endl;
+  }
+}
+
+// TODO Move this test into its own file.
+TEST_F(JoinTest, perfJoinStar) {
+  for (int i = 0; i < kNumTables; ++i) {
+    std::vector<std::string> columns;
+    columns.reserve(kNumTables);
+    for (int j = 0; j < kNumTables; ++j) {
+      columns.push_back(fmt::format("t{}c{}", i, j));
+    }
+    // std::cout << "Table t" << i << " schema: ";
+    // for (const auto& col : columns) {
+    //   std::cout << col << " ";
+    // }
+    // std::cout << "\n";
+    testConnector_->addTable(
+        fmt::format("t{}", i), ROW(std::move(columns), BIGINT()));
+  }
+
+  static constexpr std::array kJoinOptions = {
+      JoinOptions{
+          .numJoins = kIsDebug ? 150 : 200,
+          .joinOrder = JoinOrder::kSyntactic,
+      },
+      JoinOptions{
+          .numJoins = kIsDebug ? 150 : 200,
+          .joinOrder = JoinOrder::kGreedy,
+      },
+      JoinOptions{
+          .numJoins = kIsDebug ? 8 : 9,
+      },
+      JoinOptions{
+          .numJoins = kIsDebug ? 8 : 9,
+          .sample = true,
+      },
+      JoinOptions{
+          .numJoins = kIsDebug ? 8 : 9,
+          .sample = true,
+          .reducingExistences = true,
+      },
+  };
+
+  auto optimizerOptionsOld = optimizerOptions_;
+  SCOPE_EXIT {
+    optimizerOptions_ = optimizerOptionsOld;
+  };
+  for (const auto& joinOptions : kJoinOptions) {
+    ASSERT_GT(kNumTables, joinOptions.numJoins)
+        << "Not enough tables for the test";
+    lp::PlanBuilder::Context context(kTestConnectorId);
+    std::vector<lp::PlanBuilder> planBuilders;
+    planBuilders.emplace_back(lp::PlanBuilder(context).tableScan("t0"));
+    for (int i = 1; i <= joinOptions.numJoins; ++i) {
+      planBuilders.emplace_back(planBuilders.back().join(
+          lp::PlanBuilder(context).tableScan(fmt::format("t{}", i)),
+          fmt::format("t{}c{} = t{}c{}", 0, i, i, i),
+          lp::JoinType::kInner));
+    }
+    planBuilders.back().project({"t0c0"});
+    const auto logicalPlan = planBuilders.back().build();
+    // std::cout << "Logical:\n" << logicalPlan->toString()  << std::endl;
+
+    optimizerOptions_.sampleFilters = joinOptions.sample;
+    optimizerOptions_.sampleJoins = joinOptions.sample;
+    optimizerOptions_.joinOrder = joinOptions.joinOrder;
+    optimizerOptions_.enableReducingExistences = joinOptions.reducingExistences;
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto plan = toSingleNodePlan(logicalPlan);
+    const auto end = std::chrono::steady_clock::now();
+    const auto duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+            .count();
+    std::cout << "Star join optimized in " << duration << " ms"
+              << " (options: "
+              << "numJoins=" << joinOptions.numJoins << ", "
+              << "joinOrder=" << toString(joinOptions.joinOrder) << ", "
+              << "reducingExistences=" << joinOptions.reducingExistences << ", "
+              << "sample=" << joinOptions.sample << ")" << std::endl;
+    // std::cout << "\nExecution:\n" << plan->toString(true, true) << std::endl;
+  }
+}
+
+// TODO Move this test into its own file.
+TEST_F(JoinTest, perfJoinClique) {
+  for (size_t i = 0; i < kNumTables; ++i) {
+    std::vector<std::string> columns;
+    columns.push_back(fmt::format("c{}", i));
+    // std::cout << "Table t" << i << " schema: ";
+    // for (const auto& col : columns) {
+    //   std::cout << col << " ";
+    // }
+    // std::cout << "\n";
+    testConnector_->addTable(
+        fmt::format("t{}", i), ROW(std::move(columns), BIGINT()));
+  }
+
+  static constexpr std::array kJoinOptions = {
+      JoinOptions{
+          .numJoins = kIsDebug ? 130 : 260,
+          .joinOrder = JoinOrder::kSyntactic,
+      },
+      JoinOptions{
+          .numJoins = kIsDebug ? 29 : 43,
+          .joinOrder = JoinOrder::kGreedy,
+      },
+      JoinOptions{
+          .numJoins = kIsDebug ? 5 : 6,
+      },
+      JoinOptions{
+          .numJoins = kIsDebug ? 5 : 6,
+          .sample = true,
+      },
+      JoinOptions{
+          .numJoins = kIsDebug ? 5 : 6,
+          .sample = true,
+          .reducingExistences = true,
+      },
+  };
+
+  auto optimizerOptionsOld = optimizerOptions_;
+  SCOPE_EXIT {
+    optimizerOptions_ = optimizerOptionsOld;
+  };
+  for (const auto& joinOptions : kJoinOptions) {
+    ASSERT_GT(kNumTables, joinOptions.numJoins)
+        << "Not enough tables for the test";
+    lp::PlanBuilder::Context context(kTestConnectorId);
+    std::vector<lp::PlanBuilder> planBuilders;
+    planBuilders.emplace_back(lp::PlanBuilder(context).tableScan("t0"));
+    for (int i = 1; i <= joinOptions.numJoins; ++i) {
+      planBuilders.emplace_back(planBuilders.back().join(
+          lp::PlanBuilder(context).tableScan(fmt::format("t{}", i)),
+          fmt::format("c{} = c{}", i - 1, i),
+          lp::JoinType::kInner));
+    }
+    planBuilders.back().project({"c0"});
+    const auto logicalPlan = planBuilders.back().build();
+    // std::cout << "Logical:\n" << logicalPlan->toString()  << std::endl;
+
+    optimizerOptions_.sampleFilters = joinOptions.sample;
+    optimizerOptions_.sampleJoins = joinOptions.sample;
+    optimizerOptions_.joinOrder = joinOptions.joinOrder;
+    optimizerOptions_.enableReducingExistences = joinOptions.reducingExistences;
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto plan = toSingleNodePlan(logicalPlan);
+    const auto end = std::chrono::steady_clock::now();
+    const auto duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+            .count();
+    std::cout << "Linear join clique optimized in " << duration << " ms"
+              << " (options: "
+              << "numJoins=" << joinOptions.numJoins << ", "
+              << "joinOrder=" << toString(joinOptions.joinOrder) << ", "
+              << "reducingExistences=" << joinOptions.reducingExistences << ", "
+              << "sample=" << joinOptions.sample << ")" << std::endl;
+    // std::cout << "\nExecution:\n" << plan->toString(true, true) << std::endl;
+  }
+}
+
 TEST_F(JoinTest, pushdownFilterThroughJoin) {
   testConnector_->addTable("t", ROW({"t_id", "t_data"}, BIGINT()));
   testConnector_->addTable("u", ROW({"u_id", "u_data"}, BIGINT()));
@@ -144,13 +398,14 @@ TEST_F(JoinTest, pushdownFilterThroughJoin) {
     SCOPED_TRACE("Right Join");
     auto logicalPlan = makePlan(lp::JoinType::kRight);
     auto matcher = core::PlanMatcherBuilder{}
-                       .tableScan("u")
-                       .filter("u_data IS NULL")
+                       .tableScan("t")
                        .hashJoin(
-                           core::PlanMatcherBuilder{}.tableScan("t").build(),
-                           core::JoinType::kLeft)
+                           core::PlanMatcherBuilder{}
+                               .tableScan("u")
+                               .filter("u_data IS NULL")
+                               .build(),
+                           core::JoinType::kRight)
                        .filter("t_data IS NULL")
-                       .project()
                        .build();
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -529,8 +784,6 @@ TEST_F(JoinTest, leftCrossJoin) {
             .nestedLoopJoin(
                 core::PlanMatcherBuilder().tableScan("u").aggregation().build(),
                 core::JoinType::kLeft)
-            // TODO Remove redundant projection.
-            .project()
             .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
@@ -549,7 +802,6 @@ TEST_F(JoinTest, leftCrossJoin) {
             .nestedLoopJoin(
                 core::PlanMatcherBuilder().tableScan("u").aggregation().build(),
                 core::JoinType::kLeft)
-            .project()
             .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
