@@ -253,3 +253,10 @@ inline auto gt(const std::string& name, const std::string& value) {
     ASSERT_TRUE((matcher)->match(_axiom_plan_)) \
         << _axiom_plan_->toString(true, true);  \
   }
+
+#define AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher) \
+  {                                                  \
+    auto _axiom_plan_ = (plan);                      \
+    ASSERT_TRUE((matcher)->match(*_axiom_plan_))     \
+        << _axiom_plan_->toString(true);             \
+  }

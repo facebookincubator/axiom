@@ -73,20 +73,16 @@ TEST_F(HiveLimitQueriesTest, limit) {
     SCOPED_TRACE("numWorkers: 4, numDrivers: 4");
     auto distributedPlan =
         planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
-    const auto& fragments = distributedPlan.plan->fragments();
-    ASSERT_EQ(2, fragments.size());
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
                        .partialLimit(0, 10)
                        .localPartition()
                        .finalLimit(0, 10)
-                       .partitionedOutput()
+                       .shuffle()
+                       .finalLimit(0, 10)
                        .build();
-    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
-
-    matcher = core::PlanMatcherBuilder().exchange().finalLimit(0, 10).build();
-    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
 
     checkResults(distributedPlan, referenceResults);
   }
@@ -140,20 +136,16 @@ TEST_F(HiveLimitQueriesTest, offset) {
     SCOPED_TRACE("numWorkers: 4, numDrivers: 4");
     auto distributedPlan =
         planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
-    const auto& fragments = distributedPlan.plan->fragments();
-    ASSERT_EQ(2, fragments.size());
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
                        .partialLimit(0, 15)
                        .localPartition()
                        .finalLimit(0, 15)
-                       .partitionedOutput()
+                       .shuffle()
+                       .finalLimit(5, 10)
                        .build();
-    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
-
-    matcher = core::PlanMatcherBuilder().exchange().finalLimit(5, 10).build();
-    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
 
     checkResults(distributedPlan, referenceResults);
   }
@@ -249,20 +241,15 @@ TEST_F(HiveLimitQueriesTest, orderByLimit) {
     SCOPED_TRACE("numWorkers: 4, numDrivers: 4");
     auto distributedPlan =
         planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
-    const auto& fragments = distributedPlan.plan->fragments();
-    ASSERT_EQ(2, fragments.size());
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
                        .topN(10)
                        .localMerge()
-                       .partitionedOutput()
+                       .shuffleMerge()
+                       .finalLimit(0, 10)
                        .build();
-    ASSERT_TRUE(matcher->match(fragments.at(0).fragment.planNode));
-
-    matcher =
-        core::PlanMatcherBuilder().mergeExchange().finalLimit(0, 10).build();
-    ASSERT_TRUE(matcher->match(fragments.at(1).fragment.planNode));
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
 
     checkResults(distributedPlan, referenceResults);
   }
