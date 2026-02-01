@@ -431,7 +431,7 @@ TEST_F(WriteTest, insertSql) {
       }));
 }
 
-TEST_F(WriteTest, createTableAsSelectSql) {
+TEST_F(WriteTest, ctasSql) {
   {
     SCOPE_EXIT {
       hiveMetadata().dropTableIfExists("test");
@@ -482,7 +482,7 @@ TEST_F(WriteTest, createTableAsSelectSql) {
   }
 }
 
-TEST_F(WriteTest, createTableAsSelectPartitionedSql) {
+TEST_F(WriteTest, ctasPartitionedSql) {
   SCOPE_EXIT {
     hiveMetadata().dropTableIfExists("test");
   };
@@ -538,131 +538,112 @@ void verifyCollocatedWrite(const runner::MultiFragmentPlan& plan) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(&plan, matcher);
 }
 
-TEST_F(WriteTest, createTableAsSelectBucketedSql) {
-  {
-    SCOPE_EXIT {
-      for (const auto& name : {"test", "test2", "test3", "test4"}) {
-        hiveMetadata().dropTableIfExists(name);
-      }
-    };
+TEST_F(WriteTest, ctasBucketedSql) {
+  SCOPE_EXIT {
+    for (const auto& name : {"test", "more", "same", "fewer"}) {
+      hiveMetadata().dropTableIfExists(name);
+    }
+  };
 
-    // Set partitioned output buffer size very small (1 bytes) to ensure it
-    // produces as many batches as possible.
-    config_.emplace(
-        velox::core::QueryConfig::kMaxPartitionedOutputBufferSize, "1");
+  runCtas(
+      "CREATE TABLE test WITH (bucket_count = 8, bucketed_by = ARRAY['key']) AS "
+      "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber FROM lineitem",
+      600'572,
+      verifyPartitionedWrite);
 
-    runCtas(
-        "CREATE TABLE test WITH (bucket_count = 8, bucketed_by = ARRAY['key']) AS "
-        "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber FROM lineitem",
-        600'572,
-        verifyPartitionedWrite);
+  verifyPartitionedLayout(getLayout("test"), "key", 8);
 
-    verifyPartitionedLayout(getLayout("test"), "key", 8);
+  // Copy bucketed table with a larger bucket_count. Expect no shuffle.
+  runCtas(
+      "CREATE TABLE more WITH (bucket_count = 16, bucketed_by = ARRAY['key']) AS "
+      "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
+      600'572,
+      verifyCollocatedWrite);
 
-    // Copy bucketed table with a larger bucket_count. Expect no shuffle.
-    runCtas(
-        "CREATE TABLE test3 WITH (bucket_count = 16, bucketed_by = ARRAY['key']) AS "
-        "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
-        600'572,
-        verifyCollocatedWrite);
+  verifyPartitionedLayout(getLayout("more"), "key", 16);
 
-    verifyPartitionedLayout(getLayout("test3"), "key", 16);
+  // Copy bucketed table with same bucket_count. Expect no shuffle.
+  runCtas(
+      "CREATE TABLE same WITH (bucket_count = 8, bucketed_by = ARRAY['key']) AS "
+      "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
+      600'572,
+      verifyCollocatedWrite);
 
-    // Copy bucketed table with same bucket_count. Expect no shuffle.
-    runCtas(
-        "CREATE TABLE test2 WITH (bucket_count = 8, bucketed_by = ARRAY['key']) AS "
-        "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
-        600'572,
-        verifyCollocatedWrite);
+  verifyPartitionedLayout(getLayout("same"), "key", 8);
 
-    verifyPartitionedLayout(getLayout("test2"), "key", 8);
+  // Copy bucketed table with a smaller bucket_count. Expect shuffle.
+  runCtas(
+      "CREATE TABLE fewer WITH (bucket_count = 2, bucketed_by = ARRAY['key']) AS "
+      "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
+      600'572,
+      verifyPartitionedWrite);
 
-    // Copy bucketed table with a larger bucket_count. Expect no shuffle.
-    runCtas(
-        "CREATE TABLE test3 WITH (bucket_count = 16, bucketed_by = ARRAY['key']) AS "
-        "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
-        600'572,
-        verifyCollocatedWrite);
+  verifyPartitionedLayout(getLayout("fewer"), "key", 2);
+}
 
-    verifyPartitionedLayout(getLayout("test3"), "key", 16);
+TEST_F(WriteTest, ctasBucketedSingleNode) {
+  SCOPE_EXIT {
+    hiveMetadata().dropTableIfExists("test");
+  };
 
-    // Copy bucketed table a smaller bucket_count. Expect shuffle.
-    runCtas(
-        "CREATE TABLE test4 WITH (bucket_count = 2, bucketed_by = ARRAY['key']) AS "
-        "SELECT key, l_orderkey, l_linenumber + 1 as x FROM test",
-        600'572,
-        verifyPartitionedWrite);
+  runCtas(
+      "CREATE TABLE test WITH (bucket_count = 128, bucketed_by = ARRAY['key']) AS "
+      "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber FROM lineitem",
+      600'572,
+      [](const auto& plan) {
+        const auto& fragments = plan.fragments();
+        ASSERT_EQ(1, fragments.size());
 
-    verifyPartitionedLayout(getLayout("test4"), "key", 2);
-  }
+        auto matcher = core::PlanMatcherBuilder()
+                           .tableScan()
+                           .project()
+                           .localPartition()
+                           .tableWrite()
+                           .build();
+        AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
+      },
+      {.numWorkers = 1, .numDrivers = 3});
 
-  // Single-node execution.
-  {
-    SCOPE_EXIT {
-      hiveMetadata().dropTableIfExists("test");
-    };
+  verifyPartitionedLayout(getLayout("test"), "key", 128);
+}
 
-    runCtas(
-        "CREATE TABLE test WITH (bucket_count = 128, bucketed_by = ARRAY['key']) AS "
-        "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber FROM lineitem",
-        600'572,
-        [](const auto& plan) {
-          const auto& fragments = plan.fragments();
-          ASSERT_EQ(1, fragments.size());
+TEST_F(WriteTest, ctasBucketedSingleThreaded) {
+  SCOPE_EXIT {
+    hiveMetadata().dropTableIfExists("test");
+  };
 
-          auto matcher = core::PlanMatcherBuilder()
-                             .tableScan()
-                             .project()
-                             .localPartition()
-                             .tableWrite()
-                             .build();
-          AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
-        },
-        {.numWorkers = 1, .numDrivers = 3});
+  runCtas(
+      "CREATE TABLE test WITH (bucket_count = 64, bucketed_by = ARRAY['key']) AS "
+      "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber FROM lineitem",
+      600'572,
+      [](const auto& plan) {
+        const auto& fragments = plan.fragments();
+        ASSERT_EQ(1, fragments.size());
 
-    verifyPartitionedLayout(getLayout("test"), "key", 128);
-  }
+        auto matcher = core::PlanMatcherBuilder()
+                           .tableScan()
+                           .project()
+                           .tableWrite()
+                           .build();
+        AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
+      },
+      {.numWorkers = 1, .numDrivers = 1});
 
-  // Single-threaded execution.
-  {
-    SCOPE_EXIT {
-      hiveMetadata().dropTableIfExists("test");
-    };
+  verifyPartitionedLayout(getLayout("test"), "key", 64);
+}
 
-    runCtas(
-        "CREATE TABLE test WITH (bucket_count = 64, bucketed_by = ARRAY['key']) AS "
-        "SELECT rand() as key, l_orderkey, l_partkey, l_linenumber FROM lineitem",
-        600'572,
-        [](const auto& plan) {
-          const auto& fragments = plan.fragments();
-          ASSERT_EQ(1, fragments.size());
+TEST_F(WriteTest, ctasBucketedAndSorted) {
+  SCOPE_EXIT {
+    hiveMetadata().dropTableIfExists("test");
+  };
 
-          auto matcher = core::PlanMatcherBuilder()
-                             .tableScan()
-                             .project()
-                             .tableWrite()
-                             .build();
-          AXIOM_ASSERT_PLAN(nodeAt(plan, 0), matcher);
-        },
-        {.numWorkers = 1, .numDrivers = 1});
+  runCtas(
+      "CREATE TABLE test WITH (bucket_count = 16, bucketed_by = ARRAY['n_nationkey'], sorted_by = ARRAY['n_name']) AS "
+      "SELECT n_nationkey, n_name, 'bar' as y FROM nation",
+      25,
+      verifyPartitionedWrite);
 
-    verifyPartitionedLayout(getLayout("test"), "key", 64);
-  }
-
-  // Bucketed and sorted.
-  {
-    SCOPE_EXIT {
-      hiveMetadata().dropTableIfExists("test");
-    };
-
-    runCtas(
-        "CREATE TABLE test WITH (bucket_count = 16, bucketed_by = ARRAY['n_nationkey'], sorted_by = ARRAY['n_name']) AS "
-        "SELECT n_nationkey, n_name, 'bar' as y FROM nation",
-        25,
-        verifyPartitionedWrite);
-
-    verifyPartitionedLayout(getLayout("test"), "n_nationkey", 16, "n_name");
-  }
+  verifyPartitionedLayout(getLayout("test"), "n_nationkey", 16, "n_name");
 }
 
 } // namespace
