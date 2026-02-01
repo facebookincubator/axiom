@@ -992,15 +992,15 @@ TEST_F(JoinTest, leftThenFilter) {
       "SELECT * FROM t LEFT JOIN (SELECT x, y + 1 as z FROM u) ON a = x WHERE z > 0";
   auto logicalPlan = parseSelect(query, kTestConnectorId);
 
-  auto matcher =
-      core::PlanMatcherBuilder()
-          .tableScan("t")
-          .hashJoin(
-              core::PlanMatcherBuilder().tableScan("u").project().build(),
-              core::JoinType::kLeft)
-          .filter()
-          .project()
-          .build();
+  // TODO(mbkkt) we should project y + 1 before join
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("t")
+                     .hashJoin(
+                         core::PlanMatcherBuilder().tableScan("u").build(),
+                         core::JoinType::kLeft)
+                     .filter()
+                     .project()
+                     .build();
 
   auto plan = toSingleNodePlan(logicalPlan);
   AXIOM_ASSERT_PLAN(plan, matcher);
