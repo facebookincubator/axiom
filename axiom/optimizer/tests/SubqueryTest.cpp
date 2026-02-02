@@ -560,5 +560,62 @@ TEST_F(SubqueryTest, uncorrelatedExists) {
   }
 }
 
+TEST_F(SubqueryTest, unnest) {
+  testConnector_->addTable("t", ROW({"a"}, ARRAY(BIGINT())));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+  testConnector_->addTable("v", ROW({"n", "m"}, BIGINT()));
+
+  {
+    auto query =
+        "select * from t, unnest(a) as v(n) where n in (SELECT x FROM u) ";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .unnest()
+            .hashJoin(core::PlanMatcherBuilder().tableScan("u").build())
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto query =
+        "select * from t, unnest(a) as v(n) where EXISTS (SELECT * FROM u WHERE x = n) ";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("t")
+            .unnest()
+            .hashJoin(core::PlanMatcherBuilder().tableScan("u").build())
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto query =
+        "select (SELECT sum(y) FROM u WHERE x = n) from t, unnest(a) as v(n)";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("u")
+            .aggregation()
+            .project()
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("t").unnest().build(),
+                core::JoinType::kRight)
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
