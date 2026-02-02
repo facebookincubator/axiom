@@ -16,7 +16,10 @@
 
 #include "axiom/sql/presto/ast/AstBuilder.h"
 
+#include <cctype>
+
 #include "velox/common/base/Exceptions.h"
+#include "velox/external/utf8proc/utf8procImpl.h"
 
 namespace axiom::sql::presto {
 
@@ -49,6 +52,101 @@ NodeLocation getLocation(antlr4::tree::TerminalNode* terminalNode) {
 // Remove leading and trailing quotes.
 std::string unquote(std::string_view value) {
   return std::string{value.substr(1, value.length() - 2)};
+}
+
+void appendCodePoint(std::string& result, uint32_t codePoint) {
+  utf8proc_uint8_t utf8Bytes[4];
+  const auto bytesWritten =
+      utf8proc_encode_char(static_cast<int32_t>(codePoint), utf8Bytes);
+  result.append(reinterpret_cast<const char*>(utf8Bytes), bytesWritten);
+}
+
+uint32_t parseHexEscape(std::string_view content, size_t pos, size_t hexLen) {
+  const size_t remaining = content.size() - pos;
+  const std::string partial(content.substr(pos, std::min(remaining, hexLen)));
+
+  VELOX_USER_CHECK(
+      remaining >= hexLen, "Incomplete escape sequence: {}", partial);
+
+  for (const char h : partial) {
+    VELOX_USER_CHECK(
+        std::isxdigit(static_cast<unsigned char>(h)),
+        "Invalid hexadecimal digit: {}",
+        h);
+  }
+
+  const auto codePoint = std::stoul(partial, nullptr, 16);
+
+  if (hexLen == 6) {
+    VELOX_USER_CHECK(
+        codePoint <= 0x10FFFF, "Invalid escaped character: {}", partial);
+  }
+
+  VELOX_USER_CHECK(
+      codePoint < 0xD800 || codePoint > 0xDFFF,
+      "Invalid escaped character: {}. Escaped character is a surrogate. "
+      "Use '\\+123456' instead.",
+      partial);
+
+  return static_cast<uint32_t>(codePoint);
+}
+
+std::string decodeUnicodeLiteral(
+    std::string_view token,
+    const std::optional<std::string>& escapeString) {
+  const size_t start = token.find('\'');
+  VELOX_USER_CHECK(start != std::string_view::npos, "Invalid unicode literal");
+  const size_t end = token.rfind('\'');
+  VELOX_USER_CHECK(end > start, "Invalid unicode literal");
+  const std::string_view content = token.substr(start + 1, end - start - 1);
+
+  char escape = '\\';
+  if (escapeString.has_value()) {
+    VELOX_USER_CHECK(!escapeString->empty(), "Empty Unicode escape character");
+    VELOX_USER_CHECK(
+        escapeString->size() == 1,
+        "Invalid Unicode escape character: {}",
+        *escapeString);
+    escape = (*escapeString)[0];
+    VELOX_USER_CHECK(
+        escape < 0x7F && escape > 0x20 &&
+            !std::isxdigit(static_cast<unsigned char>(escape)) &&
+            escape != '"' && escape != '+' && escape != '\'',
+        "Invalid Unicode escape character: {}",
+        *escapeString);
+  }
+
+  std::string result;
+  result.reserve(content.size());
+
+  size_t i = 0;
+  while (i < content.size()) {
+    const char c = content[i];
+
+    if (c == escape && i + 1 < content.size() && content[i + 1] == escape) {
+      result.push_back(escape);
+      i += 2;
+      continue;
+    }
+
+    if (c != escape) {
+      result.push_back(c);
+      ++i;
+      continue;
+    }
+
+    if (i + 1 < content.size() && content[i + 1] == '+') {
+      const auto codePoint = parseHexEscape(content, i + 2, 6);
+      appendCodePoint(result, codePoint);
+      i += 8;
+    } else {
+      const auto codePoint = parseHexEscape(content, i + 1, 4);
+      appendCodePoint(result, codePoint);
+      i += 5;
+    }
+  }
+
+  return result;
 }
 
 } // namespace
@@ -1900,7 +1998,17 @@ std::any AstBuilder::visitBasicStringLiteral(
 std::any AstBuilder::visitUnicodeStringLiteral(
     PrestoSqlParser::UnicodeStringLiteralContext* ctx) {
   trace("visitUnicodeStringLiteral");
-  return visitChildren("visitUnicodeStringLiteral", ctx);
+
+  std::optional<std::string> escapeString;
+  if (ctx->UESCAPE() != nullptr && ctx->STRING() != nullptr) {
+    escapeString = unquote(ctx->STRING()->getText());
+  }
+
+  std::string result =
+      decodeUnicodeLiteral(ctx->UNICODE_STRING()->getText(), escapeString);
+
+  return std::static_pointer_cast<Expression>(
+      std::make_shared<StringLiteral>(getLocation(ctx), result));
 }
 
 std::any AstBuilder::visitNullTreatment(

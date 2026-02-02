@@ -1826,5 +1826,57 @@ TEST_F(PrestoParserTest, createTableAndInsert) {
   ASSERT_EQ(lp::WriteKind::kInsert, insertWrite->writeKind());
 }
 
+TEST_F(PrestoParserTest, unicodeStringLiteral) {
+  auto parser = makeParser();
+
+  {
+    auto statement = parser.parse("SELECT U&'\\0041'");
+    ASSERT_TRUE(statement->isSelect());
+  }
+
+  {
+    auto statement = parser.parse("SELECT U&'\\+01F600'");
+    ASSERT_TRUE(statement->isSelect());
+  }
+
+  {
+    auto statement = parser.parse("SELECT U&'hello\\0020world'");
+    ASSERT_TRUE(statement->isSelect());
+  }
+
+  {
+    auto statement = parser.parse("SELECT U&'hello!0041' UESCAPE '!'");
+    ASSERT_TRUE(statement->isSelect());
+  }
+
+  {
+    auto statement = parser.parse("SELECT U&'path\\\\file'");
+    ASSERT_TRUE(statement->isSelect());
+  }
+
+  {
+    auto statement = parser.parse("SELECT U&'line1\\000Aline2'");
+    ASSERT_TRUE(statement->isSelect());
+  }
+
+  VELOX_ASSERT_THROW(
+      parser.parse("SELECT U&'\\004'"), "Incomplete escape sequence");
+
+  VELOX_ASSERT_THROW(
+      parser.parse("SELECT U&'\\GHIJ'"), "Invalid hexadecimal digit");
+
+  VELOX_ASSERT_THROW(
+      parser.parse("SELECT U&'\\D800'"), "Escaped character is a surrogate");
+
+  VELOX_ASSERT_THROW(
+      parser.parse("SELECT U&'test' UESCAPE ''"), "Empty Unicode escape");
+
+  VELOX_ASSERT_THROW(
+      parser.parse("SELECT U&'test' UESCAPE 'ab'"), "Invalid Unicode escape");
+
+  VELOX_ASSERT_THROW(
+      parser.parse("SELECT U&'test' UESCAPE 'A'"), "Invalid Unicode escape");
+}
+
 } // namespace
 } // namespace axiom::sql::presto
