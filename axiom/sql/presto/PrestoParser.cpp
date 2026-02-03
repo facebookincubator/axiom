@@ -31,7 +31,6 @@
 #include "velox/exec/WindowFunction.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
-#include "velox/type/parser/ParserUtil.h"
 
 namespace axiom::sql::presto {
 namespace {
@@ -272,6 +271,70 @@ std::pair<std::string, std::string> toConnectorTable(
   // connector.schema.name
   VELOX_CHECK_EQ(3, parts.size());
   return {parts[0], fmt::format("{}.{}", parts[1], tableName)};
+}
+
+int32_t parseInt(const TypeSignaturePtr& type) {
+  VELOX_USER_CHECK_EQ(type->parameters().size(), 0);
+  const auto& str = type->baseName();
+  try {
+    return folly::to<int32_t>(str);
+  } catch (const folly::ConversionError&) {
+    VELOX_USER_FAIL("'{}' could not be converted to INTEGER_LITERAL", str);
+  }
+}
+
+TypePtr parseType(const TypeSignaturePtr& type) {
+  auto baseName = type->baseName();
+  std::transform(
+      baseName.begin(), baseName.end(), baseName.begin(), [](char c) {
+        return (std::toupper(c));
+      });
+
+  if (baseName == "INT") {
+    baseName = "INTEGER";
+  }
+
+  std::vector<TypeParameter> parameters;
+  if (!type->parameters().empty()) {
+    const auto numParams = type->parameters().size();
+    parameters.reserve(numParams);
+
+    if (baseName == "ARRAY") {
+      VELOX_USER_CHECK_EQ(1, numParams);
+      parameters.emplace_back(parseType(type->parameters().at(0)));
+    } else if (baseName == "MAP") {
+      VELOX_USER_CHECK_EQ(2, numParams);
+      parameters.emplace_back(parseType(type->parameters().at(0)));
+      parameters.emplace_back(parseType(type->parameters().at(1)));
+    } else if (baseName == "ROW") {
+      for (const auto& param : type->parameters()) {
+        auto fieldName = param->rowFieldName();
+
+        // TODO Extend Velox's RowType to support quoted / delimited field
+        // names.
+        if (fieldName.has_value()) {
+          if (fieldName->starts_with('\"') && fieldName->ends_with('\"') &&
+              fieldName->size() >= 2) {
+            fieldName = fieldName->substr(1, fieldName->size() - 2);
+          }
+        }
+
+        parameters.emplace_back(parseType(param), fieldName);
+      }
+    } else if (baseName == "DECIMAL") {
+      VELOX_USER_CHECK_EQ(2, numParams);
+      parameters.emplace_back(parseInt(type->parameters().at(0)));
+      parameters.emplace_back(parseInt(type->parameters().at(1)));
+
+    } else {
+      VELOX_USER_FAIL("Unknown parametric type: {}", baseName);
+    }
+  }
+
+  auto veloxType = getType(baseName, parameters);
+
+  VELOX_CHECK_NOT_NULL(veloxType, "Cannot resolve type: {}", baseName);
+  return veloxType;
 }
 
 class RelationPlanner : public AstVisitor {
@@ -890,65 +953,6 @@ class RelationPlanner : public AstVisitor {
         value,
         precision,
         LongDecimalType::kMaxPrecision);
-  }
-
-  static int32_t parseInt(const TypeSignaturePtr& type) {
-    VELOX_USER_CHECK_EQ(type->parameters().size(), 0);
-    return atoi(type->baseName().c_str());
-  }
-
-  static TypePtr parseType(const TypeSignaturePtr& type) {
-    auto baseName = type->baseName();
-    std::transform(
-        baseName.begin(), baseName.end(), baseName.begin(), [](char c) {
-          return (std::toupper(c));
-        });
-
-    if (baseName == "INT") {
-      baseName = "INTEGER";
-    }
-
-    std::vector<TypeParameter> parameters;
-    if (!type->parameters().empty()) {
-      const auto numParams = type->parameters().size();
-      parameters.reserve(numParams);
-
-      if (baseName == "ARRAY") {
-        VELOX_USER_CHECK_EQ(1, numParams);
-        parameters.emplace_back(parseType(type->parameters().at(0)));
-      } else if (baseName == "MAP") {
-        VELOX_USER_CHECK_EQ(2, numParams);
-        parameters.emplace_back(parseType(type->parameters().at(0)));
-        parameters.emplace_back(parseType(type->parameters().at(1)));
-      } else if (baseName == "ROW") {
-        for (const auto& param : type->parameters()) {
-          auto fieldName = param->rowFieldName();
-
-          // TODO Extend Velox's RowType to support quoted / delimited field
-          // names.
-          if (fieldName.has_value()) {
-            if (fieldName->starts_with('\"') && fieldName->ends_with('\"') &&
-                fieldName->size() >= 2) {
-              fieldName = fieldName->substr(1, fieldName->size() - 2);
-            }
-          }
-
-          parameters.emplace_back(parseType(param), fieldName);
-        }
-      } else if (baseName == "DECIMAL") {
-        VELOX_USER_CHECK_EQ(2, numParams);
-        parameters.emplace_back(parseInt(type->parameters().at(0)));
-        parameters.emplace_back(parseInt(type->parameters().at(1)));
-
-      } else {
-        VELOX_USER_FAIL("Unknown parametric type: {}", baseName);
-      }
-    }
-
-    auto veloxType = getType(baseName, parameters);
-
-    VELOX_CHECK_NOT_NULL(veloxType, "Cannot resolve type: {}", baseName);
-    return veloxType;
   }
 
   void addFilter(const ExpressionPtr& filter) {
@@ -2155,9 +2159,11 @@ SqlStatementPtr parseCreateTable(
         auto* columnDef = element->as<ColumnDefinition>();
         names.push_back(columnDef->name()->value());
 
-        auto type = typeFromString(columnDef->columnType());
+        auto type = parseType(columnDef->columnType());
         VELOX_USER_CHECK_NOT_NULL(
-            type, "Unknown type specifier: {}", columnDef->columnType());
+            type,
+            "Unknown type specifier: {}",
+            columnDef->columnType()->baseName());
         types.push_back(type);
         break;
       }

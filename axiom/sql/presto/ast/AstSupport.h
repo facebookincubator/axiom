@@ -481,13 +481,13 @@ class ColumnDefinition : public TableElement {
   ColumnDefinition(
       NodeLocation location,
       const std::shared_ptr<Identifier>& name,
-      const std::string& columnType,
+      TypeSignaturePtr columnType,
       bool nullable,
       const std::vector<std::shared_ptr<Property>>& properties,
       std::optional<std::string> comment = std::nullopt)
       : TableElement(NodeType::kColumnDefinition, location),
         name_(name),
-        columnType_(columnType),
+        columnType_(std::move(columnType)),
         nullable_(nullable),
         properties_(properties),
         comment_(std::move(comment)) {}
@@ -496,7 +496,7 @@ class ColumnDefinition : public TableElement {
     return name_;
   }
 
-  const std::string& columnType() const {
+  const TypeSignaturePtr& columnType() const {
     return columnType_;
   }
 
@@ -516,7 +516,7 @@ class ColumnDefinition : public TableElement {
 
  private:
   std::shared_ptr<Identifier> name_;
-  std::string columnType_;
+  TypeSignaturePtr columnType_;
   bool nullable_;
   std::vector<std::shared_ptr<Property>> properties_;
   std::optional<std::string> comment_;
