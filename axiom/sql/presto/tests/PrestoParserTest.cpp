@@ -469,6 +469,11 @@ TEST_F(PrestoParserTest, syntaxErrors) {
       [&]() { parser.parse("SELECT * FROM (VALUES 1, 2, 3)) blah..."); },
       ThrowsMessage<axiom::sql::presto::PrestoParseError>(::testing::HasSubstr(
           "Syntax error at 1:30: mismatched input ')' expecting <EOF>")));
+
+  EXPECT_THAT(
+      [&]() { parser.parse("CREATE TABLE t (price DECIMAL('abc', 'xyz'))"); },
+      ThrowsMessage<axiom::sql::presto::PrestoParseError>(::testing::HasSubstr(
+          "Syntax error at 1:30: mismatched input ''abc''")));
 }
 
 TEST_F(PrestoParserTest, types) {
@@ -1647,6 +1652,28 @@ TEST_F(PrestoParserTest, createTable) {
            VARCHAR(),
            BOOLEAN()}));
 
+  // complex types
+  testCreateSql(
+      "CREATE TABLE t (ids ARRAY<INTEGER>)",
+      "tiny.t",
+      ROW({"ids"}, {ARRAY(INTEGER())}));
+  testCreateSql(
+      "CREATE TABLE t (kv MAP<VARCHAR, BIGINT>)",
+      "tiny.t",
+      ROW({"kv"}, {MAP(VARCHAR(), BIGINT())}));
+  testCreateSql(
+      "CREATE TABLE t (nested_map MAP<VARCHAR, ARRAY<INTEGER>>)",
+      "tiny.t",
+      ROW({"nested_map"}, {MAP(VARCHAR(), ARRAY(INTEGER()))}));
+  testCreateSql(
+      "CREATE TABLE t (nested ROW(a INTEGER, b VARCHAR))",
+      "tiny.t",
+      ROW({"nested"}, {ROW({"a", "b"}, {INTEGER(), VARCHAR()})}));
+  testCreateSql(
+      "CREATE TABLE t (price DECIMAL(10, 2))",
+      "tiny.t",
+      ROW({"price"}, {DECIMAL(10, 2)}));
+
   // like clause
   {
     auto likeSchema = facebook::axiom::connector::ConnectorMetadata::metadata(
@@ -1714,7 +1741,12 @@ TEST_F(PrestoParserTest, createTable) {
 
   // unknown type
   testInvalidSql(
-      "CREATE TABLE t (id UNKNOWNTYPE)", "Failed to parse type [UNKNOWNTYPE]");
+      "CREATE TABLE t (id UNKNOWNTYPE)", "Cannot resolve type: UNKNOWNTYPE");
+
+  // invalid decimal type parameters
+  testInvalidSql(
+      "CREATE TABLE t (price DECIMAL(VARCHAR, ARRAY<INTEGER>))",
+      "'VARCHAR' could not be converted to INTEGER_LITERAL");
 
   // unknown constraint column
   testInvalidSql(

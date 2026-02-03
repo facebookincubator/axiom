@@ -738,6 +738,117 @@ std::any AstBuilder::visitTableElement(
   return visitChildren("visitTableElement", ctx);
 }
 
+namespace {
+std::string getIntervalFieldType(
+    PrestoSqlParser::IntervalFieldContext* intervalField) {
+  if (intervalField->YEAR() != nullptr) {
+    return "YEAR";
+  } else if (intervalField->MONTH() != nullptr) {
+    return "MONTH";
+  } else if (intervalField->DAY() != nullptr) {
+    return "DAY";
+  } else if (intervalField->HOUR() != nullptr) {
+    return "HOUR";
+  } else if (intervalField->MINUTE() != nullptr) {
+    return "MINUTE";
+  } else if (intervalField->SECOND() != nullptr) {
+    return "SECOND";
+  } else {
+    throw std::runtime_error(
+        "Unsupported interval field: " + intervalField->getText());
+  }
+}
+
+TypeSignaturePtr toTypeSignature(
+    PrestoSqlParser::TypeParameterContext* typeParam,
+    const std::optional<std::string>& rowFieldName = std::nullopt);
+
+TypeSignaturePtr toTypeSignature(
+    PrestoSqlParser::TypeContext* ctx,
+    const std::optional<std::string>& rowFieldName = std::nullopt) {
+  if (ctx->baseType() != nullptr) {
+    if (ctx->baseType()->DOUBLE_PRECISION() != nullptr) {
+      return std::make_shared<TypeSignature>(
+          getLocation(ctx), "DOUBLE", rowFieldName);
+    }
+
+    auto baseName = ctx->baseType()->getText();
+
+    std::vector<TypeSignaturePtr> parameters;
+    for (const auto& param : ctx->typeParameter()) {
+      parameters.push_back(toTypeSignature(param));
+    }
+
+    return std::make_shared<TypeSignature>(
+        getLocation(ctx),
+        std::move(baseName),
+        std::move(parameters),
+        rowFieldName);
+  }
+
+  if (ctx->ARRAY() != nullptr) {
+    return std::make_shared<TypeSignature>(
+        getLocation(ctx),
+        "ARRAY",
+        std::vector<TypeSignaturePtr>{toTypeSignature(ctx->type(0))},
+        rowFieldName);
+  }
+
+  if (ctx->MAP() != nullptr) {
+    return std::make_shared<TypeSignature>(
+        getLocation(ctx),
+        "MAP",
+        std::vector<TypeSignaturePtr>{
+            toTypeSignature(ctx->type(0)), toTypeSignature(ctx->type(1))},
+        rowFieldName);
+  }
+
+  if (ctx->ROW() != nullptr) {
+    const auto& identifiers = ctx->identifier();
+    const auto& typeParams = ctx->type();
+
+    std::vector<TypeSignaturePtr> parameters;
+    parameters.reserve(typeParams.size());
+    for (auto i = 0; i < typeParams.size(); ++i) {
+      parameters.push_back(
+          toTypeSignature(typeParams[i], identifiers[i]->getText()));
+    }
+
+    return std::make_shared<TypeSignature>(
+        getLocation(ctx), "ROW", std::move(parameters), rowFieldName);
+  }
+
+  if (ctx->INTERVAL() != nullptr) {
+    const auto& intervalFields = ctx->intervalField();
+    if (intervalFields.size() >= 2) {
+      return std::make_shared<TypeSignature>(
+          getLocation(ctx),
+          "INTERVAL " + getIntervalFieldType(intervalFields[0]) + " TO " +
+              getIntervalFieldType(intervalFields[1]),
+          rowFieldName);
+    }
+  }
+
+  throw std::runtime_error("Unsupported type specification: " + ctx->getText());
+}
+
+TypeSignaturePtr toTypeSignature(
+    PrestoSqlParser::TypeParameterContext* ctx,
+    const std::optional<std::string>& rowFieldName) {
+  if (ctx->INTEGER_VALUE() != nullptr) {
+    return std::make_shared<TypeSignature>(
+        getLocation(ctx), ctx->INTEGER_VALUE()->getText(), rowFieldName);
+  }
+
+  if (ctx->type() != nullptr) {
+    return toTypeSignature(ctx->type(), rowFieldName);
+  }
+
+  throw std::runtime_error("Unsupported typeParameter: " + ctx->getText());
+}
+
+} // namespace
+
 std::any AstBuilder::visitColumnDefinition(
     PrestoSqlParser::ColumnDefinitionContext* ctx) {
   trace("visitColumnDefinition");
@@ -756,7 +867,7 @@ std::any AstBuilder::visitColumnDefinition(
       std::make_shared<ColumnDefinition>(
           getLocation(ctx),
           visitIdentifier(ctx->identifier()),
-          ctx->type()->getText(),
+          toTypeSignature(ctx->type()),
           /*nullable=*/ctx->NOT() == nullptr,
           std::move(properties),
           std::move(comment)));
@@ -1420,114 +1531,6 @@ std::any AstBuilder::visitDereference(
 }
 
 namespace {
-std::string getIntervalFieldType(
-    PrestoSqlParser::IntervalFieldContext* intervalField) {
-  if (intervalField->YEAR() != nullptr) {
-    return "YEAR";
-  } else if (intervalField->MONTH() != nullptr) {
-    return "MONTH";
-  } else if (intervalField->DAY() != nullptr) {
-    return "DAY";
-  } else if (intervalField->HOUR() != nullptr) {
-    return "HOUR";
-  } else if (intervalField->MINUTE() != nullptr) {
-    return "MINUTE";
-  } else if (intervalField->SECOND() != nullptr) {
-    return "SECOND";
-  } else {
-    throw std::runtime_error(
-        "Unsupported interval field: " + intervalField->getText());
-  }
-}
-
-TypeSignaturePtr toTypeSignature(
-    PrestoSqlParser::TypeParameterContext* typeParam,
-    const std::optional<std::string>& rowFieldName = std::nullopt);
-
-TypeSignaturePtr toTypeSignature(
-    PrestoSqlParser::TypeContext* ctx,
-    const std::optional<std::string>& rowFieldName = std::nullopt) {
-  if (ctx->baseType() != nullptr) {
-    if (ctx->baseType()->DOUBLE_PRECISION() != nullptr) {
-      return std::make_shared<TypeSignature>(
-          getLocation(ctx), "DOUBLE", rowFieldName);
-    }
-
-    auto baseName = ctx->baseType()->getText();
-
-    std::vector<TypeSignaturePtr> parameters;
-    for (const auto& param : ctx->typeParameter()) {
-      parameters.push_back(toTypeSignature(param));
-    }
-
-    return std::make_shared<TypeSignature>(
-        getLocation(ctx),
-        std::move(baseName),
-        std::move(parameters),
-        rowFieldName);
-  }
-
-  if (ctx->ARRAY() != nullptr) {
-    return std::make_shared<TypeSignature>(
-        getLocation(ctx),
-        "ARRAY",
-        std::vector<TypeSignaturePtr>{toTypeSignature(ctx->type(0))},
-        rowFieldName);
-  }
-
-  if (ctx->MAP() != nullptr) {
-    return std::make_shared<TypeSignature>(
-        getLocation(ctx),
-        "MAP",
-        std::vector<TypeSignaturePtr>{
-            toTypeSignature(ctx->type(0)), toTypeSignature(ctx->type(1))},
-        rowFieldName);
-  }
-
-  if (ctx->ROW() != nullptr) {
-    const auto& identifiers = ctx->identifier();
-    const auto& typeParams = ctx->type();
-
-    std::vector<TypeSignaturePtr> parameters;
-    parameters.reserve(typeParams.size());
-    for (auto i = 0; i < typeParams.size(); ++i) {
-      parameters.push_back(
-          toTypeSignature(typeParams[i], identifiers[i]->getText()));
-    }
-
-    return std::make_shared<TypeSignature>(
-        getLocation(ctx), "ROW", std::move(parameters), rowFieldName);
-  }
-
-  if (ctx->INTERVAL() != nullptr) {
-    const auto& intervalFields = ctx->intervalField();
-    if (intervalFields.size() >= 2) {
-      return std::make_shared<TypeSignature>(
-          getLocation(ctx),
-          "INTERVAL " + getIntervalFieldType(intervalFields[0]) + " TO " +
-              getIntervalFieldType(intervalFields[1]),
-          rowFieldName);
-    }
-  }
-
-  throw std::runtime_error("Unsupported type specification: " + ctx->getText());
-}
-
-TypeSignaturePtr toTypeSignature(
-    PrestoSqlParser::TypeParameterContext* ctx,
-    const std::optional<std::string>& rowFieldName) {
-  if (ctx->INTEGER_VALUE() != nullptr) {
-    return std::make_shared<TypeSignature>(
-        getLocation(ctx), ctx->INTEGER_VALUE()->getText(), rowFieldName);
-  }
-
-  if (ctx->type() != nullptr) {
-    return toTypeSignature(ctx->type(), rowFieldName);
-  }
-
-  throw std::runtime_error("Unsupported typeParameter: " + ctx->getText());
-}
-
 bool equalsIgnoreCase(std::string_view left, std::string_view right) {
   if (left.size() != right.size()) {
     return false;
