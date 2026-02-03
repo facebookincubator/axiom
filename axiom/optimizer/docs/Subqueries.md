@@ -878,8 +878,8 @@ directly.
 | EXISTS (non-equality) | Filter | Nested-loop semi-join |
 | EXISTS | Projection | Mark semi-join |
 | NOT EXISTS (equality) | Filter | Anti-join |
-| NOT EXISTS (non-equality) | Filter | Nested-loop anti-join |
-| NOT EXISTS | Projection | Mark anti-join |
+| NOT EXISTS (non-equality) | Filter | Nested-loop semi-join + NOT |
+| NOT EXISTS | Projection | Mark semi-join + NOT |
 
 ## Key Source Files
 
