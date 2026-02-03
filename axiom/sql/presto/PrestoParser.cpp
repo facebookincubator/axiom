@@ -579,7 +579,7 @@ class RelationPlanner : public AstVisitor {
         } else {
           const auto seconds = parseDayTimeInterval(
               interval->value(), interval->startField(), interval->endField());
-          return lp::Lit(multiplier * seconds, INTERVAL_DAY_TIME());
+          return lp::Lit(multiplier * seconds * 1'000, INTERVAL_DAY_TIME());
         }
       }
 
