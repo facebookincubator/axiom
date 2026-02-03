@@ -513,12 +513,12 @@ TEST_F(JoinTest, leftCrossJoin) {
             .nestedLoopJoin(
                 core::PlanMatcherBuilder().tableScan("u").aggregation().build(),
                 core::JoinType::kLeft)
-            // TODO Remove redundant projection.
-            .project()
             .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
   }
 
   {
@@ -533,11 +533,32 @@ TEST_F(JoinTest, leftCrossJoin) {
             .nestedLoopJoin(
                 core::PlanMatcherBuilder().tableScan("u").aggregation().build(),
                 core::JoinType::kLeft)
-            .project()
             .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
+  }
+
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT a FROM t LEFT JOIN u ON 1 = 1 WHERE coalesce(x, 1) > 0",
+        kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("t")
+                       .nestedLoopJoin(
+                           core::PlanMatcherBuilder().tableScan("u").build(),
+                           core::JoinType::kLeft)
+                       .filter()
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
   }
 }
 

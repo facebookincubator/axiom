@@ -410,7 +410,9 @@ bool Distribution::isSameOrder(const Distribution& other) const {
 Distribution Distribution::rename(
     const ExprVector& exprs,
     const ColumnVector& names) const {
-  VELOX_CHECK(!isBroadcast());
+  if (isBroadcast()) {
+    return *this;
+  }
 
   // Partitioning survives projection if all partitioning columns are projected
   // out.

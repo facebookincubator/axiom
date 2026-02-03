@@ -494,7 +494,7 @@ void JoinEdge::guessFanout() {
     return;
   }
 
-  if (leftTable_ == nullptr) {
+  if (leftTable_ == nullptr || leftKeys_.empty()) {
     lrFanout_ = 1.1;
     rlFanout_ = 1;
     return;
