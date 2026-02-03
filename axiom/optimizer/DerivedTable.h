@@ -220,6 +220,12 @@ struct DerivedTable : public PlanObject {
     return limit >= 0;
   }
 
+  bool hasUnnestTable() const {
+    return std::ranges::any_of(tables, [](PlanObjectCP table) {
+      return table->is(PlanType::kUnnestTableNode);
+    });
+  }
+
   // True if contains one derived table in 'tables' and adds no change to its
   // result set.
   bool isWrapOnly() const;

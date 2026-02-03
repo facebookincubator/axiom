@@ -2102,6 +2102,13 @@ void ToGraph::processSubqueries(
     // Scalar subqueries are placed as joins. Joins cannot be added after
     // aggregation.
     finalizeDt(input);
+  } else if (currentDt_->hasUnnestTable() && !subqueries.empty()) {
+    // Subqueries are placed as joins. Joins cannot be placed directly on unnest
+    // tables because unnest tables are on the right side of directed
+    // cross-joins.
+    // TODO: Optimize to only wrap when subquery actually references an unnest
+    // table column.
+    finalizeDt(input);
   }
 
   for (const auto& subquery : subqueries.scalars) {
