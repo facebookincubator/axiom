@@ -508,7 +508,7 @@ TEST_F(PrestoParserTest, types) {
 TEST_F(PrestoParserTest, intervalDayTime) {
   auto parser = makeParser();
 
-  auto test = [&](std::string_view sql, int64_t expected) {
+  auto test = [&](std::string_view sql, int64_t expectedSeconds) {
     SCOPED_TRACE(sql);
     auto expr = parser.parseExpression(sql);
 
@@ -517,7 +517,7 @@ TEST_F(PrestoParserTest, intervalDayTime) {
 
     auto value = expr->as<lp::ConstantExpr>()->value();
     ASSERT_FALSE(value->isNull());
-    ASSERT_EQ(value->value<int64_t>(), expected);
+    ASSERT_EQ(value->value<int64_t>(), expectedSeconds * 1'000);
   };
 
   test("INTERVAL '2' DAY", 2 * 24 * 60 * 60);
