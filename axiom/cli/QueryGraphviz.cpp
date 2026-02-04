@@ -168,7 +168,7 @@ int main(int argc, char** argv) {
 
   facebook::axiom::Connectors connectors;
   axiom::sql::SqlQueryRunner runner;
-  runner.initialize([&](auto& /*history*/) {
+  runner.initialize([&]() {
     auto defaultConnector = connectors.registerTpchConnector();
     if (!FLAGS_data_path.empty()) {
       defaultConnector = connectors.registerLocalHiveConnector(
