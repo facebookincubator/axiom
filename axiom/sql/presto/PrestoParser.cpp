@@ -605,6 +605,28 @@ class RelationPlanner : public AstVisitor {
         }
       }
 
+      case NodeType::kCurrentTime: {
+        auto* currentTime = node->as<CurrentTime>();
+        switch (currentTime->function()) {
+          case CurrentTime::Function::kDate:
+            return lp::Call("current_date");
+          case CurrentTime::Function::kTimestamp:
+            return lp::Call("current_timestamp");
+          case CurrentTime::Function::kLocaltime:
+            return lp::Call("localtime");
+          // TODO D92297380: Add Velox support for CURRENT_TIME and
+          // LOCALTIMESTAMP
+          case CurrentTime::Function::kTime:
+            [[fallthrough]];
+          case CurrentTime::Function::kLocaltimestamp:
+            VELOX_UNSUPPORTED(
+                "Unsupported date/time function: {}",
+                static_cast<int>(currentTime->function()));
+          default:
+            VELOX_UNREACHABLE();
+        }
+      }
+
       case NodeType::kNullLiteral:
         return lp::Lit(Variant::null(TypeKind::UNKNOWN));
 
