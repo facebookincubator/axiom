@@ -56,7 +56,6 @@ Optimization::Optimization(
   for (auto* join : root_->joins) {
     join->guessFanout();
   }
-  toGraph_.setDtOutput(root_, *logicalPlan_);
 }
 
 // static
