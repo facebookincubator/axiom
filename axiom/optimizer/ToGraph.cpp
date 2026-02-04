@@ -21,7 +21,6 @@
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
-#include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/SubfieldTracker.h"
 #include "axiom/runner/LocalRunner.h"
@@ -267,6 +266,8 @@ lp::ValuesNodePtr tryFoldConstantDt(
   if (discretePredicates == nullptr) {
     return nullptr;
   }
+
+  dt->distributeConjuncts();
 
   VELOX_CHECK(dt->conjuncts.empty());
   VELOX_CHECK_NULL(dt->write);
@@ -1687,8 +1688,6 @@ void ToGraph::finalizeSubqueryDt(
 
   currentDt_ = outerDt;
   currentDt_->addTable(dt);
-
-  dt->makeInitialPlan();
 }
 
 ColumnCP ToGraph::makeCountStarWrapper(DerivedTableP inputDt) {
@@ -2041,7 +2040,6 @@ DerivedTableP ToGraph::translateSubquery(
   currentDt_ = outerDt;
   if (finalize) {
     currentDt_->addTable(subqueryDt);
-    subqueryDt->makeInitialPlan();
   }
 
   renames_ = std::move(originalRenames);
@@ -2262,16 +2260,14 @@ void ToGraph::processSubqueries(
       if (subqueryDt->limit != 0) {
         subqueryDt->limit = 1;
       }
-      subqueryDt->makeInitialPlan();
 
       auto* countColumn = makeCountStarWrapper(subqueryDt);
 
       subqueries_.emplace(exists, makeNotEqualsZero(countColumn));
     } else {
       // Correlated EXISTS: create mark join.
-      // Finalize the subqueryDt (add to currentDt_ and make initial plan).
+      // Finalize the subqueryDt (add to currentDt_).
       currentDt_->addTable(subqueryDt);
-      subqueryDt->makeInitialPlan();
 
       auto decorrelated = extractDecorrelatedJoin(subqueryDt);
       if (decorrelated.leftKeys.empty()) {
@@ -2549,32 +2545,9 @@ void ToGraph::translateSetJoin(const lp::SetNode& set) {
     setDt->exprs.push_back(c);
   }
   setDt->columns = columns;
-  setDt->makeInitialPlan();
 }
 
 namespace {
-
-void makeUnionDistributionAndStats(DerivedTableP setDt) {
-  for (const auto* childDt : setDt->children) {
-    VELOX_DCHECK_EQ(childDt->columns.size(), setDt->columns.size());
-
-    const auto& plan = *childDt->bestInitialPlan()->op;
-    setDt->cardinality += plan.resultCardinality();
-
-    // This doesn't look correct because childValue and setValue
-    // can have same address. Even if we fix code to sum up correctly.
-    // Child columns still will share cardinality with set columns.
-    // But this is how it was implemented initially.
-    // Let's revisit this later.
-    for (size_t i = 0; i < setDt->columns.size(); ++i) {
-      const auto& setValue = setDt->columns[i]->value().cardinality;
-      const auto& childValue = plan.columns()[i]->value().cardinality;
-      // The Column is created in setDt before all branches are planned so the
-      // value is mutated here.
-      const_cast<float&>(setValue) += childValue;
-    }
-  }
-}
 
 void translateSetOperationInput(
     const lp::LogicalPlanNode& input,
@@ -2651,12 +2624,10 @@ void ToGraph::translateUnion(const lp::SetNode& set) {
       newDt->columns = setDt->columns;
     }
 
-    newDt->makeInitialPlan();
     setDt->children.push_back(newDt);
   };
 
   translateSetOperationInput(set, shouldFlatten, translateUnionInput);
-  makeUnionDistributionAndStats(setDt);
 
   renames_ = std::move(renames);
   for (const auto* column : setDt->columns) {

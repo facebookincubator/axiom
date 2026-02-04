@@ -137,17 +137,9 @@ struct DerivedTable : public PlanObject {
   // Write.
   WritePlanCP write{nullptr};
 
-  /// Moves suitable elements of 'conjuncts' into join edges or single
-  /// table filters. May be called repeatedly if enclosing dt's add
-  /// more conjuncts. May call itself recursively on component dts.
-  void distributeConjuncts();
-
-  /// Completes 'joins' with edges implied by column equivalences.
-  void addImpliedJoins();
-
-  /// After 'joins' is filled in, links tables to their direct and
-  /// equivalence-implied joins.
-  void linkTablesToJoins();
+  /// Initializes 'this' and all nested DerivedTables. Pushes filters down the
+  /// tree, then computes join graphs and initial plans bottom-up.
+  void initializePlans();
 
   /// Initializes 'this' to join 'tables' from 'super'. Adds the joins from
   /// 'existences' as semijoins to limit cardinality when making a hash join
@@ -238,18 +230,28 @@ struct DerivedTable : public PlanObject {
   /// 'this' as a join side because join sides must have a cardinality guess.
   void makeInitialPlan();
 
-  /// Erases the existing Memo entry and re-runs makeInitialPlan. Use this after
-  /// modifying properties of an already-memoized DerivedTable.
-  void remakeInitialPlan();
-
-  PlanP bestInitialPlan() const;
-
   std::string toString() const override;
 
+  /// Pushes down filters from 'conjuncts' into join conditions and single-table
+  /// predicates, including nested DerivedTables. Must be called before
+  /// memoization.
+  void distributeConjuncts();
+
  private:
+  // Completes 'joins' with edges implied by column equivalences.
+  void addImpliedJoins();
+
+  // After 'joins' is filled in, links tables to their direct and
+  // equivalence-implied joins.
+  void linkTablesToJoins();
+
   // Fills in 'startTables_' to 'tables_' that are not to the right of
   // non-commutative joins.
   void setStartTables();
+
+  // Completes 'joins' with edges implied by column equivalences, links tables
+  // to their joins, estimates fanout for each join, and computes start tables.
+  void finalizeJoins();
 
   // Imports the joins in 'this' inside 'firstDt', which must be a
   // member of 'this'. The import is possible if the join is not

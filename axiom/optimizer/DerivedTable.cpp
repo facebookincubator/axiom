@@ -75,7 +75,87 @@ void fillJoins(
     }
   }
 }
+
+MemoKey memoKey(const DerivedTable& dt) {
+  return MemoKey::create(
+      &dt, PlanObjectSet::fromObjects(dt.columns), PlanObjectSet::single(&dt));
+}
 } // namespace
+
+void DerivedTable::initializePlans() {
+  // Pre-order (top-down): push conjuncts to children.
+  distributeConjuncts();
+
+  const bool isUnion = setOp.has_value() &&
+      (setOp.value() == logical_plan::SetOperation::kUnion ||
+       setOp.value() == logical_plan::SetOperation::kUnionAll);
+
+  if (!isUnion) {
+    VELOX_CHECK(!tables.empty());
+    VELOX_CHECK(children.empty());
+
+    // Recurse to child DerivedTables in 'tables'.
+    for (auto* table : tables) {
+      if (table->is(PlanType::kDerivedTableNode)) {
+        const_cast<PlanObject*>(table)->as<DerivedTable>()->initializePlans();
+      }
+    }
+  } else {
+    VELOX_CHECK(tables.empty());
+    VELOX_CHECK(!children.empty());
+
+    // Recurse to children of set operations (UNION, UNION ALL).
+    for (auto* child : children) {
+      child->initializePlans();
+    }
+  }
+
+  // Post-order (bottom-up): finalize joins and compute plans.
+  finalizeJoins();
+
+  auto optimization = queryCtx()->optimization();
+  auto& memo = optimization->memo();
+
+  if (!isUnion) {
+    PlanState state(*optimization, this);
+    state.targetExprs.unionObjects(exprs);
+
+    optimization->makeJoins(state);
+
+    auto plan = state.plans.best()->op;
+    this->cardinality = plan->resultCardinality();
+
+    MemoKey key = memoKey(*this);
+    memo.insert(key, std::move(state.plans));
+
+  } else {
+    for (const auto* childDt : children) {
+      MemoKey childKey = memoKey(*childDt);
+
+      auto* plans = memo.find(childKey);
+      VELOX_CHECK(
+          plans != nullptr, "Expecting to find a plan for union branch");
+
+      const auto& childPlan = *plans->best()->op;
+      this->cardinality += childPlan.resultCardinality();
+
+      for (size_t i = 0; i < columns.size(); ++i) {
+        const auto& setValue = columns[i]->value().cardinality;
+        const auto& childValue = childPlan.columns()[i]->value().cardinality;
+        const_cast<float&>(setValue) += childValue;
+      }
+    }
+  }
+}
+
+void DerivedTable::finalizeJoins() {
+  addImpliedJoins();
+  linkTablesToJoins();
+  setStartTables();
+  for (auto& join : joins) {
+    join->guessFanout();
+  }
+}
 
 void DerivedTable::addImpliedJoins() {
   EdgeSet edges;
@@ -161,8 +241,8 @@ PlanObjectSet findSingleRowDts(
     }
   });
 
-  // If everything is a single row dt, then process these as cross products and
-  // not as placed with filters.
+  // If everything is a single row dt, then process these as cross products
+  // and not as placed with filters.
   if (numSingle == tables.size()) {
     return PlanObjectSet();
   }
@@ -216,8 +296,6 @@ JoinEdgeP makeExists(PlanObjectCP table, const PlanObjectSet& tables) {
 } // namespace
 
 void DerivedTable::linkTablesToJoins() {
-  setStartTables();
-
   // All tables directly mentioned by a join link to the join. A non-inner
   // that depends on multiple left tables has no leftTable but is still linked
   // from all the tables it depends on.
@@ -367,6 +445,7 @@ void DerivedTable::import(
   }
 
   linkTablesToJoins();
+  setStartTables();
 }
 
 namespace {
@@ -387,8 +466,8 @@ JoinEdgeP importedDtJoin(JoinEdgeP join, DerivedTableP dt, ExprCP innerKey) {
 }
 
 // Returns a join partner of starting 'joins' where the partner is not in
-// 'visited'. Sets 'fullyImported' to false if the partner is not guaranteed n:1
-// reducing or has columns that are projected out.
+// 'visited'. Sets 'fullyImported' to false if the partner is not guaranteed
+// n:1 reducing or has columns that are projected out.
 PlanObjectCP nextJoin(
     PlanObjectCP start,
     const JoinEdgeVector& joins,
@@ -535,13 +614,6 @@ ExprCP DerivedTable::importExpr(ExprCP expr) {
   return replaceInputs(expr, columns, exprs);
 }
 
-namespace {
-MemoKey memoKey(const DerivedTable& dt) {
-  return MemoKey::create(
-      &dt, PlanObjectSet::fromObjects(dt.columns), PlanObjectSet::single(&dt));
-}
-} // namespace
-
 void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
   if (isWrapOnly()) {
     flattenDt(tables[0]->as<DerivedTable>());
@@ -582,7 +654,8 @@ void DerivedTable::importJoinsIntoFirstDt(const DerivedTable* firstDt) {
     auto innerKey = replaceInputs(side.keys[0], outer, inner);
     VELOX_DCHECK(innerKey);
     if (innerKey->containsFunction(FunctionSet::kAggregate)) {
-      // If the join key is an aggregate, the join can't be moved below the agg.
+      // If the join key is an aggregate, the join can't be moved below the
+      // agg.
       continue;
     }
 
@@ -684,8 +757,8 @@ findJoin(DerivedTableP dt, std::vector<PlanObjectP>& tables, bool create) {
   return nullptr;
 }
 
-// Check if a non-UNION DT has a limit or one of the children of a UNION DT has
-// a limit.
+// Check if a non-UNION DT has a limit or one of the children of a UNION DT
+// has a limit.
 bool dtHasLimit(const DerivedTable& dt) {
   if (dt.setOp.has_value()) {
     for (const auto& child : dt.children) {
@@ -778,8 +851,8 @@ ExprVector extractPerTable(
 // Analyzes an OR. Returns top level conjuncts that this has inferred from the
 // disjuncts. For example if all have an AND inside and each AND has the same
 // condition then this condition is returned and removed from the disjuncts.
-// 'disjuncts' is changed in place. If 'replacement' is set, then this replaces
-// the whole OR from which 'disjuncts' was flattened.
+// 'disjuncts' is changed in place. If 'replacement' is set, then this
+// replaces the whole OR from which 'disjuncts' was flattened.
 //
 // In other words,
 //    (x AND y) OR (x AND z) => x AND (y OR z)
@@ -889,11 +962,10 @@ void expandConjuncts(ExprVector& conjuncts) {
 }
 
 // Converts a LEFT join to an INNER join, preserving the join keys.
-// Used when a filter on the right side columns eliminates rows where the right
-// side is NULL, making the LEFT join equivalent to an INNER join.
-// Note: The caller must handle the optional filter from the left join
-// separately (e.g., add it to conjuncts) as it is not copied to the new inner
-// join.
+// Used when a filter on the right side columns eliminates rows where the
+// right side is NULL, making the LEFT join equivalent to an INNER join. Note:
+// The caller must handle the optional filter from the left join separately
+// (e.g., add it to conjuncts) as it is not copied to the new inner join.
 JoinEdgeP toInnerJoin(JoinEdgeCP leftJoin) {
   auto innerJoin =
       JoinEdge::makeInner(leftJoin->leftTable(), leftJoin->rightTable());
@@ -1070,14 +1142,6 @@ void DerivedTable::distributeConjuncts() {
       }
     }
   }
-
-  // Remake initial plan for changedDTs. Calls distributeConjuncts
-  // recursively for further pushdown of pushed down items. Replans
-  // on returning edge of recursion, so everybody's initial plan is
-  // up to date after all pushdowns.
-  for (auto* changed : changedDts) {
-    changed->remakeInitialPlan();
-  }
 }
 
 void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
@@ -1115,11 +1179,12 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
           conjuncts.insert(
               conjuncts.end(), join->filter().begin(), join->filter().end());
         } else {
-          // Convert FULL join to (normalized) RIGHT join. The filter references
-          // right-side columns and has default null behavior, so it eliminates
-          // left-only rows (which have NULLs for right columns). This is
-          // equivalent to a RIGHT join. The result is normalized by swapping
-          // sides to avoid storing RIGHT joins directly.
+          // Convert FULL join to (normalized) RIGHT join. The filter
+          // references right-side columns and has default null behavior, so
+          // it eliminates left-only rows (which have NULLs for right
+          // columns). This is equivalent to a RIGHT join. The result is
+          // normalized by swapping sides to avoid storing RIGHT joins
+          // directly.
           joins[joinIndex] = toNormalizedRightJoin(join);
 
           replaceInputs(conjuncts, join->rightColumns(), join->rightExprs());
@@ -1200,15 +1265,7 @@ bool DerivedTable::tryPushdownConjunct(
 }
 
 void DerivedTable::makeInitialPlan() {
-  MemoKey key = memoKey(*this);
-
-  distributeConjuncts();
-  addImpliedJoins();
-  linkTablesToJoins();
-  for (auto& join : joins) {
-    join->guessFanout();
-  }
-  setStartTables();
+  finalizeJoins();
 
   auto optimization = queryCtx()->optimization();
   PlanState state(*optimization, this);
@@ -1219,21 +1276,8 @@ void DerivedTable::makeInitialPlan() {
   auto plan = state.plans.best()->op;
   this->cardinality = plan->resultCardinality();
 
-  optimization->memo().insert(key, std::move(state.plans));
-}
-
-void DerivedTable::remakeInitialPlan() {
-  queryCtx()->optimization()->memo().erase(memoKey(*this));
-  makeInitialPlan();
-}
-
-PlanP DerivedTable::bestInitialPlan() const {
   MemoKey key = memoKey(*this);
-
-  auto* plans = queryCtx()->optimization()->memo().find(key);
-  VELOX_CHECK(plans != nullptr, "Expecting to find a plan for union branch");
-
-  return plans->best();
+  optimization->memo().insert(key, std::move(state.plans));
 }
 
 std::string DerivedTable::toString() const {

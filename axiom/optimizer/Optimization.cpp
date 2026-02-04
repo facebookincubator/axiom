@@ -50,12 +50,7 @@ Optimization::Optimization(
       toVelox_{session_, runnerOptions_, options_} {
   queryCtx()->optimization() = this;
   root_ = toGraph_.makeQueryGraph(*logicalPlan_);
-  root_->distributeConjuncts();
-  root_->addImpliedJoins();
-  root_->linkTablesToJoins();
-  for (auto* join : root_->joins) {
-    join->guessFanout();
-  }
+  root_->initializePlans();
 }
 
 // static
