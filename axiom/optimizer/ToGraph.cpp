@@ -333,15 +333,6 @@ lp::ValuesNodePtr tryFoldConstantDt(
 
 } // namespace
 
-void ToGraph::setDtOutput(DerivedTableP dt, const lp::LogicalPlanNode& node) {
-  const auto& type = *node.outputType();
-  for (const auto& name : type.names()) {
-    addDtColumn(dt, name);
-  }
-
-  // TODO Try constant fold the dt.
-}
-
 void ToGraph::setDtUsedOutput(
     DerivedTableP dt,
     const lp::LogicalPlanNode& node) {
@@ -2666,6 +2657,10 @@ DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
       }).markAll(logicalPlan);
   currentDt_ = newDt();
   makeQueryGraph(logicalPlan, kAllAllowedInDt);
+  setDtUsedOutput(currentDt_, logicalPlan);
+
+  // TODO Try constant fold the dt.
+
   return currentDt_;
 }
 

@@ -108,10 +108,6 @@ class ToGraph {
   DerivedTableP makeQueryGraph(
       const logical_plan::LogicalPlanNode& logicalPlan);
 
-  // Sets the columns to project out from the root DerivedTable based on
-  // 'logicalPlan'.
-  void setDtOutput(DerivedTableP dt, const logical_plan::LogicalPlanNode& node);
-
   Name newCName(std::string_view prefix) {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
   }
