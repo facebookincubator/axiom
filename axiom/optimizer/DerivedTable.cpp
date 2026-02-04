@@ -590,6 +590,24 @@ bool DerivedTable::isWrapOnly() const {
       exprs.empty();
 }
 
+void DerivedTable::ensureSingleRow() {
+  // Global aggregation (no grouping keys) without HAVING clause guarantees
+  // exactly one output row.
+  if (aggregation && aggregation->groupingKeys().empty() && having.empty()) {
+    return;
+  }
+
+  // A single VALUES row with no filtering or aggregation guarantees exactly
+  // one output row.
+  if (tables.size() == 1 && tables[0]->is(PlanType::kValuesTableNode) &&
+      conjuncts.empty() && !hasAggregation() &&
+      tables[0]->as<ValuesTable>()->cardinality() == 1) {
+    return;
+  }
+
+  enforceSingleRow = true;
+}
+
 ExprCP DerivedTable::exportExpr(ExprCP expr) {
   expr->columns().forEach<Column>([&](auto* column) {
     if (tableSet.contains(column->relation())) {

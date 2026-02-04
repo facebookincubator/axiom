@@ -2137,12 +2137,9 @@ void ToGraph::processSubqueries(
           currentDt_->removeLastTable(subqueryDt);
           continue;
         }
-
-        // TODO Handle the case when subquery returns no rows. Fail if subquery
-        // is used in a comparison (x = <subquery>), constant fold if used as an
-        // IN LIST (x IN <subquery>).
       }
 
+      subqueryDt->ensureSingleRow();
       subqueries_.emplace(subquery, subqueryDt->columns.front());
     } else {
       VELOX_CHECK_EQ(

@@ -217,6 +217,11 @@ class ToTextVisitor : public RelationOpVisitor {
     visitDefault(op, context);
   }
 
+  void visit(const EnforceSingleRow& op, RelationOpVisitorContext& context)
+      const override {
+    visitDefault(op, context);
+  }
+
  private:
   static std::string toIndentation(size_t indent) {
     return std::string(indent * 2, ' ');
@@ -346,6 +351,11 @@ class OnelineVisitor : public RelationOpVisitor {
   }
 
   void visit(const TableWrite& op, RelationOpVisitorContext& context)
+      const override {
+    visitDefault(op, context);
+  }
+
+  void visit(const EnforceSingleRow& op, RelationOpVisitorContext& context)
       const override {
     visitDefault(op, context);
   }

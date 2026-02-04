@@ -300,6 +300,14 @@ class PlanMatcherBuilder {
   /// Cannot be used with match(PlanNodePtr) - use match(MultiFragmentPlan).
   PlanMatcherBuilder& shuffleMerge();
 
+  /// Matches a broadcast shuffle boundary in a distributed plan.
+  /// Verifies that PartitionedOutputNode::isBroadcast() is true.
+  PlanMatcherBuilder& broadcast();
+
+  /// Matches a gather shuffle boundary in a distributed plan.
+  /// Verifies that PartitionedOutputNode::numPartitions() == 1.
+  PlanMatcherBuilder& gather();
+
   /// Matches any Limit node regardless of offset, count, or partial/final step.
   PlanMatcherBuilder& limit();
 
@@ -329,6 +337,10 @@ class PlanMatcherBuilder {
 
   /// Matches any TableWrite node.
   PlanMatcherBuilder& tableWrite();
+
+  /// Matches an EnforceSingleRow node, which validates that its input
+  /// produces exactly one row. Used for scalar subqueries.
+  PlanMatcherBuilder& enforceSingleRow();
 
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.
