@@ -570,7 +570,7 @@ TEST_F(JoinTest, crossThenLeft) {
   auto query =
       "WITH v AS (SELECT v0, count(1) as v1 FROM (VALUES 1, 2, 3) as v(v0) GROUP BY 1) "
       "SELECT count(1) FROM (SELECT * FROM t, u) LEFT JOIN v ON t0 = v0 AND u0 = v1";
-  auto logicalPlan = parseSelect(query, kTestConnectorId);
+  SCOPED_TRACE(query);
 
   auto matcher =
       core::PlanMatcherBuilder()
@@ -588,7 +588,7 @@ TEST_F(JoinTest, crossThenLeft) {
           .aggregation()
           .build();
 
-  auto plan = toSingleNodePlan(logicalPlan);
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
@@ -599,8 +599,7 @@ TEST_F(JoinTest, joinWithComputedAndProjectedKeys) {
   auto query =
       "WITH v AS (SELECT coalesce(t0, 0) as v0 FROM t) "
       "SELECT * FROM u LEFT JOIN v ON u0 = v0";
-
-  auto logicalPlan = parseSelect(query, kTestConnectorId);
+  SCOPED_TRACE(query);
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan("u")
@@ -613,14 +612,13 @@ TEST_F(JoinTest, joinWithComputedAndProjectedKeys) {
                      .project()
                      .build();
 
-  auto plan = toSingleNodePlan(logicalPlan);
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 TEST_F(JoinTest, crossThanOrderBy) {
   auto query = "SELECT length(n_name) FROM nation, region ORDER BY 1";
-
-  auto logicalPlan = parseSelect(query, kTestConnectorId);
+  SCOPED_TRACE(query);
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan("nation")
@@ -631,6 +629,7 @@ TEST_F(JoinTest, crossThanOrderBy) {
                      .project()
                      .build();
 
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
   auto plan = toSingleNodePlan(logicalPlan);
   AXIOM_ASSERT_PLAN(plan, matcher);
 
@@ -643,21 +642,19 @@ TEST_F(JoinTest, filterPushdownThroughCrossJoinUnnest) {
         "t", ROW({"t0", "t1"}, {ROW({"a", "b"}, BIGINT()), ARRAY(BIGINT())}));
 
     auto query = "SELECT * FROM t, UNNEST(t1) WHERE t0.a > 0";
-
-    auto logicalPlan = parseSelect(query, kTestConnectorId);
+    SCOPED_TRACE(query);
 
     auto matcher =
         core::PlanMatcherBuilder().tableScan("t").filter().unnest().build();
 
-    auto plan = toSingleNodePlan(logicalPlan);
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
   {
     auto query =
         "SELECT * FROM (VALUES row(row(1, 2))) as t(x), UNNEST(array[1,2,3]) WHERE x.field0 > 0";
-
-    auto logicalPlan = parseSelect(query, kTestConnectorId);
+    SCOPED_TRACE(query);
 
     auto matcher = core::PlanMatcherBuilder()
                        .values()
@@ -668,7 +665,7 @@ TEST_F(JoinTest, filterPushdownThroughCrossJoinUnnest) {
                        .unnest()
                        .build();
 
-    auto plan = toSingleNodePlan(logicalPlan);
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
@@ -679,8 +676,8 @@ TEST_F(JoinTest, joinOnClause) {
 
   {
     auto query = "SELECT * FROM t JOIN u ON t0.a = u0.a";
+    SCOPED_TRACE(query);
 
-    auto logicalPlan = parseSelect(query, kTestConnectorId);
     auto matcher =
         core::PlanMatcherBuilder()
             .tableScan("t")
@@ -689,14 +686,14 @@ TEST_F(JoinTest, joinOnClause) {
                 core::PlanMatcherBuilder().tableScan("u").project().build())
             .build();
 
-    auto plan = toSingleNodePlan(logicalPlan);
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
   {
     auto query = "SELECT * FROM (SELECT t0, 1 FROM t) JOIN u ON t0.a = u0.a";
+    SCOPED_TRACE(query);
 
-    auto logicalPlan = parseSelect(query, kTestConnectorId);
     auto matcher =
         core::PlanMatcherBuilder()
             .tableScan("t")
@@ -706,7 +703,7 @@ TEST_F(JoinTest, joinOnClause) {
             .project()
             .build();
 
-    auto plan = toSingleNodePlan(logicalPlan);
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
@@ -714,7 +711,7 @@ TEST_F(JoinTest, joinOnClause) {
 TEST_F(JoinTest, leftJoinOverValues) {
   auto query =
       "SELECT * FROM (VALUES 1, 2, 3) as t(x) LEFT JOIN (VALUES 1, 2, 3) as u(y) ON x = y";
-  auto logicalPlan = parseSelect(query, kTestConnectorId);
+  SCOPED_TRACE(query);
 
   auto matcher = core::PlanMatcherBuilder()
                      .values()
@@ -723,6 +720,8 @@ TEST_F(JoinTest, leftJoinOverValues) {
                          core::JoinType::kLeft)
                      .project()
                      .build();
+
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
@@ -741,22 +740,156 @@ TEST_F(JoinTest, leftThenFilter) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
-  auto query =
-      "SELECT * FROM t LEFT JOIN (SELECT x, y + 1 as z FROM u) ON a = x WHERE z > 0";
-  auto logicalPlan = parseSelect(query, kTestConnectorId);
+  auto matchScan = [&](const auto& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
-  auto matcher =
-      core::PlanMatcherBuilder()
-          .tableScan("t")
-          .hashJoin(
-              core::PlanMatcherBuilder().tableScan("u").project().build(),
-              core::JoinType::kLeft)
-          .filter()
-          .project()
-          .build();
+  // Post-LEFT JOIN filter that references only columns from the right-hand
+  // (optional) table and doesn't eliminate NULLs.
+  {
+    auto query =
+        "SELECT * FROM t LEFT JOIN (SELECT x, y + 1 as z FROM u) ON a = x "
+        "WHERE coalesce(z, 1) > 0";
+    SCOPED_TRACE(query);
 
-  auto plan = toSingleNodePlan(logicalPlan);
-  AXIOM_ASSERT_PLAN(plan, matcher);
+    auto matcher =
+        matchScan("t")
+            .hashJoin(matchScan("u").project().build(), core::JoinType::kLeft)
+            .filter()
+            .project()
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // A filter that does eliminate NULLs turns the LEFT JOIN into an INNER JOIN.
+  {
+    auto query =
+        "SELECT * FROM t LEFT JOIN (SELECT x, y + 1 as z FROM u) ON a = x "
+        "WHERE z > 0";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").filter("y + 1 > 0").build(),
+                           core::JoinType::kInner)
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // A filter with multiple conjuncts, some of which eliminate NULLs.
+  {
+    auto query =
+        "SELECT * FROM t LEFT JOIN (SELECT x, y + 1 as z FROM u) ON a = x "
+        "WHERE coalesce(z, 1) > 0 AND z > 0";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u")
+                               .filter("coalesce(y + 1, 1) > 0 AND y + 1 > 0")
+                               .build(),
+                           core::JoinType::kInner)
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(JoinTest, fullThenFilter) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+
+  auto matchScan = [&](const auto& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
+
+  // Post-FULL JOIN filter made of conjuncts that each reference only one side
+  // of the join and do not eliminate NULLs.
+  {
+    auto query =
+        "SELECT * FROM t FULL JOIN (SELECT x, y + 1 as z FROM u) ON a = x "
+        "WHERE coalesce(z, 1) > 0 AND is_null(a)";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("t")
+            .hashJoin(
+                matchScan("u").project({"x", "y", "y + 1 as z"}).build(),
+                core::JoinType::kFull)
+            .filter("coalesce(z, 1) > 0 AND is_null(a)")
+            .project()
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Null-eliminating conjunct that references only right side turns FULL join
+  // into LEFT or RIGHT join and gets pushed down below the join.
+  {
+    auto query =
+        "SELECT * FROM t FULL JOIN (SELECT x, y + 1 as z FROM u) ON a = x "
+        "WHERE z > 0 AND is_null(a)";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").filter("y + 1 > 0").build(),
+                           core::JoinType::kRight)
+                       .filter("is_null(a)")
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto query =
+        "SELECT * FROM t FULL JOIN (SELECT x, y + 1 as z FROM u) ON a = x "
+        "WHERE coalesce(z, 1) > 0 AND a > 0";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("t")
+            .filter("a > 0")
+            .hashJoin(
+                matchScan("u").project({"x", "y", "y + 1 as z"}).build(),
+                core::JoinType::kLeft)
+            .filter("coalesce(z, 1) > 0")
+            .project()
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Two null-eliminating conjuncts, one on each side of the join turn the join
+  // into an INNER join.
+  {
+    auto query =
+        "SELECT * FROM t FULL JOIN (SELECT x, y + 1 as z FROM u) ON a = x "
+        "WHERE z > 0 AND a > 0";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .filter("a > 0")
+                       .hashJoin(
+                           matchScan("u").filter("y + 1 > 0").build(),
+                           core::JoinType::kInner)
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 } // namespace

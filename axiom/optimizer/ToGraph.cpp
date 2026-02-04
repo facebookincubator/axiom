@@ -934,17 +934,31 @@ ExprCP ToGraph::makeConstant(const lp::ConstantExpr& constant) {
 
 namespace {
 // Returns bits describing function 'name'.
-FunctionSet functionBits(Name name) {
+FunctionSet functionBits(Name name, bool specialForm) {
   if (auto* md = functionMetadata(name)) {
     return md->functionSet;
   }
 
-  const auto deterministic = velox::isDeterministic(name);
-  if (deterministic.has_value() && !deterministic.value()) {
-    return FunctionSet(FunctionSet::kNonDeterministic);
+  FunctionSet bits;
+
+  if (specialForm) {
+    bits = bits | FunctionSet::kNonDefaultNullBehavior;
+  } else {
+    const auto deterministic = velox::isDeterministic(name);
+    VELOX_CHECK(deterministic.has_value(), "Function not found: {}", name);
+    if (!deterministic.value()) {
+      bits = bits | FunctionSet::kNonDeterministic;
+    }
+
+    const auto defaultNullBehavior = velox::isDefaultNullBehavior(name);
+    VELOX_CHECK(
+        defaultNullBehavior.has_value(), "Function not found: {}", name);
+    if (!defaultNullBehavior.value()) {
+      bits = bits | FunctionSet::kNonDefaultNullBehavior;
+    }
   }
 
-  return FunctionSet(0);
+  return bits;
 }
 
 } // namespace
@@ -1026,7 +1040,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
       }
     }
 
-    funcs = funcs | functionBits(name);
+    funcs = funcs | functionBits(name, specialForm != nullptr);
     auto* callExpr = deduppedCall(
         name, Value(exprType, cardinality), std::move(args), funcs);
     return callExpr;
@@ -1138,7 +1152,7 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
   }
 
   auto* name = toName(velox::exec::sanitizeName(call->name()));
-  funcs = funcs | functionBits(name);
+  funcs = funcs | functionBits(name, /*specialForm=*/false);
 
   if (metadata->explode) {
     auto map = metadata->explode(call, paths);
@@ -2469,7 +2483,7 @@ namespace {
 bool hasNondeterministic(const lp::ExprPtr& expr) {
   if (expr->isCall()) {
     const auto* call = expr->as<lp::CallExpr>();
-    if (functionBits(toName(call->name()))
+    if (functionBits(toName(call->name()), /*specialForm=*/false)
             .contains(FunctionSet::kNonDeterministic)) {
       return true;
     }

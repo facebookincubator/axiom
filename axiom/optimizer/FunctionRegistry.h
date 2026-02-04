@@ -37,6 +37,10 @@ class FunctionSet {
   /// Indicates an aggregate function that ignores duplicate inputs.
   static constexpr uint64_t kIgnoreDuplicatesAggregate = 1UL << 3;
 
+  /// Indicates a function that doesn't propagate nulls, e.g. null in some input
+  /// may produce non-null result.
+  static constexpr uint64_t kNonDefaultNullBehavior = 1UL << 4;
+
   FunctionSet() : set_(0) {}
 
   explicit FunctionSet(uint64_t set) : set_(set) {}

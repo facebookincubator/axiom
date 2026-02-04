@@ -2209,6 +2209,14 @@ std::vector<int32_t> sortByStartingScore(const PlanObjectVector& tables) {
 } // namespace
 
 void Optimization::makeJoins(PlanState& state) {
+  // Sanity check that there are no RIGHT joins.
+  for (auto join : state.dt->joins) {
+    if (join->leftOptional()) {
+      VELOX_CHECK(
+          join->rightOptional(), "Unexpected RIGHT join: {}", join->toString());
+    }
+  }
+
   PlanObjectVector firstTables;
 
   if (options_.syntacticJoinOrder) {
