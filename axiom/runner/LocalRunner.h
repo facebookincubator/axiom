@@ -124,6 +124,9 @@ class LocalRunner : public Runner,
   /// Best-effort attempt to cancel the execution.
   void abort() override;
 
+  /// Waits for `maxWaitMicros` microseconds for all tasks to complete.
+  /// If `maxWaitMicros <= 0` this will check if the tasks are completed and
+  /// return false immediately if not.
   /// @pre state() != State::kInitialized
   /// @return true if all tasks completed within the timeout, false otherwise.
   bool waitForCompletion(int32_t maxWaitMicros) override;

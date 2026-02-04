@@ -16,22 +16,19 @@
 #pragma once
 
 #include <folly/executors/IOThreadPoolExecutor.h>
-#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/DerivedTable.h"
-#include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/optimizer/ToVelox.h"
 #include "axiom/runner/LocalRunner.h"
-#include "axiom/sql/presto/PrestoParser.h"
+#include "axiom/sql/presto/SqlStatement.h"
 
 namespace axiom::sql {
 
 class SqlQueryRunner {
  public:
   /// @param initializeConnectors Lambda to call to initialize connectors and
-  /// return a pair of default {connector ID, schema}. Takes a reference to the
-  /// history to allow for loading from persistent storage.
+  /// return a pair of default {connector ID, optional(schema)}.
   void initialize(
-      const std::function<std::pair<std::string, std::optional<std::string>>(
-          facebook::axiom::optimizer::VeloxHistory& history)>&
+      const std::function<std::pair<std::string, std::optional<std::string>>()>&
           initializeConnectors);
 
   /// Results of running a query. SELECT queries return a vector of results.
@@ -48,6 +45,13 @@ class SqlQueryRunner {
     uint64_t splitTargetBytes{16 << 20};
     uint32_t optimizerTraceFlags{0};
 
+    /// Microseconds to wait for query to complete. 0 means check for completion
+    /// then timeout immediately if not complete.
+    int32_t timeoutMicros{500'000};
+
+    std::optional<std::string> defaultConnectorId;
+    std::optional<std::string> defaultSchema;
+
     /// If true, EXPLAIN ANALYZE output includes custom operator stats.
     bool debugMode{false};
   };
@@ -60,10 +64,25 @@ class SqlQueryRunner {
       const presto::SqlStatement& statement,
       const RunOptions& options);
 
+  /// Runs a single SELECT or INSERT statement and returns the LocalRunner. The
+  /// caller is responsible for retrieving the results from LocalRunner.
+  /// @return LocalRunner executing the provided `statement`.
+  /// @throws VeloxUserError if `statement` is not SELECT or INSERT
+  std::shared_ptr<facebook::axiom::runner::LocalRunner> executeSelectOrInsert(
+      const presto::SqlStatement& statement,
+      const RunOptions& options);
+
   /// Parses SQL text containing one or more semicolon-separated statements.
   /// @param sql SQL text to parse.
   /// @return Vector of parsed statements.
   std::vector<presto::SqlStatementPtr> parseMultiple(
+      std::string_view sql,
+      const RunOptions& options);
+
+  /// Parses SQL text containing one statement.
+  /// @return Parsed statement.
+  /// @throw VeloxUserError if the SQL text contains multiple statements.
+  presto::SqlStatementPtr parseSingle(
       std::string_view sql,
       const RunOptions& options);
 
@@ -81,14 +100,6 @@ class SqlQueryRunner {
 
   std::unordered_map<std::string, std::string>& sessionConfig() {
     return config_;
-  }
-
-  void saveHistory(const std::string& path) {
-    history_->saveToFile(path);
-  }
-
-  void clearHistory() {
-    history_ = std::make_unique<facebook::axiom::optimizer::VeloxHistory>();
   }
 
  private:
@@ -128,25 +139,33 @@ class SqlQueryRunner {
           const facebook::axiom::optimizer::DerivedTable&)>& checkDerivedTable =
           nullptr,
       const std::function<bool(const facebook::axiom::optimizer::RelationOp&)>&
-          checkBestPlan = nullptr);
+          checkBestPlan = nullptr,
+      std::shared_ptr<facebook::axiom::connector::SchemaResolver>
+          schemaResolver = nullptr);
 
   std::shared_ptr<facebook::axiom::runner::LocalRunner> makeLocalRunner(
       facebook::axiom::optimizer::PlanAndStats& planAndStats,
       const std::shared_ptr<facebook::velox::core::QueryCtx>& queryCtx,
       const RunOptions& options);
 
-  /// Runs a query and returns the result as a single vector in *resultVector,
+  /// Runs a plan and returns the result as a single vector in *resultVector,
   /// the plan text in *planString and the error message in *errorString.
   /// *errorString is not set if no error. Any of these may be nullptr.
-  std::vector<facebook::velox::RowVectorPtr> runSql(
+  std::vector<facebook::velox::RowVectorPtr> runLogicalPlan(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
-      const RunOptions& options);
+      const RunOptions& options,
+      std::shared_ptr<facebook::axiom::connector::SchemaResolver>
+          schemaResolver = nullptr);
 
+  // Wait maxWaitMicros microseconds for the LocalRunner to complete.  If
+  // `maxWaitMicros <= 0` this will check if the LocalRunner is completed and
+  // return immediately.
   static void waitForCompletion(
-      const std::shared_ptr<facebook::axiom::runner::LocalRunner>& runner) {
+      const std::shared_ptr<facebook::axiom::runner::LocalRunner>& runner,
+      int32_t maxWaitMicros) {
     if (runner) {
       try {
-        runner->waitForCompletion(500000);
+        runner->waitForCompletion(maxWaitMicros);
       } catch (const std::exception&) {
       }
     }
@@ -155,13 +174,13 @@ class SqlQueryRunner {
   std::shared_ptr<facebook::velox::cache::AsyncDataCache> cache_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> optimizerPool_;
+  std::shared_ptr<facebook::velox::memory::MemoryPool> executorPool_;
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<folly::IOThreadPoolExecutor> spillExecutor_;
-  std::shared_ptr<facebook::axiom::connector::SchemaResolver> schema_;
   std::unordered_map<std::string, std::string> config_;
-  std::unique_ptr<facebook::axiom::optimizer::VeloxHistory> history_;
-  std::unique_ptr<presto::PrestoParser> prestoParser_;
-  int32_t queryCounter_{0};
+  std::string defaultConnectorId_;
+  std::optional<std::string> defaultSchema_;
+  std::atomic<int32_t> queryCounter_{0};
 };
 
 } // namespace axiom::sql
