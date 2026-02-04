@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include <gtest/gtest.h>
+#include <unordered_set>
 #include "axiom/runner/MultiFragmentPlan.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/duckdb/conversion/DuckParser.h"
@@ -60,6 +61,7 @@ class PlanMatcherImpl : public PlanMatcher {
     AXIOM_TEST_RETURN_IF_FAILURE
 
     std::unordered_map<std::string, std::string> newSymbols;
+    std::unordered_set<std::string> ambiguousSymbols;
 
     for (auto i = 0; i < sourceMatchers_.size(); ++i) {
       auto result =
@@ -68,13 +70,20 @@ class PlanMatcherImpl : public PlanMatcher {
         return MatchResult::failure();
       }
 
-      // TODO Combine symbols from all sources.
-      newSymbols = std::move(result.symbols);
+      // Combine symbols from all sources, tracking ambiguous ones.
+      for (const auto& [alias, actualName] : result.symbols) {
+        auto it = newSymbols.find(alias);
+        if (it != newSymbols.end()) {
+          ambiguousSymbols.insert(alias);
+        } else {
+          newSymbols[alias] = actualName;
+        }
+      }
     }
 
-    if (sourceMatchers_.size() > 1) {
-      // TODO Add support for multiple sources.
-      newSymbols.clear();
+    // Remove ambiguous symbols.
+    for (const auto& alias : ambiguousSymbols) {
+      newSymbols.erase(alias);
     }
 
     return matchDetails(*specificNode, newSymbols);
@@ -690,7 +699,10 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
       EXPECT_EQ(plan.isNullAware(), nullAware_.value());
     }
 
-    AXIOM_TEST_RETURN
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    // Propagate existing aliases from source matchers.
+    return MatchResult::success(symbols);
   }
 
  private:

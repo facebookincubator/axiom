@@ -25,6 +25,7 @@ using DistributionP = Distribution*;
 
 class JoinEdge;
 using JoinEdgeP = JoinEdge*;
+using JoinEdgeCP = const JoinEdge*;
 using JoinEdgeVector = QGVector<JoinEdgeP>;
 
 class AggregationPlan;
@@ -97,7 +98,8 @@ struct DerivedTable : public PlanObject {
   /// Tables that are not to the right sides of non-commutative joins.
   PlanObjectSet startTables;
 
-  /// Joins between 'tables'.
+  /// Joins between 'tables'. Does not contain RIGHT joins because these are
+  /// normalized to LEFT joins.
   JoinEdgeVector joins;
 
   /// Filters in WHERE that are not single table expressions and not join
@@ -226,8 +228,8 @@ struct DerivedTable : public PlanObject {
     });
   }
 
-  // True if contains one derived table in 'tables' and adds no change to its
-  // result set.
+  /// True if contains one derived table in 'tables' and adds no change to its
+  /// result set.
   bool isWrapOnly() const;
 
   void addJoinedBy(JoinEdgeP join);
@@ -245,8 +247,8 @@ struct DerivedTable : public PlanObject {
   std::string toString() const override;
 
  private:
-  /// Fills in 'startTables_' to 'tables_' that are not to the right of
-  /// non-commutative joins.
+  // Fills in 'startTables_' to 'tables_' that are not to the right of
+  // non-commutative joins.
   void setStartTables();
 
   // Imports the joins in 'this' inside 'firstDt', which must be a
@@ -262,6 +264,35 @@ struct DerivedTable : public PlanObject {
 
   // Sets 'columns' and 'exprs'.
   void makeProjection(const ExprVector& exprs);
+
+  // Attempts to convert outer joins to less restrictive join types based on
+  // filter predicates. A filter that eliminates NULLs on the optional side of
+  // an outer join allows the join to be converted:
+  // - LEFT join + filter on right columns → INNER join
+  // - FULL join + filter on right columns → RIGHT join
+  // - FULL join + filter on left columns → LEFT join
+  //
+  // @param allowNondeterministic If true, non-deterministic conjuncts are
+  // considered for join conversion.
+  void tryConvertOuterJoins(bool allowNondeterministic);
+
+  // Attempts to push down a filter conjunct into the specified table.
+  // For a DerivedTable, translates column names and adds the condition to
+  // conjuncts or having clause (if there's aggregation). For set operations,
+  // the filter is added to all children. For a BaseTable, adds the filter
+  // directly.
+  // Returns false without modifying anything for ValuesTable, UnnestTable,
+  // and DerivedTables with LIMIT (which block filter push-down).
+  //
+  // @param conjunct The filter expression to push down.
+  // @param table The target table (BaseTable, DerivedTable, etc.).
+  // @param changedDts Output parameter collecting DerivedTables that were
+  // modified.
+  // @return true if the conjunct was successfully pushed down, false otherwise.
+  bool tryPushdownConjunct(
+      ExprCP conjunct,
+      PlanObjectP table,
+      std::vector<DerivedTable*>& changedDts);
 };
 
 using DerivedTableP = DerivedTable*;

@@ -497,6 +497,12 @@ ExprCP replaceInputs(ExprCP expr, const T& source, const U& target) {
   }
 }
 
+template <typename T, typename U>
+void replaceInputs(ExprVector& exprs, const T& source, const U& target) {
+  for (auto i = 0; i < exprs.size(); ++i) {
+    exprs[i] = replaceInputs(exprs[i], source, target);
+  }
+}
 } // namespace
 
 bool DerivedTable::isWrapOnly() const {
@@ -882,6 +888,78 @@ void expandConjuncts(ExprVector& conjuncts) {
   } while (any);
 }
 
+// Converts a LEFT join to an INNER join, preserving the join keys.
+// Used when a filter on the right side columns eliminates rows where the right
+// side is NULL, making the LEFT join equivalent to an INNER join.
+// Note: The caller must handle the optional filter from the left join
+// separately (e.g., add it to conjuncts) as it is not copied to the new inner
+// join.
+JoinEdgeP toInnerJoin(JoinEdgeCP leftJoin) {
+  auto innerJoin =
+      JoinEdge::makeInner(leftJoin->leftTable(), leftJoin->rightTable());
+
+  for (int j = 0; j < leftJoin->leftKeys().size(); j++) {
+    innerJoin->addEquality(leftJoin->leftKeys()[j], leftJoin->rightKeys()[j]);
+  }
+
+  return innerJoin;
+}
+
+// Converts a FULL join to a LEFT join, preserving the filter, join keys, and
+// right-side output columns/expressions.
+// Used when a filter on the left side columns eliminates rows where the left
+// side is NULL (i.e., right-only rows don't survive the filter).
+JoinEdgeP toLeftJoin(JoinEdgeCP fullJoin) {
+  JoinEdge::Spec joinSpec{
+      .filter = fullJoin->filter(),
+      .leftOptional = false,
+      .rightOptional = true,
+  };
+
+  joinSpec.rightColumns = fullJoin->rightColumns();
+  joinSpec.rightExprs = fullJoin->rightExprs();
+
+  auto leftJoin = make<JoinEdge>(
+      fullJoin->leftTable(),
+      fullJoin->rightTable(),
+      std::move(joinSpec),
+      logical_plan::JoinType::kLeft);
+
+  for (int j = 0; j < fullJoin->leftKeys().size(); j++) {
+    leftJoin->addEquality(fullJoin->leftKeys()[j], fullJoin->rightKeys()[j]);
+  }
+
+  return leftJoin;
+}
+
+// Converts a FULL join to a "normalized" RIGHT join by swapping the table
+// sides. This eliminates rows where the left side (of the original join) is
+// NULL, keeping only rows where the right side matches or has no match on the
+// left. The normalization swaps left and right tables so the result can be
+// stored using the standard LEFT join representation (with swapped sides).
+JoinEdgeP toNormalizedRightJoin(JoinEdgeCP fullJoin) {
+  JoinEdge::Spec joinSpec{
+      .filter = fullJoin->filter(),
+      .leftOptional = false,
+      .rightOptional = true,
+  };
+
+  joinSpec.rightColumns = fullJoin->leftColumns();
+  joinSpec.rightExprs = fullJoin->leftExprs();
+
+  auto leftJoin = make<JoinEdge>(
+      fullJoin->rightTable(),
+      fullJoin->leftTable(),
+      std::move(joinSpec),
+      logical_plan::JoinType::kRight);
+
+  for (int j = 0; j < fullJoin->leftKeys().size(); j++) {
+    leftJoin->addEquality(fullJoin->rightKeys()[j], fullJoin->leftKeys()[j]);
+  }
+
+  return leftJoin;
+}
+
 } // namespace
 
 void DerivedTable::distributeConjuncts() {
@@ -936,14 +1014,18 @@ void DerivedTable::distributeConjuncts() {
         tables[0]->as<DerivedTable>()->setOp.value() ==
             logical_plan::SetOperation::kUnionAll));
 
+  tryConvertOuterJoins(allowNondeterministic);
+
   for (auto i = 0; i < conjuncts.size(); ++i) {
+    auto* conjunct = conjuncts[i];
+
     // No pushdown of non-deterministic except if only pushdown target is a
     // union all.
-    if (conjuncts[i]->containsNonDeterministic() && !allowNondeterministic) {
+    if (conjunct->containsNonDeterministic() && !allowNondeterministic) {
       continue;
     }
 
-    PlanObjectSet tableSet = conjuncts[i]->allTables();
+    PlanObjectSet tableSet = conjunct->allTables();
     std::vector<PlanObjectP> tables;
     tableSet.forEachMutable([&](auto table) { tables.push_back(table); });
     if (tables.size() == 1) {
@@ -952,42 +1034,10 @@ void DerivedTable::distributeConjuncts() {
                   // existence flags. Leave in place.
       }
 
-      if (tables[0]->is(PlanType::kValuesTableNode)) {
-        continue; // ValuesTable does not have filter push-down.
+      if (!tryPushdownConjunct(conjunct, tables[0], changedDts)) {
+        continue;
       }
 
-      if (tables[0]->is(PlanType::kUnnestTableNode)) {
-        continue; // UnnestTable does not have filter push-down.
-      }
-
-      if (tables[0]->is(PlanType::kDerivedTableNode)) {
-        // Translate the column names and add the condition to the conjuncts in
-        // the dt. If the inner is a set operation, add the filter to children.
-        auto innerDt = tables[0]->as<DerivedTable>();
-        if (dtHasLimit(*innerDt)) {
-          continue;
-        }
-
-        auto numChildren =
-            innerDt->children.empty() ? 1 : innerDt->children.size();
-        for (auto childIdx = 0; childIdx < numChildren; ++childIdx) {
-          auto childDt =
-              numChildren == 1 ? innerDt : innerDt->children[childIdx];
-          auto imported = childDt->importExpr(conjuncts[i]);
-          if (childDt->aggregation) {
-            childDt->having.push_back(imported);
-          } else {
-            childDt->conjuncts.push_back(imported);
-          }
-          if (std::find(changedDts.begin(), changedDts.end(), childDt) ==
-              changedDts.end()) {
-            changedDts.push_back(childDt);
-          }
-        }
-      } else {
-        VELOX_CHECK(tables[0]->is(PlanType::kTableNode));
-        tables[0]->as<BaseTable>()->addFilter(conjuncts[i]);
-      }
       conjuncts.erase(conjuncts.begin() + i);
       --i;
       continue;
@@ -1001,7 +1051,7 @@ void DerivedTable::distributeConjuncts() {
       // cases, leave the conjunct in place, to be evaluated when its
       // dependences are known.
       if (queryCtx()->optimization()->isJoinEquality(
-              conjuncts[i], tables[0], tables[1], left, right)) {
+              conjunct, tables[0], tables[1], left, right)) {
         auto join = findJoin(this, tables, true);
         if (join->isInner()) {
           if (left->is(PlanType::kColumnExpr) &&
@@ -1028,6 +1078,125 @@ void DerivedTable::distributeConjuncts() {
   for (auto* changed : changedDts) {
     changed->remakeInitialPlan();
   }
+}
+
+void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
+  for (auto i = 0; i < conjuncts.size(); ++i) {
+    auto* conjunct = conjuncts[i];
+
+    // No pushdown of non-deterministic except if only pushdown target is a
+    // union all.
+    if (conjunct->containsNonDeterministic() && !allowNondeterministic) {
+      continue;
+    }
+
+    if (conjunct->singleTable() != this) {
+      continue;
+    }
+
+    if (conjunct->containsFunction(FunctionSet::kNonDefaultNullBehavior)) {
+      continue;
+    }
+
+    for (auto joinIndex = 0; joinIndex < joins.size(); ++joinIndex) {
+      auto join = joins[joinIndex];
+      if (!join->leftOptional() && !join->rightOptional()) {
+        continue;
+      }
+
+      auto rightJoinColumns = PlanObjectSet::fromObjects(join->rightColumns());
+      auto leftJoinColumns = PlanObjectSet::fromObjects(join->leftColumns());
+
+      if (conjunct->columns().isSubset(rightJoinColumns)) {
+        if (!join->leftOptional()) {
+          joins[joinIndex] = toInnerJoin(join);
+
+          replaceInputs(conjuncts, join->rightColumns(), join->rightExprs());
+          conjuncts.insert(
+              conjuncts.end(), join->filter().begin(), join->filter().end());
+        } else {
+          // Convert FULL join to (normalized) RIGHT join. The filter references
+          // right-side columns and has default null behavior, so it eliminates
+          // left-only rows (which have NULLs for right columns). This is
+          // equivalent to a RIGHT join. The result is normalized by swapping
+          // sides to avoid storing RIGHT joins directly.
+          joins[joinIndex] = toNormalizedRightJoin(join);
+
+          replaceInputs(conjuncts, join->rightColumns(), join->rightExprs());
+        }
+
+        // Translate 'columns'.
+        for (int j = 0; j < columns.size(); ++j) {
+          if (rightJoinColumns.contains(exprs[j])) {
+            exprs[j] = replaceInputs(
+                exprs[j], join->rightColumns(), join->rightExprs());
+          }
+        }
+
+        break;
+      }
+
+      if (conjunct->columns().isSubset(leftJoinColumns)) {
+        // Convert FULL join to LEFT join. The filter references left-side
+        // columns and has default null behavior, so it eliminates right-only
+        // rows (which have NULLs for left columns). This is equivalent to a
+        // LEFT join.
+        joins[joinIndex] = toLeftJoin(join);
+
+        // Translate 'columns'.
+        for (int j = 0; j < columns.size(); ++j) {
+          if (leftJoinColumns.contains(exprs[j])) {
+            exprs[j] =
+                replaceInputs(exprs[j], join->leftColumns(), join->leftExprs());
+          }
+        }
+
+        replaceInputs(conjuncts, join->leftColumns(), join->leftExprs());
+
+        break;
+      }
+    }
+  }
+}
+
+bool DerivedTable::tryPushdownConjunct(
+    ExprCP conjunct,
+    PlanObjectP table,
+    std::vector<DerivedTableP>& changedDts) {
+  if (table->is(PlanType::kValuesTableNode)) {
+    return false; // ValuesTable does not have filter push-down.
+  }
+
+  if (table->is(PlanType::kUnnestTableNode)) {
+    return false; // UnnestTable does not have filter push-down.
+  }
+
+  if (table->is(PlanType::kDerivedTableNode)) {
+    // Translate the column names and add the condition to the conjuncts in
+    // the dt. If the inner is a set operation, add the filter to children.
+    auto innerDt = table->as<DerivedTable>();
+    if (dtHasLimit(*innerDt)) {
+      return false;
+    }
+
+    auto numChildren = innerDt->children.empty() ? 1 : innerDt->children.size();
+    for (auto childIdx = 0; childIdx < numChildren; ++childIdx) {
+      auto childDt = numChildren == 1 ? innerDt : innerDt->children[childIdx];
+      auto imported = childDt->importExpr(conjunct);
+      if (childDt->aggregation) {
+        childDt->having.push_back(imported);
+      } else {
+        childDt->conjuncts.push_back(imported);
+      }
+
+      pushBackUnique(changedDts, childDt);
+    }
+    return true;
+  }
+
+  VELOX_CHECK(table->is(PlanType::kTableNode));
+  table->as<BaseTable>()->addFilter(conjunct);
+  return true;
 }
 
 void DerivedTable::makeInitialPlan() {
