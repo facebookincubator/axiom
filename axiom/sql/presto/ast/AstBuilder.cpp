@@ -1592,7 +1592,24 @@ std::any AstBuilder::visitTypeConstructor(
 std::any AstBuilder::visitSpecialDateTimeFunction(
     PrestoSqlParser::SpecialDateTimeFunctionContext* ctx) {
   trace("visitSpecialDateTimeFunction");
-  return visitChildren("visitSpecialDateTimeFunction", ctx);
+
+  // TODO D92297380: Add Velox support for CURRENT_TIME and LOCALTIMESTAMP
+  auto makeCurrentTime = [&](const CurrentTime::Function function) {
+    return std::static_pointer_cast<Expression>(std::make_shared<CurrentTime>(
+        getLocation(ctx), function, std::nullopt));
+  };
+
+  switch (ctx->name->getType()) {
+    case PrestoSqlParser::CURRENT_DATE:
+      return makeCurrentTime(CurrentTime::Function::kDate);
+    case PrestoSqlParser::CURRENT_TIMESTAMP:
+      return makeCurrentTime(CurrentTime::Function::kTimestamp);
+    case PrestoSqlParser::LOCALTIME:
+      return makeCurrentTime(CurrentTime::Function::kLocaltime);
+    default:
+      VELOX_UNSUPPORTED(
+          "Unsupported date/time function: {}", ctx->name->getText());
+  }
 }
 
 std::any AstBuilder::visitSubstring(PrestoSqlParser::SubstringContext* ctx) {

@@ -1304,6 +1304,29 @@ TEST_F(PrestoParserTest, lambda) {
       "reduce(array[], map(), (s, x) -> map(array[1], array[2]), s -> 123)");
 }
 
+TEST_F(PrestoParserTest, specialDateTimeFunctions) {
+  testSqlExpression("current_date");
+  testSqlExpression("current_timestamp");
+  testSqlExpression("localtime");
+
+  testSqlExpression("date_add('day', -1000, current_date)");
+  testSqlExpression("date_diff('day', current_date, date '2020-01-01')");
+
+  testSqlExpression("current_date > date '2020-01-01'");
+  testSqlExpression("current_date - interval '1' day");
+
+  // TODO D92297380: These are currently unsupported in Velox
+  {
+    auto parser = makeParser();
+    VELOX_ASSERT_THROW(
+        parser.parseExpression("current_time"),
+        "Unsupported date/time function");
+    VELOX_ASSERT_THROW(
+        parser.parseExpression("localtimestamp"),
+        "Unsupported date/time function");
+  }
+}
+
 TEST_F(PrestoParserTest, values) {
   {
     auto matcher = lp::test::LogicalPlanMatcherBuilder().values(
