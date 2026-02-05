@@ -33,6 +33,9 @@ const auto& orderTypeNames() {
   };
   return kNames;
 }
+} // namespace
+
+AXIOM_DEFINE_ENUM_NAME(OrderType, orderTypeNames);
 
 /// Helper to register an optional Variant with the QueryGraphContext.
 /// Returns nullptr if the optional has no value, otherwise returns a pointer
@@ -44,9 +47,6 @@ const velox::Variant* registerOptionalVariant(
   }
   return registerVariant(opt.value());
 }
-} // namespace
-
-AXIOM_DEFINE_ENUM_NAME(OrderType, orderTypeNames);
 
 Value& Value::operator=(const Value& other) {
   VELOX_CHECK(
@@ -202,7 +202,8 @@ SchemaTableCP Schema::findTable(
 
 float tableCardinality(PlanObjectCP table) {
   if (table->is(PlanType::kTableNode)) {
-    return table->as<BaseTable>()->schemaTable->cardinality;
+    return std::max<float>(
+        1.0f, table->as<BaseTable>()->firstLayoutScanCardinality);
   }
   if (table->is(PlanType::kValuesTableNode)) {
     return table->as<ValuesTable>()->cardinality();

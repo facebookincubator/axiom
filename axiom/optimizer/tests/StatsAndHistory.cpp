@@ -503,8 +503,9 @@ TEST_F(StatsAndHistoryTest, partitionStatsWithSampling) {
 
   // Check partition statistics based on product partition value
   for (size_t i = 0; i < partitions.size(); ++i) {
-    auto* partition = dynamic_cast<const connector::hive::LocalHivePartitionHandle*>(
-        partitions[i].get());
+    auto* partition =
+        dynamic_cast<const connector::hive::LocalHivePartitionHandle*>(
+            partitions[i].get());
     ASSERT_NE(partition, nullptr);
 
     // Get product partition value
@@ -541,28 +542,34 @@ TEST_F(StatsAndHistoryTest, partitionStatsWithSampling) {
         // p1: ~1750 rows per partition, numDistinct should be between 1200 and
         // 1600
         EXPECT_GE(numDistinct, 1200)
-            << "Column " << colName << " in partition " << partition->partition()
+            << "Column " << colName << " in partition "
+            << partition->partition()
             << " (product=p1) has numDistinct=" << numDistinct;
         EXPECT_LE(numDistinct, 1800)
-            << "Column " << colName << " in partition " << partition->partition()
+            << "Column " << colName << " in partition "
+            << partition->partition()
             << " (product=p1) has numDistinct=" << numDistinct;
       } else if (product == "p2") {
         // p2: ~500 rows per partition, numDistinct should be between 400 and
         // 600
         EXPECT_GE(numDistinct, 400)
-            << "Column " << colName << " in partition " << partition->partition()
+            << "Column " << colName << " in partition "
+            << partition->partition()
             << " (product=p2) has numDistinct=" << numDistinct;
         EXPECT_LE(numDistinct, 600)
-            << "Column " << colName << " in partition " << partition->partition()
+            << "Column " << colName << " in partition "
+            << partition->partition()
             << " (product=p2) has numDistinct=" << numDistinct;
       } else if (product == "p3") {
         // p3: ~250 rows per partition, numDistinct should be between 200 and
         // 300
         EXPECT_GE(numDistinct, 200)
-            << "Column " << colName << " in partition " << partition->partition()
+            << "Column " << colName << " in partition "
+            << partition->partition()
             << " (product=p3) has numDistinct=" << numDistinct;
         EXPECT_LE(numDistinct, 300)
-            << "Column " << colName << " in partition " << partition->partition()
+            << "Column " << colName << " in partition "
+            << partition->partition()
             << " (product=p3) has numDistinct=" << numDistinct;
       } else {
         FAIL() << "Unexpected product value: " << product;
@@ -788,6 +795,66 @@ TEST_F(StatsAndHistoryTest, samplePartitions) {
     EXPECT_LE(sequenceStats->numDistinct.value(), 550)
         << "sequence numDistinct should be <= 550";
   }
+}
+
+TEST_F(StatsAndHistoryTest, filterSamplingInOptimize) {
+  // Helper function to test filter sampling with different optimizer settings
+  auto testFilterSampling = [this](
+                                const std::string& sql,
+                                bool sampleFilters,
+                                float minExpectedDistinct,
+                                float minExpectedPlanCost) {
+    optimizerOptions_.sampleFilters = sampleFilters;
+
+    optimize(sql, velox::exec::test::kHiveConnectorId);
+    auto* plan = optimization_->bestPlan();
+
+    // Check that we got a valid plan
+    ASSERT_NE(plan, nullptr);
+    ASSERT_NE(plan->op, nullptr);
+
+    // Get the output columns from the plan
+    const auto& columns = plan->op->columns();
+    ASSERT_FALSE(columns.empty()) << "Plan should have output columns";
+
+    // Find constraint for first column
+    ASSERT_FALSE(columns.empty()) << "Expected at least one column";
+    auto* firstCol = columns[0];
+
+    auto it = plan->constraints->find(firstCol->id());
+    ASSERT_TRUE(it != plan->constraints->end())
+        << "Expected constraint for first column: " << firstCol->name();
+
+    const auto& constraint = it->second;
+
+    // Check that cardinality (distinct values) meets expectations
+    EXPECT_GT(constraint.cardinality, minExpectedDistinct)
+        << "With sampleFilters=" << sampleFilters << ", expected cardinality > "
+        << minExpectedDistinct << " for column " << firstCol->name() << ", got "
+        << constraint.cardinality;
+
+    // Check the plan cost
+    EXPECT_GT(plan->cost.cost, minExpectedPlanCost)
+        << "With sampleFilters=" << sampleFilters << ", expected plan cost > "
+        << minExpectedPlanCost << ", got " << plan->cost.cost;
+
+    LOG(INFO) << "With sampleFilters=" << sampleFilters
+              << ": column=" << firstCol->name()
+              << ", cardinality (distinct values)=" << constraint.cardinality
+              << ", plan cost=" << plan->cost.cost;
+  };
+
+  const std::string sql =
+      "select user_id from history_data where user_id > 10000";
+
+  // Test with sampleFilters = true
+  testFilterSampling(sql, true, 1000.0f, 1000.0f);
+
+  // Reset the leaf selectivity cache by creating a new history object
+  history_ = std::make_unique<optimizer::VeloxHistory>();
+
+  // Test with sampleFilters = false
+  testFilterSampling(sql, false, 1000.0f, 1000.0f);
 }
 
 } // namespace facebook::axiom::optimizer::test

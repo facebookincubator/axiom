@@ -241,6 +241,13 @@ struct DerivedTable : public PlanObject {
   /// 'this' as a join side because join sides must have a cardinality guess.
   void makeInitialPlan();
 
+  /// Clears memoized plans and remakes the initial plan.
+  void remakeInitialPlan();
+
+  /// Returns the best plan from the initial memoization, or nullptr if not
+  /// memoized.
+  PlanP bestInitialPlan() const;
+
   std::string toString() const override;
 
   /// Pushes down filters from 'conjuncts' into join conditions and single-table

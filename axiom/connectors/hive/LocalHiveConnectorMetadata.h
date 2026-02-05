@@ -176,8 +176,8 @@ class LocalHiveTableLayout : public HiveTableLayout {
     files_ = std::move(files);
   }
 
-  const std::vector<std::shared_ptr<const LocalHivePartitionHandle>>& partitions()
-      const {
+  const std::vector<std::shared_ptr<const LocalHivePartitionHandle>>&
+  partitions() const {
     return partitions_;
   }
 
@@ -302,6 +302,11 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
     return hiveConnector_;
   }
 
+  const std::shared_ptr<velox::connector::hive::HiveConfig>& hiveConfig()
+      const {
+    return hiveConfig_;
+  }
+
   /// Rereads the contents of the data path and re-creates the tables
   /// and stats. This is used in tests after adding tables.
   void reinitialize();
@@ -379,6 +384,7 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   folly::F14FastMap<std::string, std::shared_ptr<LocalTable>> tables_;
   LocalHiveSplitManager splitManager_;
   std::shared_ptr<HiveMetadataConfig> hiveMetadataConfig_;
+  std::shared_ptr<velox::connector::hive::HiveConfig> hiveConfig_;
 };
 
 } // namespace facebook::axiom::connector::hive

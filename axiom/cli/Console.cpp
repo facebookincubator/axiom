@@ -45,6 +45,9 @@ DEFINE_string(
 
 DEFINE_bool(debug, false, "Enable debug mode");
 
+DEFINE_bool(sample_joins, false, "Enable join sampling");
+DEFINE_bool(sample_filters, false, "Enable filter sampling");
+
 using namespace facebook::velox;
 
 namespace axiom::sql {
@@ -77,6 +80,8 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
       .splitTargetBytes = FLAGS_split_target_bytes,
       .optimizerTraceFlags = FLAGS_optimizer_trace,
       .debugMode = FLAGS_debug,
+      .sampleJoins = FLAGS_sample_joins,
+      .sampleFilters = FLAGS_sample_filters,
   };
 
   decltype(runner_.parseMultiple(sql, options)) statements;

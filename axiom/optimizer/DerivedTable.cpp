@@ -1336,16 +1336,47 @@ void DerivedTable::makeInitialPlan() {
   finalizeJoins();
 
   auto optimization = queryCtx()->optimization();
+
+  // If statistics haven't been fetched yet, don't make plans or memo entries
+  if (!optimization->statsFetched()) {
+    return;
+  }
+
   PlanState state(*optimization, this);
   state.targetExprs.unionObjects(exprs);
 
   optimization->makeJoins(state);
 
-  auto plan = state.plans.best()->op;
+  auto bestPlan = state.plans.best();
+  auto plan = bestPlan->op;
   this->cardinality = plan->resultCardinality();
+
+  // Copy constraints from the Plan to the output columns of this DerivedTable
+  for (size_t i = 0; i < columns.size(); i++) {
+    auto* column = columns[i];
+    auto it = bestPlan->constraints->find(column->id());
+    if (it != bestPlan->constraints->end()) {
+      // Cast away const to update the value using setValue
+      const_cast<Column*>(column)->setValue(it->second);
+    }
+  }
 
   MemoKey key = memoKey(*this);
   optimization->memo().insert(key, std::move(state.plans));
+}
+
+void DerivedTable::remakeInitialPlan() {
+  queryCtx()->optimization()->memo().erase(memoKey(*this));
+  makeInitialPlan();
+}
+
+PlanP DerivedTable::bestInitialPlan() const {
+  MemoKey key = memoKey(*this);
+  auto plans = queryCtx()->optimization()->memo().find(key);
+  if (!plans) {
+    return nullptr;
+  }
+  return plans->best();
 }
 
 std::string DerivedTable::toString() const {

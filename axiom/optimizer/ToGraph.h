@@ -138,6 +138,12 @@ class ToGraph {
     }
   }
 
+  /// Updates the cardinality in the Value of all expressions in
+  /// SubfieldProjections to reflect the updated stats after table stats are
+  /// fetched. Uses firstLayoutScanCardinality * filterSelectivity of the
+  /// BaseTable.
+  void refreshAfterStats();
+
  private:
   static bool isSpecialForm(
       const logical_plan::ExprPtr& expr,
