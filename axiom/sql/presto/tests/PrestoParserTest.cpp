@@ -1014,6 +1014,11 @@ TEST_F(PrestoParserTest, groupingKeyExpr) {
     testSql(
         "SELECT substr(n_name, 1, 2), count(1) FROM nation GROUP BY 1",
         matcher);
+
+    testSql(
+        "SELECT r_regionkey IN (SELECT n_regionkey FROM nation), count(1) "
+        "FROM region GROUP BY 1",
+        matcher);
   }
 
   {
