@@ -140,6 +140,10 @@ std::string visitDerivedTable(const DerivedTable& dt) {
     }
   }
 
+  if (dt.enforceSingleRow) {
+    out << "  enforce single row" << std::endl;
+  }
+
   if (!dt.tables.empty()) {
     out << "  tables: ";
     int32_t i = 0;

@@ -1479,6 +1479,17 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
       std::move(input));
 }
 
+velox::core::PlanNodePtr ToVelox::makeEnforceSingleRow(
+    const EnforceSingleRow& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+  auto node = std::make_shared<velox::core::EnforceSingleRowNode>(
+      nextId(), std::move(input));
+  makePredictionAndHistory(node->id(), &op);
+  return node;
+}
+
 void ToVelox::makePredictionAndHistory(
     const velox::core::PlanNodeId& id,
     const RelationOp* op) {
@@ -1519,6 +1530,9 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeUnnest(*op->as<Unnest>(), fragment, stages);
     case RelType::kTableWrite:
       return makeWrite(*op->as<TableWrite>(), fragment, stages);
+    case RelType::kEnforceSingleRow:
+      return makeEnforceSingleRow(
+          *op->as<EnforceSingleRow>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

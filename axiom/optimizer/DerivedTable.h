@@ -72,6 +72,11 @@ struct DerivedTable : public PlanObject {
   /// operation (setOp is set).
   ExprVector exprs;
 
+  /// True if this DT is expected to produce exactly 1 row and must be validated
+  /// at runtime. Set for scalar subqueries that don't naturally guarantee
+  /// single-row output (no global aggregation).
+  bool enforceSingleRow{false};
+
   /// References all joins where 'this' is an end point.
   JoinEdgeVector joinedBy;
 
@@ -219,6 +224,12 @@ struct DerivedTable : public PlanObject {
       return table->is(PlanType::kUnnestTableNode);
     });
   }
+
+  /// Sets enforceSingleRow flag if this DT doesn't naturally guarantee
+  /// single-row output. A global aggregation (no grouping keys) without
+  /// HAVING clause guarantees exactly one row; otherwise, runtime validation
+  /// is needed for scalar subqueries.
+  void ensureSingleRow();
 
   /// True if contains one derived table in 'tables' and adds no change to its
   /// result set.

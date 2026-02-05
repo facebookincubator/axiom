@@ -66,6 +66,10 @@ class RelationOpVisitor {
 
   virtual void visit(const TableWrite& op, RelationOpVisitorContext& context)
       const = 0;
+
+  virtual void visit(
+      const EnforceSingleRow& op,
+      RelationOpVisitorContext& context) const = 0;
 };
 
 } // namespace facebook::axiom::optimizer

@@ -738,18 +738,28 @@ class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
   const std::optional<JoinType> joinType_;
 };
 
+// Type of shuffle boundary for matching.
+enum class ShuffleType {
+  kOrdered, // Ordered shuffle (MergeExchange)
+  kPartitioned, // Partitioned shuffle (hash/range partitioning)
+  kBroadcast, // Broadcast (isBroadcast() == true)
+  kGather, // Gather to single partition (numPartitions() == 1)
+};
+
 // Marks a shuffle boundary between fragments in a distributed plan.
 // When matching a single PlanNodePtr (via match(PlanNodePtr)):
 //   - Fails the match (shuffle boundaries require distributed plan matching)
 // When matching a MultiFragmentPlan (via match(MultiFragmentPlan)):
 //   - Producer side expects PartitionedOutput
 //   - Consumer side expects Exchange (or MergeExchange if ordered)
+//   - If type is specified, verifies the corresponding PartitionedOutputNode
+//     property (e.g., isBroadcast(), numPartitions())
 class ShuffleBoundaryMatcher : public PlanMatcher {
  public:
   explicit ShuffleBoundaryMatcher(
       std::shared_ptr<PlanMatcher> producerMatcher,
-      bool ordered = false)
-      : producerMatcher_(std::move(producerMatcher)), ordered_(ordered) {}
+      std::optional<ShuffleType> type = std::nullopt)
+      : producerMatcher_(std::move(producerMatcher)), type_(type) {}
 
   MatchResult match(
       const PlanNodePtr& plan,
@@ -763,7 +773,7 @@ class ShuffleBoundaryMatcher : public PlanMatcher {
 
  private:
   const std::shared_ptr<PlanMatcher> producerMatcher_;
-  const bool ordered_;
+  const std::optional<ShuffleType> type_;
 };
 
 // Returns the producer fragment for the given Exchange node, or nullptr if not
@@ -797,7 +807,7 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
       "PlanNodePtr. Use match(MultiFragmentPlan) for distributed plans.");
 
   // Verify the plan is an Exchange or MergeExchange.
-  if (ordered_) {
+  if (type_ == ShuffleType::kOrdered) {
     EXPECT_TRUE(dynamic_cast<const MergeExchangeNode*>(plan.get()) != nullptr)
         << "Expected MergeExchange at shuffle boundary, but got "
         << plan->toString(false, false);
@@ -823,6 +833,37 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
       << "Expected PartitionedOutput at fragment root, but got "
       << fragmentPlan->toString(false, false);
   AXIOM_TEST_RETURN_IF_FAILURE
+
+  // Verify shuffle type specific constraints if type is specified.
+  if (type_.has_value()) {
+    switch (type_.value()) {
+      case ShuffleType::kBroadcast:
+        EXPECT_TRUE(partitionedOutput->isBroadcast())
+            << "Expected broadcast PartitionedOutput, but got "
+            << fragmentPlan->toString(false, false);
+        AXIOM_TEST_RETURN_IF_FAILURE
+        break;
+      case ShuffleType::kGather:
+        EXPECT_EQ(partitionedOutput->numPartitions(), 1)
+            << "Expected gather (single partition) PartitionedOutput, but got "
+            << partitionedOutput->numPartitions() << " partitions";
+        AXIOM_TEST_RETURN_IF_FAILURE
+        break;
+      case ShuffleType::kPartitioned:
+        EXPECT_FALSE(partitionedOutput->isBroadcast())
+            << "Expected partitioned PartitionedOutput, but got broadcast";
+        AXIOM_TEST_RETURN_IF_FAILURE
+        EXPECT_GT(partitionedOutput->numPartitions(), 1)
+            << "Expected partitioned PartitionedOutput with multiple "
+               "partitions, but got "
+            << partitionedOutput->numPartitions();
+        AXIOM_TEST_RETURN_IF_FAILURE
+        break;
+      case ShuffleType::kOrdered:
+        // Already verified above with MergeExchange check.
+        break;
+    }
+  }
 
   // Update context for producer fragment matching.
   DistributedMatchContext producerContext{
@@ -1047,15 +1088,28 @@ PlanMatcherBuilder& PlanMatcherBuilder::exchange() {
 
 PlanMatcherBuilder& PlanMatcherBuilder::shuffle() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ =
-      std::make_shared<ShuffleBoundaryMatcher>(matcher_, /*ordered=*/false);
+  matcher_ = std::make_shared<ShuffleBoundaryMatcher>(matcher_);
   return *this;
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::shuffleMerge() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ =
-      std::make_shared<ShuffleBoundaryMatcher>(matcher_, /*ordered=*/true);
+      std::make_shared<ShuffleBoundaryMatcher>(matcher_, ShuffleType::kOrdered);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::broadcast() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<ShuffleBoundaryMatcher>(
+      matcher_, ShuffleType::kBroadcast);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::gather() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<ShuffleBoundaryMatcher>(matcher_, ShuffleType::kGather);
   return *this;
 }
 
@@ -1109,6 +1163,13 @@ PlanMatcherBuilder& PlanMatcherBuilder::orderBy(
 PlanMatcherBuilder& PlanMatcherBuilder::tableWrite() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<PlanMatcherImpl<TableWriteNode>>(
+      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::enforceSingleRow() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<PlanMatcherImpl<EnforceSingleRowNode>>(
       std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
   return *this;
 }

@@ -18,6 +18,7 @@
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::axiom::optimizer {
 namespace {
@@ -60,6 +61,7 @@ TEST_F(SubqueryTest, uncorrelatedScalar) {
                        .hashJoin(
                            core::PlanMatcherBuilder()
                                .hiveScan("region", {}, "r_name like 'AF%'")
+                               .enforceSingleRow()
                                .build(),
                            velox::core::JoinType::kInner)
                        .build();
@@ -887,6 +889,45 @@ TEST_F(SubqueryTest, unnest) {
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(SubqueryTest, enforceSingleRow) {
+  auto query =
+      "SELECT * FROM region "
+      "WHERE r_regionkey > (SELECT n_regionkey FROM nation)";
+  auto logicalPlan = parseSelect(query);
+
+  auto matchScan = [&](const auto& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
+
+  {
+    auto matcher =
+        matchScan("region")
+            .nestedLoopJoin(matchScan("nation").enforceSingleRow().build())
+            .filter()
+            .project()
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    VELOX_ASSERT_THROW(runVelox(plan), "Expected single row of input.");
+  }
+
+  {
+    auto matcher =
+        matchScan("region")
+            .nestedLoopJoin(
+                matchScan("nation").enforceSingleRow().broadcast().build())
+            .filter()
+            .project()
+            .gather()
+            .build();
+
+    auto distributedPlan = planVelox(logicalPlan);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
   }
 }
 

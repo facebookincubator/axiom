@@ -908,6 +908,12 @@ void Optimization::addPostprocess(
     state.addCost(*limit);
     plan = limit;
   }
+
+  if (dt->enforceSingleRow) {
+    auto enforceSingleRow = make<EnforceSingleRow>(plan);
+    state.addCost(*enforceSingleRow);
+    plan = enforceSingleRow;
+  }
 }
 
 namespace {

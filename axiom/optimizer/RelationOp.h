@@ -119,6 +119,7 @@ enum class RelType {
   kValues,
   kUnnest,
   kTableWrite,
+  kEnforceSingleRow,
 };
 
 AXIOM_DECLARE_ENUM_NAME(RelType)
@@ -665,5 +666,19 @@ struct TableWrite : public RelationOp {
 };
 
 using TableWriteCP = const TableWrite*;
+
+/// Validates that input produces exactly one row. Used for scalar subqueries.
+/// Fails at runtime if input produces zero or more than one row.
+struct EnforceSingleRow : public RelationOp {
+  explicit EnforceSingleRow(RelationOpPtr input);
+
+  std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+};
+
+using EnforceSingleRowCP = const EnforceSingleRow*;
 
 } // namespace facebook::axiom::optimizer

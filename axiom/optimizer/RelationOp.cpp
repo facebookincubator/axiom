@@ -49,6 +49,7 @@ const auto& relTypeNames() {
       {RelType::kValues, "Values"},
       {RelType::kUnnest, "Unnest"},
       {RelType::kTableWrite, "TableWrite"},
+      {RelType::kEnforceSingleRow, "EnforceSingleRow"},
   };
 
   return kNames;
@@ -1318,6 +1319,32 @@ std::string TableWrite::toString(bool recursive, bool detail) const {
 }
 
 void TableWrite::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+EnforceSingleRow::EnforceSingleRow(RelationOpPtr input)
+    : RelationOp(
+          RelType::kEnforceSingleRow,
+          input,
+          input->distribution(),
+          input->columns()) {
+  // Cardinality neutral: passes through exactly 1 row or fails at runtime.
+  cost_.fanout = 1;
+  cost_.unitCost = 0;
+}
+
+std::string EnforceSingleRow::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (recursive) {
+    out << input()->toString(true, detail) << " ";
+  }
+  out << "EnforceSingleRow";
+  return out.str();
+}
+
+void EnforceSingleRow::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
   visitor.visit(*this, context);
