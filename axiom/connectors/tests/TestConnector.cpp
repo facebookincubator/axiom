@@ -62,7 +62,7 @@ std::vector<SplitSource::SplitAndGroup> TestSplitSource::getSplits(uint64_t) {
 std::vector<PartitionHandlePtr> TestSplitManager::listPartitions(
     const ConnectorSessionPtr& session,
     const velox::connector::ConnectorTableHandlePtr&) {
-  return {std::make_shared<PartitionHandle>()};
+  return {std::make_shared<TestPartitionHandle>()};
 }
 
 std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(

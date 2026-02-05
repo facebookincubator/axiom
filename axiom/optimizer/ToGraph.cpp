@@ -110,6 +110,11 @@ ToGraph::ToGraph(
   if (auto cardinality = registry->cardinality()) {
     cardinality_ = toName(cardinality.value());
   }
+
+  // Initialize between, and, gte, lte for rewriting between to and(gte, lte)
+  between_ = toName("between");
+  gte_ = toName("gte");
+  lte_ = toName("lte");
 }
 
 void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
@@ -302,21 +307,30 @@ lp::ValuesNodePtr tryFoldConstantDt(
           baseTable->filter.begin(),
           baseTable->filter.end());
     }
-    plan = make<Filter>(plan, combinedFilters);
+    // Create temporary PlanState for Filter constructor
+    PlanState tempState(*queryCtx()->optimization(), nullptr);
+    plan = make<Filter>(tempState, plan, combinedFilters);
   }
 
-  plan = Optimization::planSingleAggregation(dt, plan);
+  // Create temporary PlanState for planSingleAggregation
+  PlanState aggState(*queryCtx()->optimization(), nullptr);
+  plan = Optimization::planSingleAggregation(dt, plan, aggState);
 
   if (!dt->having.empty()) {
-    plan = make<Filter>(plan, dt->having);
+    // Create temporary PlanState for Filter constructor
+    PlanState tempState(*queryCtx()->optimization(), nullptr);
+    plan = make<Filter>(tempState, plan, dt->having);
   }
 
+  // Create temporary PlanState for Project constructor
+  PlanState tempState(*queryCtx()->optimization(), nullptr);
   if (!Project::isRedundant(plan, dt->exprs, dt->columns)) {
     plan = make<Project>(
         plan,
         dt->exprs,
         dt->columns,
-        /*redundantProject=*/false);
+        /*redundantProject=*/false,
+        tempState);
   }
 
   auto veloxPlan = queryCtx()->optimization()->toVeloxPlan(plan);
@@ -377,7 +391,13 @@ void ToGraph::translateConjuncts(const lp::ExprPtr& input, ExprVector& flat) {
   } else {
     auto translatedExpr = translateExpr(input);
     if (!isConstantTrue(translatedExpr)) {
-      flat.push_back(translatedExpr);
+      // If the translated expression is an 'and' call, flatten it
+      if (translatedExpr->is(PlanType::kCallExpr) &&
+          translatedExpr->as<Call>()->name() == SpecialFormCallNames::kAnd) {
+        flattenAll(translatedExpr, SpecialFormCallNames::kAnd, flat);
+      } else {
+        flat.push_back(translatedExpr);
+      }
     }
   }
 }
@@ -857,20 +877,36 @@ bool shouldInvert(ExprCP left, ExprCP right) {
 
 } // namespace
 
-void ToGraph::canonicalizeCall(Name& name, ExprVector& args) {
+std::optional<ExprCP> ToGraph::canonicalizeCall(Name& name, ExprVector& args) {
+  // Rewrite between(x, a, b) to and(gte(x, a), lte(x, b))
+  if (args.size() == 3 && name == between_) {
+    auto* boolType = toType(velox::BOOLEAN());
+    // Build gte(args[0], args[1])
+    auto* gteExpr =
+        deduppedCall(gte_, Value(boolType, 2), {args[0], args[1]}, {});
+    // Build lte(args[0], args[2])
+    auto* lteExpr =
+        deduppedCall(lte_, Value(boolType, 2), {args[0], args[2]}, {});
+    // Build and(gteExpr, lteExpr)
+    auto* andExpr = deduppedCall(
+        SpecialFormCallNames::kAnd, Value(boolType, 2), {gteExpr, lteExpr}, {});
+    return andExpr;
+  }
+
   if (args.size() != 2) {
-    return;
+    return std::nullopt;
   }
 
   auto it = reversibleFunctions_.find(name);
   if (it == reversibleFunctions_.end()) {
-    return;
+    return std::nullopt;
   }
 
   if (shouldInvert(args[0], args[1])) {
     std::swap(args[0], args[1]);
     name = it->second;
   }
+  return std::nullopt;
 }
 
 ExprCP ToGraph::deduppedCall(
@@ -878,7 +914,11 @@ ExprCP ToGraph::deduppedCall(
     Value value,
     ExprVector args,
     FunctionSet flags) {
-  canonicalizeCall(name, args);
+  // Check if canonicalizeCall returns a rewritten expression
+  if (auto rewritten = canonicalizeCall(name, args)) {
+    return rewritten.value();
+  }
+
   ExprDedupKey key = {name, args};
 
   auto [it, emplaced] = functionDedup_.try_emplace(key);
@@ -927,7 +967,15 @@ ExprCP ToGraph::makeConstant(const lp::ConstantExpr& constant) {
     return it->second;
   }
 
-  auto* literal = make<Literal>(Value(temp.type, 1), temp.value.get());
+  Value value(temp.type, 1);
+  // For scalar types, set min and max to the literal value
+  if (temp.type->isPrimitiveType()) {
+    // Scalar/primitive type - set min and max to the variant
+    value.min = temp.value.get();
+    value.max = temp.value.get();
+  }
+
+  auto* literal = make<Literal>(value, temp.value.get());
 
   constantDedup_[std::move(temp)] = literal;
   return literal;

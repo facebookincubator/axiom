@@ -142,13 +142,22 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
       make<Call>(toName(kHashMix), bigintValue(), hashes, FunctionSet{});
 
   ColumnCP hashColumn = make<Column>(toName("hash"), nullptr, hash->value());
+
+  // Create temporary PlanState for Project and Filter constructors
+  PlanState tempState(*queryCtx()->optimization(), nullptr);
+
   RelationOpPtr project = make<Project>(
-      scan, ExprVector{hash}, ColumnVector{hashColumn}, /*redundant=*/false);
+      scan,
+      ExprVector{hash},
+      ColumnVector{hashColumn},
+      /*redundant=*/false,
+      tempState);
 
   // (hash % mod) < lim
   ExprCP filterExpr = makeCall(
       kSample, velox::BOOLEAN(), hashColumn, bigintLit(mod), bigintLit(lim));
-  RelationOpPtr filter = make<Filter>(project, ExprVector{filterExpr});
+  RelationOpPtr filter =
+      make<Filter>(tempState, project, ExprVector{filterExpr});
 
   auto plan = queryCtx()->optimization()->toVeloxPlan(filter);
   return std::make_shared<runner::LocalRunner>(
