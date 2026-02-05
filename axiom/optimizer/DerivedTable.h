@@ -289,6 +289,12 @@ struct DerivedTable : public PlanObject {
   // considered for join conversion.
   void tryConvertOuterJoins(bool allowNondeterministic);
 
+  // Replaces column references in 'exprs', 'conjuncts', 'orderKeys', and
+  // 'aggregation' from 'source' to 'target'. Used when converting outer joins
+  // to less restrictive join types and the join output columns need to be
+  // translated to the underlying expressions.
+  void replaceJoinOutputs(const ColumnVector& source, const ExprVector& target);
+
   // Attempts to push down a filter conjunct into the specified table.
   // For a DerivedTable, translates column names and adds the condition to
   // conjuncts or having clause (if there's aggregation). For set operations,
