@@ -19,6 +19,7 @@
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/ExprResolver.h"
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -32,6 +33,7 @@ class ExprSerdeTest : public testing::Test {
   static void SetUpTestSuite() {
     velox::Type::registerSerDe();
     Expr::registerSerDe();
+    LogicalPlanNode::registerSerDe();
     velox::functions::prestosql::registerAllScalarFunctions();
     velox::aggregate::prestosql::registerAllAggregateFunctions();
   }
@@ -176,6 +178,17 @@ TEST_F(ExprSerdeTest, lambdaExpr) {
       Call(
           "filter", Col("arr"), Lambda({"x"}, Call("gt", Col("x"), Lit(10LL)))),
       schema);
+}
+
+TEST_F(ExprSerdeTest, subqueryExpr) {
+  // Create a simple ValuesNode as the subquery
+  auto subqueryPlan = std::make_shared<ValuesNode>(
+      "values_0",
+      velox::ROW({"x"}, {velox::BIGINT()}),
+      ValuesNode::Variants{velox::Variant::row({42LL})});
+
+  auto subqueryExpr = std::make_shared<SubqueryExpr>(subqueryPlan);
+  testRoundTrip(subqueryExpr);
 }
 
 } // namespace

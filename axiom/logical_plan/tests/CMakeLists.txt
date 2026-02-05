@@ -16,6 +16,7 @@ add_executable(
   axiom_logical_plan_tests
   ExprSerdeTest.cpp
   ExprTest.cpp
+  LogicalPlanNodeSerdeTest.cpp
   NameAllocatorTest.cpp
   NameMappingsTest.cpp
   ExprApiTest.cpp

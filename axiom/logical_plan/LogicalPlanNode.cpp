@@ -38,12 +38,508 @@ const auto& nodeKindNames() {
   };
   return kNames;
 }
+
+/// Helper to serialize a vector of items to a folly::dynamic array.
+template <typename T, typename Serializer>
+folly::dynamic serializeVector(const std::vector<T>& items, Serializer&& fn) {
+  folly::dynamic arr = folly::dynamic::array;
+  for (const auto& item : items) {
+    arr.push_back(fn(item));
+  }
+  return arr;
+}
+
+/// Helper to deserialize the "inputs" field from a folly::dynamic object.
+std::vector<LogicalPlanNodePtr> deserializeNodeInputs(
+    const folly::dynamic& obj,
+    void* context) {
+  std::vector<LogicalPlanNodePtr> result;
+  if (obj.count("inputs")) {
+    const auto& inputs = obj["inputs"];
+    result.reserve(inputs.size());
+    for (const auto& input : inputs) {
+      result.push_back(
+          velox::ISerializable::deserialize<LogicalPlanNode>(input, context));
+    }
+  }
+  return result;
+}
+
+/// Helper to deserialize the "outputType" field from a folly::dynamic object.
+velox::RowTypePtr deserializeOutputType(const folly::dynamic& obj) {
+  return std::dynamic_pointer_cast<const velox::RowType>(
+      velox::ISerializable::deserialize<velox::Type>(obj["outputType"]));
+}
+
+/// Helper to deserialize an Expr from a folly::dynamic object.
+ExprPtr deserializeExpr(const folly::dynamic& obj, void* context) {
+  return velox::ISerializable::deserialize<Expr>(obj, context);
+}
+
+/// Helper to deserialize expressions from a field.
+std::vector<ExprPtr> deserializeExprs(
+    const folly::dynamic& obj,
+    const std::string& fieldName,
+    void* context) {
+  std::vector<ExprPtr> result;
+  if (obj.count(fieldName)) {
+    const auto& exprs = obj[fieldName];
+    result.reserve(exprs.size());
+    for (const auto& expr : exprs) {
+      result.push_back(deserializeExpr(expr, context));
+    }
+  }
+  return result;
+}
+
+/// Helper to deserialize a vector of strings.
+std::vector<std::string> deserializeStringVector(
+    const folly::dynamic& obj,
+    const std::string& fieldName) {
+  std::vector<std::string> result;
+  if (obj.count(fieldName)) {
+    const auto& items = obj[fieldName];
+    result.reserve(items.size());
+    for (const auto& item : items) {
+      result.push_back(item.asString());
+    }
+  }
+  return result;
+}
+
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(NodeKind, nodeKindNames)
 
 std::string LogicalPlanNode::toString() const {
   return PlanPrinter::toText(*this);
+}
+
+folly::dynamic LogicalPlanNode::serializeBase(std::string_view name) const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = name;
+  obj["id"] = id_;
+  obj["outputType"] = outputType_->serialize();
+  if (!inputs_.empty()) {
+    obj["inputs"] = serializeVector(
+        inputs_, [](const LogicalPlanNodePtr& n) { return n->serialize(); });
+  }
+  return obj;
+}
+
+// static
+void LogicalPlanNode::registerSerDe() {
+  auto& registry = velox::DeserializationWithContextRegistryForSharedPtr();
+  registry.Register("ValuesNode", ValuesNode::create);
+  registry.Register("TableScanNode", TableScanNode::create);
+  registry.Register("FilterNode", FilterNode::create);
+  registry.Register("ProjectNode", ProjectNode::create);
+  registry.Register("AggregateNode", AggregateNode::create);
+  registry.Register("JoinNode", JoinNode::create);
+  registry.Register("SortNode", SortNode::create);
+  registry.Register("LimitNode", LimitNode::create);
+  registry.Register("SetNode", SetNode::create);
+  registry.Register("UnnestNode", UnnestNode::create);
+  registry.Register("TableWriteNode", TableWriteNode::create);
+  registry.Register("SampleNode", SampleNode::create);
+}
+
+folly::dynamic ValuesNode::serialize() const {
+  auto obj = serializeBase("ValuesNode");
+  obj["cardinality"] = cardinality_;
+
+  // Serialize the data variant
+  if (std::holds_alternative<Variants>(data_)) {
+    obj["dataType"] = "Variants";
+    obj["data"] = serializeVector(
+        std::get<Variants>(data_),
+        [](const velox::Variant& v) { return v.serialize(); });
+  } else if (std::holds_alternative<Vectors>(data_)) {
+    obj["dataType"] = "Vectors";
+    // Serialize each RowVector as an array of variants to preserve batch
+    // structure
+    obj["data"] = serializeVector(
+        std::get<Vectors>(data_), [](const velox::RowVectorPtr& vector) {
+          return serializeVector(
+              vector->toVariants(),
+              [](const velox::Variant& v) { return v.serialize(); });
+        });
+  } else {
+    obj["dataType"] = "Exprs";
+    folly::dynamic rows = folly::dynamic::array;
+    for (const auto& row : std::get<Exprs>(data_)) {
+      rows.push_back(serializeVector(
+          row, [](const ExprPtr& e) { return e->serialize(); }));
+    }
+    obj["data"] = std::move(rows);
+  }
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr ValuesNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto id = obj["id"].asString();
+  auto outputType = deserializeOutputType(obj);
+  auto dataType = obj["dataType"].asString();
+
+  if (dataType == "Variants") {
+    Variants rows;
+    for (const auto& v : obj["data"]) {
+      rows.push_back(velox::Variant::create(v));
+    }
+    return std::make_shared<ValuesNode>(
+        std::move(id), outputType, std::move(rows));
+  } else if (dataType == "Vectors") {
+    VELOX_CHECK_NOT_NULL(
+        context,
+        "Memory pool required in context for deserializing ValuesNode with Vectors");
+    auto* pool = static_cast<velox::memory::MemoryPool*>(context);
+    const auto& data = obj["data"];
+    Vectors vectors;
+    vectors.reserve(data.size());
+    for (const auto& batch : data) {
+      std::vector<velox::Variant> variants;
+      variants.reserve(batch.size());
+      for (const auto& v : batch) {
+        variants.push_back(velox::Variant::create(v));
+      }
+      auto vector = std::dynamic_pointer_cast<velox::RowVector>(
+          velox::BaseVector::createFromVariants(outputType, variants, pool));
+      vectors.push_back(std::move(vector));
+    }
+    return std::make_shared<ValuesNode>(std::move(id), std::move(vectors));
+  } else if (dataType == "Exprs") {
+    const auto& data = obj["data"];
+    Exprs rows;
+    rows.reserve(data.size());
+    for (const auto& row : data) {
+      std::vector<ExprPtr> exprs;
+      exprs.reserve(row.size());
+      for (const auto& e : row) {
+        exprs.push_back(deserializeExpr(e, context));
+      }
+      rows.push_back(std::move(exprs));
+    }
+    return std::make_shared<ValuesNode>(
+        std::move(id), outputType, std::move(rows));
+  } else {
+    VELOX_FAIL("Unknown ValuesNode dataType: {}", dataType);
+  }
+}
+
+folly::dynamic TableScanNode::serialize() const {
+  auto obj = serializeBase("TableScanNode");
+  obj["connectorId"] = connectorId_;
+  obj["tableName"] = tableName_;
+  obj["columnNames"] =
+      serializeVector(columnNames_, [](const std::string& s) { return s; });
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr TableScanNode::create(
+    const folly::dynamic& obj,
+    void* /*context*/) {
+  return std::make_shared<TableScanNode>(
+      obj["id"].asString(),
+      deserializeOutputType(obj),
+      obj["connectorId"].asString(),
+      obj["tableName"].asString(),
+      deserializeStringVector(obj, "columnNames"));
+}
+
+folly::dynamic FilterNode::serialize() const {
+  auto obj = serializeBase("FilterNode");
+  obj["predicate"] = predicate_->serialize();
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr FilterNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 1);
+  return std::make_shared<FilterNode>(
+      obj["id"].asString(),
+      inputs[0],
+      deserializeExpr(obj["predicate"], context));
+}
+
+folly::dynamic ProjectNode::serialize() const {
+  auto obj = serializeBase("ProjectNode");
+  obj["names"] =
+      serializeVector(names_, [](const std::string& s) { return s; });
+  obj["expressions"] = serializeVector(
+      expressions_, [](const ExprPtr& e) { return e->serialize(); });
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr ProjectNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 1);
+  return std::make_shared<ProjectNode>(
+      obj["id"].asString(),
+      inputs[0],
+      deserializeStringVector(obj, "names"),
+      deserializeExprs(obj, "expressions", context));
+}
+
+folly::dynamic AggregateNode::serialize() const {
+  auto obj = serializeBase("AggregateNode");
+  obj["groupingKeys"] = serializeVector(
+      groupingKeys_, [](const ExprPtr& e) { return e->serialize(); });
+  obj["groupingSets"] =
+      serializeVector(groupingSets_, [](const GroupingSet& gs) {
+        folly::dynamic arr = folly::dynamic::array;
+        for (const auto& idx : gs) {
+          arr.push_back(idx);
+        }
+        return arr;
+      });
+  obj["aggregates"] = serializeVector(
+      aggregates_, [](const AggregateExprPtr& e) { return e->serialize(); });
+  obj["outputNames"] =
+      serializeVector(outputNames_, [](const std::string& s) { return s; });
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr AggregateNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 1);
+
+  std::vector<ExprPtr> groupingKeys =
+      deserializeExprs(obj, "groupingKeys", context);
+
+  std::vector<GroupingSet> groupingSets;
+  if (obj.count("groupingSets")) {
+    for (const auto& gs : obj["groupingSets"]) {
+      GroupingSet set;
+      for (const auto& idx : gs) {
+        set.push_back(idx.asInt());
+      }
+      groupingSets.push_back(std::move(set));
+    }
+  }
+
+  std::vector<AggregateExprPtr> aggregates;
+  if (obj.count("aggregates")) {
+    for (const auto& e : obj["aggregates"]) {
+      aggregates.push_back(
+          std::dynamic_pointer_cast<const AggregateExpr>(
+              deserializeExpr(e, context)));
+    }
+  }
+
+  return std::make_shared<AggregateNode>(
+      obj["id"].asString(),
+      inputs[0],
+      std::move(groupingKeys),
+      std::move(groupingSets),
+      std::move(aggregates),
+      deserializeStringVector(obj, "outputNames"));
+}
+
+folly::dynamic JoinNode::serialize() const {
+  auto obj = serializeBase("JoinNode");
+  obj["joinType"] = JoinTypeName::toName(joinType_);
+  if (condition_) {
+    obj["condition"] = condition_->serialize();
+  }
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr JoinNode::create(const folly::dynamic& obj, void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 2);
+  ExprPtr condition = nullptr;
+  if (obj.count("condition")) {
+    condition = deserializeExpr(obj["condition"], context);
+  }
+  return std::make_shared<JoinNode>(
+      obj["id"].asString(),
+      inputs[0],
+      inputs[1],
+      JoinTypeName::toJoinType(obj["joinType"].asString()),
+      std::move(condition));
+}
+
+folly::dynamic SortNode::serialize() const {
+  auto obj = serializeBase("SortNode");
+  obj["ordering"] = serializeVector(
+      ordering_, [](const SortingField& f) { return f.serialize(); });
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr SortNode::create(const folly::dynamic& obj, void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 1);
+  std::vector<SortingField> ordering;
+  if (obj.count("ordering")) {
+    for (const auto& f : obj["ordering"]) {
+      ordering.push_back(SortingField::deserialize(f, context));
+    }
+  }
+  return std::make_shared<SortNode>(
+      obj["id"].asString(), inputs[0], std::move(ordering));
+}
+
+folly::dynamic LimitNode::serialize() const {
+  auto obj = serializeBase("LimitNode");
+  obj["offset"] = offset_;
+  obj["count"] = count_;
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr LimitNode::create(const folly::dynamic& obj, void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 1);
+  return std::make_shared<LimitNode>(
+      obj["id"].asString(),
+      inputs[0],
+      obj["offset"].asInt(),
+      obj["count"].asInt());
+}
+
+folly::dynamic SetNode::serialize() const {
+  auto obj = serializeBase("SetNode");
+  obj["operation"] = SetOperationName::toName(operation_);
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr SetNode::create(const folly::dynamic& obj, void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  return std::make_shared<SetNode>(
+      obj["id"].asString(),
+      inputs,
+      SetOperationName::toSetOperation(obj["operation"].asString()));
+}
+
+folly::dynamic UnnestNode::serialize() const {
+  auto obj = serializeBase("UnnestNode");
+  obj["unnestExpressions"] = serializeVector(
+      unnestExpressions_, [](const ExprPtr& e) { return e->serialize(); });
+  obj["unnestedNames"] = serializeVector(
+      unnestedNames_, [](const std::vector<std::string>& names) {
+        folly::dynamic arr = folly::dynamic::array;
+        for (const auto& name : names) {
+          arr.push_back(name);
+        }
+        return arr;
+      });
+  if (ordinalityName_.has_value()) {
+    obj["ordinalityName"] = ordinalityName_.value();
+  }
+  obj["flattenArrayOfRows"] = flattenArrayOfRows_;
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr UnnestNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 1);
+
+  std::vector<std::vector<std::string>> unnestedNames;
+  if (obj.count("unnestedNames")) {
+    for (const auto& names : obj["unnestedNames"]) {
+      std::vector<std::string> nameVec;
+      for (const auto& name : names) {
+        nameVec.push_back(name.asString());
+      }
+      unnestedNames.push_back(std::move(nameVec));
+    }
+  }
+
+  std::optional<std::string> ordinalityName;
+  if (obj.count("ordinalityName")) {
+    ordinalityName = obj["ordinalityName"].asString();
+  }
+
+  return std::make_shared<UnnestNode>(
+      obj["id"].asString(),
+      inputs[0],
+      deserializeExprs(obj, "unnestExpressions", context),
+      std::move(unnestedNames),
+      std::move(ordinalityName),
+      obj["flattenArrayOfRows"].asBool());
+}
+
+folly::dynamic TableWriteNode::serialize() const {
+  auto obj = serializeBase("TableWriteNode");
+  obj["connectorId"] = connectorId_;
+  obj["tableName"] = tableName_;
+  obj["writeKind"] = WriteKindName::toName(writeKind_);
+  obj["columnNames"] =
+      serializeVector(columnNames_, [](const std::string& s) { return s; });
+  obj["columnExpressions"] = serializeVector(
+      columnExpressions_, [](const ExprPtr& e) { return e->serialize(); });
+  if (!options_.empty()) {
+    folly::dynamic optionsObj = folly::dynamic::object;
+    for (const auto& [key, value] : options_) {
+      optionsObj[key] = value;
+    }
+    obj["options"] = std::move(optionsObj);
+  }
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr TableWriteNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 1);
+
+  folly::F14FastMap<std::string, std::string> options;
+  if (obj.count("options")) {
+    for (const auto& [key, value] : obj["options"].items()) {
+      options[key.asString()] = value.asString();
+    }
+  }
+
+  return std::make_shared<TableWriteNode>(
+      obj["id"].asString(),
+      inputs[0],
+      obj["connectorId"].asString(),
+      obj["tableName"].asString(),
+      WriteKindName::toWriteKind(obj["writeKind"].asString()),
+      deserializeStringVector(obj, "columnNames"),
+      deserializeExprs(obj, "columnExpressions", context),
+      std::move(options));
+}
+
+folly::dynamic SampleNode::serialize() const {
+  auto obj = serializeBase("SampleNode");
+  obj["percentage"] = percentage_->serialize();
+  obj["sampleMethod"] = SampleNode::toName(sampleMethod_);
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr SampleNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 1);
+  return std::make_shared<SampleNode>(
+      obj["id"].asString(),
+      inputs[0],
+      deserializeExpr(obj["percentage"], context),
+      SampleNode::toSampleMethod(obj["sampleMethod"].asString()));
 }
 
 namespace {

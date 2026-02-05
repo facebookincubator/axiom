@@ -746,6 +746,8 @@ class SubqueryExpr : public Expr {
 
   folly::dynamic serialize() const override;
 
+  static ExprPtr create(const folly::dynamic& obj, void* context);
+
  private:
   const LogicalPlanNodePtr subquery_;
 };
