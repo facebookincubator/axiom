@@ -530,7 +530,8 @@ ExprCP replaceInputs(ExprCP expr, const T& source, const U& target) {
       return expr;
     case PlanType::kLiteralExpr:
       return expr;
-    case PlanType::kCallExpr: {
+    case PlanType::kCallExpr:
+    case PlanType::kAggregateExpr: {
       auto children = expr->children();
       ExprVector newChildren(children.size());
       FunctionSet functions;
@@ -541,6 +542,36 @@ ExprCP replaceInputs(ExprCP expr, const T& source, const U& target) {
         if (newChildren[i]->isFunction()) {
           functions = functions | newChildren[i]->as<Call>()->functions();
         }
+      }
+
+      if (expr->type() == PlanType::kAggregateExpr) {
+        const auto* aggregate = expr->as<Aggregate>();
+        auto* newCondition =
+            replaceInputs(aggregate->condition(), source, target);
+
+        ExprVector newOrderKeys;
+        newOrderKeys.reserve(aggregate->orderKeys().size());
+        for (const auto* orderKey : aggregate->orderKeys()) {
+          newOrderKeys.push_back(replaceInputs(orderKey, source, target));
+        }
+
+        anyChange |= newCondition != aggregate->condition();
+        anyChange |= newOrderKeys != aggregate->orderKeys();
+
+        if (!anyChange) {
+          return expr;
+        }
+
+        return make<Aggregate>(
+            aggregate->name(),
+            aggregate->value(),
+            std::move(newChildren),
+            functions,
+            aggregate->isDistinct(),
+            newCondition,
+            aggregate->intermediateType(),
+            std::move(newOrderKeys),
+            aggregate->orderTypes());
       }
 
       if (!anyChange) {
@@ -582,7 +613,45 @@ void replaceInputs(ExprVector& exprs, const T& source, const U& target) {
     exprs[i] = replaceInputs(exprs[i], source, target);
   }
 }
+
+template <typename T, typename U>
+AggregationPlanCP
+replaceInputs(AggregationPlanCP aggregation, const T& source, const U& target) {
+  if (!aggregation) {
+    return nullptr;
+  }
+
+  ExprVector newGroupingKeys = aggregation->groupingKeys();
+  replaceInputs(newGroupingKeys, source, target);
+
+  AggregateVector newAggregates;
+  newAggregates.reserve(aggregation->aggregates().size());
+  for (const auto* aggregate : aggregation->aggregates()) {
+    newAggregates.push_back(
+        replaceInputs(aggregate, source, target)->template as<Aggregate>());
+  }
+
+  if (newGroupingKeys == aggregation->groupingKeys() &&
+      newAggregates == aggregation->aggregates()) {
+    return aggregation;
+  }
+
+  return make<AggregationPlan>(
+      std::move(newGroupingKeys),
+      std::move(newAggregates),
+      aggregation->columns(),
+      aggregation->intermediateColumns());
+}
 } // namespace
+
+void DerivedTable::replaceJoinOutputs(
+    const ColumnVector& source,
+    const ExprVector& target) {
+  replaceInputs(exprs, source, target);
+  replaceInputs(conjuncts, source, target);
+  replaceInputs(orderKeys, source, target);
+  aggregation = replaceInputs(aggregation, source, target);
+}
 
 bool DerivedTable::isWrapOnly() const {
   return tables.size() == 1 && tables[0]->is(PlanType::kDerivedTableNode) &&
@@ -1193,7 +1262,6 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
         if (!join->leftOptional()) {
           joins[joinIndex] = toInnerJoin(join);
 
-          replaceInputs(conjuncts, join->rightColumns(), join->rightExprs());
           conjuncts.insert(
               conjuncts.end(), join->filter().begin(), join->filter().end());
         } else {
@@ -1204,18 +1272,9 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
           // normalized by swapping sides to avoid storing RIGHT joins
           // directly.
           joins[joinIndex] = toNormalizedRightJoin(join);
-
-          replaceInputs(conjuncts, join->rightColumns(), join->rightExprs());
         }
 
-        // Translate 'columns'.
-        for (int j = 0; j < columns.size(); ++j) {
-          if (rightJoinColumns.contains(exprs[j])) {
-            exprs[j] = replaceInputs(
-                exprs[j], join->rightColumns(), join->rightExprs());
-          }
-        }
-
+        replaceJoinOutputs(join->rightColumns(), join->rightExprs());
         break;
       }
 
@@ -1226,16 +1285,7 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
         // LEFT join.
         joins[joinIndex] = toLeftJoin(join);
 
-        // Translate 'columns'.
-        for (int j = 0; j < columns.size(); ++j) {
-          if (leftJoinColumns.contains(exprs[j])) {
-            exprs[j] =
-                replaceInputs(exprs[j], join->leftColumns(), join->leftExprs());
-          }
-        }
-
-        replaceInputs(conjuncts, join->leftColumns(), join->leftExprs());
-
+        replaceJoinOutputs(join->leftColumns(), join->leftExprs());
         break;
       }
     }

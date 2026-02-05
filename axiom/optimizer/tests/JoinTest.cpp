@@ -800,6 +800,70 @@ TEST_F(JoinTest, leftThenFilter) {
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+
+  // The filter 'z > 0' references the optional side of the LEFT join. This
+  // filter eliminates NULLs on the right side, so the LEFT join can be
+  // converted to an INNER join. The filter is pushed down below the join.
+  // Column 'z' is produced by the join and becomes unavailable after the join
+  // is converted to INNER. Hence, references to 'z' in projections,
+  // aggregations and order-by clauses must be replaced with the underlying
+  // expression 'y + 1'.
+
+  // Projection that references optional side column.
+  {
+    auto query =
+        "SELECT z * 2 FROM t LEFT JOIN (SELECT x, y + 1 as z FROM u) ON a = x "
+        "WHERE z > 0";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("u")
+                       .filter("y + 1 > 0")
+                       .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Aggregation that references optional side column.
+  {
+    auto query =
+        "SELECT sum(z) FROM t LEFT JOIN (SELECT x, y + 1 as z FROM u) ON a = x "
+        "WHERE z > 0";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("u")
+                       .filter("y + 1 > 0")
+                       .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+                       .project()
+                       .aggregation()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Order-by that references optional side column.
+  {
+    auto query =
+        "SELECT * FROM t LEFT JOIN (SELECT x, y + 1 as z FROM u) ON a = x "
+        "WHERE z > 0 "
+        "ORDER BY z DESC";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").filter("y + 1 > 0").build(),
+                           core::JoinType::kInner)
+                       .project()
+                       .orderBy()
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 TEST_F(JoinTest, fullThenFilter) {
