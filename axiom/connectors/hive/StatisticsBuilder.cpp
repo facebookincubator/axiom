@@ -17,10 +17,17 @@
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/hive/StatisticsBuilder.h"
+#include "velox/type/Type.h"
 
 namespace facebook::axiom::connector {
 
 namespace {
+
+template <typename T, typename U>
+velox::Variant toVariant(U value) {
+  return velox::Variant(static_cast<T>(value));
+}
+
 /// StatisticsBuilder using dwrf::StaticsBuilder
 class StatisticsBuilderImpl : public StatisticsBuilder {
  public:
@@ -37,18 +44,7 @@ class StatisticsBuilderImpl : public StatisticsBuilder {
 
   void merge(const StatisticsBuilder& other) override;
 
-  int64_t numAscending() const override {
-    return numAsc_;
-  }
-
-  void build(ColumnStatistics& result, float sampleFraction = 1) override;
-
-  int64_t numRepeat() const override {
-    return numRepeat_;
-  }
-  int64_t numDescending() const override {
-    return numDesc_;
-  }
+  void build(ColumnStatistics& result) const override;
 
  private:
   template <typename Builder, typename T>
@@ -70,7 +66,7 @@ std::unique_ptr<StatisticsBuilder> StatisticsBuilder::create(
     const StatisticsBuilderOptions& options) {
   velox::dwrf::StatisticsBuilderOptions dwrfOptions(
       options.maxStringLength,
-      options.initialSize,
+      /*initialSize=*/std::nullopt,
       options.countDistincts,
       options.allocator);
   switch (type->kind()) {
@@ -175,13 +171,11 @@ void StatisticsBuilderImpl::add(const velox::VectorPtr& data) {
 void StatisticsBuilder::updateBuilders(
     const velox::RowVectorPtr& row,
     std::vector<std::unique_ptr<StatisticsBuilder>>& builders) {
-  for (auto column = 0; column < builders.size(); ++column) {
-    if (!builders[column]) {
-      continue;
+  VELOX_CHECK_LE(builders.size(), row->childrenSize());
+  for (auto i = 0; i < builders.size(); ++i) {
+    if (builders[i] != nullptr) {
+      builders[i]->add(row->childAt(i));
     }
-    auto* builder = builders[column].get();
-    velox::VectorPtr data = row->childAt(column);
-    builder->add(data);
   }
 }
 
@@ -194,37 +188,63 @@ void StatisticsBuilderImpl::merge(const StatisticsBuilder& in) {
   numRows_ += other->numRows_;
 }
 
-void StatisticsBuilderImpl::build(
-    ColumnStatistics& result,
-    float sampleFraction) {
+void StatisticsBuilderImpl::build(ColumnStatistics& result) const {
   auto stats = builder_->build();
-  auto optNumValues = stats->getNumberOfValues();
-  auto numValues = optNumValues.has_value() ? optNumValues.value() : 0;
+  auto numValues = stats->getNumberOfValues().value_or(0);
+
   if (auto ints = dynamic_cast<velox::dwio::common::IntegerColumnStatistics*>(
           stats.get())) {
-    auto min = ints->getMinimum();
-    auto max = ints->getMaximum();
-    if (min.has_value() && max.has_value()) {
-      result.min = velox::Variant(min.value());
-      result.max = velox::Variant(max.value());
+    if (auto min = ints->getMinimum(), max = ints->getMaximum(); min && max) {
+      // IntegerStatisticsBuilder uses int64_t accumulator, but we need to
+      // create a Variant with the correct TypeKind for the actual column type.
+      switch (type_->kind()) {
+        case velox::TypeKind::TINYINT:
+          result.min = toVariant<int8_t>(*min);
+          result.max = toVariant<int8_t>(*max);
+          break;
+        case velox::TypeKind::SMALLINT:
+          result.min = toVariant<int16_t>(*min);
+          result.max = toVariant<int16_t>(*max);
+          break;
+        case velox::TypeKind::INTEGER:
+          result.min = toVariant<int32_t>(*min);
+          result.max = toVariant<int32_t>(*max);
+          break;
+        case velox::TypeKind::BIGINT:
+          result.min = velox::Variant(*min);
+          result.max = velox::Variant(*max);
+          break;
+        case velox::TypeKind::HUGEINT:
+          result.min = toVariant<velox::int128_t>(*min);
+          result.max = toVariant<velox::int128_t>(*max);
+          break;
+        default:
+          // For other types, use int64_t as fallback.
+          result.min = velox::Variant(*min);
+          result.max = velox::Variant(*max);
+          break;
+      }
     }
   } else if (
       auto* dbl = dynamic_cast<velox::dwio::common::DoubleColumnStatistics*>(
           stats.get())) {
-    auto min = dbl->getMinimum();
-    auto max = dbl->getMaximum();
-    if (min.has_value() && max.has_value()) {
-      result.min = velox::Variant(min.value());
-      result.max = velox::Variant(max.value());
+    if (auto min = dbl->getMinimum(), max = dbl->getMaximum(); min && max) {
+      // DoubleStatisticsBuilder uses double accumulator, but REAL columns
+      // need float Variants.
+      if (type_->kind() == velox::TypeKind::REAL) {
+        result.min = toVariant<float>(*min);
+        result.max = toVariant<float>(*max);
+      } else {
+        result.min = velox::Variant(*min);
+        result.max = velox::Variant(*max);
+      }
     }
   } else if (
       auto* str = dynamic_cast<velox::dwio::common::StringColumnStatistics*>(
           stats.get())) {
-    auto min = str->getMinimum();
-    auto max = str->getMaximum();
-    if (min.has_value() && max.has_value()) {
-      result.min = velox::Variant(min.value());
-      result.max = velox::Variant(max.value());
+    if (auto min = str->getMinimum(), max = str->getMaximum(); min && max) {
+      result.min = velox::Variant(*min);
+      result.max = velox::Variant(*max);
     }
     if (numValues) {
       result.avgLength = str->getTotalLength().value() / numValues;
@@ -235,6 +255,15 @@ void StatisticsBuilderImpl::build(
         100 * (numRows_ - numValues) / static_cast<float>(numRows_);
   }
   result.numDistinct = stats->numDistinct();
+
+  // Compute ascending/descending percentages from ordering statistics.
+  // Note: totalTransitions counts transitions between consecutive non-null
+  // values, while numRows_ counts all rows including nulls.
+  const auto totalTransitions = numAsc_ + numDesc_ + numRepeat_;
+  if (totalTransitions > 0) {
+    result.ascendingPct = 100.0f * numAsc_ / totalTransitions;
+    result.descendingPct = 100.0f * numDesc_ / totalTransitions;
+  }
 }
 
 } // namespace facebook::axiom::connector

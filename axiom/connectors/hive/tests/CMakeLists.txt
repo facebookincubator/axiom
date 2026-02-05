@@ -12,15 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_executable(
-  axiom_hive_connector_metadata_test
+  axiom_connectors_hive_test
   LocalHiveConnectorMetadataTest.cpp
   HiveMetadataConfigTest.cpp
+  StatisticsBuilderTest.cpp
 )
 
-add_test(axiom_hive_connector_metadata_test axiom_hive_connector_metadata_test)
+add_test(axiom_connectors_hive_test axiom_connectors_hive_test)
 
 target_link_libraries(
-  axiom_hive_connector_metadata_test
+  axiom_connectors_hive_test
   axiom_hive_connector_metadata
   velox_hive_connector
   axiom_runner_tests_utils
