@@ -950,8 +950,9 @@ void LocalHiveConnectorMetadata::loadTable(
 
 namespace {
 
-bool isMixedOrder(const StatisticsBuilder& stats) {
-  return stats.numAscending() && stats.numDescending();
+bool isMixedOrder(const ColumnStatistics& stats) {
+  return stats.ascendingPct.has_value() && stats.descendingPct.has_value() &&
+      stats.ascendingPct.value() > 0 && stats.descendingPct.value() > 0;
 }
 
 bool isInteger(velox::TypeKind kind) {
@@ -1040,20 +1041,22 @@ void LocalTable::sampleNumDistincts(
 
   numSampledRows_ = sampled;
   for (auto i = 0; i < statsBuilders.size(); ++i) {
-    if (statsBuilders[i]) {
+    if (const auto& builder = statsBuilders[i]) {
       auto* column = findColumn(type()->nameOf(i));
+
       ColumnStatistics& stats = *const_cast<Column*>(column)->mutableStats();
-      statsBuilders[i]->build(stats);
+      builder->build(stats);
+
       auto estimate = stats.numDistinct;
       int64_t approxNumDistinct =
           estimate.has_value() ? estimate.value() : numRows_;
+
       // For tiny tables the sample is 100% and the approxNumDistinct is
       // accurate. For partial samples, the distinct estimate is left to be the
       // distinct estimate of the sample if there are few distincts. This is an
       // enumeration where values in unsampled rows are likely the same. If
       // there are many distincts, we multiply by 1/sample rate assuming that
       // unsampled rows will mostly have new values.
-
       if (numSampledRows_ < numRows_) {
         if (approxNumDistinct > sampled / 50) {
           float numDups =
@@ -1063,11 +1066,10 @@ void LocalTable::sampleNumDistincts(
           // If the type is an integer type, num distincts cannot be larger than
           // max - min.
 
-          if (isInteger(statsBuilders[i]->type()->kind())) {
+          if (isInteger(builder->type()->kind())) {
             auto min = stats.min;
             auto max = stats.max;
-            if (min.has_value() && max.has_value() &&
-                isMixedOrder(*statsBuilders[i])) {
+            if (min.has_value() && max.has_value() && isMixedOrder(stats)) {
               auto range = numericValue<float>(max.value()) -
                   numericValue<float>(min.value());
               approxNumDistinct = std::min<float>(approxNumDistinct, range);
