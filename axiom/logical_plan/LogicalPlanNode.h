@@ -17,6 +17,7 @@
 
 #include "axiom/common/Enums.h"
 #include "axiom/logical_plan/Expr.h"
+#include "velox/common/serialization/Serializable.h"
 #include "velox/type/Variant.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -50,7 +51,7 @@ class PlanNodeVisitorContext;
 /// have two inputs. Union may have many inputs. Most other nodes have just
 /// one input. Every plan node has an output schema (list of names and types
 /// of output columns) expressed as a RowType.
-class LogicalPlanNode {
+class LogicalPlanNode : public velox::ISerializable {
  public:
   LogicalPlanNode(
       NodeKind kind,
@@ -69,8 +70,6 @@ class LogicalPlanNode {
           "TableWrite cannot be non-root logical plan node");
     }
   }
-
-  virtual ~LogicalPlanNode() = default;
 
   NodeKind kind() const {
     return kind_;
@@ -123,7 +122,13 @@ class LogicalPlanNode {
       const PlanNodeVisitor& visitor,
       PlanNodeVisitorContext& context) const = 0;
 
+  /// Registers deserializers for all LogicalPlanNode subclasses.
+  static void registerSerDe();
+
  protected:
+  /// Serializes common base fields (name, id, outputType, inputs).
+  folly::dynamic serializeBase(std::string_view name) const;
+
   const NodeKind kind_;
   const std::string id_;
   const std::vector<LogicalPlanNodePtr> inputs_;
@@ -166,6 +171,10 @@ class ValuesNode : public LogicalPlanNode {
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   const uint64_t cardinality_ = 0;
@@ -217,6 +226,10 @@ class TableScanNode : public LogicalPlanNode {
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   const std::string connectorId_;
   const std::string tableName_;
@@ -243,6 +256,10 @@ class FilterNode : public LogicalPlanNode {
   const ExprPtr& predicate() const {
     return predicate_;
   }
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   const ExprPtr predicate_;
@@ -285,6 +302,10 @@ class ProjectNode : public LogicalPlanNode {
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   static velox::RowTypePtr makeOutputType(
@@ -367,6 +388,10 @@ class AggregateNode : public LogicalPlanNode {
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   static velox::RowTypePtr makeOutputType(
@@ -451,6 +476,10 @@ class JoinNode : public LogicalPlanNode {
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   static velox::RowTypePtr makeOutputType(
       const LogicalPlanNodePtr& left,
@@ -481,6 +510,10 @@ class SortNode : public LogicalPlanNode {
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   const std::vector<SortingField> ordering_;
@@ -527,6 +560,10 @@ class LimitNode : public LogicalPlanNode {
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   const int64_t offset_;
@@ -576,6 +613,10 @@ class SetNode : public LogicalPlanNode {
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   static velox::RowTypePtr makeOutputType(
@@ -657,6 +698,10 @@ class UnnestNode : public LogicalPlanNode {
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   static velox::RowTypePtr makeOutputType(
@@ -759,6 +804,10 @@ class TableWriteNode : public LogicalPlanNode {
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   const std::string connectorId_;
   const std::string tableName_;
@@ -811,6 +860,10 @@ class SampleNode : public LogicalPlanNode {
   SampleMethod sampleMethod() const {
     return sampleMethod_;
   }
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   const ExprPtr percentage_;

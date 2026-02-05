@@ -97,6 +97,7 @@ void Expr::registerSerDe() {
   registry.Register("AggregateExpr", AggregateExpr::create);
   registry.Register("WindowExpr", WindowExpr::create);
   registry.Register("LambdaExpr", LambdaExpr::create);
+  registry.Register("SubqueryExpr", SubqueryExpr::create);
 }
 
 folly::dynamic ConstantExpr::serialize() const {
@@ -363,9 +364,16 @@ void SubqueryExpr::accept(
 }
 
 folly::dynamic SubqueryExpr::serialize() const {
-  VELOX_NYI(
-      "Serialization not implemented for SubqueryExpr. "
-      "Requires plan node serialization which is not yet implemented.");
+  auto obj = serializeBase("SubqueryExpr");
+  obj["subquery"] = subquery_->serialize();
+  return obj;
+}
+
+// static
+ExprPtr SubqueryExpr::create(const folly::dynamic& obj, void* context) {
+  auto subquery = velox::ISerializable::deserialize<LogicalPlanNode>(
+      obj["subquery"], context);
+  return std::make_shared<SubqueryExpr>(std::move(subquery));
 }
 
 // static
