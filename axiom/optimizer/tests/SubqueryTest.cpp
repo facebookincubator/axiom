@@ -931,5 +931,47 @@ TEST_F(SubqueryTest, enforceSingleRow) {
   }
 }
 
+TEST_F(SubqueryTest, uncorrelatedGroupingKey) {
+  auto query =
+      "SELECT r_name, (SELECT count(*) FROM nation) FROM region GROUP BY 1, 2";
+  SCOPED_TRACE(query);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("region")
+                     .nestedLoopJoin(
+                         core::PlanMatcherBuilder()
+                             .tableScan("nation")
+                             .aggregation()
+                             .build())
+                     .aggregation()
+                     .build();
+
+  auto plan = toSingleNodePlan(query);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(SubqueryTest, correlatedGroupingKey) {
+  auto query =
+      "SELECT r_name, (SELECT count(*) FROM nation WHERE n_regionkey = r_regionkey) + 1 "
+      "FROM region GROUP BY 1, 2";
+  SCOPED_TRACE(query);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("region")
+                     .hashJoin(
+                         core::PlanMatcherBuilder()
+                             .tableScan("nation")
+                             .aggregation()
+                             .project()
+                             .build(),
+                         core::JoinType::kLeft)
+                     .project()
+                     .aggregation()
+                     .build();
+
+  auto plan = toSingleNodePlan(query);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

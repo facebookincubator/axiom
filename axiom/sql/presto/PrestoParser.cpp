@@ -1279,6 +1279,11 @@ class RelationPlanner : public AstVisitor {
     // Go over grouping keys and collect expressions. Ordinals refer to output
     // columns (selectItems). Non-ordinals refer to input columns.
 
+    // Cache expressions referenced by ordinals (e.g. GROUP BY 1, 2) to reuse
+    // the same ExprApi instance when processing the SELECT list below.
+    folly::F14FastMap<const axiom::sql::presto::Expression*, lp::ExprApi>
+        ordinalExpressions;
+
     std::vector<lp::ExprApi> groupingKeys;
 
     for (const auto& groupingElement : groupingElements) {
@@ -1298,6 +1303,9 @@ class RelationPlanner : public AstVisitor {
 
           const auto* singleColumn = item->as<SingleColumn>();
           groupingKeys.emplace_back(toExpr(singleColumn->expression()));
+
+          ordinalExpressions.emplace(
+              singleColumn->expression().get(), groupingKeys.back());
         } else {
           groupingKeys.emplace_back(toExpr(expr));
         }
@@ -1320,8 +1328,14 @@ class RelationPlanner : public AstVisitor {
       VELOX_CHECK(item->is(NodeType::kSingleColumn));
       auto* singleColumn = item->as<SingleColumn>();
 
-      lp::ExprApi expr =
-          toExpr(singleColumn->expression(), &aggregateOptionsMap);
+      lp::ExprApi expr = [&]() {
+        auto it = ordinalExpressions.find(singleColumn->expression().get());
+        if (it != ordinalExpressions.end()) {
+          return it->second;
+        }
+        return toExpr(singleColumn->expression(), &aggregateOptionsMap);
+      }();
+
       findAggregates(expr.expr(), aggregates, aggregateSet);
 
       if (!aggregates.empty() &&

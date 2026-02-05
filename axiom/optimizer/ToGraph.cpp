@@ -1333,10 +1333,16 @@ struct AggregateDedupHasher {
 } // namespace
 
 AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
-  exprSources_.push_back(agg.onlyInput().get());
+  const auto& input = *agg.onlyInput();
+
+  exprSources_.push_back(&input);
   SCOPE_EXIT {
     exprSources_.pop_back();
   };
+
+  for (const auto& key : agg.groupingKeys()) {
+    processSubqueries(input, key, /*filter=*/false);
+  }
 
   ColumnVector columns;
 
