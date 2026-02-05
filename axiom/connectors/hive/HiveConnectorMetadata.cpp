@@ -21,7 +21,28 @@
 #include "velox/exec/TableWriter.h"
 #include "velox/expression/ExprConstants.h"
 
+#include <fmt/format.h>
+#include <folly/String.h>
+#include <algorithm>
+
 namespace facebook::axiom::connector::hive {
+
+std::string HivePartitionHandle::makePartitionString(
+    const folly::F14FastMap<std::string, std::optional<std::string>>& keys) {
+  if (keys.empty()) {
+    return "";
+  }
+  std::vector<std::string> parts;
+  parts.reserve(keys.size());
+  for (const auto& [key, value] : keys) {
+    if (value.has_value()) {
+      parts.push_back(fmt::format("{}={}", key, value.value()));
+    } else {
+      parts.push_back(fmt::format("{}=__HIVE_DEFAULT_PARTITION__", key));
+    }
+  }
+  return folly::join("/", parts);
+}
 
 const PartitionType* HivePartitionType::copartition(
     const PartitionType& other) const {
@@ -378,6 +399,20 @@ void HiveConnectorMetadata::validateOptions(
       VELOX_USER_FAIL("Option {} is not supported", pair.first);
     }
   }
+}
+
+std::string HivePartitionHandle::toString() const {
+  std::string result = partition();
+
+  // Append bucket number if present
+  if (tableBucketNumber.has_value()) {
+    if (!result.empty()) {
+      result += ", ";
+    }
+    result += fmt::format("buckets={}", tableBucketNumber.value());
+  }
+
+  return fmt::format("<hive partition: {}>", result);
 }
 
 } // namespace facebook::axiom::connector::hive

@@ -59,9 +59,24 @@ struct SplitOptions {
 class PartitionHandle {
  public:
   virtual ~PartitionHandle() = default;
+
+  virtual std::string toString() const {
+    return "PartitionHandle";
+  }
+
+  /// Returns the partition path string in Hive format (e.g.,
+  /// "ds=2023-01-01/product=p1"). Returns an empty string for unpartitioned
+  /// tables.
+  virtual const std::string& partition() const {
+    static std::string empty;
+    return empty;
+  }
 };
 
 using PartitionHandlePtr = std::shared_ptr<const PartitionHandle>;
+
+struct PartitionStatistics;
+using PartitionStatisticsPtr = std::shared_ptr<PartitionStatistics>;
 
 class ConnectorSplitManager {
  public:
@@ -72,6 +87,16 @@ class ConnectorSplitManager {
   virtual std::vector<PartitionHandlePtr> listPartitions(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) = 0;
+
+  /// Returns per-partition statistics for the 'partitions' and
+  /// 'columns'. This is a separate function because split enumeration
+  /// for reading files transfers less data. Typically use only a
+  /// subset of the partitions to get stats.
+  virtual std::vector<PartitionStatisticsPtr> getPartitionStatistics(
+      std::span<const PartitionHandlePtr> partitions,
+      const std::vector<std::string>& columns) {
+    return {};
+  }
 
   /// Returns a SplitSource that covers the contents of 'partitions'. The set of
   /// partitions is exposed separately so that the caller may process the
