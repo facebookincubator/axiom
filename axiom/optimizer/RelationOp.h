@@ -28,6 +28,7 @@ namespace facebook::axiom::optimizer {
 class RelationOpVisitorContext;
 class RelationOpVisitor;
 class RelationOp;
+struct PlanState;
 
 /// Represents the cost of a plan.
 struct PlanCost {
@@ -415,7 +416,7 @@ using RepartitionCP = const Repartition*;
 /// join. Non-equality constraints over inner joins become Filters.
 class Filter : public RelationOp {
  public:
-  Filter(RelationOpPtr input, ExprVector exprs);
+  Filter(PlanState& state, RelationOpPtr input, ExprVector exprs);
 
   const ExprVector& exprs() const {
     return exprs_;

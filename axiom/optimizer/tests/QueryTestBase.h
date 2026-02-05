@@ -19,6 +19,7 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <gflags/gflags.h>
 #include "axiom/connectors/SchemaResolver.h"
+#include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
@@ -26,6 +27,18 @@
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
 DECLARE_string(history_save_path);
+
+namespace facebook::axiom::optimizer {
+class QueryGraphContext;
+} // namespace facebook::axiom::optimizer
+
+namespace facebook::axiom {
+class Session;
+}
+
+namespace facebook::velox {
+class HashStringAllocator;
+}
 
 namespace facebook::axiom::optimizer::test {
 
@@ -179,14 +192,27 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   /// Returns the full path to a test data file.
   static std::string getTestDataPath(const std::string& filename);
 
+  /// Parses SQL and creates an Optimization that stays live for the TEST_F.
+  void optimize(
+      std::string_view sql,
+      const std::string& defaultConnectorId = "");
+
   OptimizerOptions optimizerOptions_;
 
- private:
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
 
+  std::unique_ptr<optimizer::VeloxHistory> history_;
+
+  // Members that stay alive for the duration of TEST_F
+  std::unique_ptr<velox::HashStringAllocator> allocator_;
+  std::unique_ptr<optimizer::QueryGraphContext> context_;
+  optimizer::QueryGraphContext* optimizerQueryCtx_{nullptr};
+  std::shared_ptr<Session> session_;
+  std::unique_ptr<optimizer::Optimization> optimization_;
+
+ private:
   // A QueryCtx created for each compiled query.
   std::shared_ptr<velox::core::QueryCtx> queryCtx_;
-  std::unique_ptr<optimizer::VeloxHistory> history_;
 
   inline static int32_t gQueryCounter{0};
   inline static std::unique_ptr<VeloxHistory> gSuiteHistory;

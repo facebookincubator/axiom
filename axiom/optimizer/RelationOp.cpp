@@ -16,6 +16,7 @@
 
 #include <algorithm>
 
+#include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -996,16 +997,16 @@ void HashBuild::accept(
   visitor.visit(*this, context);
 }
 
-Filter::Filter(RelationOpPtr input, ExprVector exprs)
+Filter::Filter(PlanState& state, RelationOpPtr input, ExprVector exprs)
     : RelationOp{RelType::kFilter, std::move(input)}, exprs_{std::move(exprs)} {
   cost_.inputCardinality = inputCardinality();
   const auto numExprs = static_cast<float>(exprs_.size());
   cost_.unitCost = Costs::kMinimumFilterCost * numExprs;
 
-  // We assume each filter selects 4/5. Small effect makes it so
-  // join and scan selectivities that are better known have more
-  // influence on plan cardinality. To be filled in from history.
-  cost_.fanout = std::pow(0.8F, numExprs);
+  // Compute selectivity using filter analysis
+  ConstraintMap constraints;
+  auto selectivity = conjunctsSelectivity(state, exprs_, false, constraints);
+  cost_.fanout = selectivity.trueFraction;
 }
 
 const QGString& Filter::historyKey() const {
