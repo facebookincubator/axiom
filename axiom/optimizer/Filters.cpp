@@ -127,7 +127,30 @@ float combineSelectivities(
 }
 
 const Value& value(const PlanState& state, ExprCP expr) {
+  auto it = state.constraints().find(expr->id());
+  if (it != state.constraints().end()) {
+    return it->second;
+  }
   return expr->value();
+}
+
+void addConstraint(int32_t exprId, Value value, ConstraintMap& constraints) {
+  // Limit cardinality based on type kind
+  auto typeKind = value.type->kind();
+
+  if (typeKind == velox::TypeKind::BOOLEAN) {
+    // Boolean can have at most 2 distinct values (true/false)
+    value.cardinality = std::min(value.cardinality, 2.0f);
+  } else if (typeKind == velox::TypeKind::TINYINT) {
+    // TINYINT (int8) can have at most 256 distinct values (-128 to 127)
+    value.cardinality = std::min(value.cardinality, 256.0f);
+  } else if (typeKind == velox::TypeKind::SMALLINT) {
+    // SMALLINT (int16) can have at most 65536 distinct values
+    value.cardinality = std::min(value.cardinality, 65536.0f);
+  }
+  // Other types (INTEGER, BIGINT, VARCHAR, etc.) have no practical limit
+
+  constraints.insert_or_assign(exprId, value);
 }
 
 Selectivity comparisonSelectivity(
@@ -216,10 +239,15 @@ Selectivity functionSelectivity(
 }
 
 Selectivity conjunctsSelectivity(
-    const PlanState& state,
+    PlanState& state,
     std::span<const ExprCP> conjuncts,
     bool updateConstraints,
     ConstraintMap& newConstraints) {
+  // Update constraints for each conjunct before processing
+  for (auto* conjunct : conjuncts) {
+    exprConstraint(conjunct, state, true);
+  }
+
   std::vector<Selectivity> selectivities;
   selectivities.reserve(conjuncts.size());
 
@@ -271,7 +299,7 @@ Selectivity conjunctsSelectivity(
 }
 
 Selectivity exprSelectivity(
-    const PlanState& state,
+    PlanState& state,
     ExprCP expr,
     bool updateConstraints,
     ConstraintMap& newConstraints) {
@@ -1311,6 +1339,22 @@ Selectivity rangeSelectivity(
 
   // Default case
   return {0.5 * (1.0 - nullFrac), nullFrac};
+}
+
+/// Declared in namespace to allow calling from debugger.
+std::string constraintsString(ConstraintMap& constraints) {
+  std::stringstream out;
+  for (const auto& pair : constraints) {
+    out << pair.first;
+    if (queryCtx() != nullptr) {
+      auto* expr = queryCtx()->objectAt(pair.first);
+      if (expr != nullptr) {
+        out << " (" << expr->toString() << ")";
+      }
+    }
+    out << " = " << pair.second.toString() << "\n";
+  }
+  return out.str();
 }
 
 } // namespace facebook::axiom::optimizer

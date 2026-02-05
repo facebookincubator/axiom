@@ -121,7 +121,8 @@ class Optimization {
   /// @param dt Derived table with an aggregation.
   static RelationOpPtr planSingleAggregation(
       DerivedTableCP dt,
-      RelationOpPtr& input);
+      RelationOpPtr& input,
+      PlanState& state);
 
   const std::shared_ptr<velox::core::QueryCtx>& veloxQueryCtx() const {
     return veloxQueryCtx_;
