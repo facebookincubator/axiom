@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/optimizer/Cost.h"
+#include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "velox/exec/TaskStats.h"
 
@@ -53,6 +54,10 @@ class VeloxHistory : public History {
   void update(folly::dynamic& serialized) override;
 
  private:
+  /// Updates the Values in columns of BaseTable based on constraints from
+  /// conjunctsSelectivity.
+  void setBaseTableValues(const ConstraintMap& constraints, BaseTable& table);
+
   folly::F14FastMap<std::string, std::pair<float, float>> joinSamples_;
   folly::F14FastMap<std::string, NodePrediction> planHistory_;
 };

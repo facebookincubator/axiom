@@ -445,7 +445,8 @@ class Project : public RelationOp {
       const RelationOpPtr& input,
       ExprVector exprs,
       const ColumnVector& columns,
-      bool redundant);
+      bool redundant,
+      PlanState& state);
 
   const ExprVector& exprs() const {
     return exprs_;
@@ -490,14 +491,17 @@ struct Join : public RelationOp {
       ExprVector rhsKeys,
       ExprVector filterExprs,
       float fanout,
-      ColumnVector columns);
+      float innerFanout, // The fanout if this were an inner join
+      ColumnVector columns,
+      PlanState& state);
 
   static Join* makeCrossJoin(
       RelationOpPtr input,
       RelationOpPtr right,
       velox::core::JoinType joinType,
       ExprVector filter,
-      ColumnVector columns);
+      ColumnVector columns,
+      PlanState& state);
 
   const JoinMethod method;
   const velox::core::JoinType joinType;
@@ -572,7 +576,8 @@ struct Aggregation : public RelationOp {
       ExprVector groupingKeys,
       AggregateVector aggregates,
       velox::core::AggregationNode::Step step,
-      ColumnVector columns);
+      ColumnVector columns,
+      PlanState& state);
 
   const ExprVector groupingKeys;
   const AggregateVector aggregates;
@@ -587,7 +592,7 @@ struct Aggregation : public RelationOp {
       RelationOpVisitorContext& context) const override;
 
  private:
-  void setCostWithGroups(int64_t inputBeforePartial);
+  void setCostWithGroups(int64_t inputBeforePartial, const PlanState& state);
 };
 
 /// Represents an order by. The order is given by the distribution.

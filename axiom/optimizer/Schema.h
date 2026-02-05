@@ -42,9 +42,18 @@ struct Value {
   Value(const velox::Type* type, float cardinality)
       : type{type}, cardinality{cardinality} {}
 
+  // Default copy constructor
+  Value(const Value&) = default;
+
+  /// Assignment operator that checks type equality and assigns other members.
+  Value& operator=(const Value& other);
+
   /// Returns the average byte size of a value when it occurs as an intermediate
   /// result without dictionary or other encoding.
   float byteSize() const;
+
+  /// Returns a string representation of this Value.
+  std::string toString() const;
 
   const velox::Type* type;
   const velox::Variant* min{nullptr};
@@ -52,7 +61,7 @@ struct Value {
 
   // Count of distinct values. Is not exact and is used for estimating
   // cardinalities of group bys or joins.
-  const float cardinality{1};
+  float cardinality{1};
 
   // Sentinel value for unknown trueFraction.
   static constexpr float kUnknown = -1.0f;
