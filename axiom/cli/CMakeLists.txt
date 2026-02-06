@@ -12,9 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  axiom_sql
-  AxiomSql.cpp
+add_library(
+  axiom_cli
   Connectors.cpp
   Console.cpp
   SqlQueryRunner.cpp
@@ -25,7 +24,7 @@ add_executable(
 )
 
 target_link_libraries(
-  axiom_sql
+  axiom_cli
   axiom_runner_local_runner
   axiom_runner_multifragment_plan
   axiom_optimizer
@@ -41,19 +40,12 @@ target_link_libraries(
   velox_parse_utils
 )
 
-add_executable(axiom_graphviz Connectors.cpp QueryGraphviz.cpp SqlQueryRunner.cpp)
+add_executable(axiom_sql AxiomSql.cpp)
 
-target_link_libraries(
-  axiom_graphviz
-  axiom_runner_local_runner
-  axiom_runner_multifragment_plan
-  axiom_optimizer
-  axiom_tpch_connector_metadata
-  axiom_hive_connector_metadata
-  axiom_sql_presto_parser
-  velox_exec_test_lib
-  velox_parse_parser
-  velox_parse_expression
-  velox_parse_utils
-  Folly::folly
-)
+target_link_libraries(axiom_sql axiom_cli)
+
+add_executable(axiom_graphviz QueryGraphviz.cpp)
+
+target_link_libraries(axiom_graphviz axiom_cli)
+
+add_subdirectory(tests)
