@@ -431,12 +431,23 @@ Distribution Distribution::rename(
   orderTypes.resize(newOrderSize);
   replace(orderKeys, exprs, names);
   VELOX_DCHECK_EQ(orderKeys.size(), orderTypes.size());
+
+  // Clustering survives for any cluster keys that continue to be projected out.
+  ExprVector clusterKeys;
+  for (const auto& key : clusterKeys_) {
+    auto it = std::find(exprs.begin(), exprs.end(), key);
+    if (it != exprs.end()) {
+      clusterKeys.push_back(names[it - exprs.begin()]);
+    }
+  }
+
   return Distribution(
       distributionType_,
       std::move(partitionKeys),
       std::move(orderKeys),
       std::move(orderTypes),
-      numKeysUnique_);
+      numKeysUnique_,
+      std::move(clusterKeys));
 }
 
 namespace {
@@ -474,6 +485,10 @@ std::string Distribution::toString() const {
   if (!orderKeys().empty()) {
     out << " O ";
     exprsToString(orderKeys(), out);
+  }
+  if (!clusterKeys().empty()) {
+    out << " C ";
+    exprsToString(clusterKeys(), out);
   }
   if (numKeysUnique() && numKeysUnique() >= orderKeys().size()) {
     out << " first " << numKeysUnique() << " unique";

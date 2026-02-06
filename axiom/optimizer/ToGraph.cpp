@@ -110,6 +110,14 @@ ToGraph::ToGraph(
   if (auto cardinality = registry->cardinality()) {
     cardinality_ = toName(cardinality.value());
   }
+
+  if (auto arbitrary = registry->arbitrary()) {
+    arbitrary_ = toName(arbitrary.value());
+  }
+
+  if (auto count = registry->count()) {
+    count_ = toName(count.value());
+  }
 }
 
 void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
@@ -920,6 +928,18 @@ bool ToGraph::isJoinEquality(
   return false;
 }
 
+bool ToGraph::areAllJoinEqualities(const ExprVector& conjuncts) const {
+  for (const auto* conjunct : conjuncts) {
+    const auto tables = conjunct->allTables().toObjects();
+    ExprCP left = nullptr;
+    ExprCP right = nullptr;
+    if (!isJoinEquality(conjunct, tables[0], tables[1], left, right)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 ExprCP ToGraph::makeConstant(const lp::ConstantExpr& constant) {
   TypedVariant temp{toType(constant.type()), constant.value()};
   auto it = constantDedup_.find(temp);
@@ -1697,16 +1717,17 @@ void ToGraph::finalizeSubqueryDt(
 }
 
 ColumnCP ToGraph::makeCountStarWrapper(DerivedTableP inputDt) {
+  VELOX_CHECK_NOT_NULL(count_, "Count aggregate function not registered");
+
   auto* wrapperDt = newDt();
   wrapperDt->addTable(inputDt);
 
-  auto countName = toName("count");
   auto accumulatorType =
-      toType(velox::exec::resolveIntermediateType("count", {}));
+      toType(velox::exec::resolveIntermediateType(std::string{count_}, {}));
   Value countValue(toType(velox::BIGINT()), 1);
 
   AggregateCP countAggregate = make<Aggregate>(
-      countName,
+      count_,
       countValue,
       ExprVector{},
       FunctionSet(),
@@ -1970,6 +1991,10 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
   });
 
   for (auto i : channels) {
+    processSubqueries(input, exprs[i], /*filter=*/false);
+  }
+
+  for (auto i : channels) {
     if (exprs[i]->isInputReference()) {
       const auto& name = exprs[i]->as<lp::InputReferenceExpr>()->name();
       // A variable projected to itself adds no renames. Inputs contain this
@@ -1978,8 +2003,6 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
         continue;
       }
     }
-
-    processSubqueries(input, exprs[i], /*filter=*/false);
 
     auto expr = translateExpr(exprs.at(i));
     renames_[names[i]] = expr;
@@ -2097,6 +2120,39 @@ ToGraph::DecorrelatedJoin ToGraph::extractDecorrelatedJoin(
   return result;
 }
 
+void ToGraph::appendArbitraryAggregates(
+    const lp::LogicalPlanNode& input,
+    AggregateVector& aggregates,
+    ColumnVector& columns) {
+  VELOX_CHECK_NOT_NULL(
+      arbitrary_, "Arbitrary aggregate function not registered");
+
+  for (auto channel : usedChannels(input)) {
+    const auto& name = input.outputType()->nameOf(channel);
+    auto expr = renames_.at(name);
+
+    auto intermediateType = toType(
+        velox::exec::resolveIntermediateType(
+            std::string{arbitrary_}, {toTypePtr(expr->value().type)}));
+    auto* arbitraryAgg = make<Aggregate>(
+        arbitrary_,
+        expr->value(),
+        ExprVector{expr},
+        FunctionSet(),
+        /*isDistinct=*/false,
+        /*condition=*/nullptr,
+        intermediateType,
+        ExprVector{},
+        OrderTypeVector{});
+    aggregates.push_back(arbitraryAgg);
+
+    auto* column = make<Column>(newCName("__agg"), currentDt_, expr->value());
+    columns.push_back(column);
+
+    renames_[name] = column;
+  }
+}
+
 void ToGraph::processSubqueries(
     const lp::LogicalPlanNode& input,
     const lp::ExprPtr& expr,
@@ -2148,13 +2204,12 @@ void ToGraph::processSubqueries(
       subqueryDt->ensureSingleRow();
       subqueries_.emplace(subquery, subqueryDt->columns.front());
     } else {
-      VELOX_CHECK_EQ(
-          correlatedConjuncts_.size() + 1, subqueryDt->columns.size());
-
       // Add LEFT join.
       PlanObjectCP leftTable = nullptr;
       ExprVector leftKeys;
       ExprVector rightKeys;
+      ExprVector nonEquiConjuncts;
+
       for (const auto* conjunct : correlatedConjuncts_) {
         const auto tables = conjunct->allTables().toObjects();
         VELOX_CHECK_EQ(2, tables.size());
@@ -2162,7 +2217,8 @@ void ToGraph::processSubqueries(
         ExprCP left = nullptr;
         ExprCP right = nullptr;
         if (isJoinEquality(conjunct, tables[0], tables[1], left, right)) {
-          if (tables[1] == subqueryDt) {
+          if (tables[1] == subqueryDt ||
+              subqueryDt->tableSet.contains(tables[1])) {
             leftKeys.push_back(left);
             rightKeys.push_back(right);
             leftTable = tables[0];
@@ -2172,22 +2228,81 @@ void ToGraph::processSubqueries(
             leftTable = tables[1];
           }
         } else {
-          VELOX_FAIL(
-              "Expected correlated conjunct of the form a = b: {}",
-              conjunct->toString());
+          nonEquiConjuncts.push_back(conjunct);
+          if (tables[1] == subqueryDt ||
+              subqueryDt->tableSet.contains(tables[1])) {
+            leftTable = tables[0];
+          } else {
+            leftTable = tables[1];
+          }
         }
+      }
+
+      if (!nonEquiConjuncts.empty()) {
+        // For non-equi correlation, expect only 1 column (the aggregate
+        // result).
+        VELOX_CHECK_EQ(1, subqueryDt->columns.size());
+      } else {
+        // For equi-only correlation, expect grouping keys + aggregate result.
+        VELOX_CHECK_EQ(
+            correlatedConjuncts_.size() + 1, subqueryDt->columns.size());
       }
 
       correlatedConjuncts_.clear();
 
-      auto* join = make<JoinEdge>(
-          leftTable, subqueryDt, JoinEdge::Spec{.rightOptional = true});
-      for (auto i = 0; i < leftKeys.size(); ++i) {
-        join->addEquality(leftKeys[i], rightKeys[i]);
-      }
+      if (nonEquiConjuncts.empty()) {
+        // Equi-join only: use existing logic.
+        auto* join = make<JoinEdge>(
+            leftTable, subqueryDt, JoinEdge::Spec{.rightOptional = true});
+        for (auto i = 0; i < leftKeys.size(); ++i) {
+          join->addEquality(leftKeys[i], rightKeys[i]);
+        }
 
-      currentDt_->joins.push_back(join);
-      subqueries_.emplace(subquery, subqueryDt->columns.back());
+        currentDt_->joins.push_back(join);
+        subqueries_.emplace(subquery, subqueryDt->columns.back());
+      } else {
+        // Non-equi correlation: use AssignUniqueId + LEFT JOIN + Aggregation.
+        auto* mark = toName(fmt::format("__mark{}", markCounter_++));
+        auto exportedAgg = subqueryDt->exportSingleAggregate(mark);
+
+        auto* rowNumber = toName(fmt::format("__rownum{}", markCounter_++));
+        auto* rowNumberColumn = make<Column>(
+            rowNumber, currentDt_, Value{toType(velox::BIGINT()), 1});
+
+        ExprVector exportedFilter;
+        for (auto* conjunct : nonEquiConjuncts) {
+          exportedFilter.push_back(subqueryDt->exportExpr(conjunct));
+        }
+
+        auto* join = make<JoinEdge>(
+            leftTable,
+            subqueryDt,
+            JoinEdge::Spec{
+                .filter = exportedFilter,
+                .rightOptional = true,
+                .rowNumberColumn = rowNumberColumn,
+            });
+
+        // Add any equi-join keys.
+        for (auto i = 0; i < leftKeys.size(); ++i) {
+          join->addEquality(
+              subqueryDt->exportExpr(leftKeys[i]),
+              subqueryDt->exportExpr(rightKeys[i]));
+        }
+        currentDt_->joins.push_back(join);
+
+        auto* aggResultColumn =
+            make<Column>(newCName("__agg"), currentDt_, exportedAgg->value());
+
+        AggregateVector allAggregates{exportedAgg};
+        ColumnVector allColumns{rowNumberColumn, aggResultColumn};
+        appendArbitraryAggregates(input, allAggregates, allColumns);
+
+        currentDt_->aggregation = make<AggregationPlan>(
+            ExprVector{rowNumberColumn}, allAggregates, allColumns, allColumns);
+
+        subqueries_.emplace(subquery, aggResultColumn);
+      }
     }
   }
 
@@ -2727,69 +2842,74 @@ void ToGraph::makeQueryGraph(
 
         VELOX_CHECK(agg->groupingKeys().empty());
 
-        // Expect all conjuncts to have the form of f(outer) = g(inner).
-        ExprVector groupingKeys;
-        ColumnVector columns;
-        ExprVector leftKeys;
-        for (const auto* conjunct : correlatedConjuncts_) {
-          const auto tables = conjunct->allTables().toObjects();
-          VELOX_CHECK_EQ(2, tables.size());
+        // Check if all conjuncts are equalities. If any are non-equi, we'll
+        // handle decorrelation at the outer level using AssignUniqueId.
+        if (!areAllJoinEqualities(correlatedConjuncts_)) {
+          // Non-equi correlation: keep the aggregation as-is (global agg).
+          // The decorrelation will be handled at the outer level using
+          // AssignUniqueId + LEFT JOIN + outer aggregation.
+          currentDt_->aggregation = agg;
+        } else {
+          // Expect all conjuncts to have the form of f(outer) = g(inner).
+          ExprVector groupingKeys;
+          ColumnVector columns;
+          ExprVector leftKeys;
+          for (const auto* conjunct : correlatedConjuncts_) {
+            const auto tables = conjunct->allTables().toObjects();
+            VELOX_CHECK_EQ(2, tables.size());
 
-          ExprCP left = nullptr;
-          ExprCP right = nullptr;
-          ExprCP key = nullptr;
-          if (isJoinEquality(conjunct, tables[0], tables[1], left, right)) {
-            if (currentDt_->tableSet.contains(tables[0])) {
-              key = left;
-              leftKeys.push_back(right);
-            } else {
-              key = right;
-              leftKeys.push_back(left);
+            ExprCP left = nullptr;
+            ExprCP right = nullptr;
+            ExprCP key = nullptr;
+            if (isJoinEquality(conjunct, tables[0], tables[1], left, right)) {
+              if (currentDt_->tableSet.contains(tables[0])) {
+                key = left;
+                leftKeys.push_back(right);
+              } else {
+                key = right;
+                leftKeys.push_back(left);
+              }
+
+              if (key->is(PlanType::kColumnExpr)) {
+                columns.push_back(key->as<Column>());
+              } else {
+                auto* column =
+                    make<Column>(newCName("__gk"), currentDt_, key->value());
+                columns.push_back(column);
+              }
+
+              groupingKeys.push_back(key);
             }
-
-            if (key->is(PlanType::kColumnExpr)) {
-              columns.push_back(key->as<Column>());
-            } else {
-              auto* column =
-                  make<Column>(newCName("__gk"), currentDt_, key->value());
-              columns.push_back(column);
-            }
-
-            groupingKeys.push_back(key);
-          } else {
-            VELOX_FAIL(
-                "Expected correlated conjunct of the form a = b: {}",
-                conjunct->toString());
           }
+
+          correlatedConjuncts_.clear();
+          for (auto i = 0; i < leftKeys.size(); ++i) {
+            currentDt_->exprs.push_back(columns[i]);
+            currentDt_->columns.push_back(
+                make<Column>(
+                    newCName("__gk"), currentDt_, columns[i]->value()));
+
+            correlatedConjuncts_.push_back(
+                make<Call>(
+                    equality_,
+                    Value(toType(velox::BOOLEAN()), 2),
+                    ExprVector{leftKeys[i], currentDt_->columns.back()},
+                    FunctionSet()));
+          }
+
+          auto intermediateColumns = columns;
+
+          for (const auto* column : agg->columns()) {
+            columns.push_back(column);
+          }
+
+          for (const auto* column : agg->intermediateColumns()) {
+            intermediateColumns.push_back(column);
+          }
+
+          currentDt_->aggregation = make<AggregationPlan>(
+              groupingKeys, agg->aggregates(), columns, intermediateColumns);
         }
-
-        correlatedConjuncts_.clear();
-        for (auto i = 0; i < leftKeys.size(); ++i) {
-          currentDt_->exprs.push_back(columns[i]);
-          currentDt_->columns.push_back(
-              make<Column>(newCName("__gk"), currentDt_, columns[i]->value()));
-
-          correlatedConjuncts_.push_back(
-              make<Call>(
-                  equality_,
-                  Value(toType(velox::BOOLEAN()), 2),
-                  ExprVector{leftKeys[i], currentDt_->columns.back()},
-                  FunctionSet()));
-        }
-
-        auto intermediateColumns = columns;
-
-        for (const auto* column : agg->columns()) {
-          columns.push_back(column);
-        }
-
-        for (const auto* column : agg->intermediateColumns()) {
-          intermediateColumns.push_back(column);
-        }
-
-        currentDt_->aggregation = make<AggregationPlan>(
-            groupingKeys, agg->aggregates(), columns, intermediateColumns);
-
       } else {
         currentDt_->aggregation = agg;
       }

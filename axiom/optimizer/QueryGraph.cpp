@@ -344,6 +344,9 @@ std::string JoinEdge::toString() const {
   if (!filter_.empty()) {
     out << " filter " << conjunctsToString(filter_);
   }
+  if (rowNumberColumn_) {
+    out << " row# " << rowNumberColumn_->toString();
+  }
   out << ">";
   return out.str();
 }
@@ -384,7 +387,7 @@ bool Expr::sameOrEqual(const Expr& other) const {
         return false;
       }
       for (auto i = 0; i < numArgs; ++i) {
-        if (as<Call>()->argAt(i)->sameOrEqual(*other.as<Call>()->argAt(i))) {
+        if (!as<Call>()->argAt(i)->sameOrEqual(*other.as<Call>()->argAt(i))) {
           return false;
         }
       }

@@ -677,6 +677,57 @@ void DerivedTable::ensureSingleRow() {
   enforceSingleRow = true;
 }
 
+AggregateCP DerivedTable::exportSingleAggregate(Name markName) {
+  VELOX_CHECK(hasAggregation());
+  VELOX_CHECK_EQ(0, aggregation->groupingKeys().size());
+  VELOX_CHECK_EQ(0, having.size());
+  VELOX_CHECK_EQ(1, aggregation->aggregates().size());
+
+  VELOX_CHECK(!hasLimit());
+  VELOX_CHECK(!hasOrderBy());
+
+  const Value constantBoolean{toType(velox::BOOLEAN()), 1};
+
+  auto* markColumn = make<Column>(markName, this, constantBoolean);
+
+  auto* trueLiteral =
+      make<Literal>(constantBoolean, registerVariant(velox::Variant(true)));
+  columns.push_back(markColumn);
+  exprs.push_back(trueLiteral);
+
+  const auto* onlyAgg = aggregation->aggregates().front();
+
+  ExprVector exportedArgs;
+  for (const auto* arg : onlyAgg->args()) {
+    exportedArgs.push_back(exportExpr(arg));
+  }
+
+  ExprVector exportedOrderKeys;
+  for (const auto* orderKey : onlyAgg->orderKeys()) {
+    exportedOrderKeys.push_back(exportExpr(orderKey));
+  }
+
+  ExprCP combinedCondition = markColumn;
+  if (onlyAgg->condition() != nullptr) {
+    combinedCondition = queryCtx()->optimization()->combineLeftDeep(
+        SpecialFormCallNames::kAnd,
+        ExprVector{combinedCondition, onlyAgg->condition()});
+  }
+
+  aggregation = nullptr;
+
+  return make<Aggregate>(
+      onlyAgg->name(),
+      onlyAgg->value(),
+      exportedArgs,
+      onlyAgg->functions(),
+      onlyAgg->isDistinct(),
+      /*condition=*/combinedCondition,
+      onlyAgg->intermediateType(),
+      exportedOrderKeys,
+      onlyAgg->orderTypes());
+}
+
 ExprCP DerivedTable::exportExpr(ExprCP expr) {
   expr->columns().forEach<Column>([&](auto* column) {
     if (tableSet.contains(column->relation())) {

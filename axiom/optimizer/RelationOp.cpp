@@ -50,6 +50,7 @@ const auto& relTypeNames() {
       {RelType::kUnnest, "Unnest"},
       {RelType::kTableWrite, "TableWrite"},
       {RelType::kEnforceSingleRow, "EnforceSingleRow"},
+      {RelType::kAssignUniqueId, "AssignUniqueId"},
   };
 
   return kNames;
@@ -741,14 +742,16 @@ double maxGroups(const ExprVector& groupingKeys) {
 
 Aggregation::Aggregation(
     RelationOpPtr input,
-    ExprVector groupingKeysVector,
-    AggregateVector aggregatesVector,
+    ExprVector _groupingKeys,
+    ExprVector _preGroupedKeys,
+    AggregateVector _aggregates,
     velox::core::AggregationNode::Step step,
     ColumnVector columns)
     : RelationOp{RelType::kAggregation, std::move(input), std::move(columns)},
-      groupingKeys{std::move(groupingKeysVector)},
-      aggregates{std::move(aggregatesVector)},
-      step{step} {
+      groupingKeys{std::move(_groupingKeys)},
+      aggregates{std::move(_aggregates)},
+      step{step},
+      preGroupedKeys{std::move(_preGroupedKeys)} {
   cost_.inputCardinality = inputCardinality();
 
   const auto numKeys = groupingKeys.size();
@@ -1345,6 +1348,47 @@ std::string EnforceSingleRow::toString(bool recursive, bool detail) const {
 }
 
 void EnforceSingleRow::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+namespace {
+ColumnVector appendColumn(const ColumnVector& columns, ColumnCP column) {
+  ColumnVector result = columns;
+  result.push_back(column);
+  return result;
+}
+} // namespace
+
+AssignUniqueId::AssignUniqueId(RelationOpPtr input, ColumnCP uniqueIdColumn)
+    : RelationOp(
+          RelType::kAssignUniqueId,
+          input,
+          Distribution(
+              input->distribution().distributionType(),
+              input->distribution().partitionKeys(),
+              input->distribution().orderKeys(),
+              input->distribution().orderTypes(),
+              input->distribution().numKeysUnique(),
+              ExprVector{uniqueIdColumn}),
+          appendColumn(input->columns(), uniqueIdColumn)),
+      uniqueIdColumn_(uniqueIdColumn) {
+  // Fanout is 1 (cardinality neutral).
+  cost_.fanout = 1;
+  cost_.unitCost = 0.01; // Minimal cost for generating unique IDs.
+}
+
+std::string AssignUniqueId::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (recursive) {
+    out << input()->toString(true, detail) << " ";
+  }
+  out << "AssignUniqueId[" << uniqueIdColumn_->toString() << "]";
+  return out.str();
+}
+
+void AssignUniqueId::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
   visitor.visit(*this, context);

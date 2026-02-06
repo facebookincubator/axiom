@@ -120,6 +120,7 @@ enum class RelType {
   kUnnest,
   kTableWrite,
   kEnforceSingleRow,
+  kAssignUniqueId,
 };
 
 AXIOM_DECLARE_ENUM_NAME(RelType)
@@ -569,6 +570,7 @@ struct Aggregation : public RelationOp {
   Aggregation(
       RelationOpPtr input,
       ExprVector groupingKeys,
+      ExprVector preGroupedKeys,
       AggregateVector aggregates,
       velox::core::AggregationNode::Step step,
       ColumnVector columns);
@@ -576,6 +578,17 @@ struct Aggregation : public RelationOp {
   const ExprVector groupingKeys;
   const AggregateVector aggregates;
   const velox::core::AggregationNode::Step step;
+
+  /// Keys that the input is pre-grouped on. This is a prefix of groupingKeys
+  /// that matches the input's clusterKeys. When non-empty, the aggregation
+  /// can be executed in streaming manner without building a hash table.
+  const ExprVector preGroupedKeys;
+
+  /// Returns true if the aggregation is pre-grouped (streaming).
+  bool isPreGrouped() const {
+    return !preGroupedKeys.empty() &&
+        preGroupedKeys.size() == groupingKeys.size();
+  }
 
   const QGString& historyKey() const override;
 
@@ -680,5 +693,30 @@ struct EnforceSingleRow : public RelationOp {
 };
 
 using EnforceSingleRowCP = const EnforceSingleRow*;
+
+/// Assigns unique identifiers to each input row. Used for decorrelating
+/// subqueries with non-equi correlation conditions. The unique identifier
+/// is not necessarily sequential, just guaranteed to be unique across
+/// all nodes in a distributed query.
+struct AssignUniqueId : public RelationOp {
+  /// @param input The input relation.
+  /// @param uniqueIdColumn The column to store the unique identifier.
+  AssignUniqueId(RelationOpPtr input, ColumnCP uniqueIdColumn);
+
+  ColumnCP uniqueIdColumn() const {
+    return uniqueIdColumn_;
+  }
+
+  std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+
+ private:
+  ColumnCP const uniqueIdColumn_;
+};
+
+using AssignUniqueIdCP = const AssignUniqueId*;
 
 } // namespace facebook::axiom::optimizer

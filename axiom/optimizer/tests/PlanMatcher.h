@@ -239,6 +239,18 @@ class PlanMatcherBuilder {
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates);
 
+  /// Matches any streaming Aggregation node (input is pre-grouped on all
+  /// grouping keys).
+  PlanMatcherBuilder& streamingAggregation();
+
+  /// Matches a streaming Aggregation node with the specified grouping keys and
+  /// aggregate expressions.
+  /// @param groupingKeys Columns to group by.
+  /// @param aggregates Aggregate expressions.
+  PlanMatcherBuilder& streamingAggregation(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates);
+
   /// Matches a HashJoin node with the specified right side matcher.
   /// @param rightMatcher Matcher for the right (build) side of the join.
   PlanMatcherBuilder& hashJoin(
@@ -341,6 +353,16 @@ class PlanMatcherBuilder {
   /// Matches an EnforceSingleRow node, which validates that its input
   /// produces exactly one row. Used for scalar subqueries.
   PlanMatcherBuilder& enforceSingleRow();
+
+  /// Matches an AssignUniqueId node, which assigns unique identifiers to
+  /// each input row. Used for decorrelating subqueries with non-equi
+  /// correlation conditions.
+  PlanMatcherBuilder& assignUniqueId();
+
+  /// Matches an AssignUniqueId node and captures the unique ID column name
+  /// as a symbol alias for use in parent matchers via symbol rewriting.
+  /// @param alias The alias to use for the unique ID column.
+  PlanMatcherBuilder& assignUniqueId(const std::string& alias);
 
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.

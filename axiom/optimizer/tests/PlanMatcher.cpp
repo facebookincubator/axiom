@@ -594,6 +594,9 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
       for (auto i = 0; i < groupingKeys_.size(); ++i) {
         auto expected =
             parse::DuckSqlExpressionsParser().parseExpr(groupingKeys_[i]);
+        if (!symbols.empty()) {
+          expected = rewriteInputNames(expected, symbols);
+        }
         EXPECT_EQ(plan.groupingKeys()[i]->toString(), expected->toString());
       }
       AXIOM_TEST_RETURN_IF_FAILURE
@@ -667,6 +670,36 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
   const std::vector<std::string> aggregates_;
 };
 
+class StreamingAggregationMatcher : public AggregationMatcher {
+ public:
+  explicit StreamingAggregationMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher)
+      : AggregationMatcher(matcher, AggregationNode::Step::kSingle) {}
+
+  StreamingAggregationMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates)
+      : AggregationMatcher(
+            matcher,
+            AggregationNode::Step::kSingle,
+            groupingKeys,
+            aggregates) {}
+
+  MatchResult matchDetails(
+      const AggregationNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    EXPECT_TRUE(plan.isPreGrouped())
+        << "Expected streaming aggregation (pre-grouped input)";
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    return AggregationMatcher::matchDetails(plan, symbols);
+  }
+};
+
 class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
  public:
   HashJoinMatcher(
@@ -731,7 +764,10 @@ class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
           JoinTypeName::toName(joinType_.value()));
     }
 
-    AXIOM_TEST_RETURN
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    // Propagate existing aliases from source matchers.
+    return MatchResult::success(symbols);
   }
 
  private:
@@ -872,6 +908,26 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
   return producerMatcher_->match(
       partitionedOutput->sources()[0], symbols, &producerContext);
 }
+
+class AssignUniqueIdMatcher : public PlanMatcherImpl<AssignUniqueIdNode> {
+ public:
+  AssignUniqueIdMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      const std::string& alias)
+      : PlanMatcherImpl<AssignUniqueIdNode>({matcher}), alias_{alias} {}
+
+  MatchResult matchDetails(
+      const AssignUniqueIdNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    std::unordered_map<std::string, std::string> newSymbols = symbols;
+    newSymbols[alias_] = plan.outputType()->names().back();
+    return MatchResult::success(std::move(newSymbols));
+  }
+
+ private:
+  const std::string alias_;
+};
 
 #undef AXIOM_TEST_RETURN
 #undef AXIOM_TEST_RETURN_IF_FAILURE
@@ -1030,6 +1086,21 @@ PlanMatcherBuilder& PlanMatcherBuilder::finalAggregation(
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::streamingAggregation() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<StreamingAggregationMatcher>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::streamingAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<StreamingAggregationMatcher>(
+      matcher_, groupingKeys, aggregates);
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
     const std::shared_ptr<PlanMatcher>& rightMatcher) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
@@ -1171,6 +1242,20 @@ PlanMatcherBuilder& PlanMatcherBuilder::enforceSingleRow() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<PlanMatcherImpl<EnforceSingleRowNode>>(
       std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::assignUniqueId() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<PlanMatcherImpl<AssignUniqueIdNode>>(
+      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::assignUniqueId(
+    const std::string& alias) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<AssignUniqueIdMatcher>(matcher_, alias);
   return *this;
 }
 

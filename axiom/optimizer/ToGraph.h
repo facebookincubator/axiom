@@ -139,6 +139,9 @@ class ToGraph {
   }
 
  private:
+  // True if all conjuncts are join equalities.
+  bool areAllJoinEqualities(const ExprVector& conjuncts) const;
+
   static bool isSpecialForm(
       const logical_plan::ExprPtr& expr,
       logical_plan::SpecialForm form) {
@@ -409,6 +412,18 @@ class ToGraph {
   // IN and EXISTS subqueries.
   DecorrelatedJoin extractDecorrelatedJoin(DerivedTableP subqueryDt);
 
+  // Appends `arbitrary` aggregates for all columns used from 'input'.
+  // Used when decorrelating non-equi correlated subqueries. Since the
+  // decorrelation strategy groups by a unique ID (one group per outer row),
+  // we need to preserve the outer row's columns through the aggregation.
+  // The `arbitrary` aggregate is used because each group contains exactly
+  // one distinct value for these columns. Updates 'renames_' to map original
+  // column names to the new aggregate output columns.
+  void appendArbitraryAggregates(
+      const logical_plan::LogicalPlanNode& input,
+      AggregateVector& aggregates,
+      ColumnVector& columns);
+
   ColumnCP addMarkColumn();
 
   void addJoinColumns(
@@ -506,6 +521,8 @@ class ToGraph {
   Name elementAt_{nullptr};
   Name subscript_{nullptr};
   Name cardinality_{nullptr};
+  Name arbitrary_{nullptr};
+  Name count_{nullptr};
 
   folly::F14FastMap<Name, Name> reversibleFunctions_;
 };
