@@ -13,11 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include "axiom/logical_plan/PlanBuilder.h"
 #include <gtest/gtest.h>
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 using namespace facebook::velox;
@@ -146,6 +147,141 @@ TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
             .build(),
         "Output schemas of all inputs to a Set operation must match");
   }
+}
+
+TEST_F(PlanBuilderTest, groupingSetsEmptyAggregatesAndKeys) {
+  auto rowType = ROW({"a", "b"}, {INTEGER(), INTEGER()});
+  std::vector<Variant> data{
+      Variant::row({1, 10}),
+  };
+
+  VELOX_ASSERT_THROW(
+      PlanBuilder()
+          .values(rowType, data)
+          .aggregate({{}}, {}, "$grouping_set_id")
+          .build(),
+      "Aggregation node must specify at least one aggregate or grouping key");
+}
+
+// Tests for the index-based (ordinal) grouping sets API.
+// Similar to SQL: GROUPING SETS ((1, 2), (1, 2, 3))
+TEST_F(PlanBuilderTest, groupingSetsWithOrdinals) {
+  auto rowType =
+      ROW({"a", "b", "c", "d"}, {INTEGER(), INTEGER(), INTEGER(), INTEGER()});
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100, 1000}),
+  };
+
+  // Create grouping sets using ordinals: (0, 1) and (0, 1, 2)
+  auto plan = PlanBuilder()
+                  .values(rowType, data)
+                  .aggregate(
+                      {"a", "b", "c"}, // grouping keys
+                      {{0, 1}, {0, 1, 2}}, // grouping sets using indices
+                      {"sum(d) as total"},
+                      {},
+                      "$grouping_set_id")
+                  .build();
+
+  // Output should have: a, b, c (grouping keys), total, $grouping_set_id
+  EXPECT_EQ(plan->outputType()->size(), 5);
+  EXPECT_EQ(plan->outputType()->nameOf(0), "a");
+  EXPECT_EQ(plan->outputType()->nameOf(1), "b");
+  EXPECT_EQ(plan->outputType()->nameOf(2), "c");
+  EXPECT_EQ(plan->outputType()->nameOf(3), "total");
+  EXPECT_EQ(plan->outputType()->nameOf(4), "$grouping_set_id");
+
+  // Verify the grouping sets indices.
+  auto aggNode = std::dynamic_pointer_cast<const AggregateNode>(plan);
+  ASSERT_NE(aggNode, nullptr);
+  ASSERT_EQ(aggNode->groupingSets().size(), 2);
+  EXPECT_EQ(aggNode->groupingSets()[0], (std::vector<int32_t>{0, 1}));
+  EXPECT_EQ(aggNode->groupingSets()[1], (std::vector<int32_t>{0, 1, 2}));
+}
+
+TEST_F(PlanBuilderTest, rollup) {
+  auto rowType = ROW({"a", "b", "c"}, {INTEGER(), INTEGER(), INTEGER()});
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100}),
+  };
+
+  auto plan = PlanBuilder()
+                  .values(rowType, data)
+                  .rollup({"a", "b"}, {"sum(c) as total"}, "$grouping_set_id")
+                  .build();
+
+  // Output should have: a, b (grouping keys), total, $grouping_set_id
+  EXPECT_EQ(plan->outputType()->size(), 4);
+  EXPECT_EQ(plan->outputType()->nameOf(0), "a");
+  EXPECT_EQ(plan->outputType()->nameOf(1), "b");
+  EXPECT_EQ(plan->outputType()->nameOf(2), "total");
+  EXPECT_EQ(plan->outputType()->nameOf(3), "$grouping_set_id");
+
+  // Verify ROLLUP(a, b) expands to: [[0,1], [0], []]
+  auto aggNode = std::dynamic_pointer_cast<const AggregateNode>(plan);
+  ASSERT_NE(aggNode, nullptr);
+  ASSERT_EQ(aggNode->groupingSets().size(), 3);
+  EXPECT_EQ(aggNode->groupingSets()[0], (std::vector<int32_t>{0, 1}));
+  EXPECT_EQ(aggNode->groupingSets()[1], (std::vector<int32_t>{0}));
+  EXPECT_EQ(aggNode->groupingSets()[2], (std::vector<int32_t>{}));
+}
+
+TEST_F(PlanBuilderTest, cube) {
+  auto rowType = ROW({"a", "b", "c"}, {INTEGER(), INTEGER(), INTEGER()});
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100}),
+  };
+
+  auto plan = PlanBuilder()
+                  .values(rowType, data)
+                  .cube({"a", "b"}, {"sum(c) as total"}, "$grouping_set_id")
+                  .build();
+
+  // Output should have: a, b (grouping keys), total, $grouping_set_id
+  EXPECT_EQ(plan->outputType()->size(), 4);
+  EXPECT_EQ(plan->outputType()->nameOf(0), "a");
+  EXPECT_EQ(plan->outputType()->nameOf(1), "b");
+  EXPECT_EQ(plan->outputType()->nameOf(2), "total");
+  EXPECT_EQ(plan->outputType()->nameOf(3), "$grouping_set_id");
+
+  // Verify CUBE(a, b) expands to: [[0,1], [0], [1], []]
+  auto aggNode = std::dynamic_pointer_cast<const AggregateNode>(plan);
+  ASSERT_NE(aggNode, nullptr);
+  ASSERT_EQ(aggNode->groupingSets().size(), 4);
+  EXPECT_EQ(aggNode->groupingSets()[0], (std::vector<int32_t>{0, 1}));
+  EXPECT_EQ(aggNode->groupingSets()[1], (std::vector<int32_t>{0}));
+  EXPECT_EQ(aggNode->groupingSets()[2], (std::vector<int32_t>{1}));
+  EXPECT_EQ(aggNode->groupingSets()[3], (std::vector<int32_t>{}));
+}
+
+TEST_F(PlanBuilderTest, cubeThreeKeys) {
+  auto rowType =
+      ROW({"a", "b", "c", "d"}, {INTEGER(), INTEGER(), INTEGER(), INTEGER()});
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100, 1000}),
+  };
+
+  auto plan =
+      PlanBuilder()
+          .values(rowType, data)
+          .cube({"a", "b", "c"}, {"sum(d) as total"}, "$grouping_set_id")
+          .build();
+
+  // Verify CUBE(a, b, c) expands to 2^3 = 8 grouping sets.
+  auto aggNode = std::dynamic_pointer_cast<const AggregateNode>(plan);
+  ASSERT_NE(aggNode, nullptr);
+  ASSERT_EQ(aggNode->groupingSets().size(), 8);
+
+  // Sets should be in order: [0,1,2], [0,1], [0,2], [0], [1,2], [1], [2],
+  // []
+  EXPECT_EQ(aggNode->groupingSets()[0], (std::vector<int32_t>{0, 1, 2}));
+  EXPECT_EQ(aggNode->groupingSets()[1], (std::vector<int32_t>{0, 1}));
+  EXPECT_EQ(aggNode->groupingSets()[2], (std::vector<int32_t>{0, 2}));
+  EXPECT_EQ(aggNode->groupingSets()[3], (std::vector<int32_t>{0}));
+  EXPECT_EQ(aggNode->groupingSets()[4], (std::vector<int32_t>{1, 2}));
+  EXPECT_EQ(aggNode->groupingSets()[5], (std::vector<int32_t>{1}));
+  EXPECT_EQ(aggNode->groupingSets()[6], (std::vector<int32_t>{2}));
+  EXPECT_EQ(aggNode->groupingSets()[7], (std::vector<int32_t>{}));
 }
 
 } // namespace

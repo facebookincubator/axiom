@@ -1271,43 +1271,228 @@ class RelationPlanner : public AstVisitor {
     return true;
   }
 
+  // ROLLUP(a,b,c) -> {(a,b,c), (a,b), (a), ()}
+  static std::vector<std::vector<ExpressionPtr>> expandRollup(
+      const std::vector<ExpressionPtr>& expressions) {
+    std::vector<std::vector<ExpressionPtr>> groupingSets;
+    groupingSets.reserve(expressions.size() + 1);
+
+    for (size_t i = expressions.size(); i > 0; --i) {
+      std::vector<ExpressionPtr> groupingSet(
+          expressions.begin(), expressions.begin() + i);
+      groupingSets.push_back(std::move(groupingSet));
+    }
+    groupingSets.emplace_back();
+    return groupingSets;
+  }
+
+  // CUBE(a,b) -> {(a,b), (a), (b), ()}
+  static std::vector<std::vector<ExpressionPtr>> expandCube(
+      const std::vector<ExpressionPtr>& expressions) {
+    const size_t n = expressions.size();
+    // Presto limits CUBE to 30 columns (2^30 possible grouping sets).
+    // https://github.com/prestodb/presto/issues/27096
+    VELOX_USER_CHECK_LE(n, 30, "CUBE supports at most 30 columns");
+    const size_t numGroupingSets = 1ULL << n;
+    std::vector<std::vector<ExpressionPtr>> groupingSets;
+    groupingSets.reserve(numGroupingSets);
+
+    for (size_t mask = numGroupingSets; mask > 0; --mask) {
+      size_t bits = mask - 1;
+      std::vector<ExpressionPtr> groupingSet;
+      for (size_t i = 0; i < n; ++i) {
+        if (bits & (1ULL << (n - 1 - i))) {
+          groupingSet.push_back(expressions[i]);
+        }
+      }
+      groupingSets.push_back(std::move(groupingSet));
+    }
+    return groupingSets;
+  }
+
+  static bool hasGroupingSets(
+      const std::vector<GroupingElementPtr>& groupingElements) {
+    for (const auto& element : groupingElements) {
+      switch (element->type()) {
+        case NodeType::kRollup:
+        case NodeType::kCube:
+        case NodeType::kGroupingSets:
+          return true;
+        default:
+          break;
+      }
+    }
+    return false;
+  }
+
+  // Computes Cartesian product of accumulatedSets and newSets, concatenating
+  // each pair. If accumulatedSets is empty, returns newSets.
+  template <typename T>
+  static void crossProductGroupingSets(
+      std::vector<std::vector<T>>& accumulatedSets,
+      std::vector<std::vector<T>> newSets) {
+    if (accumulatedSets.empty()) {
+      accumulatedSets = std::move(newSets);
+      return;
+    }
+    std::vector<std::vector<T>> combined;
+    combined.reserve(accumulatedSets.size() * newSets.size());
+    for (const auto& base : accumulatedSets) {
+      for (const auto& addition : newSets) {
+        std::vector<T> merged = base;
+        merged.insert(merged.end(), addition.begin(), addition.end());
+        combined.push_back(std::move(merged));
+      }
+    }
+    accumulatedSets = std::move(combined);
+  }
+
+  lp::ExprApi resolveGroupingExpression(
+      const ExpressionPtr& expr,
+      const std::vector<SelectItemPtr>& selectItems) {
+    if (expr->is(NodeType::kLongLiteral)) {
+      const auto n = expr->as<LongLiteral>()->value();
+      VELOX_CHECK_GE(n, 1);
+      VELOX_CHECK_LE(n, selectItems.size());
+
+      const auto& item = selectItems.at(n - 1);
+      VELOX_CHECK(item->is(NodeType::kSingleColumn));
+
+      const auto* singleColumn = item->as<SingleColumn>();
+      return toExpr(singleColumn->expression());
+    }
+    return toExpr(expr);
+  }
+
+  /// Converts expanded grouping sets (vectors of AST ExpressionPtr) to
+  /// vectors of lp::ExprApi by resolving each expression.
+  std::vector<std::vector<lp::ExprApi>> resolveAndConvertGroupingSets(
+      const std::vector<std::vector<ExpressionPtr>>& expandedSets,
+      const std::vector<SelectItemPtr>& selectItems) {
+    std::vector<std::vector<lp::ExprApi>> result;
+    result.reserve(expandedSets.size());
+    for (const auto& groupingSet : expandedSets) {
+      std::vector<lp::ExprApi> exprs;
+      exprs.reserve(groupingSet.size());
+      for (const auto& expr : groupingSet) {
+        exprs.push_back(resolveGroupingExpression(expr, selectItems));
+      }
+      result.push_back(std::move(exprs));
+    }
+    return result;
+  }
+
+  std::vector<std::vector<lp::ExprApi>> expandGroupingSets(
+      const std::vector<GroupingElementPtr>& groupingElements,
+      const std::vector<SelectItemPtr>& selectItems) {
+    std::vector<std::vector<lp::ExprApi>> allSets;
+
+    for (const auto& element : groupingElements) {
+      switch (element->type()) {
+        case NodeType::kSimpleGroupBy: {
+          const auto* simple = element->as<SimpleGroupBy>();
+          std::vector<lp::ExprApi> exprs;
+          for (const auto& expr : simple->expressions()) {
+            exprs.push_back(resolveGroupingExpression(expr, selectItems));
+          }
+          if (allSets.empty()) {
+            allSets.push_back(std::move(exprs));
+          } else {
+            for (auto& groupingSet : allSets) {
+              for (const auto& e : exprs) {
+                groupingSet.push_back(e);
+              }
+            }
+          }
+          break;
+        }
+
+        case NodeType::kRollup: {
+          const auto* rollup = element->as<Rollup>();
+          auto rollupSets = resolveAndConvertGroupingSets(
+              expandRollup(rollup->expressions()), selectItems);
+          crossProductGroupingSets(allSets, std::move(rollupSets));
+          break;
+        }
+
+        case NodeType::kCube: {
+          const auto* cube = element->as<Cube>();
+          auto cubeSets = resolveAndConvertGroupingSets(
+              expandCube(cube->expressions()), selectItems);
+          crossProductGroupingSets(allSets, std::move(cubeSets));
+          break;
+        }
+
+        case NodeType::kGroupingSets: {
+          const auto* groupingSetsNode = element->as<GroupingSets>();
+          auto explicitSets = resolveAndConvertGroupingSets(
+              groupingSetsNode->sets(), selectItems);
+          crossProductGroupingSets(allSets, std::move(explicitSets));
+          break;
+        }
+
+        default:
+          VELOX_NYI(
+              "Grouping element type not supported: {}",
+              NodeTypeName::toName(element->type()));
+      }
+    }
+
+    return allSets;
+  }
+
   void addGroupBy(
       const std::vector<SelectItemPtr>& selectItems,
       const std::vector<GroupingElementPtr>& groupingElements,
       const ExpressionPtr& having,
       const OrderByPtr& orderBy) {
-    // Go over grouping keys and collect expressions. Ordinals refer to output
-    // columns (selectItems). Non-ordinals refer to input columns.
+    bool useGroupingSets = hasGroupingSets(groupingElements);
 
     // Cache expressions referenced by ordinals (e.g. GROUP BY 1, 2) to reuse
     // the same ExprApi instance when processing the SELECT list below.
     folly::F14FastMap<const axiom::sql::presto::Expression*, lp::ExprApi>
         ordinalExpressions;
 
+    // Collect grouping keys - either as sets (for grouping sets) or flat list.
+    std::vector<std::vector<lp::ExprApi>> groupingSets;
+    std::vector<std::vector<int32_t>> groupingSetsIndices;
     std::vector<lp::ExprApi> groupingKeys;
 
-    for (const auto& groupingElement : groupingElements) {
-      VELOX_CHECK_EQ(groupingElement->type(), NodeType::kSimpleGroupBy);
-      const auto* simple = groupingElement->as<SimpleGroupBy>();
+    if (useGroupingSets) {
+      groupingSets = expandGroupingSets(groupingElements, selectItems);
+      // Extract unique grouping keys and build index-based grouping sets.
+      // This avoids duplicate deduplication in PlanBuilder.
+      facebook::velox::core::ExprMap<int32_t> exprToIndex;
+      for (const auto& groupingSet : groupingSets) {
+        std::vector<int32_t> indices;
+        indices.reserve(groupingSet.size());
+        for (const auto& expr : groupingSet) {
+          int32_t idx = static_cast<int32_t>(groupingKeys.size());
+          auto [it, inserted] = exprToIndex.try_emplace(expr.expr(), idx);
+          if (inserted) {
+            groupingKeys.push_back(expr);
+          }
+          indices.push_back(it->second);
+        }
+        groupingSetsIndices.push_back(std::move(indices));
+      }
+    } else {
+      for (const auto& groupingElement : groupingElements) {
+        VELOX_CHECK_EQ(groupingElement->type(), NodeType::kSimpleGroupBy);
+        const auto* simple = groupingElement->as<SimpleGroupBy>();
 
-      for (const auto& expr : simple->expressions()) {
-        if (expr->is(NodeType::kLongLiteral)) {
-          // 1-based index.
-          const auto n = expr->as<LongLiteral>()->value();
+        for (const auto& expr : simple->expressions()) {
+          auto resolvedExpr = resolveGroupingExpression(expr, selectItems);
+          groupingKeys.push_back(resolvedExpr);
 
-          VELOX_CHECK_GE(n, 1);
-          VELOX_CHECK_LE(n, selectItems.size());
-
-          const auto& item = selectItems.at(n - 1);
-          VELOX_CHECK(item->is(NodeType::kSingleColumn));
-
-          const auto* singleColumn = item->as<SingleColumn>();
-          groupingKeys.emplace_back(toExpr(singleColumn->expression()));
-
-          ordinalExpressions.emplace(
-              singleColumn->expression().get(), groupingKeys.back());
-        } else {
-          groupingKeys.emplace_back(toExpr(expr));
+          // Cache expressions referenced by ordinals for reuse in SELECT list.
+          if (expr->is(NodeType::kLongLiteral)) {
+            const auto n = expr->as<LongLiteral>()->value();
+            const auto& item = selectItems.at(n - 1);
+            const auto* singleColumn = item->as<SingleColumn>();
+            ordinalExpressions.emplace(
+                singleColumn->expression().get(), resolvedExpr);
+          }
         }
       }
     }
@@ -1387,7 +1572,17 @@ class RelationPlanner : public AstVisitor {
         aggregateOptions.emplace_back();
       }
     }
-    builder_->aggregate(groupingKeys, aggregates, aggregateOptions);
+
+    if (!groupingSetsIndices.empty()) {
+      builder_->aggregate(
+          groupingKeys,
+          groupingSetsIndices,
+          aggregates,
+          aggregateOptions,
+          "$grouping_set_id");
+    } else {
+      builder_->aggregate(groupingKeys, aggregates, aggregateOptions);
+    }
 
     const auto outputNames = builder_->findOrAssignOutputNames();
 
