@@ -19,6 +19,7 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
+#include "axiom/optimizer/tests/QueryTestBase.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
@@ -28,34 +29,31 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class AggregationPlanTest : public testing::Test {
+class AggregationPlanTest : public test::QueryTestBase {
  protected:
   static constexpr auto kTestConnectorId = "test";
 
-  static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  void SetUp() override {
+    test::QueryTestBase::SetUp();
+
+    testConnector_ =
+        std::make_shared<connector::TestConnector>(kTestConnectorId);
+    velox::connector::registerConnector(testConnector_);
 
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
   }
 
-  void SetUp() override {
-    testConnector_ =
-        std::make_shared<connector::TestConnector>(kTestConnectorId);
-    velox::connector::registerConnector(testConnector_);
-
-    rootPool_ = memory::memoryManager()->addRootPool("root");
-    optimizerPool_ = rootPool_->addLeafChild("optimizer");
-  }
-
   void TearDown() override {
     velox::connector::unregisterConnector(kTestConnectorId);
+
+    test::QueryTestBase::TearDown();
   }
 
   velox::core::PlanNodePtr planVelox(const lp::LogicalPlanNodePtr& plan) {
     auto distributedPlan = Optimization::toVeloxPlan(
                                *plan,
-                               *optimizerPool_,
+                               optimizerPool(),
                                {}, // optimizerOptions
                                {.numWorkers = 1, .numDrivers = 1})
                                .plan;
@@ -64,8 +62,6 @@ class AggregationPlanTest : public testing::Test {
     return distributedPlan->fragments().at(0).fragment.planNode;
   }
 
-  std::shared_ptr<velox::memory::MemoryPool> rootPool_;
-  std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
   std::shared_ptr<connector::TestConnector> testConnector_;
 };
 
@@ -221,6 +217,89 @@ TEST_F(AggregationPlanTest, dedupSameOptions) {
           .build();
 
   ASSERT_TRUE(matcher->match(plan));
+}
+
+// Verifies that aggregation with ORDER BY keys always uses single-step
+// aggregation, even in distributed mode where partial+final would normally
+// be used. This is required because partial aggregation cannot preserve
+// global ordering across workers.
+TEST_F(AggregationPlanTest, orderByEnforcesSingleStepInDistributedMode) {
+  auto schema =
+      ROW({"group_key", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"},
+          {BIGINT(),
+           BIGINT(),
+           DOUBLE(),
+           VARCHAR(),
+           BIGINT(),
+           DOUBLE(),
+           VARCHAR(),
+           BIGINT(),
+           DOUBLE()});
+  testConnector_->addTable("wide_table", schema);
+
+  // 10k rows with only 2 distinct group_key values (0 and 1)
+  constexpr int kNumRows = 10000;
+  const std::string stringValue = "this is a long string";
+
+  auto rowVector = makeRowVector({
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 2; }),
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+      makeFlatVector<double>(kNumRows, [](auto row) { return row * 1.5; }),
+      makeFlatVector<StringView>(
+          kNumRows,
+          [&stringValue](auto row) { return StringView(stringValue); }),
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row * 100; }),
+      makeFlatVector<double>(kNumRows, [](auto row) { return row * 2.5; }),
+      makeFlatVector<StringView>(
+          kNumRows,
+          [&stringValue](auto row) { return StringView(stringValue); }),
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row * 1000; }),
+      makeFlatVector<double>(kNumRows, [](auto row) { return row * 3.5; }),
+  });
+  testConnector_->appendData("wide_table", rowVector);
+
+  // Query with ORDER BY in aggregate - should use single aggregation step
+  auto logicalPlanWithOrderBy =
+      lp::PlanBuilder(/*enableCoercions=*/true)
+          .tableScan(kTestConnectorId, "wide_table")
+          .aggregate({"group_key"}, {"array_agg(v1 ORDER BY v2)", "sum(v1)"})
+          .build();
+  auto planWithOrderBy = test::QueryTestBase::planVelox(logicalPlanWithOrderBy);
+
+  auto matcherWithOrderBy =
+      core::PlanMatcherBuilder()
+          .tableScan()
+          .shuffle()
+          .localPartition()
+          .singleAggregation(
+              {"group_key"}, {"array_agg(v1 ORDER BY v2)", "sum(v1)"})
+          .shuffle()
+          .build();
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(planWithOrderBy.plan, matcherWithOrderBy);
+
+  // Query without ORDER BY - should use partial + final aggregation
+  // Wide table to maximize per-row shuffle cost
+  auto logicalPlanWithoutOrderBy =
+      lp::PlanBuilder(/*enableCoercions=*/true)
+          .tableScan(kTestConnectorId, "wide_table")
+          .aggregate({"group_key"}, {"sum(v1)"})
+          .build();
+  auto planWithoutOrderBy =
+      test::QueryTestBase::planVelox(logicalPlanWithoutOrderBy);
+
+  auto matcherWithoutOrderBy =
+      core::PlanMatcherBuilder()
+          .tableScan()
+          .partialAggregation({"group_key"}, {"sum(v1)"})
+          .shuffle()
+          .localPartition()
+          .finalAggregation()
+          .shuffle()
+          .build();
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(planWithoutOrderBy.plan, matcherWithoutOrderBy);
+  testConnector_->dropTableIfExists("wide_table");
 }
 
 } // namespace
