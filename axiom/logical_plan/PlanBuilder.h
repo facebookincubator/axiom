@@ -454,12 +454,14 @@ class PlanBuilder {
   /// use auto-generated IDs for the output column names.
   LogicalPlanNodePtr build(bool useIds = false);
 
+  /// Returns 'name' as-is if unique. Otherwise, returns 'name_N' where N is a
+  /// numeric suffix to ensure uniqueness.
+  std::string newName(const std::string& name);
+
  private:
   std::string nextId() {
     return planNodeIdGenerator_->next();
   }
-
-  std::string newName(const std::string& hint);
 
   ExprPtr resolveInputName(
       const std::optional<std::string>& alias,
