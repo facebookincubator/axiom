@@ -47,6 +47,22 @@ struct ExprDedupHasher {
 using FunctionDedupMap =
     folly::F14FastMap<ExprDedupKey, ExprCP, ExprDedupHasher>;
 
+/// Holds function names with well-defined semantics that the optimizer can use
+/// for expression analysis and transformations. These are looked up from the
+/// function registry during ToGraph construction.
+struct FunctionNames {
+  /// Scalar functions.
+  Name equality{nullptr};
+  Name negation{nullptr};
+  Name elementAt{nullptr};
+  Name subscript{nullptr};
+  Name cardinality{nullptr};
+
+  /// Aggregate functions.
+  Name arbitrary{nullptr};
+  Name count{nullptr};
+};
+
 struct TypedVariant {
   /// Canonical Type pointer returned by QueryGraphContext::toType.
   const velox::Type* type;
@@ -139,9 +155,6 @@ class ToGraph {
   }
 
  private:
-  // True if all conjuncts are join equalities.
-  bool areAllJoinEqualities(const ExprVector& conjuncts) const;
-
   static bool isSpecialForm(
       const logical_plan::ExprPtr& expr,
       logical_plan::SpecialForm form) {
@@ -153,6 +166,16 @@ class ToGraph {
   // deduplication. E.g column op constant, and smaller plan object id
   // to the left.
   void canonicalizeCall(Name& name, ExprVector& args);
+
+  // Handles correlation processing for aggregations in correlated subqueries.
+  // Returns the aggregation plan to use, or nullptr if the aggregation should
+  // be skipped (e.g., DISTINCT in EXISTS).
+  //
+  // Side effects for equi-correlated aggregations:
+  // - Clears correlatedConjuncts_ and repopulates it with new equality
+  //   expressions that reference the new grouping key columns.
+  // - Adds grouping key columns to currentDt_->exprs and currentDt_->columns.
+  AggregationPlanCP processCorrelatedAggregation(AggregationPlanCP agg);
 
   // Converts 'plan' to PlanObjects and records join edges into
   // 'currentDt_'. Wraps 'node' in a new Derived table f 'node' does not match
@@ -347,9 +370,6 @@ class ToGraph {
   // Returns the count column. The wrapper DT is added to currentDt_.
   ColumnCP makeCountStarWrapper(DerivedTableP inputDt);
 
-  // Creates a comparison expression: expr != 0, i.e. NOT(expr == 0).
-  ExprCP makeNotEqualsZero(ExprCP expr);
-
   // Adds a column 'name' from current DerivedTable to the 'dt'.
   void addDtColumn(DerivedTableP dt, std::string_view name);
 
@@ -385,6 +405,60 @@ class ToGraph {
       const logical_plan::ExprPtr& expr,
       bool filter);
 
+  // Processes scalar subqueries, creating DTs and joins for each.
+  // Populates subqueries_ with mappings from subquery expressions to columns.
+  void processScalarSubqueries(
+      const logical_plan::LogicalPlanNode& input,
+      const std::vector<logical_plan::SubqueryExprPtr>& scalars);
+
+  // Processes an uncorrelated scalar subquery. Attempts constant folding,
+  // otherwise ensures single row. Returns the expression to map to the
+  // subquery.
+  ExprCP processUncorrelatedScalarSubquery(DerivedTableP subqueryDt);
+
+  // Processes a correlated scalar subquery. Creates LEFT join with
+  // decorrelation, handling both equi-only and non-equi correlation.
+  // Returns the expression to map to the subquery.
+  ExprCP processCorrelatedScalarSubquery(
+      const logical_plan::LogicalPlanNode& input,
+      DerivedTableP subqueryDt);
+
+  // Processes IN <subquery> predicates, creating semi-joins with mark columns.
+  // Populates subqueries_ with mappings from IN predicates to mark columns.
+  void processInPredicates(
+      const std::vector<logical_plan::ExprPtr>& inPredicates);
+
+  // Processes an uncorrelated IN <subquery> predicate.
+  // Returns the mark column to map to the predicate.
+  ExprCP processUncorrelatedInPredicate(
+      DerivedTableP subqueryDt,
+      ColumnCP markColumn,
+      ExprCP leftKey,
+      PlanObjectCP leftTable);
+
+  // Processes a correlated IN <subquery> predicate.
+  // Returns the mark column to map to the predicate.
+  ExprCP processCorrelatedInPredicate(
+      DerivedTableP subqueryDt,
+      ColumnCP markColumn,
+      ExprCP leftKey,
+      PlanObjectCP leftTable);
+
+  // Processes EXISTS subqueries, creating mark joins or cross joins.
+  // Populates subqueries_ with mappings from EXISTS expressions to mark columns
+  // or NOT(COUNT(*) = 0) expressions.
+  void processExistsSubqueries(
+      const std::vector<logical_plan::ExprPtr>& exists);
+
+  // Processes an uncorrelated EXISTS subquery. Uses COUNT(*) wrapper
+  // with cross join and NOT(count == 0) expression.
+  // Returns the expression to map to the EXISTS.
+  ExprCP processUncorrelatedExists(DerivedTableP subqueryDt);
+
+  // Processes a correlated EXISTS subquery. Creates mark join with
+  // decorrelation. Returns the mark column to map to the EXISTS.
+  ExprCP processCorrelatedExists(DerivedTableP subqueryDt);
+
   // Translates a subquery into a DerivedTable. Sets up correlations_ to allow
   // the subquery to reference columns from the outer query. After translation,
   // correlatedConjuncts_ contains any correlated predicates found.
@@ -398,19 +472,6 @@ class ToGraph {
   DerivedTableP translateSubquery(
       const logical_plan::LogicalPlanNode& node,
       bool finalize = true);
-
-  // Holds the extracted join keys and filters from correlated conjuncts.
-  // Used when decorrelating IN and EXISTS subqueries.
-  struct DecorrelatedJoin {
-    PlanObjectSet leftTables;
-    ExprVector leftKeys;
-    ExprVector rightKeys;
-    ExprVector filter;
-  };
-
-  // Extracts join keys and filters from correlated conjuncts for decorrelating
-  // IN and EXISTS subqueries.
-  DecorrelatedJoin extractDecorrelatedJoin(DerivedTableP subqueryDt);
 
   // Appends `arbitrary` aggregates for all columns used from 'input'.
   // Used when decorrelating non-equi correlated subqueries. Since the
@@ -516,13 +577,7 @@ class ToGraph {
   folly::F14FastMap<const logical_plan::LogicalPlanNode*, PlanObjectCP>
       planLeaves_;
 
-  Name equality_;
-  Name negation_;
-  Name elementAt_{nullptr};
-  Name subscript_{nullptr};
-  Name cardinality_{nullptr};
-  Name arbitrary_{nullptr};
-  Name count_{nullptr};
+  FunctionNames functionNames_;
 
   folly::F14FastMap<Name, Name> reversibleFunctions_;
 };
