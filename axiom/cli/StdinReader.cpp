@@ -22,6 +22,19 @@
 
 namespace axiom::cli {
 
+namespace {
+std::string collapseWhitespace(std::string str) {
+  std::replace_if(str.begin(), str.end(), ::isspace, ' ');
+  str.erase(
+      std::unique(
+          str.begin(),
+          str.end(),
+          [](char a, char b) { return a == ' ' && b == ' '; }),
+      str.end());
+  return str;
+}
+} // namespace
+
 std::string readCommand(const std::string& prompt, bool& atEnd) {
   std::stringstream command;
   atEnd = false;
@@ -59,7 +72,8 @@ std::string readCommand(const std::string& prompt, bool& atEnd) {
 
       if (line[i] == ';') {
         command << line.substr(startPos, i - startPos);
-        linenoiseHistoryAdd(fmt::format("{};", command.str()).c_str());
+        auto history = collapseWhitespace(command.str());
+        linenoiseHistoryAdd(fmt::format("{};", history).c_str());
         return command.str();
       }
 
