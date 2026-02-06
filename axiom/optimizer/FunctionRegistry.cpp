@@ -73,6 +73,24 @@ bool FunctionRegistry::registerCardinality(std::string_view name) {
   return true;
 }
 
+bool FunctionRegistry::registerArbitrary(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (arbitrary_.has_value() && arbitrary_.value() != name) {
+    return false;
+  }
+  arbitrary_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerCount(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (count_.has_value() && count_.value() != name) {
+    return false;
+  }
+  count_ = name;
+  return true;
+}
+
 bool FunctionRegistry::registerSpecialForm(
     lp::SpecialForm specialForm,
     std::string_view name) {
@@ -211,6 +229,8 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
   registry->registerElementAt(fullName("element_at"));
   registry->registerSubscript(fullName("subscript"));
   registry->registerCardinality(fullName("cardinality"));
+  registry->registerArbitrary(fullName("arbitrary"));
+  registry->registerCount(fullName("count"));
 
   registry->registerReversibleFunction(fullName("eq"));
   registry->registerReversibleFunction(fullName("lt"), fullName("gt"));

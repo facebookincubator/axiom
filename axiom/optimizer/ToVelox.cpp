@@ -1213,7 +1213,7 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
     }
   }
 
-  if (options_.numDrivers > 1 &&
+  if (op.preGroupedKeys.empty() && options_.numDrivers > 1 &&
       (op.step == velox::core::AggregationNode::Step::kFinal ||
        op.step == velox::core::AggregationNode::Step::kSingle)) {
     std::vector<velox::core::PlanNodePtr> inputs = {input};
@@ -1235,11 +1235,13 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
     }
   }
 
+  auto preGroupedKeys = toFieldRefs(op.preGroupedKeys);
+
   return std::make_shared<velox::core::AggregationNode>(
       nextId(),
       op.step,
       keys,
-      std::vector<velox::core::FieldAccessTypedExprPtr>{},
+      preGroupedKeys,
       aggregateNames,
       aggregates,
       /*ignoreNullKeys=*/false,
@@ -1490,6 +1492,24 @@ velox::core::PlanNodePtr ToVelox::makeEnforceSingleRow(
   return node;
 }
 
+velox::core::PlanNodePtr ToVelox::makeAssignUniqueId(
+    const AssignUniqueId& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+
+  // TODO Remove taskUniqueId from AssignUniqueIdNode:
+  // https://github.com/facebookincubator/velox/issues/16260
+  auto node = std::make_shared<velox::core::AssignUniqueIdNode>(
+      nextId(),
+      op.uniqueIdColumn()->toString(),
+      /*taskUniqueId=*/0,
+      std::move(input));
+
+  makePredictionAndHistory(node->id(), &op);
+  return node;
+}
+
 void ToVelox::makePredictionAndHistory(
     const velox::core::PlanNodeId& id,
     const RelationOp* op) {
@@ -1533,6 +1553,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
     case RelType::kEnforceSingleRow:
       return makeEnforceSingleRow(
           *op->as<EnforceSingleRow>(), fragment, stages);
+    case RelType::kAssignUniqueId:
+      return makeAssignUniqueId(*op->as<AssignUniqueId>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

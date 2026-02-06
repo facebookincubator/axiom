@@ -520,6 +520,12 @@ class JoinEdge {
     /// 'rightExists' must be true.
     ColumnCP markColumn{nullptr};
 
+    /// Row number column to be assigned to the non-optional (probe) side using
+    /// AssignUniqueId. Used for decorrelating scalar subqueries with non-equi
+    /// correlation conditions. The join output will be clustered on this
+    /// column.
+    ColumnCP rowNumberColumn{nullptr};
+
     /// Columns produced by the 'left' side of a RIGHT or FULL OUTER join.
     /// Requires 'leftOptional' to be true.
     ColumnVector leftColumns;
@@ -556,6 +562,7 @@ class JoinEdge {
         nullAwareIn_(spec.nullAwareIn),
         directed_(spec.directed),
         markColumn_(spec.markColumn),
+        rowNumberColumn_(spec.rowNumberColumn),
         leftColumns_{spec.leftColumns},
         leftExprs_{spec.leftExprs},
         rightColumns_{spec.rightColumns},
@@ -573,6 +580,11 @@ class JoinEdge {
 
     if (markColumn_) {
       VELOX_CHECK(rightExists_);
+    }
+
+    if (rowNumberColumn_) {
+      VELOX_CHECK(!leftOptional_);
+      VELOX_CHECK(rightOptional_);
     }
 
     if (!leftColumns_.empty()) {
@@ -701,6 +713,10 @@ class JoinEdge {
 
   ColumnCP markColumn() const {
     return markColumn_;
+  }
+
+  ColumnCP rowNumberColumn() const {
+    return rowNumberColumn_;
   }
 
   const ColumnVector& leftColumns() const {
@@ -889,6 +905,9 @@ class JoinEdge {
 
   // Flag to set if right side has a match.
   ColumnCP const markColumn_;
+
+  // Row number column assigned to the probe side using AssignUniqueId.
+  ColumnCP const rowNumberColumn_;
 
   const ColumnVector leftColumns_;
   const ExprVector leftExprs_;

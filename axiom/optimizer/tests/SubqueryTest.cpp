@@ -973,5 +973,170 @@ TEST_F(SubqueryTest, correlatedGroupingKey) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_F(SubqueryTest, nonEquiCorrelatedScalar) {
+  // Correlated scalar subquery with non-equi correlation condition.
+  {
+    auto query =
+        "SELECT * FROM region "
+        "WHERE (SELECT count(*) FROM nation WHERE n_regionkey < r_regionkey) > 3";
+    SCOPED_TRACE(query);
+
+    auto logicalPlan = parseSelect(query);
+
+    {
+      auto matcher = core::PlanMatcherBuilder()
+                         .tableScan("region")
+                         .assignUniqueId("unique_id")
+                         .nestedLoopJoin(
+                             core::PlanMatcherBuilder()
+                                 .tableScan("nation")
+                                 .project({"true as marker", "n_regionkey"})
+                                 .build(),
+                             velox::core::JoinType::kLeft)
+                         .streamingAggregation(
+                             {"unique_id"},
+                             {
+                                 "count(*) filter (where marker) as cnt",
+                                 "arbitrary(r_regionkey)",
+                                 "arbitrary(r_name)",
+                                 "arbitrary(r_comment)",
+                             })
+                         .filter("cnt > 3")
+                         .project()
+                         .build();
+
+      auto plan = toSingleNodePlan(logicalPlan);
+      AXIOM_ASSERT_PLAN(plan, matcher);
+    }
+
+    {
+      auto matcher = core::PlanMatcherBuilder()
+                         .tableScan("region")
+                         .assignUniqueId("unique_id")
+                         .nestedLoopJoin(
+                             core::PlanMatcherBuilder()
+                                 .tableScan("nation")
+                                 .project({"true as marker", "n_regionkey"})
+                                 .broadcast()
+                                 .build(),
+                             velox::core::JoinType::kLeft)
+                         .streamingAggregation(
+                             {"unique_id"},
+                             {
+                                 "count(*) filter (where marker) as cnt",
+                                 "arbitrary(r_regionkey)",
+                                 "arbitrary(r_name)",
+                                 "arbitrary(r_comment)",
+                             })
+                         .filter("cnt > 3")
+                         .project()
+                         .gather()
+                         .build();
+
+      auto distributedPlan = planVelox(logicalPlan);
+      AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+    }
+  }
+
+  // Equi AND non-equi correlation clauses.
+  {
+    auto query =
+        "SELECT r_name FROM region "
+        "WHERE (SELECT count(*) FROM nation "
+        "         WHERE n_regionkey = r_regionkey "
+        "               AND length(n_name) < length(r_name)) > 3";
+    SCOPED_TRACE(query);
+
+    auto logicalPlan = parseSelect(query);
+
+    {
+      auto matcher =
+          core::PlanMatcherBuilder()
+              .tableScan("region")
+              .assignUniqueId("unique_id")
+              .hashJoin(
+                  core::PlanMatcherBuilder()
+                      .tableScan("nation")
+                      .project({"true as marker", "n_name", "n_regionkey"})
+                      .build(),
+                  velox::core::JoinType::kLeft)
+              .streamingAggregation(
+                  {"unique_id"},
+                  {
+                      "count(*) filter (where marker) as cnt",
+                      "arbitrary(r_regionkey)",
+                      "arbitrary(r_name)",
+                  })
+              .filter("cnt > 3")
+              .project()
+              .build();
+
+      auto plan = toSingleNodePlan(logicalPlan);
+      AXIOM_ASSERT_PLAN(plan, matcher);
+    }
+  }
+}
+
+TEST_F(SubqueryTest, nonEquiCorrelatedProject) {
+  // Correlated scalar subquery with non-equi correlation condition.
+  {
+    auto query =
+        "SELECT length(r_name), (SELECT count(*) FROM nation WHERE n_regionkey < r_regionkey) FROM region";
+    SCOPED_TRACE(query);
+
+    auto logicalPlan = parseSelect(query);
+
+    {
+      auto matcher = core::PlanMatcherBuilder()
+                         .tableScan("region")
+                         .assignUniqueId("unique_id")
+                         .nestedLoopJoin(
+                             core::PlanMatcherBuilder()
+                                 .tableScan("nation")
+                                 .project({"true as marker", "n_regionkey"})
+                                 .build(),
+                             velox::core::JoinType::kLeft)
+                         .streamingAggregation(
+                             {"unique_id"},
+                             {
+                                 "count(*) filter (where marker) as cnt",
+                                 "arbitrary(r_regionkey)",
+                                 "arbitrary(r_name) as r_name",
+                             })
+                         .project({"length(r_name)", "cnt"})
+                         .build();
+
+      auto plan = toSingleNodePlan(logicalPlan);
+      AXIOM_ASSERT_PLAN(plan, matcher);
+    }
+
+    {
+      auto matcher = core::PlanMatcherBuilder()
+                         .tableScan("region")
+                         .assignUniqueId("unique_id")
+                         .nestedLoopJoin(
+                             core::PlanMatcherBuilder()
+                                 .tableScan("nation")
+                                 .project({"true as marker", "n_regionkey"})
+                                 .broadcast()
+                                 .build(),
+                             velox::core::JoinType::kLeft)
+                         .streamingAggregation(
+                             {"unique_id"},
+                             {
+                                 "count(*) filter (where marker) as cnt",
+                                 "arbitrary(r_regionkey)",
+                                 "arbitrary(r_name) as r_name",
+                             })
+                         .project({"length(r_name)", "cnt"})
+                         .gather()
+                         .build();
+
+      auto distributedPlan = planVelox(logicalPlan);
+      AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+    }
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

@@ -140,13 +140,15 @@ struct Distribution {
       ExprVector partitionKeys,
       ExprVector orderKeys = {},
       OrderTypeVector orderTypes = {},
-      int32_t numKeysUnique = 0)
+      int32_t numKeysUnique = 0,
+      ExprVector clusterKeys = {})
       : distributionType_{distributionType},
         partitionKeys_{std::move(partitionKeys)},
         orderKeys_{std::move(orderKeys)},
         orderTypes_{std::move(orderTypes)},
         numKeysUnique_{numKeysUnique},
-        isBroadcast_{false} {
+        isBroadcast_{false},
+        clusterKeys_{std::move(clusterKeys)} {
     VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
     if (isGather()) {
       VELOX_CHECK_EQ(partitionKeys_.size(), 0);
@@ -213,6 +215,10 @@ struct Distribution {
     return numKeysUnique_;
   }
 
+  const ExprVector& clusterKeys() const {
+    return clusterKeys_;
+  }
+
   Distribution rename(const ExprVector& exprs, const ColumnVector& names) const;
 
   std::string toString() const;
@@ -239,6 +245,11 @@ struct Distribution {
   int32_t numKeysUnique_;
 
   bool isBroadcast_;
+
+  /// Clustering columns. Rows with the same values in these columns are
+  /// contiguous but not necessarily ordered. Enables streaming group by
+  /// when clustering keys are a subset of grouping keys.
+  ExprVector clusterKeys_;
 };
 
 struct SchemaTable;

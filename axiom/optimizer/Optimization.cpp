@@ -338,7 +338,8 @@ void forJoinedTables(const PlanState& state, Func func) {
           }
         }
         if (usable &&
-            (state.mayConsiderNext(join->rightTable()) || join->markColumn())) {
+            (state.mayConsiderNext(join->rightTable()) || join->markColumn() ||
+             join->rowNumberColumn())) {
           func(join, join->rightTable(), join->lrFanout());
         }
       } else {
@@ -948,6 +949,59 @@ AggregateVector flattenAggregates(
   return flatAggregates;
 }
 
+// Computes the pre-grouped keys for streaming aggregation based on input's
+// orderKeys and clusterKeys. For orderKeys, returns the longest prefix that
+// is also a grouping key (order guarantees break at the first non-grouping
+// key). For clusterKeys, returns any subset that are grouping keys (clustering
+// only requires contiguous values, not ordering). Returns whichever set is
+// larger to maximize streaming benefit.
+ExprVector computePreGroupedKeys(
+    const RelationOp& input,
+    const ExprVector& groupingKeys) {
+  if (groupingKeys.empty()) {
+    return {};
+  }
+
+  auto isGroupingKey = [&](ExprCP key) {
+    for (const auto& groupingKey : groupingKeys) {
+      if (key->sameOrEqual(*groupingKey)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Check orderKeys - find the longest prefix that is in groupingKeys.
+  // For ordered data, we can only use a prefix because the order guarantee
+  // breaks once we hit a key not in groupingKeys.
+  ExprVector fromOrderKeys;
+  const auto& orderKeys = input.distribution().orderKeys();
+  for (const auto& key : orderKeys) {
+    if (isGroupingKey(key)) {
+      fromOrderKeys.push_back(key);
+    } else {
+      break; // Must be a prefix for ordered data.
+    }
+  }
+
+  // Check clusterKeys - any subset of groupingKeys works.
+  // Clustering doesn't require prefix matching since rows with the same
+  // cluster key values are contiguous regardless of other columns.
+  ExprVector fromClusterKeys;
+  const auto& clusterKeys = input.distribution().clusterKeys();
+  for (const auto& key : clusterKeys) {
+    if (isGroupingKey(key)) {
+      fromClusterKeys.push_back(key);
+    }
+  }
+
+  // Return the larger subset for maximum streaming benefit.
+  // When equal, prefer orderKeys. Ideally we'd choose the set that produces
+  // the smallest hash table, but we lack data to make that determination.
+  return fromOrderKeys.size() >= fromClusterKeys.size() ? fromOrderKeys
+                                                        : fromClusterKeys;
+}
+
 } // namespace
 
 // static
@@ -964,6 +1018,7 @@ RelationOpPtr Optimization::planSingleAggregation(
   return make<Aggregation>(
       std::move(precompute).maybeProject(),
       std::move(groupingKeys),
+      /*preGroupedKeys*/ ExprVector{},
       std::move(aggregates),
       velox::core::AggregationNode::Step::kSingle,
       aggPlan->columns());
@@ -983,10 +1038,13 @@ void Optimization::addAggregation(
   plan = std::move(precompute).maybeProject();
   state.place(aggPlan);
 
-  if (isSingleWorker_ && isSingleDriver_) {
+  auto preGroupedKeys = computePreGroupedKeys(*plan, groupingKeys);
+
+  if ((isSingleWorker_ && isSingleDriver_) || !preGroupedKeys.empty()) {
     auto* singleAgg = make<Aggregation>(
         plan,
         std::move(groupingKeys),
+        std::move(preGroupedKeys),
         std::move(aggregates),
         velox::core::AggregationNode::Step::kSingle,
         aggPlan->columns());
@@ -1008,6 +1066,7 @@ void Optimization::addAggregation(
   auto* partialAgg = make<Aggregation>(
       plan,
       groupingKeys,
+      /*preGroupedKeys*/ ExprVector{},
       aggregates,
       velox::core::AggregationNode::Step::kPartial,
       aggPlan->intermediateColumns());
@@ -1027,6 +1086,7 @@ void Optimization::addAggregation(
   auto* splitAggPlan = make<Aggregation>(
       plan,
       std::move(finalGroupingKeys),
+      /*preGroupedKeys*/ ExprVector{},
       aggregates,
       velox::core::AggregationNode::Step::kFinal,
       aggPlan->columns());
@@ -1045,6 +1105,7 @@ void Optimization::addAggregation(
   auto* singleAgg = make<Aggregation>(
       plan,
       groupingKeys,
+      /*preGroupedKeys*/ ExprVector{},
       aggregates,
       velox::core::AggregationNode::Step::kSingle,
       aggPlan->columns());
@@ -1416,6 +1477,12 @@ void Optimization::joinByHash(
   auto buildKeys = std::move(precomputed.buildKeys);
   joinColumnMapping = std::move(precomputed.joinColumnMapping);
 
+  // Add AssignUniqueId for non-equi correlated scalar subquery decorrelation.
+  if (auto* rowNumColumn = candidate.join->rowNumberColumn()) {
+    probeInput = make<AssignUniqueId>(probeInput, rowNumColumn);
+    probeColumns.add(rowNumColumn);
+  }
+
   ProjectionBuilder projectionBuilder;
   bool needsProjection = false;
 
@@ -1747,10 +1814,16 @@ void Optimization::crossJoin(
     buildInput = std::move(precomputed.buildInput);
     joinColumnMapping = std::move(precomputed.joinColumnMapping);
 
+    auto probeColumns = PlanObjectSet::fromObjects(plan->columns());
+
+    // Add AssignUniqueId for non-equi correlated scalar subquery decorrelation.
+    if (auto* rowNumColumn = candidate.join->rowNumberColumn()) {
+      probeInput = make<AssignUniqueId>(probeInput, rowNumColumn);
+      probeColumns.add(rowNumColumn);
+    }
+
     ProjectionBuilder projectionBuilder;
     bool needsProjection = false;
-
-    auto probeColumns = PlanObjectSet::fromObjects(plan->columns());
 
     PlanObjectSet joinColumns;
     joinColumns.unionObjects(probe.columns);
@@ -2121,6 +2194,7 @@ RelationOpPtr makeDistinct(const RelationOpPtr& input) {
   return make<Aggregation>(
       input,
       groupingKeys,
+      /*preGroupedKeys*/ ExprVector{},
       AggregateVector{},
       velox::core::AggregationNode::Step::kSingle,
       input->columns());

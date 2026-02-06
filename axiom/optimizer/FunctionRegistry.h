@@ -268,6 +268,28 @@ class FunctionRegistry {
   /// 'cardinality' function is already registered.
   bool registerCardinality(std::string_view name);
 
+  /// Registers function 'name' that has semantics of Presto's 'arbitrary'
+  /// aggregate function, i.e. returns an arbitrary value from the group.
+  /// @return true if successfully registered, false if a different
+  /// 'arbitrary' function is already registered.
+  bool registerArbitrary(std::string_view name);
+
+  /// Returns the name of the 'arbitrary' aggregate function.
+  const std::optional<std::string>& arbitrary() const {
+    return arbitrary_;
+  }
+
+  /// Registers function 'name' that has semantics of Presto's 'count'
+  /// aggregate function, i.e. counts the number of rows in a group.
+  /// @return true if successfully registered, false if a different
+  /// 'count' function is already registered.
+  bool registerCount(std::string_view name);
+
+  /// Returns the name of the 'count' aggregate function.
+  const std::optional<std::string>& count() const {
+    return count_;
+  }
+
   bool registerSpecialForm(
       logical_plan::SpecialForm specialForm,
       std::string_view name);
@@ -301,6 +323,8 @@ class FunctionRegistry {
   std::optional<std::string> elementAt_;
   std::optional<std::string> subscript_;
   std::optional<std::string> cardinality_;
+  std::optional<std::string> arbitrary_;
+  std::optional<std::string> count_;
   folly::F14FastMap<std::string, std::string> reversibleFunctions_;
   folly::F14FastMap<logical_plan::SpecialForm, std::string> specialForms_;
 };

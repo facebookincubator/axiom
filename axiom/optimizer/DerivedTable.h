@@ -31,6 +31,9 @@ using JoinEdgeVector = QGVector<JoinEdgeP>;
 class AggregationPlan;
 using AggregationPlanCP = const AggregationPlan*;
 
+class Aggregate;
+using AggregateCP = const Aggregate*;
+
 enum class OrderType;
 using OrderTypeVector = QGVector<OrderType>;
 
@@ -170,6 +173,26 @@ struct DerivedTable : public PlanObject {
 
   /// Applies 'exportExpr' to each expression in 'exprs' in place.
   void exportExprs(ExprVector& exprs);
+
+  /// Exports a single aggregate function for non-equi correlation
+  /// decorrelation.
+  ///
+  /// This method is used when decorrelating scalar subqueries with non-equi
+  /// correlation predicates. It transforms the aggregation by:
+  /// 1. Adding a mark column (boolean true literal) to track which rows
+  /// came from the subquery.
+  /// 2. Exporting the aggregate's arguments and sorting keys using
+  /// 'exportExpr'.
+  /// 3. Combining the mark column with any existing aggregate condition.
+  /// 4. Clearing the aggregation from this DerivedTable.
+  ///
+  /// Requires: hasAggregation() == true, no grouping keys, no HAVING clause,
+  /// exactly one aggregate function, no LIMIT, no ORDER BY.
+  ///
+  /// @param markName Name for the mark column to be added.
+  /// @return The exported aggregate with updated condition that includes the
+  /// mark column.
+  AggregateCP exportSingleAggregate(Name markName);
 
   bool isTable() const override {
     return true;
