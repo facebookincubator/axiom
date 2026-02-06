@@ -17,6 +17,7 @@
 #include "axiom/cli/Connectors.h"
 
 #include <folly/system/HardwareConcurrency.h>
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
@@ -52,6 +53,8 @@ Connectors::Connectors() {
 
 Connectors::~Connectors() {
   for (const auto& connectorId : connectorIds_) {
+    // Unregister metadata first since it may reference the connector.
+    connector::ConnectorMetadata::unregisterMetadata(connectorId);
     velox::connector::unregisterConnector(connectorId);
   }
 }
