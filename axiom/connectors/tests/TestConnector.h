@@ -149,24 +149,19 @@ class TestTable : public Table {
 
 /// SplitSource generated via the TestSplitManager embedded in the
 /// TestConnector. Generates one default-initialized ConnectorSplit
-/// for each partition provided at initialization time. targetBytes
-/// are ignored when retrieving splits, each new call to getSplits
-/// returns just one ConnectorSplit.
+/// for each partition provided at initialization time.
 class TestSplitSource : public SplitSource {
  public:
   TestSplitSource(
       const std::string& connectorId,
       const std::vector<PartitionHandlePtr>& partitions)
-      : connectorId_(connectorId),
-        partitions_(partitions),
-        currentPartition_(0) {}
+      : connectorId_(connectorId), partitions_(partitions) {}
 
-  std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) override;
+  folly::coro::AsyncGenerator<SplitAndGroup> getSplitGenerator() override;
 
  private:
   const std::string connectorId_;
   const std::vector<PartitionHandlePtr> partitions_;
-  size_t currentPartition_;
 };
 
 /// SplitManager embedded in the TestConnector. Returns one
