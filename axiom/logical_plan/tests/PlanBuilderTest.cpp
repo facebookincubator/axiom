@@ -71,6 +71,21 @@ TEST_F(PlanBuilderTest, outputNames) {
   EXPECT_EQ("expr_0", outputNames[2]);
 }
 
+TEST_F(PlanBuilderTest, identityProjectionWithNoNameMappings) {
+  auto builder = PlanBuilder()
+                     .values(
+                         ROW({"a"}, {BIGINT()}),
+                         std::vector<Variant>{Variant::row({123LL})})
+                     .project({"a + 1"});
+
+  EXPECT_EQ("expr", builder.findOrAssignOutputNameAt(0));
+
+  builder.project({"expr"});
+
+  EXPECT_EQ(1, builder.numOutput());
+  EXPECT_EQ("expr", builder.findOrAssignOutputNameAt(0));
+}
+
 TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
   auto startMatcher = [] { return test::LogicalPlanMatcherBuilder().values(); };
 
