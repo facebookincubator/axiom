@@ -128,6 +128,11 @@ class ToGraph {
     return toName(fmt::format("{}{}", prefix, ++nameCounter_));
   }
 
+  /// Creates a new column with a unique name using the given prefix.
+  ColumnCP makeColumn(std::string_view prefix, Value value) {
+    return make<Column>(newCName(prefix), currentDt_, value);
+  }
+
   /// Creates or returns pre-existing function call with name+args. If
   /// deterministic, a new ExprCP is remembered for reuse.
   ExprCP
@@ -539,10 +544,6 @@ class ToGraph {
   // Counter for generating unique correlation names for BaseTables and
   // DerivedTables.
   int32_t nameCounter_{0};
-
-  // Counter for generating unique names for 'mark' columns produced by semi
-  // joins.
-  int32_t markCounter_{0};
 
   // Column and subfield access info for filters, joins, grouping and other
   // things affecting result row selection.

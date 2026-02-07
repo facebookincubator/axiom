@@ -468,10 +468,19 @@ from the outer side.
 ## Supported Subquery Shapes in Axiom
 
 The Axiom optimizer supports three types of subqueries—scalar, IN, and
-EXISTS—in both correlated and uncorrelated forms. Subqueries can appear in
-WHERE clauses (filter predicates) or SELECT lists (projections). For correlated
-subqueries, only equality correlations of the form `f(outer) = g(inner)` are
-supported. This section describes each supported shape and how it is transformed
+EXISTS—in both correlated and uncorrelated forms. Subqueries can appear in:
+
+- **WHERE clauses** (filter predicates)
+- **SELECT lists** (projections)
+- **GROUP BY keys** (grouping expressions)
+
+**Correlation types:**
+- **Equality correlations** of the form `f(outer) = g(inner)` become join keys
+  and enable efficient hash join execution.
+- **Non-equality correlations** (e.g., `outer.a > inner.b`) become join filters
+  and require nested-loop join execution.
+
+This section describes each supported shape and how it is transformed
 into an equivalent join-based query.
 
 ### Scalar Subqueries
@@ -503,10 +512,6 @@ WHERE order_total > subq.min_order_amount
 The `EnforceSingleRow` operator validates that the subquery returns exactly one
 row, failing with an error otherwise.
 
-**Bug**: Currently, Axiom does not add `EnforceSingleRow` to scalar subqueries,
-which can produce incorrect results when the subquery returns multiple rows.
-See [GitHub issue #845](https://github.com/facebookincubator/axiom/issues/845) for tracking.
-
 If the subquery result can be computed at planning time (see "Constant Folding"
 below), it is replaced with a literal constant, eliminating the join entirely.
 
@@ -529,12 +534,34 @@ CROSS JOIN (SELECT count(*) AS cnt FROM nation) AS subq
 return exactly one row. In this example, `count(*)` is a global aggregation that
 always produces one row, so `EnforceSingleRow` is not required.
 
-#### Correlated Scalar Subquery in Filter
+#### Uncorrelated Scalar Subquery in GROUP BY
 
-Correlated scalar subqueries reference columns from the outer query. Axiom
-requires scalar subqueries to use aggregation. The correlation key is added
-as a grouping key, which naturally produces one row per correlation value
-and enables decorrelation.
+Scalar subqueries can also appear in GROUP BY keys. Like other uses, the subquery
+is cross-joined and its result becomes available as a grouping expression.
+
+```sql
+-- Original
+SELECT sum(n_nationkey)
+FROM nation
+GROUP BY (SELECT max(r_regionkey) FROM region)
+
+-- Rewritten as
+SELECT sum(n_nationkey)
+FROM nation
+CROSS JOIN (
+    EnforceSingleRow(SELECT max(r_regionkey) FROM region)
+) AS subq
+GROUP BY subq.max_r_regionkey
+```
+
+This is particularly useful when grouping by a dynamically computed value that
+depends on data from another table.
+
+#### Correlated Scalar Subquery with Aggregation
+
+Correlated scalar subqueries reference columns from the outer query. When the
+subquery contains aggregation, the correlation key is added as a grouping key,
+which naturally produces one row per correlation value and enables decorrelation.
 
 ```sql
 -- Original
@@ -560,15 +587,56 @@ The correlation column (`n_regionkey`) becomes a grouping key in the subquery,
 ensuring exactly one row per correlation value. The LEFT JOIN preserves outer
 rows that have no matches (producing NULL for the subquery result).
 
-**Note**: Scalar subqueries without aggregation are not currently supported in
-Axiom. Such queries would require applying `EnforceSingleRow` validation per
-correlation value, but the `EnforceSingleRow` operator can only validate the
-entire output of an operator, not individual groups.
+#### Correlated Scalar Subquery without Aggregation
+
+When a correlated scalar subquery does not contain aggregation, it must still
+return at most one row per correlation value. Axiom uses the `EnforceDistinct`
+operator to validate this constraint at runtime.
+
+```sql
+-- Original
+SELECT *,
+       (SELECT u.c FROM u WHERE u.a = t.a AND u.b > t.b) AS subq_result
+FROM t
+```
+
+```
+-- Rewritten plan
+EnforceDistinct(keys=[__rownum], error="Scalar sub-query has returned multiple rows")
+  └─ LeftJoin(on: u.a = t.a, filter: u.b > t.b)
+       ├─ AssignUniqueId(__rownum)
+       │    └─ Scan(t)
+       └─ Scan(u)
+```
+
+The decorrelation works as follows:
+
+1. **AssignUniqueId**: Assigns a unique identifier (`__rownum`) to each outer
+   row. This ID is used to detect when multiple subquery rows match the same
+   outer row.
+
+2. **LEFT JOIN**: Joins the outer table with the subquery's base table using
+   equality correlation conditions as join keys and non-equality conditions
+   as the join filter.
+
+3. **EnforceDistinct**: Validates that each unique outer row ID appears at
+   most once in the join result. If the same `__rownum` appears multiple times
+   (meaning the subquery returned multiple rows for that outer row), the
+   operator throws a runtime error: "Scalar sub-query has returned multiple rows".
+
+Since the join preserves the ordering of the left side rows (rows with the same
+`__rownum` are consecutive), the streaming version of EnforceDistinct can be used.
+This requires only O(1) memory as it only needs to compare adjacent rows.
+
+**Note**: In this example, the equality condition `u.a = t.a` is used as the
+hash join key, while the inequality `u.b > t.b` becomes the join filter. When
+a correlation has only non-equality conditions (no equalities), a nested-loop
+join is used instead.
 
 #### Correlated Scalar Subquery in Projection
 
 Correlated scalar subqueries in the SELECT list are decorrelated the same way
-as in filters.
+as in filters. With aggregation, the correlation key becomes a GROUP BY key:
 
 ```sql
 -- Original
@@ -586,11 +654,28 @@ LEFT JOIN (
 ) AS subq ON subq.n_regionkey = r.r_regionkey
 ```
 
-The LEFT JOIN preserves outer rows with no matching nations (returning NULL
-for the subquery result). This rewrite is only correct for aggregations where
-`agg(<empty set>) == NULL`, such as `min`, `max`, `sum`, `avg`. Aggregations
-like `count(*)` that return a non-NULL value for empty sets require a different
-approach (e.g., Assign-Unique-ID with cross join).
+Without aggregation, the AssignUniqueId + EnforceDistinct pattern is used:
+
+```sql
+-- Original
+SELECT a, (SELECT c FROM u WHERE u.a = t.a) AS subq_result
+FROM t
+```
+
+```
+-- Rewritten plan
+EnforceDistinct(keys=[__rownum], error="Scalar sub-query has returned multiple rows")
+  └─ LeftJoin(on: u.a = t.a)
+       ├─ AssignUniqueId(__rownum)
+       │    └─ Scan(t)
+       └─ Scan(u)
+```
+
+The LEFT JOIN preserves outer rows with no matches (returning NULL for the
+subquery result). For aggregation-based rewrites, this is only correct for
+aggregations where `agg(<empty set>) == NULL`, such as `min`, `max`, `sum`,
+`avg`. Aggregations like `count(*)` that return a non-NULL value for empty
+sets require a different approach (e.g., Assign-Unique-ID with cross join).
 
 **Bug**: Currently, Axiom uses this LEFT JOIN rewrite for all aggregations,
 including `count(*)`, which produces incorrect results (NULL instead of 0)
@@ -852,7 +937,7 @@ directly.
 
 | Subquery Type | Location | Rewritten As |
 |---------------|----------|--------------|
-| Scalar | Filter/Projection | Cross join with EnforceSingleRow* |
+| Scalar | Filter/Projection/GROUP BY | Cross join with EnforceSingleRow |
 | IN | Filter | Semi-join (null-aware) |
 | IN | Projection | Mark semi-join (null-aware) |
 | NOT IN | Filter | Anti-join (null-aware) |
@@ -862,14 +947,12 @@ directly.
 | NOT EXISTS | Filter | Cross join + HAVING count check |
 | NOT EXISTS | Projection | Cross join + count = 0 |
 
-*Currently missing EnforceSingleRow due to [GitHub issue #845](https://github.com/facebookincubator/axiom/issues/845).
-
 #### Correlated Subqueries
 
 | Subquery Type | Location | Rewritten As |
 |---------------|----------|--------------|
-| Scalar (with agg) | Filter | Left join + GROUP BY correlation key |
-| Scalar (with agg) | Projection | Left join + GROUP BY correlation key |
+| Scalar (with agg) | Filter/Projection/GROUP BY | Left join + GROUP BY correlation key |
+| Scalar (without agg) | Filter/Projection/GROUP BY | AssignUniqueId + Left join + EnforceDistinct |
 | IN | Filter | Semi-join with correlation keys |
 | IN | Projection | Mark semi-join with correlation keys |
 | NOT IN | Filter | Anti-join with correlation keys |
@@ -941,21 +1024,82 @@ auto* markColumn = make<Column>(mark, currentDt_, Value{toType(velox::BOOLEAN())
 
 ### DecorrelatedJoin Struct
 
-When processing correlated IN and EXISTS subqueries, correlation conjuncts are
-extracted into a common structure:
+When processing correlated subqueries, correlation conjuncts are extracted into
+a common structure:
 
 ```cpp
 struct DecorrelatedJoin {
-  PlanObjectSet leftTables;  // Outer tables referenced by correlation
-  ExprVector leftKeys;       // Keys from outer query (for equalities)
-  ExprVector rightKeys;      // Keys from subquery (for equalities)
-  ExprVector filter;         // Non-equality correlation conditions
+  PlanObjectSet leftTables;     // Outer tables referenced by correlation
+  ExprVector leftKeys;          // Keys from outer query (for equalities)
+  ExprVector rightKeys;         // Keys from subquery (for equalities)
+  ExprVector nonEquiConjuncts;  // Non-equality correlation conditions
 };
 ```
 
 The `extractDecorrelatedJoin()` helper processes `correlatedConjuncts_` and
 separates equality conditions (which become join keys) from non-equality
 conditions (which become join filters).
+
+### JoinEdge Fields for Subqueries
+
+Subquery decorrelation uses various `JoinEdge::Spec` fields to represent
+different subquery semantics. Most fields (`filter`, `rightOptional`,
+`rightExists`, `rightNotExists`, `nullAwareIn`, `markColumn`) are also used
+for regular joins. The `rowNumberColumn` and `multipleMatchesError` fields
+are used exclusively for subqueries.
+
+```cpp
+struct Spec {
+  /// Filter conjuncts to be applied after the join. Only for non-inner joins.
+  /// Used for non-equality correlation conditions (e.g., u.b > t.b).
+  ExprVector filter;
+
+  /// True for LEFT and FULL OUTER JOIN. The output may have no match on the
+  /// right side. Set for correlated scalar subqueries.
+  bool rightOptional{false};
+
+  /// True for EXISTS subquery. Mutually exclusive with 'rightNotExists'.
+  bool rightExists{false};
+
+  /// True for NOT EXISTS subquery. Mutually exclusive with 'rightExists'.
+  bool rightNotExists{false};
+
+  /// When true, the join semantic is IN / NOT IN. When false, the join
+  /// semantic is EXISTS / NOT EXISTS. Applies to semi and anti joins.
+  bool nullAwareIn{false};
+
+  /// Marker column produced by 'exists' or 'not exists' join. If set, the
+  /// 'rightExists' must be true. Used when EXISTS/IN appears in the SELECT
+  /// list rather than WHERE clause.
+  ColumnCP markColumn{nullptr};
+
+  /// Row number column to be assigned to the non-optional (probe) side using
+  /// AssignUniqueId. Used for decorrelating scalar subqueries with non-equi
+  /// correlation conditions and scalar subqueries without aggregation. The
+  /// join output will be clustered on this column.
+  ColumnCP rowNumberColumn{nullptr};
+
+  /// When set, validate at runtime during query execution that the join
+  /// produces at most one match for each left-side row. Throws with this
+  /// error message if multiple matches are found. Used for decorrelating
+  /// scalar subqueries without aggregation. Requires 'rowNumberColumn' to
+  /// be set.
+  Name multipleMatchesError{nullptr};
+};
+```
+
+**Field usage by subquery type:**
+
+| Subquery Type | Join Kind | Key Spec Fields |
+|---------------|-----------|-----------------|
+| EXISTS | Semi join | `rightExists = true` |
+| NOT EXISTS | Anti join | `rightNotExists = true` |
+| IN | Semi join (null-aware) | `rightExists = true`, `nullAwareIn = true` |
+| NOT IN | Anti join (null-aware) | `rightNotExists = true`, `nullAwareIn = true` |
+| EXISTS/IN in SELECT | Mark join | `markColumn` set |
+| Scalar (with agg, equi-only) | Left join | `rightOptional = true` |
+| Scalar (with agg, non-equi) | Left join | `rightOptional = true`, `rowNumberColumn` |
+| Scalar (without agg) | Left join + EnforceDistinct | `rightOptional = true`, `rowNumberColumn`, `multipleMatchesError` |
 
 ## Processing Flow
 
@@ -1003,34 +1147,6 @@ DerivedTableP ToGraph::translateSubquery(
   return subqueryDt;
 }
 ```
-
-## JoinEdge Representation
-
-`JoinEdge::makeExists` creates a specialized join edge:
-
-```cpp
-static JoinEdge* makeExists(
-    PlanObjectCP leftTable,
-    PlanObjectCP rightTable,
-    ColumnCP markColumn = nullptr,
-    ExprVector filter = {},
-    bool nullAwareIn = false) {
-  return make<JoinEdge>(
-      leftTable,
-      rightTable,
-      Spec{
-          .filter = std::move(filter),
-          .rightExists = true,
-          .markColumn = markColumn,
-          .nullAwareIn = nullAwareIn,
-      });
-}
-```
-
-Join types used for subqueries:
-- `kLeftSemiFilter` for EXISTS/IN (keeps matching rows)
-- `kAnti` for NOT EXISTS/NOT IN (filters out matching rows)
-- `kLeft` with `rightOptional = true` for correlated scalars
 
 ## Limitations and TODOs
 

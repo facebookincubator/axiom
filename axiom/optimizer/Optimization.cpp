@@ -1477,16 +1477,25 @@ void Optimization::joinByHash(
   auto buildKeys = std::move(precomputed.buildKeys);
   joinColumnMapping = std::move(precomputed.joinColumnMapping);
 
-  // Add AssignUniqueId for non-equi correlated scalar subquery decorrelation.
+  // Add AssignUniqueId for correlated scalar subquery decorrelation.
+  // For non-equi correlation with aggregation: rowNumberColumn is set,
+  // multipleMatchesError is null. For equi-correlation without aggregation:
+  // rowNumberColumn is set and multipleMatchesError is set.
+  ColumnCP enforceDistinctColumn = nullptr;
   if (auto* rowNumColumn = candidate.join->rowNumberColumn()) {
     probeInput = make<AssignUniqueId>(probeInput, rowNumColumn);
     probeColumns.add(rowNumColumn);
+
+    if (candidate.join->multipleMatchesError()) {
+      enforceDistinctColumn = rowNumColumn;
+    }
   }
 
   ProjectionBuilder projectionBuilder;
   bool needsProjection = false;
 
-  state.downstreamColumns().forEach<Column>([&](auto column) {
+  const auto& downstreamColumns = state.downstreamColumns();
+  downstreamColumns.forEach<Column>([&](auto column) {
     if (column == build.markColumn) {
       mark = column;
       return;
@@ -1516,6 +1525,13 @@ void Optimization::joinByHash(
   // If there is an existence flag, it is the rightmost result column.
   if (mark) {
     projectionBuilder.add(mark, mark);
+  }
+
+  // Add the row-number column for EnforceDistinct. It is not part of
+  // downstreamColumns, so we need to add it explicitly.
+  if (enforceDistinctColumn &&
+      !downstreamColumns.contains(enforceDistinctColumn)) {
+    projectionBuilder.add(enforceDistinctColumn, enforceDistinctColumn);
   }
 
   state.replaceColumns(projectionBuilder.outputColumns());
@@ -1576,6 +1592,15 @@ void Optimization::joinByHash(
   state.addCost(*join);
   state.cost.cost += buildState.cost.cost;
 
+  if (enforceDistinctColumn != nullptr) {
+    join = make<EnforceDistinct>(
+        join,
+        ExprVector{enforceDistinctColumn},
+        ExprVector{enforceDistinctColumn},
+        candidate.join->multipleMatchesError());
+    state.addCost(*join);
+  }
+
   if (needsProjection) {
     join = projectionBuilder.build(join);
   }
@@ -1589,6 +1614,8 @@ void Optimization::joinByHashRight(
     PlanState& state,
     std::vector<NextJoin>& toTry) {
   checkTables(candidate);
+
+  VELOX_CHECK_NULL(candidate.join->rowNumberColumn());
 
   auto [probe, build] = candidate.joinSides();
 
@@ -1816,10 +1843,18 @@ void Optimization::crossJoin(
 
     auto probeColumns = PlanObjectSet::fromObjects(plan->columns());
 
-    // Add AssignUniqueId for non-equi correlated scalar subquery decorrelation.
+    // Add AssignUniqueId for correlated scalar subquery decorrelation.
+    // For non-equi correlation with aggregation: rowNumberColumn is set,
+    // multipleMatchesError is null. For equi-correlation without aggregation:
+    // rowNumberColumn is set and multipleMatchesError is set.
+    ColumnCP enforceDistinctColumn = nullptr;
     if (auto* rowNumColumn = candidate.join->rowNumberColumn()) {
       probeInput = make<AssignUniqueId>(probeInput, rowNumColumn);
       probeColumns.add(rowNumColumn);
+
+      if (candidate.join->multipleMatchesError()) {
+        enforceDistinctColumn = rowNumColumn;
+      }
     }
 
     ProjectionBuilder projectionBuilder;
@@ -1848,6 +1883,13 @@ void Optimization::crossJoin(
       projectionBuilder.add(column, column);
     });
 
+    // Add the row-number column for EnforceDistinct. It is not part of
+    // downstreamColumns, so we need to add it explicitly.
+    if (enforceDistinctColumn &&
+        !downstreamColumns.contains(enforceDistinctColumn)) {
+      projectionBuilder.add(enforceDistinctColumn, enforceDistinctColumn);
+    }
+
     VELOX_CHECK(
         joinType == velox::core::JoinType::kInner ||
             joinType == velox::core::JoinType::kLeft ||
@@ -1866,6 +1908,15 @@ void Optimization::crossJoin(
 
     state.replaceColumns(projectionBuilder.outputColumns());
     state.addCost(*join);
+
+    if (enforceDistinctColumn != nullptr) {
+      join = make<EnforceDistinct>(
+          join,
+          ExprVector{enforceDistinctColumn},
+          ExprVector{enforceDistinctColumn},
+          candidate.join->multipleMatchesError());
+      state.addCost(*join);
+    }
 
     if (needsProjection) {
       join = projectionBuilder.build(join);

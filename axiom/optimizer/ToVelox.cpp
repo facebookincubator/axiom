@@ -1510,6 +1510,23 @@ velox::core::PlanNodePtr ToVelox::makeAssignUniqueId(
   return node;
 }
 
+velox::core::PlanNodePtr ToVelox::makeEnforceDistinct(
+    const EnforceDistinct& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+
+  auto node = std::make_shared<velox::core::EnforceDistinctNode>(
+      nextId(),
+      toFieldRefs(op.distinctKeys()),
+      toFieldRefs(op.preGroupedKeys()),
+      op.errorMessage(),
+      std::move(input));
+
+  makePredictionAndHistory(node->id(), &op);
+  return node;
+}
+
 void ToVelox::makePredictionAndHistory(
     const velox::core::PlanNodeId& id,
     const RelationOp* op) {
@@ -1555,6 +1572,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
           *op->as<EnforceSingleRow>(), fragment, stages);
     case RelType::kAssignUniqueId:
       return makeAssignUniqueId(*op->as<AssignUniqueId>(), fragment, stages);
+    case RelType::kEnforceDistinct:
+      return makeEnforceDistinct(*op->as<EnforceDistinct>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

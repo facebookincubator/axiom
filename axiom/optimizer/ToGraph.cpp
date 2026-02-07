@@ -2101,10 +2101,8 @@ DerivedTableP ToGraph::translateSubquery(
 }
 
 ColumnCP ToGraph::addMarkColumn() {
-  auto* mark = toName(fmt::format("__mark{}", markCounter_++));
-  auto* markColumn =
-      make<Column>(mark, currentDt_, toValue(velox::BOOLEAN(), 2));
-  renames_[mark] = markColumn;
+  auto* markColumn = makeColumn("__mark", toValue(velox::BOOLEAN(), 2));
+  renames_[markColumn->name()] = markColumn;
   return markColumn;
 }
 
@@ -2393,18 +2391,25 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
   auto correlation =
       extractCorrelationKeys(functionNames_, correlatedConjuncts_, subqueryDt);
 
+  const bool hasAggregation = subqueryDt->hasAggregation();
+
   if (!correlation.nonEquiConjuncts.empty()) {
     // For non-equi correlation, expect only 1 column (the aggregate result).
     VELOX_CHECK_EQ(1, subqueryDt->columns.size());
-  } else {
-    // For equi-only correlation, expect grouping keys + aggregate result.
+  } else if (hasAggregation) {
+    // For equi-only correlation with aggregation, expect grouping keys +
+    // aggregate result.
     VELOX_CHECK_EQ(correlatedConjuncts_.size() + 1, subqueryDt->columns.size());
+  } else {
+    // For equi-only correlation without aggregation, expect only 1 column (the
+    // subquery result).
+    VELOX_CHECK_EQ(1, subqueryDt->columns.size());
   }
 
   correlatedConjuncts_.clear();
 
-  if (correlation.nonEquiConjuncts.empty()) {
-    // Equi-join only: create LEFT join with correlation keys.
+  if (correlation.nonEquiConjuncts.empty() && hasAggregation) {
+    // Equi-join only with aggregation: create LEFT join with correlation keys.
     auto* join = make<JoinEdge>(
         correlation.leftTable,
         subqueryDt,
@@ -2417,13 +2422,50 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
     return subqueryDt->columns.back();
   }
 
-  // Non-equi correlation: use AssignUniqueId + LEFT JOIN + Aggregation.
-  auto* mark = toName(fmt::format("__mark{}", markCounter_++));
-  auto exportedAgg = subqueryDt->exportSingleAggregate(mark);
+  if (!hasAggregation) {
+    // Correlation without aggregation: use AssignUniqueId + LEFT JOIN +
+    // EnforceDistinct to validate single-row semantics.
+    auto* rowNumberColumn = makeColumn(
+        "__rownum",
+        toValue(velox::BIGINT(), std::numeric_limits<int64_t>::max()));
 
-  auto* rowNumber = toName(fmt::format("__rownum{}", markCounter_++));
-  auto* rowNumberColumn =
-      make<Column>(rowNumber, currentDt_, toConstantValue(velox::BIGINT()));
+    ExprVector exportedFilter;
+    for (auto* conjunct : correlation.nonEquiConjuncts) {
+      exportedFilter.push_back(subqueryDt->exportExpr(conjunct));
+    }
+
+    auto* join = make<JoinEdge>(
+        correlation.leftTable,
+        subqueryDt,
+        JoinEdge::Spec{
+            .filter = exportedFilter,
+            .rightOptional = true,
+            .rowNumberColumn = rowNumberColumn,
+            .multipleMatchesError =
+                toName("Scalar sub-query has returned multiple rows"),
+        });
+
+    for (auto i = 0; i < correlation.leftKeys.size(); ++i) {
+      join->addEquality(
+          correlation.leftKeys[i],
+          subqueryDt->exportExpr(correlation.rightKeys[i]));
+    }
+
+    currentDt_->joins.push_back(join);
+
+    // The first column is the subquery's original output (the SELECT
+    // expression). Subsequent columns are correlation keys added via
+    // exportExpr.
+    return subqueryDt->columns.front();
+  }
+
+  // Non-equi correlation with aggregation: use AssignUniqueId + LEFT JOIN +
+  // Aggregation.
+  auto exportedAgg = subqueryDt->exportSingleAggregate(newCName("__mark"));
+
+  auto* rowNumberColumn = makeColumn(
+      "__rownum",
+      toValue(velox::BIGINT(), std::numeric_limits<int64_t>::max()));
 
   ExprVector exportedFilter;
   for (auto* conjunct : correlation.nonEquiConjuncts) {
@@ -2447,8 +2489,7 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
   }
   currentDt_->joins.push_back(join);
 
-  auto* aggResultColumn =
-      make<Column>(newCName("__agg"), currentDt_, exportedAgg->value());
+  auto* aggResultColumn = makeColumn("__agg", exportedAgg->value());
 
   AggregateVector allAggregates{exportedAgg};
   ColumnVector allColumns{rowNumberColumn, aggResultColumn};

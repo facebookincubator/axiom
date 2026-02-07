@@ -522,9 +522,16 @@ class JoinEdge {
 
     /// Row number column to be assigned to the non-optional (probe) side using
     /// AssignUniqueId. Used for decorrelating scalar subqueries with non-equi
-    /// correlation conditions. The join output will be clustered on this
-    /// column.
+    /// correlation conditions and scalar subqueries without aggregation. The
+    /// join output will be clustered on this column.
     ColumnCP rowNumberColumn{nullptr};
+
+    /// When set, validate at runtime during query execution that the join
+    /// produces at most one match for each left-side row. Throws with this
+    /// error message if multiple matches are found. Used for decorrelating
+    /// scalar subqueries without aggregation. Requires 'rowNumberColumn' to
+    /// be set.
+    Name multipleMatchesError{nullptr};
 
     /// Columns produced by the 'left' side of a RIGHT or FULL OUTER join.
     /// Requires 'leftOptional' to be true.
@@ -563,6 +570,7 @@ class JoinEdge {
         directed_(spec.directed),
         markColumn_(spec.markColumn),
         rowNumberColumn_(spec.rowNumberColumn),
+        multipleMatchesError_(spec.multipleMatchesError),
         leftColumns_{spec.leftColumns},
         leftExprs_{spec.leftExprs},
         rightColumns_{spec.rightColumns},
@@ -585,6 +593,10 @@ class JoinEdge {
     if (rowNumberColumn_) {
       VELOX_CHECK(!leftOptional_);
       VELOX_CHECK(rightOptional_);
+    }
+
+    if (multipleMatchesError_) {
+      VELOX_CHECK_NOT_NULL(rowNumberColumn_);
     }
 
     if (!leftColumns_.empty()) {
@@ -719,6 +731,10 @@ class JoinEdge {
     return rowNumberColumn_;
   }
 
+  Name multipleMatchesError() const {
+    return multipleMatchesError_;
+  }
+
   const ColumnVector& leftColumns() const {
     return leftColumns_;
   }
@@ -795,7 +811,8 @@ class JoinEdge {
   /// True if has a hash based variant that builds on the left and probes on the
   /// right.
   bool hasRightHashVariant() const {
-    return isNonCommutative() && !rightNotExists_;
+    return isNonCommutative() && !rightNotExists_ &&
+        rowNumberColumn_ == nullptr;
   }
 
   /// Returns the join side info for 'table'. If 'other' is set, returns the
@@ -908,6 +925,11 @@ class JoinEdge {
 
   // Row number column assigned to the probe side using AssignUniqueId.
   ColumnCP const rowNumberColumn_;
+
+  // When set, validate at runtime that the join produces at most one match for
+  // each left-side row. Throws with this error message if multiple matches are
+  // found.
+  const Name multipleMatchesError_;
 
   const ColumnVector leftColumns_;
   const ExprVector leftExprs_;

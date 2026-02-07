@@ -51,6 +51,7 @@ const auto& relTypeNames() {
       {RelType::kTableWrite, "TableWrite"},
       {RelType::kEnforceSingleRow, "EnforceSingleRow"},
       {RelType::kAssignUniqueId, "AssignUniqueId"},
+      {RelType::kEnforceDistinct, "EnforceDistinct"},
   };
 
   return kNames;
@@ -1389,6 +1390,35 @@ std::string AssignUniqueId::toString(bool recursive, bool detail) const {
 }
 
 void AssignUniqueId::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+EnforceDistinct::EnforceDistinct(
+    RelationOpPtr input,
+    ExprVector distinctKeys,
+    ExprVector preGroupedKeys,
+    Name errorMessage)
+    : RelationOp(RelType::kEnforceDistinct, std::move(input)),
+      distinctKeys_(std::move(distinctKeys)),
+      preGroupedKeys_(std::move(preGroupedKeys)),
+      errorMessage_(errorMessage) {
+  // Fanout is 1 (cardinality neutral).
+  cost_.fanout = 1;
+  cost_.unitCost = 0.01; // Minimal cost for enforcing distinctness.
+}
+
+std::string EnforceDistinct::toString(bool recursive, bool detail) const {
+  std::stringstream out;
+  if (recursive) {
+    out << input()->toString(true, detail) << " ";
+  }
+  out << "EnforceDistinct";
+  return out.str();
+}
+
+void EnforceDistinct::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
   visitor.visit(*this, context);
