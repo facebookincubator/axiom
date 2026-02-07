@@ -1873,7 +1873,15 @@ std::any AstBuilder::visitExists(PrestoSqlParser::ExistsContext* ctx) {
 
 std::any AstBuilder::visitPosition(PrestoSqlParser::PositionContext* ctx) {
   trace("visitPosition");
-  return visitChildren("visitPosition", ctx);
+
+  // POSITION(x IN y) is equivalent to strpos(y, x)
+  return std::static_pointer_cast<Expression>(std::make_shared<FunctionCall>(
+      getLocation(ctx),
+      std::make_shared<QualifiedName>(
+          getLocation(ctx), std::vector<std::string>{"strpos"}),
+      std::vector<std::shared_ptr<Expression>>{
+          visitTyped<Expression>(ctx->valueExpression(1)),
+          visitTyped<Expression>(ctx->valueExpression(0))}));
 }
 
 std::any AstBuilder::visitSearchedCase(
