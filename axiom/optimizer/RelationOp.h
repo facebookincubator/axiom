@@ -121,6 +121,7 @@ enum class RelType {
   kTableWrite,
   kEnforceSingleRow,
   kAssignUniqueId,
+  kEnforceDistinct,
 };
 
 AXIOM_DECLARE_ENUM_NAME(RelType)
@@ -718,5 +719,49 @@ struct AssignUniqueId : public RelationOp {
 };
 
 using AssignUniqueIdCP = const AssignUniqueId*;
+
+/// Enforces that input has unique values for specified key columns. Used for
+/// validating correlated scalar subqueries return at most one row per
+/// correlation group. Throws with a custom error message if duplicates are
+/// found.
+struct EnforceDistinct : public RelationOp {
+  /// @param input The input relation.
+  /// @param distinctKeys The columns to check for distinctness.
+  /// @param preGroupedKeys Subset of distinctKeys that are already
+  /// sorted/grouped. When preGroupedKeys matches distinctKeys, streaming
+  /// enforcement with O(1) memory is used. Otherwise, hash-based enforcement
+  /// with O(n) memory is used.
+  /// @param errorMessage Error message to throw if duplicates are found.
+  EnforceDistinct(
+      RelationOpPtr input,
+      ExprVector distinctKeys,
+      ExprVector preGroupedKeys,
+      Name errorMessage);
+
+  const ExprVector& distinctKeys() const {
+    return distinctKeys_;
+  }
+
+  const ExprVector& preGroupedKeys() const {
+    return preGroupedKeys_;
+  }
+
+  Name errorMessage() const {
+    return errorMessage_;
+  }
+
+  std::string toString(bool recursive, bool detail) const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+
+ private:
+  const ExprVector distinctKeys_;
+  const ExprVector preGroupedKeys_;
+  const Name errorMessage_;
+};
+
+using EnforceDistinctCP = const EnforceDistinct*;
 
 } // namespace facebook::axiom::optimizer
