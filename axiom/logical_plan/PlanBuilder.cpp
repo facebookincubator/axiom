@@ -342,7 +342,11 @@ PlanBuilder& PlanBuilder::dropHiddenColumns() {
 
     const auto names = outputMapping_->reverseLookup(id);
     for (const auto& name : names) {
-      newOutputMapping->add(name, id);
+      if (name.alias.has_value()) {
+        newOutputMapping->add(name, id);
+      } else {
+        newOutputMapping->tryAdd(name.name, id);
+      }
     }
 
     exprs.push_back(
@@ -402,21 +406,23 @@ void PlanBuilder::resolveProjections(
           outputNames.push_back(id);
 
           const auto names = outputMapping_->reverseLookup(id);
-          VELOX_USER_CHECK(!names.empty());
-
           for (const auto& name : names) {
-            mappings.add(name, id);
+            if (name.alias.has_value()) {
+              mappings.tryAdd(name, id);
+            } else {
+              mappings.tryAdd(name.name, id);
+            }
           }
         } else {
           outputNames.push_back(newName(id));
         }
       } else {
         outputNames.push_back(newName(alias.value()));
-        mappings.add(alias.value(), outputNames.back());
+        mappings.tryAdd(alias.value(), outputNames.back());
       }
     } else if (alias.has_value()) {
       outputNames.push_back(newName(alias.value()));
-      mappings.add(alias.value(), outputNames.back());
+      mappings.tryAdd(alias.value(), outputNames.back());
     } else {
       outputNames.push_back(newName("expr"));
     }
@@ -471,7 +477,11 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
 
     const auto names = outputMapping_->reverseLookup(id);
     for (const auto& name : names) {
-      newOutputMapping->add(name, id);
+      if (name.alias.has_value()) {
+        newOutputMapping->add(name, id);
+      } else {
+        newOutputMapping->tryAdd(name.name, id);
+      }
     }
 
     exprs.push_back(
@@ -558,7 +568,7 @@ PlanBuilder& PlanBuilder::aggregate(
     if (aggregate.name().has_value()) {
       const auto& alias = aggregate.name().value();
       outputNames.push_back(newName(alias));
-      newOutputMapping->add(alias, outputNames.back());
+      newOutputMapping->tryAdd(alias, outputNames.back());
     } else {
       outputNames.push_back(newName(expr->name()));
     }
@@ -619,10 +629,8 @@ PlanBuilder& PlanBuilder::unnest(
   size_t index = 0;
 
   auto addOutputMapping = [&](const std::string& name, const std::string& id) {
-    if (!newOutputMapping->lookup(name)) {
-      newOutputMapping->add(name, id);
-    }
-    newOutputMapping->add({.alias = alias, .name = name}, id);
+    newOutputMapping->tryAdd(name, id);
+    newOutputMapping->tryAdd({.alias = alias, .name = name}, id);
     ++index;
   };
 
@@ -636,7 +644,7 @@ PlanBuilder& PlanBuilder::unnest(
       outputNames.emplace_back();
       for (const std::string& alias : unnestExpr.unnestedAliases()) {
         outputNames.back().emplace_back(newName(alias));
-        newOutputMapping->add(alias, outputNames.back().back());
+        newOutputMapping->tryAdd(alias, outputNames.back().back());
       }
     } else {
       switch (expr->type()->kind()) {

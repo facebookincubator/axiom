@@ -71,6 +71,43 @@ TEST_F(PlanBuilderTest, outputNames) {
   EXPECT_EQ("expr_0", outputNames[2]);
 }
 
+TEST_F(PlanBuilderTest, identityProjectionWithNoNameMappings) {
+  auto builder = PlanBuilder()
+                     .values(
+                         ROW({"a"}, {BIGINT()}),
+                         std::vector<Variant>{Variant::row({123LL})})
+                     .project({"a + 1"});
+
+  EXPECT_EQ("expr", builder.findOrAssignOutputNameAt(0));
+
+  builder.project({"expr"});
+
+  EXPECT_EQ(1, builder.numOutput());
+  EXPECT_EQ("expr", builder.findOrAssignOutputNameAt(0));
+}
+
+TEST_F(PlanBuilderTest, duplicateUnqualifiedColumnNames) {
+  PlanBuilder::Context context;
+
+  auto builder =
+      PlanBuilder(context)
+          .values(
+              ROW({"a", "b"}, {BIGINT(), VARCHAR()}), ValuesNode::Variants{})
+          .as("t")
+          .join(
+              PlanBuilder(context)
+                  .values(
+                      ROW({"a", "c"}, {BIGINT(), INTEGER()}),
+                      ValuesNode::Variants{})
+                  .as("u"),
+              "t.a = u.a",
+              JoinType::kInner);
+
+  builder.project({"t.a", "u.a", "t.b", "u.c"});
+
+  EXPECT_EQ(4, builder.numOutput());
+}
+
 TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
   auto startMatcher = [] { return test::LogicalPlanMatcherBuilder().values(); };
 

@@ -150,6 +150,24 @@ TEST(NameMappingsTest, basic) {
   }
 }
 
+TEST(NameMappingsTest, tryAdd) {
+  NameMappings mappings;
+
+  EXPECT_TRUE(mappings.tryAdd("a", "id1"));
+  EXPECT_EQ(mappings.lookup("a"), "id1");
+
+  EXPECT_FALSE(mappings.tryAdd("a", "id2"));
+  EXPECT_EQ(mappings.lookup("a"), "id1");
+
+  EXPECT_TRUE(mappings.tryAdd(
+      NameMappings::QualifiedName{.alias = "t", .name = "a"}, "id3"));
+  EXPECT_EQ(mappings.lookup("t", "a"), "id3");
+
+  EXPECT_FALSE(mappings.tryAdd(
+      NameMappings::QualifiedName{.alias = "t", .name = "a"}, "id4"));
+  EXPECT_EQ(mappings.lookup("t", "a"), "id3");
+}
+
 TEST(NameMappingsTest, enableUnqualifiedAccess) {
   NameMappings mappings;
   mappings.add(
