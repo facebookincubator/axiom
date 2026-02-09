@@ -13,7 +13,7 @@ different data layouts.
 
 We run the single node experiments using Axiom CLI on a laptop against a 30G
 dataset with Parquet and Snappy.  To repeat the below runs, use the query
-formulations in tpch.queries. To see plans and stats, use
+formulations in tpch/queries. To see plans and stats, use
 
 ```
 SQL> flag optimizer_trace = 15;

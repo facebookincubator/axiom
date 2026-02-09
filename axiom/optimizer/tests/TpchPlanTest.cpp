@@ -85,7 +85,7 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
   }
 
   static std::string readTpchSql(int32_t query) {
-    auto sql = readSqlFromFile(fmt::format("tpch.queries/q{}.sql", query));
+    auto sql = readSqlFromFile(fmt::format("tpch/queries/q{}.sql", query));
 
     // Drop trailing semicolon.
     boost::trim_right(sql);
@@ -686,10 +686,10 @@ TEST_F(TpchPlanTest, q22) {
   ASSERT_NO_THROW(planVelox(parseTpchSql(22)));
 }
 
-// Use to re-generate the plans stored in tpch.plans directory.
+// Use to re-generate the plans stored in tpch/plans directory.
 TEST_F(TpchPlanTest, DISABLED_makePlans) {
   const auto path =
-      velox::test::getDataFilePath("axiom/optimizer/tests", "tpch.plans");
+      velox::test::getDataFilePath("axiom/optimizer/tests", "tpch/plans");
 
   const runner::MultiFragmentPlan::Options options{
       .numWorkers = 1, .numDrivers = 1};
