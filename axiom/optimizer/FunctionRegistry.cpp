@@ -111,6 +111,39 @@ bool FunctionRegistry::registerReversibleFunction(std::string_view name) {
   return reversibleFunctions_.emplace(name, name).second;
 }
 
+bool FunctionRegistry::registerAggregateEmptyResultResolver(
+    const std::vector<std::string>& names,
+    AggregateEmptyResultResolver resolver) {
+  folly::F14FastSet<std::string_view> seen;
+  for (const auto& name : names) {
+    VELOX_USER_CHECK(!name.empty(), "Function name cannot be empty");
+    VELOX_USER_CHECK(
+        seen.insert(name).second, "Duplicate function name: {}", name);
+    if (aggregateEmptyResultResolvers_.contains(name)) {
+      return false;
+    }
+  }
+  for (const auto& name : names) {
+    aggregateEmptyResultResolvers_.emplace(name, resolver);
+  }
+  return true;
+}
+
+velox::Variant FunctionRegistry::aggregateResultForEmptyInput(
+    std::string_view name,
+    std::span<const velox::Type* const> argTypes) const {
+  if (count_.has_value() && count_.value() == name) {
+    return velox::Variant::create<velox::TypeKind::BIGINT>(0);
+  }
+
+  auto it = aggregateEmptyResultResolvers_.find(name);
+  if (it != aggregateEmptyResultResolvers_.end()) {
+    return it->second(name, argTypes);
+  }
+
+  return velox::Variant();
+}
+
 // static
 FunctionRegistry* FunctionRegistry::instance() {
   static std::unique_ptr<FunctionRegistry> registry{new FunctionRegistry{}};
@@ -231,6 +264,13 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
   registry->registerCardinality(fullName("cardinality"));
   registry->registerArbitrary(fullName("arbitrary"));
   registry->registerCount(fullName("count"));
+
+  registry->registerAggregateEmptyResultResolver(
+      {fullName("count_if"), fullName("approx_distinct")},
+      [](std::string_view /*name*/,
+         std::span<const velox::Type* const> /*argTypes*/) {
+        return velox::Variant::create<velox::TypeKind::BIGINT>(0);
+      });
 
   registry->registerReversibleFunction(fullName("eq"));
   registry->registerReversibleFunction(fullName("lt"), fullName("gt"));

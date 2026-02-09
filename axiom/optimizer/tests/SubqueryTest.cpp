@@ -554,20 +554,72 @@ TEST_F(SubqueryTest, correlatedScalar) {
   {
     auto query =
         "SELECT * FROM region "
-        "WHERE r_regionkey = (SELECT count(*) FROM nation WHERE n_regionkey = r_regionkey)";
+        "WHERE r_regionkey = (SELECT min(n_nationkey) FROM nation WHERE n_regionkey = r_regionkey)";
 
     // The correlated scalar subquery is transformed into a LEFT JOIN with
     // aggregation grouped by the correlation key, then filtered.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("region")
+            .hashJoin(
+                core::PlanMatcherBuilder()
+                    .tableScan("nation")
+                    .singleAggregation({"n_regionkey"}, {"min(n_nationkey)"})
+                    .project()
+                    .build(),
+                velox::core::JoinType::kLeft)
+            .filter("r_regionkey = min")
+            .project()
+            .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto query =
+        "SELECT * FROM region "
+        "WHERE r_regionkey = (SELECT count(*) FROM nation WHERE n_regionkey = r_regionkey)";
+
+    // The correlated scalar subquery is transformed into a LEFT JOIN with
+    // aggregation grouped by the correlation key. The count result is wrapped
+    // with COALESCE to return 0 for unmatched rows (instead of NULL from
+    // LEFT JOIN).
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("region")
                        .hashJoin(
                            core::PlanMatcherBuilder()
                                .tableScan("nation")
-                               .singleAggregation()
+                               .singleAggregation({"n_regionkey"}, {"count(*)"})
                                .project()
                                .build(),
                            velox::core::JoinType::kLeft)
-                       .filter()
+                       .filter("r_regionkey = coalesce(count, 0)")
+                       .project()
+                       .build();
+
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto query =
+        "SELECT * FROM region "
+        "WHERE r_regionkey = (SELECT approx_distinct(n_name) FROM nation WHERE n_regionkey = r_regionkey)";
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("region")
+                       .hashJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("nation")
+                               .singleAggregation(
+                                   {"n_regionkey"}, {"approx_distinct(n_name)"})
+                               .project()
+                               .build(),
+                           velox::core::JoinType::kLeft)
+                       .filter("r_regionkey = coalesce(approx_distinct, 0)")
                        .project()
                        .build();
 
