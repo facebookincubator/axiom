@@ -23,7 +23,6 @@ target_link_libraries(
   axiom_logical_plan_builder
   axiom_sql_presto_ast
   antlr4_shared
-  velox_type_parser
 )
 
 add_subdirectory(tests)
