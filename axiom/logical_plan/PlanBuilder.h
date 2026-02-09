@@ -309,7 +309,7 @@ class PlanBuilder {
       JoinType joinType);
 
   PlanBuilder& crossJoin(const PlanBuilder& right) {
-    return join(right, /* condition */ "", JoinType::kInner);
+    return join(right, /* condition */ std::nullopt, JoinType::kInner);
   }
 
   PlanBuilder& unionAll(const PlanBuilder& other);

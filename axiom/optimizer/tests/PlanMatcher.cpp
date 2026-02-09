@@ -43,6 +43,9 @@ class PlanMatcherImpl : public PlanMatcher {
  public:
   PlanMatcherImpl() = default;
 
+  explicit PlanMatcherImpl(const std::shared_ptr<PlanMatcher>& sourceMatcher)
+      : sourceMatchers_{{sourceMatcher}} {}
+
   explicit PlanMatcherImpl(
       const std::vector<std::shared_ptr<PlanMatcher>>& sourceMatchers)
       : sourceMatchers_{sourceMatchers} {}
@@ -929,6 +932,42 @@ class AssignUniqueIdMatcher : public PlanMatcherImpl<AssignUniqueIdNode> {
   const std::string alias_;
 };
 
+class EnforceDistinctMatcher : public PlanMatcherImpl<EnforceDistinctNode> {
+ public:
+  EnforceDistinctMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      const std::vector<std::string>& distinctKeys)
+      : PlanMatcherImpl<EnforceDistinctNode>({matcher}),
+        distinctKeys_{distinctKeys} {}
+
+  MatchResult matchDetails(
+      const EnforceDistinctNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    if (!distinctKeys_.empty()) {
+      EXPECT_EQ(plan.distinctKeys().size(), distinctKeys_.size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      for (auto i = 0; i < distinctKeys_.size(); ++i) {
+        auto expected =
+            parse::DuckSqlExpressionsParser().parseExpr(distinctKeys_[i]);
+        if (!symbols.empty()) {
+          expected = rewriteInputNames(expected, symbols);
+        }
+        EXPECT_EQ(plan.distinctKeys()[i]->toString(), expected->toString());
+      }
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
+    return MatchResult::success(symbols);
+  }
+
+ private:
+  const std::vector<std::string> distinctKeys_;
+};
+
 #undef AXIOM_TEST_RETURN
 #undef AXIOM_TEST_RETURN_IF_FAILURE
 
@@ -1017,8 +1056,7 @@ PlanMatcherBuilder& PlanMatcherBuilder::parallelProject(
 
 PlanMatcherBuilder& PlanMatcherBuilder::unnest() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<PlanMatcherImpl<UnnestNode>>(
-      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
+  matcher_ = std::make_shared<PlanMatcherImpl<UnnestNode>>(matcher_);
   return *this;
 }
 
@@ -1129,8 +1167,7 @@ PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(
 
 PlanMatcherBuilder& PlanMatcherBuilder::localPartition() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<PlanMatcherImpl<LocalPartitionNode>>(
-      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
+  matcher_ = std::make_shared<PlanMatcherImpl<LocalPartitionNode>>(matcher_);
   return *this;
 }
 
@@ -1146,8 +1183,7 @@ PlanMatcherBuilder& PlanMatcherBuilder::localPartition(
 
 PlanMatcherBuilder& PlanMatcherBuilder::localMerge() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<PlanMatcherImpl<LocalMergeNode>>(
-      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
+  matcher_ = std::make_shared<PlanMatcherImpl<LocalMergeNode>>(matcher_);
   return *this;
 }
 
@@ -1233,22 +1269,19 @@ PlanMatcherBuilder& PlanMatcherBuilder::orderBy(
 
 PlanMatcherBuilder& PlanMatcherBuilder::tableWrite() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<PlanMatcherImpl<TableWriteNode>>(
-      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
+  matcher_ = std::make_shared<PlanMatcherImpl<TableWriteNode>>(matcher_);
   return *this;
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::enforceSingleRow() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<PlanMatcherImpl<EnforceSingleRowNode>>(
-      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
+  matcher_ = std::make_shared<PlanMatcherImpl<EnforceSingleRowNode>>(matcher_);
   return *this;
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::assignUniqueId() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ = std::make_shared<PlanMatcherImpl<AssignUniqueIdNode>>(
-      std::vector<std::shared_ptr<PlanMatcher>>{matcher_});
+  matcher_ = std::make_shared<PlanMatcherImpl<AssignUniqueIdNode>>(matcher_);
   return *this;
 }
 
@@ -1256,6 +1289,19 @@ PlanMatcherBuilder& PlanMatcherBuilder::assignUniqueId(
     const std::string& alias) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<AssignUniqueIdMatcher>(matcher_, alias);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::enforceDistinct() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<PlanMatcherImpl<EnforceDistinctNode>>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::enforceDistinct(
+    const std::vector<std::string>& distinctKeys) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<EnforceDistinctMatcher>(matcher_, distinctKeys);
   return *this;
 }
 

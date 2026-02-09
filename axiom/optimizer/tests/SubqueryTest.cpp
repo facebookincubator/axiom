@@ -1138,5 +1138,86 @@ TEST_F(SubqueryTest, nonEquiCorrelatedProject) {
   }
 }
 
+// Correlated scalar subqueries without aggregation.
+// These require EnforceDistinct to validate single-row semantics.
+TEST_F(SubqueryTest, correlatedScalarWithoutAggregation) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"c", "d"}, BIGINT()));
+
+  auto matchScan = [&](const auto& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
+
+  // Equi-correlation: d = b.
+  {
+    auto query = "SELECT * FROM t WHERE a > (SELECT c FROM u WHERE d = b)";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("t")
+            .assignUniqueId("unique_id")
+            .hashJoin(matchScan("u").build(), velox::core::JoinType::kLeft)
+            .enforceDistinct({"unique_id"})
+            .filter("a > c")
+            .project()
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto query = "SELECT a + (SELECT c FROM u WHERE d = b) FROM t";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("t")
+            .assignUniqueId("unique_id")
+            .hashJoin(matchScan("u").build(), velox::core::JoinType::kLeft)
+            .enforceDistinct({"unique_id"})
+            .project({"a + c"})
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Non-equi correlation: d < b.
+  {
+    auto query = "SELECT * FROM t WHERE a > (SELECT c + d FROM u WHERE d < b)";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .assignUniqueId("unique_id")
+                       .nestedLoopJoin(
+                           matchScan("u").project({"c + d as cd", "d"}).build(),
+                           velox::core::JoinType::kLeft)
+                       .enforceDistinct({"unique_id"})
+                       .filter("a > cd")
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto query = "SELECT a + (SELECT c + d FROM u WHERE d < b) FROM t";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .assignUniqueId("unique_id")
+                       .nestedLoopJoin(
+                           matchScan("u").project({"c + d as cd", "d"}).build(),
+                           velox::core::JoinType::kLeft)
+                       .enforceDistinct({"unique_id"})
+                       .project({"a + cd"})
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

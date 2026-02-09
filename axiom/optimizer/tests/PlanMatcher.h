@@ -364,6 +364,16 @@ class PlanMatcherBuilder {
   /// @param alias The alias to use for the unique ID column.
   PlanMatcherBuilder& assignUniqueId(const std::string& alias);
 
+  /// Matches an EnforceDistinct node, which validates that input has unique
+  /// values for the specified key columns. Throws if duplicates are found.
+  PlanMatcherBuilder& enforceDistinct();
+
+  /// Matches an EnforceDistinct node and verifies the distinct key expressions.
+  /// @param distinctKeys List of expected distinct key expressions (DuckDB SQL
+  /// syntax). Supports symbol rewriting from child matchers.
+  PlanMatcherBuilder& enforceDistinct(
+      const std::vector<std::string>& distinctKeys);
+
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.
   std::shared_ptr<PlanMatcher> build() {
