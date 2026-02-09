@@ -587,6 +587,18 @@ The correlation column (`n_regionkey`) becomes a grouping key in the subquery,
 ensuring exactly one row per correlation value. The LEFT JOIN preserves outer
 rows that have no matches (producing NULL for the subquery result).
 
+For aggregations where `agg(<empty set>) == NULL` (such as `min`, `max`, `sum`,
+`avg`), this NULL correctly represents "no matching rows".
+
+For "counting-like" aggregations like `count(*)`, `count_if`, or `approx_distinct`
+that return a non-NULL value for empty sets (e.g., 0), the optimizer wraps
+the aggregate result with `COALESCE(agg_result, <empty_input_value>)`. This
+replaces the NULL from the LEFT JOIN (no matches) with the correct value.
+
+This COALESCE wrapping is safe because these aggregates never return NULL for
+non-empty input. The `FunctionRegistry::aggregateResultForEmptyInput()` method
+identifies such aggregates and provides their empty-input result.
+
 #### Correlated Scalar Subquery without Aggregation
 
 When a correlated scalar subquery does not contain aggregation, it must still
@@ -670,17 +682,6 @@ EnforceDistinct(keys=[__rownum], error="Scalar sub-query has returned multiple r
        │    └─ Scan(t)
        └─ Scan(u)
 ```
-
-The LEFT JOIN preserves outer rows with no matches (returning NULL for the
-subquery result). For aggregation-based rewrites, this is only correct for
-aggregations where `agg(<empty set>) == NULL`, such as `min`, `max`, `sum`,
-`avg`. Aggregations like `count(*)` that return a non-NULL value for empty
-sets require a different approach (e.g., Assign-Unique-ID with cross join).
-
-**Bug**: Currently, Axiom uses this LEFT JOIN rewrite for all aggregations,
-including `count(*)`, which produces incorrect results (NULL instead of 0)
-when there are no matching rows.
-See [GitHub issue #846](https://github.com/facebookincubator/axiom/issues/846) for tracking.
 
 ### IN Subqueries
 

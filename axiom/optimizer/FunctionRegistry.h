@@ -15,8 +15,10 @@
  */
 #pragma once
 
+#include <span>
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/optimizer/QueryGraphContext.h"
+#include "velox/type/Variant.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -197,6 +199,16 @@ class FunctionRegistry {
   FunctionRegistry(FunctionRegistry&&) = delete;
   FunctionRegistry(const FunctionRegistry&) = delete;
 
+  /// Callback that returns the result of an aggregate function over empty
+  /// input. Only used for "counting-like" aggregates that return non-NULL
+  /// values for empty input (e.g., count returns 0).
+  /// @param name The aggregate function name.
+  /// @param argTypes The argument types of the aggregate function.
+  /// @return The result as a Variant (must be non-null).
+  using AggregateEmptyResultResolver = std::function<velox::Variant(
+      std::string_view name,
+      std::span<const velox::Type* const> argTypes)>;
+
   /// @return metadata for function 'name' or nullptr if 'name' is not
   /// registered.
   FunctionMetadataCP metadata(std::string_view name) const;
@@ -316,6 +328,46 @@ class FunctionRegistry {
   /// eq, lt, gt, lte, gte, plus, multiply, and, or.
   static void registerPrestoFunctions(std::string_view prefix = "");
 
+  /// Registers a callback that provides results for aggregate functions over
+  /// empty input. The callback is invoked for functions in 'names'.
+  ///
+  /// IMPORTANT: This method should only be used for "counting-like" aggregates
+  /// that satisfy the following properties:
+  /// - Return a non-NULL value for empty input (e.g., count returns 0)
+  /// - NEVER return NULL for non-empty input
+  ///
+  /// Examples: count, count_if, approx_distinct
+  ///
+  /// This property is relied upon by the optimizer when decorrelating scalar
+  /// subqueries. The optimizer wraps such aggregates with COALESCE to replace
+  /// NULL (from LEFT JOIN with no matches) with the empty-input result. If an
+  /// aggregate could return NULL for non-empty input, COALESCE would
+  /// incorrectly replace that NULL.
+  ///
+  /// NOTE: It is not necessary to include 'count' in 'names' if registerCount()
+  /// was called. The 'count' function is handled automatically.
+  /// @param names List of aggregate function names handled by this callback.
+  /// @param resolver Callback that returns the result for empty input.
+  /// @return true if registered successfully, false if any function is already
+  ///   registered.
+  bool registerAggregateEmptyResultResolver(
+      const std::vector<std::string>& names,
+      AggregateEmptyResultResolver resolver);
+
+  /// Returns the result of an aggregate function over empty input.
+  /// If registerCount() was called, returns 0 (as BIGINT) for 'count' function.
+  /// Otherwise, uses the resolver registered via
+  /// Returns the result of an aggregate function over empty input. Uses
+  /// 'count' registered via registerCount() or a resolver registered via
+  /// registerAggregateEmptyResultResolver().
+  /// @param name The aggregate function name.
+  /// @param argTypes The argument types of the aggregate function.
+  /// @return Non-null Variant with the result for empty input, or null Variant
+  ///   if no resolver is registered for this aggregate.
+  velox::Variant aggregateResultForEmptyInput(
+      std::string_view name,
+      std::span<const velox::Type* const> argTypes) const;
+
  private:
   folly::F14FastMap<std::string, std::unique_ptr<FunctionMetadata>> metadata_;
   std::string equality_{"eq"};
@@ -327,6 +379,8 @@ class FunctionRegistry {
   std::optional<std::string> count_;
   folly::F14FastMap<std::string, std::string> reversibleFunctions_;
   folly::F14FastMap<logical_plan::SpecialForm, std::string> specialForms_;
+  folly::F14FastMap<std::string, AggregateEmptyResultResolver>
+      aggregateEmptyResultResolvers_;
 };
 
 /// Shortcut for FunctionRegistry::instance()->metadata(name).

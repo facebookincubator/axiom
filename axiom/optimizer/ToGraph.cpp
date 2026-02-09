@@ -2385,6 +2385,20 @@ ExprCP ToGraph::processUncorrelatedScalarSubquery(DerivedTableP subqueryDt) {
   return subqueryDt->columns.front();
 }
 
+namespace {
+// Returns a Literal for the result of 'agg' over empty input, or nullptr
+// if the aggregate returns NULL for empty input. Used to wrap count-like
+// aggregates with COALESCE when decorrelating scalar subqueries.
+Literal* tryMakeLiteralForEmptyInput(AggregateCP agg) {
+  auto result = FunctionRegistry::instance()->aggregateResultForEmptyInput(
+      agg->name(), agg->rawInputType());
+  if (result.isNull()) {
+    return nullptr;
+  }
+  return make<Literal>(Value(agg->value().type, 1), registerVariant(result));
+}
+} // namespace
+
 ExprCP ToGraph::processCorrelatedScalarSubquery(
     const lp::LogicalPlanNode& input,
     DerivedTableP subqueryDt) {
@@ -2419,7 +2433,22 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
     }
 
     currentDt_->joins.push_back(join);
-    return subqueryDt->columns.back();
+
+    auto* aggregateResult = subqueryDt->columns.back();
+
+    auto* agg = subqueryDt->aggregation->aggregates().back();
+    if (auto* literal = tryMakeLiteralForEmptyInput(agg)) {
+      // Wrap with COALESCE for aggregates that return non-NULL for empty input.
+      // LEFT JOIN returns NULL for outer rows with no matches, but count-like
+      // aggregates should return 0 (or similar default) instead.
+      return make<Call>(
+          SpecialFormCallNames::kCoalesce,
+          aggregateResult->value(),
+          ExprVector{aggregateResult, literal},
+          FunctionSet());
+    }
+
+    return aggregateResult;
   }
 
   if (!hasAggregation) {
