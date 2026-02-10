@@ -402,8 +402,6 @@ void PlanBuilder::resolveProjections(
           outputNames.push_back(id);
 
           const auto names = outputMapping_->reverseLookup(id);
-          VELOX_USER_CHECK(!names.empty());
-
           for (const auto& name : names) {
             mappings.add(name, id);
           }
