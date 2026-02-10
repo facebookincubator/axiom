@@ -120,4 +120,8 @@ std::string columnsToString(const ColumnVector& columns);
 
 std::string exprsToString(const ExprVector& exprs);
 
+/// Recursively flattens nested calls to the given function.
+/// For example, flattenAll(and(and(a, b), c), "and", flat) produces [a, b, c].
+void flattenAll(ExprCP expr, Name func, ExprVector& flat);
+
 } // namespace facebook::axiom::optimizer

@@ -57,6 +57,9 @@ struct FunctionNames {
   Name elementAt{nullptr};
   Name subscript{nullptr};
   Name cardinality{nullptr};
+  Name between{nullptr};
+  Name gte{nullptr};
+  Name lte{nullptr};
 
   /// Aggregate functions.
   Name arbitrary{nullptr};
@@ -159,17 +162,14 @@ class ToGraph {
     }
   }
 
- private:
-  static bool isSpecialForm(
-      const logical_plan::ExprPtr& expr,
-      logical_plan::SpecialForm form) {
-    return expr->isSpecialForm() &&
-        expr->as<logical_plan::SpecialFormExpr>()->form() == form;
-  }
+  // Rewrites a function call to a different expression if applicable.
+  // For example, rewrites between(x, a, b) to and(gte(x, a), lte(x, b)).
+  // Returns nullptr if no rewrite is needed.
+  ExprCP rewriteCall(Name name, const ExprVector& args);
 
-  // For comparisons, swaps the args to have a canonical form for
-  // deduplication. E.g column op constant, and smaller plan object id
-  // to the left.
+  // Canonicalizes function call by reordering arguments for reversible
+  // functions like gt/lt to ensure consistent argument order. Modifies
+  // 'name' and 'args' in place.
   void canonicalizeCall(Name& name, ExprVector& args);
 
   // Handles correlation processing for aggregations in correlated subqueries.
