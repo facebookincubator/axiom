@@ -19,6 +19,7 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
+#include "axiom/optimizer/tests/QueryTestBase.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
@@ -28,44 +29,27 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class AggregationPlanTest : public testing::Test {
+class AggregationPlanTest : public test::QueryTestBase {
  protected:
   static constexpr auto kTestConnectorId = "test";
 
-  static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  void SetUp() override {
+    test::QueryTestBase::SetUp();
+
+    testConnector_ =
+        std::make_shared<connector::TestConnector>(kTestConnectorId);
+    velox::connector::registerConnector(testConnector_);
 
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
   }
 
-  void SetUp() override {
-    testConnector_ =
-        std::make_shared<connector::TestConnector>(kTestConnectorId);
-    velox::connector::registerConnector(testConnector_);
-
-    rootPool_ = memory::memoryManager()->addRootPool("root");
-    optimizerPool_ = rootPool_->addLeafChild("optimizer");
-  }
-
   void TearDown() override {
     velox::connector::unregisterConnector(kTestConnectorId);
+
+    test::QueryTestBase::TearDown();
   }
 
-  velox::core::PlanNodePtr planVelox(const lp::LogicalPlanNodePtr& plan) {
-    auto distributedPlan = Optimization::toVeloxPlan(
-                               *plan,
-                               *optimizerPool_,
-                               {}, // optimizerOptions
-                               {.numWorkers = 1, .numDrivers = 1})
-                               .plan;
-
-    VELOX_CHECK_EQ(1, distributedPlan->fragments().size());
-    return distributedPlan->fragments().at(0).fragment.planNode;
-  }
-
-  std::shared_ptr<velox::memory::MemoryPool> rootPool_;
-  std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
   std::shared_ptr<connector::TestConnector> testConnector_;
 };
 
@@ -80,7 +64,7 @@ TEST_F(AggregationPlanTest, dedupGroupingKeysAndAggregates) {
                            .aggregate({"x", "y"}, {"count(1)", "count(1)"})
                            .build();
 
-    auto plan = planVelox(logicalPlan);
+    auto plan = toSingleNodePlan(logicalPlan);
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
@@ -103,7 +87,7 @@ TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
                          .project({"ab1 AS x", "ab2 AS y", "c1 AS z"})
                          .build();
 
-  auto plan = planVelox(logicalPlan);
+  auto plan = toSingleNodePlan(logicalPlan);
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan()
@@ -127,7 +111,7 @@ TEST_F(AggregationPlanTest, dedupMask) {
                               "sum(a) FILTER (WHERE b > 0)"})
                          .build();
 
-  auto plan = planVelox(logicalPlan);
+  auto plan = toSingleNodePlan(logicalPlan);
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan()
@@ -144,7 +128,7 @@ TEST_F(AggregationPlanTest, dedupMask) {
   ASSERT_TRUE(matcher->match(plan));
 }
 
-TEST_F(AggregationPlanTest, orderByDedup) {
+TEST_F(AggregationPlanTest, dedupOrderBy) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
 
   auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
@@ -157,7 +141,7 @@ TEST_F(AggregationPlanTest, orderByDedup) {
                               "array_agg(c ORDER BY b * 2, b * 2)"})
                          .build();
 
-  auto plan = planVelox(logicalPlan);
+  auto plan = toSingleNodePlan(logicalPlan);
 
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan()
@@ -193,7 +177,7 @@ TEST_F(AggregationPlanTest, dedupSameOptions) {
                "array_agg(a ORDER BY a) FILTER (WHERE b > 0)"})
           .build();
 
-  auto plan = planVelox(logicalPlan);
+  auto plan = toSingleNodePlan(logicalPlan);
 
   auto matcher =
       core::PlanMatcherBuilder()
@@ -221,6 +205,70 @@ TEST_F(AggregationPlanTest, dedupSameOptions) {
           .build();
 
   ASSERT_TRUE(matcher->match(plan));
+}
+
+// Verifies that aggregation with ORDER BY keys always uses single-step
+// aggregation, even in distributed mode where partial+final would normally
+// be used. This is required because partial aggregation cannot preserve
+// global ordering across workers.
+TEST_F(AggregationPlanTest, orderBy) {
+  auto schema = ROW({"k", "v1", "v2"}, {BIGINT(), BIGINT(), DOUBLE()});
+  testConnector_->addTable("t", schema);
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  // 10 rows with only 2 distinct group_key values (0 and 1). Adding data to the
+  // test table is necessary to trigger split aggregation steps by default.
+  constexpr int kNumRows = 10;
+  auto rowVector = makeRowVector({
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 2; }),
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+      makeFlatVector<double>(kNumRows, [](auto row) { return row * 1.5; }),
+  });
+  testConnector_->appendData("t", rowVector);
+
+  // Query with ORDER BY in aggregate should use single aggregation step, even
+  // if the optimizer option requires always planning partial aggregation.
+  auto logicalPlan =
+      lp::PlanBuilder()
+          .tableScan(kTestConnectorId, "t")
+          .aggregate({"k"}, {"array_agg(v1 ORDER BY v2)", "sum(v1)"})
+          .build();
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan()
+          .shuffle()
+          .localPartition()
+          .singleAggregation({"k"}, {"array_agg(v1 ORDER BY v2)", "sum(v1)"})
+          .shuffle()
+          .build();
+
+  for (auto i = 0; i < 2; ++i) {
+    OptimizerOptions option{.alwaysPlanPartialAggregation = (i == 0)};
+    auto plan = planVelox(
+        logicalPlan,
+        runner::MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4},
+        option);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+
+  // Query without ORDER BY - should use partial + final aggregation.
+  logicalPlan = lp::PlanBuilder()
+                    .tableScan(kTestConnectorId, "t")
+                    .aggregate({"k"}, {"sum(v1)"})
+                    .build();
+  auto plan = planVelox(logicalPlan);
+
+  matcher = core::PlanMatcherBuilder()
+                .tableScan()
+                .partialAggregation({"k"}, {"sum(v1)"})
+                .shuffle()
+                .localPartition()
+                .finalAggregation()
+                .shuffle()
+                .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
 }
 
 } // namespace

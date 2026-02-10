@@ -81,6 +81,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
               .numWorkers = 4,
               .numDrivers = 4,
           },
+      const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt,
       const std::optional<std::string>& planFilePathPrefix = std::nullopt);
 
   optimizer::PlanAndStats planVelox(
@@ -91,6 +92,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
               .numWorkers = 4,
               .numDrivers = 4,
           },
+      const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt,
       const std::optional<std::string>& planFilePathPrefix = std::nullopt);
 
   TestResult runVelox(

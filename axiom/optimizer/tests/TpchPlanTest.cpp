@@ -705,7 +705,11 @@ TEST_F(TpchPlanTest, DISABLED_makePlans) {
     };
 
     auto logicalPlan = parseTpchSql(q);
-    planVelox(logicalPlan, options, fmt::format("{}/q{}", path, q));
+    planVelox(
+        logicalPlan,
+        options,
+        /*optimizerOptions=*/std::nullopt,
+        fmt::format("{}/q{}", path, q));
   }
 }
 
