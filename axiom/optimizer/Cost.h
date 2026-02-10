@@ -49,29 +49,18 @@ class History {
   /// execution.
   virtual void recordCost(const RelationOp& op, Cost cost) = 0;
 
-  /// Sets 'filterSelectivity' of 'baseTable' from historical data. Considers
-  /// filters only and does not return a cost since the cost depends on the
-  /// columns extracted. This is used first for coming up with join orders. The
-  /// plan candidates are then made and findCost() is used to access historical
-  /// cost and plan cardinality.
-  virtual bool setLeafSelectivity(
+  /// Estimates 'filterSelectivity' of 'baseTable' from historical data.
+  /// Considers filters only and does not return a cost since the cost depends
+  /// on the columns extracted. This is used first for coming up with join
+  /// orders. The plan candidates are then made and findCost() is used to access
+  /// historical cost and plan cardinality.
+  virtual bool estimateLeafSelectivity(
       BaseTable& baseTable,
       const velox::RowTypePtr& scanType) = 0;
 
   virtual void recordJoinSample(std::string_view key, float lr, float rl) = 0;
 
   virtual std::pair<float, float> sampleJoin(JoinEdge* edge) = 0;
-
-  virtual void recordLeafSelectivity(
-      std::string_view handle,
-      float selectivity,
-      bool overwrite = true) {
-    std::lock_guard<std::mutex> l(mutex_);
-    if (!overwrite && leafSelectivities_.contains(handle)) {
-      return;
-    }
-    leafSelectivities_[handle] = selectivity;
-  }
 
   virtual folly::dynamic serialize() = 0;
 
@@ -82,12 +71,30 @@ class History {
   void updateFromFile(const std::string& path);
 
  protected:
-  // serializes access to all data members.
+  // Records a sampled leaf selectivity value for the given handle.
+  void recordSampledLeafSelectivity(
+      std::string_view handle,
+      float selectivity,
+      bool overwrite = true);
+
+  // Returns the sampled selectivity for the given handle, or std::nullopt if
+  // not cached.
+  std::optional<float> findSampledLeafSelectivity(std::string_view handle);
+
+  // Returns the sampled leaf selectivities map for serialization.
+  const folly::F14FastMap<std::string, float>& sampledLeafSelectivities()
+      const {
+    return sampledLeafSelectivities_;
+  }
+
+  // Serializes access to all data members.
   std::mutex mutex_;
 
-  /// Memo for selectivity keyed on ConnectorTableHandle::toString().
-  /// Values between 0 and 1.
-  folly::F14FastMap<std::string, float> leafSelectivities_;
+ private:
+  // Cache for sampled selectivity values keyed on
+  // ConnectorTableHandle::toString(). Values between 0 and 1. Only populated
+  // when sampling is enabled.
+  folly::F14FastMap<std::string, float> sampledLeafSelectivities_;
 };
 
 /// Collection of per operation costs for a target system.  The base

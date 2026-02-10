@@ -82,7 +82,7 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
   return pair;
 }
 
-bool VeloxHistory::setLeafSelectivity(
+bool VeloxHistory::estimateLeafSelectivity(
     BaseTable& table,
     const velox::RowTypePtr& scanType) {
   auto options = queryCtx()->optimization()->options();
@@ -90,14 +90,10 @@ bool VeloxHistory::setLeafSelectivity(
       queryCtx()->optimization()->leafHandle(table.id());
   const auto string = tableHandle->toString();
 
-  // Check whether leaf selectivity is already cached for this handle.
-  {
-    auto it = leafSelectivities_.find(string);
-    if (it != leafSelectivities_.end()) {
-      std::lock_guard<std::mutex> l(mutex_);
-      table.filterSelectivity = it->second;
-      return true;
-    }
+  // Return cached sampled selectivity if available to avoid expensive I/O.
+  if (auto cached = findSampledLeafSelectivity(string)) {
+    table.filterSelectivity = cached.value();
+    return true;
   }
 
   auto* runnerTable = table.schemaTable->connectorTable;
@@ -127,12 +123,14 @@ bool VeloxHistory::setLeafSelectivity(
     return true;
   }
 
-  // When finding no hits, do not make a selectivity of 0 because this makes /0
-  // or *0 and *0 is 0, which makes any subsequent operations 0 regardless of
-  // cost. So as not to underflow, count non-existent as 0.9 rows.
+  // When finding no hits, do not make a selectivity of 0 because this
+  // makes /0 or *0 and *0 is 0, which makes any subsequent operations 0
+  // regardless of cost. So as not to underflow, count non-existent as 0.9
+  // rows.
   table.filterSelectivity =
       std::max<float>(0.9f, sample.second) / static_cast<float>(sample.first);
-  recordLeafSelectivity(string, table.filterSelectivity, false);
+
+  recordSampledLeafSelectivity(string, table.filterSelectivity, false);
 
   bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
   if (trace) {
@@ -236,7 +234,7 @@ void VeloxHistory::recordVeloxExecution(
         if (op.operatorType == "TableScanOperator") {
           if (const auto* scan = findScan(op.planNodeId, plan.plan)) {
             std::string handle = scan->tableHandle()->toString();
-            recordLeafSelectivity(
+            recordSampledLeafSelectivity(
                 handle,
                 static_cast<float>(actualRows) /
                     std::max(1.F, static_cast<float>(op.rawInputPositions)),
@@ -259,7 +257,7 @@ void VeloxHistory::recordVeloxExecution(
 folly::dynamic VeloxHistory::serialize() {
   folly::dynamic obj = folly::dynamic::object();
   auto leafArray = folly::dynamic::array();
-  for (auto& pair : leafSelectivities_) {
+  for (auto& pair : sampledLeafSelectivities()) {
     folly::dynamic leaf = folly::dynamic::object();
     leaf["key"] = pair.first;
     leaf["value"] = pair.second;
@@ -292,7 +290,8 @@ void VeloxHistory::update(folly::dynamic& serialized) {
     return static_cast<float>(atof(v.asString().c_str()));
   };
   for (auto& pair : serialized["leaves"]) {
-    leafSelectivities_[pair["key"].asString()] = toFloat(pair["value"]);
+    recordSampledLeafSelectivity(
+        pair["key"].asString(), toFloat(pair["value"]));
   }
   for (auto& pair : serialized["joins"]) {
     joinSamples_[pair["key"].asString()] =

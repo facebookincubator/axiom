@@ -83,12 +83,13 @@ class Optimization {
         baseTable, leafColumns, topColumns, typeMap);
   }
 
-  /// Sets 'filterSelectivity' of 'baseTable' from history. Returns true if set.
-  /// 'scanType' is the set of sampled columns with possible map to struct cast.
-  bool setLeafSelectivity(
+  /// Estimates 'filterSelectivity' of 'baseTable' from history. Returns true if
+  /// set. 'scanType' is the set of sampled columns with possible map to struct
+  /// cast.
+  bool estimateLeafSelectivity(
       BaseTable& baseTable,
       const velox::RowTypePtr& scanType) {
-    return history_.setLeafSelectivity(baseTable, scanType);
+    return history_.estimateLeafSelectivity(baseTable, scanType);
   }
 
   void filterUpdated(BaseTableCP baseTable, bool updateSelectivity = true) {

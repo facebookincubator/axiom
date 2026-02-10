@@ -1914,7 +1914,7 @@ void ToGraph::makeBaseTable(const lp::TableScanNode& tableScan) {
   auto scanType = optimization->subfieldPushdownScanType(
       baseTable, baseTable->columns, top, map);
 
-  optimization->setLeafSelectivity(*baseTable, scanType);
+  optimization->estimateLeafSelectivity(*baseTable, scanType);
   currentDt_->addTable(baseTable);
 }
 
