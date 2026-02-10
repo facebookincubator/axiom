@@ -956,5 +956,117 @@ TEST_F(JoinTest, fullThenFilter) {
   }
 }
 
+TEST_F(JoinTest, correlatedInSubquery) {
+  // Find customers with at least one order.
+  {
+    auto query =
+        "SELECT c.c_custkey, c.c_name FROM customer AS c "
+        "WHERE c.c_custkey IN ("
+        "  SELECT o.o_custkey FROM orders AS o "
+        "  WHERE o.o_custkey = c.c_custkey)";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    // Correlated IN subquery creates a semi-join with null-aware semantics.
+    // The IN equality (c_custkey = o_custkey) and the correlation equality
+    // (o_custkey = c_custkey) are the same, so the optimizer uses a single
+    // join key.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("customer")
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("orders").build(),
+                core::JoinType::kLeftSemiFilter)
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
+  }
+
+  // Find customers with no orders.
+  {
+    auto query =
+        "SELECT c.c_custkey, c.c_name FROM customer AS c "
+        "WHERE c.c_custkey NOT IN ("
+        "  SELECT o.o_custkey FROM orders AS o "
+        "  WHERE o.o_custkey = c.c_custkey)";
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    // Correlated NOT IN subquery creates an anti-join with null-aware
+    // semantics.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan("customer")
+            .hashJoin(
+                core::PlanMatcherBuilder().tableScan("orders").build(),
+                core::JoinType::kAnti,
+                /*nullAware=*/true)
+            .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    ASSERT_NO_THROW(planVelox(logicalPlan));
+  }
+}
+
+TEST_F(JoinTest, joinUsing) {
+  testConnector_->addTable("t", ROW({"id", "key", "value"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"id", "key", "amount"}, BIGINT()));
+
+  auto verifyOutputColumns = [&](const std::string& query,
+                                 const std::vector<std::string>& expectedCols) {
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    EXPECT_EQ(plan->outputType()->names(), expectedCols);
+  };
+
+  verifyOutputColumns(
+      "SELECT * FROM t JOIN u USING (id)",
+      {"id", "key", "value", "key_2", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM t JOIN u USING (id, key)",
+      {"id", "key", "value", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM t LEFT JOIN u USING (id)",
+      {"id", "key", "value", "key_2", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM t RIGHT JOIN u USING (id)",
+      {"id", "key", "value", "key_2", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM t FULL OUTER JOIN u USING (id)",
+      {"id", "key", "value", "key_2", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM t t1 JOIN t t2 USING (id)",
+      {"id", "key", "value", "key_3", "value_4"});
+}
+
+TEST_F(JoinTest, joinUsingErrors) {
+  testConnector_->addTable("t", ROW({"id", "value"}, {BIGINT(), BIGINT()}));
+  testConnector_->addTable("u", ROW({"id", "amount"}, {BIGINT(), BIGINT()}));
+  testConnector_->addTable("v", ROW({"id"}, {VARCHAR()}));
+
+  VELOX_ASSERT_THROW(
+      parseSelect(
+          "SELECT * FROM t JOIN u USING (nonexistent)", kTestConnectorId),
+      "Cannot resolve column");
+
+  VELOX_ASSERT_THROW(
+      parseSelect("SELECT * FROM t JOIN u USING (value)", kTestConnectorId),
+      "Cannot resolve column");
+
+  VELOX_ASSERT_THROW(
+      parseSelect("SELECT * FROM t JOIN u USING (amount)", kTestConnectorId),
+      "Cannot resolve column");
+
+  VELOX_ASSERT_THROW(
+      toSingleNodePlan(
+          parseSelect("SELECT * FROM t JOIN v USING (id)", kTestConnectorId)),
+      "");
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

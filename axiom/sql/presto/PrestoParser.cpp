@@ -1167,6 +1167,104 @@ class RelationPlanner : public AstVisitor {
       if (const auto& criteria = join->criteria()) {
         if (criteria->is(NodeType::kJoinOn)) {
           condition = toExpr(criteria->as<JoinOn>()->expression());
+        } else if (criteria->is(NodeType::kJoinUsing)) {
+          // JOIN ... USING
+          auto* joinUsing = criteria->as<JoinUsing>();
+          const auto& columns = joinUsing->columns();
+          VELOX_USER_CHECK(
+              !columns.empty(), "JOIN USING must specify at least one column");
+
+          auto getRelationAlias =
+              [&](const RelationPtr& relation) -> std::string {
+            if (relation->is(NodeType::kAliasedRelation)) {
+              return canonicalizeIdentifier(
+                  *relation->as<AliasedRelation>()->alias());
+            }
+            if (relation->is(NodeType::kTable)) {
+              return canonicalizeName(relation->as<Table>()->name()->suffix());
+            }
+            VELOX_USER_FAIL(
+                "JOIN USING requires table references, got: {}",
+                NodeTypeName::toName(relation->type()));
+          };
+
+          std::string leftAlias = getRelationAlias(join->left());
+          std::string rightAlias = getRelationAlias(join->right());
+
+          std::unordered_set<std::string> usingColumnSet;
+          std::vector<std::string> usingColumnNames;
+          usingColumnNames.reserve(columns.size());
+          std::optional<lp::ExprApi> usingCondition;
+          for (const auto& column : columns) {
+            std::string columnName = canonicalizeIdentifier(*column);
+            usingColumnNames.emplace_back(columnName);
+            usingColumnSet.insert(columnName);
+            auto leftCol = lp::Col(columnName, lp::Col(leftAlias));
+            auto rightCol = lp::Col(columnName, lp::Col(rightAlias));
+            auto eqExpr = leftCol == rightCol;
+
+            if (usingCondition.has_value()) {
+              usingCondition = usingCondition.value() && eqExpr;
+            } else {
+              usingCondition = eqExpr;
+            }
+          }
+          condition = usingCondition;
+
+          // Get output column names from left and right sides before joining.
+          auto leftOutputNames = leftBuilder->findOrAssignOutputNames(
+              /*includeHiddenColumns=*/false, leftAlias);
+          auto rightOutputNames = rightBuilder->findOrAssignOutputNames(
+              /*includeHiddenColumns=*/false, rightAlias);
+
+          auto joinType = toJoinType(join->joinType());
+          builder_->join(*rightBuilder, condition, joinType);
+
+          // Build output projection: USING cols, then left cols, then right
+          // cols.
+          std::vector<lp::ExprApi> projections;
+          projections.reserve(
+              usingColumnNames.size() + leftOutputNames.size() +
+              rightOutputNames.size() - 2 * usingColumnNames.size());
+
+          bool isFullJoin = joinType == lp::JoinType::kFull;
+
+          std::unordered_set<std::string> outputColumnNames;
+
+          for (const auto& colName : usingColumnNames) {
+            auto leftCol = lp::Col(colName, lp::Col(leftAlias));
+            auto rightCol = lp::Col(colName, lp::Col(rightAlias));
+            if (isFullJoin) {
+              projections.push_back(
+                  lp::Call("coalesce", {leftCol, rightCol}).as(colName));
+            } else {
+              projections.push_back(leftCol.as(colName));
+            }
+            outputColumnNames.insert(colName);
+          }
+
+          for (const auto& colName : leftOutputNames) {
+            if (usingColumnSet.find(colName) == usingColumnSet.end()) {
+              projections.push_back(lp::Col(colName, lp::Col(leftAlias)));
+              outputColumnNames.insert(colName);
+            }
+          }
+
+          for (const auto& colName : rightOutputNames) {
+            if (usingColumnSet.find(colName) == usingColumnSet.end()) {
+              auto rightCol = lp::Col(colName, lp::Col(rightAlias));
+              if (outputColumnNames.find(colName) != outputColumnNames.end()) {
+                auto uniqueName = builder_->newName(colName);
+                projections.push_back(rightCol.as(uniqueName));
+              } else {
+                projections.push_back(rightCol);
+                outputColumnNames.insert(colName);
+              }
+            }
+          }
+
+          builder_->project(projections);
+          return;
         } else {
           VELOX_NYI(
               "Join criteria type is not supported yet: {}",

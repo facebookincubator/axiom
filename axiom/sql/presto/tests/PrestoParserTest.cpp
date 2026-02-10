@@ -1224,6 +1224,32 @@ TEST_F(PrestoParserTest, join) {
   }
 }
 
+TEST_F(PrestoParserTest, joinUsing) {
+  defaultConnectorId_ = kTestConnectorId;
+  defaultSchema_ = std::nullopt;
+
+  testConnector_->addTable("t", ROW({"id", "key", "value"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"id", "key", "amount"}, BIGINT()));
+
+  auto verifyOutputColumns = [&](const std::string& sql,
+                                 const std::vector<std::string>& expectedCols) {
+    SCOPED_TRACE(sql);
+    auto parser = makeParser();
+    auto statement = parser.parse(sql, true);
+    ASSERT_TRUE(statement->isSelect());
+
+    auto plan = statement->as<SelectStatement>()->plan();
+    EXPECT_EQ(plan->outputType()->names(), expectedCols);
+  };
+
+  verifyOutputColumns(
+      "SELECT * FROM t JOIN u USING (id)",
+      {"id", "key", "value", "key_2", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM t JOIN u USING (id, key)",
+      {"id", "key", "value", "amount"});
+}
+
 TEST_F(PrestoParserTest, unionAll) {
   auto matcher =
       lp::test::LogicalPlanMatcherBuilder().tableScan().project().setOperation(
