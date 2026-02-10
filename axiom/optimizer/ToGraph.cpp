@@ -1491,13 +1491,6 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
           "DISTINCT option for aggregation is supported only in single worker, single thread mode");
     }
 
-    if (!orderKeys.empty()) {
-      const auto& options = queryCtx()->optimization()->runnerOptions();
-      VELOX_CHECK(
-          options.numWorkers == 1 && options.numDrivers == 1,
-          "ORDER BY option for aggregation is supported only in single worker, single thread mode");
-    }
-
     auto name = toName(agg.outputNames()[channel]);
 
     AggregateDedupKey key{

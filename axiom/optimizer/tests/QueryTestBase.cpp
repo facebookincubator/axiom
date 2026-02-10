@@ -142,15 +142,18 @@ std::shared_ptr<core::QueryCtx>& QueryTestBase::getQueryCtx() {
 optimizer::PlanAndStats QueryTestBase::planVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
     const runner::MultiFragmentPlan::Options& options,
+    const std::optional<OptimizerOptions>& optimizerOptions,
     const std::optional<std::string>& planFilePathPrefix) {
   connector::SchemaResolver schemaResolver;
-  return planVelox(plan, schemaResolver, options, planFilePathPrefix);
+  return planVelox(
+      plan, schemaResolver, options, optimizerOptions, planFilePathPrefix);
 }
 
 optimizer::PlanAndStats QueryTestBase::planVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
     const connector::SchemaResolver& schemaResolver,
     const runner::MultiFragmentPlan::Options& options,
+    const std::optional<OptimizerOptions>& optimizerOptions,
     const std::optional<std::string>& planFilePathPrefix) {
   auto& queryCtx = getQueryCtx();
 
@@ -187,7 +190,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
       *history_,
       queryCtx,
       evaluator,
-      optimizerOptions_,
+      optimizerOptions.value_or(optimizerOptions_),
       options);
   if (planPath != nullptr) {
     *planPath << "Query Graph:\n\n" << opt.rootDt()->toString() << "\n\n";

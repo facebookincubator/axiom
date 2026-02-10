@@ -1002,6 +1002,71 @@ ExprVector computePreGroupedKeys(
                                                         : fromClusterKeys;
 }
 
+// Creates a two-phase (partial + final) aggregation plan for distributed
+// execution. First applies a partial aggregation on local data, then
+// repartitions by grouping keys and performs the final aggregation. Returns a
+// pair of the root to the aggregation plan and cost of this aggregation.
+std::pair<Aggregation*, PlanCost> makeSplitAggregationPlan(
+    const AggregationPlan* aggPlan,
+    RelationOpPtr plan,
+    const ExprVector& groupingKeys,
+    const AggregateVector& aggregates) {
+  PlanCost splitAggCost;
+  Aggregation* splitAggPlan;
+
+  auto* partialAgg = make<Aggregation>(
+      plan,
+      groupingKeys,
+      /*preGroupedKeys*/ ExprVector{},
+      aggregates,
+      velox::core::AggregationNode::Step::kPartial,
+      aggPlan->intermediateColumns());
+
+  splitAggCost.add(*partialAgg);
+  plan = repartitionForAgg(aggPlan, partialAgg, splitAggCost);
+
+  const auto numKeys = aggPlan->groupingKeys().size();
+
+  ExprVector finalGroupingKeys;
+  finalGroupingKeys.reserve(numKeys);
+  for (auto i = 0; i < numKeys; ++i) {
+    finalGroupingKeys.push_back(aggPlan->intermediateColumns()[i]);
+  }
+
+  splitAggPlan = make<Aggregation>(
+      plan,
+      std::move(finalGroupingKeys),
+      /*preGroupedKeys*/ ExprVector{},
+      aggregates,
+      velox::core::AggregationNode::Step::kFinal,
+      aggPlan->columns());
+  splitAggCost.add(*splitAggPlan);
+
+  return {splitAggPlan, splitAggCost};
+}
+
+// Creates a single-phase aggregation plan where data is first repartitioned by
+// grouping keys and then aggregated in one step. Returns a pair of the root to
+// the aggregation plan and the cost of this aggregation.
+std::pair<Aggregation*, PlanCost> makeSingleAggregationPlan(
+    const AggregationPlan* aggPlan,
+    RelationOpPtr plan,
+    const ExprVector& groupingKeys,
+    const AggregateVector& aggregates) {
+  PlanCost singleAggCost;
+  plan = repartitionForAgg(aggPlan, plan, singleAggCost);
+  auto* singleAgg = make<Aggregation>(
+      plan,
+      groupingKeys,
+      /*preGroupedKeys*/ ExprVector{},
+      aggregates,
+      velox::core::AggregationNode::Step::kSingle,
+      aggPlan->columns());
+  singleAggCost.add(*singleAgg);
+
+  return {singleAgg, singleAggCost};
+}
+
 } // namespace
 
 // static
@@ -1039,7 +1104,6 @@ void Optimization::addAggregation(
   state.place(aggPlan);
 
   auto preGroupedKeys = computePreGroupedKeys(*plan, groupingKeys);
-
   if ((isSingleWorker_ && isSingleDriver_) || !preGroupedKeys.empty()) {
     auto* singleAgg = make<Aggregation>(
         plan,
@@ -1054,6 +1118,29 @@ void Optimization::addAggregation(
     return;
   }
 
+  // Check if any aggregate has ORDER BY keys. If so, we must use single-step
+  // aggregation because partial aggregation cannot preserve global ordering.
+  const auto hasOrderBy =
+      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
+        return !agg->orderKeys().empty();
+      });
+  if (hasOrderBy) {
+    const auto& [singleAgg, singleAggCost] =
+        makeSingleAggregationPlan(aggPlan, plan, groupingKeys, aggregates);
+    plan = singleAgg;
+    state.cost.add(singleAggCost);
+    return;
+  }
+
+  if (aggPlan->groupingKeys().empty() ||
+      options_.alwaysPlanPartialAggregation) {
+    const auto& [splitAggPlan, splitAggCost] =
+        makeSplitAggregationPlan(aggPlan, plan, groupingKeys, aggregates);
+    plan = splitAggPlan;
+    state.cost.add(splitAggCost);
+    return;
+  }
+
   // We make a plan with partial agg and one without and pick the better
   // according to cost model. We use the cost functions of the RelationOps to
   // get details of the width of intermediate results, shuffles and so forth. A
@@ -1062,61 +1149,19 @@ void Optimization::addAggregation(
   // partial agg also depends on the width of the data and configs so instead of
   // unbundling the cost functions we make different kinds of plans and use the
   // plan's functions.
-  const auto planBeforeAgg = plan;
-  auto* partialAgg = make<Aggregation>(
-      plan,
-      groupingKeys,
-      /*preGroupedKeys*/ ExprVector{},
-      aggregates,
-      velox::core::AggregationNode::Step::kPartial,
-      aggPlan->intermediateColumns());
-
-  PlanCost splitAggCost;
-  splitAggCost.add(*partialAgg);
-  plan = repartitionForAgg(aggPlan, partialAgg, splitAggCost);
-
-  const auto numKeys = aggPlan->groupingKeys().size();
-
-  ExprVector finalGroupingKeys;
-  finalGroupingKeys.reserve(numKeys);
-  for (auto i = 0; i < numKeys; ++i) {
-    finalGroupingKeys.push_back(aggPlan->intermediateColumns()[i]);
-  }
-
-  auto* splitAggPlan = make<Aggregation>(
-      plan,
-      std::move(finalGroupingKeys),
-      /*preGroupedKeys*/ ExprVector{},
-      aggregates,
-      velox::core::AggregationNode::Step::kFinal,
-      aggPlan->columns());
-  splitAggCost.add(*splitAggPlan);
-
-  if (numKeys == 0 || options_.alwaysPlanPartialAggregation) {
-    // If there is no grouping, we always make partial + final.
-    plan = splitAggPlan;
-    state.cost.add(splitAggCost);
-    return;
-  }
+  // auto planBeforeAgg = plan;
+  const auto& [splitAggPlan, splitAggCost] =
+      makeSplitAggregationPlan(aggPlan, plan, groupingKeys, aggregates);
 
   // Now we make a plan without partial aggregation.
-  PlanCost singleAggCost;
-  plan = repartitionForAgg(aggPlan, planBeforeAgg, singleAggCost);
-  auto* singleAgg = make<Aggregation>(
-      plan,
-      groupingKeys,
-      /*preGroupedKeys*/ ExprVector{},
-      aggregates,
-      velox::core::AggregationNode::Step::kSingle,
-      aggPlan->columns());
-  singleAggCost.add(*singleAgg);
+  const auto& [singleAgg, singleAggCost] =
+      makeSingleAggregationPlan(aggPlan, plan, groupingKeys, aggregates);
 
   if (singleAggCost.cost < splitAggCost.cost) {
     plan = singleAgg;
     state.cost.add(singleAggCost);
     return;
   }
-
   state.cost.add(splitAggCost);
   plan = splitAggPlan;
 }

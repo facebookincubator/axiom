@@ -137,9 +137,18 @@ TEST_F(HiveAggregationQueriesTest, orderBy) {
 
   ASSERT_TRUE(matcher->match(plan));
 
-  VELOX_ASSERT_THROW(
-      planVelox(logicalPlan),
-      "ORDER BY option for aggregation is supported only in single worker, single thread mode");
+  auto distributedPlan = planVelox(logicalPlan);
+  matcher = core::PlanMatcherBuilder()
+                .tableScan("nation")
+                .shuffle()
+                .localPartition()
+                .singleAggregation(
+                    {"n_regionkey"},
+                    {"array_agg(n_nationkey ORDER BY n_nationkey DESC)",
+                     "array_agg(n_name ORDER BY n_nationkey)"})
+                .shuffle()
+                .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
 
   auto referencePlan =
       exec::test::PlanBuilder()
@@ -173,9 +182,16 @@ TEST_F(HiveAggregationQueriesTest, maskWithOrderBy) {
 
   ASSERT_TRUE(matcher->match(plan));
 
-  VELOX_ASSERT_THROW(
-      planVelox(logicalPlan),
-      "ORDER BY option for aggregation is supported only in single worker, single thread mode");
+  auto distributedPlan = planVelox(logicalPlan);
+  matcher = core::PlanMatcherBuilder()
+                .tableScan("nation")
+                .project()
+                .shuffle()
+                .localPartition()
+                .singleAggregation()
+                .shuffle()
+                .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
 
   auto referencePlan =
       exec::test::PlanBuilder()
