@@ -35,6 +35,27 @@ void History::updateFromFile(const std::string& path) {
   }
 }
 
+void History::recordSampledLeafSelectivity(
+    std::string_view handle,
+    float selectivity,
+    bool overwrite) {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (!overwrite && sampledLeafSelectivities_.contains(handle)) {
+    return;
+  }
+  sampledLeafSelectivities_[handle] = selectivity;
+}
+
+std::optional<float> History::findSampledLeafSelectivity(
+    std::string_view handle) {
+  std::lock_guard<std::mutex> l(mutex_);
+  auto it = sampledLeafSelectivities_.find(handle);
+  if (it != sampledLeafSelectivities_.end()) {
+    return it->second;
+  }
+  return std::nullopt;
+}
+
 float shuffleCost(const ColumnVector& columns) {
   return byteSize(columns) * Costs::kByteShuffleCost;
 }

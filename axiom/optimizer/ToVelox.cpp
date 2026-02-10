@@ -192,7 +192,8 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
 
   setLeafHandle(table->id(), std::move(handle), std::move(rejectedFilters));
   if (updateSelectivity) {
-    optimization->setLeafSelectivity(*const_cast<BaseTable*>(table), scanType);
+    optimization->estimateLeafSelectivity(
+        *const_cast<BaseTable*>(table), scanType);
   }
 }
 

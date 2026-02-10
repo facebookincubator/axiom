@@ -36,10 +36,15 @@ class VeloxHistory : public History {
 
   void recordCost(const RelationOp& op, Cost cost) override {}
 
-  /// Sets the filter selectivity of a table scan. Returns true if there is data
-  /// to back the estimate and false if this is a pure guess.
-  bool setLeafSelectivity(BaseTable& table, const velox::RowTypePtr& scanType)
-      override;
+  /// Estimates filter selectivity for a table scan and updates column value
+  /// constraints (cardinality, min, max, trueFraction, nullFraction, nullable)
+  /// based on the table's filters. If sampling is enabled and a physical table
+  /// is available, samples the table to refine the selectivity estimate.
+  /// Returns true if the estimate is backed by sampling, false if it relies
+  /// solely on statistics-based estimation.
+  bool estimateLeafSelectivity(
+      BaseTable& table,
+      const velox::RowTypePtr& scanType) override;
 
   /// Stores observed costs and cardinalities from a query execution. If 'op' is
   /// non-null, non-leaf costs from non-leaf levels are recorded. Otherwise only
