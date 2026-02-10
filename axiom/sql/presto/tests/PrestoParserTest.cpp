@@ -1845,6 +1845,13 @@ TEST_F(PrestoParserTest, unqualifiedAccessAfterJoin) {
   testSql(sql, matcher);
 }
 
+TEST_F(PrestoParserTest, qualifiedStarInUnionAfterJoin) {
+  parseSql(
+      "SELECT * FROM (VALUES (1)) t(id) "
+      "UNION ALL "
+      "SELECT a.* FROM (VALUES (1)) a(id) JOIN (VALUES (2)) b(id) ON a.id = b.id");
+}
+
 TEST_F(PrestoParserTest, createTableAndInsert) {
   auto parser = makeParser();
 
