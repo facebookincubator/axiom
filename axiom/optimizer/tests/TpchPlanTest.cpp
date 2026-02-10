@@ -630,14 +630,6 @@ TEST_F(TpchPlanTest, q19) {
 }
 
 TEST_F(TpchPlanTest, q20) {
-  // TODO Fix the plan when 'enableReducingExistences' is true.
-  const bool originalEnableReducingExistences =
-      optimizerOptions_.enableReducingExistences;
-  optimizerOptions_.enableReducingExistences = false;
-  SCOPE_EXIT {
-    optimizerOptions_.enableReducingExistences =
-        originalEnableReducingExistences;
-  };
   checkTpchSql(20);
 
   // TODO Verify the plan.
