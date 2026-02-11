@@ -83,62 +83,6 @@ class PlanTest : public test::QueryTestBase {
   std::shared_ptr<connector::TestConnector> testConnector_;
 };
 
-// TODO Move this test into its own file.
-TEST_F(PlanTest, queryGraph) {
-  TypePtr row1 = ROW({{"c1", ROW({{"c1a", INTEGER()}})}, {"c2", DOUBLE()}});
-  TypePtr row2 = row1 =
-      ROW({{"c1", ROW({{"c1a", INTEGER()}})}, {"c2", DOUBLE()}});
-  TypePtr largeRow = ROW(
-      {{"c1", ROW({{"c1a", INTEGER()}})},
-       {"c2", DOUBLE()},
-       {"m1", MAP(INTEGER(), ARRAY(INTEGER()))}});
-  TypePtr differentNames =
-      ROW({{"different", ROW({{"c1a", INTEGER()}})}, {"c2", DOUBLE()}});
-
-  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-  auto context = std::make_unique<QueryGraphContext>(*allocator);
-  queryCtx() = context.get();
-
-  SCOPE_EXIT {
-    queryCtx() = nullptr;
-  };
-
-  auto* dedupRow1 = toType(row1);
-  auto* dedupRow2 = toType(row2);
-  auto* dedupLargeRow = toType(largeRow);
-  auto* dedupDifferentNames = toType(differentNames);
-
-  // dedupped complex types make a copy.
-  EXPECT_NE(row1.get(), dedupRow1);
-
-  // Identical types get equal pointers.
-  EXPECT_EQ(dedupRow1, dedupRow2);
-
-  // Different names differentiate types.
-  EXPECT_NE(dedupDifferentNames, dedupRow1);
-
-  // Shared complex substructure makes equal pointers.
-  EXPECT_EQ(dedupRow1->childAt(0).get(), dedupLargeRow->childAt(0).get());
-
-  // Identical child types with different names get equal pointers.
-  EXPECT_EQ(dedupRow1->childAt(0).get(), dedupDifferentNames->childAt(0).get());
-
-  auto* path = make<Path>()
-                   ->subscript("field")
-                   ->subscript(123)
-                   ->field("f1")
-                   ->cardinality();
-  auto interned = queryCtx()->toPath(path);
-  EXPECT_EQ(interned, path);
-  auto* path2 = make<Path>()
-                    ->subscript("field")
-                    ->subscript(123)
-                    ->field("f1")
-                    ->cardinality();
-  auto interned2 = queryCtx()->toPath(path2);
-  EXPECT_EQ(interned2, interned);
-}
-
 TEST_F(PlanTest, dedupEmptyArrays) {
   auto logicalPlan =
       lp::PlanBuilder()

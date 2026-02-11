@@ -98,6 +98,7 @@ add_executable(
   ParquetTpchTest.cpp
   PrecomputeProjectionTest.cpp
   PlanTest.cpp
+  QueryGraphContextTest.cpp
   RelationOpPrinterTest.cpp
   SetTest.cpp
   SubfieldTest.cpp

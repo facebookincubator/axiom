@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 #include "axiom/optimizer/ArenaCache.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/type/Variant.h"
@@ -86,6 +88,85 @@ struct QGAllocator {
 
 template <typename T>
 using QGVector = std::vector<T, QGAllocator<T>>;
+
+/// An allocator backed by QueryGraphContext that guarantees a configurable
+/// alignment. The alignment must be a power of 2 and not be 0. This allocator
+/// can be used with folly F14 containers that require 16-byte alignment.
+template <class T, uint8_t Alignment = 16>
+struct QGAlignedAllocator {
+  using value_type = T;
+
+  static_assert(Alignment != 0, "Alignment cannot be 0.");
+  static_assert(
+      (Alignment & (Alignment - 1)) == 0,
+      "Alignment must be a power of 2.");
+
+  template <class Other>
+  struct rebind {
+    using other = QGAlignedAllocator<Other, Alignment>;
+  };
+
+  QGAlignedAllocator() = default;
+
+  template <class U, uint8_t A>
+  explicit QGAlignedAllocator(const QGAlignedAllocator<U, A>& /*other*/) {}
+
+  T* allocate(std::size_t n);
+
+  void deallocate(T* p, std::size_t n) noexcept;
+
+  friend bool operator==(
+      const QGAlignedAllocator& /*lhs*/,
+      const QGAlignedAllocator& /*rhs*/) {
+    return true;
+  }
+
+ private:
+  // Pad the memory user requested by some padding to facilitate memory
+  // alignment later. Memory layout:
+  // - padding (length is stored in `delta`)
+  // - delta (4 bytes storing the size of padding)
+  // - the aligned ptr
+  static std::size_t calculatePaddedSize(std::size_t n) {
+    return velox::checkedPlus<size_t>(
+        Alignment + 4, velox::checkedMultiply(n, sizeof(T)));
+  }
+
+  static T*
+  alignPtr(char* ptr, std::size_t allocateCount, std::size_t& paddedSize) {
+    // Align 'ptr + 4'.
+    void* alignedPtr = ptr + 4;
+    paddedSize -= 4;
+    std::align(Alignment, allocateCount * sizeof(T), alignedPtr, paddedSize);
+
+    // Write alignment delta just before the aligned pointer.
+    int32_t delta = static_cast<char*>(alignedPtr) - ptr - 4;
+    *reinterpret_cast<int32_t*>(static_cast<char*>(alignedPtr) - 4) = delta;
+
+    return reinterpret_cast<T*>(alignedPtr);
+  }
+};
+
+/// F14FastMap using QGAlignedAllocator for use in QueryGraphContext.
+template <
+    typename Key,
+    typename Value,
+    typename Hasher = std::hash<Key>,
+    typename KeyEqual = std::equal_to<Key>>
+using QGF14FastMap = folly::F14FastMap<
+    Key,
+    Value,
+    Hasher,
+    KeyEqual,
+    QGAlignedAllocator<std::pair<const Key, Value>>>;
+
+/// F14FastSet using QGAlignedAllocator for use in QueryGraphContext.
+template <
+    typename Key,
+    typename Hasher = std::hash<Key>,
+    typename KeyEqual = std::equal_to<Key>>
+using QGF14FastSet =
+    folly::F14FastSet<Key, Hasher, KeyEqual, QGAlignedAllocator<Key>>;
 
 /// Elements of subfield paths. The QueryGraphContext holds a dedupped
 /// collection of distinct paths.
@@ -344,6 +425,21 @@ T* QGAllocator<T>::allocate(std::size_t n) {
 template <class T>
 void QGAllocator<T>::deallocate(T* p, std::size_t /*n*/) noexcept {
   queryCtx()->free(p);
+}
+
+template <class T, uint8_t Alignment>
+T* QGAlignedAllocator<T, Alignment>::allocate(std::size_t n) {
+  auto paddedSize = calculatePaddedSize(n);
+  auto* ptr = reinterpret_cast<char*>(queryCtx()->allocate(paddedSize));
+  return alignPtr(ptr, n, paddedSize);
+}
+
+template <class T, uint8_t Alignment>
+void QGAlignedAllocator<T, Alignment>::deallocate(
+    T* p,
+    std::size_t /*n*/) noexcept {
+  auto delta = *reinterpret_cast<int32_t*>(reinterpret_cast<char*>(p) - 4);
+  queryCtx()->free(reinterpret_cast<char*>(p) - 4 - delta);
 }
 
 template <class T, class... Args>
