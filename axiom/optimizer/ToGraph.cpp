@@ -36,6 +36,11 @@ namespace lp = facebook::axiom::logical_plan;
 namespace facebook::axiom::optimizer {
 namespace {
 
+bool isSpecialForm(const lp::ExprPtr& expr, lp::SpecialForm form) {
+  return expr->isSpecialForm() &&
+      expr->as<lp::SpecialFormExpr>()->form() == form;
+}
+
 Value toValue(const velox::TypePtr& type, float cardinality) {
   return Value{toType(type), cardinality};
 }
@@ -124,6 +129,17 @@ ToGraph::ToGraph(
 
   if (auto count = registry->count()) {
     functionNames_.count = toName(count.value());
+  }
+
+  // Initialize between, gte, lte for rewriting between to and(gte, lte).
+  if (auto between = registry->between()) {
+    functionNames_.between = toName(between.value());
+  }
+  if (auto gte = registry->greaterThanOrEqual()) {
+    functionNames_.gte = toName(gte.value());
+  }
+  if (auto lte = registry->lessThanOrEqual()) {
+    functionNames_.lte = toName(lte.value());
   }
 }
 
@@ -392,7 +408,13 @@ void ToGraph::translateConjuncts(const lp::ExprPtr& input, ExprVector& flat) {
   } else {
     auto translatedExpr = translateExpr(input);
     if (!isConstantTrue(translatedExpr)) {
-      flat.push_back(translatedExpr);
+      // If the translated expression is an 'and' call, flatten it
+      if (translatedExpr->is(PlanType::kCallExpr) &&
+          translatedExpr->as<Call>()->name() == SpecialFormCallNames::kAnd) {
+        flattenAll(translatedExpr, SpecialFormCallNames::kAnd, flat);
+      } else {
+        flat.push_back(translatedExpr);
+      }
     }
   }
 }
@@ -875,6 +897,24 @@ bool shouldInvert(ExprCP left, ExprCP right) {
 
 } // namespace
 
+ExprCP ToGraph::rewriteCall(Name name, const ExprVector& args) {
+  // Rewrite between(x, a, b) to and(gte(x, a), lte(x, b)).
+  if (args.size() == 3 && functionNames_.between != nullptr &&
+      functionNames_.gte != nullptr && functionNames_.lte != nullptr &&
+      name == functionNames_.between) {
+    auto value = toValue(velox::BOOLEAN(), 2);
+
+    auto* gteExpr =
+        deduppedCall(functionNames_.gte, value, {args[0], args[1]}, {});
+    auto* lteExpr =
+        deduppedCall(functionNames_.lte, value, {args[0], args[2]}, {});
+    auto* andExpr =
+        deduppedCall(SpecialFormCallNames::kAnd, value, {gteExpr, lteExpr}, {});
+    return andExpr;
+  }
+  return nullptr;
+}
+
 void ToGraph::canonicalizeCall(Name& name, ExprVector& args) {
   if (args.size() != 2) {
     return;
@@ -896,7 +936,14 @@ ExprCP ToGraph::deduppedCall(
     Value value,
     ExprVector args,
     FunctionSet flags) {
+  // Check if the call should be rewritten to a different expression.
+  if (auto* rewritten = rewriteCall(name, args)) {
+    return rewritten;
+  }
+
+  // Canonicalize arguments (e.g., swap args for reversible functions).
   canonicalizeCall(name, args);
+
   ExprDedupKey key = {name, args};
 
   auto [it, emplaced] = functionDedup_.try_emplace(key);

@@ -550,7 +550,6 @@ TEST_F(PlanTest, filterBreakup) {
             .add("l_quantity", exec::betweenDouble(1.0, 30.0))
             .build();
 
-    auto plan = toSingleNodePlan(logicalPlan);
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan("lineitem", std::move(lineitemFilters))
@@ -558,16 +557,17 @@ TEST_F(PlanTest, filterBreakup) {
                 core::PlanMatcherBuilder()
                     .hiveScan(
                         "part",
-                        {},
-                        "\"or\"(\"and\"(p_size between 1 and 15, (p_brand = 'Brand#34' AND p_container LIKE 'LG%')), "
-                        "   \"or\"(\"and\"(p_size between 1 and 5, (p_brand = 'Brand#12' AND p_container LIKE 'SM%')), "
-                        "          \"and\"(p_size between 1 and 10, (p_brand = 'Brand#23' AND p_container LIKE 'MED%'))))")
+                        common::test::SubfieldFiltersBuilder()
+                            .add("p_size", exec::greaterThanOrEqual(1LL))
+                            .build(),
+                        "\"or\"(\"and\"(lte(p_size,15),\"and\"(eq(p_brand,'Brand#34'),\"like\"(p_container,'LG%'))),\"or\"(\"and\"(lte(p_size,5),\"and\"(eq(p_brand,'Brand#12'),\"like\"(p_container,'SM%'))),\"and\"(lte(p_size,10),\"and\"(eq(p_brand,'Brand#23'),\"like\"(p_container,'MED%')))))")
                     .build())
             .filter()
             .project()
             .singleAggregation()
             .build();
 
+    auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
