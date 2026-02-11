@@ -793,6 +793,35 @@ TEST_P(SubfieldTest, overAggregation) {
   verifyRequiredSubfields(plan, {{"a", {}}, {"b", {}}});
 }
 
+TEST_P(SubfieldTest, multipleAggregateAliases) {
+  createTable(
+      "t1",
+      {makeRowVector(
+          {"a", "b", "c", "d"},
+          {
+              makeFlatVector<StringView>({"x"}),
+              makeFlatVector<StringView>({"y"}),
+              makeFlatVector<StringView>({"z"}),
+              makeFlatVector<StringView>({"{\"k1\": \"v1\", \"k2\": \"v2\"}"}),
+          })});
+
+  auto logicalPlan = parseSelect(
+      "WITH cte AS ("
+      "  SELECT "
+      "    a, "
+      "    b, "
+      "    arbitrary(c) AS agg1, "
+      "    arbitrary(json_extract_scalar(d, '$.k1')) AS agg2, "
+      "    arbitrary(json_extract_scalar(d, '$.k2')) AS agg3 "
+      "  FROM t1 "
+      "  GROUP BY 1, 2"
+      ") "
+      "SELECT a, b, agg1, agg2, agg3 FROM cte",
+      kHiveConnectorId);
+
+  ASSERT_NO_THROW(toSingleNodePlan(logicalPlan));
+}
+
 TEST_P(SubfieldTest, blackbox) {
   auto data = makeRowVector(
       {"id", "m"},
