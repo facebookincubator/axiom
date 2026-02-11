@@ -64,7 +64,7 @@ void Connectors::initialize() {
   folly::call_once(kInitialized, [this]() {
     initializeFileFormats();
     ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(
-        std::thread::hardware_concurrency(),
+        folly::hardware_concurrency(),
         std::make_shared<folly::NamedThreadFactory>("io"));
   });
 }
