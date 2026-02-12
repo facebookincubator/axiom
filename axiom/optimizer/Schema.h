@@ -27,43 +27,63 @@
 /// though, so that a schema cache can have its own lifetime.
 namespace facebook::axiom::optimizer {
 
-// TODO: It seems like QGAllocator doesn't work for folly F14 containers.
-// Investigate and fix.
 template <typename T>
-using NameMap = std::unordered_map<
-    Name,
-    T,
-    std::hash<Name>,
-    std::equal_to<Name>,
-    QGAllocator<std::pair<const Name, T>>>;
+using NameMap = QGF14FastMap<Name, T>;
+
+using VariantCP = const velox::Variant*;
+using TypeCP = const velox::Type*;
 
 /// Represents constraints on a column value or intermediate result.
+// TODO: Refactor to separate schema facts from statistical estimates:
+//   struct Value {
+//     TypeCP type;
+//     bool nullable{false};  // schema fact
+//     struct Estimates {
+//       float cardinality{1};
+//       float nullFraction{0};
+//       float trueFraction{kUnknown};
+//       VariantCP min{nullptr};
+//       VariantCP max{nullptr};
+//     } estimates;
+//   };
 struct Value {
-  Value(const velox::Type* type, float cardinality)
+  Value(TypeCP type, float cardinality)
       : type{type}, cardinality{cardinality} {}
+
+  // Default copy constructor
+  Value(const Value&) = default;
+
+  /// Assignment operator that checks type equality and assigns other members.
+  Value& operator=(const Value& other);
 
   /// Returns the average byte size of a value when it occurs as an intermediate
   /// result without dictionary or other encoding.
   float byteSize() const;
 
-  const velox::Type* type;
-  const velox::Variant* min{nullptr};
-  const velox::Variant* max{nullptr};
+  /// Returns a string representation of this Value.
+  std::string toString() const;
 
-  // Count of distinct values. Is not exact and is used for estimating
-  // cardinalities of group bys or joins.
-  const float cardinality{1};
+  TypeCP type;
+  VariantCP min{nullptr};
+  VariantCP max{nullptr};
 
-  // Estimate of true fraction for booleans. 0 means always
-  // false. This is an estimate and 1 or 0 do not allow pruning
-  // dependent code paths.
-  float trueFraction{1};
+  /// Count of distinct values. Is not exact and is used for estimating
+  /// cardinalities of group bys or joins.
+  float cardinality{1};
 
-  // 0 means no nulls, 0.5 means half are null.
+  /// Sentinel value for unknown trueFraction.
+  static constexpr float kUnknown = -1.0f;
+
+  /// Estimate of true fraction for booleans. 0 means always
+  /// false. This is an estimate and 1 or 0 do not allow pruning
+  /// dependent code paths.
+  float trueFraction{kUnknown};
+
+  /// 0 means no nulls, 0.5 means half are null.
   float nullFraction{0};
 
-  // True if nulls may occur. 'false' means that plans that allow no nulls may
-  // be generated.
+  /// True if nulls may occur. 'false' means that plans that allow no nulls may
+  /// be generated.
   bool nullable{true};
 };
 

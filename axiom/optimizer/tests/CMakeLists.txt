@@ -91,6 +91,7 @@ add_executable(
   CsvReadWriteTest.cpp
   DerivedTablePrinterTest.cpp
   FilterPushdownTest.cpp
+  FiltersTest.cpp
   HiveAggregationQueriesTest.cpp
   HiveLimitQueriesTest.cpp
   HiveQueriesTest.cpp

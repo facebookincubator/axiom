@@ -91,11 +91,11 @@ ToGraph::ToGraph(
     const connector::SchemaResolver& schema,
     velox::core::ExpressionEvaluator& evaluator,
     const OptimizerOptions& options)
-    : schema_{schema}, evaluator_{evaluator}, options_{options} {
+    : schema_{schema},
+      evaluator_{evaluator},
+      options_{options},
+      functionNames_{queryCtx()->functionNames()} {
   auto* registry = FunctionRegistry::instance();
-
-  functionNames_.equality = toName(registry->equality());
-  functionNames_.negation = toName(registry->negation());
 
   const auto& reversibleFunctions = registry->reversibleFunctions();
   for (const auto& [name, reverseName] : reversibleFunctions) {
@@ -105,26 +105,6 @@ ToGraph::ToGraph(
 
   reversibleFunctions_[SpecialFormCallNames::kAnd] = SpecialFormCallNames::kAnd;
   reversibleFunctions_[SpecialFormCallNames::kOr] = SpecialFormCallNames::kOr;
-
-  if (auto elementAt = registry->elementAt()) {
-    functionNames_.elementAt = toName(elementAt.value());
-  }
-
-  if (auto subscript = registry->subscript()) {
-    functionNames_.subscript = toName(subscript.value());
-  }
-
-  if (auto cardinality = registry->cardinality()) {
-    functionNames_.cardinality = toName(cardinality.value());
-  }
-
-  if (auto arbitrary = registry->arbitrary()) {
-    functionNames_.arbitrary = toName(arbitrary.value());
-  }
-
-  if (auto count = registry->count()) {
-    functionNames_.count = toName(count.value());
-  }
 }
 
 void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
