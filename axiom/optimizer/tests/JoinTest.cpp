@@ -864,6 +864,25 @@ TEST_F(JoinTest, leftThenFilter) {
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+
+  // Multi-table filter that references both sides of the join. Since the filter
+  // references the right side with default null behavior, it eliminates NULLs
+  // on the right side, converting the LEFT join to an INNER join. The filter
+  // cannot be pushed down below the join since it references both sides.
+  {
+    auto query =
+        "SELECT * FROM t LEFT JOIN (SELECT * FROM u) ON a = x "
+        "WHERE a > y";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+                       .filter("a > y")
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 TEST_F(JoinTest, fullThenFilter) {
@@ -949,6 +968,24 @@ TEST_F(JoinTest, fullThenFilter) {
                            matchScan("u").filter("y + 1 > 0").build(),
                            core::JoinType::kInner)
                        .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // The filter references both left and right sides with default null behavior.
+  // It eliminates both left-only rows (NULLs on right) and right-only rows
+  // (NULLs on left), converting FULL join directly to INNER join.
+  {
+    auto query =
+        "SELECT * FROM t FULL JOIN (SELECT * FROM u) ON a = x "
+        "WHERE a > y";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+                       .filter("a > y")
                        .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));

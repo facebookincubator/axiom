@@ -323,6 +323,11 @@ struct DerivedTable : public PlanObject {
   // - LEFT join + filter on right columns → INNER join
   // - FULL join + filter on right columns → RIGHT join
   // - FULL join + filter on left columns → LEFT join
+  // - FULL join + filter on both left and right columns → INNER join
+  //
+  // The filter can reference columns from multiple tables; as long as it
+  // references at least one column from the optional side, it will reject
+  // NULLs on that side.
   //
   // @param allowNondeterministic If true, non-deterministic conjuncts are
   // considered for join conversion.
