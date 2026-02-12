@@ -60,6 +60,9 @@ class History {
 
   virtual void recordJoinSample(std::string_view key, float lr, float rl) = 0;
 
+  /// Estimates join fanout by sampling actual data. Returns {rlFanout,
+  /// lrFanout}: the average number of matching rows on each side for one row
+  /// on the other side. Returns {0, 0} if sampling is not possible.
   virtual std::pair<float, float> sampleJoin(JoinEdge* edge) = 0;
 
   virtual folly::dynamic serialize() = 0;

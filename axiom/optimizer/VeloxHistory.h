@@ -28,6 +28,9 @@ class VeloxHistory : public History {
  public:
   void recordJoinSample(std::string_view key, float lr, float rl) override;
 
+  /// Samples actual data from both sides of the join to estimate fanout.
+  /// Returns {0, 0} if either side is not a BaseTable. Results are cached by a
+  /// canonical key derived from the join's table names and key columns.
   std::pair<float, float> sampleJoin(JoinEdge* edge) override;
 
   std::optional<Cost> findCost(RelationOp& op) override {

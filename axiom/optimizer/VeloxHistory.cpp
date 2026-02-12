@@ -30,16 +30,12 @@ namespace facebook::axiom::optimizer {
 void VeloxHistory::recordJoinSample(std::string_view key, float lr, float rl) {}
 
 std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
-  const auto& options = queryCtx()->optimization()->options();
-  if (!options.sampleJoins) {
-    return {0, 0};
-  }
-
   auto keyPair = edge->sampleKey();
 
   if (keyPair.first.empty()) {
     return std::make_pair(0, 0);
   }
+
   {
     std::lock_guard<std::mutex> l(mutex_);
     auto it = joinSamples_.find(keyPair.first);
@@ -69,6 +65,7 @@ std::pair<float, float> VeloxHistory::sampleJoin(JoinEdge* edge) {
     joinSamples_[keyPair.first] = pair;
   }
 
+  const auto& options = queryCtx()->optimization()->options();
   const bool trace = (options.traceFlags & OptimizerOptions::kSample) != 0;
   if (trace) {
     std::cout << "Sample join " << keyPair.first << ": " << pair.first << " :"
