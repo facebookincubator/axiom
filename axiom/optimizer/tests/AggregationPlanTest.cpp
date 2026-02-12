@@ -271,5 +271,76 @@ TEST_F(AggregationPlanTest, orderBy) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
 }
 
+// Verifies that repartitionForAgg correctly determines when shuffle is needed
+// based on the relationship between the current partition keys and the required
+// grouping keys.
+// - When partitionKeys ⊆ groupingKeys: no shuffle needed
+// - When partitionKeys ⊄ groupingKeys: shuffle is needed
+//
+// Uses two nested aggregations to test this: the first aggregation creates a
+// distribution partitioned by its grouping keys, and the second aggregation
+// tests whether a shuffle is added based on the relationship between current
+// partition keys and the required grouping keys.
+TEST_F(AggregationPlanTest, repartitionForAggPartitionSubset) {
+  auto schema = ROW({"a", "b", "c", "v"}, BIGINT());
+  testConnector_->addTable("t", schema);
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  // Test current partitionKeys ⊆ required groupingKeys --> no shuffle needed.
+  {
+    auto logicalPlan = lp::PlanBuilder()
+                           .tableScan(kTestConnectorId, "t")
+                           .aggregate({"a", "b"}, {})
+                           .with({"a + b as d"})
+                           .aggregate({"a", "b", "d"}, {})
+                           .build();
+    auto plan = planVelox(logicalPlan);
+
+    // There should be only ONE shuffle (for the first
+    // aggregation). The second aggregation should NOT require a shuffle
+    // because partitionKeys [a, b] ⊆ groupingKeys [a, b, d].
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .shuffle()
+                       .localPartition()
+                       .singleAggregation({"a", "b"}, {})
+                       .project()
+                       // No shuffle here - partitionKeys ⊆ groupingKeys
+                       .localPartition()
+                       .singleAggregation({"a", "b", "d"}, {})
+                       .shuffle()
+                       .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+
+  // Test current partitionKeys ⊄ required groupingKeys --> shuffle is needed.
+  {
+    auto logicalPlan = lp::PlanBuilder()
+                           .tableScan(kTestConnectorId, "t")
+                           .aggregate({"a", "b", "c"}, {})
+                           .aggregate({"a", "b"}, {})
+                           .build();
+    auto plan = planVelox(logicalPlan);
+
+    // There should be TWO shuffles. The second aggregation
+    // MUST be after a shuffle because partitionKeys [a, b, c] ⊄ groupingKeys
+    // [a, b].
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .shuffle()
+                       .localPartition()
+                       .singleAggregation({"a", "b", "c"}, {})
+                       .project()
+                       .shuffle()
+                       .localPartition()
+                       .singleAggregation({"a", "b"}, {})
+                       .shuffle()
+                       .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

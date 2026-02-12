@@ -463,7 +463,6 @@ RelationOpPtr repartitionForAgg(
     AggregationPlanCP const agg,
     const RelationOpPtr& plan,
     PlanCost& cost) {
-  // No shuffle if all grouping keys are in partitioning.
   if (isSingleWorker() || plan->distribution().isGather()) {
     return plan;
   }
@@ -484,13 +483,19 @@ RelationOpPtr repartitionForAgg(
     keyValues.push_back(agg->intermediateColumns()[i]);
   }
 
-  bool shuffle = false;
-  for (auto& key : keyValues) {
-    auto nthKey = position(plan->distribution().partitionKeys(), *key);
-    if (nthKey == kNotFound) {
-      shuffle = true;
-      break;
-    }
+  // Check if grouping keys is a superset of all partition keys. If partition
+  // keys are empty or contain columns not in grouping keys, we need to shuffle.
+  // Empty partition keys means unknown/unpartitioned distribution, so shuffle
+  // is required to ensure rows with same grouping keys are co-located.
+  bool shuffle = plan->distribution().partitionKeys().empty();
+  if (!shuffle) {
+    const auto& partitionKeys = plan->distribution().partitionKeys();
+    shuffle = std::any_of(
+        partitionKeys.begin(),
+        partitionKeys.end(),
+        [&keyValues](const auto& key) {
+          return position(keyValues, *key) == kNotFound;
+        });
   }
   if (!shuffle) {
     return plan;
