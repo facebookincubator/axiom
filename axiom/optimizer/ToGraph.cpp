@@ -369,6 +369,66 @@ std::vector<int32_t> ToGraph::usedChannels(const lp::LogicalPlanNode& node) {
   return result;
 }
 
+void ToGraph::printSubfields(const lp::LogicalPlanNode& node) const {
+  std::cout << node.kindName() << " #" << node.id() << std::endl;
+
+  auto controlIt = controlSubfields_.nodeFields.find(&node);
+  auto payloadIt = payloadSubfields_.nodeFields.find(&node);
+  const auto& names = node.outputType()->names();
+
+  // Compute the union of used channels from control and payload.
+  std::vector<int32_t> channels;
+  if (controlIt != controlSubfields_.nodeFields.end()) {
+    for (auto& [idx, _] : controlIt->second.resultPaths) {
+      channels.push_back(idx);
+    }
+  }
+  if (payloadIt != payloadSubfields_.nodeFields.end()) {
+    for (auto& [idx, _] : payloadIt->second.resultPaths) {
+      channels.push_back(idx);
+    }
+  }
+  std::ranges::sort(channels);
+  channels.erase(std::unique(channels.begin(), channels.end()), channels.end());
+
+  for (auto i : channels) {
+    std::cout << "  channel " << i << " " << names[i] << ":";
+
+    auto printPaths = [](const char* label, const PathSet& paths) {
+      std::cout << " " << label << "=[";
+      size_t n = 0;
+      paths.forEachPath([&](PathCP path) {
+        if (n > 0) {
+          std::cout << ", ";
+        }
+        std::cout << path->toString();
+        ++n;
+      });
+      std::cout << "]";
+    };
+
+    if (controlIt != controlSubfields_.nodeFields.end()) {
+      auto pathIt = controlIt->second.resultPaths.find(i);
+      if (pathIt != controlIt->second.resultPaths.end()) {
+        printPaths("control", pathIt->second);
+      }
+    }
+
+    if (payloadIt != payloadSubfields_.nodeFields.end()) {
+      auto pathIt = payloadIt->second.resultPaths.find(i);
+      if (pathIt != payloadIt->second.resultPaths.end()) {
+        printPaths("payload", pathIt->second);
+      }
+    }
+
+    std::cout << std::endl;
+  }
+
+  for (const auto& child : node.inputs()) {
+    printSubfields(*child);
+  }
+}
+
 namespace {
 bool isConstantTrue(ExprCP expr) {
   if (expr->isNot(PlanType::kLiteralExpr)) {

@@ -152,6 +152,10 @@ class ToGraph {
     return &evaluator_;
   }
 
+  /// Prints the control and payload subfields accessed from each
+  /// LogicalPlanNode in the plan tree rooted at 'node'.
+  void printSubfields(const logical_plan::LogicalPlanNode& node) const;
+
   template <typename Func>
   void trace(uint32_t event, Func f) {
     if ((options_.traceFlags & event) != 0) {
