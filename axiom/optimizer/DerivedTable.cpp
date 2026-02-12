@@ -912,16 +912,6 @@ bool dtHasLimit(const DerivedTable& dt) {
   return dt.hasLimit();
 }
 
-void flattenAll(ExprCP expr, Name func, ExprVector& flat) {
-  if (expr->isNot(PlanType::kCallExpr) || expr->as<Call>()->name() != func) {
-    flat.push_back(expr);
-    return;
-  }
-  for (auto arg : expr->as<Call>()->args()) {
-    flattenAll(arg, func, flat);
-  }
-}
-
 // 'disjuncts' is an OR of ANDs. If each disjunct depends on the same tables
 // and if each conjunct inside the ANDs in the OR depends on a single table,
 // then return for each distinct table an OR of ANDs. The disjuncts are the

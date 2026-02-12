@@ -149,6 +149,18 @@ class Optimization {
     return session_;
   }
 
+  const FunctionNames& functionNames() const {
+    return toGraph_.functionNames();
+  }
+
+  ExprCP deduppedCall(
+      Name name,
+      Value value,
+      ExprVector args,
+      FunctionSet flags) {
+    return toGraph_.deduppedCall(name, std::move(value), std::move(args), flags);
+  }
+
   const OptimizerOptions& options() const {
     return options_;
   }

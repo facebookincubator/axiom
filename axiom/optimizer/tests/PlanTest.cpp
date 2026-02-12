@@ -550,7 +550,6 @@ TEST_F(PlanTest, filterBreakup) {
             .add("l_quantity", exec::betweenDouble(1.0, 30.0))
             .build();
 
-    auto plan = toSingleNodePlan(logicalPlan);
     auto matcher =
         core::PlanMatcherBuilder()
             .hiveScan("lineitem", std::move(lineitemFilters))
@@ -558,16 +557,17 @@ TEST_F(PlanTest, filterBreakup) {
                 core::PlanMatcherBuilder()
                     .hiveScan(
                         "part",
-                        {},
-                        "\"or\"(\"and\"(p_size between 1 and 15, (p_brand = 'Brand#34' AND p_container LIKE 'LG%')), "
-                        "   \"or\"(\"and\"(p_size between 1 and 5, (p_brand = 'Brand#12' AND p_container LIKE 'SM%')), "
-                        "          \"and\"(p_size between 1 and 10, (p_brand = 'Brand#23' AND p_container LIKE 'MED%'))))")
+                        common::test::SubfieldFiltersBuilder()
+                            .add("p_size", exec::greaterThanOrEqual(1LL))
+                            .build(),
+                        "\"or\"(\"and\"(lte(p_size,15),\"and\"(eq(p_brand,'Brand#34'),\"like\"(p_container,'LG%'))),\"or\"(\"and\"(lte(p_size,5),\"and\"(eq(p_brand,'Brand#12'),\"like\"(p_container,'SM%'))),\"and\"(lte(p_size,10),\"and\"(eq(p_brand,'Brand#23'),\"like\"(p_container,'MED%')))))")
                     .build())
             .filter()
             .project()
             .singleAggregation()
             .build();
 
+    auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
@@ -578,6 +578,42 @@ TEST_F(PlanTest, filterBreakup) {
   auto referencePlan = referenceBuilder->getQueryPlan(19).plan;
 
   checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(PlanTest, between) {
+  // Query 1: Simple between with nested OR of betweens. Expects between
+  // merging.
+  {
+    auto plan = toSingleNodePlan(parseSelect(
+        "select p_size from part where p_partkey between 10 and 10000 "
+        "and (p_size + 1 between 1 and 10 "
+        "or (p_size + 2 between 20 and 30 and p_size + 2 between 22 and 32))",
+        exec::test::kHiveConnectorId));
+    std::cout << "Between query 1:\n"
+              << plan->toString(true) << std::endl;
+  }
+
+  // Query 2: Non-deterministic first arg (rand()) should not be merged.
+  {
+    auto plan = toSingleNodePlan(parseSelect(
+        "select p_size from part where "
+        "rand() + p_size between p_retailprice and p_retailprice + 100 "
+        "and p_size + 1 between 10 and 40",
+        exec::test::kHiveConnectorId));
+    std::cout << "Between query 2:\n"
+              << plan->toString(true) << std::endl;
+  }
+
+  // Query 3: Deterministic first arg with overlapping betweens should merge.
+  {
+    auto plan = toSingleNodePlan(parseSelect(
+        "select p_size from part where "
+        "p_size + 1 between p_retailprice and p_retailprice + 100 "
+        "and p_size + 1 between 10 and 100",
+        exec::test::kHiveConnectorId));
+    std::cout << "Between query 3:\n"
+              << plan->toString(true) << std::endl;
+  }
 }
 
 TEST_F(PlanTest, values) {

@@ -16,6 +16,7 @@
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
+#include "axiom/optimizer/PlanUtils.h"
 #include "velox/core/PlanConsistencyChecker.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/HashPartitionFunction.h"
@@ -265,6 +266,132 @@ velox::core::TypedExprPtr ToVelox::toAnd(const ExprVector& exprs) {
     return toTypedExpr(exprs[0]);
   }
 
+  auto* opt = queryCtx()->optimization();
+  const auto& fn = opt->functionNames();
+
+  // Try to merge gte/lte comparisons on the same first argument into between.
+  if (fn.gte != nullptr && fn.lte != nullptr && fn.between != nullptr &&
+      fn.least != nullptr && fn.greatest != nullptr) {
+    // Group comparisons by their first argument (pointer-equal).
+    // For each first arg, collect lower bounds (from gte) and upper bounds
+    // (from lte).
+    ExprVector nonComparisons;
+    // Use vector of pairs to preserve order.
+    std::vector<std::pair<ExprCP, std::pair<ExprVector, ExprVector>>> groups;
+    auto findGroup =
+        [&](ExprCP key) -> std::pair<ExprVector, ExprVector>* {
+      for (auto& [k, v] : groups) {
+        if (k == key) {
+          return &v;
+        }
+      }
+      return nullptr;
+    };
+
+    for (auto* expr : exprs) {
+      if (isCallExpr(expr, fn.gte) &&
+          expr->as<Call>()->args().size() == 2) {
+        auto* call = expr->as<Call>();
+        auto* group = findGroup(call->args()[0]);
+        if (!group) {
+          groups.emplace_back(
+              call->args()[0], std::pair<ExprVector, ExprVector>{});
+          group = &groups.back().second;
+        }
+        group->first.push_back(call->args()[1]);
+      } else if (
+          isCallExpr(expr, fn.lte) &&
+          expr->as<Call>()->args().size() == 2) {
+        auto* call = expr->as<Call>();
+        auto* group = findGroup(call->args()[0]);
+        if (!group) {
+          groups.emplace_back(
+              call->args()[0], std::pair<ExprVector, ExprVector>{});
+          group = &groups.back().second;
+        }
+        group->second.push_back(call->args()[1]);
+      } else {
+        nonComparisons.push_back(expr);
+      }
+    }
+
+    if (!groups.empty()) {
+      // Returns the consolidated bound for a list of bound expressions.
+      // isLower=true means these are lower bounds (from gte), so we want the
+      // greatest among literals. isLower=false means upper bounds (from lte),
+      // so we want the least among literals.
+      auto comparisonBound = [&](const ExprVector& bounds,
+                                 bool isLower) -> ExprCP {
+        if (bounds.empty()) {
+          return nullptr;
+        }
+        ExprVector literals;
+        ExprVector nonLiterals;
+        for (auto* b : bounds) {
+          if (b->is(PlanType::kLiteralExpr)) {
+            literals.push_back(b);
+          } else {
+            nonLiterals.push_back(b);
+          }
+        }
+
+        ExprVector result;
+        if (!literals.empty()) {
+          // Find the best literal: greatest if isLower, least if !isLower.
+          ExprCP best = literals[0];
+          for (size_t i = 1; i < literals.size(); ++i) {
+            const auto& bestVal = best->as<Literal>()->literal();
+            const auto& curVal = literals[i]->as<Literal>()->literal();
+            if (isLower ? (bestVal < curVal) : (curVal < bestVal)) {
+              best = literals[i];
+            }
+          }
+          result.push_back(best);
+        }
+        for (auto* nl : nonLiterals) {
+          result.push_back(nl);
+        }
+
+        if (result.size() == 1) {
+          return result[0];
+        }
+        // Wrap in greatest (for lower bounds) or least (for upper bounds).
+        auto wrapName = isLower ? fn.greatest : fn.least;
+        return opt->deduppedCall(
+            wrapName, result[0]->value(), std::move(result), {});
+      };
+
+      ExprVector merged;
+      auto boolValue =
+          Value(toType(velox::BOOLEAN()), 2);
+      for (auto& [firstArg, bounds] : groups) {
+        auto* lower = comparisonBound(bounds.first, true);
+        auto* upper = comparisonBound(bounds.second, false);
+        if (lower && upper) {
+          merged.push_back(opt->deduppedCall(
+              fn.between, boolValue, {firstArg, lower, upper}, {}));
+        } else if (lower) {
+          merged.push_back(opt->deduppedCall(
+              fn.gte, boolValue, {firstArg, lower}, {}));
+        } else if (upper) {
+          merged.push_back(opt->deduppedCall(
+              fn.lte, boolValue, {firstArg, upper}, {}));
+        }
+      }
+      for (auto* expr : nonComparisons) {
+        merged.push_back(expr);
+      }
+
+      if (merged.size() == 1) {
+        return toTypedExpr(merged[0]);
+      }
+      return std::make_shared<velox::core::CallTypedExpr>(
+          velox::BOOLEAN(),
+          specialForm(lp::SpecialForm::kAnd),
+          toTypedExprs(merged));
+    }
+  }
+
   return std::make_shared<velox::core::CallTypedExpr>(
       velox::BOOLEAN(),
       specialForm(lp::SpecialForm::kAnd),
@@ -447,8 +574,17 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
           toTypePtr(expr->value().type), name);
     }
     case PlanType::kCallExpr: {
-      std::vector<velox::core::TypedExprPtr> inputs;
       auto call = expr->as<Call>();
+
+      // Flatten nested ANDs and delegate to toAnd for merging gte/lte into
+      // between.
+      if (call->name() == SpecialFormCallNames::kAnd) {
+        ExprVector flat;
+        flattenAll(expr, SpecialFormCallNames::kAnd, flat);
+        return toAnd(flat);
+      }
+
+      std::vector<velox::core::TypedExprPtr> inputs;
 
       if (call->name() == SpecialFormCallNames::kIn) {
         VELOX_USER_CHECK_GE(call->args().size(), 2);
