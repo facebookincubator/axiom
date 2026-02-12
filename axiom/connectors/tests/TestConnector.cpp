@@ -46,6 +46,43 @@ TestTable::TestTable(
   pool_ = velox::memory::memoryManager()->addLeafPool(name + "_table");
 }
 
+void TestTable::setStats(
+    uint64_t numRows,
+    const std::unordered_map<std::string, ColumnStatistics>& columnStats) {
+  setNumRows(numRows);
+
+  // Set or clear stats for all columns.
+  for (const auto& [name, column] : columnMap()) {
+    auto statsIt = columnStats.find(name);
+    if (statsIt != columnStats.end()) {
+      const_cast<Column*>(column)->setStats(
+          std::make_unique<ColumnStatistics>(statsIt->second));
+    } else {
+      // Clear stats for columns not in columnStats.
+      const_cast<Column*>(column)->setStats(
+          std::make_unique<ColumnStatistics>());
+    }
+  }
+}
+
+void TestTable::addData(const velox::RowVectorPtr& data) {
+  VELOX_CHECK(
+      data->type()->equivalent(*type()),
+      "appended data type {} must match table type {}",
+      data->type(),
+      type());
+  VELOX_CHECK_GT(data->size(), 0, "Cannot append empty RowVector");
+  auto copy = std::dynamic_pointer_cast<velox::RowVector>(
+      velox::BaseVector::copy(*data, pool_.get()));
+  data_.push_back(copy);
+
+  // Recompute numRows from all data vectors.
+  numRows_ = 0;
+  for (const auto& vector : data_) {
+    numRows_ += vector->size();
+  }
+}
+
 std::vector<SplitSource::SplitAndGroup> TestSplitSource::getSplits(uint64_t) {
   std::vector<SplitAndGroup> result;
   if (currentPartition_ >= partitions_.size()) {
@@ -214,6 +251,15 @@ void TestConnectorMetadata::setDiscreteValues(
   it->second->mutableLayout()->setDiscreteValues(columnNames, values);
 }
 
+void TestConnectorMetadata::setStats(
+    const std::string& tableName,
+    uint64_t numRows,
+    const std::unordered_map<std::string, ColumnStatistics>& columnStats) {
+  auto it = tables_.find(tableName);
+  VELOX_CHECK(it != tables_.end(), "Table doesn't exist: {}", tableName);
+  it->second->setStats(numRows, columnStats);
+}
+
 TestDataSource::TestDataSource(
     const velox::RowTypePtr& outputType,
     const velox::connector::ColumnHandleMap& handles,
@@ -327,6 +373,13 @@ void TestConnector::setDiscreteValues(
     const std::vector<std::string>& columnNames,
     const std::vector<velox::Variant>& values) {
   metadata_->setDiscreteValues(name, columnNames, values);
+}
+
+void TestConnector::setStats(
+    const std::string& tableName,
+    uint64_t numRows,
+    const std::unordered_map<std::string, ColumnStatistics>& columnStats) {
+  metadata_->setStats(tableName, numRows, columnStats);
 }
 
 std::shared_ptr<velox::connector::Connector> TestConnectorFactory::newConnector(

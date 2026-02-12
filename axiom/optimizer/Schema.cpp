@@ -34,16 +34,6 @@ const auto& orderTypeNames() {
   return kNames;
 }
 
-/// Helper to register an optional Variant with the QueryGraphContext.
-/// Returns nullptr if the optional has no value, otherwise returns a pointer
-/// to a registered copy that lives for the duration of QueryGraphContext.
-const velox::Variant* registerOptionalVariant(
-    const std::optional<velox::Variant>& opt) {
-  if (!opt.has_value()) {
-    return nullptr;
-  }
-  return registerVariant(opt.value());
-}
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(OrderType, orderTypeNames);
@@ -113,6 +103,19 @@ ColumnCP SchemaTable::findColumn(Name name) const {
   return it->second;
 }
 
+namespace {
+
+// Returns nullptr if the optional has no value, otherwise returns a pointer
+// to a registered copy that lives for the duration of QueryGraphContext.
+const velox::Variant* registerOptionalVariant(
+    const std::optional<velox::Variant>& opt) {
+  if (!opt.has_value()) {
+    return nullptr;
+  }
+  return registerVariant(opt.value());
+}
+} // namespace
+
 SchemaTableCP Schema::findTable(
     std::string_view connectorId,
     std::string_view name) const {
@@ -139,17 +142,20 @@ SchemaTableCP Schema::findTable(
         tableColumn->approxNumDistinct(
             static_cast<int64_t>(connectorTable->numRows())));
 
-    // Get min/max from column statistics if available
+    // Get min/max and null fraction from column statistics if available.
     const velox::Variant* minPtr = nullptr;
     const velox::Variant* maxPtr = nullptr;
+    float nullFraction = 0;
     if (auto* stats = tableColumn->stats()) {
       minPtr = registerOptionalVariant(stats->min);
       maxPtr = registerOptionalVariant(stats->max);
+      nullFraction = stats->nullPct / 100.0f;
     }
 
     Value value(toType(tableColumn->type()), cardinality);
     value.min = minPtr;
     value.max = maxPtr;
+    value.nullFraction = nullFraction;
     auto* column = make<Column>(toName(columnName), nullptr, value);
     schemaColumns[column->name()] = column;
   }
@@ -245,12 +251,12 @@ bool SchemaTable::isUnique(CPSpan<Column> columns) const {
     }
   }
   for (auto index : columnGroups) {
-    auto nUnique = index->distribution.numKeysUnique();
-    if (!nUnique) {
+    auto numUnique = index->distribution.numKeysUnique();
+    if (!numUnique) {
       continue;
     }
     bool unique = true;
-    for (auto i = 0; i < nUnique; ++i) {
+    for (auto i = 0; i < numUnique; ++i) {
       auto part = findColumnByName(columns, index->columns[i]->name());
       if (!part) {
         unique = false;
