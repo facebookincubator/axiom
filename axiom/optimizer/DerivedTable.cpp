@@ -1292,10 +1292,6 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
       continue;
     }
 
-    if (conjunct->singleTable() != this) {
-      continue;
-    }
-
     if (conjunct->containsFunction(FunctionSet::kNonDefaultNullBehavior)) {
       continue;
     }
@@ -1309,7 +1305,29 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
       auto rightJoinColumns = PlanObjectSet::fromObjects(join->rightColumns());
       auto leftJoinColumns = PlanObjectSet::fromObjects(join->leftColumns());
 
-      if (conjunct->columns().isSubset(rightJoinColumns)) {
+      // Check if conjunct references any column from the optional side of the
+      // join. If so, and the conjunct has default null behavior, it is
+      // null-rejecting for that side, even if it also references other tables.
+      bool referencesRight =
+          conjunct->columns().hasIntersection(rightJoinColumns);
+      bool referencesLeft =
+          conjunct->columns().hasIntersection(leftJoinColumns);
+
+      // Special case: If conjunct references BOTH sides of a FULL join, it
+      // rejects NULLs on both sides, so convert directly to INNER join.
+      if (referencesRight && referencesLeft && join->leftOptional() &&
+          join->rightOptional()) {
+        joins[joinIndex] = toInnerJoin(join);
+
+        conjuncts.insert(
+            conjuncts.end(), join->filter().begin(), join->filter().end());
+
+        replaceJoinOutputs(join->rightColumns(), join->rightExprs());
+        replaceJoinOutputs(join->leftColumns(), join->leftExprs());
+        break;
+      }
+
+      if (referencesRight) {
         if (!join->leftOptional()) {
           joins[joinIndex] = toInnerJoin(join);
 
@@ -1329,7 +1347,7 @@ void DerivedTable::tryConvertOuterJoins(bool allowNondeterministic) {
         break;
       }
 
-      if (conjunct->columns().isSubset(leftJoinColumns)) {
+      if (referencesLeft) {
         // Convert FULL join to LEFT join. The filter references left-side
         // columns and has default null behavior, so it eliminates right-only
         // rows (which have NULLs for left columns). This is equivalent to a
