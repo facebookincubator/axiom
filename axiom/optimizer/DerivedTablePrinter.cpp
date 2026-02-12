@@ -23,6 +23,9 @@ namespace facebook::axiom::optimizer {
 namespace {
 
 std::string columnNames(const ColumnVector& columns) {
+  if (columns.empty()) {
+    return "<no output columns>";
+  }
   std::stringstream out;
   int32_t i = 0;
   for (auto column : columns) {
@@ -32,6 +35,41 @@ std::string columnNames(const ColumnVector& columns) {
     i++;
     out << column->name();
   }
+  return out.str();
+}
+
+std::string formatCardinality(float cardinality) {
+  return fmt::format("{:.2f}", cardinality);
+}
+
+std::string headerLine(
+    const std::string& name,
+    float cardinality,
+    const ColumnVector& columns) {
+  return fmt::format(
+      "{}: {} rows, {}\n",
+      name,
+      formatCardinality(cardinality),
+      columnNames(columns));
+}
+
+std::string constraintString(const Value& value) {
+  std::stringstream out;
+  out << value.type->toString()
+      << " (cardinality=" << formatCardinality(value.cardinality);
+  if (value.min != nullptr) {
+    out << " min=" << *value.min;
+  }
+  if (value.max != nullptr) {
+    out << " max=" << *value.max;
+  }
+  if (value.trueFraction != Value::kUnknown) {
+    out << " trueFraction=" << value.trueFraction;
+  }
+  if (value.nullFraction != 0) {
+    out << " nullFraction=" << value.nullFraction;
+  }
+  out << ")";
   return out.str();
 }
 
@@ -52,8 +90,15 @@ std::string tableName(PlanObjectCP table) {
 
 std::string visitBaseTable(const BaseTable& table) {
   std::stringstream out;
-  out << table.cname << ": " << columnNames(table.columns) << std::endl;
+  out << headerLine(
+      table.cname,
+      table.schemaTable->cardinality * table.filterSelectivity,
+      table.columns);
   out << "  table: " << table.schemaTable->name() << std::endl;
+  for (const auto& column : table.columns) {
+    out << "    " << column->name() << " " << constraintString(column->value())
+        << std::endl;
+  }
   if (!table.columnFilters.empty()) {
     out << "  single-column filters: " << conjunctsToString(table.columnFilters)
         << std::endl;
@@ -67,13 +112,21 @@ std::string visitBaseTable(const BaseTable& table) {
 
 std::string visitValuesTable(const ValuesTable& values) {
   std::stringstream out;
-  out << values.cname << ": " << columnNames(values.columns) << std::endl;
+  out << headerLine(values.cname, values.cardinality(), values.columns);
+  for (const auto& column : values.columns) {
+    out << "  " << column->name() << " " << constraintString(column->value())
+        << std::endl;
+  }
   return out.str();
 }
 
 std::string visitUnnestTable(const UnnestTable& unnest) {
   std::stringstream out;
-  out << unnest.cname << ": " << columnNames(unnest.columns) << std::endl;
+  out << headerLine(unnest.cname, unnest.cardinality(), unnest.columns);
+  for (const auto& column : unnest.columns) {
+    out << "  " << column->name() << " " << constraintString(column->value())
+        << std::endl;
+  }
   return out.str();
 }
 
@@ -119,12 +172,21 @@ std::string visitJoinEdge(const JoinEdge& edge) {
     out << " FILTER " << conjunctsToString(edge.filter());
   }
 
+  if (edge.leftTable() != nullptr) {
+    constexpr std::string_view kArrow = "\xe2\x86\x92"; // →
+
+    out << " [" << tableName(edge.leftTable()) << " " << kArrow << " "
+        << formatCardinality(edge.lrFanout()) << ", "
+        << tableName(edge.rightTable()) << " " << kArrow << " "
+        << formatCardinality(edge.rlFanout()) << "]";
+  }
+
   return out.str();
 }
 
 std::string visitDerivedTable(const DerivedTable& dt) {
   std::stringstream out;
-  out << dt.cname << ": " << columnNames(dt.columns) << std::endl;
+  out << headerLine(dt.cname, dt.cardinality, dt.columns);
 
   if (dt.setOp.has_value()) {
     VELOX_CHECK_EQ(0, dt.exprs.size());
@@ -136,7 +198,8 @@ std::string visitDerivedTable(const DerivedTable& dt) {
     out << "  output:" << std::endl;
     for (auto i = 0; i < dt.columns.size(); ++i) {
       out << "    " << dt.columns.at(i)->name()
-          << " := " << dt.exprs.at(i)->toString() << std::endl;
+          << " := " << dt.exprs.at(i)->toString() << " "
+          << constraintString(dt.columns.at(i)->value()) << std::endl;
     }
   }
 

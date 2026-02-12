@@ -63,6 +63,10 @@ using WritePlanCP = const WritePlan*;
 struct DerivedTable : public PlanObject {
   DerivedTable() : PlanObject(PlanType::kDerivedTableNode) {}
 
+  /// Estimated number of rows produced by this DerivedTable. Set during
+  /// planning by initializePlans() or makeInitialPlan(). For non-union DTs,
+  /// computed as resultCardinality() of the initial physical plan. For union
+  /// DTs, computed as the sum of resultCardinality() across all children.
   float cardinality{};
 
   /// Correlation name.
@@ -145,8 +149,20 @@ struct DerivedTable : public PlanObject {
   // Write.
   WritePlanCP write{nullptr};
 
-  /// Initializes 'this' and all nested DerivedTables. Pushes filters down the
-  /// tree, then computes join graphs and initial plans bottom-up.
+  /// Initializes 'this' and all nested DerivedTables recursively. Processes the
+  /// tree in two passes:
+  ///   1. Pre-order (top-down): pushes filter conjuncts down to children.
+  ///   2. Post-order (bottom-up): finalizes join graphs and computes initial
+  ///      physical plans.
+  ///
+  /// Sets 'cardinality' for each DerivedTable. For non-union DTs, sets it to
+  /// resultCardinality() of the initial physical plan. For union DTs, sums
+  /// resultCardinality() across all children.
+  ///
+  /// As a side effect, computing the physical plan updates constraints
+  /// (type, cardinality, min, max, etc.) on output columns. Finalizing the
+  /// join graph estimates left-to-right and right-to-left fanouts for each
+  /// join edge.
   void initializePlans();
 
   /// Initializes 'this' to join 'tables' from 'super'. Adds the joins from
