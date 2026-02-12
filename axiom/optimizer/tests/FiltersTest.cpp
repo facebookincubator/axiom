@@ -1001,9 +1001,6 @@ TEST_F(FiltersTest, equalityWithRange) {
 TEST_F(FiltersTest, cardinalityBasedSelectivity) {
   // TestConnector creates columns without min/max statistics, triggering
   // cardinality-based selectivity instead of range-based.
-  // TODO: Enhance TestConnector to allow specifying partial stats for columns
-  // (e.g. cardinality, nullFraction) so we don't need to override constraints
-  // manually after exprConstraint.
   static constexpr auto kTestConnectorId = "test_filters";
 
   auto testConnector =
@@ -1014,18 +1011,28 @@ TEST_F(FiltersTest, cardinalityBasedSelectivity) {
     velox::connector::unregisterConnector(kTestConnectorId);
   };
 
-  testConnector->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
-
-  constexpr float kCardinality = 100;
-  constexpr float kNullFraction = 0.1;
+  constexpr int64_t kCardinality = 100;
+  constexpr float kNullPct = 10.0;
+  constexpr float kNullFraction = kNullPct / 100.0;
   // P(either null) = P(a null) + P(b null) - P(a null) * P(b null).
   constexpr double kCombinedNull =
       kNullFraction + kNullFraction - kNullFraction * kNullFraction;
 
-  auto verify = [&](const std::string& condition,
+  constexpr uint64_t kNumRows = 1000;
+
+  testConnector->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector->setStats(
+      "t",
+      kNumRows,
+      {
+          {"a", {.nullPct = kNullPct, .numDistinct = kCardinality}},
+          {"b", {.nullPct = kNullPct, .numDistinct = kCardinality}},
+      });
+
+  auto verify = [&](std::string_view condition,
                     double expectedSelectivity,
                     double expectedNullFraction) {
-    SCOPED_TRACE("Testing condition: " + condition);
+    SCOPED_TRACE(condition);
     auto sql = fmt::format("SELECT * FROM t WHERE {}", condition);
     verifyQueryGraph(
         sql,
@@ -1034,19 +1041,8 @@ TEST_F(FiltersTest, cardinalityBasedSelectivity) {
           ASSERT_EQ(1, allFilters.size());
 
           auto constraints = makeSchemaConstraints(allFilters);
-
-          // Populate constraints for the filter expression first,
-          // then override with controlled values. Must be done after
-          // exprConstraint to avoid being overwritten by
-          // conjunctsSelectivity's internal exprConstraint calls.
-          exprConstraint(allFilters[0], constraints, true);
-
-          for (auto& [id, constraint] : constraints) {
-            constraint.cardinality = kCardinality;
-            constraint.nullFraction = kNullFraction;
-          }
-
-          auto selectivity = exprSelectivity(constraints, allFilters[0], true);
+          auto selectivity =
+              conjunctsSelectivity(constraints, allFilters, true);
 
           EXPECT_NEAR(
               selectivity.trueFraction, expectedSelectivity, kTolerance);
@@ -1079,14 +1075,10 @@ TEST_F(FiltersTest, cardinalityBasedSelectivity) {
       kNullFraction);
 
   // Function expression as LHS: coalesce has no min/max, so uses noRange.
-  // The selectivity system doesn't know that coalesce eliminates nulls, so
-  // it still applies the null fraction from the underlying column.
-  // TODO: Enhance Filters to recognize coalesce special form and set
-  // nullFraction to 0 when a non-null default is provided.
-  verify(
-      "coalesce(a, 10) > 5",
-      Selectivity::kNoRange * (1.0 - kNullFraction),
-      kNullFraction);
+  // coalesce(a, 10) produces a non-null result for every row, so
+  // nullFraction = 0 for the expression. The selectivity is noRange applied
+  // to the full row set (no null discount).
+  verify("coalesce(a, 10) > 5", Selectivity::kNoRange, 0.0);
 }
 
 } // namespace
