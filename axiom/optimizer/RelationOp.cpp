@@ -1224,6 +1224,7 @@ void Limit::accept(
 UnionAll::UnionAll(RelationOpPtrVector inputsVector)
     : RelationOp{RelType::kUnionAll, nullptr, Distribution{}, inputsVector[0]->columns()},
       inputs{std::move(inputsVector)} {
+  cost_.inputCardinality = 0;
   for (auto& input : inputs) {
     cost_.inputCardinality +=
         input->cost().inputCardinality * input->cost().fanout;
