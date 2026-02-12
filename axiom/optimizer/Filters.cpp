@@ -297,16 +297,19 @@ Selectivity conjunctsSelectivity(
       auto argCall = arg->as<Call>();
       auto argFuncName = argCall->name();
 
-      if (isComparisonOperator(argFuncName) && argCall->args().size() == 2) {
-        // Group by left-hand side
+      if (isComparisonOperator(argFuncName) &&
+          argCall->args()[1]->is(PlanType::kLiteralExpr)) {
+        // Group literal-bound comparisons by left-hand side for range
+        // analysis. Column-vs-column comparisons (e.g., a = b) go through
+        // exprSelectivity which handles cardinality-based estimation.
         ExprCP leftSide = argCall->args()[0];
         rangeConditions[leftSide].push_back(arg);
-      } else if (
-          argFuncName == SpecialFormCallNames::kIn &&
-          argCall->args().size() > 1) {
+
+      } else if (argFuncName == SpecialFormCallNames::kIn) {
         // Handle IN predicates as range conditions
         ExprCP leftSide = argCall->args()[0];
         rangeConditions[leftSide].push_back(arg);
+
       } else {
         otherConditions.push_back(arg);
       }

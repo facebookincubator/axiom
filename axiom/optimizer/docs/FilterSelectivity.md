@@ -86,7 +86,11 @@ P(NULL) = ∏ (trueFraction(i) + nullFraction(i)) - P(TRUE)
 
 This assumes independence between conditions. When conditions share the same
 left-hand side column (e.g., `x > 5 AND x < 10`), they are grouped and processed
-together using range selectivity to avoid underestimating selectivity.
+together using range selectivity to avoid underestimating selectivity. Only
+comparisons with a literal on the right-hand side are grouped this way.
+Column-vs-column comparisons (e.g., `a = b`) are evaluated individually using
+cardinality-based selectivity (see
+[Cardinality-Based Selectivity](#cardinality-based-selectivity) below).
 
 **Note:** Expressions are normalized during planning, so `5 < x` is always
 converted to `x > 5`. This ensures the column is consistently on the left-hand

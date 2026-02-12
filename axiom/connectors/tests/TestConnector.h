@@ -106,38 +106,38 @@ class TestTable : public Table {
   }
 
   uint64_t numRows() const override {
-    uint64_t rows = 0;
-    for (const auto& vector : data_) {
-      rows += vector->size();
-    }
-    return rows;
+    return numRows_;
+  }
+
+  void setNumRows(uint64_t numRows) {
+    numRows_ = numRows;
   }
 
   const std::vector<velox::RowVectorPtr>& data() const {
     return data_;
   }
 
-  /// Copy the specified RowVector into the internal data of the
-  /// table. The underlying types of the columns must match the
-  /// schema specified during initial table creation.
-  /// Data is copied on append so that vectors from temporary
-  /// memory pools can be appended. These copies are allocated
-  /// via the TestTable internal memory pool.
-  void addData(const velox::RowVectorPtr& data) {
-    VELOX_CHECK(
-        data->type()->equivalent(*type()),
-        "appended data type {} must match table type {}",
-        data->type(),
-        type());
-    VELOX_CHECK(data->size() > 0, "cannot append empty RowVector");
-    auto copy = std::dynamic_pointer_cast<velox::RowVector>(
-        velox::BaseVector::copy(*data, pool_.get()));
-    data_.push_back(copy);
-  }
+  /// Copies the specified RowVector into the internal data of the table.
+  /// The underlying types of the columns must match the schema specified
+  /// during initial table creation. Data is copied so that vectors from
+  /// temporary memory pools can be appended.
+  ///
+  /// Recomputes numRows from all data vectors. If setStats was called before
+  /// addData, the numRows set by setStats will be overwritten. To set a custom
+  /// numRows, call setStats after adding all data.
+  void addData(const velox::RowVectorPtr& data);
 
   TestTableLayout* mutableLayout() {
     return exportedLayout_.get();
   }
+
+  /// Replaces column statistics for this table. Each entry in the map sets
+  /// the full ColumnStatistics for the named column via Column::setStats.
+  /// Columns not included in 'columnStats' have their statistics cleared.
+  /// Also sets the table's row count.
+  void setStats(
+      uint64_t numRows,
+      const std::unordered_map<std::string, ColumnStatistics>& columnStats);
 
  private:
   velox::connector::Connector* connector_;
@@ -145,6 +145,7 @@ class TestTable : public Table {
   std::unique_ptr<TestTableLayout> exportedLayout_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::vector<velox::RowVectorPtr> data_;
+  uint64_t numRows_{0};
 };
 
 /// SplitSource generated via the TestSplitManager embedded in the
@@ -289,15 +290,19 @@ class TestConnectorMetadata : public ConnectorMetadata {
       const velox::RowTypePtr& schema,
       const velox::RowTypePtr& hiddenColumns);
 
-  /// Add data rows to the specified table. This data is returned via the
-  /// DataSource corresponding to this table. The data is copied
-  /// into the internal memory pool associated with the table.
+  /// See TestTable::addData.
   void appendData(std::string_view name, const velox::RowVectorPtr& data);
 
   void setDiscreteValues(
       const std::string& name,
       const std::vector<std::string>& columnNames,
       const std::vector<velox::Variant>& values);
+
+  /// See TestTable::setStats.
+  void setStats(
+      const std::string& tableName,
+      uint64_t numRows,
+      const std::unordered_map<std::string, ColumnStatistics>& columnStats);
 
   bool dropTable(
       const ConnectorSessionPtr& session,
@@ -418,15 +423,19 @@ class TestConnector : public velox::connector::Connector {
       const velox::RowTypePtr& schema = velox::ROW({}),
       const velox::RowTypePtr& hiddenColumns = velox::ROW({}));
 
-  /// Add data rows to the specified table. This data is returned via the
-  /// DataSource corresponding to this table. Appended data is copied
-  /// to the internal memory pool of the associated table.
+  /// See TestTable::addData.
   void appendData(std::string_view name, const velox::RowVectorPtr& data);
 
   void setDiscreteValues(
       const std::string& name,
       const std::vector<std::string>& columnNames,
       const std::vector<velox::Variant>& values);
+
+  /// See TestConnectorMetadata::setStats.
+  void setStats(
+      const std::string& tableName,
+      uint64_t numRows,
+      const std::unordered_map<std::string, ColumnStatistics>& columnStats);
 
   bool dropTableIfExists(const std::string& name);
 
