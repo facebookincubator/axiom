@@ -91,6 +91,51 @@ bool FunctionRegistry::registerCount(std::string_view name) {
   return true;
 }
 
+bool FunctionRegistry::registerBetween(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (between_.has_value() && between_.value() != name) {
+    return false;
+  }
+  between_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerGreaterThanOrEqual(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (greaterThanOrEqual_.has_value() && greaterThanOrEqual_.value() != name) {
+    return false;
+  }
+  greaterThanOrEqual_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerLessThanOrEqual(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (lessThanOrEqual_.has_value() && lessThanOrEqual_.value() != name) {
+    return false;
+  }
+  lessThanOrEqual_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerLeast(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (least_.has_value() && least_.value() != name) {
+    return false;
+  }
+  least_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerGreatest(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (greatest_.has_value() && greatest_.value() != name) {
+    return false;
+  }
+  greatest_ = name;
+  return true;
+}
+
 bool FunctionRegistry::registerSpecialForm(
     lp::SpecialForm specialForm,
     std::string_view name) {
@@ -264,6 +309,11 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
   registry->registerCardinality(fullName("cardinality"));
   registry->registerArbitrary(fullName("arbitrary"));
   registry->registerCount(fullName("count"));
+  registry->registerBetween(fullName("between"));
+  registry->registerGreaterThanOrEqual(fullName("gte"));
+  registry->registerLessThanOrEqual(fullName("lte"));
+  registry->registerLeast(fullName("least"));
+  registry->registerGreatest(fullName("greatest"));
 
   registry->registerAggregateEmptyResultResolver(
       {fullName("count_if"), fullName("approx_distinct")},

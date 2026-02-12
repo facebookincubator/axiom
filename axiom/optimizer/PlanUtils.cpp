@@ -142,4 +142,14 @@ std::string exprsToString(const ExprVector& exprs) {
   return out.str();
 }
 
+void flattenAll(ExprCP expr, Name func, ExprVector& flat) {
+  if (expr->isNot(PlanType::kCallExpr) || expr->as<Call>()->name() != func) {
+    flat.push_back(expr);
+    return;
+  }
+  for (auto arg : expr->as<Call>()->args()) {
+    flattenAll(arg, func, flat);
+  }
+}
+
 } // namespace facebook::axiom::optimizer

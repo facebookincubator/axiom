@@ -302,6 +302,61 @@ class FunctionRegistry {
     return count_;
   }
 
+  /// Registers function 'name' that has semantics of Presto's 'between',
+  /// i.e. returns true if value is within the specified range [low, high].
+  /// @return true if successfully registered, false if a different
+  /// 'between' function is already registered.
+  bool registerBetween(std::string_view name);
+
+  /// Returns the name of the 'between' function.
+  const std::optional<std::string>& between() const {
+    return between_;
+  }
+
+  /// Registers function 'name' that has semantics of Presto's 'gte',
+  /// i.e. returns true if left argument is greater than or equal to right.
+  /// @return true if successfully registered, false if a different
+  /// 'greaterThanOrEqual' function is already registered.
+  bool registerGreaterThanOrEqual(std::string_view name);
+
+  /// Returns the name of the 'greaterThanOrEqual' function.
+  const std::optional<std::string>& greaterThanOrEqual() const {
+    return greaterThanOrEqual_;
+  }
+
+  /// Registers function 'name' that has semantics of Presto's 'lte',
+  /// i.e. returns true if left argument is less than or equal to right.
+  /// @return true if successfully registered, false if a different
+  /// 'lessThanOrEqual' function is already registered.
+  bool registerLessThanOrEqual(std::string_view name);
+
+  /// Returns the name of the 'lessThanOrEqual' function.
+  const std::optional<std::string>& lessThanOrEqual() const {
+    return lessThanOrEqual_;
+  }
+
+  /// Registers function 'name' that has semantics of Presto's 'least',
+  /// i.e. returns the smallest of the given arguments.
+  /// @return true if successfully registered, false if a different
+  /// 'least' function is already registered.
+  bool registerLeast(std::string_view name);
+
+  /// Returns the name of the 'least' function.
+  const std::optional<std::string>& least() const {
+    return least_;
+  }
+
+  /// Registers function 'name' that has semantics of Presto's 'greatest',
+  /// i.e. returns the largest of the given arguments.
+  /// @return true if successfully registered, false if a different
+  /// 'greatest' function is already registered.
+  bool registerGreatest(std::string_view name);
+
+  /// Returns the name of the 'greatest' function.
+  const std::optional<std::string>& greatest() const {
+    return greatest_;
+  }
+
   bool registerSpecialForm(
       logical_plan::SpecialForm specialForm,
       std::string_view name);
@@ -377,6 +432,11 @@ class FunctionRegistry {
   std::optional<std::string> cardinality_;
   std::optional<std::string> arbitrary_;
   std::optional<std::string> count_;
+  std::optional<std::string> between_;
+  std::optional<std::string> greaterThanOrEqual_;
+  std::optional<std::string> lessThanOrEqual_;
+  std::optional<std::string> least_;
+  std::optional<std::string> greatest_;
   folly::F14FastMap<std::string, std::string> reversibleFunctions_;
   folly::F14FastMap<logical_plan::SpecialForm, std::string> specialForms_;
   folly::F14FastMap<std::string, AggregateEmptyResultResolver>
