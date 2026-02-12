@@ -46,17 +46,13 @@ TestTable::TestTable(
   pool_ = velox::memory::memoryManager()->addLeafPool(name + "_table");
 }
 
-std::vector<SplitSource::SplitAndGroup> TestSplitSource::getSplits(uint64_t) {
-  std::vector<SplitAndGroup> result;
-  if (currentPartition_ >= partitions_.size()) {
-    result.push_back({nullptr, kUngroupedGroupId});
-  } else {
-    result.push_back(
-        {std::make_shared<velox::connector::ConnectorSplit>(connectorId_),
-         kUngroupedGroupId});
+folly::coro::AsyncGenerator<SplitSource::SplitAndGroup>
+TestSplitSource::getSplitGenerator() {
+  for (size_t i = 0; i < partitions_.size(); ++i) {
+    co_yield SplitAndGroup{
+        std::make_shared<velox::connector::ConnectorSplit>(connectorId_),
+        kUngroupedGroupId};
   }
-  currentPartition_++;
-  return result;
 }
 
 std::vector<PartitionHandlePtr> TestSplitManager::listPartitions(
