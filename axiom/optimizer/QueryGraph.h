@@ -1243,7 +1243,12 @@ class WritePlan : public PlanObject {
 
 using WritePlanCP = const WritePlan*;
 
-/// @return cname if 'relation' is a table, otherwise throw.
+/// @return cname of 'relation'. 'relation' must be a BaseTable, ValuesTable,
+/// UnnestTable, or DerivedTable.
 Name cname(PlanObjectCP relation);
+
+/// @return estimated number of rows in 'table'. 'table' must be a BaseTable,
+/// ValuesTable, UnnestTable, or DerivedTable.
+float tableCardinality(PlanObjectCP table);
 
 } // namespace facebook::axiom::optimizer

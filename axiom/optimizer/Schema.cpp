@@ -206,38 +206,11 @@ SchemaTableCP Schema::findTable(
   return schemaTable;
 }
 
-float tableCardinality(PlanObjectCP table) {
-  if (table->is(PlanType::kTableNode)) {
-    return table->as<BaseTable>()->schemaTable->cardinality;
-  }
-  if (table->is(PlanType::kValuesTableNode)) {
-    return table->as<ValuesTable>()->cardinality();
-  }
-
-  if (table->is(PlanType::kUnnestTableNode)) {
-    return table->as<UnnestTable>()->cardinality();
-  }
-
-  VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
-  return table->as<DerivedTable>()->cardinality;
-}
-
-// The fraction of rows of a base table selected by non-join filters. 0.2
-// means 1 in 5 are selected.
-float baseSelectivity(PlanObjectCP object) {
-  if (object->is(PlanType::kTableNode)) {
-    return object->as<BaseTable>()->filterSelectivity;
-  }
-  return 1;
-}
-
 namespace {
-template <typename T>
-ColumnCP findColumnByName(const T& columns, Name name) {
+ColumnCP findColumnByName(CPSpan<Column> columns, Name name) {
   for (auto column : columns) {
-    if (column->is(PlanType::kColumnExpr) &&
-        column->template as<Column>()->name() == name) {
-      return column->template as<Column>();
+    if (column->name() == name) {
+      return column;
     }
   }
   return nullptr;
@@ -245,25 +218,18 @@ ColumnCP findColumnByName(const T& columns, Name name) {
 } // namespace
 
 bool SchemaTable::isUnique(CPSpan<Column> columns) const {
-  for (auto& column : columns) {
-    if (column->isNot(PlanType::kColumnExpr)) {
-      return false;
-    }
-  }
   for (auto index : columnGroups) {
-    auto numUnique = index->distribution.numKeysUnique();
+    const auto numUnique = index->distribution.numKeysUnique();
     if (!numUnique) {
       continue;
     }
-    bool unique = true;
-    for (auto i = 0; i < numUnique; ++i) {
-      auto part = findColumnByName(columns, index->columns[i]->name());
-      if (!part) {
-        unique = false;
-        break;
-      }
-    }
-    if (unique) {
+
+    if (std::all_of(
+            index->columns.begin(),
+            index->columns.begin() + numUnique,
+            [&](ColumnCP column) {
+              return findColumnByName(columns, column->name()) != nullptr;
+            })) {
       return true;
     }
   }
@@ -320,24 +286,19 @@ IndexInfo SchemaTable::indexInfo(
   }
 
   for (auto column : columnsSpan) {
-    if (column->isNot(PlanType::kColumnExpr)) {
-      // Join key is an expression dependent on the table.
-      covered.unionColumns(column->as<Expr>());
-      info.joinCardinality = combine(
-          info.joinCardinality, covered.size(), column->value().cardinality);
-      continue;
-    }
     if (covered.contains(column)) {
       continue;
     }
-    auto part = findColumnByName(index->columns, column->name());
-    if (!part) {
+
+    if (!findColumnByName(index->columns, column->name())) {
       continue;
     }
+
     covered.add(column);
     info.joinCardinality = combine(
         info.joinCardinality, covered.size(), column->value().cardinality);
   }
+
   info.coveredColumns = std::move(covered);
   return info;
 }
@@ -351,24 +312,27 @@ IndexInfo SchemaTable::indexByColumns(CPSpan<Column> columns) const {
   IndexInfo best;
   bool unique = isUnique(columns);
   float bestPrediction = 0;
-  for (auto iIndex = 0; iIndex < columnGroups.size(); ++iIndex) {
-    auto index = columnGroups[iIndex];
+  for (auto i = 0; i < columnGroups.size(); ++i) {
+    auto index = columnGroups[i];
     auto candidate = indexInfo(index, columns);
-    if (iIndex == 0) {
+    if (i == 0) {
       pkInfo = candidate;
       best = candidate;
       bestPrediction = best.joinCardinality;
       continue;
     }
+
     if (candidate.lookupKeys.empty()) {
       // No prefix match for secondary index.
       continue;
     }
+
     // The join cardinality estimate from the longest prefix is preferred for
     // the estimate. The index with the least scan cardinality is preferred
     if (candidate.lookupKeys.size() > best.lookupKeys.size()) {
       bestPrediction = candidate.joinCardinality;
     }
+
     if (candidate.scanCardinality < best.scanCardinality) {
       best = candidate;
     }
@@ -376,39 +340,6 @@ IndexInfo SchemaTable::indexByColumns(CPSpan<Column> columns) const {
   best.joinCardinality = bestPrediction;
   best.unique = unique;
   return best;
-}
-
-IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys) {
-  if (table->is(PlanType::kTableNode)) {
-    auto schemaTable = table->as<BaseTable>()->schemaTable;
-    return schemaTable->indexByColumns(keys);
-  }
-  IndexInfo result;
-  auto computeCardinalities = [&](float scanCardinality) {
-    result.scanCardinality = scanCardinality;
-    result.joinCardinality = scanCardinality;
-    for (size_t i = 0; i < keys.size(); ++i) {
-      result.joinCardinality =
-          combine(result.joinCardinality, i, keys[i]->value().cardinality);
-    }
-  };
-
-  if (table->is(PlanType::kValuesTableNode)) {
-    const auto* valuesTable = table->as<ValuesTable>();
-    computeCardinalities(valuesTable->cardinality());
-    return result;
-  }
-  if (table->is(PlanType::kUnnestTableNode)) {
-    const auto* unnestTable = table->as<UnnestTable>();
-    computeCardinalities(unnestTable->cardinality());
-    return result;
-  }
-  VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
-  const auto* dt = table->as<DerivedTable>();
-  computeCardinalities(dt->cardinality);
-  result.unique =
-      dt->aggregation && keys.size() >= dt->aggregation->groupingKeys().size();
-  return result;
 }
 
 ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {

@@ -50,7 +50,7 @@ struct Value {
   Value(TypeCP type, float cardinality)
       : type{type}, cardinality{cardinality} {}
 
-  // Default copy constructor
+  /// Default copy constructor.
   Value(const Value&) = default;
 
   /// Assignment operator that checks type equality and assigns other members.
@@ -305,46 +305,40 @@ struct ColumnGroup {
 
 using ColumnGroupCP = const ColumnGroup*;
 
-// Describes the number of rows to look at and the number of expected matches
-// given equality constraints for a set of columns. See
-// SchemaTable::indexInfo().
+/// Describes the number of rows to look at and the number of expected matches
+/// given equality constraints for a set of columns. See
+/// SchemaTable::indexInfo().
 struct IndexInfo {
-  // Index chosen based on columns.
+  /// Index chosen based on columns.
   ColumnGroupCP index;
 
-  // True if the column combination is unique. This can be true even if there
-  // is no key order in 'index'.
+  /// True if the column combination is unique. This can be true even if there
+  /// is no key order in 'index'.
   bool unique{false};
 
-  // The number of rows selected after index lookup based on 'lookupKeys'. For
-  // empty 'lookupKeys', this is the cardinality of 'index'.
+  /// The number of rows selected after index lookup based on 'lookupKeys'. For
+  /// empty 'lookupKeys', this is the cardinality of 'index'.
   float scanCardinality;
 
-  // The expected number of hits for an equality match of lookup keys. This is
-  // the expected number of rows given the lookup column combination
-  // regardless of whether an index order can be used.
+  /// The expected number of hits for an equality match of lookup keys. This is
+  /// the expected number of rows given the lookup column combination
+  /// regardless of whether an index order can be used.
   float joinCardinality;
 
-  // The lookup columns that match 'index'. These match 1:1 the leading keys
-  // of 'index'. If 'index' has no ordering columns or if the lookup columns
-  // are not a prefix of these, this is empty.
+  /// The lookup columns that match 'index'. These match 1:1 the leading keys
+  /// of 'index'. If 'index' has no ordering columns or if the lookup columns
+  /// are not a prefix of these, this is empty.
   std::vector<ColumnCP> lookupKeys;
 
-  // The columns that were considered in 'scanCardinality' and
-  // 'joinCardinality'. This may be fewer columns than given to
-  // indexInfo() if the index does not cover some columns.
+  /// The columns that were considered in 'scanCardinality' and
+  /// 'joinCardinality'. This may be fewer columns than given to
+  /// indexInfo() if the index does not cover some columns.
   PlanObjectSet coveredColumns;
 
   /// Returns the schema column for the BaseTable column 'column' or nullptr
   /// if not in the index.
   ColumnCP schemaColumn(ColumnCP keyValue) const;
 };
-
-IndexInfo joinCardinality(PlanObjectCP table, CPSpan<Column> keys);
-
-float tableCardinality(PlanObjectCP table);
-
-float baseSelectivity(PlanObjectCP object);
 
 /// A table in a schema. The table may have multiple differently ordered and
 /// partitioned physical representations (ColumnGroups). Not all ColumnGroups
@@ -376,16 +370,16 @@ struct SchemaTable {
     return connectorTable->name();
   }
 
-  // Table description from external schema.
-  // This is the source-dependent representation from which 'this' was created.
+  /// Table description from external schema.
+  /// This is the source-dependent representation from which 'this' was created.
   const connector::Table* const connectorTable;
 
   const float cardinality;
 
-  // Lookup from name to column.
+  /// Maps column name to schema column.
   NameMap<ColumnCP> columns;
 
-  // All indices. Must contain at least one.
+  /// All indices. Must contain at least one.
   QGVector<ColumnGroupCP> columnGroups;
 };
 

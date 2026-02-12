@@ -80,6 +80,22 @@ Name cname(PlanObjectCP relation) {
   }
 }
 
+float tableCardinality(PlanObjectCP table) {
+  if (table->is(PlanType::kTableNode)) {
+    return table->as<BaseTable>()->schemaTable->cardinality;
+  }
+  if (table->is(PlanType::kValuesTableNode)) {
+    return table->as<ValuesTable>()->cardinality();
+  }
+
+  if (table->is(PlanType::kUnnestTableNode)) {
+    return table->as<UnnestTable>()->cardinality();
+  }
+
+  VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
+  return table->as<DerivedTable>()->cardinality;
+}
+
 std::string Column::toString() const {
   const auto* opt = queryCtx()->optimization();
   if (!opt->cnamesInExpr() || relation_ == nullptr) {
@@ -485,10 +501,84 @@ PlanObjectSet JoinEdge::allTables() const {
 }
 
 namespace {
-template <typename U>
-inline CPSpan<Column> toRangeCast(const ExprVector& exprs) {
-  return CPSpan<Column>(
-      reinterpret_cast<const Column* const*>(exprs.data()), exprs.size());
+
+struct JoinFanout {
+  float fanout;
+  bool unique;
+};
+
+// Estimates the number of matching rows per equality lookup on 'keys' given
+// 'scanCardinality' total rows. Divides by each key's distinct value count.
+// For subsequent keys, floors at 1 when a key has more distinct values than
+// remaining rows.
+float estimateFanout(float scanCardinality, const ExprVector& keys) {
+  if (keys.empty()) {
+    return scanCardinality;
+  }
+
+  auto fanout = scanCardinality / keys[0]->value().cardinality;
+  for (size_t i = 1; i < keys.size(); ++i) {
+    auto distinctValues = keys[i]->value().cardinality;
+    if (distinctValues > fanout) {
+      fanout = 1;
+    } else {
+      fanout /= distinctValues;
+    }
+  }
+  return fanout;
+}
+
+// Estimates the number of matching rows per equality lookup on 'keys' for
+// 'table'. For BaseTable, delegates to SchemaTable::indexByColumns() which
+// matches keys against available indices. For ValuesTable, UnnestTable, and
+// DerivedTable, estimates cardinality using column statistics. For
+// DerivedTable with an aggregation, sets unique = true when keys cover all
+// grouping keys.
+JoinFanout joinFanout(PlanObjectCP table, const ExprVector& keys) {
+  if (table->is(PlanType::kTableNode)) {
+    auto schemaTable = table->as<BaseTable>()->schemaTable;
+
+    const bool allColumns =
+        std::all_of(keys.begin(), keys.end(), [](ExprCP key) {
+          return key->is(PlanType::kColumnExpr);
+        });
+
+    if (allColumns) {
+      CPSpan<Column> columns(
+          reinterpret_cast<ColumnCP const*>(keys.data()), keys.size());
+      auto info = schemaTable->indexByColumns(columns);
+      return {info.joinCardinality, info.unique};
+    }
+
+    return {
+        .fanout = estimateFanout(schemaTable->cardinality, keys),
+        .unique = false};
+  }
+
+  if (table->is(PlanType::kValuesTableNode)) {
+    const auto cardinality = table->as<ValuesTable>()->cardinality();
+    return {.fanout = estimateFanout(cardinality, keys), .unique = false};
+  }
+
+  if (table->is(PlanType::kUnnestTableNode)) {
+    const auto cardinality = table->as<UnnestTable>()->cardinality();
+    return {.fanout = estimateFanout(cardinality, keys), .unique = false};
+  }
+
+  VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
+  const auto* dt = table->as<DerivedTable>();
+  return {
+      .fanout = estimateFanout(dt->cardinality, keys),
+      .unique = dt->aggregation &&
+          keys.size() >= dt->aggregation->groupingKeys().size(),
+  };
+}
+
+float baseSelectivity(PlanObjectCP object) {
+  if (object->is(PlanType::kTableNode)) {
+    return object->as<BaseTable>()->filterSelectivity;
+  }
+  return 1;
 }
 } // namespace
 
@@ -504,29 +594,38 @@ void JoinEdge::guessFanout() {
   }
 
   auto* opt = queryCtx()->optimization();
-  auto samplePair = opt->history().sampleJoin(this);
-  auto left = joinCardinality(leftTable_, toRangeCast<Column>(leftKeys_));
-  auto right = joinCardinality(rightTable_, toRangeCast<Column>(rightKeys_));
+  const auto& options = opt->options();
+
+  auto left = joinFanout(leftTable_, leftKeys_);
+  auto right = joinFanout(rightTable_, rightKeys_);
   leftUnique_ = left.unique;
   rightUnique_ = right.unique;
-  if (samplePair.first == 0 && samplePair.second == 0) {
-    lrFanout_ = right.joinCardinality * baseSelectivity(rightTable_);
-    rlFanout_ = left.joinCardinality * baseSelectivity(leftTable_);
-  } else {
-    lrFanout_ = samplePair.second * baseSelectivity(rightTable_);
-    rlFanout_ = samplePair.first * baseSelectivity(leftTable_);
-  }
-  // If one side is unique, the other side is a pk to fk join, with fanout =
-  // fk-table-card / pk-table-card.
-  if (rightUnique_) {
-    lrFanout_ = baseSelectivity(rightTable_);
-    rlFanout_ = tableCardinality(leftTable_) / tableCardinality(rightTable_) *
-        baseSelectivity(leftTable_);
-  }
+
+  // If one side has unique join keys, this is a primary key (PK) to foreign
+  // key (FK) join. For example, joining orders (PK: orderkey) with lineitem
+  // (FK: orderkey), if orders is the left table, then leftUnique_ is true: each
+  // lineitem matches at most one order (rlFanout ≤ 1), while each order may
+  // match many lineitems (lrFanout = cardLineitem / cardOrders). When both
+  // sides are unique (1:1 join), leftUnique takes precedence.
   if (leftUnique_) {
     rlFanout_ = baseSelectivity(leftTable_);
     lrFanout_ = tableCardinality(rightTable_) / tableCardinality(leftTable_) *
         baseSelectivity(rightTable_);
+  } else if (rightUnique_) {
+    lrFanout_ = baseSelectivity(rightTable_);
+    rlFanout_ = tableCardinality(leftTable_) / tableCardinality(rightTable_) *
+        baseSelectivity(leftTable_);
+  } else {
+    auto [sampledLeftFanout, sampledRightFanout] = options.sampleJoins
+        ? opt->history().sampleJoin(this)
+        : std::pair<float, float>(0, 0);
+    if (sampledLeftFanout == 0 && sampledRightFanout == 0) {
+      lrFanout_ = right.fanout * baseSelectivity(rightTable_);
+      rlFanout_ = left.fanout * baseSelectivity(leftTable_);
+    } else {
+      lrFanout_ = sampledRightFanout * baseSelectivity(rightTable_);
+      rlFanout_ = sampledLeftFanout * baseSelectivity(leftTable_);
+    }
   }
 }
 
