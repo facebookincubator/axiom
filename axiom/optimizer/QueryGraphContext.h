@@ -288,6 +288,27 @@ struct PathComparer {
   }
 };
 
+/// Holds function names with well-defined semantics that the optimizer can use
+/// for expression analysis and transformations. These are looked up from the
+/// function registry during query graph construction.
+struct FunctionNames {
+  /// Scalar functions.
+  Name equality{nullptr};
+  Name negation{nullptr};
+  Name elementAt{nullptr};
+  Name subscript{nullptr};
+  Name cardinality{nullptr};
+  Name lt{nullptr};
+  Name lte{nullptr};
+  Name gt{nullptr};
+  Name gte{nullptr};
+  Name isNull{nullptr};
+
+  /// Aggregate functions.
+  Name arbitrary{nullptr};
+  Name count{nullptr};
+};
+
 /// Context for making a query plan. Owns all memory associated to
 /// planning, except for the input PlanNode tree. The result of
 /// planning is also owned by 'this', so the planning result must be
@@ -353,6 +374,11 @@ class QueryGraphContext {
     return optimization_;
   }
 
+  /// Returns the function names used for expression analysis.
+  const FunctionNames& functionNames() const {
+    return functionNames_;
+  }
+
   /// Returns the interned representation of 'str', i.e. Returns a
   /// pointer to a canonical null terminated const char* with the same
   /// characters as 'str'. Allows comparing names by comparing
@@ -386,6 +412,8 @@ class QueryGraphContext {
   }
 
  private:
+  void populateFunctionNames();
+
   velox::TypePtr dedupType(const velox::TypePtr& type);
 
   velox::HashStringAllocator& allocator_;
@@ -409,6 +437,7 @@ class QueryGraphContext {
 
   PlanP contextPlan_{nullptr};
   Optimization* optimization_{nullptr};
+  FunctionNames functionNames_;
 
   std::vector<std::unique_ptr<velox::Variant>> allVariants_;
 };

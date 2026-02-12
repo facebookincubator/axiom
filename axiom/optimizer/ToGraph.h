@@ -47,22 +47,6 @@ struct ExprDedupHasher {
 using FunctionDedupMap =
     folly::F14FastMap<ExprDedupKey, ExprCP, ExprDedupHasher>;
 
-/// Holds function names with well-defined semantics that the optimizer can use
-/// for expression analysis and transformations. These are looked up from the
-/// function registry during ToGraph construction.
-struct FunctionNames {
-  /// Scalar functions.
-  Name equality{nullptr};
-  Name negation{nullptr};
-  Name elementAt{nullptr};
-  Name subscript{nullptr};
-  Name cardinality{nullptr};
-
-  /// Aggregate functions.
-  Name arbitrary{nullptr};
-  Name count{nullptr};
-};
-
 struct TypedVariant {
   /// Canonical Type pointer returned by QueryGraphContext::toType.
   const velox::Type* type;
@@ -578,7 +562,7 @@ class ToGraph {
   folly::F14FastMap<const logical_plan::LogicalPlanNode*, PlanObjectCP>
       planLeaves_;
 
-  FunctionNames functionNames_;
+  const FunctionNames functionNames_;
 
   folly::F14FastMap<Name, Name> reversibleFunctions_;
 };

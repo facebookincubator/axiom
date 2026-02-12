@@ -3,6 +3,7 @@
 See also:
 - [Subqueries](docs/Subqueries.md) - How subqueries are implemented in the optimizer
 - [Join Planning](docs/JoinPlanning.md) - Control flow and state management in join order enumeration
+- [Filter Selectivity](docs/FilterSelectivity.md) - How filter selectivity is estimated for cost-based optimization
 
 The optimizer's input is Logical Plan. This is a tree of relational plan nodes defined using a hierarchy of logical_plan::LogicalPlanNode and logical_plan::Expr classes. Operations represented by the Logical Plan are fully typed and resolved. All names have been bound to schema objects and each operation has defined input and output types.
 

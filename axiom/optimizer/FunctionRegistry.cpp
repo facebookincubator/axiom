@@ -91,6 +91,51 @@ bool FunctionRegistry::registerCount(std::string_view name) {
   return true;
 }
 
+bool FunctionRegistry::registerLessThan(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (lessThan_.has_value() && lessThan_.value() != name) {
+    return false;
+  }
+  lessThan_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerLessThanOrEqual(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (lessThanOrEqual_.has_value() && lessThanOrEqual_.value() != name) {
+    return false;
+  }
+  lessThanOrEqual_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerGreaterThan(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (greaterThan_.has_value() && greaterThan_.value() != name) {
+    return false;
+  }
+  greaterThan_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerGreaterThanOrEqual(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (greaterThanOrEqual_.has_value() && greaterThanOrEqual_.value() != name) {
+    return false;
+  }
+  greaterThanOrEqual_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerIsNull(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (isNull_.has_value() && isNull_.value() != name) {
+    return false;
+  }
+  isNull_ = name;
+  return true;
+}
+
 bool FunctionRegistry::registerSpecialForm(
     lp::SpecialForm specialForm,
     std::string_view name) {
@@ -264,6 +309,11 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
   registry->registerCardinality(fullName("cardinality"));
   registry->registerArbitrary(fullName("arbitrary"));
   registry->registerCount(fullName("count"));
+  registry->registerLessThan(fullName("lt"));
+  registry->registerLessThanOrEqual(fullName("lte"));
+  registry->registerGreaterThan(fullName("gt"));
+  registry->registerGreaterThanOrEqual(fullName("gte"));
+  registry->registerIsNull(fullName("is_null"));
 
   registry->registerAggregateEmptyResultResolver(
       {fullName("count_if"), fullName("approx_distinct")},

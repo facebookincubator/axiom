@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include "axiom/optimizer/BitSet.h"
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/QueryGraph.h"
 
 namespace facebook::axiom::optimizer {
@@ -37,6 +38,8 @@ QueryGraphContext::QueryGraphContext(velox::HashStringAllocator& allocator)
   addName(SpecialFormCallNames::kIf);
   addName(SpecialFormCallNames::kSwitch);
   addName(SpecialFormCallNames::kIn);
+
+  populateFunctionNames();
 }
 
 QueryGraphContext*& queryCtx() {
@@ -301,6 +304,53 @@ PathCP toPath(std::span<const Step> steps, bool reverse) {
   PathCP path = reverse ? make<Path>(steps, std::true_type{})
                         : make<Path>(steps, std::false_type{});
   return queryCtx()->toPath(path);
+}
+
+void QueryGraphContext::populateFunctionNames() {
+  auto* registry = FunctionRegistry::instance();
+
+  functionNames_.equality = this->toName(registry->equality());
+  functionNames_.negation = this->toName(registry->negation());
+
+  if (auto elementAt = registry->elementAt()) {
+    functionNames_.elementAt = this->toName(elementAt.value());
+  }
+
+  if (auto subscript = registry->subscript()) {
+    functionNames_.subscript = this->toName(subscript.value());
+  }
+
+  if (auto cardinality = registry->cardinality()) {
+    functionNames_.cardinality = this->toName(cardinality.value());
+  }
+
+  if (auto arbitrary = registry->arbitrary()) {
+    functionNames_.arbitrary = this->toName(arbitrary.value());
+  }
+
+  if (auto count = registry->count()) {
+    functionNames_.count = this->toName(count.value());
+  }
+
+  if (auto lt = registry->lessThan()) {
+    functionNames_.lt = this->toName(lt.value());
+  }
+
+  if (auto lte = registry->lessThanOrEqual()) {
+    functionNames_.lte = this->toName(lte.value());
+  }
+
+  if (auto gt = registry->greaterThan()) {
+    functionNames_.gt = this->toName(gt.value());
+  }
+
+  if (auto gte = registry->greaterThanOrEqual()) {
+    functionNames_.gte = this->toName(gte.value());
+  }
+
+  if (auto isNull = registry->isNull()) {
+    functionNames_.isNull = this->toName(isNull.value());
+  }
 }
 
 } // namespace facebook::axiom::optimizer
