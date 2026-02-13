@@ -190,7 +190,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
 
     executor_ =
         std::make_shared<folly::CPUThreadPoolExecutor>(std::max<int32_t>(
-            folly::hardware_concurrency() * 2,
+            folly::available_concurrency() * 2,
             FLAGS_num_workers * FLAGS_num_drivers * 2 + 2));
     spillExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(4);
   }

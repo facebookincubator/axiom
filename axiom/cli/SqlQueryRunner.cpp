@@ -251,7 +251,7 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
   ++queryCounter_;
 
   executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(std::max<int32_t>(
-      folly::hardware_concurrency() * 2,
+      folly::available_concurrency() * 2,
       options.numWorkers * options.numDrivers * 2 + 2));
 
   return velox::core::QueryCtx::create(

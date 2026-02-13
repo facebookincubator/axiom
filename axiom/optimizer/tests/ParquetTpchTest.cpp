@@ -73,12 +73,12 @@ void doCreateTables(std::string_view path) {
     }
 
     const int32_t numDrivers =
-        std::min<int32_t>(numSplits, folly::hardware_concurrency());
+        std::min<int32_t>(numSplits, folly::available_concurrency());
 
     LOG(INFO) << "Creating TPC-H table " << tableName
               << " scaleFactor=" << FLAGS_tpch_scale
               << " numSplits=" << numSplits << " numDrivers=" << numDrivers
-              << " hw concurrency=" << folly::hardware_concurrency();
+              << " hw concurrency=" << folly::available_concurrency();
     auto rows = AssertQueryBuilder(plan)
                     .splits(std::move(splits))
                     .maxDrivers(numDrivers)
