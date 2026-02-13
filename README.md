@@ -1,3 +1,5 @@
+[![Linux Build](https://github.com/facebookincubator/axiom/actions/workflows/build_and_test.yml/badge.svg)](https://github.com/facebookincubator/axiom/actions/workflows/build_and_test.yml)
+
 ## License
 
 Axiom is licensed under the Apache 2.0 License. A copy of the license
