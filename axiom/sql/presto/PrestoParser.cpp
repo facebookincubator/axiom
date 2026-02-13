@@ -2448,6 +2448,7 @@ SqlStatementPtr parseCreateTable(
   return std::make_shared<CreateTableStatement>(
       connectorTable.first,
       connectorTable.second,
+      createTable.name()->fullyQualifiedName(),
       ROW(std::move(names), std::move(types)),
       std::move(properties),
       createTable.isNotExists(),
@@ -2462,7 +2463,10 @@ SqlStatementPtr parseDropTable(
       *dropTable.tableName(), defaultConnectorId, defaultSchema);
 
   return std::make_shared<DropTableStatement>(
-      connectorTable.first, connectorTable.second, dropTable.isExists());
+      connectorTable.first,
+      connectorTable.second,
+      dropTable.tableName()->fullyQualifiedName(),
+      dropTable.isExists());
 }
 
 SqlStatementPtr doPlan(
@@ -2487,6 +2491,11 @@ SqlStatementPtr doPlan(
   if (query->is(NodeType::kCreateTable)) {
     return parseCreateTable(
         *query->as<CreateTable>(), defaultConnectorId, defaultSchema);
+  }
+
+  if (query->is(NodeType::kDropTable)) {
+    return parseDropTable(
+        *query->as<DropTable>(), defaultConnectorId, defaultSchema);
   }
 
   if (query->is(NodeType::kShowCatalogs)) {
@@ -2542,11 +2551,6 @@ SqlStatementPtr PrestoParser::doParse(
     auto sqlStatement = doPlan(
         explain->statement(), defaultConnectorId_, defaultSchema_, parseSql);
     return parseExplain(*explain, sqlStatement);
-  }
-
-  if (query->is(NodeType::kDropTable)) {
-    return parseDropTable(
-        *query->as<DropTable>(), defaultConnectorId_, defaultSchema_);
   }
 
   return doPlan(query, defaultConnectorId_, defaultSchema_, parseSql);
