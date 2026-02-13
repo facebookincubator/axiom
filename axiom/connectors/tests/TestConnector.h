@@ -117,10 +117,12 @@ class TestTable : public Table {
     return data_;
   }
 
-  /// Copies the specified RowVector into the internal data of the table.
-  /// The underlying types of the columns must match the schema specified
-  /// during initial table creation. Data is copied so that vectors from
-  /// temporary memory pools can be appended.
+  /// Copy the specified RowVector into the internal data of the table. The
+  /// underlying types of the columns must match the schema specified during
+  /// initial table creation. Each appended vector will generate a separate
+  /// TestConnectorSplit when splits are generated for the table. Data is copied
+  /// on append so that vectors from temporary memory pools can be appended.
+  /// These copies are allocated via the TestTable internal memory pool.
   ///
   /// Recomputes numRows from all data vectors. If setStats was called before
   /// addData, the numRows set by setStats will be overwritten. To set a custom
@@ -149,31 +151,25 @@ class TestTable : public Table {
 };
 
 /// SplitSource generated via the TestSplitManager embedded in the
-/// TestConnector. Generates one default-initialized ConnectorSplit
-/// for each partition provided at initialization time. targetBytes
-/// are ignored when retrieving splits, each new call to getSplits
-/// returns just one ConnectorSplit.
+/// TestConnector. Generates one TestConnectorSplit for each RowVector
+/// in the table's data_ vector.
 class TestSplitSource : public SplitSource {
  public:
-  TestSplitSource(
-      const std::string& connectorId,
-      const std::vector<PartitionHandlePtr>& partitions)
-      : connectorId_(connectorId),
-        partitions_(partitions),
-        currentPartition_(0) {}
+  TestSplitSource(const std::string& connectorId, size_t splitCount)
+      : connectorId_(connectorId), splitCount_(splitCount) {}
 
   std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) override;
 
  private:
   const std::string connectorId_;
-  const std::vector<PartitionHandlePtr> partitions_;
-  size_t currentPartition_;
+  const size_t splitCount_;
+  bool done_{false};
 };
 
 /// SplitManager embedded in the TestConnector. Returns one
 /// default-initialized PartitionHandle upon call to listPartitions.
-/// Generates a TestSplitSource containing the provided partition
-/// handles upon call to getSplitSource.
+/// Generates a TestSplitSource that produces one TestConnectorSplit
+/// per RowVector in the table's data_ vector.
 class TestSplitManager : public ConnectorSplitManager {
  public:
   std::vector<PartitionHandlePtr> listPartitions(
@@ -203,6 +199,22 @@ class TestColumnHandle : public velox::connector::ColumnHandle {
  private:
   const std::string name_;
   const velox::TypePtr type_;
+};
+
+/// Connector split containing an index into the data_ vector of the table.
+/// Each split yields the RowVector at the corresponding index in the table
+/// data.
+class TestConnectorSplit : public velox::connector::ConnectorSplit {
+ public:
+  TestConnectorSplit(const std::string& connectorId, size_t index)
+      : ConnectorSplit(connectorId), index_(index) {}
+
+  size_t index() const {
+    return index_;
+  }
+
+ private:
+  const size_t index_;
 };
 
 /// The layout corresponding to the handle is provided at
@@ -359,12 +371,12 @@ class TestDataSource : public velox::connector::DataSource {
  private:
   const velox::RowTypePtr outputType_;
   velox::memory::MemoryPool* pool_;
-  std::shared_ptr<velox::connector::ConnectorSplit> split_;
+  std::shared_ptr<TestConnectorSplit> split_;
   std::vector<velox::RowVectorPtr> data_;
   std::vector<velox::column_index_t> outputMappings_;
   uint64_t completedBytes_{0};
   uint64_t completedRows_{0};
-  uint64_t idx_{0};
+  bool more_{false};
 };
 
 /// Contains an embedded TestConnectorMetadata to which TestTables are

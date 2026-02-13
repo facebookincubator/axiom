@@ -85,14 +85,17 @@ void TestTable::addData(const velox::RowVectorPtr& data) {
 
 std::vector<SplitSource::SplitAndGroup> TestSplitSource::getSplits(uint64_t) {
   std::vector<SplitAndGroup> result;
-  if (currentPartition_ >= partitions_.size()) {
-    result.push_back({nullptr, kUngroupedGroupId});
-  } else {
-    result.push_back(
-        {std::make_shared<velox::connector::ConnectorSplit>(connectorId_),
-         kUngroupedGroupId});
+  if (!done_) {
+    for (size_t i = 0; i < splitCount_; ++i) {
+      result.push_back(
+          {std::make_shared<TestConnectorSplit>(connectorId_, i),
+           kUngroupedGroupId});
+    }
+    done_ = true;
   }
-  currentPartition_++;
+  if (result.empty()) {
+    result.push_back({nullptr, kUngroupedGroupId});
+  }
   return result;
 }
 
@@ -105,10 +108,15 @@ std::vector<PartitionHandlePtr> TestSplitManager::listPartitions(
 std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
     const ConnectorSessionPtr& session,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
-    const std::vector<PartitionHandlePtr>& partitions,
+    const std::vector<PartitionHandlePtr>&,
     SplitOptions) {
+  auto maybeTableHandle =
+      std::dynamic_pointer_cast<const TestTableHandle>(tableHandle);
+  VELOX_CHECK(maybeTableHandle, "Expected TestTableHandle");
+  auto& table =
+      dynamic_cast<const TestTable&>(maybeTableHandle->layout().table());
   return std::make_shared<TestSplitSource>(
-      tableHandle->connectorId(), partitions);
+      tableHandle->connectorId(), table.data().size());
 }
 
 std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
@@ -292,17 +300,23 @@ TestDataSource::TestDataSource(
 
 void TestDataSource::addSplit(
     std::shared_ptr<velox::connector::ConnectorSplit> split) {
-  split_ = std::move(split);
+  split_ = std::dynamic_pointer_cast<TestConnectorSplit>(split);
+  VELOX_CHECK(split_, "Expected TestConnectorSplit");
+  more_ = true;
 }
 
 std::optional<velox::RowVectorPtr> TestDataSource::next(
     uint64_t,
     velox::ContinueFuture&) {
   VELOX_CHECK(split_, "no split added to DataSource");
-  if (data_.size() <= idx_) {
+
+  if (!more_) {
     return nullptr;
   }
-  auto vector = data_[idx_++];
+  more_ = false;
+
+  VELOX_CHECK_LT(split_->index(), data_.size(), "split index out of bounds");
+  auto vector = data_[split_->index()];
 
   completedRows_ += vector->size();
   completedBytes_ += vector->retainedSize();
