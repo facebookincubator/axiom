@@ -1043,6 +1043,7 @@ class RelationPlanner : public AstVisitor {
       if (withIt != withQueries_.end()) {
         // TODO Change WithQuery to store Query and not Statement.
         processQuery(dynamic_cast<Query*>(withIt->second->query().get()));
+        builder_->enableUnqualifiedAccess();
       } else {
         const auto& [connectorId, tableName] = toConnectorTable(
             *table->name(), context_.defaultConnectorId, defaultSchema_);
@@ -1060,6 +1061,8 @@ class RelationPlanner : public AstVisitor {
           VELOX_CHECK_NOT_NULL(parseSql_);
           auto query = parseSql_(view->text());
           processQuery(dynamic_cast<Query*>(query.get()));
+          // Enable unqualified access for view output columns.
+          builder_->enableUnqualifiedAccess();
         } else {
           VELOX_USER_FAIL(
               "Table not found: {}", table->name()->fullyQualifiedName());
@@ -1123,6 +1126,8 @@ class RelationPlanner : public AstVisitor {
 
       if (query->is(NodeType::kQuery)) {
         processQuery(query->as<Query>());
+        // Enable unqualified access to the subquery's output columns.
+        builder_->enableUnqualifiedAccess();
         return;
       }
 
@@ -1199,10 +1204,11 @@ class RelationPlanner : public AstVisitor {
         auto* allColumns = item->as<AllColumns>();
 
         std::vector<std::string> columnNames;
+        std::optional<std::string> prefix;
         if (allColumns->prefix() != nullptr) {
           // SELECT t.*
-          columnNames = builder_->findOrAssignOutputNames(
-              /*includeHiddenColumns=*/false, allColumns->prefix()->suffix());
+          prefix = allColumns->prefix()->suffix();
+          columnNames = builder_->findOrAssignOutputNames(false, prefix);
 
         } else {
           // SELECT *
@@ -1211,7 +1217,14 @@ class RelationPlanner : public AstVisitor {
         }
 
         for (const auto& name : columnNames) {
-          exprs.push_back(lp::Col(name));
+          if (prefix.has_value()) {
+            // Use qualified reference to handle joins that removed unqualified
+            // access.
+            exprs.push_back(
+                lp::Sql(fmt::format("{}.{}", prefix.value(), name)));
+          } else {
+            exprs.push_back(lp::Col(name));
+          }
         }
       } else {
         VELOX_CHECK(item->is(NodeType::kSingleColumn));
