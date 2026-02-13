@@ -89,6 +89,27 @@ class ToTextVisitor : public PlanNodeVisitor {
 
     myContext.out << ")";
 
+    // Print grouping sets if present
+    if (!node.groupingSets().empty()) {
+      myContext.out << " GROUPING SETS [";
+      for (size_t i = 0; i < node.groupingSets().size(); ++i) {
+        if (i > 0) {
+          myContext.out << ", ";
+        }
+        myContext.out << "(";
+        const auto& groupingSet = node.groupingSets()[i];
+        for (size_t j = 0; j < groupingSet.size(); ++j) {
+          if (j > 0) {
+            myContext.out << ", ";
+          }
+          myContext.out << ExprPrinter::toText(
+              *node.groupingKeys().at(groupingSet[j]));
+        }
+        myContext.out << ")";
+      }
+      myContext.out << "]";
+    }
+
     appendOutputType(node, myContext);
 
     myContext.out << std::endl;

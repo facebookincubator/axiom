@@ -979,6 +979,213 @@ TEST_F(PrestoParserTest, simpleGroupBy) {
   }
 }
 
+TEST_F(PrestoParserTest, groupingSets) {
+  lp::AggregateNodePtr agg;
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
+      [&](const auto& node) {
+        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+      });
+
+  testSql(
+      "SELECT n_regionkey, count(1) FROM nation "
+      "GROUP BY GROUPING SETS (n_regionkey, ())",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(testing::ElementsAre(0), testing::IsEmpty()));
+
+  testSql(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY GROUPING SETS ((n_regionkey, n_name), (n_regionkey), ())",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1),
+          testing::ElementsAre(0),
+          testing::IsEmpty()));
+
+  // Test ordinals in GROUPING SETS: GROUPING SETS ((1, 2), (1))
+  testSql(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY GROUPING SETS ((1, 2), (1))",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1), testing::ElementsAre(0)));
+}
+
+TEST_F(PrestoParserTest, rollup) {
+  lp::AggregateNodePtr agg;
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
+      [&](const auto& node) {
+        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+      });
+
+  testSql(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY ROLLUP(n_regionkey, n_name)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1),
+          testing::ElementsAre(0),
+          testing::IsEmpty()));
+
+  testSql(
+      "SELECT n_regionkey, count(1) FROM nation "
+      "GROUP BY ROLLUP(n_regionkey)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(testing::ElementsAre(0), testing::IsEmpty()));
+}
+
+TEST_F(PrestoParserTest, cube) {
+  lp::AggregateNodePtr agg;
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
+      [&](const auto& node) {
+        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+      });
+
+  testSql(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY CUBE(n_regionkey, n_name)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1),
+          testing::ElementsAre(0),
+          testing::ElementsAre(1),
+          testing::IsEmpty()));
+
+  testSql(
+      "SELECT n_regionkey, count(1) FROM nation "
+      "GROUP BY CUBE(n_regionkey)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(testing::ElementsAre(0), testing::IsEmpty()));
+}
+
+TEST_F(PrestoParserTest, mixedGroupByWithRollup) {
+  lp::AggregateNodePtr agg;
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
+      [&](const auto& node) {
+        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+      });
+
+  testSql(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY n_regionkey, ROLLUP(n_name)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1), testing::ElementsAre(0)));
+}
+
+TEST_F(PrestoParserTest, groupingSetsOrdinalCaching) {
+  lp::AggregateNodePtr agg;
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
+      [&](const auto& node) {
+        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+      });
+
+  testSql(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY GROUPING SETS ((1), (1, 2), (2))",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0),
+          testing::ElementsAre(0, 1),
+          testing::ElementsAre(1)));
+
+  testSql(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY ROLLUP(1, 2)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1),
+          testing::ElementsAre(0),
+          testing::IsEmpty()));
+
+  testSql(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY CUBE(1, 2)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1),
+          testing::ElementsAre(0),
+          testing::ElementsAre(1),
+          testing::IsEmpty()));
+}
+
+TEST_F(PrestoParserTest, groupingSetsSubqueryOrdinal) {
+  lp::AggregateNodePtr agg;
+  auto matcher =
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .aggregate([&](const auto& node) {
+            agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+          })
+          .project();
+
+  testSql(
+      "SELECT (SELECT 1), n_name, count(1) FROM nation "
+      "GROUP BY GROUPING SETS ((1), (1, 2))",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0), testing::ElementsAre(0, 1)));
+}
+
+TEST_F(PrestoParserTest, cubeColumnLimit) {
+  // CUBE is limited to 30 columns (2^30 grouping sets).
+  // Generate a query with 31 columns to verify the limit is enforced.
+  std::string columns;
+  for (int i = 1; i <= 31; ++i) {
+    if (i > 1) {
+      columns += ", ";
+    }
+    columns += fmt::format("c{}", i);
+  }
+
+  std::string sql = fmt::format(
+      "SELECT {}, count(1) FROM (SELECT 1 as c1, 2 as c2, 3 as c3, 4 as c4, "
+      "5 as c5, 6 as c6, 7 as c7, 8 as c8, 9 as c9, 10 as c10, "
+      "11 as c11, 12 as c12, 13 as c13, 14 as c14, 15 as c15, 16 as c16, "
+      "17 as c17, 18 as c18, 19 as c19, 20 as c20, 21 as c21, 22 as c22, "
+      "23 as c23, 24 as c24, 25 as c25, 26 as c26, 27 as c27, 28 as c28, "
+      "29 as c29, 30 as c30, 31 as c31) GROUP BY CUBE({})",
+      columns,
+      columns);
+
+  VELOX_ASSERT_THROW(parseSql(sql), "CUBE supports at most 30 columns");
+}
+
 TEST_F(PrestoParserTest, distinct) {
   {
     auto matcher =

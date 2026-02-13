@@ -481,6 +481,149 @@ TEST_F(PlanPrinterTest, distinctSortedMaskedAgg) {
           testing::Eq("")));
 }
 
+TEST_F(PlanPrinterTest, aggregateGroupingSets) {
+  auto rowType = ROW({"a", "b", "c"}, INTEGER());
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100}),
+      Variant::row({2, 20, 200}),
+  };
+
+  auto plan =
+      PlanBuilder()
+          .values(rowType, data)
+          .aggregate(
+              {{"a", "b"}, {"a"}, {}}, {"sum(c) as total"}, "$grouping_set_id")
+          .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith(
+              "- Aggregate(a, b) GROUPING SETS [(a, b), (a), ()]"),
+          testing::StartsWith("    total := sum(c)"),
+          testing::StartsWith("  - Values"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, groupingSetsDistinctAgg) {
+  auto rowType = ROW({"a", "b", "c"}, INTEGER());
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100}),
+      Variant::row({1, 10, 100}),
+      Variant::row({2, 20, 200}),
+  };
+
+  auto plan = PlanBuilder()
+                  .values(rowType, data)
+                  .aggregate(
+                      {{"a", "b"}, {"a"}, {}},
+                      {"sum(distinct c) as distinct_sum"},
+                      "$grouping_set_id")
+                  .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith(
+              "- Aggregate(a, b) GROUPING SETS [(a, b), (a), ()]"),
+          testing::StartsWith("    distinct_sum := sum(DISTINCT c)"),
+          testing::StartsWith("  - Values"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, groupingSetsSortedAgg) {
+  auto rowType = ROW({"a", "b", "c"}, INTEGER());
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100}),
+      Variant::row({1, 20, 200}),
+      Variant::row({2, 30, 300}),
+  };
+
+  auto plan = PlanBuilder()
+                  .values(rowType, data)
+                  .aggregate(
+                      {{"a"}, {}},
+                      {"array_agg(b order by c desc) as ordered_array"},
+                      "$grouping_set_id")
+                  .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Aggregate(a) GROUPING SETS [(a), ()]"),
+          testing::StartsWith(
+              "    ordered_array := array_agg(b ORDER BY c DESC"),
+          testing::StartsWith("  - Values"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, groupingSetsMaskedAgg) {
+  auto rowType =
+      ROW({"a", "b", "c", "d"}, {INTEGER(), INTEGER(), INTEGER(), BOOLEAN()});
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100, true}),
+      Variant::row({1, 20, 200, false}),
+      Variant::row({2, 30, 300, true}),
+  };
+
+  auto plan = PlanBuilder()
+                  .values(rowType, data)
+                  .aggregate(
+                      {{"a", "b"}, {"a"}, {}},
+                      {"sum(c) filter (where d) as filtered_sum"},
+                      "$grouping_set_id")
+                  .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith(
+              "- Aggregate(a, b) GROUPING SETS [(a, b), (a), ()]"),
+          testing::StartsWith("    filtered_sum := sum(c) FILTER (WHERE d)"),
+          testing::StartsWith("  - Values"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, groupingSetsDistinctSortedMaskedAgg) {
+  auto rowType =
+      ROW({"a", "b", "c", "d"}, {INTEGER(), INTEGER(), INTEGER(), BOOLEAN()});
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100, true}),
+      Variant::row({1, 10, 200, true}),
+      Variant::row({1, 20, 300, false}),
+      Variant::row({2, 30, 400, true}),
+  };
+
+  auto plan =
+      PlanBuilder()
+          .values(rowType, data)
+          .aggregate(
+              {{"a", "b"}, {"a"}, {}},
+              {"array_agg(distinct b order by c desc) filter (where d) as complex_agg"},
+              "$grouping_set_id")
+          .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith(
+              "- Aggregate(a, b) GROUPING SETS [(a, b), (a), ()]"),
+          testing::StartsWith(
+              "    complex_agg := array_agg(DISTINCT b ORDER BY c DESC NULLS LAST) FILTER (WHERE d)"),
+          testing::StartsWith("  - Values"),
+          testing::Eq("")));
+}
+
 TEST_F(PlanPrinterTest, unnest) {
   {
     auto plan = PlanBuilder().unnest({"array[1, 2, 3]"}).build();
