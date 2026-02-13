@@ -38,10 +38,20 @@ class NameMappings {
   };
 
   /// Adds a mapping from 'name' to 'id'. Throws if 'name' already exists.
+  /// Use when duplicates are not expected.
   void add(const QualifiedName& name, const std::string& id);
 
   /// Adds a mapping from 'name' to 'id'. Throws if 'name' already exists.
+  /// Use when duplicates are not expected.
   void add(const std::string& name, const std::string& id);
+
+  /// Tries to add a mapping from 'name' to 'id'. Returns true if added, false
+  /// if 'name' already exists. Use when duplicates are expected.
+  bool tryAdd(const QualifiedName& name, const std::string& id);
+
+  /// Tries to add a mapping from 'name' to 'id'. Returns true if added, false
+  /// if 'name' already exists. Use when duplicates are expected.
+  bool tryAdd(const std::string& name, const std::string& id);
 
   /// Marks the specified 'id' as hidden. The 'id' must have been added earlier
   /// via 'add' API.

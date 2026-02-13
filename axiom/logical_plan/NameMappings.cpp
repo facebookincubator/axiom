@@ -38,6 +38,14 @@ void NameMappings::add(const std::string& name, const std::string& id) {
   VELOX_CHECK(ok, "Duplicate name: {}", name);
 }
 
+bool NameMappings::tryAdd(const QualifiedName& name, const std::string& id) {
+  return mappings_.emplace(name, id).second;
+}
+
+bool NameMappings::tryAdd(const std::string& name, const std::string& id) {
+  return mappings_.emplace(QualifiedName{.alias = {}, .name = name}, id).second;
+}
+
 void NameMappings::markHidden(const std::string& id) {
   hiddenIds_.emplace(id);
 }

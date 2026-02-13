@@ -74,6 +74,44 @@ TEST_F(PlanBuilderTest, outputNames) {
   EXPECT_EQ("expr_0", outputNames[2]);
 }
 
+TEST_F(PlanBuilderTest, withDuplicateName) {
+  // Column references with same alias
+  {
+    auto builder =
+        PlanBuilder()
+            .values(ROW({"a", "b"}, BIGINT()), ValuesNode::Variants{})
+            .with({"a as x", "b as x"});
+
+    EXPECT_THAT(
+        builder.findOrAssignOutputNames(),
+        testing::ElementsAre("a", "b", "x", "x_0"));
+  }
+
+  // Expressions with same alias
+  {
+    auto builder =
+        PlanBuilder()
+            .values(ROW({"a", "b"}, BIGINT()), ValuesNode::Variants{})
+            .with({"a + 1 as x", "b + 1 as x"});
+
+    EXPECT_THAT(
+        builder.findOrAssignOutputNames(),
+        testing::ElementsAre("a", "b", "x", "x_0"));
+  }
+}
+
+TEST_F(PlanBuilderTest, unnestDuplicateName) {
+  auto builder = PlanBuilder()
+                     .values(
+                         ROW({"a", "arr"}, {BIGINT(), ARRAY(BIGINT())}),
+                         ValuesNode::Variants{})
+                     .unnest({Col("arr").unnestAs("a")});
+
+  EXPECT_THAT(
+      builder.findOrAssignOutputNames(),
+      testing::ElementsAre("a", "arr", "a_0"));
+}
+
 TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
   auto startMatcher = [] { return test::LogicalPlanMatcherBuilder().values(); };
 
