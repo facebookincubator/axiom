@@ -259,6 +259,94 @@ class PlanBuilder {
       const std::vector<ExprApi>& aggregates,
       const std::vector<AggregateOptions>& options);
 
+  /// Builds an aggregate node with SQL GROUPING SETS semantics.
+  ///
+  /// This is the most flexible overload, allowing explicit control over
+  /// grouping key ordering and index-based grouping set specification. Similar
+  /// to SQL's GROUPING SETS with ordinal references: GROUPING SETS ((1, 2), (1,
+  /// 2, 3)).
+  ///
+  /// @param groupingKeys All grouping key expressions. Output column order
+  /// matches the order of keys in this vector.
+  /// @param groupingSets Vector of grouping sets, where each set is a vector
+  /// of indices into groupingKeys. For example, with groupingKeys [a, b, c]:
+  ///   - ROLLUP(a,b,c) would have sets: [[0,1,2], [0,1], [0], []]
+  ///   - CUBE(a,b) would have sets: [[0,1], [0], [1], []]
+  /// @param aggregates The aggregate expressions to compute.
+  /// @param options Per-aggregate options (filter, orderBy, distinct).
+  /// @param groupingSetIndexName Name of the output column that identifies
+  /// which grouping set each row belongs to.
+  PlanBuilder& aggregate(
+      const std::vector<ExprApi>& groupingKeys,
+      const std::vector<std::vector<int32_t>>& groupingSets,
+      const std::vector<ExprApi>& aggregates,
+      const std::vector<AggregateOptions>& options,
+      const std::string& groupingSetIndexName);
+
+  /// Aggregate with grouping sets support for ROLLUP, CUBE, and GROUPING SETS.
+  ///
+  /// Convenience overload that extracts unique grouping keys from the sets.
+  /// Grouping keys appear in output in first-occurrence order across all sets.
+  /// For explicit key ordering, use the overload with separate groupingKeys and
+  /// index-based sets.
+  ///
+  /// @param groupingSets Vector of grouping sets, where each set contains
+  /// the grouping key expressions for that set.
+  /// Example: {{"a", "b"}, {"a"}, {}} for ROLLUP(a, b)
+  /// @param aggregates The aggregate expressions to compute.
+  /// @param options Per-aggregate options (filter, orderBy, distinct).
+  /// @param groupingSetIndexName Name of the output column that identifies
+  /// which grouping set each row belongs to.
+  PlanBuilder& aggregate(
+      const std::vector<std::vector<ExprApi>>& groupingSets,
+      const std::vector<ExprApi>& aggregates,
+      const std::vector<AggregateOptions>& options,
+      const std::string& groupingSetIndexName);
+
+  /// Convenience overload that parses SQL strings for grouping keys and
+  /// aggregates.
+  PlanBuilder& aggregate(
+      const std::vector<std::vector<std::string>>& groupingSets,
+      const std::vector<std::string>& aggregates,
+      const std::string& groupingSetIndexName);
+
+  /// Convenience overload that parses SQL strings for grouping keys and
+  /// aggregates. This version takes explicit grouping keys and index-based
+  /// grouping sets.
+  PlanBuilder& aggregate(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::vector<int32_t>>& groupingSets,
+      const std::vector<std::string>& aggregates,
+      const std::vector<AggregateOptions>& options,
+      const std::string& groupingSetIndexName);
+
+  /// ROLLUP convenience API. Expands ROLLUP(a, b, c) to grouping sets:
+  /// [[0,1,2], [0,1], [0], []]
+  PlanBuilder& rollup(
+      const std::vector<ExprApi>& groupingKeys,
+      const std::vector<ExprApi>& aggregates,
+      const std::vector<AggregateOptions>& options,
+      const std::string& groupingSetIndexName);
+
+  PlanBuilder& rollup(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::string& groupingSetIndexName);
+
+  /// CUBE convenience API. Expands CUBE(a, b) to grouping sets:
+  /// [[0,1], [0], [1], []]
+  /// Supports at most 30 grouping keys (2^30 grouping sets).
+  PlanBuilder& cube(
+      const std::vector<ExprApi>& groupingKeys,
+      const std::vector<ExprApi>& aggregates,
+      const std::vector<AggregateOptions>& options,
+      const std::string& groupingSetIndexName);
+
+  PlanBuilder& cube(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::string& groupingSetIndexName);
+
   PlanBuilder& distinct();
 
   /// Starts or continues the plan with an Unnest node. Uses auto-generated
@@ -479,6 +567,13 @@ class PlanBuilder {
       const std::vector<ExprApi>& projections,
       std::vector<std::string>& outputNames,
       std::vector<ExprPtr>& exprs,
+      NameMappings& mappings);
+
+  void resolveAggregates(
+      const std::vector<ExprApi>& aggregates,
+      const std::vector<AggregateOptions>& options,
+      std::vector<std::string>& outputNames,
+      std::vector<AggregateExprPtr>& exprs,
       NameMappings& mappings);
 
   const std::optional<std::string> defaultConnectorId_;

@@ -15,6 +15,7 @@
  */
 #include "axiom/logical_plan/PlanBuilder.h"
 #include <velox/common/base/Exceptions.h>
+#include <numeric>
 #include <vector>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/NameMappings.h"
@@ -487,10 +488,10 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
   return *this;
 }
 
-PlanBuilder& PlanBuilder::aggregate(
-    const std::vector<std::string>& groupingKeys,
+namespace {
+std::vector<PlanBuilder::AggregateOptions> parseAggregateOptions(
     const std::vector<std::string>& aggregates) {
-  std::vector<AggregateOptions> options;
+  std::vector<PlanBuilder::AggregateOptions> options;
   options.reserve(aggregates.size());
   for (const auto& sql : aggregates) {
     auto aggregateExpr = velox::duckdb::parseAggregateExpr(sql, {});
@@ -508,8 +509,17 @@ PlanBuilder& PlanBuilder::aggregate(
         std::move(sortingKeys),
         aggregateExpr.distinct);
   }
+  return options;
+}
+} // namespace
 
-  return aggregate(parse(groupingKeys), parse(aggregates), options);
+PlanBuilder& PlanBuilder::aggregate(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  return aggregate(
+      parse(groupingKeys),
+      parse(aggregates),
+      parseAggregateOptions(aggregates));
 }
 
 PlanBuilder& PlanBuilder::aggregate(
@@ -531,38 +541,7 @@ PlanBuilder& PlanBuilder::aggregate(
   std::vector<AggregateExprPtr> exprs;
   exprs.reserve(aggregates.size());
 
-  VELOX_USER_CHECK(options.size() == aggregates.size());
-  for (size_t i = 0; i < aggregates.size(); ++i) {
-    const auto& aggregate = aggregates[i];
-
-    ExprPtr filter;
-    if (options[i].filter != nullptr) {
-      filter = resolveScalarTypes(options[i].filter);
-    }
-
-    std::vector<SortingField> sortingFields;
-    sortingFields.reserve(options[i].orderBy.size());
-    for (const auto& key : options[i].orderBy) {
-      auto expr = resolveScalarTypes(key.expr.expr());
-
-      sortingFields.push_back(
-          SortingField{expr, SortOrder(key.ascending, key.nullsFirst)});
-    }
-
-    AggregateExprPtr expr;
-    expr = resolveAggregateTypes(
-        aggregate.expr(), filter, sortingFields, options[i].distinct);
-
-    if (aggregate.name().has_value()) {
-      const auto& alias = aggregate.name().value();
-      outputNames.push_back(newName(alias));
-      newOutputMapping->add(alias, outputNames.back());
-    } else {
-      outputNames.push_back(newName(expr->name()));
-    }
-
-    exprs.emplace_back(std::move(expr));
-  }
+  resolveAggregates(aggregates, options, outputNames, exprs, *newOutputMapping);
 
   node_ = std::make_shared<AggregateNode>(
       nextId(),
@@ -576,6 +555,239 @@ PlanBuilder& PlanBuilder::aggregate(
   outputMapping_ = std::move(newOutputMapping);
 
   return *this;
+}
+
+PlanBuilder& PlanBuilder::aggregate(
+    const std::vector<std::vector<ExprApi>>& groupingSets,
+    const std::vector<ExprApi>& aggregates,
+    const std::vector<AggregateOptions>& options,
+    const std::string& groupingSetIndexName) {
+  // Extract unique grouping keys from all sets and build index mapping.
+  std::vector<ExprApi> groupingKeys;
+  velox::core::ExprMap<int32_t> exprToIndex;
+
+  auto getOrAddKey = [&](const ExprApi& expr) -> int32_t {
+    int32_t idx = static_cast<int32_t>(groupingKeys.size());
+    auto [it, inserted] = exprToIndex.try_emplace(expr.expr(), idx);
+    if (inserted) {
+      groupingKeys.push_back(expr);
+    }
+    return it->second;
+  };
+
+  // Build index-based grouping sets.
+  std::vector<std::vector<int32_t>> groupingSetsIndices;
+  groupingSetsIndices.reserve(groupingSets.size());
+  for (const auto& groupingSet : groupingSets) {
+    std::vector<int32_t> indices;
+    indices.reserve(groupingSet.size());
+    for (const auto& expr : groupingSet) {
+      indices.push_back(getOrAddKey(expr));
+    }
+    groupingSetsIndices.push_back(std::move(indices));
+  }
+
+  return aggregate(
+      groupingKeys,
+      groupingSetsIndices,
+      aggregates,
+      options,
+      groupingSetIndexName);
+}
+
+PlanBuilder& PlanBuilder::aggregate(
+    const std::vector<std::vector<std::string>>& groupingSets,
+    const std::vector<std::string>& aggregates,
+    const std::string& groupingSetIndexName) {
+  std::vector<std::vector<ExprApi>> exprGroupingSets;
+  exprGroupingSets.reserve(groupingSets.size());
+  for (const auto& groupingSet : groupingSets) {
+    exprGroupingSets.push_back(parse(groupingSet));
+  }
+  return aggregate(
+      exprGroupingSets,
+      parse(aggregates),
+      parseAggregateOptions(aggregates),
+      groupingSetIndexName);
+}
+
+PlanBuilder& PlanBuilder::aggregate(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::vector<int32_t>>& groupingSets,
+    const std::vector<std::string>& aggregates,
+    const std::vector<AggregateOptions>& options,
+    const std::string& groupingSetIndexName) {
+  return aggregate(
+      parse(groupingKeys),
+      groupingSets,
+      parse(aggregates),
+      options,
+      groupingSetIndexName);
+}
+
+PlanBuilder& PlanBuilder::aggregate(
+    const std::vector<ExprApi>& groupingKeys,
+    const std::vector<std::vector<int32_t>>& groupingSets,
+    const std::vector<ExprApi>& aggregates,
+    const std::vector<AggregateOptions>& options,
+    const std::string& groupingSetIndexName) {
+  VELOX_USER_CHECK_NOT_NULL(node_, "Aggregate node cannot be a leaf node");
+
+  const auto numKeys = static_cast<int32_t>(groupingKeys.size());
+  for (const auto& groupingSet : groupingSets) {
+    for (const auto index : groupingSet) {
+      VELOX_USER_CHECK_LT(
+          index, numKeys, "Grouping set index {} is out of bounds", index);
+    }
+  }
+
+  velox::core::ExprMap<bool> seen;
+  for (const auto& key : groupingKeys) {
+    VELOX_USER_CHECK(
+        seen.try_emplace(key.expr(), true).second, "Duplicate grouping key");
+  }
+
+  std::vector<std::string> outputNames;
+  outputNames.reserve(groupingKeys.size() + aggregates.size() + 1);
+
+  std::vector<ExprPtr> keyExprs;
+  keyExprs.reserve(groupingKeys.size());
+
+  auto newOutputMapping = std::make_shared<NameMappings>();
+
+  resolveProjections(groupingKeys, outputNames, keyExprs, *newOutputMapping);
+
+  std::vector<AggregateExprPtr> exprs;
+  exprs.reserve(aggregates.size());
+
+  resolveAggregates(aggregates, options, outputNames, exprs, *newOutputMapping);
+
+  outputNames.push_back(newName(groupingSetIndexName));
+  newOutputMapping->add(groupingSetIndexName, outputNames.back());
+
+  node_ = std::make_shared<AggregateNode>(
+      nextId(),
+      std::move(node_),
+      std::move(keyExprs),
+      groupingSets,
+      std::move(exprs),
+      std::move(outputNames));
+
+  newOutputMapping->enableUnqualifiedAccess();
+  outputMapping_ = std::move(newOutputMapping);
+
+  return *this;
+}
+
+void PlanBuilder::resolveAggregates(
+    const std::vector<ExprApi>& aggregates,
+    const std::vector<AggregateOptions>& options,
+    std::vector<std::string>& outputNames,
+    std::vector<AggregateExprPtr>& exprs,
+    NameMappings& mappings) {
+  if (!options.empty()) {
+    VELOX_USER_CHECK_EQ(options.size(), aggregates.size());
+  }
+
+  for (size_t i = 0; i < aggregates.size(); ++i) {
+    const auto& aggregate = aggregates[i];
+
+    ExprPtr filter;
+    std::vector<SortingField> sortingFields;
+    bool distinct = false;
+
+    if (!options.empty()) {
+      if (options[i].filter != nullptr) {
+        filter = resolveScalarTypes(options[i].filter);
+      }
+
+      sortingFields.reserve(options[i].orderBy.size());
+      for (const auto& key : options[i].orderBy) {
+        auto expr = resolveScalarTypes(key.expr.expr());
+
+        sortingFields.push_back(
+            SortingField{expr, SortOrder(key.ascending, key.nullsFirst)});
+      }
+
+      distinct = options[i].distinct;
+    }
+
+    AggregateExprPtr expr;
+    expr = resolveAggregateTypes(
+        aggregate.expr(), filter, sortingFields, distinct);
+
+    if (aggregate.name().has_value()) {
+      const auto& alias = aggregate.name().value();
+      outputNames.push_back(newName(alias));
+      mappings.add(alias, outputNames.back());
+    } else {
+      outputNames.push_back(newName(expr->name()));
+    }
+
+    exprs.emplace_back(std::move(expr));
+  }
+}
+
+PlanBuilder& PlanBuilder::rollup(
+    const std::vector<ExprApi>& groupingKeys,
+    const std::vector<ExprApi>& aggregates,
+    const std::vector<AggregateOptions>& options,
+    const std::string& groupingSetIndexName) {
+  // ROLLUP(a, b, c) -> [[0,1,2], [0,1], [0], []]
+  std::vector<std::vector<int32_t>> groupingSets;
+  groupingSets.reserve(groupingKeys.size() + 1);
+
+  for (size_t i = groupingKeys.size(); i > 0; --i) {
+    std::vector<int32_t> indices(i);
+    std::iota(indices.begin(), indices.end(), 0);
+    groupingSets.push_back(std::move(indices));
+  }
+  groupingSets.emplace_back();
+
+  return aggregate(
+      groupingKeys, groupingSets, aggregates, options, groupingSetIndexName);
+}
+
+PlanBuilder& PlanBuilder::rollup(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::string& groupingSetIndexName) {
+  return rollup(
+      parse(groupingKeys), parse(aggregates), {}, groupingSetIndexName);
+}
+
+PlanBuilder& PlanBuilder::cube(
+    const std::vector<ExprApi>& groupingKeys,
+    const std::vector<ExprApi>& aggregates,
+    const std::vector<AggregateOptions>& options,
+    const std::string& groupingSetIndexName) {
+  // CUBE(a, b) -> [[0,1], [0], [1], []]
+  const size_t n = groupingKeys.size();
+
+  const size_t numSets = 1ULL << n;
+  std::vector<std::vector<int32_t>> groupingSets;
+  groupingSets.reserve(numSets);
+
+  for (size_t mask = numSets; mask > 0; --mask) {
+    size_t bits = mask - 1;
+    std::vector<int32_t> indices;
+    for (size_t i = 0; i < n; ++i) {
+      if (bits & (1ULL << (n - 1 - i))) {
+        indices.push_back(static_cast<int32_t>(i));
+      }
+    }
+    groupingSets.push_back(std::move(indices));
+  }
+
+  return aggregate(
+      groupingKeys, groupingSets, aggregates, options, groupingSetIndexName);
+}
+
+PlanBuilder& PlanBuilder::cube(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::string& groupingSetIndexName) {
+  return cube(parse(groupingKeys), parse(aggregates), {}, groupingSetIndexName);
 }
 
 PlanBuilder& PlanBuilder::distinct() {

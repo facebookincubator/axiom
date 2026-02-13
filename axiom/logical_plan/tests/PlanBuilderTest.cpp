@@ -13,11 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include "axiom/logical_plan/PlanBuilder.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 using namespace facebook::velox;
@@ -33,6 +35,7 @@ class PlanBuilderTest : public testing::Test {
 
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
+    aggregate::prestosql::registerAllAggregateFunctions();
   }
 
  protected:
@@ -146,6 +149,165 @@ TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
             .build(),
         "Output schemas of all inputs to a Set operation must match");
   }
+}
+
+TEST_F(PlanBuilderTest, groupingSetsEmptyAggregatesAndKeys) {
+  auto rowType = ROW({"a", "b"}, INTEGER());
+  std::vector<Variant> data{
+      Variant::row({1, 10}),
+  };
+
+  VELOX_ASSERT_THROW(
+      PlanBuilder()
+          .values(rowType, data)
+          .aggregate({{}}, {}, "$grouping_set_id")
+          .build(),
+      "Aggregation node must specify at least one aggregate or grouping key");
+}
+
+TEST_F(PlanBuilderTest, groupingSetsOutOfBoundIndices) {
+  auto rowType = ROW({"a", "b", "c"}, INTEGER());
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100}),
+  };
+
+  VELOX_ASSERT_THROW(
+      PlanBuilder()
+          .values(rowType, data)
+          .aggregate(
+              {"a", "b"},
+              {{0, 1}, {0, 2}},
+              {"sum(c) as total"},
+              {},
+              "$grouping_set_id")
+          .build(),
+      "Grouping set index 2 is out of bounds");
+}
+
+TEST_F(PlanBuilderTest, groupingSetsDuplicateKeys) {
+  auto rowType = ROW({"a", "b", "c"}, INTEGER());
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100}),
+  };
+
+  VELOX_ASSERT_THROW(
+      PlanBuilder()
+          .values(rowType, data)
+          .aggregate(
+              {"a", "a"}, {{0, 1}}, {"sum(c) as total"}, {}, "$grouping_set_id")
+          .build(),
+      "Duplicate grouping key");
+}
+
+TEST_F(PlanBuilderTest, groupingSetsWithIndices) {
+  auto rowType = ROW({"a", "b", "c", "d"}, INTEGER());
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100, 1000}),
+  };
+
+  auto plan = PlanBuilder()
+                  .values(rowType, data)
+                  .aggregate(
+                      {"a", "b", "c"},
+                      {{0, 1}, {0, 1, 2}},
+                      {"sum(d) as total"},
+                      {},
+                      "$grouping_set_id")
+                  .build();
+
+  EXPECT_THAT(
+      plan->outputType()->names(),
+      testing::ElementsAre("a", "b", "c", "total", "$grouping_set_id"));
+
+  auto aggNode = std::dynamic_pointer_cast<const AggregateNode>(plan);
+  ASSERT_NE(aggNode, nullptr);
+  EXPECT_THAT(
+      aggNode->groupingSets(),
+      testing::ElementsAre(
+          std::vector<int32_t>{0, 1}, std::vector<int32_t>{0, 1, 2}));
+}
+
+TEST_F(PlanBuilderTest, rollup) {
+  auto rowType = ROW({"a", "b", "c"}, INTEGER());
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100}),
+  };
+
+  auto plan = PlanBuilder()
+                  .values(rowType, data)
+                  .rollup({"a", "b"}, {"sum(c) as total"}, "$grouping_set_id")
+                  .build();
+
+  // Output should have: a, b (grouping keys), total, $grouping_set_id
+  EXPECT_THAT(
+      plan->outputType()->names(),
+      testing::ElementsAre("a", "b", "total", "$grouping_set_id"));
+
+  // Verify ROLLUP(a, b) expands to: [[0,1], [0], []]
+  auto aggNode = std::dynamic_pointer_cast<const AggregateNode>(plan);
+  ASSERT_NE(aggNode, nullptr);
+  EXPECT_THAT(
+      aggNode->groupingSets(),
+      testing::ElementsAre(
+          std::vector<int32_t>{0, 1},
+          std::vector<int32_t>{0},
+          std::vector<int32_t>{}));
+}
+
+TEST_F(PlanBuilderTest, cube) {
+  auto rowType = ROW({"a", "b", "c"}, INTEGER());
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100}),
+  };
+
+  auto plan = PlanBuilder()
+                  .values(rowType, data)
+                  .cube({"a", "b"}, {"sum(c) as total"}, "$grouping_set_id")
+                  .build();
+
+  // Output should have: a, b (grouping keys), total, $grouping_set_id
+  EXPECT_THAT(
+      plan->outputType()->names(),
+      testing::ElementsAre("a", "b", "total", "$grouping_set_id"));
+
+  // Verify CUBE(a, b) expands to: [[0,1], [0], [1], []]
+  auto aggNode = std::dynamic_pointer_cast<const AggregateNode>(plan);
+  ASSERT_NE(aggNode, nullptr);
+  EXPECT_THAT(
+      aggNode->groupingSets(),
+      testing::ElementsAre(
+          std::vector<int32_t>{0, 1},
+          std::vector<int32_t>{0},
+          std::vector<int32_t>{1},
+          std::vector<int32_t>{}));
+}
+
+TEST_F(PlanBuilderTest, cubeThreeKeys) {
+  auto rowType = ROW({"a", "b", "c", "d"}, INTEGER());
+  std::vector<Variant> data{
+      Variant::row({1, 10, 100, 1000}),
+  };
+
+  auto plan =
+      PlanBuilder()
+          .values(rowType, data)
+          .cube({"a", "b", "c"}, {"sum(d) as total"}, "$grouping_set_id")
+          .build();
+
+  // Verify CUBE(a, b, c) expands to 2^3 = 8 grouping sets.
+  auto aggNode = std::dynamic_pointer_cast<const AggregateNode>(plan);
+  ASSERT_NE(aggNode, nullptr);
+  EXPECT_THAT(
+      aggNode->groupingSets(),
+      testing::ElementsAre(
+          std::vector<int32_t>{0, 1, 2},
+          std::vector<int32_t>{0, 1},
+          std::vector<int32_t>{0, 2},
+          std::vector<int32_t>{0},
+          std::vector<int32_t>{1, 2},
+          std::vector<int32_t>{1},
+          std::vector<int32_t>{2},
+          std::vector<int32_t>{}));
 }
 
 } // namespace
