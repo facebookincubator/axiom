@@ -120,10 +120,48 @@ TEST_F(TestConnectorTest, columnHandle) {
 
 TEST_F(TestConnectorTest, splitManager) {
   auto schema = ROW({"a"}, {INTEGER()});
-  connector_->addTable("test_table", schema);
+  auto table = connector_->addTable("test_table", schema);
+  auto& layout = *table->layouts()[0];
 
   auto splitManager = metadata_->splitManager();
   EXPECT_NE(splitManager, nullptr);
+
+  auto evaluator =
+      std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
+  std::vector<velox::connector::ColumnHandlePtr> columns;
+  columns.push_back(layout.createColumnHandle(nullptr, "a"));
+  std::vector<core::TypedExprPtr> empty;
+  auto tableHandle = layout.createTableHandle(
+      nullptr, std::move(columns), *evaluator, empty, empty);
+
+  auto partitions = splitManager->listPartitions(nullptr, tableHandle);
+  auto splitSource =
+      splitManager->getSplitSource(nullptr, tableHandle, partitions, {});
+  EXPECT_NE(splitSource, nullptr);
+
+  auto splits = splitSource->getSplits(0);
+  EXPECT_EQ(splits.size(), 1);
+  EXPECT_EQ(splits[0].split, nullptr);
+
+  auto vector = makeRowVector({makeFlatVector<int>({1})});
+  constexpr size_t kNumSplits = 1024;
+  for (size_t i = 0; i < kNumSplits; ++i) {
+    connector_->appendData("test_table", vector);
+  }
+
+  splitSource =
+      splitManager->getSplitSource(nullptr, tableHandle, partitions, {});
+  splits = splitSource->getSplits(0);
+  EXPECT_EQ(splits.size(), kNumSplits);
+  for (size_t i = 0; i < kNumSplits; ++i) {
+    auto split = std::dynamic_pointer_cast<TestConnectorSplit>(splits[i].split);
+    EXPECT_NE(split, nullptr);
+    EXPECT_EQ(split->index(), i);
+  }
+
+  splits = splitSource->getSplits(0);
+  EXPECT_EQ(splits.size(), 1);
+  EXPECT_EQ(splits[0].split, nullptr);
 }
 
 TEST_F(TestConnectorTest, splits) {
@@ -191,9 +229,9 @@ TEST_F(TestConnectorTest, dataSource) {
       schema, std::move(handleMap), table, pool());
   EXPECT_EQ(dataSource->getCompletedRows(), 0);
 
-  auto split = std::make_shared<velox::connector::ConnectorSplit>(
-      connector_->connectorId());
-  dataSource->addSplit(split);
+  auto split0 =
+      std::make_shared<TestConnectorSplit>(connector_->connectorId(), 0);
+  dataSource->addSplit(split0);
 
   velox::ContinueFuture future;
   auto result = dataSource->next(0, future);
@@ -201,6 +239,14 @@ TEST_F(TestConnectorTest, dataSource) {
   EXPECT_EQ(result.value()->size(), 2);
   EXPECT_EQ(dataSource->getCompletedRows(), 2);
   test::assertEqualVectors(vector1, result.value());
+
+  result = dataSource->next(0, future);
+  EXPECT_TRUE(result.has_value());
+  EXPECT_EQ(result.value(), nullptr);
+
+  auto split1 =
+      std::make_shared<TestConnectorSplit>(connector_->connectorId(), 1);
+  dataSource->addSplit(split1);
 
   result = dataSource->next(0, future);
   EXPECT_TRUE(result.has_value());
