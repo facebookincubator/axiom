@@ -506,6 +506,9 @@ class PlanBuilder {
 
   PlanBuilder& as(const std::string& alias);
 
+  /// Adds unqualified access for columns with unique names in the output.
+  PlanBuilder& enableUnqualifiedAccess();
+
   PlanBuilder& captureScope(Scope& scope) {
     scope = [this](const auto& alias, const auto& name) {
       return resolveInputName(alias, name);

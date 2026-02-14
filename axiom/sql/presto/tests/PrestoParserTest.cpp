@@ -936,6 +936,29 @@ TEST_F(PrestoParserTest, with) {
   testSql("WITH a as (SELECT 1 as x) SELECT A.x FROM a", matcher);
 }
 
+TEST_F(PrestoParserTest, withStarExpansionAndJoin) {
+  auto query = R"(
+    WITH cte AS (
+        SELECT a.*, b.col2
+        FROM (VALUES (1, 2)) AS a(id, val)
+        LEFT JOIN (VALUES (1, 3)) AS b(id, col2) ON a.id = b.id
+    )
+    SELECT id, val, col2
+    FROM cte
+    GROUP BY id, val, col2
+  )";
+
+  testSql(
+      query,
+      lp::test::LogicalPlanMatcherBuilder()
+          .values()
+          .project()
+          .join(
+              lp::test::LogicalPlanMatcherBuilder().values().project().build())
+          .project()
+          .aggregate());
+}
+
 TEST_F(PrestoParserTest, countStar) {
   {
     auto matcher =

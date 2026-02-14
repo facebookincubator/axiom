@@ -1364,6 +1364,11 @@ PlanBuilder& PlanBuilder::as(const std::string& alias) {
   return *this;
 }
 
+PlanBuilder& PlanBuilder::enableUnqualifiedAccess() {
+  outputMapping_->enableUnqualifiedAccess();
+  return *this;
+}
+
 std::string PlanBuilder::newName(const std::string& hint) {
   return nameAllocator_->newName(hint);
 }
