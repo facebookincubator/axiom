@@ -156,6 +156,7 @@ class CreateTableStatement : public SqlStatement {
   CreateTableStatement(
       std::string connectorId,
       std::string tableName,
+      std::string originalTableName,
       facebook::velox::RowTypePtr tableSchema,
       std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
           properties,
@@ -168,6 +169,12 @@ class CreateTableStatement : public SqlStatement {
 
   const std::string& tableName() const {
     return tableName_;
+  }
+
+  /// Returns the table name exactly as specified in the SQL statement.
+  /// This preserves the original format (1-part, 2-part, or 3-part name).
+  const std::string& originalTableName() const {
+    return originalTableName_;
   }
 
   /// Returns the table layout. Columns are case-insensitively checked for
@@ -199,6 +206,7 @@ class CreateTableStatement : public SqlStatement {
  private:
   const std::string connectorId_;
   const std::string tableName_;
+  const std::string originalTableName_;
   const facebook::velox::RowTypePtr tableSchema_;
   std::unordered_map<std::string, facebook::axiom::logical_plan::ExprPtr>
       properties_;
@@ -254,10 +262,12 @@ class DropTableStatement : public SqlStatement {
   DropTableStatement(
       std::string connectorId,
       std::string tableName,
+      std::string originalTableName,
       bool ifExists)
       : SqlStatement(SqlStatementKind::kDropTable),
         connectorId_{std::move(connectorId)},
         tableName_{std::move(tableName)},
+        originalTableName_{std::move(originalTableName)},
         ifExists_{ifExists} {}
 
   const std::string& connectorId() const {
@@ -268,6 +278,12 @@ class DropTableStatement : public SqlStatement {
     return tableName_;
   }
 
+  /// Returns the table name exactly as specified in the SQL statement.
+  /// This preserves the original format (1-part, 2-part, or 3-part name).
+  const std::string& originalTableName() const {
+    return originalTableName_;
+  }
+
   bool ifExists() const {
     return ifExists_;
   }
@@ -275,6 +291,7 @@ class DropTableStatement : public SqlStatement {
  private:
   const std::string connectorId_;
   const std::string tableName_;
+  const std::string originalTableName_;
   const bool ifExists_;
 };
 

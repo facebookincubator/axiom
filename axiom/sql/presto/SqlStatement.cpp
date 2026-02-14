@@ -83,6 +83,7 @@ std::string_view SqlStatement::kindName() const {
 CreateTableStatement::CreateTableStatement(
     std::string connectorId,
     std::string tableName,
+    std::string originalTableName,
     RowTypePtr tableSchema,
     std::unordered_map<std::string, lp::ExprPtr> properties,
     bool ifNotExists,
@@ -90,6 +91,7 @@ CreateTableStatement::CreateTableStatement(
     : SqlStatement(SqlStatementKind::kCreateTable),
       connectorId_{std::move(connectorId)},
       tableName_{std::move(tableName)},
+      originalTableName_{std::move(originalTableName)},
       tableSchema_{std::move(tableSchema)},
       properties_{std::move(properties)},
       ifNotExists_{ifNotExists},

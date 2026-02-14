@@ -1828,7 +1828,35 @@ TEST_F(PrestoParserTest, createTable) {
 
     const auto* createTable = statement->as<CreateTableStatement>();
     ASSERT_EQ("tiny.t", createTable->tableName());
+    ASSERT_EQ("t", createTable->originalTableName());
     ASSERT_TRUE(createTable->ifNotExists());
+  }
+
+  // originalTableName preserves the name as specified by user
+  {
+    auto parser = makeParser();
+
+    // Single-part name (just table name)
+    auto statement1 = parser.parse("CREATE TABLE newtable (id INTEGER)");
+    ASSERT_TRUE(statement1->isCreateTable());
+    const auto* createTable1 = statement1->as<CreateTableStatement>();
+    ASSERT_EQ("tiny.newtable", createTable1->tableName());
+    ASSERT_EQ("newtable", createTable1->originalTableName());
+
+    // Two-part name (schema.table)
+    auto statement2 = parser.parse("CREATE TABLE tiny.newtable (id INTEGER)");
+    ASSERT_TRUE(statement2->isCreateTable());
+    const auto* createTable2 = statement2->as<CreateTableStatement>();
+    ASSERT_EQ("tiny.newtable", createTable2->tableName());
+    ASSERT_EQ("tiny.newtable", createTable2->originalTableName());
+
+    // Three-part name (catalog.schema.table)
+    auto statement3 =
+        parser.parse("CREATE TABLE tpch.tiny.newtable (id INTEGER)");
+    ASSERT_TRUE(statement3->isCreateTable());
+    const auto* createTable3 = statement3->as<CreateTableStatement>();
+    ASSERT_EQ("tiny.newtable", createTable3->tableName());
+    ASSERT_EQ("tpch.tiny.newtable", createTable3->originalTableName());
   }
 
   // properties
@@ -1994,6 +2022,7 @@ TEST_F(PrestoParserTest, dropTable) {
 
     const auto* dropTable = statement->as<DropTableStatement>();
     ASSERT_EQ("tiny.t", dropTable->tableName());
+    ASSERT_EQ("t", dropTable->originalTableName());
     ASSERT_FALSE(dropTable->ifExists());
   }
 
@@ -2003,7 +2032,30 @@ TEST_F(PrestoParserTest, dropTable) {
 
     const auto* dropTable = statement->as<DropTableStatement>();
     ASSERT_EQ("tiny.u", dropTable->tableName());
+    ASSERT_EQ("u", dropTable->originalTableName());
     ASSERT_TRUE(dropTable->ifExists());
+  }
+
+  // fully qualified table name preserves original format
+  {
+    auto statement = parser.parse("DROP TABLE tpch.tiny.nation");
+    ASSERT_TRUE(statement->isDropTable());
+
+    const auto* dropTable = statement->as<DropTableStatement>();
+    ASSERT_EQ("tiny.nation", dropTable->tableName());
+    ASSERT_EQ("tpch.tiny.nation", dropTable->originalTableName());
+    ASSERT_FALSE(dropTable->ifExists());
+  }
+
+  // schema.table format
+  {
+    auto statement = parser.parse("DROP TABLE tiny.nation");
+    ASSERT_TRUE(statement->isDropTable());
+
+    const auto* dropTable = statement->as<DropTableStatement>();
+    ASSERT_EQ("tiny.nation", dropTable->tableName());
+    ASSERT_EQ("tiny.nation", dropTable->originalTableName());
+    ASSERT_FALSE(dropTable->ifExists());
   }
 }
 
