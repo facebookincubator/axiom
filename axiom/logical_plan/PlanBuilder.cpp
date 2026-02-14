@@ -411,11 +411,11 @@ void PlanBuilder::resolveProjections(
         }
       } else {
         outputNames.push_back(newName(alias.value()));
-        mappings.add(alias.value(), outputNames.back());
+        mappings.tryAdd(alias.value(), outputNames.back());
       }
     } else if (alias.has_value()) {
       outputNames.push_back(newName(alias.value()));
-      mappings.add(alias.value(), outputNames.back());
+      mappings.tryAdd(alias.value(), outputNames.back());
     } else {
       outputNames.push_back(newName("expr"));
     }
@@ -829,10 +829,8 @@ PlanBuilder& PlanBuilder::unnest(
   size_t index = 0;
 
   auto addOutputMapping = [&](const std::string& name, const std::string& id) {
-    if (!newOutputMapping->lookup(name)) {
-      newOutputMapping->add(name, id);
-    }
-    newOutputMapping->add({.alias = alias, .name = name}, id);
+    newOutputMapping->tryAdd(name, id);
+    newOutputMapping->tryAdd({.alias = alias, .name = name}, id);
     ++index;
   };
 
@@ -846,7 +844,7 @@ PlanBuilder& PlanBuilder::unnest(
       outputNames.emplace_back();
       for (const std::string& alias : unnestExpr.unnestedAliases()) {
         outputNames.back().emplace_back(newName(alias));
-        newOutputMapping->add(alias, outputNames.back().back());
+        newOutputMapping->tryAdd(alias, outputNames.back().back());
       }
     } else {
       switch (expr->type()->kind()) {
