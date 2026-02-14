@@ -2083,5 +2083,88 @@ TEST_F(PrestoParserTest, createTableAndInsert) {
   ASSERT_EQ(lp::WriteKind::kInsert, insertWrite->writeKind());
 }
 
+TEST_F(PrestoParserTest, orderByNonAliasedColumn) {
+  testSql(
+      "SELECT a, b as c "
+      "FROM (VALUES ('x', 1), ('y', 2)) AS t(a, b) "
+      "ORDER BY b DESC",
+      lp::test::LogicalPlanMatcherBuilder()
+          .values()
+          .project()
+          .sort()
+          .project());
+
+  testSql(
+      "SELECT a, ABS(b) as c "
+      "FROM (VALUES ('x', 1), ('y', 2)) AS t(a, b) "
+      "ORDER BY b DESC",
+      lp::test::LogicalPlanMatcherBuilder()
+          .values()
+          .project()
+          .sort()
+          .project());
+
+  testSql(
+      "SELECT * "
+      "FROM (SELECT a, b FROM (VALUES ('x', 1), ('y', 2)) AS t(a, b) WHERE b > 0) AS sub "
+      "ORDER BY a DESC",
+      lp::test::LogicalPlanMatcherBuilder()
+          .values()
+          .project()
+          .filter()
+          .project()
+          .sort());
+
+  testSql(
+      "SELECT a, ABS(b) as c "
+      "FROM (VALUES ('x', 1), ('y', 2)) AS t(a, b) "
+      "ORDER BY c DESC",
+      lp::test::LogicalPlanMatcherBuilder()
+          .values()
+          .project()
+          .sort()
+          .project());
+
+  testSql(
+      "SELECT a, b as c "
+      "FROM (VALUES ('x', 1), ('y', 2)) AS t(a, b) "
+      "ORDER BY c + 1",
+      lp::test::LogicalPlanMatcherBuilder()
+          .values()
+          .project()
+          .sort()
+          .project());
+
+  testSql(
+      "SELECT a, b as c "
+      "FROM (VALUES ('x', 1), ('y', 2)) AS t(a, b) "
+      "ORDER BY 2 DESC",
+      lp::test::LogicalPlanMatcherBuilder()
+          .values()
+          .project()
+          .sort()
+          .project());
+
+  testSql(
+      "SELECT n_name "
+      "FROM nation, region "
+      "WHERE n_regionkey = r_regionkey "
+      "ORDER BY r_name",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .join(lp::test::LogicalPlanMatcherBuilder().tableScan().build())
+          .filter()
+          .sort()
+          .project());
+
+  auto parser = makeParser();
+  auto sql =
+      "SELECT DISTINCT a FROM(VALUES('x', 1), ('y', 2), ('z', 3)) AS t(a, b) ORDER BY b DESC";
+
+  VELOX_ASSERT_THROW(
+      parser.parse(sql),
+      "For SELECT DISTINCT, ORDER BY expressions must appear in select list");
+}
+
 } // namespace
 } // namespace axiom::sql::presto

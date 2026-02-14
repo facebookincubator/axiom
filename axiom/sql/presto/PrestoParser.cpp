@@ -1721,6 +1721,74 @@ class RelationPlanner : public AstVisitor {
     }
   }
 
+  void addSortThenProject(
+      const std::vector<SelectItemPtr>& selectItems,
+      const OrderByPtr& orderBy,
+      bool distinct = false) {
+    ExprMap<core::ExprPtr> aliasToExpression;
+    std::vector<lp::ExprApi> selectExpressions;
+    for (const auto& item : selectItems) {
+      if (item->is(NodeType::kAllColumns)) {
+        continue;
+      }
+
+      VELOX_CHECK(item->is(NodeType::kSingleColumn));
+      auto* singleColumn = item->as<SingleColumn>();
+      auto expr = toExpr(singleColumn->expression());
+      if (singleColumn->alias() != nullptr) {
+        auto alias = canonicalizeIdentifier(*singleColumn->alias());
+        aliasToExpression.emplace(lp::Col(alias).expr(), expr.expr());
+        selectExpressions.push_back(expr.as(alias));
+      } else {
+        selectExpressions.push_back(expr);
+      }
+    }
+
+    std::vector<lp::SortKey> keys;
+    const auto& sortItems = orderBy->sortItems();
+    for (const auto& item : sortItems) {
+      const auto& sortKey = item->sortKey();
+
+      lp::ExprApi expr = [&]() -> lp::ExprApi {
+        if (sortKey->is(NodeType::kLongLiteral)) {
+          const auto n = sortKey->as<LongLiteral>()->value();
+          VELOX_CHECK_GE(n, 1);
+          VELOX_CHECK_LE(n, selectItems.size());
+
+          const auto& selectItem = selectItems.at(n - 1);
+          VELOX_CHECK(selectItem->is(NodeType::kSingleColumn));
+          return toExpr(selectItem->as<SingleColumn>()->expression());
+        }
+        return toExpr(sortKey);
+      }();
+
+      if (!aliasToExpression.empty()) {
+        auto resolved = replaceInputs(expr.expr(), aliasToExpression);
+        expr = lp::ExprApi(resolved, expr.name());
+      }
+
+      if (distinct) {
+        core::IExprEqual equal;
+        bool found = false;
+        for (const auto& selectExpression : selectExpressions) {
+          if (equal(expr.expr(), selectExpression.expr())) {
+            found = true;
+            break;
+          }
+        }
+        VELOX_USER_CHECK(
+            found,
+            "For SELECT DISTINCT, ORDER BY expressions must appear in select list");
+      }
+
+      keys.emplace_back(expr, item->isAscending(), item->isNullsFirst());
+    }
+
+    builder_->sort(keys);
+
+    addProject(selectItems);
+  }
+
   void addOrderBy(const OrderByPtr& orderBy) {
     if (orderBy == nullptr) {
       return;
@@ -1814,6 +1882,8 @@ class RelationPlanner : public AstVisitor {
     } else {
       if (tryAddGlobalAgg(selectItems, node->having())) {
         // Nothing else to do.
+      } else if (orderBy != nullptr) {
+        addSortThenProject(selectItems, orderBy, distinct);
       } else {
         // SELECT a, b -> builder.project({a, b})
         addProject(selectItems);
@@ -1822,8 +1892,6 @@ class RelationPlanner : public AstVisitor {
       if (distinct) {
         builder_->distinct();
       }
-
-      addOrderBy(orderBy);
     }
   }
 
