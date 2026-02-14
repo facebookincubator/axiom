@@ -110,6 +110,13 @@ int64_t integerValue(const velox::Variant* variant);
 std::optional<int64_t> maybeIntegerLiteral(
     const logical_plan::ConstantExpr* expr);
 
+/// Extracts field access information from a DEREFERENCE expression.
+/// The caller must verify the expression is a DEREFERENCE before calling.
+/// @param expr The DEREFERENCE expression.
+/// @return A Step with kField kind, field name, and field index. For anonymous
+/// structs, the field name will be an empty string.
+Step extractDereferenceStep(const logical_plan::Expr* expr);
+
 std::string conjunctsToString(const ExprVector& conjuncts);
 
 std::string orderByToString(
