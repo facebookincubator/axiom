@@ -1151,6 +1151,11 @@ class Aggregate : public Call {
     return orderTypes_;
   }
 
+  const Aggregate* dropDistinct() {
+    isDistinct_ = false;
+    return this;
+  }
+
   std::string toString() const override;
 
  private:

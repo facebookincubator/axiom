@@ -20,6 +20,7 @@
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
@@ -339,6 +340,146 @@ TEST_F(AggregationPlanTest, repartitionForAggPartitionSubset) {
                        .shuffle()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+}
+
+// Verifies that when all aggregates are DISTINCT with the same input columns
+// and no filters, the optimizer transforms them into a two-level aggregation:
+// 1. Inner: GROUP BY (original_keys + distinct_args) - for deduplication
+// 2. Outer: Regular aggregation without DISTINCT flag
+// This avoids the overhead of tracking distinct values in each aggregate.
+TEST_F(AggregationPlanTest, singleDistinctToGroupBy) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), DOUBLE()}));
+
+  {
+    // Test multiple DISTINCT aggregates on the same set of columns.
+    auto logicalPlan =
+        lp::PlanBuilder(/*enableCoercions=*/true)
+            .tableScan(kTestConnectorId, "t")
+            .aggregate({"a"}, {"count(DISTINCT b)", "covar_pop(DISTINCT b, b)"})
+            .build();
+
+    auto plan = test::QueryTestBase::planVelox(logicalPlan);
+
+    auto expectedMatcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .shuffle()
+            .localPartition()
+            .singleAggregation({"a", "b"}, {})
+            .shuffle()
+            .localPartition()
+            .singleAggregation({"a"}, {"count(b)", "covar_pop(b, b)"})
+            .shuffle()
+            .build();
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
+  }
+
+  {
+    // Test expression-based grouping keys and distinct args.
+    auto logicalPlan =
+        lp::PlanBuilder(/*enableCoercions=*/true)
+            .tableScan(kTestConnectorId, "t")
+            .aggregate(
+                {"a + 1"}, {"count(DISTINCT b + c)", "sum(DISTINCT b + c)"})
+            .build();
+
+    auto plan = test::QueryTestBase::planVelox(logicalPlan);
+
+    auto expectedMatcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .project()
+            .shuffle()
+            .localPartition()
+            .singleAggregation({"expr", "\"dt1.__p11\""}, {})
+            .shuffle()
+            .localPartition()
+            .singleAggregation(
+                {"expr"}, {"count(\"dt1.__p11\")", "sum(\"dt1.__p11\")"})
+            .shuffle()
+            .build();
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
+  }
+
+  {
+    // Test same set of distinct args with different order and duplicates: (b,
+    // c) and (c, b) have the same set {b, c}.
+    auto logicalPlan =
+        lp::PlanBuilder(/*enableCoercions=*/true)
+            .tableScan(kTestConnectorId, "t")
+            .aggregate(
+                {"a"},
+                {"covar_pop(DISTINCT b, c)", "covar_samp(DISTINCT c, b)"})
+            .build();
+
+    auto plan = test::QueryTestBase::planVelox(logicalPlan);
+
+    auto expectedMatcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .shuffle()
+            .localPartition()
+            .singleAggregation({"a", "b", "c"}, {})
+            .shuffle()
+            .localPartition()
+            .singleAggregation({"a"}, {"covar_pop(b, c)", "covar_samp(c, b)"})
+            .shuffle()
+            .build();
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
+  }
+}
+
+TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+
+  {
+    // Different DISTINCT arguments across aggregates is not supported yet.
+    auto logicalPlan =
+        lp::PlanBuilder(/*enableCoercions=*/true)
+            .tableScan(kTestConnectorId, "t")
+            .aggregate({"a"}, {"count(DISTINCT b)", "sum(DISTINCT c)"})
+            .build();
+
+    VELOX_ASSERT_THROW(test::QueryTestBase::planVelox(logicalPlan), "");
+  }
+
+  {
+    // Different DISTINCT argument sets: {b, c} vs {b}.
+    auto logicalPlan =
+        lp::PlanBuilder(/*enableCoercions=*/true)
+            .tableScan(kTestConnectorId, "t")
+            .aggregate(
+                {"a"},
+                {"covar_pop(DISTINCT b, c)", "covar_samp(DISTINCT b, b)"})
+            .build();
+
+    VELOX_ASSERT_THROW(test::QueryTestBase::planVelox(logicalPlan), "");
+  }
+
+  {
+    // Mix of DISTINCT and non-DISTINCT aggregates is not supported yet.
+    auto logicalPlan = lp::PlanBuilder(/*enableCoercions=*/true)
+                           .tableScan(kTestConnectorId, "t")
+                           .aggregate({"a"}, {"count(DISTINCT b)", "sum(c)"})
+                           .build();
+
+    VELOX_ASSERT_THROW(test::QueryTestBase::planVelox(logicalPlan), "");
+  }
+
+  {
+    // DISTINCT with ORDER BY is not supported yet.
+    auto logicalPlan =
+        lp::PlanBuilder(/*enableCoercions=*/true)
+            .tableScan(kTestConnectorId, "t")
+            .aggregate({"a"}, {"array_agg(DISTINCT b ORDER BY c)"})
+            .build();
+
+    VELOX_ASSERT_THROW(test::QueryTestBase::planVelox(logicalPlan), "");
   }
 }
 
