@@ -38,6 +38,7 @@ class ToTextVisitor : public RelationOpVisitor {
       const override {
     auto& myCtx = static_cast<Context&>(context);
     printHeader(op, myCtx);
+    printConstraints(op, myCtx);
 
     const auto& table = *op.as<TableScan>()->baseTable;
 
@@ -72,6 +73,7 @@ class ToTextVisitor : public RelationOpVisitor {
             : fmt::format(
                   "({})", exprsToString(op.distribution().partitionKeys())));
 
+    printConstraints(op, myCtx);
     printInput(*op.input(), myCtx);
   }
 
@@ -79,6 +81,7 @@ class ToTextVisitor : public RelationOpVisitor {
       const override {
     auto& myCtx = static_cast<Context&>(context);
     printHeader(op, myCtx);
+    printConstraints(op, myCtx);
     myCtx.out << toIndentation(myCtx.indent + 2)
               << conjunctsToString(op.exprs()) << std::endl;
     printInput(*op.input(), myCtx);
@@ -96,7 +99,11 @@ class ToTextVisitor : public RelationOpVisitor {
     for (auto i = 0; i < op.exprs().size(); ++i) {
       myCtx.out << toIndentation(myCtx.indent + 2)
                 << op.columns()[i]->toString()
-                << " := " << op.exprs()[i]->toString() << std::endl;
+                << " := " << op.exprs()[i]->toString();
+      if (myCtx.options.includeConstraints) {
+        myCtx.out << formatConstraint(op, op.columns()[i]->id());
+      }
+      myCtx.out << std::endl;
     }
 
     printInput(*op.input(), myCtx);
@@ -112,21 +119,20 @@ class ToTextVisitor : public RelationOpVisitor {
             std::string(velox::core::JoinTypeName::toName(op.joinType)),
             std::string(JoinMethodName::toName(op.method))));
 
-    const auto indentation = toIndentation(myCtx.indent + 2);
-    auto appendLine = [&](const std::string& line) {
-      myCtx.out << indentation << line << std::endl;
-    };
+    printConstraints(op, myCtx);
 
+    const auto indentation = toIndentation(myCtx.indent + 2);
     for (auto i = 0; i < op.leftKeys.size(); ++i) {
-      appendLine(
-          fmt::format(
-              "{} = {}",
-              op.leftKeys[i]->toString(),
-              op.rightKeys[i]->toString()));
+      myCtx.out << indentation
+                << fmt::format(
+                       "{} = {}",
+                       op.leftKeys[i]->toString(),
+                       op.rightKeys[i]->toString())
+                << std::endl;
     }
 
     if (!op.filter.empty()) {
-      appendLine(conjunctsToString(op.filter));
+      myCtx.out << indentation << conjunctsToString(op.filter) << std::endl;
     }
 
     printInput(*op.input(), myCtx);
@@ -160,7 +166,12 @@ class ToTextVisitor : public RelationOpVisitor {
     for (auto i = 0; i < op.aggregates.size(); ++i) {
       myCtx.out << toIndentation(myCtx.indent + 2)
                 << op.columns()[i + numGrouppingKeys]->toString()
-                << " := " << op.aggregates[i]->toString() << std::endl;
+                << " := " << op.aggregates[i]->toString();
+      if (myCtx.options.includeConstraints) {
+        myCtx.out << formatConstraint(
+            op, op.columns()[i + numGrouppingKeys]->id());
+      }
+      myCtx.out << std::endl;
     }
 
     printInput(*op.input(), myCtx);
@@ -175,6 +186,7 @@ class ToTextVisitor : public RelationOpVisitor {
       const override {
     auto& myCtx = static_cast<Context&>(context);
     printHeader(op, myCtx);
+    printConstraints(op, myCtx);
 
     for (auto i = 0; i < op.inputs.size(); ++i) {
       printInput(*op.inputs[i], myCtx);
@@ -191,6 +203,7 @@ class ToTextVisitor : public RelationOpVisitor {
       printHeader(op, myCtx, fmt::format("({})", op.limit));
     }
 
+    printConstraints(op, myCtx);
     printInput(*op.input(), myCtx);
   }
 
@@ -203,6 +216,8 @@ class ToTextVisitor : public RelationOpVisitor {
       const override {
     auto& myCtx = static_cast<Context&>(context);
     printHeader(op, myCtx);
+
+    printConstraints(op, myCtx);
 
     for (auto i = 0; i < op.unnestExprs.size(); ++i) {
       myCtx.out << toIndentation(myCtx.indent + 2)
@@ -241,6 +256,7 @@ class ToTextVisitor : public RelationOpVisitor {
       const {
     auto& myCtx = static_cast<Context&>(context);
     printHeader(op, myCtx);
+    printConstraints(op, myCtx);
     if (op.input() != nullptr) {
       printInput(*op.input(), myCtx);
     }
@@ -255,14 +271,78 @@ class ToTextVisitor : public RelationOpVisitor {
     if (!extra.empty()) {
       context.out << " " << extra;
     }
-    context.out << " -> " << columnsToString(op.columns()) << std::endl;
+
+    context.out << " [" << std::fixed << std::setprecision(2)
+                << op.resultCardinality() << " rows] -> "
+                << columnsToString(op.columns()) << std::endl;
 
     if (context.options.includeCost) {
       context.out << toIndentation(context.indent + 1)
-                  << "Estimates: cardinality = " << std::fixed
-                  << std::setprecision(0) << op.resultCardinality()
+                  << "Estimates: fanout = " << std::fixed
+                  << std::setprecision(2) << op.cost().fanout
                   << ", cost = " << std::fixed << std::setprecision(2)
                   << op.cost().totalCost() << std::endl;
+    }
+  }
+
+  // Formats constraint info for a column, e.g. " BIGINT (ndv=2.00 min=3
+  // max=4)". Returns empty string if no constraint found.
+  static std::string formatConstraint(const RelationOp& op, int32_t columnId) {
+    auto it = op.constraints().find(columnId);
+    if (it == op.constraints().end()) {
+      return "";
+    }
+
+    const auto& value = it->second;
+    std::stringstream out;
+    out << " " << value.type->toString() << " (ndv=" << std::fixed
+        << std::setprecision(2) << value.cardinality;
+    if (value.min != nullptr) {
+      out << " min=" << *value.min;
+    }
+    if (value.max != nullptr) {
+      out << " max=" << *value.max;
+    }
+    if (value.nullFraction > 0) {
+      out << " nulls=" << std::fixed << std::setprecision(0)
+          << (value.nullFraction * 100) << "%";
+    }
+    out << ")";
+    return out.str();
+  }
+
+  // Prints column constraints (type, ndv, min, max) in a box-drawing
+  // style that visually separates them from operator-specific details:
+  //
+  //   | Constraints:
+  //   |    t3.r_name VARCHAR (ndv=55 min="AFRICA" max="MIDDLE EAST")
+  //   |___ t3.r_regionkey BIGINT (ndv=55 min=0 max=4)
+  //
+  // No-op when includeConstraints is false or no columns have constraints.
+  void printConstraints(const RelationOp& op, Context& context) const {
+    if (!context.options.includeConstraints) {
+      return;
+    }
+    std::vector<std::string> lines;
+    for (auto* column : op.columns()) {
+      auto constraint = formatConstraint(op, column->id());
+      if (!constraint.empty()) {
+        lines.push_back(column->toString() + constraint);
+      }
+    }
+    if (lines.empty()) {
+      return;
+    }
+    const auto indentation = toIndentation(context.indent + 1);
+    context.out << indentation << "| Constraints:" << std::endl;
+    for (auto i = 0; i < lines.size(); ++i) {
+      context.out << indentation;
+      if (i + 1 < lines.size()) {
+        context.out << "|    ";
+      } else {
+        context.out << "|___ ";
+      }
+      context.out << lines[i] << std::endl;
     }
   }
 

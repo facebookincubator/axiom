@@ -27,6 +27,15 @@
 
 DECLARE_string(history_save_path);
 
+namespace facebook::axiom {
+namespace logical_plan {
+class LogicalPlanNode;
+} // namespace logical_plan
+namespace optimizer {
+class Optimization;
+} // namespace optimizer
+} // namespace facebook::axiom
+
 namespace facebook::axiom::optimizer::test {
 
 struct TestResult {
@@ -171,6 +180,13 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   velox::memory::MemoryPool& optimizerPool() const {
     return *optimizerPool_;
   }
+
+  /// Builds Optimization from 'logicalPlan' and invokes 'callback'. The
+  /// Optimization instance stays alive for the duration of the callback.
+  void verifyOptimization(
+      const logical_plan::LogicalPlanNode& logicalPlan,
+      const std::function<void(Optimization&)>& callback,
+      const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt);
 
   std::shared_ptr<velox::core::QueryCtx>& getQueryCtx();
 

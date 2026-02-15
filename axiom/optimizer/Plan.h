@@ -62,6 +62,9 @@ struct Plan {
   /// inputs is dt.pkt1.
   PlanObjectSet input;
 
+  /// Derived constraints on output columns.
+  const ConstraintMap* constraints;
+
   /// Hash join builds placed in the plan. Allows reusing a build.
   HashBuildVector builds;
 
@@ -122,18 +125,22 @@ struct JoinCandidate {
   /// The join between already placed tables and the table(s) in 'this'.
   JoinEdgeP join{nullptr};
 
-  /// Tables to join on the build side. The tables must not be already placed in
-  /// the plan.
+  /// Tables to join on the build side. The first entry is the primary
+  /// table (the original join candidate). Subsequent entries, if any,
+  /// are reducing tables discovered by findReducingBushyJoins that are
+  /// bundled into a bushy build side. Must not include already-placed
+  /// tables.
   std::vector<PlanObjectCP> tables;
 
-  /// Joins imported from the left side for reducing a build
-  /// size. These could be ignored without affecting the result but can
-  /// be included to restrict the size of build, e.g. lineitem join
-  /// part left (partsupp exists part) would have the second part in
-  /// 'existences' and partsupp in 'tables' because we know that
-  /// partsupp will not be probed with keys that are not in part, so
-  /// there is no point building with these. This may involve tables already
-  /// placed in the plan.
+  /// Semi-joins imported from the probe side to reduce the build size.
+  /// Each entry is a set of tables forming one semi-join. These do not
+  /// affect correctness — the inner join already filters — but shrink
+  /// the build by excluding rows that would never be probed. May
+  /// reference tables already placed in the plan.
+  ///
+  /// Example: for lineitem ⨝ part ⨝ partsupp, if partsupp (build) is
+  /// filtered by an existence on part, 'tables' = {partsupp} and
+  /// 'existences' = {{part}}.
   std::vector<PlanObjectSet> existences;
 
   /// Number of right side hits for one row on the left. The join
@@ -141,8 +148,9 @@ struct JoinCandidate {
   /// 'existences' does not.
   float fanout;
 
-  /// The selectivity from 'existences'. 0.2 means that the join of 'tables' is
-  /// reduced 5x.
+  /// Product of the selectivities from 'existences'. Used to set
+  /// the fanout on the exists-DT join. 0.2 means existences
+  /// reduce cardinality 5x.
   float existsFanout{1};
 
   JoinEdgeP compositeEdge{nullptr};

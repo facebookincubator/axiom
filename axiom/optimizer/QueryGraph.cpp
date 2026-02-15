@@ -508,17 +508,22 @@ struct JoinFanout {
 };
 
 // Estimates the number of matching rows per equality lookup on 'keys' given
-// 'scanCardinality' total rows. Divides by each key's distinct value count.
-// For subsequent keys, floors at 1 when a key has more distinct values than
-// remaining rows.
-float estimateFanout(float scanCardinality, const ExprVector& keys) {
+// 'scanCardinality' total rows. For each key pair, divides by
+// max(ndv(thisKey), ndv(otherKey)) to account for values on the probe side
+// that have no match on the scan side.
+float estimateFanout(
+    float scanCardinality,
+    const ExprVector& keys,
+    const ExprVector& otherKeys) {
   if (keys.empty()) {
     return scanCardinality;
   }
 
-  auto fanout = scanCardinality / keys[0]->value().cardinality;
+  auto fanout = scanCardinality /
+      std::max(keys[0]->value().cardinality, otherKeys[0]->value().cardinality);
   for (size_t i = 1; i < keys.size(); ++i) {
-    auto distinctValues = keys[i]->value().cardinality;
+    auto distinctValues = std::max(
+        keys[i]->value().cardinality, otherKeys[i]->value().cardinality);
     if (distinctValues > fanout) {
       fanout = 1;
     } else {
@@ -529,46 +534,53 @@ float estimateFanout(float scanCardinality, const ExprVector& keys) {
 }
 
 // Estimates the number of matching rows per equality lookup on 'keys' for
-// 'table'. For BaseTable, delegates to SchemaTable::indexByColumns() which
-// matches keys against available indices. For ValuesTable, UnnestTable, and
+// 'table'. For BaseTable, uses column statistics via estimateFanout and checks
+// uniqueness via SchemaTable::isUnique(). For ValuesTable, UnnestTable, and
 // DerivedTable, estimates cardinality using column statistics. For
 // DerivedTable with an aggregation, sets unique = true when keys cover all
 // grouping keys.
-JoinFanout joinFanout(PlanObjectCP table, const ExprVector& keys) {
+JoinFanout joinFanout(
+    PlanObjectCP table,
+    const ExprVector& keys,
+    const ExprVector& otherKeys) {
   if (table->is(PlanType::kTableNode)) {
     auto schemaTable = table->as<BaseTable>()->schemaTable;
+
+    auto fanout = estimateFanout(schemaTable->cardinality, keys, otherKeys);
 
     const bool allColumns =
         std::all_of(keys.begin(), keys.end(), [](ExprCP key) {
           return key->is(PlanType::kColumnExpr);
         });
 
+    bool unique = false;
     if (allColumns) {
       CPSpan<Column> columns(
           reinterpret_cast<ColumnCP const*>(keys.data()), keys.size());
-      auto info = schemaTable->indexByColumns(columns);
-      return {info.joinCardinality, info.unique};
+      unique = schemaTable->isUnique(columns);
     }
 
-    return {
-        .fanout = estimateFanout(schemaTable->cardinality, keys),
-        .unique = false};
+    return {fanout, unique};
   }
 
   if (table->is(PlanType::kValuesTableNode)) {
     const auto cardinality = table->as<ValuesTable>()->cardinality();
-    return {.fanout = estimateFanout(cardinality, keys), .unique = false};
+    return {
+        .fanout = estimateFanout(cardinality, keys, otherKeys),
+        .unique = false};
   }
 
   if (table->is(PlanType::kUnnestTableNode)) {
     const auto cardinality = table->as<UnnestTable>()->cardinality();
-    return {.fanout = estimateFanout(cardinality, keys), .unique = false};
+    return {
+        .fanout = estimateFanout(cardinality, keys, otherKeys),
+        .unique = false};
   }
 
   VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
   const auto* dt = table->as<DerivedTable>();
   return {
-      .fanout = estimateFanout(dt->cardinality, keys),
+      .fanout = estimateFanout(dt->cardinality, keys, otherKeys),
       .unique = dt->aggregation &&
           keys.size() >= dt->aggregation->groupingKeys().size(),
   };
@@ -596,8 +608,8 @@ void JoinEdge::guessFanout() {
   auto* opt = queryCtx()->optimization();
   const auto& options = opt->options();
 
-  auto left = joinFanout(leftTable_, leftKeys_);
-  auto right = joinFanout(rightTable_, rightKeys_);
+  auto left = joinFanout(leftTable_, leftKeys_, rightKeys_);
+  auto right = joinFanout(rightTable_, rightKeys_, leftKeys_);
   leftUnique_ = left.unique;
   rightUnique_ = right.unique;
 

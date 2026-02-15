@@ -290,7 +290,11 @@ std::string SqlQueryRunner::runExplain(
           nullptr,
           [&](const auto& plan) {
             text = optimizer::RelationOpPrinter::toText(
-                plan, {.includeCost = true});
+                plan,
+                {
+                    .includeCost = true,
+                    .includeConstraints = options.debugMode,
+                });
             return false; // Stop optimization.
           });
       return text;
