@@ -64,6 +64,9 @@ struct Value {
   std::string toString() const;
 
   TypeCP type;
+
+  /// Minimum and maximum values. Applies to orderable types (integers, floats,
+  /// dates, timestamps). Not set for booleans, strings, or complex types.
   VariantCP min{nullptr};
   VariantCP max{nullptr};
 
@@ -320,19 +323,14 @@ struct IndexInfo {
   /// empty 'lookupKeys', this is the cardinality of 'index'.
   float scanCardinality;
 
-  /// The expected number of hits for an equality match of lookup keys. This is
-  /// the expected number of rows given the lookup column combination
-  /// regardless of whether an index order can be used.
-  float joinCardinality;
-
   /// The lookup columns that match 'index'. These match 1:1 the leading keys
   /// of 'index'. If 'index' has no ordering columns or if the lookup columns
   /// are not a prefix of these, this is empty.
   std::vector<ColumnCP> lookupKeys;
 
-  /// The columns that were considered in 'scanCardinality' and
-  /// 'joinCardinality'. This may be fewer columns than given to
-  /// indexInfo() if the index does not cover some columns.
+  /// The columns that were considered in 'scanCardinality'. This may be
+  /// fewer columns than given to indexInfo() if the index does not cover
+  /// some columns.
   PlanObjectSet coveredColumns;
 
   /// Returns the schema column for the BaseTable column 'column' or nullptr
@@ -358,13 +356,9 @@ struct SchemaTable {
   /// True if 'columns' match no more than one row.
   bool isUnique(CPSpan<Column> columns) const;
 
-  /// Returns   uniqueness and cardinality information for a lookup on 'index'
+  /// Returns uniqueness and cardinality information for a lookup on 'index'
   /// where 'columns' have an equality constraint.
   IndexInfo indexInfo(ColumnGroupCP index, CPSpan<Column> columns) const;
-
-  /// Returns the best index to use for lookup where 'columns' have an
-  /// equality constraint.
-  IndexInfo indexByColumns(CPSpan<Column> columns) const;
 
   const std::string& name() const {
     return connectorTable->name();

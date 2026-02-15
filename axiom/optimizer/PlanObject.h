@@ -147,6 +147,8 @@ using PlanObjectVector = QGVector<PlanObjectCP>;
 /// Set of PlanObjects. Uses the objects id() as an index into a bitmap.
 class PlanObjectSet : public BitSet {
  public:
+  using BitSet::contains;
+
   /// Creates a PlanObjectSet containing a single object.
   static PlanObjectSet single(PlanObjectCP object) {
     PlanObjectSet set;

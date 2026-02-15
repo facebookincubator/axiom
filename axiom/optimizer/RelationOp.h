@@ -16,9 +16,9 @@
 
 #pragma once
 
+#include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
-#include "axiom/runner/MultiFragmentPlan.h"
 
 /// Plan candidates.
 /// A candidate plan is constructed based on the join graph/derived table tree.
@@ -199,6 +199,10 @@ class RelationOp {
     return relType_;
   }
 
+  std::string_view relTypeName() const {
+    return RelTypeName::toName(relType_);
+  }
+
   const Distribution& distribution() const {
     return distribution_;
   }
@@ -237,6 +241,13 @@ class RelationOp {
 
   const Cost& cost() const {
     return cost_;
+  }
+
+  /// Returns constraints on output columns. Keys are column IDs. Leaf operators
+  /// initialize constraints from schema/column values. Non-leaf operators
+  /// compute constraints from input constraints.
+  const ConstraintMap& constraints() const {
+    return constraints_;
   }
 
   /// Returns the number of output rows.
@@ -295,6 +306,8 @@ class RelationOp {
   const boost::intrusive_ptr<class RelationOp> input_;
 
   Cost cost_;
+
+  ConstraintMap constraints_;
 
   // Cache of history lookup key.
   mutable QGString key_;
@@ -481,6 +494,22 @@ AXIOM_DECLARE_ENUM_NAME(JoinMethod);
 
 /// Represents a hash or merge join.
 struct Join : public RelationOp {
+  /// @param nullAware Applies to semi and anti joins only. When true, the join
+  /// semantic is IN / NOT IN. When false, the join semantic is EXISTS / NOT
+  /// EXISTS.
+  /// @param lhsKeys Left-side join keys from lhs columns, 1:1 with rhsKeys.
+  /// @param rhsKeys Right-side join keys from rhs columns, 1:1 with lhsKeys.
+  /// @param fanout Raw equi-key fanout: expected number of rhs matches per lhs
+  /// row. Computed externally from join graph statistics (index lookups,
+  /// execution history, PK/FK relationships) which are not available inside the
+  /// Join constructor. Does not include join-type adjustment (e.g. max(1,
+  /// fanout) for left join, min(1, fanout) for semi join) or filter
+  /// selectivity; both are applied in initCost.
+  /// @param rlFanout Raw equi-key fanout in the reverse direction: expected
+  /// number of lhs matches per rhs row.
+  /// @param columns Output columns for the join. Must be a subset of columns
+  /// from lhs and rhs. For kLeftSemiProject, includes an extra boolean mark
+  /// column (last) that is not present in either input.
   Join(
       JoinMethod method,
       velox::core::JoinType joinType,
@@ -491,8 +520,12 @@ struct Join : public RelationOp {
       ExprVector rhsKeys,
       ExprVector filterExprs,
       float fanout,
+      float rlFanout,
       ColumnVector columns);
 
+  /// Convenience factory for cross joins (no equi-keys). Sets method to
+  /// kCross, nullAware to false, keys to empty, and fanout to
+  /// right->resultCardinality().
   static Join* makeCrossJoin(
       RelationOpPtr input,
       RelationOpPtr right,
@@ -502,8 +535,6 @@ struct Join : public RelationOp {
 
   const JoinMethod method;
   const velox::core::JoinType joinType;
-  /// When true, the join semantic is IN / NOT IN. When false, the join semantic
-  /// is EXISTS / NOT EXISTS.
   const bool nullAware;
   const RelationOpPtr right;
   const ExprVector leftKeys;
@@ -517,6 +548,17 @@ struct Join : public RelationOp {
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
+
+ private:
+  // Computes filter selectivity from input constraints.
+  float computeFilterSelectivity() const;
+
+  // Initializes constraints_ for output columns.
+  void initConstraints(float fanout, float rlFanout, float filterSelectivity);
+
+  // Initializes cost_ fields. Applies filter selectivity and join-type
+  // adjustment to the raw fanout.
+  void initCost(float fanout, float rlFanout, float filterSelectivity);
 };
 
 using JoinCP = const Join*;
@@ -564,10 +606,27 @@ struct Unnest : public RelationOp {
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
+
+ private:
+  void initConstraints();
 };
 
 /// Represents aggregation with or without grouping.
 struct Aggregation : public RelationOp {
+  /// Constructs an Aggregation operator.
+  ///
+  /// @param input The input relation.
+  /// @param groupingKeys Columns from the input that define groups. Each key
+  ///   must be a column expression (kColumnExpr). These correspond 1:1 to the
+  ///   prefix of output columns (columns[0..groupingKeys.size()-1]).
+  /// @param preGroupedKeys Prefix of groupingKeys that input is already sorted
+  ///   on. When equal to groupingKeys, enables streaming aggregation.
+  /// @param aggregates Aggregate functions to compute per group. These
+  ///   correspond 1:1 to the suffix of output columns
+  ///   (columns[groupingKeys.size()..]).
+  /// @param step Aggregation step (partial, final, single, intermediate).
+  /// @param columns Output columns: groupingKeys followed by aggregate result
+  ///   columns. Must have size == groupingKeys.size() + aggregates.size().
   Aggregation(
       RelationOpPtr input,
       ExprVector groupingKeys,
@@ -600,6 +659,7 @@ struct Aggregation : public RelationOp {
       RelationOpVisitorContext& context) const override;
 
  private:
+  void initConstraints();
   void setCostWithGroups(int64_t inputBeforePartial);
 };
 
@@ -637,6 +697,9 @@ struct UnionAll : public RelationOp {
       RelationOpVisitorContext& context) const override;
 
   const RelationOpPtrVector inputs;
+
+ private:
+  void initConstraints();
 };
 
 using UnionAllCP = const UnionAll*;

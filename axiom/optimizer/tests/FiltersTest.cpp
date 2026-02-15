@@ -16,17 +16,13 @@
 
 #include "axiom/optimizer/Filters.h"
 #include <fmt/format.h>
-#include <folly/init/Init.h>
 #include <gtest/gtest.h>
 #include <functional>
-#include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/optimizer/Optimization.h"
-#include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/expression/Expr.h"
 
 using namespace facebook::velox;
 
@@ -106,42 +102,9 @@ class FiltersTest : public test::HiveQueriesTestBase {
       const std::string& connectorId = exec::test::kHiveConnectorId) {
     auto logicalPlan = parseSelect(sql, connectorId);
 
-    auto& veloxQueryCtx = getQueryCtx();
-
-    HashStringAllocator allocator(&optimizerPool());
-    auto context = std::make_unique<optimizer::QueryGraphContext>(allocator);
-
-    optimizer::queryCtx() = context.get();
-    SCOPE_EXIT {
-      optimizer::queryCtx() = nullptr;
-    };
-
-    exec::SimpleExpressionEvaluator evaluator(
-        veloxQueryCtx.get(), &optimizerPool());
-
-    auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
-
-    connector::SchemaResolver schemaResolver;
-
-    runner::MultiFragmentPlan::Options options;
-    options.numWorkers = 1;
-    options.numDrivers = 1;
-
-    optimizer::VeloxHistory history;
-
-    optimizer::Optimization optimization(
-        session,
-        *logicalPlan,
-        schemaResolver,
-        history,
-        veloxQueryCtx,
-        evaluator,
-        optimizerOptions_,
-        options);
-
-    auto* rootDt = optimization.rootDt();
-
-    callback(rootDt);
+    verifyOptimization(*logicalPlan, [&](Optimization& optimization) {
+      callback(optimization.rootDt());
+    });
   }
 
   // Returns nullptr if the table is not found.

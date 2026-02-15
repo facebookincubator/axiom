@@ -139,6 +139,40 @@ std::shared_ptr<core::QueryCtx>& QueryTestBase::getQueryCtx() {
   return queryCtx_;
 }
 
+void QueryTestBase::verifyOptimization(
+    const logical_plan::LogicalPlanNode& logicalPlan,
+    const std::function<void(Optimization&)>& callback,
+    const std::optional<OptimizerOptions>& optimizerOptions) {
+  auto& veloxQueryCtx = getQueryCtx();
+
+  HashStringAllocator allocator(optimizerPool_.get());
+  auto context = std::make_unique<optimizer::QueryGraphContext>(allocator);
+  optimizer::queryCtx() = context.get();
+  SCOPE_EXIT {
+    optimizer::queryCtx() = nullptr;
+  };
+
+  exec::SimpleExpressionEvaluator evaluator(
+      veloxQueryCtx.get(), optimizerPool_.get());
+
+  auto session = std::make_shared<Session>(veloxQueryCtx->queryId());
+
+  connector::SchemaResolver schemaResolver;
+  VeloxHistory history;
+
+  Optimization optimization(
+      session,
+      logicalPlan,
+      schemaResolver,
+      history,
+      veloxQueryCtx,
+      evaluator,
+      optimizerOptions.value_or(optimizerOptions_),
+      runner::MultiFragmentPlan::Options{.numWorkers = 1, .numDrivers = 1});
+
+  callback(optimization);
+}
+
 optimizer::PlanAndStats QueryTestBase::planVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
     const runner::MultiFragmentPlan::Options& options,

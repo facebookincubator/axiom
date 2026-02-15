@@ -19,6 +19,7 @@
 #include <ranges>
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
+#include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Optimization.h"
 #include "axiom/optimizer/PlanUtils.h"
@@ -37,7 +38,7 @@ namespace facebook::axiom::optimizer {
 namespace {
 
 Value toValue(const velox::TypePtr& type, float cardinality) {
-  return Value{toType(type), cardinality};
+  return clampCardinality(Value{toType(type), cardinality});
 }
 
 Value toConstantValue(const velox::TypePtr& type) {
@@ -954,7 +955,15 @@ ExprCP ToGraph::makeConstant(const lp::ConstantExpr& constant) {
     return it->second;
   }
 
-  auto* literal = make<Literal>(Value(temp.type, 1), temp.value.get());
+  Value value(temp.type, 1);
+  // For scalar types, set min and max to the literal value
+  if (temp.type->isPrimitiveType()) {
+    // Scalar/primitive type - set min and max to the variant
+    value.min = temp.value.get();
+    value.max = temp.value.get();
+  }
+
+  auto* literal = make<Literal>(value, temp.value.get());
 
   constantDedup_[std::move(temp)] = literal;
   return literal;

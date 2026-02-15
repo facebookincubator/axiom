@@ -570,5 +570,11 @@ based on column statistics, but statistics may be stale or approximate:
 
 ## Related Documentation
 
-- See [JoinPlanning.md](JoinPlanning.md) for how selectivity estimates affect
-  join ordering decisions.
+- See [CardinalityEstimation.md](CardinalityEstimation.md) for cardinality
+  estimation of all operators, including how filter selectivity feeds into
+  output cardinality.
+- See [JoinEstimation.md](JoinEstimation.md) for join cardinality and
+  constraint propagation, which uses filter selectivity for non-equi
+  filter conditions.
+- See [JoinEstimationQuickRef.md](JoinEstimationQuickRef.md) for a compact
+  cheat-sheet of join cardinality and constraint propagation formulas.
