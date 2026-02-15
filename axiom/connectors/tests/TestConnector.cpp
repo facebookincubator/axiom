@@ -55,8 +55,23 @@ void TestTable::setStats(
   for (const auto& [name, column] : columnMap()) {
     auto statsIt = columnStats.find(name);
     if (statsIt != columnStats.end()) {
-      const_cast<Column*>(column)->setStats(
-          std::make_unique<ColumnStatistics>(statsIt->second));
+      auto stats = std::make_unique<ColumnStatistics>(statsIt->second);
+      if (stats->numDistinct.has_value()) {
+        VELOX_CHECK_LE(
+            stats->numDistinct.value(), numRows, "Column '{}'", name);
+      }
+      if (stats->nonNull) {
+        VELOX_CHECK_EQ(stats->nullPct, 0, "Column '{}'", name);
+      }
+      if (stats->min.has_value() && stats->max.has_value()) {
+        VELOX_CHECK(
+            !(stats->max.value() < stats->min.value()),
+            "Column '{}': min must not exceed max ({} vs. {})",
+            name,
+            stats->min.value().toJsonUnsafe(),
+            stats->max.value().toJsonUnsafe());
+      }
+      const_cast<Column*>(column)->setStats(std::move(stats));
     } else {
       // Clear stats for columns not in columnStats.
       const_cast<Column*>(column)->setStats(

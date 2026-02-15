@@ -292,22 +292,22 @@ TEST_F(RelationOpPrinterTest, cost) {
       lines,
       testing::ElementsAre(
           testing::StartsWith("Project (redundant)"),
-          testing::StartsWith("  Estimates: cardinality"),
+          testing::StartsWith("  Estimates: fanout"),
           testing::StartsWith("    "),
           testing::StartsWith("  Aggregation"),
-          testing::StartsWith("    Estimates: cardinality"),
+          testing::StartsWith("    Estimates: fanout"),
           testing::StartsWith("      "), // count(*)
           testing::StartsWith("    Join LEFT Hash "),
-          testing::StartsWith("      Estimates: cardinality"),
+          testing::StartsWith("      Estimates: fanout"),
           testing::StartsWith("      "), // t_key = u_key
           testing::HasSubstr("gt"), // a > b
           testing::StartsWith("      TableScan"),
-          testing::StartsWith("        Estimates: cardinality"),
+          testing::StartsWith("        Estimates: fanout"),
           testing::StartsWith("        table: t"),
           testing::StartsWith("      HashBuild"),
-          testing::StartsWith("        Estimates: cardinality"),
+          testing::StartsWith("        Estimates: fanout"),
           testing::StartsWith("        TableScan"),
-          testing::StartsWith("          Estimates: cardinality"),
+          testing::StartsWith("          Estimates: fanout"),
           testing::StartsWith("          table: u"),
           testing::Eq("")));
 }

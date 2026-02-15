@@ -688,13 +688,6 @@ TEST_F(TpchPlanTest, DISABLED_makePlans) {
 
   for (auto q = 1; q <= 22; ++q) {
     LOG(ERROR) << "q" << q;
-    const bool originalEnableReducingExistences =
-        optimizerOptions_.enableReducingExistences;
-    optimizerOptions_.enableReducingExistences = (q != 20);
-    SCOPE_EXIT {
-      optimizerOptions_.enableReducingExistences =
-          originalEnableReducingExistences;
-    };
 
     auto logicalPlan = parseTpchSql(q);
     planVelox(

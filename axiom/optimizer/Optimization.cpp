@@ -18,9 +18,7 @@
 #include <algorithm>
 #include <iostream>
 #include <utility>
-#include "axiom/optimizer/DerivedTablePrinter.h"
 #include "axiom/optimizer/Plan.h"
-#include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
@@ -45,7 +43,6 @@ Optimization::Optimization(
       history_(history),
       veloxQueryCtx_(std::move(veloxQueryCtx)),
       topState_{*this, nullptr},
-      negation_{toName(FunctionRegistry::instance()->negation())},
       toGraph_{schema, evaluator, options_},
       toVelox_{session_, runnerOptions_, options_} {
   queryCtx()->optimization() = this;
@@ -115,6 +112,39 @@ PlanP Optimization::bestPlan() {
 }
 
 namespace {
+// Thresholds used in reducing-joins logic.
+//
+// These constants control when the optimizer introduces "reducing" semi-joins
+// that pre-filter a table before joining with the main query. The goal is to
+// reduce intermediate result sizes when small dimension tables can filter
+// large fact tables early.
+//
+// The values are empirically tuned based on TPC-H and production workloads:
+// - Too aggressive (low thresholds): Creates unnecessary semi-joins that add
+//   overhead without sufficient row reduction.
+// - Too conservative (high thresholds): Misses opportunities to reduce
+//   intermediate result sizes.
+struct ReducingJoinsMagic {
+  // Maximum single-edge fanout to follow during DFS traversal.
+  // Edges with fanout > 1.2 are unlikely to reduce rows enough to justify
+  // the overhead of a semi-join. The 1.2 threshold allows for slight row
+  // expansion while exploring paths that ultimately reduce overall cardinality.
+  static constexpr float kMaxEdgeFanout = 1.2;
+
+  // Cumulative fanout below which a path is declared "reducing"
+  // and its tables are added to the result.
+  // A path with cumulative fanout < 0.9 reduces total rows by at least 10%,
+  // which typically justifies the cost of an additional semi-join operation.
+  static constexpr float kReducingPathThreshold = 0.9;
+
+  // Minimum reduction required to create a semi-join existence.
+  // Existence checks (semi-joins) have lower overhead than full joins, so we
+  // require at least 30% row reduction (fanout < 0.7) to justify adding them.
+  // This is more conservative than kReducingPathThreshold because existence
+  // semi-joins add an extra table scan and hash build.
+  static constexpr float kExistenceReductionThreshold = 0.7;
+};
+
 // Traverses joins from 'candidate'. Follows any join that goes to a table not
 // in 'visited' with a fanout < 'maxFanout'. 'fanoutFromRoot' is the product of
 // the fanouts between 'candidate' and the 'candidate' of the top level call to
@@ -174,11 +204,12 @@ void reducingJoinsRecursive(
 
     visited.add(other.table);
     auto fanout = fanoutFromRoot * other.fanout;
-    if (fanout < 0.9) {
+    auto nextMaxFanout = maxFanout;
+    if (fanout < ReducingJoinsMagic::kReducingPathThreshold) {
       result.add(other.table);
       for (auto step : path) {
         result.add(step);
-        maxFanout = 1;
+        nextMaxFanout = 1;
       }
     }
 
@@ -188,7 +219,7 @@ void reducingJoinsRecursive(
         state,
         other.table,
         fanout,
-        maxFanout,
+        nextMaxFanout,
         path,
         visited,
         result,
@@ -205,6 +236,78 @@ void reducingJoinsRecursive(
       resultFunc(path, fanoutFromRoot);
     }
   }
+}
+
+// Traverses join edges from 'startTable', skipping tables in
+// 'excludedTables', looking for paths whose cumulative fanout is
+// below kReducingPathThreshold. Populates 'reducingTables' with
+// 'startTable' plus any discovered reducing tables. Returns the
+// cumulative reduction (product of leaf fanouts), or 1 if no reducing
+// path is found.
+float findReducingBushyJoins(
+    const PlanState& state,
+    PlanObjectCP startTable,
+    PlanObjectSet& reducingTables,
+    const PlanObjectSet& excludedTables = {}) {
+  reducingTables = {};
+  PlanObjectSet visited = state.placed();
+  visited.add(startTable);
+  visited.unionSet(excludedTables);
+  reducingTables.add(startTable);
+  std::vector<PlanObjectCP> path{startTable};
+  float reduction = 1;
+  reducingJoinsRecursive(
+      state,
+      startTable,
+      /*fanoutFromRoot=*/1,
+      ReducingJoinsMagic::kMaxEdgeFanout,
+      path,
+      visited,
+      reducingTables,
+      reduction);
+  return reduction;
+}
+
+// Traverses join edges from 'startTable', skipping tables in
+// 'excludedTables', looking for paths whose cumulative fanout is
+// below kExistenceReductionThreshold. Each qualifying path becomes
+// a semi-join existence appended to 'existences'. Returns the
+// cumulative existence reduction, or 1 if none found.
+float findReducingExistences(
+    const PlanState& state,
+    PlanObjectCP startTable,
+    const PlanObjectSet& excludedTables,
+    std::vector<PlanObjectSet>& existences) {
+  std::vector<PlanObjectCP> path{startTable};
+  PlanObjectSet exists;
+  auto visitedCopy = excludedTables;
+  // Required by reducingJoinsRecursive but unused; only
+  // existenceReduction matters.
+  float reduction = 1;
+  float existenceReduction = 1;
+  reducingJoinsRecursive(
+      state,
+      startTable,
+      /*fanoutFromRoot=*/1,
+      ReducingJoinsMagic::kMaxEdgeFanout,
+      path,
+      visitedCopy,
+      exists,
+      reduction,
+      [&](auto& path, float reduction) {
+        if (reduction < ReducingJoinsMagic::kExistenceReductionThreshold) {
+          // The original table is added to the reducing existences because
+          // the path starts with it but it is not joined twice since it
+          // already is the start of the main join.
+          PlanObjectSet added;
+          for (auto i = 1; i < path.size(); ++i) {
+            added.add(path[i]);
+          }
+          existences.push_back(std::move(added));
+          existenceReduction *= reduction;
+        }
+      });
+  return existenceReduction;
 }
 
 bool allowReducingInnerJoins(const JoinCandidate& candidate) {
@@ -226,38 +329,48 @@ void checkTables(const JoinCandidate& candidate) {
   }
 }
 
-// For an inner join, see if can bundle reducing joins on the build.
+// For an inner join candidate, looks for co-located tables whose joins reduce
+// cardinality and bundles them into a bushy build side. Also looks for reducing
+// existences (semi-joins) that can be imported from the probe side to shrink
+// the build.
+//
+// Returns a new JoinCandidate with the expanded table list, accumulated
+// existences, and adjusted fanout. Returns std::nullopt if no reduction is
+// found.
+//
+// Two passes are made using reducingJoinsRecursive:
+//   1. Reducing inner joins — DFS from the candidate table over unplaced
+//      neighbors. If the cumulative reduction is below kReducingPathThreshold,
+//      the discovered tables are bundled into a single bushy candidate.
+//   2. Reducing existences — a second DFS that also traverses already-placed
+//      tables and tables found in pass 1. For every reducing leaf whose
+//      cumulative fanout is below kExistenceReductionThreshold, a semi-join
+//      (existence) is recorded so it can later be imported to the build side.
+//
+// Pass 2 is skipped when 'enableReducingExistences' is false or
+// 'noImportOfExists' is set on the derived table.
 std::optional<JoinCandidate> reducingJoins(
     const PlanState& state,
     const JoinCandidate& candidate,
     bool enableReducingExistences) {
   checkTables(candidate);
 
+  VELOX_DCHECK_EQ(candidate.tables.size(), 1);
+  auto startTable = candidate.tables[0];
+
   std::vector<PlanObjectCP> tables;
   std::vector<PlanObjectSet> existences;
   float fanout = candidate.fanout;
 
-  PlanObjectSet reducingSet;
+  PlanObjectSet reducingTables;
   if (allowReducingInnerJoins(candidate)) {
-    PlanObjectSet visited = state.placed();
-    visited.add(candidate.tables[0]);
-    reducingSet.add(candidate.tables[0]);
-    std::vector<PlanObjectCP> path{candidate.tables[0]};
-    float reduction = 1;
-    reducingJoinsRecursive(
-        state,
-        candidate.tables[0],
-        1,
-        1.2,
-        path,
-        visited,
-        reducingSet,
-        reduction);
-    if (reduction < 0.9) {
-      // The only table in 'candidate' must be first in the bushy table list.
-      tables = candidate.tables;
-      reducingSet.forEach([&](auto object) {
-        if (object != tables[0]) {
+    auto reduction = findReducingBushyJoins(state, startTable, reducingTables);
+    if (reduction < ReducingJoinsMagic::kReducingPathThreshold) {
+      // Start with the candidate's original table, then append the
+      // reducing tables discovered by the DFS.
+      tables.push_back(startTable);
+      reducingTables.forEach([&](auto object) {
+        if (object != startTable) {
           tables.push_back(object);
         }
       });
@@ -265,38 +378,15 @@ std::optional<JoinCandidate> reducingJoins(
     }
   }
 
+  float existenceReduction = 1;
   if (enableReducingExistences && !state.dt->noImportOfExists) {
-    std::vector<PlanObjectCP> path{candidate.tables[0]};
     // Look for reducing joins that were not added before, also covering already
     // placed tables. This may copy reducing joins from a probe to the
     // corresponding build.
-    reducingSet.add(candidate.tables[0]);
-    reducingSet.unionSet(state.dt->importedExistences);
-
-    PlanObjectSet exists;
-    float reduction = 1;
-    reducingJoinsRecursive(
-        state,
-        candidate.tables[0],
-        1,
-        1.2,
-        path,
-        reducingSet,
-        exists,
-        reduction,
-        [&](auto& path, float reduction) {
-          if (reduction < 0.7) {
-            // The original table is added to the reducing existences because
-            // the path starts with it but it is not joined twice since it
-            // already is the start of the main join.
-            PlanObjectSet added;
-            for (auto i = 1; i < path.size(); ++i) {
-              added.add(path[i]);
-            }
-            existences.push_back(std::move(added));
-            fanout *= reduction;
-          }
-        });
+    reducingTables.add(startTable);
+    reducingTables.unionSet(state.dt->importedExistences);
+    existenceReduction =
+        findReducingExistences(state, startTable, reducingTables, existences);
   }
 
   if (tables.empty() && existences.empty()) {
@@ -309,9 +399,10 @@ std::optional<JoinCandidate> reducingJoins(
     tables = candidate.tables;
   }
 
-  JoinCandidate reducing(candidate.join, tables[0], fanout);
+  JoinCandidate reducing(candidate.join, startTable, fanout);
   reducing.tables = std::move(tables);
   reducing.existences = std::move(existences);
+  reducing.existsFanout = existenceReduction;
   return reducing;
 }
 
@@ -597,49 +688,6 @@ RelationOpPtr repartitionForIndex(
       plan->columns());
   state.addCost(*repartition);
   return repartition;
-}
-
-// Join edge: a -- b. Left is a. Right is b.
-// @param fanout For each row in 'a' there are so many matches in 'b'.
-// @param rlFanout For each row in 'b' there are so many matches in 'a'.
-// @param rightToLeftRatio |b| / |a|
-float fanoutJoinTypeLimit(
-    velox::core::JoinType joinType,
-    float fanout,
-    float rlFanout,
-    float rightToLeftRatio) {
-  switch (joinType) {
-    case velox::core::JoinType::kInner:
-      return fanout;
-    case velox::core::JoinType::kLeft:
-      return std::max<float>(1, fanout);
-    case velox::core::JoinType::kRight:
-      return std::max<float>(1, rlFanout) * rightToLeftRatio;
-    case velox::core::JoinType::kFull:
-      return std::max<float>(std::max<float>(1, fanout), rightToLeftRatio);
-    case velox::core::JoinType::kLeftSemiProject:
-      return 1;
-    case velox::core::JoinType::kLeftSemiFilter:
-      return std::min<float>(1, fanout);
-    case velox::core::JoinType::kRightSemiProject:
-      return rightToLeftRatio;
-    case velox::core::JoinType::kRightSemiFilter:
-      return std::min<float>(1, rlFanout) * rightToLeftRatio;
-    case velox::core::JoinType::kAnti:
-      return std::max<float>(0, 1 - fanout);
-    default:
-      VELOX_UNREACHABLE();
-  }
-}
-
-void setMarkTrueFraction(
-    ColumnCP mark,
-    velox::core::JoinType joinType,
-    float fanout,
-    float rlFanout) {
-  const_cast<Value*>(&mark->value())->trueFraction = std::min<float>(
-      1,
-      joinType == velox::core::JoinType::kLeftSemiProject ? fanout : rlFanout);
 }
 
 // Returns the positions in 'keys' for the expressions that determine the
@@ -1408,8 +1456,7 @@ PlanObjectSet translateToJoinInput(
 void tryOptimizeSemiProject(
     velox::core::JoinType& joinType,
     ColumnCP& mark,
-    PlanState& state,
-    Name negation) {
+    PlanState& state) {
   if (mark) {
     const bool leftProject =
         joinType == velox::core::JoinType::kLeftSemiProject;
@@ -1426,7 +1473,8 @@ void tryOptimizeSemiProject(
           return;
         }
 
-        if (leftProject && isCallExpr(markFilter, negation) &&
+        if (leftProject &&
+            isCallExpr(markFilter, queryCtx()->functionNames().negation) &&
             markFilter->as<Call>()->argAt(0) == mark) {
           joinType = velox::core::JoinType::kAnti;
           mark = nullptr;
@@ -1541,57 +1589,6 @@ void Optimization::joinByHash(
     }
   }
 
-  ProjectionBuilder projectionBuilder;
-  bool needsProjection = false;
-
-  const auto& downstreamColumns = state.downstreamColumns();
-  downstreamColumns.forEach<Column>([&](auto column) {
-    if (column == build.markColumn) {
-      mark = column;
-      return;
-    }
-
-    if (joinColumns.contains(column)) {
-      projectionBuilder.add(column, joinColumnMapping.at(column));
-      needsProjection = true;
-      return;
-    }
-
-    if ((probeOnly || !buildColumns.contains(column)) &&
-        !probeColumns.contains(column)) {
-      return;
-    }
-
-    projectionBuilder.add(column, column);
-  });
-
-  if (mark) {
-    setMarkTrueFraction(
-        mark, joinType, candidate.fanout, candidate.join->rlFanout());
-  }
-
-  tryOptimizeSemiProject(joinType, mark, state, negation_);
-
-  // If there is an existence flag, it is the rightmost result column.
-  if (mark) {
-    projectionBuilder.add(mark, mark);
-  }
-
-  // Add the row-number column for EnforceDistinct. It is not part of
-  // downstreamColumns, so we need to add it explicitly.
-  if (enforceDistinctColumn &&
-      !downstreamColumns.contains(enforceDistinctColumn)) {
-    projectionBuilder.add(enforceDistinctColumn, enforceDistinctColumn);
-  }
-
-  state.replaceColumns(projectionBuilder.outputColumns());
-
-  const auto fanout = fanoutJoinTypeLimit(
-      joinType,
-      candidate.fanout,
-      candidate.join->rlFanout(),
-      buildState.cost.cardinality / state.cost.cardinality);
-
   if (!isSingleWorker_ &&
       !(probeInput->distribution().isGather() &&
         buildInput->distribution().isGather())) {
@@ -1599,7 +1596,7 @@ void Optimization::joinByHash(
       if (needsShuffle) {
         if (copartition.empty()) {
           for (auto i : partKeys) {
-            copartition.push_back(build.keys[i]);
+            copartition.push_back(buildKeys[i]);
           }
         }
         Distribution distribution{
@@ -1624,8 +1621,48 @@ void Optimization::joinByHash(
     }
   }
 
-  auto* buildOp = make<HashBuild>(buildInput, build.keys, buildPlan);
+  auto* buildOp = make<HashBuild>(buildInput, buildKeys, buildPlan);
   buildState.addCost(*buildOp);
+
+  ProjectionBuilder projectionBuilder;
+  bool needsProjection = false;
+
+  const auto& downstreamColumns = state.downstreamColumns();
+  downstreamColumns.forEach<Column>([&](auto column) {
+    if (column == build.markColumn) {
+      mark = column;
+      return;
+    }
+
+    if (joinColumns.contains(column)) {
+      projectionBuilder.add(column, joinColumnMapping.at(column));
+      needsProjection = true;
+      return;
+    }
+
+    if ((probeOnly || !buildColumns.contains(column)) &&
+        !probeColumns.contains(column)) {
+      return;
+    }
+
+    projectionBuilder.add(column, column);
+  });
+
+  tryOptimizeSemiProject(joinType, mark, state);
+
+  // If there is an existence flag, it is the rightmost result column.
+  if (mark) {
+    projectionBuilder.add(mark, mark);
+  }
+
+  // Add the row-number column for EnforceDistinct. It is not part of
+  // downstreamColumns, so we need to add it explicitly.
+  if (enforceDistinctColumn &&
+      !downstreamColumns.contains(enforceDistinctColumn)) {
+    projectionBuilder.add(enforceDistinctColumn, enforceDistinctColumn);
+  }
+
+  state.replaceColumns(projectionBuilder.outputColumns());
 
   RelationOp* join = make<Join>(
       JoinMethod::kHash,
@@ -1636,7 +1673,8 @@ void Optimization::joinByHash(
       std::move(probeKeys),
       std::move(buildKeys),
       candidate.join->filter(),
-      fanout,
+      candidate.fanout,
+      candidate.join->rlFanout(),
       projectionBuilder.inputColumns());
 
   state.addCost(*join);
@@ -1759,22 +1797,11 @@ void Optimization::joinByHashRight(
     projectionBuilder.add(column, column);
   });
 
-  if (mark) {
-    setMarkTrueFraction(
-        mark, rightJoinType, candidate.join->rlFanout(), candidate.fanout);
-  }
-
-  tryOptimizeSemiProject(rightJoinType, mark, state, negation_);
+  tryOptimizeSemiProject(rightJoinType, mark, state);
 
   if (mark) {
     projectionBuilder.add(mark, mark);
   }
-
-  const auto fanout = fanoutJoinTypeLimit(
-      rightJoinType,
-      candidate.join->rlFanout(),
-      candidate.fanout,
-      state.cost.cardinality / probeState.cost.cardinality);
 
   const auto buildCost = state.cost;
 
@@ -1801,7 +1828,8 @@ void Optimization::joinByHashRight(
       std::move(probeKeys),
       std::move(buildKeys),
       candidate.join->filter(),
-      fanout,
+      candidate.join->rlFanout(),
+      candidate.fanout,
       projectionBuilder.inputColumns());
   state.addCost(*join);
 
@@ -2175,23 +2203,20 @@ void Optimization::placeDerivedTable(DerivedTableCP from, PlanState& state) {
   makeJoins(plan->op, state);
 
   // We see if there are reducing joins to import inside the dt.
-  PlanObjectSet visited = state.placed();
-  visited.add(from);
-  visited.unionSet(state.dt->importedExistences);
+  PlanObjectSet reducingTables;
+  auto reduction = findReducingBushyJoins(
+      state, from, reducingTables, state.dt->importedExistences);
 
-  PlanObjectSet reducingSet = PlanObjectSet::single(from);
-
-  std::vector<PlanObjectCP> path{from};
-
-  float reduction = 1;
-  reducingJoinsRecursive(
-      state, from, 1, 1.2, path, visited, reducingSet, reduction);
-
-  if (reduction < 0.9) {
+  if (reduction < ReducingJoinsMagic::kReducingPathThreshold) {
     MemoKey reducingKey = MemoKey::create(
-        from, state.downstreamColumns(), std::move(reducingSet));
+        from, state.downstreamColumns(), std::move(reducingTables));
     plan = makePlan(
-        *state.dt, reducingKey, std::nullopt, PlanObjectSet{}, 1, ignore);
+        *state.dt,
+        reducingKey,
+        /*distribution=*/std::nullopt,
+        /*boundColumns=*/PlanObjectSet{},
+        /*existsFanout=*/1,
+        /*needsShuffle=*/ignore);
     state.cost = plan->cost;
     makeJoins(plan->op, state);
   }

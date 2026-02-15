@@ -42,6 +42,8 @@ class DerivedTablePrinterTest : public ::testing::Test {
 
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
+
+    optimizer::FunctionRegistry::registerPrestoFunctions();
   }
 
   void SetUp() override {
@@ -151,7 +153,7 @@ TEST_F(DerivedTablePrinterTest, basic) {
             testing::Eq("  having: gt(dt1.s, 100)"),
             testing::Eq("  orderBy: t2.a DESC NULLS LAST"),
             testing::Eq(""),
-            testing::Eq("t2: 0.10 rows, a, b"),
+            testing::Eq("t2: 0.50 rows, a, b"),
             testing::Eq("  table: t"),
             testing::Eq("    a INTEGER (cardinality=1.00)"),
             testing::Eq("    b INTEGER (cardinality=1.00)"),

@@ -29,7 +29,6 @@ DEFINE_string(
     "",
     "Path to TPC-H data directory. If empty, the test creates a temp directory and deletes it on exit");
 DEFINE_bool(create_dataset, true, "Creates the TPC-H tables");
-DEFINE_double(tpch_scale, 0.1, "Scale factor");
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -38,7 +37,7 @@ using namespace facebook::velox::exec::test;
 namespace facebook::axiom::optimizer::test {
 
 namespace {
-void doCreateTables(std::string_view path) {
+void doCreateTables(std::string_view path, double scaleFactor) {
   auto rootPool = memory::memoryManager()->addRootPool();
   auto pool = rootPool->addLeafChild("leaf");
 
@@ -49,15 +48,14 @@ void doCreateTables(std::string_view path) {
     const auto tableSchema = tpch::getTableSchema(table);
 
     int32_t numSplits = 1;
-    if (tableName != "nation" && tableName != "region" &&
-        FLAGS_tpch_scale > 1) {
-      numSplits = std::min<int32_t>(FLAGS_tpch_scale, 200);
+    if (tableName != "nation" && tableName != "region" && scaleFactor > 1) {
+      numSplits = std::min<int32_t>(scaleFactor, 200);
     }
 
     const auto tableDirectory = fmt::format("{}/{}", path, tableName);
     auto plan =
         PlanBuilder()
-            .tpchTableScan(table, tableSchema->names(), FLAGS_tpch_scale)
+            .tpchTableScan(table, tableSchema->names(), scaleFactor)
             .startTableWriter()
             .outputDirectoryPath(tableDirectory)
             .fileFormat(dwio::common::FileFormat::PARQUET)
@@ -66,6 +64,7 @@ void doCreateTables(std::string_view path) {
             .planNode();
 
     std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
+    splits.reserve(numSplits);
     for (auto i = 0; i < numSplits; ++i) {
       splits.push_back(
           std::make_shared<velox::connector::tpch::TpchConnectorSplit>(
@@ -76,8 +75,8 @@ void doCreateTables(std::string_view path) {
         std::min<int32_t>(numSplits, folly::hardware_concurrency());
 
     LOG(INFO) << "Creating TPC-H table " << tableName
-              << " scaleFactor=" << FLAGS_tpch_scale
-              << " numSplits=" << numSplits << " numDrivers=" << numDrivers
+              << " scaleFactor=" << scaleFactor << " numSplits=" << numSplits
+              << " numDrivers=" << numDrivers
               << " hw concurrency=" << folly::hardware_concurrency();
     auto rows = AssertQueryBuilder(plan)
                     .splits(std::move(splits))
@@ -97,7 +96,7 @@ void registerHiveConnector(const std::string& id) {
 } // namespace
 
 //  static
-void ParquetTpchTest::createTables(std::string_view path) {
+void ParquetTpchTest::createTables(std::string_view path, double scaleFactor) {
   SCOPE_EXIT {
     velox::connector::unregisterConnector(
         std::string(PlanBuilder::kHiveDefaultConnectorId));
@@ -121,7 +120,7 @@ void ParquetTpchTest::createTables(std::string_view path) {
 
   registerTpchConnector(std::string(PlanBuilder::kTpchDefaultConnectorId));
 
-  doCreateTables(path);
+  doCreateTables(path, scaleFactor);
 }
 
 // static

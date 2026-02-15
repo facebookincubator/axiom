@@ -929,15 +929,17 @@ TEST_F(SubqueryTest, unnest) {
         "select (SELECT sum(y) FROM u WHERE x = n) from t, unnest(a) as v(n)";
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("u")
-            .aggregation()
-            .project()
-            .hashJoin(
-                core::PlanMatcherBuilder().tableScan("t").unnest().build(),
-                core::JoinType::kRight)
-            .build();
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("t")
+                       .unnest()
+                       .hashJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("u")
+                               .aggregation()
+                               .project()
+                               .build(),
+                           core::JoinType::kLeft)
+                       .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);

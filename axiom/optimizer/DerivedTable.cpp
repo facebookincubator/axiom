@@ -342,6 +342,7 @@ std::pair<DerivedTableP, JoinEdgeP> makeExistsDtAndJoin(
     float existsFanout,
     PlanObjectVector& existsTables,
     JoinEdgeP existsJoin) {
+  VELOX_DCHECK_LT(existsFanout, 1.0f);
   const auto& rightKeys = existsJoin->rightKeys();
 
   MemoKey existsDtKey = [&]() {

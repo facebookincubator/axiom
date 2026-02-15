@@ -25,20 +25,12 @@ namespace facebook::axiom::optimizer::test {
 
 class ParquetTpchTest {
  public:
-  /// Writes TPC-H tables in Parquet format to a temp directory. Use --data_path
-  /// GFlag to specify an alternative directory. That directory must exist.
+  /// Writes TPC-H tables in Parquet format to 'path'.
   ///
-  /// No-op if --data_path is specified, but --create_dataset is false.
-  ///
-  /// To create tables,
-  ///   - registers Hive and TPC-H connectors,
-  ///   - for each table, creates and runs Velox plan to read from TPC-H
-  ///   connector and
-  ///       write to Hive connector.
-  /// Unregisters Hive and TPC-H connectors before returning.
-  ///
-  /// @return Returns newly created temp directory if any.
-  static void createTables(std::string_view path);
+  /// @param path Directory to write the tables to. Must exist.
+  /// @param scaleFactor TPC-H scale factor (e.g., 0.1, 1, 10). Controls the
+  /// size of the generated data. SF=1 produces ~6M lineitem rows.
+  static void createTables(std::string_view path, double scaleFactor = 0.1);
 
   static void registerTpchConnector(const std::string& id);
 

@@ -710,7 +710,7 @@ TEST_F(JoinTest, joinOnClause) {
 
 TEST_F(JoinTest, leftJoinOverValues) {
   auto query =
-      "SELECT * FROM (VALUES 1, 2, 3) as t(x) LEFT JOIN (VALUES 1, 2, 3) as u(y) ON x = y";
+      "SELECT * FROM (VALUES 1, 2, 3, 4) as t(x) LEFT JOIN (VALUES 1, 2) as u(y) ON x = y";
   SCOPED_TRACE(query);
 
   auto matcher = core::PlanMatcherBuilder()

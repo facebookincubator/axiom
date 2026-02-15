@@ -20,8 +20,13 @@
 namespace facebook::axiom::optimizer {
 
 struct RelationOpToTextOptions {
-  /// Include the estimate of the cardinality and cost of each plan node.
+  /// Include the estimate of the cardinality, fanout and cost of each plan
+  /// node.
   bool includeCost{false};
+
+  /// Include statistical constraints on output columns: data type, estimated
+  /// number of distinct values, min/max bounds and null fraction.
+  bool includeConstraints{false};
 
   /// Maximum depth of the plan tree to print. 0 means print only the root node.
   /// Default is unlimited.

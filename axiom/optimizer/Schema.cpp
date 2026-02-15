@@ -17,6 +17,7 @@
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/Cost.h"
 #include "axiom/optimizer/DerivedTable.h"
+#include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/PlanUtils.h"
 
 #include <numbers>
@@ -156,7 +157,8 @@ SchemaTableCP Schema::findTable(
     value.min = minPtr;
     value.max = maxPtr;
     value.nullFraction = nullFraction;
-    auto* column = make<Column>(toName(columnName), nullptr, value);
+    auto* column =
+        make<Column>(toName(columnName), nullptr, clampCardinality(value));
     schemaColumns[column->name()] = column;
   }
 
@@ -255,7 +257,6 @@ IndexInfo SchemaTable::indexInfo(
   IndexInfo info;
   info.index = index;
   info.scanCardinality = index->table->cardinality;
-  info.joinCardinality = index->table->cardinality;
 
   const auto& distribution = index->distribution;
 
@@ -275,10 +276,6 @@ IndexInfo SchemaTable::indexInfo(
       info.scanCardinality =
           combine(info.scanCardinality, i, orderKey->value().cardinality);
       info.lookupKeys.push_back(part);
-      info.joinCardinality = info.scanCardinality;
-    } else {
-      info.joinCardinality =
-          combine(info.joinCardinality, i, orderKey->value().cardinality);
     }
     if (i == numUnique - 1) {
       info.unique = true;
@@ -295,51 +292,10 @@ IndexInfo SchemaTable::indexInfo(
     }
 
     covered.add(column);
-    info.joinCardinality = combine(
-        info.joinCardinality, covered.size(), column->value().cardinality);
   }
 
   info.coveredColumns = std::move(covered);
   return info;
-}
-
-IndexInfo SchemaTable::indexByColumns(CPSpan<Column> columns) const {
-  // Match 'columns' against all indices. Pick the one that has the
-  // longest prefix intersection with 'columns'. If 'columns' are a
-  // unique combination on any index, then unique is true of the
-  // result.
-  IndexInfo pkInfo;
-  IndexInfo best;
-  bool unique = isUnique(columns);
-  float bestPrediction = 0;
-  for (auto i = 0; i < columnGroups.size(); ++i) {
-    auto index = columnGroups[i];
-    auto candidate = indexInfo(index, columns);
-    if (i == 0) {
-      pkInfo = candidate;
-      best = candidate;
-      bestPrediction = best.joinCardinality;
-      continue;
-    }
-
-    if (candidate.lookupKeys.empty()) {
-      // No prefix match for secondary index.
-      continue;
-    }
-
-    // The join cardinality estimate from the longest prefix is preferred for
-    // the estimate. The index with the least scan cardinality is preferred
-    if (candidate.lookupKeys.size() > best.lookupKeys.size()) {
-      bestPrediction = candidate.joinCardinality;
-    }
-
-    if (candidate.scanCardinality < best.scanCardinality) {
-      best = candidate;
-    }
-  }
-  best.joinCardinality = bestPrediction;
-  best.unique = unique;
-  return best;
 }
 
 ColumnCP IndexInfo::schemaColumn(ColumnCP keyValue) const {
