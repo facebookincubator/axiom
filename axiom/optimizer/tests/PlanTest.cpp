@@ -19,9 +19,8 @@
 #include <gtest/gtest.h>
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/optimizer/tests/ParquetTpchTest.h"
+#include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
-#include "axiom/optimizer/tests/QueryTestBase.h"
 #include "axiom/optimizer/tests/utils/DfFunctions.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -32,39 +31,17 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
-class PlanTest : public test::QueryTestBase {
+class PlanTest : public test::HiveQueriesTestBase {
  protected:
   static constexpr auto kTestConnectorId = "test";
 
   static void SetUpTestCase() {
-    test::QueryTestBase::SetUpTestCase();
-
-    std::string path;
-    if (FLAGS_data_path.empty()) {
-      gTempDirectory = velox::exec::test::TempDirectoryPath::create();
-      path = gTempDirectory->getPath();
-      test::ParquetTpchTest::createTables(path);
-    } else {
-      path = FLAGS_data_path;
-      if (FLAGS_create_dataset) {
-        test::ParquetTpchTest::createTables(path);
-      }
-    }
-
-    LocalRunnerTestBase::localDataPath_ = path;
-    LocalRunnerTestBase::localFileFormat_ =
-        velox::dwio::common::FileFormat::PARQUET;
-
+    test::HiveQueriesTestBase::SetUpTestCase();
     test::registerDfFunctions();
   }
 
-  static void TearDownTestCase() {
-    gTempDirectory.reset();
-    test::QueryTestBase::TearDownTestCase();
-  }
-
   void SetUp() override {
-    QueryTestBase::SetUp();
+    HiveQueriesTestBase::SetUp();
 
     testConnector_ =
         std::make_shared<connector::TestConnector>(kTestConnectorId);
@@ -73,12 +50,8 @@ class PlanTest : public test::QueryTestBase {
 
   void TearDown() override {
     velox::connector::unregisterConnector(kTestConnectorId);
-
-    QueryTestBase::TearDown();
+    HiveQueriesTestBase::TearDown();
   }
-
-  inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
-      gTempDirectory;
 
   std::shared_ptr<connector::TestConnector> testConnector_;
 };
