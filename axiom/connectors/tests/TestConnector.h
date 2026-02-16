@@ -106,37 +106,27 @@ class TestTable : public Table {
   }
 
   uint64_t numRows() const override {
-    return numRows_;
-  }
-
-  void setNumRows(uint64_t numRows) {
-    numRows_ = numRows;
+    return data_.empty() ? numRows_ : dataRows_;
   }
 
   const std::vector<velox::RowVectorPtr>& data() const {
     return data_;
   }
 
-  /// Copy the specified RowVector into the internal data of the table. The
-  /// underlying types of the columns must match the schema specified during
-  /// initial table creation. Each appended vector will generate a separate
-  /// TestConnectorSplit when splits are generated for the table. Data is copied
-  /// on append so that vectors from temporary memory pools can be appended.
-  /// These copies are allocated via the TestTable internal memory pool.
-  ///
-  /// Recomputes numRows from all data vectors. If setStats was called before
-  /// addData, the numRows set by setStats will be overwritten. To set a custom
-  /// numRows, call setStats after adding all data.
+  /// Appends a RowVector to the table's data. Each appended vector generates
+  /// a separate TestConnectorSplit. Data is copied into the table's internal
+  /// memory pool. Tracks numRows only; does not compute per-column statistics
+  /// (min/max, numDistinct, nullPct). Cannot be combined with setStats on the
+  /// same table.
   void addData(const velox::RowVectorPtr& data);
 
   TestTableLayout* mutableLayout() {
     return exportedLayout_.get();
   }
 
-  /// Replaces column statistics for this table. Each entry in the map sets
-  /// the full ColumnStatistics for the named column via Column::setStats.
-  /// Columns not included in 'columnStats' have their statistics cleared.
-  /// Also sets the table's row count.
+  /// Sets row count and column statistics without adding actual data.
+  /// Use this to create tables with controlled statistics for optimizer
+  /// testing. Cannot be combined with addData on the same table.
   void setStats(
       uint64_t numRows,
       const std::unordered_map<std::string, ColumnStatistics>& columnStats);
@@ -148,6 +138,7 @@ class TestTable : public Table {
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::vector<velox::RowVectorPtr> data_;
   uint64_t numRows_{0};
+  uint64_t dataRows_{0};
 };
 
 /// SplitSource generated via the TestSplitManager embedded in the
