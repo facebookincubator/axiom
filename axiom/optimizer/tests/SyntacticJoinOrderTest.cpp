@@ -18,9 +18,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/optimizer/tests/ParquetTpchTest.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "axiom/optimizer/tests/TpchDataGenerator.h"
 #include "axiom/sql/presto/PrestoParser.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -38,7 +38,7 @@ class SyntacticJoinOrderTest : public test::QueryTestBase {
     gTempDirectory = velox::exec::test::TempDirectoryPath::create();
 
     auto path = gTempDirectory->getPath();
-    test::ParquetTpchTest::createTables(path);
+    test::TpchDataGenerator::createTables(path);
 
     LocalRunnerTestBase::localDataPath_ = path;
     LocalRunnerTestBase::localFileFormat_ =

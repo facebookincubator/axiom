@@ -16,7 +16,7 @@
 
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/optimizer/tests/ParquetTpchTest.h"
+#include "axiom/optimizer/tests/TpchDataGenerator.h"
 
 namespace facebook::axiom::optimizer::test {
 
@@ -28,7 +28,7 @@ void HiveQueriesTestBase::SetUpTestCase() {
   test::QueryTestBase::SetUpTestCase();
 
   gTempDirectory = exec::test::TempDirectoryPath::create();
-  test::ParquetTpchTest::createTables(gTempDirectory->getPath());
+  test::TpchDataGenerator::createTables(gTempDirectory->getPath());
 
   LocalRunnerTestBase::localDataPath_ = gTempDirectory->getPath();
   LocalRunnerTestBase::localFileFormat_ =

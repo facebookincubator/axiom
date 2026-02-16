@@ -4,7 +4,9 @@ Tips for debugging the Axiom optimizer.
 
 ## 1. Using the CLI to Get a Query Plan
 
-Use the `axiom/cli:cli` target to run queries against TPC-H data and view their plans:
+Use the `axiom_sql` CLI to run queries against TPC-H data and view their plans.
+
+**Buck (Meta-internal):**
 
 ```bash
 buck run axiom/cli:cli -- \
@@ -14,6 +16,22 @@ buck run axiom/cli:cli -- \
   --debug \
   --query "EXPLAIN SELECT * FROM lineitem LIMIT 10"
 ```
+
+**CMake (OSS):**
+
+```bash
+./build/axiom/cli/axiom_sql \
+  --data_path /home/$USER/tpch/sf0.1/ \
+  --num-workers 1 \
+  --num-drivers 1 \
+  --debug \
+  --query "EXPLAIN SELECT * FROM lineitem LIMIT 10"
+```
+
+> **Note:** The remaining examples in this document use Buck commands. For CMake
+> builds, replace `buck run <target> --` with the binary path under your build
+> directory (e.g., `./build/axiom/cli/axiom_tpchgen`) and `buck test <target>`
+> with `ctest` or the test binary directly.
 
 ### Key flags
 
@@ -98,7 +116,7 @@ void HiveQueriesTestBase::SetUpTestCase() {
   test::QueryTestBase::SetUpTestCase();
 
   gTempDirectory = exec::test::TempDirectoryPath::create();
-  test::ParquetTpchTest::createTables(gTempDirectory->getPath());
+  test::TpchDataGenerator::createTables(gTempDirectory->getPath());
 
   LocalRunnerTestBase::localDataPath_ = gTempDirectory->getPath();
   LocalRunnerTestBase::localFileFormat_ =
@@ -116,9 +134,9 @@ void HiveQueriesTestBase::SetUpTestCase() {
   test::QueryTestBase::SetUpTestCase();
 
   // gTempDirectory = exec::test::TempDirectoryPath::create();
-  // test::ParquetTpchTest::createTables(gTempDirectory->getPath());
+  // test::TpchDataGenerator::createTables(gTempDirectory->getPath());
 
-  LocalRunnerTestBase::localDataPath_ = "/home/mbasmanova/tpch/sf0.1";
+  LocalRunnerTestBase::localDataPath_ = "/home/mbasmanova/tpch/sf0.1"; // <-- replace with your path
   LocalRunnerTestBase::localFileFormat_ =
       velox::dwio::common::FileFormat::PARQUET;
 }
