@@ -130,17 +130,11 @@ t2:
   table: tiny.nation
 ```
 
-The query graph consists of a BaseTable t2 that represents ‘nation’ and a DerivedTable dt1 that represents an aggregation over t2.
+The query graph consists of a BaseTable t2 that represents 'nation' and a DerivedTable dt1 that represents an aggregation over t2.
 
-```mermaid
-flowchart TD
-  subgraph dt1["dt1: count"]
-    agg["agg: count() AS count"]:::transparent
-    t2["t2 := nation"]
-  end
+<img src="docs/images/readme_count_query_graph.svg" width="300" alt="count(*) query graph">
 
-  classDef transparent fill:transparent, stroke-width:0
-```
+> See [Query Graphviz CLI](docs/QueryGraphviz.md) for a tool to generate query graph and logical plan visualizations from SQL queries.
 
 A bit more involved query would count the number of African nations by joining nation and region tables.
 
@@ -163,26 +157,9 @@ t3: r_regionkey, r_name
   single-column filters: eq(t3.r_name, "AFRICA")
 ```
 
-The query graph consists of two BaseTables t2 and t3 that represent ‘nation’ and 'region' tables, and a DerivedTable dt1 that represents an aggregation over join of t2 and t3. BaseTable t3 represents table 'region' with a filter: r_name = 'AFRICA'.
+The query graph consists of two BaseTables t2 and t3 that represent 'nation' and 'region' tables, and a DerivedTable dt1 that represents an aggregation over join of t2 and t3. BaseTable t3 represents table 'region' with a filter: r_name = 'AFRICA'.
 
-```mermaid
-flowchart TD
-  subgraph dt1["dt1: count"]
-    direction TB
-    agg["agg: count() AS count"]:::transparent
-    subgraph y[" "]
-      direction LR
-      t2["t2 := nation"]
-      t3["t3 := region | eq(t3.r_name, 'AFRICA')"]
-      t2 <-->|t2.n_regionkey = t3.r_regionkey| t3
-    end
-  end
-
-  agg e1@--- y
-
-  classDef transparent fill:transparent, stroke-width:0
-  class e1 transparent
-```
+<img src="docs/images/readme_join_query_graph.svg" width="400" alt="join query graph">
 
 Each object in a query graph has a unique ID and type. These are stored in PlanObject base class. IDs are unique across all objects. IDs are sequential numbers assigned at object's creation time using a single counter stored in QueryGraphContext. An ID can be used to lookup an object from the context.
 
@@ -294,17 +271,4 @@ t6: n_nationkey, n_name, n_regionkey, n_comment
 
 DerivedTable dt2 represents UNION ALL of dt5 and dt3.
 
-```mermaid
-flowchart LR
-  subgraph dt1
-   direction LR
-    subgraph dt2["dt2: UNION ALL"]
-      subgraph dt5
-         t6["`t6 := nation<br/>eq(t4.n_regionkey, 2)`"]
-      end
-      subgraph dt3
-         t4["`t4 := nation<br/>eq(t4.n_regionkey, 0)`"]
-      end
-    end
-  end
-```
+<img src="docs/images/readme_union_all_query_graph.svg" width="500" alt="UNION ALL query graph">

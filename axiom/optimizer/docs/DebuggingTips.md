@@ -44,6 +44,17 @@ buck run axiom/cli:cli -- \
 | `--debug` | Enable glog output to stderr (disabled by default) |
 | `--query` | SQL query to execute (use `EXPLAIN` prefix to see the plan). Multiple queries can be separated by `;` |
 
+### EXPLAIN variants
+
+The `EXPLAIN` command supports several output types:
+
+| Command | Output | Description |
+|---------|--------|-------------|
+| `EXPLAIN <query>` | Velox plan | The default output — a distributed execution plan with Velox operators |
+| `EXPLAIN (type logical) <query>` | Logical plan | The unoptimized logical plan tree (the output of `PrestoParser`) |
+| `EXPLAIN (type graph) <query>` | Query graph | The output of `ToGraph` — parsed query structure with tables, joins, filters, and aggregations |
+| `EXPLAIN (type optimized) <query>` | Physical plan | The output of `Optimization::bestPlan` — the optimized logical plan before translation to Velox |
+
 ### TPC-H Data Directories
 
 Two pre-generated TPC-H datasets are available:
@@ -100,6 +111,16 @@ buck run axiom/cli:cli -- \
   --num-workers 1 \
   --num-drivers 1 \
   --query "EXPLAIN $(cat axiom/optimizer/tests/tpch/queries/q5.sql)"
+```
+
+To view the query graph instead:
+
+```bash
+buck run axiom/cli:cli -- \
+  --data_path /home/$USER/tpch/sf0.1/ \
+  --num-workers 1 \
+  --num-drivers 1 \
+  --query "EXPLAIN (type graph) $(cat axiom/optimizer/tests/tpch/queries/q5.sql)"
 ```
 
 ## 2. Speeding Up Test Runs with Pre-generated Data
