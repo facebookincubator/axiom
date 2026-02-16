@@ -49,7 +49,12 @@ TestTable::TestTable(
 void TestTable::setStats(
     uint64_t numRows,
     const std::unordered_map<std::string, ColumnStatistics>& columnStats) {
-  setNumRows(numRows);
+  VELOX_CHECK_EQ(
+      dataRows_,
+      0,
+      "Cannot use both setStats and addData on table '{}'.",
+      name());
+  numRows_ = numRows;
 
   // Set or clear stats for all columns.
   for (const auto& [name, column] : columnMap()) {
@@ -81,6 +86,11 @@ void TestTable::setStats(
 }
 
 void TestTable::addData(const velox::RowVectorPtr& data) {
+  VELOX_CHECK_EQ(
+      numRows_,
+      0,
+      "Cannot use both setStats and addData on table '{}'.",
+      name());
   VELOX_CHECK(
       data->type()->equivalent(*type()),
       "appended data type {} must match table type {}",
@@ -90,12 +100,7 @@ void TestTable::addData(const velox::RowVectorPtr& data) {
   auto copy = std::dynamic_pointer_cast<velox::RowVector>(
       velox::BaseVector::copy(*data, pool_.get()));
   data_.push_back(copy);
-
-  // Recompute numRows from all data vectors.
-  numRows_ = 0;
-  for (const auto& vector : data_) {
-    numRows_ += vector->size();
-  }
+  dataRows_ += data->size();
 }
 
 std::vector<SplitSource::SplitAndGroup> TestSplitSource::getSplits(uint64_t) {
