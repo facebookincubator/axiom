@@ -17,8 +17,8 @@
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
-#include "axiom/optimizer/tests/ParquetTpchTest.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "axiom/optimizer/tests/TpchDataGenerator.h"
 #include "axiom/sql/presto/PrestoParser.h"
 
 namespace facebook::axiom::optimizer::test {
@@ -33,11 +33,11 @@ class TpchConnectorQueryTest : public QueryTestBase {
 
   void SetUp() override {
     QueryTestBase::SetUp();
-    ParquetTpchTest::registerTpchConnector(kTpchConnectorId);
+    TpchDataGenerator::registerTpchConnector(kTpchConnectorId);
   }
 
   void TearDown() override {
-    ParquetTpchTest::unregisterTpchConnector(kTpchConnectorId);
+    TpchDataGenerator::unregisterTpchConnector(kTpchConnectorId);
     QueryTestBase::TearDown();
   }
 

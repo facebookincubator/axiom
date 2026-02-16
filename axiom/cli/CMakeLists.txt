@@ -50,6 +50,11 @@ target_link_libraries(axiom_graphviz axiom_cli)
 
 add_executable(axiom_tpchgen GenerateTpchData.cpp)
 
-target_link_libraries(axiom_tpchgen axiom_cli velox_exec_test_lib)
+target_link_libraries(
+  axiom_tpchgen
+  axiom_cli
+  axiom_optimizer_tests_tpch_data_generator
+  velox_exec_test_lib
+)
 
 add_subdirectory(tests)

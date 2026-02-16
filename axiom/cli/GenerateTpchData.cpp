@@ -25,16 +25,13 @@
 //   - glog output is suppressed by default; enable with --debug.
 
 #include <folly/init/Init.h>
-#include <folly/system/HardwareConcurrency.h>
 #include <gflags/gflags.h>
 #include <chrono>
 #include <filesystem>
 #include "axiom/cli/Connectors.h"
+#include "axiom/optimizer/tests/TpchDataGenerator.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/tpch/TpchConnectorSplit.h"
-#include "velox/dwio/common/Options.h"
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/tpch/gen/TpchGen.h"
 
@@ -49,6 +46,7 @@ DEFINE_bool(debug, false, "Enable debug logging.");
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
+using facebook::axiom::optimizer::test::TpchDataGenerator;
 
 namespace {
 
@@ -57,54 +55,15 @@ void generateTpchData(
     double scaleFactor,
     dwio::common::FileFormat fileFormat,
     common::CompressionKind compressionKind) {
-  auto rootPool = memory::memoryManager()->addRootPool();
-  auto pool = rootPool->addLeafChild("leaf");
-
   for (const auto& table : tpch::tables) {
     const auto tableName = tpch::toTableName(table);
-    const auto tableSchema = tpch::getTableSchema(table);
 
-    int32_t numSplits = 1;
-    if (table != tpch::Table::TBL_NATION && table != tpch::Table::TBL_REGION &&
-        scaleFactor > 1) {
-      numSplits = std::min<int32_t>(scaleFactor, 200);
-    }
-
-    const auto tableDirectory = fmt::format("{}/{}", path, tableName);
-    auto plan = PlanBuilder()
-                    .tpchTableScan(table, tableSchema->names(), scaleFactor)
-                    .startTableWriter()
-                    .outputDirectoryPath(tableDirectory)
-                    .fileFormat(fileFormat)
-                    .compressionKind(compressionKind)
-                    .endTableWriter()
-                    .planNode();
-
-    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
-    splits.reserve(numSplits);
-    for (auto i = 0; i < numSplits; ++i) {
-      splits.push_back(
-          std::make_shared<connector::tpch::TpchConnectorSplit>(
-              std::string(PlanBuilder::kTpchDefaultConnectorId), numSplits, i));
-    }
-
-    const int32_t numDrivers =
-        std::min<int32_t>(numSplits, folly::hardware_concurrency());
-
-    fmt::print(
-        stderr,
-        "Generating {} (sf={}, splits={}, drivers={})\n",
-        tableName,
-        scaleFactor,
-        numSplits,
-        numDrivers);
+    fmt::print(stderr, "Generating {} ...\n", tableName);
 
     const auto start = std::chrono::steady_clock::now();
 
-    auto result = AssertQueryBuilder(plan)
-                      .splits(std::move(splits))
-                      .maxDrivers(numDrivers)
-                      .copyResults(pool.get());
+    auto numRows = TpchDataGenerator::createTable(
+        table, path, scaleFactor, fileFormat, compressionKind);
 
     const auto elapsed =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - start);
@@ -113,7 +72,7 @@ void generateTpchData(
         stderr,
         "Generated {}: {} rows in {:.2f} seconds.\n",
         tableName,
-        result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0),
+        numRows,
         elapsed.count());
   }
 }

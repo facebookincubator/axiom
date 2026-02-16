@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_optimizer_tests_parquet_tpch ParquetTpchTest.cpp)
+add_library(axiom_optimizer_tests_tpch_data_generator TpchDataGenerator.cpp)
 
 target_link_libraries(
-  axiom_optimizer_tests_parquet_tpch
+  axiom_optimizer_tests_tpch_data_generator
   axiom_logical_plan_builder
   axiom_optimizer
   velox_tpch_gen
@@ -60,7 +60,7 @@ add_library(axiom_optimizer_tests_hive_queries_test_base HiveQueriesTestBase.cpp
 
 target_link_libraries(
   axiom_optimizer_tests_hive_queries_test_base
-  axiom_optimizer_tests_parquet_tpch
+  axiom_optimizer_tests_tpch_data_generator
   axiom_optimizer_tests_plan_matcher
   axiom_optimizer_tests_query_test_base
   axiom_sql_presto_parser
@@ -79,7 +79,7 @@ add_test(
 target_link_libraries(
   axiom_optimizer_tpch_plan_test
   velox_dwio_common_test_utils
-  axiom_optimizer_tests_parquet_tpch
+  axiom_optimizer_tests_tpch_data_generator
   axiom_optimizer_tests_query_test_base
   axiom_optimizer_tests_hive_queries_test_base
   axiom_runner_tests_utils
@@ -97,7 +97,7 @@ add_executable(
   HiveLimitQueriesTest.cpp
   HiveQueriesTest.cpp
   JoinTest.cpp
-  ParquetTpchTest.cpp
+  TpchDataGenerator.cpp
   PrecomputeProjectionTest.cpp
   PlanTest.cpp
   QueryGraphContextTest.cpp
@@ -127,7 +127,7 @@ target_link_libraries(
   axiom_optimizer
   axiom_logical_plan_builder
   axiom_optimizer_tests_hive_queries_test_base
-  axiom_optimizer_tests_parquet_tpch
+  axiom_optimizer_tests_tpch_data_generator
   axiom_optimizer_tests_plan_matcher
   axiom_optimizer_tests_query_test_base
   axiom_runner_tests_utils
