@@ -48,4 +48,8 @@ add_executable(axiom_graphviz QueryGraphviz.cpp)
 
 target_link_libraries(axiom_graphviz axiom_cli)
 
+add_executable(axiom_tpchgen GenerateTpchData.cpp)
+
+target_link_libraries(axiom_tpchgen axiom_cli velox_exec_test_lib)
+
 add_subdirectory(tests)
