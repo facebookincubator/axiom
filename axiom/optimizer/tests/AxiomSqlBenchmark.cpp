@@ -668,7 +668,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
           /*checkDerivedTable=*/nullptr,
           [&](const auto& best) {
             if (planString) {
-              *planString = best.op->toString(true, false);
+              *planString = best.toString(false);
             }
             return true; // Continue the optimization.
           });

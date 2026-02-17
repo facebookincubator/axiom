@@ -986,8 +986,7 @@ velox::core::PlanNodePtr ToVelox::makeScan(
   if (tableHandle == nullptr) {
     filterUpdated(scan.baseTable, false);
     std::tie(tableHandle, rejectedFilters) = leafHandle(scan.baseTable->id());
-    VELOX_CHECK_NOT_NULL(
-        tableHandle, "No table for scan {}", scan.toString(true, true));
+    VELOX_CHECK_NOT_NULL(tableHandle, "No table for scan {}", scan.toString());
   }
 
   // Add columns used by rejected filters to scan columns.
