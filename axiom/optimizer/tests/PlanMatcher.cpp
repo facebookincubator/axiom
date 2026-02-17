@@ -719,6 +719,21 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
         joinType_{joinType},
         nullAware_{nullAware} {}
 
+  HashJoinMatcher(
+      const std::shared_ptr<PlanMatcher>& left,
+      const std::shared_ptr<PlanMatcher>& right,
+      JoinType joinType,
+      const std::vector<std::string>& outputColumnNames)
+      : PlanMatcherImpl<HashJoinNode>({left, right}),
+        joinType_{joinType},
+        outputColumnNames_(
+            {outputColumnNames.begin(), outputColumnNames.end()}) {
+    VELOX_USER_CHECK_EQ(
+        outputColumnNames_->size(),
+        outputColumnNames.size(),
+        "Duplicate column names in outputColumnNames");
+  }
+
   MatchResult matchDetails(
       const HashJoinNode& plan,
       const std::unordered_map<std::string, std::string>& symbols)
@@ -737,6 +752,25 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
 
     AXIOM_TEST_RETURN_IF_FAILURE
 
+    if (outputColumnNames_.has_value()) {
+      const auto& outputType = plan.outputType();
+
+      // Resolve expected column names to actual Velox names using symbols.
+      std::set<std::string> expectedColumns;
+      for (const auto& name : *outputColumnNames_) {
+        auto it = symbols.find(name);
+        expectedColumns.insert(it != symbols.end() ? it->second : name);
+      }
+
+      std::set<std::string> actualColumns;
+      for (auto i = 0; i < outputType->size(); ++i) {
+        actualColumns.insert(outputType->nameOf(i));
+      }
+
+      EXPECT_EQ(actualColumns, expectedColumns);
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
     // Propagate existing aliases from source matchers.
     return MatchResult::success(symbols);
   }
@@ -744,6 +778,7 @@ class HashJoinMatcher : public PlanMatcherImpl<HashJoinNode> {
  private:
   const std::optional<JoinType> joinType_;
   const std::optional<bool> nullAware_;
+  const std::optional<std::set<std::string>> outputColumnNames_;
 };
 
 class NestedLoopJoinMatcher : public PlanMatcherImpl<NestedLoopJoinNode> {
@@ -1153,6 +1188,16 @@ PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<HashJoinMatcher>(
       matcher_, rightMatcher, joinType, nullAware);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::hashJoin(
+    const std::shared_ptr<PlanMatcher>& rightMatcher,
+    JoinType joinType,
+    const std::vector<std::string>& outputColumnNames) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<HashJoinMatcher>(
+      matcher_, rightMatcher, joinType, outputColumnNames);
   return *this;
 }
 

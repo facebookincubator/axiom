@@ -341,16 +341,17 @@ TEST_F(JoinTest, joinWithComputedKeys) {
   {
     auto plan = toSingleNodePlan(logicalPlan);
 
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
-            // TODO Remove redundant projection of 'n_regionkey'.
-            .project({"n_regionkey", "coalesce(n_regionkey, 1)"})
-            .hashJoin(
-                core::PlanMatcherBuilder().tableScan("region").build(),
-                core::JoinType::kRight)
-            .aggregation()
-            .build();
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("region")
+
+                       .hashJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("nation")
+                               .project({"coalesce(n_regionkey, 1)"})
+                               .build(),
+                           core::JoinType::kLeft)
+                       .aggregation()
+                       .build();
 
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
@@ -363,8 +364,7 @@ TEST_F(JoinTest, joinWithComputedKeys) {
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
-                       // TODO Remove redundant projection of 'n_regionkey'.
-                       .project({"n_regionkey", "coalesce(n_regionkey, 1)"})
+                       .project({"coalesce(n_regionkey, 1)"})
                        .shuffle()
                        .hashJoin(rightSideMatcher, core::JoinType::kRight)
                        .partialAggregation()
@@ -560,6 +560,62 @@ TEST_F(JoinTest, leftCrossJoin) {
 
     ASSERT_NO_THROW(planVelox(logicalPlan));
   }
+
+  // Verify projection optimization on build side of cross join.
+  // Only 'x' and 'y + 1 as z' are needed from build (not 'y').
+  {
+    auto query =
+        "SELECT * FROM t LEFT JOIN (SELECT x, y + 1 as z FROM u) ON coalesce(a, x) > 0";
+    SCOPED_TRACE(query);
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("t")
+                       .nestedLoopJoin(
+                           core::PlanMatcherBuilder()
+                               .tableScan("u")
+                               .project({"x", "y + 1"})
+                               .build(),
+                           core::JoinType::kLeft)
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(JoinTest, rightJoin) {
+  // Make t small and u large so optimizer swaps sides and uses right hash join.
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(
+          100, {{"a", {.numDistinct = 100}}, {"b", {.numDistinct = 50}}});
+
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(
+          1000, {{"x", {.numDistinct = 100}}, {"y", {.numDistinct = 500}}});
+
+  // Only 'x' and 'y + 1 as z' should be projected from the subquery (not 'y').
+  {
+    auto query =
+        "SELECT * FROM t LEFT JOIN (SELECT x, y + 1 as z FROM u) ON a = x";
+    SCOPED_TRACE(query);
+
+    auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan("u")
+                       .project({"x", "y + 1"})
+                       .hashJoin(
+                           core::PlanMatcherBuilder().tableScan("t").build(),
+                           core::JoinType::kRight)
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(logicalPlan);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 TEST_F(JoinTest, crossThenLeft) {
@@ -606,8 +662,7 @@ TEST_F(JoinTest, joinWithComputedAndProjectedKeys) {
                      .hashJoin(
                          core::PlanMatcherBuilder()
                              .tableScan("t")
-                             // TODO Remove redundant projection of 't0'.
-                             .project({"t0", "coalesce(t0, 0)"})
+                             .project({"coalesce(t0, 0)"})
                              .build())
                      .project()
                      .build();
@@ -752,12 +807,13 @@ TEST_F(JoinTest, leftThenFilter) {
         "WHERE coalesce(z, 1) > 0";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .hashJoin(matchScan("u").project().build(), core::JoinType::kLeft)
-            .filter()
-            .project()
-            .build();
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").project({"x", "y + 1"}).build(),
+                           core::JoinType::kLeft)
+                       .filter()
+                       .project()
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -901,14 +957,13 @@ TEST_F(JoinTest, fullThenFilter) {
         "WHERE coalesce(z, 1) > 0 AND is_null(a)";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .hashJoin(
-                matchScan("u").project({"x", "y", "y + 1 as z"}).build(),
-                core::JoinType::kFull)
-            .filter("coalesce(z, 1) > 0 AND is_null(a)")
-            .project()
-            .build();
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u").project({"x", "y + 1 as z"}).build(),
+                           core::JoinType::kFull)
+                       .filter("coalesce(z, 1) > 0 AND is_null(a)")
+                       .project()
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -940,15 +995,14 @@ TEST_F(JoinTest, fullThenFilter) {
         "WHERE coalesce(z, 1) > 0 AND a > 0";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .filter("a > 0")
-            .hashJoin(
-                matchScan("u").project({"x", "y", "y + 1 as z"}).build(),
-                core::JoinType::kLeft)
-            .filter("coalesce(z, 1) > 0")
-            .project()
-            .build();
+    auto matcher = matchScan("t")
+                       .filter("a > 0")
+                       .hashJoin(
+                           matchScan("u").project({"x", "y + 1 as z"}).build(),
+                           core::JoinType::kLeft)
+                       .filter("coalesce(z, 1) > 0")
+                       .project()
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);

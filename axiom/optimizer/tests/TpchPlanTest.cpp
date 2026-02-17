@@ -193,9 +193,16 @@ TEST_F(TpchPlanTest, q03) {
           .hashJoin(
               startMatcher("orders")
                   .hashJoin(
-                      startMatcher("customer").build(), core::JoinType::kInner)
+                      startMatcher("customer").build(),
+                      core::JoinType::kInner,
+                      {"o_orderkey", "o_orderdate", "o_shippriority"})
                   .build(),
-              core::JoinType::kInner)
+              core::JoinType::kInner,
+              {"l_orderkey",
+               "l_extendedprice",
+               "l_discount",
+               "o_orderdate",
+               "o_shippriority"})
           .project()
           .aggregation()
           .topN()
