@@ -17,6 +17,7 @@
 #include "axiom/sql/presto/PrestoParser.h"
 #include <algorithm>
 #include <cctype>
+#include <map>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/sql/presto/PrestoParseError.h"
@@ -357,6 +358,19 @@ class RelationPlanner : public AstVisitor {
   const std::unordered_map<std::pair<std::string, std::string>, std::string>&
   views() const {
     return views_;
+  }
+
+  const std::map<std::string, std::string>& tableAliases() const {
+    return tableAliases_;
+  }
+
+  std::vector<std::string> cteNames() const {
+    std::vector<std::string> names;
+    names.reserve(withQueries_.size());
+    for (const auto& [name, _] : withQueries_) {
+      names.push_back(name);
+    }
+    return names;
   }
 
   lp::PlanBuilder& builder() {
@@ -1113,7 +1127,18 @@ class RelationPlanner : public AstVisitor {
         builder_->project(renames);
       }
 
-      builder_->as(canonicalizeIdentifier(*aliasedRelation->alias()));
+      auto alias = canonicalizeIdentifier(*aliasedRelation->alias());
+
+      // Record table-to-alias mapping when the inner relation is a table.
+      if (aliasedRelation->relation()->is(NodeType::kTable)) {
+        auto* innerTable = aliasedRelation->relation()->as<Table>();
+        auto tableName = canonicalizeName(innerTable->name()->suffix());
+        if (tableName != alias) {
+          tableAliases_[tableName] = alias;
+        }
+      }
+
+      builder_->as(alias);
       return;
     }
 
@@ -1924,6 +1949,7 @@ class RelationPlanner : public AstVisitor {
   std::shared_ptr<lp::PlanBuilder> builder_;
   std::unordered_map<std::string, std::shared_ptr<WithQuery>> withQueries_;
   std::unordered_map<std::pair<std::string, std::string>, std::string> views_;
+  std::map<std::string, std::string> tableAliases_;
 };
 
 } // namespace
@@ -2292,7 +2318,11 @@ SqlStatementPtr parseInsert(
       columnNames,
       toColumnExprs(inputColumns));
 
-  return std::make_shared<InsertStatement>(planner.plan(), planner.views());
+  return std::make_shared<InsertStatement>(
+      planner.plan(),
+      planner.views(),
+      planner.tableAliases(),
+      planner.cteNames());
 }
 
 std::unordered_map<std::string, lp::ExprPtr> parseTableProperties(
@@ -2371,7 +2401,9 @@ SqlStatementPtr parseCreateTableAsSelect(
       ROW(std::move(columnNames), std::move(columnTypes)),
       std::move(properties),
       planner.plan(),
-      planner.views());
+      planner.views(),
+      planner.tableAliases(),
+      planner.cteNames());
 }
 
 SqlStatementPtr parseCreateTable(
@@ -2505,7 +2537,11 @@ SqlStatementPtr doPlan(
   if (query->is(NodeType::kQuery)) {
     RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
     query->accept(&planner);
-    return std::make_shared<SelectStatement>(planner.plan(), planner.views());
+    return std::make_shared<SelectStatement>(
+        planner.plan(),
+        planner.views(),
+        planner.tableAliases(),
+        planner.cteNames());
   }
 
   VELOX_NYI(

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <map>
 #include <unordered_set>
 #include "axiom/common/Enums.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
@@ -39,8 +40,13 @@ class SqlStatement {
   explicit SqlStatement(
       SqlStatementKind kind,
       std::unordered_map<std::pair<std::string, std::string>, std::string>
-          views = {})
-      : kind_{kind}, views_{std::move(views)} {}
+          views = {},
+      std::map<std::string, std::string> tableAliases = {},
+      std::vector<std::string> cteNames = {})
+      : kind_{kind},
+        views_{std::move(views)},
+        tableAliases_{std::move(tableAliases)},
+        cteNames_{std::move(cteNames)} {}
 
   virtual ~SqlStatement() = default;
 
@@ -86,10 +92,22 @@ class SqlStatement {
     return views_;
   }
 
+  /// Returns table aliases from FROM clauses (table name -> SQL alias).
+  const std::map<std::string, std::string>& tableAliases() const {
+    return tableAliases_;
+  }
+
+  /// Returns CTE names from WITH clauses.
+  const std::vector<std::string>& cteNames() const {
+    return cteNames_;
+  }
+
  private:
   const SqlStatementKind kind_;
   const std::unordered_map<std::pair<std::string, std::string>, std::string>
       views_;
+  const std::map<std::string, std::string> tableAliases_;
+  const std::vector<std::string> cteNames_;
 };
 
 using SqlStatementPtr = std::shared_ptr<const SqlStatement>;
@@ -99,8 +117,14 @@ class SelectStatement : public SqlStatement {
   explicit SelectStatement(
       facebook::axiom::logical_plan::LogicalPlanNodePtr plan,
       std::unordered_map<std::pair<std::string, std::string>, std::string>
-          views = {})
-      : SqlStatement(SqlStatementKind::kSelect, std::move(views)),
+          views = {},
+      std::map<std::string, std::string> tableAliases = {},
+      std::vector<std::string> cteNames = {})
+      : SqlStatement(
+            SqlStatementKind::kSelect,
+            std::move(views),
+            std::move(tableAliases),
+            std::move(cteNames)),
         plan_{std::move(plan)} {}
 
   const facebook::axiom::logical_plan::LogicalPlanNodePtr& plan() const {
@@ -116,8 +140,14 @@ class InsertStatement : public SqlStatement {
   explicit InsertStatement(
       facebook::axiom::logical_plan::LogicalPlanNodePtr plan,
       std::unordered_map<std::pair<std::string, std::string>, std::string>
-          views = {})
-      : SqlStatement(SqlStatementKind::kInsert, std::move(views)),
+          views = {},
+      std::map<std::string, std::string> tableAliases = {},
+      std::vector<std::string> cteNames = {})
+      : SqlStatement(
+            SqlStatementKind::kInsert,
+            std::move(views),
+            std::move(tableAliases),
+            std::move(cteNames)),
         plan_{std::move(plan)} {}
 
   const facebook::axiom::logical_plan::LogicalPlanNodePtr& plan() const {
@@ -216,7 +246,9 @@ class CreateTableAsSelectStatement : public SqlStatement {
           properties,
       facebook::axiom::logical_plan::LogicalPlanNodePtr plan,
       std::unordered_map<std::pair<std::string, std::string>, std::string>
-          views = {});
+          views = {},
+      std::map<std::string, std::string> tableAliases = {},
+      std::vector<std::string> cteNames = {});
 
   const std::string& connectorId() const {
     return connectorId_;

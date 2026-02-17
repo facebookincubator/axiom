@@ -17,6 +17,7 @@
 #include "axiom/sql/presto/SqlStatement.h"
 
 #include <folly/container/F14Map.h>
+#include <map>
 
 namespace axiom::sql::presto {
 
@@ -120,8 +121,14 @@ CreateTableAsSelectStatement::CreateTableAsSelectStatement(
     RowTypePtr tableSchema,
     std::unordered_map<std::string, lp::ExprPtr> properties,
     lp::LogicalPlanNodePtr plan,
-    std::unordered_map<std::pair<std::string, std::string>, std::string> views)
-    : SqlStatement(SqlStatementKind::kCreateTableAsSelect, std::move(views)),
+    std::unordered_map<std::pair<std::string, std::string>, std::string> views,
+    std::map<std::string, std::string> tableAliases,
+    std::vector<std::string> cteNames)
+    : SqlStatement(
+          SqlStatementKind::kCreateTableAsSelect,
+          std::move(views),
+          std::move(tableAliases),
+          std::move(cteNames)),
       connectorId_{std::move(connectorId)},
       tableName_{std::move(tableName)},
       tableSchema_{std::move(tableSchema)},

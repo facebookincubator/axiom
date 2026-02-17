@@ -2083,5 +2083,64 @@ TEST_F(PrestoParserTest, createTableAndInsert) {
   ASSERT_EQ(lp::WriteKind::kInsert, insertWrite->writeKind());
 }
 
+TEST_F(PrestoParserTest, tableAliases) {
+  // Table alias should be tracked when FROM uses AS.
+  {
+    auto statement = parseSql("SELECT * FROM nation n");
+    ASSERT_TRUE(statement->isSelect());
+    const auto& aliases = statement->tableAliases();
+    ASSERT_EQ(1, aliases.size());
+    ASSERT_EQ("n", aliases.at("nation"));
+  }
+
+  // No alias recorded when the alias matches the table name.
+  {
+    auto statement = parseSql("SELECT * FROM nation");
+    ASSERT_TRUE(statement->isSelect());
+    ASSERT_TRUE(statement->tableAliases().empty());
+  }
+
+  // Multiple table aliases in a join.
+  {
+    auto statement = parseSql(
+        "SELECT * FROM nation n, region r WHERE n.n_regionkey = r.r_regionkey");
+    ASSERT_TRUE(statement->isSelect());
+    const auto& aliases = statement->tableAliases();
+    ASSERT_EQ(2, aliases.size());
+    ASSERT_EQ("n", aliases.at("nation"));
+    ASSERT_EQ("r", aliases.at("region"));
+  }
+}
+
+TEST_F(PrestoParserTest, cteNames) {
+  // Single CTE.
+  {
+    auto statement = parseSql("WITH a AS (SELECT 1 as x) SELECT * FROM a");
+    ASSERT_TRUE(statement->isSelect());
+    const auto& names = statement->cteNames();
+    ASSERT_EQ(1, names.size());
+    ASSERT_EQ("a", names[0]);
+  }
+
+  // Multiple CTEs.
+  {
+    auto statement = parseSql(
+        "WITH a AS (SELECT 1 as x), b AS (SELECT 2 as y) "
+        "SELECT * FROM a, b");
+    ASSERT_TRUE(statement->isSelect());
+    const auto& names = statement->cteNames();
+    ASSERT_EQ(2, names.size());
+    // CTE names should contain both 'a' and 'b'.
+    ASSERT_THAT(names, testing::UnorderedElementsAre("a", "b"));
+  }
+
+  // No CTEs.
+  {
+    auto statement = parseSql("SELECT * FROM nation");
+    ASSERT_TRUE(statement->isSelect());
+    ASSERT_TRUE(statement->cteNames().empty());
+  }
+}
+
 } // namespace
 } // namespace axiom::sql::presto
