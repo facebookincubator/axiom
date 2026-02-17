@@ -94,8 +94,8 @@ void Optimization::trace(
   if (event & options_.traceFlags) {
     std::cout << (event == OptimizerOptions::kRetained ? "Retained: "
                                                        : "Abandoned: ")
-              << id << ": " << cost.toString() << ": " << " "
-              << plan.toString(true, false) << std::endl;
+              << id << ": " << cost.toString() << ": " << " " << plan.toString()
+              << std::endl;
   }
 }
 

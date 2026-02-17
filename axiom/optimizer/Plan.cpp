@@ -172,7 +172,7 @@ std::string Plan::printCost() const {
 
 std::string Plan::toString(bool detail) const {
   queryCtx()->contextPlan() = const_cast<Plan*>(this);
-  auto result = op->toString(true, detail);
+  auto result = RelationOpPrinter::toText(*op, {.includeCost = detail});
   queryCtx()->contextPlan() = nullptr;
   return result;
 }

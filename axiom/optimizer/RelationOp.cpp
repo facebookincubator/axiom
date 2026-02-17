@@ -331,22 +331,6 @@ const QGString& TableScan::historyKey() const {
   return key_;
 }
 
-std::string TableScan::toString(bool /*recursive*/, bool detail) const {
-  std::stringstream out;
-  if (input()) {
-    out << input()->toString(true, detail);
-    out << " *I " << joinTypeLabel(joinType);
-  }
-  out << baseTable->schemaTable->name() << " " << baseTable->cname;
-  if (detail) {
-    printCost(detail, out);
-    if (!input()) {
-      out << distribution_.toString() << std::endl;
-    }
-  }
-  return out.str();
-}
-
 void TableScan::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
@@ -373,17 +357,6 @@ const QGString& Values::historyKey() const {
   }
   key_ = sanitizeHistoryKey("values");
   return key_;
-}
-
-std::string Values::toString(bool /*recursive*/, bool detail) const {
-  VELOX_DCHECK(!input());
-  std::stringstream out;
-  out << valuesTable.cname;
-  if (detail) {
-    printCost(detail, out);
-    out << distribution_.toString() << std::endl;
-  }
-  return out.str();
 }
 
 void Values::accept(
@@ -1008,27 +981,6 @@ Join* Join::makeCrossJoin(
       std::move(columns));
 }
 
-std::string Join::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail);
-  }
-  out << "*" << (method == JoinMethod::kHash ? "H" : "M") << " "
-      << joinTypeLabel(joinType);
-  printCost(detail, out);
-  if (detail) {
-    out << "columns: " << itemsToString(columns().data(), columns().size())
-        << std::endl;
-  }
-  if (recursive) {
-    out << " (" << right->toString(true, detail) << ")";
-    if (detail) {
-      out << std::endl;
-    }
-  }
-  return out.str();
-}
-
 void Join::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
@@ -1055,28 +1007,6 @@ Repartition::Repartition(
 
   // Repartition projects all input columns.
   constraints_ = input_->constraints();
-}
-
-std::string Repartition::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-
-  if (distribution().isBroadcast()) {
-    out << "broadcast ";
-  } else if (distribution().isGather()) {
-    out << "gather ";
-  } else {
-    out << "repartition ";
-    if (detail) {
-      out << distribution().toString() << " ";
-    }
-  }
-  if (detail) {
-    printCost(detail, out);
-  }
-  return out.str();
 }
 
 void Repartition::accept(
@@ -1151,28 +1081,6 @@ void Unnest::initConstraints() {
     ordValue.nullable = false;
     constraints_.emplace(ordinalityColumn->id(), ordValue);
   }
-}
-
-std::string Unnest::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-  out << "unnest ";
-  printCost(detail, out);
-  if (detail) {
-    out << "replicate columns: "
-        << itemsToString(replicateColumns.data(), replicateColumns.size());
-    out << ", unnest exprs: "
-        << itemsToString(unnestExprs.data(), unnestExprs.size());
-    out << ", unnested columns: "
-        << itemsToString(unnestedColumns.data(), unnestedColumns.size());
-    if (ordinalityColumn) {
-      out << ", ordinality column: " << ordinalityColumn->name();
-    }
-    out << std::endl;
-  }
-  return out.str();
 }
 
 void Unnest::accept(
@@ -1538,24 +1446,6 @@ const QGString& Aggregation::historyKey() const {
   return key_;
 }
 
-std::string Aggregation::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-  out << velox::core::AggregationNode::toName(step) << " agg";
-  printCost(detail, out);
-  if (detail) {
-    if (groupingKeys.empty()) {
-      out << "global";
-    } else {
-      out << itemsToString(groupingKeys.data(), groupingKeys.size());
-    }
-    out << aggregates.size() << " aggregates" << std::endl;
-  }
-  return out.str();
-}
-
 void Aggregation::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
@@ -1583,16 +1473,6 @@ HashBuild::HashBuild(RelationOpPtr input, ExprVector keysVector, PlanP plan)
 
   // HashBuild projects all input columns.
   constraints_ = input_->constraints();
-}
-
-std::string HashBuild::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-  out << " Build ";
-  printCost(detail, out);
-  return out.str();
 }
 
 void HashBuild::accept(
@@ -1636,26 +1516,6 @@ const QGString& Filter::historyKey() const {
   return key_;
 }
 
-std::string Filter::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-  if (detail) {
-    out << "Filter (";
-    for (auto i = 0; i < exprs_.size(); ++i) {
-      out << exprs_[i]->toString();
-      if (i < exprs_.size() - 1) {
-        out << " and ";
-      }
-    }
-    out << ")\n";
-  } else {
-    out << "filter " << exprs_.size() << " exprs ";
-  }
-  return out.str();
-}
-
 void Filter::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
@@ -1694,26 +1554,6 @@ Project::Project(
   cost_.fanout = 1;
 
   // TODO Fill in cost_.unitCost and others.
-}
-
-std::string Project::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-  if (detail) {
-    out << "Project (";
-    for (auto i = 0; i < exprs_.size(); ++i) {
-      out << columns_[i]->toString() << " = " << exprs_[i]->toString();
-      if (i < exprs_.size() - 1) {
-        out << ", ";
-      }
-    }
-    out << ")\n";
-  } else {
-    out << "project " << exprs_.size() << " columns ";
-  }
-  return out.str();
 }
 
 void Project::accept(
@@ -1791,20 +1631,6 @@ OrderBy::OrderBy(
   }
 }
 
-std::string OrderBy::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-
-  if (detail) {
-    out << "OrderBy (" << distribution_.toString() << ")\n";
-  } else {
-    out << "order by " << distribution_.orderKeys().size() << " columns ";
-  }
-  return out.str();
-}
-
 void OrderBy::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
@@ -1839,20 +1665,6 @@ Limit::Limit(RelationOpPtr input, int64_t limit, int64_t offset)
         sampledNdv(constraint.cardinality, cost_.inputCardinality, fraction));
     constraints_.emplace(columnId, adjusted);
   }
-}
-
-std::string Limit::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-
-  if (detail) {
-    out << "Limit (" << offset << ", " << limit << ")\n";
-  } else {
-    out << "offset " << offset << " limit " << limit << " ";
-  }
-  return out.str();
 }
 
 void Limit::accept(
@@ -1966,25 +1778,6 @@ void UnionAll::initConstraints() {
   }
 }
 
-std::string UnionAll::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  out << "(";
-  for (auto i = 0; i < inputs.size(); ++i) {
-    out << inputs[i]->toString(recursive, detail);
-    if (i < inputs.size() - 1) {
-      if (detail) {
-        out << std::endl;
-      }
-      out << " union all ";
-      if (detail) {
-        out << std::endl;
-      }
-    }
-  }
-  out << ")";
-  return out.str();
-}
-
 void UnionAll::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
@@ -2005,36 +1798,6 @@ TableWrite::TableWrite(
       this->inputColumns.size(), this->write->table().type()->size());
 }
 
-std::string TableWrite::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-
-  const auto& table = write->table();
-  const auto& type = *table.type();
-  if (detail) {
-    out << fmt::format(
-        "TableWrite to {} ({} columns)", table.name(), type.size());
-
-    out << " columns:";
-    VELOX_DCHECK_LT(0, type.size(), "Table must have at least one column");
-    for (uint32_t i = 0; i < type.size(); ++i) {
-      out << " " << type.nameOf(i) << "=" << inputColumns[i]->toString();
-      if (i < inputColumns.size() - 1) {
-        out << ", ";
-      }
-    }
-
-    printCost(detail, out);
-  } else {
-    out << fmt::format(
-        "TableWrite {} columns to {}", type.size(), table.name());
-  }
-
-  return out.str();
-}
-
 void TableWrite::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
@@ -2053,15 +1816,6 @@ EnforceSingleRow::EnforceSingleRow(RelationOpPtr input)
 
   // EnforceSingleRow projects all input columns.
   constraints_ = input_->constraints();
-}
-
-std::string EnforceSingleRow::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-  out << "EnforceSingleRow";
-  return out.str();
 }
 
 void EnforceSingleRow::accept(
@@ -2105,15 +1859,6 @@ AssignUniqueId::AssignUniqueId(RelationOpPtr input, ColumnCP uniqueIdColumn)
   constraints_.emplace(uniqueIdColumn_->id(), uniqueIdValue);
 }
 
-std::string AssignUniqueId::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-  out << "AssignUniqueId[" << uniqueIdColumn_->toString() << "]";
-  return out.str();
-}
-
 void AssignUniqueId::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
@@ -2135,15 +1880,6 @@ EnforceDistinct::EnforceDistinct(
 
   // EnforceDistinct projects all input columns.
   constraints_ = input_->constraints();
-}
-
-std::string EnforceDistinct::toString(bool recursive, bool detail) const {
-  std::stringstream out;
-  if (recursive) {
-    out << input()->toString(true, detail) << " ";
-  }
-  out << "EnforceDistinct";
-  return out.str();
 }
 
 void EnforceDistinct::accept(

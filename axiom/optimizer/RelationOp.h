@@ -274,21 +274,6 @@ class RelationOp {
     return input_->historyKey();
   }
 
-  /// Returns human readable string for 'this' and inputs if 'recursive' is
-  /// true. If 'detail' is true, includes cost and other details.
-  ///
-  /// Example,
-  ///
-  ///   region t3*H  (nation t2  Build ) project 2 columns
-  ///
-  /// reads as
-  ///
-  ///   - Project -> 2 columns
-  ///     - HashJoin
-  ///       - Scan(region as t3)
-  ///       - Scan(nation as t2)
-  virtual std::string toString(bool recursive, bool detail) const = 0;
-
   std::string toString() const;
 
   std::string toOneline() const;
@@ -368,8 +353,6 @@ struct TableScan : public RelationOp {
 
   const QGString& historyKey() const override;
 
-  std::string toString(bool recursive, bool detail) const override;
-
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
@@ -399,8 +382,6 @@ struct Values : RelationOp {
 
   const QGString& historyKey() const override;
 
-  std::string toString(bool recursive, bool detail) const override;
-
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
@@ -416,8 +397,6 @@ class Repartition : public RelationOp {
       RelationOpPtr input,
       Distribution distribution,
       ColumnVector columns);
-
-  std::string toString(bool recursive, bool detail) const override;
 
   void accept(
       const RelationOpVisitor& visitor,
@@ -437,8 +416,6 @@ class Filter : public RelationOp {
   }
 
   const QGString& historyKey() const override;
-
-  std::string toString(bool recursive, bool detail) const override;
 
   void accept(
       const RelationOpVisitor& visitor,
@@ -468,8 +445,6 @@ class Project : public RelationOp {
   bool isRedundant() const {
     return redundant_;
   }
-
-  std::string toString(bool recursive, bool detail) const override;
 
   void accept(
       const RelationOpVisitor& visitor,
@@ -543,8 +518,6 @@ struct Join : public RelationOp {
 
   const QGString& historyKey() const override;
 
-  std::string toString(bool recursive, bool detail) const override;
-
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
@@ -576,8 +549,6 @@ struct HashBuild : public RelationOp {
   // The plan producing the build data. Used for deduplicating joins.
   PlanP plan;
 
-  std::string toString(bool recursive, bool detail) const override;
-
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
@@ -600,8 +571,6 @@ struct Unnest : public RelationOp {
   // it can be 2:1 (for MAP) and 1:1 (for ARRAY).
   const ColumnVector unnestedColumns;
   const ColumnCP ordinalityColumn;
-
-  std::string toString(bool recursive, bool detail) const override;
 
   void accept(
       const RelationOpVisitor& visitor,
@@ -652,8 +621,6 @@ struct Aggregation : public RelationOp {
 
   const QGString& historyKey() const override;
 
-  std::string toString(bool recursive, bool detail) const override;
-
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
@@ -675,8 +642,6 @@ struct OrderBy : public RelationOp {
   const int64_t limit;
   const int64_t offset;
 
-  std::string toString(bool recursive, bool detail) const override;
-
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
@@ -689,8 +654,6 @@ struct UnionAll : public RelationOp {
   explicit UnionAll(RelationOpPtrVector inputsVector);
 
   const QGString& historyKey() const override;
-
-  std::string toString(bool recursive, bool detail) const override;
 
   void accept(
       const RelationOpVisitor& visitor,
@@ -715,8 +678,6 @@ struct Limit : public RelationOp {
     return limit >= (kMax - offset);
   }
 
-  std::string toString(bool recursive, bool detail) const override;
-
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
@@ -732,8 +693,6 @@ struct TableWrite : public RelationOp {
       ExprVector inputColumns,
       const WritePlan* write);
 
-  std::string toString(bool recursive, bool detail) const override;
-
   void accept(
       const RelationOpVisitor& visitor,
       RelationOpVisitorContext& context) const override;
@@ -748,8 +707,6 @@ using TableWriteCP = const TableWrite*;
 /// Fails at runtime if input produces zero or more than one row.
 struct EnforceSingleRow : public RelationOp {
   explicit EnforceSingleRow(RelationOpPtr input);
-
-  std::string toString(bool recursive, bool detail) const override;
 
   void accept(
       const RelationOpVisitor& visitor,
@@ -770,8 +727,6 @@ struct AssignUniqueId : public RelationOp {
   ColumnCP uniqueIdColumn() const {
     return uniqueIdColumn_;
   }
-
-  std::string toString(bool recursive, bool detail) const override;
 
   void accept(
       const RelationOpVisitor& visitor,
@@ -812,8 +767,6 @@ struct EnforceDistinct : public RelationOp {
   Name errorMessage() const {
     return errorMessage_;
   }
-
-  std::string toString(bool recursive, bool detail) const override;
 
   void accept(
       const RelationOpVisitor& visitor,
