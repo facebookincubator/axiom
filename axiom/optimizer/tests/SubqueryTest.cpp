@@ -785,7 +785,6 @@ TEST_F(SubqueryTest, uncorrelatedExists) {
                                .finalLimit(0, 1)
                                .singleAggregation({}, {"count(*) as c"})
                                .filter("not(eq(c, 0))")
-                               .project()
                                .build(),
                            velox::core::JoinType::kInner)
                        .build();
@@ -808,7 +807,6 @@ TEST_F(SubqueryTest, uncorrelatedExists) {
                                .finalLimit(0, 1)
                                .singleAggregation({}, {"count(*) as c"})
                                .filter("not(not(eq(c, 0)))")
-                               .project()
                                .build(),
                            velox::core::JoinType::kInner)
                        .build();

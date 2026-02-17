@@ -1375,21 +1375,49 @@ folly::F14FastMap<PlanObjectCP, ExprCP> makeJoinColumnMapping(
   return mapping;
 }
 
-folly::F14FastMap<PlanObjectCP, ExprCP> makeJoinColumnMapping(
-    const ColumnVector& leftColumns,
-    const ExprVector& leftExprs,
-    const ColumnVector& rightColumns,
-    const ExprVector& rightExprs) {
-  folly::F14FastMap<PlanObjectCP, ExprCP> mapping;
+// Computes columns from the join filter that belong to each side of the join.
+//
+// @param filter The join filter expressions.
+// @param sideAColumns Columns available from side A.
+// @param sideBColumns Columns available from side B.
+// @return A pair of filter columns for {sideA, sideB}.
+std::pair<PlanObjectSet, PlanObjectSet> computeJoinFilterColumns(
+    const ExprVector& filter,
+    const PlanObjectSet& sideAColumns,
+    const PlanObjectSet& sideBColumns) {
+  PlanObjectSet allFilterColumns;
+  allFilterColumns.unionColumns(filter);
 
-  for (auto i = 0; i < leftColumns.size(); ++i) {
-    mapping.emplace(leftColumns[i], leftExprs[i]);
-  }
+  auto a = allFilterColumns;
+  a.intersect(sideAColumns);
 
-  for (auto i = 0; i < rightColumns.size(); ++i) {
-    mapping.emplace(rightColumns[i], rightExprs[i]);
-  }
-  return mapping;
+  auto b = allFilterColumns;
+  b.intersect(sideBColumns);
+
+  return {a, b};
+}
+
+// Computes the minimal set of columns needed from one side of a join,
+// enabling column pruning by projecting only what's required downstream.
+// Includes filter columns for filter evaluation.
+//
+// Note: Keys are handled separately by precomputeJoinInputs, which precomputes
+// key expressions and adds only the result columns to the output.
+//
+// @param availableColumns Columns available from the input relation.
+// @param side Join side containing join edge columns.
+// @param downstreamColumns Columns needed by operators above the join.
+// @param filterColumns Columns used in the join filter from this side.
+PlanObjectSet computeJoinSideOutputColumns(
+    const PlanObjectSet& availableColumns,
+    const JoinSide& side,
+    const PlanObjectSet& downstreamColumns,
+    const PlanObjectSet& filterColumns) {
+  auto outputColumns = availableColumns;
+  outputColumns.unionObjects(side.columns);
+  outputColumns.intersect(downstreamColumns);
+  outputColumns.unionSet(filterColumns);
+  return outputColumns;
 }
 
 // Result of precomputing join column expressions and keys on both sides of
@@ -1402,35 +1430,59 @@ struct PrecomputedJoinInputs {
   folly::F14FastMap<PlanObjectCP, ExprCP> joinColumnMapping;
 };
 
-// Precomputes join column expressions and keys on both probe and build sides.
-// For cross joins, keys will be empty (probe.keys and build.keys are empty).
+// Precomputes join column expressions and keys, projecting only the columns
+// in probeOutputColumns and buildOutputColumns.
 PrecomputedJoinInputs precomputeJoinInputs(
     RelationOpPtr probeInput,
     RelationOpPtr buildInput,
     const JoinSide& probe,
     const JoinSide& build,
-    const DerivedTable* dt) {
-  PrecomputeProjection precomputeProbe(probeInput, dt);
-  auto probeJoinColumns =
-      precomputeProbe.toColumns(probe.exprs, &probe.columns);
+    const DerivedTable* dt,
+    const PlanObjectSet& probeOutputColumns,
+    const PlanObjectSet& buildOutputColumns,
+    const folly::F14FastMap<PlanObjectCP, ExprCP>& columnMapping) {
+  folly::F14FastMap<PlanObjectCP, ExprCP> updatedMapping;
+
+  // Adds columns from outputColumns to the projection.
+  // Uses columnMapping for lookup of non-identity projections.
+  // Adds projected non-identity columns to updatedMapping.
+  auto addOutputColumns = [&](PrecomputeProjection& precompute,
+                              const PlanObjectSet& outputColumns) {
+    outputColumns.forEach<Column>([&](ColumnCP column) {
+      auto it = columnMapping.find(column);
+      if (it != columnMapping.end()) {
+        // Non-identity: project expression as column, track result.
+        auto projected = precompute.toColumn(it->second, column);
+        updatedMapping.emplace(column, projected);
+      } else {
+        // Pass-through: column passes through as-is.
+        precompute.toColumn(column);
+      }
+    });
+  };
+
+  // Probe side: project output columns (includes keys).
+  PrecomputeProjection precomputeProbe(
+      probeInput, dt, /*projectAllInputs=*/false);
+  addOutputColumns(precomputeProbe, probeOutputColumns);
+  // Compute keys in case they are expressions (e.g., a + 1).
   auto probeKeys = precomputeProbe.toColumns(probe.keys);
   probeInput = std::move(precomputeProbe).maybeProject();
 
-  PrecomputeProjection precomputeBuild(buildInput, dt);
-  auto buildJoinColumns =
-      precomputeBuild.toColumns(build.exprs, &build.columns);
+  // Build side: project output columns (includes keys).
+  PrecomputeProjection precomputeBuild(
+      buildInput, dt, /*projectAllInputs=*/false);
+  addOutputColumns(precomputeBuild, buildOutputColumns);
+  // Compute keys in case they are expressions (e.g., b + 2).
   auto buildKeys = precomputeBuild.toColumns(build.keys);
   buildInput = std::move(precomputeBuild).maybeProject();
-
-  auto joinColumnMapping = makeJoinColumnMapping(
-      probe.columns, probeJoinColumns, build.columns, buildJoinColumns);
 
   return {
       std::move(probeInput),
       std::move(buildInput),
       std::move(probeKeys),
       std::move(buildKeys),
-      std::move(joinColumnMapping)};
+      std::move(updatedMapping)};
 }
 
 // Translates columns from outside the join to columns below the join if there
@@ -1442,7 +1494,7 @@ PlanObjectSet translateToJoinInput(
   columns.forEach([&](PlanObjectCP object) {
     auto it = mapping.find(object);
     if (it != mapping.end()) {
-      result.add(it->second);
+      result.unionColumns(it->second);
     } else {
       result.add(object);
     }
@@ -1506,9 +1558,12 @@ void Optimization::joinByHash(
 
   PlanStateSaver save(state, candidate);
 
-  PlanObjectSet buildFilterColumns;
-  buildFilterColumns.unionColumns(candidate.join->filter());
-  buildFilterColumns.intersect(availableColumns(candidate.tables[0]));
+  auto probeColumns = PlanObjectSet::fromObjects(plan->columns());
+
+  auto [probeFilterColumns, buildFilterColumns] = computeJoinFilterColumns(
+      candidate.join->filter(),
+      probeColumns,
+      availableColumns(candidate.tables[0]));
 
   PlanObjectSet buildTables;
   PlanObjectSet buildColumns;
@@ -1517,15 +1572,18 @@ void Optimization::joinByHash(
     buildTables.add(buildTable);
   }
 
+  state.place(buildTables);
+
+  const auto downstreamColumns = state.downstreamColumns();
+
   // Mapping from join output column to probe or build side input.
   auto joinColumnMapping = makeJoinColumnMapping(candidate.join);
   buildColumns.intersect(
-      translateToJoinInput(state.downstreamColumns(), joinColumnMapping));
+      translateToJoinInput(downstreamColumns, joinColumnMapping));
 
   buildColumns.unionColumns(build.keys);
   buildColumns.unionSet(buildFilterColumns);
 
-  state.place(buildTables);
   state.placeColumns(buildColumns);
 
   MemoKey memoKey = MemoKey::create(
@@ -1547,30 +1605,26 @@ void Optimization::joinByHash(
       needsShuffle);
 
   PlanState buildState(state.optimization, state.dt, buildPlan);
-  RelationOpPtr buildInput = buildPlan->op;
-  RelationOpPtr probeInput = plan;
 
-  auto joinType = build.leftJoinType();
-  const bool probeOnly = joinType == velox::core::JoinType::kLeftSemiFilter ||
-      joinType == velox::core::JoinType::kLeftSemiProject ||
-      joinType == velox::core::JoinType::kAnti;
+  auto precomputed = [&]() {
+    auto probeOutputColumns = computeJoinSideOutputColumns(
+        probeColumns, probe, downstreamColumns, probeFilterColumns);
+    auto buildOutputColumns = computeJoinSideOutputColumns(
+        buildColumns, build, downstreamColumns, buildFilterColumns);
 
-  PlanObjectSet probeColumns;
-  probeColumns.unionObjects(plan->columns());
+    return precomputeJoinInputs(
+        plan,
+        buildPlan->op,
+        probe,
+        build,
+        state.dt,
+        probeOutputColumns,
+        buildOutputColumns,
+        joinColumnMapping);
+  }();
 
-  ColumnCP mark = nullptr;
-
-  PlanObjectSet joinColumns;
-  joinColumns.unionObjects(probe.columns);
-  joinColumns.unionObjects(build.columns);
-
-  // Non-trivial projections over input needed by the join must be computed
-  // first. These projections include expressions used in join keys and
-  // joinEdge.{right, left}Columns.
-  auto precomputed =
-      precomputeJoinInputs(probeInput, buildInput, probe, build, state.dt);
-  probeInput = std::move(precomputed.probeInput);
-  buildInput = std::move(precomputed.buildInput);
+  auto probeInput = std::move(precomputed.probeInput);
+  auto buildInput = std::move(precomputed.buildInput);
   auto probeKeys = std::move(precomputed.probeKeys);
   auto buildKeys = std::move(precomputed.buildKeys);
   joinColumnMapping = std::move(precomputed.joinColumnMapping);
@@ -1624,18 +1678,23 @@ void Optimization::joinByHash(
   auto* buildOp = make<HashBuild>(buildInput, buildKeys, buildPlan);
   buildState.addCost(*buildOp);
 
+  auto joinType = build.leftJoinType();
+  const bool probeOnly = velox::core::isProbeOnlyJoin(joinType);
+
   ProjectionBuilder projectionBuilder;
   bool needsProjection = false;
 
-  const auto& downstreamColumns = state.downstreamColumns();
+  ColumnCP mark = nullptr;
+
   downstreamColumns.forEach<Column>([&](auto column) {
     if (column == build.markColumn) {
       mark = column;
       return;
     }
 
-    if (joinColumns.contains(column)) {
-      projectionBuilder.add(column, joinColumnMapping.at(column));
+    if (auto it = joinColumnMapping.find(column);
+        it != joinColumnMapping.end()) {
+      projectionBuilder.add(column, it->second);
       needsProjection = true;
       return;
     }
@@ -1709,23 +1768,27 @@ void Optimization::joinByHashRight(
 
   PlanStateSaver save(state, candidate);
 
-  PlanObjectSet probeFilterColumns;
-  probeFilterColumns.unionColumns(candidate.join->filter());
-  probeFilterColumns.intersect(availableColumns(candidate.tables[0]));
-
-  const auto& dc = state.downstreamColumns();
-
   PlanObjectSet probeTables;
   PlanObjectSet probeColumns;
   for (auto probeTable : candidate.tables) {
     probeColumns.unionSet(availableColumns(probeTable));
-    state.place(probeTable);
     probeTables.add(probeTable);
   }
 
-  probeColumns.intersect(dc);
+  auto buildColumns = PlanObjectSet::fromObjects(plan->columns());
+
+  auto [probeFilterColumns, buildFilterColumns] = computeJoinFilterColumns(
+      candidate.join->filter(), probeColumns, buildColumns);
+
+  state.place(probeTables);
+  const auto downstreamColumns = state.downstreamColumns();
+
+  auto joinColumnMapping = makeJoinColumnMapping(candidate.join);
+  probeColumns.intersect(
+      translateToJoinInput(downstreamColumns, joinColumnMapping));
   probeColumns.unionColumns(probe.keys);
   probeColumns.unionSet(probeFilterColumns);
+
   state.placeColumns(probeColumns);
 
   MemoKey memoKey = MemoKey::create(
@@ -1742,19 +1805,30 @@ void Optimization::joinByHashRight(
 
   PlanState probeState(state.optimization, state.dt, probePlan);
 
-  RelationOpPtr probeInput = probePlan->op;
-  RelationOpPtr buildInput = plan;
+  auto precomputed = [&]() {
+    auto probeOutputColumns = computeJoinSideOutputColumns(
+        probeColumns, probe, downstreamColumns, probeFilterColumns);
+    auto buildOutputColumns = computeJoinSideOutputColumns(
+        buildColumns, build, downstreamColumns, buildFilterColumns);
 
-  auto precomputed =
-      precomputeJoinInputs(probeInput, buildInput, probe, build, state.dt);
-  probeInput = std::move(precomputed.probeInput);
-  buildInput = std::move(precomputed.buildInput);
+    return precomputeJoinInputs(
+        probePlan->op,
+        plan,
+        probe,
+        build,
+        state.dt,
+        probeOutputColumns,
+        buildOutputColumns,
+        joinColumnMapping);
+  }();
+
+  auto probeInput = std::move(precomputed.probeInput);
+  auto buildInput = std::move(precomputed.buildInput);
   auto probeKeys = std::move(precomputed.probeKeys);
   auto buildKeys = std::move(precomputed.buildKeys);
-  auto joinColumnMapping = std::move(precomputed.joinColumnMapping);
+  joinColumnMapping = std::move(precomputed.joinColumnMapping);
 
-  PlanObjectSet buildColumns;
-  buildColumns.unionObjects(buildInput->columns());
+  buildColumns = PlanObjectSet::fromObjects(buildInput->columns());
 
   const auto leftJoinType = probe.leftJoinType();
   // Change the join type to the right join variant.
@@ -1770,21 +1844,18 @@ void Optimization::joinByHashRight(
 
   ColumnCP mark = nullptr;
 
-  PlanObjectSet joinColumns;
-  joinColumns.unionObjects(probe.columns);
-  joinColumns.unionObjects(build.columns);
-
   ProjectionBuilder projectionBuilder;
   bool needsProjection = false;
 
-  state.downstreamColumns().forEach<Column>([&](auto column) {
+  downstreamColumns.forEach<Column>([&](auto column) {
     if (column == probe.markColumn) {
       mark = column;
       return;
     }
 
-    if (joinColumns.contains(column)) {
-      projectionBuilder.add(column, joinColumnMapping.at(column));
+    if (auto it = joinColumnMapping.find(column);
+        it != joinColumnMapping.end()) {
+      projectionBuilder.add(column, it->second);
       needsProjection = true;
       return;
     }
@@ -1851,18 +1922,27 @@ void Optimization::crossJoin(
   PlanStateSaver save(state, candidate);
 
   const auto* table = candidate.tables[0];
+  state.place(table);
+
+  const auto downstreamColumns = state.downstreamColumns();
+
+  auto buildColumns = availableColumns(table);
+  auto probeColumns = PlanObjectSet::fromObjects(plan->columns());
+
+  // Columns from the filter that belong to each side.
+  PlanObjectSet probeFilterColumns;
+  PlanObjectSet buildFilterColumns;
 
   folly::F14FastMap<PlanObjectCP, ExprCP> joinColumnMapping;
   if (candidate.join != nullptr) {
     joinColumnMapping = makeJoinColumnMapping(candidate.join);
-  }
 
-  auto buildColumns = availableColumns(table);
-  buildColumns.intersect(
-      translateToJoinInput(state.downstreamColumns(), joinColumnMapping));
+    std::tie(probeFilterColumns, buildFilterColumns) = computeJoinFilterColumns(
+        candidate.join->filter(), probeColumns, buildColumns);
 
-  if (candidate.join != nullptr) {
-    buildColumns.unionColumns(candidate.join->filter());
+    buildColumns.intersect(
+        translateToJoinInput(downstreamColumns, joinColumnMapping));
+    buildColumns.unionSet(buildFilterColumns);
   }
 
   PlanObjectSet buildTables = PlanObjectSet::single(table);
@@ -1882,7 +1962,6 @@ void Optimization::crossJoin(
   PlanState buildState(state.optimization, state.dt, buildPlan);
 
   RelationOpPtr buildInput = buildPlan->op;
-  RelationOpPtr probeInput = plan;
 
   if (!isSingleWorker_) {
     buildInput = make<Repartition>(
@@ -1891,35 +1970,36 @@ void Optimization::crossJoin(
 
   buildState.addCost(*buildInput);
 
-  state.place(table);
   state.cost.cost += buildState.cost.cost;
-
-  // Determine joinType and filter from candidate's join if present.
-  velox::core::JoinType joinType = velox::core::JoinType::kInner;
-  ExprVector filter;
-
-  const auto downstreamColumns = state.downstreamColumns();
 
   if (candidate.join) {
     auto [build, probe] = candidate.joinSides();
-    joinType = build.leftJoinType();
-    filter = candidate.join->filter();
 
     auto mark = build.markColumn;
     if (mark != nullptr) {
       VELOX_CHECK(downstreamColumns.contains(mark));
     }
 
-    // Non-trivial projections over input needed by the join must be computed
-    // first. These projections include expressions used in joinEdge.{right,
-    // left}Columns.
-    auto precomputed =
-        precomputeJoinInputs(probeInput, buildInput, probe, build, state.dt);
-    probeInput = std::move(precomputed.probeInput);
+    auto precomputed = [&]() {
+      auto probeOutputColumns = computeJoinSideOutputColumns(
+          probeColumns, probe, downstreamColumns, probeFilterColumns);
+      auto buildOutputColumns = computeJoinSideOutputColumns(
+          buildColumns, build, downstreamColumns, buildFilterColumns);
+
+      return precomputeJoinInputs(
+          plan,
+          buildInput,
+          probe,
+          build,
+          state.dt,
+          probeOutputColumns,
+          buildOutputColumns,
+          joinColumnMapping);
+    }();
+
+    auto probeInput = std::move(precomputed.probeInput);
     buildInput = std::move(precomputed.buildInput);
     joinColumnMapping = std::move(precomputed.joinColumnMapping);
-
-    auto probeColumns = PlanObjectSet::fromObjects(plan->columns());
 
     // Add AssignUniqueId for correlated scalar subquery decorrelation.
     // For non-equi correlation with aggregation: rowNumberColumn is set,
@@ -1938,18 +2018,15 @@ void Optimization::crossJoin(
     ProjectionBuilder projectionBuilder;
     bool needsProjection = false;
 
-    PlanObjectSet joinColumns;
-    joinColumns.unionObjects(probe.columns);
-    joinColumns.unionObjects(build.columns);
-
     downstreamColumns.forEach<Column>([&](auto column) {
       if (column == mark) {
         projectionBuilder.add(mark, mark);
         return;
       }
 
-      if (joinColumns.contains(column)) {
-        projectionBuilder.add(column, joinColumnMapping.at(column));
+      if (auto it = joinColumnMapping.find(column);
+          it != joinColumnMapping.end()) {
+        projectionBuilder.add(column, it->second);
         needsProjection = true;
         return;
       }
@@ -1968,6 +2045,8 @@ void Optimization::crossJoin(
       projectionBuilder.add(enforceDistinctColumn, enforceDistinctColumn);
     }
 
+    auto joinType = build.leftJoinType();
+
     VELOX_CHECK(
         joinType == velox::core::JoinType::kInner ||
             joinType == velox::core::JoinType::kLeft ||
@@ -1981,7 +2060,7 @@ void Optimization::crossJoin(
         probeInput,
         buildInput,
         joinType,
-        std::move(filter),
+        candidate.join->filter(),
         projectionBuilder.inputColumns());
 
     state.replaceColumns(projectionBuilder.outputColumns());
@@ -2009,10 +2088,10 @@ void Optimization::crossJoin(
     resultColumns.intersect(downstreamColumns);
 
     RelationOp* join = Join::makeCrossJoin(
-        probeInput,
+        plan,
         buildInput,
-        joinType,
-        std::move(filter),
+        velox::core::JoinType::kInner,
+        {},
         resultColumns.toObjects<Column>());
 
     state.replaceColumns(std::move(resultColumns));
