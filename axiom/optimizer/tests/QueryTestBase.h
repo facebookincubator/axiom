@@ -211,6 +211,10 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
 };
 
 /// Filters on BIGINT columns.
+inline auto eq(const std::string& name, int64_t n) {
+  return velox::common::test::singleSubfieldFilter(name, velox::exec::equal(n));
+}
+
 inline auto lt(const std::string& name, int64_t n) {
   return velox::common::test::singleSubfieldFilter(
       name, velox::exec::lessThan(n));

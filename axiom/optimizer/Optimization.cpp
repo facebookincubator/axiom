@@ -2746,6 +2746,7 @@ PlanP Optimization::makeDtPlan(
 }
 
 ExprCP Optimization::combineLeftDeep(Name func, const ExprVector& exprs) {
+  VELOX_CHECK(!exprs.empty());
   ExprVector copy = exprs;
   std::ranges::sort(copy, [&](ExprCP left, ExprCP right) {
     return left->id() < right->id();
