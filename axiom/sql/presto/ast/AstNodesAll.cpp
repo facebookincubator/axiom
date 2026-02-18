@@ -758,6 +758,10 @@ void ExplainType::accept(AstVisitor* visitor) {
   visitor->visitExplainType(this);
 }
 
+void Use::accept(AstVisitor* visitor) {
+  visitor->visitUse(this);
+}
+
 void ShowCatalogs::accept(AstVisitor* visitor) {
   visitor->visitShowCatalogs(this);
 }

@@ -33,6 +33,7 @@ const auto& statementKindNames() {
       {SqlStatementKind::kInsert, "INSERT"},
       {SqlStatementKind::kDropTable, "DROP TABLE"},
       {SqlStatementKind::kExplain, "EXPLAIN"},
+      {SqlStatementKind::kUse, "USE"},
   };
 
   return kNames;

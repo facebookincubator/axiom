@@ -16,6 +16,7 @@
 
 #include "axiom/cli/SqlQueryRunner.h"
 #include <folly/system/HardwareConcurrency.h>
+#include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanDotPrinter.h"
 #include "axiom/logical_plan/PlanPrinter.h"
@@ -264,6 +265,22 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     const auto* drop = sqlStatement.as<presto::DropTableStatement>();
 
     return {.message = dropTable(*drop)};
+  }
+
+  if (sqlStatement.isUse()) {
+    const auto* use = sqlStatement.as<presto::UseStatement>();
+    const auto& connectorId = use->catalog().has_value()
+        ? use->catalog().value()
+        : defaultConnectorId_;
+    VELOX_USER_CHECK(
+        connector::ConnectorMetadata::tryMetadata(connectorId) != nullptr,
+        "Catalog does not exist: {}",
+        connectorId);
+    defaultConnectorId_ = connectorId;
+    defaultSchema_ = use->schema();
+    return {
+        .message =
+            fmt::format("Using {}.{}", defaultConnectorId_, use->schema())};
   }
 
   VELOX_CHECK(sqlStatement.isSelect());

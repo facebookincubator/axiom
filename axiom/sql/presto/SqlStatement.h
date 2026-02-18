@@ -30,6 +30,7 @@ enum class SqlStatementKind {
   kInsert,
   kDropTable,
   kExplain,
+  kUse,
 };
 
 AXIOM_DECLARE_ENUM_NAME(SqlStatementKind);
@@ -72,6 +73,10 @@ class SqlStatement {
 
   bool isExplain() const {
     return kind_ == SqlStatementKind::kExplain;
+  }
+
+  bool isUse() const {
+    return kind_ == SqlStatementKind::kUse;
   }
 
   template <typename T>
@@ -320,6 +325,27 @@ class ExplainStatement : public SqlStatement {
   const SqlStatementPtr statement_;
   const bool analyze_;
   const Type type_;
+};
+
+/// Sets the default catalog and schema for subsequent queries.
+class UseStatement : public SqlStatement {
+ public:
+  UseStatement(std::optional<std::string> catalog, std::string schema)
+      : SqlStatement(SqlStatementKind::kUse),
+        catalog_{std::move(catalog)},
+        schema_{std::move(schema)} {}
+
+  const std::optional<std::string>& catalog() const {
+    return catalog_;
+  }
+
+  const std::string& schema() const {
+    return schema_;
+  }
+
+ private:
+  const std::optional<std::string> catalog_;
+  const std::string schema_;
 };
 
 } // namespace axiom::sql::presto

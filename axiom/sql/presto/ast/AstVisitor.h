@@ -551,6 +551,10 @@ class AstVisitor {
     defaultVisit(node);
   }
 
+  virtual void visitUse(Use* node) {
+    defaultVisit(node);
+  }
+
   virtual void visitShowCatalogs(ShowCatalogs* node) {
     defaultVisit(node);
   }
