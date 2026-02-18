@@ -15,6 +15,7 @@
  */
 
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
+#include <folly/coro/GtestHelpers.h>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
@@ -155,15 +156,15 @@ TEST_F(TpchConnectorMetadataTest, createTableHandle) {
       tpchTableHandle->getScaleFactor(), tpchLayout->getScaleFactor());
 }
 
-TEST_F(TpchConnectorMetadataTest, splitGeneration) {
+CO_TEST_F(TpchConnectorMetadataTest, splitGeneration) {
   auto table = metadata_->findTable("lineitem");
-  ASSERT_NE(table, nullptr);
+  EXPECT_NE(table, nullptr);
 
   const auto& layouts = table->layouts();
-  ASSERT_FALSE(layouts.empty());
+  EXPECT_FALSE(layouts.empty());
 
   auto splitManager = metadata_->splitManager();
-  ASSERT_NE(splitManager, nullptr);
+  EXPECT_NE(splitManager, nullptr);
 
   std::vector<velox::connector::ColumnHandlePtr> columnHandles;
   std::vector<velox::core::TypedExprPtr> empty;
@@ -171,17 +172,21 @@ TEST_F(TpchConnectorMetadataTest, splitGeneration) {
       nullptr, nullptr);
   auto tableHandle = layouts[0]->createTableHandle(
       /*session=*/nullptr, columnHandles, *evaluator, empty, empty);
-  ASSERT_NE(tableHandle, nullptr);
+  EXPECT_NE(tableHandle, nullptr);
 
   auto partitions =
       splitManager->listPartitions(/*session=*/nullptr, tableHandle);
-  ASSERT_EQ(partitions.size(), 1);
+  EXPECT_EQ(partitions.size(), 1);
 
   auto splitSource = splitManager->getSplitSource(
       /*session=*/nullptr, tableHandle, partitions);
-  ASSERT_NE(splitSource, nullptr);
-  auto splits = splitSource->getSplits(1024 * 1024); // 1MB target
-  ASSERT_FALSE(splits.empty());
+  EXPECT_NE(splitSource, nullptr);
+  std::vector<SplitSource::SplitAndGroup> splits;
+  auto generator = splitSource->getSplitGenerator();
+  while (auto split = co_await generator.next()) {
+    splits.push_back(std::move(*split));
+  }
+  EXPECT_FALSE(splits.empty());
 }
 } // namespace
 } // namespace facebook::axiom::connector::tpch

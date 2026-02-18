@@ -16,6 +16,8 @@
 
 #include "axiom/connectors/tests/TestConnector.h"
 
+#include <folly/coro/BlockingWait.h>
+#include <folly/coro/GtestHelpers.h>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
@@ -118,7 +120,7 @@ TEST_F(TestConnectorTest, columnHandle) {
   EXPECT_EQ(testColumnHandle->type()->kind(), TypeKind::INTEGER);
 }
 
-TEST_F(TestConnectorTest, splitManager) {
+CO_TEST_F(TestConnectorTest, splitManager) {
   auto schema = ROW({"a"}, {INTEGER()});
   auto table = connector_->addTable("test_table", schema);
   auto& layout = *table->layouts()[0];
@@ -139,9 +141,14 @@ TEST_F(TestConnectorTest, splitManager) {
       splitManager->getSplitSource(nullptr, tableHandle, partitions, {});
   EXPECT_NE(splitSource, nullptr);
 
-  auto splits = splitSource->getSplits(0);
-  EXPECT_EQ(splits.size(), 1);
-  EXPECT_EQ(splits[0].split, nullptr);
+  {
+    std::vector<SplitSource::SplitAndGroup> splits;
+    auto generator = splitSource->getSplitGenerator();
+    while (auto split = co_await generator.next()) {
+      splits.push_back(std::move(*split));
+    }
+    EXPECT_EQ(splits.size(), 0);
+  }
 
   auto vector = makeRowVector({makeFlatVector<int>({1})});
   constexpr size_t kNumSplits = 1024;
@@ -151,17 +158,20 @@ TEST_F(TestConnectorTest, splitManager) {
 
   splitSource =
       splitManager->getSplitSource(nullptr, tableHandle, partitions, {});
-  splits = splitSource->getSplits(0);
-  EXPECT_EQ(splits.size(), kNumSplits);
-  for (size_t i = 0; i < kNumSplits; ++i) {
-    auto split = std::dynamic_pointer_cast<TestConnectorSplit>(splits[i].split);
-    EXPECT_NE(split, nullptr);
-    EXPECT_EQ(split->index(), i);
+  {
+    std::vector<SplitSource::SplitAndGroup> splits;
+    auto generator = splitSource->getSplitGenerator();
+    while (auto split = co_await generator.next()) {
+      splits.push_back(std::move(*split));
+    }
+    EXPECT_EQ(splits.size(), kNumSplits);
+    for (size_t i = 0; i < kNumSplits; ++i) {
+      auto split =
+          std::dynamic_pointer_cast<TestConnectorSplit>(splits[i].split);
+      EXPECT_NE(split, nullptr);
+      EXPECT_EQ(split->index(), i);
+    }
   }
-
-  splits = splitSource->getSplits(0);
-  EXPECT_EQ(splits.size(), 1);
-  EXPECT_EQ(splits[0].split, nullptr);
 }
 
 TEST_F(TestConnectorTest, splits) {

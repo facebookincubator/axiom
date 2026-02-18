@@ -149,12 +149,11 @@ class TestSplitSource : public SplitSource {
   TestSplitSource(const std::string& connectorId, size_t splitCount)
       : connectorId_(connectorId), splitCount_(splitCount) {}
 
-  std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) override;
+  folly::coro::AsyncGenerator<SplitAndGroup> getSplitGenerator() override;
 
  private:
   const std::string connectorId_;
   const size_t splitCount_;
-  bool done_{false};
 };
 
 /// SplitManager embedded in the TestConnector. Returns one
