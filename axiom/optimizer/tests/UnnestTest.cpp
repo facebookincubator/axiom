@@ -1262,6 +1262,26 @@ TEST_F(UnnestTest, ordinality) {
   }
 }
 
+// Unnest with a WHERE filter referencing unnested columns.
+TEST_F(UnnestTest, unnestWithFilter) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b"}, {MAP(VARCHAR(), INTEGER()), VARCHAR()}));
+
+  auto query = "SELECT * FROM t, UNNEST(a) AS u(x, y) WHERE b = x";
+  SCOPED_TRACE(query);
+
+  auto logicalPlan = parseSelect(query, kTestConnectorId);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("t")
+                     .unnest()
+                     .filter("b = x")
+                     .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 TEST_F(UnnestTest, multipleTables) {
   testConnector_->addTable("t", ROW({"a"}, ARRAY(BIGINT())));
 

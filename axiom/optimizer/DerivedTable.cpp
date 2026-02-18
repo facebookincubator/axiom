@@ -1311,7 +1311,7 @@ void DerivedTable::distributeConjuncts() {
       if (queryCtx()->optimization()->isJoinEquality(
               conjunct, tables[0], tables[1], left, right)) {
         auto join = findJoin(this, tables, true);
-        if (join->isInner()) {
+        if (join->isInner() && !join->isUnnest()) {
           if (left->is(PlanType::kColumnExpr) &&
               right->is(PlanType::kColumnExpr)) {
             left->as<Column>()->equals(right->as<Column>());
