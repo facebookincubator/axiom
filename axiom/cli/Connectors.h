@@ -36,6 +36,7 @@ class Connectors {
  public:
   static constexpr const char* kTpchConnectorId = "tpch";
   static constexpr const char* kLocalHiveConnectorId = "hive";
+  static constexpr const char* kTestConnectorId = "test";
 
   Connectors();
 
@@ -65,6 +66,10 @@ class Connectors {
       const std::string& dataPath,
       const std::string& dataFormat,
       const std::string& connectorId = kLocalHiveConnectorId);
+
+  /// Registers an in-memory test connector under `connectorId`.
+  std::shared_ptr<velox::connector::Connector> registerTestConnector(
+      const std::string& connectorId = kTestConnectorId);
 
  protected:
   /// Initialize file formats and ioExecutor. Must be called before

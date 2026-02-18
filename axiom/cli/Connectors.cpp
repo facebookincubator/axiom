@@ -20,6 +20,7 @@
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -115,6 +116,15 @@ Connectors::registerLocalHiveConnector(
       std::make_shared<connector::hive::LocalHiveConnectorMetadata>(
           hiveConnector));
 
+  return connector;
+}
+
+std::shared_ptr<velox::connector::Connector> Connectors::registerTestConnector(
+    const std::string& connectorId) {
+  connector::TestConnectorFactory factory(connectorId.c_str());
+  auto connector = factory.newConnector(connectorId);
+  connectorIds_.push_back(connector->connectorId());
+  velox::connector::registerConnector(connector);
   return connector;
 }
 

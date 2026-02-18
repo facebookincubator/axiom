@@ -19,6 +19,12 @@
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/Console.h"
 
+DEFINE_string(
+    catalog,
+    "",
+    "Default catalog (connector). If empty, uses tpch or hive if --data_path is set.");
+DEFINE_string(schema, "", "Default schema.");
+
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv, false);
 
@@ -29,11 +35,21 @@ int main(int argc, char** argv) {
   axiom::sql::SqlQueryRunner runner;
   runner.initialize([&]() {
     auto defaultConnector = connectors.registerTpchConnector();
+
+    connectors.registerTestConnector();
+
     if (!FLAGS_data_path.empty()) {
       defaultConnector = connectors.registerLocalHiveConnector(
           FLAGS_data_path, FLAGS_data_format);
     }
-    return std::make_pair(defaultConnector->connectorId(), std::nullopt);
+
+    std::string connectorId =
+        FLAGS_catalog.empty() ? defaultConnector->connectorId() : FLAGS_catalog;
+
+    std::optional<std::string> schema =
+        FLAGS_schema.empty() ? std::nullopt : std::make_optional(FLAGS_schema);
+
+    return std::make_pair(connectorId, schema);
   });
 
   axiom::sql::Console console{runner};

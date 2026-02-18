@@ -307,6 +307,22 @@ class TestConnectorMetadata : public ConnectorMetadata {
       uint64_t numRows,
       const std::unordered_map<std::string, ColumnStatistics>& columnStats);
 
+  TablePtr createTable(
+      const ConnectorSessionPtr& session,
+      const std::string& tableName,
+      const velox::RowTypePtr& rowType,
+      const folly::F14FastMap<std::string, velox::Variant>& options) override;
+
+  ConnectorWriteHandlePtr beginWrite(
+      const ConnectorSessionPtr& session,
+      const TablePtr& table,
+      WriteKind kind) override;
+
+  RowsFuture finishWrite(
+      const ConnectorSessionPtr& session,
+      const ConnectorWriteHandlePtr& handle,
+      const std::vector<velox::RowVectorPtr>& writeResults) override;
+
   bool dropTable(
       const ConnectorSessionPtr& session,
       std::string_view tableName,

@@ -72,6 +72,11 @@ class SqlQueryRunner {
       const presto::SqlStatement& statement,
       const RunOptions& options);
 
+  /// Splits SQL text into individual statements separated by semicolons.
+  /// @param sql SQL text containing one or more statements.
+  /// @return Vector of individual SQL statements.
+  std::vector<std::string_view> splitStatements(std::string_view sql);
+
   /// Parses SQL text containing one or more semicolon-separated statements.
   /// @param sql SQL text to parse.
   /// @return Vector of parsed statements.
@@ -102,14 +107,17 @@ class SqlQueryRunner {
     return config_;
   }
 
- private:
-  std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
-      const RunOptions& options);
+  facebook::axiom::connector::TablePtr createTable(
+      const presto::CreateTableStatement& statement);
 
   facebook::axiom::connector::TablePtr createTable(
       const presto::CreateTableAsSelectStatement& statement);
 
   std::string dropTable(const presto::DropTableStatement& statement);
+
+ private:
+  std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
+      const RunOptions& options);
 
   std::string runExplain(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,

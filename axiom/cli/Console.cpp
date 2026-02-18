@@ -79,24 +79,23 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
       .debugMode = FLAGS_debug,
   };
 
-  decltype(runner_.parseMultiple(sql, options)) statements;
-  try {
-    // Parse all statements upfront.
-    cli::Timing parseTiming;
-    statements = cli::time<decltype(statements)>(
-        [&]() { return runner_.parseMultiple(sql, options); }, parseTiming);
-
-    if (isInteractive) {
-      std::cout << "Parsing: " << parseTiming.toString() << std::endl;
+  // Parse and execute statements one at a time so that DDL statements
+  // (e.g. CREATE TABLE) take effect before subsequent statements (e.g.
+  // INSERT) are parsed.
+  for (const auto& sqlText : runner_.splitStatements(sql)) {
+    if (sqlText.empty()) {
+      continue;
     }
-  } catch (std::exception& e) {
-    std::cerr << "Parse failed: " << e.what() << std::endl;
-    return;
-  }
 
-  // Execute each statement with timing.
-  for (const auto& statement : statements) {
     try {
+      cli::Timing parseTiming;
+      auto statement = cli::time<presto::SqlStatementPtr>(
+          [&]() { return runner_.parseSingle(sqlText, options); }, parseTiming);
+
+      if (isInteractive) {
+        std::cout << "Parsing: " << parseTiming.toString() << std::endl;
+      }
+
       cli::Timing statementTiming;
       auto result = cli::time<SqlQueryRunner::SqlResult>(
           [&]() { return runner_.run(*statement, options); }, statementTiming);
@@ -108,13 +107,11 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
       }
 
       if (isInteractive) {
-        // In interactive mode, show per-statement timing.
         std::cout << "Optimizing and Executing: " << statementTiming.toString()
                   << std::endl;
       }
     } catch (std::exception& e) {
       std::cerr << "Query failed: " << e.what() << std::endl;
-      // Stop executing remaining statements in this block.
       return;
     }
   }

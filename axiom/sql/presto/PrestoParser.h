@@ -66,13 +66,13 @@ class PrestoParser {
   /// @return input and output tables which the query references.
   ReferencedTables getReferencedTables(std::string_view sql);
 
- private:
-  SqlStatementPtr doParse(std::string_view sql, bool enableTracing);
-
   /// Splits SQL text into individual statements by semicolon delimiters.
   /// @param sql SQL text containing one or more statements.
-  /// @return Vector of individual SQL statements with semicolons removed.
-  static std::vector<std::string> splitStatements(std::string_view sql);
+  /// @return Vector of string_views into 'sql' for individual SQL statements.
+  static std::vector<std::string_view> splitStatements(std::string_view sql);
+
+ private:
+  SqlStatementPtr doParse(std::string_view sql, bool enableTracing);
 
   const std::string defaultConnectorId_;
   const std::optional<std::string> defaultSchema_;
