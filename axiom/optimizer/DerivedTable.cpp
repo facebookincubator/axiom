@@ -987,18 +987,36 @@ ExprVector extractPerTable(
   return conjuncts;
 }
 
-// Analyzes an OR. Returns top level conjuncts that this has inferred from the
-// disjuncts. For example if all have an AND inside and each AND has the same
-// condition then this condition is returned and removed from the disjuncts.
-// 'disjuncts' is changed in place. If 'replacement' is set, then this
-// replaces the whole OR from which 'disjuncts' was flattened.
+// Factors out common conjuncts from OR disjuncts and extracts per-table
+// filters that can be pushed down into individual table scans.
 //
-// In other words,
+// Examples:
 //    (x AND y) OR (x AND z) => x AND (y OR z)
 //    (x AND y) OR (x AND y) => x AND y
+//    A OR (A AND B) => A
+//    (n1='FR' AND n2='DE') OR (n1='DE' AND n2='FR')
+//        => n1 IN ('FR', 'DE') AND n2 IN ('DE', 'FR')
+//           AND ((n1='FR' AND n2='DE') OR (n1='DE' AND n2='FR'))
 //
-// This pattern appears in TPC-H q9.
-ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
+// Returns extracted conjuncts (common factors and per-table filters) to be
+// added alongside the OR. The caller must also handle the OR itself based on
+// two mutually exclusive signals:
+//
+//  - 'orReplacement' set: The OR simplifies to a new expression (after
+//     deduplication or after factoring out common conjuncts). Replace the OR
+//     with 'orReplacement'.
+//  - 'orSubsumed' true: A disjunct was fully subsumed by the common factors,
+//     e.g. A OR (A AND B) => A. The OR is trivially true. Drop the OR.
+//  - Neither: The OR is unchanged. Keep it as-is.
+//
+// This pattern appears in TPC-H q7 and q9.
+ExprVector extractCommonFromDisjuncts(
+    ExprVector& disjuncts,
+    ExprCP* orReplacement,
+    bool& orSubsumed) {
+  *orReplacement = nullptr;
+  orSubsumed = false;
+
   // Remove duplicates.
   folly::F14FastSet<ExprCP> uniqueDisjuncts;
   bool changeOriginal = false;
@@ -1012,7 +1030,7 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
   }
 
   if (disjuncts.size() == 1) {
-    *replacement = disjuncts[0];
+    *orReplacement = disjuncts[0];
     return {};
   }
 
@@ -1046,6 +1064,15 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
     }
   }
 
+  // If any disjunct was fully subsumed by the common factors, the OR is
+  // trivially true. Return just the common factors.
+  for (const auto& disjunct : flat) {
+    if (disjunct.empty()) {
+      orSubsumed = true;
+      return result;
+    }
+  }
+
   auto perTable = extractPerTable(disjuncts, flat);
   if (!perTable.empty()) {
     // The per-table extraction does not alter the original but can surface
@@ -1060,7 +1087,7 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
       ands.push_back(
           optimization->combineLeftDeep(SpecialFormCallNames::kAnd, inner));
     }
-    *replacement =
+    *orReplacement =
         optimization->combineLeftDeep(SpecialFormCallNames::kOr, ands);
   }
 
@@ -1072,32 +1099,46 @@ ExprVector extractCommon(ExprVector& disjuncts, ExprCP* replacement) {
 // create join edges. May be called repeatedly, each e.g. after pushing down
 // conjuncts from outer DTs.
 void expandConjuncts(ExprVector& conjuncts) {
-  bool any = false;
+  bool changed = false;
   auto firstUnprocessed = 0;
   do {
-    any = false;
+    changed = false;
 
-    const auto end = conjuncts.size();
+    auto end = conjuncts.size();
     for (auto i = firstUnprocessed; i < end; ++i) {
       const auto& conjunct = conjuncts[i];
       if (isCallExpr(conjunct, SpecialFormCallNames::kOr) &&
           !conjunct->containsNonDeterministic()) {
         ExprVector flat;
         flattenAll(conjunct, SpecialFormCallNames::kOr, flat);
-        ExprCP replace = nullptr;
-        ExprVector common = extractCommon(flat, &replace);
-        if (replace) {
-          any = true;
-          conjuncts[i] = replace;
+
+        ExprCP orReplacement = nullptr;
+        bool orSubsumed = false;
+        ExprVector common =
+            extractCommonFromDisjuncts(flat, &orReplacement, orSubsumed);
+        VELOX_CHECK(
+            !orReplacement || !orSubsumed,
+            "orReplacement and orSubsumed are mutually exclusive");
+        if (orReplacement) {
+          changed = true;
+          conjuncts[i] = orReplacement;
+        } else if (orSubsumed) {
+          // A disjunct was fully subsumed by the common conjuncts, e.g.
+          // A OR (A AND B) => A. The OR is trivially true and can be dropped.
+          changed = true;
+          conjuncts.erase(conjuncts.begin() + i);
+          --i;
+          --end;
         }
+
         if (!common.empty()) {
-          any = true;
+          changed = true;
           conjuncts.insert(conjuncts.end(), common.begin(), common.end());
         }
       }
     }
     firstUnprocessed = end;
-  } while (any);
+  } while (changed);
 }
 
 // Converts a LEFT join to an INNER join, preserving the join keys.

@@ -150,5 +150,59 @@ TEST_F(FilterPushdownTest, throughJoin) {
   }
 }
 
+// Verify that OR with a disjunct that is fully subsumed by extracted common
+// factors does not crash. E.g. A OR (A AND B): the first disjunct is fully
+// subsumed, leaving an empty residual. The result should be just A.
+TEST_F(FilterPushdownTest, orWithSubsumedDisjunct) {
+  auto logicalPlan = lp::PlanBuilder()
+                         .tableScan(exec::test::kHiveConnectorId, "nation")
+                         .filter(
+                             "(n_regionkey = 1) OR "
+                             "(n_regionkey = 1 AND n_name like 'A%')")
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  auto matcher = core::PlanMatcherBuilder()
+                     .hiveScan("nation", test::eq("n_regionkey", 1LL))
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// Verify that multi-table OR filter with per-table extraction preserves the
+// cross-combination filter. Per-table filters like n_name IN ('FRANCE',
+// 'JAPAN') can be extracted and pushed down, but the original OR must be kept
+// as a remaining filter.
+TEST_F(FilterPushdownTest, multiTableOrFilter) {
+  lp::PlanBuilder::Context ctx(exec::test::kHiveConnectorId);
+  auto logicalPlan = lp::PlanBuilder(ctx)
+                         .from({"nation", "region"})
+                         .filter(
+                             "n_regionkey = r_regionkey AND "
+                             "((n_name = 'FRANCE' AND r_name = 'EUROPE') OR "
+                             "(n_name = 'JAPAN' AND r_name = 'ASIA'))")
+                         .build();
+
+  // TODO: Per-table filters are pushed down as remaining filters because
+  // ExprToSubfieldFilterParser::makeOrFilter doesn't support merging
+  // VARCHAR equality filters into BytesValues IN filters.
+  // https://github.com/facebookincubator/velox/issues/16440
+  auto plan = toSingleNodePlan(logicalPlan);
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .hiveScan("nation", {}, "n_name = 'FRANCE' OR n_name = 'JAPAN'")
+          .hashJoin(
+              core::PlanMatcherBuilder()
+                  .hiveScan(
+                      "region", {}, "r_name = 'EUROPE' OR r_name = 'ASIA'")
+                  .build(),
+              velox::core::JoinType::kInner)
+          .filter(
+              "(n_name = 'FRANCE' AND r_name = 'EUROPE') OR "
+              "(n_name = 'JAPAN' AND r_name = 'ASIA')")
+          .build();
+
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
