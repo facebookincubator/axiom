@@ -671,6 +671,11 @@ class JoinEdge {
     return make<JoinEdge>(leftTable, rightTable, Spec{.rightNotExists = true});
   }
 
+  /// Creates a JoinEdge for CROSS JOIN UNNEST. Stores 'unnestExprs' in
+  /// leftKeys_. These are the MAP or ARRAY expressions to unnest, not
+  /// equality keys. Equalities from WHERE-clause filters that reference
+  /// unnested columns are left as DT conjuncts and placed as Filter nodes
+  /// during optimization.
   static JoinEdge* makeUnnest(
       PlanObjectCP leftTable,
       PlanObjectCP rightTable,
@@ -777,6 +782,11 @@ class JoinEdge {
   /// True if this is a NOT EXISTS join.
   bool isAnti() const {
     return rightNotExists_;
+  }
+
+  /// True if this is an UNNEST join.
+  bool isUnnest() const {
+    return rightTable_->is(PlanType::kUnnestTableNode);
   }
 
   /// Returns true for IN semantics (nullAware), false for EXISTS semantics.
