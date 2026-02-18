@@ -15,6 +15,7 @@
  */
 
 #include "axiom/connectors/tests/TestConnector.h"
+#include "velox/exec/TableWriter.h"
 
 namespace facebook::axiom::connector {
 
@@ -247,6 +248,41 @@ std::shared_ptr<TestTable> TestConnectorMetadata::addTable(
   auto [it, ok] = tables_.emplace(name, std::move(table));
   VELOX_CHECK(ok, "Table already exists: {}", name);
   return it->second;
+}
+
+TablePtr TestConnectorMetadata::createTable(
+    const ConnectorSessionPtr& /*session*/,
+    const std::string& tableName,
+    const velox::RowTypePtr& rowType,
+    const folly::F14FastMap<std::string, velox::Variant>& /*options*/) {
+  return addTable(tableName, rowType, velox::ROW({}));
+}
+
+ConnectorWriteHandlePtr TestConnectorMetadata::beginWrite(
+    const ConnectorSessionPtr& /*session*/,
+    const TablePtr& table,
+    WriteKind /*kind*/) {
+  auto insertHandle = std::make_shared<TestInsertTableHandle>(table->name());
+  return std::make_shared<ConnectorWriteHandle>(
+      std::move(insertHandle),
+      velox::exec::TableWriteTraits::outputType(std::nullopt));
+}
+
+RowsFuture TestConnectorMetadata::finishWrite(
+    const ConnectorSessionPtr& /*session*/,
+    const ConnectorWriteHandlePtr& /*handle*/,
+    const std::vector<velox::RowVectorPtr>& writeResults) {
+  int64_t rows = 0;
+  velox::DecodedVector decoded;
+  for (const auto& result : writeResults) {
+    decoded.decode(*result->childAt(0));
+    for (velox::vector_size_t i = 0; i < decoded.size(); ++i) {
+      if (!decoded.isNullAt(i)) {
+        rows += decoded.valueAt<int64_t>(i);
+      }
+    }
+  }
+  return folly::makeFuture(rows);
 }
 
 bool TestConnectorMetadata::dropTable(

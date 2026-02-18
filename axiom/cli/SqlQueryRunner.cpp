@@ -87,6 +87,22 @@ std::vector<velox::RowVectorPtr> fetchResults(runner::LocalRunner& runner) {
 } // namespace
 
 connector::TablePtr SqlQueryRunner::createTable(
+    const presto::CreateTableStatement& statement) {
+  auto metadata =
+      connector::ConnectorMetadata::metadata(statement.connectorId());
+
+  folly::F14FastMap<std::string, velox::Variant> options;
+  for (const auto& [key, value] : statement.properties()) {
+    options[key] =
+        optimizer::ConstantExprEvaluator::evaluateConstantExpr(*value);
+  }
+
+  auto session = std::make_shared<connector::ConnectorSession>("test");
+  return metadata->createTable(
+      session, statement.tableName(), statement.tableSchema(), options);
+}
+
+connector::TablePtr SqlQueryRunner::createTable(
     const presto::CreateTableAsSelectStatement& statement) {
   auto metadata =
       connector::ConnectorMetadata::metadata(statement.connectorId());
@@ -168,6 +184,11 @@ logical_plan::LogicalPlanNodePtr SqlQueryRunner::toLogicalPlan(
   return statement->as<presto::SelectStatement>()->plan();
 }
 
+std::vector<std::string_view> SqlQueryRunner::splitStatements(
+    std::string_view sql) {
+  return presto::PrestoParser::splitStatements(sql);
+}
+
 std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
     std::string_view sql,
     const RunOptions& options) {
@@ -216,6 +237,12 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     } else {
       return {.message = runExplain(logicalPlan, explain->type(), options)};
     }
+  }
+
+  if (sqlStatement.isCreateTable()) {
+    const auto* create = sqlStatement.as<presto::CreateTableStatement>();
+    createTable(*create);
+    return {.message = fmt::format("Created table: {}", create->tableName())};
   }
 
   if (sqlStatement.isCreateTableAsSelect()) {

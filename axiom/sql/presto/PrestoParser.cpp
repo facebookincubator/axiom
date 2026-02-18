@@ -1948,11 +1948,12 @@ std::vector<SqlStatementPtr> PrestoParser::parseMultiple(
   return results;
 }
 
-std::vector<std::string> PrestoParser::splitStatements(std::string_view sql) {
-  std::vector<std::string> statements;
+std::vector<std::string_view> PrestoParser::splitStatements(
+    std::string_view sql) {
+  std::vector<std::string_view> statements;
 
   // Use ANTLR lexer to tokenize and find statement boundaries
-  std::string sqlStr(sql);
+  const std::string sqlStr(sql);
   UpperCaseInputStream inputStream(sqlStr);
   PrestoSqlLexer lexer(&inputStream);
   antlr4::CommonTokenStream tokenStream(&lexer);
@@ -1972,20 +1973,17 @@ std::vector<std::string> PrestoParser::splitStatements(std::string_view sql) {
         size_t startIndex = tokenStream.get(statementStart)->getStartIndex();
         size_t endIndex = tokenStream.get(i - 1)->getStopIndex();
 
-        std::string statementText =
-            sqlStr.substr(startIndex, endIndex - startIndex + 1);
+        auto stmt = sql.substr(startIndex, endIndex - startIndex + 1);
 
-        size_t start = 0;
-        size_t end = statementText.size();
-        while (start < end && std::isspace(statementText[start])) {
-          ++start;
+        while (!stmt.empty() && std::isspace(stmt.front())) {
+          stmt.remove_prefix(1);
         }
-        while (end > start && std::isspace(statementText[end - 1])) {
-          --end;
+        while (!stmt.empty() && std::isspace(stmt.back())) {
+          stmt.remove_suffix(1);
         }
 
-        if (start < end) {
-          statements.push_back(statementText.substr(start, end - start));
+        if (!stmt.empty()) {
+          statements.push_back(stmt);
         }
       }
 
@@ -2005,20 +2003,17 @@ std::vector<std::string> PrestoParser::splitStatements(std::string_view sql) {
       size_t startIndex = tokenStream.get(statementStart)->getStartIndex();
       size_t endIndex = tokenStream.get(lastTokenIdx)->getStopIndex();
 
-      std::string statementText =
-          sqlStr.substr(startIndex, endIndex - startIndex + 1);
+      auto stmt = sql.substr(startIndex, endIndex - startIndex + 1);
 
-      size_t start = 0;
-      size_t end = statementText.size();
-      while (start < end && std::isspace(statementText[start])) {
-        ++start;
+      while (!stmt.empty() && std::isspace(stmt.front())) {
+        stmt.remove_prefix(1);
       }
-      while (end > start && std::isspace(statementText[end - 1])) {
-        --end;
+      while (!stmt.empty() && std::isspace(stmt.back())) {
+        stmt.remove_suffix(1);
       }
 
-      if (start < end) {
-        statements.push_back(statementText.substr(start, end - start));
+      if (!stmt.empty()) {
+        statements.push_back(stmt);
       }
     }
   }
@@ -2264,8 +2259,15 @@ SqlStatementPtr parseInsert(
     const std::optional<std::string>& defaultSchema,
     const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
         std::string_view /*sql*/)>& parseSql) {
-  const auto table =
-      findTable(*insert.target(), defaultConnectorId, defaultSchema);
+  const auto connectorTable =
+      toConnectorTable(*insert.target(), defaultConnectorId, defaultSchema);
+
+  const auto table = facebook::axiom::connector::ConnectorMetadata::metadata(
+                         connectorTable.first)
+                         ->findTable(connectorTable.second);
+
+  VELOX_USER_CHECK_NOT_NULL(
+      table, "Table not found: {}", insert.target()->fullyQualifiedName());
 
   const auto& columns = insert.columns();
 
@@ -2286,8 +2288,8 @@ SqlStatementPtr parseInsert(
   VELOX_CHECK_EQ(inputColumns.size(), columnNames.size());
 
   planner.builder().tableWrite(
-      defaultConnectorId,
-      table->name(),
+      connectorTable.first,
+      connectorTable.second,
       lp::WriteKind::kInsert,
       columnNames,
       toColumnExprs(inputColumns));
