@@ -70,6 +70,12 @@ void fillJoins(
     EdgeSet& edges,
     DerivedTableP dt) {
   for (auto& other : equivalence.columns) {
+    // A join equality requires columns from different tables. Two columns
+    // in the same equivalence class can belong to the same table, e.g. after
+    // UNNEST.
+    if (column->as<Expr>()->singleTable() == other->as<Expr>()->singleTable()) {
+      continue;
+    }
     if (addEdge(edges, column, other)) {
       addJoinEquality(column->as<Column>(), other->as<Column>(), dt->joins);
     }

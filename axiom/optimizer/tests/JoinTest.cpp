@@ -87,8 +87,11 @@ class JoinTest : public test::QueryTestBase {
 
   void TearDown() override {
     velox::connector::unregisterConnector(kTestConnectorId);
-
     test::QueryTestBase::TearDown();
+  }
+
+  static core::PlanMatcherBuilder matchScan(const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
   }
 
   std::shared_ptr<connector::TestConnector> testConnector_;
@@ -382,10 +385,6 @@ TEST_F(JoinTest, crossJoin) {
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
   testConnector_->addTable("v", ROW({"n", "m"}, BIGINT()));
 
-  auto matchScan = [&](const auto& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
   {
     lp::PlanBuilder::Context ctx{kTestConnectorId};
     auto logicalPlan =
@@ -593,8 +592,7 @@ TEST_F(JoinTest, rightJoin) {
           100, {{"a", {.numDistinct = 100}}, {"b", {.numDistinct = 50}}});
 
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
-      ->setStats(
-          1000, {{"x", {.numDistinct = 100}}, {"y", {.numDistinct = 500}}});
+      ->setStats(1'000, {{"x", {.numDistinct = 100}}});
 
   // Only 'x' and 'y + 1 as z' should be projected from the subquery (not 'y').
   {
@@ -795,10 +793,6 @@ TEST_F(JoinTest, leftThenFilter) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
-  auto matchScan = [&](const auto& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
   // Post-LEFT JOIN filter that references only columns from the right-hand
   // (optional) table and doesn't eliminate NULLs.
   {
@@ -945,10 +939,6 @@ TEST_F(JoinTest, fullThenFilter) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
 
-  auto matchScan = [&](const auto& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
-
   // Post-FULL JOIN filter made of conjuncts that each reference only one side
   // of the join and do not eliminate NULLs.
   {
@@ -1040,6 +1030,69 @@ TEST_F(JoinTest, fullThenFilter) {
     auto matcher = matchScan("t")
                        .hashJoin(matchScan("u").build(), core::JoinType::kInner)
                        .filter("a > y")
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(JoinTest, impliedJoins) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+  testConnector_->addTable("v", ROW({"n", "m"}, BIGINT()))
+      ->setStats(100, {{"n", {.numDistinct = 100}}});
+
+  // Transitive:
+
+  // Transitive: t.a = u.x AND u.x = v.n implies t.a = v.n. With v being the
+  // smallest table, the optimizer should join t with v first using the implied
+  // join key.
+  {
+    auto query = "SELECT count(*) FROM t, u, v WHERE t.a = u.x AND u.x = v.n";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("v").build(), core::JoinType::kInner)
+                       .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+                       .aggregation()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Same-table columns in one equivalence class: t.a = u.x AND t.a = t.b puts
+  // t.a and t.b (both from t) in the same class. addImpliedJoins must skip
+  // same-table pairs. t.a = t.b becomes a filter on t.
+  {
+    auto query = "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.a = t.b";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .filter("a = b")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+                       .aggregation()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Same as above, but the same-table equivalence arises indirectly through
+  // transitivity: t.a = u.x AND t.b = u.x implies t.a = t.b. The optimizer
+  // keeps both as join keys.
+  // TODO(https://github.com/facebookincubator/axiom/issues/909): Optimal plan
+  // would filter t on a = b, then join on a single key.
+  {
+    auto query = "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.b = u.x";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+                       .aggregation()
                        .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
