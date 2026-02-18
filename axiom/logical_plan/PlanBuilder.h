@@ -28,6 +28,8 @@ namespace facebook::axiom::logical_plan {
 
 class NameMappings;
 
+/// Placeholder SQL parser that always throws. Used as a fallback when SQL
+/// parsing is not available.
 class ThrowingSqlExpressionsParser : public velox::parse::SqlExpressionsParser {
  public:
   velox::core::ExprPtr parseExpr(const std::string& expr) override {
@@ -45,16 +47,78 @@ class ThrowingSqlExpressionsParser : public velox::parse::SqlExpressionsParser {
   }
 };
 
-// Make sure to specify Context.queryCtx to enable constand folding.
+/// Builds logical plan trees using a fluent API. Supports table scans,
+/// filters, projections, aggregations, joins, set operations, sorts, limits,
+/// unnest, and table writes.
+///
+/// Most methods come in two flavors:
+///
+/// - **SQL-based** — accept SQL expression strings, e.g. "a + b AS c",
+///   "sum(x) filter (where y > 0)". Parsed using DuckDB SQL dialect by
+///   default. Callers can provide a custom SQL parser via Context.
+/// - **ExprApi-based** — accept ExprApi objects built programmatically with
+///   Col(), Lit(), Sql(), Subquery(), etc. Required for subqueries.
+///
+/// Example using SQL strings:
+///
+///   PlanBuilder(ctx)
+///     .tableScan("orders")
+///     .filter("o_totalprice > 100")
+///     .aggregate({"o_custkey"}, {"sum(o_totalprice)"})
+///     .build();
+///
+/// Equivalent using ExprApi:
+///
+///   PlanBuilder(ctx)
+///     .tableScan("orders")
+///     .filter(Col("o_totalprice") > 100)
+///     .aggregate({Col("o_custkey")}, {Sql("sum(o_totalprice)")})
+///     .build();
+///
+/// Share a Context across multiple PlanBuilder instances when building queries
+/// with two or more table scans to ensure globally unique plan-node IDs and
+/// column names. Set the default connector ID in Context to omit it from
+/// individual tableScan calls:
+///
+///   PlanBuilder::Context ctx(connectorId);
+///   auto plan = PlanBuilder(ctx)
+///     .tableScan("orders")
+///     .join(PlanBuilder(ctx).tableScan("customers"), "o_custkey = c_custkey",
+///           JoinType::kInner)
+///     .build();
+///
+/// Set 'enableCoercions' to true to automatically insert implicit CASTs when
+/// expression types don't match (e.g. INTEGER + BIGINT). Set Context.queryCtx
+/// to enable constant folding, i.e. evaluating constant expressions at
+/// plan-build time (e.g. 1 + 2 becomes 3).
 class PlanBuilder {
  public:
+  /// Shared state across PlanBuilder instances. Pass the same Context to
+  /// multiple builders to keep plan-node IDs and column names globally unique.
   struct Context {
+    /// Identifies the connector to use when tableScan omits the catalog prefix.
     std::optional<std::string> defaultConnectorId;
+
+    /// Parses SQL expression strings. Defaults to DuckDB dialect.
     std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser;
+
+    /// Generates unique plan-node IDs across all builders sharing this Context.
     std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator;
+
+    /// Allocates unique internal column names across all builders sharing this
+    /// Context.
     std::shared_ptr<NameAllocator> nameAllocator;
+
+    /// Enables constant folding when set. Also provides a memory pool for
+    /// evaluating constant expressions.
     std::shared_ptr<velox::core::QueryCtx> queryCtx;
+
+    /// Rewrites function calls during expression resolution, e.g. maps
+    /// SQL function names to Velox runtime functions.
     ExprResolver::FunctionRewriteHook hook;
+
+    /// Provides memory for allocating literal values during constant folding.
+    /// Automatically derived from queryCtx.
     std::shared_ptr<velox::memory::MemoryPool> pool;
 
     explicit Context(
@@ -77,6 +141,9 @@ class PlanBuilder {
                   : nullptr} {}
   };
 
+  /// Resolves a column reference from an outer query scope. Used to support
+  /// correlated subqueries where an inner query references columns from the
+  /// outer query.
   using Scope = std::function<ExprPtr(
       const std::optional<std::string>& alias,
       const std::string& name)>;
@@ -104,16 +171,21 @@ class PlanBuilder {
     VELOX_CHECK_NOT_NULL(nameAllocator_);
   }
 
+  /// Adds a leaf Values node producing literal rows. Must be the first node
+  /// in the plan.
   PlanBuilder& values(
       const velox::RowTypePtr& rowType,
       std::vector<velox::Variant> rows);
 
+  /// @overload Takes pre-built RowVectors.
   PlanBuilder& values(const std::vector<velox::RowVectorPtr>& values);
 
+  /// @overload Takes column names and per-row expressions.
   PlanBuilder& values(
       const std::vector<std::string>& names,
       const std::vector<std::vector<ExprApi>>& values);
 
+  /// @overload Takes column names and per-row SQL strings.
   PlanBuilder& values(
       const std::vector<std::string>& names,
       const std::vector<std::vector<std::string>>& values) {
@@ -126,6 +198,7 @@ class PlanBuilder {
   }
 
   /// Equivalent to SELECT col1, col2,.. FROM <tableName>.
+  /// Adds a leaf TableScan node reading specified columns from a table.
   PlanBuilder& tableScan(
       const std::string& connectorId,
       const std::string& tableName,
@@ -141,6 +214,7 @@ class PlanBuilder {
         std::vector<std::string>{columnNames.begin(), columnNames.end()});
   }
 
+  /// @overload Uses the default connector ID from Context.
   PlanBuilder& tableScan(
       const std::string& tableName,
       const std::vector<std::string>& columnNames);
@@ -166,10 +240,12 @@ class PlanBuilder {
     return tableScan(connectorId, std::string{tableName}, includeHiddenColumns);
   }
 
+  /// @overload Uses the default connector ID from Context.
   PlanBuilder& tableScan(
       const std::string& tableName,
       bool includeHiddenColumns = false);
 
+  /// Removes hidden columns (e.g. $row_id) from the output.
   PlanBuilder& dropHiddenColumns();
 
   /// Equivalent to SELECT * FROM t1, t2, t3...
@@ -184,10 +260,14 @@ class PlanBuilder {
   ///     .build();
   PlanBuilder& from(const std::vector<std::string>& tableNames);
 
+  /// Adds a Filter node that keeps only rows matching the predicate.
   PlanBuilder& filter(const std::string& predicate);
 
+  /// @overload Takes an ExprApi predicate.
   PlanBuilder& filter(const ExprApi& predicate);
 
+  /// Adds a Project node that computes new columns, replacing the current
+  /// output. Use 'with' to append columns instead.
   PlanBuilder& project(const std::vector<std::string>& projections) {
     return project(parse(projections));
   }
@@ -234,6 +314,8 @@ class PlanBuilder {
     return with(std::vector<ExprApi>{projections});
   }
 
+  /// Adds an Aggregate node with the specified grouping keys and aggregate
+  /// functions.
   PlanBuilder& aggregate(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates);
@@ -347,6 +429,7 @@ class PlanBuilder {
       const std::vector<std::string>& aggregates,
       const std::string& groupingSetIndexName);
 
+  /// Adds an Aggregate node that deduplicates rows on all output columns.
   PlanBuilder& distinct();
 
   /// Starts or continues the plan with an Unnest node. Uses auto-generated
@@ -386,34 +469,46 @@ class PlanBuilder {
       const std::optional<std::string>& alias,
       const std::vector<std::string>& unnestAliases);
 
+  /// Joins the current plan (left) with the 'right' plan on the given
+  /// condition. Pass a separate PlanBuilder for the right side.
   PlanBuilder& join(
       const PlanBuilder& right,
       const std::string& condition,
       JoinType joinType);
 
+  /// @overload Takes an optional ExprApi condition. Pass std::nullopt for
+  /// cross joins.
   PlanBuilder& join(
       const PlanBuilder& right,
       const std::optional<ExprApi>& condition,
       JoinType joinType);
 
+  /// Adds a cross join (cartesian product) with the 'right' plan.
   PlanBuilder& crossJoin(const PlanBuilder& right) {
     return join(right, /* condition */ std::nullopt, JoinType::kInner);
   }
 
+  /// Adds a UNION ALL set operation combining this plan with 'other'.
   PlanBuilder& unionAll(const PlanBuilder& other);
 
+  /// Adds an INTERSECT set operation.
   PlanBuilder& intersect(const PlanBuilder& other);
 
+  /// Adds an EXCEPT set operation.
   PlanBuilder& except(const PlanBuilder& other);
 
+  /// Adds a set operation of the given type with a single other input.
   PlanBuilder& setOperation(SetOperation op, const PlanBuilder& other);
 
+  /// @overload Combines multiple inputs.
   PlanBuilder& setOperation(
       SetOperation op,
       const std::vector<PlanBuilder>& inputs);
 
+  /// Adds a Sort node ordering rows by the given keys.
   PlanBuilder& sort(const std::vector<std::string>& sortingKeys);
 
+  /// @overload Takes typed SortKey objects for explicit sort direction.
   PlanBuilder& sort(const std::vector<SortKey>& sortingKeys);
 
   /// An alias for 'sort'.
@@ -421,14 +516,19 @@ class PlanBuilder {
     return sort(sortingKeys);
   }
 
+  /// Adds a Limit node returning at most 'count' rows.
   PlanBuilder& limit(int32_t count) {
     return limit(0, count);
   }
 
+  /// @overload Skips 'offset' rows, then returns at most 'count' rows.
   PlanBuilder& limit(int64_t offset, int64_t count);
 
+  /// Adds an Offset node that skips the first 'offset' rows.
   PlanBuilder& offset(int64_t offset);
 
+  /// Adds a TableWrite node that writes the current plan's output into the
+  /// specified table.
   PlanBuilder& tableWrite(
       std::string connectorId,
       std::string tableName,
@@ -498,14 +598,36 @@ class PlanBuilder {
       std::vector<std::string> columnNames,
       folly::F14FastMap<std::string, std::string> options = {});
 
+  /// Adds a Sample node that passes each row with the given probability.
   PlanBuilder& sample(double percentage, SampleNode::SampleMethod sampleMethod);
 
+  /// @overload Takes a dynamic percentage expression.
   PlanBuilder& sample(
       const ExprApi& percentage,
       SampleNode::SampleMethod sampleMethod);
 
+  /// Assigns a relation alias, enabling qualified column references like
+  /// "alias.column" in subsequent operations.
   PlanBuilder& as(const std::string& alias);
 
+  /// Captures the current name-resolution scope into 'scope' so it can be
+  /// passed to an inner PlanBuilder for correlated subqueries.
+  ///
+  /// Example:
+  ///
+  ///   PlanBuilder::Scope scope;
+  ///   auto plan = PlanBuilder(ctx)
+  ///     .tableScan("orders")
+  ///     .as("o")
+  ///     .captureScope(scope)
+  ///     .filter(Col("totalprice") >
+  ///       Subquery(PlanBuilder(ctx, false, scope)
+  ///         .tableScan("thresholds")
+  ///         .as("t")
+  ///         .filter("o.custkey = t.custkey")
+  ///         .aggregate({}, {"max(threshold)"})
+  ///         .build()))
+  ///     .build();
   PlanBuilder& captureScope(Scope& scope) {
     scope = [this](const auto& alias, const auto& name) {
       return resolveInputName(alias, name);
@@ -576,18 +698,34 @@ class PlanBuilder {
       std::vector<AggregateExprPtr>& exprs,
       NameMappings& mappings);
 
+  // Connector ID used when table names omit the catalog prefix.
   const std::optional<std::string> defaultConnectorId_;
+
+  // Generates unique plan-node IDs (shared across builders via Context).
   const std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator_;
+
+  // Allocates unique internal column names (shared across builders via
+  // Context).
   const std::shared_ptr<NameAllocator> nameAllocator_;
+
+  // Resolves column references from the enclosing query for correlated
+  // subqueries. Null for top-level queries.
   const Scope outerScope_;
+
+  // Parses SQL expression strings into Velox expression trees.
   const std::shared_ptr<velox::parse::SqlExpressionsParser> sqlParser_;
+
+  // When true, inserts implicit CAST nodes to coerce mismatched types.
   const bool enableCoercions_;
 
+  // Root of the plan tree built so far. Null before the first leaf node
+  // (values or tableScan) is added.
   LogicalPlanNodePtr node_;
 
-  // Mapping from user-provided to auto-generated output column names.
+  // Maps user-visible column names to auto-generated internal IDs.
   std::shared_ptr<NameMappings> outputMapping_;
 
+  // Resolves and type-checks scalar and aggregate expressions.
   ExprResolver resolver_;
 };
 
