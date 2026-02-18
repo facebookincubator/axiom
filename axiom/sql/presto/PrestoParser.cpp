@@ -2551,6 +2551,16 @@ SqlStatementPtr PrestoParser::doParse(
         *query->as<DropTable>(), defaultConnectorId_, defaultSchema_);
   }
 
+  if (query->is(NodeType::kUse)) {
+    auto* use = query->as<Use>();
+    std::optional<std::string> catalog;
+    if (use->catalog()) {
+      catalog = use->catalog()->value();
+    }
+    return std::make_shared<UseStatement>(
+        std::move(catalog), use->schema()->value());
+  }
+
   return doPlan(query, defaultConnectorId_, defaultSchema_, parseSql);
 }
 

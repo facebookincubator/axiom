@@ -377,6 +377,31 @@ class CreateType : public Statement {
   std::vector<std::string> enumValues_;
 };
 
+class Use : public Statement {
+ public:
+  Use(NodeLocation location,
+      std::shared_ptr<Identifier> catalog,
+      std::shared_ptr<Identifier> schema)
+      : Statement(NodeType::kUse, location),
+        catalog_(std::move(catalog)),
+        schema_(std::move(schema)) {}
+
+  /// Returns the catalog identifier, or nullptr for schema-only USE.
+  const std::shared_ptr<Identifier>& catalog() const {
+    return catalog_;
+  }
+
+  const std::shared_ptr<Identifier>& schema() const {
+    return schema_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+ private:
+  std::shared_ptr<Identifier> catalog_;
+  std::shared_ptr<Identifier> schema_;
+};
+
 // Drop Statements
 class DropTable : public Statement {
  public:

@@ -1196,4 +1196,13 @@ void AstPrinter::visitShowFunctions(ShowFunctions* node) {
   printHeader("ShowFunctions", node);
 }
 
+void AstPrinter::visitUse(Use* node) {
+  printHeader("Use", node, [&](std::ostream& out) {
+    if (node->catalog()) {
+      out << node->catalog()->value() << ".";
+    }
+    out << node->schema()->value();
+  });
+}
+
 } // namespace axiom::sql::presto

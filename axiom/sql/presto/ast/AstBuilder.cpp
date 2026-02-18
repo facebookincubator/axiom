@@ -272,7 +272,14 @@ std::any AstBuilder::visitStatementDefault(
 
 std::any AstBuilder::visitUse(PrestoSqlParser::UseContext* ctx) {
   trace("visitUse");
-  return visitChildren("visitUse", ctx);
+
+  std::shared_ptr<Identifier> catalog;
+  if (ctx->catalog != nullptr) {
+    catalog = visitIdentifier(ctx->catalog);
+  }
+
+  return std::static_pointer_cast<Statement>(std::make_shared<Use>(
+      getLocation(ctx), std::move(catalog), visitIdentifier(ctx->schema)));
 }
 
 std::any AstBuilder::visitCreateSchema(

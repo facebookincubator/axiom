@@ -100,3 +100,32 @@ ok
 (1 rows in 1 batches)
 
 ```
+
+## USE catalog.schema
+
+```scrut
+$ $CLI --query "USE test.default; CREATE TABLE t(x int, y int); INSERT INTO t VALUES (1, 2); SELECT * FROM t" 2>/dev/null
+Using test.default
+Created table: default.t
+ROW<rows:BIGINT>
+----
+rows
+----
+   1
+(1 rows in 1 batches)
+
+ROW<x:INTEGER,y:INTEGER>
+--+--
+x | y
+--+--
+1 | 2
+(1 rows in 1 batches)
+
+```
+
+## USE with non-existent catalog
+
+```scrut
+$ $CLI --query "USE blah.default" 2>&1 | grep Reason
+Reason: Catalog does not exist: blah
+```
