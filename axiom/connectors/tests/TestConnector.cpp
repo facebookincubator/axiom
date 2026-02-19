@@ -16,6 +16,7 @@
 
 #include "axiom/connectors/tests/TestConnector.h"
 #include "velox/exec/TableWriter.h"
+#include "velox/tpch/gen/TpchGen.h"
 
 namespace facebook::axiom::connector {
 
@@ -430,6 +431,14 @@ std::shared_ptr<TestTable> TestConnector::addTable(
 
 bool TestConnector::dropTableIfExists(const std::string& name) {
   return metadata_->dropTableIfExists(name);
+}
+
+void TestConnector::addTpchTables() {
+  for (auto table : velox::tpch::tables) {
+    addTable(
+        std::string(velox::tpch::toTableName(table)),
+        velox::tpch::getTableSchema(table));
+  }
 }
 
 void TestConnector::appendData(

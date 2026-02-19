@@ -37,52 +37,7 @@ class JoinTest : public test::QueryTestBase {
         std::make_shared<connector::TestConnector>(kTestConnectorId);
     velox::connector::registerConnector(testConnector_);
 
-    testConnector_->addTable(
-        "region",
-        ROW({"r_regionkey", "r_name", "r_comment"},
-            {BIGINT(), VARCHAR(), VARCHAR()}));
-    testConnector_->addTable(
-        "nation",
-        ROW({"n_nationkey", "n_name", "n_regionkey", "n_comment"},
-            {BIGINT(), VARCHAR(), BIGINT(), VARCHAR()}));
-    testConnector_->addTable(
-        "customer",
-        ROW({"c_custkey",
-             "c_name",
-             "c_address",
-             "c_nationkey",
-             "c_phone",
-             "c_acctbal",
-             "c_mktsegment",
-             "c_comment"},
-            {BIGINT(),
-             VARCHAR(),
-             VARCHAR(),
-             BIGINT(),
-             VARCHAR(),
-             DOUBLE(),
-             VARCHAR(),
-             VARCHAR()}));
-    testConnector_->addTable(
-        "orders",
-        ROW({"o_orderkey",
-             "o_custkey",
-             "o_orderstatus",
-             "o_totalprice",
-             "o_orderdate",
-             "o_orderpriority",
-             "o_clerk",
-             "o_shippriority",
-             "o_comment"},
-            {BIGINT(),
-             BIGINT(),
-             VARCHAR(),
-             DOUBLE(),
-             DATE(),
-             VARCHAR(),
-             VARCHAR(),
-             INTEGER(),
-             VARCHAR()}));
+    testConnector_->addTpchTables();
   }
 
   void TearDown() override {

@@ -60,8 +60,7 @@ TEST_F(SubqueryTest, uncorrelatedScalar) {
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
+    auto matcher = matchScan("nation")
                        .hashJoin(
                            core::PlanMatcherBuilder()
                                .hiveScan("region", {}, "r_name like 'AF%'")
@@ -81,8 +80,7 @@ TEST_F(SubqueryTest, uncorrelatedScalar) {
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
+    auto matcher = matchScan("nation")
                        .hashJoin(
                            core::PlanMatcherBuilder()
                                .hiveScan("region", test::gt("r_name", "ASIA"))
@@ -103,8 +101,7 @@ TEST_F(SubqueryTest, uncorrelatedScalar) {
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
+        matchScan("nation")
             .hashJoin(
                 core::PlanMatcherBuilder()
                     .hiveScan("region", test::gt("r_name", "ASIA"))
@@ -124,8 +121,7 @@ TEST_F(SubqueryTest, uncorrelatedScalar) {
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
+    auto matcher = matchScan("nation")
                        .hashJoin(
                            core::PlanMatcherBuilder()
                                .hiveScan("region", test::gt("r_name", "ASIA"))
@@ -157,7 +153,7 @@ TEST_F(SubqueryTest, foldable) {
   };
 
   auto makeMatcher = [&](const std::string& filter) {
-    return core::PlanMatcherBuilder().tableScan("t").filter(filter).build();
+    return matchScan("t").filter(filter).build();
   };
 
   {
@@ -218,8 +214,7 @@ TEST_F(SubqueryTest, correlatedExists) {
         "EXISTS (SELECT * FROM region WHERE r_regionkey = n_regionkey)";
 
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
+        matchScan("nation")
             .hashJoin(
                 core::PlanMatcherBuilder().hiveScan("region", {}).build(),
                 velox::core::JoinType::kLeftSemiFilter)
@@ -260,15 +255,13 @@ TEST_F(SubqueryTest, correlatedExists) {
         "SELECT * FROM nation WHERE "
         "EXISTS (SELECT 1 FROM region WHERE r_regionkey > n_regionkey)";
 
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
-            .nestedLoopJoin(
-                core::PlanMatcherBuilder().tableScan("region").build(),
-                velox::core::JoinType::kLeftSemiProject)
-            .filter()
-            .project()
-            .build();
+    auto matcher = matchScan("nation")
+                       .nestedLoopJoin(
+                           matchScan("region").build(),
+                           velox::core::JoinType::kLeftSemiProject)
+                       .filter()
+                       .project()
+                       .build();
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
@@ -281,11 +274,8 @@ TEST_F(SubqueryTest, correlatedExists) {
         "SELECT * FROM a WHERE EXISTS(SELECT * FROM(VALUES 1, 2, 3) as t(x) WHERE n_regionkey = x) ";
 
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
-            .hashJoin(
-                core::PlanMatcherBuilder().tableScan("region").build(),
-                velox::core::JoinType::kFull)
+        matchScan("nation")
+            .hashJoin(matchScan("region").build(), velox::core::JoinType::kFull)
             .hashJoin(
                 core::PlanMatcherBuilder().values().project().build(),
                 velox::core::JoinType::kLeftSemiFilter)
@@ -303,13 +293,11 @@ TEST_F(SubqueryTest, correlatedExists) {
         "SELECT * FROM t WHERE EXISTS (SELECT * FROM nation WHERE n_nationkey = nkey AND n_regionkey = rkey)";
 
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
+        matchScan("nation")
             .hashJoin(
-                core::PlanMatcherBuilder().tableScan("region").build(),
-                velox::core::JoinType::kInner)
+                matchScan("region").build(), velox::core::JoinType::kInner)
             .hashJoin(
-                core::PlanMatcherBuilder().tableScan("nation").build(),
+                matchScan("nation").build(),
                 velox::core::JoinType::kLeftSemiFilter)
             .project()
             .build();
@@ -330,16 +318,13 @@ TEST_F(SubqueryTest, uncorrelatedProject) {
         "FROM region";
 
     // Uncorrelated subquery is cross-joined.
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
-                       .nestedLoopJoin(
-                           core::PlanMatcherBuilder()
-                               .tableScan("nation")
-                               .singleAggregation({}, {"count(*)"})
-                               .build(),
-                           velox::core::JoinType::kInner)
-                       .project()
-                       .build();
+    auto matcher =
+        matchScan("region")
+            .nestedLoopJoin(
+                matchScan("nation").singleAggregation({}, {"count(*)"}).build(),
+                velox::core::JoinType::kInner)
+            .project()
+            .build();
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
@@ -355,17 +340,14 @@ TEST_F(SubqueryTest, uncorrelatedProject) {
         "FROM region";
 
     // The scalar subquery must be cross-joined AFTER the aggregation.
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
-                       .singleAggregation({}, {"array_agg(r_name)"})
-                       .nestedLoopJoin(
-                           core::PlanMatcherBuilder()
-                               .tableScan("nation")
-                               .singleAggregation({}, {"count(*)"})
-                               .build(),
-                           velox::core::JoinType::kInner)
-                       .project()
-                       .build();
+    auto matcher =
+        matchScan("region")
+            .singleAggregation({}, {"array_agg(r_name)"})
+            .nestedLoopJoin(
+                matchScan("nation").singleAggregation({}, {"count(*)"}).build(),
+                velox::core::JoinType::kInner)
+            .project()
+            .build();
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
@@ -383,14 +365,10 @@ TEST_F(SubqueryTest, uncorrelatedProject) {
 
     // The scalar subquery must be cross-joined AFTER the aggregation.
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
+        matchScan("nation")
             .singleAggregation({"n_regionkey"}, {"array_agg(n_name)"})
             .nestedLoopJoin(
-                core::PlanMatcherBuilder()
-                    .tableScan("region")
-                    .singleAggregation({}, {"count(*)"})
-                    .build(),
+                matchScan("region").singleAggregation({}, {"count(*)"}).build(),
                 velox::core::JoinType::kInner)
             .project()
             .build();
@@ -409,8 +387,7 @@ TEST_F(SubqueryTest, uncorrelatedProject) {
 
     // IN subquery in projection is transformed into a LEFT SEMI PROJECT join
     // with a mark column. nullAware is true for IN semantics.
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
+    auto matcher = matchScan("nation")
                        .hashJoin(
                            core::PlanMatcherBuilder()
                                .hiveScan("region", test::gt("r_name", "ASIA"))
@@ -434,8 +411,7 @@ TEST_F(SubqueryTest, uncorrelatedProject) {
 
     // NOT IN subquery in projection is transformed into a LEFT SEMI PROJECT
     // join with a mark column and NOT applied to the result. nullAware is true.
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("nation")
+    auto matcher = matchScan("nation")
                        .hashJoin(
                            core::PlanMatcherBuilder()
                                .hiveScan("region", test::gt("r_name", "ASIA"))
@@ -458,17 +434,13 @@ TEST_F(SubqueryTest, uncorrelatedProject) {
         "FROM region";
 
     // Uncorrelated EXISTS in projection uses cross join with count check.
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
-                       .nestedLoopJoin(
-                           core::PlanMatcherBuilder()
-                               .tableScan("nation")
-                               .limit()
-                               .singleAggregation()
-                               .build(),
-                           velox::core::JoinType::kInner)
-                       .project()
-                       .build();
+    auto matcher =
+        matchScan("region")
+            .nestedLoopJoin(
+                matchScan("nation").limit().singleAggregation().build(),
+                velox::core::JoinType::kInner)
+            .project()
+            .build();
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
@@ -484,17 +456,13 @@ TEST_F(SubqueryTest, uncorrelatedProject) {
 
     // Uncorrelated NOT EXISTS in projection uses cross join with count = 0
     // check.
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
-                       .nestedLoopJoin(
-                           core::PlanMatcherBuilder()
-                               .tableScan("nation")
-                               .limit()
-                               .singleAggregation()
-                               .build(),
-                           velox::core::JoinType::kInner)
-                       .project()
-                       .build();
+    auto matcher =
+        matchScan("region")
+            .nestedLoopJoin(
+                matchScan("nation").limit().singleAggregation().build(),
+                velox::core::JoinType::kInner)
+            .project()
+            .build();
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
@@ -514,11 +482,9 @@ TEST_F(SubqueryTest, correlatedIn) {
     // Correlated IN subquery creates a semi-join. The optimizer may flip
     // the join order and use RIGHT SEMI.
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("orders")
+        matchScan("orders")
             .hashJoin(
-                core::PlanMatcherBuilder().tableScan("customer").build(),
-                core::JoinType::kRightSemiFilter)
+                matchScan("customer").build(), core::JoinType::kRightSemiFilter)
             .build();
 
     SCOPED_TRACE(query);
@@ -536,16 +502,14 @@ TEST_F(SubqueryTest, correlatedIn) {
 
     // Correlated NOT IN subquery creates a RIGHT SEMI PROJECT join with
     // mark column, then filters and projects.
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("orders")
-            .hashJoin(
-                core::PlanMatcherBuilder().tableScan("customer").build(),
-                core::JoinType::kRightSemiProject,
-                /*nullAware=*/true)
-            .filter()
-            .project()
-            .build();
+    auto matcher = matchScan("orders")
+                       .hashJoin(
+                           matchScan("customer").build(),
+                           core::JoinType::kRightSemiProject,
+                           /*nullAware=*/true)
+                       .filter()
+                       .project()
+                       .build();
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
@@ -563,11 +527,9 @@ TEST_F(SubqueryTest, correlatedScalar) {
     // The correlated scalar subquery is transformed into a LEFT JOIN with
     // aggregation grouped by the correlation key, then filtered.
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("region")
+        matchScan("region")
             .hashJoin(
-                core::PlanMatcherBuilder()
-                    .tableScan("nation")
+                matchScan("nation")
                     .singleAggregation({"n_regionkey"}, {"min(n_nationkey)"})
                     .project()
                     .build(),
@@ -590,11 +552,9 @@ TEST_F(SubqueryTest, correlatedScalar) {
     // aggregation grouped by the correlation key. The count result is wrapped
     // with COALESCE to return 0 for unmatched rows (instead of NULL from
     // LEFT JOIN).
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
+    auto matcher = matchScan("region")
                        .hashJoin(
-                           core::PlanMatcherBuilder()
-                               .tableScan("nation")
+                           matchScan("nation")
                                .singleAggregation({"n_regionkey"}, {"count(*)"})
                                .project()
                                .build(),
@@ -613,11 +573,9 @@ TEST_F(SubqueryTest, correlatedScalar) {
         "SELECT * FROM region "
         "WHERE r_regionkey = (SELECT approx_distinct(n_name) FROM nation WHERE n_regionkey = r_regionkey)";
 
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
+    auto matcher = matchScan("region")
                        .hashJoin(
-                           core::PlanMatcherBuilder()
-                               .tableScan("nation")
+                           matchScan("nation")
                                .singleAggregation(
                                    {"n_regionkey"}, {"approx_distinct(n_name)"})
                                .project()
@@ -635,11 +593,7 @@ TEST_F(SubqueryTest, correlatedScalar) {
 
 TEST_F(SubqueryTest, correlatedProject) {
   auto matchAggNation = [&]() {
-    return core::PlanMatcherBuilder()
-        .tableScan("nation")
-        .singleAggregation()
-        .project()
-        .build();
+    return matchScan("nation").singleAggregation().project().build();
   };
 
   // Correlated scalar subquery in projection with COUNT aggregation.
@@ -651,8 +605,7 @@ TEST_F(SubqueryTest, correlatedProject) {
 
     // The correlated scalar subquery is transformed into a LEFT JOIN with
     // aggregation grouped by the correlation key.
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
+    auto matcher = matchScan("region")
                        .hashJoin(matchAggNation(), velox::core::JoinType::kLeft)
                        .project()
                        .build();
@@ -669,8 +622,7 @@ TEST_F(SubqueryTest, correlatedProject) {
         "(SELECT sum(n_nationkey) FROM nation WHERE n_regionkey = r_regionkey) AS total "
         "FROM region";
 
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
+    auto matcher = matchScan("region")
                        .hashJoin(matchAggNation(), velox::core::JoinType::kLeft)
                        .project()
                        .build();
@@ -689,8 +641,7 @@ TEST_F(SubqueryTest, correlatedProject) {
         "FROM region";
 
     // Each subquery produces a separate LEFT JOIN.
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
+    auto matcher = matchScan("region")
                        // TODO Optimize to combine the two LEFT JOINs into one.
                        .hashJoin(matchAggNation(), velox::core::JoinType::kLeft)
                        .hashJoin(matchAggNation(), velox::core::JoinType::kLeft)
@@ -712,8 +663,7 @@ TEST_F(SubqueryTest, correlatedProject) {
     // EXISTS subquery in projection is transformed into a LEFT SEMI PROJECT
     // join with a mark column. nullAware is false for EXISTS semantics.
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
+        matchScan("nation")
             .hashJoin(
                 core::PlanMatcherBuilder().hiveScan("region", {}).build(),
                 velox::core::JoinType::kLeftSemiProject,
@@ -736,8 +686,7 @@ TEST_F(SubqueryTest, correlatedProject) {
     // Correlated IN subquery in projection is transformed into a LEFT SEMI
     // PROJECT join with a mark column.
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
+        matchScan("nation")
             .hashJoin(
                 core::PlanMatcherBuilder().hiveScan("region", {}).build(),
                 velox::core::JoinType::kLeftSemiProject,
@@ -760,8 +709,7 @@ TEST_F(SubqueryTest, correlatedProject) {
     // Correlated NOT IN subquery in projection is transformed into a LEFT SEMI
     // PROJECT join with a mark column and NOT applied.
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
+        matchScan("nation")
             .hashJoin(
                 core::PlanMatcherBuilder().hiveScan("region", {}).build(),
                 velox::core::JoinType::kLeftSemiProject,
@@ -781,11 +729,9 @@ TEST_F(SubqueryTest, uncorrelatedExists) {
     auto query = "SELECT * FROM region WHERE EXISTS (SELECT 1 FROM nation)";
 
     // EXISTS uses NOT(count = 0) to check if any rows exist.
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
+    auto matcher = matchScan("region")
                        .nestedLoopJoin(
-                           core::PlanMatcherBuilder()
-                               .tableScan("nation")
+                           matchScan("nation")
                                .finalLimit(0, 1)
                                .singleAggregation({}, {"count(*) as c"})
                                .filter("not(eq(c, 0))")
@@ -803,11 +749,9 @@ TEST_F(SubqueryTest, uncorrelatedExists) {
     auto query = "SELECT * FROM region WHERE NOT EXISTS (SELECT 1 FROM nation)";
 
     // NOT EXISTS uses NOT(NOT(count = 0)) to check if no rows exist.
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("region")
+    auto matcher = matchScan("region")
                        .nestedLoopJoin(
-                           core::PlanMatcherBuilder()
-                               .tableScan("nation")
+                           matchScan("nation")
                                .finalLimit(0, 1)
                                .singleAggregation({}, {"count(*) as c"})
                                .filter("not(not(eq(c, 0)))")
@@ -829,8 +773,7 @@ TEST_F(SubqueryTest, correlatedNotExists) {
         "NOT EXISTS (SELECT * FROM region WHERE r_regionkey = n_regionkey)";
 
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
+        matchScan("nation")
             .hashJoin(
                 core::PlanMatcherBuilder().hiveScan("region", {}).build(),
                 velox::core::JoinType::kAnti)
@@ -849,15 +792,13 @@ TEST_F(SubqueryTest, correlatedNotExists) {
 
     // NOT EXISTS with non-equality correlation uses nested loop join with
     // LEFT SEMI PROJECT, then filters and negates the result.
-    auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
-            .nestedLoopJoin(
-                core::PlanMatcherBuilder().tableScan("region").build(),
-                velox::core::JoinType::kLeftSemiProject)
-            .filter()
-            .project()
-            .build();
+    auto matcher = matchScan("nation")
+                       .nestedLoopJoin(
+                           matchScan("region").build(),
+                           velox::core::JoinType::kLeftSemiProject)
+                       .filter()
+                       .project()
+                       .build();
 
     SCOPED_TRACE(query);
     auto plan = toSingleNodePlan(query);
@@ -874,8 +815,7 @@ TEST_F(SubqueryTest, correlatedNotExists) {
     // NOT EXISTS subquery in projection is transformed into a LEFT SEMI PROJECT
     // join with a mark column and NOT applied.
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("nation")
+        matchScan("nation")
             .hashJoin(
                 core::PlanMatcherBuilder().hiveScan("region", {}).build(),
                 velox::core::JoinType::kLeftSemiProject,
@@ -900,11 +840,7 @@ TEST_F(SubqueryTest, unnest) {
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("t")
-            .unnest()
-            .hashJoin(core::PlanMatcherBuilder().tableScan("u").build())
-            .build();
+        matchScan("t").unnest().hashJoin(matchScan("u").build()).build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -916,11 +852,7 @@ TEST_F(SubqueryTest, unnest) {
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
     auto matcher =
-        core::PlanMatcherBuilder()
-            .tableScan("t")
-            .unnest()
-            .hashJoin(core::PlanMatcherBuilder().tableScan("u").build())
-            .build();
+        matchScan("t").unnest().hashJoin(matchScan("u").build()).build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -931,15 +863,10 @@ TEST_F(SubqueryTest, unnest) {
         "select (SELECT sum(y) FROM u WHERE x = n) from t, unnest(a) as v(n)";
 
     auto logicalPlan = parseSelect(query, kTestConnectorId);
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan("t")
+    auto matcher = matchScan("t")
                        .unnest()
                        .hashJoin(
-                           core::PlanMatcherBuilder()
-                               .tableScan("u")
-                               .aggregation()
-                               .project()
-                               .build(),
+                           matchScan("u").aggregation().project().build(),
                            core::JoinType::kLeft)
                        .build();
 
@@ -953,10 +880,6 @@ TEST_F(SubqueryTest, enforceSingleRow) {
       "SELECT * FROM region "
       "WHERE r_regionkey > (SELECT n_regionkey FROM nation)";
   auto logicalPlan = parseSelect(query);
-
-  auto matchScan = [&](const auto& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
 
   {
     auto matcher =
@@ -992,13 +915,8 @@ TEST_F(SubqueryTest, uncorrelatedGroupingKey) {
       "SELECT r_name, (SELECT count(*) FROM nation) FROM region GROUP BY 1, 2";
   SCOPED_TRACE(query);
 
-  auto matcher = core::PlanMatcherBuilder()
-                     .tableScan("region")
-                     .nestedLoopJoin(
-                         core::PlanMatcherBuilder()
-                             .tableScan("nation")
-                             .aggregation()
-                             .build())
+  auto matcher = matchScan("region")
+                     .nestedLoopJoin(matchScan("nation").aggregation().build())
                      .aggregation()
                      .build();
 
@@ -1012,14 +930,9 @@ TEST_F(SubqueryTest, correlatedGroupingKey) {
       "FROM region GROUP BY 1, 2";
   SCOPED_TRACE(query);
 
-  auto matcher = core::PlanMatcherBuilder()
-                     .tableScan("region")
+  auto matcher = matchScan("region")
                      .hashJoin(
-                         core::PlanMatcherBuilder()
-                             .tableScan("nation")
-                             .aggregation()
-                             .project()
-                             .build(),
+                         matchScan("nation").aggregation().project().build(),
                          core::JoinType::kLeft)
                      .project()
                      .aggregation()
@@ -1040,12 +953,10 @@ TEST_F(SubqueryTest, nonEquiCorrelatedScalar) {
     auto logicalPlan = parseSelect(query);
 
     {
-      auto matcher = core::PlanMatcherBuilder()
-                         .tableScan("region")
+      auto matcher = matchScan("region")
                          .assignUniqueId("unique_id")
                          .nestedLoopJoin(
-                             core::PlanMatcherBuilder()
-                                 .tableScan("nation")
+                             matchScan("nation")
                                  .project({"true as marker", "n_regionkey"})
                                  .build(),
                              velox::core::JoinType::kLeft)
@@ -1066,12 +977,10 @@ TEST_F(SubqueryTest, nonEquiCorrelatedScalar) {
     }
 
     {
-      auto matcher = core::PlanMatcherBuilder()
-                         .tableScan("region")
+      auto matcher = matchScan("region")
                          .assignUniqueId("unique_id")
                          .nestedLoopJoin(
-                             core::PlanMatcherBuilder()
-                                 .tableScan("nation")
+                             matchScan("nation")
                                  .project({"true as marker", "n_regionkey"})
                                  .broadcast()
                                  .build(),
@@ -1107,12 +1016,10 @@ TEST_F(SubqueryTest, nonEquiCorrelatedScalar) {
 
     {
       auto matcher =
-          core::PlanMatcherBuilder()
-              .tableScan("region")
+          matchScan("region")
               .assignUniqueId("unique_id")
               .hashJoin(
-                  core::PlanMatcherBuilder()
-                      .tableScan("nation")
+                  matchScan("nation")
                       .project({"true as marker", "n_name", "n_regionkey"})
                       .build(),
                   velox::core::JoinType::kLeft)
@@ -1143,12 +1050,10 @@ TEST_F(SubqueryTest, nonEquiCorrelatedProject) {
     auto logicalPlan = parseSelect(query);
 
     {
-      auto matcher = core::PlanMatcherBuilder()
-                         .tableScan("region")
+      auto matcher = matchScan("region")
                          .assignUniqueId("unique_id")
                          .nestedLoopJoin(
-                             core::PlanMatcherBuilder()
-                                 .tableScan("nation")
+                             matchScan("nation")
                                  .project({"true as marker", "n_regionkey"})
                                  .build(),
                              velox::core::JoinType::kLeft)
@@ -1167,12 +1072,10 @@ TEST_F(SubqueryTest, nonEquiCorrelatedProject) {
     }
 
     {
-      auto matcher = core::PlanMatcherBuilder()
-                         .tableScan("region")
+      auto matcher = matchScan("region")
                          .assignUniqueId("unique_id")
                          .nestedLoopJoin(
-                             core::PlanMatcherBuilder()
-                                 .tableScan("nation")
+                             matchScan("nation")
                                  .project({"true as marker", "n_regionkey"})
                                  .broadcast()
                                  .build(),
@@ -1199,10 +1102,6 @@ TEST_F(SubqueryTest, nonEquiCorrelatedProject) {
 TEST_F(SubqueryTest, correlatedScalarWithoutAggregation) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"c", "d"}, BIGINT()));
-
-  auto matchScan = [&](const auto& tableName) {
-    return core::PlanMatcherBuilder().tableScan(tableName);
-  };
 
   // Equi-correlation: d = b.
   {
