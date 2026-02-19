@@ -41,9 +41,14 @@ class BitSet {
 
   size_t hash() const;
 
-  // True if no members.
+  /// True if no members.
   bool empty() const {
     return std::ranges::all_of(bits_, [](auto word) { return word == 0; });
+  }
+
+  /// Removes all members, but keep the underlying storage for reuse.
+  void clear() {
+    std::ranges::fill(bits_, 0);
   }
 
   /// Returns true if 'this' is a subset of 'super'.
