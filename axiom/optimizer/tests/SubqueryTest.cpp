@@ -44,6 +44,10 @@ class SubqueryTest : public test::HiveQueriesTestBase {
     HiveQueriesTestBase::TearDown();
   }
 
+  static core::PlanMatcherBuilder matchScan(const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  }
+
   std::shared_ptr<connector::TestConnector> testConnector_;
 };
 
@@ -1267,6 +1271,139 @@ TEST_F(SubqueryTest, correlatedScalarWithoutAggregation) {
                        .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(SubqueryTest, innerJoinOnSubquery) {
+  // Subqueries in inner join ON clauses are processed as cross join + filter,
+  // reusing the WHERE clause subquery infrastructure.
+  const std::string baseJoin =
+      "SELECT * FROM nation n JOIN region r ON r.r_regionkey = n.n_regionkey";
+
+  // Uncorrelated scalar subquery in ON clause.
+  {
+    auto query = baseJoin +
+        " AND n.n_nationkey = (SELECT min(s_nationkey) FROM supplier)";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("nation")
+            .hashJoin(
+                matchScan("region").build(), velox::core::JoinType::kInner)
+            .hashJoin(
+                matchScan("supplier")
+                    .singleAggregation({}, {"min(s_nationkey)"})
+                    .build(),
+                velox::core::JoinType::kInner)
+            .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // IN subquery in ON clause.
+  {
+    auto query =
+        baseJoin + " AND n.n_nationkey IN (SELECT s_nationkey FROM supplier)";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("supplier")
+            .hashJoin(
+                matchScan("nation").build(),
+                velox::core::JoinType::kRightSemiFilter)
+            .hashJoin(
+                matchScan("region").build(), velox::core::JoinType::kInner)
+            .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // NOT IN subquery in ON clause.
+  {
+    auto query = baseJoin +
+        " AND n.n_nationkey NOT IN (SELECT s_nationkey FROM supplier)";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("supplier")
+            .hashJoin(
+                matchScan("nation").build(),
+                velox::core::JoinType::kRightSemiProject,
+                /*nullAware=*/true)
+            .filter()
+            .hashJoin(
+                matchScan("region").build(), velox::core::JoinType::kInner)
+            .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // EXISTS subquery in ON clause.
+  {
+    auto query = baseJoin +
+        " AND EXISTS (SELECT 1 FROM supplier s"
+        " WHERE s.s_nationkey = n.n_nationkey)";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("supplier")
+            .hashJoin(
+                matchScan("nation").build(),
+                velox::core::JoinType::kRightSemiFilter)
+            .hashJoin(
+                matchScan("region").build(), velox::core::JoinType::kInner)
+            .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // NOT EXISTS subquery in ON clause.
+  {
+    auto query = baseJoin +
+        " AND NOT EXISTS (SELECT 1 FROM supplier s"
+        " WHERE s.s_nationkey = n.n_nationkey)";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("supplier")
+            .hashJoin(
+                matchScan("nation").build(),
+                velox::core::JoinType::kRightSemiProject)
+            .filter()
+            .hashJoin(
+                matchScan("region").build(), velox::core::JoinType::kInner)
+            .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Correlated scalar
+  {
+    auto query = baseJoin +
+        " AND n.n_nationkey > "
+        "(SELECT count(*) FROM supplier s WHERE s.s_nationkey = n.n_nationkey)";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("nation")
+            .hashJoin(
+                matchScan("supplier")
+                    .singleAggregation({"s_nationkey"}, {"count(*) as cnt"})
+                    .project()
+                    .build(),
+                velox::core::JoinType::kLeft)
+            .filter("n_nationkey > coalesce(cnt, 0)")
+            .hashJoin(
+                matchScan("region").build(), velox::core::JoinType::kInner)
+            .build();
+
+    auto plan = toSingleNodePlan(query);
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 }
