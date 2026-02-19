@@ -458,6 +458,9 @@ class TestConnector : public velox::connector::Connector {
 
   bool dropTableIfExists(const std::string& name);
 
+  /// Registers all 8 TPC-H tables with their canonical schemas.
+  void addTpchTables();
+
  private:
   const std::shared_ptr<TestConnectorMetadata> metadata_;
 };
