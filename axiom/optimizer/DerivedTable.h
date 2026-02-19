@@ -180,7 +180,12 @@ struct DerivedTable : public PlanObject {
 
   /// Return a copy of 'expr', replacing references to this DT's 'columns' with
   /// corresponding 'exprs'.
-  ExprCP importExpr(ExprCP expr);
+  ExprCP importExpr(ExprCP expr) const;
+
+  /// Adds a filter conjunct to this DT. Handles LIMIT (returns false),
+  /// aggregation (adds to 'having'), and set operations (adds to all children).
+  /// Returns true if the conjunct was successfully added, false otherwise.
+  bool addFilter(ExprCP conjunct);
 
   /// Returns a copy of 'expr', replacing references to this DT's 'exprs' with
   /// the corresponding 'columns'. If 'expr' references columns not present in
