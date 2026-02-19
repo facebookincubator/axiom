@@ -144,13 +144,6 @@ class ToGraph {
   }
 
  private:
-  static bool isSpecialForm(
-      const logical_plan::ExprPtr& expr,
-      logical_plan::SpecialForm form) {
-    return expr->isSpecialForm() &&
-        expr->as<logical_plan::SpecialFormExpr>()->form() == form;
-  }
-
   // For comparisons, swaps the args to have a canonical form for
   // deduplication. E.g column op constant, and smaller plan object id
   // to the left.
@@ -245,7 +238,7 @@ class ToGraph {
   // already.
   // @param joinType Inner, left or full. Right join must have been normalized
   // into a left join.
-  // @param condition Join condition. Can be nullptr if a cross join.
+  // @param condition Join condition. Can be nullptr for a cross join.
   // @param originalJoinType The original join type from the logical plan
   // (before normalization).
   void translateJoin(
@@ -254,6 +247,13 @@ class ToGraph {
       logical_plan::JoinType joinType,
       const logical_plan::ExprPtr& condition,
       logical_plan::JoinType originalJoinType);
+
+  // For LEFT JOIN with subquery conjuncts in the ON clause, processes the right
+  // side inside a container DT and applies the subquery conjuncts as filters.
+  // Returns the remaining non-subquery condition (possibly nullptr).
+  logical_plan::ExprPtr processLeftJoinSubqueries(
+      const logical_plan::LogicalPlanNode& right,
+      const logical_plan::ExprPtr& condition);
 
   // Given an INTERSECT or an EXCEPT set operation, create derived tables for
   // inputs, add them to 'currentDt_' and connect them with join edges.

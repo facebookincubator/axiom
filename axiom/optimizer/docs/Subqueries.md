@@ -472,6 +472,8 @@ EXISTS—in both correlated and uncorrelated forms. Subqueries can appear in:
 
 - **WHERE clauses** (filter predicates)
 - **INNER JOIN ON clauses** (processed as cross join + filter)
+- **LEFT / RIGHT JOIN ON clauses** (subquery conjuncts that reference only the
+  null-supplying side are pushed into that side as filters)
 - **SELECT lists** (projections)
 - **GROUP BY keys** (grouping expressions)
 
@@ -1174,6 +1176,25 @@ DerivedTableP ToGraph::translateSubquery(
        leftTable,
        "<expr> IN <subquery> with multi-table <expr> is not supported yet");
    ```
+
+4. **Subqueries in LEFT / RIGHT JOIN ON clause referencing the preserved side**
+   ```sql
+   -- Not supported: subquery conjunct references the preserved (left) side
+   SELECT * FROM t1 LEFT JOIN t2
+   ON t1.a = t2.b AND t1.c > (SELECT min(x) FROM t3)
+   ```
+   TODO: Support by pre-computing the subquery conjunct as a projected boolean
+   column on the preserved side (e.g., `_flag = t1.c > subquery`), then
+   referencing `_flag` in the ON clause.
+
+5. **Subqueries in FULL JOIN ON clause**
+   ```sql
+   -- Not supported: neither side can be pushed in a FULL JOIN
+   SELECT * FROM t1 FULL JOIN t2
+   ON t1.a = t2.b AND t2.c IN (SELECT x FROM t3)
+   ```
+   TODO: Support by pre-computing subquery conjuncts as projected boolean
+   columns on the appropriate side.
 
 ## Architectural Notes
 
