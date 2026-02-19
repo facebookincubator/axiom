@@ -351,6 +351,12 @@ std::vector<int32_t> ToGraph::usedChannels(const lp::LogicalPlanNode& node) {
 }
 
 namespace {
+
+bool isSpecialForm(const lp::ExprPtr& expr, lp::SpecialForm form) {
+  return expr->isSpecialForm() &&
+      expr->as<lp::SpecialFormExpr>()->form() == form;
+}
+
 bool isConstantTrue(ExprCP expr) {
   if (expr->isNot(PlanType::kLiteralExpr)) {
     return false;
@@ -1083,7 +1089,7 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     return callExpr;
   }
 
-  VELOX_NYI();
+  VELOX_NYI("Unexpected expression: {}", expr->kindName());
   return nullptr;
 }
 
@@ -1611,6 +1617,81 @@ void ToGraph::addJoinColumns(
     columns.push_back(column);
     exprs.push_back(expr);
   }
+}
+
+namespace {
+
+bool hasSubquery(const lp::ExprPtr& expr) {
+  if (expr->isSubquery()) {
+    return true;
+  }
+
+  for (const auto& input : expr->inputs()) {
+    if (hasSubquery(input)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// Splits a logical plan expression on AND into leaf conjuncts.
+void flattenConjuncts(const lp::ExprPtr& expr, std::vector<lp::ExprPtr>& out) {
+  if (!expr) {
+    return;
+  }
+  if (isSpecialForm(expr, lp::SpecialForm::kAnd)) {
+    for (const auto& child : expr->inputs()) {
+      flattenConjuncts(child, out);
+    }
+  } else {
+    out.push_back(expr);
+  }
+}
+
+// Combines multiple logical plan expressions into a single AND expression.
+// Returns nullptr if the list is empty.
+lp::ExprPtr combineConjuncts(std::vector<lp::ExprPtr>&& conjuncts) {
+  if (conjuncts.empty()) {
+    return nullptr;
+  }
+  if (conjuncts.size() == 1) {
+    return std::move(conjuncts[0]);
+  }
+  return std::make_shared<lp::SpecialFormExpr>(
+      velox::BOOLEAN(), lp::SpecialForm::kAnd, std::move(conjuncts));
+}
+
+} // namespace
+
+lp::ExprPtr ToGraph::processLeftJoinSubqueries(
+    const lp::LogicalPlanNode& right,
+    const lp::ExprPtr& condition) {
+  std::vector<lp::ExprPtr> conjuncts;
+  flattenConjuncts(condition, conjuncts);
+
+  auto it = std::stable_partition(
+      conjuncts.begin(), conjuncts.end(), [](const lp::ExprPtr& e) {
+        return !hasSubquery(e);
+      });
+
+  std::vector<lp::ExprPtr> subqueryConjuncts(
+      std::make_move_iterator(it), std::make_move_iterator(conjuncts.end()));
+  conjuncts.erase(it, conjuncts.end());
+
+  VELOX_CHECK(!subqueryConjuncts.empty());
+
+  auto* outerDt = std::exchange(currentDt_, newDt());
+  makeQueryGraph(right, kAllAllowedInDt);
+  addFilter(right, combineConjuncts(std::move(subqueryConjuncts)));
+
+  if (!correlatedConjuncts_.empty()) {
+    VELOX_NYI(
+        "Unsupported subqueries in the ON clause of a LEFT or RIGHT join");
+  }
+  finalizeDt(right, outerDt);
+
+  return combineConjuncts(std::move(conjuncts));
 }
 
 void ToGraph::translateJoin(
@@ -2906,20 +2987,6 @@ bool hasNondeterministic(const lp::ExprPtr& expr) {
   return std::ranges::any_of(expr->inputs(), hasNondeterministic);
 }
 
-bool hasSubquery(const lp::ExprPtr& expr) {
-  if (expr->isSubquery()) {
-    return true;
-  }
-
-  for (const auto& input : expr->inputs()) {
-    if (hasSubquery(input)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 } // namespace
 
 void ToGraph::translateSetJoin(const lp::SetNode& set) {
@@ -3178,12 +3245,21 @@ void ToGraph::makeQueryGraph(
 
       makeQueryGraph(*left, allowedInDt, /*excludeOuterJoins=*/true);
 
-      if (queryCtx()->optimization()->options().syntacticJoinOrder) {
-        allowedInDt = deny(allowedInDt, lp::NodeKind::kJoin);
+      // For LEFT JOIN with subquery conjuncts, push subquery predicates into
+      // the right side. See Subqueries.md.
+      auto remainingCondition = join.condition();
+      if (joinType == lp::JoinType::kLeft && join.condition() &&
+          hasSubquery(join.condition())) {
+        remainingCondition =
+            processLeftJoinSubqueries(*right, join.condition());
+      } else {
+        if (queryCtx()->optimization()->options().syntacticJoinOrder) {
+          allowedInDt = deny(allowedInDt, lp::NodeKind::kJoin);
+        }
+        makeQueryGraph(*right, allowedInDt, /*excludeOuterJoins=*/true);
       }
-      makeQueryGraph(*right, allowedInDt, /*excludeOuterJoins=*/true);
 
-      translateJoin(left, right, joinType, join.condition(), join.joinType());
+      translateJoin(left, right, joinType, remainingCondition, join.joinType());
     } break;
     case lp::NodeKind::kSort: {
       const auto& input = *node.onlyInput();

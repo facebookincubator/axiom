@@ -1406,6 +1406,280 @@ TEST_F(SubqueryTest, innerJoinOnSubquery) {
     auto plan = toSingleNodePlan(query);
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+
+  // Uncorrelated scalar subquery referencing both sides of the join.
+  {
+    auto query = baseJoin +
+        " AND n.n_nationkey + r.r_regionkey > "
+        "(SELECT min(s_nationkey) FROM supplier)";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("nation")
+            .hashJoin(
+                matchScan("region").build(), velox::core::JoinType::kInner)
+            .nestedLoopJoin(
+                matchScan("supplier")
+                    .singleAggregation({}, {"min(s_nationkey)"})
+                    .build(),
+                velox::core::JoinType::kInner)
+            .filter()
+            .project()
+            .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(SubqueryTest, leftJoinOnSubquery) {
+  // Subqueries in LEFT JOIN ON clauses are supported when they reference only
+  // the right (null-supplying) side. See Subqueries.md.
+  const std::string baseJoin =
+      "SELECT * FROM nation n LEFT JOIN region r ON r.r_regionkey = n.n_regionkey";
+
+  // Uncorrelated IN subquery in LEFT JOIN ON clause.
+  {
+    auto query = baseJoin + " AND r.r_name IN (SELECT s_name FROM supplier)";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("nation")
+                       .hashJoin(
+                           matchScan("supplier")
+                               .hashJoin(
+                                   matchScan("region").build(),
+                                   core::JoinType::kRightSemiFilter)
+                               .build(),
+                           core::JoinType::kLeft)
+                       .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Uncorrelated scalar subquery in LEFT JOIN ON clause.
+  {
+    auto query = baseJoin +
+        " AND r.r_regionkey > (SELECT min(s_nationkey) FROM supplier)";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("nation")
+            .hashJoin(
+                matchScan("region")
+                    .nestedLoopJoin(
+                        matchScan("supplier")
+                            .singleAggregation({}, {"min(s_nationkey) as m"})
+                            .build(),
+                        core::JoinType::kInner)
+                    .filter("r_regionkey > m")
+                    .project()
+                    .build(),
+                core::JoinType::kLeft)
+            .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // NOT IN subquery in LEFT JOIN ON clause.
+  {
+    auto query =
+        baseJoin + " AND r.r_name NOT IN (SELECT s_name FROM supplier)";
+    SCOPED_TRACE(query);
+
+    // The optimizer uses RIGHT SEMI PROJECT with null-aware mark column,
+    // then filters NOT(mark) to keep non-matching rows.
+    auto matcher = matchScan("nation")
+                       .hashJoin(
+                           matchScan("supplier")
+                               .hashJoin(
+                                   matchScan("region").build(),
+                                   core::JoinType::kRightSemiProject,
+                                   /*nullAware=*/true)
+                               .filter()
+                               .project()
+                               .build(),
+                           core::JoinType::kLeft)
+                       .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // All conjuncts contain subqueries (no non-subquery condition remains).
+  {
+    auto query =
+        "SELECT * FROM nation n LEFT JOIN region r "
+        "ON r.r_name IN (SELECT s_name FROM supplier)";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("nation")
+                       .nestedLoopJoin(
+                           matchScan("supplier")
+                               .hashJoin(
+                                   matchScan("region").build(),
+                                   core::JoinType::kRightSemiFilter)
+                               .build(),
+                           core::JoinType::kLeft)
+                       .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Correlated EXISTS referencing the right (null-supplying) side.
+  {
+    auto query = baseJoin +
+        " AND EXISTS (SELECT 1 FROM supplier s"
+        " WHERE s.s_nationkey = r.r_regionkey)";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("nation")
+                       .hashJoin(
+                           matchScan("supplier")
+                               .hashJoin(
+                                   matchScan("region").build(),
+                                   core::JoinType::kRightSemiFilter)
+                               .build(),
+                           core::JoinType::kLeft)
+                       .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Correlated NOT EXISTS referencing the right (null-supplying) side.
+  {
+    auto query = baseJoin +
+        " AND NOT EXISTS (SELECT 1 FROM supplier s"
+        " WHERE s.s_nationkey = r.r_regionkey)";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("nation")
+                       .hashJoin(
+                           matchScan("supplier")
+                               .hashJoin(
+                                   matchScan("region").build(),
+                                   core::JoinType::kRightSemiProject)
+                               .filter()
+                               .project()
+                               .build(),
+                           core::JoinType::kLeft)
+                       .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Correlated scalar subquery referencing the right (null-supplying) side.
+  {
+    auto query = baseJoin +
+        " AND r.r_regionkey > "
+        "(SELECT count(*) FROM supplier s WHERE s.s_nationkey = r.r_regionkey)";
+    SCOPED_TRACE(query);
+
+    // The correlated subquery is decorrelated: supplier is semi-joined with
+    // a fresh region scan, then aggregated and LEFT JOINed with the outer
+    // region scan.
+    auto matcher =
+        matchScan("nation")
+            .hashJoin(
+                matchScan("region")
+                    .hashJoin(
+                        matchScan("supplier")
+                            .hashJoin(
+                                matchScan("region").build(),
+                                core::JoinType::kLeftSemiFilter)
+                            .singleAggregation({"s_nationkey"}, {"count(*)"})
+                            .project()
+                            .build(),
+                        core::JoinType::kLeft)
+                    .filter()
+                    .project()
+                    .build(),
+                core::JoinType::kLeft)
+            .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(SubqueryTest, rightJoinOnSubquery) {
+  // RIGHT JOIN is normalized to LEFT JOIN. Subqueries referencing the
+  // null-supplying side (left in SQL, right after normalization) are supported.
+  // A final Project reorders columns to match the original SQL column order.
+  const std::string baseJoin =
+      "SELECT * FROM region r RIGHT JOIN nation n ON r.r_regionkey = n.n_regionkey";
+
+  // IN subquery on the null-supplying side.
+  {
+    auto query = baseJoin + " AND r.r_name IN (SELECT s_name FROM supplier)";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("nation")
+                       .hashJoin(
+                           matchScan("supplier")
+                               .hashJoin(
+                                   matchScan("region").build(),
+                                   core::JoinType::kRightSemiFilter)
+                               .build(),
+                           core::JoinType::kLeft)
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Correlated EXISTS referencing the null-supplying side.
+  {
+    auto query = baseJoin +
+        " AND EXISTS (SELECT 1 FROM supplier s"
+        " WHERE s.s_nationkey = r.r_regionkey)";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("nation")
+                       .hashJoin(
+                           matchScan("supplier")
+                               .hashJoin(
+                                   matchScan("region").build(),
+                                   core::JoinType::kRightSemiFilter)
+                               .build(),
+                           core::JoinType::kLeft)
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+TEST_F(SubqueryTest, unsupportedSubqueryInJoin) {
+  // Left-side subquery in LEFT JOIN ON clause.
+  VELOX_ASSERT_THROW(
+      toSingleNodePlan(
+          "SELECT * FROM nation n LEFT JOIN region r "
+          "ON r.r_regionkey = n.n_regionkey "
+          "AND n.n_regionkey > (SELECT min(s_nationkey) FROM supplier)"),
+      "Unsupported subqueries in the ON clause of a LEFT or RIGHT join");
+
+  // Right-side (preserved) subquery in RIGHT JOIN ON clause.
+  VELOX_ASSERT_THROW(
+      toSingleNodePlan(
+          "SELECT * FROM region r RIGHT JOIN nation n "
+          "ON r.r_regionkey = n.n_regionkey "
+          "AND n.n_regionkey > (SELECT min(s_nationkey) FROM supplier)"),
+      "Unsupported subqueries in the ON clause of a LEFT or RIGHT join");
+
+  // Subquery in FULL JOIN ON clause.
+  VELOX_ASSERT_THROW(
+      toSingleNodePlan(
+          "SELECT * FROM nation n FULL JOIN region r "
+          "ON r.r_regionkey = n.n_regionkey "
+          "AND r.r_name IN (SELECT s_name FROM supplier)"),
+      "Unexpected expression: Subquery");
 }
 
 } // namespace
