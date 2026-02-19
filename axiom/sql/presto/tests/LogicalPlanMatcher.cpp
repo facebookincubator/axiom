@@ -122,6 +122,36 @@ class ValuesMatcher : public LogicalPlanMatcherImpl<ValuesNode> {
 
   const velox::RowTypePtr outputType_;
 };
+
+class SortMatcher : public LogicalPlanMatcherImpl<SortNode> {
+ public:
+  SortMatcher(
+      const std::shared_ptr<LogicalPlanMatcher>& inputMatcher,
+      std::vector<std::string> ordering,
+      std::function<void(const LogicalPlanNodePtr&)> onMatch)
+      : LogicalPlanMatcherImpl<SortNode>(inputMatcher, std::move(onMatch)),
+        ordering_{std::move(ordering)} {}
+
+ private:
+  bool matchDetails(const SortNode& plan) const override {
+    const auto& actualOrdering = plan.ordering();
+    EXPECT_EQ(actualOrdering.size(), ordering_.size());
+    if (::testing::Test::HasNonfatalFailure()) {
+      return false;
+    }
+
+    for (size_t i = 0; i < ordering_.size(); ++i) {
+      EXPECT_EQ(actualOrdering[i].expression->toString(), ordering_[i]);
+      if (::testing::Test::HasNonfatalFailure()) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  const std::vector<std::string> ordering_;
+};
 } // namespace
 
 LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::tableWrite(
@@ -219,6 +249,15 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::sort(
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<LogicalPlanMatcherImpl<SortNode>>(
       matcher_, std::move(onMatch));
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::sort(
+    const std::vector<std::string>& ordering,
+    OnMatchCallback onMatch) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<SortMatcher>(matcher_, ordering, std::move(onMatch));
   return *this;
 }
 

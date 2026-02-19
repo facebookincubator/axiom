@@ -2117,5 +2117,137 @@ TEST_F(PrestoParserTest, createTableAndInsert) {
   ASSERT_EQ(lp::WriteKind::kInsert, insertWrite->writeKind());
 }
 
+TEST_F(PrestoParserTest, orderByNonSelectedColumn) {
+  defaultConnectorId_ = kTestConnectorId;
+  defaultSchema_ = std::nullopt;
+  testConnector_->addTable("t", ROW({"a", "b", "c", "d", "e", "f"}, INTEGER()));
+
+  // Base SELECT query with a mix of features:
+  // - SELECT a as b: alias shadows original column name
+  // - SELECT b + 1 as a: expression with alias that shadows another column
+  // - SELECT c * d: expression without alias
+  // - SELECT c + e as x: expression with new alias
+  // - SELECT f: plain column
+  // Note: The aliases shadow original column names, requiring two Project nodes
+  // (one for intermediate renaming, one for final aliases).
+  const std::string baseSelect =
+      "SELECT a as b, b + 1 as a, c * d, c + e as x FROM t";
+
+  auto testOrderBy = [&](const std::string& orderByClause,
+                         const std::vector<std::string>& ordering) {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .tableScan()
+                       .sort(ordering)
+                       .project()
+                       .project();
+    testSql(baseSelect + " ORDER BY " + orderByClause, matcher);
+  };
+
+  // Column not in SELECT list.
+  testOrderBy("e", {"e"});
+  testOrderBy("f", {"f"});
+
+  // Name and alias conflict. Uses alias.
+  testOrderBy("b", {"a"});
+
+  // Alias uses underlying expression.
+  testOrderBy("x", {"plus(c, e)"});
+
+  // Expression over alias.
+  testOrderBy("x + 1", {"plus(plus(c, e), 1)"});
+
+  // Ordinal resolves to underlying expression.
+  testOrderBy("1", {"plus(b, 1)"});
+  testOrderBy("3", {"multiply(c, d)"});
+  testInvalidSql(
+      baseSelect + " ORDER BY 5", "GROUP BY position 5 is not in select list");
+
+  // Multiple columns mixing selected and non-selected.
+  testOrderBy("e, x, 1", {"e", "plus(c, e)", "plus(b, 1)"});
+}
+
+TEST_F(PrestoParserTest, orderByStar) {
+  defaultConnectorId_ = kTestConnectorId;
+  defaultSchema_ = std::nullopt;
+  testConnector_->addTable("t", ROW({"a", "b", "c", "d", "e", "f"}, INTEGER()));
+  lp::SortNodePtr sortNode;
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().sort(
+      {"a", "c", "e", "f"});
+
+  testSql("SELECT * FROM t ORDER BY 1, 3, e, f", matcher);
+}
+
+TEST_F(PrestoParserTest, orderByStarWithHiddenColumn) {
+  // SELECT * FROM t ORDER BY "$path" should not fail and should not return
+  // "$path" column in output.
+  defaultConnectorId_ = kTestConnectorId;
+  defaultSchema_ = std::nullopt;
+  testConnector_->addTable(
+      "t", ROW({"a", "b"}, INTEGER()), ROW({"$path"}, VARCHAR()));
+
+  lp::SortNodePtr sortNode;
+  lp::LogicalPlanNodePtr outputNode;
+  auto matcher =
+      lp::test::LogicalPlanMatcherBuilder().tableScan().sort({"$path"}).project(
+          [&](const auto& node) { outputNode = node; });
+
+  testSql("SELECT * FROM t ORDER BY \"$path\"", matcher);
+  // EXPECT_EQ(sortNode->ordering()[0].expression->toString(), "$path");
+  ASSERT_THAT(
+      outputNode->outputType()->names(),
+      ::testing::Pointwise(::testing::Eq(), {"a", "b"}));
+}
+
+TEST_F(PrestoParserTest, orderByJoinedTable) {
+  // ORDER BY a column from a joined table that is not in the SELECT list.
+  testSql(
+      "SELECT n_name "
+      "FROM nation, region "
+      "WHERE n_regionkey = r_regionkey "
+      "ORDER BY r_name",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .join(lp::test::LogicalPlanMatcherBuilder().tableScan().build())
+          .filter()
+          .sort()
+          .project());
+}
+
+TEST_F(PrestoParserTest, orderByDistinct) {
+  defaultConnectorId_ = kTestConnectorId;
+  defaultSchema_ = std::nullopt;
+  testConnector_->addTable("t", ROW({"a", "b"}, INTEGER()));
+  auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                     .tableScan()
+                     .project()
+                     .aggregate()
+                     .sort();
+
+  testSql(
+      "SELECT DISTINCT a "
+      "FROM t "
+      "ORDER BY a",
+      matcher);
+  testSql(
+      "SELECT DISTINCT a "
+      "FROM t "
+      "ORDER BY 1",
+      matcher);
+
+  // SELECT DISTINCT with ORDER BY can only references SELECT fields.
+  testInvalidSql(
+      "SELECT DISTINCT a FROM (VALUES (1, 2), (3, 4)) AS t(a, b) ORDER BY b DESC",
+      "Cannot resolve column: b not in");
+  testInvalidSql(
+      "SELECT DISTINCT a + b FROM (VALUES (1, 2), (3, 4)) AS t(a, b) ORDER BY a DESC",
+      "Cannot resolve column: a not in");
+  testInvalidSql(
+      "SELECT DISTINCT a FROM (VALUES (1, 2), (3, 4)) AS t(a, b) ORDER BY 2 DESC",
+      "(1 vs. 1) ROW<a:INTEGER>");
+  testInvalidSql(
+      "SELECT a + b FROM (VALUES (1, 2), (3, 4)) AS t(a, b) GROUP BY 1 ORDER BY a DESC",
+      "Cannot resolve column: a not in [expr -> expr]");
+}
+
 } // namespace
 } // namespace axiom::sql::presto
