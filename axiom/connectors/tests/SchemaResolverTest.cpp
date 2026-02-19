@@ -78,20 +78,24 @@ TEST_F(SchemaResolverTest, bareTable) {
 }
 
 TEST_F(SchemaResolverTest, invalidName) {
-  auto lookup = "table.";
-  VELOX_ASSERT_THROW(
-      resolver_->findTable("base", lookup),
-      fmt::format("Invalid table name: '{}'", lookup));
+  // Names that don't parse as valid catalog.schema.table are passed through
+  // to the connector's findTable, which returns nullptr for unknown tables.
+  ASSERT_EQ(resolver_->findTable("base", "table."), nullptr);
+  ASSERT_EQ(resolver_->findTable("base", "..."), nullptr);
+  ASSERT_EQ(
+      resolver_->findTable("base", "catalog.extra.schema.table"), nullptr);
+}
 
-  lookup = "...";
-  VELOX_ASSERT_THROW(
-      resolver_->findTable("base", lookup),
-      fmt::format("Invalid table name: '{}'", lookup));
+TEST_F(SchemaResolverTest, multiDotNamePassthrough) {
+  // Names with more than 3 dots (e.g., XDB tier paths like
+  // "ephemeralxdb.on_demand.ftw.784.tasks") bypass the standard
+  // catalog.schema.table parser and are passed directly to the connector.
+  auto lookup = "ephemeralxdb.on_demand.ftw.784.tasks";
+  baseCatalog_.connector->addTable(lookup);
 
-  lookup = "catalog.extra.schema.table";
-  VELOX_ASSERT_THROW(
-      resolver_->findTable("base", lookup),
-      fmt::format("Invalid table name: '{}'", lookup));
+  auto table = resolver_->findTable("base", lookup);
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(table->name(), lookup);
 }
 
 TEST_F(SchemaResolverTest, tablePlusSchema) {
