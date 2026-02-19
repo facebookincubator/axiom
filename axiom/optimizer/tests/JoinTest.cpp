@@ -1037,6 +1037,150 @@ TEST_F(JoinTest, fullThenFilter) {
   }
 }
 
+// Verifies that ON clause conjuncts referencing only the right (null-supplying)
+// side of a LEFT JOIN are pushed down as filters on the right input.
+TEST_F(JoinTest, leftJoinOnClausePushdown) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+
+  // Right-side-only ON conjunct is pushed down as a filter on the right input.
+  {
+    auto query = "SELECT * FROM t LEFT JOIN u ON a = x AND y > 0";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("t")
+            .hashJoin(
+                matchScan("u").filter("y > 0").build(), core::JoinType::kLeft)
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Left-side-only ON conjunct is NOT pushed down. It stays in the join
+  // condition.
+  {
+    auto query = "SELECT * FROM t LEFT JOIN u ON a = x AND b > 0";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kLeft)
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Both-sides ON conjunct is NOT pushed down.
+  {
+    auto query = "SELECT * FROM t LEFT JOIN u ON a = x AND b > y";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kLeft)
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Right-side-only ON conjunct pushed through a subquery DT.
+  {
+    auto query =
+        "SELECT * FROM t LEFT JOIN (SELECT x, y + 1 as z FROM u) "
+        "ON a = x AND z > 0";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u")
+                               .filter("y + 1 > 0")
+                               .project({"x", "y + 1"})
+                               .build(),
+                           core::JoinType::kLeft)
+                       .project()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Right-side-only ON conjunct pushed into HAVING of a DT with aggregation.
+  {
+    auto query =
+        "SELECT * FROM t LEFT JOIN (SELECT x, sum(y) as s FROM u GROUP BY x) "
+        " ON a = x AND s > 10";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u")
+                               .singleAggregation({"x"}, {"sum(y) as s"})
+                               .filter("s > 10")
+                               .build(),
+                           core::JoinType::kLeft)
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Right-side-only ON conjunct on a grouping key pushed below aggregation.
+  {
+    auto query =
+        "SELECT * FROM t LEFT JOIN (SELECT x, sum(y) as s FROM u GROUP BY x) "
+        "ON a = x AND x > 0";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(
+                           matchScan("u")
+                               .filter("x > 0")
+                               .singleAggregation({"x"}, {"sum(y)"})
+                               .build(),
+                           core::JoinType::kLeft)
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Right-side-only ON conjunct NOT pushed below LIMIT. It stays in the join
+  // condition.
+  // TODO: Support pushing conjuncts below LIMIT by wrapping in a DT.
+  {
+    auto query =
+        "SELECT * FROM t LEFT JOIN (SELECT x, y FROM u LIMIT 10) "
+        " ON a = x AND y > 0";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("t")
+            .hashJoin(matchScan("u").limit().build(), core::JoinType::kLeft)
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Constant ON conjunct stays in the JoinEdge filter.
+  // TODO(https://github.com/facebookincubator/axiom/issues/919): Optimal plan
+  // would eliminate the join entirely and produce left rows with NULL right
+  // columns.
+  {
+    auto query = "SELECT * FROM t LEFT JOIN u ON a = x AND 1 > 2";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kLeft)
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 TEST_F(JoinTest, impliedJoins) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
@@ -1048,8 +1192,8 @@ TEST_F(JoinTest, impliedJoins) {
   // Transitive:
 
   // Transitive: t.a = u.x AND u.x = v.n implies t.a = v.n. With v being the
-  // smallest table, the optimizer should join t with v first using the implied
-  // join key.
+  // smallest table, the optimizer should join t with v first using the
+  // implied join key.
   {
     auto query = "SELECT count(*) FROM t, u, v WHERE t.a = u.x AND u.x = v.n";
     SCOPED_TRACE(query);

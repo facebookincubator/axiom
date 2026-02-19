@@ -1664,6 +1664,38 @@ void ToGraph::translateJoin(
   // table then this too is the last in 'tables'.
   auto rightTable = currentDt_->tables.back();
 
+  // For LEFT JOIN, push down conjuncts that reference only the right
+  // (null-supplying) side. Pre-filtering the right side is semantically
+  // equivalent: it reduces which right rows are candidates for matching, while
+  // left rows that don't find a match still appear with NULLs.
+  if (rightOptional && !leftOptional) {
+    for (auto it = conjuncts.begin(); it != conjuncts.end();) {
+      auto* conjunct = *it;
+      if (conjunct->singleTable() != rightTable) {
+        ++it;
+        continue;
+      }
+
+      if (rightTable->is(PlanType::kDerivedTableNode)) {
+        auto* rightDt =
+            const_cast<DerivedTable*>(rightTable->as<DerivedTable>());
+        if (!rightDt->addFilter(conjunct)) {
+          ++it;
+          continue;
+        }
+      } else if (rightTable->is(PlanType::kTableNode)) {
+        const_cast<BaseTable*>(rightTable->as<BaseTable>())
+            ->addFilter(conjunct);
+      } else {
+        // TODO: Support ValuesTable and UnnestTable.
+        ++it;
+        continue;
+      }
+
+      it = conjuncts.erase(it);
+    }
+  }
+
   ExprVector leftKeys;
   ExprVector rightKeys;
   PlanObjectSet leftTables;
