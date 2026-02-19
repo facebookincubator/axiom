@@ -1619,7 +1619,20 @@ void ToGraph::translateJoin(
     lp::JoinType joinType,
     const lp::ExprPtr& condition,
     lp::JoinType originalJoinType) {
-  const bool isInner = joinType == lp::JoinType::kInner;
+  if (joinType == lp::JoinType::kInner) {
+    // Inner join is a cross join with a filter. Both sides are already in the
+    // DT. Process the condition as a filter. This handles subqueries using the
+    // same infrastructure as WHERE clause predicates.
+    if (condition) {
+      exprSources_.push_back(right.get());
+      SCOPE_EXIT {
+        exprSources_.pop_back();
+      };
+
+      addFilter(*left, condition);
+    }
+    return;
+  }
 
   exprSources_.push_back(left.get());
   exprSources_.push_back(right.get());
@@ -1642,61 +1655,56 @@ void ToGraph::translateJoin(
   }
 #endif
 
-  if (isInner) {
-    currentDt_->conjuncts.insert(
-        currentDt_->conjuncts.end(), conjuncts.begin(), conjuncts.end());
-  } else {
-    const bool leftOptional =
-        joinType == lp::JoinType::kRight || joinType == lp::JoinType::kFull;
-    const bool rightOptional =
-        joinType == lp::JoinType::kLeft || joinType == lp::JoinType::kFull;
+  const bool leftOptional =
+      joinType == lp::JoinType::kRight || joinType == lp::JoinType::kFull;
+  const bool rightOptional =
+      joinType == lp::JoinType::kLeft || joinType == lp::JoinType::kFull;
 
-    // If non-inner, and many tables on the right they are one dt. If a single
-    // table then this too is the last in 'tables'.
-    auto rightTable = currentDt_->tables.back();
+  // If non-inner, and many tables on the right they are one dt. If a single
+  // table then this too is the last in 'tables'.
+  auto rightTable = currentDt_->tables.back();
 
-    ExprVector leftKeys;
-    ExprVector rightKeys;
-    PlanObjectSet leftTables;
-    extractNonInnerJoinEqualities(
-        functionNames_.equality,
-        conjuncts,
-        rightTable,
-        leftKeys,
-        rightKeys,
-        leftTables);
+  ExprVector leftKeys;
+  ExprVector rightKeys;
+  PlanObjectSet leftTables;
+  extractNonInnerJoinEqualities(
+      functionNames_.equality,
+      conjuncts,
+      rightTable,
+      leftKeys,
+      rightKeys,
+      leftTables);
 
-    JoinEdge::Spec joinSpec{
-        .filter = std::move(conjuncts),
-        .leftOptional = leftOptional,
-        .rightOptional = rightOptional,
-    };
+  JoinEdge::Spec joinSpec{
+      .filter = std::move(conjuncts),
+      .leftOptional = leftOptional,
+      .rightOptional = rightOptional,
+  };
 
-    if (leftOptional) {
-      addJoinColumns(*left, joinSpec.leftColumns, joinSpec.leftExprs);
-    }
+  if (leftOptional) {
+    addJoinColumns(*left, joinSpec.leftColumns, joinSpec.leftExprs);
+  }
 
-    if (rightOptional) {
-      addJoinColumns(*right, joinSpec.rightColumns, joinSpec.rightExprs);
-    }
+  if (rightOptional) {
+    addJoinColumns(*right, joinSpec.rightColumns, joinSpec.rightExprs);
+  }
 
-    if (leftTables.empty()) {
-      VELOX_CHECK_EQ(
-          2,
-          currentDt_->tables.size(),
-          "The left of a non-inner join is expected to be one table");
-      leftTables.add(currentDt_->tables[0]);
-    }
+  if (leftTables.empty()) {
+    VELOX_CHECK_EQ(
+        2,
+        currentDt_->tables.size(),
+        "The left of a non-inner join is expected to be one table");
+    leftTables.add(currentDt_->tables[0]);
+  }
 
-    auto* edge = make<JoinEdge>(
-        leftTables.size() == 1 ? leftTables.onlyObject() : nullptr,
-        rightTable,
-        std::move(joinSpec),
-        originalJoinType);
-    currentDt_->joins.push_back(edge);
-    for (auto i = 0; i < leftKeys.size(); ++i) {
-      edge->addEquality(leftKeys[i], rightKeys[i]);
-    }
+  auto* edge = make<JoinEdge>(
+      leftTables.size() == 1 ? leftTables.onlyObject() : nullptr,
+      rightTable,
+      std::move(joinSpec),
+      originalJoinType);
+  currentDt_->joins.push_back(edge);
+  for (auto i = 0; i < leftKeys.size(); ++i) {
+    edge->addEquality(leftKeys[i], rightKeys[i]);
   }
 }
 
