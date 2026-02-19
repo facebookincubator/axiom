@@ -1161,6 +1161,10 @@ class Aggregate : public Call {
     return orderTypes_;
   }
 
+  /// Returns a copy of 'this' with 'isDistinct' set to false. If 'isDistinct'
+  /// of this instance is already false, return 'this' directly.
+  const Aggregate* dropDistinct() const;
+
   std::string toString() const override;
 
  private:

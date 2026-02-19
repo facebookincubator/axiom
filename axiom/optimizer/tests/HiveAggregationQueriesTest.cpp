@@ -92,17 +92,25 @@ TEST_F(HiveAggregationQueriesTest, distinct) {
 
   {
     auto plan = toSingleNodePlan(logicalPlan);
-
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
                        .singleAggregation({}, {"count(distinct n_regionkey)"})
                        .build();
-
     ASSERT_TRUE(matcher->match(plan));
 
-    VELOX_ASSERT_THROW(
-        planVelox(logicalPlan),
-        "DISTINCT option for aggregation is supported only in single worker, single thread mode");
+    auto distributedPlan = planVelox(logicalPlan);
+    matcher = core::PlanMatcherBuilder()
+                  .tableScan("nation")
+                  .partialAggregation({"n_regionkey"}, {})
+                  .shuffle()
+                  .localPartition()
+                  .finalAggregation({"n_regionkey"}, {})
+                  .partialAggregation({}, {"count(n_regionkey)"})
+                  .shuffle()
+                  .localPartition()
+                  .finalAggregation({}, {"count(count)"})
+                  .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
   }
 
   auto referencePlan =
@@ -126,7 +134,6 @@ TEST_F(HiveAggregationQueriesTest, orderBy) {
           .build();
 
   auto plan = toSingleNodePlan(logicalPlan);
-
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan("nation")
                      .singleAggregation(
@@ -134,7 +141,6 @@ TEST_F(HiveAggregationQueriesTest, orderBy) {
                          {"array_agg(n_nationkey ORDER BY n_nationkey DESC)",
                           "array_agg(n_name ORDER BY n_nationkey)"})
                      .build();
-
   ASSERT_TRUE(matcher->match(plan));
 
   auto distributedPlan = planVelox(logicalPlan);
