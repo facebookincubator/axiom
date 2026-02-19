@@ -342,6 +342,21 @@ class ProjectMatcher : public PlanMatcherImpl<ProjectNode> {
             expected->dropAlias()->toString());
       }
       AXIOM_TEST_RETURN_IF_FAILURE
+    } else {
+      // No expressions to verify. Remap symbols through the project's
+      // column mapping. For identity projections (field access), update
+      // the symbol to use the project's output name. Symbols for computed
+      // projections are dropped.
+      for (const auto& [alias, childName] : symbols) {
+        for (auto i = 0; i < plan.projections().size(); ++i) {
+          if (auto* field = dynamic_cast<const FieldAccessTypedExpr*>(
+                  plan.projections()[i].get());
+              field && field->name() == childName) {
+            newSymbols[alias] = plan.names()[i];
+            break;
+          }
+        }
+      }
     }
 
     return MatchResult::success(newSymbols);

@@ -235,9 +235,10 @@ class ToGraph {
   // 'flat'.
   void translateConjuncts(const logical_plan::ExprPtr& input, ExprVector& flat);
 
-  // Adds a join to 'currentDt_'. If 'joinType' is an inner join, the conjuncts
-  // of the join condition are added to currentDt_->conjuncts. If left or full
-  // join, a JoinEdge is created and added to currentDt_->joins.
+  // Adds a join to 'currentDt_'. For inner joins, processes the condition as a
+  // cross join followed by a filter, which handles subqueries using the same
+  // infrastructure as WHERE clause predicates. For left or full joins, creates
+  // a JoinEdge with appropriate equi-join keys and remaining filter.
   // @param left Left side of the join. Must have been added to the graph
   // already.
   // @param right Right side of the join. Must have been added to the graph

@@ -471,6 +471,7 @@ The Axiom optimizer supports three types of subqueries—scalar, IN, and
 EXISTS—in both correlated and uncorrelated forms. Subqueries can appear in:
 
 - **WHERE clauses** (filter predicates)
+- **INNER JOIN ON clauses** (processed as cross join + filter)
 - **SELECT lists** (projections)
 - **GROUP BY keys** (grouping expressions)
 
