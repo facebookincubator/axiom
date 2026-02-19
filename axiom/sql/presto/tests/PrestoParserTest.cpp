@@ -1431,6 +1431,40 @@ TEST_F(PrestoParserTest, join) {
   }
 }
 
+TEST_F(PrestoParserTest, joinOnSubquery) {
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().join(
+      lp::test::LogicalPlanMatcherBuilder().tableScan().build());
+
+  // Correlated subquery in JOIN ON clause referencing left-side columns works.
+  testSql(
+      "SELECT * FROM nation n JOIN region r "
+      "ON n.n_regionkey = r.r_regionkey "
+      "AND n.n_nationkey IN (SELECT s_nationkey FROM supplier s WHERE s.s_nationkey = n.n_nationkey)",
+      matcher);
+
+  // Correlated subquery in JOIN ON clause referencing right-side columns.
+  testSql(
+      "SELECT * FROM nation n JOIN region r "
+      "ON n.n_regionkey = r.r_regionkey "
+      "AND r.r_regionkey IN (SELECT s_nationkey FROM supplier s WHERE s.s_nationkey = r.r_regionkey)",
+      matcher);
+
+  // Correlated EXISTS referencing right-side columns.
+  testSql(
+      "SELECT * FROM nation n JOIN region r "
+      "ON n.n_regionkey = r.r_regionkey "
+      "AND EXISTS (SELECT 1 FROM supplier s WHERE s.s_nationkey = r.r_regionkey)",
+      matcher);
+
+  // LEFT JOIN with correlated subquery referencing right-side (null-supplying)
+  // columns.
+  testSql(
+      "SELECT * FROM nation n LEFT JOIN region r "
+      "ON n.n_regionkey = r.r_regionkey "
+      "AND EXISTS (SELECT 1 FROM supplier s WHERE s.s_nationkey = r.r_regionkey)",
+      matcher);
+}
+
 TEST_F(PrestoParserTest, unionAll) {
   auto matcher =
       lp::test::LogicalPlanMatcherBuilder().tableScan().project().setOperation(

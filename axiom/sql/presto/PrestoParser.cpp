@@ -1153,14 +1153,28 @@ class RelationPlanner : public AstVisitor {
 
       auto leftBuilder = builder_;
 
-      lp::PlanBuilder::Scope scope;
-      leftBuilder->captureScope(scope);
+      lp::PlanBuilder::Scope leftScope;
+      leftBuilder->captureScope(leftScope);
 
-      builder_ = newBuilder(scope);
+      builder_ = newBuilder(leftScope);
       processFrom(join->right());
       auto rightBuilder = builder_;
 
-      builder_ = leftBuilder;
+      // Create a combined scope that can resolve columns from both sides of
+      // the join. Subqueries in the ON clause may contain correlated
+      // references to either side.
+      lp::PlanBuilder::Scope rightScope;
+      rightBuilder->captureScope(rightScope);
+
+      lp::PlanBuilder::Scope joinScope =
+          [leftScope, rightScope](const auto& alias, const auto& name) {
+            if (auto expr = leftScope(alias, name)) {
+              return expr;
+            }
+            return rightScope(alias, name);
+          };
+
+      builder_ = newBuilder(joinScope);
 
       std::optional<lp::ExprApi> condition;
 
@@ -1174,6 +1188,7 @@ class RelationPlanner : public AstVisitor {
         }
       }
 
+      builder_ = leftBuilder;
       builder_->join(*rightBuilder, condition, toJoinType(join->joinType()));
       return;
     }
