@@ -343,17 +343,12 @@ class ToGraph {
   // are not freely reorderable with its parents' descendents.
   void wrapInDt(const logical_plan::LogicalPlanNode& node);
 
-  // Start new DT and add 'currentDt_' as a child.
-  // Set 'currentDt_' to the new DT.
+  // Finalizes 'currentDt_' by setting its output columns based on 'node',
+  // then nests it inside 'outerDt' (or a new DT if 'outerDt' is nullptr).
+  // Updates 'currentDt_' to point to the outer DT.
   void finalizeDt(
       const logical_plan::LogicalPlanNode& node,
       DerivedTableP outerDt = nullptr);
-
-  // Same as finalizeDt but requires 'outerDt' to be non-null.
-  // And don't check that correlated conjuncts are empty.
-  void finalizeSubqueryDt(
-      const logical_plan::LogicalPlanNode& node,
-      DerivedTableP outerDt);
 
   // Creates a wrapper DerivedTable with a COUNT(*) aggregation over 'inputDt'.
   // Returns the count column. The wrapper DT is added to currentDt_.
