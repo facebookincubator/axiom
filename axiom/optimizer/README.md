@@ -118,7 +118,7 @@ The order of operations in a DerivedTable follows SQL order:
 
 Consider a simple count(*) query.
 
-```
+```text
 SQL> EXPLAIN (TYPE GRAPH) SELECT count(*) FROM nation;
 dt1: count
   output:
@@ -138,7 +138,7 @@ The query graph consists of a BaseTable t2 that represents 'nation' and a Derive
 
 A bit more involved query would count the number of African nations by joining nation and region tables.
 
-```
+```text
 SQL> EXPLAIN (TYPE GRAPH) SELECT count(*) FROM nation, region WHERE n_regionkey = r_regionkey and r_name = 'AFRICA';
 dt1: count
   output:
@@ -223,16 +223,40 @@ For example, in the following query, 'c' is control column, while 'a' and 'b' ar
 
 Tracking control and payload columns separately is useful for enabling late materialization. When payload columns are large and need to be shuffled before being dropped by a selective join, it might be more efficient to perform the shuffle and join using only control columns and a row ID column, then load payload columns for the passing rows using row IDs.
 
+## UNNEST
+
+UNNEST expands array or map columns into rows. In the query graph, UNNEST is represented as a special join between the input table and an UnnestTable. The UnnestTable holds the unnested columns.
+
+```sql
+SELECT * FROM t, UNNEST(t.array_col) AS u(x)
+```
+
+The input table `t` is joined with an UnnestTable `ut` using a special UNNEST join edge. For each row in `t`, the join produces one row for each element in `array_col`. The UnnestTable provides the unnested column `x`.
+
+UNNEST behaves like a lateral (correlated) join — the right side (UnnestTable) depends on values from the left side. This means UNNEST cannot be freely reordered with other joins.
+
+When UNNEST expressions reference columns from multiple tables (e.g., after a join), the input is wrapped in a nested DT to ensure the unnest expressions can be evaluated.
+
 ## Set Operations
 
 Axiom supports UNION, UNION ALL, INTERSECT and EXCEPT set operations.
 
-In a query graph, a set operation is represented by a special kind of DerivedTable that stores set operation type and a list of child DerivedTables.
+### UNION and UNION ALL
+
+UNION and UNION ALL are represented by a special kind of DerivedTable that stores the set operation type in the `setOp` field and a list of child DerivedTables in the `children` field.
 
 Here is an example of a UNION ALL query that combines two tables with simple filters.
 
+```sql
+SELECT * FROM nation WHERE n_regionkey = 0
+UNION ALL
+SELECT * FROM nation WHERE n_regionkey = 2;
 ```
-SQL> EXPLAIN (TYPE GRAPH) SELECT * FROM nation WHERE n_regionkey = 0 UNION ALL SELECT * FROM nation WHERE n_regionkey = 2;
+
+<details>
+<summary>EXPLAIN output</summary>
+
+```text
 dt1: n_nationkey, n_name, n_regionkey, n_comment
   output:
     n_nationkey := dt2.n_nationkey
@@ -269,6 +293,158 @@ t6: n_nationkey, n_name, n_regionkey, n_comment
   single-column filters: eq(t6.n_regionkey, 2)
 ```
 
-DerivedTable dt2 represents UNION ALL of dt5 and dt3.
+</details>
+
+DerivedTable dt2 represents UNION ALL of dt3 and dt5.
 
 <img src="docs/images/readme_union_all_query_graph.svg" width="500" alt="UNION ALL query graph">
+
+### INTERSECT and EXCEPT
+
+Unlike UNION/UNION ALL, INTERSECT and EXCEPT do not use the `setOp`/`children` fields. Instead, they are translated into semi-joins and anti-joins with aggregation for deduplication. Each input becomes a nested DerivedTable. The first input is joined with each subsequent input using:
+
+- **INTERSECT** → a SEMI join (EXISTS) with equalities on all output columns.
+- **EXCEPT** → an ANTI join (NOT EXISTS) with equalities on all output columns.
+
+Per the SQL standard, INTERSECT and EXCEPT (without ALL) return only distinct rows. The semi-join or anti-join alone does not deduplicate — if the left input has multiple identical rows, all of them would pass through. A GROUP BY on the output columns of the first input is added to ensure the result contains only distinct rows.
+
+Here is an INTERSECT example:
+
+```sql
+SELECT n_nationkey FROM nation WHERE n_regionkey = 0
+INTERSECT
+SELECT n_nationkey FROM nation WHERE n_regionkey = 2;
+```
+
+<details>
+<summary>EXPLAIN output</summary>
+
+```text
+dt1: 1.00 rows, n_nationkey
+  output:
+    n_nationkey := dt2.n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+  tables: dt2
+  grouping keys: dt2.n_nationkey
+
+dt2: 1.00 rows, n_nationkey
+  output:
+    n_nationkey := dt2.n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+  tables: dt3, dt5
+  joins:
+    dt3 SEMI dt5 ON dt3.n_nationkey = dt5.n_nationkey_6 [dt3 → 0.20, dt5 → 0.20]
+  syntactic join order: 2, 17
+  grouping keys: dt3.n_nationkey
+
+dt3: 5.00 rows, n_nationkey
+  output:
+    n_nationkey := t4.n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+  tables: t4
+
+t4: 5.00 rows, n_nationkey, n_regionkey
+  table: nation
+    n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+    n_regionkey BIGINT (cardinality=1.00 min=0 max=0)
+  single-column filters: eq(t4.n_regionkey, 0)
+
+dt5: 5.00 rows, n_nationkey_6
+  output:
+    n_nationkey_6 := t6.n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+  tables: t6
+
+t6: 5.00 rows, n_nationkey, n_regionkey
+  table: nation
+    n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+    n_regionkey BIGINT (cardinality=1.00 min=2 max=2)
+  single-column filters: eq(t6.n_regionkey, 2)
+```
+
+</details>
+
+DerivedTable dt2 represents INTERSECT as a SEMI join between dt3 and dt5 with a GROUP BY for deduplication. dt1 wraps dt2 with another GROUP BY.
+
+<img src="docs/images/readme_intersect_query_graph.svg" width="500" alt="INTERSECT query graph">
+
+Here is an EXCEPT example:
+
+```sql
+SELECT n_nationkey FROM nation WHERE n_regionkey = 0
+EXCEPT
+SELECT n_nationkey FROM nation WHERE n_regionkey = 2;
+```
+
+<details>
+<summary>EXPLAIN output</summary>
+
+```text
+dt1: 1.00 rows, n_nationkey
+  output:
+    n_nationkey := dt2.n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+  tables: dt2
+  grouping keys: dt2.n_nationkey
+
+dt2: 1.00 rows, n_nationkey
+  output:
+    n_nationkey := dt2.n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+  tables: dt3, dt5
+  joins:
+    dt3 ANTI dt5 ON dt3.n_nationkey = dt5.n_nationkey_6 [dt3 → 0.20, dt5 → 0.20]
+  syntactic join order: 2, 17
+  grouping keys: dt3.n_nationkey
+
+dt3: 5.00 rows, n_nationkey
+  output:
+    n_nationkey := t4.n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+  tables: t4
+
+t4: 5.00 rows, n_nationkey, n_regionkey
+  table: nation
+    n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+    n_regionkey BIGINT (cardinality=1.00 min=0 max=0)
+  single-column filters: eq(t4.n_regionkey, 0)
+
+dt5: 5.00 rows, n_nationkey_6
+  output:
+    n_nationkey_6 := t6.n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+  tables: t6
+
+t6: 5.00 rows, n_nationkey, n_regionkey
+  table: nation
+    n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+    n_regionkey BIGINT (cardinality=1.00 min=2 max=2)
+  single-column filters: eq(t6.n_regionkey, 2)
+```
+
+</details>
+
+DerivedTable dt2 represents EXCEPT as an ANTI join between dt3 and dt5 with a GROUP BY for deduplication.
+
+<img src="docs/images/readme_except_query_graph.svg" width="500" alt="EXCEPT query graph">
+
+## DerivedTable Composition Rules
+
+A DerivedTable groups together operations that can be planned as a single unit. The following rules determine what can be combined into the same DT:
+
+1. **Aggregation, Limit, Sort, and Unnest cannot appear below a join.** These operations must complete before their results can be joined. If any of these appear in a join input, they are wrapped in a nested DT. Operations *above* a join are unaffected — for example, `SELECT ... FROM t1 JOIN t2 GROUP BY ...` produces a single DT containing both the join and the aggregation.
+
+2. **Only inner joins can be flattened together.** Multiple inner joins can be combined into a single DT for join order optimization. Outer joins (LEFT, FULL) cannot be freely reordered, so each outer join and its inputs are wrapped in a nested DT.
+
+3. **Syntactic join order (optional).** When enabled, the right side of each join is wrapped in a nested DT to preserve the SQL-specified join order.
+
+> [!NOTE]
+> Some outer join reorderings are semantically valid. For example, `(a JOIN b) LEFT JOIN c ON f(a, c)` can be reordered to `(a LEFT JOIN c ON f(a, c)) JOIN b`. However, Axiom does not implement this optimization today.
+
+### Implementation
+
+`ToGraph::makeQueryGraph` processes the logical plan in two phases:
+
+**On the way down (recursion):** The function walks the logical plan tree top-down. Before recursing into child nodes, it narrows the `allowedInDt` bitmask based on the current node type. For example, when entering a join, aggregations and limits are removed from `allowedInDt` for the join's inputs.
+
+**On the way up (building):** After returning from child nodes, the function adds the current node's contribution to `currentDt_`.
+
+When a nested DT is needed, there are two patterns:
+
+- **`wrapInDt(node)`**: Converts the logical plan subtree rooted at `node` into a query graph and wraps it in a nested DT. Called when: (1) a node type is not allowed per the `allowedInDt` bitmask, (2) an outer join appears where only inner joins are allowed, (3) for inputs of INTERSECT/EXCEPT set operations, or (4) for inputs of table writes.
+
+- **`finalizeDt`**: Completes `currentDt_` by setting its output columns, nests it inside an outer DT, and updates `currentDt_` to point to the outer DT. Called from `wrapInDt`, but also called directly in cases like adding an aggregation when one already exists, or adding a sort when a limit already exists.
+
+See `ToGraph::makeQueryGraph` in `ToGraph.cpp` for the full implementation.
