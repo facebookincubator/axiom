@@ -105,20 +105,14 @@ void TestTable::addData(const velox::RowVectorPtr& data) {
   dataRows_ += data->size();
 }
 
-std::vector<SplitSource::SplitAndGroup> TestSplitSource::getSplits(uint64_t) {
-  std::vector<SplitAndGroup> result;
-  if (!done_) {
-    for (size_t i = 0; i < splitCount_; ++i) {
-      result.push_back(
-          {std::make_shared<TestConnectorSplit>(connectorId_, i),
-           kUngroupedGroupId});
-    }
-    done_ = true;
+folly::coro::AsyncGenerator<SplitSource::SplitAndGroup>
+TestSplitSource::getSplitGenerator() {
+  auto self = shared_from_this();
+  for (size_t i = 0; i < splitCount_; ++i) {
+    co_yield SplitAndGroup{
+        std::make_shared<TestConnectorSplit>(connectorId_, i),
+        kUngroupedGroupId};
   }
-  if (result.empty()) {
-    result.push_back({nullptr, kUngroupedGroupId});
-  }
-  return result;
 }
 
 std::vector<PartitionHandlePtr> TestSplitManager::listPartitions(
