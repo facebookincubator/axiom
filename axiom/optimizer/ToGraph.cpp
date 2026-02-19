@@ -1716,13 +1716,10 @@ void ToGraph::finalizeDt(
     const lp::LogicalPlanNode& node,
     DerivedTableP outerDt) {
   VELOX_CHECK_EQ(0, correlatedConjuncts_.size());
-  finalizeSubqueryDt(node, outerDt ? outerDt : newDt());
-}
 
-void ToGraph::finalizeSubqueryDt(
-    const lp::LogicalPlanNode& node,
-    DerivedTableP outerDt) {
-  VELOX_DCHECK_NOT_NULL(outerDt);
+  if (!outerDt) {
+    outerDt = newDt();
+  }
   VELOX_DCHECK_NOT_NULL(currentDt_);
 
   DerivedTableP dt = currentDt_;
