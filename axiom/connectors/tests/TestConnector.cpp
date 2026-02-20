@@ -18,6 +18,9 @@
 #include "velox/exec/TableWriter.h"
 #include "velox/tpch/gen/TpchGen.h"
 
+#include "velox/common/serialization/DeserializationRegistry.h"
+#include "velox/core/ITypedExpr.h"
+
 namespace facebook::axiom::connector {
 
 namespace {
@@ -132,13 +135,12 @@ std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>&,
     SplitOptions) {
-  auto maybeTableHandle =
-      std::dynamic_pointer_cast<const TestTableHandle>(tableHandle);
-  VELOX_CHECK(maybeTableHandle, "Expected TestTableHandle");
-  auto& table =
-      dynamic_cast<const TestTable&>(maybeTableHandle->layout().table());
+  auto table = metadata_->findTable(tableHandle->name());
+  VELOX_CHECK_NOT_NULL(table);
+  auto maybeTable = std::dynamic_pointer_cast<const TestTable>(table);
+  VELOX_CHECK(maybeTable, "Table is not a TestTable: {}", table->name());
   return std::make_shared<TestSplitSource>(
-      tableHandle->connectorId(), table.data().size());
+      tableHandle->connectorId(), maybeTable->data().size());
 }
 
 std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
@@ -237,7 +239,8 @@ velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
     velox::RowTypePtr /* dataColumns */,
     std::optional<LookupKeys> lookupKeys) const {
   rejectedFilters = std::move(filters);
-  return std::make_shared<TestTableHandle>(*this, std::move(columnHandles));
+  return std::make_shared<TestTableHandle>(
+      connector()->connectorId(), table().name(), std::move(columnHandles));
 }
 
 std::shared_ptr<TestTable> TestConnectorMetadata::addTable(
@@ -473,6 +476,90 @@ void TestDataSink::appendData(velox::RowVectorPtr vector) {
   if (vector) {
     table_->addData(vector);
   }
+}
+
+folly::dynamic TestColumnHandle::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = TestColumnHandle::getClassName();
+  obj["columnName"] = name_;
+  obj["type"] = type_->serialize();
+  return obj;
+}
+
+std::shared_ptr<TestColumnHandle> TestColumnHandle::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto name = obj["columnName"].asString();
+  auto type =
+      velox::ISerializable::deserialize<velox::Type>(obj["type"], context);
+  return std::make_shared<TestColumnHandle>(name, type);
+}
+
+void TestColumnHandle::registerSerDe() {
+  velox::registerDeserializerWithContext<TestColumnHandle>();
+}
+
+folly::dynamic TestConnectorSplit::serialize() const {
+  auto obj = serializeBase(TestConnectorSplit::getClassName());
+  obj["index"] = index_;
+  return obj;
+}
+
+std::shared_ptr<TestConnectorSplit> TestConnectorSplit::create(
+    const folly::dynamic& obj) {
+  auto connectorId = obj["connectorId"].asString();
+  auto index = static_cast<size_t>(obj["index"].asInt());
+  return std::make_shared<TestConnectorSplit>(connectorId, index);
+}
+
+void TestConnectorSplit::registerSerDe() {
+  velox::registerDeserializer<TestConnectorSplit>();
+}
+
+folly::dynamic TestTableHandle::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = TestTableHandle::getClassName();
+  obj["connectorId"] = connectorId();
+  obj["tableName"] = tableName_;
+  folly::dynamic columnHandlesArray = folly::dynamic::array;
+  for (const auto& handle : columnHandles_) {
+    columnHandlesArray.push_back(handle->serialize());
+  }
+  obj["columnHandles"] = columnHandlesArray;
+  folly::dynamic filtersArray = folly::dynamic::array;
+  for (const auto& filter : filters_) {
+    filtersArray.push_back(filter->serialize());
+  }
+  obj["filters"] = filtersArray;
+  return obj;
+}
+
+velox::connector::ConnectorTableHandlePtr TestTableHandle::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto connectorId = obj["connectorId"].asString();
+  auto tableName = obj["tableName"].asString();
+
+  std::vector<velox::connector::ColumnHandlePtr> columnHandles;
+  for (const auto& handleObj : obj["columnHandles"]) {
+    columnHandles.push_back(
+        velox::ISerializable::deserialize<velox::connector::ColumnHandle>(
+            handleObj, context));
+  }
+
+  std::vector<velox::core::TypedExprPtr> filters;
+  for (const auto& filterObj : obj["filters"]) {
+    filters.push_back(
+        velox::ISerializable::deserialize<velox::core::ITypedExpr>(
+            filterObj, context));
+  }
+
+  return std::make_shared<TestTableHandle>(
+      connectorId, tableName, std::move(columnHandles), std::move(filters));
+}
+
+void TestTableHandle::registerSerDe() {
+  velox::registerDeserializerWithContext<TestTableHandle>();
 }
 
 } // namespace facebook::axiom::connector

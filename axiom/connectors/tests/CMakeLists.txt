@@ -22,7 +22,7 @@ target_link_libraries(
   velox_connector
 )
 
-add_executable(axiom_test_connector_test TestConnectorTest.cpp)
+add_executable(axiom_test_connector_test TestConnectorTest.cpp TestConnectorSerdeTest.cpp)
 
 add_test(axiom_test_connector_test axiom_test_connector_test)
 
