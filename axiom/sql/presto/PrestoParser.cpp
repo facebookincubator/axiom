@@ -1928,7 +1928,10 @@ class RelationPlanner : public AstVisitor {
   std::shared_ptr<lp::PlanBuilder> newBuilder(
       const lp::PlanBuilder::Scope& outerScope = nullptr) {
     return std::make_shared<lp::PlanBuilder>(
-        context_, /* enableCoersions */ true, outerScope);
+        context_,
+        /*enableCoercions=*/true,
+        /*allowDuplicateAliases=*/true,
+        outerScope);
   }
 
   lp::PlanBuilder::Context context_;

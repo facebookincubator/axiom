@@ -834,7 +834,7 @@ TEST_F(PlanPrinterTest, subquery) {
           .with({
               Col("a") + 1,
               Subquery(
-                  PlanBuilder(context, false, scope)
+                  PlanBuilder(context, false, false, scope)
                       .values(ROW({"a", "b"}, {INTEGER(), INTEGER()}), lookup)
                       .as("r")
                       .filter("l.a = r.a")
@@ -895,7 +895,7 @@ TEST_F(PlanPrinterTest, subquery) {
           .filter(
               Col("a") >
               Subquery(
-                  PlanBuilder(context, false, scope)
+                  PlanBuilder(context, false, false, scope)
                       .values(ROW({"a", "b"}, {INTEGER(), INTEGER()}), lookup)
                       .as("r")
                       .filter("l.a = r.a")
@@ -961,7 +961,7 @@ TEST_F(PlanPrinterTest, inSubquery) {
           .filter(In(
               Col("a"),
               Subquery(
-                  PlanBuilder(context, false, scope)
+                  PlanBuilder(context, false, false, scope)
                       .values(ROW({"a", "b"}, {INTEGER(), INTEGER()}), lookup)
                       .as("r")
                       .filter("l.a = r.a")
@@ -1025,7 +1025,7 @@ TEST_F(PlanPrinterTest, existsSubquery) {
           .as("l")
           .captureScope(scope)
           .filter(Exists(Subquery(
-              PlanBuilder(context, false, scope)
+              PlanBuilder(context, false, false, scope)
                   .values(ROW({"a", "b"}, {INTEGER(), INTEGER()}), lookup)
                   .as("r")
                   .filter("l.a = r.a")
@@ -1083,15 +1083,22 @@ TEST_F(PlanPrinterTest, join) {
   };
 
   auto context = PlanBuilder::Context();
-  auto plan = PlanBuilder(context)
-                  .values(leftType, leftData)
-                  .as("l")
-                  .join(
-                      PlanBuilder(context).values(rightType, rightData).as("r"),
-                      "l.key = r.key",
-                      JoinType::kLeft)
-                  .with({"l.v + r.w as z"})
-                  .build();
+  auto plan =
+      PlanBuilder(
+          context, /*enableCoercions=*/false, /*allowDuplicateAliases=*/true)
+          .values(leftType, leftData)
+          .as("l")
+          .join(
+              PlanBuilder(
+                  context,
+                  /*enableCoercions=*/false,
+                  /*allowDuplicateAliases=*/true)
+                  .values(rightType, rightData)
+                  .as("r"),
+              "l.key = r.key",
+              JoinType::kLeft)
+          .with({"l.v + r.w as z"})
+          .build();
 
   auto lines = toLines(plan);
 
@@ -1155,15 +1162,22 @@ TEST_F(PlanPrinterTest, crossJoin) {
   };
 
   PlanBuilder::Context context;
-  auto plan = PlanBuilder(context)
-                  .values(leftType, leftData)
-                  .as("l")
-                  .join(
-                      PlanBuilder(context).values(rightType, rightData).as("r"),
-                      "",
-                      JoinType::kInner)
-                  .with({"l.v + r.w as z"})
-                  .build();
+  auto plan =
+      PlanBuilder(
+          context, /*enableCoercions=*/false, /*allowDuplicateAliases=*/true)
+          .values(leftType, leftData)
+          .as("l")
+          .join(
+              PlanBuilder(
+                  context,
+                  /*enableCoercions=*/false,
+                  /*allowDuplicateAliases=*/true)
+                  .values(rightType, rightData)
+                  .as("r"),
+              "",
+              JoinType::kInner)
+          .with({"l.v + r.w as z"})
+          .build();
 
   auto lines = toLines(plan);
 

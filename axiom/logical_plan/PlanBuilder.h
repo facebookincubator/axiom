@@ -149,11 +149,25 @@ class PlanBuilder {
       const std::string& name)>;
 
   explicit PlanBuilder(bool enableCoercions = false, Scope outerScope = nullptr)
-      : PlanBuilder{Context{}, enableCoercions, std::move(outerScope)} {}
+      : PlanBuilder{
+            Context{},
+            enableCoercions,
+            /*allowDuplicateAliases=*/false,
+            std::move(outerScope)} {}
 
+  /// @param context Shared state for plan-node IDs and column names.
+  /// @param enableCoercions When true, inserts implicit CASTs for mismatched
+  ///     types.
+  /// @param allowDuplicateAliases When true, allows duplicate column aliases
+  ///     within a single operation (project, aggregate, unnest). Columns with
+  ///     duplicate names become inaccessible by name in subsequent operations,
+  ///     matching Presto semantics.
+  /// @param outerScope Resolves column references from the enclosing query for
+  ///     correlated subqueries.
   explicit PlanBuilder(
       const Context& context,
       bool enableCoercions = false,
+      bool allowDuplicateAliases = false,
       Scope outerScope = nullptr)
       : defaultConnectorId_{context.defaultConnectorId},
         planNodeIdGenerator_{context.planNodeIdGenerator},
@@ -161,6 +175,7 @@ class PlanBuilder {
         outerScope_{std::move(outerScope)},
         sqlParser_{context.sqlParser},
         enableCoercions_{enableCoercions},
+        allowDuplicateAliases_{allowDuplicateAliases},
         resolver_{
             context.queryCtx,
             enableCoercions,
@@ -717,6 +732,7 @@ class PlanBuilder {
 
   // When true, inserts implicit CAST nodes to coerce mismatched types.
   const bool enableCoercions_;
+  const bool allowDuplicateAliases_;
 
   // Root of the plan tree built so far. Null before the first leaf node
   // (values or tableScan) is added.

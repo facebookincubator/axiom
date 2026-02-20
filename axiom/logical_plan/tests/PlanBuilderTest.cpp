@@ -74,6 +74,85 @@ TEST_F(PlanBuilderTest, outputNames) {
   EXPECT_EQ("expr_0", outputNames[2]);
 }
 
+TEST_F(PlanBuilderTest, duplicateAliasAllowed) {
+  PlanBuilder::Context context;
+
+  auto makeBuilder = [&context]() {
+    return PlanBuilder(
+        context,
+        /*enableCoercions=*/false,
+        /*allowDuplicateAliases=*/true);
+  };
+
+  // Project: duplicate aliases get unique physical names.
+  {
+    auto builder =
+        makeBuilder()
+            .values(ROW({"a", "b"}, BIGINT()), ValuesNode::Variants{})
+            .with({"a as x", "b as x"});
+
+    auto names = builder.findOrAssignOutputNames();
+    EXPECT_EQ(4, names.size());
+    EXPECT_EQ("x", names[2]);
+    EXPECT_TRUE(names[3].starts_with("x_"));
+  }
+
+  // Lookup on duplicate name fails.
+  {
+    auto builder =
+        makeBuilder()
+            .values(ROW({"a", "b"}, BIGINT()), ValuesNode::Variants{})
+            .with({"a as x", "b as x"});
+
+    VELOX_ASSERT_THROW(builder.project({"x"}), "Cannot resolve");
+  }
+
+  // Unnest: duplicate names allowed.
+  {
+    auto builder = makeBuilder()
+                       .values(
+                           ROW({"a", "arr"}, {BIGINT(), ARRAY(BIGINT())}),
+                           ValuesNode::Variants{})
+                       .unnest({Col("arr").unnestAs("a")});
+
+    auto names = builder.findOrAssignOutputNames();
+    EXPECT_EQ(3, names.size());
+    EXPECT_TRUE(names[0].starts_with("a"));
+    EXPECT_TRUE(names[2].starts_with("a"));
+  }
+
+  // Aggregate: duplicate aliases get unique physical names.
+  {
+    auto builder =
+        makeBuilder()
+            .values(ROW({"a", "b"}, BIGINT()), ValuesNode::Variants{})
+            .aggregate({}, {"sum(a) as x", "sum(b) as x"});
+
+    auto names = builder.findOrAssignOutputNames();
+    EXPECT_EQ(2, names.size());
+    EXPECT_TRUE(names[0].starts_with("x"));
+    EXPECT_TRUE(names[1].starts_with("x"));
+    EXPECT_NE(names[0], names[1]);
+  }
+}
+
+TEST_F(PlanBuilderTest, duplicateAliasThrows) {
+  // Duplicate aliases throw by default.
+  VELOX_ASSERT_THROW(
+      PlanBuilder()
+          .values(ROW({"a", "b"}, BIGINT()), ValuesNode::Variants{})
+          .with({"a as x", "b as x"}),
+      "Duplicate name: x");
+
+  VELOX_ASSERT_THROW(
+      PlanBuilder()
+          .values(
+              ROW({"a", "arr"}, {BIGINT(), ARRAY(BIGINT())}),
+              ValuesNode::Variants{})
+          .unnest({Col("arr").unnestAs("a")}),
+      "Duplicate name: a");
+}
+
 TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
   auto startMatcher = [] { return test::LogicalPlanMatcherBuilder().values(); };
 
