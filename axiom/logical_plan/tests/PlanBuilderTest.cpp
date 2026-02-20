@@ -137,20 +137,12 @@ TEST_F(PlanBuilderTest, duplicateAliasAllowed) {
 }
 
 TEST_F(PlanBuilderTest, duplicateAliasThrows) {
-  // Duplicate aliases throw by default.
+  // Duplicate aliases throw by default in project/aggregate operations.
   VELOX_ASSERT_THROW(
       PlanBuilder()
           .values(ROW({"a", "b"}, BIGINT()), ValuesNode::Variants{})
           .with({"a as x", "b as x"}),
       "Duplicate name: x");
-
-  VELOX_ASSERT_THROW(
-      PlanBuilder()
-          .values(
-              ROW({"a", "arr"}, {BIGINT(), ARRAY(BIGINT())}),
-              ValuesNode::Variants{})
-          .unnest({Col("arr").unnestAs("a")}),
-      "Duplicate name: a");
 }
 
 TEST_F(PlanBuilderTest, setOperationTypeCoercion) {

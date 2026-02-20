@@ -70,14 +70,13 @@ class NameMappings {
   void setAlias(const std::string& alias);
 
   /// Merges mappings from 'other' into this. Removes unqualified access to
-  /// non-unique names. If 'allowDuplicates' is false, throws on duplicate
-  /// unqualified names instead of removing access.
+  /// non-unique names.
   ///
   /// @pre IDs are unique across 'this' and 'other'. This expectation is not
   /// verified explicitly. Violations would lead to undefined behavior.
   ///
   /// Used in PlanBuilder::join() and PlanBuilder::unnest() APIs.
-  void merge(const NameMappings& other, bool allowDuplicates = true);
+  void merge(const NameMappings& other);
 
   /// Enables unqualified access to unique names.
   void enableUnqualifiedAccess();

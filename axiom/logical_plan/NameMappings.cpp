@@ -101,11 +101,10 @@ void NameMappings::setAlias(const std::string& alias) {
   }
 }
 
-void NameMappings::merge(const NameMappings& other, bool allowDuplicates) {
+void NameMappings::merge(const NameMappings& other) {
   for (const auto& [name, id] : other.mappings_) {
     if (mappings_.contains(name)) {
       VELOX_CHECK(!name.alias.has_value());
-      VELOX_USER_CHECK(allowDuplicates, "Duplicate name: {}", name.toString());
       mappings_.erase(name);
     } else {
       mappings_.emplace(name, id);
