@@ -120,6 +120,19 @@ class PrestoParserTest : public testing::Test {
     }
   }
 
+  /// Verifies that EXPLAIN can parse DDL statements (CREATE TABLE, DROP TABLE).
+  /// DDL statements do not have logical plans, so we only verify parsing.
+  void testExplainDdl(std::string_view sql, SqlStatementKind expectedKind) {
+    SCOPED_TRACE(sql);
+    auto parser = makeParser();
+
+    auto statement = parser.parse(sql);
+    ASSERT_TRUE(statement->isExplain());
+
+    auto* explainStatement = statement->as<ExplainStatement>();
+    ASSERT_EQ(explainStatement->statement()->kind(), expectedKind);
+  }
+
   void testSql(
       std::string_view sql,
       lp::test::LogicalPlanMatcherBuilder& matcher,
@@ -1708,6 +1721,24 @@ TEST_F(PrestoParserTest, explainInsert) {
     auto matcher = lp::test::LogicalPlanMatcherBuilder().values().tableWrite();
     testExplain("EXPLAIN INSERT INTO region VALUES (1, 'foo', 'bar')", matcher);
   }
+}
+
+TEST_F(PrestoParserTest, explainCreateTable) {
+  testExplainDdl(
+      "EXPLAIN CREATE TABLE t (id INTEGER)", SqlStatementKind::kCreateTable);
+  testExplainDdl(
+      "EXPLAIN CREATE TABLE IF NOT EXISTS t (id INTEGER)",
+      SqlStatementKind::kCreateTable);
+  testExplainDdl(
+      "EXPLAIN CREATE TABLE t (id INTEGER, ds VARCHAR) "
+      "WITH (partitioned_by = ARRAY['ds'])",
+      SqlStatementKind::kCreateTable);
+}
+
+TEST_F(PrestoParserTest, explainDropTable) {
+  testExplainDdl("EXPLAIN DROP TABLE t", SqlStatementKind::kDropTable);
+  testExplainDdl(
+      "EXPLAIN DROP TABLE IF EXISTS u", SqlStatementKind::kDropTable);
 }
 
 TEST_F(PrestoParserTest, showCatalogs) {
