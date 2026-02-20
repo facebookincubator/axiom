@@ -365,172 +365,173 @@ class RelationPlanner : public AstVisitor {
       return;
     }
 
-    if (relation->is(NodeType::kTable)) {
-      auto* table = relation->as<Table>();
+    switch (relation->type()) {
+      case NodeType::kTable:
+        return processTable(*relation->as<Table>());
+      case NodeType::kSampledRelation:
+        return processSampledRelation(*relation->as<SampledRelation>());
+      case NodeType::kAliasedRelation:
+        return processAliasedRelation(*relation->as<AliasedRelation>());
+      case NodeType::kTableSubquery:
+        return processTableSubquery(*relation->as<TableSubquery>());
+      case NodeType::kUnnest:
+        return processUnnest(*relation->as<Unnest>());
+      case NodeType::kJoin:
+        return processJoin(*relation->as<Join>());
+      default:
+        VELOX_NYI(
+            "Relation type is not supported yet: {}",
+            NodeTypeName::toName(relation->type()));
+    }
+  }
 
-      const auto tableName = canonicalizeName(table->name()->suffix());
+  void processTable(const Table& table) {
+    const auto tableName = canonicalizeName(table.name()->suffix());
 
-      auto withIt = withQueries_.find(table->name()->suffix());
-      if (withIt == withQueries_.end()) {
-        withIt = withQueries_.find(tableName);
-      }
+    auto withIt = withQueries_.find(table.name()->suffix());
+    if (withIt == withQueries_.end()) {
+      withIt = withQueries_.find(tableName);
+    }
 
-      if (withIt != withQueries_.end()) {
-        // TODO Change WithQuery to store Query and not Statement.
-        processQuery(dynamic_cast<Query*>(withIt->second->query().get()));
+    if (withIt != withQueries_.end()) {
+      // TODO Change WithQuery to store Query and not Statement.
+      processQuery(dynamic_cast<Query*>(withIt->second->query().get()));
+    } else {
+      const auto& [connectorId, qualifiedName] = toConnectorTable(
+          *table.name(), context_.defaultConnectorId, defaultSchema_);
+
+      auto* metadata =
+          facebook::axiom::connector::ConnectorMetadata::metadata(connectorId);
+
+      if (metadata->findTable(qualifiedName) != nullptr) {
+        builder_->tableScan(
+            connectorId, qualifiedName, /*includeHiddenColumns=*/true);
+      } else if (auto view = metadata->findView(qualifiedName)) {
+        views_.emplace(
+            std::make_pair(connectorId, qualifiedName), view->text());
+
+        VELOX_CHECK_NOT_NULL(parseSql_);
+        auto query = parseSql_(view->text());
+        processQuery(dynamic_cast<Query*>(query.get()));
       } else {
-        const auto& [connectorId, tableName] = toConnectorTable(
-            *table->name(), context_.defaultConnectorId, defaultSchema_);
-
-        auto* metadata =
-            facebook::axiom::connector::ConnectorMetadata::metadata(
-                connectorId);
-
-        if (metadata->findTable(tableName) != nullptr) {
-          builder_->tableScan(
-              connectorId, tableName, /*includeHiddenColumns=*/true);
-        } else if (auto view = metadata->findView(tableName)) {
-          views_.emplace(std::make_pair(connectorId, tableName), view->text());
-
-          VELOX_CHECK_NOT_NULL(parseSql_);
-          auto query = parseSql_(view->text());
-          processQuery(dynamic_cast<Query*>(query.get()));
-        } else {
-          VELOX_USER_FAIL(
-              "Table not found: {}", table->name()->fullyQualifiedName());
-        }
+        VELOX_USER_FAIL(
+            "Table not found: {}", table.name()->fullyQualifiedName());
       }
-
-      builder_->as(tableName);
-      return;
     }
 
-    if (relation->is(NodeType::kSampledRelation)) {
-      auto* sampledRelation = relation->as<SampledRelation>();
+    builder_->as(tableName);
+  }
 
-      processFrom(sampledRelation->relation());
+  void processSampledRelation(const SampledRelation& sampledRelation) {
+    processFrom(sampledRelation.relation());
 
-      lp::SampleNode::SampleMethod sampleMethod;
-      switch (sampledRelation->sampleType()) {
-        case SampledRelation::Type::kBernoulli:
-          sampleMethod = lp::SampleNode::SampleMethod::kBernoulli;
-          break;
-        case SampledRelation::Type::kSystem:
-          sampleMethod = lp::SampleNode::SampleMethod::kSystem;
-          break;
-        default:
-          VELOX_USER_FAIL("Unsupported sample type");
-      }
-
-      auto percentage = toExpr(sampledRelation->samplePercentage());
-      builder_->sample(percentage.expr(), sampleMethod);
-      return;
+    lp::SampleNode::SampleMethod sampleMethod;
+    switch (sampledRelation.sampleType()) {
+      case SampledRelation::Type::kBernoulli:
+        sampleMethod = lp::SampleNode::SampleMethod::kBernoulli;
+        break;
+      case SampledRelation::Type::kSystem:
+        sampleMethod = lp::SampleNode::SampleMethod::kSystem;
+        break;
+      default:
+        VELOX_USER_FAIL("Unsupported sample type");
     }
 
-    if (relation->is(NodeType::kAliasedRelation)) {
-      auto* aliasedRelation = relation->as<AliasedRelation>();
+    auto percentage = toExpr(sampledRelation.samplePercentage());
+    builder_->sample(percentage.expr(), sampleMethod);
+  }
 
-      processFrom(aliasedRelation->relation());
+  void processAliasedRelation(const AliasedRelation& aliasedRelation) {
+    processFrom(aliasedRelation.relation());
 
-      const auto& columnAliases = aliasedRelation->columnNames();
-      if (!columnAliases.empty()) {
-        // Add projection to rename columns.
-        const size_t numColumns = columnAliases.size();
+    const auto& columnAliases = aliasedRelation.columnNames();
+    if (!columnAliases.empty()) {
+      // Add projection to rename columns.
+      const size_t numColumns = columnAliases.size();
 
-        std::vector<lp::ExprApi> renames;
-        renames.reserve(numColumns);
-        for (auto i = 0; i < numColumns; ++i) {
-          renames.push_back(
-              lp::Col(builder_->findOrAssignOutputNameAt(i))
-                  .as(canonicalizeIdentifier(*columnAliases.at(i))));
-        }
-
-        builder_->project(renames);
+      std::vector<lp::ExprApi> renames;
+      renames.reserve(numColumns);
+      for (auto i = 0; i < numColumns; ++i) {
+        renames.push_back(
+            lp::Col(builder_->findOrAssignOutputNameAt(i))
+                .as(canonicalizeIdentifier(*columnAliases.at(i))));
       }
 
-      builder_->as(canonicalizeIdentifier(*aliasedRelation->alias()));
-      return;
+      builder_->project(renames);
     }
 
-    if (relation->is(NodeType::kTableSubquery)) {
-      auto* subquery = relation->as<TableSubquery>();
-      auto query = subquery->query();
+    builder_->as(canonicalizeIdentifier(*aliasedRelation.alias()));
+  }
 
-      if (query->is(NodeType::kQuery)) {
-        processQuery(query->as<Query>());
-        return;
-      }
+  void processTableSubquery(const TableSubquery& subquery) {
+    auto query = subquery.query();
 
-      VELOX_NYI(
-          "Subquery type is not supported yet: {}",
-          NodeTypeName::toName(query->type()));
-    }
-
-    if (relation->is(NodeType::kUnnest)) {
-      auto* unnest = relation->as<Unnest>();
-      std::vector<lp::ExprApi> inputs;
-      for (const auto& expr : unnest->expressions()) {
-        inputs.push_back(toExpr(expr));
-      }
-
-      builder_->unnest(inputs, unnest->isWithOrdinality());
-      return;
-    }
-
-    if (relation->is(NodeType::kJoin)) {
-      auto* join = relation->as<Join>();
-      processFrom(join->left());
-
-      if (auto unnest = tryGetUnnest(join->right())) {
-        addCrossJoinUnnest(*unnest->first, unnest->second);
-        return;
-      }
-
-      auto leftBuilder = builder_;
-
-      lp::PlanBuilder::Scope leftScope;
-      leftBuilder->captureScope(leftScope);
-
-      builder_ = newBuilder(leftScope);
-      processFrom(join->right());
-      auto rightBuilder = builder_;
-
-      // Create a combined scope that can resolve columns from both sides of
-      // the join. Subqueries in the ON clause may contain correlated
-      // references to either side.
-      lp::PlanBuilder::Scope rightScope;
-      rightBuilder->captureScope(rightScope);
-
-      lp::PlanBuilder::Scope joinScope =
-          [leftScope, rightScope](const auto& alias, const auto& name) {
-            if (auto expr = leftScope(alias, name)) {
-              return expr;
-            }
-            return rightScope(alias, name);
-          };
-
-      builder_ = newBuilder(joinScope);
-
-      std::optional<lp::ExprApi> condition;
-
-      if (const auto& criteria = join->criteria()) {
-        if (criteria->is(NodeType::kJoinOn)) {
-          condition = toExpr(criteria->as<JoinOn>()->expression());
-        } else {
-          VELOX_NYI(
-              "Join criteria type is not supported yet: {}",
-              NodeTypeName::toName(criteria->type()));
-        }
-      }
-
-      builder_ = leftBuilder;
-      builder_->join(*rightBuilder, condition, toJoinType(join->joinType()));
+    if (query->is(NodeType::kQuery)) {
+      processQuery(query->as<Query>());
       return;
     }
 
     VELOX_NYI(
-        "Relation type is not supported yet: {}",
-        NodeTypeName::toName(relation->type()));
+        "Subquery type is not supported yet: {}",
+        NodeTypeName::toName(query->type()));
+  }
+
+  void processUnnest(const Unnest& unnest) {
+    std::vector<lp::ExprApi> inputs;
+    for (const auto& expr : unnest.expressions()) {
+      inputs.push_back(toExpr(expr));
+    }
+
+    builder_->unnest(inputs, unnest.isWithOrdinality());
+  }
+
+  void processJoin(const Join& join) {
+    processFrom(join.left());
+
+    if (auto unnest = tryGetUnnest(join.right())) {
+      addCrossJoinUnnest(*unnest->first, unnest->second);
+      return;
+    }
+
+    auto leftBuilder = builder_;
+
+    lp::PlanBuilder::Scope leftScope;
+    leftBuilder->captureScope(leftScope);
+
+    builder_ = newBuilder(leftScope);
+    processFrom(join.right());
+    auto rightBuilder = builder_;
+
+    // Create a combined scope that can resolve columns from both sides of
+    // the join. Subqueries in the ON clause may contain correlated
+    // references to either side.
+    lp::PlanBuilder::Scope rightScope;
+    rightBuilder->captureScope(rightScope);
+
+    lp::PlanBuilder::Scope joinScope =
+        [leftScope, rightScope](const auto& alias, const auto& name) {
+          if (auto expr = leftScope(alias, name)) {
+            return expr;
+          }
+          return rightScope(alias, name);
+        };
+
+    builder_ = newBuilder(joinScope);
+
+    std::optional<lp::ExprApi> condition;
+
+    if (const auto& criteria = join.criteria()) {
+      if (criteria->is(NodeType::kJoinOn)) {
+        condition = toExpr(criteria->as<JoinOn>()->expression());
+      } else {
+        VELOX_NYI(
+            "Join criteria type is not supported yet: {}",
+            NodeTypeName::toName(criteria->type()));
+      }
+    }
+
+    builder_ = leftBuilder;
+    builder_->join(*rightBuilder, condition, toJoinType(join.joinType()));
   }
 
   void addProject(const std::vector<SelectItemPtr>& selectItems) {
