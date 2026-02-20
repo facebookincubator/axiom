@@ -266,6 +266,38 @@ class SubfieldTest : public QueryTestBase,
                            : fmt::format("[{}]{}", first, rest);
   };
 
+  void testDtSubfields() {
+    declareGenies();
+
+    // Query 1: select idl[1] from (select id_list_features[200200] as idl from
+    // features limit 2);
+    {
+      auto logicalPlan = parseSelect(
+          "select idl[1] from (select id_list_features[200200] as idl from features limit 2)",
+          kHiveConnectorId);
+      ASSERT_NO_THROW(runVelox(logicalPlan));
+    }
+
+    // Query 2: select g[3][200200] from (select genie(uid, ts, float_features,
+    // id_list_features, id_score_list_features) g from features limit 2);
+    {
+      auto logicalPlan = parseSelect(
+          "select g[3][200200] from (select genie(uid, ts, float_features, id_list_features, id_score_list_features) g from features limit 2)",
+          kHiveConnectorId);
+      ASSERT_NO_THROW(runVelox(logicalPlan));
+    }
+
+    // Query 3: select g[3][200200] from (select exploding_genie(uid, ts,
+    // float_features, id_list_features, id_score_list_features) g from features
+    // limit 2);
+    {
+      auto logicalPlan = parseSelect(
+          "select g[3][200200] from (select exploding_genie(uid, ts, float_features, id_list_features, id_score_list_features) g from features limit 2)",
+          kHiveConnectorId);
+      ASSERT_NO_THROW(runVelox(logicalPlan));
+    }
+  }
+
   void testMakeRowFromMap() {
     lp::PlanBuilder::Context ctx(
         exec::test::kHiveConnectorId, getQueryCtx(), resolveDfFunction);
@@ -508,6 +540,8 @@ TEST_P(SubfieldTest, maps) {
   auto vectors = createFeaturesTable();
 
   testMakeRowFromMap();
+
+  testDtSubfields();
 
   {
     lp::PlanBuilder::Context ctx(kHiveConnectorId);
