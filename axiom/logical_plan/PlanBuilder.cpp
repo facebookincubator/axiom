@@ -999,7 +999,7 @@ PlanBuilder& PlanBuilder::unnest(
       std::move(ordinalityName),
       flattenArrayOfRows);
 
-  outputMapping_->merge(unnestMapping, allowDuplicateAliases_);
+  outputMapping_->merge(unnestMapping);
 
   return *this;
 }
@@ -1054,7 +1054,7 @@ PlanBuilder& PlanBuilder::join(
   // User-facing column names may have duplicates between left and right side.
   // Columns that are unique can be referenced as is. Columns that are not
   // unique must be referenced using an alias.
-  outputMapping_->merge(*right.outputMapping_, allowDuplicateAliases_);
+  outputMapping_->merge(*right.outputMapping_);
 
   auto inputRowType = node_->outputType()->unionWith(right.node_->outputType());
 

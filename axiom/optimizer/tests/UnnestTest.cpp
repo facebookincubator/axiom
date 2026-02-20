@@ -898,9 +898,7 @@ TEST_F(UnnestTest, limit) {
 
 TEST_F(UnnestTest, join) {
   auto startLogicalPlan = [&](lp::PlanBuilder::Context& ctx) {
-    return lp::PlanBuilder{
-        ctx, /*enableCoercions=*/false, /*allowDuplicateAliases=*/true}
-        .values({rowVector_});
+    return lp::PlanBuilder{ctx}.values({rowVector_});
   };
 
   auto startReferencePlan = [&](auto& planNodeIdGenerator) {
