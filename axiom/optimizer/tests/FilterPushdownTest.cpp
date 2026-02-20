@@ -169,9 +169,7 @@ TEST_F(FilterPushdownTest, orWithSubsumedDisjunct) {
 }
 
 // Verify that multi-table OR filter with per-table extraction preserves the
-// cross-combination filter. Per-table filters like n_name IN ('FRANCE',
-// 'JAPAN') can be extracted and pushed down, but the original OR must be kept
-// as a remaining filter.
+// cross-combination filter.
 TEST_F(FilterPushdownTest, multiTableOrFilter) {
   lp::PlanBuilder::Context ctx(exec::test::kHiveConnectorId);
   auto logicalPlan = lp::PlanBuilder(ctx)
@@ -182,18 +180,13 @@ TEST_F(FilterPushdownTest, multiTableOrFilter) {
                              "(n_name = 'JAPAN' AND r_name = 'ASIA'))")
                          .build();
 
-  // TODO: Per-table filters are pushed down as remaining filters because
-  // ExprToSubfieldFilterParser::makeOrFilter doesn't support merging
-  // VARCHAR equality filters into BytesValues IN filters.
-  // https://github.com/facebookincubator/velox/issues/16440
   auto plan = toSingleNodePlan(logicalPlan);
   auto matcher =
       core::PlanMatcherBuilder()
-          .hiveScan("nation", {}, "n_name = 'FRANCE' OR n_name = 'JAPAN'")
+          .hiveScan("nation", test::in("n_name", {"FRANCE", "JAPAN"}))
           .hashJoin(
               core::PlanMatcherBuilder()
-                  .hiveScan(
-                      "region", {}, "r_name = 'EUROPE' OR r_name = 'ASIA'")
+                  .hiveScan("region", test::in("r_name", {"ASIA", "EUROPE"}))
                   .build(),
               velox::core::JoinType::kInner)
           .filter(

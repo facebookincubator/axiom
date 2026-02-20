@@ -267,6 +267,13 @@ inline auto gt(const std::string& name, const std::string& value) {
       name, velox::exec::greaterThan(value));
 }
 
+inline auto in(
+    const std::string& name,
+    const std::vector<std::string>& values) {
+  return velox::common::test::singleSubfieldFilter(
+      name, velox::exec::in(values));
+}
+
 } // namespace facebook::axiom::optimizer::test
 
 #define AXIOM_ASSERT_PLAN(plan, matcher)        \
