@@ -333,10 +333,27 @@ class TestConnectorMetadata : public ConnectorMetadata {
     return dropTable(nullptr, tableName, true);
   }
 
+  ViewPtr findView(std::string_view name) override;
+
+  /// Register a view with the given name, output schema, and SQL text.
+  void createView(
+      std::string_view name,
+      velox::RowTypePtr type,
+      std::string_view text);
+
+  /// Remove a view by name. Returns true if the view existed.
+  bool dropView(std::string_view name);
+
  private:
   TestConnector* connector_;
   folly::F14FastMap<std::string, std::shared_ptr<TestTable>> tables_;
   std::unique_ptr<TestSplitManager> splitManager_;
+
+  struct ViewDefinition {
+    velox::RowTypePtr type;
+    std::string text;
+  };
+  folly::F14FastMap<std::string, ViewDefinition> views_;
 };
 
 /// At DataSource creation time, the data contained in the corresponding Table
@@ -460,6 +477,15 @@ class TestConnector : public velox::connector::Connector {
 
   /// Registers all 8 TPC-H tables with their canonical schemas.
   void addTpchTables();
+
+  /// Register a view with the given name, output schema, and SQL text.
+  void createView(
+      std::string_view name,
+      velox::RowTypePtr type,
+      std::string_view text);
+
+  /// Remove a view by name. Returns true if the view existed.
+  bool dropView(std::string_view name);
 
  private:
   const std::shared_ptr<TestConnectorMetadata> metadata_;

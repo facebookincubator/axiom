@@ -16,7 +16,14 @@ add_library(axiom_logical_plan_matcher LogicalPlanMatcher.cpp)
 
 target_link_libraries(axiom_logical_plan_matcher axiom_logical_plan GTest::gtest)
 
-add_executable(axiom_sql_presto_test PrestoParserTest.cpp TableExtractorTest.cpp)
+add_executable(
+  axiom_sql_presto_test
+  DdlParserTest.cpp
+  ExpressionParserTest.cpp
+  PrestoParserTest.cpp
+  PrestoParserTestBase.cpp
+  TableExtractorTest.cpp
+)
 
 add_test(axiom_sql_presto_test axiom_sql_presto_test)
 
@@ -26,8 +33,6 @@ target_link_libraries(
   axiom_logical_plan_builder
   axiom_sql_presto_parser
   axiom_test_connector
-  axiom_tpch_connector_metadata
-  velox_tpch_connector
   GTest::gmock
   glog::glog
   GTest::gtest
