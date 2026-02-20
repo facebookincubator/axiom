@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/container/F14Map.h>
+#include <folly/dynamic.h>
 #include "axiom/connectors/ConnectorMetadata.h"
 
 namespace facebook::axiom::connector {
@@ -157,12 +158,17 @@ class TestSplitSource : public SplitSource {
   bool done_{false};
 };
 
+class TestConnectorMetadata;
+
 /// SplitManager embedded in the TestConnector. Returns one
 /// default-initialized PartitionHandle upon call to listPartitions.
 /// Generates a TestSplitSource that produces one TestConnectorSplit
 /// per RowVector in the table's data_ vector.
 class TestSplitManager : public ConnectorSplitManager {
  public:
+  explicit TestSplitManager(TestConnectorMetadata* metadata)
+      : metadata_(metadata) {}
+
   std::vector<PartitionHandlePtr> listPartitions(
       const ConnectorSessionPtr& session,
       const velox::connector::ConnectorTableHandlePtr& tableHandle) override;
@@ -172,6 +178,9 @@ class TestSplitManager : public ConnectorSplitManager {
       const velox::connector::ConnectorTableHandlePtr& tableHandle,
       const std::vector<PartitionHandlePtr>& partitions,
       SplitOptions options = {}) override;
+
+ private:
+  TestConnectorMetadata* metadata_;
 };
 
 class TestColumnHandle : public velox::connector::ColumnHandle {
@@ -186,6 +195,16 @@ class TestColumnHandle : public velox::connector::ColumnHandle {
   const velox::TypePtr& type() const {
     return type_;
   }
+
+  folly::dynamic serialize() const override;
+
+  static std::shared_ptr<TestColumnHandle> create(
+      const folly::dynamic& obj,
+      void* context);
+
+  static void registerSerDe();
+
+  VELOX_DEFINE_CLASS_NAME(TestColumnHandle)
 
  private:
   const std::string name_;
@@ -204,33 +223,38 @@ class TestConnectorSplit : public velox::connector::ConnectorSplit {
     return index_;
   }
 
+  folly::dynamic serialize() const override;
+
+  static std::shared_ptr<TestConnectorSplit> create(const folly::dynamic& obj);
+
+  static void registerSerDe();
+
+  VELOX_DEFINE_CLASS_NAME(TestConnectorSplit)
+
  private:
   const size_t index_;
 };
 
-/// The layout corresponding to the handle is provided at
-/// initialization time.
+/// Stores a connector ID and table name to identify the table, along
+/// with column handles and optional filters.
 class TestTableHandle : public velox::connector::ConnectorTableHandle {
  public:
   TestTableHandle(
-      const TableLayout& layout,
+      std::string connectorId,
+      std::string tableName,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       std::vector<velox::core::TypedExprPtr> filters = {})
-      : ConnectorTableHandle(layout.connector()->connectorId()),
-        layout_(layout),
+      : ConnectorTableHandle(std::move(connectorId)),
+        tableName_(std::move(tableName)),
         columnHandles_(std::move(columnHandles)),
         filters_(std::move(filters)) {}
 
   const std::string& name() const override {
-    return layout_.table().name();
+    return tableName_;
   }
 
   std::string toString() const override {
-    return name();
-  }
-
-  const TableLayout& layout() const {
-    return layout_;
+    return tableName_;
   }
 
   const std::vector<velox::core::TypedExprPtr>& filters() const {
@@ -241,8 +265,18 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
     return columnHandles_;
   }
 
+  folly::dynamic serialize() const override;
+
+  static velox::connector::ConnectorTableHandlePtr create(
+      const folly::dynamic& obj,
+      void* context);
+
+  static void registerSerDe();
+
+  VELOX_DEFINE_CLASS_NAME(TestTableHandle)
+
  private:
-  const TableLayout& layout_;
+  const std::string tableName_;
   const std::vector<velox::connector::ColumnHandlePtr> columnHandles_;
   const std::vector<velox::core::TypedExprPtr> filters_;
 };
@@ -273,7 +307,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
  public:
   explicit TestConnectorMetadata(TestConnector* connector)
       : connector_(connector),
-        splitManager_(std::make_unique<TestSplitManager>()) {}
+        splitManager_(std::make_unique<TestSplitManager>(this)) {}
 
   TablePtr findTable(std::string_view name) override;
 
@@ -460,6 +494,12 @@ class TestConnector : public velox::connector::Connector {
 
   /// Registers all 8 TPC-H tables with their canonical schemas.
   void addTpchTables();
+
+  static void registerSerDe() {
+    TestTableHandle::registerSerDe();
+    TestColumnHandle::registerSerDe();
+    TestConnectorSplit::registerSerDe();
+  }
 
  private:
   const std::shared_ptr<TestConnectorMetadata> metadata_;
