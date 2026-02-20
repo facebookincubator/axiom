@@ -533,35 +533,29 @@ class RelationPlanner : public AstVisitor {
         NodeTypeName::toName(relation->type()));
   }
 
-  void addProject(const std::vector<SelectItemPtr>& selectItems) {
-    // SELECT * FROM ...
-    const bool isSingleSelectStar = selectItems.size() == 1 &&
-        selectItems.at(0)->is(NodeType::kAllColumns) &&
-        selectItems.at(0)->as<AllColumns>()->prefix() == nullptr;
-    if (isSingleSelectStar) {
-      builder_->dropHiddenColumns();
-      return;
-    }
+  // Processes SELECT items into projection expressions and an alias map.
+  // The alias map maps alias column references to their underlying expressions
+  // for ORDER BY resolution.
+  std::pair<std::vector<lp::ExprApi>, ExprMap<core::ExprPtr>>
+  buildSelectExpressions(const std::vector<SelectItemPtr>& selectItems) {
+    std::vector<lp::ExprApi> projections;
+    ExprMap<core::ExprPtr> aliasMap;
 
-    std::vector<lp::ExprApi> exprs;
     for (const auto& item : selectItems) {
       if (item->is(NodeType::kAllColumns)) {
         auto* allColumns = item->as<AllColumns>();
 
         std::vector<std::string> columnNames;
         if (allColumns->prefix() != nullptr) {
-          // SELECT t.*
           columnNames = builder_->findOrAssignOutputNames(
               /*includeHiddenColumns=*/false, allColumns->prefix()->suffix());
-
         } else {
-          // SELECT *
           columnNames =
               builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
         }
 
         for (const auto& name : columnNames) {
-          exprs.push_back(lp::Col(name));
+          projections.push_back(lp::Col(name));
         }
       } else {
         VELOX_CHECK(item->is(NodeType::kSingleColumn));
@@ -570,13 +564,28 @@ class RelationPlanner : public AstVisitor {
         lp::ExprApi expr = toExpr(singleColumn->expression());
 
         if (singleColumn->alias() != nullptr) {
-          expr = expr.as(canonicalizeIdentifier(*singleColumn->alias()));
+          auto alias = canonicalizeIdentifier(*singleColumn->alias());
+          aliasMap.emplace(lp::Col(alias).expr(), expr.expr());
+          expr = expr.as(alias);
         }
-        exprs.push_back(expr);
+
+        projections.push_back(expr);
       }
     }
 
-    builder_->project(exprs);
+    return {std::move(projections), std::move(aliasMap)};
+  }
+
+  // Adds a projection node for the SELECT items.
+  void addProject(
+      const std::vector<lp::ExprApi>& projections,
+      const bool isStarSelect) {
+    // SELECT * FROM ... — no projection needed, just drop hidden columns.
+    if (isStarSelect) {
+      builder_->dropHiddenColumns();
+    } else {
+      builder_->project(projections);
+    }
   }
 
   lp::ExprApi toSortingKey(const ExpressionPtr& expr) {
@@ -1071,16 +1080,45 @@ class RelationPlanner : public AstVisitor {
     }
   }
 
-  void addOrderBy(const OrderByPtr& orderBy) {
+  // Adds a sort node to the plan builder based on a specified ORDER BY clause.
+  // When projections are provided, ordinal references resolve against them.
+  // When an aliasMap is provided, resolves alias references in ORDER BY
+  // expressions.
+  void addOrderBy(
+      const OrderByPtr& orderBy,
+      const std::vector<lp::ExprApi>& projections = {},
+      const ExprMap<core::ExprPtr>& aliasMap = {}) {
     if (orderBy == nullptr) {
       return;
     }
 
+    auto toSortKey = [&](const ExpressionPtr& sortKey) -> lp::ExprApi {
+      if (sortKey->is(NodeType::kLongLiteral)) {
+        const auto ordinal = sortKey->as<LongLiteral>()->value();
+        if (!projections.empty()) {
+          VELOX_CHECK_GE(ordinal, 1);
+          VELOX_CHECK_LE(
+              ordinal,
+              projections.size(),
+              "GROUP BY position {} is not in select list",
+              ordinal);
+          return projections.at(ordinal - 1);
+        }
+        return lp::Col(builder_->findOrAssignOutputNameAt(ordinal - 1));
+      }
+      return toExpr(sortKey);
+    };
+
     std::vector<lp::SortKey> keys;
 
-    const auto& sortItems = orderBy->sortItems();
-    for (const auto& item : sortItems) {
-      auto expr = toSortingKey(item->sortKey());
+    for (const auto& item : orderBy->sortItems()) {
+      lp::ExprApi expr = toSortKey(item->sortKey());
+
+      if (!aliasMap.empty()) {
+        auto resolved = replaceInputs(expr.expr(), aliasMap);
+        expr = lp::ExprApi(resolved, expr.name());
+      }
+
       keys.emplace_back(expr, item->isAscending(), item->isNullsFirst());
     }
 
@@ -1148,8 +1186,11 @@ class RelationPlanner : public AstVisitor {
     // WHERE a > 1 -> builder.filter("a > 1")
     addFilter(node->where());
 
+    const bool isDistinct = node->select()->isDistinct();
     const auto& selectItems = node->select()->selectItems();
-    const bool distinct = node->select()->isDistinct();
+    const bool isStarSelect = selectItems.size() == 1 &&
+        selectItems.at(0)->is(NodeType::kAllColumns) &&
+        selectItems.at(0)->as<AllColumns>()->prefix() == nullptr;
 
     if (auto groupBy = node->groupBy()) {
       VELOX_USER_CHECK(
@@ -1158,22 +1199,29 @@ class RelationPlanner : public AstVisitor {
       addGroupBy(
           selectItems, groupBy->groupingElements(), node->having(), orderBy);
 
-      if (distinct) {
+      if (isDistinct) {
         builder_->distinct();
       }
     } else {
       if (tryAddGlobalAgg(selectItems, node->having())) {
         // Nothing else to do.
+        if (isDistinct) {
+          builder_->distinct();
+        }
       } else {
-        // SELECT a, b -> builder.project({a, b})
-        addProject(selectItems);
-      }
+        auto [projections, aliasMap] = buildSelectExpressions(selectItems);
 
-      if (distinct) {
-        builder_->distinct();
+        if (isDistinct) {
+          // For SELECT DISTINCT, project first, then sort.
+          addProject(projections, isStarSelect);
+          builder_->distinct();
+          addOrderBy(orderBy);
+        } else {
+          // For SELECT without DISTINCT, sort first, then project.
+          addOrderBy(orderBy, projections, aliasMap);
+          addProject(projections, isStarSelect);
+        }
       }
-
-      addOrderBy(orderBy);
     }
   }
 

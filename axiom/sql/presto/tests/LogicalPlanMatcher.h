@@ -60,6 +60,10 @@ class LogicalPlanMatcherBuilder {
 
   LogicalPlanMatcherBuilder& sort(OnMatchCallback onMatch = nullptr);
 
+  LogicalPlanMatcherBuilder& sort(
+      const std::vector<std::string>& ordering,
+      OnMatchCallback onMatch = nullptr);
+
   LogicalPlanMatcherBuilder& sample(OnMatchCallback onMatch = nullptr);
 
   std::shared_ptr<LogicalPlanMatcher> build() {
