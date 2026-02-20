@@ -19,6 +19,7 @@ add_subdirectory(example)
 add_library(
   axiom_sql_presto_parser
   ExpressionPlanner.cpp
+  GroupByPlanner.cpp
   PrestoParser.cpp
   SqlStatement.cpp
   TableVisitor.cpp
