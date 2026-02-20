@@ -246,6 +246,46 @@ class RelationPlanner : public AstVisitor {
     }
   }
 
+  std::optional<std::string> tryGetRelationAlias(const RelationPtr& relation) {
+    if (relation->is(NodeType::kAliasedRelation)) {
+      return canonicalizeIdentifier(*relation->as<AliasedRelation>()->alias());
+    }
+    if (relation->is(NodeType::kTable)) {
+      return canonicalizeName(relation->as<Table>()->name()->suffix());
+    }
+    return std::nullopt;
+  }
+
+  void handleJoinUsing(
+      const JoinUsing* joinUsing,
+      const Join& join,
+      std::shared_ptr<lp::PlanBuilder>& leftBuilder,
+      std::shared_ptr<lp::PlanBuilder>& rightBuilder) {
+    auto ensureAlias = [this](
+                           const RelationPtr& relation,
+                           std::shared_ptr<lp::PlanBuilder>& builder) {
+      auto alias = tryGetRelationAlias(relation);
+      if (alias.has_value()) {
+        builder->as(alias.value());
+        return;
+      }
+      builder->as(builder_->newName("join"));
+    };
+
+    ensureAlias(join.left(), leftBuilder);
+    ensureAlias(join.right(), rightBuilder);
+
+    std::vector<std::string> usingColumns;
+    usingColumns.reserve(joinUsing->columns().size());
+    for (const auto& column : joinUsing->columns()) {
+      usingColumns.push_back(canonicalizeIdentifier(*column));
+    }
+
+    leftBuilder->joinUsing(
+        *rightBuilder, usingColumns, toJoinType(join.joinType()));
+    builder_ = leftBuilder;
+  }
+
   void processFrom(const RelationPtr& relation) {
     if (relation == nullptr) {
       // SELECT 1; type of query.
@@ -411,6 +451,10 @@ class RelationPlanner : public AstVisitor {
     if (const auto& criteria = join.criteria()) {
       if (criteria->is(NodeType::kJoinOn)) {
         condition = toExpr(criteria->as<JoinOn>()->expression());
+      } else if (criteria->is(NodeType::kJoinUsing)) {
+        handleJoinUsing(
+            criteria->as<JoinUsing>(), join, leftBuilder, rightBuilder);
+        return;
       } else {
         VELOX_NYI(
             "Join criteria type is not supported yet: {}",

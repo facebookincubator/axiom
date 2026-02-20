@@ -381,5 +381,73 @@ TEST_F(PlanBuilderTest, cubeThreeKeys) {
           std::vector<int32_t>{}));
 }
 
+TEST_F(PlanBuilderTest, joinUsing) {
+  PlanBuilder::Context context;
+
+  auto makePlanBuilder = [&context]() {
+    return PlanBuilder(
+        context,
+        /*enableCoercions=*/false,
+        /*allowDuplicateAliases=*/true);
+  };
+
+  // Single USING column.
+  {
+    auto leftPlan =
+        makePlanBuilder()
+            .values(
+                ROW({"id", "key", "value"}, BIGINT()), ValuesNode::Variants{})
+            .as("t");
+
+    auto rightPlan =
+        makePlanBuilder()
+            .values(
+                ROW({"id", "key", "amount"}, BIGINT()), ValuesNode::Variants{})
+            .as("u");
+
+    leftPlan.joinUsing(rightPlan, {"id"}, JoinType::kInner);
+
+    EXPECT_THAT(
+        leftPlan.findOrAssignOutputNames(),
+        testing::ElementsAre("id", "key", "value", "key_2", "amount"));
+  }
+
+  // Multiple USING columns.
+  {
+    auto leftPlan =
+        makePlanBuilder()
+            .values(
+                ROW({"id", "key", "value"}, BIGINT()), ValuesNode::Variants{})
+            .as("t");
+
+    auto rightPlan =
+        makePlanBuilder()
+            .values(
+                ROW({"id", "key", "amount"}, BIGINT()), ValuesNode::Variants{})
+            .as("u");
+
+    leftPlan.joinUsing(rightPlan, {"id", "key"}, JoinType::kInner);
+
+    EXPECT_THAT(
+        leftPlan.findOrAssignOutputNames(),
+        testing::ElementsAre("id", "key", "value", "amount"));
+  }
+
+  // 'joinUsing' API equires aliases on both sides.
+  {
+    auto leftPlan = PlanBuilder(context).values(
+        ROW({"id", "value"}, BIGINT()), ValuesNode::Variants{});
+
+    auto rightPlan =
+        PlanBuilder(context)
+            .values(ROW({"id", "amount"}, BIGINT()), ValuesNode::Variants{})
+            .as("u");
+
+    VELOX_ASSERT_THROW(
+        leftPlan.joinUsing(rightPlan, {"id"}, JoinType::kInner),
+        "Left side of JOIN USING must have an alias set via as()");
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::logical_plan

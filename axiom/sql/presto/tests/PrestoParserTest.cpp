@@ -73,8 +73,8 @@ class PrestoParserTest : public testing::Test {
     facebook::velox::connector::unregisterConnector(kTpchConnectorId);
   }
 
-  void SetUp() override {
-    // Register Test connector.
+  // Registers TestConnector for tests that need custom tables.
+  void useTestConnector() {
     testConnector_ =
         std::make_shared<facebook::axiom::connector::TestConnector>(
             kTestConnectorId);
@@ -82,8 +82,10 @@ class PrestoParserTest : public testing::Test {
   }
 
   void TearDown() override {
-    facebook::velox::connector::unregisterConnector(kTestConnectorId);
-    testConnector_.reset();
+    if (testConnector_) {
+      facebook::velox::connector::unregisterConnector(kTestConnectorId);
+      testConnector_.reset();
+    }
   }
 
   void testExplain(
@@ -138,8 +140,9 @@ class PrestoParserTest : public testing::Test {
 
     ASSERT_EQ(views.size(), selectStatement->views().size());
 
+    auto connectorId = testConnector_ ? kTestConnectorId : kTpchConnectorId;
     for (const auto& view : views) {
-      ASSERT_TRUE(selectStatement->views().contains({kTpchConnectorId, view}))
+      ASSERT_TRUE(selectStatement->views().contains({connectorId, view}))
           << "Missing view: " << view;
     }
   }
@@ -259,11 +262,11 @@ class PrestoParserTest : public testing::Test {
   }
 
   PrestoParser makeParser() {
-    return PrestoParser(defaultConnectorId_, defaultSchema_);
+    if (testConnector_) {
+      return PrestoParser(kTestConnectorId, std::nullopt);
+    }
+    return PrestoParser(kTpchConnectorId, kTinySchema);
   }
-
-  std::string defaultConnectorId_ = kTpchConnectorId;
-  std::optional<std::string> defaultSchema_ = kTinySchema;
 
   std::shared_ptr<facebook::axiom::connector::TestConnector> testConnector_;
 };
@@ -892,22 +895,17 @@ TEST_F(PrestoParserTest, selectStar) {
 }
 
 TEST_F(PrestoParserTest, hiddenColumns) {
-  defaultConnectorId_ = kTestConnectorId;
-  defaultSchema_ = std::nullopt;
-
+  useTestConnector();
   testConnector_->addTable(
       "t", ROW({"a", "b"}, INTEGER()), ROW({"$c", "$d"}, VARCHAR()));
 
   auto verifyOutput = [&](const std::string& sql,
-                          std::initializer_list<std::string> expectedNames) {
-    lp::LogicalPlanNodePtr outputNode;
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project(
-        [&](const auto& node) { outputNode = node; });
-
+                          std::vector<std::string> expectedNames) {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .tableScan()
+                       .project()
+                       .outputColumns(std::move(expectedNames));
     testSql(sql, matcher);
-    ASSERT_THAT(
-        outputNode->outputType()->names(),
-        ::testing::Pointwise(::testing::Eq(), expectedNames));
   };
 
   verifyOutput("SELECT * FROM t", {"a", "b"});
@@ -1463,6 +1461,100 @@ TEST_F(PrestoParserTest, joinOnSubquery) {
       "ON n.n_regionkey = r.r_regionkey "
       "AND EXISTS (SELECT 1 FROM supplier s WHERE s.s_nationkey = r.r_regionkey)",
       matcher);
+}
+
+TEST_F(PrestoParserTest, joinUsing) {
+  useTestConnector();
+
+  testConnector_->addTable("t", ROW({"id", "key", "value"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"id", "key", "amount"}, BIGINT()));
+
+  auto verifyOutputColumns = [&](const std::string& sql,
+                                 const std::vector<std::string>& expectedCols) {
+    SCOPED_TRACE(sql);
+    auto statement = parseSql(sql);
+    ASSERT_TRUE(statement->isSelect());
+    auto plan = statement->as<SelectStatement>()->plan();
+    EXPECT_THAT(
+        plan->outputType()->names(), testing::ElementsAreArray(expectedCols));
+  };
+
+  // Basic USING.
+  verifyOutputColumns(
+      "SELECT * FROM t JOIN u USING (id)",
+      {"id", "key", "value", "key_2", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM t JOIN u USING (id, key)",
+      {"id", "key", "value", "amount"});
+  verifyOutputColumns(
+      "SELECT id, value, amount FROM t JOIN u USING (id)",
+      {"id", "value", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM t JOIN u USING (id) WHERE value > 10",
+      {"id", "key", "value", "key_2", "amount"});
+
+  // Join types.
+  verifyOutputColumns(
+      "SELECT * FROM t LEFT JOIN u USING (id)",
+      {"id", "key", "value", "key_2", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM t RIGHT JOIN u USING (id)",
+      {"id", "key", "value", "key_2", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM t FULL OUTER JOIN u USING (id)",
+      {"id", "key", "value", "key_2", "amount"});
+
+  // Aliased tables.
+  verifyOutputColumns(
+      "SELECT * FROM t AS t1 JOIN u USING (id)",
+      {"id", "key", "value", "key_2", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM t t1 JOIN t t2 USING (id)",
+      {"id", "key", "value", "key_3", "value_4"});
+
+  // Subqueries.
+  verifyOutputColumns(
+      "SELECT * FROM (SELECT id, key, value FROM t) t1 "
+      "JOIN (SELECT id, key, amount FROM u) u1 USING (id)",
+      {"id", "key", "value", "key_4", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM (SELECT id, key, value FROM t) t1 "
+      "JOIN (SELECT id, key, amount FROM u) u1 USING (id, key)",
+      {"id", "key", "value", "amount"});
+  verifyOutputColumns(
+      "SELECT * FROM (SELECT id, value FROM t) "
+      "JOIN (SELECT id, amount FROM u) USING (id)",
+      {"id", "value", "amount"});
+
+  // Nested joins.
+  testConnector_->addTable("v", ROW({"id", "name"}, BIGINT()));
+  testConnector_->addTable("w", ROW({"id", "data"}, BIGINT()));
+
+  verifyOutputColumns(
+      "SELECT * FROM (t JOIN u USING (id)) JOIN v USING (id)",
+      {"id", "key", "value", "key_2", "amount", "name"});
+  verifyOutputColumns(
+      "SELECT * FROM (t JOIN u USING (id)) AS tu JOIN v USING (id)",
+      {"id", "key", "value", "key_2", "amount", "name"});
+  verifyOutputColumns(
+      "SELECT * FROM ((t JOIN u USING (id)) JOIN v USING (id)) JOIN w USING (id)",
+      {"id", "key", "value", "key_2", "amount", "name", "data"});
+
+  // Error cases.
+  // Column doesn't exist in either table.
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT * FROM t JOIN u USING (nonexistent)"),
+      "Cannot resolve column");
+
+  // Column exists only in left table.
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT * FROM t JOIN u USING (value)"),
+      "Cannot resolve column");
+
+  // Column exists only in right table.
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT * FROM t JOIN u USING (amount)"),
+      "Cannot resolve column");
 }
 
 TEST_F(PrestoParserTest, unionAll) {

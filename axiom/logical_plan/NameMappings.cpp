@@ -85,6 +85,8 @@ std::vector<NameMappings::QualifiedName> NameMappings::reverseLookup(
 }
 
 void NameMappings::setAlias(const std::string& alias) {
+  alias_ = alias;
+
   std::vector<std::pair<std::string, std::string>> names;
   for (auto it = mappings_.begin(); it != mappings_.end();) {
     if (it->first.alias.has_value()) {
