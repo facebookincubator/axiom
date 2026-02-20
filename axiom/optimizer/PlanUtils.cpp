@@ -97,6 +97,35 @@ std::optional<int64_t> maybeIntegerLiteral(
   }
 }
 
+bool isSpecialForm(
+    const logical_plan::ExprPtr& expr,
+    logical_plan::SpecialForm form) {
+  return expr->isSpecialForm() &&
+      expr->as<logical_plan::SpecialFormExpr>()->form() == form;
+}
+
+Step extractDereferenceStep(const logical_plan::ExprPtr& expr) {
+  VELOX_CHECK(isSpecialForm(expr, logical_plan::SpecialForm::kDereference));
+
+  const auto* field = expr->inputAt(1)->as<logical_plan::ConstantExpr>();
+  const auto& rowType = expr->inputAt(0)->type()->asRow();
+
+  auto maybeIndex = maybeIntegerLiteral(field);
+  Name name = nullptr;
+  int64_t id = 0;
+
+  if (maybeIndex.has_value()) {
+    id = maybeIndex.value();
+    name = toName(rowType.nameOf(static_cast<uint32_t>(id)));
+  } else {
+    const auto& fieldName = field->value()->value<velox::TypeKind::VARCHAR>();
+    name = toName(fieldName);
+    id = rowType.getChildIdx(name);
+  }
+
+  return Step{.kind = StepKind::kField, .field = name, .id = id};
+}
+
 std::string conjunctsToString(const ExprVector& conjuncts) {
   std::stringstream out;
   for (auto i = 0; i < conjuncts.size(); ++i) {
