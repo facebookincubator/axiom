@@ -15,6 +15,7 @@
  */
 
 #include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace facebook::axiom::logical_plan::test {
@@ -122,6 +123,31 @@ class ValuesMatcher : public LogicalPlanMatcherImpl<ValuesNode> {
 
   const velox::RowTypePtr outputType_;
 };
+
+/// Wraps another matcher and verifies output column names after matching.
+class OutputColumnsMatcher : public LogicalPlanMatcher {
+ public:
+  OutputColumnsMatcher(
+      std::shared_ptr<LogicalPlanMatcher> innerMatcher,
+      std::vector<std::string> expectedColumns)
+      : innerMatcher_{std::move(innerMatcher)},
+        expectedColumns_{std::move(expectedColumns)} {}
+
+  bool match(const LogicalPlanNodePtr& plan) const override {
+    if (!innerMatcher_->match(plan)) {
+      return false;
+    }
+
+    EXPECT_THAT(
+        plan->outputType()->names(),
+        ::testing::Pointwise(::testing::Eq(), expectedColumns_));
+    return !::testing::Test::HasNonfatalFailure();
+  }
+
+ private:
+  std::shared_ptr<LogicalPlanMatcher> innerMatcher_;
+  std::vector<std::string> expectedColumns_;
+};
 } // namespace
 
 LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::tableWrite(
@@ -227,6 +253,14 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::sample(
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<LogicalPlanMatcherImpl<SampleNode>>(
       matcher_, std::move(onMatch));
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::outputColumns(
+    std::vector<std::string> expected) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<OutputColumnsMatcher>(matcher_, std::move(expected));
   return *this;
 }
 

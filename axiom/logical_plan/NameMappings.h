@@ -69,6 +69,11 @@ class NameMappings {
   /// Used in PlanBuilder::as() API.
   void setAlias(const std::string& alias);
 
+  /// Returns the current alias, if set via 'setAlias()'.
+  const std::optional<std::string>& alias() const {
+    return alias_;
+  }
+
   /// Merges mappings from 'other' into this. Removes unqualified access to
   /// non-unique names.
   ///
@@ -108,6 +113,9 @@ class NameMappings {
 
   // IDs of hidden columns.
   folly::F14FastSet<std::string> hiddenIds_;
+
+  // Current alias, set by setAlias().
+  std::optional<std::string> alias_;
 };
 
 } // namespace facebook::axiom::logical_plan

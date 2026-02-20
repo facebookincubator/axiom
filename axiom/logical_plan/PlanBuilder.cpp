@@ -1073,6 +1073,79 @@ PlanBuilder& PlanBuilder::join(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::joinUsing(
+    PlanBuilder& right,
+    const std::vector<std::string>& usingColumns,
+    JoinType joinType) {
+  VELOX_USER_CHECK(
+      !usingColumns.empty(), "JOIN USING must specify at least one column");
+  VELOX_USER_CHECK(
+      outputMapping_->alias().has_value(),
+      "Left side of JOIN USING must have an alias set via as()");
+  VELOX_USER_CHECK(
+      right.outputMapping_->alias().has_value(),
+      "Right side of JOIN USING must have an alias set via as()");
+
+  const auto& leftAlias = outputMapping_->alias().value();
+  const auto& rightAlias = right.outputMapping_->alias().value();
+
+  auto leftOutputNames =
+      findOrAssignOutputNames(/*includeHiddenColumns=*/false, leftAlias);
+  auto rightOutputNames =
+      right.findOrAssignOutputNames(/*includeHiddenColumns=*/false, rightAlias);
+
+  auto qualifiedCol = [](const std::string& colName, const std::string& alias) {
+    return Col(colName, Col(alias));
+  };
+
+  auto makeEquality = [&](const std::string& colName) {
+    return qualifiedCol(colName, leftAlias) ==
+        qualifiedCol(colName, rightAlias);
+  };
+
+  ExprApi condition = makeEquality(usingColumns[0]);
+  for (size_t i = 1; i < usingColumns.size(); ++i) {
+    condition = condition && makeEquality(usingColumns[i]);
+  }
+
+  join(right, condition, joinType);
+
+  // SQL standard output order: USING columns (coalesced), remaining left,
+  // remaining right.
+  std::vector<ExprApi> projections;
+  folly::F14FastSet<std::string> usingColumnSet(
+      usingColumns.begin(), usingColumns.end());
+  folly::F14FastSet<std::string> outputColumnNames;
+
+  auto addProjection = [&](const ExprApi& col, const std::string& name) {
+    auto outputName = outputColumnNames.contains(name) ? newName(name) : name;
+    projections.push_back(col.as(outputName));
+    outputColumnNames.insert(outputName);
+  };
+
+  for (const auto& colName : usingColumns) {
+    auto leftCol = qualifiedCol(colName, leftAlias);
+    auto rightCol = qualifiedCol(colName, rightAlias);
+    addProjection(Call("coalesce", {leftCol, rightCol}), colName);
+  }
+
+  for (const auto& colName : leftOutputNames) {
+    if (!usingColumnSet.contains(colName)) {
+      addProjection(qualifiedCol(colName, leftAlias), colName);
+    }
+  }
+
+  for (const auto& colName : rightOutputNames) {
+    if (!usingColumnSet.contains(colName)) {
+      addProjection(qualifiedCol(colName, rightAlias), colName);
+    }
+  }
+
+  project(projections);
+
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::unionAll(const PlanBuilder& other) {
   VELOX_USER_CHECK_NOT_NULL(node_, "UnionAll node cannot be a leaf node");
   VELOX_USER_CHECK_NOT_NULL(other.node_);

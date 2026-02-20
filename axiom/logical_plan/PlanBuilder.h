@@ -503,6 +503,20 @@ class PlanBuilder {
     return join(right, /* condition */ std::nullopt, JoinType::kInner);
   }
 
+  /// Joins the current plan (left) with the 'right' plan using the specified
+  /// columns. Equivalent to SQL: ... JOIN right USING (col1, col2, ...).
+  ///
+  /// Both sides must have aliases set via 'as()' before calling this method.
+  ///
+  /// Output columns follow SQL standard:
+  /// 1. USING columns first (single occurrence via COALESCE)
+  /// 2. Remaining left table columns
+  /// 3. Remaining right table columns (renamed if duplicates with left)
+  PlanBuilder& joinUsing(
+      PlanBuilder& right,
+      const std::vector<std::string>& usingColumns,
+      JoinType joinType);
+
   /// Adds a UNION ALL set operation combining this plan with 'other'.
   PlanBuilder& unionAll(const PlanBuilder& other);
 
@@ -679,12 +693,14 @@ class PlanBuilder {
   /// use auto-generated IDs for the output column names.
   LogicalPlanNodePtr build(bool useIds = false);
 
+  /// Returns 'name' as-is if unique. Otherwise, returns 'name_N' where N is a
+  /// numeric suffix to ensure uniqueness.
+  std::string newName(const std::string& name);
+
  private:
   std::string nextId() {
     return planNodeIdGenerator_->next();
   }
-
-  std::string newName(const std::string& hint);
 
   ExprPtr resolveInputName(
       const std::optional<std::string>& alias,
