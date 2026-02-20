@@ -384,12 +384,101 @@ std::vector<ExprApi> PlanBuilder::parse(const std::vector<std::string>& exprs) {
   return untypedExprs;
 }
 
+namespace {
+
+// Tracks duplicate names and adds mappings accordingly.
+// When allowDuplicates is true, names that appear multiple times are skipped
+// to avoid ambiguous lookups.
+class NameTracker {
+ public:
+  NameTracker(bool allowDuplicates, NameMappings& mappings)
+      : allowDuplicates_{allowDuplicates}, mappings_{mappings} {}
+
+  void track(const std::vector<ExprApi>& expressions) {
+    for (const auto& expr : expressions) {
+      track(expr.name().value_or(""));
+    }
+  }
+
+  void track(const std::vector<std::string>& names) {
+    for (const auto& name : names) {
+      track(name);
+    }
+  }
+
+  /// Returns true if 'name' is a duplicate and should be skipped.
+  bool isDuplicate(const std::string& name) const {
+    return allowDuplicates_ && duplicates_.contains(name);
+  }
+
+  /// Adds a mapping from unqualified 'name' to 'id'. Skips duplicates if
+  /// allowDuplicates is set.
+  void add(const std::string& name, const std::string& id) {
+    if (isDuplicate(name)) {
+      return;
+    }
+    mappings_.add(name, id);
+  }
+
+  /// Adds a mapping from qualified 'name' (with optional alias) to 'id'. Skips
+  /// duplicates if allowDuplicates is set.
+  void add(const NameMappings::QualifiedName& name, const std::string& id) {
+    if (isDuplicate(name.name)) {
+      return;
+    }
+    mappings_.add(name, id);
+  }
+
+  /// Adds mappings from both unqualified 'name' and qualified 'alias.name' to
+  /// 'id'. Skips duplicates if allowDuplicates is set.
+  void add(
+      const std::string& name,
+      const std::string& id,
+      const std::optional<std::string>& alias) {
+    if (isDuplicate(name)) {
+      return;
+    }
+    addWithAlias(name, id, alias);
+  }
+
+ private:
+  // Tracks a single name for duplicate detection.
+  void track(const std::string& name) {
+    if (allowDuplicates_ && !name.empty() && !seen_.insert(name).second) {
+      duplicates_.insert(name);
+    }
+  }
+
+  // Adds mappings from both unqualified 'name' and qualified 'alias.name' to
+  // 'id'. Does not check for duplicates.
+  void addWithAlias(
+      const std::string& name,
+      const std::string& id,
+      const std::optional<std::string>& alias) {
+    mappings_.add(name, id);
+    if (alias.has_value()) {
+      mappings_.add(
+          NameMappings::QualifiedName{.alias = alias, .name = name}, id);
+    }
+  }
+
+  bool allowDuplicates_;
+  NameMappings& mappings_;
+  std::unordered_set<std::string> seen_;
+  std::unordered_set<std::string> duplicates_;
+};
+
+} // namespace
+
 void PlanBuilder::resolveProjections(
     const std::vector<ExprApi>& projections,
     std::vector<std::string>& outputNames,
     std::vector<ExprPtr>& exprs,
     NameMappings& mappings) {
   std::unordered_set<std::string> identities;
+  NameTracker tracker(allowDuplicateAliases_, mappings);
+  tracker.track(projections);
+
   for (const auto& untypedExpr : projections) {
     auto expr = resolveScalarTypes(untypedExpr.expr());
 
@@ -401,21 +490,19 @@ void PlanBuilder::resolveProjections(
       if (!alias.has_value() || id == alias.value()) {
         if (identities.emplace(id).second) {
           outputNames.push_back(id);
-
-          const auto names = outputMapping_->reverseLookup(id);
-          for (const auto& name : names) {
-            mappings.add(name, id);
+          for (const auto& name : outputMapping_->reverseLookup(id)) {
+            tracker.add(name, outputNames.back());
           }
         } else {
           outputNames.push_back(newName(id));
         }
       } else {
         outputNames.push_back(newName(alias.value()));
-        mappings.add(alias.value(), outputNames.back());
+        tracker.add(alias.value(), outputNames.back());
       }
     } else if (alias.has_value()) {
       outputNames.push_back(newName(alias.value()));
-      mappings.add(alias.value(), outputNames.back());
+      tracker.add(alias.value(), outputNames.back());
     } else {
       outputNames.push_back(newName("expr"));
     }
@@ -689,6 +776,9 @@ void PlanBuilder::resolveAggregates(
     VELOX_USER_CHECK_EQ(options.size(), aggregates.size());
   }
 
+  NameTracker tracker(allowDuplicateAliases_, mappings);
+  tracker.track(aggregates);
+
   for (size_t i = 0; i < aggregates.size(); ++i) {
     const auto& aggregate = aggregates[i];
 
@@ -712,14 +802,13 @@ void PlanBuilder::resolveAggregates(
       distinct = options[i].distinct;
     }
 
-    AggregateExprPtr expr;
-    expr = resolveAggregateTypes(
+    auto expr = resolveAggregateTypes(
         aggregate.expr(), filter, sortingFields, distinct);
 
     if (aggregate.name().has_value()) {
       const auto& alias = aggregate.name().value();
       outputNames.push_back(newName(alias));
-      mappings.add(alias, outputNames.back());
+      tracker.add(alias, outputNames.back());
     } else {
       outputNames.push_back(newName(expr->name()));
     }
@@ -824,15 +913,22 @@ PlanBuilder& PlanBuilder::unnest(
     values(velox::ROW({}), {velox::Variant::row({})});
   }
 
-  auto newOutputMapping = outputMapping_;
+  // Create new mappings for unnested columns, then merge with existing.
+  NameMappings unnestMapping;
+  NameTracker tracker(allowDuplicateAliases_, unnestMapping);
+
+  if (unnestAliases.empty()) {
+    for (const auto& unnestExpr : unnestExprs) {
+      tracker.track(unnestExpr.unnestedAliases());
+    }
+  } else {
+    tracker.track(unnestAliases);
+  }
 
   size_t index = 0;
 
   auto addOutputMapping = [&](const std::string& name, const std::string& id) {
-    if (!newOutputMapping->lookup(name)) {
-      newOutputMapping->add(name, id);
-    }
-    newOutputMapping->add({.alias = alias, .name = name}, id);
+    tracker.add(name, id, alias);
     ++index;
   };
 
@@ -844,9 +940,9 @@ PlanBuilder& PlanBuilder::unnest(
 
     if (!unnestExpr.unnestedAliases().empty()) {
       outputNames.emplace_back();
-      for (const std::string& alias : unnestExpr.unnestedAliases()) {
-        outputNames.back().emplace_back(newName(alias));
-        newOutputMapping->add(alias, outputNames.back().back());
+      for (const std::string& unnestAlias : unnestExpr.unnestedAliases()) {
+        outputNames.back().emplace_back(newName(unnestAlias));
+        addOutputMapping(unnestAlias, outputNames.back().back());
       }
     } else {
       switch (expr->type()->kind()) {
@@ -903,7 +999,7 @@ PlanBuilder& PlanBuilder::unnest(
       std::move(ordinalityName),
       flattenArrayOfRows);
 
-  outputMapping_ = std::move(newOutputMapping);
+  outputMapping_->merge(unnestMapping, allowDuplicateAliases_);
 
   return *this;
 }
@@ -958,7 +1054,7 @@ PlanBuilder& PlanBuilder::join(
   // User-facing column names may have duplicates between left and right side.
   // Columns that are unique can be referenced as is. Columns that are not
   // unique must be referenced using an alias.
-  outputMapping_->merge(*right.outputMapping_);
+  outputMapping_->merge(*right.outputMapping_, allowDuplicateAliases_);
 
   auto inputRowType = node_->outputType()->unionWith(right.node_->outputType());
 

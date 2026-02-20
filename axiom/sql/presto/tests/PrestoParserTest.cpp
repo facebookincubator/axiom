@@ -2086,6 +2086,43 @@ TEST_F(PrestoParserTest, unqualifiedAccessAfterJoin) {
   testSql(sql, matcher);
 }
 
+TEST_F(PrestoParserTest, duplicateAliases) {
+  {
+    auto matcher =
+        lp::test::LogicalPlanMatcherBuilder().values().project().project();
+    testSql("SELECT a as x, b as x FROM (VALUES (1, 2)) AS t(a, b)", matcher);
+  }
+
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .unnest()
+                       .project();
+    testSql(
+        "SELECT a as x, u.x FROM (VALUES (1, ARRAY[10, 20])) AS t(a, b) "
+        "CROSS JOIN UNNEST(b) AS u(x)",
+        matcher);
+  }
+
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .values()
+                       .project()
+                       .aggregate()
+                       .project();
+    testSql(
+        "SELECT sum(a) as x, sum(b) as x FROM (VALUES (1, 2)) AS t(a, b)",
+        matcher);
+  }
+
+  // Referencing a duplicate column shoud fail.
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT x FROM (SELECT a as x, b as x FROM (VALUES (1, 2)) AS t(a, b))"),
+      "Cannot resolve");
+}
+
 TEST_F(PrestoParserTest, qualifiedStarInUnionAfterJoin) {
   parseSql(
       "SELECT * FROM (VALUES (1)) t(id) "
