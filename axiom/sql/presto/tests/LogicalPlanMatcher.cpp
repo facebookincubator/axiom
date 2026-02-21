@@ -152,6 +152,30 @@ class LimitMatcher : public LogicalPlanMatcherImpl<LimitNode> {
   const int64_t count_;
 };
 
+class ProjectMatcher : public LogicalPlanMatcherImpl<ProjectNode> {
+ public:
+  ProjectMatcher(
+      const std::shared_ptr<LogicalPlanMatcher>& inputMatcher,
+      std::vector<std::string> expressions)
+      : LogicalPlanMatcherImpl<ProjectNode>(inputMatcher, nullptr),
+        expressions_{std::move(expressions)} {}
+
+ private:
+  bool matchDetails(const ProjectNode& plan) const override {
+    EXPECT_EQ(expressions_.size(), plan.expressions().size());
+    AXIOM_RETURN_IF_FAILURE;
+
+    for (auto i = 0; i < expressions_.size(); ++i) {
+      EXPECT_EQ(expressions_[i], plan.expressionAt(i)->toString())
+          << "at index " << i;
+      AXIOM_RETURN_IF_FAILURE;
+    }
+    AXIOM_RETURN_RESULT
+  }
+
+  const std::vector<std::string> expressions_;
+};
+
 class DistinctMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
  public:
   explicit DistinctMatcher(
@@ -233,6 +257,13 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::project(
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<LogicalPlanMatcherImpl<ProjectNode>>(
       matcher_, std::move(onMatch));
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::project(
+    const std::vector<std::string>& expressions) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<ProjectMatcher>(matcher_, expressions);
   return *this;
 }
 

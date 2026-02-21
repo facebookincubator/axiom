@@ -94,6 +94,9 @@ std::any AstBuilder::visitQueryNoWith(
   }
 
   auto limit = getText(ctx->limit);
+  if (!limit.has_value()) {
+    limit = getText(ctx->fetchFirstNRows);
+  }
 
   auto term = visitTyped<QueryBody>(ctx->queryTerm());
   if (auto querySpec = std::dynamic_pointer_cast<QuerySpecification>(term)) {
