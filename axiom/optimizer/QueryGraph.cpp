@@ -160,6 +160,22 @@ std::string Aggregate::toString() const {
   return out.str();
 }
 
+const Aggregate* Aggregate::dropDistinct() const {
+  if (!isDistinct_) {
+    return this;
+  }
+  return make<Aggregate>(
+      name(),
+      value_,
+      args(),
+      functions(),
+      /*isDistinct=*/false,
+      condition_,
+      intermediateType_,
+      orderKeys_,
+      orderTypes_);
+}
+
 std::string Field::toString() const {
   std::stringstream out;
   out << base_->toString() << ".";

@@ -103,8 +103,8 @@ class PlanMatcherImpl : public PlanMatcher {
  protected:
   virtual MatchResult matchDetails(
       const T& plan,
-      const std::unordered_map<std::string, std::string>& /* symbols */) const {
-    return MatchResult::success();
+      const std::unordered_map<std::string, std::string>& symbols) const {
+    return MatchResult::success(symbols);
   }
 
   const std::vector<std::shared_ptr<PlanMatcher>> sourceMatchers_;
