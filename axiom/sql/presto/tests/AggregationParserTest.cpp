@@ -268,20 +268,20 @@ TEST_F(AggregationParserTest, cubeColumnLimit) {
 
 TEST_F(AggregationParserTest, distinct) {
   {
-    auto matcher = matchScan().project().aggregate();
+    auto matcher = matchScan().project().distinct();
     testSelect("SELECT DISTINCT n_regionkey FROM nation", matcher);
     testSelect(
         "SELECT DISTINCT n_regionkey, length(n_name) FROM nation", matcher);
   }
 
   {
-    auto matcher = matchScan().aggregate().project().aggregate();
+    auto matcher = matchScan().aggregate().project().distinct();
     testSelect(
         "SELECT DISTINCT count(1) FROM nation GROUP BY n_regionkey", matcher);
   }
 
   {
-    auto matcher = matchScan().aggregate();
+    auto matcher = matchScan().distinct();
     testSelect("SELECT DISTINCT * FROM nation", matcher);
   }
 }
