@@ -415,47 +415,75 @@ TEST_F(PrestoParserTest, joinOnSubquery) {
 }
 
 TEST_F(PrestoParserTest, unionAll) {
-  auto matcher = matchScan().project().setOperation(
-      lp::SetOperation::kUnionAll, matchScan().project().build());
+  auto matcher = matchScan().project().unionAll(matchScan().project().build());
 
   testSelect(
       "SELECT n_name FROM nation UNION ALL SELECT r_name FROM region", matcher);
+
+  // 3-way UNION ALL produces nested SetNodes.
+  auto matcher3 = matchScan()
+                      .project()
+                      .unionAll(matchScan().project().build())
+                      .unionAll(matchScan().project().build());
+
+  testSelect(
+      "SELECT n_name FROM nation "
+      "UNION ALL SELECT r_name FROM region "
+      "UNION ALL SELECT n_name FROM nation",
+      matcher3);
 }
 
 TEST_F(PrestoParserTest, union) {
   auto matcher =
-      matchScan()
-          .project()
-          .setOperation(
-              lp::SetOperation::kUnionAll, matchScan().project().build())
-          .aggregate();
+      matchScan().project().unionAll(matchScan().project().build()).distinct();
 
+  // UNION and UNION DISTINCT are equivalent.
   testSelect(
       "SELECT n_name FROM nation UNION SELECT r_name FROM region", matcher);
+  testSelect(
+      "SELECT n_name FROM nation UNION DISTINCT SELECT r_name FROM region",
+      matcher);
 }
 
 TEST_F(PrestoParserTest, except) {
+  // EXCEPT and EXCEPT DISTINCT are equivalent. Both add distinct for
+  // deduplication.
   auto matcher =
-      matchScan()
-          .project()
-          .setOperation(
-              lp::SetOperation::kExcept, matchScan().project().build())
-          .aggregate();
+      matchScan().project().except(matchScan().project().build()).distinct();
 
   testSelect(
       "SELECT n_name FROM nation EXCEPT SELECT r_name FROM region", matcher);
+  testSelect(
+      "SELECT n_name FROM nation EXCEPT DISTINCT SELECT r_name FROM region",
+      matcher);
+
+  // EXCEPT ALL skips deduplication.
+  auto matcherAll = matchScan().project().except(matchScan().project().build());
+
+  testSelect(
+      "SELECT n_name FROM nation EXCEPT ALL SELECT r_name FROM region",
+      matcherAll);
 }
 
 TEST_F(PrestoParserTest, intersect) {
+  // INTERSECT and INTERSECT DISTINCT are equivalent. Both add distinct for
+  // deduplication.
   auto matcher =
-      matchScan()
-          .project()
-          .setOperation(
-              lp::SetOperation::kIntersect, matchScan().project().build())
-          .aggregate();
+      matchScan().project().intersect(matchScan().project().build()).distinct();
 
   testSelect(
       "SELECT n_name FROM nation INTERSECT SELECT r_name FROM region", matcher);
+  testSelect(
+      "SELECT n_name FROM nation INTERSECT DISTINCT SELECT r_name FROM region",
+      matcher);
+
+  // INTERSECT ALL skips deduplication.
+  auto matcherAll =
+      matchScan().project().intersect(matchScan().project().build());
+
+  testSelect(
+      "SELECT n_name FROM nation INTERSECT ALL SELECT r_name FROM region",
+      matcherAll);
 }
 
 TEST_F(PrestoParserTest, exists) {
@@ -702,6 +730,66 @@ TEST_F(PrestoParserTest, qualifiedStarInUnionAfterJoin) {
       "SELECT * FROM (VALUES (1)) t(id) "
       "UNION ALL "
       "SELECT a.* FROM (VALUES (1)) a(id) JOIN (VALUES (2)) b(id) ON a.id = b.id");
+}
+
+TEST_F(PrestoParserTest, limit) {
+  {
+    auto matcher = matchScan().limit(0, 10);
+    testSelect("SELECT * FROM nation LIMIT 10", matcher);
+  }
+
+  {
+    auto matcher = matchScan().aggregate().limit(0, 5);
+    testSelect(
+        "SELECT n_regionkey, count(1) FROM nation GROUP BY 1 LIMIT 5", matcher);
+  }
+
+  {
+    auto matcher = matchScan().sort().limit(0, 100);
+    testSelect("SELECT * FROM nation ORDER BY n_name LIMIT 100", matcher);
+  }
+}
+
+TEST_F(PrestoParserTest, offset) {
+  {
+    auto matcher = matchScan().limit(5, std::numeric_limits<int64_t>::max());
+    testSelect("SELECT * FROM nation OFFSET 5", matcher);
+  }
+
+  {
+    // OFFSET + LIMIT produces two LimitNodes.
+    auto matcher =
+        matchScan().limit(5, std::numeric_limits<int64_t>::max()).limit(0, 10);
+    testSelect("SELECT * FROM nation OFFSET 5 LIMIT 10", matcher);
+  }
+}
+
+TEST_F(PrestoParserTest, use) {
+  {
+    auto statement = parseSql("USE my_schema");
+    ASSERT_TRUE(statement->isUse());
+
+    const auto* use = statement->as<UseStatement>();
+    ASSERT_FALSE(use->catalog().has_value());
+    ASSERT_EQ("my_schema", use->schema());
+  }
+
+  {
+    auto statement = parseSql("USE my_catalog.my_schema");
+    ASSERT_TRUE(statement->isUse());
+
+    const auto* use = statement->as<UseStatement>();
+    ASSERT_TRUE(use->catalog().has_value());
+    ASSERT_EQ("my_catalog", use->catalog().value());
+    ASSERT_EQ("my_schema", use->schema());
+  }
+}
+
+TEST_F(PrestoParserTest, windowFunction) {
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT n_name, row_number() OVER (ORDER BY n_nationkey) FROM nation"),
+      "Window functions are not supported yet");
 }
 
 } // namespace

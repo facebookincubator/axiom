@@ -16,9 +16,24 @@
 
 #include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
 #include <gtest/gtest.h>
+#include <set>
 
 namespace facebook::axiom::logical_plan::test {
 namespace {
+
+/// Returns false from the current function if a non-fatal test failure has
+/// occurred.
+#define AXIOM_RETURN_IF_FAILURE                \
+  if (::testing::Test::HasNonfatalFailure()) { \
+    return false;                              \
+  }
+
+/// Returns false if a non-fatal test failure has occurred, true otherwise.
+#define AXIOM_RETURN_RESULT                    \
+  if (::testing::Test::HasNonfatalFailure()) { \
+    return false;                              \
+  }                                            \
+  return true;
 
 template <typename T = LogicalPlanNode>
 class LogicalPlanMatcherImpl : public LogicalPlanMatcher {
@@ -42,20 +57,14 @@ class LogicalPlanMatcherImpl : public LogicalPlanMatcher {
     EXPECT_TRUE(specificNode != nullptr)
         << "Expected " << folly::demangle(typeid(T).name()) << ", but got "
         << NodeKindName::toName(plan->kind());
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_RETURN_IF_FAILURE;
 
     EXPECT_EQ(plan->inputs().size(), inputMatchers_.size());
-    if (::testing::Test::HasNonfatalFailure()) {
-      return false;
-    }
+    AXIOM_RETURN_IF_FAILURE;
 
     for (auto i = 0; i < inputMatchers_.size(); ++i) {
       EXPECT_TRUE(inputMatchers_[i]->match(plan->inputs()[i]));
-      if (::testing::Test::HasNonfatalFailure()) {
-        return false;
-      }
+      AXIOM_RETURN_IF_FAILURE;
     }
 
     if (!matchDetails(*specificNode)) {
@@ -93,7 +102,7 @@ class SetMatcher : public LogicalPlanMatcherImpl<SetNode> {
  private:
   bool matchDetails(const SetNode& plan) const override {
     EXPECT_EQ(plan.operation(), op_);
-    return !::testing::Test::HasNonfatalFailure();
+    AXIOM_RETURN_RESULT
   }
 
   SetOperation op_;
@@ -116,12 +125,66 @@ class ValuesMatcher : public LogicalPlanMatcherImpl<ValuesNode> {
     EXPECT_TRUE(*outputType_ == *outputType)
         << "Expected " << outputType_->toString() << ", but got "
         << outputType->toString();
-
-    return !::testing::Test::HasNonfatalFailure();
+    AXIOM_RETURN_RESULT
   }
 
   const velox::RowTypePtr outputType_;
 };
+
+class LimitMatcher : public LogicalPlanMatcherImpl<LimitNode> {
+ public:
+  LimitMatcher(
+      const std::shared_ptr<LogicalPlanMatcher>& inputMatcher,
+      int64_t offset,
+      int64_t count)
+      : LogicalPlanMatcherImpl<LimitNode>(inputMatcher, nullptr),
+        offset_{offset},
+        count_{count} {}
+
+ private:
+  bool matchDetails(const LimitNode& plan) const override {
+    EXPECT_EQ(offset_, plan.offset());
+    EXPECT_EQ(count_, plan.count());
+    AXIOM_RETURN_RESULT
+  }
+
+  const int64_t offset_;
+  const int64_t count_;
+};
+
+class DistinctMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
+ public:
+  explicit DistinctMatcher(
+      const std::shared_ptr<LogicalPlanMatcher>& inputMatcher)
+      : LogicalPlanMatcherImpl<AggregateNode>(inputMatcher, nullptr) {}
+
+ private:
+  bool matchDetails(const AggregateNode& plan) const override {
+    EXPECT_EQ(0, plan.aggregates().size())
+        << "Expected no aggregates for distinct";
+    EXPECT_EQ(0, plan.groupingSets().size())
+        << "Expected no grouping sets for distinct";
+    AXIOM_RETURN_IF_FAILURE;
+
+    std::set<std::string> names;
+    for (const auto& key : plan.groupingKeys()) {
+      EXPECT_TRUE(key->isInputReference())
+          << "Expected grouping key to be an input column, but got "
+          << key->toString();
+      AXIOM_RETURN_IF_FAILURE;
+
+      auto name = key->as<InputReferenceExpr>()->name();
+      EXPECT_TRUE(names.insert(name).second)
+          << "Duplicate grouping key: " << name;
+      AXIOM_RETURN_IF_FAILURE;
+    }
+    AXIOM_RETURN_RESULT
+  }
+};
+
+#undef AXIOM_RETURN_IF_FAILURE
+#undef AXIOM_RETURN_RESULT
+
 } // namespace
 
 LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::tableWrite(
@@ -181,6 +244,12 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::aggregate(
   return *this;
 }
 
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::distinct() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<DistinctMatcher>(matcher_);
+  return *this;
+}
+
 LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::unnest(
     OnMatchCallback onMatch) {
   if (matcher_ != nullptr) {
@@ -214,11 +283,45 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::setOperation(
   return *this;
 }
 
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::unionAll(
+    const std::shared_ptr<LogicalPlanMatcher>& matcher,
+    OnMatchCallback onMatch) {
+  return setOperation(SetOperation::kUnionAll, matcher, std::move(onMatch));
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::except(
+    const std::shared_ptr<LogicalPlanMatcher>& matcher,
+    OnMatchCallback onMatch) {
+  return setOperation(SetOperation::kExcept, matcher, std::move(onMatch));
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::intersect(
+    const std::shared_ptr<LogicalPlanMatcher>& matcher,
+    OnMatchCallback onMatch) {
+  return setOperation(SetOperation::kIntersect, matcher, std::move(onMatch));
+}
+
 LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::sort(
     OnMatchCallback onMatch) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<LogicalPlanMatcherImpl<SortNode>>(
       matcher_, std::move(onMatch));
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::limit(
+    OnMatchCallback onMatch) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<LogicalPlanMatcherImpl<LimitNode>>(
+      matcher_, std::move(onMatch));
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::limit(
+    int64_t offset,
+    int64_t count) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<LimitMatcher>(matcher_, offset, count);
   return *this;
 }
 
