@@ -151,6 +151,27 @@ TablePtr TestConnectorMetadata::findTable(std::string_view name) {
   return findTableInternal(name);
 }
 
+ViewPtr TestConnectorMetadata::findView(std::string_view name) {
+  auto it = views_.find(name);
+  if (it == views_.end()) {
+    return nullptr;
+  }
+  return std::make_shared<View>(it->first, it->second.type, it->second.text);
+}
+
+void TestConnectorMetadata::createView(
+    std::string_view name,
+    velox::RowTypePtr type,
+    std::string_view text) {
+  auto [_, inserted] = views_.emplace(
+      std::string(name), ViewDefinition{std::move(type), std::string(text)});
+  VELOX_CHECK(inserted, "View already exists: {}", name);
+}
+
+bool TestConnectorMetadata::dropView(std::string_view name) {
+  return views_.erase(std::string(name)) == 1;
+}
+
 namespace {
 class TestDiscretePredicates : public DiscretePredicates {
  public:
@@ -439,6 +460,17 @@ void TestConnector::addTpchTables() {
         std::string(velox::tpch::toTableName(table)),
         velox::tpch::getTableSchema(table));
   }
+}
+
+void TestConnector::createView(
+    std::string_view name,
+    velox::RowTypePtr type,
+    std::string_view text) {
+  metadata_->createView(name, std::move(type), text);
+}
+
+bool TestConnector::dropView(std::string_view name) {
+  return metadata_->dropView(name);
 }
 
 void TestConnector::appendData(
