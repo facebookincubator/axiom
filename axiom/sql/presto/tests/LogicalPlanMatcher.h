@@ -92,6 +92,11 @@ class LogicalPlanMatcherBuilder {
   /// Matches a ProjectNode.
   LogicalPlanMatcherBuilder& project(OnMatchCallback onMatch = nullptr);
 
+  /// Matches a ProjectNode with the specified expressions. Each expression
+  /// string is compared against expressionAt(i)->toString().
+  LogicalPlanMatcherBuilder& project(
+      const std::vector<std::string>& expressions);
+
   /// Matches an AggregateNode.
   LogicalPlanMatcherBuilder& aggregate(OnMatchCallback onMatch = nullptr);
 

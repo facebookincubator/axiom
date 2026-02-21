@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -29,6 +30,15 @@ class ExpressionParserTest : public PrestoParserTestBase {
  protected:
   lp::ExprPtr parseExpr(std::string_view sql) {
     return makeParser().parseExpression(sql, true);
+  }
+
+  // Parses 'SELECT <expr> FROM nation' and verifies the project expression
+  // matches expectedExpr via toString().
+  void testNationExpr(std::string_view expr, std::string_view expectedExpr) {
+    SCOPED_TRACE(expr);
+    testSelect(
+        fmt::format("SELECT {} FROM nation", expr),
+        matchScan().project({std::string(expectedExpr)}));
   }
 
   // Parses a decimal literal and verifies its value and type.
@@ -48,35 +58,41 @@ class ExpressionParserTest : public PrestoParserTestBase {
 };
 
 TEST_F(ExpressionParserTest, types) {
-  auto test = [&](std::string_view sql, const TypePtr& expectedType) {
-    SCOPED_TRACE(sql);
-    auto expr = parseExpr(sql);
+  // Verifies that cast and try_cast produce the expected type and are preserved
+  // as kCast and kTryCast special forms respectively.
+  auto test = [&](std::string_view castArgs, const TypePtr& expectedType) {
+    SCOPED_TRACE(castArgs);
 
-    VELOX_EXPECT_EQ_TYPES(expr->type(), expectedType);
+    auto castExpr = parseExpr(fmt::format("cast({})", castArgs));
+    VELOX_EXPECT_EQ_TYPES(castExpr->type(), expectedType);
+    ASSERT_TRUE(castExpr->isSpecialForm());
+    ASSERT_EQ(
+        castExpr->as<lp::SpecialFormExpr>()->form(), lp::SpecialForm::kCast);
+
+    auto tryCastExpr = parseExpr(fmt::format("try_cast({})", castArgs));
+    VELOX_EXPECT_EQ_TYPES(tryCastExpr->type(), expectedType);
+    ASSERT_TRUE(tryCastExpr->isSpecialForm());
+    ASSERT_EQ(
+        tryCastExpr->as<lp::SpecialFormExpr>()->form(),
+        lp::SpecialForm::kTryCast);
   };
 
-  test("cast(null as boolean)", BOOLEAN());
-  test("cast('1' as tinyint)", TINYINT());
-  test("cast(null as smallint)", SMALLINT());
-  test("cast('2' as int)", INTEGER());
-  test("cast(null as integer)", INTEGER());
-  test("cast('3' as bIgInT)", BIGINT());
-  test("cast('2020-01-01' as date)", DATE());
-  test("cast(null as timestamp)", TIMESTAMP());
-  test("cast(null as decimal(3, 2))", DECIMAL(3, 2));
-  test("cast(null as decimal(33, 10))", DECIMAL(33, 10));
+  test("null as boolean", BOOLEAN());
+  test("'1' as tinyint", TINYINT());
+  test("null as smallint", SMALLINT());
+  test("'2' as int", INTEGER());
+  test("null as integer", INTEGER());
+  test("'3' as bIgInT", BIGINT());
+  test("'2020-01-01' as date", DATE());
+  test("null as timestamp", TIMESTAMP());
+  test("null as decimal(3, 2)", DECIMAL(3, 2));
+  test("null as decimal(33, 10)", DECIMAL(33, 10));
 
-  test("cast(null as int array)", ARRAY(INTEGER()));
-  test("cast(null as varchar array)", ARRAY(VARCHAR()));
-  test("cast(null as map(integer, real))", MAP(INTEGER(), REAL()));
-  test("cast(null as row(int, double))", ROW({INTEGER(), DOUBLE()}));
-  test(
-      "cast(null as row(a int, b double))",
-      ROW({"a", "b"}, {INTEGER(), DOUBLE()}));
-
-  test(
-      R"(cast(json_parse('{"foo": 1, "bar": 2}') as row(foo bigint, "BAR" int)).BAR)",
-      INTEGER());
+  test("null as int array", ARRAY(INTEGER()));
+  test("null as varchar array", ARRAY(VARCHAR()));
+  test("null as map(integer, real)", MAP(INTEGER(), REAL()));
+  test("null as row(int, double)", ROW({INTEGER(), DOUBLE()}));
+  test("null as row(a int, b double)", ROW({"a", "b"}, {INTEGER(), DOUBLE()}));
 }
 
 TEST_F(ExpressionParserTest, intervalDayTime) {
@@ -226,193 +242,231 @@ TEST_F(ExpressionParserTest, timestampLiteral) {
 }
 
 TEST_F(ExpressionParserTest, atTimeZone) {
-  auto matcher = matchValues().project();
-  testSelect(
-      "SELECT from_unixtime(1700000000, 'UTC') AT TIME ZONE 'America/New_York'",
-      matcher);
-  testSelect(
-      "SELECT date_format(date_trunc('hour', from_unixtime(1700000000, 'UTC') AT TIME ZONE 'GMT'), '%Y-%m-%d+%H:00')",
-      matcher);
+  // AT TIME ZONE translates to at_timezone().
+  EXPECT_EQ(
+      "at_timezone(from_unixtime(CAST(1700000000 AS DOUBLE), UTC), America/New_York)",
+      parseExpr(
+          "from_unixtime(1700000000, 'UTC') AT TIME ZONE 'America/New_York'")
+          ->toString());
+  EXPECT_EQ(
+      "date_format(date_trunc(hour, at_timezone(from_unixtime(CAST(1700000000 AS DOUBLE), UTC), GMT)), %Y-%m-%d+%H:00)",
+      parseExpr(
+          "date_format(date_trunc('hour', from_unixtime(1700000000, 'UTC') AT TIME ZONE 'GMT'), '%Y-%m-%d+%H:00')")
+          ->toString());
+}
+
+TEST_F(ExpressionParserTest, extract) {
+  // EXTRACT(field FROM x) translates to a scalar function call.
+  auto test = [&](std::string_view field, const std::string& expectedFunction) {
+    auto sql =
+        fmt::format("EXTRACT({} FROM TIMESTAMP '2020-06-15 12:30:45')", field);
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+    ASSERT_TRUE(expr->isCall());
+    ASSERT_EQ(expr->as<lp::CallExpr>()->name(), expectedFunction);
+  };
+
+  test("YEAR", "year");
+  test("MONTH", "month");
+  test("DAY", "day");
+  test("HOUR", "hour");
+  test("MINUTE", "minute");
+  test("SECOND", "second");
 }
 
 TEST_F(ExpressionParserTest, nullif) {
-  auto matcher = matchValues().project();
-
-  testSelect("SELECT NULLIF(1, 2)", matcher);
-  testSelect("SELECT nullif(1, 1)", matcher);
-  testSelect("SELECT NULLIF('foo', 'bar')", matcher);
+  // NULLIF(a, b) translates to IF(eq(a, b), null, a).
+  EXPECT_EQ(
+      "IF(eq(1, 2), CAST(null AS INTEGER), 1)",
+      parseExpr("NULLIF(1, 2)")->toString());
+  EXPECT_EQ(
+      "IF(eq(1, 1), CAST(null AS INTEGER), 1)",
+      parseExpr("nullif(1, 1)")->toString());
+  EXPECT_EQ(
+      "IF(eq(foo, bar), CAST(null AS VARCHAR), foo)",
+      parseExpr("NULLIF('foo', 'bar')")->toString());
 }
 
 TEST_F(ExpressionParserTest, null) {
-  auto matcher = matchValues().project();
-  testSelect("SELECT 1 is null", matcher);
-  testSelect("SELECT 1 IS NULL", matcher);
+  EXPECT_EQ("is_null(1)", parseExpr("1 is null")->toString());
+  EXPECT_EQ("is_null(1)", parseExpr("1 IS NULL")->toString());
 
-  testSelect("SELECT 1 is not null", matcher);
-  testSelect("SELECT 1 IS NOT NULL", matcher);
+  EXPECT_EQ("not(is_null(1))", parseExpr("1 is not null")->toString());
+  EXPECT_EQ("not(is_null(1))", parseExpr("1 IS NOT NULL")->toString());
 }
 
 TEST_F(ExpressionParserTest, unaryArithmetic) {
-  lp::ProjectNodePtr project;
-  auto matcher = matchValues().project([&](const auto& node) {
-    project = std::dynamic_pointer_cast<const lp::ProjectNode>(node);
-  });
-
-  testSelect("SELECT -1", matcher);
-  ASSERT_EQ(project->expressions().size(), 1);
-  ASSERT_EQ(project->expressionAt(0)->toString(), "negate(1)");
-
-  testSelect("SELECT +1", matcher);
-  ASSERT_EQ(project->expressions().size(), 1);
-  ASSERT_EQ(project->expressionAt(0)->toString(), "1");
+  EXPECT_EQ("negate(1)", parseExpr("-1")->toString());
+  EXPECT_EQ("1", parseExpr("+1")->toString());
 }
 
 TEST_F(ExpressionParserTest, distinctFrom) {
-  lp::ProjectNodePtr project;
-  auto matcher = matchValues().project([&](const auto& node) {
-    project = std::dynamic_pointer_cast<const lp::ProjectNode>(node);
-  });
-
-  testSelect("SELECT 1 is distinct from 2", matcher);
-  ASSERT_EQ(project->expressions().size(), 1);
-  ASSERT_EQ(project->expressionAt(0)->toString(), "distinct_from(1, 2)");
-
-  testSelect("SELECT 1 is not distinct from 2", matcher);
-  ASSERT_EQ(project->expressions().size(), 1);
-  ASSERT_EQ(project->expressionAt(0)->toString(), "not(distinct_from(1, 2))");
+  EXPECT_EQ(
+      "distinct_from(1, 2)", parseExpr("1 is distinct from 2")->toString());
+  EXPECT_EQ(
+      "not(distinct_from(1, 2))",
+      parseExpr("1 is not distinct from 2")->toString());
 }
 
 TEST_F(ExpressionParserTest, ifClause) {
-  {
-    auto matcher = matchValues().project();
-    testSelect("SELECT if (1 > 2, 100)", matcher);
-  }
+  EXPECT_EQ(
+      "IF(gt(1, 2), 100, null)", parseExpr("if (1 > 2, 100)")->toString());
+  EXPECT_EQ(
+      "IF(gt(1, 2), 100, 200)", parseExpr("if (1 > 2, 100, 200)")->toString());
 
-  {
-    auto matcher = matchScan().project();
-    testSelect(
-        "SELECT if (n_nationkey between 10 and 13, 'foo') FROM nation",
-        matcher);
-  }
+  testNationExpr(
+      "if (n_nationkey between 10 and 13, 'foo')",
+      "IF(between(n_nationkey, CAST(10 AS BIGINT), CAST(13 AS BIGINT)), foo, null)");
+}
+
+TEST_F(ExpressionParserTest, notBetween) {
+  // NOT BETWEEN translates to not(between(x, low, high)).
+  testNationExpr(
+      "n_nationkey NOT BETWEEN 10 AND 20",
+      "not(between(n_nationkey, CAST(10 AS BIGINT), CAST(20 AS BIGINT)))");
 }
 
 TEST_F(ExpressionParserTest, switch) {
-  auto matcher = matchScan().project();
+  // Searched CASE (CASE WHEN cond THEN result).
+  EXPECT_EQ(
+      "SWITCH(gt(1, 2), 100, gt(3, 4), 200)",
+      parseExpr("case when 1 > 2 then 100 when 3 > 4 then 200 end")
+          ->toString());
+  EXPECT_EQ(
+      "SWITCH(gt(1, 2), 100, gt(3, 4), 200, 300)",
+      parseExpr("case when 1 > 2 then 100 when 3 > 4 then 200 else 300 end")
+          ->toString());
 
-  testSelect(
-      "SELECT case when n_nationkey > 2 then 100 when n_name like 'A%' then 200 end FROM nation",
-      matcher);
-  testSelect(
-      "SELECT case when n_nationkey > 2 then 100 when n_name like 'A%' then 200 else 300 end FROM nation",
-      matcher);
-
-  testSelect(
-      "SELECT case n_nationkey when 1 then 100 when 2 then 200 end FROM nation",
-      matcher);
-
-  testSelect(
-      "SELECT case n_nationkey when 1 then 100 when 2 then 200 else 300 end FROM nation",
-      matcher);
+  // Simple CASE (CASE x WHEN v THEN result) desugars to SWITCH(eq(x, v), ...).
+  EXPECT_EQ(
+      "SWITCH(eq(1, 1), 100, eq(1, 2), 200)",
+      parseExpr("case 1 when 1 then 100 when 2 then 200 end")->toString());
+  EXPECT_EQ(
+      "SWITCH(eq(1, 1), 100, eq(1, 2), 200, 300)",
+      parseExpr("case 1 when 1 then 100 when 2 then 200 else 300 end")
+          ->toString());
 }
 
 TEST_F(ExpressionParserTest, in) {
-  {
-    auto matcher = matchValues().project();
-    testSelect("SELECT 1 in (2,3,4)", matcher);
-    testSelect("SELECT 1 IN (2,3,4)", matcher);
+  EXPECT_EQ("IN(1, 2, 3, 4)", parseExpr("1 in (2,3,4)")->toString());
+  EXPECT_EQ("IN(1, 2, 3, 4)", parseExpr("1 IN (2,3,4)")->toString());
 
-    testSelect("SELECT 1 not in (2,3,4)", matcher);
-    testSelect("SELECT 1 NOT IN (2,3,4)", matcher);
-  }
-
-  // Subquery.
-  {
-    auto matcher = matchScan().filter();
-    testSelect(
-        "SELECT * FROM nation WHERE n_regionkey IN (SELECT r_regionkey FROM region WHERE r_name like 'A%')",
-        matcher);
-  }
-
-  {
-    auto matcher = matchScan().project();
-    testSelect(
-        "SELECT n_regionkey IN (SELECT r_regionkey FROM region WHERE r_name like 'A%') FROM nation",
-        matcher);
-  }
+  EXPECT_EQ("not(IN(1, 2, 3, 4))", parseExpr("1 not in (2,3,4)")->toString());
+  EXPECT_EQ("not(IN(1, 2, 3, 4))", parseExpr("1 NOT IN (2,3,4)")->toString());
 
   // Coercions.
-  {
-    auto matcher = matchScan().project();
-    testSelect("SELECT n_nationkey in (1, 2, 3) FROM nation", matcher);
-  }
+  testNationExpr(
+      "n_nationkey in (1, 2, 3)",
+      "IN(n_nationkey, CAST(1 AS BIGINT), CAST(2 AS BIGINT), CAST(3 AS BIGINT))");
+
+  auto assertInSubquery = [](const lp::ExprPtr& expr) {
+    ASSERT_EQ(lp::ExprKind::kSpecialForm, expr->kind());
+    auto& in = *expr->as<lp::SpecialFormExpr>();
+    ASSERT_EQ(in.form(), lp::SpecialForm::kIn);
+    ASSERT_EQ(in.inputs().size(), 2);
+    ASSERT_EQ(lp::ExprKind::kInputReference, in.inputAt(0)->kind());
+    ASSERT_EQ(lp::ExprKind::kSubquery, in.inputAt(1)->kind());
+  };
+
+  // Subquery IN in WHERE clause produces a filter with IN(column, subquery).
+  testSelect(
+      "SELECT * FROM nation WHERE n_regionkey IN (SELECT r_regionkey FROM region WHERE r_name like 'A%')",
+      matchScan().filter([&](const auto& node) {
+        auto filter = std::dynamic_pointer_cast<const lp::FilterNode>(node);
+        assertInSubquery(filter->predicate());
+      }));
+
+  // Subquery IN in SELECT clause produces a project with IN(column, subquery).
+  testSelect(
+      "SELECT n_regionkey IN (SELECT r_regionkey FROM region WHERE r_name like 'A%') FROM nation",
+      matchScan().project([&](const auto& node) {
+        auto project = std::dynamic_pointer_cast<const lp::ProjectNode>(node);
+        ASSERT_EQ(project->expressions().size(), 1);
+        assertInSubquery(project->expressionAt(0));
+      }));
+}
+
+TEST_F(ExpressionParserTest, notLike) {
+  // NOT LIKE translates to not(like(x, pattern)).
+  testNationExpr("n_name NOT LIKE 'A%'", "not(like(n_name, A%))");
+}
+
+TEST_F(ExpressionParserTest, likeEscape) {
+  // LIKE with ESCAPE translates to a 3-argument like() call.
+  testNationExpr("n_name LIKE 'A%' ESCAPE '#'", "like(n_name, A%, #)");
+  testNationExpr("n_name NOT LIKE 'A%' ESCAPE '#'", "not(like(n_name, A%, #))");
 }
 
 TEST_F(ExpressionParserTest, coalesce) {
-  auto matcher = matchScan().project();
-  testSelect("SELECT coalesce(n_name, 'foo') FROM nation", matcher);
-  testSelect("SELECT COALESCE(n_name, 'foo') FROM nation", matcher);
+  testNationExpr("coalesce(n_name, 'foo')", "COALESCE(n_name, foo)");
+  testNationExpr("COALESCE(n_name, 'foo')", "COALESCE(n_name, foo)");
 
   // Coercions.
-  testSelect("SELECT coalesce(n_regionkey, 1) FROM nation", matcher);
+  testNationExpr(
+      "coalesce(n_regionkey, 1)", "COALESCE(n_regionkey, CAST(1 AS BIGINT))");
 }
 
 TEST_F(ExpressionParserTest, concat) {
-  auto matcher = matchScan().project();
-  testSelect("SELECT n_name || n_comment FROM nation", matcher);
+  // || translates to concat().
+  testNationExpr("n_name || n_comment", "concat(n_name, n_comment)");
 }
 
 TEST_F(ExpressionParserTest, position) {
-  auto matcher = matchScan().project();
-  testSelect("SELECT POSITION('A' IN n_name) FROM nation", matcher);
-  testSelect("SELECT POSITION(n_comment IN n_name) FROM nation", matcher);
+  // POSITION(x IN y) translates to strpos(y, x).
+  testNationExpr("POSITION('A' IN n_name)", "strpos(n_name, A)");
+  testNationExpr("POSITION(n_comment IN n_name)", "strpos(n_name, n_comment)");
+}
+
+TEST_F(ExpressionParserTest, substringFrom) {
+  // SUBSTRING(x FROM y FOR z) translates to substr(x, y, z).
+  testNationExpr("SUBSTRING(n_name FROM 1)", "substr(n_name, 1)");
+  testNationExpr("SUBSTRING(n_name FROM 2 FOR 3)", "substr(n_name, 2, 3)");
 }
 
 TEST_F(ExpressionParserTest, subscript) {
-  auto matcher = matchScan().project();
-  testSelect("SELECT array[1, 2, 3][1] FROM nation", matcher);
-  testSelect("SELECT row(1,2)[2] FROM nation", matcher);
+  EXPECT_EQ(
+      "subscript(array_constructor(1, 2, 3), 1)",
+      parseExpr("array[1, 2, 3][1]")->toString());
+  EXPECT_EQ(
+      "DEREFERENCE(row_constructor(1, 2), 1)",
+      parseExpr("row(1, 2)[2]")->toString());
 }
 
 TEST_F(ExpressionParserTest, dereference) {
-  auto matcher = matchValues().unnest().project().project();
+  // Named field dereference.
+  EXPECT_EQ(
+      "DEREFERENCE(CAST(row_constructor(1, 2) AS ROW<a:INTEGER,b:INTEGER>), a)",
+      parseExpr("cast(row(1, 2) as row(a int, b int)).a")->toString());
 
-  testSelect("SELECT t.x FROM UNNEST(array[1, 2, 3]) as t(x)", matcher);
-
-  testSelect("SELECT x FROM UNNEST(array[1, 2, 3]) as t(x)", matcher);
-
-  testSelect(
-      "SELECT t.x.a FROM UNNEST(array[cast(row(1, 2) as row(a int, b int))]) as t(x)",
-      matcher);
-
-  testSelect(
-      "SELECT x.a FROM UNNEST(array[cast(row(1, 2) as row(a int, b int))]) as t(x)",
-      matcher);
-
-  testSelect("SELECT t.X FROM UNNEST(array[1, 2, 3]) as t(x)", matcher);
-  testSelect("SELECT T.X FROM UNNEST(array[1, 2, 3]) as t(x)", matcher);
-  testSelect("SELECT t.x FROM UNNEST(array[1, 2, 3]) as t(X)", matcher);
-
-  testSelect(
-      "SELECT t.x.field0 FROM UNNEST(array[row(1, 2)]) as t(x)", matcher);
-  testSelect("SELECT x.field0 FROM UNNEST(array[row(1, 2)]) as t(x)", matcher);
-  testSelect(
-      "SELECT x.field000 FROM UNNEST(array[row(1, 2)]) as t(x)", matcher);
-
-  testSelect("SELECT x.field1 FROM UNNEST(array[row(1, 2)]) as t(x)", matcher);
-  testSelect("SELECT x.field01 FROM UNNEST(array[row(1, 2)]) as t(x)", matcher);
+  // Legacy field name dereference.
+  EXPECT_EQ(
+      "DEREFERENCE(row_constructor(1, 2), 0)",
+      parseExpr("row(1, 2).field0")->toString());
+  EXPECT_EQ(
+      "DEREFERENCE(row_constructor(1, 2), 0)",
+      parseExpr("row(1, 2).field000")->toString());
+  EXPECT_EQ(
+      "DEREFERENCE(row_constructor(1, 2), 1)",
+      parseExpr("row(1, 2).field1")->toString());
+  EXPECT_EQ(
+      "DEREFERENCE(row_constructor(1, 2), 1)",
+      parseExpr("row(1, 2).field01")->toString());
 
   VELOX_ASSERT_THROW(
-      parseSql("SELECT x.field2 FROM UNNEST(array[row(1, 2)]) as t(x)"),
-      "Invalid legacy field name: field2");
+      parseExpr("row(1, 2).field2"), "Invalid legacy field name: field2");
 
   VELOX_ASSERT_THROW(
-      parseSql("SELECT cast(row(1, 2) as row(a int, b int)).field0"),
+      parseExpr("cast(row(1, 2) as row(a int, b int)).field0"),
       "Cannot access named field using legacy field name: field0 vs. a");
+
+  auto expr = parseExpr(
+      R"(cast(json_parse('{"foo": 1, "bar": 2}') as row(foo bigint, "BAR" int)).BAR)");
+  VELOX_EXPECT_EQ_TYPES(expr->type(), INTEGER());
 }
 
 TEST_F(ExpressionParserTest, row) {
-  auto matcher = matchScan().project();
-  testSelect("SELECT row(n_regionkey, n_name) FROM nation", matcher);
+  testNationExpr(
+      "row(n_regionkey, n_name)", "row_constructor(n_regionkey, n_name)");
 }
 
 TEST_F(ExpressionParserTest, lambda) {

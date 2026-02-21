@@ -203,6 +203,19 @@ TEST_F(PrestoParserTest, unnest) {
   }
 }
 
+TEST_F(PrestoParserTest, qualifiedColumnAccess) {
+  connector_->addTable("t", ROW({"x"}, {INTEGER()}));
+  auto matcher = matchScan().project();
+
+  // Qualified and unqualified column access.
+  testSelect("SELECT t.x FROM t", matcher);
+  testSelect("SELECT x FROM t", matcher);
+
+  // Case insensitive column and table alias.
+  testSelect("SELECT t.X FROM t", matcher);
+  testSelect("SELECT T.X FROM t", matcher);
+}
+
 TEST_F(PrestoParserTest, syntaxErrors) {
   auto parser = makeParser();
   EXPECT_THAT(
@@ -732,21 +745,30 @@ TEST_F(PrestoParserTest, qualifiedStarInUnionAfterJoin) {
       "SELECT a.* FROM (VALUES (1)) a(id) JOIN (VALUES (2)) b(id) ON a.id = b.id");
 }
 
+// FETCH FIRST n ROWS ONLY is equivalent to LIMIT n. Each LIMIT query below is
+// paired with a FETCH FIRST query to verify they produce the same plan.
 TEST_F(PrestoParserTest, limit) {
   {
     auto matcher = matchScan().limit(0, 10);
     testSelect("SELECT * FROM nation LIMIT 10", matcher);
+    testSelect("SELECT * FROM nation FETCH FIRST 10 ROWS ONLY", matcher);
   }
 
   {
     auto matcher = matchScan().aggregate().limit(0, 5);
     testSelect(
         "SELECT n_regionkey, count(1) FROM nation GROUP BY 1 LIMIT 5", matcher);
+    testSelect(
+        "SELECT n_regionkey, count(1) FROM nation GROUP BY 1 FETCH FIRST 5 ROWS ONLY",
+        matcher);
   }
 
   {
     auto matcher = matchScan().sort().limit(0, 100);
     testSelect("SELECT * FROM nation ORDER BY n_name LIMIT 100", matcher);
+    testSelect(
+        "SELECT * FROM nation ORDER BY n_name FETCH FIRST 100 ROWS ONLY",
+        matcher);
   }
 }
 
@@ -757,10 +779,11 @@ TEST_F(PrestoParserTest, offset) {
   }
 
   {
-    // OFFSET + LIMIT produces two LimitNodes.
     auto matcher =
         matchScan().limit(5, std::numeric_limits<int64_t>::max()).limit(0, 10);
     testSelect("SELECT * FROM nation OFFSET 5 LIMIT 10", matcher);
+    testSelect(
+        "SELECT * FROM nation OFFSET 5 FETCH FIRST 10 ROWS ONLY", matcher);
   }
 }
 
