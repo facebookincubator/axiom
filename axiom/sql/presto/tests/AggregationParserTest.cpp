@@ -1,0 +1,393 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "axiom/sql/presto/tests/PrestoParserTestBase.h"
+#include "velox/common/base/tests/GTestUtils.h"
+
+namespace axiom::sql::presto::test {
+
+using namespace facebook::velox;
+namespace lp = facebook::axiom::logical_plan;
+
+namespace {
+
+class AggregationParserTest : public PrestoParserTestBase {};
+
+TEST_F(AggregationParserTest, countStar) {
+  {
+    auto matcher = matchScan().aggregate();
+
+    testSelect("SELECT count(*) FROM nation", matcher);
+    testSelect("SELECT count(1) FROM nation", matcher);
+
+    testSelect("SELECT count(1) \"count\" FROM nation", matcher);
+    testSelect("SELECT count(1) AS \"count\" FROM nation", matcher);
+  }
+
+  {
+    // Global aggregation with HAVING clause.
+    auto matcher = matchScan().aggregate().filter();
+    testSelect("SELECT count(*) FROM nation HAVING count(*) > 100", matcher);
+  }
+}
+
+TEST_F(AggregationParserTest, aggregateCoercions) {
+  auto matcher = matchScan().aggregate();
+
+  testSelect("SELECT corr(n_nationkey, 1.2) FROM nation", matcher);
+}
+
+TEST_F(AggregationParserTest, simpleGroupBy) {
+  {
+    auto matcher = matchScan().aggregate();
+
+    testSelect("SELECT n_name, count(1) FROM nation GROUP BY 1", matcher);
+    testSelect("SELECT n_name, count(1) FROM nation GROUP BY n_name", matcher);
+  }
+
+  {
+    auto matcher = matchScan().aggregate().project();
+    testSelect(
+        "SELECT count(1) FROM nation GROUP BY n_name, n_regionkey", matcher);
+  }
+}
+
+TEST_F(AggregationParserTest, groupingSets) {
+  lp::AggregateNodePtr agg;
+  auto matcher = matchScan().aggregate([&](const auto& node) {
+    agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+  });
+
+  testSelect(
+      "SELECT n_regionkey, count(1) FROM nation "
+      "GROUP BY GROUPING SETS (n_regionkey, ())",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(testing::ElementsAre(0), testing::IsEmpty()));
+
+  testSelect(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY GROUPING SETS ((n_regionkey, n_name), (n_regionkey), ())",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1),
+          testing::ElementsAre(0),
+          testing::IsEmpty()));
+
+  // Test ordinals in GROUPING SETS: GROUPING SETS ((1, 2), (1))
+  testSelect(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY GROUPING SETS ((1, 2), (1))",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1), testing::ElementsAre(0)));
+}
+
+TEST_F(AggregationParserTest, rollup) {
+  lp::AggregateNodePtr agg;
+  auto matcher = matchScan().aggregate([&](const auto& node) {
+    agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+  });
+
+  testSelect(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY ROLLUP(n_regionkey, n_name)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1),
+          testing::ElementsAre(0),
+          testing::IsEmpty()));
+
+  testSelect(
+      "SELECT n_regionkey, count(1) FROM nation "
+      "GROUP BY ROLLUP(n_regionkey)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(testing::ElementsAre(0), testing::IsEmpty()));
+}
+
+TEST_F(AggregationParserTest, cube) {
+  lp::AggregateNodePtr agg;
+  auto matcher = matchScan().aggregate([&](const auto& node) {
+    agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+  });
+
+  testSelect(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY CUBE(n_regionkey, n_name)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1),
+          testing::ElementsAre(0),
+          testing::ElementsAre(1),
+          testing::IsEmpty()));
+
+  testSelect(
+      "SELECT n_regionkey, count(1) FROM nation "
+      "GROUP BY CUBE(n_regionkey)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(testing::ElementsAre(0), testing::IsEmpty()));
+}
+
+TEST_F(AggregationParserTest, mixedGroupByWithRollup) {
+  lp::AggregateNodePtr agg;
+  auto matcher = matchScan().aggregate([&](const auto& node) {
+    agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+  });
+
+  testSelect(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY n_regionkey, ROLLUP(n_name)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1), testing::ElementsAre(0)));
+}
+
+TEST_F(AggregationParserTest, groupingSetsOrdinalCaching) {
+  lp::AggregateNodePtr agg;
+  auto matcher = matchScan().aggregate([&](const auto& node) {
+    agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+  });
+
+  testSelect(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY GROUPING SETS ((1), (1, 2), (2))",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0),
+          testing::ElementsAre(0, 1),
+          testing::ElementsAre(1)));
+
+  testSelect(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY ROLLUP(1, 2)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1),
+          testing::ElementsAre(0),
+          testing::IsEmpty()));
+
+  testSelect(
+      "SELECT n_regionkey, n_name, count(1) FROM nation "
+      "GROUP BY CUBE(1, 2)",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0, 1),
+          testing::ElementsAre(0),
+          testing::ElementsAre(1),
+          testing::IsEmpty()));
+}
+
+TEST_F(AggregationParserTest, groupingSetsSubqueryOrdinal) {
+  lp::AggregateNodePtr agg;
+  auto matcher =
+      matchScan()
+          .aggregate([&](const auto& node) {
+            agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+          })
+          .project();
+
+  testSelect(
+      "SELECT (SELECT 1), n_name, count(1) FROM nation "
+      "GROUP BY GROUPING SETS ((1), (1, 2))",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  EXPECT_THAT(
+      agg->groupingSets(),
+      testing::ElementsAre(
+          testing::ElementsAre(0), testing::ElementsAre(0, 1)));
+}
+
+TEST_F(AggregationParserTest, cubeColumnLimit) {
+  // CUBE is limited to 30 columns (2^30 grouping sets).
+  // Generate a query with 31 columns to verify the limit is enforced.
+  std::string columns;
+  for (int i = 1; i <= 31; ++i) {
+    if (i > 1) {
+      columns += ", ";
+    }
+    columns += fmt::format("c{}", i);
+  }
+
+  std::string sql = fmt::format(
+      "SELECT {}, count(1) FROM (SELECT 1 as c1, 2 as c2, 3 as c3, 4 as c4, "
+      "5 as c5, 6 as c6, 7 as c7, 8 as c8, 9 as c9, 10 as c10, "
+      "11 as c11, 12 as c12, 13 as c13, 14 as c14, 15 as c15, 16 as c16, "
+      "17 as c17, 18 as c18, 19 as c19, 20 as c20, 21 as c21, 22 as c22, "
+      "23 as c23, 24 as c24, 25 as c25, 26 as c26, 27 as c27, 28 as c28, "
+      "29 as c29, 30 as c30, 31 as c31) GROUP BY CUBE({})",
+      columns,
+      columns);
+
+  VELOX_ASSERT_THROW(parseSql(sql), "CUBE supports at most 30 columns");
+}
+
+TEST_F(AggregationParserTest, distinct) {
+  {
+    auto matcher = matchScan().project().aggregate();
+    testSelect("SELECT DISTINCT n_regionkey FROM nation", matcher);
+    testSelect(
+        "SELECT DISTINCT n_regionkey, length(n_name) FROM nation", matcher);
+  }
+
+  {
+    auto matcher = matchScan().aggregate().project().aggregate();
+    testSelect(
+        "SELECT DISTINCT count(1) FROM nation GROUP BY n_regionkey", matcher);
+  }
+
+  {
+    auto matcher = matchScan().aggregate();
+    testSelect("SELECT DISTINCT * FROM nation", matcher);
+  }
+}
+
+TEST_F(AggregationParserTest, groupingKeyExpr) {
+  {
+    auto matcher = matchScan().aggregate().project();
+
+    testSelect(
+        "SELECT n_name, count(1), length(n_name) FROM nation GROUP BY 1",
+        matcher);
+  }
+
+  {
+    auto matcher = matchScan().aggregate();
+    testSelect(
+        "SELECT substr(n_name, 1, 2), count(1) FROM nation GROUP BY 1",
+        matcher);
+
+    testSelect(
+        "SELECT r_regionkey IN (SELECT n_regionkey FROM nation), count(1) "
+        "FROM region GROUP BY 1",
+        matcher);
+  }
+
+  {
+    auto matcher = matchScan().aggregate().project();
+    testSelect(
+        "SELECT count(1) FROM nation GROUP BY substr(n_name, 1, 2)", matcher);
+  }
+}
+
+TEST_F(AggregationParserTest, having) {
+  {
+    auto matcher = matchScan().aggregate().filter().project();
+
+    testSelect(
+        "SELECT n_name FROM nation GROUP BY 1 HAVING sum(length(n_comment)) > 10",
+        matcher);
+  }
+}
+
+TEST_F(AggregationParserTest, scalarOverAgg) {
+  auto matcher = matchScan().aggregate().project();
+
+  testSelect(
+      "SELECT sum(n_regionkey) + count(1), avg(length(n_name)) * 0.3 "
+      "FROM nation",
+      matcher);
+
+  testSelect(
+      "SELECT n_regionkey, sum(n_nationkey) + count(1), avg(length(n_name)) * 0.3 "
+      "FROM nation "
+      "GROUP BY 1",
+      matcher);
+}
+
+TEST_F(AggregationParserTest, aggregateOptions) {
+  lp::AggregateNodePtr agg;
+  auto matcher = matchScan().aggregate([&](const auto& node) {
+    agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+  });
+
+  testSelect("SELECT array_agg(distinct n_regionkey) FROM nation", matcher);
+  ASSERT_TRUE(agg != nullptr);
+  ASSERT_EQ(1, agg->aggregates().size());
+  ASSERT_TRUE(agg->aggregateAt(0)->isDistinct());
+  ASSERT_TRUE(agg->aggregateAt(0)->filter() == nullptr);
+  ASSERT_EQ(0, agg->aggregateAt(0)->ordering().size());
+
+  testSelect(
+      "SELECT array_agg(n_nationkey ORDER BY n_regionkey) FROM nation",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  ASSERT_EQ(1, agg->aggregates().size());
+  ASSERT_FALSE(agg->aggregateAt(0)->isDistinct());
+  ASSERT_TRUE(agg->aggregateAt(0)->filter() == nullptr);
+  ASSERT_EQ(1, agg->aggregateAt(0)->ordering().size());
+
+  testSelect(
+      "SELECT array_agg(n_nationkey) FILTER (WHERE n_regionkey = 1) FROM nation",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  ASSERT_EQ(1, agg->aggregates().size());
+  ASSERT_FALSE(agg->aggregateAt(0)->isDistinct());
+  ASSERT_FALSE(agg->aggregateAt(0)->filter() == nullptr);
+  ASSERT_EQ(0, agg->aggregateAt(0)->ordering().size());
+
+  testSelect(
+      "SELECT array_agg(distinct n_regionkey) FILTER (WHERE n_name like 'A%') FROM nation",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  ASSERT_EQ(1, agg->aggregates().size());
+  ASSERT_TRUE(agg->aggregateAt(0)->isDistinct());
+  ASSERT_FALSE(agg->aggregateAt(0)->filter() == nullptr);
+  ASSERT_EQ(0, agg->aggregateAt(0)->ordering().size());
+
+  testSelect(
+      "SELECT array_agg(n_regionkey ORDER BY n_name) FILTER (WHERE n_name like 'A%') FROM nation",
+      matcher);
+  ASSERT_TRUE(agg != nullptr);
+  ASSERT_EQ(1, agg->aggregates().size());
+  ASSERT_FALSE(agg->aggregateAt(0)->isDistinct());
+  ASSERT_FALSE(agg->aggregateAt(0)->filter() == nullptr);
+  ASSERT_EQ(1, agg->aggregateAt(0)->ordering().size());
+}
+
+} // namespace
+} // namespace axiom::sql::presto::test

@@ -18,6 +18,7 @@ target_link_libraries(axiom_logical_plan_matcher axiom_logical_plan GTest::gtest
 
 add_executable(
   axiom_sql_presto_test
+  AggregationParserTest.cpp
   DdlParserTest.cpp
   ExpressionParserTest.cpp
   PrestoParserTest.cpp

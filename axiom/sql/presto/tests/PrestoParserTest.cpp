@@ -150,7 +150,7 @@ TEST_F(PrestoParserTest, parseMultipleComplexQuery) {
 
 TEST_F(PrestoParserTest, unnest) {
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().values().unnest();
+    auto matcher = matchValues().unnest();
     testSelect("SELECT * FROM unnest(array[1, 2, 3])", matcher);
 
     testSelect(
@@ -163,8 +163,7 @@ TEST_F(PrestoParserTest, unnest) {
   }
 
   {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().values().unnest().project();
+    auto matcher = matchValues().unnest().project();
     testSelect("SELECT * FROM unnest(array[1, 2, 3]) as t(x)", matcher);
 
     testSelect(
@@ -173,14 +172,14 @@ TEST_F(PrestoParserTest, unnest) {
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().unnest();
+    auto matcher = matchScan().unnest();
     testSelect(
         "SELECT * FROM nation, unnest(array[n_nationkey, n_regionkey])",
         matcher);
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().unnest();
+    auto matcher = matchScan().unnest();
 
     testSelect(
         "SELECT * FROM nation, unnest(array[n_nationkey, n_regionkey]) as t(x)",
@@ -188,11 +187,7 @@ TEST_F(PrestoParserTest, unnest) {
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                       .values()
-                       .project()
-                       .unnest()
-                       .project();
+    auto matcher = matchValues().project().unnest().project();
 
     testSelect(
         "WITH a AS (SELECT array[1,2,3] as x) SELECT t.x + 1 FROM a, unnest(A.x) as T(X)",
@@ -200,7 +195,7 @@ TEST_F(PrestoParserTest, unnest) {
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().unnest();
+    auto matcher = matchScan().unnest();
 
     testSelect(
         "SELECT * FROM (nation cross join unnest(array[1,2,3]) as t(x))",
@@ -237,13 +232,13 @@ TEST_F(PrestoParserTest, syntaxErrors) {
 
 TEST_F(PrestoParserTest, selectStar) {
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan();
+    auto matcher = matchScan();
     testSelect("SELECT * FROM nation", matcher);
     testSelect("(SELECT * FROM nation)", matcher);
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+    auto matcher = matchScan().project();
     testSelect("SELECT *, * FROM nation", matcher);
     testSelect("SELECT *, n_nationkey FROM nation", matcher);
     testSelect("SELECT nation.* FROM nation", matcher);
@@ -251,12 +246,7 @@ TEST_F(PrestoParserTest, selectStar) {
   }
 
   {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder()
-            .tableScan()
-            .join(lp::test::LogicalPlanMatcherBuilder().tableScan().build())
-            .filter()
-            .project();
+    auto matcher = matchScan().join(matchScan().build()).filter().project();
     testSelect(
         "SELECT nation.*, r_regionkey + 1 FROM nation, region WHERE n_regionkey = r_regionkey",
         matcher);
@@ -272,8 +262,8 @@ TEST_F(PrestoParserTest, hiddenColumns) {
   auto verifyOutput = [&](const std::string& sql,
                           std::initializer_list<std::string> expectedNames) {
     lp::LogicalPlanNodePtr outputNode;
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project(
-        [&](const auto& node) { outputNode = node; });
+    auto matcher =
+        matchScan().project([&](const auto& node) { outputNode = node; });
 
     testSelect(sql, matcher);
     ASSERT_THAT(
@@ -290,7 +280,7 @@ TEST_F(PrestoParserTest, hiddenColumns) {
 }
 
 TEST_F(PrestoParserTest, mixedCaseColumnNames) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+  auto matcher = matchScan().project();
   testSelect("SELECT N_NAME, n_ReGiOnKeY FROM nation", matcher);
   testSelect("SELECT nation.n_name FROM nation", matcher);
   testSelect("SELECT NATION.n_name FROM nation", matcher);
@@ -298,7 +288,7 @@ TEST_F(PrestoParserTest, mixedCaseColumnNames) {
 }
 
 TEST_F(PrestoParserTest, with) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
+  auto matcher = matchValues().project();
   testSelect("WITH a as (SELECT 1 as x) SELECT * FROM a", matcher);
   testSelect("WITH a as (SELECT 1 as x) SELECT * FROM A", matcher);
   testSelect("WITH A as (SELECT 1 as x) SELECT * FROM a", matcher);
@@ -307,409 +297,16 @@ TEST_F(PrestoParserTest, with) {
   testSelect("WITH a as (SELECT 1 as x) SELECT A.x FROM a", matcher);
 }
 
-TEST_F(PrestoParserTest, countStar) {
-  {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate();
-
-    testSelect("SELECT count(*) FROM nation", matcher);
-    testSelect("SELECT count(1) FROM nation", matcher);
-
-    testSelect("SELECT count(1) \"count\" FROM nation", matcher);
-    testSelect("SELECT count(1) AS \"count\" FROM nation", matcher);
-  }
-
-  {
-    // Global aggregation with HAVING clause.
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate().filter();
-    testSelect("SELECT count(*) FROM nation HAVING count(*) > 100", matcher);
-  }
-}
-
-TEST_F(PrestoParserTest, aggregateCoercions) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate();
-
-  testSelect("SELECT corr(n_nationkey, 1.2) FROM nation", matcher);
-}
-
-TEST_F(PrestoParserTest, simpleGroupBy) {
-  {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate();
-
-    testSelect("SELECT n_name, count(1) FROM nation GROUP BY 1", matcher);
-    testSelect("SELECT n_name, count(1) FROM nation GROUP BY n_name", matcher);
-  }
-
-  {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate().project();
-    testSelect(
-        "SELECT count(1) FROM nation GROUP BY n_name, n_regionkey", matcher);
-  }
-}
-
-TEST_F(PrestoParserTest, groupingSets) {
-  lp::AggregateNodePtr agg;
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
-      [&](const auto& node) {
-        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-      });
-
-  testSelect(
-      "SELECT n_regionkey, count(1) FROM nation "
-      "GROUP BY GROUPING SETS (n_regionkey, ())",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  EXPECT_THAT(
-      agg->groupingSets(),
-      testing::ElementsAre(testing::ElementsAre(0), testing::IsEmpty()));
-
-  testSelect(
-      "SELECT n_regionkey, n_name, count(1) FROM nation "
-      "GROUP BY GROUPING SETS ((n_regionkey, n_name), (n_regionkey), ())",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  EXPECT_THAT(
-      agg->groupingSets(),
-      testing::ElementsAre(
-          testing::ElementsAre(0, 1),
-          testing::ElementsAre(0),
-          testing::IsEmpty()));
-
-  // Test ordinals in GROUPING SETS: GROUPING SETS ((1, 2), (1))
-  testSelect(
-      "SELECT n_regionkey, n_name, count(1) FROM nation "
-      "GROUP BY GROUPING SETS ((1, 2), (1))",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  EXPECT_THAT(
-      agg->groupingSets(),
-      testing::ElementsAre(
-          testing::ElementsAre(0, 1), testing::ElementsAre(0)));
-}
-
-TEST_F(PrestoParserTest, rollup) {
-  lp::AggregateNodePtr agg;
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
-      [&](const auto& node) {
-        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-      });
-
-  testSelect(
-      "SELECT n_regionkey, n_name, count(1) FROM nation "
-      "GROUP BY ROLLUP(n_regionkey, n_name)",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  EXPECT_THAT(
-      agg->groupingSets(),
-      testing::ElementsAre(
-          testing::ElementsAre(0, 1),
-          testing::ElementsAre(0),
-          testing::IsEmpty()));
-
-  testSelect(
-      "SELECT n_regionkey, count(1) FROM nation "
-      "GROUP BY ROLLUP(n_regionkey)",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  EXPECT_THAT(
-      agg->groupingSets(),
-      testing::ElementsAre(testing::ElementsAre(0), testing::IsEmpty()));
-}
-
-TEST_F(PrestoParserTest, cube) {
-  lp::AggregateNodePtr agg;
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
-      [&](const auto& node) {
-        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-      });
-
-  testSelect(
-      "SELECT n_regionkey, n_name, count(1) FROM nation "
-      "GROUP BY CUBE(n_regionkey, n_name)",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  EXPECT_THAT(
-      agg->groupingSets(),
-      testing::ElementsAre(
-          testing::ElementsAre(0, 1),
-          testing::ElementsAre(0),
-          testing::ElementsAre(1),
-          testing::IsEmpty()));
-
-  testSelect(
-      "SELECT n_regionkey, count(1) FROM nation "
-      "GROUP BY CUBE(n_regionkey)",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  EXPECT_THAT(
-      agg->groupingSets(),
-      testing::ElementsAre(testing::ElementsAre(0), testing::IsEmpty()));
-}
-
-TEST_F(PrestoParserTest, mixedGroupByWithRollup) {
-  lp::AggregateNodePtr agg;
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
-      [&](const auto& node) {
-        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-      });
-
-  testSelect(
-      "SELECT n_regionkey, n_name, count(1) FROM nation "
-      "GROUP BY n_regionkey, ROLLUP(n_name)",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  EXPECT_THAT(
-      agg->groupingSets(),
-      testing::ElementsAre(
-          testing::ElementsAre(0, 1), testing::ElementsAre(0)));
-}
-
-TEST_F(PrestoParserTest, groupingSetsOrdinalCaching) {
-  lp::AggregateNodePtr agg;
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
-      [&](const auto& node) {
-        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-      });
-
-  testSelect(
-      "SELECT n_regionkey, n_name, count(1) FROM nation "
-      "GROUP BY GROUPING SETS ((1), (1, 2), (2))",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  EXPECT_THAT(
-      agg->groupingSets(),
-      testing::ElementsAre(
-          testing::ElementsAre(0),
-          testing::ElementsAre(0, 1),
-          testing::ElementsAre(1)));
-
-  testSelect(
-      "SELECT n_regionkey, n_name, count(1) FROM nation "
-      "GROUP BY ROLLUP(1, 2)",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  EXPECT_THAT(
-      agg->groupingSets(),
-      testing::ElementsAre(
-          testing::ElementsAre(0, 1),
-          testing::ElementsAre(0),
-          testing::IsEmpty()));
-
-  testSelect(
-      "SELECT n_regionkey, n_name, count(1) FROM nation "
-      "GROUP BY CUBE(1, 2)",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  EXPECT_THAT(
-      agg->groupingSets(),
-      testing::ElementsAre(
-          testing::ElementsAre(0, 1),
-          testing::ElementsAre(0),
-          testing::ElementsAre(1),
-          testing::IsEmpty()));
-}
-
-TEST_F(PrestoParserTest, groupingSetsSubqueryOrdinal) {
-  lp::AggregateNodePtr agg;
-  auto matcher =
-      lp::test::LogicalPlanMatcherBuilder()
-          .tableScan()
-          .aggregate([&](const auto& node) {
-            agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-          })
-          .project();
-
-  testSelect(
-      "SELECT (SELECT 1), n_name, count(1) FROM nation "
-      "GROUP BY GROUPING SETS ((1), (1, 2))",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  EXPECT_THAT(
-      agg->groupingSets(),
-      testing::ElementsAre(
-          testing::ElementsAre(0), testing::ElementsAre(0, 1)));
-}
-
-TEST_F(PrestoParserTest, cubeColumnLimit) {
-  // CUBE is limited to 30 columns (2^30 grouping sets).
-  // Generate a query with 31 columns to verify the limit is enforced.
-  std::string columns;
-  for (int i = 1; i <= 31; ++i) {
-    if (i > 1) {
-      columns += ", ";
-    }
-    columns += fmt::format("c{}", i);
-  }
-
-  std::string sql = fmt::format(
-      "SELECT {}, count(1) FROM (SELECT 1 as c1, 2 as c2, 3 as c3, 4 as c4, "
-      "5 as c5, 6 as c6, 7 as c7, 8 as c8, 9 as c9, 10 as c10, "
-      "11 as c11, 12 as c12, 13 as c13, 14 as c14, 15 as c15, 16 as c16, "
-      "17 as c17, 18 as c18, 19 as c19, 20 as c20, 21 as c21, 22 as c22, "
-      "23 as c23, 24 as c24, 25 as c25, 26 as c26, 27 as c27, 28 as c28, "
-      "29 as c29, 30 as c30, 31 as c31) GROUP BY CUBE({})",
-      columns,
-      columns);
-
-  VELOX_ASSERT_THROW(parseSql(sql), "CUBE supports at most 30 columns");
-}
-
-TEST_F(PrestoParserTest, distinct) {
-  {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().project().aggregate();
-    testSelect("SELECT DISTINCT n_regionkey FROM nation", matcher);
-    testSelect(
-        "SELECT DISTINCT n_regionkey, length(n_name) FROM nation", matcher);
-  }
-
-  {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                       .tableScan()
-                       .aggregate()
-                       .project()
-                       .aggregate();
-    testSelect(
-        "SELECT DISTINCT count(1) FROM nation GROUP BY n_regionkey", matcher);
-  }
-
-  {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate();
-    testSelect("SELECT DISTINCT * FROM nation", matcher);
-  }
-}
-
-TEST_F(PrestoParserTest, groupingKeyExpr) {
-  {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate().project();
-
-    testSelect(
-        "SELECT n_name, count(1), length(n_name) FROM nation GROUP BY 1",
-        matcher);
-  }
-
-  {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate();
-    testSelect(
-        "SELECT substr(n_name, 1, 2), count(1) FROM nation GROUP BY 1",
-        matcher);
-
-    testSelect(
-        "SELECT r_regionkey IN (SELECT n_regionkey FROM nation), count(1) "
-        "FROM region GROUP BY 1",
-        matcher);
-  }
-
-  {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate().project();
-    testSelect(
-        "SELECT count(1) FROM nation GROUP BY substr(n_name, 1, 2)", matcher);
-  }
-}
-
-TEST_F(PrestoParserTest, having) {
-  {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                       .tableScan()
-                       .aggregate()
-                       .filter()
-                       .project();
-
-    testSelect(
-        "SELECT n_name FROM nation GROUP BY 1 HAVING sum(length(n_comment)) > 10",
-        matcher);
-  }
-}
-
-TEST_F(PrestoParserTest, scalarOverAgg) {
-  auto matcher =
-      lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate().project();
-
-  testSelect(
-      "SELECT sum(n_regionkey) + count(1), avg(length(n_name)) * 0.3 "
-      "FROM nation",
-      matcher);
-
-  testSelect(
-      "SELECT n_regionkey, sum(n_nationkey) + count(1), avg(length(n_name)) * 0.3 "
-      "FROM nation "
-      "GROUP BY 1",
-      matcher);
-}
-
-TEST_F(PrestoParserTest, aggregateOptions) {
-  lp::AggregateNodePtr agg;
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate(
-      [&](const auto& node) {
-        agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-      });
-
-  testSelect("SELECT array_agg(distinct n_regionkey) FROM nation", matcher);
-  ASSERT_TRUE(agg != nullptr);
-  ASSERT_EQ(1, agg->aggregates().size());
-  ASSERT_TRUE(agg->aggregateAt(0)->isDistinct());
-  ASSERT_TRUE(agg->aggregateAt(0)->filter() == nullptr);
-  ASSERT_EQ(0, agg->aggregateAt(0)->ordering().size());
-
-  testSelect(
-      "SELECT array_agg(n_nationkey ORDER BY n_regionkey) FROM nation",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  ASSERT_EQ(1, agg->aggregates().size());
-  ASSERT_FALSE(agg->aggregateAt(0)->isDistinct());
-  ASSERT_TRUE(agg->aggregateAt(0)->filter() == nullptr);
-  ASSERT_EQ(1, agg->aggregateAt(0)->ordering().size());
-
-  testSelect(
-      "SELECT array_agg(n_nationkey) FILTER (WHERE n_regionkey = 1) FROM nation",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  ASSERT_EQ(1, agg->aggregates().size());
-  ASSERT_FALSE(agg->aggregateAt(0)->isDistinct());
-  ASSERT_FALSE(agg->aggregateAt(0)->filter() == nullptr);
-  ASSERT_EQ(0, agg->aggregateAt(0)->ordering().size());
-
-  testSelect(
-      "SELECT array_agg(distinct n_regionkey) FILTER (WHERE n_name like 'A%') FROM nation",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  ASSERT_EQ(1, agg->aggregates().size());
-  ASSERT_TRUE(agg->aggregateAt(0)->isDistinct());
-  ASSERT_FALSE(agg->aggregateAt(0)->filter() == nullptr);
-  ASSERT_EQ(0, agg->aggregateAt(0)->ordering().size());
-
-  testSelect(
-      "SELECT array_agg(n_regionkey ORDER BY n_name) FILTER (WHERE n_name like 'A%') FROM nation",
-      matcher);
-  ASSERT_TRUE(agg != nullptr);
-  ASSERT_EQ(1, agg->aggregates().size());
-  ASSERT_FALSE(agg->aggregateAt(0)->isDistinct());
-  ASSERT_FALSE(agg->aggregateAt(0)->filter() == nullptr);
-  ASSERT_EQ(1, agg->aggregateAt(0)->ordering().size());
-}
-
 TEST_F(PrestoParserTest, orderBy) {
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                       .tableScan()
-                       .aggregate()
-                       .sort()
-                       .project();
+    auto matcher = matchScan().aggregate().sort().project();
 
     testSelect(
         "select n_regionkey from nation group by 1 order by count(1)", matcher);
   }
 
   {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate().sort();
+    auto matcher = matchScan().aggregate().sort();
 
     testSelect(
         "select n_regionkey, count(1) from nation group by 1 order by count(1)",
@@ -725,11 +322,7 @@ TEST_F(PrestoParserTest, orderBy) {
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                       .tableScan()
-                       .aggregate()
-                       .project()
-                       .sort();
+    auto matcher = matchScan().aggregate().project().sort();
 
     testSelect(
         "select n_regionkey, count(1) * 2 from nation group by 1 order by 2",
@@ -741,12 +334,7 @@ TEST_F(PrestoParserTest, orderBy) {
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                       .tableScan()
-                       .aggregate()
-                       .project()
-                       .sort()
-                       .project();
+    auto matcher = matchScan().aggregate().project().sort().project();
     testSelect(
         "select n_regionkey, count(1) * 2 from nation group by 1 order by count(1) * 3",
         matcher);
@@ -755,8 +343,7 @@ TEST_F(PrestoParserTest, orderBy) {
 
 TEST_F(PrestoParserTest, join) {
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().join(
-        lp::test::LogicalPlanMatcherBuilder().tableScan().build());
+    auto matcher = matchScan().join(matchScan().build());
 
     testSelect("SELECT * FROM nation, region", matcher);
 
@@ -778,11 +365,7 @@ TEST_F(PrestoParserTest, join) {
   }
 
   {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder()
-            .tableScan()
-            .join(lp::test::LogicalPlanMatcherBuilder().tableScan().build())
-            .filter();
+    auto matcher = matchScan().join(matchScan().build()).filter();
 
     testSelect(
         "SELECT * FROM nation, region WHERE n_regionkey = r_regionkey",
@@ -790,12 +373,7 @@ TEST_F(PrestoParserTest, join) {
   }
 
   {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder()
-            .tableScan()
-            .join(lp::test::LogicalPlanMatcherBuilder().tableScan().build())
-            .filter()
-            .project();
+    auto matcher = matchScan().join(matchScan().build()).filter().project();
 
     testSelect(
         "SELECT n_name, r_name FROM nation, region WHERE n_regionkey = r_regionkey",
@@ -804,8 +382,7 @@ TEST_F(PrestoParserTest, join) {
 }
 
 TEST_F(PrestoParserTest, joinOnSubquery) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().join(
-      lp::test::LogicalPlanMatcherBuilder().tableScan().build());
+  auto matcher = matchScan().join(matchScan().build());
 
   // Correlated subquery in JOIN ON clause referencing left-side columns works.
   testSelect(
@@ -838,58 +415,44 @@ TEST_F(PrestoParserTest, joinOnSubquery) {
 }
 
 TEST_F(PrestoParserTest, unionAll) {
-  auto matcher =
-      lp::test::LogicalPlanMatcherBuilder().tableScan().project().setOperation(
-          lp::SetOperation::kUnionAll,
-          lp::test::LogicalPlanMatcherBuilder().tableScan().project().build());
+  auto matcher = matchScan().project().setOperation(
+      lp::SetOperation::kUnionAll, matchScan().project().build());
 
   testSelect(
       "SELECT n_name FROM nation UNION ALL SELECT r_name FROM region", matcher);
 }
 
 TEST_F(PrestoParserTest, union) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                     .tableScan()
-                     .project()
-                     .setOperation(
-                         lp::SetOperation::kUnionAll,
-                         lp::test::LogicalPlanMatcherBuilder()
-                             .tableScan()
-                             .project()
-                             .build())
-                     .aggregate();
+  auto matcher =
+      matchScan()
+          .project()
+          .setOperation(
+              lp::SetOperation::kUnionAll, matchScan().project().build())
+          .aggregate();
 
   testSelect(
       "SELECT n_name FROM nation UNION SELECT r_name FROM region", matcher);
 }
 
 TEST_F(PrestoParserTest, except) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                     .tableScan()
-                     .project()
-                     .setOperation(
-                         lp::SetOperation::kExcept,
-                         lp::test::LogicalPlanMatcherBuilder()
-                             .tableScan()
-                             .project()
-                             .build())
-                     .aggregate();
+  auto matcher =
+      matchScan()
+          .project()
+          .setOperation(
+              lp::SetOperation::kExcept, matchScan().project().build())
+          .aggregate();
 
   testSelect(
       "SELECT n_name FROM nation EXCEPT SELECT r_name FROM region", matcher);
 }
 
 TEST_F(PrestoParserTest, intersect) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                     .tableScan()
-                     .project()
-                     .setOperation(
-                         lp::SetOperation::kIntersect,
-                         lp::test::LogicalPlanMatcherBuilder()
-                             .tableScan()
-                             .project()
-                             .build())
-                     .aggregate();
+  auto matcher =
+      matchScan()
+          .project()
+          .setOperation(
+              lp::SetOperation::kIntersect, matchScan().project().build())
+          .aggregate();
 
   testSelect(
       "SELECT n_name FROM nation INTERSECT SELECT r_name FROM region", matcher);
@@ -897,7 +460,7 @@ TEST_F(PrestoParserTest, intersect) {
 
 TEST_F(PrestoParserTest, exists) {
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().filter();
+    auto matcher = matchScan().filter();
 
     testSelect(
         "SELECT * FROM region WHERE exists (SELECT * from nation WHERE n_name like 'A%' and r_regionkey = n_regionkey)",
@@ -909,7 +472,7 @@ TEST_F(PrestoParserTest, exists) {
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+    auto matcher = matchScan().project();
 
     testSelect(
         "SELECT EXISTS (SELECT * from nation WHERE n_regionkey = r_regionkey) FROM region",
@@ -944,7 +507,7 @@ TEST_F(PrestoParserTest, values) {
 
 TEST_F(PrestoParserTest, tablesample) {
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().sample();
+    auto matcher = matchScan().sample();
 
     testSelect("SELECT * FROM nation TABLESAMPLE BERNOULLI (10.0)", matcher);
     testSelect("SELECT * FROM nation TABLESAMPLE SYSTEM (1.5)", matcher);
@@ -954,8 +517,7 @@ TEST_F(PrestoParserTest, tablesample) {
   }
 
   {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().aggregate().sample();
+    auto matcher = matchScan().aggregate().sample();
 
     testSelect(
         "SELECT * FROM (SELECT l_orderkey, count(*) FROM lineitem GROUP BY 1) "
@@ -966,12 +528,7 @@ TEST_F(PrestoParserTest, tablesample) {
 
 TEST_F(PrestoParserTest, everything) {
   auto matcher =
-      lp::test::LogicalPlanMatcherBuilder()
-          .tableScan()
-          .join(lp::test::LogicalPlanMatcherBuilder().tableScan().build())
-          .filter()
-          .aggregate()
-          .sort();
+      matchScan().join(matchScan().build()).filter().aggregate().sort();
 
   testSelect(
       "SELECT r_name, count(*) FROM nation, region "
@@ -983,7 +540,7 @@ TEST_F(PrestoParserTest, everything) {
 
 TEST_F(PrestoParserTest, explainSelect) {
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan();
+    auto matcher = matchScan();
     testExplain("EXPLAIN SELECT * FROM nation", matcher);
   }
 
@@ -1050,7 +607,7 @@ TEST_F(PrestoParserTest, explainSelect) {
 }
 
 TEST_F(PrestoParserTest, explainShow) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().values();
+  auto matcher = matchValues();
   testExplain("EXPLAIN SHOW CATALOGS", matcher);
 
   testExplain("EXPLAIN SHOW COLUMNS FROM nation", matcher);
@@ -1060,31 +617,30 @@ TEST_F(PrestoParserTest, explainShow) {
 
 TEST_F(PrestoParserTest, explainInsert) {
   {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().tableWrite();
+    auto matcher = matchScan().tableWrite();
     testExplain("EXPLAIN INSERT INTO region SELECT * FROM region", matcher);
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().values().tableWrite();
+    auto matcher = matchValues().tableWrite();
     testExplain("EXPLAIN INSERT INTO region VALUES (1, 'foo', 'bar')", matcher);
   }
 }
 
 TEST_F(PrestoParserTest, showCatalogs) {
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().values();
+    auto matcher = matchValues();
     testSelect("SHOW CATALOGS", matcher);
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().values().filter();
+    auto matcher = matchValues().filter();
     testSelect("SHOW CATALOGS LIKE 'tpch'", matcher);
   }
 }
 
 TEST_F(PrestoParserTest, describe) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().values();
+  auto matcher = matchValues();
   testSelect("DESCRIBE nation", matcher);
 
   testSelect("DESC orders", matcher);
@@ -1094,12 +650,12 @@ TEST_F(PrestoParserTest, describe) {
 
 TEST_F(PrestoParserTest, showFunctions) {
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().values();
+    auto matcher = matchValues();
     testSelect("SHOW FUNCTIONS", matcher);
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().values().filter();
+    auto matcher = matchValues().filter();
     testSelect("SHOW FUNCTIONS LIKE 'array%'", matcher);
   }
 }
@@ -1108,29 +664,19 @@ TEST_F(PrestoParserTest, unqualifiedAccessAfterJoin) {
   auto sql =
       "SELECT n_name FROM (SELECT n1.n_name as n_name FROM nation n1, nation n2)";
 
-  auto matcher =
-      lp::test::LogicalPlanMatcherBuilder()
-          .tableScan()
-          .join(lp::test::LogicalPlanMatcherBuilder().tableScan().build())
-          .project()
-          .project();
+  auto matcher = matchScan().join(matchScan().build()).project().project();
   testSelect(sql, matcher);
 }
 
 TEST_F(PrestoParserTest, duplicateAliases) {
   {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().values().project().project();
+    auto matcher = matchValues().project().project();
     testSelect(
         "SELECT a as x, b as x FROM (VALUES (1, 2)) AS t(a, b)", matcher);
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                       .values()
-                       .project()
-                       .unnest()
-                       .project();
+    auto matcher = matchValues().project().unnest().project();
     testSelect(
         "SELECT a as x, u.x FROM (VALUES (1, ARRAY[10, 20])) AS t(a, b) "
         "CROSS JOIN UNNEST(b) AS u(x)",
@@ -1138,11 +684,7 @@ TEST_F(PrestoParserTest, duplicateAliases) {
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                       .values()
-                       .project()
-                       .aggregate()
-                       .project();
+    auto matcher = matchValues().project().aggregate().project();
     testSelect(
         "SELECT sum(a) as x, sum(b) as x FROM (VALUES (1, 2)) AS t(a, b)",
         matcher);

@@ -28,14 +28,12 @@ class DdlParserTest : public PrestoParserTestBase {};
 
 TEST_F(DdlParserTest, insertIntoTable) {
   {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().tableWrite();
+    auto matcher = matchScan().tableWrite();
     testInsert("INSERT INTO nation SELECT * FROM nation", matcher);
   }
 
   {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().values().project().tableWrite();
+    auto matcher = matchValues().project().tableWrite();
     testInsert(
         "INSERT INTO nation SELECT 100, 'n-100', 2, 'test comment'", matcher);
 
@@ -63,14 +61,12 @@ TEST_F(DdlParserTest, createTableAsSelect) {
             ->findTable("nation")
             ->type();
 
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().tableScan().tableWrite();
+    auto matcher = matchScan().tableWrite();
     testCtas(
         "CREATE TABLE t AS SELECT * FROM nation", "t", nationSchema, matcher);
   }
 
-  auto matcher =
-      lp::test::LogicalPlanMatcherBuilder().tableScan().project().tableWrite();
+  auto matcher = matchScan().project().tableWrite();
 
   testCtas(
       "CREATE TABLE t AS SELECT n_nationkey * 100 as a, n_name as b FROM nation",
@@ -315,14 +311,8 @@ TEST_F(DdlParserTest, view) {
     connector_->dropView("view");
   };
 
-  auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                     .tableScan()
-                     .join(
-                         lp::test::LogicalPlanMatcherBuilder()
-                             .tableScan()
-                             .aggregate()
-                             .project()
-                             .build())
+  auto matcher = matchScan()
+                     .join(matchScan().aggregate().project().build())
                      .filter()
                      .project();
   testSelect(
