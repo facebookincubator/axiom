@@ -440,17 +440,21 @@ class RelationPlanner : public AstVisitor {
         std::vector<std::string> columnNames;
         if (allColumns->prefix() != nullptr) {
           // SELECT t.*
+          const auto& prefix = allColumns->prefix()->suffix();
           columnNames = builder_->findOrAssignOutputNames(
-              /*includeHiddenColumns=*/false, allColumns->prefix()->suffix());
+              /*includeHiddenColumns=*/false, prefix);
 
+          for (const auto& name : columnNames) {
+            exprs.push_back(lp::Col(name, lp::Col(prefix)));
+          }
         } else {
           // SELECT *
           columnNames =
               builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
-        }
 
-        for (const auto& name : columnNames) {
-          exprs.push_back(lp::Col(name));
+          for (const auto& name : columnNames) {
+            exprs.push_back(lp::Col(name));
+          }
         }
       } else {
         VELOX_CHECK(item->is(NodeType::kSingleColumn));

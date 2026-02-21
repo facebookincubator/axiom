@@ -745,6 +745,22 @@ TEST_F(PrestoParserTest, qualifiedStarInUnionAfterJoin) {
       "SELECT a.* FROM (VALUES (1)) a(id) JOIN (VALUES (2)) b(id) ON a.id = b.id");
 }
 
+TEST_F(PrestoParserTest, qualifiedStarWithAmbiguousColumnAfterJoin) {
+  // SELECT t.* after a JOIN where both sides have columns with the same names.
+  // Verifies that t.* correctly resolves ambiguous column names using qualified
+  // references.
+  testSelect(
+      "SELECT n1.* FROM nation n1 JOIN nation n2 ON n1.n_regionkey = n2.n_regionkey",
+      matchScan()
+          .join(matchScan().build())
+          .project({
+              "n_nationkey",
+              "n_name",
+              "n_regionkey",
+              "n_comment",
+          }));
+}
+
 // FETCH FIRST n ROWS ONLY is equivalent to LIMIT n. Each LIMIT query below is
 // paired with a FETCH FIRST query to verify they produce the same plan.
 TEST_F(PrestoParserTest, limit) {
