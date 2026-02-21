@@ -27,7 +27,7 @@ namespace {
 
 class ExpressionParserTest : public PrestoParserTestBase {
  protected:
-  lp::ExprPtr parseSqlExpression(std::string_view sql) {
+  lp::ExprPtr parseExpr(std::string_view sql) {
     return makeParser().parseExpression(sql, true);
   }
 
@@ -36,8 +36,7 @@ class ExpressionParserTest : public PrestoParserTestBase {
   void testDecimal(std::string_view sql, T value, const TypePtr& type) {
     SCOPED_TRACE(sql);
 
-    auto parser = makeParser();
-    auto expr = parser.parseExpression(sql);
+    auto expr = parseExpr(sql);
 
     ASSERT_TRUE(expr->isConstant());
     ASSERT_EQ(expr->type()->toString(), type->toString());
@@ -49,13 +48,11 @@ class ExpressionParserTest : public PrestoParserTestBase {
 };
 
 TEST_F(ExpressionParserTest, types) {
-  auto parser = makeParser();
-
   auto test = [&](std::string_view sql, const TypePtr& expectedType) {
     SCOPED_TRACE(sql);
-    auto expr = parser.parseExpression(sql);
+    auto expr = parseExpr(sql);
 
-    ASSERT_EQ(expr->type()->toString(), expectedType->toString());
+    VELOX_EXPECT_EQ_TYPES(expr->type(), expectedType);
   };
 
   test("cast(null as boolean)", BOOLEAN());
@@ -83,11 +80,9 @@ TEST_F(ExpressionParserTest, types) {
 }
 
 TEST_F(ExpressionParserTest, intervalDayTime) {
-  auto parser = makeParser();
-
   auto test = [&](std::string_view sql, int64_t expectedSeconds) {
     SCOPED_TRACE(sql);
-    auto expr = parser.parseExpression(sql);
+    auto expr = parseExpr(sql);
 
     ASSERT_TRUE(expr->isConstant());
     ASSERT_EQ(expr->type()->toString(), INTERVAL_DAY_TIME()->toString());
@@ -112,8 +107,6 @@ TEST_F(ExpressionParserTest, intervalDayTime) {
 }
 
 TEST_F(ExpressionParserTest, decimal) {
-  auto parser = makeParser();
-
   auto testShort =
       [&](std::string_view sql, int64_t value, const TypePtr& type) {
         testDecimal<int64_t>(sql, value, type);
@@ -172,10 +165,8 @@ TEST_F(ExpressionParserTest, decimal) {
 }
 
 TEST_F(ExpressionParserTest, intervalYearMonth) {
-  auto parser = makeParser();
-
   auto test = [&](std::string_view sql, int64_t expected) {
-    auto expr = parser.parseExpression(sql);
+    auto expr = parseExpr(sql);
 
     ASSERT_TRUE(expr->isConstant());
     ASSERT_EQ(expr->type()->toString(), INTERVAL_YEAR_MONTH()->toString());
@@ -196,11 +187,9 @@ TEST_F(ExpressionParserTest, intervalYearMonth) {
 }
 
 TEST_F(ExpressionParserTest, doubleLiteral) {
-  auto parser = makeParser();
-
   auto test = [&](std::string_view sql, double expected) {
     SCOPED_TRACE(sql);
-    auto expr = parser.parseExpression(sql);
+    auto expr = parseExpr(sql);
 
     ASSERT_TRUE(expr->isConstant());
     ASSERT_EQ(expr->type()->toString(), DOUBLE()->toString());
@@ -218,11 +207,9 @@ TEST_F(ExpressionParserTest, doubleLiteral) {
 }
 
 TEST_F(ExpressionParserTest, timestampLiteral) {
-  auto parser = makeParser();
-
   auto test = [&](std::string_view sql, const TypePtr& expectedType) {
     SCOPED_TRACE(sql);
-    auto expr = parser.parseExpression(sql);
+    auto expr = parseExpr(sql);
 
     VELOX_ASSERT_EQ_TYPES(expr->type(), expectedType);
   };
@@ -235,12 +222,11 @@ TEST_F(ExpressionParserTest, timestampLiteral) {
       TIMESTAMP_WITH_TIME_ZONE());
 
   VELOX_ASSERT_THROW(
-      parser.parseExpression("TIMESTAMP 'foo'"),
-      "Not a valid timestamp literal");
+      parseExpr("TIMESTAMP 'foo'"), "Not a valid timestamp literal");
 }
 
 TEST_F(ExpressionParserTest, atTimeZone) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
+  auto matcher = matchValues().project();
   testSelect(
       "SELECT from_unixtime(1700000000, 'UTC') AT TIME ZONE 'America/New_York'",
       matcher);
@@ -250,7 +236,7 @@ TEST_F(ExpressionParserTest, atTimeZone) {
 }
 
 TEST_F(ExpressionParserTest, nullif) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
+  auto matcher = matchValues().project();
 
   testSelect("SELECT NULLIF(1, 2)", matcher);
   testSelect("SELECT nullif(1, 1)", matcher);
@@ -258,7 +244,7 @@ TEST_F(ExpressionParserTest, nullif) {
 }
 
 TEST_F(ExpressionParserTest, null) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
+  auto matcher = matchValues().project();
   testSelect("SELECT 1 is null", matcher);
   testSelect("SELECT 1 IS NULL", matcher);
 
@@ -268,10 +254,9 @@ TEST_F(ExpressionParserTest, null) {
 
 TEST_F(ExpressionParserTest, unaryArithmetic) {
   lp::ProjectNodePtr project;
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project(
-      [&](const auto& node) {
-        project = std::dynamic_pointer_cast<const lp::ProjectNode>(node);
-      });
+  auto matcher = matchValues().project([&](const auto& node) {
+    project = std::dynamic_pointer_cast<const lp::ProjectNode>(node);
+  });
 
   testSelect("SELECT -1", matcher);
   ASSERT_EQ(project->expressions().size(), 1);
@@ -284,10 +269,9 @@ TEST_F(ExpressionParserTest, unaryArithmetic) {
 
 TEST_F(ExpressionParserTest, distinctFrom) {
   lp::ProjectNodePtr project;
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project(
-      [&](const auto& node) {
-        project = std::dynamic_pointer_cast<const lp::ProjectNode>(node);
-      });
+  auto matcher = matchValues().project([&](const auto& node) {
+    project = std::dynamic_pointer_cast<const lp::ProjectNode>(node);
+  });
 
   testSelect("SELECT 1 is distinct from 2", matcher);
   ASSERT_EQ(project->expressions().size(), 1);
@@ -300,12 +284,12 @@ TEST_F(ExpressionParserTest, distinctFrom) {
 
 TEST_F(ExpressionParserTest, ifClause) {
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
+    auto matcher = matchValues().project();
     testSelect("SELECT if (1 > 2, 100)", matcher);
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+    auto matcher = matchScan().project();
     testSelect(
         "SELECT if (n_nationkey between 10 and 13, 'foo') FROM nation",
         matcher);
@@ -313,7 +297,7 @@ TEST_F(ExpressionParserTest, ifClause) {
 }
 
 TEST_F(ExpressionParserTest, switch) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+  auto matcher = matchScan().project();
 
   testSelect(
       "SELECT case when n_nationkey > 2 then 100 when n_name like 'A%' then 200 end FROM nation",
@@ -333,7 +317,7 @@ TEST_F(ExpressionParserTest, switch) {
 
 TEST_F(ExpressionParserTest, in) {
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().values().project();
+    auto matcher = matchValues().project();
     testSelect("SELECT 1 in (2,3,4)", matcher);
     testSelect("SELECT 1 IN (2,3,4)", matcher);
 
@@ -343,14 +327,14 @@ TEST_F(ExpressionParserTest, in) {
 
   // Subquery.
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().filter();
+    auto matcher = matchScan().filter();
     testSelect(
         "SELECT * FROM nation WHERE n_regionkey IN (SELECT r_regionkey FROM region WHERE r_name like 'A%')",
         matcher);
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+    auto matcher = matchScan().project();
     testSelect(
         "SELECT n_regionkey IN (SELECT r_regionkey FROM region WHERE r_name like 'A%') FROM nation",
         matcher);
@@ -358,13 +342,13 @@ TEST_F(ExpressionParserTest, in) {
 
   // Coercions.
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+    auto matcher = matchScan().project();
     testSelect("SELECT n_nationkey in (1, 2, 3) FROM nation", matcher);
   }
 }
 
 TEST_F(ExpressionParserTest, coalesce) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+  auto matcher = matchScan().project();
   testSelect("SELECT coalesce(n_name, 'foo') FROM nation", matcher);
   testSelect("SELECT COALESCE(n_name, 'foo') FROM nation", matcher);
 
@@ -373,28 +357,24 @@ TEST_F(ExpressionParserTest, coalesce) {
 }
 
 TEST_F(ExpressionParserTest, concat) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+  auto matcher = matchScan().project();
   testSelect("SELECT n_name || n_comment FROM nation", matcher);
 }
 
 TEST_F(ExpressionParserTest, position) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+  auto matcher = matchScan().project();
   testSelect("SELECT POSITION('A' IN n_name) FROM nation", matcher);
   testSelect("SELECT POSITION(n_comment IN n_name) FROM nation", matcher);
 }
 
 TEST_F(ExpressionParserTest, subscript) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+  auto matcher = matchScan().project();
   testSelect("SELECT array[1, 2, 3][1] FROM nation", matcher);
   testSelect("SELECT row(1,2)[2] FROM nation", matcher);
 }
 
 TEST_F(ExpressionParserTest, dereference) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder()
-                     .values()
-                     .unnest()
-                     .project()
-                     .project();
+  auto matcher = matchValues().unnest().project().project();
 
   testSelect("SELECT t.x FROM UNNEST(array[1, 2, 3]) as t(x)", matcher);
 
@@ -431,20 +411,19 @@ TEST_F(ExpressionParserTest, dereference) {
 }
 
 TEST_F(ExpressionParserTest, row) {
-  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().project();
+  auto matcher = matchScan().project();
   testSelect("SELECT row(n_regionkey, n_name) FROM nation", matcher);
 }
 
 TEST_F(ExpressionParserTest, lambda) {
-  ASSERT_NO_THROW(parseSqlExpression("filter(array[1,2,3], x -> x > 1)"));
-  ASSERT_NO_THROW(parseSqlExpression("FILTER(array[1,2,3], x -> x > 1)"));
+  ASSERT_NO_THROW(parseExpr("filter(array[1,2,3], x -> x > 1)"));
+  ASSERT_NO_THROW(parseExpr("FILTER(array[1,2,3], x -> x > 1)"));
 
-  ASSERT_NO_THROW(parseSqlExpression("filter(array[], x -> true)"));
+  ASSERT_NO_THROW(parseExpr("filter(array[], x -> true)"));
 
-  ASSERT_NO_THROW(
-      parseSqlExpression("reduce(array[], map(), (s, x) -> s, s -> 123)"));
+  ASSERT_NO_THROW(parseExpr("reduce(array[], map(), (s, x) -> s, s -> 123)"));
 
-  ASSERT_NO_THROW(parseSqlExpression(
+  ASSERT_NO_THROW(parseExpr(
       "reduce(array[], map(), (s, x) -> map(array[1], array[2]), s -> 123)"));
 }
 
