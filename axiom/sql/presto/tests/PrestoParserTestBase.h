@@ -79,6 +79,20 @@ class PrestoParserTestBase : public testing::Test {
       const std::vector<CreateTableStatement::Constraint>& constraints = {});
 
  protected:
+  /// Returns a matcher builder starting with a table scan node.
+  static facebook::axiom::logical_plan::test::LogicalPlanMatcherBuilder
+  matchScan() {
+    return facebook::axiom::logical_plan::test::LogicalPlanMatcherBuilder()
+        .tableScan();
+  }
+
+  /// Returns a matcher builder starting with a values node.
+  static facebook::axiom::logical_plan::test::LogicalPlanMatcherBuilder
+  matchValues() {
+    return facebook::axiom::logical_plan::test::LogicalPlanMatcherBuilder()
+        .values();
+  }
+
   /// Creates a PrestoParser configured with the test connector.
   PrestoParser makeParser() {
     return PrestoParser(kConnectorId, std::nullopt);
