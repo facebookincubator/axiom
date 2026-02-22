@@ -310,6 +310,28 @@ TEST_F(PrestoParserTest, with) {
   testSelect("WITH a as (SELECT 1 as x) SELECT A.x FROM a", matcher);
 }
 
+TEST_F(PrestoParserTest, withShadowing) {
+  // Inner CTE shadows outer CTE with the same name. The inner CTE uses a table
+  // scan (producing a Scan node) while the outer uses VALUES. Without proper
+  // shadowing, the subquery would resolve to the outer CTE and produce a Values
+  // node instead.
+  auto matcher = matchScan().project();
+  testSelect(
+      "WITH t AS (SELECT 1 AS x) "
+      "SELECT * FROM (WITH t AS (SELECT n_nationkey FROM nation) SELECT * FROM t) sub",
+      matcher);
+}
+
+TEST_F(PrestoParserTest, withNoLeaking) {
+  // CTE defined inside a subquery is not visible outside.
+  VELOX_ASSERT_THROW(
+      testSelect(
+          "SELECT * FROM (WITH t AS (SELECT 1 AS x) SELECT * FROM t) sub "
+          "CROSS JOIN t",
+          matchValues().project()),
+      "Table not found: t");
+}
+
 TEST_F(PrestoParserTest, orderBy) {
   {
     auto matcher = matchScan().aggregate().sort().project();
