@@ -32,12 +32,12 @@ class NameMappings;
 /// parsing is not available.
 class ThrowingSqlExpressionsParser : public velox::parse::SqlExpressionsParser {
  public:
-  velox::core::ExprPtr parseExpr(const std::string& expr) override {
+  velox::core::ExprPtr parseExpr(const std::string& /*expr*/) override {
     VELOX_USER_FAIL("SQL parsing is not supported");
   }
 
   std::vector<velox::core::ExprPtr> parseExprs(
-      const std::string& expr) override {
+      const std::string& /*expr*/) override {
     VELOX_USER_FAIL("SQL parsing is not supported");
   }
 

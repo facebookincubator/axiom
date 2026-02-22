@@ -15,6 +15,7 @@
  */
 
 #include "axiom/sql/presto/PrestoParser.h"
+#include <folly/ScopeGuard.h>
 #include <cctype>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/PlanBuilder.h"
@@ -520,9 +521,15 @@ class RelationPlanner : public AstVisitor {
   }
 
   void processQuery(Query* query) {
+    auto savedWithQueries = withQueries_;
+    SCOPE_EXIT {
+      withQueries_ = std::move(savedWithQueries);
+    };
+
     if (const auto& with = query->with()) {
       for (const auto& query : with->queries()) {
-        withQueries_.emplace(canonicalizeIdentifier(*query->name()), query);
+        withQueries_.insert_or_assign(
+            canonicalizeIdentifier(*query->name()), query);
       }
     }
 
