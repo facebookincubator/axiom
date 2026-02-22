@@ -665,6 +665,17 @@ class PlanBuilder {
     return *this;
   }
 
+  /// Returns a Scope that resolves column names against this builder's output.
+  Scope scope() const {
+    return [this](const auto& alias, const auto& name) {
+      return resolveInputName(alias, name);
+    };
+  }
+
+  /// Returns true if the given unqualified name resolves to a column in this
+  /// builder's output without chaining to outer scopes.
+  bool hasColumn(const std::string& name) const;
+
   /// Returns the number of output columns.
   size_t numOutput() const;
 

@@ -145,6 +145,41 @@ std::pair<std::string, std::string> toConnectorTable(
   return {parts[0], fmt::format("{}.{}", parts[1], tableName)};
 }
 
+// Resolves a column reference against both sides of a JOIN. Raises an error
+// for unqualified names that exist on both sides.
+lp::ExprPtr resolveJoinColumn(
+    const lp::PlanBuilder::Scope& leftScope,
+    const lp::PlanBuilder::Scope& rightScope,
+    const lp::PlanBuilder& leftBuilder,
+    const lp::PlanBuilder& rightBuilder,
+    const std::optional<std::string>& alias,
+    const std::string& name) {
+  // Qualified name: try left, then right. No ambiguity since table
+  // aliases are unique.
+  if (alias.has_value()) {
+    if (auto expr = leftScope(alias, name)) {
+      return expr;
+    }
+    return rightScope(alias, name);
+  }
+
+  // For unqualified names, check both sides for ambiguity.
+  const bool leftHas = leftBuilder.hasColumn(name);
+  const bool rightHas = rightBuilder.hasColumn(name);
+
+  // Not found on either side. Delegate to leftScope which chains to the
+  // outer scope for correlated subqueries, or throws.
+  if (!leftHas && !rightHas) {
+    return leftScope(alias, name);
+  }
+
+  VELOX_USER_CHECK(leftHas != rightHas, "Column is ambiguous: {}", name);
+
+  // Resolve from the side that has it. Calling leftScope for a name only on
+  // the right would throw (unqualified not-found with no outer scope).
+  return leftHas ? leftScope(alias, name) : rightScope(alias, name);
+}
+
 class RelationPlanner : public AstVisitor {
  public:
   RelationPlanner(
@@ -383,9 +418,7 @@ class RelationPlanner : public AstVisitor {
     }
 
     auto leftBuilder = builder_;
-
-    lp::PlanBuilder::Scope leftScope;
-    leftBuilder->captureScope(leftScope);
+    auto leftScope = leftBuilder->scope();
 
     builder_ = newBuilder(leftScope);
     processFrom(join.right());
@@ -394,15 +427,13 @@ class RelationPlanner : public AstVisitor {
     // Create a combined scope that can resolve columns from both sides of
     // the join. Subqueries in the ON clause may contain correlated
     // references to either side.
-    lp::PlanBuilder::Scope rightScope;
-    rightBuilder->captureScope(rightScope);
-
     lp::PlanBuilder::Scope joinScope =
-        [leftScope, rightScope](const auto& alias, const auto& name) {
-          if (auto expr = leftScope(alias, name)) {
-            return expr;
-          }
-          return rightScope(alias, name);
+        [leftScope,
+         rightScope = rightBuilder->scope(),
+         leftBuilder,
+         rightBuilder](const auto& alias, const auto& name) {
+          return resolveJoinColumn(
+              leftScope, rightScope, *leftBuilder, *rightBuilder, alias, name);
         };
 
     builder_ = newBuilder(joinScope);
@@ -665,8 +696,7 @@ class RelationPlanner : public AstVisitor {
 
     auto leftBuilder = builder_;
 
-    lp::PlanBuilder::Scope scope;
-    leftBuilder->captureScope(scope);
+    auto scope = leftBuilder->scope();
 
     builder_ = newBuilder(scope);
     right->accept(this);
@@ -698,8 +728,7 @@ class RelationPlanner : public AstVisitor {
   ExpressionPlanner exprPlanner_{
       [this](Query* query) -> lp::LogicalPlanNodePtr {
         auto builder = std::move(builder_);
-        lp::PlanBuilder::Scope scope;
-        builder->captureScope(scope);
+        auto scope = builder->scope();
         builder_ = newBuilder(scope);
         processQuery(query);
         auto subqueryBuilder = builder_;
