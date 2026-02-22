@@ -691,6 +691,28 @@ lp::ExprApi ExpressionPlanner::toExpr(
           lp::Call("is_null", toExpr(isNull->value(), aggregateOptions)));
     }
 
+    case NodeType::kCurrentTime: {
+      auto* currentTime = node->as<CurrentTime>();
+
+      VELOX_USER_CHECK(
+          !currentTime->precision().has_value(),
+          "Precision for date/time functions is not supported yet.");
+
+      switch (currentTime->function()) {
+        case CurrentTime::Function::kDate:
+          return lp::Call("current_date");
+        case CurrentTime::Function::kTime:
+          return lp::Call("current_time");
+        case CurrentTime::Function::kTimestamp:
+          return lp::Call("current_timestamp");
+        case CurrentTime::Function::kLocaltime:
+          VELOX_NYI("LOCALTIME is not supported yet.");
+        case CurrentTime::Function::kLocaltimestamp:
+          VELOX_NYI("LOCALTIMESTAMP is not supported yet.");
+      }
+      VELOX_UNREACHABLE();
+    }
+
     default:
       VELOX_NYI(
           "Unsupported expression type: {}",

@@ -274,6 +274,27 @@ TEST_F(ExpressionParserTest, extract) {
   test("SECOND", "second");
 }
 
+TEST_F(ExpressionParserTest, currentDateTime) {
+  // CURRENT_DATE and CURRENT_TIMESTAMP translate to zero-argument function
+  // calls.
+  EXPECT_EQ("current_date()", parseExpr("CURRENT_DATE")->toString());
+  EXPECT_EQ("current_date()", parseExpr("current_date")->toString());
+  EXPECT_EQ("current_timestamp()", parseExpr("CURRENT_TIMESTAMP")->toString());
+
+  // LOCALTIME and LOCALTIMESTAMP are not yet implemented.
+  VELOX_ASSERT_THROW(parseExpr("LOCALTIME"), "LOCALTIME is not supported yet");
+  VELOX_ASSERT_THROW(
+      parseExpr("LOCALTIMESTAMP"), "LOCALTIMESTAMP is not supported yet");
+
+  // Precision is not supported.
+  VELOX_ASSERT_THROW(
+      parseExpr("CURRENT_TIME(3)"),
+      "Precision for date/time functions is not supported yet");
+  VELOX_ASSERT_THROW(
+      parseExpr("CURRENT_TIMESTAMP(6)"),
+      "Precision for date/time functions is not supported yet");
+}
+
 TEST_F(ExpressionParserTest, nullif) {
   // NULLIF(a, b) translates to IF(eq(a, b), null, a).
   EXPECT_EQ(

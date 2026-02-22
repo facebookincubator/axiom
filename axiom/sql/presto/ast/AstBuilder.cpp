@@ -1613,10 +1613,38 @@ std::any AstBuilder::visitTypeConstructor(
       std::make_shared<GenericLiteral>(getLocation(ctx), type, value));
 }
 
+namespace {
+CurrentTime::Function toCurrentTimeFunction(size_t tokenType) {
+  switch (tokenType) {
+    case PrestoSqlParser::CURRENT_DATE:
+      return CurrentTime::Function::kDate;
+    case PrestoSqlParser::CURRENT_TIME:
+      return CurrentTime::Function::kTime;
+    case PrestoSqlParser::CURRENT_TIMESTAMP:
+      return CurrentTime::Function::kTimestamp;
+    case PrestoSqlParser::LOCALTIME:
+      return CurrentTime::Function::kLocaltime;
+    case PrestoSqlParser::LOCALTIMESTAMP:
+      return CurrentTime::Function::kLocaltimestamp;
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+} // namespace
+
 std::any AstBuilder::visitSpecialDateTimeFunction(
     PrestoSqlParser::SpecialDateTimeFunctionContext* ctx) {
   trace("visitSpecialDateTimeFunction");
-  return visitChildren("visitSpecialDateTimeFunction", ctx);
+
+  auto function = toCurrentTimeFunction(ctx->name->getType());
+
+  std::optional<int> precision;
+  if (ctx->precision != nullptr) {
+    precision = std::stoi(ctx->precision->getText());
+  }
+
+  return std::static_pointer_cast<Expression>(
+      std::make_shared<CurrentTime>(getLocation(ctx), function, precision));
 }
 
 std::any AstBuilder::visitSubstring(PrestoSqlParser::SubstringContext* ctx) {
