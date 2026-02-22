@@ -597,7 +597,7 @@ std::vector<PlanBuilder::AggregateOptions> parseAggregateOptions(
     }
 
     options.emplace_back(
-        std::move(aggregateExpr.maskExpr),
+        std::move(aggregateExpr.filter),
         std::move(sortingKeys),
         aggregateExpr.distinct);
   }

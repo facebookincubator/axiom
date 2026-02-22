@@ -636,7 +636,7 @@ class AggregationMatcher : public PlanMatcherImpl<AggregationNode> {
 
         AXIOM_TEST_RETURN_IF_FAILURE
 
-        auto expectedMask = aggregateExpr.maskExpr;
+        auto expectedMask = aggregateExpr.filter;
         const auto& mask = plan.aggregates()[i].mask;
         EXPECT_EQ(mask != nullptr, expectedMask != nullptr);
         AXIOM_TEST_RETURN_IF_FAILURE

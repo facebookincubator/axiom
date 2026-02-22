@@ -42,7 +42,21 @@ class ThrowingSqlExpressionsParser : public velox::parse::SqlExpressionsParser {
   }
 
   velox::parse::OrderByClause parseOrderByExpr(
-      const std::string& expr) override {
+      const std::string& /*expr*/) override {
+    VELOX_USER_FAIL("SQL parsing is not supported");
+  }
+
+  velox::parse::AggregateExpr parseAggregateExpr(
+      const std::string& /*expr*/) override {
+    VELOX_USER_FAIL("SQL parsing is not supported");
+  }
+
+  velox::parse::WindowExpr parseWindowExpr(
+      const std::string& /*expr*/) override {
+    VELOX_USER_FAIL("SQL parsing is not supported");
+  }
+  std::variant<velox::core::ExprPtr, velox::parse::WindowExpr>
+  parseScalarOrWindowExpr(const std::string& /*expr*/) override {
     VELOX_USER_FAIL("SQL parsing is not supported");
   }
 };
