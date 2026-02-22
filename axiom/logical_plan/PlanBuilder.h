@@ -694,9 +694,13 @@ class PlanBuilder {
 
   AggregateExprPtr resolveAggregateTypes(
       const velox::core::ExprPtr& expr,
-      const ExprPtr& filter,
-      const std::vector<SortingField>& ordering,
+      const velox::core::ExprPtr& filter,
+      const std::vector<SortKey>& ordering,
       bool distinct) const;
+
+  WindowExprPtr resolveWindowTypes(
+      const velox::core::ExprPtr& expr,
+      const WindowSpec& windowSpec) const;
 
   std::vector<ExprApi> parse(const std::vector<std::string>& exprs);
 

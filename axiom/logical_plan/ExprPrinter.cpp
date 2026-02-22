@@ -77,14 +77,8 @@ class ToTextVisitor : public ExprVisitor {
     }
 
     if (!expr.ordering().empty()) {
-      out << " ORDER BY ";
-      for (auto i = 0; i < expr.ordering().size(); ++i) {
-        if (i > 0) {
-          out << ", ";
-        }
-        expr.ordering()[i].expression->accept(*this, context);
-        out << " " << expr.ordering()[i].order.toString();
-      }
+      out << " ";
+      appendOrdering(expr.ordering(), out, context);
     }
 
     out << ")";
@@ -103,7 +97,43 @@ class ToTextVisitor : public ExprVisitor {
     out << expr.name();
     appendInputs(expr, out, context);
 
-    // TODO Add partitionKeys, ordering, frame, ignoreNulls.
+    out << " OVER (";
+
+    bool needSeparator = false;
+
+    if (!expr.partitionKeys().empty()) {
+      out << "PARTITION BY ";
+      for (auto i = 0; i < expr.partitionKeys().size(); ++i) {
+        if (i > 0) {
+          out << ", ";
+        }
+        expr.partitionKeys()[i]->accept(*this, context);
+      }
+      needSeparator = true;
+    }
+
+    if (!expr.ordering().empty()) {
+      if (needSeparator) {
+        out << " ";
+      }
+      appendOrdering(expr.ordering(), out, context);
+      needSeparator = true;
+    }
+
+    const auto& frame = expr.frame();
+    if (needSeparator) {
+      out << " ";
+    }
+    out << WindowExpr::toName(frame.type) << " BETWEEN ";
+    appendFrameBound(frame.startType, frame.startValue, out, context);
+    out << " AND ";
+    appendFrameBound(frame.endType, frame.endValue, out, context);
+
+    out << ")";
+
+    if (expr.ignoreNulls()) {
+      out << " IGNORE NULLS";
+    }
   }
 
   void visit(const ConstantExpr& expr, ExprVisitorContext& context)
@@ -146,6 +176,32 @@ class ToTextVisitor : public ExprVisitor {
   static std::stringstream& toOut(ExprVisitorContext& context) {
     auto& myContext = static_cast<ToTextVisitorContext&>(context);
     return myContext.out;
+  }
+
+  void appendFrameBound(
+      WindowExpr::BoundType boundType,
+      const ExprPtr& value,
+      std::stringstream& out,
+      ExprVisitorContext& context) const {
+    if (value != nullptr) {
+      value->accept(*this, context);
+      out << " ";
+    }
+    out << WindowExpr::toName(boundType);
+  }
+
+  void appendOrdering(
+      const std::vector<SortingField>& ordering,
+      std::stringstream& out,
+      ExprVisitorContext& context) const {
+    out << "ORDER BY ";
+    for (auto i = 0; i < ordering.size(); ++i) {
+      if (i > 0) {
+        out << ", ";
+      }
+      ordering[i].expression->accept(*this, context);
+      out << " " << ordering[i].order.toString();
+    }
   }
 
   void appendInputs(

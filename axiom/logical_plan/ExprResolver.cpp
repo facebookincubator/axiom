@@ -18,6 +18,7 @@
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
+#include "velox/exec/WindowFunction.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionSignature.h"
@@ -832,41 +833,155 @@ ExprPtr ExprResolver::resolveScalarTypes(
   VELOX_NYI("Can't resolve {}", expr->toString());
 }
 
-AggregateExprPtr ExprResolver::resolveAggregateTypes(
+namespace {
+
+// Resolves function call arguments to typed expressions and determines the
+// return type using the provided resolve functions.
+struct ResolvedCall {
+  std::string name;
+  std::vector<ExprPtr> inputs;
+  velox::TypePtr type;
+};
+
+using ResolveFunc =
+    velox::TypePtr (*)(const std::string&, const std::vector<velox::TypePtr>&);
+
+using ResolveWithCoercionsFunc = velox::TypePtr (*)(
+    const std::string&,
+    const std::vector<velox::TypePtr>&,
+    std::vector<velox::TypePtr>&);
+
+ResolvedCall resolveCallTypes(
     const velox::core::ExprPtr& expr,
-    const InputNameResolver& inputNameResolver,
-    const ExprPtr& filter,
-    const std::vector<SortingField>& ordering,
-    bool distinct) const {
+    const ExprResolver::InputNameResolver& inputNameResolver,
+    const ExprResolver& resolver,
+    bool enableCoercions,
+    const char* label,
+    ResolveFunc resolveFunc,
+    ResolveWithCoercionsFunc resolveWithCoercionsFunc) {
   const auto* call = dynamic_cast<const velox::core::CallExpr*>(expr.get());
   VELOX_USER_CHECK_NOT_NULL(
-      call, "Aggregate must be a call expression: {}", expr->toString());
+      call, "{} must be a call expression: {}", label, expr->toString());
 
-  const auto name = velox::exec::sanitizeName(call->name());
+  auto name = velox::exec::sanitizeName(call->name());
 
   std::vector<ExprPtr> inputs;
   inputs.reserve(expr->inputs().size());
   for (const auto& input : expr->inputs()) {
-    inputs.push_back(resolveScalarTypes(input, inputNameResolver));
+    inputs.push_back(resolver.resolveScalarTypes(input, inputNameResolver));
   }
 
-  std::vector<velox::TypePtr> inputTypes;
-  inputTypes.reserve(inputs.size());
-  for (const auto& input : inputs) {
-    inputTypes.push_back(input->type());
-  }
+  auto inputTypes = toTypes(inputs);
 
   velox::TypePtr type;
-  if (enableCoercions_) {
+  if (enableCoercions) {
     std::vector<velox::TypePtr> coercions;
-    type = velox::exec::resolveResultTypeWithCoercions(
-        name, inputTypes, coercions);
+    type = resolveWithCoercionsFunc(name, inputTypes, coercions);
     applyCoercions(inputs, coercions);
   } else {
-    type = velox::exec::resolveResultType(name, inputTypes);
+    type = resolveFunc(name, inputTypes);
+  }
+
+  return {std::move(name), std::move(inputs), type};
+}
+
+} // namespace
+
+AggregateExprPtr ExprResolver::resolveAggregateTypes(
+    const velox::core::ExprPtr& expr,
+    const InputNameResolver& inputNameResolver,
+    const velox::core::ExprPtr& filter,
+    const std::vector<SortKey>& ordering,
+    bool distinct) const {
+  auto resolved = resolveCallTypes(
+      expr,
+      inputNameResolver,
+      *this,
+      enableCoercions_,
+      "Aggregate",
+      velox::exec::resolveResultType,
+      velox::exec::resolveResultTypeWithCoercions);
+
+  ExprPtr resolvedFilter;
+  if (filter != nullptr) {
+    resolvedFilter = resolveScalarTypes(filter, inputNameResolver);
+  }
+
+  std::vector<SortingField> sortingFields;
+  sortingFields.reserve(ordering.size());
+  for (const auto& key : ordering) {
+    auto sortExpr = resolveScalarTypes(key.expr.expr(), inputNameResolver);
+    sortingFields.push_back(
+        SortingField{sortExpr, SortOrder(key.ascending, key.nullsFirst)});
   }
 
   return std::make_shared<AggregateExpr>(
-      type, name, inputs, filter, ordering, distinct);
+      resolved.type,
+      resolved.name,
+      std::move(resolved.inputs),
+      resolvedFilter,
+      std::move(sortingFields),
+      distinct);
 }
+
+WindowExprPtr ExprResolver::resolveWindowTypes(
+    const velox::core::ExprPtr& expr,
+    const WindowSpec& windowSpec,
+    const InputNameResolver& inputNameResolver) const {
+  auto resolved = resolveCallTypes(
+      expr,
+      inputNameResolver,
+      *this,
+      enableCoercions_,
+      "Window function",
+      velox::exec::resolveWindowResultType,
+      velox::exec::resolveWindowResultTypeWithCoercions);
+
+  // Resolve partition keys.
+  std::vector<ExprPtr> partitionKeys;
+  partitionKeys.reserve(windowSpec.partitionKeys().size());
+  for (const auto& key : windowSpec.partitionKeys()) {
+    partitionKeys.push_back(resolveScalarTypes(key.expr(), inputNameResolver));
+  }
+
+  // Resolve ordering.
+  std::vector<SortingField> ordering;
+  ordering.reserve(windowSpec.orderByKeys().size());
+  for (const auto& key : windowSpec.orderByKeys()) {
+    auto sortExpr = resolveScalarTypes(key.expr.expr(), inputNameResolver);
+    ordering.push_back(
+        SortingField{sortExpr, SortOrder(key.ascending, key.nullsFirst)});
+  }
+
+  // Resolve frame.
+  auto startType = windowSpec.startType();
+  ExprPtr startValue;
+  if (windowSpec.startValue().has_value()) {
+    startValue =
+        resolveScalarTypes(windowSpec.startValue()->expr(), inputNameResolver);
+  }
+
+  auto endType = windowSpec.endType();
+  ExprPtr endValue;
+  if (windowSpec.endValue().has_value()) {
+    endValue =
+        resolveScalarTypes(windowSpec.endValue()->expr(), inputNameResolver);
+  }
+
+  auto windowType = windowSpec.frameType().has_value()
+      ? windowSpec.frameType().value()
+      : WindowExpr::WindowType::kRange;
+
+  WindowExpr::Frame frame{windowType, startType, startValue, endType, endValue};
+
+  return std::make_shared<WindowExpr>(
+      resolved.type,
+      resolved.name,
+      std::move(resolved.inputs),
+      std::move(partitionKeys),
+      std::move(ordering),
+      std::move(frame),
+      windowSpec.isIgnoreNulls());
+}
+
 } // namespace facebook::axiom::logical_plan

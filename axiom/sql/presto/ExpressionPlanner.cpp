@@ -648,6 +648,14 @@ lp::ExprApi ExpressionPlanner::toExpr(
         VELOX_CHECK(inserted);
       }
 
+      if (call->window() != nullptr) {
+        auto windowSpec = convertWindow(call->window(), aggregateOptions);
+        if (call->ignoreNulls()) {
+          windowSpec.ignoreNulls();
+        }
+        return callExpr.over(windowSpec);
+      }
+
       return callExpr;
     }
 
@@ -688,6 +696,89 @@ lp::ExprApi ExpressionPlanner::toExpr(
           "Unsupported expression type: {}",
           NodeTypeName::toName(node->type()));
   }
+}
+
+namespace {
+
+lp::WindowExpr::BoundType toWindowBoundType(FrameBound::Type type) {
+  switch (type) {
+    case FrameBound::Type::kUnboundedPreceding:
+      return lp::WindowExpr::BoundType::kUnboundedPreceding;
+    case FrameBound::Type::kPreceding:
+      return lp::WindowExpr::BoundType::kPreceding;
+    case FrameBound::Type::kCurrentRow:
+      return lp::WindowExpr::BoundType::kCurrentRow;
+    case FrameBound::Type::kFollowing:
+      return lp::WindowExpr::BoundType::kFollowing;
+    case FrameBound::Type::kUnboundedFollowing:
+      return lp::WindowExpr::BoundType::kUnboundedFollowing;
+  }
+  VELOX_UNREACHABLE();
+}
+
+} // namespace
+
+lp::WindowSpec ExpressionPlanner::convertWindow(
+    const std::shared_ptr<Window>& window,
+    std::unordered_map<
+        const facebook::velox::core::IExpr*,
+        lp::PlanBuilder::AggregateOptions>* aggregateOptions) {
+  lp::WindowSpec spec;
+
+  if (!window->partitionBy().empty()) {
+    std::vector<lp::ExprApi> partitionKeys;
+    partitionKeys.reserve(window->partitionBy().size());
+    for (const auto& key : window->partitionBy()) {
+      partitionKeys.push_back(toExpr(key, aggregateOptions));
+    }
+    spec.partitionBy(std::move(partitionKeys));
+  }
+
+  if (window->orderBy() != nullptr) {
+    std::vector<lp::SortKey> orderByKeys;
+    const auto& sortItems = window->orderBy()->sortItems();
+    orderByKeys.reserve(sortItems.size());
+    for (const auto& item : sortItems) {
+      orderByKeys.emplace_back(
+          toExpr(item->sortKey(), aggregateOptions),
+          item->isAscending(),
+          item->isNullsFirst());
+    }
+    spec.orderBy(std::move(orderByKeys));
+  }
+
+  if (window->frame() != nullptr) {
+    const auto& frame = window->frame();
+
+    auto startType = toWindowBoundType(frame->start()->boundType());
+    std::optional<lp::ExprApi> startValue;
+    if (frame->start()->value().has_value()) {
+      startValue = toExpr(frame->start()->value().value(), aggregateOptions);
+    }
+
+    auto endType = frame->end() != nullptr
+        ? toWindowBoundType(frame->end()->boundType())
+        : lp::WindowExpr::BoundType::kCurrentRow;
+    std::optional<lp::ExprApi> endValue;
+    if (frame->end() != nullptr && frame->end()->value().has_value()) {
+      endValue = toExpr(frame->end()->value().value(), aggregateOptions);
+    }
+
+    switch (frame->frameType()) {
+      case WindowFrame::Type::kRows:
+        spec.rows(
+            startType, std::move(startValue), endType, std::move(endValue));
+        break;
+      case WindowFrame::Type::kRange:
+        spec.range(
+            startType, std::move(startValue), endType, std::move(endValue));
+        break;
+      case WindowFrame::Type::kGroups:
+        VELOX_NYI("GROUPS frame type is not supported yet");
+    }
+  }
+
+  return spec;
 }
 
 } // namespace axiom::sql::presto

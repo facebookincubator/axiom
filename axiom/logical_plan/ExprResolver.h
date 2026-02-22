@@ -16,6 +16,7 @@
 #pragma once
 
 #include "axiom/logical_plan/Expr.h"
+#include "axiom/logical_plan/ExprApi.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/FunctionSignature.h"
@@ -24,20 +25,34 @@
 
 namespace facebook::axiom::logical_plan {
 
-/// Provides functions for type inference and constant folding. Use with SQL and
-/// PlanBuilder.
+/// Resolves untyped expressions (velox::core::IExpr) into typed expressions
+/// (Expr). Performs type inference, signature matching, implicit coercions, and
+/// constant folding.
 class ExprResolver {
  public:
+  /// Resolves an unqualified or qualified column name to a typed input
+  /// reference. Called during expression resolution to look up column types
+  /// from the current plan node's input schema.
+  ///
+  /// @param alias Optional table alias (e.g. "t" in "t.col").
+  /// @param fieldName Column name.
   using InputNameResolver = std::function<ExprPtr(
       const std::optional<std::string>& alias,
       const std::string& fieldName)>;
 
   /// Maps from an untyped call and resolved arguments to a resolved function
-  /// call. Use only for anamolous functions where the type depends on constant
+  /// call. Use only for anomalous functions where the type depends on constant
   /// arguments, e.g. Koski's make_row_from_map().
   using FunctionRewriteHook = std::function<
       ExprPtr(const std::string& name, const std::vector<ExprPtr>& args)>;
 
+  /// @param queryCtx Query context for constant folding.
+  /// @param enableCoercions Whether to apply implicit type coercions when
+  /// resolving function signatures.
+  /// @param hook Optional rewrite hook for special functions.
+  /// @param pool Memory pool for constant folding evaluation.
+  /// @param planNodeIdGenerator Plan node ID generator for subquery
+  /// expressions.
   ExprResolver(
       std::shared_ptr<velox::core::QueryCtx> queryCtx,
       bool enableCoercions,
@@ -51,16 +66,30 @@ class ExprResolver {
         pool_(std::move(pool)),
         planNodeIdGenerator_{std::move(planNodeIdGenerator)} {}
 
+  /// Resolves an untyped scalar expression into a typed expression. Handles
+  /// column references, function calls, casts, literals, lambdas, and
+  /// subqueries. Attempts constant folding when all inputs are constants.
   ExprPtr resolveScalarTypes(
       const velox::core::ExprPtr& expr,
       const InputNameResolver& inputNameResolver) const;
 
+  /// Resolves an aggregate function call. Resolves argument types, looks up
+  /// the aggregate function signature, resolves the filter and ordering
+  /// expressions, and produces an AggregateExpr.
   AggregateExprPtr resolveAggregateTypes(
       const velox::core::ExprPtr& expr,
       const InputNameResolver& inputNameResolver,
-      const ExprPtr& filter,
-      const std::vector<SortingField>& ordering,
+      const velox::core::ExprPtr& filter,
+      const std::vector<SortKey>& ordering,
       bool distinct) const;
+
+  /// Resolves a window function call. Resolves argument types, partition keys,
+  /// ordering, and frame bounds, then looks up the window function signature
+  /// and produces a WindowExpr.
+  WindowExprPtr resolveWindowTypes(
+      const velox::core::ExprPtr& expr,
+      const WindowSpec& windowSpec,
+      const InputNameResolver& inputNameResolver) const;
 
  private:
   ExprPtr resolveLambdaExpr(

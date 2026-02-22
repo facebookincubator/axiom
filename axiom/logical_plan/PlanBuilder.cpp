@@ -480,7 +480,12 @@ void PlanBuilder::resolveProjections(
   tracker.track(projections);
 
   for (const auto& untypedExpr : projections) {
-    auto expr = resolveScalarTypes(untypedExpr.expr());
+    ExprPtr expr;
+    if (untypedExpr.windowSpec() != nullptr) {
+      expr = resolveWindowTypes(untypedExpr.expr(), *untypedExpr.windowSpec());
+    } else {
+      expr = resolveScalarTypes(untypedExpr.expr());
+    }
 
     const auto& alias = untypedExpr.name();
 
@@ -782,28 +787,18 @@ void PlanBuilder::resolveAggregates(
   for (size_t i = 0; i < aggregates.size(); ++i) {
     const auto& aggregate = aggregates[i];
 
-    ExprPtr filter;
-    std::vector<SortingField> sortingFields;
+    velox::core::ExprPtr filter;
+    std::vector<SortKey> sortKeys;
     bool distinct = false;
 
     if (!options.empty()) {
-      if (options[i].filter != nullptr) {
-        filter = resolveScalarTypes(options[i].filter);
-      }
-
-      sortingFields.reserve(options[i].orderBy.size());
-      for (const auto& key : options[i].orderBy) {
-        auto expr = resolveScalarTypes(key.expr.expr());
-
-        sortingFields.push_back(
-            SortingField{expr, SortOrder(key.ascending, key.nullsFirst)});
-      }
-
+      filter = options[i].filter;
+      sortKeys = options[i].orderBy;
       distinct = options[i].distinct;
     }
 
-    auto expr = resolveAggregateTypes(
-        aggregate.expr(), filter, sortingFields, distinct);
+    auto expr =
+        resolveAggregateTypes(aggregate.expr(), filter, sortKeys, distinct);
 
     if (aggregate.name().has_value()) {
       const auto& alias = aggregate.name().value();
@@ -1442,8 +1437,8 @@ ExprPtr PlanBuilder::resolveScalarTypes(
 
 AggregateExprPtr PlanBuilder::resolveAggregateTypes(
     const velox::core::ExprPtr& expr,
-    const ExprPtr& filter,
-    const std::vector<SortingField>& ordering,
+    const velox::core::ExprPtr& filter,
+    const std::vector<SortKey>& ordering,
     bool distinct) const {
   return resolver_.resolveAggregateTypes(
       expr,
@@ -1453,6 +1448,15 @@ AggregateExprPtr PlanBuilder::resolveAggregateTypes(
       filter,
       ordering,
       distinct);
+}
+
+WindowExprPtr PlanBuilder::resolveWindowTypes(
+    const velox::core::ExprPtr& expr,
+    const WindowSpec& windowSpec) const {
+  return resolver_.resolveWindowTypes(
+      expr, windowSpec, [&](const auto& alias, const auto& name) {
+        return resolveInputName(alias, name);
+      });
 }
 
 PlanBuilder& PlanBuilder::as(const std::string& alias) {

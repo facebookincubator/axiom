@@ -1858,8 +1858,6 @@ std::any AstBuilder::visitFunctionCall(
     PrestoSqlParser::FunctionCallContext* ctx) {
   trace("visitFunctionCall");
 
-  VELOX_CHECK_NULL(ctx->over(), "Window functions are not supported yet");
-
   auto name = getQualifiedName(ctx->qualifiedName());
 
   auto filter = visitTyped<Expression>(ctx->filter());
@@ -1875,10 +1873,15 @@ std::any AstBuilder::visitFunctionCall(
 
   auto args = visitTyped<Expression>(ctx->expression());
 
+  std::shared_ptr<Window> window;
+  if (ctx->over() != nullptr) {
+    window = visitTyped<Window>(ctx->over());
+  }
+
   return std::static_pointer_cast<Expression>(std::make_shared<FunctionCall>(
       getLocation(ctx),
       name,
-      /*window=*/nullptr,
+      window,
       filter,
       orderBy,
       isDistinct(ctx),
@@ -2076,31 +2079,78 @@ std::any AstBuilder::visitFilter(PrestoSqlParser::FilterContext* ctx) {
 
 std::any AstBuilder::visitOver(PrestoSqlParser::OverContext* ctx) {
   trace("visitOver");
-  return visitChildren("visitOver", ctx);
+
+  auto partitionBy = visitTyped<Expression>(ctx->partition);
+
+  std::shared_ptr<OrderBy> orderBy;
+  if (!ctx->sortItem().empty()) {
+    orderBy = std::make_shared<OrderBy>(
+        getLocation(ctx), visitTyped<SortItem>(ctx->sortItem()));
+  }
+
+  std::shared_ptr<WindowFrame> frame;
+  if (ctx->windowFrame() != nullptr) {
+    frame = visitTyped<WindowFrame>(ctx->windowFrame());
+  }
+
+  return std::make_shared<Window>(
+      getLocation(ctx), partitionBy, orderBy, frame);
 }
 
 std::any AstBuilder::visitWindowFrame(
     PrestoSqlParser::WindowFrameContext* ctx) {
   trace("visitWindowFrame");
-  return visitChildren("visitWindowFrame", ctx);
+
+  WindowFrame::Type frameType;
+  if (ctx->frameType->getType() == PrestoSqlParser::RANGE) {
+    frameType = WindowFrame::Type::kRange;
+  } else if (ctx->frameType->getType() == PrestoSqlParser::ROWS) {
+    frameType = WindowFrame::Type::kRows;
+  } else {
+    VELOX_CHECK(ctx->frameType->getType() == PrestoSqlParser::GROUPS);
+    frameType = WindowFrame::Type::kGroups;
+  }
+
+  auto start = visitTyped<FrameBound>(ctx->start);
+
+  std::shared_ptr<FrameBound> end;
+  if (ctx->end != nullptr) {
+    end = visitTyped<FrameBound>(ctx->end);
+  }
+
+  return std::make_shared<WindowFrame>(getLocation(ctx), frameType, start, end);
 }
 
 std::any AstBuilder::visitUnboundedFrame(
     PrestoSqlParser::UnboundedFrameContext* ctx) {
   trace("visitUnboundedFrame");
-  return visitChildren("visitUnboundedFrame", ctx);
+
+  auto boundType = ctx->boundType->getType() == PrestoSqlParser::PRECEDING
+      ? FrameBound::Type::kUnboundedPreceding
+      : FrameBound::Type::kUnboundedFollowing;
+
+  return std::make_shared<FrameBound>(getLocation(ctx), boundType);
 }
 
 std::any AstBuilder::visitCurrentRowBound(
     PrestoSqlParser::CurrentRowBoundContext* ctx) {
   trace("visitCurrentRowBound");
-  return visitChildren("visitCurrentRowBound", ctx);
+
+  return std::make_shared<FrameBound>(
+      getLocation(ctx), FrameBound::Type::kCurrentRow);
 }
 
 std::any AstBuilder::visitBoundedFrame(
     PrestoSqlParser::BoundedFrameContext* ctx) {
   trace("visitBoundedFrame");
-  return visitChildren("visitBoundedFrame", ctx);
+
+  auto boundType = ctx->boundType->getType() == PrestoSqlParser::PRECEDING
+      ? FrameBound::Type::kPreceding
+      : FrameBound::Type::kFollowing;
+
+  auto value = visitTyped<Expression>(ctx->expression());
+
+  return std::make_shared<FrameBound>(getLocation(ctx), boundType, value);
 }
 
 std::any AstBuilder::visitUpdateAssignment(

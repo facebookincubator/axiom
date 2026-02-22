@@ -114,7 +114,7 @@ class ExprAnalyzer : public DefaultTraversalVisitor {
 
   void visitFunctionCall(FunctionCall* node) override {
     const auto& name = node->name()->suffix();
-    if (exec::getAggregateFunctionEntry(name)) {
+    if (exec::getAggregateFunctionEntry(name) && node->window() == nullptr) {
       VELOX_USER_CHECK(
           !aggregateName_.has_value(),
           "Cannot nest aggregations inside aggregation: {}({})",

@@ -73,6 +73,13 @@ class ExpressionPlanner {
           lp::PlanBuilder::AggregateOptions>* aggregateOptions = nullptr);
 
  private:
+  // Converts a Window AST node into a WindowSpec.
+  lp::WindowSpec convertWindow(
+      const std::shared_ptr<Window>& window,
+      std::unordered_map<
+          const facebook::velox::core::IExpr*,
+          lp::PlanBuilder::AggregateOptions>* aggregateOptions);
+
   SubqueryPlanner subqueryPlanner_;
   SortingKeyResolver sortingKeyResolver_;
 };
