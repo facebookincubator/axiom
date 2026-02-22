@@ -137,7 +137,7 @@ TEST_F(DerivedTablePrinterTest, basic) {
     auto lines = toLines(
         "SELECT a, sum(b) as s FROM t WHERE a > b "
         "GROUP BY 1 "
-        "HAVING s > 100 "
+        "HAVING sum(b) > 100 "
         "ORDER BY 1 DESC");
 
     EXPECT_THAT(

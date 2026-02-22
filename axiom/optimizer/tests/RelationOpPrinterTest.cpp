@@ -141,7 +141,7 @@ TEST_F(RelationOpPrinterTest, basic) {
 
   {
     const auto sql =
-        "SELECT sum(a + 1) as s FROM t WHERE a > 0 GROUP BY t_key HAVING s < 10";
+        "SELECT sum(a + 1) as s FROM t WHERE a > 0 GROUP BY t_key HAVING sum(a + 1) < 10";
 
     auto lines = toLines(sql);
     EXPECT_THAT(

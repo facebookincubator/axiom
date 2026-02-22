@@ -10,7 +10,7 @@ Axiom is licensed under the Apache 2.0 License. A copy of the license
 Axiom is a set of reusable and extensible components designed to be compatible
 with Velox. These components are:
 
-- SQL Parser compatible with PrestoSQL dialect.
+- [SQL Parser](axiom/sql/presto/README.md) compatible with PrestoSQL dialect.
   - top-level “sql” directory
 - Logical Plan - a representation of SQL relations and expressions.
   - top-level “logical_plan” directory

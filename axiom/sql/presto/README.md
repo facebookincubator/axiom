@@ -468,27 +468,6 @@ them today). Contributions to close these gaps are welcome.
 
 ## Known Gaps and Limitations
 
-- **HAVING can reference SELECT aliases on aggregates.** In Presto Java,
-  `SELECT sum(x) AS s FROM t HAVING s > 10` fails because HAVING is
-  evaluated before SELECT and cannot see SELECT aliases. In Axiom,
-  alias-on-aggregate names the aggregate output `s` before HAVING is
-  processed, so `s` accidentally resolves. Fixing this requires validating
-  the HAVING expression against the pre-aggregation scope (before the
-  aggregate node is added). `ExpressionPlanner::toExpr` creates deferred
-  `FieldAccessExpr` nodes that are only resolved when attached to a plan
-  node, so a new PlanBuilder API is needed to validate expressions without
-  adding them to the plan.
-
-- **HAVING can silently resolve to the wrong column.** When a SELECT alias
-  on an aggregate shadows a FROM column name, HAVING references resolve to
-  the aggregate instead of the FROM column. For example,
-  `SELECT n_regionkey + 1, count(*) AS n_regionkey FROM t GROUP BY 1 HAVING n_regionkey > 10`
-  should fail because `n_regionkey` in HAVING refers to the FROM column
-  (which is not a grouping key — the grouping key is `n_regionkey + 1`).
-  Instead, alias-on-aggregate names `count(*)` as `n_regionkey`, so the
-  filter silently applies to `count(*)`. This is a consequence of the same
-  root cause as the previous issue.
-
 - **ORDER BY cannot reference FROM columns not in SELECT (without GROUP BY).**
   In standard SQL, `SELECT x FROM t ORDER BY z` is valid — ORDER BY can
   reference any column from the FROM clause, not just the SELECT list. Axiom
