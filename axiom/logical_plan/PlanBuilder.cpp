@@ -374,11 +374,92 @@ PlanBuilder& PlanBuilder::filter(const ExprApi& predicate) {
   return *this;
 }
 
+namespace {
+
+WindowExpr::BoundType toBoundType(velox::parse::BoundType type) {
+  switch (type) {
+    case velox::parse::BoundType::kCurrentRow:
+      return WindowExpr::BoundType::kCurrentRow;
+    case velox::parse::BoundType::kUnboundedPreceding:
+      return WindowExpr::BoundType::kUnboundedPreceding;
+    case velox::parse::BoundType::kUnboundedFollowing:
+      return WindowExpr::BoundType::kUnboundedFollowing;
+    case velox::parse::BoundType::kPreceding:
+      return WindowExpr::BoundType::kPreceding;
+    case velox::parse::BoundType::kFollowing:
+      return WindowExpr::BoundType::kFollowing;
+  }
+  VELOX_UNREACHABLE();
+}
+
+WindowSpec toWindowSpec(const velox::parse::WindowExpr& parsed) {
+  WindowSpec spec;
+
+  std::vector<ExprApi> partitionKeys;
+  partitionKeys.reserve(parsed.partitionBy.size());
+  for (const auto& key : parsed.partitionBy) {
+    partitionKeys.emplace_back(key);
+  }
+  if (!partitionKeys.empty()) {
+    spec.partitionBy(std::move(partitionKeys));
+  }
+
+  std::vector<SortKey> orderByKeys;
+  orderByKeys.reserve(parsed.orderBy.size());
+  for (const auto& ob : parsed.orderBy) {
+    orderByKeys.emplace_back(ExprApi(ob.expr), ob.ascending, ob.nullsFirst);
+  }
+  if (!orderByKeys.empty()) {
+    spec.orderBy(std::move(orderByKeys));
+  }
+
+  std::optional<ExprApi> startValue;
+  if (parsed.frame.startValue) {
+    startValue = ExprApi(parsed.frame.startValue);
+  }
+  std::optional<ExprApi> endValue;
+  if (parsed.frame.endValue) {
+    endValue = ExprApi(parsed.frame.endValue);
+  }
+
+  switch (parsed.frame.type) {
+    case velox::parse::WindowType::kRows:
+      spec.rows(
+          toBoundType(parsed.frame.startType),
+          std::move(startValue),
+          toBoundType(parsed.frame.endType),
+          std::move(endValue));
+      break;
+    case velox::parse::WindowType::kRange:
+      spec.range(
+          toBoundType(parsed.frame.startType),
+          std::move(startValue),
+          toBoundType(parsed.frame.endType),
+          std::move(endValue));
+      break;
+  }
+
+  if (parsed.ignoreNulls) {
+    spec.ignoreNulls();
+  }
+
+  return spec;
+}
+
+} // namespace
+
 std::vector<ExprApi> PlanBuilder::parse(const std::vector<std::string>& exprs) {
   std::vector<ExprApi> untypedExprs;
   untypedExprs.reserve(exprs.size());
   for (const auto& sql : exprs) {
-    untypedExprs.emplace_back(sqlParser_->parseExpr(sql));
+    auto result = sqlParser_->parseScalarOrWindowExpr(sql);
+    if (auto* windowExpr = std::get_if<velox::parse::WindowExpr>(&result)) {
+      auto callExpr = ExprApi(windowExpr->functionCall);
+      auto spec = toWindowSpec(*windowExpr);
+      untypedExprs.push_back(callExpr.over(spec));
+    } else {
+      untypedExprs.emplace_back(std::get<velox::core::ExprPtr>(result));
+    }
   }
 
   return untypedExprs;
@@ -581,37 +662,45 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
 }
 
 namespace {
-std::vector<PlanBuilder::AggregateOptions> parseAggregateOptions(
-    const std::vector<std::string>& aggregates) {
-  std::vector<PlanBuilder::AggregateOptions> options;
+
+// Parses SQL aggregate expressions into ExprApi objects and their options
+// (FILTER, ORDER BY, DISTINCT).
+void parseAggregates(
+    velox::parse::SqlExpressionsParser& parser,
+    const std::vector<std::string>& aggregates,
+    std::vector<ExprApi>& parsedAggregates,
+    std::vector<PlanBuilder::AggregateOptions>& options) {
+  parsedAggregates.reserve(aggregates.size());
   options.reserve(aggregates.size());
+
   for (const auto& sql : aggregates) {
-    auto aggregateExpr = velox::duckdb::parseAggregateExpr(sql, {});
+    auto parsed = parser.parseAggregateExpr(sql);
+
+    parsedAggregates.emplace_back(parsed.expr);
 
     std::vector<SortKey> sortingKeys;
-    sortingKeys.reserve(aggregateExpr.orderBy.size());
-    for (const auto& orderBy : aggregateExpr.orderBy) {
+    sortingKeys.reserve(parsed.orderBy.size());
+    for (const auto& orderBy : parsed.orderBy) {
       sortingKeys.emplace_back(
           SortKey{
               ExprApi(orderBy.expr), orderBy.ascending, orderBy.nullsFirst});
     }
 
     options.emplace_back(
-        std::move(aggregateExpr.filter),
-        std::move(sortingKeys),
-        aggregateExpr.distinct);
+        std::move(parsed.filter), std::move(sortingKeys), parsed.distinct);
   }
-  return options;
 }
+
 } // namespace
 
 PlanBuilder& PlanBuilder::aggregate(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates) {
-  return aggregate(
-      parse(groupingKeys),
-      parse(aggregates),
-      parseAggregateOptions(aggregates));
+  std::vector<ExprApi> parsedAggregates;
+  std::vector<AggregateOptions> options;
+  parseAggregates(*sqlParser_, aggregates, parsedAggregates, options);
+
+  return aggregate(parse(groupingKeys), parsedAggregates, options);
 }
 
 PlanBuilder& PlanBuilder::aggregate(
@@ -696,11 +785,13 @@ PlanBuilder& PlanBuilder::aggregate(
   for (const auto& groupingSet : groupingSets) {
     exprGroupingSets.push_back(parse(groupingSet));
   }
+
+  std::vector<ExprApi> parsedAggregates;
+  std::vector<AggregateOptions> options;
+  parseAggregates(*sqlParser_, aggregates, parsedAggregates, options);
+
   return aggregate(
-      exprGroupingSets,
-      parse(aggregates),
-      parseAggregateOptions(aggregates),
-      groupingSetIndexName);
+      exprGroupingSets, parsedAggregates, options, groupingSetIndexName);
 }
 
 PlanBuilder& PlanBuilder::aggregate(
