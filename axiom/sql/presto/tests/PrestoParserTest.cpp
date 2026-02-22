@@ -825,10 +825,12 @@ TEST_F(PrestoParserTest, use) {
 }
 
 TEST_F(PrestoParserTest, windowFunction) {
-  VELOX_ASSERT_THROW(
-      parseSql(
-          "SELECT n_name, row_number() OVER (ORDER BY n_nationkey) FROM nation"),
-      "Window functions are not supported yet");
+  testSelect(
+      "SELECT n_name, row_number() OVER (ORDER BY n_nationkey) FROM nation",
+      matchScan().project({
+          "n_name",
+          "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+      }));
 }
 
 } // namespace

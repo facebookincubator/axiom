@@ -33,6 +33,7 @@
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/serializers/PrestoSerializer.h"
 
@@ -49,6 +50,7 @@ void SqlQueryRunner::initialize(
   folly::call_once(kInitialized, []() {
     velox::functions::prestosql::registerAllScalarFunctions();
     velox::aggregate::prestosql::registerAllAggregateFunctions();
+    velox::window::prestosql::registerAllWindowFunctions();
     velox::parse::registerTypeResolver();
 
     optimizer::FunctionRegistry::registerPrestoFunctions();

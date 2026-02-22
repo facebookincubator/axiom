@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 namespace axiom::sql::presto::test {
 
@@ -31,6 +32,7 @@ void PrestoParserTestBase::SetUpTestCase() {
 
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
+  window::prestosql::registerAllWindowFunctions();
 }
 
 void PrestoParserTestBase::SetUp() {

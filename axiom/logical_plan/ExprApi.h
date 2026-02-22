@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <optional>
+#include "axiom/logical_plan/Expr.h"
 #include "velox/parse/IExpr.h"
 #include "velox/type/Variant.h"
 
@@ -37,6 +39,8 @@ namespace facebook::axiom::logical_plan {
 
 class LogicalPlanNode;
 using LogicalPlanNodePtr = std::shared_ptr<const LogicalPlanNode>;
+
+class WindowSpec;
 
 } // namespace facebook::axiom::logical_plan
 namespace facebook::velox::core {
@@ -248,22 +252,32 @@ class ExprApi {
   }
 
   ExprApi as(std::string alias) const {
-    return ExprApi(expr_, std::move(alias));
+    ExprApi result(expr_, std::move(alias));
+    result.windowSpec_ = windowSpec_;
+    return result;
   }
 
-  ExprApi unnestAs(std::vector<std::string> aliases) const {
-    return ExprApi(expr_, alias_, aliases);
-  }
+  ExprApi unnestAs(std::vector<std::string> aliases) const;
 
   template <typename... T>
   ExprApi unnestAs(T... aliases) const {
     return unnestAs(std::vector<std::string>{std::forward<T>(aliases)...});
   }
 
+  /// Converts a function call into a window function with the given window
+  /// specification.
+  ExprApi over(const WindowSpec& windowSpec) const;
+
+  /// Returns the window specification, if any.
+  const std::shared_ptr<const WindowSpec>& windowSpec() const {
+    return windowSpec_;
+  }
+
  private:
   velox::core::ExprPtr expr_;
   std::optional<std::string> alias_;
   std::vector<std::string> unnestedAliases_;
+  std::shared_ptr<const WindowSpec> windowSpec_;
 };
 
 ExprApi Lit(velox::Variant&& val);
@@ -344,6 +358,96 @@ struct SortKey {
   ExprApi expr;
   bool ascending;
   bool nullsFirst;
+};
+
+/// Window specification for use with ExprApi::over(). Follows PySpark's
+/// Window.partitionBy().orderBy() pattern.
+///
+/// Usage:
+///
+///   auto w = WindowSpec()
+///       .partitionBy({Col("dept")})
+///       .orderBy({SortKey(Col("salary"), DESC)});
+///
+///   builder.project({
+///       Col("name"),
+///       Call("row_number").over(w).as("row_num"),
+///   });
+class WindowSpec {
+ public:
+  /// Specifies keys to break up the input rows into separate partitions.
+  WindowSpec& partitionBy(std::vector<ExprApi> keys) {
+    partitionKeys_ = std::move(keys);
+    return *this;
+  }
+
+  /// Specifies the order within each partition.
+  WindowSpec& orderBy(std::vector<SortKey> keys) {
+    orderByKeys_ = std::move(keys);
+    return *this;
+  }
+
+  /// Specifies a ROWS frame.
+  WindowSpec& rows(
+      WindowExpr::BoundType startType,
+      std::optional<ExprApi> startValue,
+      WindowExpr::BoundType endType,
+      std::optional<ExprApi> endValue);
+
+  /// Specifies a RANGE frame.
+  WindowSpec& range(
+      WindowExpr::BoundType startType,
+      std::optional<ExprApi> startValue,
+      WindowExpr::BoundType endType,
+      std::optional<ExprApi> endValue);
+
+  /// Sets IGNORE NULLS for the window function.
+  WindowSpec& ignoreNulls() {
+    ignoreNulls_ = true;
+    return *this;
+  }
+
+  const std::vector<ExprApi>& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  const std::vector<SortKey>& orderByKeys() const {
+    return orderByKeys_;
+  }
+
+  const std::optional<WindowExpr::WindowType>& frameType() const {
+    return frameType_;
+  }
+
+  WindowExpr::BoundType startType() const {
+    return startType_;
+  }
+
+  const std::optional<ExprApi>& startValue() const {
+    return startValue_;
+  }
+
+  WindowExpr::BoundType endType() const {
+    return endType_;
+  }
+
+  const std::optional<ExprApi>& endValue() const {
+    return endValue_;
+  }
+
+  bool isIgnoreNulls() const {
+    return ignoreNulls_;
+  }
+
+ private:
+  std::vector<ExprApi> partitionKeys_;
+  std::vector<SortKey> orderByKeys_;
+  std::optional<WindowExpr::WindowType> frameType_;
+  WindowExpr::BoundType startType_{WindowExpr::BoundType::kUnboundedPreceding};
+  std::optional<ExprApi> startValue_;
+  WindowExpr::BoundType endType_{WindowExpr::BoundType::kUnboundedFollowing};
+  std::optional<ExprApi> endValue_;
+  bool ignoreNulls_{false};
 };
 
 } // namespace facebook::axiom::logical_plan

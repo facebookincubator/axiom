@@ -174,4 +174,57 @@ ExprApi Exists(const ExprApi& input) {
 ExprApi Sql(const std::string& sql) {
   return ExprApi{velox::parse::DuckSqlExpressionsParser().parseExpr(sql)};
 }
+
+ExprApi ExprApi::unnestAs(std::vector<std::string> aliases) const {
+  VELOX_USER_CHECK(!aliases.empty(), "UNNEST aliases must not be empty.");
+  VELOX_USER_CHECK_NULL(
+      windowSpec_,
+      "UNNEST cannot be combined with OVER: {}",
+      expr_->toString());
+  return ExprApi(expr_, alias_, std::move(aliases));
+}
+
+ExprApi ExprApi::over(const WindowSpec& windowSpec) const {
+  VELOX_USER_CHECK(
+      expr_->kind() == velox::core::IExpr::Kind::kCall,
+      "OVER can only be applied to a function call: {}",
+      expr_->toString());
+  VELOX_USER_CHECK_NULL(
+      windowSpec_, "OVER clause already specified: {}", expr_->toString());
+  VELOX_USER_CHECK(
+      unnestedAliases_.empty(),
+      "OVER cannot be combined with UNNEST: {}",
+      expr_->toString());
+
+  ExprApi result(expr_, alias_);
+  result.windowSpec_ = std::make_shared<const WindowSpec>(windowSpec);
+  return result;
+}
+
+WindowSpec& WindowSpec::rows(
+    WindowExpr::BoundType startType,
+    std::optional<ExprApi> startValue,
+    WindowExpr::BoundType endType,
+    std::optional<ExprApi> endValue) {
+  frameType_ = WindowExpr::WindowType::kRows;
+  startType_ = startType;
+  startValue_ = std::move(startValue);
+  endType_ = endType;
+  endValue_ = std::move(endValue);
+  return *this;
+}
+
+WindowSpec& WindowSpec::range(
+    WindowExpr::BoundType startType,
+    std::optional<ExprApi> startValue,
+    WindowExpr::BoundType endType,
+    std::optional<ExprApi> endValue) {
+  frameType_ = WindowExpr::WindowType::kRange;
+  startType_ = startType;
+  startValue_ = std::move(startValue);
+  endType_ = endType;
+  endValue_ = std::move(endValue);
+  return *this;
+}
+
 } // namespace facebook::axiom::logical_plan

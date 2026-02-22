@@ -23,6 +23,7 @@
 #include "velox/common/serialization/Serializable.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/type/Type.h"
 
 namespace facebook::axiom::logical_plan {
@@ -36,6 +37,7 @@ class ExprSerdeTest : public testing::Test {
     LogicalPlanNode::registerSerDe();
     velox::functions::prestosql::registerAllScalarFunctions();
     velox::aggregate::prestosql::registerAllAggregateFunctions();
+    velox::window::prestosql::registerAllWindowFunctions();
   }
 
   // Verifies round-trip serialization by comparing toString() outputs.
@@ -65,6 +67,21 @@ class ExprSerdeTest : public testing::Test {
     ExprResolver resolver(/*queryCtx=*/nullptr, /*enableCoercions=*/false);
     return resolver.resolveScalarTypes(
         expr.expr(),
+        [&schema](const std::optional<std::string>&, const std::string& name)
+            -> ExprPtr {
+          return std::make_shared<InputReferenceExpr>(
+              schema->findChild(name), name);
+        });
+  }
+
+  // Resolves a window ExprApi expression to an Expr using a schema for column
+  // types.
+  ExprPtr resolveWindow(const ExprApi& expr, velox::RowTypePtr schema) {
+    VELOX_CHECK_NOT_NULL(expr.windowSpec());
+    ExprResolver resolver(/*queryCtx=*/nullptr, /*enableCoercions=*/false);
+    return resolver.resolveWindowTypes(
+        expr.expr(),
+        *expr.windowSpec(),
         [&schema](const std::optional<std::string>&, const std::string& name)
             -> ExprPtr {
           return std::make_shared<InputReferenceExpr>(
@@ -153,23 +170,33 @@ TEST_F(ExprSerdeTest, aggregateExprDistinct) {
 TEST_F(ExprSerdeTest, windowExpr) {
   auto schema =
       velox::ROW({{"x", velox::BIGINT()}, {"category", velox::VARCHAR()}});
-  auto x = resolve(Col("x"), schema);
-  auto category = resolve(Col("category"), schema);
-  WindowExpr::Frame frame{
-      WindowExpr::WindowType::kRows,
-      WindowExpr::BoundType::kUnboundedPreceding,
-      nullptr,
-      WindowExpr::BoundType::kCurrentRow,
-      nullptr};
-  testRoundTrip(
-      std::make_shared<WindowExpr>(
-          velox::BIGINT(),
-          "sum",
-          std::vector<ExprPtr>{x},
-          std::vector<ExprPtr>{category},
-          std::vector<SortingField>{},
-          frame,
-          false));
+
+  // row_number() with ORDER BY.
+  testRoundTrip(resolveWindow(
+      Call("row_number").over(WindowSpec().orderBy({SortKey(Col("x"), ASC)})),
+      schema));
+
+  // row_number() with PARTITION BY and ORDER BY.
+  testRoundTrip(resolveWindow(
+      Call("row_number")
+          .over(
+              WindowSpec()
+                  .partitionBy({Col("category")})
+                  .orderBy({SortKey(Col("x"), DESC)})),
+      schema));
+
+  // sum() with PARTITION BY and ROWS frame.
+  testRoundTrip(resolveWindow(
+      Call("sum", Col("x"))
+          .over(
+              WindowSpec()
+                  .partitionBy({Col("category")})
+                  .rows(
+                      WindowExpr::BoundType::kUnboundedPreceding,
+                      {},
+                      WindowExpr::BoundType::kCurrentRow,
+                      {})),
+      schema));
 }
 
 TEST_F(ExprSerdeTest, lambdaExpr) {

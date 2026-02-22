@@ -469,6 +469,79 @@ TEST_F(ExpressionParserTest, row) {
       "row(n_regionkey, n_name)", "row_constructor(n_regionkey, n_name)");
 }
 
+TEST_F(ExpressionParserTest, windowFunction) {
+  // row_number() with ORDER BY.
+  testNationExpr(
+      "row_number() OVER (ORDER BY n_nationkey)",
+      "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+
+  // row_number() with PARTITION BY and ORDER BY.
+  testNationExpr(
+      "row_number() OVER (PARTITION BY n_regionkey ORDER BY n_nationkey)",
+      "row_number() OVER (PARTITION BY n_regionkey ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+
+  // Aggregate function as window function.
+  testNationExpr(
+      "sum(n_nationkey) OVER (PARTITION BY n_regionkey)",
+      "sum(n_nationkey) OVER (PARTITION BY n_regionkey RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+
+  // ORDER BY DESC NULLS FIRST.
+  testNationExpr(
+      "row_number() OVER (ORDER BY n_nationkey DESC NULLS FIRST)",
+      "row_number() OVER (ORDER BY n_nationkey DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+
+  // Explicit ROWS frame.
+  testNationExpr(
+      "sum(n_nationkey) OVER (ORDER BY n_nationkey ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      "sum(n_nationkey) OVER (ORDER BY n_nationkey ASC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)");
+
+  // ROWS frame with bounded preceding and following.
+  testNationExpr(
+      "sum(n_nationkey) OVER (ORDER BY n_nationkey ROWS BETWEEN 1 PRECEDING AND 2 FOLLOWING)",
+      "sum(n_nationkey) OVER (ORDER BY n_nationkey ASC NULLS LAST ROWS BETWEEN 1 PRECEDING AND 2 FOLLOWING)");
+
+  // RANGE frame.
+  testNationExpr(
+      "sum(n_nationkey) OVER (ORDER BY n_nationkey RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+      "sum(n_nationkey) OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)");
+
+  // Multiple window functions in SELECT.
+  testSelect(
+      "SELECT row_number() OVER (ORDER BY n_nationkey), sum(n_nationkey) OVER (PARTITION BY n_regionkey) FROM nation",
+      matchScan().project({
+          "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+          "sum(n_nationkey) OVER (PARTITION BY n_regionkey RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+      }));
+
+  // Mix of scalar and window functions.
+  testSelect(
+      "SELECT n_name, length(n_name), row_number() OVER (ORDER BY n_nationkey) FROM nation",
+      matchScan().project({
+          "n_name",
+          "length(n_name)",
+          "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+      }));
+
+  // Window function with alias.
+  testSelect(
+      "SELECT row_number() OVER (ORDER BY n_nationkey) AS row_num FROM nation",
+      matchScan().project({
+          "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+      }));
+
+  // Pure window function with coercion: ntile expects BIGINT, integer literal
+  // 1 is INTEGER.
+  testNationExpr(
+      "ntile(1) OVER (ORDER BY n_nationkey)",
+      "ntile(CAST(1 AS BIGINT)) OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+
+  // Aggregate as window function with coercion: corr expects (DOUBLE, DOUBLE),
+  // columns are BIGINT.
+  testNationExpr(
+      "corr(n_nationkey, n_regionkey) OVER (ORDER BY n_nationkey)",
+      "corr(CAST(n_nationkey AS DOUBLE), CAST(n_regionkey AS DOUBLE)) OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+}
+
 TEST_F(ExpressionParserTest, lambda) {
   ASSERT_NO_THROW(parseExpr("filter(array[1,2,3], x -> x > 1)"));
   ASSERT_NO_THROW(parseExpr("FILTER(array[1,2,3], x -> x > 1)"));
