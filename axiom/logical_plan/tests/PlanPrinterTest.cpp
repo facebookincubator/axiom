@@ -21,6 +21,7 @@
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 using namespace facebook::velox;
 
@@ -38,6 +39,7 @@ class PlanPrinterTest : public testing::Test {
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
+    window::prestosql::registerAllWindowFunctions();
 
     connector_ = std::make_shared<connector::TestConnector>(kTestConnectorId);
     connector_->addTable(
@@ -620,6 +622,60 @@ TEST_F(PlanPrinterTest, groupingSetsDistinctSortedMaskedAgg) {
               "- Aggregate(a, b) GROUPING SETS [(a, b), (a), ()]"),
           testing::StartsWith(
               "    complex_agg := array_agg(DISTINCT b ORDER BY c DESC NULLS LAST) FILTER (WHERE d)"),
+          testing::StartsWith("  - Values"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, window) {
+  auto rowType = ROW({"a", "b"}, INTEGER());
+  std::vector<Variant> data{
+      Variant::row({1, 10}),
+      Variant::row({2, 20}),
+      Variant::row({3, 30}),
+  };
+
+  auto plan = PlanBuilder()
+                  .values(rowType, data)
+                  .with({"row_number() over (order by a) as rn"})
+                  .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Project"),
+          testing::StartsWith("    a := a"),
+          testing::StartsWith("    b := b"),
+          testing::StartsWith("    rn := row_number() OVER ("),
+          testing::StartsWith("  - Values"),
+          testing::Eq("")));
+}
+
+TEST_F(PlanPrinterTest, windowWithPartitionBy) {
+  auto rowType = ROW({"a", "b"}, INTEGER());
+  std::vector<Variant> data{
+      Variant::row({1, 10}),
+      Variant::row({1, 20}),
+      Variant::row({2, 30}),
+  };
+
+  auto plan =
+      PlanBuilder()
+          .values(rowType, data)
+          .with({"row_number() over (partition by a order by b desc) as rn"})
+          .build();
+
+  auto lines = toLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("- Project"),
+          testing::StartsWith("    a := a"),
+          testing::StartsWith("    b := b"),
+          testing::StartsWith(
+              "    rn := row_number() OVER (PARTITION BY a ORDER BY b DESC"),
           testing::StartsWith("  - Values"),
           testing::Eq("")));
 }
