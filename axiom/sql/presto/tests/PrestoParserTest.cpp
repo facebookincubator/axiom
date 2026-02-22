@@ -204,16 +204,45 @@ TEST_F(PrestoParserTest, unnest) {
 }
 
 TEST_F(PrestoParserTest, qualifiedColumnAccess) {
-  connector_->addTable("t", ROW({"x"}, {INTEGER()}));
-  auto matcher = matchScan().project();
+  {
+    connector_->addTable("t", ROW({"x"}, {INTEGER()}));
+    auto matcher = matchScan().project();
 
-  // Qualified and unqualified column access.
-  testSelect("SELECT t.x FROM t", matcher);
-  testSelect("SELECT x FROM t", matcher);
+    // Qualified and unqualified column access.
+    testSelect("SELECT t.x FROM t", matcher);
+    testSelect("SELECT x FROM t", matcher);
 
-  // Case insensitive column and table alias.
-  testSelect("SELECT t.X FROM t", matcher);
-  testSelect("SELECT T.X FROM t", matcher);
+    // Case insensitive column and table alias.
+    testSelect("SELECT t.X FROM t", matcher);
+    testSelect("SELECT T.X FROM t", matcher);
+  }
+
+  // Table alias takes priority over struct column name. Table 'u' has a
+  // column 'x' (INTEGER) and a struct column 't' with fields 'x' (VARCHAR)
+  // and 'y' (DOUBLE). When aliased as 't':
+  //   - 't' resolves to the struct column (ROW).
+  //   - 't.x' resolves to the table-qualified column (INTEGER), not the
+  //     struct field (VARCHAR), because the table alias takes priority.
+  //   - 't.y' resolves to the struct field (DOUBLE), because 'u' has no
+  //     column 'y' and the fallback to struct dereference kicks in.
+  {
+    connector_->addTable(
+        "u",
+        ROW({"t", "x"}, {ROW({"x", "y"}, {VARCHAR(), DOUBLE()}), INTEGER()}));
+    auto matcher = matchScan().project([&](const auto& node) {
+      const auto& outputType = node->outputType();
+      EXPECT_EQ(outputType->childAt(0)->kind(), TypeKind::ROW);
+      EXPECT_EQ(outputType->childAt(1)->kind(), TypeKind::INTEGER);
+      EXPECT_EQ(outputType->childAt(2)->kind(), TypeKind::DOUBLE);
+    });
+    testSelect("SELECT t, t.x, t.y FROM u AS t", matcher);
+
+    // Struct field 'x' is shadowed by the table-qualified column. Legacy
+    // positional access also fails because the struct has named fields.
+    VELOX_ASSERT_THROW(
+        parseSql("SELECT t.field0 FROM u AS t"),
+        "Cannot access named field using legacy field name");
+  }
 }
 
 TEST_F(PrestoParserTest, syntaxErrors) {
@@ -400,6 +429,50 @@ TEST_F(PrestoParserTest, join) {
   }
 
   {
+    connector_->addTable("t1", ROW({"id", "a"}, {INTEGER(), VARCHAR()}));
+    connector_->addTable("t2", ROW({"id", "b"}, {INTEGER(), VARCHAR()}));
+    connector_->addTable(
+        "t3", ROW({"x", "y", "z"}, {INTEGER(), INTEGER(), VARCHAR()}));
+
+    // Unqualified reference to a column on both sides is ambiguous.
+    VELOX_ASSERT_THROW(
+        parseSql("SELECT * FROM t1 JOIN t2 ON id = id"),
+        "Cannot resolve column");
+
+    // Qualified references are not ambiguous.
+    auto matcher = matchScan().join(matchScan().build());
+    testSelect("SELECT * FROM t1 JOIN t2 ON t1.id = t2.id", matcher);
+
+    // Non-existent column in ON clause.
+    VELOX_ASSERT_THROW(
+        parseSql("SELECT * FROM t1 JOIN t2 ON t1.id = no_such_column"),
+        "Cannot resolve column");
+
+    // Correlated subquery in ON clause with unqualified reference to a column
+    // that exists on both sides of the join is ambiguous. This exercises the
+    // joinScope lambda (resolveJoinColumn) rather than the NameMappings::merge
+    // path used for simple ON conditions.
+    VELOX_ASSERT_THROW(
+        parseSql(
+            "SELECT * FROM t1 JOIN t2 "
+            "ON t1.id = (SELECT max(x) FROM t3 WHERE t3.y = id)"),
+        "Column is ambiguous: id");
+
+    // Correlated subquery referencing a column unique to one side works.
+    // Column 'a' exists only on t1, so it resolves unambiguously.
+    testSelect(
+        "SELECT * FROM t1 JOIN t2 "
+        "ON t1.id = (SELECT max(x) FROM t3 WHERE t3.z = a)",
+        matcher);
+
+    // Qualified reference to ambiguous column in subquery is not ambiguous.
+    testSelect(
+        "SELECT * FROM t1 JOIN t2 "
+        "ON t1.id = (SELECT max(x) FROM t3 WHERE t3.y = t1.id)",
+        matcher);
+  }
+
+  {
     auto matcher = matchScan().join(matchScan().build()).filter();
 
     testSelect(
@@ -541,6 +614,18 @@ TEST_F(PrestoParserTest, exists) {
         "SELECT EXISTS (SELECT * from nation WHERE n_regionkey = r_regionkey) FROM region",
         matcher);
   }
+}
+
+TEST_F(PrestoParserTest, structDereferenceInCorrelatedSubquery) {
+  connector_->addTable(
+      "t",
+      ROW({"s", "x"}, {ROW({"a", "b"}, {INTEGER(), VARCHAR()}), INTEGER()}));
+  connector_->addTable("u", ROW({"y"}, {INTEGER()}));
+
+  // Correlated subquery references a struct field from the outer query.
+  auto matcher = matchScan().filter();
+  testSelect(
+      "SELECT * FROM t WHERE EXISTS (SELECT 1 FROM u WHERE s.a = y)", matcher);
 }
 
 TEST_F(PrestoParserTest, values) {
