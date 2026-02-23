@@ -775,6 +775,24 @@ TEST_F(PrestoParserTest, explainInsert) {
   }
 }
 
+TEST_F(PrestoParserTest, explainCreateTable) {
+  testExplainDdl(
+      "EXPLAIN CREATE TABLE t (id INTEGER)", SqlStatementKind::kCreateTable);
+  testExplainDdl(
+      "EXPLAIN CREATE TABLE IF NOT EXISTS t (id INTEGER)",
+      SqlStatementKind::kCreateTable);
+  testExplainDdl(
+      "EXPLAIN CREATE TABLE t (id INTEGER, ds VARCHAR) "
+      "WITH (partitioned_by = ARRAY['ds'])",
+      SqlStatementKind::kCreateTable);
+}
+
+TEST_F(PrestoParserTest, explainDropTable) {
+  testExplainDdl("EXPLAIN DROP TABLE t", SqlStatementKind::kDropTable);
+  testExplainDdl(
+      "EXPLAIN DROP TABLE IF EXISTS u", SqlStatementKind::kDropTable);
+}
+
 TEST_F(PrestoParserTest, showCatalogs) {
   {
     auto matcher = matchValues();
