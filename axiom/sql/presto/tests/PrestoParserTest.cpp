@@ -489,6 +489,84 @@ TEST_F(PrestoParserTest, join) {
   }
 }
 
+TEST_F(PrestoParserTest, joinUsing) {
+  connector_->addTable("t1", ROW({"id", "a"}, {INTEGER(), VARCHAR()}));
+  connector_->addTable("t2", ROW({"id", "b"}, {INTEGER(), VARCHAR()}));
+  connector_->addTable("t3", ROW({"id", "c"}, {INTEGER(), VARCHAR()}));
+
+  auto verifyOutputColumns =
+      [](const lp::LogicalPlanNodePtr& node,
+         const std::vector<std::string>& expectedColumns) {
+        EXPECT_THAT(
+            node->outputType()->names(),
+            testing::ElementsAreArray(expectedColumns));
+      };
+
+  // INNER JOIN USING.
+  {
+    auto matcher = matchScan("t1")
+                       .join(matchScan("t2").build())
+                       .project([&](const auto& node) {
+                         verifyOutputColumns(node, {"id", "a", "b"});
+                       });
+    testSelect("SELECT * FROM t1 JOIN t2 USING (id)", matcher);
+  }
+
+  // Chained JOIN USING.
+  {
+    auto matcher = matchScan("t1")
+                       .join(matchScan("t2").build())
+                       .project()
+                       .join(matchScan("t3").build())
+                       .project([&](const auto& node) {
+                         verifyOutputColumns(node, {"id", "a", "b", "c"});
+                       });
+    testSelect(
+        "SELECT * FROM t1 JOIN t2 USING (id) JOIN t3 USING (id)", matcher);
+  }
+
+  // LEFT JOIN USING.
+  {
+    auto matcher = matchScan("t1")
+                       .join(matchScan("t2").build())
+                       .project([&](const auto& node) {
+                         verifyOutputColumns(node, {"id", "a", "b"});
+                       });
+    testSelect("SELECT * FROM t1 LEFT JOIN t2 USING (id)", matcher);
+  }
+
+  // RIGHT JOIN USING.
+  {
+    auto matcher = matchScan("t1")
+                       .join(matchScan("t2").build())
+                       .project()
+                       .project([&](const auto& node) {
+                         verifyOutputColumns(node, {"id", "a", "b"});
+                       });
+    testSelect("SELECT * FROM t1 RIGHT JOIN t2 USING (id)", matcher);
+  }
+
+  // FULL JOIN USING: inner project coalesces USING columns.
+  {
+    auto matcher =
+        matchScan("t1")
+            .join(matchScan("t2").build())
+            .project([&](const auto& node) {
+              auto project =
+                  std::dynamic_pointer_cast<const lp::ProjectNode>(node);
+              ASSERT_EQ(3, project->expressions().size());
+              auto* coalesce = dynamic_cast<const lp::SpecialFormExpr*>(
+                  project->expressionAt(0).get());
+              ASSERT_NE(nullptr, coalesce);
+              EXPECT_EQ(lp::SpecialForm::kCoalesce, coalesce->form());
+            })
+            .project([&](const auto& node) {
+              verifyOutputColumns(node, {"id", "a", "b"});
+            });
+    testSelect("SELECT * FROM t1 FULL JOIN t2 USING (id)", matcher);
+  }
+}
+
 TEST_F(PrestoParserTest, joinOnSubquery) {
   auto matcher = matchScan().join(matchScan().build());
 

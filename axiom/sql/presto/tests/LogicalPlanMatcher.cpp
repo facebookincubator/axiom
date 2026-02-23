@@ -75,7 +75,7 @@ class LogicalPlanMatcherImpl : public LogicalPlanMatcher {
       onMatch_(plan);
     }
 
-    return true;
+    AXIOM_RETURN_RESULT
   }
 
  protected:
@@ -225,6 +225,14 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::tableScan(
   matcher_ = std::make_shared<LogicalPlanMatcherImpl<TableScanNode>>(
       std::move(onMatch));
   return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::tableScan(
+    const std::string& tableName) {
+  return tableScan([tableName](const LogicalPlanNodePtr& node) {
+    auto scan = std::dynamic_pointer_cast<const TableScanNode>(node);
+    EXPECT_EQ(scan->tableName(), tableName);
+  });
 }
 
 LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::values(

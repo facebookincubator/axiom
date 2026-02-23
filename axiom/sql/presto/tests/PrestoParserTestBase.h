@@ -86,6 +86,14 @@ class PrestoParserTestBase : public testing::Test {
         .tableScan();
   }
 
+  /// Returns a matcher builder starting with a table scan node for the given
+  /// table.
+  static facebook::axiom::logical_plan::test::LogicalPlanMatcherBuilder
+  matchScan(const std::string& tableName) {
+    return facebook::axiom::logical_plan::test::LogicalPlanMatcherBuilder()
+        .tableScan(tableName);
+  }
+
   /// Returns a matcher builder starting with a values node.
   static facebook::axiom::logical_plan::test::LogicalPlanMatcherBuilder
   matchValues() {
