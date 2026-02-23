@@ -87,6 +87,11 @@ PlanBuilder& PlanBuilder::values(
 }
 
 namespace {
+
+ExprPtr makeInputRef(const velox::TypePtr& type, const std::string& name) {
+  return std::make_shared<InputReferenceExpr>(type, name);
+}
+
 ExprPtr applyCoercion(const ExprPtr& input, const velox::TypePtr& type) {
   if (input->isSpecialForm() &&
       input->as<SpecialFormExpr>()->form() == SpecialForm::kCast) {
@@ -346,8 +351,7 @@ PlanBuilder& PlanBuilder::dropHiddenColumns() {
       newOutputMapping->add(name, id);
     }
 
-    exprs.push_back(
-        std::make_shared<InputReferenceExpr>(inputType->childAt(i), id));
+    exprs.push_back(makeInputRef(inputType->childAt(i), id));
   }
 
   node_ = std::make_shared<ProjectNode>(
@@ -646,8 +650,7 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
       newOutputMapping->add(name, id);
     }
 
-    exprs.push_back(
-        std::make_shared<InputReferenceExpr>(inputType->childAt(i), id));
+    exprs.push_back(makeInputRef(inputType->childAt(i), id));
   }
 
   resolveProjections(projections, outputNames, exprs, *newOutputMapping);
@@ -975,8 +978,7 @@ PlanBuilder& PlanBuilder::distinct() {
   keyExprs.reserve(inputType->size());
   for (auto i = 0; i < inputType->size(); i++) {
     keyExprs.push_back(
-        std::make_shared<InputReferenceExpr>(
-            inputType->childAt(i), inputType->nameOf(i)));
+        makeInputRef(inputType->childAt(i), inputType->nameOf(i)));
   }
 
   node_ = std::make_shared<AggregateNode>(
@@ -1111,16 +1113,14 @@ ExprPtr resolveJoinInputName(
     const velox::RowTypePtr& inputRowType) {
   if (alias.has_value()) {
     if (auto id = mapping.lookup(alias.value(), name)) {
-      return std::make_shared<InputReferenceExpr>(
-          inputRowType->findChild(id.value()), id.value());
+      return makeInputRef(inputRowType->findChild(id.value()), id.value());
     }
 
     return nullptr;
   }
 
   if (auto id = mapping.lookup(name)) {
-    return std::make_shared<InputReferenceExpr>(
-        inputRowType->findChild(id.value()), id.value());
+    return makeInputRef(inputRowType->findChild(id.value()), id.value());
   }
 
   VELOX_USER_FAIL(
@@ -1157,6 +1157,134 @@ PlanBuilder& PlanBuilder::join(
       nextId(), std::move(node_), right.node_, joinType, std::move(expr));
 
   return *this;
+}
+
+PlanBuilder& PlanBuilder::joinUsing(
+    const PlanBuilder& right,
+    const std::vector<std::string>& columns,
+    JoinType joinType) {
+  VELOX_USER_CHECK(!columns.empty(), "USING columns cannot be empty");
+  VELOX_USER_CHECK_NOT_NULL(node_, "Join node cannot be a leaf node");
+  VELOX_USER_CHECK_NOT_NULL(right.node_);
+
+  // Find internal IDs for each USING column from both sides before merge.
+  std::vector<UsingColumn> usingColumns;
+  usingColumns.reserve(columns.size());
+  for (const auto& column : columns) {
+    auto leftId = outputMapping_->lookup(column);
+    VELOX_USER_CHECK(
+        leftId.has_value(),
+        "USING column not found on the left side of the join: {}",
+        column);
+    auto rightId = right.outputMapping_->lookup(column);
+    VELOX_USER_CHECK(
+        rightId.has_value(),
+        "USING column not found on the right side of the join: {}",
+        column);
+    usingColumns.push_back({column, leftId.value(), rightId.value()});
+  }
+
+  // Build equi-join condition.
+  auto leftType = node_->outputType();
+  auto rightType = right.node_->outputType();
+
+  std::vector<ExprPtr> eqExprs;
+  eqExprs.reserve(usingColumns.size());
+  for (const auto& column : usingColumns) {
+    auto leftColumnType = leftType->findChild(column.leftId);
+    auto rightColumnType = rightType->findChild(column.rightId);
+    VELOX_USER_CHECK(
+        leftColumnType->equivalent(*rightColumnType),
+        "USING column has different types on left and right sides of the join: {} ({} vs {})",
+        column.name,
+        leftColumnType->toString(),
+        rightColumnType->toString());
+    auto leftRef = makeInputRef(leftColumnType, column.leftId);
+    auto rightRef = makeInputRef(rightColumnType, column.rightId);
+    eqExprs.push_back(
+        std::make_shared<CallExpr>(
+            velox::BOOLEAN(), "eq", std::vector<ExprPtr>{leftRef, rightRef}));
+  }
+
+  ExprPtr condition;
+  if (eqExprs.size() == 1) {
+    condition = std::move(eqExprs[0]);
+  } else {
+    condition = std::make_shared<SpecialFormExpr>(
+        velox::BOOLEAN(), SpecialForm::kAnd, std::move(eqExprs));
+  }
+
+  // Merge mappings and create JoinNode.
+  outputMapping_->merge(*right.outputMapping_);
+
+  node_ = std::make_shared<JoinNode>(
+      nextId(), std::move(node_), right.node_, joinType, std::move(condition));
+
+  // Add projection to deduplicate USING columns.
+  addJoinUsingProjection(usingColumns, joinType);
+
+  return *this;
+}
+
+void PlanBuilder::addJoinUsingProjection(
+    const std::vector<UsingColumn>& usingColumns,
+    JoinType joinType) {
+  auto joinOutputType = node_->outputType();
+
+  std::vector<std::string> outputNames;
+  std::vector<ExprPtr> exprs;
+  auto newOutputMapping = std::make_shared<NameMappings>();
+
+  // Emit USING columns first (one copy each).
+  for (const auto& column : usingColumns) {
+    auto type = joinOutputType->findChild(column.leftId);
+    if (joinType == JoinType::kFull) {
+      // Coalesce left and right for FULL OUTER joins.
+      auto leftRef = makeInputRef(type, column.leftId);
+      auto rightRef = makeInputRef(type, column.rightId);
+      exprs.push_back(
+          std::make_shared<SpecialFormExpr>(
+              type,
+              SpecialForm::kCoalesce,
+              std::vector<ExprPtr>{leftRef, rightRef}));
+      outputNames.push_back(newName(column.name));
+    } else if (joinType == JoinType::kRight) {
+      // Use the right side's column for RIGHT joins.
+      exprs.push_back(makeInputRef(type, column.rightId));
+      outputNames.push_back(column.rightId);
+    } else {
+      // Pass through the left side's column for INNER/LEFT joins.
+      exprs.push_back(makeInputRef(type, column.leftId));
+      outputNames.push_back(column.leftId);
+    }
+    newOutputMapping->add(column.name, outputNames.back());
+  }
+
+  // Emit all non-USING columns from both sides in order.
+  for (size_t i = 0; i < joinOutputType->size(); i++) {
+    const auto& id = joinOutputType->nameOf(i);
+
+    if (UsingColumn::containsId(usingColumns, id)) {
+      continue;
+    }
+
+    if (outputMapping_->isHidden(id)) {
+      continue;
+    }
+
+    outputNames.push_back(id);
+    exprs.push_back(makeInputRef(joinOutputType->childAt(i), id));
+
+    for (const auto& qualifiedName : outputMapping_->reverseLookup(id)) {
+      newOutputMapping->add(qualifiedName, id);
+    }
+  }
+
+  node_ = std::make_shared<ProjectNode>(
+      nextId(), std::move(node_), std::move(outputNames), std::move(exprs));
+
+  newOutputMapping->enableUnqualifiedAccess();
+  outputMapping_ = std::move(newOutputMapping);
 }
 
 PlanBuilder& PlanBuilder::unionAll(const PlanBuilder& other) {
@@ -1274,7 +1402,7 @@ PlanBuilder& PlanBuilder::setOperation(
           const auto& inputType = inputRowType->childAt(i);
           const auto& name = inputRowType->nameOf(i);
 
-          auto inputRef = std::make_shared<InputReferenceExpr>(inputType, name);
+          auto inputRef = makeInputRef(inputType, name);
 
           if (castIdx < indicesToCast.size() && indicesToCast[castIdx] == i) {
             exprs.push_back(
@@ -1495,7 +1623,7 @@ ExprPtr PlanBuilder::resolveInputName(
 
   if (alias.has_value()) {
     if (auto id = outputMapping_->lookup(alias.value(), name)) {
-      return std::make_shared<InputReferenceExpr>(
+      return makeInputRef(
           node_->outputType()->findChild(id.value()), id.value());
     }
 
@@ -1508,8 +1636,7 @@ ExprPtr PlanBuilder::resolveInputName(
   }
 
   if (auto id = outputMapping_->lookup(name)) {
-    return std::make_shared<InputReferenceExpr>(
-        node_->outputType()->findChild(id.value()), id.value());
+    return makeInputRef(node_->outputType()->findChild(id.value()), id.value());
   }
 
   if (outerScope_ != nullptr) {
@@ -1675,7 +1802,7 @@ LogicalPlanNodePtr PlanBuilder::build(bool useIds) {
     const auto& type = rowType->childAt(i);
 
     if (useIds) {
-      exprs.push_back(std::make_shared<InputReferenceExpr>(type, id));
+      exprs.push_back(makeInputRef(type, id));
     } else {
       auto it = names.find(id);
       if (it != names.end()) {
@@ -1688,7 +1815,7 @@ LogicalPlanNodePtr PlanBuilder::build(bool useIds) {
         needRename = true;
       }
 
-      exprs.push_back(std::make_shared<InputReferenceExpr>(type, id));
+      exprs.push_back(makeInputRef(type, id));
     }
   }
 

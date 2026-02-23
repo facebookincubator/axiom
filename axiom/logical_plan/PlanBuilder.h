@@ -512,6 +512,15 @@ class PlanBuilder {
       const std::optional<ExprApi>& condition,
       JoinType joinType);
 
+  /// Joins using named columns (SQL JOIN USING semantics). Produces a single
+  /// copy of each USING column in the output followed by non-USING columns from
+  /// both sides in their original order. For FULL OUTER joins, USING columns
+  /// are coalesced.
+  PlanBuilder& joinUsing(
+      const PlanBuilder& right,
+      const std::vector<std::string>& columns,
+      JoinType joinType);
+
   /// Adds a cross join (cartesian product) with the 'right' plan.
   PlanBuilder& crossJoin(const PlanBuilder& right) {
     return join(right, /* condition */ std::nullopt, JoinType::kInner);
@@ -705,6 +714,33 @@ class PlanBuilder {
   LogicalPlanNodePtr build(bool useIds = false);
 
  private:
+  // Stores resolved internal IDs for a USING column from both sides of the
+  // join.
+  struct UsingColumn {
+    std::string name;
+    std::string leftId;
+    std::string rightId;
+
+    // Returns true if the given internal ID matches either side of any USING
+    // column.
+    static bool containsId(
+        const std::vector<UsingColumn>& usingColumns,
+        const std::string& id) {
+      for (const auto& column : usingColumns) {
+        if (id == column.leftId || id == column.rightId) {
+          return true;
+        }
+      }
+      return false;
+    }
+  };
+
+  // Adds a projection to deduplicate USING columns after a join. Emits a
+  // single copy of each USING column followed by all non-USING columns.
+  void addJoinUsingProjection(
+      const std::vector<UsingColumn>& usingColumns,
+      JoinType joinType);
+
   std::string nextId() {
     return planNodeIdGenerator_->next();
   }

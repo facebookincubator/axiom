@@ -438,20 +438,33 @@ class RelationPlanner : public AstVisitor {
 
     builder_ = newBuilder(joinScope);
 
-    std::optional<lp::ExprApi> condition;
-
     if (const auto& criteria = join.criteria()) {
       if (criteria->is(NodeType::kJoinOn)) {
+        std::optional<lp::ExprApi> condition;
         condition = toExpr(criteria->as<JoinOn>()->expression());
+
+        builder_ = leftBuilder;
+        builder_->join(*rightBuilder, condition, toJoinType(join.joinType()));
+      } else if (criteria->is(NodeType::kJoinUsing)) {
+        const auto* joinUsing = criteria->as<JoinUsing>();
+        std::vector<std::string> columns;
+        columns.reserve(joinUsing->columns().size());
+        for (const auto& col : joinUsing->columns()) {
+          columns.push_back(canonicalizeIdentifier(*col));
+        }
+
+        builder_ = leftBuilder;
+        builder_->joinUsing(
+            *rightBuilder, columns, toJoinType(join.joinType()));
       } else {
         VELOX_NYI(
             "Join criteria type is not supported yet: {}",
             NodeTypeName::toName(criteria->type()));
       }
+    } else {
+      builder_ = leftBuilder;
+      builder_->join(*rightBuilder, std::nullopt, toJoinType(join.joinType()));
     }
-
-    builder_ = leftBuilder;
-    builder_->join(*rightBuilder, condition, toJoinType(join.joinType()));
   }
 
   void addProject(const std::vector<SelectItemPtr>& selectItems) {

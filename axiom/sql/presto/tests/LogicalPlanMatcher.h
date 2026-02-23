@@ -78,6 +78,9 @@ class LogicalPlanMatcherBuilder {
   /// Matches a TableScanNode. Must be the first node in the chain (leaf).
   LogicalPlanMatcherBuilder& tableScan(OnMatchCallback onMatch = nullptr);
 
+  /// Matches a TableScanNode with the specified table name.
+  LogicalPlanMatcherBuilder& tableScan(const std::string& tableName);
+
   /// Matches a ValuesNode. Must be the first node in the chain (leaf).
   LogicalPlanMatcherBuilder& values(OnMatchCallback onMatch = nullptr);
 
