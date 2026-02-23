@@ -34,10 +34,15 @@ using ExprMap =
     folly::F14FastMap<core::ExprPtr, V, core::IExprHash, core::IExprEqual>;
 
 // Given an expression, and pairs of search-and-replace sub-expressions,
-// produces a new expression with sub-expressions replaced.
+// produces a new expression with sub-expressions replaced. If
+// 'onUnreplacedLeaf' is provided, invokes the callback for any
+// FieldAccessExpr that is not in the replacement map and whose children were
+// not replaced either. Used to detect invalid column references in HAVING.
 core::ExprPtr replaceInputs(
     const core::ExprPtr& expr,
-    const ExprMap<core::ExprPtr>& replacements) {
+    const ExprMap<core::ExprPtr>& replacements,
+    const std::function<void(const core::FieldAccessExpr&)>& onUnreplacedLeaf =
+        nullptr) {
   auto it = replacements.find(expr);
   if (it != replacements.end()) {
     return it->second;
@@ -46,11 +51,16 @@ core::ExprPtr replaceInputs(
   std::vector<core::ExprPtr> newInputs;
   bool hasNewInput = false;
   for (const auto& input : expr->inputs()) {
-    auto newInput = replaceInputs(input, replacements);
+    auto newInput = replaceInputs(input, replacements, onUnreplacedLeaf);
     if (newInput.get() != input.get()) {
       hasNewInput = true;
     }
     newInputs.push_back(newInput);
+  }
+
+  if (!hasNewInput && onUnreplacedLeaf &&
+      expr->is(core::IExpr::Kind::kFieldAccess)) {
+    onUnreplacedLeaf(*expr->as<core::FieldAccessExpr>());
   }
 
   if (hasNewInput) {
@@ -494,7 +504,11 @@ void GroupByPlanner::rewritePostAggregateExprs() {
   }
 
   if (filter_.has_value()) {
-    filter_ = replaceInputs(filter_.value().expr(), inputs);
+    filter_ = replaceInputs(
+        filter_.value().expr(), inputs, [](const core::FieldAccessExpr& expr) {
+          VELOX_USER_FAIL(
+              "HAVING clause cannot reference column: {}", expr.name());
+        });
   }
 
   // Replace sub-expressions in SELECT projections with column references to
