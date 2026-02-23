@@ -63,6 +63,11 @@ TEST_F(AggregationParserTest, simpleGroupBy) {
     testSelect(
         "SELECT count(1) FROM nation GROUP BY n_name, n_regionkey", matcher);
   }
+
+  // GROUP BY resolves against FROM columns, not SELECT aliases.
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT n_name AS x FROM nation GROUP BY x"),
+      "Cannot resolve column: x");
 }
 
 TEST_F(AggregationParserTest, groupingSets) {
@@ -315,13 +320,32 @@ TEST_F(AggregationParserTest, groupingKeyExpr) {
 }
 
 TEST_F(AggregationParserTest, having) {
-  {
-    auto matcher = matchScan().aggregate().filter().project();
+  auto matcher = matchScan().aggregate().filter().project();
 
-    testSelect(
-        "SELECT n_name FROM nation GROUP BY 1 HAVING sum(length(n_comment)) > 10",
-        matcher);
-  }
+  // HAVING with aggregate expression.
+  testSelect(
+      "SELECT n_name FROM nation GROUP BY 1 HAVING sum(length(n_comment)) > 10",
+      matcher);
+
+  // HAVING referencing a grouping key.
+  testSelect(
+      "SELECT n_regionkey, count(*) FROM nation GROUP BY 1 HAVING n_regionkey > 2",
+      matchScan().aggregate().filter());
+
+  // HAVING referencing both a grouping key and an aggregate.
+  testSelect(
+      "SELECT n_regionkey, count(*) FROM nation GROUP BY 1 HAVING n_regionkey > count(*)",
+      matchScan().aggregate().filter());
+
+  // HAVING with aggregate not in SELECT.
+  testSelect(
+      "SELECT n_name FROM nation GROUP BY 1 HAVING count(*) > 5", matcher);
+
+  // HAVING cannot reference non-grouped columns.
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT n_regionkey FROM nation GROUP BY 1 HAVING n_comment = 'x'"),
+      "Cannot resolve column: n_comment");
 }
 
 TEST_F(AggregationParserTest, scalarOverAgg) {

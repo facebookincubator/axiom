@@ -1481,6 +1481,10 @@ PlanBuilder& PlanBuilder::sample(
   return *this;
 }
 
+bool PlanBuilder::hasColumn(const std::string& name) const {
+  return outputMapping_ != nullptr && outputMapping_->lookup(name).has_value();
+}
+
 ExprPtr PlanBuilder::resolveInputName(
     const std::optional<std::string>& alias,
     const std::string& name) const {
