@@ -48,6 +48,10 @@ class PrestoParserTestBase : public testing::Test {
       std::string_view sql,
       facebook::axiom::logical_plan::test::LogicalPlanMatcherBuilder& matcher);
 
+  /// Verifies that EXPLAIN can parse DDL statements (CREATE TABLE, DROP TABLE).
+  /// DDL statements do not have logical plans, so we only verify parsing.
+  void testExplainDdl(std::string_view sql, SqlStatementKind expectedKind);
+
   /// Parses a SELECT statement and verifies the logical plan matches.
   /// Optionally checks that the expected set of views were accessed.
   void testSelect(

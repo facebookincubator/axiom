@@ -1308,6 +1308,11 @@ SqlStatementPtr doPlan(
         *query->as<CreateTable>(), defaultConnectorId, defaultSchema);
   }
 
+  if (query->is(NodeType::kDropTable)) {
+    return parseDropTable(
+        *query->as<DropTable>(), defaultConnectorId, defaultSchema);
+  }
+
   if (query->is(NodeType::kShowCatalogs)) {
     return parseShowCatalogs(*query->as<ShowCatalogs>(), defaultConnectorId);
   }
@@ -1361,11 +1366,6 @@ SqlStatementPtr PrestoParser::doParse(
     auto sqlStatement = doPlan(
         explain->statement(), defaultConnectorId_, defaultSchema_, parseSql);
     return parseExplain(*explain, sqlStatement);
-  }
-
-  if (query->is(NodeType::kDropTable)) {
-    return parseDropTable(
-        *query->as<DropTable>(), defaultConnectorId_, defaultSchema_);
   }
 
   if (query->is(NodeType::kUse)) {

@@ -87,6 +87,19 @@ void PrestoParserTestBase::testExplain(
   }
 }
 
+void PrestoParserTestBase::testExplainDdl(
+    std::string_view sql,
+    SqlStatementKind expectedKind) {
+  SCOPED_TRACE(sql);
+  auto parser = makeParser();
+
+  auto statement = parser.parse(sql);
+  ASSERT_TRUE(statement->isExplain());
+
+  auto* explainStatement = statement->as<ExplainStatement>();
+  ASSERT_EQ(explainStatement->statement()->kind(), expectedKind);
+}
+
 void PrestoParserTestBase::testSelect(
     std::string_view sql,
     lp::test::LogicalPlanMatcherBuilder& matcher,
