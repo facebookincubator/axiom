@@ -97,7 +97,8 @@ class LocalRunnerTestBase : public velox::exec::test::HiveConnectorTestBase {
   void setupConnector();
 
   inline static bool initialized_;
-  inline static std::shared_ptr<velox::exec::test::TempDirectoryPath> files_;
+  inline static std::shared_ptr<velox::common::testutil::TempDirectoryPath>
+      files_;
   /// Map from table name to list of file system paths.
   inline static std::unordered_map<std::string, std::vector<std::string>>
       tableFilePaths_;

@@ -31,7 +31,7 @@ target_link_libraries(
   axiom_runner_tests_utils
   axiom_runner_local_runner
   axiom_hive_connector_metadata
-  velox_temp_path
+  velox_test_util
   velox_exec_test_lib
   velox_exec
   velox_file_test_utils

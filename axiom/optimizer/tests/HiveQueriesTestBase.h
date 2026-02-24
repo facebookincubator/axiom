@@ -20,6 +20,7 @@
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "axiom/sql/presto/PrestoParser.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 
 namespace facebook::axiom::optimizer::test {
 
@@ -94,7 +95,7 @@ class HiveQueriesTestBase : public QueryTestBase {
       const folly::F14FastMap<std::string, velox::Variant>& options = {});
 
  private:
-  inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
+  inline static std::shared_ptr<velox::common::testutil::TempDirectoryPath>
       gTempDirectory;
 
   std::unique_ptr<::axiom::sql::presto::PrestoParser> prestoParser_;
