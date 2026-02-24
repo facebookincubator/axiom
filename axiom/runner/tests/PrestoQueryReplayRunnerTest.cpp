@@ -16,12 +16,13 @@
 
 #include "axiom/runner/tests/PrestoQueryReplayRunner.h"
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::exec::test;
 
 namespace facebook::axiom::runner {
