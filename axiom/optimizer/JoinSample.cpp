@@ -150,11 +150,13 @@ std::shared_ptr<runner::Runner> prepareSampleRunner(
       kSample, velox::BOOLEAN(), hashColumn, bigintLit(mod), bigintLit(lim));
   RelationOpPtr filter = make<Filter>(project, ExprVector{filterExpr});
 
-  auto plan = queryCtx()->optimization()->toVeloxPlan(filter);
+  auto& optimization = queryCtx()->optimization();
+  auto plan = optimization->toVelox().toVeloxPlan(
+      filter, optimization->runnerOptions());
   return std::make_shared<runner::LocalRunner>(
       std::move(plan.plan),
       std::move(plan.finishWrite),
-      sampleQueryCtx(*queryCtx()->optimization()->veloxQueryCtx()));
+      sampleQueryCtx(*optimization->veloxQueryCtx()));
 }
 
 // Maps hash value to number of times it appears in a table.

@@ -247,7 +247,7 @@ TEST_F(LogicalPlanNodeSerdeTest, unnestNode) {
 TEST_F(LogicalPlanNodeSerdeTest, unnestNodeWithOrdinality) {
   auto plan = PlanBuilder()
                   .tableScan(kTestConnectorId, "test_table", {"arr"})
-                  .unnest({Col("arr").unnestAs("elem")}, true)
+                  .unnest({Col("arr").unnestAs("elem")}, Ordinality())
                   .build();
   testRoundTrip(plan);
 }

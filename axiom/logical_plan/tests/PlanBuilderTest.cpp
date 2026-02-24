@@ -81,7 +81,7 @@ TEST_F(PlanBuilderTest, duplicateAliasAllowed) {
     return PlanBuilder(
         context,
         /*enableCoercions=*/false,
-        /*allowDuplicateAliases=*/true);
+        /*allowAmbiguousOutputNames=*/true);
   };
 
   // Project: duplicate aliases get unique physical names.
@@ -121,6 +121,20 @@ TEST_F(PlanBuilderTest, duplicateAliasAllowed) {
     EXPECT_TRUE(names[2].starts_with("a"));
   }
 
+  // Unnest: ordinality alias duplicates an unnest alias.
+  {
+    auto builder =
+        makeBuilder()
+            .values(ROW({"a"}, ARRAY(BIGINT())), ValuesNode::Variants{})
+            .unnest({Col("a").unnestAs("x")}, Ordinality().as("x"));
+
+    auto names = builder.findOrAssignOutputNames();
+    EXPECT_EQ(3, names.size());
+    EXPECT_TRUE(names[1].starts_with("x"));
+    EXPECT_TRUE(names[2].starts_with("x"));
+    EXPECT_NE(names[1], names[2]);
+  }
+
   // Aggregate: duplicate aliases get unique physical names.
   {
     auto builder =
@@ -136,6 +150,42 @@ TEST_F(PlanBuilderTest, duplicateAliasAllowed) {
   }
 }
 
+TEST_F(PlanBuilderTest, emptyAliasAllowed) {
+  PlanBuilder::Context context;
+
+  auto makeValues = [&context](const RowTypePtr& rowType) {
+    return PlanBuilder(
+               context,
+               /*enableCoercions=*/false,
+               /*allowAmbiguousOutputNames=*/true)
+        .values(rowType, ValuesNode::Variants{});
+  };
+
+  auto assertOutputNames = [](PlanBuilder builder,
+                              const std::vector<std::string>& expected) {
+    auto plan = builder.build();
+    EXPECT_THAT(
+        plan->outputType()->names(), testing::ElementsAreArray(expected));
+  };
+
+  // Unnest: empty aliases for array.
+  assertOutputNames(
+      makeValues(ROW("a", ARRAY(BIGINT()))).unnest({Col("a").unnestAs("")}),
+      {"a", ""});
+
+  // Unnest: empty aliases for map.
+  assertOutputNames(
+      makeValues(ROW("m", MAP(BIGINT(), BIGINT())))
+          .unnest({Col("m").unnestAs("", "")}),
+      {"m", "", ""});
+
+  // Unnest: empty ordinality alias.
+  assertOutputNames(
+      makeValues(ROW("a", ARRAY(BIGINT())))
+          .unnest({Col("a").unnestAs("elem")}, Ordinality().as("")),
+      {"a", "elem", ""});
+}
+
 TEST_F(PlanBuilderTest, duplicateAliasThrows) {
   // Duplicate aliases throw by default in project/aggregate operations.
   VELOX_ASSERT_THROW(
@@ -143,6 +193,30 @@ TEST_F(PlanBuilderTest, duplicateAliasThrows) {
           .values(ROW({"a", "b"}, BIGINT()), ValuesNode::Variants{})
           .with({"a as x", "b as x"}),
       "Duplicate name: x");
+}
+
+TEST_F(PlanBuilderTest, unnestOrdinality) {
+  auto assertOutputNames = [](PlanBuilder builder,
+                              const std::vector<std::string>& expected) {
+    auto plan = builder.build();
+    EXPECT_THAT(
+        plan->outputType()->names(), testing::ElementsAreArray(expected));
+  };
+
+  auto makeValues = [] {
+    return PlanBuilder().values(
+        ROW("a", ARRAY(BIGINT())), ValuesNode::Variants{});
+  };
+
+  // Without alias.
+  assertOutputNames(
+      makeValues().unnest({Col("a").unnestAs("elem")}, Ordinality()),
+      {"a", "elem", "ordinality"});
+
+  // With alias.
+  assertOutputNames(
+      makeValues().unnest({Col("a").unnestAs("elem")}, Ordinality().as("ord")),
+      {"a", "elem", "ord"});
 }
 
 TEST_F(PlanBuilderTest, setOperationTypeCoercion) {

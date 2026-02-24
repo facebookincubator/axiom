@@ -231,6 +231,26 @@ class ToTextVisitor : public PlanNodeVisitor {
         context);
   }
 
+  void visit(const OutputNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& myContext = static_cast<Context&>(context);
+    myContext.out << makeIndent(myContext.indent) << "- Output:";
+
+    appendOutputType(node, myContext);
+
+    myContext.out << std::endl;
+
+    const auto& inputType = node.onlyInput()->outputType();
+    const auto indent = makeIndent(myContext.indent + 2);
+
+    for (const auto& entry : node.entries()) {
+      myContext.out << indent << entry.name
+                    << " := " << inputType->nameOf(entry.index) << std::endl;
+    }
+
+    appendInputs(node, myContext);
+  }
+
  private:
   static std::string makeIndent(size_t size) {
     return std::string(size * 2, ' ');
@@ -409,6 +429,11 @@ class CollectExprStatsPlanNodeVisitor : public PlanNodeVisitor {
   }
 
   void visit(const SampleNode& node, PlanNodeVisitorContext& context)
+      const override {
+    visitInputs(node, context);
+  }
+
+  void visit(const OutputNode& node, PlanNodeVisitorContext& context)
       const override {
     visitInputs(node, context);
   }
@@ -713,6 +738,13 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
                     << " " << node.percentage()->toString() << std::endl;
     }
 
+    appendInputs(node, myContext);
+  }
+
+  void visit(const OutputNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& myContext = static_cast<Context&>(context);
+    appendHeader(node, myContext);
     appendInputs(node, myContext);
   }
 

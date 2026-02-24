@@ -175,6 +175,10 @@ ExprApi Sql(const std::string& sql) {
   return ExprApi{velox::parse::DuckSqlExpressionsParser().parseExpr(sql)};
 }
 
+ExprApi Ordinality() {
+  return Lit(true);
+}
+
 ExprApi ExprApi::unnestAs(std::vector<std::string> aliases) const {
   VELOX_USER_CHECK(!aliases.empty(), "UNNEST aliases must not be empty.");
   VELOX_USER_CHECK_NULL(

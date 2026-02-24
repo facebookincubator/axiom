@@ -36,6 +36,7 @@ enum class NodeKind {
   kUnnest = 9,
   kTableWrite = 10,
   kSample = 11,
+  kOutput = 12,
 };
 
 AXIOM_DECLARE_ENUM_NAME(NodeKind)
@@ -68,6 +69,9 @@ class LogicalPlanNode : public velox::ISerializable {
       VELOX_USER_CHECK(
           input->kind() != NodeKind::kTableWrite,
           "TableWrite cannot be non-root logical plan node");
+      VELOX_USER_CHECK(
+          input->kind() != NodeKind::kOutput,
+          "Output cannot be non-root logical plan node");
     }
   }
 
@@ -871,6 +875,44 @@ class SampleNode : public LogicalPlanNode {
 };
 
 using SampleNodePtr = std::shared_ptr<const SampleNode>;
+
+/// Root-only node that names and reorders input columns for the final query
+/// output. Can drop or duplicate columns but cannot compute anything new.
+/// Unlike ProjectNode, allows duplicate and empty output column names, matching
+/// Presto behavior: SELECT a AS x, b AS x or SELECT 1 AS "".
+class OutputNode : public LogicalPlanNode {
+ public:
+  /// Describes a single output column: which input column it comes from and
+  /// what name to give it in the output.
+  struct Entry {
+    /// Index into input's output columns.
+    int32_t index;
+
+    /// Output column name. May be empty or duplicate.
+    std::string name;
+  };
+
+  OutputNode(
+      std::string id,
+      LogicalPlanNodePtr input,
+      std::vector<Entry> entries);
+
+  const std::vector<Entry>& entries() const {
+    return entries_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  const std::vector<Entry> entries_;
+};
+
+using OutputNodePtr = std::shared_ptr<const OutputNode>;
 
 } // namespace facebook::axiom::logical_plan
 

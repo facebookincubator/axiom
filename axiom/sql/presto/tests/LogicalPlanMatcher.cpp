@@ -206,6 +206,30 @@ class DistinctMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
   }
 };
 
+class OutputNamesMatcher : public LogicalPlanMatcherImpl<OutputNode> {
+ public:
+  OutputNamesMatcher(
+      const std::shared_ptr<LogicalPlanMatcher>& inputMatcher,
+      std::vector<std::string> expectedNames)
+      : LogicalPlanMatcherImpl<OutputNode>(inputMatcher, nullptr),
+        expectedNames_{std::move(expectedNames)} {}
+
+ private:
+  bool matchDetails(const OutputNode& plan) const override {
+    const auto& names = plan.outputType()->names();
+    EXPECT_EQ(expectedNames_.size(), names.size());
+    AXIOM_RETURN_IF_FAILURE;
+
+    for (auto i = 0; i < expectedNames_.size(); ++i) {
+      EXPECT_EQ(expectedNames_[i], names[i]) << "at index " << i;
+      AXIOM_RETURN_IF_FAILURE;
+    }
+    AXIOM_RETURN_RESULT
+  }
+
+  const std::vector<std::string> expectedNames_;
+};
+
 #undef AXIOM_RETURN_IF_FAILURE
 #undef AXIOM_RETURN_RESULT
 
@@ -370,6 +394,27 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::sample(
   matcher_ = std::make_shared<LogicalPlanMatcherImpl<SampleNode>>(
       matcher_, std::move(onMatch));
   return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::output(
+    OnMatchCallback onMatch) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<LogicalPlanMatcherImpl<OutputNode>>(
+      matcher_, std::move(onMatch));
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::output(
+    const std::vector<std::string>& expectedNames) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<OutputNamesMatcher>(matcher_, expectedNames);
+  return *this;
+}
+
+std::shared_ptr<LogicalPlanMatcher> LogicalPlanMatcherBuilder::build() {
+  VELOX_USER_CHECK_NOT_NULL(
+      matcher_, "Cannot build an empty LogicalPlanMatcher.");
+  return matcher_;
 }
 
 } // namespace facebook::axiom::logical_plan::test

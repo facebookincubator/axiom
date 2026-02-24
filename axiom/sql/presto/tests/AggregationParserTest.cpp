@@ -28,7 +28,7 @@ class AggregationParserTest : public PrestoParserTestBase {};
 
 TEST_F(AggregationParserTest, countStar) {
   {
-    auto matcher = matchScan().aggregate();
+    auto matcher = matchScan().aggregate().output();
 
     testSelect("SELECT count(*) FROM nation", matcher);
     testSelect("SELECT count(1) FROM nation", matcher);
@@ -39,27 +39,27 @@ TEST_F(AggregationParserTest, countStar) {
 
   {
     // Global aggregation with HAVING clause.
-    auto matcher = matchScan().aggregate().filter();
+    auto matcher = matchScan().aggregate().filter().output();
     testSelect("SELECT count(*) FROM nation HAVING count(*) > 100", matcher);
   }
 }
 
 TEST_F(AggregationParserTest, aggregateCoercions) {
-  auto matcher = matchScan().aggregate();
+  auto matcher = matchScan().aggregate().output();
 
   testSelect("SELECT corr(n_nationkey, 1.2) FROM nation", matcher);
 }
 
 TEST_F(AggregationParserTest, simpleGroupBy) {
   {
-    auto matcher = matchScan().aggregate();
+    auto matcher = matchScan().aggregate().output();
 
     testSelect("SELECT n_name, count(1) FROM nation GROUP BY 1", matcher);
     testSelect("SELECT n_name, count(1) FROM nation GROUP BY n_name", matcher);
   }
 
   {
-    auto matcher = matchScan().aggregate().project();
+    auto matcher = matchScan().aggregate().project().output();
     testSelect(
         "SELECT count(1) FROM nation GROUP BY n_name, n_regionkey", matcher);
   }
@@ -72,9 +72,12 @@ TEST_F(AggregationParserTest, simpleGroupBy) {
 
 TEST_F(AggregationParserTest, groupingSets) {
   lp::AggregateNodePtr agg;
-  auto matcher = matchScan().aggregate([&](const auto& node) {
-    agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-  });
+  auto matcher =
+      matchScan()
+          .aggregate([&](const auto& node) {
+            agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+          })
+          .output();
 
   testSelect(
       "SELECT n_regionkey, count(1) FROM nation "
@@ -111,9 +114,12 @@ TEST_F(AggregationParserTest, groupingSets) {
 
 TEST_F(AggregationParserTest, rollup) {
   lp::AggregateNodePtr agg;
-  auto matcher = matchScan().aggregate([&](const auto& node) {
-    agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-  });
+  auto matcher =
+      matchScan()
+          .aggregate([&](const auto& node) {
+            agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+          })
+          .output();
 
   testSelect(
       "SELECT n_regionkey, n_name, count(1) FROM nation "
@@ -139,9 +145,12 @@ TEST_F(AggregationParserTest, rollup) {
 
 TEST_F(AggregationParserTest, cube) {
   lp::AggregateNodePtr agg;
-  auto matcher = matchScan().aggregate([&](const auto& node) {
-    agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-  });
+  auto matcher =
+      matchScan()
+          .aggregate([&](const auto& node) {
+            agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+          })
+          .output();
 
   testSelect(
       "SELECT n_regionkey, n_name, count(1) FROM nation "
@@ -168,9 +177,12 @@ TEST_F(AggregationParserTest, cube) {
 
 TEST_F(AggregationParserTest, mixedGroupByWithRollup) {
   lp::AggregateNodePtr agg;
-  auto matcher = matchScan().aggregate([&](const auto& node) {
-    agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-  });
+  auto matcher =
+      matchScan()
+          .aggregate([&](const auto& node) {
+            agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+          })
+          .output();
 
   testSelect(
       "SELECT n_regionkey, n_name, count(1) FROM nation "
@@ -185,9 +197,12 @@ TEST_F(AggregationParserTest, mixedGroupByWithRollup) {
 
 TEST_F(AggregationParserTest, groupingSetsOrdinalCaching) {
   lp::AggregateNodePtr agg;
-  auto matcher = matchScan().aggregate([&](const auto& node) {
-    agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-  });
+  auto matcher =
+      matchScan()
+          .aggregate([&](const auto& node) {
+            agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+          })
+          .output();
 
   testSelect(
       "SELECT n_regionkey, n_name, count(1) FROM nation "
@@ -234,7 +249,7 @@ TEST_F(AggregationParserTest, groupingSetsSubqueryOrdinal) {
           .aggregate([&](const auto& node) {
             agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
           })
-          .project();
+          .output();
 
   testSelect(
       "SELECT (SELECT 1), n_name, count(1) FROM nation "
@@ -273,27 +288,27 @@ TEST_F(AggregationParserTest, cubeColumnLimit) {
 
 TEST_F(AggregationParserTest, distinct) {
   {
-    auto matcher = matchScan().project().distinct();
+    auto matcher = matchScan().project().distinct().output();
     testSelect("SELECT DISTINCT n_regionkey FROM nation", matcher);
     testSelect(
         "SELECT DISTINCT n_regionkey, length(n_name) FROM nation", matcher);
   }
 
   {
-    auto matcher = matchScan().aggregate().project().distinct();
+    auto matcher = matchScan().aggregate().project().distinct().output();
     testSelect(
         "SELECT DISTINCT count(1) FROM nation GROUP BY n_regionkey", matcher);
   }
 
   {
-    auto matcher = matchScan().distinct();
+    auto matcher = matchScan().distinct().output();
     testSelect("SELECT DISTINCT * FROM nation", matcher);
   }
 }
 
 TEST_F(AggregationParserTest, groupingKeyExpr) {
   {
-    auto matcher = matchScan().aggregate().project();
+    auto matcher = matchScan().aggregate().project().output();
 
     testSelect(
         "SELECT n_name, count(1), length(n_name) FROM nation GROUP BY 1",
@@ -301,7 +316,7 @@ TEST_F(AggregationParserTest, groupingKeyExpr) {
   }
 
   {
-    auto matcher = matchScan().aggregate();
+    auto matcher = matchScan().aggregate().output();
     testSelect(
         "SELECT substr(n_name, 1, 2), count(1) FROM nation GROUP BY 1",
         matcher);
@@ -313,14 +328,14 @@ TEST_F(AggregationParserTest, groupingKeyExpr) {
   }
 
   {
-    auto matcher = matchScan().aggregate().project();
+    auto matcher = matchScan().aggregate().project().output();
     testSelect(
         "SELECT count(1) FROM nation GROUP BY substr(n_name, 1, 2)", matcher);
   }
 }
 
 TEST_F(AggregationParserTest, having) {
-  auto matcher = matchScan().aggregate().filter().project();
+  auto matcher = matchScan().aggregate().filter().project().output();
 
   // HAVING with aggregate expression over a non-selected column.
   testSelect(
@@ -330,12 +345,12 @@ TEST_F(AggregationParserTest, having) {
   // HAVING referencing a grouping key.
   testSelect(
       "SELECT n_regionkey, count(*) FROM nation GROUP BY 1 HAVING n_regionkey > 2",
-      matchScan().aggregate().filter());
+      matchScan().aggregate().filter().output());
 
   // HAVING referencing both a grouping key and an aggregate.
   testSelect(
       "SELECT n_regionkey, count(*) FROM nation GROUP BY 1 HAVING n_regionkey > count(*)",
-      matchScan().aggregate().filter());
+      matchScan().aggregate().filter().output());
 
   // HAVING with count(*) not in SELECT.
   testSelect(
@@ -377,7 +392,7 @@ TEST_F(AggregationParserTest, having) {
 }
 
 TEST_F(AggregationParserTest, scalarOverAgg) {
-  auto matcher = matchScan().aggregate().project();
+  auto matcher = matchScan().aggregate().project().output();
 
   testSelect(
       "SELECT sum(n_regionkey) + count(1), avg(length(n_name)) * 0.3 "
@@ -393,9 +408,12 @@ TEST_F(AggregationParserTest, scalarOverAgg) {
 
 TEST_F(AggregationParserTest, aggregateOptions) {
   lp::AggregateNodePtr agg;
-  auto matcher = matchScan().aggregate([&](const auto& node) {
-    agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
-  });
+  auto matcher =
+      matchScan()
+          .aggregate([&](const auto& node) {
+            agg = std::dynamic_pointer_cast<const lp::AggregateNode>(node);
+          })
+          .output();
 
   testSelect("SELECT array_agg(distinct n_regionkey) FROM nation", matcher);
   ASSERT_TRUE(agg != nullptr);

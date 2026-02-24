@@ -265,6 +265,13 @@ class RelationPlanner : public AstVisitor {
       inputs.push_back(toExpr(expr));
     }
 
+    auto toOrdinality = [&]() -> std::optional<lp::ExprApi> {
+      if (!unnest.isWithOrdinality()) {
+        return std::nullopt;
+      }
+      return lp::Ordinality();
+    };
+
     if (aliasedRelation) {
       std::vector<std::string> columnNames;
       columnNames.reserve(aliasedRelation->columnNames().size());
@@ -272,13 +279,19 @@ class RelationPlanner : public AstVisitor {
         columnNames.emplace_back(canonicalizeIdentifier(*name));
       }
 
+      auto ordinality = toOrdinality();
+      if (ordinality.has_value() && !columnNames.empty()) {
+        ordinality = ordinality->as(columnNames.back());
+        columnNames.pop_back();
+      }
+
       builder_->unnest(
           inputs,
-          unnest.isWithOrdinality(),
+          ordinality,
           canonicalizeIdentifier(*aliasedRelation->alias()),
           columnNames);
     } else {
-      builder_->unnest(inputs, unnest.isWithOrdinality());
+      builder_->unnest(inputs, toOrdinality());
     }
   }
 
@@ -343,6 +356,7 @@ class RelationPlanner : public AstVisitor {
       }
     }
 
+    builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
     builder_->as(tableName);
   }
 
@@ -368,23 +382,33 @@ class RelationPlanner : public AstVisitor {
   void processAliasedRelation(const AliasedRelation& aliasedRelation) {
     processFrom(aliasedRelation.relation());
 
+    auto alias = canonicalizeIdentifier(*aliasedRelation.alias());
+
     const auto& columnAliases = aliasedRelation.columnNames();
     if (!columnAliases.empty()) {
-      // Add projection to rename columns.
-      const size_t numColumns = columnAliases.size();
+      const size_t numOutput = builder_->numOutput();
+      VELOX_USER_CHECK_EQ(
+          columnAliases.size(),
+          numOutput,
+          "Column alias list size does not match the number of columns available for '{}'",
+          alias);
 
+      // Add projection to rename columns. Column aliases override output
+      // names from the inner subquery.
       std::vector<lp::ExprApi> renames;
-      renames.reserve(numColumns);
-      for (auto i = 0; i < numColumns; ++i) {
-        renames.push_back(
-            lp::Col(builder_->findOrAssignOutputNameAt(i))
-                .as(canonicalizeIdentifier(*columnAliases.at(i))));
+      renames.reserve(numOutput);
+
+      for (auto i = 0; i < numOutput; ++i) {
+        auto name = canonicalizeIdentifier(*columnAliases.at(i));
+        auto column = lp::Col(builder_->findOrAssignOutputNameAt(i));
+        renames.push_back(column.as(name));
       }
 
       builder_->project(renames);
     }
 
-    builder_->as(canonicalizeIdentifier(*aliasedRelation.alias()));
+    builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
+    builder_->as(alias);
   }
 
   void processTableSubquery(const TableSubquery& subquery) {
@@ -406,7 +430,11 @@ class RelationPlanner : public AstVisitor {
       inputs.push_back(toExpr(expr));
     }
 
-    builder_->unnest(inputs, unnest.isWithOrdinality());
+    std::optional<lp::ExprApi> ordinality;
+    if (unnest.isWithOrdinality()) {
+      ordinality = lp::Ordinality();
+    }
+    builder_->unnest(inputs, ordinality);
   }
 
   void processJoin(const Join& join) {
@@ -422,24 +450,25 @@ class RelationPlanner : public AstVisitor {
 
     builder_ = newBuilder(leftScope);
     processFrom(join.right());
+
     auto rightBuilder = builder_;
 
-    // Create a combined scope that can resolve columns from both sides of
-    // the join. Subqueries in the ON clause may contain correlated
-    // references to either side.
-    lp::PlanBuilder::Scope joinScope =
-        [leftScope,
-         rightScope = rightBuilder->scope(),
-         leftBuilder,
-         rightBuilder](const auto& alias, const auto& name) {
+    if (const auto& criteria = join.criteria()) {
+      if (criteria->is(NodeType::kJoinOn)) {
+        // Create a combined scope that can resolve columns from both sides of
+        // the join. Subqueries in the ON clause may contain correlated
+        // references to either side.
+        lp::PlanBuilder::Scope joinScope = [leftScope,
+                                            rightScope = rightBuilder->scope(),
+                                            leftBuilder,
+                                            rightBuilder](
+                                               const auto& alias,
+                                               const auto& name) {
           return resolveJoinColumn(
               leftScope, rightScope, *leftBuilder, *rightBuilder, alias, name);
         };
 
-    builder_ = newBuilder(joinScope);
-
-    if (const auto& criteria = join.criteria()) {
-      if (criteria->is(NodeType::kJoinOn)) {
+        builder_ = newBuilder(joinScope);
         std::optional<lp::ExprApi> condition;
         condition = toExpr(criteria->as<JoinOn>()->expression());
 
@@ -508,7 +537,8 @@ class RelationPlanner : public AstVisitor {
         lp::ExprApi expr = toExpr(singleColumn->expression());
 
         if (singleColumn->alias() != nullptr) {
-          expr = expr.as(canonicalizeIdentifier(*singleColumn->alias()));
+          auto alias = canonicalizeIdentifier(*singleColumn->alias());
+          expr = expr.as(alias);
         }
         exprs.push_back(expr);
       }
@@ -709,9 +739,7 @@ class RelationPlanner : public AstVisitor {
 
     auto leftBuilder = builder_;
 
-    auto scope = leftBuilder->scope();
-
-    builder_ = newBuilder(scope);
+    builder_ = newBuilder(leftBuilder->scope());
     right->accept(this);
     auto rightBuilder = builder_;
 
@@ -728,7 +756,7 @@ class RelationPlanner : public AstVisitor {
     return std::make_shared<lp::PlanBuilder>(
         context_,
         /*enableCoercions=*/true,
-        /*allowDuplicateAliases=*/true,
+        /*allowAmbiguousOutputNames=*/true,
         outerScope);
   }
 
@@ -740,13 +768,18 @@ class RelationPlanner : public AstVisitor {
   std::shared_ptr<lp::PlanBuilder> builder_;
   ExpressionPlanner exprPlanner_{
       [this](Query* query) -> lp::LogicalPlanNodePtr {
+        // Save and restore builder. Correlated subqueries run on the same
+        // RelationPlanner and must not overwrite the outer scope's state.
+        // userOutputNames_ lives inside the builder, so it is saved and
+        // restored automatically.
         auto builder = std::move(builder_);
-        auto scope = builder->scope();
-        builder_ = newBuilder(scope);
+        SCOPE_EXIT {
+          builder_ = std::move(builder);
+        };
+
+        builder_ = newBuilder(builder->scope());
         processQuery(query);
-        auto subqueryBuilder = builder_;
-        builder_ = std::move(builder);
-        return subqueryBuilder->build(/*useIds=*/true);
+        return builder_->planNode();
       },
       [this](const ExpressionPtr& expr) -> lp::ExprApi {
         return toSortingKey(expr);
@@ -856,8 +889,8 @@ lp::ExprPtr PrestoParser::parseExpression(
   auto statement = doParse(fmt::format("SELECT {}", sql), enableTracing);
   VELOX_USER_CHECK(statement->isSelect());
 
-  auto plan = statement->as<SelectStatement>()->plan();
-
+  // plan() always wraps in OutputNode; look through it.
+  auto plan = statement->as<SelectStatement>()->plan()->onlyInput();
   VELOX_USER_CHECK(plan->is(lp::NodeKind::kProject));
 
   auto project = plan->as<lp::ProjectNode>();
@@ -971,7 +1004,8 @@ SqlStatementPtr parseShowCatalogs(
   lp::PlanBuilder::Context ctx(defaultConnectorId);
   lp::PlanBuilder builder(ctx);
   builder.values(
-      ROW({"catalog_name", "connector_id", "connector_name"}, VARCHAR()), data);
+      ROW({"catalog_name", "connector_id", "connector_name"}, VARCHAR()),
+      std::move(data));
 
   if (showCatalogs.getLikePattern().has_value()) {
     builder.filter(makeLikeExpr(

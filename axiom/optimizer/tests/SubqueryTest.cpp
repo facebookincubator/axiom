@@ -1065,6 +1065,7 @@ TEST_F(SubqueryTest, nonEquiCorrelatedProject) {
                                  "arbitrary(r_name) as r_name",
                              })
                          .project({"length(r_name)", "cnt"})
+                         .project()
                          .build();
 
       auto plan = toSingleNodePlan(logicalPlan);
@@ -1089,6 +1090,7 @@ TEST_F(SubqueryTest, nonEquiCorrelatedProject) {
                              })
                          .project({"length(r_name)", "cnt"})
                          .gather()
+                         .project()
                          .build();
 
       auto distributedPlan = planVelox(logicalPlan);

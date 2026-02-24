@@ -1044,6 +1044,27 @@ TEST_F(PlanTest, lambdaArgs) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_F(PlanTest, outputNames) {
+  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  auto test = [&](std::string_view sql,
+                  const std::vector<std::string>& expectedNames) {
+    auto logicalPlan = parseSelect(sql, kTestConnectorId);
+    auto plan = toSingleNodePlan(logicalPlan);
+    EXPECT_THAT(
+        plan->outputType()->names(), testing::ElementsAreArray(expectedNames))
+        << sql;
+  };
+
+  // Duplicate output names.
+  test("SELECT a, a FROM t", {"a", "a"});
+  test("SELECT a AS x, b AS x FROM t", {"x", "x"});
+  test("SELECT *, * FROM t", {"a", "b", "a", "b"});
+
+  // Empty output names.
+  test(R"(SELECT a AS "", b FROM t)", {"", "b"});
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
 

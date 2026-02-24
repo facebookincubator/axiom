@@ -135,18 +135,7 @@ class ExprApi {
       std::vector<std::string> unnestedAliases = {})
       : expr_{std::move(expr)},
         alias_{std::move(alias)},
-        unnestedAliases_{std::move(unnestedAliases)} {
-    if (alias_.has_value()) {
-      VELOX_CHECK(
-          !alias_.value().empty(),
-          "Alias, if specified, cannot be empty: {}",
-          expr_->toString());
-    }
-
-    for (const auto& alias : unnestedAliases_) {
-      VELOX_CHECK(!alias.empty());
-    }
-  }
+        unnestedAliases_{std::move(unnestedAliases)} {}
 
   ExprApi(const ExprApi& other) = default;
 
@@ -324,6 +313,13 @@ ExprApi Subquery(std::shared_ptr<const LogicalPlanNode> subquery);
 ExprApi Exists(const ExprApi& input);
 
 ExprApi Sql(const std::string& sql);
+
+/// Placeholder for an ordinality column in unnest operations. Use with
+/// ExprApi::as() to specify a custom alias.
+///
+///   builder.unnest(exprs, Ordinality())            // anonymous
+///   builder.unnest(exprs, Ordinality().as("ord"))  // with alias
+ExprApi Ordinality();
 
 // SortKey to use with sort operation.
 // e.g.

@@ -170,12 +170,11 @@ Axiom separates these two concerns into simpler, orthogonal mechanisms.
 All columns in the logical plan are identified by auto-generated internal IDs
 that are guaranteed unique within a query plan. These IDs use user-provided
 names as prefixes to keep them readable (e.g. a column named `revenue`
-gets IDs like `revenue`, `revenue_0`, `revenue_1`). User-provided names (column aliases, table names) are tracked in a side structure
-(`NameMappings`) and only applied in the final projection produced by
-`PlanBuilder::build()`. There is no dedicated `OutputNode`; the final rename
-is done via a `ProjectNode`. Because `ProjectNode` enforces unique column
-names, the plan cannot currently represent SQL queries with duplicate output
-names like `SELECT a AS x, b AS x` (see [Known Gaps](#known-gaps-and-limitations)).
+gets IDs like `revenue`, `revenue_0`, `revenue_1`). User-facing output names
+are tracked by the SQL parser and recorded in a root-only `OutputNode`.
+Unlike `ProjectNode`, `OutputNode` allows duplicate and empty output column
+names, matching Presto behavior (e.g. `SELECT a AS x, b AS x` or
+`SELECT 1 AS ""`).
 
 **NameMappings** handles name-to-column mapping. Each `PlanBuilder` carries
 its own `NameMappings` that represents which columns are available at this
@@ -476,13 +475,6 @@ them today). Contributions to close these gaps are welcome.
   the non-GROUP BY path `addOrderBy()` runs after `addProject()`, which
   narrows the scope to only the SELECT list columns. Referencing a FROM
   column not in SELECT will fail with "Cannot resolve column".
-
-- **Duplicate output column names are not supported.** SQL allows queries like
-  `SELECT a AS x, b AS x` with duplicate column names in the output. Axiom
-  silently renames the second column to `x_0` because all plan nodes enforce
-  unique column names via `UniqueNameChecker`. Supporting this would require
-  an `OutputNode` that allows duplicate names, or relaxing the uniqueness
-  constraint on the final `ProjectNode`.
 
 [SLL]: https://www.antlr.org/api/Java/org/antlr/v4/runtime/atn/PredictionMode.html "SLL — Simple LL. A faster but less powerful prediction mode that ignores the parser call stack (full context). Falls back to LL on ambiguity."
 [LL]: https://en.wikipedia.org/wiki/LL_parser "LL — a top-down parsing strategy that reads input Left-to-right and produces a Leftmost derivation"

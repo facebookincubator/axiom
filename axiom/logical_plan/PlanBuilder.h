@@ -166,22 +166,26 @@ class PlanBuilder {
       : PlanBuilder{
             Context{},
             enableCoercions,
-            /*allowDuplicateAliases=*/false,
+            /*allowAmbiguousOutputNames=*/false,
             std::move(outerScope)} {}
 
   /// @param context Shared state for plan-node IDs and column names.
   /// @param enableCoercions When true, inserts implicit CASTs for mismatched
   ///     types.
-  /// @param allowDuplicateAliases When true, allows duplicate column aliases
-  ///     within a single operation (project, aggregate, unnest). Columns with
-  ///     duplicate names become inaccessible by name in subsequent operations,
-  ///     matching Presto semantics.
+  /// @param allowAmbiguousOutputNames When true, allows duplicate and empty
+  ///     column names within a single operation (project, aggregate, unnest)
+  ///     and creates an OutputNode in build() that preserves these ambiguous
+  ///     output names. Columns with duplicate names become inaccessible by
+  ///     name in subsequent operations, matching Presto semantics. When false,
+  ///     duplicate and empty names are rejected and build() produces a
+  ///     ProjectNode for renaming (or returns the plan as-is if no renaming
+  ///     is needed).
   /// @param outerScope Resolves column references from the enclosing query for
   ///     correlated subqueries.
   explicit PlanBuilder(
       const Context& context,
       bool enableCoercions = false,
-      bool allowDuplicateAliases = false,
+      bool allowAmbiguousOutputNames = false,
       Scope outerScope = nullptr)
       : defaultConnectorId_{context.defaultConnectorId},
         planNodeIdGenerator_{context.planNodeIdGenerator},
@@ -189,7 +193,7 @@ class PlanBuilder {
         outerScope_{std::move(outerScope)},
         sqlParser_{context.sqlParser},
         enableCoercions_{enableCoercions},
-        allowDuplicateAliases_{allowDuplicateAliases},
+        allowAmbiguousOutputNames_{allowAmbiguousOutputNames},
         resolver_{
             context.queryCtx,
             enableCoercions,
@@ -473,28 +477,33 @@ class PlanBuilder {
   ///       .build();
   ///
   /// @param unnestExprs A list of constant expressions to unnest.
+  /// @param ordinality If set, adds an ordinality column. Must be created
+  /// using the Ordinality() factory function. Use Ordinality().as("name") to
+  /// specify a custom alias.
   PlanBuilder& unnest(
       const std::vector<std::string>& unnestExprs,
-      bool withOrdinality = false) {
-    return unnest(parse(unnestExprs), withOrdinality);
+      const std::optional<ExprApi>& ordinality = std::nullopt) {
+    return unnest(parse(unnestExprs), ordinality);
   }
 
   PlanBuilder& unnest(
       const std::vector<ExprApi>& unnestExprs,
-      bool withOrdinality = false) {
-    return unnest(unnestExprs, withOrdinality, std::nullopt, {});
+      const std::optional<ExprApi>& ordinality = std::nullopt) {
+    return unnest(unnestExprs, ordinality, std::nullopt, {});
   }
 
   /// An alternative way to specify aliases for unnested columns. A preferred
   /// way is by using ExprApi::unnestAs.
   ///
+  /// @param ordinality If set, adds an ordinality column. Must be created
+  /// using the Ordinality() factory function.
   /// @param alias Optional alias for the relation produced by unnest.
   /// @param columnAliases An optional list of aliases for columns produced by
   /// unnest. The list can be empty or must have a non-empty alias for each
   /// column.
   PlanBuilder& unnest(
       const std::vector<ExprApi>& unnestExprs,
-      bool withOrdinality,
+      const std::optional<ExprApi>& ordinality,
       const std::optional<std::string>& alias,
       const std::vector<std::string>& unnestAliases);
 
@@ -690,7 +699,9 @@ class PlanBuilder {
 
   /// Returns the names of the output columns. Returns std::nullopt for
   /// anonymous columns.
-  std::vector<std::optional<std::string>> outputNames() const;
+  /// @param includeHiddenColumns Whether to include hidden columns.
+  std::vector<std::optional<std::string>> outputNames(
+      bool includeHiddenColumns = true) const;
 
   /// Returns the types of the output columns. 1:1 with outputNames().
   std::vector<velox::TypePtr> outputTypes() const;
@@ -709,11 +720,26 @@ class PlanBuilder {
   /// is anonymous, assigns unique name before returning.
   std::string findOrAssignOutputNameAt(size_t index) const;
 
-  /// @param useIds Boolean indicating whether to use user-specified names or
-  /// use auto-generated IDs for the output column names.
-  LogicalPlanNodePtr build(bool useIds = false);
+  /// Returns the current plan node as-is.
+  LogicalPlanNodePtr planNode() const {
+    VELOX_USER_CHECK_NOT_NULL(node_);
+    return node_;
+  }
+
+  /// Builds the plan using user-specified names for output columns.
+  /// When allowAmbiguousOutputNames is true, creates an OutputNode at the root
+  /// that supports duplicate and empty names. Otherwise, creates a ProjectNode
+  /// for renaming (or returns the plan as-is if no renaming is needed).
+  LogicalPlanNodePtr build();
 
  private:
+  // Builds an OutputNode that preserves duplicate and empty output names.
+  LogicalPlanNodePtr buildOutputNode();
+
+  // Builds a ProjectNode to rename output columns to user-specified names.
+  // Returns the plan as-is if no renaming is needed.
+  LogicalPlanNodePtr buildRenameProject();
+
   // Stores resolved internal IDs for a USING column from both sides of the
   // join.
   struct UsingColumn {
@@ -797,7 +823,7 @@ class PlanBuilder {
 
   // When true, inserts implicit CAST nodes to coerce mismatched types.
   const bool enableCoercions_;
-  const bool allowDuplicateAliases_;
+  const bool allowAmbiguousOutputNames_;
 
   // Root of the plan tree built so far. Null before the first leaf node
   // (values or tableScan) is added.

@@ -351,6 +351,8 @@ PlanBuilder& PlanBuilder::dropHiddenColumns() {
       newOutputMapping->add(name, id);
     }
 
+    newOutputMapping->copyUserName(id, *outputMapping_);
+
     exprs.push_back(makeInputRef(inputType->childAt(i), id));
   }
 
@@ -471,6 +473,22 @@ std::vector<ExprApi> PlanBuilder::parse(const std::vector<std::string>& exprs) {
 
 namespace {
 
+std::optional<std::string> pickName(
+    const std::vector<NameMappings::QualifiedName>& names) {
+  if (names.empty()) {
+    return std::nullopt;
+  }
+
+  // Prefer non-aliased name.
+  for (const auto& name : names) {
+    if (!name.alias.has_value()) {
+      return name.name;
+    }
+  }
+
+  return names.front().name;
+}
+
 // Tracks duplicate names and adds mappings accordingly.
 // When allowDuplicates is true, names that appear multiple times are skipped
 // to avoid ambiguous lookups.
@@ -491,13 +509,15 @@ class NameTracker {
     }
   }
 
-  /// Returns true if 'name' is a duplicate and should be skipped.
-  bool isDuplicate(const std::string& name) const {
-    return allowDuplicates_ && duplicates_.contains(name);
+  // Tracks a single name for duplicate detection without adding mappings.
+  void track(const std::string& name) {
+    if (allowDuplicates_ && !name.empty() && !seen_.insert(name).second) {
+      duplicates_.insert(name);
+    }
   }
 
-  /// Adds a mapping from unqualified 'name' to 'id'. Skips duplicates if
-  /// allowDuplicates is set.
+  // Adds a mapping from unqualified 'name' to 'id'. Skips duplicates if
+  // allowDuplicates is set.
   void add(const std::string& name, const std::string& id) {
     if (isDuplicate(name)) {
       return;
@@ -505,8 +525,8 @@ class NameTracker {
     mappings_.add(name, id);
   }
 
-  /// Adds a mapping from qualified 'name' (with optional alias) to 'id'. Skips
-  /// duplicates if allowDuplicates is set.
+  // Adds a mapping from qualified 'name' (with optional alias) to 'id'. Skips
+  // duplicates if allowDuplicates is set.
   void add(const NameMappings::QualifiedName& name, const std::string& id) {
     if (isDuplicate(name.name)) {
       return;
@@ -514,8 +534,8 @@ class NameTracker {
     mappings_.add(name, id);
   }
 
-  /// Adds mappings from both unqualified 'name' and qualified 'alias.name' to
-  /// 'id'. Skips duplicates if allowDuplicates is set.
+  // Adds mappings from both unqualified 'name' and qualified 'alias.name' to
+  // 'id'. Skips duplicates if allowDuplicates is set.
   void add(
       const std::string& name,
       const std::string& id,
@@ -526,12 +546,25 @@ class NameTracker {
     addWithAlias(name, id, alias);
   }
 
- private:
-  // Tracks a single name for duplicate detection.
-  void track(const std::string& name) {
-    if (allowDuplicates_ && !name.empty() && !seen_.insert(name).second) {
-      duplicates_.insert(name);
+  // Adds a mapping from 'alias' to 'id'. If the alias is a duplicate, skips
+  // the mapping but stores a user name so the OutputNode can map the ID back
+  // to the original alias. If the ID differs from the alias (e.g. due to
+  // deduplication), also stores a user name.
+  void addNamed(const std::string& alias, const std::string& id) {
+    if (isDuplicate(alias)) {
+      mappings_.addUserName(id, alias);
+    } else {
+      add(alias, id);
+      if (id != alias) {
+        mappings_.addUserName(id, alias);
+      }
     }
+  }
+
+ private:
+  // Returns true if 'name' is a duplicate and should be skipped.
+  bool isDuplicate(const std::string& name) const {
+    return allowDuplicates_ && duplicates_.contains(name);
   }
 
   // Adds mappings from both unqualified 'name' and qualified 'alias.name' to
@@ -560,41 +593,79 @@ void PlanBuilder::resolveProjections(
     std::vector<std::string>& outputNames,
     std::vector<ExprPtr>& exprs,
     NameMappings& mappings) {
-  std::unordered_set<std::string> identities;
-  NameTracker tracker(allowDuplicateAliases_, mappings);
-  tracker.track(projections);
+  std::unordered_set<std::string> seenColumnIds;
+  NameTracker nameTracker(allowAmbiguousOutputNames_, mappings);
 
-  for (const auto& untypedExpr : projections) {
+  // Track all projection names for duplicate detection. For identity
+  // projections without explicit aliases (e.g. Col("x") from SELECT *),
+  // track the resolved column name so collisions with explicit aliases
+  // (e.g. 'foo' as x) are detected.
+  for (const auto& projection : projections) {
+    const auto& alias = projection.name();
+    if (alias.has_value()) {
+      nameTracker.track(alias.value());
+    } else if (
+        allowAmbiguousOutputNames_ &&
+        projection.expr()->is(velox::core::IExpr::Kind::kFieldAccess)) {
+      const auto& fieldName =
+          projection.expr()->as<velox::core::FieldAccessExpr>()->name();
+      nameTracker.track(fieldName);
+    }
+  }
+
+  // Default name hint for unnamed expressions.
+  static const std::string kExprHint = "expr";
+
+  for (const auto& projection : projections) {
     ExprPtr expr;
-    if (untypedExpr.windowSpec() != nullptr) {
-      expr = resolveWindowTypes(untypedExpr.expr(), *untypedExpr.windowSpec());
+    if (projection.windowSpec() != nullptr) {
+      expr = resolveWindowTypes(projection.expr(), *projection.windowSpec());
     } else {
-      expr = resolveScalarTypes(untypedExpr.expr());
+      expr = resolveScalarTypes(projection.expr());
     }
 
-    const auto& alias = untypedExpr.name();
+    const auto& alias = projection.name();
 
-    if (expr->isInputReference()) {
-      // Identity projection
+    // Empty alias: generate a unique physical name using column name or "expr"
+    // as hint.
+    if (alias.has_value() && alias.value().empty()) {
+      VELOX_USER_CHECK(
+          allowAmbiguousOutputNames_, "Empty column alias is not allowed");
+      auto hint = expr->isInputReference()
+          ? expr->as<InputReferenceExpr>()->name()
+          : kExprHint;
+      outputNames.push_back(newName(hint));
+      mappings.addUserName(outputNames.back(), "");
+      exprs.push_back(std::move(expr));
+      continue;
+    }
+
+    if (expr->isInputReference() &&
+        (!alias.has_value() ||
+         alias.value() == expr->as<InputReferenceExpr>()->name())) {
+      // Identity projection without rename.
       const auto& id = expr->as<InputReferenceExpr>()->name();
-      if (!alias.has_value() || id == alias.value()) {
-        if (identities.emplace(id).second) {
-          outputNames.push_back(id);
-          for (const auto& name : outputMapping_->reverseLookup(id)) {
-            tracker.add(name, outputNames.back());
-          }
-        } else {
-          outputNames.push_back(newName(id));
+      if (seenColumnIds.emplace(id).second) {
+        outputNames.push_back(id);
+        for (const auto& name : outputMapping_->reverseLookup(id)) {
+          nameTracker.add(name, outputNames.back());
         }
+        mappings.copyUserName(id, *outputMapping_);
       } else {
-        outputNames.push_back(newName(alias.value()));
-        tracker.add(alias.value(), outputNames.back());
+        outputNames.push_back(newName(id));
+        // Store user name for the duplicate identity so the OutputNode
+        // can map the disambiguated physical name back to the original.
+        if (auto userName = outputMapping_->userName(id)) {
+          mappings.addUserName(outputNames.back(), *userName);
+        } else if (auto name = pickName(outputMapping_->reverseLookup(id))) {
+          mappings.addUserName(outputNames.back(), *name);
+        }
       }
     } else if (alias.has_value()) {
       outputNames.push_back(newName(alias.value()));
-      tracker.add(alias.value(), outputNames.back());
+      nameTracker.addNamed(alias.value(), outputNames.back());
     } else {
-      outputNames.push_back(newName("expr"));
+      outputNames.push_back(newName(kExprHint));
     }
 
     exprs.push_back(std::move(expr));
@@ -649,6 +720,8 @@ PlanBuilder& PlanBuilder::with(const std::vector<ExprApi>& projections) {
     for (const auto& name : names) {
       newOutputMapping->add(name, id);
     }
+
+    newOutputMapping->copyUserName(id, *outputMapping_);
 
     exprs.push_back(makeInputRef(inputType->childAt(i), id));
   }
@@ -875,7 +948,7 @@ void PlanBuilder::resolveAggregates(
     VELOX_USER_CHECK_EQ(options.size(), aggregates.size());
   }
 
-  NameTracker tracker(allowDuplicateAliases_, mappings);
+  NameTracker tracker(allowAmbiguousOutputNames_, mappings);
   tracker.track(aggregates);
 
   for (size_t i = 0; i < aggregates.size(); ++i) {
@@ -994,16 +1067,20 @@ PlanBuilder& PlanBuilder::distinct() {
 
 PlanBuilder& PlanBuilder::unnest(
     const std::vector<ExprApi>& unnestExprs,
-    bool withOrdinality,
+    const std::optional<ExprApi>& ordinality,
     const std::optional<std::string>& alias,
     const std::vector<std::string>& unnestAliases) {
   if (!node_) {
     values(velox::ROW({}), {velox::Variant::row({})});
   }
 
+  static const std::string kElementHint = "e";
+  static const std::string kKeyHint = "k";
+  static const std::string kValueHint = "v";
+
   // Create new mappings for unnested columns, then merge with existing.
   NameMappings unnestMapping;
-  NameTracker tracker(allowDuplicateAliases_, unnestMapping);
+  NameTracker tracker(allowAmbiguousOutputNames_, unnestMapping);
 
   if (unnestAliases.empty()) {
     for (const auto& unnestExpr : unnestExprs) {
@@ -1013,71 +1090,87 @@ PlanBuilder& PlanBuilder::unnest(
     tracker.track(unnestAliases);
   }
 
-  size_t index = 0;
+  if (ordinality.has_value() && ordinality->alias().has_value()) {
+    tracker.track(*ordinality->alias());
+  }
 
-  auto addOutputMapping = [&](const std::string& name, const std::string& id) {
-    tracker.add(name, id, alias);
-    ++index;
-  };
+  size_t index = 0;
 
   std::vector<ExprPtr> exprs;
   std::vector<std::vector<std::string>> outputNames;
+
+  auto addUnnestOutput = [&](const std::string& name, const std::string& hint) {
+    if (name.empty()) {
+      VELOX_USER_CHECK(
+          allowAmbiguousOutputNames_, "Empty column alias is not allowed");
+      outputNames.back().emplace_back(newName(hint));
+      unnestMapping.addUserName(outputNames.back().back(), "");
+    } else {
+      outputNames.back().emplace_back(newName(name));
+      tracker.add(name, outputNames.back().back(), alias);
+    }
+    ++index;
+  };
+
   for (const auto& unnestExpr : unnestExprs) {
     auto expr = resolveScalarTypes(unnestExpr.expr());
     exprs.push_back(expr);
+    outputNames.emplace_back();
 
-    if (!unnestExpr.unnestedAliases().empty()) {
-      outputNames.emplace_back();
-      for (const std::string& unnestAlias : unnestExpr.unnestedAliases()) {
-        outputNames.back().emplace_back(newName(unnestAlias));
-        addOutputMapping(unnestAlias, outputNames.back().back());
-      }
-    } else {
-      switch (expr->type()->kind()) {
-        case velox::TypeKind::ARRAY:
-          if (!unnestAliases.empty()) {
-            VELOX_USER_CHECK_LT(index, unnestAliases.size());
+    // Per-expression aliases (unnestedAliases) take priority over per-relation
+    // aliases (unnestAliases). When neither is provided, generate default
+    // names.
+    const auto& aliases = unnestExpr.unnestedAliases();
 
-            const auto& outputName = unnestAliases.at(index);
-            outputNames.emplace_back(
-                std::vector<std::string>{newName(outputName)});
+    switch (expr->type()->kind()) {
+      case velox::TypeKind::ARRAY:
+        if (!aliases.empty()) {
+          VELOX_USER_CHECK_EQ(aliases.size(), 1);
+          addUnnestOutput(aliases[0], kElementHint);
+        } else if (!unnestAliases.empty()) {
+          VELOX_USER_CHECK_LT(index, unnestAliases.size());
+          addUnnestOutput(unnestAliases[index], kElementHint);
+        } else {
+          outputNames.back().emplace_back(newName(kElementHint));
+        }
+        break;
 
-            addOutputMapping(outputName, outputNames.back().back());
-          } else {
-            outputNames.emplace_back(std::vector<std::string>{newName("e")});
-          }
-          break;
+      case velox::TypeKind::MAP:
+        if (!aliases.empty()) {
+          VELOX_USER_CHECK_EQ(aliases.size(), 2);
+          addUnnestOutput(aliases[0], kKeyHint);
+          addUnnestOutput(aliases[1], kValueHint);
+        } else if (!unnestAliases.empty()) {
+          VELOX_USER_CHECK_LT(index, unnestAliases.size());
+          addUnnestOutput(unnestAliases[index], kKeyHint);
+          addUnnestOutput(unnestAliases[index], kValueHint);
+        } else {
+          outputNames.back().emplace_back(newName(kKeyHint));
+          outputNames.back().emplace_back(newName(kValueHint));
+        }
+        break;
 
-        case velox::TypeKind::MAP:
-          if (!unnestAliases.empty()) {
-            VELOX_USER_CHECK_LT(index, unnestAliases.size());
-
-            const auto& keyName = unnestAliases.at(index);
-            const auto& valueName = unnestAliases.at(index + 1);
-            outputNames.emplace_back(
-                std::vector<std::string>{newName(keyName), newName(valueName)});
-
-            addOutputMapping(keyName, outputNames.back().at(0));
-            addOutputMapping(valueName, outputNames.back().at(1));
-          } else {
-            outputNames.emplace_back(
-                std::vector<std::string>{newName("k"), newName("v")});
-          }
-          break;
-
-        default:
-          VELOX_USER_FAIL(
-              "Unsupported type to unnest: {}", expr->type()->toString());
-      }
+      default:
+        VELOX_USER_FAIL(
+            "Unsupported type to unnest: {}", expr->type()->toString());
     }
   }
 
   std::optional<std::string> ordinalityName;
-  if (withOrdinality) {
-    ordinalityName = newName("ordinality");
+  if (ordinality.has_value()) {
+    const auto& ordinalityAlias = ordinality->alias();
+    if (ordinalityAlias.has_value() && !ordinalityAlias->empty()) {
+      ordinalityName = newName(*ordinalityAlias);
+      tracker.add(*ordinalityAlias, *ordinalityName, alias);
+    } else if (ordinalityAlias.has_value()) {
+      VELOX_USER_CHECK(
+          allowAmbiguousOutputNames_, "Empty column alias is not allowed");
+      ordinalityName = newName("ordinality");
+      unnestMapping.addUserName(*ordinalityName, "");
+    } else {
+      ordinalityName = newName("ordinality");
+    }
   }
-
-  bool flattenArrayOfRows = false;
 
   node_ = std::make_shared<UnnestNode>(
       nextId(),
@@ -1085,7 +1178,7 @@ PlanBuilder& PlanBuilder::unnest(
       std::move(exprs),
       std::move(outputNames),
       std::move(ordinalityName),
-      flattenArrayOfRows);
+      /*flattenArrayOfRows=*/false);
 
   outputMapping_->merge(unnestMapping);
 
@@ -1237,7 +1330,7 @@ void PlanBuilder::addJoinUsingProjection(
 
   // Emit USING columns first (one copy each).
   for (const auto& column : usingColumns) {
-    auto type = joinOutputType->findChild(column.leftId);
+    const auto& type = joinOutputType->findChild(column.leftId);
     if (joinType == JoinType::kFull) {
       // Coalesce left and right for FULL OUTER joins.
       auto leftRef = makeInputRef(type, column.leftId);
@@ -1257,6 +1350,7 @@ void PlanBuilder::addJoinUsingProjection(
       exprs.push_back(makeInputRef(type, column.leftId));
       outputNames.push_back(column.leftId);
     }
+
     newOutputMapping->add(column.name, outputNames.back());
   }
 
@@ -1278,6 +1372,8 @@ void PlanBuilder::addJoinUsingProjection(
     for (const auto& qualifiedName : outputMapping_->reverseLookup(id)) {
       newOutputMapping->add(qualifiedName, id);
     }
+
+    newOutputMapping->copyUserName(id, *outputMapping_);
   }
 
   node_ = std::make_shared<ProjectNode>(
@@ -1695,33 +1791,26 @@ size_t PlanBuilder::numOutput() const {
   return node_->outputType()->size();
 }
 
-namespace {
-std::optional<std::string> pickName(
-    const std::vector<NameMappings::QualifiedName>& names) {
-  if (names.empty()) {
-    return std::nullopt;
-  }
-
-  // Prefer non-aliased name.
-  for (const auto& name : names) {
-    if (!name.alias.has_value()) {
-      return name.name;
-    }
-  }
-
-  return names.front().name;
-}
-} // namespace
-
-std::vector<std::optional<std::string>> PlanBuilder::outputNames() const {
-  auto size = numOutput();
+std::vector<std::optional<std::string>> PlanBuilder::outputNames(
+    bool includeHiddenColumns) const {
+  const auto size = numOutput();
+  const auto& inputType = node_->outputType();
 
   std::vector<std::optional<std::string>> names;
   names.reserve(size);
 
   for (auto i = 0; i < size; i++) {
-    const auto id = node_->outputType()->nameOf(i);
-    names.push_back(pickName(outputMapping_->reverseLookup(id)));
+    const auto& id = inputType->nameOf(i);
+
+    if (!includeHiddenColumns && outputMapping_->isHidden(id)) {
+      continue;
+    }
+
+    if (auto userName = outputMapping_->userName(id)) {
+      names.push_back(*userName);
+    } else {
+      names.push_back(pickName(outputMapping_->reverseLookup(id)));
+    }
   }
 
   return names;
@@ -1779,15 +1868,30 @@ std::string PlanBuilder::findOrAssignOutputNameAt(size_t index) const {
   return id;
 }
 
-LogicalPlanNodePtr PlanBuilder::build(bool useIds) {
-  VELOX_USER_CHECK_NOT_NULL(node_);
-  VELOX_USER_CHECK_NOT_NULL(outputMapping_);
+LogicalPlanNodePtr PlanBuilder::buildOutputNode() {
+  auto defaultNames = findOrAssignOutputNames(/*includeHiddenColumns=*/true);
+  const auto numColumns = defaultNames.size();
 
-  // Use user-specified names for the output. Should we add an OutputNode?
+  std::vector<OutputNode::Entry> entries;
+  entries.reserve(numColumns);
 
+  for (size_t i = 0; i < numColumns; ++i) {
+    std::string name;
+    if (auto userName =
+            outputMapping_->userName(node_->outputType()->nameOf(i))) {
+      name = *userName;
+    } else {
+      name = std::move(defaultNames[i]);
+    }
+    entries.emplace_back(
+        OutputNode::Entry{static_cast<int32_t>(i), std::move(name)});
+  }
+
+  return std::make_shared<OutputNode>(nextId(), node_, std::move(entries));
+}
+
+LogicalPlanNodePtr PlanBuilder::buildRenameProject() {
   const auto names = outputMapping_->uniqueNames();
-
-  bool needRename = false;
 
   const auto& rowType = node_->outputType();
 
@@ -1797,33 +1901,42 @@ LogicalPlanNodePtr PlanBuilder::build(bool useIds) {
   std::vector<ExprPtr> exprs;
   exprs.reserve(rowType->size());
 
+  bool needRename = false;
   for (auto i = 0; i < rowType->size(); i++) {
     const auto& id = rowType->nameOf(i);
     const auto& type = rowType->childAt(i);
 
-    if (useIds) {
-      exprs.push_back(makeInputRef(type, id));
+    auto it = names.find(id);
+    if (it != names.end()) {
+      outputNames.push_back(it->second);
     } else {
-      auto it = names.find(id);
-      if (it != names.end()) {
-        outputNames.push_back(it->second);
-      } else {
-        outputNames.push_back(id);
-      }
-
-      if (id != outputNames.back()) {
-        needRename = true;
-      }
-
-      exprs.push_back(makeInputRef(type, id));
+      outputNames.push_back(id);
     }
+
+    if (id != outputNames.back()) {
+      needRename = true;
+    }
+
+    exprs.push_back(makeInputRef(type, id));
   }
 
   if (needRename) {
-    return std::make_shared<ProjectNode>(nextId(), node_, outputNames, exprs);
+    return std::make_shared<ProjectNode>(
+        nextId(), node_, std::move(outputNames), std::move(exprs));
   }
 
   return node_;
+}
+
+LogicalPlanNodePtr PlanBuilder::build() {
+  VELOX_USER_CHECK_NOT_NULL(node_);
+  VELOX_CHECK_NOT_NULL(outputMapping_);
+
+  if (allowAmbiguousOutputNames_ && !node_->is(NodeKind::kTableWrite)) {
+    return buildOutputNode();
+  }
+
+  return buildRenameProject();
 }
 
 } // namespace facebook::axiom::logical_plan

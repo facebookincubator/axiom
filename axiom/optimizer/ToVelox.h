@@ -54,10 +54,12 @@ class ToVelox {
       const OptimizerOptions& optimizerOptions);
 
   /// Converts physical plan (a tree of RelationOp) to an executable
-  /// multi-fragment Velox plan.
+  /// multi-fragment Velox plan. If outputNames is non-empty, adds a
+  /// final projection to rename or reorder output columns.
   PlanAndStats toVeloxPlan(
       RelationOpPtr plan,
-      const runner::MultiFragmentPlan::Options& options);
+      const runner::MultiFragmentPlan::Options& options,
+      const std::vector<logical_plan::OutputNode::Entry>& outputNames = {});
 
   std::pair<
       velox::connector::ConnectorTableHandlePtr,
@@ -87,6 +89,13 @@ class ToVelox {
   void filterUpdated(BaseTableCP baseTable, bool updateSelectivity = true);
 
  private:
+  // Adds a Velox ProjectNode that renames or reorders output columns per the
+  // given OutputNode entries. Returns the input unchanged if all names and
+  // positions already match.
+  velox::core::PlanNodePtr addOutputRenames(
+      velox::core::PlanNodePtr input,
+      const std::vector<logical_plan::OutputNode::Entry>& outputNames);
+
   velox::core::FieldAccessTypedExprPtr toFieldRef(ExprCP expr);
 
   std::vector<velox::core::FieldAccessTypedExprPtr> toFieldRefs(

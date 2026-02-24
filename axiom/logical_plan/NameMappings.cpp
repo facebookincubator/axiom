@@ -46,6 +46,27 @@ bool NameMappings::isHidden(const std::string& id) const {
   return hiddenIds_.contains(id);
 }
 
+void NameMappings::addUserName(const std::string& id, const std::string& name) {
+  auto [it, inserted] = userNames_.emplace(id, name);
+  VELOX_CHECK(inserted, "Duplicate user name for column ID: {}", id);
+}
+
+const std::string* NameMappings::userName(const std::string& id) const {
+  auto it = userNames_.find(id);
+  if (it != userNames_.end()) {
+    return &it->second;
+  }
+  return nullptr;
+}
+
+void NameMappings::copyUserName(
+    const std::string& id,
+    const NameMappings& source) {
+  if (auto name = source.userName(id)) {
+    addUserName(id, *name);
+  }
+}
+
 std::optional<std::string> NameMappings::lookup(const std::string& name) const {
   auto it = mappings_.find(QualifiedName{.alias = {}, .name = name});
   if (it != mappings_.end()) {
@@ -113,6 +134,10 @@ void NameMappings::merge(const NameMappings& other) {
 
   for (const auto& id : other.hiddenIds_) {
     markHidden(id);
+  }
+
+  for (const auto& [id, name] : other.userNames_) {
+    userNames_.emplace(id, name);
   }
 }
 

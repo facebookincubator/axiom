@@ -197,9 +197,94 @@ void ToVelox::filterUpdated(BaseTableCP table, bool updateSelectivity) {
   }
 }
 
+velox::core::PlanNodePtr ToVelox::addOutputRenames(
+    velox::core::PlanNodePtr input,
+    const std::vector<logical_plan::OutputNode::Entry>& outputNames) {
+  VELOX_CHECK_EQ(outputNames.size(), input->outputType()->size());
+
+  // If the input is a ProjectNode that only does renames/reorders (all
+  // expressions are FieldAccessTypedExpr on input columns), look through it
+  // to compose the renames and avoid stacking two rename-only projects.
+  auto* project = dynamic_cast<const velox::core::ProjectNode*>(input.get());
+  const std::vector<velox::core::TypedExprPtr>* innerProjections = nullptr;
+  if (project) {
+    const auto& projections = project->projections();
+    bool allFieldAccess = true;
+    for (const auto& expr : projections) {
+      if (auto* field = dynamic_cast<const velox::core::FieldAccessTypedExpr*>(
+              expr.get());
+          !field || !field->isInputColumn()) {
+        allFieldAccess = false;
+        break;
+      }
+    }
+    if (allFieldAccess) {
+      innerProjections = &projections;
+    }
+  }
+
+  // Resolve the effective source: the project's input if we can look
+  // through, otherwise the input itself.
+  auto source = innerProjections ? project->sources()[0] : std::move(input);
+  const auto& sourceType = source->outputType();
+
+  // Check if the composed result is a no-op: each output column maps to the
+  // same-named source column at the same index.
+  if (sourceType->size() == outputNames.size()) {
+    bool needRename = false;
+    for (size_t i = 0; i < outputNames.size(); ++i) {
+      auto index = outputNames[i].index;
+      const auto& sourceName = [&]() -> const std::string& {
+        if (innerProjections) {
+          return static_cast<const velox::core::FieldAccessTypedExpr*>(
+                     (*innerProjections)[index].get())
+              ->name();
+        }
+        return sourceType->nameOf(index);
+      }();
+
+      if (outputNames[i].name != sourceName ||
+          sourceName != sourceType->nameOf(i)) {
+        needRename = true;
+        break;
+      }
+    }
+
+    if (!needRename) {
+      return source;
+    }
+  }
+
+  std::vector<std::string> names;
+  names.reserve(outputNames.size());
+
+  std::vector<velox::core::TypedExprPtr> projections;
+  projections.reserve(outputNames.size());
+  for (const auto& entry : outputNames) {
+    names.push_back(entry.name);
+    if (innerProjections) {
+      projections.push_back((*innerProjections)[entry.index]);
+    } else {
+      projections.push_back(
+          std::make_shared<velox::core::FieldAccessTypedExpr>(
+              sourceType->childAt(entry.index),
+              sourceType->nameOf(entry.index)));
+    }
+  }
+
+  auto id = innerProjections ? project->id() : nextId();
+
+  return std::make_shared<velox::core::ProjectNode>(
+      std::move(id),
+      std::move(names),
+      std::move(projections),
+      std::move(source));
+}
+
 PlanAndStats ToVelox::toVeloxPlan(
     RelationOpPtr plan,
-    const runner::MultiFragmentPlan::Options& options) {
+    const runner::MultiFragmentPlan::Options& options,
+    const std::vector<logical_plan::OutputNode::Entry>& outputNames) {
   options_ = options;
 
   prediction_.clear();
@@ -212,6 +297,12 @@ PlanAndStats ToVelox::toVeloxPlan(
   runner::ExecutableFragment top;
   std::vector<runner::ExecutableFragment> stages;
   top.fragment.planNode = makeFragment(plan, top, stages);
+
+  if (!outputNames.empty()) {
+    top.fragment.planNode =
+        addOutputRenames(top.fragment.planNode, outputNames);
+  }
+
   stages.push_back(std::move(top));
 
   auto finishWrite = std::move(finishWrite_);

@@ -59,7 +59,11 @@ class Optimization {
   /// given, these can be used to record history data about the execution of
   /// each relevant node for costing future queries.
   PlanAndStats toVeloxPlan(RelationOpPtr plan) {
-    return toVelox_.toVeloxPlan(std::move(plan), runnerOptions_);
+    return toVelox_.toVeloxPlan(std::move(plan), runnerOptions_, outputNames_);
+  }
+
+  ToVelox& toVelox() {
+    return toVelox_;
   }
 
   std::pair<
@@ -326,6 +330,9 @@ class Optimization {
 
   // Top level plan to optimize.
   const logical_plan::LogicalPlanNode* const logicalPlan_;
+
+  // User-facing output column names from the root OutputNode.
+  std::vector<logical_plan::OutputNode::Entry> outputNames_;
 
   // Source of historical cost/cardinality information.
   History& history_;

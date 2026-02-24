@@ -23,9 +23,10 @@
 
 namespace facebook::axiom::logical_plan {
 
-/// Maintains a mapping from user-visible names to auto-generated IDs.
+/// Maintains a mapping from user-visible names to auto-generated column IDs.
 /// Unique names may be accessed by name alone. Non-unique names must be
-/// disambiguated using an alias.
+/// disambiguated using an alias. Also tracks optional user-specified output
+/// names per column ID to support duplicate and empty names in query output.
 class NameMappings {
  public:
   struct QualifiedName {
@@ -69,8 +70,8 @@ class NameMappings {
   /// Used in PlanBuilder::as() API.
   void setAlias(const std::string& alias);
 
-  /// Merges mappings from 'other' into this. Removes unqualified access to
-  /// non-unique names.
+  /// Merges mappings and user names from 'other' into this. Removes
+  /// unqualified access to non-unique names.
   ///
   /// @pre IDs are unique across 'this' and 'other'. This expectation is not
   /// verified explicitly. Violations would lead to undefined behavior.
@@ -91,10 +92,24 @@ class NameMappings {
   /// 'alias'.
   folly::F14FastSet<std::string> idsWithAlias(const std::string& alias) const;
 
+  /// Stores a user-specified output name for the given column ID. May be empty
+  /// or duplicate across columns. Each ID may only be set once.
+  void addUserName(const std::string& id, const std::string& name);
+
+  /// Copies the user-specified output name for the given column ID from
+  /// 'source', if one exists. Does nothing if 'source' has no user name for
+  /// the given ID.
+  void copyUserName(const std::string& id, const NameMappings& source);
+
+  /// Returns the user-specified output name for the given column ID, or
+  /// nullptr.
+  const std::string* userName(const std::string& id) const;
+
   std::string toString() const;
 
   void reset() {
     mappings_.clear();
+    userNames_.clear();
   }
 
  private:
@@ -108,6 +123,10 @@ class NameMappings {
 
   // IDs of hidden columns.
   folly::F14FastSet<std::string> hiddenIds_;
+
+  // Maps column ID to user-specified output name. May contain empty strings
+  // and values that are duplicated across different IDs.
+  folly::F14FastMap<std::string, std::string> userNames_;
 };
 
 } // namespace facebook::axiom::logical_plan
