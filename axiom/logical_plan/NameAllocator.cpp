@@ -32,7 +32,7 @@ std::string NameAllocator::newName(std::string_view hint) {
   std::string_view prefix = hint;
 
   auto pos = prefix.rfind('_');
-  if (pos != std::string::npos &&
+  if (pos != std::string::npos && pos + 1 < prefix.size() &&
       isAllDigits({prefix.data() + pos + 1, prefix.size() - pos - 1})) {
     prefix = prefix.substr(0, pos);
   }
