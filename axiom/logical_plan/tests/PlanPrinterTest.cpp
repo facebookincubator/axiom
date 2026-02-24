@@ -904,7 +904,7 @@ TEST_F(PlanPrinterTest, subquery) {
   EXPECT_THAT(
       lines,
       testing::ElementsAre(
-          testing::StartsWith("- Project:"),
+          testing::StartsWith("- Output:"),
           testing::StartsWith("    a := a"),
           testing::StartsWith("    expr := expr"),
           testing::StartsWith("    sum := sum_1"),
@@ -921,8 +921,7 @@ TEST_F(PlanPrinterTest, subquery) {
       lines,
       // clang-format off
       testing::ElementsAre(
-          testing::Eq("- PROJECT [5]: 3 fields: a INTEGER, expr INTEGER, sum BIGINT"),
-          testing::Eq("      expressions: field: 3"),
+          testing::Eq("- OUTPUT [5]: 3 fields: a INTEGER, expr INTEGER, sum BIGINT"),
           testing::Eq("  - PROJECT [4]: 3 fields: a INTEGER, expr INTEGER, sum_1 BIGINT"),
           testing::Eq("        expressions: aggregate: 1, call: 2, constant: 1, field: 5, subquery: 1"),
           testing::Eq("        functions: eq: 1, plus: 1, sum: 1"),
@@ -939,7 +938,9 @@ TEST_F(PlanPrinterTest, subquery) {
   EXPECT_THAT(
       lines,
       testing::ElementsAre(
-          testing::Eq("- VALUES [0]: 1 fields"), testing::Eq("")));
+          testing::Eq("- OUTPUT [5]: 3 fields"),
+          testing::Eq("  - VALUES [0]: 1 fields"),
+          testing::Eq("")));
 
   // Subquery in a filter.
   context = PlanBuilder::Context();
@@ -1104,8 +1105,8 @@ TEST_F(PlanPrinterTest, existsSubquery) {
       // clang-format off
       testing::ElementsAre(
           testing::Eq("- FILTER [4]: 1 fields: a INTEGER"),
-          testing::Eq("      predicate: EXISTS(subquery(- Project: -> ROW<a:INTEGER,b:INTE..."),
-          testing::Eq("      expressions: EXISTS: 1, call: 1, field: 4, subquery: 1"),
+          testing::Eq("      predicate: EXISTS(subquery(- Output: -> ROW<a:INTEGER,b:INTEG..."),
+          testing::Eq("      expressions: EXISTS: 1, call: 1, field: 2, subquery: 1"),
           testing::Eq("      functions: eq: 1"),
           testing::Eq("  - VALUES [0]: 1 fields: a INTEGER"),
           testing::Eq("        rows: 3"),
@@ -1300,7 +1301,7 @@ TEST_F(PlanPrinterTest, specialForms) {
   EXPECT_THAT(
       lines,
       testing::ElementsAre(
-          testing::StartsWith("- Project"),
+          testing::StartsWith("- Output"),
           testing::StartsWith("    a := a_0"),
           testing::StartsWith("    b := b_1"),
           testing::StartsWith("    expr "),
@@ -1331,8 +1332,7 @@ TEST_F(PlanPrinterTest, specialForms) {
       lines,
       // clang-format off
       testing::ElementsAre(
-          testing::Eq("- PROJECT [2]: 10 fields: a BOOLEAN, b BOOLEAN, expr DOUBLE, expr_2 VARCHAR, expr_3 INTEGER, ..."),
-          testing::Eq("      expressions: field: 10"),
+          testing::Eq("- OUTPUT [2]: 10 fields: a BOOLEAN, b BOOLEAN, expr DOUBLE, expr_2 VARCHAR, expr_3 INTEGER, ..."),
           testing::Eq("  - PROJECT [1]: 10 fields: a_0 BOOLEAN, b_1 BOOLEAN, expr DOUBLE, expr_2 VARCHAR, expr_3 INTEGER, ..."),
           testing::Eq("        expressions: AND: 1, CAST: 6, COALESCE: 1, DEREFERENCE: 2, IF: 1, OR: 1, SWITCH: 1, TRY: 1, TRY_CAST: 1, call: 10, constant: 11, field: 21"),
           testing::Eq("        functions: divide: 2, eq: 2, gt: 4, lt: 1, multiply: 1"),
@@ -1352,14 +1352,13 @@ TEST_F(PlanPrinterTest, specialForms) {
       lines,
       // clang-format off
       testing::ElementsAre(
-          testing::Eq("- PROJECT [2]: 10 fields: a BOOLEAN, b BOOLEAN, expr DOUBLE, expr_2 VARCHAR, expr_3 INTEGER, ..."),
-          testing::Eq("      expressions: field: 10"),
+          testing::Eq("- OUTPUT [2]: 10 fields: a BOOLEAN, b BOOLEAN, expr DOUBLE, expr_2 VARCHAR, expr_3 INTEGER, ..."),
           testing::Eq("  - PROJECT [1]: 10 fields: a_0 BOOLEAN, b_1 BOOLEAN, expr DOUBLE, expr_2 VARCHAR, expr_3 INTEGER, ..."),
           testing::Eq("        expressions: AND: 1, CAST: 6, COALESCE: 1, DEREFERENCE: 2, IF: 1, OR: 1, SWITCH: 1, TRY: 1, TRY_CAST: 1, call: 10, constant: 11, field: 21"),
           testing::Eq("        functions: divide: 2, eq: 2, gt: 4, lt: 1, multiply: 1"),
           testing::Eq("        constants: BIGINT: 5, DOUBLE: 1, INTEGER: 1, VARCHAR: 4"),
           testing::Eq("        projections: 8 out of 10"),
-          testing::Eq( "          a_0: AND(gt(a, b), gt(b, CAST(10 AS INTEGER)))"),
+          testing::Eq("          a_0: AND(gt(a, b), gt(b, CAST(10 AS INTEGER)))"),
           testing::Eq("          b_1: OR(lt(a, b), gt(b, CAST(0 AS INTEGER)))"),
           testing::Eq("          expr: multiply(CAST(a AS DOUBLE), 1.2)"),
           testing::Eq("          ... 5 more"),
@@ -1377,7 +1376,9 @@ TEST_F(PlanPrinterTest, specialForms) {
   EXPECT_THAT(
       lines,
       testing::ElementsAre(
-          testing::Eq("- VALUES [0]: 3 fields"), testing::Eq("")));
+          testing::Eq("- OUTPUT [2]: 10 fields"),
+          testing::Eq("  - VALUES [0]: 3 fields"),
+          testing::Eq("")));
 }
 
 TEST_F(PlanPrinterTest, lambda) {

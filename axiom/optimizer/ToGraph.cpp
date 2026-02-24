@@ -315,7 +315,9 @@ lp::ValuesNodePtr tryFoldConstantDt(
         /*redundantProject=*/false);
   }
 
-  auto veloxPlan = queryCtx()->optimization()->toVeloxPlan(plan);
+  auto& optimization = queryCtx()->optimization();
+  auto veloxPlan =
+      optimization->toVelox().toVeloxPlan(plan, optimization->runnerOptions());
   auto results = runConstantPlan(veloxPlan, pool);
   if (results.empty()) {
     VELOX_CHECK_EQ(1, veloxPlan.plan->fragments().size());

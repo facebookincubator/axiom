@@ -35,6 +35,7 @@ const auto& nodeKindNames() {
       {NodeKind::kUnnest, "UNNEST"},
       {NodeKind::kTableWrite, "TABLE_WRITE"},
       {NodeKind::kSample, "SAMPLE"},
+      {NodeKind::kOutput, "OUTPUT"},
   };
   return kNames;
 }
@@ -142,6 +143,7 @@ void LogicalPlanNode::registerSerDe() {
   registry.Register("UnnestNode", UnnestNode::create);
   registry.Register("TableWriteNode", TableWriteNode::create);
   registry.Register("SampleNode", SampleNode::create);
+  registry.Register("OutputNode", OutputNode::create);
 }
 
 folly::dynamic ValuesNode::serialize() const {
@@ -953,6 +955,76 @@ void SampleNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+namespace {
+velox::RowTypePtr makeOutputType(
+    const LogicalPlanNode& input,
+    const std::vector<OutputNode::Entry>& entries) {
+  const auto& inputType = input.outputType();
+
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> types;
+  names.reserve(entries.size());
+  types.reserve(entries.size());
+
+  for (const auto& entry : entries) {
+    VELOX_USER_CHECK_GE(entry.index, 0);
+    VELOX_USER_CHECK_LT(
+        entry.index, inputType->size(), "Output column index is out of range");
+    names.push_back(entry.name);
+    types.push_back(inputType->childAt(entry.index));
+  }
+
+  return velox::ROW(std::move(names), std::move(types));
+}
+} // namespace
+
+OutputNode::OutputNode(
+    std::string id,
+    LogicalPlanNodePtr input,
+    std::vector<Entry> entries)
+    : LogicalPlanNode{NodeKind::kOutput, std::move(id), {input}, makeOutputType(*input, entries)},
+      entries_{std::move(entries)} {
+  VELOX_USER_CHECK(
+      !entries_.empty(), "Output node must have at least one entry");
+}
+
+void OutputNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+folly::dynamic OutputNode::serialize() const {
+  auto obj = serializeBase("OutputNode");
+  obj["entries"] = serializeVector(entries_, [](const Entry& entry) {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["index"] = entry.index;
+    obj["name"] = entry.name;
+    return obj;
+  });
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr OutputNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 1);
+
+  std::vector<OutputNode::Entry> entries;
+  if (obj.count("entries")) {
+    for (const auto& entry : obj["entries"]) {
+      entries.push_back(
+          {static_cast<int32_t>(entry["index"].asInt()),
+           entry["name"].asString()});
+    }
+  }
+
+  return std::make_shared<OutputNode>(
+      obj["id"].asString(), inputs[0], std::move(entries));
 }
 
 } // namespace facebook::axiom::logical_plan

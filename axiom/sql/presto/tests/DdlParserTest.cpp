@@ -314,7 +314,8 @@ TEST_F(DdlParserTest, view) {
   auto matcher = matchScan()
                      .join(matchScan().aggregate().project().build())
                      .filter()
-                     .project();
+                     .project()
+                     .output();
   testSelect(
       "SELECT n_name, n_regionkey, cnt FROM nation n, view v "
       "WHERE n_nationkey = regionkey",

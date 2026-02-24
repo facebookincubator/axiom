@@ -46,7 +46,14 @@ Optimization::Optimization(
       toGraph_{schema, evaluator, options_},
       toVelox_{session_, runnerOptions_, options_} {
   queryCtx()->optimization() = this;
-  root_ = toGraph_.makeQueryGraph(*logicalPlan_);
+
+  const auto* planRoot = logicalPlan_;
+  if (logicalPlan_->is(logical_plan::NodeKind::kOutput)) {
+    outputNames_ = logicalPlan_->as<logical_plan::OutputNode>()->entries();
+    planRoot = logicalPlan_->onlyInput().get();
+  }
+
+  root_ = toGraph_.makeQueryGraph(*planRoot);
   root_->initializePlans();
 }
 

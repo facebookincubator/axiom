@@ -414,6 +414,29 @@ class DotPrinterVisitor : public PlanNodeVisitor {
     visitInputs(node, ctx);
   }
 
+  void visit(const OutputNode& node, PlanNodeVisitorContext& ctx)
+      const override {
+    auto& context = static_cast<Context&>(ctx);
+    printNodeStart(context.out, node, "Output", kPalette.header);
+
+    const auto& inputType = node.onlyInput()->outputType();
+    for (const auto& entry : node.entries()) {
+      const auto& inputName = inputType->nameOf(entry.index);
+      if (entry.name != inputName) {
+        printRow(
+            context.out,
+            fmt::format(
+                "{} := {}", escapeHtml(entry.name), escapeHtml(inputName)));
+      } else {
+        printRow(context.out, escapeHtml(entry.name));
+      }
+    }
+
+    printNodeEnd(context.out);
+    printEdgeToInputs(context.out, node);
+    visitInputs(node, ctx);
+  }
+
  private:
   static void printNodeStart(
       std::ostream& out,

@@ -38,7 +38,7 @@ class ExpressionParserTest : public PrestoParserTestBase {
     SCOPED_TRACE(expr);
     testSelect(
         fmt::format("SELECT {} FROM nation", expr),
-        matchScan().project({std::string(expectedExpr)}));
+        matchScan().project({std::string(expectedExpr)}).output());
   }
 
   // Parses a decimal literal and verifies its value and type.
@@ -392,19 +392,24 @@ TEST_F(ExpressionParserTest, in) {
   // Subquery IN in WHERE clause produces a filter with IN(column, subquery).
   testSelect(
       "SELECT * FROM nation WHERE n_regionkey IN (SELECT r_regionkey FROM region WHERE r_name like 'A%')",
-      matchScan().filter([&](const auto& node) {
-        auto filter = std::dynamic_pointer_cast<const lp::FilterNode>(node);
-        assertInSubquery(filter->predicate());
-      }));
+      matchScan()
+          .filter([&](const auto& node) {
+            auto filter = std::dynamic_pointer_cast<const lp::FilterNode>(node);
+            assertInSubquery(filter->predicate());
+          })
+          .output());
 
   // Subquery IN in SELECT clause produces a project with IN(column, subquery).
   testSelect(
       "SELECT n_regionkey IN (SELECT r_regionkey FROM region WHERE r_name like 'A%') FROM nation",
-      matchScan().project([&](const auto& node) {
-        auto project = std::dynamic_pointer_cast<const lp::ProjectNode>(node);
-        ASSERT_EQ(project->expressions().size(), 1);
-        assertInSubquery(project->expressionAt(0));
-      }));
+      matchScan()
+          .project([&](const auto& node) {
+            auto project =
+                std::dynamic_pointer_cast<const lp::ProjectNode>(node);
+            ASSERT_EQ(project->expressions().size(), 1);
+            assertInSubquery(project->expressionAt(0));
+          })
+          .output());
 }
 
 TEST_F(ExpressionParserTest, notLike) {
@@ -529,26 +534,32 @@ TEST_F(ExpressionParserTest, windowFunction) {
   // Multiple window functions in SELECT.
   testSelect(
       "SELECT row_number() OVER (ORDER BY n_nationkey), sum(n_nationkey) OVER (PARTITION BY n_regionkey) FROM nation",
-      matchScan().project({
-          "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
-          "sum(n_nationkey) OVER (PARTITION BY n_regionkey RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
-      }));
+      matchScan()
+          .project({
+              "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+              "sum(n_nationkey) OVER (PARTITION BY n_regionkey RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+          })
+          .output());
 
   // Mix of scalar and window functions.
   testSelect(
       "SELECT n_name, length(n_name), row_number() OVER (ORDER BY n_nationkey) FROM nation",
-      matchScan().project({
-          "n_name",
-          "length(n_name)",
-          "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
-      }));
+      matchScan()
+          .project({
+              "n_name",
+              "length(n_name)",
+              "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+          })
+          .output());
 
   // Window function with alias.
   testSelect(
       "SELECT row_number() OVER (ORDER BY n_nationkey) AS row_num FROM nation",
-      matchScan().project({
-          "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
-      }));
+      matchScan()
+          .project({
+              "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+          })
+          .output());
 
   // Pure window function with coercion: ntile expects BIGINT, integer literal
   // 1 is INTEGER.

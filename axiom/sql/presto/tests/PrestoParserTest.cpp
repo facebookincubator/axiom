@@ -150,7 +150,7 @@ TEST_F(PrestoParserTest, parseMultipleComplexQuery) {
 
 TEST_F(PrestoParserTest, unnest) {
   {
-    auto matcher = matchValues().unnest();
+    auto matcher = matchValues().unnest().output();
     testSelect("SELECT * FROM unnest(array[1, 2, 3])", matcher);
 
     testSelect(
@@ -162,43 +162,39 @@ TEST_F(PrestoParserTest, unnest) {
         matcher);
   }
 
-  {
-    auto matcher = matchValues().unnest().project();
-    testSelect("SELECT * FROM unnest(array[1, 2, 3]) as t(x)", matcher);
+  testSelect(
+      "SELECT * FROM unnest(array[1, 2, 3]) as t(x)",
+      matchValues().unnest().project().output({"x"}));
 
-    testSelect(
-        "SELECT * FROM unnest(array[1, 2, 3], array[4, 5]) with ordinality as t(x, y)",
-        matcher);
-  }
+  testSelect(
+      "SELECT * FROM unnest(array[1, 2, 3], array[4, 5]) with ordinality as t(x, y)",
+      matchValues().unnest().project().output({"x", "y"}));
 
   {
-    auto matcher = matchScan().unnest();
+    auto matcher = matchScan().unnest().output();
     testSelect(
         "SELECT * FROM nation, unnest(array[n_nationkey, n_regionkey])",
         matcher);
   }
 
   {
-    auto matcher = matchScan().unnest();
+    auto matcher = matchScan().unnest().output(
+        {"n_nationkey", "n_name", "n_regionkey", "n_comment", "x"});
 
     testSelect(
         "SELECT * FROM nation, unnest(array[n_nationkey, n_regionkey]) as t(x)",
         matcher);
-  }
-
-  {
-    auto matcher = matchValues().project().unnest().project();
 
     testSelect(
-        "WITH a AS (SELECT array[1,2,3] as x) SELECT t.x + 1 FROM a, unnest(A.x) as T(X)",
+        "SELECT * FROM (nation cross join unnest(array[1,2,3]) as t(x))",
         matcher);
   }
 
   {
-    auto matcher = matchScan().unnest();
+    auto matcher = matchValues().project().unnest().project().output();
 
     testSelect(
-        "SELECT * FROM (nation cross join unnest(array[1,2,3]) as t(x))",
+        "WITH a AS (SELECT array[1,2,3] as x) SELECT t.x + 1 FROM a, unnest(A.x) as T(X)",
         matcher);
   }
 }
@@ -206,7 +202,7 @@ TEST_F(PrestoParserTest, unnest) {
 TEST_F(PrestoParserTest, qualifiedColumnAccess) {
   {
     connector_->addTable("t", ROW({"x"}, {INTEGER()}));
-    auto matcher = matchScan().project();
+    auto matcher = matchScan().project().output({"x"});
 
     // Qualified and unqualified column access.
     testSelect("SELECT t.x FROM t", matcher);
@@ -229,12 +225,15 @@ TEST_F(PrestoParserTest, qualifiedColumnAccess) {
     connector_->addTable(
         "u",
         ROW({"t", "x"}, {ROW({"x", "y"}, {VARCHAR(), DOUBLE()}), INTEGER()}));
-    auto matcher = matchScan().project([&](const auto& node) {
-      const auto& outputType = node->outputType();
-      EXPECT_EQ(outputType->childAt(0)->kind(), TypeKind::ROW);
-      EXPECT_EQ(outputType->childAt(1)->kind(), TypeKind::INTEGER);
-      EXPECT_EQ(outputType->childAt(2)->kind(), TypeKind::DOUBLE);
-    });
+    auto matcher =
+        matchScan()
+            .project([&](const auto& node) {
+              const auto& outputType = node->outputType();
+              EXPECT_EQ(outputType->childAt(0)->kind(), TypeKind::ROW);
+              EXPECT_EQ(outputType->childAt(1)->kind(), TypeKind::INTEGER);
+              EXPECT_EQ(outputType->childAt(2)->kind(), TypeKind::DOUBLE);
+            })
+            .output({"t", "x", "y"});
     testSelect("SELECT t, t.x, t.y FROM u AS t", matcher);
 
     // Struct field 'x' is shadowed by the table-qualified column. Legacy
@@ -274,21 +273,49 @@ TEST_F(PrestoParserTest, syntaxErrors) {
 
 TEST_F(PrestoParserTest, selectStar) {
   {
-    auto matcher = matchScan();
+    auto matcher = matchScan().output(
+        {"n_nationkey", "n_name", "n_regionkey", "n_comment"});
     testSelect("SELECT * FROM nation", matcher);
     testSelect("(SELECT * FROM nation)", matcher);
   }
 
   {
-    auto matcher = matchScan().project();
+    // SELECT *, * duplicates column names via OutputNode.
+    auto matcher = matchScan().project().output(
+        {"n_nationkey",
+         "n_name",
+         "n_regionkey",
+         "n_comment",
+         "n_nationkey",
+         "n_name",
+         "n_regionkey",
+         "n_comment"});
     testSelect("SELECT *, * FROM nation", matcher);
-    testSelect("SELECT *, n_nationkey FROM nation", matcher);
-    testSelect("SELECT nation.* FROM nation", matcher);
-    testSelect("SELECT nation.*, n_nationkey + 1 FROM nation", matcher);
+
+    // These produce Project → Output (Output renames disambiguated columns
+    // back to original names).
+    testSelect(
+        "SELECT *, n_nationkey FROM nation",
+        matchScan().project().output(
+            {"n_nationkey",
+             "n_name",
+             "n_regionkey",
+             "n_comment",
+             "n_nationkey"}));
+
+    // These produce just Project (output names already match).
+    testSelect(
+        "SELECT nation.* FROM nation",
+        matchScan().project().output(
+            {"n_nationkey", "n_name", "n_regionkey", "n_comment"}));
+    testSelect(
+        "SELECT nation.*, n_nationkey + 1 FROM nation",
+        matchScan().project().output());
   }
 
   {
-    auto matcher = matchScan().join(matchScan().build()).filter().project();
+    auto matcher =
+        matchScan().join(matchScan().build()).filter().project().output();
     testSelect(
         "SELECT nation.*, r_regionkey + 1 FROM nation, region WHERE n_regionkey = r_regionkey",
         matcher);
@@ -301,42 +328,57 @@ TEST_F(PrestoParserTest, hiddenColumns) {
   connector_->addTable(
       "t", ROW({"a", "b"}, INTEGER()), ROW({"$c", "$d"}, VARCHAR()));
 
-  auto verifyOutput = [&](const std::string& sql,
-                          std::initializer_list<std::string> expectedNames) {
-    lp::LogicalPlanNodePtr outputNode;
-    auto matcher =
-        matchScan().project([&](const auto& node) { outputNode = node; });
+  {
+    // SELECT * filters out hidden columns.
+    auto matcher = matchScan().project().output({"a", "b"});
+    testSelect("SELECT * FROM t", matcher);
+  }
+  {
+    // Hidden columns can be explicitly referenced.
+    testSelect(
+        R"(SELECT "$c", * FROM t)",
+        matchScan().project().output({"$c", "a", "b"}));
+    testSelect(
+        R"(SELECT a, "$c" FROM t)", matchScan().project().output({"a", "$c"}));
+  }
 
-    testSelect(sql, matcher);
-    ASSERT_THAT(
-        outputNode->outputType()->names(),
-        ::testing::Pointwise(::testing::Eq(), expectedNames));
-  };
+  {
+    // Duplicate columns from * produce correct output names.
+    auto matcher = matchScan().project().output({"a", "b", "a"});
+    testSelect("SELECT *, a FROM t", matcher);
+  }
 
-  verifyOutput("SELECT * FROM t", {"a", "b"});
-  verifyOutput("SELECT \"$c\", * FROM t", {"$c", "a", "b"});
-  verifyOutput("SELECT a, \"$c\" FROM t", {"a", "$c"});
-
-  verifyOutput("SELECT *, a FROM t", {"a", "b", "a_0"});
-  verifyOutput("SELECT *, * FROM t", {"a", "b", "a_0", "b_1"});
+  {
+    auto matcher = matchScan().project().output({"a", "b", "a", "b"});
+    testSelect("SELECT *, * FROM t", matcher);
+  }
 }
 
 TEST_F(PrestoParserTest, mixedCaseColumnNames) {
-  auto matcher = matchScan().project();
-  testSelect("SELECT N_NAME, n_ReGiOnKeY FROM nation", matcher);
-  testSelect("SELECT nation.n_name FROM nation", matcher);
-  testSelect("SELECT NATION.n_name FROM nation", matcher);
-  testSelect("SELECT \"NATION\".n_name FROM nation", matcher);
+  {
+    auto matcher = matchScan().project().output({"n_name", "n_regionkey"});
+    testSelect("SELECT N_NAME, n_ReGiOnKeY FROM nation", matcher);
+  }
+  {
+    auto matcher = matchScan().project().output({"n_name"});
+    testSelect("SELECT nation.n_name FROM nation", matcher);
+    testSelect("SELECT NATION.n_name FROM nation", matcher);
+    testSelect("SELECT \"NATION\".n_name FROM nation", matcher);
+  }
 }
 
 TEST_F(PrestoParserTest, with) {
-  auto matcher = matchValues().project();
-  testSelect("WITH a as (SELECT 1 as x) SELECT * FROM a", matcher);
-  testSelect("WITH a as (SELECT 1 as x) SELECT * FROM A", matcher);
-  testSelect("WITH A as (SELECT 1 as x) SELECT * FROM a", matcher);
+  {
+    auto matcher = matchValues().project().output({"x"});
+    testSelect("WITH a as (SELECT 1 as x) SELECT * FROM a", matcher);
+    testSelect("WITH a as (SELECT 1 as x) SELECT * FROM A", matcher);
+    testSelect("WITH A as (SELECT 1 as x) SELECT * FROM a", matcher);
+  }
 
-  matcher.project();
-  testSelect("WITH a as (SELECT 1 as x) SELECT A.x FROM a", matcher);
+  {
+    auto matcher = matchValues().project().project().output({"x"});
+    testSelect("WITH a as (SELECT 1 as x) SELECT A.x FROM a", matcher);
+  }
 }
 
 TEST_F(PrestoParserTest, withShadowing) {
@@ -344,7 +386,7 @@ TEST_F(PrestoParserTest, withShadowing) {
   // scan (producing a Scan node) while the outer uses VALUES. Without proper
   // shadowing, the subquery would resolve to the outer CTE and produce a Values
   // node instead.
-  auto matcher = matchScan().project();
+  auto matcher = matchScan().project().output({"n_nationkey"});
   testSelect(
       "WITH t AS (SELECT 1 AS x) "
       "SELECT * FROM (WITH t AS (SELECT n_nationkey FROM nation) SELECT * FROM t) sub",
@@ -354,23 +396,24 @@ TEST_F(PrestoParserTest, withShadowing) {
 TEST_F(PrestoParserTest, withNoLeaking) {
   // CTE defined inside a subquery is not visible outside.
   VELOX_ASSERT_THROW(
-      testSelect(
+      parseSql(
           "SELECT * FROM (WITH t AS (SELECT 1 AS x) SELECT * FROM t) sub "
-          "CROSS JOIN t",
-          matchValues().project()),
+          "CROSS JOIN t"),
       "Table not found: t");
 }
 
 TEST_F(PrestoParserTest, orderBy) {
   {
-    auto matcher = matchScan().aggregate().sort().project();
+    auto matcher =
+        matchScan().aggregate().sort().project().output({"n_regionkey"});
 
     testSelect(
         "select n_regionkey from nation group by 1 order by count(1)", matcher);
   }
 
   {
-    auto matcher = matchScan().aggregate().sort();
+    auto matcher =
+        matchScan().aggregate().sort().output({"n_regionkey", "count"});
 
     testSelect(
         "select n_regionkey, count(1) from nation group by 1 order by count(1)",
@@ -382,11 +425,11 @@ TEST_F(PrestoParserTest, orderBy) {
 
     testSelect(
         "select n_regionkey, count(1) as c from nation group by 1 order by c",
-        matcher);
+        matchScan().aggregate().sort().output({"n_regionkey", "c"}));
   }
 
   {
-    auto matcher = matchScan().aggregate().project().sort();
+    auto matcher = matchScan().aggregate().project().sort().output();
 
     testSelect(
         "select n_regionkey, count(1) * 2 from nation group by 1 order by 2",
@@ -398,7 +441,7 @@ TEST_F(PrestoParserTest, orderBy) {
   }
 
   {
-    auto matcher = matchScan().aggregate().project().sort().project();
+    auto matcher = matchScan().aggregate().project().sort().project().output();
     testSelect(
         "select n_regionkey, count(1) * 2 from nation group by 1 order by count(1) * 3",
         matcher);
@@ -407,7 +450,16 @@ TEST_F(PrestoParserTest, orderBy) {
 
 TEST_F(PrestoParserTest, join) {
   {
-    auto matcher = matchScan().join(matchScan().build());
+    auto matcher = matchScan()
+                       .join(matchScan().build())
+                       .output(
+                           {"n_nationkey",
+                            "n_name",
+                            "n_regionkey",
+                            "n_comment",
+                            "r_regionkey",
+                            "r_name",
+                            "r_comment"});
 
     testSelect("SELECT * FROM nation, region", matcher);
 
@@ -440,7 +492,8 @@ TEST_F(PrestoParserTest, join) {
         "Cannot resolve column");
 
     // Qualified references are not ambiguous.
-    auto matcher = matchScan().join(matchScan().build());
+    auto matcher =
+        matchScan().join(matchScan().build()).output({"id", "a", "id", "b"});
     testSelect("SELECT * FROM t1 JOIN t2 ON t1.id = t2.id", matcher);
 
     // Non-existent column in ON clause.
@@ -473,7 +526,17 @@ TEST_F(PrestoParserTest, join) {
   }
 
   {
-    auto matcher = matchScan().join(matchScan().build()).filter();
+    auto matcher = matchScan()
+                       .join(matchScan().build())
+                       .filter()
+                       .output(
+                           {"n_nationkey",
+                            "n_name",
+                            "n_regionkey",
+                            "n_comment",
+                            "r_regionkey",
+                            "r_name",
+                            "r_comment"});
 
     testSelect(
         "SELECT * FROM nation, region WHERE n_regionkey = r_regionkey",
@@ -481,7 +544,11 @@ TEST_F(PrestoParserTest, join) {
   }
 
   {
-    auto matcher = matchScan().join(matchScan().build()).filter().project();
+    auto matcher = matchScan()
+                       .join(matchScan().build())
+                       .filter()
+                       .project()
+                       .output({"n_name", "r_name"});
 
     testSelect(
         "SELECT n_name, r_name FROM nation, region WHERE n_regionkey = r_regionkey",
@@ -494,21 +561,12 @@ TEST_F(PrestoParserTest, joinUsing) {
   connector_->addTable("t2", ROW({"id", "b"}, {INTEGER(), VARCHAR()}));
   connector_->addTable("t3", ROW({"id", "c"}, {INTEGER(), VARCHAR()}));
 
-  auto verifyOutputColumns =
-      [](const lp::LogicalPlanNodePtr& node,
-         const std::vector<std::string>& expectedColumns) {
-        EXPECT_THAT(
-            node->outputType()->names(),
-            testing::ElementsAreArray(expectedColumns));
-      };
-
   // INNER JOIN USING.
   {
     auto matcher = matchScan("t1")
                        .join(matchScan("t2").build())
-                       .project([&](const auto& node) {
-                         verifyOutputColumns(node, {"id", "a", "b"});
-                       });
+                       .project()
+                       .output({"id", "a", "b"});
     testSelect("SELECT * FROM t1 JOIN t2 USING (id)", matcher);
   }
 
@@ -518,9 +576,8 @@ TEST_F(PrestoParserTest, joinUsing) {
                        .join(matchScan("t2").build())
                        .project()
                        .join(matchScan("t3").build())
-                       .project([&](const auto& node) {
-                         verifyOutputColumns(node, {"id", "a", "b", "c"});
-                       });
+                       .project()
+                       .output({"id", "a", "b", "c"});
     testSelect(
         "SELECT * FROM t1 JOIN t2 USING (id) JOIN t3 USING (id)", matcher);
   }
@@ -529,24 +586,21 @@ TEST_F(PrestoParserTest, joinUsing) {
   {
     auto matcher = matchScan("t1")
                        .join(matchScan("t2").build())
-                       .project([&](const auto& node) {
-                         verifyOutputColumns(node, {"id", "a", "b"});
-                       });
+                       .project()
+                       .output({"id", "a", "b"});
     testSelect("SELECT * FROM t1 LEFT JOIN t2 USING (id)", matcher);
   }
 
-  // RIGHT JOIN USING.
+  // RIGHT JOIN USING: OutputNode renames id_0 -> id.
   {
     auto matcher = matchScan("t1")
                        .join(matchScan("t2").build())
                        .project()
-                       .project([&](const auto& node) {
-                         verifyOutputColumns(node, {"id", "a", "b"});
-                       });
+                       .output({"id", "a", "b"});
     testSelect("SELECT * FROM t1 RIGHT JOIN t2 USING (id)", matcher);
   }
 
-  // FULL JOIN USING: inner project coalesces USING columns.
+  // FULL JOIN USING: project coalesces USING columns, OutputNode renames.
   {
     auto matcher =
         matchScan("t1")
@@ -560,15 +614,60 @@ TEST_F(PrestoParserTest, joinUsing) {
               ASSERT_NE(nullptr, coalesce);
               EXPECT_EQ(lp::SpecialForm::kCoalesce, coalesce->form());
             })
-            .project([&](const auto& node) {
-              verifyOutputColumns(node, {"id", "a", "b"});
-            });
+            .output({"id", "a", "b"});
     testSelect("SELECT * FROM t1 FULL JOIN t2 USING (id)", matcher);
+  }
+
+  // Aliased table in JOIN USING. Column aliases from both sides are used as
+  // output names. The USING column appears once with the left side's alias,
+  // followed by non-USING columns from both sides.
+  {
+    auto matcher = matchScan("t1")
+                       .project()
+                       .join(matchScan("t2").project().build())
+                       .project()
+                       .output({"x", "y", "b"});
+    testSelect(
+        "SELECT * FROM t1 AS s1(x, y) JOIN t2 AS s2(x, b) USING (x)", matcher);
+    testSelect(
+        "SELECT * FROM t1 AS s1(x, y) LEFT JOIN t2 AS s2(x, b) USING (x)",
+        matcher);
+    testSelect(
+        "SELECT * FROM t1 AS s1(x, y) RIGHT JOIN t2 AS s2(x, b) USING (x)",
+        matcher);
+    testSelect(
+        "SELECT * FROM t1 AS s1(x, y) FULL JOIN t2 AS s2(x, b) USING (x)",
+        matcher);
+  }
+
+  // Duplicate column aliases with JOIN USING.
+  {
+    connector_->addTable(
+        "t4", ROW({"x", "y", "z"}, {INTEGER(), INTEGER(), INTEGER()}));
+    connector_->addTable(
+        "t5", ROW({"x", "y", "z"}, {INTEGER(), INTEGER(), INTEGER()}));
+    auto matcher = matchScan("t4")
+                       .project()
+                       .join(matchScan("t5").project().build())
+                       .project()
+                       .output({"id", "a", "a", "b", "b"});
+    testSelect(
+        "SELECT * FROM t4 AS r(id, a, a) JOIN t5 AS t(id, b, b) USING (id)",
+        matcher);
   }
 }
 
 TEST_F(PrestoParserTest, joinOnSubquery) {
-  auto matcher = matchScan().join(matchScan().build());
+  auto matcher = matchScan()
+                     .join(matchScan().build())
+                     .output(
+                         {"n_nationkey",
+                          "n_name",
+                          "n_regionkey",
+                          "n_comment",
+                          "r_regionkey",
+                          "r_name",
+                          "r_comment"});
 
   // Correlated subquery in JOIN ON clause referencing left-side columns works.
   testSelect(
@@ -601,7 +700,10 @@ TEST_F(PrestoParserTest, joinOnSubquery) {
 }
 
 TEST_F(PrestoParserTest, unionAll) {
-  auto matcher = matchScan().project().unionAll(matchScan().project().build());
+  auto matcher = matchScan()
+                     .project()
+                     .unionAll(matchScan().project().build())
+                     .output({"n_name"});
 
   testSelect(
       "SELECT n_name FROM nation UNION ALL SELECT r_name FROM region", matcher);
@@ -610,7 +712,8 @@ TEST_F(PrestoParserTest, unionAll) {
   auto matcher3 = matchScan()
                       .project()
                       .unionAll(matchScan().project().build())
-                      .unionAll(matchScan().project().build());
+                      .unionAll(matchScan().project().build())
+                      .output({"n_name"});
 
   testSelect(
       "SELECT n_name FROM nation "
@@ -620,8 +723,11 @@ TEST_F(PrestoParserTest, unionAll) {
 }
 
 TEST_F(PrestoParserTest, union) {
-  auto matcher =
-      matchScan().project().unionAll(matchScan().project().build()).distinct();
+  auto matcher = matchScan()
+                     .project()
+                     .unionAll(matchScan().project().build())
+                     .distinct()
+                     .output({"n_name"});
 
   // UNION and UNION DISTINCT are equivalent.
   testSelect(
@@ -634,8 +740,11 @@ TEST_F(PrestoParserTest, union) {
 TEST_F(PrestoParserTest, except) {
   // EXCEPT and EXCEPT DISTINCT are equivalent. Both add distinct for
   // deduplication.
-  auto matcher =
-      matchScan().project().except(matchScan().project().build()).distinct();
+  auto matcher = matchScan()
+                     .project()
+                     .except(matchScan().project().build())
+                     .distinct()
+                     .output({"n_name"});
 
   testSelect(
       "SELECT n_name FROM nation EXCEPT SELECT r_name FROM region", matcher);
@@ -644,7 +753,10 @@ TEST_F(PrestoParserTest, except) {
       matcher);
 
   // EXCEPT ALL skips deduplication.
-  auto matcherAll = matchScan().project().except(matchScan().project().build());
+  auto matcherAll = matchScan()
+                        .project()
+                        .except(matchScan().project().build())
+                        .output({"n_name"});
 
   testSelect(
       "SELECT n_name FROM nation EXCEPT ALL SELECT r_name FROM region",
@@ -654,8 +766,11 @@ TEST_F(PrestoParserTest, except) {
 TEST_F(PrestoParserTest, intersect) {
   // INTERSECT and INTERSECT DISTINCT are equivalent. Both add distinct for
   // deduplication.
-  auto matcher =
-      matchScan().project().intersect(matchScan().project().build()).distinct();
+  auto matcher = matchScan()
+                     .project()
+                     .intersect(matchScan().project().build())
+                     .distinct()
+                     .output({"n_name"});
 
   testSelect(
       "SELECT n_name FROM nation INTERSECT SELECT r_name FROM region", matcher);
@@ -664,8 +779,10 @@ TEST_F(PrestoParserTest, intersect) {
       matcher);
 
   // INTERSECT ALL skips deduplication.
-  auto matcherAll =
-      matchScan().project().intersect(matchScan().project().build());
+  auto matcherAll = matchScan()
+                        .project()
+                        .intersect(matchScan().project().build())
+                        .output({"n_name"});
 
   testSelect(
       "SELECT n_name FROM nation INTERSECT ALL SELECT r_name FROM region",
@@ -674,7 +791,8 @@ TEST_F(PrestoParserTest, intersect) {
 
 TEST_F(PrestoParserTest, exists) {
   {
-    auto matcher = matchScan().filter();
+    auto matcher =
+        matchScan().filter().output({"r_regionkey", "r_name", "r_comment"});
 
     testSelect(
         "SELECT * FROM region WHERE exists (SELECT * from nation WHERE n_name like 'A%' and r_regionkey = n_regionkey)",
@@ -686,7 +804,7 @@ TEST_F(PrestoParserTest, exists) {
   }
 
   {
-    auto matcher = matchScan().project();
+    auto matcher = matchScan().project().output();
 
     testSelect(
         "SELECT EXISTS (SELECT * from nation WHERE n_regionkey = r_regionkey) FROM region",
@@ -701,15 +819,17 @@ TEST_F(PrestoParserTest, structDereferenceInCorrelatedSubquery) {
   connector_->addTable("u", ROW({"y"}, {INTEGER()}));
 
   // Correlated subquery references a struct field from the outer query.
-  auto matcher = matchScan().filter();
+  auto matcher = matchScan().filter().output({"s", "x"});
   testSelect(
       "SELECT * FROM t WHERE EXISTS (SELECT 1 FROM u WHERE s.a = y)", matcher);
 }
 
 TEST_F(PrestoParserTest, values) {
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().values(
-        ROW({"c0", "c1", "c2"}, {INTEGER(), DOUBLE(), VARCHAR()}));
+    auto matcher =
+        lp::test::LogicalPlanMatcherBuilder()
+            .values(ROW({"c0", "c1", "c2"}, {INTEGER(), DOUBLE(), VARCHAR()}))
+            .output();
 
     testSelect(
         "SELECT * FROM (VALUES (1, 1.1, 'foo'), (2, null, 'bar'))", matcher);
@@ -719,21 +839,24 @@ TEST_F(PrestoParserTest, values) {
   }
 
   {
-    auto matcher =
-        lp::test::LogicalPlanMatcherBuilder().values(ROW({"c0"}, {INTEGER()}));
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .values(ROW({"c0"}, {INTEGER()}))
+                       .output();
     testSelect("SELECT * FROM (VALUES (1), (2), (3), (4))", matcher);
   }
 
   {
-    auto matcher = lp::test::LogicalPlanMatcherBuilder().values(
-        ROW({"c0", "c1"}, {REAL(), INTEGER()}));
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .values(ROW({"c0", "c1"}, {REAL(), INTEGER()}))
+                       .output();
     testSelect("SELECT * FROM (VALUES (real '1', 1 + 2))", matcher);
   }
 }
 
 TEST_F(PrestoParserTest, tablesample) {
   {
-    auto matcher = matchScan().sample();
+    auto matcher = matchScan().sample().output(
+        {"n_nationkey", "n_name", "n_regionkey", "n_comment"});
 
     testSelect("SELECT * FROM nation TABLESAMPLE BERNOULLI (10.0)", matcher);
     testSelect("SELECT * FROM nation TABLESAMPLE SYSTEM (1.5)", matcher);
@@ -743,7 +866,8 @@ TEST_F(PrestoParserTest, tablesample) {
   }
 
   {
-    auto matcher = matchScan().aggregate().sample();
+    auto matcher =
+        matchScan().aggregate().sample().output({"l_orderkey", "count"});
 
     testSelect(
         "SELECT * FROM (SELECT l_orderkey, count(*) FROM lineitem GROUP BY 1) "
@@ -753,8 +877,12 @@ TEST_F(PrestoParserTest, tablesample) {
 }
 
 TEST_F(PrestoParserTest, everything) {
-  auto matcher =
-      matchScan().join(matchScan().build()).filter().aggregate().sort();
+  auto matcher = matchScan()
+                     .join(matchScan().build())
+                     .filter()
+                     .aggregate()
+                     .sort()
+                     .output({"r_name", "count"});
 
   testSelect(
       "SELECT r_name, count(*) FROM nation, region "
@@ -766,7 +894,8 @@ TEST_F(PrestoParserTest, everything) {
 
 TEST_F(PrestoParserTest, explainSelect) {
   {
-    auto matcher = matchScan();
+    auto matcher = matchScan().output(
+        {"n_nationkey", "n_name", "n_regionkey", "n_comment"});
     testExplain("EXPLAIN SELECT * FROM nation", matcher);
   }
 
@@ -905,30 +1034,36 @@ TEST_F(PrestoParserTest, showFunctions) {
 }
 
 TEST_F(PrestoParserTest, unqualifiedAccessAfterJoin) {
-  auto sql =
-      "SELECT n_name FROM (SELECT n1.n_name as n_name FROM nation n1, nation n2)";
-
-  auto matcher = matchScan().join(matchScan().build()).project().project();
-  testSelect(sql, matcher);
+  auto matcher = matchScan()
+                     .join(matchScan().build())
+                     .project()
+                     .project()
+                     .output({"n_name"});
+  testSelect(
+      "SELECT n_name FROM (SELECT n1.n_name as n_name FROM nation n1, nation n2)",
+      matcher);
 }
 
 TEST_F(PrestoParserTest, duplicateAliases) {
   {
-    auto matcher = matchValues().project().project();
+    auto matcher = matchValues().project().project().output({"x", "x"});
     testSelect(
         "SELECT a as x, b as x FROM (VALUES (1, 2)) AS t(a, b)", matcher);
   }
 
   {
-    auto matcher = matchValues().project().unnest().project();
+    auto matcher =
+        matchValues().project().unnest().project().output({"x", "x"});
     testSelect(
         "SELECT a as x, u.x FROM (VALUES (1, ARRAY[10, 20])) AS t(a, b) "
         "CROSS JOIN UNNEST(b) AS u(x)",
         matcher);
   }
 
+  // Duplicate aliases with aggregates.
   {
-    auto matcher = matchValues().project().aggregate().project();
+    auto matcher =
+        matchValues().project().aggregate().project().output({"x", "x"});
     testSelect(
         "SELECT sum(a) as x, sum(b) as x FROM (VALUES (1, 2)) AS t(a, b)",
         matcher);
@@ -938,14 +1073,130 @@ TEST_F(PrestoParserTest, duplicateAliases) {
   VELOX_ASSERT_THROW(
       parseSql(
           "SELECT x FROM (SELECT a as x, b as x FROM (VALUES (1, 2)) AS t(a, b))"),
-      "Cannot resolve");
+      "Cannot resolve column: x");
+}
+
+TEST_F(PrestoParserTest, outputNames) {
+  auto test = [&](const std::string& sql,
+                  const std::vector<std::string>& expectedNames) {
+    SCOPED_TRACE(sql);
+    auto plan = parseSelect(sql);
+    EXPECT_THAT(
+        plan->outputType()->names(), testing::ElementsAreArray(expectedNames));
+  };
+
+  // Direct SELECT with empty and duplicate aliases.
+  test(R"(SELECT 1 as "", 2 as "", 3 as x, 4 as x)", {"", "", "x", "x"});
+
+  // SELECT * from subquery preserves empty and duplicate names.
+  test(
+      R"(SELECT * FROM (SELECT 1 as "", 2 as "", 3 as x, 4 as x))",
+      {"", "", "x", "x"});
+
+  // SELECT t.* from subquery preserves empty and duplicate names.
+  test(
+      R"(SELECT t.* FROM (SELECT 1 as "", 2 as "", 3 as x, 4 as x) t)",
+      {"", "", "x", "x"});
+
+  // Cross join of subqueries preserves empty and duplicate names.
+  test(
+      R"(SELECT * FROM (SELECT 1 as ""), (SELECT 2 as ""), )"
+      R"((SELECT 3 as x), (SELECT 4 as x))",
+      {"", "", "x", "x"});
+
+  // Mixed qualified star preserves empty and duplicate names per alias.
+  test(
+      R"(SELECT t.*, v.*, w.* FROM )"
+      R"((SELECT 1 as "") as t, )"
+      R"((SELECT 2 as "") as u, )"
+      R"((SELECT 3 as x) as v, )"
+      R"((SELECT 4 as x) as w)",
+      {"", "x", "x"});
+
+  // Column aliases override empty output names from inner subquery.
+  test(R"(SELECT * FROM (SELECT 1 as "", 2 as "") t(a, b))", {"a", "b"});
+
+  // Mixed select with * and explicit columns preserves empty names.
+  test(R"(SELECT *, 5 as y FROM (SELECT 1 as ""))", {"", "y"});
+
+  // Double * preserves empty names in both expansions.
+  test(R"(SELECT *, * FROM (SELECT 1 as ""))", {"", ""});
+
+  // Double * with explicit columns in between.
+  test(
+      "SELECT *, 'foo' as x, 'bar' as y, * FROM (SELECT 1 as x)",
+      {"x", "x", "y", "x"});
+
+  // Nested subqueries preserve output names through multiple layers.
+  test(
+      R"(SELECT * FROM (SELECT * FROM (SELECT 1 as "", 2 as x, 3 as x)))",
+      {"", "x", "x"});
+
+  // UNION uses left side's output names.
+  test(R"(SELECT 1 as "", 2 as x UNION ALL SELECT 3, 4)", {"", "x"});
+
+  // UNNEST with duplicate column aliases.
+  test(
+      "SELECT * FROM UNNEST(ARRAY[1, 2, 3], ARRAY[1, 2, 3]) AS t(x, x)",
+      {"x", "x"});
+
+  // UNNEST with empty column aliases.
+  test(
+      R"(SELECT * FROM UNNEST(ARRAY[1, 2, 3], ARRAY[1, 2, 3]) AS t("", ""))",
+      {"", ""});
+
+  // UNNEST without aliases produces auto-generated names.
+  {
+    auto plan =
+        parseSelect("SELECT * FROM UNNEST(ARRAY[1, 2, 3], ARRAY[1, 2, 3])");
+    const auto& names = plan->outputType()->names();
+    EXPECT_EQ(2, names.size());
+    EXPECT_FALSE(names[0].empty());
+    EXPECT_FALSE(names[1].empty());
+    EXPECT_NE(names[0], names[1]);
+  }
+
+  // Bare expression uses default name; explicit empty alias uses "".
+  {
+    auto plan = parseSelect(R"(SELECT 1, 1 as "")");
+    const auto& names = plan->outputType()->names();
+    EXPECT_EQ(2, names.size());
+    EXPECT_FALSE(names[0].empty());
+    EXPECT_TRUE(names[1].empty());
+  }
+
+  // Duplicate qualified star produces duplicate column names.
+  test(
+      "SELECT nation.*, nation.* FROM nation",
+      {"n_nationkey",
+       "n_name",
+       "n_regionkey",
+       "n_comment",
+       "n_nationkey",
+       "n_name",
+       "n_regionkey",
+       "n_comment"});
+
+  // Duplicate output column names are preserved as-is (not deduplicated to
+  // x, x_0).
+  test("SELECT a as x, b as x FROM (VALUES (1, 2)) AS t(a, b)", {"x", "x"});
 }
 
 TEST_F(PrestoParserTest, qualifiedStarInUnionAfterJoin) {
-  parseSql(
+  auto matcher = matchValues()
+                     .project()
+                     .unionAll(
+                         matchValues()
+                             .project()
+                             .join(matchValues().project().build())
+                             .project()
+                             .build())
+                     .output({"id"});
+  testSelect(
       "SELECT * FROM (VALUES (1)) t(id) "
       "UNION ALL "
-      "SELECT a.* FROM (VALUES (1)) a(id) JOIN (VALUES (2)) b(id) ON a.id = b.id");
+      "SELECT a.* FROM (VALUES (1)) a(id) JOIN (VALUES (2)) b(id) ON a.id = b.id",
+      matcher);
 }
 
 TEST_F(PrestoParserTest, qualifiedStarWithAmbiguousColumnAfterJoin) {
@@ -961,20 +1212,25 @@ TEST_F(PrestoParserTest, qualifiedStarWithAmbiguousColumnAfterJoin) {
               "n_name",
               "n_regionkey",
               "n_comment",
-          }));
+          })
+          .output({"n_nationkey", "n_name", "n_regionkey", "n_comment"}));
 }
 
 // FETCH FIRST n ROWS ONLY is equivalent to LIMIT n. Each LIMIT query below is
 // paired with a FETCH FIRST query to verify they produce the same plan.
 TEST_F(PrestoParserTest, limit) {
+  auto nationColumns = std::vector<std::string>{
+      "n_nationkey", "n_name", "n_regionkey", "n_comment"};
+
   {
-    auto matcher = matchScan().limit(0, 10);
+    auto matcher = matchScan().limit(0, 10).output(nationColumns);
     testSelect("SELECT * FROM nation LIMIT 10", matcher);
     testSelect("SELECT * FROM nation FETCH FIRST 10 ROWS ONLY", matcher);
   }
 
   {
-    auto matcher = matchScan().aggregate().limit(0, 5);
+    auto matcher =
+        matchScan().aggregate().limit(0, 5).output({"n_regionkey", "count"});
     testSelect(
         "SELECT n_regionkey, count(1) FROM nation GROUP BY 1 LIMIT 5", matcher);
     testSelect(
@@ -983,7 +1239,7 @@ TEST_F(PrestoParserTest, limit) {
   }
 
   {
-    auto matcher = matchScan().sort().limit(0, 100);
+    auto matcher = matchScan().sort().limit(0, 100).output(nationColumns);
     testSelect("SELECT * FROM nation ORDER BY n_name LIMIT 100", matcher);
     testSelect(
         "SELECT * FROM nation ORDER BY n_name FETCH FIRST 100 ROWS ONLY",
@@ -992,14 +1248,21 @@ TEST_F(PrestoParserTest, limit) {
 }
 
 TEST_F(PrestoParserTest, offset) {
+  auto nationColumns = std::vector<std::string>{
+      "n_nationkey", "n_name", "n_regionkey", "n_comment"};
+
   {
-    auto matcher = matchScan().limit(5, std::numeric_limits<int64_t>::max());
+    auto matcher = matchScan()
+                       .limit(5, std::numeric_limits<int64_t>::max())
+                       .output(nationColumns);
     testSelect("SELECT * FROM nation OFFSET 5", matcher);
   }
 
   {
-    auto matcher =
-        matchScan().limit(5, std::numeric_limits<int64_t>::max()).limit(0, 10);
+    auto matcher = matchScan()
+                       .limit(5, std::numeric_limits<int64_t>::max())
+                       .limit(0, 10)
+                       .output(nationColumns);
     testSelect("SELECT * FROM nation OFFSET 5 LIMIT 10", matcher);
     testSelect(
         "SELECT * FROM nation OFFSET 5 FETCH FIRST 10 ROWS ONLY", matcher);
@@ -1030,10 +1293,12 @@ TEST_F(PrestoParserTest, use) {
 TEST_F(PrestoParserTest, windowFunction) {
   testSelect(
       "SELECT n_name, row_number() OVER (ORDER BY n_nationkey) FROM nation",
-      matchScan().project({
-          "n_name",
-          "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
-      }));
+      matchScan()
+          .project({
+              "n_name",
+              "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+          })
+          .output());
 }
 
 } // namespace

@@ -1162,7 +1162,8 @@ PlanBuilder& PlanBuilder::join(
 PlanBuilder& PlanBuilder::joinUsing(
     const PlanBuilder& right,
     const std::vector<std::string>& columns,
-    JoinType joinType) {
+    JoinType joinType,
+    std::vector<int32_t>* outputIndices) {
   VELOX_USER_CHECK(!columns.empty(), "USING columns cannot be empty");
   VELOX_USER_CHECK_NOT_NULL(node_, "Join node cannot be a leaf node");
   VELOX_USER_CHECK_NOT_NULL(right.node_);
@@ -1221,14 +1222,15 @@ PlanBuilder& PlanBuilder::joinUsing(
       nextId(), std::move(node_), right.node_, joinType, std::move(condition));
 
   // Add projection to deduplicate USING columns.
-  addJoinUsingProjection(usingColumns, joinType);
+  addJoinUsingProjection(usingColumns, joinType, outputIndices);
 
   return *this;
 }
 
 void PlanBuilder::addJoinUsingProjection(
     const std::vector<UsingColumn>& usingColumns,
-    JoinType joinType) {
+    JoinType joinType,
+    std::vector<int32_t>* outputIndices) {
   auto joinOutputType = node_->outputType();
 
   std::vector<std::string> outputNames;
@@ -1237,7 +1239,8 @@ void PlanBuilder::addJoinUsingProjection(
 
   // Emit USING columns first (one copy each).
   for (const auto& column : usingColumns) {
-    auto type = joinOutputType->findChild(column.leftId);
+    const auto index = joinOutputType->getChildIdx(column.leftId);
+    const auto& type = joinOutputType->childAt(index);
     if (joinType == JoinType::kFull) {
       // Coalesce left and right for FULL OUTER joins.
       auto leftRef = makeInputRef(type, column.leftId);
@@ -1257,7 +1260,11 @@ void PlanBuilder::addJoinUsingProjection(
       exprs.push_back(makeInputRef(type, column.leftId));
       outputNames.push_back(column.leftId);
     }
+
     newOutputMapping->add(column.name, outputNames.back());
+    if (outputIndices) {
+      outputIndices->push_back(index);
+    }
   }
 
   // Emit all non-USING columns from both sides in order.
@@ -1274,6 +1281,9 @@ void PlanBuilder::addJoinUsingProjection(
 
     outputNames.push_back(id);
     exprs.push_back(makeInputRef(joinOutputType->childAt(i), id));
+    if (outputIndices) {
+      outputIndices->push_back(i);
+    }
 
     for (const auto& qualifiedName : outputMapping_->reverseLookup(id)) {
       newOutputMapping->add(qualifiedName, id);
@@ -1779,17 +1789,15 @@ std::string PlanBuilder::findOrAssignOutputNameAt(size_t index) const {
   return id;
 }
 
-LogicalPlanNodePtr PlanBuilder::build(bool useIds) {
+LogicalPlanNodePtr PlanBuilder::build() {
   VELOX_USER_CHECK_NOT_NULL(node_);
   VELOX_USER_CHECK_NOT_NULL(outputMapping_);
 
-  // Use user-specified names for the output. Should we add an OutputNode?
-
   const auto names = outputMapping_->uniqueNames();
 
-  bool needRename = false;
-
   const auto& rowType = node_->outputType();
+
+  bool needRename = false;
 
   std::vector<std::string> outputNames;
   outputNames.reserve(rowType->size());
@@ -1799,31 +1807,45 @@ LogicalPlanNodePtr PlanBuilder::build(bool useIds) {
 
   for (auto i = 0; i < rowType->size(); i++) {
     const auto& id = rowType->nameOf(i);
-    const auto& type = rowType->childAt(i);
 
-    if (useIds) {
-      exprs.push_back(makeInputRef(type, id));
-    } else {
-      auto it = names.find(id);
-      if (it != names.end()) {
-        outputNames.push_back(it->second);
-      } else {
-        outputNames.push_back(id);
-      }
+    auto it = names.find(id);
+    outputNames.push_back(it != names.end() ? it->second : id);
 
-      if (id != outputNames.back()) {
-        needRename = true;
-      }
-
-      exprs.push_back(makeInputRef(type, id));
+    if (id != outputNames.back()) {
+      needRename = true;
     }
+
+    exprs.push_back(makeInputRef(rowType->childAt(i), id));
   }
 
   if (needRename) {
-    return std::make_shared<ProjectNode>(nextId(), node_, outputNames, exprs);
+    return std::make_shared<ProjectNode>(
+        nextId(), node_, std::move(outputNames), std::move(exprs));
   }
 
   return node_;
+}
+
+LogicalPlanNodePtr PlanBuilder::build(
+    std::vector<std::optional<std::string>> outputNames) {
+  VELOX_USER_CHECK_NOT_NULL(node_);
+
+  const auto& rowType = node_->outputType();
+  VELOX_USER_CHECK_EQ(outputNames.size(), rowType->size());
+
+  auto defaultNames = findOrAssignOutputNames();
+
+  std::vector<OutputNode::Entry> entries;
+  entries.reserve(outputNames.size());
+
+  for (size_t i = 0; i < outputNames.size(); ++i) {
+    entries.emplace_back(
+        OutputNode::Entry{
+            static_cast<int32_t>(i),
+            std::move(outputNames[i]).value_or(std::move(defaultNames[i]))});
+  }
+
+  return std::make_shared<OutputNode>(nextId(), node_, std::move(entries));
 }
 
 } // namespace facebook::axiom::logical_plan

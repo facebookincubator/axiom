@@ -148,12 +148,15 @@ class LogicalPlanMatcherBuilder {
   /// Matches a SampleNode.
   LogicalPlanMatcherBuilder& sample(OnMatchCallback onMatch = nullptr);
 
+  /// Matches an OutputNode.
+  LogicalPlanMatcherBuilder& output(OnMatchCallback onMatch = nullptr);
+
+  /// Matches an OutputNode with the specified output column names.
+  LogicalPlanMatcherBuilder& output(
+      const std::vector<std::string>& expectedNames);
+
   /// Builds and returns the constructed LogicalPlanMatcher.
-  std::shared_ptr<LogicalPlanMatcher> build() {
-    VELOX_USER_CHECK_NOT_NULL(
-        matcher_, "Cannot build an empty LogicalPlanMatcher.");
-    return matcher_;
-  }
+  std::shared_ptr<LogicalPlanMatcher> build();
 
  private:
   std::shared_ptr<LogicalPlanMatcher> matcher_;

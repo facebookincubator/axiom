@@ -43,6 +43,10 @@ class PrestoParserTestBase : public testing::Test {
   /// Parses a SQL statement with expression optimization enabled.
   SqlStatementPtr parseSql(std::string_view sql);
 
+  /// Parses a SELECT statement and returns the logical plan.
+  facebook::axiom::logical_plan::LogicalPlanNodePtr parseSelect(
+      std::string_view sql);
+
   /// Parses an EXPLAIN statement and verifies the underlying plan matches.
   void testExplain(
       std::string_view sql,

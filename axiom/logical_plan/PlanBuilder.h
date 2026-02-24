@@ -516,10 +516,17 @@ class PlanBuilder {
   /// copy of each USING column in the output followed by non-USING columns from
   /// both sides in their original order. For FULL OUTER joins, USING columns
   /// are coalesced.
+  ///
+  /// @param outputIndices If non-null, populated with the mapping from each
+  /// output column position to its source position in the standard join output
+  /// (left columns concatenated with right columns). This allows callers to
+  /// reorder parallel metadata (e.g., user-specified output names) to match the
+  /// dedup projection's column order.
   PlanBuilder& joinUsing(
       const PlanBuilder& right,
       const std::vector<std::string>& columns,
-      JoinType joinType);
+      JoinType joinType,
+      std::vector<int32_t>* outputIndices = nullptr);
 
   /// Adds a cross join (cartesian product) with the 'right' plan.
   PlanBuilder& crossJoin(const PlanBuilder& right) {
@@ -709,9 +716,28 @@ class PlanBuilder {
   /// is anonymous, assigns unique name before returning.
   std::string findOrAssignOutputNameAt(size_t index) const;
 
-  /// @param useIds Boolean indicating whether to use user-specified names or
-  /// use auto-generated IDs for the output column names.
-  LogicalPlanNodePtr build(bool useIds = false);
+  /// Returns the current plan node without adding an OutputNode.
+  LogicalPlanNodePtr planNode() const {
+    VELOX_USER_CHECK_NOT_NULL(node_);
+    return node_;
+  }
+
+  /// Builds the plan using unambiguous user-specified names for output columns.
+  /// Disambiguated names (e.g. key_0 for a duplicate key after a join) are
+  /// preserved as-is. Creates an OutputNode at the root if any resolved name
+  /// differs from the internal ID.
+  LogicalPlanNodePtr build();
+
+  /// Builds the plan with explicit output names. For each position, uses the
+  /// user-specified name if set, otherwise resolves the original column name
+  /// (undoing disambiguation, e.g. key_0 back to key). This allows duplicate
+  /// and empty output names per SQL semantics. Creates an OutputNode at the
+  /// root if any resolved name differs from the internal ID.
+  ///
+  /// Example: SELECT 1 AS "", 2 AS "", 3 AS x, 4 AS x
+  /// Empty and duplicate aliases cannot be represented internally, so the
+  /// caller provides them as user-specified names: ("", "", "x", "x").
+  LogicalPlanNodePtr build(std::vector<std::optional<std::string>> outputNames);
 
  private:
   // Stores resolved internal IDs for a USING column from both sides of the
@@ -739,7 +765,8 @@ class PlanBuilder {
   // single copy of each USING column followed by all non-USING columns.
   void addJoinUsingProjection(
       const std::vector<UsingColumn>& usingColumns,
-      JoinType joinType);
+      JoinType joinType,
+      std::vector<int32_t>* outputIndices);
 
   std::string nextId() {
     return planNodeIdGenerator_->next();
