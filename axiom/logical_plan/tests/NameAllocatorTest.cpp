@@ -32,6 +32,10 @@ TEST(NameAllocatorTest, basic) {
 
   EXPECT_EQ(allocator.newName("foo_bar"), "foo_bar");
   EXPECT_EQ(allocator.newName("foo_bar"), "foo_bar_3");
+
+  // Trailing underscore is preserved (not stripped as a numeric suffix).
+  EXPECT_EQ(allocator.newName("x_"), "x_");
+  EXPECT_EQ(allocator.newName("x_"), "x__4");
 }
 
 } // namespace facebook::axiom::logical_plan
