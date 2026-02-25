@@ -240,6 +240,17 @@ class Optimization {
   void addAggregation(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)
       const;
 
+  // Transforms aggregations where all aggregates are DISTINCT with the same
+  // args into a two-level aggregation: inner level GROUP BY (keys +
+  // distinct_args) -> outer level AGG without DISTINCT.
+  void transformDistinctToGroupBy(
+      RelationOpPtr& plan,
+      PlanCost& cost,
+      const ExprVector& groupingKeys,
+      const ExprVector& distinctArgs,
+      const AggregateVector& aggregates,
+      AggregationPlanCP aggPlan) const;
+
   void addOrderBy(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)
       const;
 
