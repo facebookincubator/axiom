@@ -42,6 +42,23 @@ std::vector<const lp::TableScanNode*> findTableScans(
   return scans;
 }
 
+/// Collect all nodes with a subquery alias by walking the plan tree.
+std::vector<lp::LogicalPlanNodePtr> findSubqueryAliases(
+    const lp::LogicalPlanNodePtr& root) {
+  std::vector<lp::LogicalPlanNodePtr> result;
+  std::function<void(const lp::LogicalPlanNodePtr&)> walk =
+      [&](const lp::LogicalPlanNodePtr& node) {
+        if (node->subqueryAlias().has_value()) {
+          result.push_back(node);
+        }
+        for (const auto& input : node->inputs()) {
+          walk(input);
+        }
+      };
+  walk(root);
+  return result;
+}
+
 class PrestoParserTest : public PrestoParserTestBase {};
 
 TEST_F(PrestoParserTest, parseMultiple) {
@@ -1378,6 +1395,74 @@ TEST_F(PrestoParserTest, windowFunction) {
               "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
           })
           .output());
+}
+
+TEST_F(PrestoParserTest, cteSubqueryAlias) {
+  // The alias lands on the CTE's subtree root, which can be any node type.
+  {
+    // CTE body is "SELECT 1 as x" — alias on a ProjectNode.
+    auto statement =
+        parseSql("WITH cte AS (SELECT 1 as x) SELECT * FROM cte");
+    const auto& plan = statement->as<SelectStatement>()->plan();
+
+    auto aliases = findSubqueryAliases(plan);
+    ASSERT_EQ(aliases.size(), 1);
+    ASSERT_TRUE(aliases[0]->is(lp::NodeKind::kProject));
+    ASSERT_EQ(aliases[0]->subqueryAlias().value(), "cte");
+  }
+
+  {
+    // CTE body is "SELECT * FROM nation" — alias on a TableScanNode.
+    auto statement =
+        parseSql("WITH src AS (SELECT * FROM nation) SELECT * FROM src");
+    const auto& plan = statement->as<SelectStatement>()->plan();
+
+    auto aliases = findSubqueryAliases(plan);
+    ASSERT_EQ(aliases.size(), 1);
+    ASSERT_TRUE(aliases[0]->is(lp::NodeKind::kTableScan));
+    ASSERT_EQ(aliases[0]->subqueryAlias().value(), "src");
+  }
+}
+
+TEST_F(PrestoParserTest, chainedCteSubqueryAlias) {
+  // Each CTE gets its alias on its own subtree node. Using a filter in b's
+  // body ensures a and b land on different nodes.
+  auto statement = parseSql(
+      "WITH a AS (SELECT 1 as x), b AS (SELECT * FROM a WHERE x > 0) "
+      "SELECT * FROM b");
+  const auto& plan = statement->as<SelectStatement>()->plan();
+
+  auto aliases = findSubqueryAliases(plan);
+  ASSERT_EQ(aliases.size(), 2);
+  ASSERT_EQ(aliases[0]->subqueryAlias().value(), "b");
+  ASSERT_EQ(aliases[1]->subqueryAlias().value(), "a");
+}
+
+TEST_F(PrestoParserTest, inlineSubqueryAlias) {
+  auto statement = parseSql("SELECT * FROM (SELECT 1 as x) AS stg");
+  const auto& plan = statement->as<SelectStatement>()->plan();
+
+  auto aliases = findSubqueryAliases(plan);
+  ASSERT_EQ(aliases.size(), 1);
+  ASSERT_EQ(aliases[0]->subqueryAlias().value(), "stg");
+}
+
+TEST_F(PrestoParserTest, subqueryAliasSerdeRoundTrip) {
+  Type::registerSerDe();
+  lp::Expr::registerSerDe();
+  lp::LogicalPlanNode::registerSerDe();
+
+  auto statement = parseSql("WITH cte AS (SELECT 1 as x) SELECT * FROM cte");
+  const auto& plan = statement->as<SelectStatement>()->plan();
+
+  auto aliases = findSubqueryAliases(plan);
+  ASSERT_EQ(aliases.size(), 1);
+
+  auto serialized = aliases[0]->serialize();
+  auto deserialized =
+      ISerializable::deserialize<lp::LogicalPlanNode>(serialized);
+  ASSERT_TRUE(deserialized->subqueryAlias().has_value());
+  ASSERT_EQ(deserialized->subqueryAlias().value(), "cte");
 }
 
 } // namespace

@@ -126,6 +126,18 @@ class LogicalPlanNode : public velox::ISerializable {
       const PlanNodeVisitor& visitor,
       PlanNodeVisitorContext& context) const = 0;
 
+  /// Returns the CTE or inline subquery alias, if set.
+  const std::optional<std::string>& subqueryAlias() const {
+    return subqueryAlias_;
+  }
+
+  /// Sets the CTE or inline subquery alias. Uses mutable field because
+  /// nodes are const once constructed and this is annotation metadata
+  /// that does not affect plan shape or output types.
+  void setSubqueryAlias(std::string alias) const {
+    subqueryAlias_ = std::move(alias);
+  }
+
   /// Registers deserializers for all LogicalPlanNode subclasses.
   static void registerSerDe();
 
@@ -137,6 +149,7 @@ class LogicalPlanNode : public velox::ISerializable {
   const std::string id_;
   const std::vector<LogicalPlanNodePtr> inputs_;
   const velox::RowTypePtr outputType_;
+  mutable std::optional<std::string> subqueryAlias_;
 };
 
 /// A table whose content is embedded in the plan.
