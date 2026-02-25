@@ -17,6 +17,7 @@
 #pragma once
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "folly/CppAttributes.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/Options.h"
@@ -52,7 +53,8 @@ class HivePartitionType : public connector::PartitionType {
   /// Types are compatible if numPartitions of one is an interger multiple of
   /// the other. The partition to use for copartitioning is the one with the
   /// fewer partitions. If numPartitions is the same, returns 'this'.
-  const PartitionType* copartition(const PartitionType& any) const override;
+  const PartitionType* FOLLY_NULLABLE
+  copartition(const PartitionType& any) const override;
 
   velox::core::PartitionFunctionSpecPtr makeSpec(
       const std::vector<velox::column_index_t>& channels,
@@ -102,9 +104,9 @@ class HiveTableLayout : public TableLayout {
       velox::connector::Connector* connector,
       std::vector<const Column*> columns,
       std::optional<int32_t> numPartitions,
-      std::vector<const Column*> partitionedByColumns,
-      std::vector<const Column*> sortedByColumns,
-      std::vector<SortOrder> sortOrder,
+      const std::vector<const Column*>& partitionedByColumns,
+      const std::vector<const Column*>& sortedByColumns,
+      const std::vector<SortOrder>& sortOrder,
       std::vector<const Column*> lookupKeys,
       std::vector<const Column*> hivePartitionedByColumns,
       velox::dwio::common::FileFormat fileFormat);

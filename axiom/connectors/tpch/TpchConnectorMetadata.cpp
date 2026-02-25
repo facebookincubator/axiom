@@ -69,13 +69,13 @@ double getScaleFactor(const std::string& schema) {
 } // namespace
 
 std::vector<PartitionHandlePtr> TpchSplitManager::listPartitions(
-    const connector::ConnectorSessionPtr& session,
+    const connector::ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& /*tableHandle*/) {
   return {std::make_shared<connector::PartitionHandle>()};
 }
 
 std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
-    const connector::ConnectorSessionPtr& session,
+    const connector::ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& /*partitions*/,
     SplitOptions options) {
@@ -100,7 +100,7 @@ std::vector<SplitSource::SplitAndGroup> TpchSplitSource::getSplits(
     // Generate splits if not already done
     auto rowType = velox::tpch::getTableSchema(table_);
     size_t rowSize = 0;
-    for (auto i = 0; i < rowType->children().size(); i++) {
+    for (size_t i = 0; i < rowType->children().size(); i++) {
       // TODO: use actual size
       rowSize += 10;
     }
@@ -148,16 +148,16 @@ TpchConnectorMetadata::TpchConnectorMetadata(
 }
 
 velox::connector::ColumnHandlePtr TpchTableLayout::createColumnHandle(
-    const ConnectorSessionPtr& session,
+    const ConnectorSessionPtr& /*session*/,
     const std::string& columnName,
-    std::vector<velox::common::Subfield> subfields,
-    std::optional<velox::TypePtr> castToType,
-    SubfieldMapping subfieldMapping) const {
+    std::vector<velox::common::Subfield> /*subfields*/,
+    std::optional<velox::TypePtr> /*castToType*/,
+    SubfieldMapping /*subfieldMapping*/) const {
   return std::make_shared<velox::connector::tpch::TpchColumnHandle>(columnName);
 }
 
 velox::connector::ConnectorTableHandlePtr TpchTableLayout::createTableHandle(
-    const ConnectorSessionPtr& session,
+    const ConnectorSessionPtr& /*session*/,
     std::vector<velox::connector::ColumnHandlePtr> /*columnHandles*/,
     velox::core::ExpressionEvaluator& /*evaluator*/,
     std::vector<velox::core::TypedExprPtr> filters,
@@ -185,8 +185,8 @@ velox::connector::ConnectorTableHandlePtr TpchTableLayout::createTableHandle(
 }
 
 std::pair<int64_t, int64_t> TpchTableLayout::sample(
-    const velox::connector::ConnectorTableHandlePtr& handle,
-    float pct,
+    const velox::connector::ConnectorTableHandlePtr& /*handle*/,
+    float /*pct*/,
     const std::vector<velox::core::TypedExprPtr>& /* extraFilters */,
     velox::RowTypePtr /* outputType */,
     const std::vector<velox::common::Subfield>& /* fields */,

@@ -46,7 +46,7 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
   }
 
   std::shared_ptr<TestConnector> connector_;
-  ConnectorMetadata* metadata_;
+  ConnectorMetadata* metadata_{};
 };
 
 TEST_F(TestConnectorTest, connectorRegister) {

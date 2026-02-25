@@ -18,6 +18,7 @@
 #include "axiom/common/Enums.h"
 #include "axiom/connectors/ConnectorSession.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
+#include "folly/CppAttributes.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/Connector.h"
 #include "velox/type/Subfield.h"
@@ -217,8 +218,8 @@ class PartitionType {
   /// the function is the same. In such a case the partition to use is the 8 way
   /// one. On the 16 side data from partitions 0 and 1 match 0 on the 8 side and
   /// 2, 3 match 1 and so on.
-  virtual const PartitionType* copartition(
-      const PartitionType& other) const = 0;
+  virtual const PartitionType* FOLLY_NULLABLE
+  copartition(const PartitionType& other) const = 0;
 
   /// Returns a factory that makes partition functions. The function takes a
   /// RowVector and calculates a partition number from the columns identified by
@@ -461,7 +462,7 @@ class TableLayout {
       std::vector<ColumnStatistics>* statistics = nullptr) const = 0;
 
   /// Return a column with the matching name. Returns nullptr if not found.
-  const Column* findColumn(std::string_view name) const;
+  const Column* FOLLY_NULLABLE findColumn(std::string_view name) const;
 
   /// Creates a ColumnHandle for 'columnName'. If the type is a complex type,
   /// 'subfields' specifies which subfields need to be retrievd. Empty
@@ -585,7 +586,7 @@ class Table : public std::enable_shared_from_this<Table> {
     return columnMap_;
   }
 
-  const Column* findColumn(std::string_view name) const {
+  const Column* FOLLY_NULLABLE findColumn(std::string_view name) const {
     const auto& map = columnMap();
     auto it = map.find(name);
     return it == map.end() ? nullptr : it->second;
@@ -605,7 +606,7 @@ class Table : public std::enable_shared_from_this<Table> {
   /// an update or delete record. These may be for example some connector
   /// specific opaque row id or primary key columns.
   virtual std::vector<velox::connector::ColumnHandlePtr> rowIdHandles(
-      WriteKind kind) const {
+      WriteKind /*kind*/) const {
     VELOX_UNSUPPORTED();
   }
 
@@ -705,7 +706,8 @@ class ConnectorMetadata {
   /// Temporary APIs to assist in removing dependency on ConnectorMetadata from
   /// Velox.
   static ConnectorMetadata* metadata(std::string_view connectorId);
-  static ConnectorMetadata* tryMetadata(std::string_view connectorId);
+  static ConnectorMetadata* FOLLY_NULLABLE
+  tryMetadata(std::string_view connectorId);
   static ConnectorMetadata* metadata(velox::connector::Connector* connector);
   static void registerMetadata(
       std::string_view connectorId,
@@ -731,7 +733,7 @@ class ConnectorMetadata {
   /// connector ID / catalog prefix, but may include the schema.
   ///
   /// @return nullptr if view doesn't exist.
-  virtual ViewPtr findView(std::string_view name) {
+  virtual ViewPtr findView(std::string_view /*name*/) {
     return nullptr;
   }
 
@@ -755,10 +757,10 @@ class ConnectorMetadata {
   /// table is not available via the findTable interface until after finishWrite
   /// completes.
   virtual TablePtr createTable(
-      const ConnectorSessionPtr& session,
-      const std::string& tableName,
-      const velox::RowTypePtr& rowType,
-      const folly::F14FastMap<std::string, velox::Variant>& options) {
+      const ConnectorSessionPtr& /*session*/,
+      const std::string& /*tableName*/,
+      const velox::RowTypePtr& /*rowType*/,
+      const folly::F14FastMap<std::string, velox::Variant>& /*options*/) {
     VELOX_UNSUPPORTED();
   }
 
@@ -771,9 +773,9 @@ class ConnectorMetadata {
   /// connector-dependent, and ConnectorSession may be null for connectors which
   /// do not require it.
   virtual ConnectorWriteHandlePtr beginWrite(
-      const ConnectorSessionPtr& session,
-      const TablePtr& table,
-      WriteKind kind) {
+      const ConnectorSessionPtr& /*session*/,
+      const TablePtr& /*table*/,
+      WriteKind /*kind*/) {
     VELOX_UNSUPPORTED();
   }
 
@@ -788,9 +790,9 @@ class ConnectorMetadata {
   /// null for connectors which do not require it.
   /// The returned future contains the number of rows "written".
   virtual RowsFuture finishWrite(
-      const ConnectorSessionPtr& session,
-      const ConnectorWriteHandlePtr& handle,
-      const std::vector<velox::RowVectorPtr>& writeResults) {
+      const ConnectorSessionPtr& /*session*/,
+      const ConnectorWriteHandlePtr& /*handle*/,
+      const std::vector<velox::RowVectorPtr>& /*writeResults*/) {
     VELOX_UNSUPPORTED();
   }
 
@@ -802,8 +804,8 @@ class ConnectorMetadata {
   /// synchronous operation, the connector should perform the abort and return
   /// an already-fulfilled future.
   virtual velox::ContinueFuture abortWrite(
-      const ConnectorSessionPtr& session,
-      const ConnectorWriteHandlePtr& handle) noexcept {
+      const ConnectorSessionPtr& /*session*/,
+      const ConnectorWriteHandlePtr& /*handle*/) noexcept {
     return {};
   }
 
@@ -811,9 +813,9 @@ class ConnectorMetadata {
   /// is false, raises an error. Otherwise, returns true if table was dropped
   /// and false if table didn't exist.
   virtual bool dropTable(
-      const ConnectorSessionPtr& session,
-      std::string_view tableName,
-      bool ifExists) {
+      const ConnectorSessionPtr& /*session*/,
+      std::string_view /*tableName*/,
+      bool /*ifExists*/) {
     VELOX_UNSUPPORTED();
   }
 

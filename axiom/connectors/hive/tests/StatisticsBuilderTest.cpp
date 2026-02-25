@@ -55,8 +55,8 @@ class StatisticsBuilderTest : public ::testing::Test,
   void assertMinMax(
       const ColumnStatistics& stats,
       TypeKind expectedKind,
-      T expectedMin,
-      T expectedMax) {
+      const T& expectedMin,
+      const T& expectedMax) {
     ASSERT_TRUE(stats.min.has_value());
     ASSERT_TRUE(stats.max.has_value());
     EXPECT_EQ(stats.min->kind(), expectedKind);

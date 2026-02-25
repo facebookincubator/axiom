@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <utility>
+
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/StatisticsBuilder.h"
@@ -66,7 +68,7 @@ class LocalHiveConnectorMetadata;
 
 class LocalHiveSplitManager : public ConnectorSplitManager {
  public:
-  LocalHiveSplitManager(LocalHiveConnectorMetadata* /* metadata */) {}
+  explicit LocalHiveSplitManager(LocalHiveConnectorMetadata* /* metadata */) {}
 
   std::vector<PartitionHandlePtr> listPartitions(
       const ConnectorSessionPtr& session,
@@ -89,9 +91,9 @@ class LocalHiveTableLayout : public HiveTableLayout {
       velox::connector::Connector* connector,
       std::vector<const Column*> columns,
       std::optional<int32_t> numBuckets,
-      std::vector<const Column*> partitioning,
-      std::vector<const Column*> orderColumns,
-      std::vector<SortOrder> sortOrder,
+      const std::vector<const Column*>& partitioning,
+      const std::vector<const Column*>& orderColumns,
+      const std::vector<SortOrder>& sortOrder,
       std::vector<const Column*> lookupKeys,
       std::vector<const Column*> hivePartitionColumns,
       velox::dwio::common::FileFormat fileFormat,
@@ -100,13 +102,13 @@ class LocalHiveTableLayout : public HiveTableLayout {
             name,
             table,
             connector,
-            columns,
+            std::move(columns),
             numBuckets,
             partitioning,
             orderColumns,
             sortOrder,
-            lookupKeys,
-            hivePartitionColumns,
+            std::move(lookupKeys),
+            std::move(hivePartitionColumns),
             fileFormat),
         serdeParameters_(std::move(serdeParameters)) {}
 
@@ -293,7 +295,8 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
   std::shared_ptr<velox::memory::MemoryPool> schemaPool_;
   std::shared_ptr<velox::core::QueryCtx> queryCtx_;
   std::shared_ptr<velox::connector::ConnectorQueryCtx> connectorQueryCtx_;
-  velox::dwio::common::FileFormat format_;
+  velox::dwio::common::FileFormat format_{
+      velox::dwio::common::FileFormat::UNKNOWN};
   folly::F14FastMap<std::string, std::shared_ptr<LocalTable>> tables_;
   LocalHiveSplitManager splitManager_;
   std::shared_ptr<HiveMetadataConfig> hiveMetadataConfig_;

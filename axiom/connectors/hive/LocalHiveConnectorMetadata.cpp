@@ -17,6 +17,7 @@
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include <dirent.h>
 #include <folly/Conv.h>
+#include <folly/CppAttributes.h>
 #include <folly/json.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -34,15 +35,15 @@
 namespace facebook::axiom::connector::hive {
 
 std::vector<PartitionHandlePtr> LocalHiveSplitManager::listPartitions(
-    const ConnectorSessionPtr& session,
-    const velox::connector::ConnectorTableHandlePtr& tableHandle) {
+    const ConnectorSessionPtr& /*session*/,
+    const velox::connector::ConnectorTableHandlePtr& /*tableHandle*/) {
   // All tables are unpartitioned.
   folly::F14FastMap<std::string, std::optional<std::string>> empty;
   return {std::make_shared<HivePartitionHandle>(empty, std::nullopt)};
 }
 
 namespace {
-velox::common::Filter* findFilter(
+velox::common::Filter* FOLLY_NULLABLE findFilter(
     const velox::connector::hive::HiveTableHandle& tableHandle,
     const std::string& columnName) {
   auto it =
@@ -65,7 +66,8 @@ std::vector<const FileInfo*> filterFilesByTableHandle(
   std::vector<const FileInfo*> selectedFiles;
   for (const auto& file : files) {
     if (pathFilter &&
-        !pathFilter->testBytes(file->path.c_str(), file->path.size())) {
+        !pathFilter->testBytes(
+            file->path.c_str(), static_cast<int32_t>(file->path.size()))) {
       continue;
     }
     if (bucketFilter && file->bucketNumber.has_value() &&
@@ -79,7 +81,7 @@ std::vector<const FileInfo*> filterFilesByTableHandle(
 } // namespace
 
 std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
-    const ConnectorSessionPtr& session,
+    const ConnectorSessionPtr& /*session*/,
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     const std::vector<PartitionHandlePtr>& /*partitions*/,
     SplitOptions options) {
@@ -231,7 +233,7 @@ std::shared_ptr<velox::core::QueryCtx> LocalHiveConnectorMetadata::makeQueryCtx(
 
   return velox::core::QueryCtx::create(
       hiveConnector_->executor(),
-      velox::core::QueryConfig(config),
+      velox::core::QueryConfig(std::move(config)),
       std::move(connectorConfigs),
       velox::cache::AsyncDataCache::getInstance(),
       rootPool_->shared_from_this(),
@@ -290,7 +292,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
   }
 
   statistics->resize(builders.size());
-  for (auto i = 0; i < builders.size(); ++i) {
+  for (size_t i = 0; i < builders.size(); ++i) {
     ColumnStatistics runnerStats;
     if (builders[i]) {
       builders[i]->build(runnerStats);
@@ -303,7 +305,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
 std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
     const velox::connector::ConnectorTableHandlePtr& tableHandle,
     float pct,
-    velox::RowTypePtr scanType,
+    velox::RowTypePtr /*scanType*/,
     const std::vector<velox::common::Subfield>& fields,
     velox::HashStringAllocator* allocator,
     std::vector<std::unique_ptr<StatisticsBuilder>>* statsBuilders) const {
@@ -321,6 +323,7 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
   for (const auto& field : fields) {
     const auto& name = field.baseName();
     const auto* column = table().findColumn(name);
+    VELOX_CHECK_NOT_NULL(column, "Column not found: {}", name);
     const auto& type = column->type();
 
     names.push_back(name);
@@ -437,7 +440,7 @@ int32_t extractDigitsAfterLastSlash(std::string_view path) {
 
 void listFiles(
     std::string_view path,
-    std::function<int32_t(std::string_view)> parseBucketNumber,
+    const std::function<int32_t(std::string_view)>& parseBucketNumber,
     int32_t prefixSize,
     std::vector<std::unique_ptr<const FileInfo>>& result) {
   for (auto const& dirEntry : fs::directory_iterator{path}) {
@@ -467,7 +470,7 @@ void listFiles(
       std::vector<std::string> parts;
       folly::split('=', dir, parts);
       if (parts.size() == 2) {
-        file->partitionKeys[parts[0]] = parts[1];
+        file->partitionKeys[parts.at(0)] = parts.at(1);
       }
     }
     result.push_back(std::move(file));
@@ -507,7 +510,7 @@ int32_t parseBucketNumber(const velox::Variant& value) {
           HiveWriteOptions::kBucketCount);
       VELOX_USER_CHECK_GT(
           numBuckets, 0, "{} must be > 0", HiveWriteOptions::kBucketCount);
-      return numBuckets;
+      return static_cast<int32_t>(numBuckets);
     }
     default:
       VELOX_USER_FAIL(
@@ -651,20 +654,20 @@ CreateTableOptions parseCreateTableOptions(
     options.serdeOptions = serdeOpts;
   }
 
-  for (auto column : obj["partitionColumns"]) {
-    options.partitionedByColumns.push_back(column["name"].asString());
+  for (const auto& partCol : obj["partitionColumns"]) {
+    options.partitionedByColumns.push_back(partCol["name"].asString());
   }
 
   if (obj.count("bucketProperty")) {
     const auto& bucketObj = obj["bucketProperty"];
     options.numBuckets = atoi(bucketObj["bucketCount"].asString().c_str());
 
-    for (const auto& column : bucketObj["bucketedBy"]) {
-      options.bucketedByColumns.push_back(column.asString());
+    for (const auto& bucketCol : bucketObj["bucketedBy"]) {
+      options.bucketedByColumns.push_back(bucketCol.asString());
     }
 
-    for (const auto& column : bucketObj["sortedBy"]) {
-      options.sortedByColumns.push_back(column.asString());
+    for (const auto& sortCol : bucketObj["sortedBy"]) {
+      options.sortedByColumns.push_back(sortCol.asString());
     }
   }
 
@@ -772,9 +775,10 @@ std::shared_ptr<LocalTable> createLocalTable(
       std::string{name}, schema, numBuckets.has_value(), std::move(options));
 
   std::vector<const Column*> partitionedBy;
-  for (const auto& name : createTableOptions.partitionedByColumns) {
-    auto column = table->findColumn(name);
-    VELOX_CHECK_NOT_NULL(column, "Partitioned-by column not found: {}", name);
+  for (const auto& columnName : createTableOptions.partitionedByColumns) {
+    auto column = table->findColumn(columnName);
+    VELOX_CHECK_NOT_NULL(
+        column, "Partitioned-by column not found: {}", columnName);
     partitionedBy.push_back(column);
   }
 
@@ -782,15 +786,17 @@ std::shared_ptr<LocalTable> createLocalTable(
   std::vector<const Column*> sortedBy;
   std::vector<SortOrder> sortOrders;
   if (numBuckets.has_value()) {
-    for (const auto& name : createTableOptions.bucketedByColumns) {
-      auto column = table->findColumn(name);
-      VELOX_CHECK_NOT_NULL(column, "Bucketed-by column not found: {}", name);
+    for (const auto& columnName : createTableOptions.bucketedByColumns) {
+      auto column = table->findColumn(columnName);
+      VELOX_CHECK_NOT_NULL(
+          column, "Bucketed-by column not found: {}", columnName);
       bucketedBy.push_back(column);
     }
 
-    for (const auto& name : createTableOptions.sortedByColumns) {
-      auto column = table->findColumn(name);
-      VELOX_CHECK_NOT_NULL(column, "Sorted-by column not found: {}", name);
+    for (const auto& columnName : createTableOptions.sortedByColumns) {
+      auto column = table->findColumn(columnName);
+      VELOX_CHECK_NOT_NULL(
+          column, "Sorted-by column not found: {}", columnName);
       sortedBy.push_back(column);
       sortOrders.push_back(SortOrder{true, true}); // ASC NULLS FIRST.
     }
@@ -839,7 +845,7 @@ std::shared_ptr<LocalTable> createTableFromSchema(
   }
 
   VELOX_CHECK_EQ(jsons.size(), 1);
-  auto json = jsons[0];
+  const auto& json = jsons[0];
 
   const auto options = parseCreateTableOptions(json, defaultFileFormat);
   const auto schema = parseSchema(json);
@@ -869,7 +875,11 @@ void LocalHiveConnectorMetadata::loadTable(
 
   std::vector<std::unique_ptr<const FileInfo>> files;
   std::string pathString = tablePath;
-  listFiles(pathString, parseBucketNumber, pathString.size(), files);
+  listFiles(
+      pathString,
+      parseBucketNumber,
+      static_cast<int32_t>(pathString.size()),
+      files);
 
   for (auto& info : files) {
     // If the table has a schema it has a layout that gives the file format.
@@ -1007,7 +1017,7 @@ void LocalTable::sampleNumDistincts(
   std::vector<velox::common::Subfield> fields;
   fields.reserve(type()->size());
   for (auto i = 0; i < type()->size(); ++i) {
-    fields.push_back(velox::common::Subfield(type()->nameOf(i)));
+    fields.emplace_back(type()->nameOf(i));
   }
 
   // Sample the table. Adjust distinct values according to the samples.
@@ -1040,9 +1050,12 @@ void LocalTable::sampleNumDistincts(
       handle, samplePct, type(), fields, allocator.get(), &statsBuilders);
 
   numSampledRows_ = sampled;
-  for (auto i = 0; i < statsBuilders.size(); ++i) {
+  for (size_t i = 0; i < statsBuilders.size(); ++i) {
     if (const auto& builder = statsBuilders[i]) {
-      auto* column = findColumn(type()->nameOf(i));
+      auto columnIdx = static_cast<uint32_t>(i);
+      auto* column = findColumn(type()->nameOf(columnIdx));
+      VELOX_CHECK_NOT_NULL(
+          column, "Column not found: {}", type()->nameOf(columnIdx));
 
       ColumnStatistics& stats = *const_cast<Column*>(column)->mutableStats();
       builder->build(stats);
@@ -1077,9 +1090,8 @@ void LocalTable::sampleNumDistincts(
           }
         }
 
-        const_cast<Column*>(findColumn(type()->nameOf(i)))
-            ->mutableStats()
-            ->numDistinct = approxNumDistinct;
+        const_cast<Column*>(column)->mutableStats()->numDistinct =
+            approxNumDistinct;
       }
     }
   }
@@ -1124,7 +1136,7 @@ void deleteDirectoryContents(const std::string& path) {
       continue;
     }
     std::string fullPath = fmt::format("{}/{}", path, name);
-    struct stat st;
+    struct stat st{};
     if (stat(fullPath.c_str(), &st) == 0) {
       if (S_ISDIR(st.st_mode)) {
         deleteDirectoryRecursive(fullPath);
@@ -1173,7 +1185,7 @@ void move(const fs::path& sourceDir, const fs::path& targetDir) {
 
 // Check if directory exists.
 bool dirExists(const std::string& path) {
-  struct stat info;
+  struct stat info{};
   return stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
 }
 
@@ -1187,7 +1199,7 @@ void createDir(const std::string& path) {
 } // namespace
 
 TablePtr LocalHiveConnectorMetadata::createTable(
-    const ConnectorSessionPtr& session,
+    const ConnectorSessionPtr& /*session*/,
     const std::string& tableName,
     const velox::RowTypePtr& rowType,
     const folly::F14FastMap<std::string, velox::Variant>& options) {
@@ -1259,7 +1271,7 @@ void LocalHiveConnectorMetadata::reloadTableFromPath(
 }
 
 velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
-    const ConnectorSessionPtr& session,
+    const ConnectorSessionPtr& /*session*/,
     const ConnectorWriteHandlePtr& handle) noexcept try {
   std::lock_guard<std::mutex> l(mutex_);
   auto hiveHandle =

@@ -168,7 +168,8 @@ TableLayout::TableLayout(
   }
 }
 
-const Column* TableLayout::findColumn(std::string_view name) const {
+const Column* FOLLY_NULLABLE
+TableLayout::findColumn(std::string_view name) const {
   for (const auto& column : columns_) {
     if (column->name() == name) {
       return column;
@@ -188,8 +189,8 @@ metadataRegistry() {
 } // namespace
 
 // static
-ConnectorMetadata* ConnectorMetadata::tryMetadata(
-    std::string_view connectorId) {
+ConnectorMetadata* FOLLY_NULLABLE
+ConnectorMetadata::tryMetadata(std::string_view connectorId) {
   auto it = metadataRegistry().find(connectorId);
   if (it != metadataRegistry().end()) {
     return it->second.get();
