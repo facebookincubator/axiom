@@ -657,6 +657,11 @@ class PlanBuilder {
   /// "alias.column" in subsequent operations.
   PlanBuilder& as(const std::string& alias);
 
+  /// Sets the alias on the current TableScanNode. If a ProjectNode sits on
+  /// top of the scan (e.g. due to column aliases), looks through to the
+  /// underlying TableScanNode.
+  PlanBuilder& setTableScanAlias(const std::string& alias);
+
   /// Captures the current name-resolution scope into 'scope' so it can be
   /// passed to an inner PlanBuilder for correlated subqueries.
   ///

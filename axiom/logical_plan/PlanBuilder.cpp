@@ -1782,6 +1782,46 @@ PlanBuilder& PlanBuilder::as(const std::string& alias) {
   return *this;
 }
 
+PlanBuilder& PlanBuilder::setTableScanAlias(const std::string& alias) {
+  VELOX_USER_CHECK_NOT_NULL(node_);
+
+  if (node_->is(NodeKind::kTableScan)) {
+    const auto* scan = node_->as<TableScanNode>();
+    node_ = std::make_shared<TableScanNode>(
+        scan->id(),
+        scan->outputType(),
+        scan->connectorId(),
+        scan->tableName(),
+        scan->columnNames(),
+        alias);
+  } else if (node_->is(NodeKind::kProject)) {
+    // When the SQL has both column aliases and a table alias, e.g.
+    // `FROM orders AS o (col1, col2)`, the parser first creates a ProjectNode
+    // for the column renames, then calls setTableScanAlias for the table alias.
+    // Look through the ProjectNode to set the alias on the underlying scan.
+    const auto& input = node_->onlyInput();
+    if (input->is(NodeKind::kTableScan)) {
+      const auto* scan = input->as<TableScanNode>();
+      auto newScan = std::make_shared<TableScanNode>(
+          scan->id(),
+          scan->outputType(),
+          scan->connectorId(),
+          scan->tableName(),
+          scan->columnNames(),
+          alias);
+
+      const auto* project = node_->as<ProjectNode>();
+      node_ = std::make_shared<ProjectNode>(
+          project->id(),
+          std::move(newScan),
+          project->names(),
+          project->expressions());
+    }
+  }
+
+  return *this;
+}
+
 std::string PlanBuilder::newName(const std::string& hint) {
   return nameAllocator_->newName(hint);
 }
