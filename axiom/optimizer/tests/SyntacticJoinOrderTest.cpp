@@ -35,7 +35,7 @@ class SyntacticJoinOrderTest : public test::QueryTestBase {
   static void SetUpTestCase() {
     test::QueryTestBase::SetUpTestCase();
 
-    gTempDirectory = velox::exec::test::TempDirectoryPath::create();
+    gTempDirectory = velox::common::testutil::TempDirectoryPath::create();
 
     auto path = gTempDirectory->getPath();
     test::TpchDataGenerator::createTables(path);
@@ -59,7 +59,7 @@ class SyntacticJoinOrderTest : public test::QueryTestBase {
     return statement->as<::axiom::sql::presto::SelectStatement>()->plan();
   }
 
-  inline static std::shared_ptr<velox::exec::test::TempDirectoryPath>
+  inline static std::shared_ptr<velox::common::testutil::TempDirectoryPath>
       gTempDirectory;
 };
 

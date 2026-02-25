@@ -17,8 +17,8 @@
 #pragma once
 
 #include "axiom/runner/LocalRunner.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 namespace facebook::axiom::runner::test {
 
