@@ -16,6 +16,7 @@
 
 #include "axiom/sql/presto/ast/AstBuilder.h"
 
+#include <folly/Unicode.h>
 #include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
@@ -49,6 +50,98 @@ NodeLocation getLocation(antlr4::tree::TerminalNode* terminalNode) {
 // Remove leading and trailing quotes.
 std::string unquote(std::string_view value) {
   return std::string{value.substr(1, value.length() - 2)};
+}
+
+bool isHexDigit(char c) {
+  return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+      (c >= 'A' && c <= 'F');
+}
+
+// Check that the escape character is a printable ASCII character that is not a
+// hex digit, quote, or '+'.
+bool isValidUnicodeEscape(char c) {
+  return c > 0x20 && c < 0x7F && !isHexDigit(c) && c != '+' && c != '"' &&
+      c != '\'';
+}
+
+// Decode a Unicode string literal (U&'...' with optional UESCAPE).
+std::string decodeUnicodeLiteral(
+    PrestoSqlParser::UnicodeStringLiteralContext& ctx) {
+  char escape = '\\';
+  if (ctx.UESCAPE() != nullptr) {
+    auto escapeString = unquote(ctx.STRING()->getText());
+    VELOX_USER_CHECK_EQ(
+        escapeString.size(),
+        1,
+        "Invalid Unicode escape character: {}",
+        escapeString);
+    escape = escapeString[0];
+    VELOX_USER_CHECK(
+        isValidUnicodeEscape(escape),
+        "Invalid Unicode escape character: {}",
+        escapeString);
+  }
+
+  // Strip 'U&' prefix and quotes: U&'content' -> content.
+  auto rawText = ctx.UNICODE_STRING()->getText();
+  auto rawContent = unquote(std::string_view{rawText}.substr(2));
+
+  std::string result;
+  std::string escapedChars;
+  int32_t charsNeeded{0};
+
+  enum State { kEmpty, kEscaped, kUnicodeSequence };
+  auto state = kEmpty;
+
+  for (auto ch : rawContent) {
+    switch (state) {
+      case kEmpty:
+        if (ch == escape) {
+          state = kEscaped;
+        } else {
+          result += ch;
+        }
+        break;
+      case kEscaped:
+        if (ch == escape) {
+          result += escape;
+          state = kEmpty;
+        } else if (ch == '+') {
+          state = kUnicodeSequence;
+          charsNeeded = 6;
+        } else {
+          VELOX_USER_CHECK(isHexDigit(ch), "Invalid hexadecimal digit: {}", ch);
+          state = kUnicodeSequence;
+          charsNeeded = 4;
+          escapedChars += ch;
+        }
+        break;
+      case kUnicodeSequence:
+        VELOX_USER_CHECK(
+            isHexDigit(ch), "Incomplete escape sequence: {}", escapedChars);
+        escapedChars += ch;
+        if (escapedChars.size() == charsNeeded) {
+          auto codePoint =
+              static_cast<int32_t>(std::stoul(escapedChars, nullptr, 16));
+          VELOX_USER_CHECK(
+              codePoint >= 0 && codePoint <= 0x10FFFF,
+              "Invalid escaped character: {}",
+              escapedChars);
+          VELOX_USER_CHECK(
+              codePoint < 0xD800 || codePoint > 0xDFFF,
+              "Invalid escaped character: {}. Escaped character is a surrogate. Use '\\+123456' instead.",
+              escapedChars);
+          folly::appendCodePointToUtf8(codePoint, result);
+          escapedChars.clear();
+          state = kEmpty;
+        }
+        break;
+    }
+  }
+
+  VELOX_USER_CHECK(
+      state == kEmpty, "Incomplete escape sequence: {}", escapedChars);
+  return result;
 }
 
 } // namespace
@@ -1966,7 +2059,8 @@ std::any AstBuilder::visitBasicStringLiteral(
 std::any AstBuilder::visitUnicodeStringLiteral(
     PrestoSqlParser::UnicodeStringLiteralContext* ctx) {
   trace("visitUnicodeStringLiteral");
-  return visitChildren("visitUnicodeStringLiteral", ctx);
+  return std::static_pointer_cast<Expression>(std::make_shared<StringLiteral>(
+      getLocation(ctx), decodeUnicodeLiteral(*ctx)));
 }
 
 std::any AstBuilder::visitNullTreatment(
