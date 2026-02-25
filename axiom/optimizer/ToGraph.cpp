@@ -354,11 +354,6 @@ std::vector<int32_t> ToGraph::usedChannels(const lp::LogicalPlanNode& node) {
 
 namespace {
 
-bool isSpecialForm(const lp::ExprPtr& expr, lp::SpecialForm form) {
-  return expr->isSpecialForm() &&
-      expr->as<lp::SpecialFormExpr>()->form() == form;
-}
-
 bool isConstantBool(ExprCP expr, bool expected) {
   if (expr->isNot(PlanType::kLiteralExpr)) {
     return false;
@@ -446,21 +441,7 @@ bool ToGraph::isSubfield(
     Step& step,
     lp::ExprPtr& input) {
   if (isSpecialForm(expr, lp::SpecialForm::kDereference)) {
-    step.kind = StepKind::kField;
-    auto maybeIndex =
-        maybeIntegerLiteral(expr->inputAt(1)->as<lp::ConstantExpr>());
-    Name name = nullptr;
-    int64_t id = 0;
-    auto& rowType = expr->inputAt(0)->type()->as<velox::TypeKind::ROW>();
-    if (maybeIndex.has_value()) {
-      id = maybeIndex.value();
-    } else {
-      auto& field = expr->inputAt(1)->as<lp::ConstantExpr>()->value();
-      name = toName(field->value<velox::TypeKind::VARCHAR>());
-      id = rowType.getChildIdx(name);
-    }
-    step.field = name;
-    step.id = id;
+    step = extractDereferenceStep(expr);
     input = expr->inputAt(0);
     return true;
   }

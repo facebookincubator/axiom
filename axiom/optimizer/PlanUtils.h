@@ -110,6 +110,18 @@ int64_t integerValue(const velox::Variant* variant);
 std::optional<int64_t> maybeIntegerLiteral(
     const logical_plan::ConstantExpr* expr);
 
+/// Returns true if 'expr' points to an instance of 'form'.
+bool isSpecialForm(
+    const logical_plan::ExprPtr& expr,
+    logical_plan::SpecialForm form);
+
+/// Extracts field access information from a DEREFERENCE expression. Throws if
+/// 'expr' is not a DEREFERENCE.
+/// @param expr The DEREFERENCE expression.
+/// @return A Step with kField kind, field name, and field index. For anonymous
+/// structs, the field name will be an empty string.
+Step extractDereferenceStep(const logical_plan::ExprPtr& expr);
+
 std::string conjunctsToString(const ExprVector& conjuncts);
 
 std::string orderByToString(
