@@ -27,7 +27,7 @@ namespace lp = facebook::axiom::logical_plan;
 void HiveQueriesTestBase::SetUpTestCase() {
   test::QueryTestBase::SetUpTestCase();
 
-  gTempDirectory = exec::test::TempDirectoryPath::create();
+  gTempDirectory = common::testutil::TempDirectoryPath::create();
   test::TpchDataGenerator::createTables(gTempDirectory->getPath());
 
   LocalRunnerTestBase::localDataPath_ = gTempDirectory->getPath();

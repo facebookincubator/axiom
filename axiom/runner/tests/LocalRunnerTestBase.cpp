@@ -91,7 +91,7 @@ void LocalRunnerTestBase::makeTables() {
   initialized_ = true;
 
   if (localDataPath_.empty()) {
-    files_ = velox::exec::test::TempDirectoryPath::create();
+    files_ = velox::common::testutil::TempDirectoryPath::create();
     localDataPath_ = files_->getPath();
   }
 
