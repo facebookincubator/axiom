@@ -248,6 +248,14 @@ class ToGraph {
       const logical_plan::ExprPtr& condition,
       logical_plan::JoinType originalJoinType);
 
+  // Eliminates join when the ON clause contains a constant false condition.
+  // Returns true if the join was eliminated.
+  bool eliminateJoinOnConstantFalse(
+      logical_plan::JoinType joinType,
+      const logical_plan::LogicalPlanNodePtr& left,
+      const logical_plan::LogicalPlanNodePtr& right,
+      PlanObjectCP rightTable);
+
   // For LEFT JOIN with subquery conjuncts in the ON clause, processes the right
   // side inside a container DT and applies the subquery conjuncts as filters.
   // Returns the remaining non-subquery condition (possibly nullptr).

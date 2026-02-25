@@ -661,6 +661,7 @@ const auto& windowTypeNames() {
       kNames = {
           {WindowExpr::WindowType::kRows, "ROWS"},
           {WindowExpr::WindowType::kRange, "RANGE"},
+          {WindowExpr::WindowType::kGroups, "GROUPS"},
       };
   return kNames;
 }

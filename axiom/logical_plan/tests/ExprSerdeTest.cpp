@@ -185,15 +185,44 @@ TEST_F(ExprSerdeTest, windowExpr) {
                   .orderBy({SortKey(Col("x"), DESC)})),
       schema));
 
-  // sum() with PARTITION BY and ROWS frame.
+  // sum() with PARTITION BY and ROWS frame with value bounds.
   testRoundTrip(resolveWindow(
       Call("sum", Col("x"))
           .over(
               WindowSpec()
                   .partitionBy({Col("category")})
+                  .orderBy({SortKey(Col("x"), ASC)})
                   .rows(
+                      WindowExpr::BoundType::kPreceding,
+                      Lit(3LL),
+                      WindowExpr::BoundType::kFollowing,
+                      Lit(5LL))),
+      schema));
+
+  // sum() with PARTITION BY and RANGE frame.
+  testRoundTrip(resolveWindow(
+      Call("sum", Col("x"))
+          .over(
+              WindowSpec()
+                  .partitionBy({Col("category")})
+                  .orderBy({SortKey(Col("x"), ASC)})
+                  .range(
                       WindowExpr::BoundType::kUnboundedPreceding,
                       {},
+                      WindowExpr::BoundType::kCurrentRow,
+                      {})),
+      schema));
+
+  // sum() with PARTITION BY and GROUPS frame.
+  testRoundTrip(resolveWindow(
+      Call("sum", Col("x"))
+          .over(
+              WindowSpec()
+                  .partitionBy({Col("category")})
+                  .orderBy({SortKey(Col("x"), ASC)})
+                  .groups(
+                      WindowExpr::BoundType::kPreceding,
+                      Lit(2LL),
                       WindowExpr::BoundType::kCurrentRow,
                       {})),
       schema));

@@ -650,6 +650,27 @@ TEST_F(PlanPrinterTest, window) {
           testing::StartsWith("    rn := row_number() OVER ("),
           testing::StartsWith("  - Values"),
           testing::Eq("")));
+
+  lines = toSummaryLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq(
+              "- PROJECT [1]: 3 fields: a INTEGER, b INTEGER, rn BIGINT"),
+          testing::Eq("      expressions: field: 3, window: 1"),
+          testing::Eq("      functions: row_number: 1"),
+          testing::Eq("      projections: 1 out of 3"),
+          testing::Eq("  - VALUES [0]: 2 fields: a INTEGER, b INTEGER"),
+          testing::Eq("        rows: 3"),
+          testing::Eq("")));
+
+  lines = toSkeletonLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("- VALUES [0]: 2 fields"), testing::Eq("")));
 }
 
 TEST_F(PlanPrinterTest, windowWithPartitionBy) {
@@ -678,6 +699,27 @@ TEST_F(PlanPrinterTest, windowWithPartitionBy) {
               "    rn := row_number() OVER (PARTITION BY a ORDER BY b DESC"),
           testing::StartsWith("  - Values"),
           testing::Eq("")));
+
+  lines = toSummaryLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq(
+              "- PROJECT [1]: 3 fields: a INTEGER, b INTEGER, rn BIGINT"),
+          testing::Eq("      expressions: field: 4, window: 1"),
+          testing::Eq("      functions: row_number: 1"),
+          testing::Eq("      projections: 1 out of 3"),
+          testing::Eq("  - VALUES [0]: 2 fields: a INTEGER, b INTEGER"),
+          testing::Eq("        rows: 3"),
+          testing::Eq("")));
+
+  lines = toSkeletonLines(plan);
+
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::Eq("- VALUES [0]: 2 fields"), testing::Eq("")));
 }
 
 TEST_F(PlanPrinterTest, unnest) {

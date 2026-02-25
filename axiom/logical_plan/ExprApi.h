@@ -397,6 +397,13 @@ class WindowSpec {
       WindowExpr::BoundType endType,
       std::optional<ExprApi> endValue);
 
+  /// Specifies a GROUPS frame.
+  WindowSpec& groups(
+      WindowExpr::BoundType startType,
+      std::optional<ExprApi> startValue,
+      WindowExpr::BoundType endType,
+      std::optional<ExprApi> endValue);
+
   /// Sets IGNORE NULLS for the window function.
   WindowSpec& ignoreNulls() {
     ignoreNulls_ = true;
