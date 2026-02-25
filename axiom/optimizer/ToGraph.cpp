@@ -1494,13 +1494,6 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
           "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
     }
 
-    if (isDistinct) {
-      const auto& options = queryCtx()->optimization()->runnerOptions();
-      VELOX_CHECK(
-          options.numWorkers == 1 && options.numDrivers == 1,
-          "DISTINCT option for aggregation is supported only in single worker, single thread mode");
-    }
-
     auto name = toName(agg.outputNames()[channel]);
 
     AggregateDedupKey key{
