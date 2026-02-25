@@ -359,15 +359,28 @@ bool isSpecialForm(const lp::ExprPtr& expr, lp::SpecialForm form) {
       expr->as<lp::SpecialFormExpr>()->form() == form;
 }
 
-bool isConstantTrue(ExprCP expr) {
+bool isConstantBool(ExprCP expr, bool expected) {
   if (expr->isNot(PlanType::kLiteralExpr)) {
     return false;
   }
 
   const auto& variant = expr->as<Literal>()->literal();
   return variant.kind() == velox::TypeKind::BOOLEAN && !variant.isNull() &&
-      variant.value<bool>();
+      variant.value<bool>() == expected;
 }
+
+bool isConstantTrue(ExprCP expr) {
+  return isConstantBool(expr, true);
+}
+
+bool isConstantFalse(ExprCP expr) {
+  return isConstantBool(expr, false);
+}
+
+bool hasConstantFalse(const ExprVector& exprs) {
+  return std::ranges::any_of(exprs, isConstantFalse);
+}
+
 } // namespace
 
 void ToGraph::translateConjuncts(const lp::ExprPtr& input, ExprVector& flat) {
@@ -1738,14 +1751,19 @@ void ToGraph::translateJoin(
   }
 #endif
 
+  // If non-inner, and many tables on the right they are one dt. If a single
+  // table then this too is the last in 'tables'.
+  auto* rightTable = currentDt_->tables.back();
+
+  if (hasConstantFalse(conjuncts) &&
+      eliminateJoinOnConstantFalse(joinType, left, right, rightTable)) {
+    return;
+  }
+
   const bool leftOptional =
       joinType == lp::JoinType::kRight || joinType == lp::JoinType::kFull;
   const bool rightOptional =
       joinType == lp::JoinType::kLeft || joinType == lp::JoinType::kFull;
-
-  // If non-inner, and many tables on the right they are one dt. If a single
-  // table then this too is the last in 'tables'.
-  auto rightTable = currentDt_->tables.back();
 
   // For LEFT JOIN, push down conjuncts that reference only the right
   // (null-supplying) side. Pre-filtering the right side is semantically
@@ -1821,6 +1839,41 @@ void ToGraph::translateJoin(
   for (auto i = 0; i < leftKeys.size(); ++i) {
     edge->addEquality(leftKeys[i], rightKeys[i]);
   }
+}
+
+bool ToGraph::eliminateJoinOnConstantFalse(
+    lp::JoinType joinType,
+    const lp::LogicalPlanNodePtr& left,
+    const lp::LogicalPlanNodePtr& right,
+    PlanObjectCP rightTable) {
+  // TODO: For INNER/FULL joins, no rows can match at all - return empty
+  // result.
+  const lp::LogicalPlanNode* optionalSide = nullptr;
+
+  if (joinType == lp::JoinType::kLeft) {
+    // No rows from the right can ever match.
+    currentDt_->removeLastTable(rightTable);
+    optionalSide = right.get();
+  } else if (joinType == lp::JoinType::kRight) {
+    // No rows from the left can ever match. Keep only the right table.
+    currentDt_ = newDt();
+    currentDt_->addTable(rightTable);
+    optionalSide = left.get();
+  }
+
+  if (!optionalSide) {
+    return false;
+  }
+
+  // Project NULL for each column from the removed side.
+  const auto& outputType = optionalSide->outputType();
+  for (auto channel : usedChannels(*optionalSide)) {
+    const auto& name = outputType->names()[channel];
+    const auto& typePtr = outputType->childAt(channel);
+    renames_[name] = make<Literal>(
+        toConstantValue(typePtr), registerVariant(toType(typePtr)->kind()));
+  }
+  return true;
 }
 
 DerivedTableP ToGraph::newDt() {

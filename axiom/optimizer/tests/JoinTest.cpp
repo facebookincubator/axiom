@@ -1119,17 +1119,29 @@ TEST_F(JoinTest, leftJoinOnClausePushdown) {
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
-  // Constant ON conjunct stays in the JoinEdge filter.
-  // TODO(https://github.com/facebookincubator/axiom/issues/919): Optimal plan
-  // would eliminate the join entirely and produce left rows with NULL right
-  // columns.
+  // Constant false ON conjunct (1 > 2) means no right rows can ever match.
+  // The join is eliminated entirely; left rows survive with NULL right columns.
   {
     auto query = "SELECT * FROM t LEFT JOIN u ON a = x AND 1 > 2";
     SCOPED_TRACE(query);
 
-    auto matcher = matchScan("t")
-                       .hashJoin(matchScan("u").build(), core::JoinType::kLeft)
-                       .build();
+    // The optimal plan scans only 't' and projects NULLs for 'u' columns.
+    auto matcher =
+        matchScan("t").project({"a", "b", "c", "null", "null"}).build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Constant false ON conjunct (1 > 2) means no left rows can ever match.
+  // The join is eliminated entirely; right rows survive with NULL left columns.
+  {
+    auto query = "SELECT * FROM t RIGHT JOIN u ON a = x AND 1 > 2";
+    SCOPED_TRACE(query);
+
+    // The optimal plan scans only 'u' and projects NULLs for 't' columns.
+    auto matcher =
+        matchScan("u").project({"null", "null", "null", "x", "y"}).build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
