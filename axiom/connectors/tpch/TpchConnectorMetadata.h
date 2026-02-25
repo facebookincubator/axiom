@@ -23,7 +23,7 @@
 
 namespace facebook::axiom::connector::tpch {
 
-static const SplitSource::SplitAndGroup kNoMoreSplits{nullptr, 0};
+inline const SplitSource::SplitAndGroup kNoMoreSplits{nullptr, 0};
 
 class TpchConnectorMetadata;
 
@@ -48,12 +48,12 @@ class TpchSplitSource : public SplitSource {
   const double scaleFactor_;
   const std::string connectorId_;
   std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits_;
-  int32_t currentSplit_{0};
+  size_t currentSplit_{0};
 };
 
 class TpchSplitManager : public ConnectorSplitManager {
  public:
-  TpchSplitManager(TpchConnectorMetadata* /* metadata */) {}
+  explicit TpchSplitManager(TpchConnectorMetadata* /* metadata */) {}
 
   std::vector<PartitionHandlePtr> listPartitions(
       const ConnectorSessionPtr& session,

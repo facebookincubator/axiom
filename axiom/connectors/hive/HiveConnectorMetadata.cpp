@@ -15,6 +15,9 @@
  */
 
 #include "axiom/connectors/hive/HiveConnectorMetadata.h"
+
+#include <folly/CppAttributes.h>
+#include <utility>
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -23,8 +26,8 @@
 
 namespace facebook::axiom::connector::hive {
 
-const PartitionType* HivePartitionType::copartition(
-    const PartitionType& other) const {
+const PartitionType* FOLLY_NULLABLE
+HivePartitionType::copartition(const PartitionType& other) const {
   if (const auto* otherPartitionType = other.as<HivePartitionType>()) {
     const auto& thisTypes = partitionKeyTypes_;
     const auto& otherTypes = otherPartitionType->partitionKeyTypes_;
@@ -51,7 +54,7 @@ const PartitionType* HivePartitionType::copartition(
 velox::core::PartitionFunctionSpecPtr HivePartitionType::makeSpec(
     const std::vector<velox::column_index_t>& channels,
     const std::vector<velox::VectorPtr>& constants,
-    bool isLocal) const {
+    bool /*isLocal*/) const {
   return std::make_shared<velox::connector::hive::HivePartitionFunctionSpec>(
       numPartitions_, channels, constants);
 }
@@ -123,9 +126,9 @@ HiveTableLayout::HiveTableLayout(
     velox::connector::Connector* connector,
     std::vector<const Column*> columns,
     std::optional<int32_t> numPartitions,
-    std::vector<const Column*> partitionedByColumns,
-    std::vector<const Column*> sortedByColumns,
-    std::vector<SortOrder> sortOrder,
+    const std::vector<const Column*>& partitionedByColumns,
+    const std::vector<const Column*>& sortedByColumns,
+    const std::vector<SortOrder>& sortOrder,
     std::vector<const Column*> lookupKeys,
     std::vector<const Column*> hivePartitionedByColumns,
     velox::dwio::common::FileFormat fileFormat)
@@ -133,14 +136,14 @@ HiveTableLayout::HiveTableLayout(
           name,
           table,
           connector,
-          columns,
+          std::move(columns),
           partitionedByColumns,
           sortedByColumns,
           sortOrder,
-          lookupKeys,
+          std::move(lookupKeys),
           /*supportsScan=*/true),
       fileFormat_(fileFormat),
-      hivePartitionColumns_(hivePartitionedByColumns),
+      hivePartitionColumns_(std::move(hivePartitionedByColumns)),
       numBuckets_(numPartitions),
       partitionType_{
           numPartitions.has_value()
@@ -189,7 +192,7 @@ void extractInputFields(
 } // namespace
 
 velox::connector::ColumnHandlePtr HiveTableLayout::createColumnHandle(
-    const ConnectorSessionPtr& session,
+    const ConnectorSessionPtr& /*session*/,
     const std::string& columnName,
     std::vector<velox::common::Subfield> subfields,
     std::optional<velox::TypePtr> castToType,
@@ -210,7 +213,7 @@ velox::connector::ColumnHandlePtr HiveTableLayout::createColumnHandle(
 
 velox::connector::ConnectorTableHandlePtr HiveTableLayout::createTableHandle(
     const ConnectorSessionPtr& session,
-    std::vector<velox::connector::ColumnHandlePtr> columnHandles,
+    std::vector<velox::connector::ColumnHandlePtr> /*columnHandles*/,
     velox::core::ExpressionEvaluator& evaluator,
     std::vector<velox::core::TypedExprPtr> filters,
     std::vector<velox::core::TypedExprPtr>& /*rejectedFilters*/,
@@ -266,8 +269,8 @@ velox::connector::ConnectorTableHandlePtr HiveTableLayout::createTableHandle(
 
 namespace {
 std::shared_ptr<velox::connector::hive::LocationHandle> makeLocationHandle(
-    std::string targetDirectory,
-    std::optional<std::string> writeDirectory) {
+    const std::string& targetDirectory,
+    const std::optional<std::string>& writeDirectory) {
   return std::make_shared<velox::connector::hive::LocationHandle>(
       targetDirectory,
       writeDirectory.value_or(targetDirectory),
@@ -325,7 +328,7 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
         std::shared_ptr<const velox::connector::hive::HiveSortingColumn>>
         sortedBy;
     sortedBy.reserve(hiveLayout->orderColumns().size());
-    for (auto i = 0; i < hiveLayout->orderColumns().size(); ++i) {
+    for (size_t i = 0; i < hiveLayout->orderColumns().size(); ++i) {
       sortedBy.push_back(
           std::make_shared<velox::connector::hive::HiveSortingColumn>(
               hiveLayout->orderColumns()[i]->name(),

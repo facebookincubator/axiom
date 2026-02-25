@@ -30,23 +30,18 @@ TableNameParser::TableNameParser(std::string_view name) {
     return;
   }
 
-  valid_ = true;
-  switch (parts.size()) {
-    case 1:
-      table_ = parts[0];
-      break;
-    case 2:
-      schema_ = parts[0];
-      table_ = parts[1];
-      break;
-    case 3:
-      catalog_ = parts[0];
-      schema_ = parts[1];
-      table_ = parts[2];
-      break;
-    default:
-      valid_ = false;
-      break;
+  if (parts.size() == 1) {
+    table_ = parts[0];
+    valid_ = true;
+  } else if (parts.size() == 2) {
+    schema_ = parts[0];
+    table_ = parts[1];
+    valid_ = true;
+  } else if (parts.size() == 3) {
+    catalog_ = parts[0];
+    schema_ = parts[1];
+    table_ = parts[2];
+    valid_ = true;
   }
 }
 

@@ -221,7 +221,7 @@ class LocalHiveConnectorMetadataTest
   }
 
   inline static RowTypePtr rowType_;
-  LocalHiveConnectorMetadata* metadata_;
+  LocalHiveConnectorMetadata* metadata_{};
 };
 
 TEST_F(LocalHiveConnectorMetadataTest, basic) {
@@ -331,7 +331,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
           makeFlatVector<int32_t>(kTestSize, [](auto row) { return row % 10; }),
           makeFlatVector<int64_t>(kTestSize, [](auto row) { return row + 2; }),
           makeFlatVector<StringView>(
-              kTestSize, [](auto row) { return "2022-09-01"; }),
+              kTestSize, [](auto /*row*/) { return "2022-09-01"; }),
       });
   EXPECT_EQ(data->size(), kTestSize);
 
@@ -441,7 +441,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
           makeFlatVector<int64_t>(
               kInsertSize, [](auto row) { return row % 11; }),
           makeFlatVector<StringView>(
-              kInsertSize, [](auto row) { return "2022-09-01"; }),
+              kInsertSize, [](auto /*row*/) { return "2022-09-01"; }),
       });
   EXPECT_EQ(insertData->size(), kInsertSize);
   writeToTable(
