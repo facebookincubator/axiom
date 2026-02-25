@@ -108,6 +108,15 @@ std::vector<std::string> deserializeStringVector(
   return result;
 }
 
+/// Restores subqueryAlias from a serialized node, if present.
+void deserializeSubqueryAlias(
+    const folly::dynamic& obj,
+    const LogicalPlanNodePtr& node) {
+  if (obj.count("subqueryAlias")) {
+    node->setSubqueryAlias(obj["subqueryAlias"].asString());
+  }
+}
+
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(NodeKind, nodeKindNames)
@@ -124,6 +133,9 @@ folly::dynamic LogicalPlanNode::serializeBase(std::string_view name) const {
   if (!inputs_.empty()) {
     obj["inputs"] = serializeVector(
         inputs_, [](const LogicalPlanNodePtr& n) { return n->serialize(); });
+  }
+  if (subqueryAlias_.has_value()) {
+    obj["subqueryAlias"] = subqueryAlias_.value();
   }
   return obj;
 }
@@ -186,12 +198,13 @@ LogicalPlanNodePtr ValuesNode::create(
   auto outputType = deserializeOutputType(obj);
   auto dataType = obj["dataType"].asString();
 
+  LogicalPlanNodePtr node;
   if (dataType == "Variants") {
     Variants rows;
     for (const auto& v : obj["data"]) {
       rows.push_back(velox::Variant::create(v));
     }
-    return std::make_shared<ValuesNode>(
+    node = std::make_shared<ValuesNode>(
         std::move(id), outputType, std::move(rows));
   } else if (dataType == "Vectors") {
     VELOX_CHECK_NOT_NULL(
@@ -211,7 +224,7 @@ LogicalPlanNodePtr ValuesNode::create(
           velox::BaseVector::createFromVariants(outputType, variants, pool));
       vectors.push_back(std::move(vector));
     }
-    return std::make_shared<ValuesNode>(std::move(id), std::move(vectors));
+    node = std::make_shared<ValuesNode>(std::move(id), std::move(vectors));
   } else if (dataType == "Exprs") {
     const auto& data = obj["data"];
     Exprs rows;
@@ -224,11 +237,13 @@ LogicalPlanNodePtr ValuesNode::create(
       }
       rows.push_back(std::move(exprs));
     }
-    return std::make_shared<ValuesNode>(
+    node = std::make_shared<ValuesNode>(
         std::move(id), outputType, std::move(rows));
   } else {
     VELOX_FAIL("Unknown ValuesNode dataType: {}", dataType);
   }
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 folly::dynamic TableScanNode::serialize() const {
@@ -237,6 +252,9 @@ folly::dynamic TableScanNode::serialize() const {
   obj["tableName"] = tableName_;
   obj["columnNames"] =
       serializeVector(columnNames_, [](const std::string& s) { return s; });
+  if (!alias_.empty()) {
+    obj["alias"] = alias_;
+  }
   return obj;
 }
 
@@ -244,12 +262,19 @@ folly::dynamic TableScanNode::serialize() const {
 LogicalPlanNodePtr TableScanNode::create(
     const folly::dynamic& obj,
     void* /*context*/) {
-  return std::make_shared<TableScanNode>(
+  std::string alias;
+  if (obj.count("alias")) {
+    alias = obj["alias"].asString();
+  }
+  auto node = std::make_shared<TableScanNode>(
       obj["id"].asString(),
       deserializeOutputType(obj),
       obj["connectorId"].asString(),
       obj["tableName"].asString(),
-      deserializeStringVector(obj, "columnNames"));
+      deserializeStringVector(obj, "columnNames"),
+      std::move(alias));
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 folly::dynamic FilterNode::serialize() const {
@@ -264,10 +289,12 @@ LogicalPlanNodePtr FilterNode::create(
     void* context) {
   auto inputs = deserializeNodeInputs(obj, context);
   VELOX_CHECK_EQ(inputs.size(), 1);
-  return std::make_shared<FilterNode>(
+  auto node = std::make_shared<FilterNode>(
       obj["id"].asString(),
       inputs[0],
       deserializeExpr(obj["predicate"], context));
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 folly::dynamic ProjectNode::serialize() const {
@@ -285,11 +312,13 @@ LogicalPlanNodePtr ProjectNode::create(
     void* context) {
   auto inputs = deserializeNodeInputs(obj, context);
   VELOX_CHECK_EQ(inputs.size(), 1);
-  return std::make_shared<ProjectNode>(
+  auto node = std::make_shared<ProjectNode>(
       obj["id"].asString(),
       inputs[0],
       deserializeStringVector(obj, "names"),
       deserializeExprs(obj, "expressions", context));
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 folly::dynamic AggregateNode::serialize() const {
@@ -341,13 +370,15 @@ LogicalPlanNodePtr AggregateNode::create(
     }
   }
 
-  return std::make_shared<AggregateNode>(
+  auto node = std::make_shared<AggregateNode>(
       obj["id"].asString(),
       inputs[0],
       std::move(groupingKeys),
       std::move(groupingSets),
       std::move(aggregates),
       deserializeStringVector(obj, "outputNames"));
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 folly::dynamic JoinNode::serialize() const {
@@ -367,12 +398,14 @@ LogicalPlanNodePtr JoinNode::create(const folly::dynamic& obj, void* context) {
   if (obj.count("condition")) {
     condition = deserializeExpr(obj["condition"], context);
   }
-  return std::make_shared<JoinNode>(
+  auto node = std::make_shared<JoinNode>(
       obj["id"].asString(),
       inputs[0],
       inputs[1],
       JoinTypeName::toJoinType(obj["joinType"].asString()),
       std::move(condition));
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 folly::dynamic SortNode::serialize() const {
@@ -392,8 +425,10 @@ LogicalPlanNodePtr SortNode::create(const folly::dynamic& obj, void* context) {
       ordering.push_back(SortingField::deserialize(f, context));
     }
   }
-  return std::make_shared<SortNode>(
+  auto node = std::make_shared<SortNode>(
       obj["id"].asString(), inputs[0], std::move(ordering));
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 folly::dynamic LimitNode::serialize() const {
@@ -407,11 +442,13 @@ folly::dynamic LimitNode::serialize() const {
 LogicalPlanNodePtr LimitNode::create(const folly::dynamic& obj, void* context) {
   auto inputs = deserializeNodeInputs(obj, context);
   VELOX_CHECK_EQ(inputs.size(), 1);
-  return std::make_shared<LimitNode>(
+  auto node = std::make_shared<LimitNode>(
       obj["id"].asString(),
       inputs[0],
       obj["offset"].asInt(),
       obj["count"].asInt());
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 folly::dynamic SetNode::serialize() const {
@@ -423,10 +460,12 @@ folly::dynamic SetNode::serialize() const {
 // static
 LogicalPlanNodePtr SetNode::create(const folly::dynamic& obj, void* context) {
   auto inputs = deserializeNodeInputs(obj, context);
-  return std::make_shared<SetNode>(
+  auto node = std::make_shared<SetNode>(
       obj["id"].asString(),
       inputs,
       SetOperationName::toSetOperation(obj["operation"].asString()));
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 folly::dynamic UnnestNode::serialize() const {
@@ -471,13 +510,15 @@ LogicalPlanNodePtr UnnestNode::create(
     ordinalityName = obj["ordinalityName"].asString();
   }
 
-  return std::make_shared<UnnestNode>(
+  auto node = std::make_shared<UnnestNode>(
       obj["id"].asString(),
       inputs[0],
       deserializeExprs(obj, "unnestExpressions", context),
       std::move(unnestedNames),
       std::move(ordinalityName),
       obj["flattenArrayOfRows"].asBool());
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 folly::dynamic TableWriteNode::serialize() const {
@@ -513,7 +554,7 @@ LogicalPlanNodePtr TableWriteNode::create(
     }
   }
 
-  return std::make_shared<TableWriteNode>(
+  auto node = std::make_shared<TableWriteNode>(
       obj["id"].asString(),
       inputs[0],
       obj["connectorId"].asString(),
@@ -522,6 +563,8 @@ LogicalPlanNodePtr TableWriteNode::create(
       deserializeStringVector(obj, "columnNames"),
       deserializeExprs(obj, "columnExpressions", context),
       std::move(options));
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 folly::dynamic SampleNode::serialize() const {
@@ -537,11 +580,13 @@ LogicalPlanNodePtr SampleNode::create(
     void* context) {
   auto inputs = deserializeNodeInputs(obj, context);
   VELOX_CHECK_EQ(inputs.size(), 1);
-  return std::make_shared<SampleNode>(
+  auto node = std::make_shared<SampleNode>(
       obj["id"].asString(),
       inputs[0],
       deserializeExpr(obj["percentage"], context),
       SampleNode::toSampleMethod(obj["sampleMethod"].asString()));
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 namespace {
@@ -1023,8 +1068,10 @@ LogicalPlanNodePtr OutputNode::create(
     }
   }
 
-  return std::make_shared<OutputNode>(
+  auto node = std::make_shared<OutputNode>(
       obj["id"].asString(), inputs[0], std::move(entries));
+  deserializeSubqueryAlias(obj, node);
+  return node;
 }
 
 } // namespace facebook::axiom::logical_plan

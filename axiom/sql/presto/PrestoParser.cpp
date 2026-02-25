@@ -333,6 +333,7 @@ class RelationPlanner : public AstVisitor {
     if (withIt != withQueries_.end()) {
       // TODO Change WithQuery to store Query and not Statement.
       processQuery(dynamic_cast<Query*>(withIt->second->query().get()));
+      builder_->planNode()->setSubqueryAlias(tableName);
     } else {
       const auto& [connectorId, qualifiedName] = toConnectorTable(
           *table.name(), context_.defaultConnectorId, defaultSchema_);
@@ -405,6 +406,20 @@ class RelationPlanner : public AstVisitor {
       }
 
       builder_->project(renames);
+    }
+
+    // Set the alias on the underlying TableScanNode when the inner relation
+    // is a table and the alias differs from the table name.
+    if (aliasedRelation.relation()->is(NodeType::kTable)) {
+      auto* innerTable = aliasedRelation.relation()->as<Table>();
+      auto tableName = canonicalizeName(innerTable->name()->suffix());
+      if (tableName != alias) {
+        builder_->setTableScanAlias(alias);
+      }
+    }
+
+    if (aliasedRelation.relation()->is(NodeType::kTableSubquery)) {
+      builder_->planNode()->setSubqueryAlias(alias);
     }
 
     builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
