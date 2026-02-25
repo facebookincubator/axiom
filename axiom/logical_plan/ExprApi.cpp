@@ -231,4 +231,17 @@ WindowSpec& WindowSpec::range(
   return *this;
 }
 
+WindowSpec& WindowSpec::groups(
+    WindowExpr::BoundType startType,
+    std::optional<ExprApi> startValue,
+    WindowExpr::BoundType endType,
+    std::optional<ExprApi> endValue) {
+  frameType_ = WindowExpr::WindowType::kGroups;
+  startType_ = startType;
+  startValue_ = std::move(startValue);
+  endType_ = endType;
+  endValue_ = std::move(endValue);
+  return *this;
+}
+
 } // namespace facebook::axiom::logical_plan
