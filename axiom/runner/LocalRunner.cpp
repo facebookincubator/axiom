@@ -261,12 +261,21 @@ void LocalRunner::abort() {
     }
   }
   VELOX_CHECK(state_ != State::kInitialized);
-  // Setting errors is thread safe. The stages do not change after
-  // initialization.
-  for (auto& stage : stages_) {
-    for (auto& task : stage) {
-      task->setError(error_);
+
+  // Take a local copy of tasks under the mutex to prevent use-after-free if
+  // waitForCompletion() clears stages_ concurrently.
+  std::vector<std::shared_ptr<velox::exec::Task>> tasks;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    for (auto& stage : stages_) {
+      for (auto& task : stage) {
+        tasks.push_back(task);
+      }
     }
+  }
+
+  for (auto& task : tasks) {
+    task->setError(error_);
   }
   if (cursor_) {
     cursor_->setError(error_);
