@@ -112,7 +112,10 @@ Step extractDereferenceStep(const logical_plan::ExprPtr& expr) {
 
   auto index = maybeIntegerLiteral(field);
   Name name = nullptr;
-  if (!index.has_value()) {
+
+  if (index.has_value()) {
+    name = toName(rowType.nameOf(static_cast<uint32_t>(index.value())));
+  } else {
     const auto& fieldName = field->value()->value<velox::TypeKind::VARCHAR>();
     name = toName(fieldName);
     index = rowType.getChildIdx(name);

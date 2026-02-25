@@ -758,7 +758,9 @@ ExprCP ToGraph::makeGetter(const Step& step, ExprCP base) {
   const auto& inputType = base->value().type;
   switch (step.kind) {
     case StepKind::kField: {
-      if (step.field) {
+      // If step.field is empty, this step is accessing a subfield in an
+      // anonymous struct via index. Use id in this case.
+      if (step.field && strlen(step.field) > 0) {
         auto childType = toType(inputType->asRow().findChild(step.field));
         return make<Field>(childType, base, step.field);
       } else {
