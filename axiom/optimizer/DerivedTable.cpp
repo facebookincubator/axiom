@@ -1226,6 +1226,7 @@ bool DerivedTable::addFilter(ExprCP conjunct) {
     return false;
   }
 
+  // TODO: Handle not being able to pushdown filter through UNION ALL.
   if (setOp.has_value()) {
     for (auto* child : children) {
       auto ok = child->addFilter(conjunct);
@@ -1235,6 +1236,10 @@ bool DerivedTable::addFilter(ExprCP conjunct) {
   }
 
   auto imported = importExpr(conjunct);
+  if (imported->containsFunction(FunctionSet::kWindow)) {
+    return false;
+  }
+
   if (aggregation) {
     having.push_back(imported);
   } else {
@@ -1442,6 +1447,10 @@ bool DerivedTable::tryPushdownConjunct(
 
   if (table->is(PlanType::kUnnestTableNode)) {
     return false; // UnnestTable does not have filter push-down.
+  }
+
+  if (conjunct->containsFunction(FunctionSet::kWindow)) {
+    return false;
   }
 
   if (table->is(PlanType::kDerivedTableNode)) {

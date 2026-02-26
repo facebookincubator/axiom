@@ -20,6 +20,8 @@
 #include "axiom/optimizer/PlanUtils.h"
 #include "velox/expression/ScopedVarSetter.h"
 
+namespace lp = facebook::axiom::logical_plan;
+
 namespace facebook::axiom::optimizer {
 
 // static
@@ -174,6 +176,50 @@ const Aggregate* Aggregate::dropDistinct() const {
       intermediateType_,
       orderKeys_,
       orderTypes_);
+}
+
+std::string WindowFunction::toString() const {
+  std::stringstream out;
+  out << name() << "(";
+
+  for (auto i = 0; i < args().size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << args()[i]->toString();
+  }
+
+  out << ") OVER (";
+
+  if (!partitionKeys_.empty()) {
+    out << "PARTITION BY ";
+    for (auto i = 0; i < partitionKeys_.size(); ++i) {
+      if (i > 0) {
+        out << ", ";
+      }
+      out << partitionKeys_[i]->toString();
+    }
+  }
+
+  if (!orderKeys_.empty()) {
+    if (!partitionKeys_.empty()) {
+      out << " ";
+    }
+    out << "ORDER BY " << orderByToString(orderKeys_, orderTypes_);
+  }
+
+  out << " " << lp::WindowExpr::toName(frame_.type) << " BETWEEN ";
+  if (frame_.startValue) {
+    out << frame_.startValue->toString() << " ";
+  }
+  out << lp::WindowExpr::toName(frame_.startType) << " AND ";
+  if (frame_.endValue) {
+    out << frame_.endValue->toString() << " ";
+  }
+  out << lp::WindowExpr::toName(frame_.endType);
+
+  out << ")";
+  return out.str();
 }
 
 std::string Field::toString() const {

@@ -31,6 +31,11 @@ namespace {
     return MatchResult::failure();             \
   }
 
+#define AXIOM_TEST_RETURN_IF_FAILURE_VOID      \
+  if (::testing::Test::HasNonfatalFailure()) { \
+    return;                                    \
+  }
+
 #define AXIOM_TEST_RETURN                      \
   if (::testing::Test::HasNonfatalFailure()) { \
     return MatchResult::failure();             \
@@ -843,12 +848,16 @@ enum class ShuffleType {
 //   - Consumer side expects Exchange (or MergeExchange if ordered)
 //   - If type is specified, verifies the corresponding PartitionedOutputNode
 //     property (e.g., isBroadcast(), numPartitions())
+//   - If keys are specified, verifies the partition keys match
 class ShuffleBoundaryMatcher : public PlanMatcher {
  public:
   explicit ShuffleBoundaryMatcher(
       std::shared_ptr<PlanMatcher> producerMatcher,
-      std::optional<ShuffleType> type = std::nullopt)
-      : producerMatcher_(std::move(producerMatcher)), type_(type) {}
+      std::optional<ShuffleType> type = std::nullopt,
+      std::vector<std::string> keys = {})
+      : producerMatcher_(std::move(producerMatcher)),
+        type_(type),
+        keys_(std::move(keys)) {}
 
   MatchResult match(
       const PlanNodePtr& plan,
@@ -863,6 +872,7 @@ class ShuffleBoundaryMatcher : public PlanMatcher {
  private:
   const std::shared_ptr<PlanMatcher> producerMatcher_;
   const std::optional<ShuffleType> type_;
+  const std::vector<std::string> keys_;
 };
 
 // Returns the producer fragment for the given Exchange node, or nullptr if not
@@ -954,6 +964,35 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
     }
   }
 
+  // Verify partition keys if specified.
+  if (!keys_.empty()) {
+    const auto& actualKeys = partitionedOutput->keys();
+    EXPECT_EQ(actualKeys.size(), keys_.size())
+        << "Partition key count mismatch: expected " << keys_.size() << ", got "
+        << actualKeys.size();
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    for (size_t i = 0; i < keys_.size(); ++i) {
+      // Apply symbol rewriting to expected key name.
+      auto expectedKey = keys_[i];
+      auto it = symbols.find(expectedKey);
+      if (it != symbols.end()) {
+        expectedKey = it->second;
+      }
+
+      // Extract name from FieldAccessTypedExpr.
+      auto fieldAccess =
+          std::dynamic_pointer_cast<const FieldAccessTypedExpr>(actualKeys[i]);
+      EXPECT_TRUE(fieldAccess != nullptr)
+          << "Partition key at index " << i << " is not a field access";
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      EXPECT_EQ(fieldAccess->name(), expectedKey)
+          << "Partition key mismatch at index " << i;
+    }
+    AXIOM_TEST_RETURN_IF_FAILURE
+  }
+
   // Update context for producer fragment matching.
   DistributedMatchContext producerContext{
       context->fragments, producerFragment, context->taskPrefixToFragmentIndex};
@@ -1018,8 +1057,211 @@ class EnforceDistinctMatcher : public PlanMatcherImpl<EnforceDistinctNode> {
   const std::vector<std::string> distinctKeys_;
 };
 
+// Maps parser BoundType to WindowNode::BoundType.
+WindowNode::BoundType toNodeBoundType(parse::BoundType type) {
+  switch (type) {
+    case parse::BoundType::kCurrentRow:
+      return WindowNode::BoundType::kCurrentRow;
+    case parse::BoundType::kUnboundedPreceding:
+      return WindowNode::BoundType::kUnboundedPreceding;
+    case parse::BoundType::kUnboundedFollowing:
+      return WindowNode::BoundType::kUnboundedFollowing;
+    case parse::BoundType::kPreceding:
+      return WindowNode::BoundType::kPreceding;
+    case parse::BoundType::kFollowing:
+      return WindowNode::BoundType::kFollowing;
+  }
+  VELOX_UNREACHABLE();
+}
+
+// Maps parser WindowType to WindowNode::WindowType.
+WindowNode::WindowType toNodeWindowType(parse::WindowType type) {
+  switch (type) {
+    case parse::WindowType::kRows:
+      return WindowNode::WindowType::kRows;
+    case parse::WindowType::kRange:
+      return WindowNode::WindowType::kRange;
+  }
+  VELOX_UNREACHABLE();
+}
+
+class WindowMatcher : public PlanMatcherImpl<WindowNode> {
+ public:
+  explicit WindowMatcher(const std::shared_ptr<PlanMatcher>& matcher)
+      : PlanMatcherImpl<WindowNode>({matcher}) {}
+
+  WindowMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      std::vector<std::string> windowExprs)
+      : PlanMatcherImpl<WindowNode>({matcher}),
+        windowExprs_(std::move(windowExprs)) {}
+
+  MatchResult matchDetails(
+      const WindowNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    if (windowExprs_.empty()) {
+      return MatchResult::success(symbols);
+    }
+
+    EXPECT_EQ(plan.windowFunctions().size(), windowExprs_.size())
+        << "Window function count mismatch";
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    // Parse all window expressions to extract expected values.
+    std::vector<parse::WindowExpr> expectedWindows;
+    expectedWindows.reserve(windowExprs_.size());
+    for (const auto& expr : windowExprs_) {
+      expectedWindows.push_back(
+          parse::DuckSqlExpressionsParser().parseWindowExpr(expr));
+    }
+
+    // All window functions in a WindowNode share the same partition and order
+    // by keys. Verify against the first expression.
+    const auto& firstExpected = expectedWindows[0];
+
+    verifyPartitionKeys(plan, firstExpected, symbols);
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    verifyOrderByKeys(plan, firstExpected, symbols);
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    auto newSymbols = verifyWindowFunctions(plan, expectedWindows, symbols);
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    return MatchResult::success(newSymbols);
+  }
+
+ private:
+  void verifyPartitionKeys(
+      const WindowNode& plan,
+      const parse::WindowExpr& expected,
+      const std::unordered_map<std::string, std::string>& symbols) const {
+    EXPECT_EQ(plan.partitionKeys().size(), expected.partitionBy.size())
+        << "Partition key count mismatch";
+    AXIOM_TEST_RETURN_IF_FAILURE_VOID
+
+    for (auto i = 0; i < expected.partitionBy.size(); ++i) {
+      auto expectedKey = expected.partitionBy[i];
+      if (!symbols.empty()) {
+        expectedKey = rewriteInputNames(expectedKey, symbols);
+      }
+      EXPECT_EQ(plan.partitionKeys()[i]->toString(), expectedKey->toString())
+          << "Partition key mismatch at index " << i;
+    }
+  }
+
+  void verifyOrderByKeys(
+      const WindowNode& plan,
+      const parse::WindowExpr& expected,
+      const std::unordered_map<std::string, std::string>& symbols) const {
+    EXPECT_EQ(plan.sortingKeys().size(), expected.orderBy.size())
+        << "Order by key count mismatch";
+    AXIOM_TEST_RETURN_IF_FAILURE_VOID
+
+    for (auto i = 0; i < expected.orderBy.size(); ++i) {
+      auto expectedKey = expected.orderBy[i].expr;
+      if (!symbols.empty()) {
+        expectedKey = rewriteInputNames(expectedKey, symbols);
+      }
+      EXPECT_EQ(plan.sortingKeys()[i]->toString(), expectedKey->toString())
+          << "Order by key mismatch at index " << i;
+      EXPECT_EQ(
+          plan.sortingOrders()[i].isAscending(), expected.orderBy[i].ascending)
+          << "Order by ascending mismatch at index " << i;
+      EXPECT_EQ(
+          plan.sortingOrders()[i].isNullsFirst(),
+          expected.orderBy[i].nullsFirst)
+          << "Order by nullsFirst mismatch at index " << i;
+    }
+  }
+
+  // Verifies each window function call expression and frame. Returns captured
+  // aliases for symbol propagation.
+  std::unordered_map<std::string, std::string> verifyWindowFunctions(
+      const WindowNode& plan,
+      const std::vector<parse::WindowExpr>& expectedWindows,
+      const std::unordered_map<std::string, std::string>& symbols) const {
+    std::unordered_map<std::string, std::string> newSymbols;
+    for (auto i = 0; i < expectedWindows.size(); ++i) {
+      const auto& expectedWindow = expectedWindows[i];
+      const auto& actualFunc = plan.windowFunctions()[i];
+      auto expectedCall = expectedWindow.functionCall;
+
+      // Capture alias for symbol propagation.
+      if (expectedCall->alias()) {
+        newSymbols[expectedCall->alias().value()] = plan.windowColumnNames()[i];
+      }
+
+      if (!symbols.empty()) {
+        expectedCall = rewriteInputNames(expectedCall, symbols);
+      }
+
+      EXPECT_EQ(
+          actualFunc.functionCall->toString(),
+          expectedCall->dropAlias()->toString())
+          << "Window function call mismatch at index " << i;
+
+      verifyFrame(actualFunc.frame, expectedWindow.frame, symbols, i);
+    }
+    return newSymbols;
+  }
+
+  void verifyFrame(
+      const WindowNode::Frame& actual,
+      const parse::WindowFrame& expected,
+      const std::unordered_map<std::string, std::string>& symbols,
+      size_t index) const {
+    EXPECT_EQ(
+        WindowNode::toName(actual.type),
+        WindowNode::toName(toNodeWindowType(expected.type)))
+        << "Frame type mismatch at index " << index;
+
+    // Verify frame start bound.
+    EXPECT_EQ(
+        WindowNode::toName(actual.startType),
+        WindowNode::toName(toNodeBoundType(expected.startType)))
+        << "Frame start type mismatch at index " << index;
+    if (expected.startValue) {
+      EXPECT_TRUE(actual.startValue != nullptr)
+          << "Expected frame start value at index " << index;
+      AXIOM_TEST_RETURN_IF_FAILURE_VOID
+
+      auto expectedStartValue = expected.startValue;
+      if (!symbols.empty()) {
+        expectedStartValue = rewriteInputNames(expectedStartValue, symbols);
+      }
+      EXPECT_EQ(actual.startValue->toString(), expectedStartValue->toString())
+          << "Frame start value mismatch at index " << index;
+    }
+
+    // Verify frame end bound.
+    EXPECT_EQ(
+        WindowNode::toName(actual.endType),
+        WindowNode::toName(toNodeBoundType(expected.endType)))
+        << "Frame end type mismatch at index " << index;
+    if (expected.endValue) {
+      EXPECT_TRUE(actual.endValue != nullptr)
+          << "Expected frame end value at index " << index;
+      AXIOM_TEST_RETURN_IF_FAILURE_VOID
+
+      auto expectedEndValue = expected.endValue;
+      if (!symbols.empty()) {
+        expectedEndValue = rewriteInputNames(expectedEndValue, symbols);
+      }
+      EXPECT_EQ(actual.endValue->toString(), expectedEndValue->toString())
+          << "Frame end value mismatch at index " << index;
+    }
+  }
+
+  const std::vector<std::string> windowExprs_;
+};
+
 #undef AXIOM_TEST_RETURN
 #undef AXIOM_TEST_RETURN_IF_FAILURE
+#undef AXIOM_TEST_RETURN_IF_FAILURE_VOID
 
 } // namespace
 
@@ -1259,6 +1501,14 @@ PlanMatcherBuilder& PlanMatcherBuilder::shuffle() {
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::shuffle(
+    const std::vector<std::string>& keys) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<ShuffleBoundaryMatcher>(
+      matcher_, ShuffleType::kPartitioned, keys);
+  return *this;
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::shuffleMerge() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ =
@@ -1362,6 +1612,19 @@ PlanMatcherBuilder& PlanMatcherBuilder::enforceDistinct(
     const std::vector<std::string>& distinctKeys) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<EnforceDistinctMatcher>(matcher_, distinctKeys);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::window() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<WindowMatcher>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::window(
+    const std::vector<std::string>& windowExprs) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<WindowMatcher>(matcher_, windowExprs);
   return *this;
 }
 

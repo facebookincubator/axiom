@@ -509,6 +509,33 @@ void SubfieldTracker::markSubfields(
     return;
   }
 
+  if (expr->isWindow()) {
+    const auto* window = expr->as<lp::WindowExpr>();
+    std::vector<Step> windowSteps;
+    for (const auto& key : window->partitionKeys()) {
+      markSubfields(key, windowSteps, /*isControl=*/true, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+    for (const auto& field : window->ordering()) {
+      markSubfields(field.expression, windowSteps, /*isControl=*/true, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+    for (const auto& input : expr->inputs()) {
+      markSubfields(input, windowSteps, isControl, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+    const auto& frame = window->frame();
+    if (frame.startValue) {
+      markSubfields(frame.startValue, windowSteps, isControl, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+    if (frame.endValue) {
+      markSubfields(frame.endValue, windowSteps, isControl, context);
+      VELOX_DCHECK(windowSteps.empty());
+    }
+    return;
+  }
+
   VELOX_UNREACHABLE("Unhandled expr: {}", lp::ExprPrinter::toText(*expr));
 }
 

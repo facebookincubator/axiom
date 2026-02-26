@@ -23,6 +23,8 @@
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
 
+namespace lp = facebook::axiom::logical_plan;
+
 namespace facebook::axiom::optimizer {
 
 Optimization::Optimization(
@@ -557,22 +559,56 @@ bool isSingleWorker() {
   return queryCtx()->optimization()->runnerOptions().numWorkers == 1;
 }
 
-RelationOpPtr repartitionForAgg(
-    const RelationOpPtr& plan,
-    const ExprVector& groupingKeys,
-    const ColumnVector& intermediateColumns,
+// Repartitions 'plan' by 'desiredKeys' if needed. Adds a gather if
+// desiredKeys is empty. Adds a shuffle if existing partition keys are not a
+// superset of desiredKeys. Does nothing if data is already gathered or
+// partitioned correctly.
+void maybeRepartition(
+    RelationOpPtr& plan,
+    ExprVector desiredKeys,
     PlanCost& cost) {
-  if (isSingleWorker() || plan->distribution().isGather()) {
-    return plan;
+  if (plan->distribution().isGather()) {
+    return;
   }
 
-  // If no grouping and not yet gathered on a single node,
-  // add a gather before final agg.
-  if (groupingKeys.empty()) {
+  if (desiredKeys.empty()) {
     auto* gather =
         make<Repartition>(plan, Distribution::gather(), plan->columns());
     cost.add(*gather);
-    return gather;
+    plan = gather;
+    return;
+  }
+
+  // Check if existing partition keys are a superset of desired keys. If
+  // partition keys are empty or contain columns not in desired keys, shuffle.
+  bool shuffle = plan->distribution().partitionKeys().empty();
+  if (!shuffle) {
+    const auto& existingKeys = plan->distribution().partitionKeys();
+    shuffle = std::any_of(
+        existingKeys.begin(),
+        existingKeys.end(),
+        [&desiredKeys](const auto& key) {
+          return position(desiredKeys, *key) == kNotFound;
+        });
+  }
+
+  if (shuffle) {
+    Distribution distribution{
+        plan->distribution().distributionType(), std::move(desiredKeys)};
+    auto* repartition =
+        make<Repartition>(plan, std::move(distribution), plan->columns());
+    cost.add(*repartition);
+    plan = repartition;
+  }
+}
+
+void repartitionForAgg(
+    RelationOpPtr& plan,
+    const ExprVector& groupingKeys,
+    const ColumnVector& intermediateColumns,
+    PlanCost& cost) {
+  if (isSingleWorker()) {
+    return;
   }
 
   // 'intermediateColumns' contains grouping keys followed by partial agg
@@ -583,30 +619,7 @@ RelationOpPtr repartitionForAgg(
     keyValues.push_back(intermediateColumns[i]);
   }
 
-  // Check if grouping keys is a superset of all partition keys. If partition
-  // keys are empty or contain columns not in grouping keys, we need to shuffle.
-  // Empty partition keys means unknown/unpartitioned distribution, so shuffle
-  // is required to ensure rows with same grouping keys are co-located.
-  bool shuffle = plan->distribution().partitionKeys().empty();
-  if (!shuffle) {
-    const auto& partitionKeys = plan->distribution().partitionKeys();
-    shuffle = std::any_of(
-        partitionKeys.begin(),
-        partitionKeys.end(),
-        [&keyValues](const auto& key) {
-          return position(keyValues, *key) == kNotFound;
-        });
-  }
-  if (!shuffle) {
-    return plan;
-  }
-
-  Distribution distribution{
-      plan->distribution().distributionType(), std::move(keyValues)};
-  auto* repartition =
-      make<Repartition>(plan, std::move(distribution), plan->columns());
-  cost.add(*repartition);
-  return repartition;
+  maybeRepartition(plan, std::move(keyValues), cost);
 }
 
 CPSpan<Column> leadingColumns(const ExprVector& exprs) {
@@ -938,6 +951,8 @@ void Optimization::addPostprocess(
     plan = filter;
   }
 
+  addWindow(dt, plan, state);
+
   // We probably want to make this decision based on cost.
   static constexpr int64_t kMaxLimitBeforeProject = 8'192;
   if (dt->hasOrderBy()) {
@@ -1077,17 +1092,16 @@ std::pair<Aggregation*, PlanCost> makeSplitAggregationPlan(
   PlanCost splitAggCost;
   Aggregation* splitAggPlan;
 
-  auto* partialAgg = make<Aggregation>(
+  plan = make<Aggregation>(
       plan,
       groupingKeys,
       /*preGroupedKeys*/ ExprVector{},
       aggregates,
       velox::core::AggregationNode::Step::kPartial,
       intermediateColumns);
+  splitAggCost.add(*plan);
 
-  splitAggCost.add(*partialAgg);
-  plan = repartitionForAgg(
-      partialAgg, groupingKeys, intermediateColumns, splitAggCost);
+  repartitionForAgg(plan, groupingKeys, intermediateColumns, splitAggCost);
 
   const auto numKeys = groupingKeys.size();
 
@@ -1119,8 +1133,7 @@ std::pair<Aggregation*, PlanCost> makeSingleAggregationPlan(
     const ColumnVector& intermediateColumns,
     const ColumnVector& outputColumns) {
   PlanCost singleAggCost;
-  plan =
-      repartitionForAgg(plan, groupingKeys, intermediateColumns, singleAggCost);
+  repartitionForAgg(plan, groupingKeys, intermediateColumns, singleAggCost);
   auto* singleAgg = make<Aggregation>(
       plan,
       groupingKeys,
@@ -1363,6 +1376,300 @@ void Optimization::transformDistinctToGroupBy(
       options_.alwaysPlanPartialAggregation);
   plan = outerPlan;
   cost.add(outerCost);
+}
+
+namespace {
+
+// Appends all elements of 'src' to the end of 'dst'.
+template <typename T>
+void append(QGVector<T>& dst, const QGVector<T>& src) {
+  dst.insert(dst.end(), src.begin(), src.end());
+}
+
+// Returns true if 'lhs' is a prefix of 'rhs'.
+template <typename T>
+bool isPrefix(const T& lhs, const T& rhs) {
+  if (lhs.size() > rhs.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    if (lhs[i] != rhs[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Returns true if two expression vectors are equal (same pointers, same
+// order).
+bool sameKeys(const ExprVector& lhs, const ExprVector& rhs) {
+  return lhs.size() == rhs.size() && isPrefix(lhs, rhs);
+}
+
+// Returns true if two order type vectors are equal.
+bool sameOrderTypes(const OrderTypeVector& lhs, const OrderTypeVector& rhs) {
+  return lhs.size() == rhs.size() && isPrefix(lhs, rhs);
+}
+
+// Groups window functions by partition keys and order keys specification.
+struct WindowGroup {
+  ExprVector partitionKeys;
+  ExprVector orderKeys;
+  OrderTypeVector orderTypes;
+  WindowFunctionVector functions;
+  ColumnVector outputColumns;
+
+  // Creates a new group from a single window function and its output column.
+  static WindowGroup create(
+      WindowFunctionCP windowFunc,
+      ColumnCP outputColumn) {
+    WindowGroup group;
+    group.partitionKeys = windowFunc->partitionKeys();
+    group.orderKeys = windowFunc->orderKeys();
+    group.orderTypes = windowFunc->orderTypes();
+    group.functions.push_back(windowFunc);
+    group.outputColumns.push_back(outputColumn);
+    return group;
+  }
+
+  // Tries to add a window function to this group. Returns true if the function
+  // has matching specification and was added.
+  bool tryAdd(WindowFunctionCP windowFunc, ColumnCP outputColumn) {
+    if (sameKeys(partitionKeys, windowFunc->partitionKeys()) &&
+        sameKeys(orderKeys, windowFunc->orderKeys()) &&
+        sameOrderTypes(orderTypes, windowFunc->orderTypes())) {
+      functions.push_back(windowFunc);
+      outputColumns.push_back(outputColumn);
+      return true;
+    }
+    return false;
+  }
+
+  void appendAll(const WindowGroup& other) {
+    append(functions, other.functions);
+    append(outputColumns, other.outputColumns);
+  }
+};
+
+// Returns true if all window functions in the group use ROWS frames.
+bool allRowsFrames(const WindowFunctionVector& functions) {
+  return std::all_of(
+      functions.begin(), functions.end(), [](WindowFunctionCP func) {
+        return func->frame().type == lp::WindowExpr::WindowType::kRows;
+      });
+}
+
+// Groups window functions by specification (partition keys + order keys),
+// merges compatible ROWS-frame groups, and sorts for optimal execution order.
+std::vector<WindowGroup> groupWindowFunctions(
+    const std::vector<std::pair<ColumnCP, WindowFunctionCP>>& windowExprs) {
+  // Group by specification.
+  std::vector<WindowGroup> groups;
+  for (const auto& [outputColumn, windowFunc] : windowExprs) {
+    bool found = false;
+    for (auto& group : groups) {
+      if (group.tryAdd(windowFunc, outputColumn)) {
+        found = true;
+        break;
+      }
+    }
+
+    if (!found) {
+      groups.push_back(WindowGroup::create(windowFunc, outputColumn));
+    }
+  }
+
+  // ROWS-only merge: merge shorter-ORDER-BY group into longer when all
+  // functions in the shorter group use ROWS frames and the shorter ORDER BY
+  // is a prefix of the longer, and partition keys match.
+  for (size_t i = 0; i < groups.size(); ++i) {
+    for (size_t j = i + 1; j < groups.size();) {
+      auto& target = groups[i];
+      auto& candidate = groups[j];
+
+      if (!sameKeys(target.partitionKeys, candidate.partitionKeys)) {
+        ++j;
+        continue;
+      }
+
+      // Try merging candidate into target or target into candidate.
+      if (isPrefix(candidate.orderKeys, target.orderKeys) &&
+          isPrefix(candidate.orderTypes, target.orderTypes) &&
+          allRowsFrames(candidate.functions)) {
+        target.appendAll(candidate);
+        groups.erase(groups.begin() + j);
+      } else if (
+          isPrefix(target.orderKeys, candidate.orderKeys) &&
+          isPrefix(target.orderTypes, candidate.orderTypes) &&
+          allRowsFrames(target.functions)) {
+        candidate.appendAll(target);
+        groups.erase(groups.begin() + i);
+        // Don't increment i since the element at i has changed.
+        j = i + 1;
+      } else {
+        ++j;
+      }
+    }
+  }
+
+  // Order groups: same partition keys adjacent, longer ORDER BY first,
+  // empty partition keys last.
+  std::sort(groups.begin(), groups.end(), [](const auto& lhs, const auto& rhs) {
+    // Empty partition keys go last.
+    if (lhs.partitionKeys.empty() != rhs.partitionKeys.empty()) {
+      return !lhs.partitionKeys.empty();
+    }
+    // Same partition keys adjacent: compare by first partition key id.
+    if (!lhs.partitionKeys.empty() && !rhs.partitionKeys.empty()) {
+      auto lhsId = lhs.partitionKeys[0]->id();
+      auto rhsId = rhs.partitionKeys[0]->id();
+      if (lhsId != rhsId) {
+        return lhsId < rhsId;
+      }
+    }
+    // Longer ORDER BY first within same partition.
+    return lhs.orderKeys.size() > rhs.orderKeys.size();
+  });
+
+  return groups;
+}
+
+// Adds a Project to drop columns from 'plan' that are not in 'neededColumns'.
+// No-op if all columns are needed.
+void maybeDropColumns(RelationOpPtr& plan, const PlanObjectSet& neededColumns) {
+  ExprVector exprs;
+  ColumnVector cols;
+  for (auto* column : plan->columns()) {
+    if (neededColumns.contains(column)) {
+      exprs.emplace_back(column);
+      cols.emplace_back(column);
+    }
+  }
+
+  if (cols.size() < plan->columns().size()) {
+    plan = make<Project>(
+        plan, std::move(exprs), std::move(cols), /*redundant=*/false);
+  }
+}
+
+// Precomputes window function args and frame bound values, returning new
+// WindowFunction objects with column references in place of expressions.
+WindowFunctionVector flattenWindowFunctions(
+    const WindowFunctionVector& functions,
+    PrecomputeProjection& precompute) {
+  WindowFunctionVector result;
+  result.reserve(functions.size());
+  for (const auto& func : functions) {
+    auto args = precompute.toColumns(
+        func->args(), /*aliases=*/nullptr, /*preserveLiterals=*/true);
+    Frame frame = func->frame();
+    if (frame.startValue) {
+      frame.startValue = precompute.toColumn(frame.startValue);
+    }
+    if (frame.endValue) {
+      frame.endValue = precompute.toColumn(frame.endValue);
+    }
+    result.emplace_back(
+        make<WindowFunction>(
+            func->name(),
+            func->value(),
+            std::move(args),
+            func->functions(),
+            func->partitionKeys(),
+            func->orderKeys(),
+            func->orderTypes(),
+            frame,
+            func->ignoreNulls()));
+  }
+  return result;
+}
+
+} // namespace
+
+void Optimization::addWindow(
+    DerivedTableCP dt,
+    RelationOpPtr& plan,
+    PlanState& state) const {
+  // Collect window functions from DT expressions.
+  std::vector<std::pair<ColumnCP, WindowFunctionCP>> windowExprs;
+  for (size_t i = 0; i < dt->exprs.size(); ++i) {
+    if (dt->exprs[i]->is(PlanType::kWindowExpr)) {
+      windowExprs.emplace_back(
+          dt->columns[i], dt->exprs[i]->as<WindowFunction>());
+    }
+  }
+
+  if (windowExprs.empty()) {
+    return;
+  }
+
+  auto groups = groupWindowFunctions(windowExprs);
+
+  // Emit Window operators.
+  for (size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
+    auto& group = groups[groupIndex];
+
+    // Precompute projection for window function arguments, partition keys,
+    // order keys, frame bound expressions, and downstream columns.
+    PrecomputeProjection precompute(plan, dt, /*projectAllInputs=*/false);
+
+    // Add input columns needed downstream (by operators above all window
+    // groups). Uses downstreamColumns which accounts for placed expressions.
+    const auto downstream = state.downstreamColumns();
+    for (auto* column : plan->columns()) {
+      if (downstream.contains(column)) {
+        precompute.toColumn(column);
+      }
+    }
+
+    // Precompute window function args and frame bound values.
+    auto windowFunctions = flattenWindowFunctions(group.functions, precompute);
+
+    auto partitionKeys = precompute.toColumns(group.partitionKeys);
+    auto orderKeys = precompute.toColumns(group.orderKeys);
+    auto planBeforeProject = plan;
+    plan = std::move(precompute).maybeProject();
+
+    // Velox WindowNode passes through all input columns. When precompute
+    // didn't add a Project (all needed columns are simple pass-throughs of
+    // input columns), drop columns not needed by this or subsequent window
+    // groups or by downstream operators.
+    if (plan == planBeforeProject) {
+      maybeDropColumns(plan, downstream);
+    }
+
+    if (!isSingleWorker_) {
+      maybeRepartition(plan, ExprVector(partitionKeys), state.cost);
+    }
+
+    // Check inputsSorted: true if the previous group had the same partition
+    // keys and this group's ORDER BY is a prefix of the previous.
+    bool inputsSorted = groupIndex > 0 &&
+        sameKeys(groups[groupIndex - 1].partitionKeys, group.partitionKeys) &&
+        isPrefix(group.orderKeys, groups[groupIndex - 1].orderKeys);
+
+    // Build output columns: all input columns + window function result columns.
+    ColumnVector columns = plan->columns();
+    append(columns, group.outputColumns);
+
+    plan = make<Window>(
+        plan,
+        std::move(partitionKeys),
+        std::move(orderKeys),
+        std::move(group.orderTypes),
+        std::move(windowFunctions),
+        inputsSorted,
+        std::move(columns));
+    state.addCost(*plan);
+
+    // Map original window function expressions to their output columns and
+    // mark them as placed so that downstreamColumns() is recomputed for the
+    // next group.
+    for (size_t i = 0; i < group.outputColumns.size(); ++i) {
+      state.addExprToColumn(group.functions[i], group.outputColumns[i]);
+      state.place(group.functions[i]);
+    }
+  }
 }
 
 void Optimization::addOrderBy(

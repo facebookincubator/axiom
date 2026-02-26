@@ -1309,12 +1309,14 @@ TEST_F(PrestoParserTest, use) {
 }
 
 TEST_F(PrestoParserTest, windowFunction) {
+  // SQL standard default frame when ORDER BY is present without explicit frame
+  // is RANGE UNBOUNDED PRECEDING to CURRENT ROW.
   testSelect(
       "SELECT n_name, row_number() OVER (ORDER BY n_nationkey) FROM nation",
       matchScan()
           .project({
               "n_name",
-              "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+              "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
           })
           .output());
 }

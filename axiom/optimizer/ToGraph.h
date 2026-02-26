@@ -167,6 +167,20 @@ class ToGraph {
       uint64_t allowedInDt,
       bool excludeOuterJoins = false);
 
+  // Handles kFilter in makeQueryGraph. Creates DT boundaries for
+  // nondeterministic filters and filters on window function outputs.
+  void makeFilterQueryGraph(
+      const logical_plan::FilterNode& filter,
+      uint64_t allowedInDt,
+      bool excludeOuterJoins);
+
+  // Handles kProject in makeQueryGraph. Creates DT boundaries for
+  // window-on-window dependencies and windows over LIMIT.
+  void makeProjectQueryGraph(
+      const logical_plan::ProjectNode& project,
+      uint64_t allowedInDt,
+      bool excludeOuterJoins);
+
   PlanObjectCP findLeaf(const logical_plan::LogicalPlanNode* node) {
     auto* leaf = planLeaves_[node];
     VELOX_CHECK_NOT_NULL(leaf);
@@ -279,11 +293,23 @@ class ToGraph {
   AggregationPlanCP translateAggregation(
       const logical_plan::AggregateNode& aggregation);
 
+  // Translates a logical WindowExpr to a QueryGraph WindowFunction.
+  ExprCP translateWindowExpr(const logical_plan::WindowExpr& window);
+
   void addProjection(const logical_plan::ProjectNode& project);
 
   void addFilter(
       const logical_plan::LogicalPlanNode& input,
       const logical_plan::ExprPtr& predicate);
+
+  // Returns true if 'expr' references any window function output through
+  // renames_. Used to detect filters that depend on window function results.
+  bool referencesWindowOutput(const logical_plan::ExprPtr& expr) const;
+
+  // Returns true if any window expression in the project references another
+  // window function output through renames_. Used to detect window-on-window
+  // dependencies that require a DT boundary.
+  bool windowReferencesWindow(const logical_plan::ProjectNode& project) const;
 
   void addLimit(const logical_plan::LimitNode& limit);
 

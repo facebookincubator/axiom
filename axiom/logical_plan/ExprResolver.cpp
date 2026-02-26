@@ -972,6 +972,15 @@ WindowExprPtr ExprResolver::resolveWindowTypes(
       ? windowSpec.frameType().value()
       : WindowExpr::WindowType::kRange;
 
+  // SQL standard: when ORDER BY is present and no frame is specified, the
+  // default is RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW. When ORDER BY
+  // is absent, the default is RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
+  // FOLLOWING (entire partition).
+  if (!windowSpec.frameType().has_value() && !ordering.empty() &&
+      endType == WindowExpr::BoundType::kUnboundedFollowing) {
+    endType = WindowExpr::BoundType::kCurrentRow;
+  }
+
   WindowExpr::Frame frame{windowType, startType, startValue, endType, endValue};
 
   return std::make_shared<WindowExpr>(

@@ -53,6 +53,7 @@ const auto& relTypeNames() {
       {RelType::kEnforceSingleRow, "EnforceSingleRow"},
       {RelType::kAssignUniqueId, "AssignUniqueId"},
       {RelType::kEnforceDistinct, "EnforceDistinct"},
+      {RelType::kWindow, "Window"},
   };
 
   return kNames;
@@ -1335,6 +1336,15 @@ float aggregationCost(
       numAggregates * Costs::kSimpleAggregateCost +
       2 * Costs::hashRowCost(numGroups, rowBytes);
 }
+
+// Per-row cost of sorting 'cardinality' rows by 'numKeys' keys.
+// Models O(n log n) comparisons amortized per row.
+float sortCost(size_t numKeys, float cardinality) {
+  if (numKeys == 0 || cardinality <= 1) {
+    return 0;
+  }
+  return Costs::kKeyCompareCost * numKeys * std::log2(cardinality);
+}
 } // namespace
 
 void Aggregation::setCostWithGroups(int64_t inputBeforePartial) {
@@ -1883,6 +1893,75 @@ EnforceDistinct::EnforceDistinct(
 }
 
 void EnforceDistinct::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+Window::Window(
+    RelationOpPtr input,
+    ExprVector _partitionKeys,
+    ExprVector _orderKeys,
+    OrderTypeVector _orderTypes,
+    WindowFunctionVector _windowFunctions,
+    bool _inputsSorted,
+    ColumnVector columns)
+    : RelationOp{RelType::kWindow, std::move(input), std::move(columns)},
+      partitionKeys{std::move(_partitionKeys)},
+      orderKeys{std::move(_orderKeys)},
+      orderTypes{std::move(_orderTypes)},
+      windowFunctions{std::move(_windowFunctions)},
+      inputsSorted{_inputsSorted} {
+  VELOX_CHECK_EQ(orderKeys.size(), orderTypes.size());
+
+  cost_.inputCardinality = inputCardinality();
+  // Window functions are cardinality-neutral.
+  cost_.fanout = 1;
+
+  const auto numKeys = partitionKeys.size() + orderKeys.size();
+  cost_.unitCost =
+      (inputsSorted ? 0 : sortCost(numKeys, cost_.inputCardinality)) +
+      windowFunctions.size() * Costs::kSimpleAggregateCost;
+
+  initConstraints();
+}
+
+void Window::initConstraints() {
+  // Window passes through all input constraints and adds new columns for
+  // window function results.
+  constraints_ = input_->constraints();
+  const auto numInputColumns = columns_.size() - windowFunctions.size();
+  for (size_t i = numInputColumns; i < columns_.size(); ++i) {
+    auto* column = columns_[i];
+    constraints_.emplace(column->id(), column->value());
+  }
+}
+
+const QGString& Window::historyKey() const {
+  if (!key_.empty()) {
+    return key_;
+  }
+  std::stringstream out;
+  out << input_->historyKey();
+  out << " window";
+  auto* opt = queryCtx()->optimization();
+  velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  if (!partitionKeys.empty()) {
+    out << " partition by ";
+    std::vector<std::string> strings;
+    for (auto& key : partitionKeys) {
+      strings.push_back(key->toString());
+    }
+    std::ranges::sort(strings);
+    for (auto& s : strings) {
+      out << s << ", ";
+    }
+  }
+  key_ = sanitizeHistoryKey(out.str());
+  return key_;
+}
+
+void Window::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
   visitor.visit(*this, context);

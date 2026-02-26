@@ -225,6 +225,25 @@ class ToVelox {
       runner::ExecutableFragment& fragment,
       std::vector<runner::ExecutableFragment>& stages);
 
+  // Makes a Velox WindowNode for a RelationOp.
+  velox::core::PlanNodePtr makeWindow(
+      const Window& op,
+      runner::ExecutableFragment& fragment,
+      std::vector<runner::ExecutableFragment>& stages);
+
+  // Adds a ProjectNode to trim extra columns from 'input' if it has more
+  // columns than 'inputOp' expects. This handles Velox operators that pass
+  // through all input columns (e.g., WindowNode) when the input has extra
+  // columns from rejected scan filters.
+  velox::core::PlanNodePtr maybeTrimColumns(
+      velox::core::PlanNodePtr input,
+      const RelationOpPtr& inputOp);
+
+  // Converts a single WindowFunction to a Velox WindowNode::Function.
+  velox::core::WindowNode::Function toVeloxWindowFunction(
+      WindowFunctionCP windowFunc,
+      ColumnCP outputColumn);
+
   // Makes a tree of PlanNode for a tree of
   // RelationOp. 'fragment' is the fragment that 'op'
   // belongs to. If op or children are repartitions then the

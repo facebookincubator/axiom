@@ -269,13 +269,16 @@ TEST_F(PlanTest, specialFormConstantFold) {
                            .map({"a + 2"})
                            .build();
 
-    auto matcher = testCase.expectedExpression.has_value()
-        ? core::PlanMatcherBuilder()
-              .tableScan()
-              .filter(testCase.expectedExpression.value())
-              .project()
-              .build()
-        : core::PlanMatcherBuilder().tableScan().project().build();
+    std::shared_ptr<velox::core::PlanMatcher> matcher;
+    if (!testCase.expectedExpression.has_value()) {
+      matcher = core::PlanMatcherBuilder().tableScan().project().build();
+    } else {
+      matcher = core::PlanMatcherBuilder()
+                    .tableScan()
+                    .filter(testCase.expectedExpression.value())
+                    .project()
+                    .build();
+    }
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
