@@ -135,7 +135,7 @@ bool VeloxHistory::estimateLeafSelectivity(
   auto* runnerTable = table.schemaTable->connectorTable;
   VELOX_DCHECK_NOT_NULL(runnerTable);
 
-  if (options.sampleFilters) {
+  if (options.sampleFilters && runnerTable->layouts()[0]->supportsSampling()) {
     const auto string = tableHandle->toString();
 
     // Return cached sampled selectivity if available to avoid expensive I/O.
