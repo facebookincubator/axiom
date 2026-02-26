@@ -1019,6 +1019,18 @@ FunctionSet functionBits(Name name, bool specialForm) {
   return bits;
 }
 
+// Estimates the output cardinality of a function call as the maximum
+// cardinality across its arguments, with a minimum of 1.
+// TODO: This underestimates for functions like row_number() that produce
+// unique values per row. Revisit when partition size estimates are available.
+float estimateCallCardinality(const ExprVector& args) {
+  float cardinality = 1;
+  for (const auto& arg : args) {
+    cardinality = std::max(cardinality, arg->value().cardinality);
+  }
+  return cardinality;
+}
+
 } // namespace
 
 ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
@@ -1067,18 +1079,18 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     const auto& inputs = expr->inputs();
     ExprVector args;
     args.reserve(inputs.size());
-    float cardinality = 1;
     bool allConstant = true;
 
     for (const auto& input : inputs) {
       auto arg = translateExpr(input);
       args.emplace_back(arg);
       allConstant &= arg->is(PlanType::kLiteralExpr);
-      cardinality = std::max(cardinality, arg->value().cardinality);
       if (arg->is(PlanType::kCallExpr)) {
         funcs = funcs | arg->as<Call>()->functions();
       }
     }
+
+    auto cardinality = estimateCallCardinality(args);
 
     auto name = call ? toName(callName)
                      : SpecialFormCallNames::toCallName(specialForm->form());
@@ -1104,8 +1116,78 @@ ExprCP ToGraph::translateExpr(const lp::ExprPtr& expr) {
     return callExpr;
   }
 
+  if (expr->isWindow()) {
+    return translateWindowExpr(*expr->as<lp::WindowExpr>());
+  }
+
   VELOX_NYI("Unexpected expression: {}", expr->kindName());
   return nullptr;
+}
+
+ExprCP ToGraph::translateWindowExpr(const lp::WindowExpr& window) {
+  ExprVector args = translateExprs(window.inputs());
+
+  FunctionSet funcs;
+  for (auto& arg : args) {
+    funcs = funcs | arg->functions();
+  }
+
+  // Translate and deduplicate partition keys.
+  ExprVector partitionKeys;
+  partitionKeys.reserve(window.partitionKeys().size());
+  folly::F14FastSet<ExprCP> uniquePartitionKeys;
+  for (const auto& key : window.partitionKeys()) {
+    auto* translated = translateExpr(key);
+    if (uniquePartitionKeys.emplace(translated).second) {
+      partitionKeys.push_back(translated);
+    }
+  }
+
+  // Translate and deduplicate order keys, removing any that appear in
+  // partition keys.
+  auto [orderKeys, orderTypes] = dedupOrdering(window.ordering());
+  ExprVector filteredOrderKeys;
+  OrderTypeVector filteredOrderTypes;
+  filteredOrderKeys.reserve(orderKeys.size());
+  filteredOrderTypes.reserve(orderTypes.size());
+  for (size_t i = 0; i < orderKeys.size(); ++i) {
+    if (!uniquePartitionKeys.contains(orderKeys[i])) {
+      filteredOrderKeys.push_back(orderKeys[i]);
+      filteredOrderTypes.push_back(orderTypes[i]);
+    }
+  }
+
+  // Translate frame. Only the bound value expressions need translation.
+  const auto& lpFrame = window.frame();
+  VELOX_USER_CHECK(
+      lpFrame.type != lp::WindowExpr::WindowType::kGroups,
+      "GROUPS window type is not supported");
+  Frame frame;
+  frame.type = lpFrame.type;
+  frame.startType = lpFrame.startType;
+  frame.startValue =
+      lpFrame.startValue ? translateExpr(lpFrame.startValue) : nullptr;
+  frame.endType = lpFrame.endType;
+  frame.endValue = lpFrame.endValue ? translateExpr(lpFrame.endValue) : nullptr;
+
+  auto callName = toName(window.name());
+  // Window functions are non-deterministic and have non-default null behavior.
+  funcs = funcs | FunctionSet::kNonDeterministic |
+      FunctionSet::kNonDefaultNullBehavior;
+
+  auto* exprType = toType(window.type());
+  auto cardinality = estimateCallCardinality(args);
+
+  return make<WindowFunction>(
+      callName,
+      Value(exprType, cardinality),
+      std::move(args),
+      funcs,
+      std::move(partitionKeys),
+      std::move(filteredOrderKeys),
+      std::move(filteredOrderTypes),
+      frame,
+      window.ignoreNulls());
 }
 
 ExprCP ToGraph::translateLambda(const lp::LambdaExpr* lambda) {
@@ -2898,6 +2980,56 @@ void ToGraph::applySampling(
   }
 }
 
+bool ToGraph::referencesWindowOutput(const lp::ExprPtr& expr) const {
+  if (expr->isInputReference()) {
+    const auto& name = expr->as<lp::InputReferenceExpr>()->name();
+    auto it = renames_.find(name);
+    // The name may not be in renames_ for columns from outer scopes in
+    // correlated subqueries. The value may be null when a subfield path is not
+    // materialized (see intersectWithSkyline).
+    return it != renames_.end() && it->second != nullptr &&
+        it->second->is(PlanType::kWindowExpr);
+  }
+  return std::ranges::any_of(expr->inputs(), [this](const auto& input) {
+    return referencesWindowOutput(input);
+  });
+}
+
+bool ToGraph::windowReferencesWindow(const lp::ProjectNode& project) const {
+  for (const auto& expr : project.expressions()) {
+    if (!expr->isWindow()) {
+      continue;
+    }
+
+    // Check all sub-expressions of this window (args, partition keys,
+    // order keys) for references to other window function outputs.
+    const auto* window = expr->as<lp::WindowExpr>();
+    for (const auto& input : window->inputs()) {
+      if (referencesWindowOutput(input)) {
+        return true;
+      }
+    }
+    for (const auto& key : window->partitionKeys()) {
+      if (referencesWindowOutput(key)) {
+        return true;
+      }
+    }
+    for (const auto& field : window->ordering()) {
+      if (referencesWindowOutput(field.expression)) {
+        return true;
+      }
+    }
+    const auto& frame = window->frame();
+    if (frame.startValue && referencesWindowOutput(frame.startValue)) {
+      return true;
+    }
+    if (frame.endValue && referencesWindowOutput(frame.endValue)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void ToGraph::addFilter(
     const lp::LogicalPlanNode& input,
     const lp::ExprPtr& predicate) {
@@ -3207,6 +3339,66 @@ DerivedTableP ToGraph::makeQueryGraph(const lp::LogicalPlanNode& logicalPlan) {
   return currentDt_;
 }
 
+void ToGraph::makeFilterQueryGraph(
+    const lp::FilterNode& filter,
+    uint64_t allowedInDt,
+    bool excludeOuterJoins) {
+  const auto& input = *filter.onlyInput();
+
+  if (hasSubquery(filter.predicate())) {
+    excludeOuterJoins = true;
+  }
+
+  if (hasNondeterministic(filter.predicate())) {
+    auto* outerDt = std::exchange(currentDt_, newDt());
+    makeQueryGraph(input, kAllAllowedInDt, excludeOuterJoins);
+    addFilter(input, filter.predicate());
+    finalizeDt(filter, outerDt);
+    return;
+  }
+
+  makeQueryGraph(input, allowedInDt, excludeOuterJoins);
+
+  // If the filter references window function outputs, finalize the DT
+  // so the filter is evaluated in the outer DT after the window.
+  if (referencesWindowOutput(filter.predicate())) {
+    finalizeDt(filter);
+  }
+
+  addFilter(input, filter.predicate());
+}
+
+void ToGraph::makeProjectQueryGraph(
+    const lp::ProjectNode& project,
+    uint64_t allowedInDt,
+    bool excludeOuterJoins) {
+  makeQueryGraph(*project.onlyInput(), allowedInDt, excludeOuterJoins);
+
+  // Check if this project contains window expressions and apply DT
+  // boundary rules.
+  bool hasWindow = false;
+  bool windowHasPartitionOrOrderKeys = false;
+  for (const auto& expr : project.expressions()) {
+    if (expr->isWindow()) {
+      hasWindow = true;
+      const auto* window = expr->as<lp::WindowExpr>();
+      if (!window->partitionKeys().empty() || !window->ordering().empty()) {
+        windowHasPartitionOrOrderKeys = true;
+      }
+    }
+  }
+
+  if (hasWindow) {
+    if (currentDt_->hasLimit() || windowReferencesWindow(project)) {
+      finalizeDt(*project.onlyInput());
+    } else if (currentDt_->hasOrderBy() && windowHasPartitionOrOrderKeys) {
+      currentDt_->dropOrderBy();
+    }
+  }
+
+  addProjection(project);
+}
+
 void ToGraph::makeQueryGraph(
     const lp::LogicalPlanNode& node,
     uint64_t allowedInDt,
@@ -3234,37 +3426,21 @@ void ToGraph::makeQueryGraph(
     case lp::NodeKind::kSample:
       applySampling(*node.as<lp::SampleNode>(), allowedInDt);
       break;
-    case lp::NodeKind::kFilter: {
-      const auto& input = *node.onlyInput();
-      const auto& filter = *node.as<lp::FilterNode>();
-
-      if (hasSubquery(filter.predicate())) {
-        excludeOuterJoins = true;
-      }
-
-      if (hasNondeterministic(filter.predicate())) {
-        auto* outerDt = std::exchange(currentDt_, newDt());
-        makeQueryGraph(input, kAllAllowedInDt, excludeOuterJoins);
-        addFilter(input, filter.predicate());
-        finalizeDt(node, outerDt);
-        break;
-      }
-
-      makeQueryGraph(input, allowedInDt, excludeOuterJoins);
-      addFilter(input, filter.predicate());
-    } break;
-    case lp::NodeKind::kProject: {
-      makeQueryGraph(*node.onlyInput(), allowedInDt, excludeOuterJoins);
-      addProjection(*node.as<lp::ProjectNode>());
-    } break;
+    case lp::NodeKind::kFilter:
+      makeFilterQueryGraph(
+          *node.as<lp::FilterNode>(), allowedInDt, excludeOuterJoins);
+      break;
+    case lp::NodeKind::kProject:
+      makeProjectQueryGraph(
+          *node.as<lp::ProjectNode>(), allowedInDt, excludeOuterJoins);
+      break;
     case lp::NodeKind::kAggregate: {
       const auto& input = *node.onlyInput();
       makeQueryGraph(input, allowedInDt, excludeOuterJoins);
       if (currentDt_->hasAggregation() || currentDt_->hasLimit()) {
         finalizeDt(input);
       } else if (currentDt_->hasOrderBy()) {
-        currentDt_->orderKeys.clear();
-        currentDt_->orderTypes.clear();
+        currentDt_->dropOrderBy();
       }
 
       auto* agg = translateAggregation(*node.as<lp::AggregateNode>());

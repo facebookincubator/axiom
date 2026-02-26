@@ -124,6 +124,78 @@ for the complete guide. Key rules are summarized below.
 - Keep method implementations in `.cpp` except for trivial one-liners.
 - Avoid default arguments when all callers can pass values explicitly.
 
+## Common Mistakes
+
+These are frequently violated rules. Check every new or modified line against
+this list before finishing.
+
+### `///` vs `//` — wrong comment style
+
+`///` is **only** for public API: public classes, public methods, public member
+variables. Everything else uses `//`: private/protected members, anonymous
+namespace functions and types, comments inside function bodies.
+
+```cpp
+// ❌ Wrong — anonymous-namespace function is not public API.
+namespace {
+/// Returns true if 'a' is a prefix of 'b'.
+bool isPrefix(const ExprVector& a, const ExprVector& b);
+} // namespace
+
+// ✅ Correct.
+namespace {
+// Returns true if 'a' is a prefix of 'b'.
+bool isPrefix(const ExprVector& a, const ExprVector& b);
+} // namespace
+
+// ❌ Wrong — private method is not public API.
+ private:
+  /// Recursively replaces window function references.
+  ExprCP resolveWindowRefs(ExprCP expr) const;
+
+// ✅ Correct.
+ private:
+  // Recursively replaces window function references.
+  ExprCP resolveWindowRefs(ExprCP expr) const;
+```
+
+### One-letter and abbreviated variable names
+
+Do not abbreviate. Use full, descriptive names. Loop indices (`i`, `j`) are
+acceptable. Everything else — function parameters, lambda parameters, local
+variables — must be descriptive.
+
+```cpp
+// ❌ Wrong — one-letter names and abbreviations.
+bool sameKeys(const ExprVector& a, const ExprVector& b);
+std::sort(groups.begin(), groups.end(), [](const auto& a, const auto& b) { ... });
+for (auto* wf : group.functions) { ... }
+for (size_t gi = 0; gi < groups.size(); ++gi) { ... }
+auto f = [](WindowFunctionCP f) { return f->frame().type == WindowType::kRows; };
+
+// ✅ Correct — descriptive names.
+bool sameKeys(const ExprVector& lhs, const ExprVector& rhs);
+std::sort(groups.begin(), groups.end(), [](const auto& lhs, const auto& rhs) { ... });
+for (auto* windowFunc : group.functions) { ... }
+for (size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex) { ... }
+auto f = [](WindowFunctionCP func) { return func->frame().type == WindowType::kRows; };
+```
+
+### Undocumented APIs in headers
+
+Every class, every non-trivial method declaration, and every member variable in
+a `.h` file must have a comment. Trivial one-liner getters may be left
+undocumented if the name is self-explanatory.
+
+```cpp
+// ❌ Wrong — no comment on method declaration.
+  ExprCP translateWindowExpr(const logical_plan::WindowExpr* window);
+
+// ✅ Correct.
+  // Translates a logical WindowExpr to a QueryGraph WindowFunction.
+  ExprCP translateWindowExpr(const logical_plan::WindowExpr* window);
+```
+
 ## Directory Structure
 
 | Directory | Description |

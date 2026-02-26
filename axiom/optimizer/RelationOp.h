@@ -122,6 +122,7 @@ enum class RelType {
   kEnforceSingleRow,
   kAssignUniqueId,
   kEnforceDistinct,
+  kWindow,
 };
 
 AXIOM_DECLARE_ENUM_NAME(RelType)
@@ -779,5 +780,46 @@ struct EnforceDistinct : public RelationOp {
 };
 
 using EnforceDistinctCP = const EnforceDistinct*;
+
+/// Computes window functions over partitioned and sorted input.
+struct Window : public RelationOp {
+  /// @param input The input relation.
+  /// @param partitionKeys Keys to break input into partitions.
+  /// @param orderKeys Keys to sort rows within each partition.
+  /// @param orderTypes Sort order for each order key.
+  /// @param windowFunctions Window functions to compute.
+  /// @param inputsSorted True if input is already partitioned and sorted.
+  /// @param columns Output columns: all input columns followed by window
+  ///   function result columns.
+  Window(
+      RelationOpPtr input,
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes,
+      WindowFunctionVector windowFunctions,
+      bool inputsSorted,
+      ColumnVector columns);
+
+  const ExprVector partitionKeys;
+  const ExprVector orderKeys;
+  const OrderTypeVector orderTypes;
+  const WindowFunctionVector windowFunctions;
+
+  /// When true, input is already partitioned by partitionKeys and sorted by
+  /// orderKeys within each partition, so the Window operator skips
+  /// repartitioning and sorting.
+  const bool inputsSorted;
+
+  const QGString& historyKey() const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+
+ private:
+  void initConstraints();
+};
+
+using WindowCP = const Window*;
 
 } // namespace facebook::axiom::optimizer

@@ -56,6 +56,33 @@ ToVelox::ToVelox(
 
 namespace {
 
+// Returns true if 'node' is a ProjectNode where every expression is a plain
+// FieldAccessTypedExpr on an input column (i.e., the project only
+// selects/renames/reorders columns without computing anything). If
+// 'allowRenaming' is false, also requires that each output name matches the
+// input field name.
+bool isIdentityProject(
+    const velox::core::PlanNode* node,
+    bool allowRenaming = true) {
+  auto* project = dynamic_cast<const velox::core::ProjectNode*>(node);
+  if (!project) {
+    return false;
+  }
+  const auto& names = project->names();
+  const auto& projections = project->projections();
+  for (size_t i = 0; i < projections.size(); ++i) {
+    auto* field = dynamic_cast<const velox::core::FieldAccessTypedExpr*>(
+        projections[i].get());
+    if (!field || !field->isInputColumn()) {
+      return false;
+    }
+    if (!allowRenaming && names[i] != field->name()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::vector<velox::common::Subfield> columnSubfields(
     BaseTableCP table,
     int32_t id) {
@@ -207,20 +234,8 @@ velox::core::PlanNodePtr ToVelox::addOutputRenames(
   // to compose the renames and avoid stacking two rename-only projects.
   auto* project = dynamic_cast<const velox::core::ProjectNode*>(input.get());
   const std::vector<velox::core::TypedExprPtr>* innerProjections = nullptr;
-  if (project) {
-    const auto& projections = project->projections();
-    bool allFieldAccess = true;
-    for (const auto& expr : projections) {
-      if (auto* field = dynamic_cast<const velox::core::FieldAccessTypedExpr*>(
-              expr.get());
-          !field || !field->isInputColumn()) {
-        allFieldAccess = false;
-        break;
-      }
-    }
-    if (allFieldAccess) {
-      innerProjections = &projections;
-    }
+  if (isIdentityProject(input.get())) {
+    innerProjections = &project->projections();
   }
 
   // Resolve the effective source: the project's input if we can look
@@ -1340,6 +1355,120 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       input);
 }
 
+namespace {
+velox::core::WindowNode::WindowType toVeloxWindowType(
+    lp::WindowExpr::WindowType type) {
+  switch (type) {
+    case lp::WindowExpr::WindowType::kRows:
+      return velox::core::WindowNode::WindowType::kRows;
+    case lp::WindowExpr::WindowType::kRange:
+      return velox::core::WindowNode::WindowType::kRange;
+    case lp::WindowExpr::WindowType::kGroups:
+      VELOX_NYI("GROUPS window type is not supported");
+  }
+  VELOX_UNREACHABLE();
+}
+
+velox::core::WindowNode::BoundType toVeloxBoundType(
+    lp::WindowExpr::BoundType type) {
+  switch (type) {
+    case lp::WindowExpr::BoundType::kUnboundedPreceding:
+      return velox::core::WindowNode::BoundType::kUnboundedPreceding;
+    case lp::WindowExpr::BoundType::kPreceding:
+      return velox::core::WindowNode::BoundType::kPreceding;
+    case lp::WindowExpr::BoundType::kCurrentRow:
+      return velox::core::WindowNode::BoundType::kCurrentRow;
+    case lp::WindowExpr::BoundType::kFollowing:
+      return velox::core::WindowNode::BoundType::kFollowing;
+    case lp::WindowExpr::BoundType::kUnboundedFollowing:
+      return velox::core::WindowNode::BoundType::kUnboundedFollowing;
+  }
+  VELOX_UNREACHABLE();
+}
+} // namespace
+
+velox::core::WindowNode::Function ToVelox::toVeloxWindowFunction(
+    WindowFunctionCP windowFunc,
+    ColumnCP outputColumn) {
+  auto call = std::make_shared<velox::core::CallTypedExpr>(
+      toTypePtr(outputColumn->value().type),
+      toTypedExprs(windowFunc->args()),
+      windowFunc->name());
+
+  const auto& frame = windowFunc->frame();
+  velox::core::WindowNode::Frame veloxFrame{
+      .type = toVeloxWindowType(frame.type),
+      .startType = toVeloxBoundType(frame.startType),
+      .startValue = frame.startValue ? toTypedExpr(frame.startValue) : nullptr,
+      .endType = toVeloxBoundType(frame.endType),
+      .endValue = frame.endValue ? toTypedExpr(frame.endValue) : nullptr,
+  };
+
+  return {
+      .functionCall = std::move(call),
+      .frame = std::move(veloxFrame),
+      .ignoreNulls = windowFunc->ignoreNulls(),
+  };
+}
+
+velox::core::PlanNodePtr ToVelox::maybeTrimColumns(
+    velox::core::PlanNodePtr input,
+    const RelationOpPtr& inputOp) {
+  const auto& columns = inputOp->columns();
+  if (input->outputType()->size() <= columns.size()) {
+    return input;
+  }
+
+  auto type = makeOutputType(columns);
+  std::vector<std::string> names;
+  std::vector<velox::core::TypedExprPtr> exprs;
+  names.reserve(columns.size());
+  exprs.reserve(columns.size());
+  for (size_t i = 0; i < columns.size(); ++i) {
+    names.push_back(type->nameOf(i));
+    exprs.push_back(
+        std::make_shared<velox::core::FieldAccessTypedExpr>(
+            type->childAt(i), type->nameOf(i)));
+  }
+  return std::make_shared<velox::core::ProjectNode>(
+      nextId(), std::move(names), std::move(exprs), std::move(input));
+}
+
+velox::core::PlanNodePtr ToVelox::makeWindow(
+    const Window& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input =
+      maybeTrimColumns(makeFragment(op.input(), fragment, stages), op.input());
+
+  auto partitionKeys = toFieldRefs(op.partitionKeys);
+  auto sortingKeys = toFieldRefs(op.orderKeys);
+  auto sortingOrders = toSortOrders(op.orderTypes);
+
+  const auto numInputColumns = op.input()->columns().size();
+  std::vector<std::string> windowColumnNames;
+  std::vector<velox::core::WindowNode::Function> windowFunctions;
+  windowColumnNames.reserve(op.windowFunctions.size());
+  windowFunctions.reserve(op.windowFunctions.size());
+
+  for (size_t i = 0; i < op.windowFunctions.size(); ++i) {
+    const auto* column = op.columns()[numInputColumns + i];
+    windowColumnNames.push_back(column->outputName());
+    windowFunctions.push_back(
+        toVeloxWindowFunction(op.windowFunctions[i], column));
+  }
+
+  return std::make_shared<velox::core::WindowNode>(
+      nextId(),
+      std::move(partitionKeys),
+      std::move(sortingKeys),
+      std::move(sortingOrders),
+      std::move(windowColumnNames),
+      std::move(windowFunctions),
+      op.inputsSorted,
+      std::move(input));
+}
+
 velox::core::PlanNodePtr ToVelox::makeRepartition(
     const Repartition& repartition,
     runner::ExecutableFragment& fragment,
@@ -1674,6 +1803,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeAssignUniqueId(*op->as<AssignUniqueId>(), fragment, stages);
     case RelType::kEnforceDistinct:
       return makeEnforceDistinct(*op->as<EnforceDistinct>(), fragment, stages);
+    case RelType::kWindow:
+      return makeWindow(*op->as<Window>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

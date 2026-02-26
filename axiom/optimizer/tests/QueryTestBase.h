@@ -20,6 +20,7 @@
 #include <gflags/gflags.h>
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/optimizer/VeloxHistory.h"
+#include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
@@ -196,6 +197,11 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
 
   /// Returns the full path to a test data file.
   static std::string getTestDataPath(const std::string& filename);
+
+  static velox::core::PlanMatcherBuilder matchScan(
+      const std::string& tableName) {
+    return velox::core::PlanMatcherBuilder().tableScan(tableName);
+  }
 
   OptimizerOptions optimizerOptions_;
 

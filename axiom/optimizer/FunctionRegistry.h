@@ -43,6 +43,9 @@ class FunctionSet {
   /// may produce non-null result.
   static constexpr uint64_t kNonDefaultNullBehavior = 1UL << 4;
 
+  /// Indicates a window function in the set.
+  static constexpr uint64_t kWindow = 1UL << 5;
+
   FunctionSet() : set_(0) {}
 
   explicit FunctionSet(uint64_t set) : set_(set) {}

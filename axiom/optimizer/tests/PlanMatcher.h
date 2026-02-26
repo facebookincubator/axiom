@@ -316,6 +316,11 @@ class PlanMatcherBuilder {
   /// Cannot be used with match(PlanNodePtr) - use match(MultiFragmentPlan).
   PlanMatcherBuilder& shuffle();
 
+  /// Marks a shuffle boundary with verification of partition keys.
+  /// @param keys Expected partition key column names. Supports symbol rewriting
+  /// from child matchers.
+  PlanMatcherBuilder& shuffle(const std::vector<std::string>& keys);
+
   /// Marks an ordered shuffle boundary (uses MergeExchange instead of
   /// Exchange). In a distributed plan:
   ///   - Producer side expects PartitionedOutput node
@@ -384,6 +389,16 @@ class PlanMatcherBuilder {
   /// syntax). Supports symbol rewriting from child matchers.
   PlanMatcherBuilder& enforceDistinct(
       const std::vector<std::string>& distinctKeys);
+
+  /// Matches any Window node regardless of functions or partitioning.
+  PlanMatcherBuilder& window();
+
+  /// Matches a Window node with the specified SQL window expressions.
+  /// Each expression should be a complete window clause, e.g.
+  /// "row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name) as rn".
+  /// Verifies function names, partition keys, and order by keys.
+  /// @param windowExprs SQL window expressions to match.
+  PlanMatcherBuilder& window(const std::vector<std::string>& windowExprs);
 
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.

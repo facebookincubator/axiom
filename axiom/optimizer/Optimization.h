@@ -251,6 +251,11 @@ class Optimization {
       const AggregateVector& aggregates,
       AggregationPlanCP aggPlan) const;
 
+  // Adds window function operators to 'plan'. Groups window functions by
+  // specification and emits one Window operator per group.
+  void addWindow(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)
+      const;
+
   void addOrderBy(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)
       const;
 

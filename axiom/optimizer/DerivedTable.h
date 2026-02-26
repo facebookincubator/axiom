@@ -259,6 +259,11 @@ struct DerivedTable : public PlanObject {
     return !orderKeys.empty();
   }
 
+  void dropOrderBy() {
+    orderKeys.clear();
+    orderTypes.clear();
+  }
+
   bool hasLimit() const {
     return limit >= 0;
   }

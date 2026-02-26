@@ -24,6 +24,7 @@
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/expression/Expr.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 DECLARE_string(data_path);
 
@@ -53,6 +54,7 @@ void QueryTestBase::SetUp() {
   optimizerOptions_.traceFlags = FLAGS_optimizer_trace;
 
   optimizer::FunctionRegistry::registerPrestoFunctions();
+  velox::window::prestosql::registerAllWindowFunctions();
 }
 
 void QueryTestBase::TearDown() {

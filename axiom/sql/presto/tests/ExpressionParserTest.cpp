@@ -585,27 +585,29 @@ TEST_F(ExpressionParserTest, row) {
 }
 
 TEST_F(ExpressionParserTest, windowFunction) {
-  // row_number() with ORDER BY.
+  // row_number() with ORDER BY: SQL standard default frame when ORDER BY is
+  // present without explicit frame is RANGE UNBOUNDED PRECEDING to CURRENT ROW.
   testNationExpr(
       "row_number() OVER (ORDER BY n_nationkey)",
-      "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+      "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)");
 
-  // row_number() with PARTITION BY and ORDER BY.
+  // row_number() with PARTITION BY and ORDER BY: same default applies.
   testNationExpr(
       "row_number() OVER (PARTITION BY n_regionkey ORDER BY n_nationkey)",
-      "row_number() OVER (PARTITION BY n_regionkey ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+      "row_number() OVER (PARTITION BY n_regionkey ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)");
 
-  // Aggregate function as window function.
+  // Aggregate function as window function without ORDER BY: default frame is
+  // entire partition (UNBOUNDED PRECEDING to UNBOUNDED FOLLOWING).
   testNationExpr(
       "sum(n_nationkey) OVER (PARTITION BY n_regionkey)",
       "sum(n_nationkey) OVER (PARTITION BY n_regionkey RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
 
-  // ORDER BY DESC NULLS FIRST.
+  // ORDER BY DESC NULLS FIRST with default frame.
   testNationExpr(
       "row_number() OVER (ORDER BY n_nationkey DESC NULLS FIRST)",
-      "row_number() OVER (ORDER BY n_nationkey DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+      "row_number() OVER (ORDER BY n_nationkey DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)");
 
-  // Explicit ROWS frame.
+  // Explicit ROWS frame is preserved.
   testNationExpr(
       "sum(n_nationkey) OVER (ORDER BY n_nationkey ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
       "sum(n_nationkey) OVER (ORDER BY n_nationkey ASC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)");
@@ -620,12 +622,13 @@ TEST_F(ExpressionParserTest, windowFunction) {
       "sum(n_nationkey) OVER (ORDER BY n_nationkey RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
       "sum(n_nationkey) OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)");
 
-  // Multiple window functions in SELECT.
+  // Multiple window functions in SELECT: first has ORDER BY (default to CURRENT
+  // ROW), second has no ORDER BY (default to UNBOUNDED FOLLOWING).
   testSelect(
       "SELECT row_number() OVER (ORDER BY n_nationkey), sum(n_nationkey) OVER (PARTITION BY n_regionkey) FROM nation",
       matchScan()
           .project({
-              "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+              "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
               "sum(n_nationkey) OVER (PARTITION BY n_regionkey RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
           })
           .output());
@@ -637,7 +640,7 @@ TEST_F(ExpressionParserTest, windowFunction) {
           .project({
               "n_name",
               "length(n_name)",
-              "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+              "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
           })
           .output());
 
@@ -646,7 +649,7 @@ TEST_F(ExpressionParserTest, windowFunction) {
       "SELECT row_number() OVER (ORDER BY n_nationkey) AS row_num FROM nation",
       matchScan()
           .project({
-              "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+              "row_number() OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
           })
           .output());
 
@@ -654,13 +657,13 @@ TEST_F(ExpressionParserTest, windowFunction) {
   // 1 is INTEGER.
   testNationExpr(
       "ntile(1) OVER (ORDER BY n_nationkey)",
-      "ntile(CAST(1 AS BIGINT)) OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+      "ntile(CAST(1 AS BIGINT)) OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)");
 
   // Aggregate as window function with coercion: corr expects (DOUBLE, DOUBLE),
   // columns are BIGINT.
   testNationExpr(
       "corr(n_nationkey, n_regionkey) OVER (ORDER BY n_nationkey)",
-      "corr(CAST(n_nationkey AS DOUBLE), CAST(n_regionkey AS DOUBLE)) OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+      "corr(CAST(n_nationkey AS DOUBLE), CAST(n_regionkey AS DOUBLE)) OVER (ORDER BY n_nationkey ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)");
 }
 
 TEST_F(ExpressionParserTest, lambda) {

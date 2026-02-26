@@ -1179,6 +1179,100 @@ class Aggregate : public Call {
 using AggregateCP = const Aggregate*;
 using AggregateVector = QGVector<AggregateCP>;
 
+/// Describes the sliding window of rows processed by a window function.
+/// Mirrors logical_plan::WindowExpr::Frame but uses QueryGraph expression
+/// pointers (ExprCP) instead of logical plan expression pointers (ExprPtr).
+struct Frame {
+  logical_plan::WindowExpr::WindowType type;
+
+  /// Type of the starting frame bound.
+  logical_plan::WindowExpr::BoundType startType;
+
+  /// Offset expression for the start bound, or nullptr for UNBOUNDED or
+  /// CURRENT ROW.
+  ExprCP startValue;
+
+  /// Type of the ending frame bound.
+  logical_plan::WindowExpr::BoundType endType;
+
+  /// Offset expression for the end bound, or nullptr for UNBOUNDED or
+  /// CURRENT ROW.
+  ExprCP endValue;
+};
+
+/// Window function call. Stores partition keys, order keys, frame, and
+/// ignoreNulls in addition to inherited Call fields (function name, args).
+class WindowFunction : public Call {
+ public:
+  WindowFunction(
+      Name name,
+      const Value& value,
+      ExprVector args,
+      FunctionSet functions,
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes,
+      Frame frame,
+      bool ignoreNulls)
+      : Call(
+            PlanType::kWindowExpr,
+            name,
+            value,
+            std::move(args),
+            functions | FunctionSet::kWindow),
+        partitionKeys_(std::move(partitionKeys)),
+        orderKeys_(std::move(orderKeys)),
+        orderTypes_(std::move(orderTypes)),
+        frame_(frame),
+        ignoreNulls_(ignoreNulls) {
+    VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
+    for (auto& key : partitionKeys_) {
+      columns_.unionSet(key->columns());
+    }
+    for (auto& key : orderKeys_) {
+      columns_.unionSet(key->columns());
+    }
+    if (frame_.startValue) {
+      columns_.unionSet(frame_.startValue->columns());
+    }
+    if (frame_.endValue) {
+      columns_.unionSet(frame_.endValue->columns());
+    }
+  }
+
+  const ExprVector& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  const ExprVector& orderKeys() const {
+    return orderKeys_;
+  }
+
+  const OrderTypeVector& orderTypes() const {
+    return orderTypes_;
+  }
+
+  const Frame& frame() const {
+    return frame_;
+  }
+
+  bool ignoreNulls() const {
+    return ignoreNulls_;
+  }
+
+  std::string toString() const override;
+
+ private:
+  ExprVector partitionKeys_;
+  ExprVector orderKeys_;
+  OrderTypeVector orderTypes_;
+  Frame frame_;
+  bool ignoreNulls_;
+};
+
+using WindowFunctionCP = const WindowFunction*;
+using WindowFunctionVector = QGVector<WindowFunctionCP>;
+
 class AggregationPlan : public PlanObject {
  public:
   AggregationPlan(
