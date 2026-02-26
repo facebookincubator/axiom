@@ -302,13 +302,6 @@ MarkFieldsAccessedContextVector makeContextForLambdaArg(
 
   return {newRowTypes, newSources};
 }
-
-bool isSpecialForm(
-    const logical_plan::ExprPtr& expr,
-    logical_plan::SpecialForm form) {
-  return expr->isSpecialForm() &&
-      expr->as<logical_plan::SpecialFormExpr>()->form() == form;
-}
 } // namespace
 
 void SubfieldTracker::markSubfields(
@@ -334,21 +327,9 @@ void SubfieldTracker::markSubfields(
 
   if (isSpecialForm(expr, lp::SpecialForm::kDereference)) {
     VELOX_CHECK(expr->inputAt(1)->isConstant());
-    const auto* field = expr->inputAt(1)->as<lp::ConstantExpr>();
-    const auto& input = expr->inputAt(0);
-
-    // Always fill the index for a struct getter.
-    auto fieldIndex = maybeIntegerLiteral(field);
-    Name name = nullptr;
-    if (!fieldIndex.has_value()) {
-      const auto& fieldName = field->value()->value<velox::TypeKind::VARCHAR>();
-      fieldIndex = input->type()->asRow().getChildIdx(fieldName);
-      name = toName(fieldName);
-    }
-
-    steps.push_back(
-        {.kind = StepKind::kField, .field = name, .id = fieldIndex.value()});
-    markSubfields(input, steps, isControl, context);
+    auto step = extractDereferenceStep(expr);
+    steps.push_back(step);
+    markSubfields(expr->inputAt(0), steps, isControl, context);
     steps.pop_back();
     return;
   }
