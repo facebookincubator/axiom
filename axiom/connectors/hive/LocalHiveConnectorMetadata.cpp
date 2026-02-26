@@ -119,69 +119,45 @@ T ceil2(T x, T y) {
 }
 } // namespace
 
-std::vector<SplitSource::SplitAndGroup> LocalHiveSplitSource::getSplits(
-    uint64_t targetBytes) {
-  std::vector<SplitAndGroup> result;
-  uint64_t bytes = 0;
-  for (;;) {
-    if (currentFile_ >= static_cast<int32_t>(files_.size())) {
-      result.push_back(SplitSource::SplitAndGroup{nullptr, 0});
-      return result;
-    }
-
-    if (currentSplit_ >= fileSplits_.size()) {
-      fileSplits_.clear();
-      ++currentFile_;
-      if (currentFile_ >= files_.size()) {
-        result.push_back(SplitSource::SplitAndGroup{nullptr, 0});
-        return result;
-      }
-
-      currentSplit_ = 0;
-      const auto& filePath = files_[currentFile_]->path;
-      const auto fileSize = fs::file_size(filePath);
-      int64_t splitsPerFile =
-          ceil2<uint64_t>(fileSize, options_.fileBytesPerSplit);
-      if (options_.targetSplitCount) {
-        auto numFiles = files_.size();
-        if (splitsPerFile * numFiles < options_.targetSplitCount) {
-          // Divide the file into more splits but still not smaller than 64MB.
-          auto perFile = ceil2<uint64_t>(options_.targetSplitCount, numFiles);
-          int64_t bytesInSplit = ceil2<uint64_t>(fileSize, perFile);
-          splitsPerFile = ceil2<uint64_t>(
-              fileSize, std::max<uint64_t>(bytesInSplit, 32 << 20));
-        }
-      }
-      // Take the upper bound.
-      const int64_t splitSize = ceil2<uint64_t>(fileSize, splitsPerFile);
-      for (int i = 0; i < splitsPerFile; ++i) {
-        auto builder =
-            velox::connector::hive::HiveConnectorSplitBuilder(filePath)
-                .connectorId(connectorId_)
-                .fileFormat(format_)
-                .start(i * splitSize)
-                .length(splitSize);
-
-        auto* info = files_[currentFile_];
-        if (info->bucketNumber.has_value()) {
-          builder.tableBucketNumber(info->bucketNumber.value());
-        }
-        for (auto& pair : info->partitionKeys) {
-          builder.partitionKey(pair.first, pair.second);
-        }
-        if (!serdeParameters_.empty()) {
-          builder.serdeParameters(serdeParameters_);
-        }
-        fileSplits_.push_back(builder.build());
+folly::coro::AsyncGenerator<SplitSource::SplitAndGroup>
+LocalHiveSplitSource::getSplitGenerator() {
+  auto self = shared_from_this();
+  for (int32_t fileIdx = 0; fileIdx < files_.size(); ++fileIdx) {
+    const auto& filePath = files_[fileIdx]->path;
+    const auto fileSize = fs::file_size(filePath);
+    int64_t splitsPerFile =
+        ceil2<uint64_t>(fileSize, options_.fileBytesPerSplit);
+    if (options_.targetSplitCount) {
+      auto numFiles = files_.size();
+      if (splitsPerFile * numFiles < options_.targetSplitCount) {
+        // Divide the file into more splits but still not smaller than 64MB.
+        auto perFile = ceil2<uint64_t>(options_.targetSplitCount, numFiles);
+        int64_t bytesInSplit = ceil2<uint64_t>(fileSize, perFile);
+        splitsPerFile = ceil2<uint64_t>(
+            fileSize, std::max<uint64_t>(bytesInSplit, 32 << 20));
       }
     }
-    result.push_back(SplitAndGroup{std::move(fileSplits_[currentSplit_++]), 0});
-    bytes +=
-        reinterpret_cast<const velox::connector::hive::HiveConnectorSplit*>(
-            result.back().split.get())
-            ->length;
-    if (bytes > targetBytes) {
-      return result;
+    // Take the upper bound.
+    const int64_t splitSize = ceil2<uint64_t>(fileSize, splitsPerFile);
+    for (int i = 0; i < splitsPerFile; ++i) {
+      auto builder = velox::connector::hive::HiveConnectorSplitBuilder(filePath)
+                         .connectorId(connectorId_)
+                         .fileFormat(format_)
+                         .start(i * splitSize)
+                         .length(splitSize);
+
+      auto* info = files_[fileIdx];
+      if (info->bucketNumber.has_value()) {
+        builder.tableBucketNumber(info->bucketNumber.value());
+      }
+      for (auto& pair : info->partitionKeys) {
+        builder.partitionKey(pair.first, pair.second);
+      }
+      if (!serdeParameters_.empty()) {
+        builder.serdeParameters(serdeParameters_);
+      }
+      auto split = builder.build();
+      co_yield SplitAndGroup{std::move(split), 0};
     }
   }
 }

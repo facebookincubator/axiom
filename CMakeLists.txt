@@ -95,6 +95,11 @@ if(COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
   string(APPEND CMAKE_CXX_FLAGS " -Wno-nullability-completeness")
 endif()
 
+check_cxx_compiler_flag("-fcoroutines" COMPILER_HAS_F_COROUTINES)
+if(COMPILER_HAS_F_COROUTINES)
+  string(APPEND CMAKE_CXX_FLAGS " -fcoroutines")
+endif()
+
 # Axiom, Velox and folly need to be compiled with the same compiler flags.
 execute_process(
   COMMAND

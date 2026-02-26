@@ -38,6 +38,7 @@ target_link_libraries(
   velox_hdfs
   velox_gcs
   velox_abfs
+  Folly::folly
 )
 
 if(AXIOM_BUILD_TESTING)

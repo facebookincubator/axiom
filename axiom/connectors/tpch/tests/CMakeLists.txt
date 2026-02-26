@@ -24,6 +24,7 @@ target_link_libraries(
   velox_vector_test_lib
   velox_exec
   velox_exec_test_lib
+  Folly::folly
   GTest::gtest
   GTest::gtest_main
 )
