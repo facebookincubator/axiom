@@ -54,6 +54,8 @@ const auto& relTypeNames() {
       {RelType::kAssignUniqueId, "AssignUniqueId"},
       {RelType::kEnforceDistinct, "EnforceDistinct"},
       {RelType::kWindow, "Window"},
+      {RelType::kRowNumber, "RowNumber"},
+      {RelType::kTopNRowNumber, "TopNRowNumber"},
   };
 
   return kNames;
@@ -1835,6 +1837,22 @@ void EnforceSingleRow::accept(
 }
 
 namespace {
+
+// Returns the Value for a ranking column (row_number, rank, dense_rank) with
+// cardinality set to min(limit, inputCardinality) and nullable set to false.
+Value rankingColumnValue(
+    ColumnCP outputColumn,
+    float inputCardinality,
+    std::optional<int32_t> limit) {
+  auto value = outputColumn->value();
+  value.cardinality = limit.has_value()
+      ? std::min(static_cast<float>(limit.value()), inputCardinality)
+      : inputCardinality;
+  value.nullable = false;
+  value.nullFraction = 0;
+  return value;
+}
+
 ColumnVector appendColumn(const ColumnVector& columns, ColumnCP column) {
   ColumnVector result = columns;
   result.push_back(column);
@@ -1962,6 +1980,130 @@ const QGString& Window::historyKey() const {
 }
 
 void Window::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+RowNumber::RowNumber(
+    RelationOpPtr input,
+    ExprVector _partitionKeys,
+    std::optional<int32_t> _limit,
+    ColumnCP _outputColumn,
+    ColumnVector columns)
+    : RelationOp{RelType::kRowNumber, std::move(input), std::move(columns)},
+      partitionKeys{std::move(_partitionKeys)},
+      limit{_limit},
+      outputColumn{_outputColumn} {
+  cost_.inputCardinality = inputCardinality();
+  cost_.fanout = 1;
+  // No sorting, just hashing by partition keys.
+  cost_.unitCost = Costs::kHashColumnCost * partitionKeys.size() +
+      Costs::hashTableCost(cost_.inputCardinality);
+
+  // Pass through all input constraints and add a new column for the row number.
+  constraints_ = input_->constraints();
+  constraints_.emplace(
+      outputColumn->id(),
+      rankingColumnValue(outputColumn, cost_.inputCardinality, limit));
+}
+
+const QGString& RowNumber::historyKey() const {
+  if (!key_.empty()) {
+    return key_;
+  }
+  std::stringstream out;
+  out << input_->historyKey();
+  out << " row_number";
+  auto* opt = queryCtx()->optimization();
+  velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  if (!partitionKeys.empty()) {
+    out << " partition by ";
+    std::vector<std::string> strings;
+    for (auto& key : partitionKeys) {
+      strings.push_back(key->toString());
+    }
+    std::ranges::sort(strings);
+    for (auto& s : strings) {
+      out << s << ", ";
+    }
+  }
+  key_ = sanitizeHistoryKey(out.str());
+  return key_;
+}
+
+void RowNumber::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+TopNRowNumber::TopNRowNumber(
+    RelationOpPtr input,
+    ExprVector _partitionKeys,
+    ExprVector _orderKeys,
+    OrderTypeVector _orderTypes,
+    velox::core::TopNRowNumberNode::RankFunction _rankFunction,
+    int32_t _limit,
+    ColumnCP _outputColumn,
+    ColumnVector columns)
+    : RelationOp{RelType::kTopNRowNumber, std::move(input), std::move(columns)},
+      partitionKeys{std::move(_partitionKeys)},
+      orderKeys{std::move(_orderKeys)},
+      orderTypes{std::move(_orderTypes)},
+      rankFunction{_rankFunction},
+      limit{_limit},
+      outputColumn{_outputColumn} {
+  VELOX_CHECK_EQ(orderKeys.size(), orderTypes.size());
+  VELOX_CHECK(!orderKeys.empty());
+
+  cost_.inputCardinality = inputCardinality();
+  cost_.fanout = 1;
+  // Hash by partition keys + partial sort by order keys with limit-based
+  // pruning. Cheaper than a full Window sort because only top N rows are kept.
+  const auto numKeys = partitionKeys.size() + orderKeys.size();
+  cost_.unitCost = Costs::kHashColumnCost * partitionKeys.size() +
+      sortCost(numKeys, cost_.inputCardinality);
+
+  // Pass through all input constraints and add a new column for the ranking
+  // result.
+  constraints_ = input_->constraints();
+  constraints_.emplace(
+      outputColumn->id(),
+      rankingColumnValue(outputColumn, cost_.inputCardinality, limit));
+}
+
+const QGString& TopNRowNumber::historyKey() const {
+  if (!key_.empty()) {
+    return key_;
+  }
+  std::stringstream out;
+  out << input_->historyKey();
+  out << " topn_row_number";
+  auto* opt = queryCtx()->optimization();
+  velox::ScopedVarSetter cnames(&opt->cnamesInExpr(), false);
+  if (!partitionKeys.empty()) {
+    out << " partition by ";
+    std::vector<std::string> strings;
+    for (auto& key : partitionKeys) {
+      strings.push_back(key->toString());
+    }
+    std::ranges::sort(strings);
+    for (auto& s : strings) {
+      out << s << ", ";
+    }
+  }
+  out << " order by ";
+  for (size_t i = 0; i < orderKeys.size(); ++i) {
+    out << orderKeys[i]->toString() << " "
+        << OrderTypeName::toName(orderTypes[i]) << ", ";
+  }
+  out << " limit " << limit;
+  key_ = sanitizeHistoryKey(out.str());
+  return key_;
+}
+
+void TopNRowNumber::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
   visitor.visit(*this, context);

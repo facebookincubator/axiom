@@ -360,6 +360,39 @@ class FunctionRegistry {
     return isNull_;
   }
 
+  /// Registers function 'name' that has semantics of 'row_number' window
+  /// function, i.e. assigns sequential numbers to rows within a partition.
+  /// @return true if successfully registered, false if a different
+  /// 'rowNumber' function is already registered.
+  bool registerRowNumber(std::string_view name);
+
+  /// Returns the name of the 'row_number' window function.
+  const std::optional<std::string>& rowNumber() const {
+    return rowNumber_;
+  }
+
+  /// Registers function 'name' that has semantics of 'rank' window function,
+  /// i.e. assigns rank with gaps for ties within a partition.
+  /// @return true if successfully registered, false if a different
+  /// 'rank' function is already registered.
+  bool registerRank(std::string_view name);
+
+  /// Returns the name of the 'rank' window function.
+  const std::optional<std::string>& rank() const {
+    return rank_;
+  }
+
+  /// Registers function 'name' that has semantics of 'dense_rank' window
+  /// function, i.e. assigns rank without gaps for ties within a partition.
+  /// @return true if successfully registered, false if a different
+  /// 'denseRank' function is already registered.
+  bool registerDenseRank(std::string_view name);
+
+  /// Returns the name of the 'dense_rank' window function.
+  const std::optional<std::string>& denseRank() const {
+    return denseRank_;
+  }
+
   bool registerSpecialForm(
       logical_plan::SpecialForm specialForm,
       std::string_view name);
@@ -428,18 +461,28 @@ class FunctionRegistry {
 
  private:
   folly::F14FastMap<std::string, std::unique_ptr<FunctionMetadata>> metadata_;
+
+  // Scalar functions.
   std::string equality_{"eq"};
   std::string negation_{"not"};
   std::optional<std::string> elementAt_;
   std::optional<std::string> subscript_;
   std::optional<std::string> cardinality_;
-  std::optional<std::string> arbitrary_;
-  std::optional<std::string> count_;
   std::optional<std::string> lessThan_;
   std::optional<std::string> lessThanOrEqual_;
   std::optional<std::string> greaterThan_;
   std::optional<std::string> greaterThanOrEqual_;
   std::optional<std::string> isNull_;
+
+  // Aggregate functions.
+  std::optional<std::string> arbitrary_;
+  std::optional<std::string> count_;
+
+  // Window functions.
+  std::optional<std::string> rowNumber_;
+  std::optional<std::string> rank_;
+  std::optional<std::string> denseRank_;
+
   folly::F14FastMap<std::string, std::string> reversibleFunctions_;
   folly::F14FastMap<logical_plan::SpecialForm, std::string> specialForms_;
   folly::F14FastMap<std::string, AggregateEmptyResultResolver>

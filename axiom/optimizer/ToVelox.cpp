@@ -858,7 +858,9 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
     return makeOffset(op, fragment, stages);
   }
 
-  if (isSingle_) {
+  // When the input is already gathered (e.g. Limit after TopNRowNumber with no
+  // partition keys), skip the distributed limit pattern.
+  if (isSingle_ || op.input()->distribution().isGather()) {
     auto input = makeFragment(op.input(), fragment, stages);
     if (options_.numDrivers == 1) {
       return addFinalLimit(nextId(), op.offset, op.limit, input);
@@ -1469,6 +1471,39 @@ velox::core::PlanNodePtr ToVelox::makeWindow(
       std::move(input));
 }
 
+velox::core::PlanNodePtr ToVelox::makeRowNumber(
+    const RowNumber& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input =
+      maybeTrimColumns(makeFragment(op.input(), fragment, stages), op.input());
+
+  return std::make_shared<velox::core::RowNumberNode>(
+      nextId(),
+      toFieldRefs(op.partitionKeys),
+      op.outputColumn->outputName(),
+      op.limit,
+      std::move(input));
+}
+
+velox::core::PlanNodePtr ToVelox::makeTopNRowNumber(
+    const TopNRowNumber& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input =
+      maybeTrimColumns(makeFragment(op.input(), fragment, stages), op.input());
+
+  return std::make_shared<velox::core::TopNRowNumberNode>(
+      nextId(),
+      op.rankFunction,
+      toFieldRefs(op.partitionKeys),
+      toFieldRefs(op.orderKeys),
+      toSortOrders(op.orderTypes),
+      op.outputColumn->outputName(),
+      op.limit,
+      std::move(input));
+}
+
 velox::core::PlanNodePtr ToVelox::makeRepartition(
     const Repartition& repartition,
     runner::ExecutableFragment& fragment,
@@ -1805,6 +1840,10 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeEnforceDistinct(*op->as<EnforceDistinct>(), fragment, stages);
     case RelType::kWindow:
       return makeWindow(*op->as<Window>(), fragment, stages);
+    case RelType::kRowNumber:
+      return makeRowNumber(*op->as<RowNumber>(), fragment, stages);
+    case RelType::kTopNRowNumber:
+      return makeTopNRowNumber(*op->as<TopNRowNumber>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

@@ -252,8 +252,10 @@ class Optimization {
       AggregationPlanCP aggPlan) const;
 
   // Adds window function operators to 'plan'. Groups window functions by
-  // specification and emits one Window operator per group.
-  void addWindow(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)
+  // specification and emits one Window operator per group. Returns true if the
+  // DT's limit was consumed by a ranking optimization and should not be
+  // created separately by addPostprocess.
+  bool addWindow(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)
       const;
 
   void addOrderBy(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)

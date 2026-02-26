@@ -187,7 +187,8 @@ SELECT *, row_number() OVER (PARTITION BY a) as rn FROM t
 ```
 
 Emit `RowNumberNode` instead of `WindowNode`. Simpler and more efficient: no
-sorting keys or frame, just partition keys and an optional per-partition limit.
+sorting keys or frame, just partition keys. The per-partition limit is not used
+here (see Pattern 3).
 
 #### Pattern 2: `row_number()` without ORDER BY + LIMIT
 
@@ -307,22 +308,30 @@ collecting and grouping window functions, `addWindow` checks `dt->hasLimit()`:
 
 - **Pattern 2** (`row_number()` without ORDER BY + LIMIT): the only window
   function is `row_number()` with no ORDER BY. Create a `Limit` RelationOp
-  before the `RowNumber` RelationOp (limit below window). Clear `dt->limit` so
-  `addPostprocess` does not create a second Limit.
+  before the `RowNumber` RelationOp (limit below window). The DT's limit is
+  consumed and `addPostprocess` does not create a second Limit.
 
-- **Pattern 4** (ranking function with ORDER BY + LIMIT): the only window
-  function is a ranking function with ORDER BY. Create
-  `TopNRowNumberNode(limit=dt->limit)`. For `row_number()` without partition
-  keys, clear `dt->limit` (fully absorbed — `row_number()` never produces
-  ties, so the TopNRowNumber output has exactly `limit` rows). For
-  `rank()`/`dense_rank()`, or for any ranking function with partition keys,
-  keep `dt->limit` so `addPostprocess` creates a Limit on top (ties may
-  produce more rows than the limit).
+- **Pattern 4** (ranking function with ORDER BY + LIMIT, no partition keys):
+  the only window function is a ranking function with ORDER BY. Create
+  `TopNRowNumber(limit=dt->limit)`. For `row_number()`, the limit is fully
+  absorbed — `row_number()` never produces ties, so the TopNRowNumber output
+  has exactly `limit` rows. For `rank()`/`dense_rank()`, a Limit is added
+  after TopNRowNumber because ties may produce more rows than the limit. In
+  both cases, the DT's limit is consumed. With partition keys, per-partition
+  limit differs from global limit, so the DT's limit is not consumed and
+  `addPostprocess` creates the Limit normally.
 
 These checks only apply when the DT has exactly one window function. Pattern 2
 requires `row_number()` specifically; Pattern 4 applies to any ranking function.
 When multiple window functions exist, or when the window function is not a
 ranking function, the limit is left for `addPostprocess` to handle normally.
+
+#### Distributed Limit for Gathered Input
+
+When a Limit's input is already gathered (e.g., Limit after TopNRowNumber with
+no partition keys where data is gathered first), ToVelox skips the distributed
+limit pattern (partialLimit → exchange → finalLimit) and creates a simple
+single-node limit instead.
 
 ## Comparison with Presto
 
@@ -489,7 +498,7 @@ SELECT * FROM (
 ```
 
 Logical plan:
-```
+```text
 Filter [s > 10]
   Project [sum(x) OVER (PARTITION BY a) as s, ...]
     Scan
@@ -503,7 +512,7 @@ With window awareness: when `addFilter` detects the predicate references a
 `WindowExpr`, it finalizes the current DT (which includes the window
 expression) and creates a new outer DT for the filter.
 
-```
+```text
 Outer DT: conjuncts=[s > 10]
   Inner DT: window=[sum(x) OVER (PARTITION BY a) as s]
     Scan
@@ -664,7 +673,7 @@ during `addPostprocess`.
 Window planning slots into `addPostprocess` after aggregation and HAVING
 filters, but before ORDER BY and projection:
 
-```
+```text
 1. WRITE (early return)
 2. GROUP BY (addAggregation)
 3. HAVING (filter)
@@ -678,7 +687,9 @@ filters, but before ORDER BY and projection:
 `addWindow` extracts `WindowFunction` entries from the DT's `exprs`, groups
 them by specification (Steps 1-3 of Phase 2), and creates physical operators:
 `Window`, `RowNumber`, or `TopNRowNumber` RelationOps depending on the detected
-pattern (see Ranking Function Optimizations).
+pattern (see Ranking Function Optimizations). When a ranking optimization
+consumes the DT's LIMIT (Patterns 2 or 4), `addPostprocess` skips creating a
+separate Limit.
 
 ### ToVelox Translation
 
@@ -762,7 +773,7 @@ Groups 1 and 2 share partition key `a` and group 1's ORDER BY is a prefix of
 group 2's. Process the longer ORDER BY first:
 
 Physical plan:
-```
+```text
 Project [final column selection]
   Window [partition=d, order=e] -> max(z)
     Repartition [by d]
@@ -910,21 +921,35 @@ Target: `buck test fbcode//axiom/optimizer/tests:window` (new target)
 ### Ranking Function Optimization Tests
 
 Add `RankingTest.cpp` to `axiom/optimizer/tests/` (extends
-`HiveQueriesTestBase`).
+`HiveQueriesTestBase`). Parse SQL via `parseSelect()`, verify single-node plans
+with `toSingleNodePlan()` + `PlanMatcherBuilder`, and distributed plans with
+`planVelox()` + `AXIOM_ASSERT_DISTRIBUTED_PLAN`.
 
 Test cases:
-- Pattern 1: `row_number()` without ORDER BY → `RowNumberNode`.
-- Pattern 2: `row_number()` without ORDER BY + LIMIT → LIMIT pushed below
-  window.
-- Pattern 3: `rn <= N` filter → `TopNRowNumberNode` or
-  `RowNumberNode(limit=N)`.
-  - `rn < N` → limit = N - 1.
-  - Filter removed when only ranking predicate; preserved when additional
-    predicates exist.
-- Pattern 4: ranking function with ORDER BY + LIMIT → absorbed into
-  `TopNRowNumberNode`.
-  - With partition keys: `TopNRowNumberNode(limit=N)` + LIMIT on top.
-  - Without partition keys: LIMIT removed.
+
+**RowNumber optimization (no ORDER BY → RowNumberNode):**
+- `row_number()` without partition or ORDER BY → RowNumber.
+- `row_number()` with PARTITION BY → RowNumber with partition keys.
+- `row_number()` + LIMIT → Limit pushed below RowNumber.
+- `row_number()` with PARTITION BY + LIMIT → same with partition keys.
+
+**TopNRowNumber optimization (ORDER BY + LIMIT → TopNRowNumberNode):**
+- `row_number()` with ORDER BY + LIMIT → limit absorbed (no ties).
+- `rank()` with ORDER BY + LIMIT → limit preserved on top (ties).
+- `dense_rank()` with ORDER BY + LIMIT → same as rank().
+- `row_number()` with PARTITION BY + ORDER BY + LIMIT → with partition keys.
+- `row_number()` with ORDER BY + LIMIT + matching query ORDER BY → redundant
+  ORDER BY absorbed.
+
+**No optimization (→ WindowNode):**
+- `row_number()` / `rank()` with ORDER BY, no LIMIT → Window (no TopN without
+  LIMIT).
+- `rank()` / `dense_rank()` without ORDER BY → Window (only `row_number()` gets
+  RowNumber optimization).
+- `rank()` with LIMIT, no ORDER BY → Window + Limit (Pattern 2 does not apply
+  to rank).
+- Multiple window functions with LIMIT → Window (ranking optimization requires
+  single function).
 
 Target: `buck test fbcode//axiom/optimizer/tests:ranking` (new target)
 

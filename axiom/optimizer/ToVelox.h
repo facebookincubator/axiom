@@ -231,6 +231,18 @@ class ToVelox {
       runner::ExecutableFragment& fragment,
       std::vector<runner::ExecutableFragment>& stages);
 
+  // Makes a Velox RowNumberNode for a RelationOp.
+  velox::core::PlanNodePtr makeRowNumber(
+      const RowNumber& op,
+      runner::ExecutableFragment& fragment,
+      std::vector<runner::ExecutableFragment>& stages);
+
+  // Makes a Velox TopNRowNumberNode for a RelationOp.
+  velox::core::PlanNodePtr makeTopNRowNumber(
+      const TopNRowNumber& op,
+      runner::ExecutableFragment& fragment,
+      std::vector<runner::ExecutableFragment>& stages);
+
   // Adds a ProjectNode to trim extra columns from 'input' if it has more
   // columns than 'inputOp' expects. This handles Velox operators that pass
   // through all input columns (e.g., WindowNode) when the input has extra

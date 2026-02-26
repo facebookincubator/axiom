@@ -1634,6 +1634,30 @@ void ToGraph::addOrderBy(const lp::SortNode& order) {
   auto [deduppedOrderKeys, deduppedOrderTypes] =
       dedupOrdering(order.ordering());
 
+  // Check if the ORDER BY is redundant because all window functions sort by
+  // the same keys and have no partition keys. With partition keys, the output
+  // is only sorted by order keys within each partition, not globally. When
+  // multiple groups exist with different orderings, the last group determines
+  // the output sort, so we can only drop the ORDER BY if every window function
+  // agrees.
+  std::optional<bool> allWindowsMatch;
+  for (const auto& [name, expr] : renames_) {
+    if (expr != nullptr && expr->is(PlanType::kWindowExpr)) {
+      const auto* windowFunc = expr->as<WindowFunction>();
+      if (!windowFunc->partitionKeys().empty() ||
+          windowFunc->orderKeys() != deduppedOrderKeys ||
+          windowFunc->orderTypes() != deduppedOrderTypes) {
+        allWindowsMatch = false;
+        break;
+      }
+      allWindowsMatch = true;
+    }
+  }
+
+  if (allWindowsMatch.value_or(false)) {
+    return;
+  }
+
   currentDt_->orderKeys = std::move(deduppedOrderKeys);
   currentDt_->orderTypes = std::move(deduppedOrderTypes);
 }
