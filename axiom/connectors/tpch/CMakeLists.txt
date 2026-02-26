@@ -19,6 +19,7 @@ target_link_libraries(
   axiom_connectors
   velox_tpch_connector
   velox_tpch_gen
+  Folly::folly
 )
 
 if(AXIOM_BUILD_TESTING)

@@ -92,53 +92,27 @@ std::shared_ptr<SplitSource> TpchSplitManager::getSplitSource(
       options);
 }
 
-std::vector<SplitSource::SplitAndGroup> TpchSplitSource::getSplits(
-    uint64_t targetBytes) {
-  std::vector<SplitAndGroup> result;
-
-  if (splits_.empty()) {
-    // Generate splits if not already done
-    auto rowType = velox::tpch::getTableSchema(table_);
-    size_t rowSize = 0;
-    for (size_t i = 0; i < rowType->children().size(); i++) {
-      // TODO: use actual size
-      rowSize += 10;
-    }
-    const auto totalRows = velox::tpch::getRowCount(table_, scaleFactor_);
-    const auto rowsPerSplit = options_.fileBytesPerSplit / rowSize;
-    const auto numSplits = (totalRows + rowsPerSplit - 1) / rowsPerSplit;
-
-    // TODO: adjust numSplits based on options_.targetSplitCount
-    for (int64_t i = 0; i < numSplits; ++i) {
-      splits_.push_back(
-          std::make_shared<velox::connector::tpch::TpchConnectorSplit>(
-              connectorId_, numSplits, i));
-    }
+folly::coro::AsyncGenerator<SplitSource::SplitAndGroup>
+TpchSplitSource::getSplitGenerator() {
+  auto self = shared_from_this();
+  // Generate splits on-the-fly
+  auto rowType = velox::tpch::getTableSchema(table_);
+  size_t rowSize = 0;
+  for (size_t i = 0; i < rowType->children().size(); i++) {
+    // TODO: use actual size
+    rowSize += 10;
   }
+  const auto totalRows = velox::tpch::getRowCount(table_, scaleFactor_);
+  const auto rowsPerSplit = options_.fileBytesPerSplit / rowSize;
+  const auto numSplits = (totalRows + rowsPerSplit - 1) / rowsPerSplit;
 
-  if (currentSplit_ >= splits_.size()) {
-    result.push_back(kNoMoreSplits);
-    return result;
+  // TODO: adjust numSplits based on options_.targetSplitCount
+  for (int64_t i = 0; i < numSplits; ++i) {
+    co_yield SplitAndGroup{
+        std::make_shared<velox::connector::tpch::TpchConnectorSplit>(
+            connectorId_, numSplits, i),
+        0};
   }
-
-  uint64_t bytes = 0;
-  while (currentSplit_ < splits_.size()) {
-    auto split = splits_[currentSplit_++];
-    result.emplace_back(SplitAndGroup{split, 0});
-
-    // TODO: use a more accurate size for the split
-    bytes += options_.fileBytesPerSplit;
-
-    if (bytes > targetBytes) {
-      break;
-    }
-  }
-
-  if (result.empty()) {
-    result.push_back(SplitSource::SplitAndGroup{nullptr, 0});
-  }
-
-  return result;
 }
 
 TpchConnectorMetadata::TpchConnectorMetadata(

@@ -20,6 +20,7 @@ target_link_libraries(
   velox_common_base
   velox_memory
   velox_connector
+  Folly::folly
 )
 
 add_executable(axiom_test_connector_test TestConnectorTest.cpp)
@@ -34,6 +35,7 @@ target_link_libraries(
   velox_connector
   velox_exec
   velox_vector_test_lib
+  Folly::folly
   gtest
   gtest_main
 )
