@@ -196,6 +196,25 @@ undocumented if the name is self-explanatory.
   ExprCP translateWindowExpr(const logical_plan::WindowExpr* window);
 ```
 
+### `goto` statements
+
+Never use `goto`. Restructure the code using early returns, helper functions, or
+duplicated code paths instead. `goto` makes control flow hard to follow and is
+never necessary in C++.
+
+### Fitting tests to buggy code
+
+When a test fails, **never** update the test expectation to match what the code
+produces without first verifying that the code is correct. The default
+assumption should be that the code is wrong, not the test.
+
+For optimizer plan tests:
+1. Derive the expected plan from query semantics before running the test.
+2. When a test fails, investigate the mismatch — do not blindly copy the actual
+   output into the expected.
+3. Flag suspicious patterns: redundant operators, two gathers with no partition
+   keys, extra columns flowing through unnecessary nodes.
+
 ## Directory Structure
 
 | Directory | Description |

@@ -48,6 +48,11 @@ class WindowTest : public test::QueryTestBase {
     return QueryTestBase::toSingleNodePlan(logicalPlan, numDrivers);
   }
 
+  runner::MultiFragmentPlanPtr toDistributedPlan(std::string_view sql) {
+    auto logicalPlan = parseSelect(sql, kTestConnectorId);
+    return planVelox(logicalPlan).plan;
+  }
+
   std::shared_ptr<connector::TestConnector> testConnector_;
 };
 
@@ -320,6 +325,9 @@ TEST_F(WindowTest, distributed) {
 
   auto distributedPlan = planVelox(logicalPlan);
 
+  // TODO: n_nationkey and n_regionkey are carried through gather
+  // unnecessarily. Drop them after the Window once
+  // https://github.com/facebookincubator/velox/issues/16551 is fixed.
   auto matcher =
       matchScan("nation")
           .shuffle({"n_regionkey"})
@@ -354,6 +362,139 @@ TEST_F(WindowTest, distributedMultipleShuffles) {
           .gather()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+}
+
+TEST_F(WindowTest, nonRedundantOrderByWithPartitionKeys) {
+  // With partition keys, ORDER BY is NOT redundant because the window only
+  // sorts within each partition, not globally.
+  constexpr auto sql =
+      "SELECT n_name, "
+      "sum(n_regionkey) OVER (PARTITION BY n_regionkey ORDER BY n_name) as s "
+      "FROM nation ORDER BY n_name LIMIT 10";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher =
+      matchScan("nation")
+          .window(
+              {"sum(n_regionkey) OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
+          .topN(10)
+          .project({"n_name", "s"})
+          .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher =
+      matchScan("nation")
+          .shuffle({"n_regionkey"})
+          .window(
+              {"sum(n_regionkey) OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
+          .topN(10)
+          .localMerge()
+          .shuffleMerge()
+          .finalLimit(0, 10)
+          .project({"n_name", "s"})
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(WindowTest, nonRedundantOrderByWithDifferentKeys) {
+  // Query ORDER BY does not match window ORDER BY — ORDER BY is preserved.
+  constexpr auto sql =
+      "SELECT n_name, n_nationkey, sum(n_regionkey) OVER (ORDER BY n_name) "
+      "FROM nation ORDER BY n_nationkey LIMIT 10";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation")
+                     .window({"sum(n_regionkey) OVER (ORDER BY n_name)"})
+                     .topN(10)
+                     .project()
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  // No partition keys — gather, then Window + TopN + merge + limit + project.
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher =
+      matchScan("nation")
+          .gather()
+          .window({"sum(n_regionkey) OVER (ORDER BY n_name)"})
+          .topN(10)
+          .localMerge()
+          .shuffleMerge()
+          .finalLimit(0, 10)
+          .project()
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(WindowTest, redundantOrderByMultipleWindowsSameOrderBy) {
+  // Multiple window functions with the same ORDER BY and no partition keys —
+  // query ORDER BY is redundant.
+  constexpr auto sql =
+      "SELECT n_name, "
+      "sum(n_regionkey) OVER (ORDER BY n_name) as s, "
+      "avg(n_nationkey) OVER (ORDER BY n_name) as a "
+      "FROM nation ORDER BY n_name LIMIT 10";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation")
+                     .window(
+                         {"sum(n_regionkey) OVER (ORDER BY n_name)",
+                          "avg(n_nationkey) OVER (ORDER BY n_name)"})
+                     .finalLimit(0, 10)
+                     .project()
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  // No partition keys — gather, then Window + limit + project.
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher = matchScan("nation")
+                                .gather()
+                                .window(
+                                    {"sum(n_regionkey) OVER (ORDER BY n_name)",
+                                     "avg(n_nationkey) OVER (ORDER BY n_name)"})
+                                .partialLimit(0, 10)
+                                .localPartition()
+                                .finalLimit(0, 10)
+                                .project()
+                                .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(WindowTest, nonRedundantOrderByMultipleWindowsDifferentOrderBy) {
+  // Multiple window functions with different ORDER BY — query ORDER BY is NOT
+  // redundant.
+  constexpr auto sql =
+      "SELECT n_name, "
+      "sum(n_regionkey) OVER (ORDER BY n_name) as s, "
+      "avg(n_nationkey) OVER (ORDER BY n_nationkey) as a "
+      "FROM nation ORDER BY n_name LIMIT 10";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation")
+                     .window({"sum(n_regionkey) OVER (ORDER BY n_name)"})
+                     .project()
+                     .window({"avg(n_nationkey) OVER (ORDER BY n_nationkey)"})
+                     .topN(10)
+                     .project()
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  // No partition keys — gather, then two Windows + TopN + merge + limit +
+  // project.
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher =
+      matchScan("nation")
+          .gather()
+          .window({"sum(n_regionkey) OVER (ORDER BY n_name)"})
+          .project()
+          .window({"avg(n_nationkey) OVER (ORDER BY n_nationkey)"})
+          .topN(10)
+          .localMerge()
+          .shuffleMerge()
+          .finalLimit(0, 10)
+          .project()
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
 } // namespace

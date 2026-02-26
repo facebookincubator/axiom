@@ -136,6 +136,33 @@ bool FunctionRegistry::registerIsNull(std::string_view name) {
   return true;
 }
 
+bool FunctionRegistry::registerRowNumber(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (rowNumber_.has_value() && rowNumber_.value() != name) {
+    return false;
+  }
+  rowNumber_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerRank(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (rank_.has_value() && rank_.value() != name) {
+    return false;
+  }
+  rank_ = name;
+  return true;
+}
+
+bool FunctionRegistry::registerDenseRank(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (denseRank_.has_value() && denseRank_.value() != name) {
+    return false;
+  }
+  denseRank_ = name;
+  return true;
+}
+
 bool FunctionRegistry::registerSpecialForm(
     lp::SpecialForm specialForm,
     std::string_view name) {
@@ -314,6 +341,9 @@ void FunctionRegistry::registerPrestoFunctions(std::string_view prefix) {
   registry->registerGreaterThan(fullName("gt"));
   registry->registerGreaterThanOrEqual(fullName("gte"));
   registry->registerIsNull(fullName("is_null"));
+  registry->registerRowNumber(fullName("row_number"));
+  registry->registerRank(fullName("rank"));
+  registry->registerDenseRank(fullName("dense_rank"));
 
   registry->registerAggregateEmptyResultResolver(
       {fullName("count_if"), fullName("approx_distinct")},

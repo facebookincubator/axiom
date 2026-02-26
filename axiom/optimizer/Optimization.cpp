@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <iostream>
 #include <utility>
+#include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
 #include "axiom/optimizer/VeloxHistory.h"
@@ -951,13 +952,15 @@ void Optimization::addPostprocess(
     plan = filter;
   }
 
-  addWindow(dt, plan, state);
+  const bool limitConsumedByWindow = addWindow(dt, plan, state);
 
   // We probably want to make this decision based on cost.
   static constexpr int64_t kMaxLimitBeforeProject = 8'192;
   if (dt->hasOrderBy()) {
     addOrderBy(dt, plan, state);
-  } else if (dt->hasLimit() && dt->limit <= kMaxLimitBeforeProject) {
+  } else if (
+      !limitConsumedByWindow && dt->hasLimit() &&
+      dt->limit <= kMaxLimitBeforeProject) {
     auto limit = make<Limit>(plan, dt->limit, dt->offset);
     state.addCost(*limit);
     plan = limit;
@@ -981,7 +984,8 @@ void Optimization::addPostprocess(
         Project::isRedundant(plan, usedExprs, usedColumns));
   }
 
-  if (!dt->hasOrderBy() && dt->limit > kMaxLimitBeforeProject) {
+  if (!limitConsumedByWindow && !dt->hasOrderBy() &&
+      dt->limit > kMaxLimitBeforeProject) {
     auto limit = make<Limit>(plan, dt->limit, dt->offset);
     state.addCost(*limit);
     plan = limit;
@@ -1411,6 +1415,30 @@ bool sameOrderTypes(const OrderTypeVector& lhs, const OrderTypeVector& rhs) {
   return lhs.size() == rhs.size() && isPrefix(lhs, rhs);
 }
 
+bool isRowNumber(std::string_view name) {
+  const auto* registry = FunctionRegistry::instance();
+  return registry->rowNumber().has_value() && name == *registry->rowNumber();
+}
+
+// Returns the RankFunction if the function name is a ranking function,
+// std::nullopt otherwise.
+std::optional<velox::core::TopNRowNumberNode::RankFunction> toRankFunction(
+    std::string_view name) {
+  using RankFunction = velox::core::TopNRowNumberNode::RankFunction;
+  if (isRowNumber(name)) {
+    return RankFunction::kRowNumber;
+  }
+
+  const auto* registry = FunctionRegistry::instance();
+  if (registry->rank().has_value() && name == *registry->rank()) {
+    return RankFunction::kRank;
+  }
+  if (registry->denseRank().has_value() && name == *registry->denseRank()) {
+    return RankFunction::kDenseRank;
+  }
+  return std::nullopt;
+}
+
 // Groups window functions by partition keys and order keys specification.
 struct WindowGroup {
   ExprVector partitionKeys;
@@ -1534,6 +1562,57 @@ std::vector<WindowGroup> groupWindowFunctions(
   return groups;
 }
 
+// Creates the appropriate operator for a window function group: RowNumber for
+// row_number() without ORDER BY, TopNRowNumber for a ranking function with
+// ORDER BY + LIMIT, or Window for the general case.
+RelationOpPtr makeWindowOp(
+    const RelationOpPtr& plan,
+    DerivedTableCP dt,
+    WindowGroup& group,
+    ExprVector partitionKeys,
+    ExprVector orderKeys,
+    WindowFunctionVector windowFunctions,
+    bool inputsSorted,
+    ColumnVector columns) {
+  if (group.functions.size() == 1) {
+    auto rankFunction =
+        toRankFunction(std::string_view(group.functions[0]->name()));
+
+    if (rankFunction.has_value() && group.orderKeys.empty() &&
+        *rankFunction ==
+            velox::core::TopNRowNumberNode::RankFunction::kRowNumber) {
+      return make<RowNumber>(
+          plan,
+          std::move(partitionKeys),
+          std::nullopt,
+          group.outputColumns[0],
+          std::move(columns));
+    }
+
+    if (rankFunction.has_value() && !group.orderKeys.empty() &&
+        dt->hasLimit() && !dt->hasOrderBy()) {
+      return make<TopNRowNumber>(
+          plan,
+          std::move(partitionKeys),
+          std::move(orderKeys),
+          std::move(group.orderTypes),
+          *rankFunction,
+          dt->limit,
+          group.outputColumns[0],
+          std::move(columns));
+    }
+  }
+
+  return make<Window>(
+      plan,
+      std::move(partitionKeys),
+      std::move(orderKeys),
+      std::move(group.orderTypes),
+      std::move(windowFunctions),
+      inputsSorted,
+      std::move(columns));
+}
+
 // Adds a Project to drop columns from 'plan' that are not in 'neededColumns'.
 // No-op if all columns are needed.
 void maybeDropColumns(RelationOpPtr& plan, const PlanObjectSet& neededColumns) {
@@ -1584,9 +1663,16 @@ WindowFunctionVector flattenWindowFunctions(
   return result;
 }
 
+bool isSingleWindowWithLimit(
+    DerivedTableCP dt,
+    const std::vector<WindowGroup>& groups) {
+  return dt->hasLimit() && !dt->hasOrderBy() && groups.size() == 1 &&
+      groups[0].functions.size() == 1;
+}
+
 } // namespace
 
-void Optimization::addWindow(
+bool Optimization::addWindow(
     DerivedTableCP dt,
     RelationOpPtr& plan,
     PlanState& state) const {
@@ -1600,10 +1686,38 @@ void Optimization::addWindow(
   }
 
   if (windowExprs.empty()) {
-    return;
+    return false;
   }
 
   auto groups = groupWindowFunctions(windowExprs);
+
+  // Check for ranking function + LIMIT optimizations. Only applies when there
+  // is exactly one window function group with a single ranking function.
+  bool limitConsumed = false;
+  bool addLimitAfterTopN = false;
+  if (isSingleWindowWithLimit(dt, groups)) {
+    const auto& group = groups[0];
+    const auto functionName = group.functions[0]->name();
+
+    if (group.orderKeys.empty() && isRowNumber(functionName)) {
+      // row_number() without ORDER BY + LIMIT. Push LIMIT below RowNumber.
+      // The row numbering is non-deterministic (no ORDER BY), so computing
+      // row numbers on a smaller set produces a valid result.
+      plan = make<Limit>(plan, dt->limit, dt->offset);
+      state.addCost(*plan);
+      limitConsumed = true;
+    } else if (
+        !group.orderKeys.empty() && group.partitionKeys.empty() &&
+        toRankFunction(functionName).has_value()) {
+      // Ranking function with ORDER BY + LIMIT, no partition keys. After
+      // gather, TopNRowNumber runs on a single node — no distributed limit
+      // needed. row_number never produces ties, so the limit is fully
+      // absorbed. rank() and dense_rank() may produce ties, so a Limit is
+      // added after TopNRowNumber.
+      limitConsumed = true;
+      addLimitAfterTopN = !isRowNumber(functionName);
+    }
+  }
 
   // Emit Window operators.
   for (size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
@@ -1642,25 +1756,31 @@ void Optimization::addWindow(
       maybeRepartition(plan, ExprVector(partitionKeys), state.cost);
     }
 
+    // Build output columns: all input columns + window function result columns.
+    ColumnVector columns = plan->columns();
+    append(columns, group.outputColumns);
+
     // Check inputsSorted: true if the previous group had the same partition
     // keys and this group's ORDER BY is a prefix of the previous.
     bool inputsSorted = groupIndex > 0 &&
         sameKeys(groups[groupIndex - 1].partitionKeys, group.partitionKeys) &&
         isPrefix(group.orderKeys, groups[groupIndex - 1].orderKeys);
 
-    // Build output columns: all input columns + window function result columns.
-    ColumnVector columns = plan->columns();
-    append(columns, group.outputColumns);
-
-    plan = make<Window>(
+    plan = makeWindowOp(
         plan,
+        dt,
+        group,
         std::move(partitionKeys),
         std::move(orderKeys),
-        std::move(group.orderTypes),
         std::move(windowFunctions),
         inputsSorted,
         std::move(columns));
     state.addCost(*plan);
+
+    if (addLimitAfterTopN) {
+      plan = make<Limit>(plan, dt->limit, dt->offset);
+      state.addCost(*plan);
+    }
 
     // Map original window function expressions to their output columns and
     // mark them as placed so that downstreamColumns() is recomputed for the
@@ -1670,6 +1790,8 @@ void Optimization::addWindow(
       state.place(group.functions[i]);
     }
   }
+
+  return limitConsumed;
 }
 
 void Optimization::addOrderBy(

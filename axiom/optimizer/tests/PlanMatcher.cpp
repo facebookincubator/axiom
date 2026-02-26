@@ -1116,6 +1116,18 @@ class WindowMatcher : public PlanMatcherImpl<WindowNode> {
     for (const auto& expr : windowExprs_) {
       expectedWindows.push_back(
           parse::DuckSqlExpressionsParser().parseWindowExpr(expr));
+
+      // DuckDB's parser defaults the frame end bound to CURRENT ROW even
+      // when ORDER BY is absent, where the SQL standard requires UNBOUNDED
+      // FOLLOWING. Correct this since DuckDB does not distinguish defaulted
+      // from explicit frames.
+      // TODO: Remove after fixing
+      // https://github.com/facebookincubator/velox/issues/16549.
+      auto& window = expectedWindows.back();
+      if (window.orderBy.empty() &&
+          window.frame.endType == parse::BoundType::kCurrentRow) {
+        window.frame.endType = parse::BoundType::kUnboundedFollowing;
+      }
     }
 
     // All window functions in a WindowNode share the same partition and order
@@ -1257,6 +1269,97 @@ class WindowMatcher : public PlanMatcherImpl<WindowNode> {
   }
 
   const std::vector<std::string> windowExprs_;
+};
+
+// Verifies that field names match expected names with symbol rewriting.
+void matchFieldNames(
+    const std::vector<FieldAccessTypedExprPtr>& fields,
+    const std::vector<std::string>& expectedNames,
+    const std::unordered_map<std::string, std::string>& symbols,
+    std::string_view label) {
+  EXPECT_EQ(fields.size(), expectedNames.size()) << label << " count mismatch";
+  AXIOM_TEST_RETURN_IF_FAILURE_VOID
+
+  for (auto i = 0; i < expectedNames.size(); ++i) {
+    auto expected = expectedNames[i];
+    auto it = symbols.find(expected);
+    if (it != symbols.end()) {
+      expected = it->second;
+    }
+    EXPECT_EQ(fields[i]->name(), expected)
+        << label << " mismatch at index " << i;
+  }
+}
+
+// Matches a RowNumberNode and verifies partition keys and limit.
+class RowNumberMatcher : public PlanMatcherImpl<RowNumberNode> {
+ public:
+  RowNumberMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      std::vector<std::string> partitionKeys,
+      std::optional<int32_t> limit)
+      : PlanMatcherImpl<RowNumberNode>({matcher}),
+        partitionKeys_{std::move(partitionKeys)},
+        limit_{limit} {}
+
+  MatchResult matchDetails(
+      const RowNumberNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    matchFieldNames(
+        plan.partitionKeys(), partitionKeys_, symbols, "Partition key");
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    EXPECT_EQ(plan.limit(), limit_) << "Limit mismatch";
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    return MatchResult::success(symbols);
+  }
+
+ private:
+  const std::vector<std::string> partitionKeys_;
+  const std::optional<int32_t> limit_;
+};
+
+// Matches a TopNRowNumberNode and verifies partition keys, sorting keys,
+// and limit.
+class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
+ public:
+  TopNRowNumberMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      std::vector<std::string> partitionKeys,
+      std::vector<std::string> sortingKeys,
+      int32_t limit)
+      : PlanMatcherImpl<TopNRowNumberNode>({matcher}),
+        partitionKeys_{std::move(partitionKeys)},
+        sortingKeys_{std::move(sortingKeys)},
+        limit_{limit} {}
+
+  MatchResult matchDetails(
+      const TopNRowNumberNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    matchFieldNames(
+        plan.partitionKeys(), partitionKeys_, symbols, "Partition key");
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    matchFieldNames(plan.sortingKeys(), sortingKeys_, symbols, "Sorting key");
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    EXPECT_EQ(plan.limit(), limit_) << "Limit mismatch";
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    return MatchResult::success(symbols);
+  }
+
+ private:
+  const std::vector<std::string> partitionKeys_;
+  const std::vector<std::string> sortingKeys_;
+  const int32_t limit_;
 };
 
 #undef AXIOM_TEST_RETURN
@@ -1552,6 +1655,16 @@ PlanMatcherBuilder& PlanMatcherBuilder::finalLimit(
   return *this;
 }
 
+PlanMatcherBuilder& PlanMatcherBuilder::distributedLimit(
+    int64_t offset,
+    int64_t count) {
+  return partialLimit(0, offset + count)
+      .localPartition()
+      .finalLimit(0, offset + count)
+      .gather()
+      .finalLimit(offset, count);
+}
+
 PlanMatcherBuilder& PlanMatcherBuilder::topN() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<TopNMatcher>(matcher_);
@@ -1625,6 +1738,38 @@ PlanMatcherBuilder& PlanMatcherBuilder::window(
     const std::vector<std::string>& windowExprs) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<WindowMatcher>(matcher_, windowExprs);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::rowNumber() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<RowNumberMatcher>(
+      matcher_, std::vector<std::string>{}, std::nullopt);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::rowNumber(
+    const std::vector<std::string>& partitionKeys,
+    std::optional<int32_t> limit) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<RowNumberMatcher>(matcher_, partitionKeys, limit);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::topNRowNumber() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<TopNRowNumberMatcher>(
+      matcher_, std::vector<std::string>{}, std::vector<std::string>{}, 0);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::topNRowNumber(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<TopNRowNumberMatcher>(
+      matcher_, partitionKeys, sortingKeys, limit);
   return *this;
 }
 

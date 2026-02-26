@@ -123,6 +123,8 @@ enum class RelType {
   kAssignUniqueId,
   kEnforceDistinct,
   kWindow,
+  kRowNumber,
+  kTopNRowNumber,
 };
 
 AXIOM_DECLARE_ENUM_NAME(RelType)
@@ -821,5 +823,76 @@ struct Window : public RelationOp {
 };
 
 using WindowCP = const Window*;
+
+/// Computes row_number() over partitioned input without sorting. Translates to
+/// Velox RowNumberNode which is more efficient than a generic Window operator.
+struct RowNumber : public RelationOp {
+  RowNumber(
+      RelationOpPtr input,
+      ExprVector partitionKeys,
+      std::optional<int32_t> limit,
+      ColumnCP outputColumn,
+      ColumnVector columns);
+
+  /// Keys to break input into partitions. May be empty.
+  const ExprVector partitionKeys;
+
+  /// Optional per-partition row limit. When set, only emits the first 'limit'
+  /// rows per partition.
+  const std::optional<int32_t> limit;
+
+  /// Column for the row number result.
+  const ColumnCP outputColumn;
+
+  const QGString& historyKey() const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+};
+
+using RowNumberCP = const RowNumber*;
+
+/// Computes a ranking function (row_number, rank, or dense_rank) with ORDER BY
+/// and a per-partition limit. Translates to Velox TopNRowNumberNode. More
+/// efficient than a generic Window operator: processes all input but only keeps
+/// the top N rows per partition.
+struct TopNRowNumber : public RelationOp {
+  TopNRowNumber(
+      RelationOpPtr input,
+      ExprVector partitionKeys,
+      ExprVector orderKeys,
+      OrderTypeVector orderTypes,
+      velox::core::TopNRowNumberNode::RankFunction rankFunction,
+      int32_t limit,
+      ColumnCP outputColumn,
+      ColumnVector columns);
+
+  /// Keys to break input into partitions. May be empty.
+  const ExprVector partitionKeys;
+
+  /// Sorting keys within each partition.
+  const ExprVector orderKeys;
+
+  /// Sort directions for each order key.
+  const OrderTypeVector orderTypes;
+
+  /// Which ranking function to compute.
+  const velox::core::TopNRowNumberNode::RankFunction rankFunction;
+
+  /// Per-partition row limit.
+  const int32_t limit;
+
+  /// Column for the ranking function result.
+  const ColumnCP outputColumn;
+
+  const QGString& historyKey() const override;
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+};
+
+using TopNRowNumberCP = const TopNRowNumber*;
 
 } // namespace facebook::axiom::optimizer

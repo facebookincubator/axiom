@@ -349,6 +349,13 @@ class PlanMatcherBuilder {
   /// @param count Maximum number of rows to return.
   PlanMatcherBuilder& finalLimit(int64_t offset, int64_t count);
 
+  /// Matches the distributed limit pattern: partialLimit(0, offset + count) →
+  /// localPartition → finalLimit(0, offset + count) → gather →
+  /// finalLimit(offset, count).
+  /// @param offset Number of rows to skip.
+  /// @param count Maximum number of rows to return.
+  PlanMatcherBuilder& distributedLimit(int64_t offset, int64_t count);
+
   /// Matches any TopN node.
   PlanMatcherBuilder& topN();
 
@@ -399,6 +406,29 @@ class PlanMatcherBuilder {
   /// Verifies function names, partition keys, and order by keys.
   /// @param windowExprs SQL window expressions to match.
   PlanMatcherBuilder& window(const std::vector<std::string>& windowExprs);
+
+  /// Matches any RowNumber node.
+  PlanMatcherBuilder& rowNumber();
+
+  /// Matches a RowNumber node with the specified partition keys and limit.
+  /// @param partitionKeys Expected partition key column names.
+  /// @param limit Expected per-partition limit.
+  PlanMatcherBuilder& rowNumber(
+      const std::vector<std::string>& partitionKeys,
+      std::optional<int32_t> limit = std::nullopt);
+
+  /// Matches any TopNRowNumber node.
+  PlanMatcherBuilder& topNRowNumber();
+
+  /// Matches a TopNRowNumber node with the specified partition keys, sorting
+  /// keys, and limit.
+  /// @param partitionKeys Expected partition key column names.
+  /// @param sortingKeys Expected sorting key column names.
+  /// @param limit Expected per-partition row limit.
+  PlanMatcherBuilder& topNRowNumber(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit);
 
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.
