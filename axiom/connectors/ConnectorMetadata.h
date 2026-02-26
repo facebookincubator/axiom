@@ -432,6 +432,12 @@ class TableLayout {
     return supportsScan_;
   }
 
+  /// True if this layout supports sampling for cardinality estimation. If
+  /// false, the optimizer skips sampling and falls back to default estimates.
+  virtual bool supportsSampling() const {
+    return true;
+  }
+
   /// The columns and their names as a RowType.
   const velox::RowTypePtr& rowType() const {
     return rowType_;
@@ -459,7 +465,9 @@ class TableLayout {
       velox::RowTypePtr outputType = nullptr,
       const std::vector<velox::common::Subfield>& fields = {},
       velox::HashStringAllocator* allocator = nullptr,
-      std::vector<ColumnStatistics>* statistics = nullptr) const = 0;
+      std::vector<ColumnStatistics>* statistics = nullptr) const {
+    VELOX_UNSUPPORTED("Sampling is not supported for this layout");
+  }
 
   /// Return a column with the matching name. Returns nullptr if not found.
   const Column* FOLLY_NULLABLE findColumn(std::string_view name) const;
