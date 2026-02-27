@@ -294,8 +294,7 @@ class ToVelox {
   runner::ExecutableFragment newFragment();
 
   // TODO Move this into MultiFragmentPlan::Options.
-  const velox::VectorSerde::Kind exchangeSerdeKind_{
-      velox::VectorSerde::Kind::kPresto};
+  const std::string exchangeSerdeKind_{"Presto"};
 
   const SessionPtr session_;
 
