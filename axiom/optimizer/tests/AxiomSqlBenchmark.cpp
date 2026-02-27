@@ -167,7 +167,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     exec::ExchangeSource::registerFactory(
         exec::test::createLocalExchangeSource);
     serializer::presto::PrestoVectorSerde::registerVectorSerde();
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+    if (!isRegisteredNamedVectorSerde("Presto")) {
       serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
     }
 
