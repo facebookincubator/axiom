@@ -140,6 +140,55 @@ target_link_libraries(
   GTest::gtest_main
 )
 
+add_library(axiom_optimizer_tests_sql_query_entry SqlQueryEntry.cpp)
+
+target_link_libraries(axiom_optimizer_tests_sql_query_entry velox_exception Folly::folly)
+
+add_executable(axiom_optimizer_sql_query_entry_test SqlQueryEntryTest.cpp)
+
+add_test(NAME axiom_optimizer_sql_query_entry_test COMMAND axiom_optimizer_sql_query_entry_test)
+
+target_link_libraries(
+  axiom_optimizer_sql_query_entry_test
+  axiom_optimizer_tests_sql_query_entry
+  GTest::gmock
+  GTest::gtest
+  GTest::gtest_main
+)
+
+add_library(axiom_optimizer_tests_sql_test_base SqlTestBase.cpp)
+
+target_link_libraries(
+  axiom_optimizer_tests_sql_test_base
+  axiom_common
+  axiom_optimizer
+  axiom_runner_local_runner
+  axiom_sql_presto_parser
+  axiom_test_connector
+  velox_exec_test_lib
+  velox_expression
+  velox_functions_prestosql
+  velox_aggregates
+  velox_window
+)
+
+add_executable(axiom_optimizer_sql_test SqlTest.cpp)
+
+add_test(
+  NAME axiom_optimizer_sql_test
+  COMMAND axiom_optimizer_sql_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(
+  axiom_optimizer_sql_test
+  axiom_optimizer_tests_sql_test_base
+  axiom_optimizer_tests_sql_query_entry
+  velox_dwio_common_test_utils
+  Folly::folly
+  GTest::gtest
+)
+
 add_subdirectory(utils)
 
 add_executable(axiom_model_test ModelTest.cpp)
