@@ -459,5 +459,81 @@ TEST_F(AggregationParserTest, aggregateOptions) {
   ASSERT_EQ(1, agg->aggregateAt(0)->ordering().size());
 }
 
+// Verifies that aggregation calls with same expression but different options
+// are treated as different aggregates.
+TEST_F(AggregationParserTest, aggregateDeduplication) {
+  {
+    // Same expression with different DISTINCT options produces two aggregates.
+    testSelect(
+        "SELECT n_name, sum(n_regionkey) + 1, sum(DISTINCT n_regionkey) * 2 "
+        "FROM nation GROUP BY n_name",
+        matchScan()
+            .aggregate(
+                {"n_name"}, {"sum(n_regionkey)", "sum(DISTINCT n_regionkey)"})
+            .project({
+                "n_name",
+                "plus(sum, CAST(1 AS BIGINT))",
+                "multiply(sum_0, CAST(2 AS BIGINT))",
+            })
+            .output());
+  }
+
+  {
+    // Same expression with different FILTER clauses produces two aggregates.
+    testSelect(
+        "SELECT n_name, "
+        "sum(n_regionkey) FILTER (WHERE n_nationkey > 5) + 1, "
+        "sum(n_regionkey) FILTER (WHERE n_nationkey < 10) * 2 "
+        "FROM nation GROUP BY n_name",
+        matchScan()
+            .aggregate(
+                {"n_name"},
+                {"sum(n_regionkey) FILTER (WHERE gt(n_nationkey, CAST(5 AS BIGINT)))",
+                 "sum(n_regionkey) FILTER (WHERE lt(n_nationkey, CAST(10 AS BIGINT)))"})
+            .project({
+                "n_name",
+                "plus(sum, CAST(1 AS BIGINT))",
+                "multiply(sum_0, CAST(2 AS BIGINT))",
+            })
+            .output());
+  }
+
+  {
+    // Same expression with different ORDER BY directions produces two
+    // aggregates. No ProjectNode in this plan.
+    testSelect(
+        "SELECT n_name, "
+        "array_agg(n_comment ORDER BY n_nationkey ASC) as agg1, "
+        "array_agg(n_comment ORDER BY n_nationkey DESC) as agg2 "
+        "FROM nation GROUP BY n_name",
+        matchScan()
+            .aggregate(
+                {"n_name"},
+                {"array_agg(n_comment ORDER BY n_nationkey ASC NULLS LAST)",
+                 "array_agg(n_comment ORDER BY n_nationkey DESC NULLS LAST)"})
+            .output());
+  }
+
+  {
+    // Same expression with same options should be deduplicated to one
+    // aggregate. Project references the same column twice.
+    testSelect(
+        "SELECT n_name, "
+        "sum(DISTINCT n_regionkey) FILTER (WHERE n_nationkey > 5) + 1, "
+        "sum(DISTINCT n_regionkey) FILTER (WHERE n_nationkey > 5) * 2 "
+        "FROM nation GROUP BY n_name",
+        matchScan()
+            .aggregate(
+                {"n_name"},
+                {"sum(DISTINCT n_regionkey) FILTER (WHERE gt(n_nationkey, CAST(5 AS BIGINT)))"})
+            .project({
+                "n_name",
+                "plus(sum, CAST(1 AS BIGINT))",
+                "multiply(sum, CAST(2 AS BIGINT))",
+            })
+            .output());
+  }
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test

@@ -29,6 +29,7 @@ target_link_libraries(
   axiom_sql_presto_parser
   axiom_logical_plan_builder
   axiom_sql_presto_ast
+  velox_common_base
   antlr4_shared
 )
 
