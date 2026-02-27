@@ -216,7 +216,9 @@ class ToGraph {
   //  Applies translateExpr to a 'source'.
   ExprVector translateExprs(const std::vector<logical_plan::ExprPtr>& source);
 
-  // Makes a deduplicated Expr tree from 'expr'.
+  // Makes a deduplicated Expr tree from 'expr'. May return null when 'expr'
+  // is a subfield path that is not materialized.
+  // TODO: Return std::optional<ExprCP> instead of allowing null returns.
   ExprCP translateExpr(const logical_plan::ExprPtr& expr);
 
   ExprCP translateLambda(const logical_plan::LambdaExpr* lambda);
@@ -302,10 +304,6 @@ class ToGraph {
       const logical_plan::LogicalPlanNode& input,
       const logical_plan::ExprPtr& predicate);
 
-  // Returns true if 'expr' references any window function output through
-  // renames_. Used to detect filters that depend on window function results.
-  bool referencesWindowOutput(const logical_plan::ExprPtr& expr) const;
-
   // Returns true if any window expression in the project references another
   // window function output through renames_. Used to detect window-on-window
   // dependencies that require a DT boundary.
@@ -389,7 +387,7 @@ class ToGraph {
   // Returns the count column. The wrapper DT is added to currentDt_.
   ColumnCP makeCountStarWrapper(DerivedTableP inputDt);
 
-  // Adds a column 'name' from current DerivedTable to the 'dt'.
+  // Adds a column 'name' from current DerivedTable to 'dt'.
   void addDtColumn(DerivedTableP dt, std::string_view name);
 
   void setDtUsedOutput(
@@ -532,6 +530,8 @@ class ToGraph {
   folly::F14FastMap<std::string_view, ColumnCP> lambdaSignature_;
 
   // Maps names in project nodes of input logical plan to deduplicated Exprs.
+  // Values may be null when a subfield path is not materialized (see
+  // intersectWithSkyline in makeGettersOverSkyline).
   folly::F14FastMap<std::string, ExprCP> renames_;
 
   // Symbols from the 'outer' query. Used when processing correlated subqueries.

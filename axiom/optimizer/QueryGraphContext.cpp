@@ -351,6 +351,18 @@ void QueryGraphContext::populateFunctionNames() {
   if (auto isNull = registry->isNull()) {
     functionNames_.isNull = this->toName(isNull.value());
   }
+
+  if (auto rowNumber = registry->rowNumber()) {
+    functionNames_.rowNumber = this->toName(rowNumber.value());
+  }
+
+  if (auto rank = registry->rank()) {
+    functionNames_.rank = this->toName(rank.value());
+  }
+
+  if (auto denseRank = registry->denseRank()) {
+    functionNames_.denseRank = this->toName(denseRank.value());
+  }
 }
 
 } // namespace facebook::axiom::optimizer

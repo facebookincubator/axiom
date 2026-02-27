@@ -307,6 +307,11 @@ struct FunctionNames {
   /// Aggregate functions.
   Name arbitrary{nullptr};
   Name count{nullptr};
+
+  /// Window functions.
+  Name rowNumber{nullptr};
+  Name rank{nullptr};
+  Name denseRank{nullptr};
 };
 
 /// Context for making a query plan. Owns all memory associated to

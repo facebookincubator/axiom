@@ -33,6 +33,7 @@ const auto& planTypeNames() {
       {PlanType::kUnnestTableNode, "UnnestTableNode"},
       {PlanType::kDerivedTableNode, "DerivedTableNode"},
       {PlanType::kAggregationNode, "AggregationNode"},
+      {PlanType::kWindowPlanNode, "WindowPlanNode"},
   };
   return kNames;
 }

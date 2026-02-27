@@ -222,6 +222,17 @@ std::string WindowFunction::toString() const {
   return out.str();
 }
 
+const WindowPlan* WindowPlan::withFunctions(
+    QGVector<WindowFunctionCP> functions,
+    ColumnVector columns) const {
+  auto merged = functions_;
+  auto mergedColumns = columns_;
+  merged.insert(merged.end(), functions.begin(), functions.end());
+  mergedColumns.insert(mergedColumns.end(), columns.begin(), columns.end());
+  return make<WindowPlan>(
+      std::move(merged), std::move(mergedColumns), rankingLimit_);
+}
+
 std::string Field::toString() const {
   std::stringstream out;
   out << base_->toString() << ".";

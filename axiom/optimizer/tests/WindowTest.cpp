@@ -103,6 +103,47 @@ TEST_F(WindowTest, multipleWindowFunctionsSameSpec) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+TEST_F(WindowTest, stackedWindows) {
+  // Window functions from stacked projects (inner subquery + outer window)
+  // merge into the same DT when the outer window doesn't reference the inner
+  // window's output. The two windows have different specs (ORDER BY vs none),
+  // so they produce separate Window operators.
+  auto plan = toSingleNodePlan(
+      "SELECT n_name, rn, s FROM ("
+      "  SELECT n_name, n_nationkey, "
+      "    row_number() OVER (ORDER BY n_name) as rn, "
+      "    sum(n_nationkey) OVER () as s "
+      "  FROM nation"
+      ")");
+
+  auto matcher = matchScan("nation")
+                     .window({"row_number() OVER (ORDER BY n_name)"})
+                     .window({"sum(n_nationkey) OVER ()"})
+                     .project({"n_name", "rn", "s"})
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(WindowTest, stackedWindowsSameSpec) {
+  // Window functions from stacked projects with the same spec are combined
+  // into a single Window operator.
+  auto plan = toSingleNodePlan(
+      "SELECT n_name, rn, s FROM ("
+      "  SELECT n_name, n_nationkey, "
+      "    row_number() OVER (ORDER BY n_name) as rn, "
+      "    sum(n_nationkey) OVER (ORDER BY n_name) as s "
+      "  FROM nation"
+      ")");
+
+  auto matcher = matchScan("nation")
+                     .window(
+                         {"row_number() OVER (ORDER BY n_name)",
+                          "sum(n_nationkey) OVER (ORDER BY n_name)"})
+                     .project({"n_name", "rn", "s"})
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 TEST_F(WindowTest, differentPartitionKeys) {
   // Window functions with different partition keys produce separate Window
   // operators.
@@ -249,16 +290,18 @@ TEST_F(WindowTest, windowAfterFilter) {
 }
 
 TEST_F(WindowTest, filterOnWindowOutput) {
-  // Filter on window output forces a DT boundary.
+  // Filter on a non-ranking window function output forces a DT boundary.
+  // The filter stays because sum() is not a ranking function.
   auto plan = toSingleNodePlan(
       "SELECT * FROM ("
-      "  SELECT n_name, row_number() OVER (ORDER BY n_name) as rn "
+      "  SELECT n_name, sum(n_regionkey) OVER (ORDER BY n_name) as s "
       "  FROM nation"
-      ") WHERE rn <= 5");
+      ") WHERE s > 10");
 
   auto matcher = matchScan("nation")
-                     .window({"row_number() OVER (ORDER BY n_name) as rn"})
-                     .filter("rn <= 5")
+                     .window({"sum(n_regionkey) OVER (ORDER BY n_name) as s"})
+                     .project({"n_name", "s"})
+                     .filter("s > 10")
                      .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
@@ -452,9 +495,7 @@ TEST_F(WindowTest, redundantOrderByMultipleWindowsSameOrderBy) {
                                 .window(
                                     {"sum(n_regionkey) OVER (ORDER BY n_name)",
                                      "avg(n_nationkey) OVER (ORDER BY n_name)"})
-                                .partialLimit(0, 10)
-                                .localPartition()
-                                .finalLimit(0, 10)
+                                .localLimit(0, 10)
                                 .project()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);

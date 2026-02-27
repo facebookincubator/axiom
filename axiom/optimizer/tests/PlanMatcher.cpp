@@ -1655,14 +1655,18 @@ PlanMatcherBuilder& PlanMatcherBuilder::finalLimit(
   return *this;
 }
 
-PlanMatcherBuilder& PlanMatcherBuilder::distributedLimit(
+PlanMatcherBuilder& PlanMatcherBuilder::localLimit(
     int64_t offset,
     int64_t count) {
   return partialLimit(0, offset + count)
       .localPartition()
-      .finalLimit(0, offset + count)
-      .gather()
       .finalLimit(offset, count);
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::distributedLimit(
+    int64_t offset,
+    int64_t count) {
+  return localLimit(0, offset + count).gather().finalLimit(offset, count);
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::topN() {

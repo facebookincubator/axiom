@@ -663,7 +663,7 @@ void DerivedTable::replaceJoinOutputs(
 bool DerivedTable::isWrapOnly() const {
   return tables.size() == 1 && tables[0]->is(PlanType::kDerivedTableNode) &&
       !hasLimit() && !hasOrderBy() && conjuncts.empty() && !hasAggregation() &&
-      exprs.empty();
+      !hasWindow() && exprs.empty();
 }
 
 void DerivedTable::ensureSingleRow() {
@@ -862,6 +862,7 @@ void DerivedTable::flattenDt(const DerivedTable* dt) {
   exprs = dt->exprs;
   importedExistences.unionSet(dt->importedExistences);
   aggregation = dt->aggregation;
+  windowPlan = dt->windowPlan;
   having = dt->having;
   limit = dt->limit;
   offset = dt->offset;
@@ -1218,7 +1219,81 @@ JoinEdgeP toNormalizedRightJoin(JoinEdgeCP fullJoin) {
   return leftJoin;
 }
 
+// Returns true if 'name' is a ranking window function (row_number, rank,
+// dense_rank).
+bool isRankingFunction(Name name, const FunctionNames& names) {
+  return name == names.rowNumber || name == names.rank ||
+      name == names.denseRank;
+}
+
+// Extracts the ranking limit from a predicate of the form column <= N,
+// column < N, or column = 1, where 'windowColumn' is the output of
+// 'windowFunction' which must be a ranking function (row_number, rank, or
+// dense_rank). Returns std::nullopt if the predicate does not match.
+std::optional<int32_t> extractRankingLimit(
+    ExprCP expr,
+    const FunctionNames& names,
+    ColumnCP windowColumn,
+    WindowFunctionCP windowFunction) {
+  if (!expr->is(PlanType::kCallExpr)) {
+    return std::nullopt;
+  }
+
+  const auto* call = expr->as<Call>();
+  const auto& args = call->args();
+  if (args.size() != 2 || args[0] != windowColumn ||
+      !args[1]->is(PlanType::kLiteralExpr)) {
+    return std::nullopt;
+  }
+
+  if (!isRankingFunction(windowFunction->name(), names)) {
+    return std::nullopt;
+  }
+
+  const auto& literal = args[1];
+  const auto& literalType = literal->value().type;
+  if (!literalType->isTinyint() && !literalType->isSmallint() &&
+      !literalType->isInteger() && !literalType->isBigint()) {
+    return std::nullopt;
+  }
+
+  auto value = integerValue(&literal->as<Literal>()->literal());
+  auto callName = call->name();
+  // ranking_func() <= N → limit = N. Valid when N > 0.
+  if (callName == names.lte && value > 0) {
+    return static_cast<int32_t>(value);
+  }
+
+  // ranking_func() < N → limit = N - 1. Valid when N > 1.
+  if (callName == names.lt && value > 1) {
+    return static_cast<int32_t>(value - 1);
+  }
+
+  // ranking_func() = 1 → limit = 1. TopNRowNumber returns rows 1..limit,
+  // so = N for N > 1 cannot be converted to a limit.
+  if (callName == names.equality && value == 1) {
+    return 1;
+  }
+
+  return std::nullopt;
+}
+
 } // namespace
+
+bool DerivedTable::isPartitionKeyFilter(ExprCP imported) const {
+  VELOX_CHECK_NOT_NULL(windowPlan);
+  for (const auto* func : windowPlan->functions()) {
+    if (func->partitionKeys().empty()) {
+      return false;
+    }
+    PlanObjectSet partitionKeyColumns;
+    partitionKeyColumns.unionColumns(func->partitionKeys());
+    if (!imported->columns().isSubset(partitionKeyColumns)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 bool DerivedTable::addFilter(ExprCP conjunct) {
   // TODO: Support pushing conjuncts below LIMIT by wrapping in a DT.
@@ -1236,8 +1311,25 @@ bool DerivedTable::addFilter(ExprCP conjunct) {
   }
 
   auto imported = importExpr(conjunct);
-  if (imported->containsFunction(FunctionSet::kWindow)) {
-    return false;
+
+  if (windowPlan) {
+    if (isPartitionKeyFilter(imported)) {
+      // Filter on partition keys of all window functions can be pushed below.
+    } else {
+      if (windowPlan->functions().size() == 1 &&
+          imported->columns().size() == 1 &&
+          imported->columns().contains(windowPlan->columns()[0])) {
+        if (auto rankingLimit = extractRankingLimit(
+                imported,
+                queryCtx()->functionNames(),
+                windowPlan->columns()[0],
+                windowPlan->functions()[0])) {
+          windowPlan = windowPlan->withRankingLimit(*rankingLimit);
+          return true;
+        }
+      }
+      return false;
+    }
   }
 
   if (aggregation) {
