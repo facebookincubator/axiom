@@ -57,11 +57,23 @@ class ExpressionPlanner {
   using SortingKeyResolver =
       std::function<lp::ExprApi(const ExpressionPtr& expr)>;
 
+  /// Callback to translate GROUPING() operations. Takes the GroupingOperation
+  /// AST node, returns the translated expression. Required when the expression
+  /// may contain GROUPING() calls. Can be nullptr if GROUPING() is not
+  /// expected.
+  using GroupingTranslator =
+      std::function<lp::ExprApi(const GroupingOperation* node)>;
+
   ExpressionPlanner(
       SubqueryPlanner subqueryPlanner,
       SortingKeyResolver sortingKeyResolver)
       : subqueryPlanner_(std::move(subqueryPlanner)),
         sortingKeyResolver_(std::move(sortingKeyResolver)) {}
+
+  /// Sets the callback for translating GROUPING() operations.
+  void setGroupingTranslator(GroupingTranslator translator) {
+    groupingTranslator_ = std::move(translator);
+  }
 
   /// Translates an AST expression into an ExprApi. Optionally collects
   /// aggregate options (DISTINCT, FILTER, ORDER BY) for aggregate function
@@ -82,6 +94,7 @@ class ExpressionPlanner {
 
   SubqueryPlanner subqueryPlanner_;
   SortingKeyResolver sortingKeyResolver_;
+  GroupingTranslator groupingTranslator_;
 };
 
 } // namespace axiom::sql::presto

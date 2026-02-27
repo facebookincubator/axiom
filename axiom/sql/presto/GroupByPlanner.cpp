@@ -16,6 +16,7 @@
 
 #include "axiom/sql/presto/GroupByPlanner.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
+#include "folly/ScopeGuard.h"
 #include "velox/exec/Aggregate.h"
 
 namespace axiom::sql::presto {
@@ -260,11 +261,35 @@ void GroupByPlanner::plan(
   groupingSets_ = expandGroupingSets(groupingElements, selectItems);
   deduplicateGroupingKeys();
 
+  // Build mapping for GROUPING() translation if we have multiple grouping sets.
+  const bool useGroupingSets = hasGroupingSets(groupingElements);
+  if (useGroupingSets) {
+    for (size_t i = 0; i < groupingKeys_.size(); ++i) {
+      if (const auto* fieldAccess =
+              dynamic_cast<const facebook::velox::core::FieldAccessExpr*>(
+                  groupingKeys_[i].expr().get())) {
+        if (fieldAccess->isRootColumn()) {
+          groupingColumnToIndex_[fieldAccess->name()] = static_cast<int32_t>(i);
+        }
+      }
+    }
+
+    // Set up GROUPING() translator.
+    exprPlanner_.setGroupingTranslator(
+        [this](const GroupingOperation* node) -> lp::ExprApi {
+          return translateGroupingOperation(node);
+        });
+  }
+
+  SCOPE_EXIT {
+    exprPlanner_.setGroupingTranslator(nullptr);
+  };
+
   // Walk SELECT, HAVING, and ORDER BY expressions to collect aggregate
   // function calls, then add the Aggregate plan node.
   // Populates: aggregates_, projections_, filter_, sortingKeys_, outputNames_.
   auto aggregateOptionsMap = collectAggregates(selectItems, having, orderBy);
-  addAggregate(aggregateOptionsMap, hasGroupingSets(groupingElements));
+  addAggregate(aggregateOptionsMap, useGroupingSets);
 
   // Rewrite filter_, projections_, and sortingKeys_ to reference the
   // aggregate output columns instead of the original input expressions.
@@ -656,6 +681,23 @@ std::vector<lp::ExprApi> GroupByPlanner::resolveWithCache(
     result.push_back(resolveWithCache(expr, selectItems));
   }
   return result;
+}
+
+lp::ExprApi GroupByPlanner::translateGroupingOperation(
+    const GroupingOperation* node) {
+  std::vector<int32_t> columnIndices;
+  columnIndices.reserve(node->groupingColumns().size());
+  for (const auto& column : node->groupingColumns()) {
+    auto name = canonicalizeName(column->suffix());
+    auto it = groupingColumnToIndex_.find(name);
+    VELOX_USER_CHECK(
+        it != groupingColumnToIndex_.end(),
+        "Column is not a grouping column: {}",
+        name);
+    columnIndices.push_back(it->second);
+  }
+
+  return lp::Grouping(columnIndices, groupingSetsIndices_, "$grouping_set_id");
 }
 
 } // namespace axiom::sql::presto

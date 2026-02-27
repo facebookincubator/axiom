@@ -476,5 +476,129 @@ TEST_F(HiveAggregationQueriesTest, ignoreDuplicatesXOrderNonSensitive) {
   checkSame(logicalPlan, referencePlan);
 }
 
+TEST_F(HiveAggregationQueriesTest, rollup) {
+  lp::PlanBuilder::Context context(exec::test::kHiveConnectorId);
+  auto logicalPlan = lp::PlanBuilder(context)
+                         .tableScan("nation")
+                         .rollup(
+                             {"n_regionkey"},
+                             {"count(1) as cnt", "sum(n_nationkey) as total"},
+                             "$grouping_set_id")
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan()
+          .groupId({{"n_regionkey"}, {}}, {"n_nationkey"}, "$grouping_set_id")
+          .singleAggregation(
+              {"n_regionkey", "\"$grouping_set_id\""},
+              {"count(1) as cnt", "sum(n_nationkey) as total"})
+          .project({"n_regionkey", "cnt", "total", "\"$grouping_set_id\""})
+          .build();
+  ASSERT_TRUE(matcher->match(plan));
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .groupId({"n_regionkey"}, {{"n_regionkey"}, {}}, {"n_nationkey"})
+          .singleAggregation(
+              {"n_regionkey", "group_id"},
+              {"count(1) as cnt", "sum(n_nationkey) as total"})
+          .project({"n_regionkey", "cnt", "total", "group_id"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveAggregationQueriesTest, rollupMultiKey) {
+  auto logicalPlan = parseSelect(
+      "SELECT n_regionkey, n_name, count(1) as cnt "
+      "FROM nation "
+      "GROUP BY ROLLUP(n_regionkey, n_name)");
+
+  // ROLLUP(a, b) produces 3 grouping sets: {a, b}, {a}, {}.
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .groupId(
+              {"n_regionkey", "n_name"},
+              {{"n_regionkey", "n_name"}, {"n_regionkey"}, {}},
+              {"n_nationkey"})
+          .singleAggregation(
+              {"n_regionkey", "n_name", "group_id"}, {"count(1) as cnt"})
+          .project({"n_regionkey", "n_name", "cnt", "group_id"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveAggregationQueriesTest, cube) {
+  auto logicalPlan = parseSelect(
+      "SELECT n_regionkey, n_name, count(1) as cnt "
+      "FROM nation "
+      "GROUP BY CUBE(n_regionkey, n_name)");
+
+  // CUBE(a, b) produces 4 grouping sets: {a, b}, {a}, {b}, {}.
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .groupId(
+              {"n_regionkey", "n_name"},
+              {{"n_regionkey", "n_name"}, {"n_regionkey"}, {"n_name"}, {}},
+              {"n_nationkey"})
+          .singleAggregation(
+              {"n_regionkey", "n_name", "group_id"}, {"count(1) as cnt"})
+          .project({"n_regionkey", "n_name", "cnt", "group_id"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveAggregationQueriesTest, groupingSets) {
+  auto logicalPlan = parseSelect(
+      "SELECT n_regionkey, n_name, sum(n_nationkey) as total "
+      "FROM nation "
+      "GROUP BY GROUPING SETS ((n_regionkey), (n_name))");
+
+  // Explicit grouping sets: {n_regionkey}, {n_name}.
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .tableScan("nation", getSchema("nation"))
+          .groupId(
+              {"n_regionkey", "n_name"},
+              {{"n_regionkey"}, {"n_name"}},
+              {"n_nationkey"})
+          .singleAggregation(
+              {"n_regionkey", "n_name", "group_id"},
+              {"sum(n_nationkey) as total"})
+          .project({"n_regionkey", "n_name", "total", "group_id"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
+TEST_F(HiveAggregationQueriesTest, rollupWithGrouping) {
+  auto logicalPlan = parseSelect(
+      "SELECT n_regionkey, count(1) as cnt, grouping(n_regionkey) as grp "
+      "FROM nation "
+      "GROUP BY ROLLUP(n_regionkey)");
+
+  // ROLLUP(a) produces 2 grouping sets: {a}, {}.
+  // GROUPING(n_regionkey) returns 0 when present, 1 when aggregated.
+  auto referencePlan =
+      exec::test::PlanBuilder(pool_.get())
+          .tableScan("nation", getSchema("nation"))
+          .groupId({"n_regionkey"}, {{"n_regionkey"}, {}}, {"n_nationkey"})
+          .singleAggregation({"n_regionkey", "group_id"}, {"count(1) as cnt"})
+          .project(
+              {"n_regionkey",
+               "cnt",
+               "cast(element_at(array[0, 1], group_id + 1) as bigint) as grp"})
+          .planNode();
+
+  checkSame(logicalPlan, referencePlan);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

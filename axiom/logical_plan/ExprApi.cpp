@@ -15,6 +15,7 @@
  */
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "folly/container/F14Set.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -242,6 +243,52 @@ WindowSpec& WindowSpec::groups(
   endType_ = endType;
   endValue_ = std::move(endValue);
   return *this;
+}
+
+ExprApi Grouping(
+    const std::vector<int32_t>& columnIndices,
+    const std::vector<std::vector<int32_t>>& groupingSets,
+    const std::string& groupingSetIndexName) {
+  VELOX_USER_CHECK(
+      !columnIndices.empty(), "GROUPING() requires at least one argument");
+  VELOX_USER_CHECK_LE(
+      columnIndices.size(),
+      63,
+      "GROUPING() supports up to 63 column arguments");
+
+  // Single grouping set: all columns present, return 0.
+  if (groupingSets.size() == 1) {
+    return Lit(static_cast<int64_t>(0));
+  }
+
+  // Compute bitmask for each grouping set.
+  auto computeBitmask = [&](const std::vector<int32_t>& groupingSet) {
+    int64_t bitmask = static_cast<int64_t>((1ULL << columnIndices.size()) - 1);
+    folly::F14FastSet<int32_t> setIndices(
+        groupingSet.begin(), groupingSet.end());
+    for (size_t i = 0; i < columnIndices.size(); ++i) {
+      if (setIndices.contains(columnIndices[i])) {
+        bitmask &=
+            ~static_cast<int64_t>(1ULL << (columnIndices.size() - 1 - i));
+      }
+    }
+    return bitmask;
+  };
+
+  std::vector<ExprApi> bitmasks;
+  bitmasks.reserve(groupingSets.size());
+  for (const auto& groupingSet : groupingSets) {
+    bitmasks.push_back(Lit(computeBitmask(groupingSet)));
+  }
+
+  // element_at(array[bitmasks...], groupingSetIndexName + 1)
+  return Call(
+      "element_at",
+      Call("array_constructor", bitmasks),
+      Call(
+          "plus",
+          Cast(velox::BIGINT(), Col(groupingSetIndexName)),
+          Lit(static_cast<int64_t>(1))));
 }
 
 } // namespace facebook::axiom::logical_plan
