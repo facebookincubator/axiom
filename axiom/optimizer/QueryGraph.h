@@ -1314,6 +1314,56 @@ class AggregationPlan : public PlanObject {
 
 using AggregationPlanCP = const AggregationPlan*;
 
+/// Stores the window functions and their output columns in a DerivedTable.
+/// Analogous to AggregationPlan for aggregations.
+class WindowPlan : public PlanObject {
+ public:
+  WindowPlan(
+      QGVector<WindowFunctionCP> functions,
+      ColumnVector columns,
+      std::optional<int32_t> rankingLimit = std::nullopt)
+      : PlanObject(PlanType::kWindowPlanNode),
+        functions_(std::move(functions)),
+        columns_(std::move(columns)),
+        rankingLimit_(rankingLimit) {
+    VELOX_CHECK_EQ(functions_.size(), columns_.size());
+    if (rankingLimit_.has_value()) {
+      VELOX_CHECK_EQ(functions_.size(), 1);
+    }
+  }
+
+  const QGVector<WindowFunctionCP>& functions() const {
+    return functions_;
+  }
+
+  const ColumnVector& columns() const {
+    return columns_;
+  }
+
+  /// Ranking limit absorbed from a filter predicate (e.g., row_number() <= 5).
+  std::optional<int32_t> rankingLimit() const {
+    return rankingLimit_;
+  }
+
+  /// Returns a new WindowPlan with the given ranking limit.
+  const WindowPlan* withRankingLimit(int32_t limit) const {
+    return make<WindowPlan>(functions_, columns_, limit);
+  }
+
+  /// Returns a new WindowPlan with additional window functions and columns
+  /// appended. Used when merging windows from stacked project nodes.
+  const WindowPlan* withFunctions(
+      QGVector<WindowFunctionCP> functions,
+      ColumnVector columns) const;
+
+ private:
+  const QGVector<WindowFunctionCP> functions_;
+  const ColumnVector columns_;
+  const std::optional<int32_t> rankingLimit_;
+};
+
+using WindowPlanCP = const WindowPlan*;
+
 class WritePlan : public PlanObject {
  public:
   /// @param table The table to write to.

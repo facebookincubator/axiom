@@ -110,7 +110,6 @@ ToGraph::ToGraph(
 
 void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
   const auto* inner = translateColumn(name);
-  dt->exprs.push_back(inner);
 
   ColumnCP outer = nullptr;
   if (inner->isColumn() && inner->as<Column>()->relation() == dt &&
@@ -120,6 +119,8 @@ void ToGraph::addDtColumn(DerivedTableP dt, std::string_view name) {
     const auto* columnName = toName(name);
     outer = make<Column>(columnName, dt, inner->value(), columnName);
   }
+
+  dt->exprs.push_back(inner);
   dt->columns.push_back(outer);
   renames_[name] = outer;
 }
@@ -1622,9 +1623,8 @@ void ToGraph::addOrderBy(const lp::SortNode& order) {
   // the output sort, so we can only drop the ORDER BY if every window function
   // agrees.
   std::optional<bool> allWindowsMatch;
-  for (const auto& [name, expr] : renames_) {
-    if (expr != nullptr && expr->is(PlanType::kWindowExpr)) {
-      const auto* windowFunc = expr->as<WindowFunction>();
+  if (currentDt_->windowPlan) {
+    for (const auto* windowFunc : currentDt_->windowPlan->functions()) {
       if (!windowFunc->partitionKeys().empty() ||
           windowFunc->orderKeys() != deduppedOrderKeys ||
           windowFunc->orderTypes() != deduppedOrderTypes) {
@@ -2249,6 +2249,9 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
     processSubqueries(input, exprs[i], /*filter=*/false);
   }
 
+  QGVector<WindowFunctionCP> windowFunctions;
+  ColumnVector windowColumns;
+
   for (auto i : channels) {
     if (exprs[i]->isInputReference()) {
       const auto& name = exprs[i]->as<lp::InputReferenceExpr>()->name();
@@ -2260,7 +2263,28 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
     }
 
     auto expr = translateExpr(exprs.at(i));
-    renames_[names[i]] = expr;
+
+    if (expr && expr->is(PlanType::kWindowExpr)) {
+      auto* windowFunction = expr->as<WindowFunction>();
+      auto* name = toName(names[i]);
+      auto* column =
+          make<Column>(name, currentDt_, windowFunction->value(), name);
+      windowFunctions.push_back(windowFunction);
+      windowColumns.push_back(column);
+      renames_[names[i]] = column;
+    } else {
+      renames_[names[i]] = expr;
+    }
+  }
+
+  if (!windowFunctions.empty()) {
+    if (currentDt_->windowPlan) {
+      currentDt_->windowPlan = currentDt_->windowPlan->withFunctions(
+          std::move(windowFunctions), std::move(windowColumns));
+    } else {
+      currentDt_->windowPlan = make<WindowPlan>(
+          std::move(windowFunctions), std::move(windowColumns));
+    }
   }
 }
 
@@ -2985,22 +3009,38 @@ void ToGraph::applySampling(
   }
 }
 
-bool ToGraph::referencesWindowOutput(const lp::ExprPtr& expr) const {
+namespace {
+// Returns true if 'expr' references any column in 'windowColumnSet' through
+// 'renames'. Used to detect window-on-window dependencies.
+bool referencesWindowOutput(
+    const lp::ExprPtr& expr,
+    const folly::F14FastMap<std::string, ExprCP>& renames,
+    const PlanObjectSet& windowColumnSet) {
   if (expr->isInputReference()) {
     const auto& name = expr->as<lp::InputReferenceExpr>()->name();
-    auto it = renames_.find(name);
-    // The name may not be in renames_ for columns from outer scopes in
+    auto it = renames.find(name);
+    // The name may not be in renames for columns from outer scopes in
     // correlated subqueries. The value may be null when a subfield path is not
     // materialized (see intersectWithSkyline).
-    return it != renames_.end() && it->second != nullptr &&
-        it->second->is(PlanType::kWindowExpr);
+    if (it == renames.end() || it->second == nullptr) {
+      return false;
+    }
+    return windowColumnSet.contains(it->second);
   }
-  return std::ranges::any_of(expr->inputs(), [this](const auto& input) {
-    return referencesWindowOutput(input);
+  return std::ranges::any_of(expr->inputs(), [&](const auto& input) {
+    return referencesWindowOutput(input, renames, windowColumnSet);
   });
 }
+} // namespace
 
 bool ToGraph::windowReferencesWindow(const lp::ProjectNode& project) const {
+  if (!currentDt_->hasWindow()) {
+    return false;
+  }
+
+  auto windowColumnSet =
+      PlanObjectSet::fromObjects(currentDt_->windowPlan->columns());
+
   for (const auto& expr : project.expressions()) {
     if (!expr->isWindow()) {
       continue;
@@ -3010,25 +3050,27 @@ bool ToGraph::windowReferencesWindow(const lp::ProjectNode& project) const {
     // order keys) for references to other window function outputs.
     const auto* window = expr->as<lp::WindowExpr>();
     for (const auto& input : window->inputs()) {
-      if (referencesWindowOutput(input)) {
+      if (referencesWindowOutput(input, renames_, windowColumnSet)) {
         return true;
       }
     }
     for (const auto& key : window->partitionKeys()) {
-      if (referencesWindowOutput(key)) {
+      if (referencesWindowOutput(key, renames_, windowColumnSet)) {
         return true;
       }
     }
     for (const auto& field : window->ordering()) {
-      if (referencesWindowOutput(field.expression)) {
+      if (referencesWindowOutput(field.expression, renames_, windowColumnSet)) {
         return true;
       }
     }
     const auto& frame = window->frame();
-    if (frame.startValue && referencesWindowOutput(frame.startValue)) {
+    if (frame.startValue &&
+        referencesWindowOutput(frame.startValue, renames_, windowColumnSet)) {
       return true;
     }
-    if (frame.endValue && referencesWindowOutput(frame.endValue)) {
+    if (frame.endValue &&
+        referencesWindowOutput(frame.endValue, renames_, windowColumnSet)) {
       return true;
     }
   }
@@ -3364,9 +3406,11 @@ void ToGraph::makeFilterQueryGraph(
 
   makeQueryGraph(input, allowedInDt, excludeOuterJoins);
 
-  // If the filter references window function outputs, finalize the DT
-  // so the filter is evaluated in the outer DT after the window.
-  if (referencesWindowOutput(filter.predicate())) {
+  // If the current DT has any window function outputs, finalize the DT
+  // so that filters are evaluated in the outer DT after the window.
+  // Window functions compute over the full input; pushing any filter below
+  // them changes their semantics.
+  if (currentDt_->hasWindow()) {
     finalizeDt(filter);
   }
 

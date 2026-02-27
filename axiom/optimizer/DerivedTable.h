@@ -40,6 +40,9 @@ using OrderTypeVector = QGVector<OrderType>;
 class WritePlan;
 using WritePlanCP = const WritePlan*;
 
+class WindowPlan;
+using WindowPlanCP = const WindowPlan*;
+
 /// Represents a derived table, i.e. a SELECT in a FROM clause. This is the
 /// basic unit of planning. Derived tables can be merged and split apart from
 /// other ones. Join types and orders are decided within each derived table. A
@@ -135,6 +138,10 @@ struct DerivedTable : public PlanObject {
   /// Postprocessing clauses: group by, having, order by, limit, offset.
 
   AggregationPlanCP aggregation{nullptr};
+
+  /// Window functions and their output columns. Set during ToGraph when the
+  /// projection contains window function expressions.
+  WindowPlanCP windowPlan{nullptr};
 
   ExprVector having;
 
@@ -255,6 +262,10 @@ struct DerivedTable : public PlanObject {
     return aggregation != nullptr;
   }
 
+  bool hasWindow() const {
+    return windowPlan != nullptr;
+  }
+
   bool hasOrderBy() const {
     return !orderKeys.empty();
   }
@@ -366,6 +377,10 @@ struct DerivedTable : public PlanObject {
       ExprCP conjunct,
       PlanObjectP table,
       std::vector<DerivedTable*>& changedDts);
+
+  // Returns true if 'imported' depends only on columns that are partition keys
+  // of every window function in windowPlan.
+  bool isPartitionKeyFilter(ExprCP imported) const;
 };
 
 using DerivedTableP = DerivedTable*;

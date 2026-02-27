@@ -349,9 +349,15 @@ class PlanMatcherBuilder {
   /// @param count Maximum number of rows to return.
   PlanMatcherBuilder& finalLimit(int64_t offset, int64_t count);
 
-  /// Matches the distributed limit pattern: partialLimit(0, offset + count) →
-  /// localPartition → finalLimit(0, offset + count) → gather →
-  /// finalLimit(offset, count).
+  /// Matches the local limit pattern: partialLimit(0, offset + count) →
+  /// localPartition → finalLimit(offset, count). Used when data is already on a
+  /// single node and no gather is needed.
+  /// @param offset Number of rows to skip.
+  /// @param count Maximum number of rows to return.
+  PlanMatcherBuilder& localLimit(int64_t offset, int64_t count);
+
+  /// Matches the distributed limit pattern: localLimit(0, offset + count) →
+  /// gather → finalLimit(offset, count).
   /// @param offset Number of rows to skip.
   /// @param count Maximum number of rows to return.
   PlanMatcherBuilder& distributedLimit(int64_t offset, int64_t count);
