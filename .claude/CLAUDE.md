@@ -124,6 +124,23 @@ for the complete guide. Key rules are summarized below.
 - Keep method implementations in `.cpp` except for trivial one-liners.
 - Avoid default arguments when all callers can pass values explicitly.
 
+## Commit Messages
+
+Use conventional commit prefixes with `[Project]` tags:
+
+```
+[Axiom] feat(optimizer): Add support for window functions
+[Axiom] fix: Validate HAVING column references in SQL parser
+[Axiom] refactor(parser): Extract GroupByPlanner class
+[Axiom] test: Improve LogicalPlanMatcherBuilder API
+[Axiom] docs: Document Query Graphviz CLI
+```
+
+Format: `[Project] type(scope): Description`
+- Types: `feat`, `fix`, `refactor`, `test`, `docs`
+- Scope is optional, use for subsystem clarity (e.g., `parser`, `optimizer`)
+- Description starts with a capital letter, no trailing period
+
 ## Common Mistakes
 
 These are frequently violated rules. Check every new or modified line against

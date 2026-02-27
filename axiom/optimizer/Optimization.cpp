@@ -20,6 +20,7 @@
 #include <utility>
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/Plan.h"
+#include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "velox/expression/Expr.h"
@@ -1489,11 +1490,12 @@ bool allRowsFrames(const WindowFunctionVector& functions) {
 
 // Groups window functions by specification (partition keys + order keys),
 // merges compatible ROWS-frame groups, and sorts for optimal execution order.
-std::vector<WindowGroup> groupWindowFunctions(
-    const std::vector<std::pair<ColumnCP, WindowFunctionCP>>& windowExprs) {
+std::vector<WindowGroup> groupWindowFunctions(WindowPlanCP windowPlan) {
   // Group by specification.
   std::vector<WindowGroup> groups;
-  for (const auto& [outputColumn, windowFunc] : windowExprs) {
+  for (size_t i = 0; i < windowPlan->functions().size(); ++i) {
+    auto windowFunc = windowPlan->functions()[i];
+    auto outputColumn = windowPlan->columns()[i];
     bool found = false;
     for (auto& group : groups) {
       if (group.tryAdd(windowFunc, outputColumn)) {
@@ -1573,7 +1575,8 @@ RelationOpPtr makeWindowOp(
     ExprVector orderKeys,
     WindowFunctionVector windowFunctions,
     bool inputsSorted,
-    ColumnVector columns) {
+    ColumnVector columns,
+    std::optional<int32_t> rankingFilterLimit) {
   if (group.functions.size() == 1) {
     auto rankFunction =
         toRankFunction(std::string_view(group.functions[0]->name()));
@@ -1584,24 +1587,35 @@ RelationOpPtr makeWindowOp(
       return make<RowNumber>(
           plan,
           std::move(partitionKeys),
-          std::nullopt,
+          rankingFilterLimit,
           group.outputColumns[0],
           std::move(columns));
     }
 
+    // Use the minimum of DT limit and ranking filter limit.
+    auto topNLimit = rankingFilterLimit;
+    if (dt->hasLimit() && !dt->hasOrderBy()) {
+      topNLimit = topNLimit.has_value()
+          ? std::min(*topNLimit, static_cast<int32_t>(dt->limit))
+          : std::optional<int32_t>(dt->limit);
+    }
     if (rankFunction.has_value() && !group.orderKeys.empty() &&
-        dt->hasLimit() && !dt->hasOrderBy()) {
+        topNLimit.has_value()) {
       return make<TopNRowNumber>(
           plan,
           std::move(partitionKeys),
           std::move(orderKeys),
           std::move(group.orderTypes),
           *rankFunction,
-          dt->limit,
+          *topNLimit,
           group.outputColumns[0],
           std::move(columns));
     }
   }
+
+  VELOX_CHECK(
+      !rankingFilterLimit.has_value(),
+      "Ranking filter limit not consumed by RowNumber or TopNRowNumber.");
 
   return make<Window>(
       plan,
@@ -1676,20 +1690,13 @@ bool Optimization::addWindow(
     DerivedTableCP dt,
     RelationOpPtr& plan,
     PlanState& state) const {
-  // Collect window functions from DT expressions.
-  std::vector<std::pair<ColumnCP, WindowFunctionCP>> windowExprs;
-  for (size_t i = 0; i < dt->exprs.size(); ++i) {
-    if (dt->exprs[i]->is(PlanType::kWindowExpr)) {
-      windowExprs.emplace_back(
-          dt->columns[i], dt->exprs[i]->as<WindowFunction>());
-    }
-  }
-
-  if (windowExprs.empty()) {
+  if (!dt->windowPlan) {
     return false;
   }
 
-  auto groups = groupWindowFunctions(windowExprs);
+  state.place(dt->windowPlan);
+
+  auto groups = groupWindowFunctions(dt->windowPlan);
 
   // Check for ranking function + LIMIT optimizations. Only applies when there
   // is exactly one window function group with a single ranking function.
@@ -1774,7 +1781,8 @@ bool Optimization::addWindow(
         std::move(orderKeys),
         std::move(windowFunctions),
         inputsSorted,
-        std::move(columns));
+        std::move(columns),
+        dt->windowPlan->rankingLimit());
     state.addCost(*plan);
 
     if (addLimitAfterTopN) {

@@ -57,12 +57,8 @@ TEST_F(HiveLimitQueriesTest, limit) {
     SCOPED_TRACE("numWorkers: 1, numDrivers: 4");
     auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 4});
 
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan()
-                       .partialLimit(0, 10)
-                       .localPartition()
-                       .finalLimit(0, 10)
-                       .build();
+    auto matcher =
+        core::PlanMatcherBuilder().tableScan().localLimit(0, 10).build();
 
     checkSingleNodePlan(plan, matcher);
     checkResults(plan, referenceResults);
@@ -76,9 +72,7 @@ TEST_F(HiveLimitQueriesTest, limit) {
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
-                       .partialLimit(0, 10)
-                       .localPartition()
-                       .finalLimit(0, 10)
+                       .localLimit(0, 10)
                        .shuffle()
                        .finalLimit(0, 10)
                        .build();
@@ -120,12 +114,8 @@ TEST_F(HiveLimitQueriesTest, offset) {
     SCOPED_TRACE("numWorkers: 1, numDrivers: 4");
     auto plan = planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = 4});
 
-    auto matcher = core::PlanMatcherBuilder()
-                       .tableScan()
-                       .partialLimit(0, 15)
-                       .localPartition()
-                       .finalLimit(5, 10)
-                       .build();
+    auto matcher =
+        core::PlanMatcherBuilder().tableScan().localLimit(5, 10).build();
 
     checkSingleNodePlan(plan, matcher);
     checkResults(plan, referenceResults);
@@ -139,9 +129,7 @@ TEST_F(HiveLimitQueriesTest, offset) {
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
-                       .partialLimit(0, 15)
-                       .localPartition()
-                       .finalLimit(0, 15)
+                       .localLimit(0, 15)
                        .shuffle()
                        .finalLimit(5, 10)
                        .build();

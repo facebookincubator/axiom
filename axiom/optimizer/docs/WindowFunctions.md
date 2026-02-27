@@ -1,6 +1,4 @@
-# Window Function Design Proposal
-
-*February 25, 2026*
+# Window functions
 
 ## Overview
 
@@ -15,15 +13,6 @@ SELECT
   avg(y) OVER (PARTITION BY a ORDER BY c)
 FROM t
 ```
-
-## Current State
-
-Parsing and logical plan representation are complete. Window functions are
-represented as `WindowExpr` nodes inside `ProjectNode` expressions. The
-optimizer does not handle `WindowExpr` — `SubfieldTracker` hits
-`VELOX_UNREACHABLE` in `markSubfields` and `ConstantExprEvaluator` hits
-`VELOX_NYI`. The `ConstantExprEvaluator` fix is trivial: window functions are
-never constant, so return the expression unchanged.
 
 ## Window Specification
 
@@ -45,12 +34,54 @@ Planning happens in two phases:
 
 ### Phase 1: DT Construction (ToGraph)
 
+#### Filter Pushdown Through Windows
+
+Window functions compute over the full input set of a partition. Pushing a
+filter below a window function changes which rows the window sees, altering the
+results. For example:
+
+```sql
+SELECT * FROM (
+  SELECT x, count(*) OVER () as cnt FROM t
+) WHERE x <= 2
+```
+
+`count(*) OVER ()` should count all rows in `t`, not just those where `x <= 2`.
+If the filter pushes below the window, the count reflects only the filtered
+rows — a wrong result.
+
+**General rule:** filters cannot be pushed below window functions.
+
+There are two exceptions where pushdown is safe:
+
+1. **Partition-key-aligned filters.** If the predicate depends only on columns
+   that are partition keys of every window function in the DT, pushing it below
+   is semantically equivalent. For `PARTITION BY a`, filtering on `a = 5` before
+   the window gives the same result because rows with `a = 5` already form their
+   own partition — the window never mixes them with other rows. This is analogous
+   to pushing filters below aggregation when the filter is on grouping keys.
+
+2. **Ranking upper-bound predicates** (see Pattern 5 below). A predicate like
+   `rn <= 5` on a ranking function output can be absorbed as a limit in
+   `TopNRowNumber` or `RowNumber`. This is only valid when the DT has exactly
+   one window function — the ranking function itself. With multiple window
+   functions, the predicate cannot be absorbed and must stay as a filter above
+   the window operators.
+
+These rules apply both during DT construction (when a FilterNode is folded into
+a DT that has windows — see DT Boundary Rules below) and during filter pushdown
+(`distributeConjuncts`), when conjuncts from an outer DT are pushed into an
+inner DT that has window functions.
+
+#### Expression Folding
+
 During `makeQueryGraph`, multiple ProjectNodes and FilterNodes are folded into
 the same DerivedTable via the `renames_` map. Window expressions from all
 folded ProjectNodes accumulate in `renames_` as `WindowExpr` nodes embedded in
 expression trees. The DT boundary rules (see below) determine when a new DT
-must be started — e.g., when a filter references a window output, or when a
-Project with window expressions is added to a DT that already has a limit.
+must be started — e.g., when a FilterNode follows a Project with window
+expressions, or when a Project with window expressions is added to a DT that
+already has a limit.
 
 When translating a `WindowExpr`, normalize its partition keys and order keys:
 - Deduplicate, keeping the first occurrence of each column. A duplicate column
@@ -76,7 +107,7 @@ before the final projection and ORDER BY.
 
 #### Step 1: Collect
 
-Extract all `WindowExpr` nodes from the DT's expressions.
+Extract all window functions from `windowPlan->functions`.
 
 #### Step 2: Group by Specification
 
@@ -99,6 +130,8 @@ depend on ORDER BY values, and GROUPS frame boundaries depend on peer groups
 (rows with equal ORDER BY values). In both cases, extending the ORDER BY
 changes which rows are peers, altering the frame boundaries and changing
 results.
+
+See "Full-partition frame merge" in Future Optimizations below.
 
 #### Step 3: Order Groups for Sort Reuse
 
@@ -162,23 +195,22 @@ All decisions are heuristic:
 Window functions preserve all input rows, so there is no reduction to exploit
 via partial computation.
 
-#### Future: Data-Expanding Functions
-
-Some aggregate functions used as window functions produce large results per row
-(e.g., `array_agg`), significantly increasing data size. Running these early
-means subsequent window operators process larger rows — more data to
-repartition, sort, and shuffle. However, deferring them may require additional
-repartitioning or sorting that would not be needed if they were grouped with
-compatible functions earlier. This is a cost-based decision: estimate output
-size per window function and weigh the data expansion cost against the
-repartition/sort savings.
+See "Data-expanding functions" in Future Optimizations below.
 
 ### Ranking Function Optimizations
 
-Ranking functions (`row_number`, `rank`, `dense_rank`) enable optimizations
-that are not possible for general window functions. Velox provides specialized
+Ranking functions (`row_number`, `rank`, `dense_rank`) and filter pushdown
+through windows enable several optimizations. Velox provides specialized
 operators — `RowNumberNode` and `TopNRowNumberNode` — that Axiom emits when it
 detects the patterns below.
+
+| Pattern | Description | Operator | Restriction |
+|---------|-------------|----------|-------------|
+| 1 | `row_number()` without ORDER BY | `RowNumber` | Single window function |
+| 2 | `row_number()` without ORDER BY + LIMIT | `Limit` below `RowNumber` | Single window function |
+| 3 | Ranking function with ORDER BY + LIMIT | `TopNRowNumber` | Single window function |
+| 4 | Filter on partition keys | Push filter below window | Filter columns must be partition keys of every window function |
+| 5 | Ranking function + filter on output | `TopNRowNumber` or `RowNumber` with limit | Single window function |
 
 #### Pattern 1: `row_number()` without ORDER BY
 
@@ -188,7 +220,7 @@ SELECT *, row_number() OVER (PARTITION BY a) as rn FROM t
 
 Emit `RowNumberNode` instead of `WindowNode`. Simpler and more efficient: no
 sorting keys or frame, just partition keys. The per-partition limit is not used
-here (see Pattern 3).
+here (see Pattern 5).
 
 #### Pattern 2: `row_number()` without ORDER BY + LIMIT
 
@@ -209,7 +241,90 @@ Does not apply to other window functions — they need full partitions to comput
 correctly. Does not apply to `row_number()` with ORDER BY — the ordering
 determines which rows get which numbers; limiting first changes the result.
 
-#### Pattern 3: Ranking function + filter on output
+#### Pattern 3: Ranking function with ORDER BY + LIMIT
+
+```sql
+SELECT *, rank() OVER (ORDER BY b) as rn FROM t LIMIT 10
+```
+
+Absorb `LIMIT` into `TopNRowNumberNode(limit=10)` and remove the `LIMIT` node.
+When there are no partition keys, per-partition limit equals global limit. The
+node still processes all input but only keeps the top N internally.
+
+With partition keys, the `LIMIT` node stays on top but `TopNRowNumberNode` is
+still beneficial — it processes all input rows but only keeps the top N per
+partition (no need to sort entire partitions), significantly cutting the data
+volume before the global `LIMIT` selects the final N rows.
+
+```sql
+-- TopNRowNumberNode(limit=10) + LIMIT 10 on top
+SELECT *, rank() OVER (PARTITION BY a ORDER BY b) as rn FROM t LIMIT 10
+```
+
+#### Detection of Patterns 2 and 3
+
+Both patterns involve the interaction of LIMIT with window functions within the
+same DT. In `ToGraph`, `addLimit` sets `currentDt_->limit` on the current DT
+without creating a new DT. When the logical plan is `Limit → Project(window) →
+Scan`, ToGraph processes bottom-up: Scan → Project (adds window to DT) → Limit
+(sets limit on same DT). So both window functions and the limit are in the same
+DT.
+
+Detection happens in `addWindow` (called from `addPostprocess`). After
+collecting and grouping window functions, `addWindow` checks `dt->hasLimit()`:
+
+- **Pattern 2** (`row_number()` without ORDER BY + LIMIT): the only window
+  function is `row_number()` with no ORDER BY. Create a `Limit` RelationOp
+  before the `RowNumber` RelationOp (limit below window). The DT's limit is
+  consumed and `addPostprocess` does not create a second Limit.
+
+- **Pattern 3** (ranking function with ORDER BY + LIMIT, no partition keys):
+  the only window function is a ranking function with ORDER BY. Create
+  `TopNRowNumber(limit=dt->limit)`. For `row_number()`, the limit is fully
+  absorbed — `row_number()` never produces ties, so the TopNRowNumber output
+  has exactly `limit` rows. For `rank()`/`dense_rank()`, a Limit is added
+  after TopNRowNumber because ties may produce more rows than the limit. In
+  both cases, the DT's limit is consumed. With partition keys, per-partition
+  limit differs from global limit, so the DT's limit is not consumed and
+  `addPostprocess` creates the Limit normally.
+
+These checks only apply when the DT has exactly one window function. Pattern 2
+requires `row_number()` specifically; Pattern 3 applies to any ranking function.
+When multiple window functions exist, or when the window function is not a
+ranking function, the limit is left for `addPostprocess` to handle normally.
+
+#### Distributed Limit for Gathered Input
+
+When a Limit's input is already gathered (e.g., Limit after TopNRowNumber with
+no partition keys where data is gathered first), ToVelox skips the distributed
+limit pattern (partialLimit → exchange → finalLimit) and creates a simple
+single-node limit instead.
+
+#### Pattern 4: Filter on partition keys
+
+```sql
+SELECT * FROM (
+  SELECT *, sum(x) OVER (PARTITION BY a) as s FROM t
+) WHERE a = 5
+```
+
+If a filter predicate depends only on columns that are partition keys of every
+window function in the DT, pushing it below the window is semantically
+equivalent. Rows with `a = 5` already form their own partition — the window
+never mixes them with other rows. Pushing the filter below reduces the input to
+the window, avoiding unnecessary computation. This is analogous to pushing
+filters below aggregation when the filter is on grouping keys.
+
+This optimization is applied in `addFilter`: a predicate pushed into a DT with
+window functions is accepted if it depends only on columns present in the
+partition keys of every window function in that DT. The check uses
+`isPartitionKeyFilter`, which builds a `PlanObjectSet` of each window
+function's partition key columns and verifies that the predicate's columns are a
+subset.
+
+See "Per-operator filter placement" in Future Optimizations below.
+
+#### Pattern 5: Ranking function + filter on output
 
 ```sql
 -- Top 3 orders per customer by date
@@ -262,76 +377,20 @@ preserved as a filter on top.
 **Detection**: since a filter on a window function output triggers a DT
 boundary, the window is in the inner DT and the filter is in the outer DT. The
 ranking predicate starts in the outer DT's conjuncts. During filter pushdown
-(`tryPushdownConjunct` in `DerivedTable.cpp`), it gets pushed down into the
-inner DT as a regular conjunct (it references a column that the inner DT will
-produce). In the inner DT's `addPostprocess`,
-`placeConjuncts` skips it because the window output column doesn't exist yet
-(the window hasn't been planned). After `addWindow` creates the Window or
-RowNumber RelationOp and the output column becomes available, `addPostprocess`
-scans remaining unplaced conjuncts, recognizes the ranking predicate, and
-extracts its upper bound as a limit for the specialized node —
-`TopNRowNumber(limit=N)` or `RowNumber(limit=N)`. The assertion that checks
-all conjuncts are placed needs to be relaxed for conjuncts referencing window
-outputs until after `addWindow` runs.
+(`distributeConjuncts`), the predicate is pushed into the inner DT only when
+the inner DT has exactly one window function — the ranking function itself.
+With multiple window functions, the predicate cannot be absorbed as a
+TopNRowNumber limit and stays in the outer DT as a regular filter. When pushed,
+the predicate is validated using `isRankingUpperBoundPredicate` on the imported
+form (where the column reference is replaced with the underlying WindowFunction
+expression). The limit is extracted and stored on the `WindowPlan` via
+`withRankingLimit` (see Ranking Limit in the DerivedTable section). Non-ranking
+window predicates (e.g., `sum() > 10`) are rejected and stay in the outer DT
+as a regular Filter.
 
-#### Pattern 4: Ranking function with ORDER BY + LIMIT
-
-```sql
-SELECT *, rank() OVER (ORDER BY b) as rn FROM t LIMIT 10
-```
-
-Absorb `LIMIT` into `TopNRowNumberNode(limit=10)` and remove the `LIMIT` node.
-When there are no partition keys, per-partition limit equals global limit. The
-node still processes all input but only keeps the top N internally.
-
-With partition keys, the `LIMIT` node stays on top but `TopNRowNumberNode` is
-still beneficial — it processes all input rows but only keeps the top N per
-partition (no need to sort entire partitions), significantly cutting the data
-volume before the global `LIMIT` selects the final N rows.
-
-```sql
--- TopNRowNumberNode(limit=10) + LIMIT 10 on top
-SELECT *, rank() OVER (PARTITION BY a ORDER BY b) as rn FROM t LIMIT 10
-```
-
-#### Detection of Patterns 2 and 4
-
-Both patterns involve the interaction of LIMIT with window functions within the
-same DT. In `ToGraph`, `addLimit` sets `currentDt_->limit` on the current DT
-without creating a new DT. When the logical plan is `Limit → Project(window) →
-Scan`, ToGraph processes bottom-up: Scan → Project (adds window to DT) → Limit
-(sets limit on same DT). So both window functions and the limit are in the same
-DT.
-
-Detection happens in `addWindow` (called from `addPostprocess`). After
-collecting and grouping window functions, `addWindow` checks `dt->hasLimit()`:
-
-- **Pattern 2** (`row_number()` without ORDER BY + LIMIT): the only window
-  function is `row_number()` with no ORDER BY. Create a `Limit` RelationOp
-  before the `RowNumber` RelationOp (limit below window). The DT's limit is
-  consumed and `addPostprocess` does not create a second Limit.
-
-- **Pattern 4** (ranking function with ORDER BY + LIMIT, no partition keys):
-  the only window function is a ranking function with ORDER BY. Create
-  `TopNRowNumber(limit=dt->limit)`. For `row_number()`, the limit is fully
-  absorbed — `row_number()` never produces ties, so the TopNRowNumber output
-  has exactly `limit` rows. For `rank()`/`dense_rank()`, a Limit is added
-  after TopNRowNumber because ties may produce more rows than the limit. In
-  both cases, the DT's limit is consumed. With partition keys, per-partition
-  limit differs from global limit, so the DT's limit is not consumed and
-  `addPostprocess` creates the Limit normally.
-
-These checks only apply when the DT has exactly one window function. Pattern 2
-requires `row_number()` specifically; Pattern 4 applies to any ranking function.
-When multiple window functions exist, or when the window function is not a
-ranking function, the limit is left for `addPostprocess` to handle normally.
-
-#### Distributed Limit for Gathered Input
-
-When a Limit's input is already gathered (e.g., Limit after TopNRowNumber with
-no partition keys where data is gathered first), ToVelox skips the distributed
-limit pattern (partialLimit → exchange → finalLimit) and creates a simple
-single-node limit instead.
+In `addWindow`, the ranking limit is read from `WindowPlan::rankingLimit()`
+and passed to `makeWindowOp`, which creates `TopNRowNumber(limit=N)` or
+`RowNumber(limit=N)`.
 
 ## Comparison with Presto
 
@@ -414,7 +473,7 @@ and to `TopNRowNumberNode` (for ranking functions with a filter or limit). The
 only enabled for native execution.
 
 Axiom performs the same optimizations during the filter pushdown pass
-(Patterns 3 and 4) and during Phase 2 window planning (Pattern 1). Axiom also
+(Patterns 3 and 5) and during Phase 2 window planning (Pattern 1). Axiom also
 pushes `LIMIT` below `row_number()` without ORDER BY (Pattern 2), which Presto
 does not do — Presto always computes row numbers for all rows before applying
 the limit.
@@ -437,8 +496,10 @@ window function's output, the `WindowExpr` is substituted in via `renames_`.
 ### Rules for DerivedTable Boundaries
 
 Window functions execute after WHERE, GROUP BY, and HAVING, but before ORDER BY
-and LIMIT. A DT boundary is needed when other nodes reference window function
-outputs, or when adding window expressions to a DT that already has a limit.
+and LIMIT. A DT boundary is needed when a filter follows window expressions
+(to prevent pushdown below windows — see Filter Pushdown Through Windows
+above), when other nodes reference window function outputs, or when adding
+window expressions to a DT that already has a limit.
 
 #### Adding a Project that contains a WindowExpr
 
@@ -465,7 +526,7 @@ with it.
 | Node Kind | Rule |
 |-----------|------|
 | **Project without WindowExpr** | If a non-window expression references a `WindowExpr` output (via `renames_`), it can stay in the same DT — the window is computed before the final projection. |
-| **Filter** | If the predicate references a `WindowExpr` (directly or transitively via `renames_`), finalize the current DT and place the filter in a new outer DT. The inner DT computes the window functions; the outer DT applies the filter. |
+| **Filter** | Finalize the current DT and place the filter in a new outer DT. The inner DT computes the window functions; the outer DT applies the filter. This prevents filters from being placed below window operators, which would change the window semantics (see Filter Pushdown Through Windows above). |
 | **Aggregate** | If grouping keys or aggregate arguments reference a `WindowExpr`, finalize the current DT. The inner DT computes windows; the outer DT aggregates. |
 | **Sort** | No changes. Sort folds into the DT's `orderKeys` as usual. If a subsequent Project with WindowExpr is added, the "DT has `orderKeys`" rule above handles it. |
 | **Limit** | No changes. Limit folds into `dt->limit` as usual. If a subsequent Project with WindowExpr is added, the "DT has `limit`" rule above handles it. |
@@ -505,12 +566,11 @@ Filter [s > 10]
 ```
 
 Without window awareness, all three nodes fold into one DT with the filter as a
-conjunct. But the filter references `s`, which resolves to a `WindowExpr`. The
-window must be computed before the filter can evaluate.
+conjunct. But the DT has window functions, and placing a filter in the same DT
+would put the filter below the window — changing which rows the window sees.
 
-With window awareness: when `addFilter` detects the predicate references a
-`WindowExpr`, it finalizes the current DT (which includes the window
-expression) and creates a new outer DT for the filter.
+With window awareness: the FilterNode triggers a DT boundary because the
+current DT has window functions. The filter is placed in a new outer DT.
 
 ```text
 Outer DT: conjuncts=[s > 10]
@@ -556,32 +616,84 @@ during Phase 2 to group by specification. The `Frame` struct mirrors Velox's
 
 ### DerivedTable
 
-No new fields. Window functions are stored in the existing `columns` and `exprs`
-fields. For each window function translated in Phase 1, an entry is added to
-`columns` (the output Column) and `exprs` (the WindowFunction expression).
-To check whether a DT has window functions, scan `exprs` for
-`PlanType::kWindowExpr`.
+Window functions are represented explicitly in the DerivedTable, similar to
+aggregation. A new `WindowPlanCP windowPlan` field stores the window functions
+and their metadata:
 
-During Phase 2 (`addPostprocess`), the DT's `exprs` are scanned for
-`WindowFunction` entries. These are extracted, grouped by specification,
-and converted to physical `Window` operators. The corresponding `columns`
-entries become the output columns of the `Window` operators.
+```cpp
+class WindowPlan : public PlanObject {
+ public:
+  /// Window function expressions, 1:1 with output columns.
+  const QGVector<WindowFunctionCP>& functions() const;
 
-#### Conjuncts Referencing Window Outputs
+  /// Output columns, 1:1 with functions.
+  const ColumnVector& columns() const;
 
-When a filter on a window function output triggers a DT boundary (Pattern 3),
-the ranking predicate starts in the outer DT's conjuncts.
-During filter pushdown (`tryPushdownConjunct` in `DerivedTable.cpp`), it gets
-pushed down into the inner DT as a regular conjunct.
+  /// Ranking limit absorbed from a filter predicate (e.g., row_number() <= 5).
+  std::optional<int32_t> rankingLimit() const;
 
-In the inner DT's `addPostprocess`, `placeConjuncts` skips it because
-the window output column doesn't exist yet. After `addWindow` creates the
-Window or RowNumber RelationOp and the output column becomes available,
-`addPostprocess` scans remaining unplaced conjuncts: ranking predicates are
-extracted as limits for specialized nodes (`TopNRowNumber(limit=N)` or
-`RowNumber(limit=N)`); other window-output predicates are placed as regular
-Filter RelationOps. The assertion that checks all conjuncts are placed needs
-to be relaxed until after `addWindow` runs.
+  /// Returns a new WindowPlan with the given ranking limit.
+  const WindowPlan* withRankingLimit(int32_t limit) const;
+
+  /// Returns a new WindowPlan with additional window functions and columns
+  /// appended. Used when merging windows from stacked project nodes.
+  const WindowPlan* withFunctions(
+      QGVector<WindowFunctionCP> functions,
+      ColumnVector columns) const;
+};
+```
+
+During Phase 1, `ToGraph` populates `windowPlan` when translating `WindowExpr`
+nodes. Each window function adds an entry to `windowPlan->functions` (the
+`WindowFunction` expression) and `windowPlan->columns` (the output column).
+The DT's `exprs` reference the output columns, not the `WindowFunction`
+expressions themselves — the same pattern used for aggregation.
+
+To check whether a DT has window functions: `windowPlan != nullptr`. To count
+them: `windowPlan->functions.size()`.
+
+#### Filter Pushdown into Window DTs
+
+When a filter triggers a DT boundary (because the current DT has window
+functions), the filter becomes a conjunct in the outer DT. During filter
+pushdown (`distributeConjuncts`), the inner DT's `addFilter` decides whether to
+accept or reject each conjunct:
+
+1. **Non-window predicates on partition keys.** If the predicate depends only on
+   columns that are partition keys of every window function in the DT, the
+   predicate is accepted and added to `conjuncts` (or `having` if the DT has
+   aggregation). It will be placed below the
+   window operators during `addPostprocess`, reducing the input to the window.
+   This is Pattern 4.
+
+2. **Ranking upper-bound predicates.** If the predicate references a window
+   function output and passes `isRankingUpperBoundPredicate`, and the DT has
+   exactly one window function, the limit is extracted and stored on the
+   `WindowFunction` (see Ranking Limit below). This is Pattern 5.
+
+3. **All other predicates.** Rejected. They stay in the outer DT as regular
+   filters — either because they reference non-partition columns (pushing below
+   would change window semantics) or because they reference window outputs that
+   are not ranking upper bounds.
+
+#### Ranking Limit
+
+When a ranking upper-bound predicate (e.g., `rn <= 5`) is pushed into a
+single-window DT during filter pushdown (`distributeConjuncts`), the limit is
+stored on the `WindowPlan` via `withRankingLimit`. The `WindowPlan` enforces the
+invariant that `rankingLimit` is only valid when there is exactly one window
+function.
+
+In `addFilter`, when a ranking predicate passes validation
+(`isRankingUpperBoundPredicate`), the limit is extracted and a new `WindowPlan`
+is created with the limit set. In `addWindow`, the limit is read from
+`WindowPlan::rankingLimit()` and passed to `makeWindowOp`.
+
+#### Phase 2 Processing
+
+During Phase 2 (`addPostprocess`), `addWindow` reads `windowPlan->functions`,
+groups them by specification, and creates physical operators. The corresponding
+`windowPlan->columns` become the output columns of the `Window` operators.
 
 ### Physical Level: Window RelationOp
 
@@ -632,12 +744,12 @@ struct RowNumber : public RelationOp {
 ```
 
 Maps directly to Velox's `RowNumberNode`. The optional `limit` is set when
-Pattern 3 (filter pushdown) detects a ranking predicate on a `row_number()`
+Pattern 5 (filter pushdown) detects a ranking predicate on a `row_number()`
 without ORDER BY.
 
 ### Physical Level: TopNRowNumber RelationOp
 
-For Patterns 3 and 4 (ranking function with ORDER BY + limit):
+For Patterns 3 and 5 (ranking function with ORDER BY + limit):
 
 ```cpp
 enum class RankFunction { kRowNumber, kRank, kDenseRank };
@@ -662,7 +774,7 @@ struct TopNRowNumber : public RelationOp {
 ```
 
 Maps directly to Velox's `TopNRowNumberNode`. The `limit` comes from filter
-pushdown (Pattern 3) or LIMIT absorption (Pattern 4).
+pushdown (Pattern 5) or LIMIT absorption (Pattern 3).
 
 Pattern 2 (`row_number()` without ORDER BY + LIMIT) does not need a new
 RelationOp — it reorders the existing Limit before the RowNumber operator
@@ -684,11 +796,11 @@ filters, but before ORDER BY and projection:
 8. EnforceSingleRow
 ```
 
-`addWindow` extracts `WindowFunction` entries from the DT's `exprs`, groups
+`addWindow` reads `windowPlan->functions`, groups
 them by specification (Steps 1-3 of Phase 2), and creates physical operators:
 `Window`, `RowNumber`, or `TopNRowNumber` RelationOps depending on the detected
 pattern (see Ranking Function Optimizations). When a ranking optimization
-consumes the DT's LIMIT (Patterns 2 or 4), `addPostprocess` skips creating a
+consumes the DT's LIMIT (Patterns 2 or 3), `addPostprocess` skips creating a
 separate Limit.
 
 ### ToVelox Translation
@@ -834,6 +946,53 @@ expression) during Phase 1.
 
 ## Future Optimizations
 
+### Full-Partition Frame Merge
+
+The ROWS-only merge rule (Step 2) is overly conservative for full-partition
+frames (`UNBOUNDED PRECEDING` to `UNBOUNDED FOLLOWING`). A full-partition frame
+processes every row in the partition regardless of ordering, so the frame type
+(`ROWS`, `RANGE`, `GROUPS`) is irrelevant — the result is the same under any
+sort order. This matters because the SQL standard defaults to `RANGE` when no
+explicit frame is specified, and aggregate window functions without ORDER BY
+(e.g., `count(*) OVER (PARTITION BY a)`) get the full-partition RANGE frame.
+These could safely be merged into any group with the same partition keys, but
+`allRowsFrames` currently rejects them. Extending the merge to accept
+full-partition frames of any type would allow combining e.g. `row_number() OVER
+(PARTITION BY a ORDER BY b)` with `count(*) OVER (PARTITION BY a)` into a
+single Window operator.
+
+### Per-Operator Filter Placement
+
+The current filter pushdown approach (Pattern 4) is all-or-nothing: a filter is
+either pushed below all window operators or stays above all of them. A more
+granular approach would push the filter between window operators. Consider:
+
+```sql
+SELECT * FROM (
+  SELECT *, count(*) OVER () as cnt,
+    row_number() OVER (PARTITION BY a ORDER BY b) as rn
+  FROM t
+) WHERE a = 5
+```
+
+`count(*) OVER ()` needs all rows, so the filter cannot go below it. But
+`row_number() OVER (PARTITION BY a ORDER BY b)` partitions by `a`, so filtering
+on `a = 5` before it is safe. The optimal plan is: `count(*) OVER ()` → filter
+→ `row_number() OVER (PARTITION BY a ORDER BY b)`. This requires reordering
+window operators so that those incompatible with the filter run first, then the
+filter, then the remaining windows.
+
+### Data-Expanding Functions
+
+Some aggregate functions used as window functions produce large results per row
+(e.g., `array_agg`), significantly increasing data size. Running these early
+means subsequent window operators process larger rows — more data to
+repartition, sort, and shuffle. However, deferring them may require additional
+repartitioning or sorting that would not be needed if they were grouped with
+compatible functions earlier. This is a cost-based decision: estimate output
+size per window function and weigh the data expansion cost against the
+repartition/sort savings.
+
 ### Window Run Conditions (Early Partition Termination)
 
 PostgreSQL 15 introduced window run conditions — early termination of
@@ -851,28 +1010,17 @@ processing a partition. The optimizer would detect filter patterns on monotonic
 window functions and push the predicate into the Window operator as a run
 condition.
 
-### Partition-Wide Frame Merging
-
-Window functions with `ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
-FOLLOWING` compute over the entire partition — the result is the same for every
-row regardless of ORDER BY. Two such functions with the same partition keys but
-different ORDER BY could be merged into one Window operator since ORDER BY
-is irrelevant when the frame covers all rows. In practice this is uncommon:
-users who omit ORDER BY get this frame as the default, and those functions
-already share the same spec (no order keys) and are grouped together.
-
 ## Testing
 
 ### Optimizer Plan Tests
 
-Add `WindowTest.cpp` to `axiom/optimizer/tests/` (extends
-`HiveQueriesTestBase`). Parse SQL via `parseSelect()`, verify single-node plans
-with `toSingleNodePlan()` + `PlanMatcherBuilder`, and distributed plans with
+`WindowTest.cpp` in `axiom/optimizer/tests/` (extends `HiveQueriesTestBase`).
+Parses SQL via `parseSelect()`, verifies single-node plans with
+`toSingleNodePlan()` + `PlanMatcherBuilder`, and distributed plans with
 `planVelox()` + `AXIOM_ASSERT_DISTRIBUTED_PLAN`.
 
-`PlanMatcherBuilder` needs new matchers: `window()`, `rowNumber()`,
-`topNRowNumber()` in `PlanMatcher.h/cpp`. Follow the `singleAggregation()`
-pattern.
+`PlanMatcherBuilder` matchers: `window()`, `rowNumber()`, `topNRowNumber()` in
+`PlanMatcher.h/cpp`. Follow the `singleAggregation()` pattern.
 
 Test cases:
 
@@ -882,6 +1030,12 @@ Test cases:
 - ROWS-only merge: shorter ORDER BY merged into longer ORDER BY group.
 - Sort reuse: `inputsSorted=true` when ORDER BY is a prefix.
 - Empty partition keys processed last.
+
+**Stacked windows:**
+- Window functions from stacked projects with different specs → separate Window
+  operators.
+- Window functions from stacked projects with the same spec → combined into a
+  single Window operator.
 
 **Repartitioning:**
 - Distributed plan: repartition + window.
@@ -911,19 +1065,19 @@ Test cases:
 - Aggregate on window output: `SELECT max(rn) FROM (SELECT row_number() OVER
   (PARTITION BY a ORDER BY b) as rn FROM t)` → inner DT computes window, outer
   aggregates.
-- Filter on partition key pushes below window: `SELECT * FROM (SELECT *,
-  sum(x) OVER (PARTITION BY a) as s FROM t) WHERE a = 5 AND s > 10` → `a = 5`
-  pushes below window (doesn't reference window output), `s > 10` stays above.
-  Verify the scan sees `a = 5` as a pushed-down predicate.
+- Partition-key filter pushdown: `SELECT * FROM (SELECT *,
+  sum(x) OVER (PARTITION BY a) as s FROM t) WHERE a = 5 AND s > 10` → `s > 10`
+  stays above the window. `a = 5` is pushed below the window because `a` is a
+  partition key of every window function (Pattern 4).
 
-Target: `buck test fbcode//axiom/optimizer/tests:window` (new target)
+Target: `buck test fbcode//axiom/optimizer/tests:window`
 
 ### Ranking Function Optimization Tests
 
-Add `RankingTest.cpp` to `axiom/optimizer/tests/` (extends
-`HiveQueriesTestBase`). Parse SQL via `parseSelect()`, verify single-node plans
-with `toSingleNodePlan()` + `PlanMatcherBuilder`, and distributed plans with
-`planVelox()` + `AXIOM_ASSERT_DISTRIBUTED_PLAN`.
+`RankingTest.cpp` in `axiom/optimizer/tests/` (extends
+`HiveQueriesTestBase`). Parses SQL via `parseSelect()`, verifies single-node
+plans with `toSingleNodePlan()` + `PlanMatcherBuilder`, and distributed plans
+with `planVelox()` + `AXIOM_ASSERT_DISTRIBUTED_PLAN`.
 
 Test cases:
 
@@ -951,7 +1105,26 @@ Test cases:
 - Multiple window functions with LIMIT → Window (ranking optimization requires
   single function).
 
-Target: `buck test fbcode//axiom/optimizer/tests:ranking` (new target)
+**Filter on ranking function output (Pattern 5):**
+- `rn <= 5` → TopNRowNumber(limit=5). Both single-node and distributed.
+- `rn <= 5` with PARTITION BY → TopNRowNumber with partition keys. Distributed:
+  shuffle + TopNRowNumber.
+- `rn <= 5` without ORDER BY → RowNumber(limit=5).
+- `rn < 5` → TopNRowNumber(limit=4).
+- `rn = 1` → TopNRowNumber(limit=1).
+- `rn <= 5` with additional non-window predicates → TopNRowNumber + filter.
+- `rn >= 3 AND rn <= 10` → TopNRowNumber(limit=10) + filter on `rn >= 3`.
+- `rn <= 5` with multiple window functions → Window + filter (no optimization).
+- Non-window filter with window function → Window + filter (no optimization).
+- `rn <= 5` with LIMIT → TopNRowNumber + Limit.
+
+**Partition-key filter pushdown (Pattern 4):**
+- Filter on partition key → pushed below window.
+- Filter on non-partition column → stays above window.
+- Filter on partition key shared by all window functions → pushed below.
+- Filter on partition key of one but not all window functions → stays above.
+
+Target: `buck test fbcode//axiom/optimizer/tests:ranking`
 
 ### Subfield Tests
 
@@ -997,7 +1170,7 @@ Test cases:
 - Multiple window functions with same and different specifications.
 - Window functions combined with GROUP BY, HAVING, ORDER BY, LIMIT.
 - Subquery with window function and outer filter.
-- Ranking function optimizations (Patterns 1–4) — verify correct results
+- Ranking function optimizations (Patterns 1–5) — verify correct results
   despite plan transformations.
 
 Target: `buck test fbcode//axiom/optimizer/tests:window_e2e` (new target)

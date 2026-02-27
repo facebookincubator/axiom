@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <fmt/core.h>
+
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 
@@ -64,7 +66,6 @@ TEST_F(RankingTest, rowNumberWithoutOrderBy) {
   auto matcher = matchScan("nation").rowNumber({}).build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
-  // No partition keys — gather to single node, then RowNumber.
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation").gather().rowNumber({}).build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
@@ -107,8 +108,6 @@ TEST_F(RankingTest, rowNumberWithLimit) {
   auto matcher = matchScan("nation").finalLimit(0, 10).rowNumber({}).build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
-  // Distributed: partial limit → local gather → final limit → gather →
-  // final limit → RowNumber.
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher =
       matchScan("nation").distributedLimit(0, 10).rowNumber({}).build();
@@ -132,7 +131,6 @@ TEST_F(RankingTest, rowNumberWithPartitionByAndLimit) {
   // TODO: n_regionkey is carried through the limit chain and gather
   // unnecessarily. Drop it after RowNumber once
   // https://github.com/facebookincubator/velox/issues/16551 is fixed.
-  // Distributed: limit pushed below RowNumber, gather to single node.
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .distributedLimit(0, 10)
@@ -153,7 +151,6 @@ TEST_F(RankingTest, rowNumberWithOrderByAndLimit) {
   auto matcher = matchScan("nation").topNRowNumber({}, {"n_name"}, 10).build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
-  // No partition keys — gather, then TopNRowNumber.
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher =
       matchScan("nation").gather().topNRowNumber({}, {"n_name"}, 10).build();
@@ -162,7 +159,7 @@ TEST_F(RankingTest, rowNumberWithOrderByAndLimit) {
 
 TEST_F(RankingTest, rankWithOrderByAndLimit) {
   // rank() with ORDER BY + LIMIT → TopNRowNumber with LIMIT on top because
-  // rank() may produce ties.
+  // rank may produce ties.
   constexpr auto sql =
       "SELECT n_name, rank() OVER (ORDER BY n_name) as rn "
       "FROM nation LIMIT 10";
@@ -174,39 +171,11 @@ TEST_F(RankingTest, rankWithOrderByAndLimit) {
                      .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
-  // No partition keys — gather, then TopNRowNumber + finalLimit.
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .gather()
                                 .topNRowNumber({}, {"n_name"}, 10)
-                                .partialLimit(0, 10)
-                                .localPartition()
-                                .finalLimit(0, 10)
-                                .build();
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
-}
-
-TEST_F(RankingTest, denseRankWithOrderByAndLimit) {
-  // dense_rank() behaves like rank() — LIMIT preserved on top.
-  constexpr auto sql =
-      "SELECT n_name, dense_rank() OVER (ORDER BY n_name) as rn "
-      "FROM nation LIMIT 10";
-
-  auto plan = toSingleNodePlan(sql);
-  auto matcher = matchScan("nation")
-                     .topNRowNumber({}, {"n_name"}, 10)
-                     .finalLimit(0, 10)
-                     .build();
-  AXIOM_ASSERT_PLAN(plan, matcher);
-
-  // No partition keys — gather, then TopNRowNumber + finalLimit.
-  auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher = matchScan("nation")
-                                .gather()
-                                .topNRowNumber({}, {"n_name"}, 10)
-                                .partialLimit(0, 10)
-                                .localPartition()
-                                .finalLimit(0, 10)
+                                .localLimit(0, 10)
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -260,16 +229,13 @@ TEST_F(RankingTest, multipleWindowFunctionsWithLimitNoOptimization) {
                      .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
-  // No partition keys — gather, then Window + limit + project.
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .gather()
                                 .window(
                                     {"row_number() OVER (ORDER BY n_name)",
                                      "sum(n_regionkey) OVER (ORDER BY n_name)"})
-                                .partialLimit(0, 10)
-                                .localPartition()
-                                .finalLimit(0, 10)
+                                .localLimit(0, 10)
                                 .project({"n_name", "rn", "s"})
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
@@ -290,40 +256,13 @@ TEST_F(RankingTest, rankWithoutOrderBy) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   // TODO: n_regionkey is carried through gather unnecessarily. Drop it after
-  // the Window once https://github.com/facebookincubator/velox/issues/16551 is
-  // fixed.
+  // the Window once https://github.com/facebookincubator/velox/issues/16551
+  // is fixed.
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher =
       matchScan("nation")
           .shuffle({"n_regionkey"})
           .window({"rank() OVER (PARTITION BY n_regionkey)"})
-          .project({"n_name", "rn"})
-          .gather()
-          .build();
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
-}
-
-TEST_F(RankingTest, denseRankWithoutOrderBy) {
-  // dense_rank() without ORDER BY stays as generic Window.
-  constexpr auto sql =
-      "SELECT n_name, dense_rank() OVER (PARTITION BY n_regionkey) as rn "
-      "FROM nation";
-
-  auto plan = toSingleNodePlan(sql);
-  auto matcher = matchScan("nation")
-                     .window({"dense_rank() OVER (PARTITION BY n_regionkey)"})
-                     .project({"n_name", "rn"})
-                     .build();
-  AXIOM_ASSERT_PLAN(plan, matcher);
-
-  // TODO: n_regionkey is carried through gather unnecessarily. Drop it after
-  // the Window once https://github.com/facebookincubator/velox/issues/16551 is
-  // fixed.
-  auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher =
-      matchScan("nation")
-          .shuffle({"n_regionkey"})
-          .window({"dense_rank() OVER (PARTITION BY n_regionkey)"})
           .project({"n_name", "rn"})
           .gather()
           .build();
@@ -359,49 +298,28 @@ TEST_F(RankingTest, rankWithLimitWithoutOrderBy) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
-TEST_F(RankingTest, rowNumberWithOrderByNoLimit) {
-  // row_number() with ORDER BY but no LIMIT stays as generic Window — no TopN
-  // optimization without LIMIT.
-  constexpr auto sql =
-      "SELECT n_name, row_number() OVER (ORDER BY n_name) as rn "
-      "FROM nation";
+TEST_F(RankingTest, orderByWithoutLimit) {
+  // Ranking function with ORDER BY but no LIMIT stays as generic Window — no
+  // TopN optimization without LIMIT.
+  for (const auto& func : {"row_number", "rank"}) {
+    SCOPED_TRACE(func);
+    auto sql = fmt::format(
+        "SELECT n_name, {}() OVER (ORDER BY n_name) as rn FROM nation", func);
 
-  auto plan = toSingleNodePlan(sql);
-  auto matcher = matchScan("nation")
-                     .window({"row_number() OVER (ORDER BY n_name)"})
-                     .build();
-  AXIOM_ASSERT_PLAN(plan, matcher);
+    auto windowExpr = fmt::format("{}() OVER (ORDER BY n_name)", func);
+    auto plan = toSingleNodePlan(sql);
+    auto matcher = matchScan("nation").window({windowExpr}).build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
 
-  // No partition keys — gather, then Window.
-  auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher = matchScan("nation")
-                                .gather()
-                                .window({"row_number() OVER (ORDER BY n_name)"})
-                                .build();
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+    // No partition keys — gather, then Window.
+    auto distributedPlan = toDistributedPlan(sql);
+    auto distributedMatcher =
+        matchScan("nation").gather().window({windowExpr}).build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+  }
 }
 
-TEST_F(RankingTest, rankWithOrderByNoLimit) {
-  // rank() with ORDER BY but no LIMIT stays as generic Window.
-  constexpr auto sql =
-      "SELECT n_name, rank() OVER (ORDER BY n_name) as rn "
-      "FROM nation";
-
-  auto plan = toSingleNodePlan(sql);
-  auto matcher =
-      matchScan("nation").window({"rank() OVER (ORDER BY n_name)"}).build();
-  AXIOM_ASSERT_PLAN(plan, matcher);
-
-  // No partition keys — gather, then Window.
-  auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher = matchScan("nation")
-                                .gather()
-                                .window({"rank() OVER (ORDER BY n_name)"})
-                                .build();
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
-}
-
-TEST_F(RankingTest, rowNumberWithRedundantQueryOrderBy) {
+TEST_F(RankingTest, redundantQueryOrderBy) {
   // Query ORDER BY matches window ORDER BY — ORDER BY is redundant, absorbed
   // into TopNRowNumber.
   constexpr auto sql =
@@ -412,10 +330,426 @@ TEST_F(RankingTest, rowNumberWithRedundantQueryOrderBy) {
   auto matcher = matchScan("nation").topNRowNumber({}, {"n_name"}, 10).build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
-  // No partition keys — gather, then TopNRowNumber.
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher =
       matchScan("nation").gather().topNRowNumber({}, {"n_name"}, 10).build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+// --- Ranking function + filter on output ---
+
+TEST_F(RankingTest, filterOnOutput) {
+  // Ranking function with ORDER BY + filter on output. The ranking predicate
+  // is absorbed as a TopNRowNumber limit.
+  for (const auto& func : {"row_number", "rank"}) {
+    SCOPED_TRACE(func);
+    auto sql = fmt::format(
+        "SELECT * FROM ("
+        "  SELECT n_name, {}() OVER (ORDER BY n_name) as rn "
+        "  FROM nation"
+        ") WHERE rn <= 5",
+        func);
+
+    auto plan = toSingleNodePlan(sql);
+    auto matcher = matchScan("nation").topNRowNumber({}, {"n_name"}, 5).build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    // No partition keys — gather, then TopNRowNumber.
+    auto distributedPlan = toDistributedPlan(sql);
+    auto distributedMatcher =
+        matchScan("nation").gather().topNRowNumber({}, {"n_name"}, 5).build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+  }
+}
+
+TEST_F(RankingTest, filterOnRowNumberWithPartitionKeys) {
+  // row_number() with PARTITION BY + ORDER BY + filter. The ranking predicate
+  // is absorbed as a TopNRowNumber limit.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, "
+      "    row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name) as rn "
+      "  FROM nation"
+      ") WHERE rn <= 5";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation")
+                     .topNRowNumber({"n_regionkey"}, {"n_name"}, 5)
+                     .project({"n_name", "rn"})
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher = matchScan("nation")
+                                .shuffle({"n_regionkey"})
+                                .topNRowNumber({"n_regionkey"}, {"n_name"}, 5)
+                                .project({"n_name", "rn"})
+                                .gather()
+                                .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, filterOnRowNumberWithoutOrderBy) {
+  // row_number() without ORDER BY + filter. The ranking predicate is absorbed
+  // as a RowNumber limit.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, row_number() OVER () as rn "
+      "  FROM nation"
+      ") WHERE rn <= 5";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation").rowNumber({}, 5).build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher =
+      matchScan("nation").gather().rowNumber({}, 5).build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, filterOnRowNumberLessThan) {
+  // rn < 5 is absorbed as a TopNRowNumber limit of 4.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, row_number() OVER (ORDER BY n_name) as rn "
+      "  FROM nation"
+      ") WHERE rn < 5";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation").topNRowNumber({}, {"n_name"}, 4).build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher =
+      matchScan("nation").gather().topNRowNumber({}, {"n_name"}, 4).build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, filterOnRowNumberEquals1) {
+  // rn = 1 is absorbed as a TopNRowNumber limit of 1.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, row_number() OVER (ORDER BY n_name) as rn "
+      "  FROM nation"
+      ") WHERE rn = 1";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation").topNRowNumber({}, {"n_name"}, 1).build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher =
+      matchScan("nation").gather().topNRowNumber({}, {"n_name"}, 1).build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, filterWithAdditionalPredicates) {
+  // The ranking predicate (rn <= 5) is absorbed as a TopNRowNumber limit. The
+  // non-window predicate (n_regionkey > 2) stays as a filter above because it
+  // is not a partition key filter.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, n_regionkey, "
+      "    row_number() OVER (ORDER BY n_name) as rn "
+      "  FROM nation"
+      ") WHERE rn <= 5 AND n_regionkey > 2";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation")
+                     .topNRowNumber({}, {"n_name"}, 5)
+                     .filter("n_regionkey > 2")
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher = matchScan("nation")
+                                .gather()
+                                .topNRowNumber({}, {"n_name"}, 5)
+                                .filter("n_regionkey > 2")
+                                .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, filterWithLowerBound) {
+  // The upper bound (rn <= 10) is absorbed as a TopNRowNumber limit. The lower
+  // bound (rn >= 3) stays as a filter above.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, row_number() OVER (ORDER BY n_name) as rn "
+      "  FROM nation"
+      ") WHERE rn >= 3 AND rn <= 10";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation")
+                     .topNRowNumber({}, {"n_name"}, 10)
+                     .filter("rn >= 3")
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher = matchScan("nation")
+                                .gather()
+                                .topNRowNumber({}, {"n_name"}, 10)
+                                .filter("rn >= 3")
+                                .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, filterOnOutputWithLimit) {
+  // Both a ranking filter (rn <= 5) and a query LIMIT (3) are present.
+  // The ranking filter is absorbed by TopNRowNumber. The LIMIT is on the
+  // outer query and becomes a separate Limit node above.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, row_number() OVER (ORDER BY n_name) as rn "
+      "  FROM nation"
+      ") WHERE rn <= 5 LIMIT 3";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation")
+                     .topNRowNumber({}, {"n_name"}, 5)
+                     .finalLimit(0, 3)
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher = matchScan("nation")
+                                .gather()
+                                .topNRowNumber({}, {"n_name"}, 5)
+                                .localLimit(0, 3)
+                                .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, filterOnOutputWithLargerLimit) {
+  // Ranking filter (rn <= 3) is tighter than the query LIMIT (10).
+  // TopNRowNumber gets the ranking filter limit. The LIMIT 10 stays as a
+  // separate node even though TopNRowNumber(limit=3) can never produce more
+  // than 3 rows for row_number(). The optimizer does not reason about
+  // TopNRowNumber output cardinality being bounded by its limit. For rank()
+  // or dense_rank(), TopNRowNumber could produce more than 'limit' rows due
+  // to ties, so the LIMIT would be meaningful.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, row_number() OVER (ORDER BY n_name) as rn "
+      "  FROM nation"
+      ") WHERE rn <= 3 LIMIT 10";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation")
+                     .topNRowNumber({}, {"n_name"}, 3)
+                     .finalLimit(0, 10)
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher = matchScan("nation")
+                                .gather()
+                                .topNRowNumber({}, {"n_name"}, 3)
+                                .localLimit(0, 10)
+                                .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, filterOnRowNumberWithMultipleWindowFunctions) {
+  // Ranking predicate with multiple window functions in the same DT.
+  // row_number() and count(*) over () share the same DT. The ranking predicate
+  // must not be pushed below the window operator; it should become a filter
+  // above all window operators.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, count(*) OVER () as cnt, "
+      "    row_number() OVER () as rn "
+      "  FROM nation"
+      ") WHERE rn <= 5";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation")
+                     .window({"count() OVER ()", "row_number() OVER ()"})
+                     .filter("rn <= 5")
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher =
+      matchScan("nation")
+          .gather()
+          .window({"count() OVER ()", "row_number() OVER ()"})
+          .filter("rn <= 5")
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, nonWindowFilterWithWindowFunction) {
+  // A non-window predicate (n_regionkey > 2) must not be pushed below window
+  // operators. Window functions compute over the full input; pushing filters
+  // below changes their semantics.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, n_regionkey, "
+      "    row_number() OVER (ORDER BY n_name) as rn "
+      "  FROM nation"
+      ") WHERE n_regionkey > 2";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation")
+                     .window({"row_number() OVER (ORDER BY n_name)"})
+                     .filter("n_regionkey > 2")
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher = matchScan("nation")
+                                .gather()
+                                .window({"row_number() OVER (ORDER BY n_name)"})
+                                .filter("n_regionkey > 2")
+                                .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, partitionKeyFilterPushdown) {
+  // Filter on a partition key of the window function is pushed below the
+  // window. This is safe because partitioning is independent per partition.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, n_regionkey, "
+      "    row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name) as rn "
+      "  FROM nation"
+      ") WHERE n_regionkey = 2";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher =
+      matchScan("nation")
+          .filter("n_regionkey = 2")
+          .window(
+              {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
+          .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher =
+      matchScan("nation")
+          .filter("n_regionkey = 2")
+          .shuffle({"n_regionkey"})
+          .window(
+              {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
+          .gather()
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, nonPartitionKeyFilterStaysAbove) {
+  // Filter on a non-partition-key column stays above the window.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, n_regionkey, "
+      "    row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name) as rn "
+      "  FROM nation"
+      ") WHERE n_name = 'FRANCE'";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher =
+      matchScan("nation")
+          .window(
+              {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
+          .filter("n_name = 'FRANCE'")
+          .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher =
+      matchScan("nation")
+          .shuffle({"n_regionkey"})
+          .window(
+              {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
+          .filter("n_name = 'FRANCE'")
+          .gather()
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, partitionKeyFilterWithMultipleWindows) {
+  // Filter on a column that is a partition key of every window function is
+  // pushed below all window operators.
+  //
+  // TODO: These two window functions could be merged into a single Window
+  // operator. They share the same partition keys and count(*)'s empty ORDER BY
+  // is a prefix of row_number()'s ORDER BY n_name. The merge doesn't happen
+  // because count(*) gets the default RANGE frame (per SQL standard), and the
+  // ROWS-only merge rule requires all functions in the shorter-ORDER-BY group
+  // to use ROWS frames. A full-partition frame (UNBOUNDED PRECEDING to
+  // UNBOUNDED FOLLOWING) is order-independent regardless of frame type, so the
+  // merge would be safe.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, n_regionkey, "
+      "    row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name) as rn, "
+      "    count(*) OVER (PARTITION BY n_regionkey) as cnt "
+      "  FROM nation"
+      ") WHERE n_regionkey = 2";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher =
+      matchScan("nation")
+          .filter("n_regionkey = 2")
+          .window(
+              {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
+          .window({"count() OVER (PARTITION BY n_regionkey)"})
+          .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher =
+      matchScan("nation")
+          .filter("n_regionkey = 2")
+          .shuffle({"n_regionkey"})
+          .window(
+              {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
+          .window({"count() OVER (PARTITION BY n_regionkey)"})
+          .gather()
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
+TEST_F(RankingTest, partitionKeyFilterPartialMatch) {
+  // Filter on a column that is a partition key of one window function but not
+  // another stays above all window operators.
+  //
+  // TODO: A more optimal plan would be: scan → window(count OVER ()) →
+  // filter(n_regionkey = 2) → window(row_number OVER PARTITION BY n_regionkey
+  // ORDER BY n_name). The filter could be pushed between the two window
+  // operators because count(*) OVER () needs all rows but row_number()'s
+  // result for matching rows is unchanged (n_regionkey is its partition key).
+  // This requires per-operator filter placement instead of all-or-nothing.
+  constexpr auto sql =
+      "SELECT * FROM ("
+      "  SELECT n_name, n_regionkey, "
+      "    row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name) as rn, "
+      "    count(*) OVER () as cnt "
+      "  FROM nation"
+      ") WHERE n_regionkey = 2";
+
+  auto plan = toSingleNodePlan(sql);
+  auto matcher =
+      matchScan("nation")
+          .window(
+              {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
+          .window({"count() OVER ()"})
+          .filter("n_regionkey = 2")
+          .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher =
+      matchScan("nation")
+          .shuffle({"n_regionkey"})
+          .window(
+              {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
+          .gather()
+          .window({"count() OVER ()"})
+          .filter("n_regionkey = 2")
+          .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 

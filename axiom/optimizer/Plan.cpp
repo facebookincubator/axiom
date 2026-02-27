@@ -341,6 +341,15 @@ PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
     }
   }
 
+  // Window functions.
+  if (dt->windowPlan) {
+    for (const auto* func : dt->windowPlan->functions()) {
+      if (!placed_.contains(func)) {
+        addExpr(func);
+      }
+    }
+  }
+
   // Filters after aggregation.
   for (const auto* conjunct : dt->having) {
     if (!placed_.contains(conjunct)) {
