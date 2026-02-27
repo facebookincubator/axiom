@@ -45,6 +45,21 @@ Value toConstantValue(const velox::TypePtr& type) {
   return toValue(type, 1);
 }
 
+// Returns the aggregate index for an output column ordinal, or std::nullopt
+// if the ordinal corresponds to a grouping key or grouping set index column.
+std::optional<size_t> aggregateIndexForOrdinal(
+    const lp::AggregateNode& agg,
+    size_t ordinal) {
+  if (ordinal < agg.groupingKeys().size()) {
+    return std::nullopt;
+  }
+  const auto aggregateIndex = ordinal - agg.groupingKeys().size();
+  if (aggregateIndex >= agg.aggregates().size()) {
+    return std::nullopt;
+  }
+  return aggregateIndex;
+}
+
 OrderType toOrderType(lp::SortOrder sort) {
   if (sort.isAscending()) {
     return sort.isNullsFirst() ? OrderType::kAscNullsFirst
@@ -1506,8 +1521,12 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       continue;
     }
 
-    const auto i = channel - agg.groupingKeys().size();
-    const auto& aggregate = agg.aggregates()[i];
+    const auto aggregateIndex = aggregateIndexForOrdinal(agg, channel);
+    if (!aggregateIndex) {
+      continue;
+    }
+
+    const auto& aggregate = agg.aggregates()[*aggregateIndex];
     ExprVector args = translateExprs(aggregate->inputs());
 
     FunctionSet funcs;
@@ -1597,13 +1616,39 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     }
   }
 
+  // Add the grouping set ID column if present. Always included because
+  // the optimizer uses it as a grouping key in the Aggregation node even if
+  // the query doesn't reference it in SELECT.
+  const auto numProcessed = agg.groupingKeys().size() + agg.aggregates().size();
+  ColumnCP groupIdColumn = nullptr;
+  if (numProcessed < agg.outputType()->size()) {
+    auto name = toName(agg.outputType()->nameOf(numProcessed));
+    auto* column = make<Column>(
+        name,
+        currentDt_,
+        toConstantValue(agg.outputType()->childAt(numProcessed)),
+        name);
+    newRenames[name] = column;
+    groupIdColumn = column;
+    columns.push_back(column);
+    intermediateColumns.push_back(column);
+  }
+
   renames_ = std::move(newRenames);
+
+  // Convert grouping sets from std::vector to QGVector for arena allocation.
+  QGVector<QGVector<int32_t>> qgGroupingSets;
+  for (const auto& set : agg.groupingSets()) {
+    qgGroupingSets.emplace_back(set.begin(), set.end());
+  }
 
   return make<AggregationPlan>(
       std::move(deduppedGroupingKeys),
       std::move(deduppedAggregates),
       std::move(columns),
-      std::move(intermediateColumns));
+      std::move(intermediateColumns),
+      std::move(qgGroupingSets),
+      groupIdColumn);
 }
 
 void ToGraph::addOrderBy(const lp::SortNode& order) {

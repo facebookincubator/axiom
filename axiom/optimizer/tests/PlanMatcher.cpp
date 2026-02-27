@@ -1362,6 +1362,80 @@ class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
   const int32_t limit_;
 };
 
+// Matches a GroupIdNode and verifies grouping sets, aggregation inputs, and
+// group ID column name.
+class GroupIdMatcher : public PlanMatcherImpl<GroupIdNode> {
+ public:
+  explicit GroupIdMatcher(const std::shared_ptr<PlanMatcher>& matcher)
+      : PlanMatcherImpl<GroupIdNode>({matcher}) {}
+
+  GroupIdMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      std::vector<std::vector<std::string>> groupingSets,
+      std::vector<std::string> aggregationInputs,
+      const std::string& groupIdColumn)
+      : PlanMatcherImpl<GroupIdNode>({matcher}),
+        groupingSets_{std::move(groupingSets)},
+        aggregationInputs_{std::move(aggregationInputs)},
+        groupIdColumn_{groupIdColumn} {}
+
+  MatchResult matchDetails(
+      const GroupIdNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    if (groupIdColumn_.has_value()) {
+      EXPECT_EQ(plan.groupIdName(), groupIdColumn_.value());
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
+    if (groupingSets_.has_value()) {
+      const auto& planSets = plan.groupingSets();
+
+      EXPECT_EQ(planSets.size(), groupingSets_->size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      for (auto i = 0; i < groupingSets_->size(); ++i) {
+        const auto& expectedSet = (*groupingSets_)[i];
+        const auto& actualSet = planSets[i];
+
+        EXPECT_EQ(actualSet.size(), expectedSet.size())
+            << "Grouping set " << i << " size mismatch";
+        AXIOM_TEST_RETURN_IF_FAILURE
+
+        for (auto j = 0; j < expectedSet.size(); ++j) {
+          EXPECT_EQ(actualSet[j], expectedSet[j])
+              << "Grouping set " << i << ", key " << j;
+          AXIOM_TEST_RETURN_IF_FAILURE
+        }
+      }
+    }
+
+    if (aggregationInputs_.has_value()) {
+      EXPECT_EQ(plan.aggregationInputs().size(), aggregationInputs_->size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      for (auto i = 0; i < aggregationInputs_->size(); ++i) {
+        auto expected = parse::DuckSqlExpressionsParser().parseExpr(
+            (*aggregationInputs_)[i]);
+        if (!symbols.empty()) {
+          expected = rewriteInputNames(expected, symbols);
+        }
+        EXPECT_EQ(
+            plan.aggregationInputs()[i]->toString(), expected->toString());
+      }
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
+    return MatchResult::success(symbols);
+  }
+
+ private:
+  const std::optional<std::vector<std::vector<std::string>>> groupingSets_;
+  const std::optional<std::vector<std::string>> aggregationInputs_;
+  const std::optional<std::string> groupIdColumn_;
+};
 #undef AXIOM_TEST_RETURN
 #undef AXIOM_TEST_RETURN_IF_FAILURE
 #undef AXIOM_TEST_RETURN_IF_FAILURE_VOID
@@ -1770,6 +1844,22 @@ PlanMatcherBuilder& PlanMatcherBuilder::topNRowNumber(
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<TopNRowNumberMatcher>(
       matcher_, partitionKeys, sortingKeys, limit);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::groupId() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<GroupIdMatcher>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::groupId(
+    const std::vector<std::vector<std::string>>& groupingSets,
+    const std::vector<std::string>& aggregationInputs,
+    const std::string& groupIdColumn) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<GroupIdMatcher>(
+      matcher_, groupingSets, aggregationInputs, groupIdColumn);
   return *this;
 }
 

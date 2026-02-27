@@ -1178,6 +1178,123 @@ std::pair<Aggregation*, PlanCost> makeSplitOrSingleAggregationPlan(
   return {splitAggPlan, splitAggCost};
 }
 
+// Handles aggregation with grouping sets (ROLLUP, CUBE, GROUPING SETS).
+// Creates a GroupId node followed by single-step or two-phase aggregation.
+void addGroupingSetsAggregation(
+    const AggregationPlan* aggPlan,
+    RelationOpPtr& plan,
+    ExprVector& groupingKeys,
+    AggregateVector& aggregates,
+    PlanState& state,
+    bool useSingleStep) {
+  QGVector<GroupId::GroupingKeyInfo> groupingKeyInfos;
+  groupingKeyInfos.reserve(groupingKeys.size());
+  for (const auto* key : groupingKeys) {
+    auto* column = key->as<Column>();
+    groupingKeyInfos.push_back({
+        .output = column->name(),
+        .input = column,
+    });
+  }
+
+  // Aggregation inputs are columns that are not grouping keys.
+  folly::F14FastSet<int32_t> groupingKeyIds;
+  for (auto* key : groupingKeys) {
+    groupingKeyIds.insert(key->id());
+  }
+  ExprVector aggregationInputs;
+  for (auto* column : plan->columns()) {
+    if (!groupingKeyIds.contains(column->id())) {
+      aggregationInputs.push_back(column);
+    }
+  }
+
+  auto* groupIdNode = make<GroupId>(
+      plan,
+      aggPlan->groupingSets(),
+      std::move(groupingKeyInfos),
+      std::move(aggregationInputs),
+      aggPlan->groupIdColumn());
+
+  state.addCost(*groupIdNode);
+  plan = groupIdNode;
+
+  // Aggregation groups by all keys plus groupIdColumn.
+  const auto numKeys = aggPlan->groupingKeys().size();
+  ExprVector newGroupingKeys;
+  newGroupingKeys.reserve(numKeys + 1);
+  for (size_t i = 0; i < numKeys; ++i) {
+    newGroupingKeys.push_back(groupIdNode->columns()[i]);
+  }
+  newGroupingKeys.push_back(aggPlan->groupIdColumn());
+  groupingKeys = std::move(newGroupingKeys);
+
+  ColumnVector aggColumns;
+  for (size_t i = 0; i < numKeys; ++i) {
+    aggColumns.push_back(aggPlan->columns()[i]);
+  }
+  aggColumns.push_back(aggPlan->groupIdColumn());
+  for (size_t i = 0; i < aggregates.size(); ++i) {
+    aggColumns.push_back(aggPlan->columns()[numKeys + i]);
+  }
+
+  if (useSingleStep) {
+    auto* singleAgg = make<Aggregation>(
+        plan,
+        std::move(groupingKeys),
+        /*preGroupedKeys*/ ExprVector{},
+        std::move(aggregates),
+        velox::core::AggregationNode::Step::kSingle,
+        std::move(aggColumns));
+
+    state.addCost(*singleAgg);
+    plan = singleAgg;
+    return;
+  }
+
+  // Two-phase aggregation: partial → repartition → final.
+  // intermediateColumns must be reordered to [keys, groupIdColumn, aggregates]
+  // because aggPlan->intermediateColumns() has [keys, aggregates,
+  // groupIdColumn].
+  ColumnVector intermediateColumns;
+  for (size_t i = 0; i < numKeys; ++i) {
+    intermediateColumns.push_back(aggPlan->intermediateColumns()[i]);
+  }
+  intermediateColumns.push_back(aggPlan->groupIdColumn());
+  for (size_t i = numKeys; i < numKeys + aggregates.size(); ++i) {
+    intermediateColumns.push_back(aggPlan->intermediateColumns()[i]);
+  }
+
+  auto* partialAgg = make<Aggregation>(
+      plan,
+      groupingKeys,
+      /*preGroupedKeys*/ ExprVector{},
+      aggregates,
+      velox::core::AggregationNode::Step::kPartial,
+      intermediateColumns);
+  state.addCost(*partialAgg);
+
+  plan = partialAgg;
+  repartitionForAgg(plan, groupingKeys, intermediateColumns, state.cost);
+
+  ExprVector finalGroupingKeys;
+  finalGroupingKeys.reserve(numKeys + 1);
+  for (size_t i = 0; i < numKeys; ++i) {
+    finalGroupingKeys.push_back(intermediateColumns[i]);
+  }
+  finalGroupingKeys.push_back(intermediateColumns[numKeys]);
+
+  auto* finalAgg = make<Aggregation>(
+      plan,
+      std::move(finalGroupingKeys),
+      /*preGroupedKeys*/ ExprVector{},
+      std::move(aggregates),
+      velox::core::AggregationNode::Step::kFinal,
+      std::move(aggColumns));
+  state.addCost(*finalAgg);
+  plan = finalAgg;
+}
+
 } // namespace
 
 // static
@@ -1267,6 +1384,14 @@ void Optimization::addAggregation(
 
   plan = std::move(precompute).maybeProject();
   state.place(aggPlan);
+
+  // If grouping sets are present, use the dedicated helper.
+  if (aggPlan->hasGroupingSets()) {
+    const bool useSingleStep = isSingleWorker_ && isSingleDriver_;
+    addGroupingSetsAggregation(
+        aggPlan, plan, groupingKeys, aggregates, state, useSingleStep);
+    return;
+  }
 
   auto preGroupedKeys = computePreGroupedKeys(*plan, groupingKeys);
   if ((isSingleWorker_ && isSingleDriver_) || !preGroupedKeys.empty()) {

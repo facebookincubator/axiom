@@ -643,11 +643,16 @@ replaceInputs(AggregationPlanCP aggregation, const T& source, const U& target) {
     return aggregation;
   }
 
+  // Grouping sets contain indices into grouping keys (not column references),
+  // so they don't need replaceInputs treatment. groupIdColumn is an output
+  // column that is also unaffected.
   return make<AggregationPlan>(
       std::move(newGroupingKeys),
       std::move(newAggregates),
       aggregation->columns(),
-      aggregation->intermediateColumns());
+      aggregation->intermediateColumns(),
+      aggregation->groupingSets(),
+      aggregation->groupIdColumn());
 }
 } // namespace
 

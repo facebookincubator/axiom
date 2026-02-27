@@ -1279,13 +1279,19 @@ class AggregationPlan : public PlanObject {
       ExprVector groupingKeys,
       AggregateVector aggregates,
       ColumnVector columns,
-      ColumnVector intermediateColumns)
+      ColumnVector intermediateColumns,
+      QGVector<QGVector<int32_t>> groupingSets = {},
+      ColumnCP groupIdColumn = nullptr)
       : PlanObject(PlanType::kAggregationNode),
         groupingKeys_(std::move(groupingKeys)),
         aggregates_(std::move(aggregates)),
         columns_(std::move(columns)),
-        intermediateColumns_(std::move(intermediateColumns)) {
-    VELOX_CHECK_EQ(groupingKeys_.size() + aggregates_.size(), columns_.size());
+        intermediateColumns_(std::move(intermediateColumns)),
+        groupingSets_(std::move(groupingSets)),
+        groupIdColumn_(groupIdColumn) {
+    const auto expectedSize = groupingKeys_.size() + aggregates_.size() +
+        (groupIdColumn_ != nullptr ? 1 : 0);
+    VELOX_CHECK_EQ(expectedSize, columns_.size());
     VELOX_CHECK_EQ(columns_.size(), intermediateColumns_.size());
   }
 
@@ -1305,11 +1311,29 @@ class AggregationPlan : public PlanObject {
     return intermediateColumns_;
   }
 
+  /// Returns true if this aggregation uses grouping sets (ROLLUP/CUBE/GROUPING
+  /// SETS).
+  bool hasGroupingSets() const {
+    return !groupingSets_.empty();
+  }
+
+  const QGVector<QGVector<int32_t>>& groupingSets() const {
+    return groupingSets_;
+  }
+
+  /// Returns the column for the grouping set ID, or nullptr if no grouping
+  /// sets.
+  ColumnCP groupIdColumn() const {
+    return groupIdColumn_;
+  }
+
  private:
   const ExprVector groupingKeys_;
   const AggregateVector aggregates_;
   const ColumnVector columns_;
   const ColumnVector intermediateColumns_;
+  const QGVector<QGVector<int32_t>> groupingSets_;
+  const ColumnCP groupIdColumn_;
 };
 
 using AggregationPlanCP = const AggregationPlan*;

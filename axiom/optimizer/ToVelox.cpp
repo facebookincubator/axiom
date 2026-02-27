@@ -1791,6 +1791,51 @@ velox::core::PlanNodePtr ToVelox::makeEnforceDistinct(
   return node;
 }
 
+velox::core::PlanNodePtr ToVelox::makeGroupId(
+    const GroupId& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+
+  // Convert groupingKeyInfos.
+  std::vector<velox::core::GroupIdNode::GroupingKeyInfo> groupingKeyInfos;
+  groupingKeyInfos.reserve(op.groupingKeyInfos().size());
+  for (const auto& keyInfo : op.groupingKeyInfos()) {
+    groupingKeyInfos.push_back({
+        .output = std::string(keyInfo.output),
+        .input = toFieldRef(keyInfo.input),
+    });
+  }
+
+  // Convert groupingSets from indices to output column names for Velox.
+  // Can be simplified once Velox supports an index-based GroupIdNode
+  // constructor.
+  std::vector<std::vector<std::string>> groupingSets;
+  groupingSets.reserve(op.groupingSets().size());
+  for (const auto& set : op.groupingSets()) {
+    std::vector<std::string> names;
+    names.reserve(set.size());
+    for (auto idx : set) {
+      names.push_back(std::string(op.groupingKeyInfos()[idx].output));
+    }
+    groupingSets.push_back(std::move(names));
+  }
+
+  // Convert aggregationInputs.
+  auto aggregationInputs = toFieldRefs(op.aggregationInputs());
+
+  auto node = std::make_shared<velox::core::GroupIdNode>(
+      nextId(),
+      std::move(groupingSets),
+      std::move(groupingKeyInfos),
+      std::move(aggregationInputs),
+      op.groupIdColumn()->outputName(),
+      std::move(input));
+
+  makePredictionAndHistory(node->id(), &op);
+  return node;
+}
+
 void ToVelox::makePredictionAndHistory(
     const velox::core::PlanNodeId& id,
     const RelationOp* op) {
@@ -1844,6 +1889,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeRowNumber(*op->as<RowNumber>(), fragment, stages);
     case RelType::kTopNRowNumber:
       return makeTopNRowNumber(*op->as<TopNRowNumber>(), fragment, stages);
+    case RelType::kGroupId:
+      return makeGroupId(*op->as<GroupId>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

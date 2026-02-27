@@ -21,6 +21,7 @@
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
@@ -103,7 +104,7 @@ TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
 TEST_F(AggregationPlanTest, dedupMask) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
-  auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
+  auto logicalPlan = lp::PlanBuilder(/*enableCoercions=*/true)
                          .tableScan(kTestConnectorId, "t")
                          .aggregate(
                              {},
@@ -132,7 +133,7 @@ TEST_F(AggregationPlanTest, dedupMask) {
 TEST_F(AggregationPlanTest, dedupOrderBy) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
 
-  auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
+  auto logicalPlan = lp::PlanBuilder(/*enableCoercions=*/true)
                          .tableScan(kTestConnectorId, "t")
                          .aggregate(
                              {},
@@ -162,7 +163,7 @@ TEST_F(AggregationPlanTest, dedupSameOptions) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
   auto logicalPlan =
-      lp::PlanBuilder(/*enableCoersions=*/true)
+      lp::PlanBuilder(/*enableCoercions=*/true)
           .tableScan(kTestConnectorId, "t")
           .aggregate(
               {},
@@ -550,6 +551,114 @@ TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
         test::QueryTestBase::planVelox(logicalPlan),
         "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
   }
+}
+
+TEST_F(AggregationPlanTest, groupingSets) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  auto rowVector = makeRowVector(
+      {"a", "b", "c"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 40}),
+          makeFlatVector<double>({1.0, 2.0, 3.0, 4.0}),
+      });
+  testConnector_->appendData("t", rowVector);
+
+  auto logicalPlan =
+      lp::PlanBuilder()
+          .tableScan(kTestConnectorId, "t")
+          .rollup({"a", "b"}, {"sum(c) as total"}, "$grouping_set_id")
+          .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  // ROLLUP(a, b) expands to grouping sets: {a, b}, {a}, {}.
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan()
+          .groupId({{"a", "b"}, {"a"}, {}}, {"c"}, "$grouping_set_id")
+          .singleAggregation(
+              {"a", "b", "\"$grouping_set_id\""}, {"sum(c) as total"})
+          .project({"a", "b", "total", "\"$grouping_set_id\""})
+          .build();
+  ASSERT_TRUE(matcher->match(plan));
+
+  auto referencePlan =
+      exec::test::PlanBuilder()
+          .values({rowVector})
+          .groupId({"a", "b"}, {{"a", "b"}, {"a"}, {}}, {"c"})
+          .singleAggregation({"a", "b", "group_id"}, {"sum(c) as total"})
+          .project({"a", "b", "total", "group_id"})
+          .planNode();
+
+  checkSameSingleNode(logicalPlan, referencePlan);
+}
+
+// Verifies that grouping sets aggregation uses partial+final two-phase
+// aggregation in distributed mode, including with ORDER BY in aggregates.
+TEST_F(AggregationPlanTest, groupingSetsDistributed) {
+  auto schema = ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()});
+  testConnector_->addTable("t", schema);
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  constexpr int kNumRows = 10;
+  auto rowVector = makeRowVector({
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 2; }),
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+      makeFlatVector<double>(kNumRows, [](auto row) { return row * 1.5; }),
+  });
+  testConnector_->appendData("t", rowVector);
+
+  auto logicalPlan =
+      lp::PlanBuilder()
+          .tableScan(kTestConnectorId, "t")
+          .rollup({"a", "b"}, {"sum(c) as total"}, "$grouping_set_id")
+          .build();
+
+  auto plan = planVelox(logicalPlan);
+
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan()
+          .groupId({{"a", "b"}, {"a"}, {}}, {"c"}, "$grouping_set_id")
+          .partialAggregation(
+              {"a", "b", "\"$grouping_set_id\""}, {"sum(c) as total"})
+          .shuffle()
+          .localPartition()
+          .finalAggregation()
+          .project({"a", "b", "total", "\"$grouping_set_id\""})
+          .shuffle()
+          .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+
+  // With ORDER BY in aggregate.
+  logicalPlan =
+      lp::PlanBuilder(/*enableCoercions=*/true)
+          .tableScan(kTestConnectorId, "t")
+          .rollup({"a"}, {"array_agg(b ORDER BY c) as arr"}, "$grouping_set_id")
+          .build();
+
+  plan = planVelox(logicalPlan);
+
+  matcher = core::PlanMatcherBuilder()
+                .tableScan()
+                .groupId({{"a"}, {}}, {"b"}, "$grouping_set_id")
+                .partialAggregation(
+                    {"a", "\"$grouping_set_id\""}, {"array_agg(b) as arr"})
+                .shuffle()
+                .localPartition()
+                .finalAggregation()
+                .project({"a", "arr", "\"$grouping_set_id\""})
+                .shuffle()
+                .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
 }
 
 } // namespace
