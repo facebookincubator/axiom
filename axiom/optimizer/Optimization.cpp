@@ -3232,16 +3232,11 @@ PlanP Optimization::makeUnionPlan(
   std::vector<bool> inputNeedsShuffle;
 
   for (auto* inputDt : setDt->children) {
-    MemoKey inputKey = [&]() {
-      PlanObjectSet inputTables = key.tables;
-      inputTables.erase(key.firstTable);
-      inputTables.add(inputDt);
-      return MemoKey::create(
-          inputDt,
-          PlanObjectSet{key.columns},
-          std::move(inputTables),
-          std::vector<PlanObjectSet>{key.existences});
-    }();
+    // Only include the child DT in the input tables. Extra tables from
+    // the parent key (e.g., reducing bushy join tables) reference joins
+    // against the UNION ALL DT which don't exist for individual children.
+    auto inputKey = MemoKey::create(
+        inputDt, PlanObjectSet{key.columns}, PlanObjectSet::single(inputDt));
 
     bool inputShuffle = false;
     auto inputPlan = makePlan(
