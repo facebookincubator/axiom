@@ -17,6 +17,8 @@
 #include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
 #include <gtest/gtest.h>
 #include <set>
+#include "velox/parse/Expressions.h"
+#include "velox/parse/ExpressionsParser.h"
 
 namespace facebook::axiom::logical_plan::test {
 namespace {
@@ -34,6 +36,103 @@ namespace {
     return false;                              \
   }                                            \
   return true;
+
+// Prints a velox::core::IExpr tree in the same format as lp::ExprPrinter.
+// This allows comparing DuckDB-parsed expected expressions against actual
+// lp::Expr::toString() output.
+std::string toExprString(const velox::core::IExpr& expr) {
+  using velox::core::IExpr;
+  switch (expr.kind()) {
+    case IExpr::Kind::kFieldAccess:
+      return expr.as<velox::core::FieldAccessExpr>()->name();
+    case IExpr::Kind::kCall: {
+      auto* call = expr.as<velox::core::CallExpr>();
+      std::string result = call->name() + "(";
+      for (size_t i = 0; i < call->inputs().size(); ++i) {
+        if (i > 0) {
+          result += ", ";
+        }
+        result += toExprString(*call->inputAt(i));
+      }
+      return result + ")";
+    }
+    case IExpr::Kind::kCast: {
+      auto* cast = expr.as<velox::core::CastExpr>();
+      return fmt::format(
+          "{}({} AS {})",
+          cast->isTryCast() ? "TRY_CAST" : "CAST",
+          toExprString(*cast->input()),
+          cast->type()->toString());
+    }
+    case IExpr::Kind::kConstant: {
+      auto* constant = expr.as<velox::core::ConstantExpr>();
+      return constant->value().toStringAsVector(constant->type());
+    }
+    case IExpr::Kind::kInput:
+      return "ROW";
+    default:
+      VELOX_UNREACHABLE(
+          "Unsupported IExpr kind in toExprString: {}", expr.toString());
+  }
+}
+
+// Formats a velox::parse::WindowExpr in the same format as lp::ExprPrinter.
+std::string toWindowExprString(const velox::parse::WindowExpr& window) {
+  std::string result = toExprString(*window.functionCall->dropAlias());
+  result += " OVER (";
+
+  bool needSeparator = false;
+
+  if (!window.partitionBy.empty()) {
+    result += "PARTITION BY ";
+    for (size_t i = 0; i < window.partitionBy.size(); ++i) {
+      if (i > 0) {
+        result += ", ";
+      }
+      result += toExprString(*window.partitionBy[i]);
+    }
+    needSeparator = true;
+  }
+
+  if (!window.orderBy.empty()) {
+    if (needSeparator) {
+      result += " ";
+    }
+    result += "ORDER BY ";
+    for (size_t i = 0; i < window.orderBy.size(); ++i) {
+      if (i > 0) {
+        result += ", ";
+      }
+      result += toExprString(*window.orderBy[i].expr);
+      result += " ";
+      result += window.orderBy[i].ascending ? "ASC" : "DESC";
+      result += " NULLS ";
+      result += window.orderBy[i].nullsFirst ? "FIRST" : "LAST";
+    }
+    needSeparator = true;
+  }
+
+  if (needSeparator) {
+    result += " ";
+  }
+  result += velox::parse::WindowTypeName::toName(window.frame.type);
+  result += " BETWEEN ";
+  if (window.frame.startValue) {
+    result += toExprString(*window.frame.startValue) + " ";
+  }
+  result += velox::parse::BoundTypeName::toName(window.frame.startType);
+  result += " AND ";
+  if (window.frame.endValue) {
+    result += toExprString(*window.frame.endValue) + " ";
+  }
+  result += velox::parse::BoundTypeName::toName(window.frame.endType);
+  result += ")";
+
+  if (window.ignoreNulls) {
+    result += " IGNORE NULLS";
+  }
+  return result;
+}
 
 template <typename T = LogicalPlanNode>
 class LogicalPlanMatcherImpl : public LogicalPlanMatcher {
@@ -152,6 +251,9 @@ class LimitMatcher : public LogicalPlanMatcherImpl<LimitNode> {
   const int64_t count_;
 };
 
+/// Matches a ProjectNode with the specified expressions. Each expected
+/// expression is parsed with DuckDB and printed in a format compatible with
+/// lp::ExprPrinter, then compared against expressionAt(i)->toString().
 class ProjectMatcher : public LogicalPlanMatcherImpl<ProjectNode> {
  public:
   ProjectMatcher(
@@ -165,9 +267,29 @@ class ProjectMatcher : public LogicalPlanMatcherImpl<ProjectNode> {
     EXPECT_EQ(expressions_.size(), plan.expressions().size());
     AXIOM_RETURN_IF_FAILURE;
 
+    velox::parse::DuckSqlExpressionsParser parser;
+
     for (auto i = 0; i < expressions_.size(); ++i) {
-      EXPECT_EQ(expressions_[i], plan.expressionAt(i)->toString())
-          << "at index " << i;
+      const auto& expected = expressions_[i];
+      const auto& actual = plan.expressionAt(i);
+
+      auto parsed = parser.parseScalarOrWindowExpr(expected);
+
+      std::string expectedStr;
+      if (auto* windowExpr = std::get_if<velox::parse::WindowExpr>(&parsed)) {
+        // DuckDB defaults end bound to CURRENT ROW when ORDER BY is absent,
+        // but the SQL standard requires UNBOUNDED FOLLOWING. Correct this.
+        if (windowExpr->orderBy.empty() &&
+            windowExpr->frame.endType == velox::parse::BoundType::kCurrentRow) {
+          windowExpr->frame.endType =
+              velox::parse::BoundType::kUnboundedFollowing;
+        }
+        expectedStr = toWindowExprString(*windowExpr);
+      } else {
+        expectedStr = toExprString(*std::get<velox::core::ExprPtr>(parsed));
+      }
+
+      EXPECT_EQ(expectedStr, actual->toString()) << "at index " << i;
       AXIOM_RETURN_IF_FAILURE;
     }
     AXIOM_RETURN_RESULT

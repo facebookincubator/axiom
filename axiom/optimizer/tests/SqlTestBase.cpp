@@ -161,34 +161,46 @@ std::vector<RowVectorPtr> SqlTestBase::runAndCollect(std::string_view sql) {
 
 void SqlTestBase::assertResults(
     std::string_view sql,
-    std::string_view duckDbSql) {
+    bool checkColumnNames,
+    std::optional<std::string> duckDbSql) {
   SCOPED_TRACE(sql);
 
   auto axiomResults = runAndCollect(sql);
 
   VELOX_CHECK(!axiomResults.empty(), "Axiom returned no results for: {}", sql);
 
-  auto referenceSql = duckDbSql.empty() ? sql : duckDbSql;
+  auto referenceSql = duckDbSql.value_or(std::string(sql));
   auto resultType = axiomResults[0]->rowType();
 
   velox::exec::test::assertResults(
-      axiomResults, resultType, std::string(referenceSql), duckDbQueryRunner_);
+      axiomResults, resultType, referenceSql, duckDbQueryRunner_);
+
+  if (checkColumnNames) {
+    auto duckDbResult = duckDbQueryRunner_.execute(referenceSql);
+    ASSERT_EQ(resultType->size(), duckDbResult->names.size())
+        << "Column count mismatch";
+    for (size_t i = 0; i < resultType->size(); ++i) {
+      ASSERT_EQ(resultType->nameOf(i), duckDbResult->names[i])
+          << "Column name mismatch at position " << i;
+    }
+  }
 }
 
 void SqlTestBase::assertOrderedResults(
     std::string_view sql,
-    std::string_view duckDbSql) {
+    bool checkColumnNames,
+    std::optional<std::string> duckDbSql) {
   SCOPED_TRACE(sql);
 
   auto axiomResults = runAndCollect(sql);
 
   VELOX_CHECK(!axiomResults.empty(), "Axiom returned no results for: {}", sql);
 
-  auto referenceSql = duckDbSql.empty() ? sql : duckDbSql;
+  auto referenceSql = duckDbSql.value_or(std::string(sql));
   auto resultType = axiomResults[0]->rowType();
 
   auto expectedRows =
-      duckDbQueryRunner_.executeOrdered(std::string(referenceSql), resultType);
+      duckDbQueryRunner_.executeOrdered(referenceSql, resultType);
 
   // Materialize Axiom results into an ordered list of rows.
   std::vector<velox::exec::test::MaterializedRow> actualRows;
@@ -201,6 +213,16 @@ void SqlTestBase::assertOrderedResults(
 
   for (size_t i = 0; i < expectedRows.size(); ++i) {
     ASSERT_EQ(expectedRows[i], actualRows[i]) << "Mismatch at row " << i;
+  }
+
+  if (checkColumnNames) {
+    auto duckDbResult = duckDbQueryRunner_.execute(referenceSql);
+    ASSERT_EQ(resultType->size(), duckDbResult->names.size())
+        << "Column count mismatch";
+    for (size_t i = 0; i < resultType->size(); ++i) {
+      ASSERT_EQ(resultType->nameOf(i), duckDbResult->names[i])
+          << "Column name mismatch at position " << i;
+    }
   }
 }
 

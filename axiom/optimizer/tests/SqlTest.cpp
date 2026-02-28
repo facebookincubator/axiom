@@ -53,10 +53,11 @@ class SqlTest : public SqlTestBase {
   void TestBody() override {
     switch (entry_.type) {
       case QueryEntry::Type::kResults:
-        assertResults(entry_.sql, entry_.duckDbSql);
+        assertResults(entry_.sql, entry_.checkColumnNames, entry_.duckDbSql);
         break;
       case QueryEntry::Type::kOrdered:
-        assertOrderedResults(entry_.sql, entry_.duckDbSql);
+        assertOrderedResults(
+            entry_.sql, entry_.checkColumnNames, entry_.duckDbSql);
         break;
       case QueryEntry::Type::kCount:
         assertResultCount(entry_.sql, entry_.expectedCount);

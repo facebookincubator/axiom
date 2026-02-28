@@ -18,6 +18,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::axiom::optimizer::test {
 namespace {
@@ -94,7 +95,7 @@ TEST_F(SqlQueryEntryTest, duckdb) {
       "SELECT 1 x");
   ASSERT_THAT(entries, testing::SizeIs(1));
   EXPECT_EQ(entries[0].type, QueryEntry::Type::kResults);
-  EXPECT_EQ(entries[0].duckDbSql, "SELECT 1 AS x");
+  EXPECT_EQ(entries[0].duckDbSql, std::optional<std::string>("SELECT 1 AS x"));
   EXPECT_EQ(entries[0].sql, "SELECT 1 x");
 }
 
@@ -149,6 +150,43 @@ TEST_F(SqlQueryEntryTest, commentBeforeSql) {
   ASSERT_THAT(entries, testing::SizeIs(1));
   EXPECT_EQ(entries[0].sql, "SELECT a / 2 FROM t");
   EXPECT_EQ(entries[0].type, QueryEntry::Type::kResults);
+}
+
+TEST_F(SqlQueryEntryTest, columns) {
+  auto entries = QueryEntry::parse(
+      "-- columns\n"
+      "SELECT a, b FROM t");
+  ASSERT_THAT(entries, testing::SizeIs(1));
+  EXPECT_TRUE(entries[0].checkColumnNames);
+  EXPECT_EQ(entries[0].type, QueryEntry::Type::kResults);
+}
+
+TEST_F(SqlQueryEntryTest, columnsWithOrdered) {
+  auto entries = QueryEntry::parse(
+      "-- ordered\n"
+      "-- columns\n"
+      "SELECT a FROM t ORDER BY a");
+  ASSERT_THAT(entries, testing::SizeIs(1));
+  EXPECT_TRUE(entries[0].checkColumnNames);
+  EXPECT_EQ(entries[0].type, QueryEntry::Type::kOrdered);
+}
+
+TEST_F(SqlQueryEntryTest, columnsWithCount) {
+  VELOX_ASSERT_THROW(
+      QueryEntry::parse(
+          "-- count 5\n"
+          "-- columns\n"
+          "SELECT * FROM t"),
+      "'-- columns' can only be used with 'results' or 'ordered' queries");
+}
+
+TEST_F(SqlQueryEntryTest, columnsWithError) {
+  VELOX_ASSERT_THROW(
+      QueryEntry::parse(
+          "-- error: bad\n"
+          "-- columns\n"
+          "SELECT * FROM t"),
+      "'-- columns' can only be used with 'results' or 'ordered' queries");
 }
 
 } // namespace
