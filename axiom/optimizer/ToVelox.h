@@ -251,6 +251,15 @@ class ToVelox {
       velox::core::PlanNodePtr input,
       const RelationOpPtr& inputOp);
 
+  // Prepares the input for a partitioned operator (Window, RowNumber,
+  // TopNRowNumber): trims extra columns and adds a local partition exchange
+  // when running with multiple drivers.
+  velox::core::PlanNodePtr makeWindowInput(
+      const RelationOp& op,
+      const ExprVector& partitionKeys,
+      runner::ExecutableFragment& fragment,
+      std::vector<runner::ExecutableFragment>& stages);
+
   // Converts a single WindowFunction to a Velox WindowNode::Function.
   velox::core::WindowNode::Function toVeloxWindowFunction(
       WindowFunctionCP windowFunc,
