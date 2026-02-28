@@ -104,6 +104,12 @@ class LogicalPlanMatcherBuilder {
   /// Matches an AggregateNode.
   LogicalPlanMatcherBuilder& aggregate(OnMatchCallback onMatch = nullptr);
 
+  /// Matches an AggregateNode with the specified grouping keys and aggregates.
+  /// Each string is compared against the corresponding expression's toString().
+  LogicalPlanMatcherBuilder& aggregate(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates);
+
   /// Matches an AggregateNode used for deduplication (no aggregate functions,
   /// no grouping sets, all output columns are grouping keys).
   LogicalPlanMatcherBuilder& distinct();

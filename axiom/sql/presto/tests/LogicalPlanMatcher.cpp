@@ -298,6 +298,42 @@ class ProjectMatcher : public LogicalPlanMatcherImpl<ProjectNode> {
   const std::vector<std::string> expressions_;
 };
 
+class AggregateMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
+ public:
+  AggregateMatcher(
+      const std::shared_ptr<LogicalPlanMatcher>& inputMatcher,
+      std::vector<std::string> groupingKeys,
+      std::vector<std::string> aggregates)
+      : LogicalPlanMatcherImpl<AggregateNode>(inputMatcher, nullptr),
+        groupingKeys_{std::move(groupingKeys)},
+        aggregates_{std::move(aggregates)} {}
+
+ private:
+  bool matchDetails(const AggregateNode& plan) const override {
+    EXPECT_EQ(groupingKeys_.size(), plan.groupingKeys().size());
+    AXIOM_RETURN_IF_FAILURE;
+
+    for (auto i = 0; i < groupingKeys_.size(); ++i) {
+      EXPECT_EQ(groupingKeys_[i], plan.groupingKeys()[i]->toString())
+          << "at grouping key index " << i;
+      AXIOM_RETURN_IF_FAILURE;
+    }
+
+    EXPECT_EQ(aggregates_.size(), plan.aggregates().size());
+    AXIOM_RETURN_IF_FAILURE;
+
+    for (auto i = 0; i < aggregates_.size(); ++i) {
+      EXPECT_EQ(aggregates_[i], plan.aggregateAt(i)->toString())
+          << "at aggregate index " << i;
+      AXIOM_RETURN_IF_FAILURE;
+    }
+    AXIOM_RETURN_RESULT
+  }
+
+  const std::vector<std::string> groupingKeys_;
+  const std::vector<std::string> aggregates_;
+};
+
 class DistinctMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
  public:
   explicit DistinctMatcher(
@@ -426,6 +462,15 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::aggregate(
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<LogicalPlanMatcherImpl<AggregateNode>>(
       matcher_, std::move(onMatch));
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::aggregate(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<AggregateMatcher>(matcher_, groupingKeys, aggregates);
   return *this;
 }
 

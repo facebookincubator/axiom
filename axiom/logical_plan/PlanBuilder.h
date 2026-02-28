@@ -364,6 +364,13 @@ class PlanBuilder {
 
     AggregateOptions() = default;
 
+    /// Computes hash based on distinct flag, filter expression, and orderBy.
+    size_t hash() const;
+
+    /// Compare distinct flag, filter expression, and orderBy between 'this' and
+    /// 'other'.
+    bool operator==(const AggregateOptions& other) const;
+
     velox::core::ExprPtr filter;
     std::vector<SortKey> orderBy;
     bool distinct{false};
