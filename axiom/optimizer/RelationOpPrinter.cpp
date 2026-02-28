@@ -262,6 +262,44 @@ class ToTextVisitor : public RelationOpVisitor {
     visitDefault(op, context);
   }
 
+  void visit(const GroupId& op, RelationOpVisitorContext& context)
+      const override {
+    auto& myCtx = static_cast<Context&>(context);
+
+    std::stringstream groupingSets;
+    groupingSets << "(";
+    for (size_t i = 0; i < op.groupingSets().size(); ++i) {
+      if (i > 0) {
+        groupingSets << ", ";
+      }
+      // Convert indices to output names for readability.
+      groupingSets << "[";
+      const auto& set = op.groupingSets()[i];
+      for (size_t j = 0; j < set.size(); ++j) {
+        if (j > 0) {
+          groupingSets << ", ";
+        }
+        groupingSets << op.groupingKeyInfos()[set[j]].output;
+      }
+      groupingSets << "]";
+    }
+    groupingSets << ")";
+
+    printHeader(op, myCtx, groupingSets.str());
+    printConstraints(op, myCtx);
+
+    const auto indentation = toIndentation(myCtx.indent + 2);
+    for (const auto& keyInfo : op.groupingKeyInfos()) {
+      myCtx.out << indentation << keyInfo.output
+                << " := " << keyInfo.input->toString() << std::endl;
+    }
+    myCtx.out << indentation
+              << "groupIdColumn: " << op.groupIdColumn()->toString()
+              << std::endl;
+
+    printInput(*op.input(), myCtx);
+  }
+
  private:
   static std::string toIndentation(size_t indent) {
     return std::string(indent * 2, ' ');
@@ -488,6 +526,14 @@ class OnelineVisitor : public RelationOpVisitor {
   void visit(const TopNRowNumber& op, RelationOpVisitorContext& context)
       const override {
     visitDefault(op, context);
+  }
+
+  void visit(const GroupId& op, RelationOpVisitorContext& context)
+      const override {
+    auto& myCtx = static_cast<Context&>(context);
+    myCtx.out << "groupid(";
+    op.input()->accept(*this, context);
+    myCtx.out << ")";
   }
 
  private:

@@ -125,6 +125,7 @@ enum class RelType {
   kWindow,
   kRowNumber,
   kTopNRowNumber,
+  kGroupId,
 };
 
 AXIOM_DECLARE_ENUM_NAME(RelType)
@@ -895,4 +896,56 @@ struct TopNRowNumber : public RelationOp {
 
 using TopNRowNumberCP = const TopNRowNumber*;
 
+/// Duplicates input rows for each grouping set, producing a grouping set ID
+/// column. Used to implement GROUPING SETS, ROLLUP, and CUBE.
+struct GroupId : public RelationOp {
+  /// Represents info about a grouping key column.
+  struct GroupingKeyInfo {
+    /// Output column name.
+    Name output;
+    /// Input column expression.
+    ExprCP input;
+  };
+
+  /// @param input The input relation.
+  /// @param groupingSets List of grouping sets, each containing indices into
+  ///   groupingKeyInfos that are active for that set.
+  /// @param groupingKeyInfos The grouping key columns and their mappings.
+  /// @param aggregationInputs Columns that are inputs to aggregate functions.
+  /// @param groupIdColumn The output column for the grouping set ID.
+  GroupId(
+      RelationOpPtr input,
+      QGVector<QGVector<int32_t>> groupingSets,
+      QGVector<GroupingKeyInfo> groupingKeyInfos,
+      ExprVector aggregationInputs,
+      ColumnCP groupIdColumn);
+
+  const QGVector<QGVector<int32_t>>& groupingSets() const {
+    return groupingSets_;
+  }
+
+  const QGVector<GroupingKeyInfo>& groupingKeyInfos() const {
+    return groupingKeyInfos_;
+  }
+
+  const ExprVector& aggregationInputs() const {
+    return aggregationInputs_;
+  }
+
+  ColumnCP groupIdColumn() const {
+    return groupIdColumn_;
+  }
+
+  void accept(
+      const RelationOpVisitor& visitor,
+      RelationOpVisitorContext& context) const override;
+
+ private:
+  const QGVector<QGVector<int32_t>> groupingSets_;
+  const QGVector<GroupingKeyInfo> groupingKeyInfos_;
+  const ExprVector aggregationInputs_;
+  const ColumnCP groupIdColumn_;
+};
+
+using GroupIdCP = const GroupId*;
 } // namespace facebook::axiom::optimizer

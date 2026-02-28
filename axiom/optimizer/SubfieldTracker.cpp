@@ -24,6 +24,25 @@ namespace lp = facebook::axiom::logical_plan;
 
 namespace facebook::axiom::optimizer {
 
+namespace {
+
+// Returns the aggregate index for an output column ordinal, or std::nullopt
+// if the ordinal corresponds to a grouping key or grouping set index column.
+std::optional<size_t> aggregateIndexForOrdinal(
+    const lp::AggregateNode& agg,
+    size_t ordinal) {
+  if (ordinal < agg.groupingKeys().size()) {
+    return std::nullopt;
+  }
+  const auto aggregateIndex = ordinal - agg.groupingKeys().size();
+  if (aggregateIndex >= agg.aggregates().size()) {
+    return std::nullopt;
+  }
+  return aggregateIndex;
+}
+
+} // namespace
+
 SubfieldTracker::SubfieldTracker(
     std::function<logical_plan::ConstantExprPtr(const logical_plan::ExprPtr&)>
         tryFoldConstant)
@@ -158,7 +177,12 @@ void SubfieldTracker::markFieldAccessed(
     return;
   }
 
-  const auto& aggregate = agg.aggregateAt(ordinal - keys.size());
+  const auto aggregateIndex = aggregateIndexForOrdinal(agg, ordinal);
+  if (!aggregateIndex) {
+    return;
+  }
+
+  const auto& aggregate = agg.aggregates()[*aggregateIndex];
   for (const auto& aggregateInput : aggregate->inputs()) {
     mark(aggregateInput);
   }
