@@ -26,9 +26,9 @@ namespace facebook::axiom::optimizer::test {
 namespace {
 
 // Test fixture that runs a single QueryEntry through SqlTestBase.
-class SqlQueryFileTest : public SqlTestBase {
+class SqlTest : public SqlTestBase {
  public:
-  explicit SqlQueryFileTest(QueryEntry entry) : entry_(std::move(entry)) {}
+  explicit SqlTest(QueryEntry entry) : entry_(std::move(entry)) {}
 
  protected:
   void SetUp() override {
@@ -37,9 +37,17 @@ class SqlQueryFileTest : public SqlTestBase {
     createTable(
         "t",
         {makeRowVector(
-            {"a", "b"},
-            {makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
-             makeFlatVector<int64_t>({10, 20, 30, 40, 50})})});
+             {"a", "b"},
+             {makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
+              makeFlatVector<int64_t>({10, 20, 30, 40, 50})}),
+         makeRowVector(
+             {"a", "b"},
+             {makeFlatVector<int64_t>({3, 1, 2, 3, 1}),
+              makeFlatVector<int64_t>({60, 70, 80, 90, 100})}),
+         makeRowVector(
+             {"a", "b"},
+             {makeFlatVector<int64_t>({2, 3, 1, 2, 3}),
+              makeFlatVector<int64_t>({110, 120, 130, 140, 150})})});
   }
 
   void TestBody() override {
@@ -99,8 +107,8 @@ void registerQueryFile(const std::string& fileName) {
         /*value_param=*/nullptr,
         path.c_str(),
         entry.lineNumber,
-        [capturedEntry = std::move(capturedEntry)]() -> SqlQueryFileTest* {
-          return new SqlQueryFileTest(capturedEntry);
+        [capturedEntry = std::move(capturedEntry)]() -> SqlTest* {
+          return new SqlTest(capturedEntry);
         });
   }
 }
@@ -113,6 +121,7 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv, false);
 
   facebook::axiom::optimizer::test::registerQueryFile("basic.sql");
+  facebook::axiom::optimizer::test::registerQueryFile("window.sql");
 
   return RUN_ALL_TESTS();
 }
