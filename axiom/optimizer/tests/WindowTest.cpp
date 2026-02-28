@@ -374,6 +374,7 @@ TEST_F(WindowTest, distributed) {
   auto matcher =
       matchScan("nation")
           .shuffle({"n_regionkey"})
+          .localPartition({"n_regionkey"})
           .window(
               {"sum(n_nationkey) OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
           .project()
@@ -396,9 +397,11 @@ TEST_F(WindowTest, distributedMultipleShuffles) {
   auto matcher =
       matchScan("nation")
           .shuffle({"n_nationkey"})
+          .localPartition({"n_nationkey"})
           .window(
               {"row_number() OVER (PARTITION BY n_nationkey ORDER BY n_name)"})
           .shuffle({"n_regionkey"})
+          .localPartition({"n_regionkey"})
           .window(
               {"sum(n_nationkey) OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
           .project()
@@ -429,6 +432,7 @@ TEST_F(WindowTest, nonRedundantOrderByWithPartitionKeys) {
   auto distributedMatcher =
       matchScan("nation")
           .shuffle({"n_regionkey"})
+          .localPartition({"n_regionkey"})
           .window(
               {"sum(n_regionkey) OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
           .topN(10)
@@ -459,6 +463,7 @@ TEST_F(WindowTest, nonRedundantOrderByWithDifferentKeys) {
   auto distributedMatcher =
       matchScan("nation")
           .gather()
+          .localGather()
           .window({"sum(n_regionkey) OVER (ORDER BY n_name)"})
           .topN(10)
           .localMerge()
@@ -492,6 +497,7 @@ TEST_F(WindowTest, redundantOrderByMultipleWindowsSameOrderBy) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .gather()
+                                .localGather()
                                 .window(
                                     {"sum(n_regionkey) OVER (ORDER BY n_name)",
                                      "avg(n_nationkey) OVER (ORDER BY n_name)"})
@@ -526,8 +532,10 @@ TEST_F(WindowTest, nonRedundantOrderByMultipleWindowsDifferentOrderBy) {
   auto distributedMatcher =
       matchScan("nation")
           .gather()
+          .localGather()
           .window({"sum(n_regionkey) OVER (ORDER BY n_name)"})
           .project()
+          .localGather()
           .window({"avg(n_nationkey) OVER (ORDER BY n_nationkey)"})
           .topN(10)
           .localMerge()
