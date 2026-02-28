@@ -961,6 +961,64 @@ full-partition frames of any type would allow combining e.g. `row_number() OVER
 (PARTITION BY a ORDER BY b)` with `count(*) OVER (PARTITION BY a)` into a
 single Window operator.
 
+### Drop ORDER BY for Full-Partition Frames
+
+When a window function uses a full-partition frame (`UNBOUNDED PRECEDING` to
+`UNBOUNDED FOLLOWING`) with an ORDER BY, the ORDER BY can be dropped — the
+frame already includes every row in the partition regardless of order. For
+example:
+
+```sql
+-- Original (ORDER BY is redundant — frame covers the entire partition)
+SELECT sum(x) OVER (PARTITION BY a ORDER BY b
+    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM t
+
+-- Simplified (same result, no sort needed)
+SELECT sum(x) OVER (PARTITION BY a) FROM t
+```
+
+The ORDER BY only affects which rows fall within the frame. When the frame is
+the entire partition, ordering is irrelevant for any aggregate. The benefit is
+eliminating a sort within each partition. This also enables the full-partition
+aggregation rewrite (below), which converts the window to a GROUP BY + join.
+
+### Full-Partition Aggregation Rewrite
+
+When a window function uses a full-partition frame (no ORDER BY, or explicit
+`UNBOUNDED PRECEDING` to `UNBOUNDED FOLLOWING`), the window can be rewritten as
+a regular aggregation joined back to the original table:
+
+```sql
+-- Original
+SELECT *, agg(x) OVER (PARTITION BY y) FROM t
+
+-- Rewritten
+SELECT t.*, g.agg_x
+FROM t JOIN (SELECT y, agg(x) AS agg_x FROM t GROUP BY y) g ON t.y = g.y
+```
+
+This enables partial/final aggregation, which reduces data volume before the
+shuffle — the window path must shuffle all rows. For `OVER ()` (empty partition
+keys), the aggregation produces a single row that can be cross-joined.
+
+Caveats:
+- Only valid for full-partition frames. Running or sliding frames produce
+  per-row results that cannot be expressed as GROUP BY.
+- NULL partition keys require `IS NOT DISTINCT FROM` semantics in the join,
+  since window partitioning treats NULLs as equal but standard equi-joins
+  do not.
+- Reads the input twice (once for the base rows, once for the aggregation)
+  unless scan sharing is available.
+- Only applies to standard aggregates (`sum`, `count`, `avg`, `min`, `max`,
+  etc.). Functions like `row_number`, `rank`, `lag`, `lead` have no GROUP BY
+  equivalent.
+
+Velox's Window operator partially mitigates the per-row cost: the incremental
+aggregation path in `AggregateWindow.cpp` detects that all rows share the same
+frame bounds and copies the result instead of recomputing. But the per-row
+iteration and copy overhead remains, and the distributed shuffle cost is
+unaffected.
+
 ### Per-Operator Filter Placement
 
 The current filter pushdown approach (Pattern 4) is all-or-nothing: a filter is
@@ -1149,17 +1207,19 @@ Target: `buck test fbcode//axiom/optimizer/tests:subfields`
 
 ### End-to-End Tests
 
-Add `WindowE2ETest.cpp` to `axiom/optimizer/tests/` (extends
-`HiveQueriesTestBase`). Generate data using `makeRowVector` /
-`makeFlatVector`, load it into both HiveConnector (as a table) and DuckDB (via
-`createDuckDbTable`). Parse SQL via `parseSelect()`, optimize and translate to
-a Velox plan via `planVelox()`, then execute using Velox's
-`AssertQueryBuilder(plan, duckDbQueryRunner_).assertResults(duckDbSql)` to
-compare results against DuckDB.
+Add window function test queries to `axiom/optimizer/tests/sql/window.sql`. The
+`SqlTest` harness (`SqlTest.cpp` /
+`SqlTestBase.h`) parses SQL queries from `.sql` files, runs each through the
+full Axiom pipeline (parse → optimize → execute via `LocalRunner`), and
+compares results against DuckDB.
 
-This reuses Velox's existing `DuckDbQueryRunner` and `AssertQueryBuilder`
-infrastructure (from `velox/exec/tests/utils/`). Axiom does not currently use
-DuckDB-based result comparison — this would be the first test to do so.
+Each query in the `.sql` file becomes a separate gtest case. Annotations
+control behavior:
+- Default: unordered result comparison against DuckDB.
+- `-- ordered`: ordered result comparison.
+- `-- duckdb: <sql>`: use alternate SQL for the DuckDB reference (useful when
+  Axiom and DuckDB syntax differs).
+- `-- error: <message>`: expect a failure containing the given message.
 
 Test cases:
 - Basic window functions: `sum`, `avg`, `count`, `min`, `max` with PARTITION
@@ -1173,14 +1233,14 @@ Test cases:
 - Ranking function optimizations (Patterns 1–5) — verify correct results
   despite plan transformations.
 
-Target: `buck test fbcode//axiom/optimizer/tests:window_e2e` (new target)
+Target: `buck test fbcode//axiom/optimizer/tests:sql`
 
 ### Verification Commands
 
 ```bash
 buck test fbcode//axiom/optimizer/tests:window
 buck test fbcode//axiom/optimizer/tests:ranking
-buck test fbcode//axiom/optimizer/tests:window_e2e
+buck test fbcode//axiom/optimizer/tests:sql
 buck test fbcode//axiom/optimizer/tests:subfields
 buck build fbcode//axiom/...
 ```
