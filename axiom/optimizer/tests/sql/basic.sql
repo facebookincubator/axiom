@@ -1,14 +1,24 @@
--- Table t(a BIGINT, b BIGINT) with 5 rows:
---   a | b
---  ---+----
---   1 | 10
---   2 | 20
---   3 | 30
---   1 | 40
---   2 | 50
+-- Table t(a BIGINT, b BIGINT) with 15 rows across 3 splits:
+--   a |   b
+--  ---+-----
+--   1 |  10
+--   2 |  20
+--   3 |  30
+--   1 |  40
+--   2 |  50
+--   3 |  60
+--   1 |  70
+--   2 |  80
+--   3 |  90
+--   1 | 100
+--   2 | 110
+--   3 | 120
+--   1 | 130
+--   2 | 140
+--   3 | 150
 --
 -- Basic queries.
--- count 5
+-- count 15
 SELECT * FROM t
 ----
 -- count 0

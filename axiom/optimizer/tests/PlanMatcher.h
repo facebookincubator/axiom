@@ -290,6 +290,11 @@ class PlanMatcherBuilder {
   /// Matches any LocalPartition node.
   PlanMatcherBuilder& localPartition();
 
+  /// Matches a LocalPartition node with repartition type and the specified
+  /// partition keys.
+  PlanMatcherBuilder& localPartition(
+      const std::vector<std::string>& partitionKeys);
+
   /// Matches a LocalPartition node with the specified source matchers.
   /// @param matcher Matchers for the partition sources.
   PlanMatcherBuilder& localPartition(
@@ -301,6 +306,10 @@ class PlanMatcherBuilder {
       const std::shared_ptr<PlanMatcher>& matcher) {
     return localPartition({matcher});
   }
+
+  /// Matches a LocalPartition node with gather type (N-to-1, empty partition
+  /// keys).
+  PlanMatcherBuilder& localGather();
 
   /// Matches any LocalMerge node.
   PlanMatcherBuilder& localMerge();
