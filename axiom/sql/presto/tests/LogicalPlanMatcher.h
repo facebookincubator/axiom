@@ -16,19 +16,63 @@
 
 #pragma once
 
+#include <unordered_map>
 #include "axiom/logical_plan/LogicalPlanNode.h"
 
 namespace facebook::axiom::logical_plan::test {
 
 /// Verifies the structure of a logical plan tree. Each matcher matches a
 /// specific node type and recursively verifies its inputs.
+///
+/// Symbol Rewriting:
+/// -----------------
+/// LogicalPlanMatcher supports symbol (alias) capture and rewriting to allow
+/// verification of expressions that reference columns from child nodes.
+///
+/// When a matcher specifies an expression with an alias (e.g., "sum(a) OVER
+/// (PARTITION BY b) AS w"), the alias is captured and mapped to the actual
+/// column name in the plan. Subsequent matchers can then use the alias in their
+/// expressions, and it will be rewritten to the actual column name before
+/// comparison.
+///
+/// Example:
+///   .project({"sum(a) OVER (PARTITION BY b) AS w"})  // Captures alias 'w'
+///   .project({"w * 2"})  // 'w' is rewritten to actual column name
 class LogicalPlanMatcher {
  public:
   virtual ~LogicalPlanMatcher() = default;
 
+  struct MatchResult {
+    const bool match;
+
+    /// Mapping from an alias specified in the matcher to the actual symbol
+    /// found in the plan.
+    const std::unordered_map<std::string, std::string> symbols;
+
+    static MatchResult success(
+        std::unordered_map<std::string, std::string> symbols = {}) {
+      return MatchResult{true, std::move(symbols)};
+    }
+
+    static MatchResult failure() {
+      return MatchResult{false, {}};
+    }
+  };
+
   /// Matches the plan against this matcher. Sets gtest non-fatal failures on
   /// mismatch.
-  virtual bool match(const LogicalPlanNodePtr& plan) const = 0;
+  bool match(const LogicalPlanNodePtr& plan) const {
+    return match(plan, {}).match;
+  }
+
+  /// Matches the plan against this matcher with symbol rewriting support.
+  /// @param plan The plan node to match.
+  /// @param symbols Mapping from aliases to actual column names for expression
+  /// rewriting.
+  /// @return MatchResult with match status and updated symbol mappings.
+  virtual MatchResult match(
+      const LogicalPlanNodePtr& plan,
+      const std::unordered_map<std::string, std::string>& symbols) const = 0;
 };
 
 /// Builds a LogicalPlanMatcher using a fluent API. Leaf nodes (tableScan,
