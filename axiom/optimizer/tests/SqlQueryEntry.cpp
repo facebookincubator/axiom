@@ -54,6 +54,13 @@ std::vector<QueryEntry> QueryEntry::parse(const std::string& content) {
     }
 
     if (!sqlLines.empty() && !disabled) {
+      VELOX_CHECK(
+          !current.checkColumnNames ||
+              (current.type == Type::kResults ||
+               current.type == Type::kOrdered),
+          "'-- columns' can only be used with 'results' or 'ordered' queries at line {}",
+          sqlStartLine);
+
       current.sql = std::move(sqlLines);
       current.lineNumber = sqlStartLine;
       entries.push_back(std::move(current));
@@ -89,6 +96,8 @@ std::vector<QueryEntry> QueryEntry::parse(const std::string& content) {
         current.expectedError = annotation.substr(7);
       } else if (annotation.substr(0, 8) == "duckdb: ") {
         current.duckDbSql = annotation.substr(8);
+      } else if (annotation == "columns") {
+        current.checkColumnNames = true;
       }
       // Ignore unrecognized annotations (they may be regular SQL comments).
       continue;

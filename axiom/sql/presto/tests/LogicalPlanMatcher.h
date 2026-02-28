@@ -95,8 +95,9 @@ class LogicalPlanMatcherBuilder {
   /// Matches a ProjectNode.
   LogicalPlanMatcherBuilder& project(OnMatchCallback onMatch = nullptr);
 
-  /// Matches a ProjectNode with the specified expressions. Each expression
-  /// string is compared against expressionAt(i)->toString().
+  /// Matches a ProjectNode with the specified expressions. Each expected
+  /// expression is parsed with DuckDB and printed in a format compatible with
+  /// lp::ExprPrinter, then compared against expressionAt(i)->toString().
   LogicalPlanMatcherBuilder& project(
       const std::vector<std::string>& expressions);
 

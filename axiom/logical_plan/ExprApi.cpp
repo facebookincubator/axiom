@@ -142,6 +142,10 @@ ExprApi Call(std::string name, const std::vector<ExprApi>& args) {
   std::vector<velox::core::ExprPtr> argExpr;
   argExpr.reserve(args.size());
   for (auto& arg : args) {
+    VELOX_CHECK_NULL(
+        arg.windowSpec(),
+        "Window function cannot be an argument to a scalar function: {}",
+        name);
     argExpr.push_back(arg.expr());
   }
   return ExprApi{std::make_shared<const velox::core::CallExpr>(

@@ -1321,5 +1321,63 @@ TEST_F(PrestoParserTest, windowFunction) {
           .output());
 }
 
+TEST_F(PrestoParserTest, nestedWindowFunction) {
+  connector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  // Window function nested in an arithmetic expression produces two project
+  // nodes: the first computes the window function, the second applies the
+  // scalar expression using a column reference to the window result.
+  testSelect(
+      "SELECT sum(a) OVER (PARTITION BY b) * 2 AS doubled FROM t",
+      matchScan("t")
+          .project({
+              "a",
+              "b",
+              "sum(a) OVER (PARTITION BY b)",
+          })
+          .project()
+          .output({"doubled"}));
+
+  // Multiple nested window functions with aliases.
+  testSelect(
+      "SELECT sum(a) OVER (PARTITION BY b) + 1 AS s, "
+      "count(*) OVER () * 2 AS c FROM t",
+      matchScan("t")
+          .project({
+              "a",
+              "b",
+              "sum(a) OVER (PARTITION BY b)",
+              "count() OVER ()",
+          })
+          .project()
+          .output({"s", "c"}));
+
+  // Mix of top-level and nested window functions preserves aliases.
+  testSelect(
+      "SELECT row_number() OVER (ORDER BY a) AS rn, "
+      "sum(a) OVER (PARTITION BY b) * 2 AS doubled FROM t",
+      matchScan("t")
+          .project({
+              "a",
+              "b",
+              "row_number() OVER (ORDER BY a)",
+              "sum(a) OVER (PARTITION BY b)",
+          })
+          .project()
+          .output({"rn", "doubled"}));
+
+  // Window function without alias in expression.
+  testSelect(
+      "SELECT b, sum(a) OVER (PARTITION BY b) * 2 FROM t",
+      matchScan("t")
+          .project({
+              "a",
+              "b",
+              "sum(a) OVER (PARTITION BY b)",
+          })
+          .project()
+          .output());
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test
