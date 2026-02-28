@@ -1873,7 +1873,8 @@ std::any AstBuilder::visitBinaryLiteral(
 std::any AstBuilder::visitCurrentUser(
     PrestoSqlParser::CurrentUserContext* ctx) {
   trace("visitCurrentUser");
-  return visitChildren("visitCurrentUser", ctx);
+  return std::static_pointer_cast<Expression>(
+      std::make_shared<CurrentUser>(getLocation(ctx)));
 }
 
 namespace {
