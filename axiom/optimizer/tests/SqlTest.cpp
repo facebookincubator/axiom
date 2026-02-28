@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#include <fstream>
-
+#include <folly/FileUtil.h>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 #include "axiom/optimizer/tests/SqlQueryEntry.h"
@@ -74,17 +73,9 @@ class SqlTest : public SqlTestBase {
 
 // Reads the entire contents of a file.
 std::string readFile(const std::string& path) {
-  std::ifstream file(path, std::ifstream::binary);
-  VELOX_CHECK(file, "Failed to open file: {}", path);
-
-  file.seekg(0, std::ios::end);
-  auto size = file.tellg();
-  VELOX_CHECK(size >= 0, "Failed to determine file size: {}", path);
-  file.seekg(0, std::ios::beg);
-
   std::string content;
-  content.resize(size);
-  file.read(content.data(), size);
+  auto success = folly::readFile(path.c_str(), content);
+  VELOX_CHECK(success, "Failed to read file: {}", path);
   return content;
 }
 
