@@ -466,5 +466,29 @@ TEST_F(SetTest, except) {
   checkSame(logicalPlan, referencePlan);
 }
 
+// Verifies that joining with a UNION ALL subquery does not crash with an
+// assertion failure in importJoinsIntoFirstDt.
+TEST_F(SetTest, joinWithUnionAll) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
+  testConnector_->addTable("v", ROW({"x", "y"}, BIGINT()));
+
+  auto sql =
+      "SELECT a FROM t "
+      "JOIN (SELECT x FROM u UNION ALL SELECT x FROM v) w "
+      "ON a = w.x";
+
+  auto logicalPlan = parseSelect(sql, kTestConnectorId);
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  auto matcher =
+      matchScan("u")
+          .localPartition(matchScan("v").project().build())
+          .hashJoin(matchScan("t").build(), core::JoinType::kInner)
+          .build();
+
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

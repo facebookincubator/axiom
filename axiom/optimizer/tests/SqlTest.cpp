@@ -122,6 +122,7 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv, false);
 
   facebook::axiom::optimizer::test::registerQueryFile("basic.sql");
+  facebook::axiom::optimizer::test::registerQueryFile("join.sql");
   facebook::axiom::optimizer::test::registerQueryFile("window.sql");
 
   return RUN_ALL_TESTS();
