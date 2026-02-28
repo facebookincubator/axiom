@@ -15,6 +15,7 @@
  */
 
 #include "axiom/cli/Console.h"
+#include <folly/FileUtil.h>
 #include <iostream>
 #include "axiom/cli/ResultPrinter.h"
 #include "axiom/cli/StdinReader.h"
@@ -43,6 +44,11 @@ DEFINE_string(
     "",
     "Text of query. If empty, reads ';' separated queries from standard input");
 
+DEFINE_string(
+    init,
+    "",
+    "Path to a SQL file to execute on startup before entering interactive mode or running --query");
+
 DEFINE_bool(debug, false, "Enable debug mode");
 
 using namespace facebook::velox;
@@ -59,6 +65,13 @@ void Console::initialize() {
 }
 
 void Console::run() {
+  if (!FLAGS_init.empty()) {
+    std::string sql;
+    auto success = folly::readFile(FLAGS_init.c_str(), sql);
+    VELOX_USER_CHECK(success, "Cannot open init file: {}", FLAGS_init);
+    runNoThrow(sql, false);
+  }
+
   if (!FLAGS_query.empty()) {
     runNoThrow(FLAGS_query, false);
   } else {

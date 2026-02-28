@@ -22,6 +22,9 @@ with Velox. These components are:
 - Connector - an extention of Velox Connector APIs to provide functionality
   necessary for query parsing and planning.
   - top-level “connectors” directory
+- [CLI](axiom/cli/README.md) - Interactive SQL command line for executing
+  queries against in-memory TPC-H dataset and local Hive data.
+  - top-level “cli” directory
 
 These components can be used to put together single-node or distributed
 execution. Single-node execution can be single-threaded or multi-threaded.
