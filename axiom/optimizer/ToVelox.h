@@ -256,6 +256,12 @@ class ToVelox {
       WindowFunctionCP windowFunc,
       ColumnCP outputColumn);
 
+  // Converts a GroupId operator to a Velox GroupIdNode.
+  velox::core::PlanNodePtr makeGroupId(
+      const GroupId& op,
+      runner::ExecutableFragment& fragment,
+      std::vector<runner::ExecutableFragment>& stages);
+
   // Makes a tree of PlanNode for a tree of
   // RelationOp. 'fragment' is the fragment that 'op'
   // belongs to. If op or children are repartitions then the

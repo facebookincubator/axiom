@@ -436,6 +436,20 @@ class PlanMatcherBuilder {
       const std::vector<std::string>& sortingKeys,
       int32_t limit);
 
+  /// Matches any GroupId node regardless of grouping sets or inputs.
+  PlanMatcherBuilder& groupId();
+
+  /// Matches a GroupId node with the specified grouping sets, aggregation
+  /// inputs, and group ID column name. Each grouping set is a list of output
+  /// column names for the active keys in that set.
+  /// @param groupingSets The expected grouping sets (each set is a list of
+  /// output column names).
+  /// @param aggregationInputs The expected aggregation input expressions.
+  /// @param groupIdColumn The expected name of the group ID output column.
+  PlanMatcherBuilder& groupId(
+      const std::vector<std::vector<std::string>>& groupingSets,
+      const std::vector<std::string>& aggregationInputs,
+      const std::string& groupIdColumn);
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.
   std::shared_ptr<PlanMatcher> build() {

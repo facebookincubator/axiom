@@ -713,6 +713,14 @@ lp::ExprApi ExpressionPlanner::toExpr(
       VELOX_UNREACHABLE();
     }
 
+    case NodeType::kGroupingOperation: {
+      VELOX_USER_CHECK(
+          groupingTranslator_,
+          "A GROUPING() operation can only be used with a corresponding "
+          "GROUPING SET/CUBE/ROLLUP/GROUP BY clause");
+      return groupingTranslator_(node->as<GroupingOperation>());
+    }
+
     default:
       VELOX_NYI(
           "Unsupported expression type: {}",

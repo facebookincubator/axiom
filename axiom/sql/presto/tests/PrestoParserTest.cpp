@@ -420,6 +420,65 @@ TEST_F(PrestoParserTest, withNoLeaking) {
       "Table not found: t");
 }
 
+TEST_F(PrestoParserTest, groupingFunction) {
+  // GROUPING() returns a bitmask: 0 if column is present, 1 if aggregated.
+
+  // With ROLLUP.
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .tableScan()
+                       .aggregate()
+                       .project()
+                       .output();
+    testSelect(
+        "SELECT n_regionkey, n_name, GROUPING(n_regionkey, n_name), count(1) "
+        "FROM nation GROUP BY ROLLUP(n_regionkey, n_name)",
+        matcher);
+  }
+
+  // With CUBE.
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .tableScan()
+                       .aggregate()
+                       .project()
+                       .output();
+    testSelect(
+        "SELECT n_regionkey, n_name, GROUPING(n_regionkey), GROUPING(n_name), "
+        "count(1) FROM nation GROUP BY CUBE(n_regionkey, n_name)",
+        matcher);
+  }
+
+  // With GROUPING SETS.
+  {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .tableScan()
+                       .aggregate()
+                       .project()
+                       .output();
+    testSelect(
+        "SELECT n_regionkey, GROUPING(n_regionkey), count(1) "
+        "FROM nation GROUP BY GROUPING SETS (n_regionkey, ())",
+        matcher);
+  }
+
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT n_regionkey, GROUPING(n_regionkey), count(1) "
+          "FROM nation GROUP BY n_regionkey")
+          ->as<SelectStatement>()
+          ->plan(),
+      "A GROUPING() operation can only be used with a corresponding GROUPING SET/CUBE/ROLLUP/GROUP BY clause");
+
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT n_regionkey, GROUPING(n_name), count(1) "
+          "FROM nation GROUP BY ROLLUP(n_regionkey)")
+          ->as<SelectStatement>()
+          ->plan(),
+      "Column is not a grouping column: n_name");
+}
+
 TEST_F(PrestoParserTest, orderBy) {
   {
     auto matcher =
