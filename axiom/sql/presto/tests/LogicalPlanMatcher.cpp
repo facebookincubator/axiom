@@ -23,19 +23,20 @@
 namespace facebook::axiom::logical_plan::test {
 namespace {
 
-/// Returns false from the current function if a non-fatal test failure has
-/// occurred.
-#define AXIOM_RETURN_IF_FAILURE                \
-  if (::testing::Test::HasNonfatalFailure()) { \
-    return false;                              \
+// Returns MatchResult::failure() from the current function if a non-fatal
+// test failure has occurred.
+#define AXIOM_RETURN_IF_FAILURE                        \
+  if (::testing::Test::HasNonfatalFailure()) {         \
+    return LogicalPlanMatcher::MatchResult::failure(); \
   }
 
-/// Returns false if a non-fatal test failure has occurred, true otherwise.
-#define AXIOM_RETURN_RESULT                    \
-  if (::testing::Test::HasNonfatalFailure()) { \
-    return false;                              \
-  }                                            \
-  return true;
+// Returns MatchResult based on non-fatal test failure status, passing through
+// symbols on success.
+#define AXIOM_RETURN_RESULT(symbols)                   \
+  if (::testing::Test::HasNonfatalFailure()) {         \
+    return LogicalPlanMatcher::MatchResult::failure(); \
+  }                                                    \
+  return LogicalPlanMatcher::MatchResult::success(symbols);
 
 // Prints a velox::core::IExpr tree in the same format as lp::ExprPrinter.
 // This allows comparing DuckDB-parsed expected expressions against actual
@@ -134,6 +135,31 @@ std::string toWindowExprString(const velox::parse::WindowExpr& window) {
   return result;
 }
 
+// Rewrites field access names in an IExpr tree using the given mapping.
+// Used for symbol rewriting: replaces alias names with actual column names.
+velox::core::ExprPtr rewriteInputNames(
+    const velox::core::ExprPtr& expr,
+    const std::unordered_map<std::string, std::string>& mapping) {
+  using velox::core::IExpr;
+  if (expr->is(IExpr::Kind::kFieldAccess)) {
+    auto* fieldAccess = expr->as<velox::core::FieldAccessExpr>();
+    if (fieldAccess->isRootColumn()) {
+      auto it = mapping.find(fieldAccess->name());
+      if (it == mapping.end()) {
+        return expr;
+      }
+      return std::make_shared<velox::core::FieldAccessExpr>(
+          it->second, fieldAccess->alias());
+    }
+  }
+
+  std::vector<velox::core::ExprPtr> newInputs;
+  for (const auto& input : expr->inputs()) {
+    newInputs.push_back(rewriteInputNames(input, mapping));
+  }
+  return expr->replaceInputs(newInputs);
+}
+
 template <typename T = LogicalPlanNode>
 class LogicalPlanMatcherImpl : public LogicalPlanMatcher {
  public:
@@ -151,7 +177,10 @@ class LogicalPlanMatcherImpl : public LogicalPlanMatcher {
       std::function<void(const LogicalPlanNodePtr&)> onMatch)
       : inputMatchers_{{inputMatcher}}, onMatch_{std::move(onMatch)} {}
 
-  bool match(const LogicalPlanNodePtr& plan) const override {
+  MatchResult match(
+      const LogicalPlanNodePtr& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     const auto* specificNode = dynamic_cast<const T*>(plan.get());
     EXPECT_TRUE(specificNode != nullptr)
         << "Expected " << folly::demangle(typeid(T).name()) << ", but got "
@@ -161,25 +190,38 @@ class LogicalPlanMatcherImpl : public LogicalPlanMatcher {
     EXPECT_EQ(plan->inputs().size(), inputMatchers_.size());
     AXIOM_RETURN_IF_FAILURE;
 
+    // Match children, collect symbols.
+    std::unordered_map<std::string, std::string> childSymbols;
     for (auto i = 0; i < inputMatchers_.size(); ++i) {
-      EXPECT_TRUE(inputMatchers_[i]->match(plan->inputs()[i]));
-      AXIOM_RETURN_IF_FAILURE;
+      auto result = inputMatchers_[i]->match(plan->inputs()[i], symbols);
+      if (!result.match) {
+        return MatchResult::failure();
+      }
+      for (const auto& [alias, actualName] : result.symbols) {
+        childSymbols[alias] = actualName;
+      }
     }
 
-    if (!matchDetails(*specificNode)) {
-      return false;
+    auto result = matchDetails(*specificNode, childSymbols);
+    if (!result.match) {
+      return MatchResult::failure();
     }
 
     if (onMatch_ != nullptr) {
       onMatch_(plan);
+      AXIOM_RETURN_IF_FAILURE;
     }
 
-    AXIOM_RETURN_RESULT
+    return result;
   }
 
  protected:
-  virtual bool matchDetails(const T& plan) const {
-    return true;
+  using MatchResult = LogicalPlanMatcher::MatchResult;
+
+  virtual MatchResult matchDetails(
+      const T& plan,
+      const std::unordered_map<std::string, std::string>& symbols) const {
+    return MatchResult::success(symbols);
   }
 
   const std::vector<std::shared_ptr<LogicalPlanMatcher>> inputMatchers_;
@@ -199,9 +241,12 @@ class SetMatcher : public LogicalPlanMatcherImpl<SetNode> {
         op_{op} {}
 
  private:
-  bool matchDetails(const SetNode& plan) const override {
+  MatchResult matchDetails(
+      const SetNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     EXPECT_EQ(plan.operation(), op_);
-    AXIOM_RETURN_RESULT
+    AXIOM_RETURN_RESULT(symbols)
   }
 
   SetOperation op_;
@@ -216,7 +261,10 @@ class ValuesMatcher : public LogicalPlanMatcherImpl<ValuesNode> {
         outputType_{std::move(outputType)} {}
 
  private:
-  bool matchDetails(const ValuesNode& plan) const override {
+  MatchResult matchDetails(
+      const ValuesNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     const auto& outputType = plan.outputType();
 
     EXPECT_EQ(velox::TypeKind::ROW, outputType->kind());
@@ -224,7 +272,7 @@ class ValuesMatcher : public LogicalPlanMatcherImpl<ValuesNode> {
     EXPECT_TRUE(*outputType_ == *outputType)
         << "Expected " << outputType_->toString() << ", but got "
         << outputType->toString();
-    AXIOM_RETURN_RESULT
+    AXIOM_RETURN_RESULT(symbols)
   }
 
   const velox::RowTypePtr outputType_;
@@ -241,19 +289,22 @@ class LimitMatcher : public LogicalPlanMatcherImpl<LimitNode> {
         count_{count} {}
 
  private:
-  bool matchDetails(const LimitNode& plan) const override {
+  MatchResult matchDetails(
+      const LimitNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     EXPECT_EQ(offset_, plan.offset());
     EXPECT_EQ(count_, plan.count());
-    AXIOM_RETURN_RESULT
+    AXIOM_RETURN_RESULT(symbols)
   }
 
   const int64_t offset_;
   const int64_t count_;
 };
 
-/// Matches a ProjectNode with the specified expressions. Each expected
-/// expression is parsed with DuckDB and printed in a format compatible with
-/// lp::ExprPrinter, then compared against expressionAt(i)->toString().
+// Matches a ProjectNode with the specified expressions. Each expected
+// expression is parsed with DuckDB and printed in a format compatible with
+// lp::ExprPrinter, then compared against expressionAt(i)->toString().
 class ProjectMatcher : public LogicalPlanMatcherImpl<ProjectNode> {
  public:
   ProjectMatcher(
@@ -263,20 +314,27 @@ class ProjectMatcher : public LogicalPlanMatcherImpl<ProjectNode> {
         expressions_{std::move(expressions)} {}
 
  private:
-  bool matchDetails(const ProjectNode& plan) const override {
+  MatchResult matchDetails(
+      const ProjectNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     EXPECT_EQ(expressions_.size(), plan.expressions().size());
     AXIOM_RETURN_IF_FAILURE;
 
+    std::unordered_map<std::string, std::string> newSymbols;
     velox::parse::DuckSqlExpressionsParser parser;
 
     for (auto i = 0; i < expressions_.size(); ++i) {
-      const auto& expected = expressions_[i];
       const auto& actual = plan.expressionAt(i);
+      auto parsed = parser.parseScalarOrWindowExpr(expressions_[i]);
 
-      auto parsed = parser.parseScalarOrWindowExpr(expected);
-
-      std::string expectedStr;
       if (auto* windowExpr = std::get_if<velox::parse::WindowExpr>(&parsed)) {
+        // Capture alias from the window function call.
+        if (windowExpr->functionCall->alias()) {
+          newSymbols[windowExpr->functionCall->alias().value()] =
+              plan.names()[i];
+        }
+
         // DuckDB defaults end bound to CURRENT ROW when ORDER BY is absent,
         // but the SQL standard requires UNBOUNDED FOLLOWING. Correct this.
         if (windowExpr->orderBy.empty() &&
@@ -284,15 +342,49 @@ class ProjectMatcher : public LogicalPlanMatcherImpl<ProjectNode> {
           windowExpr->frame.endType =
               velox::parse::BoundType::kUnboundedFollowing;
         }
-        expectedStr = toWindowExprString(*windowExpr);
-      } else {
-        expectedStr = toExprString(*std::get<velox::core::ExprPtr>(parsed));
-      }
 
-      EXPECT_EQ(expectedStr, actual->toString()) << "at index " << i;
+        // Rewrite symbols in window sub-expressions.
+        if (!symbols.empty()) {
+          windowExpr->functionCall =
+              rewriteInputNames(windowExpr->functionCall, symbols);
+          for (auto& expr : windowExpr->partitionBy) {
+            expr = rewriteInputNames(expr, symbols);
+          }
+          for (auto& entry : windowExpr->orderBy) {
+            entry.expr = rewriteInputNames(entry.expr, symbols);
+          }
+          if (windowExpr->frame.startValue) {
+            windowExpr->frame.startValue =
+                rewriteInputNames(windowExpr->frame.startValue, symbols);
+          }
+          if (windowExpr->frame.endValue) {
+            windowExpr->frame.endValue =
+                rewriteInputNames(windowExpr->frame.endValue, symbols);
+          }
+        }
+
+        EXPECT_EQ(toWindowExprString(*windowExpr), actual->toString())
+            << "at index " << i;
+      } else {
+        auto expectedExpr = std::get<velox::core::ExprPtr>(parsed);
+
+        // Capture alias.
+        if (expectedExpr->alias()) {
+          newSymbols[expectedExpr->alias().value()] = plan.names()[i];
+        }
+
+        // Rewrite symbols in expected expression.
+        if (!symbols.empty()) {
+          expectedExpr = rewriteInputNames(expectedExpr, symbols);
+        }
+
+        EXPECT_EQ(toExprString(*expectedExpr->dropAlias()), actual->toString())
+            << "at index " << i;
+      }
       AXIOM_RETURN_IF_FAILURE;
     }
-    AXIOM_RETURN_RESULT
+
+    return MatchResult::success(newSymbols);
   }
 
   const std::vector<std::string> expressions_;
@@ -305,7 +397,10 @@ class DistinctMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
       : LogicalPlanMatcherImpl<AggregateNode>(inputMatcher, nullptr) {}
 
  private:
-  bool matchDetails(const AggregateNode& plan) const override {
+  MatchResult matchDetails(
+      const AggregateNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     EXPECT_EQ(0, plan.aggregates().size())
         << "Expected no aggregates for distinct";
     EXPECT_EQ(0, plan.groupingSets().size())
@@ -324,7 +419,7 @@ class DistinctMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
           << "Duplicate grouping key: " << name;
       AXIOM_RETURN_IF_FAILURE;
     }
-    AXIOM_RETURN_RESULT
+    AXIOM_RETURN_RESULT(symbols)
   }
 };
 
@@ -337,7 +432,10 @@ class OutputNamesMatcher : public LogicalPlanMatcherImpl<OutputNode> {
         expectedNames_{std::move(expectedNames)} {}
 
  private:
-  bool matchDetails(const OutputNode& plan) const override {
+  MatchResult matchDetails(
+      const OutputNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
     const auto& names = plan.outputType()->names();
     EXPECT_EQ(expectedNames_.size(), names.size());
     AXIOM_RETURN_IF_FAILURE;
@@ -346,7 +444,7 @@ class OutputNamesMatcher : public LogicalPlanMatcherImpl<OutputNode> {
       EXPECT_EQ(expectedNames_[i], names[i]) << "at index " << i;
       AXIOM_RETURN_IF_FAILURE;
     }
-    AXIOM_RETURN_RESULT
+    AXIOM_RETURN_RESULT(symbols)
   }
 
   const std::vector<std::string> expectedNames_;

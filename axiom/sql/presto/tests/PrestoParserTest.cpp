@@ -1333,9 +1333,9 @@ TEST_F(PrestoParserTest, nestedWindowFunction) {
           .project({
               "a",
               "b",
-              "sum(a) OVER (PARTITION BY b)",
+              "sum(a) OVER (PARTITION BY b) AS w",
           })
-          .project()
+          .project({"w * 2::bigint"})
           .output({"doubled"}));
 
   // Multiple nested window functions with aliases.
@@ -1346,10 +1346,10 @@ TEST_F(PrestoParserTest, nestedWindowFunction) {
           .project({
               "a",
               "b",
-              "sum(a) OVER (PARTITION BY b)",
-              "count() OVER ()",
+              "sum(a) OVER (PARTITION BY b) AS s",
+              "count() OVER () AS c",
           })
-          .project()
+          .project({"s + 1::bigint", "c * 2::bigint"})
           .output({"s", "c"}));
 
   // Mix of top-level and nested window functions preserves aliases.
@@ -1360,10 +1360,10 @@ TEST_F(PrestoParserTest, nestedWindowFunction) {
           .project({
               "a",
               "b",
-              "row_number() OVER (ORDER BY a)",
-              "sum(a) OVER (PARTITION BY b)",
+              "row_number() OVER (ORDER BY a) AS rn",
+              "sum(a) OVER (PARTITION BY b) AS w",
           })
-          .project()
+          .project({"rn", "w * 2::bigint"})
           .output({"rn", "doubled"}));
 
   // Window function without alias in expression.
@@ -1373,9 +1373,9 @@ TEST_F(PrestoParserTest, nestedWindowFunction) {
           .project({
               "a",
               "b",
-              "sum(a) OVER (PARTITION BY b)",
+              "sum(a) OVER (PARTITION BY b) AS w",
           })
-          .project()
+          .project({"b", "w * 2::bigint"})
           .output());
 }
 
