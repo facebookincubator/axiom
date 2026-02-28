@@ -56,6 +56,7 @@ const auto& relTypeNames() {
       {RelType::kWindow, "Window"},
       {RelType::kRowNumber, "RowNumber"},
       {RelType::kTopNRowNumber, "TopNRowNumber"},
+      {RelType::kGroupId, "GroupId"},
   };
 
   return kNames;
@@ -2109,4 +2110,78 @@ void TopNRowNumber::accept(
   visitor.visit(*this, context);
 }
 
+namespace {
+
+// Builds the output columns for GroupId from grouping key infos, aggregation
+// inputs, and the group ID column.
+ColumnVector makeGroupIdColumns(
+    const QGVector<GroupId::GroupingKeyInfo>& groupingKeyInfos,
+    const ExprVector& aggregationInputs,
+    ColumnCP groupIdColumn) {
+  ColumnVector columns;
+  for (const auto& keyInfo : groupingKeyInfos) {
+    VELOX_CHECK(
+        keyInfo.input->is(PlanType::kColumnExpr),
+        "GroupId key input must be a Column");
+    columns.push_back(keyInfo.input->as<Column>());
+  }
+  for (auto* expr : aggregationInputs) {
+    VELOX_CHECK(
+        expr->is(PlanType::kColumnExpr),
+        "GroupId aggregation input must be a Column");
+    columns.push_back(expr->as<Column>());
+  }
+  columns.push_back(groupIdColumn);
+  return columns;
+}
+
+// Returns a Value for the group ID column: non-nullable integer in
+// [0, numGroupingSets - 1].
+Value makeGroupIdColumnValue(ColumnCP groupIdColumn, size_t numGroupingSets) {
+  Value value(groupIdColumn->value().type, numGroupingSets);
+  value.nullable = false;
+  value.min = registerVariant(int64_t{0});
+  value.max = registerVariant(static_cast<int64_t>(numGroupingSets - 1));
+  return value;
+}
+
+} // namespace
+
+GroupId::GroupId(
+    RelationOpPtr input,
+    QGVector<QGVector<int32_t>> groupingSets,
+    QGVector<GroupingKeyInfo> groupingKeyInfos,
+    ExprVector aggregationInputs,
+    ColumnCP groupIdColumn)
+    : RelationOp(
+          RelType::kGroupId,
+          std::move(input),
+          makeGroupIdColumns(
+              groupingKeyInfos,
+              aggregationInputs,
+              groupIdColumn)),
+      groupingSets_(std::move(groupingSets)),
+      groupingKeyInfos_(std::move(groupingKeyInfos)),
+      aggregationInputs_(std::move(aggregationInputs)),
+      groupIdColumn_(groupIdColumn) {
+  VELOX_CHECK_GE(
+      groupingSets_.size(), 2, "GroupId requires two or more grouping sets.");
+
+  // Fanout equals the number of grouping sets since each input row is
+  // duplicated once per set.
+  cost_.fanout = groupingSets_.size();
+  // Minimal per-row cost scaled by the number of grouping sets.
+  cost_.unitCost = 0.01 * groupingSets_.size();
+
+  constraints_ = input_->constraints();
+  constraints_.emplace(
+      groupIdColumn_->id(),
+      makeGroupIdColumnValue(groupIdColumn_, groupingSets_.size()));
+}
+
+void GroupId::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
 } // namespace facebook::axiom::optimizer
