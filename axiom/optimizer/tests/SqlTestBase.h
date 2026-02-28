@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <optional>
 #include "axiom/connectors/tests/TestConnector.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 
@@ -64,14 +65,19 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
 
   /// Runs SQL through Axiom and DuckDB, asserts unordered results match.
   /// @param sql SQL query to run through both engines.
+  /// @param checkColumnNames If true, also asserts output column names match.
   /// @param duckDbSql Optional different SQL for DuckDB (e.g. different
-  /// function names). Uses 'sql' for DuckDB if empty.
-  void assertResults(std::string_view sql, std::string_view duckDbSql = {});
+  /// function names). Uses 'sql' for DuckDB if not set.
+  void assertResults(
+      std::string_view sql,
+      bool checkColumnNames = false,
+      std::optional<std::string> duckDbSql = std::nullopt);
 
   /// Runs SQL through both engines, asserts ordered results match.
   void assertOrderedResults(
       std::string_view sql,
-      std::string_view duckDbSql = {});
+      bool checkColumnNames = false,
+      std::optional<std::string> duckDbSql = std::nullopt);
 
   /// Runs SQL through Axiom, asserts the result has exactly 'expectedCount'
   /// rows.

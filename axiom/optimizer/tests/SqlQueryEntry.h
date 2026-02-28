@@ -34,9 +34,10 @@ struct QueryEntry {
 
   std::string sql;
   Type type{Type::kResults};
-  std::string duckDbSql;
+  std::optional<std::string> duckDbSql;
   uint64_t expectedCount{0};
   std::string expectedError;
+  bool checkColumnNames{false};
   int32_t lineNumber{0};
 
   /// Parses 'content' into a list of QueryEntry. Queries are separated by
@@ -46,6 +47,7 @@ struct QueryEntry {
   ///   -- count N         -> assertResultCount(sql, N)
   ///   -- error: message  -> assertFailure(sql, "message")
   ///   -- duckdb: sql     -> use alternate SQL for DuckDB comparison
+  ///   -- columns         -> verify column names match DuckDB
   ///   -- disabled        -> skip this query
   /// Unrecognized '-- ' lines before SQL starts are treated as comments and
   /// ignored. '-- ' lines after SQL starts are part of the SQL body.

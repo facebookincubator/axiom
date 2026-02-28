@@ -64,13 +64,19 @@ class ExpressionPlanner {
         sortingKeyResolver_(std::move(sortingKeyResolver)) {}
 
   /// Translates an AST expression into an ExprApi. Optionally collects
-  /// aggregate options (DISTINCT, FILTER, ORDER BY) for aggregate function
-  /// calls.
+  /// sideband data for aggregate and window function calls:
+  /// - aggregateOptions: collects DISTINCT, FILTER, ORDER BY for aggregates.
+  /// - windowOptions: collects WindowSpec for window function calls. When
+  ///   provided, window function calls are returned as plain function calls
+  ///   (without .over()) and the caller is responsible for extracting them
+  ///   and applying the window spec.
   lp::ExprApi toExpr(
       const ExpressionPtr& node,
       std::unordered_map<
           const facebook::velox::core::IExpr*,
-          lp::PlanBuilder::AggregateOptions>* aggregateOptions = nullptr);
+          lp::PlanBuilder::AggregateOptions>* aggregateOptions = nullptr,
+      std::unordered_map<const facebook::velox::core::IExpr*, lp::WindowSpec>*
+          windowOptions = nullptr);
 
  private:
   // Converts a Window AST node into a WindowSpec.

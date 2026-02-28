@@ -82,3 +82,11 @@ SELECT * FROM (SELECT a, b, sum(b) OVER (PARTITION BY a) AS s FROM t) WHERE a = 
 ----
 -- Non-partition filter stays above window.
 SELECT * FROM (SELECT a, b, sum(b) OVER (PARTITION BY a) AS s FROM t) WHERE s > 40
+----
+-- Window function in expression.
+-- columns
+SELECT a, b, sum(b) OVER (PARTITION BY a) * 2 AS doubled FROM t
+----
+-- Window function mixed with *.
+-- columns
+SELECT *, sum(b) OVER (PARTITION BY a) AS total_b FROM t
