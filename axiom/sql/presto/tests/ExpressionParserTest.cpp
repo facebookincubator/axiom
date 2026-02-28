@@ -38,7 +38,15 @@ class ExpressionParserTest : public PrestoParserTestBase {
     SCOPED_TRACE(expr);
     testSelect(
         fmt::format("SELECT {} FROM nation", expr),
-        matchScan().project({std::string(expectedExpr)}).output());
+        matchScan()
+            .project([expectedExpr](const lp::LogicalPlanNodePtr& node) {
+              auto& project = *node->as<lp::ProjectNode>();
+              ASSERT_EQ(1, project.expressions().size());
+              EXPECT_EQ(
+                  std::string(expectedExpr),
+                  project.expressionAt(0)->toString());
+            })
+            .output());
   }
 
   // Parses a decimal literal and verifies its value and type.

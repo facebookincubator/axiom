@@ -272,7 +272,8 @@ TypePtr parseType(const TypeSignaturePtr& type) {
 lp::ExprApi ExpressionPlanner::toExpr(
     const ExpressionPtr& node,
     std::unordered_map<const core::IExpr*, lp::PlanBuilder::AggregateOptions>*
-        aggregateOptions) {
+        aggregateOptions,
+    std::unordered_map<const core::IExpr*, lp::WindowSpec>* windowOptions) {
   switch (node->type()) {
     case NodeType::kIdentifier:
       return lp::Col(canonicalizeIdentifier(*node->as<Identifier>()));
@@ -281,7 +282,7 @@ lp::ExprApi ExpressionPlanner::toExpr(
       auto* dereference = node->as<DereferenceExpression>();
       return lp::Col(
           canonicalizeIdentifier(*dereference->field()),
-          toExpr(dereference->base(), aggregateOptions));
+          toExpr(dereference->base(), aggregateOptions, windowOptions));
     }
 
     case NodeType::kSubqueryExpression: {
@@ -303,23 +304,27 @@ lp::ExprApi ExpressionPlanner::toExpr(
       auto* comparison = node->as<ComparisonExpression>();
       return lp::Call(
           toFunctionName(comparison->op()),
-          toExpr(comparison->left(), aggregateOptions),
-          toExpr(comparison->right(), aggregateOptions));
+          toExpr(comparison->left(), aggregateOptions, windowOptions),
+          toExpr(comparison->right(), aggregateOptions, windowOptions));
     }
 
     case NodeType::kNotExpression: {
       auto* negation = node->as<NotExpression>();
-      return lp::Call("not", toExpr(negation->value(), aggregateOptions));
+      return lp::Call(
+          "not", toExpr(negation->value(), aggregateOptions, windowOptions));
     }
 
     case NodeType::kLikePredicate: {
       auto* like = node->as<LikePredicate>();
 
       std::vector<lp::ExprApi> inputs;
-      inputs.emplace_back(toExpr(like->value(), aggregateOptions));
-      inputs.emplace_back(toExpr(like->pattern(), aggregateOptions));
+      inputs.emplace_back(
+          toExpr(like->value(), aggregateOptions, windowOptions));
+      inputs.emplace_back(
+          toExpr(like->pattern(), aggregateOptions, windowOptions));
       if (like->escape()) {
-        inputs.emplace_back(toExpr(like->escape(), aggregateOptions));
+        inputs.emplace_back(
+            toExpr(like->escape(), aggregateOptions, windowOptions));
       }
 
       return lp::Call("like", std::move(inputs));
@@ -327,8 +332,8 @@ lp::ExprApi ExpressionPlanner::toExpr(
 
     case NodeType::kLogicalBinaryExpression: {
       auto* logical = node->as<LogicalBinaryExpression>();
-      auto left = toExpr(logical->left(), aggregateOptions);
-      auto right = toExpr(logical->right(), aggregateOptions);
+      auto left = toExpr(logical->left(), aggregateOptions, windowOptions);
+      auto right = toExpr(logical->right(), aggregateOptions, windowOptions);
 
       switch (logical->op()) {
         case LogicalBinaryExpression::Operator::kAnd:
@@ -342,34 +347,36 @@ lp::ExprApi ExpressionPlanner::toExpr(
     case NodeType::kArithmeticUnaryExpression: {
       auto* unary = node->as<ArithmeticUnaryExpression>();
       if (unary->sign() == ArithmeticUnaryExpression::Sign::kMinus) {
-        return lp::Call("negate", toExpr(unary->value(), aggregateOptions));
+        return lp::Call(
+            "negate", toExpr(unary->value(), aggregateOptions, windowOptions));
       }
 
-      return toExpr(unary->value(), aggregateOptions);
+      return toExpr(unary->value(), aggregateOptions, windowOptions);
     }
 
     case NodeType::kArithmeticBinaryExpression: {
       auto* binary = node->as<ArithmeticBinaryExpression>();
       return lp::Call(
           toFunctionName(binary->op()),
-          toExpr(binary->left(), aggregateOptions),
-          toExpr(binary->right(), aggregateOptions));
+          toExpr(binary->left(), aggregateOptions, windowOptions),
+          toExpr(binary->right(), aggregateOptions, windowOptions));
     }
 
     case NodeType::kBetweenPredicate: {
       auto* between = node->as<BetweenPredicate>();
       return lp::Call(
           "between",
-          toExpr(between->value(), aggregateOptions),
-          toExpr(between->min(), aggregateOptions),
-          toExpr(between->max(), aggregateOptions));
+          toExpr(between->value(), aggregateOptions, windowOptions),
+          toExpr(between->min(), aggregateOptions, windowOptions),
+          toExpr(between->max(), aggregateOptions, windowOptions));
     }
 
     case NodeType::kInPredicate: {
       auto* inPredicate = node->as<InPredicate>();
       const auto& valueList = inPredicate->valueList();
 
-      const auto value = toExpr(inPredicate->value(), aggregateOptions);
+      const auto value =
+          toExpr(inPredicate->value(), aggregateOptions, windowOptions);
 
       if (valueList->is(NodeType::kInListExpression)) {
         auto inList = valueList->as<InListExpression>();
@@ -379,14 +386,15 @@ lp::ExprApi ExpressionPlanner::toExpr(
 
         inputs.emplace_back(value);
         for (const auto& expr : inList->values()) {
-          inputs.emplace_back(toExpr(expr, aggregateOptions));
+          inputs.emplace_back(toExpr(expr, aggregateOptions, windowOptions));
         }
 
         return lp::Call("in", inputs);
       }
 
       if (valueList->is(NodeType::kSubqueryExpression)) {
-        return lp::Call("in", value, toExpr(valueList, aggregateOptions));
+        return lp::Call(
+            "in", value, toExpr(valueList, aggregateOptions, windowOptions));
       }
 
       VELOX_USER_FAIL(
@@ -396,7 +404,8 @@ lp::ExprApi ExpressionPlanner::toExpr(
 
     case NodeType::kExistsPredicate: {
       auto* exists = node->as<ExistsPredicate>();
-      return lp::Exists(toExpr(exists->subquery(), aggregateOptions));
+      return lp::Exists(
+          toExpr(exists->subquery(), aggregateOptions, windowOptions));
     }
 
     case NodeType::kCast: {
@@ -404,9 +413,11 @@ lp::ExprApi ExpressionPlanner::toExpr(
       const auto type = parseType(cast->toType());
 
       if (cast->isSafe()) {
-        return lp::TryCast(type, toExpr(cast->expression(), aggregateOptions));
+        return lp::TryCast(
+            type, toExpr(cast->expression(), aggregateOptions, windowOptions));
       } else {
-        return lp::Cast(type, toExpr(cast->expression(), aggregateOptions));
+        return lp::Cast(
+            type, toExpr(cast->expression(), aggregateOptions, windowOptions));
       }
     }
 
@@ -414,14 +425,15 @@ lp::ExprApi ExpressionPlanner::toExpr(
       auto* atTimeZone = node->as<AtTimeZone>();
       return lp::Call(
           "at_timezone",
-          toExpr(atTimeZone->value(), aggregateOptions),
-          toExpr(atTimeZone->timeZone(), aggregateOptions));
+          toExpr(atTimeZone->value(), aggregateOptions, windowOptions),
+          toExpr(atTimeZone->timeZone(), aggregateOptions, windowOptions));
     }
 
     case NodeType::kSimpleCaseExpression: {
       auto* simpleCase = node->as<SimpleCaseExpression>();
 
-      const auto operand = toExpr(simpleCase->operand(), aggregateOptions);
+      const auto operand =
+          toExpr(simpleCase->operand(), aggregateOptions, windowOptions);
 
       std::vector<lp::ExprApi> inputs;
       inputs.reserve(1 + simpleCase->whenClauses().size());
@@ -429,13 +441,16 @@ lp::ExprApi ExpressionPlanner::toExpr(
       for (const auto& clause : simpleCase->whenClauses()) {
         inputs.emplace_back(
             lp::Call(
-                "eq", operand, toExpr(clause->operand(), aggregateOptions)));
-        inputs.emplace_back(toExpr(clause->result(), aggregateOptions));
+                "eq",
+                operand,
+                toExpr(clause->operand(), aggregateOptions, windowOptions)));
+        inputs.emplace_back(
+            toExpr(clause->result(), aggregateOptions, windowOptions));
       }
 
       if (simpleCase->defaultValue()) {
-        inputs.emplace_back(
-            toExpr(simpleCase->defaultValue(), aggregateOptions));
+        inputs.emplace_back(toExpr(
+            simpleCase->defaultValue(), aggregateOptions, windowOptions));
       }
 
       return lp::Call("switch", inputs);
@@ -448,13 +463,15 @@ lp::ExprApi ExpressionPlanner::toExpr(
       inputs.reserve(1 + searchedCase->whenClauses().size());
 
       for (const auto& clause : searchedCase->whenClauses()) {
-        inputs.emplace_back(toExpr(clause->operand(), aggregateOptions));
-        inputs.emplace_back(toExpr(clause->result(), aggregateOptions));
+        inputs.emplace_back(
+            toExpr(clause->operand(), aggregateOptions, windowOptions));
+        inputs.emplace_back(
+            toExpr(clause->result(), aggregateOptions, windowOptions));
       }
 
       if (searchedCase->defaultValue()) {
-        inputs.emplace_back(
-            toExpr(searchedCase->defaultValue(), aggregateOptions));
+        inputs.emplace_back(toExpr(
+            searchedCase->defaultValue(), aggregateOptions, windowOptions));
       }
 
       return lp::Call("switch", inputs);
@@ -462,7 +479,8 @@ lp::ExprApi ExpressionPlanner::toExpr(
 
     case NodeType::kExtract: {
       auto* extract = node->as<Extract>();
-      auto expr = toExpr(extract->expression(), aggregateOptions);
+      auto expr =
+          toExpr(extract->expression(), aggregateOptions, windowOptions);
 
       switch (extract->field()) {
         case Extract::Field::kYear:
@@ -574,7 +592,7 @@ lp::ExprApi ExpressionPlanner::toExpr(
       auto* array = node->as<ArrayConstructor>();
       std::vector<lp::ExprApi> values;
       for (const auto& value : array->values()) {
-        values.emplace_back(toExpr(value, aggregateOptions));
+        values.emplace_back(toExpr(value, aggregateOptions, windowOptions));
       }
 
       return lp::Call("array_constructor", values);
@@ -584,7 +602,7 @@ lp::ExprApi ExpressionPlanner::toExpr(
       auto* row = node->as<Row>();
       std::vector<lp::ExprApi> items;
       for (const auto& item : row->items()) {
-        items.emplace_back(toExpr(item, aggregateOptions));
+        items.emplace_back(toExpr(item, aggregateOptions, windowOptions));
       }
 
       return lp::Call("row_constructor", items);
@@ -595,7 +613,7 @@ lp::ExprApi ExpressionPlanner::toExpr(
 
       std::vector<lp::ExprApi> args;
       for (const auto& arg : call->arguments()) {
-        args.push_back(toExpr(arg, aggregateOptions));
+        args.push_back(toExpr(arg, aggregateOptions, windowOptions));
       }
 
       const auto& funcName = call->name()->suffix();
@@ -653,6 +671,10 @@ lp::ExprApi ExpressionPlanner::toExpr(
         if (call->ignoreNulls()) {
           windowSpec.ignoreNulls();
         }
+        if (windowOptions != nullptr) {
+          windowOptions->emplace(callExpr.expr().get(), windowSpec);
+          return callExpr;
+        }
         return callExpr.over(windowSpec);
       }
 
@@ -668,27 +690,31 @@ lp::ExprApi ExpressionPlanner::toExpr(
         names.emplace_back(arg->name()->value());
       }
 
-      return lp::Lambda(names, toExpr(lambda->body(), aggregateOptions));
+      return lp::Lambda(
+          names, toExpr(lambda->body(), aggregateOptions, windowOptions));
     }
 
     case NodeType::kSubscriptExpression: {
       auto* subscript = node->as<SubscriptExpression>();
       return lp::Call(
           "subscript",
-          toExpr(subscript->base(), aggregateOptions),
-          toExpr(subscript->index(), aggregateOptions));
+          toExpr(subscript->base(), aggregateOptions, windowOptions),
+          toExpr(subscript->index(), aggregateOptions, windowOptions));
     }
 
     case NodeType::kIsNullPredicate: {
       auto* isNull = node->as<IsNullPredicate>();
-      return lp::Call("is_null", toExpr(isNull->value(), aggregateOptions));
+      return lp::Call(
+          "is_null", toExpr(isNull->value(), aggregateOptions, windowOptions));
     }
 
     case NodeType::kIsNotNullPredicate: {
       auto* isNull = node->as<IsNotNullPredicate>();
       return lp::Call(
           "not",
-          lp::Call("is_null", toExpr(isNull->value(), aggregateOptions)));
+          lp::Call(
+              "is_null",
+              toExpr(isNull->value(), aggregateOptions, windowOptions)));
     }
 
     case NodeType::kCurrentTime: {
