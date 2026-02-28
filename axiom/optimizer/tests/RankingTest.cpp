@@ -67,7 +67,8 @@ TEST_F(RankingTest, rowNumberWithoutOrderBy) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher = matchScan("nation").gather().rowNumber({}).build();
+  auto distributedMatcher =
+      matchScan("nation").gather().localGather().rowNumber({}).build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
@@ -91,6 +92,7 @@ TEST_F(RankingTest, rowNumberWithPartitionByWithoutOrderBy) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .shuffle({"n_regionkey"})
+                                .localPartition({"n_regionkey"})
                                 .rowNumber({"n_regionkey"})
                                 .project({"n_name", "rn"})
                                 .gather()
@@ -109,8 +111,11 @@ TEST_F(RankingTest, rowNumberWithLimit) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher =
-      matchScan("nation").distributedLimit(0, 10).rowNumber({}).build();
+  auto distributedMatcher = matchScan("nation")
+                                .distributedLimit(0, 10)
+                                .localGather()
+                                .rowNumber({})
+                                .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
@@ -134,6 +139,7 @@ TEST_F(RankingTest, rowNumberWithPartitionByAndLimit) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .distributedLimit(0, 10)
+                                .localPartition({"n_regionkey"})
                                 .rowNumber({"n_regionkey"})
                                 .project({"n_name", "rn"})
                                 .build();
@@ -152,8 +158,11 @@ TEST_F(RankingTest, rowNumberWithOrderByAndLimit) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher =
-      matchScan("nation").gather().topNRowNumber({}, {"n_name"}, 10).build();
+  auto distributedMatcher = matchScan("nation")
+                                .gather()
+                                .localGather()
+                                .topNRowNumber({}, {"n_name"}, 10)
+                                .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
@@ -174,6 +183,7 @@ TEST_F(RankingTest, rankWithOrderByAndLimit) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .gather()
+                                .localGather()
                                 .topNRowNumber({}, {"n_name"}, 10)
                                 .localLimit(0, 10)
                                 .build();
@@ -204,6 +214,7 @@ TEST_F(RankingTest, rowNumberWithPartitionAndOrderByAndLimit) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .shuffle({"n_regionkey"})
+                                .localPartition({"n_regionkey"})
                                 .topNRowNumber({"n_regionkey"}, {"n_name"}, 10)
                                 .distributedLimit(0, 10)
                                 .project({"n_name", "rn"})
@@ -232,6 +243,7 @@ TEST_F(RankingTest, multipleWindowFunctionsWithLimitNoOptimization) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .gather()
+                                .localGather()
                                 .window(
                                     {"row_number() OVER (ORDER BY n_name)",
                                      "sum(n_regionkey) OVER (ORDER BY n_name)"})
@@ -262,6 +274,7 @@ TEST_F(RankingTest, rankWithoutOrderBy) {
   auto distributedMatcher =
       matchScan("nation")
           .shuffle({"n_regionkey"})
+          .localPartition({"n_regionkey"})
           .window({"rank() OVER (PARTITION BY n_regionkey)"})
           .project({"n_name", "rn"})
           .gather()
@@ -291,6 +304,7 @@ TEST_F(RankingTest, rankWithLimitWithoutOrderBy) {
   auto distributedMatcher =
       matchScan("nation")
           .shuffle({"n_regionkey"})
+          .localPartition({"n_regionkey"})
           .window({"rank() OVER (PARTITION BY n_regionkey)"})
           .distributedLimit(0, 10)
           .project({"n_name", "rn"})
@@ -314,7 +328,7 @@ TEST_F(RankingTest, orderByWithoutLimit) {
     // No partition keys — gather, then Window.
     auto distributedPlan = toDistributedPlan(sql);
     auto distributedMatcher =
-        matchScan("nation").gather().window({windowExpr}).build();
+        matchScan("nation").gather().localGather().window({windowExpr}).build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
   }
 }
@@ -331,8 +345,11 @@ TEST_F(RankingTest, redundantQueryOrderBy) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher =
-      matchScan("nation").gather().topNRowNumber({}, {"n_name"}, 10).build();
+  auto distributedMatcher = matchScan("nation")
+                                .gather()
+                                .localGather()
+                                .topNRowNumber({}, {"n_name"}, 10)
+                                .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
@@ -356,8 +373,11 @@ TEST_F(RankingTest, filterOnOutput) {
 
     // No partition keys — gather, then TopNRowNumber.
     auto distributedPlan = toDistributedPlan(sql);
-    auto distributedMatcher =
-        matchScan("nation").gather().topNRowNumber({}, {"n_name"}, 5).build();
+    auto distributedMatcher = matchScan("nation")
+                                  .gather()
+                                  .localGather()
+                                  .topNRowNumber({}, {"n_name"}, 5)
+                                  .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
   }
 }
@@ -382,6 +402,7 @@ TEST_F(RankingTest, filterOnRowNumberWithPartitionKeys) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .shuffle({"n_regionkey"})
+                                .localPartition({"n_regionkey"})
                                 .topNRowNumber({"n_regionkey"}, {"n_name"}, 5)
                                 .project({"n_name", "rn"})
                                 .gather()
@@ -404,7 +425,7 @@ TEST_F(RankingTest, filterOnRowNumberWithoutOrderBy) {
 
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher =
-      matchScan("nation").gather().rowNumber({}, 5).build();
+      matchScan("nation").gather().localGather().rowNumber({}, 5).build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
@@ -421,8 +442,11 @@ TEST_F(RankingTest, filterOnRowNumberLessThan) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher =
-      matchScan("nation").gather().topNRowNumber({}, {"n_name"}, 4).build();
+  auto distributedMatcher = matchScan("nation")
+                                .gather()
+                                .localGather()
+                                .topNRowNumber({}, {"n_name"}, 4)
+                                .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
@@ -439,8 +463,11 @@ TEST_F(RankingTest, filterOnRowNumberEquals1) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher =
-      matchScan("nation").gather().topNRowNumber({}, {"n_name"}, 1).build();
+  auto distributedMatcher = matchScan("nation")
+                                .gather()
+                                .localGather()
+                                .topNRowNumber({}, {"n_name"}, 1)
+                                .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
@@ -465,6 +492,7 @@ TEST_F(RankingTest, filterWithAdditionalPredicates) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .gather()
+                                .localGather()
                                 .topNRowNumber({}, {"n_name"}, 5)
                                 .filter("n_regionkey > 2")
                                 .build();
@@ -490,6 +518,7 @@ TEST_F(RankingTest, filterWithLowerBound) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .gather()
+                                .localGather()
                                 .topNRowNumber({}, {"n_name"}, 10)
                                 .filter("rn >= 3")
                                 .build();
@@ -516,6 +545,7 @@ TEST_F(RankingTest, filterOnOutputWithLimit) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .gather()
+                                .localGather()
                                 .topNRowNumber({}, {"n_name"}, 5)
                                 .localLimit(0, 3)
                                 .build();
@@ -546,6 +576,7 @@ TEST_F(RankingTest, filterOnOutputWithLargerLimit) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .gather()
+                                .localGather()
                                 .topNRowNumber({}, {"n_name"}, 3)
                                 .localLimit(0, 10)
                                 .build();
@@ -575,6 +606,7 @@ TEST_F(RankingTest, filterOnRowNumberWithMultipleWindowFunctions) {
   auto distributedMatcher =
       matchScan("nation")
           .gather()
+          .localGather()
           .window({"count() OVER ()", "row_number() OVER ()"})
           .filter("rn <= 5")
           .build();
@@ -602,6 +634,7 @@ TEST_F(RankingTest, nonWindowFilterWithWindowFunction) {
   auto distributedPlan = toDistributedPlan(sql);
   auto distributedMatcher = matchScan("nation")
                                 .gather()
+                                .localGather()
                                 .window({"row_number() OVER (ORDER BY n_name)"})
                                 .filter("n_regionkey > 2")
                                 .build();
@@ -632,6 +665,7 @@ TEST_F(RankingTest, partitionKeyFilterPushdown) {
       matchScan("nation")
           .filter("n_regionkey = 2")
           .shuffle({"n_regionkey"})
+          .localPartition({"n_regionkey"})
           .window(
               {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
           .gather()
@@ -661,6 +695,7 @@ TEST_F(RankingTest, nonPartitionKeyFilterStaysAbove) {
   auto distributedMatcher =
       matchScan("nation")
           .shuffle({"n_regionkey"})
+          .localPartition({"n_regionkey"})
           .window(
               {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
           .filter("n_name = 'FRANCE'")
@@ -704,8 +739,10 @@ TEST_F(RankingTest, partitionKeyFilterWithMultipleWindows) {
       matchScan("nation")
           .filter("n_regionkey = 2")
           .shuffle({"n_regionkey"})
+          .localPartition({"n_regionkey"})
           .window(
               {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
+          .localPartition({"n_regionkey"})
           .window({"count() OVER (PARTITION BY n_regionkey)"})
           .gather()
           .build();
@@ -744,9 +781,11 @@ TEST_F(RankingTest, partitionKeyFilterPartialMatch) {
   auto distributedMatcher =
       matchScan("nation")
           .shuffle({"n_regionkey"})
+          .localPartition({"n_regionkey"})
           .window(
               {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
           .gather()
+          .localGather()
           .window({"count() OVER ()"})
           .filter("n_regionkey = 2")
           .build();

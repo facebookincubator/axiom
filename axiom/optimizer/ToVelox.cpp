@@ -931,6 +931,28 @@ velox::core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
       inputType, std::move(keyIndices));
 }
 
+// Adds a local gather (empty partition keys) or local repartition (non-empty
+// partition keys) to ensure all rows for a partition are processed by a single
+// driver when numDrivers > 1.
+velox::core::PlanNodePtr addLocalPartition(
+    const velox::core::PlanNodeId& id,
+    const velox::core::PlanNodePtr& input,
+    const std::vector<velox::core::FieldAccessTypedExprPtr>& partitionKeys) {
+  std::vector<velox::core::PlanNodePtr> inputs = {input};
+  if (partitionKeys.empty()) {
+    return velox::core::LocalPartitionNode::gather(id, std::move(inputs));
+  }
+
+  auto partition = createPartitionFunctionSpec(
+      input->outputType(), partitionKeys, Distribution{});
+  return std::make_shared<velox::core::LocalPartitionNode>(
+      id,
+      velox::core::LocalPartitionNode::Type::kRepartition,
+      false,
+      std::move(partition),
+      std::move(inputs));
+}
+
 bool hasSubfieldPushdown(const TableScan& scan) {
   return std::ranges::any_of(
       scan.columns(), [](ColumnCP column) { return column->topColumn(); });
@@ -1324,22 +1346,9 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
   if (op.preGroupedKeys.empty() && options_.numDrivers > 1 &&
       (op.step == velox::core::AggregationNode::Step::kFinal ||
        op.step == velox::core::AggregationNode::Step::kSingle)) {
-    std::vector<velox::core::PlanNodePtr> inputs = {input};
+    input = addLocalPartition(nextId(), input, keys);
     if (keys.empty()) {
-      // Final agg with no grouping is single worker and has a local gather
-      // before the final aggregation.
-      input =
-          velox::core::LocalPartitionNode::gather(nextId(), std::move(inputs));
       fragment.width = 1;
-    } else {
-      auto partition = createPartitionFunctionSpec(
-          input->outputType(), keys, Distribution{});
-      input = std::make_shared<velox::core::LocalPartitionNode>(
-          nextId(),
-          velox::core::LocalPartitionNode::Type::kRepartition,
-          false,
-          std::move(partition),
-          std::move(inputs));
     }
   }
 
@@ -1436,12 +1445,24 @@ velox::core::PlanNodePtr ToVelox::maybeTrimColumns(
       nextId(), std::move(names), std::move(exprs), std::move(input));
 }
 
-velox::core::PlanNodePtr ToVelox::makeWindow(
-    const Window& op,
+velox::core::PlanNodePtr ToVelox::makeWindowInput(
+    const RelationOp& op,
+    const ExprVector& partitionKeys,
     runner::ExecutableFragment& fragment,
     std::vector<runner::ExecutableFragment>& stages) {
   auto input =
       maybeTrimColumns(makeFragment(op.input(), fragment, stages), op.input());
+  if (options_.numDrivers > 1) {
+    input = addLocalPartition(nextId(), input, toFieldRefs(partitionKeys));
+  }
+  return input;
+}
+
+velox::core::PlanNodePtr ToVelox::makeWindow(
+    const Window& op,
+    runner::ExecutableFragment& fragment,
+    std::vector<runner::ExecutableFragment>& stages) {
+  auto input = makeWindowInput(op, op.partitionKeys, fragment, stages);
 
   auto partitionKeys = toFieldRefs(op.partitionKeys);
   auto sortingKeys = toFieldRefs(op.orderKeys);
@@ -1475,8 +1496,7 @@ velox::core::PlanNodePtr ToVelox::makeRowNumber(
     const RowNumber& op,
     runner::ExecutableFragment& fragment,
     std::vector<runner::ExecutableFragment>& stages) {
-  auto input =
-      maybeTrimColumns(makeFragment(op.input(), fragment, stages), op.input());
+  auto input = makeWindowInput(op, op.partitionKeys, fragment, stages);
 
   return std::make_shared<velox::core::RowNumberNode>(
       nextId(),
@@ -1490,8 +1510,7 @@ velox::core::PlanNodePtr ToVelox::makeTopNRowNumber(
     const TopNRowNumber& op,
     runner::ExecutableFragment& fragment,
     std::vector<runner::ExecutableFragment>& stages) {
-  auto input =
-      maybeTrimColumns(makeFragment(op.input(), fragment, stages), op.input());
+  auto input = makeWindowInput(op, op.partitionKeys, fragment, stages);
 
   return std::make_shared<velox::core::TopNRowNumberNode>(
       nextId(),

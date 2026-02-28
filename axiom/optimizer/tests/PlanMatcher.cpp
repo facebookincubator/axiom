@@ -20,6 +20,7 @@
 #include "axiom/runner/MultiFragmentPlan.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/duckdb/conversion/DuckParser.h"
+#include "velox/exec/HashPartitionFunction.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 
@@ -1362,6 +1363,58 @@ class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
   const int32_t limit_;
 };
 
+// Matches a LocalPartitionNode and verifies its type (gather or repartition)
+// and optionally partition keys.
+class LocalPartitionTypeMatcher : public PlanMatcherImpl<LocalPartitionNode> {
+ public:
+  LocalPartitionTypeMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      LocalPartitionNode::Type expectedType,
+      std::vector<std::string> partitionKeys = {})
+      : PlanMatcherImpl<LocalPartitionNode>({matcher}),
+        expectedType_{expectedType},
+        partitionKeys_{std::move(partitionKeys)} {}
+
+  MatchResult matchDetails(
+      const LocalPartitionNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    EXPECT_EQ(plan.type(), expectedType_);
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    if (!partitionKeys_.empty()) {
+      const auto& outputType = plan.sources().at(0)->outputType();
+
+      std::vector<column_index_t> keyChannels;
+      keyChannels.reserve(partitionKeys_.size());
+      for (const auto& key : partitionKeys_) {
+        auto name = key;
+        auto it = symbols.find(key);
+        if (it != symbols.end()) {
+          name = it->second;
+        }
+        EXPECT_TRUE(outputType->containsChild(name))
+            << "Partition key not found: " << name;
+        AXIOM_TEST_RETURN_IF_FAILURE
+        keyChannels.push_back(outputType->getChildIdx(name));
+      }
+
+      auto expected =
+          exec::HashPartitionFunctionSpec(outputType, keyChannels).toString();
+      EXPECT_EQ(plan.partitionFunctionSpec().toString(), expected);
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
+    return MatchResult::success(symbols);
+  }
+
+ private:
+  const LocalPartitionNode::Type expectedType_;
+  const std::vector<std::string> partitionKeys_;
+};
+
 #undef AXIOM_TEST_RETURN
 #undef AXIOM_TEST_RETURN_IF_FAILURE
 #undef AXIOM_TEST_RETURN_IF_FAILURE_VOID
@@ -1573,6 +1626,21 @@ PlanMatcherBuilder& PlanMatcherBuilder::nestedLoopJoin(
 PlanMatcherBuilder& PlanMatcherBuilder::localPartition() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<PlanMatcherImpl<LocalPartitionNode>>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::localGather() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<LocalPartitionTypeMatcher>(
+      matcher_, LocalPartitionNode::Type::kGather);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::localPartition(
+    const std::vector<std::string>& partitionKeys) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<LocalPartitionTypeMatcher>(
+      matcher_, LocalPartitionNode::Type::kRepartition, partitionKeys);
   return *this;
 }
 
