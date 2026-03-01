@@ -1146,6 +1146,41 @@ TEST_F(JoinTest, leftJoinOnClausePushdown) {
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+
+  // Constant false ON conjunct applied on INNER JOIN will return an empty set.
+  {
+    auto query = "SELECT * FROM t INNER JOIN u ON a = x AND 1 > 2";
+    SCOPED_TRACE(query);
+
+    // No rows can match at all - return empty values with correct output type.
+    auto matcher = core::PlanMatcherBuilder()
+                       .values(ROW({"a", "b", "c", "x", "y"}, BIGINT()))
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Constant false ON conjunct applied on FULL JOIN transforms to UNION ALL.
+  {
+    auto query = "SELECT * FROM t FULL JOIN u ON a = x AND 1 > 2";
+    SCOPED_TRACE(query);
+
+    // Full join with constant false ON clause transforms to:
+    // UNION ALL of (scan t with NULLs for u) and (scan u with NULLs for t).
+    auto matcher = core::PlanMatcherBuilder{}
+                       .tableScan("t")
+                       .project({"a", "b", "c", "null", "null"})
+                       .localPartition(
+                           core::PlanMatcherBuilder{}
+                               .tableScan("u")
+                               .project({"null", "null", "null", "x", "y"})
+                               .build())
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 TEST_F(JoinTest, impliedJoins) {

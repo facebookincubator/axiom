@@ -1806,9 +1806,18 @@ void ToGraph::translateJoin(
       };
 
       addFilter(*left, condition);
+      tryEliminateOnConstantFalse(condition, joinType, left, right);
     }
     return;
   }
+
+  if (tryEliminateOnConstantFalse(condition, joinType, left, right)) {
+    return;
+  }
+
+  // If non-inner, and many tables on the right they are one dt. If a single
+  // table then this too is the last in 'tables'.
+  auto* rightTable = currentDt_->tables.back();
 
   exprSources_.push_back(left.get());
   exprSources_.push_back(right.get());
@@ -1830,15 +1839,6 @@ void ToGraph::translateJoin(
         conjunct->toString());
   }
 #endif
-
-  // If non-inner, and many tables on the right they are one dt. If a single
-  // table then this too is the last in 'tables'.
-  auto* rightTable = currentDt_->tables.back();
-
-  if (hasConstantFalse(conjuncts) &&
-      eliminateJoinOnConstantFalse(joinType, left, right, rightTable)) {
-    return;
-  }
 
   const bool leftOptional =
       joinType == lp::JoinType::kRight || joinType == lp::JoinType::kFull;
@@ -1921,39 +1921,120 @@ void ToGraph::translateJoin(
   }
 }
 
-bool ToGraph::eliminateJoinOnConstantFalse(
+bool ToGraph::tryEliminateOnConstantFalse(
+    const lp::ExprPtr& condition,
     lp::JoinType joinType,
     const lp::LogicalPlanNodePtr& left,
-    const lp::LogicalPlanNodePtr& right,
-    PlanObjectCP rightTable) {
-  // TODO: For INNER/FULL joins, no rows can match at all - return empty
-  // result.
-  const lp::LogicalPlanNode* optionalSide = nullptr;
-
-  if (joinType == lp::JoinType::kLeft) {
-    // No rows from the right can ever match.
-    currentDt_->removeLastTable(rightTable);
-    optionalSide = right.get();
-  } else if (joinType == lp::JoinType::kRight) {
-    // No rows from the left can ever match. Keep only the right table.
-    currentDt_ = newDt();
-    currentDt_->addTable(rightTable);
-    optionalSide = left.get();
-  }
-
-  if (!optionalSide) {
+    const lp::LogicalPlanNodePtr& right) {
+  if (!condition) {
     return false;
   }
 
-  // Project NULL for each column from the removed side.
-  const auto& outputType = optionalSide->outputType();
-  for (auto channel : usedChannels(*optionalSide)) {
-    const auto& name = outputType->names()[channel];
-    const auto& typePtr = outputType->childAt(channel);
-    renames_[name] = make<Literal>(
-        toConstantValue(typePtr), registerVariant(toType(typePtr)->kind()));
+  exprSources_.push_back(left.get());
+  exprSources_.push_back(right.get());
+  SCOPE_EXIT {
+    exprSources_.pop_back();
+    exprSources_.pop_back();
+  };
+
+  ExprVector conjuncts;
+  translateConjuncts(condition, conjuncts);
+
+  if (!hasConstantFalse(conjuncts)) {
+    return false;
   }
-  return true;
+
+  // Helper to project NULL for each column from the given side.
+  const auto projectNulls = [&](const lp::LogicalPlanNode& side) {
+    const auto& outputType = side.outputType();
+    for (auto channel : usedChannels(side)) {
+      const auto& name = outputType->names()[channel];
+      const auto& typePtr = outputType->childAt(channel);
+      renames_[name] = make<Literal>(
+          toConstantValue(typePtr), registerVariant(toType(typePtr)->kind()));
+    }
+  };
+
+  switch (joinType) {
+    case lp::JoinType::kInner: {
+      currentDt_ = newDt();
+      makeEmptyValuesTable(*left, *right);
+      return true;
+    }
+    case lp::JoinType::kLeft: {
+      auto* rightTable = currentDt_->tables.back();
+      currentDt_->removeLastTable(rightTable);
+      projectNulls(*right);
+      return true;
+    }
+    case lp::JoinType::kRight: {
+      auto* rightTable = currentDt_->tables.back();
+      currentDt_ = newDt();
+      currentDt_->addTable(rightTable);
+      projectNulls(*left);
+      return true;
+    }
+    case lp::JoinType::kFull: {
+      // Full join with constant false ON clause: no rows can ever match.
+      // Return all rows from left with NULLs for right columns, UNION ALL
+      // all rows from right with NULLs for left columns.
+      auto* leftTable = currentDt_->tables.front();
+      auto* rightTable = currentDt_->tables.back();
+
+      auto* unionDt = newDt();
+      unionDt->setOp = lp::SetOperation::kUnionAll;
+
+      auto* leftChild = newDt();
+      leftChild->addTable(leftTable);
+
+      auto* rightChild = newDt();
+      rightChild->addTable(rightTable);
+
+      // Build output columns for the union DT and child expressions.
+      // Column order: left columns first, then right columns.
+      // 'isLeftSide' indicates which child gets the real column (true = left).
+      const auto addColumns = [&](const lp::LogicalPlanNode& node,
+                                  bool isLeftSide) {
+        const auto& type = node.outputType();
+        for (auto channel : usedChannels(node)) {
+          const auto& name = type->names()[channel];
+          const auto& typePtr = type->childAt(channel);
+          auto value = toConstantValue(typePtr);
+
+          auto* columnName = toName(name);
+          auto* unionColumn =
+              make<Column>(columnName, unionDt, value, columnName);
+          unionDt->columns.push_back(unionColumn);
+          leftChild->columns.push_back(unionColumn);
+          rightChild->columns.push_back(unionColumn);
+
+          auto* nullLiteral =
+              make<Literal>(value, registerVariant(toType(typePtr)->kind()));
+          auto* realColumn = translateColumn(name);
+
+          leftChild->exprs.push_back(isLeftSide ? realColumn : nullLiteral);
+          rightChild->exprs.push_back(isLeftSide ? nullLiteral : realColumn);
+        }
+      };
+
+      addColumns(*left, true);
+      addColumns(*right, false);
+
+      unionDt->children.push_back(leftChild);
+      unionDt->children.push_back(rightChild);
+
+      // Update renames_ to point to the union output columns.
+      for (const auto* column : unionDt->columns) {
+        renames_[column->name()] = column;
+      }
+
+      currentDt_ = newDt();
+      currentDt_->addTable(unionDt);
+      return true;
+    }
+    default:
+      return false;
+  }
 }
 
 DerivedTableP ToGraph::newDt() {
@@ -3136,6 +3217,45 @@ void ToGraph::addLimit(const lp::LimitNode& limit) {
 void ToGraph::makeEmptyValuesTable(const lp::LogicalPlanNode& node) {
   auto* emptyData = &registerVariant(velox::Variant::array({}))->array();
   auto* valuesTable = makeValuesTable(node, emptyData);
+  currentDt_->addTable(valuesTable);
+}
+
+void ToGraph::makeEmptyValuesTable(
+    const lp::LogicalPlanNode& left,
+    const lp::LogicalPlanNode& right) {
+  auto* emptyData = &registerVariant(velox::Variant::array({}))->array();
+
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> types;
+  for (const auto* side : {&left, &right}) {
+    const auto& outputType = side->outputType();
+    for (auto channel : usedChannels(*side)) {
+      names.push_back(outputType->names()[channel]);
+      types.push_back(outputType->childAt(channel));
+    }
+  }
+
+  auto outputType = velox::ROW(std::move(names), std::move(types));
+  auto* valuesTable =
+      make<ValuesTable>(toType(std::move(outputType)), emptyData);
+  valuesTable->cname = newCName("vt");
+
+  const auto cardinality = valuesTable->cardinality();
+  for (const auto* side : {&left, &right}) {
+    const auto& sideOutputType = side->outputType();
+    for (auto channel : usedChannels(*side)) {
+      const auto& name = sideOutputType->names()[channel];
+      const auto* columnName = toName(name);
+      auto* column = make<Column>(
+          columnName,
+          valuesTable,
+          toValue(sideOutputType->childAt(channel), cardinality),
+          columnName);
+      valuesTable->columns.push_back(column);
+      renames_[name] = column;
+    }
+  }
+
   currentDt_->addTable(valuesTable);
 }
 
