@@ -147,6 +147,41 @@ TEST_F(LogicalPlanNodeSerdeTest, tableScanNode) {
   testRoundTrip(plan);
 }
 
+TEST_F(LogicalPlanNodeSerdeTest, tableScanNodeWithAlias) {
+  auto plan = std::make_shared<TableScanNode>(
+      "scan_0",
+      ROW({"a", "b"}, {BIGINT(), VARCHAR()}),
+      "test_connector",
+      "test_table",
+      std::vector<std::string>{"col_a", "col_b"},
+      "t1");
+  EXPECT_EQ(plan->alias(), "t1");
+  testRoundTrip(plan);
+
+  // Verify the alias survives round-trip.
+  auto serialized = plan->serialize();
+  auto deserialized = ISerializable::deserialize<LogicalPlanNode>(serialized);
+  auto deserializedScan = deserialized->as<TableScanNode>();
+  EXPECT_EQ(deserializedScan->alias(), "t1");
+}
+
+TEST_F(LogicalPlanNodeSerdeTest, tableScanNodeWithoutAlias) {
+  auto plan = std::make_shared<TableScanNode>(
+      "scan_0",
+      ROW({"a", "b"}, {BIGINT(), VARCHAR()}),
+      "test_connector",
+      "test_table",
+      std::vector<std::string>{"col_a", "col_b"});
+  EXPECT_TRUE(plan->alias().empty());
+  testRoundTrip(plan);
+
+  // Verify no alias after round-trip.
+  auto serialized = plan->serialize();
+  auto deserialized = ISerializable::deserialize<LogicalPlanNode>(serialized);
+  auto deserializedScan = deserialized->as<TableScanNode>();
+  EXPECT_TRUE(deserializedScan->alias().empty());
+}
+
 TEST_F(LogicalPlanNodeSerdeTest, filterNode) {
   auto plan = PlanBuilder()
                   .values(

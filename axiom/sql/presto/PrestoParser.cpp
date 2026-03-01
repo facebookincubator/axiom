@@ -504,6 +504,16 @@ class RelationPlanner : public AstVisitor {
       builder_->project(renames);
     }
 
+    // Set the alias on the underlying TableScanNode when the inner relation
+    // is a table and the alias differs from the table name.
+    if (aliasedRelation.relation()->is(NodeType::kTable)) {
+      auto* innerTable = aliasedRelation.relation()->as<Table>();
+      auto tableName = canonicalizeName(innerTable->name()->suffix());
+      if (tableName != alias) {
+        builder_->setTableScanAlias(alias);
+      }
+    }
+
     builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
     builder_->as(alias);
   }
