@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include <boost/algorithm/string.hpp>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
+#include "axiom/optimizer/tests/TpchQueries.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -59,44 +59,8 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
     HiveQueriesTestBase::TearDown();
   }
 
-  static std::string readSqlFromFile(const std::string& filePath) {
-    auto path = velox::test::getDataFilePath("axiom/optimizer/tests", filePath);
-    std::ifstream inputFile(path, std::ifstream::binary);
-
-    VELOX_CHECK(inputFile, "Failed to open SQL file: {}", path);
-
-    // Find out file size.
-    auto begin = inputFile.tellg();
-    inputFile.seekg(0, std::ios::end);
-    auto end = inputFile.tellg();
-
-    const auto fileSize = end - begin;
-    VELOX_CHECK_GT(fileSize, 0, "SQL file is empty: {}", path);
-
-    // Read the file.
-    std::string sql;
-    sql.resize(fileSize);
-
-    inputFile.seekg(begin);
-    inputFile.read(sql.data(), fileSize);
-    inputFile.close();
-
-    return sql;
-  }
-
-  static std::string readTpchSql(int32_t query) {
-    auto sql = readSqlFromFile(fmt::format("tpch/queries/q{}.sql", query));
-
-    // Drop trailing semicolon.
-    boost::trim_right(sql);
-    if (!sql.empty() && sql.back() == ';') {
-      sql.pop_back();
-    }
-    return sql;
-  }
-
   lp::LogicalPlanNodePtr parseTpchSql(int32_t query) {
-    auto sql = readTpchSql(query);
+    auto sql = tests::readTpchSql(query);
 
     ::axiom::sql::presto::PrestoParser prestoParser(
         exec::test::kHiveConnectorId, std::nullopt);
@@ -112,7 +76,7 @@ class TpchPlanTest : public virtual test::HiveQueriesTestBase {
   }
 
   void checkTpchSql(int32_t query) {
-    auto sql = readTpchSql(query);
+    auto sql = tests::readTpchSql(query);
     auto referencePlan = referenceBuilder_->getQueryPlan(query).plan;
     checkResults(sql, referencePlan);
   }

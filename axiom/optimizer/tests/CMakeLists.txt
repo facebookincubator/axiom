@@ -68,6 +68,8 @@ target_link_libraries(
   axiom_runner_tests_utils
 )
 
+add_library(axiom_optimizer_tests_tpch_queries TpchQueries.cpp)
+
 add_executable(axiom_optimizer_tpch_plan_test TpchPlanTest.cpp)
 
 add_test(
@@ -80,6 +82,7 @@ target_link_libraries(
   axiom_optimizer_tpch_plan_test
   velox_dwio_common_test_utils
   axiom_optimizer_tests_tpch_data_generator
+  axiom_optimizer_tests_tpch_queries
   axiom_optimizer_tests_query_test_base
   axiom_optimizer_tests_hive_queries_test_base
   axiom_runner_tests_utils
