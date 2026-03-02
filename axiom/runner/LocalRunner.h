@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/coro/AsyncScope.h>
+
 #include "axiom/connectors/ConnectorSplitManager.h"
 #include "axiom/runner/MultiFragmentPlan.h"
 #include "axiom/runner/Runner.h"
@@ -85,6 +87,11 @@ class LocalRunner : public Runner,
       std::shared_ptr<SplitSourceFactory> splitSourceFactory =
           std::make_shared<ConnectorSplitSourceFactory>(),
       std::shared_ptr<velox::memory::MemoryPool> outputPool = nullptr);
+
+  ~LocalRunner() override;
+
+  LocalRunner(LocalRunner&&) = delete;
+  LocalRunner& operator=(LocalRunner&&) = delete;
 
   /// First call starts execution.
   velox::RowVectorPtr next() override;
@@ -168,6 +175,8 @@ class LocalRunner : public Runner,
   std::vector<std::vector<std::shared_ptr<velox::exec::Task>>> stages_;
   std::exception_ptr error_;
   std::shared_ptr<SplitSourceFactory> splitSourceFactory_;
+  folly::coro::AsyncScope splitScope_{/*throwOnJoin=*/true};
+  bool splitScopeJoined_{false};
 };
 
 } // namespace facebook::axiom::runner

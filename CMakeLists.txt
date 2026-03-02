@@ -95,6 +95,15 @@ if(COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
   string(APPEND CMAKE_CXX_FLAGS " -Wno-nullability-completeness")
 endif()
 
+check_cxx_compiler_flag("-fcoroutines" COMPILER_HAS_F_COROUTINES)
+if(COMPILER_HAS_F_COROUTINES)
+  string(APPEND CMAKE_CXX_FLAGS " -fcoroutines")
+  # Explicitly enable folly coroutines when compiler supports them.
+  # This is required for folly::coro::AsyncGenerator to work correctly.
+  # Use CMAKE_CXX_FLAGS to ensure it propagates to all subdirectories including velox.
+  string(APPEND CMAKE_CXX_FLAGS " -DFOLLY_HAS_COROUTINES=1")
+endif()
+
 # Axiom, Velox and folly need to be compiled with the same compiler flags.
 execute_process(
   COMMAND
