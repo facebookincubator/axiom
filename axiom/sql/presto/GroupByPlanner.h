@@ -26,6 +26,20 @@ namespace axiom::sql::presto {
 
 namespace lp = facebook::axiom::logical_plan;
 
+using AggregateOptionsMap = std::unordered_map<
+    const facebook::velox::core::IExpr*,
+    lp::PlanBuilder::AggregateOptions>;
+
+/// Aggregate expression paired with its options pointer.
+struct AggregateWithOptions {
+  /// The aggregation expression.
+  lp::ExprApi expr;
+  /// The execution options of the aggregation. If this aggregation expression
+  /// has the default options, i.e., no distinct, filter, or orderBy, this is
+  /// nullptr.
+  const lp::PlanBuilder::AggregateOptions* options;
+};
+
 /// Plans GROUP BY, ROLLUP, CUBE, and GROUPING SETS clauses. Constructed
 /// per-query to hold intermediate state during aggregation planning.
 class GroupByPlanner {
@@ -49,21 +63,15 @@ class GroupByPlanner {
       const ExpressionPtr& having) &&;
 
  private:
-  using AggregateOptionsMap = std::unordered_map<
-      const facebook::velox::core::IExpr*,
-      lp::PlanBuilder::AggregateOptions>;
-
   std::vector<std::vector<lp::ExprApi>> expandGroupingSets(
       const std::vector<GroupingElementPtr>& groupingElements,
       const std::vector<SelectItemPtr>& selectItems);
   void deduplicateGroupingKeys();
-  AggregateOptionsMap collectAggregates(
+  void collectAggregates(
       const std::vector<SelectItemPtr>& selectItems,
       const ExpressionPtr& having,
       const OrderByPtr& orderBy);
-  void addAggregate(
-      const AggregateOptionsMap& aggregateOptionsMap,
-      bool useGroupingSets);
+  void addAggregate(bool useGroupingSets);
   void rewritePostAggregateExprs();
   std::vector<size_t> resolveSortOrdinals(const OrderByPtr& orderBy);
   bool isIdentityProjection() const;
@@ -92,7 +100,14 @@ class GroupByPlanner {
   std::vector<lp::ExprApi> groupingKeys_;
   std::vector<std::vector<int32_t>> groupingSetsIndices_;
   std::vector<lp::ExprApi> projections_;
-  std::vector<lp::ExprApi> aggregates_;
+
+  // Stores aggregate expressions with their options after deduplication.
+  std::vector<AggregateWithOptions> aggregates_;
+
+  // Maps each Expr* to its aggregate options. Populated by collectAggregates().
+  // Must outlive aggregates_ since aggregates_ holds pointers into this map.
+  AggregateOptionsMap aggregateOptionsMap_;
+
   std::optional<lp::ExprApi> filter_;
   std::vector<lp::SortKey> sortingKeys_;
   std::vector<std::string> outputNames_;

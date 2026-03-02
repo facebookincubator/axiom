@@ -19,9 +19,49 @@
 #include <vector>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/NameMappings.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/type/TypeCoercer.h"
 
 namespace facebook::axiom::logical_plan {
+
+size_t PlanBuilder::AggregateOptions::hash() const {
+  using facebook::velox::bits::hashMix;
+
+  size_t result = std::hash<bool>{}(distinct);
+  if (filter) {
+    result = hashMix(result, filter->hash());
+  }
+  for (const auto& key : orderBy) {
+    result = hashMix(result, key.expr.expr()->hash());
+    result = hashMix(result, key.ascending);
+    result = hashMix(result, key.nullsFirst);
+  }
+  return result;
+}
+
+bool PlanBuilder::AggregateOptions::operator==(
+    const AggregateOptions& other) const {
+  if (distinct != other.distinct) {
+    return false;
+  }
+  if (static_cast<bool>(filter) != static_cast<bool>(other.filter)) {
+    return false;
+  }
+  if (filter && (*filter != *other.filter)) {
+    return false;
+  }
+  if (orderBy.size() != other.orderBy.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < orderBy.size(); ++i) {
+    if (*orderBy[i].expr.expr() != *other.orderBy[i].expr.expr() ||
+        orderBy[i].ascending != other.orderBy[i].ascending ||
+        orderBy[i].nullsFirst != other.orderBy[i].nullsFirst) {
+      return false;
+    }
+  }
+  return true;
+}
 
 PlanBuilder& PlanBuilder::values(
     const velox::RowTypePtr& rowType,
