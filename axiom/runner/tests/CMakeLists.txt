@@ -37,6 +37,7 @@ target_link_libraries(
   velox_file_test_utils
   velox_hive_connector
   velox_tpch_connector
+  Folly::folly
 )
 
 add_executable(axiom_runner_local_runner_test LocalRunnerTest.cpp Main.cpp)
@@ -49,6 +50,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_parse_parser
   velox_parse_expression
+  Folly::folly
   GTest::gtest
 )
 
@@ -59,6 +61,7 @@ target_link_libraries(
   axiom_runner_local_runner
   velox_hive_connector
   velox_exec_test_lib
+  Folly::folly
 )
 
 add_executable(
@@ -74,5 +77,6 @@ target_link_libraries(
   axiom_runner_presto_query_replay_runner_test_utils
   velox_exec_test_lib
   velox_exec
+  Folly::folly
   GTest::gtest
 )

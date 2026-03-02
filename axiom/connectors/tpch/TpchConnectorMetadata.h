@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/experimental/coro/AsyncGenerator.h>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/connectors/tpch/TpchConnector.h"
@@ -39,16 +40,13 @@ class TpchSplitSource : public SplitSource {
         scaleFactor_(scaleFactor),
         connectorId_(connectorId) {}
 
-  std::vector<SplitSource::SplitAndGroup> getSplits(
-      uint64_t targetBytes) override;
+  folly::coro::AsyncGenerator<SplitAndGroup> getSplitGenerator() override;
 
  private:
   const SplitOptions options_;
   const velox::tpch::Table table_;
   const double scaleFactor_;
   const std::string connectorId_;
-  std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits_;
-  size_t currentSplit_{0};
 };
 
 class TpchSplitManager : public ConnectorSplitManager {
