@@ -264,13 +264,19 @@ class ToGraph {
       const logical_plan::ExprPtr& condition,
       logical_plan::JoinType originalJoinType);
 
-  // Eliminates join when the ON clause contains a constant false condition.
+  // Translates the join condition into conjuncts and checks if any conjunct is
+  // constant false. If so, eliminates the join based on join type:
+  // - Inner join: replaces with an empty ValuesTable
+  // - Left join: removes right side and projects NULLs
+  // - Right join: removes left side and projects NULLs
+  // - Full join: creates a UNION ALL of left (with NULLs for right) and right
+  //   (with NULLs for left)
   // Returns true if the join was eliminated.
-  bool eliminateJoinOnConstantFalse(
+  bool tryEliminateOnConstantFalse(
+      const logical_plan::ExprPtr& condition,
       logical_plan::JoinType joinType,
       const logical_plan::LogicalPlanNodePtr& left,
-      const logical_plan::LogicalPlanNodePtr& right,
-      PlanObjectCP rightTable);
+      const logical_plan::LogicalPlanNodePtr& right);
 
   // For LEFT JOIN with subquery conjuncts in the ON clause, processes the right
   // side inside a container DT and applies the subquery conjuncts as filters.
@@ -369,6 +375,12 @@ class ToGraph {
       ValuesTable::Data data);
 
   void makeEmptyValuesTable(const logical_plan::LogicalPlanNode& node);
+
+  // Creates an empty ValuesTable with the combined output schema of 'left' and
+  // 'right' nodes. Used for JOIN with constant false condition.
+  void makeEmptyValuesTable(
+      const logical_plan::LogicalPlanNode& left,
+      const logical_plan::LogicalPlanNode& right);
 
   // Adds 'node' and descendants to query graph wrapped inside a
   // DerivedTable. Done for joins to the right of non-inner joins,
