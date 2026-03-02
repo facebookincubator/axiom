@@ -476,5 +476,13 @@ them today). Contributions to close these gaps are welcome.
   narrows the scope to only the SELECT list columns. Referencing a FROM
   column not in SELECT will fail with "Cannot resolve column".
 
+- **ORDER BY cannot reference un-aliased expressions in SELECT.**
+  In standard SQL, `SELECT a + b FROM t ORDER BY a + b` is valid — ORDER BY
+  can reference expressions that also appear in the SELECT list even if these
+  columns are not projected outside of the expression. Axiom currently only
+  propagates projected columns to ORDER BY, not expressions, so this query
+  will fail with "Cannot resolve column" if "a" and "b" are not projected
+  outside of the expression. Expressions are aliased as "expr_0", etc.
+
 [SLL]: https://www.antlr.org/api/Java/org/antlr/v4/runtime/atn/PredictionMode.html "SLL — Simple LL. A faster but less powerful prediction mode that ignores the parser call stack (full context). Falls back to LL on ambiguity."
 [LL]: https://en.wikipedia.org/wiki/LL_parser "LL — a top-down parsing strategy that reads input Left-to-right and produces a Leftmost derivation"
