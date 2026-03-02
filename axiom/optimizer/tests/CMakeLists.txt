@@ -25,6 +25,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_dwio_parquet_reader
   velox_dwio_native_parquet_reader
+  Folly::folly
   gtest
   gtest_main
 )
@@ -40,6 +41,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_dwio_parquet_reader
   velox_dwio_native_parquet_reader
+  Folly::folly
   gtest
   gtest_main
 )
@@ -66,6 +68,7 @@ target_link_libraries(
   axiom_sql_presto_parser
   axiom_runner_multifragment_plan
   axiom_runner_tests_utils
+  Folly::folly
 )
 
 add_library(axiom_optimizer_tests_tpch_queries TpchQueries.cpp)
@@ -86,6 +89,7 @@ target_link_libraries(
   axiom_optimizer_tests_query_test_base
   axiom_optimizer_tests_hive_queries_test_base
   axiom_runner_tests_utils
+  Folly::folly
 )
 
 add_executable(
@@ -137,6 +141,7 @@ target_link_libraries(
   axiom_test_connector
   velox_dwio_text_reader_register
   velox_dwio_text_writer_register
+  Folly::folly
   GTest::gmock
   glog::glog
   GTest::gtest
