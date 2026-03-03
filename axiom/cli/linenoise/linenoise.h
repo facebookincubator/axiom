@@ -81,6 +81,11 @@ struct linenoiseState {
   size_t cols; /* Number of columns in terminal. */
   size_t oldrows; /* Rows used by last refrehsed line (multiline mode) */
   int history_index; /* The history index we are currently editing. */
+  int in_reverse_search; /* 1 if in Ctrl+R search mode */
+  char search_buf[256]; /* Search query being typed */
+  size_t search_len; /* Length of search query */
+  int search_match_index; /* History index of current match, -1 = none */
+  size_t search_match_pos; /* Position within matched line where query starts */
 };
 
 typedef struct linenoiseCompletions {

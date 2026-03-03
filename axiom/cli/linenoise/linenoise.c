@@ -160,6 +160,7 @@ enum KEY_ACTION {
   CTRL_D = 4, /* Ctrl-d */
   CTRL_E = 5, /* Ctrl-e */
   CTRL_F = 6, /* Ctrl-f */
+  CTRL_G = 7, /* Ctrl-g */
   CTRL_H = 8, /* Ctrl-h */
   TAB = 9, /* Tab */
   CTRL_K = 11, /* Ctrl+k */
@@ -167,6 +168,7 @@ enum KEY_ACTION {
   ENTER = 13, /* Enter */
   CTRL_N = 14, /* Ctrl-n */
   CTRL_P = 16, /* Ctrl-p */
+  CTRL_R = 18, /* Ctrl-r */
   CTRL_T = 20, /* Ctrl-t */
   CTRL_U = 21, /* Ctrl+u */
   CTRL_W = 23, /* Ctrl+w */
@@ -897,6 +899,198 @@ void linenoiseEditDeletePrevWord(struct linenoiseState* l) {
   refreshLine(l);
 }
 
+/* ========================= Reverse search (Ctrl+R) ======================== */
+
+/* Search backward through history for a substring match starting from
+ * 'start_index'. Returns the history index of the match, or -1 if none.
+ * Also sets *match_pos to the position within the matched line. */
+static int linenoiseReverseSearchHistory(
+    struct linenoiseState* l,
+    const char* query,
+    size_t query_len,
+    int start_index,
+    size_t* match_pos) {
+  int i;
+  if (query_len == 0 || history_len == 0) {
+    return -1;
+  }
+
+  for (i = start_index; i >= 0; i--) {
+    const char* line = history[i];
+    if (line == NULL) {
+      continue;
+    }
+    const char* found = strstr(line, query);
+    if (found != NULL) {
+      *match_pos = (size_t)(found - line);
+      return i;
+    }
+  }
+  return -1;
+}
+
+/* Render the reverse search UI. Shows either:
+ *   (reverse-i-search)'query': matched_line
+ * or:
+ *   (failed reverse-i-search)'query':
+ * The cursor is positioned at the match location within the matched line. */
+static void refreshLineReverseSearch(struct linenoiseState* l) {
+  struct abuf ab;
+  char seq[64];
+  const char* prefix;
+  int prefix_len;
+  size_t cursor_col;
+
+  if (l->search_match_index >= 0) {
+    prefix = "(reverse-i-search)'";
+  } else {
+    prefix = "(failed reverse-i-search)'";
+  }
+  prefix_len = (int)strlen(prefix);
+
+  abInit(&ab);
+
+  /* Move cursor to left edge and clear line */
+  abAppend(&ab, "\r", 1);
+  snprintf(seq, sizeof(seq), "\x1b[0K");
+  abAppend(&ab, seq, (int)strlen(seq));
+
+  /* Write search prefix */
+  abAppend(&ab, prefix, prefix_len);
+
+  /* Write search query */
+  abAppend(&ab, l->search_buf, (int)l->search_len);
+
+  /* Write separator */
+  abAppend(&ab, "': ", 3);
+
+  /* Write matched line if any */
+  if (l->search_match_index >= 0 && history[l->search_match_index] != NULL) {
+    const char* matched_line = history[l->search_match_index];
+    int matched_len = (int)strlen(matched_line);
+    int available = 0;
+    if (l->cols > (size_t)(prefix_len + (int)l->search_len + 3)) {
+      available = (int)(l->cols - prefix_len - l->search_len - 3);
+    }
+    if (matched_len > available) {
+      matched_len = available;
+    }
+    abAppend(&ab, matched_line, matched_len);
+    /* Position cursor at the match location */
+    cursor_col = prefix_len + l->search_len + 3 + l->search_match_pos;
+    if (cursor_col >= l->cols) {
+      cursor_col = l->cols - 1;
+    }
+  } else {
+    cursor_col = prefix_len + l->search_len + 3;
+  }
+
+  /* Move cursor to the match position */
+  snprintf(seq, sizeof(seq), "\r\x1b[%dC", (int)cursor_col);
+  abAppend(&ab, seq, (int)strlen(seq));
+
+  if (write(l->ofd, ab.b, ab.len) == -1) {
+  } /* Can't recover from write error. */
+  abFree(&ab);
+}
+
+/* Handle a keypress while in reverse search mode.
+ * Returns:
+ *   0  - key consumed, continue searching
+ *   1  - accept current match (c contains the triggering key)
+ *  -1  - cancel search */
+static int linenoiseReverseSearchFeed(struct linenoiseState* l, char c) {
+  switch (c) {
+    case CTRL_R:
+      /* Cycle to the next older match */
+      if (l->search_match_index > 0 && l->search_len > 0) {
+        size_t match_pos;
+        int idx = linenoiseReverseSearchHistory(
+            l,
+            l->search_buf,
+            l->search_len,
+            l->search_match_index - 1,
+            &match_pos);
+        if (idx >= 0) {
+          l->search_match_index = idx;
+          l->search_match_pos = match_pos;
+        } else {
+          linenoiseBeep();
+        }
+      } else {
+        linenoiseBeep();
+      }
+      refreshLineReverseSearch(l);
+      return 0;
+
+    case BACKSPACE:
+    case CTRL_H:
+      /* Remove last character from search query */
+      if (l->search_len > 0) {
+        l->search_len--;
+        l->search_buf[l->search_len] = '\0';
+        if (l->search_len > 0) {
+          /* Re-search from the end of history */
+          size_t match_pos;
+          int idx = linenoiseReverseSearchHistory(
+              l, l->search_buf, l->search_len, history_len - 1, &match_pos);
+          if (idx >= 0) {
+            l->search_match_index = idx;
+            l->search_match_pos = match_pos;
+          } else {
+            l->search_match_index = -1;
+            l->search_match_pos = 0;
+          }
+        } else {
+          l->search_match_index = -1;
+          l->search_match_pos = 0;
+        }
+      }
+      refreshLineReverseSearch(l);
+      return 0;
+
+    case ENTER:
+      /* Accept the match and submit */
+      return 1;
+
+    case ESC:
+    case CTRL_G:
+    case CTRL_C:
+      /* Cancel search */
+      return -1;
+
+    default:
+      if (c >= 32) {
+        /* Printable character: append to search query */
+        if (l->search_len < sizeof(l->search_buf) - 1) {
+          l->search_buf[l->search_len] = c;
+          l->search_len++;
+          l->search_buf[l->search_len] = '\0';
+
+          /* Search backward for the new query */
+          size_t match_pos;
+          int start = (l->search_match_index >= 0) ? l->search_match_index
+                                                   : history_len - 1;
+          int idx = linenoiseReverseSearchHistory(
+              l, l->search_buf, l->search_len, start, &match_pos);
+          if (idx >= 0) {
+            l->search_match_index = idx;
+            l->search_match_pos = match_pos;
+          } else {
+            l->search_match_index = -1;
+            l->search_match_pos = 0;
+            linenoiseBeep();
+          }
+        }
+        refreshLineReverseSearch(l);
+        return 0;
+      }
+      /* Non-printable, non-handled key: accept match and let caller
+       * re-process */
+      return 1;
+  }
+}
+
 /* This function is part of the multiplexed API of Linenoise, that is used
  * in order to implement the blocking variant of the API but can also be
  * called by the user directly in an event driven program. It will:
@@ -947,6 +1141,13 @@ int linenoiseEditStart(
   l->cols = getColumns(stdin_fd, stdout_fd);
   l->oldrows = 0;
   l->history_index = 0;
+
+  /* Initialize reverse search state. */
+  l->in_reverse_search = 0;
+  l->search_buf[0] = '\0';
+  l->search_len = 0;
+  l->search_match_index = -1;
+  l->search_match_pos = 0;
 
   /* Buffer starts empty. */
   l->buf[0] = '\0';
@@ -1001,6 +1202,36 @@ char* linenoiseEditFeed(struct linenoiseState* l) {
   nread = read(l->ifd, &c, 1);
   if (nread <= 0)
     return NULL;
+
+  /* Handle reverse search mode. */
+  if (l->in_reverse_search) {
+    int result = linenoiseReverseSearchFeed(l, c);
+    if (result == 0) {
+      /* Key consumed by search, continue. */
+      return linenoiseEditMore;
+    } else if (result == 1) {
+      /* Accept match: copy matched history line into edit buffer. */
+      l->in_reverse_search = 0;
+      if (l->search_match_index >= 0 &&
+          history[l->search_match_index] != NULL) {
+        strncpy(l->buf, history[l->search_match_index], l->buflen);
+        l->buf[l->buflen - 1] = '\0';
+        l->len = l->pos = strlen(l->buf);
+      }
+      /* Restore the normal prompt display. */
+      refreshLine(l);
+      if (c == ENTER) {
+        /* Fall through to normal ENTER handling below. */
+      } else {
+        return linenoiseEditMore;
+      }
+    } else {
+      /* Cancel: restore normal display. */
+      l->in_reverse_search = 0;
+      refreshLine(l);
+      return linenoiseEditMore;
+    }
+  }
 
   /* Only autocomplete when the callback is set. It returns < 0 when
    * there was an error reading from fd. Otherwise it will return the
@@ -1127,6 +1358,14 @@ char* linenoiseEditFeed(struct linenoiseState* l) {
             break;
         }
       }
+      break;
+    case CTRL_R: /* ctrl-r, reverse search */
+      l->in_reverse_search = 1;
+      l->search_buf[0] = '\0';
+      l->search_len = 0;
+      l->search_match_index = -1;
+      l->search_match_pos = 0;
+      refreshLineReverseSearch(l);
       break;
     default:
       if (linenoiseEditInsert(l, c))
