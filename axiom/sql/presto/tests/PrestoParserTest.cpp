@@ -466,6 +466,65 @@ TEST_F(PrestoParserTest, orderBy) {
   }
 }
 
+TEST_F(PrestoParserTest, orderByExpression) {
+  // Expression in both SELECT and ORDER BY.
+  {
+    auto matcher = matchValues().project().project().sort().output();
+
+    testSelect(
+        "SELECT a + b FROM ( VALUES (1, 2) ) t(a, b) ORDER BY a + b", matcher);
+  }
+
+  // Expression with constant.
+  {
+    auto matcher = matchValues().project().project().sort().output();
+
+    testSelect("SELECT a + 1 FROM ( VALUES (1) ) t(a) ORDER BY a + 1", matcher);
+  }
+
+  // Multiple expressions in SELECT, ORDER BY on one of them.
+  {
+    auto matcher = matchValues().project().project().sort().output();
+
+    testSelect(
+        "SELECT a + b, a - b FROM ( VALUES (1, 2) ) t(a, b) ORDER BY a + b",
+        matcher);
+  }
+
+  // Nested subquery with aliased expression.
+  {
+    auto matcher = matchValues().project().project().project().sort().output();
+
+    testSelect(
+        "SELECT x FROM (SELECT a + b AS x FROM ( VALUES (1, 2) ) t(a, b)) ORDER BY x",
+        matcher);
+  }
+
+  // Simple column ORDER BY (regression check).
+  {
+    auto matcher = matchScan().project().sort().output();
+
+    testSelect("SELECT n_regionkey FROM nation ORDER BY n_regionkey", matcher);
+  }
+
+  // Ordinal ORDER BY with expression in SELECT (regression check).
+  {
+    auto matcher = matchValues().project().project().sort().output();
+
+    testSelect(
+        "SELECT a + b FROM ( VALUES (1, 2) ) t(a, b) ORDER BY 1", matcher);
+  }
+
+  // DISTINCT with expression in both SELECT and ORDER BY.
+  {
+    auto matcher = matchValues().project().project().distinct().sort().output();
+
+    testSelect(
+        "SELECT DISTINCT a + b FROM ( VALUES (1, 2) ) t(a, b) ORDER BY a + b",
+        matcher);
+  }
+}
+
 TEST_F(PrestoParserTest, join) {
   {
     auto matcher = matchScan()
