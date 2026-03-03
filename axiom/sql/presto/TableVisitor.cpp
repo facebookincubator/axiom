@@ -97,6 +97,14 @@ void TableVisitor::visitDropMaterializedView(DropMaterializedView* node) {
 std::string TableVisitor::constructTableName(const QualifiedName& name) const {
   const auto& parts = name.parts();
   VELOX_CHECK(!parts.empty(), "Table name cannot be empty");
+  // TODO: This limits table names to at most 3 dot-separated components
+  // (catalog.schema.table). Connectors with multi-dot paths (e.g., XDB tier
+  // paths like "ephemeralxdb.on_demand.ftw.784.tasks") require double-quoting
+  // at the SQL layer to collapse them into a single identifier. However, the
+  // resulting dot-joined string loses identifier boundaries downstream. To
+  // fully support multi-dot paths in SQL, this function and toConnectorTable()
+  // in PrestoParser.cpp need to propagate QualifiedName parts instead of a
+  // flat dot-joined string.
   VELOX_CHECK_LE(
       parts.size(),
       3,
