@@ -112,6 +112,18 @@ SQL> explain select count(*) from nation;
 Use `explain analyze` to execute the query and print the plan annotated with
 runtime statistics.
 
+## Query History
+
+The CLI persists query history across sessions. Previous commands are available
+via the up/down arrow keys even after restarting the CLI.
+
+- History is stored in `~/.axiom_cli.history`.
+- History is saved after each command (not just on exit) to survive crashes
+  during long-running queries.
+- Up to 1024 entries are retained.
+- If `HOME` is unset, history silently degrades to in-memory only (no
+  persistence).
+
 ## Interactive Commands
 
 | Command | Description |

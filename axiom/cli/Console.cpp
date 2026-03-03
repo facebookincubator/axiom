@@ -17,6 +17,7 @@
 #include "axiom/cli/Console.h"
 #include <folly/FileUtil.h>
 #include <iostream>
+#include <optional>
 #include "axiom/cli/ResultPrinter.h"
 #include "axiom/cli/StdinReader.h"
 #include "axiom/cli/Timing.h"
@@ -52,6 +53,18 @@ DEFINE_string(
 DEFINE_bool(debug, false, "Enable debug mode");
 
 using namespace facebook::velox;
+
+namespace {
+// Returns the path to the persistent history file, or std::nullopt if HOME is
+// unset.
+std::optional<std::string> getHistoryFilePath() {
+  const char* home = getenv("HOME");
+  if (home == nullptr) {
+    return std::nullopt;
+  }
+  return std::string(home) + "/.axiom_cli.history";
+}
+} // namespace
 
 namespace axiom::sql {
 
@@ -134,6 +147,11 @@ void Console::readCommands(const std::string& prompt) {
   linenoiseSetMultiLine(1);
   linenoiseHistorySetMaxLen(1024);
 
+  auto historyFile = getHistoryFilePath();
+  if (historyFile.has_value()) {
+    linenoiseHistoryLoad(historyFile->c_str());
+  }
+
   std::set<std::string> modifiedFlags;
 
   for (;;) {
@@ -145,6 +163,11 @@ void Console::readCommands(const std::string& prompt) {
 
     if (command.empty()) {
       continue;
+    }
+
+    // Save history after each command is added.
+    if (historyFile.has_value()) {
+      linenoiseHistorySave(historyFile->c_str());
     }
 
     if (command.starts_with("exit") || command.starts_with("quit")) {
