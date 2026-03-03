@@ -61,6 +61,14 @@ TEST_F(TableExtractorTest, select) {
   testInput("SELECT * FROM catalog.schema.table1", "catalog.schema.table1");
 }
 
+TEST_F(TableExtractorTest, quotedMultiDotTableName) {
+  // Double-quoted identifiers preserve multi-dot XDB tier paths as a single
+  // component, preventing the parser from splitting them into separate parts.
+  testInput(
+      R"(SELECT * FROM xdb."ephemeralxdb.on_demand_rocksdb.ftw.784.tasks")",
+      "foo.xdb.ephemeralxdb.on_demand_rocksdb.ftw.784.tasks");
+}
+
 TEST_F(TableExtractorTest, joins) {
   testInputs(
       "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id",
