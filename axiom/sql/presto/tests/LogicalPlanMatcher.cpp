@@ -492,6 +492,38 @@ class OutputNamesMatcher : public LogicalPlanMatcherImpl<OutputNode> {
 #undef AXIOM_RETURN_IF_FAILURE
 #undef AXIOM_RETURN_RESULT
 
+class SortMatcher : public LogicalPlanMatcherImpl<SortNode> {
+ public:
+  SortMatcher(
+      const std::shared_ptr<LogicalPlanMatcher>& inputMatcher,
+      std::vector<std::string> ordering,
+      std::function<void(const LogicalPlanNodePtr&)> onMatch)
+      : LogicalPlanMatcherImpl<SortNode>(inputMatcher, std::move(onMatch)),
+        ordering_{std::move(ordering)} {}
+
+ private:
+  MatchResult matchDetails(
+      const SortNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    const auto& actualOrdering = plan.ordering();
+    EXPECT_EQ(actualOrdering.size(), ordering_.size());
+    if (::testing::Test::HasNonfatalFailure()) {
+      return MatchResult::failure();
+    }
+
+    for (size_t i = 0; i < ordering_.size(); ++i) {
+      EXPECT_EQ(actualOrdering[i].expression->toString(), ordering_[i]);
+      if (::testing::Test::HasNonfatalFailure()) {
+        return MatchResult::failure();
+      }
+    }
+
+    return MatchResult::success(symbols);
+  }
+
+  const std::vector<std::string> ordering_;
+};
 } // namespace
 
 LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::tableWrite(
@@ -653,6 +685,15 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::limit(
     int64_t count) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<LimitMatcher>(matcher_, offset, count);
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::sort(
+    const std::vector<std::string>& ordering,
+    OnMatchCallback onMatch) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<SortMatcher>(matcher_, ordering, std::move(onMatch));
   return *this;
 }
 

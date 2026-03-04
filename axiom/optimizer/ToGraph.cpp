@@ -3455,25 +3455,37 @@ void ToGraph::makeProjectQueryGraph(
 
   // Check if this project contains window expressions and apply DT
   // boundary rules.
-  bool windowHasPartitionOrOrderKeys = false;
   for (const auto& expr : project.expressions()) {
     if (expr->isWindow()) {
-      const auto* window = expr->as<lp::WindowExpr>();
-      if (!window->partitionKeys().empty() || !window->ordering().empty()) {
-        windowHasPartitionOrOrderKeys = true;
-      }
     }
   }
 
   if (hasWindow) {
     if (currentDt_->hasLimit() || windowReferencesWindow(project)) {
       finalizeDt(*project.onlyInput());
-    } else if (currentDt_->hasOrderBy() && windowHasPartitionOrOrderKeys) {
-      currentDt_->dropOrderBy();
     }
   }
 
   addProjection(project);
+
+  // Drop redundant ORDER BY when all window functions already sort by the same
+  // keys.
+  if (hasWindow && currentDt_->hasOrderBy() && currentDt_->windowPlan) {
+    bool allMatch = true;
+    bool hasAny = false;
+    for (const auto* windowFunc : currentDt_->windowPlan->functions()) {
+      hasAny = true;
+      if (!windowFunc->partitionKeys().empty() ||
+          windowFunc->orderKeys() != currentDt_->orderKeys ||
+          windowFunc->orderTypes() != currentDt_->orderTypes) {
+        allMatch = false;
+        break;
+      }
+    }
+    if (hasAny && allMatch) {
+      currentDt_->dropOrderBy();
+    }
+  }
 }
 
 void ToGraph::makeQueryGraph(

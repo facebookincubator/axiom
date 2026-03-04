@@ -196,6 +196,10 @@ class LogicalPlanMatcherBuilder {
   /// Matches a LimitNode with the specified offset and count.
   LogicalPlanMatcherBuilder& limit(int64_t offset, int64_t count);
 
+  LogicalPlanMatcherBuilder& sort(
+      const std::vector<std::string>& ordering,
+      OnMatchCallback onMatch = nullptr);
+
   /// Matches a SampleNode.
   LogicalPlanMatcherBuilder& sample(OnMatchCallback onMatch = nullptr);
 
