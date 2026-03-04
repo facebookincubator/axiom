@@ -39,6 +39,10 @@ namespace {
 using namespace facebook::velox;
 namespace lp = facebook::axiom::logical_plan;
 
+template <typename V>
+using ExprMap =
+    folly::F14FastMap<core::ExprPtr, V, core::IExprHash, core::IExprEqual>;
+
 class ErrorListener : public antlr4::BaseErrorListener {
  public:
   void syntaxError(
@@ -215,6 +219,17 @@ bool hasWindowFunction(const ExpressionPtr& expr) {
   return finder.hasWindowFunction();
 }
 
+bool hasAnyWindowFunction(const std::vector<SelectItemPtr>& selectItems) {
+  for (const auto& item : selectItems) {
+    if (item->is(NodeType::kSingleColumn)) {
+      if (hasWindowFunction(item->as<SingleColumn>()->expression())) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Returns true if any select item has a window function nested inside an
 // expression (e.g., sum(b) OVER (...) * 2). Top-level window functions
 // (e.g., sum(b) OVER (...) AS s) are handled directly by PlanBuilder and
@@ -261,6 +276,27 @@ core::ExprPtr replaceInputs(
     const core::ExprPtr& expr,
     const std::unordered_map<const core::IExpr*, core::ExprPtr>& replacements) {
   auto it = replacements.find(expr.get());
+  if (it != replacements.end()) {
+    return it->second;
+  }
+
+  std::vector<core::ExprPtr> newInputs;
+  bool changed = false;
+  for (const auto& input : expr->inputs()) {
+    auto newInput = replaceInputs(input, replacements);
+    if (newInput.get() != input.get()) {
+      changed = true;
+    }
+    newInputs.push_back(std::move(newInput));
+  }
+
+  return changed ? expr->replaceInputs(std::move(newInputs)) : expr;
+}
+
+core::ExprPtr replaceInputs(
+    const core::ExprPtr& expr,
+    const ExprMap<core::ExprPtr>& replacements) {
+  auto it = replacements.find(expr);
   if (it != replacements.end()) {
     return it->second;
   }
@@ -644,15 +680,16 @@ class RelationPlanner : public AstVisitor {
     return replacements;
   }
 
-  void addProject(const std::vector<SelectItemPtr>& selectItems) {
-    // SELECT * FROM ...
-    const bool isSingleSelectStar = selectItems.size() == 1 &&
-        selectItems.at(0)->is(NodeType::kAllColumns) &&
-        selectItems.at(0)->as<AllColumns>()->prefix() == nullptr;
-    if (isSingleSelectStar) {
-      builder_->dropHiddenColumns();
-      return;
-    }
+  // Processes SELECT items into projection expressions and an alias map.
+  // The alias map maps alias column references to their underlying expressions
+  // for ORDER BY resolution.
+  using ExprCache = folly::F14FastMap<const Expression*, lp::ExprApi>;
+
+  std::tuple<std::vector<lp::ExprApi>, ExprMap<core::ExprPtr>, ExprCache>
+  buildSelectExpressions(const std::vector<SelectItemPtr>& selectItems) {
+    std::vector<lp::ExprApi> projections;
+    ExprMap<core::ExprPtr> aliasMap;
+    ExprCache exprCache;
 
     const bool hasNestedWindow = hasNestedWindowFunction(selectItems);
 
@@ -662,7 +699,6 @@ class RelationPlanner : public AstVisitor {
     // to how GroupByPlanner handles aggregates in expressions.
     std::unordered_map<const core::IExpr*, lp::WindowSpec> windowOptions;
 
-    std::vector<lp::ExprApi> exprs;
     for (const auto& item : selectItems) {
       if (item->is(NodeType::kAllColumns)) {
         auto* allColumns = item->as<AllColumns>();
@@ -675,15 +711,14 @@ class RelationPlanner : public AstVisitor {
               /*includeHiddenColumns=*/false, prefix);
 
           for (const auto& name : columnNames) {
-            exprs.push_back(lp::Col(name, lp::Col(prefix)));
+            projections.push_back(lp::Col(name, lp::Col(prefix)));
           }
         } else {
-          // SELECT *
           columnNames =
               builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
 
           for (const auto& name : columnNames) {
-            exprs.push_back(lp::Col(name));
+            projections.push_back(lp::Col(name));
           }
         }
       } else {
@@ -695,23 +730,38 @@ class RelationPlanner : public AstVisitor {
             /*aggregateOptions=*/nullptr,
             hasNestedWindow ? &windowOptions : nullptr);
 
+        exprCache.emplace(singleColumn->expression().get(), expr);
+
         if (singleColumn->alias() != nullptr) {
           auto alias = canonicalizeIdentifier(*singleColumn->alias());
+          aliasMap.emplace(lp::Col(alias).expr(), expr.expr());
           expr = expr.as(alias);
         }
-        exprs.push_back(expr);
+
+        projections.push_back(expr);
       }
     }
 
     if (hasNestedWindow) {
-      auto replacements = addWindowProjection(windowOptions, exprs);
-      for (auto& expr : exprs) {
+      auto replacements = addWindowProjection(windowOptions, projections);
+      for (auto& expr : projections) {
         expr =
             lp::ExprApi(replaceInputs(expr.expr(), replacements), expr.alias());
       }
     }
 
-    builder_->project(exprs);
+    return {std::move(projections), std::move(aliasMap), std::move(exprCache)};
+  }
+
+  void addProject(
+      const std::vector<lp::ExprApi>& projections,
+      const bool isStarSelect) {
+    // SELECT * FROM ... — no projection needed, just drop hidden columns.
+    if (isStarSelect) {
+      builder_->dropHiddenColumns();
+    } else {
+      builder_->project(projections);
+    }
   }
 
   lp::ExprApi toSortingKey(const ExpressionPtr& expr) {
@@ -725,16 +775,52 @@ class RelationPlanner : public AstVisitor {
     return toExpr(expr);
   }
 
-  void addOrderBy(const OrderByPtr& orderBy) {
+  // Adds a sort node to the plan builder based on a specified ORDER BY clause.
+  // When projections are provided, ordinal references resolve against them.
+  // When an aliasMap is provided, resolves alias references in ORDER BY
+  // expressions.
+  void addOrderBy(
+      const OrderByPtr& orderBy,
+      const std::vector<lp::ExprApi>& projections = {},
+      const ExprMap<core::ExprPtr>& aliasMap = {},
+      const ExprCache& exprCache = {}) {
     if (orderBy == nullptr) {
       return;
     }
 
+    auto toSortKey = [&](const ExpressionPtr& sortKey) -> lp::ExprApi {
+      if (sortKey->is(NodeType::kLongLiteral)) {
+        const auto ordinal = sortKey->as<LongLiteral>()->value();
+        if (!projections.empty()) {
+          VELOX_CHECK_GE(ordinal, 1);
+          VELOX_CHECK_LE(
+              ordinal,
+              projections.size(),
+              "ORDER BY position {} is not in select list",
+              ordinal);
+          return projections.at(ordinal - 1);
+        }
+        return lp::Col(builder_->findOrAssignOutputNameAt(ordinal - 1));
+      }
+      if (!exprCache.empty()) {
+        auto it = exprCache.find(sortKey.get());
+        if (it != exprCache.end()) {
+          return it->second;
+        }
+      }
+      return toExpr(sortKey);
+    };
+
     std::vector<lp::SortKey> keys;
 
-    const auto& sortItems = orderBy->sortItems();
-    for (const auto& item : sortItems) {
-      auto expr = toSortingKey(item->sortKey());
+    for (const auto& item : orderBy->sortItems()) {
+      lp::ExprApi expr = toSortKey(item->sortKey());
+
+      if (!aliasMap.empty()) {
+        auto resolved = replaceInputs(expr.expr(), aliasMap);
+        expr = lp::ExprApi(resolved, expr.name());
+      }
+
       keys.emplace_back(expr, item->isAscending(), item->isNullsFirst());
     }
 
@@ -808,8 +894,11 @@ class RelationPlanner : public AstVisitor {
     // WHERE a > 1 -> builder.filter("a > 1")
     addFilter(node->where());
 
+    const bool isDistinct = node->select()->isDistinct();
     const auto& selectItems = node->select()->selectItems();
-    const bool distinct = node->select()->isDistinct();
+    const bool isStarSelect = selectItems.size() == 1 &&
+        selectItems.at(0)->is(NodeType::kAllColumns) &&
+        selectItems.at(0)->as<AllColumns>()->prefix() == nullptr;
 
     if (auto groupBy = node->groupBy()) {
       VELOX_USER_CHECK(
@@ -818,23 +907,29 @@ class RelationPlanner : public AstVisitor {
       GroupByPlanner{builder_, exprPlanner_}.plan(
           selectItems, groupBy->groupingElements(), node->having(), orderBy);
 
-      if (distinct) {
+      if (isDistinct) {
         builder_->distinct();
       }
     } else {
       if (GroupByPlanner{builder_, exprPlanner_}.tryPlanGlobalAgg(
               selectItems, node->having())) {
         // Nothing else to do.
+        if (isDistinct) {
+          builder_->distinct();
+        }
       } else {
-        // SELECT a, b -> builder.project({a, b})
-        addProject(selectItems);
-      }
+        auto [projections, aliasMap, exprCache] =
+            buildSelectExpressions(selectItems);
 
-      if (distinct) {
-        builder_->distinct();
+        if (isDistinct) {
+          addProject(projections, isStarSelect);
+          builder_->distinct();
+          addOrderBy(orderBy);
+        } else {
+          addOrderBy(orderBy, projections, aliasMap, exprCache);
+          addProject(projections, isStarSelect);
+        }
       }
-
-      addOrderBy(orderBy);
     }
   }
 

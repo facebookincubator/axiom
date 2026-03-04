@@ -469,7 +469,7 @@ TEST_F(PrestoParserTest, orderBy) {
 TEST_F(PrestoParserTest, orderByExpression) {
   // Expression in both SELECT and ORDER BY.
   {
-    auto matcher = matchValues().project().project().sort().output();
+    auto matcher = matchValues().project().sort().project().output();
 
     testSelect(
         "SELECT a + b FROM ( VALUES (1, 2) ) t(a, b) ORDER BY a + b", matcher);
@@ -477,14 +477,14 @@ TEST_F(PrestoParserTest, orderByExpression) {
 
   // Expression with constant.
   {
-    auto matcher = matchValues().project().project().sort().output();
+    auto matcher = matchValues().project().sort().project().output();
 
     testSelect("SELECT a + 1 FROM ( VALUES (1) ) t(a) ORDER BY a + 1", matcher);
   }
 
   // Multiple expressions in SELECT, ORDER BY on one of them.
   {
-    auto matcher = matchValues().project().project().sort().output();
+    auto matcher = matchValues().project().sort().project().output();
 
     testSelect(
         "SELECT a + b, a - b FROM ( VALUES (1, 2) ) t(a, b) ORDER BY a + b",
@@ -493,7 +493,7 @@ TEST_F(PrestoParserTest, orderByExpression) {
 
   // Nested subquery with aliased expression.
   {
-    auto matcher = matchValues().project().project().project().sort().output();
+    auto matcher = matchValues().project().project().sort().project().output();
 
     testSelect(
         "SELECT x FROM (SELECT a + b AS x FROM ( VALUES (1, 2) ) t(a, b)) ORDER BY x",
@@ -502,14 +502,14 @@ TEST_F(PrestoParserTest, orderByExpression) {
 
   // Simple column ORDER BY (regression check).
   {
-    auto matcher = matchScan().project().sort().output();
+    auto matcher = matchScan().sort().project().output();
 
     testSelect("SELECT n_regionkey FROM nation ORDER BY n_regionkey", matcher);
   }
 
   // Ordinal ORDER BY with expression in SELECT (regression check).
   {
-    auto matcher = matchValues().project().project().sort().output();
+    auto matcher = matchValues().project().sort().project().output();
 
     testSelect(
         "SELECT a + b FROM ( VALUES (1, 2) ) t(a, b) ORDER BY 1", matcher);
@@ -1446,6 +1446,164 @@ TEST_F(PrestoParserTest, nestedWindowFunction) {
           })
           .project({"b", "w * 2::bigint"})
           .output());
+
+  // Two window functions combined in the same expression.
+  testSelect(
+      "SELECT sum(a) OVER (PARTITION BY b) + count(*) OVER () AS total FROM t",
+      matchScan("t")
+          .project({
+              "a",
+              "b",
+              "sum(a) OVER (PARTITION BY b) AS w",
+              "count() OVER () AS w_0",
+          })
+          .project({"w + w_0"})
+          .output({"total"}));
+
+  // Deeply nested: window inside CAST inside arithmetic.
+  testSelect(
+      "SELECT CAST(sum(a) OVER (PARTITION BY b) AS DOUBLE) / 100.0 AS pct "
+      "FROM t",
+      matchScan("t")
+          .project({
+              "a",
+              "b",
+              "sum(a) OVER (PARTITION BY b) AS expr",
+          })
+          .project({"cast(expr as DOUBLE) / 100.0"})
+          .output({"pct"}));
+}
+
+TEST_F(PrestoParserTest, orderByNonSelectedColumn) {
+  connector_->addTable("t", ROW({"a", "b", "c", "d", "e", "f"}, INTEGER()));
+
+  // Base SELECT query with a mix of features:
+  // - SELECT a as b: alias shadows original column name
+  // - SELECT b + 1 as a: expression with alias that shadows another column
+  // - SELECT c * d: expression without alias
+  // - SELECT c + e as x: expression with new alias
+  // - SELECT f: plain column
+  // Note: The aliases shadow original column names, requiring two Project nodes
+  // (one for intermediate renaming, one for final aliases).
+  const std::string baseSelect =
+      "SELECT a as b, b + 1 as a, c * d, c + e as x FROM t";
+
+  auto testOrderBy = [&](const std::string& orderByClause,
+                         const std::vector<std::string>& ordering) {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .tableScan()
+                       .sort(ordering)
+                       .project()
+                       .output();
+    testSelect(baseSelect + " ORDER BY " + orderByClause, matcher);
+  };
+
+  // Column not in SELECT list.
+  testOrderBy("e", {"e"});
+  testOrderBy("f", {"f"});
+
+  // Name and alias conflict. Uses alias.
+  testOrderBy("b", {"a"});
+
+  // Alias uses underlying expression.
+  testOrderBy("x", {"plus(c, e)"});
+
+  // Expression over alias.
+  testOrderBy("x + 1", {"plus(plus(c, e), 1)"});
+
+  // Ordinal resolves to underlying expression.
+  testOrderBy("1", {"plus(b, 1)"});
+  testOrderBy("3", {"multiply(c, d)"});
+  VELOX_ASSERT_THROW(
+      parseSql(baseSelect + " ORDER BY 5"),
+      "ORDER BY position 5 is not in select list");
+
+  // Multiple columns mixing selected and non-selected.
+  testOrderBy("e, x, 1", {"e", "plus(c, e)", "plus(b, 1)"});
+}
+
+TEST_F(PrestoParserTest, orderByStar) {
+  connector_->addTable("t", ROW({"a", "b", "c", "d", "e", "f"}, INTEGER()));
+  auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                     .tableScan()
+                     .sort({"a", "c", "e", "f"})
+                     .output();
+
+  testSelect("SELECT * FROM t ORDER BY 1, 3, e, f", matcher);
+}
+
+TEST_F(PrestoParserTest, orderByStarWithHiddenColumn) {
+  // SELECT * FROM t ORDER BY "$path" should not fail and should not return
+  // "$path" column in output.
+  connector_->addTable(
+      "t", ROW({"a", "b"}, INTEGER()), ROW({"$path"}, VARCHAR()));
+
+  lp::LogicalPlanNodePtr outputNode;
+  auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                     .tableScan()
+                     .sort({"$path"})
+                     .project([&](const auto& node) { outputNode = node; })
+                     .output();
+
+  testSelect("SELECT * FROM t ORDER BY \"$path\"", matcher);
+  ASSERT_THAT(
+      outputNode->outputType()->names(),
+      ::testing::Pointwise(::testing::Eq(), {"a", "b"}));
+}
+
+TEST_F(PrestoParserTest, orderByJoinedTable) {
+  // ORDER BY a column from a joined table that is not in the SELECT list.
+  testSelect(
+      "SELECT n_name "
+      "FROM nation, region "
+      "WHERE n_regionkey = r_regionkey "
+      "ORDER BY r_name",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .join(lp::test::LogicalPlanMatcherBuilder().tableScan().build())
+          .filter()
+          .sort()
+          .project()
+          .output());
+}
+
+TEST_F(PrestoParserTest, orderByDistinct) {
+  connector_->addTable("t", ROW({"a", "b"}, INTEGER()));
+  auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                     .tableScan()
+                     .project()
+                     .aggregate()
+                     .sort()
+                     .output();
+
+  testSelect(
+      "SELECT DISTINCT a "
+      "FROM t "
+      "ORDER BY a",
+      matcher);
+  testSelect(
+      "SELECT DISTINCT a "
+      "FROM t "
+      "ORDER BY 1",
+      matcher);
+
+  // SELECT DISTINCT with ORDER BY can only references SELECT fields.
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT DISTINCT a FROM (VALUES (1, 2), (3, 4)) AS t(a, b) ORDER BY b DESC"),
+      "Cannot resolve column: b not in");
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT DISTINCT a + b FROM (VALUES (1, 2), (3, 4)) AS t(a, b) ORDER BY a DESC"),
+      "Cannot resolve column: a not in");
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT DISTINCT a FROM (VALUES (1, 2), (3, 4)) AS t(a, b) ORDER BY 2 DESC"),
+      "(1 vs. 1) ROW<a:INTEGER>");
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT a + b FROM (VALUES (1, 2), (3, 4)) AS t(a, b) GROUP BY 1 ORDER BY a DESC"),
+      "Cannot resolve column: a not in [expr -> expr]");
 }
 
 } // namespace
