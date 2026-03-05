@@ -141,9 +141,6 @@ std::pair<std::string, std::string> toConnectorTable(
   }
 
   // connector.schema.name
-  // TODO: This limits table names to exactly 3 dot-separated components.
-  // Same limitation as constructTableName() in TableVisitor.cpp — see the
-  // details there on supporting multi-dot connector paths.
   VELOX_CHECK_EQ(3, parts.size());
   return {parts[0], fmt::format("{}.{}", parts[1], tableName)};
 }

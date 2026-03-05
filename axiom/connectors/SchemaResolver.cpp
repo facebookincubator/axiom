@@ -30,38 +30,29 @@ TablePtr SchemaResolver::findTable(
     std::string_view catalog,
     std::string_view name) const {
   TableNameParser parser(name);
+  VELOX_USER_CHECK(parser.valid(), "Invalid table name: '{}'", name);
 
-  // For standard table names (max 3 parts: catalog.schema.table), use the
-  // parser to validate and extract components.
-  if (parser.valid()) {
-    if (parser.catalog().has_value()) {
-      VELOX_USER_CHECK_EQ(
-          catalog,
-          parser.catalog().value(),
-          "Input catalog must match table catalog specifier");
-    }
-
-    std::string lookupName;
-    if (parser.schema().has_value()) {
-      lookupName =
-          fmt::format("{}.{}", parser.schema().value(), parser.table());
-    } else if (!defaultSchema_.empty()) {
-      lookupName = fmt::format("{}.{}", defaultSchema_, parser.table());
-    } else {
-      lookupName = parser.table();
-    }
-
-    if (targetCatalog_ == catalog && targetTable_->name() == lookupName) {
-      return targetTable_;
-    }
-
-    return ConnectorMetadata::metadata(catalog)->findTable(lookupName);
+  if (parser.catalog().has_value()) {
+    VELOX_USER_CHECK_EQ(
+        catalog,
+        parser.catalog().value(),
+        "Input catalog must match table catalog specifier");
   }
 
-  // For non-standard table names (e.g., XDB tier paths with multiple dots
-  // like "ephemeralxdb.on_demand_rocksdb.ftw.784.tasks"), pass directly to
-  // the connector's findTable which may have its own specialized parser.
-  return ConnectorMetadata::metadata(catalog)->findTable(name);
+  std::string lookupName;
+  if (parser.schema().has_value()) {
+    lookupName = fmt::format("{}.{}", parser.schema().value(), parser.table());
+  } else if (!defaultSchema_.empty()) {
+    lookupName = fmt::format("{}.{}", defaultSchema_, parser.table());
+  } else {
+    lookupName = parser.table();
+  }
+
+  if (targetCatalog_ == catalog && targetTable_->name() == lookupName) {
+    return targetTable_;
+  }
+
+  return ConnectorMetadata::metadata(catalog)->findTable(lookupName);
 }
 
 } // namespace facebook::axiom::connector
