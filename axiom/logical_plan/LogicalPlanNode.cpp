@@ -237,6 +237,9 @@ folly::dynamic TableScanNode::serialize() const {
   obj["tableName"] = tableName_;
   obj["columnNames"] =
       serializeVector(columnNames_, [](const std::string& s) { return s; });
+  if (!alias_.empty()) {
+    obj["alias"] = alias_;
+  }
   return obj;
 }
 
@@ -244,12 +247,17 @@ folly::dynamic TableScanNode::serialize() const {
 LogicalPlanNodePtr TableScanNode::create(
     const folly::dynamic& obj,
     void* /*context*/) {
+  std::string alias;
+  if (obj.count("alias")) {
+    alias = obj["alias"].asString();
+  }
   return std::make_shared<TableScanNode>(
       obj["id"].asString(),
       deserializeOutputType(obj),
       obj["connectorId"].asString(),
       obj["tableName"].asString(),
-      deserializeStringVector(obj, "columnNames"));
+      deserializeStringVector(obj, "columnNames"),
+      std::move(alias));
 }
 
 folly::dynamic FilterNode::serialize() const {

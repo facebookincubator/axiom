@@ -25,6 +25,23 @@ namespace lp = facebook::axiom::logical_plan;
 
 namespace {
 
+/// Collect all TableScanNodes by walking the plan tree.
+std::vector<const lp::TableScanNode*> findTableScans(
+    const lp::LogicalPlanNodePtr& root) {
+  std::vector<const lp::TableScanNode*> scans;
+  std::function<void(const lp::LogicalPlanNodePtr&)> walk =
+      [&](const lp::LogicalPlanNodePtr& node) {
+        if (node->is(lp::NodeKind::kTableScan)) {
+          scans.push_back(node->as<lp::TableScanNode>());
+        }
+        for (const auto& input : node->inputs()) {
+          walk(input);
+        }
+      };
+  walk(root);
+  return scans;
+}
+
 class PrestoParserTest : public PrestoParserTestBase {};
 
 TEST_F(PrestoParserTest, parseMultiple) {
@@ -260,6 +277,50 @@ TEST_F(PrestoParserTest, qualifiedColumnAccess) {
         parseSql("SELECT t.field0 FROM u AS t"),
         "Cannot access named field using legacy field name");
   }
+}
+
+TEST_F(PrestoParserTest, tableScanWithAlias) {
+  connector_->addTable("t", ROW({"x"}, {INTEGER()}));
+
+  auto statement = parseSql("SELECT x FROM t AS src");
+  auto plan = statement->as<SelectStatement>()->plan();
+  auto scans = findTableScans(plan);
+  ASSERT_EQ(scans.size(), 1);
+  EXPECT_EQ(scans[0]->alias(), "src");
+}
+
+TEST_F(PrestoParserTest, tableScanAliasInSubqueries) {
+  // Verify that different aliases on the same table propagate through
+  // subqueries and joins.
+  auto statement = parseSql(R"(
+    SELECT
+        o1.o_orderkey,
+        o2.o_totalprice
+    FROM
+        (SELECT o_orderkey, o_custkey FROM orders AS o1) AS o1
+    JOIN
+        (SELECT o_totalprice, o_custkey FROM orders AS o2) AS o2
+    ON o1.o_custkey = o2.o_custkey
+  )");
+
+  auto plan = statement->as<SelectStatement>()->plan();
+  auto scans = findTableScans(plan);
+  ASSERT_EQ(scans.size(), 2);
+  // Both subqueries scan the same table with different aliases.
+  EXPECT_EQ(scans[0]->tableName(), "orders");
+  EXPECT_EQ(scans[0]->alias(), "o1");
+  EXPECT_EQ(scans[1]->tableName(), "orders");
+  EXPECT_EQ(scans[1]->alias(), "o2");
+}
+
+TEST_F(PrestoParserTest, tableScanWithoutAlias) {
+  connector_->addTable("t", ROW({"x"}, {INTEGER()}));
+
+  auto statement = parseSql("SELECT x FROM t");
+  auto plan = statement->as<SelectStatement>()->plan();
+  auto scans = findTableScans(plan);
+  ASSERT_EQ(scans.size(), 1);
+  EXPECT_TRUE(scans[0]->alias().empty());
 }
 
 TEST_F(PrestoParserTest, syntaxErrors) {
