@@ -766,6 +766,10 @@ void ShowCatalogs::accept(AstVisitor* visitor) {
   visitor->visitShowCatalogs(this);
 }
 
+void ShowTables::accept(AstVisitor* visitor) {
+  visitor->visitShowTables(this);
+}
+
 void ShowColumns::accept(AstVisitor* visitor) {
   visitor->visitShowColumns(this);
 }

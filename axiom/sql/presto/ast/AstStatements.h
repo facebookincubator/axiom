@@ -776,6 +776,39 @@ class ShowCatalogs : public Statement {
   std::optional<std::string> escape_;
 };
 
+/// SHOW TABLES with optional schema qualifier and LIKE filter.
+class ShowTables : public Statement {
+ public:
+  ShowTables(
+      NodeLocation location,
+      std::shared_ptr<QualifiedName> schemaName,
+      std::optional<std::string> likePattern,
+      std::optional<std::string> escape)
+      : Statement(NodeType::kShowTables, location),
+        schemaName_(std::move(schemaName)),
+        likePattern_(std::move(likePattern)),
+        escape_(std::move(escape)) {}
+
+  const std::shared_ptr<QualifiedName>& schemaName() const {
+    return schemaName_;
+  }
+
+  const std::optional<std::string>& getLikePattern() const {
+    return likePattern_;
+  }
+
+  const std::optional<std::string>& getEscape() const {
+    return escape_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+ private:
+  std::shared_ptr<QualifiedName> schemaName_;
+  std::optional<std::string> likePattern_;
+  std::optional<std::string> escape_;
+};
+
 class ShowColumns : public Statement {
  public:
   explicit ShowColumns(

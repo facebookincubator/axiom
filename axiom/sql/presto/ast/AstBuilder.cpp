@@ -680,7 +680,26 @@ std::any AstBuilder::visitShowCreateFunction(
 
 std::any AstBuilder::visitShowTables(PrestoSqlParser::ShowTablesContext* ctx) {
   trace("visitShowTables");
-  return visitChildren("visitShowTables", ctx);
+
+  std::shared_ptr<QualifiedName> schemaName;
+  if (ctx->qualifiedName() != nullptr) {
+    schemaName = getQualifiedName(ctx->qualifiedName());
+  }
+
+  std::optional<std::string> likePattern;
+  std::optional<std::string> escape;
+  if (ctx->LIKE() != nullptr) {
+    likePattern = visitExpression(ctx->pattern)->as<StringLiteral>()->value();
+  }
+  if (ctx->ESCAPE() != nullptr) {
+    escape = visitExpression(ctx->escape)->as<StringLiteral>()->value();
+  }
+
+  return std::static_pointer_cast<Statement>(std::make_shared<ShowTables>(
+      getLocation(ctx),
+      std::move(schemaName),
+      std::move(likePattern),
+      std::move(escape)));
 }
 
 std::any AstBuilder::visitShowSchemas(

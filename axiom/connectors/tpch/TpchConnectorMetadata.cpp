@@ -239,6 +239,20 @@ TablePtr TpchConnectorMetadata::findTable(std::string_view name) {
   return table;
 }
 
+std::vector<std::string> TpchConnectorMetadata::listTables(
+    const std::optional<std::string>& schemaFilter) {
+  const auto schema = schemaFilter.value_or(kTiny);
+  if (!isValidTpchSchema(schema)) {
+    return {};
+  }
+
+  std::vector<std::string> result;
+  for (auto tpchTable : velox::tpch::tables) {
+    result.emplace_back(velox::tpch::toTableName(tpchTable));
+  }
+  return result;
+}
+
 std::string canonicalizeViewName(const TableNameParser& parser) {
   return fmt::format("{}.{}", parser.schema().value_or(kTiny), parser.table());
 }

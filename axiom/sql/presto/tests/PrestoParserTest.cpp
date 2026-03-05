@@ -1042,6 +1042,8 @@ TEST_F(PrestoParserTest, explainShow) {
   auto matcher = matchValues();
   testExplain("EXPLAIN SHOW CATALOGS", matcher);
 
+  testExplain("EXPLAIN SHOW TABLES", matcher);
+
   testExplain("EXPLAIN SHOW COLUMNS FROM nation", matcher);
 
   testExplain("EXPLAIN SHOW FUNCTIONS", matcher);
@@ -1088,6 +1090,28 @@ TEST_F(PrestoParserTest, showCatalogs) {
   {
     auto matcher = matchValues().filter();
     testSelect("SHOW CATALOGS LIKE 'tpch'", matcher);
+  }
+}
+
+TEST_F(PrestoParserTest, showTables) {
+  {
+    auto matcher = matchValues();
+    testSelect("SHOW TABLES", matcher);
+  }
+
+  {
+    auto matcher = matchValues();
+    testSelect("SHOW TABLES FROM tiny", matcher);
+  }
+
+  {
+    auto matcher = matchValues().filter();
+    testSelect("SHOW TABLES LIKE 'line%'", matcher);
+  }
+
+  {
+    auto matcher = matchValues().filter();
+    testSelect("SHOW TABLES FROM tiny LIKE 'nation'", matcher);
   }
 }
 
