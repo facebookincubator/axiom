@@ -737,6 +737,13 @@ class ConnectorMetadata {
   /// @return nullptr if table doesn't exist.
   virtual TablePtr findTable(std::string_view name) = 0;
 
+  /// Returns the list of table names available in this connector,
+  /// optionally filtered by schema prefix. Returns empty by default.
+  virtual std::vector<std::string> listTables(
+      const std::optional<std::string>& /* schemaFilter */ = std::nullopt) {
+    return {};
+  }
+
   /// Return a ViewPtr given the view name. View name is provided without the
   /// connector ID / catalog prefix, but may include the schema.
   ///

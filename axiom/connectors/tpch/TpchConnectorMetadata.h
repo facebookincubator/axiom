@@ -183,6 +183,9 @@ class TpchConnectorMetadata : public ConnectorMetadata {
 
   TablePtr findTable(std::string_view name) override;
 
+  std::vector<std::string> listTables(
+      const std::optional<std::string>& schemaFilter = std::nullopt) override;
+
   ViewPtr findView(std::string_view name) override;
 
   void createView(

@@ -18,6 +18,8 @@
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
+#include <gmock/gmock.h>
+
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/expression/Expr.h"
 
@@ -153,6 +155,35 @@ TEST_F(TpchConnectorMetadataTest, createTableHandle) {
   EXPECT_EQ(tpchTableHandle->getTable(), tpchLayout->getTpchTable());
   EXPECT_DOUBLE_EQ(
       tpchTableHandle->getScaleFactor(), tpchLayout->getScaleFactor());
+}
+
+TEST_F(TpchConnectorMetadataTest, listTablesDefault) {
+  auto tables = metadata_->listTables();
+  EXPECT_THAT(
+      tables,
+      testing::ElementsAre(
+          "part",
+          "supplier",
+          "partsupp",
+          "customer",
+          "orders",
+          "lineitem",
+          "nation",
+          "region"));
+}
+
+TEST_F(TpchConnectorMetadataTest, listTablesWithSchema) {
+  auto tables = metadata_->listTables("sf1");
+  ASSERT_EQ(tables.size(), 8);
+  // Table names should not include schema prefix.
+  for (const auto& table : tables) {
+    EXPECT_FALSE(table.find('.') != std::string::npos) << table;
+  }
+}
+
+TEST_F(TpchConnectorMetadataTest, listTablesInvalidSchema) {
+  auto tables = metadata_->listTables("invalid");
+  EXPECT_THAT(tables, testing::IsEmpty());
 }
 
 TEST_F(TpchConnectorMetadataTest, splitGeneration) {

@@ -1184,6 +1184,48 @@ SqlStatementPtr parseShowCatalogs(
   return std::make_shared<SelectStatement>(builder.build());
 }
 
+SqlStatementPtr parseShowTables(
+    const ShowTables& showTables,
+    const std::string& defaultConnectorId,
+    const std::optional<std::string>& defaultSchema) {
+  // Resolve connector ID and schema from the qualified name.
+  std::string connectorId = defaultConnectorId;
+  std::optional<std::string> schema = defaultSchema;
+
+  if (showTables.schemaName()) {
+    const auto& parts = showTables.schemaName()->parts();
+    if (parts.size() == 1) {
+      // SHOW TABLES FROM schema
+      schema = parts[0];
+    } else if (parts.size() == 2) {
+      // SHOW TABLES FROM catalog.schema
+      connectorId = parts[0];
+      schema = parts[1];
+    }
+  }
+
+  auto* metadata =
+      facebook::axiom::connector::ConnectorMetadata::metadata(connectorId);
+  auto tables = metadata->listTables(schema);
+
+  std::vector<Variant> data;
+  data.reserve(tables.size());
+  for (const auto& tableName : tables) {
+    data.emplace_back(Variant::row({tableName}));
+  }
+
+  lp::PlanBuilder::Context ctx(defaultConnectorId);
+  lp::PlanBuilder builder(ctx);
+  builder.values(ROW({"Table"}, VARCHAR()), std::move(data));
+
+  if (showTables.getLikePattern().has_value()) {
+    builder.filter(makeLikeExpr(
+        "Table", showTables.getLikePattern().value(), showTables.getEscape()));
+  }
+
+  return std::make_shared<SelectStatement>(builder.build());
+}
+
 SqlStatementPtr parseShowColumns(
     const ShowColumns& showColumns,
     const std::string& defaultConnectorId,
@@ -1629,6 +1671,11 @@ SqlStatementPtr doPlan(
 
   if (query->is(NodeType::kShowCatalogs)) {
     return parseShowCatalogs(*query->as<ShowCatalogs>(), defaultConnectorId);
+  }
+
+  if (query->is(NodeType::kShowTables)) {
+    return parseShowTables(
+        *query->as<ShowTables>(), defaultConnectorId, defaultSchema);
   }
 
   if (query->is(NodeType::kShowColumns)) {
