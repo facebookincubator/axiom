@@ -26,4 +26,4 @@ endif()
 
 add_library(axiom_connectors ConnectorMetadata.cpp SchemaResolver.cpp SchemaUtils.cpp)
 
-target_link_libraries(axiom_connectors velox_common_base velox_memory velox_connector)
+target_link_libraries(axiom_connectors velox_common_base velox_memory velox_connector Folly::folly)

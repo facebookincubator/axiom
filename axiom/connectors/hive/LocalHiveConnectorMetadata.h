@@ -50,8 +50,7 @@ class LocalHiveSplitSource : public SplitSource {
         files_(std::move(files)),
         serdeParameters_(std::move(serdeParameters)) {}
 
-  std::vector<SplitSource::SplitAndGroup> getSplits(
-      uint64_t targetBytes) override;
+  folly::coro::AsyncGenerator<SplitAndGroup> getSplitGenerator() override;
 
  private:
   const SplitOptions options_;
@@ -59,9 +58,6 @@ class LocalHiveSplitSource : public SplitSource {
   const std::string connectorId_;
   std::vector<const FileInfo*> files_;
   const std::unordered_map<std::string, std::string> serdeParameters_;
-  std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> fileSplits_;
-  int32_t currentFile_{-1};
-  int32_t currentSplit_{0};
 };
 
 class LocalHiveConnectorMetadata;

@@ -177,20 +177,21 @@ std::unique_ptr<ColumnStatistics> TestTable::ColumnTracker::toColumnStatistics(
   return stats;
 }
 
-std::vector<SplitSource::SplitAndGroup> TestSplitSource::getSplits(uint64_t) {
-  std::vector<SplitAndGroup> result;
-  if (!done_) {
-    for (size_t i = 0; i < splitCount_; ++i) {
-      result.push_back(
-          {std::make_shared<TestConnectorSplit>(connectorId_, i),
-           kUngroupedGroupId});
-    }
-    done_ = true;
+folly::coro::AsyncGenerator<SplitSource::SplitAndGroup>
+TestSplitSource::getSplitGenerator() {
+  // Keep 'this' alive during coroutine execution.
+  auto self = shared_from_this();
+
+  // Copy member variables to local stack to avoid potential coroutine state
+  // issues when accessing members across suspension points.
+  const auto count = splitCount_;
+  const auto connectorId = connectorId_;
+
+  for (size_t i = 0; i < count; ++i) {
+    co_yield SplitAndGroup{
+        std::make_shared<TestConnectorSplit>(connectorId, i),
+        kUngroupedGroupId};
   }
-  if (result.empty()) {
-    result.push_back({nullptr, kUngroupedGroupId});
-  }
-  return result;
 }
 
 std::vector<PartitionHandlePtr> TestSplitManager::listPartitions(
