@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(axiom_cli_test SqlQueryRunnerTest.cpp StdinReaderTest.cpp)
+add_executable(axiom_cli_test SqlQueryRunnerTest.cpp StdinReaderTest.cpp ConsoleTest.cpp)
 
 add_test(NAME axiom_cli_test COMMAND axiom_cli_test)
 
