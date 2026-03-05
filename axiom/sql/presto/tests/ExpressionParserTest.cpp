@@ -371,17 +371,14 @@ TEST_F(ExpressionParserTest, extract) {
   test("SECOND", "second");
 }
 
-TEST_F(ExpressionParserTest, currentDateTime) {
-  // CURRENT_DATE and CURRENT_TIMESTAMP translate to zero-argument function
-  // calls.
+TEST_F(ExpressionParserTest, specialDateTimeFunctions) {
+  // Special date/time keywords translate to zero-argument function calls.
   EXPECT_EQ("current_date()", parseExpr("CURRENT_DATE")->toString());
   EXPECT_EQ("current_date()", parseExpr("current_date")->toString());
+  EXPECT_EQ("current_time()", parseExpr("CURRENT_TIME")->toString());
   EXPECT_EQ("current_timestamp()", parseExpr("CURRENT_TIMESTAMP")->toString());
-
-  // LOCALTIME and LOCALTIMESTAMP are not yet implemented.
-  VELOX_ASSERT_THROW(parseExpr("LOCALTIME"), "LOCALTIME is not supported yet");
-  VELOX_ASSERT_THROW(
-      parseExpr("LOCALTIMESTAMP"), "LOCALTIMESTAMP is not supported yet");
+  EXPECT_EQ("localtime()", parseExpr("LOCALTIME")->toString());
+  EXPECT_EQ("localtimestamp()", parseExpr("LOCALTIMESTAMP")->toString());
 
   // Precision is not supported.
   VELOX_ASSERT_THROW(
