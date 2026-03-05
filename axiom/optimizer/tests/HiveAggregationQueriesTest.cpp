@@ -225,12 +225,18 @@ TEST_F(HiveAggregationQueriesTest, distinctWithOrderBy) {
               {"array_agg(DISTINCT n_name ORDER BY n_nationkey)"})
           .build();
 
-  VELOX_ASSERT_THROW(
-      toSingleNodePlan(logicalPlan),
-      "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
+  auto plan = toSingleNodePlan(logicalPlan);
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan("nation")
+                     .singleAggregation(
+                         {"n_regionkey"},
+                         {"array_agg(DISTINCT n_name ORDER BY n_nationkey)"})
+                     .build();
+  ASSERT_TRUE(matcher->match(plan));
+
   VELOX_ASSERT_THROW(
       planVelox(logicalPlan),
-      "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
+      "For DISTINCT aggregations with parallel execution, ORDER BY keys must appear in aggregation arguments.");
 }
 
 TEST_F(HiveAggregationQueriesTest, ignoreDuplicates) {
