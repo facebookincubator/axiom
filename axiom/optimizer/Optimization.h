@@ -231,17 +231,6 @@ class Optimization {
   void addAggregation(DerivedTableCP dt, RelationOpPtr& plan, PlanState& state)
       const;
 
-  // Transforms aggregations where all aggregates are DISTINCT with the same
-  // args into a two-level aggregation: inner level GROUP BY (keys +
-  // distinct_args) -> outer level AGG without DISTINCT.
-  void transformDistinctToGroupBy(
-      RelationOpPtr& plan,
-      PlanCost& cost,
-      const ExprVector& groupingKeys,
-      const ExprVector& distinctArgs,
-      const AggregateVector& aggregates,
-      AggregationPlanCP aggPlan) const;
-
   // Adds window function operators to 'plan'. Groups window functions by
   // specification and emits one Window operator per group. Returns true if the
   // DT's limit was consumed by a ranking optimization and should not be
