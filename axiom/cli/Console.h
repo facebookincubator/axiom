@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <functional>
+#include <unordered_map>
+#include <utility>
 #include "axiom/cli/SqlQueryRunner.h"
 
 DECLARE_string(data_path);
@@ -23,9 +26,23 @@ DECLARE_bool(debug);
 
 namespace axiom::sql {
 
+/// Permission check callback: (sql, catalog, schema, views) -> throws on
+/// denial. Empty (nullptr) by default -- no permission checking.
+using PermissionCheck = std::function<void(
+    std::string_view sql,
+    std::string_view catalog,
+    std::optional<std::string_view> schema,
+    const std::unordered_map<std::pair<std::string, std::string>, std::string>&
+        views)>;
+
 class Console {
  public:
-  explicit Console(SqlQueryRunner& runner) : runner_{runner} {}
+  /// @param permissionCheck Optional callback invoked after each statement is
+  /// parsed but before it is executed. Throws on denial.
+  explicit Console(
+      SqlQueryRunner& runner,
+      PermissionCheck permissionCheck = nullptr)
+      : runner_{runner}, permissionCheck_{std::move(permissionCheck)} {}
 
   void initialize();
 
@@ -45,6 +62,7 @@ class Console {
   void readCommands(const std::string& prompt);
 
   SqlQueryRunner& runner_;
+  PermissionCheck permissionCheck_;
 };
 
 } // namespace axiom::sql

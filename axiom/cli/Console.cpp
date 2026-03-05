@@ -122,6 +122,17 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
         std::cout << "Parsing: " << parseTiming.toString() << std::endl;
       }
 
+      // Permission check after parsing, before execution.
+      if (permissionCheck_ != nullptr) {
+        const auto& schema = options.defaultSchema ? options.defaultSchema
+                                                   : runner_.defaultSchema();
+        permissionCheck_(
+            sqlText,
+            options.defaultConnectorId.value_or(runner_.defaultConnectorId()),
+            schema ? std::optional<std::string_view>{*schema} : std::nullopt,
+            statement->views());
+      }
+
       cli::Timing statementTiming;
       auto result = cli::time<SqlQueryRunner::SqlResult>(
           [&]() { return runner_.run(*statement, options); }, statementTiming);

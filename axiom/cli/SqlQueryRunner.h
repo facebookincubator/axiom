@@ -115,6 +115,16 @@ class SqlQueryRunner {
 
   std::string dropTable(const presto::DropTableStatement& statement);
 
+  /// Returns the default connector ID set during initialization.
+  const std::string& defaultConnectorId() const {
+    return defaultConnectorId_;
+  }
+
+  /// Returns the default schema set during initialization.
+  const std::optional<std::string>& defaultSchema() const {
+    return defaultSchema_;
+  }
+
  private:
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
       const RunOptions& options);
