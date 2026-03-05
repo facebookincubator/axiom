@@ -445,6 +445,15 @@ class PlanMatcherBuilder {
       const std::vector<std::string>& sortingKeys,
       int32_t limit);
 
+  /// Matches any MarkDistinct node regardless of distinct keys.
+  PlanMatcherBuilder& markDistinct();
+
+  /// Matches a MarkDistinct node with the specified distinct key expressions.
+  /// @param distinctKeys List of expected distinct key expressions (DuckDB SQL
+  /// syntax). Supports symbol rewriting from child matchers.
+  PlanMatcherBuilder& markDistinct(
+      const std::vector<std::string>& distinctKeys);
+
   /// Builds and returns the constructed PlanMatcher.
   /// @throws VeloxUserError if matcher is empty.
   std::shared_ptr<PlanMatcher> build() {
