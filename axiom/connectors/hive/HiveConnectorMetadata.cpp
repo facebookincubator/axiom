@@ -258,7 +258,6 @@ velox::connector::ConnectorTableHandlePtr HiveTableLayout::createTableHandle(
   return std::make_shared<velox::connector::hive::HiveTableHandle>(
       connector()->connectorId(),
       table().name(),
-      true,
       std::move(subfieldFilters),
       remainingFilter,
       dataColumns ? dataColumns : rowType(),
