@@ -1587,34 +1587,23 @@ PlanBuilder& PlanBuilder::setOperation(
     // Add cast projections where needed.
     for (auto& node : nodes) {
       const auto& inputRowType = node->outputType();
-      std::vector<uint32_t> indicesToCast;
+      bool needsCast = false;
+      std::vector<ExprPtr> exprs;
+      exprs.reserve(inputRowType->size());
+
       for (uint32_t i = 0; i < inputRowType->size(); ++i) {
-        if (*inputRowType->childAt(i) != *targetRowType->childAt(i)) {
-          indicesToCast.push_back(i);
+        const auto& inputType = inputRowType->childAt(i);
+        const auto& targetType = targetRowType->childAt(i);
+        if (!inputType->equivalent(*targetType)) {
+          needsCast = true;
+          exprs.push_back(
+              makeCoercedRef(inputType, inputRowType->nameOf(i), targetType));
+        } else {
+          exprs.push_back(makeInputRef(inputType, inputRowType->nameOf(i)));
         }
       }
 
-      if (!indicesToCast.empty()) {
-        std::vector<ExprPtr> exprs;
-        exprs.reserve(inputRowType->size());
-
-        size_t castIdx = 0;
-        for (uint32_t i = 0; i < inputRowType->size(); ++i) {
-          const auto& inputType = inputRowType->childAt(i);
-          const auto& name = inputRowType->nameOf(i);
-
-          auto inputRef = makeInputRef(inputType, name);
-
-          if (castIdx < indicesToCast.size() && indicesToCast[castIdx] == i) {
-            exprs.push_back(
-                std::make_shared<SpecialFormExpr>(
-                    targetRowType->childAt(i), SpecialForm::kCast, inputRef));
-            ++castIdx;
-          } else {
-            exprs.push_back(inputRef);
-          }
-        }
-
+      if (needsCast) {
         node = std::make_shared<ProjectNode>(
             nextId(), std::move(node), inputRowType->names(), std::move(exprs));
       }
