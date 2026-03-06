@@ -422,16 +422,16 @@ TEST_F(PrestoParserTest, withNoLeaking) {
 
 TEST_F(PrestoParserTest, orderBy) {
   {
-    auto matcher =
-        matchScan().aggregate().sort().project().output({"n_regionkey"});
+    auto matcher = matchScan().aggregate().sort({"count"}).project().output(
+        {"n_regionkey"});
 
     testSelect(
         "select n_regionkey from nation group by 1 order by count(1)", matcher);
   }
 
   {
-    auto matcher =
-        matchScan().aggregate().sort().output({"n_regionkey", "count"});
+    auto matcher = matchScan().aggregate().sort({"count"}).output(
+        {"n_regionkey", "count"});
 
     testSelect(
         "select n_regionkey, count(1) from nation group by 1 order by count(1)",
@@ -443,11 +443,11 @@ TEST_F(PrestoParserTest, orderBy) {
 
     testSelect(
         "select n_regionkey, count(1) as c from nation group by 1 order by c",
-        matchScan().aggregate().sort().output({"n_regionkey", "c"}));
+        matchScan().aggregate().sort({"c"}).output({"n_regionkey", "c"}));
   }
 
   {
-    auto matcher = matchScan().aggregate().project().sort().output();
+    auto matcher = matchScan().aggregate().project().sort({"expr"}).output();
 
     testSelect(
         "select n_regionkey, count(1) * 2 from nation group by 1 order by 2",
@@ -459,17 +459,28 @@ TEST_F(PrestoParserTest, orderBy) {
   }
 
   {
-    auto matcher = matchScan().aggregate().project().sort().project().output();
+    auto matcher =
+        matchScan().aggregate().project().sort({"expr_0"}).project().output();
     testSelect(
         "select n_regionkey, count(1) * 2 from nation group by 1 order by count(1) * 3",
         matcher);
+  }
+
+  // Multiple sort keys with mixed directions.
+  {
+    auto matcher =
+        matchScan()
+            .sort({"n_regionkey", "n_name desc"})
+            .output({"n_nationkey", "n_name", "n_regionkey", "n_comment"});
+    testSelect(
+        "SELECT * FROM nation ORDER BY n_regionkey, n_name DESC", matcher);
   }
 }
 
 TEST_F(PrestoParserTest, orderByExpression) {
   // Expression in both SELECT and ORDER BY.
   {
-    auto matcher = matchValues().project().project().sort().output();
+    auto matcher = matchValues().project().project().sort({"expr"}).output();
 
     testSelect(
         "SELECT a + b FROM ( VALUES (1, 2) ) t(a, b) ORDER BY a + b", matcher);
@@ -477,14 +488,14 @@ TEST_F(PrestoParserTest, orderByExpression) {
 
   // Expression with constant.
   {
-    auto matcher = matchValues().project().project().sort().output();
+    auto matcher = matchValues().project().project().sort({"expr"}).output();
 
     testSelect("SELECT a + 1 FROM ( VALUES (1) ) t(a) ORDER BY a + 1", matcher);
   }
 
   // Multiple expressions in SELECT, ORDER BY on one of them.
   {
-    auto matcher = matchValues().project().project().sort().output();
+    auto matcher = matchValues().project().project().sort({"expr"}).output();
 
     testSelect(
         "SELECT a + b, a - b FROM ( VALUES (1, 2) ) t(a, b) ORDER BY a + b",
@@ -493,7 +504,8 @@ TEST_F(PrestoParserTest, orderByExpression) {
 
   // Nested subquery with aliased expression.
   {
-    auto matcher = matchValues().project().project().project().sort().output();
+    auto matcher =
+        matchValues().project().project().project().sort({"x"}).output();
 
     testSelect(
         "SELECT x FROM (SELECT a + b AS x FROM ( VALUES (1, 2) ) t(a, b)) ORDER BY x",
@@ -502,14 +514,14 @@ TEST_F(PrestoParserTest, orderByExpression) {
 
   // Simple column ORDER BY (regression check).
   {
-    auto matcher = matchScan().project().sort().output();
+    auto matcher = matchScan().project().sort({"n_regionkey"}).output();
 
     testSelect("SELECT n_regionkey FROM nation ORDER BY n_regionkey", matcher);
   }
 
   // Ordinal ORDER BY with expression in SELECT (regression check).
   {
-    auto matcher = matchValues().project().project().sort().output();
+    auto matcher = matchValues().project().project().sort({"expr"}).output();
 
     testSelect(
         "SELECT a + b FROM ( VALUES (1, 2) ) t(a, b) ORDER BY 1", matcher);
@@ -517,7 +529,8 @@ TEST_F(PrestoParserTest, orderByExpression) {
 
   // DISTINCT with expression in both SELECT and ORDER BY.
   {
-    auto matcher = matchValues().project().project().distinct().sort().output();
+    auto matcher =
+        matchValues().project().project().distinct().sort({"expr"}).output();
 
     testSelect(
         "SELECT DISTINCT a + b FROM ( VALUES (1, 2) ) t(a, b) ORDER BY a + b",
@@ -969,7 +982,7 @@ TEST_F(PrestoParserTest, everything) {
                      .join(matchScan().build())
                      .filter()
                      .aggregate()
-                     .sort()
+                     .sort({"count desc"})
                      .output({"r_name", "count"});
 
   testSelect(
@@ -1337,7 +1350,8 @@ TEST_F(PrestoParserTest, limit) {
   }
 
   {
-    auto matcher = matchScan().sort().limit(0, 100).output(nationColumns);
+    auto matcher =
+        matchScan().sort({"n_name"}).limit(0, 100).output(nationColumns);
     testSelect("SELECT * FROM nation ORDER BY n_name LIMIT 100", matcher);
     testSelect(
         "SELECT * FROM nation ORDER BY n_name FETCH FIRST 100 ROWS ONLY",
