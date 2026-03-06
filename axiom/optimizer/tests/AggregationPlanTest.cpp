@@ -509,8 +509,11 @@ TEST_F(AggregationPlanTest, singleDistinctToGroupBy) {
 // Verifies that when there are multiple DISTINCT aggregates with different
 // sets of arguments, the optimizer uses the MarkDistinct transformation:
 TEST_F(AggregationPlanTest, multipleDistinctToMarkDistinct) {
-  testConnector_->addTable(
+  auto table = testConnector_->addTable(
       "t", ROW({"a", "b", "c", "d"}, {BIGINT(), DOUBLE(), DOUBLE(), BIGINT()}));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
 
   // Builds an expected plan matcher for the MarkDistinct transformation.
   // When 'singleStep' is true, expects a single aggregation step. Otherwise,
@@ -677,6 +680,65 @@ TEST_F(AggregationPlanTest, multipleDistinctToMarkDistinct) {
   }
 }
 
+TEST_F(AggregationPlanTest, basicPlan) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), DOUBLE()}));
+
+  {
+    // DISTINCT aggregate with a filter falls back to a basic single-step plan.
+    auto logicalPlan =
+        lp::PlanBuilder()
+            .tableScan(kTestConnectorId, "t")
+            .aggregate({"a"}, {"count(DISTINCT b) FILTER (WHERE c > 0.0)"})
+            .build();
+    auto plan = planVelox(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .project({"a as a", "c > 0.0 as m0", "b as b"})
+            .shuffle()
+            .localPartition()
+            .singleAggregation({"a"}, {"count(DISTINCT b) FILTER (WHERE m0)"})
+            .shuffle()
+            .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+
+  {
+    // When the plan cannot be transformed to use GroupBy or MarkDistinct, even
+    // if alwaysPlanPartialAggregation is true, we still generate a basic plan
+    // of single aggregation step because this is the only eligible plan.
+    auto logicalPlan = lp::PlanBuilder()
+                           .tableScan(kTestConnectorId, "t")
+                           .aggregate(
+                               {"a"},
+                               {"count(DISTINCT b) FILTER (WHERE c > 0.0)",
+                                "array_agg(DISTINCT c ORDER BY c)",
+                                "avg(c)"})
+                           .build();
+    OptimizerOptions options{.alwaysPlanPartialAggregation = true};
+    auto plan = planVelox(
+        logicalPlan,
+        runner::MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4},
+        options);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan()
+                       .project({"a as a", "c > 0.0 as m0", "b as b", "c as c"})
+                       .shuffle()
+                       .localPartition()
+                       .singleAggregation(
+                           {"a"},
+                           {"count(DISTINCT b) FILTER (WHERE m0)",
+                            "array_agg(DISTINCT c ORDER BY c)",
+                            "avg(c)"})
+                       .shuffle()
+                       .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+}
+
 TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
   testConnector_->addTable(
       "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), DOUBLE()}));
@@ -693,19 +755,6 @@ TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
     VELOX_ASSERT_THROW(
         test::QueryTestBase::planVelox(logicalPlan),
         "For DISTINCT aggregations with parallel execution, ORDER BY keys must appear in aggregation arguments.");
-  }
-
-  {
-    // DISTINCT aggregate with a filter condition is not supported yet.
-    auto logicalPlan =
-        lp::PlanBuilder(/*enableCoercions=*/true)
-            .tableScan(kTestConnectorId, "t")
-            .aggregate({"a"}, {"count(DISTINCT b) FILTER (WHERE c > 0)"})
-            .build();
-
-    VELOX_ASSERT_THROW(
-        test::QueryTestBase::planVelox(logicalPlan),
-        "Distinct aggregation plan not eligible for transformation to GroupBy or MarkDistinct.");
   }
 }
 
