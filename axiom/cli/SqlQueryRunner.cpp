@@ -424,6 +424,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
   runner::MultiFragmentPlan::Options opts;
   opts.numWorkers = options.numWorkers;
   opts.numDrivers = options.numDrivers;
+  opts.remoteOutput = options.numWorkers > 1;
   auto allocator =
       std::make_unique<velox::HashStringAllocator>(optimizerPool_.get());
   auto context = std::make_unique<optimizer::QueryGraphContext>(*allocator);

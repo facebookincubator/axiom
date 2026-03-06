@@ -67,14 +67,15 @@ TEST_F(HiveLimitQueriesTest, limit) {
   // Distributed.
   {
     SCOPED_TRACE("numWorkers: 4, numDrivers: 4");
-    auto distributedPlan =
-        planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+    auto distributedPlan = planVelox(
+        logicalPlan, {.numWorkers = 4, .numDrivers = 4, .remoteOutput = true});
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
                        .localLimit(0, 10)
                        .shuffle()
                        .finalLimit(0, 10)
+                       .partitionedOutputSingle()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
 
@@ -124,14 +125,15 @@ TEST_F(HiveLimitQueriesTest, offset) {
   // Distributed.
   {
     SCOPED_TRACE("numWorkers: 4, numDrivers: 4");
-    auto distributedPlan =
-        planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+    auto distributedPlan = planVelox(
+        logicalPlan, {.numWorkers = 4, .numDrivers = 4, .remoteOutput = true});
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
                        .localLimit(0, 15)
                        .shuffle()
                        .finalLimit(5, 10)
+                       .partitionedOutputSingle()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
 
@@ -227,8 +229,8 @@ TEST_F(HiveLimitQueriesTest, orderByLimit) {
   // Distributed.
   {
     SCOPED_TRACE("numWorkers: 4, numDrivers: 4");
-    auto distributedPlan =
-        planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4});
+    auto distributedPlan = planVelox(
+        logicalPlan, {.numWorkers = 4, .numDrivers = 4, .remoteOutput = true});
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan()
@@ -236,6 +238,7 @@ TEST_F(HiveLimitQueriesTest, orderByLimit) {
                        .localMerge()
                        .shuffleMerge()
                        .finalLimit(0, 10)
+                       .partitionedOutputSingle()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
 

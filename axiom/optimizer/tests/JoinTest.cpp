@@ -329,6 +329,7 @@ TEST_F(JoinTest, joinWithComputedKeys) {
                        .shuffle()
                        .localPartition()
                        .finalAggregation()
+                       .partitionedOutputSingle()
                        .build();
 
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
@@ -737,10 +738,19 @@ TEST_F(JoinTest, leftJoinOverValues) {
   }
 
   {
-    auto distributedPlan = planVelox(logicalPlan).plan;
-    EXPECT_EQ(1, distributedPlan->fragments().size());
-    auto plan = distributedPlan->fragments().at(0).fragment.planNode;
-    AXIOM_ASSERT_PLAN(plan, matcher);
+    auto distributedPlan = planVelox(logicalPlan);
+    EXPECT_EQ(1, distributedPlan.plan->fragments().size());
+
+    auto distributedMatcher =
+        core::PlanMatcherBuilder()
+            .values()
+            .hashJoin(
+                core::PlanMatcherBuilder().values().build(),
+                core::JoinType::kLeft)
+            .project()
+            .partitionedOutputSingle()
+            .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
   }
 }
 

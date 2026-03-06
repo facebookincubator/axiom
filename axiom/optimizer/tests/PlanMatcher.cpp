@@ -1002,6 +1002,37 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
       partitionedOutput->sources()[0], symbols, &producerContext);
 }
 
+class PartitionedOutputMatcher : public PlanMatcherImpl<PartitionedOutputNode> {
+ public:
+  explicit PartitionedOutputMatcher(
+      std::shared_ptr<PlanMatcher> matcher,
+      std::optional<PartitionedOutputNode::Kind> kind = std::nullopt,
+      std::optional<int32_t> numPartitions = std::nullopt)
+      : PlanMatcherImpl<PartitionedOutputNode>({std::move(matcher)}),
+        kind_(kind),
+        numPartitions_(numPartitions) {}
+
+  MatchResult matchDetails(
+      const PartitionedOutputNode& node,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(node.toString(true, false));
+    if (kind_.has_value()) {
+      EXPECT_EQ(node.kind(), kind_.value());
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+    if (numPartitions_.has_value()) {
+      EXPECT_EQ(node.numPartitions(), numPartitions_.value());
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+    return MatchResult::success(symbols);
+  }
+
+ private:
+  const std::optional<PartitionedOutputNode::Kind> kind_;
+  const std::optional<int32_t> numPartitions_;
+};
+
 class AssignUniqueIdMatcher : public PlanMatcherImpl<AssignUniqueIdNode> {
  public:
   AssignUniqueIdMatcher(
@@ -1669,6 +1700,13 @@ PlanMatcherBuilder& PlanMatcherBuilder::exchange() {
 PlanMatcherBuilder& PlanMatcherBuilder::shuffle() {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<ShuffleBoundaryMatcher>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::partitionedOutputSingle() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<PartitionedOutputMatcher>(
+      matcher_, PartitionedOutputNode::Kind::kPartitioned, 1);
   return *this;
 }
 

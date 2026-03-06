@@ -90,6 +90,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
           {
               .numWorkers = 4,
               .numDrivers = 4,
+              .remoteOutput = true,
           },
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt,
       const std::optional<std::string>& planFilePathPrefix = std::nullopt);
@@ -101,6 +102,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
           {
               .numWorkers = 4,
               .numDrivers = 4,
+              .remoteOutput = true,
           },
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt,
       const std::optional<std::string>& planFilePathPrefix = std::nullopt);
@@ -110,6 +112,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
       const runner::MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
           .numDrivers = 4,
+          .remoteOutput = true,
       });
 
   TestResult runVelox(
@@ -118,6 +121,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
       const runner::MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
           .numDrivers = 4,
+          .remoteOutput = true,
       });
 
   TestResult runFragmentedPlan(optimizer::PlanAndStats& plan);
@@ -148,6 +152,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
       const axiom::runner::MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
           .numDrivers = 4,
+          .remoteOutput = true,
       });
 
   void checkSame(
@@ -156,6 +161,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
       const axiom::runner::MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
           .numDrivers = 4,
+          .remoteOutput = true,
       });
 
   velox::core::PlanNodePtr toSingleNodePlan(

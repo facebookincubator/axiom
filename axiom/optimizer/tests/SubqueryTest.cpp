@@ -902,7 +902,7 @@ TEST_F(SubqueryTest, enforceSingleRow) {
                 matchScan("nation").enforceSingleRow().broadcast().build())
             .filter()
             .project()
-            .gather()
+            .partitionedOutputSingle()
             .build();
 
     auto distributedPlan = planVelox(logicalPlan);
@@ -995,7 +995,7 @@ TEST_F(SubqueryTest, nonEquiCorrelatedScalar) {
                              })
                          .filter("cnt > 3")
                          .project()
-                         .gather()
+                         .partitionedOutputSingle()
                          .build();
 
       auto distributedPlan = planVelox(logicalPlan);
@@ -1089,8 +1089,8 @@ TEST_F(SubqueryTest, nonEquiCorrelatedProject) {
                                  "arbitrary(r_name) as r_name",
                              })
                          .project({"length(r_name)", "cnt"})
-                         .gather()
                          .project()
+                         .partitionedOutputSingle()
                          .build();
 
       auto distributedPlan = planVelox(logicalPlan);

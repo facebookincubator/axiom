@@ -325,6 +325,9 @@ class PlanMatcherBuilder {
   /// Cannot be used with match(PlanNodePtr) - use match(MultiFragmentPlan).
   PlanMatcherBuilder& shuffle();
 
+  /// Matches a PartitionedOutput node with a single partition.
+  PlanMatcherBuilder& partitionedOutputSingle();
+
   /// Marks a shuffle boundary with verification of partition keys.
   /// @param keys Expected partition key column names. Supports symbol rewriting
   /// from child matchers.

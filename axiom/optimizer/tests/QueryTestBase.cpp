@@ -302,7 +302,10 @@ void QueryTestBase::checkSame(
   }
 
   if (options.numWorkers > 1) {
-    testOptions.push_back({.numWorkers = options.numWorkers, .numDrivers = 1});
+    testOptions.push_back(
+        {.numWorkers = options.numWorkers,
+         .numDrivers = 1,
+         .remoteOutput = true});
   }
 
   if (options.numWorkers > 1 && options.numDrivers > 1) {
@@ -326,7 +329,10 @@ velox::core::PlanNodePtr QueryTestBase::toSingleNodePlan(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     int32_t numDrivers) {
   auto plan =
-      planVelox(logicalPlan, {.numWorkers = 1, .numDrivers = numDrivers}).plan;
+      planVelox(
+          logicalPlan,
+          {.numWorkers = 1, .numDrivers = numDrivers, .remoteOutput = false})
+          .plan;
 
   EXPECT_EQ(1, plan->fragments().size());
   return plan->fragments().at(0).fragment.planNode;

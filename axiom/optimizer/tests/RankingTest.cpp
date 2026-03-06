@@ -67,8 +67,12 @@ TEST_F(RankingTest, rowNumberWithoutOrderBy) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher =
-      matchScan("nation").gather().localGather().rowNumber({}).build();
+  auto distributedMatcher = matchScan("nation")
+                                .gather()
+                                .localGather()
+                                .rowNumber({})
+                                .partitionedOutputSingle()
+                                .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
@@ -95,7 +99,7 @@ TEST_F(RankingTest, rowNumberWithPartitionByWithoutOrderBy) {
                                 .localPartition({"n_regionkey"})
                                 .rowNumber({"n_regionkey"})
                                 .project({"n_name", "rn"})
-                                .gather()
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -115,6 +119,7 @@ TEST_F(RankingTest, rowNumberWithLimit) {
                                 .distributedLimit(0, 10)
                                 .localGather()
                                 .rowNumber({})
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -142,6 +147,7 @@ TEST_F(RankingTest, rowNumberWithPartitionByAndLimit) {
                                 .localPartition({"n_regionkey"})
                                 .rowNumber({"n_regionkey"})
                                 .project({"n_name", "rn"})
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -162,6 +168,7 @@ TEST_F(RankingTest, rowNumberWithOrderByAndLimit) {
                                 .gather()
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 10)
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -186,6 +193,7 @@ TEST_F(RankingTest, rankWithOrderByAndLimit) {
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 10)
                                 .localLimit(0, 10)
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -218,6 +226,7 @@ TEST_F(RankingTest, rowNumberWithPartitionAndOrderByAndLimit) {
                                 .topNRowNumber({"n_regionkey"}, {"n_name"}, 10)
                                 .distributedLimit(0, 10)
                                 .project({"n_name", "rn"})
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -249,6 +258,7 @@ TEST_F(RankingTest, multipleWindowFunctionsWithLimitNoOptimization) {
                                      "sum(n_regionkey) OVER (ORDER BY n_name)"})
                                 .localLimit(0, 10)
                                 .project({"n_name", "rn", "s"})
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -277,7 +287,7 @@ TEST_F(RankingTest, rankWithoutOrderBy) {
           .localPartition({"n_regionkey"})
           .window({"rank() OVER (PARTITION BY n_regionkey)"})
           .project({"n_name", "rn"})
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -308,6 +318,7 @@ TEST_F(RankingTest, rankWithLimitWithoutOrderBy) {
           .window({"rank() OVER (PARTITION BY n_regionkey)"})
           .distributedLimit(0, 10)
           .project({"n_name", "rn"})
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -327,8 +338,12 @@ TEST_F(RankingTest, orderByWithoutLimit) {
 
     // No partition keys — gather, then Window.
     auto distributedPlan = toDistributedPlan(sql);
-    auto distributedMatcher =
-        matchScan("nation").gather().localGather().window({windowExpr}).build();
+    auto distributedMatcher = matchScan("nation")
+                                  .gather()
+                                  .localGather()
+                                  .window({windowExpr})
+                                  .partitionedOutputSingle()
+                                  .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
   }
 }
@@ -349,6 +364,7 @@ TEST_F(RankingTest, redundantQueryOrderBy) {
                                 .gather()
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 10)
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -377,6 +393,7 @@ TEST_F(RankingTest, filterOnOutput) {
                                   .gather()
                                   .localGather()
                                   .topNRowNumber({}, {"n_name"}, 5)
+                                  .partitionedOutputSingle()
                                   .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
   }
@@ -405,7 +422,7 @@ TEST_F(RankingTest, filterOnRowNumberWithPartitionKeys) {
                                 .localPartition({"n_regionkey"})
                                 .topNRowNumber({"n_regionkey"}, {"n_name"}, 5)
                                 .project({"n_name", "rn"})
-                                .gather()
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -424,8 +441,12 @@ TEST_F(RankingTest, filterOnRowNumberWithoutOrderBy) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 
   auto distributedPlan = toDistributedPlan(sql);
-  auto distributedMatcher =
-      matchScan("nation").gather().localGather().rowNumber({}, 5).build();
+  auto distributedMatcher = matchScan("nation")
+                                .gather()
+                                .localGather()
+                                .rowNumber({}, 5)
+                                .partitionedOutputSingle()
+                                .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
@@ -446,6 +467,7 @@ TEST_F(RankingTest, filterOnRowNumberLessThan) {
                                 .gather()
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 4)
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -467,6 +489,7 @@ TEST_F(RankingTest, filterOnRowNumberEquals1) {
                                 .gather()
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 1)
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -495,6 +518,7 @@ TEST_F(RankingTest, filterWithAdditionalPredicates) {
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 5)
                                 .filter("n_regionkey > 2")
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -521,6 +545,7 @@ TEST_F(RankingTest, filterWithLowerBound) {
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 10)
                                 .filter("rn >= 3")
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -548,6 +573,7 @@ TEST_F(RankingTest, filterOnOutputWithLimit) {
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 5)
                                 .localLimit(0, 3)
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -579,6 +605,7 @@ TEST_F(RankingTest, filterOnOutputWithLargerLimit) {
                                 .localGather()
                                 .topNRowNumber({}, {"n_name"}, 3)
                                 .localLimit(0, 10)
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -609,6 +636,7 @@ TEST_F(RankingTest, filterOnRowNumberWithMultipleWindowFunctions) {
           .localGather()
           .window({"count() OVER ()", "row_number() OVER ()"})
           .filter("rn <= 5")
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -637,6 +665,7 @@ TEST_F(RankingTest, nonWindowFilterWithWindowFunction) {
                                 .localGather()
                                 .window({"row_number() OVER (ORDER BY n_name)"})
                                 .filter("n_regionkey > 2")
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -668,7 +697,7 @@ TEST_F(RankingTest, partitionKeyFilterPushdown) {
           .localPartition({"n_regionkey"})
           .window(
               {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -699,7 +728,7 @@ TEST_F(RankingTest, nonPartitionKeyFilterStaysAbove) {
           .window(
               {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
           .filter("n_name = 'FRANCE'")
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -744,7 +773,7 @@ TEST_F(RankingTest, partitionKeyFilterWithMultipleWindows) {
               {"row_number() OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
           .localPartition({"n_regionkey"})
           .window({"count() OVER (PARTITION BY n_regionkey)"})
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -788,6 +817,7 @@ TEST_F(RankingTest, partitionKeyFilterPartialMatch) {
           .localGather()
           .window({"count() OVER ()"})
           .filter("n_regionkey = 2")
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }

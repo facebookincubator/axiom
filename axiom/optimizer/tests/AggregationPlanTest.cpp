@@ -242,14 +242,15 @@ TEST_F(AggregationPlanTest, orderBy) {
           .shuffle()
           .localPartition()
           .singleAggregation({"k"}, {"array_agg(v1 ORDER BY v2)", "sum(v1)"})
-          .shuffle()
+          .partitionedOutputSingle()
           .build();
 
   for (auto i = 0; i < 2; ++i) {
     OptimizerOptions option{.alwaysPlanPartialAggregation = (i == 0)};
     auto plan = planVelox(
         logicalPlan,
-        runner::MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4},
+        runner::MultiFragmentPlan::Options{
+            .numWorkers = 4, .numDrivers = 4, .remoteOutput = true},
         option);
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }
@@ -267,7 +268,7 @@ TEST_F(AggregationPlanTest, orderBy) {
                 .shuffle()
                 .localPartition()
                 .finalAggregation()
-                .shuffle()
+                .partitionedOutputSingle()
                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
 }
@@ -311,7 +312,7 @@ TEST_F(AggregationPlanTest, repartitionForAggPartitionSubset) {
                        // No shuffle here - partitionKeys ⊆ groupingKeys
                        .localPartition()
                        .singleAggregation({"a", "b", "d"}, {})
-                       .shuffle()
+                       .partitionedOutputSingle()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }
@@ -337,7 +338,7 @@ TEST_F(AggregationPlanTest, repartitionForAggPartitionSubset) {
                        .shuffle()
                        .localPartition()
                        .singleAggregation({"a", "b"}, {})
-                       .shuffle()
+                       .partitionedOutputSingle()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }
@@ -366,7 +367,7 @@ TEST_F(AggregationPlanTest, singleDistinctToGroupBy) {
         .shuffle()
         .localPartition()
         .singleAggregation(outerGroupingKeys, aggregates)
-        .shuffle()
+        .partitionedOutputSingle()
         .build();
   };
 
@@ -391,6 +392,7 @@ TEST_F(AggregationPlanTest, singleDistinctToGroupBy) {
             .shuffle()
             .localPartition()
             .finalAggregation({}, {"count(a0)", "covar_pop(a1)"})
+            .partitionedOutputSingle()
             .build();
 
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
