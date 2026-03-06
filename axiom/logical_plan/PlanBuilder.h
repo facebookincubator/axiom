@@ -768,11 +768,19 @@ class PlanBuilder {
     }
   };
 
+  // Computes the common supertype for each pair of USING columns from the left
+  // and right sides of a join. Returns nullptr for columns that already match.
+  std::vector<velox::TypePtr> computeCommonTypes(
+      const std::vector<UsingColumn>& usingColumns,
+      const velox::RowTypePtr& leftType,
+      const velox::RowTypePtr& rightType);
+
   // Adds a projection to deduplicate USING columns after a join. Emits a
   // single copy of each USING column followed by all non-USING columns.
   void addJoinUsingProjection(
       const std::vector<UsingColumn>& usingColumns,
-      JoinType joinType);
+      JoinType joinType,
+      const std::vector<velox::TypePtr>& commonTypes);
 
   std::string nextId() {
     return planNodeIdGenerator_->next();

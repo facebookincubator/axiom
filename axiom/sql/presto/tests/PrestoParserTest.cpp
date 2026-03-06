@@ -732,6 +732,17 @@ TEST_F(PrestoParserTest, joinUsing) {
         "SELECT * FROM t4 AS r(id, a, a) JOIN t5 AS t(id, b, b) USING (id)",
         matcher);
   }
+
+  // JOIN USING with type coercion (INTEGER vs BIGINT).
+  {
+    connector_->addTable("t_int", ROW({"id", "a"}, {INTEGER(), VARCHAR()}));
+    connector_->addTable("t_big", ROW({"id", "b"}, {BIGINT(), VARCHAR()}));
+    auto matcher = matchScan("t_int")
+                       .join(matchScan("t_big").build())
+                       .project()
+                       .output({"id", "a", "b"});
+    testSelect("SELECT * FROM t_int JOIN t_big USING (id)", matcher);
+  }
 }
 
 TEST_F(PrestoParserTest, joinOnSubquery) {
