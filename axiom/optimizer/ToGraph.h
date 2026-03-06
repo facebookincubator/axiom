@@ -267,13 +267,18 @@ class ToGraph {
       const logical_plan::ExprPtr& condition,
       logical_plan::JoinType originalJoinType);
 
-  // Eliminates join when the ON clause contains a constant false condition.
+  // Eliminates a join when the ON clause contains a constant false conjunct.
+  // - Left join: removes right side and projects NULLs.
+  // - Right join: removes left side and projects NULLs.
+  // - Full join: creates a UNION ALL of left (with NULLs for right) and right
+  //   (with NULLs for left).
+  //
+  // Inner joins are not yet supported.
   // Returns true if the join was eliminated.
-  bool eliminateJoinOnConstantFalse(
+  bool tryEliminateJoinOnConstantFalse(
       logical_plan::JoinType joinType,
       const logical_plan::LogicalPlanNodePtr& left,
-      const logical_plan::LogicalPlanNodePtr& right,
-      PlanObjectCP rightTable);
+      const logical_plan::LogicalPlanNodePtr& right);
 
   // For LEFT JOIN with subquery conjuncts in the ON clause, processes the right
   // side inside a container DT and applies the subquery conjuncts as filters.
@@ -411,7 +416,7 @@ class ToGraph {
       const std::vector<logical_plan::SortingField>& ordering);
 
   // Process subqueries used in filter's predicate or projection expressions
-  // and populate subqueries_ map. For each IN <subquery> expression, create a
+  // and populate subqueries map. For each IN <subquery> expression, create a
   // separate DT for the subquery and add a semi-join edge. Replace the whole IN
   // predicate with a 'mark' column produced by the join. For other <subquery>
   // expressions, create a separate DT and replace the expression with the only
