@@ -296,6 +296,143 @@ TEST_F(PlanBuilderTest, setOperationTypeCoercion) {
   }
 }
 
+TEST_F(PlanBuilderTest, joinUsingTypeCoercion) {
+  auto startMatcher = [] { return test::LogicalPlanMatcherBuilder().values(); };
+
+  auto makeBuilders = [](PlanBuilder::Context& context,
+                         const velox::RowTypePtr& leftType,
+                         const velox::RowTypePtr& rightType,
+                         bool enableCoercions = true) {
+    auto left = PlanBuilder(context, enableCoercions)
+                    .values(leftType, ValuesNode::Variants{});
+    auto right = PlanBuilder(context).values(rightType, ValuesNode::Variants{});
+    return std::make_pair(std::move(left), std::move(right));
+  };
+
+  // INTEGER vs BIGINT -> BIGINT.
+  {
+    PlanBuilder::Context context;
+    auto [left, right] = makeBuilders(
+        context,
+        ROW({"c0", "c1"}, {INTEGER(), VARCHAR()}),
+        ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}));
+
+    auto plan = left.joinUsing(right, {"c0"}, JoinType::kInner).build();
+
+    VELOX_EXPECT_EQ_TYPES(
+        plan->outputType(),
+        ROW({"c0", "c1", "c1_1"}, {BIGINT(), VARCHAR(), VARCHAR()}));
+
+    auto matcher =
+        startMatcher().join(startMatcher().build()).project().build();
+    ASSERT_TRUE(matcher->match(plan)) << plan->toString();
+  }
+
+  // Same types on both sides.
+  {
+    PlanBuilder::Context context;
+    auto [left, right] = makeBuilders(
+        context,
+        ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}),
+        ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}));
+
+    auto plan = left.joinUsing(right, {"c0"}, JoinType::kInner).build();
+
+    VELOX_EXPECT_EQ_TYPES(
+        plan->outputType(),
+        ROW({"c0", "c1", "c1_1"}, {BIGINT(), VARCHAR(), VARCHAR()}));
+
+    auto matcher =
+        startMatcher().join(startMatcher().build()).project().build();
+    ASSERT_TRUE(matcher->match(plan)) << plan->toString();
+  }
+
+  // Incompatible types (VARCHAR vs INTEGER) fail even with coercions enabled.
+  {
+    PlanBuilder::Context context;
+    auto [left, right] = makeBuilders(
+        context,
+        ROW({"c0", "c1"}, {VARCHAR(), BIGINT()}),
+        ROW({"c0", "c1"}, {INTEGER(), BIGINT()}));
+
+    VELOX_ASSERT_THROW(
+        left.joinUsing(right, {"c0"}, JoinType::kInner),
+        "USING column has incompatible types");
+  }
+
+  // Mismatched types fail when coercions are disabled.
+  {
+    PlanBuilder::Context context;
+    auto [left, right] = makeBuilders(
+        context,
+        ROW({"c0", "c1"}, {INTEGER(), VARCHAR()}),
+        ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}),
+        /*enableCoercions=*/false);
+
+    VELOX_ASSERT_THROW(
+        left.joinUsing(right, {"c0"}, JoinType::kInner),
+        "USING column has different types");
+  }
+
+  // RIGHT JOIN with coercion.
+  {
+    PlanBuilder::Context context;
+    auto [left, right] = makeBuilders(
+        context,
+        ROW({"c0", "c1"}, {INTEGER(), VARCHAR()}),
+        ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}));
+
+    auto plan = left.joinUsing(right, {"c0"}, JoinType::kRight).build();
+
+    VELOX_EXPECT_EQ_TYPES(
+        plan->outputType(),
+        ROW({"c0", "c1", "c1_1"}, {BIGINT(), VARCHAR(), VARCHAR()}));
+
+    auto matcher =
+        startMatcher().join(startMatcher().build()).project().project().build();
+    ASSERT_TRUE(matcher->match(plan)) << plan->toString();
+  }
+
+  // FULL OUTER JOIN with coercion.
+  {
+    PlanBuilder::Context context;
+    auto [left, right] = makeBuilders(
+        context,
+        ROW({"c0", "c1"}, {INTEGER(), VARCHAR()}),
+        ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}));
+
+    auto plan = left.joinUsing(right, {"c0"}, JoinType::kFull).build();
+
+    VELOX_EXPECT_EQ_TYPES(
+        plan->outputType(),
+        ROW({"c0", "c1", "c1_1"}, {BIGINT(), VARCHAR(), VARCHAR()}));
+
+    auto matcher =
+        startMatcher().join(startMatcher().build()).project().project().build();
+    ASSERT_TRUE(matcher->match(plan)) << plan->toString();
+  }
+
+  // Multiple USING columns with mixed match/mismatch.
+  {
+    PlanBuilder::Context context;
+    auto [left, right] = makeBuilders(
+        context,
+        ROW({"c0", "c1", "c2"}, {INTEGER(), VARCHAR(), REAL()}),
+        ROW({"c0", "c1", "c2"}, {BIGINT(), VARCHAR(), DOUBLE()}));
+
+    auto plan = left.joinUsing(right, {"c0", "c1"}, JoinType::kInner).build();
+
+    VELOX_EXPECT_EQ_TYPES(
+        plan->outputType(),
+        ROW({"c0", "c1", "c2", "c2_2"},
+            {BIGINT(), VARCHAR(), REAL(), DOUBLE()}));
+
+    auto matcher =
+        startMatcher().join(startMatcher().build()).project().build();
+    ASSERT_TRUE(matcher->match(plan)) << plan->toString();
+  }
+}
+
 TEST_F(PlanBuilderTest, groupingSetsEmptyAggregatesAndKeys) {
   auto rowType = ROW({"a", "b"}, INTEGER());
   std::vector<Variant> data{

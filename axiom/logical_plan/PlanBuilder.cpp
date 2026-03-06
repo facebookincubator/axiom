@@ -142,6 +142,19 @@ ExprPtr applyCoercion(const ExprPtr& input, const velox::TypePtr& type) {
   return std::make_shared<SpecialFormExpr>(type, SpecialForm::kCast, input);
 }
 
+// Creates an InputRef for the given column, casting to targetType if it
+// differs from the column's actual type.
+ExprPtr makeCoercedRef(
+    const velox::TypePtr& columnType,
+    const std::string& name,
+    const velox::TypePtr& targetType) {
+  auto ref = makeInputRef(columnType, name);
+  if (targetType != nullptr && !columnType->equivalent(*targetType)) {
+    return applyCoercion(ref, targetType);
+  }
+  return ref;
+}
+
 std::vector<velox::TypePtr> toTypes(const std::vector<ExprPtr>& exprs) {
   std::vector<velox::TypePtr> types;
   types.reserve(exprs.size());
@@ -1328,19 +1341,17 @@ PlanBuilder& PlanBuilder::joinUsing(
   auto leftType = node_->outputType();
   auto rightType = right.node_->outputType();
 
+  auto commonTypes = computeCommonTypes(usingColumns, leftType, rightType);
+
   std::vector<ExprPtr> eqExprs;
   eqExprs.reserve(usingColumns.size());
-  for (const auto& column : usingColumns) {
-    auto leftColumnType = leftType->findChild(column.leftId);
-    auto rightColumnType = rightType->findChild(column.rightId);
-    VELOX_USER_CHECK(
-        leftColumnType->equivalent(*rightColumnType),
-        "USING column has different types on left and right sides of the join: {} ({} vs {})",
-        column.name,
-        leftColumnType->toString(),
-        rightColumnType->toString());
-    auto leftRef = makeInputRef(leftColumnType, column.leftId);
-    auto rightRef = makeInputRef(rightColumnType, column.rightId);
+  for (size_t i = 0; i < usingColumns.size(); ++i) {
+    const auto& column = usingColumns[i];
+    auto leftRef = makeCoercedRef(
+        leftType->findChild(column.leftId), column.leftId, commonTypes[i]);
+    auto rightRef = makeCoercedRef(
+        rightType->findChild(column.rightId), column.rightId, commonTypes[i]);
+
     eqExprs.push_back(
         std::make_shared<CallExpr>(
             velox::BOOLEAN(), "eq", std::vector<ExprPtr>{leftRef, rightRef}));
@@ -1361,40 +1372,87 @@ PlanBuilder& PlanBuilder::joinUsing(
       nextId(), std::move(node_), right.node_, joinType, std::move(condition));
 
   // Add projection to deduplicate USING columns.
-  addJoinUsingProjection(usingColumns, joinType);
+  addJoinUsingProjection(usingColumns, joinType, commonTypes);
 
   return *this;
 }
 
+std::vector<velox::TypePtr> PlanBuilder::computeCommonTypes(
+    const std::vector<UsingColumn>& usingColumns,
+    const velox::RowTypePtr& leftType,
+    const velox::RowTypePtr& rightType) {
+  std::vector<velox::TypePtr> commonTypes;
+  commonTypes.reserve(usingColumns.size());
+
+  for (const auto& column : usingColumns) {
+    auto leftColumnType = leftType->findChild(column.leftId);
+    auto rightColumnType = rightType->findChild(column.rightId);
+
+    if (leftColumnType->equivalent(*rightColumnType)) {
+      commonTypes.push_back(nullptr);
+      continue;
+    }
+
+    if (!enableCoercions_) {
+      VELOX_USER_FAIL(
+          "USING column has different types on left and right sides of the join: ({} vs {}) for {}",
+          leftColumnType->toString(),
+          rightColumnType->toString(),
+          column.name);
+    }
+
+    auto commonType = velox::TypeCoercer::leastCommonSuperType(
+        leftColumnType, rightColumnType);
+    VELOX_USER_CHECK_NOT_NULL(
+        commonType,
+        "USING column has incompatible types on left and right sides of the join: ({} vs {}) for {}",
+        leftColumnType->toString(),
+        rightColumnType->toString(),
+        column.name);
+    commonTypes.push_back(commonType);
+  }
+  return commonTypes;
+}
+
 void PlanBuilder::addJoinUsingProjection(
     const std::vector<UsingColumn>& usingColumns,
-    JoinType joinType) {
+    JoinType joinType,
+    const std::vector<velox::TypePtr>& commonTypes) {
   auto joinOutputType = node_->outputType();
 
   std::vector<std::string> outputNames;
   std::vector<ExprPtr> exprs;
+  outputNames.reserve(joinOutputType->size());
+  exprs.reserve(joinOutputType->size());
   auto newOutputMapping = std::make_shared<NameMappings>();
 
   // Emit USING columns first (one copy each).
-  for (const auto& column : usingColumns) {
-    const auto& type = joinOutputType->findChild(column.leftId);
+  for (size_t i = 0; i < usingColumns.size(); ++i) {
+    const auto& column = usingColumns[i];
+    auto leftColumnType = joinOutputType->findChild(column.leftId);
+    auto rightColumnType = joinOutputType->findChild(column.rightId);
+
     if (joinType == JoinType::kFull) {
       // Coalesce left and right for FULL OUTER joins.
-      auto leftRef = makeInputRef(type, column.leftId);
-      auto rightRef = makeInputRef(type, column.rightId);
+      auto leftRef =
+          makeCoercedRef(leftColumnType, column.leftId, commonTypes[i]);
+      auto rightRef =
+          makeCoercedRef(rightColumnType, column.rightId, commonTypes[i]);
       exprs.push_back(
           std::make_shared<SpecialFormExpr>(
-              type,
+              leftRef->type(),
               SpecialForm::kCoalesce,
               std::vector<ExprPtr>{leftRef, rightRef}));
       outputNames.push_back(newName(column.name));
     } else if (joinType == JoinType::kRight) {
       // Use the right side's column for RIGHT joins.
-      exprs.push_back(makeInputRef(type, column.rightId));
+      exprs.push_back(
+          makeCoercedRef(rightColumnType, column.rightId, commonTypes[i]));
       outputNames.push_back(column.rightId);
     } else {
       // Pass through the left side's column for INNER/LEFT joins.
-      exprs.push_back(makeInputRef(type, column.leftId));
+      exprs.push_back(
+          makeCoercedRef(leftColumnType, column.leftId, commonTypes[i]));
       outputNames.push_back(column.leftId);
     }
 
