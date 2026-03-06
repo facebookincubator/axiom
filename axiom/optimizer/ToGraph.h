@@ -251,6 +251,7 @@ class ToGraph {
   // cross join followed by a filter, which handles subqueries using the same
   // infrastructure as WHERE clause predicates. For left or full joins, creates
   // a JoinEdge with appropriate equi-join keys and remaining filter.
+  // @param joinNode The JoinNode from the logical plan.
   // @param left Left side of the join. Must have been added to the graph
   // already.
   // @param right Right side of the join. Must have been added to the graph
@@ -261,6 +262,7 @@ class ToGraph {
   // @param originalJoinType The original join type from the logical plan
   // (before normalization).
   void translateJoin(
+      const logical_plan::JoinNode& joinNode,
       const logical_plan::LogicalPlanNodePtr& left,
       const logical_plan::LogicalPlanNodePtr& right,
       logical_plan::JoinType joinType,
@@ -273,7 +275,9 @@ class ToGraph {
   // - Full join: creates a UNION ALL of left (with NULLs for right) and right
   //   (with NULLs for left).
   //
-  // Inner joins are not yet supported.
+  // Note: Inner join is handled by addFilter, which produces an empty result
+  // when there is a false conjunct.
+  //
   // Returns true if the join was eliminated.
   bool tryEliminateJoinOnConstantFalse(
       logical_plan::JoinType joinType,

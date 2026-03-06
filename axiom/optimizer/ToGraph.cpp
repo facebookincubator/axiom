@@ -1805,6 +1805,7 @@ lp::ExprPtr ToGraph::processLeftJoinSubqueries(
 }
 
 void ToGraph::translateJoin(
+    const lp::JoinNode& joinNode,
     const lp::LogicalPlanNodePtr& left,
     const lp::LogicalPlanNodePtr& right,
     lp::JoinType joinType,
@@ -1820,7 +1821,7 @@ void ToGraph::translateJoin(
         exprSources_.pop_back();
       };
 
-      addFilter(*left, condition);
+      addFilter(*left, condition, &joinNode);
     }
     return;
   }
@@ -3631,7 +3632,8 @@ void ToGraph::makeQueryGraph(
             /*excludeWindows=*/true);
       }
 
-      translateJoin(left, right, joinType, remainingCondition, join.joinType());
+      translateJoin(
+          join, left, right, joinType, remainingCondition, join.joinType());
     } break;
     case lp::NodeKind::kSort: {
       const auto& input = *node.onlyInput();

@@ -1165,6 +1165,37 @@ TEST_F(JoinTest, leftJoinOnClausePushdown) {
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+
+  // Constant false ON conjunct applied on INNER JOIN will return an empty set.
+  {
+    auto query = "SELECT * FROM t INNER JOIN u ON a = x AND 1 > 2";
+    SCOPED_TRACE(query);
+
+    // No rows can match at all - return empty values with correct output type.
+    auto matcher = core::PlanMatcherBuilder()
+                       .values(ROW({"a", "b", "c", "x", "y"}, BIGINT()))
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Constant false ON conjunct on INNER JOIN when left side has aggregation.
+  // The ON condition goes to 'having' (not 'conjuncts') because currentDt_
+  // already has an aggregation plan.
+  {
+    auto query =
+        "SELECT * FROM (SELECT a, count(*) as cnt FROM t GROUP BY a) "
+        "INNER JOIN u ON a = x AND 1 > 2";
+    SCOPED_TRACE(query);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values(ROW({"a", "cnt", "x", "y"}, BIGINT()))
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 TEST_F(JoinTest, impliedJoins) {
