@@ -251,6 +251,7 @@ class ToGraph {
   // cross join followed by a filter, which handles subqueries using the same
   // infrastructure as WHERE clause predicates. For left or full joins, creates
   // a JoinEdge with appropriate equi-join keys and remaining filter.
+  // @param joinNode The JoinNode from the logical plan.
   // @param left Left side of the join. Must have been added to the graph
   // already.
   // @param right Right side of the join. Must have been added to the graph
@@ -261,19 +262,27 @@ class ToGraph {
   // @param originalJoinType The original join type from the logical plan
   // (before normalization).
   void translateJoin(
+      const logical_plan::JoinNode& joinNode,
       const logical_plan::LogicalPlanNodePtr& left,
       const logical_plan::LogicalPlanNodePtr& right,
       logical_plan::JoinType joinType,
       const logical_plan::ExprPtr& condition,
       logical_plan::JoinType originalJoinType);
 
-  // Eliminates join when the ON clause contains a constant false condition.
+  // Eliminates a join when the ON clause contains a constant false conjunct.
+  // - Left join: removes right side and projects NULLs.
+  // - Right join: removes left side and projects NULLs.
+  // - Full join: creates a UNION ALL of left (with NULLs for right) and right
+  //   (with NULLs for left).
+  //
+  // Note: Inner join is handled by addFilter, which produces an empty result
+  // when there is a false conjunct.
+  //
   // Returns true if the join was eliminated.
-  bool eliminateJoinOnConstantFalse(
+  bool tryEliminateJoinOnConstantFalse(
       logical_plan::JoinType joinType,
       const logical_plan::LogicalPlanNodePtr& left,
-      const logical_plan::LogicalPlanNodePtr& right,
-      PlanObjectCP rightTable);
+      const logical_plan::LogicalPlanNodePtr& right);
 
   // For LEFT JOIN with subquery conjuncts in the ON clause, processes the right
   // side inside a container DT and applies the subquery conjuncts as filters.
@@ -303,9 +312,14 @@ class ToGraph {
 
   void addProjection(const logical_plan::ProjectNode& project);
 
+  // Adds filter conjuncts from 'predicate' to 'currentDt_'. If 'output' is
+  // provided and the flattened conjuncts contain a constant false, replaces
+  // 'currentDt_' with an empty ValuesTable matching the output schema of
+  // 'output'.
   void addFilter(
       const logical_plan::LogicalPlanNode& input,
-      const logical_plan::ExprPtr& predicate);
+      const logical_plan::ExprPtr& predicate,
+      const logical_plan::LogicalPlanNode* output = nullptr);
 
   // Returns true if any window expression in the project references another
   // window function output through renames_. Used to detect window-on-window
@@ -411,7 +425,7 @@ class ToGraph {
       const std::vector<logical_plan::SortingField>& ordering);
 
   // Process subqueries used in filter's predicate or projection expressions
-  // and populate subqueries_ map. For each IN <subquery> expression, create a
+  // and populate subqueries map. For each IN <subquery> expression, create a
   // separate DT for the subquery and add a semi-join edge. Replace the whole IN
   // predicate with a 'mark' column produced by the join. For other <subquery>
   // expressions, create a separate DT and replace the expression with the only
