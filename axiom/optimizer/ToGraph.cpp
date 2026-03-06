@@ -3139,7 +3139,8 @@ bool ToGraph::windowReferencesWindow(const lp::ProjectNode& project) const {
 
 void ToGraph::addFilter(
     const lp::LogicalPlanNode& input,
-    const lp::ExprPtr& predicate) {
+    const lp::ExprPtr& predicate,
+    const lp::LogicalPlanNode* output) {
   exprSources_.push_back(&input);
   SCOPE_EXIT {
     exprSources_.pop_back();
@@ -3166,6 +3167,12 @@ void ToGraph::addFilter(
       correlatedConjuncts_.push_back(conjunct);
       return true;
     });
+  }
+
+  if (output && hasConstantFalse(flat)) {
+    currentDt_ = newDt();
+    makeEmptyValuesTable(*output);
+    return;
   }
 
   if (currentDt_->hasAggregation()) {
@@ -3460,7 +3467,7 @@ void ToGraph::makeFilterQueryGraph(
   if (hasNondeterministic(filter.predicate())) {
     auto* outerDt = std::exchange(currentDt_, newDt());
     makeQueryGraph(input, kAllAllowedInDt, excludeOuterJoins);
-    addFilter(input, filter.predicate());
+    addFilter(input, filter.predicate(), &filter);
     finalizeDt(filter, outerDt);
     return;
   }
@@ -3475,7 +3482,7 @@ void ToGraph::makeFilterQueryGraph(
     finalizeDt(filter);
   }
 
-  addFilter(input, filter.predicate());
+  addFilter(input, filter.predicate(), &filter);
 }
 
 void ToGraph::makeProjectQueryGraph(

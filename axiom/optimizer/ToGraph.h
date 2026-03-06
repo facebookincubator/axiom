@@ -308,9 +308,14 @@ class ToGraph {
 
   void addProjection(const logical_plan::ProjectNode& project);
 
+  // Adds filter conjuncts from 'predicate' to 'currentDt_'. If 'output' is
+  // provided and the flattened conjuncts contain a constant false, replaces
+  // 'currentDt_' with an empty ValuesTable matching the output schema of
+  // 'output'.
   void addFilter(
       const logical_plan::LogicalPlanNode& input,
-      const logical_plan::ExprPtr& predicate);
+      const logical_plan::ExprPtr& predicate,
+      const logical_plan::LogicalPlanNode* output = nullptr);
 
   // Returns true if any window expression in the project references another
   // window function output through renames_. Used to detect window-on-window
