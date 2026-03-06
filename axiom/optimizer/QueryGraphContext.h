@@ -189,6 +189,14 @@ struct Step {
 
   bool operator<(const Step& other) const;
 
+  bool operator>=(const Step& other) const {
+    return !(*this < other);
+  }
+
+  bool operator>(const Step& other) const {
+    return other < *this;
+  }
+
   size_t hash() const;
 };
 
@@ -255,6 +263,14 @@ class Path {
   bool operator==(const Path& other) const;
 
   bool operator<(const Path& other) const;
+
+  bool operator>=(const Path& other) const {
+    return !(*this < other);
+  }
+
+  bool operator>(const Path& other) const {
+    return other < *this;
+  }
 
   size_t hash() const;
 
