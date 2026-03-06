@@ -133,6 +133,10 @@ class MultiFragmentPlan {
     /// Number of threads in a fragment in a worker. If 1, there are no local
     /// exchanges.
     int32_t numDrivers{4};
+
+    /// Add partitioned output node to facilitate remote transfer of query
+    /// results.
+    bool remoteOutput{false};
   };
 
   MultiFragmentPlan(std::vector<ExecutableFragment> fragments, Options options)

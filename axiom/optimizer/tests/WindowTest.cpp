@@ -399,7 +399,7 @@ TEST_F(WindowTest, distributed) {
           .window(
               {"sum(n_nationkey) OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
           .project()
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
 }
@@ -426,7 +426,7 @@ TEST_F(WindowTest, distributedMultipleShuffles) {
           .window(
               {"sum(n_nationkey) OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
           .project()
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
 }
@@ -461,6 +461,7 @@ TEST_F(WindowTest, nonRedundantOrderByWithPartitionKeys) {
           .shuffleMerge()
           .finalLimit(0, 10)
           .project({"n_name", "s"})
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -491,6 +492,7 @@ TEST_F(WindowTest, nonRedundantOrderByWithDifferentKeys) {
           .shuffleMerge()
           .finalLimit(0, 10)
           .project()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -524,6 +526,7 @@ TEST_F(WindowTest, redundantOrderByMultipleWindowsSameOrderBy) {
                                      "avg(n_nationkey) OVER (ORDER BY n_name)"})
                                 .localLimit(0, 10)
                                 .project()
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
@@ -563,6 +566,7 @@ TEST_F(WindowTest, nonRedundantOrderByMultipleWindowsDifferentOrderBy) {
           .shuffleMerge()
           .finalLimit(0, 10)
           .project()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }

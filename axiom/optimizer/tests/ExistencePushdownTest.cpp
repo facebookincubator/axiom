@@ -133,7 +133,7 @@ TEST_F(ExistencePushdownTest, innerJoinGroupBy) {
               matchScan("t").filter("b < 100").shuffle({"a"}).build(),
               core::JoinType::kInner)
           .project()
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -189,7 +189,7 @@ TEST_F(ExistencePushdownTest, semiJoin) {
                   .broadcast()
                   .build(),
               core::JoinType::kLeftSemiFilter)
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -234,7 +234,7 @@ TEST_F(ExistencePushdownTest, leftJoinDtIsOptional) {
           .hashJoin(
               matchScan("t").filter("b < 100").shuffle({"a"}).build(),
               core::JoinType::kRight)
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -281,7 +281,7 @@ TEST_F(ExistencePushdownTest, otherIsDerivedTable) {
                                         .build(),
                                     core::JoinType::kInner)
                                 .project()
-                                .gather()
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -341,7 +341,7 @@ TEST_F(ExistencePushdownTest, chainJoin) {
                   .broadcast()
                   .build(),
               core::JoinType::kInner)
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -401,8 +401,7 @@ TEST_F(ExistencePushdownTest, multipleTables) {
               matchScan("r").filter("b < 100").broadcast().build(),
               core::JoinType::kInner)
           .project()
-          .gather()
-          .project()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -445,8 +444,7 @@ TEST_F(ExistencePushdownTest, partialPush) {
               core::JoinType::kInner)
           .hashJoin(matchScan("r").broadcast().build(), core::JoinType::kInner)
           .project()
-          .gather()
-          .project()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -497,7 +495,7 @@ TEST_F(ExistencePushdownTest, distinctSubquery) {
                   .broadcast()
                   .build(),
               core::JoinType::kInner)
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -539,7 +537,7 @@ TEST_F(ExistencePushdownTest, multiKeyJoin) {
               matchScan("t").filter("c < 100").shuffle({"a", "b"}).build(),
               core::JoinType::kInner)
           .project()
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -590,7 +588,7 @@ TEST_F(ExistencePushdownTest, joinWithFilter) {
               core::JoinType::kInner)
           .filter("b < x")
           .project()
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -624,7 +622,7 @@ TEST_F(ExistencePushdownTest, leftJoinDtIsPreserved) {
           .hashJoin(
               matchScan("t").shuffle({"a"}).build(), core::JoinType::kLeft)
           .project()
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -673,7 +671,7 @@ TEST_F(ExistencePushdownTest, windowSubquery) {
               matchScan("t").filter("b < 100").shuffle({"a"}).build(),
               core::JoinType::kInner)
           .project()
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -717,7 +715,7 @@ TEST_F(ExistencePushdownTest, limitOnFirstDt) {
                                         .broadcast()
                                         .build(),
                                     core::JoinType::kInner)
-                                .gather()
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -767,6 +765,7 @@ TEST_F(ExistencePushdownTest, orderByOnFirstDt) {
           .hashJoin(
               matchScan("t").filter("b < 100").broadcast().build(),
               core::JoinType::kInner)
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -804,7 +803,7 @@ TEST_F(ExistencePushdownTest, aggregateKey) {
           .hashJoin(
               matchScan("t").filter("b < 100").broadcast().build(),
               core::JoinType::kInner)
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -856,7 +855,7 @@ TEST_F(ExistencePushdownTest, otherIsUnnestDerivedTable) {
                                         .build(),
                                     core::JoinType::kInner)
                                 .project()
-                                .gather()
+                                .partitionedOutputSingle()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -911,7 +910,7 @@ TEST_F(ExistencePushdownTest, unnestGroupBy) {
                   .build(),
               core::JoinType::kInner)
           .project()
-          .gather()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
@@ -983,6 +982,7 @@ TEST_F(ExistencePushdownTest, windowNonPartitionKey) {
               matchScan("t").filter("b < 100").broadcast().build(),
               core::JoinType::kInner)
           .project()
+          .partitionedOutputSingle()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }

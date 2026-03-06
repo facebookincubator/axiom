@@ -144,22 +144,6 @@ std::vector<velox::common::Subfield> columnSubfields(
   return subfields;
 }
 
-RelationOpPtr addGather(const RelationOpPtr& op) {
-  if (op->distribution().isGather()) {
-    return op;
-  }
-  if (op->relType() == RelType::kOrderBy) {
-    const auto& order = op->distribution();
-    auto final = Distribution::gather(order.orderKeys(), order.orderTypes());
-    auto* gather = make<Repartition>(op, final, op->columns());
-    auto* orderBy =
-        make<OrderBy>(gather, order.orderKeys(), order.orderTypes());
-    return orderBy;
-  }
-  auto* gather = make<Repartition>(op, Distribution::gather(), op->columns());
-  return gather;
-}
-
 } // namespace
 
 void ToVelox::filterUpdated(BaseTableCP table) {
@@ -295,32 +279,35 @@ PlanAndStats ToVelox::toVeloxPlan(
     RelationOpPtr plan,
     const runner::MultiFragmentPlan::Options& options,
     const std::vector<logical_plan::OutputNode::Entry>& outputNames) {
+  VELOX_CHECK(
+      options.numWorkers == 1 || options.remoteOutput,
+      "Remote output is required for multi-worker plans");
   options_ = options;
 
   prediction_.clear();
   nodeHistory_.clear();
 
-  if (options_.numWorkers > 1) {
-    plan = addGather(plan);
-  }
-
-  runner::ExecutableFragment top;
+  runner::ExecutableFragment top = newFragment();
   std::vector<runner::ExecutableFragment> stages;
   top.fragment.planNode = makeFragment(plan, top, stages);
-
-  if (!outputNames.empty()) {
-    top.fragment.planNode =
-        addOutputRenames(top.fragment.planNode, outputNames);
-  }
-
   stages.push_back(std::move(top));
 
-  auto finishWrite = std::move(finishWrite_);
-  VELOX_DCHECK(!finishWrite_);
+  auto& rootPlanNode = stages.back().fragment.planNode;
+  if (!outputNames.empty()) {
+    rootPlanNode = addOutputRenames(rootPlanNode, outputNames);
+  }
 
   for (const auto& stage : stages) {
     velox::core::PlanConsistencyChecker::check(stage.fragment.planNode);
   }
+
+  if (options.remoteOutput) {
+    rootPlanNode = velox::core::PartitionedOutputNode::single(
+        nextId(), rootPlanNode->outputType(), exchangeSerdeKind_, rootPlanNode);
+  }
+
+  auto finishWrite = std::move(finishWrite_);
+  VELOX_DCHECK(!finishWrite_);
 
   return PlanAndStats{
       std::make_shared<runner::MultiFragmentPlan>(std::move(stages), options),

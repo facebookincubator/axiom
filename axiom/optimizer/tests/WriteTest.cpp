@@ -76,6 +76,7 @@ class WriteTest : public test::HiveQueriesTestBase {
       const runner::MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
           .numDrivers = 4,
+          .remoteOutput = true,
       }) {
     SCOPED_TRACE(sql);
 
@@ -519,7 +520,7 @@ void verifyPartitionedWrite(const runner::MultiFragmentPlan& plan) {
                      .shuffle()
                      .localPartition()
                      .tableWrite()
-                     .shuffle()
+                     .partitionedOutputSingle()
                      .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(&plan, matcher);
 }
@@ -533,7 +534,7 @@ void verifyCollocatedWrite(const runner::MultiFragmentPlan& plan) {
                      // TODO Enhance the optimizer to eliminate local exchange.
                      .localPartition()
                      .tableWrite()
-                     .shuffle()
+                     .partitionedOutputSingle()
                      .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(&plan, matcher);
 }

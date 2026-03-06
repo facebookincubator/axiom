@@ -119,6 +119,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
   runner::MultiFragmentPlan::Options options;
   options.numWorkers = numWorkers_;
   options.numDrivers = numDrivers_;
+  options.remoteOutput = numWorkers_ > 1;
   options.queryId = queryId;
 
   Optimization optimization(

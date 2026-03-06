@@ -55,7 +55,10 @@ TEST_F(HiveAggregationQueriesTest, mask) {
   }
 
   {
-    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan;
+    auto plan = planVelox(
+                    logicalPlan,
+                    {.numWorkers = 4, .numDrivers = 4, .remoteOutput = true})
+                    .plan;
 
     // Verify mask is NOT present in final aggregation.
     auto matcher =
@@ -67,6 +70,7 @@ TEST_F(HiveAggregationQueriesTest, mask) {
             .shuffle()
             .localPartition()
             .finalAggregation({}, {"sum(sum)", "avg(avg)"})
+            .partitionedOutputSingle()
             .build();
 
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
@@ -109,6 +113,7 @@ TEST_F(HiveAggregationQueriesTest, distinct) {
                   .shuffle()
                   .localPartition()
                   .finalAggregation({}, {"count(count)"})
+                  .partitionedOutputSingle()
                   .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
   }
@@ -152,7 +157,7 @@ TEST_F(HiveAggregationQueriesTest, orderBy) {
                     {"n_regionkey"},
                     {"array_agg(n_nationkey ORDER BY n_nationkey DESC)",
                      "array_agg(n_name ORDER BY n_nationkey)"})
-                .shuffle()
+                .partitionedOutputSingle()
                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
 
@@ -195,7 +200,7 @@ TEST_F(HiveAggregationQueriesTest, maskWithOrderBy) {
                 .shuffle()
                 .localPartition()
                 .singleAggregation()
-                .shuffle()
+                .partitionedOutputSingle()
                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
 
@@ -293,6 +298,7 @@ TEST_F(HiveAggregationQueriesTest, ignoreDuplicates) {
                        .localPartition()
                        .finalAggregation()
                        .project()
+                       .partitionedOutputSingle()
                        .build();
 
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
@@ -356,7 +362,10 @@ TEST_F(HiveAggregationQueriesTest, orderNonSensitive) {
   }
 
   {
-    auto plan = planVelox(logicalPlan, {.numWorkers = 4, .numDrivers = 4}).plan;
+    auto plan = planVelox(
+                    logicalPlan,
+                    {.numWorkers = 4, .numDrivers = 4, .remoteOutput = true})
+                    .plan;
 
     auto matcher = core::PlanMatcherBuilder()
                        .tableScan("nation")
@@ -375,6 +384,7 @@ TEST_F(HiveAggregationQueriesTest, orderNonSensitive) {
                        .localPartition()
                        .finalAggregation()
                        .project()
+                       .partitionedOutputSingle()
                        .build();
 
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
@@ -450,6 +460,7 @@ TEST_F(HiveAggregationQueriesTest, ignoreDuplicatesXOrderNonSensitive) {
             .localPartition()
             .finalAggregation()
             .project()
+            .partitionedOutputSingle()
             .build();
 
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);

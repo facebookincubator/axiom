@@ -136,6 +136,34 @@ std::vector<ExecutableFragment> topologicalSort(
   VELOX_CHECK_EQ(result.size(), fragments.size());
   return result;
 }
+
+std::vector<ExecutableFragment> prepareFragments(
+    const std::shared_ptr<velox::core::QueryCtx>& queryCtx,
+    std::vector<ExecutableFragment> fragments) {
+  VELOX_CHECK(!fragments.empty());
+  fragments = topologicalSort(fragments);
+  auto& topFragment = fragments.back();
+  auto& topNode = topFragment.fragment.planNode;
+  if (auto* partitionedOutput =
+          dynamic_cast<const velox::core::PartitionedOutputNode*>(
+              topNode.get())) {
+    VELOX_CHECK(partitionedOutput->isPartitioned());
+    VELOX_CHECK_EQ(partitionedOutput->numPartitions(), 1);
+    ExecutableFragment collectFragment{queryCtx->queryId() + "_collect"};
+    collectFragment.width = 1;
+    auto exchangeNode = std::make_shared<velox::core::ExchangeNode>(
+        "collect-exchange-node",
+        partitionedOutput->outputType(),
+        velox::VectorSerde::Kind::kPresto);
+    collectFragment.fragment.planNode = exchangeNode;
+    collectFragment.inputStages.push_back(
+        InputStage{
+            .consumerNodeId = exchangeNode->id(),
+            .producerTaskPrefix = topFragment.taskPrefix});
+    fragments.push_back(std::move(collectFragment));
+  }
+  return fragments;
+}
 } // namespace
 
 LocalRunner::LocalRunner(
@@ -145,7 +173,7 @@ LocalRunner::LocalRunner(
     std::shared_ptr<SplitSourceFactory> splitSourceFactory,
     std::shared_ptr<velox::memory::MemoryPool> outputPool)
     : plan_{std::move(plan)},
-      fragments_{topologicalSort(plan_->fragments())},
+      fragments_{prepareFragments(queryCtx, plan_->fragments())},
       finishWrite_{std::move(finishWrite)},
       splitSourceFactory_{std::move(splitSourceFactory)} {
   params_.queryCtx = std::move(queryCtx);
