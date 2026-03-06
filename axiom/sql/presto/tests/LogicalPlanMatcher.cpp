@@ -489,6 +489,50 @@ class OutputNamesMatcher : public LogicalPlanMatcherImpl<OutputNode> {
   const std::vector<std::string> expectedNames_;
 };
 
+class SortMatcher : public LogicalPlanMatcherImpl<SortNode> {
+ public:
+  SortMatcher(
+      const std::shared_ptr<LogicalPlanMatcher>& inputMatcher,
+      std::vector<std::string> ordering,
+      std::function<void(const LogicalPlanNodePtr&)> onMatch)
+      : LogicalPlanMatcherImpl<SortNode>(inputMatcher, std::move(onMatch)),
+        ordering_{std::move(ordering)} {}
+
+ private:
+  MatchResult matchDetails(
+      const SortNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    const auto& actualOrdering = plan.ordering();
+    EXPECT_EQ(actualOrdering.size(), ordering_.size());
+    AXIOM_RETURN_IF_FAILURE;
+
+    velox::parse::DuckSqlExpressionsParser parser;
+    for (size_t i = 0; i < ordering_.size(); ++i) {
+      auto expected = parser.parseOrderByExpr(ordering_[i]);
+      auto expectedExpr = expected.expr;
+
+      EXPECT_EQ(
+          toExprString(*expectedExpr->dropAlias()),
+          actualOrdering[i].expression->toString())
+          << "at ordering index " << i;
+      AXIOM_RETURN_IF_FAILURE;
+
+      EXPECT_EQ(expected.ascending, actualOrdering[i].order.isAscending())
+          << "sort direction mismatch at ordering index " << i;
+      AXIOM_RETURN_IF_FAILURE;
+
+      EXPECT_EQ(expected.nullsFirst, actualOrdering[i].order.isNullsFirst())
+          << "nulls-first mismatch at ordering index " << i;
+      AXIOM_RETURN_IF_FAILURE;
+    }
+
+    AXIOM_RETURN_RESULT(symbols)
+  }
+
+  const std::vector<std::string> ordering_;
+};
+
 #undef AXIOM_RETURN_IF_FAILURE
 #undef AXIOM_RETURN_RESULT
 
@@ -637,6 +681,15 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::sort(
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<LogicalPlanMatcherImpl<SortNode>>(
       matcher_, std::move(onMatch));
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::sort(
+    const std::vector<std::string>& ordering,
+    OnMatchCallback onMatch) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ =
+      std::make_shared<SortMatcher>(matcher_, ordering, std::move(onMatch));
   return *this;
 }
 
