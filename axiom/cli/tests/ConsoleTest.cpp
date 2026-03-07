@@ -70,7 +70,8 @@ TEST_F(ConsoleTest, permissionCheckCalledBeforeExecution) {
   std::string capturedSql;
   std::string capturedCatalog;
 
-  PermissionCheck check = [&](std::string_view sql,
+  PermissionCheck check = [&](std::string_view /*queryId*/,
+                              std::string_view sql,
                               std::string_view catalog,
                               std::optional<std::string_view> /*schema*/,
                               const auto& /*views*/) {

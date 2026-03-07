@@ -18,6 +18,7 @@
 #include <folly/FileUtil.h>
 #include <iostream>
 #include <optional>
+#include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/cli/ResultPrinter.h"
 #include "axiom/cli/StdinReader.h"
 #include "axiom/cli/Timing.h"
@@ -67,6 +68,21 @@ std::optional<std::string> getHistoryFilePath() {
 } // namespace
 
 namespace axiom::sql {
+
+Console::Console(
+    SqlQueryRunner& runner,
+    PermissionCheck permissionCheck,
+    QueryIdGenerator queryIdGenerator)
+    : runner_{runner}, permissionCheck_{std::move(permissionCheck)} {
+  if (queryIdGenerator) {
+    queryIdGenerator_ = std::move(queryIdGenerator);
+  } else {
+    auto generator = std::make_shared<cli::QueryIdGenerator>();
+    queryIdGenerator_ = [generator]() {
+      return generator->createNextQueryId();
+    };
+  }
+}
 
 void Console::initialize() {
   gflags::SetUsageMessage(
@@ -118,8 +134,11 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
       auto statement = cli::time<presto::SqlStatementPtr>(
           [&]() { return runner_.parseSingle(sqlText, options); }, parseTiming);
 
+      auto queryId = queryIdGenerator_();
+
       if (isInteractive) {
-        std::cout << "Parsing: " << parseTiming.toString() << std::endl;
+        std::cout << "Query ID: " << queryId
+                  << " | Parsing: " << parseTiming.toString() << std::endl;
       }
 
       // Permission check after parsing, before execution.
@@ -127,6 +146,7 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
         const auto& schema = options.defaultSchema ? options.defaultSchema
                                                    : runner_.defaultSchema();
         permissionCheck_(
+            queryId,
             sqlText,
             options.defaultConnectorId.value_or(runner_.defaultConnectorId()),
             schema ? std::optional<std::string_view>{*schema} : std::nullopt,

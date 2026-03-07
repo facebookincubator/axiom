@@ -26,9 +26,13 @@ DECLARE_bool(debug);
 
 namespace axiom::sql {
 
-/// Permission check callback: (sql, catalog, schema, views) -> throws on
-/// denial. Empty (nullptr) by default -- no permission checking.
+/// Function that generates a unique query ID string.
+using QueryIdGenerator = std::function<std::string()>;
+
+/// Permission check callback: (queryId, sql, catalog, schema, views) -> throws
+/// on denial. Empty (nullptr) by default -- no permission checking.
 using PermissionCheck = std::function<void(
+    std::string_view queryId,
     std::string_view sql,
     std::string_view catalog,
     std::optional<std::string_view> schema,
@@ -39,11 +43,14 @@ class Console {
  public:
   /// @param permissionCheck Optional callback invoked after each statement is
   /// parsed but before it is executed. Throws on denial.
+  /// @param queryIdGenerator Optional callback that produces a unique query ID.
+  /// Defaults to a randomly-generated suffix based generator.
   explicit Console(
       SqlQueryRunner& runner,
-      PermissionCheck permissionCheck = nullptr)
-      : runner_{runner}, permissionCheck_{std::move(permissionCheck)} {}
+      PermissionCheck permissionCheck = nullptr,
+      QueryIdGenerator queryIdGenerator = nullptr);
 
+  /// Initializes the CLI with usage message and logging settings.
   void initialize();
 
   /// Runs the CLI, either executing a single query if passed in
@@ -63,6 +70,7 @@ class Console {
 
   SqlQueryRunner& runner_;
   PermissionCheck permissionCheck_;
+  QueryIdGenerator queryIdGenerator_;
 };
 
 } // namespace axiom::sql
