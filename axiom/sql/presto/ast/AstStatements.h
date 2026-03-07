@@ -795,7 +795,7 @@ class ShowColumns : public Statement {
 
 /// Represents SHOW STATS FOR <table>. Returns per-column and table-level
 /// statistics as a VALUES plan with the following columns:
-///   row_count (DOUBLE) - total rows, populated only in the summary row.
+///   row_count (BIGINT) - total rows, populated only in the summary row.
 ///   column_name (VARCHAR) - column name, NULL in the summary row.
 ///   nulls_fraction (DOUBLE) - fraction of null values.
 ///   distinct_values_count (BIGINT) - number of distinct values.
@@ -816,6 +816,25 @@ class ShowStats : public Statement {
 
  private:
   std::shared_ptr<QualifiedName> table_;
+};
+
+/// Represents SHOW STATS FOR (<query>). Same output schema as ShowStats, but
+/// statistics are estimated by the optimizer for the result of the query.
+class ShowStatsForQuery : public Statement {
+ public:
+  ShowStatsForQuery(
+      NodeLocation location,
+      const std::shared_ptr<Statement>& query)
+      : Statement(NodeType::kShowStatsForQuery, location), query_(query) {}
+
+  const std::shared_ptr<Statement>& query() const {
+    return query_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+ private:
+  std::shared_ptr<Statement> query_;
 };
 
 class ShowFunctions : public Statement {

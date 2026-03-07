@@ -21,6 +21,7 @@ add_library(
   ExpressionPlanner.cpp
   GroupByPlanner.cpp
   PrestoParser.cpp
+  ShowStatsBuilder.cpp
   SqlStatement.cpp
   TableVisitor.cpp
 )

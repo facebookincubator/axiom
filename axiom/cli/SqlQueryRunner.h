@@ -138,6 +138,12 @@ class SqlQueryRunner {
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
       const RunOptions& options);
 
+  // Runs SHOW STATS FOR (<query>): optimizes the inner query's logical plan
+  // and returns per-column and table-level statistics as a VALUES result.
+  std::vector<facebook::velox::RowVectorPtr> runShowStatsForQuery(
+      const presto::SqlStatement& sqlStatement,
+      const RunOptions& options);
+
   // Parses SQL and returns the logical plan.
   facebook::axiom::logical_plan::LogicalPlanNodePtr toLogicalPlan(
       std::string_view sql);

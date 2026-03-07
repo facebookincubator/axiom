@@ -135,6 +135,7 @@ class TestTable : public Table {
     uint64_t nullCount{0};
     std::optional<velox::Variant> min;
     std::optional<velox::Variant> max;
+    int64_t totalLength{0};
     int32_t maxLength{0};
   };
 

@@ -1129,6 +1129,25 @@ TEST_F(PrestoParserTest, showStats) {
 
   VELOX_ASSERT_USER_THROW(
       parseSelect("SHOW STATS FOR no_such_table"), "Table not found");
+
+  // SHOW STATS FOR (<query>) returns a ShowStatsForQueryStatement wrapping
+  // the inner SELECT's logical plan.
+  {
+    auto statement = parseSql("SHOW STATS FOR (SELECT * FROM nation)");
+    ASSERT_TRUE(statement->isShowStatsForQuery());
+
+    auto* showStats = statement->as<ShowStatsForQueryStatement>();
+    ASSERT_TRUE(showStats->statement()->isSelect());
+  }
+
+  {
+    auto statement = parseSql(
+        "SHOW STATS FOR (SELECT n_nationkey FROM nation WHERE n_regionkey = 1)");
+    ASSERT_TRUE(statement->isShowStatsForQuery());
+
+    auto* showStats = statement->as<ShowStatsForQueryStatement>();
+    ASSERT_TRUE(showStats->statement()->isSelect());
+  }
 }
 
 TEST_F(PrestoParserTest, unqualifiedAccessAfterJoin) {

@@ -182,6 +182,7 @@ const auto& nodeTypeNames() {
       {NodeType::kShowCreateFunction, "ShowCreateFunction"},
       {NodeType::kShowSession, "ShowSession"},
       {NodeType::kShowStats, "ShowStats"},
+      {NodeType::kShowStatsForQuery, "ShowStatsForQuery"},
       {NodeType::kShowGrants, "ShowGrants"},
       {NodeType::kShowRoles, "ShowRoles"},
       {NodeType::kShowRoleGrants, "ShowRoleGrants"},
@@ -772,6 +773,10 @@ void ShowColumns::accept(AstVisitor* visitor) {
 
 void ShowStats::accept(AstVisitor* visitor) {
   visitor->visitShowStats(this);
+}
+
+void ShowStatsForQuery::accept(AstVisitor* visitor) {
+  visitor->visitShowStatsForQuery(this);
 }
 
 void ShowFunctions::accept(AstVisitor* visitor) {

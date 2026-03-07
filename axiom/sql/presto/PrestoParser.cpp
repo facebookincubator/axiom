@@ -22,6 +22,7 @@
 #include "axiom/sql/presto/ExpressionPlanner.h"
 #include "axiom/sql/presto/GroupByPlanner.h"
 #include "axiom/sql/presto/PrestoParseError.h"
+#include "axiom/sql/presto/ShowStatsBuilder.h"
 #include "axiom/sql/presto/TableVisitor.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
@@ -1211,96 +1212,46 @@ SqlStatementPtr parseShowStats(
       findTable(*showStats.table(), defaultConnectorId, defaultSchema);
   const auto schema = table->type();
 
-  static const auto kNullDouble = Variant::null(TypeKind::DOUBLE);
-  static const auto kNullBigint = Variant::null(TypeKind::BIGINT);
-  static const auto kNullVarchar = Variant::null(TypeKind::VARCHAR);
-
-  // Converts a stats Variant (min or max) to a display string using the
-  // column's type for proper formatting (e.g. dates, decimals).
-  auto variantToString = [](const Variant& value,
-                            const TypePtr& type) -> std::string {
-    if (value.kind() == TypeKind::VARCHAR) {
-      return value.value<TypeKind::VARCHAR>();
-    }
-    return value.toJson(type);
-  };
-
-  std::vector<Variant> data;
-  data.reserve(schema->size() + 1);
-
+  ShowStatsBuilder builder(static_cast<int64_t>(table->numRows()));
   for (auto i = 0; i < schema->size(); ++i) {
     const auto* column = table->columnMap().at(schema->nameOf(i));
     const auto* stats = column->stats();
 
-    auto nullsFraction = kNullDouble;
-    auto distinctCount = kNullBigint;
-    auto avgLength = kNullBigint;
-    auto lowValue = kNullVarchar;
-    auto highValue = kNullVarchar;
+    std::optional<double> nullsFraction;
+    std::optional<int64_t> distinctCount;
+    std::optional<int64_t> avgLength;
+    const Variant* min{nullptr};
+    const Variant* max{nullptr};
 
     if (stats != nullptr) {
-      nullsFraction = Variant(static_cast<double>(stats->nullPct) / 100.0);
-
+      nullsFraction = static_cast<double>(stats->nullPct) / 100.0;
       if (stats->numDistinct.has_value()) {
-        distinctCount =
-            Variant(static_cast<int64_t>(stats->numDistinct.value()));
+        distinctCount = static_cast<int64_t>(stats->numDistinct.value());
       }
-
-      if (stats->avgLength.has_value()) {
-        avgLength = Variant(static_cast<int64_t>(stats->avgLength.value()));
-      }
-
+      avgLength = stats->avgLength;
       if (stats->min.has_value()) {
-        lowValue = Variant(variantToString(stats->min.value(), column->type()));
+        min = &stats->min.value();
       }
-
       if (stats->max.has_value()) {
-        highValue =
-            Variant(variantToString(stats->max.value(), column->type()));
+        max = &stats->max.value();
       }
     }
 
-    data.emplace_back(
-        Variant::row(
-            {kNullDouble,
-             Variant(schema->nameOf(i)),
-             nullsFraction,
-             distinctCount,
-             avgLength,
-             lowValue,
-             highValue}));
+    builder.addColumn(
+        schema->nameOf(i),
+        *column->type(),
+        nullsFraction,
+        distinctCount,
+        avgLength,
+        min,
+        max);
   }
 
-  // Summary row: only row_count is populated.
-  data.emplace_back(
-      Variant::row(
-          {Variant(static_cast<double>(table->numRows())),
-           kNullVarchar,
-           kNullDouble,
-           kNullBigint,
-           kNullBigint,
-           kNullVarchar,
-           kNullVarchar}));
-
   lp::PlanBuilder::Context ctx(defaultConnectorId);
-  return std::make_shared<SelectStatement>(lp::PlanBuilder(ctx)
-                                               .values(
-                                                   ROW({"row_count",
-                                                        "column_name",
-                                                        "nulls_fraction",
-                                                        "distinct_values_count",
-                                                        "avg_length",
-                                                        "low_value",
-                                                        "high_value"},
-                                                       {DOUBLE(),
-                                                        VARCHAR(),
-                                                        DOUBLE(),
-                                                        BIGINT(),
-                                                        BIGINT(),
-                                                        VARCHAR(),
-                                                        VARCHAR()}),
-                                                   data)
-                                               .build());
+  return std::make_shared<SelectStatement>(
+      lp::PlanBuilder(ctx)
+          .values(ShowStatsBuilder::outputType(), builder.rows())
+          .build());
 }
 
 SqlStatementPtr parseShowFunctions(
@@ -1636,6 +1587,16 @@ SqlStatementPtr doPlan(
   if (query->is(NodeType::kShowStats)) {
     return parseShowStats(
         *query->as<ShowStats>(), defaultConnectorId, defaultSchema);
+  }
+
+  if (query->is(NodeType::kShowStatsForQuery)) {
+    auto* showStats = query->as<ShowStatsForQuery>();
+    RelationPlanner planner(defaultConnectorId, defaultSchema, parseSql);
+    showStats->query()->accept(&planner);
+    auto innerStatement =
+        std::make_shared<SelectStatement>(planner.plan(), planner.views());
+    return std::make_shared<ShowStatsForQueryStatement>(
+        std::move(innerStatement));
   }
 
   if (query->is(NodeType::kShowFunctions)) {

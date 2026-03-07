@@ -30,6 +30,7 @@ enum class SqlStatementKind {
   kInsert,
   kDropTable,
   kExplain,
+  kShowStatsForQuery,
   kUse,
 };
 
@@ -73,6 +74,10 @@ class SqlStatement {
 
   bool isExplain() const {
     return kind_ == SqlStatementKind::kExplain;
+  }
+
+  bool isShowStatsForQuery() const {
+    return kind_ == SqlStatementKind::kShowStatsForQuery;
   }
 
   bool isUse() const {
@@ -325,6 +330,22 @@ class ExplainStatement : public SqlStatement {
   const SqlStatementPtr statement_;
   const bool analyze_;
   const Type type_;
+};
+
+/// Wraps a SELECT statement whose logical plan should be optimized to extract
+/// per-column and table-level statistics from the optimizer.
+class ShowStatsForQueryStatement : public SqlStatement {
+ public:
+  explicit ShowStatsForQueryStatement(SqlStatementPtr statement)
+      : SqlStatement(SqlStatementKind::kShowStatsForQuery),
+        statement_{std::move(statement)} {}
+
+  const SqlStatementPtr& statement() const {
+    return statement_;
+  }
+
+ private:
+  const SqlStatementPtr statement_;
 };
 
 /// Sets the default catalog and schema for subsequent queries.
