@@ -384,5 +384,36 @@ TEST_F(RelationOpPrinterTest, maxDepth) {
   }
 }
 
+TEST_F(RelationOpPrinterTest, groupId) {
+  connector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
+
+  auto lines =
+      toLines("SELECT a, b, sum(c) AS total FROM t GROUP BY ROLLUP(a, b)");
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("Project"),
+          testing::StartsWith("    "), // dt1.a := t2.a
+          testing::StartsWith("    "), // dt1.b := t2.b
+          testing::StartsWith("    "), // dt1.total := dt1.total
+          testing::StartsWith("    "), // grouping set ID column
+          testing::StartsWith("  Aggregation"),
+          testing::HasSubstr("sum(t2.c)"),
+          testing::AllOf(
+              testing::StartsWith("    GroupId"),
+              testing::HasSubstr("[a$gid, b$gid], [a$gid], []")),
+          testing::HasSubstr("a$gid := "),
+          testing::HasSubstr("b$gid := "),
+          testing::HasSubstr("groupIdColumn:"),
+          testing::StartsWith("      TableScan"),
+          testing::StartsWith("        table: t"),
+          testing::Eq("")));
+
+  auto oneline =
+      toOneline("SELECT a, b, sum(c) AS total FROM t GROUP BY ROLLUP(a, b)");
+  EXPECT_THAT(oneline, testing::HasSubstr("groupid("));
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

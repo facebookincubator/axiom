@@ -499,12 +499,17 @@ TEST_F(PlanBuilderTest, groupingSetsWithIndices) {
 
   EXPECT_THAT(
       plan->outputType()->names(),
-      testing::ElementsAre("a", "b", "c", "total", "$grouping_set_id"));
+      testing::ElementsAre("a", "b", "c", "$grouping_set_id", "total"));
 
   auto aggNode = std::dynamic_pointer_cast<const AggregateNode>(plan);
   ASSERT_NE(aggNode, nullptr);
+  EXPECT_TRUE(aggNode->groupingSets().empty());
+
+  auto groupIdNode =
+      std::dynamic_pointer_cast<const GroupIdNode>(aggNode->onlyInput());
+  ASSERT_NE(groupIdNode, nullptr);
   EXPECT_THAT(
-      aggNode->groupingSets(),
+      groupIdNode->groupingSets(),
       testing::ElementsAre(
           std::vector<int32_t>{0, 1}, std::vector<int32_t>{0, 1, 2}));
 }
@@ -520,16 +525,19 @@ TEST_F(PlanBuilderTest, rollup) {
                   .rollup({"a", "b"}, {"sum(c) as total"}, "$grouping_set_id")
                   .build();
 
-  // Output should have: a, b (grouping keys), total, $grouping_set_id
   EXPECT_THAT(
       plan->outputType()->names(),
-      testing::ElementsAre("a", "b", "total", "$grouping_set_id"));
+      testing::ElementsAre("a", "b", "$grouping_set_id", "total"));
 
-  // Verify ROLLUP(a, b) expands to: [[0,1], [0], []]
   auto aggNode = std::dynamic_pointer_cast<const AggregateNode>(plan);
   ASSERT_NE(aggNode, nullptr);
+  EXPECT_TRUE(aggNode->groupingSets().empty());
+
+  auto groupIdNode =
+      std::dynamic_pointer_cast<const GroupIdNode>(aggNode->onlyInput());
+  ASSERT_NE(groupIdNode, nullptr);
   EXPECT_THAT(
-      aggNode->groupingSets(),
+      groupIdNode->groupingSets(),
       testing::ElementsAre(
           std::vector<int32_t>{0, 1},
           std::vector<int32_t>{0},
@@ -547,16 +555,19 @@ TEST_F(PlanBuilderTest, cube) {
                   .cube({"a", "b"}, {"sum(c) as total"}, "$grouping_set_id")
                   .build();
 
-  // Output should have: a, b (grouping keys), total, $grouping_set_id
   EXPECT_THAT(
       plan->outputType()->names(),
-      testing::ElementsAre("a", "b", "total", "$grouping_set_id"));
+      testing::ElementsAre("a", "b", "$grouping_set_id", "total"));
 
-  // Verify CUBE(a, b) expands to: [[0,1], [0], [1], []]
   auto aggNode = std::dynamic_pointer_cast<const AggregateNode>(plan);
   ASSERT_NE(aggNode, nullptr);
+  EXPECT_TRUE(aggNode->groupingSets().empty());
+
+  auto groupIdNode =
+      std::dynamic_pointer_cast<const GroupIdNode>(aggNode->onlyInput());
+  ASSERT_NE(groupIdNode, nullptr);
   EXPECT_THAT(
-      aggNode->groupingSets(),
+      groupIdNode->groupingSets(),
       testing::ElementsAre(
           std::vector<int32_t>{0, 1},
           std::vector<int32_t>{0},
@@ -576,11 +587,15 @@ TEST_F(PlanBuilderTest, cubeThreeKeys) {
           .cube({"a", "b", "c"}, {"sum(d) as total"}, "$grouping_set_id")
           .build();
 
-  // Verify CUBE(a, b, c) expands to 2^3 = 8 grouping sets.
   auto aggNode = std::dynamic_pointer_cast<const AggregateNode>(plan);
   ASSERT_NE(aggNode, nullptr);
+  EXPECT_TRUE(aggNode->groupingSets().empty());
+
+  auto groupIdNode =
+      std::dynamic_pointer_cast<const GroupIdNode>(aggNode->onlyInput());
+  ASSERT_NE(groupIdNode, nullptr);
   EXPECT_THAT(
-      aggNode->groupingSets(),
+      groupIdNode->groupingSets(),
       testing::ElementsAre(
           std::vector<int32_t>{0, 1, 2},
           std::vector<int32_t>{0, 1},

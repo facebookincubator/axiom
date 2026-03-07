@@ -103,7 +103,7 @@ TEST_F(AggregationPlanTest, duplicatesBetweenGroupAndAggregate) {
 TEST_F(AggregationPlanTest, dedupMask) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
-  auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
+  auto logicalPlan = lp::PlanBuilder(/*enableCoercions=*/true)
                          .tableScan(kTestConnectorId, "t")
                          .aggregate(
                              {},
@@ -132,7 +132,7 @@ TEST_F(AggregationPlanTest, dedupMask) {
 TEST_F(AggregationPlanTest, dedupOrderBy) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
 
-  auto logicalPlan = lp::PlanBuilder(/*enableCoersions=*/true)
+  auto logicalPlan = lp::PlanBuilder(/*enableCoercions=*/true)
                          .tableScan(kTestConnectorId, "t")
                          .aggregate(
                              {},
@@ -162,7 +162,7 @@ TEST_F(AggregationPlanTest, dedupSameOptions) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
 
   auto logicalPlan =
-      lp::PlanBuilder(/*enableCoersions=*/true)
+      lp::PlanBuilder(/*enableCoercions=*/true)
           .tableScan(kTestConnectorId, "t")
           .aggregate(
               {},
@@ -550,6 +550,97 @@ TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
         test::QueryTestBase::planVelox(logicalPlan),
         "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
   }
+}
+
+TEST_F(AggregationPlanTest, groupingSets) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
+
+  auto logicalPlan = lp::PlanBuilder()
+                         .tableScan(kTestConnectorId, "t")
+                         .rollup({"a", "b"}, {"sum(c) as total"}, "gid")
+                         .build();
+
+  // Single-node plan shape.
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    // ROLLUP(a, b) expands to grouping sets: {a, b}, {a}, {}.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .groupId({{"a$gid", "b$gid"}, {"a$gid"}, {}}, {"c"}, "gid")
+            .singleAggregation({"a$gid", "b$gid", "gid"}, {"sum(c) as total"})
+            .project({"a$gid", "b$gid", "gid", "total"})
+            .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Distributed plan shape.
+  {
+    auto plan = planVelox(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .groupId({{"a$gid", "b$gid"}, {"a$gid"}, {}}, {"c"}, "gid")
+            .partialAggregation({"a$gid", "b$gid", "gid"}, {"sum(c) as total"})
+            .shuffle()
+            .localPartition()
+            .finalAggregation()
+            .project({"a$gid", "b$gid", "gid", "total"})
+            .gather()
+            .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+
+  // Distributed plan with ORDER BY in aggregate.
+  {
+    auto logicalPlanWithOrderBy =
+        lp::PlanBuilder(/*enableCoercions=*/true)
+            .tableScan(kTestConnectorId, "t")
+            .rollup({"a"}, {"array_agg(b ORDER BY c) as arr"}, "gid")
+            .build();
+
+    auto plan = planVelox(logicalPlanWithOrderBy);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .groupId({{"a$gid"}, {}}, {"b"}, "gid")
+            .partialAggregation({"a$gid", "gid"}, {"array_agg(b) as arr"})
+            .shuffle()
+            .localPartition()
+            .finalAggregation()
+            .project({"a$gid", "gid", "arr"})
+            .gather()
+            .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+}
+
+// Verifies that a grouping key can also be an aggregation input.
+// SELECT a, SUM(a) FROM t GROUP BY ROLLUP(a) requires 'a' to appear both as
+// a grouping key (subject to NULL-ing) and as an aggregation input (preserved).
+TEST_F(AggregationPlanTest, groupingSetsKeyIsAggInput) {
+  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), DOUBLE()}));
+
+  auto logicalPlan = lp::PlanBuilder()
+                         .tableScan(kTestConnectorId, "t")
+                         .rollup({"a"}, {"sum(a) as total"}, "gid")
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  // 'a' appears as both a grouping key and an aggregation input in GroupId.
+  // The key output is renamed to 'a$gid' to avoid ambiguity.
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .groupId({{"a$gid"}, {}}, {"a"}, "gid")
+                     .singleAggregation({"a$gid", "gid"}, {"sum(a) as total"})
+                     .project({"a$gid", "gid", "total"})
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 } // namespace

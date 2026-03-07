@@ -158,7 +158,11 @@ void SubfieldTracker::markFieldAccessed(
     return;
   }
 
-  const auto& aggregate = agg.aggregateAt(ordinal - keys.size());
+  const auto* aggregate = aggregateForOrdinal(agg, ordinal);
+  if (!aggregate) {
+    return;
+  }
+
   for (const auto& aggregateInput : aggregate->inputs()) {
     mark(aggregateInput);
   }
@@ -181,6 +185,35 @@ void SubfieldTracker::markFieldAccessed(
     const auto ctx = fromNode(input);
     markFieldAccessed(ctx.sources[0], ordinal, steps, isControl, ctx.toCtx());
   }
+}
+
+void SubfieldTracker::markFieldAccessed(
+    const lp::GroupIdNode& groupId,
+    int32_t ordinal,
+    std::vector<Step>& steps,
+    bool isControl) {
+  const auto& input = groupId.onlyInput();
+  const auto numKeys = static_cast<int32_t>(groupId.groupingKeys().size());
+  const auto numAggInputs =
+      static_cast<int32_t>(groupId.aggregateInputs().size());
+
+  if (ordinal < numKeys) {
+    const auto ctx = fromNode(input);
+    markSubfields(
+        groupId.groupingKeys()[ordinal], steps, isControl, ctx.toCtx());
+    return;
+  }
+
+  if (ordinal < numKeys + numAggInputs) {
+    const auto ctx = fromNode(input);
+    markSubfields(
+        groupId.aggregateInputs()[ordinal - numKeys],
+        steps,
+        isControl,
+        ctx.toCtx());
+    return;
+  }
+  // The last column is the synthesized groupId column — nothing to trace.
 }
 
 void SubfieldTracker::markFieldAccessed(
@@ -237,6 +270,12 @@ void SubfieldTracker::markFieldAccessed(
   if (kind == lp::NodeKind::kAggregate) {
     const auto* agg = source.planNode->as<lp::AggregateNode>();
     markFieldAccessed(*agg, ordinal, steps, isControl);
+    return;
+  }
+
+  if (kind == lp::NodeKind::kGroupId) {
+    const auto* groupId = source.planNode->as<lp::GroupIdNode>();
+    markFieldAccessed(*groupId, ordinal, steps, isControl);
     return;
   }
 
@@ -577,6 +616,14 @@ void SubfieldTracker::markControl(
     const auto& agg = *node.as<lp::AggregateNode>();
     markColumnSubfields(
         node.onlyInput(), agg.groupingKeys(), /*isControl=*/true, context);
+
+  } else if (kind == lp::NodeKind::kGroupId) {
+    const auto& groupId = *node.as<lp::GroupIdNode>();
+    markColumnSubfields(
+        node.onlyInput(),
+        groupId.groupingKeys(),
+        /*isControl=*/true,
+        context);
 
   } else if (kind == lp::NodeKind::kSort) {
     const auto& order = *node.as<lp::SortNode>();

@@ -502,10 +502,11 @@ TEST_F(PlanPrinterTest, aggregateGroupingSets) {
   EXPECT_THAT(
       lines,
       testing::ElementsAre(
-          testing::StartsWith(
-              "- Aggregate(a, b) GROUPING SETS [(a, b), (a), ()]"),
+          testing::StartsWith("- Aggregate(a$gid, b$gid, $grouping_set_id)"),
           testing::StartsWith("    total := sum(c)"),
-          testing::StartsWith("  - Values"),
+          testing::StartsWith(
+              "  - GroupId(a, b) GROUPING SETS [(a, b), (a), ()]"),
+          testing::StartsWith("    - Values"),
           testing::Eq("")));
 }
 
@@ -530,10 +531,11 @@ TEST_F(PlanPrinterTest, groupingSetsDistinctAgg) {
   EXPECT_THAT(
       lines,
       testing::ElementsAre(
-          testing::StartsWith(
-              "- Aggregate(a, b) GROUPING SETS [(a, b), (a), ()]"),
+          testing::StartsWith("- Aggregate(a$gid, b$gid, $grouping_set_id)"),
           testing::StartsWith("    distinct_sum := sum(DISTINCT c)"),
-          testing::StartsWith("  - Values"),
+          testing::StartsWith(
+              "  - GroupId(a, b) GROUPING SETS [(a, b), (a), ()]"),
+          testing::StartsWith("    - Values"),
           testing::Eq("")));
 }
 
@@ -558,10 +560,11 @@ TEST_F(PlanPrinterTest, groupingSetsSortedAgg) {
   EXPECT_THAT(
       lines,
       testing::ElementsAre(
-          testing::StartsWith("- Aggregate(a) GROUPING SETS [(a), ()]"),
+          testing::StartsWith("- Aggregate(a$gid, $grouping_set_id)"),
           testing::StartsWith(
               "    ordered_array := array_agg(b ORDER BY c DESC"),
-          testing::StartsWith("  - Values"),
+          testing::StartsWith("  - GroupId(a) GROUPING SETS [(a), ()]"),
+          testing::StartsWith("    - Values"),
           testing::Eq("")));
 }
 
@@ -587,10 +590,11 @@ TEST_F(PlanPrinterTest, groupingSetsMaskedAgg) {
   EXPECT_THAT(
       lines,
       testing::ElementsAre(
-          testing::StartsWith(
-              "- Aggregate(a, b) GROUPING SETS [(a, b), (a), ()]"),
+          testing::StartsWith("- Aggregate(a$gid, b$gid, $grouping_set_id)"),
           testing::StartsWith("    filtered_sum := sum(c) FILTER (WHERE d)"),
-          testing::StartsWith("  - Values"),
+          testing::StartsWith(
+              "  - GroupId(a, b) GROUPING SETS [(a, b), (a), ()]"),
+          testing::StartsWith("    - Values"),
           testing::Eq("")));
 }
 
@@ -618,11 +622,12 @@ TEST_F(PlanPrinterTest, groupingSetsDistinctSortedMaskedAgg) {
   EXPECT_THAT(
       lines,
       testing::ElementsAre(
-          testing::StartsWith(
-              "- Aggregate(a, b) GROUPING SETS [(a, b), (a), ()]"),
+          testing::StartsWith("- Aggregate(a$gid, b$gid, $grouping_set_id)"),
           testing::StartsWith(
               "    complex_agg := array_agg(DISTINCT b ORDER BY c DESC NULLS LAST) FILTER (WHERE d)"),
-          testing::StartsWith("  - Values"),
+          testing::StartsWith(
+              "  - GroupId(a, b) GROUPING SETS [(a, b), (a), ()]"),
+          testing::StartsWith("    - Values"),
           testing::Eq("")));
 }
 

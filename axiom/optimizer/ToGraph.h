@@ -598,6 +598,18 @@ class ToGraph {
   const FunctionNames functionNames_;
 
   folly::F14FastMap<Name, Name> reversibleFunctions_;
+
+  // Deferred GroupIdNode data, consumed by the immediately following
+  // AggregateNode in translateAggregation.
+  struct PendingGroupId {
+    // Index-based grouping sets from the logical GroupIdNode.
+    GroupingSets groupingSets;
+    // Synthesized column for the grouping set ID output.
+    ColumnCP groupIdColumn;
+    // Original (unrenamed) input key columns from the scan.
+    ColumnVector inputGroupingKeys;
+  };
+  std::optional<PendingGroupId> pendingGroupId_;
 };
 
 } // namespace facebook::axiom::optimizer
