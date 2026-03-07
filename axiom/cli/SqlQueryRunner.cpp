@@ -16,6 +16,7 @@
 
 #include "axiom/cli/SqlQueryRunner.h"
 #include <folly/system/HardwareConcurrency.h>
+#include <cmath>
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/logical_plan/LogicalPlanDotPrinter.h"
@@ -28,6 +29,7 @@
 #include "axiom/optimizer/RelationOpPrinter.h"
 #include "axiom/optimizer/VeloxHistory.h"
 #include "axiom/sql/presto/PrestoParser.h"
+#include "axiom/sql/presto/ShowStatsBuilder.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/expression/Expr.h"
@@ -269,6 +271,10 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     return {.message = dropTable(*drop)};
   }
 
+  if (sqlStatement.isShowStatsForQuery()) {
+    return {.results = runShowStatsForQuery(sqlStatement, options)};
+  }
+
   if (sqlStatement.isUse()) {
     const auto* use = sqlStatement.as<presto::UseStatement>();
     const auto& connectorId = use->catalog().has_value()
@@ -497,6 +503,48 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runLogicalPlan(
   };
 
   return fetchResults(*runner);
+}
+
+std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
+    const presto::SqlStatement& sqlStatement,
+    const RunOptions& options) {
+  const auto* showStats = sqlStatement.as<presto::ShowStatsForQueryStatement>();
+  const auto& innerStatement = showStats->statement();
+  VELOX_CHECK(innerStatement->isSelect());
+
+  const auto logicalPlan =
+      innerStatement->as<presto::SelectStatement>()->plan();
+
+  std::vector<velox::Variant> data;
+
+  optimize(
+      logicalPlan,
+      newQuery(options),
+      options,
+      [&](const optimizer::DerivedTable& rootDt) {
+        presto::ShowStatsBuilder builder(std::llround(rootDt.cardinality));
+
+        for (const auto* column : rootDt.columns) {
+          const auto& value = column->value();
+
+          builder.addColumn(
+              column->outputName(),
+              *value.type,
+              static_cast<double>(value.nullFraction),
+              static_cast<int64_t>(value.cardinality),
+              /*avgLength=*/std::nullopt,
+              value.min,
+              value.max);
+        }
+
+        data = builder.rows();
+        return false; // Stop optimization.
+      });
+
+  auto result = std::dynamic_pointer_cast<velox::RowVector>(
+      velox::BaseVector::createFromVariants(
+          presto::ShowStatsBuilder::outputType(), data, optimizerPool_.get()));
+  return {result};
 }
 
 } // namespace axiom::sql

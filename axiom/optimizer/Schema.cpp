@@ -59,7 +59,9 @@ float Value::byteSize() const {
     return static_cast<float>(type->cppSizeInBytes());
   }
   switch (type->kind()) {
-      // Add complex types here.
+      // TODO: Use avgLength from connector stats to replace this hardcoded
+      // estimate. Needed for strings, arrays, and maps to properly estimate
+      // memory usage and shuffle volume.
     default:
       return 16;
   }

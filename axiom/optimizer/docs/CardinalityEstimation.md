@@ -304,6 +304,11 @@ TODO: Compute fanout from unnest expression array size statistics when available
 5. **Unnest heuristic**: Array/map unnest uses a hardcoded fanout of 10
    regardless of actual array sizes.
 
+6. **No average length tracking**: The optimizer does not propagate average
+   length (avgLength) for variable-length types (strings, arrays, maps).
+   `Value::byteSize()` returns a hardcoded 16 bytes for all such types.
+   This affects memory usage and shuffle volume estimates.
+
 ## Sampling
 
 The optimizer can sample actual data to improve cardinality estimates beyond

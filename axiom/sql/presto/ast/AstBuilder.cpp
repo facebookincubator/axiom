@@ -723,7 +723,12 @@ std::any AstBuilder::visitShowStats(PrestoSqlParser::ShowStatsContext* ctx) {
 std::any AstBuilder::visitShowStatsForQuery(
     PrestoSqlParser::ShowStatsForQueryContext* ctx) {
   trace("visitShowStatsForQuery");
-  return visitChildren("visitShowStatsForQuery", ctx);
+  auto queryBody = std::any_cast<std::shared_ptr<QueryBody>>(
+      visitQuerySpecification(ctx->querySpecification()));
+  auto query = std::static_pointer_cast<Statement>(
+      std::make_shared<Query>(getLocation(ctx), nullptr, queryBody));
+  return std::static_pointer_cast<Statement>(
+      std::make_shared<ShowStatsForQuery>(getLocation(ctx), query));
 }
 
 std::any AstBuilder::visitShowRoles(PrestoSqlParser::ShowRolesContext* ctx) {

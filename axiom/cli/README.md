@@ -22,12 +22,12 @@ buck run @mode/opt axiom/cli:cli
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--query` | | SQL text to execute. Supports multiple semicolon-separated statements. If empty, enters interactive mode. |
+| `--query` | | SQL text to execute. Supports multiple semicolon-separated statements. If not specified, enters interactive mode. If set to an empty string (`--query ""`), reads semicolon-separated SQL statements from stdin. |
 | `--init` | | Path to a SQL file with semicolon-separated statements to execute on startup before entering interactive mode or running `--query`. |
 | `--catalog` | | Default catalog (connector). If not specified, defaults to `hive` when `--data_path` is set, `tpch` otherwise. |
 | `--schema` | | Default schema. If not specified, defaults to `tiny` for TPC-H and `default` for Hive and Test connectors. |
 | `--data_path` | | Hive specific: root path for Hive-style partitioned data. Registers local Hive connector. |
-| `--data_format` | `parquet` | Hive specific: data format, `parquet` or `dwrf`. |
+| `--data_format` | `parquet` | Hive specific: data format, `parquet`, `dwrf`, or `text`. |
 | `--split_target_bytes` | `16MB` | Hive specific: approximate bytes per split. |
 | `--num_workers` | `4` | Number of in-process workers. |
 | `--num_drivers` | `4` | Number of drivers per worker (parallelism). |
@@ -37,9 +37,10 @@ buck run @mode/opt axiom/cli:cli
 
 ## Connectors
 
-Three connectors are available out of the box.
+Three connectors are available out of the box. See individual connector READMEs
+for detailed documentation.
 
-**TPC-H** (`tpch.tiny`) — Always registered. Read-only. Provides standard TPC-H tables
+**[TPC-H](../connectors/tpch/README.md)** (`tpch.tiny`) — Always registered. Read-only. Provides standard TPC-H tables
 (`nation`, `region`, `part`, `supplier`, `partsupp`, `customer`, `orders`,
 `lineitem`) generated in memory. Use `--schema` to select the scale factor:
 `tiny` (default), `sf1`, `sf10`, etc. Default catalog when `--data_path` is not set.
@@ -56,8 +57,8 @@ $ ./axiom_sql --query "select count(*) from sf1.orders"
 1500000
 ```
 
-**Hive** (`hive.default`) — Registered when `--data_path` is set. Reads and writes
-Parquet or DWRF files in a local directory with Hive-style partitioning. Supports
+**[Hive](../connectors/hive/README.md)** (`hive.default`) — Registered when `--data_path` is set. Reads and writes
+Parquet, DWRF, or TEXT (including CSV) files in a local directory with Hive-style partitioning. Supports
 `CREATE TABLE`, `CREATE TABLE AS SELECT`, `INSERT`, and `DROP TABLE`. Becomes the
 default catalog when registered.
 
@@ -65,7 +66,7 @@ default catalog when registered.
 $ ./axiom_sql --data_path /path/to/data --data_format parquet
 ```
 
-**Test** (`test.default`) — Always registered. An in-memory connector that supports
+**[Test](../connectors/tests/README.md)** (`test.default`) — Always registered. An in-memory connector that supports
 `CREATE TABLE`, `CREATE TABLE AS SELECT`, `INSERT`, and `DROP TABLE`. Tables do
 not persist across CLI launches. Use with `--init` to pre-populate tables on
 startup:
@@ -99,8 +100,19 @@ count
 
 ### Single Query
 
+The `--query` flag accepts multiple semicolon-separated statements:
+
 ```
-$ ./axiom_sql --query "select count(*) from nation"
+$ ./axiom_sql --query "select count(*) from nation; select count(*) from region"
+```
+
+### Query from File
+
+Pipe a SQL file into the CLI using `--query ""`. The file can contain multiple
+semicolon-separated statements:
+
+```
+$ cat query.sql | ./axiom_sql --query ""
 ```
 
 ### EXPLAIN

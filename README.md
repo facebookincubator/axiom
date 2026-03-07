@@ -22,6 +22,9 @@ with Velox. These components are:
 - Connector - an extention of Velox Connector APIs to provide functionality
   necessary for query parsing and planning.
   - top-level “connectors” directory
+  - [Hive](axiom/connectors/hive/README.md) — Local filesystem connector for Parquet, DWRF, and TEXT (including CSV) files.
+  - [TPC-H](axiom/connectors/tpch/README.md) — Read-only, in-memory TPC-H benchmark data.
+  - [Test](axiom/connectors/tests/README.md) — In-memory read-write connector for unit testing.
 - [CLI](axiom/cli/README.md) - Interactive SQL command line for executing
   queries against in-memory TPC-H dataset and local Hive data.
   - top-level “cli” directory

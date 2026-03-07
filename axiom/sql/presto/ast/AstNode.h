@@ -182,6 +182,7 @@ enum class NodeType {
   kShowCreateFunction,
   kShowSession,
   kShowStats,
+  kShowStatsForQuery,
   kShowGrants,
   kShowRoles,
   kShowRoleGrants,

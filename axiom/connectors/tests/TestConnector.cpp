@@ -139,18 +139,21 @@ void TestTable::ColumnTracker::append(const velox::BaseVector& vector) {
       }
     }
 
+    auto addLength = [&](int32_t length) {
+      totalLength += length;
+      maxLength = std::max(maxLength, length);
+    };
+
     if (childType->isVarchar() || childType->isVarbinary()) {
       auto value =
           vector.as<velox::SimpleVector<velox::StringView>>()->valueAt(i);
-      maxLength = std::max(maxLength, static_cast<int32_t>(value.size()));
+      addLength(static_cast<int32_t>(value.size()));
     } else if (childType->isArray()) {
       auto* arrayVector = vector.wrappedVector()->as<velox::ArrayVector>();
-      auto wrappedIndex = vector.wrappedIndex(i);
-      maxLength = std::max(maxLength, arrayVector->sizeAt(wrappedIndex));
+      addLength(arrayVector->sizeAt(vector.wrappedIndex(i)));
     } else if (childType->isMap()) {
       auto* mapVector = vector.wrappedVector()->as<velox::MapVector>();
-      auto wrappedIndex = vector.wrappedIndex(i);
-      maxLength = std::max(maxLength, mapVector->sizeAt(wrappedIndex));
+      addLength(mapVector->sizeAt(vector.wrappedIndex(i)));
     }
   }
 }
@@ -172,6 +175,10 @@ std::unique_ptr<ColumnStatistics> TestTable::ColumnTracker::toColumnStatistics(
   if (type->isVarchar() || type->isVarbinary() || type->isArray() ||
       type->isMap()) {
     stats->maxLength = maxLength;
+    auto numNonNull = totalRows - nullCount;
+    if (numNonNull > 0) {
+      stats->avgLength = totalLength / numNonNull;
+    }
   }
 
   return stats;
