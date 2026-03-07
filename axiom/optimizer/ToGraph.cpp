@@ -1479,6 +1479,12 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     auto name = toName(agg.outputType()->nameOf(i));
     auto* key = translateExpr(agg.groupingKeys()[i]);
 
+    // Skip the gid column — handled separately below via pendingGroupId_.
+    if (pendingGroupId_ && key == pendingGroupId_->groupIdColumn) {
+      newRenames[name] = pendingGroupId_->groupIdColumn;
+      continue;
+    }
+
     auto it = uniqueGroupingKeys.try_emplace(key).first;
     if (it->second) {
       newRenames[name] = it->second;
@@ -1507,8 +1513,11 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       continue;
     }
 
-    const auto i = channel - agg.groupingKeys().size();
-    const auto& aggregate = agg.aggregates()[i];
+    const auto* aggregate = aggregateForOrdinal(agg, channel);
+    if (!aggregate) {
+      continue;
+    }
+
     ExprVector args = translateExprs(aggregate->inputs());
 
     FunctionSet funcs;
@@ -1598,13 +1607,48 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     }
   }
 
+  // Resolve grouping sets and groupIdColumn.
+  ColumnCP groupIdColumn = nullptr;
+  GroupingSets qgGroupingSets;
+  ColumnVector inputGroupingKeys;
+  if (pendingGroupId_) {
+    groupIdColumn = pendingGroupId_->groupIdColumn;
+    columns.push_back(groupIdColumn);
+    intermediateColumns.push_back(groupIdColumn);
+    qgGroupingSets = std::move(pendingGroupId_->groupingSets);
+    inputGroupingKeys = std::move(pendingGroupId_->inputGroupingKeys);
+    pendingGroupId_.reset();
+  } else if (!agg.groupingSets().empty()) {
+    const auto ordinal = agg.groupingKeys().size() + agg.aggregates().size();
+    auto name = toName(agg.outputNames().at(ordinal));
+    auto groupIdType = agg.outputType()->childAt(ordinal);
+    Value groupIdValue(toType(groupIdType), agg.groupingSets().size());
+    groupIdValue.nullable = false;
+    groupIdValue.min = registerVariant(int64_t{0});
+    groupIdValue.max =
+        registerVariant(static_cast<int64_t>(agg.groupingSets().size() - 1));
+    auto* column = make<Column>(name, currentDt_, groupIdValue, name);
+    newRenames[name] = column;
+    groupIdColumn = column;
+    columns.push_back(column);
+    intermediateColumns.push_back(column);
+
+    qgGroupingSets.reserve(agg.groupingSets().size());
+    for (const auto& set : agg.groupingSets()) {
+      qgGroupingSets.emplace_back(set.begin(), set.end());
+    }
+  }
+
   renames_ = std::move(newRenames);
 
   return make<AggregationPlan>(
       std::move(deduppedGroupingKeys),
       std::move(deduppedAggregates),
       std::move(columns),
-      std::move(intermediateColumns));
+      std::move(intermediateColumns),
+      std::move(qgGroupingSets),
+      groupIdColumn,
+      std::move(inputGroupingKeys));
 }
 
 void ToGraph::addOrderBy(const lp::SortNode& order) {
@@ -3611,6 +3655,57 @@ void ToGraph::makeQueryGraph(
       VELOX_DCHECK_EQ(allowedInDt, kAllAllowedInDt);
       wrapInDt(*node.onlyInput());
       addWrite(*node.as<lp::TableWriteNode>());
+    } break;
+    case lp::NodeKind::kGroupId: {
+      const auto& groupIdNode = *node.as<lp::GroupIdNode>();
+      makeQueryGraph(
+          *node.onlyInput(), allowedInDt, excludeOuterJoins, excludeWindows);
+
+      exprSources_.push_back(node.onlyInput().get());
+      SCOPE_EXIT {
+        exprSources_.pop_back();
+      };
+
+      ColumnVector inputKeys;
+      for (const auto& key : groupIdNode.groupingKeys()) {
+        auto* expr = translateExpr(key);
+        VELOX_CHECK(expr->is(PlanType::kColumnExpr));
+        inputKeys.push_back(expr->as<Column>());
+      }
+
+      auto newRenames = renames_;
+      const auto numKeys = groupIdNode.groupingKeys().size();
+
+      for (size_t i = 0; i < numKeys; ++i) {
+        auto outputName = toName(groupIdNode.outputNames()[i]);
+        auto* column = make<Column>(
+            outputName, currentDt_, inputKeys[i]->value(), outputName);
+        newRenames[outputName] = column;
+      }
+
+      auto gidOrdinal = numKeys + groupIdNode.aggregateInputs().size();
+      auto gidName = toName(groupIdNode.outputNames()[gidOrdinal]);
+      Value gidValue(
+          toType(groupIdNode.outputType()->childAt(gidOrdinal)),
+          groupIdNode.groupingSets().size());
+      gidValue.nullable = false;
+      gidValue.min = registerVariant(int64_t{0});
+      gidValue.max = registerVariant(
+          static_cast<int64_t>(groupIdNode.groupingSets().size() - 1));
+      auto* groupIdColumn =
+          make<Column>(gidName, currentDt_, gidValue, gidName);
+      newRenames[gidName] = groupIdColumn;
+
+      renames_ = std::move(newRenames);
+
+      GroupingSets qgGroupingSets;
+      qgGroupingSets.reserve(groupIdNode.groupingSets().size());
+      for (const auto& set : groupIdNode.groupingSets()) {
+        qgGroupingSets.emplace_back(set.begin(), set.end());
+      }
+
+      pendingGroupId_ = PendingGroupId{
+          std::move(qgGroupingSets), groupIdColumn, std::move(inputKeys)};
     } break;
     default:
       VELOX_NYI(

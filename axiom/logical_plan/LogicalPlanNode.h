@@ -37,6 +37,7 @@ enum class NodeKind {
   kTableWrite = 10,
   kSample = 11,
   kOutput = 12,
+  kGroupId = 13,
 };
 
 AXIOM_DECLARE_ENUM_NAME(NodeKind)
@@ -411,6 +412,73 @@ class AggregateNode : public LogicalPlanNode {
 };
 
 using AggregateNodePtr = std::shared_ptr<const AggregateNode>;
+
+/// Duplicates each input row once per grouping set. For each copy, grouping key
+/// columns not participating in that set are set to NULL. Produces a grouping
+/// set ID column. Used to implement GROUPING SETS, ROLLUP, and CUBE.
+///
+/// Output schema: [grouping keys (always renamed with $gid suffix)...,
+/// aggregate inputs..., grouping set ID (BIGINT)].
+///
+/// Immediately followed by an AggregateNode (with empty groupingSets) in the
+/// logical plan tree.
+class GroupIdNode : public LogicalPlanNode {
+ public:
+  using GroupingSet = std::vector<int32_t>;
+
+  /// @param groupingKeys Expressions referencing input columns used as grouping
+  /// keys. Each key is renamed in the output (e.g. "a" -> "a$gid") to avoid
+  /// name collisions with aggregation inputs that reference the same column.
+  /// @param groupingSets List of grouping sets, each containing indices into
+  /// 'groupingKeys'.
+  /// @param aggregateInputs Expressions referencing input columns used as
+  /// aggregate function inputs. Passed through unchanged.
+  /// @param outputNames Names for output columns: one per grouping key
+  /// (renamed), one per aggregate input, plus the grouping set ID column name.
+  GroupIdNode(
+      std::string id,
+      LogicalPlanNodePtr input,
+      std::vector<ExprPtr> groupingKeys,
+      std::vector<GroupingSet> groupingSets,
+      std::vector<ExprPtr> aggregateInputs,
+      std::vector<std::string> outputNames);
+
+  const std::vector<ExprPtr>& groupingKeys() const {
+    return groupingKeys_;
+  }
+
+  const std::vector<GroupingSet>& groupingSets() const {
+    return groupingSets_;
+  }
+
+  const std::vector<ExprPtr>& aggregateInputs() const {
+    return aggregateInputs_;
+  }
+
+  const std::vector<std::string>& outputNames() const {
+    return outputNames_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  folly::dynamic serialize() const override;
+
+  static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  static velox::RowTypePtr makeOutputType(
+      const std::vector<ExprPtr>& groupingKeys,
+      const std::vector<ExprPtr>& aggregateInputs,
+      const std::vector<std::string>& outputNames);
+
+  const std::vector<ExprPtr> groupingKeys_;
+  const std::vector<GroupingSet> groupingSets_;
+  const std::vector<ExprPtr> aggregateInputs_;
+  const std::vector<std::string> outputNames_;
+};
+
+using GroupIdNodePtr = std::shared_ptr<const GroupIdNode>;
 
 enum class JoinType {
   /// For each row on the left, find all matching rows on the right and return

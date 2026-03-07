@@ -437,6 +437,29 @@ class DotPrinterVisitor : public PlanNodeVisitor {
     visitInputs(node, ctx);
   }
 
+  void visit(const GroupIdNode& node, PlanNodeVisitorContext& ctx)
+      const override {
+    auto& context = static_cast<Context&>(ctx);
+    printNodeStart(context.out, node, "GroupId", kPalette.header);
+
+    for (size_t i = 0; i < node.groupingSets().size(); ++i) {
+      std::string setStr = "(";
+      const auto& groupingSet = node.groupingSets()[i];
+      for (size_t j = 0; j < groupingSet.size(); ++j) {
+        if (j > 0) {
+          setStr += ", ";
+        }
+        setStr += ExprPrinter::toText(*node.groupingKeys().at(groupingSet[j]));
+      }
+      setStr += ")";
+      printRow(context.out, escapeHtml(setStr));
+    }
+
+    printNodeEnd(context.out);
+    printEdgeToInputs(context.out, node);
+    visitInputs(node, ctx);
+  }
+
  private:
   static void printNodeStart(
       std::ostream& out,

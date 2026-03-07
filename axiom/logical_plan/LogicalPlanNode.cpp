@@ -36,6 +36,7 @@ const auto& nodeKindNames() {
       {NodeKind::kTableWrite, "TABLE_WRITE"},
       {NodeKind::kSample, "SAMPLE"},
       {NodeKind::kOutput, "OUTPUT"},
+      {NodeKind::kGroupId, "GROUP_ID"},
   };
   return kNames;
 }
@@ -144,6 +145,7 @@ void LogicalPlanNode::registerSerDe() {
   registry.Register("TableWriteNode", TableWriteNode::create);
   registry.Register("SampleNode", SampleNode::create);
   registry.Register("OutputNode", OutputNode::create);
+  registry.Register("GroupIdNode", GroupIdNode::create);
 }
 
 folly::dynamic ValuesNode::serialize() const {
@@ -955,6 +957,128 @@ void SampleNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+GroupIdNode::GroupIdNode(
+    std::string id,
+    LogicalPlanNodePtr input,
+    std::vector<ExprPtr> groupingKeys,
+    std::vector<GroupingSet> groupingSets,
+    std::vector<ExprPtr> aggregateInputs,
+    std::vector<std::string> outputNames)
+    : LogicalPlanNode{NodeKind::kGroupId, std::move(id), {std::move(input)}, makeOutputType(groupingKeys, aggregateInputs, outputNames)},
+      groupingKeys_{std::move(groupingKeys)},
+      groupingSets_{std::move(groupingSets)},
+      aggregateInputs_{std::move(aggregateInputs)},
+      outputNames_{std::move(outputNames)} {
+  VELOX_USER_CHECK_GT(
+      groupingSets_.size(),
+      1,
+      "GroupIdNode requires multiple grouping sets. "
+      "A single grouping set is a regular GROUP BY");
+
+  for (const auto& groupingSet : groupingSets_) {
+    for (size_t i = 0; i < groupingSet.size(); ++i) {
+      VELOX_USER_CHECK_LT(
+          groupingSet[i],
+          groupingKeys_.size(),
+          "Grouping set index {} is out of bounds",
+          groupingSet[i]);
+      for (size_t j = i + 1; j < groupingSet.size(); ++j) {
+        VELOX_USER_CHECK_NE(
+            groupingSet[i],
+            groupingSet[j],
+            "Duplicate index in grouping set: {}",
+            groupingSet[i]);
+      }
+    }
+  }
+}
+
+// static
+velox::RowTypePtr GroupIdNode::makeOutputType(
+    const std::vector<ExprPtr>& groupingKeys,
+    const std::vector<ExprPtr>& aggregateInputs,
+    const std::vector<std::string>& outputNames) {
+  const auto size = groupingKeys.size() + aggregateInputs.size() + 1;
+  VELOX_USER_CHECK_EQ(outputNames.size(), size);
+
+  std::vector<std::string> names = outputNames;
+  std::vector<velox::TypePtr> types;
+  types.reserve(size);
+
+  for (const auto& key : groupingKeys) {
+    types.push_back(key->type());
+  }
+
+  for (const auto& input : aggregateInputs) {
+    types.push_back(input->type());
+  }
+
+  // Grouping set ID column (BIGINT).
+  types.push_back(velox::BIGINT());
+
+  UniqueNameChecker::check(names);
+
+  return ROW(std::move(names), std::move(types));
+}
+
+void GroupIdNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+folly::dynamic GroupIdNode::serialize() const {
+  auto obj = serializeBase("GroupIdNode");
+  obj["groupingKeys"] = serializeVector(
+      groupingKeys_, [](const ExprPtr& e) { return e->serialize(); });
+  obj["groupingSets"] =
+      serializeVector(groupingSets_, [](const GroupingSet& gs) {
+        folly::dynamic arr = folly::dynamic::array;
+        for (const auto& idx : gs) {
+          arr.push_back(idx);
+        }
+        return arr;
+      });
+  obj["aggregateInputs"] = serializeVector(
+      aggregateInputs_, [](const ExprPtr& e) { return e->serialize(); });
+  obj["outputNames"] =
+      serializeVector(outputNames_, [](const std::string& s) { return s; });
+  return obj;
+}
+
+// static
+LogicalPlanNodePtr GroupIdNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto inputs = deserializeNodeInputs(obj, context);
+  VELOX_CHECK_EQ(inputs.size(), 1);
+
+  std::vector<ExprPtr> groupingKeys =
+      deserializeExprs(obj, "groupingKeys", context);
+
+  std::vector<GroupIdNode::GroupingSet> groupingSets;
+  if (obj.count("groupingSets")) {
+    for (const auto& gs : obj["groupingSets"]) {
+      GroupingSet set;
+      for (const auto& idx : gs) {
+        set.push_back(idx.asInt());
+      }
+      groupingSets.push_back(std::move(set));
+    }
+  }
+
+  std::vector<ExprPtr> aggregateInputs =
+      deserializeExprs(obj, "aggregateInputs", context);
+
+  return std::make_shared<GroupIdNode>(
+      obj["id"].asString(),
+      inputs[0],
+      std::move(groupingKeys),
+      std::move(groupingSets),
+      std::move(aggregateInputs),
+      deserializeStringVector(obj, "outputNames"));
 }
 
 namespace {

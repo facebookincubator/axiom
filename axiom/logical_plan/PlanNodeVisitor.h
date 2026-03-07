@@ -68,6 +68,9 @@ class PlanNodeVisitor {
   virtual void visit(const OutputNode& node, PlanNodeVisitorContext& context)
       const = 0;
 
+  virtual void visit(const GroupIdNode& node, PlanNodeVisitorContext& context)
+      const = 0;
+
  protected:
   void visitInputs(const LogicalPlanNode& node, PlanNodeVisitorContext& ctx)
       const {

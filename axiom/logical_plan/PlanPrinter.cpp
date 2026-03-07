@@ -231,6 +231,42 @@ class ToTextVisitor : public PlanNodeVisitor {
         context);
   }
 
+  void visit(const GroupIdNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& myContext = static_cast<Context&>(context);
+    myContext.out << makeIndent(myContext.indent) << "- GroupId(";
+
+    const auto numKeys = node.groupingKeys().size();
+    for (size_t i = 0; i < numKeys; ++i) {
+      if (i > 0) {
+        myContext.out << ", ";
+      }
+      myContext.out << ExprPrinter::toText(*node.groupingKeys().at(i));
+    }
+
+    myContext.out << ") GROUPING SETS [";
+    for (size_t i = 0; i < node.groupingSets().size(); ++i) {
+      if (i > 0) {
+        myContext.out << ", ";
+      }
+      myContext.out << "(";
+      const auto& groupingSet = node.groupingSets()[i];
+      for (size_t j = 0; j < groupingSet.size(); ++j) {
+        if (j > 0) {
+          myContext.out << ", ";
+        }
+        myContext.out << ExprPrinter::toText(
+            *node.groupingKeys().at(groupingSet[j]));
+      }
+      myContext.out << ")";
+    }
+    myContext.out << "]";
+
+    appendOutputType(node, myContext);
+    myContext.out << std::endl;
+    appendInputs(node, myContext);
+  }
+
   void visit(const OutputNode& node, PlanNodeVisitorContext& context)
       const override {
     auto& myContext = static_cast<Context&>(context);
@@ -435,6 +471,14 @@ class CollectExprStatsPlanNodeVisitor : public PlanNodeVisitor {
 
   void visit(const OutputNode& node, PlanNodeVisitorContext& context)
       const override {
+    visitInputs(node, context);
+  }
+
+  void visit(const GroupIdNode& node, PlanNodeVisitorContext& context)
+      const override {
+    auto& stats = static_cast<Context&>(context).stats;
+    collectExprStats(node.groupingKeys(), stats);
+    collectExprStats(node.aggregateInputs(), stats);
     visitInputs(node, context);
   }
 
@@ -761,6 +805,11 @@ class SummarizeToTextVisitor : public PlanNodeVisitor {
     auto& myContext = static_cast<Context&>(context);
     appendHeader(node, myContext);
     appendInputs(node, myContext);
+  }
+
+  void visit(const GroupIdNode& node, PlanNodeVisitorContext& context)
+      const override {
+    appendNode(node, context);
   }
 
  private:

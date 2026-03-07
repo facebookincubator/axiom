@@ -112,6 +112,12 @@ class SubfieldTracker {
       bool isControl);
 
   void markFieldAccessed(
+      const logical_plan::GroupIdNode& groupId,
+      int32_t ordinal,
+      std::vector<Step>& steps,
+      bool isControl);
+
+  void markFieldAccessed(
       const logical_plan::SetNode& set,
       int32_t ordinal,
       std::vector<Step>& steps,

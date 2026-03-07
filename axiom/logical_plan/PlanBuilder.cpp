@@ -952,6 +952,10 @@ PlanBuilder& PlanBuilder::aggregate(
     const std::string& groupingSetIndexName) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Aggregate node cannot be a leaf node");
 
+  VELOX_USER_CHECK(
+      !groupingKeys.empty() || !aggregates.empty(),
+      "Aggregation node must specify at least one aggregate or grouping key");
+
   const auto numKeys = static_cast<int32_t>(groupingKeys.size());
   for (const auto& groupingSet : groupingSets) {
     for (const auto index : groupingSet) {
@@ -966,31 +970,119 @@ PlanBuilder& PlanBuilder::aggregate(
         seen.try_emplace(key.expr(), true).second, "Duplicate grouping key");
   }
 
-  std::vector<std::string> outputNames;
-  outputNames.reserve(groupingKeys.size() + aggregates.size() + 1);
+  // Phase 1: Resolve keys and aggregates against the current input.
+  std::vector<std::string> keyInternalNames;
+  keyInternalNames.reserve(numKeys);
 
   std::vector<ExprPtr> keyExprs;
-  keyExprs.reserve(groupingKeys.size());
+  keyExprs.reserve(numKeys);
 
   auto newOutputMapping = std::make_shared<NameMappings>();
 
-  resolveProjections(groupingKeys, outputNames, keyExprs, *newOutputMapping);
+  resolveProjections(
+      groupingKeys, keyInternalNames, keyExprs, *newOutputMapping);
 
-  std::vector<AggregateExprPtr> exprs;
-  exprs.reserve(aggregates.size());
+  std::vector<std::string> aggInternalNames;
+  std::vector<AggregateExprPtr> aggExprs;
 
-  resolveAggregates(aggregates, options, outputNames, exprs, *newOutputMapping);
+  resolveAggregates(
+      aggregates, options, aggInternalNames, aggExprs, *newOutputMapping);
 
-  outputNames.push_back(newName(groupingSetIndexName));
-  newOutputMapping->add(groupingSetIndexName, outputNames.back());
+  // Phase 2: Collect unique InputReferenceExpr from resolved aggregates.
+  // These are the input columns that aggregate functions read from, which the
+  // GroupIdNode must pass through unchanged.
+  folly::F14FastSet<std::string> seenInputNames;
+  std::vector<ExprPtr> aggregateInputExprs;
+
+  std::function<void(const ExprPtr&)> collectInputRefs =
+      [&](const ExprPtr& expr) {
+        if (expr->isInputReference()) {
+          const auto& name = expr->as<InputReferenceExpr>()->name();
+          if (seenInputNames.insert(name).second) {
+            aggregateInputExprs.push_back(expr);
+          }
+        }
+        for (const auto& child : expr->inputs()) {
+          collectInputRefs(child);
+        }
+      };
+
+  for (const auto& aggExpr : aggExprs) {
+    for (const auto& input : aggExpr->inputs()) {
+      collectInputRefs(input);
+    }
+    if (aggExpr->filter()) {
+      collectInputRefs(aggExpr->filter());
+    }
+    for (const auto& sortField : aggExpr->ordering()) {
+      collectInputRefs(sortField.expression);
+    }
+  }
+
+  // Phase 3: Build GroupIdNode.
+  // Always rename key outputs with a $gid suffix so they are distinct from
+  // aggregate inputs that may reference the same underlying column.
+  std::vector<std::string> groupIdOutputNames;
+  groupIdOutputNames.reserve(numKeys + aggregateInputExprs.size() + 1);
+
+  std::vector<std::string> renamedKeyNames;
+  renamedKeyNames.reserve(numKeys);
+  std::vector<velox::TypePtr> keyTypes;
+  keyTypes.reserve(numKeys);
+  for (size_t i = 0; i < static_cast<size_t>(numKeys); ++i) {
+    auto renamed = newName(keyInternalNames[i] + "$gid");
+    renamedKeyNames.push_back(renamed);
+    groupIdOutputNames.push_back(renamed);
+    keyTypes.push_back(keyExprs[i]->type());
+  }
+
+  for (const auto& inputExpr : aggregateInputExprs) {
+    groupIdOutputNames.push_back(inputExpr->as<InputReferenceExpr>()->name());
+  }
+
+  auto gidInternalName = newName(groupingSetIndexName);
+  groupIdOutputNames.push_back(gidInternalName);
+
+  node_ = std::make_shared<GroupIdNode>(
+      nextId(),
+      std::move(node_),
+      std::move(keyExprs),
+      std::move(groupingSets),
+      std::move(aggregateInputExprs),
+      std::move(groupIdOutputNames));
+
+  // Phase 4: Build AggregateNode on top of GroupIdNode.
+  // Grouping keys reference GroupIdNode's renamed output columns.
+  std::vector<ExprPtr> aggNodeKeys;
+  aggNodeKeys.reserve(numKeys + 1);
+  for (size_t i = 0; i < static_cast<size_t>(numKeys); ++i) {
+    aggNodeKeys.push_back(
+        std::make_shared<InputReferenceExpr>(keyTypes[i], renamedKeyNames[i]));
+  }
+  aggNodeKeys.push_back(
+      std::make_shared<InputReferenceExpr>(velox::BIGINT(), gidInternalName));
+
+  // AggregateNode output names: original key names, gid, then aggregate names.
+  std::vector<std::string> aggNodeOutputNames;
+  aggNodeOutputNames.reserve(numKeys + 1 + aggExprs.size());
+  for (const auto& name : keyInternalNames) {
+    aggNodeOutputNames.push_back(name);
+  }
+  aggNodeOutputNames.push_back(gidInternalName);
+  for (const auto& name : aggInternalNames) {
+    aggNodeOutputNames.push_back(name);
+  }
+
+  newOutputMapping->add(groupingSetIndexName, gidInternalName);
+  newOutputMapping->markHidden(gidInternalName);
 
   node_ = std::make_shared<AggregateNode>(
       nextId(),
       std::move(node_),
-      std::move(keyExprs),
-      groupingSets,
-      std::move(exprs),
-      std::move(outputNames));
+      std::move(aggNodeKeys),
+      std::vector<AggregateNode::GroupingSet>{},
+      std::move(aggExprs),
+      std::move(aggNodeOutputNames));
 
   newOutputMapping->enableUnqualifiedAccess();
   outputMapping_ = std::move(newOutputMapping);
@@ -1972,19 +2064,22 @@ std::string PlanBuilder::findOrAssignOutputNameAt(size_t index) const {
 }
 
 LogicalPlanNodePtr PlanBuilder::buildOutputNode() {
-  auto defaultNames = findOrAssignOutputNames(/*includeHiddenColumns=*/true);
-  const auto numColumns = defaultNames.size();
+  const auto& inputType = node_->outputType();
+  const auto numColumns = inputType->size();
 
   std::vector<OutputNode::Entry> entries;
   entries.reserve(numColumns);
 
   for (size_t i = 0; i < numColumns; ++i) {
+    const auto& id = inputType->nameOf(i);
+    if (outputMapping_->isHidden(id)) {
+      continue;
+    }
     std::string name;
-    if (auto userName =
-            outputMapping_->userName(node_->outputType()->nameOf(i))) {
+    if (auto userName = outputMapping_->userName(id)) {
       name = *userName;
     } else {
-      name = std::move(defaultNames[i]);
+      name = findOrAssignOutputNameAt(i);
     }
     entries.emplace_back(
         OutputNode::Entry{static_cast<int32_t>(i), std::move(name)});
