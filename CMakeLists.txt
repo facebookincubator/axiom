@@ -147,6 +147,9 @@ velox_resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 velox_set_source(folly)
 velox_resolve_dependency(folly)
 
+velox_set_source(re2)
+velox_resolve_dependency(re2)
+
 # Add ANTLR4 runtime dependency
 velox_set_source(antlr4-runtime)
 velox_resolve_dependency(antlr4-runtime)
