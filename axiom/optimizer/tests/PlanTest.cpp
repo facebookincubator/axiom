@@ -277,6 +277,8 @@ TEST_F(PlanTest, specialFormConstantFold) {
     std::shared_ptr<velox::core::PlanMatcher> matcher;
     if (!testCase.expectedExpression.has_value()) {
       matcher = core::PlanMatcherBuilder().tableScan().project().build();
+    } else if (testCase.expectedExpression.value() == "false") {
+      matcher = core::PlanMatcherBuilder().values().project().build();
     } else {
       matcher = core::PlanMatcherBuilder()
                     .tableScan()
@@ -354,7 +356,7 @@ TEST_F(PlanTest, inList) {
   {
     auto logicalPlan = scan().filter("4 in (1, 2, 3)").map({"a + 2"}).build();
 
-    auto matcher = scanMatcher().filter("false").project().build();
+    auto matcher = core::PlanMatcherBuilder().values().project().build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -940,6 +942,35 @@ TEST_F(PlanTest, zeroLimit) {
                                  core::PlanMatcherBuilder{}.tableScan().build(),
                                  core::JoinType::kInner)
                              .build();
+    AXIOM_ASSERT_PLAN(planSql(query), matcher);
+  }
+}
+
+// Verifies that filters with constant false predicates produce empty
+// ValuesTable nodes. Exercises the 'output' parameter of addFilter in
+// makeFilterQueryGraph, which replaces currentDt_ with an empty ValuesTable
+// when a false conjunct is detected.
+TEST_F(PlanTest, constantFalseFilter) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+
+  const auto planSql = [&](const std::string& sql) {
+    return toSingleNodePlan(parseSelect(sql, kTestConnectorId));
+  };
+
+  const auto matcher =
+      core::PlanMatcherBuilder{}.values(ROW({"a", "b"}, BIGINT())).build();
+
+  // Simple WHERE false produces an empty Values node.
+  {
+    const auto query = "SELECT * FROM t WHERE false";
+    SCOPED_TRACE(query);
+    AXIOM_ASSERT_PLAN(planSql(query), matcher);
+  }
+
+  // Constant false expression (1 > 2) in WHERE clause.
+  {
+    const auto query = "SELECT * FROM t WHERE 1 > 2";
+    SCOPED_TRACE(query);
     AXIOM_ASSERT_PLAN(planSql(query), matcher);
   }
 }
