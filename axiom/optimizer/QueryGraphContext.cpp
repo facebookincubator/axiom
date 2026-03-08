@@ -177,6 +177,9 @@ bool Path::operator<(const Path& other) const {
     if (steps_[i] < other.steps_[i]) {
       return true;
     }
+    if (steps_[i] > other.steps_[i]) {
+      return false;
+    }
   }
   return steps_.size() < other.steps_.size();
 }
