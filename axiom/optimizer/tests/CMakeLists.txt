@@ -117,6 +117,7 @@ add_executable(
   UnnestTest.cpp
   ValuesTest.cpp
   WriteTest.cpp
+  RemoteOutputTest.cpp
 )
 
 add_test(

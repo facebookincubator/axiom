@@ -304,27 +304,31 @@ PlanAndStats ToVelox::toVeloxPlan(
   prediction_.clear();
   nodeHistory_.clear();
 
-  if (options_.numWorkers > 1) {
+  if (options_.numWorkers > 1 && !options_.remoteOutput) {
     plan = addGather(plan);
   }
 
-  runner::ExecutableFragment top;
+  runner::ExecutableFragment top = newFragment();
   std::vector<runner::ExecutableFragment> stages;
   top.fragment.planNode = makeFragment(plan, top, stages);
-
-  if (!outputNames.empty()) {
-    top.fragment.planNode =
-        addOutputRenames(top.fragment.planNode, outputNames);
-  }
-
   stages.push_back(std::move(top));
 
-  auto finishWrite = std::move(finishWrite_);
-  VELOX_DCHECK(!finishWrite_);
+  auto& rootPlanNode = stages.back().fragment.planNode;
+  if (!outputNames.empty()) {
+    rootPlanNode = addOutputRenames(rootPlanNode, outputNames);
+  }
 
   for (const auto& stage : stages) {
     velox::core::PlanConsistencyChecker::check(stage.fragment.planNode);
   }
+
+  if (options.remoteOutput) {
+    rootPlanNode = velox::core::PartitionedOutputNode::single(
+        nextId(), rootPlanNode->outputType(), exchangeSerdeKind_, rootPlanNode);
+  }
+
+  auto finishWrite = std::move(finishWrite_);
+  VELOX_DCHECK(!finishWrite_);
 
   return PlanAndStats{
       std::make_shared<runner::MultiFragmentPlan>(std::move(stages), options),

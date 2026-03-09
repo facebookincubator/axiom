@@ -133,6 +133,21 @@ class MultiFragmentPlan {
     /// Number of threads in a fragment in a worker. If 1, there are no local
     /// exchanges.
     int32_t numDrivers{4};
+
+    /// Controls how query results are delivered from the final plan fragment.
+    ///
+    /// When true, wraps the root of the final fragment in a
+    /// PartitionedOutputNode that serializes results for remote consumption
+    /// via exchange. With multiple workers, results remain distributed across
+    /// worker nodes — no gather is added, so the caller must read from each
+    /// worker independently. Even with a single worker, the
+    /// PartitionedOutputNode is added to enable remote consumption.
+    ///
+    /// When false (default), results are consumed locally from the final
+    /// fragment. With multiple workers, the planner adds a gather stage to
+    /// collect results onto a single node. With a single worker, no
+    /// additional nodes are added.
+    bool remoteOutput{false};
   };
 
   MultiFragmentPlan(std::vector<ExecutableFragment> fragments, Options options)
