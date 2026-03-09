@@ -190,6 +190,12 @@ class LogicalPlanMatcherBuilder {
   /// Matches a SortNode.
   LogicalPlanMatcherBuilder& sort(OnMatchCallback onMatch = nullptr);
 
+  /// Matches a SortNode with the specified ordering. Each entry in 'ordering'
+  /// is a sorting expression in DuckDB SQL syntax.
+  LogicalPlanMatcherBuilder& sort(
+      const std::vector<std::string>& ordering,
+      OnMatchCallback onMatch = nullptr);
+
   /// Matches any LimitNode.
   LogicalPlanMatcherBuilder& limit(OnMatchCallback onMatch = nullptr);
 
