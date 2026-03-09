@@ -18,6 +18,7 @@
 #include <folly/FileUtil.h>
 #include <iostream>
 #include <optional>
+#include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/cli/ResultPrinter.h"
 #include "axiom/cli/StdinReader.h"
 #include "axiom/cli/Timing.h"
@@ -68,6 +69,16 @@ std::optional<std::string> getHistoryFilePath() {
 
 namespace axiom::sql {
 
+Console::Console(
+    SqlQueryRunner& runner,
+    PermissionCheck permissionCheck,
+    std::shared_ptr<cli::QueryIdGenerator> queryIdGenerator)
+    : runner_{runner},
+      permissionCheck_{std::move(permissionCheck)},
+      queryIdGenerator_{
+          queryIdGenerator ? std::move(queryIdGenerator)
+                           : std::make_shared<cli::QueryIdGenerator>()} {}
+
 void Console::initialize() {
   gflags::SetUsageMessage(
       "Axiom local SQL command line. "
@@ -113,13 +124,16 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
       continue;
     }
 
+    auto queryId = queryIdGenerator_->createNextQueryId();
+
     try {
       cli::Timing parseTiming;
       auto statement = cli::time<presto::SqlStatementPtr>(
           [&]() { return runner_.parseSingle(sqlText, options); }, parseTiming);
 
       if (isInteractive) {
-        std::cout << "Parsing: " << parseTiming.toString() << std::endl;
+        std::cout << "Query ID: " << queryId
+                  << " | Parsing: " << parseTiming.toString() << std::endl;
       }
 
       // Permission check after parsing, before execution.
@@ -127,6 +141,7 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
         const auto& schema = options.defaultSchema ? options.defaultSchema
                                                    : runner_.defaultSchema();
         permissionCheck_(
+            queryId,
             sqlText,
             options.defaultConnectorId.value_or(runner_.defaultConnectorId()),
             schema ? std::optional<std::string_view>{*schema} : std::nullopt,
@@ -144,11 +159,12 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
       }
 
       if (isInteractive) {
-        std::cout << "Optimizing and Executing: " << statementTiming.toString()
-                  << std::endl;
+        std::cout << "Query ID: " << queryId << " | Optimizing and Executing: "
+                  << statementTiming.toString() << std::endl;
       }
     } catch (std::exception& e) {
-      std::cerr << "Query failed: " << e.what() << std::endl;
+      std::cerr << "Query ID: " << queryId << " | Query failed: " << e.what()
+                << std::endl;
       return;
     }
   }

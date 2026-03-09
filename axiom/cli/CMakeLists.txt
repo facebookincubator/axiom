@@ -16,6 +16,7 @@ add_library(
   axiom_cli
   Connectors.cpp
   Console.cpp
+  QueryIdGenerator.cpp
   SqlQueryRunner.cpp
   ResultPrinter.cpp
   StdinReader.cpp
