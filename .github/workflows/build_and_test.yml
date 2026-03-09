@@ -89,6 +89,26 @@ jobs:
         run: |
           ccache -sz
 
+      - name: Check Folly Coroutine Support
+        run: |
+          echo "=== Checking if folly has coroutine support ==="
+          cat > /tmp/test_coro.cpp << 'EOF'
+          #include <folly/Portability.h>
+          #include <iostream>
+          int main() {
+            std::cout << "FOLLY_HAS_COROUTINES = " << FOLLY_HAS_COROUTINES << std::endl;
+            #ifdef __cpp_impl_coroutine
+            std::cout << "__cpp_impl_coroutine = " << __cpp_impl_coroutine << std::endl;
+            #else
+            std::cout << "__cpp_impl_coroutine is NOT defined" << std::endl;
+            #endif
+            return 0;
+          }
+          EOF
+          g++ -std=c++20 -I/usr/local/include /tmp/test_coro.cpp -o /tmp/test_coro
+          /tmp/test_coro
+          echo "=== End coroutine check ==="
+
       - name: Build Axiom ${{ matrix.build_type }}
         env:
           MAKEFLAGS: NUM_THREADS=4 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=2
