@@ -62,7 +62,8 @@ void SqlQueryRunner::initialize(
     velox::exec::ExchangeSource::registerFactory(
         velox::exec::test::createLocalExchangeSource);
     velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
-    if (!isRegisteredNamedVectorSerde(velox::VectorSerde::Kind::kPresto)) {
+    if (!velox::isRegisteredNamedVectorSerde(
+            velox::VectorSerde::kindName(velox::VectorSerde::Kind::kPresto))) {
       velox::serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
     }
   });
