@@ -1004,10 +1004,10 @@ PlanMatcher::MatchResult ShuffleBoundaryMatcher::match(
 
 class PartitionedOutputMatcher : public PlanMatcherImpl<PartitionedOutputNode> {
  public:
-  explicit PartitionedOutputMatcher(
+  PartitionedOutputMatcher(
       std::shared_ptr<PlanMatcher> matcher,
-      std::optional<PartitionedOutputNode::Kind> kind = std::nullopt,
-      std::optional<int32_t> numPartitions = std::nullopt)
+      PartitionedOutputNode::Kind kind,
+      int32_t numPartitions)
       : PlanMatcherImpl<PartitionedOutputNode>({std::move(matcher)}),
         kind_(kind),
         numPartitions_(numPartitions) {}
@@ -1017,20 +1017,16 @@ class PartitionedOutputMatcher : public PlanMatcherImpl<PartitionedOutputNode> {
       const std::unordered_map<std::string, std::string>& symbols)
       const override {
     SCOPED_TRACE(node.toString(true, false));
-    if (kind_.has_value()) {
-      EXPECT_EQ(node.kind(), kind_.value());
-      AXIOM_TEST_RETURN_IF_FAILURE
-    }
-    if (numPartitions_.has_value()) {
-      EXPECT_EQ(node.numPartitions(), numPartitions_.value());
-      AXIOM_TEST_RETURN_IF_FAILURE
-    }
+    EXPECT_EQ(node.kind(), kind_);
+    AXIOM_TEST_RETURN_IF_FAILURE
+    EXPECT_EQ(node.numPartitions(), numPartitions_);
+    AXIOM_TEST_RETURN_IF_FAILURE
     return MatchResult::success(symbols);
   }
 
  private:
-  const std::optional<PartitionedOutputNode::Kind> kind_;
-  const std::optional<int32_t> numPartitions_;
+  const PartitionedOutputNode::Kind kind_;
+  const int32_t numPartitions_;
 };
 
 class AssignUniqueIdMatcher : public PlanMatcherImpl<AssignUniqueIdNode> {
