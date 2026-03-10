@@ -92,6 +92,9 @@ class GroupByPlanner {
       const std::vector<ExpressionPtr>& exprs,
       const std::vector<SelectItemPtr>& selectItems);
 
+  // Translates a GROUPING() operation into an expression.
+  lp::ExprApi translateGroupingOperation(const GroupingOperation* node);
+
   // Injected dependencies.
   std::shared_ptr<lp::PlanBuilder>& builder_;
   ExpressionPlanner& exprPlanner_;
@@ -102,6 +105,7 @@ class GroupByPlanner {
   std::vector<std::vector<lp::ExprApi>> groupingSets_;
   std::vector<lp::ExprApi> groupingKeys_;
   std::vector<std::vector<int32_t>> groupingSetsIndices_;
+  folly::F14FastMap<std::string, int32_t> groupingColumnToIndex_;
   std::vector<lp::ExprApi> projections_;
 
   // Stores aggregate expressions with their options after deduplication.

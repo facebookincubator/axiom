@@ -16,7 +16,9 @@
 
 #include "axiom/logical_plan/ExprApi.h"
 #include <gtest/gtest.h>
+#include <numeric>
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 
 using namespace facebook::velox;
@@ -121,6 +123,24 @@ TEST_F(ExprApiTest, inList) {
   EXPECT_EQ(
       toString(In(Col("a"), Lit(1.1), Lit(2.2), Lit(3.3))),
       "in(\"a\",1.1,2.2,3.3)");
+}
+
+TEST_F(ExprApiTest, grouping) {
+  EXPECT_EQ(toString(Grouping({0}, {{0}}, "$grouping_set_id")), "0");
+
+  EXPECT_EQ(
+      toString(Grouping({0, 1}, {{0, 1}, {0}, {}}, "$grouping_set_id")),
+      "element_at(array_constructor(0,1,3),plus(cast(\"$grouping_set_id\" as BIGINT),1))");
+
+  VELOX_ASSERT_THROW(
+      Grouping({}, {{0, 1}, {0}, {}}, "$grouping_set_id"),
+      "GROUPING() requires at least one argument");
+
+  std::vector<int32_t> tooManyColumns(64);
+  std::iota(tooManyColumns.begin(), tooManyColumns.end(), 0);
+  VELOX_ASSERT_THROW(
+      Grouping(tooManyColumns, {{0}}, "$grouping_set_id"),
+      "GROUPING() supports up to 63 column arguments");
 }
 
 } // namespace
