@@ -732,9 +732,9 @@ lp::ExprApi ExpressionPlanner::toExpr(
         case CurrentTime::Function::kTimestamp:
           return lp::Call("current_timestamp");
         case CurrentTime::Function::kLocaltime:
-          VELOX_NYI("LOCALTIME is not supported yet.");
+          return lp::Call("localtime");
         case CurrentTime::Function::kLocaltimestamp:
-          VELOX_NYI("LOCALTIMESTAMP is not supported yet.");
+          return lp::Call("localtimestamp");
       }
       VELOX_UNREACHABLE();
     }
