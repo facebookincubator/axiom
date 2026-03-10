@@ -1641,6 +1641,21 @@ std::pair<RelationOpPtr, PlanCost> makeDistinctToMarkDistinctPlan(
   }
 }
 
+// Builds a basic single-step aggregation plan for DISTINCT aggregates. Used as
+// a fallback when neither GroupBy nor MarkDistinct transformations can apply.
+std::pair<RelationOpPtr, PlanCost> makeBasicDistinctPlan(
+    RelationOpPtr plan,
+    const ExprVector& groupingKeys,
+    const AggregateVector& aggregates,
+    AggregationPlanCP aggPlan) {
+  return makeSingleAggregationPlan(
+      plan,
+      groupingKeys,
+      aggregates,
+      aggPlan->intermediateColumns(),
+      aggPlan->columns());
+}
+
 } // namespace
 
 void Optimization::addAggregation(
@@ -1719,9 +1734,10 @@ void Optimization::addAggregation(
       candidatePlans.emplace(candidate.second, std::move(candidate.first));
     }
 
-    if (candidatePlans.empty()) {
-      VELOX_USER_FAIL(
-          "Distinct aggregation plan not eligible for transformation to GroupBy or MarkDistinct.");
+    if (!options_.alwaysPlanPartialAggregation || candidatePlans.empty()) {
+      auto candidate =
+          makeBasicDistinctPlan(plan, groupingKeys, aggregates, aggPlan);
+      candidatePlans.emplace(candidate.second, std::move(candidate.first));
     }
 
     auto best = candidatePlans.begin();
