@@ -3143,7 +3143,8 @@ bool ToGraph::windowReferencesWindow(const lp::ProjectNode& project) const {
 
 void ToGraph::addFilter(
     const lp::LogicalPlanNode& input,
-    const lp::ExprPtr& predicate) {
+    const lp::ExprPtr& predicate,
+    const velox::RowTypePtr emptyValuesType) {
   exprSources_.push_back(&input);
   SCOPE_EXIT {
     exprSources_.pop_back();
@@ -3160,6 +3161,13 @@ void ToGraph::addFilter(
 
     translateConjuncts(predicate, flat);
   }
+
+  if (emptyValuesType && hasConstantFalse(flat)) {
+    currentDt_ = newDt();
+    makeEmptyValuesTable(emptyValuesType);
+    return;
+  }
+
   {
     PlanObjectSet tables = currentDt_->tableSet;
     tables.add(currentDt_);
@@ -3200,6 +3208,26 @@ void ToGraph::addLimit(const lp::LimitNode& limit) {
 void ToGraph::makeEmptyValuesTable(const lp::LogicalPlanNode& node) {
   auto* emptyData = &registerVariant(velox::Variant::array({}))->array();
   auto* valuesTable = makeValuesTable(node, emptyData);
+  currentDt_->addTable(valuesTable);
+}
+
+void ToGraph::makeEmptyValuesTable(const velox::RowTypePtr& outputType) {
+  auto* emptyData = &registerVariant(velox::Variant::array({}))->array();
+  auto* valuesTable = make<ValuesTable>(toType(outputType), emptyData);
+  valuesTable->cname = newCName("vt");
+  const auto& names = outputType->names();
+  const auto cardinality = valuesTable->cardinality();
+  for (auto i = 0; i < outputType->size(); ++i) {
+    const auto& name = names[i];
+    const auto* columnName = toName(name);
+    auto* column = make<Column>(
+        columnName,
+        valuesTable,
+        toValue(outputType->childAt(i), cardinality),
+        columnName);
+    valuesTable->columns.push_back(column);
+    renames_[name] = column;
+  }
   currentDt_->addTable(valuesTable);
 }
 
@@ -3464,7 +3492,7 @@ void ToGraph::makeFilterQueryGraph(
   if (hasNondeterministic(filter.predicate())) {
     auto* outerDt = std::exchange(currentDt_, newDt());
     makeQueryGraph(input, kAllAllowedInDt, excludeOuterJoins);
-    addFilter(input, filter.predicate());
+    addFilter(input, filter.predicate(), filter.outputType());
     finalizeDt(filter, outerDt);
     return;
   }
@@ -3479,7 +3507,7 @@ void ToGraph::makeFilterQueryGraph(
     finalizeDt(filter);
   }
 
-  addFilter(input, filter.predicate());
+  addFilter(input, filter.predicate(), filter.outputType());
 }
 
 void ToGraph::makeProjectQueryGraph(
