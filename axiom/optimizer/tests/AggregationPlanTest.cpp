@@ -348,148 +348,331 @@ TEST_F(AggregationPlanTest, repartitionForAggPartitionSubset) {
 // 2. Outer: Regular aggregation without DISTINCT flag
 // This avoids the overhead of tracking distinct values in each aggregate.
 TEST_F(AggregationPlanTest, singleDistinctToGroupBy) {
-  testConnector_->addTable(
+  auto table = testConnector_->addTable(
       "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), DOUBLE()}));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  // Set table statistics with high duplicate ratio for grouping key + distinct
+  // args. The inner GROUP BY should deduplicate aggressively, making the
+  // GroupBy plan cheaper than the MarkDistinct plan.
+  table->setStats(
+      10'000,
+      {{"a", {.numDistinct = 10}},
+       {"b", {.numDistinct = 5}},
+       {"c", {.numDistinct = 5}}});
 
   auto buildMatcher = [](const std::vector<std::string>& projections,
                          const std::vector<std::string>& innerGroupingKeys,
                          const std::vector<std::string>& outerGroupingKeys,
-                         const std::vector<std::string>& aggregates) {
+                         const std::vector<std::string>& aggregates,
+                         bool useSingleStepOuterAgg = false) {
     auto builder = core::PlanMatcherBuilder().tableScan();
     if (!projections.empty()) {
       builder.project(projections);
     }
-    return builder.shuffle()
-        .localPartition()
-        .singleAggregation(innerGroupingKeys, {})
+    builder.partialAggregation(innerGroupingKeys, {})
         .shuffle()
         .localPartition()
-        .singleAggregation(outerGroupingKeys, aggregates)
-        .shuffle()
-        .build();
+        .finalAggregation(innerGroupingKeys, {});
+    if (useSingleStepOuterAgg) {
+      builder.shuffle().localPartition().singleAggregation(
+          outerGroupingKeys, aggregates);
+    } else {
+      builder.partialAggregation(outerGroupingKeys, aggregates)
+          .shuffle()
+          .localPartition()
+          .finalAggregation();
+    }
+    if (!outerGroupingKeys.empty()) {
+      builder.shuffle();
+    }
+    return builder.build();
   };
+
+  // Builds a logical plan, optimizes it, and asserts it matches the expected
+  // distributed plan.
+  OptimizerOptions options{.alwaysPlanPartialAggregation = true};
+  auto assertPlan =
+      [&](const std::vector<std::string>& groupingKeys,
+          const std::vector<std::string>& aggregates,
+          const std::shared_ptr<core::PlanMatcher>& expectedMatcher) {
+        auto logicalPlan = lp::PlanBuilder(makeContext())
+                               .tableScan("t")
+                               .aggregate(groupingKeys, aggregates)
+                               .build();
+        auto plan = planVelox(
+            logicalPlan,
+            runner::MultiFragmentPlan::Options{
+                .numWorkers = 4, .numDrivers = 4},
+            options);
+        AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
+      };
 
   {
     // Test global aggregation with multiple DISTINCT aggregates on the same set
     // of columns.
-    auto logicalPlan =
-        lp::PlanBuilder(makeContext())
-            .tableScan("t")
-            .aggregate({}, {"count(DISTINCT b)", "covar_pop(DISTINCT b, b)"})
-            .build();
-
-    auto plan = test::QueryTestBase::planVelox(logicalPlan);
-
-    auto expectedMatcher =
-        core::PlanMatcherBuilder()
-            .tableScan()
-            .shuffle()
-            .localPartition()
-            .singleAggregation({"b"}, {})
-            .partialAggregation({}, {"count(b) as a0", "covar_pop(b, b) as a1"})
-            .shuffle()
-            .localPartition()
-            .finalAggregation({}, {"count(a0)", "covar_pop(a1)"})
-            .build();
-
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
+    assertPlan(
+        {},
+        {"count(DISTINCT b)", "covar_pop(DISTINCT b, b)"},
+        buildMatcher(
+            /*projections=*/{},
+            /*innerGroupingKeys=*/{"b"},
+            /*outerGroupingKeys=*/{},
+            /*aggregates=*/{"count(b)", "covar_pop(b, b)"}));
   }
 
   {
     // Test single DISTINCT aggregate with grouping keys.
-    auto logicalPlan = lp::PlanBuilder(makeContext())
-                           .tableScan("t")
-                           .aggregate({"a"}, {"count(DISTINCT b)"})
-                           .build();
-
-    auto plan = test::QueryTestBase::planVelox(logicalPlan);
-
-    auto expectedMatcher = buildMatcher(
-        /*projections=*/{},
-        /*innerGroupingKeys=*/{"a", "b"},
-        /*outerGroupingKeys=*/{"a"},
-        /*aggregate=*/{"count(b)"});
-
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT b)"},
+        buildMatcher(
+            /*projections=*/{},
+            /*innerGroupingKeys=*/{"a", "b"},
+            /*outerGroupingKeys=*/{"a"},
+            /*aggregates=*/{"count(b)"}));
   }
 
   {
     // Test multiple DISTINCT aggregates on the same set of columns.
-    auto logicalPlan =
-        lp::PlanBuilder(makeContext())
-            .tableScan("t")
-            .aggregate({"a"}, {"count(DISTINCT b)", "covar_pop(DISTINCT b, b)"})
-            .build();
-
-    auto plan = test::QueryTestBase::planVelox(logicalPlan);
-
-    auto expectedMatcher = buildMatcher(
-        /*projections=*/{},
-        /*innerGroupingKeys=*/{"a", "b"},
-        /*outerGroupingKeys=*/{"a"},
-        /*aggregates=*/{"count(b)", "covar_pop(b, b)"});
-
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT b)", "covar_pop(DISTINCT b, b)"},
+        buildMatcher(
+            /*projections=*/{},
+            /*innerGroupingKeys=*/{"a", "b"},
+            /*outerGroupingKeys=*/{"a"},
+            /*aggregates=*/{"count(b)", "covar_pop(b, b)"}));
   }
 
   {
     // Test expression-based grouping keys and distinct args.
-    auto logicalPlan =
-        lp::PlanBuilder(makeContext())
-            .tableScan("t")
-            .aggregate(
-                {"a + 1"}, {"count(DISTINCT b + c)", "sum(DISTINCT b + c)"})
-            .build();
-
-    auto plan = test::QueryTestBase::planVelox(logicalPlan);
-
-    auto expectedMatcher = buildMatcher(
-        /*projections=*/{"a + 1 as p0", "b + c as p1"},
-        /*innerGroupingKeys=*/{"p0", "p1"},
-        /*outerGroupingKeys=*/{"p0"},
-        /*aggregates=*/{"count(p1)", "sum(p1)"});
-
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
+    assertPlan(
+        {"a + 1"},
+        {"count(DISTINCT b + c)", "sum(DISTINCT b + c)"},
+        buildMatcher(
+            /*projections=*/{"a + 1 as p0", "b + c as p1"},
+            /*innerGroupingKeys=*/{"p0", "p1"},
+            /*outerGroupingKeys=*/{"p0"},
+            /*aggregates=*/{"count(p1)", "sum(p1)"}));
   }
 
   {
     // Test same set of distinct args with different order and duplicates: (b,
     // c) and (c, b) have the same set {b, c}.
-    auto logicalPlan =
-        lp::PlanBuilder(makeContext())
-            .tableScan("t")
-            .aggregate(
-                {"a"},
-                {"covar_pop(DISTINCT b, c)", "covar_samp(DISTINCT c, b)"})
-            .build();
-
-    auto plan = test::QueryTestBase::planVelox(logicalPlan);
-
-    auto expectedMatcher = buildMatcher(
-        /*projections=*/{},
-        /*innerGroupingKeys=*/{"a", "b", "c"},
-        /*outerGroupingKeys=*/{"a"},
-        /*aggregates=*/{"covar_pop(b, c)", "covar_samp(c, b)"});
-
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
+    assertPlan(
+        {"a"},
+        {"covar_pop(DISTINCT b, c)", "covar_samp(DISTINCT c, b)"},
+        buildMatcher(
+            /*projections=*/{},
+            /*innerGroupingKeys=*/{"a", "b", "c"},
+            /*outerGroupingKeys=*/{"a"},
+            /*aggregates=*/{"covar_pop(b, c)", "covar_samp(c, b)"}));
   }
 
   {
     // Test DISTINCT argument overlap with grouping keys.
-    auto logicalPlan = lp::PlanBuilder(makeContext())
-                           .tableScan("t")
-                           .aggregate({"b"}, {"covar_pop(DISTINCT b, c)"})
-                           .build();
+    assertPlan(
+        {"b"},
+        {"covar_pop(DISTINCT b, c)"},
+        buildMatcher(
+            /*projections=*/{},
+            /*innerGroupingKeys=*/{"b", "c"},
+            /*outerGroupingKeys=*/{"b"},
+            /*aggregates=*/{"covar_pop(b, c)"}));
+  }
 
-    auto plan = test::QueryTestBase::planVelox(logicalPlan);
+  {
+    // DISTINCT with ORDER BY where ORDER BY keys are a subset of distinct args.
+    // Both aggregates have distinct args {a, b}.
+    // With alwaysPlanPartialAggregation=true:
+    // - Inner aggregation is split (partial + final) for deduplication.
+    // - Outer aggregation is single even if alwaysPlanPartialAggregation is
+    //   true, because ORDER BY requires single aggregation step.
+    assertPlan(
+        {"c"},
+        {"max_by(DISTINCT a, b ORDER BY a)",
+         "min_by(DISTINCT a, b ORDER BY b)"},
+        buildMatcher(
+            /*projections=*/{},
+            /*innerGroupingKeys=*/{"c", "a", "b"},
+            /*outerGroupingKeys=*/{"c"},
+            /*aggregates=*/
+            {"max_by(a, b ORDER BY a)", "min_by(a, b ORDER BY b)"},
+            /*useSingleStepOuterAgg=*/true));
+  }
+}
 
-    auto expectedMatcher = buildMatcher(
-        /*projections=*/{},
-        /*innerGroupingKeys=*/{"b", "c"},
-        /*outerGroupingKeys=*/{"b"},
-        /*aggregates=*/{"covar_pop(b, c)"});
+// Verifies that when there are multiple DISTINCT aggregates with different
+// sets of arguments, the optimizer uses the MarkDistinct transformation:
+TEST_F(AggregationPlanTest, multipleDistinctToMarkDistinct) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c", "d"}, {BIGINT(), DOUBLE(), DOUBLE(), BIGINT()}));
 
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
+  // Builds an expected plan matcher for the MarkDistinct transformation.
+  // When 'singleStep' is true, expects a single aggregation step. Otherwise,
+  // uses partial + final aggregation steps.
+  auto buildMatcher =
+      [](const std::vector<std::string>& projections,
+         const std::vector<std::vector<std::string>>& markDistinctKeys,
+         const std::vector<std::string>& groupingKeys,
+         bool singleStep,
+         const std::vector<std::string>& aggregates) {
+        auto builder = core::PlanMatcherBuilder().tableScan();
+        if (!projections.empty()) {
+          builder.project(projections);
+        }
+
+        for (const auto& keys : markDistinctKeys) {
+          builder.shuffle().markDistinct(keys);
+        }
+        if (singleStep) {
+          builder.shuffle().localPartition().singleAggregation(
+              groupingKeys, aggregates);
+        } else {
+          builder.partialAggregation(groupingKeys, aggregates)
+              .shuffle()
+              .localPartition()
+              .finalAggregation();
+        }
+        if (!groupingKeys.empty()) {
+          builder.shuffle();
+        }
+        return builder.build();
+      };
+
+  // Builds a logical plan, optimizes it, and asserts it matches the expected
+  // distributed plan.
+  auto assertPlan =
+      [&](const std::vector<std::string>& groupingKeys,
+          const std::vector<std::string>& aggregates,
+          const std::shared_ptr<core::PlanMatcher>& expectedMatcher) {
+        auto logicalPlan = lp::PlanBuilder(makeContext())
+                               .tableScan("t")
+                               .aggregate(groupingKeys, aggregates)
+                               .build();
+
+        OptimizerOptions options{.alwaysPlanPartialAggregation = true};
+        auto plan = planVelox(
+            logicalPlan,
+            runner::MultiFragmentPlan::Options{
+                .numWorkers = 4, .numDrivers = 4},
+            options);
+        AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, expectedMatcher);
+      };
+
+  {
+    // Test multiple DISTINCT aggregates with different argument sets.
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT b)", "sum(DISTINCT d % 5)"},
+        buildMatcher(
+            {"a as g", "b as p0", "d % 5 as p1"},
+            {{"g", "p0"}, {"g", "p1"}},
+            {"g"},
+            /*singleStep=*/false,
+            {"count(p0) filter (where m0)", "sum(p1) filter (where m1)"}));
+  }
+
+  {
+    // Test global aggregation with multiple DISTINCT sets.
+    assertPlan(
+        {},
+        {"count(DISTINCT b)", "sum(DISTINCT d % 5)"},
+        buildMatcher(
+            {"b as p0", "d % 5 as p1"},
+            {{"p0"}, {"p1"}},
+            {},
+            /*singleStep=*/false,
+            {"count(p0) filter (where m0)", "sum(p1) filter (where m1)"}));
+  }
+
+  {
+    // Test mix of DISTINCT with different args and non-DISTINCT.
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT b)", "sum(DISTINCT d % 5)", "avg(b)"},
+        buildMatcher(
+            {"a as g", "b as p0", "d % 5 as p1"},
+            {{"g", "p0"}, {"g", "p1"}},
+            {"g"},
+            /*singleStep=*/false,
+            {"count(p0) filter (where m0)",
+             "sum(p1) filter (where m1)",
+             "avg(p0)"}));
+  }
+
+  {
+    // Test DISTINCT with ORDER BY uses single aggregation step.
+    assertPlan(
+        {"a"},
+        {"array_agg(DISTINCT b ORDER BY b)",
+         "array_agg(DISTINCT d % 5 ORDER BY d % 5)",
+         "array_agg(b ORDER BY b)"},
+        buildMatcher(
+            {"a as g", "b as p0", "d % 5 as p1"},
+            {{"g", "p0"}, {"g", "p1"}},
+            {"g"},
+            /*singleStep=*/true,
+            {"array_agg(p0 ORDER BY p0 ASC NULLS LAST) filter (where m0)",
+             "array_agg(p1 ORDER BY p1 ASC NULLS LAST) filter (where m1)",
+             "array_agg(p0 ORDER BY p0 ASC NULLS LAST)"}));
+  }
+
+  {
+    // Test DISTINCT aggregates with the same set of non-grouping-key arguments
+    // share a single marker column. Grouping keys in distinct arguments are
+    // ignored since they always have unique values during aggregation.
+    assertPlan(
+        {"b"},
+        {"count(DISTINCT c)", "covar_pop(DISTINCT b, c)"},
+        buildMatcher(
+            {},
+            {{"b", "c"}},
+            {"b"},
+            /*singleStep=*/false,
+            {"count(c) filter (where m0)",
+             "covar_pop(b, c) filter (where m0)"}));
+  }
+
+  {
+    // Test DISTINCT args overlapping with grouping keys are deduplicated in
+    // MarkDistinct keys.
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT a)", "sum(DISTINCT b)"},
+        buildMatcher(
+            {},
+            {{"a", "b"}},
+            {"a"},
+            /*singleStep=*/false,
+            {"count(a)", "sum(b) filter (where m0)"}));
+
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT a)", "sum(DISTINCT a)"},
+        buildMatcher(
+            {},
+            {},
+            {"a"},
+            /*singleStep=*/false,
+            {"count(a)", "sum(a)"}));
+  }
+
+  {
+    // Test multi-argument DISTINCT aggregates with different arg sets.
+    assertPlan(
+        {"a"},
+        {"covar_pop(DISTINCT b, c)", "count(DISTINCT d)"},
+        buildMatcher(
+            {},
+            {{"a", "b", "c"}, {"a", "d"}},
+            {"a"},
+            /*singleStep=*/false,
+            {"covar_pop(b, c) filter (where m0)",
+             "count(d) filter (where m1)"}));
   }
 }
 
@@ -498,47 +681,8 @@ TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
       "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), DOUBLE()}));
 
   {
-    // Different DISTINCT arguments across aggregates is not supported yet.
-    auto logicalPlan =
-        lp::PlanBuilder(makeContext())
-            .tableScan("t")
-            .aggregate({"a"}, {"count(DISTINCT b)", "sum(DISTINCT c)"})
-            .build();
-
-    VELOX_ASSERT_THROW(
-        test::QueryTestBase::planVelox(logicalPlan),
-        "DISTINCT aggregates have multiple sets of arguments");
-  }
-
-  {
-    // Different DISTINCT argument sets: {b, c} vs {b}.
-    auto logicalPlan =
-        lp::PlanBuilder(makeContext())
-            .tableScan("t")
-            .aggregate(
-                {"a"},
-                {"covar_pop(DISTINCT b, c)", "covar_samp(DISTINCT b, b)"})
-            .build();
-
-    VELOX_ASSERT_THROW(
-        test::QueryTestBase::planVelox(logicalPlan),
-        "DISTINCT aggregates have multiple sets of arguments");
-  }
-
-  {
-    // Mix of DISTINCT and non-DISTINCT aggregates is not supported yet.
-    auto logicalPlan = lp::PlanBuilder(makeContext())
-                           .tableScan("t")
-                           .aggregate({"a"}, {"count(DISTINCT b)", "sum(c)"})
-                           .build();
-
-    VELOX_ASSERT_THROW(
-        test::QueryTestBase::planVelox(logicalPlan),
-        "Mix of DISTINCT and non-DISTINCT aggregates");
-  }
-
-  {
-    // DISTINCT with ORDER BY is not supported yet.
+    // DISTINCT with ORDER BY keys that are not a subset of distinct arguments
+    // is not supported yet.
     auto logicalPlan =
         lp::PlanBuilder(makeContext())
             .tableScan("t")
@@ -547,7 +691,20 @@ TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
 
     VELOX_ASSERT_THROW(
         test::QueryTestBase::planVelox(logicalPlan),
-        "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
+        "For DISTINCT aggregations with parallel execution, ORDER BY keys must appear in aggregation arguments.");
+  }
+
+  {
+    // DISTINCT aggregate with a filter condition is not supported yet.
+    auto logicalPlan =
+        lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
+            .tableScan("t")
+            .aggregate({"a"}, {"count(DISTINCT b) FILTER (WHERE c > 0)"})
+            .build();
+
+    VELOX_ASSERT_THROW(
+        test::QueryTestBase::planVelox(logicalPlan),
+        "Distinct aggregation plan not eligible for transformation to GroupBy or MarkDistinct.");
   }
 }
 
