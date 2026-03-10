@@ -79,7 +79,9 @@ void DistributedPlanBuilder::addExchange(
     const velox::RowTypePtr& producerType,
     const std::string& producerPrefix,
     runner::ExecutableFragment& fragment) {
-  exchange(producerType, "Presto");
+  exchange(
+      producerType,
+      velox::VectorSerde::kindName(velox::VectorSerde::Kind::kPresto));
   auto* exchange = as<velox::core::ExchangeNode>(planNode_);
 
   fragment.inputStages.push_back(
