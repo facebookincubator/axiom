@@ -246,6 +246,14 @@ class ExprApi {
     return result;
   }
 
+  /// Returns a copy with a different underlying expression, preserving alias,
+  /// windowSpec, and unnestedAliases.
+  ExprApi withExpr(velox::core::ExprPtr expr) const {
+    ExprApi result(std::move(expr), alias_, unnestedAliases_);
+    result.windowSpec_ = windowSpec_;
+    return result;
+  }
+
   ExprApi unnestAs(std::vector<std::string> aliases) const;
 
   template <typename... T>
