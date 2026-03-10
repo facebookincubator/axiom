@@ -1004,19 +1004,20 @@ PlanBuilder& PlanBuilder::aggregate(
   }
 
   std::vector<std::string> outputNames;
-  outputNames.reserve(groupingKeys.size() + aggregates.size() + 1);
+  outputNames.reserve(numKeys + aggregates.size() + 1);
 
   std::vector<ExprPtr> keyExprs;
-  keyExprs.reserve(groupingKeys.size());
+  keyExprs.reserve(numKeys);
 
   auto newOutputMapping = std::make_shared<NameMappings>();
 
   resolveProjections(groupingKeys, outputNames, keyExprs, *newOutputMapping);
 
-  std::vector<AggregateExprPtr> exprs;
-  exprs.reserve(aggregates.size());
+  std::vector<AggregateExprPtr> aggExprs;
+  aggExprs.reserve(aggregates.size());
 
-  resolveAggregates(aggregates, options, outputNames, exprs, *newOutputMapping);
+  resolveAggregates(
+      aggregates, options, outputNames, aggExprs, *newOutputMapping);
 
   auto gidInternalName = newName(groupingSetIndexName);
   outputNames.push_back(gidInternalName);
@@ -1028,7 +1029,7 @@ PlanBuilder& PlanBuilder::aggregate(
       std::move(node_),
       std::move(keyExprs),
       groupingSets,
-      std::move(exprs),
+      std::move(aggExprs),
       std::move(outputNames));
 
   newOutputMapping->enableUnqualifiedAccess();
