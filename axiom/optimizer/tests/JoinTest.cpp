@@ -1104,6 +1104,50 @@ TEST_F(JoinTest, leftJoinOnClausePushdown) {
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+
+  // Constant false ON conjunct applied on INNER JOIN will return an empty set.
+  {
+    auto query = "SELECT * FROM t INNER JOIN u ON a = x AND 1 > 2";
+    SCOPED_TRACE(query);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values(ROW({"a", "b", "c", "x", "y"}, BIGINT()))
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    auto valuesNode = std::dynamic_pointer_cast<const core::ValuesNode>(plan);
+    ASSERT_NE(valuesNode, nullptr);
+    size_t numRows{0};
+    for (const auto& batch : valuesNode->values()) {
+      numRows += batch->size();
+    }
+    EXPECT_EQ(numRows, 0);
+  }
+
+  // Constant false ON conjunct on INNER JOIN when left side has aggregation.
+  {
+    auto query =
+        "SELECT * FROM (SELECT a, count(*) as cnt FROM t GROUP BY a) "
+        "INNER JOIN u ON a = x AND 1 > 2";
+    SCOPED_TRACE(query);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values(ROW({"a", "cnt", "x", "y"}, BIGINT()))
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+
+    auto valuesNode = std::dynamic_pointer_cast<const core::ValuesNode>(plan);
+    ASSERT_NE(valuesNode, nullptr);
+    size_t numRows{0};
+    for (const auto& batch : valuesNode->values()) {
+      numRows += batch->size();
+    }
+    EXPECT_EQ(numRows, 0);
+  }
 }
 
 TEST_F(JoinTest, impliedJoins) {

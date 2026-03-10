@@ -273,7 +273,9 @@ class ToGraph {
   // - Full join: creates a UNION ALL of left (with NULLs for right) and right
   //   (with NULLs for left).
   //
-  // Inner joins are not yet supported.
+  // Note: Inner join is handled by addFilter, which produces an empty result
+  // when there is a false conjunct.
+  //
   // Returns true if the join was eliminated.
   bool tryEliminateJoinOnConstantFalse(
       logical_plan::JoinType joinType,

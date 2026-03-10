@@ -1820,7 +1820,8 @@ void ToGraph::translateJoin(
         exprSources_.pop_back();
       };
 
-      addFilter(*left, condition);
+      addFilter(
+          *left, condition, left->outputType()->unionWith(right->outputType()));
     }
     return;
   }
