@@ -527,5 +527,21 @@ TEST_F(AggregationParserTest, aggregateDeduplication) {
           .output());
 }
 
+TEST_F(AggregationParserTest, groupByWithWindowFunction) {
+  connector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  // Window function with grouping key in ORDER BY.
+  testSelect(
+      "SELECT b, sum(a), row_number() OVER (ORDER BY b) FROM t GROUP BY b",
+      matchScan("t")
+          .aggregate({"b"}, {"sum(a)"})
+          .project({
+              "b",
+              "sum",
+              "row_number() OVER (ORDER BY b ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .output());
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test

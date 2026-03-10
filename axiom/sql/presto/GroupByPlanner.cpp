@@ -583,15 +583,22 @@ void GroupByPlanner::rewritePostAggregateExprs() {
   for (auto& item : projections_) {
     auto newExpr = replaceInputs(
         item.expr(), keyInputs, aggregateInputs, aggregateOptionsMap_);
-    item = lp::ExprApi(newExpr, item.name());
+    auto newItem = lp::ExprApi(newExpr, item.name());
+    if (item.windowSpec()) {
+      newItem = newItem.over(*item.windowSpec());
+    }
+    item = std::move(newItem);
   }
 
   // Replace sorting key expressions too.
   for (auto& key : sortingKeys_) {
     auto newExpr = replaceInputs(
         key.expr.expr(), keyInputs, aggregateInputs, aggregateOptionsMap_);
-    key = lp::SortKey(
-        lp::ExprApi(newExpr, key.expr.name()), key.ascending, key.nullsFirst);
+    auto newKeyExpr = lp::ExprApi(newExpr, key.expr.name());
+    if (key.expr.windowSpec()) {
+      newKeyExpr = newKeyExpr.over(*key.expr.windowSpec());
+    }
+    key = lp::SortKey(std::move(newKeyExpr), key.ascending, key.nullsFirst);
   }
 }
 
