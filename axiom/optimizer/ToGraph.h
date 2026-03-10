@@ -308,9 +308,14 @@ class ToGraph {
 
   void addProjection(const logical_plan::ProjectNode& project);
 
+  // Adds filter conjuncts from 'predicate' to 'currentDt_'. If
+  // 'emptyValuesType' is provided and the flattened conjuncts contain a
+  // constant false, replaces 'currentDt_' with an empty ValuesTable of the
+  // given type.
   void addFilter(
       const logical_plan::LogicalPlanNode& input,
-      const logical_plan::ExprPtr& predicate);
+      const logical_plan::ExprPtr& predicate,
+      const velox::RowTypePtr emptyValuesType = nullptr);
 
   // Returns true if any window expression in the project references another
   // window function output through renames_. Used to detect window-on-window
@@ -377,6 +382,9 @@ class ToGraph {
       ValuesTable::Data data);
 
   void makeEmptyValuesTable(const logical_plan::LogicalPlanNode& node);
+
+  // Creates an empty ValuesTable with the given output type.
+  void makeEmptyValuesTable(const velox::RowTypePtr& outputType);
 
   // Adds 'node' and descendants to query graph wrapped inside a
   // DerivedTable. Done for joins to the right of non-inner joins,
