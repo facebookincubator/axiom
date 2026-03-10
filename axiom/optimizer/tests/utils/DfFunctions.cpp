@@ -35,7 +35,7 @@ void registerFeatureFuncHook(
 }
 
 std::pair<std::vector<Step>, int32_t> makeRowFromMapSubfield(
-    const std::vector<Step>& steps,
+    std::span<const Step> steps,
     const lp::CallExpr& call) {
   VELOX_CHECK(steps.back().kind == StepKind::kField);
   auto& list = call.inputAt(2)
@@ -58,7 +58,7 @@ std::pair<std::vector<Step>, int32_t> makeRowFromMapSubfield(
   VELOX_CHECK(
       found != -1, "Subfield not found in make_row_from_map: {}", field);
 
-  auto newFields = steps;
+  std::vector<Step> newFields(steps.begin(), steps.end());
   newFields.pop_back();
   newFields.push_back(
       optimizer::Step{
@@ -68,7 +68,7 @@ std::pair<std::vector<Step>, int32_t> makeRowFromMapSubfield(
                     ->value()
                     ->value<TypeKind::ARRAY>()[found]
                     .value<int32_t>()});
-  return std::make_pair(newFields, 0);
+  return std::make_pair(std::move(newFields), 0);
 }
 
 folly::F14FastMap<PathCP, lp::ExprPtr> makeRowFromMapExplodeGeneric(
@@ -184,14 +184,14 @@ lp::ExprPtr makeNamedRowHook(
 }
 
 std::pair<std::vector<Step>, int32_t> makeNamedRowSubfield(
-    const std::vector<Step>& steps,
+    std::span<const Step> steps,
     const lp::CallExpr& call) {
   VELOX_CHECK(steps.back().kind == StepKind::kField);
   auto field = steps.back().field;
   auto idx = call.type()->as<TypeKind::ROW>().getChildIdx(field);
-  auto newFields = steps;
+  std::vector<Step> newFields(steps.begin(), steps.end());
   newFields.pop_back();
-  return std::make_pair(newFields, 2 * idx + 1);
+  return std::make_pair(std::move(newFields), 2 * idx + 1);
 }
 
 folly::F14FastMap<PathCP, lp::ExprPtr> makeNamedRowExplode(

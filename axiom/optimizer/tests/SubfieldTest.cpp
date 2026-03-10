@@ -407,26 +407,123 @@ TEST_P(SubfieldTest, structs) {
       ROW({"s1", "s2", "s3"},
           {BIGINT(), ROW({"s2s1"}, {BIGINT()}), ARRAY(BIGINT())});
   auto rowType = ROW({"s", "i"}, {structType, BIGINT()});
-  auto vectors = makeVectors(rowType, 10, 10);
+  auto vectors = makeVectors(rowType, 1, 1);
   createTable("structs", vectors);
 
-  auto logicalPlan = lp::PlanBuilder(makeContext())
-                         .tableScan("structs", rowType->names())
-                         .project({"s.s1", "s.s3[1]"})
-                         .build();
+  {
+    // Dereference struct fields by name.
+    auto logicalPlan = lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
+                           .tableScan("structs", rowType->names())
+                           .project({"s.s1 as s1", "s.s3[1]"})
+                           .filter("s1 < 10")
+                           .build();
+    auto fragmentedPlan = planVelox(logicalPlan);
 
-  auto fragmentedPlan = planVelox(logicalPlan);
+    // t2.s = HiveColumnHandle [... requiredSubfields: [ s.s1 s.s3[1] ]]
+    verifyRequiredSubfields(
+        extractPlanNode(fragmentedPlan), {{"s", {".s1", ".s3[1]"}}});
 
-  // t2.s = HiveColumnHandle [... requiredSubfields: [ s.s1 s.s3[0] ]]
-  verifyRequiredSubfields(
-      extractPlanNode(fragmentedPlan), {{"s", {".s1", ".s3[1]"}}});
+    auto referencePlan = PlanBuilder()
+                             .tableScan("structs", rowType)
+                             .filter("s.s1 < 10")
+                             .project({"s.s1", "s.s3[1]"})
+                             .planNode();
+    checkSame(fragmentedPlan, referencePlan);
+  }
 
-  auto referencePlan = PlanBuilder()
-                           .tableScan("structs", rowType)
-                           .project({"s.s1", "s.s3[1]"})
-                           .planNode();
+  {
+    // Dereference struct fields by indices.
+    auto logicalPlan = lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
+                           .tableScan("structs", rowType->names())
+                           .project({"s[1] as s1", "s[2].s2s1", "s[3][1]"})
+                           .filter("s1 < 10")
+                           .build();
+    auto fragmentedPlan = planVelox(logicalPlan);
 
-  checkSame(fragmentedPlan, referencePlan);
+    verifyRequiredSubfields(
+        extractPlanNode(fragmentedPlan),
+        {{"s", {".s1", ".s2.s2s1", ".s3[1]"}}});
+
+    auto referencePlan = PlanBuilder()
+                             .tableScan("structs", rowType)
+                             .filter("s.s1 < 10")
+                             .project({"s.s1", "(s.s2).s2s1", "s.s3[1]"})
+                             .planNode();
+    checkSame(fragmentedPlan, referencePlan);
+  }
+}
+
+TEST_P(SubfieldTest, anonymousStructs) {
+  auto rowType = ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), ARRAY(BIGINT())});
+  auto vectors = makeVectors(rowType, 1, 1);
+  createTable("anon_structs", vectors);
+
+  {
+    // Dereference anonymous struct field in projection.
+    auto logicalPlan = parseSelect(
+        "SELECT row(a, b, c).field0, row(a, b, c)[3][1] FROM anon_structs",
+        kHiveConnectorId);
+    auto fragmentedPlan = planVelox(logicalPlan);
+
+    verifyRequiredSubfields(
+        extractPlanNode(fragmentedPlan), {{"a", {}}, {"c", {"[1]"}}});
+
+    auto referencePlan = PlanBuilder()
+                             .tableScan("anon_structs", rowType)
+                             .project({"a", "c[1]"})
+                             .planNode();
+    checkSame(fragmentedPlan, referencePlan);
+  }
+
+  {
+    // Dereference anonymous struct field in filter.
+    auto logicalPlan = parseSelect(
+        "SELECT row(a, b, c).field2[1] FROM anon_structs WHERE row(a, b, c).field0 > 0 ",
+        kHiveConnectorId);
+    auto fragmentedPlan = planVelox(logicalPlan);
+
+    verifyRequiredSubfields(extractPlanNode(fragmentedPlan), {{"c", {"[1]"}}});
+
+    auto referencePlan = PlanBuilder()
+                             .tableScan("anon_structs", rowType)
+                             .filter("a > 0")
+                             .project({"c[1]"})
+                             .planNode();
+    checkSame(fragmentedPlan, referencePlan);
+  }
+}
+
+TEST_P(SubfieldTest, anonymousStructTableScan) {
+  // Simulate filtering or projection on a table scan column with unnamed struct
+  // fields and verify that Axiom throws the "Index subfield not suitable for
+  // pruning" error as expected.
+  auto innerType = ROW({"s1", "", ""}, {BIGINT(), BIGINT(), ARRAY(BIGINT())});
+  auto rowType = ROW({"s"}, {innerType});
+  auto vectors = makeVectors(rowType, 1, 1);
+  createTable("anon_scan", vectors);
+
+  {
+    // Anonymous struct access in project.
+    auto logicalPlan = lp::PlanBuilder(makeContext())
+                           .tableScan("anon_scan", rowType->names())
+                           .project({"s[1] as s1", "s[3][1]"})
+                           .build();
+
+    VELOX_ASSERT_THROW(
+        planVelox(logicalPlan), "Index subfield not suitable for pruning");
+  }
+
+  {
+    // Anonymous struct access in filter.
+    auto logicalPlan = lp::PlanBuilder(makeContext(), /*enableCoercions=*/true)
+                           .tableScan("anon_scan", rowType->names())
+                           .project({"s[3][1] as arr_elem"})
+                           .filter("arr_elem > 0")
+                           .build();
+
+    VELOX_ASSERT_THROW(
+        planVelox(logicalPlan), "Index subfield not suitable for pruning");
+  }
 }
 
 TEST_P(SubfieldTest, genie) {

@@ -232,14 +232,17 @@ const std::string& specialForm(lp::SpecialForm specialForm) {
 
 namespace {
 std::pair<std::vector<Step>, int32_t> rowConstructorSubfield(
-    const std::vector<Step>& steps,
+    std::span<const Step> steps,
     const lp::CallExpr& call) {
   VELOX_CHECK(steps.back().kind == StepKind::kField);
-  auto field = steps.back().field;
-  auto idx = call.type()->as<velox::TypeKind::ROW>().getChildIdx(field);
-  auto newFields = steps;
+  auto& step = steps.back();
+  auto idx = step.id;
+  if (step.field) {
+    idx = call.type()->asRow().getChildIdx(step.field);
+  }
+  std::vector<Step> newFields(steps.begin(), steps.end());
   newFields.pop_back();
-  return std::make_pair(newFields, idx);
+  return std::make_pair(std::move(newFields), idx);
 }
 
 folly::F14FastMap<PathCP, lp::ExprPtr> rowConstructorExplode(

@@ -112,13 +112,22 @@ Step extractDereferenceStep(const logical_plan::ExprPtr& expr) {
 
   auto index = maybeIntegerLiteral(field);
   Name name = nullptr;
-  if (!index.has_value()) {
+
+  if (index.has_value()) {
+    VELOX_CHECK(
+        *index >= 0 && *index <= std::numeric_limits<uint32_t>::max(),
+        "Dereference index out of range.");
+    auto fieldName = rowType.nameOf(static_cast<uint32_t>(*index));
+    if (!fieldName.empty()) {
+      name = toName(fieldName);
+    }
+  } else {
     const auto& fieldName = field->value()->value<velox::TypeKind::VARCHAR>();
     name = toName(fieldName);
     index = rowType.getChildIdx(name);
   }
 
-  return Step{.kind = StepKind::kField, .field = name, .id = index.value()};
+  return Step{.kind = StepKind::kField, .field = name, .id = *index};
 }
 
 std::string conjunctsToString(const ExprVector& conjuncts) {

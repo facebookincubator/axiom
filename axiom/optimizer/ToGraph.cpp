@@ -1233,9 +1233,7 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
   bool allUsed = false;
 
   const auto& argOrginal = metadata->argOrdinal;
-  if (argOrginal.empty()) {
-    allUsed = true;
-  } else {
+  if (!argOrginal.empty()) {
     for (auto i = 0; i < paths.size(); ++i) {
       if (std::find(argOrginal.begin(), argOrginal.end(), i) ==
           argOrginal.end()) {
@@ -1250,6 +1248,23 @@ std::optional<ExprCP> ToGraph::translateSubfieldFunction(
         usedArgs.add(maybeArg.value());
       }
     }
+  } else if (metadata->valuePathToArgPath) {
+    // For functions like row_constructor that use valuePathToArgPath instead
+    // of a static argOrdinal mapping, derive usedArgs from each tracked
+    // subfield path.
+    for (const auto& path : paths) {
+      const auto& steps = path->steps();
+      if (steps.empty()) {
+        continue;
+      }
+      // Reverse steps to leaf-to-root order for valuePathToArgPath.
+      Path reversed{steps, std::true_type{}};
+      auto [remainingSteps, argIdx] =
+          metadata->valuePathToArgPath(reversed.steps(), *call);
+      usedArgs.add(argIdx);
+    }
+  } else {
+    allUsed = true;
   }
 
   const auto& inputs = call->inputs();

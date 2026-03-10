@@ -165,7 +165,7 @@ struct FunctionMetadata {
 
   using ValuePathToArgPath =
       std::function<std::pair<std::vector<Step>, int32_t>(
-          const std::vector<Step>&,
+          std::span<const Step>,
           const logical_plan::CallExpr& call)>;
 
   /// Translates a path over the function result to a path over an argument.
