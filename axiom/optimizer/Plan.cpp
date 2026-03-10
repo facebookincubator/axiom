@@ -339,6 +339,13 @@ PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
     for (auto& aggregate : aggToPlace->aggregates()) {
       addExpr(aggregate);
     }
+    // Grouping-sets renames keys (e.g., a → a$gid) on the DerivedTable. The
+    // renamed columns are not base table columns, so they get filtered out by
+    // indexColumns(). Register the original input columns so the scan includes
+    // them.
+    for (auto* inputKey : aggToPlace->inputGroupingKeys()) {
+      result.add(inputKey);
+    }
   }
 
   // Window functions.

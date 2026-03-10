@@ -166,4 +166,17 @@ std::string exprsToString(const ExprVector& exprs) {
   return out.str();
 }
 
+const logical_plan::AggregateExpr* aggregateForOrdinal(
+    const logical_plan::AggregateNode& agg,
+    size_t ordinal) {
+  if (ordinal < agg.groupingKeys().size()) {
+    return nullptr;
+  }
+  const auto aggregateIndex = ordinal - agg.groupingKeys().size();
+  if (aggregateIndex >= agg.aggregates().size()) {
+    return nullptr;
+  }
+  return agg.aggregates()[aggregateIndex].get();
+}
+
 } // namespace facebook::axiom::optimizer
