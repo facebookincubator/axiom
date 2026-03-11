@@ -773,13 +773,6 @@ PlanBuilder& PlanBuilder::project(const std::vector<ExprApi>& projections) {
 
   resolveProjections(projections, outputNames, exprs, *newOutputMapping);
 
-  projectionExpressionMap_.clear();
-  for (size_t i = 0; i < projections.size(); ++i) {
-    if (!projections[i].expr()->inputs().empty()) {
-      projectionExpressionMap_.emplace(projections[i].expr(), outputNames[i]);
-    }
-  }
-
   node_ = std::make_shared<ProjectNode>(
       nextId(), std::move(node_), std::move(outputNames), std::move(exprs));
 
@@ -1880,15 +1873,6 @@ ExprPtr PlanBuilder::resolveInputName(
 
 ExprPtr PlanBuilder::resolveScalarTypes(
     const velox::core::ExprPtr& expr) const {
-  if (!projectionExpressionMap_.empty()) {
-    auto it = projectionExpressionMap_.find(expr);
-    if (it != projectionExpressionMap_.end()) {
-      const auto& id = it->second;
-      return std::make_shared<InputReferenceExpr>(
-          node_->outputType()->findChild(id), id);
-    }
-  }
-
   return resolver_.resolveScalarTypes(
       expr, [&](const auto& alias, const auto& name) {
         return resolveInputName(alias, name);

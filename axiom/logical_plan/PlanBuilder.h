@@ -879,12 +879,6 @@ class PlanBuilder {
   // Maps user-visible column names to auto-generated internal IDs.
   std::shared_ptr<NameMappings> outputMapping_;
 
-  // Maps unresolved projection expressions to their output column names.
-  // Populated by project() so that resolveScalarTypes() can match a whole
-  // expression (e.g. plus(Col("a"), Col("b"))) to the projection output
-  // that computed it, enabling ORDER BY on expressions that appear in SELECT.
-  velox::core::ExprMap<std::string> projectionExpressionMap_;
-
   // Resolves and type-checks scalar and aggregate expressions.
   ExprResolver resolver_;
 };
