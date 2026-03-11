@@ -1442,6 +1442,45 @@ class LocalPartitionTypeMatcher : public PlanMatcherImpl<LocalPartitionNode> {
   const std::vector<std::string> partitionKeys_;
 };
 
+class MarkDistinctMatcher : public PlanMatcherImpl<MarkDistinctNode> {
+ public:
+  explicit MarkDistinctMatcher(const std::shared_ptr<PlanMatcher>& matcher)
+      : PlanMatcherImpl<MarkDistinctNode>({matcher}) {}
+
+  MarkDistinctMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      const std::vector<std::string>& distinctKeys)
+      : PlanMatcherImpl<MarkDistinctNode>({matcher}),
+        distinctKeys_{distinctKeys} {}
+
+  MatchResult matchDetails(
+      const MarkDistinctNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    if (!distinctKeys_.empty()) {
+      EXPECT_EQ(plan.distinctKeys().size(), distinctKeys_.size());
+      AXIOM_TEST_RETURN_IF_FAILURE
+
+      for (auto i = 0; i < distinctKeys_.size(); ++i) {
+        auto expected =
+            parse::DuckSqlExpressionsParser().parseExpr(distinctKeys_[i]);
+        if (!symbols.empty()) {
+          expected = rewriteInputNames(expected, symbols);
+        }
+        EXPECT_EQ(plan.distinctKeys()[i]->toString(), expected->toString());
+      }
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
+    return MatchResult::success(symbols);
+  }
+
+ private:
+  const std::vector<std::string> distinctKeys_;
+};
+
 #undef AXIOM_TEST_RETURN
 #undef AXIOM_TEST_RETURN_IF_FAILURE
 #undef AXIOM_TEST_RETURN_IF_FAILURE_VOID
@@ -1876,6 +1915,19 @@ PlanMatcherBuilder& PlanMatcherBuilder::topNRowNumber(
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<TopNRowNumberMatcher>(
       matcher_, partitionKeys, sortingKeys, limit);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::markDistinct() {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<MarkDistinctMatcher>(matcher_);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::markDistinct(
+    const std::vector<std::string>& distinctKeys) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<MarkDistinctMatcher>(matcher_, distinctKeys);
   return *this;
 }
 

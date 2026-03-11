@@ -56,6 +56,7 @@ const auto& relTypeNames() {
       {RelType::kWindow, "Window"},
       {RelType::kRowNumber, "RowNumber"},
       {RelType::kTopNRowNumber, "TopNRowNumber"},
+      {RelType::kMarkDistinct, "MarkDistinct"},
   };
 
   return kNames;
@@ -2109,6 +2110,34 @@ const QGString& TopNRowNumber::historyKey() const {
 }
 
 void TopNRowNumber::accept(
+    const RelationOpVisitor& visitor,
+    RelationOpVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+MarkDistinct::MarkDistinct(
+    RelationOpPtr input,
+    ColumnCP markerColumn,
+    ExprVector distinctKeys)
+    : RelationOp(
+          RelType::kMarkDistinct,
+          input,
+          [&]() {
+            // Output columns = input columns + marker column.
+            ColumnVector cols = input->columns();
+            cols.push_back(markerColumn);
+            return cols;
+          }()),
+      markerColumn_(markerColumn),
+      distinctKeys_(std::move(distinctKeys)) {
+  // MarkDistinct does not change cardinality.
+  cost_.fanout = 1;
+  // Cost is similar to a hash aggregation for tracking distinct values.
+  cost_.unitCost = Costs::hashTableCost(input_->resultCardinality());
+  constraints_ = input_->constraints();
+}
+
+void MarkDistinct::accept(
     const RelationOpVisitor& visitor,
     RelationOpVisitorContext& context) const {
   visitor.visit(*this, context);
