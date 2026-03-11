@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/runner/MultiFragmentPlan.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::axiom::runner::test {
@@ -28,7 +28,7 @@ class DistributedPlanBuilder : public velox::exec::test::PlanBuilder {
  public:
   /// Constructs a top level DistributedPlanBuilder.
   DistributedPlanBuilder(
-      const runner::MultiFragmentPlan::Options& options,
+      const optimizer::MultiFragmentPlan::Options& options,
       std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator,
       velox::memory::MemoryPool* pool = nullptr);
 
@@ -54,21 +54,21 @@ class DistributedPlanBuilder : public velox::exec::test::PlanBuilder {
 
   /// Returns the planned fragments. The builder will be empty after this. This
   /// is only called on the root builder.
-  std::vector<runner::ExecutableFragment> fragments();
+  std::vector<optimizer::ExecutableFragment> fragments();
 
-  runner::MultiFragmentPlanPtr build();
+  optimizer::MultiFragmentPlanPtr build();
 
  private:
   void newFragment(int32_t width = 0);
 
-  void appendFragments(std::vector<runner::ExecutableFragment> fragments);
+  void appendFragments(std::vector<optimizer::ExecutableFragment> fragments);
 
   void addExchange(
       const velox::RowTypePtr& producerType,
       const std::string& producerPrefix,
-      runner::ExecutableFragment& fragment);
+      optimizer::ExecutableFragment& fragment);
 
-  const runner::MultiFragmentPlan::Options& options_;
+  const optimizer::MultiFragmentPlan::Options& options_;
 
   DistributedPlanBuilder* const root_;
 
@@ -84,11 +84,11 @@ class DistributedPlanBuilder : public velox::exec::test::PlanBuilder {
 
   // The fragment being built. Will be moved to the root builder's 'fragments_'
   // when complete.
-  std::unique_ptr<runner::ExecutableFragment> current_;
+  std::unique_ptr<optimizer::ExecutableFragment> current_;
 
   // The fragments gathered under this builder. Moved to the root builder when
   // returning the subplan.
-  std::vector<runner::ExecutableFragment> fragments_;
+  std::vector<optimizer::ExecutableFragment> fragments_;
 };
 
 } // namespace facebook::axiom::runner::test

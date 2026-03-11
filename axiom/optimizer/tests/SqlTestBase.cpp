@@ -117,7 +117,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
   connector::SchemaResolver schemaResolver;
   VeloxHistory history;
 
-  runner::MultiFragmentPlan::Options options;
+  MultiFragmentPlan::Options options;
   options.numWorkers = numWorkers_;
   options.numDrivers = numDrivers_;
   options.queryId = queryId;

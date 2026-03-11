@@ -182,7 +182,7 @@ namespace {
 
 const velox::core::TableScanNode* findScan(
     const velox::core::PlanNodeId& id,
-    const runner::MultiFragmentPlanPtr& plan) {
+    const MultiFragmentPlanPtr& plan) {
   for (const auto& fragment : plan->fragments()) {
     if (auto node = velox::core::PlanNode::findFirstNode(
             fragment.fragment.planNode.get(),

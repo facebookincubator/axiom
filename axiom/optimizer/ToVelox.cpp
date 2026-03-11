@@ -46,7 +46,7 @@ std::string PlanAndStats::toString() const {
 
 ToVelox::ToVelox(
     SessionPtr session,
-    const runner::MultiFragmentPlan::Options& options,
+    const MultiFragmentPlan::Options& options,
     const OptimizerOptions& optimizerOptions)
     : session_{std::move(session)},
       options_{options},
@@ -297,7 +297,7 @@ velox::core::PlanNodePtr ToVelox::addOutputRenames(
 
 PlanAndStats ToVelox::toVeloxPlan(
     RelationOpPtr plan,
-    const runner::MultiFragmentPlan::Options& options,
+    const MultiFragmentPlan::Options& options,
     const std::vector<logical_plan::OutputNode::Entry>& outputNames) {
   options_ = options;
 
@@ -308,8 +308,8 @@ PlanAndStats ToVelox::toVeloxPlan(
     plan = addGather(plan);
   }
 
-  runner::ExecutableFragment top = newFragment();
-  std::vector<runner::ExecutableFragment> stages;
+  ExecutableFragment top = newFragment();
+  std::vector<ExecutableFragment> stages;
   top.fragment.planNode = makeFragment(plan, top, stages);
   stages.push_back(std::move(top));
 
@@ -334,7 +334,7 @@ PlanAndStats ToVelox::toVeloxPlan(
   VELOX_DCHECK(!finishWrite_);
 
   return PlanAndStats{
-      std::make_shared<runner::MultiFragmentPlan>(std::move(stages), options),
+      std::make_shared<MultiFragmentPlan>(std::move(stages), options),
       std::move(nodeHistory_),
       std::move(prediction_),
       std::move(finishWrite)};
@@ -633,8 +633,8 @@ velox::core::TypedExprPtr ToVelox::toTypedExpr(ExprCP expr) {
   }
 }
 
-runner::ExecutableFragment ToVelox::newFragment() {
-  runner::ExecutableFragment fragment;
+ExecutableFragment ToVelox::newFragment() {
+  ExecutableFragment fragment;
   fragment.width = options_.numWorkers;
   fragment.taskPrefix = fmt::format("stage{}", ++stageCounter_);
 
@@ -757,8 +757,8 @@ std::vector<velox::core::FieldAccessTypedExprPtr> ToVelox::toFieldRefs(
 
 velox::core::PlanNodePtr ToVelox::makeOrderBy(
     const OrderBy& op,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto sortOrder = toSortOrders(op.distribution().orderTypes());
   auto keys = toFieldRefs(op.distribution().orderKeys());
 
@@ -838,8 +838,8 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
 
 velox::core::PlanNodePtr ToVelox::makeOffset(
     const Limit& op,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   if (isSingle_) {
     auto input = makeFragment(op.input(), fragment, stages);
     return addFinalLimit(nextId(), op.offset, op.limit, input);
@@ -870,8 +870,8 @@ velox::core::PlanNodePtr ToVelox::makeOffset(
 
 velox::core::PlanNodePtr ToVelox::makeLimit(
     const Limit& op,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   if (op.isNoLimit()) {
     return makeOffset(op, fragment, stages);
   }
@@ -1129,8 +1129,8 @@ velox::core::TypedExprPtr toAndWithAliases(
 
 velox::core::PlanNodePtr ToVelox::makeScan(
     const TableScan& scan,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   columnAlteredTypes_.clear();
 
   const bool isSubfieldPushdown = hasSubfieldPushdown(scan);
@@ -1199,8 +1199,8 @@ velox::core::PlanNodePtr ToVelox::makeScan(
 
 velox::core::PlanNodePtr ToVelox::makeFilter(
     const Filter& filter,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto filterNode = std::make_shared<velox::core::FilterNode>(
       nextId(),
       toAnd(filter.exprs()),
@@ -1211,8 +1211,8 @@ velox::core::PlanNodePtr ToVelox::makeFilter(
 
 velox::core::PlanNodePtr ToVelox::makeProject(
     const Project& project,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(project.input(), fragment, stages);
   if (optimizerOptions_.parallelProjectWidth > 1) {
     auto result = maybeParallelProject(&project, input);
@@ -1243,8 +1243,8 @@ velox::core::PlanNodePtr ToVelox::makeProject(
 
 velox::core::PlanNodePtr ToVelox::makeJoin(
     const Join& join,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto left = makeFragment(join.input(), fragment, stages);
   auto right = makeFragment(join.right, fragment, stages);
   if (join.method == JoinMethod::kCross) {
@@ -1291,8 +1291,8 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
 
 velox::core::PlanNodePtr ToVelox::makeUnnest(
     const Unnest& op,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
   std::vector<std::string> unnestNames;
@@ -1315,8 +1315,8 @@ velox::core::PlanNodePtr ToVelox::makeUnnest(
 
 velox::core::PlanNodePtr ToVelox::makeAggregation(
     const Aggregation& op,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
   const bool isRawInput =
@@ -1473,8 +1473,8 @@ velox::core::PlanNodePtr ToVelox::maybeTrimColumns(
 velox::core::PlanNodePtr ToVelox::makeWindowInput(
     const RelationOp& op,
     const ExprVector& partitionKeys,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto input =
       maybeTrimColumns(makeFragment(op.input(), fragment, stages), op.input());
   if (options_.numDrivers > 1) {
@@ -1485,8 +1485,8 @@ velox::core::PlanNodePtr ToVelox::makeWindowInput(
 
 velox::core::PlanNodePtr ToVelox::makeWindow(
     const Window& op,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto input = makeWindowInput(op, op.partitionKeys, fragment, stages);
 
   auto partitionKeys = toFieldRefs(op.partitionKeys);
@@ -1519,8 +1519,8 @@ velox::core::PlanNodePtr ToVelox::makeWindow(
 
 velox::core::PlanNodePtr ToVelox::makeRowNumber(
     const RowNumber& op,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto input = makeWindowInput(op, op.partitionKeys, fragment, stages);
 
   return std::make_shared<velox::core::RowNumberNode>(
@@ -1533,8 +1533,8 @@ velox::core::PlanNodePtr ToVelox::makeRowNumber(
 
 velox::core::PlanNodePtr ToVelox::makeTopNRowNumber(
     const TopNRowNumber& op,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto input = makeWindowInput(op, op.partitionKeys, fragment, stages);
 
   return std::make_shared<velox::core::TopNRowNumberNode>(
@@ -1550,8 +1550,8 @@ velox::core::PlanNodePtr ToVelox::makeTopNRowNumber(
 
 velox::core::PlanNodePtr ToVelox::makeRepartition(
     const Repartition& repartition,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages,
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages,
     std::shared_ptr<velox::core::ExchangeNode>& exchange) {
   auto source = newFragment();
   auto sourcePlan = makeFragment(repartition.input(), source, stages);
@@ -1612,8 +1612,8 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
 
 velox::core::PlanNodePtr ToVelox::makeUnionAll(
     const UnionAll& unionAll,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   // If no inputs have a repartition, this is a local exchange. If
   // some have repartition and more than one have no repartition,
   // this is a local exchange with a remote exchaneg as input. All the
@@ -1646,7 +1646,7 @@ velox::core::PlanNodePtr ToVelox::makeUnionAll(
 
 velox::core::PlanNodePtr ToVelox::makeValues(
     const Values& values,
-    runner::ExecutableFragment& fragment) {
+    ExecutableFragment& fragment) {
   fragment.width = 1;
   const auto& newColumns = values.columns();
   const auto newType = makeOutputType(newColumns);
@@ -1730,8 +1730,8 @@ velox::core::PlanNodePtr ToVelox::makeValues(
 
 velox::core::PlanNodePtr ToVelox::makeWrite(
     const TableWrite& tableWrite,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(tableWrite.input(), fragment, stages);
   const auto& write = *tableWrite.write;
   const auto& table = write.table();
@@ -1800,8 +1800,8 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
 
 velox::core::PlanNodePtr ToVelox::makeEnforceSingleRow(
     const EnforceSingleRow& op,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
   auto node = std::make_shared<velox::core::EnforceSingleRowNode>(
       nextId(), std::move(input));
@@ -1811,8 +1811,8 @@ velox::core::PlanNodePtr ToVelox::makeEnforceSingleRow(
 
 velox::core::PlanNodePtr ToVelox::makeAssignUniqueId(
     const AssignUniqueId& op,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
   // TODO Remove taskUniqueId from AssignUniqueIdNode:
@@ -1829,8 +1829,8 @@ velox::core::PlanNodePtr ToVelox::makeAssignUniqueId(
 
 velox::core::PlanNodePtr ToVelox::makeEnforceDistinct(
     const EnforceDistinct& op,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
   auto node = std::make_shared<velox::core::EnforceDistinctNode>(
@@ -1853,8 +1853,8 @@ void ToVelox::makePredictionAndHistory(
 
 velox::core::PlanNodePtr ToVelox::makeFragment(
     const RelationOpPtr& op,
-    runner::ExecutableFragment& fragment,
-    std::vector<runner::ExecutableFragment>& stages) {
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
   switch (op->relType()) {
     case RelType::kProject:
       return makeProject(*op->as<Project>(), fragment, stages);
@@ -1910,7 +1910,7 @@ extern std::string veloxToString(const velox::core::PlanNode* plan) {
   return plan->toString(true, true);
 }
 
-extern std::string planString(const runner::MultiFragmentPlan* plan) {
+extern std::string planString(const MultiFragmentPlan* plan) {
   return plan->toString(true);
 }
 

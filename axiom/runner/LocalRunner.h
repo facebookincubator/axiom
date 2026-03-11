@@ -17,7 +17,7 @@
 #pragma once
 
 #include "axiom/connectors/ConnectorSplitManager.h"
-#include "axiom/runner/MultiFragmentPlan.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/runner/Runner.h"
 #include "velox/connectors/Connector.h"
 #include "velox/exec/Cursor.h"
@@ -79,8 +79,8 @@ class LocalRunner : public Runner,
   /// @param outputPool Optional memory pool to use for allocating memory for
   /// query results. Required if 'finishWrite' is set.
   LocalRunner(
-      MultiFragmentPlanPtr plan,
-      FinishWrite finishWrite,
+      optimizer::MultiFragmentPlanPtr plan,
+      optimizer::FinishWrite finishWrite,
       std::shared_ptr<velox::core::QueryCtx> queryCtx,
       std::shared_ptr<SplitSourceFactory> splitSourceFactory =
           std::make_shared<ConnectorSplitSourceFactory>(),
@@ -97,7 +97,7 @@ class LocalRunner : public Runner,
   /// appears before B in the sequence. It's essentially a way to arrange tasks
   /// or items with dependencies so that all prerequisites are completed before
   /// the dependent tasks.
-  const std::vector<ExecutableFragment>& fragments() const {
+  const std::vector<optimizer::ExecutableFragment>& fragments() const {
     return fragments_;
   }
 
@@ -156,9 +156,9 @@ class LocalRunner : public Runner,
   // Serializes 'cursor_' and 'error_'.
   mutable std::mutex mutex_;
 
-  const MultiFragmentPlanPtr plan_;
-  const std::vector<ExecutableFragment> fragments_;
-  FinishWrite finishWrite_;
+  const optimizer::MultiFragmentPlanPtr plan_;
+  const std::vector<optimizer::ExecutableFragment> fragments_;
+  optimizer::FinishWrite finishWrite_;
 
   velox::exec::CursorParameters params_;
 

@@ -248,7 +248,7 @@ TEST_F(AggregationPlanTest, orderBy) {
     OptimizerOptions option{.alwaysPlanPartialAggregation = (i == 0)};
     auto plan = planVelox(
         logicalPlan,
-        runner::MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4},
+        MultiFragmentPlan::Options{.numWorkers = 4, .numDrivers = 4},
         option);
     AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
   }

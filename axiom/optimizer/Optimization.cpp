@@ -41,7 +41,7 @@ Optimization::Optimization(
     std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
     velox::core::ExpressionEvaluator& evaluator,
     OptimizerOptions options,
-    runner::MultiFragmentPlan::Options runnerOptions)
+    MultiFragmentPlan::Options runnerOptions)
     : session_{std::move(session)},
       options_(std::move(options)),
       runnerOptions_(std::move(runnerOptions)),
@@ -253,7 +253,7 @@ PlanAndStats Optimization::toVeloxPlan(
     const logical_plan::LogicalPlanNode& logicalPlan,
     velox::memory::MemoryPool& pool,
     OptimizerOptions options,
-    runner::MultiFragmentPlan::Options runnerOptions) {
+    MultiFragmentPlan::Options runnerOptions) {
   auto allocator = std::make_unique<velox::HashStringAllocator>(&pool);
   auto context = std::make_unique<QueryGraphContext>(*allocator);
   queryCtx() = context.get();

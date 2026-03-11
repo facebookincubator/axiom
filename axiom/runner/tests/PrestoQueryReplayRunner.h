@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/runner/MultiFragmentPlan.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "velox/connectors/Connector.h"
 #include "velox/core/QueryCtx.h"
 
@@ -67,9 +67,10 @@ class PrestoQueryReplayRunner {
   std::vector<std::string> getTaskPrefixes(
       const std::vector<folly::dynamic>& jsonRecords);
 
-  /// Deserialize a list of plan fragments into a MultiFragmentPlanPtr. If any
-  /// of the plan fragment is unsupported, return a nullptr.
-  MultiFragmentPlanPtr deserializeSupportedPlan(
+  /// Deserialize a list of plan fragments into a
+  /// optimizer::MultiFragmentPlanPtr. If any of the plan fragment is
+  /// unsupported, return a nullptr.
+  optimizer::MultiFragmentPlanPtr deserializeSupportedPlan(
       const std::string& queryId,
       const std::vector<std::string>& serializedPlanFragments);
 

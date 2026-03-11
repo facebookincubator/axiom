@@ -652,8 +652,7 @@ TEST_F(TpchPlanTest, DISABLED_makePlans) {
   const auto path =
       velox::test::getDataFilePath("axiom/optimizer/tests", "tpch/plans");
 
-  const runner::MultiFragmentPlan::Options options{
-      .numWorkers = 1, .numDrivers = 1};
+  const MultiFragmentPlan::Options options{.numWorkers = 1, .numDrivers = 1};
 
   for (auto q = 1; q <= 22; ++q) {
     LOG(ERROR) << "q" << q;

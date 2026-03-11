@@ -19,7 +19,7 @@
 namespace facebook::axiom::runner::test {
 
 DistributedPlanBuilder::DistributedPlanBuilder(
-    const runner::MultiFragmentPlan::Options& options,
+    const optimizer::MultiFragmentPlan::Options& options,
     std::shared_ptr<velox::core::PlanNodeIdGenerator> planNodeIdGenerator,
     velox::memory::MemoryPool* pool)
     : PlanBuilder(std::move(planNodeIdGenerator), pool),
@@ -41,13 +41,13 @@ DistributedPlanBuilder::~DistributedPlanBuilder() {
   VELOX_CHECK_EQ(root_->stack_.size(), 1);
 }
 
-std::vector<runner::ExecutableFragment> DistributedPlanBuilder::fragments() {
+std::vector<optimizer::ExecutableFragment> DistributedPlanBuilder::fragments() {
   newFragment();
   return std::move(fragments_);
 }
 
-runner::MultiFragmentPlanPtr DistributedPlanBuilder::build() {
-  return std::make_shared<runner::MultiFragmentPlan>(fragments(), options_);
+optimizer::MultiFragmentPlanPtr DistributedPlanBuilder::build() {
+  return std::make_shared<optimizer::MultiFragmentPlan>(fragments(), options_);
 }
 
 void DistributedPlanBuilder::newFragment(int32_t width) {
@@ -56,7 +56,7 @@ void DistributedPlanBuilder::newFragment(int32_t width) {
     fragments_.push_back(std::move(*current_));
   }
 
-  current_ = std::make_unique<runner::ExecutableFragment>(
+  current_ = std::make_unique<optimizer::ExecutableFragment>(
       fmt::format("{}.{}", options_.queryId, root_->fragmentCounter_++));
   current_->width = width;
 
@@ -78,14 +78,14 @@ const TNode* as(const velox::core::PlanNodePtr& node) {
 void DistributedPlanBuilder::addExchange(
     const velox::RowTypePtr& producerType,
     const std::string& producerPrefix,
-    runner::ExecutableFragment& fragment) {
+    optimizer::ExecutableFragment& fragment) {
   exchange(
       producerType,
       velox::VectorSerde::kindName(velox::VectorSerde::Kind::kPresto));
   auto* exchange = as<velox::core::ExchangeNode>(planNode_);
 
   fragment.inputStages.push_back(
-      runner::InputStage{exchange->id(), producerPrefix});
+      optimizer::InputStage{exchange->id(), producerPrefix});
 }
 
 DistributedPlanBuilder& DistributedPlanBuilder::shufflePartitioned(
@@ -106,7 +106,7 @@ DistributedPlanBuilder& DistributedPlanBuilder::shufflePartitioned(
 }
 
 void DistributedPlanBuilder::appendFragments(
-    std::vector<runner::ExecutableFragment> fragments) {
+    std::vector<optimizer::ExecutableFragment> fragments) {
   for (auto& fragment : fragments) {
     fragments_.emplace_back(std::move(fragment));
   }

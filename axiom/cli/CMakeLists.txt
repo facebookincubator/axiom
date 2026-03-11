@@ -27,7 +27,7 @@ add_library(
 target_link_libraries(
   axiom_cli
   axiom_runner_local_runner
-  axiom_runner_multifragment_plan
+  axiom_optimizer_multifragment_plan
   axiom_optimizer
   axiom_hive_connector_metadata
   axiom_tpch_connector_metadata

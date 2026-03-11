@@ -92,17 +92,17 @@ void waitForCompletion(const std::shared_ptr<runner::LocalRunner>& runner) {
 } // namespace
 
 TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
-  runner::MultiFragmentPlan::Options options;
+  MultiFragmentPlan::Options options;
   options.numWorkers = 1;
   options.numDrivers = 1;
   options.queryId = fmt::format("q{}", ++gQueryCounter);
 
-  runner::ExecutableFragment fragment(fmt::format("{}.0", options.queryId));
+  ExecutableFragment fragment(fmt::format("{}.0", options.queryId));
   fragment.fragment = core::PlanFragment(plan);
 
   optimizer::PlanAndStats planAndStats = {
-      std::make_shared<runner::MultiFragmentPlan>(
-          std::vector<runner::ExecutableFragment>{std::move(fragment)},
+      std::make_shared<MultiFragmentPlan>(
+          std::vector<ExecutableFragment>{std::move(fragment)},
           std::move(options)),
   };
 
@@ -171,14 +171,14 @@ void QueryTestBase::verifyOptimization(
       veloxQueryCtx,
       evaluator,
       optimizerOptions.value_or(optimizerOptions_),
-      runner::MultiFragmentPlan::Options{.numWorkers = 1, .numDrivers = 1});
+      MultiFragmentPlan::Options{.numWorkers = 1, .numDrivers = 1});
 
   callback(optimization);
 }
 
 optimizer::PlanAndStats QueryTestBase::planVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
-    const runner::MultiFragmentPlan::Options& options,
+    const MultiFragmentPlan::Options& options,
     const std::optional<OptimizerOptions>& optimizerOptions,
     const std::optional<std::string>& planFilePathPrefix) {
   connector::SchemaResolver schemaResolver;
@@ -189,7 +189,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
 optimizer::PlanAndStats QueryTestBase::planVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
     const connector::SchemaResolver& schemaResolver,
-    const runner::MultiFragmentPlan::Options& options,
+    const MultiFragmentPlan::Options& options,
     const std::optional<OptimizerOptions>& optimizerOptions,
     const std::optional<std::string>& planFilePathPrefix) {
   auto& queryCtx = getQueryCtx();
@@ -251,7 +251,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
 
 TestResult QueryTestBase::runVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
-    const runner::MultiFragmentPlan::Options& options) {
+    const MultiFragmentPlan::Options& options) {
   auto veloxPlan = planVelox(plan, options);
   return runFragmentedPlan(veloxPlan);
 }
@@ -259,7 +259,7 @@ TestResult QueryTestBase::runVelox(
 TestResult QueryTestBase::runVelox(
     const logical_plan::LogicalPlanNodePtr& plan,
     const connector::SchemaResolver& schemaResolver,
-    const runner::MultiFragmentPlan::Options& options) {
+    const MultiFragmentPlan::Options& options) {
   auto veloxPlan = planVelox(plan, schemaResolver, options);
   return runFragmentedPlan(veloxPlan);
 }
@@ -279,7 +279,7 @@ TestResult QueryTestBase::checkSame(
 void QueryTestBase::checkSame(
     const logical_plan::LogicalPlanNodePtr& planNode,
     const velox::core::PlanNodePtr& referencePlan,
-    const axiom::runner::MultiFragmentPlan::Options& options) {
+    const MultiFragmentPlan::Options& options) {
   VELOX_CHECK_NOT_NULL(planNode);
   VELOX_CHECK_NOT_NULL(referencePlan);
 
@@ -291,10 +291,10 @@ void QueryTestBase::checkSame(
 void QueryTestBase::checkSame(
     const logical_plan::LogicalPlanNodePtr& planNode,
     const std::vector<velox::RowVectorPtr>& referenceResult,
-    const axiom::runner::MultiFragmentPlan::Options& options) {
+    const MultiFragmentPlan::Options& options) {
   VELOX_CHECK_NOT_NULL(planNode);
 
-  std::vector<axiom::runner::MultiFragmentPlan::Options> testOptions = {
+  std::vector<MultiFragmentPlan::Options> testOptions = {
       {.numWorkers = 1, .numDrivers = 1},
   };
 

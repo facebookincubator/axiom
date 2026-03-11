@@ -46,8 +46,8 @@ class TestConnectorQueryTest : public QueryTestBase {
     QueryTestBase::TearDown();
   }
 
-  runner::MultiFragmentPlanPtr appendTableWrite(
-      const runner::MultiFragmentPlanPtr& plan,
+  MultiFragmentPlanPtr appendTableWrite(
+      const MultiFragmentPlanPtr& plan,
       const RowTypePtr& schema,
       const std::string& tableName) {
     EXPECT_EQ(plan->fragments().size(), 1);
@@ -70,21 +70,19 @@ class TestConnectorQueryTest : public QueryTestBase {
         velox::connector::CommitStrategy::kTaskCommit,
         source);
 
-    runner::ExecutableFragment writeFragment(executableFragment);
+    ExecutableFragment writeFragment(executableFragment);
     writeFragment.fragment = core::PlanFragment(
         write,
         fragment.executionStrategy,
         fragment.numSplitGroups,
         fragment.groupedExecutionLeafNodeIds);
-    std::vector<runner::ExecutableFragment> fragments = {writeFragment};
+    std::vector<ExecutableFragment> fragments = {writeFragment};
 
-    return std::make_shared<runner::MultiFragmentPlan>(fragments, options_);
+    return std::make_shared<MultiFragmentPlan>(fragments, options_);
   }
 
   std::shared_ptr<connector::TestConnector> connector_;
-  const runner::MultiFragmentPlan::Options options_{
-      .numWorkers = 1,
-      .numDrivers = 16};
+  const MultiFragmentPlan::Options options_{.numWorkers = 1, .numDrivers = 16};
 };
 
 TEST_F(TestConnectorQueryTest, selectFiltered) {

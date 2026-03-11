@@ -87,7 +87,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   /// and executable plans to files with specified path prefix.
   optimizer::PlanAndStats planVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
-      const runner::MultiFragmentPlan::Options& options =
+      const MultiFragmentPlan::Options& options =
           {
               .numWorkers = 4,
               .numDrivers = 4,
@@ -98,7 +98,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   optimizer::PlanAndStats planVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
       const connector::SchemaResolver& schemaResolver,
-      const runner::MultiFragmentPlan::Options& options =
+      const MultiFragmentPlan::Options& options =
           {
               .numWorkers = 4,
               .numDrivers = 4,
@@ -108,7 +108,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
 
   TestResult runVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
-      const runner::MultiFragmentPlan::Options& options = {
+      const MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
           .numDrivers = 4,
       });
@@ -116,7 +116,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   TestResult runVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
       const connector::SchemaResolver& schemaResolver,
-      const runner::MultiFragmentPlan::Options& options = {
+      const MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
           .numDrivers = 4,
       });
@@ -146,7 +146,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   void checkSame(
       const logical_plan::LogicalPlanNodePtr& planNode,
       const velox::core::PlanNodePtr& referencePlan,
-      const axiom::runner::MultiFragmentPlan::Options& options = {
+      const MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
           .numDrivers = 4,
       });
@@ -154,7 +154,7 @@ class QueryTestBase : public runner::test::LocalRunnerTestBase {
   void checkSame(
       const logical_plan::LogicalPlanNodePtr& planNode,
       const std::vector<velox::RowVectorPtr>& referenceResult,
-      const axiom::runner::MultiFragmentPlan::Options& options = {
+      const MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
           .numDrivers = 4,
       });

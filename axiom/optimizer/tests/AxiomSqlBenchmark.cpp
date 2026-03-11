@@ -568,7 +568,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
                 << logical_plan::PlanPrinter::toText(*logicalPlan) << std::endl;
     }
 
-    runner::MultiFragmentPlan::Options opts;
+    optimizer::MultiFragmentPlan::Options opts;
     opts.numWorkers = FLAGS_num_workers;
     opts.numDrivers = FLAGS_num_drivers;
     auto allocator =

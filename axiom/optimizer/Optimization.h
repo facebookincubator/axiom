@@ -18,11 +18,11 @@
 #include "axiom/common/Session.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/Cost.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/ToGraph.h"
 #include "axiom/optimizer/ToVelox.h"
-#include "axiom/runner/MultiFragmentPlan.h"
 #include "velox/core/QueryCtx.h"
 
 namespace facebook::axiom::optimizer {
@@ -41,14 +41,14 @@ class Optimization {
       std::shared_ptr<velox::core::QueryCtx> veloxQueryCtx,
       velox::core::ExpressionEvaluator& evaluator,
       OptimizerOptions options = {},
-      runner::MultiFragmentPlan::Options runnerOptions = {});
+      MultiFragmentPlan::Options runnerOptions = {});
 
   /// Simplified API for usage in testing and tooling.
   static PlanAndStats toVeloxPlan(
       const logical_plan::LogicalPlanNode& logicalPlan,
       velox::memory::MemoryPool& pool,
       OptimizerOptions options = {},
-      runner::MultiFragmentPlan::Options runnerOptions = {});
+      MultiFragmentPlan::Options runnerOptions = {});
 
   Optimization(const Optimization& other) = delete;
   Optimization& operator=(const Optimization& other) = delete;
@@ -148,7 +148,7 @@ class Optimization {
     return options_;
   }
 
-  const runner::MultiFragmentPlan::Options& runnerOptions() const {
+  const MultiFragmentPlan::Options& runnerOptions() const {
     return runnerOptions_;
   }
 
@@ -347,7 +347,7 @@ class Optimization {
 
   const OptimizerOptions options_;
 
-  const runner::MultiFragmentPlan::Options runnerOptions_;
+  const MultiFragmentPlan::Options runnerOptions_;
 
   const bool isSingleWorker_;
 

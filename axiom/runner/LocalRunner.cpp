@@ -91,7 +91,7 @@ std::vector<velox::exec::Split> listAllSplits(
 }
 
 void getTopologicalOrder(
-    const std::vector<ExecutableFragment>& fragments,
+    const std::vector<optimizer::ExecutableFragment>& fragments,
     int32_t index,
     const folly::F14FastMap<std::string, int32_t>& taskPrefixToIndex,
     std::vector<bool>& visited,
@@ -110,8 +110,8 @@ void getTopologicalOrder(
   indices.push(index);
 }
 
-std::vector<ExecutableFragment> topologicalSort(
-    const std::vector<ExecutableFragment>& fragments) {
+std::vector<optimizer::ExecutableFragment> topologicalSort(
+    const std::vector<optimizer::ExecutableFragment>& fragments) {
   folly::F14FastMap<std::string, int32_t> taskPrefixToIndex;
   for (auto i = 0; i < fragments.size(); ++i) {
     taskPrefixToIndex[fragments[i].taskPrefix] = i;
@@ -127,7 +127,7 @@ std::vector<ExecutableFragment> topologicalSort(
 
   auto size = indices.size();
   VELOX_CHECK_EQ(size, fragments.size());
-  std::vector<ExecutableFragment> result(size);
+  std::vector<optimizer::ExecutableFragment> result(size);
   auto i = size - 1;
   while (!indices.empty()) {
     result[i--] = fragments[indices.top()];
@@ -139,8 +139,8 @@ std::vector<ExecutableFragment> topologicalSort(
 } // namespace
 
 LocalRunner::LocalRunner(
-    MultiFragmentPlanPtr plan,
-    FinishWrite finishWrite,
+    optimizer::MultiFragmentPlanPtr plan,
+    optimizer::FinishWrite finishWrite,
     std::shared_ptr<velox::core::QueryCtx> queryCtx,
     std::shared_ptr<SplitSourceFactory> splitSourceFactory,
     std::shared_ptr<velox::memory::MemoryPool> outputPool)

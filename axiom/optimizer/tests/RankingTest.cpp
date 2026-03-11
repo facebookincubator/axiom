@@ -50,7 +50,7 @@ class RankingTest : public test::QueryTestBase {
     return QueryTestBase::toSingleNodePlan(logicalPlan, numDrivers);
   }
 
-  runner::MultiFragmentPlanPtr toDistributedPlan(std::string_view sql) {
+  MultiFragmentPlanPtr toDistributedPlan(std::string_view sql) {
     auto logicalPlan = parseSelect(sql, kTestConnectorId);
     return planVelox(logicalPlan).plan;
   }

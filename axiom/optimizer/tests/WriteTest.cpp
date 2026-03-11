@@ -73,9 +73,9 @@ class WriteTest : public test::HiveQueriesTestBase {
   void runCtas(
       const std::string& sql,
       int64_t writtenRows,
-      const std::function<void(const runner::MultiFragmentPlan& plan)>&
-          verifyPlan = nullptr,
-      const runner::MultiFragmentPlan::Options& options = {
+      const std::function<void(const MultiFragmentPlan& plan)>& verifyPlan =
+          nullptr,
+      const MultiFragmentPlan::Options& options = {
           .numWorkers = 4,
           .numDrivers = 4,
       }) {
@@ -506,13 +506,13 @@ TEST_F(WriteTest, ctasPartitionedSql) {
 }
 
 const velox::core::PlanNodePtr nodeAt(
-    const runner::MultiFragmentPlan& plan,
+    const MultiFragmentPlan& plan,
     size_t index) {
   return plan.fragments().at(index).fragment.planNode;
 }
 
 // Verify that distributed plan has exchange before table write.
-void verifyPartitionedWrite(const runner::MultiFragmentPlan& plan) {
+void verifyPartitionedWrite(const MultiFragmentPlan& plan) {
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan()
                      .project()
@@ -526,7 +526,7 @@ void verifyPartitionedWrite(const runner::MultiFragmentPlan& plan) {
 
 // Verify that table write is collocated with table scan (no exchange between
 // the two).
-void verifyCollocatedWrite(const runner::MultiFragmentPlan& plan) {
+void verifyCollocatedWrite(const MultiFragmentPlan& plan) {
   auto matcher = core::PlanMatcherBuilder()
                      .tableScan()
                      .project()

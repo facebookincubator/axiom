@@ -160,21 +160,22 @@ struct PlanFragmentInfo {
   int32_t numWorkers{0};
 };
 
-std::vector<ExecutableFragment> createExecutableFragments(
+std::vector<optimizer::ExecutableFragment> createExecutableFragments(
     const folly::F14FastMap<std::string, PlanFragmentInfo>& planFragments) {
-  std::vector<ExecutableFragment> executableFragments;
+  std::vector<optimizer::ExecutableFragment> executableFragments;
   for (const auto& [taskPrefix, planFragmentInfo] : planFragments) {
-    ExecutableFragment executableFragment{taskPrefix};
+    optimizer::ExecutableFragment executableFragment{taskPrefix};
     executableFragment.width =
         (planFragmentInfo.numWorkers > 0) ? planFragmentInfo.numWorkers : 1;
     executableFragment.fragment =
         velox::core::PlanFragment{planFragmentInfo.plan};
 
-    std::vector<InputStage> inputStages;
+    std::vector<optimizer::InputStage> inputStages;
     const auto& remoteTaskIdMap = planFragmentInfo.remoteTaskIdMap;
     for (const auto& [planNodeId, remoteTaskPrefixes] : remoteTaskIdMap) {
       for (const auto& remoteTaskPrefix : remoteTaskPrefixes) {
-        inputStages.push_back(InputStage{planNodeId, remoteTaskPrefix});
+        inputStages.push_back(
+            optimizer::InputStage{planNodeId, remoteTaskPrefix});
       }
     }
     executableFragment.inputStages = std::move(inputStages);
@@ -245,7 +246,8 @@ std::string findRootTaskPrefix(
 }
 } // namespace
 
-MultiFragmentPlanPtr PrestoQueryReplayRunner::deserializeSupportedPlan(
+optimizer::MultiFragmentPlanPtr
+PrestoQueryReplayRunner::deserializeSupportedPlan(
     const std::string& queryId,
     const std::vector<std::string>& serializedPlanFragments) {
   auto jsonRecords = getJsonRecords(serializedPlanFragments);
@@ -333,8 +335,8 @@ MultiFragmentPlanPtr PrestoQueryReplayRunner::deserializeSupportedPlan(
 
   auto executableFragments = createExecutableFragments(planFragments);
 
-  MultiFragmentPlan::Options options{queryId, width_, maxDrivers_};
-  return std::make_shared<MultiFragmentPlan>(
+  optimizer::MultiFragmentPlan::Options options{queryId, width_, maxDrivers_};
+  return std::make_shared<optimizer::MultiFragmentPlan>(
       std::move(executableFragments), std::move(options));
 }
 
@@ -384,7 +386,7 @@ PrestoQueryReplayRunner::run(
   auto nodeSplitMap = deserializeConnectorSplits(serializedConnectorSplits);
   auto localRunner = std::make_shared<LocalRunner>(
       std::move(multiFragmentPlan),
-      FinishWrite{},
+      optimizer::FinishWrite{},
       makeQueryCtx(queryId, queryRootPool),
       std::make_shared<runner::SimpleSplitSourceFactory>(nodeSplitMap));
 

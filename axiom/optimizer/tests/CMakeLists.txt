@@ -64,7 +64,7 @@ target_link_libraries(
   axiom_optimizer_tests_plan_matcher
   axiom_optimizer_tests_query_test_base
   axiom_sql_presto_parser
-  axiom_runner_multifragment_plan
+  axiom_optimizer_multifragment_plan
   axiom_runner_tests_utils
 )
 

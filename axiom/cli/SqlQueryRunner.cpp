@@ -428,7 +428,7 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
     std::shared_ptr<facebook::axiom::connector::SchemaResolver> schemaResolver
 
 ) {
-  runner::MultiFragmentPlan::Options opts;
+  optimizer::MultiFragmentPlan::Options opts;
   opts.numWorkers = options.numWorkers;
   opts.numDrivers = options.numDrivers;
   auto allocator =

@@ -17,7 +17,7 @@
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include <gtest/gtest.h>
 #include <unordered_set>
-#include "axiom/runner/MultiFragmentPlan.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/HashPartitionFunction.h"
@@ -878,7 +878,7 @@ class ShuffleBoundaryMatcher : public PlanMatcher {
 
 // Returns the producer fragment for the given Exchange node, or nullptr if not
 // found.
-const axiom::runner::ExecutableFragment* findProducerFragment(
+const axiom::optimizer::ExecutableFragment* findProducerFragment(
     const PlanNodeId& exchangeNodeId,
     const PlanMatcher::DistributedMatchContext& context) {
   for (const auto& inputStage : context.currentFragment->inputStages) {
@@ -1879,7 +1879,7 @@ PlanMatcherBuilder& PlanMatcherBuilder::topNRowNumber(
   return *this;
 }
 
-bool PlanMatcher::match(const axiom::runner::MultiFragmentPlan& plan) const {
+bool PlanMatcher::match(const axiom::optimizer::MultiFragmentPlan& plan) const {
   const auto& fragments = plan.fragments();
   EXPECT_FALSE(fragments.empty()) << "MultiFragmentPlan has no fragments";
   if (testing::Test::HasNonfatalFailure()) {

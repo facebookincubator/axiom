@@ -20,7 +20,7 @@
 #include "velox/core/PlanFragment.h"
 #include "velox/vector/ComplexVector.h"
 
-namespace facebook::axiom::runner {
+namespace facebook::axiom::optimizer {
 
 /// Describes an exchange source for an ExchangeNode a non-leaf stage.
 struct InputStage {
@@ -185,4 +185,4 @@ class MultiFragmentPlan {
 
 using MultiFragmentPlanPtr = std::shared_ptr<const MultiFragmentPlan>;
 
-} // namespace facebook::axiom::runner
+} // namespace facebook::axiom::optimizer

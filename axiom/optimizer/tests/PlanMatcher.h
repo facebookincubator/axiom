@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "axiom/runner/MultiFragmentPlan.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "velox/core/PlanNode.h"
 #include "velox/type/Filter.h"
 
@@ -62,8 +62,8 @@ class PlanMatcher {
   // Context for distributed plan matching. Passed through the match() method
   // to provide fragment information needed by ShuffleBoundaryMatcher.
   struct DistributedMatchContext {
-    const std::vector<axiom::runner::ExecutableFragment>* fragments;
-    const axiom::runner::ExecutableFragment* currentFragment;
+    const std::vector<axiom::optimizer::ExecutableFragment>* fragments;
+    const axiom::optimizer::ExecutableFragment* currentFragment;
     const std::unordered_map<std::string, int32_t>* taskPrefixToFragmentIndex;
   };
 
@@ -100,7 +100,7 @@ class PlanMatcher {
   ///   - PartitionedOutput terminates producer fragments
   ///   - Exchange consumes from correct producer fragments
   ///   - Fragment topology matches shuffle boundary structure
-  bool match(const axiom::runner::MultiFragmentPlan& plan) const;
+  bool match(const axiom::optimizer::MultiFragmentPlan& plan) const;
 
   /// Matches the plan against this matcher with symbol rewriting support.
   /// On mismatch, sets gtest failures with detailed diagnostics.

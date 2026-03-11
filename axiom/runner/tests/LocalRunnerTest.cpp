@@ -77,8 +77,8 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
   // Returns a plan with a table scan. This is a single stage if 'numWorkers' is
   // 1, otherwise this is a scan stage plus shuffle to a stage that gathers the
   // scan results.
-  MultiFragmentPlanPtr makeScanPlan(int32_t numWorkers) {
-    MultiFragmentPlan::Options options = {
+  optimizer::MultiFragmentPlanPtr makeScanPlan(int32_t numWorkers) {
+    optimizer::MultiFragmentPlan::Options options = {
         .queryId = makeQueryId(), .numWorkers = numWorkers, .numDrivers = 2};
 
     test::DistributedPlanBuilder builder(options, idGenerator_, pool_.get());
@@ -89,10 +89,10 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
     return builder.build();
   }
 
-  MultiFragmentPlanPtr makeJoinPlan(
+  optimizer::MultiFragmentPlanPtr makeJoinPlan(
       std::string project = "c0",
       bool broadcastBuild = false) {
-    MultiFragmentPlan::Options options = {
+    optimizer::MultiFragmentPlan::Options options = {
         .queryId = makeQueryId(), .numWorkers = 4, .numDrivers = 2};
     const int32_t width = 3;
 
@@ -161,11 +161,12 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
     ASSERT_TRUE(localRunner->waitForCompletion(kWaitTimeoutUs));
   }
 
-  std::shared_ptr<LocalRunner> makeRunner(MultiFragmentPlanPtr plan) {
+  std::shared_ptr<LocalRunner> makeRunner(
+      optimizer::MultiFragmentPlanPtr plan) {
     const auto queryId = plan->options().queryId;
 
     return std::make_shared<LocalRunner>(
-        std::move(plan), FinishWrite{}, makeQueryCtx(queryId));
+        std::move(plan), optimizer::FinishWrite{}, makeQueryCtx(queryId));
   }
 
   std::shared_ptr<velox::core::PlanNodeIdGenerator> idGenerator_{
@@ -226,7 +227,7 @@ TEST_F(LocalRunnerTest, broadcast) {
 }
 
 TEST_F(LocalRunnerTest, lastStageWithMultipleInputs) {
-  MultiFragmentPlan::Options options = {
+  optimizer::MultiFragmentPlan::Options options = {
       .queryId = "test.", .numWorkers = 1, .numDrivers = 1};
 
   test::DistributedPlanBuilder rootBuilder(options, idGenerator_, pool_.get());

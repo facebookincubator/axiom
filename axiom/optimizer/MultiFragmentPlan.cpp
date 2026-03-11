@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "axiom/runner/MultiFragmentPlan.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
 
-namespace facebook::axiom::runner {
+namespace facebook::axiom::optimizer {
 
 std::string MultiFragmentPlan::toString(
     bool detailed,
@@ -99,4 +99,4 @@ std::string MultiFragmentPlan::toSummaryString(
   return out.str();
 }
 
-} // namespace facebook::axiom::runner
+} // namespace facebook::axiom::optimizer
