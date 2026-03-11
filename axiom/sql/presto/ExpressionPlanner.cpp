@@ -257,7 +257,9 @@ TypePtr parseType(const TypeSignaturePtr& type) {
       VELOX_USER_CHECK_EQ(2, numParams);
       parameters.emplace_back(parseInt(type->parameters().at(0)));
       parameters.emplace_back(parseInt(type->parameters().at(1)));
-
+    } else if (baseName == "TDIGEST" || baseName == "QDIGEST") {
+      VELOX_USER_CHECK_EQ(1, numParams);
+      parameters.emplace_back(parseType(type->parameters().at(0)));
     } else {
       VELOX_USER_FAIL("Unknown parametric type: {}", baseName);
     }

@@ -17,6 +17,10 @@
 #include <fmt/format.h>
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/QDigestRegistration.h"
+#include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/TDigestRegistration.h"
+#include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace axiom::sql::presto::test {
@@ -95,6 +99,14 @@ TEST_F(ExpressionParserTest, types) {
   test("null as timestamp", TIMESTAMP());
   test("null as decimal(3, 2)", DECIMAL(3, 2));
   test("null as decimal(33, 10)", DECIMAL(33, 10));
+
+  facebook::velox::registerTDigestType();
+  facebook::velox::registerQDigestType();
+
+  test("null as tdigest(double)", TDIGEST(DOUBLE()));
+  test("null as qdigest(bigint)", QDIGEST(BIGINT()));
+  test("null as qdigest(real)", QDIGEST(REAL()));
+  test("null as qdigest(double)", QDIGEST(DOUBLE()));
 
   test("null as int array", ARRAY(INTEGER()));
   test("null as varchar array", ARRAY(VARCHAR()));
