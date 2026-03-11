@@ -86,6 +86,76 @@ velox::ExceptionContext makeExceptionContext(ToGraphContext* ctx) {
   e.arg = ctx;
   return e;
 }
+
+// Detects overlap between grouping key columns and aggregate input columns.
+// When a key appears as a direct aggregate input (e.g., sum(a) GROUP BY
+// ROLLUP(a)), renames the key output with a $gid suffix so the Velox
+// GroupIdNode has distinct output column names. Returns the original
+// (pre-rename) key columns for use in ToVelox GroupingKeyInfo.
+//
+// Only checks direct column args, not leaf columns inside composite
+// expressions. For sum(a+b), the arg is a Call expression —
+// PrecomputeProjection converts it to a new column (e.g., dt1.__p6), so there's
+// no naming conflict in the GroupId output. Checking leaf columns would cause a
+// false rename that crashes downstream (ProjectNode references a$gid before
+// GroupId creates it).
+ColumnVector renameOverlappingGroupingKeys(
+    ExprVector& groupingKeys,
+    const AggregateVector& aggregates,
+    ColumnVector& columns,
+    ColumnVector& intermediateColumns,
+    folly::F14FastMap<std::string, ExprCP>& renames,
+    DerivedTableCP currentDt) {
+  // Collect direct column references from aggregate inputs — args, ORDER BY
+  // keys, and filter conditions. These pass through the GroupId node as-is and
+  // would conflict with identically-named grouping key outputs.
+  PlanObjectSet aggregateInputColumns;
+  auto maybeAddColumn = [&](ExprCP expr) {
+    if (expr->is(PlanType::kColumnExpr)) {
+      aggregateInputColumns.add(expr);
+    }
+  };
+  for (const auto* aggregate : aggregates) {
+    for (const auto* arg : aggregate->args()) {
+      maybeAddColumn(arg);
+    }
+    for (const auto* key : aggregate->orderKeys()) {
+      maybeAddColumn(key);
+    }
+    if (aggregate->condition()) {
+      maybeAddColumn(aggregate->condition());
+    }
+  }
+
+  bool hasOverlap = false;
+  for (size_t i = 0; i < groupingKeys.size(); ++i) {
+    if (aggregateInputColumns.contains(groupingKeys[i])) {
+      hasOverlap = true;
+      break;
+    }
+  }
+
+  if (!hasOverlap) {
+    return {};
+  }
+
+  ColumnVector inputGroupingKeys(groupingKeys.size());
+  for (size_t i = 0; i < groupingKeys.size(); ++i) {
+    auto* keyColumn = columns[i];
+    inputGroupingKeys[i] = keyColumn;
+    if (aggregateInputColumns.contains(groupingKeys[i])) {
+      auto renamedName = toName(keyColumn->outputName() + "$gid");
+      auto* renamed =
+          make<Column>(renamedName, currentDt, keyColumn->value(), renamedName);
+      groupingKeys[i] = renamed;
+      columns[i] = renamed;
+      intermediateColumns[i] = renamed;
+      renames[keyColumn->name()] = renamed;
+    }
+  }
+  return inputGroupingKeys;
+}
+
 } // namespace
 
 ToGraph::ToGraph(
@@ -1511,6 +1581,28 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     }
   }
 
+  ColumnCP groupIdColumn = nullptr;
+  GroupingSets qgGroupingSets;
+  if (!agg.groupingSets().empty()) {
+    const auto ordinal = agg.groupingKeys().size() + agg.aggregates().size();
+    auto name = toName(agg.outputNames().at(ordinal));
+    auto groupIdType = agg.outputType()->childAt(ordinal);
+    Value groupIdValue(toType(groupIdType), agg.groupingSets().size());
+    groupIdValue.nullable = false;
+    groupIdValue.min = registerVariant(int64_t{0});
+    groupIdValue.max =
+        registerVariant(static_cast<int64_t>(agg.groupingSets().size() - 1));
+    auto* column = make<Column>(name, currentDt_, groupIdValue, name);
+    newRenames[name] = column;
+    groupIdColumn = column;
+    columns.push_back(column);
+
+    qgGroupingSets.reserve(agg.groupingSets().size());
+    for (const auto& set : agg.groupingSets()) {
+      qgGroupingSets.emplace_back(set.begin(), set.end());
+    }
+  }
+
   AggregateVector deduppedAggregates;
   folly::F14FastMap<AggregateDedupKey, ColumnCP, AggregateDedupHasher>
       uniqueAggregates;
@@ -1522,8 +1614,11 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       continue;
     }
 
-    const auto i = channel - agg.groupingKeys().size();
-    const auto& aggregate = agg.aggregates()[i];
+    const auto* aggregate = aggregateForOrdinal(agg, channel);
+    if (!aggregate) {
+      continue;
+    }
+
     ExprVector args = translateExprs(aggregate->inputs());
 
     FunctionSet funcs;
@@ -1613,13 +1708,27 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
     }
   }
 
+  ColumnVector inputGroupingKeys;
+  if (!agg.groupingSets().empty()) {
+    inputGroupingKeys = renameOverlappingGroupingKeys(
+        deduppedGroupingKeys,
+        deduppedAggregates,
+        columns,
+        intermediateColumns,
+        newRenames,
+        currentDt_);
+  }
+
   renames_ = std::move(newRenames);
 
   return make<AggregationPlan>(
       std::move(deduppedGroupingKeys),
       std::move(deduppedAggregates),
       std::move(columns),
-      std::move(intermediateColumns));
+      std::move(intermediateColumns),
+      std::move(qgGroupingSets),
+      groupIdColumn,
+      std::move(inputGroupingKeys));
 }
 
 void ToGraph::addOrderBy(const lp::SortNode& order) {

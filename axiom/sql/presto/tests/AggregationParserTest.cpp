@@ -83,7 +83,7 @@ TEST_F(AggregationParserTest, groupingSets) {
       "SELECT n_regionkey, count(1) FROM nation "
       "GROUP BY GROUPING SETS (n_regionkey, ())",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   EXPECT_THAT(
       agg->groupingSets(),
       testing::ElementsAre(testing::ElementsAre(0), testing::IsEmpty()));
@@ -92,7 +92,7 @@ TEST_F(AggregationParserTest, groupingSets) {
       "SELECT n_regionkey, n_name, count(1) FROM nation "
       "GROUP BY GROUPING SETS ((n_regionkey, n_name), (n_regionkey), ())",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   EXPECT_THAT(
       agg->groupingSets(),
       testing::ElementsAre(
@@ -105,7 +105,7 @@ TEST_F(AggregationParserTest, groupingSets) {
       "SELECT n_regionkey, n_name, count(1) FROM nation "
       "GROUP BY GROUPING SETS ((1, 2), (1))",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   EXPECT_THAT(
       agg->groupingSets(),
       testing::ElementsAre(
@@ -125,7 +125,7 @@ TEST_F(AggregationParserTest, rollup) {
       "SELECT n_regionkey, n_name, count(1) FROM nation "
       "GROUP BY ROLLUP(n_regionkey, n_name)",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   EXPECT_THAT(
       agg->groupingSets(),
       testing::ElementsAre(
@@ -137,7 +137,7 @@ TEST_F(AggregationParserTest, rollup) {
       "SELECT n_regionkey, count(1) FROM nation "
       "GROUP BY ROLLUP(n_regionkey)",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   EXPECT_THAT(
       agg->groupingSets(),
       testing::ElementsAre(testing::ElementsAre(0), testing::IsEmpty()));
@@ -156,7 +156,7 @@ TEST_F(AggregationParserTest, cube) {
       "SELECT n_regionkey, n_name, count(1) FROM nation "
       "GROUP BY CUBE(n_regionkey, n_name)",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   EXPECT_THAT(
       agg->groupingSets(),
       testing::ElementsAre(
@@ -169,7 +169,7 @@ TEST_F(AggregationParserTest, cube) {
       "SELECT n_regionkey, count(1) FROM nation "
       "GROUP BY CUBE(n_regionkey)",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   EXPECT_THAT(
       agg->groupingSets(),
       testing::ElementsAre(testing::ElementsAre(0), testing::IsEmpty()));
@@ -188,7 +188,7 @@ TEST_F(AggregationParserTest, mixedGroupByWithRollup) {
       "SELECT n_regionkey, n_name, count(1) FROM nation "
       "GROUP BY n_regionkey, ROLLUP(n_name)",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   EXPECT_THAT(
       agg->groupingSets(),
       testing::ElementsAre(
@@ -208,7 +208,7 @@ TEST_F(AggregationParserTest, groupingSetsOrdinalCaching) {
       "SELECT n_regionkey, n_name, count(1) FROM nation "
       "GROUP BY GROUPING SETS ((1), (1, 2), (2))",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   EXPECT_THAT(
       agg->groupingSets(),
       testing::ElementsAre(
@@ -220,7 +220,7 @@ TEST_F(AggregationParserTest, groupingSetsOrdinalCaching) {
       "SELECT n_regionkey, n_name, count(1) FROM nation "
       "GROUP BY ROLLUP(1, 2)",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   EXPECT_THAT(
       agg->groupingSets(),
       testing::ElementsAre(
@@ -232,7 +232,7 @@ TEST_F(AggregationParserTest, groupingSetsOrdinalCaching) {
       "SELECT n_regionkey, n_name, count(1) FROM nation "
       "GROUP BY CUBE(1, 2)",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   EXPECT_THAT(
       agg->groupingSets(),
       testing::ElementsAre(
@@ -255,7 +255,7 @@ TEST_F(AggregationParserTest, groupingSetsSubqueryOrdinal) {
       "SELECT (SELECT 1), n_name, count(1) FROM nation "
       "GROUP BY GROUPING SETS ((1), (1, 2))",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   EXPECT_THAT(
       agg->groupingSets(),
       testing::ElementsAre(
@@ -416,7 +416,7 @@ TEST_F(AggregationParserTest, aggregateOptions) {
           .output();
 
   testSelect("SELECT array_agg(distinct n_regionkey) FROM nation", matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   ASSERT_EQ(1, agg->aggregates().size());
   ASSERT_TRUE(agg->aggregateAt(0)->isDistinct());
   ASSERT_TRUE(agg->aggregateAt(0)->filter() == nullptr);
@@ -425,7 +425,7 @@ TEST_F(AggregationParserTest, aggregateOptions) {
   testSelect(
       "SELECT array_agg(n_nationkey ORDER BY n_regionkey) FROM nation",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   ASSERT_EQ(1, agg->aggregates().size());
   ASSERT_FALSE(agg->aggregateAt(0)->isDistinct());
   ASSERT_TRUE(agg->aggregateAt(0)->filter() == nullptr);
@@ -434,7 +434,7 @@ TEST_F(AggregationParserTest, aggregateOptions) {
   testSelect(
       "SELECT array_agg(n_nationkey) FILTER (WHERE n_regionkey = 1) FROM nation",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   ASSERT_EQ(1, agg->aggregates().size());
   ASSERT_FALSE(agg->aggregateAt(0)->isDistinct());
   ASSERT_FALSE(agg->aggregateAt(0)->filter() == nullptr);
@@ -443,7 +443,7 @@ TEST_F(AggregationParserTest, aggregateOptions) {
   testSelect(
       "SELECT array_agg(distinct n_regionkey) FILTER (WHERE n_name like 'A%') FROM nation",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   ASSERT_EQ(1, agg->aggregates().size());
   ASSERT_TRUE(agg->aggregateAt(0)->isDistinct());
   ASSERT_FALSE(agg->aggregateAt(0)->filter() == nullptr);
@@ -452,7 +452,7 @@ TEST_F(AggregationParserTest, aggregateOptions) {
   testSelect(
       "SELECT array_agg(n_regionkey ORDER BY n_name) FILTER (WHERE n_name like 'A%') FROM nation",
       matcher);
-  ASSERT_TRUE(agg != nullptr);
+  ASSERT_NE(agg, nullptr);
   ASSERT_EQ(1, agg->aggregates().size());
   ASSERT_FALSE(agg->aggregateAt(0)->isDistinct());
   ASSERT_FALSE(agg->aggregateAt(0)->filter() == nullptr);
