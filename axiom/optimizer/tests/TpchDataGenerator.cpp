@@ -93,7 +93,7 @@ int64_t TpchDataGenerator::createTable(
   }
 
   const int32_t numDrivers =
-      std::min<int32_t>(numSplits, folly::hardware_concurrency());
+      std::min<int32_t>(numSplits, folly::available_concurrency());
 
   auto result = AssertQueryBuilder(plan)
                     .splits(std::move(splits))
