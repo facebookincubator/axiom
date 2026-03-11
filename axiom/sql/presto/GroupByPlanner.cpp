@@ -15,7 +15,9 @@
  */
 
 #include "axiom/sql/presto/GroupByPlanner.h"
+#include <set>
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
+#include "folly/ScopeGuard.h"
 #include "folly/container/F14Set.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/exec/Aggregate.h"
@@ -307,25 +309,75 @@ std::vector<std::vector<lp::ExprApi>> crossProductGroupingSets(
   return combined;
 }
 
+// Removes duplicate grouping sets from 'groupingSetsIndices'. Two sets are
+// duplicates if they contain the same key indices (order-insensitive).
+// Matches Presto's GROUP BY DISTINCT semantics.
+void deduplicateGroupingSets(
+    std::vector<std::vector<int32_t>>& groupingSetsIndices) {
+  std::vector<std::vector<int32_t>> unique;
+  unique.reserve(groupingSetsIndices.size());
+
+  // Sorted copies used as keys for order-insensitive dedup.
+  std::set<std::vector<int32_t>> seen;
+
+  for (auto& indices : groupingSetsIndices) {
+    auto sorted = indices;
+    std::sort(sorted.begin(), sorted.end());
+
+    if (seen.insert(std::move(sorted)).second) {
+      unique.push_back(std::move(indices));
+    }
+  }
+  groupingSetsIndices = std::move(unique);
+}
+
 } // namespace
 
 void GroupByPlanner::plan(
     const std::vector<SelectItemPtr>& selectItems,
     const std::vector<GroupingElementPtr>& groupingElements,
     const ExpressionPtr& having,
-    const OrderByPtr& orderBy) && {
+    const OrderByPtr& orderBy,
+    bool distinct) && {
   // Expand ROLLUP, CUBE, GROUPING SETS into a list of grouping sets, then
   // extract deduplicated grouping keys and per-set index vectors.
   // Populates: groupingSets_, groupingKeys_, groupingSetsIndices_.
   groupingSets_ = expandGroupingSets(groupingElements, selectItems);
   deduplicateGroupingKeys();
+  if (distinct) {
+    deduplicateGroupingSets(groupingSetsIndices_);
+  }
+
+  // Build mapping for GROUPING() translation if we have multiple grouping sets.
+  const bool useGroupingSets = hasGroupingSets(groupingElements);
+  if (useGroupingSets) {
+    for (size_t i = 0; i < groupingKeys_.size(); ++i) {
+      if (const auto* fieldAccess =
+              dynamic_cast<const facebook::velox::core::FieldAccessExpr*>(
+                  groupingKeys_[i].expr().get())) {
+        if (fieldAccess->isRootColumn()) {
+          groupingColumnToIndex_[fieldAccess->name()] = static_cast<int32_t>(i);
+        }
+      }
+    }
+
+    // Set up GROUPING() translator.
+    exprPlanner_.setGroupingTranslator(
+        [this](const GroupingOperation* node) -> lp::ExprApi {
+          return translateGroupingOperation(node);
+        });
+  }
+
+  SCOPE_EXIT {
+    exprPlanner_.setGroupingTranslator(nullptr);
+  };
 
   // Walk SELECT, HAVING, and ORDER BY expressions to collect aggregate
   // function calls, then add the Aggregate plan node.
   // Populates: aggregates_, aggregateOptionsMap_, projections_, filter_,
   //   sortingKeys_, outputNames_.
   collectAggregates(selectItems, having, orderBy);
-  addAggregate(hasGroupingSets(groupingElements));
+  addAggregate(groupingSetsIndices_.size() > 1);
 
   // Rewrite filter_, projections_, and sortingKeys_ to reference the
   // aggregate output columns instead of the original input expressions.
@@ -378,7 +430,8 @@ bool GroupByPlanner::tryPlanGlobalAgg(
     return false;
   }
 
-  std::move(*this).plan(selectItems, {}, having, /*orderBy=*/nullptr);
+  std::move(*this).plan(
+      selectItems, {}, having, /*orderBy=*/nullptr, /*distinct=*/false);
   return true;
 }
 
@@ -446,7 +499,12 @@ void GroupByPlanner::deduplicateGroupingKeys() {
       if (inserted) {
         groupingKeys_.push_back(expr);
       }
-      indices.push_back(it->second);
+      // Deduplicate keys within a single grouping set: GROUP BY (a, a)
+      // collapses to (a). Matches Presto behavior.
+      if (std::find(indices.begin(), indices.end(), it->second) ==
+          indices.end()) {
+        indices.push_back(it->second);
+      }
     }
     groupingSetsIndices_.push_back(std::move(indices));
   }
@@ -721,6 +779,23 @@ std::vector<lp::ExprApi> GroupByPlanner::resolveWithCache(
     result.push_back(resolveWithCache(expr, selectItems));
   }
   return result;
+}
+
+lp::ExprApi GroupByPlanner::translateGroupingOperation(
+    const GroupingOperation* node) {
+  std::vector<int32_t> columnIndices;
+  columnIndices.reserve(node->groupingColumns().size());
+  for (const auto& column : node->groupingColumns()) {
+    auto name = canonicalizeName(column->suffix());
+    auto it = groupingColumnToIndex_.find(name);
+    VELOX_USER_CHECK(
+        it != groupingColumnToIndex_.end(),
+        "Column is not a grouping column: {}",
+        name);
+    columnIndices.push_back(it->second);
+  }
+
+  return lp::Grouping(columnIndices, groupingSetsIndices_, "$grouping_set_id");
 }
 
 } // namespace axiom::sql::presto

@@ -321,6 +321,19 @@ ExprApi Sql(const std::string& sql);
 ///   builder.unnest(exprs, Ordinality().as("ord"))  // with alias
 ExprApi Ordinality();
 
+/// Builds GROUPING() expression for GROUPING SETS/ROLLUP/CUBE.
+/// Returns bitmask where bit is 0 if column present, 1 if aggregated.
+/// Leftmost column maps to most significant bit.
+///
+/// 'columnIndices' are indices into groupingKeys for GROUPING() arguments.
+/// 'groupingSets' are the same grouping sets passed to aggregate().
+/// 'groupingSetIndexName' is the name of the grouping set ID column.
+/// Returns element_at(array[bitmasks...], groupingSetIndexName + 1).
+ExprApi Grouping(
+    const std::vector<int32_t>& columnIndices,
+    const std::vector<std::vector<int32_t>>& groupingSets,
+    const std::string& groupingSetIndexName);
+
 // SortKey to use with sort operation.
 // e.g.
 //
