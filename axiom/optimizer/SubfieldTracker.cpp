@@ -158,7 +158,11 @@ void SubfieldTracker::markFieldAccessed(
     return;
   }
 
-  const auto& aggregate = agg.aggregateAt(ordinal - keys.size());
+  const auto* aggregate = aggregateForOrdinal(agg, ordinal);
+  if (!aggregate) {
+    return;
+  }
+
   for (const auto& aggregateInput : aggregate->inputs()) {
     mark(aggregateInput);
   }

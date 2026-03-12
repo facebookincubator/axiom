@@ -551,5 +551,72 @@ TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
   }
 }
 
+TEST_F(AggregationPlanTest, groupingSets) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .rollup({"a", "b"}, {"sum(c) as total"}, "gid")
+                         .build();
+
+  // Single-node plan shape.
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    // ROLLUP(a, b) expands to grouping sets: {a, b}, {a}, {}.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .groupId({{"a", "b"}, {"a"}, {}}, {"c"}, "gid")
+            .singleAggregation({"a", "b", "gid"}, {"sum(c) as total"})
+            .project({"a", "b", "total", "gid"})
+            .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Distributed plan shape.
+  {
+    auto plan = planVelox(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .groupId({{"a", "b"}, {"a"}, {}}, {"c"}, "gid")
+            .partialAggregation({"a", "b", "gid"}, {"sum(c) as total"})
+            .shuffle()
+            .localPartition()
+            .finalAggregation()
+            .project({"a", "b", "total", "gid"})
+            .gather()
+            .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+}
+
+// Verifies that a grouping key can also be an aggregation input.
+// SELECT a, SUM(a) FROM t GROUP BY ROLLUP(a) requires 'a' to appear both as
+// a grouping key (subject to NULL-ing) and as an aggregation input (preserved).
+TEST_F(AggregationPlanTest, groupingSetsKeyIsAggInput) {
+  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), DOUBLE()}));
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .rollup({"a"}, {"sum(a) as total"}, "gid")
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  // 'a' appears as both a grouping key and an aggregation input in GroupId.
+  // The key output is renamed to 'a$gid' to avoid ambiguity.
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .groupId({{"a$gid"}, {}}, {"a"}, "gid")
+                     .singleAggregation({"a$gid", "gid"}, {"sum(a) as total"})
+                     .project({"a$gid", "total", "gid"})
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer
