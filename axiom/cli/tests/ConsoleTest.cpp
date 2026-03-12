@@ -81,6 +81,7 @@ TEST_F(ConsoleTest, permissionCheckCalledBeforeExecution) {
     called = true;
     capturedSql = std::string(sql);
     capturedCatalog = std::string(catalog);
+    return std::shared_ptr<facebook::velox::filesystems::TokenProvider>{};
   };
 
   Console console{*runner, std::move(check)};

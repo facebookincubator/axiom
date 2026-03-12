@@ -300,11 +300,12 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
 
 std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
     const RunOptions& options) {
-  ++queryCounter_;
-
   executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(std::max<int32_t>(
       folly::available_concurrency() * 2,
       options.numWorkers * options.numDrivers * 2 + 2));
+
+  const auto queryId =
+      options.queryId.value_or(fmt::format("query_{}", ++queryCounter_));
 
   return velox::core::QueryCtx::create(
       executor_.get(),
@@ -313,7 +314,8 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
       velox::cache::AsyncDataCache::getInstance(),
       rootPool_->shared_from_this(),
       spillExecutor_.get(),
-      fmt::format("query_{}", queryCounter_));
+      queryId,
+      options.tokenProvider);
 }
 
 std::string SqlQueryRunner::runExplain(

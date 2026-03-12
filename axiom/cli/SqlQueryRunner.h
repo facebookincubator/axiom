@@ -20,6 +20,7 @@
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/sql/presto/SqlStatement.h"
+#include "velox/common/file/TokenProvider.h"
 
 namespace axiom::sql {
 
@@ -51,6 +52,8 @@ class SqlQueryRunner {
 
     std::optional<std::string> defaultConnectorId;
     std::optional<std::string> defaultSchema;
+    std::optional<std::string> queryId;
+    std::shared_ptr<facebook::velox::filesystems::TokenProvider> tokenProvider;
 
     /// If true, EXPLAIN ANALYZE output includes custom operator stats.
     bool debugMode{false};

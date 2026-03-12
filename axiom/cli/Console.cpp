@@ -108,7 +108,7 @@ void Console::run() {
 }
 
 void Console::runNoThrow(std::string_view sql, bool isInteractive) {
-  const SqlQueryRunner::RunOptions options{
+  const SqlQueryRunner::RunOptions defaultOptions{
       .numWorkers = FLAGS_num_workers,
       .numDrivers = FLAGS_num_drivers,
       .splitTargetBytes = FLAGS_split_target_bytes,
@@ -124,7 +124,9 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
       continue;
     }
 
-    auto queryId = queryIdGenerator_->createNextQueryId();
+    const auto queryId = queryIdGenerator_->createNextQueryId();
+    auto options = defaultOptions;
+    options.queryId = queryId;
 
     try {
       cli::Timing parseTiming;
@@ -137,10 +139,10 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
       }
 
       // Permission check after parsing, before execution.
-      if (permissionCheck_ != nullptr) {
+      if (permissionCheck_) {
         const auto& schema = options.defaultSchema ? options.defaultSchema
                                                    : runner_.defaultSchema();
-        permissionCheck_(
+        options.tokenProvider = permissionCheck_(
             queryId,
             sqlText,
             options.defaultConnectorId.value_or(runner_.defaultConnectorId()),

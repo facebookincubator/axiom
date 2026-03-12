@@ -33,13 +33,15 @@ class QueryIdGenerator;
 namespace axiom::sql {
 
 /// Permission check callback: (queryId, sql, catalog, schema, views) -> throws
-/// on denial. Empty (nullptr) by default -- no permission checking.
-using PermissionCheck = std::function<void(
-    std::string_view queryId,
-    std::string_view sql,
-    std::string_view catalog,
-    std::optional<std::string_view> schema,
-    const presto::ViewMap& views)>;
+/// on denial, and may return a per-query token provider.
+/// Empty (nullptr) by default -- no permission checking.
+using PermissionCheck =
+    std::function<std::shared_ptr<facebook::velox::filesystems::TokenProvider>(
+        std::string_view queryId,
+        std::string_view sql,
+        std::string_view catalog,
+        std::optional<std::string_view> schema,
+        const presto::ViewMap& views)>;
 
 class Console {
  public:
