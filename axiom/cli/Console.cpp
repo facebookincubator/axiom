@@ -155,6 +155,10 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
       if (result.message.has_value()) {
         std::cout << result.message.value() << std::endl;
       } else {
+        if (FLAGS_debug && !result.results.empty()) {
+          std::cout << result.results.front()->rowType()->toString()
+                    << std::endl;
+        }
         cli::printResults(result.results, FLAGS_max_rows);
       }
 

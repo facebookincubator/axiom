@@ -4,7 +4,6 @@
 
 ```scrut
 $ $CLI --query "SELECT count(*) as cnt FROM nation" 2>/dev/null
-ROW<cnt:BIGINT>
 ---
 cnt
 ---
@@ -20,7 +19,6 @@ $ $CLI --query "CREATE TABLE test.default.t(a int, b int, c int); SELECT * FROM 
 Created table: "default"."t"
 (0 rows in 0 batches)
 
-ROW<row_count:BIGINT,column_name:VARCHAR,nulls_fraction:DOUBLE,distinct_values_count:BIGINT,avg_length:BIGINT,low_value:VARCHAR,high_value:VARCHAR>
 ----------+-------------+----------------+-----------------------+------------+-----------+-----------
 row_count | column_name | nulls_fraction | distinct_values_count | avg_length | low_value | high_value
 ----------+-------------+----------------+-----------------------+------------+-----------+-----------
@@ -37,21 +35,18 @@ row_count | column_name | nulls_fraction | distinct_values_count | avg_length | 
 ```scrut
 $ $CLI --query "CREATE TABLE test.default.t(a int, b int); INSERT INTO test.default.t VALUES (1, 2); SELECT * FROM test.default.t; SHOW STATS FOR test.default.t" 2>/dev/null
 Created table: "default"."t"
-ROW<rows:BIGINT>
 ----
 rows
 ----
    1
 (1 rows in 1 batches)
 
-ROW<a:INTEGER,b:INTEGER>
 --+--
 a | b
 --+--
 1 | 2
 (1 rows in 1 batches)
 
-ROW<row_count:BIGINT,column_name:VARCHAR,nulls_fraction:DOUBLE,distinct_values_count:BIGINT,avg_length:BIGINT,low_value:VARCHAR,high_value:VARCHAR>
 ----------+-------------+----------------+-----------------------+------------+-----------+-----------
 row_count | column_name | nulls_fraction | distinct_values_count | avg_length | low_value | high_value
 ----------+-------------+----------------+-----------------------+------------+-----------+-----------
@@ -67,21 +62,18 @@ row_count | column_name | nulls_fraction | distinct_values_count | avg_length | 
 ```scrut
 $ $CLI --catalog test --schema default --query "CREATE TABLE t(x bigint, y bigint); INSERT INTO t VALUES (10, 20); INSERT INTO t VALUES (30, 40); SELECT * FROM t ORDER BY x" 2>/dev/null
 Created table: "default"."t"
-ROW<rows:BIGINT>
 ----
 rows
 ----
    1
 (1 rows in 1 batches)
 
-ROW<rows:BIGINT>
 ----
 rows
 ----
    1
 (1 rows in 1 batches)
 
-ROW<x:BIGINT,y:BIGINT>
 ---+---
  x |  y
 ---+---
@@ -97,7 +89,6 @@ ROW<x:BIGINT,y:BIGINT>
 $ $CLI --catalog test --schema default --query "CREATE TABLE t(a int); DROP TABLE t; SELECT 1 as ok" 2>/dev/null
 Created table: "default"."t"
 Dropped table: "default"."t"
-ROW<ok:INTEGER>
 --
 ok
 --
@@ -111,7 +102,6 @@ ok
 ```scrut
 $ $CLI --catalog test --schema default --query "DROP TABLE IF EXISTS t; SELECT 1 as ok" 2>/dev/null
 Table doesn't exist: "default"."t"
-ROW<ok:INTEGER>
 --
 ok
 --
@@ -126,14 +116,12 @@ ok
 $ $CLI --query "USE test.default; CREATE TABLE t(x int, y int); INSERT INTO t VALUES (1, 2); SELECT * FROM t" 2>/dev/null
 Using test.default
 Created table: "default"."t"
-ROW<rows:BIGINT>
 ----
 rows
 ----
    1
 (1 rows in 1 batches)
 
-ROW<x:INTEGER,y:INTEGER>
 --+--
 x | y
 --+--

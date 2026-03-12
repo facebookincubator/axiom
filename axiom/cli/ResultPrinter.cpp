@@ -51,8 +51,6 @@ int32_t printResults(
   }
 
   const auto type = results.front()->rowType();
-  std::cout << type->toString() << std::endl;
-
   const auto numColumns = type->size();
 
   std::vector<std::vector<std::string>> data;

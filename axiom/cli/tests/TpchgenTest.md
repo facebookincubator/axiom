@@ -79,7 +79,6 @@ $ QUERY="SELECT 'customer' AS tbl, count(*) AS cnt FROM customer UNION ALL SELEC
 
 ```scrut
 $ $CLI --data_path "$TMPDIR/tpch-parquet" --query "$QUERY" 2>/dev/null
-ROW<tbl:VARCHAR,cnt:BIGINT>
 ---------+------
 tbl      |   cnt
 ---------+------
@@ -136,7 +135,6 @@ supplier
 
 ```scrut
 $ $CLI --data_path "$TMPDIR/tpch-dwrf" --data_format dwrf --query "$QUERY" 2>/dev/null
-ROW<tbl:VARCHAR,cnt:BIGINT>
 ---------+------
 tbl      |   cnt
 ---------+------
