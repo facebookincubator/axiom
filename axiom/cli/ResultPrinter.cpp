@@ -17,6 +17,7 @@
 #include "axiom/cli/ResultPrinter.h"
 #include <iomanip>
 #include <iostream>
+#include "velox/vector/DecodedVector.h"
 
 using namespace facebook::velox;
 
@@ -114,14 +115,19 @@ int32_t printResults(
     printFooter();
   };
 
+  std::vector<DecodedVector> decodedColumns(numColumns);
   for (const auto& result : results) {
+    for (auto column = 0; column < numColumns; ++column) {
+      decodedColumns[column].decode(*result->childAt(column));
+    }
+
     for (auto row = 0; row < result->size(); ++row) {
       data.emplace_back();
 
       auto& rowData = data.back();
       rowData.resize(numColumns);
       for (auto column = 0; column < numColumns; ++column) {
-        rowData[column] = result->childAt(column)->toString(row);
+        rowData[column] = decodedColumns[column].toString(row);
         widths[column] = std::max(widths[column], rowData[column].size());
       }
 

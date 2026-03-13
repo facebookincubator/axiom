@@ -136,3 +136,16 @@ x | y
 $ $CLI --query "USE blah.default" 2>&1 | grep Reason
 Reason: Catalog does not exist: blah
 ```
+
+## Cleanly log dictionary wrapped result vectors (window functions produce encoded vectors)
+
+```scrut
+$ $CLI --query "SELECT * FROM (SELECT x, count(*) OVER () as cnt, row_number() OVER () AS rn FROM unnest(array[1,2,3]) AS t(x)) WHERE rn <= 2" 2>/dev/null
+--+-----+---
+x | cnt | rn
+--+-----+---
+1 |   3 |  1
+2 |   3 |  2
+(2 rows in 1 batches)
+
+```
