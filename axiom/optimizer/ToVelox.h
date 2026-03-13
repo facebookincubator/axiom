@@ -22,6 +22,7 @@
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/RelationOp.h"
+#include "velox/serializers/PrestoSerializer.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -317,9 +318,9 @@ class ToVelox {
 
   ExecutableFragment newFragment();
 
-  // TODO Move this into MultiFragmentPlan::Options.
-  const velox::VectorSerde::Kind exchangeSerdeKind_{
-      velox::VectorSerde::Kind::kPresto};
+  // TODO: Move this into MultiFragmentPlan::Options.
+  const std::string exchangeSerdeKind_{
+      velox::serializer::presto::PrestoVectorSerde::name()};
 
   const SessionPtr session_;
 
