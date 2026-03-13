@@ -41,8 +41,31 @@ std::vector<size_t> widenProjectionsForSort(
     auto [projectionIt, inserted] =
         projectionMap.emplace(sortKeys[i].expr.expr(), projections.size() + 1);
     if (inserted) {
-      ordinals.push_back(projections.size() + 1);
-      projections.push_back(sortKeys[i].expr);
+      // Pointer-based lookup failed. Try name-based matching for aliased
+      // expressions. This handles the case where expressions were rewritten
+      // (e.g., after GROUP BY) and pointer identity is lost, but the name
+      // (alias) is preserved.
+      std::optional<size_t> matchedOrdinal;
+      const auto& sortKeyName = sortKeys[i].expr.name();
+      if (sortKeyName.has_value() && !sortKeyName.value().empty()) {
+        for (size_t j = 0; j < projections.size(); ++j) {
+          if (projections[j].name() == sortKeyName) {
+            matchedOrdinal = j + 1;
+            break;
+          }
+        }
+      }
+
+      if (matchedOrdinal.has_value()) {
+        // Found by name - use existing projection.
+        ordinals.push_back(matchedOrdinal.value());
+        // Remove the spurious entry we just added to the map.
+        projectionMap.erase(sortKeys[i].expr.expr());
+      } else {
+        // Not found by pointer or name - append to projections.
+        ordinals.push_back(projections.size() + 1);
+        projections.push_back(sortKeys[i].expr);
+      }
     } else {
       ordinals.push_back(projectionIt->second);
     }

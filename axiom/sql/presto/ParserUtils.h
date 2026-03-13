@@ -22,7 +22,8 @@ namespace axiom::sql::presto {
 
 namespace lp = facebook::axiom::logical_plan;
 
-/// Matches sort key expressions against projection expressions by identity.
+/// Matches sort key expressions against projection expressions, first by
+/// pointer identity, then by name if the sort key has a name (alias).
 /// For unmatched sort keys, appends their expressions to `projections`.
 /// Returns a 1-based ordinal for each sort key in the (possibly widened)
 /// projection list.
