@@ -50,8 +50,10 @@ std::vector<size_t> widenProjectionsForSort(
       if (sortKeyName.has_value() && !sortKeyName.value().empty()) {
         for (size_t j = 0; j < projections.size(); ++j) {
           if (projections[j].name() == sortKeyName) {
+            if (matchedOrdinal.has_value()) {
+              VELOX_USER_FAIL("Column is ambiguous: {}", sortKeyName.value());
+            }
             matchedOrdinal = j + 1;
-            break;
           }
         }
       }
@@ -67,6 +69,19 @@ std::vector<size_t> widenProjectionsForSort(
         projections.push_back(sortKeys[i].expr);
       }
     } else {
+      // Pointer-based lookup succeeded. Check for name ambiguity.
+      const auto& sortKeyName = sortKeys[i].expr.name();
+      if (sortKeyName.has_value() && !sortKeyName.value().empty()) {
+        size_t matchCount = 0;
+        for (size_t j = 0; j < projections.size(); ++j) {
+          if (projections[j].name() == sortKeyName) {
+            ++matchCount;
+            if (matchCount > 1) {
+              VELOX_USER_FAIL("Column is ambiguous: {}", sortKeyName.value());
+            }
+          }
+        }
+      }
       ordinals.push_back(projectionIt->second);
     }
   }

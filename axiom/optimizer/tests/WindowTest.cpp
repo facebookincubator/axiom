@@ -445,7 +445,7 @@ TEST_F(WindowTest, nonRedundantOrderByWithPartitionKeys) {
           .window(
               {"sum(n_regionkey) OVER (PARTITION BY n_regionkey ORDER BY n_name)"})
           .topN(10)
-          .project({"n_name", "s"})
+          .project()
           .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
 
@@ -460,7 +460,7 @@ TEST_F(WindowTest, nonRedundantOrderByWithPartitionKeys) {
           .localMerge()
           .shuffleMerge()
           .finalLimit(0, 10)
-          .project({"n_name", "s"})
+          .project()
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
