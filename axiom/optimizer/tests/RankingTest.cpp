@@ -471,6 +471,33 @@ TEST_F(RankingTest, filterOnRowNumberEquals1) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
 }
 
+TEST_F(RankingTest, filterOnRowNumberGreaterThan) {
+  constexpr auto sql =
+      "SELECT count(1) FROM ("
+      "  SELECT n_name, row_number() OVER () as rn "
+      "  FROM nation"
+      ") WHERE rn > 1";
+  auto plan = toSingleNodePlan(sql);
+  auto matcher = matchScan("nation")
+                     .rowNumber({})
+                     .filter({"gt(\"rn\",1)"})
+                     .singleAggregation({}, {"count(1) as count"})
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
+  auto distributedPlan = toDistributedPlan(sql);
+  auto distributedMatcher = matchScan("nation")
+                                .shuffle()
+                                .localGather()
+                                .rowNumber({})
+                                .filter({"gt(\"rn\",1)"})
+                                .partialAggregation({}, {"count(1)"})
+                                .localPartition()
+                                .finalAggregation()
+                                .build();
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan, distributedMatcher);
+}
+
 TEST_F(RankingTest, filterWithAdditionalPredicates) {
   // The ranking predicate (rn <= 5) is absorbed as a TopNRowNumber limit. The
   // non-window predicate (n_regionkey > 2) stays as a filter above because it

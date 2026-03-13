@@ -3432,7 +3432,7 @@ void ToGraph::makeFilterQueryGraph(
   // Window functions compute over the full input; pushing any filter below
   // them changes their semantics.
   if (currentDt_->hasWindow()) {
-    finalizeDt(filter);
+    finalizeDt(input);
   }
 
   addFilter(input, filter.predicate());
