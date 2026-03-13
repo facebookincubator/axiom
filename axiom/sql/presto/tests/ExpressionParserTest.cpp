@@ -242,6 +242,37 @@ TEST_F(ExpressionParserTest, doubleLiteral) {
   test("1E+5", 1e5);
 }
 
+TEST_F(ExpressionParserTest, binaryLiteral) {
+  auto test = [&](std::string_view sql, std::string_view expectedBytes) {
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+
+    ASSERT_TRUE(expr->isConstant());
+    ASSERT_EQ(*expr->type(), *VARBINARY());
+
+    auto value = expr->as<lp::ConstantExpr>()->value();
+    ASSERT_FALSE(value->isNull());
+    EXPECT_EQ(value->value<TypeKind::VARBINARY>(), expectedBytes);
+  };
+
+  test("X'48454C4C4F'", "HELLO");
+  test(
+      "X'abcdef1234567890ABCDEF'",
+      "\xab\xcd\xef\x12\x34\x56\x78\x90\xAB\xCD\xEF");
+  test("X'00'", std::string("\x00", 1));
+  test("X''", "");
+
+  test("x''", "");
+  test("x' '", "");
+  test("X'AB CD'", "\xAB\xCD");
+
+  // Odd number of hex digits.
+  VELOX_ASSERT_THROW(parseExpr("X'a b c'"), "even number of digits");
+
+  // Non-hexadecimal character.
+  VELOX_ASSERT_THROW(parseExpr("X'az'"), "hexadecimal digits");
+}
+
 TEST_F(ExpressionParserTest, unicodeStringLiteral) {
   auto test = [&](std::string_view sql, std::string_view expected) {
     SCOPED_TRACE(sql);

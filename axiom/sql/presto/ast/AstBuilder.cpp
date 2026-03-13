@@ -1873,7 +1873,10 @@ std::any AstBuilder::visitSubqueryExpression(
 std::any AstBuilder::visitBinaryLiteral(
     PrestoSqlParser::BinaryLiteralContext* ctx) {
   trace("visitBinaryLiteral");
-  return visitChildren("visitBinaryLiteral", ctx);
+
+  auto token = ctx->BINARY_LITERAL()->getText();
+  return std::static_pointer_cast<Expression>(std::make_shared<BinaryLiteral>(
+      getLocation(ctx), token.substr(2, token.size() - 3)));
 }
 
 std::any AstBuilder::visitCurrentUser(

@@ -15,6 +15,7 @@
  */
 
 #include "axiom/sql/presto/ExpressionPlanner.h"
+#include <folly/String.h>
 #include <algorithm>
 #include <cctype>
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -546,6 +547,22 @@ lp::ExprApi ExpressionPlanner::toExpr(
 
     case NodeType::kStringLiteral:
       return lp::Lit(node->as<StringLiteral>()->value());
+
+    case NodeType::kBinaryLiteral: {
+      auto hexString = node->as<BinaryLiteral>()->value();
+      std::erase_if(hexString, [](char c) { return std::isspace(c); });
+      std::string bytes;
+      VELOX_USER_CHECK_EQ(
+          hexString.size() % 2,
+          0,
+          "Binary literal must contain an even number of digits: X'{}'",
+          hexString);
+      VELOX_USER_CHECK(
+          folly::unhexlify(hexString, bytes),
+          "Binary literal can only contain hexadecimal digits: X'{}'",
+          hexString);
+      return lp::Lit(Variant::binary(std::move(bytes)));
+    }
 
     case NodeType::kIntervalLiteral: {
       const auto interval = node->as<IntervalLiteral>();
