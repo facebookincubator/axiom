@@ -15,6 +15,7 @@
  */
 
 #include "axiom/sql/presto/GroupByPlanner.h"
+#include "axiom/sql/presto/ParserUtils.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
 #include "folly/container/F14Set.h"
 #include "velox/common/base/BitUtil.h"
@@ -597,34 +598,20 @@ void GroupByPlanner::rewritePostAggregateExprs() {
 
 std::vector<size_t> GroupByPlanner::resolveSortOrdinals(
     const OrderByPtr& orderBy) {
-  std::vector<size_t> sortingKeyOrdinals;
   if (sortingKeys_.empty()) {
-    return sortingKeyOrdinals;
+    return {};
   }
 
-  ExprMap<size_t> projectionMap;
-  for (size_t i = 0; i < projections_.size(); ++i) {
-    projectionMap.emplace(projections_.at(i).expr(), i + 1);
-  }
-
+  // Pre-resolve ordinals from AST literal integers.
+  std::vector<size_t> preResolved(sortingKeys_.size(), 0);
   for (size_t i = 0; i < sortingKeys_.size(); ++i) {
     const auto& sortKey = orderBy->sortItems().at(i)->sortKey();
     if (sortKey->is(NodeType::kLongLiteral)) {
-      const auto n = sortKey->as<LongLiteral>()->value();
-      sortingKeyOrdinals.emplace_back(n);
-    } else {
-      auto [it, inserted] = projectionMap.emplace(
-          sortingKeys_.at(i).expr.expr(), projections_.size() + 1);
-      if (inserted) {
-        sortingKeyOrdinals.emplace_back(projections_.size() + 1);
-        projections_.emplace_back(sortingKeys_.at(i).expr);
-      } else {
-        sortingKeyOrdinals.emplace_back(it->second);
-      }
+      preResolved[i] = sortKey->as<LongLiteral>()->value();
     }
   }
 
-  return sortingKeyOrdinals;
+  return widenProjectionsForSort(projections_, sortingKeys_, preResolved);
 }
 
 bool GroupByPlanner::isIdentityProjection() const {
@@ -649,30 +636,8 @@ bool GroupByPlanner::isIdentityProjection() const {
 void GroupByPlanner::addSort(
     const std::vector<SelectItemPtr>& selectItems,
     const std::vector<size_t>& sortingKeyOrdinals) {
-  if (sortingKeys_.empty()) {
-    return;
-  }
-
-  for (size_t i = 0; i < sortingKeys_.size(); ++i) {
-    const auto name =
-        builder_->findOrAssignOutputNameAt(sortingKeyOrdinals.at(i) - 1);
-
-    auto& key = sortingKeys_.at(i);
-    key = lp::SortKey(lp::Col(name), key.ascending, key.nullsFirst);
-  }
-
-  builder_->sort(sortingKeys_);
-
-  // Drop projections used only for sorting.
-  if (selectItems.size() < projections_.size()) {
-    std::vector<lp::ExprApi> finalProjections;
-    finalProjections.reserve(selectItems.size());
-    for (size_t i = 0; i < selectItems.size(); ++i) {
-      finalProjections.emplace_back(
-          lp::Col(builder_->findOrAssignOutputNameAt(i)));
-    }
-    builder_->project(finalProjections);
-  }
+  sortAndTrimProjections(
+      *builder_, sortingKeys_, sortingKeyOrdinals, selectItems.size());
 }
 
 lp::ExprApi GroupByPlanner::resolveGroupingExpression(
