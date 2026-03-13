@@ -572,5 +572,40 @@ TEST_F(AggregationParserTest, groupByWithWindowFunction) {
       "Cannot resolve column: a");
 }
 
+TEST_F(AggregationParserTest, groupByWithNestedWindowFunction) {
+  connector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  // Window function nested inside an expression with GROUP BY.
+  testSelect(
+      "SELECT a, row_number() OVER (ORDER BY a) + sum(b) FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {"sum(b)"})
+          .project({
+              "a",
+              "sum",
+              "row_number() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .project({
+              "a",
+              "plus(expr, sum)",
+          })
+          .output());
+
+  // Deeply nested window function inside arithmetic.
+  testSelect(
+      "SELECT a, 1 + (2 * row_number() OVER (ORDER BY a)) FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {})
+          .project({
+              "a",
+              "row_number() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .project({
+              "a",
+              "plus(CAST(1 AS BIGINT), multiply(CAST(2 AS BIGINT), expr))",
+          })
+          .output());
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test
