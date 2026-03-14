@@ -400,7 +400,11 @@ class PlanBuilder {
   /// @param aggregates The aggregate expressions to compute.
   /// @param options Per-aggregate options (filter, orderBy, distinct).
   /// @param groupingSetIndexName Name of the output column that identifies
-  /// which grouping set each row belongs to.
+  /// which grouping set each row belongs to. Appended after all aggregates
+  /// in the output and hidden from name resolution — cannot be referenced
+  /// in subsequent PlanBuilder operations. Remains in the physical output
+  /// for internal use (e.g. GROUPING() function). Retrieve via
+  /// findOrAssignOutputNames(/*includeHiddenColumns=*/true).
   PlanBuilder& aggregate(
       const std::vector<ExprApi>& groupingKeys,
       const std::vector<std::vector<int32_t>>& groupingSets,

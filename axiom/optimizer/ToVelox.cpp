@@ -229,7 +229,10 @@ void ToVelox::filterUpdated(BaseTableCP table) {
 velox::core::PlanNodePtr ToVelox::addOutputRenames(
     velox::core::PlanNodePtr input,
     const std::vector<logical_plan::OutputNode::Entry>& outputNames) {
-  VELOX_CHECK_EQ(outputNames.size(), input->outputType()->size());
+  VELOX_CHECK_LE(
+      outputNames.size(),
+      input->outputType()->size(),
+      "OutputNode has more entries than input columns");
 
   // If the input is a ProjectNode that only does renames/reorders (all
   // expressions are FieldAccessTypedExpr on input columns), look through it
@@ -1398,6 +1401,14 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
 
   auto preGroupedKeys = toFieldRefs(op.preGroupedKeys);
 
+  std::vector<velox::vector_size_t> globalGroupingSets(
+      op.globalGroupingSets.begin(), op.globalGroupingSets.end());
+  std::optional<velox::core::FieldAccessTypedExprPtr> groupId;
+  if (op.groupIdColumn != nullptr) {
+    groupId = std::make_shared<velox::core::FieldAccessTypedExpr>(
+        velox::BIGINT(), op.groupIdColumn->outputName());
+  }
+
   return std::make_shared<velox::core::AggregationNode>(
       nextId(),
       op.step,
@@ -1405,6 +1416,8 @@ velox::core::PlanNodePtr ToVelox::makeAggregation(
       preGroupedKeys,
       aggregateNames,
       aggregates,
+      globalGroupingSets,
+      groupId,
       /*ignoreNullKeys=*/false,
       /*noGroupsSpanBatches=*/false,
       input);
@@ -1935,6 +1948,57 @@ velox::core::PlanNodePtr ToVelox::makeEnforceDistinct(
   return node;
 }
 
+velox::core::PlanNodePtr ToVelox::makeGroupId(
+    const GroupId& op,
+    ExecutableFragment& fragment,
+    std::vector<ExecutableFragment>& stages) {
+  auto input = makeFragment(op.input(), fragment, stages);
+
+  std::vector<velox::core::GroupIdNode::GroupingKeyInfo> groupingKeyInfos;
+  groupingKeyInfos.reserve(op.groupingKeys().size());
+  VELOX_CHECK(
+      op.inputGroupingKeys().empty() ||
+          op.inputGroupingKeys().size() == op.groupingKeys().size(),
+      "inputGroupingKeys size mismatch: {} vs {}",
+      op.inputGroupingKeys().size(),
+      op.groupingKeys().size());
+  for (size_t i = 0; i < op.groupingKeys().size(); ++i) {
+    auto outputName = std::string(op.groupingKeys()[i]->name());
+    auto inputRef = op.inputGroupingKeys().empty()
+        ? toFieldRef(op.groupingKeys()[i])
+        : toFieldRef(op.inputGroupingKeys()[i]);
+    groupingKeyInfos.push_back({
+        .output = std::move(outputName),
+        .input = std::move(inputRef),
+    });
+  }
+
+  // Convert groupingSets from indices to output column names for Velox.
+  std::vector<std::vector<std::string>> groupingSets;
+  groupingSets.reserve(op.groupingSets().size());
+  for (const auto& set : op.groupingSets()) {
+    std::vector<std::string> names;
+    names.reserve(set.size());
+    for (auto keyIndex : set) {
+      names.emplace_back(groupingKeyInfos[keyIndex].output);
+    }
+    groupingSets.emplace_back(std::move(names));
+  }
+
+  auto aggregationInputs = toFieldRefs(op.aggregationInputs());
+
+  auto node = std::make_shared<velox::core::GroupIdNode>(
+      nextId(),
+      std::move(groupingSets),
+      std::move(groupingKeyInfos),
+      std::move(aggregationInputs),
+      op.groupIdColumn()->outputName(),
+      std::move(input));
+
+  makePredictionAndHistory(node->id(), &op);
+  return node;
+}
+
 void ToVelox::makePredictionAndHistory(
     const velox::core::PlanNodeId& id,
     const RelationOp* op) {
@@ -1988,6 +2052,8 @@ velox::core::PlanNodePtr ToVelox::makeFragment(
       return makeRowNumber(*op->as<RowNumber>(), fragment, stages);
     case RelType::kTopNRowNumber:
       return makeTopNRowNumber(*op->as<TopNRowNumber>(), fragment, stages);
+    case RelType::kGroupId:
+      return makeGroupId(*op->as<GroupId>(), fragment, stages);
     default:
       VELOX_FAIL(
           "Unsupported RelationOp {}", static_cast<int32_t>(op->relType()));

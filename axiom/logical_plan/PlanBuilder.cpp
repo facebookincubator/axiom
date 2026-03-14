@@ -978,6 +978,10 @@ PlanBuilder& PlanBuilder::aggregate(
     const std::string& groupingSetIndexName) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Aggregate node cannot be a leaf node");
 
+  VELOX_USER_CHECK(
+      !groupingKeys.empty() || !aggregates.empty(),
+      "Aggregation node must specify at least one aggregate or grouping key");
+
   const auto numKeys = static_cast<int32_t>(groupingKeys.size());
   for (const auto& groupingSet : groupingSets) {
     for (const auto index : groupingSet) {
@@ -1007,8 +1011,13 @@ PlanBuilder& PlanBuilder::aggregate(
 
   resolveAggregates(aggregates, options, outputNames, exprs, *newOutputMapping);
 
-  outputNames.push_back(newName(groupingSetIndexName));
-  newOutputMapping->add(groupingSetIndexName, outputNames.back());
+  auto gidInternalName = newName(groupingSetIndexName);
+  outputNames.push_back(gidInternalName);
+  newOutputMapping->add(groupingSetIndexName, gidInternalName);
+
+  // Hidden from name resolution — cannot be SELECTed. Present in the
+  // physical output for internal use by GROUPING().
+  newOutputMapping->markHidden(gidInternalName);
 
   node_ = std::make_shared<AggregateNode>(
       nextId(),
@@ -1995,19 +2004,22 @@ std::string PlanBuilder::findOrAssignOutputNameAt(size_t index) const {
 }
 
 LogicalPlanNodePtr PlanBuilder::buildOutputNode() {
-  auto defaultNames = findOrAssignOutputNames(/*includeHiddenColumns=*/true);
-  const auto numColumns = defaultNames.size();
+  const auto& inputType = node_->outputType();
+  const auto numColumns = inputType->size();
 
   std::vector<OutputNode::Entry> entries;
   entries.reserve(numColumns);
 
   for (size_t i = 0; i < numColumns; ++i) {
+    const auto& id = inputType->nameOf(i);
+    if (outputMapping_->isHidden(id)) {
+      continue;
+    }
     std::string name;
-    if (auto userName =
-            outputMapping_->userName(node_->outputType()->nameOf(i))) {
+    if (auto userName = outputMapping_->userName(id)) {
       name = *userName;
     } else {
-      name = std::move(defaultNames[i]);
+      name = findOrAssignOutputNameAt(i);
     }
     entries.emplace_back(
         OutputNode::Entry{static_cast<int32_t>(i), std::move(name)});
