@@ -486,6 +486,20 @@ TEST_F(PrestoParserTest, orderBy) {
   }
 
   {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .values(ROW({"c0"}, INTEGER()))
+                       .project()
+                       .aggregate()
+                       .project()
+                       .sort({"b"})
+                       .output({"b"});
+
+    testSelect(
+        "SELECT a as b FROM (values (1)) AS t(a) GROUP BY 1 ORDER BY b",
+        matcher);
+  }
+
+  {
     auto matcher = matchScan()
                        .aggregate()
                        .project({"n_regionkey", "count * 2::bigint as x"})
