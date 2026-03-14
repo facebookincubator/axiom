@@ -72,12 +72,16 @@ namespace axiom::sql {
 Console::Console(
     SqlQueryRunner& runner,
     PermissionCheck permissionCheck,
-    std::shared_ptr<cli::QueryIdGenerator> queryIdGenerator)
+    std::shared_ptr<cli::QueryIdGenerator> queryIdGenerator,
+    QueryStartCallback startCallback,
+    QueryCompletionCallback completionCallback)
     : runner_{runner},
       permissionCheck_{std::move(permissionCheck)},
       queryIdGenerator_{
           queryIdGenerator ? std::move(queryIdGenerator)
-                           : std::make_shared<cli::QueryIdGenerator>()} {}
+                           : std::make_shared<cli::QueryIdGenerator>()},
+      startCallback_{std::move(startCallback)},
+      completionCallback_{std::move(completionCallback)} {}
 
 void Console::initialize() {
   gflags::SetUsageMessage(
@@ -107,6 +111,16 @@ void Console::run() {
   }
 }
 
+void Console::notifyCompletion(const QueryCompletionInfo& info) {
+  if (completionCallback_) {
+    try {
+      completionCallback_(info);
+    } catch (const std::exception& ex) {
+      LOG(WARNING) << "Completion callback failed: " << ex.what();
+    }
+  }
+}
+
 void Console::runNoThrow(std::string_view sql, bool isInteractive) {
   const SqlQueryRunner::RunOptions defaultOptions{
       .numWorkers = FLAGS_num_workers,
@@ -127,8 +141,20 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
     const auto queryId = queryIdGenerator_->createNextQueryId();
     auto options = defaultOptions;
     options.queryId = queryId;
+    const auto createTime = std::chrono::system_clock::now();
 
     try {
+      // Notify start callback before parse so that every query gets a start
+      // event. Parse or permission failures are handled by completionCallback_
+      // in the catch block.
+      if (startCallback_) {
+        try {
+          startCallback_({queryId, sqlText, createTime});
+        } catch (const std::exception& ex) {
+          LOG(WARNING) << "Start callback failed: " << ex.what();
+        }
+      }
+
       cli::Timing parseTiming;
       auto statement = cli::time<presto::SqlStatementPtr>(
           [&]() { return runner_.parseSingle(sqlText, options); }, parseTiming);
@@ -168,7 +194,36 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
         std::cout << "Query ID: " << queryId << " | Optimizing and Executing: "
                   << statementTiming.toString() << std::endl;
       }
+
+      // Notify completion callback on success.
+      int64_t numOutputRows = 0;
+      for (const auto& rowVector : result.results) {
+        numOutputRows += rowVector->size();
+      }
+      notifyCompletion(
+          QueryCompletionInfo{
+              .queryId = queryId,
+              .query = sqlText,
+              .succeeded = true,
+              .planString = std::string(sqlText),
+              .parseMicros = parseTiming.micros,
+              .executionMicros = statementTiming.micros,
+              .numOutputRows = numOutputRows,
+              .createTime = createTime,
+              .endTime = std::chrono::system_clock::now(),
+          });
     } catch (std::exception& e) {
+      // Notify completion callback on failure.
+      notifyCompletion(
+          QueryCompletionInfo{
+              .queryId = queryId,
+              .query = sqlText,
+              .succeeded = false,
+              .errorMessage = e.what(),
+              .planString = std::string(sqlText),
+              .createTime = createTime,
+              .endTime = std::chrono::system_clock::now(),
+          });
       std::cerr << "Query ID: " << queryId << " | Query failed: " << e.what()
                 << std::endl;
       return;

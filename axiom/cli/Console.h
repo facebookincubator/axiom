@@ -15,9 +15,9 @@
  */
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <memory>
-#include <unordered_map>
 #include <utility>
 #include "axiom/cli/SqlQueryRunner.h"
 #include "axiom/sql/presto/SqlStatement.h"
@@ -43,16 +43,47 @@ using PermissionCheck =
         std::optional<std::string_view> schema,
         const presto::ViewMap& views)>;
 
+/// Holds query metadata at start time.
+struct QueryStartInfo {
+  std::string queryId;
+  std::string_view query;
+  std::chrono::system_clock::time_point createTime;
+};
+
+/// Holds query metadata at completion time.
+struct QueryCompletionInfo {
+  std::string queryId;
+  std::string_view query;
+  bool succeeded{true};
+  std::string errorMessage;
+  /// Serialized query plan for downstream logging.
+  std::string planString;
+  uint64_t parseMicros{0};
+  uint64_t executionMicros{0};
+  int64_t numOutputRows{0};
+  std::chrono::system_clock::time_point createTime;
+  std::chrono::system_clock::time_point endTime;
+};
+
+using QueryStartCallback = std::function<void(const QueryStartInfo&)>;
+using QueryCompletionCallback = std::function<void(const QueryCompletionInfo&)>;
+
 class Console {
  public:
   /// @param permissionCheck Optional callback invoked after each statement is
   /// parsed but before it is executed. Throws on denial.
   /// @param queryIdGenerator Optional query ID generator. Defaults to a
   /// generator with a random base-32 suffix.
+  /// @param startCallback Optional callback invoked before parse, for every
+  /// query.
+  /// @param completionCallback Optional callback invoked after execution
+  /// completes (success or failure).
   explicit Console(
       SqlQueryRunner& runner,
       PermissionCheck permissionCheck = nullptr,
-      std::shared_ptr<cli::QueryIdGenerator> queryIdGenerator = nullptr);
+      std::shared_ptr<cli::QueryIdGenerator> queryIdGenerator = nullptr,
+      QueryStartCallback startCallback = nullptr,
+      QueryCompletionCallback completionCallback = nullptr);
 
   /// Initializes the CLI with usage message and logging settings.
   void initialize();
@@ -69,6 +100,9 @@ class Console {
   // multi-statement queries.
   void runNoThrow(std::string_view sql, bool isInteractive = true);
 
+  // Invokes completionCallback_ if set, swallowing any exceptions.
+  void notifyCompletion(const QueryCompletionInfo& info);
+
   // Reads and executes commands from standard input in interactive mode.
   void readCommands(const std::string& prompt);
 
@@ -76,6 +110,10 @@ class Console {
   PermissionCheck permissionCheck_;
   // Generates unique query IDs for each statement execution.
   std::shared_ptr<cli::QueryIdGenerator> queryIdGenerator_;
+  // Invoked before parse for every query.
+  QueryStartCallback startCallback_;
+  // Invoked after execution completes (success or failure).
+  QueryCompletionCallback completionCallback_;
 };
 
 } // namespace axiom::sql
