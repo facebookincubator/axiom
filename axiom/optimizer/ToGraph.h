@@ -96,6 +96,8 @@ struct SubfieldProjections {
   folly::F14FastMap<PathCP, ExprCP> pathToExpr;
 };
 
+struct TranslatedSubquery;
+
 class ToGraph {
  public:
   ToGraph(
@@ -425,11 +427,26 @@ class ToGraph {
       const logical_plan::ExprPtr& expr,
       bool filter);
 
+  // Extracts all subqueries from a set of projection expressions and processes
+  // them in a single batch. Enables merging of correlated scalar subqueries
+  // that reference the same table with the same correlation keys.
+  void processProjectionSubqueries(
+      const logical_plan::LogicalPlanNode& input,
+      const std::vector<logical_plan::ExprPtr>& exprs,
+      const std::vector<int32_t>& channels);
+
   // Processes scalar subqueries, creating DTs and joins for each.
   // Populates subqueries_ with mappings from subquery expressions to columns.
   void processScalarSubqueries(
       const logical_plan::LogicalPlanNode& input,
       const std::vector<logical_plan::SubqueryExprPtr>& scalars);
+
+  // Resolves a scalar subquery to its output expression via the uncorrelated
+  // or correlated path. Stores the result in subqueries_.
+  void resolveScalarSubquery(
+      const logical_plan::LogicalPlanNode& input,
+      const logical_plan::SubqueryExprPtr& subqueryExpr,
+      DerivedTableP subqueryDt);
 
   // Processes an uncorrelated scalar subquery. Attempts constant folding,
   // otherwise ensures single row. Returns the expression to map to the
@@ -442,6 +459,36 @@ class ToGraph {
   ExprCP processCorrelatedScalarSubquery(
       const logical_plan::LogicalPlanNode& input,
       DerivedTableP subqueryDt);
+
+  // Merges a group of correlated scalar subqueries that reference the same
+  // table with the same correlation keys. Combines their aggregations into a
+  // single DerivedTable and creates one LEFT JOIN instead of N separate ones.
+  void mergeCorrelatedScalarSubqueries(
+      const logical_plan::LogicalPlanNode& input,
+      std::vector<TranslatedSubquery>& group);
+
+  // Creates a LEFT JOIN edge from equi-only correlation conjuncts.
+  void addCorrelationJoin(
+      const ExprVector& conjuncts,
+      DerivedTableP subqueryDt);
+
+  // Remaps a secondary subquery's aggregate to reference primaryBt's columns
+  // and appends it to the combined aggregation vectors.
+  void mergeAggregateIntoPrimary(
+      BaseTable* primaryBt,
+      DerivedTableP primaryDt,
+      const DerivedTable* secondaryDt,
+      AggregateVector& aggregates,
+      ColumnVector& columns,
+      ColumnVector& intermediateColumns);
+
+  // Maps each merged subquery to its aggregate result column, wrapping
+  // count-like aggregates with COALESCE.
+  void mapSubqueriesToResults(
+      const std::vector<TranslatedSubquery>& group,
+      const ColumnVector& columns,
+      const AggregateVector& aggregates,
+      size_t numGroupingKeys);
 
   // Processes IN <subquery> predicates, creating semi-joins with mark columns.
   // Populates subqueries_ with mappings from IN predicates to mark columns.
