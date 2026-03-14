@@ -15,6 +15,7 @@
  */
 
 #include "axiom/connectors/MaterializedViewDefinition.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "axiom/connectors/tests/TestConnector.h"
 
@@ -192,12 +193,11 @@ TEST_F(MaterializedViewDefinitionTest, tableIntegration) {
   auto table =
       connector->addTable("test_table", velox::ROW({"a"}, {velox::BIGINT()}));
 
-  // A regular table is not a materialized view.
-  EXPECT_FALSE(table->isMaterializedView());
-  EXPECT_EQ(table->materializedViewDefinition(), nullptr);
+  // A regular table does not have a materialized view definition.
+  EXPECT_FALSE(table->materializedViewDefinition().has_value());
 
   // Set a MaterializedViewDefinition on the table.
-  auto mvDef = std::make_shared<MaterializedViewDefinition>(
+  MaterializedViewDefinition mvDef(
       "SELECT * FROM base",
       "schema",
       "test_table",
@@ -207,16 +207,88 @@ TEST_F(MaterializedViewDefinitionTest, tableIntegration) {
       std::vector<ColumnMapping>{},
       std::vector<SchemaTableName>{},
       std::nullopt);
-  table->setMaterializedViewDefinition(mvDef);
+  table->setMaterializedViewDefinition(std::move(mvDef));
 
-  // Now the table should be recognized as a materialized view.
-  EXPECT_TRUE(table->isMaterializedView());
-  ASSERT_NE(table->materializedViewDefinition(), nullptr);
-  EXPECT_EQ(
-      table->materializedViewDefinition()->originalSql(), "SELECT * FROM base");
-  EXPECT_EQ(table->materializedViewDefinition()->table(), "test_table");
-  EXPECT_EQ(table->materializedViewDefinition()->baseTables().size(), 1);
-  EXPECT_EQ(table->materializedViewDefinition()->baseTables()[0].table, "base");
+  // Now the table should have a materialized view definition.
+  ASSERT_TRUE(table->materializedViewDefinition().has_value());
+  const auto& def = table->materializedViewDefinition().value();
+  EXPECT_EQ(def.originalSql(), "SELECT * FROM base");
+  EXPECT_EQ(def.table(), "test_table");
+  ASSERT_EQ(def.baseTables().size(), 1);
+  EXPECT_EQ(def.baseTables()[0].table, "base");
+}
+
+TEST_F(MaterializedViewDefinitionTest, materializedViewStatusEnum) {
+  // Verify each MaterializedViewState value is distinct.
+  EXPECT_NE(
+      MaterializedViewState::kNotMaterialized,
+      MaterializedViewState::kPartiallyMaterialized);
+  EXPECT_NE(
+      MaterializedViewState::kPartiallyMaterialized,
+      MaterializedViewState::kFullyMaterialized);
+  EXPECT_NE(
+      MaterializedViewState::kTooManyPartitionsMissing,
+      MaterializedViewState::kNotMaterialized);
+}
+
+TEST_F(
+    MaterializedViewDefinitionTest,
+    materializedViewStatusPartiallyMaterialized) {
+  MaterializedViewStatus status;
+  status.state = MaterializedViewState::kPartiallyMaterialized;
+  status.boundaryValues = {"2026-01-21", "2026-01-28"};
+
+  EXPECT_EQ(status.state, MaterializedViewState::kPartiallyMaterialized);
+  EXPECT_THAT(
+      status.boundaryValues, testing::ElementsAre("2026-01-21", "2026-01-28"));
+}
+
+TEST_F(
+    MaterializedViewDefinitionTest,
+    materializedViewStatusFullyMaterialized) {
+  MaterializedViewStatus status;
+  status.state = MaterializedViewState::kFullyMaterialized;
+
+  EXPECT_EQ(status.state, MaterializedViewState::kFullyMaterialized);
+  EXPECT_THAT(status.boundaryValues, testing::IsEmpty());
+}
+
+TEST_F(MaterializedViewDefinitionTest, materializedViewStatusNotMaterialized) {
+  MaterializedViewStatus status;
+  status.state = MaterializedViewState::kNotMaterialized;
+
+  EXPECT_EQ(status.state, MaterializedViewState::kNotMaterialized);
+  EXPECT_THAT(status.boundaryValues, testing::IsEmpty());
+}
+
+TEST_F(MaterializedViewDefinitionTest, materializedViewStatusMultipleRanges) {
+  // Phase 2 scenario: non-contiguous fresh ranges due to stale partitions.
+  MaterializedViewStatus status;
+  status.state = MaterializedViewState::kPartiallyMaterialized;
+  status.boundaryValues = {
+      "2026-01-21", "2026-01-24", "2026-01-26", "2026-01-28"};
+
+  EXPECT_EQ(status.state, MaterializedViewState::kPartiallyMaterialized);
+  EXPECT_THAT(
+      status.boundaryValues,
+      testing::ElementsAre(
+          "2026-01-21", "2026-01-24", "2026-01-26", "2026-01-28"));
+}
+
+TEST_F(
+    MaterializedViewDefinitionTest,
+    connectorMetadataDefaultGetMaterializedViewStatus) {
+  velox::memory::MemoryManager::testingSetInstance(
+      velox::memory::MemoryManager::Options{});
+  auto connector = std::make_shared<TestConnector>("default_test");
+  auto metadata = ConnectorMetadata::metadata(connector->connectorId());
+
+  auto table =
+      connector->addTable("test_table", velox::ROW({"a"}, {velox::BIGINT()}));
+
+  // The default implementation returns nullopt.
+  auto result = metadata->getMaterializedViewStatus(*table);
+  EXPECT_FALSE(result.has_value());
 }
 
 } // namespace

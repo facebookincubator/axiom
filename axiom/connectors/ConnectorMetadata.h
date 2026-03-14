@@ -663,20 +663,18 @@ class Table : public std::enable_shared_from_this<Table> {
     VELOX_UNSUPPORTED();
   }
 
-  /// Returns the MaterializedViewDefinition if this table represents a
-  /// materialized view, or nullptr for regular tables.
-  const std::shared_ptr<const MaterializedViewDefinition>&
-  materializedViewDefinition() const {
+  /// Returns the materialized view definition if this table is a materialized
+  /// view. Returns std::nullopt for regular tables.
+  const std::optional<MaterializedViewDefinition>& materializedViewDefinition()
+      const {
     return materializedViewDefinition_;
   }
 
+  /// Sets the materialized view definition. Called during table resolution
+  /// when the table is identified as a materialized view.
   void setMaterializedViewDefinition(
-      std::shared_ptr<const MaterializedViewDefinition> mvDef) {
-    materializedViewDefinition_ = std::move(mvDef);
-  }
-
-  bool isMaterializedView() const {
-    return materializedViewDefinition_ != nullptr;
+      MaterializedViewDefinition materializedViewDefinition) {
+    materializedViewDefinition_.emplace(std::move(materializedViewDefinition));
   }
 
   template <typename T>
@@ -691,19 +689,43 @@ class Table : public std::enable_shared_from_this<Table> {
   const std::vector<const Column*> columnPtrs_;
   const folly::F14FastMap<std::string, const Column*> columnMap_;
   const folly::F14FastMap<std::string, velox::Variant> options_;
-  std::shared_ptr<const MaterializedViewDefinition> materializedViewDefinition_;
+  std::optional<MaterializedViewDefinition> materializedViewDefinition_;
 };
 
 using TablePtr = std::shared_ptr<const Table>;
-using MaterializedViewDefinitionPtr =
-    std::shared_ptr<const MaterializedViewDefinition>;
 
-/// Specifies the type of view.
+/// State of a materialized view relative to its base table(s). Mirrors the
+/// Presto SPI enum
+/// (presto-spi/src/main/java/com/facebook/presto/spi/MaterializedViewStatus.java).
+enum class MaterializedViewState {
+  /// MV has no data at all — query must read entirely from the base table.
+  kNotMaterialized,
+  /// Too many partitions are missing — fall back to the base table.
+  kTooManyPartitionsMissing,
+  /// Some partitions are present, some are missing or stale — stitch MV + base.
+  kPartiallyMaterialized,
+  /// MV fully covers the base table — read from MV only.
+  kFullyMaterialized,
+};
+
+/// Status of a materialized view's data freshness. Returned by
+/// ConnectorMetadata::getMaterializedViewStatus() to indicate which data
+/// ranges are available in the MV and which must be read from the base table.
+/// The refresh column name is not included here — the optimizer gets it from
+/// MaterializedViewDefinition::validRefreshColumns().
+struct MaterializedViewStatus {
+  MaterializedViewState state;
+
+  /// Boundary values defining fresh ranges in the MV. Each consecutive pair
+  /// [boundaryValues[2i], boundaryValues[2i+1]] defines an inclusive range
+  /// of the refresh column where the MV has data. The optimizer reads
+  /// everything outside these ranges from the base table.
+  /// Only meaningful when state is kPartiallyMaterialized.
+  std::vector<std::string> boundaryValues;
+};
+
 enum class ViewType {
-  /// A logical view that is expanded at query time.
   kLogicalView,
-
-  /// A materialized view that stores precomputed results.
   kMaterializedView,
 };
 
@@ -742,7 +764,6 @@ class View {
     return text_;
   }
 
-  /// Returns the type of the view.
   ViewType viewType() const {
     return viewType_;
   }
@@ -758,7 +779,10 @@ class View {
 
 using ViewPtr = std::shared_ptr<const View>;
 
-/// Contains the information for an in-progress write operation. This may
+using MaterializedViewDefinitionPtr =
+    std::shared_ptr<const MaterializedViewDefinition>;
+
+/// Contains the information for an in-progress write operation.
 /// include insert, update, or delete of an existing table, or insertion into
 /// a new table. The ConnectorWriteHandle is generated when a table write
 /// operation is initiated in beginWrite and used to commit or abort any
@@ -841,14 +865,14 @@ class ConnectorMetadata {
     return nullptr;
   }
 
-  /// Return a MaterializedViewDefinitionPtr given the MV name. MV name is
-  /// provided without the connector ID / catalog prefix, but may include the
-  /// schema.
-  /// @return nullptr if MV doesn't exist.
+  /// Returns the materialized view definition for the given table name.
+  /// Returns nullptr if the table is not a materialized view.
   virtual MaterializedViewDefinitionPtr getMaterializedViewDefinition(
       std::string_view /*name*/) const {
     return nullptr;
   }
+
+  /// Returns a SplitManager
 
   /// Returns a SplitManager for split enumeration for TableLayouts accessed
   /// through 'this'.
@@ -996,6 +1020,18 @@ class ConnectorMetadata {
     VELOX_UNSUPPORTED();
   }
 
+  /// Returns the materialized view status for the given MV table. The
+  /// returned state tells the optimizer whether stitching is needed and
+  /// how to proceed:
+  ///   - kFullyMaterialized: MV covers all base data — read MV only.
+  ///   - kPartiallyMaterialized: boundaryValues define fresh ranges.
+  ///   - kNotMaterialized / kTooManyPartitionsMissing: read base table only.
+  /// Returns std::nullopt if the table is not a materialized view.
+  virtual std::optional<MaterializedViewStatus> getMaterializedViewStatus(
+      const Table& /*mvTable*/) {
+    return std::nullopt;
+  }
+
   template <typename T>
   const T* as() const {
     return dynamic_cast<const T*>(this);
@@ -1005,4 +1041,3 @@ class ConnectorMetadata {
 } // namespace facebook::axiom::connector
 
 AXIOM_ENUM_FORMATTER(facebook::axiom::connector::WriteKind);
-AXIOM_ENUM_FORMATTER(facebook::axiom::connector::ViewType);
