@@ -65,7 +65,7 @@ void SqlQueryRunner::initialize(
       velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
     if (!velox::isRegisteredNamedVectorSerde(
-            velox::VectorSerde::kindName(velox::VectorSerde::Kind::kPresto))) {
+            velox::serializer::presto::PrestoVectorSerde::name())) {
       velox::serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
     }
   });
