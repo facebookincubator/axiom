@@ -215,23 +215,36 @@ TablePtr TpchConnectorMetadata::findTable(const SchemaTableName& tableName) {
     return nullptr;
   }
 
-  velox::tpch::Table tpchTable = velox::tpch::fromTableName(tableName.table);
-  const auto schema = tableName.schema.empty() ? kTiny : tableName.schema;
-  const auto scaleFactor = getScaleFactor(schema);
+  if (isValidTpchTableName(tableName.table)) {
+    velox::tpch::Table tpchTable = velox::tpch::fromTableName(tableName.table);
+    const auto schema = tableName.schema.empty() ? kTiny : tableName.schema;
+    const auto scaleFactor = getScaleFactor(schema);
 
-  const auto tableType = velox::tpch::getTableSchema(tpchTable);
-  const auto numRows = velox::tpch::getRowCount(tpchTable, scaleFactor);
+    const auto tableType = velox::tpch::getTableSchema(tpchTable);
+    const auto numRows = velox::tpch::getRowCount(tpchTable, scaleFactor);
 
-  auto table = std::make_shared<TpchTable>(
-      SchemaTableName{schema, tableName.table},
-      tableType,
-      tpchTable,
-      scaleFactor,
-      numRows);
+    auto table = std::make_shared<TpchTable>(
+        SchemaTableName{schema, tableName.table},
+        tableType,
+        tpchTable,
+        scaleFactor,
+        numRows);
 
-  table->makeDefaultLayout(*this);
+    table->makeDefaultLayout(*this);
 
-  return table;
+    return table;
+  }
+
+  // Check if this is a materialized view registered as a view.
+  auto view = findView(tableName);
+  if (view && view->viewType() == ViewType::kMaterializedView) {
+    auto table = std::make_shared<TpchTable>(
+        view->name(), view->type(), velox::tpch::Table::TBL_NATION, 0.01, 0);
+    table->makeDefaultLayout(*this);
+    return table;
+  }
+
+  return nullptr;
 }
 
 std::vector<std::string> TpchConnectorMetadata::listSchemaNames(
@@ -265,13 +278,15 @@ ViewPtr TpchConnectorMetadata::findView(const SchemaTableName& tableName) {
     return nullptr;
   }
 
-  return std::make_shared<View>(it->first, it->second.type, it->second.text);
+  return std::make_shared<View>(
+      it->first, it->second.type, it->second.text, it->second.viewType);
 }
 
 void TpchConnectorMetadata::createView(
     const SchemaTableName& viewName,
     velox::RowTypePtr type,
-    std::string_view text) {
+    std::string_view text,
+    ViewType viewType) {
   VELOX_USER_CHECK(!viewName.table.empty(), "View name cannot be empty");
   if (!viewName.schema.empty()) {
     VELOX_USER_CHECK(
@@ -282,7 +297,9 @@ void TpchConnectorMetadata::createView(
 
   auto ok =
       views_
-          .emplace(viewName, ViewDefinition{std::move(type), std::string(text)})
+          .emplace(
+              viewName,
+              ViewDefinition{std::move(type), std::string(text), viewType})
           .second;
   VELOX_CHECK(ok, "View already exists: {}", viewName.toString());
 }
