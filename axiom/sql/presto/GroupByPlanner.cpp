@@ -99,6 +99,8 @@ core::ExprPtr replaceInputs(
     const ExprMap<core::ExprPtr>& keyReplacements,
     const AggregateExprMap& aggregateReplacements,
     const AggregateOptionsMap& optionsMap,
+    const std::unordered_map<const core::IExpr*, lp::WindowSpec>*
+        windowOptions = nullptr,
     const std::function<void(const core::FieldAccessExpr&)>& onUnreplacedLeaf =
         nullptr) {
   // First try grouping keys.
@@ -107,11 +109,16 @@ core::ExprPtr replaceInputs(
     return keyIt->second;
   }
 
-  // Then try aggregates.
-  AggregateExprWithOptions key{expr, findOptions(expr, optionsMap)};
-  auto aggIt = aggregateReplacements.find(key);
-  if (aggIt != aggregateReplacements.end()) {
-    return aggIt->second;
+  // Skip window function expressions. They should not be replaced with
+  // aggregate column references even if structurally equal to a plain
+  // aggregate. Sub-expressions are still rewritten below.
+  if (windowOptions == nullptr || windowOptions->count(expr.get()) == 0) {
+    // Then try aggregates.
+    AggregateExprWithOptions key{expr, findOptions(expr, optionsMap)};
+    auto aggIt = aggregateReplacements.find(key);
+    if (aggIt != aggregateReplacements.end()) {
+      return aggIt->second;
+    }
   }
 
   std::vector<core::ExprPtr> newInputs;
@@ -122,6 +129,7 @@ core::ExprPtr replaceInputs(
         keyReplacements,
         aggregateReplacements,
         optionsMap,
+        windowOptions,
         onUnreplacedLeaf);
     if (newInput.get() != input.get()) {
       hasNewInput = true;
@@ -141,6 +149,49 @@ core::ExprPtr replaceInputs(
   return expr;
 }
 
+// Finds sub-expressions in an IExpr tree using pointer-identity matching.
+// Walks the expression tree and collects ExprPtrs whose raw pointers are
+// found in targets. Also appends matches to order in traversal order for
+// deterministic plan generation.
+void findExprPtrs(
+    const core::ExprPtr& expr,
+    const std::unordered_map<const core::IExpr*, lp::WindowSpec>& targets,
+    std::unordered_map<const core::IExpr*, core::ExprPtr>& found,
+    std::vector<const core::IExpr*>& order) {
+  if (targets.count(expr.get())) {
+    if (found.emplace(expr.get(), expr).second) {
+      order.push_back(expr.get());
+    }
+    return;
+  }
+  for (const auto& input : expr->inputs()) {
+    findExprPtrs(input, targets, found, order);
+  }
+}
+
+// Replaces sub-expressions by pointer identity. Used to swap window function
+// call nodes with column references after the window projection is added.
+core::ExprPtr replaceWindowInputs(
+    const core::ExprPtr& expr,
+    const std::unordered_map<const core::IExpr*, core::ExprPtr>& replacements) {
+  auto it = replacements.find(expr.get());
+  if (it != replacements.end()) {
+    return it->second;
+  }
+
+  std::vector<core::ExprPtr> newInputs;
+  bool changed = false;
+  for (const auto& input : expr->inputs()) {
+    auto newInput = replaceWindowInputs(input, replacements);
+    if (newInput.get() != input.get()) {
+      changed = true;
+    }
+    newInputs.push_back(std::move(newInput));
+  }
+
+  return changed ? expr->replaceInputs(std::move(newInputs)) : expr;
+}
+
 // Set of aggregation expression with options for deduplication.
 using AggregateExprSet = folly::F14FastSet<
     AggregateExprWithOptions,
@@ -149,9 +200,13 @@ using AggregateExprSet = folly::F14FastSet<
 
 // Walks the expression tree looking for aggregate function calls and appending
 // these calls to 'aggregates' after deduplication through 'aggregateSet'.
+// Skips expressions found in windowOptions. These are window functions that
+// share an aggregate function name (e.g. sum(...) OVER (...)) and should not be
+// collected as aggregates. Nested arguments are still searched.
 void findAggregates(
     const core::ExprPtr& expr,
     const AggregateOptionsMap& optionsMap,
+    const std::unordered_map<const core::IExpr*, lp::WindowSpec>* windowOptions,
     std::vector<AggregateWithOptions>& aggregates,
     AggregateExprSet& aggregateSet) {
   switch (expr->kind()) {
@@ -160,6 +215,15 @@ void findAggregates(
     case core::IExpr::Kind::kFieldAccess:
       return;
     case core::IExpr::Kind::kCall: {
+      // Skip window functions even if they share an aggregate function name.
+      // Recurse into their arguments to find nested aggregates.
+      if (windowOptions != nullptr && windowOptions->count(expr.get())) {
+        for (const auto& input : expr->inputs()) {
+          findAggregates(
+              input, optionsMap, windowOptions, aggregates, aggregateSet);
+        }
+        return;
+      }
       if (exec::getAggregateFunctionEntry(expr->as<core::CallExpr>()->name())) {
         auto* options = findOptions(expr, optionsMap);
         AggregateExprWithOptions key{expr, options};
@@ -168,7 +232,8 @@ void findAggregates(
         }
       } else {
         for (const auto& input : expr->inputs()) {
-          findAggregates(input, optionsMap, aggregates, aggregateSet);
+          findAggregates(
+              input, optionsMap, windowOptions, aggregates, aggregateSet);
         }
       }
       return;
@@ -177,6 +242,7 @@ void findAggregates(
       findAggregates(
           expr->as<core::CastExpr>()->input(),
           optionsMap,
+          windowOptions,
           aggregates,
           aggregateSet);
       return;
@@ -333,15 +399,22 @@ void GroupByPlanner::plan(
   // Mutates: filter_, projections_, sortingKeys_.
   rewritePostAggregateExprs();
 
+  // Apply HAVING filter before window projection.
+  if (filter_.has_value()) {
+    builder_->filter(filter_.value());
+  }
+
+  // Materialize window functions as a separate projection, then replace
+  // window sub-expressions in projections_ and sortingKeys_ with column
+  // references to the window output.
+  if (!windowOptions_.empty()) {
+    addWindowProjection();
+  }
+
   // Resolve sorting key ordinals before projecting: ORDER BY expressions
   // that are not in the SELECT list are appended to projections_ so they
   // are included in the project node. Must happen before builder_->project().
   auto sortingKeyOrdinals = resolveSortOrdinals(orderBy);
-
-  // Apply HAVING filter, then project.
-  if (filter_.has_value()) {
-    builder_->filter(filter_.value());
-  }
 
   if (!isIdentityProjection()) {
     builder_->project(projections_);
@@ -474,11 +547,15 @@ void GroupByPlanner::collectAggregates(
         return it->second;
       }
       return exprPlanner_.toExpr(
-          singleColumn->expression(), &aggregateOptionsMap_);
+          singleColumn->expression(), &aggregateOptionsMap_, &windowOptions_);
     }();
 
     findAggregates(
-        expr.expr(), aggregateOptionsMap_, aggregates_, aggregateSet);
+        expr.expr(),
+        aggregateOptionsMap_,
+        &windowOptions_,
+        aggregates_,
+        aggregateSet);
 
     if (!aggregates_.empty() &&
         aggregates_.back().expr.expr().get() == expr.expr().get()) {
@@ -497,18 +574,31 @@ void GroupByPlanner::collectAggregates(
   }
 
   if (having != nullptr) {
-    lp::ExprApi expr = exprPlanner_.toExpr(having, &aggregateOptionsMap_);
+    // Do not pass windowOptions_ for HAVING. Window functions in HAVING are
+    // invalid SQL, so passing nullptr lets them be rejected with the default
+    // "Window function cannot be an argument to a scalar function" error.
+    lp::ExprApi expr = exprPlanner_.toExpr(
+        having, &aggregateOptionsMap_, /*windowOptions=*/nullptr);
     findAggregates(
-        expr.expr(), aggregateOptionsMap_, aggregates_, aggregateSet);
+        expr.expr(),
+        aggregateOptionsMap_,
+        /*windowOptions=*/nullptr,
+        aggregates_,
+        aggregateSet);
     filter_ = expr;
   }
 
   if (orderBy != nullptr) {
     const auto& sortItems = orderBy->sortItems();
     for (const auto& item : sortItems) {
-      auto expr = exprPlanner_.toExpr(item->sortKey(), &aggregateOptionsMap_);
+      auto expr = exprPlanner_.toExpr(
+          item->sortKey(), &aggregateOptionsMap_, &windowOptions_);
       findAggregates(
-          expr.expr(), aggregateOptionsMap_, aggregates_, aggregateSet);
+          expr.expr(),
+          aggregateOptionsMap_,
+          &windowOptions_,
+          aggregates_,
+          aggregateSet);
       sortingKeys_.emplace_back(
           expr, item->isAscending(), item->isNullsFirst());
     }
@@ -568,6 +658,7 @@ void GroupByPlanner::rewritePostAggregateExprs() {
         keyInputs,
         aggregateInputs,
         aggregateOptionsMap_,
+        /*windowOptions=*/nullptr,
         [](const core::FieldAccessExpr& expr) {
           VELOX_USER_FAIL(
               "HAVING clause cannot reference column: {}", expr.name());
@@ -580,18 +671,116 @@ void GroupByPlanner::rewritePostAggregateExprs() {
   // TODO: Verify that SELECT expressions don't depend on anything other
   // than grouping keys and aggregates.
 
+  // Updates windowOptions_ when replaceInputs produces a new IExpr pointer
+  // for a window function (e.g., aggregate sub-expressions inside the window
+  // call were replaced with column references).
+  auto updateWindowKey =
+      [this](const core::IExpr* oldPtr, const core::IExpr* newPtr) {
+        if (oldPtr != newPtr) {
+          auto it = windowOptions_.find(oldPtr);
+          if (it != windowOptions_.end()) {
+            auto spec = std::move(it->second);
+            windowOptions_.erase(it);
+            windowOptions_.emplace(newPtr, std::move(spec));
+          }
+        }
+      };
+
   for (auto& item : projections_) {
+    auto* oldExprPtr = item.expr().get();
     auto newExpr = replaceInputs(
-        item.expr(), keyInputs, aggregateInputs, aggregateOptionsMap_);
-    item = lp::ExprApi(newExpr, item.name());
+        item.expr(),
+        keyInputs,
+        aggregateInputs,
+        aggregateOptionsMap_,
+        &windowOptions_);
+    auto windowSpec = item.windowSpec();
+    item = lp::ExprApi(std::move(newExpr), item.name());
+    if (windowSpec) {
+      item = item.over(*windowSpec);
+    }
+    updateWindowKey(oldExprPtr, item.expr().get());
   }
 
   // Replace sorting key expressions too.
   for (auto& key : sortingKeys_) {
+    auto* oldExprPtr = key.expr.expr().get();
     auto newExpr = replaceInputs(
-        key.expr.expr(), keyInputs, aggregateInputs, aggregateOptionsMap_);
-    key = lp::SortKey(
-        lp::ExprApi(newExpr, key.expr.name()), key.ascending, key.nullsFirst);
+        key.expr.expr(),
+        keyInputs,
+        aggregateInputs,
+        aggregateOptionsMap_,
+        &windowOptions_);
+    auto newKeyExpr = lp::ExprApi(std::move(newExpr), key.expr.name());
+    if (key.expr.windowSpec()) {
+      newKeyExpr = newKeyExpr.over(*key.expr.windowSpec());
+    }
+    key = lp::SortKey(newKeyExpr, key.ascending, key.nullsFirst);
+    updateWindowKey(oldExprPtr, key.expr.expr().get());
+  }
+}
+
+void GroupByPlanner::addWindowProjection() {
+  auto inputColumns =
+      builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
+
+  // Collect ExprPtrs for the window calls from the expression trees.
+  // windowOrder captures matches in left-to-right traversal order for
+  // deterministic plan generation.
+  std::unordered_map<const core::IExpr*, core::ExprPtr> windowExprPtrs;
+  std::vector<const core::IExpr*> windowOrder;
+  for (const auto& expr : projections_) {
+    findExprPtrs(expr.expr(), windowOptions_, windowExprPtrs, windowOrder);
+  }
+  for (const auto& key : sortingKeys_) {
+    findExprPtrs(key.expr.expr(), windowOptions_, windowExprPtrs, windowOrder);
+  }
+
+  // Build window projection: all input columns + window function expressions.
+  std::vector<lp::ExprApi> windowProjection;
+  windowProjection.reserve(inputColumns.size() + windowOrder.size());
+  for (const auto& name : inputColumns) {
+    windowProjection.push_back(lp::Col(name));
+  }
+  for (const auto* exprPtr : windowOrder) {
+    windowProjection.push_back(
+        lp::ExprApi(windowExprPtrs.at(exprPtr))
+            .over(windowOptions_.at(exprPtr)));
+  }
+
+  builder_->project(windowProjection);
+
+  // Build replacement map: window expr pointer to column reference.
+  auto outputNames =
+      builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
+
+  std::unordered_map<const core::IExpr*, core::ExprPtr> replacements;
+  for (size_t i = 0; i < windowOrder.size(); ++i) {
+    const auto& name = outputNames.at(inputColumns.size() + i);
+    replacements.emplace(windowOrder[i], lp::Col(name).expr());
+  }
+
+  // Replace window sub-expressions in projections with column references.
+  for (auto& item : projections_) {
+    item = lp::ExprApi(
+        replaceWindowInputs(item.expr(), replacements), item.name());
+  }
+
+  // Replace window sub-expressions in sorting keys with column references.
+  for (auto& key : sortingKeys_) {
+    auto newKeyExpr = lp::ExprApi(
+        replaceWindowInputs(key.expr.expr(), replacements), key.expr.name());
+    key = lp::SortKey(newKeyExpr, key.ascending, key.nullsFirst);
+  }
+
+  // Refresh flatInputs_ and outputNames_ to reflect the window projection
+  // output, so isIdentityProjection() can detect when the final projection is
+  // identity (e.g., for top-level window functions where no further computation
+  // is needed beyond the window project).
+  flatInputs_.clear();
+  outputNames_ = outputNames;
+  for (const auto& name : outputNames) {
+    flatInputs_.push_back(lp::Col(name));
   }
 }
 
@@ -632,8 +821,9 @@ bool GroupByPlanner::isIdentityProjection() const {
     return false;
   }
 
+  core::IExprEqual exprEqual;
   for (size_t i = 0; i < projections_.size(); ++i) {
-    if (projections_.at(i).expr() != flatInputs_.at(i).expr()) {
+    if (!exprEqual(projections_.at(i).expr(), flatInputs_.at(i).expr())) {
       return false;
     }
 

@@ -527,5 +527,85 @@ TEST_F(AggregationParserTest, aggregateDeduplication) {
           .output());
 }
 
+TEST_F(AggregationParserTest, groupByWithWindowFunction) {
+  connector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  // Window function in SELECT with GROUP BY.
+  testSelect(
+      "SELECT b, sum(a), row_number() OVER (ORDER BY b) FROM t GROUP BY b",
+      matchScan("t")
+          .aggregate({"b"}, {"sum(a)"})
+          .project({
+              "b",
+              "sum",
+              "row_number() OVER (ORDER BY b ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .output());
+
+  // Window function with PARTITION BY and GROUP BY.
+  testSelect(
+      "SELECT b, sum(a), row_number() OVER (PARTITION BY b ORDER BY b) FROM t GROUP BY b",
+      matchScan("t")
+          .aggregate({"b"}, {"sum(a)"})
+          .project({
+              "b",
+              "sum",
+              "row_number() OVER (PARTITION BY b ORDER BY b ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .output());
+
+  // Window function in ORDER BY with GROUP BY.
+  testSelect(
+      "SELECT a, sum(b) FROM t GROUP BY a ORDER BY row_number() OVER (ORDER BY a)",
+      matchScan("t")
+          .aggregate({"a"}, {"sum(b)"})
+          .project()
+          .sort()
+          .project()
+          .output());
+
+  // TODO: Aggregate references inside window specs are not yet rewritten to
+  // post-aggregate output names. This valid Presto SQL should work but doesn't.
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT b, sum(a), row_number() OVER (ORDER BY sum(a)) FROM t GROUP BY b"),
+      "Cannot resolve column: a");
+}
+
+TEST_F(AggregationParserTest, groupByWithNestedWindowFunction) {
+  connector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  // Window function nested inside an expression with GROUP BY.
+  testSelect(
+      "SELECT a, row_number() OVER (ORDER BY a) + sum(b) FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {"sum(b)"})
+          .project({
+              "a",
+              "sum",
+              "row_number() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .project({
+              "a",
+              "plus(expr, sum)",
+          })
+          .output());
+
+  // Deeply nested window function inside arithmetic.
+  testSelect(
+      "SELECT a, 1 + (2 * row_number() OVER (ORDER BY a)) FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {})
+          .project({
+              "a",
+              "row_number() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .project({
+              "a",
+              "plus(CAST(1 AS BIGINT), multiply(CAST(2 AS BIGINT), expr))",
+          })
+          .output());
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test

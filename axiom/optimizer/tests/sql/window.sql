@@ -55,8 +55,18 @@ SELECT a, b, sum(b) OVER (PARTITION BY a ORDER BY b) AS s, count(*) OVER (PARTIT
 -- Multiple window functions with different specifications.
 SELECT a, b, sum(b) OVER (PARTITION BY a) AS s, count(*) OVER () AS c FROM t
 ----
--- Window function with GROUP BY.
+-- Window function with GROUP BY (via subquery).
 SELECT a, sum_b, count(*) OVER () AS cnt FROM (SELECT a, sum(b) AS sum_b FROM t GROUP BY 1)
+----
+-- Window function with GROUP BY in same SELECT.
+SELECT a, sum(b), row_number() OVER (ORDER BY a) FROM t GROUP BY a
+----
+-- Window function with PARTITION BY and GROUP BY.
+SELECT b, sum(a), row_number() OVER (PARTITION BY b ORDER BY a) FROM t GROUP BY b, a
+----
+-- Window function in ORDER BY with GROUP BY.
+-- ordered
+SELECT a, sum(b) FROM t GROUP BY a ORDER BY row_number() OVER (ORDER BY a)
 ----
 -- Subquery with window function and outer filter.
 SELECT * FROM (SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) AS rn FROM t) WHERE rn = 1
@@ -90,3 +100,12 @@ SELECT a, b, sum(b) OVER (PARTITION BY a) * 2 AS doubled FROM t
 -- Window function mixed with *.
 -- columns
 SELECT *, sum(b) OVER (PARTITION BY a) AS total_b FROM t
+----
+-- Window function nested inside expression with GROUP BY.
+SELECT a, row_number() OVER (ORDER BY a) + sum(b) FROM t GROUP BY a
+----
+-- Deeply nested window function in arithmetic with GROUP BY.
+SELECT a, 1 + (2 * row_number() OVER (ORDER BY a)) FROM t GROUP BY a
+----
+-- Multiple distinct window functions in same GROUP BY query.
+SELECT a, row_number() OVER (ORDER BY a) + sum(b), rank() OVER (ORDER BY a) FROM t GROUP BY a
