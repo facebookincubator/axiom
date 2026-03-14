@@ -486,6 +486,20 @@ TEST_F(PrestoParserTest, orderBy) {
   }
 
   {
+    auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                       .values(ROW({"c0"}, INTEGER()))
+                       .project()
+                       .aggregate()
+                       .project()
+                       .sort({"b"})
+                       .output({"b"});
+
+    testSelect(
+        "SELECT a as b FROM (values (1)) AS t(a) GROUP BY 1 ORDER BY b",
+        matcher);
+  }
+
+  {
     auto matcher = matchScan()
                        .aggregate()
                        .project({"n_regionkey", "count * 2::bigint as x"})
@@ -1480,6 +1494,236 @@ TEST_F(PrestoParserTest, nestedWindowFunction) {
               "sum(a) OVER (PARTITION BY b) AS w",
           })
           .project({"b", "w * 2::bigint"})
+          .output());
+
+  // Two window functions combined in the same expression.
+  testSelect(
+      "SELECT sum(a) OVER (PARTITION BY b) + count(*) OVER () AS total FROM t",
+      matchScan("t")
+          .project({
+              "a",
+              "b",
+              "sum(a) OVER (PARTITION BY b) AS w",
+              "count() OVER () AS w_0",
+          })
+          .project({"w + w_0"})
+          .output({"total"}));
+
+  // Deeply nested: window inside CAST inside arithmetic.
+  testSelect(
+      "SELECT CAST(sum(a) OVER (PARTITION BY b) AS DOUBLE) / 100.0 AS pct "
+      "FROM t",
+      matchScan("t")
+          .project({
+              "a",
+              "b",
+              "sum(a) OVER (PARTITION BY b) AS expr",
+          })
+          .project({"cast(expr as DOUBLE) / 100.0"})
+          .output({"pct"}));
+}
+
+TEST_F(PrestoParserTest, orderByNonSelectedColumn) {
+  connector_->addTable("t", ROW({"a", "b", "c", "d", "e", "f"}, INTEGER()));
+
+  // Base SELECT query with a mix of features:
+  // - SELECT a as b: alias shadows original column name
+  // - SELECT b + 1 as a: expression with alias that shadows another column
+  // - SELECT c * d: expression without alias
+  // - SELECT c + e as x: expression with new alias
+  // The first PROJECT makes the SELECT list and the full schema visible so
+  // ORDER BY can reference columns outside the SELECT list. The second PROJECT
+  // trims back to just the SELECT list.
+  const std::string baseSelect =
+      "SELECT a as b, b + 1 as a, c * d, c + e as x FROM t";
+
+  auto testOrderBy = [&](const std::string& orderByClause,
+                         const std::vector<std::string>& ordering,
+                         bool expectTrim) {
+    auto builder =
+        lp::test::LogicalPlanMatcherBuilder().tableScan().project().sort(
+            ordering);
+    if (expectTrim) {
+      builder.project();
+    }
+    testSelect(baseSelect + " ORDER BY " + orderByClause, builder.output());
+  };
+
+  // Column not in SELECT list - requires widening, so trim is needed.
+  testOrderBy("e", {"e"}, true);
+  testOrderBy("f", {"f"}, true);
+
+  // Name and alias conflict. Resolves to alias - no widening needed.
+  testOrderBy("b", {"b_0"}, false);
+
+  // Alias resolves directly - no widening needed.
+  testOrderBy("x", {"x"}, false);
+
+  // Ordinal refers to element in the SELECT list - no widening needed.
+  testOrderBy("1", {"b_0"}, false);
+  testOrderBy("3", {"expr"}, false);
+  VELOX_ASSERT_THROW(
+      parseSql(baseSelect + " ORDER BY 5"), "is not in the select list");
+
+  // Multiple columns mixing selected and non-selected - requires widening for
+  // 'e'.
+  testOrderBy("e, x, 1", {"e", "x", "b_0"}, true);
+}
+
+TEST_F(PrestoParserTest, orderByAmbiguousAlias) {
+  connector_->addTable("t", ROW({"a", "b", "c"}, INTEGER()));
+
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT a as b, b FROM t ORDER BY b"), "ambiguous");
+
+  testSelect(
+      "SELECT a as b, b FROM t ORDER BY c",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project()
+          .sort({"c"})
+          .project()
+          .output());
+
+  testSelect(
+      "SELECT a as b, b FROM t ORDER BY 1",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project()
+          .sort({"b_0"})
+          .output());
+
+  testSelect(
+      "SELECT a as b, b FROM t ORDER BY 2",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project()
+          .sort({"b"})
+          .output());
+
+  testSelect(
+      "SELECT a as b FROM t ORDER BY b",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project()
+          .sort({"b_0"})
+          .output());
+}
+
+TEST_F(PrestoParserTest, orderByStar) {
+  connector_->addTable("t", ROW({"a", "b", "c", "d", "e", "f"}, INTEGER()));
+
+  testSelect(
+      "SELECT * FROM t ORDER BY 1, 3, e, f",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .sort({"a", "c", "e", "f"})
+          .output());
+}
+
+TEST_F(PrestoParserTest, orderByStarWithHiddenColumn) {
+  connector_->addTable(
+      "t", ROW({"a", "b"}, INTEGER()), ROW({"$path"}, VARCHAR()));
+
+  lp::LogicalPlanNodePtr outputNode;
+  testSelect(
+      "SELECT * FROM t ORDER BY \"$path\"",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .sort({"\"$path\""})
+          .project([&](const auto& node) { outputNode = node; })
+          .output());
+  ASSERT_THAT(
+      outputNode->outputType()->names(),
+      ::testing::Pointwise(::testing::Eq(), {"a", "b"}));
+}
+
+TEST_F(PrestoParserTest, orderByJoinedTable) {
+  testSelect(
+      "SELECT n_name "
+      "FROM nation, region "
+      "WHERE n_regionkey = r_regionkey "
+      "ORDER BY r_name",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .join(lp::test::LogicalPlanMatcherBuilder().tableScan().build())
+          .filter()
+          .project()
+          .sort()
+          .project()
+          .output());
+}
+
+TEST_F(PrestoParserTest, orderByDistinct) {
+  connector_->addTable("t", ROW({"a", "b"}, INTEGER()));
+  auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                     .tableScan()
+                     .project()
+                     .aggregate()
+                     .sort()
+                     .output();
+
+  testSelect(
+      "SELECT DISTINCT a "
+      "FROM t "
+      "ORDER BY a",
+      matcher);
+  testSelect(
+      "SELECT DISTINCT a "
+      "FROM t "
+      "ORDER BY 1",
+      matcher);
+
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT DISTINCT a FROM (VALUES (1, 2), (3, 4)) AS t(a, b) ORDER BY b DESC"),
+      "Cannot resolve column: b not in");
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT DISTINCT a + b FROM (VALUES (1, 2), (3, 4)) AS t(a, b) ORDER BY a DESC"),
+      "Cannot resolve column: a not in");
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT DISTINCT a FROM (VALUES (1, 2), (3, 4)) AS t(a, b) ORDER BY 2 DESC"),
+      "ORDER BY position 2 is not in select list");
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT a + b FROM (VALUES (1, 2), (3, 4)) AS t(a, b) GROUP BY 1 ORDER BY a DESC"),
+      "Cannot resolve column: a not in [expr -> expr]");
+}
+
+TEST_F(PrestoParserTest, orderByComplexExpressionIdentity) {
+  connector_->addTable("t", ROW({"a", "b", "c"}, INTEGER()));
+
+  testSelect(
+      "SELECT CASE WHEN a > 0 THEN b ELSE c END "
+      "FROM t "
+      "ORDER BY CASE WHEN a > 0 THEN b ELSE c END",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project()
+          .sort({"expr"})
+          .output());
+
+  testSelect(
+      "SELECT COALESCE(a, b) FROM t ORDER BY COALESCE(a, b)",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project()
+          .sort({"expr"})
+          .output());
+}
+
+TEST_F(PrestoParserTest, orderByDifferentExpressions) {
+  connector_->addTable("t", ROW({"a", "b", "c"}, INTEGER()));
+
+  testSelect(
+      "SELECT a + b FROM t ORDER BY a + c",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project()
+          .sort()
+          .project()
           .output());
 }
 
