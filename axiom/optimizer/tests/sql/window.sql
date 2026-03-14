@@ -64,6 +64,9 @@ SELECT * FROM (SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) AS rn 
 -- Filter on ranking function output (rn <= N).
 SELECT * FROM (SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) AS rn FROM t) WHERE rn <= 1
 ----
+-- Filter on ranking function output (rn > N).
+SELECT a, b FROM (SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) AS rn FROM t) WHERE rn > 1
+----
 -- Window function combined with ORDER BY and LIMIT.
 -- ordered
 SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) AS rn FROM t ORDER BY a, b LIMIT 3
