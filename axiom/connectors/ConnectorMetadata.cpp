@@ -29,9 +29,18 @@ const auto& writeKindNames() {
   return kNames;
 }
 
+const auto& viewTypeNames() {
+  static const folly::F14FastMap<ViewType, std::string_view> kNames = {
+      {ViewType::kLogicalView, "LOGICAL_VIEW"},
+      {ViewType::kMaterializedView, "MATERIALIZED_VIEW"},
+  };
+  return kNames;
+}
+
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(WriteKind, writeKindNames);
+AXIOM_DEFINE_ENUM_NAME(ViewType, viewTypeNames);
 
 namespace {
 

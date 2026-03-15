@@ -19,6 +19,7 @@
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorSession.h"
 #include "axiom/connectors/ConnectorSplitManager.h"
+#include "axiom/connectors/MaterializedViewDefinition.h"
 #include "folly/CppAttributes.h"
 #include "folly/coro/Task.h"
 #include "velox/common/memory/HashStringAllocator.h"
@@ -662,6 +663,22 @@ class Table : public std::enable_shared_from_this<Table> {
     VELOX_UNSUPPORTED();
   }
 
+  /// Returns the MaterializedViewDefinition if this table represents a
+  /// materialized view, or nullptr for regular tables.
+  const std::shared_ptr<const MaterializedViewDefinition>&
+  materializedViewDefinition() const {
+    return materializedViewDefinition_;
+  }
+
+  void setMaterializedViewDefinition(
+      std::shared_ptr<const MaterializedViewDefinition> mvDef) {
+    materializedViewDefinition_ = std::move(mvDef);
+  }
+
+  bool isMaterializedView() const {
+    return materializedViewDefinition_ != nullptr;
+  }
+
   template <typename T>
   const T* as() const {
     return dynamic_cast<const T*>(this);
@@ -674,14 +691,35 @@ class Table : public std::enable_shared_from_this<Table> {
   const std::vector<const Column*> columnPtrs_;
   const folly::F14FastMap<std::string, const Column*> columnMap_;
   const folly::F14FastMap<std::string, velox::Variant> options_;
+  std::shared_ptr<const MaterializedViewDefinition> materializedViewDefinition_;
 };
 
 using TablePtr = std::shared_ptr<const Table>;
+using MaterializedViewDefinitionPtr =
+    std::shared_ptr<const MaterializedViewDefinition>;
+
+/// Specifies the type of view.
+enum class ViewType {
+  /// A logical view that is expanded at query time.
+  kLogicalView,
+
+  /// A materialized view that stores precomputed results.
+  kMaterializedView,
+};
+
+AXIOM_DECLARE_ENUM_NAME(ViewType);
 
 class View {
  public:
-  View(SchemaTableName name, velox::RowTypePtr type, std::string text)
-      : name_(std::move(name)), type_(std::move(type)), text_(std::move(text)) {
+  View(
+      SchemaTableName name,
+      velox::RowTypePtr type,
+      std::string text,
+      ViewType viewType = ViewType::kLogicalView)
+      : name_(std::move(name)),
+        type_(std::move(type)),
+        text_(std::move(text)),
+        viewType_(viewType) {
     VELOX_CHECK(!name_.schema.empty());
     VELOX_CHECK(!name_.table.empty());
 
@@ -704,23 +742,29 @@ class View {
     return text_;
   }
 
+  /// Returns the type of the view.
+  ViewType viewType() const {
+    return viewType_;
+  }
+
   virtual ~View() = default;
 
  private:
   const SchemaTableName name_;
   const velox::RowTypePtr type_;
   const std::string text_;
+  const ViewType viewType_;
 };
 
 using ViewPtr = std::shared_ptr<const View>;
 
 /// Contains the information for an in-progress write operation. This may
-/// include insert, update, or delete of an existing table, or insertion into a
-/// new table. The ConnectorWriteHandle is generated when a table write
+/// include insert, update, or delete of an existing table, or insertion into
+/// a new table. The ConnectorWriteHandle is generated when a table write
 /// operation is initiated in beginWrite and used to commit or abort any
-/// completed write operations in finishWrite or abortWrite. Derived classes of
-/// the write handle must contain all the information required by the connector
-/// to finish or abort a write operation.
+/// completed write operations in finishWrite or abortWrite. Derived classes
+/// of the write handle must contain all the information required by the
+/// connector to finish or abort a write operation.
 class ConnectorWriteHandle {
  public:
   explicit ConnectorWriteHandle(
@@ -765,8 +809,8 @@ using ConnectorWriteHandlePtr = std::shared_ptr<ConnectorWriteHandle>;
 
 class ConnectorMetadata {
  public:
-  /// Temporary APIs to assist in removing dependency on ConnectorMetadata from
-  /// Velox.
+  /// Temporary APIs to assist in removing dependency on ConnectorMetadata
+  /// from Velox.
   static ConnectorMetadata* metadata(std::string_view connectorId);
   static ConnectorMetadata* FOLLY_NULLABLE
   tryMetadata(std::string_view connectorId);
@@ -780,12 +824,12 @@ class ConnectorMetadata {
 
   /// Return a TablePtr given the table name. The returned Table object is
   /// immutable. If updates to the Table object are required, the
-  /// ConnectorMetadata is required to drop its reference to the existing Table
-  /// and return a reference to a newly created Table object for subsequent
-  /// calls to findTable. The ConnectorMetadata may drop its reference to the
-  /// Table object at any time, and callers are required to retain a reference
-  /// to the Table to prevent it from being reclaimed in the case of Table
-  /// removal by the ConnectorMetadata.
+  /// ConnectorMetadata is required to drop its reference to the existing
+  /// Table and return a reference to a newly created Table object for
+  /// subsequent calls to findTable. The ConnectorMetadata may drop its
+  /// reference to the Table object at any time, and callers are required to
+  /// retain a reference to the Table to prevent it from being reclaimed in
+  /// the case of Table removal by the ConnectorMetadata.
   ///
   /// @return nullptr if table doesn't exist.
   virtual TablePtr findTable(const SchemaTableName& tableName) = 0;
@@ -794,6 +838,15 @@ class ConnectorMetadata {
   ///
   /// @return nullptr if view doesn't exist.
   virtual ViewPtr findView(const SchemaTableName& /*tableName*/) {
+    return nullptr;
+  }
+
+  /// Return a MaterializedViewDefinitionPtr given the MV name. MV name is
+  /// provided without the connector ID / catalog prefix, but may include the
+  /// schema.
+  /// @return nullptr if MV doesn't exist.
+  virtual MaterializedViewDefinitionPtr getMaterializedViewDefinition(
+      std::string_view /*name*/) const {
     return nullptr;
   }
 
@@ -806,15 +859,15 @@ class ConnectorMetadata {
   /// ConnectorSession in a connector dependent manner, then call createTable
   /// to retrieve a Table object. Any transaction semantics are
   /// connector-dependent, and the ConnectorSession may be null for connectors
-  /// which do not require it. Throws an error if the table exists. finishWrite
-  /// should be called to commit the new table and any writes even if no data
-  /// is added. To create an empty table, call createTable, then
+  /// which do not require it. Throws an error if the table exists.
+  /// finishWrite should be called to commit the new table and any writes even
+  /// if no data is added. To create an empty table, call createTable, then
   /// beginWrite/finishWrite with the generated table object. To create the
   /// table with data, call createTable to generate a Table, call beginWrite
   /// with the Table object, perform writes against the table using the
-  /// returned insert handle, then finishWrite to commit the changes. The table
-  /// is not available via the findTable interface until after finishWrite
-  /// completes.
+  /// returned insert handle, then finishWrite to commit the changes. The
+  /// table is not available via the findTable interface until after
+  /// finishWrite completes.
   ///
   /// When 'explain' is true, the connector must interpret properties and
   /// return a valid Table with correct layout metadata, but must not create
@@ -832,11 +885,11 @@ class ConnectorMetadata {
   /// Begins the process of a write operation by creating an associated write
   /// handle. This handle must contain a valid physical insert handle for use
   /// with Velox TableWriter. To perform a write operation, first make a
-  /// ConnectorSession in a connector dependent manner, then call beginWrite to
-  /// generate the write handle. Insert data using the insert handle provided by
-  /// the write handle and call finishWrite. Transaction semantics are
-  /// connector-dependent, and ConnectorSession may be null for connectors which
-  /// do not require it.
+  /// ConnectorSession in a connector dependent manner, then call beginWrite
+  /// to generate the write handle. Insert data using the insert handle
+  /// provided by the write handle and call finishWrite. Transaction semantics
+  /// are connector-dependent, and ConnectorSession may be null for connectors
+  /// which do not require it.
   ///
   /// When 'explain' is true, the connector must build and return a valid
   /// ConnectorWriteHandle for plan display, but must not allocate staging
@@ -851,6 +904,15 @@ class ConnectorMetadata {
 
   /// Finalizes the table write operation represented by the provided handle.
   /// Returns a future containing the number of rows written.
+  /// This runs once after all the table writers have finished. The result
+  /// sets from the table writer fragments are passed as 'writeResults'. Their
+  /// format and meaning is connector-specific. The type of 'writeResults'
+  /// must match ConnectorWriteHandle::resultType returned from beginWrite.
+  /// finishWrite returns a ContinueFuture which must be waited for to
+  /// finalize the commit. If the implementation is synchronous, finishWrite
+  /// should return an already-fulfilled future to the caller.
+  /// ConnectorSession may be null for connectors which do not require it. The
+  /// returned future contains the number of rows "written".
   ///
   /// @param session Connector session.
   /// @param handle Write handle returned by beginWrite.
@@ -875,13 +937,13 @@ class ConnectorMetadata {
     VELOX_UNSUPPORTED();
   }
 
-  /// Aborts an abandoned or failed write operation. Abort is not guaranteed to
-  /// run in all failure cases. After abort is triggered for the write operation
-  /// represented by ConnectorWriteHandle, this handle can no longer be used to
-  /// commit a write operation with finishWrite. If this function is not
-  /// implemented by a connector, abort will be a no-op. If the abort is a
-  /// synchronous operation, the connector should perform the abort and return
-  /// an already-fulfilled future.
+  /// Aborts an abandoned or failed write operation. Abort is not guaranteed
+  /// to run in all failure cases. After abort is triggered for the write
+  /// operation represented by ConnectorWriteHandle, this handle can no longer
+  /// be used to commit a write operation with finishWrite. If this function
+  /// is not implemented by a connector, abort will be a no-op. If the abort
+  /// is a synchronous operation, the connector should perform the abort and
+  /// return an already-fulfilled future.
   virtual velox::ContinueFuture abortWrite(
       const ConnectorSessionPtr& /*session*/,
       const ConnectorWriteHandlePtr& /*handle*/) noexcept {
@@ -943,3 +1005,4 @@ class ConnectorMetadata {
 } // namespace facebook::axiom::connector
 
 AXIOM_ENUM_FORMATTER(facebook::axiom::connector::WriteKind);
+AXIOM_ENUM_FORMATTER(facebook::axiom::connector::ViewType);
