@@ -241,16 +241,23 @@ ViewPtr TestConnectorMetadata::findView(const SchemaTableName& tableName) {
   if (it == views_.end()) {
     return nullptr;
   }
-  return std::make_shared<View>(it->first, it->second.type, it->second.text);
+  return std::make_shared<View>(
+      it->first, it->second.type, it->second.text, it->second.viewType);
 }
 
 void TestConnectorMetadata::createView(
     const SchemaTableName& viewName,
     velox::RowTypePtr type,
-    std::string_view text) {
+    std::string_view text,
+    ViewType viewType) {
   auto [_, inserted] = views_.emplace(
-      viewName, ViewDefinition{std::move(type), std::string(text)});
+      viewName, ViewDefinition{type, std::string(text), viewType});
   VELOX_CHECK(inserted, "View already exists: {}", viewName.toString());
+
+  // Materialized views should also be accessible via findTable().
+  if (viewType == ViewType::kMaterializedView) {
+    connector_->addTable(viewName, std::move(type));
+  }
 }
 
 bool TestConnectorMetadata::dropView(const SchemaTableName& viewName) {
@@ -609,8 +616,9 @@ void TestConnector::addTpchTables() {
 void TestConnector::createView(
     const SchemaTableName& viewName,
     velox::RowTypePtr type,
-    std::string_view text) {
-  metadata_->createView(viewName, std::move(type), text);
+    std::string_view text,
+    ViewType viewType) {
+  metadata_->createView(viewName, std::move(type), text, viewType);
 }
 
 bool TestConnector::dropView(const SchemaTableName& viewName) {
