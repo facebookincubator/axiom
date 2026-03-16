@@ -167,10 +167,7 @@ class VeloxRunner : public velox::QueryBenchmarkBase {
     exec::ExchangeSource::registerFactory(
         exec::test::createLocalExchangeSource);
     serializer::presto::PrestoVectorSerde::registerVectorSerde();
-    if (!velox::isRegisteredNamedVectorSerde(
-            velox::VectorSerde::kindName(velox::VectorSerde::Kind::kPresto))) {
-      serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
-    }
+    serializer::presto::PrestoVectorSerde::tryRegisterNamedVectorSerde();
 
     if (!FLAGS_data_path.empty()) {
       connector_ = registerHiveConnector(FLAGS_data_path);
