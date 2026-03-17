@@ -441,7 +441,7 @@ bool ToGraph::isSubfield(
             step.id = integerValue(&literal);
             break;
           default:
-            VELOX_UNREACHABLE();
+            return false;
         }
         input = expr->inputAt(0);
         return true;

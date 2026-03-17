@@ -46,3 +46,7 @@ SELECT a FROM t UNION ALL SELECT b FROM t
 ----
 -- CAST to different types on the same column must not be deduplicated.
 SELECT ROW(CAST(a AS varchar), CAST(a AS double)) FROM t
+----
+-- Subscript on MAP with DOUBLE key.
+-- count 1
+SELECT m[1.0] FROM (VALUES (MAP(ARRAY[CAST(1.0 AS DOUBLE)], ARRAY['hello']))) AS t(m)
