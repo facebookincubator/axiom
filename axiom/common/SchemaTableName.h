@@ -36,16 +36,16 @@ struct SchemaTableName {
   bool operator==(const SchemaTableName&) const = default;
 };
 
-/// Hash function for using SchemaTableName as a map key.
-struct SchemaTableNameHash {
-  size_t operator()(const SchemaTableName& name) const;
-};
-
 inline std::ostream& operator<<(std::ostream& os, const SchemaTableName& name) {
   return os << name.toString();
 }
 
 } // namespace facebook::axiom
+
+template <>
+struct std::hash<facebook::axiom::SchemaTableName> {
+  size_t operator()(const facebook::axiom::SchemaTableName& name) const;
+};
 
 template <>
 struct fmt::formatter<facebook::axiom::SchemaTableName>

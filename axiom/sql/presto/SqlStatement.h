@@ -31,8 +31,8 @@ using ViewKey = std::pair<std::string, facebook::axiom::SchemaTableName>;
 struct ViewKeyHash {
   size_t operator()(const ViewKey& key) const {
     auto hash = std::hash<std::string>{}(key.first);
-    hash ^= facebook::axiom::SchemaTableNameHash{}(key.second) + 0x9e3779b9 +
-        (hash << 6) + (hash >> 2);
+    hash ^= std::hash<facebook::axiom::SchemaTableName>{}(key.second) +
+        0x9e3779b9 + (hash << 6) + (hash >> 2);
     return hash;
   }
 };

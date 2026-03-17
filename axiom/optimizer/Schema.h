@@ -406,8 +406,7 @@ class Schema {
   // This map from connector ID to map of tables in that connector.
   // In the tables map, the key is the SchemaTableName and the value is
   // schema table (optimizer object) and connector table (connector object).
-  using TableMap =
-      folly::F14FastMap<SchemaTableName, Table, SchemaTableNameHash>;
+  using TableMap = folly::F14FastMap<SchemaTableName, Table>;
   using ConnectorMap = folly::F14FastMap<std::string_view, TableMap>;
 
   const connector::SchemaResolver* source_;

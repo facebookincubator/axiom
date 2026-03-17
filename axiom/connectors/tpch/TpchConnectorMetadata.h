@@ -212,8 +212,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   std::shared_ptr<velox::memory::MemoryPool> rootPool_{
       velox::memory::memoryManager()->addRootPool()};
   TpchSplitManager splitManager_;
-  folly::F14FastMap<SchemaTableName, ViewDefinition, SchemaTableNameHash>
-      views_;
+  folly::F14FastMap<SchemaTableName, ViewDefinition> views_;
 };
 
 } // namespace facebook::axiom::connector::tpch

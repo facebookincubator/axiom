@@ -389,19 +389,14 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
  private:
   TestConnector* connector_;
-  folly::F14FastMap<
-      SchemaTableName,
-      std::shared_ptr<TestTable>,
-      SchemaTableNameHash>
-      tables_;
+  folly::F14FastMap<SchemaTableName, std::shared_ptr<TestTable>> tables_;
   std::unique_ptr<TestSplitManager> splitManager_;
 
   struct ViewDefinition {
     velox::RowTypePtr type;
     std::string text;
   };
-  folly::F14FastMap<SchemaTableName, ViewDefinition, SchemaTableNameHash>
-      views_;
+  folly::F14FastMap<SchemaTableName, ViewDefinition> views_;
 
   folly::F14FastSet<std::string> schemas_{"default"};
 };

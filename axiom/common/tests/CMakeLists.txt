@@ -12,10 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if(AXIOM_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
+add_executable(axiom_common_tests SchemaTableNameTest.cpp)
 
-add_library(axiom_common SchemaTableName.cpp Session.cpp)
+add_test(axiom_common_tests axiom_common_tests)
 
-target_link_libraries(axiom_common velox_common_base Folly::folly fmt::fmt)
+target_link_libraries(axiom_common_tests axiom_common GTest::gtest GTest::gtest_main)

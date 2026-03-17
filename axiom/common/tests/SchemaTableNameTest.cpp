@@ -16,21 +16,33 @@
 
 #include "axiom/common/SchemaTableName.h"
 
-#include <fmt/core.h>
-#include "velox/common/base/BitUtil.h"
+#include <unordered_map>
+
+#include <gtest/gtest.h>
 
 namespace facebook::axiom {
+namespace {
 
-std::string SchemaTableName::toString() const {
-  return fmt::format("{}", *this);
+TEST(SchemaTableNameTest, equality) {
+  SchemaTableName a{"schema1", "table1"};
+  SchemaTableName b{"schema1", "table1"};
+  SchemaTableName c{"schema2", "table1"};
+  SchemaTableName d{"schema1", "table2"};
+
+  EXPECT_EQ(a, b);
+  EXPECT_NE(a, c);
+  EXPECT_NE(a, d);
 }
 
+TEST(SchemaTableNameTest, hashMapKey) {
+  std::unordered_map<SchemaTableName, int> map;
+  map[{"schema1", "table1"}] = 1;
+  map[{"schema2", "table2"}] = 2;
+
+  EXPECT_EQ(map.size(), 2);
+  EXPECT_EQ(map.at({"schema1", "table1"}), 1);
+  EXPECT_EQ(map.at({"schema2", "table2"}), 2);
+}
+
+} // namespace
 } // namespace facebook::axiom
-
-size_t std::hash<facebook::axiom::SchemaTableName>::operator()(
-    const facebook::axiom::SchemaTableName& name) const {
-  auto hash = folly::hasher<std::string>{}(name.table);
-  hash = facebook::velox::bits::hashMix(
-      hash, folly::hasher<std::string>{}(name.schema));
-  return hash;
-}
