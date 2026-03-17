@@ -1596,5 +1596,28 @@ TEST_F(SubqueryTest, unsupportedSubqueryInJoin) {
       "Unexpected expression: Subquery");
 }
 
+TEST_F(SubqueryTest, nestedAggregationFieldResolution) {
+  auto query =
+      "WITH t AS ("
+      "  SELECT reduce(array_agg(ARRAY[v]), null, (s,x)->x, s->s) AS a "
+      "  FROM (VALUES (1)) t(v)"
+      ") "
+      "SELECT sum(cardinality(a)) FROM t";
+
+  SCOPED_TRACE(query);
+
+  auto matcher = core::PlanMatcherBuilder()
+                     .values()
+                     .project()
+                     .aggregation()
+                     .project()
+                     .project()
+                     .aggregation()
+                     .build();
+
+  auto plan = toSingleNodePlan(query);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

@@ -589,20 +589,29 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
           column = it->second;
           expr = nullptr;
         } else {
-          if (source == nullptr) {
-            const auto& name = field->name();
-
-            for (const auto* exprSource : exprSources_) {
-              if (exprSource->outputType()->getChildIdxIfExists(name)) {
-                source = exprSource;
-                break;
-              }
+          if (auto it = renames_.find(field->name()); it != renames_.end()) {
+            if (it->second && it->second->is(PlanType::kColumnExpr)) {
+              column = it->second->as<Column>();
+              expr = nullptr;
             }
           }
-          VELOX_CHECK_NOT_NULL(source);
-          getExprForField(field, expr, column, source);
-          if (expr) {
-            continue;
+
+          if (column == nullptr) {
+            if (source == nullptr) {
+              const auto& name = field->name();
+
+              for (const auto* exprSource : exprSources_) {
+                if (exprSource->outputType()->getChildIdxIfExists(name)) {
+                  source = exprSource;
+                  break;
+                }
+              }
+            }
+            VELOX_CHECK_NOT_NULL(source);
+            getExprForField(field, expr, column, source);
+            if (expr) {
+              continue;
+            }
           }
         }
       }
