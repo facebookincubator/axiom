@@ -2249,9 +2249,7 @@ void ToGraph::addProjection(const lp::ProjectNode& project) {
     }
   });
 
-  for (auto i : channels) {
-    processSubqueries(input, exprs[i], /*filter=*/false);
-  }
+  processProjectionSubqueries(input, exprs, channels);
 
   QGVector<WindowFunctionCP> windowFunctions;
   ColumnVector windowColumns;
@@ -2331,6 +2329,28 @@ void extractSubqueries(const lp::ExprPtr& expr, Subqueries& subqueries) {
 }
 } // namespace
 
+void ToGraph::processProjectionSubqueries(
+    const lp::LogicalPlanNode& input,
+    const std::vector<lp::ExprPtr>& exprs,
+    const std::vector<int32_t>& channels) {
+  Subqueries allSubqueries;
+  for (auto i : channels) {
+    extractSubqueries(exprs[i], allSubqueries);
+  }
+
+  if (allSubqueries.empty()) {
+    return;
+  }
+
+  if (currentDt_->hasAggregation() || currentDt_->hasUnnestTable()) {
+    finalizeDt(input);
+  }
+
+  processScalarSubqueries(input, allSubqueries.scalars);
+  processInPredicates(allSubqueries.inPredicates);
+  processExistsSubqueries(allSubqueries.exists);
+}
+
 DerivedTableP ToGraph::translateSubquery(
     const logical_plan::LogicalPlanNode& node,
     bool finalize) {
@@ -2369,7 +2389,98 @@ ColumnCP ToGraph::addMarkColumn() {
   return markColumn;
 }
 
+// Holds a translated scalar subquery along with its correlation state.
+// Used by processScalarSubqueries() to group mergeable subqueries.
+struct TranslatedSubquery {
+  lp::SubqueryExprPtr subqueryExpr;
+  DerivedTableP subqueryDt;
+  ExprVector correlatedConjuncts;
+};
+
 namespace {
+// Replaces column references in 'expr'. For each column in 'from',
+// replaces it with the corresponding entry in 'to'. Used to remap aggregate
+// expressions from one BaseTable's columns to another's.
+ExprCP
+remapColumns(ExprCP expr, const ColumnVector& from, const ColumnVector& to) {
+  if (!expr) {
+    return nullptr;
+  }
+
+  switch (expr->type()) {
+    case PlanType::kColumnExpr: {
+      for (size_t i = 0; i < from.size(); ++i) {
+        if (from[i] == expr) {
+          return to[i];
+        }
+      }
+      return expr;
+    }
+    case PlanType::kLiteralExpr:
+      return expr;
+    case PlanType::kCallExpr:
+    case PlanType::kAggregateExpr: {
+      auto children = expr->children();
+      ExprVector newChildren(children.size());
+      FunctionSet functions;
+      bool anyChange = false;
+      for (size_t i = 0; i < children.size(); ++i) {
+        newChildren[i] = remapColumns(children[i]->as<Expr>(), from, to);
+        anyChange |= newChildren[i] != children[i];
+        if (newChildren[i]->isFunction()) {
+          functions = functions | newChildren[i]->as<Call>()->functions();
+        }
+      }
+
+      if (expr->type() == PlanType::kAggregateExpr) {
+        const auto* aggregate = expr->as<Aggregate>();
+        auto* newCondition = remapColumns(aggregate->condition(), from, to);
+
+        ExprVector newOrderKeys;
+        newOrderKeys.reserve(aggregate->orderKeys().size());
+        for (const auto* orderKey : aggregate->orderKeys()) {
+          newOrderKeys.push_back(remapColumns(orderKey, from, to));
+        }
+
+        anyChange |= newCondition != aggregate->condition();
+        anyChange |= newOrderKeys != aggregate->orderKeys();
+
+        if (!anyChange) {
+          return expr;
+        }
+
+        return make<Aggregate>(
+            aggregate->name(),
+            aggregate->value(),
+            std::move(newChildren),
+            functions,
+            aggregate->isDistinct(),
+            newCondition,
+            aggregate->intermediateType(),
+            std::move(newOrderKeys),
+            aggregate->orderTypes());
+      }
+
+      if (!anyChange) {
+        return expr;
+      }
+
+      const auto* call = expr->as<Call>();
+      return make<Call>(
+          call->name(), call->value(), std::move(newChildren), functions);
+    }
+    case PlanType::kFieldExpr: {
+      auto* field = expr->as<Field>();
+      auto* newBase = remapColumns(field->base(), from, to);
+      if (newBase == field->base()) {
+        return expr;
+      }
+      return make<Field>(field->value().type, newBase, field->field());
+    }
+    default:
+      return expr;
+  }
+}
 
 // Holds the extracted join keys and filters from correlated conjuncts.
 // Used when decorrelating subqueries.
@@ -2458,7 +2569,167 @@ CorrelationKeys extractCorrelationKeys(
   return result;
 }
 
+// Extracts correlation keys if the subquery is eligible for merging, or
+// returns std::nullopt otherwise. A merge candidate must be: correlated with
+// equi-only correlation, have exactly one aggregate function, and scan a
+// single base table with no extra filters.
+std::optional<CorrelationKeys> tryExtractMergeKeys(
+    const FunctionNames& funcs,
+    const TranslatedSubquery& subquery) {
+  // Uncorrelated subqueries cannot be merged via the correlation-based path.
+  if (subquery.correlatedConjuncts.empty()) {
+    return std::nullopt;
+  }
+
+  auto* subqueryDt = subquery.subqueryDt;
+  // Reject subqueries that are too complex to merge: no aggregation, multiple
+  // tables, non-base-table scans, WHERE filters, HAVING clauses, or multiple
+  // aggregates (multi-aggregate merging would require N:N column mapping).
+  if (!subqueryDt->hasAggregation() || subqueryDt->tables.size() != 1 ||
+      !subqueryDt->tables[0]->is(PlanType::kTableNode) ||
+      !subqueryDt->conjuncts.empty() || !subqueryDt->having.empty() ||
+      subqueryDt->aggregation->aggregates().size() != 1) {
+    return std::nullopt;
+  }
+
+  // Extract correlation keys (left/right key pairs from equi-conjuncts).
+  // Reject if any non-equi conjuncts exist (can't use hash join) or if the
+  // outer table couldn't be identified.
+  auto keys = extractCorrelationKeys(
+      funcs, subquery.correlatedConjuncts, subquery.subqueryDt);
+  if (!keys.nonEquiConjuncts.empty() || !keys.leftTable) {
+    return std::nullopt;
+  }
+
+  // Reject if the base table has pushed-down column filters or table filter.
+  // These would produce different scan results per subquery, preventing merge.
+  auto* baseTable = subqueryDt->tables[0]->as<BaseTable>();
+  if (!baseTable->columnFilters.empty() || !baseTable->filter.empty()) {
+    return std::nullopt;
+  }
+
+  return keys;
+}
+
+// Returns true if two merge candidates can be combined into a single
+// aggregation. They must correlate with the same outer table using the same
+// outer keys, scan the same physical table, and group by the same columns.
+bool areMergeable(
+    const TranslatedSubquery& lhs,
+    const CorrelationKeys& keysLhs,
+    const TranslatedSubquery& rhs,
+    const CorrelationKeys& keysRhs) {
+  // Must correlate with the same outer table and same number of keys.
+  if (keysLhs.leftTable != keysRhs.leftTable ||
+      keysLhs.leftKeys.size() != keysRhs.leftKeys.size()) {
+    return false;
+  }
+
+  // Must scan the same physical table (same SchemaTable catalog entry).
+  auto* baseTableLhs = lhs.subqueryDt->tables[0]->as<BaseTable>();
+  auto* baseTableRhs = rhs.subqueryDt->tables[0]->as<BaseTable>();
+  if (baseTableLhs->schemaTable != baseTableRhs->schemaTable) {
+    return false;
+  }
+
+  // Outer (left) keys must be identical — same column pointers since they
+  // reference the same outer table.
+  for (size_t i = 0; i < keysLhs.leftKeys.size(); ++i) {
+    if (keysLhs.leftKeys[i] != keysRhs.leftKeys[i]) {
+      return false;
+    }
+  }
+
+  // Inner (right) correlation keys become GROUP BY keys. Compare by column
+  // name rather than pointer since they come from different DerivedTables.
+  auto* aggLhs = lhs.subqueryDt->aggregation;
+  auto* aggRhs = rhs.subqueryDt->aggregation;
+  if (aggLhs->groupingKeys().size() != aggRhs->groupingKeys().size()) {
+    return false;
+  }
+  for (size_t i = 0; i < aggLhs->groupingKeys().size(); ++i) {
+    auto* groupKeyLhs = aggLhs->groupingKeys()[i];
+    auto* groupKeyRhs = aggRhs->groupingKeys()[i];
+    if (!groupKeyLhs->is(PlanType::kColumnExpr) ||
+        !groupKeyRhs->is(PlanType::kColumnExpr) ||
+        groupKeyLhs->as<Column>()->name() !=
+            groupKeyRhs->as<Column>()->name()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 } // namespace
+
+void ToGraph::mergeAggregateIntoPrimary(
+    BaseTable* primaryBt,
+    DerivedTableP primaryDt,
+    const DerivedTable* secondaryDt,
+    AggregateVector& aggregates,
+    ColumnVector& columns,
+    ColumnVector& intermediateColumns) {
+  auto* secondaryBt = secondaryDt->tables[0]->as<BaseTable>();
+
+  // Build a column mapping from secondary BaseTable columns to primary
+  // BaseTable columns. Both BaseTables reference the same physical table but
+  // have separate Column objects. The mapping lets us rewrite aggregate
+  // expressions to reference the primary's columns.
+  ColumnVector sourceColumns;
+  ColumnVector targetColumns;
+  for (auto* secondaryColumn : secondaryBt->columns) {
+    sourceColumns.push_back(secondaryColumn);
+
+    // Find the matching column in the primary BaseTable by name.
+    ColumnCP match = nullptr;
+    for (auto* primaryColumn : primaryBt->columns) {
+      if (primaryColumn->name() == secondaryColumn->name()) {
+        match = primaryColumn;
+        break;
+      }
+    }
+
+    // If the primary doesn't read this column yet, add it. This happens when
+    // the secondary's aggregate uses a column the primary didn't need
+    // (e.g., primary has count(*), secondary has max(n_nationkey)).
+    if (!match) {
+      auto* newColumn = make<Column>(
+          secondaryColumn->name(), primaryBt, secondaryColumn->value());
+      primaryBt->columns.push_back(newColumn);
+      match = newColumn;
+    }
+
+    targetColumns.push_back(match);
+  }
+
+  // Remap each aggregate from the secondary to reference primary's columns,
+  // then create matching output and intermediate columns for it.
+  auto* secondaryAgg = secondaryDt->aggregation;
+  for (auto* agg : secondaryAgg->aggregates()) {
+    // Replace column references: e.g., max(secondary.n_nationkey) becomes
+    // max(primary.n_nationkey).
+    auto* remappedAgg =
+        remapColumns(agg, sourceColumns, targetColumns)->as<Aggregate>();
+    aggregates.push_back(remappedAgg);
+
+    // Use the same name for both output and intermediate columns. The
+    // distributed plan splitter pairs them by position and expects
+    // consistent names between partial and final aggregation stages.
+    auto* name = newCName("__agg");
+
+    // Output column: the final aggregate result type (e.g., BIGINT for count).
+    auto* aggColumn = make<Column>(name, primaryDt, remappedAgg->value());
+    columns.push_back(aggColumn);
+
+    // Intermediate column: the partial accumulator type (e.g., ROW<BIGINT>
+    // for count). Used as output during partial aggregation.
+    auto intermediateValue = remappedAgg->value();
+    intermediateValue.type = remappedAgg->intermediateType();
+    auto* intermediateColumn = make<Column>(name, primaryDt, intermediateValue);
+    intermediateColumns.push_back(intermediateColumn);
+  }
+}
 
 void ToGraph::appendArbitraryAggregates(
     const lp::LogicalPlanNode& input,
@@ -2610,17 +2881,92 @@ void ToGraph::processSubqueries(
 void ToGraph::processScalarSubqueries(
     const lp::LogicalPlanNode& input,
     const std::vector<lp::SubqueryExprPtr>& scalars) {
-  for (const auto& subquery : scalars) {
-    auto subqueryDt = translateSubquery(*subquery->subquery());
-
-    ExprCP column;
-    if (correlatedConjuncts_.empty()) {
-      column = processUncorrelatedScalarSubquery(subqueryDt);
-    } else {
-      column = processCorrelatedScalarSubquery(input, subqueryDt);
+  // Fast path: with 0-1 subqueries, merging is impossible. Process directly.
+  if (scalars.size() <= 1) {
+    for (const auto& subquery : scalars) {
+      auto subqueryDt = translateSubquery(*subquery->subquery());
+      resolveScalarSubquery(input, subquery, subqueryDt);
     }
-    subqueries_.emplace(subquery, column);
+    return;
   }
+
+  // Phase 1: Translate all subqueries upfront without adding to currentDt_.
+  // We pass finalize=false so the subquery DTs are not yet integrated into
+  // the outer query — we need to inspect them first to decide which can merge.
+  // Save each subquery's correlation conjuncts since translateSubquery sets
+  // correlatedConjuncts_ as a side effect.
+  std::vector<TranslatedSubquery> translated;
+  translated.reserve(scalars.size());
+  for (const auto& subquery : scalars) {
+    auto subqueryDt =
+        translateSubquery(*subquery->subquery(), /*finalize=*/false);
+    translated.push_back(
+        TranslatedSubquery{subquery, subqueryDt, correlatedConjuncts_});
+    correlatedConjuncts_.clear();
+  }
+
+  // Phase 2: Group mergeable subqueries and process each group.
+  // For each unprocessed subquery, check if it's a merge candidate. If so,
+  // scan remaining subqueries for compatible partners. Groups of 2+ get
+  // merged; singletons fall through to the normal path.
+  std::vector<bool> processed(translated.size(), false);
+  for (size_t i = 0; i < translated.size(); ++i) {
+    if (processed[i]) {
+      continue;
+    }
+
+    auto& candidate = translated[i];
+    auto candidateKeys = tryExtractMergeKeys(functionNames_, candidate);
+
+    if (candidateKeys) {
+      // Start a group with this candidate and find compatible partners.
+      std::vector<TranslatedSubquery> group;
+      group.push_back(std::move(candidate));
+
+      for (size_t j = i + 1; j < translated.size(); ++j) {
+        if (processed[j]) {
+          continue;
+        }
+        auto partnerKeys = tryExtractMergeKeys(functionNames_, translated[j]);
+        if (partnerKeys &&
+            areMergeable(
+                group[0], *candidateKeys, translated[j], *partnerKeys)) {
+          group.push_back(std::move(translated[j]));
+          processed[j] = true;
+        }
+      }
+
+      processed[i] = true;
+
+      if (group.size() > 1) {
+        mergeCorrelatedScalarSubqueries(input, group);
+        continue;
+      }
+
+      // Singleton merge candidate: move back and process via normal path.
+      candidate = std::move(group[0]);
+    }
+
+    // Normal path: process as a single subquery (uncorrelated or correlated).
+    processed[i] = true;
+
+    currentDt_->addTable(candidate.subqueryDt);
+    correlatedConjuncts_ = candidate.correlatedConjuncts;
+    resolveScalarSubquery(input, candidate.subqueryExpr, candidate.subqueryDt);
+  }
+}
+
+void ToGraph::resolveScalarSubquery(
+    const lp::LogicalPlanNode& input,
+    const lp::SubqueryExprPtr& subqueryExpr,
+    DerivedTableP subqueryDt) {
+  ExprCP column;
+  if (correlatedConjuncts_.empty()) {
+    column = processUncorrelatedScalarSubquery(subqueryDt);
+  } else {
+    column = processCorrelatedScalarSubquery(input, subqueryDt);
+  }
+  subqueries_.emplace(subqueryExpr, column);
 }
 
 ExprCP ToGraph::processUncorrelatedScalarSubquery(DerivedTableP subqueryDt) {
@@ -2791,6 +3137,114 @@ ExprCP ToGraph::processCorrelatedScalarSubquery(
       ExprVector{rowNumberColumn}, allAggregates, allColumns, allColumns);
 
   return aggResultColumn;
+}
+
+void ToGraph::addCorrelationJoin(
+    const ExprVector& conjuncts,
+    DerivedTableP subqueryDt) {
+  auto correlation =
+      extractCorrelationKeys(functionNames_, conjuncts, subqueryDt);
+
+  // Merged candidates are pre-validated as equi-only by tryExtractMergeKeys.
+  VELOX_CHECK(correlation.nonEquiConjuncts.empty());
+
+  // Create a LEFT JOIN (rightOptional = true) from the outer table to the
+  // subquery DT. The LEFT JOIN preserves all outer rows, producing NULL for
+  // the aggregate columns when there is no matching inner row.
+  auto* join = make<JoinEdge>(
+      correlation.leftTable, subqueryDt, JoinEdge::Spec{.rightOptional = true});
+  for (size_t i = 0; i < correlation.leftKeys.size(); ++i) {
+    join->addEquality(correlation.leftKeys[i], correlation.rightKeys[i]);
+  }
+  currentDt_->joins.push_back(join);
+}
+
+void ToGraph::mapSubqueriesToResults(
+    const std::vector<TranslatedSubquery>& group,
+    const ColumnVector& columns,
+    const AggregateVector& aggregates,
+    size_t numGroupingKeys) {
+  // Columns are laid out as [groupingKeys..., agg0, agg1, ...].
+  // Skip grouping keys to iterate over aggregate result columns.
+  size_t aggIdx = numGroupingKeys;
+  for (const auto& subquery : group) {
+    auto* aggResultColumn = columns[aggIdx];
+    auto* agg = aggregates[aggIdx - numGroupingKeys];
+
+    // For count-like aggregates, wrap with COALESCE(result, 0). When the
+    // LEFT JOIN produces no match, the aggregate column is NULL, but
+    // count should return 0 (not NULL) for unmatched outer rows.
+    ExprCP result = aggResultColumn;
+    if (auto* literal = tryMakeLiteralForEmptyInput(agg)) {
+      result = make<Call>(
+          SpecialFormCallNames::kCoalesce,
+          aggResultColumn->value(),
+          ExprVector{aggResultColumn, literal},
+          FunctionSet());
+    }
+
+    // Map the original subquery expression to its aggregate result so that
+    // the outer query's projection can reference it.
+    subqueries_.emplace(subquery.subqueryExpr, result);
+    ++aggIdx;
+  }
+}
+
+void ToGraph::mergeCorrelatedScalarSubqueries(
+    const lp::LogicalPlanNode& /*input*/,
+    std::vector<TranslatedSubquery>& group) {
+  // Use the first subquery as the primary — its DerivedTable survives in the
+  // plan. All others are secondaries whose aggregates get folded in.
+  VELOX_CHECK_GE(group.size(), 2);
+  auto* primaryDt = group[0].subqueryDt;
+  currentDt_->addTable(primaryDt);
+
+  auto* primaryBt =
+      const_cast<BaseTable*>(primaryDt->tables[0]->as<BaseTable>());
+  auto* primaryAgg = primaryDt->aggregation;
+  VELOX_CHECK_NOT_NULL(primaryAgg);
+
+  // Start with the primary's aggregation components. We'll append secondaries.
+  ExprVector groupingKeys = primaryAgg->groupingKeys();
+  AggregateVector aggregates = primaryAgg->aggregates();
+  ColumnVector columns(
+      primaryAgg->columns().begin(), primaryAgg->columns().end());
+  ColumnVector intermediateColumns(
+      primaryAgg->intermediateColumns().begin(),
+      primaryAgg->intermediateColumns().end());
+
+  // Merge each secondary subquery's aggregate into primary.
+  for (size_t i = 1; i < group.size(); ++i) {
+    mergeAggregateIntoPrimary(
+        primaryBt,
+        primaryDt,
+        group[i].subqueryDt,
+        aggregates,
+        columns,
+        intermediateColumns);
+  }
+
+  // Replace the primary's aggregation with the combined one (original
+  // grouping keys + all aggregates from primary and secondaries).
+  primaryDt->aggregation = make<AggregationPlan>(
+      groupingKeys, aggregates, columns, intermediateColumns);
+
+  // Expose the new aggregate columns in the primary DT's output so
+  // downstream operators can reference them. The primary's original
+  // columns are already there; only add the newly merged ones.
+  for (size_t i = primaryAgg->columns().size(); i < columns.size(); ++i) {
+    primaryDt->columns.push_back(columns[i]);
+    primaryDt->exprs.push_back(columns[i]);
+    renames_[columns[i]->name()] = columns[i];
+  }
+
+  // Create one LEFT JOIN from the outer table to the primary DT using
+  // the correlation keys. All subqueries share the same correlation.
+  addCorrelationJoin(group[0].correlatedConjuncts, primaryDt);
+
+  // Map each subquery's expression to its corresponding aggregate result
+  // column, wrapping count-like aggregates with COALESCE.
+  mapSubqueriesToResults(group, columns, aggregates, groupingKeys.size());
 }
 
 void ToGraph::processInPredicates(
