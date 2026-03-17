@@ -363,7 +363,8 @@ class TestConnectorMetadata : public ConnectorMetadata {
   void createView(
       const SchemaTableName& viewName,
       velox::RowTypePtr type,
-      std::string_view text);
+      std::string_view text,
+      ViewType viewType = ViewType::kLogicalView);
 
   /// Remove a view by name. Returns true if the view existed.
   bool dropView(const SchemaTableName& viewName);
@@ -399,6 +400,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
   struct ViewDefinition {
     velox::RowTypePtr type;
     std::string text;
+    ViewType viewType{ViewType::kLogicalView};
   };
   folly::F14FastMap<SchemaTableName, ViewDefinition, SchemaTableNameHash>
       views_;
@@ -563,7 +565,8 @@ class TestConnector : public velox::connector::Connector {
   void createView(
       const SchemaTableName& viewName,
       velox::RowTypePtr type,
-      std::string_view text);
+      std::string_view text,
+      ViewType viewType = ViewType::kLogicalView);
 
   /// Remove a view by name. Returns true if the view existed.
   bool dropView(const SchemaTableName& viewName);
