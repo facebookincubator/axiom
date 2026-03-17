@@ -16,8 +16,6 @@
 
 #include "axiom/sql/presto/TableVisitor.h"
 
-#include <fmt/format.h>
-
 #include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
@@ -94,7 +92,8 @@ void TableVisitor::visitDropMaterializedView(DropMaterializedView* node) {
   DefaultTraversalVisitor::visitDropMaterializedView(node);
 }
 
-std::string TableVisitor::constructTableName(const QualifiedName& name) const {
+facebook::axiom::CatalogSchemaTableName TableVisitor::constructTableName(
+    const QualifiedName& name) const {
   const auto& parts = name.parts();
   VELOX_CHECK(!parts.empty(), "Table name cannot be empty");
   VELOX_CHECK_LE(
@@ -104,12 +103,11 @@ std::string TableVisitor::constructTableName(const QualifiedName& name) const {
       name.fullyQualifiedName());
   switch (parts.size()) {
     case 1:
-      return fmt::format(
-          "{}.{}.{}", defaultConnectorId_, defaultSchema_, parts[0]);
+      return {defaultConnectorId_, {defaultSchema_, parts[0]}};
     case 2:
-      return fmt::format("{}.{}.{}", defaultConnectorId_, parts[0], parts[1]);
+      return {defaultConnectorId_, {parts[0], parts[1]}};
     case 3:
-      return fmt::format("{}.{}.{}", parts[0], parts[1], parts[2]);
+      return {parts[0], {parts[1], parts[2]}};
     default:
       VELOX_UNREACHABLE();
   }

@@ -17,24 +17,27 @@
 
 #include <unordered_set>
 
+#include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
 
 namespace axiom::sql::presto {
 
-// Analyzes an expression to extract the fully-qualified names of any
-// input or output tables or views in the expression. Table accesses
-// inside CTEs are included, even if the CTE is never read from.
+/// Analyzes an expression to extract the fully-qualified names of any
+/// input or output tables or views in the expression. Table accesses
+/// inside CTEs are included, even if the CTE is never read from.
 class TableVisitor : public DefaultTraversalVisitor {
  public:
   TableVisitor(
       const std::string& defaultConnectorId,
       const std::string& defaultSchema);
 
-  const std::unordered_set<std::string>& inputTables() const {
+  const std::unordered_set<facebook::axiom::CatalogSchemaTableName>&
+  inputTables() const {
     return inputTables_;
   }
 
-  const std::optional<std::string>& outputTable() const {
+  const std::optional<facebook::axiom::CatalogSchemaTableName>& outputTable()
+      const {
     return outputTable_;
   }
 
@@ -53,14 +56,15 @@ class TableVisitor : public DefaultTraversalVisitor {
   void visitDropMaterializedView(DropMaterializedView* node) override;
 
  private:
-  std::string constructTableName(const QualifiedName& name) const;
+  facebook::axiom::CatalogSchemaTableName constructTableName(
+      const QualifiedName& name) const;
   void setOutputTable(const QualifiedName& name);
 
   const std::string defaultConnectorId_;
   const std::string defaultSchema_;
   std::unordered_set<std::string> ctes_;
-  std::unordered_set<std::string> inputTables_;
-  std::optional<std::string> outputTable_;
+  std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables_;
+  std::optional<facebook::axiom::CatalogSchemaTableName> outputTable_;
 };
 
 } // namespace axiom::sql::presto

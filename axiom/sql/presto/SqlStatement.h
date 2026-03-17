@@ -17,28 +17,16 @@
 #pragma once
 
 #include <unordered_set>
+#include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/common/Enums.h"
-#include "axiom/common/SchemaTableName.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
 
-/// Key for the views map: connectorId + schema-qualified view name.
-using ViewKey = std::pair<std::string, facebook::axiom::SchemaTableName>;
-
-/// Hash function for ViewKey.
-struct ViewKeyHash {
-  size_t operator()(const ViewKey& key) const {
-    auto hash = std::hash<std::string>{}(key.first);
-    hash ^= std::hash<facebook::axiom::SchemaTableName>{}(key.second) +
-        0x9e3779b9 + (hash << 6) + (hash >> 2);
-    return hash;
-  }
-};
-
-/// Map from (connectorId, SchemaTableName) to view SQL text.
-using ViewMap = std::unordered_map<ViewKey, std::string, ViewKeyHash>;
+/// Map from table identifier to view text.
+using ViewMap =
+    std::unordered_map<facebook::axiom::CatalogSchemaTableName, std::string>;
 
 enum class SqlStatementKind {
   kSelect,

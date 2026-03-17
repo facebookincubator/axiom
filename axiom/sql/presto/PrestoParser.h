@@ -15,20 +15,21 @@
  */
 #pragma once
 
+#include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/sql/presto/SqlStatement.h"
 
 namespace axiom::sql::presto {
 
-/// The set of tables that a SQL statement references. Table names
-/// are returned in fully-qualified format ('catalog.schema.table').
+/// The set of fully-qualified names for tables that a SQL statement references.
+/// Identifiers are fully-qualified, containing catalog, schema, and table name.
 struct ReferencedTables {
   /// The set of tables accessed for reading by the query,
   /// or the empty set if the query does not read any tables.
-  std::unordered_set<std::string> inputTables;
+  std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables;
 
   /// Any table which would be modified by the query, or
   /// nullopt if the query does not modify any tables.
-  std::optional<std::string> outputTable;
+  std::optional<facebook::axiom::CatalogSchemaTableName> outputTable;
 };
 
 /// SQL Parser compatible with PrestoSQL dialect.

@@ -16,6 +16,6 @@ if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
-add_library(axiom_common SchemaTableName.cpp Session.cpp)
+add_library(axiom_common SchemaTableName.cpp CatalogSchemaTableName.cpp Session.cpp)
 
 target_link_libraries(axiom_common velox_common_base Folly::folly fmt::fmt)

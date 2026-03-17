@@ -17,7 +17,7 @@
 #include "axiom/sql/presto/PrestoParser.h"
 #include <folly/ScopeGuard.h>
 #include <cctype>
-#include "axiom/common/SchemaTableName.h"
+#include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/sql/presto/ExpressionPlanner.h"
@@ -446,7 +446,9 @@ class RelationPlanner : public AstVisitor {
             /*includeHiddenColumns=*/true);
       } else if (auto view = metadata->findView(connectorTable)) {
         views_.emplace(
-            std::make_pair(connectorId, connectorTable), view->text());
+            facebook::axiom::CatalogSchemaTableName{
+                connectorId, connectorTable},
+            view->text());
 
         VELOX_CHECK_NOT_NULL(parseSql_);
         auto query = parseSql_(view->text());
