@@ -31,6 +31,7 @@
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/time/Timer.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -340,12 +341,12 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
     auto schema = std::make_shared<connector::SchemaResolver>();
     schema->setTargetTable(ctas->connectorId(), ctas->tableName(), table);
 
-    return {.results = runLogicalPlan(ctas->plan(), options, schema)};
+    return runLogicalPlan(ctas->plan(), options, schema);
   }
 
   if (sqlStatement.isInsert()) {
     const auto* insert = sqlStatement.as<presto::InsertStatement>();
-    return {.results = runLogicalPlan(insert->plan(), options)};
+    return runLogicalPlan(insert->plan(), options);
   }
 
   if (sqlStatement.isDropTable()) {
@@ -388,7 +389,7 @@ SqlQueryRunner::SqlResult SqlQueryRunner::run(
 
   const auto logicalPlan = sqlStatement.as<presto::SelectStatement>()->plan();
 
-  return {.results = runLogicalPlan(logicalPlan, options)};
+  return runLogicalPlan(logicalPlan, options);
 }
 
 std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
@@ -605,21 +606,38 @@ std::shared_ptr<runner::LocalRunner> SqlQueryRunner::makeLocalRunner(
       executorPool_);
 }
 
-std::vector<velox::RowVectorPtr> SqlQueryRunner::runLogicalPlan(
+SqlQueryRunner::SqlResult SqlQueryRunner::runLogicalPlan(
     const logical_plan::LogicalPlanNodePtr& logicalPlan,
     const RunOptions& options,
     std::shared_ptr<facebook::axiom::connector::SchemaResolver>
         schemaResolver) {
   auto queryCtx = newQuery(options);
-  auto planAndStats = optimize(
-      logicalPlan, queryCtx, options, nullptr, nullptr, schemaResolver);
+
+  uint64_t optimizeMicros{0};
+  optimizer::PlanAndStats planAndStats;
+  {
+    velox::MicrosecondTimer timer(&optimizeMicros);
+    planAndStats = optimize(
+        logicalPlan,
+        queryCtx,
+        options,
+        nullptr,
+        nullptr,
+        std::move(schemaResolver));
+  }
+
+  auto planString = planAndStats.toString();
 
   auto runner = makeLocalRunner(planAndStats, queryCtx, options);
   SCOPE_EXIT {
     waitForCompletion(runner, options.timeoutMicros);
   };
 
-  return fetchResults(*runner);
+  return {
+      .results = fetchResults(*runner),
+      .planString = std::move(planString),
+      .optimizeMicros = optimizeMicros,
+  };
 }
 
 std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(

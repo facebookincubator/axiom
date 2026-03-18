@@ -23,6 +23,7 @@
 #include "axiom/cli/StdinReader.h"
 #include "axiom/cli/Timing.h"
 #include "axiom/cli/linenoise/linenoise.h"
+#include "velox/common/base/SuccinctPrinter.h"
 
 DEFINE_string(
     data_path,
@@ -72,12 +73,16 @@ namespace axiom::sql {
 Console::Console(
     SqlQueryRunner& runner,
     PermissionCheck permissionCheck,
-    std::shared_ptr<cli::QueryIdGenerator> queryIdGenerator)
+    std::shared_ptr<cli::QueryIdGenerator> queryIdGenerator,
+    QueryStartCallback startCallback,
+    QueryCompletionCallback completionCallback)
     : runner_{runner},
       permissionCheck_{std::move(permissionCheck)},
       queryIdGenerator_{
           queryIdGenerator ? std::move(queryIdGenerator)
-                           : std::make_shared<cli::QueryIdGenerator>()} {}
+                           : std::make_shared<cli::QueryIdGenerator>()},
+      startCallback_{std::move(startCallback)},
+      completionCallback_{std::move(completionCallback)} {}
 
 void Console::initialize() {
   gflags::SetUsageMessage(
@@ -107,6 +112,26 @@ void Console::run() {
   }
 }
 
+void Console::notifyStart(const QueryStartInfo& info) {
+  if (startCallback_) {
+    try {
+      startCallback_(info);
+    } catch (const std::exception& ex) {
+      LOG(WARNING) << "Start callback failed: " << ex.what();
+    }
+  }
+}
+
+void Console::notifyCompletion(const QueryCompletionInfo& info) {
+  if (completionCallback_) {
+    try {
+      completionCallback_(info);
+    } catch (const std::exception& ex) {
+      LOG(WARNING) << "Completion callback failed: " << ex.what();
+    }
+  }
+}
+
 void Console::runNoThrow(std::string_view sql, bool isInteractive) {
   const SqlQueryRunner::RunOptions defaultOptions{
       .numWorkers = FLAGS_num_workers,
@@ -127,6 +152,12 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
     const auto queryId = queryIdGenerator_->createNextQueryId();
     auto options = defaultOptions;
     options.queryId = queryId;
+    const auto createTime = std::chrono::system_clock::now();
+
+    // Notify start callback before parse so that every query gets a start
+    // event. Parse or permission failures are handled by completionCallback_
+    // in the catch block.
+    notifyStart({queryId, std::string(sqlText), createTime});
 
     try {
       cli::Timing parseTiming;
@@ -164,11 +195,42 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
         cli::printResults(result.results, FLAGS_max_rows);
       }
 
-      if (isInteractive) {
-        std::cout << "Query ID: " << queryId << " | Optimizing and Executing: "
-                  << statementTiming.toString() << std::endl;
+      // Notify completion callback on success.
+      int64_t numOutputRows{0};
+      for (const auto& rowVector : result.results) {
+        numOutputRows += rowVector->size();
       }
+      uint64_t executionMicros{
+          statementTiming.micros > result.optimizeMicros
+              ? statementTiming.micros - result.optimizeMicros
+              : 0};
+
+      if (isInteractive) {
+        std::cout << "Query ID: " << queryId << " | Optimizing: "
+                  << facebook::velox::succinctNanos(
+                         result.optimizeMicros * 1'000)
+                  << " | Executing: "
+                  << facebook::velox::succinctNanos(executionMicros * 1'000)
+                  << " | Total: " << statementTiming.toString() << std::endl;
+      }
+      notifyCompletion(
+          QueryCompletionInfo{
+              .startInfo = {queryId, std::string(sqlText), createTime},
+              .planString = std::move(result.planString),
+              .parseMicros = parseTiming.micros,
+              .optimizeMicros = result.optimizeMicros,
+              .executionMicros = executionMicros,
+              .numOutputRows = numOutputRows,
+              .endTime = std::chrono::system_clock::now(),
+          });
     } catch (std::exception& e) {
+      // Notify completion callback on failure.
+      notifyCompletion(
+          QueryCompletionInfo{
+              .startInfo = {queryId, std::string(sqlText), createTime},
+              .errorInfo = ErrorInfo{e.what()},
+              .endTime = std::chrono::system_clock::now(),
+          });
       std::cerr << "Query ID: " << queryId << " | Query failed: " << e.what()
                 << std::endl;
       return;

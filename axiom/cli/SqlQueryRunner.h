@@ -38,6 +38,11 @@ class SqlQueryRunner {
   struct SqlResult {
     std::optional<std::string> message;
     std::vector<facebook::velox::RowVectorPtr> results;
+    /// Human-readable distributed Velox plan with optimizer cardinality and
+    /// memory estimates. Empty for DDL statements.
+    std::optional<std::string> planString;
+    /// Time spent in the optimizer, in microseconds. Zero for DDL statements.
+    uint64_t optimizeMicros{0};
   };
 
   struct RunOptions {
@@ -186,10 +191,9 @@ class SqlQueryRunner {
       const std::shared_ptr<facebook::velox::core::QueryCtx>& queryCtx,
       const RunOptions& options);
 
-  /// Runs a plan and returns the result as a single vector in *resultVector,
-  /// the plan text in *planString and the error message in *errorString.
-  /// *errorString is not set if no error. Any of these may be nullptr.
-  std::vector<facebook::velox::RowVectorPtr> runLogicalPlan(
+  // Optimizes and executes a logical plan, returning results and the
+  // serialized Velox plan string.
+  SqlResult runLogicalPlan(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
       const RunOptions& options,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
