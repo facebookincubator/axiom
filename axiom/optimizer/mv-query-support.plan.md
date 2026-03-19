@@ -1,571 +1,594 @@
-# Plan: Materialized View Query Support with Partition Stitching in Axiom
+# Design: Materialized View Query Support in Axiom
 
-## Problem Statement
+## Scope
 
-Currently, Axiom treats a materialized view (MV) the same as a regular table — it reads all partitions directly from the MV's data table. When querying an MV that is **partially refreshed** (has missing or stale partitions), Axiom should transparently stitch data from the MV's base table for those partitions. The result should be a **UNION ALL** of:
-- Fresh partitions read from the MV
-- Missing/stale partitions read from the base table
+Axiom supports **querying** materialized views. Creating MVs (`CREATE MATERIALIZED VIEW`)
+and refreshing MVs (`REFRESH MATERIALIZED VIEW`) are currently performed by the Presto
+coordinator. This design covers only the query path — MV creation and refresh support
+in Axiom are separate future work items.
 
-**Example:** For `SELECT a, b FROM mv WHERE ds > '2026-01-20'`, if the MV only has fresh partitions up to `ds='2026-01-28'` (base table has data beyond that), the optimizer should rewrite this to:
+Axiom reads the MV definition and partition data that Presto has already written to the
+Hive metastore.
+
+## Overview
+
+Axiom supports querying materialized views (MVs) with automatic **partition stitching**:
+when an MV is partially refreshed (some partitions are missing or stale), Axiom
+transparently reads fresh data from the MV and fills in the gaps from the base table.
+
+**Important:** The stitching happens in the **optimizer**, not the parser. The parser
+treats an MV as a plain table scan — it does not rewrite the SQL or expand the MV's
+definition. The optimizer's `MaterializedViewRewrite` pass inspects the table's metadata,
+queries the connector for partition freshness, and transforms the **query graph**
+(DerivedTable tree) by replacing the MV BaseTable node with a UNION ALL of MV + base
+table scans when needed.
+
+### Example
+
+An MV `mv_sales` is defined as `SELECT region, ds, SUM(revenue) AS total FROM sales
+GROUP BY region, ds`, partitioned by `ds`. The base table `sales` has data for
+`ds='2026-01-21'` through `ds='2026-01-31'`.
+
 ```sql
-SELECT a, b FROM mv WHERE ds > '2026-01-20' AND ds <= '2026-01-28'   -- fresh partitions from MV
+SELECT * FROM mv_sales WHERE ds > '2026-01-20'
+```
+
+The parser produces a simple plan:
+
+```
+TableScan(mv_sales)
+  filter: ds > '2026-01-20'
+```
+
+The `MaterializedViewRewrite` pass then transforms the query graph depending on the
+MV's freshness status:
+
+#### Case 1: MV not refreshed (empty)
+
+The MV has no data at all. The rewrite **replaces** the MV scan with a base table
+scan. Column names are mapped via the MV definition (e.g., `total` -> `revenue`).
+
+```
+TableScan(sales)                          -- reads from base table instead
+  filter: ds > '2026-01-20'              -- user filter preserved
+  project: region, ds, revenue AS total  -- column mapping applied
+```
+
+#### Case 2: Partially materialized
+
+The MV has been refreshed for `ds='2026-01-21'` through `ds='2026-01-28'`, but
+`ds='2026-01-29'` through `ds='2026-01-31'` are missing.
+
+The `MaterializedViewRewrite` pass builds a **UNION ALL** query graph:
+
+```
 UNION ALL
-SELECT a_base, b_base FROM base_table WHERE ds > '2026-01-28'        -- missing partitions from base
++-- TableScan(mv_sales)                        -- fresh MV partitions
+|     filter: ds > '2026-01-20'                -- user filter (pushed down)
+|             AND ds >= '2026-01-21'           -- range: MV has data here
+|             AND ds <= '2026-01-28'
++-- TableScan(sales)                           -- missing partitions from base
+      filter: ds > '2026-01-20'                -- user filter (pushed down)
+              AND (ds < '2026-01-21'           -- complement: outside MV range
+                   OR ds > '2026-01-28')
+      project: region, ds, revenue AS total    -- column mapping applied
+```
+
+The user's `WHERE ds > '2026-01-20'` filter is pushed into both sides automatically
+by `distributeConjuncts()`, which runs after the MV rewrite.
+
+#### Case 3: Fully materialized
+
+The MV covers all partitions in the base table. The rewrite leaves the query graph
+unchanged:
+
+```
+TableScan(mv_sales)
+  filter: ds > '2026-01-20'
+```
+
+No rewrite is needed — the MV is scanned as-is.
+
+---
+
+## Preconditions for Correct Partition Stitching
+
+Partition stitching produces correct results only when the following conditions hold.
+These are checked or assumed by the `MaterializedViewRewrite` pass.
+
+1. **Single base table.** The MV must depend on exactly one base table. MVs defined
+   as joins across multiple tables are not yet supported — the data structures store
+   multiple `baseTables`, but the rewrite and connector only process the first one.
+
+2. **Refresh columns defined.** The MV definition must include `refreshColumns` with
+   at least one partition column (e.g., `ds`). Without this, the rewrite cannot
+   determine which partitions are fresh.
+
+3. **Complete column mapping.** Every MV output column must map to exactly one base
+   table column via `columnMappings`. This ensures that the base table side can
+   produce rows with the same output schema as the MV side.
+
+4. **Partition column exists in both tables.** The refresh column must exist in both
+   the MV and the base table (possibly under different names, resolved via column
+   mappings) with compatible types.
+
+5. **MV partition values are a subset of base partition values.** An MV partition value
+   that does not exist in the base table is ignored during boundary computation. Stale
+   partition detection (MV has data but it is outdated) is deferred to Phase 2.
+
+**Correctness argument.** When these preconditions hold, the UNION ALL of
+`MV(fresh partitions) UNION ALL Base(complement partitions)` is equivalent to querying
+the base table directly:
+- The MV range filter (`refreshCol >= lo AND refreshCol <= hi`) selects exactly the
+  fresh MV partitions.
+- The base complement filter (`refreshCol < lo OR refreshCol > hi`) selects exactly the
+  remaining partitions.
+- Together, the two filters are **complementary and exhaustive** over the partition
+  domain: every partition value in the base table is covered by exactly one side.
+- For non-contiguous ranges with multiple `[lo, hi]` pairs: the MV filter uses OR'd
+  ranges and the base filter uses AND'd complements (De Morgan), maintaining the same
+  exhaustive coverage.
+
+---
+
+## End-to-End Flow
+
+```
+User query: SELECT * FROM mv_sales WHERE ds > '2026-01-20'
+    |
+    v
+1. TABLE RESOLUTION (PrismConnectorMetadata::findTable)
+    - Resolves "mv_sales" from metastore
+    - Detects it is an MV (not a logical view)
+    - Parses MaterializedViewDefinition from catalog JSON
+    - Attaches definition to the Table object
+    |
+    v
+2. SQL PARSING (PrestoParser)
+    - Sees "mv_sales" via findTable() -> gets a Table (not expanded)
+    - Logical views would be expanded; MVs are NOT expanded
+    - Produces: LogicalPlan with TableScanNode("mv_sales")
+    |
+    v
+3. QUERY GRAPH CONSTRUCTION (ToGraph::makeQueryGraph)
+    - Converts LogicalPlan -> QueryGraph (DerivedTable tree)
+    - mv_sales becomes a BaseTable node with its schema columns
+    |
+    v
+4. MV REWRITE (MaterializedViewRewrite, runs before initializePlans)
+    - Detects BaseTable carries a MaterializedViewDefinition
+    - Calls ConnectorMetadata::getMaterializedViewStatus(mvTable)
+      -> Connector fetches MV + base partition lists, computes boundaries
+      -> Returns: { kPartiallyMaterialized, ["2026-01-21", "2026-01-28"] }
+    - Constructs UNION ALL DerivedTable:
+      - MV child:   range filter ds >= '2026-01-21' AND ds <= '2026-01-28'
+      - Base child:  complement  ds < '2026-01-21' OR ds > '2026-01-28'
+      - Column name mapping applied to base table side
+    - Replaces original BaseTable with UNION ALL DerivedTable
+    |
+    v
+5. PLAN INITIALIZATION (initializePlans)
+    - distributeConjuncts() pushes user filters (ds > '2026-01-20')
+      into both UNION ALL children automatically
+    |
+    v
+6. OPTIMIZATION + EXECUTION
+    - Join planning, predicate pushdown, split generation proceed normally
+    - Both sides produce columns with the same output names
 ```
 
 ---
 
-## Existing Foundation (Already Committed)
+## Data Structures
 
-The following are already in the current stack and can be used directly:
+### MaterializedViewDefinition
 
-### D92019614 — `MaterializedViewDefinition` class
-**File:** `axiom/connectors/MaterializedViewDefinition.h`
-
-Full C++ definition with:
-- `originalSql()` — the original SQL of the MV definition
-- `schema()` / `table()` — the MV's data table (where MV data is stored)
-- `baseTables()` — `vector<SchemaTableName>` of base tables the MV depends on
-- `columnMappings()` — `vector<ColumnMapping>` mapping MV columns to base table columns
-- `baseTablesOnOuterJoinSide()` — tables on outer side of outer joins
-- `validRefreshColumns()` — columns used for incremental refresh (e.g., `ds`)
-
-Supporting structs: `SchemaTableName`, `TableColumn`, `ColumnMapping`, `ViewSecurity`.
-
-### D92085304 — MV info in ConnectorMetadata
-**File:** `axiom/connectors/ConnectorMetadata.h`
-
-- `ViewType` enum: `kLogicalView`, `kMaterializedView`
-- `View` class now carries `viewType()` field
-- `MaterializedViewDefinitionPtr` typedef (`shared_ptr<const MaterializedViewDefinition>`)
-- `ConnectorMetadata::getMaterializedViewDefinition(name)` — virtual method returning `MaterializedViewDefinitionPtr`
-
-**File:** `axiom/facebook/prism/PrismConnectorMetadata.h/.cpp`
-
-- `PrismConnectorMetadata::getMaterializedViewDefinition()` — parses the JSON-encoded MV definition from metastore's `viewOriginalText` field. Already extracts `baseTables`, `columnMappings`, `owner`, `securityMode`, `baseTablesOnOuterJoinSide`, `validRefreshColumns`.
-
-### D92541143 — Parser flow for MV
-- `PrismConnectorMetadata::findTable()` now accepts MVs (only rejects logical views)
-- `PrismView` carries `ViewType` for distinguishing logical vs materialized views
-- PrestoParser updated to only expand logical views, not MVs
-- MV is treated as a table scan, but no partition stitching yet
-
-### Design Note: `MaterializedViewDefinition` stored on base `Table`, not `PrismTable`
-
-The MV definition should be stored on the base `connector::Table` class in `ConnectorMetadata.h`,
-**not** on `PrismTable`. The reason is dependency layering:
+Stored on the `Table` object. Contains structured metadata parsed from the Hive metastore
+catalog (not from SQL parsing -- see "Metadata Source" below).
 
 ```
-axiom/optimizer/  →  depends on  →  axiom/connectors/      (generic: Table, ConnectorMetadata)
-                     does NOT depend on  →  axiom/facebook/prism/  (specific: PrismTable)
+axiom/connectors/MaterializedViewDefinition.h
+namespace facebook::axiom::connector
+
+class MaterializedViewDefinition:
+  originalSql_        : string        // Original CREATE MV SQL (for diagnostics only; never parsed)
+  schema_             : string        // MV's schema name (from metastore JSON; may duplicate Table::name_)
+  table_              : string        // MV's table name (from metastore JSON; may duplicate Table::name_)
+  baseTables_         : vector<SchemaTableName>  // Base tables the MV depends on
+  columnMappings_     : vector<ColumnMapping>    // MV column -> base column mappings
+  baseTablesOnOuterJoinSide_ : vector<SchemaTableName>  // See note below
+  refreshColumns_     : optional<vector<string>> // Partition columns for refresh (e.g., "ds")
+  owner_              : optional<string>
+  securityMode_       : optional<ViewSecurity>   // INVOKER or DEFINER
 ```
 
-The optimizer's `MaterializedViewRewrite` pass is the primary consumer of MV metadata.
-If the field were on `PrismTable`, the optimizer would need to `#include "axiom/facebook/prism/PrismTable.h"`
-and downcast via `connectorTable->as<PrismTable>()`, breaking the connector-agnostic abstraction.
+**Notes:**
+- `schema_` and `table_` are sourced from the metastore JSON blob and may duplicate the
+  containing `Table` object's name. They are kept because `MaterializedViewDefinition` is
+  parsed independently before the `Table` is fully constructed.
+- `baseTablesOnOuterJoinSide_`: Tables on the outer side of an outer join in the MV
+  definition. Populated from the metastore JSON when the MV involves outer joins.
+  Currently unused — needed when multi-base-table (join) MVs are supported, to determine
+  which base tables have nullable columns due to outer join semantics, affecting refresh
+  correctness and column mapping.
+- `originalSql_`: Stored for debugging/diagnostics via `toString()`. Not parsed or used
+  in query processing.
 
-`PrismTable` already has Prism-specific fields (`parameters_`, `tableType_`, `partitionedByKeys_`),
-but those are only accessed by Prism-layer code — not by the optimizer.
+**Supporting types:**
 
-By placing it on `Table`, the optimizer accesses it generically:
+```
+struct SchemaTableName { string schema; string table; }
+    // Uses axiom::SchemaTableName from common/SchemaTableName.h
+
+struct TableColumn { SchemaTableName tableName; string columnName; optional<bool> isDirectMapped; }
+    // Identifies a column by table name + column name (catalog-level, not runtime).
+    // The tableName is repeated per column to match the Presto metastore JSON format 1:1,
+    // which simplifies parsing and debugging.
+
+struct ColumnMapping { TableColumn viewColumn; vector<TableColumn> baseTableColumns; }
+    // Maps one MV column to its source column(s) in the base table
+```
+
+### MaterializedViewStatus
+
+Returned by `ConnectorMetadata::getMaterializedViewStatus()`. Tells the rewrite pass
+what action to take without exposing partition details.
+
+```
+axiom/connectors/ConnectorMetadata.h
+namespace facebook::axiom::connector
+
+enum class MaterializedViewState:
+  kNotMaterialized          // MV has no data -> read base table entirely
+  kTooManyPartitionsMissing // Too many gaps -> read base table entirely
+  kPartiallyMaterialized    // Some data fresh -> stitch MV + base via UNION ALL
+  kFullyMaterialized        // MV covers everything -> read MV only
+
+struct MaterializedViewStatus:
+  state           : MaterializedViewState
+  boundaryValues  : vector<string>
+    // Pairs of [lo, hi] defining inclusive ranges where MV has fresh data.
+    // E.g., {"2026-01-21", "2026-01-28"} means MV has ds in [21, 28].
+    // Multiple pairs for non-contiguous ranges:
+    //   {"2026-01-21", "2026-01-24", "2026-01-26", "2026-01-28"}
+    //   means MV has [21,24] and [26,28], but not 25.
+    //
+    // Values are compared lexicographically as strings. This is correct for
+    // date-formatted partition keys (e.g., ds='2026-01-28'). Numeric partition
+    // keys would require type-aware comparison (future work).
+```
+
+### ViewType
+
+Distinguishes logical views (expanded at parse time) from materialized views (treated
+as table scans).
+
+```
+enum class ViewType { kLogicalView, kMaterializedView }
+```
+
+The `View` class carries a `viewType()` field. The parser checks this: logical views
+are expanded into their SQL definition; materialized views are left as table scans.
+
+### Table extensions
+
+The base `Table` class (in `ConnectorMetadata.h`) carries an optional MV definition:
+
 ```cpp
-if (const auto& mvDef = baseTable->schemaTable->connectorTable->materializedViewDefinition()) {
-  // This is an MV — do partition stitching.
+class Table {
+  optional<MaterializedViewDefinition> materializedViewDefinition_;
+public:
+  const optional<MaterializedViewDefinition>& materializedViewDefinition() const;
+  void setMaterializedViewDefinition(MaterializedViewDefinition def);
+};
+```
+
+This is set during `findTable()` by the connector (e.g., `PrismConnectorMetadata`)
+when it detects that a table is an MV. The optimizer accesses it generically via
+`baseTable->schemaTable->connectorTable->materializedViewDefinition()` without
+needing connector-specific downcasts.
+
+**TODO:** Consider removing the setter and setting the MV definition during `Table`
+construction or via a factory method in `findTable()`, to make `materializedViewDefinition_`
+immutable like the other `Table` members.
+
+---
+
+## Metadata Source
+
+The `MaterializedViewDefinition` metadata is **not produced by parsing the MV's SQL**
+in Axiom. It comes from the **Hive metastore catalog** as pre-computed structured data.
+
+### How it gets there
+
+1. **MV creation (Presto coordinator):** `CREATE MATERIALIZED VIEW mv AS SELECT ...`
+   causes Presto to analyze the SQL, compute column mappings, identify base tables,
+   and write everything as a **base64-encoded JSON blob** into the metastore's
+   `viewOriginalText` field.
+
+2. **MV resolution (Axiom -- `PrismConnectorMetadata`):** When `findTable()` resolves
+   an MV, `parseMaterializedViewDefinition()` **decodes the JSON** from the metastore.
+   The JSON already contains structured fields:
+
+   ```json
+   {
+     "originalSql": "SELECT ds, SUM(revenue) AS total FROM sales GROUP BY ds",
+     "schema": "prod", "table": "mv_sales",
+     "baseTables": [{"schema": "prod", "table": "sales"}],
+     "columnMappings": [
+       {"viewColumn": {"tableName": {"schema":"prod","table":"mv_sales"}, "columnName": "ds"},
+        "baseTableColumns": [{"tableName": {"schema":"prod","table":"sales"}, "columnName": "ds"}]},
+       {"viewColumn": {"tableName": {"schema":"prod","table":"mv_sales"}, "columnName": "total"},
+        "baseTableColumns": [{"tableName": {"schema":"prod","table":"sales"}, "columnName": "revenue"}]}
+     ],
+     "validRefreshColumns": ["ds"]
+   }
+   ```
+
+3. **Optimizer consumption:** The `MaterializedViewRewrite` pass reads only the
+   structured fields. The `originalSql` field is stored for diagnostics but
+   **never parsed** by any query processing code path.
+
+---
+
+## Component Details
+
+### 1. Table Resolution
+
+**File:** `PrismConnectorMetadata.cpp`
+
+`findTable()` resolves MVs the same way as regular tables. It only rejects **logical
+views** (which go through `findView()` instead). For MVs:
+
+```cpp
+TablePtr PrismConnectorMetadata::findTable(const SchemaTableName& tableName) {
+  auto result = client_->co_resolveTable(ns, table);
+  if (result.value()->isLogicalView()) {
+    return nullptr;  // Logical views are NOT returned as tables
+  }
+  auto table = updateTableCache(tableName, result.value());
+  if (result.value()->isMaterializedView()) {
+    table->setMaterializedViewDefinition(
+        *parseMaterializedViewDefinition(result.value()->viewOriginalText()));
+  }
+  return table;
 }
 ```
 
-And `PrismConnectorMetadata::findTable()` populates it during table resolution:
-```cpp
-auto table = updateTableCache(name, metadata);
-if (metadata->isMaterializedView()) {
-  auto mvDef = parseMaterializedViewDefinition(metadata->viewOriginalText());
-  table->setMaterializedViewDefinition(std::move(*mvDef));
-}
-return table;
-```
+### 2. Parser Handling
 
-**Note:** `getMaterializedViewDefinition(name)` on `ConnectorMetadata` is still useful for callers
-that start from a name (e.g., DDL operations like `REFRESH MATERIALIZED VIEW`), but the optimizer
-should use the `Table`-based accessor to avoid extra metastore lookups.
+**File:** `PrestoParser` (SQL parser)
 
----
+When resolving a table reference like `FROM mv_sales`:
 
-## Architecture Overview
+1. Call `findTable("mv_sales")` -- succeeds for MVs, returns a Table with MV definition
+2. If `findTable` returns null, call `findView("mv_sales")`
+3. If the view is a **logical view** (`viewType() == kLogicalView`), expand it inline
+4. If the view is a **materialized view**, do NOT expand -- treat as a table scan
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                    QUERY: SELECT a, b FROM mv WHERE ds > X          │
-└──────────────────┬───────────────────────────────────────────────────┘
-                   │
-                   ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│  1. Table Resolution (already done in D92541143 + new changes)      │
-│     - MV resolved as a table via findTable()                        │
-│     - MaterializedViewDefinition populated on Table during findTable│
-└──────────────────┬───────────────────────────────────────────────────┘
-                   │
-                   ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│  2. Optimizer Rewrite (NEW — MaterializedViewRewrite pass)          │
-│     a. Detect MV BaseTable via Table::materializedViewDefinition()  │
-│     b. Call ConnectorMetadata::getMaterializedViewStatus()           │
-│        → Connector computes boundaries internally (partition-agnostic│
-│        → Returns: refreshColumn + boundaryValues vector             │
-│     c. Construct UNION ALL:                                         │
-│        - Left child:  MV scan + filter (refreshCol <= boundary)     │
-│        - Right child: base table scan + filter (refreshCol > bound) │
-│        - Column mapping applied to base table scan                  │
-│     d. Replace original BaseTable with UNION ALL DerivedTable       │
-└──────────────────────────────────────────────────────────────────────┘
-```
+This means MVs appear in the logical plan as `TableScanNode`, not as expanded subqueries.
 
-### Key Design: Partition-Agnostic `getMaterializedViewStatus()`
+### 3. Freshness Status Computation
 
-The optimizer does NOT access `SplitManager` or partition lists directly. Instead,
-the connector encapsulates all partition/freshness logic behind a single call:
+**File:** `PrismConnectorMetadata.cpp`
+
+`getMaterializedViewStatus()` computes the freshness boundaries:
 
 ```cpp
-// In axiom/connectors/ConnectorMetadata.h
+optional<MaterializedViewStatus>
+PrismConnectorMetadata::getMaterializedViewStatus(const Table& mvTable) {
+  // 1. Get refresh column from MV definition
+  const auto& refreshColumn = mvDef->refreshColumns()->front();
 
-enum class MaterializedViewState {
-  kNotMaterialized,
-  kTooManyPartitionsMissing,
-  kPartiallyMaterialized,
-  kFullyMaterialized,
-};
+  // 2. Fetch MV + base table partition lists in parallel
+  auto [mvPartitions, basePartitions] = blockingWait(collectAll(
+      client_->co_resolvePartitionNamesByFilter(mvNs, mvName, ""),
+      client_->co_resolvePartitionNamesByFilter(baseSchema, baseTable, "")));
 
-struct MaterializedViewStatus {
-  MaterializedViewState state;
+  // 3. Extract refresh column values from partition names
+  set<string> mvValues, baseValues;
+  // ... parse partition names like "ds=2026-01-21/country=US" ...
 
-  /// Boundary values defining fresh ranges in the MV. Each consecutive pair
-  /// [boundaryValues[2i], boundaryValues[2i+1]] defines an inclusive range
-  /// of the refresh column where the MV has data. The optimizer reads
-  /// everything outside these ranges from the base table.
-  /// The refresh column name is not included here — the optimizer gets it
-  /// from MaterializedViewDefinition::validRefreshColumns().
-  /// Only meaningful when state is kPartiallyMaterialized.
-  ///
-  /// Phase 1 (missing only): Single pair, e.g., {"2026-01-21", "2026-01-28"}
-  ///   → MV: ds >= '2026-01-21' AND ds <= '2026-01-28'
-  ///   → Base: ds < '2026-01-21' OR ds > '2026-01-28'
-  ///
-  /// Phase 2 (missing + stale): Multiple pairs for non-contiguous fresh ranges,
-  ///   e.g., {"2026-01-21", "2026-01-24", "2026-01-26", "2026-01-28"}
-  ///   → MV: (ds >= '..21' AND ds <= '..24') OR (ds >= '..26' AND ds <= '..28')
-  ///   → Base: everything else (includes stale ds='2026-01-25')
-  std::vector<std::string> boundaryValues;
-};
-
-// On ConnectorMetadata:
-virtual std::optional<MaterializedViewStatus> getMaterializedViewStatus(
-    const Table& mvTable) = 0;
-```
-
-**Why this design:**
-- **Partition-agnostic**: The optimizer never sees partition names, handles, or
-  freshness values. It only gets a column + boundaries, and constructs predicates.
-- **Connector encapsulation**: The connector knows how to compute the boundaries:
-  - **Hive/Prism**: Compares partition sets, finds fresh MV ranges.
-  - **Iceberg (future)**: Uses snapshot metadata to determine refresh boundaries.
-  - **Any future format**: Just produces a column + boundary values.
-- **Same interface for both phases**: Phase 1 returns a single range (all existing
-  MV partitions). Phase 2 returns potentially multiple ranges (only fresh partitions).
-  The optimizer code handles both cases with the same range-building logic.
-- **Stale partitions handled transparently**: In Phase 2, the connector excludes
-  stale partitions from the boundary ranges. The optimizer treats them as missing
-  — the base table scan covers everything outside the fresh ranges.
-
----
-
-## Phase 1: Missing Partition Detection and Stitching
-
-Phase 1 handles the case where the MV simply **doesn't have** certain partitions
-that exist in the base table. This requires no changes to the partition freshness
-pipeline — it only compares partition sets.
-
-### 1.1 Add `MaterializedViewDefinition` to `Table`
-
-**File:** `axiom/connectors/ConnectorMetadata.h/.cpp`
-
-Add an optional `MaterializedViewDefinition` field to the base `Table` class:
-
-```cpp
-class Table : public std::enable_shared_from_this<Table> {
-  // ... existing fields ...
-  std::optional<MaterializedViewDefinition> materializedViewDefinition_;
-public:
-  const std::optional<MaterializedViewDefinition>& materializedViewDefinition() const;
-  void setMaterializedViewDefinition(MaterializedViewDefinition definition);
-};
-```
-
-### 1.2 Populate `MaterializedViewDefinition` in `findTable()`
-
-**File:** `axiom/facebook/prism/PrismConnectorMetadata.cpp`
-
-In `findTable()`, after `updateTableCache()` creates the table, check if the table
-is a materialized view and populate the definition. The parsing logic already exists
-in `parseMaterializedViewDefinition()` (used by `getMaterializedViewDefinition()`).
-
-### 1.3 New Optimizer Pass: `MaterializedViewRewrite`
-
-**File:** `axiom/optimizer/MaterializedViewRewrite.h` (NEW)
-**File:** `axiom/optimizer/MaterializedViewRewrite.cpp` (NEW)
-
-```cpp
-class MaterializedViewRewrite {
-public:
-  MaterializedViewRewrite(
-      QueryGraphContext& context,
-      const connector::SchemaResolver& schemaResolver);
-
-  /// Traverses the DerivedTable tree and rewrites any MV BaseTable
-  /// into a UNION ALL of MV partitions + missing base table partitions.
-  /// Returns true if any rewrite was performed.
-  bool rewrite(DerivedTable& root);
-
-private:
-  bool rewriteBaseTable(DerivedTable& parent, BaseTable* mvTable);
-
-  /// Resolves the base table's SchemaTable.
-  const SchemaTable* resolveBaseTable(
-      const connector::SchemaTableName& baseTableName);
-
-  /// Builds column mapping: for each MV column, find the corresponding
-  /// base table column using MaterializedViewDefinition::columnMappings().
-  folly::F14FastMap<std::string, std::string> buildColumnNameMapping(
-      const connector::MaterializedViewDefinition& mvDef,
-      const connector::SchemaTableName& baseTableName);
-
-  /// Creates an IN-list filter for a set of partition values.
-  ExprCP makePartitionFilter(
-      const std::vector<std::string>& partitionValues,
-      const Column* partitionColumn);
-
-  QueryGraphContext& context_;
-  const connector::SchemaResolver& schemaResolver_;
-};
-```
-
-#### Algorithm for Phase 1 — `rewriteBaseTable()` (with `getMaterializedViewStatus` approach):
-
-```
-1. Get MV definition from Table object:
-   mvDef = baseTable->schemaTable->connectorTable->materializedViewDefinition()
-2. If mvDef has no value → not an MV, skip.
-
-3. Call ConnectorMetadata::getMaterializedViewStatus(mvTable, queryFilter):
-   → Connector internally compares MV partitions vs base table partitions.
-   → Returns: MaterializedViewStatus { refreshColumn="ds",
-       boundaryValues={"2026-01-21", "2026-01-28"} }
-   → Returns std::nullopt if MV covers everything (no stitching needed).
-
-4. If result is nullopt → MV is complete for this query, skip.
-
-5. Build column name mapping from mvDef.columnMappings().
-
-6. Construct range predicates from boundaryValues:
-   - For each pair [boundaryValues[2i], boundaryValues[2i+1]]:
-     mvRanges += (refreshCol >= val[2i] AND refreshCol <= val[2i+1])
-   - basePredicate = NOT (mvRanges)  // everything outside the fresh ranges
-
-   Phase 1 example (single pair {"2026-01-21", "2026-01-28"}):
-     MV filter:   ds >= '2026-01-21' AND ds <= '2026-01-28'
-     Base filter:  ds < '2026-01-21' OR ds > '2026-01-28'
-
-   Phase 2 example (two pairs {"2026-01-21", "2026-01-24", "2026-01-26", "2026-01-28"}):
-     MV filter:   (ds >= '..21' AND ds <= '..24') OR (ds >= '..26' AND ds <= '..28')
-     Base filter:  everything else (includes stale ds='2026-01-25')
-
-7. Construct UNION ALL DerivedTable:
-   a. mvDt (left child): DerivedTable containing original BaseTable
-      - Add mvRanges filter + existing user filters
-
-   b. baseDt (right child): DerivedTable containing new BaseTable for base table
-      - Resolve base table via SchemaResolver
-      - Create BaseTable with base table's columns
-      - Add basePredicate filter + existing user filters (translated via column mapping)
-      - Apply column mapping (base col names → MV col names) via DerivedTable.exprs
-
-   c. parentDt: DerivedTable with setOp = kUnionAll, children = [mvDt, baseDt]
-      - columns match original MV query output
-
-8. Replace original BaseTable in parent DerivedTable with parentDt.
-```
-
-**Key insight:** The optimizer never deals with partition lists. It receives
-a column + boundary vector from the connector and constructs range predicates.
-The same logic handles both Phase 1 (single range) and Phase 2 (multiple ranges
-with gaps for stale partitions).
-
-#### Alternative Algorithm — Direct `SplitManager` Approach (for reference):
-
-The alternative approach has the optimizer access partitions directly instead of
-going through `getMaterializedViewStatus()`. This is kept here for comparison.
-
-```
-1. Get MV definition from Table object (same as above).
-2. Get the MV's partition column from mvDef.validRefreshColumns() (e.g., "ds").
-3. Fetch MV partition list via SplitManager (using query's WHERE predicate).
-   → Returns: {"ds=2026-01-21", "ds=2026-01-22", ..., "ds=2026-01-28"}
-4. Fetch base table partition list via SplitManager (using same WHERE predicate).
-   → Returns: {"ds=2026-01-21", "ds=2026-01-22", ..., "ds=2026-01-30"}
-5. Compute missing partitions = base table partitions − MV partitions.
-   → Missing: {"ds=2026-01-29", "ds=2026-01-30"}
-6. If no missing partitions → skip (MV is complete for this query).
-7. Build column name mapping from mvDef.columnMappings().
-8. Construct UNION ALL DerivedTable:
-   a. mvDt: keep existing filters (missing partitions don't exist in MV)
-   b. baseDt: add partitionCol IN (missing partition values)
-   c. parentDt: setOp = kUnionAll, children = [mvDt, baseDt]
-9. Replace original BaseTable with parentDt.
-```
-
-**Tradeoffs vs `getMaterializedViewStatus()`:**
-- **Pro:** More precise — uses exact IN-list filters instead of range predicates,
-  potentially fewer partitions read from base table.
-- **Con:** Optimizer depends on SplitManager/partition concepts, not partition-agnostic.
-- **Con:** Doesn't support Iceberg or other formats without named partitions.
-- **Con:** The optimizer currently doesn't hold a `tableHandle` needed for the
-  standard `SplitManager::listPartitions()` call. Would need to use the
-  Prism-specific overload `listPartitions(layout, subfieldFilters)` which
-  breaks connector-agnostic abstraction.
-
-### 1.4 Integration Point
-
-**File:** `axiom/optimizer/Optimization.cpp`
-
-The optimization pipeline starts in the `Optimization` constructor, which builds the
-query graph and initializes plans:
-
-```cpp
-// Optimization constructor (simplified):
-root_ = toGraph_.makeQueryGraph(*logicalPlan_);
-root_->initializePlans();
-```
-
-Then `Optimization::bestPlan()` performs join planning and returns the best plan:
-
-```cpp
-PlanP Optimization::bestPlan() {
-  PlanObjectSet targetColumns;
-  targetColumns.unionObjects(root_->columns);
-  topState_.dt = root_;
-  topState_.setTargetExprsForDt(targetColumns);
-  makeJoins(topState_);
-  return topState_.plans.best();
+  // 4. Compute status via computeMaterializedViewStatus()
+  return computeMaterializedViewStatus(mvValues, baseValues);
 }
 ```
 
-The MV rewrite should be inserted **after** `initializePlans()` in the constructor
-and **before** `bestPlan()` begins join planning. This ensures the UNION ALL
-DerivedTable is in place before the optimizer plans joins and selects access paths.
+#### Algorithm: `computeMaterializedViewStatus()`
 
-```cpp
-// In Optimization constructor, after initializePlans():
-root_ = toGraph_.makeQueryGraph(*logicalPlan_);
-root_->initializePlans();
+A pure function that compares two partition value sets and produces boundary ranges.
 
-// MV partition stitching rewrite.
-MaterializedViewRewrite mvRewrite(context_, resolver_);
-mvRewrite.rewrite(*root_);
+```
+Input:  mvValues  : set<string>   -- partition values present in the MV
+        baseValues: set<string>   -- partition values present in the base table
+
+Algorithm:
+  1. If mvValues is empty -> return kNotMaterialized.
+  2. Compute freshValues = mvValues intersection baseValues.
+  3. If freshValues == baseValues -> return kFullyMaterialized.
+  4. Otherwise -> kPartiallyMaterialized. Compute boundary ranges:
+     a. Sort freshValues lexicographically.
+     b. Walk sorted values, grouping into contiguous ranges.
+        Two values are "contiguous" if they are adjacent in the sorted
+        baseValues set (no base value exists between them that is missing
+        from the MV).
+     c. Output: pairs [lo1, hi1, lo2, hi2, ...] for each contiguous range.
+
+Correctness:
+  - The MV range filter (refreshCol >= lo AND refreshCol <= hi) selects
+    exactly the fresh partitions within each contiguous range.
+  - The base complement filter (refreshCol < lo OR refreshCol > hi) selects
+    exactly the remaining partitions.
+  - For non-contiguous ranges: MV filter uses OR'd ranges, base filter uses
+    AND'd complements (De Morgan duals), maintaining exhaustive coverage.
+  - Together, every partition value in baseValues is covered by exactly one
+    side — no gaps, no overlaps.
 ```
 
-### 1.5 Column Mapping Details
+**Example:** MV has `{21, 22, 24, 25}`, base has `{21, 22, 23, 24, 25}`.
+Result: `kPartiallyMaterialized`, boundaries = `["21", "22", "24", "25"]` (two ranges,
+gap at 23).
 
-Using the existing `MaterializedViewDefinition::columnMappings()`:
+**Note:** `getMaterializedViewStatus()` currently uses `blockingWait` which blocks the
+calling thread. For queries referencing multiple MVs, statuses are fetched sequentially.
+**TODO:** Add an async `co_getMaterializedViewStatus()` coroutine interface so the rewrite
+pass can fetch all MV statuses concurrently via `collectAll`.
+
+### 4. Optimizer Rewrite
+
+**File:** `axiom/optimizer/MaterializedViewRewrite.h/.cpp`
+
+The `MaterializedViewRewrite` pass runs **before** `initializePlans()` in the
+`Optimization` constructor. This timing is critical: it runs after `ToGraph` builds
+the query graph but before `distributeConjuncts()`, so user WHERE filters are naturally
+pushed into both UNION ALL children.
+
 ```cpp
-struct ColumnMapping {
-  TableColumn viewColumn;                  // MV column
-  std::vector<TableColumn> baseTableColumns; // base table source columns
-};
-
-struct TableColumn {
-  SchemaTableName tableName;
-  std::string columnName;
-  std::optional<bool> isDirectMapped;
-};
+// In Optimization constructor:
+root_ = toGraph_.makeQueryGraph(*planRoot);
+MaterializedViewRewrite mvRewrite(toGraph_);
+mvRewrite.rewrite(*root_);      // <-- MV rewrite here
+root_->initializePlans();        // distributeConjuncts() pushes filters down
 ```
 
-For each column in the MV query, find the matching `ColumnMapping` where
-`viewColumn.columnName` matches. Then use `baseTableColumns[i].columnName`
-(for the matching base table) as the source column in the base table scan.
+**TODO:** Change to a static function call: `MaterializedViewRewrite::rewrite(toGraph_, *root_);`
+since the class holds no mutable state between calls.
 
-When constructing `baseDt`:
-- `baseDt->exprs` = base table column references (using base column names)
-- `baseDt->columns` = shared with parent DerivedTable (using MV column names)
+The rewrite constructs DerivedTable/BaseTable nodes directly, using `ToGraph` only for
+correlation name generation (`newCName()`) and schema lookups (`schema().findTable()`).
+It does not call `ToGraph::makeQueryGraph()` because the rewrite operates on an
+already-built query graph. The nodes are wired to match ToGraph's invariants (column
+ownership, expr mapping, table registration) manually.
 
-This makes the UNION ALL seamless — both children produce columns with the same
-output names.
+#### Rewrite algorithm
 
-### 1.6 Build System
+For each BaseTable with a `MaterializedViewDefinition`:
 
-**File:** `axiom/optimizer/BUCK`
+1. **Query status:** Call `getMaterializedViewStatus(mvTable)` on the connector.
 
-Add `MaterializedViewRewrite.cpp` to the optimizer library target.
+2. **Dispatch on state:**
+   - `kFullyMaterialized` -> no-op (scan MV as-is)
+   - `kNotMaterialized` / `kTooManyPartitionsMissing` -> replace MV scan with full
+     base table scan via `replaceWithBaseTable()`
+   - `kPartiallyMaterialized` -> construct UNION ALL (step 3)
 
-### Phase 1 Files Changed
+3. **Build UNION ALL** (for `kPartiallyMaterialized`):
 
-| File | Change Type | Description |
-|------|-------------|-------------|
-| `axiom/connectors/ConnectorMetadata.h/.cpp` | Modify | Add `materializedViewDefinition` field and accessor to base `Table` class |
-| `axiom/facebook/prism/PrismConnectorMetadata.cpp` | Modify | Populate `MaterializedViewDefinition` on `Table` in `findTable()` |
-| `axiom/optimizer/MaterializedViewRewrite.h` | **NEW** | MV rewrite pass header |
-| `axiom/optimizer/MaterializedViewRewrite.cpp` | **NEW** | MV rewrite pass — missing partition detection and UNION ALL construction |
-| `axiom/optimizer/Optimization.cpp` | Modify | Call `MaterializedViewRewrite` in optimization pipeline |
-| `axiom/optimizer/BUCK` | Modify | Add new files to build |
+   ```
+   UNION ALL (DerivedTable, setOp = kUnionAll)
+   +-- MV child (DerivedTable)
+   |   +-- BaseTable(mv_sales)
+   |       filter: ds >= '2026-01-21' AND ds <= '2026-01-28'
+   +-- Base child (DerivedTable)
+       +-- BaseTable(sales)
+           filter: ds < '2026-01-21' OR ds > '2026-01-28'
+           columns mapped: total -> revenue, ds -> ds
+   ```
+
+   - **MV child:** Wraps the original BaseTable, adds range filter from boundaries.
+   - **Base child:** New BaseTable for the base table. Column names mapped via
+     `columnMappings()` (e.g., MV's `total` maps to base's `revenue`). Complement
+     filter added.
+   - **Shared columns:** Both children share the same output Column objects owned
+     by the UNION ALL DerivedTable.
+
+4. **Multiple boundary ranges** (non-contiguous fresh data):
+   - MV filter: OR'd ranges `(ds >= lo1 AND ds <= hi1) OR (ds >= lo2 AND ds <= hi2)`
+   - Base filter: AND'd complements `(ds < lo1 OR ds > hi1) AND (ds < lo2 OR ds > hi2)`
+
+5. **Replace in parent:** Swap original BaseTable for the UNION ALL DerivedTable.
+   Remap all parent expression references (exprs, conjuncts, having, orderKeys).
 
 ---
 
-## Phase 2: Stale Partition Detection via `partitionFreshness`
+## Supported View Shapes
 
-Phase 2 extends Phase 1 to also detect **stale** partitions — partitions that exist
-in the MV but contain outdated data (base table was updated after the MV was last
-refreshed). A partition is stale when `partitionFreshness == 2` (STALE) in the
-metastore response.
+The partition stitching is **shape-agnostic** -- it operates on partition boundaries
+and column name mappings, not on the view's SQL structure.
 
-### Key Design: No Optimizer Changes for Phase 2
+| View Shape | Example MV Definition | How Stitching Works |
+|---|---|---|
+| Simple projection | `SELECT * FROM t` | 1:1 column mapping |
+| Column subset | `SELECT a, ds FROM t` | MV has fewer columns; base reads only mapped columns |
+| Column renaming | `SELECT a AS x FROM t` | `columnMappings` maps `x` -> `a` |
+| Expressions | `SELECT a + b AS c FROM t` | MV stores computed `c`; base reads mapped source column |
+| Filters | `SELECT * FROM t WHERE active` | MV data has filter applied; base reads full partitions |
+| Aggregations | `SELECT ds, SUM(x) AS s FROM t GROUP BY ds` | MV has pre-aggregated rows; base returns raw rows |
+| Joins | `SELECT ... FROM t1 JOIN t2` | **Not yet supported.** See Preconditions (#1) and Limitations. |
 
-With the `getMaterializedViewStatus()` approach, **no optimizer code changes are
-needed** for Phase 2. The difference is entirely inside the connector:
-
-- **Phase 1:** `getMaterializedViewStatus()` computes boundary ranges from the set of
-  existing MV partitions.
-- **Phase 2:** `getMaterializedViewStatus()` computes boundary ranges from the set of
-  **existing AND fresh** MV partitions. Stale partitions are excluded from the fresh
-  ranges, so the optimizer naturally reads them from the base table.
-
-The optimizer receives the same `MaterializedViewStatus` struct (refreshColumn +
-boundaryValues vector) and constructs the same UNION ALL — it doesn't know or care
-whether the boundaries were computed from missing partitions, stale partitions, or
-both.
-
-### 2.1 Thread `partitionFreshness` through Prism partition pipeline
-
-This is the connector-side work needed to make `getMaterializedViewStatus()` aware
-of freshness.
-
-#### 2.1.1 Extend `PartitionNameWithVersion` to include freshness
-
-**File:** `axiom/facebook/prism/PrismCatalogClient.h`
-
-```cpp
-struct PartitionNameWithVersion {
-  std::string partitionName;
-  int64_t version;
-  std::optional<int16_t> partitionFreshness; // 1=FRESH, 2=STALE
-};
-```
-
-#### 2.1.2 Extract `partitionFreshness` from thrift response
-
-**File:** `axiom/facebook/prism/metastore/client/PrismMetastoreClient.cpp`
-
-In `co_getPartitionNamesWithVersionByFilter()`, the thrift
-`PartitionNameWithVersion` response has field 6: `partitionFreshness`.
-Currently only `partitionName` and `metadataVersion` are extracted.
-Change the return type from `vector<pair<string, int64_t>>` to include
-freshness.
-
-#### 2.1.3 Use freshness in `getMaterializedViewStatus()` implementation
-
-**File:** `axiom/facebook/prism/PrismConnectorMetadata.cpp`
-
-When computing boundary ranges:
-- Phase 1: All MV partitions are considered fresh (freshness not checked).
-- Phase 2: Filter out stale partitions (freshness == 2) before computing ranges.
-  The remaining fresh partitions form the boundary ranges returned to the optimizer.
-
-### Alternative: Direct SplitManager Approach for Phase 2 (for reference)
-
-If using the direct SplitManager approach (see Phase 1 alternative algorithm), Phase 2
-would additionally require:
-
-#### Propagate freshness to `PrismPartitionHandle`
-
-**File:** `axiom/facebook/prism/PrismPartitionHandle.h/.cpp`
-
-Add `partitionFreshness` field:
-```cpp
-class PrismPartitionHandle : public connector::PartitionHandle {
-  // ... existing fields ...
-  std::optional<int16_t> partitionFreshness_;
-public:
-  std::optional<int16_t> partitionFreshness() const;
-};
-```
-
-**File:** `axiom/facebook/prism/PrismSplitManager.cpp`
-
-In `listPartitions()`, propagate `partitionFreshness` from
-`PartitionNameWithVersion` to `PrismPartitionHandle`.
-
-#### Update `MaterializedViewRewrite` to use freshness
-
-**File:** `axiom/optimizer/MaterializedViewRewrite.cpp`
-
-Extend the rewrite algorithm to also check freshness:
-
-```
-Phase 1 (existing): missing = basePartitions − mvPartitions
-Phase 2 (new):      stale   = {p ∈ mvPartitions | p.freshness == STALE}
-
-Partitions to read from base table = missing ∪ stale
-Partitions to read from MV         = mvPartitions − stale
-```
-
-When stale partitions exist, the MV scan now needs an **additional filter** to
-exclude them:
-- `partitionCol IN (fresh MV partition values)` — only read fresh partitions from MV
-- `partitionCol IN (stale + missing partition values)` — read the rest from base table
-
-**Tradeoff:** This approach requires optimizer changes for Phase 2 (filtering stale
-partitions), whereas the `getMaterializedViewStatus()` approach does not.
-
-### Phase 2 Files Changed
-
-With `getMaterializedViewStatus()` approach:
-
-| File | Change Type | Description |
-|------|-------------|-------------|
-| `axiom/facebook/prism/PrismCatalogClient.h` | Modify | Add `partitionFreshness` to `PartitionNameWithVersion` |
-| `axiom/facebook/prism/metastore/client/PrismMetastoreClient.cpp` | Modify | Extract `partitionFreshness` from thrift response |
-| `axiom/facebook/prism/PrismConnectorMetadata.cpp` | Modify | Use freshness when computing boundary ranges in `getMaterializedViewStatus()` |
-
-Note: **No optimizer files changed** — the optimizer code from Phase 1 handles
-Phase 2 transparently via the boundary vector.
+**Key design point:** The base table side returns **raw rows**, not re-computed MV
+expressions. For aggregation MVs, the MV side returns pre-aggregated results
+(e.g., `ds='01-21', total=100`) while the base side returns raw rows
+(e.g., `ds='01-29', revenue=5`). If the user's query includes aggregation, the
+query-level aggregation produces the correct final result. This matches Presto's
+MV stitching behavior.
 
 ---
 
-## Testing Strategy
+## Test Plan
 
-### Phase 1 Tests
-- MV with all partitions present → no rewrite
-- MV with some missing partitions → UNION ALL with base table for missing
-- MV with no partitions at all → full base table scan (or fall back to base)
-- Column mapping applied correctly (different column names in MV vs base)
-- Non-partition filters preserved on both sides of UNION ALL
+### Unit tests for `computeMaterializedViewStatus()`
 
-### Phase 2 Tests
-- MV with all fresh partitions → no rewrite
-- MV with some stale partitions → UNION ALL, MV side filtered to fresh only
-- MV with mix of stale + missing → UNION ALL handles both correctly
-- MV with all stale partitions → full base table scan
+**File:** `fb_axiom/connectors/prism/tests/PrismConnectorMetadataTest.cpp`
 
-### Integration & Regression
-- End-to-end test with mock metastore returning mixed partition states
-- Run existing optimizer tests to verify no regressions
+Covers all `MaterializedViewState` values and boundary edge cases:
+- Empty MV -> `kNotMaterialized`
+- MV covers all base partitions -> `kFullyMaterialized`
+- Missing partitions at start, end, and middle -> `kPartiallyMaterialized` with correct boundaries
+- Multiple disjoint fresh ranges -> multiple boundary pairs
+- Single-partition MV
+- MV with values not present in base table (ignored in boundary computation)
+
+### Unit tests for `MaterializedViewRewrite`
+
+**File:** `axiom/optimizer/tests/MaterializedViewRewriteTest.cpp`
+
+Verifies the query graph structure after rewrite for each `MaterializedViewState`:
+- UNION ALL structure (correct children, set operation type)
+- Filter expressions on MV and base sides
+- Column mapping from MV names to base table names
+- Parent reference remapping (exprs, conjuncts, orderKeys)
+
+### End-to-end tests
+
+Verify that stitched results match full base table scans:
+- MV not refreshed (empty) -> results equal base table query
+- MV partially refreshed -> results equal base table query
+- MV fully refreshed -> results equal MV-only query
+
+### Edge case tests
+
+- MV with no refresh columns -> rewrite is skipped
+- Mismatched schemas
+- Empty base table
+- Single-partition MV
+- Non-contiguous fresh ranges with multiple gaps
 
 ---
 
-## Open Questions / Risks
+## Key Files
 
-1. **Multi-base-table MVs**: Initial implementation assumes a single base table. MVs defined as joins across multiple base tables would need `getMaterializedViewStatus()` to return per-base-table boundaries and the optimizer to construct a more complex rewrite. Suggest deferring to a future phase.
-2. **Non-contiguous fresh ranges**: With the boundary vector approach, scattered stale partitions produce multiple fresh ranges (e.g., ds=21–24 fresh, ds=25 stale, ds=26–28 fresh). The optimizer constructs OR'd range predicates, which may be less efficient than precise IN-list filters. Acceptable for correctness; can be optimized later.
-3. **`getMaterializedViewStatus()` latency**: The connector must fetch MV and base table partition lists to compute boundaries. This adds metastore RPCs during optimization. Consider caching partition metadata or making the call async. Also, if the MV is complete (no stitching needed), the call should be cheap — ideally a fast-path check before full partition comparison.
-4. **Boundary value type**: The current design uses `std::string` for boundary values. This works for date-string partitions (`ds='2026-01-28'`) but may need generalization for numeric or timestamp partition columns. The optimizer needs to know the column type to construct correct comparison expressions.
-5. **`queryFilter` parameter in `getMaterializedViewStatus()`**: The connector needs the query's WHERE clause to scope the partition comparison (e.g., only compare partitions where `ds > '2026-01-20'`). The expression type for this parameter needs to be defined — the optimizer works with `ExprCP`, but the connector layer doesn't understand optimizer expressions. May need a lightweight filter representation or the connector fetches all partitions and lets the optimizer intersect with the query filter.
-6. **Column mapping for partition/refresh columns**: If the MV's refresh column has a different name than the base table's partition column, the column mapping in `MaterializedViewDefinition` must handle this. The boundary's `refreshColumn` refers to the MV column name; the base table scan needs to translate it via the mapping.
-7. **Empty or fully-stale MV**: If `boundaryValues` is empty (no fresh data at all), the optimizer should eliminate the MV side entirely and read everything from the base table. Need to handle this edge case cleanly.
-8. **UNION ALL overhead**: The UNION ALL rewrite adds a set operation to every MV query, even when only a small number of partitions are missing. For queries where the MV covers 99% of partitions, this is acceptable. But if the optimizer can detect that the base table side would be empty (all partitions within the query's range are in the MV), it should skip the rewrite entirely — this is handled by `getMaterializedViewStatus()` returning `std::nullopt`.
-9. **Interaction with existing optimizer passes**: The MV rewrite inserts a UNION ALL DerivedTable into the query graph. Need to verify this doesn't interfere with subsequent optimization passes (join planning, predicate pushdown, constant folding). The rewrite runs after `initializePlans()` but before `bestPlan()`'s `makeJoins()` — verify this ordering is safe.
+| File | Role |
+|---|---|
+| `axiom/connectors/MaterializedViewDefinition.h` | `MaterializedViewDefinition`, `ColumnMapping`, `TableColumn` data structures |
+| `axiom/connectors/ConnectorMetadata.h` | `MaterializedViewStatus`, `MaterializedViewState`, `ViewType` enums; `Table::materializedViewDefinition()` accessor; `getMaterializedViewStatus()` virtual method |
+| `fb_axiom/connectors/prism/PrismConnectorMetadata.cpp` | `parseMaterializedViewDefinition()` (JSON decode); `getMaterializedViewStatus()` (partition comparison); `computeMaterializedViewStatus()` (boundary computation) |
+| `fb_axiom/connectors/prism/PrismView.h` | `PrismView` -- carries `ViewType` for logical vs materialized |
+| `axiom/optimizer/MaterializedViewRewrite.h/.cpp` | Rewrite pass: detects MV tables, builds UNION ALL, replaces in query graph |
+| `axiom/optimizer/Optimization.cpp` | Integration point: calls `MaterializedViewRewrite` before `initializePlans()` |
+
+---
+
+## Limitations and Future Work
+
+| Limitation | Description | Status |
+|---|---|---|
+| Multi-base-table MVs | MVs defined as joins across 2+ tables: `MaterializedViewDefinition` already stores multiple `baseTables`, but the rewrite (`rewriteBaseTable`, `replaceWithBaseTable`) and connector (`getMaterializedViewStatus`) currently only process the first base table. Extending requires per-base-table boundary computation and multi-way column mapping. | Future |
+| No expression re-evaluation | Base table side returns raw rows, not re-computed MV expressions | By design (matches Presto) |
+| No query-domain scoping | `getMaterializedViewStatus()` fetches all partitions, not scoped to query's WHERE clause | Future optimization |
+| String-based boundary values | Boundary values are compared lexicographically. Correct for date-formatted partition keys (`ds='2026-01-28'`). Numeric partition keys would require type-aware comparison via Variant or a typed wrapper. | Future generalization |
+| No MV auto-selection | User must reference the MV explicitly; optimizer does not automatically choose the best MV for a query | Future feature |
+| No stale partition detection | Phase 1 only detects missing partitions. Phase 2 will use `partitionFreshness` from metastore to also exclude stale partitions from fresh ranges | Planned |
+| Synchronous status fetching | `getMaterializedViewStatus()` uses `blockingWait`; queries with multiple MVs fetch statuses sequentially. Need async `co_getMaterializedViewStatus()` with batched `collectAll` in the rewrite pass. | TODO |
+| Mutable Table setter | `setMaterializedViewDefinition()` mutates the `Table` after construction. Should set during construction to match the immutability of other `Table` members. | TODO |
+| Static rewrite interface | `MaterializedViewRewrite` holds no mutable state; should use a static `rewrite(toGraph, root)` instead of object instantiation. | TODO |

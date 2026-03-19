@@ -20,6 +20,7 @@
 #include <utility>
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/FunctionRegistry.h"
+#include "axiom/optimizer/MaterializedViewRewrite.h"
 #include "axiom/optimizer/Plan.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/PrecomputeProjection.h"
@@ -63,6 +64,13 @@ Optimization::Optimization(
   }
 
   root_ = toGraph_.makeQueryGraph(*planRoot);
+
+  // MV partition stitching rewrite — runs before initializePlans() so that
+  // distributeConjuncts() naturally pushes WHERE filters into UNION ALL
+  // children and the memo is computed on the correct tree.
+  MaterializedViewRewrite mvRewrite(toGraph_);
+  mvRewrite.rewrite(*root_);
+
   root_->initializePlans();
 }
 
