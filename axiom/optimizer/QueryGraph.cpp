@@ -260,6 +260,43 @@ void checkTableReferences(
 }
 } // namespace
 
+AggregationPlan::AggregationPlan(
+    ExprVector groupingKeys,
+    AggregateVector aggregates,
+    ColumnVector columns,
+    ColumnVector intermediateColumns,
+    GroupingSets groupingSets,
+    ColumnCP groupIdColumn,
+    ColumnVector inputGroupingKeys)
+    : PlanObject(PlanType::kAggregationNode),
+      groupingKeys_(std::move(groupingKeys)),
+      aggregates_(std::move(aggregates)),
+      columns_(std::move(columns)),
+      intermediateColumns_(std::move(intermediateColumns)),
+      groupingSets_(std::move(groupingSets)),
+      groupIdColumn_(groupIdColumn),
+      inputGroupingKeys_(std::move(inputGroupingKeys)) {
+  const auto expectedSize = groupingKeys_.size() + aggregates_.size() +
+      (groupIdColumn_ != nullptr ? 1 : 0);
+  VELOX_CHECK_EQ(expectedSize, columns_.size());
+  VELOX_CHECK_EQ(columns_.size(), intermediateColumns_.size());
+
+  for (const auto& set : groupingSets_) {
+    for (size_t i = 0; i < set.size(); ++i) {
+      VELOX_CHECK_LT(
+          set[i],
+          groupingKeys_.size(),
+          "Grouping set index out of bounds: index={}, numKeys={}",
+          set[i],
+          groupingKeys_.size());
+      for (size_t j = i + 1; j < set.size(); ++j) {
+        VELOX_CHECK_NE(
+            set[i], set[j], "Duplicate index in grouping set: {}", set[i]);
+      }
+    }
+  }
+}
+
 void AggregationPlan::checkConsistency(const DerivedTable& dt) const {
   checkTableReferences<ExprCP>(dt, groupingKeys_, "Grouping key");
   checkTableReferences<AggregateCP>(dt, aggregates_, "Aggregate");

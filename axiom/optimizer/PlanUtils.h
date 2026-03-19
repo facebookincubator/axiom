@@ -152,4 +152,10 @@ std::string columnsToString(const ColumnVector& columns);
 
 std::string exprsToString(const ExprVector& exprs);
 
+/// Returns the aggregate for an output column ordinal, or nullptr if the
+/// ordinal corresponds to a grouping key or grouping set index column.
+const logical_plan::AggregateExpr* aggregateForOrdinal(
+    const logical_plan::AggregateNode& agg,
+    size_t ordinal);
+
 } // namespace facebook::axiom::optimizer

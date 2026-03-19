@@ -339,6 +339,13 @@ PlanObjectSet PlanState::computeDownstreamColumns(bool includeFilters) const {
     for (auto& aggregate : aggToPlace->aggregates()) {
       addExpr(aggregate);
     }
+    // Grouping-sets replaces key columns with auto-generated output columns
+    // on the DerivedTable. These are not base table columns, so they get
+    // filtered out by indexColumns(). Register the original input columns so
+    // the scan includes them.
+    for (auto* inputKey : aggToPlace->inputGroupingKeys()) {
+      result.add(inputKey);
+    }
   }
 
   // Window functions.
