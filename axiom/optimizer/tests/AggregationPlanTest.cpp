@@ -531,5 +531,103 @@ TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
   }
 }
 
+TEST_F(AggregationPlanTest, groupingSets) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .rollup({"a", "b"}, {"sum(c) as total"}, "gid")
+                         .build();
+
+  // Single-node plan shape.
+  {
+    auto plan = toSingleNodePlan(logicalPlan);
+
+    // ROLLUP(a, b) expands to grouping sets: {a, b}, {a}, {}.
+    // Grouping keys get auto-generated output names in GroupId.
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .groupId({{"gk3", "gk4"}, {"gk3"}, {}}, {"c"}, "gid")
+            .singleAggregation({"gk3", "gk4", "gid"}, {"sum(c) as total"})
+            .project({"gk3 as a", "gk4 as b", "total", "gid"})
+            .build();
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Distributed plan shape.
+  {
+    auto plan = planVelox(logicalPlan);
+
+    auto matcher =
+        core::PlanMatcherBuilder()
+            .tableScan()
+            .groupId({{"gk3", "gk4"}, {"gk3"}, {}}, {"c"}, "gid")
+            .partialAggregation({"gk3", "gk4", "gid"}, {"sum(c) as total"})
+            .shuffle()
+            .localPartition()
+            .finalAggregation()
+            .project({"gk3 as a", "gk4 as b", "total", "gid"})
+            .gather()
+            .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  }
+}
+
+// Verifies that a grouping key can also be an aggregation input.
+// SELECT a, SUM(a) FROM t GROUP BY ROLLUP(a) requires 'a' to appear both as
+// a grouping key (subject to NULL-ing) and as an aggregation input (preserved).
+TEST_F(AggregationPlanTest, groupingSetsKeyIsAggInput) {
+  testConnector_->addTable("t", ROW({"a", "b"}, {BIGINT(), DOUBLE()}));
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("t")
+                         .rollup({"a"}, {"sum(a) as total"}, "gid")
+                         .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  // 'a' appears as both a grouping key and an aggregation input in GroupId.
+  // The key output uses an auto-generated name while the aggregate input
+  // passes through as 'a'.
+  auto matcher = core::PlanMatcherBuilder()
+                     .tableScan()
+                     .groupId({{"gk3"}, {}}, {"a"}, "gid")
+                     .singleAggregation({"gk3", "gid"}, {"sum(a) as total"})
+                     .project({"gk3 as a", "total", "gid"})
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+// Identical grouping sets compute separately today. Follow-up optimization:
+// detect identical sets, compute once, and replicate rows.
+TEST_F(AggregationPlanTest, groupingSetsCrossSetOptimization) {
+  testConnector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), DOUBLE()}));
+
+  // GROUP BY GROUPING SETS ((a, b), (b, a), (a, b)) — all three sets are
+  // order-insensitively identical but treated as separate sets today.
+  auto logicalPlan =
+      lp::PlanBuilder(makeContext())
+          .tableScan("t")
+          .aggregate(
+              {{"a", "b"}, {"b", "a"}, {"a", "b"}}, {"count(1) as c"}, "gid")
+          .build();
+
+  auto plan = toSingleNodePlan(logicalPlan);
+
+  // Three separate grouping sets in GroupId. Follow-up: collapse to one set
+  // with row replication.
+  auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan()
+          .groupId({{"gk3", "gk4"}, {"gk4", "gk3"}, {"gk3", "gk4"}}, {}, "gid")
+          .singleAggregation({"gk3", "gk4", "gid"}, {"count(1) as c"})
+          .project({"gk3 as a", "gk4 as b", "c", "gid"})
+          .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer

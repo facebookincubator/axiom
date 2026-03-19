@@ -1285,21 +1285,37 @@ using WindowFunctionVector = QGVector<WindowFunctionCP>;
 /// aggregates: columns_[i] corresponds to groupingKeys_[i] for
 /// i < groupingKeys_.size(), and to aggregates_[i - groupingKeys_.size()]
 /// otherwise.
+/// Each grouping set is a list of indices into the grouping keys array.
+using GroupingSet = QGVector<int32_t>;
+using GroupingSets = QGVector<GroupingSet>;
+
 class AggregationPlan : public PlanObject {
  public:
+  /// @param groupingKeys GROUP BY columns referencing the enclosing
+  ///   DerivedTable's tableSet. When grouping sets are present, these are
+  ///   new columns with auto-generated names (no alias).
+  /// @param aggregates Aggregate functions (sum, count, etc.).
+  /// @param columns Output columns: groupingKeys[i] maps to columns[i], then
+  ///   aggregates. If groupIdColumn is present, it appears after the last
+  ///   aggregate column.
+  /// @param intermediateColumns Columns with intermediate accumulator types for
+  ///   partial aggregation. Same layout as columns.
+  /// @param groupingSets Grouping sets for ROLLUP/CUBE/GROUPING SETS. Each set
+  ///   is a list of indices into groupingKeys. Empty for regular GROUP BY.
+  /// @param groupIdColumn Output column for the grouping set ID. Null when
+  ///   grouping sets are not used.
+  /// @param inputGroupingKeys Original grouping key columns before they were
+  ///   replaced with auto-generated output columns. Used by ToVelox to build
+  ///   GroupingKeyInfo{.output = auto-generated, .input = original}. Empty
+  ///   when grouping sets are not used.
   AggregationPlan(
       ExprVector groupingKeys,
       AggregateVector aggregates,
       ColumnVector columns,
-      ColumnVector intermediateColumns)
-      : PlanObject(PlanType::kAggregationNode),
-        groupingKeys_(std::move(groupingKeys)),
-        aggregates_(std::move(aggregates)),
-        columns_(std::move(columns)),
-        intermediateColumns_(std::move(intermediateColumns)) {
-    VELOX_CHECK_EQ(groupingKeys_.size() + aggregates_.size(), columns_.size());
-    VELOX_CHECK_EQ(columns_.size(), intermediateColumns_.size());
-  }
+      ColumnVector intermediateColumns,
+      GroupingSets groupingSets = {},
+      ColumnCP groupIdColumn = nullptr,
+      ColumnVector inputGroupingKeys = {});
 
   /// GROUP BY columns. Each references a column from a table in the enclosing
   /// DerivedTable's tableSet or from the DerivedTable itself.
@@ -1332,11 +1348,38 @@ class AggregationPlan : public PlanObject {
   /// reference 'dt'.
   void checkConsistency(const DerivedTable& dt) const;
 
+  /// Returns true if this aggregation uses grouping sets (ROLLUP/CUBE/GROUPING
+  /// SETS).
+  bool hasGroupingSets() const {
+    return !groupingSets_.empty();
+  }
+
+  /// Grouping sets for ROLLUP/CUBE/GROUPING SETS. Empty for regular GROUP BY.
+  const GroupingSets& groupingSets() const {
+    return groupingSets_;
+  }
+
+  /// Returns the column for the grouping set ID, or nullptr if no grouping
+  /// sets.
+  ColumnCP groupIdColumn() const {
+    return groupIdColumn_;
+  }
+
+  /// Original grouping key columns before replacement with auto-generated
+  /// output columns. Used by the physical GroupId to produce correct Velox
+  /// input field references. Empty when grouping sets are not used.
+  const ColumnVector& inputGroupingKeys() const {
+    return inputGroupingKeys_;
+  }
+
  private:
   const ExprVector groupingKeys_;
   const AggregateVector aggregates_;
   const ColumnVector columns_;
   const ColumnVector intermediateColumns_;
+  const GroupingSets groupingSets_;
+  const ColumnCP groupIdColumn_;
+  const ColumnVector inputGroupingKeys_;
 };
 
 using AggregationPlanCP = const AggregationPlan*;

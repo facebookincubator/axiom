@@ -950,11 +950,18 @@ replaceInputs(AggregationPlanCP aggregation, const T& source, const U& target) {
     return aggregation;
   }
 
+  // Grouping sets contain indices into grouping keys (not column references),
+  // so they don't need replaceInputs treatment. groupIdColumn is an output
+  // column that is also unaffected. inputGroupingKeys reference the original
+  // input columns and must be forwarded as-is.
   return make<AggregationPlan>(
       std::move(newGroupingKeys),
       std::move(newAggregates),
       aggregation->columns(),
-      aggregation->intermediateColumns());
+      aggregation->intermediateColumns(),
+      aggregation->groupingSets(),
+      aggregation->groupIdColumn(),
+      aggregation->inputGroupingKeys());
 }
 } // namespace
 
@@ -1907,7 +1914,12 @@ void DerivedTable::distributeConjuncts() {
       // aggregation. Translate from names after agg to pre-agg
       // names. Pre/post agg names may differ for dts in set
       // operations. If already in pre-agg names, no-op.
-      if (having[i]->columns().isSubset(grouping)) {
+      //
+      // With GROUPING SETS, GroupId NULLs keys not in the active set,
+      // so HAVING filters on grouping keys must stay above aggregation
+      // to see the NULLed values.
+      if (!aggregation->hasGroupingSets() &&
+          having[i]->columns().isSubset(grouping)) {
         conjuncts.push_back(replaceInputs(
             having[i], aggregation->columns(), aggregation->groupingKeys()));
         having.erase(having.begin() + i);

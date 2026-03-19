@@ -116,6 +116,7 @@ int main(int argc, char** argv) {
   facebook::axiom::optimizer::test::registerQueryFile("join.sql");
   facebook::axiom::optimizer::test::registerQueryFile("subquery.sql");
   facebook::axiom::optimizer::test::registerQueryFile("window.sql");
+  facebook::axiom::optimizer::test::registerQueryFile("groupingsets.sql");
 
   return RUN_ALL_TESTS();
 }
