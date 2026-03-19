@@ -50,9 +50,12 @@ class GroupByPlanner {
       : builder_(builder), exprPlanner_(exprPlanner) {}
 
   /// Plans a GROUP BY clause with optional HAVING and ORDER BY.
+  /// When 'distinct' is true (GROUP BY DISTINCT), duplicate grouping sets
+  /// are removed after expansion.
   void plan(
-      const std::vector<SelectItemPtr>& selectItems,
       const std::vector<GroupingElementPtr>& groupingElements,
+      bool distinct,
+      const std::vector<SelectItemPtr>& selectItems,
       const ExpressionPtr& having,
       const OrderByPtr& orderBy) &&;
 

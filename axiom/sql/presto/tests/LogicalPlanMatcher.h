@@ -154,6 +154,13 @@ class LogicalPlanMatcherBuilder {
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates);
 
+  /// Matches an AggregateNode with the specified grouping keys, aggregates,
+  /// and grouping sets. Grouping sets are given as vectors of key indices.
+  LogicalPlanMatcherBuilder& aggregate(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<std::vector<int32_t>>& groupingSets);
+
   /// Matches an AggregateNode used for deduplication (no aggregate functions,
   /// no grouping sets, all output columns are grouping keys).
   LogicalPlanMatcherBuilder& distinct();

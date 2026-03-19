@@ -816,11 +816,12 @@ class RelationPlanner : public AstVisitor {
     const bool distinct = node->select()->isDistinct();
 
     if (auto groupBy = node->groupBy()) {
-      VELOX_USER_CHECK(
-          !groupBy->isDistinct(),
-          "GROUP BY with DISTINCT is not supported yet");
       GroupByPlanner{builder_, exprPlanner_}.plan(
-          selectItems, groupBy->groupingElements(), node->having(), orderBy);
+          groupBy->groupingElements(),
+          groupBy->isDistinct(),
+          selectItems,
+          node->having(),
+          orderBy);
 
       if (distinct) {
         builder_->distinct();
