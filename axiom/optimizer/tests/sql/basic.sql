@@ -52,3 +52,7 @@ SELECT element_at(filter(ARRAY[1, 2, 3], x -> x > 5), 1)
 ----
 -- error: Array subscript index out of bounds
 SELECT filter(ARRAY[1, 2, 3], x -> x > 5)[1]
+----
+-- Subscript on MAP with DOUBLE key.
+-- duckdb: SELECT 'hello'
+SELECT MAP(ARRAY[CAST(1.0 AS DOUBLE)], ARRAY['hello'])[1.0]
