@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "axiom/common/SchemaTableName.h"
 #include "axiom/sql/presto/PrestoParseError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -1496,6 +1497,92 @@ TEST_F(PrestoParserTest, nestedWindowFunction) {
           })
           .project({"b", "w * 2::bigint"})
           .output());
+}
+
+TEST_F(PrestoParserTest, logicalView) {
+  facebook::axiom::SchemaTableName viewName{
+      std::string(kDefaultSchema), "logical_view"};
+
+  SCOPE_EXIT {
+    connector_->dropView(viewName);
+  };
+
+  // Create a logical view explicitly.
+  connector_->createView(
+      viewName,
+      ROW({"regionkey", "cnt"}, {BIGINT(), BIGINT()}),
+      "SELECT n_regionkey as regionkey, count(*) cnt FROM nation GROUP BY 1",
+      facebook::axiom::connector::ViewType::kLogicalView);
+
+  // Verify the view type is correctly set.
+  auto* metadata =
+      facebook::axiom::connector::ConnectorMetadata::metadata(kConnectorId);
+  auto view = metadata->findView(viewName);
+  ASSERT_NE(view, nullptr);
+  ASSERT_EQ(
+      view->viewType(), facebook::axiom::connector::ViewType::kLogicalView);
+
+  // Logical views should be expanded into their underlying query.
+  // The plan should contain the aggregation from the view definition.
+  auto matcher = lp::test::LogicalPlanMatcherBuilder()
+                     .tableScan()
+                     .aggregate()
+                     .project()
+                     .output();
+  testSelect("SELECT * FROM logical_view", matcher, {"logical_view"});
+}
+
+TEST_F(PrestoParserTest, materializedView) {
+  facebook::axiom::SchemaTableName viewName{
+      std::string(kDefaultSchema), "materialized_view"};
+
+  SCOPE_EXIT {
+    connector_->dropView(viewName);
+  };
+
+  // Create a materialized view.
+  connector_->createView(
+      viewName,
+      ROW({"regionkey", "cnt"}, {BIGINT(), BIGINT()}),
+      "SELECT n_regionkey as regionkey, count(*) cnt FROM nation GROUP BY 1",
+      facebook::axiom::connector::ViewType::kMaterializedView);
+
+  // Verify the view type is correctly set.
+  auto* metadata =
+      facebook::axiom::connector::ConnectorMetadata::metadata(kConnectorId);
+  auto view = metadata->findView(viewName);
+  ASSERT_NE(view, nullptr);
+  ASSERT_EQ(
+      view->viewType(),
+      facebook::axiom::connector::ViewType::kMaterializedView);
+
+  // Materialized views should be accessed as table scans, not expanded.
+  // Since findTable() now succeeds for MVs, they take the tableScan path
+  // directly without going through findView(), so no views are recorded.
+  auto matcher = lp::test::LogicalPlanMatcherBuilder().tableScan().output();
+  testSelect("SELECT * FROM materialized_view", matcher);
+}
+
+TEST_F(PrestoParserTest, viewTypeDefault) {
+  facebook::axiom::SchemaTableName viewName{
+      std::string(kDefaultSchema), "default_view"};
+
+  SCOPE_EXIT {
+    connector_->dropView(viewName);
+  };
+
+  // Create a view without specifying type (should default to logical).
+  connector_->createView(
+      viewName,
+      ROW({"n_nationkey"}, {BIGINT()}),
+      "SELECT n_nationkey FROM nation");
+
+  auto* metadata =
+      facebook::axiom::connector::ConnectorMetadata::metadata(kConnectorId);
+  auto view = metadata->findView(viewName);
+  ASSERT_NE(view, nullptr);
+  ASSERT_EQ(
+      view->viewType(), facebook::axiom::connector::ViewType::kLogicalView);
 }
 
 } // namespace

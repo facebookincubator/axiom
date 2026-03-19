@@ -140,6 +140,14 @@ class ToGraph {
     return &evaluator_;
   }
 
+  const Schema& schema() const {
+    return schema_;
+  }
+
+  const FunctionNames& functionNames() const {
+    return functionNames_;
+  }
+
   template <typename Func>
   void trace(uint32_t event, Func f) {
     if ((options_.traceFlags & event) != 0) {

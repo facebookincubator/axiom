@@ -31,6 +31,7 @@ add_library(
   Filters.cpp
   FunctionRegistry.cpp
   JoinSample.cpp
+  MaterializedViewRewrite.cpp
   MemoKey.cpp
   Model.cpp
   Optimization.cpp

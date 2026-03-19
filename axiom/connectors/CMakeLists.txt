@@ -24,6 +24,11 @@ if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
-add_library(axiom_connectors ConnectorMetadata.cpp SchemaResolver.cpp)
+add_library(
+  axiom_connectors
+  ConnectorMetadata.cpp
+  MaterializedViewDefinition.cpp
+  SchemaResolver.cpp
+)
 
 target_link_libraries(axiom_connectors axiom_common velox_common_base velox_memory velox_connector)

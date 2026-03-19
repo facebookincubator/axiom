@@ -190,7 +190,8 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   void createView(
       const SchemaTableName& viewName,
       velox::RowTypePtr type,
-      std::string_view text);
+      std::string_view text,
+      ViewType viewType = ViewType::kLogicalView);
 
   bool dropView(const SchemaTableName& viewName);
 
@@ -206,6 +207,7 @@ class TpchConnectorMetadata : public ConnectorMetadata {
   struct ViewDefinition {
     velox::RowTypePtr type;
     std::string text;
+    ViewType viewType;
   };
 
   velox::connector::tpch::TpchConnector* tpchConnector_;
