@@ -144,13 +144,31 @@ class Expr : public velox::ISerializable {
   virtual void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
       const = 0;
 
+  /// Returns true if two expressions are structurally equal.
+  bool operator==(const Expr& other) const;
+
   std::string toString() const;
 
   /// Registers deserializers for all Expr subclasses.
   static void registerSerDe();
 
  protected:
-  /// Serializes common base fields (name, type, inputs).
+  // Returns true if derived-class-specific fields are equal. Called only when
+  // kind, type, and inputs already match.
+  virtual bool equalTo(const Expr& other) const = 0;
+
+  // Compares two ExprPtr values for structural equality. Either or both
+  // pointers may be null. Two nulls are considered equal; a null and a
+  // non-null are not.
+  static bool equalNullableExprs(const ExprPtr& lhs, const ExprPtr& rhs);
+
+  // Compares two vectors of ExprPtr for structural equality. All elements
+  // must be non-null; null elements trigger an error.
+  static bool equalExprVectors(
+      const std::vector<ExprPtr>& lhs,
+      const std::vector<ExprPtr>& rhs);
+
+  // Serializes common base fields (name, type, inputs).
   folly::dynamic serializeBase(std::string_view name) const;
 
   const ExprKind kind_;
@@ -182,6 +200,8 @@ class InputReferenceExpr : public Expr {
   static ExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const Expr& other) const override;
+
   const std::string name_;
 };
 
@@ -217,6 +237,8 @@ class ConstantExpr : public Expr {
   static ExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const Expr& other) const override;
+
   const std::shared_ptr<const velox::Variant> value_;
 };
 
@@ -250,6 +272,8 @@ class CallExpr : public Expr {
   static ExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const Expr& other) const override;
+
   const std::string name_;
 };
 
@@ -458,6 +482,8 @@ class SpecialFormExpr : public Expr {
   static ExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const Expr& other) const override;
+
   const SpecialForm form_;
 };
 
@@ -502,6 +528,9 @@ class SortOrder {
 struct SortingField {
   ExprPtr expression;
   SortOrder order;
+
+  /// Returns true if expression and sort order are equal.
+  bool operator==(const SortingField& other) const;
 
   folly::dynamic serialize() const;
 
@@ -577,6 +606,8 @@ class AggregateExpr : public Expr {
   static ExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const Expr& other) const override;
+
   const std::string name_;
   const ExprPtr filter_;
   const std::vector<SortingField> ordering_;
@@ -615,6 +646,9 @@ class WindowExpr : public Expr {
     ExprPtr startValue;
     BoundType endType;
     ExprPtr endValue;
+
+    /// Returns true if frame type, bound types, and bound values are equal.
+    bool operator==(const Frame& other) const;
 
     folly::dynamic serialize() const;
 
@@ -672,6 +706,8 @@ class WindowExpr : public Expr {
   static ExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const Expr& other) const override;
+
   const std::string name_;
   const std::vector<ExprPtr> partitionKeys_;
   const std::vector<SortingField> ordering_;
@@ -722,6 +758,8 @@ class LambdaExpr : public Expr {
   static ExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const Expr& other) const override;
+
   const velox::RowTypePtr signature_;
   const ExprPtr body_;
 };
@@ -749,6 +787,8 @@ class SubqueryExpr : public Expr {
   static ExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const Expr& other) const override;
+
   const LogicalPlanNodePtr subquery_;
 };
 

@@ -14,6 +14,7 @@
 
 add_executable(
   axiom_logical_plan_tests
+  ExprEqualityTest.cpp
   ExprSerdeTest.cpp
   ExprTest.cpp
   LogicalPlanNodeSerdeTest.cpp

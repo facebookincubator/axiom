@@ -42,6 +42,99 @@ const auto& exprKindNames() {
 
 AXIOM_DEFINE_ENUM_NAME(ExprKind, exprKindNames);
 
+bool Expr::equalNullableExprs(const ExprPtr& lhs, const ExprPtr& rhs) {
+  if (lhs == nullptr && rhs == nullptr) {
+    return true;
+  }
+  if (lhs == nullptr || rhs == nullptr) {
+    return false;
+  }
+  return *lhs == *rhs;
+}
+
+bool Expr::equalExprVectors(
+    const std::vector<ExprPtr>& lhs,
+    const std::vector<ExprPtr>& rhs) {
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    VELOX_CHECK_NOT_NULL(lhs[i]);
+    VELOX_CHECK_NOT_NULL(rhs[i]);
+    if (*lhs[i] != *rhs[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool Expr::operator==(const Expr& other) const {
+  if (this == &other) {
+    return true;
+  }
+  if (kind_ != other.kind_) {
+    return false;
+  }
+  if (*type_ != *other.type_) {
+    return false;
+  }
+  if (!equalExprVectors(inputs_, other.inputs_)) {
+    return false;
+  }
+  return equalTo(other);
+}
+
+bool InputReferenceExpr::equalTo(const Expr& other) const {
+  return name_ == other.as<InputReferenceExpr>()->name_;
+}
+
+bool ConstantExpr::equalTo(const Expr& other) const {
+  return *value_ == *other.as<ConstantExpr>()->value_;
+}
+
+bool CallExpr::equalTo(const Expr& other) const {
+  return name_ == other.as<CallExpr>()->name_;
+}
+
+bool SpecialFormExpr::equalTo(const Expr& other) const {
+  return form_ == other.as<SpecialFormExpr>()->form_;
+}
+
+bool AggregateExpr::equalTo(const Expr& other) const {
+  const auto* rhs = other.as<AggregateExpr>();
+  return name_ == rhs->name_ && distinct_ == rhs->distinct_ &&
+      equalNullableExprs(filter_, rhs->filter_) && ordering_ == rhs->ordering_;
+}
+
+bool WindowExpr::Frame::operator==(const Frame& other) const {
+  return type == other.type && startType == other.startType &&
+      equalNullableExprs(startValue, other.startValue) &&
+      endType == other.endType && equalNullableExprs(endValue, other.endValue);
+}
+
+bool SortingField::operator==(const SortingField& other) const {
+  VELOX_CHECK_NOT_NULL(expression);
+  VELOX_CHECK_NOT_NULL(other.expression);
+  return *expression == *other.expression && order == other.order;
+}
+
+bool WindowExpr::equalTo(const Expr& other) const {
+  const auto* rhs = other.as<WindowExpr>();
+  return name_ == rhs->name_ && ignoreNulls_ == rhs->ignoreNulls_ &&
+      frame_ == rhs->frame_ &&
+      equalExprVectors(partitionKeys_, rhs->partitionKeys_) &&
+      ordering_ == rhs->ordering_;
+}
+
+bool LambdaExpr::equalTo(const Expr& other) const {
+  const auto* rhs = other.as<LambdaExpr>();
+  return *signature_ == *rhs->signature_ && *body_ == *rhs->body_;
+}
+
+bool SubqueryExpr::equalTo(const Expr& /*other*/) const {
+  VELOX_UNSUPPORTED("Equality comparison is not supported for SubqueryExpr.");
+}
+
 std::string Expr::toString() const {
   return ExprPrinter::toText(*this);
 }
