@@ -828,6 +828,11 @@ class JoinEdge {
   /// True if has a hash based variant that builds on the left and probes on the
   /// right.
   bool hasRightHashVariant() const {
+    // Velox does not support null-aware right semi project join with extra
+    // filter.
+    if (nullAwareIn_ && !filter_.empty() && markColumn_ != nullptr) {
+      return false;
+    }
     return isNonCommutative() && !rightNotExists_ &&
         rowNumberColumn_ == nullptr;
   }

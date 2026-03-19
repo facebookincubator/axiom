@@ -507,6 +507,37 @@ TEST_F(SubqueryTest, correlatedIn) {
     auto plan = toSingleNodePlan(query);
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+
+  // Correlated IN subquery with non-equality filter in the SELECT list produces
+  // a null-aware semi-project join (mark column) with extra filter. The
+  // optimizer must not flip this to a right semi-project join because Velox
+  // does not support null-aware right semi project join with extra filter.
+  {
+    // Make t small and u large so the optimizer prefers the right-hash variant.
+    testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))->setStats(100, {});
+    testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+        ->setStats(10'000, {});
+
+    auto query =
+        "SELECT t.a IN ("
+        "  SELECT u.x FROM u "
+        "  WHERE u.y < t.b"
+        ") FROM t";
+    auto matcher =
+        matchScan("t")
+            .hashJoin(
+                matchScan("u")
+                    .hashJoin(
+                        matchScan("t").build(), core::JoinType::kLeftSemiFilter)
+                    .build(),
+                core::JoinType::kLeftSemiProject,
+                /*nullAware=*/true)
+            .project()
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 TEST_F(SubqueryTest, correlatedScalar) {
