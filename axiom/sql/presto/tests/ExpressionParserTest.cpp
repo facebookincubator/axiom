@@ -273,6 +273,41 @@ TEST_F(ExpressionParserTest, binaryLiteral) {
   VELOX_ASSERT_THROW(parseExpr("X'az'"), "hexadecimal digits");
 }
 
+TEST_F(ExpressionParserTest, stringLiteralEscapedQuotes) {
+  auto test = [&](std::string_view sql, std::string_view expected) {
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+
+    ASSERT_TRUE(expr->isConstant());
+    ASSERT_EQ(*expr->type(), *VARCHAR());
+
+    auto value = expr->as<lp::ConstantExpr>()->value();
+    ASSERT_FALSE(value->isNull());
+    EXPECT_EQ(value->value<std::string>(), expected);
+  };
+
+  // Simple string without escapes.
+  test("'hello'", "hello");
+
+  // Doubled single quote should produce a single quote.
+  test("'it''s'", "it's");
+
+  // Multiple escaped quotes.
+  test("'it''s a ''test'''", "it's a 'test'");
+
+  // Quote at start.
+  test("'''hello'", "'hello");
+
+  // Quote at end.
+  test("'hello'''", "hello'");
+
+  // Only escaped quotes.
+  test("''''", "'");
+
+  // Empty string.
+  test("''", "");
+}
+
 TEST_F(ExpressionParserTest, unicodeStringLiteral) {
   auto test = [&](std::string_view sql, std::string_view expected) {
     SCOPED_TRACE(sql);
@@ -285,6 +320,9 @@ TEST_F(ExpressionParserTest, unicodeStringLiteral) {
     ASSERT_FALSE(value->isNull());
     EXPECT_EQ(value->value<std::string>(), expected);
   };
+
+  // Doubled single quote in unicode string literal.
+  test(R"(U&'it''s')", "it's");
 
   // 4-digit unicode escape: \000A is newline.
   test(R"(U&'hello\000Aworld')", "hello\nworld");

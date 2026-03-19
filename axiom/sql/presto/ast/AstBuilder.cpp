@@ -47,9 +47,22 @@ NodeLocation getLocation(antlr4::tree::TerminalNode* terminalNode) {
   return getLocation(terminalNode->getSymbol());
 }
 
-// Remove leading and trailing quotes.
+// Remove leading and trailing quotes and unescape doubled single quotes
+// ('' -> ').
 std::string unquote(std::string_view value) {
-  return std::string{value.substr(1, value.length() - 2)};
+  const auto unquoted = value.substr(1, value.length() - 2);
+  std::string result;
+  result.reserve(unquoted.size());
+  for (size_t i = 0; i < unquoted.size(); ++i) {
+    if (unquoted[i] == '\'' && i + 1 < unquoted.size() &&
+        unquoted[i + 1] == '\'') {
+      result.push_back('\'');
+      ++i;
+    } else {
+      result.push_back(unquoted[i]);
+    }
+  }
+  return result;
 }
 
 bool isHexDigit(char c) {
