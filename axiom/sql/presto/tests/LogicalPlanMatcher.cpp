@@ -395,10 +395,12 @@ class AggregateMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
   AggregateMatcher(
       const std::shared_ptr<LogicalPlanMatcher>& inputMatcher,
       std::vector<std::string> groupingKeys,
-      std::vector<std::string> aggregates)
+      std::vector<std::string> aggregates,
+      std::vector<std::vector<int32_t>> groupingSets = {})
       : LogicalPlanMatcherImpl<AggregateNode>(inputMatcher, nullptr),
         groupingKeys_{std::move(groupingKeys)},
-        aggregates_{std::move(aggregates)} {}
+        aggregates_{std::move(aggregates)},
+        groupingSets_{std::move(groupingSets)} {}
 
  private:
   MatchResult matchDetails(
@@ -422,11 +424,23 @@ class AggregateMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
           << "at aggregate index " << i;
       AXIOM_RETURN_IF_FAILURE;
     }
+
+    EXPECT_EQ(groupingSets_.size(), plan.groupingSets().size())
+        << "grouping sets count mismatch";
+    AXIOM_RETURN_IF_FAILURE;
+
+    for (auto i = 0; i < groupingSets_.size(); ++i) {
+      EXPECT_EQ(groupingSets_[i], plan.groupingSets()[i])
+          << "at grouping set index " << i;
+      AXIOM_RETURN_IF_FAILURE;
+    }
+
     AXIOM_RETURN_RESULT(symbols)
   }
 
   const std::vector<std::string> groupingKeys_;
   const std::vector<std::string> aggregates_;
+  const std::vector<std::vector<int32_t>> groupingSets_;
 };
 
 class DistinctMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
@@ -616,10 +630,11 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::aggregate(
 
 LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::aggregate(
     const std::vector<std::string>& groupingKeys,
-    const std::vector<std::string>& aggregates) {
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::vector<int32_t>>& groupingSets) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
-  matcher_ =
-      std::make_shared<AggregateMatcher>(matcher_, groupingKeys, aggregates);
+  matcher_ = std::make_shared<AggregateMatcher>(
+      matcher_, groupingKeys, aggregates, groupingSets);
   return *this;
 }
 

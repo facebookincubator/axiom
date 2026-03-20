@@ -108,6 +108,12 @@ TEST_F(AggregationParserTest, groupingSets) {
           testing::ElementsAre(0),
           testing::IsEmpty()));
 
+  // Empty grouping set collapses to global aggregation.
+  testSelect(
+      "SELECT count(1) FROM nation "
+      "GROUP BY GROUPING SETS (())",
+      matchScan().aggregate({}, {"count(1)"}).output());
+
   // Test ordinals in GROUPING SETS: GROUPING SETS ((1, 2), (1))
   testSelect(
       "SELECT n_regionkey, n_name, count(1) FROM nation "
@@ -292,6 +298,93 @@ TEST_F(AggregationParserTest, cubeColumnLimit) {
       columns);
 
   VELOX_ASSERT_THROW(parseSql(sql), "CUBE supports at most 30 columns");
+}
+
+TEST_F(AggregationParserTest, groupByDistinct) {
+  // GROUP BY DISTINCT collapses all-identical sets to regular GROUP BY.
+  // (a, b), (b, a), (a, b) are identical (order-insensitive) → single set.
+  {
+    auto matcher = matchScan()
+                       .aggregate({"n_regionkey", "n_name"}, {"count(1)"}, {})
+                       .output();
+    testSelect(
+        "SELECT n_regionkey, n_name, count(1) FROM nation "
+        "GROUP BY DISTINCT GROUPING SETS "
+        "((n_regionkey, n_name), (n_name, n_regionkey), (n_regionkey, n_name))",
+        matcher);
+  }
+
+  // GROUP BY DISTINCT with two genuinely different sets preserves them.
+  {
+    auto matcher =
+        matchScan()
+            .aggregate({"n_regionkey", "n_name"}, {"count(1)"}, {{0}, {1}})
+            .output();
+    testSelect(
+        "SELECT n_regionkey, n_name, count(1) FROM nation "
+        "GROUP BY DISTINCT GROUPING SETS "
+        "((n_regionkey), (n_name), (n_regionkey))",
+        matcher);
+  }
+
+  // Key dedup within sets + DISTINCT across sets collapse to regular GROUP BY.
+  {
+    auto matcher = matchScan()
+                       .aggregate({"n_name", "n_regionkey"}, {"count(1)"}, {})
+                       .output();
+    testSelect(
+        "SELECT n_name, n_regionkey, count(1) FROM nation "
+        "GROUP BY DISTINCT GROUPING SETS "
+        "((n_name, n_regionkey, n_name), (n_regionkey, n_name, n_regionkey))",
+        matcher);
+  }
+
+  // Empty grouping set with DISTINCT collapses to global aggregation.
+  testSelect(
+      "SELECT count(1) FROM nation "
+      "GROUP BY DISTINCT GROUPING SETS (())",
+      matchScan().aggregate({}, {"count(1)"}).output());
+}
+
+TEST_F(AggregationParserTest, groupingSetsDedup) {
+  // All identical grouping sets are preserved without DISTINCT.
+  // The optimizer may collapse them as an optimization.
+  {
+    auto matcher = matchScan()
+                       .aggregate(
+                           {"n_regionkey", "n_name"},
+                           {"count(1)"},
+                           {{0, 1}, {1, 0}, {0, 1}})
+                       .output();
+    testSelect(
+        "SELECT n_regionkey, n_name, count(1) FROM nation "
+        "GROUP BY GROUPING SETS "
+        "((n_regionkey, n_name), (n_name, n_regionkey), (n_regionkey, n_name))",
+        matcher);
+  }
+
+  // Multiple distinct sets with duplicates — preserved per SQL standard.
+  {
+    auto matcher =
+        matchScan()
+            .aggregate({"n_regionkey", "n_name"}, {"count(1)"}, {{0}, {1}, {0}})
+            .output();
+    testSelect(
+        "SELECT n_regionkey, n_name, count(1) FROM nation "
+        "GROUP BY GROUPING SETS ((n_regionkey), (n_name), (n_regionkey))",
+        matcher);
+  }
+
+  // Duplicate keys within a single grouping set are deduplicated.
+  // (n_regionkey, n_regionkey) → (n_regionkey), single set → regular GROUP BY.
+  {
+    auto matcher =
+        matchScan().aggregate({"n_regionkey"}, {"count(1)"}, {}).output();
+    testSelect(
+        "SELECT n_regionkey, count(1) FROM nation "
+        "GROUP BY GROUPING SETS ((n_regionkey, n_regionkey))",
+        matcher);
+  }
 }
 
 TEST_F(AggregationParserTest, distinct) {

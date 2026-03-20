@@ -15,6 +15,7 @@
  */
 
 #include "axiom/sql/presto/GroupByPlanner.h"
+#include <set>
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
 #include "folly/container/F14Set.h"
 #include "velox/common/base/BitUtil.h"
@@ -271,20 +272,6 @@ std::vector<std::vector<lp::ExprApi>> expandCube(
   return groupingSets;
 }
 
-bool hasGroupingSets(const std::vector<GroupingElementPtr>& groupingElements) {
-  for (const auto& element : groupingElements) {
-    switch (element->type()) {
-      case NodeType::kRollup:
-      case NodeType::kCube:
-      case NodeType::kGroupingSets:
-        return true;
-      default:
-        break;
-    }
-  }
-  return false;
-}
-
 // Computes Cartesian product of accumulatedSets and newSets.
 std::vector<std::vector<lp::ExprApi>> crossProductGroupingSets(
     const std::vector<std::vector<lp::ExprApi>>& accumulatedSets,
@@ -307,11 +294,30 @@ std::vector<std::vector<lp::ExprApi>> crossProductGroupingSets(
   return combined;
 }
 
+// Removes duplicate grouping sets from 'groupingSetsIndices'. Two sets are
+// duplicates if they contain the same key indices (order-insensitive).
+void deduplicateGroupingSets(
+    std::vector<std::vector<int32_t>>& groupingSetsIndices) {
+  std::set<std::vector<int32_t>> seen;
+  size_t next = 0;
+  for (size_t i = 0; i < groupingSetsIndices.size(); ++i) {
+    std::sort(groupingSetsIndices[i].begin(), groupingSetsIndices[i].end());
+    if (seen.insert(groupingSetsIndices[i]).second) {
+      if (next != i) {
+        groupingSetsIndices[next] = std::move(groupingSetsIndices[i]);
+      }
+      ++next;
+    }
+  }
+  groupingSetsIndices.resize(next);
+}
+
 } // namespace
 
 void GroupByPlanner::plan(
-    const std::vector<SelectItemPtr>& selectItems,
     const std::vector<GroupingElementPtr>& groupingElements,
+    bool distinct,
+    const std::vector<SelectItemPtr>& selectItems,
     const ExpressionPtr& having,
     const OrderByPtr& orderBy) && {
   // Expand ROLLUP, CUBE, GROUPING SETS into a list of grouping sets, then
@@ -319,13 +325,18 @@ void GroupByPlanner::plan(
   // Populates: groupingSets_, groupingKeys_, groupingSetsIndices_.
   groupingSets_ = expandGroupingSets(groupingElements, selectItems);
   deduplicateGroupingKeys();
+  // GROUP BY DISTINCT removes duplicate grouping sets after expansion
+  // (order-insensitive comparison).
+  if (distinct) {
+    deduplicateGroupingSets(groupingSetsIndices_);
+  }
 
   // Walk SELECT, HAVING, and ORDER BY expressions to collect aggregate
   // function calls, then add the Aggregate plan node.
   // Populates: aggregates_, aggregateOptionsMap_, projections_, filter_,
   //   sortingKeys_, outputNames_.
   collectAggregates(selectItems, having, orderBy);
-  addAggregate(hasGroupingSets(groupingElements));
+  addAggregate(groupingSetsIndices_.size() > 1);
 
   // Rewrite filter_, projections_, and sortingKeys_ to reference the
   // aggregate output columns instead of the original input expressions.
@@ -378,7 +389,8 @@ bool GroupByPlanner::tryPlanGlobalAgg(
     return false;
   }
 
-  std::move(*this).plan(selectItems, {}, having, /*orderBy=*/nullptr);
+  std::move(*this).plan(
+      {}, /*distinct=*/false, selectItems, having, /*orderBy=*/nullptr);
   return true;
 }
 
@@ -446,7 +458,12 @@ void GroupByPlanner::deduplicateGroupingKeys() {
       if (inserted) {
         groupingKeys_.push_back(expr);
       }
-      indices.push_back(it->second);
+      // Deduplicate keys within a single grouping set: GROUP BY (a, a)
+      // collapses to (a).
+      if (std::find(indices.begin(), indices.end(), it->second) ==
+          indices.end()) {
+        indices.push_back(it->second);
+      }
     }
     groupingSetsIndices_.push_back(std::move(indices));
   }
