@@ -673,5 +673,84 @@ TEST_F(AggregationParserTest, groupByWithWindowFunction) {
       "Cannot resolve column: a");
 }
 
+TEST_F(AggregationParserTest, groupByWithNestedWindowFunction) {
+  connector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  // Window function nested inside an expression with GROUP BY.
+  testSelect(
+      "SELECT a, row_number() OVER (ORDER BY a) + sum(b) FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {"sum(b)"})
+          .project({
+              "a",
+              "sum",
+              "row_number() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .project({
+              "a",
+              "plus(expr, sum)",
+          })
+          .output());
+
+  // Deeply nested window function inside arithmetic.
+  testSelect(
+      "SELECT a, 1 + (2 * row_number() OVER (ORDER BY a)) FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {})
+          .project({
+              "a",
+              "row_number() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .project({
+              "a",
+              "plus(CAST(1 AS BIGINT), multiply(CAST(2 AS BIGINT), expr))",
+          })
+          .output());
+
+  // Window function sharing a name with an aggregate. sum(b) is an aggregate,
+  // sum(a) OVER (...) is a window function — they must not be conflated even
+  // though both use the sum() function name.
+  testSelect(
+      "SELECT a, sum(b), sum(a) OVER (ORDER BY a) FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {"sum(b)"})
+          .project({
+              "a",
+              "sum",
+              "sum(a) OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .output());
+
+  // Multiple distinct window functions in same GROUP BY query.
+  testSelect(
+      "SELECT a, row_number() OVER (ORDER BY a) + sum(b), "
+      "rank() OVER (ORDER BY a) FROM t GROUP BY a",
+      matchScan("t")
+          .aggregate({"a"}, {"sum(b)"})
+          .project({
+              "a",
+              "sum",
+              "row_number() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "rank() OVER (ORDER BY a ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+          })
+          .project({
+              "a",
+              "plus(expr, sum)",
+              "expr_0",
+          })
+          .output());
+}
+
+TEST_F(AggregationParserTest, windowFunctionInHavingRejected) {
+  connector_->addTable("t", ROW({"a", "b"}, {BIGINT(), BIGINT()}));
+
+  // Window functions in HAVING are invalid SQL.
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT a, sum(b) FROM t GROUP BY a "
+          "HAVING row_number() OVER (ORDER BY a) > 1"),
+      "Window function cannot be an argument to a scalar function");
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test

@@ -103,3 +103,15 @@ SELECT a, b, sum(b) OVER (PARTITION BY a) * 2 AS doubled FROM t
 -- Window function mixed with *.
 -- columns
 SELECT *, sum(b) OVER (PARTITION BY a) AS total_b FROM t
+----
+-- Window function nested inside expression with GROUP BY.
+SELECT a, row_number() OVER (ORDER BY a) + sum(b) FROM t GROUP BY a
+----
+-- Deeply nested window function in arithmetic with GROUP BY.
+SELECT a, 1 + (2 * row_number() OVER (ORDER BY a)) FROM t GROUP BY a
+----
+-- Multiple distinct window functions in same GROUP BY query.
+SELECT a, row_number() OVER (ORDER BY a) + sum(b), rank() OVER (ORDER BY a) FROM t GROUP BY a
+----
+-- Window function sharing a name with an aggregate (sum as window vs sum as aggregate).
+SELECT a, sum(b), sum(a) OVER (ORDER BY a) FROM t GROUP BY a

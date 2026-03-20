@@ -76,6 +76,10 @@ class GroupByPlanner {
       const OrderByPtr& orderBy);
   void addAggregate(bool useGroupingSets);
   void rewritePostAggregateExprs();
+  // Materializes window functions as a separate projection node, then
+  // replaces window sub-expressions in projections_ and sortingKeys_ with
+  // column references to the window output.
+  void addWindowProjection();
   std::vector<size_t> resolveSortOrdinals(const OrderByPtr& orderBy);
   bool isIdentityProjection() const;
   void addSort(
@@ -110,6 +114,12 @@ class GroupByPlanner {
   // Maps each Expr* to its aggregate options. Populated by collectAggregates().
   // Must outlive aggregates_ since aggregates_ holds pointers into this map.
   AggregateOptionsMap aggregateOptionsMap_;
+
+  // Maps each window function IExpr* to its WindowSpec. Populated by
+  // collectAggregates() via toExpr with windowOptions. Must outlive
+  // addWindowProjection() which reads from this map.
+  std::unordered_map<const facebook::velox::core::IExpr*, lp::WindowSpec>
+      windowOptions_;
 
   std::optional<lp::ExprApi> filter_;
   std::vector<lp::SortKey> sortingKeys_;
