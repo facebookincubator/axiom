@@ -20,6 +20,7 @@ add_library(
   axiom_sql_presto_parser
   ExpressionPlanner.cpp
   GroupByPlanner.cpp
+  SortProjection.cpp
   PrestoParser.cpp
   ShowStatsBuilder.cpp
   SqlStatement.cpp

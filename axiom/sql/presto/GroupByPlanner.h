@@ -78,9 +78,6 @@ class GroupByPlanner {
   void rewritePostAggregateExprs();
   std::vector<size_t> resolveSortOrdinals(const OrderByPtr& orderBy);
   bool isIdentityProjection() const;
-  void addSort(
-      const std::vector<SelectItemPtr>& selectItems,
-      const std::vector<size_t>& sortingKeyOrdinals);
 
   lp::ExprApi resolveGroupingExpression(
       const ExpressionPtr& expr,
@@ -112,7 +109,7 @@ class GroupByPlanner {
   AggregateOptionsMap aggregateOptionsMap_;
 
   std::optional<lp::ExprApi> filter_;
-  std::vector<lp::SortKey> sortingKeys_;
+  std::vector<lp::ExprApi> sortingKeyExprs_;
   std::vector<std::string> outputNames_;
 };
 
