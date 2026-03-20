@@ -133,9 +133,51 @@ TEST_F(TpchPlanTest, q01) {
 TEST_F(TpchPlanTest, q02) {
   checkTpchSql(2);
 
-  // TODO Verify the plan.
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
 
-  ASSERT_NO_THROW(planTpch(2));
+  auto joinNationWithRegion = startMatcher("nation").hashJoin(
+      core::PlanMatcherBuilder()
+          .hiveScan("region", test::eq("r_name", "EUROPE"))
+          .build(),
+      core::JoinType::kInner);
+
+  // The subquery (min cost per part) is very selective — it matches at most
+  // one partsupp row per part. It is joined before supplier because its low
+  // fanout reduces the row count before the supplier join.
+  auto matcher =
+      startMatcher("partsupp")
+          .hashJoin(startMatcher("part").build(), core::JoinType::kInner)
+          .hashJoin(
+              startMatcher("partsupp")
+                  .hashJoin(
+                      startMatcher("part").build(),
+                      core::JoinType::kLeftSemiFilter)
+                  .hashJoin(
+                      startMatcher("supplier")
+                          .hashJoin(
+                              joinNationWithRegion.build(),
+                              core::JoinType::kInner)
+                          .build(),
+                      core::JoinType::kInner)
+                  .aggregation()
+                  .project()
+                  .build(),
+              core::JoinType::kInner)
+          .hashJoin(
+              startMatcher("supplier")
+                  .hashJoin(
+                      joinNationWithRegion.build(), core::JoinType::kInner)
+                  .build(),
+              core::JoinType::kInner)
+          .topN()
+          .project()
+          .build();
+
+  auto plan = planTpch(2);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
   ASSERT_NO_THROW(planVelox(parseTpchSql(2)));
 }
 
@@ -551,9 +593,33 @@ TEST_F(TpchPlanTest, q17) {
 TEST_F(TpchPlanTest, q18) {
   checkTpchSql(18);
 
-  // TODO Verify the plan.
+  // The subquery (aggregated lineitem with HAVING sum > 300) is very
+  // selective. It is joined first via an implied semi-join through the
+  // l_orderkey = o_orderkey equivalence class, reducing lineitem before
+  // joining with orders and customer.
 
-  ASSERT_NO_THROW(planTpch(18));
+  auto startMatcher = [&](const std::string& tableName) {
+    return core::PlanMatcherBuilder().tableScan(tableName);
+  };
+
+  auto matcher =
+      startMatcher("lineitem")
+          .hashJoin(
+              startMatcher("lineitem").aggregation().filter().project().build(),
+              core::JoinType::kLeftSemiFilter)
+          .hashJoin(
+              startMatcher("orders")
+                  .hashJoin(
+                      startMatcher("customer").build(), core::JoinType::kInner)
+                  .build(),
+              core::JoinType::kInner)
+          .aggregation()
+          .topN()
+          .build();
+
+  auto plan = planTpch(18);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
   ASSERT_NO_THROW(planVelox(parseTpchSql(18)));
 }
 

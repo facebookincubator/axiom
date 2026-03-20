@@ -758,11 +758,11 @@ void JoinEdge::guessFanout() {
   // match many lineitems (lrFanout = cardLineitem / cardOrders). When both
   // sides are unique (1:1 join), leftUnique takes precedence.
   if (leftUnique_) {
-    rlFanout_ = baseSelectivity(leftTable_);
+    rlFanout_ = left.fanout * baseSelectivity(leftTable_);
     lrFanout_ = tableCardinality(rightTable_) / tableCardinality(leftTable_) *
         baseSelectivity(rightTable_);
   } else if (rightUnique_) {
-    lrFanout_ = baseSelectivity(rightTable_);
+    lrFanout_ = right.fanout * baseSelectivity(rightTable_);
     rlFanout_ = tableCardinality(leftTable_) / tableCardinality(rightTable_) *
         baseSelectivity(leftTable_);
   } else {
