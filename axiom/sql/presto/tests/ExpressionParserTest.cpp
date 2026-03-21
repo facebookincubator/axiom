@@ -108,6 +108,40 @@ TEST_F(ExpressionParserTest, types) {
   test("null as qdigest(real)", QDIGEST(REAL()));
   test("null as qdigest(double)", QDIGEST(DOUBLE()));
 
+  // VARCHAR(n) and CHAR(n) apply truncation via substr; VARBINARY(n) ignores
+  // the length parameter.
+  auto testSubstrTruncation = [&](std::string_view sql,
+                                  const TypePtr& expectedType,
+                                  int32_t expectedMaxLength) {
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+    VELOX_EXPECT_EQ_TYPES(expr->type(), expectedType);
+    ASSERT_TRUE(expr->isCall());
+    auto* call = expr->as<lp::CallExpr>();
+    EXPECT_EQ(call->name(), "substr");
+    // Verify substr arguments: (expr, start=1, length=n).
+    ASSERT_EQ(call->inputs().size(), 3);
+    auto* startLit = call->inputs()[1]->as<lp::ConstantExpr>();
+    ASSERT_NE(startLit, nullptr);
+    EXPECT_EQ(startLit->value()->value<int32_t>(), 1);
+    auto* lengthLit = call->inputs()[2]->as<lp::ConstantExpr>();
+    ASSERT_NE(lengthLit, nullptr);
+    EXPECT_EQ(lengthLit->value()->value<int32_t>(), expectedMaxLength);
+  };
+  testSubstrTruncation("cast(null as varchar(10))", VARCHAR(), 10);
+  testSubstrTruncation("try_cast(null as varchar(10))", VARCHAR(), 10);
+  testSubstrTruncation("cast(null as char(20))", VARCHAR(), 20);
+  testSubstrTruncation("try_cast(null as char(20))", VARCHAR(), 20);
+  testSubstrTruncation("cast(null as varchar(1))", VARCHAR(), 1);
+  testSubstrTruncation("cast(null as Varchar(5))", VARCHAR(), 5);
+  test("null as varbinary(100)", VARBINARY());
+
+  // Invalid length parameter.
+  VELOX_ASSERT_THROW(
+      parseExpr("cast(null as varchar(0))"), "length must be positive");
+  VELOX_ASSERT_THROW(
+      parseExpr("cast(null as varbinary(0))"), "length must be positive");
+
   test("null as int array", ARRAY(INTEGER()));
   test("null as varchar array", ARRAY(VARCHAR()));
   test("null as map(integer, real)", MAP(INTEGER(), REAL()));

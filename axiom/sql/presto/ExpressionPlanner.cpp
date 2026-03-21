@@ -27,6 +27,13 @@ using namespace facebook::velox;
 
 namespace {
 
+std::string toUpperCase(std::string s) {
+  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+    return std::toupper(c);
+  });
+  return s;
+}
+
 int32_t parseInt(const TypeSignaturePtr& type) {
   VELOX_USER_CHECK_EQ(type->parameters().size(), 0);
   const auto& str = type->baseName();
@@ -218,14 +225,12 @@ std::string canonicalizeIdentifier(const Identifier& identifier) {
 }
 
 TypePtr parseType(const TypeSignaturePtr& type) {
-  auto baseName = type->baseName();
-  std::transform(
-      baseName.begin(), baseName.end(), baseName.begin(), [](char c) {
-        return (std::toupper(c));
-      });
+  auto baseName = toUpperCase(type->baseName());
 
   if (baseName == "INT") {
     baseName = "INTEGER";
+  } else if (baseName == "CHAR") {
+    baseName = "VARCHAR";
   }
 
   std::vector<TypeParameter> parameters;
@@ -259,6 +264,16 @@ TypePtr parseType(const TypeSignaturePtr& type) {
       VELOX_USER_CHECK_EQ(2, numParams);
       parameters.emplace_back(parseInt(type->parameters().at(0)));
       parameters.emplace_back(parseInt(type->parameters().at(1)));
+    } else if (baseName == "VARCHAR" || baseName == "VARBINARY") {
+      // Velox has no parameterized VARCHAR/VARBINARY — resolve to unbounded
+      // and enforce length constraints at the CAST level via substr().
+      VELOX_USER_CHECK_EQ(
+          1, numParams, "{}(n) expects exactly one length parameter", baseName);
+      VELOX_USER_CHECK_GT(
+          parseInt(type->parameters().at(0)),
+          0,
+          "{}(n) length must be positive",
+          baseName);
     } else if (baseName == "TDIGEST" || baseName == "QDIGEST") {
       VELOX_USER_CHECK_EQ(1, numParams);
       parameters.emplace_back(parseType(type->parameters().at(0)));
@@ -415,14 +430,22 @@ lp::ExprApi ExpressionPlanner::toExpr(
     case NodeType::kCast: {
       auto* cast = node->as<Cast>();
       const auto type = parseType(cast->toType());
+      auto expr = toExpr(cast->expression(), aggregateOptions, windowOptions);
 
-      if (cast->isSafe()) {
-        return lp::TryCast(
-            type, toExpr(cast->expression(), aggregateOptions, windowOptions));
-      } else {
-        return lp::Cast(
-            type, toExpr(cast->expression(), aggregateOptions, windowOptions));
+      auto result =
+          cast->isSafe() ? lp::TryCast(type, expr) : lp::Cast(type, expr);
+
+      // VARCHAR(n) / CHAR(n): silently truncate to n characters instead of
+      // raising SQL standard error 22001 (no right-pad for CHAR).
+      // VARBINARY(n) has no truncation — Velox lacks the parameterized type.
+      auto targetBaseName = toUpperCase(cast->toType()->baseName());
+      if ((targetBaseName == "VARCHAR" || targetBaseName == "CHAR") &&
+          !cast->toType()->parameters().empty()) {
+        auto maxLength = parseInt(cast->toType()->parameters().at(0));
+        result = lp::Call("substr", result, lp::Lit(1), lp::Lit(maxLength));
       }
+
+      return result;
     }
 
     case NodeType::kAtTimeZone: {
