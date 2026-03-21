@@ -81,6 +81,53 @@ void fillJoins(
     }
   }
 }
+
+// For a single-key semi/anti-join edge, creates implied edges through
+// equivalence classes. If the edge goes from A to DT with left key A.x, and
+// A.x is equivalent to B.y (from inner join A.x = B.y), creates an implied
+// edge from B to DT with left key B.y.
+void addImpliedNonInnerEdge(
+    JoinEdgeP join,
+    const PlanObjectSet& tableSet,
+    EdgeSet& edges,
+    JoinEdgeVector& joins) {
+  if (!join->filter().empty() || join->numKeys() != 1) {
+    return;
+  }
+  auto* leftKey = join->leftKeys()[0];
+  if (!leftKey->isColumn()) {
+    return;
+  }
+  auto* equiv = leftKey->as<Column>()->equivalence();
+  if (!equiv) {
+    return;
+  }
+  auto* leftTable = leftKey->as<Expr>()->singleTable();
+
+  for (auto* candidate : equiv->columns) {
+    auto* candidateTable = candidate->as<Expr>()->singleTable();
+    if (candidateTable == leftTable || !tableSet.contains(candidateTable)) {
+      continue;
+    }
+    if (!addEdge(edges, candidate, join->rightKeys()[0])) {
+      continue;
+    }
+
+    JoinEdgeP implied;
+    if (join->isSemi()) {
+      implied = JoinEdge::makeExists(
+          candidateTable,
+          join->rightTable(),
+          join->markColumn(),
+          {},
+          join->isNullAwareIn());
+    } else {
+      implied = JoinEdge::makeNotExists(candidateTable, join->rightTable());
+    }
+    implied->addEquality(candidate, join->rightKeys()[0]);
+    joins.push_back(implied);
+  }
+}
 } // namespace
 
 void DerivedTable::checkSetOpConsistency() const {
@@ -483,6 +530,8 @@ void DerivedTable::addImpliedJoins() {
           }
         }
       }
+    } else if (join->isSemi() || join->isAnti()) {
+      addImpliedNonInnerEdge(join, tableSet, edges, joins);
     }
   }
 }

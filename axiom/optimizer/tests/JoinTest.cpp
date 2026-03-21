@@ -1127,6 +1127,46 @@ TEST_F(JoinTest, impliedJoins) {
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+
+  // t.a = u.x creates equivalence class {t.a, u.x}. The IN subquery
+  // produces a semi-join on u.x → v.n. The implied edge t.a → v.n has
+  // fanout 100/10000 = 0.01, so the semi-join is placed before the inner
+  // join with u.
+  {
+    auto query =
+        "SELECT * FROM t, u "
+        "WHERE t.a = u.x "
+        "  AND u.x IN (SELECT n FROM v)";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("t")
+            .hashJoin(matchScan("v").build(), core::JoinType::kLeftSemiFilter)
+            .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Inner join is on t.b = u.y (not equivalent to u.x). No implied edge,
+  // so the semi-join stays on u and is placed after the inner join.
+  {
+    auto query =
+        "SELECT * FROM t, u "
+        "WHERE t.b = u.y "
+        "  AND u.x IN (SELECT n FROM v)";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("t")
+            .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+            .hashJoin(matchScan("v").build(), core::JoinType::kLeftSemiFilter)
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
 }
 
 // LEFT JOIN with no equalities when the DT has 3+ tables. The comma join
