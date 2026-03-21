@@ -84,6 +84,11 @@ struct QueryCompletionInfo {
   /// microseconds.
   uint64_t executionMicros{0};
 
+  /// Total wall-clock time from parse through execution, in microseconds.
+  /// Includes inter-phase time (e.g. permission checks) not captured by the
+  /// per-phase timers.
+  uint64_t totalMicros{0};
+
   /// Number of rows in the query result.
   int64_t numOutputRows{0};
 

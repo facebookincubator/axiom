@@ -124,6 +124,24 @@ SQL> explain select count(*) from nation;
 Use `explain analyze` to execute the query and print the plan annotated with
 runtime statistics.
 
+## Timing Output
+
+In interactive mode, each statement prints timing after execution:
+
+```
+Parsing: 10.58ms / 8.76ms user / 1.83ms system (100%)
+Optimizing: 3.27ms | Executing: 5.27ms | Total: 19.26ms / 16.36ms user / 4.65ms system (109%)
+```
+
+| Field | Description |
+|-------|-------------|
+| Parsing | Time to parse the SQL text into an AST. |
+| Optimizing | Time in the query optimizer. |
+| Executing | Time running the Velox execution plan. |
+| Total | Wall-clock time for the entire query lifecycle. |
+
+Each field shows wall time, user CPU, system CPU, and CPU utilization %.
+
 ## Query History
 
 The CLI persists query history across sessions. Previous commands are available

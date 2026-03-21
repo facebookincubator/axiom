@@ -161,29 +161,40 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
 
     try {
       cli::Timing parseTiming;
-      auto statement = cli::time<presto::SqlStatementPtr>(
-          [&]() { return runner_.parseSingle(sqlText, options); }, parseTiming);
-
-      if (isInteractive) {
-        std::cout << "Query ID: " << queryId
-                  << " | Parsing: " << parseTiming.toString() << std::endl;
-      }
-
-      // Permission check after parsing, before execution.
-      if (permissionCheck_) {
-        const auto& schema = options.defaultSchema ? options.defaultSchema
-                                                   : runner_.defaultSchema();
-        options.tokenProvider = permissionCheck_(
-            queryId,
-            sqlText,
-            options.defaultConnectorId.value_or(runner_.defaultConnectorId()),
-            schema ? std::optional<std::string_view>{*schema} : std::nullopt,
-            statement->views());
-      }
-
       cli::Timing statementTiming;
+      cli::Timing totalTiming;
       auto result = cli::time<SqlQueryRunner::SqlResult>(
-          [&]() { return runner_.run(*statement, options); }, statementTiming);
+          [&]() {
+            auto statement = cli::time<presto::SqlStatementPtr>(
+                [&]() { return runner_.parseSingle(sqlText, options); },
+                parseTiming);
+
+            if (isInteractive) {
+              std::cout << "Query ID: " << queryId
+                        << " | Parsing: " << parseTiming.toString()
+                        << std::endl;
+            }
+
+            // Permission check after parsing, before execution.
+            if (permissionCheck_) {
+              const auto& schema = options.defaultSchema
+                  ? options.defaultSchema
+                  : runner_.defaultSchema();
+              options.tokenProvider = permissionCheck_(
+                  queryId,
+                  sqlText,
+                  options.defaultConnectorId.value_or(
+                      runner_.defaultConnectorId()),
+                  schema ? std::optional<std::string_view>{*schema}
+                         : std::nullopt,
+                  statement->views());
+            }
+
+            return cli::time<SqlQueryRunner::SqlResult>(
+                [&]() { return runner_.run(*statement, options); },
+                statementTiming);
+          },
+          totalTiming);
 
       if (result.message.has_value()) {
         std::cout << result.message.value() << std::endl;
@@ -204,14 +215,13 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
           statementTiming.micros > result.optimizeMicros
               ? statementTiming.micros - result.optimizeMicros
               : 0};
-
       if (isInteractive) {
         std::cout << "Query ID: " << queryId << " | Optimizing: "
                   << facebook::velox::succinctNanos(
                          result.optimizeMicros * 1'000)
                   << " | Executing: "
                   << facebook::velox::succinctNanos(executionMicros * 1'000)
-                  << " | Total: " << statementTiming.toString() << std::endl;
+                  << " | Total: " << totalTiming.toString() << std::endl;
       }
       notifyCompletion(
           QueryCompletionInfo{
@@ -220,6 +230,7 @@ void Console::runNoThrow(std::string_view sql, bool isInteractive) {
               .parseMicros = parseTiming.micros,
               .optimizeMicros = result.optimizeMicros,
               .executionMicros = executionMicros,
+              .totalMicros = totalTiming.micros,
               .numOutputRows = numOutputRows,
               .endTime = std::chrono::system_clock::now(),
           });
