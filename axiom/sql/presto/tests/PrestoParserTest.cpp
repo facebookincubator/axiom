@@ -529,6 +529,34 @@ TEST_F(PrestoParserTest, orderBy) {
   }
 }
 
+TEST_F(PrestoParserTest, groupByOrderBy) {
+  connector_->addTable("t", ROW({"a", "b"}, INTEGER()));
+
+  {
+    auto matcher = matchScan()
+                       .aggregate({"a"}, {})
+                       .project({"a as b"})
+                       .sort({"b"})
+                       .output({"b"});
+
+    testSelect("SELECT a AS b FROM t GROUP BY a ORDER BY b", matcher);
+  }
+
+  {
+    auto matcher = matchScan()
+                       .aggregate({"a"}, {"sum(b)"})
+                       .project({"a as b", "sum"})
+                       .sort({"b"})
+                       .output({"b", "sum"});
+
+    testSelect("SELECT a AS b, sum(b) FROM t GROUP BY a ORDER BY b", matcher);
+  }
+
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT a, sum(b) FROM t GROUP BY a ORDER BY b"),
+      "Cannot resolve column: b");
+}
+
 TEST_F(PrestoParserTest, join) {
   {
     auto matcher = matchScan()

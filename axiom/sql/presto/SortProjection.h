@@ -23,10 +23,10 @@ namespace axiom::sql::presto {
 
 class SortProjection {
  public:
-  /// Matches sort key expressions against items in the SELECT list. For
-  /// unmatched expressions, appends them to `projections`, widening the
-  /// projection list. Returns a 1-based ordinal for each sort key in the
-  /// widened projection list.
+  /// Matches sort key expressions against items in the SELECT list, including
+  /// aliased expressions. For unmatched expressions, appends them to
+  /// `projections`, widening the projection list. Returns a 1-based ordinal for
+  /// each sort key in the widened projection list.
   ///
   /// @param sortKeyExprs List of expressions from the ORDER BY list. Keys not
   /// in the projection list (above) are considered unmatched and used to widen

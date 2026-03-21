@@ -15,6 +15,7 @@
  */
 #include "axiom/sql/presto/SortProjection.h"
 
+#include "folly/container/F14Map.h"
 #include "velox/parse/IExpr.h"
 
 namespace axiom::sql::presto {
@@ -33,24 +34,40 @@ std::vector<size_t> SortProjection::widenProjections(
   ordinals.reserve(sortKeyExprs.size());
 
   facebook::velox::core::ExprMap<size_t> projectionMap;
+  folly::F14FastMap<std::string, size_t> aliasMap;
+  // Iterate through projections matching ordinals to projections and aliases.
   for (size_t i = 0; i < projections.size(); ++i) {
     projectionMap.emplace(projections[i].expr(), i + 1);
+    if (projections[i].name().has_value()) {
+      aliasMap.emplace(projections[i].name().value(), i + 1);
+    }
   }
 
+  // Iterate through sort keys matching them to ordinals.
   for (size_t i = 0; i < sortKeyExprs.size(); ++i) {
     // Use pre-resolved ordinal if available.
     if (preResolvedOrdinals[i] != 0) {
       ordinals.push_back(preResolvedOrdinals[i]);
-      continue;
-    }
-
-    auto [projectionIt, inserted] =
-        projectionMap.emplace(sortKeyExprs[i].expr(), projections.size() + 1);
-    if (inserted) {
-      ordinals.push_back(projections.size() + 1);
-      projections.push_back(sortKeyExprs[i]);
     } else {
-      ordinals.push_back(projectionIt->second);
+      // Match alias if one is used.
+      const auto aliasMapValue = sortKeyExprs[i].name().has_value()
+          ? aliasMap.find(sortKeyExprs[i].name().value())
+          : aliasMap.end();
+      if (aliasMapValue != aliasMap.end()) {
+        ordinals.push_back(aliasMapValue->second);
+      }
+      // Match expression directly if no alias is used, expanding out
+      // projections list if sorts keys don't match our SELECT list.
+      else {
+        auto [projectionIt, inserted] = projectionMap.emplace(
+            sortKeyExprs[i].expr(), projections.size() + 1);
+        if (inserted) {
+          ordinals.push_back(projections.size() + 1);
+          projections.push_back(sortKeyExprs[i]);
+        } else {
+          ordinals.push_back(projectionIt->second);
+        }
+      }
     }
   }
 
