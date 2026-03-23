@@ -152,21 +152,35 @@ class Expr : public velox::ISerializable {
   /// Registers deserializers for all Expr subclasses.
   static void registerSerDe();
 
+  /// Compares two ExprPtr values for structural equality. Either or both
+  /// pointers may be null. Two nulls are considered equal; a null and a
+  /// non-null are not.
+  static bool equalNullableExprs(const ExprPtr& lhs, const ExprPtr& rhs);
+
+  /// Compares two vectors of ExprPtr in order for structural equality. All
+  /// elements must be non-null; null elements trigger an error. T should be
+  /// Expr or its subclass.
+  template <typename T>
+  static bool equalExprVectors(
+      const std::vector<std::shared_ptr<const T>>& lhs,
+      const std::vector<std::shared_ptr<const T>>& rhs) {
+    if (lhs.size() != rhs.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < lhs.size(); ++i) {
+      VELOX_CHECK_NOT_NULL(lhs[i]);
+      VELOX_CHECK_NOT_NULL(rhs[i]);
+      if (*lhs[i] != *rhs[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
  protected:
   // Returns true if derived-class-specific fields are equal. Called only when
   // kind, type, and inputs already match.
   virtual bool equalTo(const Expr& other) const = 0;
-
-  // Compares two ExprPtr values for structural equality. Either or both
-  // pointers may be null. Two nulls are considered equal; a null and a
-  // non-null are not.
-  static bool equalNullableExprs(const ExprPtr& lhs, const ExprPtr& rhs);
-
-  // Compares two vectors of ExprPtr for structural equality. All elements
-  // must be non-null; null elements trigger an error.
-  static bool equalExprVectors(
-      const std::vector<ExprPtr>& lhs,
-      const std::vector<ExprPtr>& rhs);
 
   // Serializes common base fields (name, type, inputs).
   folly::dynamic serializeBase(std::string_view name) const;
