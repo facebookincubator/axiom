@@ -225,24 +225,6 @@ TEST_F(HiveAggregationQueriesTest, maskWithOrderBy) {
   checkSameSingleNode(logicalPlan, referencePlan);
 }
 
-TEST_F(HiveAggregationQueriesTest, distinctWithOrderBy) {
-  lp::PlanBuilder::Context context(
-      exec::test::kHiveConnectorId, kDefaultSchema);
-  auto logicalPlan =
-      lp::PlanBuilder(context)
-          .tableScan("nation")
-          .aggregate(
-              {"n_regionkey"}, {"array_agg(DISTINCT n_name ORDER BY n_name)"})
-          .build();
-
-  VELOX_ASSERT_THROW(
-      toSingleNodePlan(logicalPlan),
-      "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
-  VELOX_ASSERT_THROW(
-      planVelox(logicalPlan),
-      "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
-}
-
 TEST_F(HiveAggregationQueriesTest, ignoreDuplicates) {
   lp::PlanBuilder::Context context(
       exec::test::kHiveConnectorId, kDefaultSchema);
