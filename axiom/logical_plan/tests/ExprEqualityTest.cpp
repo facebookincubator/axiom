@@ -18,8 +18,7 @@
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/ExprResolver.h"
-#include "axiom/logical_plan/LogicalPlanNode.h"
-#include "velox/common/base/tests/GTestUtils.h"
+#include "axiom/logical_plan/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
@@ -307,21 +306,59 @@ TEST_F(ExprEqualityTest, lambda) {
 }
 
 TEST_F(ExprEqualityTest, subquery) {
-  auto valuesType = ROW({"x", "y"}, {BIGINT(), BIGINT()});
-  auto makeValues = [this, &valuesType](std::string id) {
-    return std::make_shared<ValuesNode>(
-        std::move(id),
-        valuesType,
-        ValuesNode::Exprs{
-            {resolve(Lit(1LL)), resolve(Lit(10LL))},
-            {resolve(Lit(2LL)), resolve(Lit(20LL))},
-            {resolve(Lit(3LL)), resolve(Lit(30LL))}});
+  // Build a multi-level plan tree: ValuesNode → FilterNode → ProjectNode.
+  std::vector<std::vector<std::string>> rows = {
+      {"1", "10"}, {"2", "20"}, {"3", "30"}};
+  auto makeTree = [&rows] {
+    return PlanBuilder()
+        .values({"x", "y"}, rows)
+        .filter("x > 0")
+        .project({"x + y as result"})
+        .planNode();
   };
 
-  VELOX_ASSERT_THROW(
-      *std::make_shared<SubqueryExpr>(makeValues("1")) ==
-          *std::make_shared<SubqueryExpr>(makeValues("1")),
-      "Equality comparison is not supported for SubqueryExpr.");
+  // Two identical complex trees built independently.
+  auto tree = makeTree();
+  auto treeCopy = makeTree();
+  EXPECT_EQ(
+      *std::make_shared<SubqueryExpr>(tree),
+      *std::make_shared<SubqueryExpr>(treeCopy));
+
+  // Different filter threshold deep in the tree.
+  auto treeDifferentFilter = PlanBuilder()
+                                 .values({"x", "y"}, rows)
+                                 .filter("x > 5")
+                                 .project({"x + y as result"})
+                                 .planNode();
+  EXPECT_NE(
+      *std::make_shared<SubqueryExpr>(tree),
+      *std::make_shared<SubqueryExpr>(treeDifferentFilter));
+
+  // Different leaf data.
+  auto treeDifferentValues =
+      PlanBuilder()
+          .values(
+              {"x", "y"},
+              std::vector<std::vector<std::string>>{
+                  {"99", "10"}, {"2", "20"}, {"3", "30"}})
+          .filter("x > 0")
+          .project({"x + y as result"})
+          .planNode();
+  EXPECT_NE(
+      *std::make_shared<SubqueryExpr>(tree),
+      *std::make_shared<SubqueryExpr>(treeDifferentValues));
+
+  // Different node ID.
+  PlanBuilder::Context altCtx;
+  altCtx.planNodeIdGenerator->next();
+  auto treeDifferentId = PlanBuilder(altCtx)
+                             .values({"x", "y"}, rows)
+                             .filter("x > 0")
+                             .project({"x + y as result"})
+                             .planNode();
+  EXPECT_EQ(
+      *std::make_shared<SubqueryExpr>(tree),
+      *std::make_shared<SubqueryExpr>(treeDifferentId));
 }
 
 TEST_F(ExprEqualityTest, crossKind) {
