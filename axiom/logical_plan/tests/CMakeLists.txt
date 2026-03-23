@@ -18,6 +18,7 @@ add_executable(
   ExprSerdeTest.cpp
   ExprTest.cpp
   LogicalPlanNodeSerdeTest.cpp
+  LogicalPlanNodeEqualityTest.cpp
   NameAllocatorTest.cpp
   NameMappingsTest.cpp
   ExprApiTest.cpp
@@ -35,6 +36,7 @@ target_link_libraries(
   axiom_test_connector
   velox_functions_prestosql
   velox_aggregates
+  velox_vector_test_lib
   GTest::gtest
   GTest::gtest_main
   GTest::gmock
