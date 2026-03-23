@@ -52,22 +52,6 @@ bool Expr::equalNullableExprs(const ExprPtr& lhs, const ExprPtr& rhs) {
   return *lhs == *rhs;
 }
 
-bool Expr::equalExprVectors(
-    const std::vector<ExprPtr>& lhs,
-    const std::vector<ExprPtr>& rhs) {
-  if (lhs.size() != rhs.size()) {
-    return false;
-  }
-  for (size_t i = 0; i < lhs.size(); ++i) {
-    VELOX_CHECK_NOT_NULL(lhs[i]);
-    VELOX_CHECK_NOT_NULL(rhs[i]);
-    if (*lhs[i] != *rhs[i]) {
-      return false;
-    }
-  }
-  return true;
-}
-
 bool Expr::operator==(const Expr& other) const {
   if (this == &other) {
     return true;
@@ -131,8 +115,8 @@ bool LambdaExpr::equalTo(const Expr& other) const {
   return *signature_ == *rhs->signature_ && *body_ == *rhs->body_;
 }
 
-bool SubqueryExpr::equalTo(const Expr& /*other*/) const {
-  VELOX_UNSUPPORTED("Equality comparison is not supported for SubqueryExpr.");
+bool SubqueryExpr::equalTo(const Expr& other) const {
+  return *subquery_ == *other.as<SubqueryExpr>()->subquery_;
 }
 
 std::string Expr::toString() const {

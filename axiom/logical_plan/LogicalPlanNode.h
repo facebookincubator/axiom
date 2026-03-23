@@ -121,6 +121,10 @@ class LogicalPlanNode : public velox::ISerializable {
     return outputType_;
   }
 
+  /// Returns true if two plan nodes are structurally equal. Node IDs are
+  /// allowed to differ.
+  bool operator==(const LogicalPlanNode& other) const;
+
   std::string toString() const;
 
   virtual void accept(
@@ -131,6 +135,10 @@ class LogicalPlanNode : public velox::ISerializable {
   static void registerSerDe();
 
  protected:
+  // Returns true if derived-class-specific fields are equal. Called only when
+  // kind, outputType, and inputs already match.
+  virtual bool equalTo(const LogicalPlanNode& other) const = 0;
+
   /// Serializes common base fields (name, id, outputType, inputs).
   folly::dynamic serializeBase(std::string_view name) const;
 
@@ -182,6 +190,8 @@ class ValuesNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   const uint64_t cardinality_ = 0;
   const Data data_;
 };
@@ -235,6 +245,8 @@ class TableScanNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   const std::string connectorId_;
   const SchemaTableName tableName_;
   const std::vector<std::string> columnNames_;
@@ -266,6 +278,8 @@ class FilterNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   const ExprPtr predicate_;
 };
 
@@ -312,6 +326,8 @@ class ProjectNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   static velox::RowTypePtr makeOutputType(
       const std::vector<std::string>& names,
       const std::vector<ExprPtr>& expressions);
@@ -398,6 +414,8 @@ class AggregateNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   static velox::RowTypePtr makeOutputType(
       const std::vector<ExprPtr>& groupingKeys,
       const std::vector<GroupingSet>& groupingSets,
@@ -485,6 +503,8 @@ class JoinNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   static velox::RowTypePtr makeOutputType(
       const LogicalPlanNodePtr& left,
       const LogicalPlanNodePtr& right);
@@ -520,6 +540,8 @@ class SortNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   const std::vector<SortingField> ordering_;
 };
 
@@ -570,6 +592,8 @@ class LimitNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   const int64_t offset_;
   const int64_t count_;
 };
@@ -630,6 +654,8 @@ class SetNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   static velox::RowTypePtr makeOutputType(
       const std::vector<LogicalPlanNodePtr>& inputs);
 
@@ -715,6 +741,8 @@ class UnnestNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   static velox::RowTypePtr makeOutputType(
       const LogicalPlanNodePtr& input,
       const std::vector<ExprPtr>& unnestExpressions,
@@ -819,6 +847,8 @@ class TableWriteNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   const std::string connectorId_;
   const SchemaTableName tableName_;
   const WriteKind writeKind_;
@@ -876,6 +906,8 @@ class SampleNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   const ExprPtr percentage_;
   const SampleMethod sampleMethod_;
 };
@@ -896,6 +928,8 @@ class OutputNode : public LogicalPlanNode {
 
     /// Output column name. May be empty or duplicate.
     std::string name;
+
+    bool operator==(const Entry&) const = default;
   };
 
   OutputNode(
@@ -915,6 +949,8 @@ class OutputNode : public LogicalPlanNode {
   static LogicalPlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  bool equalTo(const LogicalPlanNode& other) const override;
+
   const std::vector<Entry> entries_;
 };
 
