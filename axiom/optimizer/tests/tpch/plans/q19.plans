@@ -3,55 +3,65 @@ numDrivers: 1
 
 Query Graph:
 
-dt1: revenue
+dt1: 1.00 rows, revenue
   output:
-    revenue := dt1.revenue
+    revenue := dt1.revenue DOUBLE (cardinality=1.00)
   tables: t2, t3
   joins:
-    t2 INNER t3 ON t2.l_partkey = t3.p_partkey
+    t2 INNER t3 ON t2.l_partkey = t3.p_partkey [t2 → 0.00, t3 → 0.11]
   syntactic join order: 19, 37
   aggregates: sum(multiply(t2.l_extendedprice, minus(1, t2.l_discount))) AS revenue
   filter: __or(__and(between(t3.p_size, 1, 15), __and(lte(t2.l_quantity, 30), __and(gte(t2.l_quantity, 20), __and(eq(t3.p_brand, "Brand#34"), __in(t3.p_container, "LG CASE", "LG BOX", "LG PACK", "LG PKG"))))), __or(__and(between(t3.p_size, 1, 5), __and(lte(t2.l_quantity, 11), __and(gte(t2.l_quantity, 1), __and(eq(t3.p_brand, "Brand#12"), __in(t3.p_container, "SM CASE", "SM BOX", "SM PACK", "SM PKG"))))), __and(between(t3.p_size, 1, 10), __and(lte(t2.l_quantity, 20), __and(gte(t2.l_quantity, 10), __and(eq(t3.p_brand, "Brand#23"), __in(t3.p_container, "MED BAG", "MED BOX", "MED PKG", "MED PACK")))))))
 
-t2: l_partkey, l_quantity, l_extendedprice, l_discount, l_shipinstruct, l_shipmode
-  table: lineitem
+t2: 21268.69 rows, l_partkey, l_quantity, l_extendedprice, l_discount, l_shipinstruct, l_shipmode
+  table: "default"."lineitem"
+    l_partkey BIGINT (cardinality=188473.00 min=1 max=200000)
+    l_quantity DOUBLE (cardinality=50.00 min=1 max=50)
+    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
+    l_shipinstruct VARCHAR (cardinality=1.00 min="DELIVER IN PERSON" max="DELIVER IN PERSON")
+    l_shipmode VARCHAR (cardinality=2.00 min="AIR" max="AIR REG")
   single-column filters: __in(t2.l_shipmode, "AIR", "AIR REG") and eq(t2.l_shipinstruct, "DELIVER IN PERSON") and __or(__and(gte(t2.l_quantity, 20), lte(t2.l_quantity, 30)), __or(__and(gte(t2.l_quantity, 1), lte(t2.l_quantity, 11)), __and(gte(t2.l_quantity, 10), lte(t2.l_quantity, 20))))
 
-t3: p_partkey, p_brand, p_size, p_container
-  table: part
+t3: 191.39 rows, p_partkey, p_brand, p_size, p_container
+  table: "default"."part"
+    p_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
+    p_brand VARCHAR (cardinality=25.00 min="Brand#11" max="Brand#55")
+    p_size INTEGER (cardinality=50.00 min=1 max=50)
+    p_container VARCHAR (cardinality=40.00 min="JUMBO BAG" max="WRAP PKG")
   multi-column filters: __or(__and(between(t3.p_size, 1, 15), __and(eq(t3.p_brand, "Brand#34"), __in(t3.p_container, "LG CASE", "LG BOX", "LG PACK", "LG PKG"))), __or(__and(between(t3.p_size, 1, 5), __and(eq(t3.p_brand, "Brand#12"), __in(t3.p_container, "SM CASE", "SM BOX", "SM PACK", "SM PKG"))), __and(between(t3.p_size, 1, 10), __and(eq(t3.p_brand, "Brand#23"), __in(t3.p_container, "MED BAG", "MED BOX", "MED PKG", "MED PACK")))))
 
 
 Optimized plan (oneline):
 
-agg((lineitem INNER part))
+agg(("default"."lineitem" INNER "default"."part"))
 
 Optimized plan:
 
-Project (redundant) -> dt1.revenue
+Project (redundant) [1.00 rows] -> dt1.revenue
     dt1.revenue := dt1.revenue
-  Aggregation -> dt1.revenue
-      dt1.revenue := sum(dt1.__p124)
-    Project -> dt1.__p124
-        dt1.__p124 := multiply(t2.l_extendedprice, minus(1, t2.l_discount))
-      Filter -> t2.l_quantity, t2.l_extendedprice, t2.l_discount, t3.p_brand, t3.p_size, t3.p_container
+  Aggregation [1.00 rows] -> dt1.revenue
+      dt1.revenue := sum(dt1.__p134)
+    Project [1.00 rows] -> dt1.__p134
+        dt1.__p134 := multiply(t2.l_extendedprice, minus(1, t2.l_discount))
+      Filter [1.00 rows] -> t2.l_quantity, t2.l_extendedprice, t2.l_discount, t3.p_brand, t3.p_size, t3.p_container
           __or(__and(between(t3.p_size, 1, 15), __and(lte(t2.l_quantity, 30), __and(gte(t2.l_quantity, 20), __and(eq(t3.p_brand, "Brand#34"), __in(t3.p_container, "LG CASE", "LG BOX", "LG PACK", "LG PKG"))))), __or(__and(between(t3.p_size, 1, 5), __and(lte(t2.l_quantity, 11), __and(gte(t2.l_quantity, 1), __and(eq(t3.p_brand, "Brand#12"), __in(t3.p_container, "SM CASE", "SM BOX", "SM PACK", "SM PKG"))))), __and(between(t3.p_size, 1, 10), __and(lte(t2.l_quantity, 20), __and(gte(t2.l_quantity, 10), __and(eq(t3.p_brand, "Brand#23"), __in(t3.p_container, "MED BAG", "MED BOX", "MED PKG", "MED PACK")))))))
-        Join INNER Hash -> t2.l_quantity, t2.l_extendedprice, t2.l_discount, t3.p_brand, t3.p_size, t3.p_container
+        Join INNER Hash [20.67 rows] -> t2.l_quantity, t2.l_extendedprice, t2.l_discount, t3.p_brand, t3.p_size, t3.p_container
             t2.l_partkey = t3.p_partkey
-          TableScan -> t2.l_partkey, t2.l_quantity, t2.l_extendedprice, t2.l_discount
-            table: lineitem
+          TableScan [21268.69 rows] -> t2.l_partkey, t2.l_quantity, t2.l_extendedprice, t2.l_discount
+            table: "default"."lineitem"
             single-column filters: __in(t2.l_shipmode, "AIR", "AIR REG") and eq(t2.l_shipinstruct, "DELIVER IN PERSON") and __or(__and(gte(t2.l_quantity, 20), lte(t2.l_quantity, 30)), __or(__and(gte(t2.l_quantity, 1), lte(t2.l_quantity, 11)), __and(gte(t2.l_quantity, 10), lte(t2.l_quantity, 20))))
-          HashBuild -> t3.p_partkey, t3.p_brand, t3.p_size, t3.p_container
-            TableScan -> t3.p_partkey, t3.p_brand, t3.p_size, t3.p_container
-              table: part
+          HashBuild [191.39 rows] -> t3.p_partkey, t3.p_brand, t3.p_size, t3.p_container
+            TableScan [191.39 rows] -> t3.p_partkey, t3.p_brand, t3.p_size, t3.p_container
+              table: "default"."part"
               multi-column filters: __or(__and(between(t3.p_size, 1, 15), __and(eq(t3.p_brand, "Brand#34"), __in(t3.p_container, "LG CASE", "LG BOX", "LG PACK", "LG PKG"))), __or(__and(between(t3.p_size, 1, 5), __and(eq(t3.p_brand, "Brand#12"), __in(t3.p_container, "SM CASE", "SM BOX", "SM PACK", "SM PKG"))), __and(between(t3.p_size, 1, 10), __and(eq(t3.p_brand, "Brand#23"), __in(t3.p_container, "MED BAG", "MED BOX", "MED PKG", "MED PACK")))))
 
 
 Executable Velox plan:
 
-Fragment 0:  numWorkers=0:
--- Aggregation[5][SINGLE revenue := sum("dt1.__p124")] -> revenue:DOUBLE
-  -- Project[4][expressions: (dt1.__p124:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> "dt1.__p124":DOUBLE
+Fragment 0: stage1 numWorkers=1:
+-- Aggregation[5][SINGLE revenue := sum("dt1.__p134")] -> revenue:DOUBLE
+  -- Project[4][expressions: (dt1.__p134:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> "dt1.__p134":DOUBLE
     -- Filter[0][expression: or(and(between("p_size",1,15),and(lte("l_quantity",30),and(gte("l_quantity",20),and(eq("p_brand",Brand#34),in("p_container",{LG CASE, LG BOX, LG PACK, LG PKG}))))),or(and(between("p_size",1,5),and(lte("l_quantity",11),and(gte("l_quantity",1),and(eq("p_brand",Brand#12),in("p_container",{SM CASE, SM BOX, SM PACK, SM PKG}))))),and(between("p_size",1,10),and(lte("l_quantity",20),and(gte("l_quantity",10),and(eq("p_brand",Brand#23),in("p_container",{MED BAG, MED BOX, MED PKG, MED PACK})))))))] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, p_brand:VARCHAR, p_size:INTEGER, p_container:VARCHAR
       -- HashJoin[3][INNER l_partkey=p_partkey] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, p_brand:VARCHAR, p_size:INTEGER, p_container:VARCHAR
         -- TableScan[1][table: lineitem, range filters: [(l_quantity, DoubleRange: [1.000000, 30.000000] no nulls), (l_shipinstruct, Filter(BytesValues, deterministic, no nulls)), (l_shipmode, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_quantity, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipinstruct, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: l_shipmode, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> l_partkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE

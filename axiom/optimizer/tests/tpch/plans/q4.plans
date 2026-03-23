@@ -3,61 +3,65 @@ numDrivers: 1
 
 Query Graph:
 
-dt1: o_orderpriority, order_count
+dt1: 5.00 rows, o_orderpriority, order_count
   output:
-    o_orderpriority := t2.o_orderpriority
-    order_count := dt1.order_count
+    o_orderpriority := t2.o_orderpriority VARCHAR (cardinality=5.00 min="1-URGENT" max="5-LOW")
+    order_count := dt1.order_count BIGINT (cardinality=1.00)
   tables: t2, dt3
   joins:
-    t2 SEMI dt3 ON t2.o_orderkey = dt3.l_orderkey
+    t2 SEMI dt3 ON t2.o_orderkey = dt3.l_orderkey [t2 → 1.99, dt3 → 0.04]
   syntactic join order: 12, 16
   aggregates: count() AS order_count
   grouping keys: t2.o_orderpriority
-  filter: dt1.__mark0
+  filter: dt1.__mark5
   orderBy: t2.o_orderpriority ASC NULLS LAST
 
-t2: o_orderkey, o_orderdate, o_orderpriority
-  table: orders
+t2: 5735.66 rows, o_orderkey, o_orderdate, o_orderpriority
+  table: "default"."orders"
+    o_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    o_orderdate DATE (cardinality=91.08 min=8582 max=8673)
+    o_orderpriority VARCHAR (cardinality=5.00 min="1-URGENT" max="5-LOW")
   single-column filters: gte(t2.o_orderdate, "1993-07-01") and lt(t2.o_orderdate, "1993-10-01")
 
-dt3: l_orderkey
+dt3: 303820.16 rows, l_orderkey
   output:
-    l_orderkey := t4.l_orderkey
+    l_orderkey := t4.l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
   tables: t4
 
-t4: l_orderkey, l_commitdate, l_receiptdate
-  table: lineitem
+t4: 303820.16 rows, l_orderkey, l_commitdate, l_receiptdate
+  table: "default"."lineitem"
+    l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    l_commitdate DATE (cardinality=2435.00 min=8065 max=10530)
+    l_receiptdate DATE (cardinality=2523.00 min=8038 max=10587)
   multi-column filters: lt(t4.l_commitdate, t4.l_receiptdate)
 
 
 Optimized plan (oneline):
 
-agg((lineitem RIGHT SEMI (FILTER) orders))
+agg(("default"."lineitem" RIGHT SEMI (FILTER) "default"."orders"))
 
 Optimized plan:
 
-Project (redundant) -> dt1.o_orderpriority, dt1.order_count
+Project (redundant) [5.00 rows] -> dt1.o_orderpriority, dt1.order_count
     dt1.o_orderpriority := t2.o_orderpriority
     dt1.order_count := dt1.order_count
-  OrderBy -> t2.o_orderpriority, dt1.order_count
-    Aggregation (t2.o_orderpriority) -> t2.o_orderpriority, dt1.order_count
+  OrderBy [5.00 rows] -> t2.o_orderpriority, dt1.order_count
+    Aggregation (t2.o_orderpriority) [5.00 rows] -> t2.o_orderpriority, dt1.order_count
         dt1.order_count := count()
-      Join RIGHT SEMI (FILTER) Hash -> t2.o_orderpriority
+      Join RIGHT SEMI (FILTER) Hash [5735.66 rows] -> t2.o_orderpriority
           dt3.l_orderkey = t2.o_orderkey
-        Project (redundant) -> dt3.l_orderkey
-            dt3.l_orderkey := t4.l_orderkey
-          TableScan -> t4.l_orderkey
-            table: lineitem
-            multi-column filters: lt(t4.l_commitdate, t4.l_receiptdate)
-        HashBuild -> t2.o_orderkey, t2.o_orderpriority
-          TableScan -> t2.o_orderkey, t2.o_orderpriority
-            table: orders
+        TableScan [303820.16 rows] -> t4.l_orderkey
+          table: "default"."lineitem"
+          multi-column filters: lt(t4.l_commitdate, t4.l_receiptdate)
+        HashBuild [5735.66 rows] -> t2.o_orderkey, t2.o_orderpriority
+          TableScan [5735.66 rows] -> t2.o_orderkey, t2.o_orderpriority
+            table: "default"."orders"
             single-column filters: gte(t2.o_orderdate, "1993-07-01") and lt(t2.o_orderdate, "1993-10-01")
 
 
 Executable Velox plan:
 
-Fragment 0:  numWorkers=0:
+Fragment 0: stage1 numWorkers=1:
 -- OrderBy[4][o_orderpriority ASC NULLS LAST] -> o_orderpriority:VARCHAR, order_count:BIGINT
   -- Aggregation[3][SINGLE [o_orderpriority] order_count := count()] -> o_orderpriority:VARCHAR, order_count:BIGINT
     -- HashJoin[2][RIGHT SEMI (FILTER) l_orderkey=o_orderkey] -> o_orderpriority:VARCHAR

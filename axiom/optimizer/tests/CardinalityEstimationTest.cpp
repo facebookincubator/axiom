@@ -489,6 +489,43 @@ TEST_F(CardinalityEstimationTest, innerJoin) {
   });
 }
 
+// Verifies that inner join with a unique right side (DerivedTable with GROUP
+// BY) uses the right fanout to scale cardinality. The right side's fanout
+// reflects that not all left key values exist in the right side.
+TEST_F(CardinalityEstimationTest, innerJoinUniqueRight) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(
+          1'000,
+          {
+              {"a", {.numDistinct = 100}},
+              {"b", {.numDistinct = 500}},
+          });
+
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(
+          500,
+          {
+              {"x", {.numDistinct = 50}},
+              {"y", {.numDistinct = 200}},
+          });
+
+  verifyPlan(
+      "SELECT * FROM t JOIN (SELECT x, min(y) FROM u GROUP BY x) sub ON t.a = sub.x",
+      [](const Plan& plan) {
+        const auto& join = findOp<Join>(*plan.op, RelType::kJoin);
+        EXPECT_EQ(join.joinType, velox::core::JoinType::kInner);
+
+        // The subquery produces 50 rows (one per distinct x), all unique.
+        // rightUnique = true since sub.x covers all grouping keys.
+        // right.fanout = estimateFanout(50, {sub.x}, {t.a})
+        //              = 50 / max(50, 100) = 0.5.
+        // lrFanout = right.fanout * baseSelectivity(rightTable)
+        //          = 0.5 * 1 = 0.5.
+        // resultCardinality = |t| * 0.5 = 500.
+        EXPECT_NEAR(join.resultCardinality(), 500, kCardinalityTolerance);
+      });
+}
+
 // Verifies that left join preserves left-side row count and left-side
 // columns have zero null fraction.
 TEST_F(CardinalityEstimationTest, leftJoin) {

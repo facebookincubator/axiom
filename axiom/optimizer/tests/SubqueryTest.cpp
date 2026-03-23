@@ -1329,12 +1329,12 @@ TEST_F(SubqueryTest, innerJoinOnSubquery) {
     auto matcher =
         matchHiveScan("nation")
             .hashJoin(
-                matchHiveScan("region").build(), velox::core::JoinType::kInner)
-            .hashJoin(
                 matchHiveScan("supplier")
                     .singleAggregation({}, {"min(s_nationkey)"})
                     .build(),
                 velox::core::JoinType::kInner)
+            .hashJoin(
+                matchHiveScan("region").build(), velox::core::JoinType::kInner)
             .build();
 
     auto plan = toSingleNodePlan(query);

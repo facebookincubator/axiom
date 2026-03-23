@@ -3,118 +3,133 @@ numDrivers: 1
 
 Query Graph:
 
-dt1: supp_nation, cust_nation, l_year, revenue
+dt1: 3.75 rows, supp_nation, cust_nation, l_year, revenue
   output:
-    supp_nation := t6.n_name
-    cust_nation := t7.n_name
-    l_year := dt1.l_year
-    revenue := dt1.revenue
+    supp_nation := t6.n_name VARCHAR (cardinality=1.95 min="ALGERIA" max="VIETNAM")
+    cust_nation := t7.n_name VARCHAR (cardinality=1.96 min="ALGERIA" max="VIETNAM")
+    l_year := dt1.l_year BIGINT (cardinality=3.75)
+    revenue := dt1.revenue DOUBLE (cardinality=1.00)
   tables: t2, t3, t4, t5, t6, t7
   joins:
-    t2 INNER t3 ON t2.s_suppkey = t3.l_suppkey
-    t3 INNER t4 ON t3.l_orderkey = t4.o_orderkey
-    t4 INNER t5 ON t4.o_custkey = t5.c_custkey
-    t2 INNER t6 ON t2.s_nationkey = t6.n_nationkey
-    t5 INNER t7 ON t5.c_nationkey = t7.n_nationkey
+    t2 INNER t3 ON t2.s_suppkey = t3.l_suppkey [t2 → 47.26, t3 → 0.10]
+    t3 INNER t4 ON t3.l_orderkey = t4.o_orderkey [t3 → 1.00, t4 → 3.21]
+    t4 INNER t5 ON t4.o_custkey = t5.c_custkey [t4 → 0.10, t5 → 0.99]
+    t2 INNER t6 ON t2.s_nationkey = t6.n_nationkey [t2 → 0.08, t6 → 40.00]
+    t5 INNER t7 ON t5.c_nationkey = t7.n_nationkey [t5 → 0.08, t7 → 600.00]
   syntactic join order: 10, 31, 48, 61, 70, 73
   aggregates: sum(multiply(t3.l_extendedprice, minus(1, t3.l_discount))) AS revenue
   grouping keys: t6.n_name, t7.n_name, year(t3.l_shipdate)
   filter: __or(__and(eq(t6.n_name, "FRANCE"), eq(t7.n_name, "GERMANY")), __and(eq(t6.n_name, "GERMANY"), eq(t7.n_name, "FRANCE")))
   orderBy: t6.n_name ASC NULLS LAST, t7.n_name ASC NULLS LAST, dt1.l_year ASC NULLS LAST
 
-t2: s_suppkey, s_nationkey
-  table: supplier
+t2: 1000.00 rows, s_suppkey, s_nationkey
+  table: "default"."supplier"
+    s_suppkey BIGINT (cardinality=1008.00 min=1 max=1000)
+    s_nationkey BIGINT (cardinality=25.00 min=0 max=24)
 
-t3: l_orderkey, l_suppkey, l_extendedprice, l_discount, l_shipdate
-  table: lineitem
+t3: 480457.59 rows, l_orderkey, l_suppkey, l_extendedprice, l_discount, l_shipdate
+  table: "default"."lineitem"
+    l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    l_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
+    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
+    l_shipdate DATE (cardinality=2498.00 min=8037 max=10561)
   single-column filters: between(t3.l_shipdate, "1995-01-01", "1996-12-31")
 
-t4: o_orderkey, o_custkey
-  table: orders
+t4: 150000.00 rows, o_orderkey, o_custkey
+  table: "default"."orders"
+    o_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    o_custkey BIGINT (cardinality=73171.00 min=1 max=149999)
 
-t5: c_custkey, c_nationkey
-  table: customer
+t5: 15000.00 rows, c_custkey, c_nationkey
+  table: "default"."customer"
+    c_custkey BIGINT (cardinality=14936.00 min=1 max=15000)
+    c_nationkey BIGINT (cardinality=25.00 min=0 max=24)
 
-t6: n_nationkey, n_name
-  table: nation
+t6: 1.96 rows, n_nationkey, n_name
+  table: "default"."nation"
+    n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+    n_name VARCHAR (cardinality=25.00 min="ALGERIA" max="VIETNAM")
   single-column filters: __or(eq(t6.n_name, "FRANCE"), eq(t6.n_name, "GERMANY"))
 
-t7: n_nationkey, n_name
-  table: nation
+t7: 1.96 rows, n_nationkey, n_name
+  table: "default"."nation"
+    n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+    n_name VARCHAR (cardinality=25.00 min="ALGERIA" max="VIETNAM")
   single-column filters: __or(eq(t7.n_name, "GERMANY"), eq(t7.n_name, "FRANCE"))
 
 
 Optimized plan (oneline):
 
-agg(((lineitem INNER (orders INNER (customer INNER nation))) INNER (supplier INNER nation)))
+agg((("default"."lineitem" INNER ("default"."supplier" INNER "default"."nation")) INNER ("default"."orders" INNER ("default"."customer" INNER "default"."nation"))))
 
 Optimized plan:
 
-Project -> dt1.supp_nation, dt1.cust_nation, dt1.l_year, dt1.revenue
+Project [8.74 rows] -> dt1.supp_nation, dt1.cust_nation, dt1.l_year, dt1.revenue
     dt1.supp_nation := t6.n_name
     dt1.cust_nation := t7.n_name
     dt1.l_year := dt1.l_year
     dt1.revenue := dt1.revenue
-  OrderBy -> t6.n_name, t7.n_name, dt1.l_year, dt1.revenue
-    Aggregation (t6.n_name, t7.n_name, dt1.__p97) -> t6.n_name, t7.n_name, dt1.l_year, dt1.revenue
-        dt1.revenue := sum(dt1.__p102)
-      Project -> t6.n_name, t7.n_name, dt1.__p97, dt1.__p102
+  OrderBy [8.74 rows] -> t6.n_name, t7.n_name, dt1.l_year, dt1.revenue
+    Aggregation (t6.n_name, t7.n_name, dt1.__p99) [8.74 rows] -> t6.n_name, t7.n_name, dt1.l_year, dt1.revenue
+        dt1.revenue := sum(dt1.__p105)
+      Project [13.03 rows] -> t6.n_name, t7.n_name, dt1.__p99, dt1.__p105
           t6.n_name := t6.n_name
           t7.n_name := t7.n_name
-          dt1.__p97 := year(t3.l_shipdate)
-          dt1.__p102 := multiply(t3.l_extendedprice, minus(1, t3.l_discount))
-        Filter -> t3.l_extendedprice, t3.l_discount, t3.l_shipdate, t6.n_name, t7.n_name
+          dt1.__p99 := year(t3.l_shipdate)
+          dt1.__p105 := multiply(t3.l_extendedprice, minus(1, t3.l_discount))
+        Filter [13.03 rows] -> t3.l_extendedprice, t3.l_discount, t3.l_shipdate, t6.n_name, t7.n_name
             __or(__and(eq(t6.n_name, "FRANCE"), eq(t7.n_name, "GERMANY")), __and(eq(t6.n_name, "GERMANY"), eq(t7.n_name, "FRANCE")))
-          Join INNER Hash -> t3.l_extendedprice, t3.l_discount, t3.l_shipdate, t6.n_name, t7.n_name
-              t3.l_suppkey = t2.s_suppkey
-            Join INNER Hash -> t3.l_suppkey, t3.l_extendedprice, t3.l_discount, t3.l_shipdate, t7.n_name
-                t3.l_orderkey = t4.o_orderkey
-              TableScan -> t3.l_orderkey, t3.l_suppkey, t3.l_extendedprice, t3.l_discount, t3.l_shipdate
-                table: lineitem
+          Join INNER Hash [28.68 rows] -> t3.l_extendedprice, t3.l_discount, t3.l_shipdate, t6.n_name, t7.n_name
+              t3.l_orderkey = t4.o_orderkey
+            Join INNER Hash [3704.92 rows] -> t3.l_orderkey, t3.l_extendedprice, t3.l_discount, t3.l_shipdate, t6.n_name
+                t3.l_suppkey = t2.s_suppkey
+              TableScan [480457.59 rows] -> t3.l_orderkey, t3.l_suppkey, t3.l_extendedprice, t3.l_discount, t3.l_shipdate
+                table: "default"."lineitem"
                 single-column filters: between(t3.l_shipdate, "1995-01-01", "1996-12-31")
-              HashBuild -> t4.o_orderkey, t7.n_name
-                Join INNER Hash -> t4.o_orderkey, t7.n_name
-                    t4.o_custkey = t5.c_custkey
-                  TableScan -> t4.o_orderkey, t4.o_custkey
-                    table: orders
-                  HashBuild -> t5.c_custkey, t7.n_name
-                    Join INNER Hash -> t5.c_custkey, t7.n_name
-                        t5.c_nationkey = t7.n_nationkey
-                      TableScan -> t5.c_custkey, t5.c_nationkey
-                        table: customer
-                      HashBuild -> t7.n_nationkey, t7.n_name
-                        TableScan -> t7.n_nationkey, t7.n_name
-                          table: nation
-                          single-column filters: __or(eq(t7.n_name, "GERMANY"), eq(t7.n_name, "FRANCE"))
-            HashBuild -> t2.s_suppkey, t6.n_name
-              Join INNER Hash -> t2.s_suppkey, t6.n_name
-                  t2.s_nationkey = t6.n_nationkey
-                TableScan -> t2.s_suppkey, t2.s_nationkey
-                  table: supplier
-                HashBuild -> t6.n_nationkey, t6.n_name
-                  TableScan -> t6.n_nationkey, t6.n_name
-                    table: nation
-                    single-column filters: __or(eq(t6.n_name, "FRANCE"), eq(t6.n_name, "GERMANY"))
+              HashBuild [78.40 rows] -> t2.s_suppkey, t6.n_name
+                Join INNER Hash [78.40 rows] -> t2.s_suppkey, t6.n_name
+                    t2.s_nationkey = t6.n_nationkey
+                  TableScan [1000.00 rows] -> t2.s_suppkey, t2.s_nationkey
+                    table: "default"."supplier"
+                  HashBuild [1.96 rows] -> t6.n_nationkey, t6.n_name
+                    TableScan [1.96 rows] -> t6.n_nationkey, t6.n_name
+                      table: "default"."nation"
+                      single-column filters: __or(eq(t6.n_name, "FRANCE"), eq(t6.n_name, "GERMANY"))
+            HashBuild [1161.04 rows] -> t4.o_orderkey, t7.n_name
+              Join INNER Hash [1161.04 rows] -> t4.o_orderkey, t7.n_name
+                  t4.o_custkey = t5.c_custkey
+                TableScan [150000.00 rows] -> t4.o_orderkey, t4.o_custkey
+                  table: "default"."orders"
+                HashBuild [1176.00 rows] -> t5.c_custkey, t7.n_name
+                  Join INNER Hash [1176.00 rows] -> t5.c_custkey, t7.n_name
+                      t5.c_nationkey = t7.n_nationkey
+                    TableScan [15000.00 rows] -> t5.c_custkey, t5.c_nationkey
+                      table: "default"."customer"
+                    HashBuild [1.96 rows] -> t7.n_nationkey, t7.n_name
+                      TableScan [1.96 rows] -> t7.n_nationkey, t7.n_name
+                        table: "default"."nation"
+                        single-column filters: __or(eq(t7.n_name, "GERMANY"), eq(t7.n_name, "FRANCE"))
 
 
 Executable Velox plan:
 
-Fragment 0:  numWorkers=0:
+Fragment 0: stage1 numWorkers=1:
 -- Project[15][expressions: (supp_nation:VARCHAR, "n_name"), (cust_nation:VARCHAR, "n_name_9"), (l_year:BIGINT, "l_year"), (revenue:DOUBLE, "revenue")] -> supp_nation:VARCHAR, cust_nation:VARCHAR, l_year:BIGINT, revenue:DOUBLE
   -- OrderBy[14][n_name ASC NULLS LAST, n_name_9 ASC NULLS LAST, l_year ASC NULLS LAST] -> n_name:VARCHAR, n_name_9:VARCHAR, l_year:BIGINT, revenue:DOUBLE
-    -- Aggregation[13][SINGLE [n_name, n_name_9, l_year] revenue := sum("dt1.__p102")] -> n_name:VARCHAR, n_name_9:VARCHAR, l_year:BIGINT, revenue:DOUBLE
-      -- Project[12][expressions: (n_name:VARCHAR, "n_name"), (n_name_9:VARCHAR, "n_name_9"), (l_year:BIGINT, year("l_shipdate")), (dt1.__p102:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> n_name:VARCHAR, n_name_9:VARCHAR, l_year:BIGINT, "dt1.__p102":DOUBLE
+    -- Aggregation[13][SINGLE [n_name, n_name_9, l_year] revenue := sum("dt1.__p105")] -> n_name:VARCHAR, n_name_9:VARCHAR, l_year:BIGINT, revenue:DOUBLE
+      -- Project[12][expressions: (n_name:VARCHAR, "n_name"), (n_name_9:VARCHAR, "n_name_9"), (l_year:BIGINT, year("l_shipdate")), (dt1.__p105:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> n_name:VARCHAR, n_name_9:VARCHAR, l_year:BIGINT, "dt1.__p105":DOUBLE
         -- Filter[0][expression: or(and(eq("n_name",FRANCE),eq("n_name_9",GERMANY)),and(eq("n_name",GERMANY),eq("n_name_9",FRANCE)))] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE, n_name:VARCHAR, n_name_9:VARCHAR
-          -- HashJoin[11][INNER l_suppkey=s_suppkey] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE, n_name:VARCHAR, n_name_9:VARCHAR
-            -- HashJoin[7][INNER l_orderkey=o_orderkey] -> l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE, n_name_9:VARCHAR
+          -- HashJoin[11][INNER l_orderkey=o_orderkey] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE, n_name:VARCHAR, n_name_9:VARCHAR
+            -- HashJoin[5][INNER l_suppkey=s_suppkey] -> l_orderkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE, n_name:VARCHAR
               -- TableScan[1][table: lineitem, range filters: [(l_shipdate, BigintRange: [9131, 9861] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_orderkey:BIGINT, l_suppkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE, l_shipdate:DATE
-              -- HashJoin[6][INNER o_custkey=c_custkey] -> o_orderkey:BIGINT, n_name_9:VARCHAR
-                -- TableScan[2][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_custkey:BIGINT
-                -- HashJoin[5][INNER c_nationkey=n_nationkey_8] -> c_custkey:BIGINT, n_name_9:VARCHAR
-                  -- TableScan[3][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT, c_nationkey:BIGINT
-                  -- TableScan[4][table: nation, remaining filter: (or(eq("n_name",GERMANY),eq("n_name",FRANCE))), data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> n_nationkey_8:BIGINT, n_name_9:VARCHAR
-            -- HashJoin[10][INNER s_nationkey=n_nationkey] -> s_suppkey:BIGINT, n_name:VARCHAR
-              -- TableScan[8][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_nationkey:BIGINT
-              -- TableScan[9][table: nation, remaining filter: (or(eq("n_name",FRANCE),eq("n_name",GERMANY))), data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> n_nationkey:BIGINT, n_name:VARCHAR
+              -- HashJoin[4][INNER s_nationkey=n_nationkey] -> s_suppkey:BIGINT, n_name:VARCHAR
+                -- TableScan[2][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_nationkey:BIGINT
+                -- TableScan[3][table: nation, range filters: [(n_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> n_nationkey:BIGINT, n_name:VARCHAR
+            -- HashJoin[10][INNER o_custkey=c_custkey] -> o_orderkey:BIGINT, n_name_9:VARCHAR
+              -- TableScan[6][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_custkey:BIGINT
+              -- HashJoin[9][INNER c_nationkey=n_nationkey_8] -> c_custkey:BIGINT, n_name_9:VARCHAR
+                -- TableScan[7][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT, c_nationkey:BIGINT
+                -- TableScan[8][table: nation, range filters: [(n_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: n_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> n_nationkey_8:BIGINT, n_name_9:VARCHAR
 
 ___END___

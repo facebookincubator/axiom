@@ -3,77 +3,85 @@ numDrivers: 1
 
 Query Graph:
 
-dt1: avg_yearly
+dt1: 1.00 rows, avg_yearly
   output:
-    avg_yearly := divide(dt1.sum, 7)
+    avg_yearly := divide(dt1.sum, 7) DOUBLE (cardinality=1.00)
   tables: t2, t3, dt4
   joins:
-    t3 LEFT dt4 ON t3.p_partkey = dt4.__gk6
-    t2 INNER t3 ON t2.l_partkey = t3.p_partkey
+    t3 LEFT dt4 ON t3.p_partkey = dt4.__gk6 [t3 → 1.00, dt4 → 0.00]
+    t2 INNER t3 ON t2.l_partkey = t3.p_partkey [t2 → 0.00, t3 → 3.01]
   syntactic join order: 19, 34, 38
   aggregates: sum(t2.l_extendedprice) AS sum
   filter: lt(t2.l_quantity, dt4.expr)
 
-t2: l_partkey, l_quantity, l_extendedprice
-  table: lineitem
+t2: 600572.00 rows, l_partkey, l_quantity, l_extendedprice
+  table: "default"."lineitem"
+    l_partkey BIGINT (cardinality=188473.00 min=1 max=200000)
+    l_quantity DOUBLE (cardinality=50.00 min=1 max=50)
+    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
 
-t3: p_partkey, p_brand, p_container
-  table: part
+t3: 20.00 rows, p_partkey, p_brand, p_container
+  table: "default"."part"
+    p_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
+    p_brand VARCHAR (cardinality=1.00 min="Brand#23" max="Brand#23")
+    p_container VARCHAR (cardinality=1.00 min="MED BOX" max="MED BOX")
   single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
 
-dt4: __gk6, expr
+dt4: 180686.19 rows, __gk6, expr
   output:
-    __gk6 := t5.l_partkey
-    expr := multiply(dt4.avg, 0.2)
+    __gk6 := t5.l_partkey BIGINT (cardinality=180686.19 min=1 max=200000)
+    expr := multiply(dt4.avg, 0.2) DOUBLE (cardinality=1.00)
   tables: t5
   aggregates: avg(t5.l_quantity) AS avg
   grouping keys: t5.l_partkey
 
-t5: l_partkey, l_quantity
-  table: lineitem
+t5: 600572.00 rows, l_partkey, l_quantity
+  table: "default"."lineitem"
+    l_partkey BIGINT (cardinality=188473.00 min=1 max=200000)
+    l_quantity DOUBLE (cardinality=50.00 min=1 max=50)
 
 
 Optimized plan (oneline):
 
-agg(((lineitem INNER part) LEFT agg((lineitem LEFT SEMI (FILTER) part))))
+agg((("default"."lineitem" INNER "default"."part") LEFT agg(("default"."lineitem" LEFT SEMI (FILTER) "default"."part"))))
 
 Optimized plan:
 
-Project -> dt1.avg_yearly
+Project [1.00 rows] -> dt1.avg_yearly
     dt1.avg_yearly := divide(dt1.sum, 7)
-  Aggregation -> dt1.sum
+  Aggregation [1.00 rows] -> dt1.sum
       dt1.sum := sum(t2.l_extendedprice)
-    Filter -> t2.l_quantity, t2.l_extendedprice, dt4.expr
+    Filter [30.49 rows] -> t2.l_quantity, t2.l_extendedprice, dt4.expr
         lt(t2.l_quantity, dt4.expr)
-      Join LEFT Hash -> t2.l_quantity, t2.l_extendedprice, dt4.expr
+      Join LEFT Hash [60.99 rows] -> t2.l_quantity, t2.l_extendedprice, dt4.expr
           t3.p_partkey = dt4.__gk6
-        Join INNER Hash -> t2.l_quantity, t2.l_extendedprice, t3.p_partkey
+        Join INNER Hash [60.99 rows] -> t2.l_quantity, t2.l_extendedprice, t3.p_partkey
             t2.l_partkey = t3.p_partkey
-          TableScan -> t2.l_partkey, t2.l_quantity, t2.l_extendedprice
-            table: lineitem
-          HashBuild -> t3.p_partkey
-            TableScan -> t3.p_partkey
-              table: part
+          TableScan [600572.00 rows] -> t2.l_partkey, t2.l_quantity, t2.l_extendedprice
+            table: "default"."lineitem"
+          HashBuild [20.00 rows] -> t3.p_partkey
+            TableScan [20.00 rows] -> t3.p_partkey
+              table: "default"."part"
               single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
-        HashBuild -> dt4.__gk6, dt4.expr
-          Project -> dt4.__gk6, dt4.expr
+        HashBuild [59.91 rows] -> dt4.__gk6, dt4.expr
+          Project [59.91 rows] -> dt4.__gk6, dt4.expr
               dt4.__gk6 := t5.l_partkey
               dt4.expr := multiply(dt4.avg, 0.2)
-            Aggregation (t5.l_partkey) -> t5.l_partkey, dt4.avg
+            Aggregation (t5.l_partkey) [59.91 rows] -> t5.l_partkey, dt4.avg
                 dt4.avg := avg(t5.l_quantity)
-              Join LEFT SEMI (FILTER) Hash -> t5.l_partkey, t5.l_quantity
+              Join LEFT SEMI (FILTER) Hash [60.99 rows] -> t5.l_partkey, t5.l_quantity
                   t5.l_partkey = t3.p_partkey
-                TableScan -> t5.l_partkey, t5.l_quantity
-                  table: lineitem
-                HashBuild -> t3.p_partkey
-                  TableScan -> t3.p_partkey
-                    table: part
+                TableScan [600572.00 rows] -> t5.l_partkey, t5.l_quantity
+                  table: "default"."lineitem"
+                HashBuild [20.00 rows] -> t3.p_partkey
+                  TableScan [20.00 rows] -> t3.p_partkey
+                    table: "default"."part"
                     single-column filters: eq(t3.p_brand, "Brand#23") and eq(t3.p_container, "MED BOX")
 
 
 Executable Velox plan:
 
-Fragment 0:  numWorkers=0:
+Fragment 0: stage1 numWorkers=1:
 -- Project[11][expressions: (avg_yearly:DOUBLE, divide("sum",7))] -> avg_yearly:DOUBLE
   -- Aggregation[10][SINGLE sum := sum("l_extendedprice")] -> sum:DOUBLE
     -- Filter[0][expression: lt("l_quantity","expr")] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, expr:DOUBLE

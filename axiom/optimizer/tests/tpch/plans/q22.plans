@@ -3,92 +3,96 @@ numDrivers: 1
 
 Query Graph:
 
-dt1: cntrycode, numcust, totacctbal
+dt1: 1.00 rows, cntrycode, numcust, totacctbal
   output:
-    cntrycode := dt1.cntrycode
-    numcust := dt1.numcust
-    totacctbal := dt1.totacctbal
+    cntrycode := dt1.cntrycode VARCHAR (cardinality=1.00)
+    numcust := dt1.numcust BIGINT (cardinality=1.00)
+    totacctbal := dt1.totacctbal DOUBLE (cardinality=1.00)
   tables: t2, dt3, dt5
   joins:
-    t2 SEMI dt5 ON t2.c_custkey = dt5.o_custkey
-  syntactic join order: 11, 15, 37
+    t2 SEMI dt5 ON t2.c_custkey = dt5.o_custkey [t2 → 2.05, dt5 → 0.00]
+  syntactic join order: 11, 15, 36
   aggregates: count() AS numcust, sum(t2.c_acctbal) AS totacctbal
   grouping keys: substr(t2.c_phone, 1, 2)
-  filter: gt(t2.c_acctbal, dt3.avg) and not(dt1.__mark0)
+  filter: gt(t2.c_acctbal, dt3.avg) and not(dt1.__mark7)
   orderBy: dt1.cntrycode ASC NULLS LAST
 
-t2: c_custkey, c_phone, c_acctbal
-  table: customer
+t2: 6.75 rows, c_custkey, c_phone, c_acctbal
+  table: "default"."customer"
+    c_custkey BIGINT (cardinality=14936.00 min=1 max=15000)
+    c_phone VARCHAR (cardinality=15553.00 min="10-103-318-6809" max="34-999-121-7718")
+    c_acctbal DOUBLE (cardinality=14867.00 min=-999.95 max=9999.72)
   single-column filters: __in(substr(t2.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
 
-dt3: avg
+dt3: 1.00 rows, avg
   output:
-    avg := dt3.avg
+    avg := dt3.avg DOUBLE (cardinality=1.00)
   tables: t4
   aggregates: avg(t4.c_acctbal) AS avg
 
-t4: c_phone, c_acctbal
-  table: customer
+t4: 6.14 rows, c_phone, c_acctbal
+  table: "default"."customer"
+    c_phone VARCHAR (cardinality=15553.00 min="10-103-318-6809" max="34-999-121-7718")
+    c_acctbal DOUBLE (cardinality=13515.48 min=0 max=9999.72)
   single-column filters: gt(t4.c_acctbal, 0) and __in(substr(t4.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
 
-dt5: o_custkey
+dt5: 150000.00 rows, o_custkey
   output:
-    o_custkey := t6.o_custkey
+    o_custkey := t6.o_custkey BIGINT (cardinality=73171.00 min=1 max=149999)
   tables: t6
 
-t6: o_custkey
-  table: orders
+t6: 150000.00 rows, o_custkey
+  table: "default"."orders"
+    o_custkey BIGINT (cardinality=73171.00 min=1 max=149999)
 
 
 Optimized plan (oneline):
 
-agg((orders RIGHT SEMI (PROJECT) (customer INNER agg(customer))))
+agg(("default"."orders" RIGHT SEMI (PROJECT) ("default"."customer" INNER agg("default"."customer"))))
 
 Optimized plan:
 
-Project (redundant) -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
+Project (redundant) [1.00 rows] -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
     dt1.cntrycode := dt1.cntrycode
     dt1.numcust := dt1.numcust
     dt1.totacctbal := dt1.totacctbal
-  OrderBy -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
-    Aggregation (dt1.__p55) -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
+  OrderBy [1.00 rows] -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
+    Aggregation (dt1.__p54) [1.00 rows] -> dt1.cntrycode, dt1.numcust, dt1.totacctbal
         dt1.numcust := count()
         dt1.totacctbal := sum(t2.c_acctbal)
-      Project -> dt1.__p55, t2.c_acctbal
-          dt1.__p55 := substr(t2.c_phone, 1, 2)
+      Project [1.00 rows] -> dt1.__p54, t2.c_acctbal
+          dt1.__p54 := substr(t2.c_phone, 1, 2)
           t2.c_acctbal := t2.c_acctbal
-        Filter -> t2.c_phone, t2.c_acctbal, dt1.__mark0
-            not(dt1.__mark0)
-          Join RIGHT SEMI (PROJECT) Hash -> t2.c_phone, t2.c_acctbal, dt1.__mark0
+        Filter [1.00 rows] -> t2.c_phone, t2.c_acctbal, dt1.__mark7
+            not(dt1.__mark7)
+          Join RIGHT SEMI (PROJECT) Hash [3.38 rows] -> t2.c_phone, t2.c_acctbal, dt1.__mark7
               dt5.o_custkey = t2.c_custkey
-            Project (redundant) -> dt5.o_custkey
-                dt5.o_custkey := t6.o_custkey
-              TableScan -> t6.o_custkey
-                table: orders
-            HashBuild -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
-              Filter -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
+            TableScan [150000.00 rows] -> t6.o_custkey
+              table: "default"."orders"
+            HashBuild [3.38 rows] -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
+              Filter [3.38 rows] -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
                   gt(t2.c_acctbal, dt3.avg)
-                Join INNER Cross -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
-                  TableScan -> t2.c_custkey, t2.c_phone, t2.c_acctbal
-                    table: customer
+                Join INNER Cross [6.75 rows] -> t2.c_custkey, t2.c_phone, t2.c_acctbal, dt3.avg
+                  TableScan [6.75 rows] -> t2.c_custkey, t2.c_phone, t2.c_acctbal
+                    table: "default"."customer"
                     single-column filters: __in(substr(t2.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
-                  Project (redundant) -> dt3.avg
+                  Project (redundant) [1.00 rows] -> dt3.avg
                       dt3.avg := dt3.avg
-                    Aggregation -> dt3.avg
+                    Aggregation [1.00 rows] -> dt3.avg
                         dt3.avg := avg(t4.c_acctbal)
-                      TableScan -> t4.c_acctbal
-                        table: customer
+                      TableScan [6.14 rows] -> t4.c_acctbal
+                        table: "default"."customer"
                         single-column filters: gt(t4.c_acctbal, 0) and __in(substr(t4.c_phone, 1, 2), "13", "31", "23", "29", "30", "18", "17")
 
 
 Executable Velox plan:
 
-Fragment 0:  numWorkers=0:
+Fragment 0: stage1 numWorkers=1:
 -- OrderBy[10][cntrycode ASC NULLS LAST] -> cntrycode:VARCHAR, numcust:BIGINT, totacctbal:DOUBLE
   -- Aggregation[9][SINGLE [cntrycode] numcust := count(), totacctbal := sum("c_acctbal")] -> cntrycode:VARCHAR, numcust:BIGINT, totacctbal:DOUBLE
     -- Project[8][expressions: (cntrycode:VARCHAR, substr("c_phone",1,2)), (c_acctbal:DOUBLE, "c_acctbal")] -> cntrycode:VARCHAR, c_acctbal:DOUBLE
-      -- Filter[0][expression: not("dt1.__mark0")] -> c_phone:VARCHAR, c_acctbal:DOUBLE, "dt1.__mark0":BOOLEAN
-        -- HashJoin[7][RIGHT SEMI (PROJECT) o_custkey=c_custkey] -> c_phone:VARCHAR, c_acctbal:DOUBLE, "dt1.__mark0":BOOLEAN
+      -- Filter[0][expression: not("dt1.__mark7")] -> c_phone:VARCHAR, c_acctbal:DOUBLE, "dt1.__mark7":BOOLEAN
+        -- HashJoin[7][RIGHT SEMI (PROJECT) o_custkey=c_custkey] -> c_phone:VARCHAR, c_acctbal:DOUBLE, "dt1.__mark7":BOOLEAN
           -- TableScan[1][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_custkey:BIGINT
           -- Filter[2][expression: gt("c_acctbal","avg")] -> c_custkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, avg:DOUBLE
             -- NestedLoopJoin[6][INNER] -> c_custkey:BIGINT, c_phone:VARCHAR, c_acctbal:DOUBLE, avg:DOUBLE

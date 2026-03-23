@@ -3,110 +3,127 @@ numDrivers: 1
 
 Query Graph:
 
-dt1: nation, o_year, sum_profit
+dt1: 25.00 rows, nation, o_year, sum_profit
   output:
-    nation := t7.n_name
-    o_year := dt1.o_year
-    sum_profit := dt1.sum_profit
+    nation := t7.n_name VARCHAR (cardinality=25.00 min="ALGERIA" max="VIETNAM")
+    o_year := dt1.o_year BIGINT (cardinality=25.00)
+    sum_profit := dt1.sum_profit DOUBLE (cardinality=1.00)
   tables: t2, t3, t4, t5, t6, t7
   joins:
-    t3 INNER t4 ON t3.s_suppkey = t4.l_suppkey
-    t4 INNER t5 ON t4.l_suppkey = t5.ps_suppkey AND t4.l_partkey = t5.ps_partkey
-    t2 INNER t4 ON t2.p_partkey = t4.l_partkey
-    t4 INNER t6 ON t4.l_orderkey = t6.o_orderkey
-    t3 INNER t7 ON t3.s_nationkey = t7.n_nationkey
-    t3 INNER t5 ON t3.s_suppkey = t5.ps_suppkey
-    t5 INNER t2 ON t5.ps_partkey = t2.p_partkey
+    t3 INNER t4 ON t3.s_suppkey = t4.l_suppkey [t3 → 59.07, t4 → 0.10]
+    t4 INNER t5 ON t4.l_suppkey = t5.ps_suppkey AND t4.l_partkey = t5.ps_partkey [t4 → 0.10, t5 → 0.74]
+    t2 INNER t4 ON t2.p_partkey = t4.l_partkey [t2 → 3.01, t4 → 0.08]
+    t4 INNER t6 ON t4.l_orderkey = t6.o_orderkey [t4 → 1.00, t6 → 4.02]
+    t3 INNER t7 ON t3.s_nationkey = t7.n_nationkey [t3 → 1.00, t7 → 40.00]
+    t3 INNER t5 ON t3.s_suppkey = t5.ps_suppkey [t3 → 7.87, t5 → 0.10]
+    t5 INNER t2 ON t5.ps_partkey = t2.p_partkey [t5 → 0.80, t2 → 4.00]
   syntactic join order: 12, 24, 45, 59, 74, 83
   aggregates: sum(minus(multiply(t4.l_extendedprice, minus(1, t4.l_discount)), multiply(t4.l_quantity, t5.ps_supplycost))) AS sum_profit
   grouping keys: t7.n_name, year(t6.o_orderdate)
   orderBy: t7.n_name ASC NULLS LAST, dt1.o_year DESC NULLS LAST
 
-t2: p_partkey, p_name
-  table: part
+t2: 16000.00 rows, p_partkey, p_name
+  table: "default"."part"
+    p_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
+    p_name VARCHAR (cardinality=19378.00 min="almond antique metallic honeydew green" max="yellow white red chiffon tan")
   single-column filters: like(t2.p_name, "%green%")
 
-t3: s_suppkey, s_nationkey
-  table: supplier
+t3: 1000.00 rows, s_suppkey, s_nationkey
+  table: "default"."supplier"
+    s_suppkey BIGINT (cardinality=1008.00 min=1 max=1000)
+    s_nationkey BIGINT (cardinality=25.00 min=0 max=24)
 
-t4: l_orderkey, l_partkey, l_suppkey, l_quantity, l_extendedprice, l_discount
-  table: lineitem
+t4: 600572.00 rows, l_orderkey, l_partkey, l_suppkey, l_quantity, l_extendedprice, l_discount
+  table: "default"."lineitem"
+    l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    l_partkey BIGINT (cardinality=188473.00 min=1 max=200000)
+    l_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
+    l_quantity DOUBLE (cardinality=50.00 min=1 max=50)
+    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
 
-t5: ps_partkey, ps_suppkey, ps_supplycost
-  table: partsupp
+t5: 80000.00 rows, ps_partkey, ps_suppkey, ps_supplycost
+  table: "default"."partsupp"
+    ps_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
+    ps_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
+    ps_supplycost DOUBLE (cardinality=54016.00 min=1.01 max=999.99)
 
-t6: o_orderkey, o_orderdate
-  table: orders
+t6: 150000.00 rows, o_orderkey, o_orderdate
+  table: "default"."orders"
+    o_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    o_orderdate DATE (cardinality=2382.00 min=8035 max=10440)
 
-t7: n_nationkey, n_name
-  table: nation
+t7: 25.00 rows, n_nationkey, n_name
+  table: "default"."nation"
+    n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+    n_name VARCHAR (cardinality=25.00 min="ALGERIA" max="VIETNAM")
 
 
 Optimized plan (oneline):
 
-agg((((orders INNER (lineitem INNER (partsupp INNER part))) INNER supplier) INNER nation))
+agg(("default"."orders" INNER ("default"."lineitem" INNER ((("default"."partsupp" INNER "default"."supplier") INNER "default"."part") INNER "default"."nation"))))
 
 Optimized plan:
 
-Project -> dt1.nation, dt1.o_year, dt1.sum_profit
+Project [624.67 rows] -> dt1.nation, dt1.o_year, dt1.sum_profit
     dt1.nation := t7.n_name
     dt1.o_year := dt1.o_year
     dt1.sum_profit := dt1.sum_profit
-  OrderBy -> t7.n_name, dt1.o_year, dt1.sum_profit
-    Aggregation (t7.n_name, dt1.__p94) -> t7.n_name, dt1.o_year, dt1.sum_profit
-        dt1.sum_profit := sum(dt1.__p101)
-      Project -> t7.n_name, dt1.__p94, dt1.__p101
+  OrderBy [624.67 rows] -> t7.n_name, dt1.o_year, dt1.sum_profit
+    Aggregation (t7.n_name, dt1.__p94) [624.67 rows] -> t7.n_name, dt1.o_year, dt1.sum_profit
+        dt1.sum_profit := sum(dt1.__p102)
+      Project [4717.84 rows] -> t7.n_name, dt1.__p94, dt1.__p102
           t7.n_name := t7.n_name
           dt1.__p94 := year(t6.o_orderdate)
-          dt1.__p101 := minus(multiply(t4.l_extendedprice, minus(1, t4.l_discount)), multiply(t4.l_quantity, t5.ps_supplycost))
-        Join INNER Hash -> t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_supplycost, t6.o_orderdate, t7.n_name
-            t3.s_nationkey = t7.n_nationkey
-          Join INNER Hash -> t3.s_nationkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_supplycost, t6.o_orderdate
-              t4.l_suppkey = t3.s_suppkey
-            Join INNER Hash -> t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_suppkey, t5.ps_supplycost, t6.o_orderdate
-                t6.o_orderkey = t4.l_orderkey
-              TableScan -> t6.o_orderkey, t6.o_orderdate
-                table: orders
-              HashBuild -> t4.l_orderkey, t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_suppkey, t5.ps_supplycost
-                Join INNER Hash -> t4.l_orderkey, t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_suppkey, t5.ps_supplycost
-                    t4.l_suppkey = t5.ps_suppkey
-                    t4.l_partkey = t5.ps_partkey
-                  TableScan -> t4.l_orderkey, t4.l_partkey, t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount
-                    table: lineitem
-                  HashBuild -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
-                    Join INNER Hash -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
-                        t5.ps_partkey = t2.p_partkey
-                      TableScan -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
-                        table: partsupp
-                      HashBuild -> t2.p_partkey
-                        TableScan -> t2.p_partkey
-                          table: part
-                          single-column filters: like(t2.p_name, "%green%")
-            HashBuild -> t3.s_suppkey, t3.s_nationkey
-              TableScan -> t3.s_suppkey, t3.s_nationkey
-                table: supplier
-          HashBuild -> t7.n_nationkey, t7.n_name
-            TableScan -> t7.n_nationkey, t7.n_name
-              table: nation
+          dt1.__p102 := minus(multiply(t4.l_extendedprice, minus(1, t4.l_discount)), multiply(t4.l_quantity, t5.ps_supplycost))
+        Join INNER Hash [4717.84 rows] -> t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_supplycost, t6.o_orderdate, t7.n_name
+            t6.o_orderkey = t4.l_orderkey
+          TableScan [150000.00 rows] -> t6.o_orderkey, t6.o_orderdate
+            table: "default"."orders"
+          HashBuild [4702.31 rows] -> t4.l_orderkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_supplycost, t7.n_name
+            Join INNER Hash [4702.31 rows] -> t4.l_orderkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount, t5.ps_supplycost, t7.n_name
+                t4.l_suppkey = t5.ps_suppkey
+                t4.l_partkey = t5.ps_partkey
+              TableScan [600572.00 rows] -> t4.l_orderkey, t4.l_partkey, t4.l_suppkey, t4.l_quantity, t4.l_extendedprice, t4.l_discount
+                table: "default"."lineitem"
+              HashBuild [6294.88 rows] -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost, t7.n_name
+                Join INNER Hash [6294.88 rows] -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost, t7.n_name
+                    t3.s_nationkey = t7.n_nationkey
+                  Join INNER Hash [6294.88 rows] -> t3.s_nationkey, t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
+                      t5.ps_partkey = t2.p_partkey
+                    Join INNER Hash [7868.59 rows] -> t3.s_nationkey, t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
+                        t5.ps_suppkey = t3.s_suppkey
+                      TableScan [80000.00 rows] -> t5.ps_partkey, t5.ps_suppkey, t5.ps_supplycost
+                        table: "default"."partsupp"
+                      HashBuild [1000.00 rows] -> t3.s_suppkey, t3.s_nationkey
+                        TableScan [1000.00 rows] -> t3.s_suppkey, t3.s_nationkey
+                          table: "default"."supplier"
+                    HashBuild [16000.00 rows] -> t2.p_partkey
+                      TableScan [16000.00 rows] -> t2.p_partkey
+                        table: "default"."part"
+                        single-column filters: like(t2.p_name, "%green%")
+                  HashBuild [25.00 rows] -> t7.n_nationkey, t7.n_name
+                    TableScan [25.00 rows] -> t7.n_nationkey, t7.n_name
+                      table: "default"."nation"
 
 
 Executable Velox plan:
 
-Fragment 0:  numWorkers=0:
--- Project[26][expressions: (nation:VARCHAR, "n_name"), (o_year:BIGINT, "o_year"), (sum_profit:DOUBLE, "sum_profit")] -> nation:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
-  -- OrderBy[25][n_name ASC NULLS LAST, o_year DESC NULLS LAST] -> n_name:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
-    -- Aggregation[24][SINGLE [n_name, o_year] sum_profit := sum("dt1.__p101")] -> n_name:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
-      -- Project[23][expressions: (n_name:VARCHAR, "n_name"), (o_year:BIGINT, year("o_orderdate")), (dt1.__p101:DOUBLE, minus(multiply("l_extendedprice",minus(1,"l_discount")),multiply("l_quantity","ps_supplycost")))] -> n_name:VARCHAR, o_year:BIGINT, "dt1.__p101":DOUBLE
-        -- HashJoin[22][INNER s_nationkey=n_nationkey] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_supplycost:DOUBLE, o_orderdate:DATE, n_name:VARCHAR
-          -- HashJoin[20][INNER l_suppkey=s_suppkey] -> s_nationkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_supplycost:DOUBLE, o_orderdate:DATE
-            -- HashJoin[18][INNER o_orderkey=l_orderkey] -> l_suppkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_suppkey:BIGINT, ps_supplycost:DOUBLE, o_orderdate:DATE
-              -- TableScan[12][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_orderdate:DATE
-              -- HashJoin[17][INNER l_suppkey=ps_suppkey AND l_partkey=ps_partkey] -> l_orderkey:BIGINT, l_suppkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
-                -- TableScan[13][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey:BIGINT, l_partkey:BIGINT, l_suppkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE
-                -- HashJoin[16][INNER ps_partkey=p_partkey] -> ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
-                  -- TableScan[14][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
-                  -- TableScan[15][table: part, remaining filter: (like("p_name",%green%)), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> p_partkey:BIGINT
-            -- TableScan[19][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_nationkey:BIGINT
-          -- TableScan[21][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey:BIGINT, n_name:VARCHAR
+Fragment 0: stage7 numWorkers=1:
+-- Project[32][expressions: (nation:VARCHAR, "n_name"), (o_year:BIGINT, "o_year"), (sum_profit:DOUBLE, "sum_profit")] -> nation:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
+  -- OrderBy[31][n_name ASC NULLS LAST, o_year DESC NULLS LAST] -> n_name:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
+    -- Aggregation[30][SINGLE [n_name, o_year] sum_profit := sum("dt1.__p102")] -> n_name:VARCHAR, o_year:BIGINT, sum_profit:DOUBLE
+      -- Project[29][expressions: (n_name:VARCHAR, "n_name"), (o_year:BIGINT, year("o_orderdate")), (dt1.__p102:DOUBLE, minus(multiply("l_extendedprice",minus(1,"l_discount")),multiply("l_quantity","ps_supplycost")))] -> n_name:VARCHAR, o_year:BIGINT, "dt1.__p102":DOUBLE
+        -- HashJoin[28][INNER o_orderkey=l_orderkey] -> l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_supplycost:DOUBLE, o_orderdate:DATE, n_name:VARCHAR
+          -- TableScan[18][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_orderdate:DATE
+          -- HashJoin[27][INNER l_suppkey=ps_suppkey AND l_partkey=ps_partkey] -> l_orderkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE, ps_supplycost:DOUBLE, n_name:VARCHAR
+            -- TableScan[19][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey:BIGINT, l_partkey:BIGINT, l_suppkey:BIGINT, l_quantity:DOUBLE, l_extendedprice:DOUBLE, l_discount:DOUBLE
+            -- HashJoin[26][INNER s_nationkey=n_nationkey] -> ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_supplycost:DOUBLE, n_name:VARCHAR
+              -- HashJoin[24][INNER ps_partkey=p_partkey] -> s_nationkey:BIGINT, ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
+                -- HashJoin[22][INNER ps_suppkey=s_suppkey] -> s_nationkey:BIGINT, ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
+                  -- TableScan[20][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey:BIGINT, ps_suppkey:BIGINT, ps_supplycost:DOUBLE
+                  -- TableScan[21][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_nationkey:BIGINT
+                -- TableScan[23][table: part, remaining filter: (like("p_name",%green%)), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> p_partkey:BIGINT
+              -- TableScan[25][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey:BIGINT, n_name:VARCHAR
 
 ___END___

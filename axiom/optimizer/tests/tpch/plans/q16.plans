@@ -3,77 +3,85 @@ numDrivers: 1
 
 Query Graph:
 
-dt1: p_brand, p_type, p_size, supplier_cnt
+dt1: 1745.33 rows, p_brand, p_type, p_size, supplier_cnt
   output:
-    p_brand := t3.p_brand
-    p_type := t3.p_type
-    p_size := t3.p_size
-    supplier_cnt := dt1.supplier_cnt
+    p_brand := t3.p_brand VARCHAR (cardinality=25.00 min="Brand#11" max="Brand#55")
+    p_type := t3.p_type VARCHAR (cardinality=150.00 min="ECONOMY ANODIZED BRASS" max="STANDARD POLISHED TIN")
+    p_size := t3.p_size INTEGER (cardinality=8.00 min=3 max=49)
+    supplier_cnt := dt1.supplier_cnt BIGINT (cardinality=1.00)
   tables: t2, t3, dt4
   joins:
-    t2 SEMI dt4 ON t2.ps_suppkey = dt4.s_suppkey
-    t2 INNER t3 ON t2.ps_partkey = t3.p_partkey
+    t2 SEMI dt4 ON t2.ps_suppkey = dt4.s_suppkey [t2 → 0.08, dt4 → 7.87]
+    t2 INNER t3 ON t2.ps_partkey = t3.p_partkey [t2 → 0.03, t3 → 4.00]
   syntactic join order: 8, 22, 27
   aggregates: count(t2.ps_suppkey) AS supplier_cnt
   grouping keys: t3.p_brand, t3.p_type, t3.p_size
-  filter: not(dt1.__mark0)
+  filter: not(dt1.__mark6)
   orderBy: dt1.supplier_cnt DESC NULLS LAST, t3.p_brand ASC NULLS LAST, t3.p_type ASC NULLS LAST, t3.p_size ASC NULLS LAST
 
-t2: ps_partkey, ps_suppkey
-  table: partsupp
+t2: 80000.00 rows, ps_partkey, ps_suppkey
+  table: "default"."partsupp"
+    ps_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
+    ps_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
 
-t3: p_partkey, p_brand, p_type, p_size
-  table: part
+t3: 512.00 rows, p_partkey, p_brand, p_type, p_size
+  table: "default"."part"
+    p_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
+    p_brand VARCHAR (cardinality=25.00 min="Brand#11" max="Brand#55")
+    p_type VARCHAR (cardinality=150.00 min="ECONOMY ANODIZED BRASS" max="STANDARD POLISHED TIN")
+    p_size INTEGER (cardinality=8.00 min=3 max=49)
   single-column filters: neq(t3.p_brand, "Brand#45") and not(like(t3.p_type, "MEDIUM POLISHED%")) and __in(t3.p_size, 49, 14, 23, 45, 19, 3, 36, 9)
 
-dt4: s_suppkey
+dt4: 800.00 rows, s_suppkey
   output:
-    s_suppkey := t5.s_suppkey
+    s_suppkey := t5.s_suppkey BIGINT (cardinality=800.00 min=1 max=1000)
   tables: t5
 
-t5: s_suppkey, s_comment
-  table: supplier
+t5: 800.00 rows, s_suppkey, s_comment
+  table: "default"."supplier"
+    s_suppkey BIGINT (cardinality=1008.00 min=1 max=1000)
+    s_comment VARCHAR (cardinality=1000.00 min=" according to the bravely quick dolphins. deposit" max="ymptotes. blithely regular theodolites are slyly according to the ")
   single-column filters: like(t5.s_comment, "%Customer%Complaints%")
 
 
 Optimized plan (oneline):
 
-agg(((partsupp INNER part) ANTI supplier))
+agg((("default"."partsupp" INNER "default"."part") ANTI "default"."supplier"))
 
 Optimized plan:
 
-Project (redundant) -> dt1.p_brand, dt1.p_type, dt1.p_size, dt1.supplier_cnt
+Project (redundant) [1745.33 rows] -> dt1.p_brand, dt1.p_type, dt1.p_size, dt1.supplier_cnt
     dt1.p_brand := t3.p_brand
     dt1.p_type := t3.p_type
     dt1.p_size := t3.p_size
     dt1.supplier_cnt := dt1.supplier_cnt
-  OrderBy -> t3.p_brand, t3.p_type, t3.p_size, dt1.supplier_cnt
-    Aggregation (t3.p_brand, t3.p_type, t3.p_size) -> t3.p_brand, t3.p_type, t3.p_size, dt1.supplier_cnt
+  OrderBy [1745.33 rows] -> t3.p_brand, t3.p_type, t3.p_size, dt1.supplier_cnt
+    Aggregation (t3.p_brand, t3.p_type, t3.p_size) [1745.33 rows] -> t3.p_brand, t3.p_type, t3.p_size, dt1.supplier_cnt
         dt1.supplier_cnt := count(t2.ps_suppkey)
-      Join ANTI Hash -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size
+      Join ANTI Hash [1886.85 rows] -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size
           t2.ps_suppkey = dt4.s_suppkey
-        Join INNER Hash -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size
+        Join INNER Hash [2048.00 rows] -> t2.ps_suppkey, t3.p_brand, t3.p_type, t3.p_size
             t2.ps_partkey = t3.p_partkey
-          TableScan -> t2.ps_partkey, t2.ps_suppkey
-            table: partsupp
-          HashBuild -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
-            TableScan -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
-              table: part
+          TableScan [80000.00 rows] -> t2.ps_partkey, t2.ps_suppkey
+            table: "default"."partsupp"
+          HashBuild [512.00 rows] -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
+            TableScan [512.00 rows] -> t3.p_partkey, t3.p_brand, t3.p_type, t3.p_size
+              table: "default"."part"
               single-column filters: neq(t3.p_brand, "Brand#45") and not(like(t3.p_type, "MEDIUM POLISHED%")) and __in(t3.p_size, 49, 14, 23, 45, 19, 3, 36, 9)
-        HashBuild -> dt4.s_suppkey
-          Project (redundant) -> dt4.s_suppkey
+        HashBuild [800.00 rows] -> dt4.s_suppkey
+          Project (redundant) [800.00 rows] -> dt4.s_suppkey
               dt4.s_suppkey := t5.s_suppkey
-            TableScan -> t5.s_suppkey
-              table: supplier
+            TableScan [800.00 rows] -> t5.s_suppkey
+              table: "default"."supplier"
               single-column filters: like(t5.s_comment, "%Customer%Complaints%")
 
 
 Executable Velox plan:
 
-Fragment 0:  numWorkers=0:
+Fragment 0: stage1 numWorkers=1:
 -- OrderBy[6][supplier_cnt DESC NULLS LAST, p_brand ASC NULLS LAST, p_type ASC NULLS LAST, p_size ASC NULLS LAST] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
   -- Aggregation[5][SINGLE [p_brand, p_type, p_size] supplier_cnt := count("ps_suppkey")] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
-    -- HashJoin[4][ANTI ps_suppkey=s_suppkey] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+    -- HashJoin[4][ANTI ps_suppkey=s_suppkey, null aware] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
       -- HashJoin[2][INNER ps_partkey=p_partkey] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
         -- TableScan[0][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey:BIGINT, ps_suppkey:BIGINT
         -- TableScan[1][table: part, range filters: [(p_brand, Filter(MultiRange, deterministic, no nulls)), (p_size, Filter(BigintValuesUsingBitmask, deterministic, no nulls))], remaining filter: (not(like("p_type",MEDIUM POLISHED%))), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]], HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_brand, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> p_partkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER

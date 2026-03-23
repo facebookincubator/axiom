@@ -3,79 +3,107 @@ numDrivers: 1
 
 Query Graph:
 
-dt1: s_acctbal, s_name, n_name, p_partkey, p_mfgr, s_address, s_phone, s_comment
+dt1: 1.00 rows, s_acctbal, s_name, n_name, p_partkey, p_mfgr, s_address, s_phone, s_comment
   output:
-    s_acctbal := t3.s_acctbal
-    s_name := t3.s_name
-    n_name := t5.n_name
-    p_partkey := t2.p_partkey
-    p_mfgr := t2.p_mfgr
-    s_address := t3.s_address
-    s_phone := t3.s_phone
-    s_comment := t3.s_comment
+    s_acctbal := t3.s_acctbal DOUBLE (cardinality=18.69 min=-966.2 max=9993.460000000001)
+    s_name := t3.s_name VARCHAR (cardinality=18.69 min="Supplier#000000001" max="Supplier#000001000")
+    n_name := t5.n_name VARCHAR (cardinality=4.58 min="ALGERIA" max="VIETNAM")
+    p_partkey := t2.p_partkey BIGINT (cardinality=1.00 min=1 max=20000)
+    p_mfgr := t2.p_mfgr VARCHAR (cardinality=1.00 min="Manufacturer#1" max="Manufacturer#5")
+    s_address := t3.s_address VARCHAR (cardinality=18.69 min="  Bg4GNb1 64E,NhHOTBsSLegFZL2l" max="zuWWhrxl0hEvZ")
+    s_phone := t3.s_phone VARCHAR (cardinality=18.69 min="10-108-564-6160" max="34-998-900-4911")
+    s_comment := t3.s_comment VARCHAR (cardinality=18.69 min=" according to the bravely quick dolphins. deposit" max="ymptotes. blithely regular theodolites are slyly according to the ")
   tables: t2, t3, t4, t5, t6, dt7
   joins:
-    t2 LEFT dt7 ON t2.p_partkey = dt7.__gk12
-    t2 INNER t4 ON t2.p_partkey = t4.ps_partkey
-    t3 INNER t4 ON t3.s_suppkey = t4.ps_suppkey
-    t3 INNER t5 ON t3.s_nationkey = t5.n_nationkey
-    t5 INNER t6 ON t5.n_regionkey = t6.r_regionkey
-    t4 INNER dt7 ON t4.ps_supplycost = dt7.min
+    t2 LEFT dt7 ON t2.p_partkey = dt7.__gk12 [t2 → 0.05, dt7 → 0.33]
+    t2 INNER t4 ON t2.p_partkey = t4.ps_partkey [t2 → 4.00, t4 → 0.02]
+    t3 INNER t4 ON t3.s_suppkey = t4.ps_suppkey [t3 → 7.87, t4 → 0.10]
+    t3 INNER t5 ON t3.s_nationkey = t5.n_nationkey [t3 → 1.00, t5 → 40.00]
+    t5 INNER t6 ON t5.n_regionkey = t6.r_regionkey [t5 → 0.20, t6 → 5.00]
+    t4 INNER dt7 ON t4.ps_supplycost = dt7.min [t4 → 0.02, dt7 → 81.79]
   syntactic join order: 12, 26, 41, 51, 60, 63
   orderBy: t3.s_acctbal DESC NULLS LAST, t5.n_name ASC NULLS LAST, t3.s_name ASC NULLS LAST, t2.p_partkey ASC NULLS LAST
   limit: 100
 
-t2: p_partkey, p_mfgr, p_type, p_size
-  table: part
+t2: 320.00 rows, p_partkey, p_mfgr, p_type, p_size
+  table: "default"."part"
+    p_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
+    p_mfgr VARCHAR (cardinality=5.00 min="Manufacturer#1" max="Manufacturer#5")
+    p_type VARCHAR (cardinality=150.00 min="ECONOMY ANODIZED BRASS" max="STANDARD POLISHED TIN")
+    p_size INTEGER (cardinality=1.00 min=15 max=15)
   single-column filters: eq(t2.p_size, 15) and like(t2.p_type, "%BRASS")
 
-t3: s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment
-  table: supplier
+t3: 1000.00 rows, s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment
+  table: "default"."supplier"
+    s_suppkey BIGINT (cardinality=1008.00 min=1 max=1000)
+    s_name VARCHAR (cardinality=1016.00 min="Supplier#000000001" max="Supplier#000001000")
+    s_address VARCHAR (cardinality=992.00 min="  Bg4GNb1 64E,NhHOTBsSLegFZL2l" max="zuWWhrxl0hEvZ")
+    s_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+    s_phone VARCHAR (cardinality=1023.00 min="10-108-564-6160" max="34-998-900-4911")
+    s_acctbal DOUBLE (cardinality=1024.00 min=-966.2 max=9993.460000000001)
+    s_comment VARCHAR (cardinality=1000.00 min=" according to the bravely quick dolphins. deposit" max="ymptotes. blithely regular theodolites are slyly according to the ")
 
-t4: ps_partkey, ps_suppkey, ps_supplycost
-  table: partsupp
+t4: 80000.00 rows, ps_partkey, ps_suppkey, ps_supplycost
+  table: "default"."partsupp"
+    ps_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
+    ps_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
+    ps_supplycost DOUBLE (cardinality=54016.00 min=1.01 max=999.99)
 
-t5: n_nationkey, n_name, n_regionkey
-  table: nation
+t5: 25.00 rows, n_nationkey, n_name, n_regionkey
+  table: "default"."nation"
+    n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+    n_name VARCHAR (cardinality=25.00 min="ALGERIA" max="VIETNAM")
+    n_regionkey BIGINT (cardinality=5.00 min=0 max=4)
 
-t6: r_regionkey, r_name
-  table: region
+t6: 1.00 rows, r_regionkey, r_name
+  table: "default"."region"
+    r_regionkey BIGINT (cardinality=5.00 min=0 max=4)
+    r_name VARCHAR (cardinality=1.00 min="EUROPE" max="EUROPE")
   single-column filters: eq(t6.r_name, "EUROPE")
 
-dt7: __gk12, min
+dt7: 978.07 rows, __gk12, min
   output:
-    __gk12 := t8.ps_partkey
-    min := dt7.min
+    __gk12 := t8.ps_partkey BIGINT (cardinality=978.07 min=1 max=20000)
+    min := dt7.min DOUBLE (cardinality=1.00)
   tables: t8, t9, t10, t11
   joins:
-    t8 INNER t9 ON t8.ps_suppkey = t9.s_suppkey
-    t9 INNER t10 ON t9.s_nationkey = t10.n_nationkey
-    t10 INNER t11 ON t10.n_regionkey = t11.r_regionkey
+    t8 INNER t9 ON t8.ps_suppkey = t9.s_suppkey [t8 → 0.10, t9 → 7.87]
+    t9 INNER t10 ON t9.s_nationkey = t10.n_nationkey [t9 → 1.00, t10 → 40.00]
+    t10 INNER t11 ON t10.n_regionkey = t11.r_regionkey [t10 → 0.20, t11 → 5.00]
   syntactic join order: 64, 68, 71, 74
   aggregates: min(t8.ps_supplycost) AS min
   grouping keys: t8.ps_partkey
 
-t8: ps_partkey, ps_suppkey, ps_supplycost
-  table: partsupp
+t8: 80000.00 rows, ps_partkey, ps_suppkey, ps_supplycost
+  table: "default"."partsupp"
+    ps_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
+    ps_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
+    ps_supplycost DOUBLE (cardinality=54016.00 min=1.01 max=999.99)
 
-t9: s_suppkey, s_nationkey
-  table: supplier
+t9: 1000.00 rows, s_suppkey, s_nationkey
+  table: "default"."supplier"
+    s_suppkey BIGINT (cardinality=1008.00 min=1 max=1000)
+    s_nationkey BIGINT (cardinality=25.00 min=0 max=24)
 
-t10: n_nationkey, n_regionkey
-  table: nation
+t10: 25.00 rows, n_nationkey, n_regionkey
+  table: "default"."nation"
+    n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+    n_regionkey BIGINT (cardinality=5.00 min=0 max=4)
 
-t11: r_regionkey, r_name
-  table: region
+t11: 1.00 rows, r_regionkey, r_name
+  table: "default"."region"
+    r_regionkey BIGINT (cardinality=5.00 min=0 max=4)
+    r_name VARCHAR (cardinality=1.00 min="EUROPE" max="EUROPE")
   single-column filters: eq(t11.r_name, "EUROPE")
 
 
 Optimized plan (oneline):
 
-(((partsupp INNER part) INNER agg(((supplier INNER (partsupp LEFT SEMI (FILTER) part)) INNER (nation INNER region)))) INNER (supplier INNER (nation INNER region)))
+((("default"."partsupp" INNER "default"."part") INNER agg((("default"."partsupp" LEFT SEMI (FILTER) "default"."part") INNER ("default"."supplier" INNER ("default"."nation" INNER "default"."region"))))) INNER ("default"."supplier" INNER ("default"."nation" INNER "default"."region")))
 
 Optimized plan:
 
-Project -> dt1.s_acctbal, dt1.s_name, dt1.n_name, dt1.p_partkey, dt1.p_mfgr, dt1.s_address, dt1.s_phone, dt1.s_comment
+Project [1.00 rows] -> dt1.s_acctbal, dt1.s_name, dt1.n_name, dt1.p_partkey, dt1.p_mfgr, dt1.s_address, dt1.s_phone, dt1.s_comment
     dt1.s_acctbal := t3.s_acctbal
     dt1.s_name := t3.s_name
     dt1.n_name := t5.n_name
@@ -84,67 +112,67 @@ Project -> dt1.s_acctbal, dt1.s_name, dt1.n_name, dt1.p_partkey, dt1.p_mfgr, dt1
     dt1.s_address := t3.s_address
     dt1.s_phone := t3.s_phone
     dt1.s_comment := t3.s_comment
-  OrderBy -> t2.p_partkey, t2.p_mfgr, t3.s_name, t3.s_address, t3.s_phone, t3.s_acctbal, t3.s_comment, t5.n_name
-    Join INNER Hash -> t2.p_partkey, t2.p_mfgr, t3.s_name, t3.s_address, t3.s_phone, t3.s_acctbal, t3.s_comment, t5.n_name
+  OrderBy [1.00 rows] -> t2.p_partkey, t2.p_mfgr, t3.s_name, t3.s_address, t3.s_phone, t3.s_acctbal, t3.s_comment, t5.n_name
+    Join INNER Hash [1.00 rows] -> t2.p_partkey, t2.p_mfgr, t3.s_name, t3.s_address, t3.s_phone, t3.s_acctbal, t3.s_comment, t5.n_name
         t4.ps_suppkey = t3.s_suppkey
-      Join INNER Hash -> t2.p_partkey, t2.p_mfgr, t4.ps_suppkey
+      Join INNER Hash [23.18 rows] -> t2.p_partkey, t2.p_mfgr, t4.ps_suppkey
           t4.ps_supplycost = dt7.min
-        Join INNER Hash -> t2.p_partkey, t2.p_mfgr, t4.ps_suppkey, t4.ps_supplycost
+        Join INNER Hash [1280.00 rows] -> t2.p_partkey, t2.p_mfgr, t4.ps_suppkey, t4.ps_supplycost
             t4.ps_partkey = t2.p_partkey
-          TableScan -> t4.ps_partkey, t4.ps_suppkey, t4.ps_supplycost
-            table: partsupp
-          HashBuild -> t2.p_partkey, t2.p_mfgr
-            TableScan -> t2.p_partkey, t2.p_mfgr
-              table: part
+          TableScan [80000.00 rows] -> t4.ps_partkey, t4.ps_suppkey, t4.ps_supplycost
+            table: "default"."partsupp"
+          HashBuild [320.00 rows] -> t2.p_partkey, t2.p_mfgr
+            TableScan [320.00 rows] -> t2.p_partkey, t2.p_mfgr
+              table: "default"."part"
               single-column filters: eq(t2.p_size, 15) and like(t2.p_type, "%BRASS")
-        HashBuild -> dt7.min
-          Project -> dt7.min
+        HashBuild [16.03 rows] -> dt7.min
+          Project [16.03 rows] -> dt7.min
               dt7.min := dt7.min
-            Aggregation (t8.ps_partkey) -> t8.ps_partkey, dt7.min
+            Aggregation (t8.ps_partkey) [16.03 rows] -> t8.ps_partkey, dt7.min
                 dt7.min := min(t8.ps_supplycost)
-              Join INNER Hash -> t8.ps_partkey, t8.ps_supplycost
-                  t9.s_nationkey = t10.n_nationkey
-                Join INNER Hash -> t8.ps_partkey, t8.ps_supplycost, t9.s_nationkey
-                    t9.s_suppkey = t8.ps_suppkey
-                  TableScan -> t9.s_suppkey, t9.s_nationkey
-                    table: supplier
-                  HashBuild -> t8.ps_partkey, t8.ps_suppkey, t8.ps_supplycost
-                    Join LEFT SEMI (FILTER) Hash -> t8.ps_partkey, t8.ps_suppkey, t8.ps_supplycost
-                        t8.ps_partkey = t2.p_partkey
-                      TableScan -> t8.ps_partkey, t8.ps_suppkey, t8.ps_supplycost
-                        table: partsupp
-                      HashBuild -> t2.p_partkey
-                        TableScan -> t2.p_partkey
-                          table: part
-                          single-column filters: eq(t2.p_size, 15) and like(t2.p_type, "%BRASS")
-                HashBuild -> t10.n_nationkey
-                  Join INNER Hash -> t10.n_nationkey
-                      t10.n_regionkey = t11.r_regionkey
-                    TableScan -> t10.n_nationkey, t10.n_regionkey
-                      table: nation
-                    HashBuild -> t11.r_regionkey
-                      TableScan -> t11.r_regionkey
-                        table: region
-                        single-column filters: eq(t11.r_name, "EUROPE")
-      HashBuild -> t3.s_suppkey, t3.s_name, t3.s_address, t3.s_phone, t3.s_acctbal, t3.s_comment, t5.n_name
-        Join INNER Hash -> t3.s_suppkey, t3.s_name, t3.s_address, t3.s_phone, t3.s_acctbal, t3.s_comment, t5.n_name
+              Join INNER Hash [25.18 rows] -> t8.ps_partkey, t8.ps_supplycost
+                  t8.ps_suppkey = t9.s_suppkey
+                Join LEFT SEMI (FILTER) Hash [1280.00 rows] -> t8.ps_partkey, t8.ps_suppkey, t8.ps_supplycost
+                    t8.ps_partkey = t2.p_partkey
+                  TableScan [80000.00 rows] -> t8.ps_partkey, t8.ps_suppkey, t8.ps_supplycost
+                    table: "default"."partsupp"
+                  HashBuild [320.00 rows] -> t2.p_partkey
+                    TableScan [320.00 rows] -> t2.p_partkey
+                      table: "default"."part"
+                      single-column filters: eq(t2.p_size, 15) and like(t2.p_type, "%BRASS")
+                HashBuild [200.00 rows] -> t9.s_suppkey
+                  Join INNER Hash [200.00 rows] -> t9.s_suppkey
+                      t9.s_nationkey = t10.n_nationkey
+                    TableScan [1000.00 rows] -> t9.s_suppkey, t9.s_nationkey
+                      table: "default"."supplier"
+                    HashBuild [5.00 rows] -> t10.n_nationkey
+                      Join INNER Hash [5.00 rows] -> t10.n_nationkey
+                          t10.n_regionkey = t11.r_regionkey
+                        TableScan [25.00 rows] -> t10.n_nationkey, t10.n_regionkey
+                          table: "default"."nation"
+                        HashBuild [1.00 rows] -> t11.r_regionkey
+                          TableScan [1.00 rows] -> t11.r_regionkey
+                            table: "default"."region"
+                            single-column filters: eq(t11.r_name, "EUROPE")
+      HashBuild [200.00 rows] -> t3.s_suppkey, t3.s_name, t3.s_address, t3.s_phone, t3.s_acctbal, t3.s_comment, t5.n_name
+        Join INNER Hash [200.00 rows] -> t3.s_suppkey, t3.s_name, t3.s_address, t3.s_phone, t3.s_acctbal, t3.s_comment, t5.n_name
             t3.s_nationkey = t5.n_nationkey
-          TableScan -> t3.s_suppkey, t3.s_name, t3.s_address, t3.s_nationkey, t3.s_phone, t3.s_acctbal, t3.s_comment
-            table: supplier
-          HashBuild -> t5.n_nationkey, t5.n_name
-            Join INNER Hash -> t5.n_nationkey, t5.n_name
+          TableScan [1000.00 rows] -> t3.s_suppkey, t3.s_name, t3.s_address, t3.s_nationkey, t3.s_phone, t3.s_acctbal, t3.s_comment
+            table: "default"."supplier"
+          HashBuild [5.00 rows] -> t5.n_nationkey, t5.n_name
+            Join INNER Hash [5.00 rows] -> t5.n_nationkey, t5.n_name
                 t5.n_regionkey = t6.r_regionkey
-              TableScan -> t5.n_nationkey, t5.n_name, t5.n_regionkey
-                table: nation
-              HashBuild -> t6.r_regionkey
-                TableScan -> t6.r_regionkey
-                  table: region
+              TableScan [25.00 rows] -> t5.n_nationkey, t5.n_name, t5.n_regionkey
+                table: "default"."nation"
+              HashBuild [1.00 rows] -> t6.r_regionkey
+                TableScan [1.00 rows] -> t6.r_regionkey
+                  table: "default"."region"
                   single-column filters: eq(t6.r_name, "EUROPE")
 
 
 Executable Velox plan:
 
-Fragment 0:  numWorkers=0:
+Fragment 0: stage7 numWorkers=1:
 -- Project[40][expressions: (s_acctbal:DOUBLE, "s_acctbal"), (s_name:VARCHAR, "s_name"), (n_name:VARCHAR, "n_name"), (p_partkey:BIGINT, "p_partkey"), (p_mfgr:VARCHAR, "p_mfgr"), (s_address:VARCHAR, "s_address"), (s_phone:VARCHAR, "s_phone"), (s_comment:VARCHAR, "s_comment")] -> s_acctbal:DOUBLE, s_name:VARCHAR, n_name:VARCHAR, p_partkey:BIGINT, p_mfgr:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, s_comment:VARCHAR
   -- TopN[39][100 s_acctbal DESC NULLS LAST, n_name ASC NULLS LAST, s_name ASC NULLS LAST, p_partkey ASC NULLS LAST] -> p_partkey:BIGINT, p_mfgr:VARCHAR, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, s_acctbal:DOUBLE, s_comment:VARCHAR, n_name:VARCHAR
     -- HashJoin[38][INNER ps_suppkey=s_suppkey] -> p_partkey:BIGINT, p_mfgr:VARCHAR, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, s_acctbal:DOUBLE, s_comment:VARCHAR, n_name:VARCHAR
@@ -154,15 +182,15 @@ Fragment 0:  numWorkers=0:
           -- TableScan[19][table: part, range filters: [(p_size, BigintRange: [15, 15] no nulls)], remaining filter: (like("p_type",%BRASS)), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]]]] -> p_partkey:BIGINT, p_mfgr:VARCHAR
         -- Project[31][expressions: (min:DOUBLE, "min")] -> min:DOUBLE
           -- Aggregation[30][SINGLE [ps_partkey_8] min := min("ps_supplycost_11")] -> ps_partkey_8:BIGINT, min:DOUBLE
-            -- HashJoin[29][INNER s_nationkey_18=n_nationkey_24] -> ps_partkey_8:BIGINT, ps_supplycost_11:DOUBLE
-              -- HashJoin[25][INNER s_suppkey_15=ps_suppkey_9] -> ps_partkey_8:BIGINT, ps_supplycost_11:DOUBLE, s_nationkey_18:BIGINT
-                -- TableScan[21][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey_15:BIGINT, s_nationkey_18:BIGINT
-                -- HashJoin[24][LEFT SEMI (FILTER) ps_partkey_8=p_partkey] -> ps_partkey_8:BIGINT, ps_suppkey_9:BIGINT, ps_supplycost_11:DOUBLE
-                  -- TableScan[22][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey_8:BIGINT, ps_suppkey_9:BIGINT, ps_supplycost_11:DOUBLE
-                  -- TableScan[23][table: part, range filters: [(p_size, BigintRange: [15, 15] no nulls)], remaining filter: (like("p_type",%BRASS)), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]]]] -> p_partkey:BIGINT
-              -- HashJoin[28][INNER n_regionkey_26=r_regionkey_30] -> n_nationkey_24:BIGINT
-                -- TableScan[26][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey_24:BIGINT, n_regionkey_26:BIGINT
-                -- TableScan[27][table: region, range filters: [(r_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<r_regionkey:BIGINT,r_name:VARCHAR,r_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: r_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> r_regionkey_30:BIGINT
+            -- HashJoin[29][INNER ps_suppkey_9=s_suppkey_15] -> ps_partkey_8:BIGINT, ps_supplycost_11:DOUBLE
+              -- HashJoin[23][LEFT SEMI (FILTER) ps_partkey_8=p_partkey] -> ps_partkey_8:BIGINT, ps_suppkey_9:BIGINT, ps_supplycost_11:DOUBLE
+                -- TableScan[21][table: partsupp, data columns: ROW<ps_partkey:BIGINT,ps_suppkey:BIGINT,ps_availqty:INTEGER,ps_supplycost:DOUBLE,ps_comment:VARCHAR>] -> ps_partkey_8:BIGINT, ps_suppkey_9:BIGINT, ps_supplycost_11:DOUBLE
+                -- TableScan[22][table: part, range filters: [(p_size, BigintRange: [15, 15] no nulls)], remaining filter: (like("p_type",%BRASS)), data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: p_type, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]], HiveColumnHandle [name: p_size, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]]]] -> p_partkey:BIGINT
+              -- HashJoin[28][INNER s_nationkey_18=n_nationkey_24] -> s_suppkey_15:BIGINT
+                -- TableScan[24][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey_15:BIGINT, s_nationkey_18:BIGINT
+                -- HashJoin[27][INNER n_regionkey_26=r_regionkey_30] -> n_nationkey_24:BIGINT
+                  -- TableScan[25][table: nation, data columns: ROW<n_nationkey:BIGINT,n_name:VARCHAR,n_regionkey:BIGINT,n_comment:VARCHAR>] -> n_nationkey_24:BIGINT, n_regionkey_26:BIGINT
+                  -- TableScan[26][table: region, range filters: [(r_name, Filter(BytesValues, deterministic, no nulls))], data columns: ROW<r_regionkey:BIGINT,r_name:VARCHAR,r_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: r_name, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> r_regionkey_30:BIGINT
       -- HashJoin[37][INNER s_nationkey=n_nationkey] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_phone:VARCHAR, s_acctbal:DOUBLE, s_comment:VARCHAR, n_name:VARCHAR
         -- TableScan[33][table: supplier, data columns: ROW<s_suppkey:BIGINT,s_name:VARCHAR,s_address:VARCHAR,s_nationkey:BIGINT,s_phone:VARCHAR,s_acctbal:DOUBLE,s_comment:VARCHAR>] -> s_suppkey:BIGINT, s_name:VARCHAR, s_address:VARCHAR, s_nationkey:BIGINT, s_phone:VARCHAR, s_acctbal:DOUBLE, s_comment:VARCHAR
         -- HashJoin[36][INNER n_regionkey=r_regionkey] -> n_nationkey:BIGINT, n_name:VARCHAR

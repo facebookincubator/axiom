@@ -3,53 +3,59 @@ numDrivers: 1
 
 Query Graph:
 
-dt1: promo_revenue
+dt1: 1.00 rows, promo_revenue
   output:
-    promo_revenue := divide(multiply(dt1.sum, 100), dt1.sum_2)
+    promo_revenue := divide(multiply(dt1.sum, 100), dt1.sum_2) DOUBLE (cardinality=1.00)
   tables: t2, t3
   joins:
-    t2 INNER t3 ON t2.l_partkey = t3.p_partkey
+    t2 INNER t3 ON t2.l_partkey = t3.p_partkey [t2 → 0.10, t3 → 0.04]
   syntactic join order: 19, 35
   aggregates: sum(__switch(like(t3.p_type, "PROMO%"), multiply(t2.l_extendedprice, minus(1, t2.l_discount)), 0)) AS sum, sum(multiply(t2.l_extendedprice, minus(1, t2.l_discount))) AS sum_2
 
-t2: l_partkey, l_extendedprice, l_discount, l_shipdate
-  table: lineitem
+t2: 7135.51 rows, l_partkey, l_extendedprice, l_discount, l_shipdate
+  table: "default"."lineitem"
+    l_partkey BIGINT (cardinality=188473.00 min=1 max=200000)
+    l_extendedprice DOUBLE (cardinality=444713.00 min=901 max=104899.5)
+    l_discount DOUBLE (cardinality=11.00 min=0 max=0.1)
+    l_shipdate DATE (cardinality=29.68 min=9374 max=9403)
   single-column filters: gte(t2.l_shipdate, "1995-09-01") and lt(t2.l_shipdate, "1995-10-01")
 
-t3: p_partkey, p_type
-  table: part
+t3: 20000.00 rows, p_partkey, p_type
+  table: "default"."part"
+    p_partkey BIGINT (cardinality=19675.00 min=1 max=20000)
+    p_type VARCHAR (cardinality=150.00 min="ECONOMY ANODIZED BRASS" max="STANDARD POLISHED TIN")
 
 
 Optimized plan (oneline):
 
-agg((part INNER lineitem))
+agg(("default"."part" INNER "default"."lineitem"))
 
 Optimized plan:
 
-Project -> dt1.promo_revenue
+Project [1.00 rows] -> dt1.promo_revenue
     dt1.promo_revenue := divide(multiply(dt1.sum, 100), dt1.sum_2)
-  Aggregation -> dt1.sum, dt1.sum_2
-      dt1.sum := sum(dt1.__p56)
-      dt1.sum_2 := sum(dt1.__p54)
-    Project -> dt1.__p56, dt1.__p54
-        dt1.__p56 := __switch(like(t3.p_type, "PROMO%"), multiply(t2.l_extendedprice, minus(1, t2.l_discount)), 0)
-        dt1.__p54 := multiply(t2.l_extendedprice, minus(1, t2.l_discount))
-      Join INNER Hash -> t2.l_extendedprice, t2.l_discount, t3.p_type
+  Aggregation [1.00 rows] -> dt1.sum, dt1.sum_2
+      dt1.sum := sum(dt1.__p60)
+      dt1.sum_2 := sum(dt1.__p58)
+    Project [715.73 rows] -> dt1.__p60, dt1.__p58
+        dt1.__p60 := __switch(like(t3.p_type, "PROMO%"), multiply(t2.l_extendedprice, minus(1, t2.l_discount)), 0)
+        dt1.__p58 := multiply(t2.l_extendedprice, minus(1, t2.l_discount))
+      Join INNER Hash [715.73 rows] -> t2.l_extendedprice, t2.l_discount, t3.p_type
           t3.p_partkey = t2.l_partkey
-        TableScan -> t3.p_partkey, t3.p_type
-          table: part
-        HashBuild -> t2.l_partkey, t2.l_extendedprice, t2.l_discount
-          TableScan -> t2.l_partkey, t2.l_extendedprice, t2.l_discount
-            table: lineitem
+        TableScan [20000.00 rows] -> t3.p_partkey, t3.p_type
+          table: "default"."part"
+        HashBuild [7135.51 rows] -> t2.l_partkey, t2.l_extendedprice, t2.l_discount
+          TableScan [7135.51 rows] -> t2.l_partkey, t2.l_extendedprice, t2.l_discount
+            table: "default"."lineitem"
             single-column filters: gte(t2.l_shipdate, "1995-09-01") and lt(t2.l_shipdate, "1995-10-01")
 
 
 Executable Velox plan:
 
-Fragment 0:  numWorkers=0:
+Fragment 0: stage1 numWorkers=1:
 -- Project[5][expressions: (promo_revenue:DOUBLE, divide(multiply("sum",100),"sum_2"))] -> promo_revenue:DOUBLE
-  -- Aggregation[4][SINGLE sum := sum("dt1.__p56"), sum_2 := sum("dt1.__p54")] -> sum:DOUBLE, sum_2:DOUBLE
-    -- Project[3][expressions: (dt1.__p56:DOUBLE, switch(like("p_type",PROMO%),multiply("l_extendedprice",minus(1,"l_discount")),0)), (dt1.__p54:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> "dt1.__p56":DOUBLE, "dt1.__p54":DOUBLE
+  -- Aggregation[4][SINGLE sum := sum("dt1.__p60"), sum_2 := sum("dt1.__p58")] -> sum:DOUBLE, sum_2:DOUBLE
+    -- Project[3][expressions: (dt1.__p60:DOUBLE, switch(like("p_type",PROMO%),multiply("l_extendedprice",minus(1,"l_discount")),0)), (dt1.__p58:DOUBLE, multiply("l_extendedprice",minus(1,"l_discount")))] -> "dt1.__p60":DOUBLE, "dt1.__p58":DOUBLE
       -- HashJoin[2][INNER p_partkey=l_partkey] -> l_extendedprice:DOUBLE, l_discount:DOUBLE, p_type:VARCHAR
         -- TableScan[0][table: part, data columns: ROW<p_partkey:BIGINT,p_name:VARCHAR,p_mfgr:VARCHAR,p_brand:VARCHAR,p_type:VARCHAR,p_size:INTEGER,p_container:VARCHAR,p_retailprice:DOUBLE,p_comment:VARCHAR>] -> p_partkey:BIGINT, p_type:VARCHAR
         -- TableScan[1][table: lineitem, range filters: [(l_shipdate, BigintRange: [9374, 9403] no nulls)], data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_shipdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_partkey:BIGINT, l_extendedprice:DOUBLE, l_discount:DOUBLE

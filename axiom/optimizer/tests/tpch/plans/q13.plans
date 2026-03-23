@@ -3,70 +3,75 @@ numDrivers: 1
 
 Query Graph:
 
-dt4: c_count, custdist
+dt4: 1.00 rows, c_count, custdist
   output:
-    c_count := dt1.c_count
-    custdist := dt4.custdist
+    c_count := dt1.c_count BIGINT (cardinality=1.00)
+    custdist := dt4.custdist BIGINT (cardinality=1.00)
   tables: dt1
   aggregates: count() AS custdist
   grouping keys: dt1.c_count
   orderBy: dt4.custdist DESC NULLS LAST, dt1.c_count DESC NULLS LAST
 
-dt1: c_count
+dt1: 9465.03 rows, c_count
   output:
-    c_count := dt1.count
+    c_count := dt1.count BIGINT (cardinality=1.00)
   tables: t2, t3
   joins:
-    t2 LEFT t3 ON t2.c_custkey = t3.o_custkey FILTER not(like(t3.o_comment, "%special%requests%"))
+    t2 LEFT t3 ON t2.c_custkey = t3.o_custkey [t2 → 0.20, t3 → 0.10]
   syntactic join order: 11, 24
   aggregates: count(dt1.o_orderkey) AS count
   grouping keys: t2.c_custkey
 
-t2: c_custkey
-  table: customer
+t2: 15000.00 rows, c_custkey
+  table: "default"."customer"
+    c_custkey BIGINT (cardinality=14936.00 min=1 max=15000)
 
-t3: o_orderkey, o_custkey, o_comment
-  table: orders
+t3: 30000.00 rows, o_orderkey, o_custkey, o_comment
+  table: "default"."orders"
+    o_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    o_custkey BIGINT (cardinality=73171.00 min=1 max=149999)
+    o_comment VARCHAR (cardinality=151541.00 min=" Tiresias about the blithely ironic a" max="zzle. slyly special platele")
+  single-column filters: not(like(t3.o_comment, "%special%requests%"))
 
 
 Optimized plan (oneline):
 
-agg(agg((orders RIGHT customer)))
+agg(agg(("default"."orders" RIGHT "default"."customer")))
 
 Optimized plan:
 
-Project (redundant) -> dt4.c_count, dt4.custdist
+Project (redundant) [1.00 rows] -> dt4.c_count, dt4.custdist
     dt4.c_count := dt1.c_count
     dt4.custdist := dt4.custdist
-  OrderBy -> dt1.c_count, dt4.custdist
-    Aggregation (dt1.c_count) -> dt1.c_count, dt4.custdist
+  OrderBy [1.00 rows] -> dt1.c_count, dt4.custdist
+    Aggregation (dt1.c_count) [1.00 rows] -> dt1.c_count, dt4.custdist
         dt4.custdist := count()
-      Project -> dt1.c_count
+      Project [9465.03 rows] -> dt1.c_count
           dt1.c_count := dt1.count
-        Aggregation (t2.c_custkey) -> t2.c_custkey, dt1.count
+        Aggregation (t2.c_custkey) [9465.03 rows] -> t2.c_custkey, dt1.count
             dt1.count := count(dt1.o_orderkey)
-          Project (redundant) -> t2.c_custkey, dt1.o_orderkey
+          Project (redundant) [15000.00 rows] -> t2.c_custkey, dt1.o_orderkey
               t2.c_custkey := t2.c_custkey
               dt1.o_orderkey := t3.o_orderkey
-            Join RIGHT Hash -> t2.c_custkey, t3.o_orderkey
+            Join RIGHT Hash [15000.00 rows] -> t2.c_custkey, t3.o_orderkey
                 t3.o_custkey = t2.c_custkey
-                not(like(t3.o_comment, "%special%requests%"))
-              TableScan -> t3.o_orderkey, t3.o_custkey, t3.o_comment
-                table: orders
-              HashBuild -> t2.c_custkey
-                TableScan -> t2.c_custkey
-                  table: customer
+              TableScan [30000.00 rows] -> t3.o_orderkey, t3.o_custkey
+                table: "default"."orders"
+                single-column filters: not(like(t3.o_comment, "%special%requests%"))
+              HashBuild [15000.00 rows] -> t2.c_custkey
+                TableScan [15000.00 rows] -> t2.c_custkey
+                  table: "default"."customer"
 
 
 Executable Velox plan:
 
-Fragment 0:  numWorkers=0:
+Fragment 0: stage1 numWorkers=1:
 -- OrderBy[6][custdist DESC NULLS LAST, c_count DESC NULLS LAST] -> c_count:BIGINT, custdist:BIGINT
   -- Aggregation[5][SINGLE [c_count] custdist := count()] -> c_count:BIGINT, custdist:BIGINT
     -- Project[4][expressions: (c_count:BIGINT, "count")] -> c_count:BIGINT
       -- Aggregation[3][SINGLE [c_custkey] count := count("o_orderkey")] -> c_custkey:BIGINT, count:BIGINT
-        -- HashJoin[2][RIGHT o_custkey=c_custkey, filter: not(like("o_comment",%special%requests%))] -> c_custkey:BIGINT, o_orderkey:BIGINT
-          -- TableScan[0][table: orders, data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_comment:VARCHAR
+        -- HashJoin[2][RIGHT o_custkey=c_custkey] -> c_custkey:BIGINT, o_orderkey:BIGINT
+          -- TableScan[0][table: orders, remaining filter: (not(like("o_comment",%special%requests%))), data columns: ROW<o_orderkey:BIGINT,o_custkey:BIGINT,o_orderstatus:VARCHAR,o_totalprice:DOUBLE,o_orderdate:DATE,o_orderpriority:VARCHAR,o_clerk:VARCHAR,o_shippriority:INTEGER,o_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: o_comment, columnType: Regular, dataType: VARCHAR, requiredSubfields: [ ]]]] -> o_orderkey:BIGINT, o_custkey:BIGINT
           -- TableScan[1][table: customer, data columns: ROW<c_custkey:BIGINT,c_name:VARCHAR,c_address:VARCHAR,c_nationkey:BIGINT,c_phone:VARCHAR,c_acctbal:DOUBLE,c_mktsegment:VARCHAR,c_comment:VARCHAR>] -> c_custkey:BIGINT
 
 ___END___

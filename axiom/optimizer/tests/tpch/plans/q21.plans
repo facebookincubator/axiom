@@ -3,123 +3,134 @@ numDrivers: 1
 
 Query Graph:
 
-dt1: s_name, numwait
+dt1: 3.79 rows, s_name, numwait
   output:
-    s_name := t2.s_name
-    numwait := dt1.numwait
-  tables: t2, t3, t4, t5, dt6, dt8
+    s_name := t2.s_name VARCHAR (cardinality=3.79 min="Supplier#000000001" max="Supplier#000001000")
+    numwait := dt1.numwait BIGINT (cardinality=1.00)
+  tables: t2, t3, t4, t5, dt6, dt9
   joins:
-    t3 SEMI dt6 ON t3.l_orderkey = dt6.l_orderkey FILTER neq(dt6.l_suppkey, t3.l_suppkey)
-    t3 SEMI dt8 ON t3.l_orderkey = dt8.l_orderkey FILTER neq(dt8.l_suppkey, t3.l_suppkey)
-    t2 INNER t3 ON t2.s_suppkey = t3.l_suppkey
-    t3 INNER t4 ON t3.l_orderkey = t4.o_orderkey
-    t2 INNER t5 ON t2.s_nationkey = t5.n_nationkey
+    t3 SEMI dt6 ON t3.l_orderkey = dt6.l_orderkey FILTER neq(dt6.l_suppkey, t3.l_suppkey) [t3 → 3.92, dt6 → 1.99]
+    t3 SEMI dt9 ON t3.l_orderkey = dt9.l_orderkey FILTER neq(dt9.l_suppkey, t3.l_suppkey) [t3 → 1.99, dt9 → 1.99]
+    t2 INNER t3 ON t2.s_suppkey = t3.l_suppkey [t2 → 29.88, t3 → 0.10]
+    t3 INNER t4 ON t3.l_orderkey = t4.o_orderkey [t3 → 0.33, t4 → 2.03]
+    t2 INNER t5 ON t2.s_nationkey = t5.n_nationkey [t2 → 0.04, t5 → 40.00]
   syntactic join order: 10, 32, 48, 57, 60, 71
   aggregates: count() AS numwait
   grouping keys: t2.s_name
-  filter: dt1.__mark0 and not(dt1.__mark1)
+  filter: dt1.__mark8 and not(dt1.__mark11)
   orderBy: dt1.numwait DESC NULLS LAST, t2.s_name ASC NULLS LAST
   limit: 100
 
-t2: s_suppkey, s_name, s_nationkey
-  table: supplier
+t2: 1000.00 rows, s_suppkey, s_name, s_nationkey
+  table: "default"."supplier"
+    s_suppkey BIGINT (cardinality=1008.00 min=1 max=1000)
+    s_name VARCHAR (cardinality=1016.00 min="Supplier#000000001" max="Supplier#000001000")
+    s_nationkey BIGINT (cardinality=25.00 min=0 max=24)
 
-t3: l_orderkey, l_suppkey, l_commitdate, l_receiptdate
-  table: lineitem
+t3: 303820.16 rows, l_orderkey, l_suppkey, l_commitdate, l_receiptdate
+  table: "default"."lineitem"
+    l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    l_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
+    l_commitdate DATE (cardinality=2435.00 min=8065 max=10530)
+    l_receiptdate DATE (cardinality=2523.00 min=8038 max=10587)
   multi-column filters: lt(t3.l_commitdate, t3.l_receiptdate)
 
-t4: o_orderkey, o_orderstatus
-  table: orders
+t4: 50000.00 rows, o_orderkey, o_orderstatus
+  table: "default"."orders"
+    o_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    o_orderstatus VARCHAR (cardinality=1.00 min="F" max="F")
   single-column filters: eq(t4.o_orderstatus, "F")
 
-t5: n_nationkey, n_name
-  table: nation
+t5: 1.00 rows, n_nationkey, n_name
+  table: "default"."nation"
+    n_nationkey BIGINT (cardinality=25.00 min=0 max=24)
+    n_name VARCHAR (cardinality=1.00 min="SAUDI ARABIA" max="SAUDI ARABIA")
   single-column filters: eq(t5.n_name, "SAUDI ARABIA")
 
-dt6: l_orderkey, l_suppkey
+dt6: 600572.00 rows, l_orderkey, l_suppkey
   output:
-    l_orderkey := t7.l_orderkey
-    l_suppkey := t7.l_suppkey
+    l_orderkey := t7.l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    l_suppkey := t7.l_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
   tables: t7
 
-t7: l_orderkey, l_suppkey
-  table: lineitem
+t7: 600572.00 rows, l_orderkey, l_suppkey
+  table: "default"."lineitem"
+    l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    l_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
 
-dt8: l_orderkey, l_suppkey
+dt9: 303820.16 rows, l_orderkey, l_suppkey
   output:
-    l_orderkey := t9.l_orderkey
-    l_suppkey := t9.l_suppkey
-  tables: t9
+    l_orderkey := t10.l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    l_suppkey := t10.l_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
+  tables: t10
 
-t9: l_orderkey, l_suppkey, l_commitdate, l_receiptdate
-  table: lineitem
-  multi-column filters: lt(t9.l_commitdate, t9.l_receiptdate)
+t10: 303820.16 rows, l_orderkey, l_suppkey, l_commitdate, l_receiptdate
+  table: "default"."lineitem"
+    l_orderkey BIGINT (cardinality=153027.00 min=1 max=600000)
+    l_suppkey BIGINT (cardinality=10167.00 min=1 max=10000)
+    l_commitdate DATE (cardinality=2435.00 min=8065 max=10530)
+    l_receiptdate DATE (cardinality=2523.00 min=8038 max=10587)
+  multi-column filters: lt(t10.l_commitdate, t10.l_receiptdate)
 
 
 Optimized plan (oneline):
 
-agg((lineitem RIGHT SEMI (FILTER) (lineitem RIGHT SEMI (PROJECT) ((lineitem INNER (supplier INNER nation)) INNER orders))))
+agg(("default"."lineitem" RIGHT SEMI (FILTER) ("default"."lineitem" RIGHT SEMI (PROJECT) (("default"."lineitem" INNER ("default"."supplier" INNER "default"."nation")) INNER "default"."orders"))))
 
 Optimized plan:
 
-Project (redundant) -> dt1.s_name, dt1.numwait
+Project (redundant) [3.79 rows] -> dt1.s_name, dt1.numwait
     dt1.s_name := t2.s_name
     dt1.numwait := dt1.numwait
-  OrderBy -> t2.s_name, dt1.numwait
-    Aggregation (t2.s_name) -> t2.s_name, dt1.numwait
+  OrderBy [3.79 rows] -> t2.s_name, dt1.numwait
+    Aggregation (t2.s_name) [3.79 rows] -> t2.s_name, dt1.numwait
         dt1.numwait := count()
-      Join RIGHT SEMI (FILTER) Hash -> t2.s_name
+      Join RIGHT SEMI (FILTER) Hash [79.69 rows] -> t2.s_name
           dt6.l_orderkey = t3.l_orderkey
           neq(dt6.l_suppkey, t3.l_suppkey)
-        Project (redundant) -> dt6.l_orderkey, dt6.l_suppkey
-            dt6.l_orderkey := t7.l_orderkey
-            dt6.l_suppkey := t7.l_suppkey
-          TableScan -> t7.l_orderkey, t7.l_suppkey
-            table: lineitem
-        HashBuild -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
-          Filter -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
-              not(dt1.__mark1)
-            Join RIGHT SEMI (PROJECT) Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark1
-                dt8.l_orderkey = t3.l_orderkey
-                neq(dt8.l_suppkey, t3.l_suppkey)
-              Project (redundant) -> dt8.l_orderkey, dt8.l_suppkey
-                  dt8.l_orderkey := t9.l_orderkey
-                  dt8.l_suppkey := t9.l_suppkey
-                TableScan -> t9.l_orderkey, t9.l_suppkey
-                  table: lineitem
-                  multi-column filters: lt(t9.l_commitdate, t9.l_receiptdate)
-              HashBuild -> t2.s_name, t3.l_orderkey, t3.l_suppkey
-                Join INNER Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey
+        TableScan [600572.00 rows] -> t7.l_orderkey, t7.l_suppkey
+          table: "default"."lineitem"
+        HashBuild [79.69 rows] -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark11
+          Filter [79.69 rows] -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark11
+              not(dt1.__mark11)
+            Join RIGHT SEMI (PROJECT) Hash [398.44 rows] -> t2.s_name, t3.l_orderkey, t3.l_suppkey, dt1.__mark11
+                dt9.l_orderkey = t3.l_orderkey
+                neq(dt9.l_suppkey, t3.l_suppkey)
+              TableScan [303820.16 rows] -> t10.l_orderkey, t10.l_suppkey
+                table: "default"."lineitem"
+                multi-column filters: lt(t10.l_commitdate, t10.l_receiptdate)
+              HashBuild [398.44 rows] -> t2.s_name, t3.l_orderkey, t3.l_suppkey
+                Join INNER Hash [398.44 rows] -> t2.s_name, t3.l_orderkey, t3.l_suppkey
                     t3.l_orderkey = t4.o_orderkey
-                  Join INNER Hash -> t2.s_name, t3.l_orderkey, t3.l_suppkey
+                  Join INNER Hash [1195.32 rows] -> t2.s_name, t3.l_orderkey, t3.l_suppkey
                       t3.l_suppkey = t2.s_suppkey
-                    TableScan -> t3.l_orderkey, t3.l_suppkey
-                      table: lineitem
+                    TableScan [303820.16 rows] -> t3.l_orderkey, t3.l_suppkey
+                      table: "default"."lineitem"
                       multi-column filters: lt(t3.l_commitdate, t3.l_receiptdate)
-                    HashBuild -> t2.s_suppkey, t2.s_name
-                      Join INNER Hash -> t2.s_suppkey, t2.s_name
+                    HashBuild [40.00 rows] -> t2.s_suppkey, t2.s_name
+                      Join INNER Hash [40.00 rows] -> t2.s_suppkey, t2.s_name
                           t2.s_nationkey = t5.n_nationkey
-                        TableScan -> t2.s_suppkey, t2.s_name, t2.s_nationkey
-                          table: supplier
-                        HashBuild -> t5.n_nationkey
-                          TableScan -> t5.n_nationkey
-                            table: nation
+                        TableScan [1000.00 rows] -> t2.s_suppkey, t2.s_name, t2.s_nationkey
+                          table: "default"."supplier"
+                        HashBuild [1.00 rows] -> t5.n_nationkey
+                          TableScan [1.00 rows] -> t5.n_nationkey
+                            table: "default"."nation"
                             single-column filters: eq(t5.n_name, "SAUDI ARABIA")
-                  HashBuild -> t4.o_orderkey
-                    TableScan -> t4.o_orderkey
-                      table: orders
+                  HashBuild [50000.00 rows] -> t4.o_orderkey
+                    TableScan [50000.00 rows] -> t4.o_orderkey
+                      table: "default"."orders"
                       single-column filters: eq(t4.o_orderstatus, "F")
 
 
 Executable Velox plan:
 
-Fragment 0:  numWorkers=0:
+Fragment 0: stage1 numWorkers=1:
 -- TopN[13][100 numwait DESC NULLS LAST, s_name ASC NULLS LAST] -> s_name:VARCHAR, numwait:BIGINT
   -- Aggregation[12][SINGLE [s_name] numwait := count()] -> s_name:VARCHAR, numwait:BIGINT
     -- HashJoin[11][RIGHT SEMI (FILTER) l_orderkey_6=l_orderkey, filter: neq("l_suppkey_8","l_suppkey")] -> s_name:VARCHAR
       -- TableScan[0][table: lineitem, data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>] -> l_orderkey_6:BIGINT, l_suppkey_8:BIGINT
-      -- Filter[1][expression: not("dt1.__mark1")] -> s_name:VARCHAR, l_orderkey:BIGINT, l_suppkey:BIGINT, "dt1.__mark1":BOOLEAN
-        -- HashJoin[10][RIGHT SEMI (PROJECT) l_orderkey_24=l_orderkey, filter: neq("l_suppkey_26","l_suppkey")] -> s_name:VARCHAR, l_orderkey:BIGINT, l_suppkey:BIGINT, "dt1.__mark1":BOOLEAN
+      -- Filter[1][expression: not("dt1.__mark11")] -> s_name:VARCHAR, l_orderkey:BIGINT, l_suppkey:BIGINT, "dt1.__mark11":BOOLEAN
+        -- HashJoin[10][RIGHT SEMI (PROJECT) l_orderkey_24=l_orderkey, filter: neq("l_suppkey_26","l_suppkey")] -> s_name:VARCHAR, l_orderkey:BIGINT, l_suppkey:BIGINT, "dt1.__mark11":BOOLEAN
           -- TableScan[2][table: lineitem, remaining filter: (lt("l_commitdate","l_receiptdate")), data columns: ROW<l_orderkey:BIGINT,l_partkey:BIGINT,l_suppkey:BIGINT,l_linenumber:INTEGER,l_quantity:DOUBLE,l_extendedprice:DOUBLE,l_discount:DOUBLE,l_tax:DOUBLE,l_returnflag:VARCHAR,l_linestatus:VARCHAR,l_shipdate:DATE,l_commitdate:DATE,l_receiptdate:DATE,l_shipinstruct:VARCHAR,l_shipmode:VARCHAR,l_comment:VARCHAR>, filter column handles: [HiveColumnHandle [name: l_receiptdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]], HiveColumnHandle [name: l_commitdate, columnType: Regular, dataType: DATE, requiredSubfields: [ ]]]] -> l_orderkey_24:BIGINT, l_suppkey_26:BIGINT
           -- HashJoin[9][INNER l_orderkey=o_orderkey] -> s_name:VARCHAR, l_orderkey:BIGINT, l_suppkey:BIGINT
             -- HashJoin[7][INNER l_suppkey=s_suppkey] -> s_name:VARCHAR, l_orderkey:BIGINT, l_suppkey:BIGINT
