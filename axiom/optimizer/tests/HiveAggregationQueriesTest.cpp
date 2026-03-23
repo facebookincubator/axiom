@@ -232,8 +232,7 @@ TEST_F(HiveAggregationQueriesTest, distinctWithOrderBy) {
       lp::PlanBuilder(context)
           .tableScan("nation")
           .aggregate(
-              {"n_regionkey"},
-              {"array_agg(DISTINCT n_name ORDER BY n_nationkey)"})
+              {"n_regionkey"}, {"array_agg(DISTINCT n_name ORDER BY n_name)"})
           .build();
 
   VELOX_ASSERT_THROW(
@@ -421,10 +420,10 @@ TEST_F(HiveAggregationQueriesTest, ignoreDuplicatesXOrderNonSensitive) {
           .aggregate(
               {},
               {
-                  "bool_and(DISTINCT n_nationkey % 2 = 0 ORDER BY n_regionkey)",
-                  "bool_or(DISTINCT n_nationkey % 2 = 0 ORDER BY n_regionkey DESC, n_nationkey)",
-                  "bool_and(n_nationkey % 2 = 0 ORDER BY n_regionkey)",
-                  "bool_and(DISTINCT n_nationkey % 2 = 0 ORDER BY n_regionkey) FILTER (WHERE n_nationkey > 10)",
+                  "bool_and(DISTINCT n_nationkey % 2 = 0 ORDER BY n_nationkey % 2 = 0)",
+                  "bool_or(DISTINCT n_nationkey % 2 = 0 ORDER BY n_nationkey % 2 = 0 DESC)",
+                  "bool_and(n_nationkey % 2 = 0 ORDER BY n_nationkey % 2 = 0)",
+                  "bool_and(DISTINCT n_nationkey % 2 = 0 ORDER BY n_nationkey % 2 = 0) FILTER (WHERE n_nationkey > 10)",
               })
           .build();
 
