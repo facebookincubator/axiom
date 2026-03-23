@@ -16,6 +16,7 @@
 
 #include "axiom/logical_plan/Expr.h"
 #include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/Type.h"
 
 using namespace facebook::velox;
@@ -60,6 +61,84 @@ TEST_F(ExprTest, looksConstant) {
 
   testLooksConstant(cast(DOUBLE(), literal(1)), true);
   testLooksConstant(cast(DOUBLE(), inputRef("a")), false);
+}
+
+TEST_F(ExprTest, aggregateExprDistinctOrderBy) {
+  auto x = inputRef("x");
+  auto y = inputRef("y");
+  auto z = inputRef("z");
+
+  auto makeAggregate = [](const std::string& functionName,
+                          std::vector<ExprPtr> inputs,
+                          std::vector<SortingField> ordering = {}) {
+    return std::make_shared<AggregateExpr>(
+        BIGINT(),
+        functionName,
+        std::move(inputs),
+        /*filter=*/nullptr,
+        std::move(ordering),
+        /*distinct=*/false);
+  };
+
+  auto makeDistinctAggregate = [](const std::string& functionName,
+                                  std::vector<ExprPtr> inputs,
+                                  std::vector<SortingField> ordering = {}) {
+    return std::make_shared<AggregateExpr>(
+        BIGINT(),
+        functionName,
+        std::move(inputs),
+        /*filter=*/nullptr,
+        std::move(ordering),
+        /*distinct=*/true);
+  };
+
+  // DISTINCT without ORDER BY is valid.
+  EXPECT_NO_THROW(makeDistinctAggregate("array_agg", {x}));
+
+  // Non-DISTINCT with ORDER BY is valid.
+  EXPECT_NO_THROW(
+      makeAggregate("array_agg", {x}, {{y, SortOrder::kAscNullsFirst}}));
+
+  // DISTINCT with ORDER BY key on single argument is valid.
+  EXPECT_NO_THROW(makeDistinctAggregate(
+      "array_agg", {x}, {{x, SortOrder::kAscNullsFirst}}));
+
+  // DISTINCT with multiple arguments and ORDER BY key in arguments is valid.
+  EXPECT_NO_THROW(makeDistinctAggregate(
+      "array_agg", {x, y}, {{y, SortOrder::kAscNullsFirst}}));
+
+  // DISTINCT with multiple ORDER BY keys, all in arguments, is valid.
+  EXPECT_NO_THROW(makeDistinctAggregate(
+      "array_agg",
+      {x, y},
+      {{x, SortOrder::kAscNullsFirst}, {y, SortOrder::kAscNullsFirst}}));
+
+  // DISTINCT with ORDER BY keys as a subset of arguments in different order is
+  // valid. min_by naturally takes 3 arguments: min_by(value, comparison, n).
+  EXPECT_NO_THROW(makeDistinctAggregate(
+      "min_by",
+      {x, y, z},
+      {{y, SortOrder::kAscNullsFirst}, {x, SortOrder::kAscNullsFirst}}));
+
+  // DISTINCT with ORDER BY key in args is valid even when input and ordering
+  // use different ExprPtr objects for the same column.
+  auto orderX = inputRef("x");
+  EXPECT_NE(x.get(), orderX.get());
+  EXPECT_NO_THROW(makeDistinctAggregate(
+      "array_agg", {x}, {{orderX, SortOrder::kAscNullsFirst}}));
+
+  // DISTINCT with ORDER BY key NOT in arguments is not allowed.
+  VELOX_ASSERT_THROW(
+      makeDistinctAggregate("array_agg", {x}, {{y, SortOrder::kAscNullsFirst}}),
+      "For DISTINCT aggregations, ORDER BY keys must appear in aggregation arguments");
+
+  // DISTINCT with some ORDER BY key not in arguments is not allowed.
+  VELOX_ASSERT_THROW(
+      makeDistinctAggregate(
+          "array_agg",
+          {x},
+          {{x, SortOrder::kAscNullsFirst}, {y, SortOrder::kAscNullsFirst}}),
+      "For DISTINCT aggregations, ORDER BY keys must appear in aggregation arguments");
 }
 
 } // namespace

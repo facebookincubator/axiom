@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <algorithm>
+
 #include "axiom/common/Enums.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/Variant.h"
@@ -593,6 +595,20 @@ class AggregateExpr : public Expr {
 
     if (distinct_) {
       VELOX_USER_CHECK_GT(inputs_.size(), 0);
+
+      if (!ordering_.empty()) {
+        for (const auto& sortField : ordering_) {
+          VELOX_USER_CHECK(
+              std::any_of(
+                  inputs_.begin(),
+                  inputs_.end(),
+                  [&](const auto& input) {
+                    return *input == *sortField.expression;
+                  }),
+              "For DISTINCT aggregations, ORDER BY keys must appear in "
+              "aggregation arguments.");
+        }
+      }
     }
   }
 

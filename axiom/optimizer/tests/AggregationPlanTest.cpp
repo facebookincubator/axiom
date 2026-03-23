@@ -522,7 +522,7 @@ TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
     auto logicalPlan =
         lp::PlanBuilder(makeContext())
             .tableScan("t")
-            .aggregate({"a"}, {"array_agg(DISTINCT b ORDER BY c)"})
+            .aggregate({"a"}, {"array_agg(DISTINCT b ORDER BY b)"})
             .build();
 
     VELOX_ASSERT_THROW(
