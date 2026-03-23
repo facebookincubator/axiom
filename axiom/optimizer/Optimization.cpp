@@ -1426,8 +1426,8 @@ RelationOpPtr Optimization::planSingleAggregation(
 namespace {
 
 // Returns the common distinct arguments if all aggregates are DISTINCT with
-// the same set of arguments, no filters, and no order-by. Throws if any of
-// these conditions is not met.
+// the same set of arguments and no filters. Throws if any of these conditions
+// is not met.
 ExprVector getSingleDistinctArgs(const AggregateVector& aggregates) {
   VELOX_CHECK(!aggregates.empty());
 
@@ -1442,10 +1442,6 @@ ExprVector getSingleDistinctArgs(const AggregateVector& aggregates) {
     // No filter
     if (agg->condition() != nullptr) {
       VELOX_UNSUPPORTED("DISTINCT aggregates have filters");
-    }
-    // No order-by
-    if (!agg->orderKeys().empty()) {
-      VELOX_UNSUPPORTED("DISTINCT aggregates have ORDER BY");
     }
     // Check same args (as a set, using pointer equality since exprs are
     // deduplicated)
@@ -1506,23 +1502,29 @@ void Optimization::addAggregation(
     return;
   }
 
-  const auto hasDistinct = std::any_of(
-      aggregates.begin(), aggregates.end(), [](const auto& aggregate) {
-        return aggregate->isDistinct();
+  const auto hasDistinct =
+      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
+        return agg->isDistinct();
+      });
+  const auto hasOrderBy =
+      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
+        return !agg->orderKeys().empty();
       });
   if (hasDistinct) {
     auto distinctArgs = getSingleDistinctArgs(aggregates);
     transformDistinctToGroupBy(
-        plan, state.cost, groupingKeys, distinctArgs, aggregates, aggPlan);
+        plan,
+        state.cost,
+        groupingKeys,
+        distinctArgs,
+        aggregates,
+        aggPlan,
+        hasOrderBy);
     return;
   }
 
   // Check if any aggregate has ORDER BY keys. If so, we must use single-step
   // aggregation because partial aggregation cannot preserve global ordering.
-  const auto hasOrderBy =
-      std::any_of(aggregates.begin(), aggregates.end(), [](const auto& agg) {
-        return !agg->orderKeys().empty();
-      });
   if (hasOrderBy) {
     const auto& [singleAgg, singleAggCost] = makeSingleAggregationPlan(
         plan,
@@ -1560,7 +1562,8 @@ void Optimization::transformDistinctToGroupBy(
     const ExprVector& groupingKeys,
     const ExprVector& distinctArgs,
     const AggregateVector& aggregates,
-    AggregationPlanCP aggPlan) const {
+    AggregationPlanCP aggPlan,
+    bool hasOrderBy) const {
   // Build inner GROUP BY keys: groupingKeys union distinctArgs. We put
   // groupingKeys at the beginning, followed by distinctArgs not appear in
   // groupingKeys.
@@ -1594,15 +1597,27 @@ void Optimization::transformDistinctToGroupBy(
 
   // Make non-distinct aggregation calls for the outer level.
   auto nonDistinctAggregates = dropDistinctFromAggregates(aggregates);
-  const auto& [outerPlan, outerCost] = makeSplitOrSingleAggregationPlan(
-      plan,
-      groupingKeys,
-      nonDistinctAggregates,
-      aggPlan->intermediateColumns(),
-      aggPlan->columns(),
-      options_.alwaysPlanPartialAggregation);
-  plan = outerPlan;
-  cost.add(outerCost);
+
+  if (hasOrderBy) {
+    const auto& [outerPlan, outerCost] = makeSingleAggregationPlan(
+        plan,
+        groupingKeys,
+        nonDistinctAggregates,
+        aggPlan->intermediateColumns(),
+        aggPlan->columns());
+    plan = outerPlan;
+    cost.add(outerCost);
+  } else {
+    const auto& [outerPlan, outerCost] = makeSplitOrSingleAggregationPlan(
+        plan,
+        groupingKeys,
+        nonDistinctAggregates,
+        aggPlan->intermediateColumns(),
+        aggPlan->columns(),
+        options_.alwaysPlanPartialAggregation);
+    plan = outerPlan;
+    cost.add(outerCost);
+  }
 }
 
 namespace {

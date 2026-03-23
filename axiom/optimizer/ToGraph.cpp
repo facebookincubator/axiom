@@ -1547,11 +1547,6 @@ AggregationPlanCP ToGraph::translateAggregation(const lp::AggregateNode& agg) {
       std::tie(orderKeys, orderTypes) = dedupOrdering(aggregate->ordering());
     }
 
-    if (isDistinct && !orderKeys.empty()) {
-      VELOX_FAIL(
-          "DISTINCT with ORDER BY in same aggregation expression isn't supported yet");
-    }
-
     auto name = toName(agg.outputNames()[channel]);
 
     AggregateDedupKey key{

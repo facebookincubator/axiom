@@ -245,14 +245,16 @@ class Optimization {
 
   // Transforms aggregations where all aggregates are DISTINCT with the same
   // args into a two-level aggregation: inner level GROUP BY (keys +
-  // distinct_args) -> outer level AGG without DISTINCT.
+  // distinct_args) -> outer level AGG without DISTINCT. If 'hasOrderBy' is
+  // true, the outer level AGG always takes the single aggregation step.
   void transformDistinctToGroupBy(
       RelationOpPtr& plan,
       PlanCost& cost,
       const ExprVector& groupingKeys,
       const ExprVector& distinctArgs,
       const AggregateVector& aggregates,
-      AggregationPlanCP aggPlan) const;
+      AggregationPlanCP aggPlan,
+      bool hasOrderBy) const;
 
   // Adds window function operators to 'plan'. Groups window functions by
   // specification and emits one Window operator per group. Returns true if the
