@@ -327,6 +327,14 @@ checking out the parent commit and running the test. Incorrect attribution
 leads to wrong fixes — e.g., updating test expectations when the real problem
 is a bug introduced by a different commit.
 
+## Axiom-Specific Patterns
+
+### Dialect Independence
+
+- Only the SQL parser is dialect-specific. The logical plan, optimizer,
+  PlanBuilder, and runner are dialect-agnostic — do not introduce
+  dialect-specific terms in these layers.
+
 ## Directory Structure
 
 | Directory | Description |
@@ -343,3 +351,4 @@ is a bug introduced by a different commit.
 
 - [SQL Parser](../axiom/sql/presto/README.md) — Architecture, scoping, PlanBuilder design, testing conventions.
 - [Optimizer](../axiom/optimizer/README.md) — Query graph data structure and terminology.
+- [Testing](../axiom/optimizer/docs/Testing.md) — PlanMatcher, SqlTest, and test organization guidelines.
