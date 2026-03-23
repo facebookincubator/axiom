@@ -108,9 +108,42 @@ std::vector<std::string> deserializeStringVector(
   return result;
 }
 
+// Compares two vectors of LogicalPlanNodePtr for structural equality.
+bool equalNodeVectors(
+    const std::vector<LogicalPlanNodePtr>& lhs,
+    const std::vector<LogicalPlanNodePtr>& rhs) {
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    VELOX_CHECK_NOT_NULL(lhs[i]);
+    VELOX_CHECK_NOT_NULL(rhs[i]);
+    if (*lhs[i] != *rhs[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 AXIOM_DEFINE_ENUM_NAME(NodeKind, nodeKindNames)
+
+bool LogicalPlanNode::operator==(const LogicalPlanNode& other) const {
+  if (this == &other) {
+    return true;
+  }
+  if (kind_ != other.kind_) {
+    return false;
+  }
+  if (*outputType_ != *other.outputType_) {
+    return false;
+  }
+  if (!equalNodeVectors(inputs_, other.inputs_)) {
+    return false;
+  }
+  return equalTo(other);
+}
 
 std::string LogicalPlanNode::toString() const {
   return PlanPrinter::toText(*this);
@@ -643,16 +676,72 @@ void ValuesNode::accept(
   visitor.visit(*this, context);
 }
 
+bool ValuesNode::equalTo(const LogicalPlanNode& other) const {
+  const auto* rhs = other.as<ValuesNode>();
+  if (cardinality_ != rhs->cardinality_) {
+    return false;
+  }
+  if (data_.index() != rhs->data_.index()) {
+    return false;
+  }
+  // TODO: support order-insensitive comparison.
+  return std::visit(
+      [&](const auto& lhsData) -> bool {
+        using T = std::decay_t<decltype(lhsData)>;
+        const auto& rhsData = std::get<T>(rhs->data_);
+        if constexpr (std::is_same_v<T, ValuesNode::Variants>) {
+          return lhsData == rhsData;
+        } else if constexpr (std::is_same_v<T, ValuesNode::Vectors>) {
+          if (lhsData.size() != rhsData.size()) {
+            return false;
+          }
+          for (size_t i = 0; i < lhsData.size(); ++i) {
+            if (lhsData[i]->size() != rhsData[i]->size()) {
+              return false;
+            }
+            for (velox::vector_size_t row = 0; row < lhsData[i]->size();
+                 ++row) {
+              if (!lhsData[i]->equalValueAt(rhsData[i].get(), row, row)) {
+                return false;
+              }
+            }
+          }
+          return true;
+        } else {
+          if (lhsData.size() != rhsData.size()) {
+            return false;
+          }
+          for (size_t i = 0; i < lhsData.size(); ++i) {
+            if (!Expr::equalExprVectors(lhsData[i], rhsData[i])) {
+              return false;
+            }
+          }
+          return true;
+        }
+      },
+      data_);
+}
+
 void TableScanNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
 }
 
+bool TableScanNode::equalTo(const LogicalPlanNode& other) const {
+  const auto* rhs = other.as<TableScanNode>();
+  return connectorId_ == rhs->connectorId_ && tableName_ == rhs->tableName_ &&
+      columnNames_ == rhs->columnNames_;
+}
+
 void FilterNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+bool FilterNode::equalTo(const LogicalPlanNode& other) const {
+  return *predicate_ == *other.as<FilterNode>()->predicate_;
 }
 
 // static
@@ -677,6 +766,12 @@ void ProjectNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+bool ProjectNode::equalTo(const LogicalPlanNode& other) const {
+  const auto* rhs = other.as<ProjectNode>();
+  return names_ == rhs->names_ &&
+      Expr::equalExprVectors(expressions_, rhs->expressions_);
 }
 
 // static
@@ -717,6 +812,14 @@ void AggregateNode::accept(
   visitor.visit(*this, context);
 }
 
+bool AggregateNode::equalTo(const LogicalPlanNode& other) const {
+  const auto* rhs = other.as<AggregateNode>();
+  return outputNames_ == rhs->outputNames_ &&
+      groupingSets_ == rhs->groupingSets_ &&
+      Expr::equalExprVectors(groupingKeys_, rhs->groupingKeys_) &&
+      Expr::equalExprVectors(aggregates_, rhs->aggregates_);
+}
+
 namespace {
 const auto& joinTypeNames() {
   static const folly::F14FastMap<JoinType, std::string_view> kNames = {
@@ -748,16 +851,31 @@ void JoinNode::accept(
   visitor.visit(*this, context);
 }
 
+bool JoinNode::equalTo(const LogicalPlanNode& other) const {
+  const auto* rhs = other.as<JoinNode>();
+  return joinType_ == rhs->joinType_ &&
+      Expr::equalNullableExprs(condition_, rhs->condition_);
+}
+
 void SortNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
 }
 
+bool SortNode::equalTo(const LogicalPlanNode& other) const {
+  return ordering_ == other.as<SortNode>()->ordering_;
+}
+
 void LimitNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+bool LimitNode::equalTo(const LogicalPlanNode& other) const {
+  const auto* rhs = other.as<LimitNode>();
+  return offset_ == rhs->offset_ && count_ == rhs->count_;
 }
 
 namespace {
@@ -811,6 +929,10 @@ void SetNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+bool SetNode::equalTo(const LogicalPlanNode& other) const {
+  return operation_ == other.as<SetNode>()->operation_;
 }
 
 // static
@@ -892,6 +1014,14 @@ void UnnestNode::accept(
   visitor.visit(*this, context);
 }
 
+bool UnnestNode::equalTo(const LogicalPlanNode& other) const {
+  const auto* rhs = other.as<UnnestNode>();
+  return flattenArrayOfRows_ == rhs->flattenArrayOfRows_ &&
+      ordinalityName_ == rhs->ordinalityName_ &&
+      unnestedNames_ == rhs->unnestedNames_ &&
+      Expr::equalExprVectors(unnestExpressions_, rhs->unnestExpressions_);
+}
+
 TableWriteNode::TableWriteNode(
     std::string id,
     LogicalPlanNodePtr input,
@@ -923,6 +1053,14 @@ void TableWriteNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+bool TableWriteNode::equalTo(const LogicalPlanNode& other) const {
+  const auto* rhs = other.as<TableWriteNode>();
+  return connectorId_ == rhs->connectorId_ && tableName_ == rhs->tableName_ &&
+      writeKind_ == rhs->writeKind_ && columnNames_ == rhs->columnNames_ &&
+      options_ == rhs->options_ &&
+      Expr::equalExprVectors(columnExpressions_, rhs->columnExpressions_);
 }
 
 namespace {
@@ -966,6 +1104,12 @@ void SampleNode::accept(
   visitor.visit(*this, context);
 }
 
+bool SampleNode::equalTo(const LogicalPlanNode& other) const {
+  const auto* rhs = other.as<SampleNode>();
+  return sampleMethod_ == rhs->sampleMethod_ &&
+      *percentage_ == *rhs->percentage_;
+}
+
 namespace {
 velox::RowTypePtr makeOutputType(
     const LogicalPlanNode& input,
@@ -1003,6 +1147,10 @@ void OutputNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+bool OutputNode::equalTo(const LogicalPlanNode& other) const {
+  return entries_ == other.as<OutputNode>()->entries_;
 }
 
 folly::dynamic OutputNode::serialize() const {
