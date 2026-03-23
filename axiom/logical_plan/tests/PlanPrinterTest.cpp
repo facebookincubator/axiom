@@ -474,7 +474,7 @@ TEST_F(PlanPrinterTest, distinctSortedMaskedAgg) {
           .values(rowType, data)
           .aggregate(
               {"a"},
-              {"array_agg(distinct b order by c desc) filter (where d) as complex_agg"})
+              {"array_agg(distinct b order by b desc) filter (where d) as complex_agg"})
           .build();
 
   auto lines = toLines(plan);
@@ -484,7 +484,7 @@ TEST_F(PlanPrinterTest, distinctSortedMaskedAgg) {
       testing::ElementsAre(
           testing::StartsWith("- Aggregate"),
           testing::StartsWith(
-              "    complex_agg := array_agg(DISTINCT b ORDER BY c DESC NULLS LAST) FILTER (WHERE d)"),
+              "    complex_agg := array_agg(DISTINCT b ORDER BY b DESC NULLS LAST) FILTER (WHERE d)"),
           testing::StartsWith("  - Values"),
           testing::Eq("")));
 }
@@ -615,7 +615,7 @@ TEST_F(PlanPrinterTest, groupingSetsDistinctSortedMaskedAgg) {
           .values(rowType, data)
           .aggregate(
               {{"a", "b"}, {"a"}, {}},
-              {"array_agg(distinct b order by c desc) filter (where d) as complex_agg"},
+              {"array_agg(distinct b order by b desc) filter (where d) as complex_agg"},
               "$grouping_set_id")
           .build();
 
@@ -627,7 +627,7 @@ TEST_F(PlanPrinterTest, groupingSetsDistinctSortedMaskedAgg) {
           testing::StartsWith(
               "- Aggregate(a, b) GROUPING SETS [(a, b), (a), ()]"),
           testing::StartsWith(
-              "    complex_agg := array_agg(DISTINCT b ORDER BY c DESC NULLS LAST) FILTER (WHERE d)"),
+              "    complex_agg := array_agg(DISTINCT b ORDER BY b DESC NULLS LAST) FILTER (WHERE d)"),
           testing::StartsWith("  - Values"),
           testing::Eq("")));
 }
