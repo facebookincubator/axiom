@@ -149,6 +149,25 @@ localtime: match
 current_time: match
 ```
 
+## IPADDRESS displays a formatted IP address
+
+```scrut
+$ $CLI --query "SELECT CAST('192.168.255.255' AS IPADDRESS) AS ipv4, CAST('2001:db8::ff00:42:8329' AS IPADDRESS) AS ipv6, ip_prefix(CAST('192.168.255.255' AS IPADDRESS), 9) AS prefix, ip_prefix(CAST('1234:5678:90ab:cdef:1234:5678:90ab:cdef' AS IPADDRESS), 128) AS long_prefix" 2>/dev/null
+----------------+------------------------+---------------+--------------------------------------------
+           ipv4 |                   ipv6 |        prefix |                                 long_prefix
+----------------+------------------------+---------------+--------------------------------------------
+192.168.255.255 | 2001:db8::ff00:42:8329 | 192.128.0.0/9 | 1234:5678:90ab:cdef:1234:5678:90ab:cdef/128
+(1 rows in 1 batches)
+
+```
+
+## UUID displays a formatted UUID
+
+```scrut
+$ $CLI --query "SELECT uuid()" 2>/dev/null | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1 | wc -c | awk '{print ($1 == 37) ? "valid uuid format" : "invalid"}'
+valid uuid format
+```
+
 ## SET SESSION and SHOW SESSION
 
 ```scrut

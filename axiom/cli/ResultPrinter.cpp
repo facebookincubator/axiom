@@ -17,9 +17,14 @@
 #include "axiom/cli/ResultPrinter.h"
 #include <iomanip>
 #include <iostream>
+#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/SimpleVector.h"
 
 using namespace facebook::velox;
 
@@ -129,23 +134,42 @@ int32_t printResults(
       auto& rowData = data.back();
       rowData.resize(numColumns);
       for (auto column = 0; column < numColumns; ++column) {
-        if (decodedColumns[column].isNullAt(row)) {
-          rowData[column] = decodedColumns[column].toString(row);
+        auto& decodedColumn = decodedColumns[column];
+        if (decodedColumn.isNullAt(row)) {
+          rowData[column] = decodedColumn.toString(row);
         } else {
           const auto& columnType = type->childAt(column);
           if (isTimestampWithTimeZoneType(columnType)) {
             rowData[column] = TIMESTAMP_WITH_TIME_ZONE()->valueToString(
-                decodedColumns[column].valueAt<int64_t>(row));
+                decodedColumn.valueAt<int64_t>(row));
           } else if (columnType->isTime()) {
             char buf[16];
-            rowData[column] = TIME()->valueToString(
-                decodedColumns[column].valueAt<int64_t>(row), buf);
+            rowData[column] =
+                TIME()->valueToString(decodedColumn.valueAt<int64_t>(row), buf);
           } else if (isTimeWithTimeZone(columnType)) {
             char buf[32];
             rowData[column] = TIME_WITH_TIME_ZONE()->valueToString(
-                decodedColumns[column].valueAt<int64_t>(row), buf);
+                decodedColumn.valueAt<int64_t>(row), buf);
+          } else if (isIPPrefixType(columnType)) {
+            auto* rowVector = decodedColumn.base()->as<RowVector>();
+            auto decodedRow = decodedColumn.index(row);
+            auto ip =
+                rowVector->childAt(0)->as<SimpleVector<int128_t>>()->valueAt(
+                    decodedRow);
+            auto prefixLength =
+                rowVector->childAt(1)->as<SimpleVector<int8_t>>()->valueAt(
+                    decodedRow);
+            char buf[IPPrefixType::kMaxStringSize];
+            rowData[column] = IPPREFIX()->valueToString(ip, prefixLength, buf);
+          } else if (isIPAddressType(columnType)) {
+            rowData[column] = IPADDRESS()->valueToString(
+                decodedColumn.valueAt<int128_t>(row));
+          } else if (isUuidType(columnType)) {
+            char buf[UuidType::kStringSize];
+            rowData[column] = UUID()->valueToString(
+                decodedColumn.valueAt<int128_t>(row), buf);
           } else {
-            rowData[column] = decodedColumns[column].toString(row);
+            rowData[column] = decodedColumn.toString(row);
           }
         }
         widths[column] = std::max(widths[column], rowData[column].size());
