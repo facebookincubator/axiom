@@ -490,6 +490,26 @@ TEST_F(AggregationParserTest, having) {
           "SELECT n_regionkey AS n_nationkey, count(*) FROM nation "
           "GROUP BY 1 HAVING n_nationkey > 10"),
       "HAVING clause cannot reference column: n_nationkey");
+
+  // HAVING with an ambiguous unqualified reference. Both t1.id and t2.id are
+  // grouping keys, so 'id' in HAVING is ambiguous and must fail.
+  {
+    connector_->addTable("t1", ROW({"id", "a"}, {INTEGER(), VARCHAR()}));
+    connector_->addTable("t2", ROW({"id", "b"}, {INTEGER(), VARCHAR()}));
+    VELOX_ASSERT_THROW(
+        parseSql(
+            "SELECT t1.id, t2.id, count(*) FROM t1 JOIN t2 ON t1.a = t2.b "
+            "GROUP BY 1, 2 HAVING id > 0"),
+        "HAVING clause cannot reference column: id");
+  }
+
+  // CAST expression as a grouping key. The raw column inside the CAST is not
+  // a grouping key itself, so referencing it in HAVING must fail.
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT CAST(n_regionkey AS VARCHAR), count(*) FROM nation "
+          "GROUP BY 1 HAVING n_regionkey > 2"),
+      "HAVING clause cannot reference column: n_regionkey");
 }
 
 TEST_F(AggregationParserTest, scalarOverAgg) {
@@ -682,6 +702,134 @@ TEST_F(AggregationParserTest, groupByWithWindowFunction) {
               "sum",
           })
           .output());
+}
+
+// Tests that column canonicalization produces consistent expression trees
+// across GROUP BY, SELECT, HAVING, and ORDER BY, so that mixed
+// qualified/unqualified references to the same column match structurally.
+TEST_F(AggregationParserTest, columnCanonicalization) {
+  // Compound expression with mixed qualified/unqualified references.
+  {
+    connector_->addTable("t", ROW({"x", "y"}, {INTEGER(), VARCHAR()}));
+    testSelect(
+        "SELECT t.x + 1, count(*) FROM t GROUP BY 1 HAVING x + 1 > 5",
+        matchScan().aggregate().filter().output());
+    testSelect(
+        "SELECT x + 1, count(*) FROM t GROUP BY 1 HAVING t.x + 1 > 5",
+        matchScan().aggregate().filter().output());
+  }
+
+  // GROUP BY qualified, HAVING and ORDER BY unqualified — all three positions.
+  testSelect(
+      "SELECT nation.n_regionkey, count(*) FROM nation "
+      "GROUP BY nation.n_regionkey HAVING n_regionkey > 2 ORDER BY n_regionkey",
+      matchScan().aggregate().filter().sort().output());
+
+  // GROUP BY unqualified, SELECT qualified.
+  testSelect(
+      "SELECT nation.n_regionkey, count(*) FROM nation "
+      "GROUP BY n_regionkey",
+      matchScan().aggregate().output());
+
+  // GROUP BY ordinal pointing to qualified SELECT, ORDER BY unqualified.
+  testSelect(
+      "SELECT nation.n_regionkey, count(*) FROM nation "
+      "GROUP BY 1 ORDER BY n_regionkey",
+      matchScan().aggregate().sort().output());
+
+  // Qualified SELECT with table alias, unqualified HAVING.
+  testSelect(
+      "SELECT n.n_regionkey, count(*) FROM nation n "
+      "GROUP BY 1 HAVING n_regionkey > 2",
+      matchScan().aggregate().filter().output());
+
+  // Reverse: unqualified GROUP BY key, qualified ORDER BY.
+  testSelect(
+      "SELECT n_regionkey, count(*) FROM nation "
+      "GROUP BY 1 ORDER BY nation.n_regionkey",
+      matchScan().aggregate().sort().output());
+
+  // Reverse: unqualified GROUP BY key, qualified HAVING.
+  testSelect(
+      "SELECT n_regionkey, count(*) FROM nation "
+      "GROUP BY 1 HAVING nation.n_regionkey > 2",
+      matchScan().aggregate().filter().output());
+
+  // Same with a table alias.
+  testSelect(
+      "SELECT n_regionkey, count(*) FROM nation n "
+      "GROUP BY 1 HAVING n.n_regionkey > 2",
+      matchScan().aggregate().filter().output());
+
+  // Struct field dereference must not be confused with a table-qualified
+  // column. GROUP BY s.x groups by the struct field, not by table column x.
+  {
+    connector_->addTable(
+        "st",
+        ROW({"x", "s"}, {INTEGER(), ROW({"x", "y"}, {VARCHAR(), DOUBLE()})}));
+    VELOX_ASSERT_THROW(
+        parseSql(
+            "SELECT s.x, count(*) FROM st "
+            "GROUP BY 1 HAVING x > 0"),
+        "HAVING clause cannot reference column: x");
+  }
+
+  // Reverse: struct field in HAVING must not match an unqualified grouping key.
+  {
+    connector_->addTable(
+        "st2",
+        ROW({"x", "s"}, {INTEGER(), ROW({"x", "y"}, {VARCHAR(), DOUBLE()})}));
+    VELOX_ASSERT_THROW(
+        parseSql(
+            "SELECT x, count(*) FROM st2 "
+            "GROUP BY 1 HAVING s.x = 'foo'"),
+        "HAVING clause cannot reference column");
+  }
+
+  // JOIN with GROUP BY: non-ambiguous columns are canonicalized.
+  testSelect(
+      "SELECT n_name, count(*) FROM nation "
+      "JOIN region ON nation.n_regionkey = region.r_regionkey "
+      "GROUP BY nation.n_name HAVING n_name != 'BRAZIL'",
+      matchScan().join(matchScan().build()).aggregate().filter().output());
+
+  // JOIN with GROUP BY: ambiguous columns must stay qualified.
+  {
+    connector_->addTable("t1", ROW({"id", "a"}, {INTEGER(), VARCHAR()}));
+    connector_->addTable("t2", ROW({"id", "b"}, {INTEGER(), VARCHAR()}));
+
+    // Qualified GROUP BY, qualified HAVING — works because they match.
+    testSelect(
+        "SELECT t1.id, count(*) FROM t1 JOIN t2 ON t1.a = t2.b "
+        "GROUP BY t1.id HAVING t1.id > 0",
+        matchScan().join(matchScan().build()).aggregate().filter().output());
+
+    // Qualified GROUP BY, unqualified HAVING — fails because 'id' is
+    // ambiguous and cannot be canonicalized to match the qualified key.
+    VELOX_ASSERT_THROW(
+        parseSql(
+            "SELECT t1.id, count(*) FROM t1 JOIN t2 ON t1.a = t2.b "
+            "GROUP BY t1.id HAVING id > 0"),
+        "HAVING clause cannot reference column: id");
+  }
+
+  // Multiple grouping keys with mixed qualified/unqualified.
+  testSelect(
+      "SELECT nation.n_regionkey, nation.n_name, count(*) FROM nation "
+      "GROUP BY 1, 2 HAVING n_regionkey > 0 AND n_name != 'BRAZIL'",
+      matchScan().aggregate().filter().output());
+
+  // CAST expression with qualified column inside.
+  testSelect(
+      "SELECT CAST(nation.n_regionkey AS VARCHAR), count(*) FROM nation "
+      "GROUP BY 1 HAVING CAST(n_regionkey AS VARCHAR) != '0'",
+      matchScan().aggregate().filter().output());
+
+  // Aggregate function with qualified argument.
+  testSelect(
+      "SELECT n_regionkey, sum(nation.n_nationkey) FROM nation "
+      "GROUP BY 1 HAVING sum(n_nationkey) > 10",
+      matchScan().aggregate().filter().output());
 }
 
 } // namespace

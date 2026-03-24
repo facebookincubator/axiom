@@ -730,6 +730,11 @@ class PlanBuilder {
   /// builder's output without chaining to outer scopes.
   bool hasColumn(const std::string& name) const;
 
+  /// Returns true if the given qualified name (alias.name) resolves to a column
+  /// in this builder's output without chaining to outer scopes.
+  bool hasQualifiedColumn(const std::string& qualifier, const std::string& name)
+      const;
+
   /// Returns the number of output columns.
   size_t numOutput() const;
 

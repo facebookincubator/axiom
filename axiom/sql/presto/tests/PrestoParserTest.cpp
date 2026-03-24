@@ -1537,5 +1537,123 @@ TEST_F(PrestoParserTest, nestedWindowFunction) {
           .output());
 }
 
+// Tests canonicalization of table-qualified column references. When the table
+// qualifier can be unambiguously resolved, `table.col` and `col` produce
+// identical expression trees, ensuring consistent behavior across SELECT,
+// WHERE, GROUP BY, HAVING, ORDER BY, JOINs, and subqueries.
+TEST_F(PrestoParserTest, columnCanonicalization) {
+  connector_->addTable("t", ROW({"x", "y"}, {INTEGER(), VARCHAR()}));
+
+  // Qualified and unqualified produce the same plan in SELECT + WHERE.
+  {
+    auto matcher = matchScan().filter().project().output({"x"});
+    testSelect("SELECT x FROM t WHERE x > 0", matcher);
+    testSelect("SELECT t.x FROM t WHERE t.x > 0", matcher);
+    testSelect("SELECT t.x FROM t WHERE x > 0", matcher);
+    testSelect("SELECT x FROM t WHERE t.x > 0", matcher);
+  }
+
+  // With table alias.
+  {
+    auto matcher = matchScan().filter().project().output({"x"});
+    testSelect("SELECT a.x FROM t a WHERE a.x > 0", matcher);
+    testSelect("SELECT x FROM t a WHERE a.x > 0", matcher);
+    testSelect("SELECT a.x FROM t a WHERE x > 0", matcher);
+  }
+
+  // ORDER BY with mixed qualified/unqualified (no GROUP BY).
+  {
+    auto matcher = matchScan().sort().output({"x", "y"});
+    testSelect("SELECT * FROM t ORDER BY t.x", matcher);
+    testSelect("SELECT * FROM t ORDER BY x", matcher);
+  }
+
+  // JOIN: ambiguous column names must keep qualifiers.
+  {
+    connector_->addTable("t1", ROW({"id", "a"}, {INTEGER(), VARCHAR()}));
+    connector_->addTable("t2", ROW({"id", "b"}, {INTEGER(), VARCHAR()}));
+
+    // Qualified references to ambiguous columns work.
+    auto matcher =
+        matchScan().join(matchScan().build()).output({"id", "a", "id", "b"});
+    testSelect("SELECT * FROM t1 JOIN t2 ON t1.id = t2.id", matcher);
+
+    // Unqualified reference to ambiguous column fails.
+    VELOX_ASSERT_THROW(
+        parseSql("SELECT * FROM t1 JOIN t2 ON id = id"),
+        "Cannot resolve column");
+
+    // Qualified SELECT with ambiguous column after JOIN.
+    auto projMatcher =
+        matchScan().join(matchScan().build()).project().output({"id", "id"});
+    testSelect(
+        "SELECT t1.id, t2.id FROM t1 JOIN t2 ON t1.a = t2.b", projMatcher);
+
+    // Non-ambiguous columns in a JOIN are still canonicalized.
+    auto filterMatcher =
+        matchScan().join(matchScan().build()).filter().project().output({"a"});
+    testSelect(
+        "SELECT t1.a FROM t1 JOIN t2 ON t1.id = t2.id WHERE a = 'x'",
+        filterMatcher);
+    testSelect(
+        "SELECT a FROM t1 JOIN t2 ON t1.id = t2.id WHERE t1.a = 'x'",
+        filterMatcher);
+  }
+
+  // Struct dereference is not canonicalized.
+  {
+    connector_->addTable(
+        "st",
+        ROW({"x", "s"}, {INTEGER(), ROW({"a", "b"}, {VARCHAR(), DOUBLE()})}));
+
+    // s.a is a struct field access, not a table-qualified column.
+    auto matcher = matchScan().project().output({"a"});
+    testSelect("SELECT s.a FROM st", matcher);
+
+    // Using unqualified 'a' fails because column 'a' does not exist on 'st'.
+    VELOX_ASSERT_THROW(parseSql("SELECT a FROM st"), "Cannot resolve column");
+  }
+
+  // Table alias shadows struct column name (from qualifiedColumnAccess test).
+  // Verify canonicalization works correctly when alias and struct have same
+  // name.
+  {
+    connector_->addTable(
+        "u",
+        ROW({"t", "x"}, {ROW({"x", "y"}, {VARCHAR(), DOUBLE()}), INTEGER()}));
+    // t.x resolves to table column x (INTEGER), not struct field t.x (VARCHAR).
+    auto matcher = matchScan().filter().project().output({"x"});
+    testSelect("SELECT t.x FROM u AS t WHERE t.x > 0", matcher);
+    testSelect("SELECT x FROM u AS t WHERE x > 0", matcher);
+    // Mixed: qualified SELECT, unqualified WHERE.
+    testSelect("SELECT t.x FROM u AS t WHERE x > 0", matcher);
+  }
+
+  // Self-join: same table with two aliases. Columns are ambiguous.
+  {
+    auto matcher =
+        matchScan().join(matchScan().build()).filter().project().output({"x"});
+    testSelect(
+        "SELECT a.x FROM t a JOIN t b ON a.x = b.x WHERE a.y = 'foo'", matcher);
+
+    // Unqualified 'x' is ambiguous in self-join.
+    VELOX_ASSERT_THROW(
+        parseSql("SELECT x FROM t a JOIN t b ON a.x = b.x"),
+        "Cannot resolve column");
+  }
+
+  // Correlated subquery with qualified outer reference.
+  {
+    connector_->addTable("inner_t", ROW({"z"}, {INTEGER()}));
+    auto matcher = matchScan().filter().output({"x", "y"});
+    testSelect(
+        "SELECT * FROM t WHERE x > (SELECT max(z) FROM inner_t WHERE z = t.x)",
+        matcher);
+    testSelect(
+        "SELECT * FROM t WHERE t.x > (SELECT max(z) FROM inner_t WHERE z = x)",
+        matcher);
+  }
+}
+
 } // namespace
 } // namespace axiom::sql::presto::test
