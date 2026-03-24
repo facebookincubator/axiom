@@ -31,7 +31,7 @@ where
 					l.l_partkey = ps.ps_partkey
 					and l.l_suppkey = ps.ps_suppkey
 					and l.l_shipdate >= date '1994-01-01'
-					and cast(l.l_shipdate as date) < date('1994-01-01') + interval '1' year
+					and cast(l.l_shipdate as date) < date '1994-01-01' + interval '1' year
 			)
 	)
 	and s.s_nationkey = n.n_nationkey
