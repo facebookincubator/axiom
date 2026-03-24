@@ -150,6 +150,12 @@ int32_t printResults(
             char buf[32];
             rowData[column] = TIME_WITH_TIME_ZONE()->valueToString(
                 decodedColumn.valueAt<int64_t>(row), buf);
+          } else if (columnType->isIntervalDayTime()) {
+            rowData[column] = INTERVAL_DAY_TIME()->valueToString(
+                decodedColumn.valueAt<int64_t>(row));
+          } else if (columnType->isIntervalYearMonth()) {
+            rowData[column] = INTERVAL_YEAR_MONTH()->valueToString(
+                decodedColumn.valueAt<int32_t>(row));
           } else if (isIPPrefixType(columnType)) {
             auto* rowVector = decodedColumn.base()->as<RowVector>();
             auto decodedRow = decodedColumn.index(row);

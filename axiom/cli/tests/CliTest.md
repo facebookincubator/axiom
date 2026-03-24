@@ -149,6 +149,13 @@ localtime: match
 current_time: match
 ```
 
+## Interval types display formatted values
+
+```scrut
+$ $CLI --query "SELECT INTERVAL '1' DAY AS d, INTERVAL '13' MONTH AS m" 2>/dev/null | grep '00:00'
+1 00:00:00.000 | 1-1
+```
+
 ## IPADDRESS displays a formatted IP address
 
 ```scrut
