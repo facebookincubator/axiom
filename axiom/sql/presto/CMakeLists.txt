@@ -32,6 +32,7 @@ target_link_libraries(
   axiom_logical_plan_builder
   axiom_sql_presto_ast
   velox_common_base
+  velox_presto_types
   antlr4_shared
 )
 
