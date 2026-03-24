@@ -951,6 +951,15 @@ class RelationPlanner : public AstVisitor {
       },
       [this](const ExpressionPtr& expr) -> lp::ExprApi {
         return toSortingKey(expr);
+      },
+      [this](const std::string& qualifier, const std::string& name) -> bool {
+        // Only canonicalize if the qualified name resolves in the current
+        // scope. This avoids stripping qualifiers from outer references in
+        // correlated subqueries and from struct field dereferences.
+        if (!builder_->hasQualifiedColumn(qualifier, name)) {
+          return false;
+        }
+        return builder_->hasColumn(name);
       }};
   std::unordered_map<std::string, std::shared_ptr<WithQuery>> withQueries_;
   ViewMap views_;

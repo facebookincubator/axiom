@@ -284,9 +284,18 @@ lp::ExprApi ExpressionPlanner::toExpr(
 
     case NodeType::kDereferenceExpression: {
       auto* dereference = node->as<DereferenceExpression>();
+      auto field = canonicalizeIdentifier(*dereference->field());
+      // Strip table qualifier when the canonicalizer confirms it's safe.
+      if (columnCanonicalizer_ &&
+          dereference->base()->is(NodeType::kIdentifier)) {
+        auto qualifier =
+            canonicalizeIdentifier(*dereference->base()->as<Identifier>());
+        if (columnCanonicalizer_(qualifier, field)) {
+          return lp::Col(field);
+        }
+      }
       return lp::Col(
-          canonicalizeIdentifier(*dereference->field()),
-          toExpr(dereference->base(), aggregateOptions, windowOptions));
+          field, toExpr(dereference->base(), aggregateOptions, windowOptions));
     }
 
     case NodeType::kSubqueryExpression: {

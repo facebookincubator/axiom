@@ -57,11 +57,18 @@ class ExpressionPlanner {
   using SortingKeyResolver =
       std::function<lp::ExprApi(const ExpressionPtr& expr)>;
 
+  /// Normalizes table-qualified column references (e.g. t.col) to unqualified
+  /// form. Returns true if the qualifier should be stripped.
+  using ColumnCanonicalizer = std::function<
+      bool(const std::string& qualifier, const std::string& name)>;
+
   ExpressionPlanner(
       SubqueryPlanner subqueryPlanner,
-      SortingKeyResolver sortingKeyResolver)
+      SortingKeyResolver sortingKeyResolver,
+      ColumnCanonicalizer columnCanonicalizer = nullptr)
       : subqueryPlanner_(std::move(subqueryPlanner)),
-        sortingKeyResolver_(std::move(sortingKeyResolver)) {}
+        sortingKeyResolver_(std::move(sortingKeyResolver)),
+        columnCanonicalizer_(std::move(columnCanonicalizer)) {}
 
   /// Translates an AST expression into an ExprApi. Optionally collects
   /// sideband data for aggregate and window function calls:
@@ -88,6 +95,7 @@ class ExpressionPlanner {
 
   SubqueryPlanner subqueryPlanner_;
   SortingKeyResolver sortingKeyResolver_;
+  ColumnCanonicalizer columnCanonicalizer_;
 };
 
 } // namespace axiom::sql::presto

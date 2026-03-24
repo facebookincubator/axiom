@@ -1863,6 +1863,13 @@ bool PlanBuilder::hasColumn(const std::string& name) const {
   return outputMapping_ != nullptr && outputMapping_->lookup(name).has_value();
 }
 
+bool PlanBuilder::hasQualifiedColumn(
+    const std::string& qualifier,
+    const std::string& name) const {
+  return outputMapping_ != nullptr &&
+      outputMapping_->lookup(qualifier, name).has_value();
+}
+
 ExprPtr PlanBuilder::resolveInputName(
     const std::optional<std::string>& alias,
     const std::string& name) const {
