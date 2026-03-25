@@ -16,6 +16,7 @@
 
 #include "axiom/cli/StdinReader.h"
 #include <fmt/format.h>
+#include <algorithm>
 #include <sstream>
 #include "axiom/cli/linenoise/linenoise.h"
 #include "folly/ScopeGuard.h"
