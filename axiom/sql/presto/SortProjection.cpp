@@ -39,7 +39,14 @@ std::vector<size_t> SortProjection::widenProjections(
   for (size_t i = 0; i < projections.size(); ++i) {
     projectionMap.emplace(projections[i].expr(), i + 1);
     if (projections[i].name().has_value()) {
-      aliasMap.emplace(projections[i].name().value(), i + 1);
+      auto [alias, inserted] =
+          aliasMap.emplace(projections[i].name().value(), i + 1);
+      // We throw for ambiguous aliases only if they are referenced by a
+      // sorting key. Let's mark it as ambiguous here for now denoted by the
+      // '0' ordinal and throw later when we process the sorting keys.
+      if (!inserted) {
+        alias->second = 0;
+      }
     }
   }
 
@@ -54,7 +61,10 @@ std::vector<size_t> SortProjection::widenProjections(
           ? aliasMap.find(sortKeyExprs[i].name().value())
           : aliasMap.end();
       if (aliasMapValue != aliasMap.end()) {
-        ordinals.push_back(aliasMapValue->second);
+        auto ordinal = aliasMapValue->second;
+        VELOX_USER_CHECK_NE(
+            ordinal, 0, "Column is ambiguous: {}", aliasMapValue->first);
+        ordinals.push_back(ordinal);
       }
       // Match expression directly if no alias is used, expanding out
       // projections list if sorts keys don't match our SELECT list.

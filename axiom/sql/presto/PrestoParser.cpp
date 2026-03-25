@@ -24,6 +24,7 @@
 #include "axiom/sql/presto/GroupByPlanner.h"
 #include "axiom/sql/presto/PrestoParseError.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
+#include "axiom/sql/presto/SortProjection.h"
 #include "axiom/sql/presto/TableVisitor.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
@@ -648,14 +649,16 @@ class RelationPlanner : public AstVisitor {
     return replacements;
   }
 
-  void addProject(const std::vector<SelectItemPtr>& selectItems) {
+  // Converts SELECT items to ExprApi projections. Exits early by returning
+  // std::nullopt for a single SELECT *.
+  std::optional<std::vector<lp::ExprApi>> buildSelectProjections(
+      const std::vector<SelectItemPtr>& selectItems) {
     // SELECT * FROM ...
     const bool isSingleSelectStar = selectItems.size() == 1 &&
         selectItems.at(0)->is(NodeType::kAllColumns) &&
         selectItems.at(0)->as<AllColumns>()->prefix() == nullptr;
     if (isSingleSelectStar) {
-      builder_->dropHiddenColumns();
-      return;
+      return std::nullopt;
     }
 
     const bool hasNestedWindow = hasNestedWindowFunction(selectItems);
@@ -715,12 +718,91 @@ class RelationPlanner : public AstVisitor {
       }
     }
 
-    builder_->project(exprs);
+    return exprs;
+  }
+
+  // Adds a project node if projection list is non-null (i.e. not SELECT *). If
+  // projection list is null, drop hidden columns and exit early.
+  void addProject(const std::vector<SelectItemPtr>& selectItems) {
+    auto projections = buildSelectProjections(selectItems);
+    if (!projections.has_value()) {
+      builder_->dropHiddenColumns();
+      return;
+    }
+    builder_->project(projections.value());
+  }
+
+  // Build sort key expressions. Ordinals are resolved to the corresponding
+  // SELECT projection expression so widenProjectionsForSort can match them
+  // by expression identity.
+  std::pair<std::vector<lp::ExprApi>, std::vector<size_t>> buildSortKeyExprs(
+      const OrderByPtr& orderBy,
+      const std::vector<lp::ExprApi>& projections) {
+    const size_t numSelectItems = projections.size();
+    std::vector<lp::ExprApi> sortKeyExprs;
+    std::vector<size_t> preResolved(orderBy->sortItems().size(), 0);
+    for (size_t i = 0; i < orderBy->sortItems().size(); ++i) {
+      const auto& item = orderBy->sortItems()[i];
+      const auto& sortExpr = item->sortKey();
+      if (sortExpr->is(NodeType::kLongLiteral)) {
+        const auto n = sortExpr->as<LongLiteral>()->value();
+        VELOX_USER_CHECK_GE(
+            n, 1, "ORDER BY position is not in the select list: {}", n);
+        VELOX_USER_CHECK_LE(
+            n,
+            numSelectItems,
+            "ORDER BY position is not in the select list: {}",
+            n);
+        preResolved[i] = n;
+        sortKeyExprs.emplace_back(projections.at(n - 1));
+      } else {
+        sortKeyExprs.emplace_back(toExpr(sortExpr));
+      }
+    }
+    return {sortKeyExprs, preResolved};
+  }
+
+  // Adds project and sort nodes. In order to provide sort with schema-level
+  // visibility, we project twice: once with the items in the SELECT list AND
+  // table columns referenced by the sort keys and once with just the items in
+  // the SELECT list. There are a few edge cases with unique behavior, however.
+  // If the projection list is null (SELECT *), we exit early without projecting
+  // and if there is no ORDER BY clause, we just project the SELECT list only.
+  void addProjectAndOrderBy(
+      const std::vector<SelectItemPtr>& selectItems,
+      const OrderByPtr& orderBy) {
+    auto projections = buildSelectProjections(selectItems);
+    if (!projections.has_value()) {
+      addOrderBy(orderBy);
+      builder_->dropHiddenColumns();
+      return;
+    }
+    if (orderBy == nullptr) {
+      builder_->project(projections.value());
+      return;
+    }
+
+    const size_t numSelectItems = projections->size();
+    auto [sortKeyExprs, preResolved] =
+        buildSortKeyExprs(orderBy, projections.value());
+
+    auto ordinals = SortProjection::widenProjections(
+        sortKeyExprs, preResolved, projections.value());
+    builder_->project(projections.value());
+    SortProjection::sortAndTrim(
+        *builder_, orderBy->sortItems(), ordinals, numSelectItems);
   }
 
   lp::ExprApi toSortingKey(const ExpressionPtr& expr) {
     if (expr->is(NodeType::kLongLiteral)) {
       const auto n = expr->as<LongLiteral>()->value();
+      VELOX_USER_CHECK_GE(
+          n, 1, "ORDER BY position is not in the select list: {}", n);
+      VELOX_USER_CHECK_LE(
+          n,
+          builder_->numOutput(),
+          "ORDER BY position is not in the select list: {}",
+          n);
       const auto name = builder_->findOrAssignOutputNameAt(n - 1);
 
       return lp::Col(name);
@@ -830,17 +912,21 @@ class RelationPlanner : public AstVisitor {
     } else {
       if (GroupByPlanner{builder_, exprPlanner_}.tryPlanGlobalAgg(
               selectItems, node->having())) {
-        // Nothing else to do.
-      } else {
-        // SELECT a, b -> builder.project({a, b})
+        // Nothing else to do. For aggregation, ORDER BY can only reference
+        // SELECT list (aggregates). DISTINCT will be a no-op since global
+        // aggregations without a group by are 1 row output.
+        addOrderBy(orderBy);
+      } else if (distinct) {
+        // With DISTINCT, ORDER BY can only reference SELECT-list columns.
+        // Project first, then sort.
         addProject(selectItems);
-      }
-
-      if (distinct) {
         builder_->distinct();
+        addOrderBy(orderBy);
+      } else {
+        // Widen the projection to include any ORDER BY columns not in the
+        // SELECT list, sort, then project again using only the SELECT list.
+        addProjectAndOrderBy(selectItems, orderBy);
       }
-
-      addOrderBy(orderBy);
     }
   }
 

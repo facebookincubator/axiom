@@ -23,6 +23,7 @@ add_executable(
   ExpressionParserTest.cpp
   PrestoParserTest.cpp
   PrestoParserTestBase.cpp
+  SortParserTest.cpp
   TableExtractorTest.cpp
 )
 
