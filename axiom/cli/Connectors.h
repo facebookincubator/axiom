@@ -37,6 +37,7 @@ class Connectors {
   static constexpr const char* kTpchConnectorId = "tpch";
   static constexpr const char* kLocalHiveConnectorId = "hive";
   static constexpr const char* kTestConnectorId = "test";
+  static constexpr const char* kSystemConnectorId = "system";
 
   Connectors();
 
@@ -70,6 +71,11 @@ class Connectors {
   /// Registers an in-memory test connector under `connectorId`.
   std::shared_ptr<velox::connector::Connector> registerTestConnector(
       const std::string& connectorId = kTestConnectorId);
+
+  /// Registers the system connector for the runtime.queries table.
+  /// Uses nullptr for QueryInfoProvider since the CLI has no query manager.
+  void registerSystemConnector(
+      const std::string& connectorId = kSystemConnectorId);
 
  protected:
   /// Initialize file formats and ioExecutor. Must be called before

@@ -20,6 +20,8 @@
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
+#include "axiom/connectors/system/SystemConnector.h"
+#include "axiom/connectors/system/SystemConnectorMetadata.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "velox/connectors/Connector.h"
@@ -126,6 +128,15 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerTestConnector(
   connectorIds_.push_back(connector->connectorId());
   velox::connector::registerConnector(connector);
   return connector;
+}
+
+void Connectors::registerSystemConnector(const std::string& connectorId) {
+  auto connector = std::make_shared<connector::system::SystemConnector>(
+      connectorId, /*queryInfoProvider=*/nullptr);
+  connectorIds_.push_back(connector->connectorId());
+  velox::connector::registerConnector(connector);
+  connector::ConnectorMetadata::registerMetadata(
+      connector->connectorId(), connector->metadata());
 }
 
 } // namespace facebook::axiom

@@ -31,6 +31,7 @@ target_link_libraries(
   axiom_optimizer
   axiom_hive_connector_metadata
   axiom_tpch_connector_metadata
+  axiom_system_connector
   axiom_test_connector
   axiom_sql_presto_parser
   velox_exec_test_lib

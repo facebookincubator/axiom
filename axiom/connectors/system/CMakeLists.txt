@@ -12,20 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(system)
+add_library(axiom_system_connector SystemConnector.cpp SystemConnectorMetadata.cpp)
 
-if(VELOX_ENABLE_HIVE_CONNECTOR)
-  add_subdirectory(hive)
-endif()
-
-if(VELOX_ENABLE_TPCH_CONNECTOR)
-  add_subdirectory(tpch)
-endif()
+target_link_libraries(
+  axiom_system_connector
+  axiom_connectors
+  velox_connector
+  velox_exception
+  velox_vector
+)
 
 if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
-
-add_library(axiom_connectors ConnectorMetadata.cpp SchemaResolver.cpp)
-
-target_link_libraries(axiom_connectors axiom_common velox_common_base velox_memory velox_connector)

@@ -39,6 +39,7 @@ int main(int argc, char** argv) {
     auto defaultSchema = "tiny";
 
     connectors.registerTestConnector();
+    connectors.registerSystemConnector();
 
     if (!FLAGS_data_path.empty()) {
       defaultConnector = connectors.registerLocalHiveConnector(
