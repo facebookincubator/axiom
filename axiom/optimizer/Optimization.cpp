@@ -1425,15 +1425,35 @@ RelationOpPtr Optimization::planSingleAggregation(
 
 namespace {
 
+// Returns the union of 'groupingKeys' and column expressions from 'args',
+// skipping literals. Throws on unexpected expression types.
+ExprVector unionColumnArgs(
+    const ExprVector& groupingKeys,
+    const ExprVector& args) {
+  ExprVector keys = groupingKeys;
+  auto keySet = PlanObjectSet::fromObjects(keys);
+  for (const auto* arg : args) {
+    if (arg->is(PlanType::kLiteralExpr)) {
+      continue;
+    }
+    VELOX_CHECK(
+        arg->is(PlanType::kColumnExpr),
+        "Expected column or literal expression: {}",
+        arg->toString());
+    if (!keySet.contains(arg)) {
+      keySet.add(arg);
+      keys.push_back(arg);
+    }
+  }
+  return keys;
+}
+
 // Returns the common distinct arguments if all aggregates are DISTINCT with
 // the same set of arguments and no filters. Throws if any of these conditions
 // is not met.
 ExprVector getSingleDistinctArgs(const AggregateVector& aggregates) {
   VELOX_CHECK(!aggregates.empty());
 
-  ExprVector commonArgs;
-  PlanObjectSet commonArgSet;
-  PlanObjectSet currentArgSet;
   for (const auto* agg : aggregates) {
     // Must be DISTINCT
     if (!agg->isDistinct()) {
@@ -1443,18 +1463,20 @@ ExprVector getSingleDistinctArgs(const AggregateVector& aggregates) {
     if (agg->condition() != nullptr) {
       VELOX_UNSUPPORTED("DISTINCT aggregates have filters");
     }
-    // Check same args (as a set, using pointer equality since exprs are
-    // deduplicated)
-    if (commonArgs.empty()) {
-      commonArgs = agg->args();
-      commonArgSet = PlanObjectSet::fromObjects(commonArgs);
-    } else {
-      currentArgSet.clear();
-      currentArgSet.unionObjects(agg->args());
-      if (currentArgSet != commonArgSet) {
-        VELOX_UNSUPPORTED(
-            "DISTINCT aggregates have multiple sets of arguments");
-      }
+  }
+
+  // Check same column args across all aggregates (as a set, using pointer
+  // equality since exprs are deduplicated). Literals are ignored since they are
+  // constant and do not affect which rows are considered distinct.
+  auto commonArgs = unionColumnArgs({}, aggregates[0]->args());
+  auto commonColumnArgSet = PlanObjectSet::fromObjects(commonArgs);
+  PlanObjectSet currentColumnArgSet;
+  for (size_t i = 1; i < aggregates.size(); ++i) {
+    currentColumnArgSet.clear();
+    currentColumnArgSet.unionObjects(
+        unionColumnArgs({}, aggregates[i]->args()));
+    if (currentColumnArgSet != commonColumnArgSet) {
+      VELOX_UNSUPPORTED("DISTINCT aggregates have multiple sets of arguments");
     }
   }
 
@@ -1565,7 +1587,7 @@ void Optimization::transformDistinctToGroupBy(
     AggregationPlanCP aggPlan,
     bool hasOrderBy) const {
   // Build inner GROUP BY keys: groupingKeys union distinctArgs. We put
-  // groupingKeys at the beginning, followed by distinctArgs not appear in
+  // groupingKeys at the beginning, followed by distinctArgs not appearing in
   // groupingKeys.
   ExprVector innerKeys = groupingKeys;
   PlanObjectSet innerKeySet = PlanObjectSet::fromObjects(groupingKeys);

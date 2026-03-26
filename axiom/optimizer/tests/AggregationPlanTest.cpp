@@ -344,8 +344,14 @@ TEST_F(AggregationPlanTest, singleDistinctToGroupBy) {
         .shuffle()
         .localPartition(innerGroupingKeys)
         .finalAggregation(innerGroupingKeys, {});
+    // When inner and outer keys are the same, the optimizer merges the
+    // inner and outer shuffles, so we skip the shuffle between inner final
+    // and outer aggregation.
+    bool sameKeys = innerGroupingKeys == outerGroupingKeys;
     if (useSingleStepOuterAgg) {
-      builder.shuffle();
+      if (!sameKeys) {
+        builder.shuffle();
+      }
       if (outerGroupingKeys.empty()) {
         builder.localGather();
       } else {
@@ -353,7 +359,10 @@ TEST_F(AggregationPlanTest, singleDistinctToGroupBy) {
       }
       builder.singleAggregation(outerGroupingKeys, aggregates);
     } else {
-      builder.partialAggregation(outerGroupingKeys, aggregates).shuffle();
+      builder.partialAggregation(outerGroupingKeys, aggregates);
+      if (!sameKeys) {
+        builder.shuffle();
+      }
       if (outerGroupingKeys.empty()) {
         builder.localGather();
       } else {
@@ -474,6 +483,48 @@ TEST_F(AggregationPlanTest, singleDistinctToGroupBy) {
             {"max_by(a, b ORDER BY a)", "min_by(a, b ORDER BY b)"},
             /*useSingleStepOuterAgg=*/true));
   }
+
+  {
+    // Test DISTINCT with ORDER BY and literal args. The literal should be
+    // skipped while the column is kept in inner GROUP BY keys.
+    assertPlan(
+        {"a"},
+        {"max_by(DISTINCT b, 1 ORDER BY b)",
+         "min_by(DISTINCT b, 2 ORDER BY b)"},
+        buildMatcher(
+            /*projections=*/{},
+            /*innerGroupingKeys=*/{"a", "b"},
+            /*outerGroupingKeys=*/{"a"},
+            /*aggregates=*/
+            {"max_by(b, 1 ORDER BY b)", "min_by(b, 2 ORDER BY b)"},
+            /*useSingleStepOuterAgg=*/true));
+  }
+
+  {
+    // Test DISTINCT aggregate with mixed column and literal args. The literal
+    // should be skipped while the column is kept in inner GROUP BY keys.
+    assertPlan(
+        {"a"},
+        {"max_by(DISTINCT b, 1)", "min_by(DISTINCT b, 2)"},
+        buildMatcher(
+            /*projections=*/{},
+            /*innerGroupingKeys=*/{"a", "b"},
+            /*outerGroupingKeys=*/{"a"},
+            /*aggregates=*/{"max_by(b, 1)", "min_by(b, 2)"}));
+  }
+
+  {
+    // Test DISTINCT aggregate where all arguments are literals. The inner
+    // GROUP BY keys should be just the grouping keys with no additions.
+    assertPlan(
+        {"a"},
+        {"count(DISTINCT 1)", "count(DISTINCT 2)"},
+        buildMatcher(
+            /*projections=*/{},
+            /*innerGroupingKeys=*/{"a"},
+            /*outerGroupingKeys=*/{"a"},
+            /*aggregates=*/{"count(1)", "count(2)"}));
+  }
 }
 
 TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
@@ -518,6 +569,20 @@ TEST_F(AggregationPlanTest, unsupportedAggregationOverDistinct) {
     VELOX_ASSERT_THROW(
         test::QueryTestBase::planVelox(logicalPlan),
         "Mix of DISTINCT and non-DISTINCT aggregates");
+  }
+
+  {
+    // First aggregate has all-literal args, second has column args. The column
+    // arg sets differ (empty vs {b}), so this is unsupported.
+    auto logicalPlan =
+        lp::PlanBuilder(makeContext())
+            .tableScan("t")
+            .aggregate({"a"}, {"count(DISTINCT 1)", "count(DISTINCT b)"})
+            .build();
+
+    VELOX_ASSERT_THROW(
+        test::QueryTestBase::planVelox(logicalPlan),
+        "DISTINCT aggregates have multiple sets of arguments");
   }
 }
 

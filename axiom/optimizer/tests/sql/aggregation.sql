@@ -67,6 +67,18 @@ SELECT a, covar_pop(DISTINCT CAST(b AS DOUBLE), c), covar_samp(DISTINCT c, CAST(
 -- DISTINCT: argument overlap with grouping keys (c is both grouping key and DISTINCT arg).
 SELECT c, covar_pop(DISTINCT c, CAST(b AS DOUBLE)) FROM t GROUP BY c
 ----
+-- DISTINCT: mixed column and literal args (literals differ across aggregates).
+SELECT a, covar_pop(DISTINCT c, 1.0), covar_samp(DISTINCT c, 2.0) FROM t GROUP BY a
+----
+-- DISTINCT: all arguments are literals.
+SELECT a, count(DISTINCT 1), count(DISTINCT 2) FROM t GROUP BY a
+----
+-- error: DISTINCT aggregates have multiple sets of arguments
+SELECT a, count(DISTINCT 1), count(DISTINCT b) FROM t GROUP BY a
+----
+-- DISTINCT with ORDER BY and literal args.
+SELECT a, max_by(DISTINCT b, 1 ORDER BY b), min_by(DISTINCT b, 2 ORDER BY b) FROM t GROUP BY a
+----
 -- DISTINCT with ORDER BY where ORDER BY keys are subset of distinct args.
 SELECT c, max_by(DISTINCT a, CAST(b AS DOUBLE) ORDER BY a), min_by(DISTINCT a, CAST(b AS DOUBLE) ORDER BY CAST(b AS DOUBLE)) FROM t GROUP BY c
 ----
