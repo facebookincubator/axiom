@@ -1724,6 +1724,55 @@ TEST_F(SubqueryTest, rightJoinOnSubquery) {
   }
 }
 
+TEST_F(SubqueryTest, innerScopeNestedAggregation) {
+  {
+    auto query =
+        "WITH grouped AS ("
+        "  SELECT id, reverse(array_agg(val)) AS vals "
+        "  FROM (VALUES (1, 5), (1, 3), (2, 7)) t(id, val) "
+        "  GROUP BY id) "
+        "SELECT id, sum(cardinality(vals)) AS result "
+        "FROM grouped "
+        "GROUP BY id";
+
+    SCOPED_TRACE(query);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .aggregation()
+                       .project()
+                       .project()
+                       .aggregation()
+                       .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  {
+    auto query =
+        "WITH grouped AS ("
+        "  SELECT id, CASE WHEN id = 1 THEN array_agg(val) ELSE ARRAY[0] END AS vals "
+        "  FROM (VALUES (1, 5), (1, 3), (2, 7)) t(id, val) "
+        "  GROUP BY id) "
+        "SELECT sum(cardinality(vals)) AS result "
+        "FROM grouped";
+
+    SCOPED_TRACE(query);
+
+    auto matcher = core::PlanMatcherBuilder()
+                       .values()
+                       .aggregation()
+                       .project()
+                       .project()
+                       .aggregation()
+                       .build();
+
+    auto plan = toSingleNodePlan(query);
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
 TEST_F(SubqueryTest, unsupportedSubqueryInJoin) {
   // Left-side subquery in LEFT JOIN ON clause.
   VELOX_ASSERT_THROW(

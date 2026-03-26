@@ -360,6 +360,34 @@ bool hasConstantFalse(const ExprVector& exprs) {
   return std::ranges::any_of(exprs, isConstantFalse);
 }
 
+// This is a band-aid. Revisit the logic in this method.
+//
+// The problem with current logic is that translated expression may belong
+// to a derived table that's not directly referenced from the currentDt_.
+// When this happens, the downstream processing breaks because the core
+// invariant is broken: all expressions in a derived table must reference
+// relations from DerivedTable::tables.
+ColumnCP tryGetResolvedColumn(
+    const std::string& name,
+    const folly::F14FastMap<std::string, ExprCP>& renames,
+    bool allowCorrelations,
+    const folly::F14FastMap<std::string, ExprCP>* correlations) {
+  auto it = renames.find(name);
+  if (it != renames.end() && it->second->is(PlanType::kColumnExpr)) {
+    return it->second->as<Column>();
+  }
+
+  if (allowCorrelations && correlations != nullptr) {
+    if (auto corrIt = correlations->find(name); corrIt != correlations->end()) {
+      if (corrIt->second->is(PlanType::kColumnExpr)) {
+        return corrIt->second->as<Column>();
+      }
+    }
+  }
+
+  return nullptr;
+}
+
 } // namespace
 
 void ToGraph::translateConjuncts(const lp::ExprPtr& input, ExprVector& flat) {
@@ -465,21 +493,6 @@ void ToGraph::getExprForField(
     const lp::LogicalPlanNode*& context) {
   VELOX_CHECK_NOT_NULL(context);
 
-  auto lookupName = [&](const std::string& name) -> ExprCP {
-    auto it = renames_.find(name);
-    if (it != renames_.end()) {
-      return it->second;
-    }
-
-    if (allowCorrelations_ && correlations_ != nullptr) {
-      if (auto it = correlations_->find(name); it != correlations_->end()) {
-        return it->second;
-      }
-    }
-
-    return nullptr;
-  };
-
   while (context) {
     const auto& name = field->name();
 
@@ -505,21 +518,12 @@ void ToGraph::getExprForField(
       return;
     }
 
-    // This is a band-aid. Revisit the logic in this method.
-    //
-    // The problem with current logic is that translated expression may belong
-    // to a derived table that's not directly referenced from the currentDt_.
-    // When this happens, the downstream processing breaks because the core
-    // invariant is broken: all expressions in a dericed table must reference
-    // relations from DerivedTable::tables.
-    {
-      if (auto expr = lookupName(name)) {
-        if (expr != nullptr && expr->is(PlanType::kColumnExpr)) {
-          resultColumn = expr->as<Column>();
-          resultExpr = nullptr;
-          return;
-        }
-      }
+    // TODO band-aid
+    if (auto column = tryGetResolvedColumn(
+            name, renames_, allowCorrelations_, correlations_)) {
+      resultColumn = column;
+      resultExpr = nullptr;
+      return;
     }
 
     const auto& sources = context->inputs();
@@ -590,20 +594,26 @@ std::optional<ExprCP> ToGraph::translateSubfield(const lp::ExprPtr& inputExpr) {
           column = it->second;
           expr = nullptr;
         } else {
-          if (source == nullptr) {
-            const auto& name = field->name();
+          // TODO band-aid
+          column = tryGetResolvedColumn(
+              field->name(), renames_, allowCorrelations_, correlations_);
 
-            for (const auto* exprSource : exprSources_) {
-              if (exprSource->outputType()->getChildIdxIfExists(name)) {
-                source = exprSource;
-                break;
+          if (column == nullptr) {
+            if (source == nullptr) {
+              const auto& name = field->name();
+
+              for (const auto* exprSource : exprSources_) {
+                if (exprSource->outputType()->getChildIdxIfExists(name)) {
+                  source = exprSource;
+                  break;
+                }
               }
             }
-          }
-          VELOX_CHECK_NOT_NULL(source);
-          getExprForField(field, expr, column, source);
-          if (expr) {
-            continue;
+            VELOX_CHECK_NOT_NULL(source);
+            getExprForField(field, expr, column, source);
+            if (expr) {
+              continue;
+            }
           }
         }
       }

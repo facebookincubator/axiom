@@ -118,6 +118,7 @@ int main(int argc, char** argv) {
   facebook::axiom::optimizer::test::registerQueryFile("window.sql");
   facebook::axiom::optimizer::test::registerQueryFile("set.sql");
   facebook::axiom::optimizer::test::registerQueryFile("limit.sql");
+  facebook::axiom::optimizer::test::registerQueryFile("nested_aggregation.sql");
 
   return RUN_ALL_TESTS();
 }
