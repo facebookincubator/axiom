@@ -36,17 +36,20 @@ class SqlTest : public SqlTestBase {
     createTable(
         "t",
         {makeRowVector(
-             {"a", "b"},
+             {"a", "b", "c"},
              {makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
-              makeFlatVector<int64_t>({10, 20, 30, 40, 50})}),
+              makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+              makeFlatVector<double>({1.5, 2.5, 3.5, 4.5, 5.5})}),
          makeRowVector(
-             {"a", "b"},
+             {"a", "b", "c"},
              {makeFlatVector<int64_t>({3, 1, 2, 3, 1}),
-              makeFlatVector<int64_t>({60, 70, 80, 90, 100})}),
+              makeFlatVector<int64_t>({60, 70, 80, 90, 100}),
+              makeFlatVector<double>({6.5, 7.5, 8.5, 9.5, 10.5})}),
          makeRowVector(
-             {"a", "b"},
+             {"a", "b", "c"},
              {makeFlatVector<int64_t>({2, 3, 1, 2, 3}),
-              makeFlatVector<int64_t>({110, 120, 130, 140, 150})})});
+              makeFlatVector<int64_t>({110, 120, 130, 140, 150}),
+              makeFlatVector<double>({11.5, 12.5, 13.5, 14.5, 15.5})})});
   }
 
   void TestBody() override {
@@ -118,6 +121,7 @@ int main(int argc, char** argv) {
   facebook::axiom::optimizer::test::registerQueryFile("window.sql");
   facebook::axiom::optimizer::test::registerQueryFile("set.sql");
   facebook::axiom::optimizer::test::registerQueryFile("limit.sql");
+  facebook::axiom::optimizer::test::registerQueryFile("aggregation.sql");
 
   return RUN_ALL_TESTS();
 }
