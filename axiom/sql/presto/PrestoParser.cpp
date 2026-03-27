@@ -699,7 +699,7 @@ class RelationPlanner : public AstVisitor {
         std::vector<std::string> columnNames;
         if (allColumns->prefix() != nullptr) {
           // SELECT t.*
-          const auto& prefix = allColumns->prefix()->suffix();
+          const auto prefix = canonicalizeName(allColumns->prefix()->suffix());
           columnNames = builder_->findOrAssignOutputNames(
               /*includeHiddenColumns=*/false, prefix);
 
