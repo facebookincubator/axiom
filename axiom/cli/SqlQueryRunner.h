@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include <folly/executors/IOThreadPoolExecutor.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include "axiom/optimizer/DerivedTable.h"
 #include "axiom/optimizer/ToVelox.h"
 #include "axiom/runner/LocalRunner.h"
@@ -223,7 +223,6 @@ class SqlQueryRunner {
   std::shared_ptr<facebook::velox::memory::MemoryPool> optimizerPool_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> executorPool_;
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
-  std::shared_ptr<folly::IOThreadPoolExecutor> spillExecutor_;
   std::unordered_map<std::string, std::string> config_;
   std::string defaultConnectorId_;
   std::string defaultSchema_;

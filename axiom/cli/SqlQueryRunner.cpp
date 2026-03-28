@@ -115,7 +115,6 @@ void SqlQueryRunner::initialize(
   auto [defaultConnectorId, defaultSchema] = initializeConnectors();
   defaultConnectorId_ = std::move(defaultConnectorId);
   defaultSchema_ = std::move(defaultSchema);
-  spillExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(4);
 
   // Set default session properties to match Presto behavior.
   config_[velox::core::QueryConfig::kSessionTimezone] = getLocalTimezone();
@@ -497,7 +496,7 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
       {},
       velox::cache::AsyncDataCache::getInstance(),
       rootPool_->shared_from_this(),
-      spillExecutor_.get(),
+      nullptr,
       queryId,
       options.tokenProvider);
 }

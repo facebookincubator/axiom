@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <iostream>
 #include <optional>
+#include <set>
 #include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/cli/ResultPrinter.h"
 #include "axiom/cli/StdinReader.h"
