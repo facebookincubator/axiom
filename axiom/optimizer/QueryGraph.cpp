@@ -426,6 +426,13 @@ void JoinEdge::addEquality(ExprCP left, ExprCP right, bool update) {
   }
 }
 
+void JoinEdge::removeKeyAt(size_t index) {
+  VELOX_DCHECK_LT(index, leftKeys_.size());
+  VELOX_DCHECK_LT(index, rightKeys_.size());
+  leftKeys_.erase(leftKeys_.begin() + index);
+  rightKeys_.erase(rightKeys_.begin() + index);
+}
+
 JoinEdge* JoinEdge::reverse(JoinEdge& join) {
   VELOX_CHECK(join.isInner(), "JoinEdge::reverse only supports inner joins");
 
@@ -634,6 +641,15 @@ void BaseTable::addFilter(ExprCP expr) {
   if (columns.size() == 1) {
     columnFilters.push_back(expr);
   } else {
+    // The same filter can arrive from both explicit SQL (ON/WHERE clause) and
+    // equivalence-class inference. Duplicates compound selectivity estimates.
+    // TODO: Replace toString() with a content-based hash.
+    auto filterString = expr->toString();
+    for (auto* existing : filter) {
+      if (existing->toString() == filterString) {
+        return;
+      }
+    }
     filter.push_back(expr);
   }
 
