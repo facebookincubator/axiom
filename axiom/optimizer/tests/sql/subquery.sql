@@ -27,3 +27,8 @@ WITH "UpperCase" AS (SELECT * FROM (VALUES (1, 2)) t(x, y)) SELECT "uPPERcASE".*
 -- Case-insensitive alias with wildcard in JOIN (via processAliasedRelation).
 -- duckdb: SELECT T.* FROM (VALUES (1)) t(a) JOIN (VALUES (2)) u(b) ON true
 SELECT T.* FROM (VALUES (1)) t(a) JOIN (VALUES (2)) u(b) ON true
+----
+-- Correlated IN subquery in SELECT with non-equality filter. Produces a
+-- null-aware semi-project join with extra filter; the optimizer must not flip
+-- this to a right semi-project join that is unsupported in Velox.
+SELECT CASE WHEN a.x IN (SELECT t.a FROM t WHERE t.b < a.y) THEN 'p' ELSE 'f' END FROM ( VALUES ( 1, 100 ) ) a ( x, y )
