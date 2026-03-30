@@ -1738,6 +1738,8 @@ void UnionAll::initConstraints() {
     // Reads constraint for the i-th column of the given input operator from
     // the operator's constraint map.
     auto inputConstraint = [&](size_t inputIndex) -> const Value& {
+      VELOX_CHECK_LT(inputIndex, inputs.size());
+      VELOX_CHECK_LT(i, inputs[inputIndex]->columns().size());
       const auto* column = inputs[inputIndex]->columns()[i];
       auto it = inputs[inputIndex]->constraints().find(column->id());
       VELOX_CHECK(

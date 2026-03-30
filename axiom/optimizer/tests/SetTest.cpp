@@ -18,6 +18,7 @@
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::axiom::optimizer {
@@ -954,6 +955,20 @@ TEST_F(SetTest, unionDistinctWithUnnestMultipleReferences) {
                      .nestedLoopJoin(matchUnion().build())
                      .build();
   AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
+TEST_F(SetTest, unionAllColumnCountMismatchCrash) {
+  createEmptyTable("t", ROW("a", BIGINT()));
+
+  auto sql =
+      "SELECT COUNT(*) = 0 as is_empty FROM ("
+      "  SELECT DISTINCT a FROM t WHERE a > 0"
+      "  UNION ALL"
+      "  SELECT 1 AS a"
+      ")";
+
+  auto logicalPlan = parseSelect(sql);
+  VELOX_ASSERT_THROW(toSingleNodePlan(logicalPlan), "");
 }
 
 } // namespace
