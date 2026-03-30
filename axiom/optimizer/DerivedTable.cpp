@@ -129,6 +129,93 @@ void addImpliedSemiEdge(
     joins.push_back(implied);
   }
 }
+
+// Pushes equality filters for columns in the same equivalence class that
+// belong to the same table. For each table with multiple columns in the class,
+// picks the first column as an anchor and produces n-1 equalities.
+void pushFiltersForEquivalenceClass(
+    const Equivalence& equivalence,
+    EdgeSet& edges,
+    Name equalityFunctionName) {
+  folly::F14FastSet<PlanObjectCP> seenTables;
+  for (size_t j = 0; j < equivalence.columns.size(); ++j) {
+    auto* anchor = equivalence.columns[j];
+    auto* table = anchor->singleTable();
+    if (!table || !table->is(PlanType::kTableNode)) {
+      continue;
+    }
+    if (!seenTables.insert(table).second) {
+      continue;
+    }
+    for (size_t k = j + 1; k < equivalence.columns.size(); ++k) {
+      if (equivalence.columns[k]->singleTable() != table) {
+        continue;
+      }
+      if (!addEdge(edges, anchor, equivalence.columns[k])) {
+        continue;
+      }
+      auto* filter = make<Call>(
+          equalityFunctionName,
+          Value(velox::BOOLEAN().get(), 1),
+          ExprVector{anchor, equivalence.columns[k]},
+          FunctionSet());
+      const_cast<BaseTable*>(table->as<BaseTable>())->addFilter(filter);
+    }
+  }
+}
+
+// Infers same-table equality filters from equivalence classes of inner join
+// keys. For example, given t.a = u.x AND t.b = u.x, the equivalence class
+// {t.a, t.b, u.x} implies t.a = t.b, which is pushed as a filter on t.
+// Uses the first column per table as an anchor, producing a minimal set of
+// n-1 equalities for n same-table columns.
+void pushSameTableEqualities(JoinEdgeVector& joins) {
+  auto equalityFunctionName = queryCtx()->functionNames().equality;
+  EdgeSet edges;
+  for (auto& join : joins) {
+    if (!join->isInner()) {
+      // TODO: Same-table equalities on the non-preserved side of an outer
+      // join are still valid — those rows must satisfy the ON clause to
+      // appear. E.g. for t LEFT JOIN u ON u.x = t.a AND u.y = t.a, we
+      // could push u.x = u.y to u's scan.
+      continue;
+    }
+    for (size_t i = 0; i < join->numKeys(); ++i) {
+      for (auto* key : {join->leftKeys()[i], join->rightKeys()[i]}) {
+        if (!key->isColumn()) {
+          continue;
+        }
+        auto* equivalence = key->as<Column>()->equivalence();
+        if (!equivalence) {
+          continue;
+        }
+        pushFiltersForEquivalenceClass(
+            *equivalence, edges, equalityFunctionName);
+      }
+    }
+  }
+}
+
+// Removes redundant join keys from inner joins. A key pair (left_i, right_i)
+// is redundant when a kept pair (left_j, right_j) with j < i has
+// left_j sameOrEqual left_i and right_j sameOrEqual right_i.
+void removeRedundantJoinKeys(JoinEdgeVector& joins) {
+  for (auto& join : joins) {
+    if (!join->isInner()) {
+      continue;
+    }
+    for (size_t i = join->numKeys(); i-- > 0;) {
+      for (size_t j = 0; j < i; ++j) {
+        if (join->leftKeys()[j]->sameOrEqual(*join->leftKeys()[i]) &&
+            join->rightKeys()[j]->sameOrEqual(*join->rightKeys()[i])) {
+          join->removeKeyAt(i);
+          break;
+        }
+      }
+    }
+  }
+}
+
 } // namespace
 
 void DerivedTable::checkSetOpConsistency() const {
@@ -535,6 +622,9 @@ void DerivedTable::addImpliedJoins() {
       addImpliedSemiEdge(join, tableSet, edges, joins);
     }
   }
+
+  pushSameTableEqualities(joins);
+  removeRedundantJoinKeys(joins);
 }
 
 namespace {

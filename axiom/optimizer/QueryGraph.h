@@ -750,6 +750,9 @@ class JoinEdge {
 
   void addEquality(ExprCP left, ExprCP right, bool update = false);
 
+  /// Removes the key pair at position 'index' from leftKeys and rightKeys.
+  void removeKeyAt(size_t index);
+
   /// Creates a reversed copy of an inner join with left and right tables
   /// swapped and left-to-right and right-to-left fanouts swapped.
   /// @param join The join edge to reverse. Must be an inner join.

@@ -50,6 +50,15 @@ class SqlTest : public SqlTestBase {
              {makeFlatVector<int64_t>({2, 3, 1, 2, 3}),
               makeFlatVector<int64_t>({110, 120, 130, 140, 150}),
               makeFlatVector<double>({11.5, 12.5, 13.5, 14.5, 15.5})})});
+
+    // Table where some rows have a = b, for testing same-table equality
+    // inference from equivalence classes.
+    createTable(
+        "s",
+        {makeRowVector(
+            {"a", "b"},
+            {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+             makeFlatVector<int64_t>({1, 20, 3, 40, 5})})});
   }
 
   void TestBody() override {

@@ -1145,7 +1145,8 @@ TEST_F(JoinTest, impliedJoins) {
 
   // Same-table columns in one equivalence class: t.a = u.x AND t.a = t.b puts
   // t.a and t.b (both from t) in the same class. addImpliedJoins must skip
-  // same-table pairs. t.a = t.b becomes a filter on t.
+  // same-table pairs. t.a = t.b becomes a filter on t, and the redundant
+  // implied key (t.b, u.x) is removed.
   {
     auto query = "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.a = t.b";
     SCOPED_TRACE(query);
@@ -1161,16 +1162,81 @@ TEST_F(JoinTest, impliedJoins) {
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
-  // Same as above, but the same-table equivalence arises indirectly through
-  // transitivity: t.a = u.x AND t.b = u.x implies t.a = t.b. The optimizer
-  // keeps both as join keys.
-  // TODO(https://github.com/facebookincubator/axiom/issues/909): Optimal plan
-  // would filter t on a = b, then join on a single key.
+  // Deduplication: ON t.a = u.x AND t.b = u.x creates equivalence class
+  // {t.a, t.b, u.x}. pushSameTableEqualities infers a = b, but
+  // distributeConjuncts already pushed the same filter from WHERE t.a = t.b.
+  // addFilter deduplicates via toString().
+  {
+    auto query =
+        "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.b = u.x WHERE t.a = t.b";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("u")
+            .hashJoin(
+                matchScan("t").filter("a = b").build(), core::JoinType::kInner)
+            .aggregation()
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Resolves https://github.com/facebookincubator/axiom/issues/909.
   {
     auto query = "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.b = u.x";
     SCOPED_TRACE(query);
 
     auto matcher = matchScan("t")
+                       .filter("a = b")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+                       .aggregation()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Separate equivalence classes: no same-table filter.
+  {
+    auto query = "SELECT count(*) FROM t JOIN u ON t.a = u.x AND t.b = u.y";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+                       .aggregation()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // LEFT JOIN: no same-table filter on preserved side; both keys preserved.
+  {
+    auto query =
+        "SELECT count(*) FROM t LEFT JOIN u ON t.a = u.x AND t.b = u.x";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kLeft)
+                       .aggregation()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+
+  // Three tables with same-table filter on t.
+  {
+    auto query =
+        "SELECT count(*) FROM t "
+        "JOIN u ON t.a = u.x AND t.b = u.x "
+        "JOIN v ON u.x = v.n";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .filter("a = b")
+                       .hashJoin(matchScan("v").build(), core::JoinType::kInner)
                        .hashJoin(matchScan("u").build(), core::JoinType::kInner)
                        .aggregation()
                        .build();
@@ -1216,6 +1282,86 @@ TEST_F(JoinTest, impliedJoins) {
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
+}
+
+// Three or more columns from the same table in one equivalence class.
+TEST_F(JoinTest, impliedSameTableEquality) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+
+  // Three same-table columns produce a = b and a = c filters.
+  {
+    auto query =
+        "SELECT count(*) FROM t "
+        "JOIN u ON t.a = u.x AND t.b = u.x AND t.c = u.x";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .filter("a = b AND a = c")
+                       .hashJoin(matchScan("u").build(), core::JoinType::kInner)
+                       .aggregation()
+                       .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+// Equivalence class with same-table columns on both sides of the join.
+TEST_F(JoinTest, impliedSameTableEqualityBothSides) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+
+  // t.a = u.x AND t.b = u.x AND t.a = u.y creates equivalence class
+  // {t.a, t.b, u.x, u.y}. Pushes a = b on t and x = y on u.
+  {
+    auto query =
+        "SELECT count(*) FROM t "
+        "JOIN u ON t.a = u.x AND t.b = u.x AND t.a = u.y";
+    SCOPED_TRACE(query);
+
+    auto matcher =
+        matchScan("t")
+            .filter("a = b")
+            .hashJoin(
+                matchScan("u").filter("x = y").build(), core::JoinType::kInner)
+            .aggregation()
+            .build();
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN(plan, matcher);
+  }
+}
+
+// Outer joins do not infer same-table equalities (even on the non-preserved
+// side — see TODO in pushSameTableEqualities).
+TEST_F(JoinTest, impliedSameTableEqualityOuterJoin) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
+  testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
+      ->setStats(1'000, {{"x", {.numDistinct = 10}}});
+
+  GTEST_SKIP() << "TODO: Push same-table equalities on the non-preserved "
+                  "side of an outer join";
+
+  // u.x = t.a AND u.y = t.a implies u.x = u.y, which can be pushed
+  // to u's scan since unmatched u rows never appear in the result.
+  auto query = "SELECT count(*) FROM t LEFT JOIN u ON u.x = t.a AND u.y = t.a";
+  SCOPED_TRACE(query);
+
+  auto matcher =
+      matchScan("t")
+          .hashJoin(
+              matchScan("u").filter("x = y").build(), core::JoinType::kLeft)
+          .aggregation()
+          .build();
+
+  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+  AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
 // LEFT JOIN with no equalities when the DT has 3+ tables. The comma join
