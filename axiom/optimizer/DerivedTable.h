@@ -409,13 +409,13 @@ struct DerivedTable : public PlanObject {
   void pushExistencesIntoSubquery(const DerivedTable& subquery);
 
   // Checks whether all tables in 'this' can be pushed into 'subquery'. Returns
-  // false if pushdown is blocked (LIMIT, ORDER BY, multi-key join, aggregate
-  // key). On success, populates 'validJoins' and 'innerKeys' with the
-  // validated joins and their translated inner keys.
+  // false if pushdown is blocked (LIMIT, ORDER BY, aggregate key). On success,
+  // populates 'validJoins' and 'innerKeyGroups' with the validated joins and
+  // their translated inner keys (one ExprVector per join).
   bool validatePushdown(
       const DerivedTable& subquery,
       JoinEdgeVector& validJoins,
-      ExprVector& innerKeys);
+      std::vector<ExprVector>& innerKeyGroups);
 
   // Removes 'table' and all tables in 'chain' from 'tables' and 'tableSet'.
   void removeTables(PlanObjectCP table, const std::vector<PlanObjectCP>& chain);

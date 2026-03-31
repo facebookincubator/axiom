@@ -526,6 +526,55 @@ TEST_F(CardinalityEstimationTest, innerJoinUniqueRight) {
       });
 }
 
+// Verifies that multi-key existence pushdown uses the outer join's fanout
+// for the inner semijoin. The DerivedTable has a uniqueness constraint on
+// grouping keys while the inner BaseTable does not. By using the outer
+// join's fanout we reflect that only some output rows have matching keys.
+TEST_F(CardinalityEstimationTest, multiKeyExistencePushdown) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()))
+      ->setStats(
+          100,
+          {
+              {"a", {.numDistinct = 100}},
+              {"b", {.numDistinct = 100}},
+              {"c", {.numDistinct = 100}},
+          });
+
+  testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()))
+      ->setStats(
+          10'000,
+          {
+              {"x", {.numDistinct = 10'000}},
+              {"y", {.numDistinct = 10'000}},
+              {"z", {.numDistinct = 10'000}},
+          });
+
+  verifyPlan(
+      "SELECT t.a, t.b, dt.cnt FROM t, "
+      "(SELECT x, y, count(*) as cnt FROM u GROUP BY x, y) dt "
+      "WHERE t.a = dt.x AND t.b = dt.y AND t.c < 100",
+      [](const Plan& plan) {
+        // Plan: Project → Join(INNER) → Agg → Join(LEFT_SEMI_FILTER).
+        // We want the semi-join, so we extract the inner join and
+        // search down the left side.
+        const auto& inner = findOp<Join>(*plan.op, RelType::kJoin);
+        const RelationOp* node = inner.input().get();
+        while (node && !node->is(RelType::kJoin)) {
+          node = node->input().get();
+        }
+        ASSERT_NE(node, nullptr);
+        const auto& semi = *node->as<Join>();
+        ASSERT_EQ(semi.joinType, velox::core::JoinType::kLeftSemiFilter);
+
+        // The outer join's rlFanout = |t| / |DT| = 100 / 10'000 = 0.01.
+        // setFanouts(0.01, 1) gives lrFanout = 0.01, so the semijoin
+        // reduces u from 10'000 to ~100 rows. With guessFanout(), the
+        // multi-key fanout on raw base tables would clamp to 1, producing
+        // lrFanout ≈ 1 and no reduction (10'000 rows).
+        EXPECT_LT(semi.resultCardinality(), 200);
+      });
+}
+
 // Verifies that left join preserves left-side row count and left-side
 // columns have zero null fraction.
 TEST_F(CardinalityEstimationTest, leftJoin) {

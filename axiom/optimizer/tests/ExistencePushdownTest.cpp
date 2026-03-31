@@ -488,8 +488,6 @@ TEST_F(ExistencePushdownTest, distinctSubquery) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, distributedMatcher);
 }
 
-// --- No rows: pushdown should not fire ---
-
 // Row 2.
 TEST_F(ExistencePushdownTest, multiKeyJoin) {
   auto logicalPlan = parseSelect(
@@ -500,12 +498,14 @@ TEST_F(ExistencePushdownTest, multiKeyJoin) {
       "WHERE t.c < 100",
       kTestConnectorId);
 
-  // Single-node plan.
   auto plan = toSingleNodePlan(logicalPlan);
 
-  // No pushdown: multi-key join not yet supported.
+  // Multi-key join existence is pushed down into plan.
   auto matcher =
       matchScan("u")
+          .hashJoin(
+              matchScan("t").filter("c < 100").build(),
+              core::JoinType::kLeftSemiFilter)
           .singleAggregation({"x", "y"}, {"count(*) as cnt"})
           .hashJoin(
               matchScan("t").filter("c < 100").build(), core::JoinType::kInner)
@@ -518,6 +518,9 @@ TEST_F(ExistencePushdownTest, multiKeyJoin) {
 
   auto distributedMatcher =
       matchScan("u")
+          .hashJoin(
+              matchScan("t").filter("c < 100").broadcast().build(),
+              core::JoinType::kLeftSemiFilter)
           .shuffle({"x", "y"})
           .localPartition({"x", "y"})
           .singleAggregation({"x", "y"}, {"count(*) as cnt"})

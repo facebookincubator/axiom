@@ -129,6 +129,42 @@ void addImpliedSemiEdge(
     joins.push_back(implied);
   }
 }
+
+// Returns the post-filter cardinality for any table type. For BaseTable,
+// this is filteredCardinality (reduced by pushed-down WHERE/HAVING). For
+// DerivedTable, cardinality is already post-filter/post-join.
+float filteredTableCardinality(PlanObjectCP table) {
+  if (table->is(PlanType::kTableNode)) {
+    return table->as<BaseTable>()->filteredCardinality;
+  }
+  if (table->is(PlanType::kValuesTableNode)) {
+    return table->as<ValuesTable>()->cardinality();
+  }
+  if (table->is(PlanType::kUnnestTableNode)) {
+    return table->as<UnnestTable>()->cardinality();
+  }
+  VELOX_CHECK(table->is(PlanType::kDerivedTableNode));
+  return table->as<DerivedTable>()->cardinality;
+}
+
+// Estimates the number of distinct key combinations in 'table' after
+// filtering. For a single key, returns min(NDV, filteredCardinality)
+// directly (no dampening needed). For multiple keys, uses the saturating
+// product formula (max * P / (max + P)) to dampen the independence
+// assumption for correlated keys. Consistent with maxGroups().
+float compositeNdv(PlanObjectCP table, const ExprVector& keys) {
+  double max = filteredTableCardinality(table);
+  if (keys.size() == 1) {
+    return static_cast<float>(
+        std::min(max, static_cast<double>(keys[0]->value().cardinality)));
+  }
+  double product = 1.0;
+  for (const auto* key : keys) {
+    product *= key->value().cardinality;
+  }
+  return static_cast<float>(max * product / (max + product));
+}
+
 } // namespace
 
 void DerivedTable::checkSetOpConsistency() const {
@@ -1190,9 +1226,9 @@ void DerivedTable::removeTables(
 bool DerivedTable::validatePushdown(
     const DerivedTable& subquery,
     JoinEdgeVector& validJoins,
-    ExprVector& innerKeys) {
+    std::vector<ExprVector>& innerKeyGroups) {
   validJoins.clear();
-  innerKeys.clear();
+  innerKeyGroups.clear();
 
   if (subquery.hasLimit() || subquery.hasOrderBy()) {
     return false;
@@ -1254,39 +1290,49 @@ bool DerivedTable::validatePushdown(
     }
 
     auto side = join->sideOf(&subquery);
-    if (side.keys.size() > 1 || !join->filter().empty()) {
+    if (!join->filter().empty()) {
       return false;
     }
 
-    // Resolve the join key through column mappings to get the inner
-    // expression.
-    auto key = replaceInputs(side.keys[0], columns, exprs);
-    auto innerKey = replaceInputs(key, outer, inner);
-    VELOX_DCHECK(innerKey);
+    // Resolve each join key through column mappings to get the inner
+    // expression. All keys must be valid pushdown columns.
+    ExprVector resolvedKeys;
+    PlanObjectCP resolvedTable{nullptr};
+    for (size_t keyIdx = 0; keyIdx < side.keys.size(); ++keyIdx) {
+      auto key = replaceInputs(side.keys[keyIdx], columns, exprs);
+      auto innerKey = replaceInputs(key, outer, inner);
+      VELOX_DCHECK(innerKey);
 
-    // Verify the key is a valid pushdown column.
-    if (innerKey->is(PlanType::kColumnExpr) &&
-        innerKey->as<Column>()->relation() == &subquery) {
-      if (!validPushdownColumns.contains(innerKey)) {
+      if (innerKey->is(PlanType::kColumnExpr) &&
+          innerKey->as<Column>()->relation() == &subquery) {
+        if (!validPushdownColumns.contains(innerKey)) {
+          return false;
+        }
+      }
+
+      auto innerTable = innerKey->singleTable();
+      if (!innerTable) {
         return false;
       }
-    }
 
-    auto innerTable = innerKey->singleTable();
-    if (!innerTable) {
-      return false;
-    }
+      // Unnest tables have special cross-join semantics — to support
+      // pushdown here, we would need to wrap the base table and its
+      // unnest into a new DerivedTable and create the existence
+      // semijoin on that DT. Not yet implemented.
+      if (innerTable->is(PlanType::kUnnestTableNode)) {
+        return false;
+      }
 
-    // Skip if the join key resolves to an unnest table column. To support
-    // this, we would need to wrap the base table and its unnest into a new
-    // DerivedTable and create the existence semijoin on that DT. Not yet
-    // implemented.
-    if (innerTable->is(PlanType::kUnnestTableNode)) {
-      return false;
+      // All keys must resolve to the same inner table.
+      if (resolvedTable && resolvedTable != innerTable) {
+        return false;
+      }
+      resolvedTable = innerTable;
+      resolvedKeys.push_back(innerKey);
     }
 
     validJoins.push_back(join);
-    innerKeys.push_back(innerKey);
+    innerKeyGroups.push_back(std::move(resolvedKeys));
   }
 
   return true;
@@ -1294,8 +1340,8 @@ bool DerivedTable::validatePushdown(
 
 void DerivedTable::pushExistencesIntoSubquery(const DerivedTable& subquery) {
   JoinEdgeVector validJoins;
-  ExprVector innerKeys;
-  if (!validatePushdown(subquery, validJoins, innerKeys)) {
+  std::vector<ExprVector> innerKeyGroups;
+  if (!validatePushdown(subquery, validJoins, innerKeyGroups)) {
     return;
   }
 
@@ -1303,27 +1349,29 @@ void DerivedTable::pushExistencesIntoSubquery(const DerivedTable& subquery) {
   auto* newFirst = make<DerivedTable>(subquery);
 
   auto* optimization = queryCtx()->optimization();
-  const int32_t previousNumJoins = newFirst->joins.size();
-  for (auto i = 0; i < validJoins.size(); ++i) {
+  const size_t previousNumJoins = newFirst->joins.size();
+  for (size_t i = 0; i < validJoins.size(); ++i) {
     auto join = validJoins[i];
-    auto innerKey = innerKeys[i];
+    const auto& innerKeys = innerKeyGroups[i];
 
     auto otherSide = join->sideOf(&subquery, true);
     auto other = otherSide.table;
-    auto otherKey = otherSide.keys[0];
-
+    const auto& otherKeys = otherSide.keys;
     PlanObjectSet visited;
     visited.add(&subquery);
     visited.add(other);
     std::vector<PlanObjectCP> path;
     joinChain(other, joins, visited, path);
 
-    auto innerTable = innerKey->singleTable();
+    auto innerTable = innerKeys[0]->singleTable();
     VELOX_DCHECK_NOT_NULL(innerTable);
 
-    auto makeExistsJoin = [&](PlanObjectCP table, ExprCP key) {
+    auto makeExistsJoin = [&](PlanObjectCP table,
+                              const ExprVector& existsOtherKeys) {
       auto* existsJoin = JoinEdge::makeExists(innerTable, table);
-      existsJoin->addEquality(innerKey, key);
+      for (size_t keyIdx = 0; keyIdx < innerKeys.size(); ++keyIdx) {
+        existsJoin->addEquality(innerKeys[keyIdx], existsOtherKeys[keyIdx]);
+      }
       return existsJoin;
     };
 
@@ -1334,7 +1382,7 @@ void DerivedTable::pushExistencesIntoSubquery(const DerivedTable& subquery) {
       }
 
       newFirst->addTable(other);
-      newFirst->joins.push_back(makeExistsJoin(other, otherKey));
+      newFirst->joins.push_back(makeExistsJoin(other, otherKeys));
     } else {
       auto* chainDt = make<DerivedTable>();
       chainDt->cname = toName(optimization->newCName("rdt"));
@@ -1342,24 +1390,33 @@ void DerivedTable::pushExistencesIntoSubquery(const DerivedTable& subquery) {
       auto chainSet = PlanObjectSet::fromObjects(path);
       chainSet.add(other);
 
-      auto column = make<Column>(
-          optimization->newCName("ec"), chainDt, otherKey->value());
-      chainDt->columns.push_back(column);
-      chainDt->exprs.push_back(otherKey);
+      ExprVector chainColumns;
+      for (size_t keyIdx = 0; keyIdx < otherKeys.size(); ++keyIdx) {
+        auto column = make<Column>(
+            optimization->newCName("ec"), chainDt, otherKeys[keyIdx]->value());
+        chainDt->columns.push_back(column);
+        chainDt->exprs.push_back(otherKeys[keyIdx]);
+        chainColumns.push_back(column);
+      }
 
       chainDt->import(*this, chainSet, other);
       chainDt->outputColumns = chainDt->columns;
       chainDt->initializePlans();
 
       newFirst->addTable(chainDt);
-      newFirst->joins.push_back(makeExistsJoin(chainDt, column));
+      newFirst->joins.push_back(makeExistsJoin(chainDt, chainColumns));
     }
 
     removeTables(other, path);
   }
 
-  for (auto i = previousNumJoins; i < newFirst->joins.size(); ++i) {
-    newFirst->joins[i]->guessFanout();
+  for (size_t i = previousNumJoins; i < newFirst->joins.size(); ++i) {
+    auto* join = newFirst->joins[i];
+    auto pushedNdv = compositeNdv(join->rightTable(), join->rightKeys());
+    auto baseNdv =
+        std::max(1.0f, compositeNdv(join->leftTable(), join->leftKeys()));
+    auto selectivity = std::min(1.0f, pushedNdv / baseNdv);
+    join->setFanouts(selectivity, 1);
   }
 
   VELOX_CHECK_EQ(tables.size(), 1);

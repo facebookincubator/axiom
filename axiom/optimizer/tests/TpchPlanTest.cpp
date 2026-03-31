@@ -677,9 +677,48 @@ TEST_F(TpchPlanTest, q19) {
 TEST_F(TpchPlanTest, q20) {
   checkTpchSql(20);
 
-  // TODO Verify the plan.
+  // The lineitem aggregation (sum of quantity per part+supplier) is joined to
+  // partsupp via a multi-key existence semijoin pushed into the aggregation DT.
+  // The part filter (name LIKE 'forest%') further reduces partsupp rows.
+  //
+  // ((agg(lineitem)
+  //  RIGHT
+  //  (part RIGHT SEMI (FILTER) (partsupp LEFT SEMI (FILTER) (supplier INNER
+  //  nation)))) RIGHT SEMI (FILTER) (supplier INNER nation))
+  auto matcher =
+      matchHiveScan("lineitem")
+          .aggregation()
+          .project()
+          .hashJoin(
+              matchHiveScan("part")
+                  .hashJoin(
+                      matchHiveScan("partsupp")
+                          .hashJoin(
+                              matchHiveScan("supplier")
+                                  .hashJoin(
+                                      matchHiveScan("nation").build(),
+                                      core::JoinType::kInner)
+                                  .project()
+                                  .build(),
+                              core::JoinType::kLeftSemiFilter)
+                          .build(),
+                      core::JoinType::kRightSemiFilter)
+                  .build(),
+              core::JoinType::kRight)
+          .filter()
+          .project()
+          .hashJoin(
+              matchHiveScan("supplier")
+                  .hashJoin(
+                      matchHiveScan("nation").build(), core::JoinType::kInner)
+                  .build(),
+              core::JoinType::kRightSemiFilter)
+          .orderBy()
+          .build();
 
-  ASSERT_NO_THROW(planTpch(20));
+  auto plan = planTpch(20);
+  AXIOM_ASSERT_PLAN(plan, matcher);
+
   ASSERT_NO_THROW(planVelox(parseTpchSql(20)));
 }
 

@@ -200,7 +200,7 @@ optimization but not yet implemented; "N/A" means pushdown is always invalid
 |---|--------|-----------|------|-------|
 | | **Join key** | | | |
 | 1 | Single equality key on grouping key | Yes | innerJoinGroupBy | Core case |
-| 2 | Multi-key join (each key is a grouping key) | No | multiKeyJoin | Could push each key independently |
+| 2 | Multi-key join (each key is a grouping key) | Yes | multiKeyJoin | Each key validated; all must resolve to same inner table |
 | 3 | Equality key + non-equality filter | Yes | joinWithFilter | Equality pushed, filter stays outside |
 | 4 | Join key maps to aggregate expression | N/A | aggregateKey | Can't push below aggregation boundary |
 | 5 | Join key maps to unnest table column | N/A | unnestKey | Unnest has special cross-join semantics |
@@ -302,13 +302,14 @@ valid set is the intersection (the key must be safe for both operations).
 When a window function has no PARTITION BY, it contributes no valid columns.
 
 *Per-table checks* — each table must satisfy:
-- The join has a single equality key (multi-key joins are not yet supported).
-- The translated join key resolves to a valid pushdown column. The key is
-  translated through two levels of `replaceInputs`: first through the outer
-  DT's projection (`this->columns/exprs`), then through the subquery's
-  projection (`subquery.columns/exprs`).
-- The translated join key does not resolve to an unnest table column (unnest
-  tables have special cross-join semantics).
+- Each equality key in the join must translate to a valid pushdown column. The
+  key is translated through two levels of `replaceInputs`: first through the
+  outer DT's projection (`this->columns/exprs`), then through the subquery's
+  projection (`subquery.columns/exprs`). Multi-key joins are supported when
+  all keys map to grouping keys (or window partition keys).
+- All translated join keys must resolve to the same inner table.
+- No translated join key resolves to an unnest table column (unnest tables
+  have special cross-join semantics).
 
 Note: non-equality filters do not block pushdown. The optimizer separates
 equality and non-equality conditions before this code runs, so `join->filter()`
@@ -370,14 +371,6 @@ TODO: Add e2e tests via `SqlTest.cpp` that run queries with DuckDB comparison
 to verify correctness of results (not just plan structure).
 
 ## Limitations
-
-### No multi-key join pushdown
-
-When the join between the outer table and the subquery has multiple equality
-keys (e.g., `ON t.a = dt.x AND t.b = dt.y`), the existence is not pushed even
-if all keys map to grouping keys. `validatePushdown` requires a single equality
-key per join edge. Supporting multi-key pushdown would require constructing a
-composite existence semijoin with multiple key pairs.
 
 ### No partial pushdown
 
