@@ -27,6 +27,7 @@
 #include "folly/coro/BlockingWait.h"
 #include "folly/coro/Collect.h"
 #include "folly/coro/Task.h"
+#include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
 
@@ -1448,39 +1449,43 @@ ExprVector unionColumnArgs(
   return keys;
 }
 
-// Returns the common distinct arguments if all aggregates are DISTINCT with
-// the same set of arguments and no filters. Throws if any of these conditions
-// is not met.
-ExprVector getSingleDistinctArgs(const AggregateVector& aggregates) {
+// Returns true if all aggregates are DISTINCT with the same set of column
+// arguments and no filters. Literal arguments are ignored since they don't
+// affect deduplication. Populates 'commonDistinctArgs' with the first
+// aggregate's args if all conditions are met. Returns false otherwise.
+bool canMakeDistinctToGroupByPlan(
+    const AggregateVector& aggregates,
+    ExprVector& commonDistinctArgs) {
+  VELOX_CHECK(commonDistinctArgs.empty());
   VELOX_CHECK(!aggregates.empty());
 
   for (const auto* agg : aggregates) {
     // Must be DISTINCT
     if (!agg->isDistinct()) {
-      VELOX_UNSUPPORTED("Mix of DISTINCT and non-DISTINCT aggregates");
+      return false;
     }
     // No filter
     if (agg->condition() != nullptr) {
-      VELOX_UNSUPPORTED("DISTINCT aggregates have filters");
+      return false;
     }
   }
 
   // Check same column args across all aggregates (as a set, using pointer
   // equality since exprs are deduplicated). Literals are ignored since they are
   // constant and do not affect which rows are considered distinct.
-  auto commonArgs = unionColumnArgs({}, aggregates[0]->args());
-  auto commonColumnArgSet = PlanObjectSet::fromObjects(commonArgs);
+  commonDistinctArgs = unionColumnArgs({}, aggregates[0]->args());
+  auto commonColumnArgSet = PlanObjectSet::fromObjects(commonDistinctArgs);
   PlanObjectSet currentColumnArgSet;
   for (size_t i = 1; i < aggregates.size(); ++i) {
     currentColumnArgSet.clear();
     currentColumnArgSet.unionObjects(
         unionColumnArgs({}, aggregates[i]->args()));
     if (currentColumnArgSet != commonColumnArgSet) {
-      VELOX_UNSUPPORTED("DISTINCT aggregates have multiple sets of arguments");
+      return false;
     }
   }
 
-  return commonArgs;
+  return true;
 }
 
 // Returns a copy of aggregates with isDistinct set to false.
@@ -1488,9 +1493,183 @@ AggregateVector dropDistinctFromAggregates(const AggregateVector& aggregates) {
   AggregateVector result;
   result.reserve(aggregates.size());
   for (const auto* aggregate : aggregates) {
-    result.push_back(aggregate->dropDistinct());
+    result.push_back(aggregate->copyWith({.isDistinct = false}));
   }
   return result;
+}
+
+// Transforms aggregations where all aggregates are DISTINCT with the same
+// args into a two-level aggregation: inner level GROUP BY (keys +
+// distinct_args) -> outer level AGG without DISTINCT. If 'hasOrderBy' is
+// true, the outer level AGG always takes the single aggregation step.
+std::pair<RelationOpPtr, PlanCost> makeDistinctToGroupByPlan(
+    RelationOpPtr plan,
+    const ExprVector& groupingKeys,
+    const ExprVector& distinctArgs,
+    const AggregateVector& aggregates,
+    AggregationPlanCP aggPlan,
+    bool hasOrderBy,
+    bool alwaysPlanPartialAggregation) {
+  // Build inner GROUP BY keys: groupingKeys union distinctArgs. We put
+  // groupingKeys at the beginning, followed by distinctArgs not appearing in
+  // groupingKeys.
+  ExprVector innerKeys = groupingKeys;
+  PlanObjectSet innerKeySet = PlanObjectSet::fromObjects(groupingKeys);
+  for (const auto* arg : distinctArgs) {
+    if (!innerKeySet.contains(arg)) {
+      innerKeySet.add(arg);
+      innerKeys.push_back(arg);
+    }
+  }
+
+  // Make output columns of inner aggregation.
+  ColumnVector innerColumns;
+  innerColumns.reserve(innerKeys.size());
+  for (const auto* key : innerKeys) {
+    const auto* keyColumn = key->as<Column>();
+    VELOX_CHECK_NOT_NULL(keyColumn);
+    innerColumns.push_back(keyColumn);
+  }
+
+  PlanCost totalCost;
+  const auto& [innerAgg, innerAggCost] = makeSplitOrSingleAggregationPlan(
+      plan,
+      innerKeys,
+      AggregateVector{},
+      innerColumns,
+      innerColumns,
+      alwaysPlanPartialAggregation);
+  totalCost.add(innerAggCost);
+  plan = innerAgg;
+
+  // Make non-distinct aggregation calls for the outer level.
+  auto nonDistinctAggregates = dropDistinctFromAggregates(aggregates);
+
+  if (hasOrderBy) {
+    const auto& [outerPlan, outerCost] = makeSingleAggregationPlan(
+        plan,
+        groupingKeys,
+        nonDistinctAggregates,
+        aggPlan->intermediateColumns(),
+        aggPlan->columns());
+    plan = outerPlan;
+    totalCost.add(outerCost);
+  } else {
+    const auto& [outerPlan, outerCost] = makeSplitOrSingleAggregationPlan(
+        plan,
+        groupingKeys,
+        nonDistinctAggregates,
+        aggPlan->intermediateColumns(),
+        aggPlan->columns(),
+        alwaysPlanPartialAggregation);
+    plan = outerPlan;
+    totalCost.add(outerCost);
+  }
+
+  return {plan, totalCost};
+}
+
+// Returns true if no distinct aggregate has a filter.
+bool canMakeMarkDistinctPlan(const AggregateVector& aggregates) {
+  return !std::any_of(
+      aggregates.begin(), aggregates.end(), [](const auto* agg) {
+        return agg->isDistinct() && agg->condition() != nullptr;
+      });
+}
+
+// Transforms aggregations with distinct inputs into a MarkDistinct-based plan.
+// For each unique set of distinct arguments (minus grouping keys), inserts a
+// MarkDistinct node that produces a boolean marker column. Distinct aggregates
+// are then rewritten as masked non-distinct aggregates filtered by the marker.
+std::pair<RelationOpPtr, PlanCost> makeDistinctToMarkDistinctPlan(
+    RelationOpPtr plan,
+    const ExprVector& groupingKeys,
+    const AggregateVector& aggregates,
+    AggregationPlanCP aggPlan,
+    bool hasOrderBy,
+    bool alwaysPlanPartialAggregation) {
+  PlanCost totalCost;
+
+  // Map from distinct argument set to marker column.
+  std::unordered_map<PlanObjectSet, ColumnCP> markers;
+
+  // Build MarkDistinct nodes for each unique set of distinct arguments.
+  // Rewrite aggregates by replacing distinct aggregations with masked
+  // non-distinct aggregations.
+  AggregateVector newAggregates;
+  newAggregates.reserve(aggregates.size());
+  auto groupingKeySet = PlanObjectSet::fromObjects(groupingKeys);
+  for (const auto* aggregate : aggregates) {
+    if (!aggregate->isDistinct()) {
+      newAggregates.push_back(aggregate);
+      continue;
+    }
+
+    // For each distinct set of distinct arguments - grouping keys, create a
+    // new MarkDistinct node with a new marker column.
+    auto inputSet =
+        PlanObjectSet::fromObjects(unionColumnArgs({}, aggregate->args()));
+    inputSet.except(groupingKeySet);
+    if (inputSet.empty()) {
+      // All distinct args are grouping keys — no marker needed.
+      newAggregates.push_back(aggregate);
+      continue;
+    }
+
+    auto [it, inserted] = markers.try_emplace(inputSet, nullptr);
+    if (inserted) {
+      auto markerName = fmt::format("m{}", markers.size() - 1);
+      it->second = make<Column>(
+          toName(markerName),
+          /*relation=*/nullptr,
+          Value{toType(velox::BOOLEAN()), 2});
+
+      // MarkDistinct keys = groupingKeys + distinct args, after deduplication.
+      auto markDistinctKeys = unionColumnArgs(groupingKeys, aggregate->args());
+
+      // Repartition by markDistinctKeys before MarkDistinct.
+      ColumnVector markDistinctColumns(markDistinctKeys.size());
+      std::transform(
+          markDistinctKeys.begin(),
+          markDistinctKeys.end(),
+          markDistinctColumns.begin(),
+          [](ExprCP key) {
+            const auto* keyColumn = key->as<Column>();
+            VELOX_CHECK_NOT_NULL(keyColumn);
+            return keyColumn;
+          });
+
+      repartitionForAgg(plan, markDistinctKeys, markDistinctColumns, totalCost);
+      auto markDistinct =
+          make<MarkDistinct>(plan, it->second, std::move(markDistinctKeys));
+      totalCost.add(*markDistinct);
+      plan = markDistinct;
+    }
+
+    newAggregates.push_back(
+        aggregate->copyWith({.isDistinct = false, .condition = it->second}));
+  }
+
+  if (hasOrderBy) {
+    const auto& [aggregation, aggCost] = makeSingleAggregationPlan(
+        plan,
+        groupingKeys,
+        std::move(newAggregates),
+        aggPlan->intermediateColumns(),
+        aggPlan->columns());
+    totalCost.add(aggCost);
+    return {aggregation, totalCost};
+  } else {
+    const auto& [aggregation, aggCost] = makeSplitOrSingleAggregationPlan(
+        plan,
+        groupingKeys,
+        std::move(newAggregates),
+        aggPlan->intermediateColumns(),
+        aggPlan->columns(),
+        alwaysPlanPartialAggregation);
+    totalCost.add(aggCost);
+    return {aggregation, totalCost};
+  }
 }
 
 } // namespace
@@ -1533,15 +1712,42 @@ void Optimization::addAggregation(
         return !agg->orderKeys().empty();
       });
   if (hasDistinct) {
-    auto distinctArgs = getSingleDistinctArgs(aggregates);
-    transformDistinctToGroupBy(
-        plan,
-        state.cost,
-        groupingKeys,
-        distinctArgs,
-        aggregates,
-        aggPlan,
-        hasOrderBy);
+    // Use a sorted map keyed by PlanCost to pick the least expensive plan. When
+    // multiple plans have the same cost, the first one inserted wins.
+    std::map<PlanCost, RelationOpPtr> candidatePlans;
+
+    ExprVector distinctArgs;
+    if (canMakeDistinctToGroupByPlan(aggregates, distinctArgs)) {
+      auto candidate = makeDistinctToGroupByPlan(
+          plan,
+          groupingKeys,
+          distinctArgs,
+          aggregates,
+          aggPlan,
+          hasOrderBy,
+          options_.alwaysPlanPartialAggregation);
+      candidatePlans.emplace(candidate.second, std::move(candidate.first));
+    }
+
+    if (canMakeMarkDistinctPlan(aggregates)) {
+      auto candidate = makeDistinctToMarkDistinctPlan(
+          plan,
+          groupingKeys,
+          aggregates,
+          aggPlan,
+          hasOrderBy,
+          options_.alwaysPlanPartialAggregation);
+      candidatePlans.emplace(candidate.second, std::move(candidate.first));
+    }
+
+    if (candidatePlans.empty()) {
+      VELOX_USER_FAIL(
+          "Distinct aggregation plan not eligible for transformation to GroupBy or MarkDistinct.");
+    }
+
+    auto best = candidatePlans.begin();
+    plan = best->second;
+    state.cost.add(best->first);
     return;
   }
 
@@ -1576,70 +1782,6 @@ void Optimization::addAggregation(
       options_.alwaysPlanPartialAggregation);
   plan = selectedPlan;
   state.cost.add(selectedCost);
-}
-
-void Optimization::transformDistinctToGroupBy(
-    RelationOpPtr& plan,
-    PlanCost& cost,
-    const ExprVector& groupingKeys,
-    const ExprVector& distinctArgs,
-    const AggregateVector& aggregates,
-    AggregationPlanCP aggPlan,
-    bool hasOrderBy) const {
-  // Build inner GROUP BY keys: groupingKeys union distinctArgs. We put
-  // groupingKeys at the beginning, followed by distinctArgs not appearing in
-  // groupingKeys.
-  ExprVector innerKeys = groupingKeys;
-  PlanObjectSet innerKeySet = PlanObjectSet::fromObjects(groupingKeys);
-  for (const auto* arg : distinctArgs) {
-    if (!innerKeySet.contains(arg)) {
-      innerKeySet.add(arg);
-      innerKeys.push_back(arg);
-    }
-  }
-
-  // Make output columns of inner aggregation.
-  ColumnVector innerColumns;
-  innerColumns.reserve(innerKeys.size());
-  for (const auto* key : innerKeys) {
-    const auto* keyColumn = key->as<Column>();
-    VELOX_CHECK_NOT_NULL(keyColumn);
-    innerColumns.push_back(keyColumn);
-  }
-
-  const auto& [innerAgg, innerAggCost] = makeSplitOrSingleAggregationPlan(
-      plan,
-      innerKeys,
-      AggregateVector{},
-      innerColumns,
-      innerColumns,
-      options_.alwaysPlanPartialAggregation);
-  cost.add(innerAggCost);
-  plan = innerAgg;
-
-  // Make non-distinct aggregation calls for the outer level.
-  auto nonDistinctAggregates = dropDistinctFromAggregates(aggregates);
-
-  if (hasOrderBy) {
-    const auto& [outerPlan, outerCost] = makeSingleAggregationPlan(
-        plan,
-        groupingKeys,
-        nonDistinctAggregates,
-        aggPlan->intermediateColumns(),
-        aggPlan->columns());
-    plan = outerPlan;
-    cost.add(outerCost);
-  } else {
-    const auto& [outerPlan, outerCost] = makeSplitOrSingleAggregationPlan(
-        plan,
-        groupingKeys,
-        nonDistinctAggregates,
-        aggPlan->intermediateColumns(),
-        aggPlan->columns(),
-        options_.alwaysPlanPartialAggregation);
-    plan = outerPlan;
-    cost.add(outerCost);
-  }
 }
 
 namespace {

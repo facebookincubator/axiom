@@ -65,14 +65,20 @@ class RelationOpPrinterTest : public ::testing::Test {
 
   std::vector<std::string> toLines(
       const lp::LogicalPlanNode& logicalPlan,
-      const RelationOpToTextOptions& options = {}) {
+      const RelationOpToTextOptions& options = {},
+      int32_t numWorkers = 1,
+      int32_t numDrivers = 1) {
     std::vector<std::string> lines;
-    optimize(logicalPlan, [&](const RelationOp& op) {
-      const auto planString = RelationOpPrinter::toText(op, options);
+    optimize(
+        logicalPlan,
+        [&](const RelationOp& op) {
+          const auto planString = RelationOpPrinter::toText(op, options);
 
-      LOG(INFO) << std::endl << planString;
-      folly::split('\n', planString, lines);
-    });
+          LOG(INFO) << std::endl << planString;
+          folly::split('\n', planString, lines);
+        },
+        numWorkers,
+        numDrivers);
     return lines;
   }
 
@@ -80,11 +86,18 @@ class RelationOpPrinterTest : public ::testing::Test {
     return toOneline(*parse(sql));
   }
 
-  std::string toOneline(const lp::LogicalPlanNode& logicalPlan) {
+  std::string toOneline(
+      const lp::LogicalPlanNode& logicalPlan,
+      int32_t numWorkers = 1,
+      int32_t numDrivers = 1) {
     std::string planString;
-    optimize(logicalPlan, [&](const RelationOp& op) {
-      planString = RelationOpPrinter::toOneline(op);
-    });
+    optimize(
+        logicalPlan,
+        [&](const RelationOp& op) {
+          planString = RelationOpPrinter::toOneline(op);
+        },
+        numWorkers,
+        numDrivers);
     return planString;
   }
 
@@ -98,7 +111,9 @@ class RelationOpPrinterTest : public ::testing::Test {
 
   void optimize(
       const lp::LogicalPlanNode& logicalPlan,
-      const std::function<void(const RelationOp& op)>& consume) {
+      const std::function<void(const RelationOp& op)>& consume,
+      int32_t numWorkers = 1,
+      int32_t numDrivers = 1) {
     auto allocator =
         std::make_unique<velox::HashStringAllocator>(optimizerPool_.get());
     auto context = std::make_unique<QueryGraphContext>(*allocator);
@@ -125,7 +140,7 @@ class RelationOpPrinterTest : public ::testing::Test {
         veloxQueryCtx,
         evaluator,
         {.sampleJoins = false, .sampleFilters = false},
-        {.numWorkers = 1, .numDrivers = 1}};
+        {.numWorkers = numWorkers, .numDrivers = numDrivers}};
 
     auto* plan = opt.bestPlan();
     consume(*plan->op);
@@ -285,6 +300,45 @@ TEST_F(RelationOpPrinterTest, unionAll) {
           testing::StartsWith("      TableScan"),
           testing::StartsWith("        table: \"default\".\"u\""),
           testing::Eq("")));
+}
+
+TEST_F(RelationOpPrinterTest, markDistinct) {
+  connector_->addTable(
+      "t", ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), DOUBLE()}));
+
+  // Multiple DISTINCT aggregates with different argument sets trigger
+  // MarkDistinct. Requires numWorkers * numDrivers > 1 since the single-driver
+  // path skips the MarkDistinct transformation.
+  auto logicalPlan =
+      lp::PlanBuilder(makeContext())
+          .tableScan("t")
+          .aggregate({"a"}, {"count(DISTINCT b)", "sum(DISTINCT c)"})
+          .build();
+
+  auto lines =
+      toLines(*logicalPlan, /*options=*/{}, /*numWorkers=*/4, /*numDrivers=*/4);
+  EXPECT_THAT(
+      lines,
+      testing::ElementsAre(
+          testing::StartsWith("Project (redundant)"),
+          testing::StartsWith("    "),
+          testing::StartsWith("    "),
+          testing::StartsWith("    "),
+          testing::StartsWith("  Aggregation"),
+          testing::HasSubstr("FILTER (WHERE m0)"),
+          testing::HasSubstr("FILTER (WHERE m1)"),
+          testing::StartsWith("    Repartition"),
+          testing::StartsWith("      MarkDistinct"),
+          testing::StartsWith("        Repartition"),
+          testing::StartsWith("          MarkDistinct"),
+          testing::StartsWith("            Repartition"),
+          testing::StartsWith("              TableScan"),
+          testing::StartsWith("                table: \"default\".\"t\""),
+          testing::Eq("")));
+
+  EXPECT_EQ(
+      "agg(\"default\".\"t\")",
+      toOneline(*logicalPlan, /*numWorkers=*/4, /*numDrivers=*/4));
 }
 
 TEST_F(RelationOpPrinterTest, cost) {
