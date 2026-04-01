@@ -346,6 +346,71 @@ TEST_F(SortParserTest, differentExpressions) {
           .output({"ab_sum"}));
 }
 
+TEST_F(SortParserTest, outputAliasInExpression) {
+  connector_->addTable("t", ROW({"a"}, INTEGER()));
+  connector_->addTable("t2", ROW({"a", "b"}, INTEGER()));
+
+  testSelect(
+      "SELECT a * 2 AS b FROM t ORDER BY b * -1",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project({"a * 2 as b", "a * 2 * negate(1) as sortFun"})
+          .sort({"sortFun"})
+          .project({"b"})
+          .output({"b"}));
+
+  testSelect(
+      "SELECT a * 2 AS b FROM t ORDER BY b",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project({"a * 2 as b"})
+          .sort({"b"})
+          .output({"b"}));
+
+  testSelect(
+      "SELECT a * -2 AS a FROM t ORDER BY a * -1",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project(
+              {"a * negate(2) as selectFun",
+               "a * negate(2) * negate(1) as sortFun"})
+          .sort({"sortFun"})
+          .project({"selectFun"})
+          .output({"a"}));
+
+  testSelect(
+      "SELECT a AS b, a * -2 AS c FROM t ORDER BY b + c",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project(
+              {"a as b", "a * negate(2) as c", "a + a * negate(2) as sortFun"})
+          .sort({"sortFun"})
+          .project({"b", "c"})
+          .output({"b", "c"}));
+
+  testSelect(
+      "SELECT 1 AS x FROM t ORDER BY x + 1",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project({"1 as x", "1 + 1 as sortFun"})
+          .sort({"sortFun"})
+          .project({"x"})
+          .output({"x"}));
+
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT 1 AS a, a FROM t2 ORDER BY a + 1"),
+      "Column is ambiguous: a");
+
+  testSelect(
+      "SELECT 1 AS a, a FROM t2 ORDER BY b + 1",
+      lp::test::LogicalPlanMatcherBuilder()
+          .tableScan()
+          .project({"1 as alias", "a as col", "b + 1 as sortFun"})
+          .sort({"sortFun"})
+          .project({"alias", "col"})
+          .output({"a", "a"}));
+}
+
 TEST_F(SortParserTest, union) {
   {
     auto matcher = matchScan()

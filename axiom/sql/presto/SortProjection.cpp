@@ -16,11 +16,53 @@
 #include "axiom/sql/presto/SortProjection.h"
 
 #include "folly/container/F14Map.h"
+#include "velox/parse/Expressions.h"
 #include "velox/parse/IExpr.h"
 
 namespace axiom::sql::presto {
 
 namespace lp = facebook::axiom::logical_plan;
+
+namespace {
+namespace core = facebook::velox::core;
+
+// Recursively replaces root FieldAccessExpr nodes that match an output alias
+// with the alias's underlying expression. Throws if the alias is ambiguous.
+core::ExprPtr replaceAliases(
+    const core::ExprPtr& expr,
+    const folly::F14FastMap<std::string, size_t>& aliasMap,
+    const std::vector<lp::ExprApi>& projections) {
+  if (expr->is(core::IExpr::Kind::kFieldAccess)) {
+    auto* field = expr->as<core::FieldAccessExpr>();
+    if (field->isRootColumn()) {
+      auto alias = aliasMap.find(field->name());
+      if (alias != aliasMap.end()) {
+        VELOX_USER_CHECK_NE(
+            alias->second, 0, "Column is ambiguous: {}", field->name());
+        return projections[alias->second - 1].expr();
+      }
+      return expr;
+    }
+  }
+
+  const auto& inputs = expr->inputs();
+  if (inputs.empty()) {
+    return expr;
+  }
+
+  std::vector<core::ExprPtr> newInputs;
+  bool changed = false;
+  for (const auto& input : inputs) {
+    auto newInput = replaceAliases(input, aliasMap, projections);
+    if (newInput.get() != input.get()) {
+      changed = true;
+    }
+    newInputs.push_back(std::move(newInput));
+  }
+
+  return changed ? expr->replaceInputs(std::move(newInputs)) : expr;
+}
+} // namespace
 
 std::vector<size_t> SortProjection::widenProjections(
     const std::vector<lp::ExprApi>& sortKeyExprs,
@@ -38,9 +80,9 @@ std::vector<size_t> SortProjection::widenProjections(
   // Iterate through projections matching ordinals to projections and aliases.
   for (size_t i = 0; i < projections.size(); ++i) {
     projectionMap.emplace(projections[i].expr(), i + 1);
-    if (projections[i].name().has_value()) {
+    if (projections[i].alias().has_value()) {
       auto [alias, inserted] =
-          aliasMap.emplace(projections[i].name().value(), i + 1);
+          aliasMap.emplace(projections[i].alias().value(), i + 1);
       // We throw for ambiguous aliases only if they are referenced by a
       // sorting key. Let's mark it as ambiguous here for now denoted by the
       // '0' ordinal and throw later when we process the sorting keys.
@@ -57,8 +99,8 @@ std::vector<size_t> SortProjection::widenProjections(
       ordinals.push_back(preResolvedOrdinals[i]);
     } else {
       // Match alias if one is used.
-      const auto aliasMapValue = sortKeyExprs[i].name().has_value()
-          ? aliasMap.find(sortKeyExprs[i].name().value())
+      const auto aliasMapValue = sortKeyExprs[i].alias().has_value()
+          ? aliasMap.find(sortKeyExprs[i].alias().value())
           : aliasMap.end();
       if (aliasMapValue != aliasMap.end()) {
         auto ordinal = aliasMapValue->second;
@@ -69,11 +111,17 @@ std::vector<size_t> SortProjection::widenProjections(
       // Match expression directly if no alias is used, expanding out
       // projections list if sorts keys don't match our SELECT list.
       else {
-        auto [projectionIt, inserted] = projectionMap.emplace(
-            sortKeyExprs[i].expr(), projections.size() + 1);
+        auto resolved =
+            replaceAliases(sortKeyExprs[i].expr(), aliasMap, projections);
+        auto [projectionIt, inserted] =
+            projectionMap.emplace(resolved, projections.size() + 1);
         if (inserted) {
           ordinals.push_back(projections.size() + 1);
-          projections.push_back(sortKeyExprs[i]);
+          lp::ExprApi newProjection(resolved, sortKeyExprs[i].alias());
+          if (sortKeyExprs[i].windowSpec()) {
+            newProjection = newProjection.over(*sortKeyExprs[i].windowSpec());
+          }
+          projections.push_back(std::move(newProjection));
         } else {
           ordinals.push_back(projectionIt->second);
         }
